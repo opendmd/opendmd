@@ -900,9 +900,10 @@ mod tests {
     fn a_hand_written_file_decodes() {
         let mut o = OdmSource::new(Cursor::new(minimal_odm())).unwrap();
         let mut c = Canvas::new();
+        // The file says 10 ms; the decoder floors file delays at MIN_DELAY_MS.
         assert_eq!(
             o.next_frame(&mut c).unwrap(),
-            Some(Duration::from_millis(10))
+            Some(Duration::from_millis(MIN_DELAY_MS))
         );
         // 2x1 centred: (128-2)/2 = 63, (32-1)/2 = 15.
         assert_eq!(c.get(63, 15), Rgb::new(255, 0, 0));
