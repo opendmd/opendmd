@@ -1,8 +1,32 @@
 //! Streaming GIF playback onto the 128x32 canvas.
 //!
-//! One frame is decoded at a time; the only persistent buffers are the logical
-//! screen (RGBA) and, when a `Previous` disposal actually occurs, one snapshot
-//! of it. A 4 MB GIF therefore costs ~`w*h*4` bytes, not 4 MB.
+//! One frame is decoded at a time, **indexed**, into a single reusable
+//! `width * height` byte buffer allocated once in [`GifSource::new`] and never
+//! grown. The frame's own palette (local if it has one, else the global table)
+//! is then applied while compositing into an **RGB** logical screen
+//! (`width * height * 3`). A `Previous` disposal snapshot is allocated lazily
+//! and is RGB too. A 4 MB GIF therefore costs ~`w*h*4` bytes, not 4 MB.
+//!
+//! When the GIF's logical screen is exactly `WIDTH x HEIGHT` — 11,044 of the
+//! 11,047 files on the real card — there is no separate screen buffer at all:
+//! the [`Canvas`] the caller passes in *is* the logical screen, composited
+//! into directly through [`Canvas::as_mut_bytes`], and `blit` is skipped
+//! because centre-and-crop at that size is the identity. That is another
+//! 12 KB off the ESP32 heap. The canvas is cleared on the first frame, which
+//! is what the old full-canvas `blit` from a zeroed screen did anyway, and it
+//! must not be written by the caller between frames — it is the GIF's
+//! accumulating state, which `Keep` and `Previous` disposal both depend on.
+//!
+//! Going through `ColorOutput::Indexed` plus the caller-owned-buffer path
+//! (`next_frame_info` + `read_into_buffer`/`fill_buffer`) matters on the
+//! ESP32: `ColorOutput::RGBA` makes the `gif` crate keep *two* extra buffers
+//! alive per frame — a `w*h*4` RGBA `Frame::buffer` and a `w*h` indexed
+//! scratch inside its `PixelConverter` — 20 KB for 128x32 that we do not need,
+//! because the screen we composite into is the only thing we ever read back.
+//!
+//! There is no alpha channel on the screen: an untouched or background-cleared
+//! pixel is RGB `(0,0,0)`, which is exactly what a transparent screen pixel
+//! rendered as before (there is no "behind" on a HUB75 panel).
 //!
 //! Mismatched sizes are centred and cropped, never resampled — the archive is
 //! pixel art and every scaling filter ruins it. With an odd difference the
@@ -18,11 +42,17 @@ use std::time::Duration;
 const ZERO_DELAY_MS: u64 = 100;
 /// Floor for everything else — 50 fps is well past what a HUB75 refresh can do.
 const MIN_DELAY_MS: u64 = 20;
-/// Sanity cap on the declared logical screen, to bound the RGBA buffer.
+/// Sanity cap on the declared logical screen, to bound the screen buffer.
 const MAX_LOGICAL_PIXELS: usize = 2048 * 2048;
+/// Bytes in a maximal GIF colour table: 256 entries of RGB.
+const MAX_PALETTE: usize = 256 * 3;
 
 fn decode_err(e: gif::DecodingError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e)
+}
+
+fn invalid(msg: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, msg)
 }
 
 /// A GIF being played. Construct one per playback; there is no rewind (the
@@ -31,13 +61,28 @@ pub struct GifSource<R: Read> {
     decoder: gif::Decoder<R>,
     width: usize,
     height: usize,
-    /// Logical screen, RGBA, `width * height * 4`.
-    screen: Vec<u8>,
+    /// Indexed pixels of the frame being decoded. Exactly `width * height`
+    /// bytes, sized once in `new` and never reallocated; a frame rectangle
+    /// bigger than the logical screen goes down the row-chunked path instead.
+    indexed: Vec<u8>,
+    /// Logical screen, RGB, `width * height * 3` — borrowed from the caller's
+    /// `Canvas` at the panel size, owned otherwise.
+    screen: Screen,
     /// Snapshot for `DisposalMethod::Previous`; allocated on first use.
     saved: Vec<u8>,
     /// Disposal owed by the frame already on screen, with its rectangle.
     pending: Option<(DisposalMethod, Rect)>,
     frames_decoded: u64,
+}
+
+/// Where the RGB logical screen lives.
+enum Screen {
+    /// The logical screen is exactly the panel, so the caller's `Canvas` is
+    /// the screen. `cleared` is false until the first frame zeroes it.
+    Direct { cleared: bool },
+    /// Any other size: an owned buffer that `blit` centre-crops onto the
+    /// canvas each frame.
+    Owned(Vec<u8>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -53,29 +98,30 @@ impl<R: Read> GifSource<R> {
     /// an absurd declared logical screen.
     pub fn new(reader: R) -> io::Result<Self> {
         let mut opts = DecodeOptions::new();
-        opts.set_color_output(ColorOutput::RGBA);
+        opts.set_color_output(ColorOutput::Indexed);
         let decoder = opts.read_info(reader).map_err(decode_err)?;
 
         let width = decoder.width() as usize;
         let height = decoder.height() as usize;
         if width == 0 || height == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "GIF logical screen has a zero dimension",
-            ));
+            return Err(invalid("GIF logical screen has a zero dimension"));
         }
         if width.saturating_mul(height) > MAX_LOGICAL_PIXELS {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("GIF logical screen {width}x{height} is implausibly large"),
-            ));
+            return Err(invalid(format!(
+                "GIF logical screen {width}x{height} is implausibly large"
+            )));
         }
 
         Ok(GifSource {
             decoder,
             width,
             height,
-            screen: vec![0u8; width * height * 4],
+            indexed: vec![0u8; width * height],
+            screen: if width == WIDTH && height == HEIGHT {
+                Screen::Direct { cleared: false }
+            } else {
+                Screen::Owned(vec![0u8; width * height * 3])
+            },
             saved: Vec::new(),
             pending: None,
             frames_decoded: 0,
@@ -99,6 +145,7 @@ impl<R: Read> GifSource<R> {
             decoder,
             width,
             height,
+            indexed,
             screen,
             saved,
             pending,
@@ -106,80 +153,187 @@ impl<R: Read> GifSource<R> {
         } = self;
         let (width, height) = (*width, *height);
 
-        // Whatever the last frame asked for, before drawing the next one.
-        if let Some((method, rect)) = pending.take() {
-            match method {
-                DisposalMethod::Background => clear_rect(screen, width, rect),
-                DisposalMethod::Previous if saved.len() == screen.len() => {
-                    screen.copy_from_slice(saved);
-                }
-                // Any / Keep: leave the canvas alone.
-                _ => {}
-            }
-        }
+        // Metadata first, before anything touches the screen: `Ok(None)` must
+        // leave the canvas exactly as it was, and in `Direct` mode the canvas
+        // *is* the screen. Reading the frame header does not disturb it.
+        //
+        // `read_next_frame` is deliberately not used: it allocates a frame
+        // buffer per frame, which is the whole thing we are avoiding. Copy the
+        // fields out so the decoder borrow ends before we ask it to decode
+        // into a buffer we own.
+        let (rect, dispose, delay, transparent, interlaced, frame_w, frame_h) =
+            match decoder.next_frame_info().map_err(decode_err)? {
+                Some(f) => (
+                    Rect {
+                        left: (f.left as usize).min(width),
+                        top: (f.top as usize).min(height),
+                        width: f.width as usize,
+                        height: f.height as usize,
+                    },
+                    f.dispose,
+                    f.delay,
+                    f.transparent,
+                    f.interlaced,
+                    f.width as usize,
+                    f.height as usize,
+                ),
+                None => return Ok(None),
+            };
 
-        let frame = match decoder.read_next_frame().map_err(decode_err)? {
-            Some(f) => f,
-            None => return Ok(None),
+        // The palette that applies to *this* frame: its local table if it has
+        // one, else the global table. Copied onto the stack (768 B max) so
+        // that decoding, which needs the decoder mutably, can be interleaved
+        // with compositing, which needs the palette.
+        let mut pal = [0u8; MAX_PALETTE];
+        let pal_len = {
+            let p = decoder.palette().map_err(decode_err)?;
+            let n = p.len().min(MAX_PALETTE);
+            pal[..n].copy_from_slice(&p[..n]);
+            n
         };
+        let pal = &pal[..pal_len];
 
-        let rect = Rect {
-            left: (frame.left as usize).min(width),
-            top: (frame.top as usize).min(height),
-            width: frame.width as usize,
-            height: frame.height as usize,
-        };
+        // The screen borrow — of the canvas or of our own buffer — lives only
+        // inside this block, so `blit` can take the canvas again afterwards.
+        {
+            let buf: &mut [u8] = match screen {
+                Screen::Direct { cleared } => {
+                    if !*cleared {
+                        // What the old full-canvas blit from a zeroed screen
+                        // did on the first frame.
+                        canvas.clear();
+                        *cleared = true;
+                    }
+                    canvas.as_mut_bytes()
+                }
+                Screen::Owned(v) => v.as_mut_slice(),
+            };
 
-        if frame.dispose == DisposalMethod::Previous {
-            if saved.len() != screen.len() {
-                saved.resize(screen.len(), 0);
+            // Whatever the last frame asked for, before drawing the next one.
+            if let Some((method, prev)) = pending.take() {
+                match method {
+                    DisposalMethod::Background => clear_rect(buf, width, prev),
+                    DisposalMethod::Previous if saved.len() == buf.len() => {
+                        buf.copy_from_slice(saved);
+                    }
+                    // Any / Keep: leave the canvas alone.
+                    _ => {}
+                }
             }
-            saved.copy_from_slice(screen);
+
+            if dispose == DisposalMethod::Previous {
+                if saved.len() != buf.len() {
+                    saved.resize(buf.len(), 0);
+                }
+                saved.copy_from_slice(buf);
+            }
+
+            let mut comp = Compositor {
+                screen: buf,
+                width,
+                height,
+                rect,
+                palette: pal,
+                transparent,
+            };
+
+            let frame_pixels = frame_w.saturating_mul(frame_h);
+            if frame_pixels <= indexed.len() {
+                // Common case: the whole frame fits the buffer we already own,
+                // so let the crate deinterlace it for us.
+                decoder
+                    .read_into_buffer(&mut indexed[..frame_pixels])
+                    .map_err(decode_err)?;
+                for y in 0..frame_h {
+                    comp.row(y, &indexed[y * frame_w..(y + 1) * frame_w]);
+                }
+            } else {
+                // Frame rectangle larger than the logical screen. Decode it
+                // one stored row at a time and throw away what falls outside;
+                // the rows must all be consumed or the LZW stream
+                // desynchronises.
+                if frame_w > indexed.len() {
+                    return Err(invalid(format!(
+                        "GIF frame is {frame_w} px wide, wider than the {width}x{height} logical screen holds"
+                    )));
+                }
+                let mut rows = RowOrder::new(frame_h, interlaced);
+                while let Some(src_y) = rows.next() {
+                    if !decoder
+                        .fill_buffer(&mut indexed[..frame_w])
+                        .map_err(decode_err)?
+                    {
+                        return Err(invalid("GIF frame data ended early"));
+                    }
+                    comp.row(src_y, &indexed[..frame_w]);
+                }
+            }
         }
 
-        // Composite: alpha is 0 exactly for the transparent palette index, and
-        // transparent source pixels leave the screen as it was.
-        for y in 0..rect.height {
-            let dy = rect.top + y;
-            if dy >= height {
-                break;
-            }
-            for x in 0..rect.width {
-                let dx = rect.left + x;
-                if dx >= width {
-                    break;
-                }
-                let src = (y * rect.width + x) * 4;
-                if frame.buffer[src + 3] == 0 {
-                    continue;
-                }
-                let dst = (dy * width + dx) * 4;
-                screen[dst..dst + 4].copy_from_slice(&frame.buffer[src..src + 4]);
-            }
-        }
-
-        let delay_ms = if frame.delay == 0 {
+        let delay_ms = if delay == 0 {
             ZERO_DELAY_MS
         } else {
-            (frame.delay as u64) * 10
+            (delay as u64) * 10
         };
-        *pending = Some((frame.dispose, rect));
+        *pending = Some((dispose, rect));
         *frames_decoded += 1;
 
-        blit(screen, width, height, canvas);
+        // `Direct` composited into the canvas already; at the panel size
+        // centre-and-crop is the identity, so there is nothing to blit.
+        if let Screen::Owned(v) = screen {
+            blit(v, width, height, canvas);
+        }
         Ok(Some(Duration::from_millis(delay_ms.max(MIN_DELAY_MS))))
     }
 }
 
+/// One frame's worth of compositing state: everything `row` needs that does
+/// not change between the rows of a frame.
+struct Compositor<'a> {
+    screen: &'a mut [u8],
+    width: usize,
+    height: usize,
+    rect: Rect,
+    palette: &'a [u8],
+    transparent: Option<u8>,
+}
+
+impl Compositor<'_> {
+    /// Paint one decoded row of the frame into the RGB logical screen. `row`
+    /// is the frame's full row (`rect.width` indices); pixels that fall
+    /// outside the screen, carry the transparent index, or name a palette
+    /// entry that does not exist are skipped, leaving the screen as it was.
+    fn row(&mut self, src_y: usize, row: &[u8]) {
+        let dy = self.rect.top + src_y;
+        if dy >= self.height {
+            return;
+        }
+        for (x, &idx) in row.iter().enumerate() {
+            let dx = self.rect.left + x;
+            if dx >= self.width {
+                break;
+            }
+            if self.transparent == Some(idx) {
+                continue;
+            }
+            let o = idx as usize * 3;
+            if let Some(rgb) = self.palette.get(o..o + 3) {
+                let d = (dy * self.width + dx) * 3;
+                self.screen[d..d + 3].copy_from_slice(rgb);
+            }
+        }
+    }
+}
+
 fn clear_rect(screen: &mut [u8], screen_width: usize, rect: Rect) {
-    let height = screen.len() / (screen_width * 4);
+    let height = screen.len() / (screen_width * 3);
     for y in 0..rect.height {
         let dy = rect.top + y;
         if dy >= height {
             break;
         }
-        let start = (dy * screen_width + rect.left) * 4;
-        let span = rect.width.min(screen_width.saturating_sub(rect.left)) * 4;
+        let start = (dy * screen_width + rect.left) * 3;
+        let span = rect.width.min(screen_width.saturating_sub(rect.left)) * 3;
         screen[start..start + span].fill(0);
     }
 }
@@ -194,17 +348,75 @@ fn blit(screen: &[u8], width: usize, height: usize, canvas: &mut Canvas) {
         for cx in 0..WIDTH {
             let sx = cx as i32 - off_x;
             let px = if sx >= 0 && sy >= 0 && (sx as usize) < width && (sy as usize) < height {
-                let o = ((sy as usize) * width + sx as usize) * 4;
-                if screen[o + 3] == 0 {
-                    Rgb::BLACK
-                } else {
-                    Rgb::new(screen[o], screen[o + 1], screen[o + 2])
-                }
+                let o = ((sy as usize) * width + sx as usize) * 3;
+                Rgb::new(screen[o], screen[o + 1], screen[o + 2])
             } else {
                 Rgb::BLACK
             };
             canvas.set(cx, cy, px);
         }
+    }
+}
+
+/// The order `fill_buffer` hands rows back in: stored order, which for an
+/// interlaced frame is the GIF interlace order. Not an `Iterator` impl so the
+/// oversize path never needs a `Box<dyn Iterator>` or a `Vec` of row numbers.
+enum RowOrder {
+    Sequential(std::ops::Range<usize>),
+    Interlaced(InterlaceRows),
+}
+
+impl RowOrder {
+    fn new(height: usize, interlaced: bool) -> Self {
+        if interlaced {
+            RowOrder::Interlaced(InterlaceRows::new(height))
+        } else {
+            RowOrder::Sequential(0..height)
+        }
+    }
+
+    #[allow(clippy::should_implement_trait)]
+    fn next(&mut self) -> Option<usize> {
+        match self {
+            RowOrder::Sequential(r) => r.next(),
+            RowOrder::Interlaced(i) => i.next(),
+        }
+    }
+}
+
+/// The GIF interlace row order (passes of 8, 8, 4, 2 starting at 0, 4, 2, 1).
+/// `read_into_buffer` does this for us; the row-chunked oversize path has to
+/// do it itself, because `fill_buffer` hands back rows in stored order.
+struct InterlaceRows {
+    len: usize,
+    next: usize,
+    pass: usize,
+}
+
+impl InterlaceRows {
+    fn new(len: usize) -> Self {
+        InterlaceRows {
+            len,
+            next: 0,
+            pass: 0,
+        }
+    }
+}
+
+impl Iterator for InterlaceRows {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        if self.len == 0 {
+            return None;
+        }
+        let mut next = self.next + *[8usize, 8, 4, 2].get(self.pass)?;
+        while next >= self.len {
+            next = *[4usize, 2, 1, 0].get(self.pass)?;
+            self.pass += 1;
+        }
+        std::mem::swap(&mut next, &mut self.next);
+        Some(next)
     }
 }
 
@@ -219,6 +431,7 @@ mod tests {
     const GREEN_I: u8 = 2;
     const RED: Rgb = Rgb { r: 255, g: 0, b: 0 };
     const GREEN: Rgb = Rgb { r: 0, g: 255, b: 0 };
+    const BLUE: Rgb = Rgb { r: 0, g: 0, b: 255 };
 
     /// Palette index 0 is the transparent index in every fixture below, so a
     /// frame's "background" really is transparent rather than black.
@@ -286,6 +499,48 @@ mod tests {
 
     fn source(bytes: Vec<u8>) -> GifSource<std::io::Cursor<Vec<u8>>> {
         GifSource::new(std::io::Cursor::new(bytes)).unwrap()
+    }
+
+    /// A frame spec that carries its own (optional) local palette and
+    /// transparent index, for the global-vs-local tests below. Kept separate
+    /// from `FrameSpec` so the fixtures above stay as they were.
+    struct PalFrameSpec {
+        left: u16,
+        top: u16,
+        width: u16,
+        height: u16,
+        pixels: Vec<u8>,
+        dispose: DisposalMethod,
+        palette: Option<Vec<u8>>,
+        transparent: Option<u8>,
+    }
+
+    fn encode_with_global(
+        screen_w: u16,
+        screen_h: u16,
+        global: &[u8],
+        specs: Vec<PalFrameSpec>,
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut out, screen_w, screen_h, global).unwrap();
+            for spec in specs {
+                let f = Frame {
+                    left: spec.left,
+                    top: spec.top,
+                    width: spec.width,
+                    height: spec.height,
+                    buffer: Cow::Owned(spec.pixels),
+                    dispose: spec.dispose,
+                    delay: 10,
+                    palette: spec.palette,
+                    transparent: spec.transparent,
+                    ..Default::default()
+                };
+                enc.write_frame(&f).unwrap();
+            }
+        }
+        out
     }
 
     #[test]
@@ -472,5 +727,215 @@ mod tests {
     #[test]
     fn garbage_is_an_error_not_a_panic() {
         assert!(GifSource::new(std::io::Cursor::new(b"not a gif at all".to_vec())).is_err());
+    }
+
+    #[test]
+    fn panel_sized_gif_composites_into_a_dirty_canvas() {
+        // At exactly WIDTH x HEIGHT the canvas *is* the logical screen, so
+        // whatever the caller left on it must not survive the first frame.
+        let bytes = encode(
+            128,
+            32,
+            vec![full_frame(
+                128,
+                32,
+                RED_I,
+                &[(1, 1)],
+                DisposalMethod::Keep,
+                10,
+            )],
+        );
+        let mut gif = source(bytes);
+        let mut canvas = Canvas::new();
+        canvas.fill(GREEN);
+        gif.next_frame(&mut canvas).unwrap().unwrap();
+        assert_eq!(canvas.get(1, 1), RED);
+        assert_eq!(canvas.get(0, 0), Rgb::BLACK, "stale canvas must be cleared");
+        assert_eq!(canvas.get(127, 31), Rgb::BLACK);
+    }
+
+    #[test]
+    fn end_of_stream_leaves_the_canvas_alone() {
+        // Including in the direct-to-canvas case, where the screen and the
+        // canvas are the same bytes and a pending disposal is still owed.
+        let bytes = encode(
+            128,
+            32,
+            vec![full_frame(
+                128,
+                32,
+                RED_I,
+                &[(1, 1)],
+                DisposalMethod::Background,
+                10,
+            )],
+        );
+        let mut gif = source(bytes);
+        let mut canvas = Canvas::new();
+        gif.next_frame(&mut canvas).unwrap().unwrap();
+        assert_eq!(canvas.get(1, 1), RED);
+        assert!(gif.next_frame(&mut canvas).unwrap().is_none());
+        assert_eq!(
+            canvas.get(1, 1),
+            RED,
+            "the owed Background disposal must not be applied at end of stream"
+        );
+    }
+
+    #[test]
+    fn local_palette_overrides_the_global_one() {
+        // Global: 0 black, 1 red, 2 green. Local on frame 1: 1 is blue.
+        let global = vec![0, 0, 0, 255, 0, 0, 0, 255, 0];
+        let local = vec![0, 0, 0, 0, 0, 255, 0, 255, 0];
+        let bytes = encode_with_global(
+            4,
+            2,
+            &global,
+            vec![
+                PalFrameSpec {
+                    left: 0,
+                    top: 0,
+                    width: 4,
+                    height: 2,
+                    pixels: vec![
+                        RED_I, GREEN_I, BLACK_I, BLACK_I, BLACK_I, BLACK_I, BLACK_I, BLACK_I,
+                    ],
+                    dispose: DisposalMethod::Keep,
+                    palette: None,
+                    transparent: None,
+                },
+                PalFrameSpec {
+                    left: 0,
+                    top: 1,
+                    width: 1,
+                    height: 1,
+                    pixels: vec![RED_I],
+                    dispose: DisposalMethod::Keep,
+                    palette: Some(local),
+                    transparent: None,
+                },
+            ],
+        );
+        let mut gif = source(bytes);
+        assert_eq!(gif.logical_size(), (4, 2));
+        let mut canvas = Canvas::new();
+        // 4x2 -> offsets (128-4)/2 = 62, (32-2)/2 = 15.
+        gif.next_frame(&mut canvas).unwrap().unwrap();
+        assert_eq!(canvas.get(62, 15), RED, "global palette index 1 is red");
+        assert_eq!(canvas.get(63, 15), GREEN);
+        gif.next_frame(&mut canvas).unwrap().unwrap();
+        assert_eq!(
+            canvas.get(62, 16),
+            BLUE,
+            "the local palette must win over the global one"
+        );
+        // The first frame, drawn from the global palette, is untouched.
+        assert_eq!(canvas.get(62, 15), RED);
+    }
+
+    #[test]
+    fn transparent_index_in_a_local_palette_is_honoured() {
+        // Global 1 = red. Frame 1 has a local palette whose index 1 is green
+        // and is *also* the transparent index, so it must paint nothing.
+        let global = vec![0, 0, 0, 255, 0, 0];
+        let local = vec![0, 0, 255, 0, 255, 0];
+        let bytes = encode_with_global(
+            2,
+            1,
+            &global,
+            vec![
+                PalFrameSpec {
+                    left: 0,
+                    top: 0,
+                    width: 2,
+                    height: 1,
+                    pixels: vec![RED_I, RED_I],
+                    dispose: DisposalMethod::Keep,
+                    palette: None,
+                    transparent: None,
+                },
+                PalFrameSpec {
+                    left: 0,
+                    top: 0,
+                    width: 2,
+                    height: 1,
+                    pixels: vec![RED_I, BLACK_I],
+                    dispose: DisposalMethod::Keep,
+                    palette: Some(local),
+                    transparent: Some(RED_I),
+                },
+            ],
+        );
+        let mut gif = source(bytes);
+        let mut canvas = Canvas::new();
+        // 2x1 -> offsets (128-2)/2 = 63, (32-1)/2 = 15.
+        gif.next_frame(&mut canvas).unwrap().unwrap();
+        assert_eq!(canvas.get(63, 15), RED);
+        assert_eq!(canvas.get(64, 15), RED);
+        gif.next_frame(&mut canvas).unwrap().unwrap();
+        assert_eq!(canvas.get(63, 15), RED, "transparent index paints nothing");
+        assert_eq!(canvas.get(64, 15), BLUE, "local index 0 is blue");
+    }
+
+    #[test]
+    fn frame_rect_larger_than_the_logical_screen_is_clipped() {
+        // 4x4 logical screen, 6x6 frame rectangle: 36 indices is more than the
+        // 16-byte buffer holds, so this goes down the row-chunked path.
+        let global = vec![0, 0, 0, 255, 0, 0, 0, 255, 0];
+        let mut pixels = vec![BLACK_I; 36];
+        pixels[0] = RED_I; //  (0,0) -> visible
+        pixels[3] = GREEN_I; // (3,0) -> visible, last column
+        pixels[4] = RED_I; //  (4,0) -> off the right edge
+        pixels[6 * 3 + 1] = GREEN_I; // (1,3) -> visible, last row
+        pixels[6 * 4 + 1] = RED_I; // (1,4) -> off the bottom
+        let bytes = encode_with_global(
+            4,
+            4,
+            &global,
+            vec![PalFrameSpec {
+                left: 0,
+                top: 0,
+                width: 6,
+                height: 6,
+                pixels,
+                dispose: DisposalMethod::Keep,
+                palette: None,
+                transparent: Some(BLACK_I),
+            }],
+        );
+        let mut gif = source(bytes);
+        assert_eq!(gif.logical_size(), (4, 4));
+        let mut canvas = Canvas::new();
+        // 4x4 -> offsets (128-4)/2 = 62, (32-4)/2 = 14.
+        assert!(gif.next_frame(&mut canvas).unwrap().is_some());
+        assert_eq!(canvas.get(62, 14), RED);
+        assert_eq!(canvas.get(65, 14), GREEN, "last in-screen column");
+        assert_eq!(canvas.get(63, 17), GREEN, "last in-screen row");
+        assert_eq!(canvas.get(66, 14), Rgb::BLACK, "clipped off the right");
+        assert_eq!(canvas.get(63, 18), Rgb::BLACK, "clipped off the bottom");
+        // The stream stayed in sync: the trailer is reached cleanly.
+        assert!(gif.next_frame(&mut canvas).unwrap().is_none());
+        assert_eq!(gif.frames_decoded(), 1);
+    }
+
+    #[test]
+    fn interlace_row_order_matches_the_spec() {
+        assert_eq!(
+            InterlaceRows::new(0).collect::<Vec<_>>(),
+            Vec::<usize>::new()
+        );
+        assert_eq!(InterlaceRows::new(1).collect::<Vec<_>>(), vec![0]);
+        assert_eq!(
+            InterlaceRows::new(5).collect::<Vec<_>>(),
+            vec![0, 4, 2, 1, 3]
+        );
+        assert_eq!(
+            InterlaceRows::new(9).collect::<Vec<_>>(),
+            vec![0, 8, 4, 2, 6, 1, 3, 5, 7]
+        );
+        assert_eq!(
+            InterlaceRows::new(17).collect::<Vec<_>>(),
+            vec![0, 8, 16, 4, 12, 2, 6, 10, 14, 1, 3, 5, 7, 9, 11, 13, 15]
+        );
     }
 }

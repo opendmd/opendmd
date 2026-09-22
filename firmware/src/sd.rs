@@ -116,6 +116,9 @@ pub struct SdSource;
 impl Source for SdSource {
     fn open(&self, path: &str) -> io::Result<Box<dyn Read>> {
         let full = format!("{}{path}", config::SD_MOUNT);
+        // No `BufReader` here: the `gif` crate wraps whatever it is handed in
+        // an 8 KiB `BufReader` of its own, so a second one buys nothing but
+        // 4 KB of heap on a board that has ~60 KB free while playing.
         Ok(Box::new(File::open(full)?))
     }
 }

@@ -108,6 +108,12 @@ fn main() -> Result<()> {
     let mut canvas = Canvas::new();
     let mut started: u64 = 0;
     let mut last_heartbeat = Instant::now();
+    // Our own heap floor, sampled at every phase boundary of the loop. Do not
+    // use esp_get_minimum_free_heap_size() for this: it is the SUM of each
+    // heap region's own minimum, which drifts ~30 KB below the true floor as
+    // large blocks (the LZW decoder) land in different regions over time.
+    let mut sampled_min = free_heap();
+    let mut low_water = sampled_min;
 
     // One file handle and one offset index for the life of the run. Building
     // it is the only pass over the card; `Exhausted` reseeds the scheduler
@@ -131,16 +137,37 @@ fn main() -> Result<()> {
     );
 
     loop {
-        match engine.tick(Instant::now(), &mut canvas)? {
+        let outcome = engine.tick(Instant::now(), &mut canvas)?;
+        sampled_min = sampled_min.min(free_heap());
+        match outcome {
             TickOutcome::Frame {
                 playing,
                 started: is_new,
                 next_frame_at,
             } => {
                 panel.blit(&canvas);
+                sampled_min = sampled_min.min(free_heap());
                 if is_new {
                     started = playing.ordinal;
-                    log::info!("[{}] {}", playing.ordinal, playing.path);
+                    log::info!(
+                        "[{}] {} (heap {} B free, largest block {} B)",
+                        playing.ordinal,
+                        playing.path,
+                        free_heap(),
+                        largest_free_block()
+                    );
+                }
+                // Attribute every new low-water mark to the GIF on screen, so
+                // a heap regression names the file that caused it.
+                if sampled_min + 2048 < low_water {
+                    log::warn!(
+                        "heap low-water {} B -> {} B during [{}] {}",
+                        low_water,
+                        sampled_min,
+                        playing.ordinal,
+                        playing.path
+                    );
+                    low_water = sampled_min;
                 }
                 // Hold the frame for its GIF delay. `Instant::now()` again,
                 // because the blit itself took time.
@@ -150,6 +177,7 @@ fn main() -> Result<()> {
                     // other task get their turn, then catch up next pass.
                     None => thread::sleep(config::CATCHUP_SLEEP),
                 }
+                sampled_min = sampled_min.min(free_heap());
             }
             TickOutcome::Idle => thread::sleep(config::IDLE_SLEEP),
             TickOutcome::Exhausted => {
@@ -165,7 +193,7 @@ fn main() -> Result<()> {
 
         if last_heartbeat.elapsed() >= config::HEARTBEAT_INTERVAL {
             last_heartbeat = Instant::now();
-            heartbeat(&panel, started);
+            heartbeat(&panel, started, sampled_min);
         }
     }
 }
@@ -181,6 +209,18 @@ fn random_seed() -> u64 {
 fn free_heap() -> u32 {
     // SAFETY: an argument-free read of ESP-IDF's heap accounting.
     unsafe { esp_idf_sys::esp_get_free_heap_size() }
+}
+
+/// Lowest free heap seen since boot, in bytes.
+fn min_free_heap() -> u32 {
+    // SAFETY: as above.
+    unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() }
+}
+
+/// Largest single allocation currently possible from byte-addressable heap.
+fn largest_free_block() -> usize {
+    // SAFETY: a read-only query with a capability mask argument.
+    unsafe { esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_8BIT) }
 }
 
 /// Assert that a typed GPIO peripheral really is the pin `config` names.
@@ -224,12 +264,12 @@ fn build_engine(filter: &Filter) -> Result<Engine> {
     ))
 }
 
-fn heartbeat(panel: &Panel, started: u64) {
+fn heartbeat(panel: &Panel, started: u64, sampled_min: u32) {
     let free = free_heap();
     // SAFETY: an argument-free read of ESP-IDF's heap accounting.
-    let min_free = unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() };
+    let min_free = min_free_heap();
     log::info!(
-        "heartbeat: heap {free} B free (min {min_free} B), refresh {} Hz, {started} GIFs started",
+        "heartbeat: heap {free} B free (floor {sampled_min} B, idf-min {min_free} B), refresh {} Hz, {started} GIFs started",
         panel.refresh_rate(),
     );
 }

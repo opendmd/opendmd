@@ -354,20 +354,47 @@ impl Engine {
     /// Re-open the current file from the start (no rewind on a streaming
     /// reader). False if it can't be reopened, in which case we move on.
     fn restart_current(&mut self) -> bool {
-        let Some(playing) = &mut self.current else {
+        // Drop the finished decoder *before* reopening the file. A GifSource
+        // owns the LZW state plus a logical-screen buffer (and a snapshot if
+        // the GIF used `Previous` disposal); holding two at once is the
+        // difference between a ~17 KB and a ~47 KB free-heap floor on the
+        // ESP32. On failure `current` is left empty and the caller moves on.
+        let Some(playing) = self.current.take() else {
             return false;
         };
+        let Playing {
+            index,
+            path,
+            title,
+            ordinal,
+            gif,
+            started_at,
+            next_frame_at,
+            loops,
+            first_frame,
+        } = playing;
+        drop(gif);
         match self
             .source
-            .open(&playing.path)
+            .open(&path)
             .and_then(GifSource::<Box<dyn Read>>::new)
         {
             Ok(gif) => {
-                playing.gif = gif;
+                self.current = Some(Playing {
+                    index,
+                    path,
+                    title,
+                    ordinal,
+                    gif,
+                    started_at,
+                    next_frame_at,
+                    loops,
+                    first_frame,
+                });
                 true
             }
             Err(e) => {
-                log::warn!("reopen failed for {}: {e}", playing.path);
+                log::warn!("reopen failed for {path}: {e}");
                 false
             }
         }
