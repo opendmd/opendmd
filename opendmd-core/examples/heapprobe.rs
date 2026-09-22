@@ -1,18 +1,20 @@
-//! Live and peak heap while decoding GIFs through `GifSource`, via a counting
-//! global allocator.
+//! Live and peak heap while decoding GIFs and ODM files through `FrameSource`
+//! (so `GifSource` or `OdmSource`, sniffed exactly as the engine does), via a
+//! counting global allocator.
 //!
-//! Usage: `heapprobe [-v] <gif>...`
+//! Usage: `heapprobe [-v] <gif-or-odm>...`
 //!
 //! `steady` is the live heap right after the first frame — every buffer that
 //! stays alive for the rest of the playback. `peak` is the high-water mark
-//! over the whole file; the two differ only when the `gif` crate throws its
-//! LZW decoder away and builds a new one, which it does whenever a frame's
-//! LZW minimum code size differs from the previous frame's.
+//! over the whole file; for a GIF the two differ only when the `gif` crate throws
+//! its LZW decoder away and builds a new one, which it does whenever a frame's
+//! LZW minimum code size differs from the previous frame's. An ODM file
+//! allocates nothing per frame, so for it they are always equal.
 //!
 //! `-v` also prints where the steady bytes went, by taking a reading at each
 //! construction step.
 use opendmd_core::canvas::{Canvas, HEIGHT, WIDTH};
-use opendmd_core::player::GifSource;
+use opendmd_core::player::FrameSource;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fs::File;
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
@@ -49,7 +51,8 @@ fn main() {
         let at_canvas = LIVE.load(SeqCst) - base;
 
         // Handed over unbuffered, like `SdSource` on the firmware: the `gif`
-        // crate wraps it in an 8 KiB `BufReader` of its own anyway.
+        // crate wraps it in an 8 KiB `BufReader` of its own, and `OdmSource`
+        // in a 2 KiB one.
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(e) => {
@@ -60,7 +63,7 @@ fn main() {
         let reader: Box<dyn std::io::Read> = Box::new(file);
         let at_reader = LIVE.load(SeqCst) - base;
 
-        let mut src = match GifSource::new(reader) {
+        let mut src = match FrameSource::open(reader) {
             Ok(s) => s,
             Err(e) => {
                 println!("{path}: {e}");
@@ -89,11 +92,13 @@ fn main() {
         }
         let peak = PEAK.load(SeqCst) - base;
         let (w, h) = src.logical_size();
+        let kind = src.kind();
         drop(src);
 
         println!(
-            "{:<45} {:>3}x{:<3} frames {:>5}  steady {:>6} B  peak {:>6} B{}",
+            "{:<45} {} {:>3}x{:<3} frames {:>5}  steady {:>6} B  peak {:>6} B{}",
             path.rsplit('/').next().unwrap(),
+            kind,
             w,
             h,
             frames,
@@ -110,6 +115,21 @@ fn main() {
             } else {
                 w * h * 3
             };
+            if kind == "odm" {
+                println!(
+                    "    canvas {} B | + source reader {} B | + OdmSource {} B \
+                     (screen {} + 2 KiB BufReader + palette {}) | \
+                     + first frame {} B | transient {} B",
+                    at_canvas,
+                    at_reader - at_canvas,
+                    at_source - at_reader,
+                    own_screen,
+                    (at_source - at_reader).saturating_sub(own_screen + 2048),
+                    after_first - at_source,
+                    peak - after_first,
+                );
+                continue;
+            }
             println!(
                 "    canvas {} B | + source reader {} B | + GifSource {} B \
                  (screen {} + indexed {} + gif internals {}) | \

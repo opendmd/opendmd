@@ -1,0 +1,20 @@
+[package]
+name = "opendmd-pack"
+version = "0.1.0"
+edition = "2021"
+description = "Converts a card's GIFs to ODM v1 and points a manifest at them."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rossduggan/opendmd"
+publish = false
+
+[dependencies]
+opendmd-core = { path = "../opendmd-core" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+debug = false
+
+# Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
+[patch.crates-io]
+gif = { path = "../third_party/gif" }

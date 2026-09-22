@@ -5,6 +5,7 @@ CORE   := opendmd-core
 RENDER := opendmd-render
 SIM    := opendmd-sim
 WEB    := opendmd-web
+PACK   := opendmd-pack
 FW     := firmware
 
 # Serial port of the DevKit. Override: make fw-flash PORT=/dev/ttyUSB1
@@ -35,8 +36,10 @@ export PATH := $(HOME)/.cargo/bin:$(PATH)
 # Card root for `make sim` without ARGS.
 CARD_ROOT ?= ~/scratch/dmdos-card
 ARGS ?= --root $(CARD_ROOT)
+# `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
+PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-smoke fmt clippy clean \
+.PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-smoke fmt clippy clean pack \
 	fw-build fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	card-sync api-load
 
@@ -49,16 +52,20 @@ test:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(WEB)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(PACK)"
+	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo test
 
 # The same tests again, compiled to wasm and run under node — the only check
 # on this box that the browser path really works. Needs node on PATH.
 test-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 
-# Needs a real card dump; see CLAUDE.md.
+# Needs a real card dump; see CLAUDE.md. ODM_ROOT is tools/odm-proto.py's output
+# (the cross-implementation check); the test skips itself if it is missing.
+ODM_ROOT ?= ~/scratch/odm-proto
 test-card:
-	@echo "==> Testing $(CORE) against $(CARD_ROOT)"
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable DMD_CARD_ROOT=$(CARD_ROOT) \
+	@echo "==> Testing $(CORE) against $(CARD_ROOT) and $(ODM_ROOT)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable DMD_CARD_ROOT=$(CARD_ROOT) DMD_ODM_ROOT=$(ODM_ROOT) \
 		cargo test --release -- --ignored --nocapture
 
 sim:
@@ -67,6 +74,12 @@ sim:
 sim-build:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo build --release
 
+# GIF -> ODM conversion for a card: make pack ARGS="convert ~/scratch/dmdos-card --verify"
+# or ARGS="manifest <card-root>". See docs/odm-format.md.
+pack:
+	@test -n "$(PACK_ARGS)" || { echo "usage: make pack ARGS=\"convert <card-root> [--jobs N] [--verify] [--force]\""; exit 2; }
+	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release -- $(PACK_ARGS)
+
 check:
 	@echo "==> Checking $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
@@ -74,6 +87,8 @@ check:
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(SIM)"
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
+	@echo "==> Checking $(PACK)"
+	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 
 # The UI is heading for the browser, so the core and the renderer have to stay
 # free of anything wasm can't do — `std::time::Instant` above all, which has no
@@ -106,6 +121,7 @@ fmt:
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
+	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo fmt
 
 clippy:
 	@echo "==> Clippy $(CORE)"
@@ -116,12 +132,15 @@ clippy:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(WEB)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
+	@echo "==> Clippy $(PACK)"
+	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 
 clean:
 	cd $(CORE) && cargo clean
 	cd $(RENDER) && cargo clean
 	cd $(SIM) && cargo clean
 	cd $(WEB) && cargo clean
+	cd $(PACK) && cargo clean
 	rm -rf $(WEB)/www/pkg ./target
 
 # --- ESP32 firmware ---------------------------------------------------------

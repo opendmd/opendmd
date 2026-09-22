@@ -8,6 +8,7 @@ repository = "https://github.com/rossduggan/opendmd"
 publish = false
 
 [dependencies]
+color_quant = "1.1"
 gif = "0.13"
 log = "0.4"
 

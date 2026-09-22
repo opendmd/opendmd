@@ -43,7 +43,7 @@ const ZERO_DELAY_MS: u64 = 100;
 /// Floor for everything else — 50 fps is well past what a HUB75 refresh can do.
 const MIN_DELAY_MS: u64 = 20;
 /// Sanity cap on the declared logical screen, to bound the screen buffer.
-const MAX_LOGICAL_PIXELS: usize = 2048 * 2048;
+pub(crate) const MAX_LOGICAL_PIXELS: usize = 2048 * 2048;
 /// Bytes in a maximal GIF colour table: 256 entries of RGB.
 const MAX_PALETTE: usize = 256 * 3;
 
@@ -51,7 +51,7 @@ fn decode_err(e: gif::DecodingError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e)
 }
 
-fn invalid(msg: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+pub(crate) fn invalid(msg: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg)
 }
 
@@ -76,7 +76,7 @@ pub struct GifSource<R: Read> {
 }
 
 /// Where the RGB logical screen lives.
-enum Screen {
+pub(crate) enum Screen {
     /// The logical screen is exactly the panel, so the caller's `Canvas` is
     /// the screen. `cleared` is false until the first frame zeroes it.
     Direct { cleared: bool },
@@ -136,6 +136,18 @@ impl<R: Read> GifSource<R> {
     /// Frames handed out so far.
     pub fn frames_decoded(&self) -> u64 {
         self.frames_decoded
+    }
+
+    /// The RGB logical screen (`width * height * 3` bytes, row-major) as of
+    /// the last frame handed out, before `blit` centre-crops it onto the
+    /// canvas. At the panel size that is the caller's `canvas` itself, so it
+    /// must be the one passed to [`next_frame`](Self::next_frame). The ODM
+    /// encoder reads frames through this so a stray keeps its own size.
+    pub fn screen<'a>(&'a self, canvas: &'a Canvas) -> &'a [u8] {
+        match &self.screen {
+            Screen::Direct { .. } => canvas.as_bytes(),
+            Screen::Owned(v) => v,
+        }
     }
 
     /// Decode the next frame onto `canvas` and return how long to show it.
@@ -340,7 +352,7 @@ fn clear_rect(screen: &mut [u8], screen_width: usize, rect: Rect) {
 
 /// Centre-and-crop the logical screen onto the 128x32 canvas. Areas the GIF
 /// doesn't cover, and its transparent pixels, are black.
-fn blit(screen: &[u8], width: usize, height: usize, canvas: &mut Canvas) {
+pub(crate) fn blit(screen: &[u8], width: usize, height: usize, canvas: &mut Canvas) {
     let off_x = (WIDTH as i32 - width as i32) / 2;
     let off_y = (HEIGHT as i32 - height as i32) / 2;
     for cy in 0..HEIGHT {
@@ -417,6 +429,84 @@ impl Iterator for InterlaceRows {
         }
         std::mem::swap(&mut next, &mut self.next);
         Some(next)
+    }
+}
+
+/// A reader whose first four bytes were read to sniff the format and are
+/// handed back in front of the rest. A 4-byte array and a flag; no heap.
+pub type Sniffed<R> = io::Chain<io::Cursor<[u8; 4]>, R>;
+
+/// Either kind of playable file, chosen by its first four bytes: `GIF8` is a
+/// GIF, `ODM1` is a pre-rendered [`OdmSource`](crate::odm::OdmSource).
+///
+/// An enum rather than a `Box<dyn …>`: it needs no allocation per opened file
+/// (a trait object would be one more heap block on every open and every
+/// loop), dispatch is a two-way `match` per frame instead of a vtable call,
+/// and both variants are already the size they are inside the engine's
+/// `Playing` — the enum only adds its tag. Extension-free on purpose: a
+/// renamed file still plays, and the sniff is what decides.
+// The GIF variant is ~520 B inline against ODM's ~130 B, but boxing it would
+// add a heap block per open to save stack/struct space the engine's `Playing`
+// already spent before ODM existed — `large_enum_variant` is the wrong trade.
+#[allow(clippy::large_enum_variant)]
+pub enum FrameSource<R: Read> {
+    Gif(GifSource<Sniffed<R>>),
+    Odm(crate::odm::OdmSource<Sniffed<R>>),
+}
+
+impl<R: Read> FrameSource<R> {
+    /// Read the first four bytes and open the matching decoder over the whole
+    /// stream. Anything else — including a file shorter than four bytes — is
+    /// `InvalidData`.
+    pub fn open(mut reader: R) -> io::Result<Self> {
+        let mut magic = [0u8; 4];
+        reader.read_exact(&mut magic).map_err(|e| {
+            if e.kind() == io::ErrorKind::UnexpectedEof {
+                invalid("file is too short to be a GIF or an ODM")
+            } else {
+                e
+            }
+        })?;
+        let stream = io::Cursor::new(magic).chain(reader);
+        match &magic {
+            b"GIF8" => Ok(FrameSource::Gif(GifSource::new(stream)?)),
+            m if *m == crate::odm::MAGIC => {
+                Ok(FrameSource::Odm(crate::odm::OdmSource::new(stream)?))
+            }
+            _ => Err(invalid(format!(
+                "not a GIF or an ODM file (starts with {magic:02x?})"
+            ))),
+        }
+    }
+
+    /// `"gif"` or `"odm"`, for logs and tools.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            FrameSource::Gif(_) => "gif",
+            FrameSource::Odm(_) => "odm",
+        }
+    }
+
+    /// See [`GifSource::next_frame`]; the contract is the same for both.
+    pub fn next_frame(&mut self, canvas: &mut Canvas) -> io::Result<Option<Duration>> {
+        match self {
+            FrameSource::Gif(s) => s.next_frame(canvas),
+            FrameSource::Odm(s) => s.next_frame(canvas),
+        }
+    }
+
+    pub fn logical_size(&self) -> (usize, usize) {
+        match self {
+            FrameSource::Gif(s) => s.logical_size(),
+            FrameSource::Odm(s) => s.logical_size(),
+        }
+    }
+
+    pub fn frames_decoded(&self) -> u64 {
+        match self {
+            FrameSource::Gif(s) => s.frames_decoded(),
+            FrameSource::Odm(s) => s.frames_decoded(),
+        }
     }
 }
 

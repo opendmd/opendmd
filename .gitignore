@@ -10,9 +10,11 @@ cards/
 gifs/
 **/gifs/
 *.gif
+*.odm
 filelist.txt
 filelist.hall
 filelist.xmas
+filelist.odm.txt
 
 # hardware/ is deliberately NOT ignored: the measured pinout and photos are
 # the one thing that can't be regenerated.

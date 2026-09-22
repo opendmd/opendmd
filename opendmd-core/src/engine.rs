@@ -14,7 +14,7 @@
 use crate::canvas::Canvas;
 use crate::filter::Filter;
 use crate::manifest::{self, Entry};
-use crate::player::GifSource;
+use crate::player::FrameSource;
 use crate::scheduler::Scheduler;
 use std::io::{self, BufReader, Read, Seek};
 use std::time::Duration;
@@ -107,9 +107,11 @@ impl<R: Read + Seek> Catalog for FileCatalog<R> {
     }
 }
 
-/// Where GIF bytes come from. The firmware implements this over `/sdcard`, the
-/// simulator over a directory. Manifest paths are card-absolute
-/// (`/gifs/Consoles/X.gif`); joining them onto a root is the source's job.
+/// Where GIF (or ODM) bytes come from. The firmware implements this over
+/// `/sdcard`, the simulator over a directory. What `open` returns is sniffed
+/// by [`FrameSource`], not judged by its extension. Manifest paths are
+/// card-absolute (`/gifs/Consoles/X.gif`); joining them onto a root is the
+/// source's job.
 pub trait Source {
     fn open(&self, path: &str) -> io::Result<Box<dyn Read>>;
 }
@@ -170,7 +172,7 @@ struct Playing {
     path: String,
     title: String,
     ordinal: u64,
-    gif: GifSource<Box<dyn Read>>,
+    gif: FrameSource<Box<dyn Read>>,
     started_at: Duration,
     next_frame_at: Duration,
     loops: u32,
@@ -397,7 +399,7 @@ impl Engine {
         match self
             .source
             .open(&path)
-            .and_then(GifSource::<Box<dyn Read>>::new)
+            .and_then(FrameSource::<Box<dyn Read>>::open)
         {
             Ok(gif) => {
                 self.current = Some(Playing {
@@ -439,7 +441,7 @@ impl Engine {
             match self
                 .source
                 .open(&path)
-                .and_then(GifSource::<Box<dyn Read>>::new)
+                .and_then(FrameSource::<Box<dyn Read>>::open)
             {
                 Ok(gif) => {
                     self.started_count += 1;
@@ -599,6 +601,44 @@ mod tests {
         // min dwell is zero, so we move to the next entry.
         let t1 = t0 + Duration::from_millis(100);
         match e.tick(t1, &mut canvas).unwrap() {
+            TickOutcome::Frame { playing, .. } => assert_eq!(playing.title, "B"),
+            other => panic!("expected B, got {other:?}"),
+        }
+        assert_eq!(canvas.get(0, 0), Rgb::new(0, 255, 0));
+    }
+
+    #[test]
+    fn odm_entries_play_through_the_same_engine() {
+        let mut odm = Vec::new();
+        crate::odm::encode_gif(&one_pixel_gif(0, 0, 255)[..], &mut odm).unwrap();
+        let dwell = DwellPolicy {
+            min: Duration::ZERO,
+            max: Duration::from_secs(30),
+            min_loops: 1,
+        };
+        let mut e = engine_with(
+            &[
+                ("/gifs/Consoles/NES_A_01.odm", odm),
+                ("/gifs/Consoles/NES_B_01.gif", one_pixel_gif(0, 255, 0)),
+            ],
+            "/gifs/Consoles/NES_A_01.odm\n/gifs/Consoles/NES_B_01.gif",
+            dwell,
+        );
+        let mut canvas = Canvas::new();
+        match e.tick(Duration::ZERO, &mut canvas).unwrap() {
+            TickOutcome::Frame {
+                playing,
+                next_frame_at,
+                ..
+            } => {
+                assert_eq!(playing.title, "A");
+                assert_eq!(next_frame_at, Duration::from_millis(50));
+            }
+            other => panic!("expected A, got {other:?}"),
+        }
+        assert_eq!(canvas.get(0, 0), Rgb::new(0, 0, 255));
+        // It loops and hands over exactly as the GIF path does.
+        match e.tick(Duration::from_millis(100), &mut canvas).unwrap() {
             TickOutcome::Frame { playing, .. } => assert_eq!(playing.title, "B"),
             other => panic!("expected B, got {other:?}"),
         }

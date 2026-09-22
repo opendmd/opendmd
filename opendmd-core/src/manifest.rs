@@ -286,19 +286,23 @@ fn category_of(path: &str) -> Option<String> {
     Some(second.to_string())
 }
 
-/// Filename minus directories, minus any trailing `.gif` extensions and the
-/// stray dots around them (`..._01..gif` is real).
+/// Filename minus directories, minus any trailing `.gif` or `.odm` extensions
+/// and the stray dots around them (`..._01..gif` is real, and converts to
+/// `..._01..odm`). A converted file therefore gets exactly the tags of its GIF.
 fn stem_of(path: &str) -> &str {
     let name = path.rsplit('/').next().unwrap_or(path);
     let mut stem = name;
     loop {
         let trimmed = stem.trim_end_matches('.');
-        let next =
-            if trimmed.len() >= 4 && trimmed[trimmed.len() - 4..].eq_ignore_ascii_case(".gif") {
-                &trimmed[..trimmed.len() - 4]
-            } else {
-                trimmed
-            };
+        // `get`, not indexing: a name ending in a multi-byte character must
+        // not panic on a non-boundary slice.
+        let cut = trimmed.len().saturating_sub(4);
+        let next = match trimmed.get(cut..) {
+            Some(ext) if ext.eq_ignore_ascii_case(".gif") || ext.eq_ignore_ascii_case(".odm") => {
+                &trimmed[..cut]
+            }
+            _ => trimmed,
+        };
         if next.len() == stem.len() {
             return next;
         }
@@ -556,6 +560,33 @@ mod tests {
             assert!(e.has_flag("INVERT"), "{name}");
             assert_eq!(e.title, "Unknow");
         }
+    }
+
+    #[test]
+    fn an_odm_file_gets_the_tags_of_its_gif() {
+        for name in [
+            "SNES_Donkey_Kong_Country_05",
+            "MD_Sonic3_RattenJager",
+            "NINTENDO_DS_Mario_Kart_DS_01.",
+            "HALLOWEEN_ARCADE_GoldenAxe16",
+            "NES_Unknow_01_Invert",
+        ] {
+            let gif = p(&format!("/gifs/NEW 2021/{name}.gif"));
+            let odm = p(&format!("/gifs/NEW 2021/{name}.odm"));
+            assert_eq!(odm.path, format!("/gifs/NEW 2021/{name}.odm"));
+            assert_eq!(
+                Entry {
+                    path: gif.path.clone(),
+                    ..odm
+                },
+                gif,
+                "{name}"
+            );
+        }
+        assert_eq!(p("/gifs/X/SNES_Plok_08.ODM").title, "Plok");
+        // Only the extension is stripped, and a multi-byte tail cannot panic.
+        assert_eq!(p("/gifs/X/SNES_odm_Test").title, "odm Test");
+        assert_eq!(p("/gifs/X/SNES_Caf\u{e9}").title, "Caf\u{e9}");
     }
 
     #[test]

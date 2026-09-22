@@ -9,7 +9,7 @@ the ESP32 firmware.
 
 ## Layout
 
-Five standalone crates, deliberately **not** a Cargo workspace. The core, the
+Six standalone crates, deliberately **not** a Cargo workspace. The core, the
 renderer and the simulator build and test with plain stable Rust on any
 desktop; the web app needs the `wasm32-unknown-unknown` target; the firmware
 has its own xtensa build config under `firmware/`.
@@ -20,6 +20,7 @@ has its own xtensa build config under `firmware/`.
 | `opendmd-render/` | Library. The LED-panel renderer, shared by the simulator and the web app. Depends only on `opendmd-core`. |
 | `opendmd-sim/` | Binary. A `minifb` window that plays a card through `opendmd-core`, drawing it as a simulated LED panel. Glue only. |
 | `opendmd-web/` | WebAssembly front end: the same engine and renderer in a browser page. See "The web app". |
+| `opendmd-pack/` | Binary. Converts a card's GIFs to pre-rendered `.odm` files and points a manifest at them. See "Pre-rendered `.odm` files". |
 | `firmware/` | ESP32 firmware. microSD + HUB75 + the core engine. See "Firmware". |
 | `hardware/` | Measured HUB75 + SD SPI pinout and photos. See `hardware/PINOUT.md`. |
 
@@ -29,7 +30,7 @@ Stable Rust for the core and the simulator; the firmware needs the Espressif
 xtensa toolchain as well.
 
 ```bash
-make test                       # unit tests (core, render, sim, web)
+make test                       # unit tests (core, render, sim, web, pack)
 make check                      # cargo check the host crates
 make clippy                     # clippy -D warnings, every crate
 make fmt
@@ -154,6 +155,40 @@ line, LF-terminated — byte-identical to the shipped card file).
 Every GIF in the archive is 128x32 except two strays (132x32 and 135x32).
 Mismatched sizes are centred and cropped, never resampled — it is pixel art and
 any scaling filter ruins it.
+
+## Pre-rendered `.odm` files
+
+An `.odm` file is a GIF that has already been played: every frame fully
+composited, one palette for the whole file, and each frame stored as KEEP /
+FILL / LIT runs against the previous one. The player needs about **14.5 KB**
+of heap for one instead of **~54 KB** for the GIF — no LZW decoder, no GIF
+read buffer — which is headroom the ESP32 spends on WiFi and serving. Across
+the stock card they are 0.94x the size of the GIFs (median 0.93x; dithered
+content can be several times bigger), and all but 38 of 11,039 files decode to
+exactly the frames the GIF player shows. Those 38 have more than 256 colours
+and are quantised; play the `.gif` for any that look wrong. The byte-level
+spec is [`docs/odm-format.md`](docs/odm-format.md); `tools/odm-proto.py` is
+the Python reference it came from.
+
+The player decides by content, not by name: a manifest may mix `.gif` and
+`.odm` paths, and a converted file keeps its GIF's tags. To convert a card
+copy and play the result:
+
+```bash
+# <name>.odm beside every <name>.gif; skips files already converted;
+# --verify plays both and compares every frame
+make pack ARGS="convert /path/to/card --verify"
+
+# filelist.txt with every path switched to .odm where one exists
+make pack ARGS="manifest /path/to/card"          # -> filelist.odm.txt
+
+# onto a running player: the files, then the manifest as a set, then select it
+uv run tools/card-sync.py <host> --from /path/to/card --paths list.txt
+curl -T /path/to/card/filelist.odm.txt http://<host>/api/sets/odm
+curl -X PUT -d '{"set":"odm"}' http://<host>/api/config
+```
+
+Or copy the `.odm` files and the manifest onto the card directly.
 
 ## Tag grammar
 

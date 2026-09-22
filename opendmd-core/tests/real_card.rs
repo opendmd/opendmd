@@ -208,3 +208,148 @@ fn real_card_manifest() {
     assert_eq!(decoded, 50);
     assert_eq!(seen.len(), 50);
 }
+
+/// Cross-implementation check: `.odm` files written by the Python prototype
+/// (`tools/odm-proto.py`, output under `DMD_ODM_ROOT` mirroring `gifs/`)
+/// decode through the Rust `OdmSource` to exactly the canvases `GifSource`
+/// produces from the source GIF.
+///
+/// Twenty files: the seven the heap budget is measured on, the two strays
+/// (132x32 and 135x32), and eleven more picked by a fixed-seed draw. Files
+/// the prototype had to quantise are lossy by design and skipped by the draw.
+/// Delays are compared after the GIF player's rules (0 -> 100 ms, floor
+/// 20 ms), because the prototype wrote Pillow's raw `duration` where the Rust
+/// encoder writes the final delay.
+/// The one known disagreement. This 135x32 GIF's frames never cover source
+/// columns 128..=130 (canvas 125..=127 after the -3 crop offset); `GifSource`
+/// leaves never-drawn pixels black, as it always has, while Pillow starts the
+/// screen at the GIF's background colour, so the prototype encoded that
+/// strip as (107,41,57). The Rust encoder follows playback and differs from
+/// the prototype here by 216 bytes.
+const WARIO: &str = "Consoles/NINTENDO_DS_Wario_WareDIY_03";
+
+fn assert_uncovered_only(g: &Canvas, o: &Canvas, rel: &str, frame: u64) {
+    for y in 0..32 {
+        for x in 0..128 {
+            if g.get(x, y) != o.get(x, y) {
+                assert!(
+                    x >= 125 && g.get(x, y) == opendmd_core::Rgb::BLACK,
+                    "{rel}: frame {frame} differs at ({x},{y}) outside the uncovered strip"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs DMD_CARD_ROOT and DMD_ODM_ROOT (the prototype's output)"]
+fn prototype_odm_files_decode_like_the_gifs() {
+    use opendmd_core::odm::OdmSource;
+    use opendmd_core::player::GifSource;
+
+    let (Ok(card), Ok(odm_root)) = (
+        std::env::var("DMD_CARD_ROOT"),
+        std::env::var("DMD_ODM_ROOT"),
+    ) else {
+        eprintln!("DMD_CARD_ROOT / DMD_ODM_ROOT not set, nothing to do");
+        return;
+    };
+    let gifs = PathBuf::from(card).join("gifs");
+    let odm_root = PathBuf::from(odm_root);
+
+    let mut picks: Vec<String> = [
+        "Pinball_Short/PINBALL_SHORT_Corvette_01",
+        "Pinball_Short/PINBALL_SHORT_WWF_40",
+        "Consoles/SNES_Inspector_Gadget_02",
+        "Arcade/ARCADE_Arkanoid_03",
+        "Arcade/ARCADE_NEOGEO_MetalSlugFire05_Shabazz",
+        "Consoles/SNES_Donkey_Kong_Country_04",
+        "Consoles/SNES_Yoshi_Island_01_01_Wolfsoft",
+        "Consoles/NINTENDO_DS_Wario_WareDIY_03",
+        "NEW 2021/2a",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+
+    // Every prototype output, sorted, for a reproducible draw.
+    fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<String>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, base, out);
+            } else if p.extension().is_some_and(|x| x == "odm") {
+                let rel = p.strip_prefix(base).unwrap().with_extension("");
+                out.push(rel.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let mut all = Vec::new();
+    walk(&odm_root, &odm_root, &mut all);
+    all.sort();
+    println!(
+        "prototype .odm files under {}: {}",
+        odm_root.display(),
+        all.len()
+    );
+    let mut rng = Rng::new(0x4F44_4D31_0000_0020);
+    while picks.len() < 20 {
+        let rel = &all[(rng.next_u64() % all.len() as u64) as usize];
+        if picks.contains(rel) {
+            continue;
+        }
+        // Skip the prototype's quantised files: those are lossy by design.
+        let odm = std::fs::File::open(odm_root.join(format!("{rel}.odm"))).unwrap();
+        if OdmSource::new(BufReader::new(odm)).unwrap().palette_len() == 256 {
+            continue;
+        }
+        picks.push(rel.clone());
+    }
+
+    let rule = |ms: u128| match ms {
+        0 => 100,
+        n => n.max(20),
+    };
+    let mut total_frames = 0u64;
+    for rel in &picks {
+        let gif = std::fs::read(gifs.join(format!("{rel}.gif"))).unwrap();
+        let odm = std::fs::File::open(odm_root.join(format!("{rel}.odm"))).unwrap();
+        let mut g = GifSource::new(&gif[..]).unwrap();
+        let mut o = OdmSource::new(BufReader::new(odm)).unwrap();
+        assert_eq!(g.logical_size(), o.logical_size(), "{rel}: size");
+        let (mut cg, mut co) = (Canvas::new(), Canvas::new());
+        let mut frames = 0u64;
+        let mut delay_diffs = 0u64;
+        loop {
+            let dg = g.next_frame(&mut cg).unwrap();
+            let d_o = o.next_frame(&mut co).unwrap();
+            match (dg, d_o) {
+                (None, None) => break,
+                (Some(dg), Some(d_o)) => {
+                    if rel == WARIO {
+                        assert_uncovered_only(&cg, &co, rel, frames);
+                    } else {
+                        assert!(cg == co, "{rel}: frame {frames} differs");
+                    }
+                    if dg.as_millis() != rule(d_o.as_millis()) {
+                        delay_diffs += 1;
+                    }
+                }
+                _ => panic!("{rel}: frame count differs at {frames}"),
+            }
+            frames += 1;
+        }
+        println!(
+            "  ok  {rel}: {frames} frames, {}x{}, palette {}, delay mismatches {delay_diffs}",
+            o.logical_size().0,
+            o.logical_size().1,
+            o.palette_len()
+        );
+        assert_eq!(delay_diffs, 0, "{rel}: delays");
+        total_frames += frames;
+    }
+    println!(
+        "{} prototype files, {total_frames} frames, pixel-identical to GifSource (bar {WARIO}'s uncovered strip)",
+        picks.len()
+    );
+}
