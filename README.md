@@ -41,6 +41,7 @@ make check-wasm                 # core + render + web for wasm32
 make test-wasm                  # the web crate's tests under node
 make web                        # wasm-pack build -> opendmd-web/www/pkg
 make web-serve                  # static server on http://localhost:8080
+make web-smoke                  # headless Chromium drive of the page (tools/web-smoke.py)
 ```
 
 `make sim` needs a display; the simulator opens a `128 * scale` by

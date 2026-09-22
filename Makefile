@@ -30,7 +30,7 @@ export PATH := $(HOME)/.cargo/bin:$(PATH)
 CARD_ROOT ?= ~/scratch/dmdos-card
 ARGS ?= --root $(CARD_ROOT)
 
-.PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve fmt clippy clean \
+.PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-smoke fmt clippy clean \
 	fw-build fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt
 
 test:
@@ -89,6 +89,10 @@ web:
 # http://localhost:8080 — the file/directory picker does the rest.
 web-serve:
 	uv run python -m http.server 8080 -d $(WEB)/www
+
+# Headless Chromium drive of the page: DMD_CARD_ROOT=... make web-smoke
+web-smoke: web
+	uv run tools/web-smoke.py
 
 fmt:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo fmt
