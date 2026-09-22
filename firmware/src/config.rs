@@ -74,10 +74,10 @@ pub const SD_CS: u32 = 5;
 /// Where the card is mounted. Manifest paths are card-absolute, so a manifest
 /// entry `/gifs/X.gif` opens as `/sdcard/gifs/X.gif`.
 pub const SD_MOUNT: &str = "/sdcard";
-/// FATFS file descriptors. Two are live in the player's steady state (the
-/// manifest index's handle on `filelist.txt` and the GIF the engine is
-/// playing); the httpd task needs a few more for the file it is serving or
-/// the upload it is streaming to the card.
+/// FATFS file descriptors. Three are live in the player's steady state (the
+/// catalog's handles on `filelist.txt` and `filelist.txt.idx`, and the GIF the
+/// engine is playing); the httpd task needs a few more for the file it is
+/// serving or the upload it is streaming to the card.
 pub const SD_MAX_FILES: usize = 8;
 /// Conservative: the carrier's SD wiring is long and unshielded.
 pub const SD_SPEED_KHZ: u32 = 20_000;
@@ -160,14 +160,16 @@ pub const HTTP_STACK: usize = 10 * 1024;
 /// in-flight request holds one of these on a heap that has under 20 KB free
 /// while a GIF is playing.
 pub const IO_CHUNK: usize = 2048;
-/// Contiguous heap needed to rebuild the manifest index in place.
+/// Contiguous heap needed for the in-RAM playlist index, the fallback when the
+/// card will not take `<manifest>.idx`.
 ///
 /// `FileCatalog`'s `Vec<u32>` grows by doubling, so indexing the stock card's
 /// 10,133 entries (40,532 B) passes through a 64 KB allocation. That fits on a
 /// fresh heap and never once WiFi is up, where the largest free block measured
-/// 12-25 KB. The main task checks this before trying, and reboots to apply the
-/// change instead of letting the allocator abort.
-pub const REINDEX_MIN_BLOCK: usize = 64 * 1024;
+/// 12-39 KB. The on-card index (the normal path) needs none of this; the check
+/// only guards the fallback after boot, which reboots rather than let the
+/// allocator abort the board.
+pub const IN_RAM_INDEX_MIN_BLOCK: usize = 64 * 1024;
 
 /// The player's heap reserve: below this, the HTTP server stops serving files
 /// rather than let the display loop fail an allocation.
@@ -192,6 +194,12 @@ pub const REINDEX_MIN_BLOCK: usize = 64 * 1024;
 ///
 /// It is a mitigation, not a guarantee: lwip and the WiFi driver allocate on
 /// their own account, outside any check we can make here.
+///
+/// Since the playlist index moved onto the card (~40 KB back), the sampled
+/// floor under `api-load` is 38 KB with one client and 34 KB with three, so
+/// the reserve no longer engages in normal use. It is left at the measured
+/// cliff rather than raised: it is the backstop for when something else takes
+/// that headroom.
 pub const HEAP_RESERVE: u32 = 5 * 1024;
 /// How long a stalled transfer will wait for the heap to recover before it
 /// gives up and fails the request.

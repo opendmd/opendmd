@@ -289,16 +289,17 @@ make api-load HOST=opendmd.local     # stress the file server, diff the display 
 
 ### What the network costs the display
 
-A classic ESP32 with 4 MB of flash and no PSRAM is *full* with this feature
-set. Free heap while playing is 17-19 KB, and 2.5-6 KB during an HTTP
-transfer. Interactive use — loading the page, `make card-sync`, the JSON API,
-pulling the odd GIF — is comfortable and costs the panel nothing visible.
-**Sustained, back-to-back file serving is not**: the measured limit is around a
-minute of continuous downloads before an allocation fails and the board
-reboots. The player always gets priority (requests are refused with 503 and
-transfers pause when the heap falls into the player's reserve), but that is a
-mitigation rather than a fix. The arithmetic, and what would actually solve it,
-are in "Heap ceiling" in `CLAUDE.md`.
+A classic ESP32 with 4 MB of flash and no PSRAM is tight with this feature
+set. With the playlist index on the card (below), free heap while playing
+bottoms out around 57 KB idle, 38 KB while serving one client back-to-back and
+34 KB with three, and two minutes of continuous downloads leave the board up
+(before the index moved it sat at 17-19 KB and aborted within two minutes).
+What sustained serving still costs is display *timing*: the file server and
+the player share one SPI bus, so frames run late while GIFs are being pulled
+off the card. The player always gets priority on heap (requests are refused
+with 503 and transfers pause when the heap falls into the player's reserve).
+The arithmetic is in "Heap ceiling" in `CLAUDE.md`. Try it with
+`make api-load HOST=… WORKERS=1`.
 
 Both `/api/status` and the serial heartbeat report the numbers this is judged
 on — frame-deadline misses, the worst lateness seen, and the sampled heap
@@ -310,12 +311,12 @@ floor:
 I opendmd_firmware: OpenDMD firmware v0.1.0 (4mb, app desc '...') — 128x32 HUB75 GIF player
 I opendmd_firmware: panel up: 128x32 (2 x 64x32), driver=0, double_buff=false, hub75_refresh_rate=100 Hz
 I opendmd_firmware: microSD mounted at /sdcard (31.27 GB), heap 175600 B free
-I opendmd_firmware: manifest indexed: /sdcard/filelist.txt, 10133 entries, 40532 index bytes, heap 120276 B free
+I opendmd_firmware: manifest indexed: /sdcard/filelist.txt, 10133 entries, index loaded in 9 ms (40532 B on card), heap 160664 B free
 I opendmd_firmware::httpd: httpd started on port 80, pinned to CPU0, 10240 B stack
 I opendmd_firmware::wifi: WiFi connected, IP 192.168.1.69
 I opendmd_firmware::net_worker: [net] ready: http://192.168.1.69/ and http://opendmd.local/
-I opendmd_firmware: [1] /gifs/Consoles/NES_Super_Mario_Bros_16.gif (heap 26692 B free, largest block 25600 B)
-I opendmd_firmware: heartbeat: heap 19724 B free (floor 17740 B, idf-min 16088 B), refresh 100 Hz, 4 GIFs started, 3 deadline misses (worst 198 ms), wifi sta 192.168.1.69
+I opendmd_firmware: [1] /gifs/Consoles/SMS_Fire_and_Forget_II_02_bd.azerty.p.gif (heap 66748 B free, largest block 65536 B)
+I opendmd_firmware: heartbeat: heap 60076 B free (floor 58124 B, idf-min 54252 B), refresh 100 Hz, 5 GIFs started, 5 deadline misses (worst 357 ms), wifi sta 192.168.1.69
 ```
 
 A missing card is not fatal: the mount is retried every 5 seconds, forever,
@@ -325,7 +326,7 @@ associates.
 
 ### The playlist is indexed, not loaded
 
-A classic ESP32 has ~260 KB of usable DRAM, ~120 KB of it left once the HUB75
+A classic ESP32 has ~260 KB of usable DRAM, ~175 KB of it left once the HUB75
 DMA buffers are allocated. The real card's `filelist.txt` is 450 KB and 10,162
 lines; `std::fs::read_to_string` on it aborts with "out of memory" outright,
 and `parse_manifest` would then want roughly 6 MB of `Entry` values (~590
@@ -341,8 +342,20 @@ one entry. The whole card is playable in one session, and running out of
 openable files reshuffles the existing index (`Engine::reset`) rather than
 re-reading 450 KB over SPI.
 
-The simulator uses exactly the same path, so `make sim` exercises what the
-firmware does.
+On the device even those 40 KB are too many to keep in RAM, so the firmware
+writes the offsets to a file beside the manifest instead — `filelist.txt.idx`
+(or `sets/<name>.txt.idx`) — and seeks into it: 4 bytes read per GIF started.
+The file records the manifest's length and a fingerprint of the platform
+filter it was built for; at boot a current one is simply reopened (~10 ms), and
+a missing or stale one is rebuilt in one pass (~6 s over SPI) via a temp file
+and a rename. `POST /api/reindex`, a filter or set change and a manifest upload
+all rebuild it in place, with no reboot. Anything that replaces a manifest
+deletes its `.idx` first. If the card is read-only the firmware falls back to
+the in-RAM index and keeps playing. `.idx` files are derived data: delete them
+whenever you like.
+
+The simulator uses the same streaming index (the in-RAM `FileCatalog`), so
+`make sim` exercises the same manifest path the firmware does.
 
 ## License
 

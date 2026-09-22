@@ -87,19 +87,54 @@ impl Status {
     }
 }
 
+/// Where the playlist index a command ended up with came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexSource {
+    /// `<manifest>.idx` was already on the card and current for this manifest
+    /// length and filter; nothing was rebuilt.
+    Loaded,
+    /// A fresh `<manifest>.idx` was written (one streaming pass over the
+    /// manifest) and renamed into place.
+    Built,
+    /// The card would not take the `.idx` (read-only, full), so the offsets are
+    /// held in RAM as before — ~40 KB for the stock card.
+    InRam,
+}
+
+impl IndexSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IndexSource::Loaded => "loaded",
+            IndexSource::Built => "built",
+            IndexSource::InRam => "in-ram",
+        }
+    }
+}
+
 /// What came of a command that changes the playlist.
 ///
-/// `rebooting` is not a failure: rebuilding the manifest index needs a single
-/// ~64 KB contiguous allocation, which only exists on a fresh heap. Once WiFi
-/// is up the largest free block is 12-25 KB, so an in-place reindex is
-/// impossible and the main task reboots instead — the uploaded manifest is
-/// already on the card and the boot-time index picks it up. Attempting the
-/// allocation anyway is not an option: Rust aborts the board on allocation
-/// failure, which is exactly what this replaced.
+/// Every playlist change is applied in place now: the index lives on the card
+/// (`<manifest>.idx`), so rebuilding it needs a 1 KB read buffer and a 2 KB
+/// write buffer rather than the ~64 KB contiguous block the old in-RAM index
+/// passed through — which is what used to force a reboot once WiFi was up.
+/// `index` and `index_ms` say how the catalog was obtained and how long the
+/// display was held for it.
 #[derive(Clone, Copy, Debug)]
 pub struct Applied {
     pub entries: usize,
-    pub rebooting: bool,
+    pub index: Option<IndexSource>,
+    pub index_ms: u64,
+}
+
+impl Applied {
+    /// Nothing was rebuilt; `entries` is what the running engine already had.
+    pub fn unchanged(entries: usize) -> Self {
+        Applied {
+            entries,
+            index: None,
+            index_ms: 0,
+        }
+    }
 }
 
 /// The reply channel every command that changes state carries.
@@ -122,14 +157,17 @@ pub enum Command {
         settings: Box<crate::nvs_config::Settings>,
         reply: Reply,
     },
-    /// Rebuild the engine — a fresh streaming pass over the manifest, done
-    /// between GIFs and never on the httpd task.
+    /// Rebuild the engine and its on-card index — a fresh streaming pass over
+    /// the manifest even if the `.idx` looks current, done between GIFs and
+    /// never on the httpd task.
     Reindex(Reply),
     /// Swap an uploaded manifest into place and reindex.
     ///
-    /// The engine holds `dest` open, so the httpd task must not touch it: it
-    /// streams the upload to `temp` and hands the swap over here, where the
-    /// engine is dropped first. Replies `Ok(entries)` or `Err(message)`.
+    /// The engine holds `dest` (and `dest.idx`) open, so the httpd task must
+    /// not touch them: it streams the upload to `temp` and hands the swap over
+    /// here, where the engine is dropped first, the stale `.idx` is deleted,
+    /// and only then is the manifest replaced. Replies `Ok(entries)` or
+    /// `Err(message)`.
     InstallManifest {
         temp: String,
         dest: String,

@@ -261,6 +261,48 @@ pub fn receive_upload(req: &mut Req, dest: &str) -> Result<u64> {
     Ok(written)
 }
 
+/// The on-card playlist index that belongs to a manifest: `<manifest>.idx`.
+/// Derived data, rebuilt by the main task whenever it is missing or stale.
+pub fn index_path(manifest: &str) -> String {
+    format!("{manifest}.idx")
+}
+
+/// Is `path` (filesystem, `/sdcard/...`) something the player could use as a
+/// manifest — the card's `filelist.*` or anything in `sets/`? Only these have
+/// an `.idx` sidecar worth looking for; checking every upload would cost a
+/// directory scan per GIF, and FAT directories here run to 3,781 entries.
+pub fn is_manifest_path(path: &str) -> bool {
+    if path.ends_with(".idx") || path.ends_with(".tmp") || path.ends_with(".part") {
+        return false;
+    }
+    let p = Path::new(path);
+    let in_root = p.parent().is_some_and(|d| d == Path::new(config::SD_MOUNT));
+    let in_sets = p.parent().is_some_and(|d| d == Path::new(config::SETS_DIR));
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    (in_root && name.starts_with("filelist.")) || in_sets
+}
+
+/// Delete the `.idx` beside a manifest that is about to be replaced or removed.
+///
+/// The index header's staleness check (manifest length + filter fingerprint)
+/// would catch most replacements on its own, but not a new manifest of exactly
+/// the same length, and not a crash between two writes. So the order is fixed:
+/// **delete the index first, then write the manifest.** A crash in between
+/// leaves an old manifest with no index, which just costs a rebuild; the other
+/// order could leave a new manifest beside an index of the old one. A missing
+/// index is not an error.
+pub fn remove_index_beside(manifest: &str) -> Result<()> {
+    let idx = index_path(manifest);
+    match fs::remove_file(&idx) {
+        Ok(()) => {
+            log::info!("removed stale {idx}");
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => bail!("removing {idx}: {e}"),
+    }
+}
+
 /// Stream a request body to `temp`, creating parent directories.
 pub fn stream_body_to(req: &mut Req, temp: &str) -> Result<()> {
     if let Some(parent) = Path::new(temp).parent() {

@@ -33,6 +33,10 @@ const SETUP_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/setup.htm
 /// drains its channel every frame, so this only ever expires if the player is
 /// wedged — in which case saying so beats hanging the browser.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a handler waits for a command that may rebuild the playlist index:
+/// a full pass over the stock card's 450 KB manifest plus writing the 40 KB
+/// `.idx` takes several seconds over SPI, longer while files are being served.
+const REINDEX_TIMEOUT: Duration = Duration::from_secs(60);
 /// A WiFi scan takes a couple of seconds and blocks the worker.
 const SCAN_TIMEOUT: Duration = Duration::from_secs(12);
 /// Cap on JSON request bodies. Uploads are streamed and are not subject to it.
@@ -183,10 +187,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        match rx.recv_timeout(REPLY_TIMEOUT) {
-            Ok(Ok(Applied { entries, rebooting })) => req.json(&format!(
-                r#"{{"ok":true,"entries":{entries},"rebooting":{rebooting},"reboot_required":{}}}"#,
-                wifi_changed && !rebooting
+        match rx.recv_timeout(REINDEX_TIMEOUT) {
+            Ok(Ok(applied)) => req.json(&format!(
+                r#"{{"ok":true,{},"reboot_required":{wifi_changed}}}"#,
+                applied_json(&applied)
             )),
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
             Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
@@ -199,10 +203,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if c.cmd.send(Command::Reindex(tx)).is_err() {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        match rx.recv_timeout(REPLY_TIMEOUT) {
-            Ok(Ok(Applied { entries, rebooting })) => req.json(&format!(
-                r#"{{"ok":true,"entries":{entries},"rebooting":{rebooting}}}"#
-            )),
+        match rx.recv_timeout(REINDEX_TIMEOUT) {
+            Ok(Ok(applied)) => req.json(&format!(r#"{{"ok":true,{}}}"#, applied_json(&applied))),
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
             Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
         }
@@ -273,6 +275,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let Some(dest) = files::card_path(config::SD_MOUNT, &rel) else {
             return req.bad_request("path escapes the card");
         };
+        // A manifest (`/filelist.*`, `/sets/*`) may be the one the engine has
+        // open, and it has an `.idx` sidecar that must go first. Both are the
+        // main task's business, exactly as for `PUT /api/manifest`.
+        if files::is_manifest_path(&dest) {
+            return install_manifest(req, &c, dest);
+        }
         // If the player has this very file open, ask it to move on first: FAT
         // cannot replace a file that is being read.
         let playing = c.status.lock().unwrap().path.clone();
@@ -288,11 +296,30 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         ))
     })?;
 
-    server.route("/api/files/*", Method::Delete, |req| {
+    let c = ctx.clone();
+    server.route("/api/files/*", Method::Delete, move |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
         let Some(path) = files::card_path(config::SD_MOUNT, &rel) else {
             return req.bad_request("path escapes the card");
         };
+        // The engine holds the active manifest and its `.idx` open, and FAT
+        // (no FF_FS_LOCK in this build) would let us unlink them underneath it.
+        let active = c.settings.lock().unwrap().manifest_path();
+        if path == active || path == files::index_path(&active) {
+            return req.error(
+                409,
+                "409 Conflict",
+                "that is the active manifest; select another set first",
+            );
+        }
+        // A manifest's `.idx` goes first, for the same crash-ordering reason
+        // as on upload (see `files::remove_index_beside`): an orphaned index
+        // with no manifest is harmless, the reverse is not.
+        if files::is_manifest_path(&path) {
+            if let Err(e) = files::remove_index_beside(&path) {
+                return req.error(500, "500 Internal Server Error", &format!("{e:#}"));
+            }
+        }
         match std::fs::remove_file(&path) {
             Ok(()) => req.json(r#"{"ok":true}"#),
             Err(e) => req.not_found(&format!("{rel}: {e}")),
@@ -422,15 +449,29 @@ fn install_manifest(req: &mut Req, ctx: &Ctx, dest: String) -> Result<()> {
         return req.error(503, "503 Service Unavailable", "player not running");
     }
     // A full reindex of the stock card's 10,162-line manifest takes a few
-    // seconds over SPI, so this waits longer than the other replies.
-    match rx.recv_timeout(Duration::from_secs(60)) {
-        Ok(Ok(Applied { entries, rebooting })) => req.json(&format!(
-            r#"{{"ok":true,"path":{},"entries":{entries},"rebooting":{rebooting}}}"#,
-            json_string(&dest)
+    // seconds over SPI, so this waits longer than the non-playlist replies.
+    match rx.recv_timeout(REINDEX_TIMEOUT) {
+        Ok(Ok(applied)) => req.json(&format!(
+            r#"{{"ok":true,"path":{},{}}}"#,
+            json_string(&dest),
+            applied_json(&applied)
         )),
         Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
         Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
     }
+}
+
+/// The playlist fields of a reply, without braces: `"entries":N,"index":…`.
+/// `index` is `"loaded"`, `"built"`, `"in-ram"`, or `null` when the command did
+/// not touch the playlist.
+fn applied_json(a: &Applied) -> String {
+    format!(
+        r#""entries":{},"index":{},"index_ms":{}"#,
+        a.entries,
+        a.index
+            .map_or_else(|| "null".to_string(), |i| json_string(i.as_str())),
+        a.index_ms
+    )
 }
 
 fn status_json(s: &Status) -> String {

@@ -7,6 +7,7 @@
 pub mod canvas;
 pub mod engine;
 pub mod filter;
+pub mod index;
 pub mod manifest;
 pub mod player;
 pub mod scheduler;
@@ -14,6 +15,7 @@ pub mod scheduler;
 pub use canvas::{Canvas, Rgb, HEIGHT, WIDTH};
 pub use engine::{Catalog, DwellPolicy, Engine, FileCatalog, NowPlaying, Source, TickOutcome};
 pub use filter::Filter;
+pub use index::{write_index, IndexHeader, IndexedCatalog};
 pub use manifest::{
     entry_at, index_matching, normalize_title, parse_manifest, render_manifest, scan, Entry,
 };
