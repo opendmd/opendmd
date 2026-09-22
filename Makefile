@@ -1,9 +1,11 @@
 # OpenDMD. Host crates (core + simulator) build on any host with stable Rust;
 # the ESP32 firmware in firmware/ needs the xtensa toolchain.
 
-CORE := opendmd-core
-SIM  := opendmd-sim
-FW   := firmware
+CORE   := opendmd-core
+RENDER := opendmd-render
+SIM    := opendmd-sim
+WEB    := opendmd-web
+FW     := firmware
 
 # Serial port of the DevKit. Override: make fw-flash PORT=/dev/ttyUSB1
 PORT ?= /dev/ttyUSB0
@@ -28,12 +30,23 @@ export PATH := $(HOME)/.cargo/bin:$(PATH)
 CARD_ROOT ?= ~/scratch/dmdos-card
 ARGS ?= --root $(CARD_ROOT)
 
-.PHONY: test test-card sim sim-build check fmt clippy clean \
+.PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve fmt clippy clean \
 	fw-build fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt
 
 test:
 	@echo "==> Testing $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(RENDER)"
+	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(SIM)"
+	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(WEB)"
+	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo test
+
+# The same tests again, compiled to wasm and run under node — the only check
+# on this box that the browser path really works. Needs node on PATH.
+test-wasm:
+	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 
 # Needs a real card dump; see CLAUDE.md.
 test-card:
@@ -50,23 +63,55 @@ sim-build:
 check:
 	@echo "==> Checking $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
+	@echo "==> Checking $(RENDER)"
+	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(SIM)"
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 
+# The UI is heading for the browser, so the core and the renderer have to stay
+# free of anything wasm can't do — `std::time::Instant` above all, which has no
+# clock there. One `rustup target add wasm32-unknown-unknown` is the only setup.
+WASM_TARGET := wasm32-unknown-unknown
+check-wasm:
+	@echo "==> Checking $(CORE) for $(WASM_TARGET)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
+	@echo "==> Checking $(RENDER) for $(WASM_TARGET)"
+	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
+	@echo "==> Checking $(WEB) for $(WASM_TARGET)"
+	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
+
+# wasm-pack: `cargo install --locked wasm-pack`. Output is gitignored.
+web:
+	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
+	@ls -l $(WEB)/www/pkg/*.wasm
+
+# Static server for the page; uv, never bare python. Then open
+# http://localhost:8080 — the file/directory picker does the rest.
+web-serve:
+	uv run python -m http.server 8080 -d $(WEB)/www
+
 fmt:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo fmt
+	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo fmt
+	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
 
 clippy:
 	@echo "==> Clippy $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	@echo "==> Clippy $(RENDER)"
+	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(SIM)"
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	@echo "==> Clippy $(WEB)"
+	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
 
 clean:
 	cd $(CORE) && cargo clean
+	cd $(RENDER) && cargo clean
 	cd $(SIM) && cargo clean
-	rm -rf ./target
+	cd $(WEB) && cargo clean
+	rm -rf $(WEB)/www/pkg ./target
 
 # --- ESP32 firmware ---------------------------------------------------------
 # First build clones ESP-IDF v5.3 into ~/.espressif (shared between projects,

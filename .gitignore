@@ -16,3 +16,6 @@ filelist.xmas
 
 # hardware/ is deliberately NOT ignored: the measured pinout and photos are
 # the one thing that can't be regenerated.
+
+# wasm-pack output for the web spike
+opendmd-web/www/pkg/

@@ -1,0 +1,47 @@
+[package]
+name = "opendmd-web"
+version = "0.1.0"
+edition = "2021"
+description = "WebAssembly front end for OpenDMD: plays a card's GIFs in the browser with the LED look."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rossduggan/opendmd"
+publish = false
+
+[lib]
+# cdylib is what wasm-pack links; rlib is only so `wasm-bindgen-test` can link
+# the crate into its test harness (`wasm-pack test --node`).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+opendmd-core = { path = "../opendmd-core" }
+opendmd-render = { path = "../opendmd-render" }
+wasm-bindgen = "0.2"
+js-sys = "0.3"          # only for Uint8Array: the file bytes JS hands over
+console_error_panic_hook = "0.1"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "console",
+    "Window",
+    "Performance",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "ImageData",
+]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+gif = "0.13"            # the headless smoke test builds its GIF in code
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+# The vendored gif 0.13.3 reaches this crate through opendmd-core; the patch
+# has to be repeated because each crate here has its own lockfile.
+# See third_party/gif/README-OPENDMD.md
+[patch.crates-io]
+gif = { path = "../third_party/gif" }

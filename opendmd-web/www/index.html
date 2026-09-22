@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenDMD</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 24px 16px;
+    background: #111; color: #ddd;
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  main { max-width: 1280px; margin: 0 auto; }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #888; margin: 0 0 16px; }
+  /* 128 x 32 LEDs at scale 10. The wasm side reads the scale off this width. */
+  canvas { display: block; width: 100%; max-width: 1280px; image-rendering: pixelated; background: #000; border-radius: 4px; }
+  #status { margin: 12px 0 20px; color: #9c9; min-height: 1.5em; overflow-wrap: anywhere; }
+  fieldset { border: 1px solid #333; border-radius: 4px; margin: 0 0 16px; padding: 12px 16px; }
+  legend { color: #888; padding: 0 6px; }
+  .row { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: center; }
+  label { display: inline-flex; gap: 8px; align-items: center; }
+  input[type=text], input[type=number] { background: #1a1a1a; color: #ddd; border: 1px solid #333; border-radius: 3px; padding: 4px 6px; font: inherit; }
+  input[type=range] { width: 160px; }
+  button { background: #222; color: #ddd; border: 1px solid #444; border-radius: 3px; padding: 5px 14px; font: inherit; cursor: pointer; }
+  button:hover:not(:disabled) { background: #2c2c2c; }
+  button:disabled { opacity: .4; cursor: default; }
+  output { color: #9c9; min-width: 3.5em; display: inline-block; }
+</style>
+</head>
+<body>
+<main>
+  <h1>OpenDMD — browser simulator</h1>
+
+  <canvas id="panel" width="1280" height="320"></canvas>
+  <div id="status">Pick some GIFs, or the folder you extracted the card into.</div>
+
+  <fieldset>
+    <legend>files</legend>
+    <div class="row">
+      <label>GIFs <input type="file" id="files" multiple accept=".gif,image/gif"></label>
+      <label id="dir-label" hidden>folder <input type="file" id="dir" webkitdirectory directory></label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>playlist</legend>
+    <div class="row">
+      <label>platforms <input type="text" id="platforms" placeholder="MD,SNES — blank for all" size="24"></label>
+      <label><input type="checkbox" id="shuffle"> shuffle</label>
+      <label>seed <input type="number" id="seed" value="7" min="0" step="1" size="8"></label>
+      <button id="play" disabled>play</button>
+      <button id="next" disabled>next</button>
+      <button id="pause" disabled>pause</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>panel look</legend>
+    <div class="row">
+      <label>gain <input type="range" id="gain" min="0" max="4" step="0.05" value="1"><output id="gain-out">1.00</output></label>
+      <label>bloom <input type="range" id="bloom" min="0" max="1" step="0.01" value="0.22"><output id="bloom-out">0.22</output></label>
+      <label>gamma <input type="range" id="gamma" min="0.5" max="4" step="0.05" value="2.2"><output id="gamma-out">2.20</output></label>
+      <label><input type="checkbox" id="flat"> flat</label>
+    </div>
+  </fieldset>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

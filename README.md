@@ -9,14 +9,17 @@ the ESP32 firmware.
 
 ## Layout
 
-Three standalone crates, deliberately **not** a Cargo workspace. The core and
-the simulator build and test with plain stable Rust on any desktop; the
-firmware has its own xtensa build config under `firmware/`.
+Five standalone crates, deliberately **not** a Cargo workspace. The core, the
+renderer and the simulator build and test with plain stable Rust on any
+desktop; the web app needs the `wasm32-unknown-unknown` target; the firmware
+has its own xtensa build config under `firmware/`.
 
 | Path | What it is |
 |------|------------|
 | `opendmd-core/` | Library. Canvas, manifest/tag parsing, filtering, scheduling, streaming GIF playback, playlist engine. No device, window or filesystem dependencies. |
-| `opendmd-sim/` | Binary. A `minifb` window that plays a card through `opendmd-core`, drawing it as a simulated LED panel. Glue and rendering only. |
+| `opendmd-render/` | Library. The LED-panel renderer, shared by the simulator and the web app. Depends only on `opendmd-core`. |
+| `opendmd-sim/` | Binary. A `minifb` window that plays a card through `opendmd-core`, drawing it as a simulated LED panel. Glue only. |
+| `opendmd-web/` | WebAssembly front end: the same engine and renderer in a browser page. See "The web app". |
 | `firmware/` | ESP32 firmware. microSD + HUB75 + the core engine. See "Firmware". |
 | `hardware/` | Measured HUB75 + SD SPI pinout and photos. See `hardware/PINOUT.md`. |
 
@@ -26,11 +29,18 @@ Stable Rust for the core and the simulator; the firmware needs the Espressif
 xtensa toolchain as well.
 
 ```bash
-make test                       # unit tests (opendmd-core)
-make check                      # cargo check both crates
-make clippy                     # clippy -D warnings, both crates
+make test                       # unit tests (core, render, sim, web)
+make check                      # cargo check the host crates
+make clippy                     # clippy -D warnings, every crate
 make fmt
 make sim ARGS="--root /path/to/card --platforms MD,SNES"
+
+rustup target add wasm32-unknown-unknown
+cargo install --locked wasm-pack
+make check-wasm                 # core + render + web for wasm32
+make test-wasm                  # the web crate's tests under node
+make web                        # wasm-pack build -> opendmd-web/www/pkg
+make web-serve                  # static server on http://localhost:8080
 ```
 
 `make sim` needs a display; the simulator opens a `128 * scale` by
@@ -40,7 +50,7 @@ make sim ARGS="--root /path/to/card --platforms MD,SNES"
 
 By default the simulator doesn't draw pixels, it draws **LEDs**, because a P4
 HUB75 panel looks nothing like a grid of flat squares. The model in
-`opendmd-sim/src/led.rs` is measured off a close-up photo of the real panel
+`opendmd-render/src/lib.rs` is measured off a close-up photo of the real panel
 (`hardware/IMG_0495.jpeg`), in units of the 4 mm LED pitch:
 
 - a lit emitter is an anti-aliased disc of ~0.42 pitch across (measured FWHM
@@ -93,6 +103,33 @@ cd opendmd-sim && cargo run --release -- --root /path/to/card \
     --platforms SNES,MD --seed 7 --screenshot /tmp/led.png \
     --screenshot-canvas /tmp/canvas.png
 ```
+
+## The web app
+
+The simulator, curation and preprocessing are heading for a single
+**WebAssembly page**, eventually served off the SD card by the ESP32 itself,
+with all the work in the browser. `opendmd-web/` is the working spike:
+`opendmd-core` and `opendmd-render` compiled to `wasm32-unknown-unknown`,
+playing GIFs from local files with the same LED look as `make sim`.
+
+```bash
+make web            # wasm-pack build --target web --release
+make web-serve      # then open http://localhost:8080
+```
+
+On the page: pick GIFs with the file input, or point the folder picker at an
+extracted copy of a card (Chromium, Safari and Firefox all support it). Set a
+comma-separated platform filter, shuffle and a seed, and press play. The gain,
+bloom and gamma sliders are the simulator's `--led-gain`, `--bloom` and
+`--gamma`; "flat" swaps the LED simulation for a nearest-neighbour blit of the
+raw canvas. "next" skips, "pause" pauses, and the status line shows
+`[n/total] /gifs/Consoles/X.gif` and the per-frame cost.
+
+Nothing is uploaded and there is no server beyond a static file host: the
+browser reads the files into memory and hands the bytes to wasm, and the
+playlist, filtering, scheduling, GIF decoding and rendering are all the same
+Rust the firmware runs. The JavaScript is about eighty lines of file reading,
+control wiring and `requestAnimationFrame`.
 
 ## The card
 
