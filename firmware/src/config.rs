@@ -52,9 +52,14 @@ pub const I2S_SPEED: i32 = hub75::HUB75_SPEED_8M as i32;
 pub const LATCH_BLANKING: u8 = 1;
 /// Asking for more costs colour depth; 60 Hz is flicker-free to the eye.
 pub const MIN_REFRESH_RATE: u8 = 60;
-/// Double buffering: a whole frame is composed off-screen and swapped, so a
-/// 128x32 blit never tears. Costs a second DMA framebuffer (~32 KB).
-pub const DOUBLE_BUFFER: bool = true;
+/// Single-buffered on purpose. Double buffering composes a frame off-screen
+/// and swaps, so a blit can never tear — but it costs a second DMA framebuffer
+/// plus descriptors (~40 KB of heap, measured: 80 KB -> 120 KB free). A 128x32
+/// blit takes ~1 ms against a 10 ms refresh, and eyes-on-panel testing across
+/// scrolls, sprites and logos found no visible tearing (2026-09-22). If a
+/// future panel shows it, the cheaper fallback is double buffering at 6-bit
+/// colour (48 KB instead of 64 KB), not going back to 8-bit double buffering.
+pub const DOUBLE_BUFFER: bool = false;
 
 /// 0..255. The panels are extremely bright; this is a living-room level.
 pub const BRIGHTNESS: u8 = 96;
