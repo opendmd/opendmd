@@ -24,6 +24,12 @@ ESPUP_ENV := $$HOME/.espup-env.sh
 # via ESP_IDF_SDKCONFIG_DEFAULTS. (Same workaround as ~/projects/stripe-dashboard.)
 FW_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(CURDIR)/$(FW)/target/sdkconfig.partitions
 
+# Optional bench-rig credentials. `firmware/.env` is gitignored (template in
+# firmware/.env.example); when it exists, OPENDMD_WIFI_SSID/PASS are exported
+# into the build and seed NVS on a device that has none. Never committed, never
+# logged. `set -a` exports every assignment the file makes.
+FW_ENV := set -a; [ -f .env ] && . ./.env; set +a;
+
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
 # Card root for `make sim` without ARGS.
@@ -31,7 +37,8 @@ CARD_ROOT ?= ~/scratch/dmdos-card
 ARGS ?= --root $(CARD_ROOT)
 
 .PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-smoke fmt clippy clean \
-	fw-build fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt
+	fw-build fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
+	card-sync api-load
 
 test:
 	@echo "==> Testing $(CORE)"
@@ -124,7 +131,7 @@ clean:
 fw-build:
 	@mkdir -p $(FW)/target
 	@echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"' > $(FW)/target/sdkconfig.partitions
-	cd $(FW) && bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build'
+	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build'
 	@ls -l $(FW_BINARY)
 
 # 460800 baud gives frequent verify_failed errors on these CH340 boards.
@@ -157,7 +164,7 @@ fw-erase:
 	$(HOME)/.local/bin/esptool --chip esp32 --port $(PORT) erase-flash
 
 fw-clippy:
-	cd $(FW) && bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets -- -D warnings'
+	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -165,3 +172,19 @@ fw-fmt:
 fw-clean:
 	cd $(FW) && bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp cargo clean'
 	rm -rf $(FW)/target
+
+# --- Device tools -----------------------------------------------------------
+# Both take HOST=<ip-or-hostname>, e.g. HOST=opendmd.local.
+
+# Push opendmd-web/www (index.html, app.js and the wasm-pack output) onto the
+# card over the API, which is how the browser app gets there in the first place.
+card-sync:
+	@test -n "$(HOST)" || { echo "usage: make card-sync HOST=<ip>"; exit 2; }
+	uv run tools/card-sync.py $(HOST) $(WEB)/www
+
+# Hammer the file server while watching the display metrics. This is the
+# timing stress test for the networking phase, not a benchmark.
+SECONDS_ ?= 120
+api-load:
+	@test -n "$(HOST)" || { echo "usage: make api-load HOST=<ip> [SECONDS_=120]"; exit 2; }
+	uv run tools/api-load.py $(HOST) $(SECONDS_)
