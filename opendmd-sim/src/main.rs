@@ -4,6 +4,9 @@
 //! `opendmd-core`. This binary owns the window, the keyboard and the clock —
 //! exactly the responsibilities the firmware's main loop will own.
 
+mod led;
+
+use crate::led::{LedRenderer, MIN_LED_SCALE};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
@@ -65,8 +68,34 @@ struct Args {
     seed: u64,
 
     /// Pixels per LED.
-    #[arg(long, default_value_t = 8)]
+    #[arg(long, default_value_t = 10)]
     scale: u32,
+
+    /// Draw flat squares with a gutter instead of simulated LEDs.
+    #[arg(long)]
+    flat: bool,
+
+    /// Gamma used to decode canvas bytes to linear light and re-encode after.
+    #[arg(long, default_value_t = 2.2)]
+    gamma: f32,
+
+    /// Scales LED intensity, to match the real panel's brightness by eye.
+    #[arg(long = "led-gain", default_value_t = 1.0)]
+    led_gain: f32,
+
+    /// Halo strength around each lit LED (0 = none). The default was fitted
+    /// to the panel photo by eye, so this is the one to tune.
+    #[arg(long, default_value_t = led::BLOOM_STRENGTH)]
+    bloom: f32,
+
+    /// Render the first frame of the first scheduled GIF to a PNG and exit,
+    /// without opening a window. Headless-friendly.
+    #[arg(long)]
+    screenshot: Option<PathBuf>,
+
+    /// Write that same frame as the raw 128x32 canvas, for comparison.
+    #[arg(long = "screenshot-canvas")]
+    screenshot_canvas: Option<PathBuf>,
 
     /// Minimum seconds to hold one GIF.
     #[arg(long = "min-dwell", default_value_t = 3.0)]
@@ -147,8 +176,9 @@ impl ManifestStats {
     }
 }
 
-/// Nearest-neighbour upscale. At scale >= 4 the last row/column of each cell is
-/// left dark, which reads like the gaps between LEDs on a P4 panel.
+/// Nearest-neighbour upscale: flat squares separated by a one-pixel gutter.
+/// The `--flat` renderer, and the only one below [`MIN_LED_SCALE`], where
+/// there are too few window pixels per LED for a dot and a bloom to survive.
 fn paint(canvas: &Canvas, scale: usize, buffer: &mut [u32]) {
     let row = WIDTH * scale;
     let lit = if scale >= 4 { scale - 1 } else { scale };
@@ -165,6 +195,68 @@ fn paint(canvas: &Canvas, scale: usize, buffer: &mut [u32]) {
     }
 }
 
+/// How the canvas is drawn. `L` toggles it at runtime.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RenderMode {
+    Led,
+    Flat,
+}
+
+impl RenderMode {
+    fn label(self) -> &'static str {
+        match self {
+            RenderMode::Led => "LED",
+            RenderMode::Flat => "flat",
+        }
+    }
+}
+
+/// Draw one frame into `buffer` through whichever renderer is selected.
+fn draw(
+    mode: RenderMode,
+    canvas: &Canvas,
+    scale: usize,
+    renderer: &mut Option<LedRenderer>,
+    buffer: &mut [u32],
+) {
+    match (mode, renderer.as_mut()) {
+        (RenderMode::Led, Some(r)) => r.render(canvas, buffer),
+        _ => paint(canvas, scale, buffer),
+    }
+}
+
+/// Write a `0x00RRGGBB` framebuffer out as an 8-bit RGB PNG.
+fn write_png(path: &Path, width: usize, height: usize, buffer: &[u32]) -> Result<()> {
+    let file =
+        std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    let mut encoder = png::Encoder::new(io::BufWriter::new(file), width as u32, height as u32);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    for px in buffer {
+        rgb.push((px >> 16) as u8);
+        rgb.push((px >> 8) as u8);
+        rgb.push(*px as u8);
+    }
+    writer.write_image_data(&rgb)?;
+    Ok(())
+}
+
+/// Advance the engine until it produces the first frame of the first
+/// scheduled GIF. No clock is consulted beyond `Instant::now`, and the engine
+/// emits a frame on its first tick, so this is deterministic for a given seed.
+fn first_frame(engine: &mut Engine, canvas: &mut Canvas) -> Result<String> {
+    for _ in 0..1024 {
+        match engine.tick(Instant::now(), canvas)? {
+            TickOutcome::Frame { playing, .. } => return Ok(playing.path),
+            TickOutcome::Idle => continue,
+            TickOutcome::Exhausted => bail!("nothing playable"),
+        }
+    }
+    bail!("the engine produced no frame")
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
@@ -174,6 +266,15 @@ fn main() -> Result<()> {
     }
     if args.max_dwell < args.min_dwell {
         bail!("--max-dwell must be at least --min-dwell");
+    }
+    if !(0.5..=4.0).contains(&args.gamma) {
+        bail!("--gamma must be between 0.5 and 4.0");
+    }
+    if !(0.0..=1.0).contains(&args.bloom) {
+        bail!("--bloom must be between 0 and 1");
+    }
+    if !(0.0..=8.0).contains(&args.led_gain) {
+        bail!("--led-gain must be between 0.0 and 8.0");
     }
     if !args.root.join("gifs").is_dir() {
         log::warn!("{} has no gifs/ directory", args.root.display());
@@ -228,14 +329,63 @@ fn main() -> Result<()> {
 
     let scale = args.scale as usize;
     let (win_w, win_h) = (WIDTH * scale, HEIGHT * scale);
-    let mut window = Window::new("OpenDMD", win_w, win_h, WindowOptions::default())
-        .context("opening the simulator window")?;
-    window.set_target_fps(0); // we pace ourselves off the GIF delays
+
+    // The LED renderer needs enough window pixels per LED to put a dot, a
+    // bloom and a mask inside one cell; below that the flat renderer is a
+    // better picture of the panel than a smeared one.
+    let mut mode = if args.flat {
+        RenderMode::Flat
+    } else if args.scale < MIN_LED_SCALE {
+        log::info!(
+            "--scale {} is below {MIN_LED_SCALE}: using the flat renderer (LED simulation needs \
+             more pixels per LED)",
+            args.scale
+        );
+        RenderMode::Flat
+    } else {
+        RenderMode::Led
+    };
+    let mut renderer = (args.scale >= MIN_LED_SCALE)
+        .then(|| LedRenderer::new(scale, args.gamma, args.led_gain, args.bloom));
 
     let mut buffer = vec![0u32; win_w * win_h];
     let mut canvas = Canvas::new();
     canvas.fill(Rgb::BLACK);
-    println!("Space: next   P: pause/resume   Esc: quit\n");
+
+    // Headless: render the first frame of the first scheduled GIF and exit
+    // without ever touching the window system. This is the only check that
+    // runs on a box with no display.
+    if args.screenshot.is_some() || args.screenshot_canvas.is_some() {
+        let path = first_frame(&mut engine, &mut canvas)?;
+        println!("screenshot of {path}");
+        if let Some(out) = &args.screenshot {
+            draw(mode, &canvas, scale, &mut renderer, &mut buffer);
+            write_png(out, win_w, win_h, &buffer)?;
+            println!(
+                "wrote {} ({win_w}x{win_h}, {})",
+                out.display(),
+                mode.label()
+            );
+        }
+        if let Some(out) = &args.screenshot_canvas {
+            let raw: Vec<u32> = canvas.as_slice().iter().map(|p| p.to_u32()).collect();
+            write_png(out, WIDTH, HEIGHT, &raw)?;
+            println!("wrote {} ({WIDTH}x{HEIGHT}, raw canvas)", out.display());
+        }
+        return Ok(());
+    }
+
+    let mut window = Window::new(
+        &format!("OpenDMD [{}]", mode.label()),
+        win_w,
+        win_h,
+        WindowOptions::default(),
+    )
+    .context("opening the simulator window")?;
+    window.set_target_fps(0); // we pace ourselves off the GIF delays
+
+    let mut playing_path = String::new();
+    println!("Space: next   P: pause/resume   L: LED/flat   Esc: quit\n");
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let now = Instant::now();
@@ -252,6 +402,21 @@ fn main() -> Result<()> {
             };
             println!("-- {state}");
         }
+        if window.is_key_pressed(Key::L, KeyRepeat::No) {
+            mode = match mode {
+                RenderMode::Led => RenderMode::Flat,
+                RenderMode::Flat if renderer.is_some() => RenderMode::Led,
+                RenderMode::Flat => {
+                    log::info!("the LED renderer needs --scale {MIN_LED_SCALE} or more");
+                    RenderMode::Flat
+                }
+            };
+            println!("-- renderer: {}", mode.label());
+            window.set_title(&format!("OpenDMD [{}] - {playing_path}", mode.label()));
+            // Redraw now so the toggle is visible even while paused.
+            draw(mode, &canvas, scale, &mut renderer, &mut buffer);
+            window.update_with_buffer(&buffer, win_w, win_h)?;
+        }
 
         match engine.tick(now, &mut canvas)? {
             TickOutcome::Frame {
@@ -259,9 +424,10 @@ fn main() -> Result<()> {
             } => {
                 if started {
                     println!("[{}/{}] {}", playing.ordinal, total, playing.path);
-                    window.set_title(&format!("OpenDMD - {}", playing.path));
+                    playing_path = playing.path;
+                    window.set_title(&format!("OpenDMD [{}] - {playing_path}", mode.label()));
                 }
-                paint(&canvas, scale, &mut buffer);
+                draw(mode, &canvas, scale, &mut renderer, &mut buffer);
                 window.update_with_buffer(&buffer, win_w, win_h)?;
             }
             TickOutcome::Idle => {

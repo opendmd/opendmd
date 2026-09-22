@@ -16,7 +16,7 @@ firmware has its own xtensa build config under `firmware/`.
 | Path | What it is |
 |------|------------|
 | `opendmd-core/` | Library. Canvas, manifest/tag parsing, filtering, scheduling, streaming GIF playback, playlist engine. No device, window or filesystem dependencies. |
-| `opendmd-sim/` | Binary. A `minifb` window that plays a card through `opendmd-core`. Glue and rendering only. |
+| `opendmd-sim/` | Binary. A `minifb` window that plays a card through `opendmd-core`, drawing it as a simulated LED panel. Glue and rendering only. |
 | `firmware/` | ESP32 firmware. microSD + HUB75 + the core engine. See "Firmware". |
 | `hardware/` | Measured HUB75 + SD SPI pinout and photos. See `hardware/PINOUT.md`. |
 
@@ -34,7 +34,28 @@ make sim ARGS="--root /path/to/card --platforms MD,SNES"
 ```
 
 `make sim` needs a display; the simulator opens a `128 * scale` by
-`32 * scale` window.
+`32 * scale` window — 1280x320 at the default scale of 10.
+
+### What it draws
+
+By default the simulator doesn't draw pixels, it draws **LEDs**, because a P4
+HUB75 panel looks nothing like a grid of flat squares. The model in
+`opendmd-sim/src/led.rs` is measured off a close-up photo of the real panel
+(`hardware/IMG_0495.jpeg`), in units of the 4 mm LED pitch:
+
+- a lit emitter is an anti-aliased disc of ~0.42 pitch across (measured FWHM
+  0.40 horizontally, 0.44 vertically — the package makes it slightly tall);
+- a soft bloom around it falls to the mask level by ~0.75 pitch, so bright
+  neighbours' halos overlap, exactly as they do in the photo;
+- the mask between LEDs is near black (5/255), and an unlit LED is a
+  barely-there square at 10/255 over half a pitch;
+- the panel is driven linearly (BCM/PWM), so canvas bytes are decoded to
+  linear light, accumulated there, and re-encoded on the way out. That is why
+  mid greys look brighter here than a naive blit makes them.
+
+Everything that depends only on the scale — the per-LED kernel, the backdrop,
+the gamma tables — is built once, and the float accumulator is reused, so a
+frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.
 
 ```
 --root <dir>              card root, holding gifs/ and filelist.txt (required)
@@ -44,12 +65,34 @@ make sim ARGS="--root /path/to/card --platforms MD,SNES"
 --exclude-flag INVERT     repeatable
 --category / --exclude-category   repeatable, matched against gifs/<Category>
 --shuffle --seed <u64>    reproducible weighted shuffle
---scale <u32>             pixels per LED, default 8
+--scale <u32>             pixels per LED, default 10
 --min-dwell / --max-dwell seconds, default 3 and 30
+--flat                    flat squares with a 1 px gutter, the old renderer
+--gamma <f32>             canvas byte -> linear light, default 2.2
+--led-gain <f32>          scales LED intensity, default 1.0 — match the panel
+                          brightness by eye
+--bloom <f32>             halo strength around each lit LED, default 0.22
+                          (fitted by eye to the photo — the knob to tune)
+--screenshot <out.png>    render the first frame of the first scheduled GIF
+                          and exit, without opening a window
+--screenshot-canvas <out.png>   the same frame as the raw 128x32 canvas
 ```
 
-Keys: `Space` next, `P` pause/resume, `Esc` quit. Each new GIF prints
+Below `--scale 6` there are too few window pixels per LED for a dot and a
+bloom, so the flat renderer is used automatically and says so in the log.
+
+Keys: `Space` next, `P` pause/resume, `L` toggle LED/flat (the title bar shows
+which), `Esc` quit. Each new GIF prints
 `[n/total] /gifs/Consoles/SNES_Plok_08.gif`; startup prints the filter summary.
+
+The two `--screenshot*` flags are the only way to look at the renderer on a
+headless box, where `minifb` cannot open a window:
+
+```bash
+cd opendmd-sim && cargo run --release -- --root /path/to/card \
+    --platforms SNES,MD --seed 7 --screenshot /tmp/led.png \
+    --screenshot-canvas /tmp/canvas.png
+```
 
 ## The card
 
