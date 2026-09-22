@@ -4,9 +4,6 @@
 //! `opendmd-core`. This binary owns the window, the keyboard and the clock —
 //! exactly the responsibilities the firmware's main loop will own.
 
-mod led;
-
-use crate::led::{LedRenderer, MIN_LED_SCALE};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
@@ -15,6 +12,7 @@ use opendmd_core::engine::{Catalog, DwellPolicy, Engine, FileCatalog, Source, Ti
 use opendmd_core::filter::Filter;
 use opendmd_core::manifest::Entry;
 use opendmd_core::scheduler::{Mode, Scheduler};
+use opendmd_render::{LedRenderer, MIN_LED_SCALE};
 use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -85,7 +83,7 @@ struct Args {
 
     /// Halo strength around each lit LED (0 = none). The default was fitted
     /// to the panel photo by eye, so this is the one to tune.
-    #[arg(long, default_value_t = led::BLOOM_STRENGTH)]
+    #[arg(long, default_value_t = opendmd_render::BLOOM_STRENGTH)]
     bloom: f32,
 
     /// Render the first frame of the first scheduled GIF to a PNG and exit,
@@ -244,11 +242,13 @@ fn write_png(path: &Path, width: usize, height: usize, buffer: &[u32]) -> Result
 }
 
 /// Advance the engine until it produces the first frame of the first
-/// scheduled GIF. No clock is consulted beyond `Instant::now`, and the engine
-/// emits a frame on its first tick, so this is deterministic for a given seed.
+/// scheduled GIF. No clock is consulted beyond one `Instant::now` epoch, and
+/// the engine emits a frame on its first tick, so this is deterministic for a
+/// given seed.
 fn first_frame(engine: &mut Engine, canvas: &mut Canvas) -> Result<String> {
+    let t0 = Instant::now();
     for _ in 0..1024 {
-        match engine.tick(Instant::now(), canvas)? {
+        match engine.tick(t0.elapsed(), canvas)? {
             TickOutcome::Frame { playing, .. } => return Ok(playing.path),
             TickOutcome::Idle => continue,
             TickOutcome::Exhausted => bail!("nothing playable"),
@@ -387,8 +387,12 @@ fn main() -> Result<()> {
     let mut playing_path = String::new();
     println!("Space: next   P: pause/resume   L: LED/flat   Esc: quit\n");
 
+    // The engine's clock is a Duration since an epoch we pick, not an
+    // `Instant` — see `opendmd_core::engine`. Boot is as good an epoch as any.
+    let t0 = Instant::now();
+
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        let now = Instant::now();
+        let now = t0.elapsed();
 
         if window.is_key_pressed(Key::Space, KeyRepeat::No) {
             engine.skip();

@@ -15,7 +15,7 @@ use opendmd_core::scheduler::{Mode, Rng, Scheduler};
 use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::Duration;
 
 /// Joins card-absolute manifest paths (`/gifs/...`) onto a root directory.
 struct DirSource {
@@ -120,8 +120,8 @@ fn real_card_manifest() {
     let catalog = FileCatalog::build(file, &Filter::new()).expect("build catalog");
     let scheduler = Scheduler::new(catalog.len().min(50), Mode::Sequential, 0);
     let dwell = DwellPolicy {
-        min: std::time::Duration::ZERO,
-        max: std::time::Duration::from_secs(30),
+        min: Duration::ZERO,
+        max: Duration::from_secs(30),
         min_loops: 1,
     };
     let mut engine = Engine::new(
@@ -134,10 +134,10 @@ fn real_card_manifest() {
     let mut canvas = Canvas::new();
     let mut decoded = 0usize;
     let mut seen = std::collections::HashSet::new();
-    let t0 = Instant::now();
+    let t0 = Duration::ZERO;
     // Each GIF yields one frame then is skipped, so 50 skips == 50 files.
     for step in 0..50 {
-        let now = t0 + std::time::Duration::from_secs(step as u64 * 60);
+        let now = t0 + Duration::from_secs(step as u64 * 60);
         match engine.tick(now, &mut canvas).expect("engine tick") {
             TickOutcome::Frame { playing, .. } => {
                 decoded += 1;

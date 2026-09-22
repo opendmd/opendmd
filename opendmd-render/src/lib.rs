@@ -1,5 +1,9 @@
-//! An LED-panel renderer for the simulator: draws what the real display looks
-//! like rather than a grid of flat squares.
+//! An LED-panel renderer: draws what the real display looks like rather than a
+//! grid of flat squares.
+//!
+//! Shared by the desktop simulator and the WebAssembly web app, which is why
+//! it is its own crate. It depends on nothing but `opendmd-core` and `core`
+//! float maths, so it compiles unchanged for `wasm32-unknown-unknown`.
 //!
 //! # Where the numbers come from
 //!

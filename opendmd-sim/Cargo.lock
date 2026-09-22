@@ -623,6 +623,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "opendmd-render"
+version = "0.1.0"
+dependencies = [
+ "opendmd-core",
+]
+
+[[package]]
 name = "opendmd-sim"
 version = "0.1.0"
 dependencies = [
@@ -632,6 +639,7 @@ dependencies = [
  "log",
  "minifb",
  "opendmd-core",
+ "opendmd-render",
  "png",
 ]
 

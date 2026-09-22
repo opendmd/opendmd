@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 opendmd-core = { path = "../opendmd-core" }
+opendmd-render = { path = "../opendmd-render" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"

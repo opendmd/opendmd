@@ -4,6 +4,12 @@
 //! The engine never sleeps and never reads the clock. The caller (simulator or
 //! firmware main loop) passes `now` into [`Engine::tick`] and owns the timing,
 //! so the same code drives a 60 Hz desktop loop and a HUB75 refresh loop.
+//!
+//! `now` is a [`Duration`] since an epoch the *caller* chooses, not an
+//! [`std::time::Instant`]: `Instant` has no clock on `wasm32-unknown-unknown`
+//! and panics if constructed. The desktop simulator and the firmware pass
+//! `boot.elapsed()`, the web app passes `performance.now()`. Only the
+//! differences matter, so any fixed epoch works.
 
 use crate::canvas::Canvas;
 use crate::filter::Filter;
@@ -11,7 +17,7 @@ use crate::manifest::{self, Entry};
 use crate::player::GifSource;
 use crate::scheduler::Scheduler;
 use std::io::{self, BufReader, Read, Seek};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// A playlist the engine can look entries up in by index.
 ///
@@ -150,7 +156,7 @@ pub enum TickOutcome {
         /// True on the first frame of a newly started GIF.
         started: bool,
         /// When the caller should tick again for the next frame.
-        next_frame_at: Instant,
+        next_frame_at: Duration,
     },
     /// Nothing is playable — empty playlist, or every candidate failed to open.
     Exhausted,
@@ -162,8 +168,8 @@ struct Playing {
     title: String,
     ordinal: u64,
     gif: GifSource<Box<dyn Read>>,
-    started_at: Instant,
-    next_frame_at: Instant,
+    started_at: Duration,
+    next_frame_at: Duration,
     loops: u32,
     first_frame: bool,
 }
@@ -179,7 +185,7 @@ pub struct Engine {
     dwell: DwellPolicy,
     source: Box<dyn Source>,
     current: Option<Playing>,
-    paused_since: Option<Instant>,
+    paused_since: Option<Duration>,
     started_count: u64,
     skip_requested: bool,
 }
@@ -238,7 +244,7 @@ impl Engine {
         self.paused_since.is_some()
     }
 
-    pub fn pause(&mut self, now: Instant) {
+    pub fn pause(&mut self, now: Duration) {
         if self.paused_since.is_none() {
             self.paused_since = Some(now);
         }
@@ -246,9 +252,9 @@ impl Engine {
 
     /// Resuming shifts the current GIF's clocks forward by the paused duration,
     /// so a pause doesn't eat its dwell time.
-    pub fn resume(&mut self, now: Instant) {
+    pub fn resume(&mut self, now: Duration) {
         if let Some(since) = self.paused_since.take() {
-            let paused_for = now.saturating_duration_since(since);
+            let paused_for = now.saturating_sub(since);
             if let Some(p) = &mut self.current {
                 p.started_at += paused_for;
                 p.next_frame_at += paused_for;
@@ -256,7 +262,7 @@ impl Engine {
         }
     }
 
-    pub fn toggle_pause(&mut self, now: Instant) {
+    pub fn toggle_pause(&mut self, now: Duration) {
         if self.is_paused() {
             self.resume(now);
         } else {
@@ -265,7 +271,7 @@ impl Engine {
     }
 
     /// Advance playback. Returns whether the canvas changed and what is on it.
-    pub fn tick(&mut self, now: Instant, canvas: &mut Canvas) -> io::Result<TickOutcome> {
+    pub fn tick(&mut self, now: Duration, canvas: &mut Canvas) -> io::Result<TickOutcome> {
         if self.is_paused() {
             return Ok(TickOutcome::Idle);
         }
@@ -288,7 +294,7 @@ impl Engine {
             }
 
             // Hard cap: never let one GIF hold the panel past `max`.
-            if now.saturating_duration_since(playing.started_at) >= self.dwell.max {
+            if now.saturating_sub(playing.started_at) >= self.dwell.max {
                 self.current = None;
                 if !self.open_next(now) {
                     return Ok(TickOutcome::Exhausted);
@@ -337,7 +343,7 @@ impl Engine {
                     }
                     // End of stream: loop the same file or move on.
                     playing.loops += 1;
-                    let elapsed = now.saturating_duration_since(playing.started_at);
+                    let elapsed = now.saturating_sub(playing.started_at);
                     let done = playing.loops >= self.dwell.min_loops && elapsed >= self.dwell.min;
                     if done || !self.restart_current() {
                         self.current = None;
@@ -402,7 +408,7 @@ impl Engine {
 
     /// Pull entries from the scheduler until one opens. A GIF that won't open
     /// or won't decode its header is logged and skipped, never fatal.
-    fn open_next(&mut self, now: Instant) -> bool {
+    fn open_next(&mut self, now: Duration) -> bool {
         let budget = self.scheduler.len().saturating_mul(2).max(32);
         for _ in 0..budget {
             let Some(index) = self.scheduler.next_index() else {
@@ -520,7 +526,7 @@ mod tests {
         );
         assert_eq!(e.catalog_len(), 2);
 
-        let t0 = Instant::now();
+        let t0 = Duration::ZERO;
         let mut canvas = Canvas::new();
         let out = e.tick(t0, &mut canvas).unwrap();
         match out {
@@ -563,7 +569,7 @@ mod tests {
             "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
             dwell,
         );
-        let t0 = Instant::now();
+        let t0 = Duration::ZERO;
         let mut canvas = Canvas::new();
         e.tick(t0, &mut canvas).unwrap();
         // 1 s in: looped, but min dwell not reached -> still A.
@@ -598,7 +604,7 @@ mod tests {
             "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
             dwell,
         );
-        let t0 = Instant::now();
+        let t0 = Duration::ZERO;
         let mut canvas = Canvas::new();
         e.tick(t0, &mut canvas).unwrap();
         match e.tick(t0 + Duration::from_secs(6), &mut canvas).unwrap() {
@@ -625,13 +631,15 @@ mod tests {
             DwellPolicy::default(),
         );
         let mut canvas = Canvas::new();
-        let t0 = Instant::now();
-        match e.tick(t0, &mut canvas).unwrap() {
+        // The engine clock is a caller-chosen Duration; "did it spin?" is a
+        // question about wall time, so that one assertion uses a real clock.
+        let wall = std::time::Instant::now();
+        match e.tick(Duration::ZERO, &mut canvas).unwrap() {
             TickOutcome::Frame { playing, .. } => assert_eq!(playing.title, "Good"),
             other => panic!("expected Good, got {other:?}"),
         }
         assert!(
-            t0.elapsed() < Duration::from_secs(1),
+            wall.elapsed() < Duration::from_secs(1),
             "engine spun on the empty GIF"
         );
     }
@@ -649,7 +657,7 @@ mod tests {
             DwellPolicy::default(),
         );
         let mut canvas = Canvas::new();
-        match e.tick(Instant::now(), &mut canvas).unwrap() {
+        match e.tick(Duration::ZERO, &mut canvas).unwrap() {
             TickOutcome::Frame { playing, .. } => assert_eq!(playing.title, "Good"),
             other => panic!("expected Good, got {other:?}"),
         }
@@ -664,7 +672,7 @@ mod tests {
         );
         let mut canvas = Canvas::new();
         assert_eq!(
-            e.tick(Instant::now(), &mut canvas).unwrap(),
+            e.tick(Duration::ZERO, &mut canvas).unwrap(),
             TickOutcome::Exhausted
         );
     }
@@ -679,7 +687,7 @@ mod tests {
             "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
             DwellPolicy::default(),
         );
-        let t0 = Instant::now();
+        let t0 = Duration::ZERO;
         let mut canvas = Canvas::new();
         e.tick(t0, &mut canvas).unwrap();
         assert_eq!(e.now_playing().unwrap().title, "A");
@@ -750,7 +758,7 @@ mod tests {
             "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
             DwellPolicy::default(),
         );
-        let t0 = Instant::now();
+        let t0 = Duration::ZERO;
         let mut canvas = Canvas::new();
         e.tick(t0, &mut canvas).unwrap();
         e.skip();

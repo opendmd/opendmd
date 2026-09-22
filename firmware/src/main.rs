@@ -107,6 +107,10 @@ fn main() -> Result<()> {
     let filter = build_filter();
     let mut canvas = Canvas::new();
     let mut started: u64 = 0;
+    // The engine's clock is a `Duration` since an epoch the caller picks, not
+    // an `Instant` — `Instant` has no clock on wasm and the web app shares
+    // this core. Boot is our epoch; only differences ever matter.
+    let epoch = Instant::now();
     let mut last_heartbeat = Instant::now();
     // Our own heap floor, sampled at every phase boundary of the loop. Do not
     // use esp_get_minimum_free_heap_size() for this: it is the SUM of each
@@ -137,7 +141,7 @@ fn main() -> Result<()> {
     );
 
     loop {
-        let outcome = engine.tick(Instant::now(), &mut canvas)?;
+        let outcome = engine.tick(epoch.elapsed(), &mut canvas)?;
         sampled_min = sampled_min.min(free_heap());
         match outcome {
             TickOutcome::Frame {
@@ -169,9 +173,9 @@ fn main() -> Result<()> {
                     );
                     low_water = sampled_min;
                 }
-                // Hold the frame for its GIF delay. `Instant::now()` again,
+                // Hold the frame for its GIF delay. Read the clock again,
                 // because the blit itself took time.
-                match next_frame_at.checked_duration_since(Instant::now()) {
+                match next_frame_at.checked_sub(epoch.elapsed()) {
                     Some(remaining) => thread::sleep(remaining),
                     // Already late: yield a tick so the watchdog and every
                     // other task get their turn, then catch up next pass.
