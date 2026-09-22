@@ -104,6 +104,8 @@ pub fn mime_for(path: &str) -> &'static str {
         "json" | "map" => "application/json",
         "png" => "image/png",
         "gif" => "image/gif",
+        // ODM v1, the pre-rendered frame format (docs/odm-format.md).
+        "odm" => "application/octet-stream",
         "jpg" | "jpeg" => "image/jpeg",
         "svg" => "image/svg+xml",
         "ico" => "image/x-icon",
