@@ -1,0 +1,38 @@
+# --- Flash -------------------------------------------------------------
+# The DevKit V1 boards on this project are 4 MB (verified with esptool).
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Partition table — dual OTA, 4 MB. NOTE: ESP-IDF's cmake resolves this path
+# relative to its own CMakeLists inside the esp-idf-sys build dir, not the
+# crate root, so the Makefile overrides it with an absolute path via
+# ESP_IDF_SDKCONFIG_DEFAULTS. See the root CLAUDE.md "Build quirk".
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- FATFS -------------------------------------------------------------
+# Long filenames are not optional: every path on a DMDoS card is long and has
+# spaces (`/gifs/NEW 2021/...`). Without these two lines every open() fails.
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+
+# --- Tasks -------------------------------------------------------------
+# Main task on CPU1, same as stripe-dashboard: keeps the render/blit loop off
+# the core that services system (and, later, WiFi) interrupts.
+CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1=y
+# GIF decoding plus the RGB888 staging buffer wants more than the 3.5 KB default.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# --- Radio -------------------------------------------------------------
+# No WiFi in this phase. Turning it off frees flash and heap; the portal/OTA
+# phase flips this back on.
+CONFIG_ESP_WIFI_ENABLED=n
+
+# --- HUB75 panel driver ------------------------------------------------
+# The ESP32-HUB75-MatrixPanel-I2S-DMA component defaults to `y` here, which
+# makes its CMakeLists REQUIRE the `arduino` and `Adafruit-GFX-Library`
+# components and fail the configure step with "Missing component: arduino".
+# We only ever call it through components/hub75_shim, so build it -DNO_GFX.
+CONFIG_ESP32_HUB75_USE_GFX=n
+
+# --- Logging -----------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

@@ -1,4 +1,3 @@
 [submodule "firmware/components/ESP32-HUB75-MatrixPanel-I2S-DMA"]
 	path = firmware/components/ESP32-HUB75-MatrixPanel-I2S-DMA
 	url = https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA.git
-	branch = master

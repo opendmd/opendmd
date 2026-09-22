@@ -4,25 +4,26 @@ An open-source replacement for **DMDoS**, the closed ESP32 firmware that plays
 128x32 animated GIFs from a microSD card onto two chained 64x32 HUB75 LED
 panels (a "DMD" — the dot-matrix display out of a pinball machine).
 
-This repository currently holds the platform-independent core and a desktop
-simulator. The ESP32 firmware crate comes later and will live at the repository
-root.
+This repository holds the platform-independent core, a desktop simulator, and
+the ESP32 firmware.
 
 ## Layout
 
-Two standalone crates, deliberately **not** a Cargo workspace. The ESP32
-firmware will be a third crate under `firmware/` with its own xtensa build
-config; these two build and test with plain stable Rust on any desktop.
+Three standalone crates, deliberately **not** a Cargo workspace. The core and
+the simulator build and test with plain stable Rust on any desktop; the
+firmware has its own xtensa build config under `firmware/`.
 
 | Path | What it is |
 |------|------------|
 | `opendmd-core/` | Library. Canvas, manifest/tag parsing, filtering, scheduling, streaming GIF playback, playlist engine. No device, window or filesystem dependencies. |
 | `opendmd-sim/` | Binary. A `minifb` window that plays a card through `opendmd-core`. Glue and rendering only. |
+| `firmware/` | ESP32 firmware. microSD + HUB75 + the core engine. See "Firmware". |
 | `hardware/` | Measured HUB75 + SD SPI pinout and photos. See `hardware/PINOUT.md`. |
 
 ## Build and run
 
-Stable Rust, no other toolchain needed yet.
+Stable Rust for the core and the simulator; the firmware needs the Espressif
+xtensa toolchain as well.
 
 ```bash
 make test                       # unit tests (opendmd-core)
@@ -119,6 +120,78 @@ matching a user's own collection list.
 Against the real card this parses 10,162 entries with a non-empty title each,
 and 3,784 of 3,786 `gifs/Consoles` entries get a platform (99.95%; the two
 misses are `Nes_Gradius.gif` and `NEs_Captain_America...gif`).
+
+## Firmware
+
+`firmware/` plays a card on the real hardware: an ESP32 DevKit V1 (classic
+ESP32, 4 MB flash) on a DMDos carrier, a microSD over SPI, and two chained
+64x32 HUB75 P4 panels driven by
+[mrcodetastic/ESP32-HUB75-MatrixPanel-DMA](https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA)
+3.0.14. Boot mounts the card, reads `/sdcard/filelist.txt`, and runs the same
+`opendmd-core` engine the simulator does, one frame at a time, straight into
+the panels' DMA buffer.
+
+This phase is a standalone player: no WiFi, no web portal, no OTA.
+
+### Toolchain
+
+```bash
+cargo install --locked espup ldproxy espflash
+espup install --targets esp32 --export-file ~/.espup-env.sh
+uv tool install esptool
+git submodule update --init          # the HUB75 driver
+```
+
+### Build and flash
+
+```bash
+make fw-build                        # first build clones ESP-IDF v5.3 (~5-10 min)
+make fw-erase   PORT=/dev/ttyUSB0    # once, if the board ran other firmware
+make fw-flash   PORT=/dev/ttyUSB0    # build + flash at 115200 + monitor
+make fw-monitor PORT=/dev/ttyUSB0
+make fw-clean
+```
+
+ESP-IDF is installed once into `~/.espressif` and shared between projects.
+Everything tunable — pin map, panel driver chip and timing, brightness,
+platform filter, dwell and retry intervals — is a constant in
+`firmware/src/config.rs`. If the panels stay dark, the first thing to change
+is `config::DRIVER` from `SHIFTREG` to `FM6126A`.
+
+### Serial output
+
+```
+I opendmd_firmware: OpenDMD firmware v0.1.0 — 128x32 HUB75 GIF player
+I opendmd_firmware: microSD mounted at /sdcard (31.27 GB), heap 259516 B free
+I opendmd_firmware: panel up: 128x32 (2 x 64x32), driver=0, double_buff=true, hub75_refresh_rate=100 Hz, brightness=96
+I opendmd_firmware: manifest indexed: <n> entries, <4n> index bytes, heap <free> B free
+I opendmd_firmware: [1] /gifs/Consoles/NES_Super_Mario_Bros_16.gif
+I opendmd_firmware: heartbeat: heap <free> B free (min <min> B), refresh 100 Hz, 5 GIFs started
+```
+
+A missing card is not fatal: the mount is retried every 5 seconds, forever,
+and so is an unreadable `filelist.txt`.
+
+### The playlist is indexed, not loaded
+
+A classic ESP32 has ~260 KB of usable DRAM, ~120 KB of it left once the HUB75
+DMA buffers are allocated. The real card's `filelist.txt` is 450 KB and 10,162
+lines; `std::fs::read_to_string` on it aborts with "out of memory" outright,
+and `parse_manifest` would then want roughly 6 MB of `Entry` values (~590
+bytes each, measured on this part).
+
+So the firmware never holds the manifest. It opens the file once and hands it
+to `opendmd_core::engine::FileCatalog`, which makes a **single streaming pass**
+and keeps one `u32` byte offset per line that passes the filter — **40,648
+bytes for the whole card**, 6,748 for a `MD,SNES` playlist. The file handle
+stays open and the engine seeks back into it for one `Entry` at a time, only
+when it is about to open the next GIF, so the transient cost is one line and
+one entry. The whole card is playable in one session, and running out of
+openable files reshuffles the existing index (`Engine::reset`) rather than
+re-reading 450 KB over SPI.
+
+The simulator uses exactly the same path, so `make sim` exercises what the
+firmware does.
 
 ## License
 

@@ -1,0 +1,18 @@
+[build]
+target = "xtensa-esp32-espidf"
+
+[target.xtensa-esp32-espidf]
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32"
+ESP_IDF_VERSION = "v5.3"
+# Deliberate difference from stripe-dashboard, which installs ESP-IDF into an
+# in-project `.embuild/`: here the framework lives in `~/.espressif` and is
+# shared with every other esp-idf project on the machine. One 5-10 minute
+# clone instead of one per repo, and `cargo clean` does not throw it away.
+ESP_IDF_TOOLS_INSTALL_DIR = "global"

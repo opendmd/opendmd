@@ -1,0 +1,39 @@
+[package]
+name = "opendmd-firmware"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+description = "OpenDMD ESP32 firmware: plays 128x32 GIFs from microSD onto two chained HUB75 panels"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Pinned to the same versions as ~/projects/stripe-dashboard, which is the
+# owner's proven esp-idf std Rust setup on this exact chip.
+esp-idf-hal = "0.45"
+esp-idf-svc = { version = "0.51", features = ["experimental"] }
+esp-idf-sys = "0.36"
+opendmd-core = { path = "../opendmd-core" }
+anyhow = "1"
+log = "0.4"
+
+[build-dependencies]
+embuild = { version = "0.32", features = ["espidf"] }
+
+# The HUB75 DMA driver and our C shim are built as ESP-IDF components and
+# bound with bindgen into `esp_idf_sys::hub75`. `component_dirs` points at the
+# directory *containing* components, so both `hub75_shim/` and the
+# `ESP32-HUB75-MatrixPanel-I2S-DMA/` submodule are picked up (the submodule's
+# directory name is the IDF component name our CMakeLists REQUIRES).
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components"]
+bindings_header = "components/hub75_shim/include/hub75_shim.h"
+bindings_module = "hub75"
+
+[profile.dev]
+opt-level = 2          # ESP-IDF drivers misbehave below opt-level 2
+debug = true
+
+[profile.release]
+opt-level = 2
+debug = true           # keep symbols so panics decode to line numbers
+lto = "off"            # ESP-IDF does not tolerate LTO well
