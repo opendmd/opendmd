@@ -1,0 +1,16 @@
+[package]
+name = "opendmd-sim"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop simulator for OpenDMD: plays a card's GIFs in a 128x32 window."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rossduggan/opendmd"
+publish = false
+
+[dependencies]
+opendmd-core = { path = "../opendmd-core" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
+minifb = "0.28"

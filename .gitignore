@@ -1,0 +1,18 @@
+target/
+**/target/
+.embuild/
+sdkconfig
+
+# Never commit the DMDoS GIF pack or a card dump — third-party content, not
+# ours to redistribute. Test fixtures are generated in code, not checked in.
+card/
+cards/
+gifs/
+**/gifs/
+*.gif
+filelist.txt
+filelist.hall
+filelist.xmas
+
+# hardware/ is deliberately NOT ignored: the measured pinout and photos are
+# the one thing that can't be regenerated.

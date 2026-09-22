@@ -1,0 +1,42 @@
+PINWALK READY. candidates: [32, 33, 25, 26, 27, 14, 12, 13, 23, 22, 21, 19, 18, 5, 17, 16, 4, 2, 15]
+stuck low at start (external pulldown or shorted): [2]
+TOUCH  1: GPIO 26 LOW  t=89.7s
+         GPIO 26 released
+TOUCH  2: GPIO 12 LOW  t=93.9s
+         GPIO 12 released
+TOUCH  3: GPIO 32 LOW  t=97.7s
+         GPIO 32 released
+TOUCH  4: GPIO 17 LOW  t=99.5s
+         GPIO 17 released
+TOUCH  5: GPIO 4 LOW  t=102.2s
+         GPIO 4 released
+TOUCH  6: GPIO 25 LOW  t=110.3s
+         GPIO 25 released
+TOUCH  7: GPIO 27 LOW  t=112.6s
+         GPIO 27 released
+TOUCH  8: GPIO 14 LOW  t=114.4s
+         GPIO 14 released
+TOUCH  9: GPIO 13 LOW  t=116.1s
+         GPIO 13 released
+TOUCH 10: GPIO 33 LOW  t=118.1s
+         GPIO 33 released
+TOUCH 11: GPIO 22 LOW  t=120.0s
+         GPIO 22 released
+TOUCH 12: GPIO 16 LOW  t=121.9s
+         GPIO 16 released
+TOUCH 13: GPIO 15 LOW  t=123.9s
+         GPIO 15 released
+TOUCH 14: GPIO 19 LOW  t=129.4s
+         GPIO 19 released
+TOUCH 15: GPIO 19 LOW  t=129.5s
+         GPIO 19 released
+TOUCH 16: GPIO 19 LOW  t=129.7s
+         GPIO 19 released
+TOUCH 17: GPIO 18 LOW  t=131.5s
+         GPIO 18 released
+TOUCH 18: GPIO 23 LOW  t=133.7s
+         GPIO 23 released
+TOUCH 19: GPIO 23 LOW  t=133.9s
+         GPIO 23 released
+TOUCH 20: GPIO 5 LOW  t=136.1s
+         GPIO 5 released
