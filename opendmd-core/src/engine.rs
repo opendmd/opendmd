@@ -7,11 +7,96 @@
 
 use crate::canvas::Canvas;
 use crate::filter::Filter;
-use crate::manifest::Entry;
+use crate::manifest::{self, Entry};
 use crate::player::GifSource;
 use crate::scheduler::Scheduler;
-use std::io::{self, Read};
+use std::io::{self, BufReader, Read, Seek};
 use std::time::{Duration, Instant};
+
+/// A playlist the engine can look entries up in by index.
+///
+/// The engine only ever asks for an entry when it is about to open the next
+/// GIF, so an implementation is free to hold nothing but an index and go back
+/// to the card for the rest — which is exactly what [`FileCatalog`] does.
+pub trait Catalog {
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The `i`-th entry, `i` in `0..len()`.
+    fn entry(&mut self, i: usize) -> io::Result<Entry>;
+}
+
+/// A [`Catalog`] backed by a seekable `filelist.*`: a `u32` byte offset per
+/// matching line, and the file handle to read them back through.
+///
+/// This is what makes a 10,133-entry card playable on an ESP32. The index is
+/// 4 bytes per entry (~40 KB for the whole card) against the ~590 bytes per
+/// entry a `Vec<Entry>` costs, and the only other live allocation is one
+/// [`Entry`] at a time inside [`Engine::tick`].
+///
+/// `R` is `std::fs::File` on both the firmware (`/sdcard/filelist.txt`, one
+/// handle kept open for the life of the playlist) and the simulator, and
+/// `std::io::Cursor<Vec<u8>>` in tests.
+pub struct FileCatalog<R: Read + Seek> {
+    reader: BufReader<R>,
+    offsets: Vec<u32>,
+}
+
+impl<R: Read + Seek> FileCatalog<R> {
+    /// One streaming pass over the manifest, keeping the offsets of the lines
+    /// that pass `filter` and the reader they came from.
+    pub fn build(reader: R, filter: &Filter) -> io::Result<Self> {
+        Self::build_with(reader, filter, |_, _| {})
+    }
+
+    /// [`build`](Self::build), reporting every entry it sees and whether the
+    /// filter kept it, so a caller can compute a summary in the *same* pass
+    /// rather than reading the card twice.
+    pub fn build_with(
+        reader: R,
+        filter: &Filter,
+        mut visit: impl FnMut(&Entry, bool),
+    ) -> io::Result<Self> {
+        // Small buffer on purpose: this runs on a part with ~120 KB of heap
+        // once the HUB75 DMA buffers are allocated.
+        let mut reader = BufReader::with_capacity(1024, reader);
+        let mut offsets = Vec::new();
+        manifest::scan(&mut reader, |offset, entry| {
+            let matched = filter.matches(entry);
+            if matched {
+                offsets.push(offset);
+            }
+            visit(entry, matched);
+        })?;
+        offsets.shrink_to_fit();
+        Ok(FileCatalog { reader, offsets })
+    }
+
+    /// Byte offsets of the matching lines, in manifest order. `4 *
+    /// offsets().len()` is the playlist's entire memory cost.
+    pub fn offsets(&self) -> &[u32] {
+        &self.offsets
+    }
+}
+
+impl<R: Read + Seek> Catalog for FileCatalog<R> {
+    fn len(&self) -> usize {
+        self.offsets.len()
+    }
+
+    fn entry(&mut self, i: usize) -> io::Result<Entry> {
+        let offset = *self.offsets.get(i).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("catalog index {i} out of range"),
+            )
+        })?;
+        manifest::entry_at(&mut self.reader, offset)
+    }
+}
 
 /// Where GIF bytes come from. The firmware implements this over `/sdcard`, the
 /// simulator over a directory. Manifest paths are card-absolute
@@ -83,10 +168,13 @@ struct Playing {
     first_frame: bool,
 }
 
-/// Drives a filtered, scheduled playlist over a [`Source`].
+/// Drives a scheduled [`Catalog`] over a [`Source`].
+///
+/// The engine holds no entries: it asks the catalog for one only when it is
+/// about to open the next GIF, and keeps just that GIF's path and title in
+/// [`Playing`]. Playlist memory is therefore the catalog's index, nothing more.
 pub struct Engine {
-    entries: Vec<Entry>,
-    playable: Vec<usize>,
+    catalog: Box<dyn Catalog>,
     scheduler: Scheduler,
     dwell: DwellPolicy,
     source: Box<dyn Source>,
@@ -97,19 +185,16 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// `scheduler` should already be built over `filter.apply(&entries)`; the
-    /// filter is kept for reporting (`playable()`), not re-applied per tick.
+    /// `scheduler` should be built over `catalog.len()` — filtering happened
+    /// when the catalog was built, and is never re-applied per tick.
     pub fn new(
-        entries: Vec<Entry>,
-        filter: &Filter,
+        catalog: Box<dyn Catalog>,
         scheduler: Scheduler,
         dwell: DwellPolicy,
         source: Box<dyn Source>,
     ) -> Self {
-        let playable = filter.apply(&entries);
         Engine {
-            entries,
-            playable,
+            catalog,
             scheduler,
             dwell,
             source,
@@ -120,13 +205,19 @@ impl Engine {
         }
     }
 
-    pub fn entries(&self) -> &[Entry] {
-        &self.entries
+    /// How many entries survived the filter, i.e. the playlist length.
+    pub fn catalog_len(&self) -> usize {
+        self.catalog.len()
     }
 
-    /// Indices that survived the filter, in manifest order.
-    pub fn playable(&self) -> &[usize] {
-        &self.playable
+    /// Reseed and rewind the scheduler, dropping whatever is on screen.
+    ///
+    /// The catalog is untouched, so recovering from [`TickOutcome::Exhausted`]
+    /// costs no re-read of the card.
+    pub fn reset(&mut self, seed: u64) {
+        self.scheduler.reset(seed);
+        self.current = None;
+        self.skip_requested = false;
     }
 
     pub fn now_playing(&self) -> Option<NowPlaying> {
@@ -290,11 +381,14 @@ impl Engine {
             let Some(index) = self.scheduler.next_index() else {
                 return false;
             };
-            let Some(entry) = self.entries.get(index) else {
-                continue;
+            let entry = match self.catalog.entry(index) {
+                Ok(entry) => entry,
+                Err(e) => {
+                    log::warn!("catalog entry {index} unreadable: {e}");
+                    continue;
+                }
             };
-            let path = entry.path.clone();
-            let title = entry.title.clone();
+            let (path, title) = (entry.path, entry.title);
             match self
                 .source
                 .open(&path)
@@ -327,7 +421,6 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::canvas::Rgb;
-    use crate::manifest::parse_manifest;
     use crate::scheduler::Mode;
     use gif::{DisposalMethod, Encoder, Frame, Repeat};
     use std::borrow::Cow;
@@ -367,18 +460,20 @@ mod tests {
         }
     }
 
+    fn catalog(manifest: &str, filter: &Filter) -> FileCatalog<Cursor<Vec<u8>>> {
+        FileCatalog::build(Cursor::new(manifest.as_bytes().to_vec()), filter).unwrap()
+    }
+
     fn engine_with(files: &[(&str, Vec<u8>)], manifest: &str, dwell: DwellPolicy) -> Engine {
-        let entries = parse_manifest(manifest);
-        let filter = Filter::new();
-        let idx = filter.apply(&entries);
-        let sched = Scheduler::new(&idx, Mode::Sequential, 0);
+        let cat = catalog(manifest, &Filter::new());
+        let sched = Scheduler::new(cat.len(), Mode::Sequential, 0);
         let src = MemSource(
             files
                 .iter()
                 .map(|(p, b)| ((*p).to_string(), b.clone()))
                 .collect(),
         );
-        Engine::new(entries, &filter, sched, dwell, Box::new(src))
+        Engine::new(Box::new(cat), sched, dwell, Box::new(src))
     }
 
     #[test]
@@ -396,7 +491,7 @@ mod tests {
             "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
             dwell,
         );
-        assert_eq!(e.playable().len(), 2);
+        assert_eq!(e.catalog_len(), 2);
 
         let t0 = Instant::now();
         let mut canvas = Canvas::new();
@@ -576,5 +671,70 @@ mod tests {
         e.resume(t0 + Duration::from_secs(60));
         assert!(!e.is_paused());
         assert_eq!(e.now_playing().unwrap().title, "B");
+    }
+
+    const MANIFEST: &str = "/gifs/Consoles/SNES_Plok_08.gif\n\
+                            \n\
+                            /gifs/Arcade/ARCADE_Pac-Man_01.gif\r\n\
+                            /gifs/Consoles/MD_Sonic3_RattenJager.gif\n";
+
+    #[test]
+    fn file_catalog_indexes_and_reads_back() {
+        let mut cat = catalog(MANIFEST, &Filter::new());
+        assert_eq!(cat.len(), 3);
+        assert_eq!(cat.offsets().len(), 3);
+        assert_eq!(cat.entry(0).unwrap().title, "Plok");
+        assert_eq!(cat.entry(2).unwrap().title, "Sonic3");
+        // Out of order and repeated: the reader is seeked, not consumed.
+        assert_eq!(cat.entry(1).unwrap().platform.as_deref(), Some("ARCADE"));
+        assert_eq!(
+            cat.entry(0).unwrap().path,
+            "/gifs/Consoles/SNES_Plok_08.gif"
+        );
+        assert!(cat.entry(3).is_err());
+    }
+
+    #[test]
+    fn file_catalog_applies_the_filter_and_reports_the_pass() {
+        let filter = Filter::new().platforms(["SNES", "MD"]);
+        let (mut total, mut kept) = (0usize, 0usize);
+        let mut cat = FileCatalog::build_with(
+            Cursor::new(MANIFEST.as_bytes().to_vec()),
+            &filter,
+            |_, matched| {
+                total += 1;
+                kept += usize::from(matched);
+            },
+        )
+        .unwrap();
+        assert_eq!((total, kept), (3, 2));
+        assert_eq!(cat.len(), 2);
+        assert_eq!(cat.entry(0).unwrap().title, "Plok");
+        assert_eq!(cat.entry(1).unwrap().title, "Sonic3");
+    }
+
+    #[test]
+    fn reset_reseeds_without_touching_the_catalog() {
+        let mut e = engine_with(
+            &[
+                ("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0)),
+                ("/gifs/Consoles/NES_B_01.gif", one_pixel_gif(0, 255, 0)),
+            ],
+            "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
+            DwellPolicy::default(),
+        );
+        let t0 = Instant::now();
+        let mut canvas = Canvas::new();
+        e.tick(t0, &mut canvas).unwrap();
+        e.skip();
+        e.tick(t0, &mut canvas).unwrap();
+        assert_eq!(e.now_playing().unwrap().title, "B");
+
+        e.reset(0);
+        assert!(e.now_playing().is_none());
+        assert_eq!(e.catalog_len(), 2);
+        // Sequential + rewound cursor: back to the top of the playlist.
+        e.tick(t0, &mut canvas).unwrap();
+        assert_eq!(e.now_playing().unwrap().title, "A");
     }
 }

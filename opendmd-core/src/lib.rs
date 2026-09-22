@@ -12,8 +12,10 @@ pub mod player;
 pub mod scheduler;
 
 pub use canvas::{Canvas, Rgb, HEIGHT, WIDTH};
-pub use engine::{DwellPolicy, Engine, NowPlaying, Source, TickOutcome};
+pub use engine::{Catalog, DwellPolicy, Engine, FileCatalog, NowPlaying, Source, TickOutcome};
 pub use filter::Filter;
-pub use manifest::{normalize_title, parse_manifest, render_manifest, Entry};
+pub use manifest::{
+    entry_at, index_matching, normalize_title, parse_manifest, render_manifest, scan, Entry,
+};
 pub use player::GifSource;
 pub use scheduler::{Mode, Scheduler};

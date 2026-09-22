@@ -52,6 +52,9 @@
 //! title. Flags are stored verbatim; all flag comparisons are ASCII
 //! case-insensitive.
 
+use crate::filter::Filter;
+use std::io::{self, BufRead, Read, Seek, SeekFrom};
+
 /// Known single-token platform prefixes.
 pub const PLATFORMS: &[&str] = &[
     "SNES",
@@ -171,6 +174,104 @@ pub fn render_manifest(entries: &[Entry]) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Longest manifest line we will read back through [`entry_at`].
+///
+/// The real card's longest path is ~90 bytes; FAT long filenames cap a single
+/// component at 255. 512 covers both with room to spare, and keeping it a
+/// stack array is what makes `entry_at` allocation-free on the firmware.
+const MAX_LINE: usize = 512;
+
+/// Strip a leading BOM and any trailing CR / space / tab from one raw line.
+///
+/// The BOM is only ever on the first line of a file; stripping it here costs
+/// nothing and keeps [`entry_at`] correct when offset 0 is a matching entry.
+fn trim_line(raw: &str) -> &str {
+    raw.strip_prefix('\u{feff}')
+        .unwrap_or(raw)
+        .trim_end_matches(['\n', '\r', ' ', '\t'])
+}
+
+/// Stream a `filelist.*` file, calling `visit(offset, entry)` for every
+/// non-blank line, where `offset` is the **byte offset of the start of that
+/// line** in the reader.
+///
+/// This is the memory-bounded counterpart of [`parse_manifest`]: exactly one
+/// line and one [`Entry`] are alive at a time, and the entry is dropped as
+/// soon as `visit` returns. Tolerance matches `parse_manifest` exactly — a
+/// leading BOM (skipped, but offsets stay absolute file offsets), CRLF, blank
+/// lines and trailing whitespace.
+pub fn scan<R: BufRead>(mut reader: R, mut visit: impl FnMut(u32, &Entry)) -> io::Result<()> {
+    let mut raw = String::new();
+    let mut offset: u64 = 0;
+    loop {
+        raw.clear();
+        let read = reader.read_line(&mut raw)?;
+        if read == 0 {
+            return Ok(());
+        }
+        let start = offset;
+        offset += read as u64;
+        let line = trim_line(&raw);
+        if line.is_empty() {
+            continue;
+        }
+        visit(start as u32, &Entry::from_path(line));
+    }
+}
+
+/// One streaming pass returning the byte offset of the start of every line
+/// whose entry passes `filter`, in manifest order.
+///
+/// The result is the whole memory cost of a playlist: 4 bytes per matching
+/// entry (~40 KB for the real 10,133-entry card, unfiltered) instead of the
+/// ~590 bytes per entry a `Vec<Entry>` costs. Pair it with [`entry_at`], or
+/// use [`FileCatalog`](crate::engine::FileCatalog), which owns both.
+pub fn index_matching<R: BufRead>(reader: R, filter: &Filter) -> io::Result<Vec<u32>> {
+    let mut offsets = Vec::new();
+    scan(reader, |offset, entry| {
+        if filter.matches(entry) {
+            offsets.push(offset);
+        }
+    })?;
+    Ok(offsets)
+}
+
+/// Read back the single entry whose line starts at `offset`, as produced by
+/// [`index_matching`].
+///
+/// Seeks, reads at most one line into a stack buffer and parses it; no
+/// allocation beyond the returned [`Entry`]'s own strings.
+pub fn entry_at<R: Read + Seek>(reader: &mut R, offset: u32) -> io::Result<Entry> {
+    reader.seek(SeekFrom::Start(offset as u64))?;
+
+    let mut buf = [0u8; MAX_LINE];
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..])? {
+            0 => break,
+            n => filled += n,
+        }
+        if buf[..filled].contains(&b'\n') {
+            break;
+        }
+    }
+
+    let end = buf[..filled]
+        .iter()
+        .position(|b| *b == b'\n')
+        .unwrap_or(filled);
+    let raw = std::str::from_utf8(&buf[..end])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let line = trim_line(raw);
+    if line.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("no manifest line at offset {offset}"),
+        ));
+    }
+    Ok(Entry::from_path(line))
 }
 
 fn category_of(path: &str) -> Option<String> {
@@ -340,6 +441,7 @@ fn parse_stem(stem: &str) -> Entry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     fn p(path: &str) -> Entry {
         Entry::from_path(path)
@@ -538,5 +640,76 @@ mod tests {
     fn empty_manifest() {
         assert!(parse_manifest("").is_empty());
         assert_eq!(render_manifest(&[]), "");
+        assert!(index_matching(Cursor::new(Vec::new()), &Filter::new())
+            .unwrap()
+            .is_empty());
+    }
+
+    const MESSY: &str = "\u{feff}/gifs/Consoles/SNES_Plok_08.gif\r\n\
+                         \r\n\
+                         /gifs/Arcade/ARCADE_Pac-Man_01.gif   \r\n\
+                         /gifs/Consoles/MD_Sonic3_RattenJager.gif\n";
+
+    fn cursor(text: &str) -> Cursor<Vec<u8>> {
+        Cursor::new(text.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn index_matching_offsets_point_at_line_starts() {
+        let offsets = index_matching(cursor(MESSY), &Filter::new()).unwrap();
+        assert_eq!(offsets.len(), 3);
+        // Absolute file offsets: the BOM is skipped for parsing but still
+        // occupies the first three bytes, and the blank line is not indexed.
+        let bytes = MESSY.as_bytes();
+        assert_eq!(offsets[0], 0);
+        for off in &offsets {
+            let o = *off as usize;
+            assert!(
+                o == 0 || bytes[o - 1] == b'\n',
+                "offset {o} is not a line start"
+            );
+        }
+        // And they really are the offsets of the three non-blank lines.
+        let mut want = Vec::new();
+        let mut at = 0u32;
+        for raw in MESSY.split_inclusive('\n') {
+            if !trim_line(raw).is_empty() {
+                want.push(at);
+            }
+            at += raw.len() as u32;
+        }
+        assert_eq!(offsets, want);
+    }
+
+    #[test]
+    fn index_matching_agrees_with_parse_plus_filter() {
+        for filter in [
+            Filter::new(),
+            Filter::new().platforms(["SNES"]),
+            Filter::new().exclude_flag("RattenJager"),
+            Filter::new().platforms(Vec::<String>::new()),
+        ] {
+            let entries = parse_manifest(MESSY);
+            let want: Vec<&Entry> = filter
+                .apply(&entries)
+                .iter()
+                .map(|i| &entries[*i])
+                .collect();
+            let offsets = index_matching(cursor(MESSY), &filter).unwrap();
+            assert_eq!(offsets.len(), want.len());
+            let mut r = cursor(MESSY);
+            for (off, expected) in offsets.iter().zip(want) {
+                assert_eq!(&entry_at(&mut r, *off).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn entry_at_rejects_a_blank_or_past_the_end_offset() {
+        let mut r = cursor(MESSY);
+        // The blank line between the first two entries.
+        let blank = MESSY.find("\r\n\r\n").unwrap() as u32 + 2;
+        assert!(entry_at(&mut r, blank).is_err());
+        assert!(entry_at(&mut r, MESSY.len() as u32).is_err());
     }
 }

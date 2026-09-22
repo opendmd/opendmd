@@ -39,27 +39,38 @@ pub enum Mode {
     Shuffle,
 }
 
-/// Orders a set of manifest indices.
+/// Orders a catalog of `len` items, referred to by their index `0..len`.
 ///
-/// Items are referred to by their index into the caller's entry slice; the
-/// scheduler never looks at the entries themselves.
+/// The scheduler never stores the item list: on a 10k-entry card a dense
+/// `Vec<usize>` of items plus a dense `Vec<f32>` of weights would be 120 KB of
+/// DRAM for something entirely implied by `len`. Weights are sparse, allocated
+/// only for the indices `set_weight` is actually called on, so the default
+/// (everything weight 1.0) costs nothing and the draw is O(1) memory.
 #[derive(Clone, Debug)]
 pub struct Scheduler {
-    items: Vec<usize>,
-    weights: Vec<f32>,
+    len: usize,
+    /// `(index, weight)`, unique by index, empty until `set_weight` is called.
+    weights: Vec<(usize, f32)>,
     mode: Mode,
     rng: Rng,
     cursor: usize,
+    /// Ring of the last `no_repeat` indices drawn: 32 x 4 B by default.
     history: VecDeque<usize>,
     no_repeat: usize,
 }
 
+/// Rejection-sampling attempts before the weighted draw gives up and falls
+/// back to a deterministic scan. Only reached when almost every index is
+/// zero-weighted or blocked, which the fallback then handles exactly.
+const DRAW_ATTEMPTS: usize = 1024;
+
 impl Scheduler {
-    /// All weights default to 1.0 and the no-repeat window to 0.
-    pub fn new(items: &[usize], mode: Mode, seed: u64) -> Self {
+    /// Schedules over `0..len`. All weights default to 1.0 and the no-repeat
+    /// window to 0.
+    pub fn new(len: usize, mode: Mode, seed: u64) -> Self {
         Scheduler {
-            items: items.to_vec(),
-            weights: vec![1.0; items.len()],
+            len,
+            weights: Vec::new(),
             mode,
             rng: Rng::new(seed),
             cursor: 0,
@@ -75,18 +86,24 @@ impl Scheduler {
         self
     }
 
-    /// Relative weight for a slot (`slot` is the position in the item list, not
-    /// the manifest index). Weight 0 is never chosen.
-    pub fn set_weight(&mut self, slot: usize, weight: f32) {
-        if let Some(w) = self.weights.get_mut(slot) {
-            *w = weight.max(0.0);
-        }
+    /// Rewind to the start of the order with a fresh seed, keeping `len`, the
+    /// mode and any weights. The caller gets a new shuffle without rebuilding
+    /// (or re-reading) the catalog.
+    pub fn reset(&mut self, seed: u64) {
+        self.rng = Rng::new(seed);
+        self.cursor = 0;
+        self.history.clear();
     }
 
-    /// Weight for a manifest index (first matching slot).
-    pub fn set_weight_for(&mut self, item: usize, weight: f32) {
-        if let Some(slot) = self.items.iter().position(|i| *i == item) {
-            self.set_weight(slot, weight);
+    /// Relative weight for an item index. Weight 0 is never chosen.
+    pub fn set_weight(&mut self, index: usize, weight: f32) {
+        if index >= self.len {
+            return;
+        }
+        let weight = weight.max(0.0);
+        match self.weights.iter_mut().find(|(i, _)| *i == index) {
+            Some(slot) => slot.1 = weight,
+            None => self.weights.push((index, weight)),
         }
     }
 
@@ -95,88 +112,103 @@ impl Scheduler {
     }
 
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.len == 0
     }
 
-    pub fn items(&self) -> &[usize] {
-        &self.items
+    /// Weight of one index; anything `set_weight` was never called on is 1.0.
+    pub fn weight(&self, index: usize) -> f32 {
+        self.weights
+            .iter()
+            .find(|(i, _)| *i == index)
+            .map_or(1.0, |(_, w)| *w)
     }
 
-    /// Next manifest index, or `None` if there is nothing playable (empty list,
+    /// Next item index, or `None` if there is nothing playable (empty catalog,
     /// or every weight is zero in shuffle mode).
     ///
     /// Not `Iterator::next`: a `Sequential` scheduler never terminates, and the
     /// engine needs to interleave `set_weight` calls between draws.
     pub fn next_index(&mut self) -> Option<usize> {
-        if self.items.is_empty() {
+        if self.len == 0 {
             return None;
         }
-        let slot = match self.mode {
+        let index = match self.mode {
             Mode::Sequential => {
-                let slot = self.cursor;
-                self.cursor = (self.cursor + 1) % self.items.len();
-                slot
+                let index = self.cursor;
+                self.cursor = (self.cursor + 1) % self.len;
+                index
             }
             Mode::Shuffle => self.pick_weighted()?,
         };
-        self.remember(slot);
-        Some(self.items[slot])
+        self.remember(index);
+        Some(index)
     }
 
-    fn remember(&mut self, slot: usize) {
+    fn remember(&mut self, index: usize) {
         if self.no_repeat == 0 {
             return;
         }
-        self.history.push_back(slot);
+        self.history.push_back(index);
         while self.history.len() > self.no_repeat {
             self.history.pop_front();
         }
     }
 
+    /// How many indices could be drawn at all: everything except the ones
+    /// explicitly weighted to zero.
+    fn playable(&self) -> usize {
+        self.len - self.weights.iter().filter(|(_, w)| *w <= 0.0).count()
+    }
+
+    fn blocked(&self, index: usize, window: usize) -> bool {
+        self.history.iter().rev().take(window).any(|i| *i == index)
+    }
+
+    /// Rejection sampling against the sparse weight table: draw an index
+    /// uniformly, accept it with probability `weight / max_weight`. Exactly the
+    /// same distribution as a cumulative-sum walk over a dense weight vector,
+    /// in O(1) memory and — for the unweighted case, which is every real
+    /// playlist — one RNG draw per pick.
     fn pick_weighted(&mut self) -> Option<usize> {
-        let playable = self.weights.iter().filter(|w| **w > 0.0).count();
+        let playable = self.playable();
         if playable == 0 {
             return None;
         }
         // Never let the window exclude every playable item.
         let window = self.no_repeat.min(playable.saturating_sub(1));
-        let blocked: Vec<usize> = self
-            .history
+        let max_weight = self
+            .weights
             .iter()
-            .rev()
-            .take(window)
-            .copied()
-            .collect::<Vec<_>>();
+            .fold(1.0f32, |acc, (_, w)| if *w > acc { *w } else { acc });
 
-        let eligible =
-            |slot: usize, weights: &[f32]| weights[slot] > 0.0 && !blocked.contains(&slot);
-
-        let total: f64 = (0..self.items.len())
-            .filter(|s| eligible(*s, &self.weights))
-            .map(|s| self.weights[s] as f64)
-            .sum();
-        if total <= 0.0 {
-            return None;
-        }
-
-        let mut target = self.rng.next_f64() * total;
-        for slot in 0..self.items.len() {
-            if !eligible(slot, &self.weights) {
+        for _ in 0..DRAW_ATTEMPTS {
+            let index = (self.rng.next_u64() % self.len as u64) as usize;
+            if self.blocked(index, window) {
                 continue;
             }
-            target -= self.weights[slot] as f64;
-            if target < 0.0 {
-                return Some(slot);
+            let weight = self.weight(index);
+            if weight <= 0.0 {
+                continue;
+            }
+            if weight >= max_weight || self.rng.next_f64() < (weight / max_weight) as f64 {
+                return Some(index);
             }
         }
-        // Float rounding: fall back to the last eligible slot.
-        (0..self.items.len())
-            .rev()
-            .find(|s| eligible(*s, &self.weights))
+
+        // Pathological table (a handful of playable indices in a huge catalog):
+        // scan from a random start for the first eligible index, then ignore
+        // the no-repeat window rather than return nothing.
+        let from = (self.rng.next_u64() % self.len as u64) as usize;
+        let scan = |blocking: bool, s: &Self| {
+            (0..s.len)
+                .map(|k| (from + k) % s.len)
+                .find(|i| s.weight(*i) > 0.0 && !(blocking && s.blocked(*i, window)))
+        };
+        scan(true, self).or_else(|| scan(false, self))
     }
 }
 
@@ -189,28 +221,42 @@ mod tests {
     }
 
     #[test]
-    fn sequential_wraps_in_manifest_order() {
-        let mut s = Scheduler::new(&[3, 7, 11], Mode::Sequential, 0);
-        assert_eq!(take(&mut s, 7), vec![3, 7, 11, 3, 7, 11, 3]);
+    fn sequential_wraps_in_catalog_order() {
+        let mut s = Scheduler::new(3, Mode::Sequential, 0);
+        assert_eq!(take(&mut s, 7), vec![0, 1, 2, 0, 1, 2, 0]);
     }
 
     #[test]
     fn shuffle_is_reproducible_for_a_seed() {
-        let items: Vec<usize> = (0..20).collect();
-        let mut a = Scheduler::new(&items, Mode::Shuffle, 0xDEAD_BEEF);
-        let mut b = Scheduler::new(&items, Mode::Shuffle, 0xDEAD_BEEF);
-        let mut c = Scheduler::new(&items, Mode::Shuffle, 0xDEAD_BEEE);
+        let mut a = Scheduler::new(20, Mode::Shuffle, 0xDEAD_BEEF);
+        let mut b = Scheduler::new(20, Mode::Shuffle, 0xDEAD_BEEF);
+        let mut c = Scheduler::new(20, Mode::Shuffle, 0xDEAD_BEEE);
         let run_a = take(&mut a, 40);
         assert_eq!(run_a, take(&mut b, 40));
         assert_ne!(run_a, take(&mut c, 40));
         // And it actually shuffles.
-        assert_ne!(run_a[..20], items[..]);
+        let ordered: Vec<usize> = (0..20).collect();
+        assert_ne!(run_a[..20], ordered[..]);
+    }
+
+    #[test]
+    fn reset_rewinds_and_reseeds_without_rebuilding() {
+        let mut s = Scheduler::new(20, Mode::Shuffle, 7).with_no_repeat(4);
+        let first = take(&mut s, 40);
+        s.reset(7);
+        assert_eq!(take(&mut s, 40), first, "same seed must replay exactly");
+        s.reset(8);
+        assert_ne!(take(&mut s, 40), first);
+
+        let mut q = Scheduler::new(5, Mode::Sequential, 0);
+        assert_eq!(take(&mut q, 3), vec![0, 1, 2]);
+        q.reset(0);
+        assert_eq!(take(&mut q, 3), vec![0, 1, 2]);
     }
 
     #[test]
     fn no_repeat_window_is_respected() {
-        let items: Vec<usize> = (0..10).collect();
-        let mut s = Scheduler::new(&items, Mode::Shuffle, 42).with_no_repeat(4);
+        let mut s = Scheduler::new(10, Mode::Shuffle, 42).with_no_repeat(4);
         let run = take(&mut s, 200);
         assert_eq!(run.len(), 200);
         for w in run.windows(5) {
@@ -223,7 +269,7 @@ mod tests {
 
     #[test]
     fn no_repeat_window_cannot_starve_a_short_list() {
-        let mut s = Scheduler::new(&[1, 2], Mode::Shuffle, 7).with_no_repeat(8);
+        let mut s = Scheduler::new(2, Mode::Shuffle, 7).with_no_repeat(8);
         let run = take(&mut s, 20);
         assert_eq!(run.len(), 20);
         // With a 2-item list and a window of 1, it must alternate.
@@ -234,10 +280,9 @@ mod tests {
 
     #[test]
     fn zero_weight_is_never_chosen() {
-        let items: Vec<usize> = (0..5).collect();
-        let mut s = Scheduler::new(&items, Mode::Shuffle, 1);
-        s.set_weight_for(2, 0.0);
-        s.set_weight_for(4, 0.0);
+        let mut s = Scheduler::new(5, Mode::Shuffle, 1);
+        s.set_weight(2, 0.0);
+        s.set_weight(4, 0.0);
         let run = take(&mut s, 500);
         assert_eq!(run.len(), 500);
         assert!(!run.contains(&2));
@@ -247,19 +292,43 @@ mod tests {
 
     #[test]
     fn weights_bias_the_draw() {
-        let items: Vec<usize> = (0..2).collect();
-        let mut s = Scheduler::new(&items, Mode::Shuffle, 99);
-        s.set_weight_for(0, 9.0);
+        let mut s = Scheduler::new(2, Mode::Shuffle, 99);
+        s.set_weight(0, 9.0);
         let run = take(&mut s, 1000);
         let zeros = run.iter().filter(|i| **i == 0).count();
         assert!(zeros > 800 && zeros < 980, "got {zeros}/1000");
     }
 
     #[test]
+    fn a_single_playable_index_in_a_large_catalog_is_still_found() {
+        // Rejection sampling would time out here; the deterministic fallback
+        // is what must produce the answer.
+        let mut s = Scheduler::new(4000, Mode::Shuffle, 5).with_no_repeat(32);
+        for i in 0..4000 {
+            if i != 1234 {
+                s.set_weight(i, 0.0);
+            }
+        }
+        assert_eq!(take(&mut s, 3), vec![1234, 1234, 1234]);
+    }
+
+    #[test]
+    fn weights_stay_sparse() {
+        let mut s = Scheduler::new(10_000, Mode::Shuffle, 0);
+        assert!(s.weights.is_empty());
+        s.set_weight(42, 0.5);
+        s.set_weight(42, 0.25);
+        s.set_weight(10_001, 0.0); // out of range, ignored
+        assert_eq!(s.weights.len(), 1);
+        assert_eq!(s.weight(42), 0.25);
+        assert_eq!(s.weight(43), 1.0);
+    }
+
+    #[test]
     fn empty_and_all_zero() {
-        let mut s = Scheduler::new(&[], Mode::Shuffle, 0);
+        let mut s = Scheduler::new(0, Mode::Shuffle, 0);
         assert_eq!(s.next_index(), None);
-        let mut s = Scheduler::new(&[1], Mode::Shuffle, 0);
+        let mut s = Scheduler::new(1, Mode::Shuffle, 0);
         s.set_weight(0, 0.0);
         assert_eq!(s.next_index(), None);
     }

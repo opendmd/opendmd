@@ -8,10 +8,10 @@
 //! ```
 
 use opendmd_core::canvas::Canvas;
-use opendmd_core::engine::{DwellPolicy, Engine, Source, TickOutcome};
+use opendmd_core::engine::{Catalog, DwellPolicy, Engine, FileCatalog, Source, TickOutcome};
 use opendmd_core::filter::Filter;
 use opendmd_core::manifest::{parse_manifest, render_manifest};
-use opendmd_core::scheduler::{Mode, Scheduler};
+use opendmd_core::scheduler::{Mode, Rng, Scheduler};
 use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -81,18 +81,51 @@ fn real_card_manifest() {
         "only {pct:.2}% of Consoles entries got a platform"
     );
 
+    // The streaming index must agree exactly with parse + filter, and read
+    // back the same entries. This is the path the firmware actually uses.
+    for (label, filter) in [
+        ("empty filter", Filter::new()),
+        ("MD,SNES", Filter::new().platforms(["MD", "SNES"])),
+    ] {
+        let want: Vec<&opendmd_core::Entry> = filter
+            .apply(&entries)
+            .iter()
+            .map(|i| &entries[*i])
+            .collect();
+        let file = std::fs::File::open(root.join("filelist.txt")).expect("open filelist.txt");
+        let mut catalog = FileCatalog::build(file, &filter).expect("build catalog");
+        println!(
+            "\nFileCatalog[{label}]: {} entries, {} index bytes ({} for parse_manifest's Vec<Entry>)",
+            catalog.len(),
+            catalog.offsets().len() * 4,
+            want.len() * 590,
+        );
+        assert_eq!(catalog.len(), want.len(), "catalog length for {label}");
+        assert!(!want.is_empty(), "{label} matched nothing");
+
+        // Spot-check 20 random offsets against the parsed vector.
+        let mut rng = Rng::new(0x4F50_454E_444D_4400);
+        for _ in 0..20 {
+            let i = (rng.next_u64() % catalog.len() as u64) as usize;
+            assert_eq!(
+                &catalog.entry(i).expect("entry_at"),
+                want[i],
+                "entry {i} of {label}"
+            );
+        }
+    }
+
     // Open the first 50 GIFs through the engine and pull one frame each.
-    let filter = Filter::new();
-    let idx: Vec<usize> = (0..entries.len().min(50)).collect();
-    let scheduler = Scheduler::new(&idx, Mode::Sequential, 0);
+    let file = std::fs::File::open(root.join("filelist.txt")).expect("open filelist.txt");
+    let catalog = FileCatalog::build(file, &Filter::new()).expect("build catalog");
+    let scheduler = Scheduler::new(catalog.len().min(50), Mode::Sequential, 0);
     let dwell = DwellPolicy {
         min: std::time::Duration::ZERO,
         max: std::time::Duration::from_secs(30),
         min_loops: 1,
     };
     let mut engine = Engine::new(
-        entries.clone(),
-        &filter,
+        Box::new(catalog),
         scheduler,
         dwell,
         Box::new(DirSource { root }),

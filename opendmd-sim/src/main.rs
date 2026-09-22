@@ -8,9 +8,9 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use opendmd_core::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
-use opendmd_core::engine::{DwellPolicy, Engine, Source, TickOutcome};
+use opendmd_core::engine::{Catalog, DwellPolicy, Engine, FileCatalog, Source, TickOutcome};
 use opendmd_core::filter::Filter;
-use opendmd_core::manifest::{parse_manifest, Entry};
+use opendmd_core::manifest::Entry;
 use opendmd_core::scheduler::{Mode, Scheduler};
 use std::collections::BTreeMap;
 use std::io::{self, Read};
@@ -114,23 +114,37 @@ fn build_filter(args: &Args) -> Filter {
     filter
 }
 
-fn print_summary(entries: &[Entry], selected: &[usize]) {
-    println!(
-        "entries: {} total -> {} after filter",
-        entries.len(),
-        selected.len()
-    );
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for i in selected {
-        let platform = entries[*i].platform.as_deref().unwrap_or("(none)");
-        *counts.entry(platform).or_default() += 1;
+/// Startup summary, accumulated *during* the single indexing pass rather than
+/// from a `Vec<Entry>` — same numbers, one read of the card, no entries held.
+#[derive(Default)]
+struct ManifestStats {
+    total: usize,
+    selected: usize,
+    by_platform: BTreeMap<String, usize>,
+}
+
+impl ManifestStats {
+    fn observe(&mut self, entry: &Entry, matched: bool) {
+        self.total += 1;
+        if matched {
+            self.selected += 1;
+            let platform = entry.platform.as_deref().unwrap_or("(none)");
+            *self.by_platform.entry(platform.to_string()).or_default() += 1;
+        }
     }
-    let mut rows: Vec<_> = counts.into_iter().collect();
-    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-    for (platform, count) in rows {
-        println!("  {count:>6}  {platform}");
+
+    fn print(&self) {
+        println!(
+            "entries: {} total -> {} after filter",
+            self.total, self.selected
+        );
+        let mut rows: Vec<_> = self.by_platform.iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        for (platform, count) in rows {
+            println!("  {count:>6}  {platform}");
+        }
+        println!();
     }
-    println!();
 }
 
 /// Nearest-neighbour upscale. At scale >= 4 the last row/column of each cell is
@@ -169,35 +183,42 @@ fn main() -> Result<()> {
         .manifest
         .clone()
         .unwrap_or_else(|| args.root.join("filelist.txt"));
-    let text = std::fs::read_to_string(&manifest_path)
+    let file = std::fs::File::open(&manifest_path)
         .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let entries = parse_manifest(&text);
-    if entries.is_empty() {
+
+    // One streaming pass builds the offset index and the summary together;
+    // the manifest is never materialised as entries. Same code path as the
+    // firmware, which is the point of the simulator.
+    let filter = build_filter(&args);
+    let mut stats = ManifestStats::default();
+    let catalog = FileCatalog::build_with(file, &filter, |entry, matched| {
+        stats.observe(entry, matched)
+    })
+    .with_context(|| format!("indexing {}", manifest_path.display()))?;
+
+    if stats.total == 0 {
         bail!("{} has no entries", manifest_path.display());
     }
-
-    let filter = build_filter(&args);
-    let selected = filter.apply(&entries);
-    print_summary(&entries, &selected);
-    if selected.is_empty() {
+    stats.print();
+    if catalog.is_empty() {
         bail!("the filter matched nothing");
     }
-    let total = selected.len();
+    let total = catalog.len();
+    println!("playlist index: {} B\n", catalog.offsets().len() * 4);
 
     let mode = if args.shuffle {
         Mode::Shuffle
     } else {
         Mode::Sequential
     };
-    let scheduler = Scheduler::new(&selected, mode, args.seed).with_no_repeat(args.no_repeat);
+    let scheduler = Scheduler::new(total, mode, args.seed).with_no_repeat(args.no_repeat);
     let dwell = DwellPolicy {
         min: Duration::from_secs_f64(args.min_dwell),
         max: Duration::from_secs_f64(args.max_dwell),
         min_loops: 1,
     };
     let mut engine = Engine::new(
-        entries,
-        &filter,
+        Box::new(catalog),
         scheduler,
         dwell,
         Box::new(DirSource {
