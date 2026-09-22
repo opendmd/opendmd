@@ -131,6 +131,34 @@ impl Filter {
         true
     }
 
+    /// A stable 64-bit identity for what this filter selects: FNV-1a over a
+    /// canonical serialisation.
+    ///
+    /// The on-card playlist index (`<manifest>.idx`, see [`crate::index`])
+    /// records the fingerprint of the filter it was built with, so a device can
+    /// tell at boot whether the index on the card still answers its current
+    /// settings. That only works if the value is identical across runs, builds
+    /// and platforms, so nothing here depends on `HashSet` iteration order or
+    /// on `std`'s randomly-keyed hasher: every set is sorted (and titles
+    /// deduplicated, since they are OR-ed) before it is hashed, strings are
+    /// length-prefixed so `["ab","c"]` and `["a","bc"]` differ, and `None`
+    /// ("no constraint") is distinct from `Some(empty)` ("match nothing").
+    pub fn fingerprint(&self) -> u64 {
+        let mut h = Fnv1a::new();
+        h.bytes(b"opendmd-filter/1");
+        h.opt_set(self.platforms.as_ref().map(sorted));
+        h.opt_set(self.categories_include.as_ref().map(sorted));
+        h.opt_set(Some(sorted(&self.categories_exclude)));
+        h.opt_set(self.titles.as_ref().map(|t| {
+            let mut v: Vec<&str> = t.iter().map(String::as_str).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        }));
+        h.opt_set(Some(sorted(&self.exclude_flags)));
+        h.finish()
+    }
+
     /// Indices (into `entries`) of everything that survives, in manifest order.
     pub fn apply(&self, entries: &[Entry]) -> Vec<usize> {
         entries
@@ -139,6 +167,52 @@ impl Filter {
             .filter(|(_, e)| self.matches(e))
             .map(|(i, _)| i)
             .collect()
+    }
+}
+
+fn sorted(set: &HashSet<String>) -> Vec<&str> {
+    let mut v: Vec<&str> = set.iter().map(String::as_str).collect();
+    v.sort_unstable();
+    v
+}
+
+/// 64-bit FNV-1a. Hand-rolled because the value is persisted on the card:
+/// `std`'s `DefaultHasher` is explicitly allowed to change between releases.
+struct Fnv1a(u64);
+
+impl Fnv1a {
+    fn new() -> Self {
+        Fnv1a(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn bytes(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 ^= u64::from(*b);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn u32(&mut self, v: u32) {
+        self.bytes(&v.to_le_bytes());
+    }
+
+    /// One field: a presence byte, then a count and each length-prefixed item.
+    fn opt_set(&mut self, items: Option<Vec<&str>>) {
+        match items {
+            None => self.bytes(&[0]),
+            Some(items) => {
+                self.bytes(&[1]);
+                self.u32(items.len() as u32);
+                for item in items {
+                    self.u32(item.len() as u32);
+                    self.bytes(item.as_bytes());
+                }
+            }
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
     }
 }
 
@@ -222,5 +296,78 @@ mod tests {
             .platforms(Vec::<String>::new())
             .apply(&e)
             .is_empty());
+    }
+
+    #[test]
+    fn fingerprint_ignores_construction_order() {
+        let a = Filter::new()
+            .platforms(["MD", "SNES", "NES", "GBA", "PCE"])
+            .include_categories(["Consoles", "Arcade"])
+            .exclude_categories(["XMAS", "Halloween"])
+            .title("sonic")
+            .title("Donkey Kong")
+            .exclude_flags(["INVERT", "LOGO", "INTRO"]);
+        let b = Filter::new()
+            .exclude_flags(["intro", "logo"])
+            .exclude_flag("invert")
+            .title("donkeykong")
+            .title("Sonic")
+            .title("sonic")
+            .exclude_categories(["halloween"])
+            .exclude_categories(["xmas"])
+            .include_categories(["arcade", "consoles"])
+            .platforms(["pce", "gba", "nes", "snes", "md"]);
+        assert_eq!(a.fingerprint(), b.fingerprint());
+        // Stable across calls, not just across equal values.
+        assert_eq!(a.fingerprint(), a.clone().fingerprint());
+        assert_eq!(Filter::new().fingerprint(), Filter::default().fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_with_every_field() {
+        let base = Filter::new()
+            .platforms(["MD", "SNES"])
+            .include_categories(["Consoles"])
+            .exclude_categories(["XMAS"])
+            .title("sonic")
+            .exclude_flag("INVERT");
+        let variants = [
+            Filter::new(),
+            Filter::new().platforms(Vec::<String>::new()),
+            base.clone().platforms(["MD"]),
+            base.clone().platforms(["MD", "SNES", "NES"]),
+            base.clone().include_categories(["Arcade"]),
+            {
+                let mut f = base.clone();
+                f.categories_include = None;
+                f
+            },
+            base.clone().exclude_categories(["Halloween"]),
+            base.clone().title("mario"),
+            {
+                let mut f = base.clone();
+                f.titles = None;
+                f
+            },
+            base.clone().exclude_flag("LOGO"),
+        ];
+        let mut seen = vec![base.fingerprint()];
+        for v in &variants {
+            let fp = v.fingerprint();
+            assert!(!seen.contains(&fp), "collision for {v:?}");
+            seen.push(fp);
+        }
+    }
+
+    #[test]
+    fn fingerprint_separates_items() {
+        // Length prefixes: ["AB","C"] is not ["A","BC"], and a set in one field
+        // is not the same set in another.
+        let a = Filter::new().platforms(["AB", "C"]);
+        let b = Filter::new().platforms(["A", "BC"]);
+        assert_ne!(a.fingerprint(), b.fingerprint());
+        let c = Filter::new().exclude_categories(["MD"]);
+        let d = Filter::new().exclude_flag("MD");
+        assert_ne!(c.fingerprint(), d.fingerprint());
     }
 }

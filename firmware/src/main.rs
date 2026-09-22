@@ -5,11 +5,12 @@
 //! run `opendmd_core::engine::Engine`, pushing every frame to two chained
 //! 64x32 HUB75 P4 panels (128x32) over the mrcodetastic DMA driver.
 //!
-//! The manifest is never held in RAM. `FileCatalog` makes one streaming pass
-//! over the card's 450 KB / 10,162-line `filelist.txt` and keeps a `u32` byte
-//! offset per matching line (~40 KB unfiltered); the file handle stays open
-//! and the engine seeks back to it for one `Entry` at a time, only when it is
-//! about to open the next GIF.
+//! Neither the manifest nor its index is held in RAM. One streaming pass over
+//! the card's 450 KB / 10,162-line `filelist.txt` writes a `u32` byte offset
+//! per matching line to `filelist.txt.idx` beside it (~40 KB unfiltered), and
+//! `IndexedCatalog` seeks into both files for one `Entry` at a time, only when
+//! the engine is about to open the next GIF. At boot a current `.idx` is simply
+//! reopened; see [`open_catalog`].
 //!
 //! # Threads and cores
 //!
@@ -53,7 +54,11 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use opendmd_core::canvas::Canvas;
 use opendmd_core::engine::{Catalog, DwellPolicy, Engine, FileCatalog, TickOutcome};
 use opendmd_core::filter::Filter;
+use opendmd_core::index::{write_index, IndexHeader, IndexedCatalog};
 use opendmd_core::scheduler::{Mode, Scheduler};
+use std::fs::File;
+use std::io::{BufReader, Seek, SeekFrom};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -63,9 +68,18 @@ use crate::http::{Ctx, NetCommand};
 use crate::nvs_config::{Config, Settings};
 use crate::panel::{Panel, PanelConfig};
 use crate::sd::{SdBus, SdSource};
-use crate::state::{free_heap, Applied, Command, Status};
+use crate::state::{free_heap, Applied, Command, IndexSource, Status};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// True until the network worker is spawned: the heap is still whole, so the
+/// in-RAM fallback index may simply be attempted (it always fitted at boot).
+/// After that it is only attempted if the block it needs is really there.
+static HEAP_FRESH: AtomicBool = AtomicBool::new(true);
+/// Set by [`rebuild`] when the only way to get a playlist is a reboot (see
+/// [`NeedsFreshHeap`]); acted on by the main loop *after* it has answered the
+/// command that caused it, so the HTTP caller gets its reply first.
+static REBOOT_PENDING: AtomicBool = AtomicBool::new(false);
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -194,15 +208,14 @@ fn main() -> Result<()> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
     let (net_tx, net_rx) = mpsc::channel::<NetCommand>();
 
-    // One file handle and one offset index for the life of the run: the only
-    // pass over the card, and `Exhausted` reseeds the scheduler rather than
-    // re-reading it.
-    //
-    // It is built here, before anything network-shaped exists, because
-    // it is the largest single allocation after the panel's and it must not
-    // fail. If the card has no readable manifest the loop below keeps retrying.
+    // The playlist: the manifest and its on-card index, opened (or built) once
+    // and kept open; `Exhausted` reseeds the scheduler rather than re-reading
+    // either. Done before anything network-shaped exists, so that the
+    // in-RAM fallback — the only path that still needs a large block — has a
+    // fresh heap to work with. If the card has no readable manifest the loop
+    // below keeps retrying.
     let mut engine: Option<Engine> = None;
-    let _ = rebuild(&mut engine, &settings);
+    let _ = rebuild(&mut engine, &settings, false);
 
     // The HTTP server next, still before the first GIF is decoded: its task
     // stack is one contiguous 16 KB internal allocation, and the largest free
@@ -232,6 +245,7 @@ fn main() -> Result<()> {
     };
 
     // WiFi last and off this core, so it cannot delay first pixels.
+    HEAP_FRESH.store(false, Ordering::Relaxed);
     net_worker::spawn(net_worker::NetWorker {
         modem,
         sysloop,
@@ -284,7 +298,7 @@ fn main() -> Result<()> {
                             status.lock().unwrap().manifest = settings.manifest_path();
                             // Brightness and dwell apply to what is on screen
                             // right now; a filter, set or order change means a
-                            // new catalog, which may cost a reboot.
+                            // new catalog — rebuilt in place, never a reboot.
                             panel.set_brightness(settings.brightness);
                             if let Some(e) = engine.as_mut() {
                                 e.set_dwell(dwell_policy(&settings));
@@ -299,81 +313,65 @@ fn main() -> Result<()> {
                                 settings.set
                             );
                             let outcome = if needs_reindex {
-                                reindex(&mut engine, &settings)
+                                // A current `.idx` for the new set/filter is
+                                // reused; anything else is rebuilt.
+                                rebuild(&mut engine, &settings, false)
                             } else {
-                                Ok(Applied {
-                                    entries: engine.as_ref().map_or(0, |e| e.catalog_len()),
-                                    rebooting: false,
-                                })
+                                Ok(Applied::unchanged(
+                                    engine.as_ref().map_or(0, |e| e.catalog_len()),
+                                ))
                             };
-                            let rebooting = matches!(
-                                outcome,
-                                Ok(Applied {
-                                    rebooting: true,
-                                    ..
-                                })
-                            );
                             let _ = reply.send(outcome);
-                            if rebooting {
-                                reboot_to_apply();
-                            }
                         }
                     }
                 }
                 Command::Reindex(reply) => {
-                    let outcome = reindex(&mut engine, &settings);
+                    // Forced: the caller asked, perhaps because the manifest
+                    // was edited off-device with its length unchanged.
+                    let outcome = rebuild(&mut engine, &settings, true);
                     log::info!("reindex requested over HTTP: {outcome:?}");
-                    let rebooting = matches!(
-                        outcome,
-                        Ok(Applied {
-                            rebooting: true,
-                            ..
-                        })
-                    );
                     let _ = reply.send(outcome);
-                    if rebooting {
-                        reboot_to_apply();
-                    }
                 }
                 Command::InstallManifest { temp, dest, reply } => {
-                    // The engine may hold `dest` open, and FAT will not replace
-                    // an open file — so drop it first, swap, then reindex if
-                    // the file we just replaced is the one in play.
+                    // The engine may hold `dest` and `dest.idx` open, and FAT
+                    // must not have an open file replaced under it — so drop it
+                    // first. Then the sidecar rule: the stale `.idx` is deleted
+                    // *before* the new manifest lands (see
+                    // `files::remove_index_beside` for why that order), and the
+                    // index is rebuilt if this is the manifest in play.
                     let active = settings.manifest_path() == dest;
                     if active {
                         engine = None;
                     }
-                    let outcome = files::replace(&temp, &dest)
-                        .map_err(|e| format!("{e:#}"))
+                    let outcome = files::remove_index_beside(&dest)
+                        .and_then(|()| files::replace(&temp, &dest))
+                        .map_err(|e| {
+                            let _ = std::fs::remove_file(&temp);
+                            format!("{e:#}")
+                        })
                         .and_then(|()| {
                             if active {
-                                reindex(&mut engine, &settings)
+                                rebuild(&mut engine, &settings, true)
                             } else {
-                                Ok(Applied {
-                                    entries: engine.as_ref().map_or(0, |e| e.catalog_len()),
-                                    rebooting: false,
-                                })
+                                Ok(Applied::unchanged(
+                                    engine.as_ref().map_or(0, |e| e.catalog_len()),
+                                ))
                             }
                         });
                     log::info!("manifest installed at {dest} (active={active}): {outcome:?}");
-                    let rebooting = matches!(
-                        outcome,
-                        Ok(Applied {
-                            rebooting: true,
-                            ..
-                        })
-                    );
                     let _ = reply.send(outcome);
-                    if rebooting {
-                        reboot_to_apply();
-                    }
                 }
             }
         }
 
+        // Only after every reply above has been sent.
+        if REBOOT_PENDING.load(Ordering::Relaxed) {
+            reboot_to_apply();
+        }
+
         // 2. No engine (boot, or a reindex that failed): try to build one.
         let Some(eng) = engine.as_mut() else {
-            if rebuild(&mut engine, &settings).is_err() {
+            if rebuild(&mut engine, &settings, false).is_err() {
                 thread::sleep(config::RETRY_INTERVAL);
             }
             continue;
@@ -519,17 +517,11 @@ fn dwell_policy(settings: &Settings) -> DwellPolicy {
     }
 }
 
-/// A fresh engine over a streaming index of the configured manifest, shuffled
-/// with a hardware-random seed so two boots do not play the same order.
-///
-/// The `File` is handed to `FileCatalog` and stays open: the engine seeks back
-/// into it for one `Entry` at a time. Nothing proportional to the card's size
-/// is ever resident — the index is 4 bytes per playable entry.
-fn build_engine(settings: &Settings) -> Result<Engine> {
+/// A fresh engine over the configured manifest's playlist index, shuffled with
+/// a hardware-random seed so two boots do not play the same order.
+fn build_engine(settings: &Settings, force: bool) -> Result<(Engine, IndexSource)> {
     let path = settings.manifest_path();
-    let file = std::fs::File::open(&path).with_context(|| format!("opening {path}"))?;
-    let catalog = FileCatalog::build(file, &build_filter(settings))
-        .with_context(|| format!("indexing {path}"))?;
+    let (catalog, source) = open_catalog(&path, &build_filter(settings), force)?;
     let mode = if settings.shuffle {
         Mode::Shuffle
     } else {
@@ -537,73 +529,208 @@ fn build_engine(settings: &Settings) -> Result<Engine> {
     };
     let scheduler =
         Scheduler::new(catalog.len(), mode, random_seed()).with_no_repeat(config::NO_REPEAT_WINDOW);
-    Ok(Engine::new(
-        Box::new(catalog),
-        scheduler,
-        dwell_policy(settings),
-        Box::new(SdSource),
+    Ok((
+        Engine::new(
+            catalog,
+            scheduler,
+            dwell_policy(settings),
+            Box::new(SdSource),
+        ),
+        source,
     ))
 }
 
-/// Rebuild `engine` in place, reporting the entry count or a message for the
-/// HTTP caller. Only ever called from the main task.
-fn rebuild(engine: &mut Option<Engine>, settings: &Settings) -> Result<usize, String> {
+/// The playlist for `path` under `filter`, in order of preference:
+///
+/// 1. **Loaded**: `<path>.idx` exists, its header reads, and
+///    [`IndexHeader::is_valid_for`] the manifest's current length and this
+///    filter's fingerprint. Nothing is read but the 32-byte header. Skipped
+///    when `force` is set.
+/// 2. **Built**: one streaming pass over the manifest writes
+///    `<path>.idx.tmp`, which is renamed over `<path>.idx` and opened. Needs
+///    ~4 KB of heap (a 1 KB read buffer, a 2 KB write buffer, one line).
+/// 3. **In RAM**: the card would not take the file (read-only, full), so the
+///    offsets are kept in a `Vec` exactly as before this index existed and the
+///    panel still plays. That `Vec` passes through a 64 KB block while it
+///    grows, which only exists on a fresh heap — see
+///    [`config::IN_RAM_INDEX_MIN_BLOCK`] and [`NeedsFreshHeap`].
+///
+/// Either way the manifest's `File` stays open inside the catalog; with an
+/// index file that is two FATFS handles for the life of the playlist.
+fn open_catalog(
+    path: &str,
+    filter: &Filter,
+    force: bool,
+) -> Result<(Box<dyn Catalog>, IndexSource)> {
+    let manifest = File::open(path).with_context(|| format!("opening {path}"))?;
+    let len = manifest
+        .metadata()
+        .with_context(|| format!("stat {path}"))?
+        .len();
+    let len = u32::try_from(len).with_context(|| format!("{path} is over 4 GB"))?;
+    let idx = files::index_path(path);
+
+    if force {
+        log::info!("{idx}: rebuild requested");
+    } else {
+        match load_index(&idx, len, filter) {
+            Ok(index) => {
+                let catalog = IndexedCatalog::open(manifest, index)
+                    .with_context(|| format!("opening {idx}"))?;
+                return Ok((Box::new(catalog), IndexSource::Loaded));
+            }
+            Err(why) => log::info!("{idx}: {why}; rebuilding"),
+        }
+    }
+
+    let mut manifest = manifest;
+    match write_index_file(&mut manifest, len, filter, &idx) {
+        Ok(header) => {
+            let index = File::open(&idx).with_context(|| format!("reopening {idx}"))?;
+            let catalog =
+                IndexedCatalog::open(manifest, index).with_context(|| format!("opening {idx}"))?;
+            debug_assert_eq!(catalog.len(), header.count as usize);
+            Ok((Box::new(catalog), IndexSource::Built))
+        }
+        Err(e) => {
+            log::warn!("cannot write {idx} ({e:#}); falling back to an in-RAM index");
+            let block = largest_free_block();
+            if !HEAP_FRESH.load(Ordering::Relaxed) && block < config::IN_RAM_INDEX_MIN_BLOCK {
+                return Err(anyhow::Error::new(NeedsFreshHeap { block }));
+            }
+            manifest.seek(SeekFrom::Start(0))?;
+            let catalog = FileCatalog::build(manifest, filter)
+                .with_context(|| format!("indexing {path} in RAM"))?;
+            Ok((Box::new(catalog), IndexSource::InRam))
+        }
+    }
+}
+
+/// The index file, if it is current; otherwise why not, for the log.
+fn load_index(idx: &str, manifest_len: u32, filter: &Filter) -> Result<File, String> {
+    let mut file = match File::open(idx) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("missing".into()),
+        Err(e) => return Err(format!("unreadable ({e})")),
+    };
+    let header = IndexHeader::read(&mut file).map_err(|e| format!("unusable ({e})"))?;
+    if !header.is_valid_for(manifest_len, filter) {
+        return Err(format!(
+            "stale (built for a {} B manifest, filter {:016x}; now {manifest_len} B, {:016x})",
+            header.manifest_len,
+            header.filter_fingerprint,
+            filter.fingerprint()
+        ));
+    }
+    Ok(file)
+}
+
+/// Write `idx` via `idx.tmp` and a rename, so a crash or a full card never
+/// leaves a half-written index under the real name. The temp file is removed
+/// on failure.
+fn write_index_file(
+    manifest: &mut File,
+    manifest_len: u32,
+    filter: &Filter,
+    idx: &str,
+) -> Result<IndexHeader> {
+    let tmp = format!("{idx}.tmp");
+    let written = File::create(&tmp)
+        .with_context(|| format!("creating {tmp}"))
+        .and_then(|out| {
+            // `out` is dropped (closed, flushed to the card) when this returns.
+            write_index(
+                BufReader::with_capacity(1024, &mut *manifest),
+                manifest_len,
+                filter,
+                out,
+            )
+            .with_context(|| format!("writing {tmp}"))
+        })
+        .and_then(|header| files::replace(&tmp, idx).map(|()| header));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// The card would not take an index file, and the in-RAM fallback needs a
+/// contiguous block this heap no longer has. Only reachable after boot (see
+/// [`HEAP_FRESH`]); the main loop reboots, and the boot-time build — on a
+/// fresh heap — takes the in-RAM path successfully.
+#[derive(Debug)]
+struct NeedsFreshHeap {
+    block: usize,
+}
+
+impl std::fmt::Display for NeedsFreshHeap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the card will not take an index file and an in-RAM index needs {} B contiguous \
+             (largest block {} B); rebooting to build it on a fresh heap",
+            config::IN_RAM_INDEX_MIN_BLOCK,
+            self.block
+        )
+    }
+}
+
+impl std::error::Error for NeedsFreshHeap {}
+
+/// Rebuild `engine` in place, reporting what happened or a message for the
+/// HTTP caller. Only ever called from the main task. `force` skips reusing a
+/// current `.idx` and rebuilds it regardless.
+///
+/// The old engine is dropped first: it holds the manifest and its `.idx` open
+/// (the latter is about to be replaced), and its GIF decoder is the biggest
+/// thing on the heap.
+fn rebuild(
+    engine: &mut Option<Engine>,
+    settings: &Settings,
+    force: bool,
+) -> Result<Applied, String> {
     let path = settings.manifest_path();
-    // Drop first: the old engine holds `path` open, and on FAT a stale handle
-    // is the difference between a reindex and a corrupt read.
     *engine = None;
-    match build_engine(settings) {
-        Ok(built) => {
+    let started = Instant::now();
+    match build_engine(settings, force) {
+        Ok((built, source)) => {
+            let ms = started.elapsed().as_millis() as u64;
             let entries = built.catalog_len();
             if entries == 0 {
                 log::error!("{path} matched no entries under the configured filter");
                 return Err(format!("{path} matched no entries"));
             }
             log::info!(
-                "manifest indexed: {path}, {entries} entries, {} index bytes, heap {} B free",
+                "manifest indexed: {path}, {entries} entries, index {} in {ms} ms ({} B {}), heap {} B free",
+                source.as_str(),
                 entries * 4,
+                if source == IndexSource::InRam { "in RAM" } else { "on card" },
                 free_heap()
             );
             *engine = Some(built);
-            Ok(entries)
+            Ok(Applied {
+                entries,
+                index: Some(source),
+                index_ms: ms,
+            })
         }
         Err(e) => {
+            if e.downcast_ref::<NeedsFreshHeap>().is_some() {
+                log::error!("{path}: {e:#}");
+                REBOOT_PENDING.store(true, Ordering::Relaxed);
+                return Err(format!("{path}: {e:#}"));
+            }
             log::error!("{path} unreadable ({e:#})");
             Err(format!("{path}: {e:#}"))
         }
     }
 }
 
-/// Rebuild the catalog if the heap can still take it, and say so if it cannot.
+/// Reboot so the in-RAM fallback index can be built on a fresh heap.
 ///
-/// The check is the whole point — see [`config::REINDEX_MIN_BLOCK`]. With no
-/// 64 KB block left, the caller reboots instead: the new manifest is already on
-/// the card and the index is built on a fresh heap at boot. Trying anyway
-/// aborts the board, which is what this replaced.
-fn reindex(engine: &mut Option<Engine>, settings: &Settings) -> Result<Applied, String> {
-    // Drop the old catalog first either way: it holds the manifest open.
-    *engine = None;
-    let block = largest_free_block();
-    if block < config::REINDEX_MIN_BLOCK {
-        log::info!(
-            "in-place reindex wants {} B contiguous, largest block is {block} B — rebooting to apply",
-            config::REINDEX_MIN_BLOCK
-        );
-        return Ok(Applied {
-            entries: 0,
-            rebooting: true,
-        });
-    }
-    rebuild(engine, settings).map(|entries| Applied {
-        entries,
-        rebooting: false,
-    })
-}
-
-/// Reboot so a playlist change takes effect on a fresh heap.
-///
-/// The sleep is for the HTTP response: the handler is still writing it on the
-/// other core when this runs.
+/// Only reached through [`NeedsFreshHeap`], i.e. a card that refuses the
+/// `.idx` file. The reply has already been queued; the sleep is for the
+/// handler on the other core, which is still writing it.
 fn reboot_to_apply() -> ! {
     thread::sleep(Duration::from_secs(2));
     // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.

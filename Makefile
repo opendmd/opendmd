@@ -185,6 +185,7 @@ card-sync:
 # Hammer the file server while watching the display metrics. This is the
 # timing stress test for the networking phase, not a benchmark.
 SECONDS_ ?= 120
+WORKERS ?= 3
 api-load:
-	@test -n "$(HOST)" || { echo "usage: make api-load HOST=<ip> [SECONDS_=120]"; exit 2; }
-	uv run tools/api-load.py $(HOST) $(SECONDS_)
+	@test -n "$(HOST)" || { echo "usage: make api-load HOST=<ip> [SECONDS_=120] [WORKERS=3]"; exit 2; }
+	uv run tools/api-load.py $(HOST) $(SECONDS_) --workers $(WORKERS)

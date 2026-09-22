@@ -23,7 +23,8 @@ use std::time::Duration;
 ///
 /// The engine only ever asks for an entry when it is about to open the next
 /// GIF, so an implementation is free to hold nothing but an index and go back
-/// to the card for the rest — which is exactly what [`FileCatalog`] does.
+/// to the card for the rest — which is exactly what [`FileCatalog`] and
+/// [`IndexedCatalog`](crate::index::IndexedCatalog) do.
 pub trait Catalog {
     fn len(&self) -> usize;
 
@@ -38,13 +39,15 @@ pub trait Catalog {
 /// A [`Catalog`] backed by a seekable `filelist.*`: a `u32` byte offset per
 /// matching line, and the file handle to read them back through.
 ///
-/// This is what makes a 10,133-entry card playable on an ESP32. The index is
-/// 4 bytes per entry (~40 KB for the whole card) against the ~590 bytes per
-/// entry a `Vec<Entry>` costs, and the only other live allocation is one
-/// [`Entry`] at a time inside [`Engine::tick`].
+/// The index is 4 bytes per entry (~40 KB for the whole card) against the
+/// ~590 bytes per entry a `Vec<Entry>` costs, and the only other live
+/// allocation is one [`Entry`] at a time inside [`Engine::tick`]. On the ESP32
+/// even that 40 KB (and the 64 KB block the `Vec` passes through while it
+/// doubles) is too much, so the firmware keeps the same offsets in a file on
+/// the card instead — [`IndexedCatalog`](crate::index::IndexedCatalog) — and
+/// uses this only as a fallback when the card cannot be written.
 ///
-/// `R` is `std::fs::File` on both the firmware (`/sdcard/filelist.txt`, one
-/// handle kept open for the life of the playlist) and the simulator, and
+/// `R` is `std::fs::File` in the simulator (and the firmware's fallback) and
 /// `std::io::Cursor<Vec<u8>>` in tests.
 pub struct FileCatalog<R: Read + Seek> {
     reader: BufReader<R>,
