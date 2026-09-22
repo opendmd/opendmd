@@ -15,9 +15,18 @@ esp-idf-sys = "0.36"
 opendmd-core = { path = "../opendmd-core" }
 anyhow = "1"
 log = "0.4"
+# The JSON API. Responses are formatted by hand (see `httpd::json_string`) so
+# that the streaming endpoints never build a whole body in RAM; serde_json is
+# here for parsing request bodies, where correctness beats bytes.
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }
+# The embedded setup page is rendered and gzipped at build time, the same way
+# ~/projects/stripe-dashboard does it.
+flate2 = "1"
+tera = { version = "1", default-features = false }
 
 # The HUB75 DMA driver and our C shim are built as ESP-IDF components and
 # bound with bindgen into `esp_idf_sys::hub75`. `component_dirs` points at the
@@ -28,6 +37,13 @@ embuild = { version = "0.32", features = ["espidf"] }
 component_dirs = ["components"]
 bindings_header = "components/hub75_shim/include/hub75_shim.h"
 bindings_module = "hub75"
+
+# mDNS is a managed component rather than part of ESP-IDF proper; pulling it in
+# here is what makes `esp_idf_svc::mdns` compile (it is behind
+# `esp_idf_comp_espressif__mdns_enabled`). This is what puts the player on the
+# network as `opendmd.local`.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/mdns", version = "1.2" }
 
 [profile.dev]
 opt-level = 2          # ESP-IDF drivers misbehave below opt-level 2

@@ -22,10 +22,52 @@ CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1=y
 # GIF decoding plus the RGB888 staging buffer wants more than the 3.5 KB default.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
-# --- Radio -------------------------------------------------------------
-# No WiFi in this phase. Turning it off frees flash and heap; the portal/OTA
-# phase flips this back on.
-CONFIG_ESP_WIFI_ENABLED=n
+# --- Radio and network -------------------------------------------------
+# WiFi is on from phase 3a. Copied from ~/projects/stripe-dashboard except for
+# the TLS section, which is deliberately absent: this firmware speaks plain
+# HTTP on the LAN only, so there is no mbedtls certificate bundle to carry
+# (~50 KB of flash and a chunk of heap per session that we do not spend).
+CONFIG_ESP_WIFI_ENABLED=y
+
+# The radio's memory is on a strict diet, and these numbers are not cosmetic.
+# Post-panel there is ~162 KB of heap; the manifest index takes 40 KB and a
+# playing GIF another ~54 KB (see "GIF heap budget" in the root CLAUDE.md), so
+# everything with a socket in it has to fit in what is left. Defaults would
+# cost ~50 KB; this set costs about half that.
+#
+# The expensive one is block-ack reordering: AMPDU keeps per-session reorder
+# buffers and is worth roughly 15-20 KB on its own. Turning it off caps
+# throughput at a few Mbit/s, which is irrelevant here — the files are 100 KB
+# GIFs over a LAN and the bottleneck is the SD card's SPI bus, not the air.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_MGMT_SBUF_NUM=6
+CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+# Credentials live in our own NVS namespace and the driver is put in
+# WIFI_STORAGE_RAM anyway, so the driver's NVS support is dead weight.
+CONFIG_ESP_WIFI_NVS_ENABLED=n
+
+# lwip. One httpd task serves two sockets at a time (plus mDNS), and nothing
+# here speaks IPv6, so the default windows and mailbox depths are oversized.
+CONFIG_LWIP_MAX_SOCKETS=6
+CONFIG_LWIP_IPV6=n
+# One MSS each. Two MSS was measurably faster and measurably closer to the
+# out-of-memory line; with a ~20 KB floor the margin is worth more than the
+# throughput, which is still ~200 KB/s off the card.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=1440
+CONFIG_LWIP_TCP_WND_DEFAULT=1440
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=6
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=6
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
+
+# HTTP server. Desktop browsers send headers longer than the 512 B default,
+# and the card's paths are long enough to need the bigger URI buffer
+# (`/gifs/NEW 2021/...`, percent-encoded).
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
 
 # --- HUB75 panel driver ------------------------------------------------
 # The ESP32-HUB75-MatrixPanel-I2S-DMA component defaults to `y` here, which

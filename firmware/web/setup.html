@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenDMD setup</title>
+<style>
+:root{color-scheme:dark;--bg:#0d0f13;--fg:#e8e8ea;--dim:#8a8f99;--line:#252a33;--accent:#ff8a3d}
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
+main{max-width:640px;margin:0 auto}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:0 0 10px;color:var(--accent);text-transform:uppercase;letter-spacing:.08em}
+p.sub{margin:0 0 20px;color:var(--dim);font-size:13px}
+section{border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px}
+label{display:block;font-size:13px;color:var(--dim);margin:8px 0 3px}
+input,select,button{font:inherit;width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--line);background:#161a21;color:var(--fg)}
+button{background:var(--accent);color:#12141a;border:0;font-weight:600;cursor:pointer;margin-top:10px}
+button.alt{background:#1d222b;color:var(--fg);border:1px solid var(--line);font-weight:400}
+.row{display:flex;gap:8px}.row>*{flex:1}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td{padding:2px 0;vertical-align:top}td:first-child{color:var(--dim);width:45%}
+.msg{margin-top:10px;font-size:13px;min-height:1.4em;white-space:pre-wrap}
+.ok{color:#5fd08a}.err{color:#ff6b6b}
+progress{width:100%;height:6px;margin-top:8px}
+code{background:#161a21;padding:1px 4px;border-radius:3px}
+</style>
+</head>
+<body>
+<main>
+<h1>OpenDMD</h1>
+<p class="sub">firmware v{{ version }} ({{ variant }}) &middot; setup &amp; recovery page</p>
+
+<section>
+<h2>Status</h2>
+<table id="status"><tr><td>loading&hellip;</td><td></td></tr></table>
+<button class="alt" id="refresh">Refresh</button>
+</section>
+
+<section>
+<h2>WiFi</h2>
+<label for="ssid">Network</label>
+<div class="row">
+  <input id="ssid" placeholder="SSID" list="scanned" autocomplete="off">
+  <button class="alt" id="scan" style="flex:0 0 96px;margin:0">Scan</button>
+</div>
+<datalist id="scanned"></datalist>
+<label for="pass">Password (leave blank to keep the saved one)</label>
+<input id="pass" type="password" autocomplete="off">
+<button id="savewifi">Save &amp; reboot</button>
+<div class="msg" id="wifimsg"></div>
+</section>
+
+<section>
+<h2>Player</h2>
+<div class="row">
+  <div><label for="bright">Brightness (0-255)</label><input id="bright" type="number" min="0" max="255"></div>
+  <div><label for="dmin">Dwell min (s)</label><input id="dmin" type="number" min="1"></div>
+  <div><label for="dmax">Dwell max (s)</label><input id="dmax" type="number" min="1"></div>
+</div>
+<div class="row">
+  <div><label for="platforms">Platforms (comma separated, blank = all)</label><input id="platforms" placeholder="MD,SNES"></div>
+  <div><label for="set">Set (blank = filelist.txt)</label><input id="set"></div>
+</div>
+<label for="shuffle">Order</label>
+<select id="shuffle"><option value="true">Shuffle</option><option value="false">Sequential</option></select>
+<button id="savecfg">Apply</button>
+<div class="row">
+  <button class="alt" id="skip">Skip</button>
+  <button class="alt" id="pause">Pause / resume</button>
+  <button class="alt" id="reindex">Reindex</button>
+</div>
+<div class="msg" id="cfgmsg"></div>
+</section>
+
+<section>
+<h2>Upload a file to the card</h2>
+<p class="sub" style="margin:0 0 8px">This is how the web app gets onto a blank card: upload
+<code>index.html</code>, <code>app.js</code> and <code>pkg/*</code> to <code>/www/</code>.
+<code>make card-sync HOST=&hellip;</code> does the whole directory in one go.</p>
+<label for="dest">Destination path on the card</label>
+<input id="dest" value="/www/index.html">
+<label for="file">File</label>
+<input id="file" type="file">
+<button id="upload">Upload</button>
+<progress id="prog" value="0" max="100" hidden></progress>
+<div class="msg" id="upmsg"></div>
+</section>
+
+<section>
+<h2>Firmware</h2>
+<label for="fw">Firmware image (.bin, {{ variant }} build)</label>
+<input id="fw" type="file" accept=".bin">
+<button id="ota">Flash &amp; reboot</button>
+<progress id="otaprog" value="0" max="100" hidden></progress>
+<div class="msg" id="otamsg"></div>
+<button class="alt" id="reboot">Reboot now</button>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const say = (el, text, cls) => { const n = $(el); n.textContent = text; n.className = 'msg ' + (cls || ''); };
+const kb = n => (n / 1024).toFixed(1) + ' KB';
+
+async function loadStatus() {
+  try {
+    const s = await (await fetch('/api/status')).json();
+    const np = s.now_playing || {};
+    const rows = [
+      ['Version', s.version + ' (' + s.variant + ')'],
+      ['WiFi', s.wifi + (s.ip ? ' — ' + s.ip : '')],
+      ['Hostname', s.hostname + '.local'],
+      ['Uptime', s.uptime_secs + ' s'],
+      ['Playlist', s.entries + ' entries (' + s.manifest + ')'],
+      ['Now playing', np.ordinal ? '[' + np.ordinal + '] ' + (np.title || np.path) : '—'],
+      ['Paused', s.paused],
+      ['Heap free / floor', kb(s.heap.free) + ' / ' + kb(s.heap.floor)],
+      ['Refresh', s.refresh_hz + ' Hz'],
+      ['Deadline misses', s.deadline_misses + ' (worst ' + s.worst_lateness_ms + ' ms late)'],
+      ['GIFs started', s.gifs_started],
+      ['SD card', s.sd.mounted ? (s.sd.capacity_bytes / 1e9).toFixed(2) + ' GB' : 'not mounted'],
+    ];
+    $('status').innerHTML = rows.map(r => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('');
+  } catch (e) { $('status').innerHTML = '<tr><td>offline</td><td>' + e + '</td></tr>'; }
+}
+
+async function loadConfig() {
+  try {
+    const c = await (await fetch('/api/config')).json();
+    $('ssid').value = c.wifi_ssid; $('bright').value = c.brightness;
+    $('dmin').value = c.dwell_min; $('dmax').value = c.dwell_max;
+    $('platforms').value = c.platforms; $('set').value = c.set;
+    $('shuffle').value = String(c.shuffle);
+    if (c.wifi_pass_set) $('pass').placeholder = '(saved)';
+  } catch (e) { /* the setup page is useful even if this fails */ }
+}
+
+async function put(path, body) {
+  const r = await fetch(path, { method: 'PUT', body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+
+$('refresh').onclick = loadStatus;
+
+$('scan').onclick = async () => {
+  say('wifimsg', 'scanning…');
+  try {
+    const aps = await (await fetch('/api/wifi/scan')).json();
+    $('scanned').innerHTML = aps.map(a => '<option value="' + a.ssid + '">' + a.auth + ' ' + a.rssi + ' dBm</option>').join('');
+    say('wifimsg', aps.length ? aps.length + ' networks found — the SSID box is a dropdown now' :
+        'no networks (scanning is unavailable in AP mode)', aps.length ? 'ok' : 'err');
+  } catch (e) { say('wifimsg', 'scan failed: ' + e, 'err'); }
+};
+
+$('savewifi').onclick = async () => {
+  const body = { wifi_ssid: $('ssid').value };
+  if ($('pass').value) body.wifi_pass = $('pass').value;
+  say('wifimsg', 'saving…');
+  try {
+    await put('/api/config', body);
+    say('wifimsg', 'saved — rebooting to join the network', 'ok');
+    await fetch('/api/reboot', { method: 'POST' });
+  } catch (e) { say('wifimsg', 'failed: ' + e, 'err'); }
+};
+
+$('savecfg').onclick = async () => {
+  say('cfgmsg', 'applying…');
+  try {
+    const j = await put('/api/config', {
+      brightness: +$('bright').value, dwell_min: +$('dmin').value, dwell_max: +$('dmax').value,
+      platforms: $('platforms').value, set: $('set').value, shuffle: $('shuffle').value === 'true',
+    });
+    say('cfgmsg', 'applied — ' + j.entries + ' entries', 'ok');
+    loadStatus();
+  } catch (e) { say('cfgmsg', 'failed: ' + e, 'err'); }
+};
+
+for (const [id, path] of [['skip', '/api/skip'], ['pause', '/api/pause'], ['reindex', '/api/reindex']]) {
+  $(id).onclick = async () => {
+    say('cfgmsg', '…');
+    try {
+      const j = await (await fetch(path, { method: 'POST' })).json();
+      say('cfgmsg', JSON.stringify(j), 'ok');
+      loadStatus();
+    } catch (e) { say('cfgmsg', 'failed: ' + e, 'err'); }
+  };
+}
+
+// XHR rather than fetch, because it reports upload progress.
+function send(method, url, data, progressEl, msgEl, done) {
+  const xhr = new XMLHttpRequest();
+  xhr.open(method, url);
+  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+  progressEl.hidden = false;
+  xhr.upload.onprogress = e => { if (e.lengthComputable) progressEl.value = (e.loaded / e.total) * 100; };
+  xhr.onload = () => {
+    progressEl.hidden = true;
+    if (xhr.status >= 200 && xhr.status < 300) done(xhr.responseText);
+    else say(msgEl, 'failed (' + xhr.status + '): ' + xhr.responseText, 'err');
+  };
+  xhr.onerror = () => { progressEl.hidden = true; say(msgEl, 'network error', 'err'); };
+  xhr.send(data);
+}
+
+$('upload').onclick = () => {
+  const f = $('file').files[0];
+  if (!f) return say('upmsg', 'pick a file first', 'err');
+  const dest = $('dest').value.replace(/^\/+/, '');
+  say('upmsg', 'uploading ' + kb(f.size) + '…');
+  send('PUT', '/api/files/' + dest, f, $('prog'), 'upmsg',
+       t => say('upmsg', 'stored: ' + t, 'ok'));
+};
+
+$('ota').onclick = () => {
+  const f = $('fw').files[0];
+  if (!f) return say('otamsg', 'pick a .bin first', 'err');
+  say('otamsg', 'uploading ' + kb(f.size) + ' — do not power off');
+  send('POST', '/api/ota', f, $('otaprog'), 'otamsg',
+       () => say('otamsg', 'flashed — rebooting', 'ok'));
+};
+
+$('reboot').onclick = async () => {
+  say('otamsg', 'rebooting…');
+  await fetch('/api/reboot', { method: 'POST' }).catch(() => {});
+};
+
+loadStatus(); loadConfig(); setInterval(loadStatus, 10000);
+</script>
+</body>
+</html>

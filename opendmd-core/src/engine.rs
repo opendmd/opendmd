@@ -216,6 +216,17 @@ impl Engine {
         self.catalog.len()
     }
 
+    /// Change the dwell policy of a running engine.
+    ///
+    /// It takes effect on the GIF already playing — `min`/`max` are measured
+    /// against its `started_at`, which is untouched — so a caller can apply a
+    /// dwell change live instead of paying for a rebuild of the catalog just to
+    /// swap two `Duration`s. The firmware's `PUT /api/config` is why this
+    /// exists.
+    pub fn set_dwell(&mut self, dwell: DwellPolicy) {
+        self.dwell = dwell;
+    }
+
     /// Reseed and rewind the scheduler, dropping whatever is on screen.
     ///
     /// The catalog is untouched, so recovering from [`TickOutcome::Exhausted`]
@@ -507,6 +518,43 @@ mod tests {
                 .collect(),
         );
         Engine::new(Box::new(cat), sched, dwell, Box::new(src))
+    }
+
+    #[test]
+    fn set_dwell_applies_to_the_gif_already_playing() {
+        // A 30 s cap, then tightened to 0 s while the first GIF is on screen:
+        // the next tick past the new cap must move on, without the catalog
+        // being rebuilt.
+        let mut e = engine_with(
+            &[
+                ("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0)),
+                ("/gifs/Consoles/NES_B_01.gif", one_pixel_gif(0, 255, 0)),
+            ],
+            "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
+            DwellPolicy {
+                min: Duration::from_secs(3),
+                max: Duration::from_secs(30),
+                min_loops: 1,
+            },
+        );
+        let mut canvas = Canvas::new();
+        let first = e.tick(Duration::ZERO, &mut canvas).unwrap();
+        let TickOutcome::Frame { playing, .. } = first else {
+            panic!("expected a frame, got {first:?}");
+        };
+        assert_eq!(playing.path, "/gifs/Consoles/NES_A_01.gif");
+
+        e.set_dwell(DwellPolicy {
+            min: Duration::ZERO,
+            max: Duration::from_millis(1),
+            min_loops: 1,
+        });
+        let next = e.tick(Duration::from_millis(500), &mut canvas).unwrap();
+        let TickOutcome::Frame { playing, .. } = next else {
+            panic!("expected a frame, got {next:?}");
+        };
+        assert_eq!(playing.path, "/gifs/Consoles/NES_B_01.gif");
+        assert_eq!(e.catalog_len(), 2);
     }
 
     #[test]

@@ -1,9 +1,9 @@
-//! OpenDMD firmware — phase 1: a standalone player.
+//! OpenDMD firmware — phase 3a: a networked player.
 //!
-//! Boot -> mount the microSD -> build a seekable index over
-//! `/sdcard/filelist.txt` -> run `opendmd_core::engine::Engine` -> push every
-//! frame to two chained 64x32 HUB75 P4 panels (128x32) over the mrcodetastic
-//! DMA driver.
+//! Boot -> HUB75 panel up -> mount the microSD -> read settings from NVS ->
+//! build a seekable index over the manifest -> start the network worker ->
+//! run `opendmd_core::engine::Engine`, pushing every frame to two chained
+//! 64x32 HUB75 P4 panels (128x32) over the mrcodetastic DMA driver.
 //!
 //! The manifest is never held in RAM. `FileCatalog` makes one streaming pass
 //! over the card's 450 KB / 10,162-line `filelist.txt` and keeps a `u32` byte
@@ -11,30 +11,59 @@
 //! and the engine seeks back to it for one `Entry` at a time, only when it is
 //! about to open the next GIF.
 //!
-//! There is no networking in this phase. The shape here anticipates it: the
-//! peripherals are taken once and handed to module constructors, every
-//! tunable is a constant in [`config`], and the main loop is a single
-//! `engine.tick` -> `panel.blit` -> sleep cycle that a background net worker
-//! (lifted from ~/projects/stripe-dashboard in the next phase) can feed
-//! through an `mpsc` channel without being restructured.
+//! # Threads and cores
+//!
+//! | task | core | what it does |
+//! |---|---|---|
+//! | main | CPU1 | panel, SD, engine, this loop. Never touches WiFi or a socket. |
+//! | `net-worker` | CPU0 | WiFi (connect, reconnect, AP fallback), mDNS, starts the httpd |
+//! | `httpd` | CPU0 | every HTTP handler; the only task allowed to block |
+//! | `dns-server` | any | captive-portal DNS, AP mode only |
+//!
+//! The panel is initialised here, on CPU1, so the I2S-DMA interrupt is
+//! installed on CPU1 and never competes with WiFi's on CPU0. The two sides meet
+//! only through [`state::Status`] (published here, read there) and
+//! [`state::Command`] (sent there, applied here, between frames).
+//!
+//! # The numbers this phase is judged on
+//!
+//! The heartbeat and `/api/status` both carry the frame-deadline miss count,
+//! the worst lateness seen, and the sampled heap floor. If serving files costs
+//! the panel anything, those are where it shows.
 
 mod config;
+mod dns_server;
+mod files;
+mod http;
+mod httpd;
+mod net_worker;
+mod nvs_config;
+mod ota;
 mod panel;
 mod sd;
+mod state;
+mod wifi;
 
 use anyhow::{Context, Result};
 use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, Pin};
 use esp_idf_hal::peripherals::Peripherals;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::log::EspLogger;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use opendmd_core::canvas::Canvas;
 use opendmd_core::engine::{Catalog, DwellPolicy, Engine, FileCatalog, TickOutcome};
 use opendmd_core::filter::Filter;
 use opendmd_core::scheduler::{Mode, Scheduler};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use crate::http::{Ctx, NetCommand};
+use crate::nvs_config::{Config, Settings};
 use crate::panel::{Panel, PanelConfig};
 use crate::sd::{SdBus, SdSource};
+use crate::state::{free_heap, Applied, Command, Status};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -42,12 +71,41 @@ fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     EspLogger::initialize_default();
 
-    log::info!("OpenDMD firmware v{VERSION} — 128x32 HUB75 GIF player");
+    // Two version strings on purpose: the crate's, and the one the bootloader
+    // recorded in `esp_app_desc_t` — the latter is what an OTA image is checked
+    // against, so a mismatch is worth seeing at boot.
+    log::info!(
+        "OpenDMD firmware v{VERSION} ({}, app desc '{}') — 128x32 HUB75 GIF player",
+        ota::FLASH_VARIANT,
+        ota::running_version()
+    );
 
     // Peripherals are taken exactly once and handed out from here; nothing
     // downstream calls `Peripherals::take()`.
     let peripherals = Peripherals::take().context("peripherals already taken")?;
     let pins = peripherals.pins;
+    let modem = peripherals.modem;
+    let sysloop = EspSystemEventLoop::take()?;
+    let nvs_partition = EspDefaultNvsPartition::take()?;
+
+    // The panel goes up first, before the card is mounted and long before the
+    // index is built: its DMA buffers need a large contiguous run of internal
+    // DRAM, and a heap already churned by other work is exactly what produces
+    // "!KABOOM! HUB75 memory allocation failed". Claim the hard allocation on a
+    // virgin heap. Doing it here also puts the I2S interrupt on CPU1.
+    let panel_cfg = PanelConfig::default();
+    let mut panel = Panel::new(&panel_cfg)?;
+    log::info!(
+        "panel up: {}x{} ({} x {}x{}), driver={}, double_buff={}, hub75_refresh_rate={} Hz",
+        panel_cfg.surface_width(),
+        panel_cfg.height,
+        panel_cfg.chain,
+        panel_cfg.width,
+        panel_cfg.height,
+        panel_cfg.driver,
+        panel_cfg.double_buffer,
+        panel.refresh_rate(),
+    );
 
     // GPIO 2 (onboard LED) is deliberately untouched — see hardware/PINOUT.md.
     //
@@ -83,30 +141,30 @@ fn main() -> Result<()> {
         }
     };
 
-    // The panel is brought up before the index is built, which is the reverse
-    // of the obvious order: its DMA buffers need a large contiguous run of
-    // internal DRAM, and a heap already churned by the indexing pass is
-    // exactly what produces "!KABOOM! HUB75 memory allocation failed". Claim
-    // the hard allocation first.
-    let panel_cfg = PanelConfig::default();
-    let mut panel = Panel::new(&panel_cfg)?;
-    panel.set_brightness(config::BRIGHTNESS);
+    // --- Settings ---------------------------------------------------------
+    let mut nvs_config = Config::new(nvs_partition.clone())?;
+    if nvs_config.seed_credentials_from_build() {
+        log::info!("first boot with build-time credentials; they are now in NVS");
+    }
+    let mut settings = nvs_config.load();
+    panel.set_brightness(settings.brightness);
     log::info!(
-        "panel up: {}x{} ({} x {}x{}), driver={}, double_buff={}, hub75_refresh_rate={} Hz, brightness={}",
-        panel_cfg.surface_width(),
-        panel_cfg.height,
-        panel_cfg.chain,
-        panel_cfg.width,
-        panel_cfg.height,
-        panel_cfg.driver,
-        panel_cfg.double_buffer,
-        panel.refresh_rate(),
-        panel_cfg.brightness,
+        "settings: brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', host='{}', wifi={}",
+        settings.brightness,
+        settings.dwell_min,
+        settings.dwell_max,
+        settings.shuffle,
+        settings.platforms,
+        settings.set,
+        settings.hostname,
+        if settings.wifi_ssid.is_empty() {
+            "unconfigured".to_string()
+        } else {
+            format!("'{}'", settings.wifi_ssid)
+        }
     );
 
-    let filter = build_filter();
     let mut canvas = Canvas::new();
-    let mut started: u64 = 0;
     // The engine's clock is a `Duration` since an epoch the caller picks, not
     // an `Instant` — `Instant` has no clock on wasm and the web app shares
     // this core. Boot is our epoch; only differences ever matter.
@@ -118,30 +176,212 @@ fn main() -> Result<()> {
     // large blocks (the LZW decoder) land in different regions over time.
     let mut sampled_min = free_heap();
     let mut low_water = sampled_min;
+    // The display's health, reported in the heartbeat and in /api/status.
+    let mut deadline_misses: u64 = 0;
+    let mut worst_lateness_ms: u64 = 0;
+    let mut started: u64 = 0;
 
-    // One file handle and one offset index for the life of the run. Building
-    // it is the only pass over the card; `Exhausted` reseeds the scheduler
-    // instead of re-reading, so the 450 KB file is read exactly once.
-    let mut engine = loop {
-        match build_engine(&filter) {
-            Ok(engine) if engine.catalog_len() > 0 => break engine,
-            Ok(_) => log::error!(
-                "{} matched no entries under the configured filter",
-                config::MANIFEST_PATH
-            ),
-            Err(e) => log::error!("{} unreadable ({e:#})", config::MANIFEST_PATH),
+    // --- Shared state, the HTTP server, and the network worker ------------
+    let status = Arc::new(Mutex::new(Status::new(VERSION, settings.hostname.clone())));
+    {
+        let mut s = status.lock().unwrap();
+        s.sd_mounted = true;
+        s.sd_capacity_bytes = _card.capacity_bytes;
+        s.manifest = settings.manifest_path();
+        s.refresh_hz = panel.refresh_rate();
+    }
+    let shared_settings = Arc::new(Mutex::new(settings.clone()));
+    let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
+    let (net_tx, net_rx) = mpsc::channel::<NetCommand>();
+
+    // One file handle and one offset index for the life of the run: the only
+    // pass over the card, and `Exhausted` reseeds the scheduler rather than
+    // re-reading it.
+    //
+    // It is built here, before anything network-shaped exists, because
+    // it is the largest single allocation after the panel's and it must not
+    // fail. If the card has no readable manifest the loop below keeps retrying.
+    let mut engine: Option<Engine> = None;
+    let _ = rebuild(&mut engine, &settings);
+
+    // The HTTP server next, still before the first GIF is decoded: its task
+    // stack is one contiguous 16 KB internal allocation, and the largest free
+    // block while a GIF is playing is smaller than that. It is pinned to CPU0
+    // by its own config, so starting it from this task is fine. Held for the
+    // life of the program; dropping it would stop the httpd task.
+    // lwip has to exist before anything can bind a socket. Normally the WiFi
+    // driver's construction does this on the worker thread, but the server is
+    // started before that now, and `httpd_start` on a stack that is not up
+    // aborts with "assert failed: tcpip_send_msg_wait_sem ... (Invalid mbox)".
+    // `esp_netif_init` is idempotent, so the worker's later call is a no-op.
+    //
+    // SAFETY: an argument-free IDF initialiser, safe to call more than once.
+    esp_idf_sys::esp!(unsafe { esp_idf_sys::esp_netif_init() })?;
+
+    let _server = match http::start(Arc::new(Ctx {
+        status: status.clone(),
+        settings: shared_settings.clone(),
+        cmd: cmd_tx.clone(),
+        net: net_tx,
+    })) {
+        Ok(server) => Some(server),
+        Err(e) => {
+            log::error!("HTTP server failed to start ({e:#}); the player carries on without it");
+            None
         }
-        thread::sleep(config::RETRY_INTERVAL);
     };
-    log::info!(
-        "manifest indexed: {} entries, {} index bytes, heap {} B free",
-        engine.catalog_len(),
-        engine.catalog_len() * 4,
-        free_heap()
-    );
+
+    // WiFi last and off this core, so it cannot delay first pixels.
+    net_worker::spawn(net_worker::NetWorker {
+        modem,
+        sysloop,
+        nvs: nvs_partition,
+        ssid: settings.wifi_ssid.clone(),
+        password: settings.wifi_pass.clone(),
+        hostname: settings.hostname.clone(),
+        status: status.clone(),
+        rx: net_rx,
+    })?;
 
     loop {
-        let outcome = engine.tick(epoch.elapsed(), &mut canvas)?;
+        // 1. Commands from the HTTP handlers. Non-blocking, and everything that
+        //    rebuilds the engine or swaps a file on the card happens here — on
+        //    this task, between frames, never on the httpd thread.
+        while let Ok(command) = cmd_rx.try_recv() {
+            match command {
+                Command::Skip => {
+                    if let Some(e) = engine.as_mut() {
+                        e.skip();
+                    }
+                }
+                Command::TogglePause(reply) => {
+                    let paused = match engine.as_mut() {
+                        Some(e) => {
+                            e.toggle_pause(epoch.elapsed());
+                            e.is_paused()
+                        }
+                        None => false,
+                    };
+                    status.lock().unwrap().paused = paused;
+                    let _ = reply.send(paused);
+                }
+                Command::ApplyConfig {
+                    settings: next,
+                    reply,
+                } => {
+                    let next = *next;
+                    let needs_reindex = next.platforms != settings.platforms
+                        || next.set != settings.set
+                        || next.shuffle != settings.shuffle;
+
+                    match nvs_config.save(&next) {
+                        Err(e) => {
+                            let _ = reply.send(Err(format!("saving settings: {e:#}")));
+                        }
+                        Ok(()) => {
+                            settings = next;
+                            *shared_settings.lock().unwrap() = settings.clone();
+                            status.lock().unwrap().manifest = settings.manifest_path();
+                            // Brightness and dwell apply to what is on screen
+                            // right now; a filter, set or order change means a
+                            // new catalog, which may cost a reboot.
+                            panel.set_brightness(settings.brightness);
+                            if let Some(e) = engine.as_mut() {
+                                e.set_dwell(dwell_policy(&settings));
+                            }
+                            log::info!(
+                                "config applied (reindex={needs_reindex}): brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}'",
+                                settings.brightness,
+                                settings.dwell_min,
+                                settings.dwell_max,
+                                settings.shuffle,
+                                settings.platforms,
+                                settings.set
+                            );
+                            let outcome = if needs_reindex {
+                                reindex(&mut engine, &settings)
+                            } else {
+                                Ok(Applied {
+                                    entries: engine.as_ref().map_or(0, |e| e.catalog_len()),
+                                    rebooting: false,
+                                })
+                            };
+                            let rebooting = matches!(
+                                outcome,
+                                Ok(Applied {
+                                    rebooting: true,
+                                    ..
+                                })
+                            );
+                            let _ = reply.send(outcome);
+                            if rebooting {
+                                reboot_to_apply();
+                            }
+                        }
+                    }
+                }
+                Command::Reindex(reply) => {
+                    let outcome = reindex(&mut engine, &settings);
+                    log::info!("reindex requested over HTTP: {outcome:?}");
+                    let rebooting = matches!(
+                        outcome,
+                        Ok(Applied {
+                            rebooting: true,
+                            ..
+                        })
+                    );
+                    let _ = reply.send(outcome);
+                    if rebooting {
+                        reboot_to_apply();
+                    }
+                }
+                Command::InstallManifest { temp, dest, reply } => {
+                    // The engine may hold `dest` open, and FAT will not replace
+                    // an open file — so drop it first, swap, then reindex if
+                    // the file we just replaced is the one in play.
+                    let active = settings.manifest_path() == dest;
+                    if active {
+                        engine = None;
+                    }
+                    let outcome = files::replace(&temp, &dest)
+                        .map_err(|e| format!("{e:#}"))
+                        .and_then(|()| {
+                            if active {
+                                reindex(&mut engine, &settings)
+                            } else {
+                                Ok(Applied {
+                                    entries: engine.as_ref().map_or(0, |e| e.catalog_len()),
+                                    rebooting: false,
+                                })
+                            }
+                        });
+                    log::info!("manifest installed at {dest} (active={active}): {outcome:?}");
+                    let rebooting = matches!(
+                        outcome,
+                        Ok(Applied {
+                            rebooting: true,
+                            ..
+                        })
+                    );
+                    let _ = reply.send(outcome);
+                    if rebooting {
+                        reboot_to_apply();
+                    }
+                }
+            }
+        }
+
+        // 2. No engine (boot, or a reindex that failed): try to build one.
+        let Some(eng) = engine.as_mut() else {
+            if rebuild(&mut engine, &settings).is_err() {
+                thread::sleep(config::RETRY_INTERVAL);
+            }
+            continue;
+        };
+
+        // 3. One frame.
+        let entries = eng.catalog_len();
+        let outcome = eng.tick(epoch.elapsed(), &mut canvas)?;
         sampled_min = sampled_min.min(free_heap());
         match outcome {
             TickOutcome::Frame {
@@ -160,6 +400,11 @@ fn main() -> Result<()> {
                         free_heap(),
                         largest_free_block()
                     );
+                    let mut s = status.lock().unwrap();
+                    s.ordinal = playing.ordinal;
+                    s.path = playing.path.clone();
+                    s.title = playing.title.clone();
+                    s.gifs_started = playing.ordinal;
                 }
                 // Attribute every new low-water mark to the GIF on screen, so
                 // a heap regression names the file that caused it.
@@ -175,11 +420,18 @@ fn main() -> Result<()> {
                 }
                 // Hold the frame for its GIF delay. Read the clock again,
                 // because the blit itself took time.
-                match next_frame_at.checked_sub(epoch.elapsed()) {
+                let now = epoch.elapsed();
+                match next_frame_at.checked_sub(now) {
                     Some(remaining) => thread::sleep(remaining),
-                    // Already late: yield a tick so the watchdog and every
-                    // other task get their turn, then catch up next pass.
-                    None => thread::sleep(config::CATCHUP_SLEEP),
+                    None => {
+                        // Already late. This is the acceptance metric: count it
+                        // and remember the worst, then yield a tick so the
+                        // watchdog and every other task get their turn.
+                        deadline_misses += 1;
+                        let late = now.saturating_sub(next_frame_at).as_millis() as u64;
+                        worst_lateness_ms = worst_lateness_ms.max(late);
+                        thread::sleep(config::CATCHUP_SLEEP);
+                    }
                 }
                 sampled_min = sampled_min.min(free_heap());
             }
@@ -191,13 +443,30 @@ fn main() -> Result<()> {
                 );
                 thread::sleep(config::RETRY_INTERVAL);
                 // The index is still good: reseed and rewind, don't re-read.
-                engine.reset(random_seed());
+                eng.reset(random_seed());
             }
+        }
+
+        // 4. Publish. Cheap fields only: the strings move when a GIF starts.
+        if let Ok(mut s) = status.lock() {
+            s.uptime_secs = epoch.elapsed().as_secs();
+            s.entries = entries;
+            s.heap_free = free_heap();
+            s.heap_floor = sampled_min;
+            s.deadline_misses = deadline_misses;
+            s.worst_lateness_ms = worst_lateness_ms;
         }
 
         if last_heartbeat.elapsed() >= config::HEARTBEAT_INTERVAL {
             last_heartbeat = Instant::now();
-            heartbeat(&panel, started, sampled_min);
+            heartbeat(
+                &panel,
+                &status,
+                started,
+                sampled_min,
+                deadline_misses,
+                worst_lateness_ms,
+            );
         }
     }
 }
@@ -207,12 +476,6 @@ fn random_seed() -> u64 {
     // SAFETY: `esp_random()` takes no arguments and has no preconditions once
     // the RF/RNG subsystem is up, which it is by the time `main` runs.
     unsafe { ((esp_idf_sys::esp_random() as u64) << 32) | (esp_idf_sys::esp_random() as u64) }
-}
-
-/// Free heap in bytes.
-fn free_heap() -> u32 {
-    // SAFETY: an argument-free read of ESP-IDF's heap accounting.
-    unsafe { esp_idf_sys::esp_get_free_heap_size() }
 }
 
 /// Lowest free heap seen since boot, in bytes.
@@ -238,42 +501,135 @@ fn expect_pin<P: Pin>(pin: P, expected: u32, what: &str) -> P {
     pin
 }
 
-fn build_filter() -> Filter {
+fn build_filter(settings: &Settings) -> Filter {
+    let platforms = settings.platform_list();
     let filter = Filter::new();
-    if config::PLATFORMS.is_empty() {
+    if platforms.is_empty() {
         filter
     } else {
-        filter.platforms(config::PLATFORMS.iter().copied())
+        filter.platforms(platforms.iter().map(|s| s.as_str()))
     }
 }
 
-/// A fresh engine over a streaming index of the card's manifest, shuffled with
-/// a hardware-random seed so two boots do not play the same order.
+fn dwell_policy(settings: &Settings) -> DwellPolicy {
+    DwellPolicy {
+        min: Duration::from_secs(settings.dwell_min),
+        max: Duration::from_secs(settings.dwell_max),
+        ..DwellPolicy::default()
+    }
+}
+
+/// A fresh engine over a streaming index of the configured manifest, shuffled
+/// with a hardware-random seed so two boots do not play the same order.
 ///
 /// The `File` is handed to `FileCatalog` and stays open: the engine seeks back
 /// into it for one `Entry` at a time. Nothing proportional to the card's size
 /// is ever resident — the index is 4 bytes per playable entry.
-fn build_engine(filter: &Filter) -> Result<Engine> {
-    let file = std::fs::File::open(config::MANIFEST_PATH)
-        .with_context(|| format!("opening {}", config::MANIFEST_PATH))?;
-    let catalog = FileCatalog::build(file, filter)
-        .with_context(|| format!("indexing {}", config::MANIFEST_PATH))?;
-    let scheduler = Scheduler::new(catalog.len(), Mode::Shuffle, random_seed())
-        .with_no_repeat(config::NO_REPEAT_WINDOW);
+fn build_engine(settings: &Settings) -> Result<Engine> {
+    let path = settings.manifest_path();
+    let file = std::fs::File::open(&path).with_context(|| format!("opening {path}"))?;
+    let catalog = FileCatalog::build(file, &build_filter(settings))
+        .with_context(|| format!("indexing {path}"))?;
+    let mode = if settings.shuffle {
+        Mode::Shuffle
+    } else {
+        Mode::Sequential
+    };
+    let scheduler =
+        Scheduler::new(catalog.len(), mode, random_seed()).with_no_repeat(config::NO_REPEAT_WINDOW);
     Ok(Engine::new(
         Box::new(catalog),
         scheduler,
-        DwellPolicy::default(),
+        dwell_policy(settings),
         Box::new(SdSource),
     ))
 }
 
-fn heartbeat(panel: &Panel, started: u64, sampled_min: u32) {
+/// Rebuild `engine` in place, reporting the entry count or a message for the
+/// HTTP caller. Only ever called from the main task.
+fn rebuild(engine: &mut Option<Engine>, settings: &Settings) -> Result<usize, String> {
+    let path = settings.manifest_path();
+    // Drop first: the old engine holds `path` open, and on FAT a stale handle
+    // is the difference between a reindex and a corrupt read.
+    *engine = None;
+    match build_engine(settings) {
+        Ok(built) => {
+            let entries = built.catalog_len();
+            if entries == 0 {
+                log::error!("{path} matched no entries under the configured filter");
+                return Err(format!("{path} matched no entries"));
+            }
+            log::info!(
+                "manifest indexed: {path}, {entries} entries, {} index bytes, heap {} B free",
+                entries * 4,
+                free_heap()
+            );
+            *engine = Some(built);
+            Ok(entries)
+        }
+        Err(e) => {
+            log::error!("{path} unreadable ({e:#})");
+            Err(format!("{path}: {e:#}"))
+        }
+    }
+}
+
+/// Rebuild the catalog if the heap can still take it, and say so if it cannot.
+///
+/// The check is the whole point — see [`config::REINDEX_MIN_BLOCK`]. With no
+/// 64 KB block left, the caller reboots instead: the new manifest is already on
+/// the card and the index is built on a fresh heap at boot. Trying anyway
+/// aborts the board, which is what this replaced.
+fn reindex(engine: &mut Option<Engine>, settings: &Settings) -> Result<Applied, String> {
+    // Drop the old catalog first either way: it holds the manifest open.
+    *engine = None;
+    let block = largest_free_block();
+    if block < config::REINDEX_MIN_BLOCK {
+        log::info!(
+            "in-place reindex wants {} B contiguous, largest block is {block} B — rebooting to apply",
+            config::REINDEX_MIN_BLOCK
+        );
+        return Ok(Applied {
+            entries: 0,
+            rebooting: true,
+        });
+    }
+    rebuild(engine, settings).map(|entries| Applied {
+        entries,
+        rebooting: false,
+    })
+}
+
+/// Reboot so a playlist change takes effect on a fresh heap.
+///
+/// The sleep is for the HTTP response: the handler is still writing it on the
+/// other core when this runs.
+fn reboot_to_apply() -> ! {
+    thread::sleep(Duration::from_secs(2));
+    // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.
+    unsafe { esp_idf_sys::esp_restart() }
+}
+
+fn heartbeat(
+    panel: &Panel,
+    status: &Arc<Mutex<Status>>,
+    started: u64,
+    sampled_min: u32,
+    deadline_misses: u64,
+    worst_lateness_ms: u64,
+) {
     let free = free_heap();
-    // SAFETY: an argument-free read of ESP-IDF's heap accounting.
     let min_free = min_free_heap();
+    let refresh = panel.refresh_rate();
+    let (ip, wifi) = {
+        let mut s = status.lock().unwrap();
+        s.refresh_hz = refresh;
+        s.heap_idf_min = min_free;
+        (s.ip.clone(), s.wifi)
+    };
     log::info!(
-        "heartbeat: heap {free} B free (floor {sampled_min} B, idf-min {min_free} B), refresh {} Hz, {started} GIFs started",
-        panel.refresh_rate(),
+        "heartbeat: heap {free} B free (floor {sampled_min} B, idf-min {min_free} B), refresh {refresh} Hz, \
+         {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms), \
+         wifi {wifi} {ip}"
     );
 }

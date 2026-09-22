@@ -212,7 +212,9 @@ ESP32, 4 MB flash) on a DMDos carrier, a microSD over SPI, and two chained
 `opendmd-core` engine the simulator does, one frame at a time, straight into
 the panels' DMA buffer.
 
-This phase is a standalone player: no WiFi, no web portal, no OTA.
+It is also on the network: WiFi, a plain-HTTP server on port 80 that serves
+the web app and the card's files, a small JSON API, and OTA firmware updates.
+See "Getting on WiFi" and "Putting the web app on the card" below.
 
 ### Toolchain
 
@@ -231,6 +233,9 @@ make fw-erase   PORT=/dev/ttyUSB0    # once, if the board ran other firmware
 make fw-flash   PORT=/dev/ttyUSB0    # build + flash at 115200 + monitor
 make fw-monitor PORT=/dev/ttyUSB0
 make fw-clean
+
+make card-sync HOST=opendmd.local    # push the web app onto the card
+make api-load  HOST=opendmd.local    # stress the file server for 120 s
 ```
 
 ESP-IDF is installed once into `~/.espressif` and shared between projects.
@@ -239,19 +244,84 @@ platform filter, dwell and retry intervals — is a constant in
 `firmware/src/config.rs`. If the panels stay dark, the first thing to change
 is `config::DRIVER` from `SHIFTREG` to `FM6126A`.
 
+### Getting on WiFi the first time
+
+With no credentials saved, the player raises an **open access point called
+`OpenDMD-Setup`**. Join it from a phone or laptop and the setup page appears by
+itself as a "sign in to network" sheet; if it does not, open
+<http://192.168.71.1/> (the log prints the actual address). Enter your network
+and password, press **Save & reboot**, and the player joins your WiFi and
+announces itself as **`opendmd.local`**.
+
+The AP is open, so it does not stay up indefinitely: after ten minutes the
+board reboots, which retries your network if credentials were saved and
+otherwise brings the AP back with a fresh timer.
+
+`http://<ip>/setup` is always there afterwards — status, WiFi, playback
+settings, a file uploader, OTA and a reboot button — whatever else is on the
+card.
+
+For a bench board you can skip the dance: copy `firmware/.env.example` to
+`firmware/.env`, fill in `OPENDMD_WIFI_SSID` and `OPENDMD_WIFI_PASS`, and
+rebuild. Those get compiled in and seed NVS on a device that has no
+credentials of its own; anything saved through the setup page still wins.
+`.env` is gitignored and the password is never logged or returned by the API.
+
+### Putting the web app on the card
+
+The browser runs the UI and the ESP32 just serves it, so the app has to be on
+the card. Build it and push it over the API:
+
+```bash
+make web                             # wasm-pack -> opendmd-web/www/pkg
+make card-sync HOST=opendmd.local    # PUTs every file to /www/ on the card
+```
+
+That uploads `index.html`, `app.js` and `pkg/` (the JS shim and the ~165 KB
+wasm module) in about two seconds. `http://<ip>/` then serves the real app;
+before that it serves the setup page instead. The setup page can also upload
+one file at a time to any path, which is how a completely blank card gets
+started.
+
+```bash
+make api-load HOST=opendmd.local     # stress the file server, diff the display metrics
+```
+
+### What the network costs the display
+
+A classic ESP32 with 4 MB of flash and no PSRAM is *full* with this feature
+set. Free heap while playing is 17-19 KB, and 2.5-6 KB during an HTTP
+transfer. Interactive use — loading the page, `make card-sync`, the JSON API,
+pulling the odd GIF — is comfortable and costs the panel nothing visible.
+**Sustained, back-to-back file serving is not**: the measured limit is around a
+minute of continuous downloads before an allocation fails and the board
+reboots. The player always gets priority (requests are refused with 503 and
+transfers pause when the heap falls into the player's reserve), but that is a
+mitigation rather than a fix. The arithmetic, and what would actually solve it,
+are in "Heap ceiling" in `CLAUDE.md`.
+
+Both `/api/status` and the serial heartbeat report the numbers this is judged
+on — frame-deadline misses, the worst lateness seen, and the sampled heap
+floor:
+
 ### Serial output
 
 ```
-I opendmd_firmware: OpenDMD firmware v0.1.0 — 128x32 HUB75 GIF player
-I opendmd_firmware: microSD mounted at /sdcard (31.27 GB), heap 259516 B free
-I opendmd_firmware: panel up: 128x32 (2 x 64x32), driver=0, double_buff=true, hub75_refresh_rate=100 Hz, brightness=96
-I opendmd_firmware: manifest indexed: <n> entries, <4n> index bytes, heap <free> B free
-I opendmd_firmware: [1] /gifs/Consoles/NES_Super_Mario_Bros_16.gif
-I opendmd_firmware: heartbeat: heap <free> B free (min <min> B), refresh 100 Hz, 5 GIFs started
+I opendmd_firmware: OpenDMD firmware v0.1.0 (4mb, app desc '...') — 128x32 HUB75 GIF player
+I opendmd_firmware: panel up: 128x32 (2 x 64x32), driver=0, double_buff=false, hub75_refresh_rate=100 Hz
+I opendmd_firmware: microSD mounted at /sdcard (31.27 GB), heap 175600 B free
+I opendmd_firmware: manifest indexed: /sdcard/filelist.txt, 10133 entries, 40532 index bytes, heap 120276 B free
+I opendmd_firmware::httpd: httpd started on port 80, pinned to CPU0, 10240 B stack
+I opendmd_firmware::wifi: WiFi connected, IP 192.168.1.69
+I opendmd_firmware::net_worker: [net] ready: http://192.168.1.69/ and http://opendmd.local/
+I opendmd_firmware: [1] /gifs/Consoles/NES_Super_Mario_Bros_16.gif (heap 26692 B free, largest block 25600 B)
+I opendmd_firmware: heartbeat: heap 19724 B free (floor 17740 B, idf-min 16088 B), refresh 100 Hz, 4 GIFs started, 3 deadline misses (worst 198 ms), wifi sta 192.168.1.69
 ```
 
 A missing card is not fatal: the mount is retried every 5 seconds, forever,
-and so is an unreadable `filelist.txt`.
+and so is an unreadable `filelist.txt`. Neither is a missing network: the
+player plays regardless, and the HTTP server starts even if WiFi never
+associates.
 
 ### The playlist is indexed, not loaded
 

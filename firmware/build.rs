@@ -1,3 +1,18 @@
+//! Build script: ESP-IDF plumbing, the embedded setup page, and the two
+//! compile-time conveniences the device reads at boot.
+//!
+//! The setup page is rendered through Tera and gzipped into `OUT_DIR`, the same
+//! trick `~/projects/stripe-dashboard/build.rs` uses: `http.rs` embeds the
+//! compressed bytes with `include_bytes!` and serves them with
+//! `Content-Encoding: gzip`, which browsers decompress transparently. It costs
+//! roughly a third of the flash a raw string would.
+
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use std::io::Write;
+use std::path::PathBuf;
+use tera::{Context, Tera};
+
 fn main() {
     embuild::espidf::sysenv::output();
 
@@ -7,4 +22,48 @@ fn main() {
     println!("cargo:rerun-if-changed=sdkconfig.defaults");
     println!("cargo:rerun-if-changed=components/hub75_shim/include/hub75_shim.h");
     println!("cargo:rerun-if-changed=components/hub75_shim/hub75_shim.cpp");
+    println!("cargo:rerun-if-changed=web/setup.html");
+
+    // Which flash layout this image is for. The OTA handler compares it with
+    // the variant word in an uploaded image's version string and refuses a
+    // mismatch before erasing anything.
+    let variant = std::env::var("OPENDMD_FLASH_VARIANT").unwrap_or_else(|_| "4mb".into());
+    println!("cargo:rustc-env=OPENDMD_FLASH_VARIANT={variant}");
+    println!("cargo:rerun-if-env-changed=OPENDMD_FLASH_VARIANT");
+
+    // Dev convenience for the test rig: `firmware/.env` (gitignored, see
+    // `.env.example`) is exported by the Makefile, and these become
+    // `option_env!` values that seed NVS on a device that has no credentials of
+    // its own. They are NEVER echoed here — a build log is not a secret store —
+    // and `nvs_config` only ever logs the SSID.
+    for key in ["OPENDMD_WIFI_SSID", "OPENDMD_WIFI_PASS"] {
+        println!("cargo:rerun-if-env-changed={key}");
+        if let Ok(value) = std::env::var(key) {
+            if !value.is_empty() {
+                println!("cargo:rustc-env={key}={value}");
+            }
+        }
+    }
+
+    // The embedded setup page, rendered then gzipped.
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
+    let raw = std::fs::read_to_string("web/setup.html").expect("reading web/setup.html");
+    let mut tera = Tera::default();
+    tera.add_raw_template("setup", &raw)
+        .expect("parsing web/setup.html");
+    let mut ctx = Context::new();
+    ctx.insert(
+        "version",
+        &std::env::var("CARGO_PKG_VERSION").unwrap_or_default(),
+    );
+    ctx.insert("variant", &variant);
+    let html = tera
+        .render("setup", &ctx)
+        .expect("rendering web/setup.html");
+
+    let file =
+        std::fs::File::create(out_dir.join("setup.html.gz")).expect("creating setup.html.gz");
+    let mut encoder = GzEncoder::new(file, Compression::best());
+    encoder.write_all(html.as_bytes()).expect("compressing");
+    encoder.finish().expect("finishing setup.html.gz");
 }
