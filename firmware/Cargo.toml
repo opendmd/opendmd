@@ -37,3 +37,7 @@ debug = true
 opt-level = 2
 debug = true           # keep symbols so panics decode to line numbers
 lto = "off"            # ESP-IDF does not tolerate LTO well
+
+# Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
+[patch.crates-io]
+gif = { path = "../third_party/gif" }

@@ -10,3 +10,7 @@ publish = false
 [dependencies]
 gif = "0.13"
 log = "0.4"
+
+# Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
+[patch.crates-io]
+gif = { path = "../third_party/gif" }

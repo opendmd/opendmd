@@ -15,3 +15,7 @@ env_logger = "0.11"
 log = "0.4"
 minifb = "0.28"
 png = "0.17"
+
+# Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
+[patch.crates-io]
+gif = { path = "../third_party/gif" }
