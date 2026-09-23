@@ -719,7 +719,9 @@ OpenDMD page's console:
 fetch('https://www.pixilart.com/api/w/gallery/10/33478920/popular').then(r => r.status).catch(e => e.message)
 ```
 
-If that returns 200, add pixilart as a keyless search source (check that
-`art.pixilart.com` image URLs also carry CORS headers and load untainted into
-a canvas); if it fails, pixilart stays a paste / drag-and-drop source, which
-works today.
+Result: the owner got **200** from the app's origin — but only because his
+browser had already passed the challenge on pixilart.com. A first-time user
+would have to visit pixilart in the same browser first, and the clearance
+expires. **Decision (owner, 2026-09-23): filed as potential, not included** —
+no source that needs extra hoops. Pixilart works today as a paste /
+drag-and-drop source, which is how it should appear in the Studio.
