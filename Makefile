@@ -10,12 +10,19 @@ FW     := firmware
 
 # Serial port of the DevKit. Override: make fw-flash PORT=/dev/ttyUSB1
 PORT ?= /dev/ttyUSB0
-FW_BINARY := $(FW)/target/xtensa-esp32-espidf/debug/opendmd-firmware
+# Bench builds use the release *profile* (same opt-level as dev; drops debug
+# assertions / overflow checks and uses fewer codegen units), because the dev
+# profile's image had grown to 99.9% of the OTA slot. The bench/release
+# distinction is the dev-credentials feature, not the profile. Override with
+# `make fw-build FW_PROFILE=dev` when you want debug assertions.
+FW_PROFILE ?= release
+FW_PROFILE_FLAG := $(if $(filter release,$(FW_PROFILE)),--release,)
+FW_BINARY := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/opendmd-firmware
 # The project's own second-stage bootloader, which esp-idf-sys copies next to
 # the ELF. It has to be flashed explicitly: without --bootloader, espflash
 # writes its *bundled* bootloader, which has CONFIG_BOOTLOADER_APP_ROLLBACK
 # compiled out, so an OTA'd image that fails to boot would never be reverted.
-FW_BOOTLOADER := $(FW)/target/xtensa-esp32-espidf/debug/bootloader.bin
+FW_BOOTLOADER := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/bootloader.bin
 
 # The xtensa toolchain env is written by `espup install --export-file
 # ~/.espup-env.sh`. Sourcing that file beats hardcoding the versioned
@@ -188,7 +195,7 @@ FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 fw-build:
 	@mkdir -p $(FW)/target
 	@echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"' > $(FW)/target/sdkconfig.partitions
-	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_CARGO_FEATURES)'
+	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
 	@ls -l $(FW_BINARY)
 
 # 460800 baud gives frequent verify_failed errors on these CH340 boards.
