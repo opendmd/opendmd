@@ -11,14 +11,17 @@
 //! fought that one — `set_str` returns `Ok` and the read afterwards says
 //! not-found).
 //!
-//! **Dev convenience.** `build.rs` turns `OPENDMD_WIFI_SSID` /
+//! **Dev convenience, `dev-credentials` feature only.** With the feature on
+//! (`make fw-build`/`fw-flash`), `build.rs` turns `OPENDMD_WIFI_SSID` /
 //! `OPENDMD_WIFI_PASS` (from `firmware/.env`, gitignored) into compile-time
-//! env vars. [`Config::seed_credentials_from_build`] copies them into NVS
+//! env vars, and [`Config::seed_credentials_from_build`] copies them into NVS
 //! exactly once — only when NVS has no SSID of its own, so anything saved from
-//! the setup page always wins.
+//! the setup page always wins. With it off (`make fw-release`) the
+//! `option_env!` reads are not compiled at all, so a release image cannot
+//! carry a credential whatever the build environment holds.
 
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
-use log::{info, warn};
+use log::warn;
 
 use crate::config;
 
@@ -35,8 +38,11 @@ const KEY_SET: &str = "set";
 const KEY_HOSTNAME: &str = "hostname";
 
 /// Credentials seeded at build time from `firmware/.env`, if it was present.
-/// `None` in any build that did not set them — including every CI build.
+/// `None` in a dev build that did not set them; absent altogether without the
+/// `dev-credentials` feature.
+#[cfg(feature = "dev-credentials")]
 const BUILD_SSID: Option<&str> = option_env!("OPENDMD_WIFI_SSID");
+#[cfg(feature = "dev-credentials")]
 const BUILD_PASS: Option<&str> = option_env!("OPENDMD_WIFI_PASS");
 
 /// Everything the device remembers across reboots.
@@ -163,6 +169,14 @@ impl Config {
     ///
     /// Returns true when something was written. Never overwrites credentials
     /// entered through the setup page: NVS wins as soon as it has an SSID.
+    /// Always false without the `dev-credentials` feature.
+    #[cfg(not(feature = "dev-credentials"))]
+    pub fn seed_credentials_from_build(&mut self) -> bool {
+        false
+    }
+
+    /// See the `dev-credentials`-off twin above.
+    #[cfg(feature = "dev-credentials")]
     pub fn seed_credentials_from_build(&mut self) -> bool {
         let (Some(ssid), Some(pass)) = (BUILD_SSID, BUILD_PASS) else {
             return false;
@@ -183,7 +197,7 @@ impl Config {
             (Ok(_), Ok(_)) => {
                 // The SSID is logged (it is broadcast anyway); the password is
                 // never printed, here or in any status payload.
-                info!("seeded WiFi credentials for '{ssid}' from the build environment");
+                log::info!("seeded WiFi credentials for '{ssid}' from the build environment");
                 true
             }
             _ => {

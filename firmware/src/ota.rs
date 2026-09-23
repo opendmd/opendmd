@@ -47,7 +47,8 @@ pub fn running_version() -> String {
 ///
 /// The struct starts at binary offset 0x20 (image header + first segment
 /// header) and its `version` field is 0x10 into it, so 0x30 in the file. A
-/// release build ends that string with the variant word ("0.1.0 4mb").
+/// release build (`make fw-release`, which sets `CONFIG_APP_PROJECT_VER`)
+/// ends that string with the variant word ("0.2.0 4mb").
 /// `None` means "no variant marker", which older and dev builds legitimately
 /// have — those are allowed through.
 fn extract_firmware_variant(data: &[u8]) -> Option<&str> {

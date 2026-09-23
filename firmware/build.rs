@@ -31,13 +31,20 @@ fn main() {
     println!("cargo:rustc-env=OPENDMD_FLASH_VARIANT={variant}");
     println!("cargo:rerun-if-env-changed=OPENDMD_FLASH_VARIANT");
 
-    // Dev convenience for the test rig: `firmware/.env` (gitignored, see
-    // `.env.example`) is exported by the Makefile, and these become
-    // `option_env!` values that seed NVS on a device that has no credentials of
-    // its own. They are NEVER echoed here — a build log is not a secret store —
+    // Dev convenience for the test rig, `dev-credentials` feature only:
+    // `firmware/.env` (gitignored, see `.env.example`) is exported by the
+    // Makefile's bench targets, and these become `option_env!` values that seed
+    // NVS on a device that has no credentials of its own. Without the feature
+    // (every release image) nothing is forwarded even if the variables happen
+    // to be set, and `nvs_config` does not compile the `option_env!` reads at
+    // all. They are NEVER echoed here — a build log is not a secret store —
     // and `nvs_config` only ever logs the SSID.
+    let dev_credentials = std::env::var_os("CARGO_FEATURE_DEV_CREDENTIALS").is_some();
     for key in ["OPENDMD_WIFI_SSID", "OPENDMD_WIFI_PASS"] {
         println!("cargo:rerun-if-env-changed={key}");
+        if !dev_credentials {
+            continue;
+        }
         if let Ok(value) = std::env::var(key) {
             if !value.is_empty() {
                 println!("cargo:rustc-env={key}={value}");
