@@ -1,5 +1,6 @@
 // Now: what the panel is doing. On a device, /api/status every 2 s, the
-// remote control (skip, pause, brightness) and a panel-look preview of the
+// remote control (skip, pause, brightness, send a path to the panel with
+// POST /api/play) and a panel-look preview of the
 // file on screen, fetched once per change and played here — not frame-synced
 // with the panel. In local mode, a simulator over the picked folder that
 // plays one file at a time with the firmware's dwell.
@@ -31,6 +32,7 @@ function mountDevice(el) {
   const brightOut = h('output.mono', bright.value);
   const grid = h('div.grid', { id: 'now-stats' });
   const conn = h('span', { id: 'now-conn' });
+  const playPath = h('input', { type: 'text', id: 'now-play-path', placeholder: '/gifs/… or /odm/… (card path)', onkeydown: (e) => e.key === 'Enter' && send() });
 
   el.append(
     h('div.card', canvas, h('div.row.sp', cap, h('label.cap', follow, 'preview follows the panel'))),
@@ -38,7 +40,8 @@ function mountDevice(el) {
       h('div.row.sp', h('div.grow', title, h('div', { id: 'now-tags' }), meta), h('div', ord, ' ', conn)),
       h('div.row', { style: 'margin-top:10px' },
         h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn,
-        h('label', 'Brightness', bright, brightOut))),
+        h('label', 'Brightness', bright, brightOut)),
+      h('div.row', { style: 'margin-top:10px' }, h('div.grow', playPath), h('button', { id: 'now-play', onclick: send }, 'Send to panel'))),
     h('div.card', h('h3', { style: 'margin-top:0' }, 'Health'), grid),
     lookControls());
 
@@ -56,6 +59,10 @@ function mountDevice(el) {
 
   async function skip() {
     try { await app.src.skip(); setTimeout(poll, 400); } catch (e) { toast(e.message, 'bad'); }
+  }
+  async function send() {
+    const p = playPath.value.trim();
+    if (p && await app.play(p)) setTimeout(poll, 400);
   }
   async function togglePause() {
     try { const r = await app.src.pause(); app.status.paused = r.paused; render(app.status); } catch (e) { toast(e.message, 'bad'); }

@@ -39,7 +39,9 @@ export async function mount(el) {
       h('div.row',
         h('button', { id: 'cv-add-sel', onclick: addSelection }, 'Add Library selection'),
         h('label.btn', 'Local GIFs…', files), h('label', 'category for local files', localCat),
-        h('label', skip, 'skip files that already have an .odm'))),
+        h('label', { title: 'Known from filelist.odm.txt; without one, the device is asked (GET /api/stat) about the one destination. '
+          + 'A stat scans the parent directory — ~600 ms in gifs/Consoles, where the panel feels it — so only the bucketed .odm (a ~15-file directory, ~20 ms) is ever checked.' },
+        skip, 'skip files that already have an .odm'))),
     h('div.card',
       h('div.row.sp', prog, h('div.row', startBtn, h('button', { onclick: clearDone }, 'Clear finished'))),
       h('div.bar', { style: 'margin:10px 0' }, bar), list.el, errors),
@@ -98,15 +100,14 @@ export async function mount(el) {
   }
 
   // Does the bucket already hold this .odm? filelist.odm.txt answers it
-  // when the card has one; otherwise list the one ~15-entry bucket (cached).
-  const buckets = new Map();
+  // when the card has one; otherwise one GET /api/stat of the destination.
+  // A stat is a scan of the parent directory, cheap only because `dest` is
+  // always bucketed (~15 entries): never stat anything in gifs/<Category>.
   async function exists(dest) {
     await app.odmIndex();
     if (app.odm.has(dest)) return true;
     if (app.odmSource !== 'none') return false;
-    const d = dir(dest);
-    if (!buckets.has(d)) buckets.set(d, app.src.list(d).then((l) => new Set(l.map((f) => f.name)), () => new Set()));
-    return (await buckets.get(d)).has(base(dest));
+    return (await app.src.stat(dest)).exists;
   }
 
   function stop() { running = false; render(); }
@@ -131,7 +132,6 @@ export async function mount(el) {
         stats.bytes += odm.length; stats.files++;
         it.state = 'done';
         app.addOdm(it.dest);
-        buckets.get(dir(it.dest))?.then((s) => s.add(base(it.dest)));
         done.push(it.dest);
       } catch (e) {
         it.state = 'error';
