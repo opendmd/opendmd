@@ -239,6 +239,10 @@ fn open_prepared(full: &str) -> Option<Box<dyn ReadSeek>> {
 
 impl Source for SdSource {
     fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
+        // The cache builder lets go of its ~63 KB first: this may be a GIF,
+        // whose decoder needs it, and the open's directory scan should not
+        // queue behind its card I/O either.
+        crate::cache_builder::player_opening();
         let Some(prepared) = layout::bucketed_path(path) else {
             let f = open_file(&format!("{}{path}", config::SD_MOUNT))?;
             record(Served::Direct);

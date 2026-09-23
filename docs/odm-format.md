@@ -105,7 +105,24 @@ after applying them.)
 
 The encoder is desktop/wasm code: it reads the GIF into memory and decodes it
 two or three times rather than keeping frames, so memory is the file plus a
-few `w*h` buffers. The ESP32 never runs it.
+few `w*h` buffers.
+
+`encode_gif_streaming` is the one the ESP32 runs to prepare its own cache: one
+pass over a `Read`, no quantiser (a 257th colour is `TooManyColours`, and the
+file is left for `encode_gif`), and bounded memory — the `gif` decoder
+(~37 KB, most of it the LZW tables), a screen of colour *slots* (1 B a pixel:
+colours numbered as first painted) instead of an RGB canvas, the previous
+frame's palette indices, a bit per pixel of "unchanged", a 512-slot
+open-addressing colour table and a 2 KB write buffer: **~57 KB mean, 63 KB
+max** over the card (`cargo run --release --example encodeprobe -- --heap
+<dir>`). Palette indices are assigned in first-seen raster order per
+composited frame, exactly as step 1 above, and the ops by the same greedy
+rule (computed by scanning forward instead of from two `u32` tables), so the
+output is byte-identical to `encode_gif`'s: 11,001 of the card's 11,047
+files, and the other 46 are the 38 that need quantising and 8 that do not
+decode (`encodeprobe <dir>` checks all of them). The palette's length is
+only known at the end, so frames are written after a 768-byte gap and moved
+down over the unused part of it at the end (the caller truncates the file).
 
 ## Measured on the card
 

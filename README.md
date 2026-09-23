@@ -271,6 +271,20 @@ make pack ARGS="convert /path/to/card --layout bucketed --verify"
 uv run tools/card-sync.py <host> --from /path/to/card --paths list.txt
 ```
 
+**The player also prepares them itself.** While the panel is dark for the
+night, paused, or has no playlist, it walks the playlist in play and writes
+the missing copies with a one-pass encoder that needs ~57 KB of heap —
+byte-identical to `opendmd-pack` and the browser for every file of 256
+colours or fewer (11,001 of the stock card's 11,047; the 38 with more
+colours, and 8 GIFs that will not decode, are left for the browser, which
+has the quantiser). `auto_prepare` in `PUT /api/config` is `"idle"` (the
+default: only then), `"always"` (also slowly while a prepared file plays) or
+`"off"`; Settings → Playback cache shows it as one sentence ("Preparing
+files automatically when the panel is idle · 4,210 of 10,133 · about 3
+nights left") with the option "also while playing (slower)". On the rig
+the stock card goes at ~1.7 s a file at full speed, so a card with none
+prepared needs about 5 hours of night.
+
 That is all: no manifest to write, nothing to select. (`opendmd-pack
 manifest` still rewrites a manifest to `.odm` paths, for tooling and tests.)
 `GET /api/cache` reports how many of the active playlist's entries have a

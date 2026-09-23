@@ -45,9 +45,9 @@ const MIN_DELAY_MS: u64 = 20;
 /// Sanity cap on the declared logical screen, to bound the screen buffer.
 pub(crate) const MAX_LOGICAL_PIXELS: usize = 2048 * 2048;
 /// Bytes in a maximal GIF colour table: 256 entries of RGB.
-const MAX_PALETTE: usize = 256 * 3;
+pub(crate) const MAX_PALETTE: usize = 256 * 3;
 
-fn decode_err(e: gif::DecodingError) -> io::Error {
+pub(crate) fn decode_err(e: gif::DecodingError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e)
 }
 
@@ -87,11 +87,22 @@ pub(crate) enum Screen {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Rect {
-    left: usize,
-    top: usize,
-    width: usize,
-    height: usize,
+pub(crate) struct Rect {
+    pub(crate) left: usize,
+    pub(crate) top: usize,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+}
+
+/// A frame's delay as playback uses it: GIF hundredths to a `Duration`,
+/// 0 meaning [`ZERO_DELAY_MS`], floored at [`MIN_DELAY_MS`].
+pub(crate) fn frame_delay(delay: u16) -> Duration {
+    let delay_ms = if delay == 0 {
+        ZERO_DELAY_MS
+    } else {
+        (delay as u64) * 10
+    };
+    Duration::from_millis(delay_ms.max(MIN_DELAY_MS))
 }
 
 impl<R: Read> GifSource<R> {
@@ -294,11 +305,6 @@ impl<R: Read> GifSource<R> {
             }
         }
 
-        let delay_ms = if delay == 0 {
-            ZERO_DELAY_MS
-        } else {
-            (delay as u64) * 10
-        };
         *pending = Some((dispose, rect));
         *frames_decoded += 1;
 
@@ -307,7 +313,7 @@ impl<R: Read> GifSource<R> {
         if let Screen::Owned(v) = screen {
             blit(v, width, height, canvas);
         }
-        Ok(Some(Duration::from_millis(delay_ms.max(MIN_DELAY_MS))))
+        Ok(Some(frame_delay(delay)))
     }
 }
 
@@ -441,13 +447,13 @@ pub(crate) fn blit(screen: &[u8], width: usize, height: usize, canvas: &mut Canv
 /// The order `fill_buffer` hands rows back in: stored order, which for an
 /// interlaced frame is the GIF interlace order. Not an `Iterator` impl so the
 /// oversize path never needs a `Box<dyn Iterator>` or a `Vec` of row numbers.
-enum RowOrder {
+pub(crate) enum RowOrder {
     Sequential(std::ops::Range<usize>),
     Interlaced(InterlaceRows),
 }
 
 impl RowOrder {
-    fn new(height: usize, interlaced: bool) -> Self {
+    pub(crate) fn new(height: usize, interlaced: bool) -> Self {
         if interlaced {
             RowOrder::Interlaced(InterlaceRows::new(height))
         } else {
@@ -456,7 +462,7 @@ impl RowOrder {
     }
 
     #[allow(clippy::should_implement_trait)]
-    fn next(&mut self) -> Option<usize> {
+    pub(crate) fn next(&mut self) -> Option<usize> {
         match self {
             RowOrder::Sequential(r) => r.next(),
             RowOrder::Interlaced(i) => i.next(),
@@ -467,7 +473,7 @@ impl RowOrder {
 /// The GIF interlace row order (passes of 8, 8, 4, 2 starting at 0, 4, 2, 1).
 /// `read_into_buffer` does this for us; the row-chunked oversize path has to
 /// do it itself, because `fill_buffer` hands back rows in stored order.
-struct InterlaceRows {
+pub(crate) struct InterlaceRows {
     len: usize,
     next: usize,
     pass: usize,

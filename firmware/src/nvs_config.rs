@@ -41,6 +41,46 @@ const KEY_TZ: &str = "tz";
 const KEY_TZ_NAME: &str = "tz_name";
 const KEY_SCHEDULE: &str = "schedule";
 const KEY_TRANSITION: &str = "transition";
+const KEY_AUTO_PREPARE: &str = "auto_prepare";
+
+/// When the device prepares its own playback cache (`cache_builder.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum AutoPrepare {
+    /// While the panel is dark (night mode) or nothing plays. The default.
+    #[default]
+    Idle = 0,
+    /// Also slowly while a prepared file plays.
+    Always = 1,
+    Off = 2,
+}
+
+impl AutoPrepare {
+    pub fn parse(s: &str) -> Option<AutoPrepare> {
+        match s {
+            "idle" => Some(AutoPrepare::Idle),
+            "always" => Some(AutoPrepare::Always),
+            "off" => Some(AutoPrepare::Off),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AutoPrepare::Idle => "idle",
+            AutoPrepare::Always => "always",
+            AutoPrepare::Off => "off",
+        }
+    }
+
+    pub fn from_u8(v: u8) -> AutoPrepare {
+        match v {
+            1 => AutoPrepare::Always,
+            2 => AutoPrepare::Off,
+            _ => AutoPrepare::Idle,
+        }
+    }
+}
 
 /// The largest schedule JSON NVS will hold for us (`PUT /api/schedule`).
 pub const SCHEDULE_MAX: usize = 2048;
@@ -87,6 +127,8 @@ pub struct Settings {
     /// form `Transition::parse` reads; `/api/config` has it as `transition`
     /// + `transition_ms`.
     pub transition: Transition,
+    /// `"idle"` (default), `"always"` or `"off"`: see [`AutoPrepare`].
+    pub auto_prepare: AutoPrepare,
 }
 
 impl Default for Settings {
@@ -106,6 +148,7 @@ impl Default for Settings {
             tz_name: config::TZ_NAME.to_string(),
             schedule: String::new(),
             transition: config::TRANSITION,
+            auto_prepare: AutoPrepare::Idle,
         }
     }
 }
@@ -211,6 +254,10 @@ impl Config {
                 .get_string(KEY_TRANSITION)
                 .and_then(|s| Transition::parse(&s))
                 .unwrap_or(d.transition),
+            auto_prepare: self
+                .get_string(KEY_AUTO_PREPARE)
+                .and_then(|s| AutoPrepare::parse(&s))
+                .unwrap_or(d.auto_prepare),
         }
     }
 
@@ -231,6 +278,8 @@ impl Config {
         self.nvs.set_str(KEY_SCHEDULE, &s.schedule)?;
         self.nvs
             .set_str(KEY_TRANSITION, &s.transition.to_string())?;
+        self.nvs
+            .set_str(KEY_AUTO_PREPARE, s.auto_prepare.as_str())?;
         Ok(())
     }
 

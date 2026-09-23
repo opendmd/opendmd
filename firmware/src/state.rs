@@ -29,6 +29,12 @@ pub fn free_heap() -> u32 {
     unsafe { esp_idf_sys::esp_get_free_heap_size() }
 }
 
+/// Largest single allocation currently possible from byte-addressable heap.
+pub fn largest_free_block() -> usize {
+    // SAFETY: a read-only query with a capability mask argument.
+    unsafe { esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_8BIT) }
+}
+
 /// The player's health and what it is doing, as `/api/status` reports it.
 #[derive(Clone, Debug)]
 pub struct Status {

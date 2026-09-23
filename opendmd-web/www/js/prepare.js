@@ -1,8 +1,9 @@
 // Preparing files for playback. A GIF's prepared copy is a pre-rendered file
-// the player plays with less memory and opens faster; the device cannot make
-// one, so the browser does, with the core's encoder (byte-identical to
-// opendmd-pack), and uploads it to where the player looks for it
-// (odmPathFor). The GIF itself is never touched.
+// the player plays with less memory and opens faster. The device makes them
+// itself when idle; this is the fast path (and the only one past 256
+// colours): encoded here with the core's encoder (byte-identical to
+// opendmd-pack), uploaded to where the player looks (odmPathFor). The GIF
+// itself is never touched.
 //
 // `start()` prepares whatever the playlist in play is missing, one file at
 // a time: every transfer costs the playing device heap, so there is no

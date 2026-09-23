@@ -77,6 +77,13 @@ export async function mount(el) {
   const cacheBar = h('i');
   const cacheMsg = h('div.muted', { id: 'pc-progress' });
   const cacheErr = h('div.log.bad', { id: 'pc-errors' });
+  // The device prepares files by itself when idle (auto_prepare): one
+  // sentence, and whether it may also do so, slowly, while playing.
+  const autoLine = h('span', { id: 'pc-auto' });
+  const always = h('input', { type: 'checkbox', id: 'pc-always', onchange: async () => {
+    try { await app.src.putConfig({ auto_prepare: always.checked ? 'always' : 'idle' }); await app.refreshConfig(); loadCache(); } catch (e) { toast('save: ' + e.message, 'bad'); }
+  } });
+  const autoBox = h('div', { hidden: true, style: 'margin-top:10px' }, autoLine, h('label', always, 'also while playing (slower)'));
 
   const time = timeCard();
   const sched = scheduleCard();
@@ -100,7 +107,7 @@ export async function mount(el) {
     h('div.card', { id: 'pc' }, h('h2', 'Playback cache'),
       h('p.cap', 'Prepared copies play with less memory and start faster. Originals stay as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
-      h('div.bar', { style: 'margin:10px 0' }, cacheBar), cacheMsg, cacheErr),
+      h('div.bar', { style: 'margin:10px 0' }, cacheBar), cacheMsg, cacheErr, autoBox),
     h('div.card', h('h2', 'Network'), h('p.cap', 'WiFi and hostname changes need a reboot. With no saved network the player raises the open OpenDMD-Setup access point.'),
       h('div.form',
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
@@ -207,8 +214,21 @@ export async function mount(el) {
       const r = await app.src.cache();
       if (r.prepared == null) cacheLine.textContent = `${r.total.toLocaleString()} files · counting prepared files…`;
       else cacheLine.textContent = `${r.prepared.toLocaleString()} of ${r.total.toLocaleString()} files prepared` + (r.state === 'counting' ? ' · recounting…' : '');
-      if (r.state === 'counting' && visible) cachePoll = setTimeout(loadCache, 2000);
+      const a = r.auto, run = a?.state === 'running';
+      autoBox.hidden = !a;
+      if (a) { autoLine.textContent = autoText(a, r) + '. '; always.checked = a.mode === 'always'; }
+      if ((run || r.state === 'counting') && visible) cachePoll = setTimeout(loadCache, run ? 4000 : 2000);
     } catch (e) { cacheLine.textContent = 'cache: ' + e.message; }
+  }
+  function autoText(a, r) {
+    const n = (x) => x.toLocaleString(), e = a.eta_s, nt = sched.night();
+    if (a.mode === 'off') return 'Automatic preparing is off';
+    if (a.state === 'done') return a.failed ? `Automatic preparing is done · ${n(a.failed)} could not be prepared` : 'All files are prepared';
+    const m = (t) => +t.slice(0, 2) * 60 + +t.slice(3), len = nt?.mode == 'off' && ((m(nt.to) - m(nt.from) + 1440) % 1440 || 1440) * 60;
+    return (a.state !== 'running' ? (a.reason && a.reason !== 'playing' ? `Automatic preparing is waiting (${a.reason})` : 'Files are prepared automatically when the panel is idle')
+      : a.policy === 'drip' ? 'Preparing files slowly while playing' : 'Preparing files automatically while the panel is idle')
+      + (r.prepared != null ? ` · ${n(r.prepared)} of ${n(r.total)}` : '')
+      + (e == null ? '' : len ? ` · about ${Math.ceil(e / len)} night${e > len ? 's' : ''} left` : ` · about ${e < 5400 ? mins(e) : Math.round(e / 3600) + ' hours'} of idle time left`);
   }
   function mins(s) { return s < 90 ? `${Math.max(1, Math.round(s))} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`; }
   function renderJob(j) {

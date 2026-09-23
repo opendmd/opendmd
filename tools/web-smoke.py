@@ -39,6 +39,13 @@ every view like a person would:
             prepared copy land (the copy byte-identical to opendmd-pack), and
             the confirm adds both to `cachetest` ("5 of 5"); deleting one of
             the GIFs takes its copy with it
+  Auto      preparing by the device (auto_prepare): /api/cache `auto` and
+            /api/status `cache` keys; the card's sentence while playing
+            ("…when the panel is idle · 0 of 3"), with the mock paused (its
+            simulated builder at full pace, "about N s of idle time left")
+            and in night mode ("about N nights left"), "All files are
+            prepared" after preparing; the option ticked -> "always",
+            unticked -> "idle"; a bad value is a 400; a shot of the card
   Settings  www_version and index_state shown; PUT brightness, read it
             back; WiFi scan; the playlist choices are labelled; with
             /api/status rewritten to index_state "building" (Playwright
@@ -59,7 +66,8 @@ DRIFT_S=60 by default),
 Library (+ a preview, sent to the panel with POST /api/play, which must show
 up in /api/status), a preview of a GIF that has a prepared copy (fetched from
 the copy, never the GIF), the cache count (/api/cache, waited until ready),
-the playlists listed by name, Settings (read only) and one write: save a set
+the playlists listed by name, Settings (read only; the auto-prepare fields
+and sentence, the setting left alone) and one write: save a set
 named `smoke` and delete it. No preparing, no filelist or config changes.
 
 Screenshots of every view at 1280x800 and 390x844 go to target/web-smoke/.
@@ -563,6 +571,25 @@ def wait_cache_line(page: Page, text: str, timeout_ms: int = 60000) -> str:
     return page.inner_text("#pc-count")
 
 
+AUTO_KEYS = ["mode", "state", "reason", "policy", "session", "failed", "avg_full_s", "avg_drip_s", "eta_s", "current"]
+
+
+def auto_fields(base: str, what: str) -> dict:
+    """/api/cache's `auto` and /api/status's `cache`, keys in order."""
+    r = get_json(base + "/api/cache")
+    a = r.get("auto") or {}
+    check(list(r)[-1:] == ["auto"] and list(a) == AUTO_KEYS, f"{what}: /api/cache auto {a}")
+    c = get_json(base + "/api/status").get("cache") or {}
+    check(list(c) == ["state", "prepared", "total"] and c["state"] in ("idle", "running", "paused", "done"),
+          f"{what}: /api/status cache {c}")
+    return a
+
+
+def wait_auto_text(page: Page, pattern: str, timeout_ms: int = 20000) -> str:
+    page.wait_for_function(f"new RegExp({json.dumps(pattern)}).test(document.querySelector('#pc-auto').textContent)", timeout=timeout_ms)
+    return page.inner_text("#pc-auto")
+
+
 def mock_pass(browser) -> None:
     overlay = OUT / "overlay"
     shutil.rmtree(overlay, ignore_errors=True)
@@ -784,6 +811,24 @@ def mock_pass(browser) -> None:
         line = wait_cache_line(page, "0 of 3")
         check(True, f"cache: settings card reads '{line}'")
         no_leaks(page, "settings (cache)")
+        # Auto prepare: playing with "idle" -> waiting; paused -> the mock's
+        # simulated builder runs at full pace (it writes nothing).
+        a = auto_fields(base, "auto")
+        check(a["mode"] == "idle" and a["state"] == "paused" and a["reason"] == "playing", f"auto: playing -> paused ({a['state']}, {a['reason']})")
+        t = wait_auto_text(page, "^Files are prepared automatically when the panel is idle · 0 of 3\\.")
+        check(not page.is_checked("#pc-always"), f"auto: card reads '{t}', option unticked")
+        try:
+            put_json(base + "/api/config", {"auto_prepare": "sometimes"})
+            check(False, "auto: a bad auto_prepare is refused")
+        except urllib.error.HTTPError as e:
+            check(e.code == 400 and "idle, always or off" in e.read().decode(), f"auto: a bad auto_prepare is a {e.code}")
+        post_json(base + "/api/pause", {})
+        goto_view(page, "sets")
+        goto_view(page, "settings")
+        t = wait_auto_text(page, "^Preparing files automatically while the panel is idle · [1-3] of 3 · about \\d+ s of idle time left\\.|^All files are prepared\\.")
+        a = auto_fields(base, "auto (paused)")
+        check(a["session"] > 0 and a["avg_full_s"] == 2.0, f"auto: paused -> prepared at full pace ('{t}', session {a['session']})")
+        post_json(base + "/api/pause", {})
         page.click("#pc-go")
         page.wait_for_function("document.querySelector('#pc-progress').textContent.startsWith('Done')", timeout=120000)
         line = wait_cache_line(page, "3 of 3")
@@ -792,6 +837,13 @@ def mock_pass(browser) -> None:
         compare_with_pack(overlay, made)
         no_leaks(page, "settings (prepared)")
         shot(page, "settings-cache", "laptop")
+        t = wait_auto_text(page, "^All files are prepared\\.\\s*$")
+        check(True, f"auto: after preparing, the card reads '{t}'")
+        page.check("#pc-always")
+        check(wait_config(base, lambda c: c.get("auto_prepare") == "always").get("auto_prepare") == "always", "auto: ticked -> auto_prepare always")
+        page.locator("#pc").screenshot(path=str(OUT / "settings-auto-laptop.png"))
+        page.uncheck("#pc-always")
+        check(wait_config(base, lambda c: c.get("auto_prepare") == "idle").get("auto_prepare") == "idle", "auto: unticked -> auto_prepare idle")
         # Add GIFs: two new files into Consoles, prepared, added to cachetest.
         src_dir = OUT / "add-src"
         shutil.rmtree(src_dir, ignore_errors=True)
@@ -917,6 +969,10 @@ def mock_pass(browser) -> None:
         check(get_json(base + "/api/status")["mode"] == "off", "now: resumed -> back to night mode")
         # Clear the schedule: delete the rule, turn night mode off.
         goto_view(page, "settings")
+        # The panel is off for the night: the builder runs, counted in nights.
+        t = wait_auto_text(page, "^Preparing files automatically while the panel is idle · [\\d,]+ of [\\d,]+ · about \\d+ nights? left\\.|^All files are prepared\\.")
+        check(True, f"auto: night mode -> '{t}'")
+        no_leaks(page, "settings (auto)")
         page.click("#sc-rules [data-rule='0'] >> text=Delete")
         page.wait_for_selector("#sc-rules [data-rule]", state="detached", timeout=10000)
         page.uncheck("#sc-night-on")
@@ -1061,6 +1117,11 @@ def device_pass(browser, device: str) -> None:
               f"device settings: index_state {st.get('index_state')}, www_version {st.get('www_version')} shown")
         line = wait_cache_line(page, f"{r['prepared']:,} of {r['total']:,}")
         check(True, f"device settings: cache card reads '{line}'")
+        # Auto prepare, read only (the device's setting is left as it is).
+        a = auto_fields(base, "device auto")
+        check(cfg.get("auto_prepare") == a.get("mode"), f"device auto: auto_prepare {cfg.get('auto_prepare')}")
+        t = wait_auto_text(page, "\\S")
+        check(page.is_checked("#pc-always") == (a.get("mode") == "always"), f"device auto: card reads '{t}'")
         no_leaks(page, "device settings")
         shot(page, "device-settings", "laptop")
         # The one write: save and delete a set named smoke (never activated).

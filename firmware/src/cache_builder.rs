@@ -1,0 +1,1196 @@
+//! The playback cache, prepared by the device itself while it is idle.
+//!
+//! A GIF plays with ~54 KB of decoder heap; its prepared copy (an `.odm`,
+//! `opendmd_core::odm`) with ~14 KB. The browser can make copies ("Prepare
+//! remaining files"), but a user should not have to: this task walks the
+//! playlist in play and makes the missing ones with
+//! [`odm::encode_gif_streaming`] — byte-identical to what the browser and
+//! `opendmd-pack` write — when the panel can spare it.
+//!
+//! # When it runs: the pace
+//!
+//! The main task decides, every loop iteration, and publishes a [`Pace`]
+//! here ([`publish`]):
+//!
+//! - **Full** — night mode has the panel dark, the player is paused, or there
+//!   is no playlist to play: nothing is animating, so work as fast as the
+//!   card allows (a 1 ms sleep every ~20 ms of work so IDLE0 still runs).
+//! - **Drip** — `auto_prepare = "always"` and a *prepared* file is on screen
+//!   (its ~30 KB of headroom is what the encoder borrows), no transition
+//!   running: [`config::BUILDER_DRIP_PAUSE`] of sleep after every 2 KB of
+//!   card I/O and every frame, so the player's reads rarely wait for the FAT
+//!   lock.
+//! - **Stop(reason)** — anything else (`auto_prepare = "off"`, a GIF on
+//!   screen, a transition, a playlist rebuild, and — set from
+//!   [`crate::sd::SdSource::open`] — the player opening its next file).
+//!
+//! On top of the pace, a transfer in flight ([`busy`]: a stream-task file
+//! GET, an upload, a listing) stops it, and so does free heap under
+//! [`config::BUILDER_MIN_HEAP`] before a file (or under
+//! [`config::BUILDER_ABORT_HEAP`] during one).
+//!
+//! **A stop abandons the file in hand and frees everything** — the encoder is
+//! ~57 KB (63 KB at most over the card), which the player needs
+//! back the moment its next file turns out to be a GIF. The check runs before
+//! every frame and every 2 KB of card I/O, and the player's open *waits* for
+//! the release ([`player_opening`], bounded by
+//! [`config::BUILDER_RELEASE_WAIT`]); the time from request to release is in
+//! the heartbeat and in the abandon log line. The file is started again from
+//! the beginning next time — or, after [`config::BUILDER_DRIP_TRIES`] tries
+//! at the drip pace, left for the next full-speed pass.
+//!
+//! **The task only exists while it may work** (8.9 KB of stack and TCB): any
+//! stop ends it, the player's open waits for it to be gone, and the main loop
+//! starts a new one when the pace allows ([`publish`], at most once a second).
+//! Its place in the playlist survives in [`WALK`].
+//!
+//! # The work list
+//!
+//! The active manifest, in order, read a line at a time (no list in RAM):
+//! each `/gifs/…gif` entry that passes the playlist's platform filter, whose
+//! copy is not at `layout::bucketed_path` (one `stat` in a small bucket
+//! directory) and which has not failed before. Failures (more than 256
+//! colours — the browser's quantiser can do those —, a GIF that will not
+//! decode, a missing file) are appended to [`config::BUILDER_FAILED_PATH`],
+//! `path<TAB>reason` a line, and skipped by every later pass. A copy is
+//! written to `<copy>.tmp`, truncated to its length, and renamed into place;
+//! the cache count is bumped per file ([`cache::increment_prepared`]) and
+//! recounted at the end of a pass. Nothing else persists: after a reboot the
+//! walk starts again at the top, skipping what exists.
+
+use opendmd_core::filter::Filter;
+use opendmd_core::layout::{self, Prepared};
+use opendmd_core::manifest::Entry;
+use opendmd_core::odm;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering::SeqCst};
+use std::sync::Mutex;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use esp_idf_hal::cpu::Core;
+use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
+
+use crate::cache;
+use crate::config;
+use crate::state::{free_heap, largest_free_block};
+
+/// Why the builder is not running. The API's `reason` strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Reason {
+    Off = 1,
+    Playing = 2,
+    GifOnScreen = 3,
+    LowMemory = 4,
+    Busy = 5,
+    Transition = 6,
+    Reindex = 7,
+    NoPlaylist = 8,
+    /// The player is opening its next file ([`player_opening`]).
+    Opening = 9,
+}
+
+impl Reason {
+    fn from_u8(v: u8) -> Option<Reason> {
+        Some(match v {
+            1 => Reason::Off,
+            2 => Reason::Playing,
+            3 => Reason::GifOnScreen,
+            4 => Reason::LowMemory,
+            5 => Reason::Busy,
+            6 => Reason::Transition,
+            7 => Reason::Reindex,
+            8 => Reason::NoPlaylist,
+            9 => Reason::Opening,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Reason::Off => "off",
+            // A file open is over in milliseconds; to a user it is playing.
+            Reason::Playing | Reason::Opening => "playing",
+            Reason::GifOnScreen => "gif on screen",
+            Reason::LowMemory => "low memory",
+            Reason::Busy => "busy",
+            Reason::Transition => "transition",
+            Reason::Reindex => "reindex",
+            Reason::NoPlaylist => "no playlist",
+        }
+    }
+}
+
+/// What the main task allows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pace {
+    Stop(Reason),
+    Drip,
+    Full,
+}
+
+const PACE_STOP: u8 = 0;
+const PACE_DRIP: u8 = 1;
+const PACE_FULL: u8 = 2;
+
+/// The pace (`PACE_*`) and, when stopped, the [`Reason`].
+static PACE: AtomicU8 = AtomicU8::new(PACE_STOP);
+static WHY: AtomicU8 = AtomicU8::new(Reason::Off as u8);
+/// The builder has encoder state allocated. Set before it allocates and
+/// re-checked against [`PACE`] (both `SeqCst`), so a stop and a start can
+/// never both miss each other.
+static HOLDING: AtomicBool = AtomicBool::new(false);
+/// Transfers in flight ([`busy`]).
+static BUSY: AtomicU32 = AtomicU32::new(0);
+/// When the last stop, and the last transfer, were asked for (ms since
+/// boot): the abandon log line reports how long the builder took to notice.
+/// And when the last transfer ended: the builder waits
+/// [`config::BUILDER_SETTLE`] after it, so a browser fetching files one after
+/// another does not restart (and abandon) a file between each.
+static STOP_AT: AtomicU32 = AtomicU32::new(0);
+static BUSY_AT: AtomicU32 = AtomicU32::new(0);
+static BUSY_END: AtomicU32 = AtomicU32::new(0);
+/// The main task's waits for a release in [`player_opening`]: count, worst,
+/// and how many gave up.
+static RELEASE_WAITS: AtomicU32 = AtomicU32::new(0);
+static RELEASE_MAX_US: AtomicU32 = AtomicU32::new(0);
+static RELEASE_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+/// `auto_prepare` as the main task last published it (0 idle, 1 always, 2 off).
+static MODE: AtomicU8 = AtomicU8::new(0);
+/// The least stack the task has had left.
+static STACK_LOW: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// Milliseconds since boot (wraps after 49 days).
+fn now_ms() -> u32 {
+    // SAFETY: an argument-free read of the IDF's monotonic timer.
+    ((unsafe { esp_idf_sys::esp_timer_get_time() }) / 1000) as u32
+}
+
+fn ms_since(stamp: u32) -> u32 {
+    now_ms().wrapping_sub(stamp)
+}
+
+/// The main task's decision for this iteration, and the configured mode
+/// (for the API). Cheap: two or three atomic stores.
+pub fn publish(pace: Pace, mode: crate::nvs_config::AutoPrepare) {
+    MODE.store(mode as u8, SeqCst);
+    let (p, why) = match pace {
+        Pace::Stop(r) => (PACE_STOP, r as u8),
+        Pace::Drip => (PACE_DRIP, 0),
+        Pace::Full => (PACE_FULL, 0),
+    };
+    if PACE.swap(p, SeqCst) != PACE_STOP && p == PACE_STOP {
+        STOP_AT.store(now_ms(), SeqCst);
+    }
+    WHY.store(why, SeqCst);
+    if p != PACE_STOP {
+        maybe_start();
+    }
+}
+
+/// The player is about to open a file (called by `SdSource::open`, on the
+/// main task): stop the builder and wait until it has let go of its heap,
+/// because the file may be a GIF whose decoder needs it. Bounded by
+/// [`config::BUILDER_RELEASE_WAIT`]; normally one frame or one 2 KB chunk.
+pub fn player_opening() {
+    publish(Pace::Stop(Reason::Opening), mode());
+    if !ALIVE.load(SeqCst) {
+        return;
+    }
+    let t = Instant::now();
+    // The encoder's heap, which a GIF's decoder may need: wait for it. The
+    // task runs at priority 1 on CPU0, under everything that answers the
+    // network, so it is lifted to their level until it lets go — otherwise
+    // a busy CPU0 (the cache count, a burst of requests) can keep it from
+    // noticing for as long as that lasts.
+    if HOLDING.load(SeqCst) {
+        set_priority(config::BUILDER_RELEASE_PRIORITY);
+        while HOLDING.load(SeqCst) {
+            if t.elapsed() >= config::BUILDER_RELEASE_WAIT {
+                RELEASE_TIMEOUTS.fetch_add(1, SeqCst);
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+    // Then, briefly, its stack: with the task's 8.9 KB still taken, the
+    // transition into a GIF (24 KB + the decoder's first 34 KB, 12 KB to
+    // spare) is cut. Not worth more than a few ticks of the frame loop.
+    let t2 = Instant::now();
+    while ALIVE.load(SeqCst) && t2.elapsed() < config::BUILDER_EXIT_WAIT {
+        thread::sleep(Duration::from_millis(1));
+    }
+    if !ALIVE.load(SeqCst) {
+        // One tick for IDLE0 to reap the task and free its stack.
+        thread::sleep(Duration::from_millis(1));
+    }
+    RELEASE_WAITS.fetch_add(1, SeqCst);
+    RELEASE_MAX_US.fetch_max(t.elapsed().as_micros() as u32, SeqCst);
+}
+
+/// The abandon line of the last task, for the next one to print.
+static DEFERRED_LOG: Mutex<Option<String>> = Mutex::new(None);
+
+/// The running task's FreeRTOS handle (0: none), cleared under the lock
+/// before the task ends so [`set_priority`] never touches a dead one.
+static HANDLE: Mutex<usize> = Mutex::new(0);
+
+fn set_priority(priority: u8) {
+    let h = HANDLE.lock().unwrap_or_else(|p| p.into_inner());
+    if *h != 0 {
+        // SAFETY: the handle is the live task's (it clears it, under this
+        // lock, before it returns), and changing a priority is always safe.
+        unsafe {
+            esp_idf_sys::vTaskPrioritySet(*h as esp_idf_sys::TaskHandle_t, u32::from(priority))
+        };
+    }
+}
+
+fn mode() -> crate::nvs_config::AutoPrepare {
+    crate::nvs_config::AutoPrepare::from_u8(MODE.load(SeqCst))
+}
+
+/// Held for the length of a transfer that shares the card with the player
+/// (a streamed file, an upload, a listing): the builder stops while any is.
+pub struct Busy;
+
+pub fn busy() -> Busy {
+    if BUSY.fetch_add(1, SeqCst) == 0 {
+        BUSY_AT.store(now_ms(), SeqCst);
+    }
+    Busy
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        BUSY_END.store(now_ms(), SeqCst);
+        BUSY.fetch_sub(1, SeqCst);
+    }
+}
+
+/// Why the builder may not work right now, if it may not.
+fn blocked() -> Option<Reason> {
+    if PACE.load(SeqCst) == PACE_STOP {
+        return Some(Reason::from_u8(WHY.load(SeqCst)).unwrap_or(Reason::Off));
+    }
+    let settling = BUSY_END.load(SeqCst) != 0
+        && ms_since(BUSY_END.load(SeqCst)) < config::BUILDER_SETTLE.as_millis() as u32;
+    (BUSY.load(SeqCst) > 0 || settling).then_some(Reason::Busy)
+}
+
+// ---------------------------------------------------------------------------
+// What the API and the heartbeat report
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum State {
+    Idle,
+    Running,
+    Paused,
+    Done,
+}
+
+impl State {
+    fn as_str(self) -> &'static str {
+        match self {
+            State::Idle => "idle",
+            State::Running => "running",
+            State::Paused => "paused",
+            State::Done => "done",
+        }
+    }
+}
+
+struct Report {
+    state: State,
+    reason: Option<Reason>,
+    /// The pace of the file in hand (`"full"`/`"drip"`).
+    policy: Option<&'static str>,
+    session: u32,
+    failed: u32,
+    aborted: u32,
+    full: (f32, u32),
+    drip: (f32, u32),
+    /// The GIF being prepared.
+    current: Option<String>,
+    /// Bytes written to the card this session, and the seconds spent
+    /// encoding (for the throughput).
+    written: u64,
+    busy_secs: f32,
+}
+
+static REPORT: Mutex<Report> = Mutex::new(Report {
+    state: State::Idle,
+    reason: Some(Reason::Off),
+    policy: None,
+    session: 0,
+    failed: 0,
+    aborted: 0,
+    full: (0.0, 0),
+    drip: (0.0, 0),
+    current: None,
+    written: 0,
+    busy_secs: 0.0,
+});
+
+fn report() -> std::sync::MutexGuard<'static, Report> {
+    REPORT.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+fn set_state(state: State, reason: Option<Reason>) {
+    let mut r = report();
+    r.state = state;
+    r.reason = reason;
+    if state != State::Running {
+        r.policy = None;
+        r.current = None;
+    }
+}
+
+/// The state to report: the task's own while it runs; otherwise what the
+/// pace and the walk say (the task is started again when there is work).
+fn view(r: &Report) -> (State, Option<Reason>) {
+    if ALIVE.load(SeqCst) {
+        return (r.state, r.reason);
+    }
+    let done = WALK
+        .try_lock()
+        .is_ok_and(|w| w.as_ref().is_some_and(Walk::finished));
+    match blocked() {
+        Some(why @ (Reason::Off | Reason::NoPlaylist)) => (State::Idle, Some(why)),
+        _ if done => (State::Done, None),
+        Some(why) => (State::Paused, Some(why)),
+        None if (free_heap() as usize) < spawn_heap() => (State::Paused, Some(Reason::LowMemory)),
+        None => (State::Paused, None),
+    }
+}
+
+fn avg((sum, n): (f32, u32)) -> Option<f32> {
+    (n > 0).then(|| sum / n as f32)
+}
+
+fn opt_f(v: Option<f32>) -> String {
+    v.map_or_else(|| "null".to_string(), |v| format!("{v:.1}"))
+}
+
+/// `/api/cache`'s `auto` object. `total`/`prepared` are the count's.
+pub fn auto_json(total: usize, prepared: Option<usize>) -> String {
+    let r = report();
+    let full = avg(r.full);
+    let eta = match (prepared, full) {
+        (Some(p), Some(a)) => {
+            let left = total.saturating_sub(p + r.failed as usize);
+            format!("{:.0}", left as f32 * a)
+        }
+        _ => "null".to_string(),
+    };
+    let (state, reason) = view(&r);
+    format!(
+        r#"{{"mode":"{}","state":"{}","reason":{},"policy":{},"session":{},"failed":{},"avg_full_s":{},"avg_drip_s":{},"eta_s":{eta},"current":{}}}"#,
+        mode().as_str(),
+        state.as_str(),
+        reason.map_or_else(|| "null".to_string(), |x| format!("\"{}\"", x.as_str())),
+        r.policy
+            .map_or_else(|| "null".to_string(), |p| format!("\"{p}\"")),
+        r.session,
+        r.failed,
+        opt_f(full),
+        opt_f(avg(r.drip)),
+        r.current
+            .as_deref()
+            .map_or_else(|| "null".to_string(), crate::httpd::json_string),
+    )
+}
+
+/// `/api/status`'s `cache` object.
+pub fn status_json(total: usize, prepared: Option<usize>) -> String {
+    format!(
+        r#"{{"state":"{}","prepared":{},"total":{total}}}"#,
+        view(&report()).0.as_str(),
+        prepared.map_or_else(|| "null".to_string(), |p| p.to_string())
+    )
+}
+
+/// The heartbeat's part: `builder: <state> <n>/<total> <avg s/file> (…)`.
+pub fn heartbeat(total: usize, prepared: Option<usize>) -> String {
+    let r = report();
+    let (state, reason) = view(&r);
+    let pace = match state {
+        State::Running => r.policy.unwrap_or("?").to_string(),
+        _ => reason.map_or_else(String::new, |x| x.as_str().to_string()),
+    };
+    let per = match (r.policy, avg(r.full), avg(r.drip)) {
+        (Some("drip"), _, Some(d)) => format!("{d:.1} s/file"),
+        (_, Some(f), _) => format!("{f:.1} s/file"),
+        (_, None, Some(d)) => format!("{d:.1} s/file (drip)"),
+        _ => "- s/file".to_string(),
+    };
+    let rate = if r.busy_secs > 0.0 {
+        r.written as f32 / 1024.0 / r.busy_secs
+    } else {
+        0.0
+    };
+    let waits = RELEASE_WAITS.load(SeqCst);
+    format!(
+        ", builder: {} {pace} {}/{total} {per} (session {}, failed {}, abandoned {}, {:.0} KB written at {rate:.0} KB/s, \
+         release waits {waits} max {:.1} ms timeouts {}, stack {} B unused, task {})",
+        state.as_str(),
+        prepared.map_or_else(|| "?".to_string(), |p| p.to_string()),
+        r.session,
+        r.failed,
+        r.aborted,
+        r.written as f32 / 1024.0,
+        RELEASE_MAX_US.swap(0, SeqCst) as f32 / 1000.0,
+        RELEASE_TIMEOUTS.load(SeqCst),
+        match STACK_LOW.load(SeqCst) {
+            u32::MAX => "-".to_string(),
+            n => n.to_string(),
+        },
+        if ALIVE.load(SeqCst) {
+            format!("up, {} starts", SPAWNS.load(SeqCst))
+        } else {
+            format!("down, {} starts", SPAWNS.load(SeqCst))
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// The task
+// ---------------------------------------------------------------------------
+
+/// Start the task, pinned to CPU0 below the stream task. Called from `main`
+/// before WiFi, while the heap still has a contiguous block for the stack.
+fn spawn() -> anyhow::Result<()> {
+    let before = free_heap();
+    let previous = ThreadSpawnConfiguration::get();
+    ThreadSpawnConfiguration {
+        name: Some(b"cache-builder\0"),
+        stack_size: config::BUILDER_STACK,
+        priority: config::BUILDER_PRIORITY,
+        pin_to_core: Some(Core::Core0),
+        ..Default::default()
+    }
+    .set()?;
+    let handle = thread::Builder::new()
+        .name("cache-builder".into())
+        .stack_size(config::BUILDER_STACK)
+        .spawn(run);
+    if let Some(previous) = previous {
+        let _ = previous.set();
+    } else {
+        let _ = ThreadSpawnConfiguration::default().set();
+    }
+    handle?;
+    // Logged by the task itself: this runs inside the main task's frame.
+    SPAWN_COST.store(before.saturating_sub(free_heap()), SeqCst);
+    Ok(())
+}
+
+/// The task exists. It exits as soon as there is nothing it may do, giving
+/// its stack back, and [`publish`] starts it again when there is.
+static ALIVE: AtomicBool = AtomicBool::new(false);
+/// Heap the last start cost (logged by the task).
+static SPAWN_COST: AtomicU32 = AtomicU32::new(0);
+/// When a start was last tried (ms since boot), to space out attempts.
+static SPAWN_AT: AtomicU32 = AtomicU32::new(0);
+static SPAWNS: AtomicU32 = AtomicU32::new(0);
+/// The walk survives the task: a restart carries on where it stopped.
+static WALK: Mutex<Option<Walk>> = Mutex::new(None);
+/// A count has been asked for (once per boot).
+static COUNTED: AtomicBool = AtomicBool::new(false);
+
+/// Free heap needed to start the task: [`config::BUILDER_MIN_HEAP`] for a
+/// file once it runs, plus its stack and ~1 KB of TCB and pthread
+/// bookkeeping (the task costs ~7.9 KB).
+fn spawn_heap() -> usize {
+    config::BUILDER_MIN_HEAP as usize + config::BUILDER_STACK + 1024
+}
+
+/// Start the task if the pace allows work, it is not running, and there may
+/// be something to do. Called with every [`publish`] (main task): cheap
+/// unless it actually starts one, and attempts are at least
+/// [`config::BUILDER_RESPAWN`] apart.
+fn maybe_start() {
+    if ALIVE.load(SeqCst) || blocked().is_some() {
+        return;
+    }
+    if ms_since(SPAWN_AT.load(SeqCst)) < config::BUILDER_RESPAWN.as_millis() as u32 {
+        return;
+    }
+    SPAWN_AT.store(now_ms(), SeqCst);
+    // Finished, and nothing has changed since: no need.
+    let done = WALK
+        .try_lock()
+        .is_ok_and(|w| w.as_ref().is_some_and(Walk::finished));
+    // Room for the task's stack and, after it, for an encoder.
+    if done || (free_heap() as usize) < spawn_heap() {
+        return;
+    }
+    ALIVE.store(true, SeqCst);
+    if spawn().is_err() {
+        ALIVE.store(false, SeqCst);
+    }
+}
+
+/// Where the walk is in the playlist.
+struct Walk {
+    manifest: String,
+    platforms: String,
+    filter: Filter,
+    /// Byte offset of the next line to look at.
+    offset: u64,
+    /// `layout::prepared_key` of every GIF in the failure file.
+    failed: Vec<u32>,
+    /// The pass reached the end; the cache generation it recounted at.
+    done_gen: Option<u32>,
+    /// Files abandoned [`config::BUILDER_DRIP_TRIES`] times at the drip pace
+    /// (too big for one file's turn on screen): skipped while dripping and
+    /// left for the next full-speed pass.
+    deferred: Vec<u32>,
+    /// The file last abandoned at the drip pace, and how many times.
+    tries: (u32, u32),
+    /// Copies found already there, and made, in this pass.
+    found: u32,
+    made: u32,
+    started: Instant,
+}
+
+impl Walk {
+    /// The pass is over and nothing it could still do has changed: the
+    /// copies and playlist are as they were, and nothing deferred waits for
+    /// a full-speed pace that has now come.
+    fn finished(&self) -> bool {
+        self.done_gen == Some(cache::generation())
+            && (self.deferred.is_empty() || PACE.load(SeqCst) != PACE_FULL)
+    }
+
+    fn new(manifest: String, platforms: String) -> Walk {
+        let list: Vec<&str> = platforms
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let filter = if list.is_empty() {
+            Filter::new()
+        } else {
+            Filter::new().platforms(list)
+        };
+        let failed = load_failed();
+        report().failed = failed.len() as u32;
+        log::info!(
+            "cache builder: new pass over {manifest}{}, {} known failures",
+            if platforms.is_empty() {
+                String::new()
+            } else {
+                format!(" (platforms {platforms})")
+            },
+            failed.len()
+        );
+        Walk {
+            manifest,
+            platforms,
+            filter,
+            offset: 0,
+            failed,
+            done_gen: None,
+            deferred: Vec::new(),
+            tries: (0, 0),
+            found: 0,
+            made: 0,
+            started: Instant::now(),
+        }
+    }
+}
+
+fn run() {
+    if let Some(line) = DEFERRED_LOG
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take()
+    {
+        log::info!("{line}");
+    }
+    log::info!(
+        "cache builder: task started on CPU0 ({} B stack, priority {}, cost {} B of heap; start #{})",
+        config::BUILDER_STACK,
+        config::BUILDER_PRIORITY,
+        SPAWN_COST.load(SeqCst),
+        SPAWNS.fetch_add(1, SeqCst) + 1
+    );
+    // SAFETY: an argument-free query about the calling task.
+    *HANDLE.lock().unwrap_or_else(|p| p.into_inner()) =
+        unsafe { esp_idf_sys::xTaskGetCurrentTaskHandle() } as usize;
+    let mut walk = WALK.lock().unwrap_or_else(|p| p.into_inner()).take();
+    let (state, why) = work(&mut walk);
+    set_state(state, why);
+    *WALK.lock().unwrap_or_else(|p| p.into_inner()) = walk;
+    httpd_stack_low_water();
+    *HANDLE.lock().unwrap_or_else(|p| p.into_inner()) = 0;
+    // The stack goes back as soon as IDLE0 reaps the task; `publish` starts
+    // another when there is work it may do. Nothing is logged here: the
+    // player may be waiting for this ([`player_opening`]).
+    ALIVE.store(false, SeqCst);
+}
+
+/// Prepare files until there is nothing the builder may do; why it stopped.
+/// The task never waits around holding its stack: any stop ends it.
+fn work(walk: &mut Option<Walk>) -> (State, Option<Reason>) {
+    loop {
+        httpd_stack_low_water();
+        // 1. Allowed at all?
+        if let Some(why) = blocked() {
+            return match why {
+                Reason::Off | Reason::NoPlaylist => (State::Idle, Some(why)),
+                _ if walk.as_ref().is_some_and(Walk::finished) => (State::Done, None),
+                _ => (State::Paused, Some(why)),
+            };
+        }
+        // 2. The playlist in play; a new one starts a new pass.
+        let (manifest, platforms) = cache::playlist();
+        if manifest.is_empty() {
+            return (State::Idle, Some(Reason::NoPlaylist));
+        }
+        if !COUNTED.swap(true, SeqCst) {
+            // The ETA and the card's sentence want a count: ask for one
+            // (it runs on the network worker) the first time there is work.
+            let _ = cache::snapshot();
+        }
+        let w = match walk {
+            Some(w) if w.manifest == manifest && w.platforms == platforms => w,
+            _ => walk.insert(Walk::new(manifest, platforms)),
+        };
+        // 3. Done: over until the copies or the playlist change.
+        if w.done_gen.is_some() {
+            if w.finished() {
+                return (State::Done, None);
+            }
+            *w = Walk::new(w.manifest.clone(), w.platforms.clone());
+        }
+        // 4. Heap for a whole encoder, with the player's margin left.
+        if free_heap() < config::BUILDER_MIN_HEAP || largest_free_block() < 16 * 1024 {
+            return (State::Paused, Some(Reason::LowMemory));
+        }
+        // 5. The next file that needs a copy.
+        match next_candidate(w) {
+            Ok(Some((line_at, next_at, gif, copy))) => {
+                match prepare(&gif, &copy) {
+                    Outcome::Made => {
+                        w.made += 1;
+                        w.offset = next_at;
+                    }
+                    Outcome::Failed(why) => {
+                        record_failure(&gif, &why);
+                        w.failed.push(layout::prepared_key(&gif));
+                        report().failed = w.failed.len() as u32;
+                        w.offset = next_at;
+                    }
+                    // Stopped part way: the same file is next again —
+                    // unless it keeps missing its window at the drip pace.
+                    Outcome::Abandoned { drip } => {
+                        let key = layout::prepared_key(&gif);
+                        let n = if drip && w.tries.0 == key {
+                            w.tries.1 + 1
+                        } else {
+                            u32::from(drip)
+                        };
+                        w.tries = (key, n);
+                        if n >= config::BUILDER_DRIP_TRIES {
+                            if let Some(line) = DEFERRED_LOG
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .as_mut()
+                            {
+                                line.push_str(&format!(
+                                    "; abandoned {n} times at the drip pace, left for full speed"
+                                ));
+                            }
+                            w.deferred.push(key);
+                            w.offset = next_at;
+                        } else {
+                            w.offset = line_at;
+                        }
+                    }
+                    Outcome::NotStarted => w.offset = line_at,
+                    Outcome::CardError => {
+                        w.offset = line_at;
+                        thread::sleep(config::BUILDER_CARD_BACKOFF);
+                    }
+                }
+            }
+            Ok(None) => {
+                // End of the playlist: recount once, and remember the
+                // generation *after* our own invalidation.
+                cache::invalidate();
+                w.done_gen = Some(cache::generation());
+                let r = report();
+                log::info!(
+                    "cache builder: pass over {} done in {} s: {} made, {} already there, {} left for full speed, {} known failures; session {} made, {:.0} KB written",
+                    w.manifest,
+                    w.started.elapsed().as_secs(),
+                    w.made,
+                    w.found,
+                    w.deferred.len(),
+                    w.failed.len(),
+                    r.session,
+                    r.written as f32 / 1024.0
+                );
+                drop(r);
+                return (State::Done, None);
+            }
+            // Paused mid-scan: carry on from the same place next time.
+            Err(Stopped) => {}
+        }
+    }
+}
+
+fn httpd_stack_low_water() {
+    crate::httpd::stack_low_water("cache-builder", &STACK_LOW);
+}
+
+/// The walk stopped because the builder was stopped.
+struct Stopped;
+
+/// Wait out the pace before a piece of card work (2 KB of I/O, a `stat`):
+/// `Err` if stopped. At the drip pace that is [`config::BUILDER_DRIP_PAUSE`]
+/// — the card (FAT lock, SPI bus) is what the builder shares with the
+/// player; its CPU is CPU0's, the player's CPU1.
+fn pace() -> Result<(), Reason> {
+    check()?;
+    if PACE.load(SeqCst) == PACE_DRIP {
+        // In 1 ms steps, so a stop is seen within a tick, not a pause.
+        for _ in 0..config::BUILDER_DRIP_PAUSE.as_millis() {
+            if blocked().is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        LAST_SLEEP.store(now_ms(), SeqCst);
+    }
+    breathe();
+    Ok(())
+}
+
+/// Between two frames (CPU work only): `Err` if stopped.
+fn check() -> Result<(), Reason> {
+    if let Some(why) = blocked() {
+        return Err(why);
+    }
+    if free_heap() < config::BUILDER_ABORT_HEAP {
+        return Err(Reason::LowMemory);
+    }
+    breathe();
+    Ok(())
+}
+
+static LAST_SLEEP: AtomicU32 = AtomicU32::new(0);
+
+/// One tick of sleep every ~20 ms of work, so IDLE0 (and the task watchdog)
+/// get their turn: a yield alone only goes to equal or higher priorities.
+fn breathe() {
+    if ms_since(LAST_SLEEP.load(SeqCst)) >= 20 {
+        thread::sleep(Duration::from_millis(1));
+        LAST_SLEEP.store(now_ms(), SeqCst);
+    } else {
+        thread::yield_now();
+    }
+}
+
+/// The next playlist entry that needs a copy, from `w.offset` on:
+/// `(offset of its line, offset of the line after, GIF path, copy path)`,
+/// or `None` at the end. Counts copies it finds already there.
+fn next_candidate(w: &mut Walk) -> Result<Option<(u64, u64, String, String)>, Stopped> {
+    let mut report_state = true;
+    let file = match File::open(&w.manifest) {
+        Ok(f) => f,
+        Err(e) => {
+            log::warn!("cache builder: {}: {e}", w.manifest);
+            set_state(State::Idle, Some(Reason::NoPlaylist));
+            thread::sleep(config::BUILDER_CARD_BACKOFF);
+            return Err(Stopped);
+        }
+    };
+    let mut reader = BufReader::with_capacity(512, file);
+    if reader.seek(SeekFrom::Start(w.offset)).is_err() {
+        return Ok(None);
+    }
+    let parse = !w.filter.is_unconstrained();
+    let mut line = String::new();
+    let mut at = w.offset;
+    let mut lines = 0u32;
+    loop {
+        // Lines that need no `stat` (filtered out, failed, prepared ones are
+        // not among them) still cost reads: check every so often.
+        lines += 1;
+        if lines.is_multiple_of(32) {
+            if let Err(why) = pace() {
+                w.offset = at;
+                set_state(State::Paused, Some(why));
+                return Err(Stopped);
+            }
+        }
+        line.clear();
+        let n = match reader.read_line(&mut line) {
+            Ok(0) => return Ok(None),
+            Ok(n) => n as u64,
+            Err(e) => {
+                log::warn!("cache builder: reading {}: {e}", w.manifest);
+                return Ok(None);
+            }
+        };
+        let (line_at, next_at) = (at, at + n);
+        at = next_at;
+        w.offset = next_at;
+        let path = line
+            .strip_prefix('\u{feff}')
+            .unwrap_or(&line)
+            .trim_end_matches(['\n', '\r', ' ', '\t']);
+        if path.is_empty() || (parse && !w.filter.matches(&Entry::from_path(path))) {
+            continue;
+        }
+        let Prepared::Candidate { .. } = layout::classify(path) else {
+            continue;
+        };
+        let key = layout::prepared_key(path);
+        if w.failed.contains(&key) || (PACE.load(SeqCst) == PACE_DRIP && w.deferred.contains(&key))
+        {
+            continue;
+        }
+        let Some(copy) = layout::bucketed_path(path) else {
+            continue;
+        };
+        // A `stat` is a directory scan under the FAT lock: paced like I/O.
+        if let Err(why) = pace() {
+            w.offset = line_at;
+            set_state(State::Paused, Some(why));
+            return Err(Stopped);
+        }
+        if report_state {
+            report_state = false;
+            let mut r = report();
+            r.state = State::Running;
+            r.reason = None;
+        }
+        if fs::metadata(format!("{}{copy}", config::SD_MOUNT)).is_ok() {
+            w.found += 1;
+            continue;
+        }
+        return Ok(Some((line_at, next_at, path.to_string(), copy)));
+    }
+}
+
+enum Outcome {
+    Made,
+    Failed(String),
+    Abandoned {
+        drip: bool,
+    },
+    /// Stopped between choosing the file and taking the heap.
+    NotStarted,
+    CardError,
+}
+
+/// A card file read or written through [`pace`]: at most one
+/// [`config::IO_CHUNK`] per call, a pace check before each, and the first
+/// real I/O error remembered (the decoder turns every error into
+/// `InvalidData`, so this is how a card fault is told from a bad GIF).
+struct Paced {
+    file: File,
+    stopped: Option<Reason>,
+    io_error: Option<io::Error>,
+    bytes: u64,
+}
+
+impl Paced {
+    fn new(file: File) -> Paced {
+        Paced {
+            file,
+            stopped: None,
+            io_error: None,
+            bytes: 0,
+        }
+    }
+
+    fn check(&mut self) -> io::Result<()> {
+        pace().map_err(|why| {
+            self.stopped = Some(why);
+            io::Error::other("stopped")
+        })
+    }
+
+    fn note<T>(&mut self, r: io::Result<T>) -> io::Result<T> {
+        if let Err(e) = &r {
+            if self.io_error.is_none() {
+                self.io_error = Some(io::Error::new(e.kind(), e.to_string()));
+            }
+        }
+        r
+    }
+}
+
+impl Read for Paced {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.check()?;
+        let n = buf.len().min(config::IO_CHUNK);
+        let r = self.file.read(&mut buf[..n]);
+        self.note(r)
+    }
+}
+
+impl Write for Paced {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.check()?;
+        let n = buf.len().min(config::IO_CHUNK);
+        let r = self.file.write(&buf[..n]);
+        let n = self.note(r)?;
+        self.bytes += n as u64;
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        let r = self.file.flush();
+        self.note(r)
+    }
+}
+
+impl Seek for Paced {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let r = self.file.seek(pos);
+        self.note(r)
+    }
+}
+
+/// Take the heap, or find out we may not after all.
+fn hold() -> bool {
+    HOLDING.store(true, SeqCst);
+    if blocked().is_some() {
+        HOLDING.store(false, SeqCst);
+        return false;
+    }
+    true
+}
+
+/// Make one copy. Everything allocated here is dropped before `HOLDING` is
+/// cleared, whatever the outcome.
+fn prepare(gif: &str, copy: &str) -> Outcome {
+    if !hold() {
+        return Outcome::NotStarted;
+    }
+    let pace_name = if PACE.load(SeqCst) == PACE_DRIP {
+        "drip"
+    } else {
+        "full"
+    };
+    {
+        let mut r = report();
+        r.state = State::Running;
+        r.reason = None;
+        r.policy = Some(pace_name);
+        r.current = Some(gif.to_string());
+    }
+    let started = Instant::now();
+    let tmp = format!("{}{copy}.tmp", config::SD_MOUNT);
+    let mut frames = 0u32;
+    let outcome = encode_one(gif, copy, &tmp, &mut frames);
+    let secs = started.elapsed().as_secs_f32();
+    HOLDING.store(false, SeqCst);
+
+    let mut r = report();
+    r.current = None;
+    match &outcome {
+        Ok((gif_bytes, odm_bytes, written)) => {
+            r.session += 1;
+            r.written += written;
+            r.busy_secs += secs;
+            let slot = if pace_name == "drip" {
+                &mut r.drip
+            } else {
+                &mut r.full
+            };
+            slot.0 += secs;
+            slot.1 += 1;
+            let session = r.session;
+            drop(r);
+            cache::increment_prepared();
+            log::info!(
+                "cache builder: [{session}] {gif} prepared ({pace_name}): {frames} frames, {} KB -> {} KB in {:.2} s, heap {} B free",
+                gif_bytes / 1024,
+                odm_bytes / 1024,
+                secs,
+                free_heap()
+            );
+            Outcome::Made
+        }
+        Err(Fail::Stopped(why)) => {
+            r.aborted += 1;
+            drop(r);
+            let asked = match why {
+                Reason::Busy => ms_since(BUSY_AT.load(SeqCst)),
+                _ => ms_since(STOP_AT.load(SeqCst)),
+            };
+            // Printed when the task next starts: the player may be waiting
+            // for this one to be gone, and a UART line is ~15 ms.
+            *DEFERRED_LOG.lock().unwrap_or_else(|p| p.into_inner()) = Some(format!(
+                "cache builder: paused ({}) {asked} ms after it was asked; abandoned {gif} after {frames} frames, {secs:.2} s",
+                why.as_str(),
+            ));
+            set_state(State::Paused, Some(*why));
+            Outcome::Abandoned {
+                drip: pace_name == "drip",
+            }
+        }
+        Err(Fail::Bad(why)) => {
+            drop(r);
+            log::warn!("cache builder: {gif} cannot be prepared here: {why}");
+            Outcome::Failed(why.clone())
+        }
+        Err(Fail::Card(e)) => {
+            drop(r);
+            log::warn!("cache builder: card error on {gif}: {e}; backing off");
+            Outcome::CardError
+        }
+    }
+}
+
+enum Fail {
+    Stopped(Reason),
+    /// The GIF itself: recorded, never retried.
+    Bad(String),
+    /// The card: not the GIF's fault, retried later.
+    Card(String),
+}
+
+/// Encode `gif` into `tmp` and rename it to `copy`: `(GIF bytes, copy
+/// bytes, bytes written)`. The temp file is removed on every failure.
+fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64, u64, u64), Fail> {
+    let src = match File::open(format!("{}{gif}", config::SD_MOUNT)) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(Fail::Bad("not found".into())),
+        Err(e) => return Err(Fail::Card(e.to_string())),
+    };
+    let mut src = Paced::new(src);
+    // The logical screen, before anything is allocated for it: the card has
+    // 132x32 and 135x32 strays, nothing bigger, and a huge one would not fit.
+    let mut head = [0u8; 10];
+    if src.read_exact(&mut head).is_err() || &head[..3] != b"GIF" {
+        return Err(match src.stopped {
+            Some(why) => Fail::Stopped(why),
+            None if src.io_error.is_some() => Fail::Card(format!("{:?}", src.io_error)),
+            None => Fail::Bad("not a GIF".into()),
+        });
+    }
+    let (w, h) = (
+        u16::from_le_bytes([head[6], head[7]]) as usize,
+        u16::from_le_bytes([head[8], head[9]]) as usize,
+    );
+    if w * h > config::BUILDER_MAX_PIXELS {
+        return Err(Fail::Bad(format!("{w}x{h} is too large to prepare here")));
+    }
+    if src.seek(SeekFrom::Start(0)).is_err() {
+        return Err(Fail::Card("seek".into()));
+    }
+
+    if let Some(dir) = std::path::Path::new(tmp).parent() {
+        if let Err(e) = fs::create_dir_all(dir) {
+            return Err(Fail::Card(format!("creating {}: {e}", dir.display())));
+        }
+    }
+    let out = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(tmp)
+    {
+        Ok(f) => f,
+        Err(e) => return Err(Fail::Card(format!("creating {tmp}: {e}"))),
+    };
+    let mut out = Paced::new(out);
+    let result = odm::encode_gif_streaming(&mut src, &mut out, || {
+        *frames += 1;
+        check().map_err(|why| {
+            OUT_STOP.store(why as u8, SeqCst);
+            io::Error::other("stopped")
+        })
+    });
+    // `between`'s stop is kept apart, since `out` is borrowed while it runs.
+    let stopped = src
+        .stopped
+        .or(out.stopped)
+        .or(Reason::from_u8(OUT_STOP.swap(0, SeqCst)));
+    let failure = match &result {
+        Ok(_) => None,
+        Err(_) if stopped.is_some() => stopped.map(Fail::Stopped),
+        Err(e) if odm::is_too_many_colours(e) => Some(Fail::Bad("more than 256 colours".into())),
+        Err(_) if out.io_error.is_some() || src.io_error.is_some() => {
+            let e = out.io_error.take().or(src.io_error.take());
+            Some(Fail::Card(format!("{e:?}")))
+        }
+        Err(e) => Some(Fail::Bad(e.to_string())),
+    };
+    let sized = match &result {
+        Ok(stats) if failure.is_none() => out
+            .file
+            .set_len(stats.odm_bytes)
+            .and_then(|()| out.file.flush()),
+        _ => Ok(()),
+    };
+    let written = out.bytes;
+    // Closed before anything is removed or renamed: FAT must never have an
+    // open file unlinked under it.
+    drop(out);
+    drop(src);
+    let fail = |f: Fail| {
+        let _ = fs::remove_file(tmp);
+        Err(f)
+    };
+    if let Some(f) = failure {
+        return fail(f);
+    }
+    let Ok(stats) = result else {
+        return fail(Fail::Bad("encode failed".into()));
+    };
+    if let Err(e) = sized {
+        return fail(Fail::Card(format!("truncating {tmp}: {e}")));
+    }
+    let dest = format!("{}{copy}", config::SD_MOUNT);
+    if let Err(e) = fs::rename(tmp, &dest) {
+        // Someone else (the browser) put a copy there meanwhile: keep theirs.
+        if fs::metadata(&dest).is_ok() {
+            let _ = fs::remove_file(tmp);
+        } else {
+            return fail(Fail::Card(format!("rename to {dest}: {e}")));
+        }
+    }
+    Ok((stats.gif_bytes, stats.odm_bytes, written))
+}
+
+static OUT_STOP: AtomicU8 = AtomicU8::new(0);
+
+/// The failure file's GIFs, as `layout::prepared_key`s.
+fn load_failed() -> Vec<u32> {
+    let Ok(f) = File::open(config::BUILDER_FAILED_PATH) else {
+        return Vec::new();
+    };
+    let mut keys = Vec::new();
+    for line in BufReader::with_capacity(512, f).lines() {
+        let Ok(line) = line else { break };
+        let path = line.split('\t').next().unwrap_or("").trim();
+        if !path.is_empty() && keys.len() < config::BUILDER_MAX_FAILED {
+            keys.push(layout::prepared_key(path));
+        }
+    }
+    keys
+}
+
+fn record_failure(gif: &str, why: &str) {
+    let _ = fs::create_dir_all(config::ODM_ROOT);
+    let appended = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(config::BUILDER_FAILED_PATH)
+        .and_then(|mut f| writeln!(f, "{gif}\t{why}"));
+    if let Err(e) = appended {
+        log::warn!("cache builder: recording the failure of {gif}: {e}");
+    }
+}

@@ -29,7 +29,7 @@ pub use index::{write_index, write_index_with_overrides, IndexHeader, IndexedCat
 pub use manifest::{
     entry_at, index_matching, normalize_title, parse_manifest, render_manifest, scan, Entry,
 };
-pub use odm::{encode_gif, EncodeStats, OdmSource};
+pub use odm::{encode_gif, encode_gif_streaming, EncodeStats, OdmSource};
 pub use overrides::{Override, OverrideSet, Overrides};
 pub use player::{FrameSource, GifSource};
 pub use scheduler::{Mode, Scheduler};

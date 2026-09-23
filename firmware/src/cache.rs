@@ -131,6 +131,33 @@ pub fn invalidate() {
     }
 }
 
+/// The playlist the count (and the cache builder) is for: the manifest's
+/// filesystem path and the platform filter. Empty before the first build.
+pub fn playlist() -> (String, String) {
+    let s = STATE.lock().unwrap();
+    (s.manifest.clone(), s.platforms.clone())
+}
+
+/// Bumped by every change to the copies or the playlist.
+pub fn generation() -> u32 {
+    GEN.load(Relaxed)
+}
+
+/// The cache builder made one more copy: count it without a recount (a
+/// recount is a manifest pass; the builder asks for one at the end of its
+/// pass instead). A count in flight may publish over this; the next one
+/// puts it right.
+pub fn increment_prepared() {
+    if let Some(p) = STATE.lock().unwrap().prepared.as_mut() {
+        *p += 1;
+    }
+}
+
+/// The last count without asking for one (the heartbeat's view).
+pub fn peek() -> Option<usize> {
+    STATE.lock().unwrap().prepared
+}
+
 /// `GET /api/cache`: the current state, starting a count if it is stale and
 /// none is running.
 pub fn snapshot() -> State {
