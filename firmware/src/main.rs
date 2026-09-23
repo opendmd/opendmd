@@ -228,7 +228,11 @@ fn main() -> Result<()> {
     let mut confirmed = false;
 
     // --- Shared state, the HTTP server, and the network worker ------------
-    let status = Arc::new(Mutex::new(Status::new(VERSION, settings.hostname.clone())));
+    let status = Arc::new(Mutex::new(Status::new(
+        VERSION,
+        settings.hostname.clone(),
+        epoch,
+    )));
     {
         let mut s = status.lock().unwrap();
         s.sd_mounted = true;
@@ -302,14 +306,27 @@ fn main() -> Result<()> {
                     }
                 }
                 Command::TogglePause(reply) => {
+                    let now = epoch.elapsed();
                     let paused = match engine.as_mut() {
                         Some(e) => {
-                            e.toggle_pause(epoch.elapsed());
+                            e.toggle_pause(now);
                             e.is_paused()
                         }
                         None => false,
                     };
-                    status.lock().unwrap().paused = paused;
+                    let mut s = status.lock().unwrap();
+                    // The frame on screen is frozen at `paused_at`; resuming
+                    // shifts its times by the pause, as the engine shifts its
+                    // own, so the reported position carries on from there.
+                    if paused && !s.paused {
+                        s.paused_at = now;
+                    } else if !paused && s.paused {
+                        let paused_for = now.saturating_sub(s.paused_at);
+                        s.frame_shown_at += paused_for;
+                        s.frame_due_at += paused_for;
+                    }
+                    s.paused = paused;
+                    drop(s);
                     let _ = reply.send(paused);
                 }
                 Command::PlayNow { path, reply } => {
@@ -473,7 +490,15 @@ fn main() -> Result<()> {
             0
         };
         sampled_min = sampled_min.min(free_heap());
-        match outcome {
+        // What goes to /api/status from this frame: the file's position
+        // (content time, see `NowPlaying::elapsed`) and frame number, when the
+        // frame went up and when the next is due — all values the loop holds
+        // anyway, published with the fields below in the lock step 4 already
+        // takes. The browser's preview syncs its clock to these.
+        let mut shown = None;
+        let mut new_file = None;
+        let mut exhausted = false;
+        let sleep_for = match outcome {
             TickOutcome::Frame {
                 playing,
                 started: is_new,
@@ -491,11 +516,6 @@ fn main() -> Result<()> {
                         path: playing.path.clone(),
                         served: sd::take_last(),
                     });
-                    let mut s = status.lock().unwrap();
-                    s.ordinal = playing.ordinal;
-                    s.path = playing.path.clone();
-                    s.title = playing.title.clone();
-                    s.gifs_started = playing.ordinal;
                 }
                 // Attribute every new low-water mark to the GIF on screen, so
                 // a heap regression names the file that caused it.
@@ -524,8 +544,12 @@ fn main() -> Result<()> {
                         .then(|| now.saturating_sub(next_frame_at).as_millis() as u64);
                     probe::frame(&times, late_ms, is_new, &playing.path);
                 }
+                shown = Some((playing.elapsed, playing.frame, now, next_frame_at));
+                if is_new {
+                    new_file = Some(playing);
+                }
                 match next_frame_at.checked_sub(now) {
-                    Some(remaining) => thread::sleep(remaining),
+                    Some(remaining) => remaining,
                     None => {
                         // Already late. This is the acceptance metric: count it
                         // and remember the worst, then yield a tick so the
@@ -533,32 +557,24 @@ fn main() -> Result<()> {
                         deadline_misses += 1;
                         let late = now.saturating_sub(next_frame_at).as_millis() as u64;
                         worst_lateness_ms = worst_lateness_ms.max(late);
-                        thread::sleep(config::CATCHUP_SLEEP);
+                        config::CATCHUP_SLEEP
                     }
                 }
-                // The panel is up, the card is mounted and a frame is on the
-                // glass: this image works. Tell the bootloader, so that a
-                // freshly OTA'd image is kept rather than rolled back at the
-                // next reset. Once per boot, after the frame's sleep.
-                if !confirmed {
-                    confirmed = true;
-                    ota::confirm_running_image();
-                }
-                sampled_min = sampled_min.min(free_heap());
             }
-            TickOutcome::Idle => thread::sleep(config::IDLE_SLEEP),
+            TickOutcome::Idle => config::IDLE_SLEEP,
             TickOutcome::Exhausted => {
                 log::error!(
                     "playlist exhausted — nothing opened. Reshuffling in {}s",
                     config::RETRY_INTERVAL.as_secs()
                 );
-                thread::sleep(config::RETRY_INTERVAL);
-                // The index is still good: reseed and rewind, don't re-read.
-                eng.reset(random_seed());
+                exhausted = true;
+                config::RETRY_INTERVAL
             }
-        }
+        };
 
-        // 4. Publish. Cheap fields only: the strings move when a GIF starts.
+        // 4. Publish, before the sleep, so a status read during the frame's
+        //    hold sees the frame that is on the glass. Cheap fields only: the
+        //    strings move when a GIF starts.
         if let Ok(mut s) = status.lock() {
             s.uptime_secs = epoch.elapsed().as_secs();
             s.entries = entries;
@@ -566,6 +582,34 @@ fn main() -> Result<()> {
             s.heap_floor = sampled_min;
             s.deadline_misses = deadline_misses;
             s.worst_lateness_ms = worst_lateness_ms;
+            if let Some(playing) = new_file {
+                s.ordinal = playing.ordinal;
+                s.path = playing.path;
+                s.title = playing.title;
+                s.gifs_started = playing.ordinal;
+            }
+            if let Some((elapsed, frame, at, due)) = shown {
+                s.frame_elapsed = elapsed;
+                s.frame = frame;
+                s.frame_shown_at = at;
+                s.frame_due_at = due;
+            }
+        }
+
+        thread::sleep(sleep_for);
+        if exhausted {
+            // The index is still good: reseed and rewind, don't re-read.
+            eng.reset(random_seed());
+        } else if shown.is_some() {
+            // The panel is up, the card is mounted and a frame is on the
+            // glass: this image works. Tell the bootloader, so that a freshly
+            // OTA'd image is kept rather than rolled back at the next reset.
+            // Once per boot, after the frame's sleep.
+            if !confirmed {
+                confirmed = true;
+                ota::confirm_running_image();
+            }
+            sampled_min = sampled_min.min(free_heap());
         }
 
         if last_heartbeat.elapsed() >= config::HEARTBEAT_INTERVAL {

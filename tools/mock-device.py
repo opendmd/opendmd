@@ -132,6 +132,14 @@ so a UI that stats or plays in a big directory feels it.
 
 # The now-playing simulation
 
+Status carries `t_ms` (ms since the mock "booted") and, in `now_playing`,
+`elapsed_ms` and `frame`: the file's position runs on a simulated clock from
+the moment it started (paused: frozen; resumed: shifted by the pause, as the
+engine does) through the file's real frame delays — the prepared copy's ODM
+frame headers when there is one, else the GIF's Graphic Control Extensions
+with the player's rules (0 -> 100 ms, else >= 20 ms), identical to the ODM
+delays for all 11,039 copies on the card. An ideal device: never late.
+
 `--dwell` (default 5s) is a fixed cadence, independent of the configured
 `dwell_min`/`dwell_max` (which are only ever stored and reported, never used
 for actual pacing here — real dwell timing depends on each GIF's own loop
@@ -382,6 +390,56 @@ def bucketed_path(path: str):
     return f"/odm/{d}/{bb}/{odm}" if d else f"/odm/{bb}/{odm}"
 
 
+def gif_delays(b: bytes) -> list[int]:
+    """Each frame's delay in ms, by the player's rules (GifSource: a GIF delay
+    of 0, or no Graphic Control Extension, is 100 ms; anything else is floored
+    at 20 ms). Walks the blocks without decoding a pixel."""
+    if b[:3] != b"GIF" or len(b) < 13:
+        return []
+    flags = b[10]
+    i = 13 + (3 * (2 << (flags & 7)) if flags & 0x80 else 0)
+    delays, pending = [], 0
+
+    def skip_blocks(i):
+        while i < len(b) and b[i]:
+            i += b[i] + 1
+        return i + 1
+
+    while i < len(b):
+        c = b[i]
+        i += 1
+        if c == 0x21 and i < len(b):
+            label = b[i]
+            i += 1
+            if label == 0xF9 and i + 3 < len(b) and b[i] >= 4:
+                pending = b[i + 2] | (b[i + 3] << 8)
+            i = skip_blocks(i)
+        elif c == 0x2C and i + 9 <= len(b):
+            fl = b[i + 8]
+            i += 9 + (3 * (2 << (fl & 7)) if fl & 0x80 else 0)
+            i = skip_blocks(i + 1)  # past the LZW minimum code size
+            delays.append(100 if pending == 0 else max(pending * 10, 20))
+            pending = 0
+        else:
+            break  # 0x3B trailer, or junk
+    return delays
+
+
+def odm_delays(b: bytes) -> list[int]:
+    """The `delay_ms` of every ODM frame header (docs/odm-format.md)."""
+    if b[:4] != b"ODM1" or len(b) < 32:
+        return []
+    count = int.from_bytes(b[9:13], "little")
+    i = 32 + 3 * int.from_bytes(b[13:15], "little")
+    out = []
+    for _ in range(count):
+        if i + 6 > len(b):
+            break
+        out.append(int.from_bytes(b[i:i + 2], "little"))
+        i += 6 + int.from_bytes(b[i + 2:i + 6], "little")
+    return out
+
+
 def enoent(path: str) -> str:
     """Rust's io::Error Display for ENOENT, which the firmware's error
     messages embed verbatim."""
@@ -540,6 +598,11 @@ class Player:
         self.manifest = MANIFEST_REL
         self.index_state = "building"
         self.played: str | None = None  # an off-playlist POST /api/play
+        # The file's own clock: its position is (now or paused_at) - file_t0,
+        # advanced through the real frame delays (see position()).
+        self.file_t0 = time.monotonic()
+        self.paused_at = 0.0
+        self.delays: dict[str, list[int]] = {}
         self.rebuild_playlist()
 
     def resolve(self, set_: str) -> str:
@@ -591,7 +654,7 @@ class Player:
         self.played = path
         self.ordinal += 1
         self.gifs_started += 1
-        self.last_advance = time.monotonic()
+        self.last_advance = self.file_t0 = time.monotonic()
 
     def advance(self):
         self.played = None
@@ -602,10 +665,56 @@ class Player:
         self.pos = (self.pos + 1) % len(self.order)
         self.ordinal += 1
         self.gifs_started += 1
-        self.last_advance = time.monotonic()
+        self.last_advance = self.file_t0 = time.monotonic()
         if random.random() < 0.03:
             self.deadline_misses += 1
             self.worst_lateness_ms = max(self.worst_lateness_ms, random.randint(420, 560))
+
+    def set_paused(self, paused: bool):
+        """As the engine does: a pause freezes the file's position, and
+        resuming shifts its clocks (and the dwell's) by the pause."""
+        now = time.monotonic()
+        if paused and not self.paused:
+            self.paused_at = now
+        elif not paused and self.paused:
+            self.file_t0 += now - self.paused_at
+            self.last_advance += now - self.paused_at
+        self.paused = paused
+
+    def frame_delays(self, path: str) -> list[int]:
+        """The frame delays of what the device would play for `path`: its
+        prepared copy if there is one, else the file. Cached per path."""
+        if path not in self.delays:
+            out = []
+            for cand in (bucketed_path(path), path):
+                rel = card_path(cand) if cand else None
+                f = self.ctx.fs.read_path(rel) if rel else None
+                if f is None:
+                    continue
+                b = f.read_bytes()
+                out = odm_delays(b) if b[:4] == b"ODM1" else gif_delays(b)
+                if out:
+                    break
+            self.delays[path] = out
+        return self.delays[path]
+
+    def position(self):
+        """(elapsed_ms, frame): the file's position in its own timeline and
+        the 1-based number of the frame that covers it, loops included — an
+        ideal device, never late."""
+        cur = self.current()
+        delays = self.frame_delays(cur) if cur else []
+        loop = sum(delays)
+        if not loop:
+            return 0, 0
+        at = self.paused_at if self.paused else time.monotonic()
+        ms = int((at - self.file_t0) * 1000)
+        loops, rem = divmod(ms, loop)
+        idx = 0
+        while idx < len(delays) and rem >= delays[idx]:
+            rem -= delays[idx]
+            idx += 1
+        return ms, loops * len(delays) + idx + 1
 
     def tick(self):
         if self.paused or not self.playlist:
@@ -941,10 +1050,12 @@ def make_handler(ctx: Context, quiet: bool):
                 player.tick()
                 cur = player.current()
                 free, floor, idf_min = heap_numbers(player)
+                elapsed_ms, frame = player.position()
                 obj = {
                     "version": "0.1.0-mock",
                     "variant": "4mb",
                     "uptime_secs": int(time.monotonic() - player.boot_time),
+                    "t_ms": int((time.monotonic() - player.boot_time) * 1000),
                     "ip": "127.0.0.1",
                     "wifi": "sta",
                     "hostname": ctx.settings["hostname"],
@@ -952,6 +1063,8 @@ def make_handler(ctx: Context, quiet: bool):
                         "ordinal": player.ordinal,
                         "path": cur if cur else "",
                         "title": derive_title(cur, ctx.settings) if cur else "",
+                        "elapsed_ms": elapsed_ms,
+                        "frame": frame,
                     },
                     "paused": player.paused,
                     "entries": len(player.playlist),
@@ -974,7 +1087,7 @@ def make_handler(ctx: Context, quiet: bool):
 
         def h_pause(self, path):
             with ctx.lock:
-                ctx.player.paused = not ctx.player.paused
+                ctx.player.set_paused(not ctx.player.paused)
                 paused = ctx.player.paused
             self.send_json(200, {"ok": True, "paused": paused})
 

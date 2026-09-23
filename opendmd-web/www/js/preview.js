@@ -53,6 +53,10 @@ export class PanelPreview {
   get path() { return this.p.path; }
   setPaused(v) { this.p.setPaused(v); }
   get paused() { return this.p.paused; }
+  // The panel was `elapsed` ms into this file at local time `at`
+  // (performance.now()); returns the drift before correction (NaN: nothing loaded).
+  syncTo(elapsed, at) { return this.p.syncTo(elapsed, at); }
+  get synced() { return this.p.synced; }
   setDwell(min, max) { this.p.setDwell(min, max); }
   apply() { this.p.setLook(look.gamma, look.gain, look.bloom, look.flat); }
 }
@@ -65,7 +69,8 @@ export function setLook(patch) {
 
 // The collapsible "panel look" section: the simulator's --led-gain, --bloom
 // and --gamma, plus flat (nearest-neighbour, no LED simulation).
-export function lookControls() {
+// `extra` (optional) goes at the end of the row: the Now view's drift readout.
+export function lookControls(extra) {
   const slider = (key, min, max, step) => {
     const out = h('output.mono', look[key].toFixed(2));
     const input = h('input', {
@@ -78,5 +83,5 @@ export function lookControls() {
   return h('details.card', h('summary', 'Panel look'),
     h('div.row', slider('gain', 0, 4, 0.05), slider('bloom', 0, 1, 0.01), slider('gamma', 0.5, 4, 0.05),
       h('label', flat, 'flat'),
-      h('button.sm', { onclick: (e) => { setLook(DEFAULT_LOOK); const d = lookControls(); d.open = true; e.target.closest('details').replaceWith(d); } }, 'reset')));
+      h('button.sm', { onclick: (e) => { setLook(DEFAULT_LOOK); const d = lookControls(extra); d.open = true; e.target.closest('details').replaceWith(d); } }, 'reset'), extra));
 }

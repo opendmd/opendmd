@@ -357,6 +357,22 @@ impl Preview {
         }));
     }
 
+    /// The panel was `elapsed_ms` into this file at `at_ms` on this page's
+    /// `performance.now()` clock, advancing `rate` ms per ms: follow it from
+    /// now on (see `Player::sync_to`). Returns the drift before correction,
+    /// positive when the preview was ahead, or NaN with nothing loaded.
+    #[wasm_bindgen(js_name = syncTo)]
+    pub fn sync_to(&mut self, elapsed_ms: f64, at_ms: f64, rate: f64) -> f64 {
+        self.player
+            .sync_to(at(elapsed_ms), at_ms, rate, now_ms())
+            .unwrap_or(f64::NAN)
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn synced(&self) -> bool {
+        self.player.is_synced()
+    }
+
     #[wasm_bindgen(js_name = setPaused)]
     pub fn set_paused(&mut self, paused: bool) {
         self.player.set_paused(paused, at(now_ms()));

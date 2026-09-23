@@ -706,11 +706,16 @@ fn applied_json(a: &Applied) -> String {
     )
 }
 
+/// `t_ms` is the device's clock (ms since the main loop's epoch) at the
+/// moment this is built, and `now_playing.elapsed_ms` the file's position at
+/// that same moment — the pair a browser needs to put its preview in step
+/// with the panel, correcting for its own request latency the NTP way.
 fn status_json(s: &Status) -> String {
+    let t = s.epoch.elapsed();
     format!(
         concat!(
-            r#"{{"version":{},"variant":{},"uptime_secs":{},"ip":{},"wifi":{},"hostname":{},"#,
-            r#""now_playing":{{"ordinal":{},"path":{},"title":{}}},"paused":{},"#,
+            r#"{{"version":{},"variant":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"#,
+            r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}}},"paused":{},"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"gifs_started":{},"#,
@@ -719,12 +724,15 @@ fn status_json(s: &Status) -> String {
         json_string(s.version),
         json_string(ota::FLASH_VARIANT),
         s.uptime_secs,
+        t.as_millis(),
         json_string(&s.ip),
         json_string(s.wifi),
         json_string(&s.hostname),
         s.ordinal,
         json_string(&s.path),
         json_string(&s.title),
+        s.position_at(t).as_millis(),
+        s.frame,
         s.paused,
         s.entries,
         json_string(&s.manifest),

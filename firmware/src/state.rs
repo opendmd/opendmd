@@ -16,6 +16,7 @@
 //! loop blocking on the handler (which is not).
 
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 /// Free byte-addressable heap, in bytes.
 ///
@@ -41,6 +42,22 @@ pub struct Status {
     pub path: String,
     pub title: String,
     pub paused: bool,
+    /// The main loop's clock (`Duration`s below are since this); a handler
+    /// reads it to stamp `t_ms` and to extrapolate the position.
+    pub epoch: Instant,
+    /// The frame on the glass: where it starts in the file's timeline
+    /// (`NowPlaying::elapsed`, loops included), its 1-based number in the
+    /// file, when it went up (after the blit) and when the next one is due.
+    /// Written by the display loop with the other per-frame fields, from
+    /// values it already holds; `/api/status` turns them into `elapsed_ms`
+    /// as of the moment it is built, so the loop does no extra work for it.
+    pub frame_elapsed: Duration,
+    pub frame: u64,
+    pub frame_shown_at: Duration,
+    pub frame_due_at: Duration,
+    /// When the pause began (valid while `paused`): the position is frozen
+    /// there.
+    pub paused_at: Duration,
     pub entries: usize,
     /// The manifest actually in play (filesystem path), as of the last
     /// playlist build: `/sdcard/filelist.txt` for `set` = `""`. Always a list
@@ -73,7 +90,7 @@ pub struct Status {
 }
 
 impl Status {
-    pub fn new(version: &'static str, hostname: String) -> Self {
+    pub fn new(version: &'static str, hostname: String, epoch: Instant) -> Self {
         Status {
             version,
             uptime_secs: 0,
@@ -84,6 +101,12 @@ impl Status {
             path: String::new(),
             title: String::new(),
             paused: false,
+            epoch,
+            frame_elapsed: Duration::ZERO,
+            frame: 0,
+            frame_shown_at: Duration::ZERO,
+            frame_due_at: Duration::ZERO,
+            paused_at: Duration::ZERO,
             entries: 0,
             manifest: String::new(),
             index_state: "building",
@@ -98,6 +121,21 @@ impl Status {
             sd_mounted: false,
             sd_capacity_bytes: 0,
         }
+    }
+}
+
+impl Status {
+    /// Where the file on screen is, in its own timeline, at `t` (since
+    /// `epoch`): the frame's start plus the time it has been up, but never
+    /// past its hold — a frame that is late (a deadline miss) is still the
+    /// one on the glass, so the position waits with it. Frozen while paused.
+    pub fn position_at(&self, t: Duration) -> Duration {
+        if self.frame == 0 {
+            return Duration::ZERO;
+        }
+        let at = if self.paused { self.paused_at } else { t };
+        let hold = self.frame_due_at.saturating_sub(self.frame_shown_at);
+        self.frame_elapsed + at.saturating_sub(self.frame_shown_at).min(hold)
     }
 }
 
