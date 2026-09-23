@@ -221,17 +221,54 @@ fn a_preview_loops_forever_and_a_dwell_reports_its_end() {
 }
 
 #[test]
-fn swapping_files_keeps_the_player_and_blanks_the_canvas() {
+fn swapping_files_transitions_from_the_old_frame() {
+    use opendmd_core::compositor::{Kind, Transition};
     let mut player = Player::new(2, Look { flat: true, ..LOOK });
+    player.set_transition(Transition::new(Kind::Fade, ms(200)));
     player.load("/gifs/X/A.gif", white_pixel_gif(1), ms(0));
     player.tick(ms(0)).unwrap();
-    assert_eq!(player.canvas().get(4, 2), Rgb::new(255, 255, 255));
-    player.load("/gifs/X/B.gif", b"not a gif".to_vec(), ms(10));
-    assert_eq!(player.canvas().get(4, 2), Rgb::new(0, 0, 0));
-    let err = player.tick(ms(10)).unwrap_err();
-    assert!(err.contains("/gifs/X/B.gif"), "{err}");
+    assert!(!player.is_transitioning(), "the first file cuts in");
+    assert_eq!(player.shown().get(4, 2), Rgb::new(255, 255, 255));
+    // B has nothing at (4, 2): the old pixel fades out, then B is up.
+    player.load("/gifs/X/B.gif", counting_gif(), ms(10));
+    assert_eq!(player.tick(ms(10)), Ok(Tick::Frame));
+    assert!(player.is_transitioning());
+    assert_eq!(
+        player.shown().get(4, 2),
+        Rgb::new(255, 255, 255),
+        "t = 0: the old frame"
+    );
+    assert_eq!(player.tick(ms(35)), Ok(Tick::Frame));
+    assert_eq!(player.tick(ms(60)), Ok(Tick::Frame));
+    assert_eq!(
+        player.shown().get(4, 2),
+        Rgb::new(127, 127, 127),
+        "halfway down"
+    );
+    let mut t = 60;
+    while player.is_transitioning() {
+        t += 10;
+        player.tick(ms(t)).unwrap();
+        assert!(t <= 210, "the fade did not end");
+    }
+    assert_eq!(t, 210);
+    assert_eq!(player.shown(), player.canvas());
+    assert_eq!(player.shown().get(4, 2), Rgb::BLACK);
+    // replay() starts the file again, transitioning from what is shown.
+    player.replay(ms(300));
+    player.tick(ms(300)).unwrap();
+    assert!(player.is_transitioning());
+    // A bad file is reported and dropped.
+    player.load("/gifs/X/C.gif", b"not a gif".to_vec(), ms(1000));
+    let err = player.tick(ms(1000)).unwrap_err();
+    assert!(err.contains("/gifs/X/C.gif"), "{err}");
     assert_eq!(player.path(), "", "a bad file is dropped");
-    assert_eq!(player.tick(ms(20)), Ok(Tick::Idle));
+    assert_eq!(player.tick(ms(1020)), Ok(Tick::Idle));
+    // After unload the next file cuts in again.
+    player.unload();
+    player.load("/gifs/X/A.gif", white_pixel_gif(1), ms(2000));
+    player.tick(ms(2000)).unwrap();
+    assert!(!player.is_transitioning());
 }
 
 #[test]

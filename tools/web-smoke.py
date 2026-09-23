@@ -75,6 +75,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -216,6 +217,126 @@ def canvas_sum(page: Page, sel: str) -> int:
         for (let i = 0; i < d.length; i += 4) n = (n * 31 + d[i] + d[i+1] * 3 + d[i+2] * 7) >>> 0;
         return n;
     }""", sel)
+
+
+# The Now preview, hooked at Preview.load: the canvas just before the new
+# file goes in (the old picture), and the new file's path and bytes.
+HOOK_LOAD = """async () => {
+    const m = await import('./pkg/opendmd_web.js');
+    const P = m.Preview.prototype;
+    P.__orig ??= P.load;
+    window.__tr = null;
+    P.load = function (path, bytes) {
+        const c = document.querySelector('#now-panel');
+        if (c.offsetParent !== null && !window.__tr)
+            window.__tr = { path, bytes: bytes.slice(), at: performance.now(),
+                            before: c.getContext('2d').getImageData(0, 0, c.width, c.height).data };
+        return P.__orig.call(this, path, bytes);
+    };
+}"""
+
+# The Now preview now, against the picture before the load and against the
+# new file's first frame rendered by a second Preview with no transition.
+# Pixels count as different when their RGB differs by more than 24 in sum.
+MID_TRANSITION = """async () => {
+    const c = document.querySelector('#now-panel');
+    const mid = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    const dt = performance.now() - window.__tr.at;
+    const m = await import('./pkg/opendmd_web.js');
+    m.Preview.prototype.load = m.Preview.prototype.__orig;
+    const { look } = await import('./js/preview.js');
+    const o = document.createElement('canvas');
+    o.width = c.width;
+    const p = new m.Preview(o, look.gamma, look.gain, look.bloom, look.flat);
+    p.setTransition('none', 400);
+    p.load(window.__tr.path, window.__tr.bytes);
+    p.frame();
+    const first = o.getContext('2d').getImageData(0, 0, o.width, o.height).data;
+    p.free();
+    const diff = (a, b) => { let n = 0; for (let i = 0; i < a.length; i += 4)
+        if (Math.abs(a[i] - b[i]) + Math.abs(a[i+1] - b[i+1]) + Math.abs(a[i+2] - b[i+2]) > 24) n++; return n; };
+    return { dt, path: window.__tr.path, vs_before: diff(mid, window.__tr.before), vs_first: diff(mid, first),
+             before_first: diff(window.__tr.before, first) };
+}"""
+
+
+def wait_config(base: str, ok, timeout_s: float = 10) -> dict:
+    deadline = time.time() + timeout_s
+    while True:
+        cfg = get_json(base + "/api/config")
+        if ok(cfg) or time.time() > deadline:
+            return cfg
+        time.sleep(0.2)
+
+
+def mid_transition(page: Page, base: str) -> dict:
+    """Skip on the device; ~200 ms after the Now preview loads the new file
+    (the transition's start), compare the preview with the old picture and
+    with the new file's first frame. Tries up to three skips for a pair of
+    files that differ enough to tell."""
+    r = {}
+    for _ in range(3):
+        wait_sync(page, 2)
+        page.evaluate(HOOK_LOAD)
+        post_json(base + "/api/skip", {})
+        page.wait_for_function("window.__tr !== null", timeout=15000)
+        page.wait_for_function("performance.now() - window.__tr.at >= 200", timeout=5000)
+        r = page.evaluate(MID_TRANSITION)
+        if r["before_first"] > 2000:
+            break
+    return r
+
+
+def transition_checks(page: Page, base: str) -> None:
+    """Settings -> Transition: save Dissolve and Wipe (Normal), and check the
+    Now preview is mid-transition 200 ms into a new file each time; the card's
+    Preview button plays one on the page; bad values are refused."""
+    cfg = get_json(base + "/api/config")
+    check(cfg.get("transition") == "dissolve" and cfg.get("transition_ms") == 400,
+          f"settings: transition in /api/config ({cfg.get('transition')}, {cfg.get('transition_ms')})")
+    for bad in ({"transition": "sparkle"}, {"transition_ms": 5}, {"transition_ms": 9000}):
+        try:
+            put_json(base + "/api/config", bad)
+            check(False, f"settings: {bad} refused")
+        except urllib.error.HTTPError as e:
+            check(e.code == 400, f"settings: {bad} refused ({e.code})")
+    for kind, label in (("dissolve", "Dissolve"), ("wipe_left", "Wipe")):
+        goto_view(page, "settings")
+        page.select_option("#st-trans", kind)
+        page.select_option("#st-trans-ms", "400")
+        # Saving the same value is "nothing changed"; flip the speed first.
+        if get_json(base + "/api/config")["transition"] == kind:
+            put_json(base + "/api/config", {"transition_ms": 250})
+            page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
+        page.click("#st-save-trans")
+        cfg = wait_config(base, lambda c: c["transition"] == kind and c["transition_ms"] == 400)
+        check(cfg["transition"] == kind and cfg["transition_ms"] == 400, f"settings: {label} / Normal saved ({cfg['transition']}:{cfg['transition_ms']})")
+        goto_view(page, "now")
+        r = mid_transition(page, base)
+        check(r["vs_before"] > 0.1 * r["before_first"] and r["vs_first"] > 0.1 * r["before_first"],
+              f"now: {label} 400 ms, {r['dt']:.0f} ms after the new file loaded the preview differs from the old "
+              f"picture ({r['vs_before']} px) and from the new file's first frame ({r['vs_first']} px); "
+              f"those two differ by {r['before_first']} px ({r['path']})")
+    # The card's Preview: the panel's file, restarted with a transition, on the page only.
+    goto_view(page, "settings")
+    page.select_option("#st-trans", "blinds")
+    before = get_json(base + "/api/status")["now_playing"]
+    page.click("#st-trans-preview")
+    wait_lit(page, "#st-trans-panel", "settings transition preview")
+    page.wait_for_timeout(700)
+    page.click("#st-trans-preview")
+    page.wait_for_timeout(150)
+    card = OUT / "settings-transition-laptop.png"
+    page.locator("#st-trans-card").screenshot(path=str(card))
+    print(f"  shot {card}")
+    after = get_json(base + "/api/status")
+    check(get_json(base + "/api/config")["transition"] == "wipe_left" and after["now_playing"]["ordinal"] == before["ordinal"],
+          "settings: Preview plays on the page only (config and the panel untouched)")
+    page.select_option("#st-trans", "dissolve")
+    page.click("#st-save-trans")
+    check(wait_config(base, lambda c: c["transition"] == "dissolve")["transition"] == "dissolve", "settings: back to Dissolve")
+    no_leaks(page, "settings (transition)")
+    goto_view(page, "now")
 
 
 def shot(page: Page, name: str, size: str) -> None:
@@ -483,6 +604,7 @@ def mock_pass(browser) -> None:
         drifts, rtts = drift_stats(page, 8)
         print("  " + summarise("mock drift over 8 s", drifts, rtts))
         check(bool(drifts) and max(abs(d) for d in drifts) < 60, "now: every sync on the mock under 60 ms")
+        transition_checks(page, base)
         before = page.inner_text("#now-path")
         page.click("#now-skip")
         page.wait_for_function(f"document.querySelector('#now-path').textContent !== {json.dumps(before)}", timeout=10000)
@@ -930,6 +1052,9 @@ def device_pass(browser, device: str) -> None:
         goto_view(page, "settings")
         page.wait_for_selector("#st-facts .stat", timeout=20000)
         check(page.input_value("#st-hostname") != "", "device settings: config GET rendered")
+        cfg = get_json(base + "/api/config")
+        check(cfg.get("transition") and page.input_value("#st-trans-ms") == str(cfg.get("transition_ms")),
+              f"device settings: transition {cfg.get('transition')}:{cfg.get('transition_ms')} shown")
         st = get_json(base + "/api/status")
         facts = page.inner_text("#st-facts")
         check(st.get("index_state") in facts and (st.get("www_version") or "–") in facts,

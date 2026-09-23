@@ -25,8 +25,15 @@
 //! ticked), so the page also passes the rate it measured from the device's
 //! own reports. Clocks are synced, never pixels: the device sends nothing but
 //! two numbers.
+//!
+//! **Transitions** are the engine's own ([`Engine::set_transition`]): the
+//! canvas is kept across [`Player::load`], and the new file's engine is told
+//! it carries over what is on it, so the preview goes from one file to the
+//! next the way the panel does. What is drawn is always
+//! [`Engine::display`] — the compositor's output while one runs.
 
 use opendmd_core::canvas::{Canvas, HEIGHT, WIDTH};
+use opendmd_core::compositor::Transition;
 use opendmd_core::engine::{Catalog, DwellPolicy, Engine, ReadSeek, Source, TickOutcome};
 
 use opendmd_core::manifest::Entry;
@@ -163,13 +170,15 @@ fn ms_of(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
 
-fn engine_for(path: &str, bytes: &Bytes, dwell: DwellPolicy) -> Engine {
-    Engine::new(
+fn engine_for(path: &str, bytes: &Bytes, dwell: DwellPolicy, transition: Transition) -> Engine {
+    let mut engine = Engine::new(
         Box::new(OneCatalog(path.to_string())),
         Scheduler::new(1, Mode::Sequential, 0),
         dwell,
         Box::new(OneSource(bytes.clone())),
-    )
+    );
+    engine.set_transition(transition);
+    engine
 }
 
 /// One file, the engine over it, the canvas, the renderer and the
@@ -186,6 +195,10 @@ pub struct Player {
     shown_ms: f64,
     path: String,
     dwell: DwellPolicy,
+    transition: Transition,
+    /// A frame has been drawn since the canvas was last blanked: the next
+    /// file transitions from it.
+    shown: bool,
     paused: bool,
     canvas: Canvas,
     scale: usize,
@@ -208,6 +221,8 @@ impl Player {
             shown_ms: 0.0,
             path: String::new(),
             dwell: LOOP_FOREVER,
+            transition: Transition::DEFAULT,
+            shown: false,
             paused: false,
             canvas: Canvas::new(),
             scale,
@@ -234,11 +249,19 @@ impl Player {
 
     /// Swap the file. `path` is only used for its tags (and echoed back);
     /// the bytes may be a GIF or an `.odm` — the engine sniffs them. The
-    /// canvas is blanked so a slow next file does not show the old one.
-    /// A new file is not in step with anything until [`Player::sync_to`].
+    /// old file's last frame stays up and the new one transitions in from
+    /// it (a running transition is finished first, so it starts from what
+    /// is really shown). A new file is not in step with anything until
+    /// [`Player::sync_to`].
     pub fn load(&mut self, path: &str, bytes: Vec<u8>, now: Duration) {
         let bytes = Bytes(bytes.into());
-        let mut engine = engine_for(path, &bytes, self.dwell);
+        if let Some(old) = self.engine.as_mut() {
+            old.finish_transition(&mut self.canvas);
+        }
+        let mut engine = engine_for(path, &bytes, self.dwell, self.transition);
+        if self.shown {
+            engine.carry_over();
+        }
         if self.paused {
             engine.pause(now);
         }
@@ -248,7 +271,30 @@ impl Player {
         self.frame_at_ms = 0.0;
         self.frame_delay_ms = 0.0;
         self.path = path.to_string();
-        self.canvas = Canvas::new();
+    }
+
+    /// Start the loaded file again from its first frame, transitioning in
+    /// from what is shown — the Settings page's "Preview" of a transition.
+    /// Not in step with the panel afterwards (it is a demonstration).
+    pub fn replay(&mut self, now: Duration) {
+        let Some(bytes) = self.bytes.clone() else {
+            return;
+        };
+        let path = self.path.clone();
+        self.load(&path, bytes.0.to_vec(), now);
+    }
+
+    /// How files come in from now on (see [`Engine::set_transition`]).
+    pub fn set_transition(&mut self, transition: Transition) {
+        self.transition = transition;
+        if let Some(e) = self.engine.as_mut() {
+            e.set_transition(transition);
+        }
+    }
+
+    /// A transition is on screen.
+    pub fn is_transitioning(&self) -> bool {
+        self.engine.as_ref().is_some_and(Engine::is_transitioning)
     }
 
     /// Drop the file and blank the panel.
@@ -258,6 +304,7 @@ impl Player {
         self.sync = None;
         self.path.clear();
         self.canvas = Canvas::new();
+        self.shown = false;
         self.draw();
     }
 
@@ -401,7 +448,7 @@ impl Player {
         };
         if sync.restart {
             sync.restart = false;
-            let mut engine = engine_for(&self.path, bytes, self.dwell);
+            let mut engine = engine_for(&self.path, bytes, self.dwell, self.transition);
             if self.paused {
                 engine.pause(now);
             }
@@ -413,14 +460,21 @@ impl Player {
             return Ok(Tick::Idle);
         };
         match engine.seek_elapsed(Duration::from_secs_f64(target / 1000.0), &mut self.canvas) {
-            Ok(seek) if seek.frames > 0 => {
-                self.frame_at_ms = ms_of(seek.elapsed);
-                self.frame_delay_ms = ms_of(seek.delay);
-                self.shown_ms = ms_of(now);
+            Ok(seek) => {
+                // A transition runs on the page's clock, the file under it
+                // on the panel's.
+                let stepped = engine.step_transition(now, &mut self.canvas);
+                if seek.frames > 0 {
+                    self.shown = true;
+                    self.frame_at_ms = ms_of(seek.elapsed);
+                    self.frame_delay_ms = ms_of(seek.delay);
+                    self.shown_ms = ms_of(now);
+                } else if !stepped {
+                    return Ok(Tick::Idle);
+                }
                 self.draw();
                 Ok(Tick::Frame)
             }
-            Ok(_) => Ok(Tick::Idle),
             Err(e) => {
                 let path = std::mem::take(&mut self.path);
                 self.engine = None;
@@ -442,13 +496,14 @@ impl Player {
         };
         match engine.tick(now, &mut self.canvas) {
             Ok(TickOutcome::Frame {
-                playing,
-                started,
-                next_frame_at,
+                playing, started, ..
             }) => {
+                // The file's own frame timing, not a transition step's.
+                let due = engine.frame_due().unwrap_or(now);
                 self.frame_at_ms = ms_of(playing.elapsed);
-                self.frame_delay_ms = ms_of(next_frame_at.saturating_sub(now));
+                self.frame_delay_ms = ms_of(due.saturating_sub(now));
                 self.shown_ms = ms_of(now);
+                self.shown = true;
                 self.draw();
                 Ok(if started && playing.ordinal > 1 {
                     Tick::DwellEnded
@@ -469,9 +524,13 @@ impl Player {
     /// Render the current canvas again without advancing the engine — what a
     /// slider move needs so the change is visible while paused.
     pub fn draw(&mut self) {
+        let shown = match self.engine.as_ref() {
+            Some(e) => e.display(&self.canvas),
+            None => &self.canvas,
+        };
         match (self.mode, self.renderer.as_mut()) {
-            (RenderMode::Led, Some(r)) => r.render(&self.canvas, &mut self.buffer),
-            _ => paint_flat(&self.canvas, self.scale, &mut self.buffer),
+            (RenderMode::Led, Some(r)) => r.render(shown, &mut self.buffer),
+            _ => paint_flat(shown, self.scale, &mut self.buffer),
         }
         // `0x00RRGGBB` -> RGBA8888. Alpha was filled with 255 at construction
         // and is never written again.
@@ -491,5 +550,14 @@ impl Player {
     #[cfg(test)]
     pub(crate) fn canvas(&self) -> &Canvas {
         &self.canvas
+    }
+
+    /// What is drawn: the transition's output while one runs.
+    #[cfg(test)]
+    pub(crate) fn shown(&self) -> &Canvas {
+        match self.engine.as_ref() {
+            Some(e) => e.display(&self.canvas),
+            None => &self.canvas,
+        }
     }
 }

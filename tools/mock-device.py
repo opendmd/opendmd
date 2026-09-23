@@ -76,6 +76,10 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   FAT order) and sizes are opt-in (`?sizes=1`), matching the firmware's
   quadratic-`stat`-avoidance note in `files.rs`.
 - `GET /api/config` never echoes `wifi_pass`, only `wifi_pass_set`.
+- **`transition` / `transition_ms`** in the config (`"dissolve"`, 400 by
+  default): a name `opendmd_core::compositor::Kind::from_name` accepts
+  (stored normalised) and 20..=2000 ms, else a 400. The mock plays nothing,
+  so it only stores them; the page's previews are what show one.
 - **The default manifest** is `filelist.txt`: `set` = `""` plays it,
   `"filelist.*"` selects that root manifest, anything else `sets/<set>.txt`.
   An obsolete `filelist.odm.txt` is ignored and refused as a set. A set whose
@@ -218,7 +222,13 @@ DEFAULT_SETTINGS = {
     "hostname": "opendmd-mock",
     "tz": "UTC0",
     "tz_name": "UTC",
+    "transition": "dissolve",   # config::TRANSITION (opendmd_core::compositor)
+    "transition_ms": 400,
 }
+
+# opendmd_core::compositor::Kind names, and the duration range
+TRANSITIONS = ["dissolve", "wipe_left", "wipe_right", "wipe_down", "wipe_up", "blinds", "push", "fade", "none"]
+TRANSITION_MS = (20, 2000)
 
 # field -> expected type, for PUT /api/config validation
 FIELD_TYPES = {
@@ -233,6 +243,8 @@ FIELD_TYPES = {
     "hostname": "str",
     "tz": "str",
     "tz_name": "str",
+    "transition": "str",
+    "transition_ms": "u64",
 }
 
 SCHEDULE_MAX = 2048            # nvs_config::SCHEDULE_MAX
@@ -1616,6 +1628,8 @@ def make_handler(ctx: Context, quiet: bool):
                     "hostname": s["hostname"],
                     "tz": s["tz"],
                     "tz_name": s["tz_name"],
+                    "transition": s["transition"],
+                    "transition_ms": s["transition_ms"],
                 }
             self.send_json(200, obj)
 
@@ -1697,6 +1711,17 @@ def make_handler(ctx: Context, quiet: bool):
                         return
                     if field == "tz_name" and len(v) > 64:
                         self.send_error_json(400, "tz_name is at most 64 characters")
+                        return
+                    if field == "transition":
+                        # Kind::from_name: case-insensitive, '-' for '_', "wipe" = wipe_left
+                        v = v.strip().lower().replace("-", "_")
+                        v = "wipe_left" if v == "wipe" else v
+                        if v not in TRANSITIONS:
+                            self.send_error_json(
+                                400, "transition must be dissolve, wipe_left, wipe_right, wipe_down, wipe_up, blinds, push, fade or none")
+                            return
+                    if field == "transition_ms" and not TRANSITION_MS[0] <= v <= TRANSITION_MS[1]:
+                        self.send_error_json(400, f"transition_ms must be {TRANSITION_MS[0]}..={TRANSITION_MS[1]}")
                         return
                     if field == "hostname":
                         if v != "":

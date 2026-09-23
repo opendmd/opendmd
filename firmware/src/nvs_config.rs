@@ -22,6 +22,7 @@
 
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
 use log::warn;
+use opendmd_core::compositor::Transition;
 
 use crate::config;
 
@@ -39,6 +40,7 @@ const KEY_HOSTNAME: &str = "hostname";
 const KEY_TZ: &str = "tz";
 const KEY_TZ_NAME: &str = "tz_name";
 const KEY_SCHEDULE: &str = "schedule";
+const KEY_TRANSITION: &str = "transition";
 
 /// The largest schedule JSON NVS will hold for us (`PUT /api/schedule`).
 pub const SCHEDULE_MAX: usize = 2048;
@@ -81,6 +83,10 @@ pub struct Settings {
     /// The schedule, as the JSON `PUT /api/schedule` stored (validated
     /// there, at most [`SCHEDULE_MAX`] bytes); empty = no schedule.
     pub schedule: String,
+    /// How a new file comes in. Stored as `kind:ms` (`dissolve:400`), the
+    /// form `Transition::parse` reads; `/api/config` has it as `transition`
+    /// + `transition_ms`.
+    pub transition: Transition,
 }
 
 impl Default for Settings {
@@ -99,6 +105,7 @@ impl Default for Settings {
             tz: config::TZ.to_string(),
             tz_name: config::TZ_NAME.to_string(),
             schedule: String::new(),
+            transition: config::TRANSITION,
         }
     }
 }
@@ -200,6 +207,10 @@ impl Config {
             schedule: self
                 .get_long_string(KEY_SCHEDULE, SCHEDULE_MAX)
                 .unwrap_or(d.schedule),
+            transition: self
+                .get_string(KEY_TRANSITION)
+                .and_then(|s| Transition::parse(&s))
+                .unwrap_or(d.transition),
         }
     }
 
@@ -218,6 +229,8 @@ impl Config {
         self.nvs.set_str(KEY_TZ, &s.tz)?;
         self.nvs.set_str(KEY_TZ_NAME, &s.tz_name)?;
         self.nvs.set_str(KEY_SCHEDULE, &s.schedule)?;
+        self.nvs
+            .set_str(KEY_TRANSITION, &s.transition.to_string())?;
         Ok(())
     }
 

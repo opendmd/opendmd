@@ -249,6 +249,14 @@ impl Canvas {
         }
     }
 
+    /// A canvas of these pixels (exactly [`PIXELS`] of them) and this dirty
+    /// map; how the compositor builds its output from a fallibly allocated
+    /// buffer.
+    pub fn from_parts(pixels: Vec<Rgb>, dirty: DirtyMap) -> Self {
+        assert_eq!(pixels.len(), PIXELS);
+        Canvas { pixels, dirty }
+    }
+
     /// Set every pixel to black.
     pub fn clear(&mut self) {
         self.fill(Rgb::BLACK);
@@ -295,6 +303,12 @@ impl Canvas {
         let bytes =
             unsafe { core::slice::from_raw_parts_mut(self.pixels.as_mut_ptr().cast::<u8>(), len) };
         (bytes, &mut self.dirty)
+    }
+
+    /// The pixels and the dirty map at once, for a writer that marks what
+    /// it changes.
+    pub fn pixels_and_dirty_mut(&mut self) -> (&mut [Rgb], &mut DirtyMap) {
+        (&mut self.pixels, &mut self.dirty)
     }
 
     pub fn as_slice(&self) -> &[Rgb] {

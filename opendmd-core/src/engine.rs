@@ -10,8 +10,19 @@
 //! and panics if constructed. The desktop simulator and the firmware pass
 //! `boot.elapsed()`, the web app passes `performance.now()`. Only the
 //! differences matter, so any fixed epoch works.
+//!
+//! **Transitions.** When a new file starts and something is already on
+//! display, the engine's [`Compositor`] blends from that picture to the new
+//! file's frames ([`Engine::set_transition`]; Dissolve over 400 ms by
+//! default). The decoder keeps decoding into the caller's canvas exactly as
+//! before — it is the file's state and is never drawn on — and while a
+//! transition runs the picture to show is the compositor's output:
+//! [`Engine::display`] / [`Engine::display_mut`] hand out whichever is
+//! current, and [`TickOutcome::Frame::transitioning`] says which. Loops of
+//! the same file never transition.
 
 use crate::canvas::Canvas;
+use crate::compositor::{Compositor, Step, Transition, STEP};
 use crate::filter::Filter;
 use crate::manifest::{self, Entry};
 use crate::overrides::{Dwell, Override, Overrides};
@@ -128,6 +139,16 @@ pub trait Source {
 /// What the engine plays: a decoder over whatever the source opened.
 type Stream = FrameSource<Box<dyn ReadSeek>>;
 
+/// What `gif`'s decoder will still allocate before its first frame is on
+/// the canvas (a transition's gate has to leave room for it).
+fn first_frame_heap(gif: &Stream) -> usize {
+    if gif.kind() == "gif" && gif.frames_decoded() == 0 {
+        crate::compositor::GIF_FIRST_FRAME_BYTES
+    } else {
+        0
+    }
+}
+
 /// How long one GIF holds the display.
 ///
 /// A GIF ends its turn once it has looped `min_loops` times *and* `min` has
@@ -229,13 +250,21 @@ pub enum TickOutcome {
     /// Nothing to do: paused, or the current frame's delay hasn't elapsed.
     /// The canvas was not touched.
     Idle,
-    /// The canvas was updated.
+    /// The picture changed: show [`Engine::display`] (the caller's canvas,
+    /// or the compositor's output while a transition runs).
     Frame {
         playing: NowPlaying,
         /// True on the first frame of a newly started GIF.
         started: bool,
-        /// When the caller should tick again for the next frame.
+        /// When the caller should tick again: the file's next frame, or
+        /// sooner while a transition runs — its next step,
+        /// [`STEP`](crate::compositor::STEP) after the last, unless the
+        /// file's next frame comes within half a step of it (that frame
+        /// recomposites anyway).
         next_frame_at: Duration,
+        /// A transition is running and [`Engine::display`] is its output,
+        /// not the caller's canvas. False on the frame that ends it.
+        transitioning: bool,
     },
     /// Nothing is playable — empty playlist, or every candidate failed to open.
     Exhausted,
@@ -346,6 +375,12 @@ pub struct Engine {
     paused_since: Option<Duration>,
     started_count: u64,
     skip_requested: bool,
+    compositor: Compositor,
+    /// Something is on display: a new file transitions from it rather than
+    /// cutting in. False until the first frame (nothing to transition from
+    /// at boot), unless [`Engine::carry_over`] says the caller's canvas
+    /// already shows a picture.
+    shown: bool,
 }
 
 impl Engine {
@@ -367,7 +402,75 @@ impl Engine {
             paused_since: None,
             started_count: 0,
             skip_requested: false,
+            compositor: Compositor::default(),
+            shown: false,
         }
+    }
+
+    /// How new files come in (default [`Transition::DEFAULT`], Dissolve over
+    /// 400 ms). Takes effect from the next file; a transition already running
+    /// finishes as it began.
+    pub fn set_transition(&mut self, transition: Transition) {
+        self.compositor.set_transition(transition);
+    }
+
+    pub fn transition(&self) -> Transition {
+        self.compositor.transition()
+    }
+
+    /// Asked before each transition takes its 24 KB (see
+    /// [`Gate`](crate::compositor::Gate)); refused, the file cuts in.
+    pub fn set_transition_gate(&mut self, gate: Option<crate::compositor::Gate>) {
+        self.compositor.set_gate(gate);
+    }
+
+    /// The caller's canvas already shows a picture — the last frame of an
+    /// engine this one replaces (a playlist change, the web preview's next
+    /// file) — so the first file transitions from it instead of cutting in.
+    pub fn carry_over(&mut self) {
+        self.shown = true;
+    }
+
+    /// A transition is running: [`display`](Self::display) is its output.
+    pub fn is_transitioning(&self) -> bool {
+        self.compositor.is_active()
+    }
+
+    /// What to show after a tick: the compositor's output while a
+    /// transition runs, else `canvas` (the decoder's, as passed to
+    /// [`tick`](Self::tick)). The firmware blits `display_mut`, which also
+    /// lets the blit clear the dirty map of whichever it is.
+    pub fn display<'a>(&'a self, canvas: &'a Canvas) -> &'a Canvas {
+        self.compositor.output().unwrap_or(canvas)
+    }
+
+    /// [`display`](Self::display), mutably.
+    pub fn display_mut<'a>(&'a mut self, canvas: &'a mut Canvas) -> &'a mut Canvas {
+        match self.compositor.output_mut() {
+            Some(out) => out,
+            None => canvas,
+        }
+    }
+
+    /// End a running transition at once (the new file's frame goes on
+    /// display, `canvas`'s dirty map set to what the panel needs to get
+    /// there). For a caller about to drop this engine while `canvas` lives
+    /// on — the next engine's [`carry_over`](Self::carry_over) then starts
+    /// from a picture that is really on the panel.
+    pub fn finish_transition(&mut self, canvas: &mut Canvas) {
+        self.compositor.finish(canvas);
+    }
+
+    /// Step a running transition at `now` if a step is due or the file
+    /// underneath drew since the last one; true if the picture to show
+    /// changed (a step, or the end). [`tick`](Self::tick) does this itself;
+    /// a caller that moves the file with [`seek_elapsed`](Self::seek_elapsed)
+    /// instead calls it after each seek. Nothing while paused.
+    pub fn step_transition(&mut self, now: Duration, canvas: &mut Canvas) -> bool {
+        if self.is_paused() {
+            return false;
+        }
+        self.compositor.step(now, canvas) != Step::Idle
     }
 
     /// How many entries survived the filter, i.e. the playlist length.
@@ -498,6 +601,7 @@ impl Engine {
                 p.started_at += paused_for;
                 p.next_frame_at += paused_for;
             }
+            self.compositor.shift(paused_for);
         }
     }
 
@@ -509,12 +613,52 @@ impl Engine {
         }
     }
 
-    /// Advance playback. Returns whether the canvas changed and what is on it.
+    /// Advance playback: decode the next frame into `canvas` when it is
+    /// due, and step a running transition. Returns whether the picture to
+    /// show ([`display`](Self::display)) changed, and what is playing.
     pub fn tick(&mut self, now: Duration, canvas: &mut Canvas) -> io::Result<TickOutcome> {
         if self.is_paused() {
             return Ok(TickOutcome::Idle);
         }
+        let decoded = self.advance(now, canvas)?;
+        let stepped = self.compositor.step(now, canvas) != Step::Idle;
+        let (playing, started) = match decoded {
+            TickOutcome::Frame {
+                playing, started, ..
+            } => (playing, started),
+            TickOutcome::Idle if stepped => match &self.current {
+                Some(p) => (p.now_playing(), false),
+                None => return Ok(TickOutcome::Idle),
+            },
+            other => return Ok(other),
+        };
+        self.shown = true;
+        let due = self.current.as_ref().map_or(now, |p| p.next_frame_at);
+        // A step of its own only when the file's next frame is not about to
+        // do it anyway: two ticks a few ms apart would make the first one
+        // late by the second's work, for no visible gain.
+        let next_frame_at = match self.compositor.step_at() {
+            Some(step) if step + STEP / 2 < due => step,
+            _ => due,
+        };
+        Ok(TickOutcome::Frame {
+            playing,
+            started,
+            next_frame_at,
+            transitioning: self.compositor.is_active(),
+        })
+    }
 
+    /// When the file on screen's next frame is due (its own timing, which a
+    /// transition's steps do not change).
+    pub fn frame_due(&self) -> Option<Duration> {
+        self.current.as_ref().map(|p| p.next_frame_at)
+    }
+
+    /// The decoding half of [`tick`](Self::tick): open, loop and move on as
+    /// the dwell says, decode the next frame when it is due, and start a
+    /// transition in front of a new file's first frame.
+    fn advance(&mut self, now: Duration, canvas: &mut Canvas) -> io::Result<TickOutcome> {
         if self.skip_requested {
             self.skip_requested = false;
             self.current = None;
@@ -545,6 +689,11 @@ impl Engine {
                 continue;
             }
 
+            if playing.first_frame && self.shown {
+                // The canvas still holds the old picture: transition from it.
+                self.compositor
+                    .begin(canvas, first_frame_heap(&playing.gif));
+            }
             let frame = match playing.gif.next_frame(canvas) {
                 Ok(f) => f,
                 Err(e) => {
@@ -563,10 +712,12 @@ impl Engine {
                     playing.first_frame = false;
                     playing.next_frame_at = now + delay;
                     playing.advance(delay);
+                    self.compositor.frame_decoded();
                     return Ok(TickOutcome::Frame {
                         playing: playing.now_playing(),
                         started,
                         next_frame_at: playing.next_frame_at,
+                        transitioning: false,
                     });
                 }
                 None => {
@@ -633,10 +784,16 @@ impl Engine {
                     reached: !due,
                 });
             }
+            if playing.first_frame && self.shown {
+                self.compositor
+                    .begin(canvas, first_frame_heap(&playing.gif));
+            }
             match playing.gif.next_frame(canvas)? {
                 Some(delay) => {
                     playing.first_frame = false;
                     playing.advance(delay);
+                    self.compositor.frame_decoded();
+                    self.shown = true;
                     frames += 1;
                     content += delay;
                 }
@@ -1525,6 +1682,212 @@ mod tests {
         e.resume(t0 + Duration::from_secs(60));
         assert!(!e.is_paused());
         assert_eq!(e.now_playing().unwrap().title, "B");
+    }
+
+    /// A full-screen one-frame GIF of one colour, so a transition changes
+    /// every pixel.
+    fn solid_gif(r: u8, g: u8, b: u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut out, 128, 32, &[]).unwrap();
+            enc.set_repeat(Repeat::Infinite).unwrap();
+            let mut f = Frame {
+                width: 128,
+                height: 32,
+                buffer: Cow::Owned(vec![1u8; 128 * 32]),
+                dispose: DisposalMethod::Keep,
+                delay: 5,
+                ..Default::default()
+            };
+            f.palette = Some(vec![0, 0, 0, r, g, b]);
+            enc.write_frame(&f).unwrap();
+        }
+        out
+    }
+
+    fn two_solids(transition: Transition) -> Engine {
+        let mut e = engine_with(
+            &[
+                ("/gifs/Consoles/NES_A_01.gif", solid_gif(255, 0, 0)),
+                ("/gifs/Consoles/NES_B_01.gif", solid_gif(0, 0, 255)),
+            ],
+            "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
+            DwellPolicy {
+                min: Duration::from_secs(1),
+                max: Duration::from_secs(30),
+                min_loops: 1,
+            },
+        );
+        e.set_transition(transition);
+        e
+    }
+
+    #[test]
+    fn a_new_file_transitions_in_and_ends_on_its_own_frame() {
+        use crate::compositor::{Kind, STEP};
+        const RED: Rgb = Rgb::new(255, 0, 0);
+        const BLUE: Rgb = Rgb::new(0, 0, 255);
+        let ms = Duration::from_millis;
+        let mut e = two_solids(Transition::new(Kind::WipeRight, ms(400)));
+        let mut canvas = Canvas::new();
+        // The first file after boot cuts in: nothing to transition from.
+        let TickOutcome::Frame { transitioning, .. } = e.tick(ms(0), &mut canvas).unwrap() else {
+            panic!("A");
+        };
+        assert!(!transitioning && !e.is_transitioning());
+        assert_eq!(e.display(&canvas).get(5, 5), RED);
+        // A loops (a rewind, not a new file): no transition.
+        let TickOutcome::Frame { transitioning, .. } = e.tick(ms(50), &mut canvas).unwrap() else {
+            panic!("A again");
+        };
+        assert!(!transitioning);
+        // Past A's dwell: B starts, and the picture wipes from red to blue.
+        let t0 = ms(1000);
+        let mut t = t0;
+        let mut steps = 0;
+        loop {
+            let TickOutcome::Frame {
+                playing,
+                started,
+                next_frame_at,
+                transitioning,
+            } = e.tick(t, &mut canvas).unwrap()
+            else {
+                panic!("expected a frame at {t:?}");
+            };
+            assert_eq!(playing.title, "B");
+            assert_eq!(started, steps == 0);
+            // The decoder's canvas is B's frame throughout; never drawn on.
+            assert!(canvas.as_slice().iter().all(|p| *p == BLUE));
+            let shown = e.display(&canvas);
+            if !transitioning {
+                assert_eq!(t - t0, ms(400), "ends exactly at the duration");
+                assert!(shown.as_slice().iter().all(|p| *p == BLUE));
+                assert!(!e.is_transitioning());
+                break;
+            }
+            steps += 1;
+            let blue = shown.as_slice().iter().filter(|p| **p == BLUE).count();
+            let red = shown.as_slice().iter().filter(|p| **p == RED).count();
+            // The wipe's front moves right, never back.
+            assert!(
+                red + blue >= 4096 - 2 * 32,
+                "{red} red {blue} blue at {:?}",
+                t - t0
+            );
+            assert_eq!(shown.get(0, 3) == BLUE, t > t0, "{:?}", t - t0);
+            // A step 20 ms on (the last at the end), or B's own next frame
+            // (50 ms) when that comes within half a step of it.
+            let step = (t + STEP).min(t0 + ms(400));
+            let due = e.frame_due().unwrap();
+            let want = if step + STEP / 2 < due { step } else { due };
+            assert_eq!(next_frame_at, want, "at {:?}", t - t0);
+            assert!(next_frame_at - t <= ms(30));
+            t = next_frame_at;
+        }
+        // Every 20-30 ms: at 0, 20, 50, 70, 100, ... 370 (B's frames at 50k).
+        assert_eq!(steps, 16);
+        // Afterwards B's own timing again (50 ms frames, looping).
+        let TickOutcome::Frame { next_frame_at, .. } = e.tick(ms(1450), &mut canvas).unwrap()
+        else {
+            panic!("B loops");
+        };
+        assert_eq!(next_frame_at, ms(1500));
+    }
+
+    #[test]
+    fn carry_over_skip_mid_transition_pause_and_none() {
+        use crate::compositor::Kind;
+        let ms = Duration::from_millis;
+        // A replacement engine whose canvas already shows something.
+        let mut e = two_solids(Transition::new(Kind::Dissolve, ms(200)));
+        let mut canvas = Canvas::new();
+        canvas.fill(Rgb::new(9, 9, 9));
+        e.carry_over();
+        let TickOutcome::Frame { transitioning, .. } = e.tick(ms(0), &mut canvas).unwrap() else {
+            panic!("A");
+        };
+        assert!(
+            transitioning,
+            "the first file transitions from the carried-over picture"
+        );
+        assert_eq!(e.display(&canvas).get(0, 0), Rgb::new(9, 9, 9));
+        // Paused halfway for a minute: nothing moves, and it resumes where it was.
+        e.tick(ms(100), &mut canvas).unwrap();
+        let half = e.display(&canvas).clone();
+        e.pause(ms(100));
+        assert_eq!(e.tick(ms(30_000), &mut canvas).unwrap(), TickOutcome::Idle);
+        e.resume(ms(60_100));
+        let TickOutcome::Frame { transitioning, .. } = e.tick(ms(60_150), &mut canvas).unwrap()
+        else {
+            panic!("resumed");
+        };
+        assert!(transitioning);
+        let later = e.display(&canvas).clone();
+        let moved = later
+            .as_slice()
+            .iter()
+            .zip(half.as_slice())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            (600..2000).contains(&moved),
+            "{moved} px moved in 50 ms of a 200 ms dissolve"
+        );
+        // Skip halfway: B starts from the half-dissolved picture.
+        e.skip();
+        e.tick(ms(60_160), &mut canvas).unwrap();
+        assert!(e.is_transitioning());
+        assert_eq!(e.display(&canvas), &later);
+        // finish_transition hands the canvas back with what the panel owes.
+        canvas.dirty_mut().clear();
+        e.finish_transition(&mut canvas);
+        assert!(!e.is_transitioning());
+        assert!(canvas.dirty().count() > 2000);
+        assert_eq!(e.display(&canvas), &canvas);
+
+        // None: straight cuts, no extra frames.
+        let mut e = two_solids(Transition::NONE);
+        let mut canvas = Canvas::new();
+        e.tick(ms(0), &mut canvas).unwrap();
+        let TickOutcome::Frame {
+            playing,
+            transitioning,
+            next_frame_at,
+            ..
+        } = e.tick(ms(1000), &mut canvas).unwrap()
+        else {
+            panic!("B");
+        };
+        assert_eq!((playing.title.as_str(), transitioning), ("B", false));
+        assert_eq!(next_frame_at, ms(1050));
+        assert_eq!(e.display(&canvas).get(0, 0), Rgb::new(0, 0, 255));
+    }
+
+    #[test]
+    fn a_seek_starts_the_transition_and_step_transition_runs_it() {
+        use crate::compositor::Kind;
+        let ms = Duration::from_millis;
+        let path = "/gifs/Consoles/NES_Three_01.gif";
+        let mut e = engine_with(&[(path, three_frame_gif())], path, DwellPolicy::default());
+        e.set_transition(Transition::new(Kind::Fade, ms(100)));
+        e.carry_over();
+        let mut canvas = Canvas::new();
+        canvas.fill(Rgb::new(200, 200, 200));
+        e.seek_elapsed(ms(150), &mut canvas).unwrap();
+        assert!(e.is_transitioning());
+        // Not shown yet: its clock starts at the first step.
+        assert!(e.step_transition(ms(5000), &mut canvas));
+        assert_eq!(e.display(&canvas).get(9, 9), Rgb::new(200, 200, 200));
+        assert!(!e.step_transition(ms(5010), &mut canvas), "not due");
+        assert!(e.step_transition(ms(5025), &mut canvas));
+        assert!(e.step_transition(ms(5050), &mut canvas));
+        assert_eq!(e.display(&canvas).get(9, 9), Rgb::BLACK, "the dip");
+        assert!(e.step_transition(ms(5090), &mut canvas));
+        assert!(e.is_transitioning());
+        assert!(e.step_transition(ms(5100), &mut canvas));
+        assert!(!e.is_transitioning());
+        assert_eq!(e.display(&canvas).get(0, 0), Rgb::new(0, 255, 0));
     }
 
     const MANIFEST: &str = "/gifs/Consoles/SNES_Plok_08.gif\n\

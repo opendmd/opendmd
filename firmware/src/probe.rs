@@ -147,6 +147,72 @@ static BLIT: Mutex<BlitHist> = Mutex::new(BlitHist::new());
 /// catalog time: decode + composite), over frames that opened no file.
 static DECODE: Mutex<BlitHist> = Mutex::new(BlitHist::new());
 
+/// A transition's steps: the tick of a step that decoded nothing (so: the
+/// composite alone), and the blit of every step (the composited picture).
+static TRANS_TICK: Mutex<BlitHist> = Mutex::new(BlitHist::new());
+static TRANS_BLIT: Mutex<BlitHist> = Mutex::new(BlitHist::new());
+counters!(P_TRUNS, P_TSTEPS, P_TPX, LAST_FREE);
+
+/// The transition in progress: when it started, its steps, and the heap
+/// around it.
+struct TransRun {
+    start: Instant,
+    steps: u32,
+    before: u32,
+    min: u32,
+}
+
+static TRANS_RUN: Mutex<Option<TransRun>> = Mutex::new(None);
+
+/// Account a frame for the transition statistics: `transitioning` is the
+/// tick's flag (false on the frame that ends one), `decoded` whether the
+/// file underneath drew, `free` the heap after the blit. At the end of each
+/// transition a line gives its steps, time and heap: free before it (the
+/// frame before), the lowest during, and after.
+pub fn transition_frame(transitioning: bool, decoded: bool, t: &FrameTimes, free: u32) {
+    if !ENABLED {
+        return;
+    }
+    let before = LAST_FREE.swap(free, Relaxed);
+    let Ok(mut run) = TRANS_RUN.lock() else {
+        return;
+    };
+    if !transitioning && run.is_none() {
+        return;
+    }
+    P_TSTEPS.fetch_add(1, Relaxed);
+    P_TPX.fetch_add(t.blit_px, Relaxed);
+    if let Ok(mut h) = TRANS_BLIT.lock() {
+        h.add(t.blit_us);
+    }
+    if !decoded {
+        if let Ok(mut h) = TRANS_TICK.lock() {
+            h.add(t.tick_us);
+        }
+    }
+    let r = run.get_or_insert_with(|| TransRun {
+        start: Instant::now(),
+        steps: 0,
+        before,
+        min: free,
+    });
+    r.steps += 1;
+    r.min = r.min.min(free);
+    if !transitioning {
+        let r = run.take().unwrap();
+        P_TRUNS.fetch_add(1, Relaxed);
+        defer(format!(
+            "transition: {} steps in {} ms, heap free {} B before, {} B lowest during, {} B after (dip {} B)",
+            r.steps,
+            r.start.elapsed().as_millis(),
+            r.before,
+            r.min,
+            free,
+            free.saturating_sub(r.min),
+        ));
+    }
+}
+
 /// Median of a histogram, as the bucket's midpoint in µs.
 fn hist_p50(h: &[u32; BLIT_BUCKETS]) -> u32 {
     let n: u32 = h.iter().sum();
@@ -396,8 +462,22 @@ pub fn period_summary() -> String {
         .lock()
         .map(|mut h| format!("decode {}, ", h.take_summary()))
         .unwrap_or_default();
+    let steps = take(&P_TSTEPS);
+    let trans = format!(
+        "transitions {} steps {steps} composite-only tick {} blit {} px/step {}, ",
+        take(&P_TRUNS),
+        TRANS_TICK
+            .lock()
+            .map(|mut h| h.take_summary())
+            .unwrap_or_default(),
+        TRANS_BLIT
+            .lock()
+            .map(|mut h| h.take_summary())
+            .unwrap_or_default(),
+        take(&P_TPX).checked_div(steps).unwrap_or(0),
+    );
     format!(
-        " | sd: frames {frames} work-max {}us, {blit}, {decode}opens {opens} avg {}us max {}us \
+        " | sd: frames {frames} work-max {}us, {blit}, {decode}{trans}opens {opens} avg {}us max {}us \
          (all-time {} max {}us), rewinds {} (all-time {}), cat-max {}us, reads {} max {}us \
          >=5ms {} >=20ms {} >=100ms {}, misses open {} no-open {}",
         take(&P_WORK_MAX_US),

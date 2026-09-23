@@ -120,6 +120,23 @@ pub const SHUFFLE: bool = true;
 pub const DWELL_MIN_SECS: u64 = 3;
 pub const DWELL_MAX_SECS: u64 = 30;
 
+/// How a new file comes in, unless NVS says otherwise (`transition`, as
+/// `kind:ms`). A transition holds 24 KB of buffers while it runs (see
+/// `opendmd_core::compositor`), so the heap dips by that much for its
+/// duration and nothing in between.
+pub const TRANSITION: opendmd_core::compositor::Transition =
+    opendmd_core::compositor::Transition::DEFAULT;
+/// A transition only starts if the heap keeps at least this much free once
+/// it has taken its 24 KB *and* the new GIF's decoder has taken its first
+/// frame's ~34 KB (the transition begins before that frame is decoded);
+/// otherwise the file cuts in. Measured on the rig (probe build, skipping
+/// every 3 s): with a GIF playing the lowest free heap during a transition
+/// was ~16 KB, one GIF (`NEW 2021/2a.gif`) left 4.9 KB, and during a
+/// web-smoke run (files served, the cache counted) the LZW allocation of a
+/// GIF's first frame failed and aborted the board — before this gate
+/// counted the decoder. Refusals are the heartbeat's `transitions cut`.
+pub const TRANSITION_HEAP_RESERVE: usize = 12 * 1024;
+
 // ---------------------------------------------------------------------------
 // Loop timing
 // ---------------------------------------------------------------------------
