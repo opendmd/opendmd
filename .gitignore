@@ -19,5 +19,9 @@ filelist.odm.txt
 # hardware/ is deliberately NOT ignored: the measured pinout and photos are
 # the one thing that can't be regenerated.
 
-# wasm-pack output for the web spike
+# wasm-pack output and `make web`'s precompressed copies
 opendmd-web/www/pkg/
+opendmd-web/www/**/*.gz
+
+# Release images (make fw-release)
+dist/

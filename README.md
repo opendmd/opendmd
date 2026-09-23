@@ -108,30 +108,82 @@ cd opendmd-sim && cargo run --release -- --root /path/to/card \
 
 ## The web app
 
-The simulator, curation and preprocessing are heading for a single
-**WebAssembly page**, eventually served off the SD card by the ESP32 itself,
-with all the work in the browser. `opendmd-web/` is the working spike:
-`opendmd-core` and `opendmd-render` compiled to `wasm32-unknown-unknown`,
-playing GIFs from local files with the same LED look as `make sim`.
+The management UI is a **WebAssembly page the player serves off its own SD
+card** at `http://opendmd.local/`. All the heavy work happens in the browser —
+parsing and filtering manifests, previewing files with the panel look,
+converting GIFs to `.odm` — with the same `opendmd-core` and `opendmd-render`
+Rust the firmware and the simulator run. The ESP32 is a file server plus the
+small JSON API under "Firmware". No framework and no bundler: hand-written
+HTML, CSS and ES modules in `opendmd-web/www/`, plus the `opendmd-web` wasm
+module.
 
 ```bash
-make web            # wasm-pack build --target web --release
-make web-serve      # then open http://localhost:8080
+make web                                   # wasm-pack build + a .gz beside every file + the size budget
+make web-mock ROOT=~/scratch/dmdos-card # a fake device on :8080 (OVERLAY=dir keeps the card copy untouched)
+make web-mock PROXY=http://192.168.1.69    # this build, same-origin against a real device
+make web-serve                             # plain static server: local mode
+make web-smoke                             # headless Chromium through every view (DEVICE=http://… adds a real-device pass)
+make card-sync HOST=opendmd.local          # put the app on the card
 ```
 
-On the page: pick GIFs with the file input, or point the folder picker at an
-extracted copy of a card (Chromium, Safari and Firefox all support it). Set a
-comma-separated platform filter, shuffle and a seed, and press play. The gain,
-bloom and gamma sliders are the simulator's `--led-gain`, `--bloom` and
-`--gamma`; "flat" swaps the LED simulation for a nearest-neighbour blit of the
-raw canvas. "next" skips, "pause" pauses, and the status line shows
-`[n/total] /gifs/Consoles/X.gif` and the per-frame cost.
+**Device mode or local mode.** The page asks `GET /api/status`; if a player
+answers, it is in device mode and everything below talks to that device. If
+not (a laptop running `make web-serve`), it offers a folder picker: point it
+at an extracted copy of a card and the same views work over the picked files,
+read one at a time as they are needed. Writes in local mode go to a folder you
+grant (Chromium's File System Access API) or become downloads.
 
-Nothing is uploaded and there is no server beyond a static file host: the
-browser reads the files into memory and hands the bytes to wasm, and the
-playlist, filtering, scheduling, GIF decoding and rendering are all the same
-Rust the firmware runs. The JavaScript is about eighty lines of file reading,
-control wiring and `requestAnimationFrame`.
+**The views** — a left rail on a laptop, a bottom bar on a phone:
+
+- **Now** — what the panel is playing (title, platform and category parsed
+  from the path), polled every 2 s, with skip, pause and a brightness slider,
+  and the device's health: uptime, address, free heap and its sampled floor,
+  refresh rate, deadline misses and worst lateness. A **panel-look preview**
+  of the same file plays alongside — fetched once when the file changes and
+  played in the browser, so it is *not frame-synced* with the panel. It
+  fetches the file's `.odm` when `filelist.odm.txt` says there is one (cheap
+  for the device) and can be switched off. The LED-look controls (gain,
+  bloom, gamma, flat) are here too and are remembered per browser. In local
+  mode this view is the simulator: a manifest or the whole folder, a platform
+  filter, shuffle and a seed, with the firmware's 3-30 s dwell.
+- **Library** — the card by category (`GET /api/files`), thousands of entries
+  in a virtualised list, each name run through the core's tag parser. Search
+  titles (normalised the way the core matches them), filter by platform
+  chips, click to preview, and a green `.odm` tag where
+  `filelist.odm.txt` lists a converted file. Select entries to add them to a
+  set or send them to the converter.
+- **Sets** — `/sets/*.txt` and the card's manifests. Open one to edit it;
+  build a new one with the core's `Filter` (platforms, categories, title
+  words, dropped flags, shuffle with a seed, a limit) over any manifest, or
+  from the Library selection; reorder, remove, save (`PUT /api/sets/<name>`),
+  activate (`PUT /api/config {"set": …}`, which rebuilds the device's index
+  in a few seconds) and delete. Deleting the active set switches the player
+  back to `filelist.txt` first.
+- **Convert** — GIF to `.odm` in the browser with the core's encoder: byte
+  for byte what `opendmd-pack` writes. Sources are Library selections
+  (fetched from the device) or local files; destinations use the bucketed
+  layout, `/odm/<Category>/<bb>/<name>.odm`. Files already converted are
+  skipped. One upload at a time, because every transfer costs the playing
+  device heap; progress, throughput and errors as it goes. Afterwards it
+  offers to regenerate `/filelist.odm.txt` from `/filelist.txt`.
+- **Settings** — WiFi (with a scan) and hostname, which need a reboot;
+  brightness, dwell, shuffle, platform filter and active set, which apply
+  live; rebuild the index, reboot, and OTA firmware upload with progress; the
+  firmware version, flash variant and panel facts.
+
+**Size budget**, checked by `make web` (`tools/web-size.py`): the wasm module
+plus its generated JS glue at most 250 KB, the hand-written JS and CSS at
+most 80 KB. Today that is about 175 KB of wasm + 26 KB of glue (84 KB
+gzipped) and 71 KB of JS and CSS (27 KB gzipped). `make web` writes a
+`<file>.gz` beside each file, and the player sends those in preference.
+
+**The mock device.** `tools/mock-device.py` (a `uv` script, standard library
+only) serves the built app plus a fake device over an extracted card copy:
+`/api/status` walking the active manifest, config, sets, file uploads and
+deletes, reindex, a canned WiFi scan, and the card's files — with the
+firmware's JSON shapes and quirks. `--overlay dir` sends every write there
+so the card copy is never modified; `--strict` serves only what the firmware
+serves; `--proxy URL` forwards everything but the app to a real device.
 
 ## The card
 
@@ -323,8 +375,8 @@ make web                             # wasm-pack -> opendmd-web/www/pkg
 make card-sync HOST=opendmd.local    # PUTs every file to /www/ on the card
 ```
 
-That uploads `index.html`, `app.js` and `pkg/` (the JS shim and the ~165 KB
-wasm module) in about two seconds. `http://<ip>/` then serves the real app;
+That uploads `index.html`, `app.css`, `app.js`, `js/` and `pkg/` (the JS
+glue and the ~175 KB wasm module), each with its `.gz`, in a few seconds. `http://<ip>/` then serves the real app;
 before that it serves the setup page instead. The setup page can also upload
 one file at a time to any path, which is how a completely blank card gets
 started.
@@ -358,7 +410,7 @@ floor:
 ### Serial output
 
 ```
-I opendmd_firmware: OpenDMD firmware v0.1.0 (4mb, app desc '...') — 128x32 HUB75 GIF player
+I opendmd_firmware: OpenDMD firmware v0.2.0 (4mb, app desc '0.2.0 4mb') — 128x32 HUB75 GIF player
 I opendmd_firmware: panel up: 128x32 (2 x 64x32), driver=0, double_buff=false, hub75_refresh_rate=100 Hz
 I opendmd_firmware: microSD mounted at /sdcard (31.27 GB), heap 175600 B free
 I opendmd_firmware: manifest indexed: /sdcard/filelist.txt, 10133 entries, index loaded in 9 ms (40532 B on card), heap 160664 B free
@@ -406,6 +458,15 @@ whenever you like.
 
 The simulator uses the same streaming index (the in-RAM `FileCatalog`), so
 `make sim` exercises the same manifest path the firmware does.
+
+## Deploying
+
+A player for the cabinet is built with `make fw-release` — a release image in
+`dist/opendmd-<version>-4mb.bin` with no bench WiFi credentials in it —
+installed once over USB (`make fw-release-flash`) and updated over the air
+after that (`make ota HOST=opendmd.local`). Preparing a card from scratch,
+first boot, what `/api/status` should read on a healthy install, and how to
+roll back are in [`docs/deploying.md`](docs/deploying.md).
 
 ## License
 

@@ -9,6 +9,7 @@ pub mod canvas;
 pub mod engine;
 pub mod filter;
 pub mod index;
+pub mod layout;
 pub mod manifest;
 pub mod odm;
 pub mod player;

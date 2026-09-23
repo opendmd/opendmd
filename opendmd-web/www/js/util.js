@@ -1,0 +1,86 @@
+// Small DOM and formatting helpers shared by every view. No framework: `h`
+// builds elements, `bus` carries the few app-wide events, `store` wraps
+// localStorage (which can throw in a private window).
+
+export const $ = (sel, root = document) => root.querySelector(sel);
+
+// h('button.pri', {onclick}, 'Save') — tag with optional .classes, then
+// attributes/properties, then children (strings, nodes, arrays, null).
+export function h(spec, attrs, ...kids) {
+  const [tag, ...cls] = spec.split('.');
+  const el = document.createElement(tag || 'div');
+  if (cls.length) el.className = cls.join(' ');
+  if (attrs && (typeof attrs !== 'object' || attrs instanceof Node || Array.isArray(attrs))) {
+    kids.unshift(attrs);
+    attrs = null;
+  }
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'style' || k.startsWith('data-') || k.startsWith('aria-') || k === 'for') el.setAttribute(k, v);
+    else el[k] = v;
+  }
+  add(el, kids);
+  return el;
+}
+
+function add(el, kids) {
+  for (const k of kids) {
+    if (k == null || k === false) continue;
+    if (Array.isArray(k)) add(el, k);
+    else el.append(k instanceof Node ? k : String(k));
+  }
+}
+
+export const clear = (el, ...kids) => { el.replaceChildren(); add(el, kids); return el; };
+
+export const bus = new EventTarget();
+export const emit = (type, detail) => bus.dispatchEvent(new CustomEvent(type, { detail }));
+export const on = (type, fn) => bus.addEventListener(type, (e) => fn(e.detail));
+
+export const store = {
+  get(key, fallback) {
+    try { const v = localStorage.getItem('odmd.' + key); return v == null ? fallback : JSON.parse(v); } catch { return fallback; }
+  },
+  set(key, value) {
+    try { localStorage.setItem('odmd.' + key, JSON.stringify(value)); } catch { /* private mode */ }
+  },
+};
+
+export function debounce(fn, ms) {
+  let t = 0;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+export function toast(msg, kind = '') {
+  const el = h('div.toast' + (kind ? '.' + kind : ''), String(msg));
+  $('#toasts').append(el);
+  setTimeout(() => el.remove(), kind === 'bad' ? 8000 : 4000);
+}
+
+// Card paths go into URLs one segment at a time: `NEW 2021`, `+` and `#`
+// all occur in real file names, and the firmware reads `+` as a space.
+export const enc = (path) => path.split('/').map(encodeURIComponent).join('/');
+export const base = (p) => p.slice(p.lastIndexOf('/') + 1);
+export const dir = (p) => p.slice(0, p.lastIndexOf('/')) || '/';
+
+export function bytes(n) {
+  if (n == null) return '–';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(1) + ' GB';
+}
+
+export function uptime(s) {
+  const d = Math.floor(s / 86400), hh = Math.floor(s / 3600) % 24, m = Math.floor(s / 60) % 60;
+  return d ? `${d}d ${hh}h` : hh ? `${hh}h ${m}m` : `${m}m ${s % 60}s`;
+}
+
+// A manifest's non-blank lines, tolerant like the core (BOM, CRLF, trailing blanks).
+export const lines = (text) => text.replace(/^﻿/, '').split('\n').map((l) => l.trimEnd()).filter(Boolean);
+
+// The display name of an entry: "Title 03" plus nothing else.
+export const label = (e) => (e.title || base(e.path)) + (e.variant != null ? ' ' + String(e.variant).padStart(2, '0') : '');
+
+export function confirmBox(msg) { return window.confirm(msg); }

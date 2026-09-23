@@ -39,9 +39,9 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-smoke fmt clippy clean pack \
+.PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
 	fw-build fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	card-sync api-load
+	fw-release fw-release-flash ota card-sync api-load
 
 test:
 	@echo "==> Testing $(CORE)"
@@ -103,18 +103,39 @@ check-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 
 # wasm-pack: `cargo install --locked wasm-pack`. Output is gitignored.
+# Then every file the device serves gets a `<file>.gz` beside it: the firmware
+# sends `<file>.gz` under /www in preference to `<file>`, unconditionally
+# (see "Serving gzip" in CLAUDE.md). wasm-pack's package.json, .d.ts files and
+# README are deleted so `make card-sync` does not push them to the card.
+# The budget is enforced here: wasm <= 250 KB, JS + CSS <= 80 KB (raw).
+WEB_WWW := $(WEB)/www
 web:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
-	@ls -l $(WEB)/www/pkg/*.wasm
+	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
+	find $(WEB_WWW) -name '*.gz' -delete
+	find $(WEB_WWW) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' \) \
+		-exec gzip -9 -n -k -f {} \;
+	@uv run tools/web-size.py $(WEB_WWW)
 
 # Static server for the page; uv, never bare python. Then open
 # http://localhost:8080 — the file/directory picker does the rest.
 web-serve:
 	uv run python -m http.server 8080 -d $(WEB)/www
 
-# Headless Chromium drive of the page: DMD_CARD_ROOT=... make web-smoke
+# A fake device (JSON API + card files + the built app) for working on the UI
+# without the rig: make web-mock ROOT=~/scratch/dmdos-card, then open
+# http://localhost:8080. OVERLAY=dir keeps the card copy untouched (writes go
+# there); PROXY=http://<device> serves the local build against a real device.
+ROOT ?= $(CARD_ROOT)
+MOCK_PORT ?= 8080
+web-mock: web
+	uv run tools/mock-device.py --port $(MOCK_PORT) \
+		$(if $(PROXY),--proxy $(PROXY),--root $(ROOT) $(if $(OVERLAY),--overlay $(OVERLAY)))
+
+# Headless Chromium drive of the app against the mock (and, with DEVICE=,
+# a read-mostly pass against a real device): DMD_CARD_ROOT=... make web-smoke
 web-smoke: web
-	uv run tools/web-smoke.py
+	uv run tools/web-smoke.py $(if $(DEVICE),--device $(DEVICE))
 
 fmt:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -148,9 +169,13 @@ clean:
 # unlike stripe-dashboard's in-project .embuild) and takes 5-10 minutes.
 
 # FW_FEATURES=probe (or probe,probe-http) builds the timing instrumentation in
-# firmware/src/probe.rs; the default build has none of it.
+# firmware/src/probe.rs; the default build has none of it. The bench targets
+# (fw-build, fw-flash) always add `dev-credentials`, which compiles the
+# firmware/.env WiFi seed in; fw-release never does.
 FW_FEATURES ?=
-FW_CARGO_FEATURES = $(if $(FW_FEATURES),--features $(FW_FEATURES))
+FW_DEV_FEATURES = dev-credentials$(if $(FW_FEATURES),$(comma)$(FW_FEATURES))
+comma := ,
+FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 
 fw-build:
 	@mkdir -p $(FW)/target
@@ -187,8 +212,15 @@ fw-capture:
 fw-erase:
 	$(HOME)/.local/bin/esptool --chip esp32 --port $(PORT) erase-flash
 
+# Both feature sets: the bench build (dev-credentials + FW_FEATURES) and the
+# release build (no features, no .env), so neither cfg branch rots.
 fw-clippy:
+	@mkdir -p $(FW)/target
+	@echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"' > $(FW)/target/sdkconfig.partitions
+	@echo "==> Clippy firmware, --features $(FW_DEV_FEATURES)"
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets $(FW_CARGO_FEATURES) -- -D warnings'
+	@echo "==> Clippy firmware, release feature set (none)"
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -196,6 +228,65 @@ fw-fmt:
 fw-clean:
 	cd $(FW) && bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp cargo clean'
 	rm -rf $(FW)/target
+
+# --- Release -----------------------------------------------------------------
+# `make fw-release` is what goes into the cabinet: a --release build with no
+# features (so no firmware/.env credentials — the build does not even source
+# it, and the two variables are scrubbed from the environment), saved as an
+# OTA image in dist/. The version comes from firmware/Cargo.toml and is also
+# written into the app descriptor as "<version> 4mb", which is what
+# ota.rs's variant check reads at offset 0x30 of an uploaded image.
+# See docs/deploying.md.
+FW_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | head -1)
+FW_VARIANT := 4mb
+# The release build wants ~1.5 GB of its own (host build scripts plus a second
+# ESP-IDF build); FW_RELEASE_TARGET_DIR=/somewhere/roomier moves it.
+# CARGO_WORKSPACE_DIR is set below because embuild otherwise takes the crate
+# root to be the directory above the target dir, and with the target dir
+# elsewhere it would lose the extra_components (hub75, mdns) in Cargo.toml.
+FW_RELEASE_TARGET_DIR ?= $(CURDIR)/$(FW)/target
+FW_RELEASE_BINARY := $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/opendmd-firmware
+FW_RELEASE_SDKCONFIG_FRAG := $(CURDIR)/$(FW)/target/sdkconfig.release
+FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_RELEASE_SDKCONFIG_FRAG)
+DIST := dist
+FW_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT).bin
+# Each ota_N slot in firmware/partitions.csv is 0x1F0000 bytes.
+OTA_SLOT_BYTES := 2031616
+OTA_SLOT_MAX_PCT := 95
+
+fw-release:
+	@test -n "$(FW_VERSION)" || { echo "cannot read the version from $(FW)/Cargo.toml"; exit 2; }
+	@mkdir -p $(FW)/target $(DIST)
+	@{ echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"'; \
+	   echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
+	   echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; } > $(FW_RELEASE_SDKCONFIG_FRAG)
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" cargo build --release --target-dir "$(FW_RELEASE_TARGET_DIR)"'
+	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) $(FW_RELEASE_BINARY) $(FW_IMAGE)'
+	@desc=$$(dd if=$(FW_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
+	 echo "app descriptor version: '$$desc'"; \
+	 test "$$desc" = "$(FW_VERSION) $(FW_VARIANT)" || { echo "expected '$(FW_VERSION) $(FW_VARIANT)' at 0x30"; exit 1; }
+	@size=$$(stat -c %s $(FW_IMAGE)); \
+	 limit=$$(( $(OTA_SLOT_BYTES) * $(OTA_SLOT_MAX_PCT) / 100 )); \
+	 pct=$$(awk "BEGIN { printf \"%.1f\", $$size * 100 / $(OTA_SLOT_BYTES) }"); \
+	 echo "$(FW_IMAGE): $$size B = $$pct% of the $(OTA_SLOT_BYTES) B OTA slot (limit $(OTA_SLOT_MAX_PCT)% = $$limit B)"; \
+	 test $$size -le $$limit || { echo "image exceeds $(OTA_SLOT_MAX_PCT)% of the OTA slot"; exit 1; }
+
+# First install on a fresh board (or one coming from DMDoS/other firmware:
+# `make fw-erase` first). Flashes the release ELF — the same build the dist/
+# image came from — plus bootloader and partition table, and erases otadata so
+# the board boots this image even if it had been OTA'd into ota_1 before.
+fw-release-flash: fw-release
+	bash -c '. $(ESPUP_ENV) && espflash flash --port $(PORT) --baud 115200 --partition-table $(FW)/partitions.csv --flash-size $(FW_VARIANT) --erase-parts otadata --monitor $(FW_RELEASE_BINARY)'
+
+# Push an image over the air: make ota HOST=opendmd.local [BIN=dist/...]
+# Posts it to /api/ota, prints the reply, then polls /api/status until the
+# board is back up (uptime reset) reporting the image's version.
+# OTA_DRY_RUN=1 prints the commands instead of running them.
+BIN ?= $(FW_IMAGE)
+OTA_TIMEOUT ?= 120
+ota:
+	@test -n "$(HOST)" || { echo "usage: make ota HOST=<ip-or-name> [BIN=$(FW_IMAGE)] [OTA_TIMEOUT=120] [OTA_DRY_RUN=1]"; exit 2; }
+	@OTA_DRY_RUN=$(OTA_DRY_RUN) OTA_TIMEOUT=$(OTA_TIMEOUT) tools/ota.sh $(HOST) $(BIN)
 
 # --- Device tools -----------------------------------------------------------
 # Both take HOST=<ip-or-hostname>, e.g. HOST=opendmd.local.
