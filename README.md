@@ -20,7 +20,7 @@ has its own xtensa build config under `firmware/`.
 | `opendmd-render/` | Library. The LED-panel renderer, shared by the simulator and the web app. Depends only on `opendmd-core`. |
 | `opendmd-sim/` | Binary. A `minifb` window that plays a card through `opendmd-core`, drawing it as a simulated LED panel. Glue only. |
 | `opendmd-web/` | WebAssembly front end: the same engine and renderer in a browser page. See "The web app". |
-| `opendmd-pack/` | Binary. Converts a card's GIFs to pre-rendered `.odm` files and points a manifest at them. See "Pre-rendered `.odm` files". |
+| `opendmd-pack/` | Binary. Prepares a card: a pre-rendered `.odm` copy of every GIF, which the player plays in its place. See "Prepared copies". |
 | `firmware/` | ESP32 firmware. microSD + HUB75 + the core engine. See "Firmware". |
 | `hardware/` | Measured HUB75 + SD SPI pinout and photos. See `hardware/PINOUT.md`. |
 
@@ -111,7 +111,7 @@ cd opendmd-sim && cargo run --release -- --root /path/to/card \
 The management UI is a **WebAssembly page the player serves off its own SD
 card** at `http://opendmd.local/`. All the heavy work happens in the browser —
 parsing and filtering manifests, previewing files with the panel look,
-converting GIFs to `.odm` — with the same `opendmd-core` and `opendmd-render`
+preparing GIFs for playback — with the same `opendmd-core` and `opendmd-render`
 Rust the firmware and the simulator run. The ESP32 is a file server plus the
 small JSON API under "Firmware". No framework and no bundler: hand-written
 HTML, CSS and ES modules in `opendmd-web/www/`, plus the `opendmd-web` wasm
@@ -133,6 +133,11 @@ at an extracted copy of a card and the same views work over the picked files,
 read one at a time as they are needed. Writes in local mode go to a folder you
 grant (Chromium's File System Access API) or become downloads.
 
+**Users see GIFs and playlists.** A GIF's *prepared copy* (a pre-rendered
+`.odm`, "Prepared copies" below) is a cache: the player plays it when it
+exists, previews fetch it first and fall back to the GIF, and the UI never
+names the format or shows a copy's path.
+
 **The views** — a left rail on a laptop, a bottom bar on a phone:
 
 - **Now** — what the panel is playing (title, platform and category parsed
@@ -142,54 +147,52 @@ grant (Chromium's File System Access API) or become downloads.
   refresh rate, deadline misses and worst lateness. A **panel-look preview**
   of the same file plays alongside — fetched once when the file changes and
   played in the browser, so it is *not frame-synced* with the panel. It
-  fetches the file's `.odm` when `filelist.odm.txt` says there is one (cheap
-  for the device) and can be switched off. The LED-look controls (gain,
+  fetches the file's prepared copy first (cheap for the device; one 404 when
+  there is none) and can be switched off. The LED-look controls (gain,
   bloom, gamma, flat) are here too and are remembered per browser. In local
   mode this view is the simulator: a manifest or the whole folder, a platform
   filter, shuffle and a seed, with the firmware's 3-30 s dwell.
-- **Library** — the card by category (`GET /api/files`), thousands of entries
-  in a virtualised list, each name run through the core's tag parser. Search
-  titles (normalised the way the core matches them), filter by platform
-  chips, click to preview (and, on a device, **Send to panel** — its `.odm`
-  when there is one), and a green `.odm` tag where `filelist.odm.txt` lists
-  a converted file. Select entries to add them to a set or send them to the
-  converter.
-- **Sets** — `/sets/*.txt` and the card's root manifests (`filelist.txt`,
-  `filelist.odm.txt`, `.hall`, `.xmas`), with the card's default marked
-  (`filelist.odm.txt` if it has one, else `filelist.txt`). Open one to edit it;
-  build a new one with the core's `Filter` (platforms, categories, title
-  words, dropped flags, shuffle with a seed, a limit) over any manifest, or
-  from the Library selection; reorder, remove, save (`PUT /api/sets/<name>`),
-  activate (`PUT /api/config {"set": …}` — a set, a root manifest by file
-  name, or `""` for the default — which rebuilds the device's index in a few
-  seconds) and delete. Deleting the active set switches the player back to
-  the default first. Switching is disabled while status says an index is
-  `building`.
-- **Convert** — GIF to `.odm` in the browser with the core's encoder: byte
-  for byte what `opendmd-pack` writes. Sources are Library selections
-  (fetched from the device) or local files; destinations use the bucketed
-  layout, `/odm/<Category>/<bb>/<name>.odm`. Files already converted are
-  skipped (known from `filelist.odm.txt`, or one `GET /api/stat` of the
-  bucketed destination when the card has none). One upload at a time, because every transfer costs the playing
-  device heap; progress, throughput and errors as it goes. Afterwards it
-  offers to regenerate `/filelist.odm.txt` from `/filelist.txt`.
+- **Library** — the card's GIFs by category (`GET /api/files`), thousands
+  of entries in a virtualised list, each name run through the core's tag
+  parser. Search titles (normalised the way the core matches them), filter by
+  platform chips, click to preview (and, on a device, **Send to panel**).
+  Select entries to add them to a playlist. **Add GIFs** (device) uploads
+  files into the category shown, prepares each in the browser (GIF, then its
+  copy, one file at a time) and offers to add them to the playlist in play.
+- **Playlists** (`#sets`) — the card's own (`filelist.txt` as **All files**,
+  the default; `filelist.hall` **Halloween**; `filelist.xmas` **Christmas**;
+  any other `filelist.*` by file name; an obsolete `filelist.odm.*` never)
+  and `/sets/*.txt`. Open one to edit it; build a new one with the core's
+  `Filter` (platforms, categories, title words, dropped flags, shuffle with a
+  seed, a limit) over any playlist, or from the Library selection; reorder,
+  remove, save (`PUT /api/sets/<name>`), activate (`PUT /api/config {"set":
+  …}` — `""` for All files, a root manifest's file name, or a set's name —
+  which rebuilds the device's index in a few seconds) and delete. Deleting
+  the active playlist switches the player back to All files first. Switching
+  is disabled while status says an index is `building`. Entries are always
+  GIF paths.
 - **Settings** — WiFi (with a scan) and hostname, which need a reboot;
-  brightness, dwell, shuffle, platform filter and active set, which apply
-  live (any set or root manifest; not while an index is building); rebuild
-  the index, reboot, and OTA firmware upload with progress; the firmware
-  version, flash variant, panel facts, `index_state` and the web app's own
-  version (`www_version`, from `www/version.txt`).
+  brightness, dwell, shuffle, platform filter and playlist, which apply
+  live (not while an index is building); the **Playback cache** card ("9,826
+  of 10,133 files prepared", from `GET /api/cache`) with **Prepare remaining
+  files**, which works out what the playlist in play is missing
+  (`GET /api/cache/list`) and encodes and uploads it in the background, one
+  file at a time, with progress, an ETA and a stop button (starting again
+  carries on); rebuild the index, reboot, and OTA firmware upload with
+  progress; the firmware version, flash variant, panel facts, `index_state`
+  and the web app's own version (`www_version`, from `www/version.txt`).
 
 **Size budget**, checked by `make web` (`tools/web-size.py`): the wasm module
 plus its generated JS glue at most 250 KB, the hand-written JS and CSS at
 most 80 KB. Today that is about 175 KB of wasm + 26 KB of glue (84 KB
-gzipped) and 75 KB of JS and CSS (28 KB gzipped). `make web` writes a
+gzipped) and 77 KB of JS and CSS (29 KB gzipped). `make web` writes a
 `<file>.gz` beside each file, and the player sends those in preference.
 
 **The mock device.** `tools/mock-device.py` (a `uv` script, standard library
 only) serves the built app plus a fake device over an extracted card copy:
 `/api/status` walking the active manifest (the default rule included),
-config, sets, play, stat, file uploads and deletes, reindex, a canned WiFi
+config, sets, play, stat, the playback cache (`/api/cache`, `/list`,
+`/forget`), file uploads and deletes, reindex, a canned WiFi
 scan, and the card's files — with the firmware's JSON shapes and quirks.
 `--overlay dir` sends every write there so the card copy is never modified;
 `--strict` drops the mock's few deliberate deviations and adds the
@@ -219,7 +222,7 @@ Every GIF in the archive is 128x32 except two strays (132x32 and 135x32).
 Mismatched sizes are centred and cropped, never resampled — it is pixel art and
 any scaling filter ruins it.
 
-## Pre-rendered `.odm` files
+## Prepared copies (`.odm` files)
 
 An `.odm` file is a GIF that has already been played: every frame fully
 composited, one palette for the whole file, and each frame stored as KEEP /
@@ -233,40 +236,33 @@ and are quantised; play the `.gif` for any that look wrong. The byte-level
 spec is [`docs/odm-format.md`](docs/odm-format.md); `tools/odm-proto.py` is
 the Python reference it came from.
 
-The player decides by content, not by name: a manifest may mix `.gif` and
-`.odm` paths, and a converted file keeps its GIF's tags. To convert a card
-copy and play the result:
+**Users see GIFs and playlists; prepared copies are a cache.** Playlists
+only ever name GIFs. For every `/gifs/<Category>/<name>.gif` it opens, the
+firmware first tries the copy at `/odm/<Category>/<bb>/<name>.odm` (`<bb>` =
+low byte of FNV-1a-32 of the `.odm` name, 256 buckets per category, so a
+lookup scans ~15 entries, never the 3,781-file `gifs/Consoles`) and plays it
+if it opens and is an ODM file; otherwise the GIF. A miss costs ~5-6 ms (one
+failed open in a small directory, measured on the rig). A manifest line that
+already names an `/odm/...` path is opened as it is, so old manifests keep
+working, but nothing writes them any more and `filelist.odm.txt` is ignored.
+To prepare a card copy:
 
 ```bash
-# <name>.odm beside every <name>.gif; skips files already converted;
-# --verify plays both and compares every frame
-make pack ARGS="convert /path/to/card --verify"
-
-# filelist.txt with every path switched to .odm where one exists
-make pack ARGS="manifest /path/to/card"          # -> filelist.odm.txt
-
-# or: odm/<Category>/<bb>/<name>.odm, 256 hash buckets per category, so the
-# ESP32 never scans a 3,781-file directory (copies current beside .odm files)
+# odm/<Category>/<bb>/<name>.odm for every GIF; skips files already
+# prepared; --verify plays both and compares every frame
 make pack ARGS="convert /path/to/card --layout bucketed --verify"
-make pack ARGS="manifest /path/to/card --layout bucketed"   # -> filelist.odm.txt
 
-# onto a running player: the files, then the manifest (the next boot plays it)
+# onto a running player instead: the files (or use the web app's
+# Settings -> Playback cache, which prepares them in the browser)
 uv run tools/card-sync.py <host> --from /path/to/card --paths list.txt
-curl -T /path/to/card/filelist.odm.txt http://<host>/api/files/filelist.odm.txt
-curl -X POST http://<host>/api/reboot     # or PUT /api/config {"set":"filelist.odm.txt"} now
 ```
 
-**`filelist.odm.txt` is the default playlist when the card has one**: with no
-set selected the firmware plays it in preference to `filelist.txt` (chosen at
-boot and at every set change; `/api/status` reports the one in play as
-`manifest`). `PUT /api/config {"set":"filelist.txt"}` plays the GIFs instead,
-`{"set":""}` goes back to the default, and any other name is
-`/sets/<name>.txt`.
-
-Or copy the `.odm` files and the manifest onto the card directly. Either layout
-leaves `gifs/` and `filelist.txt` alone, so the card still works with stock
-DMDoS; the bucketed layout and its hash are described under "Card layout" in
-[`docs/odm-format.md`](docs/odm-format.md).
+That is all: no manifest to write, nothing to select. (`opendmd-pack
+manifest` still rewrites a manifest to `.odm` paths, for tooling and tests.)
+`GET /api/cache` reports how many of the active playlist's entries have a
+copy. The copies leave `gifs/` and `filelist.txt` alone, so the card still
+works with stock DMDoS; the layout and its hash are described under "Card
+layout" in [`docs/odm-format.md`](docs/odm-format.md).
 
 ## Tag grammar
 

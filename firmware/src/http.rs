@@ -51,6 +51,15 @@ struct PlayRequest {
 /// Requests the network worker answers on behalf of a handler.
 pub enum NetCommand {
     Scan(mpsc::Sender<Vec<ScannedAp>>),
+    /// Count the playback cache (`cache::run_count`); no reply, the result
+    /// lands in `cache`'s state for `GET /api/cache`.
+    CountCache,
+}
+
+/// Wire format for `POST /api/cache/forget`.
+#[derive(serde::Deserialize)]
+struct ForgetRequest {
+    path: String,
 }
 
 /// Everything the handlers share. One `Arc` per closure.
@@ -91,7 +100,9 @@ struct ConfigPatch {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 32)?;
+    // URI handler slots: one per `route` below (33 now, the captive-portal loop counting six). Registration past
+    // the limit fails the whole server, so count when adding a route.
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 36)?;
 
     // --- The web app, and the setup page as its fallback -------------------
     server.route("/", Method::Get, |req| {
@@ -302,6 +313,59 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         req.json(&json)
     })?;
 
+    // The playback cache. `total` is the playlist length the engine knows;
+    // `prepared` is counted on the network worker (see `cache.rs`), so a
+    // first request, or one after the card changed, answers "counting" with
+    // the last count (or null) and the browser polls.
+    let c = ctx.clone();
+    server.route("/api/cache", Method::Get, move |req| {
+        let snap = crate::cache::snapshot();
+        let total = c.status.lock().unwrap().entries;
+        req.json(&format!(
+            r#"{{"total":{total},"prepared":{},"state":{},"count_ms":{}}}"#,
+            snap.prepared
+                .map_or_else(|| "null".to_string(), |n| n.to_string()),
+            json_string(if snap.counting { "counting" } else { "ready" }),
+            snap.count_ms
+        ))
+    })?;
+
+    // Every prepared copy's card path, streamed: what a browser intersects
+    // with a playlist to find the files left to prepare.
+    server.route("/api/cache/list", Method::Get, |req| {
+        if !files::affordable(req)? {
+            return Ok(());
+        }
+        crate::cache::stream_list(req)
+    })?;
+
+    // Remove the prepared copy of a GIF (it was replaced, or is going): its
+    // bucketed `.odm`, if there is one. `{"path": "/gifs/…"}`.
+    let c = ctx.clone();
+    server.route("/api/cache/forget", Method::Post, move |req| {
+        let Some(body) = json_body(req)? else {
+            return Ok(());
+        };
+        let forget: ForgetRequest = match serde_json::from_slice(&body) {
+            Ok(p) => p,
+            Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
+        };
+        if files::card_path(config::SD_MOUNT, &forget.path).is_none()
+            || opendmd_core::layout::bucketed_path(&forget.path).is_none()
+        {
+            return req.bad_request("path must be a card-absolute /gifs/….gif");
+        }
+        skip_if_playing(&c, &format!("{}{}", config::SD_MOUNT, forget.path));
+        match crate::cache::forget(&forget.path) {
+            Ok(removed) => req.json(&format!(
+                r#"{{"ok":true,"path":{},"removed":{}}}"#,
+                json_string(&forget.path),
+                removed.is_some()
+            )),
+            Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
+        }
+    })?;
+
     server.route("/api/files", Method::Get, |req| {
         if !files::affordable(req)? {
             return Ok(());
@@ -373,17 +437,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if files::is_manifest_path(&dest) {
             return install_manifest(req, &c, dest);
         }
-        // If the player has this very file open, ask it to move on first: FAT
-        // cannot replace a file that is being read.
-        let playing = c.status.lock().unwrap().path.clone();
-        if !playing.is_empty()
-            && files::same_card_path(&dest, &format!("{}{}", config::SD_MOUNT, playing))
-        {
-            let _ = c.cmd.send(Command::Skip);
-            std::thread::sleep(Duration::from_millis(200));
-        }
+        // If the player has this very file open — the GIF, or its prepared
+        // copy — ask it to move on first: FAT cannot replace a file that is
+        // being read.
+        skip_if_playing(&c, &dest);
         let written = files::receive_upload(req, &dest)?;
         info!("PUT /{rel}: {written} B");
+        if files::under(&dest, config::ODM_ROOT) {
+            crate::cache::invalidate();
+        }
         if files::same_card_path(&dest, config::WWW_VERSION_PATH) {
             c.status.lock().unwrap().www_version = files::read_www_version();
         }
@@ -421,10 +483,20 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 return req.error(500, "500 Internal Server Error", &format!("{e:#}"));
             }
         }
+        skip_if_playing(&c, &path);
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 if files::same_card_path(&path, config::WWW_VERSION_PATH) {
                     c.status.lock().unwrap().www_version = None;
+                }
+                // A GIF takes its prepared copy with it; a copy removed
+                // directly changes the count.
+                let card = format!("/{}", rel.trim_start_matches('/'));
+                if let Err(e) = crate::cache::forget(&card) {
+                    log::warn!("DELETE {card}: its prepared copy: {e}");
+                }
+                if files::under(&path, config::ODM_ROOT) {
+                    crate::cache::invalidate();
                 }
                 req.json(r#"{"ok":true}"#)
             }
@@ -433,8 +505,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     // --- Card files, read-only --------------------------------------------
-    // Every root manifest — `filelist.txt`, `filelist.odm.txt`,
-    // `filelist.hall`, `filelist.xmas` — served as text. Without this they
+    // Every root manifest — `filelist.txt`, `filelist.hall`, `filelist.xmas`
+    // (and an obsolete `filelist.odm.txt`, if one is still there) — served as
+    // text. Without this they
     // fell through to the `/*` www catch-all and 404ed.
     server.route("/filelist*", Method::Get, |req| {
         if !files::affordable(req)? {
@@ -461,7 +534,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/sets/*", Method::Get, |req| {
         serve_under(req, config::SD_MOUNT)
     })?;
-    // The bucketed `.odm` tree (`opendmd-pack convert --layout bucketed`).
+    // The playback cache: prepared copies, `odm/<Category>/<bb>/<name>.odm`
+    // (`opendmd-pack convert --layout bucketed`, or the web app).
     server.route("/odm/*", Method::Get, |req| {
         serve_under(req, config::SD_MOUNT)
     })?;
@@ -526,6 +600,25 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 fn portal_target(ctx: &Ctx) -> Option<String> {
     let s = ctx.status.lock().ok()?;
     (s.wifi == "ap" && !s.ip.is_empty()).then(|| format!("http://{}/", s.ip))
+}
+
+/// If the player has `fs_path` open — the GIF on screen, or the prepared copy
+/// it is actually reading for it — skip to the next entry and give it a beat
+/// to close the file: FAT must not have an open file replaced or unlinked.
+fn skip_if_playing(ctx: &Ctx, fs_path: &str) {
+    let playing = ctx.status.lock().unwrap().path.clone();
+    if playing.is_empty() {
+        return;
+    }
+    let gif = format!("{}{playing}", config::SD_MOUNT);
+    let copy =
+        opendmd_core::layout::bucketed_path(&playing).map(|p| format!("{}{p}", config::SD_MOUNT));
+    if files::same_card_path(fs_path, &gif)
+        || copy.is_some_and(|c| files::same_card_path(fs_path, &c))
+    {
+        let _ = ctx.cmd.send(Command::Skip);
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 /// Serve a card-absolute path below `root`, 404ing if it is not a file.

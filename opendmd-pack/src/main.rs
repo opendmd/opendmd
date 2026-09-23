@@ -1,5 +1,5 @@
-//! `opendmd-pack`: turn a card's GIFs into ODM v1 files and point a manifest
-//! at them.
+//! `opendmd-pack`: prepare a card — turn its GIFs into ODM v1 files, the
+//! copies the player plays in their place.
 //!
 //! ```text
 //! opendmd-pack convert  <card-root> [--layout beside|bucketed] [--jobs N] [--verify] [--force]
@@ -19,9 +19,15 @@
 //! identical, except for files whose palette had to be quantised, where the
 //! frame count and delays must match and the colour error is reported.
 //!
+//! **Preparing a card is one command:** `convert <card-root> --layout
+//! bucketed --verify`. The firmware looks for each GIF's copy at its bucketed
+//! path and plays it when it is there, so playlists keep naming GIFs and
+//! nothing else changes on the card.
+//!
 //! `manifest` rewrites a manifest's `/gifs/....gif` lines to the `.odm` path
 //! of the chosen layout wherever that file exists on the card, keeping order,
-//! blank lines and line endings.
+//! blank lines and line endings. **For tooling and tests only**: playback no
+//! longer needs such a manifest (the firmware ignores `filelist.odm.txt`).
 
 mod layout;
 
@@ -47,7 +53,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Write <name>.odm beside every .gif under <card-root>/gifs and report.
+    /// Write an .odm for every .gif under <card-root>/gifs and report. To
+    /// prepare a card for the player: --layout bucketed --verify.
     Convert {
         card_root: PathBuf,
         /// Where the .odm files go: beside each .gif, or odm/<Category>/<bb>/.
@@ -63,7 +70,9 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
-    /// Rewrite a manifest's paths to .odm wherever the .odm exists.
+    /// For tooling/tests only: rewrite a manifest's paths to .odm wherever the
+    /// .odm exists. Playback does not need this; `convert --layout bucketed`
+    /// is all a card needs.
     Manifest {
         card_root: PathBuf,
         /// Which .odm paths to write: beside each .gif, or odm/<Category>/<bb>/.

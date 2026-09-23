@@ -91,6 +91,16 @@ impl Filter {
     }
 
     /// True if this entry survives the filter.
+    /// True when every entry matches (`Filter::new()` with nothing added),
+    /// so a caller can skip parsing entries it only needed for the filter.
+    pub fn is_unconstrained(&self) -> bool {
+        self.platforms.is_none()
+            && self.categories_include.is_none()
+            && self.categories_exclude.is_empty()
+            && self.titles.is_none()
+            && self.exclude_flags.is_empty()
+    }
+
     pub fn matches(&self, entry: &Entry) -> bool {
         if let Some(wanted) = &self.platforms {
             match &entry.platform {

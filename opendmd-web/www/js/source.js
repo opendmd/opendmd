@@ -54,6 +54,11 @@ export class DeviceSource {
   // {path, exists, size, is_dir} from one `stat`, i.e. one scan of the parent
   // directory on the device: ~20 ms in a bucket, ~600 ms in gifs/Consoles.
   stat(path) { return this.json('GET', '/api/stat?path=' + encodeURIComponent(path)); }
+  // The playback cache: {total, prepared, state: "ready"|"counting"}; the
+  // card paths of every prepared copy; and forgetting a GIF's copy.
+  cache() { return this.json('GET', '/api/cache', undefined, 15000); }
+  async cacheList() { return (await this.json('GET', '/api/cache/list', undefined, 180000)).paths; }
+  forget(path) { return this.json('POST', '/api/cache/forget', JSON.stringify({ path })); }
 
   async list(dir) {
     const r = await this.json('GET', '/api/files?dir=' + encodeURIComponent(dir));
@@ -93,7 +98,7 @@ export class DeviceSource {
 
 // Card-absolute path for a picked file. A folder pick gives
 // `webkitRelativePath` = `<picked folder>/gifs/Consoles/X.gif`; if the folder
-// picked was `gifs` (or `odm`, `sets`) itself, keep it.
+// picked was one of the card's top-level folders itself, keep it.
 const ROOTS = new Set(['gifs', 'odm', 'sets', 'www', 'logos']);
 function localPath(f, cardPath) {
   const rel = f.webkitRelativePath;

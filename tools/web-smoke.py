@@ -20,31 +20,41 @@ every view like a person would:
             missing path / a non-GIF give the 404 / 415 toasts
   Library   open Consoles, search "mario", platform chip SNES, preview one,
             send it to the panel, select three
-  Sets      the root manifests are listed with the card default marked
-            (filelist.odm.txt, from status `manifest`); activate
-            filelist.xmas by name and the default back as ""; build from
-            platforms MD,SNES, save as `smoke` (the file must hold exactly
-            the matching filelist.txt lines, in order), activate it, delete
-            it (the UI switches back to the default first)
-  Convert   the three selected GIFs -> .odm at their bucketed paths, which
-            must be byte-identical to `opendmd-pack convert --layout
-            bucketed` on the same GIFs; then regenerate filelist.odm.txt,
-            which must equal the card's own. Then, with the page told there
-            is no filelist.odm.txt, the same three again: skipped after one
-            GET /api/stat each and no bucket listing
+  Sets      the playlists are listed by name (All files — the default —,
+            Halloween, Christmas; never the obsolete filelist.odm.*);
+            activate Christmas (set "filelist.xmas") and All files back as
+            ""; build from platforms MD,SNES, save as `smoke` (the file must
+            hold exactly the matching filelist.txt lines, in order), activate
+            it, delete it (the UI switches back to the default first)
+  Cache     the three selected GIFs as a playlist `cachetest`, activated;
+            their prepared copies forgotten (POST /api/cache/forget), so the
+            Settings card reads "0 of 3"; "Prepare remaining files" makes all
+            three, byte-identical to `opendmd-pack convert --layout
+            bucketed`, and the card reads "3 of 3"
+  Add GIFs  two GIFs uploaded into Consoles from Library: each GIF and its
+            prepared copy land (the copy byte-identical to opendmd-pack), and
+            the confirm adds both to `cachetest` ("5 of 5"); deleting one of
+            the GIFs takes its copy with it
   Settings  www_version and index_state shown; PUT brightness, read it
-            back; WiFi scan; with /api/status rewritten to index_state
-            "building" (Playwright route), set switching is disabled in
-            Settings and Sets, and comes back when it reads "ready"
+            back; WiFi scan; the playlist choices are labelled; with
+            /api/status rewritten to index_state "building" (Playwright
+            route), set switching is disabled in Settings and Sets, and comes
+            back when it reads "ready"
 
-A few requests fail on purpose (the 404/415 plays); they are listed in
-`expected` and are not counted as console errors.
+Every view's visible text (and every title tooltip) is checked for "odm" and
+"bucket": prepared copies are an implementation detail.
+
+A few requests fail on purpose (the 404/415 plays, and a preview's try for a
+prepared copy that is not there); they are listed in `expected` and are not
+counted as console errors.
 
 Real-device pass (--device): the local build served through
 `mock-device.py --proxy`, so nothing is uploaded to the card's www/. Now,
 Library (+ a preview, sent to the panel with POST /api/play, which must show
-up in /api/status), Settings (read only) and one write: save a set named
-`smoke` and delete it. No conversion, no filelist or config changes.
+up in /api/status), a preview of a GIF that has a prepared copy (fetched from
+the copy, never the GIF), the cache count (/api/cache, waited until ready),
+the playlists listed by name, Settings (read only) and one write: save a set
+named `smoke` and delete it. No preparing, no filelist or config changes.
 
 Screenshots of every view at 1280x800 and 390x844 go to target/web-smoke/.
 Any console error or page error fails the run.
@@ -59,6 +69,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -68,7 +79,7 @@ REPO = Path(__file__).resolve().parents[1]
 CARD = Path(os.environ.get("DMD_CARD_ROOT", "~/scratch/dmdos-card"))
 OUT = Path(os.environ.get("WEB_SMOKE_OUT", REPO / "target" / "web-smoke"))
 SIZES = {"laptop": (1280, 800), "phone": (390, 844)}
-VIEWS = ["now", "library", "sets", "convert", "settings"]
+VIEWS = ["now", "library", "sets", "settings"]
 
 failures: list[str] = []
 
@@ -149,8 +160,9 @@ def shot(page: Page, name: str, size: str) -> None:
     print(f"  shot {path}")
 
 
-# URL substrings of requests that fail on purpose (a 404/415 play).
-expected: list[str] = []
+# URL substrings of requests that fail on purpose (a 404/415 play). A
+# preview asks for the prepared copy first, and a 404 there is normal.
+expected: list[str] = ["/odm/"]
 
 
 def unexpected(url: str) -> bool:
@@ -208,6 +220,31 @@ def root_manifest_rows(page: Page) -> list[str]:
     return page.eval_on_selector_all("#sets-list [data-path^='/filelist']", "els => els.map(e => e.dataset.path)")
 
 
+def row_label(page: Page, path: str) -> str:
+    return page.eval_on_selector(f"#sets-list [data-path='{path}'] .grow", "e => e.firstChild.textContent")
+
+
+# Visible copy that would leak the implementation: prepared copies are a
+# cache the user never has to know the format or layout of.
+LEAK = re.compile(r"odm|bucket", re.I)
+
+
+# Names of playlists the user made are their content, not UI copy (the rig's
+# card has bench sets called "odm" and "odmb"); filled in by device_pass.
+user_names: set[str] = set()
+
+
+def no_leaks(page: Page, where: str) -> None:
+    text = page.evaluate("""() => [document.body.innerText,
+        ...[...document.querySelectorAll('[title],[placeholder]')].map(e => (e.title || '') + ' ' + (e.placeholder || '')),
+        ...[...document.querySelectorAll('option')].map(o => o.textContent)].join('\\n')""")
+    for n in sorted(user_names, key=len, reverse=True):
+        text = re.sub(rf"(?<![\w.]){re.escape(n)}(?![\w.])", "", text)
+    hits = sorted({m.group(0) for m in LEAK.finditer(text)})
+    lines = [l for l in text.split("\n") if LEAK.search(l)][:3]
+    check(not hits, f"{where}: no 'odm'/'bucket' in visible text {lines if hits else ''}")
+
+
 def open_library(page: Page) -> None:
     goto_view(page, "library")
     page.wait_for_selector("#lib-cat option[value='Consoles']", state="attached", timeout=30000)
@@ -247,19 +284,32 @@ def expected_md_snes() -> list[str]:
     return [l for l in lines if pat.match(l.rsplit("/", 1)[1])]
 
 
+def post_json(url: str, obj) -> dict:
+    req = urllib.request.Request(url, data=json.dumps(obj).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
+def cache_ready(base: str, timeout_s: float = 60) -> dict:
+    """GET /api/cache until it stops counting."""
+    deadline = time.time() + timeout_s
+    r = get_json(base + "/api/cache")
+    while r["state"] != "ready" and time.time() < deadline:
+        time.sleep(0.5)
+        r = get_json(base + "/api/cache")
+    return r
+
+
+def wait_cache_line(page: Page, text: str, timeout_ms: int = 60000) -> str:
+    page.wait_for_function(f"document.querySelector('#pc-count').textContent.startsWith({json.dumps(text)})", timeout=timeout_ms)
+    return page.inner_text("#pc-count")
+
+
 def mock_pass(browser) -> None:
     overlay = OUT / "overlay"
     shutil.rmtree(overlay, ignore_errors=True)
     overlay.mkdir(parents=True)
-    # Seed the overlay's filelist.odm.txt with every Consoles SNES Mario line
-    # pointing back at its GIF, so the converter has something to convert
-    # (it skips files the manifest says are done).
-    gif_lines = (CARD / "filelist.txt").read_text().split("\n")
-    odm_lines = (CARD / "filelist.odm.txt").read_text().split("\n")
-    assert len(gif_lines) == len(odm_lines), "filelist.odm.txt is not line-for-line filelist.txt"
-    mario = re.compile(r"^/odm/Consoles/[0-9a-f]{2}/SNES_[^/]*mario[^/]*\.odm$", re.I)
-    seeded = [g if mario.match(o) else o for g, o in zip(gif_lines, odm_lines)]
-    (overlay / "filelist.odm.txt").write_text("\n".join(seeded))
     proc, base = start_mock(["--root", str(CARD), "--overlay", str(overlay), "--dwell", "4"])
     errors: list[str] = []
     try:
@@ -269,6 +319,7 @@ def mock_pass(browser) -> None:
         # Now
         page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
         check(page.locator("#now-stats .stat").count() >= 8, "now: status grid renders")
+        check(get_json(base + "/api/status")["manifest"] == "/sdcard/filelist.txt", "now: the default playlist is filelist.txt")
         wait_lit(page, "#now-panel", "now")
         before = page.inner_text("#now-path")
         page.click("#now-skip")
@@ -295,37 +346,44 @@ def mock_pass(browser) -> None:
         page.fill("#now-play-path", "/filelist.txt")
         page.click("#now-play")
         t = last_toast(page, "bad")
-        check("not a GIF or .odm" in t, f"now: 415 play -> toast '{t}'")
-        shot(page, "now", "laptop")
+        check("not a GIF" in t and not LEAK.search(t), f"now: 415 play -> toast '{t}'")
         page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+        page.fill("#now-play-path", "")
+        no_leaks(page, "now")
+        shot(page, "now", "laptop")
         expected.remove("/api/play")
-        # Library, and three Mario GIFs for the converter
+        # Library, and three Mario GIFs for the cache test
         open_library(page)
         send_from_library(page, base, "library")
         page.eval_on_selector_all("#lib-list .vrow:not([hidden]) input[type=checkbox]",
                                   "els => els.slice(0, 3).forEach(e => e.click())")
         check(page.inner_text("#lib-selbar b") == "3", "library: three selected")
+        selected = page.evaluate("async () => { const { app } = await import('./js/state.js'); return [...app.selection]; }")
+        no_leaks(page, "library")
         shot(page, "library", "laptop")
-        # Sets: root manifests, the default, activation by file name
+        # Sets: the playlists by name, the default, activation by value
         goto_view(page, "sets")
         page.wait_for_selector("#sets-list [data-path='/filelist.xmas']", timeout=20000)
         rows = root_manifest_rows(page)
-        check({"/filelist.txt", "/filelist.odm.txt", "/filelist.hall", "/filelist.xmas"} <= set(rows),
-              f"sets: root manifests listed ({rows})")
+        check({"/filelist.txt", "/filelist.hall", "/filelist.xmas"} <= set(rows) and not any("odm" in r for r in rows),
+              f"sets: root playlists listed, the obsolete ones not ({rows})")
+        labels = {p: row_label(page, p) for p in ["/filelist.txt", "/filelist.hall", "/filelist.xmas"]}
+        check(labels == {"/filelist.txt": "All files", "/filelist.hall": "Halloween", "/filelist.xmas": "Christmas"},
+              f"sets: friendly labels {labels}")
         dflt = page.eval_on_selector_all("#sets-list [data-path] .tag:not(.act)", "els => els.filter(e => e.textContent === 'default').map(e => e.closest('[data-path]').dataset.path)")
-        check(dflt == ["/filelist.odm.txt"], f"sets: default marked on {dflt} (status manifest {get_json(base + '/api/status')['manifest']})")
-        check("(default)" in page.inner_text("#set-active") and "not possible" not in page.inner_text("#view-sets"),
-              f"sets: '{page.inner_text('#set-active')}', no stale note")
+        check(dflt == ["/filelist.txt"], f"sets: default marked on {dflt}")
+        check("All files" in page.inner_text("#set-active"), f"sets: '{page.inner_text('#set-active')}'")
         page.click("#sets-list [data-path='/filelist.xmas'] >> text=Activate")
-        page.wait_for_function("document.querySelector('#set-active').textContent.includes('filelist.xmas')", timeout=60000)
+        page.wait_for_function("document.querySelector('#set-active').textContent.includes('Christmas')", timeout=60000)
         st, cf = get_json(base + "/api/status"), get_json(base + "/api/config")
         check(cf["set"] == "filelist.xmas" and st["manifest"] == "/sdcard/filelist.xmas",
-              f"sets: filelist.xmas activated by name ({st['entries']} entries)")
+              f"sets: Christmas activated as set \"filelist.xmas\" ({st['entries']} entries)")
+        no_leaks(page, "sets")
         shot(page, "sets-root", "laptop")
-        page.click("#sets-list [data-path='/filelist.odm.txt'] >> text=Activate")
-        page.wait_for_function("document.querySelector('#set-active').textContent.includes('(default)')", timeout=60000)
+        page.click("#sets-list [data-path='/filelist.txt'] >> text=Activate")
+        page.wait_for_function("document.querySelector('#set-active').textContent.includes('All files')", timeout=60000)
         st, cf = get_json(base + "/api/status"), get_json(base + "/api/config")
-        check(cf["set"] == "" and st["manifest"] == "/sdcard/filelist.odm.txt", "sets: the default activated as set \"\"")
+        check(cf["set"] == "" and st["manifest"] == "/sdcard/filelist.txt", "sets: All files activated as set \"\"")
         n = build_smoke_set(page)
         written = overlay / "sets" / "smoke.txt"
         want = expected_md_snes()
@@ -341,42 +399,65 @@ def mock_pass(browser) -> None:
         page.wait_for_selector("#sets-list [data-path='/sets/smoke.txt']", state="detached", timeout=60000)
         check(not written.exists() and get_json(base + "/api/config")["set"] == "",
               "sets: deleted after switching back to the default")
-        # Convert the three selected GIFs
+        # Cache: the three selected GIFs as a playlist, their copies forgotten.
         goto_view(page, "library")
-        page.click("#lib-to-convert")
-        page.wait_for_selector("#view-convert.on")
-        page.wait_for_function("document.querySelector('#cv-progress').textContent.includes('3 queued')", timeout=10000)
-        # The overlay's filelist.odm.txt forgets these three, so they are
-        # converted rather than skipped.
-        page.click("#cv-start")
-        page.wait_for_function("document.querySelector('#cv-progress').textContent.startsWith('3 converted')", timeout=120000)
-        new = sorted(p for p in (overlay / "odm").rglob("*.odm"))
-        check(len(new) == 3, f"convert: 3 .odm files uploaded ({[str(p.relative_to(overlay)) for p in new]})")
-        compare_with_pack(overlay, new)
-        page.click("#cv-manifest-write")
-        page.wait_for_timeout(1500)
-        regenerated = overlay / "filelist.odm.txt"
-        done = {"/" + str(p.relative_to(overlay)) for p in new}
-        want = "\n".join(o if o in done else s_ for s_, o in zip(seeded, odm_lines))
-        check(regenerated.exists() and regenerated.read_text() == want,
-              "convert: regenerated filelist.odm.txt = the seeded one with exactly the 3 new lines switched to .odm")
-        shot(page, "convert", "laptop")
-        tip = page.get_attribute("label:has(#cv-skip)", "title") or ""
-        check("stat" in tip and "gifs/Consoles" in tip, "convert: the skip checkbox explains the stat cost")
-        # Without filelist.odm.txt the skip check is one /api/stat per file.
-        page.evaluate("async () => { const { app } = await import('./js/state.js'); app.odm = new Set(); app.odmSource = 'none'; }")
-        page.click("text=Clear finished")
-        reqs: list[str] = []
-        page.on("request", lambda r: reqs.append(r.url))
+        page.click("#lib-to-set")
+        page.wait_for_selector("#view-sets.on")
+        page.evaluate("async () => { const { app } = await import('./js/state.js'); const { emit } = await import('./js/util.js'); app.draft.paths = [...app.selection]; app.draft.name = ''; emit('draft'); }")
+        page.fill("#set-name", "cachetest")
+        page.click("#set-save-activate")
+        page.wait_for_function("document.querySelector('#set-active').textContent.includes('cachetest')", timeout=60000)
+        check(get_json(base + "/api/status")["entries"] == 3, "cache: playlist cachetest (the three selected) playing")
+        forgot = [post_json(base + "/api/cache/forget", {"path": p})["removed"] for p in selected]
+        check(all(forgot), f"cache: POST /api/cache/forget removed the three copies ({forgot})")
+        goto_view(page, "settings")
+        line = wait_cache_line(page, "0 of 3")
+        check(True, f"cache: settings card reads '{line}'")
+        no_leaks(page, "settings (cache)")
+        page.click("#pc-go")
+        page.wait_for_function("document.querySelector('#pc-progress').textContent.startsWith('Done')", timeout=120000)
+        line = wait_cache_line(page, "3 of 3")
+        check(True, f"cache: prepared -> '{line}' ({page.inner_text('#pc-progress')})")
+        made = {bucketed(p): CARD / p.lstrip("/") for p in selected}
+        compare_with_pack(overlay, made)
+        no_leaks(page, "settings (prepared)")
+        shot(page, "settings-cache", "laptop")
+        # Add GIFs: two new files into Consoles, prepared, added to cachetest.
+        src_dir = OUT / "add-src"
+        shutil.rmtree(src_dir, ignore_errors=True)
+        src_dir.mkdir(parents=True)
+        adds = []
+        for i, p in enumerate(selected[:2]):
+            dst = src_dir / f"SNES_Smoke_Added_{i + 1:02d}.gif"
+            shutil.copy(CARD / p.lstrip("/"), dst)
+            adds.append(dst)
         goto_view(page, "library")
-        page.click("#lib-to-convert")
-        page.wait_for_function("document.querySelector('#cv-progress').textContent.includes('3 queued')", timeout=10000)
-        page.click("#cv-start")
-        page.wait_for_function("document.querySelector('#cv-progress').textContent.includes('3 skipped')", timeout=60000)
-        stats = [u for u in reqs if "/api/stat?" in u]
-        lists = [u for u in reqs if "/api/files?dir=%2Fodm" in u]
-        check(len(stats) == 3 and not lists and all("%2Fodm%2FConsoles%2F" in u for u in stats),
-              f"convert: no manifest -> 3 skipped after {len(stats)} /api/stat of the bucketed .odm, {len(lists)} listings")
+        page.select_option("#lib-cat", "Consoles")
+        page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+        page.set_input_files("#lib-add-files", [str(a) for a in adds])
+        page.wait_for_function("document.querySelector('#lib-add-progress').textContent.startsWith('2 of 2 added')", timeout=60000)
+        page.wait_for_function("[...document.querySelectorAll('#toasts .toast.ok')].some(t => t.textContent.includes('cachetest'))", timeout=60000)
+        gif_paths = [f"/gifs/Consoles/{a.name}" for a in adds]
+        landed = [(overlay / p.lstrip("/")).exists() for p in gif_paths]
+        check(all(landed), f"add: both GIFs uploaded ({landed})")
+        compare_with_pack(overlay, {bucketed(p): a for p, a in zip(gif_paths, adds)})
+        plist = (overlay / "sets" / "cachetest.txt").read_text().split("\n")
+        check(plist[3:5] == gif_paths and get_json(base + "/api/status")["entries"] == 5,
+              f"add: both appended to cachetest ({len([l for l in plist if l])} lines)")
+        r = cache_ready(base)
+        check((r["prepared"], r["total"]) == (5, 5), f"add: /api/cache {r['prepared']} of {r['total']}")
+        no_leaks(page, "library (add)")
+        shot(page, "library-add", "laptop")
+        req = urllib.request.Request(base + "/api/files" + gif_paths[1].replace(" ", "%20"), method="DELETE")
+        urllib.request.urlopen(req, timeout=30).read()
+        gone = not (overlay / bucketed(gif_paths[1]).lstrip("/")).exists()
+        r = cache_ready(base)
+        check(gone and r["prepared"] == 4, f"add: deleting a GIF took its copy with it ({r['prepared']} of {r['total']})")
+        # Back to All files; the test playlist goes.
+        goto_view(page, "sets")
+        page.click("#sets-list [data-path='/sets/cachetest.txt'] >> text=Delete")
+        page.wait_for_selector("#sets-list [data-path='/sets/cachetest.txt']", state="detached", timeout=60000)
+        check(get_json(base + "/api/config")["set"] == "", "cache: cachetest deleted, All files playing")
         # Settings
         goto_view(page, "settings")
         page.wait_for_selector("#st-facts .stat")
@@ -390,8 +471,10 @@ def mock_pass(browser) -> None:
         version = (REPO / "opendmd-web" / "www" / "version.txt").read_text().strip()
         facts = page.inner_text("#st-facts")
         check(version in facts and "ready" in facts, f"settings: www_version {version} and index_state shown")
-        opts = page.eval_on_selector_all("#st-set option", "els => els.map(e => e.value)")
-        check(opts[0] == "" and "filelist.xmas" in opts, f"settings: set choices include the root manifests ({opts[:5]})")
+        opts = page.eval_on_selector_all("#st-set option", "els => els.map(e => [e.value, e.textContent])")
+        check(opts[0] == ["", "All files (default)"] and ["filelist.xmas", "Christmas"] in opts
+              and not any("odm" in v for v, _ in opts), f"settings: playlist choices {opts[:4]}")
+        no_leaks(page, "settings")
         shot(page, "settings", "laptop")
         # index_state "building": set switching is disabled until it is ready.
         def building(route):
@@ -410,38 +493,41 @@ def mock_pass(browser) -> None:
         goto_view(page, "settings")
         page.wait_for_function("!document.querySelector('#st-set').disabled", timeout=8000)
         check(True, "settings: ready again -> set select enabled")
-        phone_pass(browser, base, errors, convert=True)
+        check(page.locator("#nav a[data-view]").count() == 4 and page.locator("#view-convert").count() == 0,
+              "nav: four views, no Convert")
+        phone_pass(browser, base, errors)
     finally:
         proc.terminate()
     report_errors("mock", errors)
 
 
-def compare_with_pack(overlay: Path, new: list[Path]) -> None:
-    """Run opendmd-pack on the same three GIFs and compare bytes."""
+def compare_with_pack(overlay: Path, made: dict[str, Path]) -> None:
+    """Run opendmd-pack on the same GIFs and compare the uploaded copies byte
+    for byte. `made` maps a copy's card path to the GIF it was made from."""
     mini = OUT / "pack-ref"
     shutil.rmtree(mini, ignore_errors=True)
-    for odm in new:
-        rel = odm.relative_to(overlay / "odm")  # Cat/bb/name.odm
-        cat = str(rel.parent.parent)
-        gif = CARD / "gifs" / cat / (odm.stem + ".gif")
+    for copy, gif in made.items():
+        cat = copy.split("/")[2]
         (mini / "gifs" / cat).mkdir(parents=True, exist_ok=True)
         shutil.copy(gif, mini / "gifs" / cat / gif.name)
     subprocess.run(["cargo", "run", "--release", "--quiet", "--", "convert", str(mini), "--layout", "bucketed", "--verify"],
                    cwd=REPO / "opendmd-pack", check=True, env={**os.environ, "RUSTUP_TOOLCHAIN": "stable"},
                    stdout=subprocess.DEVNULL)
-    for odm in new:
-        ref = mini / odm.relative_to(overlay)
-        same = ref.exists() and filecmp.cmp(ref, odm, shallow=False)
-        check(same, f"convert: {odm.relative_to(overlay)} byte-identical to opendmd-pack ({odm.stat().st_size} B, magic {odm.read_bytes()[:4]!r})")
+    for copy in made:
+        got = overlay / copy.lstrip("/")
+        ref = mini / copy.lstrip("/")
+        same = got.exists() and ref.exists() and filecmp.cmp(ref, got, shallow=False)
+        size = got.stat().st_size if got.exists() else 0
+        check(same, f"prepared copy {copy} byte-identical to opendmd-pack ({size} B)")
 
 
-def phone_pass(browser, base: str, errors: list[str], convert: bool) -> None:
+def phone_pass(browser, base: str, errors: list[str]) -> None:
     page = new_page(browser, "phone", errors)
     page.goto(base + "/")
     page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
     wait_lit(page, "#now-panel", "phone now")
     shot(page, "now", "phone")
-    for view in ["library", "sets"] + (["convert"] if convert else []) + ["settings"]:
+    for view in ["library", "sets", "settings"]:
         goto_view(page, view)
         page.wait_for_timeout(1500)
         shot(page, view, "phone")
@@ -455,15 +541,52 @@ def device_pass(browser, device: str) -> None:
     errors: list[str] = []
     try:
         print(f"\n== real device {device} via local proxy {base} (read-mostly)")
+        try:
+            user_names.update(e["name"][:-4] for e in get_json(base + "/api/files?dir=/sets")["entries"]
+                              if e["name"].endswith(".txt"))
+        except Exception:  # noqa: BLE001 - no /sets on the card
+            pass
         page = new_page(browser, "laptop", errors)
         page.goto(base + "/")
         page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=30000)
         check(page.locator("#now-stats .stat").count() >= 8, "device now: status grid renders")
         wait_lit(page, "#now-panel", "device now", 40)
+        no_leaks(page, "device now")
         shot(page, "device-now", "laptop")
         open_library(page)
         send_from_library(page, base, "device library")
         shot(page, "device-library", "laptop")
+        # A preview of a GIF that has a prepared copy: fetched from the copy.
+        t0 = time.time()
+        copies = get_json(base + "/api/cache/list")["paths"]
+        list_s = time.time() - t0
+        check(len(copies) > 0, f"device cache: /api/cache/list {len(copies)} copies in {list_s:.1f} s")
+        pick = next((c for c in copies if c.count("/") == 4), None)
+        if pick:
+            _, _, cat, _, name = pick.split("/")
+            gif = f"/gifs/{cat}/{name[:-4]}.gif"
+            reqs: list[tuple[str, int]] = []
+            page.on("response", lambda r: reqs.append((urllib.parse.unquote(r.url), r.status)))
+            goto_view(page, "library")
+            page.select_option("#lib-cat", cat)
+            page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+            for chip in page.query_selector_all("#lib-chips .chip.on"):
+                chip.click()
+            page.fill("#lib-search", name[:-4])
+            page.wait_for_timeout(500)
+            page.click(f"#lib-list .vrow:not([hidden]) >> nth=0")
+            page.wait_for_function(f"document.querySelector('#lib-cap').textContent.endsWith({json.dumps(name[:-4] + '.gif')})", timeout=40000)
+            wait_lit(page, "#lib-panel", f"device library {gif}", 40)
+            fetched = [(u.split(base, 1)[-1], s) for u, s in reqs if "/odm/" in u or "/gifs/" in u]
+            check((pick, 200) in fetched and not any(u == gif for u, _ in fetched),
+                  f"device library: {gif} previewed from its prepared copy ({fetched})")
+            check(page.inner_text("#lib-cap").endswith(name[:-4] + ".gif"), f"device library: caption names the GIF ({page.inner_text('#lib-cap')})")
+            no_leaks(page, "device library")
+        # The cache count.
+        t0 = time.time()
+        r = cache_ready(base, 180)
+        check(r["state"] == "ready" and r["prepared"] is not None,
+              f"device cache: /api/cache {r['prepared']} of {r['total']} prepared (count {r['count_ms']} ms, ready after {time.time() - t0:.1f} s)")
         goto_view(page, "settings")
         page.wait_for_selector("#st-facts .stat", timeout=20000)
         check(page.input_value("#st-hostname") != "", "device settings: config GET rendered")
@@ -471,15 +594,19 @@ def device_pass(browser, device: str) -> None:
         facts = page.inner_text("#st-facts")
         check(st.get("index_state") in facts and (st.get("www_version") or "–") in facts,
               f"device settings: index_state {st.get('index_state')}, www_version {st.get('www_version')} shown")
+        line = wait_cache_line(page, f"{r['prepared']:,} of {r['total']:,}")
+        check(True, f"device settings: cache card reads '{line}'")
+        no_leaks(page, "device settings")
         shot(page, "device-settings", "laptop")
         # The one write: save and delete a set named smoke (never activated).
         n = build_smoke_set(page)
         rows = root_manifest_rows(page)
-        dflt = page.eval_on_selector_all("#sets-list [data-path] .tag:not(.act)", "els => els.filter(e => e.textContent === 'default').map(e => e.closest('[data-path]').dataset.path)")
-        check("/filelist.txt" in rows and dflt == ["/" + st["manifest"].rsplit("/", 1)[1]] if get_json(base + "/api/config")["set"] == "" else len(dflt) == 1,
-              f"device sets: root manifests {rows}, default {dflt}")
-        with urllib.request.urlopen(base + "/sets/smoke.txt", timeout=30) as r:
-            body = r.read().decode()
+        labels = {p: row_label(page, p) for p in rows}
+        check("/filelist.txt" in rows and labels.get("/filelist.txt") == "All files"
+              and not any("odm" in p for p in rows), f"device sets: playlists {labels}")
+        no_leaks(page, "device sets")
+        with urllib.request.urlopen(base + "/sets/smoke.txt", timeout=30) as resp:
+            body = resp.read().decode()
         check(len(body.split("\n")) - 1 == n and body.endswith("\n"), f"device sets: /sets/smoke.txt saved ({n} lines)")
         shot(page, "device-sets", "laptop")
         page.click("#sets-list [data-path='/sets/smoke.txt'] >> text=Delete")

@@ -9,8 +9,7 @@ The short version:
 ```bash
 # once per card, on a laptop with the card in a reader (mounted at $CARD)
 cp -r <DMDoS pack>/gifs <DMDoS pack>/filelist.txt "$CARD"/
-make pack ARGS="convert $CARD --layout bucketed --verify"
-make pack ARGS="manifest $CARD --layout bucketed"   # -> $CARD/filelist.odm.txt, the default playlist
+make pack ARGS="convert $CARD --layout bucketed --verify"   # prepare every GIF (the playback cache)
 make web && cp -r opendmd-web/www "$CARD"/www
 sync && umount "$CARD"
 
@@ -53,37 +52,35 @@ CARD=/media/$USER/<card>            # wherever the reader mounted it
 cp -r /path/to/pack/gifs /path/to/pack/filelist.txt "$CARD"/
 ```
 
-### Pre-rendered `.odm` files, bucketed
+### Prepare the card (the playback cache)
 
-The player needs ~14.5 KB of heap for an `.odm` against ~54 KB for a GIF,
-and the bucketed layout keeps every file in a directory of ~15 entries so
-the ESP32 never scans the 3,781-file `gifs/Consoles` (each file open there
-costs ~330 ms and shows as a late frame). Both are measured in CLAUDE.md
-("Heap ceiling", "Frame time"). Neither step touches `gifs/` or
-`filelist.txt`.
+Users see GIFs and playlists; a **prepared copy** of a GIF (an `.odm` file,
+`docs/odm-format.md`) is a cache. The player looks for each GIF's copy at
+`odm/<Category>/<bb>/<name>.odm` and plays it when it is there, otherwise the
+GIF: playlists keep naming GIFs and nothing has to be configured. A copy
+needs ~14.5 KB of heap against ~54 KB for a GIF, and lives in a directory of
+~15 entries, so the ESP32 never scans the 3,781-file `gifs/Consoles` for it
+(each open there costs ~330 ms and shows as a late frame). Both are measured
+in CLAUDE.md ("Heap ceiling", "Frame time").
 
 ```bash
-# odm/<Category>/<bb>/<name>.odm for every GIF; --verify plays both and
-# compares every frame. Re-running skips files already converted.
+# A copy of every GIF; --verify plays both and compares every frame.
+# Re-running skips files already prepared. gifs/ and filelist.txt are untouched.
 make pack ARGS="convert $CARD --layout bucketed --verify"
-
-# The same playlist with .odm paths: $CARD/filelist.odm.txt.
-make pack ARGS="manifest $CARD --layout bucketed"
 ```
 
 `make pack` is `opendmd-pack` built in release; the same arguments work on
-the binary directly. The manifest step prints how many entries switched to
-`.odm`; any that stay `.gif` (no `.odm` for them) still play.
+the binary directly. That is the whole step: no manifest to write. (`opendmd-pack
+manifest` still exists for tooling and tests; the firmware ignores a
+`filelist.odm.txt` and logs so once at boot.) A GIF with no copy simply
+plays as a GIF. Files added later from the web app (Library, **Add GIFs**)
+are prepared by the browser as they are uploaded, and **Settings → Playback
+cache** shows how many of the playlist's files are prepared and can prepare
+the rest in the background.
 
-**`filelist.odm.txt` is the default playlist.** With no set selected, the
-firmware plays `/filelist.odm.txt` when the card has one and `/filelist.txt`
-otherwise, choosing at boot (and whenever the set changes); `/api/status`
-reports the one in play as `manifest`. So a converted card plays its `.odm`
-files with nothing to configure, and `filelist.txt` stays untouched for stock
-DMDoS. To play the GIFs instead, select the root manifest by name:
-`curl -X PUT -d '{"set":"filelist.txt"}' http://opendmd.local/api/config`
-(`{"set":""}` goes back to the default; `/sets/<name>.txt` sets work as
-before, by name).
+The default playlist is `/filelist.txt` ("All files" in the app); `{"set":""}`
+selects it, `{"set":"filelist.hall"}` a root manifest, `{"set":"<name>"}`
+`/sets/<name>.txt`.
 
 ### The web app
 
@@ -143,8 +140,7 @@ had been OTA'd into its second slot boots the image just flashed.
 Put the card in and power up. The boot banner reads
 `OpenDMD firmware v0.2.0 (4mb, app desc '0.2.0 4mb')`, and on first boot
 the player builds the default manifest's index on the card
-(`filelist.odm.txt.idx`, or `filelist.txt.idx` on an unconverted card; ~6 s
-for the full card) before it starts playing. Once the first frame is up the
+(`filelist.txt.idx`; ~6 s for the full card) before it starts playing. Once the first frame is up the
 log says `rollback mark: ota_0 was ..., now marked valid after the first
 frame`.
 
@@ -167,8 +163,8 @@ A release image has no WiFi credentials, so a fresh board comes up as an
    the board after ten minutes regardless, so don't dawdle.)
 3. The player joins the network as **<http://opendmd.local/>**. The app is
    there if `www/` is on the card; `/setup` is always there for recovery.
-4. Nothing to select for the `.odm` files: `filelist.odm.txt` is the
-   default playlist (section 1). A set is selected from the app, or with
+4. Nothing to select for the prepared copies: the player finds them per
+   file (section 1). A playlist is selected from the app, or with
    `curl -X PUT -d '{"set":"<name>"}' http://opendmd.local/api/config`; a
    name that does not exist on the card is refused with a 404 and nothing is
    saved. The first selection of a manifest builds its `.idx` (~6 s for the
@@ -197,10 +193,10 @@ the running firmware as the boot image.
 `curl http://opendmd.local/api/status` — numbers measured on the rig
 (CLAUDE.md, "Heap ceiling" and "Frame time"):
 
-| field | playing `filelist.txt` (GIFs) | playing the bucketed `filelist.odm.txt` |
+| field | `filelist.txt`, few files prepared (mostly GIFs) | every file played from a prepared copy |
 |---|---|---|
 | `version` / `variant` | `0.2.0` / `4mb` | same |
-| `manifest` | `/sdcard/filelist.txt` | `/sdcard/filelist.odm.txt` |
+| `manifest` | `/sdcard/filelist.txt` | `/sdcard/filelist.txt` (the copies are found per file) |
 | `index_state` | `ready` | `ready` |
 | `www_version` | the `git describe` of the `make web` that built the card's app, `null` if the card's `www/` predates it | same |
 | `heap.free` | ~57-60 KB | ~85-91 KB |
@@ -209,6 +205,12 @@ the running firmware as the boot image.
 | `deadline_misses` | a handful per few minutes idle (19 in 5 min, worst ~520 ms: opening a file in a big directory) | 0 idle; 2 (worst 3 ms) in 2 min of back-to-back downloads of the same set |
 | `worst_lateness_ms` | up to ~550 | 0 idle, single digits under load |
 | `sd.mounted` | `true` | `true` |
+
+The left column was re-measured with per-file copy resolution (200 of the
+10,133 entries prepared, 5 min idle): free 56.8-57.6 KB, floor 53.3 KB, 20
+misses (worst 443 ms); each GIF open first pays a ~5-6 ms miss looking for
+its copy, and a file that has one plays with ~87-94 KB free. The right
+column was measured with a 200-entry set of copies.
 
 A floor that keeps falling towards 5 KB (`config::HEAP_RESERVE`, where the
 server starts answering 503) or misses by the hundred while nobody is using
