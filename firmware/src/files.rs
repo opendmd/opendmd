@@ -115,7 +115,7 @@ pub fn mime_for(path: &str) -> &'static str {
         "jpg" | "jpeg" => "image/jpeg",
         "svg" => "image/svg+xml",
         "ico" => "image/x-icon",
-        "txt" => "text/plain; charset=utf-8",
+        "txt" | "meta" => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -140,7 +140,7 @@ pub fn cache_for(path: &str) -> &'static str {
             .and_then(|e| e.to_str())
             .unwrap_or("")
         {
-            "html" | "htm" | "js" | "mjs" | "json" => "no-cache",
+            "html" | "htm" | "js" | "mjs" | "json" | "meta" | "txt" => "no-cache",
             _ => "max-age=3600",
         }
     }
@@ -340,7 +340,11 @@ pub fn index_path(manifest: &str) -> String {
 /// an `.idx` sidecar worth looking for; checking every upload would cost a
 /// directory scan per GIF, and FAT directories here run to 3,781 entries.
 pub fn is_manifest_path(path: &str) -> bool {
-    if path.ends_with(".idx") || path.ends_with(".tmp") || path.ends_with(".part") {
+    if path.ends_with(".idx")
+        || path.ends_with(".tmp")
+        || path.ends_with(".part")
+        || path.ends_with(".meta")
+    {
         return false;
     }
     let p = Path::new(path);
@@ -348,6 +352,20 @@ pub fn is_manifest_path(path: &str) -> bool {
     let in_sets = p.parent().is_some_and(|d| d == Path::new(config::SETS_DIR));
     let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
     (in_root && name.starts_with("filelist.")) || in_sets
+}
+
+/// Is `path` (filesystem) a playlist's overrides file — `/filelist*.meta`
+/// at the root or `/sets/<name>.meta`? Returns the manifest it belongs to
+/// (`opendmd_core::overrides::manifest_for_meta`).
+pub fn meta_manifest(path: &str) -> Option<String> {
+    let p = Path::new(path);
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let in_root = p.parent().is_some_and(|d| d == Path::new(config::SD_MOUNT));
+    let in_sets = p.parent().is_some_and(|d| d == Path::new(config::SETS_DIR));
+    if !name.ends_with(".meta") || !(in_sets || (in_root && name.starts_with("filelist"))) {
+        return None;
+    }
+    opendmd_core::overrides::manifest_for_meta(path)
 }
 
 /// Is filesystem path `path` inside directory `dir` (case-insensitively, as

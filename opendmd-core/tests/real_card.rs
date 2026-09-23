@@ -148,7 +148,7 @@ fn real_card_manifest() {
             IndexHeader::read(&mut std::fs::File::open(&idx_path).unwrap()).unwrap(),
             header
         );
-        assert!(header.is_valid_for(manifest_len, &filter));
+        assert!(header.is_valid_for(manifest_len, &filter, opendmd_core::overrides::NO_META));
         let mut indexed = IndexedCatalog::open(
             std::fs::File::open(&manifest_path).unwrap(),
             std::fs::File::open(&idx_path).unwrap(),

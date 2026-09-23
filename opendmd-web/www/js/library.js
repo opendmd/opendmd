@@ -8,6 +8,7 @@
 // from GET /api/files, one directory at a time.
 
 import { app, playlistLabel } from './state.js';
+import { Overrides, glyphs, menu, moreButton, playlistSelect } from './overrides.js';
 import { PanelPreview } from './preview.js';
 import { prepareBytes } from './prepare.js';
 import { VList } from './vlist.js';
@@ -43,16 +44,27 @@ export async function mount(el) {
   const addCard = h('div.card', { id: 'lib-add', hidden: true }, h('div.bar', { style: 'margin-bottom:8px' }, addBar), addMsg, addErr);
   const addBtn = app.device && h('label.btn', { id: 'lib-add-btn', title: 'Upload GIFs into the category shown' }, 'Add GIFs…', addInput);
 
+  // Favourite / hide / play longer act on one playlist: the one in play,
+  // unless another is chosen here.
+  const ov = new Overrides();
+  ov.onChange = () => list.refresh();
+  const ovHolder = h('label.cap', { id: 'lib-ovfor' });
+
   const list = new VList({
     rowHeight: 40,
     render(row, it) {
       const box = h('input', { type: 'checkbox', checked: app.selection.has(it.path), onclick: (e) => { e.stopPropagation(); toggle(it.path, box.checked); } });
+      const o = ov.get(it.path);
       clear(row, box,
         h('span.t', label(it.e), it.e.platform && h('span.tag', it.e.platform), ...it.e.flags.map((f) => h('span.tag', f))),
-        h('span.n.mono', it.name));
+        glyphs(o),
+        h('span.n.mono', it.name), moreButton(ov, it.path));
       row.classList.toggle('cur', it.path === current);
+      row.classList.toggle('hid', !!o?.never);
+      row.dataset.path = it.path;
     },
     onClick: (it) => preview(it),
+    onMenu: (it, _i, x, y) => menu(ov, it.path, x, y),
   });
   list.el.id = 'lib-list';
 
@@ -60,7 +72,8 @@ export async function mount(el) {
     h('div',
       h('div.card',
         h('div.row', cat, h('div.grow', { style: 'min-width:140px' }, search), count, addBtn),
-        h('div', { style: 'margin-top:8px' }, chips)),
+        h('div', { style: 'margin-top:8px' }, chips),
+        h('div', { style: 'margin-top:8px' }, ovHolder)),
       addCard, list.el, selbar),
     h('div.side', h('div.card', canvas, cap, sendBtn && h('div.row', { style: 'margin-top:8px' }, sendBtn)))));
 
@@ -195,7 +208,17 @@ export async function mount(el) {
   cat.onchange = load;
   search.oninput = apply;
 
+  async function playlists() {
+    const lists = await app.playlists().catch(() => []);
+    if (!lists.length) lists.push({ path: '/filelist.txt', label: 'All files' });
+    const want = ov.path && lists.some((p) => p.path === ov.path) ? ov.path
+      : lists.some((p) => p.path === app.activePath) ? app.activePath : lists[0].path;
+    clear(ovHolder, 'Favourites and hiding apply to', playlistSelect(lists, want, (p) => ov.load(p)));
+    if (want !== ov.path) await ov.load(want);
+  }
+
   await categories();
+  await playlists();
   sync();
-  return { show() { sync(); } };
+  return { show() { sync(); playlists(); } };
 }

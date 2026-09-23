@@ -333,6 +333,12 @@ fn walk_bucket(
 }
 
 /// Fails the manifest pass as soon as the count has been superseded.
+///
+/// Not with `ErrorKind::Interrupted`: `BufRead::read_line` *retries*
+/// Interrupted reads, so a superseded pass used to spin on CPU0 forever —
+/// allocating an error per turn, starving the idle task (task watchdog) and,
+/// with it, the httpd and WiFi (found on the rig when a config change landed
+/// mid-count).
 struct Abortable<R> {
     inner: R,
     gen: u32,
@@ -341,7 +347,7 @@ struct Abortable<R> {
 impl<R: Read> Read for Abortable<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if GEN.load(Relaxed) != self.gen {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "superseded"));
+            return Err(io::Error::other("superseded"));
         }
         let n = self.inner.read(buf)?;
         thread::yield_now();
@@ -396,7 +402,7 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
             match layout::count_prepared(reader, &filter, (lo as u8, hi as u8), &keys, passes == 0)
             {
                 Ok(c) => c,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => return Ok(None),
+                Err(_) if GEN.load(Relaxed) != gen => return Ok(None),
                 Err(e) => return Err(e.into()),
             };
         pass_ms += tp.elapsed().as_millis();

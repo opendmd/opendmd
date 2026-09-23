@@ -24,13 +24,27 @@ export function playlistLabel(name) {
   return /^filelist\./.test(n) ? n : n.replace(/\.txt$/, '');
 }
 
+// The `set` value (config, schedule, GET /api/overrides) for a playlist's
+// card path: "" for /filelist.txt, the file name for another root playlist,
+// the name for /sets/<name>.txt.
+export function setValue(path) {
+  const n = base(path);
+  if (!path.startsWith('/sets/')) return n === 'filelist.txt' ? '' : n;
+  return n.replace(/\.txt$/, '');
+}
+
+// A `set` value's card path (the inverse).
+export function setPath(set) {
+  return !set ? '/filelist.txt' : set.startsWith('filelist.') ? '/' + set : `/sets/${set}.txt`;
+}
+
 export const app = {
   wasm,
   src: null,
   status: null,
   config: null,
   selection: new Set(),
-  draft: { name: '', paths: [] },
+  draft: { name: '', paths: [], path: '' },
   texts: new Map(),
 
   get device() { return this.src?.kind === 'device'; },
@@ -52,7 +66,7 @@ export const app = {
     if (root.some((f) => f.dir && f.name === 'sets')) {
       try { sets = await this.src.list('/sets'); } catch { /* gone meanwhile */ }
     }
-    const roots = root.filter((f) => !f.dir && /^filelist\./.test(f.name) && !OBSOLETE.test(f.name) && !/\.(idx|part|tmp|bak)$/.test(f.name))
+    const roots = root.filter((f) => !f.dir && /^filelist\./.test(f.name) && !OBSOLETE.test(f.name) && !/\.(idx|part|tmp|bak|meta)$/.test(f.name))
       .map((f) => f.name).sort((a, b) => (a === 'filelist.txt' ? -1 : b === 'filelist.txt' ? 1 : a.localeCompare(b)));
     const names = sets.filter((f) => !f.dir && /\.txt$/.test(f.name)).map((f) => f.name.replace(/\.txt$/, '')).sort();
     return [
@@ -80,8 +94,7 @@ export const app = {
   get activePath() {
     const m = this.status?.manifest?.replace(/^\/sdcard/, '');
     if (m) return m;
-    const s = this.activeSet;
-    return !s ? '/filelist.txt' : s.startsWith('filelist.') ? '/' + s : `/sets/${s}.txt`;
+    return setPath(this.activeSet);
   },
   get building() { return this.status?.index_state === 'building'; },
 

@@ -138,6 +138,22 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 /// Hostname (mDNS `<name>.local` and the DHCP client name) unless NVS says
 /// otherwise.
 pub const HOSTNAME: &str = "opendmd";
+
+/// The timezone until one is chosen in Settings: UTC. A POSIX TZ string (what
+/// newlib's `localtime_r` reads) and the name the UI shows for it.
+pub const TZ: &str = "UTC0";
+pub const TZ_NAME: &str = "UTC";
+
+/// How often the main loop looks at the clock for the schedule. It acts only
+/// when the local minute changes (or the schedule, the zone or a wake does).
+pub const SCHEDULE_CHECK: Duration = Duration::from_secs(1);
+/// The frame loop's sleep while night mode has the panel off: commands are
+/// still drained every iteration, nothing is decoded.
+pub const OFF_SLEEP: Duration = Duration::from_millis(50);
+/// The longest `POST /api/wake` honours.
+pub const WAKE_MAX_MINUTES: u32 = 24 * 60;
+/// At most this many schedule rules.
+pub const SCHEDULE_MAX_RULES: usize = 16;
 /// The open setup network raised when there are no credentials, or when STA
 /// association has failed [`STA_MAX_FAILURES`] times.
 pub const AP_SSID: &str = "OpenDMD-Setup";

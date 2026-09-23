@@ -161,6 +161,15 @@ fn run(worker: NetWorker) {
         None
     };
 
+    // --- SNTP, STA only -----------------------------------------------------
+    // Wall-clock time for the schedule (`clock.rs`); kept alive for the life
+    // of the worker. The pool is reached through the station's DNS.
+    let mut _sntp = if wifi.state() == WifiState::Connected {
+        crate::clock::start_sntp()
+    } else {
+        None
+    };
+
     // --- Captive portal DNS, AP only --------------------------------------
     let _dns = if wifi.state() == WifiState::ApMode {
         wifi.ap_ip_bytes()
@@ -215,6 +224,8 @@ fn run(worker: NetWorker) {
             }
         }
 
+        crate::clock::log_new_syncs();
+
         // An open AP does not stay up indefinitely. Rebooting (rather than
         // dropping back to STA in place) re-runs the whole boot decision with
         // whatever credentials were just saved.
@@ -236,6 +247,9 @@ fn run(worker: NetWorker) {
                     let ip = wifi.ip_address();
                     info!("[net] reconnected, IP {}", ip.clone().unwrap_or_default());
                     publish(&status, WifiState::Connected, ip);
+                    if _sntp.is_none() {
+                        _sntp = crate::clock::start_sntp();
+                    }
                 }
                 Ok(false) => warn!("[net] reconnect failed; will retry"),
                 Err(e) => warn!("[net] reconnect error: {e:#}"),

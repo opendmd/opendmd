@@ -182,11 +182,22 @@ names the format or shows a copy's path.
   progress; the firmware version, flash variant, panel facts, `index_state`
   and the web app's own version (`www_version`, from `www/version.txt`).
 
-**Size budget**, checked by `make web` (`tools/web-size.py`): the wasm module
-plus its generated JS glue at most 250 KB, the hand-written JS and CSS at
-most 80 KB. Today that is about 175 KB of wasm + 26 KB of glue (84 KB
-gzipped) and 77 KB of JS and CSS (29 KB gzipped). `make web` writes a
-`<file>.gz` beside each file, and the player sends those in preference.
+**Size budget**, checked by `make web` (`tools/web-size.py`) on the gzipped
+sizes, which are what crosses the WiFi: the wasm module plus its generated JS
+glue at most 100 KB, the hand-written JS and CSS at most 40 KB. Today that is
+about 189 KB of wasm + 27 KB of glue (90.5 KB gzipped) and 104 KB of JS and
+CSS (38.8 KB gzipped). `make web` writes a `<file>.gz` beside each file, and
+the player sends those in preference.
+
+**Favourites, hiding and schedules.** Right-click a GIF in the Library or a
+playlist (long-press on a phone, or its "…" button) to make it a favourite,
+play it less, hide it, play it longer or loop it — per playlist, so a GIF can
+be a favourite in one and hidden in another. Settings → Time sets the zone
+(the player keeps time over NTP), and Settings → Schedule picks a playlist
+and/or brightness for parts of the week ("Weekdays 18:00–23:00 → Consoles")
+and a night mode that turns the panel off or dims it; Now shows when either
+is in force and can wake the panel for an hour. The saved playlist and
+brightness come back when a rule ends.
 
 **The mock device.** `tools/mock-device.py` (a `uv` script, standard library
 only) serves the built app plus a fake device over an extracted card copy:

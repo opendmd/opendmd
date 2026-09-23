@@ -93,3 +93,14 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # 1 ms scheduler tick: the display loop sleeps for the remainder of each GIF frame
 # delay, and 10 ms ticks rounded every sleep up, running content 5-10% slow.
 CONFIG_FREERTOS_HZ=1000
+
+# --- CPU and C optimisation --------------------------------------------
+# 240 MHz: GIF decode is CPU-bound (3-11 ms a frame at 160 MHz); see "Frame
+# time" in the root CLAUDE.md for the before/after probe numbers.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# IDF's C at -Os instead of the default -Og: the dev image had grown to ~99%
+# of the OTA slot. Our hub75 shim pins itself to -O2 in its own CMakeLists, so
+# the blit is unaffected, and pins esp_driver_spi back to -Og: at -Os the SD
+# card timed out under concurrent reads (see "Frame time" in CLAUDE.md). Rust
+# code is governed by Cargo's profiles, not this.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

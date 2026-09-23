@@ -36,6 +36,12 @@ const KEY_SHUFFLE: &str = "shuffle";
 const KEY_PLATFORMS: &str = "platforms";
 const KEY_SET: &str = "set";
 const KEY_HOSTNAME: &str = "hostname";
+const KEY_TZ: &str = "tz";
+const KEY_TZ_NAME: &str = "tz_name";
+const KEY_SCHEDULE: &str = "schedule";
+
+/// The largest schedule JSON NVS will hold for us (`PUT /api/schedule`).
+pub const SCHEDULE_MAX: usize = 2048;
 
 /// Credentials seeded at build time from `firmware/.env`, if it was present.
 /// `None` in a dev build that did not set them; absent altogether without the
@@ -68,6 +74,13 @@ pub struct Settings {
     /// [`is_obsolete_set`]).
     pub set: String,
     pub hostname: String,
+    /// POSIX TZ string (`GMT0IST,M3.5.0/1,M10.5.0`), what `localtime_r` uses.
+    pub tz: String,
+    /// The name the UI chose the zone by (`Europe/Dublin`); display only.
+    pub tz_name: String,
+    /// The schedule, as the JSON `PUT /api/schedule` stored (validated
+    /// there, at most [`SCHEDULE_MAX`] bytes); empty = no schedule.
+    pub schedule: String,
 }
 
 impl Default for Settings {
@@ -83,6 +96,9 @@ impl Default for Settings {
             platforms: config::PLATFORMS.join(","),
             set: String::new(),
             hostname: config::HOSTNAME.to_string(),
+            tz: config::TZ.to_string(),
+            tz_name: config::TZ_NAME.to_string(),
+            schedule: String::new(),
         }
     }
 }
@@ -95,6 +111,19 @@ pub fn is_obsolete_set(set: &str) -> bool {
     set.eq_ignore_ascii_case(config::OBSOLETE_ODM_MANIFEST)
 }
 
+/// Filesystem path of the manifest a `set` value names: `""` is
+/// `/filelist.txt`, `filelist.*` that root manifest, anything else
+/// `/sets/<set>.txt`. Pure string work.
+pub fn manifest_path_for(set: &str) -> String {
+    if set.is_empty() {
+        config::MANIFEST_PATH.to_string()
+    } else if set.starts_with("filelist.") {
+        format!("{}/{}", config::SD_MOUNT, set)
+    } else {
+        format!("{}/{}.txt", config::SETS_DIR, set)
+    }
+}
+
 /// Is `set` a name `PUT /api/config` may store? One path segment, no `..`.
 /// Whether the file exists is checked separately, by opening it.
 pub fn valid_set_name(set: &str) -> bool {
@@ -105,13 +134,7 @@ impl Settings {
     /// Filesystem path of the manifest this configuration selects. Pure
     /// string work: `""` is always `/filelist.txt`.
     pub fn manifest_path(&self) -> String {
-        if self.set.is_empty() {
-            config::MANIFEST_PATH.to_string()
-        } else if self.set.starts_with("filelist.") {
-            format!("{}/{}", config::SD_MOUNT, self.set)
-        } else {
-            format!("{}/{}.txt", config::SETS_DIR, self.set)
-        }
+        manifest_path_for(&self.set)
     }
 
     /// Platform prefixes as a list, with blanks dropped.
@@ -169,6 +192,14 @@ impl Config {
                 .get_string(KEY_HOSTNAME)
                 .filter(|s| !s.is_empty())
                 .unwrap_or(d.hostname),
+            tz: self
+                .get_string(KEY_TZ)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(d.tz),
+            tz_name: self.get_string(KEY_TZ_NAME).unwrap_or(d.tz_name),
+            schedule: self
+                .get_long_string(KEY_SCHEDULE, SCHEDULE_MAX)
+                .unwrap_or(d.schedule),
         }
     }
 
@@ -184,6 +215,9 @@ impl Config {
         self.nvs.set_str(KEY_PLATFORMS, &s.platforms)?;
         self.nvs.set_str(KEY_SET, &s.set)?;
         self.nvs.set_str(KEY_HOSTNAME, &s.hostname)?;
+        self.nvs.set_str(KEY_TZ, &s.tz)?;
+        self.nvs.set_str(KEY_TZ_NAME, &s.tz_name)?;
+        self.nvs.set_str(KEY_SCHEDULE, &s.schedule)?;
         Ok(())
     }
 
@@ -225,6 +259,20 @@ impl Config {
             _ => {
                 warn!("failed to seed WiFi credentials into NVS");
                 false
+            }
+        }
+    }
+
+    /// [`get_string`](Self::get_string) for a value up to `max` bytes, read
+    /// through a heap buffer rather than the stack.
+    fn get_long_string(&self, key: &str, max: usize) -> Option<String> {
+        let mut buf = vec![0u8; max + 1];
+        match self.nvs.get_str(key, &mut buf) {
+            Ok(Some(s)) => Some(s.trim_end_matches('\0').to_string()),
+            Ok(None) => None,
+            Err(e) => {
+                warn!("NVS get '{key}': {e}");
+                None
             }
         }
     }

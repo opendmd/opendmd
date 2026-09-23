@@ -83,6 +83,14 @@ struct ConfigPatch {
     platforms: Option<String>,
     set: Option<String>,
     hostname: Option<String>,
+    tz: Option<String>,
+    tz_name: Option<String>,
+}
+
+/// Wire format for `POST /api/wake`.
+#[derive(serde::Deserialize)]
+struct WakeRequest {
+    minutes: u32,
 }
 
 /// Start the server and register every route.
@@ -100,9 +108,9 @@ struct ConfigPatch {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route` below (33 now, the captive-portal loop counting six). Registration past
+    // URI handler slots: one per `route` below (37 now, the captive-portal loop counting six). Registration past
     // the limit fails the whole server, so count when adding a route.
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 36)?;
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 40)?;
 
     // --- The web app, and the setup page as its fallback -------------------
     server.route("/", Method::Get, |req| {
@@ -194,6 +202,20 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 next.hostname = v;
             }
         }
+        if let Some(v) = patch.tz {
+            let v = v.trim().to_string();
+            if v.is_empty() || v.len() > 64 || v.contains('\0') {
+                return req
+                    .bad_request("tz must be a POSIX TZ string, e.g. GMT0IST,M3.5.0/1,M10.5.0");
+            }
+            next.tz = v;
+        }
+        if let Some(v) = patch.tz_name {
+            if v.len() > 64 {
+                return req.bad_request("tz_name is at most 64 characters");
+            }
+            next.tz_name = v;
+        }
         if next.dwell_max < next.dwell_min {
             return req.bad_request("dwell_max must be >= dwell_min");
         }
@@ -231,6 +253,115 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         match rx.recv_timeout(REINDEX_TIMEOUT) {
             Ok(Ok(applied)) => req.json(&format!(r#"{{"ok":true,{}}}"#, applied_json(&applied))),
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
+            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+        }
+    })?;
+
+    // A playlist's overrides, parsed: `?set=` takes the config's `set`
+    // values (`""` = all files). Streamed a line at a time from its `.meta`.
+    server.route("/api/overrides", Method::Get, |req| {
+        let set = query_param(req.query(), "set").unwrap_or_default();
+        if !crate::nvs_config::valid_set_name(&set) {
+            return req.bad_request("set must be a single path segment");
+        }
+        let manifest = crate::nvs_config::manifest_path_for(&set);
+        let meta = opendmd_core::overrides::meta_path(&manifest);
+        stream_overrides(req, &set, &manifest, &meta)
+    })?;
+
+    // The schedule: GET is what was stored (or the empty one); PUT replaces
+    // it whole, validated here (times, days, rule playlists that open)
+    // before the main task saves it to NVS and evaluates it.
+    let c = ctx.clone();
+    server.route("/api/schedule", Method::Get, move |req| {
+        let json = c.settings.lock().unwrap().schedule.clone();
+        req.json(if json.trim().is_empty() {
+            crate::sched::EMPTY_JSON
+        } else {
+            &json
+        })
+    })?;
+
+    let c = ctx.clone();
+    server.route("/api/schedule", Method::Put, move |req| {
+        let declared = req.content_len();
+        if declared > crate::nvs_config::SCHEDULE_MAX {
+            return req.error(
+                413,
+                "413 Payload Too Large",
+                &format!(
+                    "schedule is {declared} B, the limit is {} B",
+                    crate::nvs_config::SCHEDULE_MAX
+                ),
+            );
+        }
+        let body = req.read_to_vec(crate::nvs_config::SCHEDULE_MAX)?;
+        let parsed = match crate::sched::parse(&body) {
+            Ok(p) => p,
+            Err(e) => return req.bad_request(&e),
+        };
+        // Parsed as JSON, so it is UTF-8.
+        let json = String::from_utf8(body).unwrap_or_default();
+        let missing = crate::sched::missing_sets(&parsed);
+        if !missing.is_empty() {
+            return req.not_found(&format!("set not found: {}", missing.join(", ")));
+        }
+        let json = if parsed.is_empty() {
+            String::new()
+        } else {
+            json
+        };
+        let (tx, rx) = mpsc::channel();
+        if c.cmd
+            .send(Command::SetSchedule { json, reply: tx })
+            .is_err()
+        {
+            return req.error(503, "503 Service Unavailable", "player not running");
+        }
+        // Applying may switch the playlist (a rule in force now).
+        match rx.recv_timeout(REINDEX_TIMEOUT) {
+            Ok(Ok(_)) => req.json(&format!(
+                r#"{{"ok":true,"rules":{},"night":{}}}"#,
+                parsed.rules.len(),
+                parsed.night.is_some()
+            )),
+            Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
+            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+        }
+    })?;
+
+    // Suspend the schedule: `{"minutes": 60}` (0 resumes it now).
+    let c = ctx.clone();
+    server.route("/api/wake", Method::Post, move |req| {
+        let Some(body) = json_body(req)? else {
+            return Ok(());
+        };
+        let wake: WakeRequest = match serde_json::from_slice(&body) {
+            Ok(w) => w,
+            Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
+        };
+        if wake.minutes > config::WAKE_MAX_MINUTES {
+            return req.bad_request(&format!("minutes is at most {}", config::WAKE_MAX_MINUTES));
+        }
+        let (tx, rx) = mpsc::channel();
+        if c.cmd
+            .send(Command::Wake {
+                minutes: wake.minutes,
+                reply: tx,
+            })
+            .is_err()
+        {
+            return req.error(503, "503 Service Unavailable", "player not running");
+        }
+        match rx.recv_timeout(REINDEX_TIMEOUT) {
+            Ok(_) => {
+                let until = c.status.lock().unwrap().wake_until.clone();
+                req.json(&format!(
+                    r#"{{"ok":true,"minutes":{},"wake_until":{}}}"#,
+                    wake.minutes,
+                    opt_json(until.as_deref())
+                ))
+            }
             Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
         }
     })?;
@@ -437,6 +568,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if files::is_manifest_path(&dest) {
             return install_manifest(req, &c, dest);
         }
+        // A playlist's overrides: its index carries them, so the swap and the
+        // reindex are the main task's, like a manifest's.
+        if files::meta_manifest(&dest).is_some() {
+            return install_meta(req, &c, dest, true);
+        }
         // If the player has this very file open — the GIF, or its prepared
         // copy — ask it to move on first: FAT cannot replace a file that is
         // being read.
@@ -474,6 +610,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 "409 Conflict",
                 "that is the active manifest; select another set first",
             );
+        }
+        // A playlist's overrides: the main task removes it (and the index
+        // that carries them) and reindexes if the playlist is in play.
+        if files::meta_manifest(&path).is_some() {
+            return install_meta(req, &c, path, false);
         }
         // A manifest's `.idx` goes first, for the same crash-ordering reason
         // as on upload (see `files::remove_index_beside`): an orphaned index
@@ -693,16 +834,119 @@ fn install_manifest(req: &mut Req, ctx: &Ctx, dest: String) -> Result<()> {
     }
 }
 
+/// A playlist's overrides: stream an upload to a temp file (or, for a
+/// DELETE, nothing), then hand the swap or removal — and the reindex, if it
+/// is the playlist in play — to the main task.
+fn install_meta(req: &mut Req, ctx: &Ctx, dest: String, upload: bool) -> Result<()> {
+    let temp = upload.then(|| format!("{dest}.part"));
+    if let Some(t) = &temp {
+        files::stream_body_to(req, t)?;
+    }
+    let (tx, rx) = mpsc::channel();
+    if ctx
+        .cmd
+        .send(Command::InstallMeta {
+            temp: temp.clone(),
+            dest: dest.clone(),
+            reply: tx,
+        })
+        .is_err()
+    {
+        if let Some(t) = &temp {
+            let _ = std::fs::remove_file(t);
+        }
+        return req.error(503, "503 Service Unavailable", "player not running");
+    }
+    match rx.recv_timeout(REINDEX_TIMEOUT) {
+        Ok(Ok(applied)) => {
+            let path = if upload {
+                format!(
+                    r#""path":{},"#,
+                    json_string(dest.strip_prefix(config::SD_MOUNT).unwrap_or(&dest))
+                )
+            } else {
+                String::new()
+            };
+            req.json(&format!(
+                r#"{{"ok":true,{path}{}}}"#,
+                applied_json(&applied)
+            ))
+        }
+        Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
+        Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+    }
+}
+
+/// `GET /api/overrides`: `{"set","playlist","overrides":[{path, never?, w?,
+/// dwell?, dwell_x?, loops?}]}`, one `.meta` line at a time (a missing file
+/// is an empty list).
+fn stream_overrides(req: &mut Req, set: &str, manifest: &str, meta: &str) -> Result<()> {
+    use opendmd_core::overrides::{format_decimal, scan_meta, Dwell};
+    let card = |p: &str| p.strip_prefix(config::SD_MOUNT).unwrap_or(p).to_string();
+    req.header("Cache-Control", "no-cache")?;
+    req.begin_chunked("200 OK", "application/json")?;
+    let mut buf = format!(
+        r#"{{"set":{},"playlist":{},"overrides":["#,
+        json_string(set),
+        json_string(&card(manifest))
+    );
+    let mut first = true;
+    let mut sent: Result<()> = Ok(());
+    if let Ok(f) = std::fs::File::open(meta) {
+        let reader = std::io::BufReader::with_capacity(512, f);
+        let scanned = scan_meta(reader, |path, ov| {
+            if sent.is_err() {
+                return;
+            }
+            if !first {
+                buf.push(',');
+            }
+            first = false;
+            buf.push_str(&format!(r#"{{"path":{}"#, json_string(path)));
+            if ov.never {
+                buf.push_str(r#","never":true"#);
+            }
+            if let Some(w) = ov.weight {
+                buf.push_str(&format!(r#","w":{}"#, format_decimal(w)));
+            }
+            match ov.dwell {
+                Some(Dwell::Secs(s)) => buf.push_str(&format!(r#","dwell":{s}"#)),
+                Some(Dwell::Times(k)) => {
+                    buf.push_str(&format!(r#","dwell_x":{}"#, format_decimal(k)))
+                }
+                None => {}
+            }
+            if let Some(n) = ov.loops {
+                buf.push_str(&format!(r#","loops":{n}"#));
+            }
+            buf.push('}');
+            if buf.len() >= config::IO_CHUNK {
+                sent = req.chunk(buf.as_bytes());
+                buf.clear();
+            }
+        });
+        if let Err(e) = scanned {
+            log::warn!("{meta}: {e}");
+        }
+    }
+    sent?;
+    buf.push_str("]}");
+    req.chunk(buf.as_bytes())?;
+    req.finish()
+}
+
 /// The playlist fields of a reply, without braces: `"entries":N,"index":…`.
 /// `index` is `"loaded"`, `"built"`, `"in-ram"`, or `null` when the command did
-/// not touch the playlist.
+/// not touch the playlist; `overrides` is how many were resolved into it.
 fn applied_json(a: &Applied) -> String {
     format!(
-        r#""entries":{},"index":{},"index_ms":{}"#,
+        r#""entries":{},"index":{},"index_ms":{},"overrides":{},"hidden":{}"#,
         a.entries,
         a.index
             .map_or_else(|| "null".to_string(), |i| json_string(i.as_str())),
-        a.index_ms
+        a.index_ms,
+        a.overrides,
+        a.hidden
     )
 }
 
@@ -719,7 +963,10 @@ fn status_json(s: &Status) -> String {
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"gifs_started":{},"#,
-            r#""sd":{{"mounted":{},"capacity_bytes":{}}}}}"#
+            r#""sd":{{"mounted":{},"capacity_bytes":{}}},"#,
+            r#""overrides":{},"hidden":{},"#,
+            r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
+            r#""schedule":{{"rule":{},"set":{},"until":{}}}}}"#
         ),
         json_string(s.version),
         json_string(ota::FLASH_VARIANT),
@@ -749,7 +996,23 @@ fn status_json(s: &Status) -> String {
         s.gifs_started,
         s.sd_mounted,
         s.sd_capacity_bytes,
+        s.overrides,
+        s.hidden,
+        json_string(s.mode),
+        opt_json(s.mode_until.as_deref()),
+        opt_json(crate::clock::hhmm_now().as_deref()),
+        json_string(&s.tz_name),
+        crate::clock::synced_ago_secs().map_or_else(|| "null".to_string(), |n| n.to_string()),
+        opt_json(s.wake_until.as_deref()),
+        s.rule.map_or_else(|| "null".to_string(), |r| r.to_string()),
+        opt_json(s.rule_set.as_deref()),
+        opt_json(s.rule_until.as_deref()),
     )
+}
+
+/// A JSON string, or `null`.
+fn opt_json(s: Option<&str>) -> String {
+    s.map_or_else(|| "null".to_string(), json_string)
 }
 
 /// The saved configuration. The WiFi password is never returned — only whether
@@ -758,7 +1021,8 @@ fn settings_json(s: &Settings) -> String {
     format!(
         concat!(
             r#"{{"wifi_ssid":{},"wifi_pass_set":{},"brightness":{},"#,
-            r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{}}}"#
+            r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
+            r#""tz":{},"tz_name":{}}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -769,6 +1033,8 @@ fn settings_json(s: &Settings) -> String {
         json_string(&s.platforms),
         json_string(&s.set),
         json_string(&s.hostname),
+        json_string(&s.tz),
+        json_string(&s.tz_name),
     )
 }
 

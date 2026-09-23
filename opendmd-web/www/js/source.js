@@ -59,6 +59,12 @@ export class DeviceSource {
   cache() { return this.json('GET', '/api/cache', undefined, 15000); }
   async cacheList() { return (await this.json('GET', '/api/cache/list', undefined, 180000)).paths; }
   forget(path) { return this.json('POST', '/api/cache/forget', JSON.stringify({ path })); }
+  // A playlist's per-GIF overrides, parsed: {set, playlist, overrides: [...]}.
+  overrides(set) { return this.json('GET', '/api/overrides?set=' + encodeURIComponent(set)); }
+  // The schedule (rules + night mode), whole; and suspending it for a while.
+  schedule() { return this.json('GET', '/api/schedule'); }
+  putSchedule(s) { return this.json('PUT', '/api/schedule', JSON.stringify(s)); }
+  wake(minutes) { return this.json('POST', '/api/wake', JSON.stringify({ minutes })); }
 
   async list(dir) {
     const r = await this.json('GET', '/api/files?dir=' + encodeURIComponent(dir));

@@ -87,3 +87,18 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 .libgrid>.side{position:sticky;top:56px}
 @media (max-width:1000px){.libgrid{grid-template-columns:minmax(0,1fr)}.libgrid>.side{order:-1;top:48px;z-index:2}}
 @media (max-width:760px){.chips.scroll{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}.chips.scroll>*{flex:none}.libgrid .side .card{padding:8px;margin:0}}
+
+.ov{display:inline-flex;gap:4px;flex:none;font-style:normal}
+.ov i{font-style:normal;font-size:12px;color:var(--acc)}.ov i.hid{color:var(--bad)}.ov i.less{color:var(--mut)}
+.vrow.hid .t{opacity:.45;text-decoration:line-through}
+button.more{min-height:26px;padding:0 8px;flex:none}
+.menu{position:fixed;z-index:20;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 8px 28px #000a;padding:6px;min-width:250px;display:flex;flex-direction:column;gap:2px}
+.menu.sheet{left:0;right:0;bottom:0;border-radius:12px 12px 0 0;padding:10px 10px calc(14px + env(safe-area-inset-bottom))}
+.menu .mh{padding:4px 8px 8px;border-bottom:1px solid var(--line);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.menu .mi{background:none;border:0;justify-content:flex-start;text-align:left;min-height:34px}
+.menu .mi:hover:not(:disabled){background:var(--bg3)}
+.menu .ck{width:14px;color:var(--acc)}
+.menu .mr{display:flex;gap:6px;align-items:center;padding:4px 8px}.menu .mr>span:first-child{flex:1}
+button.on{border-color:var(--acc);color:var(--acc)}
+.card.sub{background:var(--bg3);margin-top:10px}
+input[type=time]{font:inherit;color:var(--fg);background:var(--bg3);border:1px solid var(--line);border-radius:var(--r);padding:6px 8px;min-height:36px;color-scheme:dark}

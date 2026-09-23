@@ -5,17 +5,40 @@
 import { h } from './util.js';
 
 export class VList {
-  constructor({ rowHeight = 40, render, onClick }) {
+  // onMenu(item, index, x, y): right-click, or a long press on a touch screen.
+  constructor({ rowHeight = 40, render, onClick, onMenu }) {
     this.rh = rowHeight;
     this.render = render;
     this.items = [];
     this.inner = h('div');
     this.el = h('div.vlist', { onscroll: () => this.draw() }, this.inner);
     this.pool = [];
+    let pressed = 0, t0 = null;
+    const fire = (row, x, y) => { pressed = Date.now(); onMenu(this.items[row._i], row._i, x, y); };
     this.el.addEventListener('click', (e) => {
       const row = e.target.closest('.vrow');
+      if (Date.now() - pressed < 700) return; // the tap that ended a long press
       if (row && onClick) onClick(this.items[row._i], row._i, e);
     });
+    if (onMenu) {
+      this.el.addEventListener('contextmenu', (e) => {
+        const row = e.target.closest('.vrow');
+        if (!row) return;
+        e.preventDefault();
+        if (Date.now() - pressed > 700) fire(row, e.clientX, e.clientY);
+      });
+      // iOS has no contextmenu on a long press.
+      let timer = 0;
+      const cancel = () => clearTimeout(timer);
+      this.el.addEventListener('pointerdown', (e) => {
+        const row = e.target.closest('.vrow');
+        if (e.pointerType !== 'touch' || !row || e.target.closest('button,input')) return;
+        t0 = [e.clientX, e.clientY];
+        timer = setTimeout(() => fire(row, t0[0], t0[1]), 550);
+      });
+      this.el.addEventListener('pointermove', (e) => { if (t0 && Math.hypot(e.clientX - t0[0], e.clientY - t0[1]) > 10) cancel(); });
+      for (const ev of ['pointerup', 'pointercancel', 'scroll']) this.el.addEventListener(ev, cancel);
+    }
     new ResizeObserver(() => this.draw()).observe(this.el);
   }
 
