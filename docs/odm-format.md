@@ -208,8 +208,9 @@ stock DMDoS.
   `MD_Sonic3_RattenJager.odm` -> FNV-1a `0xd01ef790` -> bucket `90` ->
   `odm/Consoles/90/MD_Sonic3_RattenJager.odm`. (`SNES_Plok_08.odm` hashes to
   `0x4ee48ec0`, bucket `c0`.) The one implementation is
-  `opendmd-pack/src/layout.rs` (`fnv1a32`, `bucket`, `odm_rel`), and its unit
-  test pins these values.
+  `opendmd-core/src/layout.rs` (`fnv1a32`, `bucket`, `odm_rel`,
+  `bucketed_path`), shared by `opendmd-pack` and the web app's converter
+  (`bucketFor`/`odmPathFor` in wasm); its unit test pins these values.
 
 **Why.** FAT has no directory index: opening a file scans its directory
 linearly, and on the ESP32 that costs ~0.65 ms per 512-byte directory sector

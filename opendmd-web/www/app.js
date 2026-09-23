@@ -1,84 +1,71 @@
-// Deliberately thin. This file reads the files the user picked, wires the
-// controls to the wasm module, and runs requestAnimationFrame. Everything
-// else — filtering, scheduling, GIF decoding, the LED look, the status line —
-// is Rust in `../src/lib.rs`.
+// Entry point: load the wasm module, find out whether a device is serving us
+// (GET /api/status) or we are a static page on a laptop (local mode), and
+// route between the five views. Each view is a module with
+// `mount(el) -> {show, hide}`, mounted on first visit.
 
-import init, { DmdApp } from './pkg/opendmd_web.js';
+import init from './pkg/opendmd_web.js';
+import { app } from './js/state.js';
+import { detect, LocalSource } from './js/source.js';
+import { $, h, clear, emit, toast } from './js/util.js';
 
 await init();
-DmdApp.init();
 
-const $ = (id) => document.getElementById(id);
-const status = $('status');
+const VIEWS = ['now', 'library', 'sets', 'convert', 'settings'];
+const mounted = {};
+let current = '';
 
-// Files the user picked: [name, Uint8Array] pairs, read once and kept in JS
-// until a play starts, then handed to wasm.
-let names = [];
-let blobs = [];
-let app = null;
-let raf = 0;
-
-// Chromium and Safari support it; Firefox does too but hide it where it isn't.
-if ('webkitdirectory' in document.createElement('input')) {
-  $('dir-label').hidden = false;
-}
-
-async function load(fileList) {
-  const files = [...fileList].filter((f) => f.name.toLowerCase().endsWith('.gif'));
-  if (!files.length) {
-    status.textContent = 'no .gif files in that selection';
-    return;
+async function route() {
+  const name = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'now';
+  if (name === current) return;
+  if (current) mounted[current]?.hide?.();
+  current = name;
+  for (const v of VIEWS) $('#view-' + v).classList.toggle('on', v === name);
+  for (const a of document.querySelectorAll('#nav a')) a.classList.toggle('on', a.dataset.view === name);
+  if (!app.src) return;
+  if (!mounted[name]) {
+    const mod = await import(`./js/${name}.js`);
+    mounted[name] = await mod.mount($('#view-' + name));
   }
-  status.textContent = `reading ${files.length} files…`;
-  names = files.map((f) => f.webkitRelativePath || f.name);
-  blobs = await Promise.all(files.map(async (f) => new Uint8Array(await f.arrayBuffer())));
-  status.textContent = `${files.length} GIFs in memory — press play`;
-  $('play').disabled = false;
+  mounted[name].show?.();
 }
 
-$('files').addEventListener('change', (e) => load(e.target.files));
-$('dir').addEventListener('change', (e) => load(e.target.files));
-
-// The three sliders and the flat checkbox are one control group: read them all
-// and let Rust rebuild the renderer.
-const look = () => [
-  parseFloat($('gamma').value),
-  parseFloat($('gain').value),
-  parseFloat($('bloom').value),
-  $('flat').checked,
-];
-
-for (const id of ['gain', 'bloom', 'gamma']) {
-  const el = $(id);
-  const out = $(`${id}-out`);
-  const show = () => { out.textContent = parseFloat(el.value).toFixed(2); };
-  el.addEventListener('input', () => { show(); app?.setLook(...look()); });
-  show();
+function setSource(src) {
+  app.src = src;
+  for (const k of Object.keys(mounted)) delete mounted[k];
+  for (const v of VIEWS) clear($('#view-' + v));
+  current = '';
+  emit('source', src);
+  route();
 }
-$('bloom').value = DmdApp.defaultBloom();
-$('bloom').dispatchEvent(new Event('input'));
-$('flat').addEventListener('change', () => app?.setLook(...look()));
 
-$('play').addEventListener('click', () => {
-  cancelAnimationFrame(raf);
-  const [gamma, gain, bloom, flat] = look();
-  try {
-    app = new DmdApp(
-      'panel', 'status', names, blobs,
-      $('platforms').value, $('shuffle').checked, Number($('seed').value),
-      gamma, gain, bloom, flat,
-    );
-  } catch (e) {
-    status.textContent = String(e);
-    return;
-  }
-  $('next').disabled = $('pause').disabled = false;
-  $('pause').textContent = 'pause';
-  const loop = () => { if (app.frame()) raf = requestAnimationFrame(loop); };
-  raf = requestAnimationFrame(loop);
-});
+function localPicker() {
+  const card = $('#t-local').content.cloneNode(true);
+  const pick = (e) => {
+    const files = e.target.files;
+    if (!files.length) return;
+    const src = new LocalSource(files, app.wasm.cardPath);
+    $('#where').textContent = `local · ${src.label || 'picked files'} · ${src.count} files`;
+    toast(`${src.count} files picked — nothing is read until it plays`);
+    setSource(src);
+  };
+  card.querySelector('#pick-dir').addEventListener('change', pick);
+  card.querySelector('#pick-files').addEventListener('change', pick);
+  return card;
+}
 
-$('next').addEventListener('click', () => app?.skip());
-$('pause').addEventListener('click', () => {
-  $('pause').textContent = app?.togglePause() ? 'resume' : 'pause';
-});
+addEventListener('hashchange', route);
+const found = await detect();
+if (found) {
+  app.src = found.src;
+  app.status = found.status;
+  const s = found.status;
+  $('#where').textContent = `${s.hostname || 'device'} · ${s.ip} · ${s.version} ${s.variant}`;
+  app.refreshConfig().catch((e) => toast('config: ' + e.message, 'bad'));
+  route();
+} else {
+  $('#where').textContent = 'local mode — no device answered /api/status';
+  for (const v of VIEWS) $('#view-' + v).append(h('div', localPicker()));
+  route();
+  // Re-offer the picker from any view until something is picked.
+  addEventListener('hashchange', () => { if (!app.src) route(); });
+}
