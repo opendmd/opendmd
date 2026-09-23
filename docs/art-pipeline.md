@@ -701,3 +701,25 @@ stacked screens), so they will mostly use Fit plus the Logos folder. Follow-ups,
 - walk cycles
 - the keyed sources through the Mac helper
 - the emulator import
+
+### Addendum: pixilart.com (probed 2026-09-23)
+
+The owner noticed the gallery API (`/api/w/gallery/<page>/<id>/popular?...`)
+answers with `access-control-allow-origin: *` in his browser. From anything
+that is not his browser it does not answer at all: curl, Playwright's
+request context and a headless page all get **HTTP 403 with
+`cf-mitigated: challenge`** (a Cloudflare managed challenge, "Just a
+moment…"), no CORS header on the 403, so `fetch()` fails. The clearance is a
+cookie scoped to pixilart.com, which a cross-origin `fetch` from the panel's
+page cannot send under a `*` policy, so the API is most likely unreachable
+from the app even in a real browser — to be confirmed by running, from the
+OpenDMD page's console:
+
+```js
+fetch('https://www.pixilart.com/api/w/gallery/10/33478920/popular').then(r => r.status).catch(e => e.message)
+```
+
+If that returns 200, add pixilart as a keyless search source (check that
+`art.pixilart.com` image URLs also carry CORS headers and load untainted into
+a canvas); if it fails, pixilart stays a paste / drag-and-drop source, which
+works today.
