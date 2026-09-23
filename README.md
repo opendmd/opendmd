@@ -79,6 +79,9 @@ frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.
 --shuffle --seed <u64>    reproducible weighted shuffle
 --scale <u32>             pixels per LED, default 10
 --min-dwell / --max-dwell seconds, default 3 and 30
+--transition kind[:ms]    how files come in: dissolve (default, 400 ms),
+                          wipe_left, wipe_right, wipe_down, wipe_up, blinds,
+                          push, fade or none; ms 20..2000
 --flat                    flat squares with a 1 px gutter, the old renderer
 --gamma <f32>             canvas byte -> linear light, default 2.2
 --led-gain <f32>          scales LED intensity, default 1.0 — match the panel

@@ -8,6 +8,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use opendmd_core::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
+use opendmd_core::compositor::Transition;
 use opendmd_core::engine::{
     Catalog, DwellPolicy, Engine, FileCatalog, ReadSeek, Source, TickOutcome,
 };
@@ -108,6 +109,25 @@ struct Args {
     /// Don't replay any of the last N entries when shuffling.
     #[arg(long = "no-repeat", default_value_t = 32)]
     no_repeat: usize,
+
+    /// How files come in: dissolve, wipe_left, wipe_right, wipe_down,
+    /// wipe_up, blinds, push, fade or none, with an optional duration in ms
+    /// (e.g. `wipe_left:250`; 20..2000, default 400).
+    #[arg(long, default_value = "dissolve:400", value_parser = parse_transition)]
+    transition: Transition,
+}
+
+fn parse_transition(s: &str) -> Result<Transition, String> {
+    Transition::parse(s).ok_or_else(|| {
+        format!(
+            "'{s}': expected kind[:ms], kind one of {}",
+            opendmd_core::compositor::Kind::ALL
+                .iter()
+                .map(|k| k.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
 }
 
 /// Opens card-absolute manifest paths (`/gifs/Consoles/X.gif`) under a root
@@ -328,6 +348,7 @@ fn main() -> Result<()> {
             root: args.root.clone(),
         }),
     );
+    engine.set_transition(args.transition);
 
     let scale = args.scale as usize;
     let (win_w, win_h) = (WIDTH * scale, HEIGHT * scale);
@@ -420,7 +441,13 @@ fn main() -> Result<()> {
             println!("-- renderer: {}", mode.label());
             window.set_title(&format!("OpenDMD [{}] - {playing_path}", mode.label()));
             // Redraw now so the toggle is visible even while paused.
-            draw(mode, &canvas, scale, &mut renderer, &mut buffer);
+            draw(
+                mode,
+                engine.display(&canvas),
+                scale,
+                &mut renderer,
+                &mut buffer,
+            );
             window.update_with_buffer(&buffer, win_w, win_h)?;
         }
 
@@ -433,7 +460,14 @@ fn main() -> Result<()> {
                     playing_path = playing.path;
                     window.set_title(&format!("OpenDMD [{}] - {playing_path}", mode.label()));
                 }
-                draw(mode, &canvas, scale, &mut renderer, &mut buffer);
+                // The compositor's output while a transition runs.
+                draw(
+                    mode,
+                    engine.display(&canvas),
+                    scale,
+                    &mut renderer,
+                    &mut buffer,
+                );
                 window.update_with_buffer(&buffer, win_w, win_h)?;
             }
             TickOutcome::Idle => {

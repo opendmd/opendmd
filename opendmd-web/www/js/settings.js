@@ -6,6 +6,7 @@
 import { app, playlistLabel } from './state.js';
 import * as prep from './prepare.js';
 import { timeCard, scheduleCard } from './schedule.js';
+import { PanelPreview } from './preview.js';
 import { h, clear, on, toast, bytes, uptime, base } from './util.js';
 
 export async function mount(el) {
@@ -24,7 +25,30 @@ export async function mount(el) {
     wifi_ssid: h('input', { type: 'text', id: 'st-ssid', value: c.wifi_ssid, autocomplete: 'off' }),
     wifi_pass: h('input', { type: 'password', id: 'st-pass', placeholder: c.wifi_pass_set ? 'unchanged (one is saved)' : 'none saved', autocomplete: 'new-password' }),
     hostname: h('input', { type: 'text', id: 'st-hostname', value: c.hostname }),
+    transition: h('select', { id: 'st-trans' }, [['dissolve', 'Dissolve'], ['wipe_left', 'Wipe'], ['blinds', 'Blinds'], ['push', 'Push'], ['fade', 'Fade'], ['none', 'None']].map(([v, l]) => h('option', { value: v }, l))),
+    transition_ms: h('select', { id: 'st-trans-ms', 'data-num': 1 }, [[250, 'Quick'], [400, 'Normal'], [700, 'Slow']].map(([v, l]) => h('option', { value: v }, l))),
   };
+  // A value set some other way (another wipe direction, another duration)
+  // is shown as it is rather than silently replaced.
+  const pick = (sel, v, label) => { if (![...sel.options].some((o) => o.value == v)) sel.append(h('option', { value: v }, label)); sel.value = v; };
+  pick(f.transition, c.transition ?? 'dissolve', String(c.transition).replace('_', ' '));
+  pick(f.transition_ms, c.transition_ms ?? 400, `${c.transition_ms} ms`);
+  // "Preview" plays the choice in this page only: the panel's file, started
+  // again from its first frame, transitioning in from the frame on screen.
+  const pvCanvas = h('canvas.panel', { id: 'st-trans-panel' });
+  const pvBox = h('div', { hidden: true, style: 'margin-top:12px' }, pvCanvas);
+  let pv = null;
+  async function previewTrans() {
+    pvBox.hidden = false;
+    pv ??= new PanelPreview(pvCanvas);
+    pv.p.setTransition(f.transition.value, +f.transition_ms.value);
+    const path = app.status?.now_playing?.path;
+    if (!pv.path) {
+      if (!path || !await pv.show(path, (p) => app.previewBytes(p))) return;
+      await new Promise((r) => setTimeout(r, 800));
+    }
+    pv.p.replay();
+  }
   const brightOut = h('output.mono', c.brightness);
   f.brightness.oninput = () => { brightOut.textContent = f.brightness.value; };
   const nets = h('div.chips', { id: 'st-nets' });
@@ -67,6 +91,11 @@ export async function mount(el) {
         h('label.stack', 'playlist', f.set),
         h('label', f.shuffle, 'shuffle')),
       h('div.row', { style: 'margin-top:12px' }, h('button.pri', { id: 'st-save-play', onclick: () => save(['brightness', 'dwell_min', 'dwell_max', 'shuffle', 'platforms', 'set']) }, 'Save playback'))),
+    h('div.card', { id: 'st-trans-card' }, h('h2', 'Transition'), h('p.cap', 'How the panel moves from one GIF to the next.'),
+      h('div.form', h('label.stack', 'style', f.transition), h('label.stack', 'speed', f.transition_ms)),
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-trans-preview', onclick: previewTrans }, 'Preview'),
+        h('button.pri', { id: 'st-save-trans', onclick: () => save(['transition', 'transition_ms']) }, 'Save transition')),
+      pvBox),
     time.el, sched.el,
     h('div.card', { id: 'pc' }, h('h2', 'Playback cache'),
       h('p.cap', 'Prepared copies play with less memory and start faster. Originals stay as they are.'),
@@ -110,7 +139,7 @@ export async function mount(el) {
     const patch = {};
     for (const k of keys) {
       const el_ = f[k];
-      const v = el_.type === 'checkbox' ? el_.checked : el_.type === 'number' || el_.type === 'range' ? +el_.value : el_.value.trim();
+      const v = el_.type === 'checkbox' ? el_.checked : el_.type === 'number' || el_.type === 'range' || el_.dataset.num ? +el_.value : el_.value.trim();
       if (k === 'wifi_pass') { if (el_.value) patch[k] = el_.value; continue; }
       if (v !== cur[k]) patch[k] = v;
     }

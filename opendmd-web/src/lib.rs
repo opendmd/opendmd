@@ -19,6 +19,7 @@ pub mod player;
 
 use curate::FilterSpec;
 use js_sys::{Array, Object, Reflect, Uint8Array};
+use opendmd_core::compositor::{Kind as TransitionKind, Transition};
 use opendmd_core::layout;
 use opendmd_core::manifest::{normalize_title as core_normalize, Entry};
 use opendmd_core::odm::{self, EncodeStats};
@@ -369,6 +370,29 @@ impl Preview {
     pub fn load(&mut self, path: &str, bytes: &[u8]) {
         self.error.clear();
         self.player.load(path, bytes.to_vec(), at(now_ms()));
+    }
+
+    /// How files come in: `kind` is a transition name (`dissolve`,
+    /// `wipe_left`, `wipe_right`, `wipe_down`, `wipe_up`, `blinds`, `push`,
+    /// `fade`, `none`; `wipe` = `wipe_left`) as `/api/config` has it, `ms`
+    /// its duration (20..2000). An unknown name is Dissolve.
+    #[wasm_bindgen(js_name = setTransition)]
+    pub fn set_transition(&mut self, kind: &str, ms: u32) {
+        let kind = TransitionKind::from_name(kind).unwrap_or_default();
+        self.player
+            .set_transition(Transition::new(kind, Duration::from_millis(u64::from(ms))));
+    }
+
+    /// Start the file again, transitioning in from what is shown: a
+    /// preview of the transition, on the page only.
+    pub fn replay(&mut self) {
+        self.player.replay(at(now_ms()));
+    }
+
+    /// A transition is on screen.
+    #[wasm_bindgen(getter)]
+    pub fn transitioning(&self) -> bool {
+        self.player.is_transitioning()
     }
 
     /// Stop and blank the panel.

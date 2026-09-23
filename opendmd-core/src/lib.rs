@@ -6,6 +6,7 @@
 //! encoder's quantiser, already a dependency of `gif`) and `log`.
 
 pub mod canvas;
+pub mod compositor;
 pub mod engine;
 pub mod filter;
 pub mod index;
@@ -18,6 +19,7 @@ pub mod schedule;
 pub mod scheduler;
 
 pub use canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
+pub use compositor::{Kind as TransitionKind, Transition};
 pub use engine::{
     Catalog, DwellPolicy, Engine, FileCatalog, NowPlaying, ReadSeek, Source, TickOutcome,
     OFF_PLAYLIST,

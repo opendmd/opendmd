@@ -5,12 +5,18 @@
 // screen.
 
 import { Preview, defaultBloom } from '../pkg/opendmd_web.js';
-import { h, store } from './util.js';
+import { h, store, on } from './util.js';
+import { app } from './state.js';
 
 const DEFAULT_LOOK = { gamma: 2.2, gain: 1, bloom: defaultBloom(), flat: false };
 export const look = { ...DEFAULT_LOOK, ...store.get('look', {}) };
 const live = new Set();
 let raf = 0;
+
+// Files come in with the device's transition (the engine's own, in wasm);
+// local mode keeps the engine default, Dissolve 400 ms.
+const trans = (p, c = app.config) => c && p.setTransition(c.transition ?? 'dissolve', c.transition_ms ?? 400);
+on('config', (c) => { for (const p of live) trans(p.p, c); });
 
 function loop() {
   raf = 0;
@@ -27,6 +33,7 @@ export class PanelPreview {
     const css = canvas.getBoundingClientRect().width || 900;
     canvas.width = 128 * Math.max(6, Math.min(10, Math.round((css * devicePixelRatio) / 128)));
     this.p = new Preview(canvas, look.gamma, look.gain, look.bloom, look.flat);
+    trans(this.p);
     this.onDwellEnd = onDwellEnd;
     this.onError = onError;
     this.token = 0;

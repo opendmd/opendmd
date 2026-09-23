@@ -24,6 +24,7 @@ use crate::nvs_config::Settings;
 use crate::ota;
 use crate::state::{Applied, Command, PlayError, Status, SET_NOT_FOUND};
 use crate::wifi::ScannedAp;
+use opendmd_core::compositor::{self, Kind as TransitionKind};
 
 /// The embedded setup page: rendered and gzipped by `build.rs`, served when
 /// the card has no web app on it yet (and always at `/setup`).
@@ -85,6 +86,8 @@ struct ConfigPatch {
     hostname: Option<String>,
     tz: Option<String>,
     tz_name: Option<String>,
+    transition: Option<String>,
+    transition_ms: Option<u32>,
 }
 
 /// Wire format for `POST /api/wake`.
@@ -215,6 +218,25 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 return req.bad_request("tz_name is at most 64 characters");
             }
             next.tz_name = v;
+        }
+        if let Some(v) = patch.transition {
+            let Some(kind) = TransitionKind::from_name(&v) else {
+                return req.bad_request(
+                    "transition must be dissolve, wipe_left, wipe_right, wipe_down, wipe_up, blinds, push, fade or none",
+                );
+            };
+            next.transition.kind = kind;
+        }
+        if let Some(ms) = patch.transition_ms {
+            let range = compositor::MIN_DURATION.as_millis()..=compositor::MAX_DURATION.as_millis();
+            if !range.contains(&u128::from(ms)) {
+                return req.bad_request(&format!(
+                    "transition_ms must be {}..={}",
+                    range.start(),
+                    range.end()
+                ));
+            }
+            next.transition.duration = Duration::from_millis(u64::from(ms));
         }
         if next.dwell_max < next.dwell_min {
             return req.bad_request("dwell_max must be >= dwell_min");
@@ -1022,7 +1044,7 @@ fn settings_json(s: &Settings) -> String {
         concat!(
             r#"{{"wifi_ssid":{},"wifi_pass_set":{},"brightness":{},"#,
             r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
-            r#""tz":{},"tz_name":{}}}"#
+            r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{}}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -1035,6 +1057,8 @@ fn settings_json(s: &Settings) -> String {
         json_string(&s.hostname),
         json_string(&s.tz),
         json_string(&s.tz_name),
+        s.transition.kind.name(),
+        s.transition.duration.as_millis(),
     )
 }
 

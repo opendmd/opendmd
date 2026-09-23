@@ -64,7 +64,7 @@ use opendmd_core::schedule::{self, Decision, Schedule};
 use opendmd_core::scheduler::{Mode, Scheduler};
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -86,6 +86,26 @@ static HEAP_FRESH: AtomicBool = AtomicBool::new(true);
 /// [`NeedsFreshHeap`]); acted on by the main loop *after* it has answered the
 /// command that caused it, so the HTTP caller gets its reply first.
 static REBOOT_PENDING: AtomicBool = AtomicBool::new(false);
+/// A frame has been blitted since boot: an engine built from now on (a
+/// playlist change) transitions in from the picture on the panel rather than
+/// cutting in. The first engine at boot has nothing to transition from.
+static FRAME_SHOWN: AtomicBool = AtomicBool::new(false);
+/// Transitions refused by [`transition_gate`] since boot (heartbeat).
+static TRANSITIONS_CUT: AtomicU32 = AtomicU32::new(0);
+
+/// Whether a transition may take its buffers now: `need` is its 24 KB plus
+/// what the new file's decoder has still to allocate (a GIF's LZW state);
+/// the heap must keep [`config::TRANSITION_HEAP_RESERVE`] after both, and a
+/// 16 KB block (the LZW's largest piece) must exist. Called on the main task
+/// inside the tick; counts refusals.
+fn transition_gate(need: usize) -> bool {
+    let ok = free_heap() as usize >= need + config::TRANSITION_HEAP_RESERVE
+        && largest_free_block() >= 16 * 1024;
+    if !ok {
+        TRANSITIONS_CUT.fetch_add(1, Ordering::Relaxed);
+    }
+    ok
+}
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -194,13 +214,14 @@ fn main() -> Result<()> {
     clock::set_timezone(&settings.tz, &settings.tz_name);
     let mut sched = Scheduling::new(&settings.schedule);
     log::info!(
-        "settings: brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', tz='{}' ({}), schedule {} rule(s){}, host='{}', wifi={}",
+        "settings: brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, tz='{}' ({}), schedule {} rule(s){}, host='{}', wifi={}",
         settings.brightness,
         settings.dwell_min,
         settings.dwell_max,
         settings.shuffle,
         settings.platforms,
         settings.set,
+        settings.transition,
         settings.tz,
         settings.tz_name,
         sched.schedule.rules.len(),
@@ -236,6 +257,10 @@ fn main() -> Result<()> {
     // Whether this image has told the bootloader it works (see
     // `ota::confirm_running_image`): done once, after the first frame.
     let mut confirmed = false;
+    // The file frame last published to status, `(ordinal, frame)`: a
+    // transition step that decoded nothing moves the picture but not the
+    // file's position.
+    let mut published: (u64, u64) = (0, 0);
 
     // --- Shared state, the HTTP server, and the network worker ------------
     let status = Arc::new(Mutex::new(Status::new(
@@ -263,7 +288,7 @@ fn main() -> Result<()> {
     // fresh heap to work with. If the card has no readable manifest the loop
     // below keeps retrying.
     let mut engine: Option<Engine> = None;
-    let _ = rebuild(&mut engine, &sched.effective(&settings), false, &status);
+    let _ = rebuild(&mut engine, &sched.effective(&settings), false, &status, &mut canvas);
 
     // The HTTP server next, still before the first GIF is decoded: its task
     // stack is one contiguous 16 KB internal allocation, and the largest free
@@ -409,6 +434,7 @@ fn main() -> Result<()> {
                             }
                             if let Some(e) = engine.as_mut() {
                                 e.set_dwell(dwell_policy(&settings));
+                                e.set_transition(settings.transition);
                             }
                             if tz_changed {
                                 clock::set_timezone(&settings.tz, &settings.tz_name);
@@ -422,18 +448,19 @@ fn main() -> Result<()> {
                                 );
                             }
                             log::info!(
-                                "config applied (reindex={needs_reindex}): brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}'",
+                                "config applied (reindex={needs_reindex}): brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}",
                                 settings.brightness,
                                 settings.dwell_min,
                                 settings.dwell_max,
                                 settings.shuffle,
                                 settings.platforms,
-                                settings.set
+                                settings.set,
+                                settings.transition
                             );
                             let outcome = if needs_reindex {
                                 // A current `.idx` for the new set/filter is
                                 // reused; anything else is rebuilt.
-                                rebuild(&mut engine, &sched.effective(&settings), false, &status)
+                                rebuild(&mut engine, &sched.effective(&settings), false, &status, &mut canvas)
                             } else {
                                 Ok(Applied::unchanged(
                                     engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -446,7 +473,7 @@ fn main() -> Result<()> {
                 Command::Reindex(reply) => {
                     // Forced: the caller asked, perhaps because the manifest
                     // was edited off-device with its length unchanged.
-                    let outcome = rebuild(&mut engine, &sched.effective(&settings), true, &status);
+                    let outcome = rebuild(&mut engine, &sched.effective(&settings), true, &status, &mut canvas);
                     log::info!("reindex requested over HTTP: {outcome:?}");
                     let _ = reply.send(outcome);
                 }
@@ -460,7 +487,7 @@ fn main() -> Result<()> {
                     // Compared with the manifest actually in play.
                     let active = files::same_card_path(&status.lock().unwrap().manifest, &dest);
                     if active {
-                        engine = None;
+                        retire(&mut engine, &mut canvas);
                     }
                     let outcome = files::remove_index_beside(&dest)
                         .and_then(|()| files::replace(&temp, &dest))
@@ -470,7 +497,7 @@ fn main() -> Result<()> {
                         })
                         .and_then(|()| {
                             if active {
-                                rebuild(&mut engine, &sched.effective(&settings), true, &status)
+                                rebuild(&mut engine, &sched.effective(&settings), true, &status, &mut canvas)
                             } else {
                                 Ok(Applied::unchanged(
                                     engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -496,7 +523,7 @@ fn main() -> Result<()> {
                     };
                     let active = files::same_card_path(&status.lock().unwrap().manifest, &manifest);
                     if active {
-                        engine = None;
+                        retire(&mut engine, &mut canvas);
                     }
                     let outcome = files::remove_index_beside(&manifest)
                         .and_then(|()| match &temp {
@@ -516,7 +543,7 @@ fn main() -> Result<()> {
                         })
                         .and_then(|()| {
                             if active {
-                                rebuild(&mut engine, &sched.effective(&settings), false, &status)
+                                rebuild(&mut engine, &sched.effective(&settings), false, &status, &mut canvas)
                             } else {
                                 Ok(Applied::unchanged(
                                     engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -610,7 +637,7 @@ fn main() -> Result<()> {
         // 2. No engine (boot, or a reindex that failed): try to build one.
         let Some(eng) = engine.as_mut() else {
             let eff = sched.effective(&settings);
-            if rebuild(&mut engine, &eff, false, &status).is_err() {
+            if rebuild(&mut engine, &eff, false, &status, &mut canvas).is_err() {
                 // A schedule rule's playlist that will not build is set
                 // aside (until the rule changes) and the saved one plays.
                 if eff.set != settings.set {
@@ -669,11 +696,16 @@ fn main() -> Result<()> {
                 playing,
                 started: is_new,
                 next_frame_at,
+                transitioning,
             } => {
+                // The composited picture while a transition runs.
                 let blit_start = probe::stamp();
-                let blit_px = panel.blit(&mut canvas);
+                let blit_px = panel.blit(eng.display_mut(&mut canvas));
                 let blit_us = probe::elapsed_us(blit_start);
-                sampled_min = sampled_min.min(free_heap());
+                let free = free_heap();
+                sampled_min = sampled_min.min(free);
+                FRAME_SHOWN.store(true, Ordering::Relaxed);
+                let decoded = (playing.ordinal, playing.frame) != published;
                 let log_start = probe::stamp();
                 if is_new {
                     started = playing.ordinal;
@@ -697,6 +729,11 @@ fn main() -> Result<()> {
                 // Hold the frame for its GIF delay. Read the clock again,
                 // because the blit itself took time.
                 let now = epoch.elapsed();
+                // The deadline is the file's next frame. A transition step
+                // in between (`next_frame_at` is then earlier) is not one:
+                // a step a few ms late shows nothing different, and if its
+                // work makes the file's frame late, that frame counts.
+                let deadline = eng.frame_due().unwrap_or(next_frame_at).max(next_frame_at);
                 if probe::ENABLED {
                     let times = probe::FrameTimes {
                         tick_us,
@@ -706,22 +743,30 @@ fn main() -> Result<()> {
                         work_us: now.saturating_sub(tick_now).as_micros() as u32,
                         delay_ms: next_frame_at.saturating_sub(tick_now).as_millis() as u64,
                     };
-                    let late_ms = (now > next_frame_at)
-                        .then(|| now.saturating_sub(next_frame_at).as_millis() as u64);
+                    let late_ms =
+                        (now > deadline).then(|| now.saturating_sub(deadline).as_millis() as u64);
                     probe::frame(&times, late_ms, is_new, &playing.path);
+                    probe::transition_frame(transitioning, decoded, &times, free);
                 }
-                shown = Some((playing.elapsed, playing.frame, now, next_frame_at));
+                // The file's position moves only with its own frames, and
+                // its hold is its own delay, not a transition step's.
+                if decoded {
+                    published = (playing.ordinal, playing.frame);
+                    let due = eng.frame_due().unwrap_or(next_frame_at);
+                    shown = Some((playing.elapsed, playing.frame, now, due));
+                }
                 if is_new {
                     new_file = Some(playing);
                 }
                 match next_frame_at.checked_sub(now) {
                     Some(remaining) => remaining,
+                    None if now <= deadline => config::CATCHUP_SLEEP,
                     None => {
                         // Already late. This is the acceptance metric: count it
                         // and remember the worst, then yield a tick so the
                         // watchdog and every other task get their turn.
                         deadline_misses += 1;
-                        let late = now.saturating_sub(next_frame_at).as_millis() as u64;
+                        let late = now.saturating_sub(deadline).as_millis() as u64;
                         worst_lateness_ms = worst_lateness_ms.max(late);
                         config::CATCHUP_SLEEP
                     }
@@ -956,13 +1001,13 @@ fn apply_schedule(
     let playing = status.lock().unwrap().manifest.clone();
     if engine.is_some() && !files::same_card_path(&eff.manifest_path(), &playing) {
         log::info!("schedule: playlist {} -> {}", playing, eff.manifest_path());
-        if rebuild(engine, &eff, false, status).is_err() && eff.set != settings.set {
+        if rebuild(engine, &eff, false, status, canvas).is_err() && eff.set != settings.set {
             log::warn!(
                 "schedule: playlist '{}' will not open; playing the saved one",
                 eff.set
             );
             sched.broken_set = Some(eff.set.clone());
-            let _ = rebuild(engine, &sched.effective(settings), false, status);
+            let _ = rebuild(engine, &sched.effective(settings), false, status, canvas);
         }
     }
 
@@ -982,6 +1027,10 @@ fn apply_schedule(
             // The DMA buffer was cleared under the canvas: the next frame
             // must repaint all of it, not just what changed.
             canvas.dirty_mut().mark_all();
+            if let Some(e) = engine.as_mut() {
+                // A transition's output, if one is on display.
+                e.display_mut(canvas).dirty_mut().mark_all();
+            }
             let user_paused = status.lock().unwrap().paused;
             if let Some(e) = engine.as_mut() {
                 if !user_paused {
@@ -1120,6 +1169,12 @@ fn build_engine(
         Box::new(SdSource),
     );
     engine.set_overrides(&overrides);
+    engine.set_transition(settings.transition);
+    engine.set_transition_gate(Some(transition_gate));
+    if FRAME_SHOWN.load(Ordering::Relaxed) {
+        // A playlist change: the panel shows the old playlist's last frame.
+        engine.carry_over();
+    }
     Ok((engine, source, overrides))
 }
 
@@ -1322,8 +1377,9 @@ fn rebuild(
     settings: &Settings,
     force: bool,
     status: &Mutex<Status>,
+    canvas: &mut Canvas,
 ) -> Result<Applied, String> {
-    *engine = None;
+    retire(engine, canvas);
     let path = settings.manifest_path();
     {
         let mut s = status.lock().unwrap();
@@ -1398,6 +1454,16 @@ fn build_and_report(
     }
 }
 
+/// Drop the engine, first ending any transition it is running, so the
+/// canvas (which outlives it) holds what is on the panel and owes the panel
+/// exactly the difference — the next engine carries over from it.
+fn retire(engine: &mut Option<Engine>, canvas: &mut Canvas) {
+    if let Some(e) = engine.as_mut() {
+        e.finish_transition(canvas);
+    }
+    *engine = None;
+}
+
 /// If the configured set's manifest will not open, fall back to the default
 /// manifest and clear `set` in NVS. Returns true if it did.
 ///
@@ -1463,7 +1529,8 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms), \
-         wifi {wifi} {ip}, {schedule}{}{}",
+         transitions cut {}, wifi {wifi} {ip}, {schedule}{}{}",
+        TRANSITIONS_CUT.load(Ordering::Relaxed),
         sd::period_summary(),
         probe::period_summary()
     );
