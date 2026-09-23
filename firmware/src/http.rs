@@ -4,9 +4,11 @@
 //! Route shapes and the captive-portal probe list come from
 //! `~/projects/stripe-dashboard/src/web_portal.rs`; the file server and the
 //! command plumbing are ours. Everything here runs on the httpd task, which is
-//! pinned to CPU0 (see [`crate::httpd`]) and is the *only* task allowed to
-//! block: anything that would touch the engine, the panel or a file the player
-//! has open is sent to the main task as a [`Command`] and waited on.
+//! pinned to CPU0 (see [`crate::httpd`]) and may block — except the card-file
+//! `GET`s, whose responses are produced on the streaming task
+//! ([`crate::stream`]) so that one download cannot hold up the API. Anything
+//! that would touch the engine, the panel or a file the player has open is
+//! sent to the main task as a [`Command`] and waited on.
 //!
 //! Registration order is load-bearing. ESP-IDF prefers an exact match, but
 //! among wildcards the *earliest* registration wins, so `/*` goes last.
@@ -23,6 +25,7 @@ use crate::httpd::{json_string, query_param, Method, Req, Server};
 use crate::nvs_config::Settings;
 use crate::ota;
 use crate::state::{Applied, Command, PlayError, Status, SET_NOT_FOUND};
+use crate::stream;
 use crate::wifi::ScannedAp;
 use opendmd_core::compositor::{self, Kind as TransitionKind};
 
@@ -99,9 +102,10 @@ struct WakeRequest {
 /// Start the server and register every route.
 ///
 /// Called from the main task before the display loop, *not* from the network
-/// worker, and deliberately so: the httpd task's 16 KB stack is one contiguous
-/// internal allocation, and by the time WiFi has associated the first GIF is
-/// already decoding and the largest free block has fallen below it
+/// worker, and deliberately so: the httpd task's stack (and the streaming
+/// task's, started here too) is one contiguous internal allocation, and by the
+/// time WiFi has associated the first GIF is already decoding and the largest
+/// free block has fallen below it
 /// (`httpd_start` then fails with `ESP_ERR_HTTPD_TASK`, 0xb008 — measured on
 /// this board). Starting here, right after the index is built, takes the
 /// allocation while the heap is still whole. `core_id` is in the config, so the
@@ -116,12 +120,20 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 40)?;
 
     // --- The web app, and the setup page as its fallback -------------------
+    // Every card file goes out from the streaming task (`stream`), so a big
+    // download or a stalled client never holds up the API.
+    stream::start().unwrap_or_else(|e| {
+        log::error!("stream task failed to start ({e:#}); files are served on the httpd task")
+    });
+
     server.route("/", Method::Get, |req| {
-        let index = format!("{}/index.html", config::WWW_ROOT);
-        if files::serve(req, &index)? {
-            return Ok(());
-        }
-        send_setup(req)
+        stream::hand_off(req, |req| {
+            let index = format!("{}/index.html", config::WWW_ROOT);
+            if files::serve(req, &index)? {
+                return Ok(());
+            }
+            send_setup(req)
+        })
     })?;
     server.route("/setup", Method::Get, send_setup)?;
 
@@ -673,9 +685,6 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // text. Without this they
     // fell through to the `/*` www catch-all and 404ed.
     server.route("/filelist*", Method::Get, |req| {
-        if !files::affordable(req)? {
-            return Ok(());
-        }
         let rel = crate::httpd::percent_decode(req.path());
         let name = rel.trim_start_matches('/');
         if name.contains('/') {
@@ -684,11 +693,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let Some(path) = files::card_path(config::SD_MOUNT, name) else {
             return req.bad_request("path escapes the card");
         };
-        if files::serve(req, &path)? {
-            Ok(())
-        } else {
-            req.not_found(&rel)
-        }
+        stream_file(req, path, rel)
     })?;
 
     server.route("/gifs/*", Method::Get, |req| {
@@ -704,18 +709,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     server.route("/www/*", Method::Get, |req| {
-        if !files::affordable(req)? {
-            return Ok(());
-        }
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/www/"));
         let Some(path) = files::card_path(config::WWW_ROOT, &rel) else {
             return req.bad_request("path escapes the card");
         };
-        if files::serve(req, &path)? {
-            Ok(())
-        } else {
-            req.not_found(&rel)
-        }
+        stream_file(req, path, rel)
     })?;
 
     // --- Captive portal ----------------------------------------------------
@@ -744,15 +742,24 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     let c = ctx.clone();
     server.route("/*", Method::Get, move |req| {
         let rel = crate::httpd::percent_decode(req.path());
-        if let Some(path) = files::card_path(config::WWW_ROOT, &rel) {
+        // Decided here, where the context is: what to say if the card has no
+        // such file.
+        let target = portal_target(&c);
+        let Some(path) = files::card_path(config::WWW_ROOT, &rel) else {
+            return match target {
+                Some(target) => req.redirect(&target),
+                None => req.not_found(&rel),
+            };
+        };
+        stream::hand_off(req, move |req| {
             if files::serve(req, &path)? {
                 return Ok(());
             }
-        }
-        match portal_target(&c) {
-            Some(target) => req.redirect(&target),
-            None => req.not_found(&rel),
-        }
+            match target {
+                Some(target) => req.redirect(&target),
+                None => req.not_found(&rel),
+            }
+        })
     })?;
 
     Ok(server)
@@ -786,18 +793,23 @@ fn skip_if_playing(ctx: &Ctx, fs_path: &str) {
 
 /// Serve a card-absolute path below `root`, 404ing if it is not a file.
 fn serve_under(req: &mut Req, root: &str) -> Result<()> {
-    if !files::affordable(req)? {
-        return Ok(());
-    }
     let rel = crate::httpd::percent_decode(req.path());
     let Some(path) = files::card_path(root, &rel) else {
         return req.bad_request("path escapes the card");
     };
-    if files::serve(req, &path)? {
-        Ok(())
-    } else {
-        req.not_found(&rel)
-    }
+    stream_file(req, path, rel)
+}
+
+/// Send the card file at `path` from the streaming task, or a 404 naming
+/// `rel` if there is none.
+fn stream_file(req: &mut Req, path: String, rel: String) -> Result<()> {
+    stream::hand_off(req, move |req| {
+        if files::serve(req, &path)? {
+            Ok(())
+        } else {
+            req.not_found(&rel)
+        }
+    })
 }
 
 fn send_setup(req: &mut Req) -> Result<()> {

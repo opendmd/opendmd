@@ -61,9 +61,11 @@ CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 # WIFI_STORAGE_RAM anyway, so the driver's NVS support is dead weight.
 CONFIG_ESP_WIFI_NVS_ENABLED=n
 
-# lwip. One httpd task serves two sockets at a time (plus mDNS), and nothing
-# here speaks IPv6, so the default windows and mailbox depths are oversized.
-CONFIG_LWIP_MAX_SOCKETS=6
+# lwip. One httpd task serves four sockets (config::HTTP_MAX_SOCKETS) and
+# needs three more of its own, plus one for the captive-portal DNS server; and
+# nothing here speaks IPv6, so the default windows and mailbox depths are
+# oversized.
+CONFIG_LWIP_MAX_SOCKETS=8
 CONFIG_LWIP_IPV6=n
 # One MSS each. Two MSS was measurably faster and measurably closer to the
 # out-of-memory line; with a ~20 KB floor the margin is worth more than the

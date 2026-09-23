@@ -191,8 +191,18 @@ pub const NET_WORKER_STACK: usize = 12 * 1024;
 /// The httpd task's stack, and one contiguous internal allocation — which is
 /// why the server is started before the first GIF is decoded. stripe-dashboard
 /// needs 16 KB because its OTA handler buffers on the stack; ours reads into a
-/// heap buffer, so 10 KB covers the deepest handler with room to spare.
-pub const HTTP_STACK: usize = 10 * 1024;
+/// heap buffer. Measured high-water (the `httpd task: stack high-water` log
+/// line) at 10 KB: 5.2 KB used over a device `web-smoke` pass (config,
+/// schedule, playlist upload), 3.2 KB through a full `POST /api/ota`. It was
+/// 10 KB until file streaming moved to its own task; 8 KB gives back 2 KB of
+/// the ~7 KB that task costs and leaves ~2.8 KB over the deepest measured.
+pub const HTTP_STACK: usize = 8 * 1024;
+/// The file-streaming task's stack (`stream.rs`): `files::serve` with its
+/// chunk buffer on the heap, plus logging. Also one contiguous internal
+/// allocation, taken at the same time as the httpd task's. Measured at 6 KB:
+/// 2.9 KB used at most (stalled client, 4 MB GIF, api-load, web-smoke,
+/// page-load bursts), so 4.5 KB keeps ~1.6 KB spare.
+pub const STREAM_STACK: usize = 4608;
 /// Everything streamed to or from the card moves in chunks this size: big
 /// enough to keep SPI efficient, small enough that the display loop never
 /// waits long for the FAT lock — and small enough to afford, because each
@@ -247,16 +257,21 @@ pub const HEAP_WAIT: Duration = Duration::from_secs(20);
 /// Concurrent HTTP connections.
 ///
 /// ESP-IDF's httpd is a single task, so this is not parallelism — it is how
-/// many sockets, header buffers and lwip windows are alive at once. Two is a
-/// browser's working set (page, script, wasm) and the most this heap is
-/// comfortable with.
+/// many sockets, header buffers and lwip windows are alive at once. Files are
+/// streamed one at a time by `stream.rs`, with up to `stream::QUEUE_DEPTH`
+/// (2) more waiting, and each of those holds its socket marked in use, which
+/// httpd's LRU purge will not evict. At least one socket must stay evictable
+/// or a new connection can neither be accepted nor make room (see `stream`),
+/// so this is 1 + 2 + 1 = 4; a compile-time assert there keeps it so.
+/// `CONFIG_LWIP_MAX_SOCKETS` must be at least this + 3 (httpd's listening and
+/// control sockets and a spare), + 1 for the captive-portal DNS server.
 ///
-/// It is not a safety limit, and it was measured not to be: 1, 2 and 3 were
-/// all tried on the rig, and none of them stops three concurrent multi-hundred
-/// KB downloads from running the heap to zero (see "Heap ceiling" in the root
-/// CLAUDE.md). One client at a time is well inside the budget; three is not,
-/// and no amount of socket tuning changes that.
-pub const HTTP_MAX_SOCKETS: u16 = 2;
+/// It is not a safety limit on the heap, and was measured not to be (1, 2
+/// and 3 were all tried when every download ran on the httpd task: none
+/// stopped three concurrent multi-hundred KB downloads running the heap to
+/// zero). What bounds the heap now is that only one file is ever being sent;
+/// a waiting request costs its ~1.7 KB request copy and an idle TCP pcb.
+pub const HTTP_MAX_SOCKETS: u16 = 4;
 
 /// The web app the browser runs, and the card-absolute roots the HTTP server
 /// is allowed to read from or write to.
