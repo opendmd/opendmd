@@ -1,9 +1,11 @@
 // Settings: the device's NVS config (GET/PUT /api/config — a PUT is a
 // partial patch, applied live except WiFi and hostname, which need a
-// reboot), a WiFi scan, reindex, reboot, OTA, and the facts from status.
+// reboot), a WiFi scan, reindex, reboot, OTA, the facts from status, and
+// the playback cache (how many files are prepared; prepare the rest).
 
-import { app } from './state.js';
-import { h, clear, on, toast, bytes, uptime } from './util.js';
+import { app, playlistLabel } from './state.js';
+import * as prep from './prepare.js';
+import { h, clear, on, toast, bytes, uptime, base } from './util.js';
 
 export async function mount(el) {
   if (!app.device) {
@@ -32,20 +34,38 @@ export async function mount(el) {
   const otaBar = h('i');
   const otaMsg = h('span.muted');
 
-  const { manifests, sets } = await app.sets();
-  f.set.append(h('option', { value: '' }, `card default (${app.defaultManifest(manifests)})`),
-    ...manifests.map((m) => h('option', { value: m }, m)), ...sets.map((s) => h('option', { value: s }, s)));
-  f.set.value = c.set;
+  // The playlist choices, rebuilt whenever the config changes or the view
+  // is shown: a playlist made or deleted elsewhere must not linger here.
+  async function loadPlaylists() {
+    const set = app.config?.set ?? '';
+    const lists = await app.playlists().catch(() => []);
+    if (!lists.some((p) => p.value === '')) lists.unshift({ value: '', label: 'All files' });
+    if (!lists.some((p) => p.value === set)) lists.push({ value: set, label: playlistLabel(set) });
+    clear(f.set, lists.map((p) => h('option', { value: p.value }, p.value ? p.label : `${p.label} (default)`)));
+    f.set.value = set;
+  }
+  await loadPlaylists();
+  on('config', loadPlaylists);
+  // --- playback cache
+  const cacheLine = h('b', { id: 'pc-count' }, '…');
+  const cacheBtn = h('button.pri', { id: 'pc-go', onclick: () => (prep.job.running ? prep.stop() : prep.start()) }, 'Prepare remaining files');
+  const cacheBar = h('i');
+  const cacheMsg = h('div.muted', { id: 'pc-progress' });
+  const cacheErr = h('div.log.bad', { id: 'pc-errors' });
 
   el.append(banner,
-    h('div.card', h('h2', 'Playback'), h('p.cap', 'Applied live. A set, platform or shuffle change rebuilds the index on the card (a few seconds).'),
+    h('div.card', h('h2', 'Playback'), h('p.cap', 'Applied live. A playlist, platform or shuffle change rebuilds the index on the card (a few seconds).'),
       h('div.form',
         h('label.stack', 'brightness', h('div.row', f.brightness, brightOut)),
         h('label.stack', 'dwell min / max (s)', h('div.row', f.dwell_min, f.dwell_max)),
         h('label.stack', 'platforms', f.platforms),
-        h('label.stack', 'active set', f.set),
+        h('label.stack', 'playlist', f.set),
         h('label', f.shuffle, 'shuffle')),
       h('div.row', { style: 'margin-top:12px' }, h('button.pri', { id: 'st-save-play', onclick: () => save(['brightness', 'dwell_min', 'dwell_max', 'shuffle', 'platforms', 'set']) }, 'Save playback'))),
+    h('div.card', { id: 'pc' }, h('h2', 'Playback cache'),
+      h('p.cap', 'Prepared copies play with less memory and start faster. Originals are never changed.'),
+      h('div.row.sp', h('span', cacheLine), cacheBtn),
+      h('div.bar', { style: 'margin:10px 0' }, cacheBar), cacheMsg, cacheErr),
     h('div.card', h('h2', 'Network'), h('p.cap', 'WiFi and hostname changes need a reboot. With no saved network the player raises the open OpenDMD-Setup access point.'),
       h('div.form',
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
@@ -67,7 +87,7 @@ export async function mount(el) {
     const fact = (k, v) => h('div.stat', h('b', { style: 'font-size:14px' }, v), h('span', k));
     clear(facts, fact('firmware', s.version), fact('flash variant', s.variant), fact('panel', `128×32 · ${s.refresh_hz} Hz`),
       fact('WiFi', `${s.wifi} · ${s.ip}`), fact('hostname', s.hostname + '.local'), fact('uptime', uptime(s.uptime_secs)),
-      fact('manifest', s.manifest.replace(/^\/sdcard/, '')), fact('entries', s.entries.toLocaleString()),
+      fact('playlist', playlistLabel(s.manifest)), fact('entries', s.entries.toLocaleString()),
       fact('index', s.index_state ?? '–'), fact('web app', s.www_version ?? '–'),
       fact('card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'not mounted'));
     // A set change while an index is being built would queue behind it.
@@ -142,6 +162,37 @@ export async function mount(el) {
     } catch (e) { otaMsg.textContent = ''; toast('OTA: ' + e.message, 'bad'); }
   }
 
+  // --- playback cache ---------------------------------------------------
+  // GET /api/cache is cheap to ask; the device counts in the background and
+  // answers "counting" meanwhile, so poll until it is ready.
+  let cachePoll = 0, visible = true;
+  async function loadCache() {
+    clearTimeout(cachePoll);
+    try {
+      const r = await app.src.cache();
+      if (r.prepared == null) cacheLine.textContent = `${r.total.toLocaleString()} files · counting prepared files…`;
+      else cacheLine.textContent = `${r.prepared.toLocaleString()} of ${r.total.toLocaleString()} files prepared` + (r.state === 'counting' ? ' · recounting…' : '');
+      if (r.state === 'counting' && visible) cachePoll = setTimeout(loadCache, 2000);
+    } catch (e) { cacheLine.textContent = 'cache: ' + e.message; }
+  }
+  function mins(s) { return s < 90 ? `${Math.max(1, Math.round(s))} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`; }
+  function renderJob(j) {
+    cacheBtn.textContent = j.running ? (j.stopping ? 'Stopping after this file…' : 'Stop') : 'Prepare remaining files';
+    cacheBtn.disabled = j.stopping;
+    const n = j.done + j.failed;
+    cacheBar.style.width = j.todo ? `${(100 * n) / j.todo}%` : j.phase === 'finished' ? '100%' : '0';
+    const left = prep.eta();
+    cacheMsg.textContent = j.phase === 'checking' ? 'Finding the files that are not prepared yet…'
+      : j.phase === 'preparing' ? `${n.toLocaleString()} of ${j.todo.toLocaleString()}` + (j.failed ? ` · ${j.failed} failed` : '') + (left != null ? ` · about ${mins(left)} left` : '') + (j.current ? ` · ${base(j.current)}` : '')
+      : j.phase === 'finished' ? (j.todo ? `Done: ${j.done.toLocaleString()} prepared` + (j.failed ? `, ${j.failed} failed` : '') + '.' : 'Every file is already prepared.')
+      : j.phase === 'stopped' ? `Stopped after ${j.done.toLocaleString()} of ${j.todo.toLocaleString()}. Start again to carry on.` : '';
+    clear(cacheErr, j.errors.slice(-20).map((e) => h('div', e)));
+    if (!j.running && j.phase !== 'idle') loadCache();
+  }
+  on('prepare', renderJob);
+
   renderFacts(app.status);
-  return { show() { app.refreshStatus().catch(() => {}); } };
+  renderJob(prep.job);
+  loadCache();
+  return { show() { visible = true; app.refreshStatus().catch(() => {}); loadPlaylists(); loadCache(); }, hide() { visible = false; clearTimeout(cachePoll); } };
 }

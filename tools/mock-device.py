@@ -16,8 +16,8 @@ Two modes.
 **Card mode** (`--root`) fakes the whole device: the JSON API in
 `firmware/src/http.rs`, the card file server in `firmware/src/files.rs`, and a
 simulated now-playing loop, all served on top of a local copy of an SD card
-(`--root`, an extracted card: `gifs/`, `odm/`, `filelist.txt`, maybe
-`filelist.odm.txt`, `sets/`). `--www` (default `<repo>/opendmd-web/www`) is
+(`--root`, an extracted card: `gifs/`, `odm/` (prepared copies),
+`filelist.txt`, `filelist.hall`/`.xmas`, `sets/`). `--www` (default `<repo>/opendmd-web/www`) is
 what a browser hitting `/` gets.
 
 **Proxy mode** (`--proxy URL`) does the opposite: it serves `--www` locally
@@ -76,17 +76,25 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   FAT order) and sizes are opt-in (`?sizes=1`), matching the firmware's
   quadratic-`stat`-avoidance note in `files.rs`.
 - `GET /api/config` never echoes `wifi_pass`, only `wifi_pass_set`.
-- **The default manifest.** `set` = `""` resolves to `filelist.odm.txt` if the
-  card has one, else `filelist.txt`, at every rebuild (so installing
-  `filelist.odm.txt` onto a card playing `filelist.txt` takes effect at the
-  next set change or reindex, as on the device). `set` = `"filelist.*"`
-  selects that root manifest, anything else `sets/<set>.txt`. A set whose
+- **The default manifest** is `filelist.txt`: `set` = `""` plays it,
+  `"filelist.*"` selects that root manifest, anything else `sets/<set>.txt`.
+  An obsolete `filelist.odm.txt` is ignored and refused as a set. A set whose
   manifest does not exist is a **404 `{"error":"set not found"}` with nothing
   saved**; a `/`, `\\` or `..` in it is a 400. `manifest` in status, the 409 on
   deleting the active manifest and the "is this install active" check all use
   the resolved path.
-- **`/filelist*`** serves every root manifest (`filelist.txt`, `.odm.txt`,
-  `.hall`, `.xmas`) as `text/plain`, `no-cache`; a `/` after the name is a 404.
+- **The playback cache.** `GET /api/cache` is `{total, prepared, state,
+  count_ms}`: `total` the playlist length, `prepared` how many of its entries
+  have a prepared copy at their bucketed path (`odm/<Category>/<bb>/X.odm`),
+  counted in a background thread after any change (an upload or delete under
+  `odm/`, a forget, a GIF delete, a playlist rebuild) — the first request
+  after one answers `"counting"` with the previous figure (null before the
+  first count), as the device does. `GET /api/cache/list` is every copy's
+  path; `POST /api/cache/forget {"path":"/gifs/…"}` deletes a GIF's copy;
+  `DELETE /api/files/gifs/…` takes the copy with it.
+- **`/filelist*`** serves every root manifest (`filelist.txt`, `.hall`,
+  `.xmas`, an obsolete `.odm.txt`) as `text/plain`, `no-cache`; a `/` after
+  the name is a 404.
 - **`POST /api/play {"path"}`** puts the file on "the panel" now (an
   off-playlist `now_playing`, ordinal and `gifs_started` bumped), and the
   schedule resumes at the next dwell. 404 if it does not open, 415 if it does
@@ -157,7 +165,7 @@ from pathlib import Path
 # --------------------------------------------------------------------------
 
 MANIFEST_REL = "filelist.txt"          # config::MANIFEST_PATH, relative to the card root
-ODM_MANIFEST_REL = "filelist.odm.txt"  # config::ODM_MANIFEST_PATH: the default when present
+OBSOLETE_SET = "filelist.odm.txt"      # config::OBSOLETE_ODM_MANIFEST: ignored, refused as a set
 MAX_JSON_BODY = 8192                   # http.rs MAX_JSON_BODY
 SET_NOT_FOUND = "set not found"        # state::SET_NOT_FOUND
 SETS_DIR = "sets"                      # config::SETS_DIR
@@ -352,6 +360,28 @@ def www_version(www_root: Path):
     return line[:64] or None
 
 
+def fnv1a32(b: bytes) -> int:
+    h = 0x811C9DC5
+    for x in b:
+        h = ((h ^ x) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def bucketed_path(path: str):
+    """opendmd_core::layout::bucketed_path: /gifs/Cat/X.gif ->
+    /odm/Cat/<bb>/X.odm, None for anything else."""
+    parts = path.lstrip("/").split("/", 1)
+    if len(parts) != 2 or parts[0].lower() != "gifs" or not parts[1].lower().endswith(".gif"):
+        return None
+    rest = parts[1]
+    d, _, name = rest.rpartition("/")
+    if len(name) <= 4:
+        return None
+    odm = name[:-4] + ".odm"
+    bb = f"{fnv1a32(odm.encode()) & 0xFF:02x}"
+    return f"/odm/{d}/{bb}/{odm}" if d else f"/odm/{bb}/{odm}"
+
+
 def enoent(path: str) -> str:
     """Rust's io::Error Display for ENOENT, which the firmware's error
     messages embed verbatim."""
@@ -452,6 +482,23 @@ class CardFS:
             self.tombstones.discard(rel)
             return len(data)
 
+    def odm_files(self) -> list[str]:
+        """Card paths of every `.odm` under odm/ in either layer, tombstones
+        dropped: the prepared copies."""
+        with self.lock:
+            found: dict[str, str] = {}
+            for base in (self.root_dir, self.overlay_dir):
+                if base is None or not (base / "odm").is_dir():
+                    continue
+                for d, _, names in os.walk(base / "odm"):
+                    for n in names:
+                        if not n.lower().endswith(".odm"):
+                            continue
+                        rel = (Path(d) / n).relative_to(base).as_posix()
+                        if rel not in self.tombstones:
+                            found[rel.lower()] = "/" + rel
+            return list(found.values())
+
     def delete(self, rel: str) -> bool:
         """Delete `rel`. Returns True if something was there to delete."""
         with self.lock:
@@ -498,7 +545,7 @@ class Player:
     def resolve(self, set_: str) -> str:
         """Settings::manifest_path, root-relative."""
         if not set_:
-            return ODM_MANIFEST_REL if self.ctx.fs.read_path(ODM_MANIFEST_REL) else MANIFEST_REL
+            return MANIFEST_REL
         if set_.startswith("filelist."):
             return set_
         return f"{SETS_DIR}/{set_}.txt"
@@ -533,6 +580,7 @@ class Player:
         if self.ctx.settings["shuffle"] and n > 1:
             random.Random(1234).shuffle(self.order)
         self.pos = -1
+        self.ctx.cache.invalidate()
         # A rebuilt engine starts playing immediately, not after a further
         # dwell -- mirror that so a set/platform/manifest change shows a
         # now_playing entry right away instead of an empty one for up to
@@ -593,6 +641,68 @@ def heap_numbers(player: Player):
 # Shared context
 # --------------------------------------------------------------------------
 
+class Cache:
+    """cache.rs: counted off the request path, only once someone has asked,
+    and again after every change."""
+
+    def __init__(self, ctx: "Context"):
+        self.ctx = ctx
+        self.lock = threading.Lock()
+        self.gen = 0
+        self.done_gen = -1
+        self.prepared = None
+        self.counting = False
+        self.count_ms = 0
+        self.requested = False
+
+    def invalidate(self):
+        with self.lock:
+            self.gen += 1
+            start = self.requested and not self.counting
+            if self.requested:
+                self.counting = True
+        if start:
+            self._spawn()
+
+    def snapshot(self):
+        with self.lock:
+            self.requested = True
+            start = self.done_gen != self.gen and not self.counting
+            if start:
+                self.counting = True
+            snap = (self.prepared, self.counting, self.count_ms)
+        if start:
+            self._spawn()
+        return snap
+
+    def _spawn(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while True:
+            time.sleep(0.6)  # the device debounces; a short one here
+            with self.lock:
+                gen = self.gen
+            t0 = time.monotonic()
+            with self.ctx.lock:
+                playlist = list(self.ctx.player.playlist)
+            have = {p.lower() for p in self.ctx.fs.odm_files()}
+            n = 0
+            for p in playlist:
+                if p.lower().startswith("/odm/"):
+                    n += 1
+                    continue
+                c = bucketed_path(p)
+                if c and c.lower() in have:
+                    n += 1
+            with self.lock:
+                if gen != self.gen:
+                    continue
+                self.prepared, self.done_gen, self.counting = n, gen, False
+                self.count_ms = int((time.monotonic() - t0) * 1000)
+                return
+
+
 class Context:
     def __init__(self, fs: CardFS, www_root: Path, dwell: float, strict: bool):
         self.fs = fs
@@ -601,6 +711,7 @@ class Context:
         self.strict = strict
         self.settings = dict(DEFAULT_SETTINGS)
         self.lock = threading.RLock()
+        self.cache = Cache(self)
         self.player = Player(self)
 
 
@@ -732,6 +843,9 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/reindex"), {"POST": self.h_reindex}),
                 (m_exact("/api/play"), {"POST": self.h_play}),
                 (m_exact("/api/stat"), {"GET": self.h_stat}),
+                (m_exact("/api/cache"), {"GET": self.h_cache}),
+                (m_exact("/api/cache/list"), {"GET": self.h_cache_list}),
+                (m_exact("/api/cache/forget"), {"POST": self.h_cache_forget}),
                 (m_exact("/api/files"), {"GET": self.h_files_list}),
                 (m_exact("/api/wifi/scan"), {"GET": self.h_wifi_scan}),
                 (m_exact("/api/ota"), {"POST": self.h_ota}),
@@ -962,7 +1076,10 @@ def make_handler(ctx: Context, quiet: bool):
                 )
 
                 # A new set must open before anything is saved ("" always
-                # passes: it resolves to whichever default the card has).
+                # passes: it is filelist.txt). The obsolete one never does.
+                if next_settings["set"] != before["set"] and next_settings["set"].lower() == OBSOLETE_SET:
+                    self.send_error_json(404, SET_NOT_FOUND)
+                    return
                 if next_settings["set"] != before["set"] and next_settings["set"]:
                     if ctx.fs.read_path(ctx.player.resolve(next_settings["set"])) is None:
                         self.send_error_json(404, SET_NOT_FOUND)
@@ -1077,6 +1194,49 @@ def make_handler(ctx: Context, quiet: bool):
                     obj.update(exists=True, is_dir=True)
             self.send_json(200, obj)
 
+        def h_cache(self, path):
+            prepared, counting, count_ms = ctx.cache.snapshot()
+            with ctx.lock:
+                total = len(ctx.player.playlist)
+            self.send_json(200, {
+                "total": total,
+                "prepared": prepared,
+                "state": "counting" if counting else "ready",
+                "count_ms": count_ms,
+            })
+
+        def h_cache_list(self, path):
+            paths = ctx.fs.odm_files()
+            self.send_json(200, {"paths": paths, "count": len(paths)})
+
+        def forget_copy(self, gif: str) -> bool:
+            copy = bucketed_path(gif)
+            if copy is None:
+                return False
+            removed = ctx.fs.read_path(copy.lstrip("/")) is not None and ctx.fs.delete(copy.lstrip("/"))
+            if removed:
+                ctx.cache.invalidate()
+            return removed
+
+        def h_cache_forget(self, path):
+            raw = self.json_body()
+            if raw is None:
+                return
+            try:
+                req = json.loads(raw)
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"invalid JSON: {e}")
+                return
+            p = req.get("path") if isinstance(req, dict) else None
+            if not isinstance(p, str):
+                self.send_error_json(400, "invalid JSON: missing field `path`")
+                return
+            if card_path(p) is None or bucketed_path(p) is None:
+                self.send_error_json(400, "path must be a card-absolute /gifs/….gif")
+                return
+            removed = self.forget_copy(p)
+            self.send_json(200, {"ok": True, "path": p, "removed": removed})
+
         def h_wifi_scan(self, path):
             time.sleep(1.5)
             self.send_json(200, WIFI_SCAN_RESULTS)
@@ -1164,6 +1324,8 @@ def make_handler(ctx: Context, quiet: bool):
                 self.send_json(200, obj)
                 return
             written = ctx.fs.write_bytes(rel, data)
+            if rel.lower().startswith("odm/"):
+                ctx.cache.invalidate()
             self.send_json(200, {"ok": True, "path": "/" + rel, "bytes": written})
 
         def h_files_delete(self, path):
@@ -1181,6 +1343,10 @@ def make_handler(ctx: Context, quiet: bool):
                 if is_manifest_path(rel):
                     ctx.fs.delete(rel + ".idx")
                 existed = ctx.fs.delete(rel)
+                if existed:
+                    self.forget_copy("/" + rel)
+                    if rel.lower().startswith("odm/"):
+                        ctx.cache.invalidate()
             if existed:
                 self.send_json(200, {"ok": True})
             else:

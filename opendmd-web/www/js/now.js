@@ -5,7 +5,7 @@
 // with the panel. In local mode, a simulator over the picked folder that
 // plays one file at a time with the firmware's dwell.
 
-import { app } from './state.js';
+import { app, playlistLabel } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
 import { h, clear, on, store, debounce, toast, bytes, uptime, label } from './util.js';
 
@@ -32,7 +32,7 @@ function mountDevice(el) {
   const brightOut = h('output.mono', bright.value);
   const grid = h('div.grid', { id: 'now-stats' });
   const conn = h('span', { id: 'now-conn' });
-  const playPath = h('input', { type: 'text', id: 'now-play-path', placeholder: '/gifs/… or /odm/… (card path)', onkeydown: (e) => e.key === 'Enter' && send() });
+  const playPath = h('input', { type: 'text', id: 'now-play-path', placeholder: '/gifs/… (card path)', onkeydown: (e) => e.key === 'Enter' && send() });
 
   el.append(
     h('div.card', canvas, h('div.row.sp', cap, h('label.cap', follow, 'preview follows the panel'))),
@@ -68,19 +68,15 @@ function mountDevice(el) {
     try { const r = await app.src.pause(); app.status.paused = r.paused; render(app.status); } catch (e) { toast(e.message, 'bad'); }
   }
 
-  // The preview prefers the file's bucketed .odm when filelist.odm.txt says
-  // there is one: fetching from gifs/Consoles costs the device a ~330 ms
-  // directory scan that the panel feels; a bucket costs ~6 ms.
+  // The preview fetches the file's prepared copy first (app.previewBytes):
+  // fetching from gifs/Consoles costs the device a ~330 ms directory scan
+  // that the panel feels; a copy's small directory costs ~6 ms.
   async function follow_(path) {
     if (!follow.checked || !path || path === shownPath) return;
     shownPath = path;
-    await app.odmIndex();
-    const fetchPath = app.hasOdm(path) ? app.wasm.odmPathFor(path) : path;
     cap.textContent = 'preview — not frame-synced · loading…';
     try {
-      if (await preview.show(fetchPath, (p) => app.src.readBytes(p))) {
-        cap.textContent = `preview — not frame-synced · ${fetchPath.endsWith('.odm') ? '.odm' : 'GIF'}`;
-      }
+      if (await preview.show(path, (p) => app.previewBytes(p))) cap.textContent = 'preview — not frame-synced';
     } catch (e) { cap.textContent = 'preview: ' + e.message; }
   }
 
@@ -95,7 +91,7 @@ function mountDevice(el) {
     meta.textContent = np.path;
     ord.textContent = `#${np.ordinal} · ${s.entries.toLocaleString()} entries`;
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
-    const set = s.manifest.replace(/^\/sdcard/, '');
+    const set = playlistLabel(s.manifest);
     clear(grid,
       stat('uptime', uptime(s.uptime_secs)),
       stat(`${s.wifi} · ${s.hostname}.local`, s.ip || '–'),
@@ -105,7 +101,7 @@ function mountDevice(el) {
       stat('deadline misses', s.deadline_misses.toLocaleString()),
       stat('worst lateness', s.worst_lateness_ms + ' ms'),
       stat('files started', s.gifs_started.toLocaleString()),
-      stat('manifest', set),
+      stat('playlist', set),
       stat('card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'not mounted', s.sd.mounted ? '' : '.bad'));
     follow_(np.path);
   }
@@ -158,14 +154,14 @@ function mountLocal(el) {
   preview.setDwell(3, 30);
 
   const src = app.src;
-  const manifests = [...src.files.keys()].filter((p) => /^\/filelist\.[^/]*$|^\/sets\/[^/]+\.txt$/.test(p));
-  for (const m of manifests) listSel.append(h('option', { value: m }, m));
-  listSel.append(h('option', { value: '' }, 'every GIF / .odm in the folder'));
+  const manifests = [...src.files.keys()].filter((p) => /^\/filelist\.[^/]*$|^\/sets\/[^/]+\.txt$/.test(p) && !/\/filelist\.odm\.|\.(idx|part|tmp|bak)$/.test(p));
+  for (const m of manifests) listSel.append(h('option', { value: m }, playlistLabel(m)));
+  listSel.append(h('option', { value: '' }, 'every GIF in the folder'));
 
   async function play() {
     let text;
     if (listSel.value) text = await src.readText(listSel.value);
-    else text = [...src.files.keys()].filter((p) => /\.(gif|odm)$/i.test(p)).sort().join('\n');
+    else text = [...src.files.keys()].filter((p) => /\.gif$/i.test(p)).sort().join('\n');
     list = app.wasm.filterManifest(text, JSON.stringify({ platforms: plats.value, shuffle: shuffle.checked, seed: +seed.value }));
     if (!list.length) { toast('the filter matched nothing', 'bad'); return; }
     i = -1;
@@ -183,7 +179,7 @@ function mountLocal(el) {
     const e = app.wasm.parsePath(path);
     title.textContent = label(e);
     line.textContent = `[${i + 1}/${list.length}] ${path}`;
-    await preview.show(path, (p) => src.readBytes(p));
+    await preview.show(path, (p) => app.previewBytes(p));
   }
 
   return { show() {}, hide() {} };

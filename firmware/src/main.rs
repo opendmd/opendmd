@@ -32,6 +32,7 @@
 //! the worst lateness seen, and the sampled heap floor. If serving files costs
 //! the panel anything, those are where it shows.
 
+mod cache;
 mod config;
 mod dns_server;
 mod files;
@@ -171,6 +172,20 @@ fn main() -> Result<()> {
     // playlist, retrying forever across reboots. Forget it and play the
     // default instead.
     heal_missing_set(&mut settings, &mut nvs_config);
+    // Prepared copies are found per GIF now; a playlist of `/odm/...` paths
+    // from before that is dead weight. Say so once, and never play it.
+    if File::open(format!(
+        "{}/{}",
+        config::SD_MOUNT,
+        config::OBSOLETE_ODM_MANIFEST
+    ))
+    .is_ok()
+    {
+        log::warn!(
+            "ignoring /{}: prepared copies are found automatically from /filelist.txt; it can be deleted",
+            config::OBSOLETE_ODM_MANIFEST
+        );
+    }
     panel.set_brightness(settings.brightness);
     log::info!(
         "settings: brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', host='{}', wifi={}",
@@ -224,6 +239,7 @@ fn main() -> Result<()> {
     let shared_settings = Arc::new(Mutex::new(settings.clone()));
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
     let (net_tx, net_rx) = mpsc::channel::<NetCommand>();
+    cache::init(net_tx.clone());
 
     // The playlist: the manifest and its on-card index, opened (or built) once
     // and kept open; `Exhausted` reseeds the scheduler rather than re-reading
@@ -325,8 +341,14 @@ fn main() -> Result<()> {
                     // Check the new set's manifest opens *before* anything is
                     // saved: persisting a set that does not exist used to leave
                     // the engine at None and the board retrying forever, across
-                    // reboots. `""` is always acceptable (it resolves to
-                    // whichever default the card has).
+                    // reboots. `""` is always acceptable (`/filelist.txt`).
+                    // The obsolete `filelist.odm.txt` is refused like a set
+                    // that is not there.
+                    if next.set != settings.set && nvs_config::is_obsolete_set(&next.set) {
+                        log::warn!("config: set '{}' refused: obsolete", next.set);
+                        let _ = reply.send(Err(state::SET_NOT_FOUND.to_string()));
+                        continue;
+                    }
                     if next.set != settings.set && !next.set.is_empty() {
                         let path = next.manifest_path();
                         if let Err(e) = File::open(&path) {
@@ -389,11 +411,7 @@ fn main() -> Result<()> {
                     // *before* the new manifest lands (see
                     // `files::remove_index_beside` for why that order), and the
                     // index is rebuilt if this is the manifest in play.
-                    // Compared with the manifest actually in play, which for
-                    // `set` = "" is whichever default was resolved at the last
-                    // build (installing `filelist.odm.txt` onto a card playing
-                    // `filelist.txt` takes effect at the next boot or set
-                    // change, like any other default change).
+                    // Compared with the manifest actually in play.
                     let active = files::same_card_path(&status.lock().unwrap().manifest, &dest);
                     if active {
                         engine = None;
@@ -471,6 +489,7 @@ fn main() -> Result<()> {
                     deferred.push(Deferred::Started {
                         ordinal: playing.ordinal,
                         path: playing.path.clone(),
+                        served: sd::take_last(),
                     });
                     let mut s = status.lock().unwrap();
                     s.ordinal = playing.ordinal;
@@ -567,7 +586,12 @@ fn main() -> Result<()> {
 enum Deferred {
     /// A GIF started. The heap figures are read when the line is printed,
     /// between frames: `heap_caps_get_largest_free_block` walks the heap.
-    Started { ordinal: u64, path: String },
+    Started {
+        ordinal: u64,
+        path: String,
+        /// How `SdSource` served it: the prepared copy or the original.
+        served: Option<sd::Served>,
+    },
     LowWater {
         from: u32,
         to: u32,
@@ -579,8 +603,21 @@ enum Deferred {
 impl Deferred {
     fn log(self) {
         match self {
-            Deferred::Started { ordinal, path } => log::info!(
-                "[{ordinal}] {path} (heap {} B free, largest block {} B)",
+            Deferred::Started {
+                ordinal,
+                path,
+                served,
+            } => log::info!(
+                "[{ordinal}] {path} <- {} (heap {} B free, largest block {} B)",
+                match served {
+                    Some(sd::Served::Prepared { try_us }) => {
+                        format!("prepared, open {:.1} ms", try_us as f32 / 1000.0)
+                    }
+                    Some(sd::Served::Original { miss_us }) => {
+                        format!("original, miss {:.1} ms", miss_us as f32 / 1000.0)
+                    }
+                    Some(sd::Served::Direct) | None => "as named".to_string(),
+                },
                 free_heap(),
                 largest_free_block()
             ),
@@ -820,8 +857,6 @@ fn rebuild(
     status: &Mutex<Status>,
 ) -> Result<Applied, String> {
     *engine = None;
-    // Resolved here, every time: with `set` = "" this is where the card's
-    // default (`filelist.odm.txt` over `filelist.txt`) is chosen.
     let path = settings.manifest_path();
     {
         let mut s = status.lock().unwrap();
@@ -839,6 +874,9 @@ fn rebuild(
         "unavailable"
     };
     drop(s);
+    if outcome.is_ok() {
+        cache::set_playlist(&path, &settings.platforms);
+    }
     outcome
 }
 
@@ -893,14 +931,21 @@ fn heal_missing_set(settings: &mut Settings, nvs: &mut Config) -> bool {
     if settings.set.is_empty() {
         return false;
     }
-    let path = settings.manifest_path();
-    let Err(e) = File::open(&path) else {
-        return false;
-    };
-    log::warn!(
-        "configured set '{}' does not open ({path}: {e}); falling back to the default manifest and clearing it from NVS",
-        settings.set
-    );
+    if nvs_config::is_obsolete_set(&settings.set) {
+        log::warn!(
+            "configured set '{}' is obsolete (prepared copies are found automatically); playing the default manifest and clearing it from NVS",
+            settings.set
+        );
+    } else {
+        let path = settings.manifest_path();
+        let Err(e) = File::open(&path) else {
+            return false;
+        };
+        log::warn!(
+            "configured set '{}' does not open ({path}: {e}); falling back to the default manifest and clearing it from NVS",
+            settings.set
+        );
+    }
     settings.set.clear();
     if let Err(e) = nvs.save(settings) {
         log::error!("clearing the set in NVS failed ({e:#}); the default plays for this boot only");
@@ -939,7 +984,8 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms), \
-         wifi {wifi} {ip}{}",
+         wifi {wifi} {ip}{}{}",
+        sd::period_summary(),
         probe::period_summary()
     );
 }

@@ -203,6 +203,11 @@ fn run(worker: NetWorker) {
                 });
                 let _ = reply.send(aps);
             }
+            // The playback-cache count (`cache.rs`): a directory walk and a
+            // manifest pass, seconds long, done here so neither the display
+            // task nor the httpd task waits on it. A scan request that
+            // arrives meanwhile waits too; that is the trade.
+            Ok(NetCommand::CountCache) => crate::cache::run_count(),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 info!("[net] command channel closed; worker exiting");

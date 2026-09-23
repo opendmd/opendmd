@@ -73,6 +73,114 @@ pub fn bucketed_path(manifest_path: &str) -> Option<String> {
     Some(format!("/{}", odm_rel(rest, true)?))
 }
 
+/// The key the cache count matches an optimised copy by: FNV-1a-32 over the
+/// ASCII-lowercased card-absolute bucketed path (`/odm/Consoles/90/X.odm`).
+/// Lowercased because FAT names compare case-insensitively, so the name a
+/// directory walk returns may differ in case from the manifest's.
+pub fn prepared_key(odm_path: &str) -> u32 {
+    odm_path.bytes().fold(0x811c_9dc5, |h: u32, b| {
+        (h ^ u32::from(b.to_ascii_lowercase())).wrapping_mul(0x0100_0193)
+    })
+}
+
+/// What a manifest line means for the playback cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Prepared {
+    /// A `/gifs/….gif` path: its optimised copy would be at
+    /// [`bucketed_path`], in bucket `bucket`, matched by `key`
+    /// ([`prepared_key`]).
+    Candidate { bucket: u8, key: u32 },
+    /// A path already naming an optimised copy (`/odm/…`), from a manifest
+    /// written before copies were resolved automatically. Counted as prepared.
+    Direct,
+    /// Anything else (not under `/gifs/`, not a `.gif`): never prepared.
+    Never,
+}
+
+/// Classify one manifest path. See [`Prepared`].
+pub fn classify(manifest_path: &str) -> Prepared {
+    let first = manifest_path
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or("");
+    if first.eq_ignore_ascii_case("odm") {
+        return Prepared::Direct;
+    }
+    match bucketed_path(manifest_path) {
+        Some(odm) => {
+            let name = odm.rsplit('/').next().unwrap_or(&odm);
+            Prepared::Candidate {
+                bucket: (fnv1a32(name.as_bytes()) & 0xff) as u8,
+                key: prepared_key(&odm),
+            }
+        }
+        None => Prepared::Never,
+    }
+}
+
+/// Totals from [`count_prepared`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CacheCount {
+    /// Entries that pass the filter.
+    pub total: usize,
+    /// Of those, the ones with an optimised copy: a [`Prepared::Candidate`]
+    /// whose bucket is in the range and whose key is in `keys`, plus (when
+    /// `count_direct`) every [`Prepared::Direct`] entry.
+    pub prepared: usize,
+}
+
+/// One streaming pass over a manifest counting the entries that pass
+/// `filter` and, of those, the ones whose optimised copy is known to exist.
+///
+/// `keys` is **sorted**: the [`prepared_key`]s of the copies a directory walk
+/// found in buckets `buckets.0 ..= buckets.1`. The range exists so a caller
+/// with little memory can walk the buckets a slice at a time and call this
+/// once per slice, summing `prepared` (and taking `total` from any one call;
+/// pass `count_direct` on exactly one of them).
+///
+/// Lines are only parsed into an [`Entry`](crate::manifest::Entry) (the tag
+/// grammar, most of the cost on the ESP32: ~12.7 s of a 10k-line pass there)
+/// when the filter needs one; unfiltered, a line is just a path. Tolerance is
+/// [`crate::manifest::scan`]'s: BOM, CRLF, blank lines, trailing whitespace.
+pub fn count_prepared<R: std::io::BufRead>(
+    mut reader: R,
+    filter: &crate::filter::Filter,
+    buckets: (u8, u8),
+    keys: &[u32],
+    count_direct: bool,
+) -> std::io::Result<CacheCount> {
+    let parse = !filter.is_unconstrained();
+    let mut c = CacheCount::default();
+    let mut raw = String::new();
+    loop {
+        raw.clear();
+        if reader.read_line(&mut raw)? == 0 {
+            return Ok(c);
+        }
+        let line = raw
+            .strip_prefix('\u{feff}')
+            .unwrap_or(&raw)
+            .trim_end_matches(['\n', '\r', ' ', '\t']);
+        if line.is_empty() {
+            continue;
+        }
+        if parse && !filter.matches(&crate::manifest::Entry::from_path(line)) {
+            continue;
+        }
+        c.total += 1;
+        match classify(line) {
+            Prepared::Candidate { bucket, key } => {
+                if (buckets.0..=buckets.1).contains(&bucket) && keys.binary_search(&key).is_ok() {
+                    c.prepared += 1;
+                }
+            }
+            Prepared::Direct => c.prepared += usize::from(count_direct),
+            Prepared::Never => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +249,69 @@ mod tests {
         assert_eq!(bucketed_path("/odm/Consoles/90/X.odm"), None);
         assert_eq!(bucketed_path("/gifs/Consoles/X.odm"), None);
         assert_eq!(bucketed_path("X.gif"), None);
+    }
+
+    #[test]
+    fn classify_and_count_prepared() {
+        use crate::filter::Filter;
+        let a = "/gifs/Consoles/MD_Sonic3_RattenJager.gif";
+        let b = "/gifs/NEW 2021/SNES_Plok_08.gif";
+        let Prepared::Candidate { bucket, key } = classify(a) else {
+            panic!("a GIF under gifs/ is a candidate")
+        };
+        assert_eq!(bucket, 0x90);
+        assert_eq!(
+            key,
+            prepared_key("/odm/Consoles/90/MD_Sonic3_RattenJager.odm")
+        );
+        // Case never matters: FAT hands back whatever case is on the card.
+        assert_eq!(
+            key,
+            prepared_key("/ODM/consoles/90/md_sonic3_rattenjager.ODM")
+        );
+        assert_eq!(classify("/odm/Consoles/90/X.odm"), Prepared::Direct);
+        assert_eq!(classify("/sets/x.txt"), Prepared::Never);
+        assert_eq!(classify("/gifs/Consoles/x.png"), Prepared::Never);
+
+        let manifest =
+            format!("{a}\n{b}\n/odm/Consoles/90/X.odm\n/gifs/Consoles/SNES_Other_01.gif\n");
+        let mut keys = vec![prepared_key(&bucketed_path(a).unwrap())];
+        keys.sort_unstable();
+        let all = Filter::new();
+        let c = count_prepared(manifest.as_bytes(), &all, (0, 255), &keys, true).unwrap();
+        assert_eq!(
+            c,
+            CacheCount {
+                total: 4,
+                prepared: 2
+            }
+        );
+        // The bucket slice excludes a's bucket: only the direct entry counts.
+        let c = count_prepared(manifest.as_bytes(), &all, (0, 0x8f), &keys, true).unwrap();
+        assert_eq!(
+            c,
+            CacheCount {
+                total: 4,
+                prepared: 1
+            }
+        );
+        let c = count_prepared(manifest.as_bytes(), &all, (0x90, 0x90), &keys, false).unwrap();
+        assert_eq!(
+            c,
+            CacheCount {
+                total: 4,
+                prepared: 1
+            }
+        );
+        // The filter applies to both totals.
+        let snes = Filter::new().platforms(["SNES"]);
+        let c = count_prepared(manifest.as_bytes(), &snes, (0, 255), &keys, true).unwrap();
+        assert_eq!(
+            c,
+            CacheCount {
+                total: 2,
+                prepared: 0
+            }
+        );
     }
 }

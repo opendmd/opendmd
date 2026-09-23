@@ -350,6 +350,16 @@ pub fn is_manifest_path(path: &str) -> bool {
     (in_root && name.starts_with("filelist.")) || in_sets
 }
 
+/// Is filesystem path `path` inside directory `dir` (case-insensitively, as
+/// FAT compares)?
+pub fn under(path: &str, dir: &str) -> bool {
+    path.len() > dir.len()
+        && path.as_bytes()[dir.len()] == b'/'
+        && path
+            .get(..dir.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(dir))
+}
+
 /// Do two filesystem paths name the same file on the card? FAT compares
 /// names case-insensitively, so `/sets/A.TXT` *is* `/sets/a.txt`: a guard
 /// that compares with `==` can be walked around by changing the case.

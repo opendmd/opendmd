@@ -87,12 +87,12 @@ pub const SD_SPEED_KHZ: u32 = 20_000;
 // ---------------------------------------------------------------------------
 /// The stock card's playlist file, read from the card root.
 pub const MANIFEST_PATH: &str = "/sdcard/filelist.txt";
-/// The same playlist pointing at the pre-rendered `.odm` files, as written by
-/// `opendmd-pack manifest --layout bucketed` (or the web app's converter). When
-/// it is on the card it is the default manifest (`set` = `""`), because an
-/// OpenDMD card is one that has been converted; otherwise `MANIFEST_PATH` is.
-/// See `nvs_config::default_manifest`.
-pub const ODM_MANIFEST_PATH: &str = "/sdcard/filelist.odm.txt";
+/// A manifest from before prepared copies were resolved automatically: the
+/// same playlist with `/odm/...` paths, once the default when present. It is
+/// **ignored** now (logged once at boot): `filelist.txt` is the default, and
+/// [`crate::sd::SdSource`] plays each GIF's prepared copy when it exists.
+/// Kept only so it can be recognised; `set` may not name it.
+pub const OBSOLETE_ODM_MANIFEST: &str = "filelist.odm.txt";
 
 // The manifest is indexed, never loaded.
 //
@@ -233,3 +233,20 @@ pub const SETS_DIR: &str = "/sdcard/sets";
 /// with it. Read at boot and whenever it is uploaded; `/api/status` reports it
 /// as `www_version`.
 pub const WWW_VERSION_PATH: &str = "/sdcard/www/version.txt";
+
+// ---------------------------------------------------------------------------
+// Playback cache (prepared copies)
+// ---------------------------------------------------------------------------
+/// Where prepared copies live: `odm/<Category>/<bb>/<name>.odm`, the bucketed
+/// layout of `opendmd_core::layout`. `SdSource` looks here before every GIF.
+pub const ODM_ROOT: &str = "/sdcard/odm";
+/// How many prepared-copy keys (`u32` each) the `/api/cache` count holds at
+/// once. The walk takes the buckets a slice at a time until this many keys are
+/// held, then makes one pass over the manifest for that slice: 3,072 keys is
+/// 12 KB of heap on the network worker, one pass for a card with a few thousand
+/// copies and four for a fully prepared 11k-file card.
+pub const CACHE_KEYS_PER_PASS: usize = 3072;
+/// A cache recount waits until nothing has asked for one for this long, so a
+/// browser uploading prepared copies one after another causes one count at the
+/// end, not one per file.
+pub const CACHE_DEBOUNCE: Duration = Duration::from_secs(3);

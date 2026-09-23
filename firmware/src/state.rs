@@ -42,9 +42,9 @@ pub struct Status {
     pub title: String,
     pub paused: bool,
     pub entries: usize,
-    /// The manifest actually in play (filesystem path), resolved when the
-    /// playlist was last built — so with `set` = `""` it says which default
-    /// the card got (`filelist.odm.txt` or `filelist.txt`).
+    /// The manifest actually in play (filesystem path), as of the last
+    /// playlist build: `/sdcard/filelist.txt` for `set` = `""`. Always a list
+    /// of GIF paths; prepared copies are resolved per file by `SdSource`.
     pub manifest: String,
     /// `"building"` while the main task is (re)building the playlist index —
     /// several seconds for the stock card, during which a config PUT or a
@@ -175,7 +175,8 @@ pub enum Command {
     Skip,
     /// Toggle pause and report the resulting state.
     TogglePause(mpsc::Sender<bool>),
-    /// Play this card-absolute path (`/gifs/…`, `/odm/…`) now, then carry on
+    /// Play this card-absolute path (`/gifs/…`; its prepared copy if there is
+    /// one, exactly as for a playlist entry) now, then carry on
     /// with the schedule (`Engine::play_now`). The open happens on the main
     /// task, between frames; the reply is `Err` if it failed, in which case
     /// what was on screen keeps playing.

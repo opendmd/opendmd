@@ -60,10 +60,12 @@ pub struct Settings {
     pub shuffle: bool,
     /// Comma-separated platform prefixes, e.g. `MD,SNES`. Empty = everything.
     pub platforms: String,
-    /// Active manifest: `""` is the card's default ([`default_manifest`]:
-    /// `filelist.odm.txt` if the card has one, else `filelist.txt`), a root
-    /// manifest name (`filelist.txt`, `filelist.odm.txt`, `filelist.hall`)
-    /// selects that file explicitly, and anything else is `/sets/<set>.txt`.
+    /// Active playlist: `""` is the card's default, `/filelist.txt`; a root
+    /// manifest name (`filelist.hall`, `filelist.xmas`, `filelist.txt`)
+    /// selects that file; anything else is `/sets/<set>.txt`. Whatever it
+    /// names lists GIF paths — prepared copies are found by `SdSource`, never
+    /// named by a playlist. `filelist.odm.txt` is not accepted (see
+    /// [`is_obsolete_set`]).
     pub set: String,
     pub hostname: String,
 }
@@ -85,19 +87,12 @@ impl Default for Settings {
     }
 }
 
-/// The manifest a card plays when no set is selected: `/filelist.odm.txt` if
-/// it opens, else `/filelist.txt`.
-///
-/// This is **one directory scan of the card root** (a few dozen entries, a few
-/// ms), so it is resolved when the playlist is (re)built — at boot and on a
-/// set change — not on every request. The answer is published in
-/// `Status::manifest`, and that is what everything else compares against.
-pub fn default_manifest() -> &'static str {
-    if std::fs::File::open(config::ODM_MANIFEST_PATH).is_ok() {
-        config::ODM_MANIFEST_PATH
-    } else {
-        config::MANIFEST_PATH
-    }
+/// `filelist.odm.txt`: a playlist of `/odm/...` paths from before prepared
+/// copies were resolved automatically. It is ignored — never the default, and
+/// refused as a `set` (a saved one is cleared at boot) — because the same
+/// copies now play from `filelist.txt` without it.
+pub fn is_obsolete_set(set: &str) -> bool {
+    set.eq_ignore_ascii_case(config::OBSOLETE_ODM_MANIFEST)
 }
 
 /// Is `set` a name `PUT /api/config` may store? One path segment, no `..`.
@@ -107,13 +102,11 @@ pub fn valid_set_name(set: &str) -> bool {
 }
 
 impl Settings {
-    /// Filesystem path of the manifest this configuration selects.
-    ///
-    /// `""` resolves through [`default_manifest`], which touches the card; the
-    /// other two forms are pure string work.
+    /// Filesystem path of the manifest this configuration selects. Pure
+    /// string work: `""` is always `/filelist.txt`.
     pub fn manifest_path(&self) -> String {
         if self.set.is_empty() {
-            default_manifest().to_string()
+            config::MANIFEST_PATH.to_string()
         } else if self.set.starts_with("filelist.") {
             format!("{}/{}", config::SD_MOUNT, self.set)
         } else {
