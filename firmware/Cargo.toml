@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-firmware"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 resolver = "2"
 description = "OpenDMD ESP32 firmware: plays 128x32 GIFs from microSD onto two chained HUB75 panels"
@@ -22,6 +22,11 @@ serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
 [features]
+# Bench-rig WiFi credentials from `firmware/.env`, compiled in as an NVS seed
+# (see `nvs_config.rs`). On for `make fw-build`/`fw-flash`/`fw-clippy`, OFF for
+# `make fw-release`: without it the `option_env!` reads do not exist in the
+# crate, so a release image cannot carry a credential.
+dev-credentials = []
 # Timing instrumentation (src/probe.rs): SD opens/reads/rewinds, blit time and
 # pixels, deadline-miss attribution, and a blit benchmark at boot. Off by
 # default and compiled out entirely. `make fw-build FW_FEATURES=probe`.
