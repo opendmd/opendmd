@@ -12,9 +12,23 @@
 //! The file's bytes are held once, as an `Rc<[u8]>`: every open (and a dwell
 //! that ends re-opens the same entry) hands out a `Cursor` over another handle
 //! to the same allocation, never a copy.
+//!
+//! **Following the panel.** The Now view's preview plays the file the device
+//! is playing, and [`Player::sync_to`] puts it in step: the device reports
+//! where the file is in its own timeline (`elapsed_ms`, content time — see
+//! `NowPlaying::elapsed`) and the page says when that was on its own clock.
+//! From then on the player keeps no frame clock of its own: every tick seeks
+//! the engine to where the panel is by now ([`Engine::seek_elapsed`]), so it
+//! shows the frame the panel shows, and a new report only moves the anchor.
+//! The panel's position advances a little slower than wall time (it sleeps
+//! in 10 ms FreeRTOS ticks, and each frame is timed from when the last was
+//! ticked), so the page also passes the rate it measured from the device's
+//! own reports. Clocks are synced, never pixels: the device sends nothing but
+//! two numbers.
 
 use opendmd_core::canvas::{Canvas, HEIGHT, WIDTH};
 use opendmd_core::engine::{Catalog, DwellPolicy, Engine, ReadSeek, Source, TickOutcome};
+
 use opendmd_core::manifest::Entry;
 use opendmd_core::scheduler::{Mode, Scheduler};
 use opendmd_render::{LedRenderer, MIN_LED_SCALE};
@@ -112,10 +126,64 @@ const LOOP_FOREVER: DwellPolicy = DwellPolicy {
     min_loops: u32::MAX,
 };
 
+/// A preview in step with another player (the panel): the file's position
+/// is `pos_ms + rate * (now - at_ms)` on the page's clock, or `held_ms`
+/// while paused.
+#[derive(Clone, Copy, Debug)]
+struct Sync {
+    at_ms: f64,
+    pos_ms: f64,
+    rate: f64,
+    held_ms: Option<f64>,
+    /// The preview got far ahead: start the file again and seek from zero.
+    restart: bool,
+}
+
+impl Sync {
+    fn position(&self, at_ms: f64) -> f64 {
+        self.held_ms
+            .unwrap_or(self.pos_ms + self.rate * (at_ms - self.at_ms))
+    }
+}
+
+/// A report within this of where the preview is (or within the frame's
+/// delay, when that is shorter) changes nothing but the rate: request-latency
+/// noise is well under it with the fastest-sample offset, and a shift this
+/// small is below one 60 Hz refresh, so correcting it could only add jitter.
+/// A whole frame's delay was tried first: on the rig it let the error run up
+/// to a frame before correcting (median 58 ms against 27 ms without it).
+pub const DEADBAND_MS: f64 = 20.0;
+
+/// Ahead of the panel by less than this, the preview holds its frame until
+/// the panel catches up (what the panel itself does when it is late); by
+/// more — the panel started the file again, say — it starts over and seeks.
+pub const RESTART_AHEAD_MS: f64 = 1000.0;
+
+fn ms_of(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
+
+fn engine_for(path: &str, bytes: &Bytes, dwell: DwellPolicy) -> Engine {
+    Engine::new(
+        Box::new(OneCatalog(path.to_string())),
+        Scheduler::new(1, Mode::Sequential, 0),
+        dwell,
+        Box::new(OneSource(bytes.clone())),
+    )
+}
+
 /// One file, the engine over it, the canvas, the renderer and the
 /// `0x00RRGGBB` framebuffer plus the RGBA copy the browser wants.
 pub struct Player {
     engine: Option<Engine>,
+    bytes: Option<Bytes>,
+    sync: Option<Sync>,
+    /// The frame on the canvas: its position in the file, its delay and
+    /// when (page clock, ms) it was drawn — what the drift is measured from
+    /// before the first sync.
+    frame_at_ms: f64,
+    frame_delay_ms: f64,
+    shown_ms: f64,
     path: String,
     dwell: DwellPolicy,
     paused: bool,
@@ -133,6 +201,11 @@ impl Player {
         let scale = scale.clamp(1, 32);
         let mut player = Player {
             engine: None,
+            bytes: None,
+            sync: None,
+            frame_at_ms: 0.0,
+            frame_delay_ms: 0.0,
+            shown_ms: 0.0,
             path: String::new(),
             dwell: LOOP_FOREVER,
             paused: false,
@@ -162,17 +235,18 @@ impl Player {
     /// Swap the file. `path` is only used for its tags (and echoed back);
     /// the bytes may be a GIF or an `.odm` — the engine sniffs them. The
     /// canvas is blanked so a slow next file does not show the old one.
+    /// A new file is not in step with anything until [`Player::sync_to`].
     pub fn load(&mut self, path: &str, bytes: Vec<u8>, now: Duration) {
-        let mut engine = Engine::new(
-            Box::new(OneCatalog(path.to_string())),
-            Scheduler::new(1, Mode::Sequential, 0),
-            self.dwell,
-            Box::new(OneSource(Bytes(bytes.into()))),
-        );
+        let bytes = Bytes(bytes.into());
+        let mut engine = engine_for(path, &bytes, self.dwell);
         if self.paused {
             engine.pause(now);
         }
         self.engine = Some(engine);
+        self.bytes = Some(bytes);
+        self.sync = None;
+        self.frame_at_ms = 0.0;
+        self.frame_delay_ms = 0.0;
         self.path = path.to_string();
         self.canvas = Canvas::new();
     }
@@ -180,6 +254,8 @@ impl Player {
     /// Drop the file and blank the panel.
     pub fn unload(&mut self) {
         self.engine = None;
+        self.bytes = None;
+        self.sync = None;
         self.path.clear();
         self.canvas = Canvas::new();
         self.draw();
@@ -207,6 +283,17 @@ impl Player {
     }
 
     pub fn set_paused(&mut self, paused: bool, now: Duration) {
+        if let Some(sync) = self.sync.as_mut() {
+            let now = ms_of(now);
+            match (paused, sync.held_ms) {
+                (true, None) => sync.held_ms = Some(sync.position(now).max(0.0)),
+                (false, Some(held)) => {
+                    (sync.at_ms, sync.pos_ms) = (now, held);
+                    sync.held_ms = None;
+                }
+                _ => {}
+            }
+        }
         self.paused = paused;
         if let Some(e) = self.engine.as_mut() {
             if paused {
@@ -236,16 +323,132 @@ impl Player {
         }
     }
 
+    /// Whether [`Player::sync_to`] has put this file in step.
+    pub fn is_synced(&self) -> bool {
+        self.sync.is_some()
+    }
+
+    /// Where the preview is in the file at `at_ms` (page clock).
+    fn position_ms(&self, at_ms: f64) -> f64 {
+        match self.sync {
+            Some(s) => s.position(at_ms),
+            // Free-running: the frame's start plus the time it has been up,
+            // never past its delay.
+            None if self.paused => self.frame_at_ms,
+            None => self.frame_at_ms + (at_ms - self.shown_ms).max(0.0).min(self.frame_delay_ms),
+        }
+    }
+
+    /// The panel was at `elapsed` in this file at `at_ms` (page clock, the
+    /// device's `t_ms` mapped over), and its position advances `rate` ms per
+    /// ms (1.0 until the page has measured it); `now_ms` is the page clock.
+    ///
+    /// Returns the drift before any correction — how far ahead (positive)
+    /// or behind the preview was — or `None` with nothing loaded. Within
+    /// [`DEADBAND_MS`] (or one frame delay, if shorter) only the rate is
+    /// taken; beyond it the anchor moves to the panel's report, and the next
+    /// tick seeks forward — or, ahead by more than [`RESTART_AHEAD_MS`],
+    /// starts the file again and seeks from zero; ahead by less, it holds its
+    /// frame until the panel catches up. The first sync of a file always
+    /// takes. While paused the position is held where the panel's is.
+    pub fn sync_to(
+        &mut self,
+        elapsed: Duration,
+        at_ms: f64,
+        rate: f64,
+        now_ms: f64,
+    ) -> Option<f64> {
+        self.engine.as_ref()?;
+        let elapsed_ms = ms_of(elapsed);
+        let drift = self.position_ms(at_ms) - elapsed_ms;
+        let rate = if rate.is_finite() && rate > 0.0 {
+            rate
+        } else {
+            1.0
+        };
+        // Not `f64::clamp`: its panic message formats floats, which pulls
+        // ~20 KB of float formatting into the wasm.
+        #[allow(clippy::manual_clamp)]
+        let deadband = self.frame_delay_ms.max(1.0).min(DEADBAND_MS);
+        if let Some(sync) = self.sync.as_mut() {
+            if drift.abs() < deadband {
+                // Re-anchor where the preview already is, at the new rate.
+                if sync.held_ms.is_none() {
+                    sync.pos_ms = sync.position(now_ms);
+                    sync.at_ms = now_ms;
+                }
+                sync.rate = rate;
+                return Some(drift);
+            }
+        }
+        let mut sync = Sync {
+            at_ms,
+            pos_ms: elapsed_ms,
+            rate,
+            held_ms: self.paused.then_some(elapsed_ms),
+            restart: false,
+        };
+        sync.restart = self.frame_delay_ms > 0.0
+            && self.frame_at_ms - sync.position(now_ms) > RESTART_AHEAD_MS;
+        self.sync = Some(sync);
+        Some(drift)
+    }
+
+    /// Synced: seek to where the panel is now. Draws when a frame changed.
+    fn follow(&mut self, now: Duration) -> Result<Tick, String> {
+        let (Some(sync), Some(bytes)) = (self.sync.as_mut(), self.bytes.as_ref()) else {
+            return Ok(Tick::Idle);
+        };
+        if sync.restart {
+            sync.restart = false;
+            let mut engine = engine_for(&self.path, bytes, self.dwell);
+            if self.paused {
+                engine.pause(now);
+            }
+            self.engine = Some(engine);
+            self.canvas = Canvas::new();
+        }
+        let target = sync.position(ms_of(now)).max(0.0);
+        let Some(engine) = self.engine.as_mut() else {
+            return Ok(Tick::Idle);
+        };
+        match engine.seek_elapsed(Duration::from_secs_f64(target / 1000.0), &mut self.canvas) {
+            Ok(seek) if seek.frames > 0 => {
+                self.frame_at_ms = ms_of(seek.elapsed);
+                self.frame_delay_ms = ms_of(seek.delay);
+                self.shown_ms = ms_of(now);
+                self.draw();
+                Ok(Tick::Frame)
+            }
+            Ok(_) => Ok(Tick::Idle),
+            Err(e) => {
+                let path = std::mem::take(&mut self.path);
+                self.engine = None;
+                self.sync = None;
+                Err(format!("{path}: {e}"))
+            }
+        }
+    }
+
     /// One engine tick; on a frame the canvas is rendered into
-    /// [`Player::rgba`].
+    /// [`Player::rgba`]. In step with the panel ([`Player::sync_to`]) this
+    /// is a seek instead.
     pub fn tick(&mut self, now: Duration) -> Result<Tick, String> {
+        if self.sync.is_some() {
+            return self.follow(now);
+        }
         let Some(engine) = self.engine.as_mut() else {
             return Ok(Tick::Idle);
         };
         match engine.tick(now, &mut self.canvas) {
             Ok(TickOutcome::Frame {
-                playing, started, ..
+                playing,
+                started,
+                next_frame_at,
             }) => {
+                self.frame_at_ms = ms_of(playing.elapsed);
+                self.frame_delay_ms = ms_of(next_frame_at.saturating_sub(now));
+                self.shown_ms = ms_of(now);
                 self.draw();
                 Ok(if started && playing.ordinal > 1 {
                     Tick::DwellEnded

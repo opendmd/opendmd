@@ -101,6 +101,101 @@ fn a_gif_plays_through_the_engine_and_lights_a_pixel() {
     assert!(rgba[far] < 20, "bloom reaches too far: {}", rgba[far]);
 }
 
+/// Four 50 ms frames, frame `i` lighting (i, 0) on top of the ones before:
+/// the lit pixels on row 0 are the frame's number within the loop.
+fn counting_gif() -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let mut enc = Encoder::new(&mut out, WIDTH as u16, HEIGHT as u16, &[]).unwrap();
+        enc.set_repeat(Repeat::Infinite).unwrap();
+        for x in 0..4u16 {
+            let mut f = Frame {
+                left: x,
+                width: 1,
+                height: 1,
+                buffer: Cow::Owned(vec![1u8]),
+                dispose: DisposalMethod::Keep,
+                delay: 5,
+                ..Default::default()
+            };
+            f.palette = Some(vec![0, 0, 0, 255, 255, 255]);
+            enc.write_frame(&f).unwrap();
+        }
+    }
+    out
+}
+
+fn lit_in_row0(p: &Player) -> usize {
+    (0..WIDTH)
+        .filter(|&x| p.canvas().get(x, 0) != Rgb::BLACK)
+        .count()
+}
+
+/// The Now view's preview: told where the panel is, it shows the panel's
+/// frame, ignores sub-frame noise, holds when a little ahead, starts over
+/// when far ahead, follows the panel's rate, and holds the panel's frame
+/// while paused.
+#[test]
+fn a_synced_preview_shows_the_panels_frame() {
+    let mut p = Player::new(1, Look { flat: true, ..LOOK });
+    p.load("/gifs/X/A.gif", counting_gif(), ms(0));
+    assert!(!p.is_synced());
+    // The panel is 520 ms in (third loop, 400..600: frame 3 of it is
+    // 500..550) as of page time 1000; nothing was shown here yet.
+    assert_eq!(p.sync_to(ms(520), 1000.0, 1.0, 1000.0), Some(-520.0));
+    assert!(p.is_synced());
+    assert_eq!(p.tick(ms(1000)), Ok(Tick::Frame));
+    assert_eq!(lit_in_row0(&p), 3);
+    assert_eq!(p.tick(ms(1010)), Ok(Tick::Idle), "same frame until 550");
+    assert_eq!(p.tick(ms(1030)), Ok(Tick::Frame));
+    assert_eq!(lit_in_row0(&p), 4);
+
+    // 3 ms of request noise: under a frame, nothing moves.
+    assert_eq!(p.sync_to(ms(557), 1040.0, 1.0, 1040.0), Some(3.0));
+    // 170 ms ahead (the panel ran late): hold the frame until it catches up
+    // rather than start over.
+    assert_eq!(p.sync_to(ms(400), 1050.0, 1.0, 1050.0), Some(170.0));
+    assert_eq!(p.tick(ms(1050)), Ok(Tick::Idle));
+    assert_eq!(p.tick(ms(1240)), Ok(Tick::Idle), "the panel is at 590");
+    assert_eq!(lit_in_row0(&p), 4);
+    assert_eq!(p.tick(ms(1250)), Ok(Tick::Frame), "600: the next loop");
+    assert_eq!(lit_in_row0(&p), 1);
+    // Far ahead (the panel started the file again): start over and seek.
+    assert_eq!(
+        p.tick(ms(3000)),
+        Ok(Tick::Frame),
+        "2350: 4th frame of a loop"
+    );
+    assert_eq!(lit_in_row0(&p), 4);
+    assert_eq!(p.sync_to(ms(100), 3000.0, 1.0, 3000.0), Some(2250.0));
+    assert_eq!(p.tick(ms(3000)), Ok(Tick::Frame));
+    assert_eq!(lit_in_row0(&p), 3);
+
+    // Paused: the frame is held however long, and a report while paused
+    // moves it to the panel's.
+    p.set_paused(true, ms(3010));
+    assert_eq!(p.tick(ms(5000)), Ok(Tick::Idle));
+    assert_eq!(lit_in_row0(&p), 3);
+    assert_eq!(p.sync_to(ms(180), 5000.0, 1.0, 5000.0), Some(110.0 - 180.0));
+    assert_eq!(p.tick(ms(5001)), Ok(Tick::Frame));
+    assert_eq!(lit_in_row0(&p), 4);
+    // Resumed, it carries on from the held position.
+    p.set_paused(false, ms(6000));
+    assert_eq!(p.tick(ms(6020)), Ok(Tick::Frame));
+    assert_eq!(lit_in_row0(&p), 1);
+
+    // A panel whose position runs at 0.9x wall time: at 1000 ms of page
+    // time past a report of 0 it is at 900, the fourth loop's third frame.
+    p.load("/gifs/X/B.gif", counting_gif(), ms(7000));
+    assert!(
+        !p.is_synced(),
+        "a new file is free-running until it is synced"
+    );
+    p.sync_to(ms(0), 7000.0, 0.9, 7000.0);
+    assert_eq!(p.tick(ms(8000)), Ok(Tick::Frame));
+    assert_eq!(lit_in_row0(&p), 3);
+}
+
 #[test]
 fn a_preview_loops_forever_and_a_dwell_reports_its_end() {
     let mut player = Player::new(2, LOOK);

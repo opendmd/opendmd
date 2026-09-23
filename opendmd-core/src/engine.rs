@@ -159,6 +159,19 @@ pub struct NowPlaying {
     pub title: String,
     /// 1-based count of GIFs started since the engine was created.
     pub ordinal: u64,
+    /// Where the frame on screen starts in the file's own timeline: the sum
+    /// of the delays of every frame decoded before it since the file
+    /// started, loops included (a 3-frame, 300 ms loop on its 5th frame is at
+    /// 400 ms). This is *content* time, not `now - started_at`: the caller
+    /// shows each frame for at least its delay and usually a little more
+    /// (sleep granularity, decode and blit), so wall time since the start
+    /// runs ahead of what is on screen. Two players showing the same file are
+    /// in step when their positions agree, which is what the web app's
+    /// preview syncs on ([`Engine::seek_elapsed`]).
+    pub elapsed: Duration,
+    /// Frames decoded in this file since it started, loops included; the one
+    /// on screen is number `frame` (1-based).
+    pub frame: u64,
 }
 
 /// [`NowPlaying::index`] of a file started by [`Engine::play_now`]: it did not
@@ -183,6 +196,26 @@ pub enum TickOutcome {
     Exhausted,
 }
 
+/// How far [`Engine::seek_elapsed`] got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SeekTo {
+    /// Frames decoded by this call (0: already there, nothing drawn).
+    pub frames: u32,
+    /// The on-screen frame's position afterwards ([`NowPlaying::elapsed`]).
+    pub elapsed: Duration,
+    /// Its delay: the frame covers `elapsed..elapsed + delay`.
+    pub delay: Duration,
+    /// False if the bound stopped it short of the target; call again (the
+    /// next animation frame) to carry on.
+    pub reached: bool,
+}
+
+/// [`Engine::seek_elapsed`] decodes at most this many frames per call...
+pub const SEEK_MAX_FRAMES: u32 = 2_000;
+/// ...or this much content, whichever comes first, so a seek into a long
+/// file costs one bounded stall rather than an unbounded one.
+pub const SEEK_MAX_CONTENT: Duration = Duration::from_secs(60);
+
 struct Playing {
     index: usize,
     path: String,
@@ -193,6 +226,59 @@ struct Playing {
     next_frame_at: Duration,
     loops: u32,
     first_frame: bool,
+    /// Frames decoded in this file, across loops (the decoder's own count
+    /// restarts with every loop).
+    frames: u64,
+    /// Content position of the last decoded frame, and its delay.
+    frame_at: Duration,
+    frame_delay: Duration,
+}
+
+impl Playing {
+    /// A frame of `delay` was just decoded: move the file's position past
+    /// the previous one.
+    fn advance(&mut self, delay: Duration) {
+        if self.frames > 0 {
+            self.frame_at += self.frame_delay;
+        }
+        self.frame_delay = delay;
+        self.frames += 1;
+    }
+
+    fn now_playing(&self) -> NowPlaying {
+        NowPlaying {
+            index: self.index,
+            path: self.path.clone(),
+            title: self.title.clone(),
+            ordinal: self.ordinal,
+            elapsed: self.frame_at,
+            frame: self.frames,
+        }
+    }
+
+    fn new(
+        index: usize,
+        path: String,
+        title: String,
+        ordinal: u64,
+        gif: Stream,
+        at: Duration,
+    ) -> Self {
+        Playing {
+            index,
+            path,
+            title,
+            ordinal,
+            gif,
+            started_at: at,
+            next_frame_at: at,
+            loops: 0,
+            first_frame: true,
+            frames: 0,
+            frame_at: Duration::ZERO,
+            frame_delay: Duration::ZERO,
+        }
+    }
 }
 
 /// Drives a scheduled [`Catalog`] over a [`Source`].
@@ -259,12 +345,7 @@ impl Engine {
     }
 
     pub fn now_playing(&self) -> Option<NowPlaying> {
-        self.current.as_ref().map(|p| NowPlaying {
-            index: p.index,
-            path: p.path.clone(),
-            title: p.title.clone(),
-            ordinal: p.ordinal,
-        })
+        self.current.as_ref().map(Playing::now_playing)
     }
 
     /// Play `path` next, now, ahead of the schedule.
@@ -293,17 +374,14 @@ impl Engine {
         // A paused engine has not run its clock; `resume` shifts these by the
         // pause, so start them at the pause instant rather than `now`.
         let at = self.paused_since.unwrap_or(now);
-        self.current = Some(Playing {
-            index: OFF_PLAYLIST,
-            path: path.to_string(),
-            title: Entry::from_path(path).title,
-            ordinal: self.started_count,
+        self.current = Some(Playing::new(
+            OFF_PLAYLIST,
+            path.to_string(),
+            Entry::from_path(path).title,
+            self.started_count,
             gif,
-            started_at: at,
-            next_frame_at: at,
-            loops: 0,
-            first_frame: true,
-        });
+            at,
+        ));
         Ok(())
     }
 
@@ -391,13 +469,9 @@ impl Engine {
                     let started = playing.first_frame;
                     playing.first_frame = false;
                     playing.next_frame_at = now + delay;
+                    playing.advance(delay);
                     return Ok(TickOutcome::Frame {
-                        playing: NowPlaying {
-                            index: playing.index,
-                            path: playing.path.clone(),
-                            title: playing.title.clone(),
-                            ordinal: playing.ordinal,
-                        },
+                        playing: playing.now_playing(),
                         started,
                         next_frame_at: playing.next_frame_at,
                     });
@@ -429,6 +503,68 @@ impl Engine {
         }
     }
 
+    /// Fast-forward the current file until the frame on the canvas is the
+    /// one that covers `target` in the file's own timeline (see
+    /// [`NowPlaying::elapsed`]): decode frames into `canvas` — the decoders
+    /// are deltas, so every frame is decoded, but the caller renders only the
+    /// last — rewinding at the end of the file exactly as a loop does.
+    ///
+    /// This is how a second player follows the first: the web app's preview
+    /// is told where the panel is and seeks there instead of keeping its own
+    /// clock. Nothing here reads `now`; the dwell policy is not applied (the
+    /// caller that follows another player learns about file changes from it),
+    /// and a pause does not stop it. Only forward: a `target` at or before
+    /// the frame on screen decodes nothing — to go back, start the file again
+    /// and seek from zero.
+    ///
+    /// Opens the next entry first if nothing is playing (its first frame is
+    /// decoded even for a zero `target`). Bounded by [`SEEK_MAX_FRAMES`] and
+    /// [`SEEK_MAX_CONTENT`] per call; [`SeekTo::reached`] says whether it got
+    /// there. An error means the file is gone (unreadable, or no frames).
+    pub fn seek_elapsed(&mut self, target: Duration, canvas: &mut Canvas) -> io::Result<SeekTo> {
+        if self.current.is_none() && !self.open_next(Duration::ZERO) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "nothing to play"));
+        }
+        let mut frames = 0u32;
+        let mut content = Duration::ZERO;
+        loop {
+            let Some(playing) = self.current.as_mut() else {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "file gone"));
+            };
+            let due = playing.frames == 0 || playing.frame_at + playing.frame_delay <= target;
+            if !due || frames >= SEEK_MAX_FRAMES || content >= SEEK_MAX_CONTENT {
+                return Ok(SeekTo {
+                    frames,
+                    elapsed: playing.frame_at,
+                    delay: playing.frame_delay,
+                    reached: !due,
+                });
+            }
+            match playing.gif.next_frame(canvas)? {
+                Some(delay) => {
+                    playing.first_frame = false;
+                    playing.advance(delay);
+                    frames += 1;
+                    content += delay;
+                }
+                None if playing.gif.frames_decoded() == 0 => {
+                    let path = std::mem::take(&mut playing.path);
+                    self.current = None;
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("no frames in {path}"),
+                    ));
+                }
+                None => {
+                    playing.loops += 1;
+                    if !self.restart_current() {
+                        return Err(io::Error::other("rewind failed"));
+                    }
+                }
+            }
+        }
+    }
+
     /// Rewind the current file and start a fresh decoder over the same
     /// handle — no second open, so no second directory scan on a FAT card.
     /// False if the rewind or the header fails, in which case `current` is
@@ -451,6 +587,9 @@ impl Engine {
             next_frame_at,
             loops,
             first_frame,
+            frames,
+            frame_at,
+            frame_delay,
         } = playing;
         let mut reader = gif.into_inner();
         match reader
@@ -468,6 +607,9 @@ impl Engine {
                     next_frame_at,
                     loops,
                     first_frame,
+                    frames,
+                    frame_at,
+                    frame_delay,
                 });
                 true
             }
@@ -497,17 +639,14 @@ impl Engine {
             match self.source.open(&path).and_then(Stream::open) {
                 Ok(gif) => {
                     self.started_count += 1;
-                    self.current = Some(Playing {
+                    self.current = Some(Playing::new(
                         index,
                         path,
                         title,
-                        ordinal: self.started_count,
+                        self.started_count,
                         gif,
-                        started_at: now,
-                        next_frame_at: now,
-                        loops: 0,
-                        first_frame: true,
-                    });
+                        now,
+                    ));
                     return true;
                 }
                 Err(e) => log::warn!("skipping {path}: {e}"),
@@ -862,6 +1001,126 @@ mod tests {
             assert_eq!(opens.get(), 1, "{path}: looping opened the file again");
             assert_eq!(e.now_playing().unwrap().ordinal, 1);
         }
+    }
+
+    /// Three frames of 100, 200 and 300 ms: a red, a green and a blue pixel
+    /// at (0,0), so the canvas says which frame is up. One loop is 600 ms.
+    fn three_frame_gif() -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut out, 128, 32, &[]).unwrap();
+            enc.set_repeat(Repeat::Infinite).unwrap();
+            for (delay, colour) in [(10u16, [255, 0, 0]), (20, [0, 255, 0]), (30, [0, 0, 255])] {
+                let mut f = Frame {
+                    width: 1,
+                    height: 1,
+                    buffer: Cow::Owned(vec![1u8]),
+                    dispose: DisposalMethod::Keep,
+                    delay,
+                    ..Default::default()
+                };
+                f.palette = Some([&[0, 0, 0][..], &colour[..]].concat());
+                enc.write_frame(&f).unwrap();
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn seek_elapsed_lands_on_the_frame_and_loop_that_cover_the_target() {
+        const RED: Rgb = Rgb::new(255, 0, 0);
+        const GREEN: Rgb = Rgb::new(0, 255, 0);
+        const BLUE: Rgb = Rgb::new(0, 0, 255);
+        let file = "/gifs/Consoles/NES_Three_01.gif";
+        let mut odm = Vec::new();
+        crate::odm::encode_gif(&three_frame_gif()[..], &mut odm).unwrap();
+        for (path, bytes) in [
+            (file, three_frame_gif()),
+            ("/gifs/Consoles/NES_Three_01.odm", odm),
+        ] {
+            let mut e = engine_with(&[(path, bytes)], path, DwellPolicy::default());
+            let mut canvas = Canvas::new();
+            let seek = |e: &mut Engine, canvas: &mut Canvas, ms| {
+                e.seek_elapsed(Duration::from_millis(ms), canvas).unwrap()
+            };
+
+            // Nothing open yet: the first frame is decoded even for zero.
+            let s = seek(&mut e, &mut canvas, 0);
+            assert_eq!(
+                (s.frames, s.elapsed, s.delay, s.reached),
+                (1, Duration::ZERO, Duration::from_millis(100), true),
+                "{path}"
+            );
+            assert_eq!(canvas.get(0, 0), RED);
+            // Inside frame 2 (100..300).
+            let s = seek(&mut e, &mut canvas, 150);
+            assert_eq!(
+                (s.frames, s.elapsed),
+                (1, Duration::from_millis(100)),
+                "{path}"
+            );
+            assert_eq!(canvas.get(0, 0), GREEN);
+            // Third loop (1200..1800), frame 2 of it (1300..1500): the 8th frame.
+            let s = seek(&mut e, &mut canvas, 1350);
+            assert_eq!(
+                (s.frames, s.elapsed, s.reached),
+                (6, Duration::from_millis(1300), true),
+                "{path}"
+            );
+            assert_eq!(canvas.get(0, 0), GREEN);
+            let np = e.now_playing().unwrap();
+            assert_eq!(
+                (np.frame, np.elapsed, np.ordinal),
+                (8, Duration::from_millis(1300), 1)
+            );
+            // Exactly on a boundary is the new frame; backwards decodes nothing.
+            assert_eq!(
+                seek(&mut e, &mut canvas, 1500).elapsed,
+                Duration::from_millis(1500)
+            );
+            assert_eq!(canvas.get(0, 0), BLUE);
+            assert_eq!(seek(&mut e, &mut canvas, 200).frames, 0);
+            assert_eq!(canvas.get(0, 0), BLUE);
+
+            // Ten minutes in is past the per-call bound: it stops after 60 s
+            // of content and says so; calling again carries on from there.
+            let s = seek(&mut e, &mut canvas, 600_000);
+            assert!(!s.reached && s.elapsed >= Duration::from_secs(60), "{s:?}");
+            let mut calls = 1;
+            while !seek(&mut e, &mut canvas, 600_000).reached {
+                calls += 1;
+            }
+            // ~598.5 s of content at <= 60 s a call: ten calls in all.
+            assert_eq!(calls + 1, 10);
+            // 600 s is the start of the 1001st loop: frame 3001, red.
+            let np = e.now_playing().unwrap();
+            assert_eq!((np.frame, np.elapsed), (3001, Duration::from_secs(600)));
+            assert_eq!(canvas.get(0, 0), RED);
+        }
+    }
+
+    #[test]
+    fn tick_reports_the_content_position_not_the_wall_clock() {
+        let path = "/gifs/Consoles/NES_Three_01.gif";
+        let mut e = engine_with(&[(path, three_frame_gif())], path, DwellPolicy::default());
+        let mut canvas = Canvas::new();
+        // Every frame is ticked 7 ms late: wall time runs ahead, the
+        // position does not.
+        let mut now = Duration::ZERO;
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            let TickOutcome::Frame {
+                playing,
+                next_frame_at,
+                ..
+            } = e.tick(now, &mut canvas).unwrap()
+            else {
+                panic!("expected a frame at {now:?}");
+            };
+            seen.push((playing.frame, playing.elapsed.as_millis()));
+            now = next_frame_at + Duration::from_millis(7);
+        }
+        assert_eq!(seen, [(1, 0), (2, 100), (3, 300), (4, 600), (5, 700)]);
     }
 
     #[test]

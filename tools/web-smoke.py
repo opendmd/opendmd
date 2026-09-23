@@ -15,7 +15,11 @@ default ~/scratch/dmdos-card) with a fresh overlay under
 target/web-smoke/overlay, so the card copy is never written. Then drives
 every view like a person would:
 
-  Now       status renders, the preview lights pixels, skip, pause; "Send
+  Now       status renders, the preview lights pixels; the preview is in
+            step with the mock's clock (drift < 60 ms after two polls, the
+            mock's position running through the file's real frame delays),
+            re-syncs to the new file after a skip, pauses when the mock is
+            paused and holds its frame; skip, pause from the UI; "Send
             to panel" of a card path (POST /api/play) shows in status, and a
             missing path / a non-GIF give the 404 / 415 toasts
   Library   open Consoles, search "mario", platform chip SNES, preview one,
@@ -49,7 +53,9 @@ prepared copy that is not there); they are listed in `expected` and are not
 counted as console errors.
 
 Real-device pass (--device): the local build served through
-`mock-device.py --proxy`, so nothing is uploaded to the card's www/. Now,
+`mock-device.py --proxy`, so nothing is uploaded to the card's www/. Now
+(and a minute of the preview's drift against the panel: median, max, RTT —
+DRIFT_S=60 by default),
 Library (+ a preview, sent to the panel with POST /api/play, which must show
 up in /api/status), a preview of a GIF that has a prepared copy (fetched from
 the copy, never the GIF), the cache count (/api/cache, waited until ready),
@@ -152,6 +158,62 @@ def wait_lit(page: Page, canvas: str, what: str, timeout_s: float = 20) -> None:
             break
         page.wait_for_timeout(250)
     check(n > 200, f"{what}: preview lit ({n} px)")
+
+
+def sync_state(page: Page) -> dict:
+    """The Now preview's last sync (js/now.js puts it on #now-drift)."""
+    return page.evaluate("() => ({...document.querySelector('#now-drift').dataset})")
+
+
+def wait_sync(page: Page, k: int, not_path: str | None = None, timeout_s: float = 15) -> dict:
+    """Until the preview has synced `k` times to one file (not `not_path`)."""
+    deadline = time.time() + timeout_s
+    st = {}
+    while time.time() < deadline:
+        st = sync_state(page)
+        if int(st.get("k", 0)) >= k and st.get("path") != not_path:
+            break
+        page.wait_for_timeout(100)
+    return st
+
+
+def drift_stats(page: Page, seconds: float) -> tuple[list[float], list[float]]:
+    """Every sync's drift and RTT for `seconds`, leaving out each file's
+    first sync (the jump from free-running into step). Prints the range of
+    the measured position rates."""
+    drifts, rtts, rates, seen = [], [], [], None
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        st = sync_state(page)
+        key = (st.get("path"), st.get("k"))
+        if key != seen and int(st.get("k", 0)) >= 2:
+            drifts.append(float(st["drift"]))
+            rtts.append(float(st["rtt"]))
+            rates.append(float(st["rate"]))
+        seen = key
+        page.wait_for_timeout(50)
+    if rates:
+        print(f"  position rate (panel ms per ms): {min(rates):.4f}..{max(rates):.4f}")
+    return drifts, rtts
+
+
+def summarise(what: str, drifts: list[float], rtts: list[float]) -> str:
+    if not drifts:
+        return f"{what}: no syncs"
+    a = sorted(abs(d) for d in drifts)
+    r = sorted(rtts)
+    return (f"{what}: {len(a)} syncs, |drift| median {a[len(a) // 2]:.1f} ms, max {a[-1]:.1f} ms, "
+            f"p90 {a[int(len(a) * 0.9)]:.1f} ms; rtt median {r[len(r) // 2]:.1f} ms, min {r[0]:.1f} ms")
+
+
+def canvas_sum(page: Page, sel: str) -> int:
+    return page.evaluate("""(sel) => {
+        const c = document.querySelector(sel);
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) n = (n * 31 + d[i] + d[i+1] * 3 + d[i+2] * 7) >>> 0;
+        return n;
+    }""", sel)
 
 
 def shot(page: Page, name: str, size: str) -> None:
@@ -321,6 +383,32 @@ def mock_pass(browser) -> None:
         check(page.locator("#now-stats .stat").count() >= 8, "now: status grid renders")
         check(get_json(base + "/api/status")["manifest"] == "/sdcard/filelist.txt", "now: the default playlist is filelist.txt")
         wait_lit(page, "#now-panel", "now")
+        # In step with the mock's clock: a first sync, then two polls.
+        st = wait_sync(page, 3)
+        check(abs(float(st.get("drift", 1e9))) < 60, f"now: preview in step after two polls (drift {st.get('drift')} ms, rtt {st.get('rtt')} ms, {st.get('path')})")
+        check(page.inner_text("#now-cap") == "preview · in step with the panel", "now: caption says in step")
+        # A skip on the device (not through the UI): the preview loads the
+        # new file and is in step with it.
+        post_json(base + "/api/skip", {})
+        st = wait_sync(page, 3, not_path=st.get("path"))
+        now_path = get_json(base + "/api/status")["now_playing"]["path"]
+        check(st.get("path") == now_path and abs(float(st.get("drift", 1e9))) < 60,
+              f"now: a skip re-syncs to the new file (drift {st.get('drift')} ms, {st.get('path')})")
+        # Paused on the device: the preview pauses and holds its frame.
+        post_json(base + "/api/pause", {})
+        page.wait_for_function("document.querySelector('#now-drift').dataset.paused === 'true'", timeout=5000)
+        page.wait_for_timeout(300)
+        a = canvas_sum(page, "#now-panel")
+        page.wait_for_timeout(1200)
+        check(a == canvas_sum(page, "#now-panel"), "now: pausing the mock pauses the preview (frame held 1.2 s)")
+        post_json(base + "/api/pause", {})
+        page.wait_for_function("document.querySelector('#now-drift').dataset.paused === 'false'", timeout=5000)
+        k = int(sync_state(page)["k"])
+        st = wait_sync(page, k + 2)
+        check(abs(float(st.get("drift", 1e9))) < 60, f"now: resumed, still in step (drift {st.get('drift')} ms)")
+        drifts, rtts = drift_stats(page, 8)
+        print("  " + summarise("mock drift over 8 s", drifts, rtts))
+        check(bool(drifts) and max(abs(d) for d in drifts) < 60, "now: every sync on the mock under 60 ms")
         before = page.inner_text("#now-path")
         page.click("#now-skip")
         page.wait_for_function(f"document.querySelector('#now-path').textContent !== {json.dumps(before)}", timeout=10000)
@@ -551,6 +639,16 @@ def device_pass(browser, device: str) -> None:
         page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=30000)
         check(page.locator("#now-stats .stat").count() >= 8, "device now: status grid renders")
         wait_lit(page, "#now-panel", "device now", 40)
+        st0 = get_json(base + "/api/status")
+        check(all(k in st0["now_playing"] for k in ("elapsed_ms", "frame")) and "t_ms" in st0,
+              "device now: status has now_playing.elapsed_ms/frame and t_ms")
+        secs = float(os.environ.get("DRIFT_S", "60"))
+        drifts, rtts = drift_stats(page, secs)
+        st1 = get_json(base + "/api/status")
+        print("  " + summarise(f"device drift over {secs:.0f} s", drifts, rtts))
+        print(f"  device over that minute: misses {st0['deadline_misses']} -> {st1['deadline_misses']}, "
+              f"worst {st1['worst_lateness_ms']} ms, files {st0['gifs_started']} -> {st1['gifs_started']}")
+        check(len(drifts) > secs, f"device now: the preview kept syncing ({len(drifts)} syncs)")
         no_leaks(page, "device now")
         shot(page, "device-now", "laptop")
         open_library(page)
