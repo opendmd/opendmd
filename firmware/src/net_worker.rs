@@ -185,7 +185,7 @@ fn run(worker: NetWorker) {
     };
 
     // The HTTP server is already up: `main` starts it before the display loop,
-    // while the heap is still whole enough for its 16 KB task stack (see
+    // while the heap is still whole enough for its task stack (see
     // `http::start`). All this thread does is tell the world where to find it.
     match wifi.state() {
         WifiState::Connected => info!(

@@ -47,6 +47,7 @@ mod probe;
 mod sched;
 mod sd;
 mod state;
+mod stream;
 mod wifi;
 
 use anyhow::{Context, Result};
@@ -288,11 +289,18 @@ fn main() -> Result<()> {
     // fresh heap to work with. If the card has no readable manifest the loop
     // below keeps retrying.
     let mut engine: Option<Engine> = None;
-    let _ = rebuild(&mut engine, &sched.effective(&settings), false, &status, &mut canvas);
+    let _ = rebuild(
+        &mut engine,
+        &sched.effective(&settings),
+        false,
+        &status,
+        &mut canvas,
+    );
 
     // The HTTP server next, still before the first GIF is decoded: its task
-    // stack is one contiguous 16 KB internal allocation, and the largest free
-    // block while a GIF is playing is smaller than that. It is pinned to CPU0
+    // stack and the file-streaming task's are contiguous internal allocations
+    // (`config::HTTP_STACK`, `STREAM_STACK`), and the largest free block
+    // while a GIF is playing can be smaller than that. It is pinned to CPU0
     // by its own config, so starting it from this task is fine. Held for the
     // life of the program; dropping it would stop the httpd task.
     // lwip has to exist before anything can bind a socket. Normally the WiFi
@@ -460,7 +468,13 @@ fn main() -> Result<()> {
                             let outcome = if needs_reindex {
                                 // A current `.idx` for the new set/filter is
                                 // reused; anything else is rebuilt.
-                                rebuild(&mut engine, &sched.effective(&settings), false, &status, &mut canvas)
+                                rebuild(
+                                    &mut engine,
+                                    &sched.effective(&settings),
+                                    false,
+                                    &status,
+                                    &mut canvas,
+                                )
                             } else {
                                 Ok(Applied::unchanged(
                                     engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -473,7 +487,13 @@ fn main() -> Result<()> {
                 Command::Reindex(reply) => {
                     // Forced: the caller asked, perhaps because the manifest
                     // was edited off-device with its length unchanged.
-                    let outcome = rebuild(&mut engine, &sched.effective(&settings), true, &status, &mut canvas);
+                    let outcome = rebuild(
+                        &mut engine,
+                        &sched.effective(&settings),
+                        true,
+                        &status,
+                        &mut canvas,
+                    );
                     log::info!("reindex requested over HTTP: {outcome:?}");
                     let _ = reply.send(outcome);
                 }
@@ -497,7 +517,13 @@ fn main() -> Result<()> {
                         })
                         .and_then(|()| {
                             if active {
-                                rebuild(&mut engine, &sched.effective(&settings), true, &status, &mut canvas)
+                                rebuild(
+                                    &mut engine,
+                                    &sched.effective(&settings),
+                                    true,
+                                    &status,
+                                    &mut canvas,
+                                )
                             } else {
                                 Ok(Applied::unchanged(
                                     engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -543,7 +569,13 @@ fn main() -> Result<()> {
                         })
                         .and_then(|()| {
                             if active {
-                                rebuild(&mut engine, &sched.effective(&settings), false, &status, &mut canvas)
+                                rebuild(
+                                    &mut engine,
+                                    &sched.effective(&settings),
+                                    false,
+                                    &status,
+                                    &mut canvas,
+                                )
                             } else {
                                 Ok(Applied::unchanged(
                                     engine.as_ref().map_or(0, |e| e.catalog_len()),

@@ -253,6 +253,8 @@ pub fn confirm_running_image() {
 
 /// Let the response drain out of the TCP stack, then restart.
 pub fn reboot_after_response() -> ! {
+    // The OTA handler never returns to the wrapper that records this.
+    crate::httpd::note_httpd_stack();
     std::thread::sleep(std::time::Duration::from_secs(1));
     // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.
     unsafe { sys::esp_restart() }
