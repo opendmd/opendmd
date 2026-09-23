@@ -1,7 +1,8 @@
 // Sets: the playlists in /sets/*.txt plus the card's own manifests. Open one
 // to edit it, build a new one from filters (the core's Filter, run here over
 // the whole manifest) or from the Library selection, reorder, save with
-// PUT /api/sets/<name> and activate with PUT /api/config {"set": name}.
+// PUT /api/sets/<name> and activate with PUT /api/config {"set": name} —
+// a set's name, a root manifest's file name, or "" for the card's default.
 // The `.idx` sidecar rule is the device's business: a manifest PUT deletes
 // the stale index first and reindexes if the set is the active one.
 
@@ -9,7 +10,8 @@ import { app } from './state.js';
 import { VList } from './vlist.js';
 import { h, clear, on, toast, label, lines, base } from './util.js';
 
-const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,40}$/;
+// Not `filelist.*`: the firmware reads such a `set` as a root manifest.
+const NAME_RE = /^(?!filelist\.)[A-Za-z0-9][A-Za-z0-9 _.-]{0,40}$/;
 const setName = (path) => base(path).replace(/\.txt$/, '');
 
 export async function mount(el) {
@@ -52,8 +54,8 @@ export async function mount(el) {
   el.append(h('div.cols',
     h('div',
       h('div.card', h('div.row.sp', h('h2', 'Sets'), activeNote), setsList,
-        h('p.cap', 'Activating a set rebuilds its index on the device (a few seconds; the panel holds its frame). Activating ',
-          h('code', 'filelist.odm.txt'), ' is not possible through the API: open it and save it as a set.')),
+        h('p.cap', 'Activating rebuilds the index on the device (a few seconds; the panel holds its frame). The default is ',
+          h('code', 'filelist.odm.txt'), ' if the card has one, else ', h('code', 'filelist.txt'), '.')),
       h('div.card', h('h2', 'Build from filters'),
         h('div.form',
           h('label.stack', 'from manifest', baseSel),
@@ -80,19 +82,20 @@ export async function mount(el) {
   // --- sets list ----------------------------------------------------------
   let known = [];
   async function loadSets() {
-    const { root, sets } = await app.sets();
-    const manifests = root.filter((f) => !f.dir && /^filelist\./.test(f.name) && !/\.(idx|part|tmp|bak)$/.test(f.name)).map((f) => '/' + f.name).sort();
-    known = [...manifests, ...sets.map((n) => `/sets/${n}.txt`)];
-    const active = app.device ? app.activeSet : null;
-    activeNote.textContent = app.device ? `active: ${active || 'filelist.txt'}` : '';
+    const { manifests, sets } = await app.sets();
+    known = [...manifests.map((n) => '/' + n), ...sets.map((n) => `/sets/${n}.txt`)];
+    const dflt = app.defaultManifest(manifests);
+    const active = app.activeSet;
+    activeNote.textContent = app.device ? `active: ${active || dflt + ' (default)'}` : '';
     clear(setsList, known.map((p) => {
       const isSet = p.startsWith('/sets/');
-      const isActive = app.device && (isSet ? setName(p) === active : p === '/filelist.txt' && !active);
-      const canActivate = app.device && (isSet || p === '/filelist.txt') && !isActive;
+      const v = isSet ? setName(p) : base(p); // its `set` value
+      const isDflt = !isSet && v === dflt;
+      const isActive = app.device && (v === active || (!active && isDflt));
       return h('div', { 'data-path': p },
-        h('span.grow.mono', p, isActive && h('span.tag.act', 'active')),
+        h('span.grow.mono', p, isDflt && h('span.tag', 'default'), isActive && h('span.tag.act', 'active')),
         h('button.sm', { onclick: () => open(p) }, 'Open'),
-        canActivate && h('button.sm', { onclick: () => activate(isSet ? setName(p) : '') }, 'Activate'),
+        app.device && !isActive && h('button.sm', { 'data-act': 1, disabled: app.building, onclick: () => activate(isDflt ? '' : v) }, 'Activate'),
         isSet && h('button.sm.danger', { onclick: () => del(p) }, 'Delete'));
     }));
     const keep = baseSel.value;
@@ -114,21 +117,23 @@ export async function mount(el) {
   }
 
   async function activate(set) {
+    if (app.building) { toast('the device is building an index; try again when it is ready', 'bad'); return; }
+    const n = set || 'the default manifest';
     try {
-      toast(`activating ${set || 'filelist.txt'} — the device is rebuilding its index…`);
+      toast(`activating ${n} — the device is rebuilding its index…`);
       const r = await app.src.putConfig({ set });
-      await app.refreshConfig();
-      toast(`active: ${set || 'filelist.txt'} · ${r.entries} entries · index ${r.index ?? 'unchanged'} ${r.index_ms ? `(${r.index_ms} ms)` : ''}`, 'ok');
-      loadSets();
+      await app.refreshStatus();
+      await app.refreshConfig(); // -> loadSets
+      toast(`active: ${n} · ${r.entries} entries · index ${r.index ?? 'unchanged'} ${r.index_ms ? `(${r.index_ms} ms)` : ''}`, 'ok');
     } catch (e) { toast('activate: ' + e.message, 'bad'); }
   }
 
   async function del(path) {
     const set = setName(path);
     const isActive = app.device && app.activeSet === set;
-    if (!confirm(isActive ? `"${set}" is the active set. Switch the player back to filelist.txt and delete it?` : `Delete ${path}?`)) return;
+    if (!confirm(isActive ? `"${set}" is the active set. Switch the player back to the default manifest and delete it?` : `Delete ${path}?`)) return;
     try {
-      if (isActive) { await app.src.putConfig({ set: '' }); await app.refreshConfig(); }
+      if (isActive) { await app.src.putConfig({ set: '' }); await app.refreshStatus(); await app.refreshConfig(); }
       await app.src.deleteFile(path);
       app.texts.delete(path);
       toast(`deleted ${path}`, 'ok');
@@ -203,7 +208,7 @@ export async function mount(el) {
 
   async function save(andActivate) {
     const n = name.value.trim().replace(/\.txt$/, '');
-    if (!NAME_RE.test(n)) { toast('set names are letters, digits, space, _ . - (no slashes)', 'bad'); return; }
+    if (!NAME_RE.test(n)) { toast('set names are letters, digits, space, _ . - (no slashes, not filelist.*)', 'bad'); return; }
     if (!app.draft.paths.length) { toast('the set is empty', 'bad'); return; }
     const path = `/sets/${n}.txt`;
     if (known.includes(path) && app.draft.name !== n && !confirm(`${path} exists. Replace it?`)) return;
@@ -222,9 +227,10 @@ export async function mount(el) {
   eSearch.oninput = refresh;
   on('draft', () => { name.value = app.draft.name; refresh(); });
   on('config', () => loadSets());
+  on('status', () => { for (const b of setsList.querySelectorAll('[data-act]')) b.disabled = app.building; });
 
   await Promise.all([loadSets(), categories()]);
   refresh();
   count();
-  return { show() { name.value = app.draft.name; refresh(); } };
+  return { show() { name.value = app.draft.name; refresh(); if (app.device) app.refreshStatus().catch(() => {}); } };
 }

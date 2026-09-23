@@ -1,6 +1,7 @@
 // Library: browse the card by category, search titles and filter by
 // platform with the core's tag parser, preview an entry, and select entries
-// for a set or the converter. Listings come from GET /api/files (one
+// for a set or the converter. On a device, "Send to panel" plays the
+// previewed entry now (POST /api/play), its .odm when there is one. Listings come from GET /api/files (one
 // directory at a time); the .odm view comes from filelist.odm.txt, never
 // from listing the bucket directories.
 
@@ -30,6 +31,8 @@ export async function mount(el) {
   let shown = [];
   let current = '';
   let besideOdm = new Set();
+  let sendPath = '';
+  const sendBtn = app.device && h('button', { id: 'lib-play', disabled: true, onclick: () => app.play(sendPath) }, 'Send to panel');
   const platforms = new Set();
 
   const list = new VList({
@@ -52,7 +55,7 @@ export async function mount(el) {
         h('div.row', kind, cat, h('div.grow', { style: 'min-width:140px' }, search), count),
         h('div', { style: 'margin-top:8px' }, chips)),
       list.el, selbar),
-    h('div.side', h('div.card', canvas, cap))));
+    h('div.side', h('div.card', canvas, cap, sendBtn && h('div.row', { style: 'margin-top:8px' }, sendBtn)))));
 
   const pv = new PanelPreview(canvas, { onError: (m) => { cap.textContent = 'preview: ' + m; } });
 
@@ -69,6 +72,7 @@ export async function mount(el) {
     // A GIF with a known bucketed .odm previews from the .odm: the same
     // frames, and a cheap open on the device instead of a big-directory scan.
     const path = it.odm || it.path;
+    if (sendBtn) { sendPath = path; sendBtn.disabled = false; sendBtn.title = path; }
     cap.textContent = `${label(it.e)} · loading ${path}`;
     try {
       if (await pv.show(path, (p) => app.src.readBytes(p))) cap.textContent = `${label(it.e)} · ${path}`;

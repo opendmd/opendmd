@@ -136,8 +136,9 @@ grant (Chromium's File System Access API) or become downloads.
 **The views** — a left rail on a laptop, a bottom bar on a phone:
 
 - **Now** — what the panel is playing (title, platform and category parsed
-  from the path), polled every 2 s, with skip, pause and a brightness slider,
-  and the device's health: uptime, address, free heap and its sampled floor,
+  from the path), polled every 2 s, with skip, pause, a brightness slider and
+  **Send to panel** (any card path, `POST /api/play`: it plays now and the
+  schedule carries on), and the device's health: uptime, address, free heap and its sampled floor,
   refresh rate, deadline misses and worst lateness. A **panel-look preview**
   of the same file plays alongside — fetched once when the file changes and
   played in the browser, so it is *not frame-synced* with the panel. It
@@ -149,41 +150,51 @@ grant (Chromium's File System Access API) or become downloads.
 - **Library** — the card by category (`GET /api/files`), thousands of entries
   in a virtualised list, each name run through the core's tag parser. Search
   titles (normalised the way the core matches them), filter by platform
-  chips, click to preview, and a green `.odm` tag where
-  `filelist.odm.txt` lists a converted file. Select entries to add them to a
-  set or send them to the converter.
-- **Sets** — `/sets/*.txt` and the card's manifests. Open one to edit it;
+  chips, click to preview (and, on a device, **Send to panel** — its `.odm`
+  when there is one), and a green `.odm` tag where `filelist.odm.txt` lists
+  a converted file. Select entries to add them to a set or send them to the
+  converter.
+- **Sets** — `/sets/*.txt` and the card's root manifests (`filelist.txt`,
+  `filelist.odm.txt`, `.hall`, `.xmas`), with the card's default marked
+  (`filelist.odm.txt` if it has one, else `filelist.txt`). Open one to edit it;
   build a new one with the core's `Filter` (platforms, categories, title
   words, dropped flags, shuffle with a seed, a limit) over any manifest, or
   from the Library selection; reorder, remove, save (`PUT /api/sets/<name>`),
-  activate (`PUT /api/config {"set": …}`, which rebuilds the device's index
-  in a few seconds) and delete. Deleting the active set switches the player
-  back to `filelist.txt` first.
+  activate (`PUT /api/config {"set": …}` — a set, a root manifest by file
+  name, or `""` for the default — which rebuilds the device's index in a few
+  seconds) and delete. Deleting the active set switches the player back to
+  the default first. Switching is disabled while status says an index is
+  `building`.
 - **Convert** — GIF to `.odm` in the browser with the core's encoder: byte
   for byte what `opendmd-pack` writes. Sources are Library selections
   (fetched from the device) or local files; destinations use the bucketed
   layout, `/odm/<Category>/<bb>/<name>.odm`. Files already converted are
-  skipped. One upload at a time, because every transfer costs the playing
+  skipped (known from `filelist.odm.txt`, or one `GET /api/stat` of the
+  bucketed destination when the card has none). One upload at a time, because every transfer costs the playing
   device heap; progress, throughput and errors as it goes. Afterwards it
   offers to regenerate `/filelist.odm.txt` from `/filelist.txt`.
 - **Settings** — WiFi (with a scan) and hostname, which need a reboot;
   brightness, dwell, shuffle, platform filter and active set, which apply
-  live; rebuild the index, reboot, and OTA firmware upload with progress; the
-  firmware version, flash variant and panel facts.
+  live (any set or root manifest; not while an index is building); rebuild
+  the index, reboot, and OTA firmware upload with progress; the firmware
+  version, flash variant, panel facts, `index_state` and the web app's own
+  version (`www_version`, from `www/version.txt`).
 
 **Size budget**, checked by `make web` (`tools/web-size.py`): the wasm module
 plus its generated JS glue at most 250 KB, the hand-written JS and CSS at
 most 80 KB. Today that is about 175 KB of wasm + 26 KB of glue (84 KB
-gzipped) and 71 KB of JS and CSS (27 KB gzipped). `make web` writes a
+gzipped) and 75 KB of JS and CSS (28 KB gzipped). `make web` writes a
 `<file>.gz` beside each file, and the player sends those in preference.
 
 **The mock device.** `tools/mock-device.py` (a `uv` script, standard library
 only) serves the built app plus a fake device over an extracted card copy:
-`/api/status` walking the active manifest, config, sets, file uploads and
-deletes, reindex, a canned WiFi scan, and the card's files — with the
-firmware's JSON shapes and quirks. `--overlay dir` sends every write there
-so the card copy is never modified; `--strict` serves only what the firmware
-serves; `--proxy URL` forwards everything but the app to a real device.
+`/api/status` walking the active manifest (the default rule included),
+config, sets, play, stat, file uploads and deletes, reindex, a canned WiFi
+scan, and the card's files — with the firmware's JSON shapes and quirks.
+`--overlay dir` sends every write there so the card copy is never modified;
+`--strict` drops the mock's few deliberate deviations and adds the
+firmware's directory-scan cost to stat and play; `--proxy URL` forwards
+everything but the app to a real device.
 
 ## The card
 

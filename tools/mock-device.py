@@ -63,11 +63,11 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   the mock cannot crash mid-write.
 - **`is_manifest_path`**: only `filelist.*` directly at the card root, or any
   file directly inside `sets/` (not nested), and never `.idx`/`.tmp`/`.part`.
-- **Settings are saved before a reindex is attempted.** `PUT /api/config`
-  applies and "persists" (in memory) the new settings *before* trying to
-  rebuild the playlist for a changed `set`/`platforms`/`shuffle`. If the new
-  set's manifest does not exist, the reply is a 500, but the settings stick —
-  matching `main.rs`'s `settings = next` happening before `rebuild()` runs.
+- **A new `set` is checked before anything is saved** (it must open), then
+  the settings are saved, then the playlist is rebuilt for a changed
+  `set`/`platforms`/`shuffle`. A rebuild that still fails (`set` = "" on a
+  card with neither default manifest) is a 500 with the settings kept, as in
+  `main.rs`.
 - **No `GET`/`DELETE /api/sets/*` route** — sets are read at
   `GET /sets/<name>.txt` and deleted at `DELETE /api/files/sets/<name>.txt`.
 - **`.gz` preference is `www/`-only**, and unconditional (no `Accept-Encoding`
@@ -76,6 +76,38 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   FAT order) and sizes are opt-in (`?sizes=1`), matching the firmware's
   quadratic-`stat`-avoidance note in `files.rs`.
 - `GET /api/config` never echoes `wifi_pass`, only `wifi_pass_set`.
+- **The default manifest.** `set` = `""` resolves to `filelist.odm.txt` if the
+  card has one, else `filelist.txt`, at every rebuild (so installing
+  `filelist.odm.txt` onto a card playing `filelist.txt` takes effect at the
+  next set change or reindex, as on the device). `set` = `"filelist.*"`
+  selects that root manifest, anything else `sets/<set>.txt`. A set whose
+  manifest does not exist is a **404 `{"error":"set not found"}` with nothing
+  saved**; a `/`, `\\` or `..` in it is a 400. `manifest` in status, the 409 on
+  deleting the active manifest and the "is this install active" check all use
+  the resolved path.
+- **`/filelist*`** serves every root manifest (`filelist.txt`, `.odm.txt`,
+  `.hall`, `.xmas`) as `text/plain`, `no-cache`; a `/` after the name is a 404.
+- **`POST /api/play {"path"}`** puts the file on "the panel" now (an
+  off-playlist `now_playing`, ordinal and `gifs_started` bumped), and the
+  schedule resumes at the next dwell. 404 if it does not open, 415 if it does
+  not start with `GIF8`/`ODM1` (the firmware's error text there comes from the
+  decoder; here it is a fixed one), 400 for a relative or escaping path.
+- **`GET /api/stat?path=`** is `{path, exists, size, is_dir}`, `size` null for
+  a directory or a miss, `/` a directory.
+- **`/api/status`** has `index_state` (`ready`, or `unavailable` when the
+  manifest does not open; `building` is never observable, as on the device,
+  because a rebuild holds the lock a status read needs) and `www_version`
+  (the first line of `--www`/version.txt, trimmed, <= 64 chars, else null).
+- **JSON bodies over 8 KB** (`PUT /api/config`, `POST /api/play`) are a 413
+  `{"error":"body is N B, the limit is 8192 B"}`, judged on `Content-Length`.
+
+# `--strict`
+
+Behave like the current firmware where this mock otherwise differs on
+purpose: a `..` escape through the `/*` catch-all is a plain 404 (not 400),
+and `/api/stat` and `/api/play` cost a FAT directory scan of the parent
+(15 ms + 0.15 ms per entry: ~20 ms in a bucket, ~590 ms in `gifs/Consoles`),
+so a UI that stats or plays in a big directory feels it.
 - OTA validates the ESP image magic byte (`0xE9`) and the 1,572,864 B slot
   size, and demands a `Content-Length`.
 
@@ -85,13 +117,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   escape: `files::card_path` returns `None`, the handler's `if let Some(..)`
   is simply skipped, and it falls through to a plain 404. Every other route
   (`/www/*`, `/gifs/*`, `/odm/*`, `/sets/*`, `/api/files/*`, `/api/files`) does
-  send 400. Since this tool's spec states a blanket "`..` in a path -> 400"
-  rule for all static serving, that is what is implemented here, including
-  for the catch-all — a simplification over the firmware's narrower quirk.
-- `PUT /api/config` with a body over 8192 B: in the real firmware this
-  actually surfaces as a generic 500 (`req.read_to_vec`'s size-limit error
-  propagates through `?` to the trampoline's catch-all 500 handler, not a
-  400). This tool's spec asks for 400, so that is what is implemented.
+  send 400. Without `--strict` the catch-all 400s too.
 - serde's exact "wrong type" error text is not reproduced verbatim (there is
   no serde here); a similarly shaped `"invalid JSON: ..."` message naming the
   offending field is produced instead.
@@ -101,8 +127,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
 `--dwell` (default 5s) is a fixed cadence, independent of the configured
 `dwell_min`/`dwell_max` (which are only ever stored and reported, never used
 for actual pacing here — real dwell timing depends on each GIF's own loop
-length, which this mock does not decode). The active manifest (`filelist.txt`
-or `sets/<name>.txt`, whichever `set` selects) is read fresh on every rebuild,
+length, which this mock does not decode). The active manifest (whichever `set`
+resolves to, see above) is read fresh on every rebuild,
 filtered by the `platforms` setting (an entry survives if its filename starts
 with `<PLATFORM>_`, case-insensitive, for any listed platform — the same
 approximation of the real tag parser the task spec calls for), then played in
@@ -131,6 +157,9 @@ from pathlib import Path
 # --------------------------------------------------------------------------
 
 MANIFEST_REL = "filelist.txt"          # config::MANIFEST_PATH, relative to the card root
+ODM_MANIFEST_REL = "filelist.odm.txt"  # config::ODM_MANIFEST_PATH: the default when present
+MAX_JSON_BODY = 8192                   # http.rs MAX_JSON_BODY
+SET_NOT_FOUND = "set not found"        # state::SET_NOT_FOUND
 SETS_DIR = "sets"                      # config::SETS_DIR
 OTA_SLOT_SIZE = 1_572_864              # the board's OTA slot (ota.rs)
 SD_CAPACITY_BYTES = 31_266_439_168     # a plausible "measured" capacity for /api/status
@@ -168,7 +197,9 @@ STATUS_TEXT = {
     405: "Method Not Allowed",
     409: "Conflict",
     413: "Payload Too Large",
+    415: "Unsupported Media Type",
     500: "Internal Server Error",
+    503: "Service Unavailable",
 }
 
 WIFI_SCAN_RESULTS = [
@@ -235,7 +266,16 @@ def card_path(rel: str):
     return rel
 
 
+def is_root_manifest_name(rel: str) -> bool:
+    """files::is_root_manifest_name: `filelist.*`, not its .idx or a temp."""
+    name = rel.rsplit("/", 1)[-1]
+    return name.startswith("filelist.") and not name.endswith((".idx", ".tmp", ".part"))
+
+
 def mime_for(rel: str) -> str:
+    # Root manifests have whatever extension their owner chose; all text.
+    if is_root_manifest_name(rel):
+        return "text/plain; charset=utf-8"
     ext = Path(rel).suffix.lstrip(".").lower()
     return {
         "html": "text/html; charset=utf-8",
@@ -258,6 +298,8 @@ def mime_for(rel: str) -> str:
 
 
 def cache_for(rel: str) -> str:
+    if is_root_manifest_name(rel):
+        return "no-cache"
     if "/pkg/" in f"/{rel}":
         return "max-age=3600"
     ext = Path(rel).suffix.lstrip(".").lower()
@@ -296,6 +338,18 @@ def derive_title(manifest_line: str, settings: dict) -> str:
         stripped = stem[m.end():] if m else stem
     stripped = TRAILING_NUM_RE.sub("", stripped)
     return stripped.replace("_", " ")
+
+
+def www_version(www_root: Path):
+    """files::read_www_version: the first line of version.txt, trimmed,
+    at most 64 characters; None if missing or blank."""
+    try:
+        with open(www_root / "version.txt", "rb") as f:
+            text = f.read(128).decode("utf-8", "replace")
+    except OSError:
+        return None
+    line = (text.splitlines() or [""])[0].strip()
+    return line[:64] or None
 
 
 def enoent(path: str) -> str:
@@ -436,15 +490,27 @@ class Player:
         self.last_advance = 0.0
         self.deadline_misses = 0
         self.worst_lateness_ms = 0
+        self.manifest = MANIFEST_REL
+        self.index_state = "building"
+        self.played: str | None = None  # an off-playlist POST /api/play
         self.rebuild_playlist()
 
+    def resolve(self, set_: str) -> str:
+        """Settings::manifest_path, root-relative."""
+        if not set_:
+            return ODM_MANIFEST_REL if self.ctx.fs.read_path(ODM_MANIFEST_REL) else MANIFEST_REL
+        if set_.startswith("filelist."):
+            return set_
+        return f"{SETS_DIR}/{set_}.txt"
+
     def manifest_rel(self) -> str:
-        s = self.ctx.settings["set"]
-        return f"{SETS_DIR}/{s}.txt" if s else MANIFEST_REL
+        """The manifest in play, as resolved at the last rebuild."""
+        return self.manifest
 
     def rebuild_playlist(self):
-        rel = self.manifest_rel()
+        rel = self.manifest = self.resolve(self.ctx.settings["set"])
         lines = self.ctx.fs.read_lines(rel)
+        self.index_state = "ready" if lines is not None else "unavailable"
         filtered = []
         if lines is not None:
             platforms = [
@@ -473,7 +539,14 @@ class Player:
         # --dwell seconds.
         self.advance()
 
+    def play_now(self, path: str):
+        self.played = path
+        self.ordinal += 1
+        self.gifs_started += 1
+        self.last_advance = time.monotonic()
+
     def advance(self):
+        self.played = None
         if not self.playlist:
             self.pos = -1
             self.last_advance = time.monotonic()
@@ -493,6 +566,8 @@ class Player:
             self.advance()
 
     def current(self):
+        if self.played:
+            return self.played
         if not self.playlist or self.pos < 0:
             return None
         return self.playlist[self.order[self.pos]]
@@ -648,13 +723,6 @@ def make_handler(ctx: Context, quiet: bool):
             def m_prefix(p):
                 return lambda cur: cur.startswith(p)
 
-            def m_filelist(cur):
-                if cur == "/filelist.txt":
-                    return True
-                if ctx.strict:
-                    return False
-                return cur.startswith("/filelist") and cur.count("/") == 1
-
             routes = [
                 (m_exact("/"), {"GET": self.h_root}),
                 (m_exact("/api/status"), {"GET": self.h_status}),
@@ -662,6 +730,8 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/pause"), {"POST": self.h_pause}),
                 (m_exact("/api/config"), {"GET": self.h_config_get, "PUT": self.h_config_put}),
                 (m_exact("/api/reindex"), {"POST": self.h_reindex}),
+                (m_exact("/api/play"), {"POST": self.h_play}),
+                (m_exact("/api/stat"), {"GET": self.h_stat}),
                 (m_exact("/api/files"), {"GET": self.h_files_list}),
                 (m_exact("/api/wifi/scan"), {"GET": self.h_wifi_scan}),
                 (m_exact("/api/ota"), {"POST": self.h_ota}),
@@ -669,7 +739,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/manifest"), {"PUT": self.h_manifest_put}),
                 (m_prefix("/api/sets/"), {"PUT": self.h_sets_put}),
                 (m_prefix("/api/files/"), {"PUT": self.h_files_put, "DELETE": self.h_files_delete}),
-                (m_filelist, {"GET": self.h_filelist}),
+                (m_prefix("/filelist"), {"GET": self.h_filelist}),
                 (m_prefix("/gifs/"), {"GET": self.h_serve_under}),
                 (m_prefix("/sets/"), {"GET": self.h_serve_under}),
                 (m_prefix("/odm/"), {"GET": self.h_serve_under}),
@@ -713,6 +783,9 @@ def make_handler(ctx: Context, quiet: bool):
             rel_full = percent_decode(path)
             rel = card_path(rel_full)
             if rel is None:
+                if ctx.strict:  # the firmware's `if let Some(..)` falls through
+                    self.send_error_json(404, rel_full)
+                    return
                 self.send_error_json(400, "path escapes the card")
                 return
             if not self.serve_www_rel(rel):
@@ -720,13 +793,17 @@ def make_handler(ctx: Context, quiet: bool):
 
         def h_filelist(self, path):
             rel_full = percent_decode(path)
-            rel = card_path(rel_full)
+            name = rel_full.lstrip("/")
+            if "/" in name:
+                self.send_error_json(404, rel_full)
+                return
+            rel = card_path(name)
             if rel is None:
                 self.send_error_json(400, "path escapes the card")
                 return
             fpath = ctx.fs.read_path(rel)
             if fpath is None:
-                self.send_error_json(404, rel_full.lstrip("/"))
+                self.send_error_json(404, rel_full)
                 return
             self.stream_file(fpath, rel, gzipped=False)
 
@@ -765,6 +842,8 @@ def make_handler(ctx: Context, quiet: bool):
                     "paused": player.paused,
                     "entries": len(player.playlist),
                     "manifest": "/sdcard/" + player.manifest_rel(),
+                    "index_state": player.index_state,
+                    "www_version": www_version(ctx.www_root),
                     "heap": {"free": free, "floor": floor, "idf_min": idf_min},
                     "refresh_hz": 100,
                     "deadline_misses": player.deadline_misses,
@@ -801,12 +880,30 @@ def make_handler(ctx: Context, quiet: bool):
                 }
             self.send_json(200, obj)
 
-        def h_config_put(self, path):
+        def json_body(self) -> bytes | None:
+            """http.rs json_body: None means a 413 has been sent."""
             length = int(self.headers.get("Content-Length") or 0)
-            if length > 8192:
-                self.send_error_json(400, "invalid JSON: body exceeds the 8192 B limit")
+            if length > MAX_JSON_BODY:
+                self.rfile.read(length)  # keep the connection usable
+                self.send_error_json(413, f"body is {length} B, the limit is {MAX_JSON_BODY} B")
+                return None
+            return self.read_body()
+
+        def dir_scan(self, rel: str) -> None:
+            """--strict: the FAT scan of `rel`'s parent that one open/stat costs."""
+            if ctx.strict:
+                parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+                n = 0
+                for base in (ctx.fs.root_dir, ctx.fs.overlay_dir):
+                    d = base / parent if base is not None else None
+                    if d is not None and d.is_dir():
+                        n += len(os.listdir(d))
+                time.sleep(0.015 + 0.00015 * n)
+
+        def h_config_put(self, path):
+            raw = self.json_body()
+            if raw is None:
                 return
-            raw = self.read_body()
             try:
                 patch = json.loads(raw) if raw else {}
             except json.JSONDecodeError as e:
@@ -839,6 +936,9 @@ def make_handler(ctx: Context, quiet: bool):
                             400, f"invalid JSON: field '{field}' must be a {kind}"
                         )
                         return
+                    if field == "set" and (any(c in v for c in "/\\\0") or ".." in v):
+                        self.send_error_json(400, "set must be a single path segment")
+                        return
                     if field == "hostname":
                         if v != "":
                             next_settings["hostname"] = v
@@ -861,14 +961,22 @@ def make_handler(ctx: Context, quiet: bool):
                     or next_settings["shuffle"] != before["shuffle"]
                 )
 
-                # Settings are "saved" now, exactly like the firmware saves to
-                # NVS before attempting the (possibly failing) rebuild.
+                # A new set must open before anything is saved ("" always
+                # passes: it resolves to whichever default the card has).
+                if next_settings["set"] != before["set"] and next_settings["set"]:
+                    if ctx.fs.read_path(ctx.player.resolve(next_settings["set"])) is None:
+                        self.send_error_json(404, SET_NOT_FOUND)
+                        return
+
+                # Settings are "saved" now, like the firmware saves to NVS
+                # before the rebuild.
                 ctx.settings.clear()
                 ctx.settings.update(next_settings)
 
                 if needs_reindex:
-                    manifest_rel = ctx.player.manifest_rel()
+                    manifest_rel = ctx.player.resolve(ctx.settings["set"])
                     if ctx.fs.read_lines(manifest_rel) is None:
+                        ctx.player.rebuild_playlist()  # -> unavailable, empty
                         fs_path = "/sdcard/" + manifest_rel
                         print(
                             f"!!! mock-device: settings saved, but {fs_path} does not "
@@ -908,6 +1016,66 @@ def make_handler(ctx: Context, quiet: bool):
                 ctx.player.rebuild_playlist()
                 entries = len(ctx.player.playlist)
             self.send_json(200, {"ok": True, "entries": entries, "index": "built", "index_ms": index_ms})
+
+        def h_play(self, path):
+            raw = self.json_body()
+            if raw is None:
+                return
+            try:
+                req = json.loads(raw)
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"invalid JSON: {e}")
+                return
+            p = req.get("path") if isinstance(req, dict) else None
+            if not isinstance(p, str):
+                self.send_error_json(400, "invalid JSON: missing field `path`")
+                return
+            rel = card_path(p) if p.startswith("/") else None
+            if rel is None:
+                self.send_error_json(400, "path must be card-absolute and stay on the card")
+                return
+            with ctx.lock:
+                if not ctx.player.playlist:
+                    self.send_error_json(503, "no playlist is running")
+                    return
+                self.dir_scan(rel)
+                fpath = ctx.fs.read_path(rel)
+                if fpath is None:
+                    self.send_error_json(404, enoent(p))
+                    return
+                with open(fpath, "rb") as f:
+                    magic = f.read(4)
+                if magic[:4] not in (b"GIF8", b"ODM1"):
+                    self.send_error_json(415, f"{p}: not a GIF or ODM file")
+                    return
+                ctx.player.play_now(p)
+            self.send_json(200, {"ok": True, "path": p})
+
+        def h_stat(self, path):
+            _, _, query = self.path.partition("?")
+            card = query_param(query if "?" in self.path else None, "path")
+            if card is None:
+                self.send_error_json(400, "path= required")
+                return
+            if not card.startswith("/"):
+                self.send_error_json(400, "path must be card-absolute")
+                return
+            rel = card_path(card)
+            if rel is None:
+                self.send_error_json(400, "path escapes the card")
+                return
+            obj = {"path": card, "exists": False, "size": None, "is_dir": False}
+            if not rel.strip("/"):
+                obj.update(exists=True, is_dir=True)
+            else:
+                rel = rel.rstrip("/")
+                self.dir_scan(rel)
+                fpath = ctx.fs.read_path(rel)
+                if fpath is not None:
+                    obj.update(exists=True, size=fpath.stat().st_size)
+                elif rel not in ctx.fs.tombstones and ctx.fs.is_dir(rel):
+                    obj.update(exists=True, is_dir=True)
+            self.send_json(200, obj)
 
         def h_wifi_scan(self, path):
             time.sleep(1.5)
@@ -1200,7 +1368,9 @@ def parse_args():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--dwell", type=float, default=5.0, help="seconds per now-playing item")
-    ap.add_argument("--strict", action="store_true", help="only /filelist.txt at the card root, like real firmware")
+    ap.add_argument("--strict", action="store_true",
+                    help="behave like the current firmware where the mock differs on purpose: "
+                         "a '..' via the catch-all is a 404, stat/play cost a directory scan")
     ap.add_argument("--quiet", action="store_true", help="suppress the one-line-per-request log")
     ap.add_argument("--proxy", help="forward everything but --www to a real device at this URL")
     return ap.parse_args()

@@ -3,7 +3,7 @@
 // reboot), a WiFi scan, reindex, reboot, OTA, and the facts from status.
 
 import { app } from './state.js';
-import { h, clear, toast, bytes, uptime } from './util.js';
+import { h, clear, on, toast, bytes, uptime } from './util.js';
 
 export async function mount(el) {
   if (!app.device) {
@@ -32,8 +32,9 @@ export async function mount(el) {
   const otaBar = h('i');
   const otaMsg = h('span.muted');
 
-  const { sets } = await app.sets();
-  f.set.append(h('option', { value: '' }, 'filelist.txt (stock)'), ...sets.map((s) => h('option', { value: s }, s)));
+  const { manifests, sets } = await app.sets();
+  f.set.append(h('option', { value: '' }, `card default (${app.defaultManifest(manifests)})`),
+    ...manifests.map((m) => h('option', { value: m }, m)), ...sets.map((s) => h('option', { value: s }, s)));
   f.set.value = c.set;
 
   el.append(banner,
@@ -67,8 +68,16 @@ export async function mount(el) {
     clear(facts, fact('firmware', s.version), fact('flash variant', s.variant), fact('panel', `128×32 · ${s.refresh_hz} Hz`),
       fact('WiFi', `${s.wifi} · ${s.ip}`), fact('hostname', s.hostname + '.local'), fact('uptime', uptime(s.uptime_secs)),
       fact('manifest', s.manifest.replace(/^\/sdcard/, '')), fact('entries', s.entries.toLocaleString()),
+      fact('index', s.index_state ?? '–'), fact('web app', s.www_version ?? '–'),
       fact('card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'not mounted'));
+    // A set change while an index is being built would queue behind it.
+    f.set.disabled = s.index_state === 'building';
+    f.set.title = f.set.disabled ? 'the device is building an index' : '';
+    clearTimeout(recheck);
+    if (f.set.disabled) recheck = setTimeout(() => app.refreshStatus().catch(() => {}), 2000);
   }
+  let recheck = 0;
+  on('status', renderFacts);
 
   async function save(keys) {
     const cur = app.config;
@@ -112,7 +121,7 @@ export async function mount(el) {
   async function waitForBoot(msg) {
     for (let i = 0; i < 45; i++) {
       await new Promise((r) => setTimeout(r, 2000));
-      try { const s = await app.refreshStatus(); msg(`back up: ${s.version} ${s.variant}`); renderFacts(s); return; } catch { msg(`rebooting… ${2 * (i + 1)} s`); }
+      try { const s = await app.refreshStatus(); msg(`back up: ${s.version} ${s.variant}`); return; } catch { msg(`rebooting… ${2 * (i + 1)} s`); }
     }
     msg('the device has not come back after 90 s — check its serial log');
   }
@@ -134,5 +143,5 @@ export async function mount(el) {
   }
 
   renderFacts(app.status);
-  return { show() { app.refreshStatus().then(renderFacts, () => {}); } };
+  return { show() { app.refreshStatus().catch(() => {}); } };
 }

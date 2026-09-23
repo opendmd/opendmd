@@ -49,6 +49,11 @@ export class DeviceSource {
   reindex() { return this.json('POST', '/api/reindex'); }
   reboot() { return this.json('POST', '/api/reboot'); }
   wifiScan() { return this.json('GET', '/api/wifi/scan', undefined, 20000); }
+  // One file onto the panel now: 404 if it does not open, 415 if not GIF/ODM.
+  play(path) { return this.json('POST', '/api/play', JSON.stringify({ path })); }
+  // {path, exists, size, is_dir} from one `stat`, i.e. one scan of the parent
+  // directory on the device: ~20 ms in a bucket, ~600 ms in gifs/Consoles.
+  stat(path) { return this.json('GET', '/api/stat?path=' + encodeURIComponent(path)); }
 
   async list(dir) {
     const r = await this.json('GET', '/api/files?dir=' + encodeURIComponent(dir));
@@ -134,6 +139,10 @@ export class LocalSource {
     return [...m.values()];
   }
   async readText(path) { const f = this.files.get(path); return f ? f.text() : null; }
+  async stat(path) {
+    const f = this.files.get(path), d = !f && this.dirs.has(path);
+    return { path, exists: !!f || d, size: f ? f.size : null, is_dir: d };
+  }
   async readBytes(path) {
     const f = this.files.get(path);
     if (!f) throw new HttpError(404, `${path}: not in the picked folder`);
