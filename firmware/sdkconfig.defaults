@@ -89,3 +89,7 @@ CONFIG_ESP32_HUB75_USE_GFX=n
 
 # --- Logging -----------------------------------------------------------
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# 1 ms scheduler tick: the display loop sleeps for the remainder of each GIF frame
+# delay, and 10 ms ticks rounded every sleep up, running content 5-10% slow.
+CONFIG_FREERTOS_HZ=1000
