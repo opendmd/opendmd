@@ -16,6 +16,39 @@ static const char *TAG = "hub75_shim";
 static MatrixPanel_I2S_DMA *s_panel = nullptr;
 static uint16_t s_width = 0;
 static uint16_t s_height = 0;
+/* hub75_draw_span's fast path is usable (see hub75_init). */
+static bool s_fast = false;
+/*
+ * s_spread[v]: the CIE-corrected value lumConvTab[v] with its bit d moved to
+ * bit 3*d, for d < PIXEL_COLOR_DEPTH_BITS (<= 8, so 24 bits). A pixel's
+ * spread(r) | spread(g) << 1 | spread(b) << 2 then holds, at bits 3d..3d+2,
+ * exactly the B/G/R triple updateMatrixDMABuffer() computes for colour plane
+ * d, so the per-plane work is one shift and one mask. 1 KB, built at init.
+ */
+static uint32_t s_spread[256];
+
+/*
+ * Access to MatrixPanel_I2S_DMA::fb, the frame buffer the library's own
+ * updateMatrixDMABuffer() writes into. It is private and has no accessor, and
+ * the library's only per-pixel entry point (drawPixelRGB888 ->
+ * updateMatrixDMABuffer) costs ~3.3 us a pixel on this chip: 13.6 ms for a
+ * full 128x32 frame. hub75_draw_span writes the same bits a row at a time.
+ *
+ * This is the standard-conforming "explicit instantiation" loophole, not a
+ * `#define private public`: [temp.explicit] says access checking does not
+ * apply to the names in an explicit instantiation, so the member pointer can
+ * be named there and handed out through a friend function. It reads the
+ * member the library already maintains; nothing about the class changes.
+ */
+template <typename Tag, typename Tag::type M>
+struct Rob {
+    friend typename Tag::type get(Tag) { return M; }
+};
+struct FbTag {
+    typedef frameStruct *MatrixPanel_I2S_DMA::*type;
+    friend type get(FbTag);
+};
+template struct Rob<FbTag, &MatrixPanel_I2S_DMA::fb>;
 
 extern "C" bool hub75_init(const hub75_cfg_t *cfg) {
     if (s_panel != nullptr) {
@@ -56,6 +89,25 @@ extern "C" bool hub75_init(const hub75_cfg_t *cfg) {
 
     s_width = static_cast<uint16_t>(cfg->mx_width * cfg->chain_length);
     s_height = cfg->mx_height;
+    // The span writer hardcodes what updateMatrixDMABuffer() decides at
+    // compile time (the CIE LUT for PIXEL_COLOR_DEPTH_BITS, no PSRAM
+    // write-back) and one runtime assumption: the configured colour depth is
+    // that same PIXEL_COLOR_DEPTH_BITS. Anything else takes the per-pixel path.
+#if !defined(NO_CIE1931) && LUT_NATIVE_BIT_DEPTH && !defined(SPIRAM_DMA_BUFFER)
+    s_fast = s_panel->getCfg().getPixelColorDepthBits() == PIXEL_COLOR_DEPTH_BITS &&
+             PIXEL_COLOR_DEPTH_BITS <= 8;
+    for (int v = 0; v < 256; v++) {
+        const uint32_t lum = lumConvTab[v];
+        uint32_t spread = 0;
+        for (int d = 0; d < PIXEL_COLOR_DEPTH_BITS; d++) {
+            spread |= ((lum >> d) & 1U) << (3 * d);
+        }
+        s_spread[v] = spread;
+    }
+#else
+    s_fast = false;
+#endif
+    ESP_LOGI(TAG, "span writer: %s", s_fast ? "direct" : "per-pixel fallback");
     s_panel->clearScreen();
     ESP_LOGI(TAG, "panel %ux%u up, refresh %d Hz", s_width, s_height,
              s_panel->calculated_refresh_rate);
@@ -89,6 +141,136 @@ extern "C" void hub75_draw_rgb888(const uint8_t *rgb, uint16_t w, uint16_t h) {
                                      px[2]);
         }
     }
+}
+
+extern "C" void hub75_set_pixel(uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b) {
+    if (s_panel != nullptr) {
+        s_panel->drawPixelRGB888(static_cast<int16_t>(x), static_cast<int16_t>(y), r, g, b);
+    }
+}
+
+/*
+ * Exactly what updateMatrixDMABuffer(x, y, r, g, b) does to the frame buffer
+ * for every pixel of the span -- same LUT, same bit order, same FIFO-order
+ * column swap, same RGB1/RGB2 half -- with everything that does not depend on
+ * the pixel hoisted out of the loop: the row's bit-plane base pointer (one
+ * shared_ptr and vector dereference per span instead of eight per pixel), the
+ * half-panel mask and shift, and the range checks; and the per-plane bit
+ * extraction replaced by s_spread. hub75_fb_checksum() is how the two are
+ * shown to agree (Panel::bench, probe builds).
+ */
+extern "C" void hub75_draw_span(const uint8_t *rgb_row, uint16_t y, uint16_t x0, uint16_t x1) {
+    if (s_panel == nullptr || rgb_row == nullptr || y >= s_height) {
+        return;
+    }
+    if (x1 > s_width) {
+        x1 = s_width;
+    }
+    if (x0 >= x1) {
+        return;
+    }
+    if (!s_fast) {
+        for (uint16_t x = x0; x < x1; x++) {
+            const uint8_t *px = rgb_row + static_cast<size_t>(x) * 3;
+            s_panel->drawPixelRGB888(static_cast<int16_t>(x), static_cast<int16_t>(y), px[0],
+                                     px[1], px[2]);
+        }
+        return;
+    }
+#if !defined(NO_CIE1931) && LUT_NATIVE_BIT_DEPTH && !defined(SPIRAM_DMA_BUFFER)
+    const uint16_t rows_per_frame = s_height / MATRIX_ROWS_IN_PARALLEL;
+    uint16_t row = y;
+    uint16_t keep = BITMASK_RGB1_CLEAR;
+    uint8_t shift = 0;
+    if (row >= rows_per_frame) {
+        row -= rows_per_frame;
+        keep = BITMASK_RGB2_CLEAR;
+        shift = BITS_RGB2_OFFSET;
+    }
+    frameStruct *fb = s_panel->*get(FbTag());
+    rowBitStruct *bits = fb->rowBits[row].get();
+    const size_t plane = bits->width; /* words per colour-depth plane */
+    ESP32_I2S_DMA_STORAGE_TYPE *const base = bits->data;
+    const uint8_t depth = PIXEL_COLOR_DEPTH_BITS;
+
+    const uint8_t *px = rgb_row + static_cast<size_t>(x0) * 3;
+    for (uint16_t x = x0; x < x1; x++, px += 3) {
+        uint32_t bits = s_spread[px[0]] | (s_spread[px[1]] << 1) | (s_spread[px[2]] << 2);
+#if defined(ESP32_THE_ORIG)
+        const uint16_t col = x ^ 1U; /* ESP32_TX_FIFO_POSITION_ADJUST */
+#else
+        const uint16_t col = x;
+#endif
+        ESP32_I2S_DMA_STORAGE_TYPE *w = base + col;
+        for (uint8_t d = 0; d < depth; d++, bits >>= 3, w += plane) {
+            *w = static_cast<ESP32_I2S_DMA_STORAGE_TYPE>((*w & keep) | ((bits & 7U) << shift));
+        }
+    }
+#endif
+}
+
+/*
+ * Rows y and y + height/2 in full, which share every DMA word (RGB1 and RGB2
+ * are two halves of the same uint16_t): one read-modify-write per word
+ * instead of two. For frames that repaint whole rows -- the first of every
+ * file, scrollers. Falls back to two spans when the fast path is off.
+ */
+extern "C" void hub75_draw_row_pair(const uint8_t *top_row, const uint8_t *bottom_row, uint16_t y) {
+    if (s_panel == nullptr || top_row == nullptr || bottom_row == nullptr) {
+        return;
+    }
+    const uint16_t rows_per_frame = s_height / MATRIX_ROWS_IN_PARALLEL;
+    if (y >= rows_per_frame) {
+        return;
+    }
+    if (!s_fast) {
+        hub75_draw_span(top_row, y, 0, s_width);
+        hub75_draw_span(bottom_row, static_cast<uint16_t>(y + rows_per_frame), 0, s_width);
+        return;
+    }
+#if !defined(NO_CIE1931) && LUT_NATIVE_BIT_DEPTH && !defined(SPIRAM_DMA_BUFFER)
+    frameStruct *fb = s_panel->*get(FbTag());
+    rowBitStruct *bits = fb->rowBits[y].get();
+    const size_t plane = bits->width;
+    ESP32_I2S_DMA_STORAGE_TYPE *const base = bits->data;
+    const uint8_t depth = PIXEL_COLOR_DEPTH_BITS;
+    const uint8_t *t = top_row;
+    const uint8_t *b = bottom_row;
+    for (uint16_t x = 0; x < s_width; x++, t += 3, b += 3) {
+        uint32_t hi = s_spread[t[0]] | (s_spread[t[1]] << 1) | (s_spread[t[2]] << 2);
+        uint32_t lo = s_spread[b[0]] | (s_spread[b[1]] << 1) | (s_spread[b[2]] << 2);
+#if defined(ESP32_THE_ORIG)
+        const uint16_t col = x ^ 1U;
+#else
+        const uint16_t col = x;
+#endif
+        ESP32_I2S_DMA_STORAGE_TYPE *w = base + col;
+        for (uint8_t d = 0; d < depth; d++, hi >>= 3, lo >>= 3, w += plane) {
+            *w = static_cast<ESP32_I2S_DMA_STORAGE_TYPE>(
+                (*w & BITMASK_RGB12_CLEAR) | (hi & 7U) | ((lo & 7U) << BITS_RGB2_OFFSET));
+        }
+    }
+#endif
+}
+
+/*
+ * FNV-1a over every word of the frame buffer being written, all rows and all
+ * colour-depth planes. A self-test: draw the same image through
+ * drawPixelRGB888 and through hub75_draw_span, and the two must agree.
+ */
+extern "C" uint32_t hub75_fb_checksum(void) {
+    if (s_panel == nullptr) {
+        return 0;
+    }
+    frameStruct *fb = s_panel->*get(FbTag());
+    uint32_t h = 2166136261u;
+    for (auto &rb : fb->rowBits) {
+        const size_t n = rb->width * rb->colour_depth;
+        for (size_t i = 0; i < n; i++) {
+            h = (h ^ rb->data[i]) * 16777619u;
+        }
+    }
+    return h;
 }
 
 extern "C" void hub75_flip(void) {

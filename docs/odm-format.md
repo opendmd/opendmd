@@ -180,15 +180,71 @@ back live: 91,264 B free before, 58,080 B with the first GIF decoding. The
 firmware image grew by 9,568 B (1,903,552 -> 1,913,120; the OTA slot is
 2,031,616).
 
+## Card layout
+
+`opendmd-pack` can put the `.odm` files in one of two places. Either way
+`gifs/` and `filelist.txt` are left untouched, so the card still works with
+stock DMDoS.
+
+- **beside** (the default, `--layout beside`): `gifs/<Category>/<name>.odm`
+  next to `gifs/<Category>/<name>.gif`; the manifest lists
+  `/gifs/<Category>/<name>.odm`.
+- **bucketed** (`--layout bucketed`): `odm/<Category>/<bb>/<name>.odm`; the
+  manifest lists `/odm/<Category>/<bb>/<name>.odm`.
+  - `<Category>` is the GIF's directory relative to `gifs/`, verbatim (spaces
+    and underscores included: `NEW 2021`, `Pinball_Short`). A GIF nested
+    deeper keeps its whole directory path (`gifs/A/B/x.gif` ->
+    `odm/A/B/<bb>/x.odm`); a GIF directly in `gifs/` gets no category
+    directory (`odm/<bb>/x.odm`). The stock card has neither.
+  - `<name>.odm` is the GIF's file name with its final `.gif` (any case)
+    replaced by `.odm` — the same name the beside layout uses, stray dots
+    included (`X_01..gif` -> `X_01..odm`).
+  - `<bb>` is two lowercase hex digits: the low byte of **32-bit FNV-1a over
+    the UTF-8 bytes of the `.odm` file name** (extension included, no
+    directories). FNV-1a: `h = 0x811c9dc5`; for each byte `h = (h ^ byte) *
+    0x01000193 mod 2^32`. So 256 buckets per category.
+
+  Worked example: `gifs/Consoles/MD_Sonic3_RattenJager.gif` -> file name
+  `MD_Sonic3_RattenJager.odm` -> FNV-1a `0xd01ef790` -> bucket `90` ->
+  `odm/Consoles/90/MD_Sonic3_RattenJager.odm`. (`SNES_Plok_08.odm` hashes to
+  `0x4ee48ec0`, bucket `c0`.) The one implementation is
+  `opendmd-pack/src/layout.rs` (`fnv1a32`, `bucket`, `odm_rel`), and its unit
+  test pins these values.
+
+**Why.** FAT has no directory index: opening a file scans its directory
+linearly, and on the ESP32 that costs ~0.65 ms per 512-byte directory sector
+(16 entries — fewer with long file names). `gifs/Consoles` holds 3,781 files,
+so every open there costs ~330 ms, which is a visible stall between
+animations. Split 256 ways, Consoles averages ~15 files per bucket (6-26
+over the stock card's 3,779 converted files) and an open costs a few
+milliseconds: measured on the rig, **5.7 ms p50 / 6.7 ms max** for the
+bucketed copy of the 200-file `.odm` set against 343 / 532 ms for the same
+set's files in `gifs/Consoles`, and zero frame-deadline misses in 5 minutes
+of play (the beside set: 9, worst 490 ms). The web server's opens are the
+same scans, so serving from the bucketed tree barely disturbs the display
+(2 misses of 3 ms in 120 s of back-to-back downloads). See "Frame time" in
+`CLAUDE.md`.
+
+**Tags.** `Entry::from_path` takes the category from the first directory under
+`gifs/` *or* `odm/`; under `odm/` the directory holding the file is the hash
+bucket, never the category, so `/odm/Consoles/90/X.odm` gets exactly the tags
+of `/gifs/Consoles/X.gif`. (A two-lowercase-hex-digit directory directly under
+`odm/` with the file straight inside it is read as the bucket of an
+uncategorised file.)
+
 ## Tools
 
-- `opendmd-pack convert <card-root> [--jobs N] [--verify] [--force]` — writes
-  `<name>.odm` beside every `<name>.gif` under `gifs/`, copying the GIF's
-  mtime onto it; an `.odm` with the GIF's mtime is up to date and skipped
-  unless `--force`. Prints the report above.
-- `opendmd-pack manifest <card-root> [--manifest filelist.txt] [--out
-  filelist.odm.txt]` — the same manifest with every `.gif` path switched to
-  `.odm` where that file exists, order and line endings kept.
+- `opendmd-pack convert <card-root> [--layout beside|bucketed] [--jobs N]
+  [--verify] [--force]` — writes `<name>.odm` for every `<name>.gif` under
+  `gifs/`, where the layout says (see "Card layout"), copying the GIF's mtime
+  onto it; an `.odm` with the GIF's mtime is up to date and skipped unless
+  `--force`. In the bucketed layout a current beside `.odm` is copied instead
+  of re-encoded (the encoder is deterministic, and `--verify` checks the copy
+  like any other). Prints the report above.
+- `opendmd-pack manifest <card-root> [--layout beside|bucketed] [--manifest
+  filelist.txt] [--out filelist.odm.txt]` — the same manifest with every
+  `/gifs/...gif` path switched to that layout's `.odm` path where the file
+  exists, order and line endings kept.
 - `tools/card-sync.py <host> --from <card copy> --paths <list>` — uploads a
   list of card paths over `PUT /api/files/…`.
 - `make test-card` includes the cross-implementation check: 20 of the

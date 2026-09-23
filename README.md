@@ -182,13 +182,21 @@ make pack ARGS="convert /path/to/card --verify"
 # filelist.txt with every path switched to .odm where one exists
 make pack ARGS="manifest /path/to/card"          # -> filelist.odm.txt
 
+# or: odm/<Category>/<bb>/<name>.odm, 256 hash buckets per category, so the
+# ESP32 never scans a 3,781-file directory (copies current beside .odm files)
+make pack ARGS="convert /path/to/card --layout bucketed --verify"
+make pack ARGS="manifest /path/to/card --layout bucketed"   # -> filelist.odm.txt
+
 # onto a running player: the files, then the manifest as a set, then select it
 uv run tools/card-sync.py <host> --from /path/to/card --paths list.txt
 curl -T /path/to/card/filelist.odm.txt http://<host>/api/sets/odm
 curl -X PUT -d '{"set":"odm"}' http://<host>/api/config
 ```
 
-Or copy the `.odm` files and the manifest onto the card directly.
+Or copy the `.odm` files and the manifest onto the card directly. Either layout
+leaves `gifs/` and `filelist.txt` alone, so the card still works with stock
+DMDoS; the bucketed layout and its hash are described under "Card layout" in
+[`docs/odm-format.md`](docs/odm-format.md).
 
 ## Tag grammar
 
@@ -270,7 +278,10 @@ make fw-monitor PORT=/dev/ttyUSB0
 make fw-clean
 
 make card-sync HOST=opendmd.local    # push the web app onto the card
-make api-load  HOST=opendmd.local    # stress the file server for 120 s
+make api-load  HOST=opendmd.local    # stress the file server for 120 s (PATHS=list.txt: fetch those paths)
+
+make fw-build FW_FEATURES=probe      # with the timing probe (off, and compiled out, by default)
+uv run tools/sdprobe-report.py serial.log --boot -1   # open latency, miss causes, blit times
 ```
 
 ESP-IDF is installed once into `~/.espressif` and shared between projects.
@@ -330,8 +341,12 @@ bottoms out around 57 KB idle, 38 KB while serving one client back-to-back and
 34 KB with three, and two minutes of continuous downloads leave the board up
 (before the index moved it sat at 17-19 KB and aborted within two minutes).
 What sustained serving still costs is display *timing*: the file server and
-the player share one SPI bus, so frames run late while GIFs are being pulled
-off the card. The player always gets priority on heap (requests are refused
+the player share one SPI bus and FAT's lock, and opening a file in a big
+directory is a linear scan (~330 ms in the 3,781-file `gifs/Consoles`), so
+frames run late while GIFs are being pulled out of it — 124 misses, worst
+522 ms, in two minutes of back-to-back downloads. Played and served from the
+bucketed `.odm` layout (above) the same load costs 2 misses of 3 ms, and an
+idle player misses nothing. The player always gets priority on heap (requests are refused
 with 503 and transfers pause when the heap falls into the player's reserve).
 The arithmetic is in "Heap ceiling" in `CLAUDE.md`. Try it with
 `make api-load HOST=… WORKERS=1`.

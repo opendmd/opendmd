@@ -16,7 +16,7 @@ use crate::filter::Filter;
 use crate::manifest::{self, Entry};
 use crate::player::FrameSource;
 use crate::scheduler::Scheduler;
-use std::io::{self, BufReader, Read, Seek};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::time::Duration;
 
 /// A playlist the engine can look entries up in by index.
@@ -107,14 +107,25 @@ impl<R: Read + Seek> Catalog for FileCatalog<R> {
     }
 }
 
+/// A readable, seekable byte stream: what a [`Source`] hands out. `Seek` is
+/// there so a finished file can be looped by rewinding it rather than opening
+/// it again — on the ESP32 an open is a linear FAT directory scan, ~330 ms in
+/// a 3,781-entry directory, while a seek to 0 costs nothing.
+pub trait ReadSeek: Read + Seek {}
+
+impl<T: Read + Seek + ?Sized> ReadSeek for T {}
+
 /// Where GIF (or ODM) bytes come from. The firmware implements this over
 /// `/sdcard`, the simulator over a directory. What `open` returns is sniffed
 /// by [`FrameSource`], not judged by its extension. Manifest paths are
 /// card-absolute (`/gifs/Consoles/X.gif`); joining them onto a root is the
 /// source's job.
 pub trait Source {
-    fn open(&self, path: &str) -> io::Result<Box<dyn Read>>;
+    fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>>;
 }
+
+/// What the engine plays: a decoder over whatever the source opened.
+type Stream = FrameSource<Box<dyn ReadSeek>>;
 
 /// How long one GIF holds the display.
 ///
@@ -172,7 +183,7 @@ struct Playing {
     path: String,
     title: String,
     ordinal: u64,
-    gif: FrameSource<Box<dyn Read>>,
+    gif: Stream,
     started_at: Duration,
     next_frame_at: Duration,
     loops: u32,
@@ -373,14 +384,15 @@ impl Engine {
         }
     }
 
-    /// Re-open the current file from the start (no rewind on a streaming
-    /// reader). False if it can't be reopened, in which case we move on.
+    /// Rewind the current file and start a fresh decoder over the same
+    /// handle — no second open, so no second directory scan on a FAT card.
+    /// False if the rewind or the header fails, in which case `current` is
+    /// left empty and the caller moves on.
     fn restart_current(&mut self) -> bool {
-        // Drop the finished decoder *before* reopening the file. A GifSource
-        // owns the LZW state plus a logical-screen buffer (and a snapshot if
-        // the GIF used `Previous` disposal); holding two at once is the
-        // difference between a ~17 KB and a ~47 KB free-heap floor on the
-        // ESP32. On failure `current` is left empty and the caller moves on.
+        // The finished decoder is dropped (by `into_inner`) *before* the new
+        // one is built. A GifSource owns the LZW state plus its buffers;
+        // holding two at once is the difference between a ~17 KB and a
+        // ~47 KB free-heap floor on the ESP32.
         let Some(playing) = self.current.take() else {
             return false;
         };
@@ -395,11 +407,10 @@ impl Engine {
             loops,
             first_frame,
         } = playing;
-        drop(gif);
-        match self
-            .source
-            .open(&path)
-            .and_then(FrameSource::<Box<dyn Read>>::open)
+        let mut reader = gif.into_inner();
+        match reader
+            .seek(SeekFrom::Start(0))
+            .and_then(|_| Stream::open(reader))
         {
             Ok(gif) => {
                 self.current = Some(Playing {
@@ -416,7 +427,7 @@ impl Engine {
                 true
             }
             Err(e) => {
-                log::warn!("reopen failed for {path}: {e}");
+                log::warn!("rewind failed for {path}: {e}");
                 false
             }
         }
@@ -438,11 +449,7 @@ impl Engine {
                 }
             };
             let (path, title) = (entry.path, entry.title);
-            match self
-                .source
-                .open(&path)
-                .and_then(FrameSource::<Box<dyn Read>>::open)
-            {
+            match self.source.open(&path).and_then(Stream::open) {
                 Ok(gif) => {
                     self.started_count += 1;
                     self.current = Some(Playing {
@@ -501,7 +508,7 @@ mod tests {
     struct MemSource(HashMap<String, Vec<u8>>);
 
     impl Source for MemSource {
-        fn open(&self, path: &str) -> io::Result<Box<dyn Read>> {
+        fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
             match self.0.get(path) {
                 Some(bytes) => Ok(Box::new(Cursor::new(bytes.clone()))),
                 None => Err(io::Error::new(io::ErrorKind::NotFound, path.to_string())),
@@ -677,6 +684,82 @@ mod tests {
         match e.tick(t0 + Duration::from_secs(4), &mut canvas).unwrap() {
             TickOutcome::Frame { playing, .. } => assert_eq!(playing.title, "B"),
             other => panic!("expected B, got {other:?}"),
+        }
+    }
+
+    /// A two-frame GIF: a red pixel at (0,0), then a green one at (1,0).
+    fn two_frame_gif() -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut out, 128, 32, &[]).unwrap();
+            for (x, colour) in [(0u16, [255, 0, 0]), (1, [0, 255, 0])] {
+                let mut f = Frame {
+                    left: x,
+                    width: 1,
+                    height: 1,
+                    buffer: Cow::Owned(vec![1u8]),
+                    dispose: DisposalMethod::Keep,
+                    delay: 5,
+                    ..Default::default()
+                };
+                f.palette = Some([&[0, 0, 0][..], &colour[..]].concat());
+                enc.write_frame(&f).unwrap();
+            }
+        }
+        out
+    }
+
+    /// Counts opens, so a loop can be shown not to open the file again.
+    struct CountingSource(MemSource, std::rc::Rc<std::cell::Cell<u32>>);
+
+    impl Source for CountingSource {
+        fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
+            self.1.set(self.1.get() + 1);
+            self.0.open(path)
+        }
+    }
+
+    #[test]
+    fn looping_rewinds_instead_of_reopening() {
+        let mut odm = Vec::new();
+        crate::odm::encode_gif(&two_frame_gif()[..], &mut odm).unwrap();
+        for (path, bytes) in [
+            ("/gifs/Consoles/NES_A_01.gif", two_frame_gif()),
+            ("/gifs/Consoles/NES_A_01.odm", odm),
+        ] {
+            let opens = std::rc::Rc::new(std::cell::Cell::new(0));
+            let cat = catalog(path, &Filter::new());
+            let sched = Scheduler::new(cat.len(), Mode::Sequential, 0);
+            let src = CountingSource(
+                MemSource([(path.to_string(), bytes)].into_iter().collect()),
+                opens.clone(),
+            );
+            let dwell = DwellPolicy {
+                min: Duration::from_secs(10),
+                max: Duration::from_secs(30),
+                min_loops: 1,
+            };
+            let mut e = Engine::new(Box::new(cat), sched, dwell, Box::new(src));
+            let mut canvas = Canvas::new();
+            // Five loops of two frames: every loop starts from a cleared
+            // canvas (red only) and ends with red and green, and the frames
+            // of the first loop repeat exactly.
+            for i in 0..10u64 {
+                let t = Duration::from_millis(50 * i);
+                let TickOutcome::Frame { started, .. } = e.tick(t, &mut canvas).unwrap() else {
+                    panic!("{path}: expected a frame at {t:?}");
+                };
+                assert_eq!(started, i == 0);
+                assert_eq!(canvas.get(0, 0), Rgb::new(255, 0, 0), "{path} tick {i}");
+                let second = if i % 2 == 0 {
+                    Rgb::BLACK
+                } else {
+                    Rgb::new(0, 255, 0)
+                };
+                assert_eq!(canvas.get(1, 0), second, "{path} tick {i}");
+            }
+            assert_eq!(opens.get(), 1, "{path}: looping opened the file again");
+            assert_eq!(e.now_playing().unwrap().ordinal, 1);
         }
     }
 

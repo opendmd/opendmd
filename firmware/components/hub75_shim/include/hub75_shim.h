@@ -88,6 +88,30 @@ void hub75_clear(void);
  */
 void hub75_draw_rgb888(const uint8_t *rgb, uint16_t w, uint16_t h);
 
+/*
+ * One pixel into the back buffer through the library's drawPixelRGB888
+ * (~3.3 us each). Out-of-range coordinates are dropped.
+ */
+void hub75_set_pixel(uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b);
+
+/*
+ * Pixels x0..x1 (half-open) of row y into the back buffer. `rgb_row` points
+ * at the start of that row of a tight RGB888 image (pixel x is at
+ * rgb_row + 3 * x). Writes exactly the bits drawPixelRGB888 would, with the
+ * per-row work hoisted out of the pixel loop; clipped to the panel.
+ */
+void hub75_draw_span(const uint8_t *rgb_row, uint16_t y, uint16_t x0, uint16_t x1);
+
+/*
+ * Rows y and y + height/2 (y < height/2), all of both, from two full RGB888
+ * rows: the two rows share every DMA word, so this is one read-modify-write
+ * per word where two hub75_draw_span calls would be two.
+ */
+void hub75_draw_row_pair(const uint8_t *top_row, const uint8_t *bottom_row, uint16_t y);
+
+/* FNV-1a of the whole back buffer (every row, every colour plane): a self-test. */
+uint32_t hub75_fb_checksum(void);
+
 /* Swap the DMA buffers. No-op when double_buff was false. */
 void hub75_flip(void);
 

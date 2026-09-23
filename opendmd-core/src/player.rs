@@ -32,7 +32,7 @@
 //! pixel art and every scaling filter ruins it. With an odd difference the
 //! extra pixel goes to the right/bottom.
 
-use crate::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
+use crate::canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
 use gif::{ColorOutput, DecodeOptions, DisposalMethod};
 use std::io::{self, Read};
 use std::time::Duration;
@@ -55,8 +55,9 @@ pub(crate) fn invalid(msg: impl Into<Box<dyn std::error::Error + Send + Sync>>) 
     io::Error::new(io::ErrorKind::InvalidData, msg)
 }
 
-/// A GIF being played. Construct one per playback; there is no rewind (the
-/// reader is consumed), so looping means re-opening the file.
+/// A GIF being played. Construct one per playback; there is no rewind inside
+/// the decoder, so looping means building a new one — over the same reader,
+/// rewound, when it can seek ([`FrameSource::into_inner`]).
 pub struct GifSource<R: Read> {
     decoder: gif::Decoder<R>,
     width: usize,
@@ -208,24 +209,34 @@ impl<R: Read> GifSource<R> {
         // The screen borrow — of the canvas or of our own buffer — lives only
         // inside this block, so `blit` can take the canvas again afterwards.
         {
-            let buf: &mut [u8] = match screen {
+            // In `Direct` mode the canvas's dirty map comes along: what is
+            // painted here is marked here. `Owned` needs none, because `blit`
+            // rewrites (and marks) the whole canvas every frame.
+            let (buf, mut dirty): (&mut [u8], Option<&mut DirtyMap>) = match screen {
                 Screen::Direct { cleared } => {
                     if !*cleared {
                         // What the old full-canvas blit from a zeroed screen
-                        // did on the first frame.
+                        // did on the first frame. Marks everything.
                         canvas.clear();
                         *cleared = true;
                     }
-                    canvas.as_mut_bytes()
+                    let (b, d) = canvas.bytes_and_dirty_mut();
+                    (b, Some(d))
                 }
-                Screen::Owned(v) => v.as_mut_slice(),
+                Screen::Owned(v) => (v.as_mut_slice(), None),
             };
 
             // Whatever the last frame asked for, before drawing the next one.
             if let Some((method, prev)) = pending.take() {
                 match method {
-                    DisposalMethod::Background => clear_rect(buf, width, prev),
+                    DisposalMethod::Background => {
+                        mark_changes(buf, None, dirty.as_deref_mut(), prev, width, height);
+                        clear_rect(buf, width, prev);
+                    }
                     DisposalMethod::Previous if saved.len() == buf.len() => {
+                        // Only the last frame's rectangle was painted since
+                        // the snapshot, so only it can differ.
+                        mark_changes(buf, Some(saved), dirty.as_deref_mut(), prev, width, height);
                         buf.copy_from_slice(saved);
                     }
                     // Any / Keep: leave the canvas alone.
@@ -242,6 +253,7 @@ impl<R: Read> GifSource<R> {
 
             let mut comp = Compositor {
                 screen: buf,
+                dirty,
                 width,
                 height,
                 rect,
@@ -303,6 +315,8 @@ impl<R: Read> GifSource<R> {
 /// not change between the rows of a frame.
 struct Compositor<'a> {
     screen: &'a mut [u8],
+    /// The canvas's dirty map when the screen is the canvas (`Direct`).
+    dirty: Option<&'a mut DirtyMap>,
     width: usize,
     height: usize,
     rect: Rect,
@@ -315,23 +329,76 @@ impl Compositor<'_> {
     /// is the frame's full row (`rect.width` indices); pixels that fall
     /// outside the screen, carry the transparent index, or name a palette
     /// entry that does not exist are skipped, leaving the screen as it was.
+    ///
+    /// In `Direct` mode only pixels whose value actually changes are written
+    /// and marked dirty. Most GIFs on the card repaint the full 128x32
+    /// rectangle every frame, relying on transparency or on repeating the
+    /// same colours; marking the rectangle would make every frame a full
+    /// panel update, while the comparison is a few instructions a pixel.
     fn row(&mut self, src_y: usize, row: &[u8]) {
         let dy = self.rect.top + src_y;
         if dy >= self.height {
             return;
         }
+        // A run of changed pixels, `run..x`, marked when it ends.
+        let mut run: Option<usize> = None;
+        let mut end = self.rect.left;
         for (x, &idx) in row.iter().enumerate() {
             let dx = self.rect.left + x;
             if dx >= self.width {
                 break;
             }
-            if self.transparent == Some(idx) {
-                continue;
+            end = dx + 1;
+            let mut changed = false;
+            if self.transparent != Some(idx) {
+                let o = idx as usize * 3;
+                if let Some(rgb) = self.palette.get(o..o + 3) {
+                    let d = (dy * self.width + dx) * 3;
+                    let px = &mut self.screen[d..d + 3];
+                    if px != rgb {
+                        px.copy_from_slice(rgb);
+                        changed = true;
+                    }
+                }
             }
-            let o = idx as usize * 3;
-            if let Some(rgb) = self.palette.get(o..o + 3) {
-                let d = (dy * self.width + dx) * 3;
-                self.screen[d..d + 3].copy_from_slice(rgb);
+            match (changed, run) {
+                (true, None) => run = Some(dx),
+                (false, Some(start)) => {
+                    if let Some(dirty) = self.dirty.as_deref_mut() {
+                        dirty.mark_span(dy, start, dx);
+                    }
+                    run = None;
+                }
+                _ => {}
+            }
+        }
+        if let (Some(start), Some(dirty)) = (run, self.dirty.as_deref_mut()) {
+            dirty.mark_span(dy, start, end);
+        }
+    }
+}
+
+/// Before a disposal rewrites `rect` of a `Direct` screen (where screen and
+/// canvas coordinates coincide), mark the pixels it will change: those that
+/// differ from `to`, or from black when `to` is `None`.
+fn mark_changes(
+    screen: &[u8],
+    to: Option<&[u8]>,
+    dirty: Option<&mut DirtyMap>,
+    rect: Rect,
+    width: usize,
+    height: usize,
+) {
+    let Some(dirty) = dirty else { return };
+    let x1 = rect.left.saturating_add(rect.width).min(width);
+    let y1 = rect.top.saturating_add(rect.height).min(height);
+    for y in rect.top..y1 {
+        for x in rect.left..x1 {
+            let o = (y * width + x) * 3;
+            let now = &screen[o..o + 3];
+            let after = to.map_or(&[0u8; 3][..], |t| &t[o..o + 3]);
+            if now != after {
+                dirty.mark(x, y);
             }
         }
     }
@@ -351,7 +418,8 @@ fn clear_rect(screen: &mut [u8], screen_width: usize, rect: Rect) {
 }
 
 /// Centre-and-crop the logical screen onto the 128x32 canvas. Areas the GIF
-/// doesn't cover, and its transparent pixels, are black.
+/// doesn't cover, and its transparent pixels, are black. Every canvas pixel is
+/// written, so everything is marked dirty.
 pub(crate) fn blit(screen: &[u8], width: usize, height: usize, canvas: &mut Canvas) {
     let off_x = (WIDTH as i32 - width as i32) / 2;
     let off_y = (HEIGHT as i32 - height as i32) / 2;
@@ -476,6 +544,18 @@ impl<R: Read> FrameSource<R> {
             _ => Err(invalid(format!(
                 "not a GIF or an ODM file (starts with {magic:02x?})"
             ))),
+        }
+    }
+
+    /// Give the underlying reader back, dropping the decoder (and with it the
+    /// GIF path's LZW state and buffers) first. Whatever the decoders had
+    /// buffered is discarded, so the reader's position is somewhere past the
+    /// last byte decoded: seek it before reusing it. This is how the engine
+    /// loops a file without opening it again.
+    pub fn into_inner(self) -> R {
+        match self {
+            FrameSource::Gif(s) => s.decoder.into_inner().into_inner().into_inner().1,
+            FrameSource::Odm(s) => s.into_inner().into_inner().1,
         }
     }
 

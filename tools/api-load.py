@@ -9,11 +9,17 @@ benchmark: the number that matters is what `/api/status` says about the frame
 deadline afterwards, not the throughput.
 
     uv run tools/api-load.py <host> <seconds> [--workers 3] [--dir /gifs/Consoles]
+    uv run tools/api-load.py <host> <seconds> [--workers 3] --paths paths.txt
 
 Picks random GIFs out of `GET /api/files?dir=...` and fetches them concurrently
 alongside a steady poll of `/api/status`, then prints throughput, error counts,
 and the player's own metrics before and after — deadline misses, worst
 lateness, heap floor.
+
+`--paths FILE` swaps the GIF picking for a fixed list: a text file of
+card-absolute paths (one per line, blank lines and `#` comments ignored,
+e.g. `/odm/Consoles/3f/MD_Sonic_01.odm`) that the workers fetch directly
+instead.
 """
 import argparse
 import http.client
@@ -81,11 +87,11 @@ def print_snapshot(label, snap):
           f"refresh={snap['refresh_hz']} Hz  gifs={snap['gifs_started']}  "
           f"up={snap['uptime_secs']}s")
 
-def gif_worker(host, paths, deadline, stats, stop):
+def fetch_worker(host, paths, deadline, stats, stop, prefix="/gifs/"):
     while time.monotonic() < deadline and not stop.is_set():
         path = random.choice(paths)
         try:
-            status, body = get(host, "/gifs/" + quote(path))
+            status, body = get(host, prefix + quote(path))
             stats.record(len(body), status)
         except Exception as e:
             stats.fail(type(e).__name__)
@@ -99,26 +105,49 @@ def status_worker(host, deadline, stats, stop):
             stats.fail(type(e).__name__)
         time.sleep(0.25)
 
+def load_paths_file(path):
+    paths = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            paths.append(line)
+    return paths
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("host")
     ap.add_argument("seconds", type=float)
     ap.add_argument("--dir", default="/gifs/Consoles", help="card directory to pull GIFs from")
     ap.add_argument("--workers", type=int, default=3, help="concurrent GIF fetchers")
+    ap.add_argument("--paths", metavar="FILE",
+                     help="text file of card-absolute paths (one per line, "
+                          "blank lines and # comments ignored) to fetch "
+                          "instead of picking GIFs from --dir")
     args = ap.parse_args()
 
-    print(f"listing {args.dir} …", flush=True)
-    t0 = time.monotonic()
-    listing = get_json(args.host, "/api/files?dir=" + quote(args.dir))
-    names = [e["name"] for e in listing["entries"]
-             if not e["dir"] and e["name"].lower().endswith(".gif")]
-    print(f"  {len(names)} GIFs in {time.monotonic() - t0:.1f} s")
-    if not names:
-        sys.exit(f"no GIFs under {args.dir}")
-    # `/gifs/<dir tail>/<name>`: the route is rooted at the card's gifs/.
-    tail = args.dir.strip("/")
-    tail = tail[len("gifs/"):] if tail.startswith("gifs/") else tail
-    paths = [f"{tail}/{n}" if tail else n for n in names]
+    if args.paths:
+        print(f"loading paths from {args.paths} …", flush=True)
+        paths = load_paths_file(args.paths)
+        print(f"  {len(paths)} paths")
+        if not paths:
+            sys.exit(f"no paths in {args.paths}")
+        prefix = ""
+    else:
+        print(f"listing {args.dir} …", flush=True)
+        t0 = time.monotonic()
+        listing = get_json(args.host, "/api/files?dir=" + quote(args.dir))
+        names = [e["name"] for e in listing["entries"]
+                 if not e["dir"] and e["name"].lower().endswith(".gif")]
+        print(f"  {len(names)} GIFs in {time.monotonic() - t0:.1f} s")
+        if not names:
+            sys.exit(f"no GIFs under {args.dir}")
+        # `/gifs/<dir tail>/<name>`: the route is rooted at the card's gifs/.
+        tail = args.dir.strip("/")
+        tail = tail[len("gifs/"):] if tail.startswith("gifs/") else tail
+        paths = [f"{tail}/{n}" if tail else n for n in names]
+        prefix = "/gifs/"
 
     before = snapshot(args.host)
     print_snapshot("before", before)
@@ -126,7 +155,7 @@ def main():
     stats = Stats()
     stop = threading.Event()
     deadline = time.monotonic() + args.seconds
-    threads = [threading.Thread(target=gif_worker, args=(args.host, paths, deadline, stats, stop))
+    threads = [threading.Thread(target=fetch_worker, args=(args.host, paths, deadline, stats, stop, prefix))
                for _ in range(args.workers)]
     threads.append(threading.Thread(target=status_worker,
                                     args=(args.host, deadline, stats, stop)))

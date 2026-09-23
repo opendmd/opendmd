@@ -8,13 +8,15 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use opendmd_core::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
-use opendmd_core::engine::{Catalog, DwellPolicy, Engine, FileCatalog, Source, TickOutcome};
+use opendmd_core::engine::{
+    Catalog, DwellPolicy, Engine, FileCatalog, ReadSeek, Source, TickOutcome,
+};
 use opendmd_core::filter::Filter;
 use opendmd_core::manifest::Entry;
 use opendmd_core::scheduler::{Mode, Scheduler};
 use opendmd_render::{LedRenderer, MIN_LED_SCALE};
 use std::collections::BTreeMap;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -115,7 +117,7 @@ struct DirSource {
 }
 
 impl Source for DirSource {
-    fn open(&self, path: &str) -> io::Result<Box<dyn Read>> {
+    fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
         let rel = Path::new(path.trim_start_matches('/'));
         Ok(Box::new(std::fs::File::open(self.root.join(rel))?))
     }
