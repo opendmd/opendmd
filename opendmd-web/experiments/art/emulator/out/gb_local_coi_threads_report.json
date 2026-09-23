@@ -1,0 +1,142 @@
+{
+ "url": "http://127.0.0.1:8791/ejs.html?core=gambatte&data=local&threads=1",
+ "rom": "ucity.gbc",
+ "env": {
+  "secure": true,
+  "sab": true,
+  "coi": true
+ },
+ "ms_file_to_game_start": 1309.5249996185303,
+ "ms_file_to_first_frame": 1066.6849994659424,
+ "glType": "webgl",
+ "audio_ctx_state": "running",
+ "dims": {
+  "w": 160,
+  "h": 144,
+  "canvasW": 640,
+  "canvasH": 480
+ },
+ "upload_sigs": {
+  "texImage2D 256x256 fmt=0x1907 type=0x8363 Uint16Array": 4,
+  "texImage2D 256x512 fmt=0x190a type=0x1401 Uint8Array": 8,
+  "texImage2D 128x256 fmt=0x190a type=0x1401 Uint8Array": 8,
+  "texImage2D 1x1 fmt=0x1908 type=0x1401 Uint8Array": 2,
+  "texSubImage2D 256x256 fmt=0x1907 type=0x8363 Uint16Array": 2,
+  "texSubImage2D 160x144 fmt=0x1907 type=0x8363 Uint16Array": 2
+ },
+ "raw_captures": [
+  {
+   "method": "raw",
+   "w": 160,
+   "h": 144,
+   "rowLen": 160,
+   "typ": 33635,
+   "copyMs": 0.11499977111816406,
+   "ms": 11.680000305175781,
+   "frame": 60
+  },
+  {
+   "method": "raw",
+   "w": 160,
+   "h": 144,
+   "rowLen": 160,
+   "typ": 33635,
+   "copyMs": 0.06999969482421875,
+   "ms": 6.854999542236328,
+   "frame": 120
+  },
+  {
+   "method": "raw",
+   "w": 160,
+   "h": 144,
+   "rowLen": 160,
+   "typ": 33635,
+   "copyMs": 0.05500030517578125,
+   "ms": 17.69499969482422,
+   "frame": 180
+  }
+ ],
+ "raw_ms_avg": 12.076666514078775,
+ "raw_copy_ms_avg": 0.07999992370605469,
+ "canvas_capture": {
+  "method": "canvas",
+  "w": 640,
+  "h": 480,
+  "ms": 204.5950002670288,
+  "nonblack": 0
+ },
+ "retroarch_capture": {
+  "method": "retroarch",
+  "w": 160,
+  "h": 144,
+  "pngMs": 85.05999946594238,
+  "ms": 122.09999942779541
+ },
+ "canvas_ms_x5": [
+  36.94999980926514,
+  55.7450008392334,
+  39.97000026702881,
+  41.480000495910645,
+  25.234999656677246
+ ],
+ "retroarch_ms_x3": [
+  80.625,
+  64.86000061035156,
+  85.90999984741211
+ ],
+ "bytes_total": 1773078,
+ "bytes_by_host": {
+  "127.0.0.1:8791": 1772418,
+  "cdn.emulatorjs.org": 660
+ },
+ "requests": [
+  [
+   "/ejs/cores/gambatte-thread-legacy-wasm.data",
+   1025361
+  ],
+  [
+   "/ejs/emulator.min.js",
+   426343
+  ],
+  [
+   "/ejs/compression/extract7z.js",
+   280155
+  ],
+  [
+   "/ejs/emulator.min.css",
+   25630
+  ],
+  [
+   "/ejs/loader.js",
+   7594
+  ],
+  [
+   "/ejs.html?core=gambatte&data=local&threads=1",
+   7445
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/version.json",
+   660
+  ],
+  [
+   "/ejs/localization/en-GB.json",
+   335
+  ],
+  [
+   "/ejs/cores/reports/gambatte.json",
+   122
+  ],
+  [
+   "blob:/76196938-7b7b-4c62-97ba-856a9892c031",
+   -76
+  ],
+  [
+   "blob:/d2dfaa9e-6f0d-45ee-831c-5e3a2f26b7ca",
+   -81
+  ],
+  [
+   "blob:/3c9f88dd-1096-42fd-87b4-b1b4e8895d30",
+   -82
+  ]
+ ]
+}

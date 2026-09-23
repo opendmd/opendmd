@@ -1,0 +1,45 @@
+OpenDMD art-sourcing CORS probe
+================================
+
+What this is
+-------------
+cors_probe.py is a self-contained script (PEP 723 inline deps) that checks,
+for a list of real candidate art-source URLs, whether a browser page running
+on its own http origin (like the ESP32 device does: http://<lan-ip>/) can
+actually read the pixels of images from that host, and whether its JSON API
+endpoints send Access-Control-Allow-Origin (ACAO).
+
+It starts a tiny local HTTP server on 127.0.0.1:<random port>, opens it in
+headless Chromium via Playwright, and from inside that page:
+  1. fetch(url, {mode:'cors'})                      -> ok/status or TypeError
+  2. <img crossOrigin="anonymous"> -> canvas -> getImageData()  -> readable?
+  3. plain <img> (no crossOrigin)  -> canvas -> getImageData()  -> confirms
+     tainted-canvas SecurityError when CORS is absent
+It also listens on page.on("response") to capture the real network-level
+Access-Control-Allow-Origin header per request (each test uses a unique
+cache-busting query param so its response can be matched exactly).
+
+How to run
+----------
+    cd ~/projects/opendmd/opendmd-web/experiments/art/cors
+    uv run cors_probe.py
+
+Requires nothing pre-installed beyond `uv` and the already-installed
+Playwright Chromium browser (~/.cache/ms-playwright) — the script's PEP 723
+header pulls in the `playwright` Python package on first run.
+
+Output: cors_results.json (full raw results incl. per-test network headers)
+and a markdown table printed to stdout.
+
+Known quirk found while building this
+--------------------------------------
+For a handful of hosts (OpenGameArt, TheGamesDB, thumbnails.libretro.com,
+itch.io/img.itch.zone, Spriters Resource CDN, cdn.lospec.com, SteamGridDB),
+page.on("response") never fires for the cross-origin fetch() call even
+though curl gets a normal 200 with no ACAO header from the same URL. This
+looks like a Chromium/CDP quirk where a simple-GET CORS failure surfaces as
+a request-failed event rather than a response-received event, not an actual
+server-side block (curl with browser-like headers, Origin, Sec-Fetch-*, gets
+the same 200/no-ACAO). It does not affect the <img>+canvas test, which is
+the test that actually matters for OpenDMD (can we get pixels into a
+canvas), and which reliably reports "tainted" for all of these hosts.

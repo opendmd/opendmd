@@ -1,0 +1,127 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>EmulatorJS frame grab</title>
+<style>body{background:#111;color:#ddd;font:14px sans-serif;margin:16px}#game{width:640px;height:480px;max-width:100%}</style>
+</head><body>
+<p>OpenDMD native-art experiment. Pick a ROM you own. It stays in this browser (File object, never uploaded).</p>
+<label>Core <select id="core">
+  <option>gambatte</option><option>mgba</option><option>genesis_plus_gx</option></select></label>
+<input type="file" id="rom">
+<pre id="log"></pre>
+<div id="game"></div>
+<script>
+// Query options: ?core=gambatte&data=local|cdn&pdb=1&hidden=1&threads=1
+const Q = new URLSearchParams(location.search);
+const G = window.grab = { t0: 0, tStart: 0, tFirstUpload: 0, uploads: 0, lastUpload: null,
+  uploadSig: {}, want: null, secure: window.isSecureContext, sab: typeof SharedArrayBuffer === 'function',
+  coi: window.crossOriginIsolated };
+if (Q.get('core')) document.getElementById('core').value = Q.get('core');
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
+
+// 0) Track AudioContexts to see what the autoplay policy does to them.
+G.audioCtxs = [];
+for (const name of ['AudioContext', 'webkitAudioContext']) { const AC = window[name]; if (!AC) continue;
+  window[name] = class extends AC { constructor(...a) { super(...a); G.audioCtxs.push(this);
+    // ?suspendaudio=1 simulates a browser autoplay block: context stays suspended, resume() never settles.
+    if (Q.get('suspendaudio') === '1') { this.suspend(); this.resume = () => new Promise(() => {}); } } }; }
+// 1) Optionally force preserveDrawingBuffer so drawImage(canvas) works any time.
+const origGetContext = HTMLCanvasElement.prototype.getContext;
+HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+  if (Q.get('pdb') === '1' && /webgl/.test(type)) attrs = Object.assign({}, attrs, { preserveDrawingBuffer: true });
+  const ctx = origGetContext.call(this, type, attrs);
+  if (ctx && /webgl/.test(type) && !ctx.__hooked) { hookGL(ctx); ctx.__hooked = true; G.glType = type; }
+  return ctx;
+};
+
+// 2) Raw framebuffer tap: software cores hand RetroArch a framebuffer, which the GL
+//    driver uploads with tex(Sub)Image2D. Copy the next upload on request.
+function hookGL(gl) {
+  for (const fn of ['texSubImage2D', 'texImage2D']) {
+    const orig = gl[fn];
+    gl[fn] = function (...a) {
+      // texSubImage2D(target, level, x, y, w, h, format, type, pixels[, srcOffset])
+      // texImage2D(target, level, ifmt, w, h, border, format, type, pixels[, srcOffset])
+      if (a.length >= 9 && a[8] && ArrayBuffer.isView(a[8])) {
+        const sub = fn === 'texSubImage2D';
+        const w = sub ? a[4] : a[3], h = sub ? a[5] : a[4], fmt = a[6], typ = a[7], px = a[8];
+        const off = a[9] || 0;
+        const key = `${fn} ${w}x${h} fmt=0x${fmt.toString(16)} type=0x${typ.toString(16)} ${px.constructor.name}`;
+        G.uploadSig[key] = (G.uploadSig[key] || 0) + 1;
+        G.uploads++;
+        if (!G.tFirstUpload && w > 16 && h > 16) G.tFirstUpload = performance.now();
+        if (G.want && w > 16 && h > 16) {
+          const rowLen = (gl instanceof WebGL2RenderingContext && gl.getParameter(gl.UNPACK_ROW_LENGTH)) || w;
+          const t = performance.now();
+          const bpp = (typ === 0x1401) ? 4 : 2; // UNSIGNED_BYTE RGBA vs 16-bit
+          const el = px.BYTES_PER_ELEMENT;
+          const bytes = new Uint8Array(px.buffer, px.byteOffset + off * el, rowLen * h * bpp);
+          G.want({ w, h, fmt, typ, rowLen, bpp, bytes: bytes.slice(), copyMs: performance.now() - t });
+          G.want = null;
+        }
+      }
+      return orig.apply(this, a);
+    };
+  }
+}
+
+function rawToImageData(r) {
+  const out = new ImageData(r.w, r.h), d = out.data;
+  const dv = new DataView(r.bytes.buffer);
+  for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+    const o = (y * r.w + x) * 4;
+    if (r.bpp === 4) { const i = (y * r.rowLen + x) * 4; d[o] = r.bytes[i]; d[o+1] = r.bytes[i+1]; d[o+2] = r.bytes[i+2]; d[o+3] = 255; }
+    else {
+      const v = dv.getUint16((y * r.rowLen + x) * 2, true);
+      if (r.typ === 0x8363) { // UNSIGNED_SHORT_5_6_5
+        d[o] = ((v >> 11) & 31) * 255 / 31 | 0; d[o+1] = ((v >> 5) & 63) * 255 / 63 | 0; d[o+2] = (v & 31) * 255 / 31 | 0;
+      } else { // assume 5_5_5_1 / 4_4_4_4 not expected; record raw
+        d[o] = ((v >> 11) & 31) * 8; d[o+1] = ((v >> 6) & 31) * 8; d[o+2] = ((v >> 1) & 31) * 8;
+      }
+      d[o+3] = 255;
+    }
+  }
+  return out;
+}
+function idToPNG(id) { const c = document.createElement('canvas'); c.width = id.width; c.height = id.height;
+  c.getContext('2d').putImageData(id, 0, 0); return c.toDataURL('image/png'); }
+
+// Capture methods, each returns {w,h,ms,png,...}
+G.captureRaw = () => new Promise(res => { const t = performance.now();
+  G.want = (r) => { const id = rawToImageData(r); const ms = performance.now() - t;
+    res({ method: 'raw', w: id.width, h: id.height, rowLen: r.rowLen, typ: r.typ, copyMs: r.copyMs, ms, png: idToPNG(id) }); }; });
+G.captureCanvas = () => { const t = performance.now(); const src = EJS_emulator.canvas;
+  const c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
+  const ctx = c.getContext('2d'); ctx.drawImage(src, 0, 0); const id = ctx.getImageData(0, 0, c.width, c.height);
+  const ms = performance.now() - t; let nonblack = 0; for (let i = 0; i < id.data.length; i += 4) if (id.data[i] | id.data[i+1] | id.data[i+2]) nonblack++;
+  return { method: 'canvas', w: c.width, h: c.height, ms, nonblack, png: c.toDataURL('image/png') }; };
+G.captureRetroarch = async () => { const t = performance.now(); const png = await EJS_emulator.gameManager.screenshot();
+  const ms1 = performance.now() - t; const bmp = await createImageBitmap(new Blob([png], { type: 'image/png' }));
+  const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height; const ctx = c.getContext('2d');
+  ctx.drawImage(bmp, 0, 0); ctx.getImageData(0, 0, c.width, c.height);
+  return { method: 'retroarch', w: bmp.width, h: bmp.height, pngMs: ms1, ms: performance.now() - t, png: c.toDataURL('image/png') }; };
+G.frame = () => EJS_emulator.gameManager.getFrameNum();
+G.dims = () => ({ w: EJS_emulator.gameManager.getVideoDimensions('width'), h: EJS_emulator.gameManager.getVideoDimensions('height'),
+  canvasW: EJS_emulator.canvas.width, canvasH: EJS_emulator.canvas.height });
+G.audioState = () => G.audioCtxs.map(c => c.state).join(',') || 'none created';
+
+document.getElementById('rom').addEventListener('change', (ev) => {
+  const file = ev.target.files[0]; if (!file) return;
+  G.t0 = performance.now();
+  if (Q.get('hidden') === '1') document.getElementById('game').style.cssText = 'position:absolute;left:-10000px;width:640px;height:480px';
+  window.EJS_player = '#game';
+  window.EJS_core = document.getElementById('core').value;
+  window.EJS_gameUrl = file;               // File object straight from the picker
+  window.EJS_gameName = file.name.replace(/\.[^.]+$/, '');
+  window.EJS_pathtodata = Q.get('data') === 'cdn' ? 'https://cdn.emulatorjs.org/stable/data/' : '/ejs/';
+  window.EJS_startOnLoaded = true;
+  window.EJS_volume = 0;
+  window.EJS_threads = Q.get('threads') === '1';
+  window.EJS_disableDatabases = true;      // don't cache ROM/core in IndexedDB (clean measurements)
+  window.EJS_onGameStart = () => { G.tStart = performance.now(); log('game start ' + (G.tStart - G.t0).toFixed(0) + ' ms'); };
+  // ?racfg=audio_sync%20%3D%20false : append lines to the retroarch.cfg EmulatorJS writes at start.
+  if (Q.get('racfg')) { const iv = setInterval(() => { if (!window.EJS_GameManager) return; clearInterval(iv);
+    const orig = EJS_GameManager.prototype.getRetroArchCfg;
+    EJS_GameManager.prototype.getRetroArchCfg = function () { return orig.call(this) + Q.get('racfg').replace(/;/g, '\n') + '\n'; }; }, 5); }
+  const s = document.createElement('script'); s.src = EJS_pathtodata + 'loader.js'; document.body.appendChild(s);
+});
+log(`secureContext=${G.secure} SAB=${G.sab} crossOriginIsolated=${G.coi}`);
+</script></body></html>

@@ -1,0 +1,150 @@
+{
+ "url": "http://127.0.0.1:8791/ejs.html?core=mgba&data=local&pdb=1",
+ "rom": "ucity_compat.gbc",
+ "env": {
+  "secure": true,
+  "sab": false,
+  "coi": false
+ },
+ "ms_file_to_game_start": 2350.6000003814697,
+ "ms_file_to_first_frame": 2029.3000001907349,
+ "glType": "webgl",
+ "audio_ctx_state": "running,running",
+ "dims": {
+  "w": 160,
+  "h": 144,
+  "canvasW": 640,
+  "canvasH": 480
+ },
+ "upload_sigs": {
+  "texImage2D 256x256 fmt=0x1907 type=0x8363 Uint16Array": 4,
+  "texImage2D 256x512 fmt=0x190a type=0x1401 Uint8Array": 11,
+  "texImage2D 128x256 fmt=0x190a type=0x1401 Uint8Array": 8,
+  "texImage2D 1x1 fmt=0x1908 type=0x1401 Uint8Array": 2,
+  "texSubImage2D 256x256 fmt=0x1907 type=0x8363 Uint16Array": 3,
+  "texSubImage2D 160x144 fmt=0x1907 type=0x8363 Uint16Array": 3
+ },
+ "raw_captures": [
+  {
+   "method": "raw",
+   "w": 160,
+   "h": 144,
+   "rowLen": 160,
+   "typ": 33635,
+   "copyMs": 0.09999942779541016,
+   "ms": 17.899999618530273,
+   "frame": 60
+  },
+  {
+   "method": "raw",
+   "w": 160,
+   "h": 144,
+   "rowLen": 160,
+   "typ": 33635,
+   "copyMs": 0,
+   "ms": 26.199999809265137,
+   "frame": 120
+  },
+  {
+   "method": "raw",
+   "w": 160,
+   "h": 144,
+   "rowLen": 160,
+   "typ": 33635,
+   "copyMs": 0.09999942779541016,
+   "ms": 8.899999618530273,
+   "frame": 180
+  }
+ ],
+ "raw_ms_avg": 17.666666348775227,
+ "raw_copy_ms_avg": 0.06666628519694011,
+ "canvas_capture": {
+  "method": "canvas",
+  "w": 640,
+  "h": 480,
+  "ms": 167.19999980926514,
+  "nonblack": 224597
+ },
+ "retroarch_capture": {
+  "method": "retroarch",
+  "w": 160,
+  "h": 144,
+  "pngMs": 77.69999980926514,
+  "ms": 115.30000019073486
+ },
+ "canvas_ms_x5": [
+  38.89999961853027,
+  30,
+  36.60000038146973,
+  26.399999618530273,
+  28.09999942779541
+ ],
+ "retroarch_ms_x3": [
+  128.69999980926514,
+  89.09999942779541,
+  146.80000019073486
+ ],
+ "fps_normal": 55.41833193071752,
+ "fps_fastforward_unlimited": 1722.9850819321475,
+ "frames_advanced_while_paused": 0,
+ "state_bytes": 202840,
+ "state_save_ms": 3.3922195434570312,
+ "state_load_ms": 2.2156238555908203,
+ "state_restore_png_equal": false,
+ "audio_ctx_state_end": "running,running",
+ "bytes_total": 1803035,
+ "bytes_by_host": {
+  "127.0.0.1:8791": 1802374,
+  "cdn.emulatorjs.org": 661
+ },
+ "requests": [
+  [
+   "/ejs/cores/mgba-legacy-wasm.data",
+   1054993
+  ],
+  [
+   "/ejs/emulator.min.js",
+   426343
+  ],
+  [
+   "/ejs/compression/extract7z.js",
+   280155
+  ],
+  [
+   "/ejs/emulator.min.css",
+   25630
+  ],
+  [
+   "/ejs/loader.js",
+   7594
+  ],
+  [
+   "/ejs.html?core=mgba&data=local&pdb=1",
+   7445
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/version.json",
+   661
+  ],
+  [
+   "/ejs/localization/en-GB.json",
+   335
+  ],
+  [
+   "/ejs/cores/reports/mgba.json",
+   118
+  ],
+  [
+   "blob:/e36cf343-b6d6-432e-a132-4290dbf406fa",
+   -76
+  ],
+  [
+   "blob:/d36c9dc1-bb15-4083-9fea-cb9df8aef6b7",
+   -81
+  ],
+  [
+   "blob:/8597c5a3-b1d4-4450-869d-0d3b83f3c164",
+   -82
+  ]
+ ]
+}

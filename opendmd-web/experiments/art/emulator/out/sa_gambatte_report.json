@@ -1,0 +1,151 @@
+{
+ "url": "http://127.0.0.1:8791/ejs.html?core=gambatte&data=local&suspendaudio=1&racfg=audio_sync%20%3D%20false",
+ "rom": "ucity.gbc",
+ "env": {
+  "secure": true,
+  "sab": false,
+  "coi": false
+ },
+ "ms_file_to_game_start": 901.3999996185303,
+ "ms_file_to_first_frame": 771.5,
+ "glType": "webgl",
+ "audio_ctx_state": "suspended",
+ "dims": {
+  "w": 160,
+  "h": 144,
+  "canvasW": 640,
+  "canvasH": 480
+ },
+ "upload_sigs": {
+  "texImage2D 256x256 fmt=0x1907 type=0x8363 Uint16Array": 4,
+  "texImage2D 256x512 fmt=0x190a type=0x1401 Uint8Array": 8,
+  "texImage2D 128x256 fmt=0x190a type=0x1401 Uint8Array": 8,
+  "texImage2D 1x1 fmt=0x1908 type=0x1401 Uint8Array": 2,
+  "texSubImage2D 256x256 fmt=0x1907 type=0x8363 Uint16Array": 3,
+  "texSubImage2D 160x144 fmt=0x1907 type=0x8363 Uint16Array": 3
+ },
+ "raw_captures": [
+  {
+   "method": "raw",
+   "w": 160,
+   "h": 144,
+   "rowLen": 160,
+   "typ": 33635,
+   "copyMs": 0.09999942779541016,
+   "ms": 13.300000190734863,
+   "frame": 60
+  },
+  {
+   "method": "raw",
+   "w": 160,
+   "h": 144,
+   "rowLen": 160,
+   "typ": 33635,
+   "copyMs": 0.09999942779541016,
+   "ms": 12.399999618530273,
+   "frame": 120
+  },
+  {
+   "method": "raw",
+   "w": 160,
+   "h": 144,
+   "rowLen": 160,
+   "typ": 33635,
+   "copyMs": 0,
+   "ms": 12.90000057220459,
+   "frame": 180
+  }
+ ],
+ "raw_ms_avg": 12.866666793823242,
+ "raw_copy_ms_avg": 0.06666628519694011,
+ "canvas_capture": {
+  "method": "canvas",
+  "w": 640,
+  "h": 480,
+  "ms": 77.10000038146973,
+  "nonblack": 0
+ },
+ "retroarch_capture": {
+  "method": "retroarch",
+  "w": 160,
+  "h": 144,
+  "pngMs": 56.10000038146973,
+  "ms": 58.90000057220459
+ },
+ "canvas_ms_x5": [
+  5.199999809265137,
+  4.09999942779541,
+  5.200000762939453,
+  5.699999809265137,
+  5.399999618530273
+ ],
+ "retroarch_ms_x3": [
+  58.90000057220459,
+  56.59999942779541,
+  59.69999980926514
+ ],
+ "fps_normal": 60.4267267388835,
+ "fps_fastforward_unlimited": 3027.526327913818,
+ "frames_advanced_while_paused": 0,
+ "state_bytes": 182512,
+ "state_save_ms": 3.486156463623047,
+ "state_load_ms": 2.6993751525878906,
+ "state_restore_png_equal": false,
+ "state_two_loads_equal": true,
+ "audio_ctx_state_end": "suspended",
+ "bytes_total": 1715695,
+ "bytes_by_host": {
+  "127.0.0.1:8791": 1715031,
+  "cdn.emulatorjs.org": 664
+ },
+ "requests": [
+  [
+   "/ejs/cores/gambatte-legacy-wasm.data",
+   967022
+  ],
+  [
+   "/ejs/emulator.min.js",
+   426343
+  ],
+  [
+   "/ejs/compression/extract7z.js",
+   280155
+  ],
+  [
+   "/ejs/emulator.min.css",
+   25630
+  ],
+  [
+   "/ejs.html?core=gambatte&data=local&suspendaudio=1&racfg=audio_sync%20%3D%20false",
+   8069
+  ],
+  [
+   "/ejs/loader.js",
+   7594
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/version.json",
+   664
+  ],
+  [
+   "/ejs/localization/en-GB.json",
+   335
+  ],
+  [
+   "/ejs/cores/reports/gambatte.json",
+   122
+  ],
+  [
+   "blob:/1eabe2d0-ab64-4511-9808-f89112e98af0",
+   -76
+  ],
+  [
+   "blob:/3ee5bf80-1768-4822-9d39-a17e87c2e67b",
+   -81
+  ],
+  [
+   "blob:/6327fca6-cf49-4369-ab00-725f5e229d13",
+   -82
+  ]
+ ]
+}
