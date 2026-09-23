@@ -298,3 +298,62 @@ pub const CACHE_KEYS_PER_PASS: usize = 3072;
 /// browser uploading prepared copies one after another causes one count at the
 /// end, not one per file.
 pub const CACHE_DEBOUNCE: Duration = Duration::from_secs(3);
+
+// ---------------------------------------------------------------------------
+// The cache builder (`cache_builder.rs`): the device preparing its own copies
+// ---------------------------------------------------------------------------
+/// The builder task's stack: `encode_gif_streaming` through the `gif`
+/// decoder and FATFS. Measured high-water in the heartbeat (`stack … B
+/// unused`): 5.9 KB used at most (night and drip runs), so 1.1 KB spare. Taken
+/// when the task starts (only while there is work it may do) and given back
+/// when it exits; every KB of it is a KB the drip pace needs free on top.
+pub const BUILDER_STACK: usize = 7 * 1024;
+/// Below the stream task (2): the builder runs only when nothing that
+/// answers a client wants CPU0.
+pub const BUILDER_PRIORITY: u8 = 1;
+/// A file is only started with this much heap free, the task already
+/// running; what the encoder leaves is the network's. The task itself is
+/// only started with its stack + 1 KB more than this free (74 KB). With a
+/// prepared file playing the rig has 76-80 KB free, so the drip runs; with a
+/// GIF, ~40-50 KB, so it does not. The encoder is ~57 KB by the host's
+/// count (63 KB at most over the card); on the rig, starting at 68 KB, the
+/// sampled floor over 10 minutes of dripping stayed at 16.4 KB, i.e. it
+/// took at most ~52 KB. [`BUILDER_ABORT_HEAP`] catches the big ones.
+pub const BUILDER_MIN_HEAP: u32 = 66 * 1024;
+/// Mid-file, the encode is abandoned (and its heap freed) if free heap falls
+/// under this.
+pub const BUILDER_ABORT_HEAP: u32 = 8 * 1024;
+/// Drip pace: the sleep before every 2 KB of card I/O and every `stat` while
+/// a file plays (frames are CPU0 work and are not paced: the card is what the
+/// builder shares with the player).
+pub const BUILDER_DRIP_PAUSE: Duration = Duration::from_millis(5);
+/// After a transfer ends the builder waits this long before starting again
+/// (a browser fetching several files would otherwise have it start and
+/// abandon a file between each).
+pub const BUILDER_SETTLE: Duration = Duration::from_secs(2);
+/// A file abandoned this many times in a row at the drip pace (it does not
+/// fit in one file's turn on screen) is skipped while dripping and left for
+/// the next full-speed pass.
+pub const BUILDER_DRIP_TRIES: u32 = 2;
+/// While the player waits for the builder to let go of its heap, the task
+/// runs at this priority (httpd's and the network worker's).
+pub const BUILDER_RELEASE_PRIORITY: u8 = 5;
+/// How long the player's open waits, once the heap is back, for the task to
+/// be gone too (its stack is what a GIF's transition would need).
+pub const BUILDER_EXIT_WAIT: Duration = Duration::from_millis(20);
+/// How long the player's open waits for the builder to free its heap.
+pub const BUILDER_RELEASE_WAIT: Duration = Duration::from_millis(1000);
+/// At most one start attempt this often. The task exits whenever it may not
+/// work (giving its stack and TCB, ~8.9 KB of heap, back to the player) and
+/// is started again by the main loop when it may.
+pub const BUILDER_RESPAWN: Duration = Duration::from_secs(1);
+/// After a card error (not the GIF's fault), wait this long before retrying.
+pub const BUILDER_CARD_BACKOFF: Duration = Duration::from_secs(30);
+/// The largest logical screen the builder will take on (the card's biggest
+/// is 135x32; the encoder's buffers scale with it).
+pub const BUILDER_MAX_PIXELS: usize = 2 * 128 * 32;
+/// GIFs the builder could not prepare, one `path<TAB>reason` a line; skipped
+/// by every later pass. Delete it to retry them.
+pub const BUILDER_FAILED_PATH: &str = "/sdcard/odm/.failed";
+/// At most this many failures are remembered (4 B each while a pass runs).
+pub const BUILDER_MAX_FAILED: usize = 1024;

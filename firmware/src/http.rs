@@ -91,6 +91,7 @@ struct ConfigPatch {
     tz_name: Option<String>,
     transition: Option<String>,
     transition_ms: Option<u32>,
+    auto_prepare: Option<String>,
 }
 
 /// Wire format for `POST /api/wake`.
@@ -249,6 +250,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 ));
             }
             next.transition.duration = Duration::from_millis(u64::from(ms));
+        }
+        if let Some(v) = patch.auto_prepare {
+            let Some(mode) = crate::nvs_config::AutoPrepare::parse(&v) else {
+                return req.bad_request("auto_prepare must be idle, always or off");
+            };
+            next.auto_prepare = mode;
         }
         if next.dwell_max < next.dwell_min {
             return req.bad_request("dwell_max must be >= dwell_min");
@@ -487,11 +494,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let snap = crate::cache::snapshot();
         let total = c.status.lock().unwrap().entries;
         req.json(&format!(
-            r#"{{"total":{total},"prepared":{},"state":{},"count_ms":{}}}"#,
+            r#"{{"total":{total},"prepared":{},"state":{},"count_ms":{},"auto":{}}}"#,
             snap.prepared
                 .map_or_else(|| "null".to_string(), |n| n.to_string()),
             json_string(if snap.counting { "counting" } else { "ready" }),
-            snap.count_ms
+            snap.count_ms,
+            crate::cache_builder::auto_json(total, snap.prepared)
         ))
     })?;
 
@@ -501,6 +509,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if !files::affordable(req)? {
             return Ok(());
         }
+        let _busy = crate::cache_builder::busy();
         crate::cache::stream_list(req)
     })?;
 
@@ -542,6 +551,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // Sizes cost a `stat` each, which FAT makes quadratic — see
         // `files::stream_dir_json`. Opt in with `?sizes=1`.
         let sizes = query_param(req.query(), "sizes").is_some_and(|v| v == "1" || v == "true");
+        let _busy = crate::cache_builder::busy();
         files::stream_dir_json(req, &dir, &fs_dir, sizes)
     })?;
 
@@ -557,7 +567,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
     })?;
 
-    server.route("/api/ota", Method::Post, ota::handle_upload)?;
+    server.route("/api/ota", Method::Post, |req| {
+        let _busy = crate::cache_builder::busy();
+        ota::handle_upload(req)
+    })?;
 
     server.route("/api/reboot", Method::Post, |req| {
         info!("reboot requested over HTTP");
@@ -592,6 +605,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // --- Arbitrary file upload and delete ----------------------------------
     let c = ctx.clone();
     server.route("/api/files/*", Method::Put, move |req| {
+        // Every upload shares the card (and the heap) with the player: the
+        // cache builder stops for it.
+        let _busy = crate::cache_builder::busy();
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
         let Some(dest) = files::card_path(config::SD_MOUNT, &rel) else {
             return req.bad_request("path escapes the card");
@@ -839,6 +855,7 @@ fn json_body(req: &mut Req) -> Result<Option<Vec<u8>>> {
 /// Stream a manifest upload to a temp file, then hand the swap to the main
 /// task, which drops the engine before the file underneath it changes.
 fn install_manifest(req: &mut Req, ctx: &Ctx, dest: String) -> Result<()> {
+    let _busy = crate::cache_builder::busy();
     let temp = format!("{dest}.part");
     files::stream_body_to(req, &temp)?;
 
@@ -1000,7 +1017,7 @@ fn status_json(s: &Status) -> String {
             r#""sd":{{"mounted":{},"capacity_bytes":{}}},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
-            r#""schedule":{{"rule":{},"set":{},"until":{}}}}}"#
+            r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{}}}"#
         ),
         json_string(s.version),
         json_string(ota::FLASH_VARIANT),
@@ -1041,6 +1058,7 @@ fn status_json(s: &Status) -> String {
         s.rule.map_or_else(|| "null".to_string(), |r| r.to_string()),
         opt_json(s.rule_set.as_deref()),
         opt_json(s.rule_until.as_deref()),
+        crate::cache_builder::status_json(s.entries, crate::cache::peek()),
     )
 }
 
@@ -1056,7 +1074,7 @@ fn settings_json(s: &Settings) -> String {
         concat!(
             r#"{{"wifi_ssid":{},"wifi_pass_set":{},"brightness":{},"#,
             r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
-            r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{}}}"#
+            r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -1071,6 +1089,7 @@ fn settings_json(s: &Settings) -> String {
         json_string(&s.tz_name),
         s.transition.kind.name(),
         s.transition.duration.as_millis(),
+        s.auto_prepare.as_str(),
     )
 }
 

@@ -536,6 +536,18 @@ impl Engine {
         self.skip_requested = false;
     }
 
+    /// Drop the file on screen now — its decoder, buffers and handle — and
+    /// leave the scheduler where it is: the next [`tick`](Self::tick) opens
+    /// the next entry (after a pause, once resumed). For a caller that wants
+    /// the heap back while nothing is shown (the firmware's night mode, which
+    /// lends it to the cache builder). A running transition is ended first,
+    /// so `canvas` holds what the panel was last sent.
+    pub fn drop_current(&mut self, canvas: &mut Canvas) {
+        self.compositor.finish(canvas);
+        self.current = None;
+        self.skip_requested = false;
+    }
+
     pub fn now_playing(&self) -> Option<NowPlaying> {
         self.current.as_ref().map(Playing::now_playing)
     }
@@ -1682,6 +1694,32 @@ mod tests {
         e.resume(t0 + Duration::from_secs(60));
         assert!(!e.is_paused());
         assert_eq!(e.now_playing().unwrap().title, "B");
+    }
+
+    #[test]
+    fn drop_current_frees_the_file_and_the_next_tick_opens_the_next() {
+        let mut e = engine_with(
+            &[
+                ("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0)),
+                ("/gifs/Consoles/NES_B_01.gif", one_pixel_gif(0, 255, 0)),
+            ],
+            "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
+            DwellPolicy::default(),
+        );
+        let t0 = Duration::ZERO;
+        let mut canvas = Canvas::new();
+        e.tick(t0, &mut canvas).unwrap();
+        assert_eq!(e.now_playing().unwrap().title, "A");
+        // Night mode: paused, then the file let go of.
+        e.pause(t0);
+        e.drop_current(&mut canvas);
+        assert!(e.now_playing().is_none());
+        assert!(e.is_paused());
+        assert_eq!(e.tick(t0, &mut canvas).unwrap(), TickOutcome::Idle);
+        e.resume(t0 + Duration::from_secs(60));
+        e.tick(t0 + Duration::from_secs(60), &mut canvas).unwrap();
+        let now = e.now_playing().unwrap();
+        assert_eq!((now.title.as_str(), now.ordinal), ("B", 2));
     }
 
     /// A full-screen one-frame GIF of one colour, so a transition changes

@@ -182,7 +182,7 @@ export function scheduleCard() {
     h('div.row', h('label', nightOn, 'every night from'), nFrom, h('span', 'to'), nTo, nMode, levelRow),
     h('div.row', { style: 'margin-top:10px' }, h('button.pri', { id: 'sc-night-save', onclick: saveNight }, 'Save night mode')));
   load();
-  return { el, load };
+  return { el, load, night: () => sched.night };
 }
 
 // --- Now: what the schedule is doing ---------------------------------------

@@ -185,7 +185,11 @@ fn run(queue: &'static Queue) {
                 jobs = queue.ready.wait(jobs).unwrap_or_else(|p| p.into_inner());
             }
         };
-        httpd::run_detached(req, work);
+        {
+            // The cache builder stops while a file goes out.
+            let _busy = crate::cache_builder::busy();
+            httpd::run_detached(req, work);
+        }
         // The FAT lock and the SPI bus are shared with the player: a turn for
         // everyone between files as well as between chunks.
         thread::yield_now();

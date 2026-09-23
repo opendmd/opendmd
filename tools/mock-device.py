@@ -88,7 +88,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   deleting the active manifest and the "is this install active" check all use
   the resolved path.
 - **The playback cache.** `GET /api/cache` is `{total, prepared, state,
-  count_ms}`: `total` the playlist length, `prepared` how many of its entries
+  count_ms, auto}`: `total` the playlist length, `prepared` how many of its entries
   have a prepared copy at their bucketed path (`odm/<Category>/<bb>/X.odm`),
   counted in a background thread after any change (an upload or delete under
   `odm/`, a forget, a GIF delete, a playlist rebuild) — the first request
@@ -96,6 +96,24 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   first count), as the device does. `GET /api/cache/list` is every copy's
   path; `POST /api/cache/forget {"path":"/gifs/…"}` deletes a GIF's copy;
   `DELETE /api/files/gifs/…` takes the copy with it.
+- **Auto prepare** (`auto_prepare` in the config: `"idle"` by default,
+  `"always"`, `"off"`, anything else a 400). `/api/cache` ends with
+  `"auto":{mode,state,reason,policy,session,failed,avg_full_s,avg_drip_s,
+  eta_s,current}` and status with `"cache":{state,prepared,total}`. The
+  builder is simulated and **writes nothing**: its state follows the mock's
+  own situation -- `off` -> idle/"off"; an empty playlist -> idle/"no
+  playlist"; nothing counted yet -> idle; nothing missing -> `done`; the
+  player paused (manually or by night mode "off") -> running at `full`
+  (one file / 2 s); playing with `always` -> running at `drip` (one file /
+  6 s); playing with `idle` -> paused/"playing". While running it walks the
+  last count's missing list (`current`), every 25th file a known failure
+  (`failed`), the rest added to `prepared` and `session`; `avg_*_s` are the
+  fixed paces once one file went at that pace, `eta_s` = files left x
+  `avg_full_s`. Any recount (anything that invalidates the cache count)
+  drops the simulated copies and failures (not `session`), so `prepared` is
+  the real count of copies unless the simulation has run since the last
+  change -- the web-smoke cache checks, taken while the mock plays with
+  `idle`, see real numbers only.
 - **`/filelist*`** serves every root manifest (`filelist.txt`, `.hall`,
   `.xmas`, an obsolete `.odm.txt`) as `text/plain`, `no-cache`; a `/` after
   the name is a 404.
@@ -224,6 +242,7 @@ DEFAULT_SETTINGS = {
     "tz_name": "UTC",
     "transition": "dissolve",   # config::TRANSITION (opendmd_core::compositor)
     "transition_ms": 400,
+    "auto_prepare": "idle",     # config::AUTO_PREPARE: idle / always / off
 }
 
 # opendmd_core::compositor::Kind names, and the duration range
@@ -245,7 +264,11 @@ FIELD_TYPES = {
     "tz_name": "str",
     "transition": "str",
     "transition_ms": "u64",
+    "auto_prepare": "str",
 }
+AUTO_PREPARE = ("idle", "always", "off")
+# The simulated builder's pace (seconds per file) and its known failures.
+AUTO_FULL_S, AUTO_DRIP_S, AUTO_FAIL_EVERY = 2.0, 6.0, 25
 
 SCHEDULE_MAX = 2048            # nvs_config::SCHEDULE_MAX
 WAKE_MAX_MINUTES = 24 * 60     # config::WAKE_MAX_MINUTES
@@ -1267,8 +1290,10 @@ class Cache:
         self.counting = False
         self.count_ms = 0
         self.requested = False
+        self.missing: list[str] = []  # the playlist's entries with no copy, as last counted
 
     def invalidate(self):
+        self.ctx.auto.recount()
         with self.lock:
             self.gen += 1
             start = self.requested and not self.counting
@@ -1301,6 +1326,7 @@ class Cache:
                 playlist = list(self.ctx.player.playlist)
             have = {p.lower() for p in self.ctx.fs.odm_files()}
             n = 0
+            missing = []
             for p in playlist:
                 if p.lower().startswith("/odm/"):
                     n += 1
@@ -1308,12 +1334,105 @@ class Cache:
                 c = bucketed_path(p)
                 if c and c.lower() in have:
                     n += 1
+                else:
+                    missing.append(p)
             with self.lock:
                 if gen != self.gen:
                     continue
                 self.prepared, self.done_gen, self.counting = n, gen, False
+                self.missing = missing
                 self.count_ms = int((time.monotonic() - t0) * 1000)
                 return
+
+
+class AutoPrepare:
+    """The device's own preparing ("auto prepare"), simulated. It writes
+    nothing: files it "prepares" are a count (`done`) on top of the real
+    counted copies, walked through the last count's missing list, and every
+    recount (Cache.invalidate: an upload, forget, delete or rebuild) drops it
+    along with the pass's failures -- so `prepared` is the real count unless
+    the simulation has run since the last change. Callers hold ctx.lock."""
+
+    def __init__(self, ctx: "Context"):
+        self.ctx = ctx
+        self.done = 0        # simulated copies in this pass
+        self.failed = 0      # every AUTO_FAIL_EVERY-th file "cannot be prepared"
+        self.session = 0     # prepared since boot (kept across recounts)
+        self.progress = 0.0  # fraction of the file in hand
+        self.measured = {"full": False, "drip": False}
+        self.last = time.monotonic()
+
+    def recount(self):
+        with self.ctx.lock:
+            self.done = self.failed = 0
+            self.progress = 0.0
+
+    def _missing(self):
+        c = self.ctx.cache
+        with c.lock:
+            return (list(c.missing) if c.prepared is not None else None), c.prepared
+
+    def situation(self):
+        """(state, reason, policy, remaining missing paths or None)."""
+        mode = self.ctx.settings["auto_prepare"]
+        missing, _ = self._missing()
+        if mode == "off":
+            return "idle", "off", None, missing
+        if not self.ctx.player.playlist:
+            return "idle", "no playlist", None, missing
+        if missing is None:
+            return "idle", None, None, None
+        left = missing[self.done + self.failed:]
+        if not left:
+            return "done", None, None, left
+        if self.ctx.player._frozen():
+            return "running", None, "full", left
+        if mode == "always":
+            return "running", None, "drip", left
+        return "paused", "playing", None, left
+
+    def tick(self):
+        now = time.monotonic()
+        dt, self.last = now - self.last, now
+        state, _, policy, left = self.situation()
+        if state != "running":
+            return
+        self.progress += dt / (AUTO_FULL_S if policy == "full" else AUTO_DRIP_S)
+        while self.progress >= 1 and left:
+            self.progress -= 1
+            left = left[1:]
+            if (self.done + self.failed + 1) % AUTO_FAIL_EVERY == 0:
+                self.failed += 1
+            else:
+                self.done += 1
+                self.session += 1
+                self.measured[policy] = True
+        if not left:
+            self.progress = 0.0
+
+    def prepared(self):
+        _, n = self._missing()
+        return None if n is None else n + self.done
+
+    def fields(self) -> dict:
+        state, reason, policy, left = self.situation()
+        full = AUTO_FULL_S if self.measured["full"] else None
+        return {
+            "mode": self.ctx.settings["auto_prepare"],
+            "state": state,
+            "reason": reason,
+            "policy": policy,
+            "session": self.session,
+            "failed": self.failed,
+            "avg_full_s": full,
+            "avg_drip_s": AUTO_DRIP_S if self.measured["drip"] else None,
+            "eta_s": int(len(left) * full) if full and left is not None else None,
+            "current": left[0] if state == "running" and left else None,
+        }
+
+    def status_fields(self) -> dict:
+        return {"state": self.situation()[0], "prepared": self.prepared(),
+                "total": len(self.ctx.player.playlist)}
 
 
 class Context:
@@ -1324,6 +1443,7 @@ class Context:
         self.strict = strict
         self.settings = dict(DEFAULT_SETTINGS)
         self.lock = threading.RLock()
+        self.auto = AutoPrepare(self)
         self.cache = Cache(self)
         self.schedule = Schedule(self)
         self.player = Player(self)
@@ -1335,6 +1455,7 @@ def ticker_loop(ctx: Context, stop: threading.Event):
         with ctx.lock:
             ctx.schedule.evaluate()
             ctx.player.tick()
+            ctx.auto.tick()
 
 
 # --------------------------------------------------------------------------
@@ -1599,6 +1720,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "time_synced_s": time_synced_s,
                     "wake_until": ctx.schedule.wake_until_str(),
                     "schedule": {"rule": ctx.schedule.rule_idx, "set": ctx.schedule.rule_set, "until": ctx.schedule.until},
+                    "cache": ctx.auto.status_fields(),
                 }
             self.send_json(200, obj)
 
@@ -1630,6 +1752,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "tz_name": s["tz_name"],
                     "transition": s["transition"],
                     "transition_ms": s["transition_ms"],
+                    "auto_prepare": s["auto_prepare"],
                 }
             self.send_json(200, obj)
 
@@ -1722,6 +1845,9 @@ def make_handler(ctx: Context, quiet: bool):
                             return
                     if field == "transition_ms" and not TRANSITION_MS[0] <= v <= TRANSITION_MS[1]:
                         self.send_error_json(400, f"transition_ms must be {TRANSITION_MS[0]}..={TRANSITION_MS[1]}")
+                        return
+                    if field == "auto_prepare" and v not in AUTO_PREPARE:
+                        self.send_error_json(400, "auto_prepare must be idle, always or off")
                         return
                     if field == "hostname":
                         if v != "":
@@ -1937,14 +2063,17 @@ def make_handler(ctx: Context, quiet: bool):
             self.send_json(200, obj)
 
         def h_cache(self, path):
-            prepared, counting, count_ms = ctx.cache.snapshot()
+            _, counting, count_ms = ctx.cache.snapshot()
             with ctx.lock:
                 total = len(ctx.player.playlist)
+                prepared = ctx.auto.prepared()
+                auto = ctx.auto.fields()
             self.send_json(200, {
                 "total": total,
                 "prepared": prepared,
                 "state": "counting" if counting else "ready",
                 "count_ms": count_ms,
+                "auto": auto,
             })
 
         def h_cache_list(self, path):

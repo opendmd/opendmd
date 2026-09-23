@@ -33,6 +33,7 @@
 //! the panel anything, those are where it shows.
 
 mod cache;
+mod cache_builder;
 mod clock;
 mod config;
 mod dns_server;
@@ -75,7 +76,9 @@ use crate::http::{Ctx, NetCommand};
 use crate::nvs_config::{Config, Settings};
 use crate::panel::{Panel, PanelConfig};
 use crate::sd::{SdBus, SdSource};
-use crate::state::{free_heap, Applied, Command, IndexSource, PlayError, Status};
+use crate::state::{
+    free_heap, largest_free_block, Applied, Command, IndexSource, PlayError, Status,
+};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -262,6 +265,9 @@ fn main() -> Result<()> {
     // transition step that decoded nothing moves the picture but not the
     // file's position.
     let mut published: (u64, u64) = (0, 0);
+    // The file on screen is a prepared copy (the cache builder may borrow
+    // its headroom while it plays).
+    let mut current_prepared = false;
 
     // --- Shared state, the HTTP server, and the network worker ------------
     let status = Arc::new(Mutex::new(Status::new(
@@ -443,6 +449,13 @@ fn main() -> Result<()> {
                             if let Some(e) = engine.as_mut() {
                                 e.set_dwell(dwell_policy(&settings));
                                 e.set_transition(settings.transition);
+                                // Night mode with the builder newly allowed:
+                                // it wants the paused file's heap.
+                                if sched.off()
+                                    && settings.auto_prepare != nvs_config::AutoPrepare::Off
+                                {
+                                    e.drop_current(&mut canvas);
+                                }
                             }
                             if tz_changed {
                                 clock::set_timezone(&settings.tz, &settings.tz_name);
@@ -668,6 +681,10 @@ fn main() -> Result<()> {
 
         // 2. No engine (boot, or a reindex that failed): try to build one.
         let Some(eng) = engine.as_mut() else {
+            cache_builder::publish(
+                cache_builder::Pace::Stop(cache_builder::Reason::NoPlaylist),
+                settings.auto_prepare,
+            );
             let eff = sched.effective(&settings);
             if rebuild(&mut engine, &eff, false, &status, &mut canvas).is_err() {
                 // A schedule rule's playlist that will not build is set
@@ -741,10 +758,18 @@ fn main() -> Result<()> {
                 let log_start = probe::stamp();
                 if is_new {
                     started = playing.ordinal;
+                    let served = sd::take_last();
+                    current_prepared = match served {
+                        Some(sd::Served::Prepared { .. }) => true,
+                        Some(sd::Served::Direct) => {
+                            playing.path.to_ascii_lowercase().ends_with(".odm")
+                        }
+                        _ => false,
+                    };
                     deferred.push(Deferred::Started {
                         ordinal: playing.ordinal,
                         path: playing.path.clone(),
-                        served: sd::take_last(),
+                        served,
                     });
                 }
                 // Attribute every new low-water mark to the GIF on screen, so
@@ -816,6 +841,12 @@ fn main() -> Result<()> {
             }
         };
 
+        // The cache builder's pace for what the panel is doing now.
+        cache_builder::publish(
+            builder_pace(&settings, off, eng, current_prepared),
+            settings.auto_prepare,
+        );
+
         // 4. Publish, before the sleep, so a status read during the frame's
         //    hold sees the frame that is on the glass. Cheap fields only: the
         //    strings move when a GIF starts.
@@ -868,6 +899,29 @@ fn main() -> Result<()> {
                 &sched.summary(),
             );
         }
+    }
+}
+
+/// How fast the cache builder may work while the panel does what it is doing:
+/// full speed while nothing animates (night mode "off", or paused), a slow
+/// drip while a prepared file plays (`auto_prepare` = `always`, and no
+/// transition running — its 24 KB and the builder's ~63 KB do not both fit),
+/// otherwise not at all. The builder adds its own conditions (heap, transfers).
+fn builder_pace(
+    settings: &Settings,
+    off: bool,
+    eng: &Engine,
+    current_prepared: bool,
+) -> cache_builder::Pace {
+    use cache_builder::{Pace, Reason};
+    use nvs_config::AutoPrepare;
+    match settings.auto_prepare {
+        AutoPrepare::Off => Pace::Stop(Reason::Off),
+        _ if off || eng.is_paused() => Pace::Full,
+        AutoPrepare::Idle => Pace::Stop(Reason::Playing),
+        AutoPrepare::Always if eng.is_transitioning() => Pace::Stop(Reason::Transition),
+        AutoPrepare::Always if !current_prepared => Pace::Stop(Reason::GifOnScreen),
+        AutoPrepare::Always => Pace::Drip,
     }
 }
 
@@ -1051,6 +1105,13 @@ fn apply_schedule(
             panel.set_brightness(0);
             if let Some(e) = engine.as_mut() {
                 e.pause(now);
+                // The cache builder works at full speed while the panel is
+                // dark, and wants the playing file's heap (a GIF's is ~54
+                // KB): let the file go. The next one opens when the panel
+                // comes back.
+                if settings.auto_prepare != nvs_config::AutoPrepare::Off {
+                    e.drop_current(canvas);
+                }
             }
             log::info!("schedule: night mode, panel dark and playback paused");
         }
@@ -1136,12 +1197,6 @@ fn random_seed() -> u64 {
 fn min_free_heap() -> u32 {
     // SAFETY: as above.
     unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() }
-}
-
-/// Largest single allocation currently possible from byte-addressable heap.
-fn largest_free_block() -> usize {
-    // SAFETY: a read-only query with a capability mask argument.
-    unsafe { esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_8BIT) }
 }
 
 /// Assert that a typed GPIO peripheral really is the pin `config` names.
@@ -1411,6 +1466,12 @@ fn rebuild(
     status: &Mutex<Status>,
     canvas: &mut Canvas,
 ) -> Result<Applied, String> {
+    // The builder stops for a playlist change (it may be walking this very
+    // manifest); the main loop publishes its pace again afterwards.
+    cache_builder::publish(
+        cache_builder::Pace::Stop(cache_builder::Reason::Reindex),
+        settings.auto_prepare,
+    );
     retire(engine, canvas);
     let path = settings.manifest_path();
     {
@@ -1552,18 +1613,19 @@ fn heartbeat(
     let free = free_heap();
     let min_free = min_free_heap();
     let refresh = panel.refresh_rate();
-    let (ip, wifi) = {
+    let (ip, wifi, entries) = {
         let mut s = status.lock().unwrap();
         s.refresh_hz = refresh;
         s.heap_idf_min = min_free;
-        (s.ip.clone(), s.wifi)
+        (s.ip.clone(), s.wifi, s.entries)
     };
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms), \
-         transitions cut {}, wifi {wifi} {ip}, {schedule}{}{}",
+         transitions cut {}, wifi {wifi} {ip}, {schedule}{}{}{}",
         TRANSITIONS_CUT.load(Ordering::Relaxed),
         sd::period_summary(),
+        cache_builder::heartbeat(entries, cache::peek()),
         probe::period_summary()
     );
 }
