@@ -1,0 +1,40 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>binjgb frame grab</title>
+<style>body{background:#111;color:#ddd;font:14px sans-serif;margin:16px}canvas{image-rendering:pixelated;width:480px}</style>
+</head><body>
+<p>binjgb (MIT, ~100 KB) headless Game Boy core. Pick a .gb/.gbc ROM you own; it stays in this browser.</p>
+<input type="file" id="rom"> <canvas id="c" width="160" height="144"></canvas><pre id="log"></pre>
+<!-- binjgb.js + binjgb.wasm from https://github.com/binji/binjgb/tree/main/docs (vendored outside the repo, served at /binjgb/) -->
+<script src="/binjgb/binjgb.js"></script>
+<script>
+const W = 160, H = 144, TICKS_PER_FRAME = 70224, EVENT_NEW_FRAME = 1, EVENT_UNTIL_TICKS = 4;
+const bj = window.bj = { ready: false, frames: 0 };
+const modP = Binjgb();
+document.getElementById('rom').addEventListener('change', async (ev) => {
+  const t0 = performance.now();
+  const M = bj.M = await modP; const tMod = performance.now();
+  const rom = new Uint8Array(await ev.target.files[0].arrayBuffer());
+  const size = (rom.length + 0x7fff) & ~0x7fff;
+  const p = M._malloc(size); new Uint8Array(M.HEAP8.buffer, p, size).fill(0).set(rom);
+  // no AudioContext at all: sample rate is just a number here
+  bj.e = M._emulator_new_simple(p, size, 44100, 4096, 2);
+  if (!bj.e) throw new Error('Invalid ROM');
+  bj.fbPtr = M._get_frame_buffer_ptr(bj.e); bj.fbSize = M._get_frame_buffer_size(bj.e);
+  bj.runFrames(1);
+  bj.tModule = tMod - t0; bj.tFirstFrame = performance.now() - t0; bj.ready = true;
+});
+// Run n emulated frames as fast as the CPU allows (no rAF, no audio): "fast-forward" is the default.
+bj.runFrames = (n) => { const M = bj.M, e = bj.e;
+  const target = M._emulator_get_ticks_f64(e) + n * TICKS_PER_FRAME;
+  for (;;) { const ev = M._emulator_run_until_f64(e, target); if (ev & EVENT_NEW_FRAME) bj.frames++; if (ev & EVENT_UNTIL_TICKS) break; } };
+// Framebuffer is RGBA8888 (fbSize = 160*144*4), straight from wasm memory.
+bj.capture = () => { const t = performance.now();
+  const id = new ImageData(new Uint8ClampedArray(bj.M.HEAP8.buffer, bj.fbPtr, bj.fbSize).slice(), W, H);
+  for (let i = 3; i < id.data.length; i += 4) id.data[i] = 255;
+  const ms = performance.now() - t; const c = document.getElementById('c'); c.getContext('2d').putImageData(id, 0, 0);
+  return { w: W, h: H, ms, fbSize: bj.fbSize, png: c.toDataURL('image/png') }; };
+bj.saveState = () => { const M = bj.M, fd = M._state_file_data_new(bj.e); M._emulator_write_state(bj.e, fd);
+  const buf = new Uint8Array(M.HEAP8.buffer, M._get_file_data_ptr(fd), M._get_file_data_size(fd)).slice(); M._file_data_delete(fd); return buf; };
+bj.loadState = (buf) => { const M = bj.M, fd = M._state_file_data_new(bj.e);
+  new Uint8Array(M.HEAP8.buffer, M._get_file_data_ptr(fd), M._get_file_data_size(fd)).set(buf); M._emulator_read_state(bj.e, fd); M._file_data_delete(fd); };
+</script></body></html>

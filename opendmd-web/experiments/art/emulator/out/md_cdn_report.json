@@ -1,0 +1,122 @@
+{
+ "url": "http://127.0.0.1:8791/ejs.html?core=genesis_plus_gx&data=cdn",
+ "rom": "miniplanets.bin",
+ "env": {
+  "secure": true,
+  "sab": false,
+  "coi": false
+ },
+ "ms_file_to_game_start": 2852.6000003814697,
+ "ms_file_to_first_frame": 2722.699999809265,
+ "glType": "webgl",
+ "audio_ctx_state": "running",
+ "dims": {
+  "w": 256,
+  "h": 192,
+  "canvasW": 640,
+  "canvasH": 480
+ },
+ "upload_sigs": {
+  "texImage2D 512x512 fmt=0x1907 type=0x8363 Uint16Array": 4,
+  "texImage2D 256x512 fmt=0x190a type=0x1401 Uint8Array": 8,
+  "texImage2D 128x256 fmt=0x190a type=0x1401 Uint8Array": 8,
+  "texImage2D 1x1 fmt=0x1908 type=0x1401 Uint8Array": 2,
+  "texSubImage2D 512x512 fmt=0x1907 type=0x8363 Uint16Array": 2,
+  "texSubImage2D 256x192 fmt=0x1907 type=0x8363 Uint16Array": 2
+ },
+ "raw_captures": [
+  {
+   "method": "raw",
+   "w": 320,
+   "h": 224,
+   "rowLen": 320,
+   "typ": 33635,
+   "copyMs": 0.40000057220458984,
+   "ms": 12.100000381469727,
+   "frame": 60
+  }
+ ],
+ "raw_ms_avg": 12.100000381469727,
+ "raw_copy_ms_avg": 0.40000057220458984,
+ "canvas_capture": {
+  "method": "canvas",
+  "w": 640,
+  "h": 480,
+  "ms": 74.20000076293945,
+  "nonblack": 0
+ },
+ "retroarch_capture": {
+  "method": "retroarch",
+  "w": 320,
+  "h": 224,
+  "pngMs": 77.70000076293945,
+  "ms": 83
+ },
+ "canvas_ms_x5": [
+  4.899999618530273,
+  4.200000762939453,
+  4.09999942779541,
+  4.699999809265137,
+  4.600000381469727
+ ],
+ "retroarch_ms_x3": [
+  58.80000019073486,
+  61.5,
+  55.10000038146973
+ ],
+ "bytes_total": 1425425,
+ "bytes_by_host": {
+  "127.0.0.1:8791": 7830,
+  "cdn.emulatorjs.org": 1417595
+ },
+ "requests": [
+  [
+   "https://cdn.emulatorjs.org/stable/data/cores/genesis_plus_gx-legacy-wasm.data",
+   1205760
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/emulator.min.js",
+   122084
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/compression/extract7z.js",
+   78566
+  ],
+  [
+   "/ejs.html?core=genesis_plus_gx&data=cdn",
+   8069
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/emulator.min.css",
+   6240
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/loader.js",
+   2749
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/localization/en-GB.json",
+   886
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/version.json",
+   658
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/cores/reports/genesis_plus_gx.json",
+   652
+  ],
+  [
+   "blob:/d0ccd4b9-5f39-49ef-bd86-9629e52c0b42",
+   -76
+  ],
+  [
+   "blob:/2afb7c90-ce65-4346-a4da-a5f654bb67c5",
+   -81
+  ],
+  [
+   "blob:/b6db5b39-e990-4962-a5d3-901b98697fc5",
+   -82
+  ]
+ ]
+}

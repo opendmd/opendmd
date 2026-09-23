@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Art Studio (prototype)</title>
+<style>
+  :root { color-scheme: dark; --bg: #151518; --fg: #e8e8ea; --mut: #9a9aa2; --card: #1f1f24; --acc: #ffb347; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 12px; } h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--mut); margin: 0 0 8px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  section { background: var(--card); border-radius: 8px; padding: 12px; min-width: 0; }
+  input[type=file] { max-width: 100%; }
+  input, select, button { font: inherit; background: #2a2a31; color: var(--fg); border: 1px solid #3a3a44; border-radius: 6px; padding: 5px 8px; }
+  button.pri { background: var(--acc); color: #111; border: 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+  #results { display: flex; gap: 6px; flex-wrap: wrap; } #results img { height: 48px; max-width: 100%; object-fit: contain; background: #000; cursor: pointer; border-radius: 4px; }
+  #src { max-width: 100%; image-rendering: pixelated; background: #000; }
+  #panel { width: 100%; max-width: 1024px; background: #000; display: block; }
+  .mut { color: var(--mut); } #drop { border: 2px dashed #3a3a44; border-radius: 8px; padding: 10px; text-align: center; color: var(--mut); }
+  code { color: var(--acc); }
+</style></head>
+<body>
+<h1>Art Studio <span class="mut">— prototype (docs/art-pipeline.md)</span></h1>
+<div class="grid">
+  <section id="import"><h2>Import</h2>
+    <div class="row"><input id="url" placeholder="image URL (CORS-enabled host)" style="flex:1"><button id="go">Fetch</button></div>
+    <div class="row"><input id="q" placeholder="search Wikimedia Commons" style="flex:1"><button id="search">Search</button></div>
+    <div id="results"></div>
+    <div class="row"><input type="file" id="file" accept="image/*"></div>
+    <div id="drop">drop an image here, or paste one (Ctrl/Cmd+V)</div>
+    <div id="info" class="mut"></div>
+  </section>
+  <section id="frame"><h2>Frame</h2>
+    <div class="row">Fit <select id="fit"><option value="native">native pixels 1:1</option><option value="half">native, 2:1 (mode)</option><option value="height">fit (smooth; pans if long)</option><option value="width">fit width (smooth)</option></select>
+      Motion <select id="motion"><option value="still">still</option><option value="pan">pan left-right</option><option value="scroll">scroll top-bottom</option></select></div>
+    <div class="row">x <input type="range" id="x" min="0" max="0" value="0"> y <input type="range" id="y" min="0" max="0" value="0"> <button id="auto">Auto</button></div>
+    <div class="row"><label><input type="checkbox" id="key"> background to black</label>
+      step <select id="step"><option>30</option><option selected>40</option><option>50</option></select> ms/px</div>
+    <canvas id="src"></canvas>
+  </section>
+  <section id="look"><h2>Look &amp; Preview</h2>
+    <div class="row">Colours <select id="cols"><option value="256">as many as needed (≤256)</option><option value="16">16</option><option value="8">8</option></select></div>
+    <canvas id="panel" width="1024" height="256"></canvas>
+    <div id="stats" class="mut"></div>
+  </section>
+  <section id="save"><h2>Save</h2>
+    <div class="row"><select id="plat"><option>MD</option><option>SNES</option><option>GB</option><option>GBC</option><option>SATURN</option><option>3DS</option></select>
+      <input id="title" placeholder="Title" value="Untitled"> <input id="nn" type="number" min="1" max="99" value="1" style="width:4em"></div>
+    <div class="row">→ <code id="name"></code></div>
+    <div class="row"><button class="pri" id="dl">Download GIF</button> <span class="mut">(the app would PUT it to /gifs/Consoles/ and prepare it, like Add GIFs)</span></div>
+  </section>
+</div>
+<script type="module">
+import init, { Preview, encodeGif, parsePath } from '/www/pkg/opendmd_web.js';
+import { GIFEncoder } from 'https://cdn.jsdelivr.net/npm/gifenc@1.0.3/dist/gifenc.esm.js';
+import * as P from './pipeline.js';
+
+await init();
+const $ = (id) => document.getElementById(id);
+const preview = new Preview($('panel'), 2.2, 1.0, 0.22, false);
+(function tick() { preview.frame(); requestAnimationFrame(tick); })();
+
+const S = { bitmap: null, raw: null, src: null, gif: null, t: {} };
+window.studio = S;
+
+async function load(blob, label) {
+  const t0 = performance.now();
+  S.bitmap = await createImageBitmap(blob);
+  const c = new OffscreenCanvas(S.bitmap.width, S.bitmap.height), g = c.getContext('2d');
+  g.drawImage(S.bitmap, 0, 0);
+  const d = g.getImageData(0, 0, c.width, c.height);
+  S.raw = { width: c.width, height: c.height, data: d.data };
+  S.t.decode = performance.now() - t0;
+  $('info').textContent = `${label}: ${S.raw.width}x${S.raw.height}`;
+  await prepare(true);
+}
+
+// The most common colour inside the current window (not the whole image:
+// a screenshot's commonest colour is often sky the window never shows) and
+// everything within 12 of it -> black.
+function keyBg(im, wx, wy) {
+  const m = new Map(); let bg = 0, n = -1;
+  for (let y = wy; y < Math.min(im.height, wy + P.H); y++) for (let x = wx; x < Math.min(im.width, wx + P.W); x++) {
+    const i = (y * im.width + x) * 4, c = im.data[i] << 16 | im.data[i + 1] << 8 | im.data[i + 2];
+    const v = (m.get(c) || 0) + 1; m.set(c, v); if (v > n) { n = v; bg = c; }
+  }
+  const out = { ...im, data: new Uint8ClampedArray(im.data) };
+  for (let i = 0; i < out.data.length; i += 4) {
+    const dr = Math.abs(out.data[i] - (bg >> 16)), dg = Math.abs(out.data[i + 1] - (bg >> 8 & 255)), db = Math.abs(out.data[i + 2] - (bg & 255));
+    if (Math.max(dr, dg, db) <= 12) out.data[i] = out.data[i + 1] = out.data[i + 2] = 0;
+  }
+  return out;
+}
+
+// Logos: black strokes vanish on a black panel. Unless the dark, grey
+// opaque pixels fill most of the image (a backing plate), flip their
+// lightness — at full resolution, before resampling (process/demos.py lift).
+function lifted() {
+  const r = S.raw, d = new Uint8ClampedArray(r.data);
+  let dark = 0;
+  const isDark = (i) => d[i + 3] > 127 && 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 70
+    && Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) < 60;
+  for (let i = 0; i < d.length; i += 4) if (isDark(i)) dark++;
+  if (!dark || dark / (r.width * r.height) > 0.6) return S.bitmap;
+  for (let i = 0; i < d.length; i += 4) if (isDark(i)) { d[i] = 255 - d[i]; d[i + 1] = 255 - d[i + 1]; d[i + 2] = 255 - d[i + 2]; }
+  const c = new OffscreenCanvas(r.width, r.height);
+  c.getContext('2d').putImageData(new ImageData(d, r.width, r.height), 0, 0);
+  return c;
+}
+
+async function prepare(auto) {
+  if (!S.raw) return;
+  const t0 = performance.now();
+  const fit = $('fit').value;
+  let src;
+  if (fit === 'native' || fit === 'half') {
+    const n = P.native(S.raw);
+    src = fit === 'half' ? P.downMode(n.im, 2) : n.im;
+    $('info').textContent += ` · native scale ${n.k}x`;
+  } else if (fit === 'height' && S.raw.width * P.H / S.raw.height > 1.5 * P.W) {
+    src = P.resizeSmooth(lifted(), Math.round(S.raw.width * P.H / S.raw.height), P.H);  // long: pan it
+  } else if (fit === 'height') {  // contain: fit height, or width when that is the tighter side
+    const k = Math.min(P.H / S.raw.height, P.W / S.raw.width);
+    const small = P.resizeSmooth(lifted(), Math.max(1, Math.round(S.raw.width * k)), Math.max(1, Math.round(S.raw.height * k)));
+    src = P.crop(small, -((P.W - small.width) >> 1), -((P.H - small.height) >> 1), P.W, P.H);
+  } else src = P.resizeSmooth(lifted(), P.W, Math.max(1, Math.round(S.raw.height * P.W / S.raw.width)));
+  $('x').max = Math.max(0, src.width - P.W); $('y').max = Math.max(0, src.height - P.H);
+  if (auto) {
+    const b = P.bestWindow(src, P.W, P.H);
+    $('x').value = b.x; $('y').value = b.y;
+    if (src.width > P.W * 1.5 && src.height <= P.H + 8) $('motion').value = 'pan';
+    else if (src.height > P.H * 3 && src.width <= P.W + 8) $('motion').value = 'scroll';
+  }
+  if ($('key').checked) src = keyBg(src, +$('x').value, +$('y').value);
+  S.src = src;
+  S.t.prepare = performance.now() - t0;
+  drawSource();
+  build();
+}
+
+function drawSource() {
+  const c = $('src'), s = S.src, k = Math.max(1, Math.floor(320 / Math.max(s.width, 1)));
+  c.width = s.width; c.height = s.height; c.style.width = `${s.width * k}px`;
+  const g = c.getContext('2d');
+  g.putImageData(new ImageData(new Uint8ClampedArray(s.data), s.width, s.height), 0, 0);
+  g.strokeStyle = '#0f0'; g.strokeRect(+$('x').value + 0.5, +$('y').value + 0.5, P.W - 1, P.H - 1);
+}
+
+function build() {
+  if (!S.src) return;
+  const t0 = performance.now();
+  const fr = P.frames(S.src, $('motion').value, { x: +$('x').value, y: +$('y').value }, +$('step').value);
+  const { palette, index } = P.buildPalette(fr.map((f) => f.im), +$('cols').value);
+  const gif = GIFEncoder();
+  fr.forEach((f, i) => gif.writeFrame(index(f.im), P.W, P.H, { palette: i ? undefined : palette, delay: f.delay, repeat: 0 }));
+  gif.finish();
+  S.gif = gif.bytes();
+  S.t.encode = performance.now() - t0;
+  const t1 = performance.now();
+  const { stats } = encodeGif(S.gif);  // what Add GIFs / prepare would do next
+  S.t.prepareCopy = performance.now() - t1;
+  S.stats = { frames: fr.length, colours: palette.length, gifBytes: S.gif.length, odmFrames: stats.frames, odmPalette: stats.palette_len, quantised: stats.quantised };
+  preview.load('/gifs/Consoles/' + name(), S.gif);
+  $('stats').textContent = `${fr.length} frame(s), ${palette.length} colours, GIF ${S.gif.length.toLocaleString()} B · prepared copy: palette ${stats.palette_len}, re-quantised: ${stats.quantised} · encode ${S.t.encode.toFixed(0)} ms`;
+  $('name').textContent = name();
+}
+
+const name = () => P.fileName($('plat').value, $('title').value, +$('nn').value);
+$('go').onclick = async () => {
+  try { const r = await fetch($('url').value, { mode: 'cors' }); if (!r.ok) throw new Error(r.status); await load(await r.blob(), 'URL'); }
+  catch (e) { $('info').textContent = `could not read that image from this page (${e.message}) — the host does not allow it (CORS). Save it and drop it here, or copy and paste it.`; }
+};
+$('search').onclick = async () => {
+  const u = 'https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit=12'
+    + '&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=640&gsrsearch=' + encodeURIComponent($('q').value);
+  const d = await (await fetch(u)).json();
+  $('results').replaceChildren(...Object.values(d.query?.pages || {}).map((p) => {
+    const ii = p.imageinfo[0], im = document.createElement('img');
+    im.src = ii.thumburl; im.crossOrigin = 'anonymous';
+    im.title = `${p.title} · ${ii.extmetadata?.LicenseShortName?.value || '?'}`;
+    im.onclick = async () => { $('url').value = ii.thumburl; $('go').onclick(); };
+    return im;
+  }));
+};
+$('file').onchange = () => $('file').files[0] && load($('file').files[0], $('file').files[0].name);
+$('drop').ondragover = (e) => e.preventDefault();
+$('drop').ondrop = (e) => { e.preventDefault(); const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/')); if (f) load(f, 'dropped'); else if (e.dataTransfer.getData('text/uri-list')) { $('url').value = e.dataTransfer.getData('text/uri-list'); $('go').onclick(); } };
+window.addEventListener('paste', (e) => { const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/')); if (f) load(f, 'pasted'); });
+for (const id of ['fit', 'key']) $(id).onchange = () => prepare(true);
+for (const id of ['x', 'y']) $(id).oninput = () => { drawSource(); build(); };
+for (const id of ['motion', 'cols', 'step', 'plat', 'title', 'nn']) $(id).onchange = build;
+$('auto').onclick = () => prepare(true);
+$('dl').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([S.gif], { type: 'image/gif' })); a.download = name(); a.click(); };
+S.load = load; S.set = (id, v) => { $(id).value = v; }; S.prepare = prepare; S.build = build; S.parse = () => parsePath('/gifs/Consoles/' + name());
+window.studioReady = true;
+</script>
+</body></html>

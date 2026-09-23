@@ -1,0 +1,13 @@
+[package]
+name = "nq"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Throwaway: NeuQuant through the same `color_quant` 1.1.0 the core's ODM
+# encoder uses. Reads RGBA on stdin, `nq <colors> <samplefac>`, writes the
+# palette (colors*3 bytes) then one index per pixel to stdout.
+[dependencies]
+color_quant = "=1.1.0"
+
+[workspace]

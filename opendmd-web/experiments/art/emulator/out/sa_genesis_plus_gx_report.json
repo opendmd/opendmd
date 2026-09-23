@@ -1,0 +1,151 @@
+{
+ "url": "http://127.0.0.1:8791/ejs.html?core=genesis_plus_gx&data=local&suspendaudio=1&racfg=audio_sync%20%3D%20false",
+ "rom": "miniplanets.bin",
+ "env": {
+  "secure": true,
+  "sab": false,
+  "coi": false
+ },
+ "ms_file_to_game_start": 1021.2000007629395,
+ "ms_file_to_first_frame": 887.3000001907349,
+ "glType": "webgl",
+ "audio_ctx_state": "suspended",
+ "dims": {
+  "w": 256,
+  "h": 192,
+  "canvasW": 640,
+  "canvasH": 480
+ },
+ "upload_sigs": {
+  "texImage2D 512x512 fmt=0x1907 type=0x8363 Uint16Array": 4,
+  "texImage2D 256x512 fmt=0x190a type=0x1401 Uint8Array": 8,
+  "texImage2D 128x256 fmt=0x190a type=0x1401 Uint8Array": 8,
+  "texImage2D 1x1 fmt=0x1908 type=0x1401 Uint8Array": 2,
+  "texSubImage2D 512x512 fmt=0x1907 type=0x8363 Uint16Array": 4,
+  "texSubImage2D 256x192 fmt=0x1907 type=0x8363 Uint16Array": 4
+ },
+ "raw_captures": [
+  {
+   "method": "raw",
+   "w": 320,
+   "h": 224,
+   "rowLen": 320,
+   "typ": 33635,
+   "copyMs": 0.10000038146972656,
+   "ms": 16.899999618530273,
+   "frame": 60
+  },
+  {
+   "method": "raw",
+   "w": 320,
+   "h": 224,
+   "rowLen": 320,
+   "typ": 33635,
+   "copyMs": 0,
+   "ms": 13.300000190734863,
+   "frame": 120
+  },
+  {
+   "method": "raw",
+   "w": 320,
+   "h": 224,
+   "rowLen": 320,
+   "typ": 33635,
+   "copyMs": 0.19999980926513672,
+   "ms": 14,
+   "frame": 180
+  }
+ ],
+ "raw_ms_avg": 14.733333269755045,
+ "raw_copy_ms_avg": 0.10000006357828777,
+ "canvas_capture": {
+  "method": "canvas",
+  "w": 640,
+  "h": 480,
+  "ms": 75.80000019073486,
+  "nonblack": 0
+ },
+ "retroarch_capture": {
+  "method": "retroarch",
+  "w": 320,
+  "h": 224,
+  "pngMs": 61.39999961853027,
+  "ms": 65.69999980926514
+ },
+ "canvas_ms_x5": [
+  5.799999237060547,
+  6.899999618530273,
+  4.59999942779541,
+  4.59999942779541,
+  6.699999809265137
+ ],
+ "retroarch_ms_x3": [
+  61.09999942779541,
+  59.29999923706055,
+  61.39999961853027
+ ],
+ "fps_normal": 59.95460847396634,
+ "fps_fastforward_unlimited": 773.1774754773188,
+ "frames_advanced_while_paused": 0,
+ "state_bytes": 1036312,
+ "state_save_ms": 4.679441452026367,
+ "state_load_ms": 3.125905990600586,
+ "state_restore_png_equal": false,
+ "state_two_loads_equal": true,
+ "audio_ctx_state_end": "suspended",
+ "bytes_total": 1953483,
+ "bytes_by_host": {
+  "127.0.0.1:8791": 1952819,
+  "cdn.emulatorjs.org": 664
+ },
+ "requests": [
+  [
+   "/ejs/cores/genesis_plus_gx-legacy-wasm.data",
+   1204803
+  ],
+  [
+   "/ejs/emulator.min.js",
+   426343
+  ],
+  [
+   "/ejs/compression/extract7z.js",
+   280155
+  ],
+  [
+   "/ejs/emulator.min.css",
+   25630
+  ],
+  [
+   "/ejs.html?core=genesis_plus_gx&data=local&suspendaudio=1&racfg=audio_sync%20%3D%20false",
+   8069
+  ],
+  [
+   "/ejs/loader.js",
+   7594
+  ],
+  [
+   "https://cdn.emulatorjs.org/stable/data/version.json",
+   664
+  ],
+  [
+   "/ejs/localization/en-GB.json",
+   335
+  ],
+  [
+   "/ejs/cores/reports/genesis_plus_gx.json",
+   129
+  ],
+  [
+   "blob:/d008fd8b-a0fe-43e0-8160-1c0ec07bc774",
+   -76
+  ],
+  [
+   "blob:/6291b62a-5198-4b7a-8b44-70bb7a0ce293",
+   -81
+  ],
+  [
+   "blob:/9bb8d0c0-cee7-422e-baa5-2662826ee9a7",
+   -82
+  ]
+ ]
+}
