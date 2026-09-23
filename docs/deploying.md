@@ -10,8 +10,7 @@ The short version:
 # once per card, on a laptop with the card in a reader (mounted at $CARD)
 cp -r <DMDoS pack>/gifs <DMDoS pack>/filelist.txt "$CARD"/
 make pack ARGS="convert $CARD --layout bucketed --verify"
-mkdir -p "$CARD/sets"
-make pack ARGS="manifest $CARD --layout bucketed --out sets/odm.txt"
+make pack ARGS="manifest $CARD --layout bucketed"   # -> $CARD/filelist.odm.txt, the default playlist
 make web && cp -r opendmd-web/www "$CARD"/www
 sync && umount "$CARD"
 
@@ -68,16 +67,23 @@ costs ~330 ms and shows as a late frame). Both are measured in CLAUDE.md
 # compares every frame. Re-running skips files already converted.
 make pack ARGS="convert $CARD --layout bucketed --verify"
 
-# The same playlist with .odm paths, written as a set the player can select.
-# (Without --out it writes $CARD/filelist.odm.txt; the firmware only reads
-# /filelist.txt and /sets/<name>.txt, so a set is the useful place for it.)
-mkdir -p "$CARD/sets"
-make pack ARGS="manifest $CARD --layout bucketed --out sets/odm.txt"
+# The same playlist with .odm paths: $CARD/filelist.odm.txt.
+make pack ARGS="manifest $CARD --layout bucketed"
 ```
 
 `make pack` is `opendmd-pack` built in release; the same arguments work on
 the binary directly. The manifest step prints how many entries switched to
-`.odm`; any that stay `.gif` (no `.odm` beside them) still play.
+`.odm`; any that stay `.gif` (no `.odm` for them) still play.
+
+**`filelist.odm.txt` is the default playlist.** With no set selected, the
+firmware plays `/filelist.odm.txt` when the card has one and `/filelist.txt`
+otherwise, choosing at boot (and whenever the set changes); `/api/status`
+reports the one in play as `manifest`. So a converted card plays its `.odm`
+files with nothing to configure, and `filelist.txt` stays untouched for stock
+DMDoS. To play the GIFs instead, select the root manifest by name:
+`curl -X PUT -d '{"set":"filelist.txt"}' http://opendmd.local/api/config`
+(`{"set":""}` goes back to the default; `/sets/<name>.txt` sets work as
+before, by name).
 
 ### The web app
 
@@ -117,8 +123,8 @@ build environment, and the code that would compile them in does not exist in
 this build. The image is saved to `dist/opendmd-<version>-4mb.bin` (version
 from `firmware/Cargo.toml`), its app descriptor carries `"<version> 4mb"` —
 the string the OTA handler's variant check reads — and the target fails if
-the image is over 95% of the 2,031,616-byte OTA slot. 0.2.0 is 1,575,552 B,
-77.6%.
+the image is over 95% of the 2,031,616-byte OTA slot. 0.2.0 is 1,596,224 B,
+78.6%.
 
 The release build needs ~1.5 GB of scratch; `FW_RELEASE_TARGET_DIR=/roomier/dir
 make fw-release` puts it elsewhere.
@@ -136,8 +142,18 @@ had been OTA'd into its second slot boots the image just flashed.
 
 Put the card in and power up. The boot banner reads
 `OpenDMD firmware v0.2.0 (4mb, app desc '0.2.0 4mb')`, and on first boot
-the player builds `filelist.txt.idx` on the card (~6 s) before it starts
-playing.
+the player builds the default manifest's index on the card
+(`filelist.odm.txt.idx`, or `filelist.txt.idx` on an unconverted card; ~6 s
+for the full card) before it starts playing. Once the first frame is up the
+log says `rollback mark: ota_0 was ..., now marked valid after the first
+frame`.
+
+`fw-release-flash` writes **the project's own bootloader** (`--bootloader`),
+not espflash's bundled one: only ours has OTA rollback compiled in (section
+4). A board that was last USB-flashed with a plain `espflash flash` — or
+before this change — has the bundled bootloader and no rollback until it is
+USB-flashed once with `make fw-release-flash` (or `make fw-flash` on the
+bench).
 
 ### Getting on the network
 
@@ -151,10 +167,12 @@ A release image has no WiFi credentials, so a fresh board comes up as an
    the board after ten minutes regardless, so don't dawdle.)
 3. The player joins the network as **<http://opendmd.local/>**. The app is
    there if `www/` is on the card; `/setup` is always there for recovery.
-4. To play the `.odm` set, select it as the active set (from the app, or
-   `curl -X PUT -d '{"set":"odm"}' http://opendmd.local/api/config`). The
-   first selection builds `sets/odm.txt.idx` (~6 s, the display holds its
-   frame meanwhile).
+4. Nothing to select for the `.odm` files: `filelist.odm.txt` is the
+   default playlist (section 1). A set is selected from the app, or with
+   `curl -X PUT -d '{"set":"<name>"}' http://opendmd.local/api/config`; a
+   name that does not exist on the card is refused with a 404 and nothing is
+   saved. The first selection of a manifest builds its `.idx` (~6 s for the
+   full card, the display holds its frame meanwhile).
 
 Credentials live in NVS from then on and survive every OTA update.
 
@@ -179,9 +197,12 @@ the running firmware as the boot image.
 `curl http://opendmd.local/api/status` — numbers measured on the rig
 (CLAUDE.md, "Heap ceiling" and "Frame time"):
 
-| field | playing `filelist.txt` (GIFs) | playing the bucketed `odm` set |
+| field | playing `filelist.txt` (GIFs) | playing the bucketed `filelist.odm.txt` |
 |---|---|---|
 | `version` / `variant` | `0.2.0` / `4mb` | same |
+| `manifest` | `/sdcard/filelist.txt` | `/sdcard/filelist.odm.txt` |
+| `index_state` | `ready` | `ready` |
+| `www_version` | the `git describe` of the `make web` that built the card's app, `null` if the card's `www/` predates it | same |
 | `heap.free` | ~57-60 KB | ~85-91 KB |
 | `heap.floor` (sampled low-water) | ~55-58 KB idle; ~38 KB while serving one client, ~34 KB under three | ~85 KB idle |
 | `refresh_hz` | 100 | 100 |
@@ -197,29 +218,47 @@ own means the board is rebooting: capture the serial log
 
 ## 4. Rolling back
 
-**There is no automatic bootloader rollback on this board.** The 4 MB layout
-follows stripe-dashboard's 4 MB build, which ships with
-`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` off; ours never turned it on. What
-protects an update instead:
+**The bootloader reverts an image that does not boot.**
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` is in `firmware/sdkconfig.defaults`
+(with the project's bootloader on the board — see "First install" above).
+The partition table already has what it needs: `otadata` at 0xf000 and two
+1.94 MB slots, `ota_0` and `ota_1`. Rollback costs no app-slot space; the
+code is in the bootloader (26,832 B, under the 28,672 B that fit below the
+partition table at 0x8000).
 
-- An image for the wrong flash size is refused before any flash is erased.
-- An upload that is short, fails to write or fails `esp_ota_end`'s image
-  validation is aborted, and the board keeps booting the running firmware.
-- The previous firmware stays intact in the other OTA slot until the *next*
-  update overwrites it.
+What happens on an update:
 
-So:
+1. `POST /api/ota` writes the other slot and marks it `new` in otadata.
+   Before anything is erased, an image for the wrong flash size is refused;
+   an upload that is short, fails to write or fails `esp_ota_end`'s image
+   validation is aborted, and the board keeps booting the running firmware.
+2. The bootloader boots the new slot as `pending-verify`.
+3. The new firmware brings the panel up, mounts the card, opens a playlist
+   and blits its **first frame**, and only then calls
+   `esp_ota_mark_app_valid_cancel_rollback()` (`rollback mark:` in the log).
+   From then on the image is `valid` and stays.
+4. If it resets **before** that — a panic, a watchdog, a crash loop, a hang
+   the watchdog catches — the bootloader finds it still `pending-verify`,
+   marks it invalid and boots the previous slot, which is untouched. The
+   board comes back on the old version by itself; `make ota`'s poll then
+   fails with "board rebooted but reports version '<old>'".
 
-- **New firmware boots but misbehaves, and the network works:** post the
+What rollback does not catch, and what to do instead:
+
+- **It boots, plays and misbehaves afterwards** (network broken, UI broken,
+  slow): the image was already marked valid. If the network works, post the
   previous image back — `make ota HOST=opendmd.local
   BIN=dist/opendmd-<previous>-4mb.bin`. Keep the last good image in `dist/`
   (it is gitignored, so copy it somewhere safe too).
-- **New firmware does not boot, crash-loops, or never gets on the network:**
-  USB. Take the board out, `make fw-release-flash PORT=...` with a known-good
-  tree (or `espflash flash` the previous release ELF). NVS — WiFi and
-  settings — survives a USB flash that does not erase the chip.
-
-If the cabinet board is ever hard to reach, turning on bootloader rollback
-(`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`, plus marking the app valid once
-it has booted and joined the network) is the change to make; it only takes
-effect after a USB flash of the new bootloader.
+- **It hangs before the first frame without resetting** (no watchdog fires):
+  nothing reverts it until the board is power-cycled — which then does roll
+  back, since it never got marked. So a power cycle is the first thing to
+  try.
+- **It never gets a first frame for an ordinary reason** — no card, a card
+  with no manifest — and is then reset (a power cycle, the setup AP's
+  10-minute reboot): it is rolled back too, because it never proved itself.
+  Harmless (the old image is fine) but surprising; put the card back and
+  update again.
+- **Neither slot boots, or the bootloader is espflash's**: USB. Take the
+  board out, `make fw-release-flash PORT=...` with a known-good tree. NVS —
+  WiFi and settings — survives a USB flash that does not erase the chip.

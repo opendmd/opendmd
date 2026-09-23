@@ -87,6 +87,12 @@ pub const SD_SPEED_KHZ: u32 = 20_000;
 // ---------------------------------------------------------------------------
 /// The stock card's playlist file, read from the card root.
 pub const MANIFEST_PATH: &str = "/sdcard/filelist.txt";
+/// The same playlist pointing at the pre-rendered `.odm` files, as written by
+/// `opendmd-pack manifest --layout bucketed` (or the web app's converter). When
+/// it is on the card it is the default manifest (`set` = `""`), because an
+/// OpenDMD card is one that has been converted; otherwise `MANIFEST_PATH` is.
+/// See `nvs_config::default_manifest`.
+pub const ODM_MANIFEST_PATH: &str = "/sdcard/filelist.odm.txt";
 
 // The manifest is indexed, never loaded.
 //
@@ -223,3 +229,7 @@ pub const HTTP_MAX_SOCKETS: u16 = 2;
 /// is allowed to read from or write to.
 pub const WWW_ROOT: &str = "/sdcard/www";
 pub const SETS_DIR: &str = "/sdcard/sets";
+/// `git describe` of the web app on the card, written by `make web` and pushed
+/// with it. Read at boot and whenever it is uploaded; `/api/status` reports it
+/// as `www_version`.
+pub const WWW_VERSION_PATH: &str = "/sdcard/www/version.txt";

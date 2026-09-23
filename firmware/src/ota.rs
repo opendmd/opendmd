@@ -6,7 +6,9 @@
 //! The awkward parts are all theirs:
 //!
 //! - `esp_ota_mark_app_valid_cancel_rollback()` first, or `esp_ota_begin`
-//!   returns `ESP_ERR_OTA_ROLLBACK_INVALID_STATE` on a rollback-enabled build.
+//!   returns `ESP_ERR_OTA_ROLLBACK_INVALID_STATE` while the running image is
+//!   still pending verification (an upload that arrives before the first
+//!   frame — see [`confirm_running_image`]).
 //! - The **first chunk is read before any flash is erased**, so a wrong-variant
 //!   image is rejected with the running firmware still intact.
 //! - Every failure path calls `esp_ota_abort`.
@@ -15,8 +17,14 @@
 //!   connection reset instead of a result.
 //!
 //! This board has 4 MB of flash and two 1.94 MB OTA slots, and
-//! `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is off (see `partitions.csv`): a bad
-//! image means a USB reflash, which is why the variant check earns its keep.
+//! `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is on: a freshly OTA'd image boots
+//! as "pending verify", and if it resets before [`confirm_running_image`]
+//! has run — a panic, a watchdog, a boot loop, anything before the first
+//! frame — the bootloader marks it invalid and boots the previous slot. That
+//! needs the project's own bootloader on the board (`make fw-flash` /
+//! `fw-release-flash` pass `--bootloader`; espflash's bundled one has
+//! rollback compiled out). An image that boots, plays and then misbehaves is
+//! not caught: that is still a `make ota` of the previous image.
 
 use anyhow::Result;
 use esp_idf_sys as sys;
@@ -200,6 +208,47 @@ pub fn handle_upload(req: &mut Req) -> Result<()> {
     info!("OTA: {written} B written, rebooting");
     req.json(r#"{"ok":true,"rebooting":true}"#)?;
     reboot_after_response()
+}
+
+/// Tell the bootloader the running image works, cancelling a pending rollback.
+///
+/// Called once per boot by the main loop, after the first frame has been
+/// blitted — i.e. the panel is up, the card is mounted, a playlist opened and
+/// a file decoded. Not earlier: everything before that is exactly what a bad
+/// image breaks. On an image that was not just OTA'd (already valid, or USB
+/// flashed with no otadata entry) the call is a no-op; after an OTA it writes
+/// otadata once. Logs a `rollback mark:` line either way.
+pub fn confirm_running_image() {
+    // SAFETY: read-only partition-table queries and one IDF call that takes no
+    // arguments; `running` is checked for null before it is dereferenced.
+    unsafe {
+        let running = sys::esp_ota_get_running_partition();
+        let label = if running.is_null() {
+            "?".to_string()
+        } else {
+            std::ffi::CStr::from_ptr((*running).label.as_ptr())
+                .to_string_lossy()
+                .into_owned()
+        };
+        let mut state: sys::esp_ota_img_states_t = 0;
+        let before = match sys::esp_ota_get_state_partition(running, &mut state) {
+            sys::ESP_OK => match state {
+                sys::esp_ota_img_states_t_ESP_OTA_IMG_NEW => "new",
+                sys::esp_ota_img_states_t_ESP_OTA_IMG_PENDING_VERIFY => "pending-verify",
+                sys::esp_ota_img_states_t_ESP_OTA_IMG_VALID => "valid",
+                sys::esp_ota_img_states_t_ESP_OTA_IMG_INVALID => "invalid",
+                sys::esp_ota_img_states_t_ESP_OTA_IMG_ABORTED => "aborted",
+                _ => "undefined",
+            },
+            _ => "no otadata entry",
+        };
+        let err = sys::esp_ota_mark_app_valid_cancel_rollback();
+        if err == sys::ESP_OK {
+            info!("rollback mark: {label} was {before}, now marked valid after the first frame");
+        } else {
+            warn!("rollback mark: {label} was {before}; esp_ota_mark_app_valid_cancel_rollback failed ({err})");
+        }
+    }
 }
 
 /// Let the response drain out of the TCP stack, then restart.

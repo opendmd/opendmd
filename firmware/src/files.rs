@@ -92,6 +92,11 @@ pub fn card_path(root: &str, rel: &str) -> Option<String> {
 /// Content type by extension. Everything the web app ships, plus the card's
 /// own files; anything unknown is an octet stream rather than a guess.
 pub fn mime_for(path: &str) -> &'static str {
+    // Root manifests have whatever extension their owner chose
+    // (`filelist.hall`, `filelist.xmas`); they are all text.
+    if is_root_manifest_name(path) {
+        return "text/plain; charset=utf-8";
+    }
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -122,6 +127,11 @@ pub fn mime_for(path: &str) -> &'static str {
 /// fast reload and a stale wasm module after `make card-sync`. The HTML and JS
 /// that reference it are revalidated every time.
 pub fn cache_for(path: &str) -> &'static str {
+    // A manifest is replaced in place by the install path; never let a
+    // browser keep an old copy for an hour.
+    if is_root_manifest_name(path) {
+        return "no-cache";
+    }
     if path.contains("/pkg/") {
         "max-age=3600"
     } else {
@@ -338,6 +348,41 @@ pub fn is_manifest_path(path: &str) -> bool {
     let in_sets = p.parent().is_some_and(|d| d == Path::new(config::SETS_DIR));
     let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
     (in_root && name.starts_with("filelist.")) || in_sets
+}
+
+/// Do two filesystem paths name the same file on the card? FAT compares
+/// names case-insensitively, so `/sets/A.TXT` *is* `/sets/a.txt`: a guard
+/// that compares with `==` can be walked around by changing the case.
+pub fn same_card_path(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+/// Does this path's file name look like a root manifest (`filelist.*`, but not
+/// its `.idx` or a temp file)? Name only; where it lives is the caller's check.
+fn is_root_manifest_name(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.starts_with("filelist.")
+        && !name.ends_with(".idx")
+        && !name.ends_with(".tmp")
+        && !name.ends_with(".part")
+}
+
+/// The web app's version, from [`config::WWW_VERSION_PATH`]: its first line,
+/// trimmed and capped at 64 characters, or `None` if there is no such file.
+/// Reads at most 128 bytes whatever was uploaded there.
+pub fn read_www_version() -> Option<String> {
+    let mut buf = [0u8; 128];
+    let mut file = fs::File::open(config::WWW_VERSION_PATH).ok()?;
+    let mut n = 0;
+    while n < buf.len() {
+        match file.read(&mut buf[n..]) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => n += k,
+        }
+    }
+    let text = String::from_utf8_lossy(&buf[..n]);
+    let line = text.lines().next()?.trim();
+    (!line.is_empty()).then(|| line.chars().take(64).collect())
 }
 
 /// Delete the `.idx` beside a manifest that is about to be replaced or removed.
