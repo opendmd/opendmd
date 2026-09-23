@@ -22,7 +22,7 @@ use crate::files;
 use crate::httpd::{json_string, query_param, Method, Req, Server};
 use crate::nvs_config::Settings;
 use crate::ota;
-use crate::state::{Applied, Command, Status};
+use crate::state::{Applied, Command, PlayError, Status, SET_NOT_FOUND};
 use crate::wifi::ScannedAp;
 
 /// The embedded setup page: rendered and gzipped by `build.rs`, served when
@@ -41,6 +41,12 @@ const REINDEX_TIMEOUT: Duration = Duration::from_secs(60);
 const SCAN_TIMEOUT: Duration = Duration::from_secs(12);
 /// Cap on JSON request bodies. Uploads are streamed and are not subject to it.
 const MAX_JSON_BODY: usize = 8192;
+
+/// Wire format for `POST /api/play`.
+#[derive(serde::Deserialize)]
+struct PlayRequest {
+    path: String,
+}
 
 /// Requests the network worker answers on behalf of a handler.
 pub enum NetCommand {
@@ -136,7 +142,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     let c = ctx.clone();
     server.route("/api/config", Method::Put, move |req| {
-        let body = req.read_to_vec(MAX_JSON_BODY)?;
+        let Some(body) = json_body(req)? else {
+            return Ok(());
+        };
         let patch: ConfigPatch = match serde_json::from_slice(&body) {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
@@ -165,6 +173,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             next.platforms = v;
         }
         if let Some(v) = patch.set {
+            if !crate::nvs_config::valid_set_name(&v) {
+                return req.bad_request("set must be a single path segment");
+            }
             next.set = v;
         }
         if let Some(v) = patch.hostname {
@@ -192,6 +203,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 r#"{{"ok":true,{},"reboot_required":{wifi_changed}}}"#,
                 applied_json(&applied)
             )),
+            // Checked by the main task before anything was saved: the
+            // configuration and the running playlist are as they were.
+            Ok(Err(e)) if e == SET_NOT_FOUND => req.not_found(SET_NOT_FOUND),
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
             Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
         }
@@ -208,6 +222,84 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
             Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
         }
+    })?;
+
+    // Play one file now (a Library preview sent to the panel), then carry on
+    // with the schedule. `{"path": "/gifs/…"}`, card-absolute.
+    let c = ctx.clone();
+    server.route("/api/play", Method::Post, move |req| {
+        let Some(body) = json_body(req)? else {
+            return Ok(());
+        };
+        let play: PlayRequest = match serde_json::from_slice(&body) {
+            Ok(p) => p,
+            Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
+        };
+        if !play.path.starts_with('/') || files::card_path(config::SD_MOUNT, &play.path).is_none() {
+            return req.bad_request("path must be card-absolute and stay on the card");
+        }
+        let (tx, rx) = mpsc::channel();
+        if c.cmd
+            .send(Command::PlayNow {
+                path: play.path.clone(),
+                reply: tx,
+            })
+            .is_err()
+        {
+            return req.error(503, "503 Service Unavailable", "player not running");
+        }
+        match rx.recv_timeout(REPLY_TIMEOUT) {
+            Ok(Ok(())) => req.json(&format!(
+                r#"{{"ok":true,"path":{}}}"#,
+                json_string(&play.path)
+            )),
+            Ok(Err(PlayError::NotFound(e))) => req.not_found(&e),
+            Ok(Err(PlayError::Unplayable(e))) => req.error(415, "415 Unsupported Media Type", &e),
+            Ok(Err(PlayError::NoPlaylist)) => {
+                req.error(503, "503 Service Unavailable", "no playlist is running")
+            }
+            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+        }
+    })?;
+
+    // Existence, size and kind of one path, with one `stat`. That is one scan
+    // of the parent directory under the FATFS lock — cheap in a bucket or
+    // `www/`, ~330-550 ms in the 3,781-entry `gifs/Consoles`, where the
+    // player's next open waits behind it — but still far cheaper than listing
+    // the parent. `size` is null for a directory.
+    server.route("/api/stat", Method::Get, |req| {
+        let Some(card) = query_param(req.query(), "path") else {
+            return req.bad_request("path= required");
+        };
+        if !card.starts_with('/') {
+            return req.bad_request("path must be card-absolute");
+        }
+        let Some(fs_path) = files::card_path(config::SD_MOUNT, &card) else {
+            return req.bad_request("path escapes the card");
+        };
+        // FATFS cannot `stat` a volume root; it is a directory by definition.
+        let meta = if fs_path == config::SD_MOUNT {
+            Some((true, 0))
+        } else {
+            std::fs::metadata(&fs_path)
+                .ok()
+                .map(|m| (m.is_dir(), m.len()))
+        };
+        let json = match meta {
+            Some((true, _)) => format!(
+                r#"{{"path":{},"exists":true,"size":null,"is_dir":true}}"#,
+                json_string(&card)
+            ),
+            Some((false, len)) => format!(
+                r#"{{"path":{},"exists":true,"size":{len},"is_dir":false}}"#,
+                json_string(&card)
+            ),
+            None => format!(
+                r#"{{"path":{},"exists":false,"size":null,"is_dir":false}}"#,
+                json_string(&card)
+            ),
+        };
+        req.json(&json)
     })?;
 
     server.route("/api/files", Method::Get, |req| {
@@ -284,12 +376,17 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // If the player has this very file open, ask it to move on first: FAT
         // cannot replace a file that is being read.
         let playing = c.status.lock().unwrap().path.clone();
-        if !playing.is_empty() && dest == format!("{}{}", config::SD_MOUNT, playing) {
+        if !playing.is_empty()
+            && files::same_card_path(&dest, &format!("{}{}", config::SD_MOUNT, playing))
+        {
             let _ = c.cmd.send(Command::Skip);
             std::thread::sleep(Duration::from_millis(200));
         }
         let written = files::receive_upload(req, &dest)?;
         info!("PUT /{rel}: {written} B");
+        if files::same_card_path(&dest, config::WWW_VERSION_PATH) {
+            c.status.lock().unwrap().www_version = files::read_www_version();
+        }
         req.json(&format!(
             r#"{{"ok":true,"path":{},"bytes":{written}}}"#,
             json_string(&format!("/{}", rel.trim_start_matches('/')))
@@ -304,8 +401,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         };
         // The engine holds the active manifest and its `.idx` open, and FAT
         // (no FF_FS_LOCK in this build) would let us unlink them underneath it.
-        let active = c.settings.lock().unwrap().manifest_path();
-        if path == active || path == files::index_path(&active) {
+        // "Active" is what the player resolved, so with `set` = "" this
+        // protects whichever default the card got.
+        let active = c.status.lock().unwrap().manifest.clone();
+        if files::same_card_path(&path, &active)
+            || files::same_card_path(&path, &files::index_path(&active))
+        {
             return req.error(
                 409,
                 "409 Conflict",
@@ -321,20 +422,36 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             }
         }
         match std::fs::remove_file(&path) {
-            Ok(()) => req.json(r#"{"ok":true}"#),
+            Ok(()) => {
+                if files::same_card_path(&path, config::WWW_VERSION_PATH) {
+                    c.status.lock().unwrap().www_version = None;
+                }
+                req.json(r#"{"ok":true}"#)
+            }
             Err(e) => req.not_found(&format!("{rel}: {e}")),
         }
     })?;
 
     // --- Card files, read-only --------------------------------------------
-    server.route("/filelist.txt", Method::Get, |req| {
+    // Every root manifest — `filelist.txt`, `filelist.odm.txt`,
+    // `filelist.hall`, `filelist.xmas` — served as text. Without this they
+    // fell through to the `/*` www catch-all and 404ed.
+    server.route("/filelist*", Method::Get, |req| {
         if !files::affordable(req)? {
             return Ok(());
         }
-        if files::serve(req, config::MANIFEST_PATH)? {
+        let rel = crate::httpd::percent_decode(req.path());
+        let name = rel.trim_start_matches('/');
+        if name.contains('/') {
+            return req.not_found(&rel);
+        }
+        let Some(path) = files::card_path(config::SD_MOUNT, name) else {
+            return req.bad_request("path escapes the card");
+        };
+        if files::serve(req, &path)? {
             Ok(())
         } else {
-            req.not_found("filelist.txt")
+            req.not_found(&rel)
         }
     })?;
 
@@ -433,6 +550,24 @@ fn send_setup(req: &mut Req) -> Result<()> {
     req.ok("text/html; charset=utf-8", SETUP_HTML_GZ)
 }
 
+/// Read a JSON request body of at most [`MAX_JSON_BODY`] bytes.
+///
+/// `Ok(None)` means a 413 has already been sent. ESP-IDF's server only takes
+/// bodies with a `Content-Length`, so the declared length is the whole check;
+/// whatever is left unread is drained by the server after the handler.
+fn json_body(req: &mut Req) -> Result<Option<Vec<u8>>> {
+    let declared = req.content_len();
+    if declared > MAX_JSON_BODY {
+        req.error(
+            413,
+            "413 Payload Too Large",
+            &format!("body is {declared} B, the limit is {MAX_JSON_BODY} B"),
+        )?;
+        return Ok(None);
+    }
+    req.read_to_vec(MAX_JSON_BODY).map(Some)
+}
+
 /// Stream a manifest upload to a temp file, then hand the swap to the main
 /// task, which drops the engine before the file underneath it changes.
 fn install_manifest(req: &mut Req, ctx: &Ctx, dest: String) -> Result<()> {
@@ -483,7 +618,7 @@ fn status_json(s: &Status) -> String {
         concat!(
             r#"{{"version":{},"variant":{},"uptime_secs":{},"ip":{},"wifi":{},"hostname":{},"#,
             r#""now_playing":{{"ordinal":{},"path":{},"title":{}}},"paused":{},"#,
-            r#""entries":{},"manifest":{},"#,
+            r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"gifs_started":{},"#,
             r#""sd":{{"mounted":{},"capacity_bytes":{}}}}}"#
@@ -500,6 +635,10 @@ fn status_json(s: &Status) -> String {
         s.paused,
         s.entries,
         json_string(&s.manifest),
+        json_string(s.index_state),
+        s.www_version
+            .as_deref()
+            .map_or_else(|| "null".to_string(), json_string),
         s.heap_free,
         s.heap_floor,
         s.heap_idf_min,

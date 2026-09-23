@@ -18,6 +18,7 @@ pub mod scheduler;
 pub use canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
 pub use engine::{
     Catalog, DwellPolicy, Engine, FileCatalog, NowPlaying, ReadSeek, Source, TickOutcome,
+    OFF_PLAYLIST,
 };
 pub use filter::Filter;
 pub use index::{write_index, IndexHeader, IndexedCatalog};

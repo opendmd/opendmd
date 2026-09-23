@@ -42,7 +42,19 @@ pub struct Status {
     pub title: String,
     pub paused: bool,
     pub entries: usize,
+    /// The manifest actually in play (filesystem path), resolved when the
+    /// playlist was last built — so with `set` = `""` it says which default
+    /// the card got (`filelist.odm.txt` or `filelist.txt`).
     pub manifest: String,
+    /// `"building"` while the main task is (re)building the playlist index —
+    /// several seconds for the stock card, during which a config PUT or a
+    /// manifest install is waiting for its reply — `"ready"` once an engine is
+    /// playing, `"unavailable"` if the last build failed (no card, no
+    /// manifest, nothing matched) and the loop is retrying.
+    pub index_state: &'static str,
+    /// First line of `/www/version.txt` (`git describe` of the web app, from
+    /// `make web`), or `None` if the card has none.
+    pub www_version: Option<String>,
     // Heap: `floor` is our own sampled low-water mark, which is the one to
     // trust; `idf_min` is esp_get_minimum_free_heap_size(), printed only so the
     // discrepancy stays visible (it is the sum of each region's own minimum).
@@ -74,6 +86,8 @@ impl Status {
             paused: false,
             entries: 0,
             manifest: String::new(),
+            index_state: "building",
+            www_version: None,
             heap_free: 0,
             heap_floor: 0,
             heap_idf_min: 0,
@@ -140,12 +154,35 @@ impl Applied {
 /// The reply channel every command that changes state carries.
 pub type Reply = mpsc::Sender<Result<Applied, String>>;
 
+/// The error [`Command::ApplyConfig`] replies with when the requested set's
+/// manifest does not open; the handler turns exactly this into a 404.
+pub const SET_NOT_FOUND: &str = "set not found";
+
+/// Why [`Command::PlayNow`] did not start the file. Each carries the message.
+#[derive(Debug)]
+pub enum PlayError {
+    /// The file did not open (404); what was on screen keeps playing.
+    NotFound(String),
+    /// It opened but is not a GIF or ODM file (415); the schedule moves on.
+    Unplayable(String),
+    /// There is no playlist running to interrupt (503).
+    NoPlaylist,
+}
+
 /// Work for the main task. Everything the web API can change goes through here.
 pub enum Command {
     /// End the current GIF at the next tick.
     Skip,
     /// Toggle pause and report the resulting state.
     TogglePause(mpsc::Sender<bool>),
+    /// Play this card-absolute path (`/gifs/…`, `/odm/…`) now, then carry on
+    /// with the schedule (`Engine::play_now`). The open happens on the main
+    /// task, between frames; the reply is `Err` if it failed, in which case
+    /// what was on screen keeps playing.
+    PlayNow {
+        path: String,
+        reply: mpsc::Sender<Result<(), PlayError>>,
+    },
     /// Persist a new configuration and apply what can be applied live.
     ///
     /// NVS is owned by the main task, so the handler cannot write it itself.
@@ -153,6 +190,12 @@ pub enum Command {
     /// a change of platform filter, active set or shuffle mode rebuilds the
     /// engine, and a change of WiFi credentials only takes effect at the next
     /// boot. Replies `Ok(entries)` or `Err(message)`.
+    ///
+    /// A set change is checked **before anything is saved**: the new manifest
+    /// is opened first and, if it will not open, the reply is
+    /// [`SET_NOT_FOUND`] with NVS and the running engine untouched. (Saving
+    /// first used to leave the board with no playlist, retrying forever,
+    /// across reboots.)
     ApplyConfig {
         settings: Box<crate::nvs_config::Settings>,
         reply: Reply,

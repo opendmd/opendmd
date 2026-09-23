@@ -239,11 +239,18 @@ make pack ARGS="manifest /path/to/card"          # -> filelist.odm.txt
 make pack ARGS="convert /path/to/card --layout bucketed --verify"
 make pack ARGS="manifest /path/to/card --layout bucketed"   # -> filelist.odm.txt
 
-# onto a running player: the files, then the manifest as a set, then select it
+# onto a running player: the files, then the manifest (the next boot plays it)
 uv run tools/card-sync.py <host> --from /path/to/card --paths list.txt
-curl -T /path/to/card/filelist.odm.txt http://<host>/api/sets/odm
-curl -X PUT -d '{"set":"odm"}' http://<host>/api/config
+curl -T /path/to/card/filelist.odm.txt http://<host>/api/files/filelist.odm.txt
+curl -X POST http://<host>/api/reboot     # or PUT /api/config {"set":"filelist.odm.txt"} now
 ```
+
+**`filelist.odm.txt` is the default playlist when the card has one**: with no
+set selected the firmware plays it in preference to `filelist.txt` (chosen at
+boot and at every set change; `/api/status` reports the one in play as
+`manifest`). `PUT /api/config {"set":"filelist.txt"}` plays the GIFs instead,
+`{"set":""}` goes back to the default, and any other name is
+`/sets/<name>.txt`.
 
 Or copy the `.odm` files and the manifest onto the card directly. Either layout
 leaves `gifs/` and `filelist.txt` alone, so the card still works with stock
@@ -450,11 +457,18 @@ writes the offsets to a file beside the manifest instead — `filelist.txt.idx`
 The file records the manifest's length and a fingerprint of the platform
 filter it was built for; at boot a current one is simply reopened (~10 ms), and
 a missing or stale one is rebuilt in one pass (~6 s over SPI) via a temp file
-and a rename. `POST /api/reindex`, a filter or set change and a manifest upload
+and a rename. `index_state` in `/api/status` is `building` while that runs. `POST /api/reindex`, a filter or set change and a manifest upload
 all rebuild it in place, with no reboot. Anything that replaces a manifest
 deletes its `.idx` first. If the card is read-only the firmware falls back to
 the in-RAM index and keeps playing. `.idx` files are derived data: delete them
 whenever you like.
+
+**A set that does not exist is never saved.** `PUT /api/config` with a `set`
+whose manifest does not open is answered `404 {"error":"set not found"}` and
+changes nothing. And if the saved set has gone missing anyway (deleted with the
+card in a reader, a different card), the firmware logs it at boot, plays the
+default manifest and clears the set from NVS, rather than retrying a missing
+file forever.
 
 The simulator uses the same streaming index (the in-RAM `FileCatalog`), so
 `make sim` exercises the same manifest path the firmware does.
@@ -463,8 +477,10 @@ The simulator uses the same streaming index (the in-RAM `FileCatalog`), so
 
 A player for the cabinet is built with `make fw-release` — a release image in
 `dist/opendmd-<version>-4mb.bin` with no bench WiFi credentials in it —
-installed once over USB (`make fw-release-flash`) and updated over the air
-after that (`make ota HOST=opendmd.local`). Preparing a card from scratch,
+installed once over USB (`make fw-release-flash`, which also writes the
+project's bootloader) and updated over the air after that (`make ota
+HOST=opendmd.local`). An OTA image that resets before it has put its first
+frame on the panel is rolled back to the previous one by the bootloader. Preparing a card from scratch,
 first boot, what `/api/status` should read on a healthy install, and how to
 roll back are in [`docs/deploying.md`](docs/deploying.md).
 

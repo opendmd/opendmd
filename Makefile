@@ -11,6 +11,11 @@ FW     := firmware
 # Serial port of the DevKit. Override: make fw-flash PORT=/dev/ttyUSB1
 PORT ?= /dev/ttyUSB0
 FW_BINARY := $(FW)/target/xtensa-esp32-espidf/debug/opendmd-firmware
+# The project's own second-stage bootloader, which esp-idf-sys copies next to
+# the ELF. It has to be flashed explicitly: without --bootloader, espflash
+# writes its *bundled* bootloader, which has CONFIG_BOOTLOADER_APP_ROLLBACK
+# compiled out, so an OTA'd image that fails to boot would never be reverted.
+FW_BOOTLOADER := $(FW)/target/xtensa-esp32-espidf/debug/bootloader.bin
 
 # The xtensa toolchain env is written by `espup install --export-file
 # ~/.espup-env.sh`. Sourcing that file beats hardcoding the versioned
@@ -108,10 +113,13 @@ check-wasm:
 # (see "Serving gzip" in CLAUDE.md). wasm-pack's package.json, .d.ts files and
 # README are deleted so `make card-sync` does not push them to the card.
 # The budget is enforced here: wasm <= 250 KB, JS + CSS <= 80 KB (raw).
+# www/version.txt (gitignored) is `git describe` of this build; the firmware
+# reports it as `www_version` in /api/status once it is on the card.
 WEB_WWW := $(WEB)/www
 web:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
+	git describe --always --dirty --tags > $(WEB_WWW)/version.txt
 	find $(WEB_WWW) -name '*.gz' -delete
 	find $(WEB_WWW) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' \) \
 		-exec gzip -9 -n -k -f {} \;
@@ -184,8 +192,10 @@ fw-build:
 	@ls -l $(FW_BINARY)
 
 # 460800 baud gives frequent verify_failed errors on these CH340 boards.
+# otadata is erased so the board boots the ota_0 image just written even if it
+# had been OTA'd into ota_1 (espflash always writes the first app slot).
 fw-flash: fw-build
-	bash -c '. $(ESPUP_ENV) && espflash flash --port $(PORT) --baud 115200 --partition-table $(FW)/partitions.csv --flash-size 4mb --monitor $(FW_BINARY)'
+	bash -c '. $(ESPUP_ENV) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_BOOTLOADER) --partition-table $(FW)/partitions.csv --flash-size 4mb --erase-parts otadata --monitor $(FW_BINARY)'
 
 # NOTE: do NOT capture serial with `cat $(PORT)` or stty tricks — they toggle
 # DTR/RTS and the DevKit V1's auto-reset circuit reboots (or holds) the chip,
@@ -246,6 +256,7 @@ FW_VARIANT := 4mb
 # elsewhere it would lose the extra_components (hub75, mdns) in Cargo.toml.
 FW_RELEASE_TARGET_DIR ?= $(CURDIR)/$(FW)/target
 FW_RELEASE_BINARY := $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/opendmd-firmware
+FW_RELEASE_BOOTLOADER := $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/bootloader.bin
 FW_RELEASE_SDKCONFIG_FRAG := $(CURDIR)/$(FW)/target/sdkconfig.release
 FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_RELEASE_SDKCONFIG_FRAG)
 DIST := dist
@@ -276,7 +287,7 @@ fw-release:
 # image came from — plus bootloader and partition table, and erases otadata so
 # the board boots this image even if it had been OTA'd into ota_1 before.
 fw-release-flash: fw-release
-	bash -c '. $(ESPUP_ENV) && espflash flash --port $(PORT) --baud 115200 --partition-table $(FW)/partitions.csv --flash-size $(FW_VARIANT) --erase-parts otadata --monitor $(FW_RELEASE_BINARY)'
+	bash -c '. $(ESPUP_ENV) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW)/partitions.csv --flash-size $(FW_VARIANT) --erase-parts otadata --monitor $(FW_RELEASE_BINARY)'
 
 # Push an image over the air: make ota HOST=opendmd.local [BIN=dist/...]
 # Posts it to /api/ota, prints the reply, then polls /api/status until the

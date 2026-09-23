@@ -152,13 +152,18 @@ impl Default for DwellPolicy {
 /// What is on screen right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NowPlaying {
-    /// Index into the engine's entry slice.
+    /// Index into the engine's catalog, or [`OFF_PLAYLIST`] for a file
+    /// started with [`Engine::play_now`].
     pub index: usize,
     pub path: String,
     pub title: String,
     /// 1-based count of GIFs started since the engine was created.
     pub ordinal: u64,
 }
+
+/// [`NowPlaying::index`] of a file started by [`Engine::play_now`]: it did not
+/// come from the catalog.
+pub const OFF_PLAYLIST: usize = usize::MAX;
 
 /// Result of one [`Engine::tick`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -260,6 +265,46 @@ impl Engine {
             title: p.title.clone(),
             ordinal: p.ordinal,
         })
+    }
+
+    /// Play `path` next, now, ahead of the schedule.
+    ///
+    /// The file is opened straight away through the [`Source`] (so an open
+    /// failure is reported to the caller and what is on screen keeps
+    /// playing), then the current GIF is dropped *before* the new decoder is
+    /// built — never two decoders at once — and the file takes the screen at
+    /// the next [`tick`](Engine::tick) with a fresh dwell: it plays under the
+    /// same [`DwellPolicy`] as any entry, after which the scheduler resumes
+    /// where it was. The scheduler is not advanced and the file need not be in
+    /// the catalog; it is reported with [`OFF_PLAYLIST`] as its index. A
+    /// pending [`skip`](Engine::skip) is cancelled, and a paused engine stays
+    /// paused (the file starts on resume). Its tags come from
+    /// [`Entry::from_path`], exactly as if a manifest had named it.
+    ///
+    /// Errors: the open failed (the current GIF is untouched), or the file
+    /// opened but is neither a GIF nor an ODM file (the current GIF is gone
+    /// and the scheduler picks the next entry at the next tick).
+    pub fn play_now(&mut self, path: &str, now: Duration) -> io::Result<()> {
+        let reader = self.source.open(path)?;
+        self.current = None;
+        self.skip_requested = false;
+        let gif = Stream::open(reader)?;
+        self.started_count += 1;
+        // A paused engine has not run its clock; `resume` shifts these by the
+        // pause, so start them at the pause instant rather than `now`.
+        let at = self.paused_since.unwrap_or(now);
+        self.current = Some(Playing {
+            index: OFF_PLAYLIST,
+            path: path.to_string(),
+            title: Entry::from_path(path).title,
+            ordinal: self.started_count,
+            gif,
+            started_at: at,
+            next_frame_at: at,
+            loops: 0,
+            first_frame: true,
+        });
+        Ok(())
     }
 
     /// Finish the current GIF at the next tick.
@@ -567,6 +612,62 @@ mod tests {
         };
         assert_eq!(playing.path, "/gifs/Consoles/NES_B_01.gif");
         assert_eq!(e.catalog_len(), 2);
+    }
+
+    #[test]
+    fn play_now_jumps_the_queue_then_the_schedule_resumes() {
+        let dwell = DwellPolicy {
+            min: Duration::ZERO,
+            max: Duration::from_secs(30),
+            min_loops: 1,
+        };
+        let mut e = engine_with(
+            &[
+                ("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0)),
+                ("/gifs/Consoles/NES_B_01.gif", one_pixel_gif(0, 255, 0)),
+                ("/gifs/Other/SNES_Preview_01.gif", one_pixel_gif(0, 0, 255)),
+            ],
+            "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
+            dwell,
+        );
+        let mut canvas = Canvas::new();
+        let TickOutcome::Frame { playing, .. } = e.tick(Duration::ZERO, &mut canvas).unwrap()
+        else {
+            panic!("expected A");
+        };
+        assert_eq!(playing.title, "A");
+
+        // A missing file is an error and leaves A on screen.
+        assert!(e
+            .play_now("/gifs/nope.gif", Duration::from_millis(10))
+            .is_err());
+        assert_eq!(e.now_playing().unwrap().title, "A");
+
+        // Mid-frame: the preview takes the screen at the very next tick, not
+        // after A's delay.
+        e.play_now("/gifs/Other/SNES_Preview_01.gif", Duration::from_millis(10))
+            .unwrap();
+        let t = Duration::from_millis(10);
+        match e.tick(t, &mut canvas).unwrap() {
+            TickOutcome::Frame {
+                playing, started, ..
+            } => {
+                assert!(started);
+                assert_eq!(playing.index, OFF_PLAYLIST);
+                assert_eq!(playing.path, "/gifs/Other/SNES_Preview_01.gif");
+                assert_eq!(playing.title, "Preview");
+                assert_eq!(playing.ordinal, 2);
+            }
+            other => panic!("expected the preview, got {other:?}"),
+        }
+        assert_eq!(canvas.get(0, 0), Rgb::new(0, 0, 255));
+
+        // Once its dwell is spent the schedule carries on with B — A's turn
+        // was used, the scheduler was not advanced by the preview.
+        match e.tick(t + Duration::from_millis(100), &mut canvas).unwrap() {
+            TickOutcome::Frame { playing, .. } => assert_eq!(playing.title, "B"),
+            other => panic!("expected B, got {other:?}"),
+        }
     }
 
     #[test]

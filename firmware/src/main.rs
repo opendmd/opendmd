@@ -69,7 +69,7 @@ use crate::http::{Ctx, NetCommand};
 use crate::nvs_config::{Config, Settings};
 use crate::panel::{Panel, PanelConfig};
 use crate::sd::{SdBus, SdSource};
-use crate::state::{free_heap, Applied, Command, IndexSource, Status};
+use crate::state::{free_heap, Applied, Command, IndexSource, PlayError, Status};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -166,6 +166,11 @@ fn main() -> Result<()> {
         log::info!("first boot with build-time credentials; they are now in NVS");
     }
     let mut settings = nvs_config.load();
+    // A set whose manifest no longer opens (deleted off-device, another card,
+    // or saved by a firmware that did not check) would leave the board with no
+    // playlist, retrying forever across reboots. Forget it and play the
+    // default instead.
+    heal_missing_set(&mut settings, &mut nvs_config);
     panel.set_brightness(settings.brightness);
     log::info!(
         "settings: brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', host='{}', wifi={}",
@@ -203,6 +208,9 @@ fn main() -> Result<()> {
     // sleep (see step 3): a UART line costs ~87 µs a byte and the console
     // write blocks, so printing inside the frame would count as lateness.
     let mut deferred: Vec<Deferred> = Vec::with_capacity(2);
+    // Whether this image has told the bootloader it works (see
+    // `ota::confirm_running_image`): done once, after the first frame.
+    let mut confirmed = false;
 
     // --- Shared state, the HTTP server, and the network worker ------------
     let status = Arc::new(Mutex::new(Status::new(VERSION, settings.hostname.clone())));
@@ -210,7 +218,7 @@ fn main() -> Result<()> {
         let mut s = status.lock().unwrap();
         s.sd_mounted = true;
         s.sd_capacity_bytes = _card.capacity_bytes;
-        s.manifest = settings.manifest_path();
+        s.www_version = files::read_www_version();
         s.refresh_hz = panel.refresh_rate();
     }
     let shared_settings = Arc::new(Mutex::new(settings.clone()));
@@ -224,7 +232,7 @@ fn main() -> Result<()> {
     // fresh heap to work with. If the card has no readable manifest the loop
     // below keeps retrying.
     let mut engine: Option<Engine> = None;
-    let _ = rebuild(&mut engine, &settings, false);
+    let _ = rebuild(&mut engine, &settings, false, &status);
 
     // The HTTP server next, still before the first GIF is decoded: its task
     // stack is one contiguous 16 KB internal allocation, and the largest free
@@ -288,11 +296,45 @@ fn main() -> Result<()> {
                     status.lock().unwrap().paused = paused;
                     let _ = reply.send(paused);
                 }
+                Command::PlayNow { path, reply } => {
+                    // One open, here between frames (a directory scan: ~6 ms
+                    // in a bucket, ~330 ms in `gifs/Consoles`), then the file
+                    // takes the screen at the next tick under the usual dwell.
+                    let outcome = match engine.as_mut() {
+                        Some(e) => e.play_now(&path, epoch.elapsed()).map_err(|err| {
+                            let msg = format!("{path}: {err}");
+                            if err.kind() == std::io::ErrorKind::InvalidData {
+                                PlayError::Unplayable(msg)
+                            } else {
+                                PlayError::NotFound(msg)
+                            }
+                        }),
+                        None => Err(PlayError::NoPlaylist),
+                    };
+                    match &outcome {
+                        Ok(()) => log::info!("play now: {path}"),
+                        Err(e) => log::warn!("play now: {e:?}"),
+                    }
+                    let _ = reply.send(outcome);
+                }
                 Command::ApplyConfig {
                     settings: next,
                     reply,
                 } => {
                     let next = *next;
+                    // Check the new set's manifest opens *before* anything is
+                    // saved: persisting a set that does not exist used to leave
+                    // the engine at None and the board retrying forever, across
+                    // reboots. `""` is always acceptable (it resolves to
+                    // whichever default the card has).
+                    if next.set != settings.set && !next.set.is_empty() {
+                        let path = next.manifest_path();
+                        if let Err(e) = File::open(&path) {
+                            log::warn!("config: set '{}' rejected, {path}: {e}", next.set);
+                            let _ = reply.send(Err(state::SET_NOT_FOUND.to_string()));
+                            continue;
+                        }
+                    }
                     let needs_reindex = next.platforms != settings.platforms
                         || next.set != settings.set
                         || next.shuffle != settings.shuffle;
@@ -304,7 +346,6 @@ fn main() -> Result<()> {
                         Ok(()) => {
                             settings = next;
                             *shared_settings.lock().unwrap() = settings.clone();
-                            status.lock().unwrap().manifest = settings.manifest_path();
                             // Brightness and dwell apply to what is on screen
                             // right now; a filter, set or order change means a
                             // new catalog — rebuilt in place, never a reboot.
@@ -324,7 +365,7 @@ fn main() -> Result<()> {
                             let outcome = if needs_reindex {
                                 // A current `.idx` for the new set/filter is
                                 // reused; anything else is rebuilt.
-                                rebuild(&mut engine, &settings, false)
+                                rebuild(&mut engine, &settings, false, &status)
                             } else {
                                 Ok(Applied::unchanged(
                                     engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -337,7 +378,7 @@ fn main() -> Result<()> {
                 Command::Reindex(reply) => {
                     // Forced: the caller asked, perhaps because the manifest
                     // was edited off-device with its length unchanged.
-                    let outcome = rebuild(&mut engine, &settings, true);
+                    let outcome = rebuild(&mut engine, &settings, true, &status);
                     log::info!("reindex requested over HTTP: {outcome:?}");
                     let _ = reply.send(outcome);
                 }
@@ -348,7 +389,12 @@ fn main() -> Result<()> {
                     // *before* the new manifest lands (see
                     // `files::remove_index_beside` for why that order), and the
                     // index is rebuilt if this is the manifest in play.
-                    let active = settings.manifest_path() == dest;
+                    // Compared with the manifest actually in play, which for
+                    // `set` = "" is whichever default was resolved at the last
+                    // build (installing `filelist.odm.txt` onto a card playing
+                    // `filelist.txt` takes effect at the next boot or set
+                    // change, like any other default change).
+                    let active = files::same_card_path(&status.lock().unwrap().manifest, &dest);
                     if active {
                         engine = None;
                     }
@@ -360,7 +406,7 @@ fn main() -> Result<()> {
                         })
                         .and_then(|()| {
                             if active {
-                                rebuild(&mut engine, &settings, true)
+                                rebuild(&mut engine, &settings, true, &status)
                             } else {
                                 Ok(Applied::unchanged(
                                     engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -380,7 +426,14 @@ fn main() -> Result<()> {
 
         // 2. No engine (boot, or a reindex that failed): try to build one.
         let Some(eng) = engine.as_mut() else {
-            if rebuild(&mut engine, &settings, false).is_err() {
+            if rebuild(&mut engine, &settings, false, &status).is_err() {
+                // The set may have gone missing under us (deleted off-device,
+                // card swapped): fall back to the default at once rather than
+                // retrying a manifest that is not there.
+                if heal_missing_set(&mut settings, &mut nvs_config) {
+                    *shared_settings.lock().unwrap() = settings.clone();
+                    continue;
+                }
                 thread::sleep(config::RETRY_INTERVAL);
             }
             continue;
@@ -463,6 +516,14 @@ fn main() -> Result<()> {
                         worst_lateness_ms = worst_lateness_ms.max(late);
                         thread::sleep(config::CATCHUP_SLEEP);
                     }
+                }
+                // The panel is up, the card is mounted and a frame is on the
+                // glass: this image works. Tell the bootloader, so that a
+                // freshly OTA'd image is kept rather than rolled back at the
+                // next reset. Once per boot, after the frame's sleep.
+                if !confirmed {
+                    confirmed = true;
+                    ota::confirm_running_image();
                 }
                 sampled_min = sampled_min.min(free_heap());
             }
@@ -583,9 +644,8 @@ fn dwell_policy(settings: &Settings) -> DwellPolicy {
 
 /// A fresh engine over the configured manifest's playlist index, shuffled with
 /// a hardware-random seed so two boots do not play the same order.
-fn build_engine(settings: &Settings, force: bool) -> Result<(Engine, IndexSource)> {
-    let path = settings.manifest_path();
-    let (catalog, source) = open_catalog(&path, &build_filter(settings), force)?;
+fn build_engine(settings: &Settings, path: &str, force: bool) -> Result<(Engine, IndexSource)> {
+    let (catalog, source) = open_catalog(path, &build_filter(settings), force)?;
     let catalog: Box<dyn Catalog> = if probe::ENABLED {
         Box::new(probe::TimedCatalog(catalog))
     } else {
@@ -757,11 +817,39 @@ fn rebuild(
     engine: &mut Option<Engine>,
     settings: &Settings,
     force: bool,
+    status: &Mutex<Status>,
 ) -> Result<Applied, String> {
-    let path = settings.manifest_path();
     *engine = None;
+    // Resolved here, every time: with `set` = "" this is where the card's
+    // default (`filelist.odm.txt` over `filelist.txt`) is chosen.
+    let path = settings.manifest_path();
+    {
+        let mut s = status.lock().unwrap();
+        s.manifest = path.clone();
+        s.index_state = "building";
+    }
+    let outcome = build_and_report(engine, settings, &path, force);
+    let mut s = status.lock().unwrap();
+    // `entries` too, so a status read right after the reply is already right
+    // (the frame loop only republishes it after its next frame).
+    s.entries = outcome.as_ref().map_or(0, |a| a.entries);
+    s.index_state = if outcome.is_ok() {
+        "ready"
+    } else {
+        "unavailable"
+    };
+    drop(s);
+    outcome
+}
+
+fn build_and_report(
+    engine: &mut Option<Engine>,
+    settings: &Settings,
+    path: &str,
+    force: bool,
+) -> Result<Applied, String> {
     let started = Instant::now();
-    match build_engine(settings, force) {
+    match build_engine(settings, path, force) {
         Ok((built, source)) => {
             let ms = started.elapsed().as_millis() as u64;
             let entries = built.catalog_len();
@@ -793,6 +881,31 @@ fn rebuild(
             Err(format!("{path}: {e:#}"))
         }
     }
+}
+
+/// If the configured set's manifest will not open, fall back to the default
+/// manifest and clear `set` in NVS. Returns true if it did.
+///
+/// Called at boot and whenever the main loop has no engine. `""` (the default)
+/// is never "missing" here: if the card has no `filelist.txt` either, the loop
+/// keeps retrying exactly as it does for a card with nothing on it.
+fn heal_missing_set(settings: &mut Settings, nvs: &mut Config) -> bool {
+    if settings.set.is_empty() {
+        return false;
+    }
+    let path = settings.manifest_path();
+    let Err(e) = File::open(&path) else {
+        return false;
+    };
+    log::warn!(
+        "configured set '{}' does not open ({path}: {e}); falling back to the default manifest and clearing it from NVS",
+        settings.set
+    );
+    settings.set.clear();
+    if let Err(e) = nvs.save(settings) {
+        log::error!("clearing the set in NVS failed ({e:#}); the default plays for this boot only");
+    }
+    true
 }
 
 /// Reboot so the in-RAM fallback index can be built on a fresh heap.
