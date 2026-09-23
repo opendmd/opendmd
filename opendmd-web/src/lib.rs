@@ -15,17 +15,18 @@
 //!
 //! The card is not on a filesystem here, so [`Source`] is backed by the byte
 //! arrays JS handed over and [`Catalog`] by the list of reconstructed paths.
-//! `Cursor<Vec<u8>>` clones a GIF's bytes on every open — fine for a spike on
-//! a desktop, and the thing to revisit before this becomes the real UI.
+//! `Cursor<Vec<u8>>` clones a GIF's bytes on every open (a loop rewinds the
+//! cursor instead, so that is once per GIF started) — fine for a spike on a
+//! desktop, and the thing to revisit before this becomes the real UI.
 
 use opendmd_core::canvas::{Canvas, HEIGHT, WIDTH};
-use opendmd_core::engine::{Catalog, DwellPolicy, Engine, Source, TickOutcome};
+use opendmd_core::engine::{Catalog, DwellPolicy, Engine, ReadSeek, Source, TickOutcome};
 use opendmd_core::filter::Filter;
 use opendmd_core::manifest::Entry;
 use opendmd_core::scheduler::{Mode, Scheduler};
 use opendmd_render::{LedRenderer, BLOOM_STRENGTH, MIN_LED_SCALE};
 use std::collections::HashMap;
-use std::io::{self, Cursor, Read};
+use std::io::{self, Cursor};
 use std::rc::Rc;
 use std::time::Duration;
 use wasm_bindgen::prelude::*;
@@ -69,7 +70,7 @@ pub fn card_path(relative: &str) -> String {
 struct MemSource(Files);
 
 impl Source for MemSource {
-    fn open(&self, path: &str) -> io::Result<Box<dyn Read>> {
+    fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
         match self.0.get(path) {
             Some(bytes) => Ok(Box::new(Cursor::new(bytes.clone()))),
             None => Err(io::Error::new(io::ErrorKind::NotFound, path.to_string())),

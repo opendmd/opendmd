@@ -8,13 +8,15 @@
 //! ```
 
 use opendmd_core::canvas::Canvas;
-use opendmd_core::engine::{Catalog, DwellPolicy, Engine, FileCatalog, Source, TickOutcome};
+use opendmd_core::engine::{
+    Catalog, DwellPolicy, Engine, FileCatalog, ReadSeek, Source, TickOutcome,
+};
 use opendmd_core::filter::Filter;
 use opendmd_core::index::{write_index, IndexHeader, IndexedCatalog};
 use opendmd_core::manifest::{parse_manifest, render_manifest};
 use opendmd_core::scheduler::{Mode, Rng, Scheduler};
 use std::collections::BTreeMap;
-use std::io::{self, BufReader, Read};
+use std::io::{self, BufReader};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -24,7 +26,7 @@ struct DirSource {
 }
 
 impl Source for DirSource {
-    fn open(&self, path: &str) -> io::Result<Box<dyn Read>> {
+    fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
         let rel = path.trim_start_matches('/');
         Ok(Box::new(std::fs::File::open(self.root.join(rel))?))
     }

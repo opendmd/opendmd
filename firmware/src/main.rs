@@ -41,6 +41,7 @@ mod net_worker;
 mod nvs_config;
 mod ota;
 mod panel;
+mod probe;
 mod sd;
 mod state;
 mod wifi;
@@ -121,6 +122,10 @@ fn main() -> Result<()> {
         panel.refresh_rate(),
     );
 
+    if probe::ENABLED {
+        panel.bench();
+    }
+
     // GPIO 2 (onboard LED) is deliberately untouched — see hardware/PINOUT.md.
     //
     // The GPIO peripherals are typed (`Gpio18` and friends), so the numbers in
@@ -194,6 +199,10 @@ fn main() -> Result<()> {
     let mut deadline_misses: u64 = 0;
     let mut worst_lateness_ms: u64 = 0;
     let mut started: u64 = 0;
+    // Log lines raised while a frame is being produced, printed after its
+    // sleep (see step 3): a UART line costs ~87 µs a byte and the console
+    // write blocks, so printing inside the frame would count as lateness.
+    let mut deferred: Vec<Deferred> = Vec::with_capacity(2);
 
     // --- Shared state, the HTTP server, and the network worker ------------
     let status = Arc::new(Mutex::new(Status::new(VERSION, settings.hostname.clone())));
@@ -377,9 +386,21 @@ fn main() -> Result<()> {
             continue;
         };
 
-        // 3. One frame.
+        // 3. One frame. First whatever the previous frame deferred: we are
+        //    past its sleep, and this frame's clock has not started yet.
+        for line in deferred.drain(..) {
+            line.log();
+        }
+        probe::flush();
         let entries = eng.catalog_len();
-        let outcome = eng.tick(epoch.elapsed(), &mut canvas)?;
+        probe::tick_begin();
+        let tick_now = epoch.elapsed();
+        let outcome = eng.tick(tick_now, &mut canvas)?;
+        let tick_us = if probe::ENABLED {
+            epoch.elapsed().saturating_sub(tick_now).as_micros() as u32
+        } else {
+            0
+        };
         sampled_min = sampled_min.min(free_heap());
         match outcome {
             TickOutcome::Frame {
@@ -387,17 +408,17 @@ fn main() -> Result<()> {
                 started: is_new,
                 next_frame_at,
             } => {
-                panel.blit(&canvas);
+                let blit_start = probe::stamp();
+                let blit_px = panel.blit(&mut canvas);
+                let blit_us = probe::elapsed_us(blit_start);
                 sampled_min = sampled_min.min(free_heap());
+                let log_start = probe::stamp();
                 if is_new {
                     started = playing.ordinal;
-                    log::info!(
-                        "[{}] {} (heap {} B free, largest block {} B)",
-                        playing.ordinal,
-                        playing.path,
-                        free_heap(),
-                        largest_free_block()
-                    );
+                    deferred.push(Deferred::Started {
+                        ordinal: playing.ordinal,
+                        path: playing.path.clone(),
+                    });
                     let mut s = status.lock().unwrap();
                     s.ordinal = playing.ordinal;
                     s.path = playing.path.clone();
@@ -407,18 +428,30 @@ fn main() -> Result<()> {
                 // Attribute every new low-water mark to the GIF on screen, so
                 // a heap regression names the file that caused it.
                 if sampled_min + 2048 < low_water {
-                    log::warn!(
-                        "heap low-water {} B -> {} B during [{}] {}",
-                        low_water,
-                        sampled_min,
-                        playing.ordinal,
-                        playing.path
-                    );
+                    deferred.push(Deferred::LowWater {
+                        from: low_water,
+                        to: sampled_min,
+                        ordinal: playing.ordinal,
+                        path: playing.path.clone(),
+                    });
                     low_water = sampled_min;
                 }
                 // Hold the frame for its GIF delay. Read the clock again,
                 // because the blit itself took time.
                 let now = epoch.elapsed();
+                if probe::ENABLED {
+                    let times = probe::FrameTimes {
+                        tick_us,
+                        blit_us,
+                        blit_px,
+                        log_us: probe::elapsed_us(log_start),
+                        work_us: now.saturating_sub(tick_now).as_micros() as u32,
+                        delay_ms: next_frame_at.saturating_sub(tick_now).as_millis() as u64,
+                    };
+                    let late_ms = (now > next_frame_at)
+                        .then(|| now.saturating_sub(next_frame_at).as_millis() as u64);
+                    probe::frame(&times, late_ms, is_new, &playing.path);
+                }
                 match next_frame_at.checked_sub(now) {
                     Some(remaining) => thread::sleep(remaining),
                     None => {
@@ -465,6 +498,37 @@ fn main() -> Result<()> {
                 deadline_misses,
                 worst_lateness_ms,
             );
+        }
+    }
+}
+
+/// A log line owed by a frame, printed after that frame's sleep.
+enum Deferred {
+    /// A GIF started. The heap figures are read when the line is printed,
+    /// between frames: `heap_caps_get_largest_free_block` walks the heap.
+    Started { ordinal: u64, path: String },
+    LowWater {
+        from: u32,
+        to: u32,
+        ordinal: u64,
+        path: String,
+    },
+}
+
+impl Deferred {
+    fn log(self) {
+        match self {
+            Deferred::Started { ordinal, path } => log::info!(
+                "[{ordinal}] {path} (heap {} B free, largest block {} B)",
+                free_heap(),
+                largest_free_block()
+            ),
+            Deferred::LowWater {
+                from,
+                to,
+                ordinal,
+                path,
+            } => log::warn!("heap low-water {from} B -> {to} B during [{ordinal}] {path}"),
         }
     }
 }
@@ -522,6 +586,11 @@ fn dwell_policy(settings: &Settings) -> DwellPolicy {
 fn build_engine(settings: &Settings, force: bool) -> Result<(Engine, IndexSource)> {
     let path = settings.manifest_path();
     let (catalog, source) = open_catalog(&path, &build_filter(settings), force)?;
+    let catalog: Box<dyn Catalog> = if probe::ENABLED {
+        Box::new(probe::TimedCatalog(catalog))
+    } else {
+        catalog
+    };
     let mode = if settings.shuffle {
         Mode::Shuffle
     } else {
@@ -757,6 +826,7 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms), \
-         wifi {wifi} {ip}"
+         wifi {wifi} {ip}{}",
+        probe::period_summary()
     );
 }

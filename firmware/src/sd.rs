@@ -17,9 +17,9 @@ use esp_idf_hal::spi::config::DriverConfig;
 use esp_idf_hal::spi::{Dma, SpiAnyPins, SpiDriver};
 use esp_idf_svc::fs::fatfs::Fatfs;
 use esp_idf_svc::io::vfs::MountedFatfs;
-use opendmd_core::engine::Source;
+use opendmd_core::engine::{ReadSeek, Source};
 use std::fs::File;
-use std::io::{self, Read};
+use std::io;
 
 use crate::config;
 
@@ -114,11 +114,22 @@ impl SdBus {
 pub struct SdSource;
 
 impl Source for SdSource {
-    fn open(&self, path: &str) -> io::Result<Box<dyn Read>> {
+    fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
         let full = format!("{}{path}", config::SD_MOUNT);
         // No `BufReader` here: the `gif` crate wraps whatever it is handed in
         // an 8 KiB `BufReader` of its own, so a second one buys nothing but
         // 4 KB of heap on a board that has ~60 KB free while playing.
+        //
+        // This open is a linear scan of the file's FAT directory (~0.65 ms
+        // per 512 B sector: ~330 ms in the 3,781-entry `gifs/Consoles`), which
+        // is why the engine loops a file by seeking this handle back to 0
+        // instead of opening it again, and why `opendmd-pack --layout
+        // bucketed` spreads `.odm` files over ~15-entry directories.
+        if crate::probe::ENABLED {
+            return Ok(Box::new(crate::probe::TimedFile(crate::probe::open(
+                &full,
+            )?)));
+        }
         Ok(Box::new(File::open(full)?))
     }
 }

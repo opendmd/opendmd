@@ -9,7 +9,7 @@
 
 use anyhow::{bail, Result};
 use esp_idf_sys::hub75;
-use opendmd_core::canvas::{Canvas, HEIGHT, WIDTH};
+use opendmd_core::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
 
 use crate::config;
 
@@ -112,23 +112,166 @@ impl Panel {
         Ok(panel)
     }
 
-    /// Push a whole canvas and swap buffers: one FFI call to draw it, one flip
-    /// to make it visible, so a frame is never half-drawn on screen.
+    /// Push what changed on the canvas into the panel's DMA buffer, then
+    /// forget it: only the pixels the canvas's [`DirtyMap`] marks are sent,
+    /// row by row, one span at a time.
+    ///
+    /// The panel is single-buffered (`config::DOUBLE_BUFFER`), so the DMA
+    /// buffer still holds everything drawn before and a clean pixel needs no
+    /// work at all. That matters because pushing a pixel is the expensive
+    /// part of a frame: 13.6 ms for all 4,096 through the driver's
+    /// `drawPixelRGB888`, more than a 20 ms frame's decode. The shim's
+    /// `hub75_draw_span` writes the same bits with the per-row work hoisted
+    /// (see `hub75_shim.cpp`), and a GIF or ODM frame usually repaints a
+    /// fraction of the screen, so most frames cost a fraction of that. A frame
+    /// that changes every pixel (the first of each file, and each loop's
+    /// first, which clear the canvas) still pushes all of them.
     ///
     /// The canvas *is* the staging buffer. `Rgb` is `#[repr(C)]` with three
     /// `u8` fields, so `Canvas::as_bytes` is already exactly the packed RGB888
-    /// the shim wants — the 12 KB copy this used to make was the same bytes in
-    /// a different place. Dropping it gave back 12 KB of heap on a board that
-    /// has ~30 KB free while playing over WiFi, and took a memcpy out of every
-    /// frame.
-    pub fn blit(&mut self, canvas: &Canvas) {
-        debug_assert_eq!(canvas.as_bytes().len(), WIDTH * HEIGHT * 3);
-        // SAFETY: `as_bytes` is exactly WIDTH * HEIGHT * 3 bytes, which is what
-        // the shim reads for these dimensions, and the shim only reads it.
-        unsafe {
-            hub75::hub75_draw_rgb888(canvas.as_bytes().as_ptr(), WIDTH as u16, HEIGHT as u16);
-            hub75::hub75_flip();
+    /// the shim wants.
+    ///
+    /// Returns the number of pixels pushed.
+    pub fn blit(&mut self, canvas: &mut Canvas) -> u32 {
+        // Pushing only what changed relies on the buffer being written still
+        // holding the previous frame, which is only true single-buffered: a
+        // double-buffered back buffer is two frames old.
+        if self.cfg.double_buffer {
+            canvas.dirty_mut().mark_all();
         }
+        let mut rows = canvas.dirty().row_mask();
+        if rows == 0 {
+            return 0;
+        }
+        let bytes = canvas.as_bytes();
+        debug_assert_eq!(bytes.len(), WIDTH * HEIGHT * 3);
+        let row_of = |y: usize| &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
+        let mut pushed = 0;
+        // Rows y and y + HALF share every DMA word, so when both are dirty
+        // end to end they go in one pass.
+        const HALF: usize = HEIGHT / 2;
+        for y in 0..HALF {
+            let pair = (1u32 << y) | (1u32 << (y + HALF));
+            if rows & pair == pair
+                && canvas.dirty().row_spans(y).eq([(0, WIDTH)])
+                && canvas.dirty().row_spans(y + HALF).eq([(0, WIDTH)])
+            {
+                // SAFETY: two full canvas rows, y < HEIGHT / 2; read only.
+                unsafe {
+                    hub75::hub75_draw_row_pair(
+                        row_of(y).as_ptr(),
+                        row_of(y + HALF).as_ptr(),
+                        y as u16,
+                    )
+                };
+                rows &= !pair;
+                pushed += 2 * WIDTH as u32;
+            }
+        }
+        while rows != 0 {
+            let y = rows.trailing_zeros() as usize;
+            rows &= rows - 1;
+            let row = row_of(y);
+            for (x0, x1) in canvas.dirty().row_spans(y) {
+                // SAFETY: `row` is one full canvas row (WIDTH * 3 bytes) and
+                // x0 < x1 <= WIDTH, so the shim reads only inside it; it only
+                // reads. y < HEIGHT.
+                unsafe { hub75::hub75_draw_span(row.as_ptr(), y as u16, x0 as u16, x1 as u16) };
+                pushed += (x1 - x0) as u32;
+            }
+        }
+        // SAFETY: no arguments; a no-op when single-buffered.
+        unsafe { hub75::hub75_flip() };
+        canvas.dirty_mut().clear();
+        pushed
+    }
+
+    /// Time the ways of getting a canvas into the DMA buffer, and check that
+    /// the span writer produces bit-for-bit what the driver's own per-pixel
+    /// path does. Probe builds run this once at boot, before anything else
+    /// is on screen; it leaves the panel cleared.
+    pub fn bench(&mut self) {
+        use std::time::Instant;
+        // A busy image with every channel value in use.
+        let mut canvas = Canvas::new();
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let v = (x * 7 + y * 13) as u8;
+                canvas.set(x, y, Rgb::new(v, v.wrapping_mul(3), v ^ 0x5a));
+            }
+        }
+        let bytes = canvas.as_bytes();
+        const N: u32 = 10;
+        let time = |f: &mut dyn FnMut()| {
+            let t = Instant::now();
+            for _ in 0..N {
+                f();
+            }
+            t.elapsed().as_micros() as u32 / N
+        };
+        let full_rows = || {
+            for y in 0..HEIGHT {
+                let row = bytes[y * WIDTH * 3..].as_ptr();
+                // SAFETY: as in `blit`.
+                unsafe { hub75::hub75_draw_span(row, y as u16, 0, WIDTH as u16) };
+            }
+        };
+
+        // SAFETY (all blocks below): the shim reads `bytes` only within
+        // WIDTH * HEIGHT * 3 and the coordinates are in range.
+        let legacy_us = time(&mut || unsafe {
+            hub75::hub75_draw_rgb888(bytes.as_ptr(), WIDTH as u16, HEIGHT as u16)
+        });
+        let legacy_sum = unsafe { hub75::hub75_fb_checksum() };
+        let per_pixel_us = time(&mut || {
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    let o = (y * WIDTH + x) * 3;
+                    unsafe {
+                        hub75::hub75_set_pixel(
+                            x as u16,
+                            y as u16,
+                            bytes[o],
+                            bytes[o + 1],
+                            bytes[o + 2],
+                        )
+                    };
+                }
+            }
+        });
+        self.clear();
+        let span_us = time(&mut || full_rows());
+        let span_sum = unsafe { hub75::hub75_fb_checksum() };
+        self.clear();
+        let pair_us = time(&mut || {
+            for y in 0..HEIGHT / 2 {
+                let (t, b) = (
+                    &bytes[y * WIDTH * 3..],
+                    &bytes[(y + HEIGHT / 2) * WIDTH * 3..],
+                );
+                unsafe { hub75::hub75_draw_row_pair(t.as_ptr(), b.as_ptr(), y as u16) };
+            }
+        });
+        let pair_sum = unsafe { hub75::hub75_fb_checksum() };
+        // One 16x16 sprite's worth, the typical partial frame.
+        let sprite_us = time(&mut || {
+            for y in 8..24 {
+                let row = bytes[y * WIDTH * 3..].as_ptr();
+                unsafe { hub75::hub75_draw_span(row, y as u16, 56, 72) };
+            }
+        });
+        log::info!(
+            "blit bench (us per 128x32 frame, mean of {N}): driver drawPixelRGB888 {legacy_us}, \
+             FFI set_pixel {per_pixel_us}, draw_span full {span_us}, draw_row_pair full {pair_us}, \
+             draw_span 16x16 {sprite_us}; fb checksum driver {legacy_sum:08x} span {span_sum:08x} \
+             pair {pair_sum:08x} -> {}",
+            if legacy_sum == span_sum && legacy_sum == pair_sum {
+                "identical"
+            } else {
+                "MISMATCH"
+            }
+        );
+        self.clear();
     }
 
     pub fn set_brightness(&mut self, brightness: u8) {
@@ -137,6 +280,8 @@ impl Panel {
         unsafe { hub75::hub75_set_brightness(brightness) };
     }
 
+    /// Blank the DMA buffer. The canvas does not know: a caller that clears
+    /// the panel under a canvas it keeps blitting must `mark_all` it.
     pub fn clear(&mut self) {
         // SAFETY: as above.
         unsafe {

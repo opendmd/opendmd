@@ -29,7 +29,7 @@
 //! [`OdmSource`] is the decoder (the firmware's path), [`encode_gif`] the
 //! encoder (desktop and wasm; the ESP32 never runs it).
 
-use crate::canvas::{Canvas, HEIGHT, WIDTH};
+use crate::canvas::{Canvas, DirtyMap, HEIGHT, WIDTH};
 use crate::player::{blit, invalid, GifSource, Screen, MAX_LOGICAL_PIXELS};
 use std::collections::hash_map::{Entry as MapEntry, HashMap};
 use std::io::{self, BufReader, Read, Write};
@@ -210,6 +210,11 @@ impl<R: Read> OdmSource<R> {
         self.frames_decoded
     }
 
+    /// The reader, with the decoder's buffer (and whatever it held) dropped.
+    pub fn into_inner(self) -> R {
+        self.reader.into_inner()
+    }
+
     /// Frames in the file, from the header.
     pub fn frame_count(&self) -> u32 {
         self.frame_count
@@ -243,18 +248,22 @@ impl<R: Read> OdmSource<R> {
         let data_len = read_u32(reader)? as u64;
 
         {
-            let buf: &mut [u8] = match screen {
+            // `Direct`: FILL and LIT runs are marked in the canvas's dirty
+            // map as they are painted, KEEP runs are not — that is the whole
+            // point of the map. `Owned` is re-blitted (all marked) below.
+            let (buf, dirty): (&mut [u8], Option<&mut DirtyMap>) = match screen {
                 Screen::Direct { cleared } => {
                     if !*cleared {
-                        // Frame 0 is a delta against all-black.
+                        // Frame 0 is a delta against all-black. Marks all.
                         canvas.clear();
                         *cleared = true;
                     }
-                    canvas.as_mut_bytes()
+                    let (b, d) = canvas.bytes_and_dirty_mut();
+                    (b, Some(d))
                 }
-                Screen::Owned(v) => v.as_mut_slice(),
+                Screen::Owned(v) => (v.as_mut_slice(), None),
             };
-            let consumed = apply_ops(reader, palette, buf, width * height, data_len)?;
+            let consumed = apply_ops(reader, palette, buf, dirty, width * height, data_len)?;
             if consumed != data_len {
                 return Err(invalid(format!(
                     "ODM frame {} declares {data_len} bytes of ops but uses {consumed}",
@@ -275,12 +284,57 @@ impl<R: Read> OdmSource<R> {
     }
 }
 
+/// Writes pixels and, when there is a dirty map, marks the ones whose value
+/// changed, a run at a time. FILL and LIT are what the encoder emits for
+/// changed pixels, but a short unchanged stretch is folded into a LIT (see
+/// `MIN_RUN`) and a stray's crop can repeat colours, so the value decides.
+struct Runs<'a> {
+    dirty: Option<&'a mut DirtyMap>,
+    start: Option<usize>,
+    end: usize,
+}
+
+impl<'a> Runs<'a> {
+    fn new(dirty: Option<&'a mut DirtyMap>) -> Self {
+        Runs {
+            dirty,
+            start: None,
+            end: 0,
+        }
+    }
+
+    #[inline]
+    fn paint(&mut self, i: usize, px: &mut [u8; 3], rgb: &[u8]) {
+        if px[..] == *rgb {
+            return;
+        }
+        px.copy_from_slice(rgb);
+        if self.dirty.is_some() {
+            if self.start.is_some() && self.end != i {
+                self.finish();
+            }
+            self.start.get_or_insert(i);
+            self.end = i + 1;
+        }
+    }
+
+    fn finish(&mut self) {
+        if let (Some(start), Some(d)) = (self.start.take(), self.dirty.as_deref_mut()) {
+            d.mark_run(start, self.end);
+        }
+    }
+}
+
 /// Apply one frame's ops to `screen` (packed RGB, `pixels * 3` bytes).
-/// Returns the op bytes consumed; never reads past `limit` of them.
+/// Returns the op bytes consumed; never reads past `limit` of them. Pixels a
+/// FILL or LIT run changes are marked in `dirty` when there is one (the
+/// screen is then the canvas, so run indices are canvas indices); KEEP runs
+/// are never marked.
 fn apply_ops<R: Read>(
     reader: &mut R,
     palette: &[u8],
     screen: &mut [u8],
+    mut dirty: Option<&mut DirtyMap>,
     pixels: usize,
     limit: u64,
 ) -> io::Result<u64> {
@@ -315,27 +369,33 @@ fn apply_ops<R: Read>(
             return Err(invalid("ODM run overruns the frame"));
         }
         let span = &mut screen[p * 3..(p + len) * 3];
+        // Pixels that really change, as runs of raster indices; only
+        // tracked when there is a map to put them in.
+        let mut runs = Runs::new(dirty.as_deref_mut());
         match tag {
             TAG_KEEP => {}
             TAG_FILL => {
                 take(1)?;
                 let rgb = colour(read_u8(reader)?)?;
-                for px in span.as_chunks_mut::<3>().0 {
-                    px.copy_from_slice(rgb);
+                for (i, px) in span.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+                    runs.paint(p + i, px, rgb);
                 }
             }
             TAG_LIT => {
                 take(len as u64)?;
+                let mut i = p;
                 for dst in span.chunks_mut(LIT_CHUNK * 3) {
                     let n = dst.len() / 3;
                     read_exact(reader, &mut lit[..n])?;
                     for (px, &idx) in dst.as_chunks_mut::<3>().0.iter_mut().zip(&lit[..n]) {
-                        px.copy_from_slice(colour(idx)?);
+                        runs.paint(i, px, colour(idx)?);
+                        i += 1;
                     }
                 }
             }
             _ => return Err(invalid(format!("ODM op has reserved tag {tag}"))),
         }
+        runs.finish();
         p += len;
     }
     Ok(consumed)
@@ -703,15 +763,22 @@ mod tests {
         co.fill(Rgb::new(9, 9, 9));
         let mut n = 0;
         loop {
+            let (before_g, before_o) = (cg.clone(), co.clone());
+            cg.dirty_mut().clear();
+            co.dirty_mut().clear();
             let (dg, d_o) = (
                 g.next_frame(&mut cg).unwrap(),
                 o.next_frame(&mut co).unwrap(),
             );
             assert_eq!(dg, d_o, "delay of frame {n}");
             if dg.is_none() {
+                assert!(cg.dirty().is_clean() && co.dirty().is_clean());
                 break;
             }
             assert!(cg == co, "canvas of frame {n} differs");
+            // Whatever changed was marked, by both decoders.
+            assert_dirty_covers(&before_g, &cg, n);
+            assert_dirty_covers(&before_o, &co, n);
             n += 1;
         }
         assert_eq!(n, stats.frames as usize);
@@ -721,6 +788,58 @@ mod tests {
             n as u64 * (stats.width * stats.height) as u64
         );
         stats
+    }
+
+    /// Every pixel that differs between `before` and `after` is dirty in
+    /// `after` — the one guarantee the panel's partial blit relies on.
+    fn assert_dirty_covers(before: &Canvas, after: &Canvas, frame: usize) {
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                if before.get(x, y) != after.get(x, y) {
+                    assert!(
+                        after.dirty().is_dirty(x, y),
+                        "frame {frame}: ({x},{y}) changed but was not marked"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dirty_map_is_what_changed() {
+        let bytes = pattern_gif(128, 32);
+        let mut odm = Vec::new();
+        encode_gif(&bytes[..], &mut odm).unwrap();
+        let mut g = GifSource::new(&bytes[..]).unwrap();
+        let mut o = OdmSource::new(&odm[..]).unwrap();
+        let (mut cg, mut co) = (Canvas::new(), Canvas::new());
+        for frame in 0..4 {
+            let before = cg.clone();
+            cg.dirty_mut().clear();
+            co.dirty_mut().clear();
+            g.next_frame(&mut cg).unwrap().unwrap();
+            o.next_frame(&mut co).unwrap().unwrap();
+            let changed = (0..HEIGHT)
+                .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+                .filter(|&(x, y)| before.get(x, y) != cg.get(x, y))
+                .count() as u32;
+            let (dg, d_o) = (cg.dirty().count(), co.dirty().count());
+            if frame == 0 {
+                // The first frame clears the canvas: everything is marked.
+                assert_eq!((dg, d_o), (4096, 4096));
+            } else if frame == 1 {
+                // No disposal owed yet (frame 0 is Keep): exactly the pixels
+                // that changed, from both decoders — the 6x4 rectangle's
+                // transparent and same-colour pixels are not in it.
+                assert_eq!((dg, d_o), (changed, changed));
+                assert!(changed > 0 && changed < 24, "{changed}");
+            } else {
+                // A disposal may mark a pixel the next frame paints back to
+                // what it was; never fewer than changed, never the screen.
+                assert!(dg >= changed && d_o >= changed, "frame {frame}");
+                assert!(dg < 4096 && d_o < 4096, "frame {frame}: {dg} {d_o}");
+            }
+        }
     }
 
     fn pattern_gif(w: u16, h: u16) -> Vec<u8> {

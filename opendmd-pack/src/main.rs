@@ -2,12 +2,15 @@
 //! at them.
 //!
 //! ```text
-//! opendmd-pack convert  <card-root> [--jobs N] [--verify] [--force]
-//! opendmd-pack manifest <card-root> [--manifest filelist.txt] [--out filelist.odm.txt]
+//! opendmd-pack convert  <card-root> [--layout beside|bucketed] [--jobs N] [--verify] [--force]
+//! opendmd-pack manifest <card-root> [--layout beside|bucketed] [--manifest filelist.txt] [--out filelist.odm.txt]
 //! ```
 //!
 //! `convert` writes `<name>.odm` beside every `<name>.gif` under
-//! `<card-root>/gifs/` and prints the same report `tools/odm-proto.py` does.
+//! `<card-root>/gifs/` (or, with `--layout bucketed`, at
+//! `<card-root>/odm/<Category>/<bb>/<name>.odm` — see [`layout`]) and prints
+//! the same report `tools/odm-proto.py` does. In the bucketed layout a current
+//! beside `.odm` is copied rather than re-encoded.
 //! A file is up to date — and skipped unless `--force` — when its `.odm`
 //! exists, is at least a header long, and carries the `.gif`'s mtime, which
 //! the converter copies onto every file it writes. `--verify` decodes every
@@ -16,11 +19,15 @@
 //! identical, except for files whose palette had to be quantised, where the
 //! frame count and delays must match and the colour error is reported.
 //!
-//! `manifest` rewrites a manifest's `/gifs/....gif` lines to `.odm` wherever
-//! that file exists on the card, keeping order, blank lines and line endings.
+//! `manifest` rewrites a manifest's `/gifs/....gif` lines to the `.odm` path
+//! of the chosen layout wherever that file exists on the card, keeping order,
+//! blank lines and line endings.
+
+mod layout;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use layout::Layout;
 use opendmd_core::canvas::Canvas;
 use opendmd_core::odm::{self, EncodeStats, OdmSource};
 use opendmd_core::player::GifSource;
@@ -43,6 +50,9 @@ enum Cmd {
     /// Write <name>.odm beside every .gif under <card-root>/gifs and report.
     Convert {
         card_root: PathBuf,
+        /// Where the .odm files go: beside each .gif, or odm/<Category>/<bb>/.
+        #[arg(long, value_enum, default_value_t = Layout::Beside)]
+        layout: Layout,
         /// Worker threads (default: every core).
         #[arg(long)]
         jobs: Option<usize>,
@@ -56,6 +66,9 @@ enum Cmd {
     /// Rewrite a manifest's paths to .odm wherever the .odm exists.
     Manifest {
         card_root: PathBuf,
+        /// Which .odm paths to write: beside each .gif, or odm/<Category>/<bb>/.
+        #[arg(long, value_enum, default_value_t = Layout::Beside)]
+        layout: Layout,
         /// Manifest to read, relative to the card root.
         #[arg(long, default_value = "filelist.txt")]
         manifest: PathBuf,
@@ -69,15 +82,17 @@ fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Convert {
             card_root,
+            layout,
             jobs,
             verify,
             force,
-        } => convert(&card_root, jobs, verify, force),
+        } => convert(&card_root, layout, jobs, verify, force),
         Cmd::Manifest {
             card_root,
+            layout,
             manifest,
             out,
-        } => rewrite_manifest(&card_root, &manifest, &out),
+        } => rewrite_manifest(&card_root, layout, &manifest, &out),
     }
 }
 
@@ -90,8 +105,10 @@ struct Done {
     rel: String,
     gif_bytes: u64,
     odm_bytes: u64,
-    /// `None` when the file was up to date and not re-encoded.
+    /// `None` when the file was up to date or copied, not re-encoded.
     stats: Option<EncodeStats>,
+    /// Bucketed layout only: copied from a current beside `.odm`.
+    copied: bool,
     verify: Option<Verdict>,
 }
 
@@ -127,7 +144,13 @@ fn mtime(meta: &fs::Metadata) -> Option<SystemTime> {
     meta.modified().ok()
 }
 
-fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Result<()> {
+fn convert(
+    root: &Path,
+    layout: Layout,
+    jobs: Option<usize>,
+    verify: bool,
+    force: bool,
+) -> Result<()> {
     let gif_root = root.join("gifs");
     if !gif_root.is_dir() {
         bail!("{}: no gifs/ directory", root.display());
@@ -160,7 +183,7 @@ fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Resul
                     .unwrap_or(path)
                     .to_string_lossy()
                     .into_owned();
-                match process(path, rel.clone(), force, verify) {
+                match process(root, path, rel.clone(), layout, force, verify) {
                     Ok(done) => results.lock().unwrap().push(done),
                     Err(e) => errors
                         .lock()
@@ -183,7 +206,7 @@ fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Resul
     let mut errors = errors.into_inner().unwrap();
     results.sort_by(|a, b| a.rel.cmp(&b.rel));
     errors.sort();
-    report(&results, &errors, files.len(), jobs, elapsed);
+    report(&results, &errors, files.len(), jobs, elapsed, layout);
     let failed = results
         .iter()
         .filter(|r| matches!(r.verify, Some(Verdict::Fail(_))))
@@ -194,15 +217,32 @@ fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Resul
     Ok(())
 }
 
-fn process(gif_path: &Path, rel: String, force: bool, verify: bool) -> Result<Done> {
-    let odm_path = gif_path.with_extension("odm");
+/// An `.odm` at `path` exists, is at least a header long, and carries the
+/// GIF's mtime.
+fn is_current(path: &Path, gif_meta: &fs::Metadata) -> bool {
+    fs::metadata(path).is_ok_and(|m| {
+        m.len() >= odm::HEADER_LEN as u64 && mtime(&m).is_some() && mtime(&m) == mtime(gif_meta)
+    })
+}
+
+fn process(
+    root: &Path,
+    gif_path: &Path,
+    rel: String,
+    layout: Layout,
+    force: bool,
+    verify: bool,
+) -> Result<Done> {
+    let beside = gif_path.with_extension("odm");
+    let odm_path = match layout {
+        Layout::Beside => beside.clone(),
+        Layout::Bucketed => {
+            let rel = rel.replace(std::path::MAIN_SEPARATOR, "/");
+            root.join(layout::odm_rel(&rel, layout).context("not a .gif name")?)
+        }
+    };
     let gif_meta = fs::metadata(gif_path)?;
-    let up_to_date = !force
-        && fs::metadata(&odm_path).is_ok_and(|m| {
-            m.len() >= odm::HEADER_LEN as u64
-                && mtime(&m).is_some()
-                && mtime(&m) == mtime(&gif_meta)
-        });
+    let up_to_date = !force && is_current(&odm_path, &gif_meta);
 
     if up_to_date && !verify {
         return Ok(Done {
@@ -210,11 +250,42 @@ fn process(gif_path: &Path, rel: String, force: bool, verify: bool) -> Result<Do
             gif_bytes: gif_meta.len(),
             odm_bytes: fs::metadata(&odm_path)?.len(),
             stats: None,
+            copied: false,
             verify: None,
         });
     }
+    // Bucketed: a current beside .odm is the same bytes the encoder would
+    // write (it is deterministic), so copy it. `--verify` still checks it.
+    let copy_from = (layout == Layout::Bucketed && !up_to_date && !force)
+        .then_some(&beside)
+        .filter(|b| is_current(b, &gif_meta));
+    if let Some(parent) = odm_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if let Some(src) = copy_from {
+        let tmp = odm_path.with_extension("odm.tmp");
+        fs::copy(src, &tmp).context("copying the beside .odm")?;
+        if let Some(t) = mtime(&gif_meta) {
+            fs::File::options()
+                .write(true)
+                .open(&tmp)?
+                .set_modified(t)?;
+        }
+        fs::rename(&tmp, &odm_path)?;
+        if !verify {
+            return Ok(Done {
+                rel,
+                gif_bytes: gif_meta.len(),
+                odm_bytes: fs::metadata(&odm_path)?.len(),
+                stats: None,
+                copied: true,
+                verify: None,
+            });
+        }
+    }
+    let copied = copy_from.is_some();
     let gif = fs::read(gif_path).context("reading the GIF")?;
-    let (stats, odm_bytes) = if up_to_date {
+    let (stats, odm_bytes) = if up_to_date || copied {
         (None, fs::metadata(&odm_path)?.len())
     } else {
         let mut out = Vec::new();
@@ -247,6 +318,7 @@ fn process(gif_path: &Path, rel: String, force: bool, verify: bool) -> Result<Do
         gif_bytes: gif.len() as u64,
         odm_bytes,
         stats,
+        copied,
         verify,
     })
 }
@@ -301,14 +373,33 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[lo] + (sorted[hi] - sorted[lo]) * (rank - lo as f64)
 }
 
-fn report(results: &[Done], errors: &[(String, String)], found: usize, jobs: usize, secs: f64) {
+fn report(
+    results: &[Done],
+    errors: &[(String, String)],
+    found: usize,
+    jobs: usize,
+    secs: f64,
+    layout: Layout,
+) {
     let skipped = results.iter().filter(|r| r.stats.is_none()).count();
-    println!(
-        "convert pass done: {} ok ({} encoded, {skipped} up to date), {} errors, {secs:.1}s",
-        results.len(),
-        results.len() - skipped,
-        errors.len()
-    );
+    let copied = results.iter().filter(|r| r.copied).count();
+    if layout == Layout::Bucketed {
+        println!(
+            "convert pass done: {} ok ({} encoded, {copied} copied from beside .odm, {} up to date), \
+             {} errors, {secs:.1}s",
+            results.len(),
+            results.len() - skipped,
+            skipped - copied,
+            errors.len()
+        );
+    } else {
+        println!(
+            "convert pass done: {} ok ({} encoded, {skipped} up to date), {} errors, {secs:.1}s",
+            results.len(),
+            results.len() - skipped,
+            errors.len()
+        );
+    }
 
     println!("\n=== ERRORS (skipped files) ===");
     for (rel, e) in errors {
@@ -455,19 +546,31 @@ fn report(results: &[Done], errors: &[(String, String)], found: usize, jobs: usi
 // manifest
 // ---------------------------------------------------------------------------
 
-/// `Some(path with .odm)` if `line` names a `.gif` whose `.odm` sits beside it.
-fn odm_for(root: &Path, line: &str) -> Option<String> {
-    let cut = line.len().checked_sub(4)?;
-    if !line.get(cut..)?.eq_ignore_ascii_case(".gif") {
-        return None;
-    }
-    let odm = format!("{}.odm", &line[..cut]);
+/// `Some(.odm path)` if `line` names a `.gif` whose `.odm` exists where
+/// `layout` puts it: beside it, or `/odm/<Category>/<bb>/` for a `/gifs/` path.
+fn odm_for(root: &Path, line: &str, layout: Layout) -> Option<String> {
+    let odm = match layout {
+        Layout::Beside => {
+            let cut = line.len().checked_sub(4)?;
+            if !line.get(cut..)?.eq_ignore_ascii_case(".gif") {
+                return None;
+            }
+            format!("{}.odm", &line[..cut])
+        }
+        Layout::Bucketed => {
+            let (first, rest) = line.trim_start_matches('/').split_once('/')?;
+            if !first.eq_ignore_ascii_case("gifs") {
+                return None;
+            }
+            format!("/{}", layout::odm_rel(rest, layout)?)
+        }
+    };
     root.join(odm.trim_start_matches('/'))
         .is_file()
         .then_some(odm)
 }
 
-fn rewrite_manifest(root: &Path, manifest: &Path, out: &Path) -> Result<()> {
+fn rewrite_manifest(root: &Path, layout: Layout, manifest: &Path, out: &Path) -> Result<()> {
     let src = root.join(manifest);
     let dst = root.join(out);
     let text = fs::read_to_string(&src).with_context(|| format!("reading {}", src.display()))?;
@@ -485,7 +588,7 @@ fn rewrite_manifest(root: &Path, manifest: &Path, out: &Path) -> Result<()> {
             continue;
         }
         total += 1;
-        match odm_for(root, path) {
+        match odm_for(root, path, layout) {
             Some(odm) => {
                 switched += 1;
                 result.push_str(&odm);
@@ -506,10 +609,14 @@ fn rewrite_manifest(root: &Path, manifest: &Path, out: &Path) -> Result<()> {
     }
     fs::write(&dst, result).with_context(|| format!("writing {}", dst.display()))?;
     println!(
-        "{}: {total} entries, {switched} now .odm, {} still .gif (no .odm beside them), \
+        "{}: {total} entries, {switched} now .odm, {} still .gif (no .odm {}), \
          {absent} unchanged because the file itself is not on the card -> {}",
         src.display(),
         missing.len(),
+        match layout {
+            Layout::Beside => "beside them",
+            Layout::Bucketed => "under odm/",
+        },
         dst.display()
     );
     for m in missing.iter().take(20) {
@@ -541,14 +648,54 @@ mod tests {
             "/gifs/NEW 2021/SNES_A_01..gif\r\n\n/gifs/NEW 2021/SNES_B_01.gif\n",
         )
         .unwrap();
-        rewrite_manifest(&root, Path::new("filelist.txt"), Path::new("out.txt")).unwrap();
+        rewrite_manifest(
+            &root,
+            Layout::Beside,
+            Path::new("filelist.txt"),
+            Path::new("out.txt"),
+        )
+        .unwrap();
         assert_eq!(
             fs::read_to_string(root.join("out.txt")).unwrap(),
             "/gifs/NEW 2021/SNES_A_01..odm\r\n\n/gifs/NEW 2021/SNES_B_01.gif\n"
         );
-        assert!(
-            rewrite_manifest(&root, Path::new("filelist.txt"), Path::new("filelist.txt")).is_err()
+        assert!(rewrite_manifest(
+            &root,
+            Layout::Beside,
+            Path::new("filelist.txt"),
+            Path::new("filelist.txt")
+        )
+        .is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn bucketed_manifest_points_under_odm() {
+        let root = std::env::temp_dir().join(format!("opendmd-pack-test-b-{}", std::process::id()));
+        let rel = layout::odm_rel("NEW 2021/SNES_A_01..gif", Layout::Bucketed).unwrap();
+        let odm = root.join(&rel);
+        fs::create_dir_all(odm.parent().unwrap()).unwrap();
+        fs::write(&odm, b"x").unwrap();
+        // A beside .odm for B must not be picked up in the bucketed layout.
+        fs::create_dir_all(root.join("gifs/NEW 2021")).unwrap();
+        fs::write(root.join("gifs/NEW 2021/SNES_B_01.odm"), b"x").unwrap();
+        fs::write(
+            root.join("filelist.txt"),
+            "/gifs/NEW 2021/SNES_A_01..gif\r\n\n/gifs/NEW 2021/SNES_B_01.gif\n/logos/x.gif\n",
+        )
+        .unwrap();
+        rewrite_manifest(
+            &root,
+            Layout::Bucketed,
+            Path::new("filelist.txt"),
+            Path::new("out.txt"),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("out.txt")).unwrap(),
+            format!("/{rel}\r\n\n/gifs/NEW 2021/SNES_B_01.gif\n/logos/x.gif\n")
         );
+        assert!(rel.starts_with("odm/NEW 2021/"));
         fs::remove_dir_all(&root).unwrap();
     }
 }

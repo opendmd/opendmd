@@ -147,10 +147,15 @@ clean:
 # First build clones ESP-IDF v5.3 into ~/.espressif (shared between projects,
 # unlike stripe-dashboard's in-project .embuild) and takes 5-10 minutes.
 
+# FW_FEATURES=probe (or probe,probe-http) builds the timing instrumentation in
+# firmware/src/probe.rs; the default build has none of it.
+FW_FEATURES ?=
+FW_CARGO_FEATURES = $(if $(FW_FEATURES),--features $(FW_FEATURES))
+
 fw-build:
 	@mkdir -p $(FW)/target
 	@echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"' > $(FW)/target/sdkconfig.partitions
-	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build'
+	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_CARGO_FEATURES)'
 	@ls -l $(FW_BINARY)
 
 # 460800 baud gives frequent verify_failed errors on these CH340 boards.
@@ -183,7 +188,7 @@ fw-erase:
 	$(HOME)/.local/bin/esptool --chip esp32 --port $(PORT) erase-flash
 
 fw-clippy:
-	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets -- -D warnings'
+	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets $(FW_CARGO_FEATURES) -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -202,9 +207,10 @@ card-sync:
 	uv run tools/card-sync.py $(HOST) $(WEB)/www
 
 # Hammer the file server while watching the display metrics. This is the
-# timing stress test for the networking phase, not a benchmark.
+# timing stress test for the networking phase, not a benchmark. PATHS=<file>
+# fetches a fixed list of card-absolute paths instead of picking GIFs.
 SECONDS_ ?= 120
 WORKERS ?= 3
 api-load:
-	@test -n "$(HOST)" || { echo "usage: make api-load HOST=<ip> [SECONDS_=120] [WORKERS=3]"; exit 2; }
-	uv run tools/api-load.py $(HOST) $(SECONDS_) --workers $(WORKERS)
+	@test -n "$(HOST)" || { echo "usage: make api-load HOST=<ip> [SECONDS_=120] [WORKERS=3] [PATHS=file]"; exit 2; }
+	uv run tools/api-load.py $(HOST) $(SECONDS_) --workers $(WORKERS) $(if $(PATHS),--paths $(PATHS))

@@ -112,7 +112,8 @@ pub const KNOWN_AUTHORS: &[&str] = &["RattenJager", "OMEGAeFex"];
 pub struct Entry {
     /// The path exactly as it appeared in the manifest, leading slash intact.
     pub path: String,
-    /// Directory under `gifs/`, e.g. `Consoles` or `NEW 2021`.
+    /// Directory under `gifs/` (or, for a bucketed `.odm`, under `odm/`, the
+    /// hash bucket skipped), e.g. `Consoles` or `NEW 2021`.
     pub category: Option<String>,
     pub platform: Option<String>,
     pub title: String,
@@ -274,16 +275,35 @@ pub fn entry_at<R: Read + Seek>(reader: &mut R, offset: u32) -> io::Result<Entry
     Ok(Entry::from_path(line))
 }
 
+/// The category is the first directory under `gifs/` — or under `odm/`, the
+/// bucketed `.odm` tree (`/odm/<Category>/<bb>/<name>.odm`, see "Card layout"
+/// in `docs/odm-format.md`), where the directory holding the file is a
+/// two-hex-digit hash bucket and never the category. So
+/// `/odm/Consoles/90/X.odm` is `Consoles`, like `/gifs/Consoles/X.gif`, and a
+/// loose `/odm/90/X.odm` (from a GIF directly in `gifs/`) has none.
 fn category_of(path: &str) -> Option<String> {
     let mut parts = path.split('/').filter(|p| !p.is_empty());
     let first = parts.next()?;
-    if !first.eq_ignore_ascii_case("gifs") {
-        return None;
-    }
     let second = parts.next()?;
     // Only a directory counts as a category; `/gifs/foo.gif` has none.
     parts.next()?;
-    Some(second.to_string())
+    if first.eq_ignore_ascii_case("gifs") {
+        return Some(second.to_string());
+    }
+    if first.eq_ignore_ascii_case("odm") {
+        // `/odm/<bb>/<name>`: `second` is the bucket of an uncategorised file.
+        let loose = parts.next().is_none() && is_bucket(second);
+        return (!loose).then(|| second.to_string());
+    }
+    None
+}
+
+/// Exactly two lowercase hex digits: a bucket directory in the `odm/` tree.
+fn is_bucket(dir: &str) -> bool {
+    dir.len() == 2
+        && dir
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Filename minus directories, minus any trailing `.gif` or `.odm` extensions
@@ -604,6 +624,46 @@ mod tests {
         // Not under gifs/, and no subdirectory: no category.
         assert_eq!(p("/logos/boot.gif").category, None);
         assert_eq!(p("/gifs/loose.gif").category, None);
+    }
+
+    #[test]
+    fn bucketed_odm_takes_the_category_not_the_bucket() {
+        for (gif, odm) in [
+            (
+                "/gifs/Consoles/MD_Sonic3_RattenJager.gif",
+                "/odm/Consoles/90/MD_Sonic3_RattenJager.odm",
+            ),
+            (
+                "/gifs/NEW 2021/NINTENDO_DS_Mario_Kart_DS_01..gif",
+                "/odm/NEW 2021/8e/NINTENDO_DS_Mario_Kart_DS_01..odm",
+            ),
+            (
+                "/gifs/Pinball_Short/PINBALL_SHORT_WWF_40.gif",
+                "/odm/Pinball_Short/dc/PINBALL_SHORT_WWF_40.odm",
+            ),
+            // A category that itself looks like a bucket is still a category.
+            ("/gifs/ab/SNES_Plok_08.gif", "/odm/ab/c0/SNES_Plok_08.odm"),
+        ] {
+            let (g, o) = (p(gif), p(odm));
+            assert_eq!(o.path, odm);
+            assert_eq!(
+                Entry {
+                    path: g.path.clone(),
+                    ..o
+                },
+                g,
+                "{odm}"
+            );
+        }
+        // Nested GIF directories: the first one is the category, as under gifs/.
+        assert_eq!(p("/odm/A/B/af/x.odm").category.as_deref(), Some("A"));
+        assert_eq!(p("/gifs/A/B/x.gif").category.as_deref(), Some("A"));
+        // Loose: only a bucket between odm/ and the file, so no category.
+        assert_eq!(p("/odm/af/x.odm").category, None);
+        assert_eq!(p("/odm/x.odm").category, None);
+        // Not a bucket (upper case, three digits): an unbucketed category.
+        assert_eq!(p("/odm/Arcade/x.odm").category.as_deref(), Some("Arcade"));
+        assert_eq!(p("/odm/7E/x.odm").category.as_deref(), Some("7E"));
     }
 
     #[test]

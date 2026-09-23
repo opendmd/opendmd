@@ -21,6 +21,14 @@ log = "0.4"
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
+[features]
+# Timing instrumentation (src/probe.rs): SD opens/reads/rewinds, blit time and
+# pixels, deadline-miss attribution, and a blit benchmark at boot. Off by
+# default and compiled out entirely. `make fw-build FW_FEATURES=probe`.
+probe = []
+# Also log every httpd open/listing/transfer (costs UART time on CPU0).
+probe-http = ["probe"]
+
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }
 # The embedded setup page is rendered and gzipped at build time, the same way

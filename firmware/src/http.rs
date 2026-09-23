@@ -344,6 +344,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/sets/*", Method::Get, |req| {
         serve_under(req, config::SD_MOUNT)
     })?;
+    // The bucketed `.odm` tree (`opendmd-pack convert --layout bucketed`).
+    server.route("/odm/*", Method::Get, |req| {
+        serve_under(req, config::SD_MOUNT)
+    })?;
 
     server.route("/www/*", Method::Get, |req| {
         if !files::affordable(req)? {

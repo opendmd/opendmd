@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use crate::config;
 use crate::httpd::{json_string, Req};
+use crate::probe;
 use crate::state::free_heap;
 
 /// Refuse to start a transfer that the player cannot afford.
@@ -135,27 +136,49 @@ pub fn cache_for(path: &str) -> &'static str {
     }
 }
 
-/// Send a file from the card, 4 KB at a time.
+/// Send a file from the card, [`config::IO_CHUNK`] at a time.
 ///
-/// If `<path>.gz` exists it is sent instead with `Content-Encoding: gzip` —
-/// the content type still comes from the *logical* name, so `app.js.gz` is
-/// served as JavaScript. Returns false if neither file exists, leaving the
-/// response untouched so the caller can 404 or fall through.
+/// Under [`config::WWW_ROOT`] only, if `<path>.gz` exists it is sent instead
+/// with `Content-Encoding: gzip` — the content type still comes from the
+/// *logical* name, so `app.js.gz` is served as JavaScript. Returns false if
+/// no file is there, leaving the response untouched so the caller can 404 or
+/// fall through.
+///
+/// **Every path lookup is a linear scan of the FAT directory** — ~0.65 ms per
+/// 512 B directory sector, 330-550 ms in the 3,781-entry `gifs/Consoles` —
+/// and it holds the FATFS lock the player needs for its own reads. So the
+/// file is opened straight away (one scan) and sized with `fstat` on the open
+/// handle (no scan), never `stat`ed first; and the `.gz` probe, which would be
+/// a second scan, is only made where gzipped files live. Outside `www/` that
+/// is one scan per request, where it used to be three.
 pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
-    let gz = format!("{path}.gz");
-    let (actual, gzipped) = if fs::metadata(&gz).is_ok_and(|m| m.is_file()) {
-        (gz, true)
-    } else {
-        (path.to_string(), false)
+    let t_all = probe::http_stamp();
+    let www = path
+        .strip_prefix(config::WWW_ROOT)
+        .is_some_and(|rest| rest.starts_with('/'));
+    let t = probe::http_stamp();
+    let (mut file, actual, gzipped) = match www
+        .then(|| format!("{path}.gz"))
+        .and_then(|gz| fs::File::open(&gz).ok().map(|f| (f, gz)))
+    {
+        Some((f, gz)) => (f, gz, true),
+        None => match fs::File::open(path) {
+            Ok(f) => (f, path.to_string(), false),
+            Err(_) => {
+                probe::http_log("open-miss", t_all, path);
+                return Ok(false);
+            }
+        },
     };
-    let Ok(meta) = fs::metadata(&actual) else {
-        return Ok(false);
-    };
-    if !meta.is_file() {
+    let open_us = probe::elapsed_us(t);
+    // `fstat` on the handle: FATFS answers it from the open file object.
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
         return Ok(false);
     }
-
-    let mut file = fs::File::open(&actual)?;
+    if probe::HTTP_LOG {
+        probe::http_log("open", t_all, &format!("(open={open_us}) {actual}"));
+    }
+    let (mut reads, mut rd_tot, mut rd_max) = (0u32, 0u32, 0u32);
     if gzipped {
         req.header("Content-Encoding", "gzip")?;
     }
@@ -164,7 +187,14 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
 
     let mut buf = vec![0u8; config::IO_CHUNK];
     loop {
+        let t = probe::http_stamp();
         let n = file.read(&mut buf)?;
+        if probe::HTTP_LOG {
+            let us = probe::elapsed_us(t);
+            reads += 1;
+            rd_tot += us;
+            rd_max = rd_max.max(us);
+        }
         if n == 0 {
             break;
         }
@@ -176,6 +206,13 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
         wait_for_heap()?;
     }
     req.finish()?;
+    if probe::HTTP_LOG {
+        probe::http_log(
+            "served",
+            t_all,
+            &format!("(reads={reads} rd_tot={rd_tot} rd_max={rd_max}) {actual}"),
+        );
+    }
     Ok(true)
 }
 
@@ -195,7 +232,11 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
 /// measured, it starved the display loop into an out-of-memory abort. Without
 /// sizes, `"size"` is `null`.
 pub fn stream_dir_json(req: &mut Req, card_dir: &str, fs_dir: &str, sizes: bool) -> Result<()> {
-    let entries = match fs::read_dir(fs_dir) {
+    let t_all = probe::http_stamp();
+    let opened = fs::read_dir(fs_dir);
+    probe::http_log("opendir", t_all, fs_dir);
+    let mut rd_max = 0u32;
+    let entries = match opened {
         Ok(e) => e,
         Err(e) => {
             req.not_found(&format!("{card_dir}: {e}"))?;
@@ -211,7 +252,15 @@ pub fn stream_dir_json(req: &mut Req, card_dir: &str, fs_dir: &str, sizes: bool)
     let mut first = true;
     let mut count: usize = 0;
 
-    for entry in entries.flatten() {
+    let mut entries = entries;
+    loop {
+        let t = probe::http_stamp();
+        let next = entries.next();
+        if probe::HTTP_LOG {
+            rd_max = rd_max.max(probe::elapsed_us(t));
+        }
+        let Some(next) = next else { break };
+        let Ok(entry) = next else { continue };
         let name = entry.file_name().to_string_lossy().into_owned();
         // `file_type` reads `d_type` straight out of the dirent; `metadata`
         // would be a fresh `stat` per entry. See the note above.
@@ -248,6 +297,13 @@ pub fn stream_dir_json(req: &mut Req, card_dir: &str, fs_dir: &str, sizes: bool)
     out.push_str(&format!(r#"],"count":{count},"sizes":{sizes}}}"#));
     req.chunk(out.as_bytes())?;
     req.finish()?;
+    if probe::HTTP_LOG {
+        probe::http_log(
+            "listing",
+            t_all,
+            &format!("(entries={count} readdir_max={rd_max} sizes={sizes}) {fs_dir}"),
+        );
+    }
     Ok(())
 }
 
