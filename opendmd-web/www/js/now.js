@@ -8,6 +8,7 @@
 
 import { app, playlistLabel } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
+import { bannerFor } from './schedule.js';
 import { h, clear, on, store, debounce, toast, bytes, uptime, label } from './util.js';
 
 const POLL_MS = 500;
@@ -37,7 +38,9 @@ function mountDevice(el) {
   const conn = h('span', { id: 'now-conn' });
   const playPath = h('input', { type: 'text', id: 'now-play-path', placeholder: '/gifs/… (card path)', onkeydown: (e) => e.key === 'Enter' && send() });
 
+  const banner = h('div.banner', { id: 'now-banner', hidden: true });
   el.append(
+    banner,
     h('div.card', canvas, h('div.row.sp', cap, h('label.cap', follow, 'preview follows the panel'))),
     h('div.card',
       h('div.row.sp', h('div.grow', title, h('div', { id: 'now-tags' }), meta), h('div', ord, ' ', conn)),
@@ -130,6 +133,10 @@ function mountDevice(el) {
     meta.textContent = np.path;
     ord.textContent = `#${np.ordinal} · ${s.entries.toLocaleString()} entries`;
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
+    const b = bannerFor(s, () => setTimeout(poll, 300));
+    banner.hidden = !b;
+    banner.dataset.mode = s.mode || 'normal';
+    if (b) clear(banner, b);
     const set = playlistLabel(s.manifest);
     clear(grid,
       stat('uptime', uptime(s.uptime_secs)),
@@ -205,7 +212,7 @@ function mountLocal(el) {
   preview.setDwell(3, 30);
 
   const src = app.src;
-  const manifests = [...src.files.keys()].filter((p) => /^\/filelist\.[^/]*$|^\/sets\/[^/]+\.txt$/.test(p) && !/\/filelist\.odm\.|\.(idx|part|tmp|bak)$/.test(p));
+  const manifests = [...src.files.keys()].filter((p) => /^\/filelist\.[^/]*$|^\/sets\/[^/]+\.txt$/.test(p) && !/\/filelist\.odm\.|\.(idx|part|tmp|bak|meta)$/.test(p));
   for (const m of manifests) listSel.append(h('option', { value: m }, playlistLabel(m)));
   listSel.append(h('option', { value: '' }, 'every GIF in the folder'));
 

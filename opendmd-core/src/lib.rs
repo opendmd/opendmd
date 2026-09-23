@@ -12,7 +12,9 @@ pub mod index;
 pub mod layout;
 pub mod manifest;
 pub mod odm;
+pub mod overrides;
 pub mod player;
+pub mod schedule;
 pub mod scheduler;
 
 pub use canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
@@ -21,10 +23,11 @@ pub use engine::{
     OFF_PLAYLIST,
 };
 pub use filter::Filter;
-pub use index::{write_index, IndexHeader, IndexedCatalog};
+pub use index::{write_index, write_index_with_overrides, IndexHeader, IndexedCatalog};
 pub use manifest::{
     entry_at, index_matching, normalize_title, parse_manifest, render_manifest, scan, Entry,
 };
 pub use odm::{encode_gif, EncodeStats, OdmSource};
+pub use overrides::{Override, OverrideSet, Overrides};
 pub use player::{FrameSource, GifSource};
 pub use scheduler::{Mode, Scheduler};

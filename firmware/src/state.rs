@@ -87,6 +87,24 @@ pub struct Status {
     pub gifs_started: u64,
     pub sd_mounted: bool,
     pub sd_capacity_bytes: u64,
+    /// The playlist's resolved overrides (`.meta`), and how many of them hide
+    /// an entry.
+    pub overrides: usize,
+    pub hidden: usize,
+    // The schedule, as last applied by the main loop.
+    /// `"normal"`, `"dim"` or `"off"` (night mode).
+    pub mode: &'static str,
+    /// When night mode ends, `"HH:MM"` local.
+    pub mode_until: Option<String>,
+    /// The rule in force (by position), the playlist it chose (`None`: the
+    /// saved one) and when it ends.
+    pub rule: Option<usize>,
+    pub rule_set: Option<String>,
+    pub rule_until: Option<String>,
+    /// While a manual wake has the schedule suspended: until when, `"HH:MM"`.
+    pub wake_until: Option<String>,
+    /// The zone's display name (`Europe/Dublin`).
+    pub tz_name: String,
 }
 
 impl Status {
@@ -120,6 +138,15 @@ impl Status {
             gifs_started: 0,
             sd_mounted: false,
             sd_capacity_bytes: 0,
+            overrides: 0,
+            hidden: 0,
+            mode: "normal",
+            mode_until: None,
+            rule: None,
+            rule_set: None,
+            rule_until: None,
+            wake_until: None,
+            tz_name: String::new(),
         }
     }
 }
@@ -176,6 +203,10 @@ pub struct Applied {
     pub entries: usize,
     pub index: Option<IndexSource>,
     pub index_ms: u64,
+    /// Overrides resolved into the playlist (its `.meta`), when rebuilt,
+    /// and how many of them hide an entry.
+    pub overrides: usize,
+    pub hidden: usize,
 }
 
 impl Applied {
@@ -185,6 +216,8 @@ impl Applied {
             entries,
             index: None,
             index_ms: 0,
+            overrides: 0,
+            hidden: 0,
         }
     }
 }
@@ -255,4 +288,24 @@ pub enum Command {
         dest: String,
         reply: Reply,
     },
+    /// Put a playlist's overrides file (`.meta`) in place — `temp` renamed
+    /// over `dest` — or remove it (`temp: None`), then reindex if it belongs
+    /// to the playlist in play. Exactly the manifest install's sequence
+    /// (engine dropped, `.idx` removed first), because the index carries the
+    /// resolved overrides and a fingerprint of this file.
+    InstallMeta {
+        temp: Option<String>,
+        dest: String,
+        reply: Reply,
+    },
+    /// Store a new schedule (validated JSON, `""` = none) in NVS and
+    /// evaluate it at once.
+    ///
+    /// (Every reply here is a [`Reply`]: each distinct channel type costs
+    /// several KB of code, and the image is close to its slot.)
+    SetSchedule { json: String, reply: Reply },
+    /// Suspend the schedule for this many minutes (0 resumes it now). The
+    /// local `"HH:MM"` it lasts until is in `Status::wake_until` by the time
+    /// the reply is sent.
+    Wake { minutes: u32, reply: Reply },
 }

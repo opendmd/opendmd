@@ -5,6 +5,7 @@
 
 import { app, playlistLabel } from './state.js';
 import * as prep from './prepare.js';
+import { timeCard, scheduleCard } from './schedule.js';
 import { h, clear, on, toast, bytes, uptime, base } from './util.js';
 
 export async function mount(el) {
@@ -53,6 +54,10 @@ export async function mount(el) {
   const cacheMsg = h('div.muted', { id: 'pc-progress' });
   const cacheErr = h('div.log.bad', { id: 'pc-errors' });
 
+  const time = timeCard();
+  const sched = scheduleCard();
+  on('status', time.render);
+
   el.append(banner,
     h('div.card', h('h2', 'Playback'), h('p.cap', 'Applied live. A playlist, platform or shuffle change rebuilds the index on the card (a few seconds).'),
       h('div.form',
@@ -62,8 +67,9 @@ export async function mount(el) {
         h('label.stack', 'playlist', f.set),
         h('label', f.shuffle, 'shuffle')),
       h('div.row', { style: 'margin-top:12px' }, h('button.pri', { id: 'st-save-play', onclick: () => save(['brightness', 'dwell_min', 'dwell_max', 'shuffle', 'platforms', 'set']) }, 'Save playback'))),
+    time.el, sched.el,
     h('div.card', { id: 'pc' }, h('h2', 'Playback cache'),
-      h('p.cap', 'Prepared copies play with less memory and start faster. Originals are never changed.'),
+      h('p.cap', 'Prepared copies play with less memory and start faster. Originals stay as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
       h('div.bar', { style: 'margin:10px 0' }, cacheBar), cacheMsg, cacheErr),
     h('div.card', h('h2', 'Network'), h('p.cap', 'WiFi and hostname changes need a reboot. With no saved network the player raises the open OpenDMD-Setup access point.'),
@@ -192,7 +198,8 @@ export async function mount(el) {
   on('prepare', renderJob);
 
   renderFacts(app.status);
+  time.render(app.status);
   renderJob(prep.job);
   loadCache();
-  return { show() { visible = true; app.refreshStatus().catch(() => {}); loadPlaylists(); loadCache(); }, hide() { visible = false; clearTimeout(cachePoll); } };
+  return { show() { visible = true; app.refreshStatus().catch(() => {}); loadPlaylists(); loadCache(); sched.load(); }, hide() { visible = false; clearTimeout(cachePoll); } };
 }

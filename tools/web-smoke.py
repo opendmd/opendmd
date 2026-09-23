@@ -77,7 +77,9 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import sync_playwright, Page
 
@@ -287,9 +289,10 @@ def row_label(page: Page, path: str) -> str:
 
 
 # Visible copy that would leak the implementation: prepared copies are a
-# cache the user never has to know the format or layout of.
-LEAK = re.compile(r"odm|bucket", re.I)
-
+# cache the user never has to know the format or layout of, and per-GIF
+# overrides are "favourite"/"hide"/"play longer"/"loop N times" -- never
+# their weight, file format ('.meta') or raw field syntax ('w=').
+LEAK = re.compile(r"odm|bucket|weight|\.meta|w=|never", re.I)
 
 # Names of playlists the user made are their content, not UI copy (the rig's
 # card has bench sets called "odm" and "odmb"); filled in by device_pass.
@@ -304,7 +307,7 @@ def no_leaks(page: Page, where: str) -> None:
         text = re.sub(rf"(?<![\w.]){re.escape(n)}(?![\w.])", "", text)
     hits = sorted({m.group(0) for m in LEAK.finditer(text)})
     lines = [l for l in text.split("\n") if LEAK.search(l)][:3]
-    check(not hits, f"{where}: no 'odm'/'bucket' in visible text {lines if hits else ''}")
+    check(not hits, f"{where}: no 'odm'/'bucket'/'weight'/'.meta'/'w='/'never' in visible text {lines if hits else ''}")
 
 
 def open_library(page: Page) -> None:
@@ -351,6 +354,77 @@ def post_json(url: str, obj) -> dict:
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
+
+
+def put_json(url: str, obj) -> dict:
+    req = urllib.request.Request(url, data=json.dumps(obj).encode(), method="PUT",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
+def put_text(url: str, text: str) -> dict:
+    req = urllib.request.Request(url, data=text.encode(), method="PUT")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
+# --- Per-GIF overrides: opendmd_core::overrides, mirrored for expectations ---
+
+def fmt_override_decimal(v: float) -> str:
+    """overrides::push_decimal: rounded to 3 places, trailing zeros dropped."""
+    milli = int(max(float(v), 0.0) * 1000.0 + 0.5)
+    whole, frac = divmod(milli, 1000)
+    if frac == 0:
+        return str(whole)
+    f = f"{frac:03d}".rstrip("0")
+    return f"{whole}.{f}"
+
+
+def render_meta_line(path: str, ov: dict) -> str:
+    """The canonical `.meta` line for one GIF: fields in order never, w,
+    dwell/dwell_x, loops (overrides::render_fields)."""
+    parts = [path]
+    if ov.get("never"):
+        parts.append("never")
+    if "w" in ov:
+        parts.append(f"w={fmt_override_decimal(ov['w'])}")
+    if "dwell" in ov:
+        parts.append(f"dwell={ov['dwell']}")
+    elif "dwell_x" in ov:
+        parts.append(f"dwell={fmt_override_decimal(ov['dwell_x'])}x")
+    if "loops" in ov:
+        parts.append(f"loops={ov['loops']}")
+    return "\t".join(parts)
+
+
+def wait_overrides(base: str, set_value: str, n: int, timeout_s: float = 10) -> dict:
+    """Poll GET /api/overrides?set= until it holds at least `n` entries (the
+    Overrides class saves one write at a time, in the background)."""
+    deadline = time.time() + timeout_s
+    r = {"set": set_value, "playlist": "", "overrides": []}
+    while time.time() < deadline:
+        r = get_json(base + "/api/overrides?set=" + urllib.parse.quote(set_value, safe=""))
+        if len(r["overrides"]) >= n:
+            return r
+        time.sleep(0.1)
+    return r
+
+
+def open_row_menu(page: Page, list_sel: str, idx: int, via: str = "more") -> None:
+    """Open the overrides menu for the row at `idx` among the currently
+    rendered (unhidden, pooled) rows of a VList -- its "…" button, or a
+    right-click on the row itself."""
+    row = f"{list_sel} .vrow:not([hidden]) >> nth={idx}"
+    if via == "more":
+        page.click(f"{row} >> button.more")
+    else:
+        page.click(row, button="right")
+    page.wait_for_selector("#ov-menu")
+
+
+def row_path(page: Page, list_sel: str, idx: int) -> str:
+    return page.get_attribute(f"{list_sel} .vrow:not([hidden]) >> nth={idx}", "data-path")
 
 
 def cache_ready(base: str, timeout_s: float = 60) -> dict:
@@ -447,6 +521,69 @@ def mock_pass(browser) -> None:
                                   "els => els.slice(0, 3).forEach(e => e.click())")
         check(page.inner_text("#lib-selbar b") == "3", "library: three selected")
         selected = page.evaluate("async () => { const { app } = await import('./js/state.js'); return [...app.selection]; }")
+        # Per-GIF overrides on the playlist in play (filelist.txt): favourite,
+        # hide, play longer 2x, loop 3, on four distinct rows.
+        fav_path = row_path(page, "#lib-list", 3)
+        hide_path = row_path(page, "#lib-list", 4)
+        long_path = row_path(page, "#lib-list", 5)
+        loop_path = row_path(page, "#lib-list", 6)
+        open_row_menu(page, "#lib-list", 3, via="more")
+        page.click("#ov-fav")
+        page.wait_for_selector("#ov-menu", state="detached")
+        open_row_menu(page, "#lib-list", 4, via="right-click")
+        page.click("#ov-hide")
+        page.wait_for_selector("#ov-menu", state="detached")
+        open_row_menu(page, "#lib-list", 5, via="more")
+        page.click("#ov-2x")
+        page.wait_for_selector("#ov-menu", state="detached")
+        open_row_menu(page, "#lib-list", 6, via="more")
+        page.fill("#ov-loops", "3")
+        page.click("#ov-loops-set")
+        page.wait_for_selector("#ov-menu", state="detached")
+        check(page.locator("#lib-list .vrow:not([hidden]) >> nth=3 >> i.fav").count() == 1, "library overrides: favourite glyph")
+        check(page.locator("#lib-list .vrow:not([hidden]) >> nth=4 >> i.hid").count() == 1
+              and "hid" in (page.get_attribute("#lib-list .vrow:not([hidden]) >> nth=4", "class") or ""),
+              "library overrides: hidden glyph + row class")
+        check(page.locator("#lib-list .vrow:not([hidden]) >> nth=5 >> i.long").count() == 1, "library overrides: play-longer glyph")
+        check(page.locator("#lib-list .vrow:not([hidden]) >> nth=6 >> i.loop").count() == 1, "library overrides: loop glyph")
+        expected_over = [
+            {"path": fav_path, "w": 3},
+            {"path": hide_path, "never": True},
+            {"path": long_path, "dwell_x": 2},
+            {"path": loop_path, "loops": 3},
+        ]
+        r = wait_overrides(base, "", len(expected_over))
+        check(r["overrides"] == expected_over, f"library overrides: GET /api/overrides?set= agrees ({r['overrides']})")
+        meta_file = overlay / "filelist.meta"
+        want_meta = "".join(render_meta_line(p["path"], p) + "\n" for p in expected_over)
+        got_meta = meta_file.read_text() if meta_file.exists() else ""
+        check(got_meta == want_meta, f"library overrides: filelist.meta byte-for-byte ({got_meta!r} vs {want_meta!r})")
+        st = get_json(base + "/api/status")
+        check(st["overrides"] == 4 and st["hidden"] == 1, f"library overrides: status overrides=4 hidden=1 (got {st['overrides']}/{st['hidden']})")
+        no_leaks(page, "library (overrides menu)")
+        shot(page, "override-menu", "laptop")
+        # Phone: the same menu renders as a bottom sheet.
+        phone = new_page(browser, "phone", errors)
+        phone.goto(base + "/")
+        phone.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
+        goto_view(phone, "library")
+        phone.wait_for_selector("#lib-cat option[value='Consoles']", state="attached", timeout=30000)
+        phone.select_option("#lib-cat", "Consoles")
+        phone.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+        open_row_menu(phone, "#lib-list", 0, via="more")
+        check("sheet" in (phone.get_attribute("#ov-menu", "class") or ""), "phone: override menu renders as a bottom sheet")
+        shot(phone, "override-menu", "phone")
+        phone.context.close()
+        # Reset them all: the file goes back to gone (an empty map deletes it).
+        for idx in (3, 4, 5, 6):
+            open_row_menu(page, "#lib-list", idx, via="more")
+            page.click("#ov-reset")
+            page.wait_for_selector("#ov-menu", state="detached")
+        deadline = time.time() + 10
+        while time.time() < deadline and (meta_file.exists() and meta_file.read_text().strip()):
+            page.wait_for_timeout(100)
+        check(not meta_file.exists() or not meta_file.read_text().strip(),
+              "library overrides: reset all -> filelist.meta gone (or empty)")
         no_leaks(page, "library")
         shot(page, "library", "laptop")
         # Sets: the playlists by name, the default, activation by value
@@ -487,6 +624,29 @@ def mock_pass(browser) -> None:
         page.wait_for_selector("#sets-list [data-path='/sets/smoke.txt']", state="detached", timeout=60000)
         check(not written.exists() and get_json(base + "/api/config")["set"] == "",
               "sets: deleted after switching back to the default")
+        # Playlists: a /sets playlist's own overrides (the card copy has
+        # none, so make one over the API first), favourited from the editor.
+        ov_set_lines = want[:2]
+        put_text(base + "/api/sets/overridetest", "\n".join(ov_set_lines) + "\n")
+        # Made behind the browser's back: nudge it to reload the sets list
+        # (it otherwise only does that on a config change).
+        page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
+        page.wait_for_selector("#sets-list [data-path='/sets/overridetest.txt']", timeout=20000)
+        page.click("#sets-list [data-path='/sets/overridetest.txt'] >> text=Open")
+        page.wait_for_selector("#set-entries .vrow[data-path]")
+        ov_row_path = row_path(page, "#set-entries", 0)
+        check(ov_row_path == ov_set_lines[0], f"playlists: editor opened overridetest ({ov_row_path})")
+        open_row_menu(page, "#set-entries", 0, via="more")
+        page.click("#ov-fav")
+        page.wait_for_selector("#ov-menu", state="detached")
+        r = wait_overrides(base, "overridetest", 1)
+        check(r["overrides"] == [{"path": ov_row_path, "w": 3}], f"playlists: GET /api/overrides?set=overridetest agrees ({r['overrides']})")
+        ov_meta_file = overlay / "sets" / "overridetest.meta"
+        want_ov_meta = render_meta_line(ov_row_path, {"w": 3}) + "\n"
+        got_ov_meta = ov_meta_file.read_text() if ov_meta_file.exists() else ""
+        check(got_ov_meta == want_ov_meta, f"playlists: sets/overridetest.meta byte-for-byte ({got_ov_meta!r})")
+        check(page.locator("#set-entries .vrow:not([hidden]) >> nth=0 >> i.fav").count() == 1, "playlists: favourite glyph in editor")
+        no_leaks(page, "playlists (overrides)")
         # Cache: the three selected GIFs as a playlist, their copies forgotten.
         goto_view(page, "library")
         page.click("#lib-to-set")
@@ -564,6 +724,88 @@ def mock_pass(browser) -> None:
               and not any("odm" in v for v, _ in opts), f"settings: playlist choices {opts[:4]}")
         no_leaks(page, "settings")
         shot(page, "settings", "laptop")
+        # Time: pick a zone, save, and check the POSIX TZ string landed.
+        page.select_option("#tm-zone", label="Europe/Dublin")
+        page.click("#tm-save")
+        page.wait_for_function("document.querySelector('#tm-now').textContent.includes('Europe/Dublin')", timeout=10000)
+        cfg = get_json(base + "/api/config")
+        check(cfg["tz"] == "GMT0IST,M3.5.0/1,M10.5.0" and cfg["tz_name"] == "Europe/Dublin",
+              f"settings: time zone saved (tz={cfg['tz']!r}, tz_name={cfg['tz_name']!r})")
+        # Schedule: a weekend rule with a playlist and a brightness.
+        page.click("#sc-add")
+        page.wait_for_selector("#sc-edit:not([hidden])")
+        for day in (1, 2, 3, 4, 5):
+            page.click(f"#sc-days .chip[data-day='{day}']")  # Mon-Fri default on -> off
+        for day in (6, 7):
+            page.click(f"#sc-days .chip[data-day='{day}']")  # Sat/Sun default off -> on
+        page.fill("#sc-from", "10:00")
+        page.fill("#sc-to", "12:00")
+        page.select_option("#sc-set", value="filelist.hall")
+        page.eval_on_selector("#sc-bright", "e => { e.value = 40; e.dispatchEvent(new Event('input')); }")
+        page.click("#sc-rule-save")
+        page.wait_for_selector("#sc-rules [data-rule='0']", timeout=10000)
+        sched = get_json(base + "/api/schedule")
+        rule = sched["rules"][0] if sched["rules"] else {}
+        check(sorted(rule.get("days", [])) == [6, 7] and rule.get("from") == "10:00" and rule.get("to") == "12:00"
+              and rule.get("set") == "filelist.hall" and rule.get("brightness") == 40,
+              f"settings: schedule rule saved ({sched})")
+        shot(page, "settings-schedule", "laptop")
+        # Night mode covering right now: the Now banner should show it.
+        now_dub = datetime.now(ZoneInfo("Europe/Dublin"))
+        night_from = (now_dub - timedelta(minutes=1)).strftime("%H:%M")
+        night_to = (now_dub + timedelta(minutes=30)).strftime("%H:%M")
+        page.check("#sc-night-on")
+        page.fill("#sc-night-from", night_from)
+        page.fill("#sc-night-to", night_to)
+        page.select_option("#sc-night-mode", value="off")
+        page.click("#sc-night-save")
+        page.wait_for_function("document.querySelector('#sc-night-on').checked", timeout=10000)
+        sched = get_json(base + "/api/schedule")
+        # schedule.js always sends the night brightness slider's value (8 by
+        # default) alongside from/to/mode.
+        check(sched.get("night") == {"from": night_from, "to": night_to, "mode": "off", "brightness": 8},
+              f"settings: night mode saved ({sched.get('night')})")
+        no_leaks(page, "settings (schedule)")
+        # Phone: the schedule card and the Now banner.
+        phone = new_page(browser, "phone", errors)
+        phone.goto(base + "/")
+        phone.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
+        goto_view(phone, "settings")
+        phone.wait_for_selector("#sc-rules [data-rule='0']", timeout=20000)
+        shot(phone, "settings-schedule", "phone")
+        goto_view(phone, "now")
+        phone.wait_for_selector("#now-banner[data-mode='off']", timeout=15000)
+        shot(phone, "now-banner", "phone")
+        phone.context.close()
+        # Now: the banner, waking for an hour, and resuming.
+        goto_view(page, "now")
+        page.wait_for_selector("#now-banner[data-mode='off']", timeout=15000)
+        banner_text = page.inner_text("#now-banner")
+        check("Night mode until" in banner_text and night_to in banner_text, f"now: night banner '{banner_text}'")
+        st = get_json(base + "/api/status")
+        check(st["mode"] == "off" and st["mode_until"] == night_to, f"now: status mode off until {st['mode_until']}")
+        no_leaks(page, "now (night banner)")
+        page.evaluate("window.scrollTo(0, 0)")
+        shot(page, "now-banner", "laptop")
+        page.click("#now-wake")
+        page.wait_for_function("document.querySelector('#now-banner').textContent.includes('Schedule paused until')", timeout=15000)
+        check(get_json(base + "/api/status")["mode"] == "normal", "now: woken -> status mode normal")
+        page.click("#now-resume")
+        page.wait_for_selector("#now-banner[data-mode='off']", timeout=15000)
+        check(get_json(base + "/api/status")["mode"] == "off", "now: resumed -> back to night mode")
+        # Clear the schedule: delete the rule, turn night mode off.
+        goto_view(page, "settings")
+        page.click("#sc-rules [data-rule='0'] >> text=Delete")
+        page.wait_for_selector("#sc-rules [data-rule]", state="detached", timeout=10000)
+        page.uncheck("#sc-night-on")
+        page.click("#sc-night-save")
+        page.wait_for_function("!document.querySelector('#sc-night-on').checked", timeout=10000)
+        sched = get_json(base + "/api/schedule")
+        check(sched == {"rules": [], "night": None}, f"settings: schedule cleared -> empty form ({sched})")
+        goto_view(page, "now")
+        page.wait_for_selector("#now-banner", state="hidden", timeout=15000)
+        check(get_json(base + "/api/status")["mode"] == "normal", "now: schedule cleared -> status mode normal")
+        goto_view(page, "settings")
         # index_state "building": set switching is disabled until it is ready.
         def building(route):
             r = route.fetch()

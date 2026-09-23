@@ -14,6 +14,7 @@
 use crate::canvas::Canvas;
 use crate::filter::Filter;
 use crate::manifest::{self, Entry};
+use crate::overrides::{Dwell, Override, Overrides};
 use crate::player::FrameSource;
 use crate::scheduler::Scheduler;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
@@ -139,6 +140,50 @@ pub struct DwellPolicy {
     pub min_loops: u32,
 }
 
+/// How long [`DwellPolicy::with_override`] lets a `loops` override run
+/// before the hard cap still cuts it off, if the configured `max` is shorter.
+pub const LOOPS_MAX: Duration = Duration::from_secs(600);
+
+impl DwellPolicy {
+    /// This policy as one entry's override bends it:
+    ///
+    /// - `dwell=<s>`: the entry holds the panel for `s` seconds — `min` is
+    ///   `s`, and `max` is raised to `s` if it was shorter.
+    /// - `dwell=<k>x`: `min` and `max` are both scaled by `k`.
+    /// - `loops=<n>`: exactly `n` loops — `min_loops` is `n` and, unless a
+    ///   `dwell` is also set, `min` is 0 so it moves on after the `n`th; `max`
+    ///   is raised to [`LOOPS_MAX`] so a slow loop is not cut short.
+    ///
+    /// Weights and `never` are the scheduler's business and change nothing
+    /// here.
+    pub fn with_override(self, ov: &Override) -> DwellPolicy {
+        let mut d = self;
+        let scale = |t: Duration, k: f32| {
+            Duration::try_from_secs_f64(t.as_secs_f64() * f64::from(k)).unwrap_or(Duration::MAX)
+        };
+        match ov.dwell {
+            Some(Dwell::Secs(s)) => {
+                let s = Duration::from_secs(u64::from(s));
+                d.min = s;
+                d.max = d.max.max(s);
+            }
+            Some(Dwell::Times(k)) => {
+                d.min = scale(d.min, k);
+                d.max = scale(d.max, k);
+            }
+            None => {}
+        }
+        if let Some(n) = ov.loops {
+            d.min_loops = u32::from(n);
+            if ov.dwell.is_none() {
+                d.min = Duration::ZERO;
+            }
+            d.max = d.max.max(LOOPS_MAX);
+        }
+        d
+    }
+}
+
 impl Default for DwellPolicy {
     fn default() -> Self {
         DwellPolicy {
@@ -218,6 +263,8 @@ pub const SEEK_MAX_CONTENT: Duration = Duration::from_secs(60);
 
 struct Playing {
     index: usize,
+    /// This entry's override, if it bends the dwell (`dwell`/`loops`).
+    timed: Option<Override>,
     path: String,
     title: String,
     ordinal: u64,
@@ -266,6 +313,7 @@ impl Playing {
     ) -> Self {
         Playing {
             index,
+            timed: None,
             path,
             title,
             ordinal,
@@ -290,6 +338,9 @@ pub struct Engine {
     catalog: Box<dyn Catalog>,
     scheduler: Scheduler,
     dwell: DwellPolicy,
+    /// Per-entry dwell overrides, `(index, override)` sorted by index. Only
+    /// the entries with a `dwell` or `loops`; weights live in the scheduler.
+    timed: Vec<(u32, Override)>,
     source: Box<dyn Source>,
     current: Option<Playing>,
     paused_since: Option<Duration>,
@@ -310,6 +361,7 @@ impl Engine {
             catalog,
             scheduler,
             dwell,
+            timed: Vec::new(),
             source,
             current: None,
             paused_since: None,
@@ -332,6 +384,43 @@ impl Engine {
     /// exists.
     pub fn set_dwell(&mut self, dwell: DwellPolicy) {
         self.dwell = dwell;
+    }
+
+    /// Apply a playlist's resolved overrides: `never` and `w` become the
+    /// scheduler's sparse weights (0 for `never`), `dwell` and `loops` are
+    /// kept here and bend the [`DwellPolicy`] of that entry when it plays
+    /// ([`DwellPolicy::with_override`]). Takes effect from the next entry
+    /// opened. The indices are the catalog's, as the index build resolved
+    /// them.
+    pub fn set_overrides(&mut self, overrides: &Overrides) {
+        self.timed.clear();
+        for (index, ov) in overrides.iter() {
+            if let Some(w) = ov.scheduler_weight() {
+                self.scheduler.set_weight(*index as usize, w);
+            }
+            if ov.affects_dwell() {
+                self.timed.push((*index, *ov));
+            }
+        }
+        self.timed.shrink_to_fit();
+    }
+
+    /// The override that bends entry `index`'s dwell, if any.
+    fn timed_for(&self, index: usize) -> Option<Override> {
+        let index = u32::try_from(index).ok()?;
+        self.timed
+            .binary_search_by_key(&index, |(i, _)| *i)
+            .ok()
+            .map(|k| self.timed[k].1)
+    }
+
+    /// The dwell policy the file on screen plays under: the configured one,
+    /// bent by its override.
+    pub fn current_dwell(&self) -> DwellPolicy {
+        match self.current.as_ref().and_then(|p| p.timed.as_ref()) {
+            Some(ov) => self.dwell.with_override(ov),
+            None => self.dwell,
+        }
     }
 
     /// Reseed and rewind the scheduler, dropping whatever is on screen.
@@ -443,8 +532,12 @@ impl Engine {
                 return Ok(TickOutcome::Idle);
             }
 
+            let dwell = match &playing.timed {
+                Some(ov) => self.dwell.with_override(ov),
+                None => self.dwell,
+            };
             // Hard cap: never let one GIF hold the panel past `max`.
-            if now.saturating_sub(playing.started_at) >= self.dwell.max {
+            if now.saturating_sub(playing.started_at) >= dwell.max {
                 self.current = None;
                 if !self.open_next(now) {
                     return Ok(TickOutcome::Exhausted);
@@ -490,7 +583,7 @@ impl Engine {
                     // End of stream: loop the same file or move on.
                     playing.loops += 1;
                     let elapsed = now.saturating_sub(playing.started_at);
-                    let done = playing.loops >= self.dwell.min_loops && elapsed >= self.dwell.min;
+                    let done = playing.loops >= dwell.min_loops && elapsed >= dwell.min;
                     if done || !self.restart_current() {
                         self.current = None;
                         if !self.open_next(now) {
@@ -579,6 +672,7 @@ impl Engine {
         };
         let Playing {
             index,
+            timed,
             path,
             title,
             ordinal,
@@ -599,6 +693,7 @@ impl Engine {
             Ok(gif) => {
                 self.current = Some(Playing {
                     index,
+                    timed,
                     path,
                     title,
                     ordinal,
@@ -639,14 +734,10 @@ impl Engine {
             match self.source.open(&path).and_then(Stream::open) {
                 Ok(gif) => {
                     self.started_count += 1;
-                    self.current = Some(Playing::new(
-                        index,
-                        path,
-                        title,
-                        self.started_count,
-                        gif,
-                        now,
-                    ));
+                    let mut playing =
+                        Playing::new(index, path, title, self.started_count, gif, now);
+                    playing.timed = self.timed_for(index);
+                    self.current = Some(playing);
                     return true;
                 }
                 Err(e) => log::warn!("skipping {path}: {e}"),
@@ -1145,6 +1236,200 @@ mod tests {
             TickOutcome::Frame { playing, .. } => assert_eq!(playing.title, "B"),
             other => panic!("expected B, got {other:?}"),
         }
+    }
+
+    fn three_entries(dwell: DwellPolicy) -> Engine {
+        engine_with(
+            &[
+                ("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0)),
+                ("/gifs/Consoles/NES_B_01.gif", one_pixel_gif(0, 255, 0)),
+                ("/gifs/Consoles/NES_C_01.gif", one_pixel_gif(0, 0, 255)),
+            ],
+            "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif\n/gifs/Consoles/NES_C_01.gif",
+            dwell,
+        )
+    }
+
+    fn title_at(e: &mut Engine, t: Duration, canvas: &mut Canvas) -> String {
+        match e.tick(t, canvas).unwrap() {
+            TickOutcome::Frame { playing, .. } => playing.title,
+            other => panic!("expected a frame at {t:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_hidden_entry_is_never_opened() {
+        let dwell = DwellPolicy {
+            min: Duration::ZERO,
+            max: Duration::from_secs(30),
+            min_loops: 1,
+        };
+        let mut e = three_entries(dwell);
+        let mut ov = Overrides::new();
+        ov.push(
+            1,
+            Override {
+                never: true,
+                ..Default::default()
+            },
+        );
+        e.set_overrides(&ov);
+        let mut canvas = Canvas::new();
+        let titles: Vec<String> = (0..6)
+            .map(|k| title_at(&mut e, Duration::from_millis(100 * k), &mut canvas))
+            .collect();
+        assert_eq!(titles, ["A", "C", "A", "C", "A", "C"]);
+    }
+
+    #[test]
+    fn dwell_and_loops_overrides_bend_that_entry_only() {
+        let dwell = DwellPolicy {
+            min: Duration::from_secs(3),
+            max: Duration::from_secs(30),
+            min_loops: 1,
+        };
+        let mut e = three_entries(dwell);
+        let mut ov = Overrides::new();
+        // A: exactly 2 loops (its loop is 50 ms), not 3 s.
+        ov.push(
+            0,
+            Override {
+                loops: Some(2),
+                ..Default::default()
+            },
+        );
+        // B: 10 s instead of 3.
+        ov.push(
+            1,
+            Override {
+                dwell: Some(crate::overrides::Dwell::Secs(10)),
+                ..Default::default()
+            },
+        );
+        e.set_overrides(&ov);
+        let mut canvas = Canvas::new();
+        let ms = Duration::from_millis;
+        assert_eq!(title_at(&mut e, ms(0), &mut canvas), "A");
+        assert_eq!(e.current_dwell().min_loops, 2);
+        assert_eq!(
+            title_at(&mut e, ms(50), &mut canvas),
+            "A",
+            "first loop done, one to go"
+        );
+        assert_eq!(
+            title_at(&mut e, ms(100), &mut canvas),
+            "B",
+            "two loops, then on"
+        );
+        assert_eq!(e.current_dwell().min, Duration::from_secs(10));
+        assert_eq!(
+            title_at(&mut e, ms(5_100), &mut canvas),
+            "B",
+            "past 3 s, not past 10"
+        );
+        assert_eq!(title_at(&mut e, ms(10_200), &mut canvas), "C");
+        assert_eq!(
+            e.current_dwell().min,
+            Duration::from_secs(3),
+            "C is as configured"
+        );
+    }
+
+    #[test]
+    fn with_override_scales_raises_and_caps() {
+        let base = DwellPolicy {
+            min: Duration::from_secs(3),
+            max: Duration::from_secs(30),
+            min_loops: 1,
+        };
+        let twice = base.with_override(&Override {
+            dwell: Some(crate::overrides::Dwell::Times(2.0)),
+            ..Default::default()
+        });
+        assert_eq!(
+            (twice.min, twice.max),
+            (Duration::from_secs(6), Duration::from_secs(60))
+        );
+        let long = base.with_override(&Override {
+            dwell: Some(crate::overrides::Dwell::Secs(45)),
+            ..Default::default()
+        });
+        assert_eq!(
+            (long.min, long.max),
+            (Duration::from_secs(45), Duration::from_secs(45))
+        );
+        let looped = base.with_override(&Override {
+            loops: Some(3),
+            ..Default::default()
+        });
+        assert_eq!(
+            (looped.min, looped.min_loops, looped.max),
+            (Duration::ZERO, 3, LOOPS_MAX)
+        );
+        // The web preview's "forever" does not overflow.
+        let forever = DwellPolicy {
+            min: Duration::MAX,
+            max: Duration::MAX,
+            min_loops: u32::MAX,
+        };
+        assert_eq!(forever.with_override(&twice_ov()).max, Duration::MAX);
+        // Weights change nothing here.
+        let fav = Override {
+            weight: Some(3.0),
+            ..Default::default()
+        };
+        assert_eq!(base.with_override(&fav).min, base.min);
+    }
+
+    fn twice_ov() -> Override {
+        Override {
+            dwell: Some(crate::overrides::Dwell::Times(2.0)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn favourites_are_drawn_more_often() {
+        let dwell = DwellPolicy {
+            min: Duration::ZERO,
+            max: Duration::from_secs(30),
+            min_loops: 1,
+        };
+        let cat = catalog(
+            "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif\n/gifs/Consoles/NES_C_01.gif",
+            &Filter::new(),
+        );
+        let sched = Scheduler::new(cat.len(), Mode::Shuffle, 11);
+        let src = MemSource(
+            [("A", (255, 0, 0)), ("B", (0, 255, 0)), ("C", (0, 0, 255))]
+                .iter()
+                .map(|(t, (r, g, b))| {
+                    (
+                        format!("/gifs/Consoles/NES_{t}_01.gif"),
+                        one_pixel_gif(*r, *g, *b),
+                    )
+                })
+                .collect(),
+        );
+        let mut e = Engine::new(Box::new(cat), sched, dwell, Box::new(src));
+        let mut ov = Overrides::new();
+        ov.push(
+            2,
+            Override {
+                weight: Some(3.0),
+                ..Default::default()
+            },
+        );
+        e.set_overrides(&ov);
+        let mut canvas = Canvas::new();
+        let mut c = 0;
+        for k in 0..600 {
+            if title_at(&mut e, Duration::from_millis(100 * k), &mut canvas) == "C" {
+                c += 1;
+            }
+        }
+        // Expected share 3/5 = 360 of 600.
+        assert!((300..420).contains(&c), "favourite drawn {c}/600");
     }
 
     /// Valid header and trailer, zero image frames.

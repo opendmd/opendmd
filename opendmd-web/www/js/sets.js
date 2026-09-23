@@ -10,6 +10,7 @@
 // the stale index first and reindexes if the set is the active one.
 
 import { app, playlistLabel } from './state.js';
+import { Overrides, glyphs, menu, moreButton } from './overrides.js';
 import { VList } from './vlist.js';
 import { h, clear, on, toast, label, lines } from './util.js';
 
@@ -36,20 +37,30 @@ export async function mount(el) {
   let view = [];
   const picked = new Set();
 
+  // Favourite / hide / play longer, for the playlist open in the editor
+  // (a saved one: a draft has nowhere to keep them yet).
+  const ov = new Overrides();
+  ov.onChange = () => list.refresh();
   const list = new VList({
     rowHeight: 40,
     render(row, i) {
       const p = app.draft.paths[i];
       const e = app.wasm.parsePath(p);
+      const o = ov.get(p);
       clear(row, h('span.muted.mono', { style: 'width:44px;text-align:right' }, i + 1),
         h('span.t', label(e), e.platform && h('span.tag', e.platform)),
+        glyphs(o),
         h('span.n', e.category || ''),
+        moreButton(ov, p),
         h('button.sm', { title: 'move up', onclick: (ev) => { ev.stopPropagation(); move(i, -1); } }, '↑'),
         h('button.sm', { title: 'move down', onclick: (ev) => { ev.stopPropagation(); move(i, 1); } }, '↓'),
         h('button.sm.danger', { title: 'remove', onclick: (ev) => { ev.stopPropagation(); remove(i); } }, '✕'));
       row.classList.toggle('cur', picked.has(i));
+      row.classList.toggle('hid', !!o?.never);
+      row.dataset.path = p;
     },
     onClick: (i) => { if (!picked.delete(i)) picked.add(i); list.refresh(); },
+    onMenu: (i, _k, x, y) => menu(ov, app.draft.paths[i], x, y),
   });
   list.el.id = 'set-entries';
 
@@ -75,6 +86,7 @@ export async function mount(el) {
         h('button.sm', { onclick: () => movePicked(-1e9) }, 'Picked to top'),
         h('button.sm.danger', { onclick: removePicked }, 'Remove picked'),
         h('button.sm.danger', { onclick: () => { app.draft.paths = []; picked.clear(); refresh(); } }, 'Clear')),
+      h('p.cap', 'Right-click (or long-press, or …) an entry to make it a favourite, hide it, or play it longer in this playlist.'),
       list.el,
       h('div.row', { style: 'margin-top:10px' },
         h('button.pri', { id: 'set-save', onclick: () => save(false) }, 'Save'),
@@ -107,6 +119,8 @@ export async function mount(el) {
       if (text == null) throw new Error('not served by this source');
       app.draft.paths = lines(text);
       app.draft.name = p.root ? '' : p.value;
+      app.draft.path = p.path;
+      ov.load(p.path);
       name.value = app.draft.name;
       picked.clear();
       refresh();
@@ -161,7 +175,8 @@ export async function mount(el) {
   async function build(append) {
     try {
       const paths = await run();
-      if (append) app.draft.paths.push(...paths); else app.draft.paths = paths;
+      if (append) app.draft.paths.push(...paths);
+      else { app.draft.paths = paths; app.draft.path = ''; ov.load(''); }
       picked.clear();
       refresh();
       toast(`${paths.length} entries ${append ? 'appended' : 'in the editor'}`, 'ok');
@@ -215,6 +230,7 @@ export async function mount(el) {
       const r = await app.src.saveSet(n, text);
       app.draft.name = n;
       app.texts.set(path, text);
+      if (app.draft.path !== path) { app.draft.path = path; ov.load(path); }
       toast(`saved "${n}" · ${app.draft.paths.length} entries${r.index ? ` · reindexed (${r.index_ms} ms)` : ''}`, 'ok');
       if (andActivate && app.activeSet !== n) await activate({ value: n, label: n });
       await loadSets();
@@ -224,6 +240,7 @@ export async function mount(el) {
   name.oninput = () => { app.draft.name = name.value.trim(); };
   eSearch.oninput = refresh;
   on('draft', () => { name.value = app.draft.name; refresh(); });
+  if (app.draft.path) ov.load(app.draft.path);
   on('config', () => loadSets());
   on('status', () => { for (const b of setsList.querySelectorAll('[data-act]')) b.disabled = app.building; });
 

@@ -109,12 +109,43 @@ struct BlitHist {
     run_max: u32,
 }
 
-static BLIT: Mutex<BlitHist> = Mutex::new(BlitHist {
-    period: [0; BLIT_BUCKETS],
-    run: [0; BLIT_BUCKETS],
-    period_max: 0,
-    run_max: 0,
-});
+impl BlitHist {
+    const fn new() -> Self {
+        BlitHist {
+            period: [0; BLIT_BUCKETS],
+            run: [0; BLIT_BUCKETS],
+            period_max: 0,
+            run_max: 0,
+        }
+    }
+
+    fn add(&mut self, us: u32) {
+        let b = ((us / BLIT_BUCKET_US) as usize).min(BLIT_BUCKETS - 1);
+        self.period[b] += 1;
+        self.run[b] += 1;
+        self.period_max = self.period_max.max(us);
+        self.run_max = self.run_max.max(us);
+    }
+
+    /// `p50 Xus max Yus (run p50 Zus max Wus)`, then the period is reset.
+    fn take_summary(&mut self) -> String {
+        let s = format!(
+            "p50 {}us max {}us (run p50 {}us max {}us)",
+            hist_p50(&self.period),
+            self.period_max,
+            hist_p50(&self.run),
+            self.run_max,
+        );
+        self.period = [0; BLIT_BUCKETS];
+        self.period_max = 0;
+        s
+    }
+}
+
+static BLIT: Mutex<BlitHist> = Mutex::new(BlitHist::new());
+/// The same histogram for the tick's CPU time (tick minus SD open, read and
+/// catalog time: decode + composite), over frames that opened no file.
+static DECODE: Mutex<BlitHist> = Mutex::new(BlitHist::new());
 
 /// Median of a histogram, as the bucket's midpoint in µs.
 fn hist_p50(h: &[u32; BLIT_BUCKETS]) -> u32 {
@@ -301,17 +332,7 @@ pub fn frame(t: &FrameTimes, late_ms: Option<u64>, is_new: bool, path: &str) {
     P_BLIT_PX.fetch_add(t.blit_px, Relaxed);
     max(&P_WORK_MAX_US, t.work_us);
     if let Ok(mut h) = BLIT.lock() {
-        let b = ((t.blit_us / BLIT_BUCKET_US) as usize).min(BLIT_BUCKETS - 1);
-        h.period[b] += 1;
-        h.run[b] += 1;
-        h.period_max = h.period_max.max(t.blit_us);
-        h.run_max = h.run_max.max(t.blit_us);
-    }
-    let Some(late) = late_ms else { return };
-    if s.opens > 0 {
-        P_MISS_OPEN.fetch_add(1, Relaxed);
-    } else {
-        P_MISS_NOOPEN.fetch_add(1, Relaxed);
+        h.add(t.blit_us);
     }
     // The tick's own time minus SD time is (roughly) decode + composite.
     let cpu_us = t
@@ -319,6 +340,17 @@ pub fn frame(t: &FrameTimes, late_ms: Option<u64>, is_new: bool, path: &str) {
         .saturating_sub(s.open_us)
         .saturating_sub(s.read_us)
         .saturating_sub(s.cat_us);
+    if s.opens == 0 {
+        if let Ok(mut h) = DECODE.lock() {
+            h.add(cpu_us);
+        }
+    }
+    let Some(late) = late_ms else { return };
+    if s.opens > 0 {
+        P_MISS_OPEN.fetch_add(1, Relaxed);
+    } else {
+        P_MISS_NOOPEN.fetch_add(1, Relaxed);
+    }
     defer(format!(
         "miss late={late}ms delay={}ms work={}us tick={}us new={} opens={} open={}us cat={}us \
          reads={} rd_tot={}us rd_max={}us cpu~{}us blit={}us px={} log={}us @{} {path}",
@@ -353,23 +385,19 @@ pub fn period_summary() -> String {
     let frames = take(&P_FRAMES);
     let px = take(&P_BLIT_PX);
     let blit = match BLIT.lock() {
-        Ok(mut h) => {
-            let s = format!(
-                "blit p50 {}us max {}us (run p50 {}us max {}us) px/frame {}",
-                hist_p50(&h.period),
-                h.period_max,
-                hist_p50(&h.run),
-                h.run_max,
-                px.checked_div(frames).unwrap_or(0),
-            );
-            h.period = [0; BLIT_BUCKETS];
-            h.period_max = 0;
-            s
-        }
+        Ok(mut h) => format!(
+            "blit {} px/frame {}",
+            h.take_summary(),
+            px.checked_div(frames).unwrap_or(0),
+        ),
         Err(_) => String::new(),
     };
+    let decode = DECODE
+        .lock()
+        .map(|mut h| format!("decode {}, ", h.take_summary()))
+        .unwrap_or_default();
     format!(
-        " | sd: frames {frames} work-max {}us, {blit}, opens {opens} avg {}us max {}us \
+        " | sd: frames {frames} work-max {}us, {blit}, {decode}opens {opens} avg {}us max {}us \
          (all-time {} max {}us), rewinds {} (all-time {}), cat-max {}us, reads {} max {}us \
          >=5ms {} >=20ms {} >=100ms {}, misses open {} no-open {}",
         take(&P_WORK_MAX_US),

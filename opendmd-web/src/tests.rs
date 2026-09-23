@@ -357,6 +357,33 @@ mod js {
     }
 
     #[test]
+    fn overrides_round_trip_through_js_objects() {
+        let text = "/gifs/Consoles/SNES_Plok_08.gif\tw=3\n\
+                    /gifs/NEW 2021/X.gif\tnever\n\
+                    /gifs/A/Y.gif\tdwell=45\tloops=3\n\
+                    /gifs/A/Z.gif\tw=0.5\tdwell=2x\n";
+        let list = parse_overrides(text);
+        assert_eq!(list.length(), 4);
+        let fav = list.get(0);
+        assert_eq!(s(&fav, "w").as_f64(), Some(3.0));
+        assert!(s(&fav, "never").is_undefined());
+        assert_eq!(s(&list.get(1), "never").as_bool(), Some(true));
+        assert_eq!(s(&list.get(2), "dwell").as_f64(), Some(45.0));
+        assert_eq!(s(&list.get(2), "loops").as_f64(), Some(3.0));
+        assert_eq!(s(&list.get(3), "dwell_x").as_f64(), Some(2.0));
+        assert_eq!(render_overrides(list.clone()), text);
+        // Nothing valid to say: dropped. Out of range: dropped.
+        let o = Object::new();
+        set(&o, "path", "/gifs/A/W.gif");
+        list.push(&o);
+        let bad = Object::new();
+        set(&bad, "path", "/gifs/A/V.gif");
+        set(&bad, "loops", 0);
+        list.push(&bad);
+        assert_eq!(render_overrides(list), text);
+    }
+
+    #[test]
     fn odm_manifest_switches_present_lines() {
         let present = Array::new();
         present.push(&JsValue::from_str("/odm/Spectrum_Slide/20/Exolon2.odm"));

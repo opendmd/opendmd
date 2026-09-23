@@ -22,6 +22,7 @@ use js_sys::{Array, Object, Reflect, Uint8Array};
 use opendmd_core::layout;
 use opendmd_core::manifest::{normalize_title as core_normalize, Entry};
 use opendmd_core::odm::{self, EncodeStats};
+use opendmd_core::overrides::{parse_meta, render_meta, Dwell, MetaLine, Override};
 use opendmd_render::BLOOM_STRENGTH;
 use player::{Look, Player, Tick};
 use std::collections::HashSet;
@@ -200,6 +201,69 @@ pub fn odm_manifest(manifest_text: &str, present: Array) -> JsValue {
     set(&o, "text", text);
     set(&o, "switched", switched as u32);
     o.into()
+}
+
+// --- Per-entry overrides (the playlist's `.meta`) --------------------------
+
+/// One override as the device's `GET /api/overrides` sends it:
+/// `{path, never?, w?, dwell?, dwell_x?, loops?}` — absent fields are left
+/// out, `dwell` is seconds and `dwell_x` a multiple of the configured dwell.
+fn override_object(path: &str, ov: &Override) -> Object {
+    let o = Object::new();
+    set(&o, "path", path);
+    if ov.never {
+        set(&o, "never", true);
+    }
+    if let Some(w) = ov.weight {
+        set(&o, "w", w);
+    }
+    match ov.dwell {
+        Some(Dwell::Secs(s)) => set(&o, "dwell", s),
+        Some(Dwell::Times(k)) => set(&o, "dwell_x", k),
+        None => {}
+    }
+    if let Some(n) = ov.loops {
+        set(&o, "loops", u32::from(n));
+    }
+    o
+}
+
+/// The inverse of [`override_object`], range-checked as the card parser
+/// would check a line; `None` if it overrides nothing valid.
+fn override_from(v: &JsValue) -> Option<MetaLine> {
+    let path = get(v, "path").as_string().filter(|p| !p.is_empty())?;
+    let num = |k: &str| get(v, k).as_f64();
+    let ov = Override {
+        never: get(v, "never").as_bool() == Some(true),
+        weight: num("w").map(|w| w as f32),
+        dwell: match (num("dwell"), num("dwell_x")) {
+            (Some(s), _) if s >= 0.0 && s <= u32::MAX as f64 => Some(Dwell::Secs(s as u32)),
+            (_, Some(k)) => Some(Dwell::Times(k as f32)),
+            _ => None,
+        },
+        loops: num("loops")
+            .filter(|n| *n >= 0.0 && *n <= u16::MAX as f64)
+            .map(|n| n as u16),
+    };
+    (ov.is_valid() && !ov.is_empty()).then_some(MetaLine { path, ov })
+}
+
+/// A playlist's `.meta` text -> `[{path, never?, w?, dwell?, dwell_x?,
+/// loops?}]`, tolerant like the device.
+#[wasm_bindgen(js_name = parseOverrides)]
+pub fn parse_overrides(text: &str) -> Array {
+    parse_meta(text)
+        .iter()
+        .map(|l| JsValue::from(override_object(&l.path, &l.ov)))
+        .collect()
+}
+
+/// `[{path, ...}]` -> the canonical `.meta` text. Entries that override
+/// nothing (or nothing valid) are dropped.
+#[wasm_bindgen(js_name = renderOverrides)]
+pub fn render_overrides(list: Array) -> String {
+    let lines: Vec<MetaLine> = list.iter().filter_map(|v| override_from(&v)).collect();
+    render_meta(&lines)
 }
 
 fn stats_object(s: &EncodeStats) -> Object {

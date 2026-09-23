@@ -33,6 +33,7 @@
 //! the panel anything, those are where it shows.
 
 mod cache;
+mod clock;
 mod config;
 mod dns_server;
 mod files;
@@ -43,6 +44,7 @@ mod nvs_config;
 mod ota;
 mod panel;
 mod probe;
+mod sched;
 mod sd;
 mod state;
 mod wifi;
@@ -56,7 +58,9 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use opendmd_core::canvas::Canvas;
 use opendmd_core::engine::{Catalog, DwellPolicy, Engine, FileCatalog, TickOutcome};
 use opendmd_core::filter::Filter;
-use opendmd_core::index::{write_index, IndexHeader, IndexedCatalog};
+use opendmd_core::index::{write_index_with_overrides, IndexHeader, IndexedCatalog};
+use opendmd_core::overrides::{self, OverrideSet, Overrides, NO_META};
+use opendmd_core::schedule::{self, Decision, Schedule};
 use opendmd_core::scheduler::{Mode, Scheduler};
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
@@ -187,14 +191,20 @@ fn main() -> Result<()> {
         );
     }
     panel.set_brightness(settings.brightness);
+    clock::set_timezone(&settings.tz, &settings.tz_name);
+    let mut sched = Scheduling::new(&settings.schedule);
     log::info!(
-        "settings: brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', host='{}', wifi={}",
+        "settings: brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', tz='{}' ({}), schedule {} rule(s){}, host='{}', wifi={}",
         settings.brightness,
         settings.dwell_min,
         settings.dwell_max,
         settings.shuffle,
         settings.platforms,
         settings.set,
+        settings.tz,
+        settings.tz_name,
+        sched.schedule.rules.len(),
+        if sched.schedule.night.is_some() { " + night mode" } else { "" },
         settings.hostname,
         if settings.wifi_ssid.is_empty() {
             "unconfigured".to_string()
@@ -239,6 +249,7 @@ fn main() -> Result<()> {
         s.sd_capacity_bytes = _card.capacity_bytes;
         s.www_version = files::read_www_version();
         s.refresh_hz = panel.refresh_rate();
+        s.tz_name = tz_label(&settings);
     }
     let shared_settings = Arc::new(Mutex::new(settings.clone()));
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
@@ -252,7 +263,7 @@ fn main() -> Result<()> {
     // fresh heap to work with. If the card has no readable manifest the loop
     // below keeps retrying.
     let mut engine: Option<Engine> = None;
-    let _ = rebuild(&mut engine, &settings, false, &status);
+    let _ = rebuild(&mut engine, &sched.effective(&settings), false, &status);
 
     // The HTTP server next, still before the first GIF is decoded: its task
     // stack is one contiguous 16 KB internal allocation, and the largest free
@@ -374,9 +385,14 @@ fn main() -> Result<()> {
                             continue;
                         }
                     }
-                    let needs_reindex = next.platforms != settings.platforms
-                        || next.set != settings.set
-                        || next.shuffle != settings.shuffle;
+                    // What plays is the schedule's overlay on the saved
+                    // settings: a rule's playlist wins over `set` while it
+                    // is in force, so compare what would actually play.
+                    let (eff_now, eff_next) = (sched.effective(&settings), sched.effective(&next));
+                    let needs_reindex = eff_next.platforms != eff_now.platforms
+                        || eff_next.set != eff_now.set
+                        || eff_next.shuffle != eff_now.shuffle;
+                    let tz_changed = next.tz != settings.tz || next.tz_name != settings.tz_name;
 
                     match nvs_config.save(&next) {
                         Err(e) => {
@@ -388,9 +404,22 @@ fn main() -> Result<()> {
                             // Brightness and dwell apply to what is on screen
                             // right now; a filter, set or order change means a
                             // new catalog — rebuilt in place, never a reboot.
-                            panel.set_brightness(settings.brightness);
+                            if !sched.off() {
+                                panel.set_brightness(sched.brightness(&settings));
+                            }
                             if let Some(e) = engine.as_mut() {
                                 e.set_dwell(dwell_policy(&settings));
+                            }
+                            if tz_changed {
+                                clock::set_timezone(&settings.tz, &settings.tz_name);
+                                status.lock().unwrap().tz_name = tz_label(&settings);
+                                sched.dirty = true;
+                                log::info!(
+                                    "time: zone {} ({}), local time {}",
+                                    settings.tz_name,
+                                    settings.tz,
+                                    clock::hhmm_now().unwrap_or_else(|| "not set yet".into())
+                                );
                             }
                             log::info!(
                                 "config applied (reindex={needs_reindex}): brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}'",
@@ -404,7 +433,7 @@ fn main() -> Result<()> {
                             let outcome = if needs_reindex {
                                 // A current `.idx` for the new set/filter is
                                 // reused; anything else is rebuilt.
-                                rebuild(&mut engine, &settings, false, &status)
+                                rebuild(&mut engine, &sched.effective(&settings), false, &status)
                             } else {
                                 Ok(Applied::unchanged(
                                     engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -417,7 +446,7 @@ fn main() -> Result<()> {
                 Command::Reindex(reply) => {
                     // Forced: the caller asked, perhaps because the manifest
                     // was edited off-device with its length unchanged.
-                    let outcome = rebuild(&mut engine, &settings, true, &status);
+                    let outcome = rebuild(&mut engine, &sched.effective(&settings), true, &status);
                     log::info!("reindex requested over HTTP: {outcome:?}");
                     let _ = reply.send(outcome);
                 }
@@ -441,7 +470,7 @@ fn main() -> Result<()> {
                         })
                         .and_then(|()| {
                             if active {
-                                rebuild(&mut engine, &settings, true, &status)
+                                rebuild(&mut engine, &sched.effective(&settings), true, &status)
                             } else {
                                 Ok(Applied::unchanged(
                                     engine.as_ref().map_or(0, |e| e.catalog_len()),
@@ -451,7 +480,126 @@ fn main() -> Result<()> {
                     log::info!("manifest installed at {dest} (active={active}): {outcome:?}");
                     let _ = reply.send(outcome);
                 }
+                Command::InstallMeta { temp, dest, reply } => {
+                    // The same sequence as a manifest install: the index
+                    // carries the resolved overrides and this file's
+                    // fingerprint, so it goes first, and the playlist in
+                    // play is rebuilt (the engine, which has the index open,
+                    // dropped before that).
+                    let Some(manifest) = files::meta_manifest(&dest) else {
+                        if let Some(t) = &temp {
+                            let _ = std::fs::remove_file(t);
+                        }
+                        let _ =
+                            reply.send(Err(format!("{dest} is not a playlist's overrides file")));
+                        continue;
+                    };
+                    let active = files::same_card_path(&status.lock().unwrap().manifest, &manifest);
+                    if active {
+                        engine = None;
+                    }
+                    let outcome = files::remove_index_beside(&manifest)
+                        .and_then(|()| match &temp {
+                            Some(t) => files::replace(t, &dest),
+                            None => match std::fs::remove_file(&dest) {
+                                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                                    Err(anyhow::anyhow!("removing {dest}: {e}"))
+                                }
+                                _ => Ok(()),
+                            },
+                        })
+                        .map_err(|e| {
+                            if let Some(t) = &temp {
+                                let _ = std::fs::remove_file(t);
+                            }
+                            format!("{e:#}")
+                        })
+                        .and_then(|()| {
+                            if active {
+                                rebuild(&mut engine, &sched.effective(&settings), false, &status)
+                            } else {
+                                Ok(Applied::unchanged(
+                                    engine.as_ref().map_or(0, |e| e.catalog_len()),
+                                ))
+                            }
+                        });
+                    log::info!(
+                        "overrides {} at {dest} (playlist {manifest}, active={active}): {outcome:?}",
+                        if temp.is_some() { "installed" } else { "removed" }
+                    );
+                    let _ = reply.send(outcome);
+                }
+                Command::SetSchedule { json, reply } => {
+                    let parsed = match sched::parse(json.as_bytes()) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let _ = reply.send(Err(e));
+                            continue;
+                        }
+                    };
+                    let mut next = settings.clone();
+                    next.schedule = json;
+                    match nvs_config.save(&next) {
+                        Err(e) => {
+                            let _ = reply.send(Err(format!("saving the schedule: {e:#}")));
+                        }
+                        Ok(()) => {
+                            settings = next;
+                            *shared_settings.lock().unwrap() = settings.clone();
+                            log::info!(
+                                "schedule saved: {} rule(s){}",
+                                parsed.rules.len(),
+                                if parsed.night.is_some() {
+                                    " + night mode"
+                                } else {
+                                    ""
+                                }
+                            );
+                            sched.schedule = parsed;
+                            sched.dirty = true;
+                            let _ = reply.send(Ok(Applied::unchanged(
+                                engine.as_ref().map_or(0, |e| e.catalog_len()),
+                            )));
+                        }
+                    }
+                }
+                Command::Wake { minutes, reply } => {
+                    let minutes = minutes.min(config::WAKE_MAX_MINUTES);
+                    if minutes == 0 {
+                        sched.wake_until = None;
+                        sched.wake_label = None;
+                        log::info!("schedule: wake cancelled, schedule back in force");
+                    } else {
+                        sched.wake_until =
+                            Some(Instant::now() + Duration::from_secs(u64::from(minutes) * 60));
+                        sched.wake_label = clock::hhmm_in(minutes);
+                        log::info!(
+                            "schedule: woken for {minutes} min (until {})",
+                            sched.wake_label.as_deref().unwrap_or("?")
+                        );
+                    }
+                    sched.dirty = true;
+                    status.lock().unwrap().wake_until = sched.wake_label.clone();
+                    let _ = reply.send(Ok(Applied::unchanged(
+                        engine.as_ref().map_or(0, |e| e.catalog_len()),
+                    )));
+                }
             }
+        }
+
+        // The schedule: at most once a second look at the clock, and act only
+        // when the local minute (or the schedule, zone or a wake) changed.
+        if let Some(next) = sched.poll() {
+            apply_schedule(
+                next,
+                &mut sched,
+                &settings,
+                &mut engine,
+                &mut panel,
+                &mut canvas,
+                &status,
+                epoch.elapsed(),
+            );
         }
 
         // Only after every reply above has been sent.
@@ -461,7 +609,19 @@ fn main() -> Result<()> {
 
         // 2. No engine (boot, or a reindex that failed): try to build one.
         let Some(eng) = engine.as_mut() else {
-            if rebuild(&mut engine, &settings, false, &status).is_err() {
+            let eff = sched.effective(&settings);
+            if rebuild(&mut engine, &eff, false, &status).is_err() {
+                // A schedule rule's playlist that will not build is set
+                // aside (until the rule changes) and the saved one plays.
+                if eff.set != settings.set {
+                    log::warn!(
+                        "schedule: playlist '{}' will not open; playing the saved one",
+                        eff.set
+                    );
+                    sched.broken_set = Some(eff.set.clone());
+                    sched.publish(&status);
+                    continue;
+                }
                 // The set may have gone missing under us (deleted off-device,
                 // card swapped): fall back to the default at once rather than
                 // retrying a manifest that is not there.
@@ -483,7 +643,13 @@ fn main() -> Result<()> {
         let entries = eng.catalog_len();
         probe::tick_begin();
         let tick_now = epoch.elapsed();
-        let outcome = eng.tick(tick_now, &mut canvas)?;
+        // Night mode "off": the panel is dark and nothing is decoded.
+        let off = sched.off();
+        let outcome = if off {
+            TickOutcome::Idle
+        } else {
+            eng.tick(tick_now, &mut canvas)?
+        };
         let tick_us = if probe::ENABLED {
             epoch.elapsed().saturating_sub(tick_now).as_micros() as u32
         } else {
@@ -561,6 +727,7 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            TickOutcome::Idle if off => config::OFF_SLEEP,
             TickOutcome::Idle => config::IDLE_SLEEP,
             TickOutcome::Exhausted => {
                 log::error!(
@@ -621,9 +788,211 @@ fn main() -> Result<()> {
                 sampled_min,
                 deadline_misses,
                 worst_lateness_ms,
+                &sched.summary(),
             );
         }
     }
+}
+
+/// The zone as status shows it: its name, or the POSIX string if unnamed.
+fn tz_label(settings: &Settings) -> String {
+    if settings.tz_name.is_empty() {
+        settings.tz.clone()
+    } else {
+        settings.tz_name.clone()
+    }
+}
+
+/// The schedule at run time: the parsed rules, what was last decided (and
+/// applied), and a manual wake. The saved settings are never changed by it —
+/// a rule's playlist or brightness is an overlay ([`Scheduling::effective`])
+/// that goes away when the rule ends.
+struct Scheduling {
+    schedule: Schedule,
+    decision: Decision,
+    wake_until: Option<Instant>,
+    wake_label: Option<String>,
+    last_check: Instant,
+    last_seen: Option<schedule::LocalTime>,
+    /// Evaluate at the next poll, whatever the minute.
+    dirty: bool,
+    /// A rule's playlist that would not build: ignored until the decision
+    /// changes, so the loop does not retry it every iteration.
+    broken_set: Option<String>,
+}
+
+impl Scheduling {
+    fn new(json: &str) -> Self {
+        let schedule = sched::parse(json.as_bytes()).unwrap_or_else(|e| {
+            log::warn!("schedule in NVS unusable ({e}); ignoring it");
+            Schedule::default()
+        });
+        Scheduling {
+            schedule,
+            decision: Decision::default(),
+            wake_until: None,
+            wake_label: None,
+            last_check: Instant::now(),
+            last_seen: None,
+            dirty: true,
+            broken_set: None,
+        }
+    }
+
+    /// The settings that apply now: the saved ones, with the rule's playlist
+    /// in place of `set` while a rule chooses one.
+    fn effective(&self, settings: &Settings) -> Settings {
+        let mut eff = settings.clone();
+        if let Some(set) = &self.decision.set {
+            if self.broken_set.as_ref() != Some(set) {
+                eff.set = set.clone();
+            }
+        }
+        eff
+    }
+
+    fn brightness(&self, settings: &Settings) -> u8 {
+        self.decision.brightness.unwrap_or(settings.brightness)
+    }
+
+    fn off(&self) -> bool {
+        self.decision.mode == schedule::Mode::Off
+    }
+
+    /// A fresh decision, if the minute (or anything else) changed and it
+    /// differs from what is applied. Cheap when it is not time to look.
+    fn poll(&mut self) -> Option<Decision> {
+        if !self.dirty && self.last_check.elapsed() < config::SCHEDULE_CHECK {
+            return None;
+        }
+        self.last_check = Instant::now();
+        if self.wake_until.is_some_and(|t| Instant::now() >= t) {
+            log::info!("schedule: wake over, schedule back in force");
+            self.wake_until = None;
+            self.wake_label = None;
+            self.dirty = true;
+        }
+        let now = clock::local_now();
+        if !self.dirty && now == self.last_seen {
+            return None;
+        }
+        self.last_seen = now;
+        let forced = std::mem::take(&mut self.dirty);
+        let next = match now {
+            Some(t) if self.wake_until.is_none() => self.schedule.evaluate(t),
+            _ => Decision::default(),
+        };
+        (forced || next != self.decision).then_some(next)
+    }
+
+    /// The schedule's fields in status.
+    fn publish(&self, status: &Mutex<Status>) {
+        let d = &self.decision;
+        let mut s = status.lock().unwrap();
+        s.mode = d.mode.as_str();
+        s.mode_until = d.mode_until.map(schedule::format_hhmm);
+        s.rule = d.rule;
+        s.rule_set = d
+            .set
+            .clone()
+            .filter(|set| self.broken_set.as_ref() != Some(set));
+        s.rule_until = d.rule.and(d.rule_until).map(schedule::format_hhmm);
+        s.wake_until = self.wake_label.clone();
+    }
+
+    /// For the heartbeat.
+    fn summary(&self) -> String {
+        let d = &self.decision;
+        let mut out = format!("mode {}", d.mode.as_str());
+        if let Some(until) = d.mode_until {
+            out += &format!(" until {}", schedule::format_hhmm(until));
+        }
+        if d.mode == schedule::Mode::Off {
+            out += " (panel dark, engine paused)";
+        }
+        if let Some(r) = d.rule {
+            out += &format!(
+                ", rule {r} -> '{}' until {}",
+                d.set.as_deref().unwrap_or("(saved playlist)"),
+                d.rule_until.map(schedule::format_hhmm).unwrap_or_default()
+            );
+        }
+        if let Some(w) = &self.wake_label {
+            out += &format!(", woken until {w}");
+        }
+        out
+    }
+}
+
+/// Put a new schedule decision into effect: the playlist (rebuilt in place
+/// when the rule's differs from what is playing — the panel holds its frame
+/// meanwhile, as for any playlist change), the brightness, and night mode's
+/// dark panel (cleared, brightness 0; the DMA keeps running) with playback
+/// paused. Leaving it repaints the whole canvas at the next frame.
+#[allow(clippy::too_many_arguments)]
+fn apply_schedule(
+    next: Decision,
+    sched: &mut Scheduling,
+    settings: &Settings,
+    engine: &mut Option<Engine>,
+    panel: &mut Panel,
+    canvas: &mut Canvas,
+    status: &Mutex<Status>,
+    now: Duration,
+) {
+    let prev = std::mem::replace(&mut sched.decision, next);
+    if prev.set != sched.decision.set {
+        sched.broken_set = None;
+    }
+    let d = sched.decision.clone();
+    log::info!(
+        "schedule: {} at {}",
+        sched.summary(),
+        clock::hhmm_now().unwrap_or_else(|| "(clock not set)".into())
+    );
+
+    // The playlist.
+    let eff = sched.effective(settings);
+    let playing = status.lock().unwrap().manifest.clone();
+    if engine.is_some() && !files::same_card_path(&eff.manifest_path(), &playing) {
+        log::info!("schedule: playlist {} -> {}", playing, eff.manifest_path());
+        if rebuild(engine, &eff, false, status).is_err() && eff.set != settings.set {
+            log::warn!(
+                "schedule: playlist '{}' will not open; playing the saved one",
+                eff.set
+            );
+            sched.broken_set = Some(eff.set.clone());
+            let _ = rebuild(engine, &sched.effective(settings), false, status);
+        }
+    }
+
+    // The panel.
+    let was_off = prev.mode == schedule::Mode::Off;
+    if d.mode == schedule::Mode::Off {
+        if !was_off {
+            panel.clear();
+            panel.set_brightness(0);
+            if let Some(e) = engine.as_mut() {
+                e.pause(now);
+            }
+            log::info!("schedule: night mode, panel dark and playback paused");
+        }
+    } else {
+        if was_off {
+            // The DMA buffer was cleared under the canvas: the next frame
+            // must repaint all of it, not just what changed.
+            canvas.dirty_mut().mark_all();
+            let user_paused = status.lock().unwrap().paused;
+            if let Some(e) = engine.as_mut() {
+                if !user_paused {
+                    e.resume(now);
+                }
+            }
+            log::info!("schedule: panel back on");
+        }
+        panel.set_brightness(sched.brightness(settings));
+    }
+    sched.publish(status);
 }
 
 /// A log line owed by a frame, printed after that frame's sleep.
@@ -724,9 +1093,14 @@ fn dwell_policy(settings: &Settings) -> DwellPolicy {
 }
 
 /// A fresh engine over the configured manifest's playlist index, shuffled with
-/// a hardware-random seed so two boots do not play the same order.
-fn build_engine(settings: &Settings, path: &str, force: bool) -> Result<(Engine, IndexSource)> {
-    let (catalog, source) = open_catalog(path, &build_filter(settings), force)?;
+/// a hardware-random seed so two boots do not play the same order, with the
+/// playlist's overrides (its `.meta`) applied.
+fn build_engine(
+    settings: &Settings,
+    path: &str,
+    force: bool,
+) -> Result<(Engine, IndexSource, Overrides)> {
+    let (catalog, overrides, source) = open_catalog(path, &build_filter(settings), force)?;
     let catalog: Box<dyn Catalog> = if probe::ENABLED {
         Box::new(probe::TimedCatalog(catalog))
     } else {
@@ -739,26 +1113,52 @@ fn build_engine(settings: &Settings, path: &str, force: bool) -> Result<(Engine,
     };
     let scheduler =
         Scheduler::new(catalog.len(), mode, random_seed()).with_no_repeat(config::NO_REPEAT_WINDOW);
-    Ok((
-        Engine::new(
-            catalog,
-            scheduler,
-            dwell_policy(settings),
-            Box::new(SdSource),
-        ),
-        source,
-    ))
+    let mut engine = Engine::new(
+        catalog,
+        scheduler,
+        dwell_policy(settings),
+        Box::new(SdSource),
+    );
+    engine.set_overrides(&overrides);
+    Ok((engine, source, overrides))
+}
+
+/// The fingerprint of the playlist's `.meta` as the index records it:
+/// [`NO_META`] when there is none. One small file read.
+fn meta_fingerprint(meta: &str) -> u64 {
+    match File::open(meta) {
+        Ok(f) => overrides::fingerprint(f).unwrap_or_else(|e| {
+            log::warn!("{meta}: unreadable ({e}); treating it as changed");
+            1
+        }),
+        Err(_) => NO_META,
+    }
+}
+
+/// The playlist's `.meta`, parsed for an index build (empty if there is
+/// none, or it will not read).
+fn read_meta(meta: &str) -> OverrideSet {
+    match File::open(meta) {
+        Ok(f) => OverrideSet::read(BufReader::with_capacity(512, f)).unwrap_or_else(|e| {
+            log::warn!("{meta}: unreadable ({e}); no overrides");
+            OverrideSet::new()
+        }),
+        Err(_) => OverrideSet::new(),
+    }
 }
 
 /// The playlist for `path` under `filter`, in order of preference:
 ///
 /// 1. **Loaded**: `<path>.idx` exists, its header reads, and
-///    [`IndexHeader::is_valid_for`] the manifest's current length and this
-///    filter's fingerprint. Nothing is read but the 32-byte header. Skipped
-///    when `force` is set.
+///    [`IndexHeader::is_valid_for`] the manifest's current length, this
+///    filter's fingerprint and the playlist's `.meta` fingerprint. Nothing
+///    is read but the header and the resolved overrides after the offsets.
+///    Skipped when `force` is set.
 /// 2. **Built**: one streaming pass over the manifest writes
-///    `<path>.idx.tmp`, which is renamed over `<path>.idx` and opened. Needs
-///    ~4 KB of heap (a 1 KB read buffer, a 2 KB write buffer, one line).
+///    `<path>.idx.tmp` — offsets, and the `.meta` overrides resolved against
+///    them in the same pass — which is renamed over `<path>.idx` and opened.
+///    Needs ~4 KB of heap (a 1 KB read buffer, a 2 KB write buffer, one
+///    line) plus 8 B of key per override for the duration.
 /// 3. **In RAM**: the card would not take the file (read-only, full), so the
 ///    offsets are kept in a `Vec` exactly as before this index existed and the
 ///    panel still plays. That `Vec` passes through a 64 KB block while it
@@ -771,7 +1171,7 @@ fn open_catalog(
     path: &str,
     filter: &Filter,
     force: bool,
-) -> Result<(Box<dyn Catalog>, IndexSource)> {
+) -> Result<(Box<dyn Catalog>, Overrides, IndexSource)> {
     let manifest = File::open(path).with_context(|| format!("opening {path}"))?;
     let len = manifest
         .metadata()
@@ -779,28 +1179,37 @@ fn open_catalog(
         .len();
     let len = u32::try_from(len).with_context(|| format!("{path} is over 4 GB"))?;
     let idx = files::index_path(path);
+    let meta = overrides::meta_path(path);
+    let meta_fp = meta_fingerprint(&meta);
 
     if force {
         log::info!("{idx}: rebuild requested");
     } else {
-        match load_index(&idx, len, filter) {
+        match load_index(&idx, len, filter, meta_fp) {
             Ok(index) => {
-                let catalog = IndexedCatalog::open(manifest, index)
+                let mut catalog = IndexedCatalog::open(manifest, index)
                     .with_context(|| format!("opening {idx}"))?;
-                return Ok((Box::new(catalog), IndexSource::Loaded));
+                let ov = catalog
+                    .overrides()
+                    .with_context(|| format!("reading the overrides in {idx}"))?;
+                return Ok((Box::new(catalog), ov, IndexSource::Loaded));
             }
             Err(why) => log::info!("{idx}: {why}; rebuilding"),
         }
     }
 
+    let set = read_meta(&meta);
+    if !set.is_empty() {
+        log::info!("{meta}: {} overrides to resolve", set.len());
+    }
     let mut manifest = manifest;
-    match write_index_file(&mut manifest, len, filter, &idx) {
-        Ok(header) => {
+    match write_index_file(&mut manifest, len, filter, &set, meta_fp, &idx) {
+        Ok((header, ov)) => {
             let index = File::open(&idx).with_context(|| format!("reopening {idx}"))?;
             let catalog =
                 IndexedCatalog::open(manifest, index).with_context(|| format!("opening {idx}"))?;
             debug_assert_eq!(catalog.len(), header.count as usize);
-            Ok((Box::new(catalog), IndexSource::Built))
+            Ok((Box::new(catalog), ov, IndexSource::Built))
         }
         Err(e) => {
             log::warn!("cannot write {idx} ({e:#}); falling back to an in-RAM index");
@@ -809,26 +1218,36 @@ fn open_catalog(
                 return Err(anyhow::Error::new(NeedsFreshHeap { block }));
             }
             manifest.seek(SeekFrom::Start(0))?;
-            let catalog = FileCatalog::build(manifest, filter)
-                .with_context(|| format!("indexing {path} in RAM"))?;
-            Ok((Box::new(catalog), IndexSource::InRam))
+            let mut ov = Overrides::new();
+            let mut k = 0u32;
+            let catalog = FileCatalog::build_with(manifest, filter, |entry, matched| {
+                if matched {
+                    if let Some(o) = set.get(&entry.path) {
+                        ov.push(k, o);
+                    }
+                    k += 1;
+                }
+            })
+            .with_context(|| format!("indexing {path} in RAM"))?;
+            Ok((Box::new(catalog), ov, IndexSource::InRam))
         }
     }
 }
 
 /// The index file, if it is current; otherwise why not, for the log.
-fn load_index(idx: &str, manifest_len: u32, filter: &Filter) -> Result<File, String> {
+fn load_index(idx: &str, manifest_len: u32, filter: &Filter, meta_fp: u64) -> Result<File, String> {
     let mut file = match File::open(idx) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("missing".into()),
         Err(e) => return Err(format!("unreadable ({e})")),
     };
     let header = IndexHeader::read(&mut file).map_err(|e| format!("unusable ({e})"))?;
-    if !header.is_valid_for(manifest_len, filter) {
+    if !header.is_valid_for(manifest_len, filter, meta_fp) {
         return Err(format!(
-            "stale (built for a {} B manifest, filter {:016x}; now {manifest_len} B, {:016x})",
+            "stale (built for a {} B manifest, filter {:016x}, overrides {:016x}; now {manifest_len} B, {:016x}, {meta_fp:016x})",
             header.manifest_len,
             header.filter_fingerprint,
+            header.meta_fingerprint,
             filter.fingerprint()
         ));
     }
@@ -842,22 +1261,26 @@ fn write_index_file(
     manifest: &mut File,
     manifest_len: u32,
     filter: &Filter,
+    set: &OverrideSet,
+    meta_fp: u64,
     idx: &str,
-) -> Result<IndexHeader> {
+) -> Result<(IndexHeader, Overrides)> {
     let tmp = format!("{idx}.tmp");
     let written = File::create(&tmp)
         .with_context(|| format!("creating {tmp}"))
         .and_then(|out| {
             // `out` is dropped (closed, flushed to the card) when this returns.
-            write_index(
+            write_index_with_overrides(
                 BufReader::with_capacity(1024, &mut *manifest),
                 manifest_len,
                 filter,
+                set,
+                meta_fp,
                 out,
             )
             .with_context(|| format!("writing {tmp}"))
         })
-        .and_then(|header| files::replace(&tmp, idx).map(|()| header));
+        .and_then(|built| files::replace(&tmp, idx).map(|()| built));
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -912,6 +1335,8 @@ fn rebuild(
     // `entries` too, so a status read right after the reply is already right
     // (the frame loop only republishes it after its next frame).
     s.entries = outcome.as_ref().map_or(0, |a| a.entries);
+    s.overrides = outcome.as_ref().map_or(0, |a| a.overrides);
+    s.hidden = outcome.as_ref().map_or(0, |a| a.hidden);
     s.index_state = if outcome.is_ok() {
         "ready"
     } else {
@@ -932,25 +1357,33 @@ fn build_and_report(
 ) -> Result<Applied, String> {
     let started = Instant::now();
     match build_engine(settings, path, force) {
-        Ok((built, source)) => {
+        Ok((built, source, ov)) => {
             let ms = started.elapsed().as_millis() as u64;
             let entries = built.catalog_len();
             if entries == 0 {
                 log::error!("{path} matched no entries under the configured filter");
                 return Err(format!("{path} matched no entries"));
             }
+            let (hidden, weighted, timed) = ov.summary();
             log::info!(
-                "manifest indexed: {path}, {entries} entries, index {} in {ms} ms ({} B {}), heap {} B free",
+                "manifest indexed: {path}, {entries} entries, index {} in {ms} ms ({} B {}), \
+                 overrides {} ({hidden} hidden, {weighted} more/less often, {timed} timed), heap {} B free",
                 source.as_str(),
                 entries * 4,
                 if source == IndexSource::InRam { "in RAM" } else { "on card" },
+                ov.len(),
                 free_heap()
             );
+            if hidden >= entries {
+                log::warn!("{path}: every entry is hidden; nothing will play");
+            }
             *engine = Some(built);
             Ok(Applied {
                 entries,
                 index: Some(source),
                 index_ms: ms,
+                overrides: ov.len(),
+                hidden,
             })
         }
         Err(e) => {
@@ -1008,6 +1441,7 @@ fn reboot_to_apply() -> ! {
     unsafe { esp_idf_sys::esp_restart() }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn heartbeat(
     panel: &Panel,
     status: &Arc<Mutex<Status>>,
@@ -1015,6 +1449,7 @@ fn heartbeat(
     sampled_min: u32,
     deadline_misses: u64,
     worst_lateness_ms: u64,
+    schedule: &str,
 ) {
     let free = free_heap();
     let min_free = min_free_heap();
@@ -1028,7 +1463,7 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms), \
-         wifi {wifi} {ip}{}{}",
+         wifi {wifi} {ip}, {schedule}{}{}",
         sd::period_summary(),
         probe::period_summary()
     );

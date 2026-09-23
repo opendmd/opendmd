@@ -95,15 +95,23 @@ impl Scheduler {
         self.history.clear();
     }
 
-    /// Relative weight for an item index. Weight 0 is never chosen.
+    /// Relative weight for an item index. Weight 0 is never chosen — in
+    /// either mode: `Sequential` steps over it.
+    ///
+    /// The table is kept sorted by index, so a lookup is a binary search
+    /// however many weights a playlist's overrides set (up to 1,024).
     pub fn set_weight(&mut self, index: usize, weight: f32) {
         if index >= self.len {
             return;
         }
-        let weight = weight.max(0.0);
-        match self.weights.iter_mut().find(|(i, _)| *i == index) {
-            Some(slot) => slot.1 = weight,
-            None => self.weights.push((index, weight)),
+        let weight = if weight.is_nan() {
+            1.0
+        } else {
+            weight.max(0.0)
+        };
+        match self.weights.binary_search_by_key(&index, |(i, _)| *i) {
+            Ok(k) => self.weights[k].1 = weight,
+            Err(k) => self.weights.insert(k, (index, weight)),
         }
     }
 
@@ -122,9 +130,8 @@ impl Scheduler {
     /// Weight of one index; anything `set_weight` was never called on is 1.0.
     pub fn weight(&self, index: usize) -> f32 {
         self.weights
-            .iter()
-            .find(|(i, _)| *i == index)
-            .map_or(1.0, |(_, w)| *w)
+            .binary_search_by_key(&index, |(i, _)| *i)
+            .map_or(1.0, |k| self.weights[k].1)
     }
 
     /// Next item index, or `None` if there is nothing playable (empty catalog,
@@ -138,9 +145,18 @@ impl Scheduler {
         }
         let index = match self.mode {
             Mode::Sequential => {
-                let index = self.cursor;
-                self.cursor = (self.cursor + 1) % self.len;
-                index
+                // Step over zero-weighted (hidden) entries; a whole lap of
+                // them means nothing is playable.
+                let mut found = None;
+                for _ in 0..self.len {
+                    let index = self.cursor;
+                    self.cursor = (self.cursor + 1) % self.len;
+                    if self.weights.is_empty() || self.weight(index) > 0.0 {
+                        found = Some(index);
+                        break;
+                    }
+                }
+                found?
             }
             Mode::Shuffle => self.pick_weighted()?,
         };
@@ -322,6 +338,31 @@ mod tests {
         assert_eq!(s.weights.len(), 1);
         assert_eq!(s.weight(42), 0.25);
         assert_eq!(s.weight(43), 1.0);
+    }
+
+    #[test]
+    fn sequential_steps_over_zero_weights() {
+        let mut s = Scheduler::new(5, Mode::Sequential, 0);
+        s.set_weight(1, 0.0);
+        s.set_weight(4, 0.0);
+        s.set_weight(2, 3.0); // weights other than 0 do not change the order
+        assert_eq!(take(&mut s, 7), vec![0, 2, 3, 0, 2, 3, 0]);
+        let mut s = Scheduler::new(2, Mode::Sequential, 0);
+        s.set_weight(0, 0.0);
+        s.set_weight(1, 0.0);
+        assert_eq!(s.next_index(), None);
+    }
+
+    #[test]
+    fn weight_table_stays_sorted_for_lookup() {
+        let mut s = Scheduler::new(100, Mode::Shuffle, 0);
+        for i in [50, 3, 99, 3, 17, 0] {
+            s.set_weight(i, i as f32 + 0.5);
+        }
+        assert!(s.weights.windows(2).all(|w| w[0].0 < w[1].0));
+        assert_eq!(s.weights.len(), 5);
+        assert_eq!(s.weight(17), 17.5);
+        assert_eq!(s.weight(18), 1.0);
     }
 
     #[test]

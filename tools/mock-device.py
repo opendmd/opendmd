@@ -108,6 +108,31 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   (the first line of `--www`/version.txt, trimmed, <= 64 chars, else null).
 - **JSON bodies over 8 KB** (`PUT /api/config`, `POST /api/play`) are a 413
   `{"error":"body is N B, the limit is 8192 B"}`, judged on `Content-Length`.
+- **Per-GIF overrides** (`opendmd_core::overrides`): a playlist's `.meta`
+  sidecar (`/filelist.meta`, `/filelist.<x>.meta`, `/sets/<n>.meta` --
+  `meta_path_for`/`meta_manifest_for` port `meta_path`/`manifest_for_meta`).
+  `PUT`/`DELETE /api/files/<meta>` install/remove it like a manifest (a
+  missing file on DELETE is fine) and reply with the playlist fields below,
+  for whichever playlist is actually playing; `GET /api/overrides?set=`
+  dumps one `.meta`'s overrides, parsed but unresolved. Replies that touch
+  the playlist (`/api/reindex`, `/api/config` PUT, a manifest or `.meta`
+  install/delete) now carry `overrides`/`hidden` too: how many of the
+  playing playlist's entries have one, resolved case-insensitively
+  (`opendmd_core::overrides::OverrideSet`), and how many of those are
+  `never` (dropped from the simulated playback order -- a "nice to have",
+  not modelled: weight, dwell and loop overrides).
+- **The schedule and night mode** (`opendmd_core::schedule`): `GET`/`PUT
+  /api/schedule` store the JSON verbatim (`""` for the empty schedule, read
+  back as `{"rules":[],"night":null}`); `POST /api/wake {"minutes"}`
+  suspends it. Evaluated (rules in order, first match wins; night beats
+  every rule for `mode`; a wrapped `to <= from` window belongs to the day it
+  starts) on every status read, right after a PUT/wake, and once a second in
+  the ticker. A rule's `set` overlays the playlist actually playing (`/api/
+  config`'s own `set` is untouched); night mode `"off"` freezes the
+  simulated player the same way a manual pause does. `time`/`tz` in status
+  are the host's local time through `zoneinfo` of the configured `tz_name`
+  (falling back to host local time for an unknown zone) -- the mock has no
+  real RTC/SNTP to simulate syncing.
 
 # `--strict`
 
@@ -154,6 +179,7 @@ randomness every time).
 """
 
 import argparse
+import datetime
 import http.client
 import http.server
 import json
@@ -190,6 +216,8 @@ DEFAULT_SETTINGS = {
     "platforms": "",
     "set": "",
     "hostname": "opendmd-mock",
+    "tz": "UTC0",
+    "tz_name": "UTC",
 }
 
 # field -> expected type, for PUT /api/config validation
@@ -203,7 +231,12 @@ FIELD_TYPES = {
     "platforms": "str",
     "set": "str",
     "hostname": "str",
+    "tz": "str",
+    "tz_name": "str",
 }
+
+SCHEDULE_MAX = 2048            # nvs_config::SCHEDULE_MAX
+WAKE_MAX_MINUTES = 24 * 60     # config::WAKE_MAX_MINUTES
 
 STATUS_TEXT = {
     200: "OK",
@@ -292,6 +325,8 @@ def mime_for(rel: str) -> str:
     # Root manifests have whatever extension their owner chose; all text.
     if is_root_manifest_name(rel):
         return "text/plain; charset=utf-8"
+    if rel.lower().endswith(".meta"):
+        return "text/plain; charset=utf-8"
     ext = Path(rel).suffix.lstrip(".").lower()
     return {
         "html": "text/html; charset=utf-8",
@@ -316,6 +351,8 @@ def mime_for(rel: str) -> str:
 def cache_for(rel: str) -> str:
     if is_root_manifest_name(rel):
         return "no-cache"
+    if rel.lower().endswith(".meta"):
+        return "no-cache"
     if "/pkg/" in f"/{rel}":
         return "max-age=3600"
     ext = Path(rel).suffix.lstrip(".").lower()
@@ -326,7 +363,7 @@ def cache_for(rel: str) -> str:
 
 def is_manifest_path(rel: str) -> bool:
     """Port of files::is_manifest_path, in root-relative terms."""
-    if rel.endswith(".idx") or rel.endswith(".tmp") or rel.endswith(".part"):
+    if rel.endswith((".idx", ".tmp", ".part", ".meta")):
         return False
     parts = rel.split("/")
     if len(parts) == 1 and parts[0].startswith("filelist."):
@@ -334,6 +371,38 @@ def is_manifest_path(rel: str) -> bool:
     if len(parts) == 2 and parts[0] == SETS_DIR:
         return True
     return False
+
+
+def meta_path_for(manifest_rel: str) -> str:
+    """opendmd_core::overrides::meta_path, in root-relative terms: strip a
+    '.txt' suffix if there is one, else append '.meta' -- '/filelist.txt' ->
+    '/filelist.meta', '/filelist.hall' -> '/filelist.hall.meta',
+    '/sets/x.txt' -> '/sets/x.meta'."""
+    if manifest_rel.endswith(".txt"):
+        return manifest_rel[: -len(".txt")] + ".meta"
+    return manifest_rel + ".meta"
+
+
+def meta_manifest_for(rel: str) -> str | None:
+    """Port of files::meta_manifest (+ opendmd_core::overrides::
+    manifest_for_meta): the manifest a `.meta` path belongs to, or None if
+    `rel` is not a root `filelist*.meta` or a `sets/*.meta`."""
+    if not rel.lower().endswith(".meta"):
+        return None
+    stem = rel[: -len(".meta")]
+    if "/" in stem:
+        dir_, name = stem.rsplit("/", 1)
+    else:
+        dir_, name = "", stem
+    if not name:
+        return None
+    in_root = dir_ == ""
+    in_sets = dir_ == SETS_DIR
+    if not (in_sets or (in_root and name.startswith("filelist"))):
+        return None
+    if in_sets or name == "filelist":
+        return stem + ".txt"
+    return stem
 
 
 PLATFORM_PREFIX_RE = re.compile(r"^[A-Za-z0-9]+_")
@@ -444,6 +513,187 @@ def enoent(path: str) -> str:
     """Rust's io::Error Display for ENOENT, which the firmware's error
     messages embed verbatim."""
     return f"{path}: No such file or directory (os error 2)"
+
+
+# --------------------------------------------------------------------------
+# Per-GIF overrides ('.meta' files): opendmd_core::overrides, ported
+# --------------------------------------------------------------------------
+
+def parse_decimal(s: str) -> float | None:
+    """Port of overrides::parse_decimal: a non-negative decimal, ASCII
+    digits only, at most 6 int digits and 3 fraction digits, no exponent, no
+    sign. `""`/"." are refused (both parts empty)."""
+    int_part, sep, frac_part = s.partition(".")
+    if not sep:
+        frac_part = ""
+    if int_part == "" and frac_part == "":
+        return None
+    if len(int_part) > 6 or len(frac_part) > 3:
+        return None
+    digits = "0123456789"
+    if any(c not in digits for c in int_part) or any(c not in digits for c in frac_part):
+        return None
+
+    def to_int(t: str) -> int:
+        n = 0
+        for c in t:
+            n = n * 10 + (ord(c) - 48)
+        return n
+
+    milli = to_int(int_part) * 1000 + to_int(frac_part) * (10 ** (3 - len(frac_part)))
+    return milli / 1000.0
+
+
+def num_json(v: float):
+    """A decimal value the way overrides::format_decimal/push_decimal would
+    print it, as a JSON number: `3` (int) when it is whole, else rounded to
+    3 places (`0.5`, `1.25`)."""
+    milli = int(max(float(v), 0.0) * 1000.0 + 0.5)
+    if milli % 1000 == 0:
+        return milli // 1000
+    return milli / 1000.0
+
+
+def apply_override_field(ov: dict, field: str) -> bool:
+    """Port of overrides::Override::apply_field. `ov` gains a key only for a
+    field it understands and accepts; returns whether it did."""
+    key, _, val = field.partition("=")
+    if "=" not in field:
+        key, val = field.strip(), None
+    else:
+        key, val = key.strip(), val.strip()
+    if key == "never" and val is None:
+        ov["never"] = True
+        return True
+    if key == "w" and val is not None:
+        w = parse_decimal(val)
+        if w is not None and 0.0 <= w <= 1000.0:
+            ov["w"] = w
+            return True
+        return False
+    if key == "dwell" and val is not None:
+        if val and val[-1] in "xX":
+            k = parse_decimal(val[:-1])
+            if k is not None and 0.0 < k <= 100.0:
+                ov["dwell_x"] = k
+                ov.pop("dwell", None)
+                return True
+            return False
+        if val.isdigit():
+            secs = int(val)
+            if 1 <= secs <= 86_400:
+                ov["dwell"] = secs
+                ov.pop("dwell_x", None)
+                return True
+        return False
+    if key == "loops" and val is not None:
+        if val.isdigit():
+            n = int(val)
+            if 1 <= n <= 1000:
+                ov["loops"] = n
+                return True
+        return False
+    return False
+
+
+def parse_meta_line(raw: str):
+    """Port of overrides::parse_line: `None` for a blank line, a comment, or
+    one whose fields carried nothing valid; else `(path, override_dict)`."""
+    line = raw
+    if line.startswith("﻿"):
+        line = line[1:]
+    line = line.rstrip("\n\r \t")
+    if not line or line.startswith("#"):
+        return None
+    parts = line.split("\t")
+    path = parts[0].rstrip()
+    if not path:
+        return None
+    ov: dict = {}
+    for field in parts[1:]:
+        if field.strip():
+            apply_override_field(ov, field)
+    return (path, ov) if ov else None
+
+
+def parse_meta_text(text: str) -> dict[str, dict]:
+    """Port of overrides::parse_meta: path (exact text) -> override dict, in
+    first-seen order; a later line for the same path replaces the whole
+    override."""
+    out: dict[str, dict] = {}
+    for raw in text.split("\n"):
+        parsed = parse_meta_line(raw)
+        if parsed is not None:
+            path, ov = parsed
+            out[path] = ov
+    return out
+
+
+def parse_meta_text_for(fs: "CardFS", manifest_rel: str) -> dict[str, dict]:
+    """The overrides beside `manifest_rel` (its `.meta`), parsed; `{}` if
+    there is none."""
+    meta_rel = meta_path_for(manifest_rel)
+    p = fs.read_path(meta_rel)
+    if p is None:
+        return {}
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    return parse_meta_text(text)
+
+
+# --------------------------------------------------------------------------
+# The schedule: opendmd_core::schedule, ported
+# --------------------------------------------------------------------------
+
+def parse_hhmm(s) -> int | None:
+    """Port of schedule::parse_hhmm: 'HH:MM' (00:00..23:59) to minutes since
+    midnight; '24:00' is accepted as midnight (0)."""
+    if not isinstance(s, str) or ":" not in s:
+        return None
+    h_str, _, m_str = s.strip().partition(":")
+    if h_str == "" or len(h_str) > 2 or len(m_str) != 2:
+        return None
+    if not h_str.isdigit() or not m_str.isdigit():
+        return None
+    h, m = int(h_str), int(m_str)
+    if h == 24 and m == 0:
+        return 0
+    if 0 <= h <= 23 and 0 <= m <= 59:
+        return h * 60 + m
+    return None
+
+
+def format_hhmm(minute: int) -> str:
+    m = minute % 1440
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def days_mask(days) -> int | None:
+    """Port of schedule::days_mask: ISO weekdays (1=Mon..7=Sun) to a bitmask;
+    empty is every day; None if any value is out of range."""
+    if not days:
+        return 0x7F
+    mask = 0
+    for d in days:
+        if not isinstance(d, int) or isinstance(d, bool) or not (1 <= d <= 7):
+            return None
+        mask |= 1 << (d - 1)
+    return mask
+
+
+def window_contains(frm: int, to: int, mask: int, weekday: int, minute: int) -> bool:
+    """Port of schedule::Window::contains."""
+    def on(day: int) -> bool:
+        return bool(mask & (1 << (day - 1)))
+
+    yesterday = 7 if weekday == 1 else weekday - 1
+    if frm == to:
+        return on(weekday)
+    if frm < to:
+        return on(weekday) and frm <= minute < to
+    return (on(weekday) and minute >= frm) or (on(yesterday) and minute < to)
 
 
 # --------------------------------------------------------------------------
@@ -588,7 +838,8 @@ class Player:
         self.boot_time = time.monotonic()
         self.ordinal = 0
         self.gifs_started = 0
-        self.paused = False
+        self.paused = False        # the manual toggle (POST /api/pause)
+        self.scheduled_off = False  # night mode "off" (Schedule.evaluate)
         self.playlist: list[str] = []
         self.order: list[int] = []
         self.pos = -1
@@ -596,14 +847,31 @@ class Player:
         self.deadline_misses = 0
         self.worst_lateness_ms = 0
         self.manifest = MANIFEST_REL
+        self.manifest_last_set: str | None = None
         self.index_state = "building"
         self.played: str | None = None  # an off-playlist POST /api/play
-        # The file's own clock: its position is (now or paused_at) - file_t0,
-        # advanced through the real frame delays (see position()).
+        self.overrides_count = 0
+        self.hidden_count = 0
+        # The file's own clock: its position is (now or frozen_at) - file_t0,
+        # advanced through the real frame delays (see position()). Frozen by
+        # a manual pause or by night mode "off" -- either shifts the clocks
+        # by however long it lasted, exactly once, on the way out.
         self.file_t0 = time.monotonic()
-        self.paused_at = 0.0
+        self.frozen_at = 0.0
         self.delays: dict[str, list[int]] = {}
         self.rebuild_playlist()
+
+    def _frozen(self) -> bool:
+        return self.paused or self.scheduled_off
+
+    def _apply_freeze(self, was_frozen: bool, now_frozen: bool) -> None:
+        now = time.monotonic()
+        if now_frozen and not was_frozen:
+            self.frozen_at = now
+        elif was_frozen and not now_frozen:
+            shift = now - self.frozen_at
+            self.file_t0 += shift
+            self.last_advance += shift
 
     def resolve(self, set_: str) -> str:
         """Settings::manifest_path, root-relative."""
@@ -617,11 +885,18 @@ class Player:
         """The manifest in play, as resolved at the last rebuild."""
         return self.manifest
 
+    def effective_set(self) -> str:
+        """The `set` actually playing: a schedule rule's, if one is in
+        force, overlaid on the saved config value."""
+        rule_set = self.ctx.schedule.rule_set
+        return rule_set if rule_set is not None else self.ctx.settings["set"]
+
     def rebuild_playlist(self):
-        rel = self.manifest = self.resolve(self.ctx.settings["set"])
+        self.manifest_last_set = self.effective_set()
+        rel = self.manifest = self.resolve(self.manifest_last_set)
         lines = self.ctx.fs.read_lines(rel)
         self.index_state = "ready" if lines is not None else "unavailable"
-        filtered = []
+        base: list[str] = []
         if lines is not None:
             platforms = [
                 p.strip().upper()
@@ -636,7 +911,25 @@ class Player:
                     name = line.rsplit("/", 1)[-1].upper()
                     if not any(name.startswith(p + "_") for p in platforms):
                         continue
-                filtered.append(line)
+                base.append(line)
+        # Per-GIF overrides for this playlist, resolved case-insensitively
+        # against its entries (opendmd_core::overrides::OverrideSet).
+        meta_map = parse_meta_text_for(self.ctx.fs, rel)
+        ci: dict[str, dict] = {}
+        for path, ov in meta_map.items():
+            ci[path.lower()] = ov  # later line (in file order) wins
+        overrides_n = 0
+        hidden: set[str] = set()
+        for b in base:
+            ov = ci.get(b.lower())
+            if ov is not None:
+                overrides_n += 1
+                if ov.get("never"):
+                    hidden.add(b.lower())
+        self.overrides_count = overrides_n
+        self.hidden_count = len(hidden)
+        # Nice to have: the simulated player skips entries marked `never`.
+        filtered = [b for b in base if b.lower() not in hidden]
         self.playlist = filtered
         n = len(filtered)
         self.order = list(range(n))
@@ -672,14 +965,20 @@ class Player:
 
     def set_paused(self, paused: bool):
         """As the engine does: a pause freezes the file's position, and
-        resuming shifts its clocks (and the dwell's) by the pause."""
-        now = time.monotonic()
-        if paused and not self.paused:
-            self.paused_at = now
-        elif not paused and self.paused:
-            self.file_t0 += now - self.paused_at
-            self.last_advance += now - self.paused_at
+        resuming shifts its clocks (and the dwell's) by however long it
+        lasted."""
+        was = self._frozen()
         self.paused = paused
+        self._apply_freeze(was, self._frozen())
+
+    def set_scheduled_off(self, off: bool):
+        """Night mode "off": the simulated player pauses (a separate reason
+        from the manual toggle, so either can come and go independently)."""
+        if off == self.scheduled_off:
+            return
+        was = self._frozen()
+        self.scheduled_off = off
+        self._apply_freeze(was, self._frozen())
 
     def frame_delays(self, path: str) -> list[int]:
         """The frame delays of what the device would play for `path`: its
@@ -707,7 +1006,7 @@ class Player:
         loop = sum(delays)
         if not loop:
             return 0, 0
-        at = self.paused_at if self.paused else time.monotonic()
+        at = self.frozen_at if self._frozen() else time.monotonic()
         ms = int((at - self.file_t0) * 1000)
         loops, rem = divmod(ms, loop)
         idx = 0
@@ -717,7 +1016,7 @@ class Player:
         return ms, loops * len(delays) + idx + 1
 
     def tick(self):
-        if self.paused or not self.playlist:
+        if self._frozen() or not self.playlist:
             return
         if time.monotonic() - self.last_advance >= self.ctx.dwell:
             self.advance()
@@ -744,6 +1043,199 @@ def heap_numbers(player: Player):
     floor = 50000 + int(400 * math.sin(t / 7.0 + 1.0))
     idf_min = 45000
     return max(free, 1000), max(floor, 1000), idf_min
+
+
+# --------------------------------------------------------------------------
+# The schedule: time/night mode simulation (opendmd_core::schedule, sched.rs)
+# --------------------------------------------------------------------------
+
+class Schedule:
+    """Rules + night mode, evaluated against the mock's own clock.
+
+    `doc` is the stored schedule exactly as PUT it (or `None` for "no
+    schedule", read back as the empty form) -- what GET /api/schedule
+    returns verbatim. `evaluate()` (called on every status read, from the
+    ticker, and right after a PUT/wake/tz change) turns it into `mode`,
+    `mode_until`, `rule_idx`/`rule_set`/`until` and, through
+    `Player.effective_set`/`Player.set_scheduled_off`, the playlist actually
+    playing and whether it is paused for the night.
+    """
+
+    EMPTY = {"rules": [], "night": None}
+
+    def __init__(self, ctx: "Context"):
+        self.ctx = ctx
+        self.doc: dict | None = None
+        self.wake_until_mono: float | None = None
+        self.mode = "normal"
+        self.mode_until: str | None = None
+        self.rule_idx: int | None = None
+        self.rule_set: str | None = None
+        self.until: str | None = None
+        self._norm_rules: list = []
+        self._norm_night: dict | None = None
+
+    def get_doc(self) -> dict:
+        return self.doc if self.doc is not None else dict(self.EMPTY)
+
+    def local_now(self):
+        """Host local time via zoneinfo of the configured tz_name, or plain
+        host local time if it is not a known zone."""
+        tz_name = self.ctx.settings.get("tz_name") or "UTC"
+        try:
+            from zoneinfo import ZoneInfo
+            return datetime.datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            return datetime.datetime.now()
+
+    # -- validation + storage ------------------------------------------
+
+    def _validate(self, body):
+        """Returns None (and leaves `self.doc` untouched -- the caller
+        stores it) on success, or (status, error-body-or-message)."""
+        if not isinstance(body, dict):
+            return (400, "invalid JSON: expected a JSON object")
+        rules_in = body.get("rules", [])
+        if rules_in is None:
+            rules_in = []
+        if not isinstance(rules_in, list):
+            return (400, "invalid JSON: 'rules' must be an array")
+        if len(rules_in) > 16:
+            return (400, f"at most 16 rules (got {len(rules_in)})")
+        norm_rules = []
+        for i, r in enumerate(rules_in):
+            what = f"rule {i + 1}"
+            if not isinstance(r, dict):
+                return (400, f"{what}: must be an object")
+            mask = days_mask(r.get("days") or [])
+            if mask is None:
+                return (400, f"{what}: days are 1 (Mon) to 7 (Sun)")
+            frm = parse_hhmm(r.get("from"))
+            if frm is None:
+                return (400, f"{what}: from '{r.get('from')}' is not HH:MM")
+            to = parse_hhmm(r.get("to"))
+            if to is None:
+                return (400, f"{what}: to '{r.get('to')}' is not HH:MM")
+            set_name = r.get("set")
+            if set_name is not None:
+                if (not isinstance(set_name, str) or any(c in set_name for c in "/\\\0")
+                        or ".." in set_name or set_name.lower() == OBSOLETE_SET.lower()):
+                    return (400, f"{what}: '{set_name}' is not a playlist name")
+            brightness = r.get("brightness")
+            if brightness is not None and (
+                not isinstance(brightness, int) or isinstance(brightness, bool) or not (0 <= brightness <= 255)
+            ):
+                return (400, f"{what}: brightness must be 0..255")
+            norm_rules.append({"days": mask, "from_min": frm, "to_min": to, "set": set_name, "raw": r})
+
+        night_in = body.get("night")
+        night_norm = None
+        if night_in is not None:
+            if not isinstance(night_in, dict):
+                return (400, "invalid JSON: 'night' must be an object or null")
+            nfrm = parse_hhmm(night_in.get("from"))
+            if nfrm is None:
+                return (400, f"night: from '{night_in.get('from')}' is not HH:MM")
+            nto = parse_hhmm(night_in.get("to"))
+            if nto is None:
+                return (400, f"night: to '{night_in.get('to')}' is not HH:MM")
+            mode = night_in.get("mode")
+            if mode not in ("off", "dim"):
+                return (400, f"night: mode '{mode}' is not off or dim")
+            nb = night_in.get("brightness")
+            if nb is not None and (not isinstance(nb, int) or isinstance(nb, bool) or not (0 <= nb <= 255)):
+                return (400, "night: brightness must be 0..255")
+            night_norm = {"from_min": nfrm, "to_min": nto, "mode": mode, "raw": night_in}
+
+        # Whether each rule's playlist opens is checked after everything
+        # else is well-formed (sched::missing_sets): every missing one is
+        # named, not just the first.
+        missing = []
+        for rn in norm_rules:
+            name = rn["set"]
+            if name and name not in missing and self.ctx.fs.read_lines(self.ctx.player.resolve(name)) is None:
+                missing.append(name)
+        if missing:
+            return (404, {"error": f"set not found: {', '.join(missing)}"})
+
+        self._norm_rules = norm_rules
+        self._norm_night = night_norm
+        return None
+
+    def validate_and_set(self, body):
+        err = self._validate(body)
+        if err is not None:
+            return err
+        rules_raw = [r["raw"] for r in self._norm_rules]
+        night_raw = self._norm_night["raw"] if self._norm_night is not None else None
+        self.doc = None if (not rules_raw and night_raw is None) else {"rules": rules_raw, "night": night_raw}
+        self.evaluate()
+        return None
+
+    def wake(self, minutes: int):
+        self.wake_until_mono = None if minutes <= 0 else time.monotonic() + minutes * 60
+        self.evaluate()
+
+    def wake_until_str(self) -> str | None:
+        if self.wake_until_mono is None:
+            return None
+        remaining = self.wake_until_mono - time.monotonic()
+        if remaining <= 0:
+            return None
+        until_dt = self.local_now() + datetime.timedelta(seconds=remaining)
+        return until_dt.strftime("%H:%M")
+
+    # -- evaluation ------------------------------------------------------
+
+    def evaluate(self):
+        with self.ctx.lock:
+            now = self.local_now()
+            if self.wake_until_mono is not None and time.monotonic() >= self.wake_until_mono:
+                self.wake_until_mono = None
+            woken = self.wake_until_mono is not None
+
+            weekday = now.isoweekday()
+            minute = now.hour * 60 + now.minute
+            doc = self.doc
+            rules = (doc or {}).get("rules") or []
+            night = (doc or {}).get("night")
+
+            rule_idx = rule_set = until = None
+            if not woken:
+                for i, r in enumerate(rules):
+                    mask = days_mask(r.get("days") or [])
+                    frm, to = parse_hhmm(r.get("from")), parse_hhmm(r.get("to"))
+                    if mask is None or frm is None or to is None:
+                        continue  # a stored rule should always be valid; be defensive
+                    if window_contains(frm, to, mask, weekday, minute):
+                        rule_idx = i
+                        rule_set = r.get("set")
+                        until = format_hhmm(to)
+                        break
+
+            mode, mode_until = "normal", None
+            if not woken and night is not None:
+                nfrm, nto = parse_hhmm(night.get("from")), parse_hhmm(night.get("to"))
+                if nfrm is not None and nto is not None and window_contains(nfrm, nto, 0x7F, weekday, minute):
+                    mode = night.get("mode") or "normal"
+                    mode_until = format_hhmm(nto)
+
+            self.mode = mode
+            self.mode_until = mode_until
+            self.rule_idx = rule_idx
+            self.rule_set = rule_set
+            self.until = until
+            self.ctx.player.set_scheduled_off(mode == "off")
+            if self.ctx.player.effective_set() != self.ctx.player.manifest_last_set:
+                self.ctx.player.rebuild_playlist()
+
+    def status_fields(self) -> dict:
+        return {
+            "mode": self.mode,
+            "mode_until": self.mode_until,
+            "wake_until": self.wake_until_str(),
+            "schedule": {"rule": self.rule_idx, "set": self.rule_set, "until": self.until},
+        }
 
 
 # --------------------------------------------------------------------------
@@ -821,12 +1313,15 @@ class Context:
         self.settings = dict(DEFAULT_SETTINGS)
         self.lock = threading.RLock()
         self.cache = Cache(self)
+        self.schedule = Schedule(self)
         self.player = Player(self)
+        self.schedule.evaluate()  # picks up the playlist rebuilt just above
 
 
 def ticker_loop(ctx: Context, stop: threading.Event):
     while not stop.wait(0.5):
         with ctx.lock:
+            ctx.schedule.evaluate()
             ctx.player.tick()
 
 
@@ -950,6 +1445,9 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/pause"), {"POST": self.h_pause}),
                 (m_exact("/api/config"), {"GET": self.h_config_get, "PUT": self.h_config_put}),
                 (m_exact("/api/reindex"), {"POST": self.h_reindex}),
+                (m_exact("/api/overrides"), {"GET": self.h_overrides_get}),
+                (m_exact("/api/schedule"), {"GET": self.h_schedule_get, "PUT": self.h_schedule_put}),
+                (m_exact("/api/wake"), {"POST": self.h_wake}),
                 (m_exact("/api/play"), {"POST": self.h_play}),
                 (m_exact("/api/stat"), {"GET": self.h_stat}),
                 (m_exact("/api/cache"), {"GET": self.h_cache}),
@@ -1047,10 +1545,13 @@ def make_handler(ctx: Context, quiet: bool):
         def h_status(self, path):
             with ctx.lock:
                 player = ctx.player
+                ctx.schedule.evaluate()
                 player.tick()
                 cur = player.current()
                 free, floor, idf_min = heap_numbers(player)
                 elapsed_ms, frame = player.position()
+                now_local = ctx.schedule.local_now()
+                time_synced_s = min(int(time.monotonic() - player.boot_time), 600)
                 obj = {
                     "version": "0.1.0-mock",
                     "variant": "4mb",
@@ -1077,6 +1578,15 @@ def make_handler(ctx: Context, quiet: bool):
                     "worst_lateness_ms": player.worst_lateness_ms,
                     "gifs_started": player.gifs_started,
                     "sd": {"mounted": True, "capacity_bytes": SD_CAPACITY_BYTES},
+                    "overrides": player.overrides_count,
+                    "hidden": player.hidden_count,
+                    "mode": ctx.schedule.mode,
+                    "mode_until": ctx.schedule.mode_until,
+                    "time": now_local.strftime("%H:%M"),
+                    "tz": ctx.settings["tz_name"],
+                    "time_synced_s": time_synced_s,
+                    "wake_until": ctx.schedule.wake_until_str(),
+                    "schedule": {"rule": ctx.schedule.rule_idx, "set": ctx.schedule.rule_set, "until": ctx.schedule.until},
                 }
             self.send_json(200, obj)
 
@@ -1104,8 +1614,22 @@ def make_handler(ctx: Context, quiet: bool):
                     "platforms": s["platforms"],
                     "set": s["set"],
                     "hostname": s["hostname"],
+                    "tz": s["tz"],
+                    "tz_name": s["tz_name"],
                 }
             self.send_json(200, obj)
+
+        def playlist_fields(self, index, index_ms) -> dict:
+            """`"entries","index","index_ms","overrides","hidden"` for a
+            reply that touched the playlist -- always the one actually
+            playing (http.rs `applied_json`). Caller holds ctx.lock."""
+            return {
+                "entries": len(ctx.player.playlist),
+                "index": index,
+                "index_ms": index_ms,
+                "overrides": ctx.player.overrides_count,
+                "hidden": ctx.player.hidden_count,
+            }
 
         def json_body(self) -> bytes | None:
             """http.rs json_body: None means a 413 has been sent."""
@@ -1166,9 +1690,19 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "set" and (any(c in v for c in "/\\\0") or ".." in v):
                         self.send_error_json(400, "set must be a single path segment")
                         return
+                    if field == "tz" and (not v.strip() or len(v.strip()) > 64 or "\0" in v):
+                        self.send_error_json(
+                            400, "tz must be a POSIX TZ string, e.g. GMT0IST,M3.5.0/1,M10.5.0"
+                        )
+                        return
+                    if field == "tz_name" and len(v) > 64:
+                        self.send_error_json(400, "tz_name is at most 64 characters")
+                        return
                     if field == "hostname":
                         if v != "":
                             next_settings["hostname"] = v
+                    elif field == "tz":
+                        next_settings["tz"] = v.strip()
                     elif field in ("dwell_min", "dwell_max"):
                         next_settings[field] = max(1, v)
                     else:
@@ -1223,18 +1757,12 @@ def make_handler(ctx: Context, quiet: bool):
                 else:
                     index = None
                     index_ms = 0
-                entries = len(ctx.player.playlist)
+                # tz/tz_name affect local time -> which schedule rule (if
+                # any) is in force right now.
+                ctx.schedule.evaluate()
+                fields = self.playlist_fields(index, index_ms)
 
-            self.send_json(
-                200,
-                {
-                    "ok": True,
-                    "entries": entries,
-                    "index": index,
-                    "index_ms": index_ms,
-                    "reboot_required": wifi_changed,
-                },
-            )
+            self.send_json(200, {"ok": True, **fields, "reboot_required": wifi_changed})
 
         def h_reindex(self, path):
             with ctx.lock:
@@ -1244,8 +1772,84 @@ def make_handler(ctx: Context, quiet: bool):
                 if ctx.fs.read_lines(manifest_rel) is not None:
                     ctx.fs.write_bytes(manifest_rel + ".idx", b"MOCKIDX1\n")
                 ctx.player.rebuild_playlist()
-                entries = len(ctx.player.playlist)
-            self.send_json(200, {"ok": True, "entries": entries, "index": "built", "index_ms": index_ms})
+                fields = self.playlist_fields("built", index_ms)
+            self.send_json(200, {"ok": True, **fields})
+
+        def h_overrides_get(self, path):
+            _, _, query = self.path.partition("?")
+            set_ = query_param(query if "?" in self.path else None, "set")
+            if set_ is None:
+                set_ = ""
+            if any(c in set_ for c in "/\\\0") or ".." in set_:
+                self.send_error_json(400, "set must be a single path segment")
+                return
+            with ctx.lock:
+                manifest_rel = ctx.player.resolve(set_)
+                meta_map = parse_meta_text_for(ctx.fs, manifest_rel)
+            overrides = []
+            for gif_path, ov in meta_map.items():
+                o = {"path": gif_path}
+                if ov.get("never"):
+                    o["never"] = True
+                if "w" in ov:
+                    o["w"] = num_json(ov["w"])
+                if "dwell" in ov:
+                    o["dwell"] = ov["dwell"]
+                elif "dwell_x" in ov:
+                    o["dwell_x"] = num_json(ov["dwell_x"])
+                if "loops" in ov:
+                    o["loops"] = ov["loops"]
+                overrides.append(o)
+            self.send_json(200, {"set": set_, "playlist": "/" + manifest_rel, "overrides": overrides})
+
+        def h_schedule_get(self, path):
+            with ctx.lock:
+                doc = ctx.schedule.get_doc()
+            self.send_json(200, doc)
+
+        def h_schedule_put(self, path):
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > SCHEDULE_MAX:
+                self.rfile.read(length)
+                self.send_error_json(413, f"schedule is {length} B, the limit is {SCHEDULE_MAX} B")
+                return
+            raw = self.read_body()
+            try:
+                body = json.loads(raw) if raw.strip() else {}
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"invalid schedule JSON: {e}")
+                return
+            with ctx.lock:
+                err = ctx.schedule.validate_and_set(body)
+                if err is not None:
+                    code, msg = err
+                    if isinstance(msg, dict):
+                        self.send_json(code, msg)
+                    else:
+                        self.send_error_json(code, msg)
+                    return
+                doc = ctx.schedule.doc
+                rules_n = len((doc or {}).get("rules") or [])
+                night_present = (doc or {}).get("night") is not None
+            self.send_json(200, {"ok": True, "rules": rules_n, "night": night_present})
+
+        def h_wake(self, path):
+            raw = self.json_body()
+            if raw is None:
+                return
+            try:
+                req = json.loads(raw) if raw else {}
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"invalid JSON: {e}")
+                return
+            minutes = req.get("minutes") if isinstance(req, dict) else None
+            if not isinstance(minutes, int) or isinstance(minutes, bool) or not (0 <= minutes <= WAKE_MAX_MINUTES):
+                self.send_error_json(400, f"minutes is at most {WAKE_MAX_MINUTES}")
+                return
+            with ctx.lock:
+                ctx.schedule.wake(minutes)
+                wake_until = ctx.schedule.wake_until_str()
+            self.send_json(200, {"ok": True, "minutes": minutes, "wake_until": wake_until})
 
         def h_play(self, path):
             raw = self.json_body()
@@ -1416,13 +2020,27 @@ def make_handler(ctx: Context, quiet: bool):
             else:
                 index = None
                 index_ms = 0
-            return {
-                "ok": True,
-                "path": "/sdcard/" + dest_rel,
-                "entries": len(ctx.player.playlist),
-                "index": index,
-                "index_ms": index_ms,
-            }
+            return {"ok": True, "path": "/sdcard/" + dest_rel, **self.playlist_fields(index, index_ms)}
+
+        def _meta_reply(self, meta_rel: str, manifest_rel: str, include_path: bool) -> dict:
+            """A playlist's overrides file was written or removed. Caller
+            holds ctx.lock. `index` is "built" only when the edited meta
+            belongs to the playlist actually playing (which is always what
+            `entries`/`overrides`/`hidden` describe)."""
+            active = ctx.player.manifest_rel() == manifest_rel
+            if active:
+                index_ms = random.randint(30, 150)
+                time.sleep(index_ms / 1000.0)
+                ctx.player.rebuild_playlist()
+                index = "built"
+            else:
+                index = None
+                index_ms = 0
+            obj: dict = {"ok": True}
+            if include_path:
+                obj["path"] = "/" + meta_rel
+            obj.update(self.playlist_fields(index, index_ms))
+            return obj
 
         def h_files_put(self, path):
             path, _, _ = self.path.partition("?")
@@ -1436,6 +2054,13 @@ def make_handler(ctx: Context, quiet: bool):
                     obj = self._install_manifest(rel, data)
                 self.send_json(200, obj)
                 return
+            meta_manifest = meta_manifest_for(rel)
+            if meta_manifest is not None:
+                with ctx.lock:
+                    ctx.fs.write_bytes(rel, data)
+                    obj = self._meta_reply(rel, meta_manifest, include_path=True)
+                self.send_json(200, obj)
+                return
             written = ctx.fs.write_bytes(rel, data)
             if rel.lower().startswith("odm/"):
                 ctx.cache.invalidate()
@@ -1446,6 +2071,14 @@ def make_handler(ctx: Context, quiet: bool):
             rel = card_path(percent_decode(path[len("/api/files/"):]))
             if rel is None:
                 self.send_error_json(400, "path escapes the card")
+                return
+            meta_manifest = meta_manifest_for(rel)
+            if meta_manifest is not None:
+                # A missing overrides file is fine either way.
+                with ctx.lock:
+                    ctx.fs.delete(rel)
+                    obj = self._meta_reply(rel, meta_manifest, include_path=False)
+                self.send_json(200, obj)
                 return
             with ctx.lock:
                 active_rel = ctx.player.manifest_rel()
