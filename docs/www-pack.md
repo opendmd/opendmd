@@ -1,0 +1,141 @@
+# The www pack
+
+The web app (`opendmd-web/www` after `make web`) ships to the device as one
+file, a **www pack**, written into the `www` flash partition
+(`firmware/partitions.csv`: data/`esphttpd`, 0x2C0000, 1,280 KB). At boot the
+firmware memory-maps it and serves every file from the mapping, through the
+flash cache: no card, no heap per file, no filesystem.
+
+There is one implementation of the format: `opendmd_core::www_pack`
+(`opendmd-core/src/www_pack.rs`, no dependencies). The packer
+(`opendmd-pack www`) and the firmware (`firmware/src/www.rs`) both use it,
+and its unit tests round-trip a pack and check that damage is caught.
+
+## Layout
+
+Little-endian throughout; offsets are from the start of the pack.
+
+```
+offset  size  field
+     0     4  magic "ODWP"
+     4     2  format version: 1
+     6     2  header length: 64
+     8     4  total length of the pack, header included
+    12     4  CRC-32 of bytes [64, total length)
+    16     2  entry count
+    18     1  version string length (<= 44)
+    19     1  reserved, 0
+    20    44  version string, UTF-8, zero-padded
+    64        entry table: count x 16 B, sorted by path
+              path strings, back to back (UTF-8, no terminators)
+              zero padding to a multiple of 4
+              file data, each file starting on a 4-byte boundary
+              (zero padding between files; none after the last)
+```
+
+An entry (16 B):
+
+```
+offset  size  field
+     0     4  path offset
+     4     4  data offset
+     8     4  data length
+    12     2  path length (> 0)
+    14     2  flags: bit 0 = the data is gzip; other bits must be 0
+```
+
+- **Paths** are what the browser asks for, without the leading slash:
+  `index.html`, `js/smooth.js`, `pkg-art/opendmd_art_web_bg.wasm`. Entries
+  are sorted by the paths' bytes, strictly (no duplicates), so a lookup is a
+  binary search: six comparisons for the ~40 files of today's app.
+- **The version string** is `git describe --always --dirty --tags` of the
+  build (`make web` writes it to `www/version.txt` too, which is not itself
+  packed). The firmware reports it as `www_version` in `/api/status` and as
+  `version` in `GET /api/www`. 44 bytes is room for
+  `v0.10.12-123-g0123456789ab-dirty` and then some; the packer refuses a
+  longer one.
+- **The CRC** is CRC-32/ISO-HDLC, the one zlib, gzip and PNG use
+  (`crc32(b"123456789") == 0xCBF43926`), over everything after the header.
+  The header itself is covered by its own checks (magic, format, lengths)
+  and by every entry's bounds check.
+- **Alignment**: 4 bytes for file data is all the flash cache and `memcpy`
+  want. The header is not padded to anything larger.
+- **Content type** is not stored: the firmware derives it from the path's
+  extension (`files::mime_for`, the table it always used), and the cache
+  policy from the path (`files::cache_for`).
+
+## What goes in
+
+`opendmd-pack www <dir> --out <pack> (--version <v> | --version-file <f>)
+[--max-bytes N]`, run by `make web`:
+
+- every regular file under `<dir>`, dotfiles skipped;
+- where `<file>.gz` sits beside `<file>` (`make web` gzips every `.html`,
+  `.js`, `.css`, `.wasm`, `.svg` and `.json`, `gzip -9 -n`), the entry
+  `<file>` holds the **`.gz`'s bytes** with the gzip flag, and the plain
+  file is not stored; a lone `<file>.gz` is stored as `<file>`, gzipped;
+- anything else as it is (none today: all 37 files are gzipped);
+- the `--version-file` itself is left out.
+
+The firmware sends a gzip entry with `Content-Encoding: gzip`, without
+looking at `Accept-Encoding` (every browser accepts it: see "Serving gzip"
+in CLAUDE.md), and a `Content-Length` of the stored bytes.
+
+The packer prints `pack: N B of 1,280 KB (P%)` and refuses a pack larger
+than `--max-bytes` (default and `make web`'s: 1,310,720, the partition),
+writing nothing. It then reads the file back through the reader and checks
+it. `opendmd-pack www-info <pack>` prints the header and every entry and
+verifies the CRC. `tools/web-size.py` prints the same `pack:` line under
+its gzip budgets (which are about load time over WiFi, not flash).
+
+## On the device
+
+- **Boot** (`www::init`, on the main task before the card is mounted): read
+  the 64-byte header with `esp_partition_read`; if it parses, map exactly
+  `total length` bytes with `esp_partition_mmap(…,
+  ESP_PARTITION_MMAP_DATA, …)`; parse (every entry bounds-checked, order
+  checked) and compute the CRC over the mapped bytes in one pass — no buffer,
+  the table is in flash. Logged as `www: pack '<version>' verified, N
+  entries, B B, mapped at 0x…, CRC pass M ms`. A missing, erased or damaged
+  pack is logged, reported in `/api/status` (`www.ok` false, `www.error` the
+  reason) and every web app request is answered `503` with the reason in
+  plain text; the API, the player and `/setup` carry on (in AP mode `/`
+  shows the setup page instead, so a board can always be put on WiFi).
+- **Serving** (`www::serve`, on the stream task like every file): the
+  mapping's lock is held for the whole response; the file goes out in 1 KB
+  slices, each copied from the mapping into a buffer on the stream task's
+  stack (CPU0) and then sent. Not the mapping itself: lwip copies a send
+  buffer on its tcpip task, which is not pinned, and that copy running on
+  CPU1 would pull the pack through the flash cache the display loop runs
+  from (CLAUDE.md, "Frame time", has the numbers).
+- **Updating** (`PUT /api/www`, `www::receive`, on the stream task): the
+  whole pack as the body, `Content-Length` required (411 without, 413 over
+  the partition). The first 64 bytes are read and parsed before anything is
+  erased — not a pack, or a header whose total length differs from the
+  body's, is a 400 and the app in flash stays. Then, under the mapping's
+  lock: unmap, then for each piece of the body erase the 4 KB sectors ahead
+  of it (`esp_partition_erase_range`, then a 20 ms pause so the display
+  loop runs: an erase stops both CPUs' flash caches) and write it
+  (`esp_partition_write`), then parse, CRC-check and map again. 782 KB
+  takes ~7 s over WiFi. The reply is `GET /api/www`'s object;
+  a pack that does not verify after writing is a 422, one cut short a 408
+  (or nothing, if the client went away), and either leaves `www.error`
+  saying so until a good pack is written.
+- **`GET /api/www`**: `{"version","bytes","entries","ok","error"}`; the
+  same object is `www` in `/api/status`.
+
+A response in flight and an update never overlap: both run on the one
+stream task, one job at a time, and the lock makes that hold even if the
+stream task is ever absent (then both run on the httpd task, also one at a
+time). A request that arrives during an update waits in the stream queue
+and is served from the new pack once it is mapped (measured: a page load
+started 2.5 s into a push rendered 5.2 s later); only a third request, with
+two already waiting, gets `503` + `Retry-After: 1` after 2 s, as behind any
+upload.
+
+## Changing the format
+
+Bump `FORMAT` in `www_pack.rs`. A firmware that meets a pack of another
+format reports `unsupported pack format N` and answers 503 until a pack it
+understands is written, so ship the firmware and the pack together (the
+flasher and `make fw-flash` always write both).

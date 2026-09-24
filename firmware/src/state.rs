@@ -18,6 +18,27 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// Which flash layout this build is for, compiled in by `build.rs`
+/// (`/api/status` `variant`, the boot banner).
+pub const FLASH_VARIANT: &str = env!("OPENDMD_FLASH_VARIANT");
+
+/// The running firmware's version, as the bootloader records it in the app
+/// descriptor (`"<version> 4mb"` for `make fw-release`, `git describe` for a
+/// bench build).
+pub fn running_version() -> String {
+    // SAFETY: `esp_app_get_description` returns a pointer into the app image
+    // header, which is mapped for the life of the program.
+    unsafe {
+        let desc = esp_idf_sys::esp_app_get_description();
+        if desc.is_null() {
+            return "unknown".to_string();
+        }
+        std::ffi::CStr::from_ptr((*desc).version.as_ptr())
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
 /// Free byte-addressable heap, in bytes.
 ///
 /// `esp_get_free_heap_size` is `MALLOC_CAP_DEFAULT`, so the 27 KB IRAM-only
@@ -75,9 +96,6 @@ pub struct Status {
     /// playing, `"unavailable"` if the last build failed (no card, no
     /// manifest, nothing matched) and the loop is retrying.
     pub index_state: &'static str,
-    /// First line of `/www/version.txt` (`git describe` of the web app, from
-    /// `make web`), or `None` if the card has none.
-    pub www_version: Option<String>,
     // Heap: `floor` is our own sampled low-water mark, which is the one to
     // trust; `idf_min` is esp_get_minimum_free_heap_size(), printed only so the
     // discrepancy stays visible (it is the sum of each region's own minimum).
@@ -140,7 +158,6 @@ impl Status {
             entries: 0,
             manifest: String::new(),
             index_state: "building",
-            www_version: None,
             heap_free: 0,
             heap_floor: 0,
             heap_idf_min: 0,

@@ -1,6 +1,6 @@
 // Settings: the device's NVS config (GET/PUT /api/config — a PUT is a
 // partial patch, applied live except WiFi and hostname, which need a
-// reboot), a WiFi scan, reindex, reboot, OTA, the facts from status, and
+// reboot), a WiFi scan, reindex, reboot, the facts from status, and
 // the playback cache (how many files are prepared; prepare the rest).
 
 import { app, playlistLabel } from './state.js';
@@ -12,7 +12,7 @@ import { h, clear, on, toast, bytes, uptime, base } from './util.js';
 
 export async function mount(el) {
   if (!app.device) {
-    el.append(h('div.card', h('h2', 'Settings'), h('p.muted', 'Device settings, WiFi, OTA and reboot live on the player. This page is in local mode: open it from the player (http://opendmd.local/) to use them.')));
+    el.append(h('div.card', h('h2', 'Settings'), h('p.muted', 'Device settings, WiFi and reboot live on the player. This page is in local mode: open it from the player (http://opendmd.local/) to use them.')));
     return {};
   }
   const c = app.config || await app.refreshConfig();
@@ -56,9 +56,6 @@ export async function mount(el) {
   const banner = h('div.banner', { hidden: true, id: 'st-reboot' }, 'Saved. WiFi and hostname changes take effect after a reboot. ',
     h('button.sm', { onclick: reboot }, 'Reboot now'));
   const facts = h('div.grid', { id: 'st-facts' });
-  const otaFile = h('input', { type: 'file', accept: '.bin', id: 'st-ota' });
-  const otaBar = h('i');
-  const otaMsg = h('span.muted');
 
   // The playlist choices, rebuilt whenever the config changes or the view
   // is shown: a playlist made or deleted elsewhere must not linger here.
@@ -119,13 +116,10 @@ export async function mount(el) {
       h('div.row', { style: 'margin-top:10px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
       h('div.row', { style: 'margin-top:12px' }, h('button.pri', { id: 'st-save-net', onclick: () => save(['wifi_ssid', 'wifi_pass', 'hostname']) }, 'Save network'))),
     h('div.card', h('h2', 'Device'), facts,
+      h('p.cap', { style: 'margin-top:10px' }, 'Firmware updates are installed over USB with the browser flasher.'),
       h('div.row', { style: 'margin-top:12px' },
         h('button', { id: 'st-reindex', onclick: reindex }, 'Rebuild index'),
-        h('button.danger', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
-    h('div.card', h('h2', 'Firmware update'),
-      h('p.cap', 'Upload an app image (target/…/opendmd-firmware.bin from a release build). The device checks the flash variant and reboots into it.'),
-      h('div.row', otaFile, h('button', { id: 'st-ota-go', onclick: ota }, 'Upload & reboot'), otaMsg),
-      h('div.bar', { style: 'margin-top:10px' }, otaBar)));
+        h('button.danger', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))));
 
   function renderFacts(s) {
     if (!s) return;
@@ -194,17 +188,6 @@ export async function mount(el) {
   async function reboot() {
     if (!confirm('Reboot the player?')) return;
     try { await app.src.reboot(); toast('rebooting…'); banner.hidden = true; waitForBoot((m) => toast(m)); } catch (e) { toast('reboot: ' + e.message, 'bad'); }
-  }
-
-  async function ota() {
-    const file = otaFile.files[0];
-    if (!file) { toast('pick a .bin first'); return; }
-    if (!confirm(`Flash ${file.name} (${bytes(file.size)}) and reboot?`)) return;
-    try {
-      await app.src.ota(file, (p) => { otaBar.style.width = `${(p * 100).toFixed(1)}%`; otaMsg.textContent = `uploading ${(p * 100).toFixed(0)}%`; });
-      otaMsg.textContent = 'written, rebooting…';
-      waitForBoot((m) => { otaMsg.textContent = m; });
-    } catch (e) { otaMsg.textContent = ''; toast('OTA: ' + e.message, 'bad'); }
   }
 
   // --- playback cache ---------------------------------------------------

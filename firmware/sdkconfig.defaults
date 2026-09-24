@@ -2,23 +2,13 @@
 # The DevKit V1 boards on this project are 4 MB (verified with esptool).
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
-# Partition table — dual OTA, 4 MB. NOTE: ESP-IDF's cmake resolves this path
+# Partition table — one factory app and the `www` data partition (the web
+# app's pack), 4 MB; no OTA. NOTE: ESP-IDF's cmake resolves this path
 # relative to its own CMakeLists inside the esp-idf-sys build dir, not the
 # crate root, so the Makefile overrides it with an absolute path via
 # ESP_IDF_SDKCONFIG_DEFAULTS. See the root CLAUDE.md "Build quirk".
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
-
-# --- OTA rollback ------------------------------------------------------
-# A freshly OTA'd image boots "pending verify"; if it resets before main has
-# blitted its first frame (ota::confirm_running_image), the bootloader marks it
-# invalid and boots the previous slot. This lives in the *bootloader*, so it
-# only takes effect once the project's bootloader.bin has been USB-flashed
-# (`make fw-flash` / `fw-release-flash` pass --bootloader; espflash's bundled
-# bootloader has it off). stripe-dashboard turns it off on 4 MB "because the
-# slots are too tight", but it costs no app-slot space at all — the extra code
-# is in the bootloader, which still fits under the 0x8000 partition table.
-CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # --- FATFS -------------------------------------------------------------
 # Long filenames are not optional: every path on a DMDoS card is long and has

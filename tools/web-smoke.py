@@ -76,6 +76,11 @@ every view like a person would:
             byte-identical to opendmd-pack's; then analysis, tween and
             recode timed in wasm for MD_Demons_Of_Asteborg_01_sephirot68
             (4,489 frames) and OTHER_SCROLL_Xmen01
+  Web app   GET /api/www {version, bytes, entries, ok} (the version is
+            www/version.txt, what the pack's header carries) and the same
+            object as `www` in /api/status; PUT /api/www of the built pack
+            is a 200, of something that is not a pack a 400; no firmware
+            update card in Settings (OTA is gone)
   Settings  www_version and index_state shown; PUT brightness, read it
             back; WiFi scan; the playlist choices are labelled; with
             /api/status rewritten to index_state "building" (Playwright
@@ -89,8 +94,14 @@ A few requests fail on purpose (the 404/415 plays, a preview's try for a
 prepared copy that is not there, and the aborted GIF download); they are
 listed in `expected` and are not counted as console errors.
 
-Real-device pass (--device): the local build served through
-`mock-device.py --proxy`, so nothing is uploaded to the card's www/. Now
+Real-device pass (--device): first the web app as the device serves it
+from its flash pack (GET /api/www verified, with the version this build
+would write; when that version equals the local build's, every file the
+device serves is byte-identical to what the pack holds — the `.gz` where
+there is one, with `Content-Encoding: gzip`; the page loaded straight from
+the device renders the Now view with no console errors; the misses and heap
+across that part). Then the local build served through
+`mock-device.py --proxy`, so nothing is written to the device's flash. Now
 (and a minute of the preview's drift against the panel: median, max, RTT —
 DRIFT_S=60 by default),
 Library (+ a preview, sent to the panel with POST /api/play, which must show
@@ -974,6 +985,7 @@ def mock_pass(browser) -> None:
         version = (REPO / "opendmd-web" / "www" / "version.txt").read_text().strip()
         facts = page.inner_text("#st-facts")
         check(version in facts and "ready" in facts, f"settings: www_version {version} and index_state shown")
+        www_mock_checks(page, base, version)
         opts = page.eval_on_selector_all("#st-set option", "els => els.map(e => [e.value, e.textContent])")
         check(opts[0] == ["", "All files (default)"] and ["filelist.xmas", "Christmas"] in opts
               and not any("odm" in v for v, _ in opts), f"settings: playlist choices {opts[:4]}")
@@ -1672,9 +1684,90 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
+def www_mock_checks(page: Page, base: str, version: str) -> None:
+    """GET/PUT /api/www against the mock; the OTA card is gone."""
+    w = get_json(base + "/api/www")
+    check(sorted(w) == ["bytes", "entries", "error", "ok", "version"] and w["ok"] and w["version"] == version
+          and w["entries"] > 10, f"web app: GET /api/www {w}")
+    st = get_json(base + "/api/status")
+    check(st.get("www") == w and st.get("www_version") == version, "web app: /api/status carries www and www_version")
+    pack = REPO / "opendmd-web" / "www.pack"
+    for body, want in ((pack.read_bytes(), 200), (b"not a pack at all", 400)):
+        req = urllib.request.Request(base + "/api/www", data=body, method="PUT",
+                                     headers={"Content-Type": "application/octet-stream"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                code = r.status
+        except urllib.error.HTTPError as e:
+            code = e.code
+        check(code == want, f"web app: PUT /api/www ({len(body):,} B) -> {code}")
+    check(page.locator("#st-ota, #st-ota-go").count() == 0, "web app: no firmware update card in Settings")
+
+
+def pack_files(www: Path) -> dict[str, tuple[Path, bool]]:
+    """What `opendmd-pack www` puts in the pack, by served path: `<file>.gz`
+    where there is one (gzip), else the file. version.txt is not packed."""
+    out = {}
+    for p in sorted(www.rglob("*")):
+        rel = p.relative_to(www).as_posix()
+        if not p.is_file() or p.name.startswith(".") or p.suffix == ".gz" or rel == "version.txt":
+            continue
+        gz = p.with_name(p.name + ".gz")
+        out[rel] = (gz, True) if gz.exists() else (p, False)
+    return out
+
+
+def device_flash_ui(browser, device: str, errors: list[str]) -> None:
+    """The web app straight from the device's flash (no proxy)."""
+    print(f"\n== real device {device}: the web app from its flash pack")
+    local = (REPO / "opendmd-web" / "www" / "version.txt").read_text().strip()
+    st0 = get_json(device + "/api/status")
+    w = get_json(device + "/api/www")
+    check(w.get("ok") is True and w.get("version") and w.get("entries", 0) > 10,
+          f"device web app: GET /api/www {w}")
+    check(st0.get("www", {}).get("version") == w.get("version") and st0.get("www_version") == w.get("version"),
+          f"device web app: /api/status www_version {st0.get('www_version')}")
+    files = pack_files(REPO / "opendmd-web" / "www")
+    if w.get("version") == local:
+        check(w.get("entries") == len(files), f"device web app: {w.get('entries')} entries, the local build has {len(files)}")
+        t0, same, total = time.time(), 0, 0
+        for rel, (src, gz) in files.items():
+            req = urllib.request.Request(f"{device}/{urllib.parse.quote(rel)}")
+            with urllib.request.urlopen(req, timeout=30) as r:
+                body, enc, clen = r.read(), r.headers.get("Content-Encoding"), r.headers.get("Content-Length")
+            ok = body == src.read_bytes() and (enc == "gzip") == gz and clen == str(len(body))
+            same += ok
+            total += len(body)
+            if not ok:
+                check(False, f"device web app: /{rel} differs from the pack ({len(body)} B, encoding {enc})")
+        dt = time.time() - t0
+        check(same == len(files), f"device web app: {same}/{len(files)} files byte-identical to the pack "
+                                  f"({total:,} B in {dt:.1f} s, {total / 1024 / max(dt, 1e-3):.0f} KB/s)")
+        with urllib.request.urlopen(f"{device}/www/index.html", timeout=30) as r:
+            check(r.read() == files["index.html"][0].read_bytes(), "device web app: /www/index.html is the same file")
+    else:
+        print(f"  (the device's pack is '{w.get('version')}', this build is '{local}': byte comparison skipped)")
+    page = new_page(browser, "laptop", errors)
+    t0 = time.time()
+    page.goto(device + "/")
+    page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')",
+                           timeout=30000)
+    check(page.locator("#now-stats .stat").count() >= 8,
+          f"device web app: the page from flash renders the Now view ({time.time() - t0:.1f} s)")
+    wait_lit(page, "#now-panel", "device web app", 40)
+    goto_view(page, "settings")
+    page.wait_for_selector("#st-facts .stat", timeout=20000)
+    check(w.get("version", "?") in page.inner_text("#st-facts"), "device web app: Settings shows the pack's version")
+    page.context.close()
+    st1 = get_json(device + "/api/status")
+    print(f"  device across the flash-UI checks: misses {st0['deadline_misses']} -> {st1['deadline_misses']}, "
+          f"worst {st1['worst_lateness_ms']} ms, heap free {st1['heap']['free']} floor {st0['heap']['floor']} -> {st1['heap']['floor']}")
+
+
 def device_pass(browser, device: str) -> None:
-    proc, base = start_mock(["--proxy", device])
     errors: list[str] = []
+    device_flash_ui(browser, device, errors)
+    proc, base = start_mock(["--proxy", device])
     try:
         print(f"\n== real device {device} via local proxy {base} (read-mostly)")
         try:

@@ -2,7 +2,10 @@
 
 This is the procedure for a player that lives in the cabinet rather than on
 the bench: a card prepared on a laptop, a release firmware image with no
-development credentials in it, and over-the-air updates afterwards.
+development credentials in it, installed over USB from a browser (or
+espflash), and web app updates over WiFi afterwards. There is no
+over-the-air firmware update: the 4 MB of flash hold one app and the web app
+(section 2, "The flash").
 
 The short version:
 
@@ -10,15 +13,16 @@ The short version:
 # once per card, on a laptop with the card in a reader (mounted at $CARD)
 cp -r <DMDoS pack>/gifs <DMDoS pack>/filelist.txt "$CARD"/
 make pack ARGS="convert $CARD --verify"   # prepare every GIF (the playback cache, under cache/)
-make web && cp -r opendmd-web/www "$CARD"/www
 sync && umount "$CARD"
 
-# once per board, over USB
-make fw-release-flash PORT=/dev/ttyUSB0    # after `make fw-erase` if it ran DMDoS
+# once per board, and for every firmware update: over USB
+make fw-release                            # dist/: app, web app pack, bootloader, table, 4 MB image, manifest
+make flasher                               # http://localhost:8765 in Chrome/Edge -> Install
+#   or: make fw-release-flash PORT=/dev/ttyUSB0   (after `make fw-erase` if it ran anything else)
 # join the OpenDMD-Setup WiFi, enter the network, then http://opendmd.local/
 
-# every update thereafter
-make fw-release && make ota HOST=opendmd.local
+# a web app update on its own, over WiFi
+make web && make www-push HOST=opendmd.local
 ```
 
 ## 1. The card
@@ -110,21 +114,6 @@ The default playlist is `/filelist.txt` ("All files" in the app); `{"set":""}`
 selects it, `{"set":"filelist.hall"}` a root manifest, `{"set":"<name>"}`
 `/sets/<name>.txt`.
 
-### The web app
-
-```bash
-make web                                # wasm-pack -> opendmd-web/www/pkg
-cp -r opendmd-web/www "$CARD"/www       # everything, including pkg/
-```
-
-Copy the whole directory, including any `*.gz` siblings the build leaves next
-to its files: under `/www/` the server looks for `<file>.gz` first and sends
-it with `Content-Encoding: gzip`, which is most of what makes the page load
-quickly over the ESP32's small TCP windows. Without the app on the card the
-player serves its embedded setup page at `/` instead, which still works (and
-can upload the app one file at a time), so this step can also be done later
-with `make card-sync HOST=opendmd.local`.
-
 ### Eject
 
 ```bash
@@ -134,9 +123,27 @@ sync && umount "$CARD"
 Then pull the card. A plain unmount is enough; `udisksctl power-off` has
 killed a USB reader on this machine before.
 
-## 2. The firmware
+## 2. The firmware and the web app
 
-### Build a release image
+### The flash
+
+| partition | offset | size | what |
+|---|---|---|---|
+| (bootloader) | 0x1000 | | the project's second-stage bootloader |
+| (partition table) | 0x8000 | | `firmware/partitions.csv` |
+| `nvs` | 0x9000 | 24 KB | settings, WiFi, the schedule, Follow RePlayOS |
+| `phy_init` | 0xf000 | 4 KB | |
+| `factory` | 0x10000 | 2,752 KB | the firmware |
+| `www` | 0x2C0000 | 1,280 KB | the web app, one **www pack** (`docs/www-pack.md`) |
+
+The web app is not on the card. `make web` packs it (every file gzipped as
+`make web` always did) into `opendmd-web/www.pack` — ~0.8 MB — and the
+firmware maps that partition at boot, checks its CRC and serves the app
+straight out of flash: the UI and the setup page work with no card in the
+slot. A `www/` directory left on a card by an older firmware is ignored and
+can be deleted.
+
+### Build a release
 
 ```bash
 make fw-release
@@ -145,52 +152,93 @@ make fw-release
 This is a `cargo build --release` **without** the `dev-credentials` feature:
 `firmware/.env` is not read, the two WiFi variables are scrubbed from the
 build environment, and the code that would compile them in does not exist in
-this build. The image is saved to `dist/opendmd-<version>-4mb.bin` (version
-from `firmware/Cargo.toml`), its app descriptor carries `"<version> 4mb"` —
-the string the OTA handler's variant check reads — and the target fails if
-the image is over 95% of the 2,031,616-byte OTA slot. 0.3.0 is 1,910,032 B,
-94.0% (20 KB under the limit; 0.2.0 was 1,883,264 B, 92.7%).
+this build. It runs `make web` first, then writes to `dist/`:
 
-The release build needs ~1.5 GB of scratch; `FW_RELEASE_TARGET_DIR=/roomier/dir
-make fw-release` puts it elsewhere.
+| file | flashed at | |
+|---|---|---|
+| `opendmd-<version>-app.bin` | 0x10000 | the app image; its descriptor carries `"<version> 4mb"` (checked) |
+| `opendmd-<version>-www.pack` | 0x2C0000 | the web app |
+| `bootloader.bin` | 0x1000 | |
+| `partition-table.bin` | 0x8000 | |
+| `opendmd-<version>-4mb-full.bin` | 0x0 | all four merged and padded to 4 MB: `esptool write-flash 0 <it>` or any "flash one image" tool |
+| `manifest.json` | | ESP Web Tools: the four parts and their offsets |
 
-### First install on a fresh board (USB)
+The target fails if the app image is over 95% of the 2,818,048 B `factory`
+partition, and the packer refuses a web app over the 1,310,720 B `www`
+partition. The release build needs ~1.5 GB of scratch;
+`FW_RELEASE_TARGET_DIR=/roomier/dir make fw-release` puts it elsewhere.
+
+### Installing from a browser (the flasher)
+
+`flasher/index.html` is an install page built on
+[ESP Web Tools](https://esphome.github.io/esp-web-tools/) (10.4.0, from
+jsDelivr). It needs **Chrome or Edge** on a desktop (Web Serial; not
+Firefox or Safari) and a secure context, which `localhost` is:
 
 ```bash
-make fw-erase PORT=/dev/ttyUSB0           # only if it ran DMDoS or anything else
-make fw-release-flash PORT=/dev/ttyUSB0   # bootloader, partition table, app; then monitor
+make fw-release    # once, for dist/
+make flasher       # serves the page and dist/ on http://localhost:8765
+```
+
+Plug the DevKit in by USB, open <http://localhost:8765/>, click **Install**,
+pick the serial port (a CH340, "USB Serial" / `ttyUSB0`), and the page asks
+about **Erase device**, a box that starts unticked (the manifest sets
+`new_install_prompt_erase`; `new_install_improv_wait_time` 0, since the
+firmware does not speak Improv Serial):
+
+- **Erase ticked — a first install, or a board coming from DMDoS or any
+  other firmware.** The whole chip is erased, then the bootloader, the
+  partition table, the app and the web app are written. *Everything* on the
+  board goes, NVS included: WiFi credentials, brightness, playlist, the
+  schedule and night window, Follow RePlayOS. The board comes up as the
+  `OpenDMD-Setup` access point (below). The card is not touched.
+- **Erase unticked — a firmware update that keeps the settings.** ESP Web
+  Tools writes only the four parts (the sectors they cover); NVS at 0x9000
+  is not among them, so the WiFi, the schedule and every setting survive.
+  This also works on a board still on the older dual-OTA layout: NVS is at
+  0x9000 in both tables, and the new table replaces the old one. (The old
+  `otadata` at 0xf000-0x11000 becomes the unused `phy_init` sector plus the
+  first sector of the new app, which is overwritten; with no `otadata` in
+  the table the bootloader boots `factory`.)
+
+The page cannot be tested end to end without a person at a real board (Web
+Serial asks for a port by hand); `tools/web-smoke.py`-style checks cover
+that it loads, the button renders and the manifest parses. When the repo is
+public, GitHub Pages will host the same page with the release files beside
+it (`flasher/index.html` plus a `firmware/` directory holding `dist/`'s
+files), so installing needs no toolchain at all.
+
+### Installing with espflash (USB)
+
+```bash
+make fw-erase PORT=/dev/ttyUSB0           # a first install, or from any other firmware or the old layout
+make fw-release-flash PORT=/dev/ttyUSB0   # web app pack at 0x2C0000, then bootloader, table, app; then monitor
 ```
 
 Flash at 115200 (the default here): faster rates give `verify_failed` on
-these CH340 boards. `fw-release-flash` also erases `otadata`, so a board that
-had been OTA'd into its second slot boots the image just flashed.
+these CH340 boards. Without `fw-erase` this is the keep-settings path, like
+the flasher's. On the bench, `make fw-flash` does the same with the bench
+build (`dev-credentials`).
 
 Put the card in and power up. The boot banner reads
-`OpenDMD firmware v0.3.0 (4mb, app desc '0.3.0 4mb')`, and on first boot
+`OpenDMD firmware v0.3.0 (4mb, app desc '0.3.0 4mb')`, then `www: pack
+'<version>' verified, 37 entries, … B, … CRC pass N ms`, and on first boot
 the player builds the default manifest's index on the card
-(`filelist.txt.idx`; ~6 s for the full card) before it starts playing. Once the first frame is up the
-log says `rollback mark: ota_0 was ..., now marked valid after the first
-frame`.
-
-`fw-release-flash` writes **the project's own bootloader** (`--bootloader`),
-not espflash's bundled one: only ours has OTA rollback compiled in (section
-4). A board that was last USB-flashed with a plain `espflash flash` — or
-before this change — has the bundled bootloader and no rollback until it is
-USB-flashed once with `make fw-release-flash` (or `make fw-flash` on the
-bench).
+(`filelist.txt.idx`; ~6 s for the full card) before it starts playing.
 
 ### Getting on the network
 
-A release image has no WiFi credentials, so a fresh board comes up as an
-**open access point, `OpenDMD-Setup`**:
+A release image has no WiFi credentials, so a fresh (or erased) board comes
+up as an **open access point, `OpenDMD-Setup`**:
 
-1. Join `OpenDMD-Setup` from a phone or laptop. The setup page opens as a
-   "sign in to network" sheet; if it doesn't, browse to the address in the
-   boot log (<http://192.168.71.1/>).
+1. Join `OpenDMD-Setup` from a phone or laptop. The app opens as a "sign in
+   to network" sheet; if it doesn't, browse to the address in the boot log
+   (<http://192.168.71.1/>). `/setup`, the small embedded page, is always
+   there too (and is what `/` shows in AP mode if the web app in flash is
+   missing or damaged).
 2. Enter the network name and password, **Save & reboot**. (The AP reboots
    the board after ten minutes regardless, so don't dawdle.)
-3. The player joins the network as **<http://opendmd.local/>**. The app is
-   there if `www/` is on the card; `/setup` is always there for recovery.
+3. The player joins the network as **<http://opendmd.local/>**.
 4. Nothing to select for the prepared copies: the player finds them per
    file (section 1). A playlist is selected from the app, or with
    `curl -X PUT -d '{"set":"<name>"}' http://opendmd.local/api/config`; a
@@ -198,77 +246,51 @@ A release image has no WiFi credentials, so a fresh board comes up as an
    saved. The first selection of a manifest builds its `.idx` (~6 s for the
    full card, the display holds its frame meanwhile).
 
-Credentials live in NVS from then on and survive every OTA update.
+Credentials live in NVS from then on and survive every update that does not
+erase the chip.
 
-### Updating
+### Updating the firmware
 
-```bash
-# bump `version` in firmware/Cargo.toml first
-make fw-release
-make ota HOST=opendmd.local                 # BIN=dist/... for a specific image
-OTA_DRY_RUN=1 make ota HOST=opendmd.local   # print the commands only
-```
+Over USB, keeping the settings: bump `version` in `firmware/Cargo.toml`,
+`make fw-release`, then either the flasher with **Erase** unticked, or
+`make fw-release-flash PORT=...` (no `fw-erase`). The web app pack is
+written too, so firmware and app stay in step.
 
-`make ota` POSTs the image to `/api/ota`, prints the reply
-(`{"ok":true,"rebooting":true}`), then polls `/api/status` until the board
-has rebooted and reports the version the image carries (`OTA_TIMEOUT`, default
-120 s). The upload is rejected before anything is erased if the image was
-built for another flash size, and one that fails validation at the end leaves
-the running firmware as the boot image. The whole image must arrive within
-120 s, or the update is abandoned (`esp_ota_abort`, one warn line: `POST
-/api/ota: upload aborted at <bytes> of <total> B …`) and the board keeps
-running what it had; over WiFi it takes ~10 s. The cache builder is stopped
-cleanly before the restart (its file finished or abandoned), so an OTA may be
-started at any time, the night window included.
-
-This is what the first update of a deployed build looked like (0.3.0 over a
-0.3.0 bench build in `ota_0`, 2026-09-24, a playlist playing):
-
-```
-$ make ota HOST=192.168.1.69
-image: dist/opendmd-0.3.0-4mb.bin (1910032 B), app descriptor '0.3.0 4mb', expecting version '0.3.0'
-uploading to http://192.168.1.69/api/ota ...
-{"ok":true,"rebooting":true}
-back after 23s: version 0.3.0, uptime 10s
-```
-
-and on the serial console:
-
-```
-ota: OTA: receiving 1910032 B
-ota: OTA: variant check passed (4mb)
-ota: OTA: 1910032 B written, rebooting                     (9.4 s after the first line)
-rst:0xc (SW_CPU_RESET)
-boot: Loaded app from partition at offset 0x210000         (ota_1)
-OpenDMD firmware v0.3.0 (4mb, app desc '0.3.0 4mb')
-reset reason: software
-microSD mounted at /sdcard (31.27 GB) on attempt 1
-manifest indexed: /sdcard/filelist.txt, 10133 entries, index loaded in 8 ms
-rollback mark: ota_1 was pending-verify, now marked valid after the first frame
-[1] /gifs/Arcade/ARCADE_NEOGEO_Metal_Slug_4_01_INVERT.gif <- prepared
-wifi: scanning for '<your network>'                        (from NVS: a release image has no credentials)
-WiFi connected, IP 192.168.1.69                            (11 s after the reset)
-[net] ready: http://192.168.1.69/ and http://opendmd.local/
-time: NTP synced
-heartbeat: … 0 deadline misses …, builder: paused playing
-```
-
-What to check afterwards: `version` in `/api/status` is the new one,
-`reset_reason` is `software` (not `panic` or `task watchdog`), `rollback
-mark: … now marked valid` is in the log if you have one, and the panel is
-playing. If the board comes back on the old version, the bootloader rolled
-the new one back (section 4).
-
-**Over USB, pause the cache builder first.** An OTA and `POST /api/reboot`
-stop the builder before they restart; a USB flash (`make fw-flash`,
-`fw-release-flash`, the bench scripts) resets the chip wherever it is, and a
-reset in the middle of a card write can leave a card that times out at the
-next mount. So check `curl http://opendmd.local/api/cache`: flash only while
-`auto.state` is `paused`, `idle` or `done` — it is `paused` (`reason
-"playing"`) whenever the panel is playing, with `auto_prepare` at its
-default — never while it is `running` (night mode "off", or the player
+**Pause the cache builder first.** A USB flash resets the chip wherever it
+is, and a reset in the middle of a card write can leave a card that times
+out at the next mount. So check `curl http://opendmd.local/api/cache`: flash
+only while `auto.state` is `paused`, `idle` or `done` — it is `paused`
+(`reason "playing"`) whenever the panel is playing, with `auto_prepare` at
+its default — never while it is `running` (night mode "off", or the player
 paused). If it is running, resume playback (`POST /api/pause` toggles) or
 wait for the night window to end, and check again.
+
+### Updating the web app (WiFi)
+
+```bash
+make web
+make www-push HOST=opendmd.local          # WWW_PACK=dist/opendmd-<v>-www.pack for a release's
+```
+
+`make www-push` (`tools/www-push.sh`) PUTs the pack to `/api/www`, then reads
+`GET /api/www` back and checks the device serves a verified pack with the
+version in the pack's header. No reboot. The device checks the header before
+it erases anything (a file that is not a pack, or whose length disagrees with
+its header, is a 400 and the app in flash is untouched), then writes the
+partition as the body arrives and verifies the CRC before serving it. While
+it writes (~7 s for today's 782 KB; it is received like any upload, so the
+same 120 s limit applies; the panel keeps playing, about one late frame per
+push) the API answers as usual, a browser that already
+has the app open keeps working, and a page load waits for the write and then
+loads the new app. A cut-short
+or damaged upload leaves the API up and every page answering **503** with the
+reason in plain text (`/api/status` `www.error` says it too) until a good
+pack is pushed; the setup page (`/setup`) can also write one (**Web app** →
+Write to flash).
+
+The web app and the firmware share the JSON API, so after a firmware update
+that changed it, push the web app from the same tree (the flasher and
+`fw-release-flash` already do).
 
 ## 3. What a healthy install looks like
 
@@ -280,7 +302,7 @@ wait for the night window to end, and check again.
 | `version` / `variant` | `0.3.0` / `4mb` | same |
 | `manifest` | `/sdcard/filelist.txt` | `/sdcard/filelist.txt` (the copies are found per file) |
 | `index_state` | `ready` | `ready` |
-| `www_version` | the `git describe` of the `make web` that built the card's app, `null` if the card's `www/` predates it | same |
+| `www_version` / `www` | the `git describe` of the `make web` that built the pack in flash; `www.ok` `true`, `www.error` `null` | same |
 | `heap.free` | ~62-64 KB (originals through gifslim at cap 12; 0.3.0 with the `gif` crate: ~49-60 KB) | ~76 KB (copies through gifslim at cap 9; 75.9-76.2 KB over 90 s idle on a 645-copy set) |
 | `heap.floor` (sampled low-water) | 24,980 B over the first 10 min after boot, which included deleting the old `odm/` tree (0.3.0: 12-18 KB; the older ~55-58 KB figures predate transitions and Follow) | 38,204 B over the first 2.5 min after boot (boot to idle on the copy set), 27,032 B after 120 s of `api-load WORKERS=3` |
 | `refresh_hz` | 100 | 100 |
@@ -302,49 +324,19 @@ the web app are the signs something is wrong. `uptime_secs` resetting on its
 own means the board is rebooting: capture the serial log
 (`make fw-capture PORT=... SECS=600`) before anything else.
 
-## 4. Rolling back
+## 4. When an update goes wrong
 
-**The bootloader reverts an image that does not boot.**
-`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` is in `firmware/sdkconfig.defaults`
-(with the project's bootloader on the board — see "First install" above).
-The partition table already has what it needs: `otadata` at 0xf000 and two
-1.94 MB slots, `ota_0` and `ota_1`. Rollback costs no app-slot space; the
-code is in the bootloader (26,832 B, under the 28,672 B that fit below the
-partition table at 0x8000).
+There is no bootloader rollback and no second app slot any more: the 4 MB
+of flash hold one app and the web app. What to do instead:
 
-What happens on an update:
-
-1. `POST /api/ota` writes the other slot and marks it `new` in otadata.
-   Before anything is erased, an image for the wrong flash size is refused;
-   an upload that is short, fails to write or fails `esp_ota_end`'s image
-   validation is aborted, and the board keeps booting the running firmware.
-2. The bootloader boots the new slot as `pending-verify`.
-3. The new firmware brings the panel up, mounts the card, opens a playlist
-   and blits its **first frame**, and only then calls
-   `esp_ota_mark_app_valid_cancel_rollback()` (`rollback mark:` in the log).
-   From then on the image is `valid` and stays.
-4. If it resets **before** that — a panic, a watchdog, a crash loop, a hang
-   the watchdog catches — the bootloader finds it still `pending-verify`,
-   marks it invalid and boots the previous slot, which is untouched. The
-   board comes back on the old version by itself; `make ota`'s poll then
-   fails with "board rebooted but reports version '<old>'".
-
-What rollback does not catch, and what to do instead:
-
-- **It boots, plays and misbehaves afterwards** (network broken, UI broken,
-  slow): the image was already marked valid. If the network works, post the
-  previous image back — `make ota HOST=opendmd.local
-  BIN=dist/opendmd-<previous>-4mb.bin`. Keep the last good image in `dist/`
-  (it is gitignored, so copy it somewhere safe too).
-- **It hangs before the first frame without resetting** (no watchdog fires):
-  nothing reverts it until the board is power-cycled — which then does roll
-  back, since it never got marked. So a power cycle is the first thing to
-  try.
-- **It never gets a first frame for an ordinary reason** — no card, a card
-  with no manifest — and is then reset (a power cycle, the setup AP's
-  10-minute reboot): it is rolled back too, because it never proved itself.
-  Harmless (the old image is fine) but surprising; put the card back and
-  update again.
-- **Neither slot boots, or the bootloader is espflash's**: USB. Take the
-  board out, `make fw-release-flash PORT=...` with a known-good tree. NVS —
-  WiFi and settings — survives a USB flash that does not erase the chip.
+- **The firmware does not boot, or misbehaves.** USB: flash the previous
+  release (keep `dist/` somewhere safe; it is gitignored) with the flasher
+  (Erase unticked keeps the settings) or `make fw-release-flash`. A board
+  that is stuck in a boot loop is still reachable over USB: the ROM
+  bootloader takes the flash whatever the app does.
+- **The web app is broken or missing** (`/api/status` `www.ok` false, pages
+  answer 503 with the reason): `make www-push HOST=...` a good pack, or
+  write one from `/setup` in a browser. The API, the player and the setup
+  page do not depend on it.
+- **Nothing answers on the network**: USB, as above; `make fw-capture` for
+  the serial log first if you want to know why.

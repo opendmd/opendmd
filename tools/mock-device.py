@@ -146,8 +146,19 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   a directory or a miss, `/` a directory.
 - **`/api/status`** has `index_state` (`ready`, or `unavailable` when the
   manifest does not open; `building` is never observable, as on the device,
-  because a rebuild holds the lock a status read needs) and `www_version`
-  (the first line of `--www`/version.txt, trimmed, <= 64 chars, else null).
+  because a rebuild holds the lock a status read needs), `www_version` and
+  `www` (see the web app, below).
+- **The web app.** On the device it is a www pack in flash
+  (`docs/www-pack.md`); the mock serves `--www` as files, the way it always
+  did (`<file>.gz` preferred, unconditionally), and does not read the pack
+  format (the format has one implementation, in `opendmd-core`). `GET
+  /api/www` is `{version, bytes, entries, ok, error}`: `version` the first
+  line of `--www`/version.txt (what `make web` also writes into the pack's
+  header), `bytes` the size of `www.pack` beside `--www` (0 if none),
+  `entries` the files the pack would hold. `/api/status` carries the same
+  object as `www`, and `www_version`. `PUT /api/www` wants a
+  `Content-Length` (411), at most 1,310,720 B (413) and the `ODWP` magic
+  (400); it replies as `GET` does and changes nothing served.
 - **JSON bodies over 8 KB** (`PUT /api/config`, `POST /api/play`) are a 413
   `{"error":"body is N B, the limit is 8192 B"}`, judged on `Content-Length`.
 - **Per-GIF overrides** (`opendmd_core::overrides`): a playlist's `.meta`
@@ -183,16 +194,15 @@ purpose: a `..` escape through the `/*` catch-all is a plain 404 (not 400),
 and `/api/stat` and `/api/play` cost a FAT directory scan of the parent
 (15 ms + 0.15 ms per entry: ~20 ms in a bucket, ~590 ms in `gifs/Consoles`),
 so a UI that stats or plays in a big directory feels it.
-- OTA validates the ESP image magic byte (`0xE9`) and the 1,572,864 B slot
-  size, and demands a `Content-Length`.
 
 # Deliberate deviations from the firmware (per this tool's own spec)
 
 - The real firmware's top-level `/*` catch-all does **not** 400 on a `..`
   escape: `files::card_path` returns `None`, the handler's `if let Some(..)`
-  is simply skipped, and it falls through to a plain 404. Every other route
-  (`/www/*`, `/gifs/*`, `/cache/*`, `/sets/*`, `/api/files/*`, `/api/files`) does
-  send 400. Without `--strict` the catch-all 400s too.
+  is simply skipped, and it falls through to a plain 404; `/www/*` looks the
+  path up in the pack and 404s too. The card routes (`/gifs/*`, `/cache/*`,
+  `/sets/*`, `/api/files/*`, `/api/files`) send 400. Without `--strict` the
+  catch-all and `/www/*` 400.
 - serde's exact "wrong type" error text is not reproduced verbatim (there is
   no serde here); a similarly shaped `"invalid JSON: ..."` message naming the
   offending field is produced instead.
@@ -237,7 +247,7 @@ import urllib.parse
 from pathlib import Path
 
 # --------------------------------------------------------------------------
-# Constants shared with the firmware (config.rs, files.rs, ota.rs)
+# Constants shared with the firmware (config.rs, files.rs, www.rs)
 # --------------------------------------------------------------------------
 
 MANIFEST_REL = "filelist.txt"          # config::MANIFEST_PATH, relative to the card root
@@ -248,7 +258,7 @@ CACHE_DIR = "cache"                    # the prepared copies (opendmd_core::layo
 LEGACY_DIR = "odm"                     # the old prepared format's tree: ignored
 SET_NOT_FOUND = "set not found"        # state::SET_NOT_FOUND
 SETS_DIR = "sets"                      # config::SETS_DIR
-OTA_SLOT_SIZE = 1_572_864              # the board's OTA slot (ota.rs)
+WWW_PARTITION_SIZE = 1_310_720         # the www partition (partitions.csv)
 SD_CAPACITY_BYTES = 31_266_439_168     # a plausible "measured" capacity for /api/status
 
 DEFAULT_SETTINGS = {
@@ -833,15 +843,29 @@ class Follow:
 
 
 def www_version(www_root: Path):
-    """files::read_www_version: the first line of version.txt, trimmed,
-    at most 64 characters; None if missing or blank."""
+    """The pack header's version: `make web` writes the same string to
+    version.txt. Its first line, trimmed, at most 44 characters (the header's
+    field); None if missing or blank."""
     try:
         with open(www_root / "version.txt", "rb") as f:
             text = f.read(128).decode("utf-8", "replace")
     except OSError:
         return None
     line = (text.splitlines() or [""])[0].strip()
-    return line[:64] or None
+    return line[:44] or None
+
+
+def www_info(www_root: Path) -> dict:
+    """GET /api/www, from the files rather than the pack (see the docs)."""
+    pack = www_root.parent / "www.pack"
+    entries = sum(1 for p in www_root.rglob("*")
+                  if p.is_file() and p.suffix != ".gz" and not p.name.startswith(".")
+                  and p.relative_to(www_root).as_posix() != "version.txt")
+    version = www_version(www_root)
+    ok = (www_root / "index.html").is_file()
+    return {"version": version, "bytes": pack.stat().st_size if pack.is_file() else 0,
+            "entries": entries, "ok": ok,
+            "error": None if ok else "the www partition holds no web app (erased, or never written)"}
 
 
 def fnv1a32(b: bytes) -> int:
@@ -1979,7 +2003,7 @@ def make_handler(ctx: Context, quiet: bool):
                                                 "DELETE": self.h_cache_failed_delete}),
                 (m_exact("/api/files"), {"GET": self.h_files_list}),
                 (m_exact("/api/wifi/scan"), {"GET": self.h_wifi_scan}),
-                (m_exact("/api/ota"), {"POST": self.h_ota}),
+                (m_exact("/api/www"), {"GET": self.h_www_get, "PUT": self.h_www_put}),
                 (m_exact("/api/reboot"), {"POST": self.h_reboot}),
                 (m_exact("/api/manifest"), {"PUT": self.h_manifest_put}),
                 (m_prefix("/api/sets/"), {"PUT": self.h_sets_put}),
@@ -2019,6 +2043,9 @@ def make_handler(ctx: Context, quiet: bool):
             rel_raw = path[len("/www/"):]
             rel = card_path(percent_decode(rel_raw))
             if rel is None:
+                if ctx.strict:  # the firmware looks it up in the pack: not there
+                    self.send_error_json(404, rel_raw)
+                    return
                 self.send_error_json(400, "path escapes the card")
                 return
             if not self.serve_www_rel(rel):
@@ -2105,6 +2132,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "manifest": "/sdcard/" + player.manifest_rel(),
                     "index_state": player.index_state,
                     "www_version": www_version(ctx.www_root),
+                    "www": www_info(ctx.www_root),
                     "heap": {"free": free, "floor": floor, "idf_min": idf_min},
                     "refresh_hz": 100,
                     "deadline_misses": player.deadline_misses,
@@ -2655,13 +2683,16 @@ def make_handler(ctx: Context, quiet: bool):
             time.sleep(1.5)
             self.send_json(200, WIFI_SCAN_RESULTS)
 
-        def h_ota(self, path):
+        def h_www_get(self, path):
+            self.send_json(200, www_info(ctx.www_root))
+
+        def h_www_put(self, path):
             length_hdr = self.headers.get("Content-Length")
             length = int(length_hdr) if length_hdr else 0
             if length == 0:
-                self.send_error_json(400, "Content-Length required")
+                self.send_error_json(411, "Content-Length required")
                 return
-            if length > OTA_SLOT_SIZE:
+            if length > WWW_PARTITION_SIZE:
                 # Drain the body so the connection stays usable.
                 remaining = length
                 while remaining > 0:
@@ -2669,13 +2700,13 @@ def make_handler(ctx: Context, quiet: bool):
                     if not chunk:
                         break
                     remaining -= len(chunk)
-                self.send_error_json(413, f"firmware is {length} B, the slot is {OTA_SLOT_SIZE} B")
+                self.send_error_json(413, f"the pack is {length} B, the www partition is {WWW_PARTITION_SIZE} B")
                 return
             data = self.rfile.read(length)
-            if not data or data[0] != 0xE9:
-                self.send_error_json(400, "firmware validation failed")
+            if data[:4] != b"ODWP":
+                self.send_error_json(400, "not a www pack: not a www pack (bad magic)")
                 return
-            self.send_json(200, {"ok": True, "rebooting": True})
+            self.send_json(200, www_info(ctx.www_root))
 
         def h_reboot(self, path):
             with ctx.lock:

@@ -246,7 +246,7 @@ fn run(worker: NetWorker) {
         if let Some(started) = ap_started_at {
             if started.elapsed() >= config::AP_TIMEOUT {
                 info!("[net] AP timeout reached; rebooting");
-                crate::ota::reboot_after_response();
+                crate::http::reboot_after_response();
             }
         }
 

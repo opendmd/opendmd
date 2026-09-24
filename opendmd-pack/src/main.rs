@@ -36,11 +36,16 @@
 //! `smooth analyse <card-root> [--min-percent 10] [--jobs N] [--write]`
 //! finds the files worth smoothing (and `--write` lists them).
 //!
+//! `www <dir> --out <pack> --version <v>` packs the built web app
+//! (`make web`'s `opendmd-web/www`) into a www pack for the firmware's `www`
+//! flash partition (`docs/www-pack.md`); `www-info <pack>` reads one back.
+//!
 //! `recode` and `gifscan` are the gifslim experiment's tools
 //! (`docs/gifslim-experiment.md`).
 
 mod recode;
 mod smooth;
+mod www;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -115,6 +120,27 @@ enum Cmd {
         #[arg(long)]
         tsv: Option<PathBuf>,
     },
+    /// Pack a built web app (`make web`'s opendmd-web/www) into a www pack
+    /// for the device's `www` flash partition: every file whose `<file>.gz`
+    /// is beside it is stored gzipped, the rest as they are.
+    Www {
+        dir: PathBuf,
+        /// Where to write the pack.
+        #[arg(long)]
+        out: PathBuf,
+        /// The version string for the header (`git describe` of the app).
+        #[arg(long, conflicts_with = "version_file")]
+        version: Option<String>,
+        /// Read the version from this file's first line instead; the file is
+        /// left out of the pack if it is inside <dir>.
+        #[arg(long)]
+        version_file: Option<PathBuf>,
+        /// Refuse a pack bigger than this (the `www` partition: 1,310,720).
+        #[arg(long, default_value_t = www::PARTITION_BYTES)]
+        max_bytes: usize,
+    },
+    /// Print a www pack's header and entries, and check it (CRC included).
+    WwwInfo { pack: PathBuf },
     /// Experiment: play every original GIF with gifslim at caps 9..12
     /// against GifSource.
     Gifscan {
@@ -191,6 +217,14 @@ fn main() -> Result<()> {
             jobs,
             tsv,
         } => recode::gifscan(&card_root, jobs, tsv),
+        Cmd::Www {
+            dir,
+            out,
+            version,
+            version_file,
+            max_bytes,
+        } => www::pack(&dir, &out, version, version_file, max_bytes),
+        Cmd::WwwInfo { pack } => www::info(&pack),
     }
 }
 

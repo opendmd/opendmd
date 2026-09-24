@@ -4,8 +4,8 @@
 //! ESP-IDF's httpd runs every handler on one task, so while it streams a 4 MB
 //! GIF (20-30 s at the card's ~150-300 KB/s) nothing else is answered — and
 //! the web app's Now view polls `/api/status` every 500 ms. So a `GET` for a
-//! card file (`/gifs/`, `/odm/`, `/sets/`, `/filelist*`, the web app under
-//! `/www/` and the `/*` catch-all) is *detached* on the httpd task
+//! card file (`/gifs/`, `/cache/`, `/sets/`, `/filelist*`) or web app file
+//! (`/`, `/www/` and the `/*` catch-all, from flash) is *detached* on the httpd task
 //! ([`Req::detach`], i.e. `httpd_req_async_handler_begin`) and queued here;
 //! the handler returns at once and httpd goes back to its sockets. This task
 //! opens the file (the directory scan — up to ~550 ms in `gifs/Consoles` —
@@ -41,10 +41,10 @@
 //! A taken socket is outside httpd's [`config::HTTP_MAX_SOCKETS`], so lwip
 //! needs `1 + QUEUE_DEPTH` more (asserted below).
 //!
-//! `POST /api/ota` stays on the httpd task: it writes flash through
-//! `esp_ota_*` and reboots from its handler, and nothing else may run a
-//! transfer or card write meanwhile. It has the same total-time cap. The
-//! JSON listings stay there too.
+//! The web app (`/`, `/www/…` and the `/*` catch-all) is sent from here too,
+//! out of the www pack in flash (`www.rs`), and a new pack (`PUT /api/www`)
+//! is received here: one job at a time, so a pack is never rewritten while
+//! one of its files is going out. The JSON listings stay on the httpd task.
 
 use anyhow::Result;
 use esp_idf_hal::cpu::Core;

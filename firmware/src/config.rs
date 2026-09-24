@@ -201,13 +201,13 @@ pub const NET_WORKER_STACK: usize = 12 * 1024;
 /// needs 16 KB because its OTA handler buffers on the stack; ours reads into a
 /// heap buffer. Measured high-water (the `httpd task: stack high-water` log
 /// line) at 10 KB: 5.2 KB used over a device `web-smoke` pass (config,
-/// schedule, playlist upload), 3.2 KB through a full `POST /api/ota`. It was
+/// schedule, playlist upload), 3.2 KB through a full `POST /api/ota` (gone). It was
 /// 10 KB until file streaming moved to its own task, then 8 KB. Since uploads
 /// moved there too (the upload path, with its log line, is what reached
 /// 5.2 KB: it measures ~4.0 KB on the stream task), the deepest left is
 /// parsing a config or schedule body: 4.1 KB used (invalid `PUT
 /// /api/config` and `/api/schedule` bodies, which are parsed whole and then
-/// refused), and OTA's 3.2 KB. 6.5 KB leaves ~2.4 KB over that, and gives
+/// refused); OTA's 3.2 KB went with OTA. 6.5 KB leaves ~2.4 KB over that, and gives
 /// the stream task's extra 1.5 KB back.
 pub const HTTP_STACK: usize = 6 * 1024 + 512;
 /// The file-streaming task's stack (`stream.rs`): `files::serve` and, since
@@ -226,7 +226,7 @@ pub const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The longest one request body may take to arrive, counted from when its
 /// reception starts (a queued upload's wait is not counted): 3 MB at the
 /// ~100-200 KB/s a laptop gets is 15-30 s, so this only ends a client that
-/// is trickling or stuck. `POST /api/ota` has the same cap.
+/// is trickling or stuck. `PUT /api/www` (a ~0.8 MB pack) has the same cap.
 pub const UPLOAD_MAX_TIME: Duration = Duration::from_secs(120);
 /// Everything streamed to or from the card moves in chunks this size: big
 /// enough to keep SPI efficient, small enough that the display loop never
@@ -234,6 +234,10 @@ pub const UPLOAD_MAX_TIME: Duration = Duration::from_secs(120);
 /// in-flight request holds one of these on a heap that has under 20 KB free
 /// while a GIF is playing.
 pub const IO_CHUNK: usize = 2048;
+/// `PUT /api/www` sleeps this long after each 4 KB sector it erases, so the
+/// display loop runs between erases (each stops both CPUs' flash caches for
+/// ~15-20 ms). Costs ~4 s on a 0.8 MB pack (~190 sectors).
+pub const WWW_ERASE_BREATHER: Duration = Duration::from_millis(20);
 /// Contiguous heap needed for the in-RAM playlist index, the fallback when the
 /// card will not take `<manifest>.idx`.
 ///
@@ -310,14 +314,9 @@ pub const STREAM_START_HEAP: u32 = HEAP_RESERVE + 8 * 1024;
 /// a waiting request costs its ~1.7 KB request copy and an idle TCP pcb.
 pub const HTTP_MAX_SOCKETS: u16 = 4;
 
-/// The web app the browser runs, and the card-absolute roots the HTTP server
-/// is allowed to read from or write to.
-pub const WWW_ROOT: &str = "/sdcard/www";
+/// Where the playlists live on the card. (The web app is not on the card: it
+/// is a www pack in flash, `www.rs`.)
 pub const SETS_DIR: &str = "/sdcard/sets";
-/// `git describe` of the web app on the card, written by `make web` and pushed
-/// with it. Read at boot and whenever it is uploaded; `/api/status` reports it
-/// as `www_version`.
-pub const WWW_VERSION_PATH: &str = "/sdcard/www/version.txt";
 
 // ---------------------------------------------------------------------------
 // Playback cache (prepared copies)

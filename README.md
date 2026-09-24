@@ -41,7 +41,7 @@ rustup target add wasm32-unknown-unknown
 cargo install --locked wasm-pack
 make check-wasm                 # core + render + web for wasm32
 make test-wasm                  # the web crate's tests under node
-make web                        # wasm-pack build -> opendmd-web/www/pkg (+ pkg-art, the Studio)
+make web                        # wasm-pack build -> opendmd-web/www/pkg (+ pkg-art, the Studio), packed into opendmd-web/www.pack
 make web-serve                  # static server on http://localhost:8080
 make web-smoke                  # headless Chromium drive of the page (tools/web-smoke.py)
 ```
@@ -112,8 +112,8 @@ cd opendmd-sim && cargo run --release -- --root /path/to/card \
 
 ## The web app
 
-The management UI is a **WebAssembly page the player serves off its own SD
-card** at `http://opendmd.local/`. All the heavy work happens in the browser —
+The management UI is a **WebAssembly page the player serves out of its own
+flash** at `http://opendmd.local/`. All the heavy work happens in the browser —
 parsing and filtering manifests, previewing files with the panel look,
 preparing GIFs for playback — with the same `opendmd-core` and `opendmd-render`
 Rust the firmware and the simulator run. The ESP32 is a file server plus the
@@ -122,12 +122,12 @@ HTML, CSS and ES modules in `opendmd-web/www/`, plus the `opendmd-web` wasm
 module.
 
 ```bash
-make web                                   # wasm-pack build + a .gz beside every file + the size budget
+make web                                   # wasm-pack build + a .gz beside every file + the www pack + the size budget
 make web-mock ROOT=~/scratch/dmdos-card # a fake device on :8080 (OVERLAY=dir keeps the card copy untouched)
 make web-mock PROXY=http://192.168.1.69    # this build, same-origin against a real device
 make web-serve                             # plain static server: local mode
 make web-smoke                             # headless Chromium through every view (DEVICE=http://… adds a real-device pass)
-make card-sync HOST=opendmd.local          # put the app on the card
+make www-push HOST=opendmd.local           # write the pack into the player's flash over WiFi
 ```
 
 **Device mode or local mode.** The page asks `GET /api/status`; if a player
@@ -184,9 +184,10 @@ names the format or shows a copy's path.
   files**, which works out what the playlist in play is missing
   (`GET /api/cache/list`) and encodes and uploads it in the background, one
   file at a time, with progress, an ETA and a stop button (starting again
-  carries on); rebuild the index, reboot, and OTA firmware upload with
-  progress; the firmware version, flash variant, panel facts, `index_state`
-  and the web app's own version (`www_version`, from `www/version.txt`).
+  carries on); rebuild the index and reboot; the firmware version, flash
+  variant, panel facts, `index_state` and the web app's own version
+  (`www_version`, from the pack's header). Firmware updates are over USB
+  (below, "Deploying").
 
 **Make art.** A sheet over Library that turns a picture into a GIF for the
 panel, in five steps:
@@ -413,8 +414,8 @@ ESP32, 4 MB flash) on a DMDos carrier, a microSD over SPI, and two chained
 the panels' DMA buffer.
 
 It is also on the network: WiFi, a plain-HTTP server on port 80 that serves
-the web app and the card's files, a small JSON API, and OTA firmware updates.
-See "Getting on WiFi" and "Putting the web app on the card" below.
+the web app (from flash) and the card's files, and a small JSON API. See
+"Getting on WiFi" and "The web app in flash" below.
 
 ### Toolchain
 
@@ -430,12 +431,12 @@ git submodule update --init          # the HUB75 driver
 ```bash
 make fw-build                        # first build clones ESP-IDF v5.3 (~5-10 min)
 make fw-erase   PORT=/dev/ttyUSB0    # once, if the board ran other firmware
-make fw-flash   PORT=/dev/ttyUSB0    # build + flash at 115200 + monitor
+make fw-flash   PORT=/dev/ttyUSB0    # build + flash (bootloader, table, app, web app pack) at 115200 + monitor
 make fw-monitor PORT=/dev/ttyUSB0
 make fw-clean
 
-make card-sync HOST=opendmd.local    # push the web app onto the card
-make api-load  HOST=opendmd.local    # stress the file server for 120 s (PATHS=list.txt: fetch those paths)
+make www-push HOST=opendmd.local     # a new web app over WiFi (PUT /api/www)
+make api-load HOST=opendmd.local    # stress the file server for 120 s (PATHS=list.txt: fetch those paths)
 
 make fw-build FW_FEATURES=probe      # with the timing probe (off, and compiled out, by default)
 uv run tools/sdprobe-report.py serial.log --boot -1   # open latency, miss causes, blit times
@@ -461,8 +462,8 @@ board reboots, which retries your network if credentials were saved and
 otherwise brings the AP back with a fresh timer.
 
 `http://<ip>/setup` is always there afterwards — status, WiFi, playback
-settings, a file uploader, OTA and a reboot button — whatever else is on the
-card.
+settings, a file uploader, a web app (pack) uploader and a reboot button —
+whatever state the web app in flash is in.
 
 For a bench board you can skip the dance: copy `firmware/.env.example` to
 `firmware/.env`, fill in `OPENDMD_WIFI_SSID` and `OPENDMD_WIFI_PASS`, and
@@ -470,21 +471,20 @@ rebuild. Those get compiled in and seed NVS on a device that has no
 credentials of its own; anything saved through the setup page still wins.
 `.env` is gitignored and the password is never logged or returned by the API.
 
-### Putting the web app on the card
+### The web app in flash
 
-The browser runs the UI and the ESP32 just serves it, so the app has to be on
-the card. Build it and push it over the API:
+The browser runs the UI and the ESP32 just serves it — out of its own flash,
+not the card. `make web` packs the built app into one file,
+`opendmd-web/www.pack` (~0.8 MB, every file gzipped; the format is
+[`docs/www-pack.md`](docs/www-pack.md)); `make fw-flash` writes it into the
+1,280 KB `www` partition along with the firmware, and the player maps it at
+boot, checks its CRC and serves each file as a slice of flash. So the app
+works with no card in the slot. To update just the app over WiFi:
 
 ```bash
-make web                             # wasm-pack -> opendmd-web/www/pkg
-make card-sync HOST=opendmd.local    # PUTs every file to /www/ on the card
+make web
+make www-push HOST=opendmd.local     # PUT /api/www, then check the version it reports
 ```
-
-That uploads `index.html`, `app.css`, `app.js`, `js/` and `pkg/` (the JS
-glue and the ~175 KB wasm module), each with its `.gz`, in a few seconds. `http://<ip>/` then serves the real app;
-before that it serves the setup page instead. The setup page can also upload
-one file at a time to any path, which is how a completely blank card gets
-started.
 
 ```bash
 make api-load HOST=opendmd.local     # stress the file server, diff the display metrics
@@ -581,14 +581,19 @@ The simulator uses the same streaming index (the in-RAM `FileCatalog`), so
 
 ## Deploying
 
-A player for the cabinet is built with `make fw-release` — a release image in
-`dist/opendmd-<version>-4mb.bin` with no bench WiFi credentials in it —
-installed once over USB (`make fw-release-flash`, which also writes the
-project's bootloader) and updated over the air after that (`make ota
-HOST=opendmd.local`). An OTA image that resets before it has put its first
-frame on the panel is rolled back to the previous one by the bootloader. Preparing a card from scratch,
-first boot, what `/api/status` should read on a healthy install, and how to
-roll back are in [`docs/deploying.md`](docs/deploying.md).
+A player for the cabinet is built with `make fw-release`, which writes to
+`dist/` the app image, the web app pack, the bootloader, the partition table,
+a merged 4 MB image and an ESP Web Tools manifest — no bench WiFi
+credentials anywhere. The flash holds one app (2,752 KB) and the web app
+(1,280 KB); there is no over-the-air firmware update. Firmware is installed
+and updated **over USB from the browser**: `make flasher` serves
+`flasher/index.html` on <http://localhost:8765> (Chrome or Edge), where
+**Install** writes everything, with an optional full erase (a first
+install) or without (an update that keeps WiFi and settings);
+`make fw-release-flash` does the same with espflash. The web app alone is
+updated over WiFi with `make www-push`. Preparing a card from scratch, first
+boot, what `/api/status` should read on a healthy install, and what to do
+when an update goes wrong are in [`docs/deploying.md`](docs/deploying.md).
 
 ## License
 
