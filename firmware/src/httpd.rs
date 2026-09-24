@@ -23,8 +23,25 @@
 //! retried** (see [`Req::chunk`]).
 //!
 //! Handler contract: return `Ok(())` having sent a response (or having
-//! detached the request), or `Err(_)` and the wrapper sends a 500 if nothing
-//! has gone out yet, or drops the connection if something has.
+//! detached the request, or taken its connection over), or `Err(_)` and the
+//! wrapper sends a 500 if nothing has gone out yet, or drops the connection if
+//! something has.
+//!
+//! **Uploads leave httpd altogether** ([`Req::take_over`] -> [`Upload`]). A
+//! detached request is no use for one: httpd keeps a detached socket in its
+//! `select` set, so body bytes arriving for it would be read by the httpd
+//! task as the next request, and when the handler returns httpd reads and
+//! discards whatever of the body is left (`httpd_req_delete`'s purge) — on
+//! its own task, at the client's pace. So the socket is taken out of httpd's
+//! hands instead: the bytes httpd already buffered are drained, and the
+//! session's `recv` is overridden to report a closed connection, so httpd
+//! never reads the socket again — its purge of the rest of the body, right
+//! after the handler, deletes the session at once (a body httpd had already
+//! read whole is not purged: that session goes when the client closes, the
+//! next time `select` sees the socket). Either way httpd calls our
+//! `close_fn`, which, for a taken socket, does not close it. From then on the
+//! socket is the [`Upload`]'s: read and answered with plain lwip calls, and
+//! closed by whichever of the two lets go last.
 
 use anyhow::{bail, Result};
 use esp_idf_sys as sys;
@@ -32,6 +49,9 @@ use std::cell::Cell;
 use std::ffi::{c_void, CStr, CString};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use crate::config;
 
 /// `SO_SNDTIMEO` on every client socket, in seconds: how long one `send` may
 /// wait for a client that is not reading before it fails with EAGAIN. That
@@ -59,9 +79,73 @@ impl std::fmt::Display for SendFailed {
 
 impl std::error::Error for SendFailed {}
 
+/// An upload given up on part way (a receive timeout, the total-time cap,
+/// the client gone, a card write that failed), already logged by
+/// [`crate::files::stream_body_to`] with the bytes received. `status` is what
+/// to answer, if anything can still be said.
+#[derive(Debug)]
+pub struct UploadAborted {
+    pub status: Option<(u16, &'static str)>,
+}
+
+impl std::fmt::Display for UploadAborted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("upload aborted")
+    }
+}
+
+impl std::error::Error for UploadAborted {}
+
+/// Why [`Upload::read`] failed: the status to answer with (a timeout is a
+/// 408; a client that is gone gets nothing).
+#[derive(Debug)]
+pub struct BodyError {
+    pub status: Option<(u16, &'static str)>,
+    what: String,
+}
+
+impl std::fmt::Display for BodyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.what)
+    }
+}
+
+impl std::error::Error for BodyError {}
+
 /// Was this error already logged where it happened?
 fn already_logged(e: &anyhow::Error) -> bool {
-    e.is::<SendFailed>()
+    e.is::<SendFailed>() || e.is::<UploadAborted>()
+}
+
+/// The JSON responses a handler sends, on an httpd request ([`Req`]) or on a
+/// connection taken over for an upload ([`Upload`]) alike.
+pub trait Respond {
+    /// A complete `application/json` response with this status line.
+    fn respond_json(&mut self, status: &str, body: &str) -> Result<()>;
+
+    fn json(&mut self, body: &str) -> Result<()> {
+        self.respond_json("200 OK", body)
+    }
+
+    /// A JSON error body with the given status, e.g. `(404, "404 Not Found")`.
+    fn error(&mut self, _code: u16, status: &str, message: &str) -> Result<()> {
+        let body = format!(r#"{{"error":{}}}"#, json_string(message));
+        self.respond_json(status, &body)
+    }
+
+    fn not_found(&mut self, message: &str) -> Result<()> {
+        self.error(404, "404 Not Found", message)
+    }
+
+    fn bad_request(&mut self, message: &str) -> Result<()> {
+        self.error(400, "400 Bad Request", message)
+    }
+}
+
+impl Respond for Req {
+    fn respond_json(&mut self, status: &str, body: &str) -> Result<()> {
+        self.send_status(0, status, "application/json", body.as_bytes())
+    }
 }
 
 /// Responses this device cut short after their headers went out — a send
@@ -215,6 +299,21 @@ unsafe extern "C" fn trampoline(raw: *mut sys::httpd_req_t) -> sys::esp_err_t {
     let mut req = Req::new(raw);
     let result = (*handler)(&mut req);
     stack_low_water("httpd", &HTTPD_STACK_LOW);
+    if req.taken {
+        // The connection is an `Upload`'s now; httpd must let the session
+        // go without touching the socket. With body bytes still to come,
+        // returning OK sends httpd into its purge, whose first read (our
+        // override) reports the connection closed and deletes the session.
+        // With none, the session stays until the client closes (or the LRU
+        // purge picks it), and goes the same way. Not `ESP_FAIL`, which
+        // would delete it now too, but with an IDF warning line per upload.
+        if let Err(e) = &result {
+            if !already_logged(e) {
+                req.log_failure(e);
+            }
+        }
+        return sys::ESP_OK;
+    }
     match result {
         Ok(()) => {
             // A handler that streamed chunks must terminate the response; do
@@ -293,6 +392,10 @@ pub struct Req {
     /// Set when this is a detached request running on another task: every
     /// send goes through the session's lock (see [`Session`]).
     session: Option<Arc<Session>>,
+    /// Set by [`Req::take_over`]: the connection is an [`Upload`]'s.
+    taken: bool,
+    /// [`Req::read`] gives up once this passes (`POST /api/ota`).
+    deadline: Option<Instant>,
 }
 
 impl Req {
@@ -308,6 +411,8 @@ impl Req {
             extra_headers: String::new(),
             client_gone: Cell::new(false),
             session: None,
+            taken: false,
+            deadline: None,
         }
     }
 
@@ -347,13 +452,33 @@ impl Req {
         unsafe { (*self.raw).content_len }
     }
 
+    /// Give up reading the body at `deadline` ([`Req::read`] fails then,
+    /// however steadily the data trickles in).
+    pub fn set_deadline(&mut self, deadline: Instant) {
+        self.deadline = Some(deadline);
+    }
+
     /// Read up to `buf.len()` body bytes. `Ok(0)` means the body is complete.
     /// A socket timeout is retried up to [`RECV_TIMEOUTS`] times in a row,
     /// which is what makes a slow uploader work without letting a vanished
-    /// one hold the httpd task forever.
+    /// one hold the httpd task forever; a [`Req::set_deadline`] ends it
+    /// regardless.
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let mut timeouts = 0;
         loop {
+            if let Some(deadline) = self.deadline {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    bail!(
+                        "the body took longer than the {} s cap",
+                        config::UPLOAD_MAX_TIME.as_secs()
+                    );
+                }
+                if left < Duration::from_secs(RECV_TIMEOUT_S.into()) {
+                    // SAFETY: a plain read of the live request.
+                    set_recv_timeout(unsafe { sys::httpd_req_to_sockfd(self.raw) }, left);
+                }
+            }
             // SAFETY: `buf` is a live mutable slice; httpd writes at most
             // `buf.len()` bytes into it.
             let n = unsafe { sys::httpd_req_recv(self.raw, buf.as_mut_ptr() as *mut _, buf.len()) };
@@ -460,24 +585,6 @@ impl Req {
 
     pub fn ok(&mut self, content_type: &str, body: &[u8]) -> Result<()> {
         self.send_status(200, "200 OK", content_type, body)
-    }
-
-    pub fn json(&mut self, body: &str) -> Result<()> {
-        self.ok("application/json", body.as_bytes())
-    }
-
-    /// A JSON error body with the given status, e.g. `(404, "404 Not Found")`.
-    pub fn error(&mut self, code: u16, status: &str, message: &str) -> Result<()> {
-        let body = format!(r#"{{"error":{}}}"#, json_string(message));
-        self.send_status(code, status, "application/json", body.as_bytes())
-    }
-
-    pub fn not_found(&mut self, message: &str) -> Result<()> {
-        self.error(404, "404 Not Found", message)
-    }
-
-    pub fn bad_request(&mut self, message: &str) -> Result<()> {
-        self.error(400, "400 Bad Request", message)
     }
 
     pub fn redirect(&mut self, location: &str) -> Result<()> {
@@ -713,6 +820,345 @@ impl Req {
             .push(session.clone());
         Ok(Detached { raw: copy, session })
     }
+
+    /// Take this request's connection away from httpd, for an upload whose
+    /// body is to be received on another task (see the module docs).
+    ///
+    /// The body bytes httpd read along with the headers (at most 128, its
+    /// `pending_data`) are drained into the [`Upload`] first; the session's
+    /// `recv` is then overridden to report a closed connection, so nothing on
+    /// the httpd task reads the socket again, and the session is deleted as
+    /// soon as the handler returns — which the handler must do at once,
+    /// having sent nothing on `self`.
+    pub fn take_over(&mut self) -> Result<Upload> {
+        // SAFETY: plain reads of the live request.
+        let (fd, handle) = unsafe { (sys::httpd_req_to_sockfd(self.raw), (*self.raw).handle) };
+        let len = self.content_len();
+        // SAFETY: `handle` and `fd` are this live request's.
+        let err = unsafe { sys::httpd_sess_set_recv_override(handle, fd, Some(recv_pending_only)) };
+        if err != sys::ESP_OK {
+            bail!("httpd_sess_set_recv_override: {err}");
+        }
+        let mut prefix = vec![0u8; len.min(PENDING_MAX)];
+        let mut got = 0;
+        if !prefix.is_empty() {
+            // SAFETY: `prefix` is a live buffer of the length given. With the
+            // override, this returns httpd's buffered bytes and never waits.
+            let n = unsafe {
+                sys::httpd_req_recv(self.raw, prefix.as_mut_ptr() as *mut _, prefix.len())
+            };
+            got = n.max(0) as usize;
+        }
+        prefix.truncate(got);
+        // SAFETY: as above.
+        unsafe { sys::httpd_sess_set_recv_override(handle, fd, Some(recv_closed)) };
+        TAKEN.lock().unwrap_or_else(|p| p.into_inner()).push(Taken {
+            fd,
+            httpd_done: false,
+            owner_done: false,
+        });
+        self.taken = true;
+        self.responded = true;
+        Ok(Upload {
+            fd,
+            method: self.method_name(),
+            path: self.path().to_string(),
+            len: len as u64,
+            received: 0,
+            prefix,
+            pos: 0,
+            started: Instant::now(),
+            recv_timeout: Duration::from_secs(RECV_TIMEOUT_S.into()),
+            extra_headers: String::new(),
+            responded: false,
+        })
+    }
+}
+
+/// httpd's `pending_data` (`PARSER_BLOCK_SIZE` in `esp_httpd_priv.h`): the
+/// most body it can have read along with the headers.
+const PENDING_MAX: usize = 128;
+/// How long a finished [`Upload`] waits for the client to close first.
+const UPLOAD_LINGER: Duration = Duration::from_secs(1);
+
+/// A taken-over session's `recv` while its buffered bytes are drained: never
+/// touch the socket (httpd then returns what it had buffered).
+unsafe extern "C" fn recv_pending_only(
+    _hd: sys::httpd_handle_t,
+    _fd: i32,
+    _buf: *mut core::ffi::c_char,
+    _len: usize,
+    _flags: i32,
+) -> i32 {
+    sys::HTTPD_SOCK_ERR_TIMEOUT
+}
+
+/// A taken-over session's `recv` from then on: the connection is closed, as
+/// far as httpd is concerned.
+unsafe extern "C" fn recv_closed(
+    _hd: sys::httpd_handle_t,
+    _fd: i32,
+    _buf: *mut core::ffi::c_char,
+    _len: usize,
+    _flags: i32,
+) -> i32 {
+    0
+}
+
+/// `SO_RCVTIMEO` on a socket.
+fn set_recv_timeout(fd: i32, timeout: Duration) {
+    let tv = sys::timeval {
+        tv_sec: timeout.as_secs() as _,
+        tv_usec: timeout.subsec_micros() as _,
+    };
+    // SAFETY: a live socket and a `timeval` that outlives the call.
+    unsafe {
+        sys::lwip_setsockopt(
+            fd,
+            sys::SOL_SOCKET as i32,
+            sys::SO_RCVTIMEO as i32,
+            &tv as *const _ as *const c_void,
+            std::mem::size_of::<sys::timeval>() as u32,
+        );
+    }
+}
+
+/// A socket taken over by [`Req::take_over`]: who has let go of it. httpd
+/// lets go when it deletes the session (our `close_fn`), the [`Upload`] when
+/// it is dropped; whichever is second closes the fd. Until then the fd stays
+/// open, so its number cannot be handed to a new connection while either
+/// side might still use it.
+struct Taken {
+    fd: i32,
+    httpd_done: bool,
+    owner_done: bool,
+}
+
+static TAKEN: Mutex<Vec<Taken>> = Mutex::new(Vec::new());
+
+/// The request's connection, out of httpd's hands: an upload whose body is
+/// read (and whose reply is sent) with plain socket calls, on whichever task
+/// holds this — the stream task, normally.
+///
+/// **Reading gives up** after [`config::UPLOAD_IDLE_TIMEOUT`] without data,
+/// or once the body has taken [`config::UPLOAD_MAX_TIME`] since
+/// [`Upload::start_clock`], however steadily a trickle keeps it alive. Every
+/// response closes the connection (`Connection: close`): it may be sent
+/// before the body is all in.
+pub struct Upload {
+    fd: i32,
+    method: &'static str,
+    path: String,
+    len: u64,
+    received: u64,
+    /// What httpd had already read of the body, handed over first.
+    prefix: Vec<u8>,
+    pos: usize,
+    started: Instant,
+    recv_timeout: Duration,
+    extra_headers: String,
+    responded: bool,
+}
+
+impl Upload {
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn method(&self) -> &'static str {
+        self.method
+    }
+
+    /// The declared `Content-Length`.
+    pub fn content_len(&self) -> u64 {
+        self.len
+    }
+
+    /// Body bytes read so far.
+    pub fn received(&self) -> u64 {
+        self.received
+    }
+
+    /// How long reception has been going.
+    pub fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    pub fn responded(&self) -> bool {
+        self.responded
+    }
+
+    /// Start the [`config::UPLOAD_MAX_TIME`] clock: when reception starts,
+    /// not when the request was queued.
+    pub fn start_clock(&mut self) {
+        self.started = Instant::now();
+    }
+
+    /// Read up to `buf.len()` body bytes; `Ok(0)` once all `Content-Length`
+    /// bytes are in. A failure is a [`BodyError`].
+    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        if self.received >= self.len || buf.is_empty() {
+            return Ok(0);
+        }
+        let want = ((self.len - self.received) as usize).min(buf.len());
+        if self.pos < self.prefix.len() {
+            let n = want.min(self.prefix.len() - self.pos);
+            buf[..n].copy_from_slice(&self.prefix[self.pos..self.pos + n]);
+            self.pos += n;
+            self.received += n as u64;
+            return Ok(n);
+        }
+        let timeout_408 = Some((408, "408 Request Timeout"));
+        let left = config::UPLOAD_MAX_TIME.saturating_sub(self.started.elapsed());
+        if left.is_zero() {
+            return Err(BodyError {
+                status: timeout_408,
+                what: format!(
+                    "the body took longer than the {} s cap",
+                    config::UPLOAD_MAX_TIME.as_secs()
+                ),
+            }
+            .into());
+        }
+        // Each read waits at most the idle timeout, and never past the cap.
+        let wait = left
+            .min(config::UPLOAD_IDLE_TIMEOUT)
+            .max(Duration::from_millis(10));
+        if wait != self.recv_timeout {
+            set_recv_timeout(self.fd, wait);
+            self.recv_timeout = wait;
+        }
+        // SAFETY: `buf` is a live buffer of at least `want` bytes; the socket
+        // is ours (see `Taken`).
+        let n = unsafe { sys::lwip_recv(self.fd, buf.as_mut_ptr() as *mut c_void, want, 0) };
+        if n > 0 {
+            self.received += n as u64;
+            return Ok(n as usize);
+        }
+        if n == 0 {
+            return Err(BodyError {
+                status: None,
+                what: "the client closed the connection".into(),
+            }
+            .into());
+        }
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        if errno == sys::EAGAIN as i32 {
+            let what = if wait < config::UPLOAD_IDLE_TIMEOUT {
+                format!(
+                    "the body took longer than the {} s cap",
+                    config::UPLOAD_MAX_TIME.as_secs()
+                )
+            } else {
+                format!("no data for {} s", config::UPLOAD_IDLE_TIMEOUT.as_secs())
+            };
+            return Err(BodyError {
+                status: timeout_408,
+                what,
+            }
+            .into());
+        }
+        Err(BodyError {
+            status: None,
+            what: format!("socket read error (errno {errno})"),
+        }
+        .into())
+    }
+
+    /// Append a response header (before the response).
+    pub fn header(&mut self, field: &str, value: &str) {
+        self.extra_headers.push_str(field);
+        self.extra_headers.push_str(": ");
+        self.extra_headers.push_str(value);
+        self.extra_headers.push_str("\r\n");
+    }
+
+    /// Write all of `buf` to the socket (`SO_SNDTIMEO` is httpd's 5 s).
+    fn send_all(&self, mut buf: &[u8]) -> Result<()> {
+        while !buf.is_empty() {
+            // SAFETY: a live slice; the socket is ours.
+            let n = unsafe { sys::lwip_send(self.fd, buf.as_ptr() as *const c_void, buf.len(), 0) };
+            if n <= 0 {
+                bail!("send failed after {} B", self.received);
+            }
+            buf = &buf[(n as usize).min(buf.len())..];
+        }
+        Ok(())
+    }
+}
+
+impl Respond for Upload {
+    fn respond_json(&mut self, status: &str, body: &str) -> Result<()> {
+        if self.responded {
+            return Ok(());
+        }
+        self.responded = true;
+        let msg = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n{body}",
+            body.len(),
+            self.extra_headers
+        );
+        if let Err(e) = self.send_all(msg.as_bytes()) {
+            log::info!(
+                "{} {}: the reply was not delivered: {e}",
+                self.method,
+                self.path
+            );
+            return Err(SendFailed.into());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Upload {
+    /// **The client closes first, if it will.** Whichever end closes a TCP
+    /// connection first keeps it in TIME_WAIT for 2 x `TCP_MSL` (120 s), and
+    /// this lwip allocates its pcbs from the heap with no limit on how many
+    /// wait: when the device closed first, a `card-sync` of 71 files (~100
+    /// uploads in two minutes, ~200 B each) took the free heap to 13 KB with
+    /// a 1.6 KB largest block, and the next 2 KB chunk buffer aborted the
+    /// board. So after a complete exchange the socket is read until the
+    /// client's FIN (it closes once it has the reply: `Connection: close`),
+    /// for at most [`UPLOAD_LINGER`]; only an upload cut short — body bytes
+    /// may still be arriving — is shut down at once.
+    fn drop(&mut self) {
+        if self.responded && self.received >= self.len {
+            set_recv_timeout(self.fd, UPLOAD_LINGER);
+            let until = Instant::now() + UPLOAD_LINGER;
+            let mut sink = [0u8; 64];
+            loop {
+                // SAFETY: a live buffer; the socket is ours.
+                let n = unsafe {
+                    sys::lwip_recv(self.fd, sink.as_mut_ptr() as *mut c_void, sink.len(), 0)
+                };
+                if n <= 0 || Instant::now() >= until {
+                    break;
+                }
+            }
+        } else {
+            // SAFETY: the socket is still open (see `Taken`): end the
+            // connection now, whoever closes the fd.
+            unsafe { sys::lwip_shutdown(self.fd, sys::SHUT_RDWR as i32) };
+        }
+        let close = {
+            let mut taken = TAKEN.lock().unwrap_or_else(|p| p.into_inner());
+            match taken.iter().position(|t| t.fd == self.fd) {
+                Some(i) if taken[i].httpd_done => {
+                    taken.swap_remove(i);
+                    true
+                }
+                Some(i) => {
+                    taken[i].owner_done = true;
+                    false
+                }
+                None => false,
+            }
+        };
+        if close {
+            // SAFETY: httpd has let go of it and so have we.
+            unsafe { sys::close(self.fd) };
+        }
+    }
 }
 
 /// A request handed off the httpd task by [`Req::detach`]. Must end up in
@@ -766,6 +1212,28 @@ static DETACHED: Mutex<Vec<Arc<Session>>> = Mutex::new(Vec::new());
 /// every client socket it closes, before the fd or the session slot are
 /// released.
 unsafe extern "C" fn close_session(_hd: sys::httpd_handle_t, fd: i32) {
+    // A socket taken over by an upload: httpd is done with it, but it is
+    // closed here only if the upload is done with it too.
+    let taken = {
+        let mut taken = TAKEN.lock().unwrap_or_else(|p| p.into_inner());
+        taken.iter().position(|t| t.fd == fd).map(|i| {
+            if taken[i].owner_done {
+                taken.swap_remove(i);
+                true
+            } else {
+                taken[i].httpd_done = true;
+                false
+            }
+        })
+    };
+    match taken {
+        Some(true) => {
+            sys::close(fd);
+            return;
+        }
+        Some(false) => return,
+        None => {}
+    }
     let hit = {
         let mut detached = DETACHED.lock().unwrap_or_else(|p| p.into_inner());
         detached

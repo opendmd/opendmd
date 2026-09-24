@@ -120,8 +120,8 @@ build environment, and the code that would compile them in does not exist in
 this build. The image is saved to `dist/opendmd-<version>-4mb.bin` (version
 from `firmware/Cargo.toml`), its app descriptor carries `"<version> 4mb"` —
 the string the OTA handler's variant check reads — and the target fails if
-the image is over 95% of the 2,031,616-byte OTA slot. 0.2.0 is 1,596,224 B,
-78.6%.
+the image is over 95% of the 2,031,616-byte OTA slot. 0.3.0 is 1,910,032 B,
+94.0% (20 KB under the limit; 0.2.0 was 1,883,264 B, 92.7%).
 
 The release build needs ~1.5 GB of scratch; `FW_RELEASE_TARGET_DIR=/roomier/dir
 make fw-release` puts it elsewhere.
@@ -138,7 +138,7 @@ these CH340 boards. `fw-release-flash` also erases `otadata`, so a board that
 had been OTA'd into its second slot boots the image just flashed.
 
 Put the card in and power up. The boot banner reads
-`OpenDMD firmware v0.2.0 (4mb, app desc '0.2.0 4mb')`, and on first boot
+`OpenDMD firmware v0.3.0 (4mb, app desc '0.3.0 4mb')`, and on first boot
 the player builds the default manifest's index on the card
 (`filelist.txt.idx`; ~6 s for the full card) before it starts playing. Once the first frame is up the
 log says `rollback mark: ota_0 was ..., now marked valid after the first
@@ -172,7 +172,7 @@ A release image has no WiFi credentials, so a fresh board comes up as an
 
 Credentials live in NVS from then on and survive every OTA update.
 
-### Updates (OTA)
+### Updating
 
 ```bash
 # bump `version` in firmware/Cargo.toml first
@@ -186,7 +186,61 @@ OTA_DRY_RUN=1 make ota HOST=opendmd.local   # print the commands only
 has rebooted and reports the version the image carries (`OTA_TIMEOUT`, default
 120 s). The upload is rejected before anything is erased if the image was
 built for another flash size, and one that fails validation at the end leaves
-the running firmware as the boot image.
+the running firmware as the boot image. The whole image must arrive within
+120 s, or the update is abandoned (`esp_ota_abort`, one warn line: `POST
+/api/ota: upload aborted at <bytes> of <total> B …`) and the board keeps
+running what it had; over WiFi it takes ~10 s. The cache builder is stopped
+cleanly before the restart (its file finished or abandoned), so an OTA may be
+started at any time, the night window included.
+
+This is what the first update of a deployed build looked like (0.3.0 over a
+0.3.0 bench build in `ota_0`, 2026-09-24, a playlist playing):
+
+```
+$ make ota HOST=192.168.1.69
+image: dist/opendmd-0.3.0-4mb.bin (1910032 B), app descriptor '0.3.0 4mb', expecting version '0.3.0'
+uploading to http://192.168.1.69/api/ota ...
+{"ok":true,"rebooting":true}
+back after 23s: version 0.3.0, uptime 10s
+```
+
+and on the serial console:
+
+```
+ota: OTA: receiving 1910032 B
+ota: OTA: variant check passed (4mb)
+ota: OTA: 1910032 B written, rebooting                     (9.4 s after the first line)
+rst:0xc (SW_CPU_RESET)
+boot: Loaded app from partition at offset 0x210000         (ota_1)
+OpenDMD firmware v0.3.0 (4mb, app desc '0.3.0 4mb')
+reset reason: software
+microSD mounted at /sdcard (31.27 GB) on attempt 1
+manifest indexed: /sdcard/filelist.txt, 10133 entries, index loaded in 8 ms
+rollback mark: ota_1 was pending-verify, now marked valid after the first frame
+[1] /gifs/Arcade/ARCADE_NEOGEO_Metal_Slug_4_01_INVERT.gif <- prepared
+wifi: scanning for '<your network>'                        (from NVS: a release image has no credentials)
+WiFi connected, IP 192.168.1.69                            (11 s after the reset)
+[net] ready: http://192.168.1.69/ and http://opendmd.local/
+time: NTP synced
+heartbeat: … 0 deadline misses …, builder: paused playing
+```
+
+What to check afterwards: `version` in `/api/status` is the new one,
+`reset_reason` is `software` (not `panic` or `task watchdog`), `rollback
+mark: … now marked valid` is in the log if you have one, and the panel is
+playing. If the board comes back on the old version, the bootloader rolled
+the new one back (section 4).
+
+**Over USB, pause the cache builder first.** An OTA and `POST /api/reboot`
+stop the builder before they restart; a USB flash (`make fw-flash`,
+`fw-release-flash`, the bench scripts) resets the chip wherever it is, and a
+reset in the middle of a card write can leave a card that times out at the
+next mount. So check `curl http://opendmd.local/api/cache`: flash only while
+`auto.state` is `paused`, `idle` or `done` — it is `paused` (`reason
+"playing"`) whenever the panel is playing, with `auto_prepare` at its
+default — never while it is `running` (night mode "off", or the player
+paused). If it is running, resume playback (`POST /api/pause` toggles) or
+wait for the night window to end, and check again.
 
 ## 3. What a healthy install looks like
 
@@ -195,7 +249,7 @@ the running firmware as the boot image.
 
 | field | `filelist.txt`, few files prepared (mostly GIFs) | every file played from a prepared copy |
 |---|---|---|
-| `version` / `variant` | `0.2.0` / `4mb` | same |
+| `version` / `variant` | `0.3.0` / `4mb` | same |
 | `manifest` | `/sdcard/filelist.txt` | `/sdcard/filelist.txt` (the copies are found per file) |
 | `index_state` | `ready` | `ready` |
 | `www_version` | the `git describe` of the `make web` that built the card's app, `null` if the card's `www/` predates it | same |

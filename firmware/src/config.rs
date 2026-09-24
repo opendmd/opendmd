@@ -201,15 +201,32 @@ pub const NET_WORKER_STACK: usize = 12 * 1024;
 /// heap buffer. Measured high-water (the `httpd task: stack high-water` log
 /// line) at 10 KB: 5.2 KB used over a device `web-smoke` pass (config,
 /// schedule, playlist upload), 3.2 KB through a full `POST /api/ota`. It was
-/// 10 KB until file streaming moved to its own task; 8 KB gives back 2 KB of
-/// the ~7 KB that task costs and leaves ~2.8 KB over the deepest measured.
-pub const HTTP_STACK: usize = 8 * 1024;
-/// The file-streaming task's stack (`stream.rs`): `files::serve` with its
-/// chunk buffer on the heap, plus logging. Also one contiguous internal
-/// allocation, taken at the same time as the httpd task's. Measured at 6 KB:
-/// 2.9 KB used at most (stalled client, 4 MB GIF, api-load, web-smoke,
-/// page-load bursts), so 4.5 KB keeps ~1.6 KB spare.
-pub const STREAM_STACK: usize = 4608;
+/// 10 KB until file streaming moved to its own task, then 8 KB. Since uploads
+/// moved there too (the upload path, with its log line, is what reached
+/// 5.2 KB: it measures ~4.0 KB on the stream task), the deepest left is
+/// parsing a config or schedule body: 4.1 KB used (invalid `PUT
+/// /api/config` and `/api/schedule` bodies, which are parsed whole and then
+/// refused), and OTA's 3.2 KB. 6.5 KB leaves ~2.4 KB over that, and gives
+/// the stream task's extra 1.5 KB back.
+pub const HTTP_STACK: usize = 6 * 1024 + 512;
+/// The file-streaming task's stack (`stream.rs`): `files::serve` and, since
+/// uploads moved here, `files::stream_body_to` and the manifest/`.meta`
+/// installs, chunk buffers on the heap, plus logging. Also one contiguous
+/// internal allocation, taken at the same time as the httpd task's. Measured:
+/// 2.9 KB used at most by downloads alone (stalled client, 4 MB GIF,
+/// api-load, web-smoke, page-load bursts); 3.95 KB with uploads (656 B left
+/// of 4.5 KB after card-syncs and a trickle abort, whose warn line is the
+/// deepest path), so 6 KB, for ~2 KB spare.
+pub const STREAM_STACK: usize = 6 * 1024;
+/// An upload (`PUT /api/files/…`, `/api/manifest`, `/api/sets/…`) is received
+/// on the stream task, and gives up when one read waits this long for data.
+/// A trickle does not get round it: [`UPLOAD_MAX_TIME`] caps the whole body.
+pub const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
+/// The longest one request body may take to arrive, counted from when its
+/// reception starts (a queued upload's wait is not counted): 3 MB at the
+/// ~100-200 KB/s a laptop gets is 15-30 s, so this only ends a client that
+/// is trickling or stuck. `POST /api/ota` has the same cap.
+pub const UPLOAD_MAX_TIME: Duration = Duration::from_secs(120);
 /// Everything streamed to or from the card moves in chunks this size: big
 /// enough to keep SPI efficient, small enough that the display loop never
 /// waits long for the FAT lock — and small enough to afford, because each
@@ -281,7 +298,9 @@ pub const STREAM_START_HEAP: u32 = HEAP_RESERVE + 8 * 1024;
 /// or a new connection can neither be accepted nor make room (see `stream`),
 /// so this is 1 + 2 + 1 = 4; a compile-time assert there keeps it so.
 /// `CONFIG_LWIP_MAX_SOCKETS` must be at least this + 3 (httpd's listening and
-/// control sockets and a spare), + 1 for the captive-portal DNS server.
+/// control sockets and a spare), + 1 for the captive-portal DNS server, + 3
+/// for uploads, which leave httpd's sockets for the stream task's
+/// (`stream.rs` asserts the sum).
 ///
 /// It is not a safety limit on the heap, and was measured not to be (1, 2
 /// and 3 were all tried when every download ran on the httpd task: none
@@ -321,22 +340,36 @@ pub const CACHE_DEBOUNCE: Duration = Duration::from_secs(3);
 // ---------------------------------------------------------------------------
 /// The builder task's stack: `encode_gif_streaming` through the `gif`
 /// decoder and FATFS. Measured high-water in the heartbeat (`stack … B
-/// unused`): 5.9 KB used at most (night and drip runs), so 1.1 KB spare. Taken
-/// when the task starts (only while there is work it may do) and given back
-/// when it exits; every KB of it is a KB the drip pace needs free on top.
-pub const BUILDER_STACK: usize = 7 * 1024;
+/// unused`): 6.0 KB used at most (1,024 B left of 7 KB over a 10-minute
+/// pause run of 117 files, 2026-09-24; 5.9 KB in the night and drip runs
+/// before), so 8.5 KB leaves 2.5 KB spare. Taken when the task starts (only
+/// while there is work it may do) and given back when it exits; every KB of
+/// it is a KB the drip pace needs free on top (its start threshold is 75.5
+/// KB with this stack, 74 KB with the old 7 KB; the full pace's stays at 74
+/// KB, see [`BUILDER_MIN_HEAP_FULL`]).
+pub const BUILDER_STACK: usize = 8 * 1024 + 512;
 /// Below the stream task (2): the builder runs only when nothing that
 /// answers a client wants CPU0.
 pub const BUILDER_PRIORITY: u8 = 1;
-/// A file is only started with this much heap free, the task already
-/// running; what the encoder leaves is the network's. The task itself is
-/// only started with its stack + 1 KB more than this free (74 KB). With a
+/// A file is only started at the drip pace with this much heap free, the
+/// task already running; what the encoder leaves is the network's and the
+/// player's (see [`BUILDER_MIN_HEAP_FULL`] for the full pace). The task itself is
+/// only started with its stack + 1 KB more than this free (75.5 KB). With a
 /// prepared file playing the rig has 76-80 KB free, so the drip runs; with a
 /// GIF, ~40-50 KB, so it does not. The encoder is ~57 KB by the host's
 /// count (63 KB at most over the card); on the rig, starting at 68 KB, the
 /// sampled floor over 10 minutes of dripping stayed at 16.4 KB, i.e. it
 /// took at most ~52 KB. [`BUILDER_ABORT_HEAP`] catches the big ones.
 pub const BUILDER_MIN_HEAP: u32 = 66 * 1024;
+/// [`BUILDER_MIN_HEAP`] at the full pace (paused, night mode "off", no
+/// playlist): nothing animates and the player opens nothing without stopping
+/// the builder first (`player_opening`), so the margin is only the
+/// network's, and every transfer stops the builder too. 1.5 KB under the
+/// drip figure, which is what the stack grew by in 0.3.0 (7 -> 8.5 KB): the
+/// start threshold at full pace stays where 0.2.0 had it (64.5 + 8.5 + 1 =
+/// 74 KB; paused, the rig has 74-77 KB free), and the extra stack comes out
+/// of the encoder's floor (0.2.0 at full speed: 17.1 KB sampled minimum).
+pub const BUILDER_MIN_HEAP_FULL: u32 = 64 * 1024 + 512;
 /// Mid-file, the encode is abandoned (and its heap freed) if free heap falls
 /// under this.
 pub const BUILDER_ABORT_HEAP: u32 = 8 * 1024;
@@ -361,7 +394,7 @@ pub const BUILDER_EXIT_WAIT: Duration = Duration::from_millis(20);
 /// How long the player's open waits for the builder to free its heap.
 pub const BUILDER_RELEASE_WAIT: Duration = Duration::from_millis(1000);
 /// At most one start attempt this often. The task exits whenever it may not
-/// work (giving its stack and TCB, ~8.9 KB of heap, back to the player) and
+/// work (giving its stack and TCB, ~9.4 KB of heap, back to the player) and
 /// is started again by the main loop when it may.
 pub const BUILDER_RESPAWN: Duration = Duration::from_secs(1);
 /// After a card error (not the GIF's fault), wait this long before retrying.

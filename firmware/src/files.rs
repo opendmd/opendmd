@@ -22,7 +22,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::config;
-use crate::httpd::{json_string, Req};
+use crate::httpd::{json_string, BodyError, Req, Respond, Upload, UploadAborted};
 use crate::probe;
 use crate::state::free_heap;
 
@@ -50,6 +50,16 @@ pub fn affordable(req: &mut Req) -> Result<bool> {
         "the player needs the heap right now; retry shortly",
     )?;
     Ok(false)
+}
+
+/// A zeroed [`config::IO_CHUNK`] buffer, or `None` if the heap has no block
+/// that size. `vec![0; n]` would abort the board instead: seen with a GIF
+/// just opened (13 KB free, the largest block 1.6 KB) as an upload began.
+pub fn chunk_buffer() -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(config::IO_CHUNK).ok()?;
+    buf.resize(config::IO_CHUNK, 0);
+    Some(buf)
 }
 
 /// Wait between chunks while the heap is below the player's reserve.
@@ -205,6 +215,16 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
     if !affordable(req)? {
         return Ok(true);
     }
+    let Some(mut buf) = chunk_buffer() else {
+        log::warn!("refusing {path}: no {} B block free", config::IO_CHUNK);
+        req.header("Retry-After", "2")?;
+        req.error(
+            503,
+            "503 Service Unavailable",
+            "the player needs the heap right now; retry shortly",
+        )?;
+        return Ok(true);
+    };
     let (mut reads, mut rd_tot, mut rd_max) = (0u32, 0u32, 0u32);
     if gzipped {
         req.header("Content-Encoding", "gzip")?;
@@ -212,7 +232,6 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
     req.header("Cache-Control", cache_for(path))?;
     req.begin_sized("200 OK", mime_for(path), total)?;
 
-    let mut buf = vec![0u8; config::IO_CHUNK];
     let mut left = total;
     while left > 0 {
         let t = probe::http_stamp();
@@ -343,12 +362,11 @@ pub fn stream_dir_json(req: &mut Req, card_dir: &str, fs_dir: &str, sizes: bool)
 ///
 /// Returns the byte count. Parent directories are created. The caller is
 /// responsible for making sure the player is not reading `dest`.
-pub fn receive_upload(req: &mut Req, dest: &str) -> Result<u64> {
+pub fn receive_upload(up: &mut Upload, dest: &str) -> Result<u64> {
     let temp = format!("{dest}.part");
-    stream_body_to(req, &temp)?;
-    let written = fs::metadata(&temp).map(|m| m.len()).unwrap_or(0);
+    stream_body_to(up, &temp)?;
     replace(&temp, dest)?;
-    Ok(written)
+    Ok(up.received())
 }
 
 /// The on-card playlist index that belongs to a manifest: `<manifest>.idx`.
@@ -457,32 +475,69 @@ pub fn remove_index_beside(manifest: &str) -> Result<()> {
 }
 
 /// Stream a request body to `temp`, creating parent directories.
-pub fn stream_body_to(req: &mut Req, temp: &str) -> Result<()> {
+///
+/// If it cannot all be received and written — no data for
+/// [`config::UPLOAD_IDLE_TIMEOUT`], the [`config::UPLOAD_MAX_TIME`] cap, the
+/// client gone, the heap that did not come back, a card write that failed —
+/// the temp file is removed, one warn line says how far it got (`PUT <path>:
+/// upload aborted at <received> of <Content-Length> B after <s> s: <why>`),
+/// and the error is an [`UploadAborted`] carrying what to answer.
+pub fn stream_body_to(up: &mut Upload, temp: &str) -> Result<()> {
     if let Some(parent) = Path::new(temp).parent() {
         fs::create_dir_all(parent)?;
     }
+    let Some(mut buf) = chunk_buffer() else {
+        log::warn!(
+            "{} {}: refused, no {} B block free",
+            up.method(),
+            up.path(),
+            config::IO_CHUNK
+        );
+        up.header("Retry-After", "2");
+        return Err(UploadAborted {
+            status: Some((503, "503 Service Unavailable")),
+        }
+        .into());
+    };
     let mut file = fs::File::create(temp)?;
-    let mut buf = vec![0u8; config::IO_CHUNK];
-    loop {
-        let n = match req.read(&mut buf) {
-            Ok(0) => break,
+    let outcome = loop {
+        let n = match up.read(&mut buf) {
+            Ok(0) => {
+                break file
+                    .flush()
+                    .map_err(|e| (e.into(), Some((500, "500 Internal Server Error"))))
+            }
             Ok(n) => n,
             Err(e) => {
-                drop(file);
-                let _ = fs::remove_file(temp);
-                return Err(e);
+                let status = e.downcast_ref::<BodyError>().and_then(|b| b.status);
+                break Err((e, status));
             }
         };
-        wait_for_heap()?;
+        if let Err(e) = wait_for_heap() {
+            break Err((e, Some((503, "503 Service Unavailable"))));
+        }
         if let Err(e) = file.write_all(&buf[..n]) {
-            drop(file);
-            let _ = fs::remove_file(temp);
-            return Err(e.into());
+            break Err((
+                anyhow::Error::from(e).context("writing to the card"),
+                Some((500, "500 Internal Server Error")),
+            ));
         }
         thread::yield_now();
-    }
-    file.flush()?;
-    Ok(())
+    };
+    drop(file);
+    let Err((e, status)) = outcome else {
+        return Ok(());
+    };
+    let _ = fs::remove_file(temp);
+    log::warn!(
+        "{} {}: upload aborted at {} of {} B after {:.1} s: {e:#}",
+        up.method(),
+        up.path(),
+        up.received(),
+        up.content_len(),
+        up.elapsed().as_secs_f32()
+    );
+    Err(UploadAborted { status }.into())
 }
 
 /// Move `temp` over `dest`. FAT's `rename` refuses an existing destination, so

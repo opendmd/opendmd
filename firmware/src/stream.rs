@@ -29,8 +29,22 @@
 //! listening socket without yielding. So at most `1 + QUEUE_DEPTH` sockets
 //! may be detached, and [`config::HTTP_MAX_SOCKETS`] is one more than that.
 //!
-//! Uploads (`PUT /api/files/…`, manifests, `POST /api/ota`) and the JSON
-//! listings stay on the httpd task.
+//! **Uploads are received here too** (`PUT /api/files/…`, `/api/manifest`,
+//! `/api/sets/…`, and so a playlist's `.meta`): on the httpd task a client
+//! that trickled its body held every other request — `/api/status` went
+//! unanswered for ~90 s. The handler takes the connection out of httpd's
+//! hands ([`Req::take_over`], see [`crate::httpd`]) and queues it like a
+//! download, in the same queue: one transfer at a time, either way. Reading
+//! gives up after [`config::UPLOAD_IDLE_TIMEOUT`] without data or
+//! [`config::UPLOAD_MAX_TIME`] in all; the temp file goes and one warn line
+//! says how much of the `Content-Length` came ([`files::stream_body_to`]).
+//! A taken socket is outside httpd's [`config::HTTP_MAX_SOCKETS`], so lwip
+//! needs `1 + QUEUE_DEPTH` more (asserted below).
+//!
+//! `POST /api/ota` stays on the httpd task: it writes flash through
+//! `esp_ota_*` and reboots from its handler, and nothing else may run a
+//! transfer or card write meanwhile. It has the same total-time cap. The
+//! JSON listings stay there too.
 
 use anyhow::Result;
 use esp_idf_hal::cpu::Core;
@@ -43,7 +57,7 @@ use std::time::{Duration, Instant};
 
 use crate::config;
 use crate::files;
-use crate::httpd::{self, Detached, Req};
+use crate::httpd::{self, Detached, Req, Respond, Upload, UploadAborted};
 use crate::state::free_heap;
 
 /// Requests waiting behind the one being streamed.
@@ -57,14 +71,24 @@ const PRIORITY: u8 = 2;
 
 // The invariant in the module docs: one socket is never detached.
 const _: () = assert!(config::HTTP_MAX_SOCKETS as usize > 1 + QUEUE_DEPTH);
+// lwip's sockets: httpd's clients, its listening and control sockets plus
+// the one it opens to post a control message, one more (the captive DNS in
+// AP mode, the RePlayOS client in STA mode), and the uploads taken out of
+// httpd, one streaming and QUEUE_DEPTH waiting.
+const _: () = assert!(
+    esp_idf_sys::CONFIG_LWIP_MAX_SOCKETS as usize
+        >= config::HTTP_MAX_SOCKETS as usize + 3 + 1 + 1 + QUEUE_DEPTH
+);
 
 /// What the task runs for one request: produce the whole response on the
 /// `Req` it is given (usually [`files::serve`] plus what to say on a miss).
 type Work = Box<dyn FnOnce(&mut Req) -> Result<()> + Send>;
+/// What the task runs for one upload: read the body and answer it.
+type UploadWork = Box<dyn FnOnce(&mut Upload) -> Result<()> + Send>;
 
-struct Job {
-    req: Detached,
-    work: Work,
+enum Job {
+    Download { req: Detached, work: Work },
+    Upload { up: Upload, work: UploadWork },
 }
 
 /// The waiting jobs, and the condition the task sleeps on while there are
@@ -153,7 +177,7 @@ where
         {
             let mut jobs = queue.jobs.lock().unwrap_or_else(|p| p.into_inner());
             if jobs.len() < QUEUE_DEPTH {
-                jobs.push_back(Job {
+                jobs.push_back(Job::Download {
                     req: req.detach()?,
                     work: Box::new(work),
                 });
@@ -174,9 +198,111 @@ where
     }
 }
 
+/// Receive an upload's body on the streaming task with `work`, and return
+/// at once: the connection is taken out of httpd's hands first
+/// ([`Req::take_over`]), so nothing of the body is read on the httpd task.
+/// A queue that stays full for [`QUEUE_WAIT`] is a `503` with
+/// `Retry-After: 1`, as for a download.
+pub fn receive<F>(req: &mut Req, work: F) -> Result<()>
+where
+    F: FnOnce(&mut Upload) -> Result<()> + Send + 'static,
+{
+    let up = req.take_over()?;
+    let queue = match QUEUE.get() {
+        Some(q) if STARTED.load(Ordering::Acquire) => q,
+        // No task: on the httpd task, as before (the connection is still
+        // ours, and still has its timeouts).
+        _ => {
+            run_upload(up, Box::new(work));
+            return Ok(());
+        }
+    };
+    let deadline = Instant::now() + QUEUE_WAIT;
+    let mut job = Some(Job::Upload {
+        up,
+        work: Box::new(work),
+    });
+    loop {
+        {
+            let mut jobs = queue.jobs.lock().unwrap_or_else(|p| p.into_inner());
+            if jobs.len() < QUEUE_DEPTH {
+                jobs.extend(job.take());
+                queue.ready.notify_one();
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            let Some(Job::Upload {
+                up: mut refused, ..
+            }) = job.take()
+            else {
+                return Ok(());
+            };
+            log::warn!("PUT {}: stream queue full, 503", refused.path());
+            refused.header("Retry-After", "1");
+            let _ = refused.error(
+                503,
+                "503 Service Unavailable",
+                "busy with other transfers; retry shortly",
+            );
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// One upload, start to finish: `work` reads the body and answers; an abort
+/// (already logged) is answered with its status if one can still be sent,
+/// any other failure with a 500 if nothing was sent yet. Dropping `up` ends
+/// the connection.
+fn run_upload(mut up: Upload, work: UploadWork) {
+    up.start_clock();
+    // As for a download: a transfer starts only with room to finish. The
+    // chunk buffer is taken fallibly as well (`files::stream_body_to`).
+    let free = free_heap();
+    if free < config::STREAM_START_HEAP {
+        log::warn!(
+            "refusing {} {}: {free} B free, a transfer needs {} B to start",
+            up.method(),
+            up.path(),
+            config::STREAM_START_HEAP
+        );
+        up.header("Retry-After", "2");
+        let _ = up.error(
+            503,
+            "503 Service Unavailable",
+            "the player needs the heap right now; retry shortly",
+        );
+        return;
+    }
+    if let Err(e) = work(&mut up) {
+        if let Some(aborted) = e.downcast_ref::<UploadAborted>() {
+            if let Some((code, status)) = aborted.status {
+                let why = if code == 503 {
+                    "the player needs the heap right now; retry shortly".to_string()
+                } else {
+                    format!(
+                        "upload aborted at {} of {} B",
+                        up.received(),
+                        up.content_len()
+                    )
+                };
+                let _ = up.error(code, status, &why);
+            }
+        } else if !e.is::<httpd::SendFailed>() {
+            log::warn!("{} {}: {e:#}", up.method(), up.path());
+            if !up.responded() {
+                let _ = up.error(500, "500 Internal Server Error", &format!("{e:#}"));
+            }
+        }
+    } else if !up.responded() {
+        let _ = up.error(500, "500 Internal Server Error", "no response");
+    }
+}
+
 fn run(queue: &'static Queue) {
     loop {
-        let Job { req, work } = {
+        let job = {
             let mut jobs = queue.jobs.lock().unwrap_or_else(|p| p.into_inner());
             loop {
                 if let Some(job) = jobs.pop_front() {
@@ -186,9 +312,12 @@ fn run(queue: &'static Queue) {
             }
         };
         {
-            // The cache builder stops while a file goes out.
+            // The cache builder stops while a file goes out or comes in.
             let _busy = crate::cache_builder::busy();
-            httpd::run_detached(req, work);
+            match job {
+                Job::Download { req, work } => httpd::run_detached(req, work),
+                Job::Upload { up, work } => run_upload(up, work),
+            }
         }
         // The FAT lock and the SPI bus are shared with the player: a turn for
         // everyone between files as well as between chunks.

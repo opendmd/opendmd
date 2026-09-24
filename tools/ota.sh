@@ -7,7 +7,7 @@
 # body as-is), prints the JSON reply, then polls /api/status until the board
 # answers with an uptime that started after the upload and the version the
 # image carries. The expected version is the first word of the image's
-# esp_app_desc_t.version at offset 0x30 ("0.2.0 4mb" for `make fw-release`),
+# esp_app_desc_t.version at offset 0x30 ("0.3.0 4mb" for `make fw-release`),
 # so rolling back to an older image waits for the older version.
 #
 # Env: OTA_TIMEOUT (seconds, default 120), OTA_DRY_RUN=1 (print, don't run).
