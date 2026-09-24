@@ -28,8 +28,9 @@
 
 use anyhow::{bail, Result};
 use esp_idf_sys as sys;
+use std::cell::Cell;
 use std::ffi::{c_void, CStr, CString};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// `SO_SNDTIMEO` on every client socket, in seconds: how long one `send` may
@@ -61,6 +62,17 @@ impl std::error::Error for SendFailed {}
 /// Was this error already logged where it happened?
 fn already_logged(e: &anyhow::Error) -> bool {
     e.is::<SendFailed>()
+}
+
+/// Responses this device cut short after their headers went out — a send
+/// that timed out, a card read that failed, the heap that did not come back
+/// ([`crate::files`]'s wait) — since boot. A client that went away is not
+/// counted. Every one is logged by [`Req::log_cut`].
+static STREAMS_ABORTED: AtomicU32 = AtomicU32::new(0);
+
+/// [`STREAMS_ABORTED`], for `/api/status` and the heartbeat.
+pub fn streams_aborted() -> u32 {
+    STREAMS_ABORTED.load(Ordering::Relaxed)
 }
 
 /// A boxed handler. `Sync` is not strictly required (one task) but it is free.
@@ -206,15 +218,19 @@ unsafe extern "C" fn trampoline(raw: *mut sys::httpd_req_t) -> sys::esp_err_t {
     match result {
         Ok(()) => {
             // A handler that streamed chunks must terminate the response; do
-            // it for them if they forgot, or the socket hangs.
-            if req.chunked && !req.finished {
-                let _ = req.finish();
+            // it for them if they forgot, or the socket hangs. A sized body
+            // that came up short is cut: the client must not wait for the rest.
+            if let Err(e) = req.complete() {
+                if !already_logged(&e) {
+                    req.log_failure(&e);
+                }
+                return sys::ESP_FAIL;
             }
             sys::ESP_OK
         }
         Err(e) => {
             if !already_logged(&e) {
-                log::warn!("{} {}: {e:#}", req.method_name(), req.uri());
+                req.log_failure(&e);
             }
             if req.responded {
                 // Half a response has already gone out; the only honest thing
@@ -267,6 +283,13 @@ pub struct Req {
     finished: bool,
     /// Body bytes sent so far (chunks only), for the log line when a send fails.
     sent: u64,
+    /// The declared `Content-Length` of a sized response ([`Req::begin_sized`]).
+    total: Option<u64>,
+    /// `Field: value\r\n` for every [`Req::header`], for a sized response,
+    /// whose head is written here rather than by httpd.
+    extra_headers: String,
+    /// The client closed its end: a failed send is its doing, not a fault.
+    client_gone: Cell<bool>,
     /// Set when this is a detached request running on another task: every
     /// send goes through the session's lock (see [`Session`]).
     session: Option<Arc<Session>>,
@@ -281,6 +304,9 @@ impl Req {
             chunked: false,
             finished: false,
             sent: 0,
+            total: None,
+            extra_headers: String::new(),
+            client_gone: Cell::new(false),
             session: None,
         }
     }
@@ -403,6 +429,10 @@ impl Req {
         if err != sys::ESP_OK {
             bail!("set_hdr: {err}");
         }
+        self.extra_headers.push_str(field);
+        self.extra_headers.push_str(": ");
+        self.extra_headers.push_str(value);
+        self.extra_headers.push_str("\r\n");
         Ok(())
     }
 
@@ -467,6 +497,40 @@ impl Req {
         Ok(())
     }
 
+    /// Begin a response whose body is exactly `len` bytes, with a
+    /// `Content-Length` — what a file download is, so a client can tell a
+    /// body that ended early (curl: "transfer closed with N bytes remaining")
+    /// and a browser can show progress. httpd has no streaming call for a
+    /// sized body (`httpd_resp_send` wants it all in one buffer), so the head
+    /// is written here, in the shape httpd writes its own, with the headers
+    /// set by [`Req::header`]; the body then goes out with [`Req::chunk`].
+    /// Fewer than `len` bytes by the time the handler returns cuts the
+    /// connection (see [`Req::complete`]).
+    pub fn begin_sized(&mut self, status: &str, content_type: &str, len: u64) -> Result<()> {
+        let head = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {len}\r\n{}\r\n",
+            self.extra_headers
+        );
+        self.responded = true;
+        self.total = Some(len);
+        self.send_all(head.as_bytes(), "send(head)")
+    }
+
+    /// Write `buf` to the socket, all of it, through the session guard.
+    fn send_all(&mut self, mut buf: &[u8], what: &str) -> Result<()> {
+        let raw = self.raw;
+        while !buf.is_empty() {
+            // SAFETY: `buf` is a live slice, written out synchronously.
+            let n = self
+                .guarded(|| unsafe { sys::httpd_send(raw, buf.as_ptr() as *const _, buf.len()) })?;
+            if n <= 0 {
+                return Err(self.send_failed(what, n));
+            }
+            buf = &buf[(n as usize).min(buf.len())..];
+        }
+        Ok(())
+    }
+
     /// Send one chunk. Empty chunks are skipped — an empty
     /// `httpd_resp_send_chunk` is what *terminates* the response.
     ///
@@ -484,6 +548,16 @@ impl Req {
         if buf.is_empty() {
             return Ok(());
         }
+        if let Some(total) = self.total {
+            // A sized body: raw bytes, never past what was declared.
+            let room = total.saturating_sub(self.sent) as usize;
+            if buf.len() > room {
+                bail!("body is longer than the {total} B declared");
+            }
+            self.send_all(buf, "send")?;
+            self.sent += buf.len() as u64;
+            return Ok(());
+        }
         let raw = self.raw;
         // SAFETY: `buf` is a live slice, written out synchronously.
         let err = self.guarded(|| unsafe {
@@ -498,7 +572,7 @@ impl Req {
 
     /// Terminate a chunked response.
     pub fn finish(&mut self) -> Result<()> {
-        if self.finished {
+        if self.finished || self.total.is_some() {
             return Ok(());
         }
         self.finished = true;
@@ -512,25 +586,78 @@ impl Req {
         Ok(())
     }
 
+    /// End the response properly once the handler is done with it: the
+    /// closing chunk of a chunked one; for a sized one, nothing — unless the
+    /// body came up short, which is an error (the connection must be cut, or
+    /// the client waits for bytes that are not coming).
+    fn complete(&mut self) -> Result<()> {
+        if self.chunked && !self.finished {
+            return self.finish();
+        }
+        if let Some(total) = self.total {
+            if self.sent < total {
+                bail!("the handler stopped at {} of {total} B", self.sent);
+            }
+        }
+        Ok(())
+    }
+
+    /// Log a handler's error: a response cut short ([`Req::log_cut`]) if
+    /// anything went out, else one line naming the request.
+    fn log_failure(&self, e: &anyhow::Error) {
+        if self.streaming() {
+            self.log_cut(&format!("{e:#}"));
+        } else {
+            log::warn!("{} {}: {e:#}", self.method_name(), self.uri());
+        }
+    }
+
+    /// A streamed body (chunked or sized) has begun: a failure from here on
+    /// leaves the client with part of it.
+    fn streaming(&self) -> bool {
+        self.chunked || self.total.is_some()
+    }
+
+    /// The one line for a response this device cut short, and the count of
+    /// them: the path, how far it got, and the heap at that moment — so a
+    /// client that received fewer bytes than declared can always be matched
+    /// to a reason.
+    fn log_cut(&self, why: &str) {
+        STREAMS_ABORTED.fetch_add(1, Ordering::Relaxed);
+        let total = self
+            .total
+            .map_or_else(|| "?".to_string(), |t| t.to_string());
+        log::warn!(
+            "{} {}: response cut short at {} of {total} B ({} B free): {why}",
+            self.method_name(),
+            self.path(),
+            self.sent,
+            crate::state::free_heap()
+        );
+    }
+
     /// Log a failed send once and turn it into [`SendFailed`].
-    fn send_failed(&self, what: &str, err: sys::esp_err_t) -> anyhow::Error {
-        let gone = self
-            .session
-            .as_ref()
-            .is_some_and(|s| s.closing.load(Ordering::Acquire));
+    fn send_failed(&self, what: &str, err: i32) -> anyhow::Error {
+        let gone = self.client_gone.get()
+            || self
+                .session
+                .as_ref()
+                .is_some_and(|s| s.closing.load(Ordering::Acquire));
         if gone {
+            self.client_gone.set(true);
             log::info!(
                 "{} {}: client went away after {} B",
                 self.method_name(),
                 self.path(),
                 self.sent
             );
+        } else if self.streaming() {
+            self.log_cut(&format!("{what} failed ({err}); dropping the connection"));
         } else {
             log::warn!(
-                "{} {}: {what} failed ({err}) after {} B; dropping the connection",
+                "{} {}: {what} failed ({err}); dropping the connection",
                 self.method_name(),
                 self.path(),
-                self.sent
             );
         }
         SendFailed.into()
@@ -545,6 +672,7 @@ impl Req {
         };
         let gone = session.gone.lock().unwrap_or_else(|p| p.into_inner());
         if *gone {
+            self.client_gone.set(true);
             log::info!(
                 "{} {}: client went away after {} B",
                 self.method_name(),
@@ -706,10 +834,18 @@ where
     let mut req = Req::new(raw);
     req.session = Some(session.clone());
     let abort = match handler(&mut req) {
-        Ok(()) => req.chunked && !req.finished && req.finish().is_err(),
+        Ok(()) => match req.complete() {
+            Ok(()) => false,
+            Err(e) => {
+                if !already_logged(&e) {
+                    req.log_failure(&e);
+                }
+                true
+            }
+        },
         Err(e) => {
             if !already_logged(&e) {
-                log::warn!("{} {}: {e:#}", req.method_name(), req.uri());
+                req.log_failure(&e);
             }
             // Half a response out: drop the connection. Nothing out: a 500,
             // and drop it only if even that fails.

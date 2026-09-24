@@ -93,6 +93,12 @@ pub struct Status {
     pub gifs_started: u64,
     pub sd_mounted: bool,
     pub sd_capacity_bytes: u64,
+    /// Why the card is not mounted (the last attempt's error), while it is not.
+    pub sd_error: Option<String>,
+    /// Mount attempts so far (1 on a normal boot).
+    pub sd_attempts: u32,
+    /// Why the chip last reset (`esp_reset_reason`), e.g. `panic`, `poweron`.
+    pub reset_reason: &'static str,
     /// The playlist's resolved overrides (`.meta`), and how many of them hide
     /// an entry.
     pub overrides: usize,
@@ -144,6 +150,9 @@ impl Status {
             gifs_started: 0,
             sd_mounted: false,
             sd_capacity_bytes: 0,
+            sd_error: None,
+            sd_attempts: 0,
+            reset_reason: "unknown",
             overrides: 0,
             hidden: 0,
             mode: "normal",

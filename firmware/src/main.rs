@@ -77,7 +77,7 @@ use std::time::{Duration, Instant};
 use crate::http::{Ctx, NetCommand};
 use crate::nvs_config::{Config, Settings};
 use crate::panel::{Panel, PanelConfig};
-use crate::sd::{SdBus, SdSource};
+use crate::sd::{SdBus, SdCard, SdSource};
 use crate::state::{
     free_heap, largest_free_block, Applied, Command, IndexSource, PlayError, Status,
 };
@@ -166,30 +166,37 @@ fn main() -> Result<()> {
     let mosi = expect_pin(AnyOutputPin::from(pins.gpio23), config::SD_MOSI, "SD MOSI");
     let miso = expect_pin(AnyIOPin::from(pins.gpio19), config::SD_MISO, "SD MISO");
     let cs = expect_pin(AnyOutputPin::from(pins.gpio5), config::SD_CS, "SD CS");
-    let mut bus = SdBus::new(peripherals.spi2, sck, mosi, miso, cs)?;
+    let mut bus = SdBus::new(peripherals.spi2, sck, mosi, miso, cs);
+    let reset_reason = reset_reason();
+    log::info!("reset reason: {reset_reason}");
 
-    // A missing or unreadable card must not crash-loop the panel: log, wait,
-    // try again, forever. `_card` unmounts on drop, so it lives to the end.
-    let _card = loop {
-        match bus.mount() {
-            Ok(card) => {
-                log::info!(
-                    "microSD mounted at {} ({:.2} GB), heap {} B free",
-                    config::SD_MOUNT,
-                    card.capacity_bytes as f64 / 1e9,
-                    free_heap()
-                );
-                break card;
+    // A missing or unreadable card must neither crash-loop the panel nor
+    // leave the device unreachable: a couple of attempts here, then the rest
+    // of the boot — WiFi and the web server included — goes ahead without
+    // it, and the main loop keeps trying (`try_mount`). `card` unmounts on
+    // drop, so it lives to the end.
+    let mut sd_error = None;
+    let mut card: Option<SdCard> = None;
+    for attempt in 1..=config::SD_BOOT_ATTEMPTS {
+        match try_mount(&mut bus) {
+            Ok(c) => {
+                card = Some(c);
+                break;
             }
             Err(e) => {
-                log::warn!(
-                    "microSD mount failed ({e:#}); retrying in {}s",
-                    config::RETRY_INTERVAL.as_secs()
-                );
-                thread::sleep(config::RETRY_INTERVAL);
+                sd_error = Some(e);
+                if attempt < config::SD_BOOT_ATTEMPTS {
+                    thread::sleep(Duration::from_secs(1));
+                }
             }
         }
-    };
+    }
+    if card.is_none() {
+        log::warn!(
+            "microSD: no card yet; starting the network and the web server anyway, and retrying every {} s",
+            config::RETRY_INTERVAL.as_secs()
+        );
+    }
 
     // --- Settings ---------------------------------------------------------
     let mut nvs_config = Config::new(nvs_partition.clone())?;
@@ -201,20 +208,9 @@ fn main() -> Result<()> {
     // or saved by a firmware that did not check) would leave the board with no
     // playlist, retrying forever across reboots. Forget it and play the
     // default instead.
-    heal_missing_set(&mut settings, &mut nvs_config);
-    // Prepared copies are found per GIF now; a playlist of `/odm/...` paths
-    // from before that is dead weight. Say so once, and never play it.
-    if File::open(format!(
-        "{}/{}",
-        config::SD_MOUNT,
-        config::OBSOLETE_ODM_MANIFEST
-    ))
-    .is_ok()
-    {
-        log::warn!(
-            "ignoring /{}: prepared copies are found automatically from /filelist.txt; it can be deleted",
-            config::OBSOLETE_ODM_MANIFEST
-        );
+    // (Only with a card: without one every set "does not open".)
+    if card.is_some() {
+        card_mounted_checks(&mut settings, &mut nvs_config);
     }
     panel.set_brightness(settings.brightness);
     clock::set_timezone(&settings.tz, &settings.tz_name);
@@ -281,8 +277,11 @@ fn main() -> Result<()> {
     )));
     {
         let mut s = status.lock().unwrap();
-        s.sd_mounted = true;
-        s.sd_capacity_bytes = _card.capacity_bytes;
+        s.sd_mounted = card.is_some();
+        s.sd_capacity_bytes = card.as_ref().map_or(0, |c| c.capacity_bytes);
+        s.sd_error = sd_error.take();
+        s.sd_attempts = bus.attempts();
+        s.reset_reason = reset_reason;
         s.www_version = files::read_www_version();
         s.refresh_hz = panel.refresh_rate();
         s.tz_name = tz_label(&settings);
@@ -299,13 +298,16 @@ fn main() -> Result<()> {
     // fresh heap to work with. If the card has no readable manifest the loop
     // below keeps retrying.
     let mut engine: Option<Engine> = None;
-    let _ = rebuild(
-        &mut engine,
-        &sched.effective(&settings),
-        false,
-        &status,
-        &mut canvas,
-    );
+    if card.is_some() {
+        let _ = rebuild(
+            &mut engine,
+            &sched.effective(&settings),
+            false,
+            &status,
+            &mut canvas,
+        );
+    }
+    let mut last_mount_try = Instant::now();
 
     // The HTTP server next, still before the first GIF is decoded: its task
     // stack and the file-streaming task's are contiguous internal allocations
@@ -366,6 +368,18 @@ fn main() -> Result<()> {
                     let paused = match engine.as_mut() {
                         Some(e) => {
                             e.toggle_pause(now);
+                            if e.is_paused() {
+                                // Let the file go — its decoder is a GIF's
+                                // ~54 KB, which the cache builder (full
+                                // speed while paused) and any download want
+                                // more than a frozen frame does. The panel
+                                // keeps showing it: the DMA buffer holds the
+                                // frame, and the canvas too, so resuming
+                                // opens the *next* file with the configured
+                                // transition from it rather than carrying on
+                                // with this one.
+                                e.drop_current(&mut canvas);
+                            }
                             e.is_paused()
                         }
                         None => false,
@@ -747,6 +761,37 @@ fn main() -> Result<()> {
                 cache_builder::Pace::Stop(cache_builder::Reason::NoPlaylist),
                 settings.auto_prepare,
             );
+            // No card yet: try again every so often, draining commands (and
+            // so answering the API) in between.
+            if card.is_none() {
+                if last_mount_try.elapsed() >= config::RETRY_INTERVAL {
+                    last_mount_try = Instant::now();
+                    let mounted = try_mount(&mut bus);
+                    let mut s = status.lock().unwrap();
+                    s.sd_attempts = bus.attempts();
+                    match mounted {
+                        Ok(c) => {
+                            s.sd_mounted = true;
+                            s.sd_capacity_bytes = c.capacity_bytes;
+                            s.sd_error = None;
+                            s.www_version = files::read_www_version();
+                            drop(s);
+                            card = Some(c);
+                            card_mounted_checks(&mut settings, &mut nvs_config);
+                            *shared_settings.lock().unwrap() = settings.clone();
+                        }
+                        Err(e) => s.sd_error = Some(e),
+                    }
+                }
+                if card.is_none() {
+                    if let Ok(mut s) = status.lock() {
+                        s.uptime_secs = epoch.elapsed().as_secs();
+                        s.heap_free = free_heap();
+                    }
+                    thread::sleep(config::IDLE_SLEEP.max(Duration::from_millis(50)));
+                    continue;
+                }
+            }
             let eff = sched.effective(&settings);
             if replay(
                 &mut engine,
@@ -1803,6 +1848,66 @@ fn retire(engine: &mut Option<Engine>, canvas: &mut Canvas) {
 /// Called at boot and whenever the main loop has no engine. `""` (the default)
 /// is never "missing" here: if the card has no `filelist.txt` either, the loop
 /// keeps retrying exactly as it does for a card with nothing on it.
+/// One mount attempt, logged: the card, or the error as status shows it.
+fn try_mount(bus: &mut SdBus) -> std::result::Result<SdCard, String> {
+    match bus.mount() {
+        Ok(card) => {
+            log::info!(
+                "microSD mounted at {} ({:.2} GB) on attempt {}, heap {} B free",
+                config::SD_MOUNT,
+                card.capacity_bytes as f64 / 1e9,
+                bus.attempts(),
+                free_heap()
+            );
+            Ok(card)
+        }
+        Err(e) => {
+            log::warn!("microSD mount attempt {} failed ({e:#})", bus.attempts());
+            Err(format!("{e:#}"))
+        }
+    }
+}
+
+/// What the boot checks on the card once it is mounted: a saved playlist
+/// that no longer opens is forgotten, and an obsolete one is pointed out.
+fn card_mounted_checks(settings: &mut Settings, nvs: &mut Config) {
+    heal_missing_set(settings, nvs);
+    // Prepared copies are found per GIF now; a playlist of `/odm/...` paths
+    // from before that is dead weight. Say so once, and never play it.
+    if File::open(format!(
+        "{}/{}",
+        config::SD_MOUNT,
+        config::OBSOLETE_ODM_MANIFEST
+    ))
+    .is_ok()
+    {
+        log::warn!(
+            "ignoring /{}: prepared copies are found automatically from /filelist.txt; it can be deleted",
+            config::OBSOLETE_ODM_MANIFEST
+        );
+    }
+}
+
+/// `esp_reset_reason`, as a word.
+fn reset_reason() -> &'static str {
+    use esp_idf_sys as sys;
+    // SAFETY: an argument-free query of the reset cause.
+    #[allow(non_upper_case_globals)]
+    match unsafe { sys::esp_reset_reason() } {
+        sys::esp_reset_reason_t_ESP_RST_POWERON => "poweron",
+        sys::esp_reset_reason_t_ESP_RST_EXT => "external",
+        sys::esp_reset_reason_t_ESP_RST_SW => "software",
+        sys::esp_reset_reason_t_ESP_RST_PANIC => "panic",
+        sys::esp_reset_reason_t_ESP_RST_INT_WDT => "interrupt watchdog",
+        sys::esp_reset_reason_t_ESP_RST_TASK_WDT => "task watchdog",
+        sys::esp_reset_reason_t_ESP_RST_WDT => "watchdog",
+        sys::esp_reset_reason_t_ESP_RST_DEEPSLEEP => "deep sleep",
+        sys::esp_reset_reason_t_ESP_RST_BROWNOUT => "brownout",
+        sys::esp_reset_reason_t_ESP_RST_SDIO => "sdio",
+        _ => "unknown",
+    }
+}
+
 fn heal_missing_set(settings: &mut Settings, nvs: &mut Config) -> bool {
     if settings.set.is_empty() {
         return false;
@@ -1835,6 +1940,7 @@ fn heal_missing_set(settings: &mut Settings, nvs: &mut Config) -> bool {
 /// `.idx` file. The reply has already been queued; the sleep is for the
 /// handler on the other core, which is still writing it.
 fn reboot_to_apply() -> ! {
+    cache_builder::quiesce(Duration::from_secs(3));
     thread::sleep(Duration::from_secs(2));
     // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.
     unsafe { esp_idf_sys::esp_restart() }
@@ -1862,8 +1968,9 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms), \
-         transitions cut {}, wifi {wifi} {ip}, {schedule}{}{}{}",
+         transitions cut {}, streams aborted {}, wifi {wifi} {ip}, {schedule}{}{}{}",
         TRANSITIONS_CUT.load(Ordering::Relaxed),
+        httpd::streams_aborted(),
         sd::period_summary(),
         cache_builder::heartbeat(entries, cache::peek()),
         probe::period_summary()

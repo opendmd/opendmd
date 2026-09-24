@@ -14,7 +14,7 @@ use esp_idf_hal::peripheral::Peripheral;
 use esp_idf_hal::sd::spi::SdSpiHostDriver;
 use esp_idf_hal::sd::{SdCardConfiguration, SdCardDriver};
 use esp_idf_hal::spi::config::DriverConfig;
-use esp_idf_hal::spi::{Dma, SpiAnyPins, SpiDriver};
+use esp_idf_hal::spi::{Dma, SpiDriver, SPI2};
 use esp_idf_svc::fs::fatfs::Fatfs;
 use esp_idf_svc::io::vfs::MountedFatfs;
 use opendmd_core::engine::{ReadSeek, Source};
@@ -26,18 +26,29 @@ use std::time::Instant;
 
 use crate::config;
 
-type Host = SdSpiHostDriver<'static, &'static SpiDriver<'static>>;
+type Host = SdSpiHostDriver<'static, SpiDriver<'static>>;
 type Card = SdCardDriver<Host>;
 
-/// The SPI bus, owned for the life of the program.
+/// The SD socket's SPI peripheral and pins, owned for the life of the
+/// program; every mount attempt builds the whole stack on them afresh.
 ///
-/// The bus is set up exactly once (the SPI peripheral can only be taken once),
-/// but mounting is retried forever, so the driver is leaked to `'static` and
-/// each attempt borrows it. That is what lets the firmware sit and wait for a
-/// card to be inserted instead of crash-looping.
+/// **Each attempt is a full re-initialisation**: the SPI bus
+/// (`spi_bus_initialize`), the SD SPI host and device, and the card's init
+/// sequence (CMD0 onwards) — and a failed attempt tears all three down again
+/// (`sdspi_host_remove_device`, `sdspi_host_deinit`, `spi_bus_free`, in the
+/// drivers' drops). A card left mid-transfer by a reset (a crash, a flash, a
+/// reboot while the cache builder was writing) can answer CMD0 with a
+/// timeout for a while — seen on the rig: `ESP_ERR_TIMEOUT` twice, then a
+/// mount 10 s later — and a retry must not inherit a bus in whatever state
+/// the failed attempt left it. Attempts after the first also give each
+/// command longer ([`config::SD_RETRY_CMD_TIMEOUT_MS`]).
 pub struct SdBus {
-    spi: &'static SpiDriver<'static>,
+    spi: SPI2,
+    sck: AnyOutputPin,
+    mosi: AnyOutputPin,
+    miso: AnyIOPin,
     cs: AnyOutputPin,
+    attempts: u32,
 }
 
 /// A mounted card. Dropping it unmounts, so keep it alive for the whole run.
@@ -48,28 +59,26 @@ pub struct SdCard {
 }
 
 impl SdBus {
-    pub fn new<SPI: SpiAnyPins>(
-        spi: impl Peripheral<P = SPI> + 'static,
+    pub fn new(
+        spi: SPI2,
         sck: AnyOutputPin,
         mosi: AnyOutputPin,
         miso: AnyIOPin,
         cs: AnyOutputPin,
-    ) -> Result<SdBus> {
-        let driver = SpiDriver::new(
+    ) -> SdBus {
+        SdBus {
             spi,
             sck,
             mosi,
-            Some(miso),
-            &DriverConfig::default().dma(Dma::Auto(4096)),
-        )
-        .context("SPI bus init failed")?;
-
-        Ok(SdBus {
-            // Leaked on purpose: the bus lives as long as the firmware does,
-            // and `'static` keeps the retry loop free of lifetime gymnastics.
-            spi: Box::leak(Box::new(driver)),
+            miso,
             cs,
-        })
+            attempts: 0,
+        }
+    }
+
+    /// Mount attempts made so far (the one in progress included).
+    pub fn attempts(&self) -> u32 {
+        self.attempts
     }
 
     /// One mount attempt. Fails (rather than formatting) when no card is
@@ -78,12 +87,34 @@ impl SdBus {
     /// brief asks for: a card that won't mount is a card to look at, not one
     /// to erase.
     pub fn mount(&mut self) -> Result<SdCard> {
+        self.attempts += 1;
+        if take_simulated_failure() {
+            anyhow::bail!("simulated failure (POST /api/reboot?sd_fail=N)");
+        }
+        // SAFETY: the peripheral and the pins are this struct's alone, and
+        // the drivers built on them here are either kept (inside the
+        // returned `SdCard`, after which `mount` is never called again) or
+        // dropped before this returns — never two at once.
+        let (spi, sck, mosi, miso, cs) = unsafe {
+            (
+                self.spi.clone_unchecked(),
+                self.sck.clone_unchecked(),
+                self.mosi.clone_unchecked(),
+                self.miso.clone_unchecked(),
+                self.cs.clone_unchecked(),
+            )
+        };
+        let driver = SpiDriver::new(
+            spi,
+            sck,
+            mosi,
+            Some(miso),
+            &DriverConfig::default().dma(Dma::Auto(4096)),
+        )
+        .context("SPI bus init failed")?;
         let host = SdSpiHostDriver::new(
-            self.spi,
-            // SAFETY: only the GPIO number is read out of the CS pin, and this
-            // is the only place in the firmware that touches it. Re-handing it
-            // to each retry cannot conflict with anything else.
-            Some(unsafe { self.cs.clone_unchecked() }),
+            driver,
+            Some(cs),
             AnyInputPin::none(),
             AnyInputPin::none(),
             AnyInputPin::none(),
@@ -93,6 +124,9 @@ impl SdBus {
 
         let mut cfg = SdCardConfiguration::new();
         cfg.speed_khz = config::SD_SPEED_KHZ;
+        if self.attempts > 1 {
+            cfg.command_timeout_ms = config::SD_RETRY_CMD_TIMEOUT_MS;
+        }
 
         let card = SdCardDriver::new_spi(host, &cfg).context("no card, or card init failed")?;
 
@@ -107,6 +141,38 @@ impl SdBus {
             _fs: mounted,
             capacity_bytes,
         })
+    }
+}
+
+/// Test hook: mount attempts to fail on purpose after the next restart, so
+/// the no-card boot (network up, mount retried) can be exercised without
+/// pulling the card. Kept in RTC slow memory, which a software restart
+/// leaves alone and a power-on fills with garbage — hence the magic word.
+#[link_section = ".rtc_noinit"]
+static mut SIM_FAIL: [u32; 2] = [0; 2];
+const SIM_MAGIC: u32 = 0x5d_fa_11_ed;
+
+/// Arm [`SIM_FAIL`]: the next boot's first `n` mount attempts fail.
+pub fn simulate_mount_failures(n: u32) {
+    // SAFETY: written once, from the httpd task, just before a restart;
+    // read only by the main task during boot.
+    unsafe {
+        let p = &raw mut SIM_FAIL;
+        (*p)[0] = SIM_MAGIC;
+        (*p)[1] = n;
+    }
+}
+
+fn take_simulated_failure() -> bool {
+    // SAFETY: the main task is the only one mounting, see above.
+    unsafe {
+        let p = &raw mut SIM_FAIL;
+        if (*p)[0] != SIM_MAGIC || (*p)[1] == 0 {
+            (*p)[0] = 0;
+            return false;
+        }
+        (*p)[1] -= 1;
+        true
     }
 }
 

@@ -1918,6 +1918,39 @@ mod tests {
         assert_eq!(next_frame_at, ms(1500));
     }
 
+    /// The firmware's pause: paused, then the file let go of (its decoder's
+    /// heap lent out). Resuming opens the next entry, transitioning from the
+    /// frame the canvas still holds — the paused file does not carry on.
+    #[test]
+    fn a_pause_that_drops_the_file_resumes_into_the_next_with_a_transition() {
+        use crate::compositor::Kind;
+        const RED: Rgb = Rgb::new(255, 0, 0);
+        let ms = Duration::from_millis;
+        let mut e = two_solids(Transition::new(Kind::Dissolve, ms(200)));
+        let mut canvas = Canvas::new();
+        e.tick(ms(0), &mut canvas).unwrap();
+        assert_eq!(e.now_playing().unwrap().title, "A");
+        e.pause(ms(10));
+        e.drop_current(&mut canvas);
+        assert!(e.now_playing().is_none());
+        assert_eq!(e.tick(ms(5_000), &mut canvas).unwrap(), TickOutcome::Idle);
+        // The canvas (and so the panel) still shows A's frame.
+        assert!(canvas.as_slice().iter().all(|p| *p == RED));
+        e.resume(ms(60_000));
+        let TickOutcome::Frame {
+            playing,
+            started,
+            transitioning,
+            ..
+        } = e.tick(ms(60_000), &mut canvas).unwrap()
+        else {
+            panic!("B");
+        };
+        assert_eq!(playing.title, "B");
+        assert!(started && transitioning && e.is_transitioning());
+        assert_eq!(e.display(&canvas).get(0, 0), RED, "from A's frame");
+    }
+
     #[test]
     fn carry_over_skip_mid_transition_pause_and_none() {
         use crate::compositor::Kind;
