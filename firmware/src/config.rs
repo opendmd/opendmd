@@ -81,6 +81,13 @@ pub const SD_MOUNT: &str = "/sdcard";
 pub const SD_MAX_FILES: usize = 8;
 /// Conservative: the carrier's SD wiring is long and unshielded.
 pub const SD_SPEED_KHZ: u32 = 20_000;
+/// Per-command timeout for every mount attempt after the first (the IDF
+/// default, used by the first, is 1 s): a card still finishing what a reset
+/// interrupted may take longer to come out of busy. See `sd::SdBus`.
+pub const SD_RETRY_CMD_TIMEOUT_MS: u32 = 3_000;
+/// Mount attempts at boot before the network and the web server are started
+/// anyway; the main loop keeps trying every [`RETRY_INTERVAL`] after that.
+pub const SD_BOOT_ATTEMPTS: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Playlist
@@ -250,9 +257,19 @@ pub const IN_RAM_INDEX_MIN_BLOCK: usize = 64 * 1024;
 /// cliff rather than raised: it is the backstop for when something else takes
 /// that headroom.
 pub const HEAP_RESERVE: u32 = 5 * 1024;
-/// How long a stalled transfer will wait for the heap to recover before it
-/// gives up and fails the request.
-pub const HEAP_WAIT: Duration = Duration::from_secs(20);
+/// How long a transfer already under way waits between chunks for the heap
+/// to climb back over [`HEAP_RESERVE`] before it gives up. Giving up cuts the
+/// response short — the client sees fewer bytes than the `Content-Length`, or
+/// a chunked body with no end — so it is always logged, with the path, the
+/// bytes sent of the total and the free heap, and counted
+/// (`streams_aborted` in `/api/status` and the heartbeat).
+pub const HEAP_WAIT: Duration = Duration::from_secs(10);
+/// Free heap a response must find before its first byte goes out: the
+/// reserve plus 8 KB, the lwip buffers of one transfer in flight with room
+/// to spare. Below it the request is answered `503` + `Retry-After: 2`
+/// before any body, rather than started and then abandoned half way — a
+/// refusal a client can retry, where a truncated body is a corrupt file.
+pub const STREAM_START_HEAP: u32 = HEAP_RESERVE + 8 * 1024;
 
 /// Concurrent HTTP connections.
 ///

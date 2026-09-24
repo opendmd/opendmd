@@ -150,9 +150,9 @@ struct WakeRequest {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route` below (38 now, the captive-portal loop counting six). Registration past
+    // URI handler slots: one per `route` below (40 now, the captive-portal loop counting six). Registration past
     // the limit fails the whole server, so count when adding a route.
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 40)?;
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 42)?;
 
     // --- The web app, and the setup page as its fallback -------------------
     // Every card file goes out from the streaming task (`stream`), so a big
@@ -359,6 +359,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // A playlist's overrides, parsed: `?set=` takes the config's `set`
     // values (`""` = all files). Streamed a line at a time from its `.meta`.
     server.route("/api/overrides", Method::Get, |req| {
+        if !files::affordable(req)? {
+            return Ok(());
+        }
         let set = query_param(req.query(), "set").unwrap_or_default();
         if !crate::nvs_config::valid_set_name(&set) {
             return req.bad_request("set must be a single path segment");
@@ -571,6 +574,21 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         crate::cache::stream_list(req)
     })?;
 
+    // The GIFs the cache builder could not prepare (`/odm/.failed`), and
+    // forgetting them so they are tried again.
+    server.route("/api/cache/failed", Method::Get, |req| {
+        if !files::affordable(req)? {
+            return Ok(());
+        }
+        crate::cache_builder::stream_failed(req)
+    })?;
+    server.route("/api/cache/failed", Method::Delete, |req| {
+        match crate::cache_builder::clear_failed() {
+            Ok(existed) => req.json(&format!(r#"{{"ok":true,"cleared":{existed}}}"#)),
+            Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
+        }
+    })?;
+
     // Remove the prepared copy of a GIF (it was replaced, or is going): its
     // bucketed `.odm`, if there is one. `{"path": "/gifs/…"}`.
     let c = ctx.clone();
@@ -662,6 +680,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     server.route("/api/reboot", Method::Post, |req| {
         info!("reboot requested over HTTP");
+        // Test hook: `?sd_fail=N` makes the next boot's first N card mounts
+        // fail, to exercise the no-card boot without touching the card.
+        if let Some(n) = query_param(req.query(), "sd_fail").and_then(|v| v.parse::<u32>().ok()) {
+            info!(
+                "the next boot's first {} card mount(s) will fail on purpose",
+                n.min(20)
+            );
+            crate::sd::simulate_mount_failures(n.min(20));
+        }
         req.json(r#"{"ok":true,"rebooting":true}"#)?;
         ota::reboot_after_response()
     })?;
@@ -761,6 +788,13 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             if let Err(e) = files::remove_index_beside(&path) {
                 return req.error(500, "500 Internal Server Error", &format!("{e:#}"));
             }
+        }
+        if files::same_card_path(&path, config::BUILDER_FAILED_PATH) {
+            return match crate::cache_builder::clear_failed() {
+                Ok(true) => req.json(r#"{"ok":true}"#),
+                Ok(false) => req.not_found(&rel),
+                Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
+            };
         }
         skip_if_playing(&c, &path);
         match std::fs::remove_file(&path) {
@@ -1060,7 +1094,9 @@ fn stream_overrides(req: &mut Req, set: &str, manifest: &str, meta: &str) -> Res
             }
             buf.push('}');
             if buf.len() >= config::IO_CHUNK {
-                sent = req.chunk(buf.as_bytes());
+                sent = req
+                    .chunk(buf.as_bytes())
+                    .and_then(|()| files::wait_for_heap());
                 buf.clear();
             }
         });
@@ -1101,8 +1137,8 @@ fn status_json(s: &Status) -> String {
             r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}}},"paused":{},"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"#,
-            r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"gifs_started":{},"#,
-            r#""sd":{{"mounted":{},"capacity_bytes":{}}},"#,
+            r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"gifs_started":{},"streams_aborted":{},"#,
+            r#""sd":{{"mounted":{},"capacity_bytes":{},"error":{},"attempts":{}}},"reset_reason":{},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
             r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{}}}"#
@@ -1133,8 +1169,12 @@ fn status_json(s: &Status) -> String {
         s.deadline_misses,
         s.worst_lateness_ms,
         s.gifs_started,
+        crate::httpd::streams_aborted(),
         s.sd_mounted,
         s.sd_capacity_bytes,
+        opt_json(s.sd_error.as_deref()),
+        s.sd_attempts,
+        json_string(s.reset_reason),
         s.overrides,
         s.hidden,
         json_string(s.mode),

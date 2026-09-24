@@ -255,7 +255,10 @@ pub fn confirm_running_image() {
 pub fn reboot_after_response() -> ! {
     // The OTA handler never returns to the wrapper that records this.
     crate::httpd::note_httpd_stack();
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    // No card write in flight at the reset (the drain wait runs meanwhile).
+    let t = std::time::Instant::now();
+    crate::cache_builder::quiesce(std::time::Duration::from_secs(3));
+    std::thread::sleep(std::time::Duration::from_secs(1).saturating_sub(t.elapsed()));
     // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.
     unsafe { sys::esp_restart() }
 }

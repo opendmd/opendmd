@@ -28,19 +28,22 @@ use crate::state::free_heap;
 
 /// Refuse to start a transfer that the player cannot afford.
 ///
-/// Returns `Ok(false)` having already sent a 503 if the heap is below
-/// [`config::HEAP_RESERVE`]. See that constant for why this exists.
+/// Returns `Ok(false)` having already sent a 503 (`Retry-After: 2`, before
+/// any body) if the heap is below [`config::STREAM_START_HEAP`] — the
+/// reserve plus one transfer's worth. Checked when a request arrives and
+/// again when the stream task starts it: a response that begins has room to
+/// finish, and one that would not is refused whole rather than cut short.
 pub fn affordable(req: &mut Req) -> Result<bool> {
     let free = free_heap();
-    if free >= config::HEAP_RESERVE {
+    if free >= config::STREAM_START_HEAP {
         return Ok(true);
     }
     log::warn!(
-        "refusing {}: {free} B free, reserve is {} B",
+        "refusing {}: {free} B free, a response needs {} B to start",
         req.path(),
-        config::HEAP_RESERVE
+        config::STREAM_START_HEAP
     );
-    req.header("Retry-After", "1")?;
+    req.header("Retry-After", "2")?;
     req.error(
         503,
         "503 Service Unavailable",
@@ -52,15 +55,18 @@ pub fn affordable(req: &mut Req) -> Result<bool> {
 /// Wait between chunks while the heap is below the player's reserve.
 ///
 /// Gives up after [`config::HEAP_WAIT`] so a wedged transfer cannot hold a
-/// socket forever.
-fn wait_for_heap() -> Result<()> {
+/// socket forever. The error cuts the response short; the request wrapper
+/// logs that with the path, the bytes sent of the total and the free heap,
+/// and counts it (`httpd::streams_aborted`). Every streamed responder calls
+/// this between chunks, and uploads between writes.
+pub fn wait_for_heap() -> Result<()> {
     let deadline = std::time::Instant::now() + config::HEAP_WAIT;
     while free_heap() < config::HEAP_RESERVE {
         if std::time::Instant::now() >= deadline {
             bail!(
-                "gave up waiting for heap ({} B free, reserve {} B)",
-                free_heap(),
-                config::HEAP_RESERVE
+                "the heap stayed under the {} B reserve for {} s",
+                config::HEAP_RESERVE,
+                config::HEAP_WAIT.as_secs()
             );
         }
         thread::sleep(Duration::from_millis(20));
@@ -146,7 +152,9 @@ pub fn cache_for(path: &str) -> &'static str {
     }
 }
 
-/// Send a file from the card, [`config::IO_CHUNK`] at a time.
+/// Send a file from the card, [`config::IO_CHUNK`] at a time, with a
+/// `Content-Length` (its size from `fstat`): a body cut short is visible to
+/// the client as such, and always logged here (see [`wait_for_heap`]).
 ///
 /// Under [`config::WWW_ROOT`] only, if `<path>.gz` exists it is sent instead
 /// with `Content-Encoding: gzip` — the content type still comes from the
@@ -182,23 +190,34 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
     };
     let open_us = probe::elapsed_us(t);
     // `fstat` on the handle: FATFS answers it from the open file object.
-    if !file.metadata().is_ok_and(|m| m.is_file()) {
+    let Some(total) = file
+        .metadata()
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+    else {
         return Ok(false);
-    }
+    };
     if probe::HTTP_LOG {
         probe::http_log("open", t_all, &format!("(open={open_us}) {actual}"));
+    }
+    // The queue may have held this a while: is there still room to start?
+    if !affordable(req)? {
+        return Ok(true);
     }
     let (mut reads, mut rd_tot, mut rd_max) = (0u32, 0u32, 0u32);
     if gzipped {
         req.header("Content-Encoding", "gzip")?;
     }
     req.header("Cache-Control", cache_for(path))?;
-    req.begin_chunked("200 OK", mime_for(path))?;
+    req.begin_sized("200 OK", mime_for(path), total)?;
 
     let mut buf = vec![0u8; config::IO_CHUNK];
-    loop {
+    let mut left = total;
+    while left > 0 {
         let t = probe::http_stamp();
-        let n = file.read(&mut buf)?;
+        let want = (left as usize).min(buf.len());
+        let n = file.read(&mut buf[..want])?;
         if probe::HTTP_LOG {
             let us = probe::elapsed_us(t);
             reads += 1;
@@ -206,16 +225,19 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
             rd_max = rd_max.max(us);
         }
         if n == 0 {
-            break;
+            bail!("the file ended early (it was {total} B when opened)");
         }
         req.chunk(&buf[..n])?;
+        left -= n as u64;
+        if left == 0 {
+            break;
+        }
         // Hand the scheduler a turn between chunks: the player is on the other
         // core but it shares the FAT lock and the SPI bus with us. And if the
         // heap has fallen into the player's reserve, stop until it recovers.
         thread::yield_now();
         wait_for_heap()?;
     }
-    req.finish()?;
     if probe::HTTP_LOG {
         probe::http_log(
             "served",

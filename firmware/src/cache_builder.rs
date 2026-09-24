@@ -90,6 +90,8 @@ pub enum Reason {
     NoPlaylist = 8,
     /// The player is opening its next file ([`player_opening`]).
     Opening = 9,
+    /// Reading the playlist off the card failed; retried after a back-off.
+    CardError = 10,
 }
 
 impl Reason {
@@ -104,6 +106,7 @@ impl Reason {
             7 => Reason::Reindex,
             8 => Reason::NoPlaylist,
             9 => Reason::Opening,
+            10 => Reason::CardError,
             _ => return None,
         })
     }
@@ -118,6 +121,7 @@ impl Reason {
             Reason::Busy => "busy",
             Reason::Transition => "transition",
             Reason::Reindex => "reindex",
+            Reason::CardError => "card error",
             Reason::NoPlaylist => "no playlist",
         }
     }
@@ -230,6 +234,36 @@ pub fn player_opening() {
     RELEASE_MAX_US.fetch_max(t.elapsed().as_micros() as u32, SeqCst);
 }
 
+/// Set by [`quiesce`]: the device is about to restart, and the builder must
+/// not start (or carry on with) a file.
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Before a restart (`POST /api/reboot`, OTA, the fresh-heap reboot): stop
+/// the builder for good and wait, up to `timeout`, for its task to be gone
+/// — which means the file in hand was either finished (synced, renamed) or
+/// abandoned (its `.tmp` removed). A reset in the middle of a card write is
+/// what can leave a card that times out at the next mount (see
+/// `sd::SdBus`). True if nothing is running any more.
+pub fn quiesce(timeout: Duration) -> bool {
+    SHUTTING_DOWN.store(true, SeqCst);
+    STOP_AT.store(now_ms(), SeqCst);
+    if !ALIVE.load(SeqCst) {
+        return true;
+    }
+    set_priority(config::BUILDER_RELEASE_PRIORITY);
+    let t = Instant::now();
+    while ALIVE.load(SeqCst) && t.elapsed() < timeout {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let gone = !ALIVE.load(SeqCst);
+    log::info!(
+        "cache builder: {} before the restart ({} ms)",
+        if gone { "stopped" } else { "still running" },
+        t.elapsed().as_millis()
+    );
+    gone
+}
+
 /// The abandon line of the last task, for the next one to print.
 static DEFERRED_LOG: Mutex<Option<String>> = Mutex::new(None);
 
@@ -272,6 +306,9 @@ impl Drop for Busy {
 
 /// Why the builder may not work right now, if it may not.
 fn blocked() -> Option<Reason> {
+    if SHUTTING_DOWN.load(SeqCst) {
+        return Some(Reason::Busy);
+    }
     if PACE.load(SeqCst) == PACE_STOP {
         return Some(Reason::from_u8(WHY.load(SeqCst)).unwrap_or(Reason::Off));
     }
@@ -500,6 +537,9 @@ static SPAWNS: AtomicU32 = AtomicU32::new(0);
 static WALK: Mutex<Option<Walk>> = Mutex::new(None);
 /// A count has been asked for (once per boot).
 static COUNTED: AtomicBool = AtomicBool::new(false);
+/// The failure file was cleared ([`clear_failed`]): the walk forgets its
+/// copy of the list at its next step.
+static FAILED_CLEARED: AtomicBool = AtomicBool::new(false);
 
 /// Free heap needed to start the task: [`config::BUILDER_MIN_HEAP`] for a
 /// file once it runs, plus its stack and ~1 KB of TCB and pthread
@@ -657,10 +697,18 @@ fn work(walk: &mut Option<Walk>) -> (State, Option<Reason>) {
             // (it runs on the network worker) the first time there is work.
             let _ = cache::snapshot();
         }
+        let cleared = FAILED_CLEARED.swap(false, SeqCst);
         let w = match walk {
             Some(w) if w.manifest == manifest && w.platforms == platforms => w,
             _ => walk.insert(Walk::new(manifest, platforms)),
         };
+        if cleared {
+            // Retried where the walk meets them next: later in this pass,
+            // or in the next one (the recount `clear_failed` asked for ends
+            // a finished pass).
+            w.failed.clear();
+            report().failed = 0;
+        }
         // 3. Done: over until the copies or the playlist change.
         if w.done_gen.is_some() {
             if w.finished() {
@@ -835,8 +883,19 @@ fn next_candidate(w: &mut Walk) -> Result<Option<(u64, u64, String, String)>, St
             Ok(0) => return Ok(None),
             Ok(n) => n as u64,
             Err(e) => {
-                log::warn!("cache builder: reading {}: {e}", w.manifest);
-                return Ok(None);
+                // Not the end of the playlist: a card read that failed (seen
+                // on the rig: ETIMEDOUT). Taking it for the end finished the
+                // pass as "done" with thousands of files left; instead the
+                // line is read again after a back-off.
+                log::warn!(
+                    "cache builder: reading {} at byte {at}: {e}; retrying after {} s",
+                    w.manifest,
+                    config::BUILDER_CARD_BACKOFF.as_secs()
+                );
+                w.offset = at;
+                set_state(State::Paused, Some(Reason::CardError));
+                thread::sleep(config::BUILDER_CARD_BACKOFF);
+                return Err(Stopped);
             }
         };
         let (line_at, next_at) = (at, at + n);
@@ -1132,7 +1191,9 @@ fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64
         Ok(stats) if failure.is_none() => out
             .file
             .set_len(stats.odm_bytes)
-            .and_then(|()| out.file.flush()),
+            // `f_sync`: the data and the FAT on the card before the rename,
+            // so a reset afterwards cannot leave a copy that is half there.
+            .and_then(|()| out.file.sync_all()),
         _ => Ok(()),
     };
     let written = out.bytes;
@@ -1181,6 +1242,64 @@ fn load_failed() -> Vec<u32> {
         }
     }
     keys
+}
+
+/// `GET /api/cache/failed`: the failure file as
+/// `[{"path":"/gifs/…","reason":"…"}]`, a line at a time (`[]` if there is
+/// none). The file holds at most [`config::BUILDER_MAX_FAILED`] paths that
+/// count, but is streamed whatever its length.
+pub fn stream_failed(req: &mut crate::httpd::Req) -> anyhow::Result<()> {
+    use crate::httpd::json_string;
+    req.header("Cache-Control", "no-cache")?;
+    req.begin_chunked("200 OK", "application/json")?;
+    let mut out = String::with_capacity(config::IO_CHUNK + 256);
+    out.push('[');
+    let mut n = 0usize;
+    if let Ok(f) = File::open(config::BUILDER_FAILED_PATH) {
+        for line in BufReader::with_capacity(512, f).lines() {
+            let line = line?;
+            let (path, reason) = line.split_once('\t').unwrap_or((&line, ""));
+            let path = path.trim();
+            if path.is_empty() {
+                continue;
+            }
+            if n > 0 {
+                out.push(',');
+            }
+            n += 1;
+            out.push_str(&format!(
+                r#"{{"path":{},"reason":{}}}"#,
+                json_string(path),
+                json_string(reason.trim())
+            ));
+            if out.len() >= config::IO_CHUNK {
+                req.chunk(out.as_bytes())?;
+                out.clear();
+                crate::files::wait_for_heap()?;
+            }
+        }
+    }
+    out.push(']');
+    req.chunk(out.as_bytes())?;
+    req.finish()
+}
+
+/// `DELETE /api/cache/failed` (and a `DELETE` of the file itself): forget
+/// every recorded failure, so a GIF that was replaced is tried again. The
+/// file goes; the walk drops its copy of the list at its next step; a
+/// recount is asked for, which also ends a finished pass so a new one starts.
+/// Returns whether there was a file.
+pub fn clear_failed() -> io::Result<bool> {
+    let existed = match fs::remove_file(config::BUILDER_FAILED_PATH) {
+        Ok(()) => true,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e),
+    };
+    FAILED_CLEARED.store(true, SeqCst);
+    report().failed = 0;
+    cache::invalidate();
+    log::info!("cache builder: failure list cleared");
+    Ok(existed)
 }
 
 fn record_failure(gif: &str, why: &str) {

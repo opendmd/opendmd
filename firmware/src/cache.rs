@@ -469,6 +469,7 @@ pub fn stream_list(req: &mut Req) -> Result<()> {
             if out.len() >= 2048 {
                 req.chunk(out.as_bytes())?;
                 out.clear();
+                crate::files::wait_for_heap()?;
             }
             Ok(())
         })?;
