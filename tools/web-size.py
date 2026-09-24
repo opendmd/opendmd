@@ -9,14 +9,15 @@
 Budget (gzipped bytes — what actually crosses the WiFi, since the firmware
 serves `<file>.gz` in preference): the wasm module plus its wasm-bindgen JS
 glue (`pkg/`, generated, grows with the export list) <= 100 KB; the
-hand-written JS + CSS <= 40 KB. Raw sizes are printed for information. A file
-with no `.gz` beside it counts at its raw size. Exits 1 when over budget.
+hand-written JS + CSS <= 48 KB (40 KB until Follow RePlayOS's Settings card,
+which had ~0.6 KB left). Raw sizes are printed for information. A file with
+no `.gz` beside it counts at its raw size. Exits 1 when over budget.
 """
 import sys
 from pathlib import Path
 
 WASM_GZ_BUDGET = 100 * 1024
-JS_CSS_GZ_BUDGET = 40 * 1024
+JS_CSS_GZ_BUDGET = 48 * 1024
 
 
 def main() -> int:

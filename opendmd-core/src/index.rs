@@ -193,6 +193,38 @@ pub fn write_index_with_overrides<R: BufRead, W: Write + Seek>(
     meta_fingerprint: u64,
     out: W,
 ) -> io::Result<(IndexHeader, Overrides)> {
+    let resolve = |entry: &Entry| {
+        if set.is_empty() {
+            None
+        } else {
+            set.get(&entry.path)
+        }
+    };
+    write_index_resolving(
+        manifest,
+        manifest_len,
+        filter,
+        meta_fingerprint,
+        resolve,
+        out,
+    )
+}
+
+/// The general form of [`write_index_with_overrides`]: `resolve` is asked
+/// for each matching entry's override (in manifest order, once each) instead
+/// of looking its path up in a `.meta` set. The firmware's "Follow RePlayOS"
+/// context playlists use it to weight entries by how well their title
+/// matches the game being played (`follow::title_score`), and to spot the
+/// console's logo in the same pass; `meta_fingerprint` is then whatever
+/// identifies what `resolve` computes (see `follow::context_fingerprint`).
+pub fn write_index_resolving<R: BufRead, W: Write + Seek>(
+    manifest: R,
+    manifest_len: u32,
+    filter: &Filter,
+    meta_fingerprint: u64,
+    mut resolve: impl FnMut(&Entry) -> Option<crate::overrides::Override>,
+    out: W,
+) -> io::Result<(IndexHeader, Overrides)> {
     let mut out = BufWriter::with_capacity(2048, out);
     let start = out.stream_position()?;
     let mut header = IndexHeader::new(manifest_len, filter, 0);
@@ -211,11 +243,9 @@ pub fn write_index_with_overrides<R: BufRead, W: Write + Seek>(
         }
         match out.write_all(&offset.to_le_bytes()) {
             Ok(()) => {
-                if !set.is_empty() {
-                    if let Some(ov) = set.get(&entry.path) {
-                        if !resolved.push(count, ov) {
-                            unplaced += 1;
-                        }
+                if let Some(ov) = resolve(entry) {
+                    if !resolved.push(count, ov) {
+                        unplaced += 1;
                     }
                 }
                 count += 1;

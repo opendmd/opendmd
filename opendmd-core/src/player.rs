@@ -511,7 +511,9 @@ impl Iterator for InterlaceRows {
 pub type Sniffed<R> = io::Chain<io::Cursor<[u8; 4]>, R>;
 
 /// Either kind of playable file, chosen by its first four bytes: `GIF8` is a
-/// GIF, `ODM1` is a pre-rendered [`OdmSource`](crate::odm::OdmSource).
+/// GIF, `ODM1` is a pre-rendered [`OdmSource`](crate::odm::OdmSource), and
+/// `ODMV` a virtual file drawn by [`SynthSource`](crate::synth::SynthSource)
+/// (only ever produced in memory by [`crate::synth::open`]).
 ///
 /// An enum rather than a `Box<dyn …>`: it needs no allocation per opened file
 /// (a trait object would be one more heap block on every open and every
@@ -526,6 +528,9 @@ pub type Sniffed<R> = io::Chain<io::Cursor<[u8; 4]>, R>;
 pub enum FrameSource<R: Read> {
     Gif(GifSource<Sniffed<R>>),
     Odm(crate::odm::OdmSource<Sniffed<R>>),
+    /// A virtual file ([`crate::synth`]): a title card or the power-on
+    /// effect, drawn rather than decoded.
+    Synth(crate::synth::SynthSource<Sniffed<R>>),
 }
 
 impl<R: Read> FrameSource<R> {
@@ -547,6 +552,9 @@ impl<R: Read> FrameSource<R> {
             m if *m == crate::odm::MAGIC => {
                 Ok(FrameSource::Odm(crate::odm::OdmSource::new(stream)?))
             }
+            m if *m == crate::synth::MAGIC => {
+                Ok(FrameSource::Synth(crate::synth::SynthSource::new(stream)?))
+            }
             _ => Err(invalid(format!(
                 "not a GIF or an ODM file (starts with {magic:02x?})"
             ))),
@@ -562,14 +570,16 @@ impl<R: Read> FrameSource<R> {
         match self {
             FrameSource::Gif(s) => s.decoder.into_inner().into_inner().into_inner().1,
             FrameSource::Odm(s) => s.into_inner().into_inner().1,
+            FrameSource::Synth(s) => s.into_inner().into_inner().1,
         }
     }
 
-    /// `"gif"` or `"odm"`, for logs and tools.
+    /// `"gif"`, `"odm"` or `"synth"`, for logs and tools.
     pub fn kind(&self) -> &'static str {
         match self {
             FrameSource::Gif(_) => "gif",
             FrameSource::Odm(_) => "odm",
+            FrameSource::Synth(_) => "synth",
         }
     }
 
@@ -578,6 +588,7 @@ impl<R: Read> FrameSource<R> {
         match self {
             FrameSource::Gif(s) => s.next_frame(canvas),
             FrameSource::Odm(s) => s.next_frame(canvas),
+            FrameSource::Synth(s) => s.next_frame(canvas),
         }
     }
 
@@ -585,6 +596,7 @@ impl<R: Read> FrameSource<R> {
         match self {
             FrameSource::Gif(s) => s.logical_size(),
             FrameSource::Odm(s) => s.logical_size(),
+            FrameSource::Synth(s) => s.logical_size(),
         }
     }
 
@@ -592,6 +604,7 @@ impl<R: Read> FrameSource<R> {
         match self {
             FrameSource::Gif(s) => s.frames_decoded(),
             FrameSource::Odm(s) => s.frames_decoded(),
+            FrameSource::Synth(s) => s.frames_decoded(),
         }
     }
 }

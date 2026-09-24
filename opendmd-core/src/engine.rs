@@ -20,6 +20,14 @@
 //! [`Engine::display`] / [`Engine::display_mut`] hand out whichever is
 //! current, and [`TickOutcome::Frame::transitioning`] says which. Loops of
 //! the same file never transition.
+//!
+//! **Virtual files and holding.** A path starting with `@` is drawn, not
+//! read ([`crate::synth`]: the power-on effect, title cards); the engine
+//! opens it itself, before asking its [`Source`]. And a caller that sequences
+//! files one after another (the firmware's "Follow RePlayOS": power-on, logo,
+//! title card) sets [`Engine::set_hold`]: a file whose dwell is over then
+//! stays on its last frame ([`Engine::is_waiting`]) instead of the scheduler
+//! moving on, until the caller plays the next one or releases the hold.
 
 use crate::canvas::Canvas;
 use crate::compositor::{Compositor, Step, Transition, STEP};
@@ -28,6 +36,7 @@ use crate::manifest::{self, Entry};
 use crate::overrides::{Dwell, Override, Overrides};
 use crate::player::FrameSource;
 use crate::scheduler::Scheduler;
+use crate::synth;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::time::Duration;
 
@@ -142,6 +151,7 @@ type Stream = FrameSource<Box<dyn ReadSeek>>;
 /// What `gif`'s decoder will still allocate before its first frame is on
 /// the canvas (a transition's gate has to leave room for it).
 fn first_frame_heap(gif: &Stream) -> usize {
+    // (A virtual file allocates nothing.)
     if gif.kind() == "gif" && gif.frames_decoded() == 0 {
         crate::compositor::GIF_FIRST_FRAME_BYTES
     } else {
@@ -302,6 +312,9 @@ struct Playing {
     next_frame_at: Duration,
     loops: u32,
     first_frame: bool,
+    /// Its dwell is over and the engine is holding ([`Engine::set_hold`]):
+    /// nothing more is decoded, the last frame stays up.
+    done: bool,
     /// Frames decoded in this file, across loops (the decoder's own count
     /// restarts with every loop).
     frames: u64,
@@ -351,6 +364,7 @@ impl Playing {
             next_frame_at: at,
             loops: 0,
             first_frame: true,
+            done: false,
             frames: 0,
             frame_at: Duration::ZERO,
             frame_delay: Duration::ZERO,
@@ -381,6 +395,9 @@ pub struct Engine {
     /// at boot), unless [`Engine::carry_over`] says the caller's canvas
     /// already shows a picture.
     shown: bool,
+    /// A file whose dwell is over waits on its last frame instead of the
+    /// scheduler moving on ([`Engine::set_hold`]).
+    hold: bool,
 }
 
 impl Engine {
@@ -404,6 +421,31 @@ impl Engine {
             skip_requested: false,
             compositor: Compositor::default(),
             shown: false,
+            hold: false,
+        }
+    }
+
+    /// Hold (or stop holding) at the end of each file: with `hold` set, a
+    /// file whose dwell is over stays on its last frame — nothing more is
+    /// decoded, [`is_waiting`](Self::is_waiting) turns true — until the
+    /// caller [`play_now`](Self::play_now)s another or clears the hold (the
+    /// scheduler then moves on at the next tick). For a caller that plays a
+    /// sequence of its own and must not let the playlist cut in between.
+    pub fn set_hold(&mut self, hold: bool) {
+        self.hold = hold;
+    }
+
+    /// The file on screen has finished its dwell and is being held.
+    pub fn is_waiting(&self) -> bool {
+        self.current.as_ref().is_some_and(|p| p.done)
+    }
+
+    /// Open `path` for playing: a virtual file ([`synth`]) in memory, else
+    /// through the source.
+    fn open_stream(&self, path: &str) -> io::Result<Stream> {
+        match synth::open(path) {
+            Some(bytes) => Stream::open(Box::new(bytes) as Box<dyn ReadSeek>),
+            None => self.source.open(path).and_then(Stream::open),
         }
     }
 
@@ -570,7 +612,23 @@ impl Engine {
     /// opened but is neither a GIF nor an ODM file (the current GIF is gone
     /// and the scheduler picks the next entry at the next tick).
     pub fn play_now(&mut self, path: &str, now: Duration) -> io::Result<()> {
-        let reader = self.source.open(path)?;
+        self.play_now_with(path, now, None)
+    }
+
+    /// [`play_now`](Self::play_now), with `ov` bending this one play's
+    /// dwell (`loops=1`: exactly one pass, however short — how the firmware
+    /// plays the power-on effect and a title card). The title reported for
+    /// a virtual file is what it shows.
+    pub fn play_now_with(
+        &mut self,
+        path: &str,
+        now: Duration,
+        ov: Option<Override>,
+    ) -> io::Result<()> {
+        let reader: Box<dyn ReadSeek> = match synth::open(path) {
+            Some(bytes) => Box::new(bytes),
+            None => self.source.open(path)?,
+        };
         self.current = None;
         self.skip_requested = false;
         let gif = Stream::open(reader)?;
@@ -578,14 +636,17 @@ impl Engine {
         // A paused engine has not run its clock; `resume` shifts these by the
         // pause, so start them at the pause instant rather than `now`.
         let at = self.paused_since.unwrap_or(now);
-        self.current = Some(Playing::new(
+        let title = synth::title(path).unwrap_or_else(|| Entry::from_path(path).title);
+        let mut playing = Playing::new(
             OFF_PLAYLIST,
             path.to_string(),
-            Entry::from_path(path).title,
+            title,
             self.started_count,
             gif,
             at,
-        ));
+        );
+        playing.timed = ov.filter(Override::affects_dwell);
+        self.current = Some(playing);
         Ok(())
     }
 
@@ -684,6 +745,17 @@ impl Engine {
             let Some(playing) = &mut self.current else {
                 return Ok(TickOutcome::Exhausted);
             };
+            if playing.done {
+                if self.hold {
+                    return Ok(TickOutcome::Idle);
+                }
+                // Released: move on as the dwell said to.
+                self.current = None;
+                if !self.open_next(now) {
+                    return Ok(TickOutcome::Exhausted);
+                }
+                continue;
+            }
             if now < playing.next_frame_at {
                 return Ok(TickOutcome::Idle);
             }
@@ -694,6 +766,10 @@ impl Engine {
             };
             // Hard cap: never let one GIF hold the panel past `max`.
             if now.saturating_sub(playing.started_at) >= dwell.max {
+                if self.hold {
+                    playing.done = true;
+                    return Ok(TickOutcome::Idle);
+                }
                 self.current = None;
                 if !self.open_next(now) {
                     return Ok(TickOutcome::Exhausted);
@@ -747,6 +823,12 @@ impl Engine {
                     playing.loops += 1;
                     let elapsed = now.saturating_sub(playing.started_at);
                     let done = playing.loops >= dwell.min_loops && elapsed >= dwell.min;
+                    if done && self.hold {
+                        // Hold the last frame; the reader stays open (it
+                        // would be rewound if the file were played again).
+                        playing.done = true;
+                        return Ok(TickOutcome::Idle);
+                    }
                     if done || !self.restart_current() {
                         self.current = None;
                         if !self.open_next(now) {
@@ -850,6 +932,7 @@ impl Engine {
             next_frame_at,
             loops,
             first_frame,
+            done,
             frames,
             frame_at,
             frame_delay,
@@ -871,6 +954,7 @@ impl Engine {
                     next_frame_at,
                     loops,
                     first_frame,
+                    done,
                     frames,
                     frame_at,
                     frame_delay,
@@ -900,7 +984,8 @@ impl Engine {
                 }
             };
             let (path, title) = (entry.path, entry.title);
-            match self.source.open(&path).and_then(Stream::open) {
+            let title = synth::title(&path).unwrap_or(title);
+            match self.open_stream(&path) {
                 Ok(gif) => {
                     self.started_count += 1;
                     let mut playing =
@@ -1991,5 +2076,126 @@ mod tests {
         // Sequential + rewound cursor: back to the top of the playlist.
         e.tick(t0, &mut canvas).unwrap();
         assert_eq!(e.now_playing().unwrap().title, "A");
+    }
+
+    #[test]
+    fn virtual_files_play_without_the_source() {
+        let dwell = DwellPolicy {
+            min: Duration::from_secs(3),
+            max: Duration::from_secs(30),
+            min_loops: 1,
+        };
+        let mut e = engine_with(
+            &[("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0))],
+            "/gifs/Consoles/NES_A_01.gif",
+            dwell,
+        );
+        let mut canvas = Canvas::new();
+        e.tick(Duration::ZERO, &mut canvas).unwrap();
+        let once = Override {
+            loops: Some(1),
+            ..Override::default()
+        };
+        let card = synth::card_path("Sonic the Hedgehog 3", "Mega Drive");
+        e.play_now_with(&card, Duration::from_millis(10), Some(once))
+            .unwrap();
+        let TickOutcome::Frame { playing, .. } =
+            e.tick(Duration::from_millis(10), &mut canvas).unwrap()
+        else {
+            panic!("expected the card");
+        };
+        assert_eq!(playing.title, "Sonic the Hedgehog 3");
+        assert_eq!(playing.path, card);
+        // `loops=1`: one pass of its 3 s frame, then the playlist (not the
+        // configured 3 s minimum *after* it).
+        let t = Duration::from_millis(10) + synth::CARD_DWELL;
+        match e.tick(t, &mut canvas).unwrap() {
+            TickOutcome::Frame { playing, .. } => assert_eq!(playing.title, "A"),
+            other => panic!("expected A, got {other:?}"),
+        }
+        // The power-on effect: 35 frames, then the playlist.
+        e.play_now_with(synth::POWER_ON, t, Some(once)).unwrap();
+        let mut frames = 0;
+        let mut now = t;
+        loop {
+            match e.tick(now, &mut canvas).unwrap() {
+                TickOutcome::Frame { playing, .. } if playing.path == synth::POWER_ON => {
+                    frames += 1
+                }
+                TickOutcome::Frame { .. } => break,
+                _ => {}
+            }
+            now += Duration::from_millis(5);
+        }
+        assert_eq!(frames, synth::POWER_ON_FRAMES);
+        assert!(now - t >= Duration::from_millis(700) && now - t < Duration::from_millis(760));
+    }
+
+    #[test]
+    fn hold_keeps_the_last_frame_until_released_or_replaced() {
+        let dwell = DwellPolicy {
+            min: Duration::ZERO,
+            max: Duration::from_secs(30),
+            min_loops: 1,
+        };
+        let mut e = engine_with(
+            &[
+                ("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0)),
+                ("/gifs/Consoles/NES_B_01.gif", one_pixel_gif(0, 255, 0)),
+            ],
+            "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
+            dwell,
+        );
+        let mut canvas = Canvas::new();
+        e.set_hold(true);
+        e.tick(Duration::ZERO, &mut canvas).unwrap();
+        assert_eq!(e.now_playing().unwrap().title, "A");
+        assert!(!e.is_waiting());
+        // A's 50 ms loop is its whole dwell: held, not B.
+        for ms in [50, 60, 500, 5_000] {
+            assert_eq!(
+                e.tick(Duration::from_millis(ms), &mut canvas).unwrap(),
+                TickOutcome::Idle
+            );
+            assert!(e.is_waiting());
+            assert_eq!(e.now_playing().unwrap().title, "A");
+        }
+        assert_eq!(canvas.get(0, 0), Rgb::new(255, 0, 0));
+        // Replaced: the next file plays, and is held in its turn.
+        let once = Override {
+            loops: Some(1),
+            ..Override::default()
+        };
+        e.play_now_with(synth::POWER_ON, Duration::from_millis(5_000), Some(once))
+            .unwrap();
+        assert!(!e.is_waiting());
+        let mut now = Duration::from_millis(5_000);
+        while !e.is_waiting() {
+            e.tick(now, &mut canvas).unwrap();
+            now += Duration::from_millis(20);
+            assert!(now < Duration::from_secs(10));
+        }
+        assert_eq!(e.now_playing().unwrap().path, synth::POWER_ON);
+        // Released: the scheduler moves on (to B: A's turn was used).
+        e.set_hold(false);
+        match e.tick(now, &mut canvas).unwrap() {
+            TickOutcome::Frame { playing, .. } => assert_eq!(playing.title, "B"),
+            other => panic!("expected B, got {other:?}"),
+        }
+        // The hard cap holds too.
+        e.set_hold(true);
+        let mut e2 = engine_with(
+            &[("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0))],
+            "/gifs/Consoles/NES_A_01.gif",
+            DwellPolicy {
+                min: Duration::from_secs(60),
+                max: Duration::from_secs(1),
+                min_loops: 1,
+            },
+        );
+        e2.set_hold(true);
+        e2.tick(Duration::ZERO, &mut canvas).unwrap();
+        e2.tick(Duration::from_millis(1_100), &mut canvas).unwrap();
+        assert!(e2.is_waiting());
     }
 }

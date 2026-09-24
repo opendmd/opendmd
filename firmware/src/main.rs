@@ -19,6 +19,7 @@
 //! | main | CPU1 | panel, SD, engine, this loop. Never touches WiFi or a socket. |
 //! | `net-worker` | CPU0 | WiFi (connect, reconnect, AP fallback), mDNS, starts the httpd |
 //! | `httpd` | CPU0 | every HTTP handler; the only task allowed to block |
+//! | (net-worker) | CPU0 | also Follow RePlayOS's polls and context index builds (`follow.rs`) |
 //! | `dns-server` | any | captive-portal DNS, AP mode only |
 //!
 //! The panel is initialised here, on CPU1, so the I2S-DMA interrupt is
@@ -38,6 +39,7 @@ mod clock;
 mod config;
 mod dns_server;
 mod files;
+mod follow;
 mod http;
 mod httpd;
 mod net_worker;
@@ -217,6 +219,8 @@ fn main() -> Result<()> {
     panel.set_brightness(settings.brightness);
     clock::set_timezone(&settings.tz, &settings.tz_name);
     let mut sched = Scheduling::new(&settings.schedule);
+    // Follow RePlayOS: the overlay and the sequence (`follow.rs`).
+    let mut runner = follow::Runner::default();
     log::info!(
         "settings: brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, tz='{}' ({}), schedule {} rule(s){}, host='{}', wifi={}",
         settings.brightness,
@@ -342,6 +346,8 @@ fn main() -> Result<()> {
         hostname: settings.hostname.clone(),
         status: status.clone(),
         rx: net_rx,
+        settings: shared_settings.clone(),
+        cmd: cmd_tx.clone(),
     })?;
 
     loop {
@@ -424,10 +430,25 @@ fn main() -> Result<()> {
                             continue;
                         }
                     }
+                    // The attract playlist likewise.
+                    if let Some(a) = next.attract_set.as_ref().filter(|a| !a.is_empty()) {
+                        if next.attract_set != settings.attract_set {
+                            let path = nvs_config::manifest_path_for(a);
+                            if nvs_config::is_obsolete_set(a) || File::open(&path).is_err() {
+                                log::warn!("config: attract playlist '{a}' rejected ({path})");
+                                let _ = reply.send(Err(state::SET_NOT_FOUND.to_string()));
+                                continue;
+                            }
+                        }
+                    }
                     // What plays is the schedule's overlay on the saved
                     // settings: a rule's playlist wins over `set` while it
                     // is in force, so compare what would actually play.
-                    let (eff_now, eff_next) = (sched.effective(&settings), sched.effective(&next));
+                    // Follow RePlayOS's attract playlist is an overlay too.
+                    let (eff_now, eff_next) = (
+                        runner.overlay(sched.effective(&settings)),
+                        runner.overlay(sched.effective(&next)),
+                    );
                     let needs_reindex = eff_next.platforms != eff_now.platforms
                         || eff_next.set != eff_now.set
                         || eff_next.shuffle != eff_now.shuffle;
@@ -481,9 +502,11 @@ fn main() -> Result<()> {
                             let outcome = if needs_reindex {
                                 // A current `.idx` for the new set/filter is
                                 // reused; anything else is rebuilt.
-                                rebuild(
+                                replay(
                                     &mut engine,
-                                    &sched.effective(&settings),
+                                    &settings,
+                                    &sched,
+                                    &mut runner,
                                     false,
                                     &status,
                                     &mut canvas,
@@ -500,9 +523,11 @@ fn main() -> Result<()> {
                 Command::Reindex(reply) => {
                     // Forced: the caller asked, perhaps because the manifest
                     // was edited off-device with its length unchanged.
-                    let outcome = rebuild(
+                    let outcome = replay(
                         &mut engine,
-                        &sched.effective(&settings),
+                        &settings,
+                        &sched,
+                        &mut runner,
                         true,
                         &status,
                         &mut canvas,
@@ -530,9 +555,11 @@ fn main() -> Result<()> {
                         })
                         .and_then(|()| {
                             if active {
-                                rebuild(
+                                replay(
                                     &mut engine,
-                                    &sched.effective(&settings),
+                                    &settings,
+                                    &sched,
+                                    &mut runner,
                                     true,
                                     &status,
                                     &mut canvas,
@@ -582,9 +609,11 @@ fn main() -> Result<()> {
                         })
                         .and_then(|()| {
                             if active {
-                                rebuild(
+                                replay(
                                     &mut engine,
-                                    &sched.effective(&settings),
+                                    &settings,
+                                    &sched,
+                                    &mut runner,
                                     false,
                                     &status,
                                     &mut canvas,
@@ -656,6 +685,39 @@ fn main() -> Result<()> {
                         engine.as_ref().map_or(0, |e| e.catalog_len()),
                     )));
                 }
+                Command::Follow(event) => {
+                    let was_context = runner.context().is_some();
+                    let todo =
+                        runner.handle(event, engine.as_mut(), sched.off(), epoch.elapsed());
+                    follow_todo(
+                        todo,
+                        was_context,
+                        &mut engine,
+                        &settings,
+                        &sched,
+                        &mut runner,
+                        &status,
+                        &mut canvas,
+                    );
+                }
+            }
+        }
+
+        // Follow RePlayOS's sequence: the next step once the engine has
+        // finished the one on screen (it holds the last frame meanwhile).
+        if runner.in_sequence() && !sched.off() {
+            if let Some(e) = engine.as_mut() {
+                let todo = runner.advance(e, epoch.elapsed());
+                follow_todo(
+                    todo,
+                    false,
+                    &mut engine,
+                    &settings,
+                    &sched,
+                    &mut runner,
+                    &status,
+                    &mut canvas,
+                );
             }
         }
 
@@ -665,6 +727,7 @@ fn main() -> Result<()> {
             apply_schedule(
                 next,
                 &mut sched,
+                &mut runner,
                 &settings,
                 &mut engine,
                 &mut panel,
@@ -686,7 +749,17 @@ fn main() -> Result<()> {
                 settings.auto_prepare,
             );
             let eff = sched.effective(&settings);
-            if rebuild(&mut engine, &eff, false, &status, &mut canvas).is_err() {
+            if replay(
+                &mut engine,
+                &settings,
+                &sched,
+                &mut runner,
+                false,
+                &status,
+                &mut canvas,
+            )
+            .is_err()
+            {
                 // A schedule rule's playlist that will not build is set
                 // aside (until the rule changes) and the saved one plays.
                 if eff.set != settings.set {
@@ -758,7 +831,13 @@ fn main() -> Result<()> {
                 let log_start = probe::stamp();
                 if is_new {
                     started = playing.ordinal;
-                    let served = sd::take_last();
+                    // (A virtual file — Follow RePlayOS's cards — opened
+                    // nothing: the last open was the previous file's.)
+                    let served = if opendmd_core::synth::is_virtual(&playing.path) {
+                        None
+                    } else {
+                        sd::take_last()
+                    };
                     current_prepared = match served {
                         Some(sd::Served::Prepared { .. }) => true,
                         Some(sd::Served::Direct) => {
@@ -896,10 +975,136 @@ fn main() -> Result<()> {
                 sampled_min,
                 deadline_misses,
                 worst_lateness_ms,
-                &sched.summary(),
+                &(sched.summary() + &follow::summary()),
             );
         }
     }
+}
+
+/// Act on what Follow RePlayOS's runner asked for: a rebuild onto the
+/// context index or the overlay's playlist — skipped when that is the
+/// playlist already playing (a mode change that does not change it).
+#[allow(clippy::too_many_arguments)]
+fn follow_todo(
+    todo: follow::Todo,
+    was_context: bool,
+    engine: &mut Option<Engine>,
+    settings: &Settings,
+    sched: &Scheduling,
+    runner: &mut follow::Runner,
+    status: &Mutex<Status>,
+    canvas: &mut Canvas,
+) {
+    if todo != follow::Todo::Rebuild {
+        return;
+    }
+    if runner.context().is_none() && !was_context {
+        let eff = runner.overlay(sched.effective(settings));
+        let playing = status.lock().unwrap().manifest.clone();
+        if engine.is_some() && files::same_card_path(&eff.manifest_path(), &playing) {
+            return;
+        }
+    }
+    let outcome = replay(engine, settings, sched, runner, false, status, canvas);
+    if let Err(e) = outcome {
+        log::warn!("follow: rebuild failed: {e}");
+    }
+}
+
+/// Rebuild what should be playing now: Follow RePlayOS's context index when
+/// the runner is on one, else the saved settings under the schedule's and
+/// then Follow's overlays (the attract playlist). A context that will not
+/// open, or an attract playlist that will not build, is set aside and the
+/// next thing down plays.
+#[allow(clippy::too_many_arguments)]
+fn replay(
+    engine: &mut Option<Engine>,
+    settings: &Settings,
+    sched: &Scheduling,
+    runner: &mut follow::Runner,
+    force: bool,
+    status: &Mutex<Status>,
+    canvas: &mut Canvas,
+) -> Result<Applied, String> {
+    let base = sched.effective(settings);
+    if let Some(ctx) = runner.context().cloned() {
+        match rebuild_context(engine, &base, &ctx, status, canvas) {
+            Ok(a) => return Ok(a),
+            Err(e) => {
+                log::warn!("follow: context {} will not play ({e}); attract instead", ctx.index);
+                runner.context_failed();
+            }
+        }
+    }
+    let eff = runner.overlay(base.clone());
+    let outcome = rebuild(engine, &eff, force, status, canvas);
+    if outcome.is_err() && eff.set != base.set {
+        log::warn!(
+            "follow: attract playlist '{}' will not open; playing the usual one",
+            eff.set
+        );
+        runner.attract_failed();
+        return rebuild(engine, &base, force, status, canvas);
+    }
+    outcome
+}
+
+/// Rebuild the engine over a Follow RePlayOS context index — built (and
+/// checked) by the network worker, so this only opens two files and reads
+/// the weights back: milliseconds, between frames.
+fn rebuild_context(
+    engine: &mut Option<Engine>,
+    settings: &Settings,
+    ctx: &follow::Context,
+    status: &Mutex<Status>,
+    canvas: &mut Canvas,
+) -> Result<Applied, String> {
+    cache_builder::publish(
+        cache_builder::Pace::Stop(cache_builder::Reason::Reindex),
+        settings.auto_prepare,
+    );
+    retire(engine, canvas);
+    {
+        let mut s = status.lock().unwrap();
+        s.manifest = ctx.manifest.clone();
+        s.index_state = "building";
+    }
+    let started = Instant::now();
+    let built = (|| -> Result<(Engine, Overrides)> {
+        let manifest = File::open(&ctx.manifest).with_context(|| format!("opening {}", ctx.manifest))?;
+        let index = File::open(&ctx.index).with_context(|| format!("opening {}", ctx.index))?;
+        let mut catalog = IndexedCatalog::open(manifest, index)?;
+        let ov = catalog.overrides()?;
+        Ok((engine_over(Box::new(catalog), &ov, settings), ov))
+    })();
+    let outcome = match built {
+        Ok((e, ov)) if e.catalog_len() > 0 => {
+            let entries = e.catalog_len();
+            log::info!(
+                "follow: playing context {} ({entries} entries, {} weighted) in {} ms, heap {} B free",
+                ctx.index,
+                ov.len(),
+                started.elapsed().as_millis(),
+                free_heap()
+            );
+            *engine = Some(e);
+            Ok(Applied {
+                entries,
+                index: Some(IndexSource::Loaded),
+                index_ms: started.elapsed().as_millis() as u64,
+                overrides: ov.len(),
+                hidden: 0,
+            })
+        }
+        Ok(_) => Err(format!("{} is empty", ctx.index)),
+        Err(e) => Err(format!("{e:#}")),
+    };
+    let mut s = status.lock().unwrap();
+    s.entries = outcome.as_ref().map_or(0, |a| a.entries);
+    s.overrides = outcome.as_ref().map_or(0, |a| a.overrides);
+    s.hidden = 0;
+    s.index_state = if outcome.is_ok() { "ready" } else { "unavailable" };
+    outcome
 }
 
 /// How fast the cache builder may work while the panel does what it is doing:
@@ -1064,6 +1269,7 @@ impl Scheduling {
 fn apply_schedule(
     next: Decision,
     sched: &mut Scheduling,
+    runner: &mut follow::Runner,
     settings: &Settings,
     engine: &mut Option<Engine>,
     panel: &mut Panel,
@@ -1082,18 +1288,22 @@ fn apply_schedule(
         clock::hhmm_now().unwrap_or_else(|| "(clock not set)".into())
     );
 
-    // The playlist.
-    let eff = sched.effective(settings);
+    // The playlist — unless Follow RePlayOS has a game on the panel (its
+    // overlay wins over a rule's playlist; the attract playlist does too).
+    let eff = runner.overlay(sched.effective(settings));
     let playing = status.lock().unwrap().manifest.clone();
-    if engine.is_some() && !files::same_card_path(&eff.manifest_path(), &playing) {
+    if engine.is_some()
+        && runner.mode() != follow::Mode::Game
+        && !files::same_card_path(&eff.manifest_path(), &playing)
+    {
         log::info!("schedule: playlist {} -> {}", playing, eff.manifest_path());
         if rebuild(engine, &eff, false, status, canvas).is_err() && eff.set != settings.set {
             log::warn!(
                 "schedule: playlist '{}' will not open; playing the saved one",
                 eff.set
             );
-            sched.broken_set = Some(eff.set.clone());
-            let _ = rebuild(engine, &sched.effective(settings), false, status, canvas);
+            sched.broken_set = Some(sched.effective(settings).set);
+            let _ = replay(engine, settings, sched, runner, false, status, canvas);
         }
     }
 
@@ -1131,6 +1341,10 @@ fn apply_schedule(
                 }
             }
             log::info!("schedule: panel back on");
+            // A game that started in the dark: straight to its playlist.
+            if runner.resume(engine.as_mut()) == follow::Todo::Rebuild {
+                let _ = replay(engine, settings, sched, runner, false, status, canvas);
+            }
         }
         panel.set_brightness(sched.brightness(settings));
     }
@@ -1171,6 +1385,7 @@ impl Deferred {
                     Some(sd::Served::Original { miss_us }) => {
                         format!("original, miss {:.1} ms", miss_us as f32 / 1000.0)
                     }
+                    None if path.starts_with('@') => "drawn".to_string(),
                     Some(sd::Served::Direct) | None => "as named".to_string(),
                 },
                 free_heap(),
@@ -1237,6 +1452,13 @@ fn build_engine(
     force: bool,
 ) -> Result<(Engine, IndexSource, Overrides)> {
     let (catalog, overrides, source) = open_catalog(path, &build_filter(settings), force)?;
+    Ok((engine_over(catalog, &overrides, settings), source, overrides))
+}
+
+/// An engine over `catalog` with the settings' order, dwell and transition,
+/// `overrides` applied, carrying over the picture on the panel if there is
+/// one.
+fn engine_over(catalog: Box<dyn Catalog>, overrides: &Overrides, settings: &Settings) -> Engine {
     let catalog: Box<dyn Catalog> = if probe::ENABLED {
         Box::new(probe::TimedCatalog(catalog))
     } else {
@@ -1255,14 +1477,14 @@ fn build_engine(
         dwell_policy(settings),
         Box::new(SdSource),
     );
-    engine.set_overrides(&overrides);
+    engine.set_overrides(overrides);
     engine.set_transition(settings.transition);
     engine.set_transition_gate(Some(transition_gate));
     if FRAME_SHOWN.load(Ordering::Relaxed) {
         // A playlist change: the panel shows the old playlist's last frame.
         engine.carry_over();
     }
-    Ok((engine, source, overrides))
+    engine
 }
 
 /// The fingerprint of the playlist's `.meta` as the index records it:

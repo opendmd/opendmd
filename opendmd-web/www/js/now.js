@@ -9,6 +9,7 @@
 import { app, playlistLabel } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
+import { followLine } from './follow.js';
 import { h, clear, on, store, debounce, toast, bytes, uptime, label } from './util.js';
 
 const POLL_MS = 500;
@@ -30,6 +31,7 @@ function mountDevice(el) {
   const drift = h('span.mono.muted', { id: 'now-drift' });
   const title = h('h2', { id: 'now-title' }, '…');
   const meta = h('div.muted.mono', { id: 'now-path' });
+  const followEl = h('div', { id: 'now-follow-line', hidden: true });
   const ord = h('span.muted', { id: 'now-ord' });
   const pauseBtn = h('button', { id: 'now-pause', onclick: togglePause }, 'Pause');
   const bright = h('input', { type: 'range', min: 1, max: 255, step: 1, id: 'now-bright', value: app.config?.brightness ?? 96 });
@@ -43,7 +45,7 @@ function mountDevice(el) {
     banner,
     h('div.card', canvas, h('div.row.sp', cap, h('label.cap', follow, 'preview follows the panel'))),
     h('div.card',
-      h('div.row.sp', h('div.grow', title, h('div', { id: 'now-tags' }), meta), h('div', ord, ' ', conn)),
+      h('div.row.sp', h('div.grow', title, followEl, h('div', { id: 'now-tags' }), meta), h('div', ord, ' ', conn)),
       h('div.row', { style: 'margin-top:10px' },
         h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn,
         h('label', 'Brightness', bright, brightOut)),
@@ -127,10 +129,15 @@ function mountDevice(el) {
   function render(s) {
     if (!s) return;
     const np = s.now_playing;
-    const e = app.wasm.parsePath(np.path || '');
-    title.textContent = np.path ? label(e) : '(nothing playing)';
-    clear(el.querySelector('#now-tags'), np.path ? tags(e) : null);
-    meta.textContent = np.path;
+    // A virtual file (`@…`: Follow RePlayOS's cards) shows its title only.
+    const virt = np.path?.startsWith('@');
+    const e = app.wasm.parsePath(virt ? '' : np.path || '');
+    title.textContent = virt ? np.title : np.path ? label(e) : '(nothing playing)';
+    clear(el.querySelector('#now-tags'), np.path && !virt ? tags(e) : null);
+    meta.textContent = virt ? '' : np.path;
+    const fl = followLine(s);
+    followEl.hidden = !fl;
+    followEl.textContent = fl ?? '';
     ord.textContent = `#${np.ordinal} · ${s.entries.toLocaleString()} entries`;
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
     const b = bannerFor(s, () => setTimeout(poll, 300));

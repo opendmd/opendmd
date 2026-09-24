@@ -6,6 +6,7 @@
 import { app, playlistLabel } from './state.js';
 import * as prep from './prepare.js';
 import { timeCard, scheduleCard } from './schedule.js';
+import { followCard } from './follow.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, on, toast, bytes, uptime, base } from './util.js';
 
@@ -87,6 +88,7 @@ export async function mount(el) {
 
   const time = timeCard();
   const sched = scheduleCard();
+  const follow = followCard();
   on('status', time.render);
 
   el.append(banner,
@@ -103,7 +105,7 @@ export async function mount(el) {
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-trans-preview', onclick: previewTrans }, 'Preview'),
         h('button.pri', { id: 'st-save-trans', onclick: () => save(['transition', 'transition_ms']) }, 'Save transition')),
       pvBox),
-    time.el, sched.el,
+    time.el, sched.el, follow.el,
     h('div.card', { id: 'pc' }, h('h2', 'Playback cache'),
       h('p.cap', 'Prepared copies play with less memory and start faster. Originals stay as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),

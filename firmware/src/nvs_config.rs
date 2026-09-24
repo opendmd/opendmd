@@ -42,6 +42,13 @@ const KEY_TZ_NAME: &str = "tz_name";
 const KEY_SCHEDULE: &str = "schedule";
 const KEY_TRANSITION: &str = "transition";
 const KEY_AUTO_PREPARE: &str = "auto_prepare";
+const KEY_FOLLOW: &str = "follow";
+const KEY_FOLLOW_HOST: &str = "follow_host";
+const KEY_FOLLOW_CODE: &str = "follow_code";
+const KEY_ATTRACT_SET: &str = "attract_set";
+/// What NVS holds in `attract_set` for "the current playlist" (a `*` can
+/// never be a set's name: FAT refuses it in a file name).
+const CURRENT_PLAYLIST: &str = "*";
 
 /// When the device prepares its own playback cache (`cache_builder.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -129,6 +136,15 @@ pub struct Settings {
     pub transition: Transition,
     /// `"idle"` (default), `"always"` or `"off"`: see [`AutoPrepare`].
     pub auto_prepare: AutoPrepare,
+    /// Follow RePlayOS (`follow.rs`): on/off, the Pi's host (`192.168.1.20`
+    /// or `host:port`), and its NET CONTROL code — stored like the WiFi
+    /// password, never returned by the API (only `follow_code_set`).
+    pub follow: bool,
+    pub follow_host: String,
+    pub follow_code: String,
+    /// The playlist attract mode plays (a `set` value); `None` = whatever
+    /// would play anyway (the saved playlist, or the schedule's).
+    pub attract_set: Option<String>,
 }
 
 impl Default for Settings {
@@ -149,6 +165,10 @@ impl Default for Settings {
             schedule: String::new(),
             transition: config::TRANSITION,
             auto_prepare: AutoPrepare::Idle,
+            follow: false,
+            follow_host: String::new(),
+            follow_code: String::new(),
+            attract_set: None,
         }
     }
 }
@@ -258,6 +278,20 @@ impl Config {
                 .get_string(KEY_AUTO_PREPARE)
                 .and_then(|s| AutoPrepare::parse(&s))
                 .unwrap_or(d.auto_prepare),
+            follow: self
+                .nvs
+                .get_u8(KEY_FOLLOW)
+                .ok()
+                .flatten()
+                .map(|v| v != 0)
+                .unwrap_or(d.follow),
+            follow_host: self.get_string(KEY_FOLLOW_HOST).unwrap_or(d.follow_host),
+            follow_code: self.get_string(KEY_FOLLOW_CODE).unwrap_or(d.follow_code),
+            attract_set: match self.get_string(KEY_ATTRACT_SET) {
+                None => d.attract_set,
+                Some(s) if s == CURRENT_PLAYLIST => None,
+                Some(s) => Some(s),
+            },
         }
     }
 
@@ -280,6 +314,13 @@ impl Config {
             .set_str(KEY_TRANSITION, &s.transition.to_string())?;
         self.nvs
             .set_str(KEY_AUTO_PREPARE, s.auto_prepare.as_str())?;
+        self.nvs.set_u8(KEY_FOLLOW, u8::from(s.follow))?;
+        self.nvs.set_str(KEY_FOLLOW_HOST, &s.follow_host)?;
+        self.nvs.set_str(KEY_FOLLOW_CODE, &s.follow_code)?;
+        self.nvs.set_str(
+            KEY_ATTRACT_SET,
+            s.attract_set.as_deref().unwrap_or(CURRENT_PLAYLIST),
+        )?;
         Ok(())
     }
 

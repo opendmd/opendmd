@@ -314,4 +314,8 @@ pub enum Command {
     /// local `"HH:MM"` it lasts until is in `Status::wake_until` by the time
     /// the reply is sent.
     Wake { minutes: u32, reply: Reply },
+    /// Follow RePlayOS: what the network worker's poller decided (attract,
+    /// a game started, its context index is ready, back to normal). No
+    /// reply; see `follow::Runner`.
+    Follow(crate::follow::Event),
 }

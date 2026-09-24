@@ -9,6 +9,7 @@ pub mod canvas;
 pub mod compositor;
 pub mod engine;
 pub mod filter;
+pub mod follow;
 pub mod index;
 pub mod layout;
 pub mod manifest;
@@ -17,6 +18,8 @@ pub mod overrides;
 pub mod player;
 pub mod schedule;
 pub mod scheduler;
+pub mod synth;
+pub mod text;
 
 pub use canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
 pub use compositor::{Kind as TransitionKind, Transition};
@@ -25,7 +28,9 @@ pub use engine::{
     OFF_PLAYLIST,
 };
 pub use filter::Filter;
-pub use index::{write_index, write_index_with_overrides, IndexHeader, IndexedCatalog};
+pub use index::{
+    write_index, write_index_resolving, write_index_with_overrides, IndexHeader, IndexedCatalog,
+};
 pub use manifest::{
     entry_at, index_matching, normalize_title, parse_manifest, render_manifest, scan, Entry,
 };
