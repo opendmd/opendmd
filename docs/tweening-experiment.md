@@ -1,5 +1,19 @@
 # Tweening experiment: smoother motion on a 128x32 panel
 
+> **Adopted (2026-09-24)** as **Smooth motion**, exactly as recommended
+> below: the shift tweener, opt-in per GIF, no model. The Rust port is
+> `opendmd-core/src/tween.rs` (cargo feature `tween`: `opendmd-pack` and
+> the art wasm module; never the firmware); the Library shows the control,
+> `opendmd-pack smooth analyse` finds the candidates, and the smoothed file
+> is the prepared copy, marked `OPENDMD1TWN` ([`cache-format.md`](cache-format.md),
+> "Smooth motion"). Checked against this experiment: on the 30 files below
+> the Rust tweener makes the same decision on every pair and the same
+> frames and delays, pixel for pixel (`opendmd-core/tests/tween_card.rs`);
+> over the whole card it agrees per file on the tweened pairs and frames
+> added for all 11,036 files both decode (1,002 at ≥ 10%; the 1,003rd,
+> `Consoles/NES_Unknow_01_Invert`, has a header Pillow accepts and our
+> decoders refuse).
+
 The question: many pack GIFs run at 10–25 fps. Can we add in-between frames
 that make motion smoother on the panel (100 Hz refresh, frames down to 20 ms)
 **without smears**, and for which content? I tried three things and compared

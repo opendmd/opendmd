@@ -15,9 +15,10 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 # `follow::clean_game_name` / `console_name` (what a card calls a game and a
 # platform) and `gifslim::recode_gif`, the prepared copy (here rather than
-# in the main module, which is at its size budget). The pixel work below
-# uses none of the core.
-opendmd-core = { path = "../opendmd-core" }
+# in the main module, which is at its size budget), and `tween` — Smooth
+# motion's analyser and tweener, which only the browser and opendmd-pack
+# run. The pixel work below uses none of the core.
+opendmd-core = { path = "../opendmd-core", features = ["tween"] }
 js-sys = "0.3"          # the prepared copy's {copy, stats} object
 gif = "0.13"            # the encoder: one global palette, every frame whole
 wasm-bindgen = "0.2"

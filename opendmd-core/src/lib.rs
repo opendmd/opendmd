@@ -41,3 +41,6 @@ pub use manifest::{
 pub use overrides::{Override, OverrideSet, Overrides};
 pub use player::{FrameSource, GifSource};
 pub use scheduler::{Mode, Scheduler};
+
+#[cfg(feature = "tween")]
+pub mod tween;

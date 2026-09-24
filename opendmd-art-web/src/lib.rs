@@ -10,6 +10,10 @@
 //! GIF — the core's recoder, byte-identical to `opendmd-pack` and the
 //! device — for the prepare job, Add GIFs and the Studio's save: ~10 KB gz
 //! the main module has no room for, loaded only when something is prepared.
+//! And Smooth motion ([`Smoother`], `smoothMarker`, `prepareSmoothGif`):
+//! the core's `tween` — the analysis a Library preview shows, the tweened
+//! frames its Preview plays and the smoothed copy — in steps the page
+//! yields between, byte-identical to `opendmd-pack`'s.
 
 pub mod encode;
 pub mod pipeline;
@@ -188,4 +192,116 @@ pub fn prepare_gif(gif: &[u8]) -> Result<JsValue, JsError> {
     set(&o, "copy", Uint8Array::from(&out[..]).into());
     set(&o, "stats", stats.into());
     Ok(o.into())
+}
+
+/// Smooth motion for one GIF (`opendmd_core::tween::Smooth`), in steps so
+/// the page can yield between them: `new Smoother(gifBytes)`, then
+/// `analyse(n)` until it returns true (`n` frames a call; `decoded` counts
+/// them), then the analysis (`frames`, `pairs`, `tweened`, `added`,
+/// `percent`, `offered`); `tween(n)` until true, then `gif()` — the tweened
+/// frames as a plain GIF, what the preview plays — and `prepare()`, the
+/// smoothed prepared copy (marked). Throws on a GIF that does not decode.
+#[wasm_bindgen]
+pub struct Smoother {
+    s: opendmd_core::tween::Smooth,
+}
+
+fn js_err(e: std::io::Error) -> JsError {
+    JsError::new(&e.to_string())
+}
+
+#[wasm_bindgen]
+impl Smoother {
+    #[wasm_bindgen(constructor)]
+    pub fn new(gif: &[u8]) -> Result<Smoother, JsError> {
+        Ok(Smoother {
+            s: opendmd_core::tween::Smooth::new(gif).map_err(js_err)?,
+        })
+    }
+
+    /// Decode and classify up to `frames` more frames; true once done.
+    pub fn analyse(&mut self, frames: u32) -> Result<bool, JsError> {
+        self.s.analyse(frames).map_err(js_err)
+    }
+
+    /// Write up to `frames` more source frames of the tweened GIF; true
+    /// once done.
+    pub fn tween(&mut self, frames: u32) -> Result<bool, JsError> {
+        self.s.tween(frames).map_err(js_err)
+    }
+
+    /// Frames decoded so far (the total once analysed).
+    #[wasm_bindgen(getter)]
+    pub fn decoded(&self) -> u32 {
+        self.s.summary().frames
+    }
+    #[wasm_bindgen(getter)]
+    pub fn frames(&self) -> u32 {
+        self.s.summary().frames
+    }
+    /// Frame pairs, the loop's last -> first included.
+    #[wasm_bindgen(getter)]
+    pub fn pairs(&self) -> u32 {
+        self.s.summary().pairs
+    }
+    /// Pairs that move in steps of 2 px or more the tweener takes.
+    #[wasm_bindgen(getter)]
+    pub fn tweened(&self) -> u32 {
+        self.s.summary().tweened
+    }
+    /// Frames Smooth motion adds.
+    #[wasm_bindgen(getter)]
+    pub fn added(&self) -> u32 {
+        self.s.summary().added
+    }
+    /// `tweened` as a whole percentage of `pairs`, rounded down.
+    #[wasm_bindgen(getter)]
+    pub fn percent(&self) -> u32 {
+        self.s.summary().percent()
+    }
+    /// Worth offering (≥ 10% of the pairs).
+    #[wasm_bindgen(getter)]
+    pub fn offered(&self) -> bool {
+        self.s.summary().offered()
+    }
+
+    /// The tweened frames as a plain GIF (empty until `tween` is done).
+    pub fn gif(&self) -> Vec<u8> {
+        self.s.tweened_gif().to_vec()
+    }
+
+    /// The smoothed prepared copy: the tweened GIF through the recoder in
+    /// the prepared format, marked `OPENDMD1TWN`.
+    pub fn prepare(&self) -> Result<Vec<u8>, JsError> {
+        self.s
+            .prepare(&opendmd_core::gifslim::PREPARED)
+            .map(|(copy, _)| copy)
+            .map_err(js_err)
+    }
+}
+
+/// A copy's Smooth motion marker from its first bytes (~1 KB is plenty):
+/// `{pairs, added}`, or `null` for a plain copy (or too few bytes).
+#[wasm_bindgen(js_name = smoothMarker)]
+pub fn smooth_marker(head: &[u8]) -> JsValue {
+    use js_sys::{Object, Reflect};
+    match opendmd_core::tween::marker(head) {
+        Some(m) => {
+            let o = Object::new();
+            let _ = Reflect::set(&o, &"pairs".into(), &m.pairs.into());
+            let _ = Reflect::set(&o, &"added".into(), &m.added.into());
+            o.into()
+        }
+        None => JsValue::NULL,
+    }
+}
+
+/// The smoothed prepared copy in one call (`opendmd_core::tween::smooth_gif`
+/// in the prepared format): what `Smoother` gives step by step.
+#[wasm_bindgen(js_name = prepareSmoothGif)]
+pub fn prepare_smooth_gif(gif: &[u8]) -> Result<Vec<u8>, JsError> {
+    let mut out = Vec::with_capacity(gif.len() * 2);
+    opendmd_core::tween::smooth_gif(gif, &mut out, &opendmd_core::gifslim::PREPARED)
+        .map_err(js_err)?;
+    Ok(out)
 }

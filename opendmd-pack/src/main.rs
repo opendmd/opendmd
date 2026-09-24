@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! opendmd-pack convert <card-root> [--jobs N] [--verify] [--force]
+//! opendmd-pack smooth analyse <card-root> [--min-percent 10] [--jobs N] [--write]
 //! ```
 //!
 //! `convert` writes, for every `<card-root>/gifs/<Category>/<name>.gif`, its
@@ -25,15 +26,27 @@
 //! firmware looks for each GIF's copy there and plays it when it is, so
 //! playlists keep naming GIFs and nothing else changes on the card.
 //!
+//! **Smooth motion** (`opendmd_core::tween`): a GIF named in the card's
+//! `/sets/.smooth` gets a smoothed copy — `recode_gif(tween(GIF))` plus the
+//! `OPENDMD1TWN` marker, what the browser writes — and every other copy is
+//! plain (a copy that disagrees with the list is re-encoded). Without a
+//! list, a marked copy is kept smooth. `--verify` plays a smoothed copy
+//! against the tweened frames instead of the GIF's (the same three
+//! decoders) and checks its bytes are exactly the tweener's.
+//! `smooth analyse <card-root> [--min-percent 10] [--jobs N] [--write]`
+//! finds the files worth smoothing (and `--write` lists them).
+//!
 //! `recode` and `gifscan` are the gifslim experiment's tools
 //! (`docs/gifslim-experiment.md`).
 
 mod recode;
+mod smooth;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use opendmd_core::gifslim::{self, RecodeStats, PREPARED};
 use opendmd_core::layout;
+use opendmd_core::tween::{self, Summary};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -63,6 +76,11 @@ enum Cmd {
         /// Re-encode even when the copy is up to date.
         #[arg(long)]
         force: bool,
+    },
+    /// Smooth motion: which GIFs gain from in-between frames.
+    Smooth {
+        #[command(subcommand)]
+        cmd: SmoothCmd,
     },
     /// Experiment (docs/gifslim-experiment.md): write <name>.cap<N>[d].gif
     /// beside every original GIF — a standard GIF whose LZW codes never
@@ -108,6 +126,26 @@ enum Cmd {
     },
 }
 
+#[derive(Subcommand)]
+enum SmoothCmd {
+    /// Analyse every GIF; print those where at least --min-percent of the
+    /// frame pairs would be tweened, with the frames each would gain.
+    Analyse {
+        card_root: PathBuf,
+        /// The threshold, % of frame pairs (the Library offers Smooth
+        /// motion from 10%).
+        #[arg(long, default_value_t = tween::OFFER_PERCENT)]
+        min_percent: u32,
+        /// Worker threads (default: every core).
+        #[arg(long)]
+        jobs: Option<usize>,
+        /// Add the files found to the card's /sets/.smooth (lines already
+        /// there are kept); `convert` then makes their copies smooth.
+        #[arg(long)]
+        write: bool,
+    },
+}
+
 fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Convert {
@@ -116,6 +154,15 @@ fn main() -> Result<()> {
             verify,
             force,
         } => convert(&card_root, jobs, verify, force),
+        Cmd::Smooth {
+            cmd:
+                SmoothCmd::Analyse {
+                    card_root,
+                    min_percent,
+                    jobs,
+                    write,
+                },
+        } => smooth::analyse(&card_root, min_percent, jobs, write),
         Cmd::Recode {
             card_root,
             cap,
@@ -160,6 +207,8 @@ struct Done {
     stats: Option<RecodeStats>,
     verify: Option<recode::Verdict>,
     frames_compared: u64,
+    /// The copy is smoothed: the tweener's analysis (`None` for a plain one).
+    smooth: Option<Summary>,
 }
 
 fn mtime(meta: &fs::Metadata) -> Option<SystemTime> {
@@ -177,12 +226,14 @@ fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Resul
     let jobs = jobs
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
         .max(1);
+    let choice = smooth::Choice::load(root)?;
     println!(
-        "found {} .gif files under {} ({jobs} jobs{}) -> {}",
+        "found {} .gif files under {} ({jobs} jobs{}) -> {}; smooth motion: {}",
         files.len(),
         gif_root.display(),
         if verify { ", verifying" } else { "" },
-        root.join("cache").display()
+        root.join("cache").display(),
+        choice.describe()
     );
 
     let t0 = Instant::now();
@@ -200,7 +251,7 @@ fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Resul
                     .unwrap_or(path)
                     .to_string_lossy()
                     .replace(std::path::MAIN_SEPARATOR, "/");
-                match process(root, path, rel.clone(), force, verify) {
+                match process(root, path, rel.clone(), force, verify, &choice) {
                     Ok(done) => results.lock().unwrap().push(done),
                     Err(e) => errors
                         .lock()
@@ -245,10 +296,20 @@ fn is_current(path: &Path, gif_meta: &fs::Metadata) -> bool {
         .is_ok_and(|m| m.len() > 13 && mtime(&m).is_some() && mtime(&m) == mtime(gif_meta))
 }
 
-fn process(root: &Path, gif_path: &Path, rel: String, force: bool, verify: bool) -> Result<Done> {
+fn process(
+    root: &Path,
+    gif_path: &Path,
+    rel: String,
+    force: bool,
+    verify: bool,
+    choice: &smooth::Choice,
+) -> Result<Done> {
     let copy_path = root.join(layout::cache_rel(&rel).context("not a .gif name")?);
     let gif_meta = fs::metadata(gif_path)?;
-    let up_to_date = !force && is_current(&copy_path, &gif_meta);
+    let marked = smooth::copy_is_marked(&copy_path);
+    let want_smooth = choice.wants(&rel, marked);
+    // Up to date: the GIF's mtime, and smooth exactly when it should be.
+    let up_to_date = !force && is_current(&copy_path, &gif_meta) && marked == want_smooth;
     if up_to_date && !verify {
         return Ok(Done {
             rel,
@@ -257,14 +318,44 @@ fn process(root: &Path, gif_path: &Path, rel: String, force: bool, verify: bool)
             stats: None,
             verify: None,
             frames_compared: 0,
+            smooth: None,
         });
     }
     let gif = fs::read(gif_path).context("reading the GIF")?;
+    // A smooth copy is `recode_gif(tween(GIF))` + the marker; the tweened
+    // frames (a plain GIF) are what it is verified against.
+    // A GIF the tweener cannot take (a frame past 256 colours) gets a
+    // plain copy, and says so.
+    let smoothed = if want_smooth {
+        let run = || -> std::io::Result<_> {
+            let mut s = tween::Smooth::new(&gif[..])?;
+            while !s.analyse(u32::MAX)? {}
+            while !s.tween(u32::MAX)? {}
+            let (copy, stats) = s.prepare(&PREPARED)?;
+            Ok((s, copy, stats))
+        };
+        match run() {
+            Ok(r) => Some(r),
+            Err(e) => {
+                eprintln!("  {rel}: not smoothed ({e}); a plain copy instead");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let (stats, copy) = if up_to_date {
         (None, fs::read(&copy_path)?)
     } else {
-        let mut out = Vec::with_capacity(gif.len());
-        let stats = gifslim::recode_gif(&gif[..], &mut out, &PREPARED).context("encoding")?;
+        let (stats, out) = match &smoothed {
+            Some((_, copy, stats)) => (stats.clone(), copy.clone()),
+            None => {
+                let mut out = Vec::with_capacity(gif.len());
+                let stats =
+                    gifslim::recode_gif(&gif[..], &mut out, &PREPARED).context("encoding")?;
+                (stats, out)
+            }
+        };
         if let Some(parent) = copy_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -286,8 +377,24 @@ fn process(root: &Path, gif_path: &Path, rel: String, force: bool, verify: bool)
         // whose two decoders agree while it differs from the original is
         // reported as quantised, and a fresh encode says for sure.
         let quantised = stats.as_ref().is_none_or(|s| s.quantised);
-        let (v, n, _) = recode::compare(&gif, &copy, PREPARED.cap, quantised);
-        (Some(v), n)
+        match &smoothed {
+            // Smoothed: the copy must be exactly the tweener's bytes, and
+            // play the tweened frames through both decoders.
+            Some((_, want, _)) if *want != copy => (
+                Some(recode::Verdict::Fail(
+                    "the copy is not recode(tween(GIF)) byte for byte".into(),
+                )),
+                0,
+            ),
+            Some((s, _, _)) => {
+                let (v, n, _) = recode::compare(s.tweened_gif(), &copy, PREPARED.cap, quantised);
+                (Some(v), n)
+            }
+            None => {
+                let (v, n, _) = recode::compare(&gif, &copy, PREPARED.cap, quantised);
+                (Some(v), n)
+            }
+        }
     } else {
         (None, 0)
     };
@@ -298,7 +405,14 @@ fn process(root: &Path, gif_path: &Path, rel: String, force: bool, verify: bool)
         stats,
         verify,
         frames_compared,
+        smooth: smoothed.map(|(s, _, _)| s.summary()),
     })
+}
+
+fn verify_note(results: &[Done]) -> bool {
+    results
+        .iter()
+        .any(|r| r.smooth.is_some() && r.verify.is_some())
 }
 
 /// numpy's default (linear) percentile, so the numbers line up with the
@@ -448,6 +562,33 @@ fn report(results: &[Done], errors: &[(String, String)], found: usize, jobs: usi
         }
     }
 
+    let smoothed: Vec<(&Done, &Summary)> = results
+        .iter()
+        .filter_map(|r| r.smooth.as_ref().map(|s| (r, s)))
+        .collect();
+    if !smoothed.is_empty() {
+        println!("\n=== SMOOTH MOTION ===");
+        let added: u64 = smoothed.iter().map(|(_, s)| s.added as u64).sum();
+        println!(
+            "smoothed copies: {} (+{added} in-between frames){}",
+            smoothed.len(),
+            if verify_note(results) {
+                ", verified against recode(tween(GIF))"
+            } else {
+                ""
+            }
+        );
+        for (r, s) in smoothed.iter().take(20) {
+            println!(
+                "  {}: {}% of {} pairs, +{} frames",
+                r.rel,
+                s.percent(),
+                s.pairs,
+                s.added
+            );
+        }
+    }
+
     println!("\n=== TIMING ===");
     println!("wall clock for {found} files with {jobs} jobs: {secs:.1}s");
 }
@@ -498,4 +639,60 @@ mod tests {
         convert(&root, Some(1), false, false).unwrap();
         fs::remove_dir_all(&root).unwrap();
     }
+
+    #[test]
+    fn convert_honours_the_smooth_list() {
+        let root = std::env::temp_dir().join(format!("opendmd-pack-smooth-{}", std::process::id()));
+        let dir = root.join("gifs/Other");
+        fs::create_dir_all(&dir).unwrap();
+        // A 2 px-per-frame scroll of a 64-wide stripe pattern, 50 ms a frame.
+        let (w, h) = (128u16, 32u16);
+        let pal: Vec<u8> = (0..8u8).flat_map(|i| [i * 30, 200 - i * 20, i * 7]).collect();
+        let mut gif = Vec::new();
+        {
+            let mut enc = gif::Encoder::new(&mut gif, w, h, &pal).unwrap();
+            for f in 0..8usize {
+                let buf: Vec<u8> = (0..h as usize * w as usize)
+                    .map(|p| {
+                        let (x, y) = (p % 128 + 2 * f, p / 128);
+                        ((x * 7 + y * 3 + x * x % 5) % 8) as u8
+                    })
+                    .collect();
+                enc.write_frame(&gif::Frame {
+                    width: w,
+                    height: h,
+                    buffer: std::borrow::Cow::Owned(buf),
+                    delay: 5,
+                    ..Default::default()
+                })
+                .unwrap();
+            }
+        }
+        fs::write(dir.join("X.gif"), &gif).unwrap();
+        let copy = root.join(layout::cache_rel("Other/X.gif").unwrap());
+        // Listed: the smoothed copy, exactly the core's, verified.
+        fs::create_dir_all(root.join("sets")).unwrap();
+        fs::write(root.join("sets/.smooth"), "/gifs/Other/X.gif\n").unwrap();
+        convert(&root, Some(1), true, false).unwrap();
+        let mut want = Vec::new();
+        tween::smooth_gif(&gif, &mut want, &PREPARED).unwrap();
+        let got = fs::read(&copy).unwrap();
+        assert!(tween::marker(&got).is_some());
+        assert_eq!(got, want);
+        // Up to date now; then taken off the list: made plain again.
+        convert(&root, Some(1), true, false).unwrap();
+        assert_eq!(fs::read(&copy).unwrap(), want);
+        fs::write(root.join("sets/.smooth"), "").unwrap();
+        convert(&root, Some(1), true, false).unwrap();
+        let mut plain = Vec::new();
+        gifslim::recode_gif(&gif[..], &mut plain, &PREPARED).unwrap();
+        assert_eq!(fs::read(&copy).unwrap(), plain);
+        // No list at all: a marked copy stays smooth.
+        fs::write(&copy, &want).unwrap();
+        fs::remove_file(root.join("sets/.smooth")).unwrap();
+        convert(&root, Some(1), true, true).unwrap();
+        assert_eq!(fs::read(&copy).unwrap(), want);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
 }

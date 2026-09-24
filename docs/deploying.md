@@ -80,6 +80,17 @@ prepared by the browser as they are uploaded, the player prepares the rest
 itself at night, and **Settings → Playback cache** shows how many of the
 playlist's files are prepared and can prepare the rest in the background.
 
+**Smooth motion (optional).** To switch it on for every GIF where it
+helps (≥ 10% of the frame pairs move in steps of 2 px or more: ~1,000 of
+the stock card's 11,047) before preparing, list them and convert — the
+list is `/sets/.smooth`, which `convert` honours whenever it is on the
+card, and which the web app's Library switch edits later:
+
+```bash
+make pack ARGS="smooth analyse $CARD --write"   # prints them, adds them to /sets/.smooth (68 s on 16 jobs)
+make pack ARGS="convert $CARD --verify"         # their copies smooth, the rest plain
+```
+
 **A card prepared by an earlier build** has an `odm/` tree of the retired
 pre-rendered `.odm` copies (and perhaps a `filelist.odm.txt`). The player
 ignores both and logs each once at boot. Remove the tree on a laptop (`rm

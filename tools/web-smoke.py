@@ -63,6 +63,19 @@ every view like a person would:
             and in night mode ("about N nights left"), "All files are
             prepared" after preparing; the option ticked -> "always",
             unticked -> "idle"; a bad value is a 400; a shot of the card
+  Smooth    Library's Smooth motion control: hidden for a GIF with
+            nothing to smooth (OTHER_DBZ01), shown for a candidate
+            (OTHER_SCROLL_Xmen01) with the analysis `opendmd-pack smooth
+            analyse` prints ("N% ... adds M frames"); Preview plays the
+            smooth version in the Library preview and back; on -> the line
+            in /sets/.smooth and a marked file byte-identical to
+            `opendmd-pack convert` with that list; overwritten with a plain
+            one (what the device's builder would make after the cache was
+            cleared), "Prepare remaining files" over a playlist of the two
+            makes it smooth again; off -> the line gone and the plain file,
+            byte-identical to opendmd-pack's; then analysis, tween and
+            recode timed in wasm for MD_Demons_Of_Asteborg_01_sephirot68
+            (4,489 frames) and OTHER_SCROLL_Xmen01
   Settings  www_version and index_state shown; PUT brightness, read it
             back; WiFi scan; the playlist choices are labelled; with
             /api/status rewritten to index_state "building" (Playwright
@@ -81,7 +94,8 @@ Real-device pass (--device): the local build served through
 (and a minute of the preview's drift against the panel: median, max, RTT —
 DRIFT_S=60 by default),
 Library (+ a preview, sent to the panel with POST /api/play, which must show
-up in /api/status), a preview of a GIF that has a prepared copy (fetched from
+up in /api/status; the Smooth motion control shown for OTHER_SCROLL_Xmen01,
+nothing switched), a preview of a GIF that has a prepared copy (fetched from
 the copy, never the GIF), the cache count (/api/cache, waited until ready),
 the playlists listed by name, Settings (read only; the auto-prepare fields
 and sentence, the setting left alone), the Studio (opens, "Find art for a
@@ -417,8 +431,9 @@ def shot(page: Page, name: str, size: str) -> None:
 
 
 # URL substrings of requests that fail on purpose (a 404/415 play). A
-# preview asks for the prepared copy first, and a 404 there is normal.
-expected: list[str] = ["/cache/"]
+# preview asks for the prepared copy first, and a 404 there is normal; so
+# is Smooth motion's list on a card that has none yet.
+expected: list[str] = ["/cache/", "/sets/.smooth"]
 
 
 def unexpected(url: str) -> bool:
@@ -945,6 +960,7 @@ def mock_pass(browser) -> None:
         page.click("#sets-list [data-path='/sets/cachetest.txt'] >> text=Delete")
         page.wait_for_selector("#sets-list [data-path='/sets/cachetest.txt']", state="detached", timeout=60000)
         check(get_json(base + "/api/config")["set"] == "", "cache: cachetest deleted, All files playing")
+        smooth_checks(page, base, overlay)
         # Settings
         goto_view(page, "settings")
         page.wait_for_selector("#st-facts .stat")
@@ -1352,6 +1368,150 @@ def compare_with_pack(overlay: Path, made: dict[str, Path]) -> None:
         check(same, f"prepared copy {copy} byte-identical to opendmd-pack ({size} B)")
 
 
+# --- Smooth motion -------------------------------------------------------------
+
+SMOOTH_ON = "/gifs/Other/OTHER_SCROLL_Xmen01.gif"
+SMOOTH_NONE = "/gifs/Other/OTHER_DBZ01.gif"
+SMOOTH_WORST = "/gifs/Consoles/MD_Demons_Of_Asteborg_01_sephirot68.gif"
+
+
+def pack(*args: str) -> str:
+    return subprocess.run(["cargo", "run", "--release", "--quiet", "--", *args], cwd=REPO / "opendmd-pack",
+                          check=True, env={**os.environ, "RUSTUP_TOOLCHAIN": "stable"},
+                          capture_output=True, text=True).stdout
+
+
+def pack_copy(gif: str, smooth: bool) -> bytes:
+    """opendmd-pack convert's file for one GIF, on a card of its own, with
+    or without it in /sets/.smooth."""
+    mini = OUT / ("pack-smooth" if smooth else "pack-plain")
+    shutil.rmtree(mini, ignore_errors=True)
+    dst = mini / gif.lstrip("/")
+    dst.parent.mkdir(parents=True)
+    shutil.copy(CARD / gif.lstrip("/"), dst)
+    if smooth:
+        (mini / "sets").mkdir()
+        (mini / "sets" / ".smooth").write_text(gif + "\n")
+    pack("convert", str(mini), "--verify")
+    return (mini / cache_path(gif).lstrip("/")).read_bytes()
+
+
+def marked(b: bytes) -> bool:
+    """The OPENDMD1TWN block right after the OPENDMD1LZW hint."""
+    at = 13 + (3 * (2 << (b[10] & 7)) if b[10] & 0x80 else 0)
+    return b[at + 3:at + 14] == b"OPENDMD1LZW" and b[at + 22:at + 33] == b"OPENDMD1TWN"
+
+
+def preview_in_library(page: Page, gif: str) -> str:
+    """Preview one GIF in Library; returns the Smooth motion box's state
+    once the analysis is done."""
+    goto_view(page, "library")
+    cat, name = gif.split("/")[2], gif.rsplit("/", 1)[1]
+    page.select_option("#lib-cat", cat)
+    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    page.fill("#lib-search", name[:-4])
+    page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(gif)}]", timeout=20000)
+    page.click(f"#lib-list .vrow[data-path={json.dumps(gif)}]")
+    page.wait_for_function(f"document.querySelector('#lib-cap').textContent.endsWith({json.dumps(name)})", timeout=30000)
+    page.wait_for_function("(s => s && s !== 'analysing')(document.querySelector('#lib-smooth').dataset.state)", timeout=120000)
+    return page.get_attribute("#lib-smooth", "data-state")
+
+
+def smooth_checks(page: Page, base: str, overlay: Path) -> None:
+    listing = overlay / "sets" / ".smooth"
+    copy = overlay / cache_path(SMOOTH_ON).lstrip("/")
+    # What the CLI says about the two (percent to one decimal, frames added).
+    mini = OUT / "pack-analyse"
+    shutil.rmtree(mini, ignore_errors=True)
+    for g in (SMOOTH_ON, SMOOTH_NONE):
+        (mini / g.lstrip("/")).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(CARD / g.lstrip("/"), mini / g.lstrip("/"))
+    out = pack("smooth", "analyse", str(mini), "--min-percent", "10")
+    rows = {m[3]: (float(m[0]), int(m[2])) for m in re.findall(r"^\s*([\d.]+)%\s+(\d+)\s+(\d+)\s+\d+\s+(\S.*)$", out, re.M)}
+    check(SMOOTH_ON in rows and SMOOTH_NONE not in rows, f"smooth: opendmd-pack smooth analyse lists only the candidate ({rows})")
+    pct, added = rows.get(SMOOTH_ON, (0.0, 0))
+    # Nothing to smooth: no control at all.
+    state = preview_in_library(page, SMOOTH_NONE)
+    check(state == "none" and page.locator("#lib-smooth").is_hidden(), f"smooth: hidden for {SMOOTH_NONE} ({state})")
+    # A candidate: the sentence with the CLI's numbers.
+    state = preview_in_library(page, SMOOTH_ON)
+    text = page.inner_text("#lib-smooth-text") if state in ("on", "off") else ""
+    want = f"{int(pct)}% of this animation moves in steps of 2 px or more. Smooth motion adds {added:,} frames."
+    check(state == "off" and page.locator("#lib-smooth").is_visible() and text == want,
+          f"smooth: shown for {SMOOTH_ON}: '{text}' (analysis {page.get_attribute('#lib-smooth', 'data-analyse-ms')} ms)")
+    no_leaks(page, "library (smooth)")
+    shot(page, "library-smooth", "laptop")
+    # Preview: the smooth version plays in the Library preview, then back.
+    page.click("#lib-smooth-preview")
+    page.wait_for_function("document.querySelector('#lib-cap').textContent.endsWith('smooth motion preview')", timeout=60000)
+    wait_lit(page, "#lib-panel", "smooth preview")
+    check(page.inner_text("#lib-smooth-preview") == "Show original", "smooth: Preview plays the smooth version")
+    page.click("#lib-smooth-preview")
+    page.wait_for_function(f"document.querySelector('#lib-cap').textContent.endsWith({json.dumps(SMOOTH_ON.rsplit('/', 1)[1])})", timeout=30000)
+    check(page.inner_text("#lib-smooth-preview") == "Preview", "smooth: and back to the original")
+    # On: the list line and a marked file, as opendmd-pack makes it.
+    page.click("#lib-smooth-on")
+    page.wait_for_function("document.querySelector('#lib-smooth').dataset.state === 'on'", timeout=120000)
+    check(listing.exists() and listing.read_text() == SMOOTH_ON + "\n", f"smooth: on -> /sets/.smooth holds the line ({listing.read_text()!r})")
+    ref = pack_copy(SMOOTH_ON, True)
+    got = copy.read_bytes() if copy.exists() else b""
+    check(marked(got) and got == ref, f"smooth: on -> marked file byte-identical to opendmd-pack's ({len(got)} B)")
+    shot(page, "library-smooth-on", "laptop")
+    # The device's builder replaces it with a plain one (after a cache
+    # wipe): "Prepare remaining files" notices and makes it smooth again.
+    plain = pack_copy(SMOOTH_ON, False)
+    req = urllib.request.Request(base + "/api/files" + cache_path(SMOOTH_ON), data=plain, method="PUT")
+    urllib.request.urlopen(req, timeout=60).read()
+    check(copy.read_bytes() == plain, "smooth: the file replaced by a plain one")
+    put_text(base + "/api/sets/smoothtest", f"{SMOOTH_ON}\n{SMOOTH_NONE}\n")
+    put_json(base + "/api/config", {"set": "smoothtest"})
+    sync_app(page)
+    goto_view(page, "settings")
+    page.click("#pc-go")
+    page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=120000)
+    line = page.inner_text("#pc-progress")
+    got = copy.read_bytes()
+    check(line.startswith("1 file prepared") and got == ref, f"smooth: prepare run made it smooth again ('{line}', marked {marked(got)})")
+    put_json(base + "/api/config", {"set": ""})
+    req = urllib.request.Request(base + "/api/files/sets/smoothtest.txt", method="DELETE")
+    urllib.request.urlopen(req, timeout=30).read()
+    sync_app(page)
+    # Off: the plain file again, made (not deleted), and the line gone.
+    state = preview_in_library(page, SMOOTH_ON)
+    check(state == "on" and page.is_checked("#lib-smooth-on"), f"smooth: shows as on ({state})")
+    page.click("#lib-smooth-on")
+    page.wait_for_function("document.querySelector('#lib-smooth').dataset.state === 'off'", timeout=120000)
+    got = copy.read_bytes() if copy.exists() else b""
+    check(listing.read_text() == "" and got == plain and not marked(got),
+          f"smooth: off -> list emptied, plain file byte-identical to opendmd-pack's ({len(got)} B)")
+    smooth_timings(page)
+
+
+def smooth_timings(page: Page) -> None:
+    """Analysis, tween and recode in wasm, each in one go (no slicing)."""
+    for gif in (SMOOTH_WORST, SMOOTH_ON):
+        r = page.evaluate("""async (path) => {
+            const { app } = await import('./js/state.js');
+            const m = await (await import('./js/artmod.js')).art();
+            const bytes = await app.src.readBytes(path);
+            const t0 = performance.now();
+            const s = new m.Smoother(bytes);
+            while (!s.analyse(100000)) {}
+            const t1 = performance.now();
+            while (!s.tween(100000)) {}
+            const t2 = performance.now();
+            const copy = s.prepare();
+            const t3 = performance.now();
+            const r = { frames: s.frames, tweened: s.tweened, added: s.added, percent: s.percent,
+                        analyse: t1 - t0, tween: t2 - t1, recode: t3 - t2, bytes: bytes.length, copy: copy.length };
+            s.free();
+            return r;
+        }""", gif)
+        check(r["frames"] > 0, f"smooth timing {gif.rsplit('/', 1)[1]}: {r['frames']} frames, {r['percent']}% "
+              f"(+{r['added']}), wasm analyse {r['analyse']:.0f} ms, tween {r['tween']:.0f} ms, recode {r['recode']:.0f} ms "
+              f"({r['bytes']:,} -> {r['copy']:,} B)")
+
+
 def follow_checks(page: Page, base: str, errors: list[str]) -> None:
     """Settings' "Follow RePlayOS" card and the Now line, against a fake
     RePlayOS (tools/mock-replay.py, started and stopped here)."""
@@ -1542,6 +1702,11 @@ def device_pass(browser, device: str) -> None:
         open_library(page)
         send_from_library(page, base, "device library")
         shot(page, "device-library", "laptop")
+        # Smooth motion, read only: the control for a candidate (on or off,
+        # whatever the card's list says; nothing is switched here).
+        state = preview_in_library(page, SMOOTH_ON)
+        check(state in ("on", "off") and page.locator("#lib-smooth").is_visible(),
+              f"device smooth: shown for {SMOOTH_ON} ({state}, analysis {page.get_attribute('#lib-smooth', 'data-analyse-ms')} ms)")
         # A preview of a GIF that has a prepared copy: fetched from the copy.
         t0 = time.time()
         copies = get_json(base + "/api/cache/list")["paths"]

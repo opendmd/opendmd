@@ -670,10 +670,20 @@ impl<R: Read + io::Seek> FrameSource<R> {
 
 /// What the `gif` crate's [`GifSource`] allocates for a 128x32 file, all of
 /// it before its first frame: its 8 KB `BufReader`, `weezl`'s LZW state
-/// (28,784 B, in pieces up to 16 KB) and the 4 KB indexed frame buffer (see
-/// "GIF heap budget" in CLAUDE.md). What a fallback asks its
-/// [`Gate`](crate::compositor::Gate) for, after gifslim's tables are gone.
-pub const GIF_CRATE_BYTES: usize = 42 * 1024;
+/// (28,784 B, in pieces up to 16 KB), the 4 KB indexed frame buffer (see
+/// "GIF heap budget" in CLAUDE.md) and, since `Previous` disposal is one of
+/// the reasons a file falls back, the 12 KB RGB snapshot that disposal
+/// keeps. What a fallback asks its [`Gate`](crate::compositor::Gate) for,
+/// after gifslim's tables are gone. (42 KB, without the snapshot, let
+/// `NES_Excitebike_02` take the rig's heap to 1,124 B on 2026-09-24.)
+pub const GIF_CRATE_BYTES: usize = 54 * 1024;
+
+/// Whether a [`FrameSource::try_frame`] error is gifslim giving the file up
+/// for the `gif` crate: interlaced frames or `Previous` disposal
+/// (`Unsupported`), or a code wider than the cap (`NeedsFullDecoder`).
+pub fn wants_fallback(e: &io::Error) -> bool {
+    crate::gifslim::is_unsupported(e) || crate::gifslim::is_needs_full_decoder(e)
+}
 
 impl<R: Read + io::Seek> FrameSource<R> {
     /// See [`GifSource::next_frame`]; the contract is the same for every
@@ -697,30 +707,50 @@ impl<R: Read + io::Seek> FrameSource<R> {
         canvas: &mut Canvas,
         gate: Option<crate::compositor::Gate>,
     ) -> io::Result<Option<Duration>> {
+        match self.try_frame(canvas) {
+            Err(e) if wants_fallback(&e) => self.fall_back(canvas, e, gate),
+            r => r,
+        }
+    }
+
+    /// One frame from the current decoder, with no fallback: an error for
+    /// which [`wants_fallback`] holds is gifslim giving the file up, and
+    /// [`fall_back`](Self::fall_back) carries on with the `gif` crate. The
+    /// engine takes this route so it can give a running transition's
+    /// buffers back before the crate's decoder is built.
+    pub fn try_frame(&mut self, canvas: &mut Canvas) -> io::Result<Option<Duration>> {
         match &mut self.dec {
-            Dec::Slim(s) => match s.next_frame(canvas) {
-                Err(e)
-                    if crate::gifslim::is_unsupported(&e)
-                        || crate::gifslim::is_needs_full_decoder(&e) =>
-                {
-                    self.fall_back(canvas, e, gate)
-                }
-                r => r,
-            },
+            Dec::Slim(s) => s.next_frame(canvas),
             Dec::Gif(s) => s.next_frame(canvas),
             Dec::Synth(s) => s.next_frame(canvas),
             Dec::Gone => Err(invalid("the file could not be reopened")),
         }
     }
 
-    fn fall_back(
+    /// Switch to the `gif` crate after [`try_frame`](Self::try_frame)
+    /// returned `why` (a [`wants_fallback`] error) and produce that frame;
+    /// see [`next_frame_gated`](Self::next_frame_gated) for `gate`. Anything
+    /// but a gifslim decoder here is a caller's mistake and `why` comes back.
+    pub fn fall_back(
+        &mut self,
+        canvas: &mut Canvas,
+        why: io::Error,
+        gate: Option<crate::compositor::Gate>,
+    ) -> io::Result<Option<Duration>> {
+        if !matches!(self.dec, Dec::Slim(_)) {
+            return Err(why);
+        }
+        self.fall_back_inner(canvas, why, gate)
+    }
+
+    fn fall_back_inner(
         &mut self,
         canvas: &mut Canvas,
         why: io::Error,
         gate: Option<crate::compositor::Gate>,
     ) -> io::Result<Option<Duration>> {
         let Dec::Slim(s) = std::mem::replace(&mut self.dec, Dec::Gone) else {
-            unreachable!("only gifslim falls back");
+            unreachable!("checked by fall_back");
         };
         let (done, cap) = (s.frames_decoded(), s.cap());
         // gifslim's tables go before the crate's decoder is built.

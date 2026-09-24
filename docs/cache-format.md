@@ -86,6 +86,70 @@ art-web crate's wasm tests and web-smoke (every copy the browser makes
 equals `opendmd-pack convert`'s), and on the rig (40 of 40 copies the
 builder made, downloaded, equal `opendmd-pack`'s for the same sources).
 
+## Smooth motion: a smoothed copy
+
+A GIF can be marked for **Smooth motion** (Library, per GIF; or
+`opendmd-pack smooth analyse --write`): its copy is then made from the
+GIF's frames with **in-between frames added** where the motion moves in
+steps of 2 px or more — the integer-shift tweener of
+[`tweening-experiment.md`](tweening-experiment.md), `opendmd_core::tween`
+(the `tween` cargo feature: built into `opendmd-pack` and the art wasm
+module only, never the firmware). Every in-between pixel is a pixel of one
+end moved by whole pixels; the total duration is unchanged. The GIF itself
+is never touched.
+
+- **The copy is `recode_gif(tween(GIF))`**: the tweened frames are written
+  as a plain GIF (every frame whole, 12-bit LZW, the source's loop count;
+  one global palette of the source's colours when it has ≤ 256, else one
+  per frame) and that goes through the recoder in `PREPARED` like any GIF,
+  so everything above holds (cap 9, delta frames, the hint). The browser
+  (the art module's `Smoother` / `prepareSmoothGif`) and `opendmd-pack
+  convert` write byte-identical files (web-smoke compares them; the art
+  crate's tests pin a fingerprint natively and in wasm). The device never
+  makes one: its builder only prepares GIFs that have no copy, so it leaves
+  a smoothed copy alone — and after the cache is cleared it makes a plain
+  one, which the browser then replaces (below).
+- **The marker**: a second application extension, right after the hint —
+  21 bytes:
+
+  ```text
+  21 FF 0B "OPENDMD1TWN" 05 01 <pairs u16 LE> <added u16 LE> 00
+  ```
+
+  identifier `OPENDMD1`, authentication code `TWN`; one data sub-block:
+  version 1, the frame pairs tweened and the frames added (each saturating
+  at 65,535). `GifSlim` and the `gif` crate skip it like any unknown
+  application extension (a unit test plays a marked copy through both, frame
+  for frame equal to the unmarked one); `tween::marker` finds it in the
+  file's first bytes (≤ ~830 B: header, palette, the blocks before frame 0).
+  Delays on a smoothed copy are the split ones (a 50 ms frame of a 2 px
+  scroll becomes 30 + 20 ms on the GIF's 10 ms grid); frames that were not
+  split keep their raw delay.
+- **The list**: `/sets/.smooth` (`tween::LIST_PATH`), one card-absolute GIF
+  path a line (`/gifs/Other/OTHER_SCROLL_Xmen01.gif`), UTF-8, LF, compared
+  case-insensitively. Beside the playlists (and hidden, like `/sets/.ctx`)
+  and **outside `cache/`**, so `DELETE /api/files/cache?recursive=1` keeps
+  the choice. Not `.txt` (it would be listed as a playlist) and not `.meta`
+  (a playlist's overrides); the firmware needs nothing new: `GET
+  /sets/.smooth` is served like any file under `/sets/`, and `PUT
+  /api/files/sets/.smooth` goes through the manifest install every file
+  directly in `sets/` gets (no `.idx` to remove, never the playlist in play:
+  just the temp + rename on the main task). There is no API for it; the
+  browser writes it whole.
+- **Reconciliation, not enforcement.** Settings → Playback cache's "Prepare
+  remaining files" reads the list and checks each listed GIF's copy (a GET
+  of its first KB, the stream then cancelled — neither the firmware nor the
+  mock serves ranges): missing, or without the marker (the builder made a
+  plain one after a wipe), it is made smooth again in the same run. Turning
+  Smooth motion off makes the plain copy again (it is not just deleted) and
+  then drops the line.
+- **`opendmd-pack convert`** honours the list when the card has one: a
+  listed GIF's copy is smooth, every other copy plain, and a copy that
+  disagrees is re-encoded whatever its mtime. With no list on the card a
+  marked copy is kept smooth. `--verify` checks a smoothed copy is exactly
+  `recode_gif(tween(GIF))` byte for byte, then plays it through the same
+  three decoders against the tweened frames instead of the GIF's.
+
 ## Where copies live
 
 `cache/<Category>/<xx>/<name>.gif`:
@@ -180,6 +244,12 @@ prepares. More than 256 colours is refused the same way.
 - `cargo run --release --example encodeprobe -- [--heap] [--out <root>]
   <gifs-dir>` (in `opendmd-core`) — the in-memory and streaming encoders
   against each other over every file, and the streaming one's peak heap.
+- `opendmd-pack smooth analyse <card-root> [--min-percent 10] [--jobs N]
+  [--write]` — which GIFs Smooth motion would change (≥ 10% of their frame
+  pairs, the Library's threshold), with the frames each would gain; `--write`
+  adds them to `/sets/.smooth` (lines already there are kept). The stock
+  card: 1,002 files at ≥ 10% (+53,879 frames), 48,523 of 1,791,893 pairs
+  (2.71%) tweenable card-wide, in 68.5 s on 16 jobs.
 - `make test-card CARD_ROOT=<card>` — includes `prepared_copies_on_the_real_card`:
   twenty copies equal `recode_gif`'s bytes, open as gifslim at cap 9 and play
   every frame exactly as their GIFs do; then 50 entries through the engine
