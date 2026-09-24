@@ -1,0 +1,4 @@
+# Scratch outputs: per-file measurements (5.8 MB) and frame timelines.
+out/files.jsonl
+out/tl/
+__pycache__/
