@@ -62,10 +62,12 @@ CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 CONFIG_ESP_WIFI_NVS_ENABLED=n
 
 # lwip. One httpd task serves four sockets (config::HTTP_MAX_SOCKETS) and
-# needs three more of its own, plus one for the captive-portal DNS server; and
+# needs three more of its own, plus one for the captive-portal DNS server (or
+# the RePlayOS client), plus three for uploads the stream task has taken out
+# of httpd (one receiving, two queued: stream.rs asserts the sum); and
 # nothing here speaks IPv6, so the default windows and mailbox depths are
-# oversized.
-CONFIG_LWIP_MAX_SOCKETS=8
+# oversized. A socket is a few dozen bytes of table until it is used.
+CONFIG_LWIP_MAX_SOCKETS=11
 CONFIG_LWIP_IPV6=n
 # One MSS each. Two MSS was measurably faster and measurably closer to the
 # out-of-memory line; with a ~20 KB floor the margin is worth more than the

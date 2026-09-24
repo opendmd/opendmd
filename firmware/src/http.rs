@@ -5,8 +5,8 @@
 //! `~/projects/stripe-dashboard/src/web_portal.rs`; the file server and the
 //! command plumbing are ours. Everything here runs on the httpd task, which is
 //! pinned to CPU0 (see [`crate::httpd`]) and may block — except the card-file
-//! `GET`s, whose responses are produced on the streaming task
-//! ([`crate::stream`]) so that one download cannot hold up the API. Anything
+//! `GET`s and the uploads, which are produced and received on the streaming
+//! task ([`crate::stream`]) so that one transfer cannot hold up the API. Anything
 //! that would touch the engine, the panel or a file the player has open is
 //! sent to the main task as a [`Command`] and waited on.
 //!
@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::config;
 use crate::files;
-use crate::httpd::{json_string, query_param, Method, Req, Server};
+use crate::httpd::{json_string, query_param, Method, Req, Respond, Server, Upload};
 use crate::nvs_config::Settings;
 use crate::ota;
 use crate::state::{Applied, Command, PlayError, Status, SET_NOT_FOUND};
@@ -93,6 +93,15 @@ struct ForgetRequest {
     path: String,
 }
 
+/// Wire format for `POST /api/cache/failed`: a GIF the browser could not
+/// prepare either, and why.
+#[derive(serde::Deserialize)]
+struct FailedRequest {
+    path: String,
+    #[serde(default)]
+    reason: String,
+}
+
 /// Everything the handlers share. One `Arc` per closure.
 pub struct Ctx {
     pub status: Arc<Mutex<Status>>,
@@ -150,7 +159,7 @@ struct WakeRequest {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route` below (40 now, the captive-portal loop counting six). Registration past
+    // URI handler slots: one per `route` below (41 now, the captive-portal loop counting six). Registration past
     // the limit fails the whole server, so count when adding a route.
     let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 42)?;
 
@@ -582,6 +591,30 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         crate::cache_builder::stream_failed(req)
     })?;
+    // A GIF the browser could not prepare either (`{"path","reason"}`):
+    // recorded once per path, so the device's builder skips it too.
+    server.route("/api/cache/failed", Method::Post, |req| {
+        let Some(body) = json_body(req)? else {
+            return Ok(());
+        };
+        let failed: FailedRequest = match serde_json::from_slice(&body) {
+            Ok(f) => f,
+            Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
+        };
+        if failed.path.contains(['\t', '\r', '\n'])
+            || files::card_path(config::SD_MOUNT, &failed.path).is_none()
+            || opendmd_core::layout::bucketed_path(&failed.path).is_none()
+        {
+            return req.bad_request("path must be a card-absolute /gifs/….gif");
+        }
+        match crate::cache_builder::add_failed(&failed.path, &failed.reason) {
+            Ok(added) => req.json(&format!(
+                r#"{{"ok":true,"path":{},"added":{added}}}"#,
+                json_string(&failed.path)
+            )),
+            Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
+        }
+    })?;
     server.route("/api/cache/failed", Method::Delete, |req| {
         match crate::cache_builder::clear_failed() {
             Ok(existed) => req.json(&format!(r#"{{"ok":true,"cleared":{existed}}}"#)),
@@ -673,6 +706,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
     })?;
 
+    // On the httpd task, unlike every other upload: it writes flash through
+    // `esp_ota_*` and reboots from here, and nothing else may run a transfer
+    // or a card write meanwhile. Capped in time like the others (`ota.rs`).
     server.route("/api/ota", Method::Post, |req| {
         let _busy = crate::cache_builder::busy();
         ota::handle_upload(req)
@@ -693,68 +729,49 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         ota::reboot_after_response()
     })?;
 
-    // --- Uploads that replace a manifest -----------------------------------
-    // Both go through the main task: it is the only place the engine's own
-    // file handle can be dropped before the file underneath it is replaced.
+    // --- Uploads ------------------------------------------------------------
+    // Every body is received on the stream task (`stream::receive`), never
+    // on the httpd task: a client that trickles its upload must not hold up
+    // the API. The cache builder stops for each, as for a download.
+    //
+    // A manifest goes through the main task: it is the only place the
+    // engine's own file handle can be dropped before the file underneath it
+    // is replaced.
     let c = ctx.clone();
     server.route("/api/manifest", Method::Put, move |req| {
-        install_manifest(req, &c, config::MANIFEST_PATH.to_string())
+        let c = c.clone();
+        stream::receive(req, move |up| {
+            install_manifest(up, &c, config::MANIFEST_PATH.to_string())
+        })
     })?;
 
     let c = ctx.clone();
     server.route("/api/sets/*", Method::Put, move |req| {
         let name = req.path().trim_start_matches("/api/sets/");
         let name = crate::httpd::percent_decode(name);
-        if name.is_empty() || name.contains('/') || name.contains("..") {
-            return req.bad_request("set name must be a single path segment");
-        }
-        let dest = format!("{}/{}", config::SETS_DIR, name);
-        let dest = if dest.ends_with(".txt") {
-            dest
-        } else {
-            format!("{dest}.txt")
-        };
-        install_manifest(req, &c, dest)
+        let c = c.clone();
+        stream::receive(req, move |up| {
+            if name.is_empty() || name.contains('/') || name.contains("..") {
+                return up.bad_request("set name must be a single path segment");
+            }
+            let dest = format!("{}/{}", config::SETS_DIR, name);
+            let dest = if dest.ends_with(".txt") {
+                dest
+            } else {
+                format!("{dest}.txt")
+            };
+            install_manifest(up, &c, dest)
+        })
     })?;
 
-    // --- Arbitrary file upload and delete ----------------------------------
     let c = ctx.clone();
     server.route("/api/files/*", Method::Put, move |req| {
-        // Every upload shares the card (and the heap) with the player: the
-        // cache builder stops for it.
-        let _busy = crate::cache_builder::busy();
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/api/files/"));
-        let Some(dest) = files::card_path(config::SD_MOUNT, &rel) else {
-            return req.bad_request("path escapes the card");
-        };
-        // A manifest (`/filelist.*`, `/sets/*`) may be the one the engine has
-        // open, and it has an `.idx` sidecar that must go first. Both are the
-        // main task's business, exactly as for `PUT /api/manifest`.
-        if files::is_manifest_path(&dest) {
-            return install_manifest(req, &c, dest);
-        }
-        // A playlist's overrides: its index carries them, so the swap and the
-        // reindex are the main task's, like a manifest's.
-        if files::meta_manifest(&dest).is_some() {
-            return install_meta(req, &c, dest, true);
-        }
-        // If the player has this very file open — the GIF, or its prepared
-        // copy — ask it to move on first: FAT cannot replace a file that is
-        // being read.
-        skip_if_playing(&c, &dest);
-        let written = files::receive_upload(req, &dest)?;
-        info!("PUT /{rel}: {written} B");
-        if files::under(&dest, config::ODM_ROOT) {
-            crate::cache::invalidate();
-        }
-        if files::same_card_path(&dest, config::WWW_VERSION_PATH) {
-            c.status.lock().unwrap().www_version = files::read_www_version();
-        }
-        req.json(&format!(
-            r#"{{"ok":true,"path":{},"bytes":{written}}}"#,
-            json_string(&format!("/{}", rel.trim_start_matches('/')))
-        ))
+        let c = c.clone();
+        stream::receive(req, move |up| put_file(up, &c, &rel))
     })?;
+
+    // --- Delete ---------------------------------------------------------------
 
     let c = ctx.clone();
     server.route("/api/files/*", Method::Delete, move |req| {
@@ -779,7 +796,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // A playlist's overrides: the main task removes it (and the index
         // that carries them) and reindexes if the playlist is in play.
         if files::meta_manifest(&path).is_some() {
-            return install_meta(req, &c, path, false);
+            return apply_meta(req, &c, path, None);
         }
         // A manifest's `.idx` goes first, for the same crash-ordering reason
         // as on upload (see `files::remove_index_beside`): an orphaned index
@@ -974,10 +991,49 @@ fn json_body(req: &mut Req) -> Result<Option<Vec<u8>>> {
     req.read_to_vec(MAX_JSON_BODY).map(Some)
 }
 
+/// `PUT /api/files/<rel>`, on the stream task: anywhere on the card, a
+/// manifest or a `.meta` by way of the main task.
+fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
+    let Some(dest) = files::card_path(config::SD_MOUNT, rel) else {
+        return up.bad_request("path escapes the card");
+    };
+    // A manifest (`/filelist.*`, `/sets/*`) may be the one the engine has
+    // open, and it has an `.idx` sidecar that must go first. Both are the
+    // main task's business, exactly as for `PUT /api/manifest`.
+    if files::is_manifest_path(&dest) {
+        return install_manifest(up, c, dest);
+    }
+    // A playlist's overrides: its index carries them, so the swap and the
+    // reindex are the main task's, like a manifest's.
+    if files::meta_manifest(&dest).is_some() {
+        let temp = format!("{dest}.part");
+        files::stream_body_to(up, &temp)?;
+        return apply_meta(up, c, dest, Some(temp));
+    }
+    // If the player has this very file open — the GIF, or its prepared
+    // copy — ask it to move on first: FAT cannot replace a file that is
+    // being read.
+    skip_if_playing(c, &dest);
+    let written = files::receive_upload(up, &dest)?;
+    info!(
+        "PUT /{rel}: {written} B in {:.1} s",
+        up.elapsed().as_secs_f32()
+    );
+    if files::under(&dest, config::ODM_ROOT) {
+        crate::cache::invalidate();
+    }
+    if files::same_card_path(&dest, config::WWW_VERSION_PATH) {
+        c.status.lock().unwrap().www_version = files::read_www_version();
+    }
+    up.json(&format!(
+        r#"{{"ok":true,"path":{},"bytes":{written}}}"#,
+        json_string(&format!("/{}", rel.trim_start_matches('/')))
+    ))
+}
+
 /// Stream a manifest upload to a temp file, then hand the swap to the main
 /// task, which drops the engine before the file underneath it changes.
-fn install_manifest(req: &mut Req, ctx: &Ctx, dest: String) -> Result<()> {
-    let _busy = crate::cache_builder::busy();
+fn install_manifest(req: &mut Upload, ctx: &Ctx, dest: String) -> Result<()> {
     let temp = format!("{dest}.part");
     files::stream_body_to(req, &temp)?;
 
@@ -1007,14 +1063,16 @@ fn install_manifest(req: &mut Req, ctx: &Ctx, dest: String) -> Result<()> {
     }
 }
 
-/// A playlist's overrides: stream an upload to a temp file (or, for a
-/// DELETE, nothing), then hand the swap or removal — and the reindex, if it
-/// is the playlist in play — to the main task.
-fn install_meta(req: &mut Req, ctx: &Ctx, dest: String, upload: bool) -> Result<()> {
-    let temp = upload.then(|| format!("{dest}.part"));
-    if let Some(t) = &temp {
-        files::stream_body_to(req, t)?;
-    }
+/// A playlist's overrides: hand the swap of the uploaded `temp` (or, for a
+/// DELETE, `None`: the removal) — and the reindex, if it is the playlist in
+/// play — to the main task.
+fn apply_meta<R: Respond>(
+    req: &mut R,
+    ctx: &Ctx,
+    dest: String,
+    temp: Option<String>,
+) -> Result<()> {
+    let upload = temp.is_some();
     let (tx, rx) = mpsc::channel();
     if ctx
         .cmd

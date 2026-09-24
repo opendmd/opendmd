@@ -16,6 +16,17 @@
 //!   `esp_restart()` on a socket that has not drained leaves the browser with a
 //!   connection reset instead of a result.
 //!
+//! **It runs on the httpd task**, unlike every other upload (those are
+//! received on the stream task, `stream::receive`): it drives the flash
+//! writer (`esp_ota_begin`/`write`/`end`, one handle, erasing as it goes)
+//! and ends in a restart from the handler, and the cache builder and every
+//! other transfer must stay off the card and the heap meanwhile — so it
+//! keeps the one task that nothing else is streamed on. What it shares with
+//! the other uploads is the time limit: the body must be in within
+//! [`config::UPLOAD_MAX_TIME`] (120 s; a 1.9 MB image takes ~20-30 s), or the
+//! update is abandoned with one warn line, `esp_ota_abort`, and the running
+//! firmware untouched, so a trickling client holds the API for at most that.
+//!
 //! This board has 4 MB of flash and two 1.94 MB OTA slots, and
 //! `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is on: a freshly OTA'd image boots
 //! as "pending verify", and if it resets before [`confirm_running_image`]
@@ -29,9 +40,10 @@
 use anyhow::Result;
 use esp_idf_sys as sys;
 use log::{error, info, warn};
+use std::time::Instant;
 
 use crate::config;
-use crate::httpd::Req;
+use crate::httpd::{Req, Respond};
 
 /// Which flash layout this build is for, compiled in by `build.rs`.
 pub const FLASH_VARIANT: &str = env!("OPENDMD_FLASH_VARIANT");
@@ -56,7 +68,7 @@ pub fn running_version() -> String {
 /// The struct starts at binary offset 0x20 (image header + first segment
 /// header) and its `version` field is 0x10 into it, so 0x30 in the file. A
 /// release build (`make fw-release`, which sets `CONFIG_APP_PROJECT_VER`)
-/// ends that string with the variant word ("0.2.0 4mb").
+/// ends that string with the variant word ("0.3.0 4mb").
 /// `None` means "no variant marker", which older and dev builds legitimately
 /// have — those are allowed through.
 fn extract_firmware_variant(data: &[u8]) -> Option<&str> {
@@ -105,6 +117,14 @@ pub fn handle_upload(req: &mut Req) -> Result<()> {
     }
 
     info!("OTA: receiving {content_len} B");
+    let started = Instant::now();
+    req.set_deadline(started + config::UPLOAD_MAX_TIME);
+    let aborted = |at: usize, why: &anyhow::Error| {
+        warn!(
+            "POST /api/ota: upload aborted at {at} of {content_len} B after {:.1} s: {why:#}",
+            started.elapsed().as_secs_f32()
+        );
+    };
 
     // Read the first chunk before erasing anything, so the variant check can
     // reject the upload with the running firmware untouched.
@@ -113,11 +133,12 @@ pub fn handle_upload(req: &mut Req) -> Result<()> {
         Ok(0) => return req.bad_request("no data received"),
         Ok(n) => n,
         Err(e) => {
+            aborted(0, &e);
             return req.error(
                 500,
                 "500 Internal Server Error",
                 &format!("read error: {e}"),
-            )
+            );
         }
     };
     match extract_firmware_variant(&first[..first_len]) {
@@ -147,6 +168,8 @@ pub fn handle_upload(req: &mut Req) -> Result<()> {
 
     let mut written = 0usize;
     let mut failure: Option<String> = None;
+    // A read abort has had its warn line already.
+    let mut logged = false;
 
     // SAFETY: each write hands OTA a live slice of exactly `n` bytes.
     let write = |buf: &[u8]| -> bool {
@@ -170,6 +193,8 @@ pub fn handle_upload(req: &mut Req) -> Result<()> {
                     written += n;
                 }
                 Err(e) => {
+                    aborted(written, &e);
+                    logged = true;
                     failure = Some(format!("read error at offset {written}: {e}"));
                     break;
                 }
@@ -181,7 +206,9 @@ pub fn handle_upload(req: &mut Req) -> Result<()> {
         failure = Some(format!("upload incomplete ({written}/{content_len})"));
     }
     if let Some(reason) = failure {
-        error!("OTA: {reason}");
+        if !logged {
+            error!("OTA: {reason}");
+        }
         // SAFETY: `handle` came from a successful esp_ota_begin.
         unsafe { sys::esp_ota_abort(handle) };
         return req.error(500, "500 Internal Server Error", &reason);

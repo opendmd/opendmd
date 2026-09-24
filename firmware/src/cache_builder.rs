@@ -26,7 +26,8 @@
 //!
 //! On top of the pace, a transfer in flight ([`busy`]: a stream-task file
 //! GET, an upload, a listing) stops it, and so does free heap under
-//! [`config::BUILDER_MIN_HEAP`] before a file (or under
+//! [`config::BUILDER_MIN_HEAP`] (at the full pace
+//! [`config::BUILDER_MIN_HEAP_FULL`]) before a file (or under
 //! [`config::BUILDER_ABORT_HEAP`] during one).
 //!
 //! **A stop abandons the file in hand and frees everything** — the encoder is
@@ -39,7 +40,7 @@
 //! the beginning next time — or, after [`config::BUILDER_DRIP_TRIES`] tries
 //! at the drip pace, left for the next full-speed pass.
 //!
-//! **The task only exists while it may work** (8.9 KB of stack and TCB): any
+//! **The task only exists while it may work** (~9.4 KB of stack and TCB): any
 //! stop ends it, the player's open waits for it to be gone, and the main loop
 //! starts a new one when the pace allows ([`publish`], at most once a second).
 //! Its place in the playlist survives in [`WALK`].
@@ -540,12 +541,30 @@ static COUNTED: AtomicBool = AtomicBool::new(false);
 /// The failure file was cleared ([`clear_failed`]): the walk forgets its
 /// copy of the list at its next step.
 static FAILED_CLEARED: AtomicBool = AtomicBool::new(false);
+/// GIFs added to the failure file from outside ([`add_failed`]), as
+/// `layout::prepared_key`s: the walk takes them into its list at its next
+/// step.
+static FAILED_ADDED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// Held for every read-modify-write of the failure file: the builder
+/// appends from its task, `POST /api/cache/failed` from httpd's, and FATFS
+/// (built without `FF_FS_LOCK`) does not keep two appenders apart.
+static FAILED_FILE: Mutex<()> = Mutex::new(());
 
-/// Free heap needed to start the task: [`config::BUILDER_MIN_HEAP`] for a
-/// file once it runs, plus its stack and ~1 KB of TCB and pthread
-/// bookkeeping (the task costs ~7.9 KB).
+/// Free heap needed to start a file, the task running: less at the full
+/// pace, when nothing animates ([`config::BUILDER_MIN_HEAP_FULL`]).
+fn min_heap() -> u32 {
+    if PACE.load(SeqCst) == PACE_FULL {
+        config::BUILDER_MIN_HEAP_FULL
+    } else {
+        config::BUILDER_MIN_HEAP
+    }
+}
+
+/// Free heap needed to start the task: [`min_heap`] for a file once it
+/// runs, plus its stack and ~1 KB of TCB and pthread bookkeeping (the task
+/// costs ~9.4 KB).
 fn spawn_heap() -> usize {
-    config::BUILDER_MIN_HEAP as usize + config::BUILDER_STACK + 1024
+    min_heap() as usize + config::BUILDER_STACK + 1024
 }
 
 /// Start the task if the pace allows work, it is not running, and there may
@@ -709,6 +728,15 @@ fn work(walk: &mut Option<Walk>) -> (State, Option<Reason>) {
             w.failed.clear();
             report().failed = 0;
         }
+        let added = std::mem::take(&mut *FAILED_ADDED.lock().unwrap_or_else(|p| p.into_inner()));
+        if !added.is_empty() {
+            for key in added {
+                if !w.failed.contains(&key) && w.failed.len() < config::BUILDER_MAX_FAILED {
+                    w.failed.push(key);
+                }
+            }
+            report().failed = w.failed.len() as u32;
+        }
         // 3. Done: over until the copies or the playlist change.
         if w.done_gen.is_some() {
             if w.finished() {
@@ -717,7 +745,7 @@ fn work(walk: &mut Option<Walk>) -> (State, Option<Reason>) {
             *w = Walk::new(w.manifest.clone(), w.platforms.clone());
         }
         // 4. Heap for a whole encoder, with the player's margin left.
-        if free_heap() < config::BUILDER_MIN_HEAP || largest_free_block() < 16 * 1024 {
+        if free_heap() < min_heap() || largest_free_block() < 16 * 1024 {
             return (State::Paused, Some(Reason::LowMemory));
         }
         // 5. The next file that needs a copy.
@@ -1290,6 +1318,11 @@ pub fn stream_failed(req: &mut crate::httpd::Req) -> anyhow::Result<()> {
 /// recount is asked for, which also ends a finished pass so a new one starts.
 /// Returns whether there was a file.
 pub fn clear_failed() -> io::Result<bool> {
+    let _file = FAILED_FILE.lock().unwrap_or_else(|p| p.into_inner());
+    FAILED_ADDED
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clear();
     let existed = match fs::remove_file(config::BUILDER_FAILED_PATH) {
         Ok(()) => true,
         Err(e) if e.kind() == io::ErrorKind::NotFound => false,
@@ -1302,7 +1335,60 @@ pub fn clear_failed() -> io::Result<bool> {
     Ok(existed)
 }
 
+/// `POST /api/cache/failed`: record that `gif` cannot be prepared (the
+/// browser could not either), once per path — compared case-insensitively,
+/// as FAT names are. `reason` is kept on one line, at most 200 characters.
+/// Returns whether a line was added. The builder skips it from its next step.
+pub fn add_failed(gif: &str, reason: &str) -> io::Result<bool> {
+    let reason: String = reason
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(200)
+        .collect();
+    let _file = FAILED_FILE.lock().unwrap_or_else(|p| p.into_inner());
+    // Already there? And does the file end with a newline (a hand-edited one
+    // may not)?
+    let mut ends_in_newline = true;
+    match File::open(config::BUILDER_FAILED_PATH) {
+        Ok(f) => {
+            let mut reader = BufReader::with_capacity(512, f);
+            let mut line = Vec::with_capacity(128);
+            loop {
+                line.clear();
+                if reader.read_until(b'\n', &mut line)? == 0 {
+                    break;
+                }
+                ends_in_newline = line.ends_with(b"\n");
+                let path = line.split(|&b| b == b'\t').next().unwrap_or(&[]);
+                if path.trim_ascii().eq_ignore_ascii_case(gif.as_bytes()) {
+                    return Ok(false);
+                }
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    fs::create_dir_all(config::ODM_ROOT)?;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(config::BUILDER_FAILED_PATH)?;
+    let sep = if ends_in_newline { "" } else { "\n" };
+    writeln!(f, "{sep}{gif}\t{reason}")?;
+    drop(f);
+    FAILED_ADDED
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push(layout::prepared_key(gif));
+    report().failed += 1;
+    log::info!("cache builder: {gif} recorded as failed from outside ({reason})");
+    Ok(true)
+}
+
 fn record_failure(gif: &str, why: &str) {
+    let _file = FAILED_FILE.lock().unwrap_or_else(|p| p.into_inner());
     let _ = fs::create_dir_all(config::ODM_ROOT);
     let appended = OpenOptions::new()
         .create(true)

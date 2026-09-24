@@ -5,9 +5,12 @@
 """Push a local directory onto the player's SD card over the HTTP API.
 
 This is how the web app gets onto a card: every file under <dir> is PUT to
-`/api/files/www/<relative path>`, which the firmware streams to the card in
-4 KB chunks and renames into place. `pkg/` (the wasm-pack output) is included —
-it is the whole point.
+`/api/files/www/<relative path>`, which the firmware receives on its stream
+task (one transfer at a time, downloads included), writes to the card in
+2 KB chunks and renames into place. `pkg/` (the wasm-pack output) is
+included — it is the whole point. A `503` (the device's transfer queue was
+full, or its heap was short) is retried after the `Retry-After` it gives,
+up to three times.
 
     uv run tools/card-sync.py <host> opendmd-web/www [--prefix /www] [--dry-run]
 
@@ -30,17 +33,21 @@ import sys
 import time
 import urllib.parse
 
-def put(host, path, data, timeout):
-    conn = http.client.HTTPConnection(host, timeout=timeout)
-    try:
-        conn.request("PUT", path, body=data,
-                     headers={"Content-Type": "application/octet-stream",
-                              "Content-Length": str(len(data))})
-        resp = conn.getresponse()
-        body = resp.read().decode("utf-8", "replace")
-        return resp.status, body
-    finally:
-        conn.close()
+def put(host, path, data, timeout, retries=3):
+    for attempt in range(retries + 1):
+        conn = http.client.HTTPConnection(host, timeout=timeout)
+        try:
+            conn.request("PUT", path, body=data,
+                         headers={"Content-Type": "application/octet-stream",
+                                  "Content-Length": str(len(data))})
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8", "replace")
+            wait = resp.getheader("Retry-After")
+        finally:
+            conn.close()
+        if resp.status != 503 or attempt == retries:
+            return resp.status, body
+        time.sleep(float(wait) if wait and wait.isdigit() else 1.0)
 
 def main():
     ap = argparse.ArgumentParser()

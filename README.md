@@ -483,6 +483,10 @@ frames run late while GIFs are being pulled out of it — 124 misses, worst
 bucketed `.odm` layout (above) the same load costs 2 misses of 3 ms, and an
 idle player misses nothing. The player always gets priority on heap (requests are refused
 with 503 and transfers pause when the heap falls into the player's reserve).
+Downloads and uploads both run on one transfer task, one at a time, so a
+slow or stalled client never holds up the API: an upload that sends nothing
+for 5 s, or takes over 120 s, is abandoned (`408`) and its partial file
+removed.
 The arithmetic is in "Heap ceiling" in `CLAUDE.md`. Try it with
 `make api-load HOST=… WORKERS=1`.
 
@@ -493,7 +497,7 @@ floor:
 ### Serial output
 
 ```
-I opendmd_firmware: OpenDMD firmware v0.2.0 (4mb, app desc '0.2.0 4mb') — 128x32 HUB75 GIF player
+I opendmd_firmware: OpenDMD firmware v0.3.0 (4mb, app desc '0.3.0 4mb') — 128x32 HUB75 GIF player
 I opendmd_firmware: panel up: 128x32 (2 x 64x32), driver=0, double_buff=false, hub75_refresh_rate=100 Hz
 I opendmd_firmware: microSD mounted at /sdcard (31.27 GB), heap 175600 B free
 I opendmd_firmware: manifest indexed: /sdcard/filelist.txt, 10133 entries, index loaded in 9 ms (40532 B on card), heap 160664 B free
