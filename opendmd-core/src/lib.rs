@@ -21,6 +21,7 @@ pub mod schedule;
 pub mod scheduler;
 pub mod synth;
 pub mod text;
+pub mod www_pack;
 
 pub use canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
 pub use compositor::{Kind as TransitionKind, Transition};

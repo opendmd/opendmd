@@ -86,24 +86,6 @@ export class DeviceSource {
   writeFile(path, data) { return this.json('PUT', '/api/files' + enc(path), data); }
   deleteFile(path) { return this.json('DELETE', '/api/files' + enc(path)); }
   saveSet(name, text) { return this.json('PUT', '/api/sets/' + encodeURIComponent(name), text); }
-
-  // Raw-body firmware upload with progress; XHR because fetch cannot report
-  // upload progress.
-  ota(file, onProgress) {
-    return new Promise((resolve, reject) => {
-      const x = new XMLHttpRequest();
-      x.open('POST', '/api/ota');
-      x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
-      x.onload = () => {
-        let body = {};
-        try { body = JSON.parse(x.responseText); } catch { /* empty */ }
-        if (x.status >= 200 && x.status < 300) resolve(body);
-        else reject(new HttpError(x.status, `${x.status}: ${body.error || x.statusText}`));
-      };
-      x.onerror = () => reject(new HttpError(0, 'upload failed (connection lost)'));
-      x.send(file);
-    });
-  }
 }
 
 // Card-absolute path for a picked file. A folder pick gives

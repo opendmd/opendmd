@@ -1,7 +1,15 @@
-# OpenDMD partition table — dual OTA (4MB flash). Copied from stripe-dashboard.
-# Name,    Type, SubType, Offset,   Size
-nvs,       data, nvs,     0x9000,   0x6000,
-otadata,   data, ota,     0xf000,   0x2000,
-phy_init,  data, phy,     0x11000,  0x1000,
-ota_0,     app,  ota_0,   0x20000,  0x1F0000,
-ota_1,     app,  ota_1,   0x210000, 0x1F0000,
+# OpenDMD partition table, 4 MB flash: one app, no OTA (docs/www-pack.md).
+# The web app is a www pack in its own data partition, memory-mapped and
+# served from flash; it is rewritten by PUT /api/www. Its subtype is IDF's
+# `esphttpd` (0x80, "web server data"): a custom subtype such as 0x40 is only
+# accepted by espflash under a custom *type* (its partition parser panics on
+# an unknown data subtype), and `esphttpd` says what the partition is for.
+# Firmware updates are over USB (make fw-flash, or the browser flasher).
+# 0x9000 + 0x6000 = 0xf000; + 0x1000 = 0x10000; the app starts on a 64 KB
+# boundary (the MMU page) as ESP-IDF requires; 0x10000 + 0x2B0000 = 0x2C0000;
+# + 0x140000 = 0x400000, the end of the chip.
+# Name,    Type, SubType,  Offset,   Size
+nvs,       data, nvs,      0x9000,   0x6000,
+phy_init,  data, phy,      0xf000,   0x1000,
+factory,   app,  factory,  0x10000,  0x2B0000,
+www,       data, esphttpd, 0x2C0000, 0x140000,

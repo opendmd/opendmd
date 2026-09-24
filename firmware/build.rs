@@ -24,9 +24,8 @@ fn main() {
     println!("cargo:rerun-if-changed=components/hub75_shim/hub75_shim.cpp");
     println!("cargo:rerun-if-changed=web/setup.html");
 
-    // Which flash layout this image is for. The OTA handler compares it with
-    // the variant word in an uploaded image's version string and refuses a
-    // mismatch before erasing anything.
+    // Which flash layout this image is for: `/api/status` reports it as
+    // `variant`, and the boot banner prints it.
     let variant = std::env::var("OPENDMD_FLASH_VARIANT").unwrap_or_else(|_| "4mb".into());
     println!("cargo:rustc-env=OPENDMD_FLASH_VARIANT={variant}");
     println!("cargo:rerun-if-env-changed=OPENDMD_FLASH_VARIANT");

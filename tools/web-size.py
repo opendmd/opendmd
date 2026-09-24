@@ -4,7 +4,7 @@
 # ///
 """Print the web app's size, raw and gzipped, and enforce the budget.
 
-    uv run tools/web-size.py opendmd-web/www
+    uv run tools/web-size.py opendmd-web/www [--pack opendmd-web/www.pack --pack-limit 1310720]
 
 Budget (gzipped bytes — what actually crosses the WiFi, since the firmware
 serves `<file>.gz` in preference): the wasm module plus its wasm-bindgen JS
@@ -17,7 +17,14 @@ above. The name index for "Find art for a game" (`art/*.json`, one file
 fetched per search) is printed, with no budget. Raw sizes are printed for
 information. A file with no `.gz` beside it counts at its raw size. Exits 1
 when over budget.
+
+With `--pack`, one more line: the www pack `make web` built from this
+directory (what the device keeps in its `www` flash partition, served from
+flash), its size against the partition — "pack: N B of 1,280 KB". The
+budgets above are about load time over WiFi, not flash; the partition limit
+is enforced by the packer itself (`opendmd-pack www --max-bytes`).
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -29,7 +36,12 @@ STUDIO = {"js/studio.js", "studio.css"}
 
 
 def main() -> int:
-    root = Path(sys.argv[1] if len(sys.argv) > 1 else "opendmd-web/www")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("root", nargs="?", default="opendmd-web/www")
+    ap.add_argument("--pack", help="the www pack built from it")
+    ap.add_argument("--pack-limit", type=int, default=1_310_720, help="the www partition, bytes")
+    args = ap.parse_args()
+    root = Path(args.root)
     files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix != ".gz"
                    and not p.name.startswith("."))
     totals: dict[str, list[int]] = {}
@@ -70,6 +82,9 @@ def main() -> int:
     all_raw = sum(t[0] for t in totals.values())
     all_gz = sum(t[1] for t in totals.values())
     print(f"{'total':<10} raw {all_raw:>9,}           gz {all_gz:>9,}")
+    if args.pack:
+        n = Path(args.pack).stat().st_size
+        print(f"pack: {n:,} B of {args.pack_limit // 1024:,} KB ({n * 100 / args.pack_limit:.1f}%)")
     return 0 if ok else 1
 
 

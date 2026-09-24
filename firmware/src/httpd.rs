@@ -394,8 +394,6 @@ pub struct Req {
     session: Option<Arc<Session>>,
     /// Set by [`Req::take_over`]: the connection is an [`Upload`]'s.
     taken: bool,
-    /// [`Req::read`] gives up once this passes (`POST /api/ota`).
-    deadline: Option<Instant>,
 }
 
 impl Req {
@@ -412,7 +410,6 @@ impl Req {
             client_gone: Cell::new(false),
             session: None,
             taken: false,
-            deadline: None,
         }
     }
 
@@ -452,33 +449,14 @@ impl Req {
         unsafe { (*self.raw).content_len }
     }
 
-    /// Give up reading the body at `deadline` ([`Req::read`] fails then,
-    /// however steadily the data trickles in).
-    pub fn set_deadline(&mut self, deadline: Instant) {
-        self.deadline = Some(deadline);
-    }
-
     /// Read up to `buf.len()` body bytes. `Ok(0)` means the body is complete.
     /// A socket timeout is retried up to [`RECV_TIMEOUTS`] times in a row,
     /// which is what makes a slow uploader work without letting a vanished
-    /// one hold the httpd task forever; a [`Req::set_deadline`] ends it
-    /// regardless.
+    /// one hold the httpd task forever. Only the ≤ 8 KB JSON bodies are read
+    /// this way; uploads are [`Upload`]s, read on the stream task.
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let mut timeouts = 0;
         loop {
-            if let Some(deadline) = self.deadline {
-                let left = deadline.saturating_duration_since(Instant::now());
-                if left.is_zero() {
-                    bail!(
-                        "the body took longer than the {} s cap",
-                        config::UPLOAD_MAX_TIME.as_secs()
-                    );
-                }
-                if left < Duration::from_secs(RECV_TIMEOUT_S.into()) {
-                    // SAFETY: a plain read of the live request.
-                    set_recv_timeout(unsafe { sys::httpd_req_to_sockfd(self.raw) }, left);
-                }
-            }
             // SAFETY: `buf` is a live mutable slice; httpd writes at most
             // `buf.len()` bytes into it.
             let n = unsafe { sys::httpd_req_recv(self.raw, buf.as_mut_ptr() as *mut _, buf.len()) };

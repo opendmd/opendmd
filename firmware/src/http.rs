@@ -1,5 +1,5 @@
-//! The HTTP surface: the web app off the card, the card's files, and a small
-//! JSON API.
+//! The HTTP surface: the web app out of flash (`www.rs`), the card's files,
+//! and a small JSON API.
 //!
 //! Route shapes and the captive-portal probe list come from
 //! `~/projects/stripe-dashboard/src/web_portal.rs`; the file server and the
@@ -23,14 +23,15 @@ use crate::config;
 use crate::files;
 use crate::httpd::{json_string, query_param, Method, Req, Respond, Server, Upload};
 use crate::nvs_config::Settings;
-use crate::ota;
 use crate::state::{Applied, Command, PlayError, Status, SET_NOT_FOUND};
 use crate::stream;
 use crate::wifi::ScannedAp;
+use crate::www;
 use opendmd_core::compositor::{self, Kind as TransitionKind};
 
-/// The embedded setup page: rendered and gzipped by `build.rs`, served when
-/// the card has no web app on it yet (and always at `/setup`).
+/// The embedded setup page: rendered and gzipped by `build.rs`, served at
+/// `/setup` always, and at `/` in AP mode when there is no good web app in
+/// flash (so the captive portal still configures WiFi).
 const SETUP_HTML_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/setup.html.gz"));
 
 /// How long a handler waits for the main task to answer. The display loop
@@ -159,24 +160,30 @@ struct WakeRequest {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route` below (41 now, the captive-portal loop counting six). Registration past
+    // URI handler slots: one per `route` below (42 now, the captive-portal loop counting six; 44 leaves two spare). Registration past
     // the limit fails the whole server, so count when adding a route.
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 42)?;
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 44)?;
 
-    // --- The web app, and the setup page as its fallback -------------------
-    // Every card file goes out from the streaming task (`stream`), so a big
-    // download or a stalled client never holds up the API.
+    // --- The web app, and the setup page ------------------------------------
+    // Every file goes out from the streaming task (`stream`), so a big
+    // download or a stalled client never holds up the API. The web app comes
+    // out of the www pack in flash (`www.rs`), never the card.
     stream::start().unwrap_or_else(|e| {
         log::error!("stream task failed to start ({e:#}); files are served on the httpd task")
     });
 
-    server.route("/", Method::Get, |req| {
-        stream::hand_off(req, |req| {
-            let index = format!("{}/index.html", config::WWW_ROOT);
-            if files::serve(req, &index)? {
-                return Ok(());
+    let c = ctx.clone();
+    server.route("/", Method::Get, move |req| {
+        // In AP mode a device with no good web app shows the setup page, so
+        // the captive portal can always get it onto WiFi.
+        let portal = portal_target(&c).is_some();
+        stream::hand_off(req, move |req| match www::serve(req, "index.html")? {
+            www::Served::Sent => Ok(()),
+            www::Served::NotFound | www::Served::Unavailable(_) if portal => send_setup(req),
+            www::Served::NotFound => {
+                www::unavailable(req, "the web app in flash has no index.html")
             }
-            send_setup(req)
+            www::Served::Unavailable(why) => www::unavailable(req, &why),
         })
     })?;
     server.route("/setup", Method::Get, send_setup)?;
@@ -706,12 +713,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
     })?;
 
-    // On the httpd task, unlike every other upload: it writes flash through
-    // `esp_ota_*` and reboots from here, and nothing else may run a transfer
-    // or a card write meanwhile. Capped in time like the others (`ota.rs`).
-    server.route("/api/ota", Method::Post, |req| {
-        let _busy = crate::cache_builder::busy();
-        ota::handle_upload(req)
+    // The web app in flash: what is there, and a new pack (`www.rs`). The
+    // body is received on the stream task like every other upload, which is
+    // also where every web app file is sent from: the two never overlap.
+    server.route("/api/www", Method::Get, |req| req.json(&www::info_json()))?;
+    server.route("/api/www", Method::Put, |req| {
+        stream::receive(req, www::receive)
     })?;
 
     server.route("/api/reboot", Method::Post, |req| {
@@ -726,7 +733,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             crate::sd::simulate_mount_failures(n.min(20));
         }
         req.json(r#"{"ok":true,"rebooting":true}"#)?;
-        ota::reboot_after_response()
+        reboot_after_response()
     })?;
 
     // --- Uploads ------------------------------------------------------------
@@ -822,9 +829,6 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         skip_if_playing(&c, &path);
         match std::fs::remove_file(&path) {
             Ok(()) => {
-                if files::same_card_path(&path, config::WWW_VERSION_PATH) {
-                    c.status.lock().unwrap().www_version = None;
-                }
                 // A GIF takes its prepared copy with it; a copy removed
                 // directly changes the count.
                 let card = format!("/{}", rel.trim_start_matches('/'));
@@ -869,12 +873,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         serve_under(req, config::SD_MOUNT)
     })?;
 
+    // The web app under `/www/` too (both spellings, as when it was on the
+    // card).
     server.route("/www/*", Method::Get, |req| {
         let rel = crate::httpd::percent_decode(req.path().trim_start_matches("/www/"));
-        let Some(path) = files::card_path(config::WWW_ROOT, &rel) else {
-            return req.bad_request("path escapes the card");
-        };
-        stream_file(req, path, rel)
+        stream::hand_off(req, move |req| match www::serve(req, &rel)? {
+            www::Served::Sent => Ok(()),
+            www::Served::NotFound => req.not_found(&format!("/www/{rel}")),
+            www::Served::Unavailable(why) => www::unavailable(req, &why),
+        })
     })?;
 
     // --- Captive portal ----------------------------------------------------
@@ -898,27 +905,20 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // --- Catch-all, registered last ---------------------------------------
     //
     // The app's own index.html links its assets relatively, so a browser asks
-    // for `/app.js` and `/pkg/opendmd_web_bg.wasm`, not `/www/...`. Serving the
-    // card's `www/` from here is what makes both spellings work.
+    // for `/app.js` and `/pkg/opendmd_web_bg.wasm`, not `/www/...`. Serving
+    // the pack from here is what makes both spellings work.
     let c = ctx.clone();
     server.route("/*", Method::Get, move |req| {
         let rel = crate::httpd::percent_decode(req.path());
-        // Decided here, where the context is: what to say if the card has no
-        // such file.
+        // Decided here, where the context is: what to say if the pack has no
+        // such file (in AP mode, the portal).
         let target = portal_target(&c);
-        let Some(path) = files::card_path(config::WWW_ROOT, &rel) else {
-            return match target {
-                Some(target) => req.redirect(&target),
-                None => req.not_found(&rel),
-            };
-        };
         stream::hand_off(req, move |req| {
-            if files::serve(req, &path)? {
-                return Ok(());
-            }
-            match target {
-                Some(target) => req.redirect(&target),
-                None => req.not_found(&rel),
+            match www::serve(req, rel.trim_start_matches('/'))? {
+                www::Served::Sent => Ok(()),
+                _ if target.is_some() => req.redirect(target.as_deref().unwrap_or("/")),
+                www::Served::NotFound => req.not_found(&rel),
+                www::Served::Unavailable(why) => www::unavailable(req, &why),
             }
         })
     })?;
@@ -1014,6 +1014,19 @@ fn stream_file(req: &mut Req, path: String, rel: String) -> Result<()> {
     })
 }
 
+/// Let the response drain out of the TCP stack, then restart
+/// (`POST /api/reboot`, and the network worker's AP timeout).
+pub fn reboot_after_response() -> ! {
+    // The handler never returns to the wrapper that records this.
+    crate::httpd::note_httpd_stack();
+    // No card write in flight at the reset (the drain wait runs meanwhile).
+    let t = std::time::Instant::now();
+    crate::cache_builder::quiesce(Duration::from_secs(3));
+    std::thread::sleep(Duration::from_secs(1).saturating_sub(t.elapsed()));
+    // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.
+    unsafe { esp_idf_sys::esp_restart() }
+}
+
 fn send_setup(req: &mut Req) -> Result<()> {
     req.header("Content-Encoding", "gzip")?;
     req.header("Cache-Control", "no-cache")?;
@@ -1068,9 +1081,6 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
     );
     if files::under(&dest, config::CACHE_ROOT) {
         crate::cache::invalidate();
-    }
-    if files::same_card_path(&dest, config::WWW_VERSION_PATH) {
-        c.status.lock().unwrap().www_version = files::read_www_version();
     }
     up.json(&format!(
         r#"{{"ok":true,"path":{},"bytes":{written}}}"#,
@@ -1236,11 +1246,12 @@ fn applied_json(a: &Applied) -> String {
 /// with the panel, correcting for its own request latency the NTP way.
 fn status_json(s: &Status) -> String {
     let t = s.epoch.elapsed();
+    let www = crate::www::info();
     format!(
         concat!(
             r#"{{"version":{},"variant":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"#,
             r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}}},"paused":{},"#,
-            r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"#,
+            r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"gifs_started":{},"streams_aborted":{},"#,
             r#""sd":{{"mounted":{},"capacity_bytes":{},"error":{},"attempts":{}}},"reset_reason":{},"#,
@@ -1249,7 +1260,7 @@ fn status_json(s: &Status) -> String {
             r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{}}}"#
         ),
         json_string(s.version),
-        json_string(ota::FLASH_VARIANT),
+        json_string(crate::state::FLASH_VARIANT),
         s.uptime_secs,
         t.as_millis(),
         json_string(&s.ip),
@@ -1264,9 +1275,8 @@ fn status_json(s: &Status) -> String {
         s.entries,
         json_string(&s.manifest),
         json_string(s.index_state),
-        s.www_version
-            .as_deref()
-            .map_or_else(|| "null".to_string(), json_string),
+        opt_json(www.version.as_deref().filter(|_| www.ok)),
+        crate::www::info_json(),
         s.heap_free,
         s.heap_floor,
         s.heap_idf_min,

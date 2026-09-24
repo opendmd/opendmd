@@ -105,8 +105,9 @@ pub fn card_path(root: &str, rel: &str) -> Option<String> {
     }
 }
 
-/// Content type by extension. Everything the web app ships, plus the card's
-/// own files; anything unknown is an octet stream rather than a guess.
+/// Content type by extension. Everything the web app ships (served from the
+/// www pack, `www.rs`, by its logical name), plus the card's own files;
+/// anything unknown is an octet stream rather than a guess.
 pub fn mime_for(path: &str) -> &'static str {
     // Root manifests have whatever extension their owner chose
     // (`filelist.hall`, `filelist.xmas`); they are all text.
@@ -138,7 +139,7 @@ pub fn mime_for(path: &str) -> &'static str {
 ///
 /// `wasm-pack` puts no hash in its filenames, so `pkg/` cannot be immutable
 /// however much we would like it to be: an hour is the compromise between a
-/// fast reload and a stale wasm module after `make card-sync`. The HTML and JS
+/// fast reload and a stale wasm module after `make www-push`. The HTML and JS
 /// that reference it are revalidated every time.
 pub fn cache_for(path: &str) -> &'static str {
     // A manifest is replaced in place by the install path; never let a
@@ -164,37 +165,25 @@ pub fn cache_for(path: &str) -> &'static str {
 /// `Content-Length` (its size from `fstat`): a body cut short is visible to
 /// the client as such, and always logged here (see [`wait_for_heap`]).
 ///
-/// Under [`config::WWW_ROOT`] only, if `<path>.gz` exists it is sent instead
-/// with `Content-Encoding: gzip` — the content type still comes from the
-/// *logical* name, so `app.js.gz` is served as JavaScript. Returns false if
-/// no file is there, leaving the response untouched so the caller can 404 or
-/// fall through.
+/// Returns false if no file is there, leaving the response untouched so the
+/// caller can 404 or fall through. (The web app is not on the card: it is
+/// served from flash by `www.rs`.)
 ///
 /// **Every path lookup is a linear scan of the FAT directory** — ~0.65 ms per
 /// 512 B directory sector, 330-550 ms in the 3,781-entry `gifs/Consoles` —
 /// and it holds the FATFS lock the player needs for its own reads. So the
 /// file is opened straight away (one scan) and sized with `fstat` on the open
-/// handle (no scan), never `stat`ed first; and the `.gz` probe, which would be
-/// a second scan, is only made where gzipped files live. Outside `www/` that
-/// is one scan per request, where it used to be three.
+/// handle (no scan), never `stat`ed first: one scan per request, where it
+/// used to be three.
 pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
     let t_all = probe::http_stamp();
-    let www = path
-        .strip_prefix(config::WWW_ROOT)
-        .is_some_and(|rest| rest.starts_with('/'));
     let t = probe::http_stamp();
-    let (mut file, actual, gzipped) = match www
-        .then(|| format!("{path}.gz"))
-        .and_then(|gz| fs::File::open(&gz).ok().map(|f| (f, gz)))
-    {
-        Some((f, gz)) => (f, gz, true),
-        None => match fs::File::open(path) {
-            Ok(f) => (f, path.to_string(), false),
-            Err(_) => {
-                probe::http_log("open-miss", t_all, path);
-                return Ok(false);
-            }
-        },
+    let (mut file, actual) = match fs::File::open(path) {
+        Ok(f) => (f, path),
+        Err(_) => {
+            probe::http_log("open-miss", t_all, path);
+            return Ok(false);
+        }
     };
     let open_us = probe::elapsed_us(t);
     // `fstat` on the handle: FATFS answers it from the open file object.
@@ -224,9 +213,6 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
         return Ok(true);
     };
     let (mut reads, mut rd_tot, mut rd_max) = (0u32, 0u32, 0u32);
-    if gzipped {
-        req.header("Content-Encoding", "gzip")?;
-    }
     req.header("Cache-Control", cache_for(path))?;
     req.begin_sized("200 OK", mime_for(path), total)?;
 
@@ -474,24 +460,6 @@ fn is_root_manifest_name(path: &str) -> bool {
         && !name.ends_with(".idx")
         && !name.ends_with(".tmp")
         && !name.ends_with(".part")
-}
-
-/// The web app's version, from [`config::WWW_VERSION_PATH`]: its first line,
-/// trimmed and capped at 64 characters, or `None` if there is no such file.
-/// Reads at most 128 bytes whatever was uploaded there.
-pub fn read_www_version() -> Option<String> {
-    let mut buf = [0u8; 128];
-    let mut file = fs::File::open(config::WWW_VERSION_PATH).ok()?;
-    let mut n = 0;
-    while n < buf.len() {
-        match file.read(&mut buf[n..]) {
-            Ok(0) | Err(_) => break,
-            Ok(k) => n += k,
-        }
-    }
-    let text = String::from_utf8_lossy(&buf[..n]);
-    let line = text.lines().next()?.trim();
-    (!line.is_empty()).then(|| line.chars().take(64).collect())
 }
 
 /// Delete the `.idx` beside a manifest that is about to be replaced or removed.

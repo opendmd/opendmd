@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenDMD installer</title>
+<meta name="description" content="Install or update the OpenDMD firmware and web app on an ESP32 DevKit V1 over USB, from the browser.">
+<!-- ESP Web Tools, pinned. The flashing itself is esptool-js over Web Serial. -->
+<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --fg: #16181d; --muted: #5b6270; --card: #ffffff; --line: #dde1e7;
+    --accent: #0b6bcb; --warn-bg: #fff4e5; --warn-fg: #7a4a00; --code: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111317; --fg: #e8eaee; --muted: #9aa3b2; --card: #1a1d23; --line: #2c313a;
+      --accent: #5aa7ff; --warn-bg: #2d2412; --warn-fg: #f3c77a; --code: #232730;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 28px 0 8px; }
+  p, li { color: var(--fg); }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+  .install { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+  .note { background: var(--warn-bg); color: var(--warn-fg); border-radius: 8px; padding: 12px 14px; margin: 16px 0 0; }
+  code { background: var(--code); border-radius: 4px; padding: 1px 5px; font-size: 0.92em; }
+  ol, ul { padding-left: 22px; }
+  a { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>OpenDMD installer</h1>
+  <p class="sub">Put the OpenDMD firmware and its web app on an ESP32 DevKit V1 over USB, from this page.</p>
+
+  <div class="card">
+    <div class="install">
+      <esp-web-install-button id="install" manifest="firmware/manifest.json">
+        <button slot="activate" id="install-activate" style="font: inherit; font-weight: 600; padding: 10px 22px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; cursor: pointer;">Install</button>
+        <span slot="unsupported">This browser cannot talk to a USB serial port. Use Chrome or Edge on a desktop.</span>
+        <span slot="not-allowed">This page must be opened over https or from localhost.</span>
+      </esp-web-install-button>
+      <span id="version" class="mono" style="color: var(--muted)"></span>
+    </div>
+    <p class="note">The installer asks whether to <b>Erase device</b> (unticked unless you tick it). <b>Tick it for a first
+      install</b>: it erases everything on the board, settings included. Leave it unticked to update and keep the settings.</p>
+  </div>
+
+  <h2>Before you start</h2>
+  <ol>
+    <li><b>Chrome or Edge on a desktop computer</b> (Windows, macOS, Linux, ChromeOS). Firefox and Safari have no Web Serial.</li>
+    <li>Plug the <b>ESP32 DevKit V1</b> into the computer with a USB <i>data</i> cable. On Windows and older macOS the board's CH340 USB chip may need its driver.</li>
+    <li>Leave the microSD card in or out; the installer never touches it.</li>
+  </ol>
+
+  <h2>Install</h2>
+  <ol>
+    <li>Click <b>Install</b> and choose the board's serial port (often "USB Serial", "CH340" or <code>ttyUSB0</code>).</li>
+    <li>The installer asks whether to <b>Erase device</b> (the box starts unticked):
+      <ul>
+        <li><b>Ticked</b> (a new board, or one that ran DMDoS or other firmware): the whole flash is erased first. That includes the
+          player's settings in NVS: <b>WiFi network and password, brightness, the playlist, the schedule and night window, and
+          Follow RePlayOS</b>. The board then starts as the open WiFi access point <code>OpenDMD-Setup</code>; join it and enter your
+          network.</li>
+        <li><b>Unticked</b> (an update of a board already running OpenDMD): only the firmware, the web app, the bootloader and the
+          partition table are written. The settings stay, and the player comes back on your network.</li>
+      </ul>
+    </li>
+    <li>Wait for it to finish (about a minute), then the board restarts by itself. Open <code>http://opendmd.local/</code>.</li>
+  </ol>
+  <p>If the installer cannot connect, hold the board's <b>BOOT</b> button while it says "connecting", or unplug and try again.</p>
+
+  <h2>What gets written</h2>
+  <table>
+    <thead><tr><th>part</th><th>offset</th></tr></thead>
+    <tbody id="parts"><tr><td colspan="2" style="color: var(--muted)">reading the manifest…</td></tr></tbody>
+  </table>
+  <p>These four parts are what the <a href="firmware/manifest.json">manifest</a> lists. The same four merged into one
+    4 MB image, <code>opendmd-&lt;version&gt;-4mb-full.bin</code>, sits beside it for tools that flash one file at offset 0
+    (<code>esptool write-flash 0 …</code>): that rewrites all 4 MB, settings included. Without a browser, from a checkout:
+    <code>make fw-release-flash</code>.</p>
+
+  <h2>Updating only the web app</h2>
+  <p>The web app lives in the board's flash and can be updated over WiFi without this page: <code>make www-push HOST=opendmd.local</code>,
+    or the <b>Web app</b> section of <code>http://opendmd.local/setup</code>.</p>
+</main>
+<script type="module">
+  const hex = (n) => '0x' + n.toString(16).toUpperCase();
+  try {
+    const m = await (await fetch('firmware/manifest.json')).json();
+    document.getElementById('version').textContent = `${m.name} ${m.version}`;
+    const b = m.builds.find((x) => x.chipFamily === 'ESP32') ?? m.builds[0];
+    const tb = document.getElementById('parts');
+    tb.replaceChildren(...b.parts.map((p) => {
+      const tr = document.createElement('tr');
+      const a = document.createElement('td'); a.className = 'mono'; a.textContent = p.path;
+      const o = document.createElement('td'); o.className = 'mono'; o.textContent = hex(p.offset);
+      tr.append(a, o);
+      return tr;
+    }));
+  } catch (e) {
+    document.getElementById('parts').innerHTML = '<tr><td colspan="2">no manifest here: run <code>make fw-release</code>, then <code>make flasher</code></td></tr>';
+  }
+</script>
+</body>
+</html>

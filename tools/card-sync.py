@@ -2,23 +2,25 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Push a local directory onto the player's SD card over the HTTP API.
+"""Push files onto the player's SD card over the HTTP API.
 
-This is how the web app gets onto a card: every file under <dir> is PUT to
-`/api/files/www/<relative path>`, which the firmware receives on its stream
-task (one transfer at a time, downloads included), writes to the card in
-2 KB chunks and renames into place. `pkg/` (the wasm-pack output) is
-included — it is the whole point. A `503` (the device's transfer queue was
-full, or its heap was short) is retried after the `Retry-After` it gives,
-up to three times.
-
-    uv run tools/card-sync.py <host> opendmd-web/www [--prefix /www] [--dry-run]
-
-Or a list of card-absolute paths, each read from the same path under a local
-copy of the card — how prepared copies (`opendmd-pack convert`'s
-`cache/…` files) get onto a card:
+A list of card-absolute paths, each read from the same path under a local
+copy of the card — how prepared copies (`opendmd-pack convert`'s `cache/…`
+files) get onto a card without taking it out (`make card-sync HOST= FROM=
+PATHS=`):
 
     uv run tools/card-sync.py <host> --from ~/scratch/dmdos-card --paths copies.txt
+
+Or every file under a local directory, to a card prefix you name:
+
+    uv run tools/card-sync.py <host> some/dir --prefix /sets [--dry-run]
+
+Each file is PUT to `/api/files/<path>`, which the firmware receives on its
+stream task (one transfer at a time, downloads included), writes to the card
+in 2 KB chunks and renames into place. A `503` (the device's transfer queue
+was full, or its heap was short) is retried after the `Retry-After` it
+gives, up to three times. (The web app is not on the card: it is a www pack
+in flash, `make www-push`.)
 
 The list may be a manifest: blank lines are skipped. Paths are percent-encoded
 (the card has `/gifs/NEW 2021/`).
@@ -56,7 +58,7 @@ def main():
     ap.add_argument("dir", nargs="?", help="local directory to upload")
     ap.add_argument("--from", dest="src", help="local card copy that --paths are read from")
     ap.add_argument("--paths", help="file of card-absolute paths to upload from --from")
-    ap.add_argument("--prefix", default="/www", help="card-absolute destination prefix")
+    ap.add_argument("--prefix", help="card-absolute destination prefix (with <dir>)")
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -75,7 +77,9 @@ def main():
         if not files:
             sys.exit(f"{args.paths}: no paths")
     elif not args.dir:
-        sys.exit("need <dir>, or --from and --paths")
+        sys.exit("need --from and --paths, or <dir> and --prefix")
+    elif args.prefix is None:
+        sys.exit("<dir> needs --prefix (the web app is no longer on the card: make www-push)")
     else:
         root = os.path.abspath(args.dir)
         if not os.path.isdir(root):

@@ -44,7 +44,6 @@ mod http;
 mod httpd;
 mod net_worker;
 mod nvs_config;
-mod ota;
 mod panel;
 mod probe;
 mod sched;
@@ -52,6 +51,7 @@ mod sd;
 mod state;
 mod stream;
 mod wifi;
+mod www;
 
 use anyhow::{Context, Result};
 use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, Pin};
@@ -118,12 +118,12 @@ fn main() -> Result<()> {
     EspLogger::initialize_default();
 
     // Two version strings on purpose: the crate's, and the one the bootloader
-    // recorded in `esp_app_desc_t` — the latter is what an OTA image is checked
-    // against, so a mismatch is worth seeing at boot.
+    // recorded in `esp_app_desc_t` (`"<version> 4mb"` for a release image,
+    // `git describe` for a bench build).
     log::info!(
         "OpenDMD firmware v{VERSION} ({}, app desc '{}') — 128x32 HUB75 GIF player",
-        ota::FLASH_VARIANT,
-        ota::running_version()
+        state::FLASH_VARIANT,
+        state::running_version()
     );
 
     // Peripherals are taken exactly once and handed out from here; nothing
@@ -156,6 +156,11 @@ fn main() -> Result<()> {
     if probe::ENABLED {
         panel.bench();
     }
+
+    // The web app: the www pack in flash, mapped and CRC-checked once here
+    // (`www.rs`). No card involved, so the UI and the setup flow work without
+    // one; a bad pack is logged and reported, never fatal.
+    www::init();
 
     // GPIO 2 (onboard LED) is deliberately untouched — see hardware/PINOUT.md.
     //
@@ -258,9 +263,6 @@ fn main() -> Result<()> {
     // sleep (see step 3): a UART line costs ~87 µs a byte and the console
     // write blocks, so printing inside the frame would count as lateness.
     let mut deferred: Vec<Deferred> = Vec::with_capacity(2);
-    // Whether this image has told the bootloader it works (see
-    // `ota::confirm_running_image`): done once, after the first frame.
-    let mut confirmed = false;
     // The file frame last published to status, `(ordinal, frame)`: a
     // transition step that decoded nothing moves the picture but not the
     // file's position.
@@ -282,7 +284,6 @@ fn main() -> Result<()> {
         s.sd_error = sd_error.take();
         s.sd_attempts = bus.attempts();
         s.reset_reason = reset_reason;
-        s.www_version = files::read_www_version();
         s.refresh_hz = panel.refresh_rate();
         s.tz_name = tz_label(&settings);
     }
@@ -774,7 +775,6 @@ fn main() -> Result<()> {
                             s.sd_mounted = true;
                             s.sd_capacity_bytes = c.capacity_bytes;
                             s.sd_error = None;
-                            s.www_version = files::read_www_version();
                             drop(s);
                             card = Some(c);
                             card_mounted_checks(&mut settings, &mut nvs_config);
@@ -1001,14 +1001,6 @@ fn main() -> Result<()> {
             // The index is still good: reseed and rewind, don't re-read.
             eng.reset(random_seed());
         } else if shown.is_some() {
-            // The panel is up, the card is mounted and a frame is on the
-            // glass: this image works. Tell the bootloader, so that a freshly
-            // OTA'd image is kept rather than rolled back at the next reset.
-            // Once per boot, after the frame's sleep.
-            if !confirmed {
-                confirmed = true;
-                ota::confirm_running_image();
-            }
             sampled_min = sampled_min.min(free_heap());
         }
 

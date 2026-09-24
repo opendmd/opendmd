@@ -75,11 +75,8 @@ code{background:#161a21;padding:1px 4px;border-radius:3px}
 
 <section>
 <h2>Upload a file to the card</h2>
-<p class="sub" style="margin:0 0 8px">This is how the web app gets onto a blank card: upload
-<code>index.html</code>, <code>app.js</code> and <code>pkg/*</code> to <code>/www/</code>.
-<code>make card-sync HOST=&hellip;</code> does the whole directory in one go.</p>
 <label for="dest">Destination path on the card</label>
-<input id="dest" value="/www/index.html">
+<input id="dest" value="/sets/example.txt">
 <label for="file">File</label>
 <input id="file" type="file">
 <button id="upload">Upload</button>
@@ -88,12 +85,17 @@ code{background:#161a21;padding:1px 4px;border-radius:3px}
 </section>
 
 <section>
-<h2>Firmware</h2>
-<label for="fw">Firmware image (.bin, {{ variant }} build)</label>
-<input id="fw" type="file" accept=".bin">
-<button id="ota">Flash &amp; reboot</button>
-<progress id="otaprog" value="0" max="100" hidden></progress>
-<div class="msg" id="otamsg"></div>
+<h2>Web app</h2>
+<p class="sub" style="margin:0 0 8px">The web app lives in the device's flash as one file, a
+<code>.pack</code> (<code>make web</code> builds <code>opendmd-web/www.pack</code>;
+<code>make www-push HOST=&hellip;</code> sends it). Firmware updates are over USB
+(the browser flasher, or <code>make fw-flash</code>).</p>
+<div class="msg" id="wwwinfo"></div>
+<label for="pack">Web app pack (.pack)</label>
+<input id="pack" type="file" accept=".pack">
+<button id="wwwgo">Write to flash</button>
+<progress id="wwwprog" value="0" max="100" hidden></progress>
+<div class="msg" id="wwwmsg"></div>
 <button class="alt" id="reboot">Reboot now</button>
 </section>
 </main>
@@ -214,20 +216,28 @@ $('upload').onclick = () => {
        t => say('upmsg', 'stored: ' + t, 'ok'));
 };
 
-$('ota').onclick = () => {
-  const f = $('fw').files[0];
-  if (!f) return say('otamsg', 'pick a .bin first', 'err');
-  say('otamsg', 'uploading ' + kb(f.size) + ' — do not power off');
-  send('POST', '/api/ota', f, $('otaprog'), 'otamsg',
-       () => say('otamsg', 'flashed — rebooting', 'ok'));
+async function loadWww() {
+  try {
+    const w = await (await fetch('/api/www')).json();
+    say('wwwinfo', w.ok ? 'in flash: ' + w.version + ' (' + w.entries + ' files, ' + kb(w.bytes) + ')'
+                        : 'no web app: ' + (w.error || 'unknown'), w.ok ? 'ok' : 'err');
+  } catch (e) { say('wwwinfo', 'offline', 'err'); }
+}
+
+$('wwwgo').onclick = () => {
+  const f = $('pack').files[0];
+  if (!f) return say('wwwmsg', 'pick a .pack first', 'err');
+  say('wwwmsg', 'writing ' + kb(f.size) + '…');
+  send('PUT', '/api/www', f, $('wwwprog'), 'wwwmsg',
+       t => { say('wwwmsg', 'written: ' + t, 'ok'); loadWww(); });
 };
 
 $('reboot').onclick = async () => {
-  say('otamsg', 'rebooting…');
+  say('wwwmsg', 'rebooting…');
   await fetch('/api/reboot', { method: 'POST' }).catch(() => {});
 };
 
-loadStatus(); loadConfig(); setInterval(loadStatus, 10000);
+loadStatus(); loadConfig(); loadWww(); setInterval(loadStatus, 10000);
 </script>
 </body>
 </html>
