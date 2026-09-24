@@ -103,6 +103,9 @@ export const app = {
   // 3,781-file gifs/Consoles, whose scan the panel would feel), else the
   // file itself. A missing copy costs one 404.
   async previewBytes(path) {
+    // A virtual file (a title card, the power-on effect: `@…`) is drawn by
+    // the preview's own engine from its path; there is nothing to fetch.
+    if (path.startsWith('@')) return new Uint8Array();
     const copy = wasm.odmPathFor(path);
     if (copy) {
       try { return await this.src.readBytes(copy); } catch (e) { if (e.status !== 404) throw e; }

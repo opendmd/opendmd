@@ -243,6 +243,10 @@ DEFAULT_SETTINGS = {
     "transition": "dissolve",   # config::TRANSITION (opendmd_core::compositor)
     "transition_ms": 400,
     "auto_prepare": "idle",     # config::AUTO_PREPARE: idle / always / off
+    "follow": False,            # Follow RePlayOS
+    "follow_host": "",
+    "follow_code": "",          # the NET CONTROL code -- never echoed back
+    "attract_set": None,        # None = "the current playlist", else a `set` value
 }
 
 # opendmd_core::compositor::Kind names, and the duration range
@@ -265,6 +269,11 @@ FIELD_TYPES = {
     "transition": "str",
     "transition_ms": "u64",
     "auto_prepare": "str",
+    "follow": "bool",
+    "follow_host": "str",
+    "follow_code": "str",
+    # "attract_set" is not here: it is null-or-string, validated by hand
+    # alongside "set" (see h_config_put).
 }
 AUTO_PREPARE = ("idle", "always", "off")
 # The simulated builder's pace (seconds per file) and its known failures.
@@ -458,6 +467,347 @@ def derive_title(manifest_line: str, settings: dict) -> str:
         stripped = stem[m.end():] if m else stem
     stripped = TRAILING_NUM_RE.sub("", stripped)
     return stripped.replace("_", " ")
+
+
+# --------------------------------------------------------------------------
+# Follow RePlayOS: opendmd_core's follow state machine, ported (simplified
+# but faithful -- see the Follow class below)
+# --------------------------------------------------------------------------
+
+# RePlayOS system id -> (console name, platform tag): the pairs the task
+# spec lists. An "arcade_*" id is Arcade/ARCADE; anything else unknown shows
+# its id with underscores as spaces and a null platform.
+CONSOLE_MAP = {
+    "sega_smd": ("Mega Drive", "MD"),
+    "nintendo_snes": ("Super Nintendo", "SNES"),
+    "nintendo_gb": ("Game Boy", "GB"),
+    "nintendo_gbc": ("Game Boy Color", "GBC"),
+    "nintendo_gba": ("Game Boy Advance", "GBA"),
+    "sega_st": ("Saturn", "SATURN"),
+    "nintendo_ds": ("Nintendo DS", "NDS"),
+    "nintendo_nes": ("NES", "NES"),
+    "sega_sms": ("Master System", "SMS"),
+    "nec_pce": ("PC Engine", "PCE"),
+    "sony_psx": ("PlayStation", "PS1"),
+    "nintendo_n64": ("Nintendo 64", "N64"),
+    "sega_gg": ("Game Gear", "GAMEGEAR"),
+    "snk_ngp": ("Neo Geo Pocket", "NGP"),
+}
+
+
+def console_for(system_id: str | None):
+    """(console name, platform tag) for a RePlayOS system id, or (None,
+    None) for an empty one."""
+    if not system_id:
+        return None, None
+    if system_id in CONSOLE_MAP:
+        return CONSOLE_MAP[system_id]
+    if system_id.startswith("arcade_") or system_id == "arcade":
+        return "Arcade", "ARCADE"
+    return system_id.replace("_", " "), None
+
+
+BRACKET_TAGS_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]")
+
+
+def clean_game_name(name: str) -> str:
+    """RePlayOS's game_name with bracketed tags removed: 'Sonic the
+    Hedgehog 3 (USA)' -> 'Sonic the Hedgehog 3'."""
+    return BRACKET_TAGS_RE.sub("", name or "").strip()
+
+
+TITLE_STOPWORDS = {"the", "a", "an", "of", "and", "in", "on", "for", "to", "vs", "ii", "iii", "iv", "edition"}
+TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def title_tokens(s: str) -> set[str]:
+    return {t for t in TITLE_TOKEN_RE.findall(s.lower()) if t not in TITLE_STOPWORDS}
+
+
+def compute_matches(ctx: "Context", platform: str | None, game_clean: str) -> int | None:
+    """A rough stand-in for opendmd_core's `title_score`: entries of the
+    playing playlist whose filename has this platform's prefix and whose
+    derived title shares at least one non-stopword token with the game
+    name."""
+    if not platform:
+        return None
+    want = title_tokens(game_clean)
+    if not want:
+        return 0
+    plat_prefix = platform.upper() + "_"
+    with ctx.lock:
+        playlist = list(ctx.player.playlist)
+        settings = dict(ctx.settings)
+    n = 0
+    for line in playlist:
+        name = line.rsplit("/", 1)[-1].upper()
+        if not name.startswith(plat_prefix):
+            continue
+        if title_tokens(derive_title(line, settings)) & want:
+            n += 1
+    return n
+
+
+VIRTUAL_POWER_ON = "@power-on"
+
+
+def virtual_delays(path: str) -> list[int] | None:
+    """Frame delays for a virtual "file" (a Follow RePlayOS card): a single
+    3000 ms frame for a card (`@card:...`), 35 x 20 ms for the power-on
+    effect; None for a real path."""
+    if path == VIRTUAL_POWER_ON:
+        return [20] * 35
+    if path.startswith("@card:"):
+        return [3000]
+    return None
+
+
+def virtual_title(path: str) -> str | None:
+    """now_playing.title for a virtual path, or None for a real one."""
+    if path == VIRTUAL_POWER_ON:
+        return "Power on"
+    if path.startswith("@card:"):
+        return path[len("@card:"):].split("|", 1)[0]
+    return None
+
+
+def follow_split_host_port(host: str) -> tuple[str, int]:
+    """A Follow RePlayOS host as `host[:port]`, port defaulting to 55356."""
+    if ":" in host:
+        h, _, p = host.rpartition(":")
+        try:
+            return h, int(p)
+        except ValueError:
+            return host, 55356
+    return host, 55356
+
+
+def follow_http_get(host: str, port: int, path: str, token: str | None = None, timeout: float = 3.0):
+    """One GET against RePlayOS's tiny API; (status, body bytes). Raises on
+    a connection failure or timeout -- callers turn that into "no answer"."""
+    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    try:
+        headers = {"X-RePlay-Token": token} if token is not None else {}
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+class Follow:
+    """Follows a real (or mock) RePlayOS box: a background poller, like the
+    ticker, that turns `GET get_status` into the `context` fields of
+    `/api/status`. Simplified but faithful to opendmd_core's state machine:
+
+    - disabled (follow off, or no host) -> "off": no polling.
+    - enabled but never reached / failing -> "unreachable"; leaving
+      attract/game/cooldown for it takes 3 failures in a row (a blip should
+      not flicker the panel), everything else (off, unreachable itself, a
+      fresh enable) goes straight there.
+    - reachable and no game loaded -> "attract".
+    - reachable and a new game loaded -> "starting": the mock plays its own
+      power-on/logo/title-card sequence on "the panel" (see `_run_game`),
+      then "game".
+    - the loaded game goes away -> "cooldown" for up to 20 s; the same game
+      coming back within that window returns to "game" without restarting;
+      20 s with nothing loaded -> "attract".
+    """
+
+    POLL_OK_S = 2.0
+    POLL_BAD_S = 15.0
+    TIMEOUT_S = 3.0
+    COOLDOWN_S = 20.0
+    FAIL_LIMIT = 3
+
+    def __init__(self, ctx: "Context"):
+        self.ctx = ctx
+        self.lock = threading.Lock()
+        self.state = "off"
+        self.since = time.monotonic()
+        self.fail_count = 0
+        self.error: str | None = None
+        self.system: str | None = None
+        self.platform: str | None = None
+        self.console: str | None = None
+        self.game: str | None = None
+        self.matches: int | None = None
+        self.step: str | None = None
+        self._loaded_key = None
+        self._cooldown_deadline = 0.0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    # -- state bookkeeping ------------------------------------------------
+
+    def _set_state(self, state: str, error: str | None = None) -> None:
+        with self.lock:
+            if state != self.state:
+                self.state = state
+                self.since = time.monotonic()
+            self.error = error
+
+    def _clear_game(self) -> None:
+        with self.lock:
+            self._loaded_key = None
+            self.system = self.platform = self.console = self.game = None
+            self.matches = None
+            self.step = None
+
+    @staticmethod
+    def _is_loaded(body: dict) -> bool:
+        view = body.get("view")
+        return view == "game_play" or (
+            view in ("game_options", "achievements", "leaderboards") and bool(body.get("game_file"))
+        )
+
+    # -- the poller ---------------------------------------------------------
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            with self.ctx.lock:
+                follow_on = self.ctx.settings["follow"]
+                host = self.ctx.settings["follow_host"]
+            if not follow_on or not host:
+                self._set_state("off")
+                self.fail_count = 0
+                self._stop.wait(0.5)
+                continue
+            self._poll_once(host)
+            wait_s = self.POLL_BAD_S if self.state == "unreachable" else self.POLL_OK_S
+            self._stop.wait(wait_s)
+
+    def _poll_once(self, host: str) -> None:
+        h, p = follow_split_host_port(host)
+        with self.ctx.lock:
+            code = self.ctx.settings["follow_code"]
+        try:
+            status, data = follow_http_get(h, p, "/api/v1/get_status", token=code, timeout=self.TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - any connect/timeout/protocol failure is "no answer"
+            self._on_fail("no answer")
+            return
+        if status == 401:
+            self._on_fail("401 (wrong code)")
+            return
+        if status != 200:
+            self._on_fail(f"HTTP {status}")
+            return
+        try:
+            body = json.loads(data.decode("utf-8"))
+        except Exception:  # noqa: BLE001 - a malformed reply is "bad reply", not a crash
+            self._on_fail("bad reply")
+            return
+        self.fail_count = 0
+        self._on_status(body)
+
+    def _on_fail(self, error: str) -> None:
+        with self.lock:
+            self.fail_count += 1
+            cur_state, fail_n = self.state, self.fail_count
+        if cur_state in ("attract", "game", "cooldown") and fail_n < self.FAIL_LIMIT:
+            return
+        self._set_state("unreachable", error)
+        self._clear_game()
+
+    def _on_status(self, body: dict) -> None:
+        loaded = self._is_loaded(body)
+        key = (body.get("system"), body.get("game_file")) if loaded else None
+        now = time.monotonic()
+        with self.lock:
+            cur_state, cur_key = self.state, self._loaded_key
+
+        if not loaded:
+            if cur_state == "game":
+                self._set_state("cooldown")
+                with self.lock:
+                    self._cooldown_deadline = now + self.COOLDOWN_S
+                return
+            if cur_state == "cooldown":
+                with self.lock:
+                    deadline = self._cooldown_deadline
+                if now >= deadline:
+                    self._set_state("attract")
+                    self._clear_game()
+                return
+            if cur_state != "attract":
+                self._set_state("attract")
+            return
+
+        # A game is loaded.
+        if key == cur_key and cur_state in ("game", "cooldown"):
+            if cur_state == "cooldown":
+                self._set_state("game")  # back within the window -- no restart
+            return
+        if cur_state == "starting":
+            return  # already on it (starting runs to completion below)
+        self._run_game(body, key)
+
+    # -- a new game: the mock's own power-on/logo/title sequence -----------
+
+    def _run_game(self, body: dict, key) -> None:
+        system = body.get("system") or ""
+        console, platform = console_for(system)
+        game_clean = clean_game_name(body.get("game_name") or "")
+        with self.lock:
+            self.system, self.console, self.platform, self.game = system, console, platform, game_clean
+            self._loaded_key = key
+        self._set_state("starting")
+        player = self.ctx.player
+        with self.ctx.lock:
+            player.virtual_hold = True
+        try:
+            steps = (
+                ("power_on", 0.7, VIRTUAL_POWER_ON),
+                ("logo", 3.0, f"@card:{console}|"),
+                ("title", 3.0, f"@card:{game_clean}|{console}"),
+            )
+            for step_name, dur, vpath in steps:
+                with self.ctx.lock:
+                    if not self.ctx.settings["follow"]:
+                        break
+                with self.lock:
+                    self.step = step_name
+                with self.ctx.lock:
+                    player.play_now(vpath)
+                self._stop.wait(dur)
+        finally:
+            with self.ctx.lock:
+                player.virtual_hold = False
+                player.advance()  # hand the panel back to the normal playlist
+        with self.lock:
+            self.step = None
+        matches = compute_matches(self.ctx, platform, game_clean)
+        with self.lock:
+            self.matches = matches
+        self._set_state("game")
+
+    # -- /api/status ---------------------------------------------------------
+
+    def fields(self) -> dict:
+        with self.ctx.lock:
+            follow_on = self.ctx.settings["follow"]
+            host = self.ctx.settings["follow_host"]
+        enabled = bool(follow_on and host)
+        with self.lock:
+            state = self.state
+            since = None if state == "off" else int(time.monotonic() - self.since)
+            return {
+                "source": "replayos",
+                "enabled": enabled,
+                "state": state,
+                "system": self.system,
+                "platform": self.platform,
+                "console": self.console,
+                "game": self.game,
+                "matches": self.matches,
+                "since": since,
+                "step": self.step if state == "starting" else None,
+                "error": self.error if state == "unreachable" else None,
+            }
 
 
 def www_version(www_root: Path):
@@ -875,6 +1225,7 @@ class Player:
         self.gifs_started = 0
         self.paused = False        # the manual toggle (POST /api/pause)
         self.scheduled_off = False  # night mode "off" (Schedule.evaluate)
+        self.virtual_hold = False  # Follow RePlayOS's power-on/logo/title sequence in progress
         self.playlist: list[str] = []
         self.order: list[int] = []
         self.pos = -1
@@ -1019,6 +1370,10 @@ class Player:
         """The frame delays of what the device would play for `path`: its
         prepared copy if there is one, else the file. Cached per path."""
         if path not in self.delays:
+            vd = virtual_delays(path)
+            if vd is not None:
+                self.delays[path] = vd
+                return vd
             out = []
             for cand in (bucketed_path(path), path):
                 rel = card_path(cand) if cand else None
@@ -1051,7 +1406,7 @@ class Player:
         return ms, loops * len(delays) + idx + 1
 
     def tick(self):
-        if self._frozen() or not self.playlist:
+        if self._frozen() or not self.playlist or self.virtual_hold:
             return
         if time.monotonic() - self.last_advance >= self.ctx.dwell:
             self.advance()
@@ -1447,6 +1802,7 @@ class Context:
         self.cache = Cache(self)
         self.schedule = Schedule(self)
         self.player = Player(self)
+        self.follow = Follow(self)
         self.schedule.evaluate()  # picks up the playlist rebuilt just above
 
 
@@ -1581,6 +1937,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/overrides"), {"GET": self.h_overrides_get}),
                 (m_exact("/api/schedule"), {"GET": self.h_schedule_get, "PUT": self.h_schedule_put}),
                 (m_exact("/api/wake"), {"POST": self.h_wake}),
+                (m_exact("/api/follow/test"), {"POST": self.h_follow_test}),
                 (m_exact("/api/play"), {"POST": self.h_play}),
                 (m_exact("/api/stat"), {"GET": self.h_stat}),
                 (m_exact("/api/cache"), {"GET": self.h_cache}),
@@ -1642,6 +1999,12 @@ def make_handler(ctx: Context, quiet: bool):
                     return
                 self.send_error_json(400, "path escapes the card")
                 return
+            # A Follow RePlayOS virtual "file" (`@power-on`, `@card:...`) is
+            # drawn by the page's own preview engine, never fetched; a 404
+            # here means the UI slipped and asked for one anyway.
+            if rel.startswith("@"):
+                self.send_error_json(404, rel_full)
+                return
             if not self.serve_www_rel(rel):
                 self.send_error_json(404, rel_full)
 
@@ -1666,6 +2029,9 @@ def make_handler(ctx: Context, quiet: bool):
             rel = card_path(rel_full)
             if rel is None:
                 self.send_error_json(400, "path escapes the card")
+                return
+            if rel.startswith("@") or "/@" in f"/{rel}":
+                self.send_error_json(404, rel_full)
                 return
             fpath = ctx.fs.read_path(rel)
             if fpath is None:
@@ -1696,7 +2062,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "now_playing": {
                         "ordinal": player.ordinal,
                         "path": cur if cur else "",
-                        "title": derive_title(cur, ctx.settings) if cur else "",
+                        "title": (virtual_title(cur) if cur and cur.startswith("@") else derive_title(cur, ctx.settings)) if cur else "",
                         "elapsed_ms": elapsed_ms,
                         "frame": frame,
                     },
@@ -1721,6 +2087,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "wake_until": ctx.schedule.wake_until_str(),
                     "schedule": {"rule": ctx.schedule.rule_idx, "set": ctx.schedule.rule_set, "until": ctx.schedule.until},
                     "cache": ctx.auto.status_fields(),
+                    "context": ctx.follow.fields(),
                 }
             self.send_json(200, obj)
 
@@ -1753,6 +2120,10 @@ def make_handler(ctx: Context, quiet: bool):
                     "transition": s["transition"],
                     "transition_ms": s["transition_ms"],
                     "auto_prepare": s["auto_prepare"],
+                    "follow": s["follow"],
+                    "follow_host": s["follow_host"],
+                    "follow_code_set": bool(s["follow_code"]),
+                    "attract_set": s["attract_set"],
                 }
             self.send_json(200, obj)
 
@@ -1849,6 +2220,14 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "auto_prepare" and v not in AUTO_PREPARE:
                         self.send_error_json(400, "auto_prepare must be idle, always or off")
                         return
+                    if field == "follow_host":
+                        v = v.strip()
+                        if len(v) > 64 or any(c in v for c in "/ \0?#@"):
+                            self.send_error_json(400, "follow_host must be a host name or address, optionally :port")
+                            return
+                    if field == "follow_code" and (len(v) > 64 or any(c in v for c in "\0\r\n")):
+                        self.send_error_json(400, "follow_code must be at most 64 characters, with no control characters")
+                        return
                     if field == "hostname":
                         if v != "":
                             next_settings["hostname"] = v
@@ -1858,6 +2237,18 @@ def make_handler(ctx: Context, quiet: bool):
                         next_settings[field] = max(1, v)
                     else:
                         next_settings[field] = v
+
+                # "attract_set" is null-or-string, so it is not in
+                # FIELD_TYPES; validated the same way as "set" below.
+                if "attract_set" in patch:
+                    av = patch["attract_set"]
+                    if av is not None and not isinstance(av, str):
+                        self.send_error_json(400, "invalid JSON: field 'attract_set' must be a string or null")
+                        return
+                    if isinstance(av, str) and (any(c in av for c in "/\\\0") or ".." in av):
+                        self.send_error_json(400, "attract_set must be a single path segment")
+                        return
+                    next_settings["attract_set"] = av
 
                 if next_settings["dwell_max"] < next_settings["dwell_min"]:
                     self.send_error_json(400, "dwell_max must be >= dwell_min")
@@ -1880,6 +2271,15 @@ def make_handler(ctx: Context, quiet: bool):
                     return
                 if next_settings["set"] != before["set"] and next_settings["set"]:
                     if ctx.fs.read_path(ctx.player.resolve(next_settings["set"])) is None:
+                        self.send_error_json(404, SET_NOT_FOUND)
+                        return
+
+                # Same rule for "attract_set" when it changes and is non-empty.
+                if next_settings["attract_set"] != before["attract_set"] and next_settings["attract_set"]:
+                    if next_settings["attract_set"].lower() == OBSOLETE_SET:
+                        self.send_error_json(404, SET_NOT_FOUND)
+                        return
+                    if ctx.fs.read_path(ctx.player.resolve(next_settings["attract_set"])) is None:
                         self.send_error_json(404, SET_NOT_FOUND)
                         return
 
@@ -2001,6 +2401,66 @@ def make_handler(ctx: Context, quiet: bool):
                 ctx.schedule.wake(minutes)
                 wake_until = ctx.schedule.wake_until_str()
             self.send_json(200, {"ok": True, "minutes": minutes, "wake_until": wake_until})
+
+        def h_follow_test(self, path):
+            raw = self.json_body()
+            if raw is None:
+                return
+            try:
+                req = json.loads(raw) if raw else {}
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"invalid JSON: {e}")
+                return
+            if not isinstance(req, dict):
+                self.send_error_json(400, "invalid JSON: expected a JSON object")
+                return
+            with ctx.lock:
+                saved_host = ctx.settings["follow_host"]
+                saved_code = ctx.settings["follow_code"]
+            host_in = req.get("host")
+            host = host_in.strip() if isinstance(host_in, str) and host_in.strip() else saved_host
+            code_in = req.get("code")
+            code = code_in if isinstance(code_in, str) else saved_code
+            if not host:
+                self.send_json(200, {"ok": False, "reachable": False, "error": "no host"})
+                return
+            h, p = follow_split_host_port(host)
+            try:
+                vstatus, vdata = follow_http_get(h, p, "/api/v1/get_version", timeout=3.0)
+            except Exception:  # noqa: BLE001 - any connect/timeout/protocol failure is "no answer"
+                self.send_json(200, {"ok": False, "reachable": False, "error": "no answer"})
+                return
+            if vstatus != 200:
+                self.send_json(200, {"ok": False, "reachable": True, "error": f"get_version: HTTP {vstatus}"})
+                return
+            try:
+                version = str(json.loads(vdata.decode("utf-8")).get("version", ""))
+            except Exception:  # noqa: BLE001 - a malformed get_version reply just leaves the version blank
+                version = ""
+            error = None
+            view = system = game = ""
+            sstatus = 0
+            try:
+                sstatus, sdata = follow_http_get(h, p, "/api/v1/get_status", token=code, timeout=3.0)
+            except Exception:  # noqa: BLE001 - get_status failing after get_version succeeded is still "reachable"
+                sstatus, error = 0, "no answer"
+            else:
+                if sstatus == 401:
+                    error = "401 (wrong code)"
+                elif sstatus != 200:
+                    error = f"HTTP {sstatus}"
+                else:
+                    try:
+                        body = json.loads(sdata.decode("utf-8"))
+                        view = str(body.get("view", ""))
+                        system = str(body.get("system", ""))
+                        game = clean_game_name(body.get("game_name") or "")
+                    except Exception:  # noqa: BLE001 - a malformed reply is "bad reply", not a crash
+                        error = "bad reply"
+            self.send_json(200, {
+                "ok": error is None, "reachable": True, "version": version, "status": sstatus,
+                "view": view, "system": system, "game": game, "error": error,
+            })
 
         def h_play(self, path):
             raw = self.json_body()

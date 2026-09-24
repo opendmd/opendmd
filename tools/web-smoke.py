@@ -91,6 +91,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from playwright.sync_api import sync_playwright, Page
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 REPO = Path(__file__).resolve().parents[1]
 CARD = Path(os.environ.get("DMD_CARD_ROOT", "~/scratch/dmdos-card"))
@@ -143,6 +144,50 @@ def start_mock(args: list[str]) -> tuple[subprocess.Popen, str]:
             time.sleep(0.1)
     proc.kill()
     raise RuntimeError("mock-device.py did not come up")
+
+
+def start_replay(token: str = "4321", speed: float = 1.0) -> tuple[subprocess.Popen, str, int]:
+    """A fake RePlayOS (tools/mock-replay.py) on a free port, for the Follow
+    RePlayOS checks. Returns (process, base url, port)."""
+    port = free_port()
+    proc = subprocess.Popen(
+        ["uv", "run", str(REPO / "tools" / "mock-replay.py"), "--port", str(port),
+         "--token", token, "--speed", str(speed), "--quiet"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    for _ in range(100):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return proc, f"http://127.0.0.1:{port}", port
+        except OSError:
+            time.sleep(0.1)
+    proc.kill()
+    raise RuntimeError("mock-replay.py did not come up")
+
+
+def replay_post(replay_base: str, path: str) -> None:
+    """A no-body POST to one of mock-replay's control endpoints."""
+    req = urllib.request.Request(replay_base + path, data=b"", method="POST")
+    with urllib.request.urlopen(req, timeout=10) as r:
+        r.read()
+
+
+def replay_goto(replay_base: str, step: int) -> None:
+    replay_post(replay_base, f"/mock/goto?step={step}")
+
+
+def replay_set_token(replay_base: str, value: str) -> None:
+    replay_post(replay_base, "/mock/token?value=" + urllib.parse.quote(value, safe=""))
+
+
+def wait_context(base: str, ok, timeout_s: float = 20) -> dict:
+    """Poll /api/status's `context` (Follow RePlayOS) until `ok(context)`."""
+    deadline = time.time() + timeout_s
+    c = {}
+    while True:
+        c = get_json(base + "/api/status")["context"]
+        if ok(c) or time.time() > deadline:
+            return c
+        time.sleep(0.15)
 
 
 def get_json(url: str):
@@ -1003,6 +1048,7 @@ def mock_pass(browser) -> None:
         check(True, "settings: ready again -> set select enabled")
         check(page.locator("#nav a[data-view]").count() == 4 and page.locator("#view-convert").count() == 0,
               "nav: four views, no Convert")
+        follow_checks(page, base, errors)
         phone_pass(browser, base, errors)
     finally:
         proc.terminate()
@@ -1027,6 +1073,137 @@ def compare_with_pack(overlay: Path, made: dict[str, Path]) -> None:
         same = got.exists() and ref.exists() and filecmp.cmp(ref, got, shallow=False)
         size = got.stat().st_size if got.exists() else 0
         check(same, f"prepared copy {copy} byte-identical to opendmd-pack ({size} B)")
+
+
+def follow_checks(page: Page, base: str, errors: list[str]) -> None:
+    """Settings' "Follow RePlayOS" card and the Now line, against a fake
+    RePlayOS (tools/mock-replay.py, started and stopped here)."""
+    proc, replay_base, replay_port = start_replay("4321", "1")
+    host_val = f"127.0.0.1:{replay_port}"
+    try:
+        print(f"\n== mock RePlayOS at {replay_base}")
+        goto_view(page, "settings")
+        page.wait_for_selector("#fo", timeout=10000)
+        for sel in ("#fo-on", "#fo-host", "#fo-code", "#fo-attract", "#fo-test", "#fo-save"):
+            check(page.locator(sel).count() == 1, f"follow: {sel} renders")
+        page.wait_for_selector("#fo-attract option[value='*']", state="attached", timeout=10000)
+
+        # Test: a wrong code, then the right one.
+        page.fill("#fo-host", host_val)
+        page.fill("#fo-code", "wrong")
+        page.click("#fo-test")
+        page.wait_for_function("!document.querySelector('#fo-result').textContent.includes('asking')", timeout=10000)
+        t = page.inner_text("#fo-result")
+        check("401" in t, f"follow: Test with a wrong code -> '{t}'")
+        page.fill("#fo-code", "4321")
+        page.click("#fo-test")
+        page.wait_for_function("document.querySelector('#fo-result').textContent.includes('answered')", timeout=10000)
+        t = page.inner_text("#fo-result")
+        check("answered" in t, f"follow: Test with the right code -> '{t}'")
+
+        # Save: follow on, host, code 4321, attract = the current playlist.
+        page.check("#fo-on")
+        page.fill("#fo-host", host_val)
+        page.fill("#fo-code", "4321")
+        page.select_option("#fo-attract", "*")
+        page.click("#fo-save")
+        cfg = wait_config(base, lambda c: c.get("follow") is True)
+        raw_cfg = json.dumps(cfg)
+        check(cfg.get("follow") is True and cfg.get("follow_host") == host_val
+              and cfg.get("follow_code_set") is True and cfg.get("attract_set") is None
+              and "4321" not in raw_cfg,
+              f"follow: saved -> config {cfg}")
+        try:
+            page.wait_for_function("document.querySelector('#fo-code').value === ''", timeout=5000)
+            cleared = True
+        except PlaywrightTimeoutError:
+            cleared = False
+        check(cleared, f"follow: code field cleared after save (value: '{page.input_value('#fo-code')}')")
+        page.wait_for_function(
+            "(document.querySelector('#fo-code').placeholder || '').toLowerCase().includes('saved')", timeout=5000)
+        ph = (page.get_attribute("#fo-code", "placeholder") or "").lower()
+        check("saved" in ph, f"follow: code placeholder mentions a saved code ('{ph}')")
+        no_leaks(page, "settings (follow)")
+
+        # Now: the mock RePlayOS in the menu -> attract (the poller needs a
+        # cycle to notice the game just enabled follow).
+        replay_goto(replay_base, 0)
+        goto_view(page, "now")
+        page.wait_for_selector("#now-follow-line:not([hidden])", timeout=15000)
+        page.wait_for_function(
+            "document.querySelector('#now-follow-line').textContent.includes('attract')", timeout=15000)
+        t = page.inner_text("#now-follow-line")
+        check("Following RePlayOS" in t and "attract" in t, f"follow: menu -> Now line '{t}'")
+
+        # Sonic 3 (step 1): "starting" at some point, then the game line;
+        # while the title card is up, the title shows the game and the path
+        # is empty, and nothing fetches the virtual path.
+        reqs: list[str] = []
+
+        def on_request(r):
+            reqs.append(r.url)
+
+        page.on("request", on_request)
+        err_before = len(errors)
+        replay_goto(replay_base, 1)
+        saw_starting = False
+        saw_title_card = False
+        final_line = ""
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            line = page.inner_text("#now-follow-line")
+            if "starting" in line:
+                saw_starting = True
+            if not saw_title_card:
+                title_txt = page.inner_text("#now-title")
+                path_txt = page.inner_text("#now-path")
+                if "Sonic the Hedgehog 3" in title_txt and path_txt.strip() == "":
+                    saw_title_card = True
+                    check(True, f"follow: title card -> #now-title '{title_txt}', #now-path empty")
+                    shot(page, "now-follow", "laptop")
+            if "Mega Drive" in line and "Sonic the Hedgehog 3" in line and "matching" in line:
+                final_line = line
+                break
+            page.wait_for_timeout(150)
+        page.remove_listener("request", on_request)
+        check(saw_starting or bool(final_line),
+              f"follow: Sonic 3 -> saw 'starting' ({saw_starting}) or ended at '{final_line}'")
+        check(saw_title_card, "follow: title card seen (title shown, path empty) during the starting sequence")
+        at_reqs = [u for u in reqs if urllib.parse.urlsplit(u).path.startswith("/@")]
+        check(not at_reqs, f"follow: no request for a virtual ('@...') path ({at_reqs})")
+        check(len(errors) == err_before, f"follow: no console errors during the sequence ({errors[err_before:]})")
+        if not final_line:
+            wait_context(base, lambda c: c.get("state") == "game", timeout_s=10)
+            final_line = page.inner_text("#now-follow-line")
+        check("Mega Drive" in final_line and "Sonic the Hedgehog 3" in final_line and "matching" in final_line,
+              f"follow: settled -> Now line '{final_line}'")
+
+        # A wrong token: unreachable, with the 401 error, on both ends.
+        replay_set_token(replay_base, "bogus")
+        c = wait_context(base, lambda c: c.get("state") == "unreachable", timeout_s=25)
+        check(c.get("state") == "unreachable" and c.get("error") == "401 (wrong code)",
+              f"follow: wrong code -> context {c}")
+        page.wait_for_function(
+            "document.querySelector('#now-follow-line').textContent.toLowerCase().includes('not reachable')",
+            timeout=15000)
+        t = page.inner_text("#now-follow-line")
+        check("not reachable" in t.lower(), f"follow: Now line says not reachable ('{t}')")
+        replay_set_token(replay_base, "4321")
+        no_leaks(page, "now (follow)")
+
+        # Leave the mock as it started: not following, no host.
+        goto_view(page, "settings")
+        page.wait_for_selector("#fo-on", timeout=10000)
+        if page.is_checked("#fo-on"):
+            page.uncheck("#fo-on")
+        page.fill("#fo-host", "")
+        page.click("#fo-save")
+        cfg = wait_config(base, lambda c: c.get("follow") is False)
+        check(cfg.get("follow") is False and cfg.get("follow_host") == "",
+              f"follow: disabled and host cleared before finishing ({cfg})")
+        goto_view(page, "now")
+    finally:
+        proc.terminate()
 
 
 def phone_pass(browser, base: str, errors: list[str]) -> None:
@@ -1115,6 +1292,14 @@ def device_pass(browser, device: str) -> None:
         facts = page.inner_text("#st-facts")
         check(st.get("index_state") in facts and (st.get("www_version") or "–") in facts,
               f"device settings: index_state {st.get('index_state')}, www_version {st.get('www_version')} shown")
+        # Follow RePlayOS: read-only here -- the card renders and the API
+        # shapes are present, but nothing is enabled or saved.
+        follow_keys = ("follow", "follow_host", "follow_code_set", "attract_set")
+        check(all(k in cfg for k in follow_keys), f"device config: follow keys present ({sorted(cfg)})")
+        check("context" in st, f"device status: context present ({st.get('context')})")
+        page.wait_for_selector("#fo", timeout=10000)
+        check(page.locator("#fo-on").count() == 1 and page.locator("#fo-host").count() == 1
+              and page.locator("#fo-save").count() == 1, "device settings: Follow RePlayOS card renders")
         line = wait_cache_line(page, f"{r['prepared']:,} of {r['total']:,}")
         check(True, f"device settings: cache card reads '{line}'")
         # Auto prepare, read only (the device's setting is left as it is).

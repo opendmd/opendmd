@@ -355,3 +355,79 @@ fn prototype_odm_files_decode_like_the_gifs() {
         picks.len()
     );
 }
+
+/// What "Follow RePlayOS" would build for a few games on this card: the
+/// platform's entries, how many score as this game (weight 8) or related
+/// (weight 3), and the logo it would show. Prints; asserts only that the
+/// index it writes reads back.
+#[test]
+#[ignore = "needs DMD_CARD_ROOT pointing at a real card dump"]
+fn follow_context_on_the_real_card() {
+    use opendmd_core::follow;
+    use opendmd_core::index::write_index_resolving;
+    use opendmd_core::overrides::Override;
+    let Ok(root) = std::env::var("DMD_CARD_ROOT") else {
+        eprintln!("DMD_CARD_ROOT not set, nothing to do");
+        return;
+    };
+    let path = PathBuf::from(root).join("filelist.txt");
+    let len = std::fs::metadata(&path).unwrap().len() as u32;
+    for (system, game) in [
+        ("sega_smd", "Sonic the Hedgehog 3 (USA)"),
+        ("nintendo_snes", "Super Mario World (USA)"),
+        ("nintendo_snes", "Donkey Kong Country (USA)"),
+        ("sega_smd", "Streets of Rage 2 (USA)"),
+    ] {
+        let platform = follow::platform_for_system(system).unwrap();
+        let filter = Filter::new().platforms([platform]);
+        let game_tokens = follow::tokens(game);
+        let (mut strong, mut weak, mut logos) = (Vec::new(), Vec::new(), Vec::new());
+        let mut out = io::Cursor::new(Vec::new());
+        let file = std::fs::File::open(&path).unwrap();
+        let (header, ov) = write_index_resolving(
+            BufReader::new(file),
+            len,
+            &filter,
+            follow::context_fingerprint(platform, game),
+            |e| {
+                if follow::is_logo(e) {
+                    logos.push((e.title.clone(), e.path.clone()));
+                }
+                let w = follow::weight_for(follow::score_tokens(
+                    &follow::tokens(&e.title),
+                    &game_tokens,
+                ))?;
+                if w == follow::STRONG_WEIGHT {
+                    strong.push(e.title.clone());
+                } else {
+                    weak.push(e.title.clone());
+                }
+                Some(Override {
+                    weight: Some(w),
+                    ..Override::default()
+                })
+            },
+            &mut out,
+        )
+        .unwrap();
+        let logo = follow::choose_logo(&logos, game);
+        weak.truncate(20);
+        println!(
+            "{game} ({platform}): {} entries, {} weighted, {} strong {:?}, weak e.g. {weak:?}, logo {logo:?} of {}",
+            header.count,
+            ov.len(),
+            strong.len(),
+            strong,
+            logos.len()
+        );
+        let file = std::fs::File::open(&path).unwrap();
+        let mut cat = IndexedCatalog::open(file, io::Cursor::new(out.into_inner())).unwrap();
+        assert_eq!(cat.len(), header.count as usize);
+        assert_eq!(cat.overrides().unwrap().len(), ov.len());
+        assert!(cat.header().is_valid_for(
+            len,
+            &filter,
+            follow::context_fingerprint(platform, game)
+        ));
+    }
+}

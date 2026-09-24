@@ -43,6 +43,9 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 const REINDEX_TIMEOUT: Duration = Duration::from_secs(60);
 /// A WiFi scan takes a couple of seconds and blocks the worker.
 const SCAN_TIMEOUT: Duration = Duration::from_secs(12);
+/// Two requests with 3 s timeouts, possibly behind a context index build
+/// (~5 s) on the network worker.
+const FOLLOW_TEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Cap on JSON request bodies. Uploads are streamed and are not subject to it.
 const MAX_JSON_BODY: usize = 8192;
 
@@ -58,6 +61,30 @@ pub enum NetCommand {
     /// Count the playback cache (`cache::run_count`); no reply, the result
     /// lands in `cache`'s state for `GET /api/cache`.
     CountCache,
+    /// `POST /api/follow/test`: ask the RePlayOS box at `host` (the saved one
+    /// if empty) for its version and, with `code` (the saved one if `None`),
+    /// its status. The reply is the JSON object to send.
+    FollowTest {
+        host: String,
+        code: Option<String>,
+        reply: mpsc::Sender<String>,
+    },
+}
+
+/// Wire format for `POST /api/follow/test`.
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct FollowTestRequest {
+    host: String,
+    code: Option<String>,
+}
+
+/// `null` and absent told apart: absent is `None`, `null` is `Some(None)`.
+fn double_option<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <Option<String> as serde::Deserialize>::deserialize(d).map(Some)
 }
 
 /// Wire format for `POST /api/cache/forget`.
@@ -92,6 +119,13 @@ struct ConfigPatch {
     transition: Option<String>,
     transition_ms: Option<u32>,
     auto_prepare: Option<String>,
+    follow: Option<bool>,
+    follow_host: Option<String>,
+    /// Never echoed back; `""` clears it.
+    follow_code: Option<String>,
+    /// `null` = the current playlist, else a `set` value.
+    #[serde(default, deserialize_with = "double_option")]
+    attract_set: Option<Option<String>>,
 }
 
 /// Wire format for `POST /api/wake`.
@@ -116,7 +150,7 @@ struct WakeRequest {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route` below (37 now, the captive-portal loop counting six). Registration past
+    // URI handler slots: one per `route` below (38 now, the captive-portal loop counting six). Registration past
     // the limit fails the whole server, so count when adding a route.
     let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 40)?;
 
@@ -256,6 +290,30 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 return req.bad_request("auto_prepare must be idle, always or off");
             };
             next.auto_prepare = mode;
+        }
+        if let Some(v) = patch.follow {
+            next.follow = v;
+        }
+        if let Some(v) = patch.follow_host {
+            let v = v.trim().to_string();
+            if v.len() > 64 || v.contains(['/', ' ', '\0', '?', '#', '@']) {
+                return req.bad_request("follow_host must be a host name or address, optionally :port");
+            }
+            next.follow_host = v;
+        }
+        if let Some(v) = patch.follow_code {
+            if v.len() > 64 || v.contains(['\0', '\r', '\n']) {
+                return req.bad_request("follow_code is at most 64 characters on one line");
+            }
+            next.follow_code = v;
+        }
+        if let Some(v) = patch.attract_set {
+            if let Some(set) = &v {
+                if !crate::nvs_config::valid_set_name(set) {
+                    return req.bad_request("attract_set must be a single path segment");
+                }
+            }
+            next.attract_set = v;
         }
         if next.dwell_max < next.dwell_min {
             return req.bad_request("dwell_max must be >= dwell_min");
@@ -564,6 +622,36 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         match rx.recv_timeout(SCAN_TIMEOUT) {
             Ok(aps) => req.json(&scan_json(&aps)),
             Err(_) => req.error(504, "504 Gateway Timeout", "scan timed out"),
+        }
+    })?;
+
+    // Follow RePlayOS's "Test" button: the network worker asks the box (it
+    // owns the HTTP client); nothing is saved.
+    let c = ctx.clone();
+    server.route("/api/follow/test", Method::Post, move |req| {
+        let Some(body) = json_body(req)? else {
+            return Ok(());
+        };
+        let t: FollowTestRequest = if body.is_empty() {
+            FollowTestRequest::default()
+        } else {
+            match serde_json::from_slice(&body) {
+                Ok(t) => t,
+                Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
+            }
+        };
+        let (tx, rx) = mpsc::channel();
+        let cmd = NetCommand::FollowTest {
+            host: t.host,
+            code: t.code,
+            reply: tx,
+        };
+        if c.net.send(cmd).is_err() {
+            return req.error(503, "503 Service Unavailable", "network worker not running");
+        }
+        match rx.recv_timeout(FOLLOW_TEST_TIMEOUT) {
+            Ok(json) => req.json(&json),
+            Err(_) => req.error(504, "504 Gateway Timeout", "the test did not finish"),
         }
     })?;
 
@@ -1017,7 +1105,7 @@ fn status_json(s: &Status) -> String {
             r#""sd":{{"mounted":{},"capacity_bytes":{}}},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
-            r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{}}}"#
+            r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{}}}"#
         ),
         json_string(s.version),
         json_string(ota::FLASH_VARIANT),
@@ -1059,6 +1147,7 @@ fn status_json(s: &Status) -> String {
         opt_json(s.rule_set.as_deref()),
         opt_json(s.rule_until.as_deref()),
         crate::cache_builder::status_json(s.entries, crate::cache::peek()),
+        crate::follow::status_json(),
     )
 }
 
@@ -1067,14 +1156,15 @@ fn opt_json(s: Option<&str>) -> String {
     s.map_or_else(|| "null".to_string(), json_string)
 }
 
-/// The saved configuration. The WiFi password is never returned — only whether
-/// one is set.
+/// The saved configuration. The WiFi password and the RePlayOS code are never
+/// returned — only whether one is set.
 fn settings_json(s: &Settings) -> String {
     format!(
         concat!(
             r#"{{"wifi_ssid":{},"wifi_pass_set":{},"brightness":{},"#,
             r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
-            r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}"}}"#
+            r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
+            r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{}}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -1090,6 +1180,10 @@ fn settings_json(s: &Settings) -> String {
         s.transition.kind.name(),
         s.transition.duration.as_millis(),
         s.auto_prepare.as_str(),
+        s.follow,
+        json_string(&s.follow_host),
+        !s.follow_code.is_empty(),
+        opt_json(s.attract_set.as_deref()),
     )
 }
 

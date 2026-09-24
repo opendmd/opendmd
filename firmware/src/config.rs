@@ -357,3 +357,20 @@ pub const BUILDER_MAX_PIXELS: usize = 2 * 128 * 32;
 pub const BUILDER_FAILED_PATH: &str = "/sdcard/odm/.failed";
 /// At most this many failures are remembered (4 B each while a pass runs).
 pub const BUILDER_MAX_FAILED: usize = 1024;
+
+// --- Follow RePlayOS (`follow.rs`) ---------------------------------------------
+
+/// RePlayOS's REST port (`http://<pi>:55356/api/v1/`).
+pub const FOLLOW_PORT: u16 = 55356;
+/// Connect and read timeout for one poll.
+pub const FOLLOW_TIMEOUT: Duration = Duration::from_secs(3);
+/// Where the context indexes (and the logos list) are cached.
+pub const FOLLOW_CTX_DIR: &str = "/sdcard/sets/.ctx";
+/// At most this many context indexes are kept; the oldest go first.
+pub const FOLLOW_CTX_MAX: usize = 64;
+/// The title card is held this long at most for a context index that has
+/// not arrived; then the playlist plays on (and the context swaps in when it
+/// comes).
+pub const FOLLOW_CONTEXT_WAIT: Duration = Duration::from_secs(30);
+/// How often the poller logs its request count and heap figures.
+pub const FOLLOW_REPORT: Duration = Duration::from_secs(300);

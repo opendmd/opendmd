@@ -29,7 +29,8 @@ use std::time::Instant;
 use crate::config;
 use crate::dns_server::DnsServer;
 use crate::http::NetCommand;
-use crate::state::Status;
+use crate::nvs_config::Settings;
+use crate::state::{Command, Status};
 use crate::wifi::{WifiManager, WifiState};
 
 /// Everything the worker needs to take ownership of.
@@ -42,6 +43,10 @@ pub struct NetWorker {
     pub hostname: String,
     pub status: Arc<Mutex<Status>>,
     pub rx: mpsc::Receiver<NetCommand>,
+    /// The live settings (Follow RePlayOS reads its own from them) and the
+    /// main task's command channel (where it sends what it decided).
+    pub settings: Arc<Mutex<Settings>>,
+    pub cmd: mpsc::Sender<Command>,
 }
 
 /// Spawn the worker on CPU0 and return immediately.
@@ -93,7 +98,10 @@ fn run(worker: NetWorker) {
         hostname,
         status,
         rx,
+        settings,
+        cmd,
     } = worker;
+    let mut follow = crate::follow::Poller::new(settings, status.clone(), cmd);
 
     info!("[net] worker started on CPU0");
 
@@ -204,7 +212,7 @@ fn run(worker: NetWorker) {
     loop {
         // Commands from the HTTP handlers. `recv_timeout` doubles as the poll
         // interval, so a scan is never left waiting for a sleep to finish.
-        match rx.recv_timeout(config::WIFI_POLL_INTERVAL) {
+        match rx.recv_timeout(follow.wait().min(config::WIFI_POLL_INTERVAL)) {
             Ok(NetCommand::Scan(reply)) => {
                 let aps = wifi.scan_networks().unwrap_or_else(|e| {
                     warn!("[net] scan failed: {e:#}");
@@ -217,6 +225,9 @@ fn run(worker: NetWorker) {
             // task nor the httpd task waits on it. A scan request that
             // arrives meanwhile waits too; that is the trade.
             Ok(NetCommand::CountCache) => crate::cache::run_count(),
+            Ok(NetCommand::FollowTest { host, code, reply }) => {
+                let _ = reply.send(follow.test(&host, code.as_deref()));
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 info!("[net] command channel closed; worker exiting");
@@ -225,6 +236,9 @@ fn run(worker: NetWorker) {
         }
 
         crate::clock::log_new_syncs();
+
+        // Follow RePlayOS: a poll when one is due (station mode only).
+        follow.tick(wifi.state() == WifiState::Connected && wifi.is_associated());
 
         // An open AP does not stay up indefinitely. Rebooting (rather than
         // dropping back to STA in place) re-runs the whole boot decision with
