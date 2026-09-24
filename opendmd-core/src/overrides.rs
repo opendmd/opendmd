@@ -448,6 +448,11 @@ impl Overrides {
         self.entries.iter()
     }
 
+    /// The overrides themselves, mutably (their indices stay as they are).
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Override> {
+        self.entries.iter_mut().map(|(_, o)| o)
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

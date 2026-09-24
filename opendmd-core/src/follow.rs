@@ -25,6 +25,7 @@
 //! ([`state_name`]).
 
 use crate::manifest::Entry;
+use crate::overrides::{Override, Overrides};
 use crate::text::fold_char;
 use std::time::Duration;
 
@@ -37,14 +38,237 @@ pub const BACKOFF: Duration = Duration::from_secs(15);
 /// Failed polls in a row before a following panel gives up on the Pi.
 pub const FAILURES_TO_DROP: u32 = 3;
 
-/// Score at or above which an entry's title counts as this game: weight
-/// [`STRONG_WEIGHT`].
+/// Score at or above which an entry's title counts as this game
+/// ([`Match::Strong`]).
 pub const STRONG: f32 = 0.6;
-/// Score at or above which it is related (another game of the series, say):
-/// weight [`WEAK_WEIGHT`].
+/// Score at or above which it is related (another game of the series, say:
+/// [`Match::Related`]).
 pub const WEAK: f32 = 0.35;
-pub const STRONG_WEIGHT: f32 = 8.0;
-pub const WEAK_WEIGHT: f32 = 3.0;
+
+/// Share of a context playlist's draws the strong matches get together,
+/// when there are any...
+pub const STRONG_SHARE: f32 = STRONG_PCT as f32 / 100.0;
+/// ...and the related ones, alongside them.
+pub const RELATED_SHARE: f32 = RELATED_PCT as f32 / 100.0;
+/// The related matches' share when there are no strong ones.
+pub const RELATED_ONLY_SHARE: f32 = RELATED_ONLY_PCT as f32 / 100.0;
+const STRONG_PCT: u32 = 60;
+const RELATED_PCT: u32 = 15;
+const RELATED_ONLY_PCT: u32 = 40;
+/// No entry of a context playlist weighs more than this. The scheduler's
+/// draw is rejection sampling against the largest weight, so this also
+/// bounds how many tries a draw takes (and a single entry that should have
+/// 60% of 635 draws would need a weight of ~1,450).
+pub const MAX_WEIGHT: f32 = 64.0;
+
+const STRONG_MARK: f32 = 2.0;
+const RELATED_MARK: f32 = 1.5;
+
+/// How an entry's title relates to the game being played.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Match {
+    /// The game's own art ([`STRONG`] or better).
+    Strong,
+    /// Related ([`WEAK`] or better): another game of the series, say.
+    Related,
+}
+
+impl Match {
+    /// The mark a context index's pass leaves on a match, before
+    /// [`weigh_context`] knows the counts and replaces it with the weight.
+    /// (Never seen outside the pass; positive so that an index written
+    /// without the second step still plays every entry.)
+    pub fn mark(self) -> Override {
+        Override {
+            weight: Some(match self {
+                Match::Strong => STRONG_MARK,
+                Match::Related => RELATED_MARK,
+            }),
+            ..Override::default()
+        }
+    }
+
+    fn of_mark(ov: &Override) -> Option<Match> {
+        match ov.weight {
+            Some(STRONG_MARK) => Some(Match::Strong),
+            Some(RELATED_MARK) => Some(Match::Related),
+            _ => None,
+        }
+    }
+}
+
+/// Which class a [`title_score`] puts an entry in (`None`: the rest of the
+/// platform, weight 1).
+pub fn classify(score: f32) -> Option<Match> {
+    if score >= STRONG {
+        Some(Match::Strong)
+    } else if score >= WEAK {
+        Some(Match::Related)
+    } else {
+        None
+    }
+}
+
+/// The per-entry weights of a context playlist, from how many entries it
+/// has of each kind. The rest of the platform weighs 1; the strong matches
+/// together get [`STRONG_SHARE`] of the draws and the related ones
+/// [`RELATED_SHARE`] (or [`RELATED_ONLY_SHARE`] with no strong match), the
+/// rest the remainder — so a platform with 635 entries and one match weighs
+/// that match far more than one with 60 entries and ten.
+///
+/// Each weight is capped at [`MAX_WEIGHT`] (`capped` says it bound) and
+/// floored at 1 (a match never plays less often than any other entry); a
+/// class held at either gets what that gives, and the others still get
+/// their target share, the rest of the platform taking up the difference.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContextWeights {
+    pub strong: f32,
+    pub related: f32,
+    /// A class wanted more than [`MAX_WEIGHT`].
+    pub capped: bool,
+    pub n_strong: u32,
+    pub n_related: u32,
+    /// Entries in the playlist, matches included.
+    pub total: u32,
+}
+
+impl ContextWeights {
+    pub fn for_counts(total: u32, n_strong: u32, n_related: u32) -> Self {
+        let n_rest = total.saturating_sub(n_strong + n_related);
+        // In whole percent, and through `black_box`: LLVM turns a choice
+        // between two float constants into a load from a two-entry constant
+        // table, which the Xtensa backend cannot select ("Cannot select ...
+        // PCREL_WRAPPER TargetConstantPool" — a compiler crash, not a
+        // warning), and it folds a plain integer choice back into one.
+        let (ts, tr): (u32, u32) = std::hint::black_box(match (n_strong > 0, n_related > 0) {
+            (true, true) => (STRONG_PCT, RELATED_PCT),
+            (true, false) => (STRONG_PCT, 0),
+            (false, true) => (0, RELATED_ONLY_PCT),
+            (false, false) => (0, 0),
+        });
+        let (ts, tr) = (ts as f32 / 100.0, tr as f32 / 100.0);
+        // (count, target share, weight once fixed at the cap or the floor)
+        let mut classes = [(n_strong as f32, ts, None), (n_related as f32, tr, None)];
+        let mut capped = false;
+        if n_rest == 0 {
+            // Nothing else to weigh against: the classes against each other,
+            // the lighter entry 1.
+            let per = |(n, t, _): (f32, f32, Option<f32>)| if n > 0.0 { t / n } else { 0.0 };
+            let (ps, pr) = (per(classes[0]), per(classes[1]));
+            let base = [ps, pr]
+                .into_iter()
+                .filter(|p| *p > 0.0)
+                .fold(f32::MAX, f32::min);
+            let mut w = |p: f32| {
+                if p > 0.0 {
+                    let w = p / base;
+                    capped |= w > MAX_WEIGHT;
+                    w.min(MAX_WEIGHT)
+                } else {
+                    1.0
+                }
+            };
+            let (strong, related) = (w(ps), w(pr));
+            return ContextWeights {
+                strong,
+                related,
+                capped,
+                n_strong,
+                n_related,
+                total,
+            };
+        }
+        // Water-filling: a class not held gets exactly its share of the total
+        // mass M, where M = (rest + held classes' mass) / (1 - free shares).
+        // Holding one changes M, so repeat until nothing more is held (at most
+        // once per class).
+        let mut weights = [1.0f32; 2];
+        for _ in 0..=classes.len() {
+            let held: f32 = classes
+                .iter()
+                .filter_map(|(n, _, w)| w.map(|w| w * n))
+                .sum();
+            let free: f32 = classes
+                .iter()
+                .filter(|(n, _, w)| w.is_none() && *n > 0.0)
+                .map(|(_, t, _)| t)
+                .sum();
+            let mass = (n_rest as f32 + held) / (1.0 - free);
+            let mut changed = false;
+            for (k, (n, t, fixed)) in classes.iter_mut().enumerate() {
+                if *n == 0.0 {
+                    continue;
+                }
+                if let Some(w) = fixed {
+                    weights[k] = *w;
+                    continue;
+                }
+                let w = *t * mass / *n;
+                weights[k] = w;
+                if w > MAX_WEIGHT {
+                    *fixed = Some(MAX_WEIGHT);
+                    capped = true;
+                    changed = true;
+                } else if w < 1.0 {
+                    *fixed = Some(1.0);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        ContextWeights {
+            strong: weights[0],
+            related: weights[1],
+            capped,
+            n_strong,
+            n_related,
+            total,
+        }
+    }
+
+    pub fn weight(&self, m: Match) -> f32 {
+        match m {
+            Match::Strong => self.strong,
+            Match::Related => self.related,
+        }
+    }
+
+    /// The expected share of draws of `(strong, related, rest)` with these
+    /// weights (no no-repeat window).
+    pub fn shares(&self) -> (f32, f32, f32) {
+        let s = self.strong * self.n_strong as f32;
+        let r = self.related * self.n_related as f32;
+        let o = self.total.saturating_sub(self.n_strong + self.n_related) as f32;
+        let m = s + r + o;
+        if m <= 0.0 {
+            return (0.0, 0.0, 0.0);
+        }
+        (s / m, r / m, o / m)
+    }
+}
+
+/// The second half of a context index's pass (the `finish` of
+/// [`crate::index::write_index_resolving_then`]): count the [`Match::mark`]s
+/// among `count` entries and replace each with its class's weight.
+pub fn weigh_context(count: u32, resolved: &mut Overrides) -> ContextWeights {
+    let (mut s, mut r) = (0u32, 0u32);
+    for (_, ov) in resolved.iter() {
+        match Match::of_mark(ov) {
+            Some(Match::Strong) => s += 1,
+            Some(Match::Related) => r += 1,
+            None => {}
+        }
+    }
+    let w = ContextWeights::for_counts(count, s, r);
+    for ov in resolved.values_mut() {
+        if let Some(m) = Match::of_mark(ov) {
+            ov.weight = Some(w.weight(m));
+        }
+    }
+    w
+}
 
 /// RePlayOS system ids (`<company>_<system>`) to the tag grammar's
 /// platforms. Any `arcade_*` is `ARCADE`.
@@ -247,9 +471,9 @@ fn is_number(t: &str) -> bool {
 /// - when *both* sides have words the other lacks (`Super Mario Kart`
 ///   against `Super Mario World`: another game of the series) ×0.75.
 ///
-/// "Sonic3" against "Sonic the Hedgehog 3 (USA)" is 0.8 (weight 8), "Sonic
-/// The Hedgehog" 0.56 (weight 3), "Sonic The Hedgehog 2" 0.33 (none);
-/// "Super Mario Kart" against "Super Mario World" 0.5 (weight 3).
+/// "Sonic3" against "Sonic the Hedgehog 3 (USA)" is 0.8 (strong), "Sonic
+/// The Hedgehog" 0.56 (related), "Sonic The Hedgehog 2" 0.33 (neither);
+/// "Super Mario Kart" against "Super Mario World" 0.5 (related).
 pub fn title_score(entry_title: &str, game_name: &str) -> f32 {
     score_tokens(&tokens(entry_title), &tokens(game_name))
 }
@@ -278,18 +502,6 @@ pub fn score_tokens(entry: &[String], game: &[String]) -> f32 {
         factor *= 0.75;
     }
     dice * factor
-}
-
-/// The scheduler weight a score earns in a context playlist (`None`: the
-/// default 1).
-pub fn weight_for(score: f32) -> Option<f32> {
-    if score >= STRONG {
-        Some(STRONG_WEIGHT)
-    } else if score >= WEAK {
-        Some(WEAK_WEIGHT)
-    } else {
-        None
-    }
 }
 
 /// Is this entry a logo? (`MD_LOGO_Sega31`: the `LOGO` flag, or `logo` in
@@ -356,7 +568,7 @@ pub fn context_fingerprint(platform: &str, game_name: &str) -> u64 {
         h ^= 0xff;
         h = h.wrapping_mul(0x0100_0000_01b3);
     };
-    eat(b"follow-context-v1");
+    eat(b"follow-context-v2");
     eat(platform.as_bytes());
     for t in tokens(game_name) {
         eat(t.as_bytes());
@@ -720,12 +932,182 @@ mod tests {
         assert!((title_score("Super Mario Kart", "Super Mario World (USA)") - 0.5).abs() < 1e-6);
         assert!(title_score("SuperMarioWorld", "Super Mario World (USA)") >= STRONG);
         assert!(title_score("StreetsOfRage2Skate Joge", "Streets of Rage 2 (USA)") >= STRONG);
-        // Weights.
-        assert_eq!(weight_for(score("Sonic3")), Some(STRONG_WEIGHT));
-        assert_eq!(weight_for(score("Sonic The Hedgehog")), Some(WEAK_WEIGHT));
-        assert_eq!(weight_for(score("SonicVitre")), None);
-        assert_eq!(weight_for(score("Sonic The Hedgehog 2")), None);
-        assert_eq!(weight_for(0.0), None);
+        // Classes.
+        assert_eq!(classify(score("Sonic3")), Some(Match::Strong));
+        assert_eq!(classify(score("Sonic The Hedgehog")), Some(Match::Related));
+        assert_eq!(classify(score("SonicVitre")), None);
+        assert_eq!(classify(score("Sonic The Hedgehog 2")), None);
+        assert_eq!(classify(0.0), None);
+    }
+
+    /// Draw `n` from a context index the way the engine does (the weights
+    /// read back from the index into the scheduler) and count each class.
+    fn draw_shares(
+        cat: &mut crate::index::IndexedCatalog<std::io::Cursor<Vec<u8>>, std::io::Cursor<Vec<u8>>>,
+        game: &str,
+        window: usize,
+        n: usize,
+    ) -> (f32, f32, f32) {
+        use crate::engine::Catalog;
+        use crate::scheduler::{Mode, Scheduler};
+        let mut sched = Scheduler::new(cat.len(), Mode::Shuffle, 0x5eed).with_no_repeat(window);
+        for (i, ov) in cat.overrides().unwrap().iter() {
+            sched.set_weight(*i as usize, ov.scheduler_weight().unwrap());
+        }
+        let class: Vec<Option<Match>> = (0..cat.len())
+            .map(|i| classify(title_score(&cat.entry(i).unwrap().title, game)))
+            .collect();
+        let mut c = [0usize; 3];
+        for _ in 0..n {
+            match class[sched.next_index().unwrap()] {
+                Some(Match::Strong) => c[0] += 1,
+                Some(Match::Related) => c[1] += 1,
+                None => c[2] += 1,
+            }
+        }
+        let f = |k: usize| c[k] as f32 / n as f32;
+        (f(0), f(1), f(2))
+    }
+
+    fn near(got: f32, want: f32, what: &str) {
+        assert!(
+            (got - want).abs() <= 0.03,
+            "{what}: {got:.3}, want {want:.3} ± 0.03"
+        );
+    }
+
+    /// A synthetic manifest per game, through the same one-pass index build
+    /// as the firmware (`write_index_resolving_then` + `weigh_context`),
+    /// read back, and drawn from: the strong matches get 60% of the draws,
+    /// the related 15%, the rest of the platform 25%.
+    #[test]
+    fn context_weights_hit_their_shares() {
+        use crate::engine::Catalog;
+        use crate::filter::Filter;
+        use crate::index::{write_index_resolving_then, IndexedCatalog};
+        use std::io::Cursor;
+        let others = ["StreetsOfRage", "Plok", "Gunstar Heroes", "Ecco", "Contra"];
+        for (platform, game, strong, related, n) in [
+            (
+                "MD",
+                "Sonic the Hedgehog 3 (USA)",
+                "Sonic3",
+                "SonicTheHedgehog",
+                (2, 8, 45),
+            ),
+            (
+                "SNES",
+                "Super Mario World (USA)",
+                "SuperMarioWorld",
+                "SuperMarioKart",
+                (5, 10, 100),
+            ),
+        ] {
+            let mut m = String::new();
+            let mut line = |title: &str, i: usize| {
+                m.push_str(&format!("/gifs/Consoles/{platform}_{title}_{i:02}.gif\n"));
+                // Another platform's entry between each: filtered out.
+                m.push_str(&format!("/gifs/Consoles/NES_{title}_{i:02}.gif\n"));
+            };
+            for i in 0..n.0 {
+                line(strong, i);
+            }
+            for i in 0..n.1 {
+                line(related, i);
+            }
+            for i in 0..n.2 {
+                line(others[i % others.len()], i);
+            }
+            let filter = Filter::new().platforms([platform]);
+            let game_tokens = tokens(game);
+            let mut weights = None;
+            let mut out = Cursor::new(Vec::new());
+            let (header, _) = write_index_resolving_then(
+                Cursor::new(m.as_bytes()),
+                m.len() as u32,
+                &filter,
+                context_fingerprint(platform, game),
+                |e| classify(score_tokens(&tokens(&e.title), &game_tokens)).map(Match::mark),
+                |count, ov| weights = Some(weigh_context(count, ov)),
+                &mut out,
+            )
+            .unwrap();
+            let w = weights.unwrap();
+            assert_eq!(header.count as usize, n.0 + n.1 + n.2);
+            assert_eq!(
+                (w.n_strong, w.n_related),
+                (n.0 as u32, n.1 as u32),
+                "{game}"
+            );
+            assert_eq!(w.total, header.count);
+            assert!(!w.capped, "{game}: {w:?}");
+            let (s, r, o) = w.shares();
+            near(s, STRONG_SHARE, "weights: strong");
+            near(r, RELATED_SHARE, "weights: related");
+            near(o, 1.0 - STRONG_SHARE - RELATED_SHARE, "weights: rest");
+
+            let mut cat =
+                IndexedCatalog::open(Cursor::new(m.into_bytes()), Cursor::new(out.into_inner()))
+                    .unwrap();
+            assert_eq!(cat.len(), header.count as usize);
+            let (s, r, o) = draw_shares(&mut cat, game, 0, 60_000);
+            near(s, STRONG_SHARE, &format!("{game}: drawn strong"));
+            near(r, RELATED_SHARE, &format!("{game}: drawn related"));
+            near(
+                o,
+                1.0 - STRONG_SHARE - RELATED_SHARE,
+                &format!("{game}: drawn rest"),
+            );
+        }
+    }
+
+    #[test]
+    fn context_weights_scale_cap_and_floor() {
+        // Uncapped: the owner's formula, w = share / rest share * n_rest / n.
+        let w = ContextWeights::for_counts(600, 30, 40);
+        assert!(
+            (w.strong - 0.60 / 0.25 * 530.0 / 30.0).abs() < 1e-3,
+            "{w:?}"
+        );
+        assert!(
+            (w.related - 0.15 / 0.25 * 530.0 / 40.0).abs() < 1e-3,
+            "{w:?}"
+        );
+        assert!(!w.capped);
+        // Sonic 3 on the stock card (635 MD entries, 1 strong, 27 related):
+        // the one strong entry would need ~1,457; held at 64, the related
+        // entries still get their 15%.
+        let w = ContextWeights::for_counts(635, 1, 27);
+        assert!(w.capped);
+        assert_eq!(w.strong, MAX_WEIGHT);
+        let (s, r, _) = w.shares();
+        near(r, RELATED_SHARE, "sonic 3: related");
+        assert!((s - 64.0 / (64.0 + 607.0) * 0.85).abs() < 1e-3, "{s}");
+        // Super Mario World (1,052 SNES entries, 26 strong, 91 related): 86
+        // wanted, 64 given.
+        let w = ContextWeights::for_counts(1052, 26, 91);
+        assert!(w.capped && w.strong == MAX_WEIGHT, "{w:?}");
+        near(w.shares().1, RELATED_SHARE, "smw: related");
+        // Only related matches: 40%.
+        let w = ContextWeights::for_counts(300, 0, 10);
+        assert!(
+            (w.related - 0.40 / 0.60 * 290.0 / 10.0).abs() < 1e-3,
+            "{w:?}"
+        );
+        near(w.shares().1, RELATED_ONLY_SHARE, "related only");
+        // Strong only: 60%, the rest 40%.
+        let w = ContextWeights::for_counts(100, 10, 0);
+        near(w.shares().0, STRONG_SHARE, "strong only");
+        // Matches everywhere: never below 1.
+        let w = ContextWeights::for_counts(100, 90, 5);
+        assert!(w.strong >= 1.0 && w.related >= 1.0, "{w:?}");
+        let w = ContextWeights::for_counts(10, 4, 6);
+        assert!(w.related == 1.0 && w.strong > 1.0, "{w:?}");
+        assert_eq!(ContextWeights::for_counts(50, 0, 0).shares().2, 1.0);
+        assert_eq!(
+            ContextWeights::for_counts(0, 0, 0).shares(),
+            (0.0, 0.0, 0.0)
+        );
     }
 
     #[test]

@@ -687,8 +687,7 @@ fn main() -> Result<()> {
                 }
                 Command::Follow(event) => {
                     let was_context = runner.context().is_some();
-                    let todo =
-                        runner.handle(event, engine.as_mut(), sched.off(), epoch.elapsed());
+                    let todo = runner.handle(event, engine.as_mut(), sched.off(), epoch.elapsed());
                     follow_todo(
                         todo,
                         was_context,
@@ -1031,7 +1030,10 @@ fn replay(
         match rebuild_context(engine, &base, &ctx, status, canvas) {
             Ok(a) => return Ok(a),
             Err(e) => {
-                log::warn!("follow: context {} will not play ({e}); attract instead", ctx.index);
+                log::warn!(
+                    "follow: context {} will not play ({e}); attract instead",
+                    ctx.index
+                );
                 runner.context_failed();
             }
         }
@@ -1071,7 +1073,8 @@ fn rebuild_context(
     }
     let started = Instant::now();
     let built = (|| -> Result<(Engine, Overrides)> {
-        let manifest = File::open(&ctx.manifest).with_context(|| format!("opening {}", ctx.manifest))?;
+        let manifest =
+            File::open(&ctx.manifest).with_context(|| format!("opening {}", ctx.manifest))?;
         let index = File::open(&ctx.index).with_context(|| format!("opening {}", ctx.index))?;
         let mut catalog = IndexedCatalog::open(manifest, index)?;
         let ov = catalog.overrides()?;
@@ -1103,7 +1106,11 @@ fn rebuild_context(
     s.entries = outcome.as_ref().map_or(0, |a| a.entries);
     s.overrides = outcome.as_ref().map_or(0, |a| a.overrides);
     s.hidden = 0;
-    s.index_state = if outcome.is_ok() { "ready" } else { "unavailable" };
+    s.index_state = if outcome.is_ok() {
+        "ready"
+    } else {
+        "unavailable"
+    };
     outcome
 }
 
@@ -1452,7 +1459,11 @@ fn build_engine(
     force: bool,
 ) -> Result<(Engine, IndexSource, Overrides)> {
     let (catalog, overrides, source) = open_catalog(path, &build_filter(settings), force)?;
-    Ok((engine_over(catalog, &overrides, settings), source, overrides))
+    Ok((
+        engine_over(catalog, &overrides, settings),
+        source,
+        overrides,
+    ))
 }
 
 /// An engine over `catalog` with the settings' order, dwell and transition,
