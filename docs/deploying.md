@@ -9,7 +9,7 @@ The short version:
 ```bash
 # once per card, on a laptop with the card in a reader (mounted at $CARD)
 cp -r <DMDoS pack>/gifs <DMDoS pack>/filelist.txt "$CARD"/
-make pack ARGS="convert $CARD --layout bucketed --verify"   # prepare every GIF (the playback cache)
+make pack ARGS="convert $CARD --verify"   # prepare every GIF (the playback cache, under cache/)
 make web && cp -r opendmd-web/www "$CARD"/www
 sync && umount "$CARD"
 
@@ -54,29 +54,46 @@ cp -r /path/to/pack/gifs /path/to/pack/filelist.txt "$CARD"/
 
 ### Prepare the card (the playback cache)
 
-Users see GIFs and playlists; a **prepared copy** of a GIF (an `.odm` file,
-`docs/odm-format.md`) is a cache. The player looks for each GIF's copy at
-`odm/<Category>/<bb>/<name>.odm` and plays it when it is there, otherwise the
-GIF: playlists keep naming GIFs and nothing has to be configured. A copy
-needs ~14.5 KB of heap against ~54 KB for a GIF, and lives in a directory of
-~15 entries, so the ESP32 never scans the 3,781-file `gifs/Consoles` for it
-(each open there costs ~330 ms and shows as a late frame). Both are measured
-in CLAUDE.md ("Heap ceiling", "Frame time").
+Users see GIFs and playlists; a **prepared copy** of a GIF
+(`docs/cache-format.md`) is a cache: a standard GIF with its LZW capped at 9
+bits and delta frames. The player looks for each GIF's copy at
+`cache/<Category>/<xx>/<name>.gif` and plays it when it is there, otherwise
+the GIF: playlists keep naming GIFs and nothing has to be configured. A copy
+needs ~16 KB of heap (canvas included) against ~27 KB for the original
+through the same decoder, is 0.61x its size on average, and lives in a
+directory of ~15 entries, so the ESP32 never scans the 3,781-file
+`gifs/Consoles` for it (each open there costs ~330 ms and shows as a late
+frame). Both are measured in CLAUDE.md ("GIF heap budget", "Frame time").
 
 ```bash
-# A copy of every GIF; --verify plays both and compares every frame.
-# Re-running skips files already prepared. gifs/ and filelist.txt are untouched.
-make pack ARGS="convert $CARD --layout bucketed --verify"
+# A copy of every GIF; --verify plays copy and original and compares every
+# frame. Re-running skips files already prepared (the copy carries the GIF's
+# mtime). gifs/ and filelist.txt are untouched.
+make pack ARGS="convert $CARD --verify"
 ```
 
 `make pack` is `opendmd-pack` built in release; the same arguments work on
-the binary directly. That is the whole step: no manifest to write. (`opendmd-pack
-manifest` still exists for tooling and tests; the firmware ignores a
-`filelist.odm.txt` and logs so once at boot.) A GIF with no copy simply
-plays as a GIF. Files added later from the web app (Library, **Add GIFs**)
-are prepared by the browser as they are uploaded, and **Settings → Playback
-cache** shows how many of the playlist's files are prepared and can prepare
-the rest in the background.
+the binary directly (`opendmd-pack convert --verify <card>`). That is the
+whole step: no manifest to write. A GIF with no copy simply plays as a GIF.
+Files added later from the web app (Library, **Add GIFs**, the Studio) are
+prepared by the browser as they are uploaded, the player prepares the rest
+itself at night, and **Settings → Playback cache** shows how many of the
+playlist's files are prepared and can prepare the rest in the background.
+
+**A card prepared by an earlier build** has an `odm/` tree of the retired
+pre-rendered `.odm` copies (and perhaps a `filelist.odm.txt`). The player
+ignores both and logs each once at boot. Remove the tree on a laptop (`rm
+-r "$CARD"/odm`) or over the network, a few seconds of work per request
+until the reply says `"done":true`:
+
+```bash
+until curl -s -X DELETE "http://opendmd.local/api/files/odm?recursive=1" | grep -q '"done":true'; do :; done
+curl -X DELETE http://opendmd.local/api/cache/failed   # the old failure list went with odm/; start clean
+```
+
+On the rig the stock card's tree (7,970 copies, 9,662 entries with their
+directories) took 62 requests, 250 s, while the panel played (the deletes
+hold the card, so expect late frames meanwhile).
 
 The default playlist is `/filelist.txt` ("All files" in the app); `{"set":""}`
 selects it, `{"set":"filelist.hall"}` a root manifest, `{"set":"<name>"}`
@@ -253,18 +270,20 @@ wait for the night window to end, and check again.
 | `manifest` | `/sdcard/filelist.txt` | `/sdcard/filelist.txt` (the copies are found per file) |
 | `index_state` | `ready` | `ready` |
 | `www_version` | the `git describe` of the `make web` that built the card's app, `null` if the card's `www/` predates it | same |
-| `heap.free` | ~57-60 KB | ~85-91 KB |
-| `heap.floor` (sampled low-water) | ~55-58 KB idle; ~38 KB while serving one client, ~34 KB under three | ~85 KB idle |
+| `heap.free` | ~62-64 KB (originals through gifslim at cap 12; 0.3.0 with the `gif` crate: ~49-60 KB) | ~76 KB (copies through gifslim at cap 9; 75.9-76.2 KB over 90 s idle on a 645-copy set) |
+| `heap.floor` (sampled low-water) | 24,980 B over the first 10 min after boot, which included deleting the old `odm/` tree (0.3.0: 12-18 KB; the older ~55-58 KB figures predate transitions and Follow) | 38,204 B over the first 2.5 min after boot (boot to idle on the copy set), 27,032 B after 120 s of `api-load WORKERS=3` |
 | `refresh_hz` | 100 | 100 |
 | `deadline_misses` | a handful per few minutes idle (19 in 5 min, worst ~520 ms: opening a file in a big directory) | 0 idle; 2 (worst 3 ms) in 2 min of back-to-back downloads of the same set |
 | `worst_lateness_ms` | up to ~550 | 0 idle, single digits under load |
 | `sd.mounted` | `true` | `true` |
 
-The left column was re-measured with per-file copy resolution (200 of the
-10,133 entries prepared, 5 min idle): free 56.8-57.6 KB, floor 53.3 KB, 20
-misses (worst 443 ms); each GIF open first pays a ~5-6 ms miss looking for
-its copy, and a file that has one plays with ~87-94 KB free. The right
-column was measured with a 200-entry set of copies.
+The heap rows were measured on the rig on 2026-09-24 with no copies on the
+card (5 min idle on `filelist.txt`, Dissolve, Follow RePlayOS in attract);
+the other rows are older measurements (per-file copy resolution with 200 of
+the 10,133 entries prepared as the retired `.odm` copies: 20 misses in 5
+min, worst 443 ms; each GIF open first pays a ~5-6 ms miss looking for its
+copy). The right column's misses were measured with a 200-entry set of
+`.odm` copies.
 
 A floor that keeps falling towards 5 KB (`config::HEAP_RESERVE`, where the
 server starts answering 503) or misses by the hundred while nobody is using

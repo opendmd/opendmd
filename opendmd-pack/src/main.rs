@@ -1,52 +1,48 @@
-//! `opendmd-pack`: prepare a card — turn its GIFs into ODM v1 files, the
-//! copies the player plays in their place.
+//! `opendmd-pack`: prepare a card — write every GIF's prepared copy, the
+//! file the player plays in its place.
 //!
 //! ```text
-//! opendmd-pack convert  <card-root> [--layout beside|bucketed] [--jobs N] [--verify] [--force]
-//! opendmd-pack manifest <card-root> [--layout beside|bucketed] [--manifest filelist.txt] [--out filelist.odm.txt]
+//! opendmd-pack convert <card-root> [--jobs N] [--verify] [--force]
 //! ```
 //!
-//! `convert` writes `<name>.odm` beside every `<name>.gif` under
-//! `<card-root>/gifs/` (or, with `--layout bucketed`, at
-//! `<card-root>/odm/<Category>/<bb>/<name>.odm` — see [`layout`]) and prints
-//! the same report `tools/odm-proto.py` does. In the bucketed layout a current
-//! beside `.odm` is copied rather than re-encoded.
-//! A file is up to date — and skipped unless `--force` — when its `.odm`
-//! exists, is at least a header long, and carries the `.gif`'s mtime, which
-//! the converter copies onto every file it writes. `--verify` decodes every
-//! `.odm` (converted or skipped) back through `OdmSource` and compares it with
-//! `GifSource` on the original, frame by frame: canvases and delays must be
-//! identical, except for files whose palette had to be quantised, where the
-//! frame count and delays must match and the colour error is reported.
+//! `convert` writes, for every `<card-root>/gifs/<Category>/<name>.gif`, its
+//! prepared copy at `<card-root>/cache/<Category>/<xx>/<name>.gif` (see
+//! `opendmd_core::layout` and `docs/cache-format.md`): a standard GIF89a,
+//! LZW capped at 9 bits, delta frames, the `OPENDMD1LZW` hint —
+//! `gifslim::recode_gif` in the prepared format, byte-identical to what the
+//! browser and the device's own cache builder write. A copy is up to date —
+//! and skipped unless `--force` — when it exists and carries the GIF's
+//! mtime, which the converter copies onto every file it writes. `--verify`
+//! plays every copy (converted or skipped) against its GIF, frame by frame,
+//! through three decoders at once: the original through `GifSource`, the
+//! copy through `GifSource` (the `gif` crate: "it is a standard GIF") and
+//! the copy through `GifSlim` at cap 9 (what the player uses). Every canvas
+//! and delay must be identical, except for files whose palette had to be
+//! quantised (more than 255 colours), where the frame count and delays must
+//! match and the colour error is reported.
 //!
-//! **Preparing a card is one command:** `convert <card-root> --layout
-//! bucketed --verify`. The firmware looks for each GIF's copy at its bucketed
-//! path and plays it when it is there, so playlists keep naming GIFs and
-//! nothing else changes on the card.
+//! **Preparing a card is one command:** `convert <card-root> --verify`. The
+//! firmware looks for each GIF's copy there and plays it when it is, so
+//! playlists keep naming GIFs and nothing else changes on the card.
 //!
-//! `manifest` rewrites a manifest's `/gifs/....gif` lines to the `.odm` path
-//! of the chosen layout wherever that file exists on the card, keeping order,
-//! blank lines and line endings. **For tooling and tests only**: playback no
-//! longer needs such a manifest (the firmware ignores `filelist.odm.txt`).
+//! `recode` and `gifscan` are the gifslim experiment's tools
+//! (`docs/gifslim-experiment.md`).
 
-mod layout;
 mod recode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use layout::Layout;
-use opendmd_core::canvas::Canvas;
-use opendmd_core::odm::{self, EncodeStats, OdmSource};
-use opendmd_core::player::GifSource;
+use opendmd_core::gifslim::{self, RecodeStats, PREPARED};
+use opendmd_core::layout;
 use std::fs;
-use std::io::{self, BufReader, Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime};
 
 #[derive(Parser)]
-#[command(version, about = "Convert a card's GIFs to ODM v1")]
+#[command(version, about = "Prepare a card's GIFs for the player")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -54,20 +50,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Write an .odm for every .gif under <card-root>/gifs and report. To
-    /// prepare a card for the player: --layout bucketed --verify.
+    /// Write every GIF's prepared copy under <card-root>/cache and report.
+    /// To prepare a card for the player: --verify.
     Convert {
         card_root: PathBuf,
-        /// Where the .odm files go: beside each .gif, or odm/<Category>/<bb>/.
-        #[arg(long, value_enum, default_value_t = Layout::Beside)]
-        layout: Layout,
         /// Worker threads (default: every core).
         #[arg(long)]
         jobs: Option<usize>,
-        /// Decode every .odm back and compare it with the GIF, frame by frame.
+        /// Play every copy against its GIF, frame by frame.
         #[arg(long)]
         verify: bool,
-        /// Re-encode even when the .odm is up to date.
+        /// Re-encode even when the copy is up to date.
         #[arg(long)]
         force: bool,
     },
@@ -113,38 +106,16 @@ enum Cmd {
         #[arg(long)]
         tsv: Option<PathBuf>,
     },
-    /// For tooling/tests only: rewrite a manifest's paths to .odm wherever the
-    /// .odm exists. Playback does not need this; `convert --layout bucketed`
-    /// is all a card needs.
-    Manifest {
-        card_root: PathBuf,
-        /// Which .odm paths to write: beside each .gif, or odm/<Category>/<bb>/.
-        #[arg(long, value_enum, default_value_t = Layout::Beside)]
-        layout: Layout,
-        /// Manifest to read, relative to the card root.
-        #[arg(long, default_value = "filelist.txt")]
-        manifest: PathBuf,
-        /// Where to write the result, relative to the card root.
-        #[arg(long, default_value = "filelist.odm.txt")]
-        out: PathBuf,
-    },
 }
 
 fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Convert {
             card_root,
-            layout,
             jobs,
             verify,
             force,
-        } => convert(&card_root, layout, jobs, verify, force),
-        Cmd::Manifest {
-            card_root,
-            layout,
-            manifest,
-            out,
-        } => rewrite_manifest(&card_root, layout, &manifest, &out),
+        } => convert(&card_root, jobs, verify, force),
         Cmd::Recode {
             card_root,
             cap,
@@ -184,72 +155,34 @@ fn main() -> Result<()> {
 struct Done {
     rel: String,
     gif_bytes: u64,
-    odm_bytes: u64,
-    /// `None` when the file was up to date or copied, not re-encoded.
-    stats: Option<EncodeStats>,
-    /// Bucketed layout only: copied from a current beside `.odm`.
-    copied: bool,
-    verify: Option<Verdict>,
-}
-
-enum Verdict {
-    /// Every canvas and delay identical.
-    Exact {
-        frames: u64,
-    },
-    /// Quantised palette: frames and delays match, colours within `max_err`.
-    Lossy {
-        frames: u64,
-        max_err: u8,
-    },
-    Fail(String),
-}
-
-fn find_gifs(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            find_gifs(&path, out)?;
-        } else if path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("gif"))
-            && !path
-                .file_name()
-                .is_some_and(|n| recode::is_recode_output(&n.to_string_lossy(), None))
-        {
-            // (`recode`'s experimental copies are not GIFs to convert.)
-            out.push(path);
-        }
-    }
-    Ok(())
+    copy_bytes: u64,
+    /// `None` when the file was up to date, not re-encoded.
+    stats: Option<RecodeStats>,
+    verify: Option<recode::Verdict>,
+    frames_compared: u64,
 }
 
 fn mtime(meta: &fs::Metadata) -> Option<SystemTime> {
     meta.modified().ok()
 }
 
-fn convert(
-    root: &Path,
-    layout: Layout,
-    jobs: Option<usize>,
-    verify: bool,
-    force: bool,
-) -> Result<()> {
+fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Result<()> {
     let gif_root = root.join("gifs");
     if !gif_root.is_dir() {
         bail!("{}: no gifs/ directory", root.display());
     }
-    let mut files = Vec::new();
-    find_gifs(&gif_root, &mut files).with_context(|| format!("walking {}", gif_root.display()))?;
-    files.sort();
+    // (`recode`'s experimental copies are not GIFs to convert.)
+    let files = recode::find_sources(&gif_root, None)
+        .with_context(|| format!("walking {}", gif_root.display()))?;
     let jobs = jobs
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
         .max(1);
     println!(
-        "found {} .gif files under {} ({jobs} jobs{})",
+        "found {} .gif files under {} ({jobs} jobs{}) -> {}",
         files.len(),
         gif_root.display(),
-        if verify { ", verifying" } else { "" }
+        if verify { ", verifying" } else { "" },
+        root.join("cache").display()
     );
 
     let t0 = Instant::now();
@@ -266,8 +199,8 @@ fn convert(
                     .strip_prefix(&gif_root)
                     .unwrap_or(path)
                     .to_string_lossy()
-                    .into_owned();
-                match process(root, path, rel.clone(), layout, force, verify) {
+                    .replace(std::path::MAIN_SEPARATOR, "/");
+                match process(root, path, rel.clone(), force, verify) {
                     Ok(done) => results.lock().unwrap().push(done),
                     Err(e) => errors
                         .lock()
@@ -290,10 +223,15 @@ fn convert(
     let mut errors = errors.into_inner().unwrap();
     results.sort_by(|a, b| a.rel.cmp(&b.rel));
     errors.sort();
-    report(&results, &errors, files.len(), jobs, elapsed, layout);
+    report(&results, &errors, files.len(), jobs, elapsed);
     let failed = results
         .iter()
-        .filter(|r| matches!(r.verify, Some(Verdict::Fail(_))))
+        .filter(|r| {
+            matches!(
+                r.verify,
+                Some(recode::Verdict::Fail(_) | recode::Verdict::NeedsFull(_))
+            )
+        })
         .count();
     if failed > 0 {
         bail!("{failed} files failed verification");
@@ -301,82 +239,38 @@ fn convert(
     Ok(())
 }
 
-/// An `.odm` at `path` exists, is at least a header long, and carries the
-/// GIF's mtime.
+/// A copy at `path` exists and carries the GIF's mtime.
 fn is_current(path: &Path, gif_meta: &fs::Metadata) -> bool {
-    fs::metadata(path).is_ok_and(|m| {
-        m.len() >= odm::HEADER_LEN as u64 && mtime(&m).is_some() && mtime(&m) == mtime(gif_meta)
-    })
+    fs::metadata(path)
+        .is_ok_and(|m| m.len() > 13 && mtime(&m).is_some() && mtime(&m) == mtime(gif_meta))
 }
 
-fn process(
-    root: &Path,
-    gif_path: &Path,
-    rel: String,
-    layout: Layout,
-    force: bool,
-    verify: bool,
-) -> Result<Done> {
-    let beside = gif_path.with_extension("odm");
-    let odm_path = match layout {
-        Layout::Beside => beside.clone(),
-        Layout::Bucketed => {
-            let rel = rel.replace(std::path::MAIN_SEPARATOR, "/");
-            root.join(layout::odm_rel(&rel, layout).context("not a .gif name")?)
-        }
-    };
+fn process(root: &Path, gif_path: &Path, rel: String, force: bool, verify: bool) -> Result<Done> {
+    let copy_path = root.join(layout::cache_rel(&rel).context("not a .gif name")?);
     let gif_meta = fs::metadata(gif_path)?;
-    let up_to_date = !force && is_current(&odm_path, &gif_meta);
-
+    let up_to_date = !force && is_current(&copy_path, &gif_meta);
     if up_to_date && !verify {
         return Ok(Done {
             rel,
             gif_bytes: gif_meta.len(),
-            odm_bytes: fs::metadata(&odm_path)?.len(),
+            copy_bytes: fs::metadata(&copy_path)?.len(),
             stats: None,
-            copied: false,
             verify: None,
+            frames_compared: 0,
         });
     }
-    // Bucketed: a current beside .odm is the same bytes the encoder would
-    // write (it is deterministic), so copy it. `--verify` still checks it.
-    let copy_from = (layout == Layout::Bucketed && !up_to_date && !force)
-        .then_some(&beside)
-        .filter(|b| is_current(b, &gif_meta));
-    if let Some(parent) = odm_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    if let Some(src) = copy_from {
-        let tmp = odm_path.with_extension("odm.tmp");
-        fs::copy(src, &tmp).context("copying the beside .odm")?;
-        if let Some(t) = mtime(&gif_meta) {
-            fs::File::options()
-                .write(true)
-                .open(&tmp)?
-                .set_modified(t)?;
-        }
-        fs::rename(&tmp, &odm_path)?;
-        if !verify {
-            return Ok(Done {
-                rel,
-                gif_bytes: gif_meta.len(),
-                odm_bytes: fs::metadata(&odm_path)?.len(),
-                stats: None,
-                copied: true,
-                verify: None,
-            });
-        }
-    }
-    let copied = copy_from.is_some();
     let gif = fs::read(gif_path).context("reading the GIF")?;
-    let (stats, odm_bytes) = if up_to_date || copied {
-        (None, fs::metadata(&odm_path)?.len())
+    let (stats, copy) = if up_to_date {
+        (None, fs::read(&copy_path)?)
     } else {
-        let mut out = Vec::new();
-        let stats = odm::encode_gif(&gif[..], &mut out).context("encoding")?;
-        // Temp + rename, so an interrupted run never leaves a short .odm
+        let mut out = Vec::with_capacity(gif.len());
+        let stats = gifslim::recode_gif(&gif[..], &mut out, &PREPARED).context("encoding")?;
+        if let Some(parent) = copy_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        // Temp + rename, so an interrupted run never leaves a short copy
         // with a current mtime behind.
-        let tmp = odm_path.with_extension("odm.tmp");
+        let tmp = copy_path.with_extension("gif.tmp");
         {
             let mut f = fs::File::create(&tmp)?;
             f.write_all(&out)?;
@@ -384,65 +278,26 @@ fn process(
                 f.set_modified(t)?;
             }
         }
-        fs::rename(&tmp, &odm_path)?;
-        (Some(stats), out.len() as u64)
+        fs::rename(&tmp, &copy_path)?;
+        (Some(stats), out)
     };
-
-    let verify = if verify {
-        let odm_file = BufReader::new(fs::File::open(&odm_path)?);
-        Some(
-            compare(&gif, odm_file, stats.as_ref().map(|s| s.quantised))
-                .unwrap_or_else(|e| Verdict::Fail(format!("{e:#}"))),
-        )
+    let (verify, frames_compared) = if verify {
+        // For a skipped file whether it was quantised is not known: a copy
+        // whose two decoders agree while it differs from the original is
+        // reported as quantised, and a fresh encode says for sure.
+        let quantised = stats.as_ref().is_none_or(|s| s.quantised);
+        let (v, n, _) = recode::compare(&gif, &copy, PREPARED.cap, quantised);
+        (Some(v), n)
     } else {
-        None
+        (None, 0)
     };
     Ok(Done {
         rel,
         gif_bytes: gif.len() as u64,
-        odm_bytes,
+        copy_bytes: copy.len() as u64,
         stats,
-        copied,
         verify,
-    })
-}
-
-/// Play both files side by side, exactly as the engine would.
-/// `quantised` is what the encoder reported; for a skipped (up-to-date) file it
-/// is unknown, and a 256-entry palette is taken as the sign of quantisation.
-fn compare(gif: &[u8], odm: impl Read, quantised: Option<bool>) -> Result<Verdict> {
-    let mut g = GifSource::new(gif)?;
-    let mut o = OdmSource::new(odm)?;
-    if g.logical_size() != o.logical_size() {
-        return Ok(Verdict::Fail(format!(
-            "size {:?} vs {:?}",
-            g.logical_size(),
-            o.logical_size()
-        )));
-    }
-    let (mut cg, mut co) = (Canvas::new(), Canvas::new());
-    let mut frames = 0u64;
-    let mut max_err = 0u8;
-    loop {
-        let (dg, d_o) = (g.next_frame(&mut cg)?, o.next_frame(&mut co)?);
-        if dg != d_o {
-            return Ok(Verdict::Fail(format!(
-                "frame {frames}: delay {dg:?} vs {d_o:?}"
-            )));
-        }
-        if dg.is_none() {
-            break;
-        }
-        for (a, b) in cg.as_bytes().iter().zip(co.as_bytes()) {
-            max_err = max_err.max(a.abs_diff(*b));
-        }
-        frames += 1;
-    }
-    let quantised = quantised.unwrap_or(o.palette_len() == 256);
-    Ok(match (max_err, quantised) {
-        (0, _) => Verdict::Exact { frames },
-        (e, true) => Verdict::Lossy { frames, max_err: e },
-        (e, false) => Verdict::Fail(format!("pixels differ by up to {e}")),
+        frames_compared,
     })
 }
 
@@ -457,35 +312,16 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[lo] + (sorted[hi] - sorted[lo]) * (rank - lo as f64)
 }
 
-fn report(
-    results: &[Done],
-    errors: &[(String, String)],
-    found: usize,
-    jobs: usize,
-    secs: f64,
-    layout: Layout,
-) {
+fn report(results: &[Done], errors: &[(String, String)], found: usize, jobs: usize, secs: f64) {
     let skipped = results.iter().filter(|r| r.stats.is_none()).count();
-    let copied = results.iter().filter(|r| r.copied).count();
-    if layout == Layout::Bucketed {
-        println!(
-            "convert pass done: {} ok ({} encoded, {copied} copied from beside .odm, {} up to date), \
-             {} errors, {secs:.1}s",
-            results.len(),
-            results.len() - skipped,
-            skipped - copied,
-            errors.len()
-        );
-    } else {
-        println!(
-            "convert pass done: {} ok ({} encoded, {skipped} up to date), {} errors, {secs:.1}s",
-            results.len(),
-            results.len() - skipped,
-            errors.len()
-        );
-    }
+    println!(
+        "convert pass done: {} ok ({} encoded, {skipped} up to date), {} errors, {secs:.1}s",
+        results.len(),
+        results.len() - skipped,
+        errors.len()
+    );
 
-    println!("\n=== ERRORS (skipped files) ===");
+    println!("\n=== ERRORS (no copy; the player plays the GIF, if it can) ===");
     for (rel, e) in errors {
         println!("  {rel}: {}", e.lines().next().unwrap_or(""));
     }
@@ -495,8 +331,8 @@ fn report(
     }
 
     let total_gif: u64 = results.iter().map(|r| r.gif_bytes).sum();
-    let total_odm: u64 = results.iter().map(|r| r.odm_bytes).sum();
-    let ratio = |r: &Done| r.odm_bytes as f64 / r.gif_bytes as f64;
+    let total_copy: u64 = results.iter().map(|r| r.copy_bytes).sum();
+    let ratio = |r: &Done| r.copy_bytes as f64 / r.gif_bytes as f64;
     let mut ratios: Vec<f64> = results.iter().map(ratio).collect();
     ratios.sort_by(f64::total_cmp);
     let mut worst: Vec<&Done> = results.iter().collect();
@@ -504,84 +340,75 @@ fn report(
 
     println!("\n=== SIZE ===");
     println!(
-        "total gif bytes: {total_gif} ({:.1} MB)",
+        "total gif bytes:  {total_gif} ({:.1} MB)",
         total_gif as f64 / 1e6
     );
     println!(
-        "total odm bytes: {total_odm} ({:.1} MB)",
-        total_odm as f64 / 1e6
+        "total copy bytes: {total_copy} ({:.1} MB)",
+        total_copy as f64 / 1e6
     );
     println!(
-        "overall ratio odm/gif: {:.4}",
-        total_odm as f64 / total_gif as f64
+        "overall ratio copy/gif: {:.4}",
+        total_copy as f64 / total_gif as f64
     );
     println!(
         "per-file ratio median: {:.4}  p95: {:.4}",
         percentile(&ratios, 50.0),
         percentile(&ratios, 95.0)
     );
-    println!("worst 10 files (name, gif_size, odm_size, frames, ratio):");
+    println!("worst 10 files (name, gif_size, copy_size, frames, ratio):");
     for r in worst.iter().take(10) {
         let frames = r
             .stats
             .as_ref()
             .map_or("?".to_string(), |s| s.frames.to_string());
         println!(
-            "  {}  gif={}  odm={}  frames={frames}  ratio={:.3}",
+            "  {}  gif={}  copy={}  frames={frames}  ratio={:.3}",
             r.rel,
             r.gif_bytes,
-            r.odm_bytes,
+            r.copy_bytes,
             ratio(r)
         );
     }
 
-    let encoded: Vec<&EncodeStats> = results.iter().filter_map(|r| r.stats.as_ref()).collect();
+    let encoded: Vec<(&Done, &RecodeStats)> = results
+        .iter()
+        .filter_map(|r| r.stats.as_ref().map(|s| (r, s)))
+        .collect();
     if !encoded.is_empty() {
-        let keep: u64 = encoded.iter().map(|s| s.keep_px).sum();
-        let fill: u64 = encoded.iter().map(|s| s.fill_px).sum();
-        let lit: u64 = encoded.iter().map(|s| s.lit_px).sum();
-        let total = (keep + fill + lit).max(1);
-        let pct = |n: u64| 100.0 * n as f64 / total as f64;
         println!(
-            "\n=== OP USAGE (archive-wide pixel share{}) ===",
+            "\n=== PALETTE{} ===",
             if skipped > 0 {
-                ", encoded files only"
+                " (encoded files only)"
             } else {
                 ""
             }
         );
-        println!("total pixels (sum over all frames): {total}");
-        println!("KEEP: {keep} ({:.2}%)", pct(keep));
-        println!("FILL: {fill} ({:.2}%)", pct(fill));
-        println!("LIT:  {lit} ({:.2}%)", pct(lit));
-
-        println!("\n=== PALETTE ===");
-        let quantised: Vec<&&EncodeStats> = encoded.iter().filter(|s| s.quantised).collect();
         println!(
-            "files needing quantisation (>256 colours): {} / {}",
-            quantised.len(),
+            "files needing quantisation (more than 255 colours): {} / {}",
+            encoded.iter().filter(|(_, s)| s.quantised).count(),
             encoded.len()
         );
         println!(
-            "files with a single-colour palette: {}",
-            encoded.iter().filter(|s| s.palette_len == 1).count()
+            "exactly 256 colours (deltas without a spare transparent index): {}",
+            encoded.iter().filter(|(_, s)| s.opaque_deltas).count()
         );
         println!(
-            "files with <=4 colours: {}",
-            encoded.iter().filter(|s| s.palette_len <= 4).count()
+            "decoded with the gif crate (interlaced / Previous disposal): {}",
+            encoded.iter().filter(|(_, s)| s.full_decoder).count()
         );
-        let pal_bytes: Vec<usize> = encoded.iter().map(|s| s.palette_len * 3).collect();
-        println!(
-            "palette bytes per file: max={} mean={:.1}",
-            pal_bytes.iter().max().unwrap_or(&0),
-            pal_bytes.iter().sum::<usize>() as f64 / pal_bytes.len() as f64
-        );
-
-        println!("\n=== STRAYS (not 128x32) ===");
-        for (r, s) in results
+        let rect: u64 = encoded.iter().map(|(_, s)| s.rect_px).sum();
+        let px: u64 = encoded
             .iter()
-            .filter_map(|r| r.stats.as_ref().map(|s| (r, s)))
-        {
+            .map(|(_, s)| s.frames as u64 * (s.width * s.height) as u64)
+            .sum();
+        let clears: u64 = encoded.iter().map(|(_, s)| s.lzw.clears).sum();
+        println!(
+            "frame rectangles: {:.1}% of all frame pixels; CLEARs forced by the cap: {clears}",
+            100.0 * rect as f64 / px.max(1) as f64
+        );
+        println!("\n=== STRAYS (not 128x32) ===");
+        for (r, s) in &encoded {
             if (s.width, s.height) != (128, 32) {
                 println!("  {}: {}x{}", r.rel, s.width, s.height);
             }
@@ -590,33 +417,32 @@ fn report(
 
     let verified: Vec<&Done> = results.iter().filter(|r| r.verify.is_some()).collect();
     if !verified.is_empty() {
-        let (mut exact, mut lossy, mut frames) = (0, Vec::new(), 0u64);
+        let (mut exact, mut lossy, mut worst_err, mut frames) = (0, 0, 0u8, 0u64);
         let mut fails = Vec::new();
         for r in &verified {
+            frames += r.frames_compared;
             match r.verify.as_ref().unwrap() {
-                Verdict::Exact { frames: f } => {
-                    exact += 1;
-                    frames += f;
+                recode::Verdict::Exact => exact += 1,
+                recode::Verdict::Lossy { max_err } => {
+                    lossy += 1;
+                    worst_err = worst_err.max(*max_err);
                 }
-                Verdict::Lossy { frames: f, max_err } => {
-                    lossy.push((r.rel.as_str(), *max_err));
-                    frames += f;
+                recode::Verdict::NeedsFull(e) | recode::Verdict::Fail(e) => {
+                    fails.push((r.rel.as_str(), e.as_str()))
                 }
-                Verdict::Fail(e) => fails.push((r.rel.as_str(), e.as_str())),
             }
         }
-        println!("\n=== VERIFICATION (OdmSource vs GifSource, every frame) ===");
+        println!(
+            "\n=== VERIFICATION (original/GifSource vs copy/GifSource vs copy/GifSlim cap {}, every frame) ===",
+            PREPARED.cap
+        );
         println!("files verified: {} / {}", verified.len(), results.len());
         println!(
-            "identical: {exact}  quantised (frames+delays match, colours approximate): {}  fail: {}",
-            lossy.len(),
+            "identical: {exact}  quantised (frames+delays match, colours approximate): {lossy} \
+             (worst channel error {worst_err})  fail: {}",
             fails.len()
         );
         println!("frames compared: {frames}");
-        if !lossy.is_empty() {
-            let worst = lossy.iter().map(|l| l.1).max().unwrap_or(0);
-            println!("quantised files: worst per-channel error {worst}");
-        }
         for (rel, e) in fails.iter().take(20) {
             println!("  FAIL {rel}: {e}");
         }
@@ -624,89 +450,6 @@ fn report(
 
     println!("\n=== TIMING ===");
     println!("wall clock for {found} files with {jobs} jobs: {secs:.1}s");
-}
-
-// ---------------------------------------------------------------------------
-// manifest
-// ---------------------------------------------------------------------------
-
-/// `Some(.odm path)` if `line` names a `.gif` whose `.odm` exists where
-/// `layout` puts it: beside it, or `/odm/<Category>/<bb>/` for a `/gifs/` path.
-fn odm_for(root: &Path, line: &str, layout: Layout) -> Option<String> {
-    let odm = match layout {
-        Layout::Beside => {
-            let cut = line.len().checked_sub(4)?;
-            if !line.get(cut..)?.eq_ignore_ascii_case(".gif") {
-                return None;
-            }
-            format!("{}.odm", &line[..cut])
-        }
-        Layout::Bucketed => {
-            let (first, rest) = line.trim_start_matches('/').split_once('/')?;
-            if !first.eq_ignore_ascii_case("gifs") {
-                return None;
-            }
-            format!("/{}", layout::odm_rel(rest, layout)?)
-        }
-    };
-    root.join(odm.trim_start_matches('/'))
-        .is_file()
-        .then_some(odm)
-}
-
-fn rewrite_manifest(root: &Path, layout: Layout, manifest: &Path, out: &Path) -> Result<()> {
-    let src = root.join(manifest);
-    let dst = root.join(out);
-    let text = fs::read_to_string(&src).with_context(|| format!("reading {}", src.display()))?;
-    let (mut total, mut switched) = (0usize, 0usize);
-    let mut missing = Vec::new();
-    let mut absent = 0usize;
-    let mut result = String::with_capacity(text.len());
-    for raw in text.split_inclusive('\n') {
-        // Keep the line ending (and any trailing whitespace) byte for byte.
-        let body = raw.trim_end_matches(['\n', '\r']);
-        let path = body.trim_end();
-        let tail = &raw[path.len()..];
-        if path.trim().is_empty() {
-            result.push_str(raw);
-            continue;
-        }
-        total += 1;
-        match odm_for(root, path, layout) {
-            Some(odm) => {
-                switched += 1;
-                result.push_str(&odm);
-                result.push_str(tail);
-            }
-            None => {
-                if !root.join(path.trim_start_matches('/')).is_file() {
-                    absent += 1;
-                } else if path.to_ascii_lowercase().ends_with(".gif") {
-                    missing.push(path.to_string());
-                }
-                result.push_str(raw);
-            }
-        }
-    }
-    if dst == src {
-        bail!("refusing to overwrite the manifest being read; pick another --out");
-    }
-    fs::write(&dst, result).with_context(|| format!("writing {}", dst.display()))?;
-    println!(
-        "{}: {total} entries, {switched} now .odm, {} still .gif (no .odm {}), \
-         {absent} unchanged because the file itself is not on the card -> {}",
-        src.display(),
-        missing.len(),
-        match layout {
-            Layout::Beside => "beside them",
-            Layout::Bucketed => "under odm/",
-        },
-        dst.display()
-    );
-    for m in missing.iter().take(20) {
-        println!("  still gif: {m}");
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -722,64 +465,37 @@ mod tests {
     }
 
     #[test]
-    fn manifest_lines_switch_only_where_the_odm_exists() {
+    fn convert_writes_the_prepared_copy_where_the_player_looks() {
         let root = std::env::temp_dir().join(format!("opendmd-pack-test-{}", std::process::id()));
         let dir = root.join("gifs/NEW 2021");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("SNES_A_01..odm"), b"x").unwrap();
-        fs::write(
-            root.join("filelist.txt"),
-            "/gifs/NEW 2021/SNES_A_01..gif\r\n\n/gifs/NEW 2021/SNES_B_01.gif\n",
-        )
-        .unwrap();
-        rewrite_manifest(
-            &root,
-            Layout::Beside,
-            Path::new("filelist.txt"),
-            Path::new("out.txt"),
-        )
-        .unwrap();
-        assert_eq!(
-            fs::read_to_string(root.join("out.txt")).unwrap(),
-            "/gifs/NEW 2021/SNES_A_01..odm\r\n\n/gifs/NEW 2021/SNES_B_01.gif\n"
-        );
-        assert!(rewrite_manifest(
-            &root,
-            Layout::Beside,
-            Path::new("filelist.txt"),
-            Path::new("filelist.txt")
-        )
-        .is_err());
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn bucketed_manifest_points_under_odm() {
-        let root = std::env::temp_dir().join(format!("opendmd-pack-test-b-{}", std::process::id()));
-        let rel = layout::odm_rel("NEW 2021/SNES_A_01..gif", Layout::Bucketed).unwrap();
-        let odm = root.join(&rel);
-        fs::create_dir_all(odm.parent().unwrap()).unwrap();
-        fs::write(&odm, b"x").unwrap();
-        // A beside .odm for B must not be picked up in the bucketed layout.
-        fs::create_dir_all(root.join("gifs/NEW 2021")).unwrap();
-        fs::write(root.join("gifs/NEW 2021/SNES_B_01.odm"), b"x").unwrap();
-        fs::write(
-            root.join("filelist.txt"),
-            "/gifs/NEW 2021/SNES_A_01..gif\r\n\n/gifs/NEW 2021/SNES_B_01.gif\n/logos/x.gif\n",
-        )
-        .unwrap();
-        rewrite_manifest(
-            &root,
-            Layout::Bucketed,
-            Path::new("filelist.txt"),
-            Path::new("out.txt"),
-        )
-        .unwrap();
-        assert_eq!(
-            fs::read_to_string(root.join("out.txt")).unwrap(),
-            format!("/{rel}\r\n\n/gifs/NEW 2021/SNES_B_01.gif\n/logos/x.gif\n")
-        );
-        assert!(rel.starts_with("odm/NEW 2021/"));
+        // A two-frame 4x4 GIF.
+        let mut gif = Vec::new();
+        {
+            let pal = [0u8, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255];
+            let mut enc = gif::Encoder::new(&mut gif, 4, 4, &pal).unwrap();
+            for k in 0..2u8 {
+                let f = gif::Frame {
+                    width: 4,
+                    height: 4,
+                    buffer: std::borrow::Cow::Owned(vec![k + 1; 16]),
+                    delay: 5,
+                    ..Default::default()
+                };
+                enc.write_frame(&f).unwrap();
+            }
+        }
+        fs::write(dir.join("SNES_A_01..gif"), &gif).unwrap();
+        convert(&root, Some(1), true, false).unwrap();
+        let copy = root.join(layout::cache_rel("NEW 2021/SNES_A_01..gif").unwrap());
+        assert!(copy.starts_with(root.join("cache/NEW 2021")));
+        let mut want = Vec::new();
+        gifslim::recode_gif(&gif[..], &mut want, &PREPARED).unwrap();
+        assert_eq!(fs::read(&copy).unwrap(), want);
+        // Up to date: carries the GIF's mtime, and a second run leaves it.
+        let gif_meta = fs::metadata(dir.join("SNES_A_01..gif")).unwrap();
+        assert!(is_current(&copy, &gif_meta));
+        convert(&root, Some(1), false, false).unwrap();
         fs::remove_dir_all(&root).unwrap();
     }
 }

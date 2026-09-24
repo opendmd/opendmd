@@ -33,8 +33,8 @@ every view like a person would:
   Cache     the three selected GIFs as a playlist `cachetest`, activated;
             their prepared copies forgotten (POST /api/cache/forget), so the
             Settings card reads "0 of 3"; "Prepare remaining files" makes all
-            three, byte-identical to `opendmd-pack convert --layout
-            bucketed`, and the card reads "3 of 3"
+            three, byte-identical to `opendmd-pack convert`, and the
+            card reads "3 of 3"
   Damaged   a playlist of two of them (copies forgotten) and two damaged
             GIFs written into the overlay (cut short, broken header); the
             first GET of one good GIF aborted (Playwright route) is retried:
@@ -134,12 +134,11 @@ def fnv1a32(b: bytes) -> int:
     return h
 
 
-def bucketed(gif_path: str) -> str:
-    """/gifs/Cat/X.gif -> /odm/Cat/<bb>/X.odm (opendmd_core::layout)."""
+def cache_path(gif_path: str) -> str:
+    """/gifs/Cat/X.gif -> /cache/Cat/<xx>/X.gif (opendmd_core::layout)."""
     rel = gif_path.split("/", 2)[2]
     d, name = rel.rsplit("/", 1)
-    odm = name[:-4] + ".odm"
-    return f"/odm/{d}/{fnv1a32(odm.encode()) & 0xFF:02x}/{odm}"
+    return f"/cache/{d}/{fnv1a32(name.encode()) & 0xFF:02x}/{name}"
 
 
 def free_port() -> int:
@@ -419,7 +418,7 @@ def shot(page: Page, name: str, size: str) -> None:
 
 # URL substrings of requests that fail on purpose (a 404/415 play). A
 # preview asks for the prepared copy first, and a 404 there is normal.
-expected: list[str] = ["/odm/"]
+expected: list[str] = ["/cache/"]
 
 
 def unexpected(url: str) -> bool:
@@ -897,7 +896,7 @@ def mock_pass(browser) -> None:
         page.wait_for_function("document.querySelector('#pc-progress').textContent.startsWith('3 files prepared')", timeout=120000)
         line = wait_cache_line(page, "3 of 3")
         check(True, f"cache: prepared -> '{line}' ({page.inner_text('#pc-progress')})")
-        made = {bucketed(p): CARD / p.lstrip("/") for p in selected}
+        made = {cache_path(p): CARD / p.lstrip("/") for p in selected}
         compare_with_pack(overlay, made)
         no_leaks(page, "settings (prepared)")
         shot(page, "settings-cache", "laptop")
@@ -927,7 +926,7 @@ def mock_pass(browser) -> None:
         gif_paths = [f"/gifs/Consoles/{a.name}" for a in adds]
         landed = [(overlay / p.lstrip("/")).exists() for p in gif_paths]
         check(all(landed), f"add: both GIFs uploaded ({landed})")
-        compare_with_pack(overlay, {bucketed(p): a for p, a in zip(gif_paths, adds)})
+        compare_with_pack(overlay, {cache_path(p): a for p, a in zip(gif_paths, adds)})
         plist = (overlay / "sets" / "cachetest.txt").read_text().split("\n")
         check(plist[3:5] == gif_paths and get_json(base + "/api/status")["entries"] == 5,
               f"add: both appended to cachetest ({len([l for l in plist if l])} lines)")
@@ -937,7 +936,7 @@ def mock_pass(browser) -> None:
         shot(page, "library-add", "laptop")
         req = urllib.request.Request(base + "/api/files" + gif_paths[1].replace(" ", "%20"), method="DELETE")
         urllib.request.urlopen(req, timeout=30).read()
-        gone = not (overlay / bucketed(gif_paths[1]).lstrip("/")).exists()
+        gone = not (overlay / cache_path(gif_paths[1]).lstrip("/")).exists()
         r = cache_ready(base)
         check(gone and r["prepared"] == 4, f"add: deleting a GIF took its copy with it ({r['prepared']} of {r['total']})")
         studio_checks(page, base, overlay)
@@ -1211,9 +1210,9 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
     page.wait_for_function("[...document.querySelectorAll('#toasts .toast.ok')].some(t => t.textContent.startsWith('1 added to “cachetest”'))", timeout=60000)
     path = f"/gifs/Consoles/{name}"
     got = overlay / path.lstrip("/")
-    check(got.exists() and (overlay / bucketed(path).lstrip("/")).exists(),
-          f"studio save: {path} and its prepared copy {bucketed(path)} landed")
-    compare_with_pack(overlay, {bucketed(path): got})
+    check(got.exists() and (overlay / cache_path(path).lstrip("/")).exists(),
+          f"studio save: {path} and its prepared copy {cache_path(path)} landed")
+    compare_with_pack(overlay, {cache_path(path): got})
     frames, delays = gif_frames(got)
     want = [rgb[i * 128 * 32 * 3:(i + 1) * 128 * 32 * 3] for i in range(exp["frames"])]
     same = sum(a == b for a, b in zip(frames, want))
@@ -1254,7 +1253,7 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
     the overlay (one cut short, one with a broken header). The first GET of
     one good GIF is aborted (Playwright route): it is retried after 2 s and
     made. The run ends in one summary line; the damaged GIFs are recorded in
-    /odm/.failed (POST /api/cache/failed) and a second run never fetches
+    /cache/.failed (POST /api/cache/failed) and a second run never fetches
     them. cachetest is back in play, "3 of 3", afterwards."""
     good = selected[:2]
     src = CARD / good[0].lstrip("/")
@@ -1301,8 +1300,8 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
     shot(page, "settings-damaged", "laptop")
     rows = get_json(base + "/api/cache/failed")
     check(sorted(r["path"] for r in rows) == damaged and all(r["reason"] for r in rows),
-          f"damage: recorded in /odm/.failed ({rows})")
-    compare_with_pack(overlay, {bucketed(p): CARD / p.lstrip("/") for p in good})
+          f"damage: recorded in /cache/.failed ({rows})")
+    compare_with_pack(overlay, {cache_path(p): CARD / p.lstrip("/") for p in good})
     n = len(hits)
     page.click("#pc-go")
     page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=60000)
@@ -1342,7 +1341,7 @@ def compare_with_pack(overlay: Path, made: dict[str, Path]) -> None:
         cat = copy.split("/")[2]
         (mini / "gifs" / cat).mkdir(parents=True, exist_ok=True)
         shutil.copy(gif, mini / "gifs" / cat / gif.name)
-    subprocess.run(["cargo", "run", "--release", "--quiet", "--", "convert", str(mini), "--layout", "bucketed", "--verify"],
+    subprocess.run(["cargo", "run", "--release", "--quiet", "--", "convert", str(mini), "--verify"],
                    cwd=REPO / "opendmd-pack", check=True, env={**os.environ, "RUSTUP_TOOLCHAIN": "stable"},
                    stdout=subprocess.DEVNULL)
     for copy in made:
@@ -1564,7 +1563,7 @@ def device_pass(browser, device: str) -> None:
             page.click(f"#lib-list .vrow:not([hidden]) >> nth=0")
             page.wait_for_function(f"document.querySelector('#lib-cap').textContent.endsWith({json.dumps(name[:-4] + '.gif')})", timeout=40000)
             wait_lit(page, "#lib-panel", f"device library {gif}", 40)
-            fetched = [(u.split(base, 1)[-1], s) for u, s in reqs if "/odm/" in u or "/gifs/" in u]
+            fetched = [(u.split(base, 1)[-1], s) for u, s in reqs if "/cache/" in u or "/gifs/" in u]
             check((pick, 200) in fetched and not any(u == gif for u, _ in fetched),
                   f"device library: {gif} previewed from its prepared copy ({fetched})")
             check(page.inner_text("#lib-cap").endswith(name[:-4] + ".gif"), f"device library: caption names the GIF ({page.inner_text('#lib-cap')})")

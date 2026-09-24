@@ -112,7 +112,7 @@ pub const KNOWN_AUTHORS: &[&str] = &["RattenJager", "OMEGAeFex"];
 pub struct Entry {
     /// The path exactly as it appeared in the manifest, leading slash intact.
     pub path: String,
-    /// Directory under `gifs/` (or, for a bucketed `.odm`, under `odm/`, the
+    /// Directory under `gifs/` (or, for a prepared copy, under `cache/`, the
     /// hash bucket skipped), e.g. `Consoles` or `NEW 2021`.
     pub category: Option<String>,
     pub platform: Option<String>,
@@ -275,12 +275,12 @@ pub fn entry_at<R: Read + Seek>(reader: &mut R, offset: u32) -> io::Result<Entry
     Ok(Entry::from_path(line))
 }
 
-/// The category is the first directory under `gifs/` — or under `odm/`, the
-/// bucketed `.odm` tree (`/odm/<Category>/<bb>/<name>.odm`, see "Card layout"
-/// in `docs/odm-format.md`), where the directory holding the file is a
+/// The category is the first directory under `gifs/` — or under `cache/`,
+/// the prepared copies (`/cache/<Category>/<xx>/<name>.gif`, see
+/// `docs/cache-format.md`), where the directory holding the file is a
 /// two-hex-digit hash bucket and never the category. So
-/// `/odm/Consoles/90/X.odm` is `Consoles`, like `/gifs/Consoles/X.gif`, and a
-/// loose `/odm/90/X.odm` (from a GIF directly in `gifs/`) has none.
+/// `/cache/Consoles/38/X.gif` is `Consoles`, like `/gifs/Consoles/X.gif`,
+/// and a loose `/cache/63/X.gif` (from a GIF directly in `gifs/`) has none.
 fn category_of(path: &str) -> Option<String> {
     let mut parts = path.split('/').filter(|p| !p.is_empty());
     let first = parts.next()?;
@@ -290,15 +290,15 @@ fn category_of(path: &str) -> Option<String> {
     if first.eq_ignore_ascii_case("gifs") {
         return Some(second.to_string());
     }
-    if first.eq_ignore_ascii_case("odm") {
-        // `/odm/<bb>/<name>`: `second` is the bucket of an uncategorised file.
+    if first.eq_ignore_ascii_case("cache") {
+        // `/cache/<xx>/<name>`: `second` is the bucket of an uncategorised file.
         let loose = parts.next().is_none() && is_bucket(second);
         return (!loose).then(|| second.to_string());
     }
     None
 }
 
-/// Exactly two lowercase hex digits: a bucket directory in the `odm/` tree.
+/// Exactly two lowercase hex digits: a bucket directory in the `cache/` tree.
 fn is_bucket(dir: &str) -> bool {
     dir.len() == 2
         && dir
@@ -306,9 +306,8 @@ fn is_bucket(dir: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Filename minus directories, minus any trailing `.gif` or `.odm` extensions
-/// and the stray dots around them (`..._01..gif` is real, and converts to
-/// `..._01..odm`). A converted file therefore gets exactly the tags of its GIF.
+/// Filename minus directories, minus any trailing `.gif` extensions and the
+/// stray dots around them (`..._01..gif` is real).
 fn stem_of(path: &str) -> &str {
     let name = path.rsplit('/').next().unwrap_or(path);
     let mut stem = name;
@@ -318,9 +317,7 @@ fn stem_of(path: &str) -> &str {
         // not panic on a non-boundary slice.
         let cut = trimmed.len().saturating_sub(4);
         let next = match trimmed.get(cut..) {
-            Some(ext) if ext.eq_ignore_ascii_case(".gif") || ext.eq_ignore_ascii_case(".odm") => {
-                &trimmed[..cut]
-            }
+            Some(ext) if ext.eq_ignore_ascii_case(".gif") => &trimmed[..cut],
             _ => trimmed,
         };
         if next.len() == stem.len() {
@@ -583,29 +580,10 @@ mod tests {
     }
 
     #[test]
-    fn an_odm_file_gets_the_tags_of_its_gif() {
-        for name in [
-            "SNES_Donkey_Kong_Country_05",
-            "MD_Sonic3_RattenJager",
-            "NINTENDO_DS_Mario_Kart_DS_01.",
-            "HALLOWEEN_ARCADE_GoldenAxe16",
-            "NES_Unknow_01_Invert",
-        ] {
-            let gif = p(&format!("/gifs/NEW 2021/{name}.gif"));
-            let odm = p(&format!("/gifs/NEW 2021/{name}.odm"));
-            assert_eq!(odm.path, format!("/gifs/NEW 2021/{name}.odm"));
-            assert_eq!(
-                Entry {
-                    path: gif.path.clone(),
-                    ..odm
-                },
-                gif,
-                "{name}"
-            );
-        }
-        assert_eq!(p("/gifs/X/SNES_Plok_08.ODM").title, "Plok");
+    fn only_the_gif_extension_is_stripped() {
+        assert_eq!(p("/gifs/X/SNES_Plok_08.GIF").title, "Plok");
         // Only the extension is stripped, and a multi-byte tail cannot panic.
-        assert_eq!(p("/gifs/X/SNES_odm_Test").title, "odm Test");
+        assert_eq!(p("/gifs/X/SNES_gif_Test").title, "gif Test");
         assert_eq!(p("/gifs/X/SNES_Caf\u{e9}").title, "Caf\u{e9}");
     }
 
@@ -627,43 +605,43 @@ mod tests {
     }
 
     #[test]
-    fn bucketed_odm_takes_the_category_not_the_bucket() {
-        for (gif, odm) in [
+    fn a_prepared_copy_takes_the_category_not_the_bucket() {
+        for (gif, copy) in [
             (
                 "/gifs/Consoles/MD_Sonic3_RattenJager.gif",
-                "/odm/Consoles/90/MD_Sonic3_RattenJager.odm",
+                "/cache/Consoles/38/MD_Sonic3_RattenJager.gif",
             ),
             (
                 "/gifs/NEW 2021/NINTENDO_DS_Mario_Kart_DS_01..gif",
-                "/odm/NEW 2021/8e/NINTENDO_DS_Mario_Kart_DS_01..odm",
+                "/cache/NEW 2021/1a/NINTENDO_DS_Mario_Kart_DS_01..gif",
             ),
             (
                 "/gifs/Pinball_Short/PINBALL_SHORT_WWF_40.gif",
-                "/odm/Pinball_Short/dc/PINBALL_SHORT_WWF_40.odm",
+                "/cache/Pinball_Short/fc/PINBALL_SHORT_WWF_40.gif",
             ),
             // A category that itself looks like a bucket is still a category.
-            ("/gifs/ab/SNES_Plok_08.gif", "/odm/ab/c0/SNES_Plok_08.odm"),
+            ("/gifs/ab/SNES_Plok_08.gif", "/cache/ab/68/SNES_Plok_08.gif"),
         ] {
-            let (g, o) = (p(gif), p(odm));
-            assert_eq!(o.path, odm);
+            let (g, c) = (p(gif), p(copy));
+            assert_eq!(c.path, copy);
             assert_eq!(
                 Entry {
                     path: g.path.clone(),
-                    ..o
+                    ..c
                 },
                 g,
-                "{odm}"
+                "{copy}"
             );
         }
         // Nested GIF directories: the first one is the category, as under gifs/.
-        assert_eq!(p("/odm/A/B/af/x.odm").category.as_deref(), Some("A"));
+        assert_eq!(p("/cache/A/B/af/x.gif").category.as_deref(), Some("A"));
         assert_eq!(p("/gifs/A/B/x.gif").category.as_deref(), Some("A"));
-        // Loose: only a bucket between odm/ and the file, so no category.
-        assert_eq!(p("/odm/af/x.odm").category, None);
-        assert_eq!(p("/odm/x.odm").category, None);
+        // Loose: only a bucket between cache/ and the file, so no category.
+        assert_eq!(p("/cache/af/x.gif").category, None);
+        assert_eq!(p("/cache/x.gif").category, None);
         // Not a bucket (upper case, three digits): an unbucketed category.
-        assert_eq!(p("/odm/Arcade/x.odm").category.as_deref(), Some("Arcade"));
-        assert_eq!(p("/odm/7E/x.odm").category.as_deref(), Some("7E"));
+        assert_eq!(p("/cache/Arcade/x.gif").category.as_deref(), Some("Arcade"));
+        assert_eq!(p("/cache/7E/x.gif").category.as_deref(), Some("7E"));
     }
 
     #[test]

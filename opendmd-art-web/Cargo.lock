@@ -172,6 +172,7 @@ name = "opendmd-art-web"
 version = "0.1.0"
 dependencies = [
  "gif",
+ "js-sys",
  "opendmd-core",
  "wasm-bindgen",
  "wasm-bindgen-test",

@@ -94,12 +94,13 @@ pub const SD_BOOT_ATTEMPTS: u32 = 2;
 // ---------------------------------------------------------------------------
 /// The stock card's playlist file, read from the card root.
 pub const MANIFEST_PATH: &str = "/sdcard/filelist.txt";
-/// A manifest from before prepared copies were resolved automatically: the
-/// same playlist with `/odm/...` paths, once the default when present. It is
-/// **ignored** now (logged once at boot): `filelist.txt` is the default, and
-/// [`crate::sd::SdSource`] plays each GIF's prepared copy when it exists.
-/// Kept only so it can be recognised; `set` may not name it.
-pub const OBSOLETE_ODM_MANIFEST: &str = "filelist.odm.txt";
+/// A manifest from before prepared copies were resolved automatically (a
+/// playlist of paths into the retired pre-rendered format's tree), once the
+/// default when present. It is **ignored** now (logged once at boot):
+/// `filelist.txt` is the default, and [`crate::sd::SdSource`] plays each
+/// GIF's prepared copy when it exists. Kept only so it can be recognised;
+/// `set` may not name it.
+pub const OBSOLETE_MANIFEST: &str = "filelist.odm.txt";
 
 // The manifest is indexed, never loaded.
 //
@@ -321,9 +322,17 @@ pub const WWW_VERSION_PATH: &str = "/sdcard/www/version.txt";
 // ---------------------------------------------------------------------------
 // Playback cache (prepared copies)
 // ---------------------------------------------------------------------------
-/// Where prepared copies live: `odm/<Category>/<bb>/<name>.odm`, the bucketed
-/// layout of `opendmd_core::layout`. `SdSource` looks here before every GIF.
-pub const ODM_ROOT: &str = "/sdcard/odm";
+/// Where prepared copies live: `cache/<Category>/<xx>/<name>.gif`, the
+/// layout of `opendmd_core::layout` (`docs/cache-format.md`). `SdSource`
+/// looks here before every GIF.
+pub const CACHE_ROOT: &str = "/sdcard/cache";
+/// The retired pre-rendered format's tree. Never read: its presence is
+/// logged once at boot, and `DELETE /api/files/odm?recursive=1` removes it.
+pub const LEGACY_ROOT: &str = "/sdcard/odm";
+/// A recursive `DELETE` (`?recursive=1`, under `cache/` and the legacy tree
+/// only) works on the httpd task for at most this long per request, then
+/// answers `"done":false` and the client asks again.
+pub const RECURSIVE_DELETE_BUDGET: Duration = Duration::from_secs(4);
 /// How many prepared-copy keys (`u32` each) the `/api/cache` count holds at
 /// once. The walk takes the buckets a slice at a time until this many keys are
 /// held, then makes one pass over the manifest for that slice: 3,072 keys is
@@ -338,38 +347,48 @@ pub const CACHE_DEBOUNCE: Duration = Duration::from_secs(3);
 // ---------------------------------------------------------------------------
 // The cache builder (`cache_builder.rs`): the device preparing its own copies
 // ---------------------------------------------------------------------------
-/// The builder task's stack: `encode_gif_streaming` through the `gif`
-/// decoder and FATFS. Measured high-water in the heartbeat (`stack … B
-/// unused`): 6.0 KB used at most (1,024 B left of 7 KB over a 10-minute
-/// pause run of 117 files, 2026-09-24; 5.9 KB in the night and drip runs
-/// before), so 8.5 KB leaves 2.5 KB spare. Taken when the task starts (only
-/// while there is work it may do) and given back when it exits; every KB of
-/// it is a KB the drip pace needs free on top (its start threshold is 75.5
-/// KB with this stack, 74 KB with the old 7 KB; the full pace's stays at 74
-/// KB, see [`BUILDER_MIN_HEAP_FULL`]).
-pub const BUILDER_STACK: usize = 8 * 1024 + 512;
+/// The builder task's stack: `gifslim::recode_gif_streaming` and FATFS.
+/// The heartbeat's high-water (`stack … B unused`): with the old
+/// pre-rendered encoder through the `gif` decoder ~6.1 KB was used at most
+/// (8.5 KB left 2.5 KB spare); the first run of this encoder at 8.5 KB left
+/// only 700 B (gifslim then copied a local palette into a 768-byte stack
+/// buffer on top of its 256-entry colour table; it reads it straight into
+/// the table now). 9.5 KB keeps ~2.5 KB spare. Taken when the task starts
+/// (only while there is work it may do) and given back when it exits;
+/// every KB of it is a KB the drip pace needs free on top (its start
+/// threshold is [`BUILDER_MIN_HEAP`] + this + 1 KB).
+pub const BUILDER_STACK: usize = 9 * 1024 + 512;
 /// Below the stream task (2): the builder runs only when nothing that
 /// answers a client wants CPU0.
 pub const BUILDER_PRIORITY: u8 = 1;
 /// A file is only started at the drip pace with this much heap free, the
 /// task already running; what the encoder leaves is the network's and the
-/// player's (see [`BUILDER_MIN_HEAP_FULL`] for the full pace). The task itself is
-/// only started with its stack + 1 KB more than this free (75.5 KB). With a
-/// prepared file playing the rig has 76-80 KB free, so the drip runs; with a
-/// GIF, ~40-50 KB, so it does not. The encoder is ~57 KB by the host's
-/// count (63 KB at most over the card); on the rig, starting at 68 KB, the
-/// sampled floor over 10 minutes of dripping stayed at 16.4 KB, i.e. it
-/// took at most ~52 KB. [`BUILDER_ABORT_HEAP`] catches the big ones.
-pub const BUILDER_MIN_HEAP: u32 = 66 * 1024;
+/// player's (see [`BUILDER_MIN_HEAP_FULL`] for the full pace). The task
+/// itself is only started with its stack + 1 KB more than this free (64.5
+/// KB). The encoder (`recode_gif_streaming`, gifslim at cap 12 as the
+/// source decoder) peaks at 42.9-43.6 KB for a 128x32 GIF by the host's
+/// count (`encodeprobe --heap`, the whole stock card; 56.5 KB for the
+/// 132x32 stray), against ~57 KB (63 KB at most) for the pre-rendered
+/// encoder this replaced, whose threshold was 66 KB: the same ~10 KB over
+/// the host's figure is kept. With a prepared file playing the rig has
+/// ~74-78 KB free, so the drip runs; with an original, the pace stops it
+/// anyway (`gif on screen`). [`BUILDER_ABORT_HEAP`] catches the big ones.
+pub const BUILDER_MIN_HEAP: u32 = 54 * 1024;
 /// [`BUILDER_MIN_HEAP`] at the full pace (paused, night mode "off", no
-/// playlist): nothing animates and the player opens nothing without stopping
-/// the builder first (`player_opening`), so the margin is only the
-/// network's, and every transfer stops the builder too. 1.5 KB under the
-/// drip figure, which is what the stack grew by in 0.3.0 (7 -> 8.5 KB): the
-/// start threshold at full pace stays where 0.2.0 had it (64.5 + 8.5 + 1 =
-/// 74 KB; paused, the rig has 74-77 KB free), and the extra stack comes out
-/// of the encoder's floor (0.2.0 at full speed: 17.1 KB sampled minimum).
-pub const BUILDER_MIN_HEAP_FULL: u32 = 64 * 1024 + 512;
+/// playlist): nothing animates and the player opens nothing without
+/// stopping the builder first (`player_opening`), so the margin is only
+/// the network's, and every transfer stops the builder too. 1.5 KB under
+/// the drip figure, as before (the old encoder: 64.5 KB against 66).
+pub const BUILDER_MIN_HEAP_FULL: u32 = 52 * 1024 + 512;
+/// A GIF gifslim does not decode (interlaced frames, `Previous` disposal: 5
+/// of the stock card's 11,047) is decoded with the `gif` crate instead only
+/// if this much is free when gifslim gives up: the encoder then peaks at
+/// ~84 KB instead of ~43 KB (`encodeprobe --heap`: the crate's ~41 KB, a
+/// 12 KB `Previous` snapshot, a 16 KB block among them), and
+/// [`BUILDER_ABORT_HEAP`] must still be left. On this board that is never
+/// free while the builder runs, so in practice those files are recorded as
+/// failed, "too large to prepare here", and the browser prepares them.
+pub const BUILDER_FULL_DECODER_HEAP: u32 = 60 * 1024;
 /// Mid-file, the encode is abandoned (and its heap freed) if free heap falls
 /// under this.
 pub const BUILDER_ABORT_HEAP: u32 = 8 * 1024;
@@ -404,7 +423,7 @@ pub const BUILDER_CARD_BACKOFF: Duration = Duration::from_secs(30);
 pub const BUILDER_MAX_PIXELS: usize = 2 * 128 * 32;
 /// GIFs the builder could not prepare, one `path<TAB>reason` a line; skipped
 /// by every later pass. Delete it to retry them.
-pub const BUILDER_FAILED_PATH: &str = "/sdcard/odm/.failed";
+pub const BUILDER_FAILED_PATH: &str = "/sdcard/cache/.failed";
 /// At most this many failures are remembered (4 B each while a pass runs).
 pub const BUILDER_MAX_FAILED: usize = 1024;
 

@@ -106,7 +106,7 @@ export const app = {
     // A virtual file (a title card, the power-on effect: `@…`) is drawn by
     // the preview's own engine from its path; there is nothing to fetch.
     if (path.startsWith('@')) return new Uint8Array();
-    const copy = wasm.odmPathFor(path);
+    const copy = wasm.cachePathFor(path);
     if (copy) {
       try { return await this.src.readBytes(copy); } catch (e) { if (e.status !== 404) throw e; }
     }

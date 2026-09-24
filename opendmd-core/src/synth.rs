@@ -25,7 +25,7 @@ use std::io::{self, Cursor, Read};
 use std::time::Duration;
 
 /// First four bytes of a virtual file's in-memory stream.
-pub const MAGIC: [u8; 4] = *b"ODMV";
+pub const MAGIC: [u8; 4] = *b"SYNV";
 /// The power-on effect's path.
 pub const POWER_ON: &str = "@power-on";
 /// The prefix of a title card's path.
@@ -389,7 +389,7 @@ mod tests {
         let mut src = FrameSource::open(open(POWER_ON).unwrap()).unwrap();
         let mut canvas = Canvas::new();
         while src.next_frame(&mut canvas).unwrap().is_some() {}
-        let mut r = src.into_inner();
+        let mut r = src.into_inner().unwrap();
         r.seek(SeekFrom::Start(0)).unwrap();
         let mut again = FrameSource::open(r).unwrap();
         assert!(again.next_frame(&mut canvas).unwrap().is_some());

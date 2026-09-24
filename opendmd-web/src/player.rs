@@ -248,7 +248,7 @@ impl Player {
     }
 
     /// Swap the file. `path` is only used for its tags (and echoed back);
-    /// the bytes may be a GIF or an `.odm` — the engine sniffs them. The
+    /// the bytes may be a GIF or its prepared copy — the engine sniffs them. The
     /// old file's last frame stays up and the new one transitions in from
     /// it (a running transition is finished first, so it starts from what
     /// is really shown). A new file is not in step with anything until
@@ -515,7 +515,7 @@ impl Player {
             Ok(TickOutcome::Exhausted) => {
                 let path = std::mem::take(&mut self.path);
                 self.engine = None;
-                Err(format!("{path}: not a playable GIF or .odm"))
+                Err(format!("{path}: not a playable GIF"))
             }
             Err(e) => Err(e.to_string()),
         }

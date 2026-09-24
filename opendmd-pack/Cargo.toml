@@ -2,7 +2,7 @@
 name = "opendmd-pack"
 version = "0.1.0"
 edition = "2021"
-description = "Converts a card's GIFs to ODM v1 and points a manifest at them."
+description = "Prepares a card: every GIF's prepared copy (a capped-LZW delta GIF) under cache/."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rossduggan/opendmd"
 publish = false
@@ -11,6 +11,9 @@ publish = false
 opendmd-core = { path = "../opendmd-core" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+gif = "0.13"
 
 [profile.release]
 debug = false

@@ -76,12 +76,11 @@ test-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 
-# Needs a real card dump; see CLAUDE.md. ODM_ROOT is tools/odm-proto.py's output
-# (the cross-implementation check); the test skips itself if it is missing.
-ODM_ROOT ?= ~/scratch/odm-proto
+# Needs a real card dump; see CLAUDE.md. The prepared-copy test needs the
+# card's cache/ (make pack ARGS="convert <card-root> --verify").
 test-card:
-	@echo "==> Testing $(CORE) against $(CARD_ROOT) and $(ODM_ROOT)"
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable DMD_CARD_ROOT=$(CARD_ROOT) DMD_ODM_ROOT=$(ODM_ROOT) \
+	@echo "==> Testing $(CORE) against $(CARD_ROOT) (its cache/ from opendmd-pack convert)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable DMD_CARD_ROOT=$(CARD_ROOT) \
 		cargo test --release -- --ignored --nocapture
 
 sim:
@@ -90,8 +89,8 @@ sim:
 sim-build:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo build --release
 
-# GIF -> ODM conversion for a card: make pack ARGS="convert ~/scratch/dmdos-card --verify"
-# or ARGS="manifest <card-root>". See docs/odm-format.md.
+# Prepare a card (every GIF's copy under cache/): make pack ARGS="convert ~/scratch/dmdos-card --verify".
+# See docs/cache-format.md.
 pack:
 	@test -n "$(PACK_ARGS)" || { echo "usage: make pack ARGS=\"convert <card-root> [--jobs N] [--verify] [--force]\""; exit 2; }
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release -- $(PACK_ARGS)

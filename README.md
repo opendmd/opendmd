@@ -21,7 +21,7 @@ has its own xtensa build config under `firmware/`.
 | `opendmd-sim/` | Binary. A `minifb` window that plays a card through `opendmd-core`, drawing it as a simulated LED panel. Glue only. |
 | `opendmd-web/` | WebAssembly front end: the same engine and renderer in a browser page. See "The web app". |
 | `opendmd-art-web/` | WebAssembly. The web app's "Make art" Studio: a picture in, a 128x32 GIF out. A second module, loaded only when the Studio opens. See "Make art". |
-| `opendmd-pack/` | Binary. Prepares a card: a pre-rendered `.odm` copy of every GIF, which the player plays in its place. See "Prepared copies". |
+| `opendmd-pack/` | Binary. Prepares a card: a prepared copy of every GIF (a smaller GIF the player decodes in less memory), which the player plays in its place. See "Prepared copies". |
 | `firmware/` | ESP32 firmware. microSD + HUB75 + the core engine. See "Firmware". |
 | `hardware/` | Measured HUB75 + SD SPI pinout and photos. See `hardware/PINOUT.md`. |
 
@@ -137,8 +137,8 @@ at an extracted copy of a card and the same views work over the picked files,
 read one at a time as they are needed. Writes in local mode go to a folder you
 grant (Chromium's File System Access API) or become downloads.
 
-**Users see GIFs and playlists.** A GIF's *prepared copy* (a pre-rendered
-`.odm`, "Prepared copies" below) is a cache: the player plays it when it
+**Users see GIFs and playlists.** A GIF's *prepared copy* ("Prepared
+copies" below) is a cache: the player plays it when it
 exists, previews fetch it first and fall back to the GIF, and the UI never
 names the format or shows a copy's path.
 
@@ -277,35 +277,38 @@ Every GIF in the archive is 128x32 except two strays (132x32 and 135x32).
 Mismatched sizes are centred and cropped, never resampled — it is pixel art and
 any scaling filter ruins it.
 
-## Prepared copies (`.odm` files)
+## Prepared copies
 
-An `.odm` file is a GIF that has already been played: every frame fully
-composited, one palette for the whole file, and each frame stored as KEEP /
-FILL / LIT runs against the previous one. The player needs about **14.5 KB**
-of heap for one instead of **~54 KB** for the GIF — no LZW decoder, no GIF
-read buffer — which is headroom the ESP32 spends on WiFi and serving. Across
-the stock card they are 0.94x the size of the GIFs (median 0.93x; dithered
-content can be several times bigger), and all but 38 of 11,039 files decode to
-exactly the frames the GIF player shows. Those 38 have more than 256 colours
-and are quantised; play the `.gif` for any that look wrong. The byte-level
-spec is [`docs/odm-format.md`](docs/odm-format.md); `tools/odm-proto.py` is
-the Python reference it came from.
+A prepared copy is the same animation re-encoded as a standard GIF that is
+cheap for the player: every frame already composited into one global
+palette, each frame after the first sent as only the rectangle that changed,
+and the LZW codes capped at 9 bits (an `OPENDMD1LZW` application extension
+says so). The player decodes it with a small streaming decoder in **~16 KB**
+of heap including the 12 KB canvas, against ~27 KB for the original through
+the same decoder and ~54 KB through the `gif` crate — headroom the ESP32
+spends on WiFi and serving — and it reads ~40% fewer bytes off the card:
+across the stock card the copies are 0.61x the size of the GIFs (960 MB for
+1,575 MB). Any viewer, the browser included, plays them. All but 38 of
+11,039 files decode to exactly the frames the GIF player shows; those 38
+have more than 255 colours and are quantised (play the original for any that
+look wrong). The format is [`docs/cache-format.md`](docs/cache-format.md);
+the experiment that chose it, [`docs/gifslim-experiment.md`](docs/gifslim-experiment.md).
 
 **Users see GIFs and playlists; prepared copies are a cache.** Playlists
 only ever name GIFs. For every `/gifs/<Category>/<name>.gif` it opens, the
-firmware first tries the copy at `/odm/<Category>/<bb>/<name>.odm` (`<bb>` =
-low byte of FNV-1a-32 of the `.odm` name, 256 buckets per category, so a
+firmware first tries the copy at `/cache/<Category>/<xx>/<name>.gif` (`<xx>`
+= low byte of FNV-1a-32 of the file name, 256 buckets per category, so a
 lookup scans ~15 entries, never the 3,781-file `gifs/Consoles`) and plays it
-if it opens and is an ODM file; otherwise the GIF. A miss costs ~5-6 ms (one
-failed open in a small directory, measured on the rig). A manifest line that
-already names an `/odm/...` path is opened as it is, so old manifests keep
-working, but nothing writes them any more and `filelist.odm.txt` is ignored.
-To prepare a card copy:
+if it opens and is a GIF; otherwise the original. A miss costs ~5-6 ms (one
+failed open in a small directory, measured on the rig). Originals play
+through the same small decoder at its full 12-bit table; the few it does
+not handle (interlaced frames, `Previous` disposal) fall back to the `gif`
+crate. To prepare a card copy:
 
 ```bash
-# odm/<Category>/<bb>/<name>.odm for every GIF; skips files already
-# prepared; --verify plays both and compares every frame
-make pack ARGS="convert /path/to/card --layout bucketed --verify"
+# cache/<Category>/<xx>/<name>.gif for every GIF; skips files already
+# prepared; --verify plays copy and original and compares every frame
+make pack ARGS="convert /path/to/card --verify"
 
 # onto a running player instead: the files (or use the web app's
 # Settings -> Playback cache, which prepares them in the browser)
@@ -314,24 +317,27 @@ uv run tools/card-sync.py <host> --from /path/to/card --paths list.txt
 
 **The player also prepares them itself.** While the panel is dark for the
 night, paused, or has no playlist, it walks the playlist in play and writes
-the missing copies with a one-pass encoder that needs ~57 KB of heap —
+the missing copies with a streaming encoder that needs ~43 KB of heap —
 byte-identical to `opendmd-pack` and the browser for every file of 256
 colours or fewer (11,001 of the stock card's 11,047; the 38 with more
-colours, and 8 GIFs that will not decode, are left for the browser, which
-has the quantiser). `auto_prepare` in `PUT /api/config` is `"idle"` (the
-default: only then), `"always"` (also slowly while a prepared file plays) or
-`"off"`; Settings → Playback cache shows it as one sentence ("Preparing
-files automatically when the panel is idle · 4,210 of 10,133 · about 3
-nights left") with the option "also while playing (slower)". On the rig
-the stock card goes at ~1.7 s a file at full speed, so a card with none
-prepared needs about 5 hours of night.
+colours, 5 that only the `gif` crate decodes and 8 GIFs that will not decode
+are left for the browser, which has the quantiser and the memory).
+`auto_prepare` in `PUT /api/config` is `"idle"` (the default: only then),
+`"always"` (also slowly while a prepared file plays) or `"off"`; Settings →
+Playback cache shows it as one sentence ("Preparing files automatically
+when the panel is idle · 4,210 of 10,133 · about 3 nights left") with the
+option "also while playing (slower)". On the rig the stock card goes at
+~1.3-1.4 s per file at full speed (0.7-0.75 files a second: 620 in 15
+min, then 217 in 5 min), so a card with none prepared needs about 4 hours
+— one night.
 
-That is all: no manifest to write, nothing to select. (`opendmd-pack
-manifest` still rewrites a manifest to `.odm` paths, for tooling and tests.)
-`GET /api/cache` reports how many of the active playlist's entries have a
-copy. The copies leave `gifs/` and `filelist.txt` alone, so the card still
-works with stock DMDoS; the layout and its hash are described under "Card
-layout" in [`docs/odm-format.md`](docs/odm-format.md).
+That is all: no manifest to write, nothing to select. `GET /api/cache`
+reports how many of the active playlist's entries have a copy. The copies
+leave `gifs/` and `filelist.txt` alone, so the card still works with stock
+DMDoS. **Cards prepared by earlier builds** have an `odm/` tree of the retired
+pre-rendered `.odm` copies: the player ignores it (and says so once at
+boot); remove it with `DELETE /api/files/odm?recursive=1`, repeated until
+the reply says `"done":true` (see [`docs/deploying.md`](docs/deploying.md)).
 
 ## Tag grammar
 
@@ -480,7 +486,11 @@ the player share one SPI bus and FAT's lock, and opening a file in a big
 directory is a linear scan (~330 ms in the 3,781-file `gifs/Consoles`), so
 frames run late while GIFs are being pulled out of it — 124 misses, worst
 522 ms, in two minutes of back-to-back downloads. Played and served from the
-bucketed `.odm` layout (above) the same load costs 2 misses of 3 ms, and an
+bucketed copy layout (above) the same load cost 2 misses of 3 ms (measured
+with the retired `.odm` copies; with today's GIF copies: 82 misses, worst
+497 ms, in the same two minutes of `/gifs/Consoles` downloads, against 140
+on originals — the misses are the Consoles directory scans the downloads
+make, not the copies), and an
 idle player misses nothing. The player always gets priority on heap (requests are refused
 with 503 and transfers pause when the heap falls into the player's reserve).
 Downloads and uploads both run on one transfer task, one at a time, so a

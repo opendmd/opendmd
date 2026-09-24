@@ -18,7 +18,7 @@ lateness, heap floor.
 
 `--paths FILE` swaps the GIF picking for a fixed list: a text file of
 card-absolute paths (one per line, blank lines and `#` comments ignored,
-e.g. `/odm/Consoles/3f/MD_Sonic_01.odm`) that the workers fetch directly
+e.g. `/cache/Consoles/3f/MD_Sonic_01.gif`) that the workers fetch directly
 instead.
 """
 import argparse

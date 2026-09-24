@@ -16,7 +16,7 @@ Two modes.
 **Card mode** (`--root`) fakes the whole device: the JSON API in
 `firmware/src/http.rs`, the card file server in `firmware/src/files.rs`, and a
 simulated now-playing loop, all served on top of a local copy of an SD card
-(`--root`, an extracted card: `gifs/`, `odm/` (prepared copies),
+(`--root`, an extracted card: `gifs/`, `cache/` (prepared copies),
 `filelist.txt`, `filelist.hall`/`.xmas`, `sets/`). `--www` (default `<repo>/opendmd-web/www`) is
 what a browser hitting `/` gets.
 
@@ -89,18 +89,24 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   the resolved path.
 - **The playback cache.** `GET /api/cache` is `{total, prepared, state,
   count_ms, auto}`: `total` the playlist length, `prepared` how many of its entries
-  have a prepared copy at their bucketed path (`odm/<Category>/<bb>/X.odm`),
+  have a prepared copy at their cache path (`cache/<Category>/<xx>/X.gif`),
   counted in a background thread after any change (an upload or delete under
-  `odm/`, a forget, a GIF delete, a playlist rebuild) — the first request
+  `cache/`, a forget, a GIF delete, a playlist rebuild) — the first request
   after one answers `"counting"` with the previous figure (null before the
   first count), as the device does. `GET /api/cache/list` is every copy's
   path; `POST /api/cache/forget {"path":"/gifs/…"}` deletes a GIF's copy;
   `DELETE /api/files/gifs/…` takes the copy with it. `GET /api/cache/failed`
-  is `[{path, reason}]` from `odm/.failed` and `POST
+  is `[{path, reason}]` from `cache/.failed`, `POST
   /api/cache/failed {"path","reason"}` appends a line to it (once per path;
-  `{ok, path, added}`): the GIFs that can never be prepared. The firmware
-  has no such routes yet (it writes the file, served by `/odm/*`), so
-  `--strict` 404s them as it does.
+  `{ok, path, added}`) and `DELETE /api/cache/failed` removes it
+  (`{ok, cleared}`): the GIFs that can never be prepared. A legacy `odm/`
+  tree (the old prepared format) is ignored: never counted, listed or
+  played. `DELETE /api/files/<dir>?recursive=1` removes a directory and
+  everything under it, for `cache/` and `odm/` (and anything below them)
+  only: `{ok, path, removed, done}` (files removed; `done` always true here —
+  the firmware works at most ~4 s a request and says false: ask again);
+  anywhere else a 400, a
+  missing directory a 404.
 - **Auto prepare** (`auto_prepare` in the config: `"idle"` by default,
   `"always"`, `"off"`, anything else a 400). `/api/cache` ends with
   `"auto":{mode,state,reason,policy,session,failed,avg_full_s,avg_drip_s,
@@ -125,7 +131,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
 - **`POST /api/play {"path"}`** puts the file on "the panel" now (an
   off-playlist `now_playing`, ordinal and `gifs_started` bumped), and the
   schedule resumes at the next dwell. 404 if it does not open, 415 if it does
-  not start with `GIF8`/`ODM1` (the firmware's error text there comes from the
+  not start with `GIF8` (the firmware's error text there comes from the
   decoder; here it is a fixed one), 400 for a relative or escaping path.
 - **`GET /api/stat?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
@@ -167,9 +173,7 @@ Behave like the current firmware where this mock otherwise differs on
 purpose: a `..` escape through the `/*` catch-all is a plain 404 (not 400),
 and `/api/stat` and `/api/play` cost a FAT directory scan of the parent
 (15 ms + 0.15 ms per entry: ~20 ms in a bucket, ~590 ms in `gifs/Consoles`),
-so a UI that stats or plays in a big directory feels it; and
-`/api/cache/failed` (GET and POST), which the firmware does not have yet,
-is its 404.
+so a UI that stats or plays in a big directory feels it.
 - OTA validates the ESP image magic byte (`0xE9`) and the 1,572,864 B slot
   size, and demands a `Content-Length`.
 
@@ -178,7 +182,7 @@ is its 404.
 - The real firmware's top-level `/*` catch-all does **not** 400 on a `..`
   escape: `files::card_path` returns `None`, the handler's `if let Some(..)`
   is simply skipped, and it falls through to a plain 404. Every other route
-  (`/www/*`, `/gifs/*`, `/odm/*`, `/sets/*`, `/api/files/*`, `/api/files`) does
+  (`/www/*`, `/gifs/*`, `/cache/*`, `/sets/*`, `/api/files/*`, `/api/files`) does
   send 400. Without `--strict` the catch-all 400s too.
 - serde's exact "wrong type" error text is not reproduced verbatim (there is
   no serde here); a similarly shaped `"invalid JSON: ..."` message naming the
@@ -189,10 +193,10 @@ is its 404.
 Status carries `t_ms` (ms since the mock "booted") and, in `now_playing`,
 `elapsed_ms` and `frame`: the file's position runs on a simulated clock from
 the moment it started (paused: frozen; resumed: shifted by the pause, as the
-engine does) through the file's real frame delays — the prepared copy's ODM
-frame headers when there is one, else the GIF's Graphic Control Extensions
-with the player's rules (0 -> 100 ms, else >= 20 ms), identical to the ODM
-delays for all 11,039 copies on the card. An ideal device: never late.
+engine does) through the file's real frame delays — the Graphic Control
+Extensions of the prepared copy when there is one, else of the GIF, with
+the player's rules (0 -> 100 ms, else >= 20 ms); a copy keeps its GIF's raw
+delays, so either gives the same timeline. An ideal device: never late.
 
 `--dwell` (default 5s) is a fixed cadence, independent of the configured
 `dwell_min`/`dwell_max` (which are only ever stored and reported, never used
@@ -230,7 +234,9 @@ from pathlib import Path
 MANIFEST_REL = "filelist.txt"          # config::MANIFEST_PATH, relative to the card root
 OBSOLETE_SET = "filelist.odm.txt"      # config::OBSOLETE_ODM_MANIFEST: ignored, refused as a set
 MAX_JSON_BODY = 8192                   # http.rs MAX_JSON_BODY
-FAILED_REL = "odm/.failed"             # config::BUILDER_FAILED_PATH, card-relative
+FAILED_REL = "cache/.failed"           # config::BUILDER_FAILED_PATH, card-relative
+CACHE_DIR = "cache"                    # the prepared copies (opendmd_core::layout)
+LEGACY_DIR = "odm"                     # the old prepared format's tree: ignored
 SET_NOT_FOUND = "set not found"        # state::SET_NOT_FOUND
 SETS_DIR = "sets"                      # config::SETS_DIR
 OTA_SLOT_SIZE = 1_572_864              # the board's OTA slot (ota.rs)
@@ -391,7 +397,6 @@ def mime_for(rel: str) -> str:
         "map": "application/json",
         "png": "image/png",
         "gif": "image/gif",
-        "odm": "application/octet-stream",
         "jpg": "image/jpeg",
         "jpeg": "image/jpeg",
         "svg": "image/svg+xml",
@@ -837,19 +842,18 @@ def fnv1a32(b: bytes) -> int:
     return h
 
 
-def bucketed_path(path: str):
-    """opendmd_core::layout::bucketed_path: /gifs/Cat/X.gif ->
-    /odm/Cat/<bb>/X.odm, None for anything else."""
+def cache_path(path: str):
+    """opendmd_core::layout::cache_path: /gifs/Cat/X.gif ->
+    /cache/Cat/<xx>/X.gif (xx: FNV-1a of the file name), None for anything
+    else."""
     parts = path.lstrip("/").split("/", 1)
     if len(parts) != 2 or parts[0].lower() != "gifs" or not parts[1].lower().endswith(".gif"):
         return None
-    rest = parts[1]
-    d, _, name = rest.rpartition("/")
+    d, _, name = parts[1].rpartition("/")
     if len(name) <= 4:
         return None
-    odm = name[:-4] + ".odm"
-    bb = f"{fnv1a32(odm.encode()) & 0xFF:02x}"
-    return f"/odm/{d}/{bb}/{odm}" if d else f"/odm/{bb}/{odm}"
+    xx = f"{fnv1a32(name.encode()) & 0xFF:02x}"
+    return f"/cache/{d}/{xx}/{name}" if d else f"/cache/{xx}/{name}"
 
 
 def gif_delays(b: bytes) -> list[int]:
@@ -885,21 +889,6 @@ def gif_delays(b: bytes) -> list[int]:
         else:
             break  # 0x3B trailer, or junk
     return delays
-
-
-def odm_delays(b: bytes) -> list[int]:
-    """The `delay_ms` of every ODM frame header (docs/odm-format.md)."""
-    if b[:4] != b"ODM1" or len(b) < 32:
-        return []
-    count = int.from_bytes(b[9:13], "little")
-    i = 32 + 3 * int.from_bytes(b[13:15], "little")
-    out = []
-    for _ in range(count):
-        if i + 6 > len(b):
-            break
-        out.append(int.from_bytes(b[i:i + 2], "little"))
-        i += 6 + int.from_bytes(b[i + 2:i + 6], "little")
-    return out
 
 
 def enoent(path: str) -> str:
@@ -1183,22 +1172,48 @@ class CardFS:
             self.tombstones.discard(rel)
             return len(data)
 
-    def odm_files(self) -> list[str]:
-        """Card paths of every `.odm` under odm/ in either layer, tombstones
-        dropped: the prepared copies."""
+    def cache_files(self) -> list[str]:
+        """Card paths of every `.gif` under cache/ in either layer,
+        tombstones dropped: the prepared copies."""
         with self.lock:
             found: dict[str, str] = {}
             for base in (self.root_dir, self.overlay_dir):
-                if base is None or not (base / "odm").is_dir():
+                if base is None or not (base / CACHE_DIR).is_dir():
                     continue
-                for d, _, names in os.walk(base / "odm"):
+                for d, _, names in os.walk(base / CACHE_DIR):
                     for n in names:
-                        if not n.lower().endswith(".odm"):
+                        if not n.lower().endswith(".gif"):
                             continue
                         rel = (Path(d) / n).relative_to(base).as_posix()
                         if rel not in self.tombstones:
                             found[rel.lower()] = "/" + rel
             return list(found.values())
+
+    def delete_tree(self, rel: str) -> int:
+        """Delete the directory `rel` and everything under it, in both
+        layers (root files tombstoned). Returns the files removed."""
+        with self.lock:
+            files: set[str] = set()
+            dirs: set[str] = {rel}
+            for base in (self.root_dir, self.overlay_dir):
+                if base is None or not (base / rel).is_dir():
+                    continue
+                for d, dn, names in os.walk(base / rel):
+                    drel = Path(d).relative_to(base).as_posix()
+                    if drel in self.tombstones:
+                        dn[:] = []
+                        continue
+                    dirs.update(f"{drel}/{x}" for x in dn)
+                    files.update(f"{drel}/{n}" for n in names if f"{drel}/{n}" not in self.tombstones)
+            if self.overlay_dir is not None and (self.overlay_dir / rel).is_dir():
+                shutil.rmtree(self.overlay_dir / rel)
+            if self.overlay_dir is None:
+                shutil.rmtree(self.root_dir / rel, ignore_errors=True)
+            else:
+                for r in files | dirs:
+                    if (self.root_dir / r).exists():
+                        self.tombstones.add(r)
+            return len(files)
 
     def delete(self, rel: str) -> bool:
         """Delete `rel`. Returns True if something was there to delete."""
@@ -1383,13 +1398,13 @@ class Player:
                 self.delays[path] = vd
                 return vd
             out = []
-            for cand in (bucketed_path(path), path):
+            for cand in (cache_path(path), path):
                 rel = card_path(cand) if cand else None
                 f = self.ctx.fs.read_path(rel) if rel else None
                 if f is None:
                     continue
                 b = f.read_bytes()
-                out = odm_delays(b) if b[:4] == b"ODM1" else gif_delays(b)
+                out = gif_delays(b)
                 if out:
                     break
             self.delays[path] = out
@@ -1687,14 +1702,14 @@ class Cache:
             t0 = time.monotonic()
             with self.ctx.lock:
                 playlist = list(self.ctx.player.playlist)
-            have = {p.lower() for p in self.ctx.fs.odm_files()}
+            have = {p.lower() for p in self.ctx.fs.cache_files()}
             n = 0
             missing = []
             for p in playlist:
-                if p.lower().startswith("/odm/"):
+                if p.lower().startswith("/cache/"):
                     n += 1
                     continue
-                c = bucketed_path(p)
+                c = cache_path(p)
                 if c and c.lower() in have:
                     n += 1
                 else:
@@ -1951,7 +1966,8 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/cache"), {"GET": self.h_cache}),
                 (m_exact("/api/cache/list"), {"GET": self.h_cache_list}),
                 (m_exact("/api/cache/forget"), {"POST": self.h_cache_forget}),
-                (m_exact("/api/cache/failed"), {"GET": self.h_cache_failed_get, "POST": self.h_cache_failed_post}),
+                (m_exact("/api/cache/failed"), {"GET": self.h_cache_failed_get, "POST": self.h_cache_failed_post,
+                                                "DELETE": self.h_cache_failed_delete}),
                 (m_exact("/api/files"), {"GET": self.h_files_list}),
                 (m_exact("/api/wifi/scan"), {"GET": self.h_wifi_scan}),
                 (m_exact("/api/ota"), {"POST": self.h_ota}),
@@ -1962,7 +1978,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_prefix("/filelist"), {"GET": self.h_filelist}),
                 (m_prefix("/gifs/"), {"GET": self.h_serve_under}),
                 (m_prefix("/sets/"), {"GET": self.h_serve_under}),
-                (m_prefix("/odm/"), {"GET": self.h_serve_under}),
+                (m_prefix("/cache/"), {"GET": self.h_serve_under}),
                 (m_prefix("/www/"), {"GET": self.h_www}),
                 (lambda cur: True, {"GET": self.h_catchall}),
             ]
@@ -2499,8 +2515,8 @@ def make_handler(ctx: Context, quiet: bool):
                     return
                 with open(fpath, "rb") as f:
                     magic = f.read(4)
-                if magic[:4] not in (b"GIF8", b"ODM1"):
-                    self.send_error_json(415, f"{p}: not a GIF or ODM file")
+                if magic[:4] != b"GIF8":
+                    self.send_error_json(415, f"{p}: not a GIF file")
                     return
                 ctx.player.play_now(p)
             self.send_json(200, {"ok": True, "path": p})
@@ -2546,11 +2562,11 @@ def make_handler(ctx: Context, quiet: bool):
             })
 
         def h_cache_list(self, path):
-            paths = ctx.fs.odm_files()
+            paths = ctx.fs.cache_files()
             self.send_json(200, {"paths": paths, "count": len(paths)})
 
         def forget_copy(self, gif: str) -> bool:
-            copy = bucketed_path(gif)
+            copy = cache_path(gif)
             if copy is None:
                 return False
             removed = ctx.fs.read_path(copy.lstrip("/")) is not None and ctx.fs.delete(copy.lstrip("/"))
@@ -2571,21 +2587,16 @@ def make_handler(ctx: Context, quiet: bool):
             if not isinstance(p, str):
                 self.send_error_json(400, "invalid JSON: missing field `path`")
                 return
-            if card_path(p) is None or bucketed_path(p) is None:
+            if card_path(p) is None or cache_path(p) is None:
                 self.send_error_json(400, "path must be a card-absolute /gifs/….gif")
                 return
             removed = self.forget_copy(p)
             self.send_json(200, {"ok": True, "path": p, "removed": removed})
 
-        # /odm/.failed: `path<TAB>reason` a line, the GIFs that can never be
-        # prepared (the firmware's cache builder writes it; the mock's
-        # simulated builder does not). The routes are the mock's proposal:
-        # the firmware has none yet (the file itself is served by /odm/*),
-        # so `--strict` answers them with the firmware's 404.
+        # /cache/.failed: `path<TAB>reason` a line, the GIFs that can never
+        # be prepared (the firmware's cache builder writes it; the mock's
+        # simulated builder does not).
         def h_cache_failed_get(self, path):
-            if ctx.strict:
-                self.send_error_json(404, path)
-                return
             fp = ctx.fs.read_path(FAILED_REL)
             rows = []
             if fp is not None:
@@ -2595,10 +2606,13 @@ def make_handler(ctx: Context, quiet: bool):
                         rows.append({"path": gif.strip(), "reason": why.strip()})
             self.send_json(200, rows)
 
+        def h_cache_failed_delete(self, path):
+            with ctx.lock:
+                cleared = ctx.fs.read_path(FAILED_REL) is not None and ctx.fs.delete(FAILED_REL)
+            ctx.cache.invalidate()
+            self.send_json(200, {"ok": True, "cleared": bool(cleared)})
+
         def h_cache_failed_post(self, path):
-            if ctx.strict:
-                self.send_error_json(404, path)
-                return
             raw = self.json_body()
             if raw is None:
                 return
@@ -2612,7 +2626,7 @@ def make_handler(ctx: Context, quiet: bool):
             if not isinstance(p, str) or not isinstance(why, str):
                 self.send_error_json(400, "invalid JSON: missing field `path`")
                 return
-            if card_path(p) is None or bucketed_path(p) is None:
+            if card_path(p) is None or cache_path(p) is None:
                 self.send_error_json(400, "path must be a card-absolute /gifs/….gif")
                 return
             why = " ".join(why.split())[:200]
@@ -2735,15 +2749,29 @@ def make_handler(ctx: Context, quiet: bool):
                 self.send_json(200, obj)
                 return
             written = ctx.fs.write_bytes(rel, data)
-            if rel.lower().startswith("odm/"):
+            if rel.lower().startswith(CACHE_DIR + "/"):
                 ctx.cache.invalidate()
             self.send_json(200, {"ok": True, "path": "/" + rel, "bytes": written})
 
         def h_files_delete(self, path):
-            path, _, _ = self.path.partition("?")
+            path, _, query = self.path.partition("?")
             rel = card_path(percent_decode(path[len("/api/files/"):]))
             if rel is None:
                 self.send_error_json(400, "path escapes the card")
+                return
+            rel = rel.rstrip("/")
+            if query_param(query or None, "recursive") in ("1", "true"):
+                top = rel.split("/", 1)[0].lower()
+                if top not in (CACHE_DIR, LEGACY_DIR):
+                    self.send_error_json(400, "recursive delete is only for cache/ and odm/")
+                    return
+                if not ctx.fs.is_dir(rel) or rel in ctx.fs.tombstones:
+                    self.send_error_json(404, enoent(rel))
+                    return
+                removed = ctx.fs.delete_tree(rel)
+                if top == CACHE_DIR:
+                    ctx.cache.invalidate()
+                self.send_json(200, {"ok": True, "path": "/" + rel, "removed": removed, "done": True})
                 return
             meta_manifest = meta_manifest_for(rel)
             if meta_manifest is not None:
@@ -2764,7 +2792,7 @@ def make_handler(ctx: Context, quiet: bool):
                 existed = ctx.fs.delete(rel)
                 if existed:
                     self.forget_copy("/" + rel)
-                    if rel.lower().startswith("odm/"):
+                    if rel.lower().startswith(CACHE_DIR + "/"):
                         ctx.cache.invalidate()
             if existed:
                 self.send_json(200, {"ok": True})
@@ -2947,7 +2975,7 @@ def make_proxy_handler(www_root: Path, target: str, quiet: bool):
 
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--root", help="an extracted card copy (gifs/, odm/, filelist.txt, ...)")
+    ap.add_argument("--root", help="an extracted card copy (gifs/, cache/, filelist.txt, ...)")
     ap.add_argument("--overlay", help="copy-on-write write layer in front of --root")
     ap.add_argument("--www", help="the web app to serve (default: <repo>/opendmd-web/www)")
     ap.add_argument("--host", default="127.0.0.1")

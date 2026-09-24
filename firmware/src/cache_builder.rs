@@ -1,10 +1,11 @@
 //! The playback cache, prepared by the device itself while it is idle.
 //!
-//! A GIF plays with ~54 KB of decoder heap; its prepared copy (an `.odm`,
-//! `opendmd_core::odm`) with ~14 KB. The browser can make copies ("Prepare
-//! remaining files"), but a user should not have to: this task walks the
-//! playlist in play and makes the missing ones with
-//! [`odm::encode_gif_streaming`] — byte-identical to what the browser and
+//! A prepared copy (`docs/cache-format.md`: a GIF with its LZW capped at 9
+//! bits, delta frames and the `OPENDMD1LZW` hint) plays with ~16 KB of
+//! decoder heap and reads ~40% fewer bytes than its original. The browser
+//! can make copies ("Prepare remaining files"), but a user should not have
+//! to: this task walks the playlist in play and makes the missing ones with
+//! [`gifslim::recode_gif_streaming`] — byte-identical to what the browser and
 //! `opendmd-pack` write — when the panel can spare it.
 //!
 //! # When it runs: the pace
@@ -30,9 +31,9 @@
 //! [`config::BUILDER_MIN_HEAP_FULL`]) before a file (or under
 //! [`config::BUILDER_ABORT_HEAP`] during one).
 //!
-//! **A stop abandons the file in hand and frees everything** — the encoder is
-//! ~57 KB (63 KB at most over the card), which the player needs
-//! back the moment its next file turns out to be a GIF. The check runs before
+//! **A stop abandons the file in hand and frees everything** — the encoder
+//! (see [`config::BUILDER_MIN_HEAP`] for its size), which the player needs
+//! back the moment its next file turns out to be an original. The check runs before
 //! every frame and every 2 KB of card I/O, and the player's open *waits* for
 //! the release ([`player_opening`], bounded by
 //! [`config::BUILDER_RELEASE_WAIT`]); the time from request to release is in
@@ -49,22 +50,22 @@
 //!
 //! The active manifest, in order, read a line at a time (no list in RAM):
 //! each `/gifs/…gif` entry that passes the playlist's platform filter, whose
-//! copy is not at `layout::bucketed_path` (one `stat` in a small bucket
+//! copy is not at `layout::cache_path` (one `stat` in a small bucket
 //! directory) and which has not failed before. Failures (more than 256
 //! colours — the browser's quantiser can do those —, a GIF that will not
 //! decode, a missing file) are appended to [`config::BUILDER_FAILED_PATH`],
 //! `path<TAB>reason` a line, and skipped by every later pass. A copy is
-//! written to `<copy>.tmp`, truncated to its length, and renamed into place;
+//! written to `<copy>.tmp` and renamed into place;
 //! the cache count is bumped per file ([`cache::increment_prepared`]) and
 //! recounted at the end of a pass. Nothing else persists: after a reboot the
 //! walk starts again at the top, skipping what exists.
 
 use opendmd_core::filter::Filter;
+use opendmd_core::gifslim;
 use opendmd_core::layout::{self, Prepared};
 use opendmd_core::manifest::Entry;
-use opendmd_core::odm;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering::SeqCst};
 use std::sync::Mutex;
 use std::thread;
@@ -944,7 +945,7 @@ fn next_candidate(w: &mut Walk) -> Result<Option<(u64, u64, String, String)>, St
         {
             continue;
         }
-        let Some(copy) = layout::bucketed_path(path) else {
+        let Some(copy) = layout::cache_path(path) else {
             continue;
         };
         // A `stat` is a directory scan under the FAT lock: paced like I/O.
@@ -1085,7 +1086,7 @@ fn prepare(gif: &str, copy: &str) -> Outcome {
     let mut r = report();
     r.current = None;
     match &outcome {
-        Ok((gif_bytes, odm_bytes, written)) => {
+        Ok((gif_bytes, copy_bytes, written)) => {
             r.session += 1;
             r.written += written;
             r.busy_secs += secs;
@@ -1102,7 +1103,7 @@ fn prepare(gif: &str, copy: &str) -> Outcome {
             log::info!(
                 "cache builder: [{session}] {gif} prepared ({pace_name}): {frames} frames, {} KB -> {} KB in {:.2} s, heap {} B free",
                 gif_bytes / 1024,
-                odm_bytes / 1024,
+                copy_bytes / 1024,
                 secs,
                 free_heap()
             );
@@ -1183,7 +1184,6 @@ fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64
         }
     }
     let out = match OpenOptions::new()
-        .read(true)
         .write(true)
         .create(true)
         .truncate(true)
@@ -1193,13 +1193,38 @@ fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64
         Err(e) => return Err(Fail::Card(format!("creating {tmp}: {e}"))),
     };
     let mut out = Paced::new(out);
-    let result = odm::encode_gif_streaming(&mut src, &mut out, || {
-        *frames += 1;
-        check().map_err(|why| {
-            OUT_STOP.store(why as u8, SeqCst);
-            io::Error::other("stopped")
-        })
-    });
+    let result = {
+        // The recoder writes a few bytes at a time: one 2 KB card write per
+        // buffer-full instead.
+        let mut w = BufWriter::with_capacity(config::IO_CHUNK, &mut out);
+        // Boxed like the player's files, so the decoders the recoder uses
+        // are the very ones playback already links (one copy in the image).
+        let source: Box<dyn opendmd_core::ReadSeek + '_> = Box::new(&mut src);
+        let r = gifslim::recode_gif_streaming_dyn(
+            source,
+            &mut w,
+            &gifslim::PREPARED,
+            // Interlaced frames or `Previous` disposal (5 files on the stock
+            // card): the `gif` crate decodes those, only if its heap is
+            // free now (see the constant).
+            &mut || {
+                free_heap() >= config::BUILDER_FULL_DECODER_HEAP
+                    && largest_free_block() >= 17 * 1024
+            },
+            &mut || {
+                *frames += 1;
+                check().map_err(|why| {
+                    OUT_STOP.store(why as u8, SeqCst);
+                    io::Error::other("stopped")
+                })
+            },
+        );
+        r.and_then(|s| w.flush().map(|()| s))
+    };
+    // (`frames` counted both passes' steps; the log wants the file's.)
+    if let Ok(st) = &result {
+        *frames = st.frames;
+    }
     // `between`'s stop is kept apart, since `out` is borrowed while it runs.
     let stopped = src
         .stopped
@@ -1208,20 +1233,22 @@ fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64
     let failure = match &result {
         Ok(_) => None,
         Err(_) if stopped.is_some() => stopped.map(Fail::Stopped),
-        Err(e) if odm::is_too_many_colours(e) => Some(Fail::Bad("more than 256 colours".into())),
+        Err(e) if gifslim::is_too_many_colours(e) => {
+            Some(Fail::Bad("more than 256 colours".into()))
+        }
+        Err(e) if gifslim::is_unsupported(e) || gifslim::is_needs_full_decoder(e) => {
+            Some(Fail::Bad(format!("{e} (too large to prepare here)")))
+        }
         Err(_) if out.io_error.is_some() || src.io_error.is_some() => {
             let e = out.io_error.take().or(src.io_error.take());
             Some(Fail::Card(format!("{e:?}")))
         }
         Err(e) => Some(Fail::Bad(e.to_string())),
     };
-    let sized = match &result {
-        Ok(stats) if failure.is_none() => out
-            .file
-            .set_len(stats.odm_bytes)
-            // `f_sync`: the data and the FAT on the card before the rename,
-            // so a reset afterwards cannot leave a copy that is half there.
-            .and_then(|()| out.file.sync_all()),
+    let synced = match &result {
+        // `f_sync`: the data and the FAT on the card before the rename, so a
+        // reset afterwards cannot leave a copy that is half there.
+        Ok(_) if failure.is_none() => out.file.sync_all(),
         _ => Ok(()),
     };
     let written = out.bytes;
@@ -1239,8 +1266,8 @@ fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64
     let Ok(stats) = result else {
         return fail(Fail::Bad("encode failed".into()));
     };
-    if let Err(e) = sized {
-        return fail(Fail::Card(format!("truncating {tmp}: {e}")));
+    if let Err(e) = synced {
+        return fail(Fail::Card(format!("syncing {tmp}: {e}")));
     }
     let dest = format!("{}{copy}", config::SD_MOUNT);
     if let Err(e) = fs::rename(tmp, &dest) {
@@ -1251,7 +1278,7 @@ fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64
             return fail(Fail::Card(format!("rename to {dest}: {e}")));
         }
     }
-    Ok((stats.gif_bytes, stats.odm_bytes, written))
+    Ok((stats.gif_bytes, stats.out_bytes, written))
 }
 
 static OUT_STOP: AtomicU8 = AtomicU8::new(0);
@@ -1370,7 +1397,7 @@ pub fn add_failed(gif: &str, reason: &str) -> io::Result<bool> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
-    fs::create_dir_all(config::ODM_ROOT)?;
+    fs::create_dir_all(config::CACHE_ROOT)?;
     let mut f = OpenOptions::new()
         .create(true)
         .append(true)
@@ -1389,7 +1416,7 @@ pub fn add_failed(gif: &str, reason: &str) -> io::Result<bool> {
 
 fn record_failure(gif: &str, why: &str) {
     let _file = FAILED_FILE.lock().unwrap_or_else(|p| p.into_inner());
-    let _ = fs::create_dir_all(config::ODM_ROOT);
+    let _ = fs::create_dir_all(config::CACHE_ROOT);
     let appended = OpenOptions::new()
         .create(true)
         .append(true)

@@ -1,4 +1,4 @@
-//! The playback cache: prepared copies (`.odm`) of the card's GIFs, and how
+//! The playback cache: prepared copies of the card's GIFs (`cache/…/<name>.gif`), and how
 //! many of the active playlist's entries have one.
 //!
 //! Users see GIFs and playlists; a prepared copy is a cache. `SdSource` plays
@@ -13,8 +13,8 @@
 //! the copies on the card intersected with the playlist, which is done without
 //! ever holding either in memory:
 //!
-//! 1. **Discover** the directories under `odm/` that hold bucket directories
-//!    (one per category; a listing of `odm/` and of each `odm/<Category>`,
+//! 1. **Discover** the directories under `cache/` that hold bucket directories
+//!    (one per category; a listing of `cache/` and of each `cache/<Category>`,
 //!    ≤256 short 8.3 entries each) and which of the 256 buckets exist in each.
 //! 2. **Walk the buckets in order**, `00` to `ff`, reading each existing
 //!    bucket directory (~15 files) and keeping a `u32`
@@ -29,7 +29,7 @@
 //! between directories, and restarts if the playlist or the copies change
 //! underneath it. Nothing counts until someone asks: the first
 //! `GET /api/cache` starts it, and after that every change (an upload to
-//! `odm/`, a forget, a reindex or set change) recounts, debounced by
+//! `cache/`, a forget, a reindex or set change) recounts, debounced by
 //! [`config::CACHE_DEBOUNCE`] so a browser uploading copies one after another
 //! causes one count at the end.
 
@@ -256,11 +256,11 @@ fn build_filter(platforms: &str) -> Filter {
     }
 }
 
-/// A directory under `odm/` that holds bucket directories.
+/// A directory under `cache/` that holds bucket directories.
 struct Parent {
-    /// Filesystem path, e.g. `/sdcard/odm/Consoles`.
+    /// Filesystem path, e.g. `/sdcard/cache/Consoles`.
     fs: String,
-    /// Card-absolute path, e.g. `/odm/Consoles`.
+    /// Card-absolute path, e.g. `/cache/Consoles`.
     card: String,
     /// Which of the 256 buckets exist under it.
     buckets: [u32; 8],
@@ -282,8 +282,8 @@ fn bucket_name(name: &str) -> Option<u8> {
         .flatten()
 }
 
-/// Step 1: every directory under `odm/` (depth ≤ 3, for nested categories)
-/// that has bucket directories in it. A card with no `odm/` has none.
+/// Step 1: every directory under `cache/` (depth ≤ 3, for nested categories)
+/// that has bucket directories in it. A card with no `cache/` has none.
 fn discover(fs_dir: &str, card_dir: &str, depth: u32, out: &mut Vec<Parent>) -> io::Result<u32> {
     let mut dirs = 1;
     let mut buckets = [0u32; 8];
@@ -324,14 +324,14 @@ fn discover(fs_dir: &str, card_dir: &str, depth: u32, out: &mut Vec<Parent>) -> 
 
 fn discover_all() -> io::Result<(Vec<Parent>, u32)> {
     let mut parents = Vec::new();
-    match discover(config::ODM_ROOT, "/odm", 0, &mut parents) {
+    match discover(config::CACHE_ROOT, "/cache", 0, &mut parents) {
         Ok(dirs) => Ok((parents, dirs)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((parents, 0)),
         Err(e) => Err(e),
     }
 }
 
-/// Step 2 for one bucket: call `visit` with the card path of every `.odm` in
+/// Step 2 for one bucket: call `visit` with the card path of every `.gif` in
 /// bucket `b` of every parent. Returns the number of directories read.
 fn walk_bucket(
     parents: &[Parent],
@@ -349,8 +349,11 @@ fn walk_bucket(
             let Ok(entry) = entry else { continue };
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            let is_odm = name.len() > 4 && name[name.len() - 4..].eq_ignore_ascii_case(".odm");
-            if is_odm && !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let is_gif = name.len() > 4
+                && name
+                    .get(name.len() - 4..)
+                    .is_some_and(|e| e.eq_ignore_ascii_case(".gif"));
+            if is_gif && !entry.file_type().is_ok_and(|t| t.is_dir()) {
                 visit(&format!("{}/{b:02x}/{name}", p.card))?;
             }
         }
@@ -417,7 +420,7 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
         copies += keys.len();
         keys.sort_unstable();
         // A slice with no copies in it needs no pass, except the first, which
-        // is where `total` and the direct `/odm/` entries are counted.
+        // is where `total` and the direct `/cache/` entries are counted.
         if keys.is_empty() && passes > 0 {
             lo = hi + 1;
             continue;
@@ -483,7 +486,7 @@ pub fn stream_list(req: &mut Req) -> Result<()> {
 /// prepared copy of a GIF, if there is one. `Ok(Some(path))` if one was
 /// removed, `Ok(None)` if there was none (or `gif` has no prepared form).
 pub fn forget(gif: &str) -> io::Result<Option<String>> {
-    let Some(copy) = layout::bucketed_path(gif) else {
+    let Some(copy) = layout::cache_path(gif) else {
         return Ok(None);
     };
     match fs::remove_file(format!("{}{copy}", config::SD_MOUNT)) {

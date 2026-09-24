@@ -182,16 +182,16 @@ fn take_simulated_failure() -> bool {
 /// Manifest paths are card-absolute (`/gifs/Consoles/X.gif`); joining them
 /// onto the mount point is this type's job, and so is **transparent
 /// resolution**: for a `/gifs/…/X.gif` path it first tries the prepared copy
-/// at `opendmd_core::layout::bucketed_path` (`/odm/Consoles/<bb>/X.odm`) and
-/// plays that if it opens and starts with `ODM1`; otherwise the GIF. A
-/// playlist therefore only ever names GIFs, and the engine, the status and
-/// the web app all see the GIF's path. A path that already names an `.odm`
-/// (an old manifest) is opened as it is.
+/// at `opendmd_core::layout::cache_path` (`/cache/Consoles/<xx>/X.gif`) and
+/// plays that if it opens and starts with `GIF8` (the decoder then finds its
+/// `OPENDMD1LZW` hint and plays it at cap 9); otherwise the GIF. A playlist
+/// therefore only ever names GIFs, and the engine, the status and the web
+/// app all see the GIF's path. A path under `cache/` is opened as it is.
 ///
 /// The miss costs one failed open in a small directory: the lookup walks
-/// `odm/` and `odm/<Category>` (≤256 bucket entries, 8.3 names, one dirent
-/// each) and then fails in the ~15-entry bucket, or earlier if the bucket or
-/// category does not exist. It is measured per open ([`take_last`],
+/// `cache/` and `cache/<Category>` (≤256 bucket entries, 8.3 names, one
+/// dirent each) and then fails in the ~15-entry bucket, or earlier if the
+/// bucket or category does not exist. It is measured per open ([`take_last`],
 /// [`period_summary`]) and reported in the GIF-start line and the heartbeat.
 pub struct SdSource;
 
@@ -204,7 +204,7 @@ pub enum Served {
     Prepared { try_us: u32 },
     /// The original GIF, after `miss_us` µs spent failing to find a copy.
     Original { miss_us: u32 },
-    /// A path with no prepared form (already `.odm`, or not under `gifs/`).
+    /// A path with no prepared form (already a copy, or not under `gifs/`).
     Direct,
 }
 
@@ -272,9 +272,9 @@ pub fn period_summary() -> String {
 
 /// One `File::open`, through the probe when it is built in.
 fn open_file(full: &str) -> io::Result<Box<dyn ReadSeek>> {
-    // No `BufReader` here: the `gif` crate wraps whatever it is handed in
-    // an 8 KiB `BufReader` of its own, so a second one buys nothing but
-    // 4 KB of heap on a board that has ~60 KB free while playing.
+    // No `BufReader` here: gifslim wraps whatever it is handed in a 2 KiB
+    // `BufReader` of its own (the `gif` crate, the fallback, in 8 KiB), so
+    // a second one buys nothing but heap.
     //
     // This open is a linear scan of the file's FAT directory (~0.65 ms
     // per 512 B sector: ~330 ms in the 3,781-entry `gifs/Consoles`), which
@@ -287,16 +287,16 @@ fn open_file(full: &str) -> io::Result<Box<dyn ReadSeek>> {
     Ok(Box::new(File::open(full)?))
 }
 
-/// The prepared copy at `full`, if it opens and is an ODM file. The magic is
-/// read here (the decoder would read the same sector anyway, and FATFS keeps
-/// it in the file's own buffer) so a truncated or foreign file falls back to
-/// the GIF instead of costing the playlist an entry.
+/// The prepared copy at `full`, if it opens and is a GIF. The magic is read
+/// here (the decoder would read the same sector anyway, and FATFS keeps it
+/// in the file's own buffer) so a truncated or foreign file falls back to
+/// the original instead of costing the playlist an entry.
 fn open_prepared(full: &str) -> Option<Box<dyn ReadSeek>> {
     let mut f = open_file(full).ok()?;
     let mut magic = [0u8; 4];
-    let ok = f.read_exact(&mut magic).is_ok() && &magic == b"ODM1";
+    let ok = f.read_exact(&mut magic).is_ok() && &magic == b"GIF8";
     if !ok {
-        log::warn!("{full}: not an ODM file; playing the original instead");
+        log::warn!("{full}: not a GIF; playing the original instead");
         return None;
     }
     f.seek(SeekFrom::Start(0)).ok()?;
@@ -305,11 +305,11 @@ fn open_prepared(full: &str) -> Option<Box<dyn ReadSeek>> {
 
 impl Source for SdSource {
     fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
-        // The cache builder lets go of its ~63 KB first: this may be a GIF,
-        // whose decoder needs it, and the open's directory scan should not
-        // queue behind its card I/O either.
+        // The cache builder lets go of its heap first: this may be an
+        // original, whose decoder needs more than a copy's, and the open's
+        // directory scan should not queue behind its card I/O either.
         crate::cache_builder::player_opening();
-        let Some(prepared) = layout::bucketed_path(path) else {
+        let Some(prepared) = layout::cache_path(path) else {
             let f = open_file(&format!("{}{path}", config::SD_MOUNT))?;
             record(Served::Direct);
             return Ok(f);

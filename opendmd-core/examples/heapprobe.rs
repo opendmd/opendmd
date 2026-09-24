@@ -1,15 +1,16 @@
-//! Live and peak heap while decoding GIFs and ODM files through `FrameSource`
-//! (so `GifSource` or `OdmSource`, sniffed exactly as the engine does), via a
-//! counting global allocator.
+//! Live and peak heap while decoding GIFs through `FrameSource`, exactly as
+//! the engine does (gifslim at the hint's cap or 12, the `gif` crate as its
+//! fallback), via a counting global allocator.
 //!
-//! Usage: `heapprobe [-v] <gif-or-odm>...`
+//! Usage: `heapprobe [-v] [--gif] <gif>...`
 //!
 //! `steady` is the live heap right after the first frame — every buffer that
 //! stays alive for the rest of the playback. `peak` is the high-water mark
-//! over the whole file; for a GIF the two differ only when the `gif` crate throws
-//! its LZW decoder away and builds a new one, which it does whenever a frame's
-//! LZW minimum code size differs from the previous frame's. An ODM file
-//! allocates nothing per frame, so for it they are always equal.
+//! over the whole file. gifslim allocates nothing per frame, so for it they
+//! are equal; with the `gif` crate (`--gif`: `FrameSource::open_full`, what
+//! a file that fell back loops with) they differ only when the crate throws
+//! its LZW decoder away and builds a new one, which it does whenever a
+//! frame's LZW minimum code size differs from the previous frame's.
 //!
 //! `-v` also prints where the steady bytes went, by taking a reading at each
 //! construction step.
@@ -21,6 +22,7 @@
 use opendmd_core::canvas::{Canvas, HEIGHT, WIDTH};
 use opendmd_core::gifslim::GifSlim;
 use opendmd_core::player::FrameSource;
+use opendmd_core::ReadSeek;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fs::File;
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
@@ -48,6 +50,10 @@ fn main() {
     if verbose {
         args.remove(0);
     }
+    let full = args.first().map(|a| a == "--gif").unwrap_or(false);
+    if full {
+        args.remove(0);
+    }
     if args.first().map(|a| a == "--slim").unwrap_or(false) {
         let cap = args[1].parse::<u8>().ok();
         args.drain(..2);
@@ -62,9 +68,9 @@ fn main() {
         let mut canvas = Canvas::new();
         let at_canvas = LIVE.load(SeqCst) - base;
 
-        // Handed over unbuffered, like `SdSource` on the firmware: the `gif`
-        // crate wraps it in an 8 KiB `BufReader` of its own, and `OdmSource`
-        // in a 2 KiB one.
+        // Handed over unbuffered, like `SdSource` on the firmware: gifslim
+        // wraps it in a 2 KiB `BufReader` of its own, the `gif` crate in an
+        // 8 KiB one.
         let file = match File::open(&path) {
             Ok(f) => f,
             Err(e) => {
@@ -72,10 +78,15 @@ fn main() {
                 continue;
             }
         };
-        let reader: Box<dyn std::io::Read> = Box::new(file);
+        let reader: Box<dyn ReadSeek> = Box::new(file);
         let at_reader = LIVE.load(SeqCst) - base;
 
-        let mut src = match FrameSource::open(reader) {
+        let opened = if full {
+            FrameSource::open_full(reader)
+        } else {
+            FrameSource::open(reader)
+        };
+        let mut src = match opened {
             Ok(s) => s,
             Err(e) => {
                 println!("{path}: {e}");
@@ -104,11 +115,15 @@ fn main() {
         }
         let peak = PEAK.load(SeqCst) - base;
         let (w, h) = src.logical_size();
-        let kind = src.kind();
+        let kind = match (src.kind(), src.cap()) {
+            ("slim", Some(c)) => format!("slim{c}"),
+            (k, _) => k.to_string(),
+        };
+        let kind_base = src.kind();
         drop(src);
 
         println!(
-            "{:<45} {} {:>3}x{:<3} frames {:>5}  steady {:>6} B  peak {:>6} B{}",
+            "{:<45} {:<6} {:>3}x{:<3} frames {:>5}  steady {:>6} B  peak {:>6} B{}",
             path.rsplit('/').next().unwrap(),
             kind,
             w,
@@ -127,10 +142,10 @@ fn main() {
             } else {
                 w * h * 3
             };
-            if kind == "odm" {
+            if kind_base == "slim" {
                 println!(
-                    "    canvas {} B | + source reader {} B | + OdmSource {} B \
-                     (screen {} + 2 KiB BufReader + palette {}) | \
+                    "    canvas {} B | + source reader {} B | + GifSlim {} B \
+                     (screen {} + 2 KiB read buffer + tables, row, palette {}) | \
                      + first frame {} B | transient {} B",
                     at_canvas,
                     at_reader - at_canvas,

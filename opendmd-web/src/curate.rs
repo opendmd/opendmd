@@ -2,15 +2,12 @@
 //! browser types in it so it is tested natively as well as under node.
 //!
 //! Everything here is a thin layer over `opendmd-core` — the tag parser,
-//! [`Filter`], the scheduler's [`Rng`] and the bucket rule in
-//! `opendmd_core::layout` — so the browser selects, orders and names files
-//! exactly the way the firmware and `opendmd-pack` do.
+//! [`Filter`] and the scheduler's [`Rng`] — so the browser selects and
+//! orders files exactly the way the firmware does.
 
 use opendmd_core::filter::Filter;
-use opendmd_core::layout;
 use opendmd_core::manifest::Entry;
 use opendmd_core::scheduler::Rng;
-use std::collections::HashSet;
 
 /// What the Sets view's "build from filters" form produces. Empty lists mean
 /// "no constraint" here — the page's reading of an empty chip row — rather
@@ -88,28 +85,6 @@ pub fn shuffle<T>(items: &mut [T], seed: u64) {
     }
 }
 
-/// Rewrite a manifest so every `/gifs/…​.gif` line whose bucketed `.odm` is in
-/// `present` points at the `.odm` instead — `opendmd-pack manifest --layout
-/// bucketed`, with "exists on the card" replaced by the set the page knows
-/// about. Order, blank lines and line endings are kept byte for byte.
-/// Returns the text and how many lines were switched.
-pub fn odm_manifest(text: &str, present: &HashSet<String>) -> (String, usize) {
-    let mut out = String::with_capacity(text.len());
-    let mut switched = 0;
-    for raw in text.split_inclusive('\n') {
-        let path = raw.trim_end_matches(['\n', '\r']).trim_end();
-        match layout::bucketed_path(path).filter(|odm| present.contains(odm)) {
-            Some(odm) => {
-                switched += 1;
-                out.push_str(&odm);
-                out.push_str(&raw[path.len()..]);
-            }
-            None => out.push_str(raw),
-        }
-    }
-    (out, switched)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,17 +154,5 @@ mod tests {
             },
         );
         assert_eq!(limited, a[..2]);
-    }
-
-    #[test]
-    fn the_odm_manifest_switches_only_present_files() {
-        let present: HashSet<String> =
-            ["/odm/Consoles/90/MD_Sonic3_RattenJager.odm".to_string()].into();
-        let (text, n) = odm_manifest(MANIFEST, &present);
-        assert_eq!(n, 1);
-        assert!(text.starts_with("\u{feff}/gifs/Consoles/SNES_Plok_08.gif\r\n"));
-        assert!(text.contains("\n/odm/Consoles/90/MD_Sonic3_RattenJager.odm\n\n"));
-        assert!(text.ends_with("HALLOWEEN_Dracula_01.gif  \n"));
-        assert_eq!(text.len(), MANIFEST.len() + "/odm/90".len() - "/gifs".len());
     }
 }
