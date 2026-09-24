@@ -9,7 +9,7 @@ the ESP32 firmware.
 
 ## Layout
 
-Six standalone crates, deliberately **not** a Cargo workspace. The core, the
+Seven standalone crates, deliberately **not** a Cargo workspace. The core, the
 renderer and the simulator build and test with plain stable Rust on any
 desktop; the web app needs the `wasm32-unknown-unknown` target; the firmware
 has its own xtensa build config under `firmware/`.
@@ -20,6 +20,7 @@ has its own xtensa build config under `firmware/`.
 | `opendmd-render/` | Library. The LED-panel renderer, shared by the simulator and the web app. Depends only on `opendmd-core`. |
 | `opendmd-sim/` | Binary. A `minifb` window that plays a card through `opendmd-core`, drawing it as a simulated LED panel. Glue only. |
 | `opendmd-web/` | WebAssembly front end: the same engine and renderer in a browser page. See "The web app". |
+| `opendmd-art-web/` | WebAssembly. The web app's "Make art" Studio: a picture in, a 128x32 GIF out. A second module, loaded only when the Studio opens. See "Make art". |
 | `opendmd-pack/` | Binary. Prepares a card: a pre-rendered `.odm` copy of every GIF, which the player plays in its place. See "Prepared copies". |
 | `firmware/` | ESP32 firmware. microSD + HUB75 + the core engine. See "Firmware". |
 | `hardware/` | Measured HUB75 + SD SPI pinout and photos. See `hardware/PINOUT.md`. |
@@ -30,7 +31,7 @@ Stable Rust for the core and the simulator; the firmware needs the Espressif
 xtensa toolchain as well.
 
 ```bash
-make test                       # unit tests (core, render, sim, web, pack)
+make test                       # unit tests (core, render, sim, web, art, pack)
 make check                      # cargo check the host crates
 make clippy                     # clippy -D warnings, every crate
 make fmt
@@ -40,7 +41,7 @@ rustup target add wasm32-unknown-unknown
 cargo install --locked wasm-pack
 make check-wasm                 # core + render + web for wasm32
 make test-wasm                  # the web crate's tests under node
-make web                        # wasm-pack build -> opendmd-web/www/pkg
+make web                        # wasm-pack build -> opendmd-web/www/pkg (+ pkg-art, the Studio)
 make web-serve                  # static server on http://localhost:8080
 make web-smoke                  # headless Chromium drive of the page (tools/web-smoke.py)
 ```
@@ -162,6 +163,8 @@ names the format or shows a copy's path.
   Select entries to add them to a playlist. **Add GIFs** (device) uploads
   files into the category shown, prepares each in the browser (GIF, then its
   copy, one file at a time) and offers to add them to the playlist in play.
+  **Make art…** (and "Make art from this" in an entry's menu) opens the
+  Studio, below.
 - **Playlists** (`#sets`) — the card's own (`filelist.txt` as **All files**,
   the default; `filelist.hall` **Halloween**; `filelist.xmas` **Christmas**;
   any other `filelist.*` by file name; an obsolete `filelist.odm.*` never)
@@ -185,12 +188,50 @@ names the format or shows a copy's path.
   progress; the firmware version, flash variant, panel facts, `index_state`
   and the web app's own version (`www_version`, from `www/version.txt`).
 
+**Make art.** A sheet over Library that turns a picture into a GIF for the
+panel, in five steps:
+
+1. **Import** — choose a file, drop one, paste one (Ctrl/⌘-V; copy an
+   image in any tab), give its address (most sites don't let a page read
+   their pictures; then the Studio says so: save it and drop it), or **Find
+   art for a game**: pick a platform (MD, SNES, GB, GBC, GBA, Saturn, DS,
+   NES, SMS, PC Engine, PS1, N64, Arcade), type a title, pick a game, and
+   its title screen, in-game shot, box and logo (whichever exist) load from
+   the [libretro-thumbnails](https://github.com/libretro-thumbnails)
+   collections.
+2. **Frame** — the picture zoomed with the 128x32 window on it: drag it,
+   tap to move it, **Auto** to re-pick the busiest spot. **Pixels** uses the
+   picture's own pixels 1:1 (a 2x or 3x enlarged screenshot is detected and
+   undone), **Pixels ½** halves it keeping only colours it has, **Fit**
+   scales a logo or photo to the panel's height. **Still**, **Pan →** or
+   **Scroll ↓**, at 50 / 40 / 30 ms a pixel, with a pause at the ends.
+3. **Look** — colours (auto, or 256 / 64 / 16, picked so that a small
+   bright detail survives), background to black, brighten dark outlines
+   (black lettering vanishes on the panel), brightness. No dithering.
+4. **Preview** — the panel look, looping.
+5. **Save** — platform, title, number (the next free one) and "it is a
+   logo"; the file name follows the tag grammar and the Studio shows what
+   the Library will list it as (and warns when a word in the title would be
+   read as a tag). On a device it goes into the chosen category, prepared,
+   and the Studio offers to add it to the playlist in play; in local mode it
+   downloads.
+
+The pixel work and the GIF writer are Rust (`opendmd-art-web`), in a second
+wasm module loaded only when the Studio opens. The game name lists are on
+the card (`www/art/<PLATFORM>.json`, one fetched per search), built by
+`uv run tools/art-index.py` from the repositories' file lists; re-run it to
+pick up new games. The pictures themselves come from GitHub when you pick
+a game, so that part needs the internet. The investigation behind all this
+is `docs/art-pipeline.md`.
+
 **Size budget**, checked by `make web` (`tools/web-size.py`) on the gzipped
 sizes, which are what crosses the WiFi: the wasm module plus its generated JS
-glue at most 100 KB, the hand-written JS and CSS at most 40 KB. Today that is
-about 189 KB of wasm + 27 KB of glue (90.5 KB gzipped) and 104 KB of JS and
-CSS (38.8 KB gzipped). `make web` writes a `<file>.gz` beside each file, and
-the player sends those in preference.
+glue at most 100 KB, the hand-written JS and CSS at most 48 KB; the Studio's
+own wasm at most 150 KB and its JS and CSS at most 24 KB, loaded only when it
+opens. Today that is 101.4 KB, 43.1 KB, 51.4 KB and 9.1 KB. The game name
+lists (2.4 MB, 527 KB gzipped, one platform fetched at a time) are printed
+without a budget. `make web` writes a `<file>.gz` beside each file, and the
+player sends those in preference.
 
 **Favourites, hiding and schedules.** Right-click a GIF in the Library or a
 playlist (long-press on a phone, or its "…" button) to make it a favourite,

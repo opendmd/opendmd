@@ -96,7 +96,8 @@ addEventListener('pointerdown', (e) => { if (open && !open.contains(e.target)) c
 addEventListener('resize', closeMenu);
 
 // The menu for one GIF, at (x, y) — a sheet along the bottom on a phone.
-export function menu(ov, path, x, y) {
+// `extra`: an optional [text, action] item at the end (Library's "Make art").
+export function menu(ov, path, x, y, extra) {
   closeMenu();
   if (!ov.path) { toast('save the playlist first', 'bad'); return; }
   const o = ov.get(path) || {};
@@ -115,7 +116,8 @@ export function menu(ov, path, x, y) {
       secs, h('button.sm', { id: 'ov-secs-set', onclick: () => { const v = +secs.value; if (v >= 1 && v <= 86400) put({ dwell: Math.round(v), dwell_x: null }); else toast('seconds: 1 to 86400', 'bad'); } }, 'Set')),
     h('div.mr', h('span', 'Loop'), loops, h('span.muted', 'times'),
       h('button.sm', { id: 'ov-loops-set', onclick: () => { const v = +loops.value; if (v >= 1 && v <= 1000) put({ loops: Math.round(v) }); else toast('loops: 1 to 1000', 'bad'); } }, 'Set')),
-    item('ov-reset', false, 'Reset', () => put({ never: null, w: null, dwell: null, dwell_x: null, loops: null })));
+    item('ov-reset', false, 'Reset', () => put({ never: null, w: null, dwell: null, dwell_x: null, loops: null })),
+    extra && item('ov-extra', false, extra[0], () => { closeMenu(); extra[1](); }));
   open.querySelector('#ov-reset').disabled = !ov.get(path);
   document.body.append(open);
   if (innerWidth > 600) {
@@ -126,10 +128,10 @@ export function menu(ov, path, x, y) {
 }
 
 // The "…" button a row carries so the menu is discoverable.
-export function moreButton(ov, path) {
+export function moreButton(ov, path, extra) {
   return h('button.sm.more', {
     title: 'Favourite, hide, play longer…', 'aria-label': `options for ${base(path)}`,
-    onclick: (ev) => { ev.stopPropagation(); const r = ev.currentTarget.getBoundingClientRect(); menu(ov, path, r.left - 200, r.bottom + 4); },
+    onclick: (ev) => { ev.stopPropagation(); const r = ev.currentTarget.getBoundingClientRect(); menu(ov, path, r.left - 200, r.bottom + 4, extra); },
   }, '…');
 }
 
