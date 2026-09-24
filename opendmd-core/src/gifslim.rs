@@ -35,11 +35,11 @@
 use crate::canvas::{Canvas, DirtyMap, HEIGHT, WIDTH};
 use crate::player::{
     blit, clear_rect, frame_delay, invalid, mark_changes, GifSource, Rect, Screen,
-    MAX_LOGICAL_PIXELS, MAX_PALETTE,
+    MAX_LOGICAL_PIXELS,
 };
 use gif::DisposalMethod;
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::time::Duration;
 
 /// The decoder's read buffer (as `OdmSource`'s).
@@ -157,14 +157,21 @@ pub struct GifSlim<R: Read> {
     screen: Screen,
     pending: Option<(DisposalMethod, Rect)>,
     hint: Option<Hint>,
+    /// The NETSCAPE loop count, as the `gif` crate reports it (the last one
+    /// before the first frame; `Finite(0)` if none).
+    repeat: gif::Repeat,
+    /// The last frame's delay as written (hundredths).
+    raw_delay: u16,
     ended: bool,
     frames_decoded: u64,
     stats: SlimStats,
 }
 
 /// Next byte from a `BufReader`; end of file is `UnexpectedEof`, as in the
-/// `gif` crate.
-#[inline]
+/// `gif` crate. Not inlined: it is on no per-pixel path (sub-block lengths,
+/// headers), and inlined at every call it cost the image and the browser's
+/// wasm a few KB.
+#[inline(never)]
 fn byte<R: Read>(r: &mut BufReader<R>) -> io::Result<u8> {
     if let Some(&b) = r.buffer().first() {
         r.consume(1);
@@ -178,10 +185,12 @@ fn byte<R: Read>(r: &mut BufReader<R>) -> io::Result<u8> {
     Ok(b)
 }
 
+#[inline(never)]
 fn read_exact<R: Read>(r: &mut BufReader<R>, buf: &mut [u8]) -> io::Result<()> {
     r.read_exact(buf)
 }
 
+#[inline(never)]
 fn skip<R: Read>(r: &mut BufReader<R>, mut n: usize) -> io::Result<()> {
     while n > 0 {
         let avail = r.fill_buf()?.len();
@@ -206,26 +215,48 @@ fn skip_sub_blocks<R: Read>(r: &mut BufReader<R>) -> io::Result<()> {
     }
 }
 
-/// Parse an application extension (the `0x21 0xFF` already consumed),
-/// returning our hint if it is one.
-fn read_app_ext<R: Read>(r: &mut BufReader<R>) -> io::Result<Option<Hint>> {
+/// Parse an application extension (the `0x21 0xFF` already consumed):
+/// our hint, or a NETSCAPE loop count (read as the `gif` crate reads it:
+/// the sub-blocks after the identifier concatenated, `1` then a `u16`).
+fn read_app_ext<R: Read>(r: &mut BufReader<R>) -> io::Result<(Option<Hint>, Option<gif::Repeat>)> {
     let mut id = [0u8; 11];
     let len = byte(r)? as usize;
     if len == 0 {
-        return Ok(None);
+        return Ok((None, None));
     }
     if len != 11 {
         skip(r, len)?;
         skip_sub_blocks(r)?;
-        return Ok(None);
+        return Ok((None, None));
     }
     read_exact(r, &mut id)?;
+    if &id == b"NETSCAPE2.0" {
+        let (mut d, mut got) = ([0u8; 3], 0usize);
+        loop {
+            let n = byte(r)? as usize;
+            if n == 0 {
+                break;
+            }
+            for _ in 0..n {
+                let b = byte(r)?;
+                if got < 3 {
+                    d[got] = b;
+                }
+                got += 1;
+            }
+        }
+        let repeat = (got >= 3 && d[0] == 1).then(|| match u16::from_le_bytes([d[1], d[2]]) {
+            0 => gif::Repeat::Infinite,
+            n => gif::Repeat::Finite(n),
+        });
+        return Ok((None, repeat));
+    }
     // ImageMagick keeps unknown application extensions through a rewrite
     // but lowercases the identifier (and re-encodes the LZW, so a hint is
     // a promise to check, never a guarantee: `NeedsFullDecoder` stands).
     if !id.eq_ignore_ascii_case(HINT_APP_ID) {
         skip_sub_blocks(r)?;
-        return Ok(None);
+        return Ok((None, None));
     }
     let len = byte(r)? as usize;
     let mut hint = None;
@@ -246,7 +277,7 @@ fn read_app_ext<R: Read>(r: &mut BufReader<R>) -> io::Result<Option<Hint>> {
     if len != 0 {
         skip_sub_blocks(r)?;
     }
-    Ok(hint)
+    Ok((hint, None))
 }
 
 /// Read the header, the logical screen descriptor and the global palette;
@@ -254,7 +285,9 @@ fn read_app_ext<R: Read>(r: &mut BufReader<R>) -> io::Result<Option<Hint>> {
 /// frame (where the hint lives), stopping at anything else without
 /// consuming it.
 #[allow(clippy::type_complexity)]
-fn read_header<R: Read>(r: &mut BufReader<R>) -> io::Result<(usize, usize, Vec<u8>, Option<Hint>)> {
+fn read_header<R: Read>(
+    r: &mut BufReader<R>,
+) -> io::Result<(usize, usize, Vec<u8>, Option<Hint>, gif::Repeat)> {
     let mut h = [0u8; 13];
     read_exact(r, &mut h).map_err(|e| {
         if e.kind() == io::ErrorKind::UnexpectedEof {
@@ -283,6 +316,7 @@ fn read_header<R: Read>(r: &mut BufReader<R>) -> io::Result<(usize, usize, Vec<u
         read_exact(r, &mut global)?;
     }
     let mut hint = None;
+    let mut repeat = gif::Repeat::Finite(0);
     loop {
         let buf = r.fill_buf()?;
         if buf.len() < 2 || buf[0] != 0x21 || !(buf[1] == 0xFF || buf[1] == 0xFE) {
@@ -291,14 +325,14 @@ fn read_header<R: Read>(r: &mut BufReader<R>) -> io::Result<(usize, usize, Vec<u
         let label = buf[1];
         r.consume(2);
         if label == 0xFF {
-            if let Some(h) = read_app_ext(r)? {
-                hint = Some(h);
-            }
+            let (h, rep) = read_app_ext(r)?;
+            hint = h.or(hint);
+            repeat = rep.unwrap_or(repeat);
         } else {
             skip_sub_blocks(r)?;
         }
     }
-    Ok((width, height, global, hint))
+    Ok((width, height, global, hint, repeat))
 }
 
 /// Reads LZW codes, LSB first, out of a frame's data sub-blocks.
@@ -626,7 +660,7 @@ impl<R: Read> GifSlim<R> {
 
     fn open(reader: R, cap: Option<u8>) -> io::Result<Self> {
         let mut reader = BufReader::with_capacity(READ_BUF, reader);
-        let (width, height, global, hint) = read_header(&mut reader)?;
+        let (width, height, global, hint, repeat) = read_header(&mut reader)?;
         let cap = cap.or(hint.map(|h| h.cap)).unwrap_or(DEFAULT_CAP);
         if !(MIN_CAP..=MAX_CAP).contains(&cap) {
             return Err(io::Error::new(
@@ -650,6 +684,8 @@ impl<R: Read> GifSlim<R> {
             },
             pending: None,
             hint,
+            repeat,
+            raw_delay: 0,
             ended: false,
             frames_decoded: 0,
             stats: SlimStats::default(),
@@ -676,6 +712,29 @@ impl<R: Read> GifSlim<R> {
 
     pub fn stats(&self) -> SlimStats {
         self.stats
+    }
+
+    /// The NETSCAPE loop count as the `gif` crate's `Decoder::repeat` gives
+    /// it (complete once the first frame has been read).
+    pub fn repeat(&self) -> gif::Repeat {
+        self.repeat
+    }
+
+    /// The last frame's delay as written in the file, in hundredths (the
+    /// `Duration` [`next_frame`](Self::next_frame) returns has the player's
+    /// 0 -> 100 ms and 20 ms-floor rules applied).
+    pub fn raw_delay(&self) -> u16 {
+        self.raw_delay
+    }
+
+    /// The RGB logical screen as of the last frame (`width * height * 3`
+    /// bytes), before any centre-crop: the caller's `canvas` itself at the
+    /// panel size, so it must be the one passed to `next_frame`.
+    pub fn screen<'a>(&'a self, canvas: &'a Canvas) -> &'a [u8] {
+        match &self.screen {
+            Screen::Direct { .. } => canvas.as_bytes(),
+            Screen::Owned(v) => v,
+        }
     }
 
     /// The reader, with the read buffer (and whatever it held) dropped.
@@ -731,8 +790,14 @@ impl<R: Read> GifSlim<R> {
                             transparent = (g[0] & 1 != 0).then_some(g[3]);
                         }
                         0xFF => {
-                            if let Some(h) = read_app_ext(&mut self.reader)? {
+                            let (h, rep) = read_app_ext(&mut self.reader)?;
+                            if let Some(h) = h {
                                 self.hint = Some(h);
+                            }
+                            // The crate only takes loop counts from before
+                            // the first image.
+                            if let (Some(rep), 0) = (rep, self.frames_decoded) {
+                                self.repeat = rep;
                             }
                         }
                         0x01 | 0xFE => skip_sub_blocks(&mut self.reader)?,
@@ -756,21 +821,25 @@ impl<R: Read> GifSlim<R> {
         let fw = u16::from_le_bytes([d[4], d[5]]) as usize;
         let fh = u16::from_le_bytes([d[6], d[7]]) as usize;
         let flags = d[8];
-        let mut local = [0u8; MAX_PALETTE];
-        let local_len = if flags & 0x80 != 0 {
-            let n = 3 << ((flags & 7) + 1);
-            read_exact(&mut self.reader, &mut local[..n])?;
+        // The frame's palette as a 256-entry table — a local one read
+        // straight into it (no second 768-byte buffer on the stack: the
+        // device's cache builder runs this on an 8.5 KB task) — and the
+        // indices that leave the screen alone: the transparent one and any
+        // past the palette's end.
+        let mut rgb = [[0u8; 3]; 256];
+        let mut skip = [true; 256];
+        let entries = if flags & 0x80 != 0 {
+            let n = 2usize << (flags & 7);
+            read_exact(&mut self.reader, rgb[..n].as_flattened_mut())?;
             n
-        } else {
-            0
-        };
-        let palette: &[u8] = if local_len > 0 {
-            &local[..local_len]
         } else if !self.global.is_empty() {
-            &self.global
+            let n = self.global.len() / 3;
+            rgb[..n].as_flattened_mut().copy_from_slice(&self.global);
+            n
         } else {
             return Err(invalid("no color table available for current frame"));
         };
+        skip[..entries].fill(false);
         let min = byte(&mut self.reader)?;
         if !(1..=11).contains(&min) {
             return Err(invalid("invalid minimal code size"));
@@ -791,14 +860,6 @@ impl<R: Read> GifSlim<R> {
             height: fh,
         };
 
-        // The frame's palette as a 256-entry table, and the indices that
-        // leave the screen alone: the transparent one and any past the end.
-        let mut rgb = [[0u8; 3]; 256];
-        let mut skip = [true; 256];
-        for (i, c) in palette.as_chunks::<3>().0.iter().take(256).enumerate() {
-            rgb[i] = *c;
-            skip[i] = false;
-        }
         if let Some(t) = transparent {
             skip[t as usize] = true;
         }
@@ -865,6 +926,7 @@ impl<R: Read> GifSlim<R> {
         }
         *pending = Some((dispose, rect));
         self.frames_decoded += 1;
+        self.raw_delay = delay;
         if let Screen::Owned(v) = &self.screen {
             blit(v, width, height, canvas);
         }
@@ -876,11 +938,11 @@ impl<R: Read> GifSlim<R> {
 // Capped LZW encoder
 // ---------------------------------------------------------------------------
 
-/// What one [`lzw_encode_capped`] call emitted.
+/// What an [`LzwEncoder`] emitted, summed over the frames it encoded.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LzwStats {
     pub codes: u64,
-    /// CLEARs after the first (the cap at work).
+    /// CLEARs after the first of each frame (the cap at work).
     pub clears: u64,
     /// Widest code written.
     pub max_width: u8,
@@ -888,8 +950,98 @@ pub struct LzwStats {
     pub max_string: usize,
 }
 
+/// Where an [`LzwEncoder`]'s bytes go: the raw code stream into a `Vec`
+/// ([`lzw_encode_capped`]), or cut into a GIF's data sub-blocks straight
+/// into a writer ([`SubBlocks`]).
+pub trait LzwSink {
+    fn byte(&mut self, b: u8) -> io::Result<()>;
+}
+
+impl LzwSink for Vec<u8> {
+    #[inline]
+    fn byte(&mut self, b: u8) -> io::Result<()> {
+        self.push(b);
+        Ok(())
+    }
+}
+
+/// GIF data sub-blocks (`len` + up to 255 bytes) written as they fill.
+/// [`finish`](Self::finish) writes the last one and the zero terminator.
+pub struct SubBlocks<'a, W: Write> {
+    out: &'a mut W,
+    buf: [u8; 256],
+}
+
+impl<'a, W: Write> SubBlocks<'a, W> {
+    pub fn new(out: &'a mut W) -> Self {
+        SubBlocks { out, buf: [0; 256] }
+    }
+
+    pub fn finish(self) -> io::Result<()> {
+        let n = self.buf[0] as usize;
+        if n > 0 {
+            self.out.write_all(&self.buf[..=n])?;
+        }
+        self.out.write_all(&[0])
+    }
+}
+
+impl<W: Write> LzwSink for SubBlocks<'_, W> {
+    #[inline]
+    fn byte(&mut self, b: u8) -> io::Result<()> {
+        let n = self.buf[0] as usize + 1;
+        self.buf[n] = b;
+        self.buf[0] = n as u8;
+        if n == 255 {
+            self.out.write_all(&self.buf)?;
+            self.buf[0] = 0;
+        }
+        Ok(())
+    }
+}
+
+/// GIF-flavoured LZW, fed one palette index at a time, such that **no code
+/// is wider than `cap` bits**: a CLEAR is emitted as the code the decoder
+/// reads when its next free entry is `2^cap - 1`, the last point at which a
+/// code (the CLEAR itself) still fits in `cap` bits. So a decoder with
+/// `2^cap`-entry tables plays it; any standard decoder does too.
+///
+/// Code widths follow the GIF rule every decoder uses (giflib, `weezl`): a
+/// code is read with as many bits as the decoder's next free entry needs.
+/// `cap = 12` is an ordinary GIF encoder that clears one entry early.
+///
+/// The dictionary is an open-addressing hash of `2^(cap+1)` slots (`u32`
+/// key + `u16` code: 6 KB at cap 9), allocated once in [`new`](Self::new)
+/// and emptied at every CLEAR; one encoder serves every frame of a file
+/// ([`begin`](Self::begin) … [`push`](Self::push) … [`end`](Self::end)).
+pub struct LzwEncoder {
+    cap: u8,
+    keys: Vec<u32>,
+    vals: Vec<u16>,
+    min: u32,
+    clear: u16,
+    first: u16,
+    /// The decoder's next free entry once it has read everything emitted.
+    next: u16,
+    /// The next code the decoder reads is the first after a CLEAR (it
+    /// defines nothing).
+    fresh: bool,
+    /// The string being extended (a code), if any.
+    w: Option<u16>,
+    wlen: usize,
+    acc: u64,
+    nbits: u32,
+    stats: LzwStats,
+}
+
+#[inline]
+fn width_of(next: u16) -> u32 {
+    (16 - next.leading_zeros()).min(12)
+}
+
 impl LzwStats {
-    fn add(&mut self, o: LzwStats) {
+    /// Sum of two runs (counts add, maxima take the larger).
+    pub fn add(&mut self, o: LzwStats) {
         self.codes += o.codes;
         self.clears += o.clears;
         self.max_width = self.max_width.max(o.max_width);
@@ -897,150 +1049,172 @@ impl LzwStats {
     }
 }
 
-/// LSB-first bit packer.
-struct Bits<'a> {
-    out: &'a mut Vec<u8>,
-    acc: u64,
-    n: u32,
-}
+impl LzwEncoder {
+    pub fn new(cap: u8) -> Self {
+        assert!(
+            (MIN_CAP..=MAX_CAP).contains(&cap),
+            "cap {cap} is not in {MIN_CAP}..={MAX_CAP}"
+        );
+        let slots = 1usize << (cap + 1);
+        LzwEncoder {
+            cap,
+            keys: vec![0; slots],
+            vals: vec![0; slots],
+            min: 2,
+            clear: 4,
+            first: 6,
+            next: 6,
+            fresh: true,
+            w: None,
+            wlen: 0,
+            acc: 0,
+            nbits: 0,
+            stats: LzwStats::default(),
+        }
+    }
 
-impl Bits<'_> {
+    pub fn stats(&self) -> LzwStats {
+        self.stats
+    }
+
+    /// Heap this encoder owns (the dictionary).
+    pub fn heap_bytes(&self) -> usize {
+        self.keys.len() * 4 + self.vals.len() * 2
+    }
+
     #[inline]
-    fn put(&mut self, code: u16, width: u32) {
-        self.acc |= (code as u64) << self.n;
-        self.n += width;
-        while self.n >= 8 {
-            self.out.push(self.acc as u8);
+    fn emit(&mut self, code: u16, out: &mut impl LzwSink) -> io::Result<()> {
+        let w = width_of(self.next);
+        debug_assert!(w <= self.cap as u32);
+        self.acc |= (code as u64) << self.nbits;
+        self.nbits += w;
+        while self.nbits >= 8 {
+            out.byte(self.acc as u8)?;
             self.acc >>= 8;
-            self.n -= 8;
+            self.nbits -= 8;
         }
+        self.stats.codes += 1;
+        self.stats.max_width = self.stats.max_width.max(w as u8);
+        Ok(())
     }
 
-    fn flush(&mut self) {
-        if self.n > 0 {
-            self.out.push(self.acc as u8);
-            self.acc = 0;
-            self.n = 0;
-        }
+    fn reset(&mut self) {
+        self.keys.fill(0);
+        self.next = self.first;
+        self.fresh = true;
     }
-}
 
-/// GIF-flavoured LZW of `data` (palette indices, each `< 2^min_code_size`)
-/// appended to `out` — the raw code stream, not yet cut into sub-blocks —
-/// such that **no code is wider than `cap` bits**: a CLEAR is emitted as the
-/// code the decoder reads when its next free entry is `2^cap - 1`, the last
-/// point at which a code (the CLEAR itself) still fits in `cap` bits. So a
-/// decoder with `2^cap`-entry tables plays it; any standard decoder does too.
-///
-/// Code widths follow the GIF rule every decoder uses (giflib, `weezl`): a
-/// code is read with as many bits as the decoder's next free entry needs.
-/// `cap = 12` is an ordinary GIF encoder that clears one entry early.
-pub fn lzw_encode_capped(data: &[u8], min_code_size: u8, cap: u8, out: &mut Vec<u8>) -> LzwStats {
-    assert!(
-        (2..=11).contains(&min_code_size),
-        "GIF minimum code size is 2..=11"
-    );
-    assert!(
-        cap > min_code_size && cap <= MAX_CAP,
-        "cap {cap} cannot hold the literals of code size {min_code_size}"
-    );
-    let min = min_code_size as u32;
-    let clear = 1u16 << min;
-    let eoi = clear + 1;
-    let first = clear + 2;
-    // The decoder's next free entry once it has read everything emitted so
-    // far, and whether the next code it reads is the first after a CLEAR
-    // (which defines nothing).
-    let limit = (1u16 << cap) - 1;
-    debug_assert!(data.iter().all(|&b| (b as u16) < clear));
-    let width_of = |next: u16| (16 - next.leading_zeros()).min(12);
+    /// Start a frame's code stream (indices `< 2^min_code_size`): the
+    /// initial CLEAR.
+    pub fn begin(&mut self, min_code_size: u8, out: &mut impl LzwSink) -> io::Result<()> {
+        assert!(
+            (2..=11).contains(&min_code_size),
+            "GIF minimum code size is 2..=11"
+        );
+        assert!(
+            self.cap > min_code_size,
+            "cap {} cannot hold the literals of code size {min_code_size}",
+            self.cap
+        );
+        self.min = min_code_size as u32;
+        self.clear = 1 << self.min;
+        self.first = self.clear + 2;
+        self.reset();
+        self.w = None;
+        self.wlen = 0;
+        self.acc = 0;
+        self.nbits = 0;
+        self.emit(self.clear, out)
+    }
 
-    // (prefix << 8 | byte) + 1 -> code, open addressing over 2^(cap+1)
-    // slots; emptied on every CLEAR.
-    let slots = 1usize << (cap + 1);
-    let mut keys = vec![0u32; slots];
-    let mut vals = vec![0u16; slots];
-    let mask = slots - 1;
-    let hash = |k: u32| (k.wrapping_mul(0x9E37_79B1) >> 7) as usize;
-
-    let mut bits = Bits { out, acc: 0, n: 0 };
-    let mut st = LzwStats::default();
-    let emit = |bits: &mut Bits<'_>, st: &mut LzwStats, code: u16, next: u16| {
-        let w = width_of(next);
-        debug_assert!(w <= cap as u32);
-        bits.put(code, w);
-        st.codes += 1;
-        st.max_width = st.max_width.max(w as u8);
-    };
-
-    emit(&mut bits, &mut st, clear, first);
-    let Some((&head, rest)) = data.split_first() else {
-        emit(&mut bits, &mut st, eoi, first);
-        bits.flush();
-        return st;
-    };
-    let mut next = first; // decoder's next free entry
-    let mut fresh = true; // next code read is the first after a CLEAR
-    let mut w = head as u16;
-    let mut wlen = 1usize;
-    for &c in rest {
+    /// One more index.
+    #[inline]
+    pub fn push(&mut self, c: u8, out: &mut impl LzwSink) -> io::Result<()> {
+        debug_assert!((c as u16) < self.clear);
+        let Some(w) = self.w else {
+            self.w = Some(c as u16);
+            self.wlen = 1;
+            return Ok(());
+        };
         let key = ((w as u32) << 8 | c as u32) + 1;
-        let mut s = hash(key) & mask;
+        let mask = self.keys.len() - 1;
+        let mut s = (key.wrapping_mul(0x9E37_79B1) >> 7) as usize & mask;
         loop {
-            let k = keys[s];
+            let k = self.keys[s];
             if k == key {
-                break;
+                self.w = Some(self.vals[s]);
+                self.wlen += 1;
+                return Ok(());
             }
             if k == 0 {
                 break;
             }
             s = (s + 1) & mask;
         }
-        if keys[s] == key {
-            w = vals[s];
-            wlen += 1;
-            continue;
-        }
         // Emit w. The decoder, reading it, defines entry `next` (unless it
         // is the first code after a CLEAR); the encoder defines the same
         // entry, w + c, now.
-        emit(&mut bits, &mut st, w, next);
-        st.max_string = st.max_string.max(wlen);
-        let defined = if fresh { None } else { Some(next) };
-        fresh = false;
-        if let Some(n) = defined {
-            next = n + 1;
+        self.emit(w, out)?;
+        self.stats.max_string = self.stats.max_string.max(self.wlen);
+        if !self.fresh {
+            self.next += 1;
         }
+        self.fresh = false;
         // The encoder's dictionary runs one entry ahead of the decoder's:
         // w + c becomes entry `next`, which the decoder defines on reading
         // the code after this one.
-        if next >= limit {
+        if self.next >= (1u16 << self.cap) - 1 {
             // The next code would be read at `width_of(2^cap - 1)` = cap
             // bits; after one more entry it would need cap + 1. Clear now.
-            emit(&mut bits, &mut st, clear, next);
-            st.clears += 1;
-            keys.fill(0);
-            next = first;
-            fresh = true;
+            self.emit(self.clear, out)?;
+            self.stats.clears += 1;
+            self.reset();
         } else {
-            keys[s] = key;
-            vals[s] = next;
+            self.keys[s] = key;
+            self.vals[s] = self.next;
         }
-        w = c as u16;
-        wlen = 1;
+        self.w = Some(c as u16);
+        self.wlen = 1;
+        Ok(())
     }
-    emit(&mut bits, &mut st, w, next);
-    st.max_string = st.max_string.max(wlen);
-    if !fresh {
-        next += 1;
+
+    /// The last string, END, and the bits still in hand.
+    pub fn end(&mut self, out: &mut impl LzwSink) -> io::Result<()> {
+        if let Some(w) = self.w.take() {
+            self.emit(w, out)?;
+            self.stats.max_string = self.stats.max_string.max(self.wlen);
+            if !self.fresh {
+                self.next += 1;
+            }
+        }
+        self.emit(self.clear + 1, out)?;
+        if self.nbits > 0 {
+            out.byte(self.acc as u8)?;
+            self.acc = 0;
+            self.nbits = 0;
+        }
+        Ok(())
     }
-    emit(&mut bits, &mut st, eoi, next);
-    bits.flush();
-    st
+}
+
+/// [`LzwEncoder`] over a whole slice, appending the raw code stream (not cut
+/// into sub-blocks) to `out`.
+pub fn lzw_encode_capped(data: &[u8], min_code_size: u8, cap: u8, out: &mut Vec<u8>) -> LzwStats {
+    let mut enc = LzwEncoder::new(cap);
+    // A `Vec` sink cannot fail.
+    let run = |enc: &mut LzwEncoder, out: &mut Vec<u8>| -> io::Result<()> {
+        enc.begin(min_code_size, out)?;
+        for &c in data {
+            enc.push(c, out)?;
+        }
+        enc.end(out)
+    };
+    run(&mut enc, out).expect("writing to a Vec");
+    enc.stats()
 }
 
 // ---------------------------------------------------------------------------
-// Recoder
+// Recoder: the prepared copy
 // ---------------------------------------------------------------------------
 
 /// How [`recode_gif`] writes its GIF.
@@ -1059,6 +1233,16 @@ pub struct RecodeOptions {
     pub keep_runs: bool,
 }
 
+/// **The prepared copy's format** (`docs/cache-format.md`): LZW capped at 9
+/// bits, delta frames with `keep_runs`, the hint. What `opendmd-pack
+/// convert`, the browser and the device's cache builder all write.
+pub const PREPARED: RecodeOptions = RecodeOptions {
+    cap: 9,
+    delta: true,
+    hint: true,
+    keep_runs: true,
+};
+
 /// What [`recode_gif`] produced.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RecodeStats {
@@ -1076,14 +1260,191 @@ pub struct RecodeStats {
     /// Frames among those whose changed pixels use all 256 colours: sent as
     /// the changed rectangle with no transparency.
     pub opaque_frames: u64,
+    /// The source's length.
     pub gif_bytes: u64,
     pub out_bytes: u64,
     /// Pixels written in frame rectangles, over all frames.
     pub rect_px: u64,
+    /// The source needed the `gif` crate (interlaced frames or `Previous`
+    /// disposal, which gifslim does not decode).
+    pub full_decoder: bool,
     pub lzw: LzwStats,
 }
 
+/// [`recode_gif_streaming`] met a 257th distinct colour: exact indexing is
+/// impossible and the quantising path ([`recode_gif`], i.e. the browser or
+/// `opendmd-pack`) has to make this file. Carried inside an `io::Error` of
+/// kind `InvalidData`; test with [`is_too_many_colours`]. Nothing has been
+/// written when it is returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TooManyColours;
+
+impl std::fmt::Display for TooManyColours {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("more than 256 colours (needs the quantising encoder)")
+    }
+}
+impl std::error::Error for TooManyColours {}
+
+pub fn is_too_many_colours(e: &io::Error) -> bool {
+    e.get_ref().is_some_and(|i| i.is::<TooManyColours>())
+}
+
 const NEUQUANT_SAMPLEFAC: i32 = 10;
+
+/// The source GIF's decoder: gifslim with the full 12-bit table (≈15 KB),
+/// or — for what gifslim does not decode (interlacing, `Previous`) — the
+/// `gif` crate (≈41 KB). Both give the same frames (`gifscan`: 0
+/// mismatches over the card).
+// One per encode, so the variants' sizes (~400 vs ~600 B inline) do not
+// matter; boxing would be one more allocation.
+#[allow(clippy::large_enum_variant)]
+enum SourceGif<R: Read> {
+    Slim(GifSlim<R>),
+    Full(GifSource<R>),
+}
+
+impl<R: Read> SourceGif<R> {
+    fn open(reader: R, full: bool) -> io::Result<Self> {
+        Ok(if full {
+            SourceGif::Full(GifSource::new(reader)?)
+        } else {
+            SourceGif::Slim(GifSlim::with_cap(reader, MAX_CAP)?)
+        })
+    }
+
+    /// The next frame's raw delay (hundredths), or `None` at the end.
+    fn next(&mut self, canvas: &mut Canvas) -> io::Result<Option<u16>> {
+        Ok(match self {
+            SourceGif::Slim(s) => s.next_frame(canvas)?.map(|_| s.raw_delay()),
+            SourceGif::Full(s) => s.next_frame(canvas)?.map(|_| s.raw_delay()),
+        })
+    }
+
+    fn screen<'a>(&'a self, canvas: &'a Canvas) -> &'a [u8] {
+        match self {
+            SourceGif::Slim(s) => s.screen(canvas),
+            SourceGif::Full(s) => s.screen(canvas),
+        }
+    }
+
+    fn logical_size(&self) -> (usize, usize) {
+        match self {
+            SourceGif::Slim(s) => s.logical_size(),
+            SourceGif::Full(s) => s.logical_size(),
+        }
+    }
+
+    fn repeat(&self) -> gif::Repeat {
+        match self {
+            SourceGif::Slim(s) => s.repeat(),
+            SourceGif::Full(s) => s.repeat(),
+        }
+    }
+
+    fn into_inner(self) -> R {
+        match self {
+            SourceGif::Slim(s) => s.into_inner(),
+            SourceGif::Full(s) => s.into_inner(),
+        }
+    }
+}
+
+/// Should the recoder give up gifslim for the `gif` crate on this error?
+fn wants_full_decoder(e: &io::Error) -> bool {
+    is_unsupported(e) || is_needs_full_decoder(e)
+}
+
+/// Slots in the exact colour table: a power of two, twice 256.
+const COLOUR_SLOTS: usize = 512;
+const NO_COLOUR: u32 = u32::MAX;
+
+/// The source's colours in first-seen order (scanning each composited
+/// frame in raster order) and an RGB -> index lookup: 512 `u32` keys and
+/// 512 `u8` indices by open addressing, plus the palette (~2.8 KB).
+struct Colours {
+    keys: Vec<u32>,
+    index: Vec<u8>,
+    palette: Vec<[u8; 3]>,
+    /// The last colour looked up and its index (runs are common).
+    last: (u32, u8),
+}
+
+impl Colours {
+    fn new() -> Self {
+        Colours {
+            keys: vec![NO_COLOUR; COLOUR_SLOTS],
+            index: vec![0; COLOUR_SLOTS],
+            palette: Vec::with_capacity(256),
+            last: (NO_COLOUR, 0),
+        }
+    }
+
+    #[inline]
+    fn slot(&self, rgb: u32) -> usize {
+        let mut s = (rgb.wrapping_mul(0x9E37_79B1) >> 23) as usize & (COLOUR_SLOTS - 1);
+        while self.keys[s] != rgb && self.keys[s] != NO_COLOUR {
+            s = (s + 1) & (COLOUR_SLOTS - 1);
+        }
+        s
+    }
+
+    /// Record a colour seen; `false` for a 257th.
+    #[inline]
+    fn see(&mut self, c: [u8; 3]) -> bool {
+        let rgb = u32::from_be_bytes([0, c[0], c[1], c[2]]);
+        if rgb == self.last.0 {
+            return true;
+        }
+        let s = self.slot(rgb);
+        if self.keys[s] == NO_COLOUR {
+            if self.palette.len() == 256 {
+                return false;
+            }
+            self.keys[s] = rgb;
+            self.index[s] = self.palette.len() as u8;
+            self.palette.push(c);
+        }
+        self.last = (rgb, self.index[s]);
+        true
+    }
+}
+
+/// Palette index of each composited pixel, for the second pass.
+trait Indexer {
+    fn index_of(&mut self, c: [u8; 3]) -> io::Result<u8>;
+}
+
+impl Indexer for Colours {
+    #[inline]
+    fn index_of(&mut self, c: [u8; 3]) -> io::Result<u8> {
+        let rgb = u32::from_be_bytes([0, c[0], c[1], c[2]]);
+        if rgb == self.last.0 {
+            return Ok(self.last.1);
+        }
+        let s = self.slot(rgb);
+        if self.keys[s] == NO_COLOUR {
+            return Err(invalid("GIF decoded differently on the second pass"));
+        }
+        self.last = (rgb, self.index[s]);
+        Ok(self.index[s])
+    }
+}
+
+/// The quantised path's indexer (desktop and browser only).
+struct Quantised {
+    nq: color_quant::NeuQuant,
+    cache: HashMap<[u8; 3], u8>,
+}
+
+impl Indexer for Quantised {
+    fn index_of(&mut self, c: [u8; 3]) -> io::Result<u8> {
+        Ok(*self
+            .cache
+            .entry(c)
+            .or_insert_with(|| self.nq.index_of(&[c[0], c[1], c[2], 255]) as u8))
+    }
+}
 
 struct CountingWriter<W> {
     inner: W,
@@ -1101,110 +1462,263 @@ impl<W: Write> Write for CountingWriter<W> {
     }
 }
 
-fn enc_err(e: gif::EncodingError) -> io::Error {
-    match e {
-        gif::EncodingError::Io(e) => e,
-        e => io::Error::new(io::ErrorKind::InvalidInput, e),
-    }
+/// What the first pass learnt.
+struct Scan {
+    width: usize,
+    height: usize,
+    frames: u32,
+    repeat: gif::Repeat,
+    full: bool,
 }
 
-/// Every frame of `gif` through [`GifSource`]: the logical screen (packed
-/// RGB, before any centre-crop) and the frame's index.
-fn each_frame(
-    gif: &[u8],
-    mut visit: impl FnMut(usize, &[u8]) -> io::Result<()>,
-) -> io::Result<(usize, usize, usize)> {
-    let mut src = GifSource::new(gif)?;
+/// Decode every frame of `reader` (from the start) with `visit` on each
+/// logical screen, falling back to the `gif` crate if gifslim cannot
+/// decode the file and `full_ok()` allows it. The reader is handed back
+/// rewound.
+fn scan<R: Read + Seek>(
+    mut reader: R,
+    mut full: bool,
+    full_ok: &mut dyn FnMut() -> bool,
+    between: &mut dyn FnMut() -> io::Result<()>,
+    visit: &mut dyn FnMut(u32, &[u8]) -> io::Result<bool>,
+) -> io::Result<(R, Scan)> {
     let mut canvas = Canvas::new();
-    let mut n = 0;
-    while src.next_frame(&mut canvas)?.is_some() {
-        visit(n, src.screen(&canvas))?;
-        n += 1;
+    loop {
+        reader.seek(SeekFrom::Start(0))?;
+        let mut src = SourceGif::open(reader, full)?;
+        let mut frames = 0u32;
+        let res = loop {
+            between()?;
+            match src.next(&mut canvas) {
+                Ok(Some(_)) => {
+                    let k = frames;
+                    frames = frames
+                        .checked_add(1)
+                        .ok_or_else(|| invalid("too many frames"))?;
+                    if !visit(k, src.screen(&canvas))? {
+                        break Ok(false);
+                    }
+                }
+                Ok(None) => break Ok(true),
+                Err(e) => break Err(e),
+            }
+        };
+        match res {
+            Err(e) if !full && wants_full_decoder(&e) => {
+                if !full_ok() {
+                    return Err(e);
+                }
+                reader = src.into_inner();
+                full = true;
+                continue;
+            }
+            Err(e) => return Err(e),
+            Ok(_) => {}
+        }
+        let (width, height) = src.logical_size();
+        let repeat = src.repeat();
+        let mut reader = src.into_inner();
+        reader.seek(SeekFrom::Start(0))?;
+        return Ok((
+            reader,
+            Scan {
+                width,
+                height,
+                frames,
+                repeat,
+                full,
+            },
+        ));
     }
-    let (w, h) = src.logical_size();
-    Ok((w, h, n))
 }
 
-/// Re-encode a GIF as a standard GIF whose LZW never needs more than
-/// `opts.cap` bits, so [`GifSlim`] at that cap plays it.
+/// Re-encode a GIF as the prepared copy (or any [`RecodeOptions`]) with
+/// **bounded memory**: the encoder the device's cache builder runs, and —
+/// through [`recode_gif`] — the one `opendmd-pack` and the browser run, so
+/// all three write the same bytes.
 ///
-/// Frames come from [`GifSource`], so what is encoded is what playback
-/// shows. The raw delays (hundredths) and the loop count are copied from the
-/// source, so every viewer times it as before. Palette: the animation's
-/// distinct colours in first-seen order, plus a transparent slot with delta
-/// frames; past 255 colours with deltas (256 without) `NeuQuant` builds
-/// 255 (256) — lossy, flagged in the stats. Exactly 256 colours with deltas
-/// keep all 256 and send changed rectangles without transparency.
-pub fn recode_gif(
-    mut reader: impl Read,
-    out: impl Write,
+/// Two passes over `reader` (rewound for each): the first collects the
+/// colours (first seen, scanning each composited frame in raster order),
+/// the frame count, the size and the loop count; the second decodes again
+/// and writes the GIF, a frame at a time, the LZW streamed into `out` as it
+/// is made. Nothing is written before the second pass, so an error from the
+/// first ([`TooManyColours`] past 256 colours, a GIF that will not decode)
+/// leaves `out` untouched.
+///
+/// Frames are decoded with [`GifSlim`] at cap 12; a file it does not decode
+/// (interlaced, `Previous` disposal: 5 of the card's 11,047) is decoded with
+/// the `gif` crate instead if `full_ok()` says so (the device asks whether
+/// its ~41 KB are free), else that `Unsupported` error is returned.
+/// `between` runs before every frame of both passes; an error from it
+/// abandons the encode (the device's pause).
+///
+/// Heap for a 128x32 GIF at the prepared format's cap 9: the decoder
+/// (~15 KB: 2 KB read buffer, 12 KB of tables, a row, the source's
+/// palette), a canvas (12 KB), the previous frame's indices (`w*h`), the
+/// changed bits (`w*h/8`), the colour table (~2.8 KB), the LZW dictionary
+/// (6 KB) — ~42 KB, plus whatever buffering `out` has.
+pub fn recode_gif_streaming<R: Read + Seek, W: Write>(
+    reader: R,
+    mut out: W,
     opts: &RecodeOptions,
+    mut full_ok: impl FnMut() -> bool,
+    mut between: impl FnMut() -> io::Result<()>,
 ) -> io::Result<RecodeStats> {
+    check_opts(opts)?;
+    let mut colours = Colours::new();
+    let mut reader = reader;
+    let gif_bytes = reader.seek(SeekFrom::End(0))?;
+    let mut too_many = false;
+    let (reader, sc) = scan(
+        reader,
+        false,
+        &mut full_ok,
+        &mut between,
+        &mut |_, screen| {
+            for &c in screen.as_chunks::<3>().0 {
+                if !colours.see(c) {
+                    too_many = true;
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        },
+    )?;
+    if too_many {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, TooManyColours));
+    }
+    let palette = std::mem::take(&mut colours.palette);
+    write_gif(
+        reader,
+        &mut out,
+        opts,
+        &sc,
+        palette,
+        false,
+        &mut colours,
+        gif_bytes,
+        &mut between,
+    )
+}
+
+/// [`recode_gif_streaming`] with its types fixed — a boxed reader, a `dyn`
+/// writer and `dyn` hooks — instantiated here, in this crate: what the
+/// firmware calls, so the decoders the recoder runs are the very
+/// instantiations the player already links (`FrameSource` over a
+/// `Box<dyn ReadSeek>`), not a second copy of each (~10 KB of image).
+pub fn recode_gif_streaming_dyn(
+    reader: Box<dyn crate::engine::ReadSeek + '_>,
+    out: &mut dyn Write,
+    opts: &RecodeOptions,
+    full_ok: &mut dyn FnMut() -> bool,
+    between: &mut dyn FnMut() -> io::Result<()>,
+) -> io::Result<RecodeStats> {
+    recode_gif_streaming(reader, out, opts, full_ok, between)
+}
+
+fn check_opts(opts: &RecodeOptions) -> io::Result<()> {
     if !(MIN_CAP..=MAX_CAP).contains(&opts.cap) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("cap {} is not in {MIN_CAP}..={MAX_CAP}", opts.cap),
         ));
     }
+    Ok(())
+}
+
+/// Re-encode a GIF held in memory (desktop, browser): exactly
+/// [`recode_gif_streaming`]'s bytes, plus the one thing the device cannot
+/// do — **past 256 colours** (255 with delta frames) `NeuQuant` (sample
+/// factor 10) builds the palette over every pixel of every frame, lossy,
+/// flagged in the stats.
+pub fn recode_gif(
+    mut reader: impl Read,
+    mut out: impl Write,
+    opts: &RecodeOptions,
+) -> io::Result<RecodeStats> {
+    check_opts(opts)?;
     let mut gif = Vec::new();
     reader.read_to_end(&mut gif)?;
-
-    // Raw delays and the loop count, from the crate's own metadata.
-    let mut delays = Vec::new();
-    let repeat = {
-        let mut o = gif::DecodeOptions::new();
-        o.set_color_output(gif::ColorOutput::Indexed);
-        let mut d = o.read_info(&gif[..]).map_err(crate::player::decode_err)?;
-        while let Some(f) = d.next_frame_info().map_err(crate::player::decode_err)? {
-            delays.push(f.delay);
-        }
-        d.repeat()
-    };
-
-    // Colours, first seen.
-    let mut lookup: HashMap<[u8; 3], u8> = HashMap::new();
-    let mut palette: Vec<[u8; 3]> = Vec::new();
-    let mut too_many = false;
-    let (width, height, frames) = each_frame(&gif, |_, screen| {
-        if !too_many {
-            for &c in screen.as_chunks::<3>().0 {
-                if let std::collections::hash_map::Entry::Vacant(slot) = lookup.entry(c) {
-                    if palette.len() == 256 {
-                        too_many = true;
-                        break;
-                    }
-                    slot.insert(palette.len() as u8);
-                    palette.push(c);
-                }
+    // Through the boxed entry point, like the device: one instantiation of
+    // the decoders, shared with the player (the browser's wasm budget).
+    match recode_gif_streaming_dyn(
+        Box::new(io::Cursor::new(&gif[..])),
+        &mut out,
+        opts,
+        &mut || true,
+        &mut || Ok(()),
+    ) {
+        Err(e) if is_too_many_colours(&e) => {}
+        r => return r,
+    }
+    // Quantised: every frame as RGBA for NeuQuant.
+    let mut rgba = Vec::new();
+    let (cursor, sc) = scan::<Box<dyn crate::engine::ReadSeek + '_>>(
+        Box::new(io::Cursor::new(&gif[..])),
+        false,
+        &mut || true,
+        &mut || Ok(()),
+        &mut |k, screen| {
+            // (A pass gifslim gave up part way is started again.)
+            if k == 0 {
+                rgba.clear();
             }
-        }
-        Ok(())
-    })?;
-    if frames == 0 {
-        return Err(invalid("GIF has no frames"));
-    }
-    if frames != delays.len() {
-        return Err(invalid("frame count differs between passes"));
-    }
-    let max_colours = if opts.delta { 255 } else { 256 };
-    let quantise = too_many;
-    let opaque_deltas = opts.delta && !too_many && palette.len() == 256;
-    let quant = if quantise {
-        let mut rgba = Vec::with_capacity(frames * width * height * 4);
-        each_frame(&gif, |_, screen| {
             for px in screen.as_chunks::<3>().0 {
                 rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
-            Ok(())
-        })?;
-        let nq = color_quant::NeuQuant::new(NEUQUANT_SAMPLEFAC, max_colours, &rgba);
-        drop(rgba);
-        palette = nq.color_map_rgb().as_chunks::<3>().0.to_vec();
-        lookup.clear();
-        Some(nq)
-    } else {
-        None
+            Ok(true)
+        },
+    )?;
+    let max_colours = if opts.delta { 255 } else { 256 };
+    let nq = color_quant::NeuQuant::new(NEUQUANT_SAMPLEFAC, max_colours, &rgba);
+    drop(rgba);
+    let palette = nq.color_map_rgb().as_chunks::<3>().0.to_vec();
+    let mut q = Quantised {
+        nq,
+        cache: HashMap::new(),
     };
+    write_gif(
+        cursor,
+        &mut out,
+        opts,
+        &sc,
+        palette,
+        true,
+        &mut q,
+        gif.len() as u64,
+        &mut || Ok(()),
+    )
+}
+
+/// The `gif` crate's flag for a colour table of `n` entries.
+fn table_flag(n: usize) -> u8 {
+    (n.max(2).next_power_of_two().trailing_zeros() - 1) as u8
+}
+
+/// The second pass: the GIF itself. Byte for byte what the `gif` crate's
+/// encoder writes for the same frames (header, global palette, the hint,
+/// NETSCAPE, a graphic control extension before every frame, 255-byte
+/// sub-blocks, the trailer) — a unit test holds it to that.
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
+fn write_gif<R: Read + Seek>(
+    reader: R,
+    out: &mut dyn Write,
+    opts: &RecodeOptions,
+    sc: &Scan,
+    palette: Vec<[u8; 3]>,
+    quantised: bool,
+    indexer: &mut dyn Indexer,
+    gif_bytes: u64,
+    between: &mut dyn FnMut() -> io::Result<()>,
+) -> io::Result<RecodeStats> {
+    let (width, height) = (sc.width, sc.height);
+    if sc.frames == 0 {
+        return Err(invalid("GIF has no frames"));
+    }
+    if width > u16::MAX as usize || height > u16::MAX as usize {
+        return Err(invalid("GIF screen too large"));
+    }
+    let opaque_deltas = opts.delta && !quantised && palette.len() == 256;
     let transparent = (opts.delta && !opaque_deltas).then_some(palette.len() as u8);
     let entries = palette.len() + transparent.is_some() as usize;
     let table = entries.max(4).next_power_of_two();
@@ -1218,68 +1732,79 @@ pub fn recode_gif(
             ),
         ));
     }
-    let mut pal_bytes = vec![0u8; table * 3];
-    for (i, c) in palette.iter().enumerate() {
-        pal_bytes[i * 3..i * 3 + 3].copy_from_slice(c);
-    }
-
     let mut stats = RecodeStats {
         width,
         height,
-        frames: frames as u32,
+        frames: sc.frames,
         colours: palette.len(),
-        quantised: quant.is_some(),
+        quantised,
         opaque_deltas,
-        gif_bytes: gif.len() as u64,
+        gif_bytes,
+        full_decoder: sc.full,
         ..Default::default()
     };
-    let mut enc = gif::Encoder::new(
-        CountingWriter {
-            inner: out,
-            bytes: 0,
-        },
-        width as u16,
-        height as u16,
-        &pal_bytes,
-    )
-    .map_err(enc_err)?;
-    if opts.hint {
-        enc.write_raw_extension(
-            gif::AnyExtension(0xFF),
-            &[HINT_APP_ID, &[1, opts.cap, opts.delta as u8]],
-        )?;
+
+    let mut w = CountingWriter {
+        inner: out,
+        bytes: 0,
+    };
+    // Header, logical screen, global palette (padded to its table size).
+    let flag = table_flag(table);
+    let mut head = [0u8; 13];
+    head[..6].copy_from_slice(b"GIF89a");
+    head[6..8].copy_from_slice(&(width as u16).to_le_bytes());
+    head[8..10].copy_from_slice(&(height as u16).to_le_bytes());
+    head[10] = 0x80 | flag | flag << 4;
+    w.write_all(&head)?;
+    for c in &palette {
+        w.write_all(c)?;
     }
-    if repeat != gif::Repeat::Finite(0) {
-        enc.set_repeat(repeat).map_err(enc_err)?;
+    for _ in palette.len()..table {
+        w.write_all(&[0, 0, 0])?;
+    }
+    if opts.hint {
+        w.write_all(&[0x21, 0xFF, 11])?;
+        w.write_all(HINT_APP_ID)?;
+        w.write_all(&[3, 1, opts.cap, opts.delta as u8, 0])?;
+    }
+    if sc.repeat != gif::Repeat::Finite(0) {
+        let n = match sc.repeat {
+            gif::Repeat::Finite(n) => n,
+            gif::Repeat::Infinite => 0,
+        };
+        let n = n.to_le_bytes();
+        w.write_all(&[0x21, 0xFF, 11])?;
+        w.write_all(b"NETSCAPE2.0")?;
+        w.write_all(&[3, 1, n[0], n[1], 0])?;
     }
 
     let n = width * height;
     let mut idx = vec![0u8; n];
-    let mut prev = vec![0u8; n * 3]; // what a decoder shows: starts black
-    let mut changed = vec![false; n];
-    let mut rect_buf = Vec::with_capacity(n);
-    let mut lzw = Vec::new();
-    each_frame(&gif, |k, screen| {
+    let mut changed = vec![0u8; n.div_ceil(8)];
+    let is_changed = |changed: &[u8], i: usize| changed[i / 8] & (1 << (i % 8)) != 0;
+    let mut lzw = LzwEncoder::new(opts.cap);
+    let mut canvas = Canvas::new();
+    let mut src = SourceGif::open(reader, sc.full)?;
+    let mut k = 0u32;
+    loop {
+        between()?;
+        let Some(delay) = src.next(&mut canvas)? else {
+            break;
+        };
+        if k == sc.frames {
+            return Err(invalid("frame count differs between passes"));
+        }
         let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
-        for (i, &c) in screen.as_chunks::<3>().0.iter().enumerate() {
-            let q = match (&quant, lookup.get(&c)) {
-                (_, Some(&q)) => q,
-                (Some(nq), None) => {
-                    let q = nq.index_of(&[c[0], c[1], c[2], 255]) as u8;
-                    lookup.insert(c, q);
-                    q
-                }
-                (None, None) => return Err(invalid("GIF decoded differently on the second pass")),
-            };
-            idx[i] = q;
-            let shown = &palette[q as usize];
-            let d = &mut prev[i * 3..i * 3 + 3];
+        changed.fill(0);
+        for (i, &c) in src.screen(&canvas).as_chunks::<3>().0.iter().enumerate() {
+            let q = indexer.index_of(c)?;
             // Frame 0 is sent whole and opaque: our players start from
             // black, but a browser shows what a first frame leaves
-            // uncovered (or transparent) as the page behind it.
-            changed[i] = k == 0 || d != shown;
-            if changed[i] {
-                d.copy_from_slice(shown);
+            // uncovered (or transparent) as the page behind it. After it,
+            // equal indices are equal colours as shown.
+            if k == 0 || idx[i] != q {
+                idx[i] = q;
+                changed[i / 8] |= 1 << (i % 8);
                 let (x, y) = (i % width, i / width);
                 x0 = x0.min(x);
                 x1 = x1.max(x + 1);
@@ -1287,16 +1812,14 @@ pub fn recode_gif(
                 y1 = y1.max(y + 1);
             }
         }
-        rect_buf.clear();
         // With all 256 palette slots taken there is no spare transparent
         // index, but a frame's changed pixels rarely use every colour: any
         // index they do not use can be this frame's transparent one.
         let frame_t = if opaque_deltas && k > 0 && x0 != usize::MAX {
             let mut used = [false; 256];
             for y in y0..y1 {
-                for x in x0..x1 {
-                    let i = y * width + x;
-                    if changed[i] {
+                for i in y * width + x0..y * width + x1 {
+                    if is_changed(&changed, i) {
                         used[idx[i] as usize] = true;
                     }
                 }
@@ -1309,55 +1832,77 @@ pub fn recode_gif(
         } else {
             transparent
         };
-        let (left, top, w, h) = if !opts.delta {
-            rect_buf.extend_from_slice(&idx);
+        let (left, top, fw, fh) = if !opts.delta {
             (0, 0, width, height)
+        } else if x0 == usize::MAX {
+            (0, 0, 1, 1)
+        } else {
+            (x0, y0, x1 - x0, y1 - y0)
+        };
+        stats.rect_px += (fw * fh) as u64;
+
+        // Graphic control, image descriptor, the data.
+        let dispose = if opts.delta { 1u8 } else { 0 };
+        let d = delay.to_le_bytes();
+        w.write_all(&[
+            0x21,
+            0xF9,
+            4,
+            dispose << 2 | frame_t.is_some() as u8,
+            d[0],
+            d[1],
+            frame_t.unwrap_or(0),
+            0,
+        ])?;
+        let mut desc = [0u8; 11];
+        desc[0] = 0x2C;
+        desc[1..3].copy_from_slice(&(left as u16).to_le_bytes());
+        desc[3..5].copy_from_slice(&(top as u16).to_le_bytes());
+        desc[5..7].copy_from_slice(&(fw as u16).to_le_bytes());
+        desc[7..9].copy_from_slice(&(fh as u16).to_le_bytes());
+        desc[10] = min_code_size;
+        w.write_all(&desc)?;
+        let mut blocks = SubBlocks::new(&mut w);
+        lzw.begin(min_code_size, &mut blocks)?;
+        if !opts.delta {
+            for &q in &idx {
+                lzw.push(q, &mut blocks)?;
+            }
         } else if x0 == usize::MAX {
             // Nothing changed: one pixel that leaves the screen alone (or,
             // with no transparent index, repaints itself).
-            rect_buf.push(frame_t.unwrap_or(idx[0]));
-            (0, 0, 1, 1)
+            lzw.push(frame_t.unwrap_or(idx[0]), &mut blocks)?;
         } else {
             let mut last = None;
             for y in y0..y1 {
-                for x in x0..x1 {
-                    let i = y * width + x;
+                for i in y * width + x0..y * width + x1 {
                     let v = match frame_t {
-                        Some(_) if !changed[i] && opts.keep_runs && last == Some(idx[i]) => idx[i],
-                        Some(t) if !changed[i] => t,
+                        Some(_)
+                            if !is_changed(&changed, i)
+                                && opts.keep_runs
+                                && last == Some(idx[i]) =>
+                        {
+                            idx[i]
+                        }
+                        Some(t) if !is_changed(&changed, i) => t,
                         _ => idx[i],
                     };
-                    rect_buf.push(v);
+                    lzw.push(v, &mut blocks)?;
                     last = Some(v);
                 }
             }
-            (x0, y0, x1 - x0, y1 - y0)
-        };
-        stats.rect_px += (w * h) as u64;
-        lzw.clear();
-        lzw.push(min_code_size);
-        let ls = lzw_encode_capped(&rect_buf, min_code_size, opts.cap, &mut lzw);
-        stats.lzw.add(ls);
-        let frame = gif::Frame {
-            delay: delays[k],
-            dispose: if opts.delta {
-                DisposalMethod::Keep
-            } else {
-                DisposalMethod::Any
-            },
-            transparent: frame_t,
-            left: left as u16,
-            top: top as u16,
-            width: w as u16,
-            height: h as u16,
-            buffer: std::borrow::Cow::Borrowed(&lzw),
-            ..Default::default()
-        };
-        enc.write_lzw_pre_encoded_frame(&frame).map_err(enc_err)
-    })?;
-    let mut w = enc.into_inner()?;
+        }
+        lzw.end(&mut blocks)?;
+        blocks.finish()?;
+        k += 1;
+    }
+    if k != sc.frames {
+        return Err(invalid("frame count differs between passes"));
+    }
+    w.write_all(&[0x3B])?;
     w.flush()?;
     stats.out_bytes = w.bytes;
+    stats.lzw = lzw.stats();
     Ok(stats)
 }
 
@@ -1980,5 +2525,493 @@ mod tests {
         assert_eq!((f.left, f.top, f.width, f.height), (0, 0, 128, 32));
         let t = f.transparent.unwrap();
         assert!(f.buffer.iter().all(|&i| i != t));
+    }
+
+    /// The experiment's in-memory recoder, on the `gif` crate's encoder:
+    /// the reference the hand-written container is held to.
+    mod reference {
+        use super::super::*;
+
+        fn enc_err(e: gif::EncodingError) -> io::Error {
+            match e {
+                gif::EncodingError::Io(e) => e,
+                e => io::Error::new(io::ErrorKind::InvalidInput, e),
+            }
+        }
+
+        /// Every frame of `gif` through [`GifSource`]: the logical screen (packed
+        /// RGB, before any centre-crop) and the frame's index.
+        fn each_frame(
+            gif: &[u8],
+            mut visit: impl FnMut(usize, &[u8]) -> io::Result<()>,
+        ) -> io::Result<(usize, usize, usize)> {
+            let mut src = GifSource::new(gif)?;
+            let mut canvas = Canvas::new();
+            let mut n = 0;
+            while src.next_frame(&mut canvas)?.is_some() {
+                visit(n, src.screen(&canvas))?;
+                n += 1;
+            }
+            let (w, h) = src.logical_size();
+            Ok((w, h, n))
+        }
+
+        /// Re-encode a GIF as a standard GIF whose LZW never needs more than
+        /// `opts.cap` bits, so [`GifSlim`] at that cap plays it.
+        ///
+        /// Frames come from [`GifSource`], so what is encoded is what playback
+        /// shows. The raw delays (hundredths) and the loop count are copied from the
+        /// source, so every viewer times it as before. Palette: the animation's
+        /// distinct colours in first-seen order, plus a transparent slot with delta
+        /// frames; past 255 colours with deltas (256 without) `NeuQuant` builds
+        /// 255 (256) — lossy, flagged in the stats. Exactly 256 colours with deltas
+        /// keep all 256 and send changed rectangles without transparency.
+        pub fn reference_recode(
+            mut reader: impl Read,
+            out: impl Write,
+            opts: &RecodeOptions,
+        ) -> io::Result<RecodeStats> {
+            if !(MIN_CAP..=MAX_CAP).contains(&opts.cap) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("cap {} is not in {MIN_CAP}..={MAX_CAP}", opts.cap),
+                ));
+            }
+            let mut gif = Vec::new();
+            reader.read_to_end(&mut gif)?;
+
+            // Raw delays and the loop count, from the crate's own metadata.
+            let mut delays = Vec::new();
+            let repeat = {
+                let mut o = gif::DecodeOptions::new();
+                o.set_color_output(gif::ColorOutput::Indexed);
+                let mut d = o.read_info(&gif[..]).map_err(crate::player::decode_err)?;
+                while let Some(f) = d.next_frame_info().map_err(crate::player::decode_err)? {
+                    delays.push(f.delay);
+                }
+                d.repeat()
+            };
+
+            // Colours, first seen.
+            let mut lookup: HashMap<[u8; 3], u8> = HashMap::new();
+            let mut palette: Vec<[u8; 3]> = Vec::new();
+            let mut too_many = false;
+            let (width, height, frames) = each_frame(&gif, |_, screen| {
+                if !too_many {
+                    for &c in screen.as_chunks::<3>().0 {
+                        if let std::collections::hash_map::Entry::Vacant(slot) = lookup.entry(c) {
+                            if palette.len() == 256 {
+                                too_many = true;
+                                break;
+                            }
+                            slot.insert(palette.len() as u8);
+                            palette.push(c);
+                        }
+                    }
+                }
+                Ok(())
+            })?;
+            if frames == 0 {
+                return Err(invalid("GIF has no frames"));
+            }
+            if frames != delays.len() {
+                return Err(invalid("frame count differs between passes"));
+            }
+            let max_colours = if opts.delta { 255 } else { 256 };
+            let quantise = too_many;
+            let opaque_deltas = opts.delta && !too_many && palette.len() == 256;
+            let quant = if quantise {
+                let mut rgba = Vec::with_capacity(frames * width * height * 4);
+                each_frame(&gif, |_, screen| {
+                    for px in screen.as_chunks::<3>().0 {
+                        rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+                    }
+                    Ok(())
+                })?;
+                let nq = color_quant::NeuQuant::new(NEUQUANT_SAMPLEFAC, max_colours, &rgba);
+                drop(rgba);
+                palette = nq.color_map_rgb().as_chunks::<3>().0.to_vec();
+                lookup.clear();
+                Some(nq)
+            } else {
+                None
+            };
+            let transparent = (opts.delta && !opaque_deltas).then_some(palette.len() as u8);
+            let entries = palette.len() + transparent.is_some() as usize;
+            let table = entries.max(4).next_power_of_two();
+            let min_code_size = table.trailing_zeros() as u8;
+            if opts.cap <= min_code_size {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "cap {} cannot hold a {entries}-entry palette's literals",
+                        opts.cap
+                    ),
+                ));
+            }
+            let mut pal_bytes = vec![0u8; table * 3];
+            for (i, c) in palette.iter().enumerate() {
+                pal_bytes[i * 3..i * 3 + 3].copy_from_slice(c);
+            }
+
+            let mut stats = RecodeStats {
+                width,
+                height,
+                frames: frames as u32,
+                colours: palette.len(),
+                quantised: quant.is_some(),
+                opaque_deltas,
+                gif_bytes: gif.len() as u64,
+                ..Default::default()
+            };
+            let mut enc = gif::Encoder::new(
+                CountingWriter {
+                    inner: out,
+                    bytes: 0,
+                },
+                width as u16,
+                height as u16,
+                &pal_bytes,
+            )
+            .map_err(enc_err)?;
+            if opts.hint {
+                enc.write_raw_extension(
+                    gif::AnyExtension(0xFF),
+                    &[HINT_APP_ID, &[1, opts.cap, opts.delta as u8]],
+                )?;
+            }
+            if repeat != gif::Repeat::Finite(0) {
+                enc.set_repeat(repeat).map_err(enc_err)?;
+            }
+
+            let n = width * height;
+            let mut idx = vec![0u8; n];
+            let mut prev = vec![0u8; n * 3]; // what a decoder shows: starts black
+            let mut changed = vec![false; n];
+            let mut rect_buf = Vec::with_capacity(n);
+            let mut lzw = Vec::new();
+            each_frame(&gif, |k, screen| {
+                let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+                for (i, &c) in screen.as_chunks::<3>().0.iter().enumerate() {
+                    let q = match (&quant, lookup.get(&c)) {
+                        (_, Some(&q)) => q,
+                        (Some(nq), None) => {
+                            let q = nq.index_of(&[c[0], c[1], c[2], 255]) as u8;
+                            lookup.insert(c, q);
+                            q
+                        }
+                        (None, None) => {
+                            return Err(invalid("GIF decoded differently on the second pass"))
+                        }
+                    };
+                    idx[i] = q;
+                    let shown = &palette[q as usize];
+                    let d = &mut prev[i * 3..i * 3 + 3];
+                    // Frame 0 is sent whole and opaque: our players start from
+                    // black, but a browser shows what a first frame leaves
+                    // uncovered (or transparent) as the page behind it.
+                    changed[i] = k == 0 || d != shown;
+                    if changed[i] {
+                        d.copy_from_slice(shown);
+                        let (x, y) = (i % width, i / width);
+                        x0 = x0.min(x);
+                        x1 = x1.max(x + 1);
+                        y0 = y0.min(y);
+                        y1 = y1.max(y + 1);
+                    }
+                }
+                rect_buf.clear();
+                // With all 256 palette slots taken there is no spare transparent
+                // index, but a frame's changed pixels rarely use every colour: any
+                // index they do not use can be this frame's transparent one.
+                let frame_t = if opaque_deltas && k > 0 && x0 != usize::MAX {
+                    let mut used = [false; 256];
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            let i = y * width + x;
+                            if changed[i] {
+                                used[idx[i] as usize] = true;
+                            }
+                        }
+                    }
+                    let t = used.iter().position(|u| !u).map(|t| t as u8);
+                    if t.is_none() {
+                        stats.opaque_frames += 1;
+                    }
+                    t
+                } else {
+                    transparent
+                };
+                let (left, top, w, h) = if !opts.delta {
+                    rect_buf.extend_from_slice(&idx);
+                    (0, 0, width, height)
+                } else if x0 == usize::MAX {
+                    // Nothing changed: one pixel that leaves the screen alone (or,
+                    // with no transparent index, repaints itself).
+                    rect_buf.push(frame_t.unwrap_or(idx[0]));
+                    (0, 0, 1, 1)
+                } else {
+                    let mut last = None;
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            let i = y * width + x;
+                            let v = match frame_t {
+                                Some(_)
+                                    if !changed[i] && opts.keep_runs && last == Some(idx[i]) =>
+                                {
+                                    idx[i]
+                                }
+                                Some(t) if !changed[i] => t,
+                                _ => idx[i],
+                            };
+                            rect_buf.push(v);
+                            last = Some(v);
+                        }
+                    }
+                    (x0, y0, x1 - x0, y1 - y0)
+                };
+                stats.rect_px += (w * h) as u64;
+                lzw.clear();
+                lzw.push(min_code_size);
+                let ls = lzw_encode_capped(&rect_buf, min_code_size, opts.cap, &mut lzw);
+                stats.lzw.add(ls);
+                let frame = gif::Frame {
+                    delay: delays[k],
+                    dispose: if opts.delta {
+                        DisposalMethod::Keep
+                    } else {
+                        DisposalMethod::Any
+                    },
+                    transparent: frame_t,
+                    left: left as u16,
+                    top: top as u16,
+                    width: w as u16,
+                    height: h as u16,
+                    buffer: std::borrow::Cow::Borrowed(&lzw),
+                    ..Default::default()
+                };
+                enc.write_lzw_pre_encoded_frame(&frame).map_err(enc_err)
+            })?;
+            let mut w = enc.into_inner()?;
+            w.flush()?;
+            stats.out_bytes = w.bytes;
+            Ok(stats)
+        }
+    }
+
+    /// A reader that hands out at most 7 bytes a call, and can seek.
+    struct Trickle(Cursor<Vec<u8>>);
+    impl Read for Trickle {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = buf.len().min(7);
+            self.0.read(&mut buf[..n])
+        }
+    }
+    impl Seek for Trickle {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.0.seek(pos)
+        }
+    }
+
+    fn streaming(
+        gif: &[u8],
+        opts: &RecodeOptions,
+        full_ok: bool,
+    ) -> io::Result<(Vec<u8>, RecodeStats)> {
+        let mut out = Vec::new();
+        let st = recode_gif_streaming(
+            Trickle(Cursor::new(gif.to_vec())),
+            &mut out,
+            opts,
+            || full_ok,
+            || Ok(()),
+        )?;
+        Ok((out, st))
+    }
+
+    #[test]
+    fn the_container_is_the_gif_crates_byte_for_byte() {
+        let mut files: Vec<Vec<u8>> = (1..10).map(|s| animation(128, 32, s)).collect();
+        files.push(animation(135, 32, 3));
+        files.push(animation(10, 5, 4));
+        for g in &files {
+            for cap in [9u8, 10, 12] {
+                for (delta, keep_runs, hint) in [
+                    (true, true, true),
+                    (true, false, true),
+                    (false, false, false),
+                ] {
+                    let opts = RecodeOptions {
+                        cap,
+                        delta,
+                        hint,
+                        keep_runs,
+                    };
+                    let mut want = Vec::new();
+                    let ws = reference::reference_recode(&g[..], &mut want, &opts).unwrap();
+                    let (got, gs) = streaming(g, &opts, true).unwrap();
+                    assert!(got == want, "cap {cap} delta {delta} keep_runs {keep_runs}");
+                    assert_eq!(gs.out_bytes, ws.out_bytes);
+                    assert_eq!(
+                        (gs.frames, gs.colours, gs.rect_px, gs.lzw),
+                        (ws.frames, ws.colours, ws.rect_px, ws.lzw)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn in_memory_and_streaming_write_the_same_bytes() {
+        let mut rng = Rng(11);
+        for seed in 1..40 {
+            let (w, h) = match seed % 5 {
+                0 => (135, 32),
+                1 => (16, 8),
+                _ => (128, 32),
+            };
+            let g = animation(w, h, seed * 7 + rng.below(1000) as u64);
+            let mut mem = Vec::new();
+            let ms = recode_gif(&g[..], &mut mem, &PREPARED).unwrap();
+            let (st, ss) = streaming(&g, &PREPARED, false).unwrap();
+            assert!(mem == st, "seed {seed}");
+            assert_eq!(ms, ss);
+            assert_eq!(ss.out_bytes, st.len() as u64);
+            assert_eq!(ss.gif_bytes, g.len() as u64);
+        }
+    }
+
+    #[test]
+    fn a_257th_colour_is_too_many_for_the_stream_and_writes_nothing() {
+        let mut frames = Vec::new();
+        for k in 0..3u16 {
+            let pal: Vec<u8> = (0..100)
+                .flat_map(|i: u16| [(i * 2) as u8, (k * 80) as u8, (255 - i) as u8])
+                .collect();
+            let px: Vec<u8> = (0..4096).map(|i| (i % 100) as u8).collect();
+            frames.push((0, 0, 128, 32, px, DisposalMethod::Keep, 5, Some(pal), None));
+        }
+        let g = build(128, 32, None, frames, false);
+        let mut out = Vec::new();
+        let e = recode_gif_streaming(Cursor::new(&g[..]), &mut out, &PREPARED, || true, || Ok(()))
+            .unwrap_err();
+        assert!(is_too_many_colours(&e));
+        assert!(out.is_empty());
+        // The in-memory path quantises it instead.
+        assert!(recode_gif(&g[..], Vec::new(), &PREPARED).unwrap().quantised);
+    }
+
+    #[test]
+    fn what_gifslim_cannot_decode_takes_the_gif_crate_when_allowed() {
+        let interlaced = build(
+            8,
+            8,
+            Some(palette(4)),
+            vec![
+                (
+                    0,
+                    0,
+                    8,
+                    8,
+                    (0..64).map(|i| (i % 3) as u8).collect(),
+                    DisposalMethod::Keep,
+                    5,
+                    None,
+                    None,
+                ),
+                (
+                    0,
+                    0,
+                    8,
+                    8,
+                    (0..64).map(|i| (i % 4) as u8).collect(),
+                    DisposalMethod::Keep,
+                    5,
+                    None,
+                    None,
+                ),
+            ],
+            true,
+        );
+        let e = streaming(&interlaced, &PREPARED, false).unwrap_err();
+        assert!(is_unsupported(&e));
+        let (a, sa) = streaming(&interlaced, &PREPARED, true).unwrap();
+        assert!(sa.full_decoder);
+        let mut b = Vec::new();
+        recode_gif(&interlaced[..], &mut b, &PREPARED).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(play_slim(&a, 9).unwrap(), play_gif(&interlaced).0);
+    }
+
+    #[test]
+    fn the_loop_count_is_read_like_the_gif_crate() {
+        for repeat in [Repeat::Infinite, Repeat::Finite(3), Repeat::Finite(0)] {
+            let mut out = Vec::new();
+            {
+                let mut enc = Encoder::new(&mut out, 4, 4, &palette(4)).unwrap();
+                enc.set_repeat(repeat).unwrap();
+                let f = Frame {
+                    width: 4,
+                    height: 4,
+                    buffer: Cow::Owned(vec![1u8; 16]),
+                    ..Default::default()
+                };
+                enc.write_frame(&f).unwrap();
+            }
+            let mut s = GifSlim::new(&out[..]).unwrap();
+            s.next_frame(&mut Canvas::new()).unwrap();
+            let d = gif::DecodeOptions::new().read_info(&out[..]).unwrap();
+            assert_eq!(s.repeat(), d.repeat());
+            assert_eq!(s.repeat(), repeat);
+            let (re, _) = recode(&out, 9, true);
+            assert_eq!(
+                gif::DecodeOptions::new()
+                    .read_info(&re[..])
+                    .unwrap()
+                    .repeat(),
+                repeat
+            );
+        }
+    }
+
+    #[test]
+    fn the_prepared_format_is_hinted_at_cap_9() {
+        let (re, _) = streaming(&animation(128, 32, 5), &PREPARED, false).unwrap();
+        let s = GifSlim::new(&re[..]).unwrap();
+        assert_eq!(
+            s.hint(),
+            Some(Hint {
+                cap: 9,
+                delta: true
+            })
+        );
+        assert_eq!(s.cap(), 9);
+        // ~16 KB with the canvas: tables for 9-bit codes only.
+        assert_eq!(
+            s.heap_bytes(),
+            READ_BUF + 512 * 2 + 512 + 128 + s.global.len()
+        );
+    }
+
+    #[test]
+    fn a_stop_from_between_abandons_the_encode() {
+        let g = animation(128, 32, 2);
+        let mut n = 0;
+        let e = recode_gif_streaming(
+            Cursor::new(&g[..]),
+            Vec::new(),
+            &PREPARED,
+            || true,
+            || {
+                n += 1;
+                if n > 5 {
+                    Err(io::Error::other("stopped"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(e.to_string(), "stopped");
     }
 }

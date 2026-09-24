@@ -136,7 +136,7 @@ pub trait ReadSeek: Read + Seek {}
 
 impl<T: Read + Seek + ?Sized> ReadSeek for T {}
 
-/// Where GIF (or ODM) bytes come from. The firmware implements this over
+/// Where GIF bytes come from. The firmware implements this over
 /// `/sdcard`, the simulator over a directory. What `open` returns is sniffed
 /// by [`FrameSource`], not judged by its extension. Manifest paths are
 /// card-absolute (`/gifs/Consoles/X.gif`); joining them onto a root is the
@@ -148,10 +148,19 @@ pub trait Source {
 /// What the engine plays: a decoder over whatever the source opened.
 type Stream = FrameSource<Box<dyn ReadSeek>>;
 
-/// What `gif`'s decoder will still allocate before its first frame is on
-/// the canvas (a transition's gate has to leave room for it).
+/// A GIF gifslim could not play went to the `gif` crate: say so once (a
+/// loop reopens it with the crate directly, see `restart_current`).
+fn note_fallback(playing: &mut Playing) {
+    if let Some(why) = playing.gif.take_fallback() {
+        log::info!("{}: {why}; playing it with the gif crate", playing.path);
+    }
+}
+
+/// What the decoder will still allocate before its first frame is on the
+/// canvas (a transition's gate has to leave room for it): the `gif` crate's
+/// LZW state. gifslim allocates everything when it opens, and a virtual
+/// file nothing.
 fn first_frame_heap(gif: &Stream) -> usize {
-    // (A virtual file allocates nothing.)
     if gif.kind() == "gif" && gif.frames_decoded() == 0 {
         crate::compositor::GIF_FIRST_FRAME_BYTES
     } else {
@@ -609,7 +618,7 @@ impl Engine {
     /// [`Entry::from_path`], exactly as if a manifest had named it.
     ///
     /// Errors: the open failed (the current GIF is untouched), or the file
-    /// opened but is neither a GIF nor an ODM file (the current GIF is gone
+    /// opened but is not a GIF (the current GIF is gone
     /// and the scheduler picks the next entry at the next tick).
     pub fn play_now(&mut self, path: &str, now: Duration) -> io::Result<()> {
         self.play_now_with(path, now, None)
@@ -782,7 +791,9 @@ impl Engine {
                 self.compositor
                     .begin(canvas, first_frame_heap(&playing.gif));
             }
-            let frame = match playing.gif.next_frame(canvas) {
+            let frame = playing.gif.next_frame_gated(canvas, self.compositor.gate());
+            note_fallback(playing);
+            let frame = match frame {
                 Ok(f) => f,
                 Err(e) => {
                     log::warn!("decode failed for {}: {e}", playing.path);
@@ -882,7 +893,9 @@ impl Engine {
                 self.compositor
                     .begin(canvas, first_frame_heap(&playing.gif));
             }
-            match playing.gif.next_frame(canvas)? {
+            let frame = playing.gif.next_frame_gated(canvas, self.compositor.gate());
+            note_fallback(playing);
+            match frame? {
                 Some(delay) => {
                     playing.first_frame = false;
                     playing.advance(delay);
@@ -937,11 +950,19 @@ impl Engine {
             frame_at,
             frame_delay,
         } = playing;
-        let mut reader = gif.into_inner();
-        match reader
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| Stream::open(reader))
-        {
+        // A file that fell back to the `gif` crate loops with it directly.
+        let full = gif.kind() == "gif";
+        let Some(mut reader) = gif.into_inner() else {
+            log::warn!("rewind failed for {path}: the file was lost in a fallback");
+            return false;
+        };
+        match reader.seek(SeekFrom::Start(0)).and_then(|_| {
+            if full {
+                Stream::open_full(reader)
+            } else {
+                Stream::open(reader)
+            }
+        }) {
             Ok(gif) => {
                 self.current = Some(Playing {
                     index,
@@ -1200,9 +1221,14 @@ mod tests {
     }
 
     #[test]
-    fn odm_entries_play_through_the_same_engine() {
-        let mut odm = Vec::new();
-        crate::odm::encode_gif(&one_pixel_gif(0, 0, 255)[..], &mut odm).unwrap();
+    fn prepared_copies_play_through_the_same_engine() {
+        let mut copy = Vec::new();
+        crate::gifslim::recode_gif(
+            &one_pixel_gif(0, 0, 255)[..],
+            &mut copy,
+            &crate::gifslim::PREPARED,
+        )
+        .unwrap();
         let dwell = DwellPolicy {
             min: Duration::ZERO,
             max: Duration::from_secs(30),
@@ -1210,10 +1236,10 @@ mod tests {
         };
         let mut e = engine_with(
             &[
-                ("/gifs/Consoles/NES_A_01.odm", odm),
+                ("/cache/Consoles/6c/NES_A_01.gif", copy),
                 ("/gifs/Consoles/NES_B_01.gif", one_pixel_gif(0, 255, 0)),
             ],
-            "/gifs/Consoles/NES_A_01.odm\n/gifs/Consoles/NES_B_01.gif",
+            "/cache/Consoles/6c/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
             dwell,
         );
         let mut canvas = Canvas::new();
@@ -1306,11 +1332,12 @@ mod tests {
 
     #[test]
     fn looping_rewinds_instead_of_reopening() {
-        let mut odm = Vec::new();
-        crate::odm::encode_gif(&two_frame_gif()[..], &mut odm).unwrap();
+        let mut copy = Vec::new();
+        crate::gifslim::recode_gif(&two_frame_gif()[..], &mut copy, &crate::gifslim::PREPARED)
+            .unwrap();
         for (path, bytes) in [
             ("/gifs/Consoles/NES_A_01.gif", two_frame_gif()),
-            ("/gifs/Consoles/NES_A_01.odm", odm),
+            ("/cache/Consoles/6c/NES_A_01.gif", copy),
         ] {
             let opens = std::rc::Rc::new(std::cell::Cell::new(0));
             let cat = catalog(path, &Filter::new());
@@ -1377,11 +1404,12 @@ mod tests {
         const GREEN: Rgb = Rgb::new(0, 255, 0);
         const BLUE: Rgb = Rgb::new(0, 0, 255);
         let file = "/gifs/Consoles/NES_Three_01.gif";
-        let mut odm = Vec::new();
-        crate::odm::encode_gif(&three_frame_gif()[..], &mut odm).unwrap();
+        let mut copy = Vec::new();
+        crate::gifslim::recode_gif(&three_frame_gif()[..], &mut copy, &crate::gifslim::PREPARED)
+            .unwrap();
         for (path, bytes) in [
             (file, three_frame_gif()),
-            ("/gifs/Consoles/NES_Three_01.odm", odm),
+            ("/cache/Consoles/00/NES_Three_01.gif", copy),
         ] {
             let mut e = engine_with(&[(path, bytes)], path, DwellPolicy::default());
             let mut canvas = Canvas::new();

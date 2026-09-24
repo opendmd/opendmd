@@ -20,6 +20,7 @@
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, toast, debounce } from './util.js';
+import { art as artModule } from './artmod.js';
 
 const PLATFORMS = ['MD', 'SNES', 'GB', 'GBC', 'GBA', 'SATURN', 'NDS', 'NES', 'SMS', 'PCE', 'PS1', 'N64', 'ARCADE'];
 const RAW = 'https://raw.githubusercontent.com/libretro-thumbnails/';
@@ -35,9 +36,7 @@ let sheet = null; // the one Studio, built on first open
 // file names, save(category, name, bytes) -> path, saved(category, paths)}.
 export async function open(o) {
   if (!art) {
-    const [m] = await Promise.all([import('../pkg-art/opendmd_art_web.js'), css()]);
-    await m.default();
-    art = m;
+    [art] = await Promise.all([artModule(), css()]);
   }
   sheet ??= build();
   sheet.open(o);

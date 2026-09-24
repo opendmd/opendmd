@@ -15,9 +15,10 @@ up to three times.
     uv run tools/card-sync.py <host> opendmd-web/www [--prefix /www] [--dry-run]
 
 Or a list of card-absolute paths, each read from the same path under a local
-copy of the card — how converted `.odm` files get onto a card:
+copy of the card — how prepared copies (`opendmd-pack convert`'s
+`cache/…` files) get onto a card:
 
-    uv run tools/card-sync.py <host> --from ~/scratch/dmdos-card --paths odm.txt
+    uv run tools/card-sync.py <host> --from ~/scratch/dmdos-card --paths copies.txt
 
 The list may be a manifest: blank lines are skipped. Paths are percent-encoded
 (the card has `/gifs/NEW 2021/`).

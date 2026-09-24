@@ -884,9 +884,11 @@ fn main() -> Result<()> {
                     };
                     current_prepared = match served {
                         Some(sd::Served::Prepared { .. }) => true,
-                        Some(sd::Served::Direct) => {
-                            playing.path.to_ascii_lowercase().ends_with(".odm")
-                        }
+                        // A playlist line naming a copy under `cache/`.
+                        Some(sd::Served::Direct) => matches!(
+                            opendmd_core::layout::classify(&playing.path),
+                            opendmd_core::layout::Prepared::Direct
+                        ),
                         _ => false,
                     };
                     deferred.push(Deferred::Started {
@@ -1872,18 +1874,28 @@ fn try_mount(bus: &mut SdBus) -> std::result::Result<SdCard, String> {
 /// that no longer opens is forgotten, and an obsolete one is pointed out.
 fn card_mounted_checks(settings: &mut Settings, nvs: &mut Config) {
     heal_missing_set(settings, nvs);
-    // Prepared copies are found per GIF now; a playlist of `/odm/...` paths
-    // from before that is dead weight. Say so once, and never play it.
+    // Prepared copies are found per GIF now; a playlist of paths into the
+    // retired format's tree from before that is dead weight. Say so once,
+    // and never play it.
     if File::open(format!(
         "{}/{}",
         config::SD_MOUNT,
-        config::OBSOLETE_ODM_MANIFEST
+        config::OBSOLETE_MANIFEST
     ))
     .is_ok()
     {
         log::warn!(
             "ignoring /{}: prepared copies are found automatically from /filelist.txt; it can be deleted",
-            config::OBSOLETE_ODM_MANIFEST
+            config::OBSOLETE_MANIFEST
+        );
+    }
+    // The retired pre-rendered format's copies: never read (prepared copies
+    // are GIFs under cache/ now). One `stat` of the card root's entry.
+    if std::fs::metadata(config::LEGACY_ROOT).is_ok() {
+        log::warn!(
+            "ignoring {}/: the old prepared-copy tree is not used any more; \
+             DELETE /api/files/odm?recursive=1 removes it",
+            config::LEGACY_ROOT.trim_start_matches(config::SD_MOUNT)
         );
     }
 }

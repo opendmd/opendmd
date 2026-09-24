@@ -74,6 +74,8 @@ pub struct GifSource<R: Read> {
     /// Disposal owed by the frame already on screen, with its rectangle.
     pending: Option<(DisposalMethod, Rect)>,
     frames_decoded: u64,
+    /// The last frame's delay as written (hundredths).
+    raw_delay: u16,
 }
 
 /// Where the RGB logical screen lives.
@@ -137,7 +139,24 @@ impl<R: Read> GifSource<R> {
             saved: Vec::new(),
             pending: None,
             frames_decoded: 0,
+            raw_delay: 0,
         })
+    }
+
+    /// The last frame's delay as written in the file, in hundredths (before
+    /// the player's 0 -> 100 ms and 20 ms-floor rules).
+    pub fn raw_delay(&self) -> u16 {
+        self.raw_delay
+    }
+
+    /// The NETSCAPE loop count (the crate's `Decoder::repeat`).
+    pub fn repeat(&self) -> gif::Repeat {
+        self.decoder.repeat()
+    }
+
+    /// The reader, with the decoder (and its buffer) dropped.
+    pub fn into_inner(self) -> R {
+        self.decoder.into_inner().into_inner()
     }
 
     /// The GIF's declared logical screen size, which may not be 128x32.
@@ -153,8 +172,8 @@ impl<R: Read> GifSource<R> {
     /// The RGB logical screen (`width * height * 3` bytes, row-major) as of
     /// the last frame handed out, before `blit` centre-crops it onto the
     /// canvas. At the panel size that is the caller's `canvas` itself, so it
-    /// must be the one passed to [`next_frame`](Self::next_frame). The ODM
-    /// encoder reads frames through this so a stray keeps its own size.
+    /// must be the one passed to [`next_frame`](Self::next_frame). The
+    /// recoder reads frames through this so a stray keeps its own size.
     pub fn screen<'a>(&'a self, canvas: &'a Canvas) -> &'a [u8] {
         match &self.screen {
             Screen::Direct { .. } => canvas.as_bytes(),
@@ -174,6 +193,7 @@ impl<R: Read> GifSource<R> {
             saved,
             pending,
             frames_decoded,
+            raw_delay,
         } = self;
         let (width, height) = (*width, *height);
 
@@ -307,6 +327,7 @@ impl<R: Read> GifSource<R> {
 
         *pending = Some((dispose, rect));
         *frames_decoded += 1;
+        *raw_delay = delay;
 
         // `Direct` composited into the canvas already; at the panel size
         // centre-and-crop is the identity, so there is nothing to blit.
@@ -506,106 +527,227 @@ impl Iterator for InterlaceRows {
     }
 }
 
-/// A reader whose first four bytes were read to sniff the format and are
-/// handed back in front of the rest. A 4-byte array and a flag; no heap.
-pub type Sniffed<R> = io::Chain<io::Cursor<[u8; 4]>, R>;
-
-/// Either kind of playable file, chosen by its first four bytes: `GIF8` is a
-/// GIF, `ODM1` is a pre-rendered [`OdmSource`](crate::odm::OdmSource), and
-/// `ODMV` a virtual file drawn by [`SynthSource`](crate::synth::SynthSource)
-/// (only ever produced in memory by [`crate::synth::open`]).
+/// A playable file, chosen by its first four bytes: `GIF8` is a GIF, played
+/// by [`GifSlim`](crate::gifslim::GifSlim) — at the cap its `OPENDMD1LZW`
+/// hint names (a prepared copy: 9, ~16 KB of heap with the canvas), else
+/// at 12 (~27 KB) — and `SYNV` a virtual file drawn by
+/// [`SynthSource`](crate::synth::SynthSource) (only ever produced in memory
+/// by [`crate::synth::open`]).
 ///
-/// An enum rather than a `Box<dyn …>`: it needs no allocation per opened file
-/// (a trait object would be one more heap block on every open and every
-/// loop), dispatch is a two-way `match` per frame instead of a vtable call,
-/// and both variants are already the size they are inside the engine's
-/// `Playing` — the enum only adds its tag. Extension-free on purpose: a
-/// renamed file still plays, and the sniff is what decides.
-// The GIF variant is ~520 B inline against ODM's ~130 B, but boxing it would
-// add a heap block per open to save stack/struct space the engine's `Playing`
-// already spent before ODM existed — `large_enum_variant` is the wrong trade.
-#[allow(clippy::large_enum_variant)]
-pub enum FrameSource<R: Read> {
-    Gif(GifSource<Sniffed<R>>),
-    Odm(crate::odm::OdmSource<Sniffed<R>>),
-    /// A virtual file ([`crate::synth`]): a title card or the power-on
-    /// effect, drawn rather than decoded.
-    Synth(crate::synth::SynthSource<Sniffed<R>>),
+/// **The fallback.** A GIF gifslim does not decode — interlaced frames,
+/// `Previous` disposal (`Unsupported`), or a code wider than the cap
+/// (`NeedsFullDecoder`: a hinted file some tool re-encoded) — is played by
+/// the `gif` crate's [`GifSource`] (~54 KB) instead: the reader is rewound,
+/// gifslim is dropped *before* the crate's decoder is built (never two at
+/// once), and the frames already shown are decoded again onto the canvas,
+/// so the file carries on from the frame that failed. Why is kept for the
+/// caller ([`take_fallback`](Self::take_fallback): the engine logs it once
+/// per file) and a rewound loop opens the file with the crate directly
+/// ([`open_full`](Self::open_full)).
+///
+/// No allocation per opened file beyond the decoder's own, and the sniff is
+/// what decides, not the extension: the first four bytes are read and the
+/// reader is rewound, so every decoder sees the whole file (and the device
+/// has one instantiation of each decoder, shared with its cache builder).
+pub struct FrameSource<R: Read> {
+    dec: Dec<R>,
+    fallback: Option<String>,
 }
 
-impl<R: Read> FrameSource<R> {
-    /// Read the first four bytes and open the matching decoder over the whole
-    /// stream. Anything else — including a file shorter than four bytes — is
+// The GIF variants are ~520 B inline against the others' ~150 B, but
+// boxing them would add a heap block per open: `large_enum_variant` is the
+// wrong trade here.
+#[allow(clippy::large_enum_variant)]
+enum Dec<R: Read> {
+    Slim(crate::gifslim::GifSlim<R>),
+    Gif(GifSource<R>),
+    /// A virtual file ([`crate::synth`]): a title card or the power-on
+    /// effect, drawn rather than decoded.
+    Synth(crate::synth::SynthSource<R>),
+    /// A fallback that failed half-way: the reader is gone.
+    Gone,
+}
+
+impl<R: Read + io::Seek> FrameSource<R> {
+    /// Read the first four bytes, rewind, and open the matching decoder over
+    /// the whole stream. Anything else — including a file shorter than four bytes — is
     /// `InvalidData`.
-    pub fn open(mut reader: R) -> io::Result<Self> {
+    pub fn open(reader: R) -> io::Result<Self> {
+        Self::open_with(reader, false)
+    }
+
+    /// [`open`](Self::open), but a GIF goes straight to the `gif` crate: a
+    /// file that fell back once, looped.
+    pub fn open_full(reader: R) -> io::Result<Self> {
+        Self::open_with(reader, true)
+    }
+
+    fn open_with(mut reader: R, full: bool) -> io::Result<Self> {
         let mut magic = [0u8; 4];
         reader.read_exact(&mut magic).map_err(|e| {
             if e.kind() == io::ErrorKind::UnexpectedEof {
-                invalid("file is too short to be a GIF or an ODM")
+                invalid("file is too short to be a GIF")
             } else {
                 e
             }
         })?;
-        let stream = io::Cursor::new(magic).chain(reader);
-        match &magic {
-            b"GIF8" => Ok(FrameSource::Gif(GifSource::new(stream)?)),
-            m if *m == crate::odm::MAGIC => {
-                Ok(FrameSource::Odm(crate::odm::OdmSource::new(stream)?))
+        reader.seek(io::SeekFrom::Start(0))?;
+        let stream = reader;
+        let dec = match &magic {
+            b"GIF8" if full => Dec::Gif(GifSource::new(stream)?),
+            b"GIF8" => Dec::Slim(crate::gifslim::GifSlim::new(stream)?),
+            m if *m == crate::synth::MAGIC => Dec::Synth(crate::synth::SynthSource::new(stream)?),
+            _ => {
+                return Err(invalid(format!(
+                    "not a GIF file (starts with {magic:02x?})"
+                )))
             }
-            m if *m == crate::synth::MAGIC => {
-                Ok(FrameSource::Synth(crate::synth::SynthSource::new(stream)?))
-            }
-            _ => Err(invalid(format!(
-                "not a GIF or an ODM file (starts with {magic:02x?})"
-            ))),
-        }
+        };
+        Ok(FrameSource {
+            dec,
+            fallback: None,
+        })
     }
 
     /// Give the underlying reader back, dropping the decoder (and with it the
-    /// GIF path's LZW state and buffers) first. Whatever the decoders had
-    /// buffered is discarded, so the reader's position is somewhere past the
-    /// last byte decoded: seek it before reusing it. This is how the engine
-    /// loops a file without opening it again.
-    pub fn into_inner(self) -> R {
-        match self {
-            FrameSource::Gif(s) => s.decoder.into_inner().into_inner().into_inner().1,
-            FrameSource::Odm(s) => s.into_inner().into_inner().1,
-            FrameSource::Synth(s) => s.into_inner().into_inner().1,
-        }
+    /// LZW state and buffers) first. Whatever the decoders had buffered is
+    /// discarded, so the reader's position is somewhere past the last byte
+    /// decoded: seek it before reusing it. This is how the engine loops a
+    /// file without opening it again. `None` only after a fallback that
+    /// failed (the reader went with it).
+    pub fn into_inner(self) -> Option<R> {
+        Some(match self.dec {
+            Dec::Slim(s) => s.into_inner(),
+            Dec::Gif(s) => s.into_inner(),
+            Dec::Synth(s) => s.into_inner(),
+            Dec::Gone => return None,
+        })
     }
 
-    /// `"gif"`, `"odm"` or `"synth"`, for logs and tools.
+    /// `"slim"` (gifslim), `"gif"` (the `gif` crate) or `"synth"`, for logs
+    /// and tools.
     pub fn kind(&self) -> &'static str {
-        match self {
-            FrameSource::Gif(_) => "gif",
-            FrameSource::Odm(_) => "odm",
-            FrameSource::Synth(_) => "synth",
+        match self.dec {
+            Dec::Slim(_) => "slim",
+            Dec::Gif(_) => "gif",
+            Dec::Synth(_) => "synth",
+            Dec::Gone => "gone",
         }
     }
 
-    /// See [`GifSource::next_frame`]; the contract is the same for both.
-    pub fn next_frame(&mut self, canvas: &mut Canvas) -> io::Result<Option<Duration>> {
-        match self {
-            FrameSource::Gif(s) => s.next_frame(canvas),
-            FrameSource::Odm(s) => s.next_frame(canvas),
-            FrameSource::Synth(s) => s.next_frame(canvas),
+    /// The cap gifslim plays this file at (`None` for the other decoders).
+    pub fn cap(&self) -> Option<u8> {
+        match &self.dec {
+            Dec::Slim(s) => Some(s.cap()),
+            _ => None,
         }
+    }
+
+    /// Why the last [`next_frame`](Self::next_frame) gave gifslim up for
+    /// the `gif` crate, once.
+    pub fn take_fallback(&mut self) -> Option<String> {
+        self.fallback.take()
     }
 
     pub fn logical_size(&self) -> (usize, usize) {
-        match self {
-            FrameSource::Gif(s) => s.logical_size(),
-            FrameSource::Odm(s) => s.logical_size(),
-            FrameSource::Synth(s) => s.logical_size(),
+        match &self.dec {
+            Dec::Slim(s) => s.logical_size(),
+            Dec::Gif(s) => s.logical_size(),
+            Dec::Synth(s) => s.logical_size(),
+            Dec::Gone => (0, 0),
         }
     }
 
     pub fn frames_decoded(&self) -> u64 {
-        match self {
-            FrameSource::Gif(s) => s.frames_decoded(),
-            FrameSource::Odm(s) => s.frames_decoded(),
-            FrameSource::Synth(s) => s.frames_decoded(),
+        match &self.dec {
+            Dec::Slim(s) => s.frames_decoded(),
+            Dec::Gif(s) => s.frames_decoded(),
+            Dec::Synth(s) => s.frames_decoded(),
+            Dec::Gone => 0,
         }
+    }
+}
+
+/// What the `gif` crate's [`GifSource`] allocates for a 128x32 file, all of
+/// it before its first frame: its 8 KB `BufReader`, `weezl`'s LZW state
+/// (28,784 B, in pieces up to 16 KB) and the 4 KB indexed frame buffer (see
+/// "GIF heap budget" in CLAUDE.md). What a fallback asks its
+/// [`Gate`](crate::compositor::Gate) for, after gifslim's tables are gone.
+pub const GIF_CRATE_BYTES: usize = 42 * 1024;
+
+impl<R: Read + io::Seek> FrameSource<R> {
+    /// See [`GifSource::next_frame`]; the contract is the same for every
+    /// decoder. A GIF gifslim cannot finish falls back to the `gif` crate
+    /// here (see the type's docs) and this frame comes from it, with no
+    /// question asked about heap: [`next_frame_gated`](Self::next_frame_gated)
+    /// is what the engine uses.
+    pub fn next_frame(&mut self, canvas: &mut Canvas) -> io::Result<Option<Duration>> {
+        self.next_frame_gated(canvas, None)
+    }
+
+    /// [`next_frame`](Self::next_frame), but a fallback first asks `gate`
+    /// whether [`GIF_CRATE_BYTES`] may be allocated (gifslim's tables are
+    /// already freed when it asks). Refused, the frame is an error naming
+    /// both reasons and the file is gone (`kind()` is `"gone"`,
+    /// `into_inner` is `None`): the engine skips it, as it would any file
+    /// that fails to decode, instead of the allocation aborting the device.
+    /// The firmware's gate is the compositor's, which keeps its heap reserve.
+    pub fn next_frame_gated(
+        &mut self,
+        canvas: &mut Canvas,
+        gate: Option<crate::compositor::Gate>,
+    ) -> io::Result<Option<Duration>> {
+        match &mut self.dec {
+            Dec::Slim(s) => match s.next_frame(canvas) {
+                Err(e)
+                    if crate::gifslim::is_unsupported(&e)
+                        || crate::gifslim::is_needs_full_decoder(&e) =>
+                {
+                    self.fall_back(canvas, e, gate)
+                }
+                r => r,
+            },
+            Dec::Gif(s) => s.next_frame(canvas),
+            Dec::Synth(s) => s.next_frame(canvas),
+            Dec::Gone => Err(invalid("the file could not be reopened")),
+        }
+    }
+
+    fn fall_back(
+        &mut self,
+        canvas: &mut Canvas,
+        why: io::Error,
+        gate: Option<crate::compositor::Gate>,
+    ) -> io::Result<Option<Duration>> {
+        let Dec::Slim(s) = std::mem::replace(&mut self.dec, Dec::Gone) else {
+            unreachable!("only gifslim falls back");
+        };
+        let (done, cap) = (s.frames_decoded(), s.cap());
+        // gifslim's tables go before the crate's decoder is built.
+        let mut reader = s.into_inner();
+        if gate.is_some_and(|allow| !allow(GIF_CRATE_BYTES)) {
+            let why = why
+                .get_ref()
+                .map_or_else(|| why.to_string(), |e| e.to_string());
+            return Err(invalid(format!(
+                "{why} at frame {done} (gifslim cap {cap}), and the {} KB the gif crate needs is not free",
+                GIF_CRATE_BYTES / 1024
+            )));
+        }
+        reader.seek(io::SeekFrom::Start(0))?;
+        let mut g = GifSource::new(reader)?;
+        for _ in 0..done {
+            if g.next_frame(canvas)?.is_none() {
+                return Err(invalid("the gif decoder found fewer frames"));
+            }
+        }
+        let delay = g.next_frame(canvas);
+        self.dec = Dec::Gif(g);
+        let why = why
+            .get_ref()
+            .map_or_else(|| why.to_string(), |e| e.to_string());
+        self.fallback = Some(format!("{why} at frame {done} (gifslim cap {cap})"));
+        delay
     }
 }
 
@@ -1126,5 +1268,167 @@ mod tests {
             InterlaceRows::new(17).collect::<Vec<_>>(),
             vec![0, 8, 16, 4, 12, 2, 6, 10, 14, 1, 3, 5, 7, 9, 11, 13, 15]
         );
+    }
+
+    /// Frames of a noisy 128x32 animation, whole-screen, a local palette of
+    /// 64 colours each, the given disposal and interlacing per frame.
+    fn noisy_gif(frames: &[(DisposalMethod, bool)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut out, 128, 32, &[]).unwrap();
+            enc.set_repeat(Repeat::Infinite).unwrap();
+            let mut x = 0x9E37_79B9u32;
+            for (k, &(dispose, interlaced)) in frames.iter().enumerate() {
+                let pixels: Vec<u8> = (0..4096)
+                    .map(|_| {
+                        x ^= x << 13;
+                        x ^= x >> 17;
+                        x ^= x << 5;
+                        (x % 64) as u8
+                    })
+                    .collect();
+                let pal: Vec<u8> = (0..64u32)
+                    .flat_map(|i| {
+                        [
+                            (i * 4) as u8,
+                            (k as u32 * 40 + i) as u8,
+                            (255 - i * 3) as u8,
+                        ]
+                    })
+                    .collect();
+                let f = Frame {
+                    width: 128,
+                    height: 32,
+                    buffer: Cow::Owned(pixels),
+                    palette: Some(pal),
+                    transparent: Some(0),
+                    dispose,
+                    interlaced,
+                    delay: 4,
+                    ..Default::default()
+                };
+                enc.write_frame(&f).unwrap();
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_refused_fallback_gives_the_file_up_instead_of_allocating() {
+        // An interlaced first frame: gifslim gives up before any pixel.
+        let bytes = noisy_gif(&[(DisposalMethod::Keep, true)]);
+        let mut f = FrameSource::open(std::io::Cursor::new(bytes)).unwrap();
+        let mut canvas = Canvas::new();
+        let err = f
+            .next_frame_gated(&mut canvas, Some(|_| false))
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("gif crate needs is not free"),
+            "{err}"
+        );
+        assert_eq!(f.kind(), "gone");
+        assert!(f.take_fallback().is_none());
+        assert!(f.into_inner().is_none());
+
+        // The same file with a gate that agrees plays as the crate does.
+        let bytes = noisy_gif(&[(DisposalMethod::Keep, true)]);
+        let mut f = FrameSource::open(std::io::Cursor::new(bytes.clone())).unwrap();
+        let mut g = GifSource::new(&bytes[..]).unwrap();
+        let (mut cf, mut cg) = (Canvas::new(), Canvas::new());
+        let allow: crate::compositor::Gate = |need| need == GIF_CRATE_BYTES;
+        assert_eq!(
+            f.next_frame_gated(&mut cf, Some(allow)).unwrap(),
+            g.next_frame(&mut cg).unwrap()
+        );
+        assert_eq!(f.kind(), "gif");
+        assert_eq!(cf.as_bytes(), cg.as_bytes());
+    }
+
+    /// Play `bytes` through FrameSource and GifSource side by side: every
+    /// canvas and delay equal, every changed pixel marked. Returns the
+    /// FrameSource's kind at the end and its fallback note.
+    fn plays_like_the_crate(bytes: &[u8]) -> (&'static str, Option<String>) {
+        let mut f = FrameSource::open(std::io::Cursor::new(bytes.to_vec())).unwrap();
+        assert_eq!(f.kind(), "slim");
+        let mut g = GifSource::new(bytes).unwrap();
+        let (mut cf, mut cg) = (Canvas::new(), Canvas::new());
+        let mut note = None;
+        loop {
+            let before = cf.as_bytes().to_vec();
+            cf.dirty_mut().clear();
+            let df = f.next_frame(&mut cf).unwrap();
+            note = note.or(f.take_fallback());
+            assert_eq!(df, g.next_frame(&mut cg).unwrap());
+            if df.is_none() {
+                break;
+            }
+            assert_eq!(cf.as_bytes(), cg.as_bytes());
+            for y in 0..HEIGHT {
+                for x in 0..WIDTH {
+                    let o = (y * WIDTH + x) * 3;
+                    if before[o..o + 3] != cf.as_bytes()[o..o + 3] {
+                        assert!(cf.dirty().is_dirty(x, y));
+                    }
+                }
+            }
+        }
+        assert!(f.take_fallback().is_none(), "the note is handed out once");
+        (f.kind(), note)
+    }
+
+    #[test]
+    fn a_plain_gif_plays_through_gifslim() {
+        let g = noisy_gif(&[(DisposalMethod::Keep, false); 4]);
+        assert_eq!(plays_like_the_crate(&g), ("slim", None));
+    }
+
+    #[test]
+    fn interlacing_and_previous_fall_back_to_the_gif_crate_mid_file() {
+        let g = noisy_gif(&[
+            (DisposalMethod::Keep, false),
+            (DisposalMethod::Keep, false),
+            (DisposalMethod::Keep, true),
+            (DisposalMethod::Keep, false),
+        ]);
+        let (kind, note) = plays_like_the_crate(&g);
+        assert_eq!(kind, "gif");
+        assert!(note.unwrap().contains("at frame 2"));
+        let g = noisy_gif(&[
+            (DisposalMethod::Keep, false),
+            (DisposalMethod::Previous, false),
+            (DisposalMethod::Keep, false),
+        ]);
+        let (kind, note) = plays_like_the_crate(&g);
+        assert_eq!(kind, "gif");
+        assert!(note.unwrap().contains("Previous"));
+    }
+
+    #[test]
+    fn a_hint_that_lies_falls_back_on_the_first_wide_code() {
+        // Recoded at cap 12 (codes up to 12 bits), then the hint rewritten
+        // to claim 9 — what a tool that keeps the block but re-encodes does.
+        let orig = noisy_gif(&[(DisposalMethod::Keep, false); 3]);
+        let mut re = Vec::new();
+        let opts = crate::gifslim::RecodeOptions {
+            cap: 12,
+            ..crate::gifslim::PREPARED
+        };
+        crate::gifslim::recode_gif(&orig[..], &mut re, &opts).unwrap();
+        let at = re
+            .windows(11)
+            .position(|w| w == crate::gifslim::HINT_APP_ID)
+            .unwrap();
+        assert_eq!(re[at + 12..at + 14], [1, 12]);
+        re[at + 13] = 9;
+        assert_eq!(
+            FrameSource::open(std::io::Cursor::new(re.clone()))
+                .unwrap()
+                .cap(),
+            Some(9)
+        );
+        let (kind, note) = plays_like_the_crate(&re);
+        assert_eq!(kind, "gif");
+        assert!(note.unwrap().contains("needs the full decoder"));
     }
 }

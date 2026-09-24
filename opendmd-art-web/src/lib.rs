@@ -4,8 +4,12 @@
 //! the Studio opens (`www/pkg-art/`), so the app everyone loads does not
 //! grow. The split is the web crate's: [`pipeline`] and [`encode`] hold no
 //! browser types and are tested natively and under node; this file only
-//! converts. Parsing the saved name and preparing the copy are the main
-//! module's `parsePath` and `encodeGif`, as for any added GIF.
+//! converts. Parsing the saved name is the main module's `parsePath`.
+//!
+//! It also carries [`prepare_gif`] (`prepareGif`), the prepared copy of any
+//! GIF — the core's recoder, byte-identical to `opendmd-pack` and the
+//! device — for the prepare job, Add GIFs and the Studio's save: ~10 KB gz
+//! the main module has no room for, loaded only when something is prepared.
 
 pub mod encode;
 pub mod pipeline;
@@ -156,4 +160,32 @@ pub fn clean_game_name(name: &str) -> String {
 #[wasm_bindgen(js_name = consoleName)]
 pub fn console_name(platform: &str) -> String {
     opendmd_core::follow::console_name(platform).into()
+}
+
+/// GIF bytes -> its prepared copy with the core's recoder in the prepared
+/// format (the one `opendmd-pack` and the device run, so the output is
+/// byte-identical). Returns `{copy: Uint8Array, stats: {width, height,
+/// frames, colours, quantised, gif_bytes, out_bytes}}`; throws on a GIF the
+/// player could not play either.
+#[wasm_bindgen(js_name = prepareGif)]
+pub fn prepare_gif(gif: &[u8]) -> Result<JsValue, JsError> {
+    use js_sys::{Object, Reflect, Uint8Array};
+    use opendmd_core::gifslim::{recode_gif, PREPARED};
+    let mut out = Vec::with_capacity(gif.len());
+    let s = recode_gif(gif, &mut out, &PREPARED).map_err(|e| JsError::new(&e.to_string()))?;
+    let set = |o: &Object, k: &str, v: JsValue| {
+        let _ = Reflect::set(o, &JsValue::from_str(k), &v);
+    };
+    let stats = Object::new();
+    set(&stats, "width", (s.width as u32).into());
+    set(&stats, "height", (s.height as u32).into());
+    set(&stats, "frames", s.frames.into());
+    set(&stats, "colours", (s.colours as u32).into());
+    set(&stats, "quantised", s.quantised.into());
+    set(&stats, "gif_bytes", (s.gif_bytes as f64).into());
+    set(&stats, "out_bytes", (s.out_bytes as f64).into());
+    let o = Object::new();
+    set(&o, "copy", Uint8Array::from(&out[..]).into());
+    set(&o, "stats", stats.into());
+    Ok(o.into())
 }

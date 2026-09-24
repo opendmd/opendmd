@@ -282,14 +282,15 @@ fn pause_holds_the_frame_across_a_load() {
 }
 
 #[test]
-fn an_odm_plays_like_its_gif() {
+fn a_prepared_copy_plays_like_its_gif() {
     let gif = white_pixel_gif(3);
-    let mut odm_bytes = Vec::new();
-    odm::encode_gif(&gif[..], &mut odm_bytes).unwrap();
+    let mut copy = Vec::new();
+    opendmd_core::gifslim::recode_gif(&gif[..], &mut copy, &opendmd_core::gifslim::PREPARED)
+        .unwrap();
     let mut a = Player::new(1, Look { flat: true, ..LOOK });
     let mut b = Player::new(1, Look { flat: true, ..LOOK });
     a.load("/gifs/X/A.gif", gif, ms(0));
-    b.load("/odm/X/00/A.odm", odm_bytes, ms(0));
+    b.load("/cache/X/00/A.gif", copy, ms(0));
     for t in (0..500).step_by(50) {
         assert_eq!(a.tick(ms(t)), b.tick(ms(t)));
         assert_eq!(a.rgba(), b.rgba(), "at {t} ms");
@@ -310,13 +311,14 @@ fn the_flat_renderer_blits_the_raw_canvas() {
 
 #[test]
 fn bucket_for_is_the_pack_rule() {
-    assert_eq!(bucket_for("MD_Sonic3_RattenJager.odm"), "90");
-    assert_eq!(bucket_for("SNES_Plok_08.odm"), "c0");
+    assert_eq!(bucket_for("MD_Sonic3_RattenJager.gif"), "38");
+    assert_eq!(bucket_for("SNES_Plok_08.gif"), "68");
     assert_eq!(
-        odm_path_for("/gifs/Spectrum_Slide/Exolon2.gif").as_deref(),
-        Some("/odm/Spectrum_Slide/20/Exolon2.odm")
+        cache_path_for("/gifs/Spectrum_Slide/Exolon2.gif").as_deref(),
+        Some("/cache/Spectrum_Slide/c8/Exolon2.gif")
     );
-    assert_eq!(odm_path_for("/odm/X/00/A.odm"), None);
+    assert_eq!(cache_path_for("/cache/X/00/A.gif"), None);
+    assert_eq!(cache_path_for("/gifs/X/A.png"), None);
 }
 
 #[test]
@@ -351,8 +353,8 @@ mod js {
         let e = parse_path("/gifs/Other/Nes_Gradius.gif");
         assert!(s(&e, "platform").is_null());
         assert!(s(&e, "variant").is_null());
-        // A bucketed .odm has its GIF's tags, bucket skipped.
-        let e = parse_path("/odm/NEW 2021/3a/SNES_Plok_08.odm");
+        // A prepared copy has its GIF's tags, bucket skipped.
+        let e = parse_path("/cache/NEW 2021/68/SNES_Plok_08.gif");
         assert_eq!(s(&e, "category").as_string().as_deref(), Some("NEW 2021"));
         assert_eq!(s(&e, "platform").as_string().as_deref(), Some("SNES"));
         assert_eq!(
@@ -380,20 +382,6 @@ mod js {
     }
 
     #[test]
-    fn encode_gif_matches_the_core_encoder_byte_for_byte() {
-        let gif = white_pixel_gif(3);
-        let mut want = Vec::new();
-        let stats = odm::encode_gif(&gif[..], &mut want).unwrap();
-        let got = encode_gif(&gif).unwrap();
-        let bytes = Uint8Array::from(s(&got, "odm")).to_vec();
-        assert_eq!(bytes, want);
-        let st = s(&got, "stats");
-        assert_eq!(s(&st, "frames").as_f64(), Some(stats.frames as f64));
-        assert_eq!(s(&st, "odm_bytes").as_f64(), Some(want.len() as f64));
-        assert!(encode_gif(b"GIF89a but not really").is_err());
-    }
-
-    #[test]
     fn overrides_round_trip_through_js_objects() {
         let text = "/gifs/Consoles/SNES_Plok_08.gif\tw=3\n\
                     /gifs/NEW 2021/X.gif\tnever\n\
@@ -418,20 +406,5 @@ mod js {
         set(&bad, "loops", 0);
         list.push(&bad);
         assert_eq!(render_overrides(list), text);
-    }
-
-    #[test]
-    fn odm_manifest_switches_present_lines() {
-        let present = Array::new();
-        present.push(&JsValue::from_str("/odm/Spectrum_Slide/20/Exolon2.odm"));
-        let r = odm_manifest(
-            "/gifs/Spectrum_Slide/Exolon2.gif\n/gifs/Spectrum_Slide/Abadia_Crimen.gif\n",
-            present,
-        );
-        assert_eq!(
-            s(&r, "text").as_string().as_deref(),
-            Some("/odm/Spectrum_Slide/20/Exolon2.odm\n/gifs/Spectrum_Slide/Abadia_Crimen.gif\n")
-        );
-        assert_eq!(s(&r, "switched").as_f64(), Some(1.0));
     }
 }

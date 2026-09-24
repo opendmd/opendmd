@@ -1,8 +1,9 @@
-// Preparing files for playback. A GIF's prepared copy is a pre-rendered file
-// the player plays with less memory and opens faster. The device makes them
+// Preparing files for playback. A GIF's prepared copy is a GIF re-encoded
+// so the player plays it with less memory and opens it faster. The device makes them
 // itself when idle; this is the fast path (and the only one past 256
 // colours): encoded here with the core's encoder (byte-identical to
-// opendmd-pack), uploaded to where the player looks (odmPathFor). The GIF
+// opendmd-pack; it lives in the second wasm module, js/artmod.js, loaded on
+// first use), uploaded to where the player looks (cachePathFor). The GIF
 // itself is never touched.
 //
 // `start()` prepares whatever the playlist in play is missing, one file at
@@ -16,7 +17,7 @@
 // - damaged: the encoder refused the GIF (bad LZW, truncated, not a GIF;
 //   past 256 colours is quantised, not an error). It will never work, so
 //   it is recorded and skipped from then on: `POST /api/cache/failed` where
-//   the device has it (the list is `/odm/.failed`, shared with its own cache
+//   the device has it (the list is `/cache/.failed`, shared with its own cache
 //   builder), else in this browser's storage, per device. The builder's own
 //   verdicts are read too (`GET /api/cache/failed`, or the file itself),
 //   bar the ones this encoder can do (colours, size).
@@ -25,6 +26,7 @@
 
 import { app } from './state.js';
 import { emit, store } from './util.js';
+import { art } from './artmod.js';
 
 export const job = {
   running: false, stopping: false, phase: 'idle',
@@ -37,11 +39,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Encode one GIF's bytes and upload its prepared copy. Throws on failure.
 export async function prepareBytes(gifPath, bytes) {
-  const dest = app.wasm.odmPathFor(gifPath);
+  const dest = app.wasm.cachePathFor(gifPath);
   if (!dest) throw new Error('only GIFs can be prepared');
-  const { odm } = app.wasm.encodeGif(bytes);
-  await app.src.writeFile(dest, odm);
-  return odm.length;
+  const { copy } = (await art()).prepareGif(bytes);
+  await app.src.writeFile(dest, copy);
+  return copy.length;
 }
 
 // The entries of the playlist in play (under the device's platform filter,
@@ -51,7 +53,7 @@ export async function missing() {
   if (text == null) throw new Error('the playlist could not be read');
   const paths = app.wasm.filterManifest(text, JSON.stringify({ platforms: app.config?.platforms || '' }));
   const have = new Set((await app.src.cacheList()).map((p) => p.toLowerCase()));
-  return paths.filter((p) => { const c = app.wasm.odmPathFor(p); return c && !have.has(c.toLowerCase()); });
+  return paths.filter((p) => { const c = app.wasm.cachePathFor(p); return c && !have.has(c.toLowerCase()); });
 }
 
 // --- the damaged list -----------------------------------------------------
@@ -65,11 +67,13 @@ async function damagedList() {
   try { rows = await app.src.cacheFailed(); shared = true; } catch (e) {
     shared = false;
     if (e.status !== 404) throw e;
-    const text = await app.src.readText('/odm/.failed').catch(() => null);
+    const text = await app.src.readText('/cache/.failed').catch(() => null);
     rows = (text || '').split('\n').map((l) => { const [path, reason = ''] = l.split('\t'); return { path: path.trim(), reason }; });
   }
   for (const r of rows) {
-    // The builder also gives up on what this encoder can do.
+    // The builder also gives up on what this encoder can do: past 256
+    // colours, a file too large (or needing more memory) to prepare there,
+    // one that vanished.
     if (r.path && !/colou?rs|too large|not found/.test(r.reason)) out.set(r.path.toLowerCase(), r.reason);
   }
   for (const [p, why] of Object.entries(store.get(localKey(), {}))) out.set(p.toLowerCase(), why);
@@ -90,14 +94,15 @@ async function one(path, retry) {
     let bytes;
     try {
       bytes = await app.src.readBytes(path);
-      let odm;
-      try { odm = app.wasm.encodeGif(bytes).odm; } catch (e) {
+      const m = await art();
+      let copy;
+      try { copy = m.prepareGif(bytes).copy; } catch (e) {
         const reason = String(e.message || e);
         job.damaged.push({ path, reason });
         await recordDamaged(path, reason);
         return 'damaged';
       }
-      await app.src.writeFile(app.wasm.odmPathFor(path), odm);
+      await app.src.writeFile(app.wasm.cachePathFor(path), copy);
       return 'ok';
     } catch (e) {
       if (!retry || i || job.stopping) return 'net';

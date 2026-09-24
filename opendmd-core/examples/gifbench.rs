@@ -1,15 +1,14 @@
 //! Decode CPU per decoder, for the gifslim experiment.
 //!
 //! Usage: `gifbench <base>...` where `<base>` is a GIF path without `.gif`;
-//! beside it the tool looks for `<base>.odm` and the recoded copies
-//! `<base>.cap<N>[d].gif` (`opendmd-pack recode`). Every file is decoded
+//! beside it the tool looks for the recoded copies `<base>.cap<N>[d].gif`
+//! (`opendmd-pack recode`). Every file is decoded
 //! from memory, all frames, repeated to at least ~40 ms of work; five such
 //! runs, median reported. Time is this thread's CPU time
 //! (`CLOCK_THREAD_CPUTIME_ID`), so a loaded machine inflates it less than
 //! wall time would.
 use opendmd_core::canvas::Canvas;
 use opendmd_core::gifslim::GifSlim;
-use opendmd_core::odm::OdmSource;
 use opendmd_core::player::GifSource;
 use std::io::{self, Cursor};
 
@@ -48,7 +47,6 @@ fn once(kind: &str, bytes: &[u8], canvas: &mut Canvas) -> io::Result<(u64, usize
     }
     match kind {
         "gif" => drain!(GifSource::new(Cursor::new(bytes))?),
-        "odm" => drain!(OdmSource::new(Cursor::new(bytes))?),
         k => {
             let cap: u8 = k.trim_start_matches("slim").parse().unwrap();
             drain!(GifSlim::with_cap(Cursor::new(bytes), cap)?)
@@ -83,7 +81,6 @@ fn main() {
     let bases: Vec<String> = std::env::args().skip(1).collect();
     let mut cols: Vec<(String, String)> = vec![
         ("gif".into(), ".gif".into()),
-        ("odm".into(), ".odm".into()),
         ("slim12".into(), ".gif".into()),
     ];
     for cap in [9, 10, 11, 12] {

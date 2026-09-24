@@ -27,3 +27,4 @@ opendmd-web/www/version.txt
 
 # Release images (make fw-release)
 dist/
+__pycache__/

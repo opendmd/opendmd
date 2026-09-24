@@ -1,10 +1,10 @@
 //! OpenDMD's management UI in the browser: the same `opendmd-core` engine,
-//! tag parser, filter and ODM encoder, and the same `opendmd-render` LED
+//! tag parser and filter, and the same `opendmd-render` LED
 //! renderer, compiled to `wasm32-unknown-unknown`.
 //!
 //! The ESP32 serves this module off the card and is otherwise a file server
 //! with a JSON API; everything heavy — parsing and filtering manifests,
-//! previewing files with the panel look, converting GIFs to `.odm` — runs
+//! previewing files with the panel look — runs
 //! here. The split inside the crate is deliberate:
 //!
 //! - [`player`] and [`curate`] are plain Rust with no `web-sys` in them, so
@@ -18,15 +18,13 @@ pub mod curate;
 pub mod player;
 
 use curate::FilterSpec;
-use js_sys::{Array, Object, Reflect, Uint8Array};
+use js_sys::{Array, Object, Reflect};
 use opendmd_core::compositor::{Kind as TransitionKind, Transition};
 use opendmd_core::layout;
 use opendmd_core::manifest::{normalize_title as core_normalize, Entry};
-use opendmd_core::odm::{self, EncodeStats};
 use opendmd_core::overrides::{parse_meta, render_meta, Dwell, MetaLine, Override};
 use opendmd_render::BLOOM_STRENGTH;
 use player::{Look, Player, Tick};
-use std::collections::HashSet;
 use std::time::Duration;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::Clamped;
@@ -177,31 +175,19 @@ pub fn filter_manifest(manifest_text: &str, filter_json: &str) -> Result<Array, 
 
 // --- Layout and conversion ----------------------------------------------
 
-/// The bucket directory (`"00"`..`"ff"`) for an `.odm` file name — the same
-/// FNV-1a rule `opendmd-pack --layout bucketed` uses.
+/// The bucket directory (`"00"`..`"ff"`) for a prepared copy's file name
+/// (the GIF's name) — the FNV-1a rule `opendmd-pack` and the firmware use.
 #[wasm_bindgen(js_name = bucketFor)]
-pub fn bucket_for(odm_name: &str) -> String {
-    layout::bucket(odm_name)
+pub fn bucket_for(name: &str) -> String {
+    layout::bucket(name)
 }
 
-/// `/gifs/Consoles/X.gif` -> `/odm/Consoles/<bb>/X.odm`, or `undefined` for
-/// anything that is not a `.gif` under `/gifs/`.
-#[wasm_bindgen(js_name = odmPathFor)]
-pub fn odm_path_for(gif_path: &str) -> Option<String> {
-    layout::bucketed_path(gif_path)
-}
-
-/// `filelist.odm.txt` from `filelist.txt`: every line whose bucketed `.odm`
-/// is in `present` (a JS string array) is switched to it. Returns
-/// `{text, switched}`.
-#[wasm_bindgen(js_name = odmManifest)]
-pub fn odm_manifest(manifest_text: &str, present: Array) -> JsValue {
-    let present: HashSet<String> = present.iter().filter_map(|v| v.as_string()).collect();
-    let (text, switched) = curate::odm_manifest(manifest_text, &present);
-    let o = Object::new();
-    set(&o, "text", text);
-    set(&o, "switched", switched as u32);
-    o.into()
+/// `/gifs/Consoles/X.gif` -> `/cache/Consoles/<xx>/X.gif` (where the player
+/// looks for its prepared copy), or `undefined` for anything that is not a
+/// `.gif` under `/gifs/`.
+#[wasm_bindgen(js_name = cachePathFor)]
+pub fn cache_path_for(gif_path: &str) -> Option<String> {
+    layout::cache_path(gif_path)
 }
 
 // --- Per-entry overrides (the playlist's `.meta`) --------------------------
@@ -265,34 +251,6 @@ pub fn parse_overrides(text: &str) -> Array {
 pub fn render_overrides(list: Array) -> String {
     let lines: Vec<MetaLine> = list.iter().filter_map(|v| override_from(&v)).collect();
     render_meta(&lines)
-}
-
-fn stats_object(s: &EncodeStats) -> Object {
-    let o = Object::new();
-    set(&o, "width", s.width as u32);
-    set(&o, "height", s.height as u32);
-    set(&o, "frames", s.frames);
-    set(&o, "palette_len", s.palette_len as u32);
-    set(&o, "quantised", s.quantised);
-    set(&o, "gif_bytes", s.gif_bytes as f64);
-    set(&o, "odm_bytes", s.odm_bytes as f64);
-    set(&o, "keep_px", s.keep_px as f64);
-    set(&o, "fill_px", s.fill_px as f64);
-    set(&o, "lit_px", s.lit_px as f64);
-    o
-}
-
-/// GIF bytes -> ODM v1 with the core's encoder (the one `opendmd-pack` runs,
-/// so the output is byte-identical). Returns `{odm: Uint8Array, stats}`;
-/// throws on a GIF the player could not play either.
-#[wasm_bindgen(js_name = encodeGif)]
-pub fn encode_gif(gif: &[u8]) -> Result<JsValue, JsValue> {
-    let mut out = Vec::with_capacity(gif.len());
-    let stats = odm::encode_gif(gif, &mut out).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let o = Object::new();
-    set(&o, "odm", Uint8Array::from(&out[..]));
-    set(&o, "stats", stats_object(&stats));
-    Ok(o.into())
 }
 
 /// The renderer's default bloom, so the page's slider starts where the
@@ -365,7 +323,7 @@ impl Preview {
         Ok(p)
     }
 
-    /// Play `bytes` (a GIF or an `.odm`) as `path`. The bytes are copied
+    /// Play `bytes` (a GIF, or a GIF's prepared copy) as `path`. The bytes are copied
     /// into wasm memory once and the previous file is dropped.
     pub fn load(&mut self, path: &str, bytes: &[u8]) {
         self.error.clear();

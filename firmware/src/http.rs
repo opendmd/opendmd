@@ -583,7 +583,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         crate::cache::stream_list(req)
     })?;
 
-    // The GIFs the cache builder could not prepare (`/odm/.failed`), and
+    // The GIFs the cache builder could not prepare (`/cache/.failed`), and
     // forgetting them so they are tried again.
     server.route("/api/cache/failed", Method::Get, |req| {
         if !files::affordable(req)? {
@@ -603,7 +603,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         };
         if failed.path.contains(['\t', '\r', '\n'])
             || files::card_path(config::SD_MOUNT, &failed.path).is_none()
-            || opendmd_core::layout::bucketed_path(&failed.path).is_none()
+            || opendmd_core::layout::cache_path(&failed.path).is_none()
         {
             return req.bad_request("path must be a card-absolute /gifs/….gif");
         }
@@ -622,8 +622,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
     })?;
 
-    // Remove the prepared copy of a GIF (it was replaced, or is going): its
-    // bucketed `.odm`, if there is one. `{"path": "/gifs/…"}`.
+    // Remove the prepared copy of a GIF (it was replaced, or is going), if
+    // there is one. `{"path": "/gifs/…"}`.
     let c = ctx.clone();
     server.route("/api/cache/forget", Method::Post, move |req| {
         let Some(body) = json_body(req)? else {
@@ -634,7 +634,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
         if files::card_path(config::SD_MOUNT, &forget.path).is_none()
-            || opendmd_core::layout::bucketed_path(&forget.path).is_none()
+            || opendmd_core::layout::cache_path(&forget.path).is_none()
         {
             return req.bad_request("path must be a card-absolute /gifs/….gif");
         }
@@ -798,6 +798,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if files::meta_manifest(&path).is_some() {
             return apply_meta(req, &c, path, None);
         }
+        // A whole directory, only under cache/ (prepared copies) and the
+        // retired format's tree: in pieces of at most
+        // `RECURSIVE_DELETE_BUDGET`, the client asking again until "done".
+        if query_param(req.query(), "recursive").as_deref() == Some("1") {
+            return delete_tree(req, &c, &rel, &path);
+        }
         // A manifest's `.idx` goes first, for the same crash-ordering reason
         // as on upload (see `files::remove_index_beside`): an orphaned index
         // with no manifest is harmless, the reverse is not.
@@ -825,7 +831,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 if let Err(e) = crate::cache::forget(&card) {
                     log::warn!("DELETE {card}: its prepared copy: {e}");
                 }
-                if files::under(&path, config::ODM_ROOT) {
+                if files::under(&path, config::CACHE_ROOT) {
                     crate::cache::invalidate();
                 }
                 req.json(r#"{"ok":true}"#)
@@ -836,7 +842,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // --- Card files, read-only --------------------------------------------
     // Every root manifest — `filelist.txt`, `filelist.hall`, `filelist.xmas`
-    // (and an obsolete `filelist.odm.txt`, if one is still there) — served as
+    // (and an obsolete one, if it is still there) — served as
     // text. Without this they
     // fell through to the `/*` www catch-all and 404ed.
     server.route("/filelist*", Method::Get, |req| {
@@ -857,9 +863,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/sets/*", Method::Get, |req| {
         serve_under(req, config::SD_MOUNT)
     })?;
-    // The playback cache: prepared copies, `odm/<Category>/<bb>/<name>.odm`
-    // (`opendmd-pack convert --layout bucketed`, or the web app).
-    server.route("/odm/*", Method::Get, |req| {
+    // The playback cache: prepared copies, `cache/<Category>/<xx>/<name>.gif`
+    // (the device's own builder, `opendmd-pack convert`, or the web app).
+    server.route("/cache/*", Method::Get, |req| {
         serve_under(req, config::SD_MOUNT)
     })?;
 
@@ -937,12 +943,53 @@ fn skip_if_playing(ctx: &Ctx, fs_path: &str) {
     }
     let gif = format!("{}{playing}", config::SD_MOUNT);
     let copy =
-        opendmd_core::layout::bucketed_path(&playing).map(|p| format!("{}{p}", config::SD_MOUNT));
+        opendmd_core::layout::cache_path(&playing).map(|p| format!("{}{p}", config::SD_MOUNT));
     if files::same_card_path(fs_path, &gif)
         || copy.is_some_and(|c| files::same_card_path(fs_path, &c))
     {
         let _ = ctx.cmd.send(Command::Skip);
         std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// `DELETE /api/files/<dir>?recursive=1`: everything under `path`, which
+/// must be `cache/` or the retired `odm/` tree (or a directory in one). The
+/// builder is held off and a copy the player is reading is skipped first.
+/// `{"ok","path","removed","done"}`; `done` false means the time budget ran
+/// out and the client should ask again.
+fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
+    let allowed = [config::CACHE_ROOT, config::LEGACY_ROOT]
+        .iter()
+        .any(|root| files::same_card_path(path, root) || files::under(path, root));
+    if !allowed {
+        return req.bad_request("recursive delete is only for cache/ and odm/");
+    }
+    let _busy = crate::cache_builder::busy();
+    if files::under(path, config::CACHE_ROOT) || files::same_card_path(path, config::CACHE_ROOT) {
+        let playing = c.status.lock().unwrap().path.clone();
+        if let Some(copy) = opendmd_core::layout::cache_path(&playing) {
+            let copy = format!("{}{copy}", config::SD_MOUNT);
+            if files::same_card_path(path, &copy) || files::under(&copy, path) {
+                skip_if_playing(c, &copy);
+            }
+        }
+    }
+    let card = format!("/{}", rel.trim_start_matches('/').trim_end_matches('/'));
+    match files::remove_tree(path, config::RECURSIVE_DELETE_BUDGET) {
+        Ok((removed, done)) => {
+            info!("DELETE {card} (recursive): {removed} entries removed, done {done}");
+            if files::under(path, config::CACHE_ROOT)
+                || files::same_card_path(path, config::CACHE_ROOT)
+            {
+                crate::cache::invalidate();
+            }
+            req.json(&format!(
+                r#"{{"ok":true,"path":{},"removed":{removed},"done":{done}}}"#,
+                json_string(&card)
+            ))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => req.not_found(&card),
+        Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
     }
 }
 
@@ -1019,7 +1066,7 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
         "PUT /{rel}: {written} B in {:.1} s",
         up.elapsed().as_secs_f32()
     );
-    if files::under(&dest, config::ODM_ROOT) {
+    if files::under(&dest, config::CACHE_ROOT) {
         crate::cache::invalidate();
     }
     if files::same_card_path(&dest, config::WWW_VERSION_PATH) {

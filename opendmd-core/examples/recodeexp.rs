@@ -60,31 +60,6 @@ fn main() {
             })
         })
         .collect();
-    {
-        let next = AtomicUsize::new(0);
-        let bytes = AtomicU64::new(0);
-        let t0 = Instant::now();
-        std::thread::scope(|s| {
-            for _ in 0..16 {
-                s.spawn(|| loop {
-                    let i = next.fetch_add(1, Relaxed);
-                    let Some(f) = files.get(i) else { break };
-                    let mut out = Vec::new();
-                    if let Ok(st) = opendmd_core::odm::encode_gif(&f[..], &mut out) {
-                        bytes.fetch_add(st.odm_bytes, Relaxed);
-                    }
-                });
-            }
-        });
-        let b = bytes.load(Relaxed);
-        println!(
-            "{:<34} {:>8.1} MB  ratio {:.4}  {:.1}s",
-            "odm",
-            b as f64 / 1e6,
-            b as f64 / gif_total as f64,
-            t0.elapsed().as_secs_f64()
-        );
-    }
     let only: Option<String> = std::env::var("ONLY").ok();
     for (name, opts) in variants {
         if only.as_ref().is_some_and(|o| !name.starts_with(o.as_str())) {

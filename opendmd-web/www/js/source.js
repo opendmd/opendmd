@@ -49,7 +49,7 @@ export class DeviceSource {
   reindex() { return this.json('POST', '/api/reindex'); }
   reboot() { return this.json('POST', '/api/reboot'); }
   wifiScan() { return this.json('GET', '/api/wifi/scan', undefined, 20000); }
-  // One file onto the panel now: 404 if it does not open, 415 if not GIF/ODM.
+  // One file onto the panel now: 404 if it does not open, 415 if not a GIF.
   play(path) { return this.json('POST', '/api/play', JSON.stringify({ path })); }
   // {path, exists, size, is_dir} from one `stat`, i.e. one scan of the parent
   // directory on the device: ~20 ms in a bucket, ~600 ms in gifs/Consoles.
@@ -60,7 +60,7 @@ export class DeviceSource {
   async cacheList() { return (await this.json('GET', '/api/cache/list', undefined, 180000)).paths; }
   forget(path) { return this.json('POST', '/api/cache/forget', JSON.stringify({ path })); }
   // GIFs that can never be prepared ([{path, reason}], the device's
-  // /odm/.failed), and recording one. Not in every firmware yet.
+  // /cache/.failed), and recording one. Not in every firmware yet.
   cacheFailed() { return this.json('GET', '/api/cache/failed'); }
   cacheFail(path, reason) { return this.json('POST', '/api/cache/failed', JSON.stringify({ path, reason })); }
   // A playlist's per-GIF overrides, parsed: {set, playlist, overrides: [...]}.
@@ -109,7 +109,7 @@ export class DeviceSource {
 // Card-absolute path for a picked file. A folder pick gives
 // `webkitRelativePath` = `<picked folder>/gifs/Consoles/X.gif`; if the folder
 // picked was one of the card's top-level folders itself, keep it.
-const ROOTS = new Set(['gifs', 'odm', 'sets', 'www', 'logos']);
+const ROOTS = new Set(['gifs', 'cache', 'sets', 'www', 'logos']);
 function localPath(f, cardPath) {
   const rel = f.webkitRelativePath;
   if (!rel) return cardPath(f.name);

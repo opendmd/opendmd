@@ -1,0 +1,186 @@
+# The playback cache: prepared copies
+
+A GIF's **prepared copy** is the file the player plays in its place: a
+standard GIF89a the device decodes with a small, capped-LZW decoder
+(`opendmd_core::gifslim::GifSlim`) in **~16 KB of heap including the 12 KB
+canvas**, against ~27 KB for the original through the same decoder at its
+full 12-bit table and ~54 KB through the `gif` crate. Over the stock card
+the copies are **0.61x the originals' size** (960 MB for 1,575 MB), so every
+frame also reads ~40% fewer bytes off a card the web server shares.
+
+Users never see a copy: playlists name GIFs, and the firmware finds each
+GIF's copy by itself (below). The format was chosen by the experiment in
+[`gifslim-experiment.md`](gifslim-experiment.md), which measured it against
+the pre-rendered format it replaced.
+
+## The file
+
+An ordinary GIF89a — Pillow, ffmpeg, ImageMagick and every browser play it —
+written by `gifslim::recode_gif` / `recode_gif_streaming` with
+`gifslim::PREPARED` (`cap: 9, delta: true, hint: true, keep_runs: true`):
+
+- **Frames are what playback shows.** The source is decoded with gifslim at
+  cap 12 (the `gif` crate for what gifslim does not decode: interlaced
+  frames, `Previous` disposal), so disposal, transparency and the
+  local-over-global palette rule are already applied: each frame of the copy
+  is a composited logical screen, before any centre-crop (a 135x32 stray
+  stays 135x32).
+- **One global palette**: the animation's distinct colours, first seen
+  scanning each composited frame in raster order, then a transparent slot;
+  the table is padded to a power of two (≥ 4 entries) and the minimum code
+  size is its log2. Past 255 colours `NeuQuant` (sample factor 10) builds 255
+  — lossy, 38 files on the stock card, worst channel error 151; only the
+  desktop and the browser do this (the device refuses the file: "more than
+  256 colours"). **Exactly 256 colours** (114 files) keeps all 256 with no
+  transparent slot: each frame's transparent index is any index its changed
+  pixels do not use (a frame that used every one would be sent opaque; none
+  on the card does).
+- **Delta frames**: frame 0 whole and opaque (a browser shows what frame 0
+  leaves uncovered as the page behind it); every later frame is the minimal
+  rectangle of pixels whose palette index changed, disposal **Keep**, the
+  unchanged pixels inside it transparent — except that an unchanged pixel
+  whose index equals the pixel before it in the rectangle repeats that index
+  (`keep_runs`: same picture, longer LZW runs). A frame that changes nothing
+  is one transparent pixel at (0, 0) — its delay still counts. Delays are the
+  source's raw hundredths (0 and 1 included: players apply their own rules)
+  and the NETSCAPE loop count is copied.
+- **LZW capped at 9 bits**: the encoder emits a CLEAR as the code the decoder
+  reads when its next free entry is `2^9 - 1 = 511` — the last point where a
+  code (the CLEAR itself) still fits in 9 bits — so a decoder never defines
+  an entry past 510 and never reads a code wider than 9 bits. Code widths
+  follow the rule every GIF decoder uses (giflib, `weezl`): a code is read
+  with as many bits as the decoder's next free entry needs. The dictionary is
+  a 2^10-slot hash emptied at each CLEAR.
+- **The hint**: an application extension right after the global palette,
+  before the NETSCAPE block — 19 bytes:
+
+  ```text
+  21 FF 0B "OPENDMD1LZW" 03 01 <cap> <flags> 00      flags bit 0 = delta frames
+  ```
+
+  `GifSlim::new` reads it before sizing its tables (`prefix: u16[2^cap]`,
+  `suffix: u8[2^cap]`: 1.5 KB at cap 9, 12 KB at 12), matching the id
+  case-insensitively (ImageMagick lowercases it). It is only a promise: a
+  code wider than the cap is `NeedsFullDecoder`, and the player then plays
+  the file with the `gif` crate (below). A tool that rewrites the file may
+  keep the block and break the cap (ImageMagick does); the `gif` crate and
+  Pillow drop it.
+- **Container**: byte for byte what the `gif` crate's encoder writes for the
+  same frames (header, padded global palette, the hint, NETSCAPE, a graphic
+  control extension before every frame, 255-byte data sub-blocks, the
+  trailer) — a unit test holds the hand-written streaming writer to it.
+
+**One encoder, three callers, the same bytes.** `recode_gif_streaming` is two
+passes over a seekable source — the first collects colours, frame count, size
+and loop count, the second writes the GIF a frame at a time with the LZW
+streamed out as it is made — in bounded memory (below). `recode_gif`, the
+in-memory entry point, *is* that function over a `Cursor`, plus the quantiser
+for files past 256 colours. `opendmd-pack convert`, the browser (`prepareGif`, in the art wasm module
+that `www/js/artmod.js` loads on first use, for "Prepare remaining files",
+Add GIFs and the Studio) and
+the device's cache builder therefore write identical files: checked over the
+whole stock card (`encodeprobe`: 11,001 byte-identical, the 38 quantised ones
+refused by the streaming path, 8 undecodable by both, 0 mismatches; and the
+tree it wrote equals `opendmd-pack convert`'s file for file), in the
+art-web crate's wasm tests and web-smoke (every copy the browser makes
+equals `opendmd-pack convert`'s), and on the rig (40 of 40 copies the
+builder made, downloaded, equal `opendmd-pack`'s for the same sources).
+
+## Where copies live
+
+`cache/<Category>/<xx>/<name>.gif`:
+
+- `<Category>` is the GIF's directory relative to `gifs/`, verbatim (spaces
+  and underscores included: `NEW 2021`, `Pinball_Short`). A GIF nested deeper
+  keeps its whole directory path (`gifs/A/B/x.gif` -> `cache/A/B/<xx>/x.gif`);
+  a GIF directly in `gifs/` gets no category directory (`cache/<xx>/x.gif`).
+- `<name>.gif` is the GIF's own file name.
+- `<xx>` is two lowercase hex digits: the low byte of **32-bit FNV-1a over
+  the UTF-8 bytes of the file name** (extension included, no directories).
+  FNV-1a: `h = 0x811c9dc5`; for each byte `h = (h ^ byte) * 0x01000193 mod
+  2^32`. So 256 buckets per category.
+
+Worked example: `gifs/Consoles/MD_Sonic3_RattenJager.gif` -> file name
+`MD_Sonic3_RattenJager.gif` -> FNV-1a `0x52903b38` -> bucket `38` ->
+`cache/Consoles/38/MD_Sonic3_RattenJager.gif`. (`SNES_Plok_08.gif` hashes to
+`0x10b6d368`, bucket `68`.) The one implementation is
+`opendmd-core/src/layout.rs` (`fnv1a32`, `bucket`, `cache_rel`,
+`cache_path`), shared by `opendmd-pack`, the web app (`bucketFor`,
+`cachePathFor` in wasm) and the firmware; its unit test pins these values —
+a change is a card-format break, not a refactor.
+
+**Why buckets.** FAT has no directory index: opening a file scans its
+directory linearly, ~0.65 ms per 512-byte directory sector on the ESP32.
+`gifs/Consoles` holds 3,781 files, so an open there costs ~330 ms, a visible
+stall between animations; split 256 ways it is ~15 files a bucket and an open
+costs a few milliseconds.
+
+**Tags.** `Entry::from_path` takes the category from the first directory
+under `gifs/` *or* `cache/`; under `cache/` the directory holding the file is
+the bucket, never the category, so `/cache/Consoles/38/X.gif` gets exactly the
+tags of `/gifs/Consoles/X.gif`.
+
+`cache/.failed` is the cache builder's list of GIFs it could not prepare
+(`path<TAB>reason` a line; `GET/POST/DELETE /api/cache/failed`).
+
+**The retired format.** Cards prepared before this change have an `odm/`
+tree of `.odm` files. The firmware never reads it (it logs once at boot that
+it is there) and `DELETE /api/files/odm?recursive=1` removes it, a few
+seconds' work per request (`"done":false` means ask again).
+
+## Playback
+
+- **Resolution** (firmware `sd::SdSource::open`): for a `/gifs/…/X.gif`
+  path, open `layout::cache_path` first; if it opens and starts with `GIF8`,
+  play it, else play the GIF (a miss is one failed lookup in a small
+  directory, ~5-6 ms on the rig). A playlist line that already names a
+  `/cache/` path is opened as it is. The engine, `/api/status` and the web
+  app only ever see the GIF's path; the log says `<- prepared` or
+  `<- original`.
+- **Decoding** (`player::FrameSource`): a `GIF8` file opens with `GifSlim` —
+  at the hint's cap (a copy: 9), else at 12. What gifslim does not decode —
+  interlaced frames or `Previous` disposal (`Unsupported`, 5 of the stock
+  card's originals), or a code wider than the hinted cap (`NeedsFullDecoder`,
+  a copy some tool re-encoded) — falls back to the `gif` crate: the reader
+  is rewound, gifslim's tables are dropped before the crate's decoder is
+  built, and the frames already shown are decoded again onto the canvas, so
+  the file carries on from the frame that failed. The engine logs that once
+  (info) and loops the file with the crate directly.
+- **Heap** (`heapprobe`, canvas included; steady == peak): a copy at cap 9
+  16.1-16.8 KB; an original through gifslim at cap 12 26.8-27.5 KB; the `gif`
+  crate 53.6-54.4 KB. See "GIF heap budget" in `CLAUDE.md`.
+
+## The device's encoder
+
+The cache builder (`firmware/src/cache_builder.rs`) runs
+`recode_gif_streaming` over the card file, writing `<copy>.tmp` through a
+2 KB buffer, syncing it and renaming it into place. Its heap, for a 128x32
+GIF: gifslim at cap 12 (~15 KB: the 2 KB read buffer, 12 KB of tables, a row,
+the source's palette), a canvas (12 KB), the previous frame's indices (4 KB),
+the changed bits (512 B), the colour table (~2.8 KB), the LZW dictionary
+(6 KB at cap 9) and the write buffer (2 KB). Measured with a counting
+allocator over the whole card: see `encodeprobe --heap` in "The cache
+builder" (`CLAUDE.md`). A file gifslim cannot decode needs the `gif` crate
+(~26 KB more); the builder uses it only if that much is free and otherwise
+records the file as "too large to prepare here", which the browser then
+prepares. More than 256 colours is refused the same way.
+
+## Tools
+
+- `opendmd-pack convert <card-root> [--jobs N] [--verify] [--force]` —
+  writes every GIF's copy under `cache/`, copying the GIF's mtime onto it (a
+  copy with the GIF's mtime is up to date and skipped unless `--force`).
+  `--verify` plays every copy against its GIF through three decoders at once
+  (original/`GifSource`, copy/`GifSource`, copy/`GifSlim` at cap 9): every
+  canvas and delay identical, or for a quantised file the same frames and
+  delays with the colour error reported. Stock card, 16 jobs, loaded host:
+  11,039 copies in 116 s including the verification; 11,001 identical, 38
+  quantised, 1,791,896 frames compared, 0 failures; 8 GIFs neither decoder
+  can play get no copy.
+- `cargo run --release --example encodeprobe -- [--heap] [--out <root>]
+  <gifs-dir>` (in `opendmd-core`) — the in-memory and streaming encoders
+  against each other over every file, and the streaming one's peak heap.
+- `make test-card CARD_ROOT=<card>` — includes `prepared_copies_on_the_real_card`:
+  twenty copies equal `recode_gif`'s bytes, open as gifslim at cap 9 and play
+  every frame exactly as their GIFs do; then 50 entries through the engine
+  with the firmware's resolution rule.

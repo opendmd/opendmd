@@ -178,7 +178,7 @@ impl Default for Settings {
 /// refused as a `set` (a saved one is cleared at boot) — because the same
 /// copies now play from `filelist.txt` without it.
 pub fn is_obsolete_set(set: &str) -> bool {
-    set.eq_ignore_ascii_case(config::OBSOLETE_ODM_MANIFEST)
+    set.eq_ignore_ascii_case(config::OBSOLETE_MANIFEST)
 }
 
 /// Filesystem path of the manifest a `set` value names: `""` is

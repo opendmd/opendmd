@@ -432,14 +432,17 @@ fn gif_round_trips_and_prepares_without_requantising() {
     }
     assert_eq!(i, 29);
     // The prepared copy keeps these colours exactly.
-    let stats = opendmd_core::odm::encode_gif(gif.as_slice(), Vec::new()).unwrap();
+    let prepared = &opendmd_core::gifslim::PREPARED;
+    let stats = opendmd_core::gifslim::recode_gif(gif.as_slice(), Vec::new(), prepared).unwrap();
     assert!(!stats.quantised);
     assert_eq!(stats.frames, 29);
-    assert_eq!(stats.palette_len, anim.palette.len());
+    assert_eq!(stats.colours, anim.palette.len());
     // One colour still makes a valid file.
     let one = render(&Image::new(W, H), &Plan::default());
     assert_eq!(one.palette, vec![0]);
-    assert!(opendmd_core::odm::encode_gif(encode(&one).as_slice(), Vec::new()).is_ok());
+    assert!(
+        opendmd_core::gifslim::recode_gif(encode(&one).as_slice(), Vec::new(), prepared).is_ok()
+    );
 }
 
 #[test]
@@ -460,4 +463,39 @@ fn auto_fit_and_motion() {
     assert_eq!(auto_motion(400, 32), Motion::Pan);
     assert_eq!(auto_motion(128, 430), Motion::Scroll);
     assert_eq!(auto_motion(256, 224), Motion::Still);
+}
+
+/// `prepareGif` builds JS values, so this only exists on wasm.
+#[cfg(target_arch = "wasm32")]
+#[test]
+fn prepare_gif_matches_the_core_recoder_byte_for_byte() {
+    use js_sys::{Reflect, Uint8Array};
+    use wasm_bindgen::JsValue;
+    let get = |v: &JsValue, k: &str| Reflect::get(v, &JsValue::from_str(k)).unwrap();
+    let scroll = render(
+        &flatten_pad(&pixel_art(128, 60, 8)),
+        &Plan {
+            motion: Motion::Scroll,
+            ..Plan::default()
+        },
+    );
+    for gif in [
+        encode(&scroll),
+        encode(&render(&Image::new(W, H), &Plan::default())),
+    ] {
+        let mut want = Vec::new();
+        let stats = opendmd_core::gifslim::recode_gif(
+            gif.as_slice(),
+            &mut want,
+            &opendmd_core::gifslim::PREPARED,
+        )
+        .unwrap();
+        let got = crate::prepare_gif(&gif).map_err(|_| ()).unwrap();
+        assert_eq!(Uint8Array::from(get(&got, "copy")).to_vec(), want);
+        let st = get(&got, "stats");
+        assert_eq!(get(&st, "frames").as_f64(), Some(stats.frames as f64));
+        assert_eq!(get(&st, "out_bytes").as_f64(), Some(want.len() as f64));
+        assert_eq!(get(&st, "quantised").as_bool(), Some(false));
+    }
+    assert!(crate::prepare_gif(b"GIF89a but not really").is_err());
 }

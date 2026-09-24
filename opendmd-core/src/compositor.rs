@@ -565,6 +565,12 @@ impl Compositor {
         self.gate = gate;
     }
 
+    /// The gate, for anything else that allocates on the player's behalf
+    /// (a decoder fallback).
+    pub fn gate(&self) -> Option<Gate> {
+        self.gate
+    }
+
     pub fn transition(&self) -> Transition {
         self.transition
     }

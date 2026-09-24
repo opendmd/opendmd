@@ -132,7 +132,7 @@ fn jobs_or_all(jobs: Option<usize>) -> usize {
 
 /// How the copy compared, when verified.
 #[derive(Debug)]
-enum Verdict {
+pub enum Verdict {
     /// Original, `gif` crate on the copy and gifslim on the copy: every
     /// canvas and delay identical.
     Exact,
@@ -148,7 +148,6 @@ enum Verdict {
 
 struct Recoded {
     gif_bytes: u64,
-    odm_bytes: Option<u64>,
     stats: RecodeStats,
     verdict: Option<Verdict>,
     frames_compared: u64,
@@ -227,9 +226,6 @@ pub fn recode(
             fs::rename(&tmp, &dst)?;
             (out, stats)
         };
-        let odm_bytes = fs::metadata(path.with_extension("odm"))
-            .ok()
-            .map(|m| m.len());
         let (verdict, frames_compared, slim) = if verify || verify_only {
             let (v, n, s) = compare(&gif, &out, cap, stats.quantised);
             (Some(v), n, s)
@@ -238,7 +234,6 @@ pub fn recode(
         };
         Ok(Recoded {
             gif_bytes: gif.len() as u64,
-            odm_bytes,
             stats,
             verdict,
             frames_compared,
@@ -251,14 +246,13 @@ pub fn recode(
         let mut f = io::BufWriter::new(fs::File::create(&tsv)?);
         writeln!(
             f,
-            "rel\tgif\todm\tout\tframes\tcolours\tquantised\topaque\trect_px\tclears\tmax_string\tverdict"
+            "rel\tgif\tout\tframes\tcolours\tquantised\topaque\trect_px\tclears\tmax_string\tverdict"
         )?;
         for (rel, r) in &results {
             writeln!(
                 f,
-                "{rel}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{rel}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 r.gif_bytes,
-                r.odm_bytes.map_or(String::new(), |b| b.to_string()),
                 r.stats.out_bytes,
                 r.stats.frames,
                 r.stats.colours,
@@ -293,8 +287,10 @@ fn out_path(gif: &Path, suffix: &str) -> PathBuf {
     gif.with_file_name(format!("{stem}.{suffix}.gif"))
 }
 
-/// Play the original and the copy (twice) in lockstep.
-fn compare(orig: &[u8], copy: &[u8], cap: u8, quantised: bool) -> (Verdict, u64, SlimStats) {
+/// Play the original and the copy (twice) in lockstep: the original
+/// through `GifSource`, the copy through `GifSource` and through `GifSlim`
+/// at `cap`. Returns the verdict, the frames compared and gifslim's stats.
+pub fn compare(orig: &[u8], copy: &[u8], cap: u8, quantised: bool) -> (Verdict, u64, SlimStats) {
     let run = || -> Result<(Verdict, u64, SlimStats)> {
         let mut a = GifSource::new(orig)?;
         let mut b = GifSource::new(copy)?;
@@ -379,18 +375,9 @@ fn report(
     }
     let gif: u64 = results.iter().map(|r| r.1.gif_bytes).sum();
     let out: u64 = results.iter().map(|r| r.1.stats.out_bytes).sum();
-    let with_odm: Vec<&(String, Recoded)> =
-        results.iter().filter(|r| r.1.odm_bytes.is_some()).collect();
-    let odm: u64 = with_odm.iter().map(|r| r.1.odm_bytes.unwrap()).sum();
-    let out_w: u64 = with_odm.iter().map(|r| r.1.stats.out_bytes).sum();
     let ratio = |r: &Recoded| r.stats.out_bytes as f64 / r.gif_bytes as f64;
     let mut ratios: Vec<f64> = results.iter().map(|r| ratio(&r.1)).collect();
     ratios.sort_by(f64::total_cmp);
-    let mut odm_ratios: Vec<f64> = with_odm
-        .iter()
-        .map(|r| r.1.stats.out_bytes as f64 / r.1.odm_bytes.unwrap() as f64)
-        .collect();
-    odm_ratios.sort_by(f64::total_cmp);
     println!("originals: {gif} B ({:.1} MB)", gif as f64 / 1e6);
     println!(
         "recoded:   {out} B ({:.1} MB)  ratio to originals {:.4}  (per file median {:.4} p95 {:.4})",
@@ -399,24 +386,14 @@ fn report(
         percentile(&ratios, 50.0),
         percentile(&ratios, 95.0)
     );
-    println!(
-        "vs ODM over the {} files that have one: recoded {:.1} MB / odm {:.1} MB = {:.4}  (per file median {:.4} p95 {:.4})",
-        with_odm.len(),
-        out_w as f64 / 1e6,
-        odm as f64 / 1e6,
-        out_w as f64 / odm.max(1) as f64,
-        percentile(&odm_ratios, 50.0),
-        percentile(&odm_ratios, 95.0)
-    );
     let mut worst: Vec<&(String, Recoded)> = results.iter().collect();
     worst.sort_by(|a, b| ratio(&b.1).total_cmp(&ratio(&a.1)));
     println!("worst 10 (recoded / original):");
     for (rel, r) in worst.iter().take(10) {
         println!(
-            "  {rel}  gif={} out={} odm={} frames={} ratio={:.3}",
+            "  {rel}  gif={} out={} frames={} ratio={:.3}",
             r.gif_bytes,
             r.stats.out_bytes,
-            r.odm_bytes.map_or("-".into(), |b| b.to_string()),
             r.stats.frames,
             ratio(r)
         );
@@ -692,7 +669,7 @@ mod tests {
             "X.capd.gif",
             "X.cap.gif",
             "cap10.gif",
-            "X.odm",
+            "X.bin",
         ] {
             assert!(!is_recode_output(no, None), "{no}");
         }

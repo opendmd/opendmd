@@ -1,5 +1,13 @@
 # gifslim — can standard GIFs replace ODM as the prepared format?
 
+> **Adopted (2026-09-24).** The prepared copy is now a GIF in exactly this
+> recoder's cap-9 delta form with the hint, at `cache/<Category>/<xx>/<name>.gif`
+> (not under `odm/` with the `.odm` name suggested below); ODM is retired, and
+> originals play through `GifSlim` at cap 12 with the `gif` crate as the
+> fallback. The format, the layout and the one encoder the desktop, the
+> browser and the device share are in [`cache-format.md`](cache-format.md).
+> What follows is the experiment as it was run, kept as the record.
+
 An experiment, measured on the host only (no rig), against the card copy
 `~/scratch/dmdos-card` (11,047 GIFs, 1,575 MB; ODM copies 1,484 MB). The
 code is in `opendmd-core/src/gifslim.rs` (decoder, capped LZW encoder,

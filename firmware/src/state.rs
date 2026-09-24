@@ -249,7 +249,7 @@ pub const SET_NOT_FOUND: &str = "set not found";
 pub enum PlayError {
     /// The file did not open (404); what was on screen keeps playing.
     NotFound(String),
-    /// It opened but is not a GIF or ODM file (415); the schedule moves on.
+    /// It opened but is not a GIF (415); the schedule moves on.
     Unplayable(String),
     /// There is no playlist running to interrupt (503).
     NoPlaylist,
