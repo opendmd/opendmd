@@ -736,10 +736,10 @@ impl Poller {
             .deadline_misses
             .saturating_sub(misses_before);
         let w = weights.unwrap_or_else(|| rules::ContextWeights::for_counts(header.count, 0, 0));
-        let (ss, rs, os) = w.shares();
+        let [ss, rs, os] = w.shares_ppm();
         log::info!(
             "follow: context for '{}' built in {ms} ms on CPU0: {} of the playlist's entries are {platform}, \
-             {} weighted ({} strong x{:.1}, {} related x{:.1}{}: {:.0}/{:.0}/{:.0}% of draws); \
+             {} weighted ({} strong x{}, {} related x{}{}, no-repeat window {}: {}/{}/{}% of draws); \
              heap {heap_before} B free before, lowest {heap_low} B during ({} B below), \
              panel deadline misses +{misses} meanwhile; {index}",
             game.name,
@@ -750,9 +750,10 @@ impl Poller {
             w.n_related,
             w.related,
             if w.capped { ", capped" } else { "" },
-            ss * 100.0,
-            rs * 100.0,
-            os * 100.0,
+            w.window,
+            (ss + 5_000) / 10_000,
+            (rs + 5_000) / 10_000,
+            (os + 5_000) / 10_000,
             heap_before.saturating_sub(heap_low),
         );
         cap_dir();
