@@ -213,16 +213,42 @@ pub fn write_index_with_overrides<R: BufRead, W: Write + Seek>(
 /// The general form of [`write_index_with_overrides`]: `resolve` is asked
 /// for each matching entry's override (in manifest order, once each) instead
 /// of looking its path up in a `.meta` set. The firmware's "Follow RePlayOS"
-/// context playlists use it to weight entries by how well their title
-/// matches the game being played (`follow::title_score`), and to spot the
-/// console's logo in the same pass; `meta_fingerprint` is then whatever
+/// context playlists use it (as [`write_index_resolving_then`]) to mark
+/// entries by how well their title matches the game being played
+/// (`follow::title_score`); `meta_fingerprint` is then whatever
 /// identifies what `resolve` computes (see `follow::context_fingerprint`).
 pub fn write_index_resolving<R: BufRead, W: Write + Seek>(
     manifest: R,
     manifest_len: u32,
     filter: &Filter,
     meta_fingerprint: u64,
+    resolve: impl FnMut(&Entry) -> Option<crate::overrides::Override>,
+    out: W,
+) -> io::Result<(IndexHeader, Overrides)> {
+    write_index_resolving_then(
+        manifest,
+        manifest_len,
+        filter,
+        meta_fingerprint,
+        resolve,
+        |_, _| {},
+        out,
+    )
+}
+
+/// [`write_index_resolving`], with a last look at the resolved overrides
+/// before they are written: `finish(count, &mut overrides)` runs after the
+/// pass, when the number of matching entries is known. Follow RePlayOS's
+/// context playlists use it to turn "strong"/"related" marks into weights
+/// that depend on how many of each there are
+/// (`follow::weigh_context`) — one pass, no second read of the manifest.
+pub fn write_index_resolving_then<R: BufRead, W: Write + Seek>(
+    manifest: R,
+    manifest_len: u32,
+    filter: &Filter,
+    meta_fingerprint: u64,
     mut resolve: impl FnMut(&Entry) -> Option<crate::overrides::Override>,
+    finish: impl FnOnce(u32, &mut Overrides),
     out: W,
 ) -> io::Result<(IndexHeader, Overrides)> {
     let mut out = BufWriter::with_capacity(2048, out);
@@ -262,6 +288,7 @@ pub fn write_index_resolving<R: BufRead, W: Write + Seek>(
             overrides::MAX_OVERRIDES
         );
     }
+    finish(count, &mut resolved);
     for (index, ov) in resolved.iter() {
         out.write_all(&overrides::encode_record(*index, ov))?;
     }

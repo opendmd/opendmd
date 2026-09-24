@@ -357,34 +357,45 @@ fn prototype_odm_files_decode_like_the_gifs() {
 }
 
 /// What "Follow RePlayOS" would build for a few games on this card: the
-/// platform's entries, how many score as this game (weight 8) or related
-/// (weight 3), and the logo it would show. Prints; asserts only that the
-/// index it writes reads back.
+/// platform's entries, how many score as this game (strong) or related,
+/// the weights those counts earn (`follow::ContextWeights`), and the logo it
+/// would show. For Sonic 3 and Super Mario World it asserts the shares of
+/// the draw: 60% strong, 15% related (a class whose weight hits
+/// `follow::MAX_WEIGHT` gets what the cap gives instead, and says so), both
+/// from the weights and from 60,000 draws of the scheduler over the index
+/// read back. It also prints the draws with the firmware's no-repeat window
+/// (32), which is what the panel actually plays.
 #[test]
 #[ignore = "needs DMD_CARD_ROOT pointing at a real card dump"]
 fn follow_context_on_the_real_card() {
-    use opendmd_core::follow;
-    use opendmd_core::index::write_index_resolving;
-    use opendmd_core::overrides::Override;
+    use opendmd_core::follow::{self, Match};
+    use opendmd_core::index::write_index_resolving_then;
     let Ok(root) = std::env::var("DMD_CARD_ROOT") else {
         eprintln!("DMD_CARD_ROOT not set, nothing to do");
         return;
     };
     let path = PathBuf::from(root).join("filelist.txt");
     let len = std::fs::metadata(&path).unwrap().len() as u32;
-    for (system, game) in [
-        ("sega_smd", "Sonic the Hedgehog 3 (USA)"),
-        ("nintendo_snes", "Super Mario World (USA)"),
-        ("nintendo_snes", "Donkey Kong Country (USA)"),
-        ("sega_smd", "Streets of Rage 2 (USA)"),
+    let near = |got: f32, want: f32, what: &str| {
+        assert!(
+            (got - want).abs() <= 0.03,
+            "{what}: {got:.3}, want {want:.3} ± 0.03"
+        );
+    };
+    for (system, game, check) in [
+        ("sega_smd", "Sonic the Hedgehog 3 (USA)", true),
+        ("nintendo_snes", "Super Mario World (USA)", true),
+        ("nintendo_snes", "Donkey Kong Country (USA)", false),
+        ("sega_smd", "Streets of Rage 2 (USA)", false),
     ] {
         let platform = follow::platform_for_system(system).unwrap();
         let filter = Filter::new().platforms([platform]);
         let game_tokens = follow::tokens(game);
         let (mut strong, mut weak, mut logos) = (Vec::new(), Vec::new(), Vec::new());
+        let mut weights = None;
         let mut out = io::Cursor::new(Vec::new());
         let file = std::fs::File::open(&path).unwrap();
-        let (header, ov) = write_index_resolving(
+        let (header, ov) = write_index_resolving_then(
             BufReader::new(file),
             len,
             &filter,
@@ -393,41 +404,112 @@ fn follow_context_on_the_real_card() {
                 if follow::is_logo(e) {
                     logos.push((e.title.clone(), e.path.clone()));
                 }
-                let w = follow::weight_for(follow::score_tokens(
+                let m = follow::classify(follow::score_tokens(
                     &follow::tokens(&e.title),
                     &game_tokens,
                 ))?;
-                if w == follow::STRONG_WEIGHT {
-                    strong.push(e.title.clone());
-                } else {
-                    weak.push(e.title.clone());
+                match m {
+                    Match::Strong => strong.push(e.title.clone()),
+                    Match::Related => weak.push(e.title.clone()),
                 }
-                Some(Override {
-                    weight: Some(w),
-                    ..Override::default()
-                })
+                Some(m.mark())
             },
+            |count, ov| weights = Some(follow::weigh_context(count, ov)),
             &mut out,
         )
         .unwrap();
+        let w = weights.unwrap();
         let logo = follow::choose_logo(&logos, game);
         weak.truncate(20);
+        let (s, r, o) = w.shares();
         println!(
-            "{game} ({platform}): {} entries, {} weighted, {} strong {:?}, weak e.g. {weak:?}, logo {logo:?} of {}",
+            "{game} ({platform}): {} entries, {} weighted, {} strong {:?}, related e.g. {weak:?}, logo {logo:?} of {}\n  \
+             weights strong {:.2} related {:.2}{}; shares by weight {:.1}% / {:.1}% / {:.1}%",
             header.count,
             ov.len(),
             strong.len(),
             strong,
-            logos.len()
+            logos.len(),
+            w.strong,
+            w.related,
+            if w.capped { " (the cap binds)" } else { "" },
+            s * 100.0,
+            r * 100.0,
+            o * 100.0,
         );
+        assert_eq!(w.n_strong as usize, strong.len());
         let file = std::fs::File::open(&path).unwrap();
         let mut cat = IndexedCatalog::open(file, io::Cursor::new(out.into_inner())).unwrap();
         assert_eq!(cat.len(), header.count as usize);
-        assert_eq!(cat.overrides().unwrap().len(), ov.len());
+        let read_back = cat.overrides().unwrap();
+        assert_eq!(read_back.len(), ov.len());
         assert!(cat.header().is_valid_for(
             len,
             &filter,
             follow::context_fingerprint(platform, game)
         ));
+        let class: Vec<Option<Match>> = (0..cat.len())
+            .map(|i| follow::classify(follow::title_score(&cat.entry(i).unwrap().title, game)))
+            .collect();
+        let draw = |window: usize| {
+            let mut sched = Scheduler::new(cat.len(), Mode::Shuffle, 0x5eed).with_no_repeat(window);
+            for (i, o) in read_back.iter() {
+                sched.set_weight(*i as usize, o.scheduler_weight().unwrap());
+            }
+            let n = 60_000;
+            let mut c = [0usize; 3];
+            for _ in 0..n {
+                c[match class[sched.next_index().unwrap()] {
+                    Some(Match::Strong) => 0,
+                    Some(Match::Related) => 1,
+                    None => 2,
+                }] += 1;
+            }
+            (
+                c[0] as f32 / n as f32,
+                c[1] as f32 / n as f32,
+                c[2] as f32 / n as f32,
+            )
+        };
+        let (ds, dr, d_o) = draw(0);
+        let (ws, wr, wo) = draw(32);
+        println!(
+            "  drawn {:.1}% / {:.1}% / {:.1}%; with the no-repeat window of 32 {:.1}% / {:.1}% / {:.1}%",
+            ds * 100.0,
+            dr * 100.0,
+            d_o * 100.0,
+            ws * 100.0,
+            wr * 100.0,
+            wo * 100.0
+        );
+        near(ds, s, &format!("{game}: drawn strong vs weights"));
+        near(dr, r, &format!("{game}: drawn related vs weights"));
+        near(d_o, o, &format!("{game}: drawn rest vs weights"));
+        if !check {
+            continue;
+        }
+        assert!(w.n_strong > 0 && w.n_related > 0, "{game}: {w:?}");
+        let rest_n = (w.total - w.n_strong - w.n_related) as f32;
+        let capped_strong = w.strong == follow::MAX_WEIGHT;
+        if capped_strong {
+            // What 64 per strong entry gives, with the related at 15%.
+            let m = w.n_strong as f32 * follow::MAX_WEIGHT;
+            let want = m / (m + rest_n) * (1.0 - follow::RELATED_SHARE);
+            println!(
+                "  the cap binds: strong would need {:.0} per entry for 60%; gets {:.1}%",
+                follow::STRONG_SHARE / (1.0 - follow::STRONG_SHARE - follow::RELATED_SHARE)
+                    * rest_n
+                    / w.n_strong as f32,
+                want * 100.0
+            );
+            assert!(w.capped);
+            near(s, want, &format!("{game}: strong (capped)"));
+            near(ds, want, &format!("{game}: drawn strong (capped)"));
+        } else {
+            near(s, follow::STRONG_SHARE, &format!("{game}: strong"));
+            near(ds, follow::STRONG_SHARE, &format!("{game}: drawn strong"));
+        }
+        near(r, follow::RELATED_SHARE, &format!("{game}: related"));
+        near(dr, follow::RELATED_SHARE, &format!("{game}: drawn related"));
     }
 }

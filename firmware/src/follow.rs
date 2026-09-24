@@ -7,8 +7,8 @@
 //!
 //! - **[`Poller`], on the network worker (CPU0).** Polls
 //!   `GET http://<host>:55356/api/v1/get_status` (header `X-RePlay-Token`)
-//!   every 2 s while enabled — 15 s while the Pi does not answer — through
-//!   one keep-alive `esp_http_client` (3 s timeout), feeds the answers to the
+//!   every 2 s while enabled — 15 s while the Pi does not answer — each
+//!   through an `esp_http_client` of its own (3 s timeout), feeds the answers to the
 //!   pure state machine in `opendmd_core::follow`, and does the slow work the
 //!   display task must never do: it builds the game's **context index** (the
 //!   playlist's entries for that console, weighted by
@@ -36,7 +36,7 @@ use esp_idf_svc::http::Method;
 use opendmd_core::engine::Engine;
 use opendmd_core::filter::Filter;
 use opendmd_core::follow::{self as rules, Action, Follow, Game, Observed, State};
-use opendmd_core::index::{write_index_resolving, IndexHeader};
+use opendmd_core::index::{write_index_resolving_then, IndexHeader};
 use opendmd_core::manifest::{self, Entry};
 use opendmd_core::overrides::Override;
 use opendmd_core::synth;
@@ -100,7 +100,8 @@ pub fn status_json() -> String {
         opt(s.platform),
         opt(s.console.as_deref()),
         opt(s.game.as_deref()),
-        s.matches.map_or_else(|| "null".to_string(), |n| n.to_string()),
+        s.matches
+            .map_or_else(|| "null".to_string(), |n| n.to_string()),
         s.since
             .map_or_else(|| "null".to_string(), |t| t.elapsed().as_secs().to_string()),
         opt(s.step),
@@ -114,10 +115,7 @@ pub fn summary() -> String {
     if !s.enabled {
         return String::new();
     }
-    let mut out = format!(
-        ", follow {}",
-        rules::state_name(s.state, s.step.is_some())
-    );
+    let mut out = format!(", follow {}", rules::state_name(s.state, s.step.is_some()));
     if let Some(g) = &s.game {
         out += &format!(" '{g}'");
     }
@@ -270,7 +268,13 @@ impl<R: Read> Read for Yielding<R> {
 }
 
 fn yielding(file: File) -> BufReader<Yielding<File>> {
-    BufReader::with_capacity(1024, Yielding { inner: file, since: 0 })
+    BufReader::with_capacity(
+        1024,
+        Yielding {
+            inner: file,
+            since: 0,
+        },
+    )
 }
 
 /// The poller. Lives on the network worker; [`Poller::tick`] once per
@@ -279,7 +283,6 @@ pub struct Poller {
     follow: Follow,
     epoch: Instant,
     cfg: Cfg,
-    conn: Option<EspHttpConnection>,
     next_poll: Instant,
     key: u32,
     last_error: Option<String>,
@@ -288,10 +291,12 @@ pub struct Poller {
     settings: Arc<Mutex<Settings>>,
     status: Arc<Mutex<Status>>,
     cmd: mpsc::Sender<Command>,
-    // Heap accounting, for the heartbeat-style line every 5 minutes.
+    // Heap and time accounting, for the heartbeat-style line every 5
+    // minutes (since the last one).
     polls: u32,
     poll_dip_max: u32,
-    conn_cost: u32,
+    poll_ms_sum: u32,
+    poll_ms_max: u32,
     last_report: Instant,
 }
 
@@ -305,7 +310,6 @@ impl Poller {
             follow: Follow::new(),
             epoch: Instant::now(),
             cfg: Cfg::default(),
-            conn: None,
             next_poll: Instant::now(),
             key: 0,
             last_error: None,
@@ -315,7 +319,8 @@ impl Poller {
             cmd,
             polls: 0,
             poll_dip_max: 0,
-            conn_cost: 0,
+            poll_ms_sum: 0,
+            poll_ms_max: 0,
             last_report: Instant::now(),
         }
     }
@@ -390,13 +395,17 @@ impl Poller {
         if self.last_report.elapsed() >= config::FOLLOW_REPORT {
             self.last_report = Instant::now();
             log::info!(
-                "follow: {} polls, per-poll heap dip max {} B, connection held {} B, heap {} B free",
+                "follow: {} polls, per-poll heap dip max {} B, time avg {} ms max {} ms, heap {} B free",
                 self.polls,
                 self.poll_dip_max,
-                self.conn_cost,
+                self.poll_ms_sum / self.polls.max(1),
+                self.poll_ms_max,
                 free_heap()
             );
+            self.polls = 0;
             self.poll_dip_max = 0;
+            self.poll_ms_sum = 0;
+            self.poll_ms_max = 0;
         }
     }
 
@@ -406,7 +415,6 @@ impl Poller {
         let base_changed = cfg.base_set != self.cfg.base_set;
         self.cfg = cfg;
         if target_changed || !self.cfg.enabled {
-            self.conn = None;
             self.last_error = None;
         }
         if base_changed {
@@ -503,28 +511,31 @@ impl Poller {
         }
     }
 
-    /// One GET on the kept-alive connection: `(status, body)`. The body is
-    /// capped at 2 KB (a status reply is ~300 B).
-    fn get(&mut self, host: &str, path: &str, token: Option<&str>) -> Result<(u16, Vec<u8>), String> {
+    /// One GET on a connection of its own, closed after: `(status, body)`.
+    /// The body is capped at 2 KB (a status reply is ~300 B). Nothing is
+    /// kept between polls — a kept-alive `esp_http_client` held 3.35 KB of
+    /// heap for a request every 2 s.
+    fn get(
+        &mut self,
+        host: &str,
+        path: &str,
+        token: Option<&str>,
+    ) -> Result<(u16, Vec<u8>), String> {
+        let started = Instant::now();
         let before = free_heap();
-        if self.conn.is_none() {
-            let conn = EspHttpConnection::new(&Configuration {
+        let mut low = before;
+        let url = format!("{}{path}", base_url(host));
+        let headers: &[(&str, &str)] = match token {
+            Some(t) => &[("X-RePlay-Token", t), ("Connection", "close")],
+            None => &[("Connection", "close")],
+        };
+        let result = (|| {
+            let mut conn = EspHttpConnection::new(&Configuration {
                 timeout: Some(config::FOLLOW_TIMEOUT),
                 buffer_size: Some(512),
                 buffer_size_tx: Some(256),
                 ..Default::default()
-            })
-            .map_err(|e| format!("client: {e}"))?;
-            self.conn = Some(conn);
-        }
-        let url = format!("{}{path}", base_url(host));
-        let conn = self.conn.as_mut().unwrap();
-        let headers: &[(&str, &str)] = match token {
-            Some(t) => &[("X-RePlay-Token", t), ("Connection", "keep-alive")],
-            None => &[("Connection", "keep-alive")],
-        };
-        let mut low = before;
-        let result = (|| {
+            })?;
             conn.initiate_request(Method::Get, &url, headers)?;
             conn.initiate_response()?;
             low = low.min(free_heap());
@@ -541,24 +552,14 @@ impl Poller {
             low = low.min(free_heap());
             Ok::<_, esp_idf_svc::sys::EspError>((status, body))
         })();
+        let ms = started.elapsed().as_millis() as u32;
         self.polls += 1;
-        let after = free_heap();
-        // What the request itself took, over what the connection keeps.
-        self.poll_dip_max = self.poll_dip_max.max(after.saturating_sub(low));
-        match result {
-            Ok(r) => {
-                if self.conn_cost == 0 {
-                    self.conn_cost = before.saturating_sub(after);
-                }
-                Ok(r)
-            }
-            Err(e) => {
-                // A broken keep-alive connection is dropped; the next poll
-                // makes a new one.
-                self.conn = None;
-                Err(describe(&e))
-            }
-        }
+        self.poll_ms_sum = self.poll_ms_sum.saturating_add(ms);
+        self.poll_ms_max = self.poll_ms_max.max(ms);
+        // What the request took at its deepest (connection, buffers, socket,
+        // body), all of it given back by now.
+        self.poll_dip_max = self.poll_dip_max.max(before.saturating_sub(low));
+        result.map_err(|e| describe(&e))
     }
 
     fn poll_status(&mut self) -> Result<Observed, String> {
@@ -695,13 +696,13 @@ impl Poller {
         let misses_before = self.status.lock().unwrap().deadline_misses;
         let heap_before = free_heap();
         let mut heap_low = heap_before;
-        let mut strong = 0usize;
+        let mut weights = None;
         let mut seen = 0u32;
         let tmp = format!("{index}.tmp");
         let built = File::open(&manifest)
             .and_then(|m| Ok((m, File::create(&tmp)?)))
             .and_then(|(m, out)| {
-                write_index_resolving(
+                write_index_resolving_then(
                     yielding(m),
                     len,
                     &filter,
@@ -711,18 +712,10 @@ impl Poller {
                         if seen.is_multiple_of(32) {
                             heap_low = heap_low.min(free_heap());
                         }
-                        let w = rules::weight_for(rules::score_tokens(
-                            &rules::tokens(&e.title),
-                            &tokens,
-                        ))?;
-                        if w >= rules::STRONG_WEIGHT {
-                            strong += 1;
-                        }
-                        Some(Override {
-                            weight: Some(w),
-                            ..Override::default()
-                        })
+                        rules::classify(rules::score_tokens(&rules::tokens(&e.title), &tokens))
+                            .map(rules::Match::mark)
                     },
+                    |count, ov| weights = Some(rules::weigh_context(count, ov)),
                     out,
                 )
             });
@@ -742,13 +735,24 @@ impl Poller {
             .unwrap()
             .deadline_misses
             .saturating_sub(misses_before);
+        let w = weights.unwrap_or_else(|| rules::ContextWeights::for_counts(header.count, 0, 0));
+        let (ss, rs, os) = w.shares();
         log::info!(
             "follow: context for '{}' built in {ms} ms on CPU0: {} of the playlist's entries are {platform}, \
-             {} weighted ({strong} strong); heap {heap_before} B free before, lowest {heap_low} B during \
-             ({} B below), panel deadline misses +{misses} meanwhile; {index}",
+             {} weighted ({} strong x{:.1}, {} related x{:.1}{}: {:.0}/{:.0}/{:.0}% of draws); \
+             heap {heap_before} B free before, lowest {heap_low} B during ({} B below), \
+             panel deadline misses +{misses} meanwhile; {index}",
             game.name,
             header.count,
             ov.len(),
+            w.n_strong,
+            w.strong,
+            w.n_related,
+            w.related,
+            if w.capped { ", capped" } else { "" },
+            ss * 100.0,
+            rs * 100.0,
+            os * 100.0,
             heap_before.saturating_sub(heap_low),
         );
         cap_dir();
@@ -812,7 +816,10 @@ impl Poller {
                     }
                     out.flush()
                 });
-            if let Err(e) = written.map_err(anyhow::Error::from).and_then(|()| crate::files::replace(&tmp, &path)) {
+            if let Err(e) = written
+                .map_err(anyhow::Error::from)
+                .and_then(|()| crate::files::replace(&tmp, &path))
+            {
                 let _ = fs::remove_file(&tmp);
                 log::warn!("follow: cannot write {path}: {e:#}");
                 return;
@@ -1016,7 +1023,13 @@ impl Runner {
 
     /// An event from the network side. `dark`: night mode has the panel
     /// off. Starts the sequence on `engine` for a game.
-    pub fn handle(&mut self, event: Event, engine: Option<&mut Engine>, dark: bool, now: Duration) -> Todo {
+    pub fn handle(
+        &mut self,
+        event: Event,
+        engine: Option<&mut Engine>,
+        dark: bool,
+        now: Duration,
+    ) -> Todo {
         match event {
             Event::Normal | Event::Attract => {
                 let mode = if matches!(event, Event::Normal) {
@@ -1097,7 +1110,8 @@ impl Runner {
                 }
                 self.ready = Some(ready);
                 // Waiting for it (or no sequence at all): swap now.
-                if matches!(self.step, Some(Step::Waiting)) || (self.step.is_none() && !self.deferred)
+                if matches!(self.step, Some(Step::Waiting))
+                    || (self.step.is_none() && !self.deferred)
                 {
                     return self.finish_sequence(engine);
                 }
@@ -1135,15 +1149,15 @@ impl Runner {
         match step {
             Step::PowerOn => {
                 let logo = game.logo.clone();
-                let played = logo
-                    .as_deref()
-                    .is_some_and(|p| match engine.play_now_with(p, now, None) {
-                        Ok(()) => true,
-                        Err(e) => {
-                            log::warn!("follow: logo {p}: {e}");
-                            false
-                        }
-                    });
+                let played =
+                    logo.as_deref()
+                        .is_some_and(|p| match engine.play_now_with(p, now, None) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                log::warn!("follow: logo {p}: {e}");
+                                false
+                            }
+                        });
                 if !played {
                     let card = synth::card_path(&game.console, "");
                     let _ = engine.play_now_with(&card, now, Some(once()));
