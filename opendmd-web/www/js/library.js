@@ -35,6 +35,9 @@ export async function mount(el) {
   let current = '';
   let sendPath = '';
   const sendBtn = app.device && h('button', { id: 'lib-play', disabled: true, onclick: () => app.play(sendPath) }, 'Send to panel');
+  // Smooth motion for the previewed GIF (device only; js/smooth.js, loaded
+  // on the first preview): shown only when there is motion to smooth.
+  const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true, style: 'margin-top:10px' });
   const platforms = new Set();
 
   // --- Add GIFs (device only)
@@ -77,7 +80,7 @@ export async function mount(el) {
         h('div', { style: 'margin-top:8px' }, chips),
         h('div', { style: 'margin-top:8px' }, ovHolder)),
       addCard, list.el, selbar),
-    h('div.side', h('div.card', canvas, cap, sendBtn && h('div.row', { style: 'margin-top:8px' }, sendBtn)))));
+    h('div.side', h('div.card', canvas, cap, sendBtn && h('div.row', { style: 'margin-top:8px' }, sendBtn), smoothBox))));
 
   const pv = new PanelPreview(canvas, { onError: (m) => { cap.textContent = 'preview: ' + m; } });
 
@@ -86,8 +89,13 @@ export async function mount(el) {
     list.refresh();
     if (sendBtn) { sendPath = it.path; sendBtn.disabled = false; sendBtn.title = it.path; }
     cap.textContent = `${label(it.e)} · loading…`;
+    if (smoothBox) Object.assign(smoothBox, { hidden: true }).dataset.state = 'analysing';
+    let bytes;
     try {
-      if (await pv.show(it.path, (p) => app.previewBytes(p))) cap.textContent = `${label(it.e)} · ${it.name}`;
+      if (await pv.show(it.path, async (p) => (bytes = await app.previewBytes(p)))) {
+        cap.textContent = `${label(it.e)} · ${it.name}`;
+        if (smoothBox) import('./smooth.js').then((m) => m.detail(smoothBox, it, bytes, pv, cap)).catch(() => {});
+      }
     } catch (e) { cap.textContent = 'preview: ' + e.message; }
   }
 

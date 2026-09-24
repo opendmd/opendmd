@@ -228,10 +228,26 @@ is `docs/art-pipeline.md`.
 sizes, which are what crosses the WiFi: the wasm module plus its generated JS
 glue at most 100 KB, the hand-written JS and CSS at most 48 KB; the Studio's
 own wasm at most 150 KB and its JS and CSS at most 24 KB, loaded only when it
-opens. Today that is 101.4 KB, 43.1 KB, 51.4 KB and 9.1 KB. The game name
+opens. Today that is 95.4 KB, 48.6 KB, 100.4 KB and 9.1 KB. The game name
 lists (2.4 MB, 527 KB gzipped, one platform fetched at a time) are printed
 without a budget. `make web` writes a `<file>.gz` beside each file, and the
 player sends those in preference.
+
+**Smooth motion.** Some GIFs move in steps of 2 px or more a frame — a
+marquee, a credits scroll, a sprite crossing the screen — and look jerky on
+a panel that could show every pixel of the way. Preview such a GIF in the
+Library (on a device) and a **Smooth motion** switch appears under the
+preview: "96% of this animation moves in steps of 2 px or more. Smooth
+motion adds 402 frames." **Preview** plays the smooth version there first;
+switching it on makes the panel play it with the in-between frames added —
+each one the picture moved by whole pixels, never a blend, the timing
+unchanged — and switching it off goes back to the original frames. Your GIF
+itself is never changed. The switch only appears where there is something
+to smooth (about one GIF in ten on the stock card); the choice is kept on
+the card in `/sets/.smooth` and survives clearing the playback cache.
+`opendmd-pack smooth analyse <card> [--write]` lists (and can switch on)
+every GIF worth smoothing, and `opendmd-pack convert` honours the list. The
+experiment behind it is [`docs/tweening-experiment.md`](docs/tweening-experiment.md).
 
 **Favourites, hiding and schedules.** Right-click a GIF in the Library or a
 playlist (long-press on a phone, or its "…" button) to make it a favourite,

@@ -156,6 +156,33 @@ fn note_fallback(playing: &mut Playing) {
     }
 }
 
+/// One frame of `playing`, with gifslim's fallback to the `gif` crate
+/// handled here rather than inside `FrameSource`: a transition that is
+/// running has 24 KB of buffers out, and the crate's decoder wants
+/// [`GIF_CRATE_BYTES`](crate::player::GIF_CRATE_BYTES) on top of what the
+/// transition's gate already allowed for a gifslim file (nothing). So the
+/// transition is finished first (the old picture stays up until the
+/// crate's frame lands: a cut, for the few files this concerns) and the
+/// fallback then asks the same gate for the crate's bytes. Found on the
+/// rig: `NES_Excitebike_02` (Previous disposal at frame 0) falling back
+/// under a Dissolve took the heap to 1,124 B.
+fn decode_frame(
+    playing: &mut Playing,
+    compositor: &mut Compositor,
+    canvas: &mut Canvas,
+) -> io::Result<Option<Duration>> {
+    match playing.gif.try_frame(canvas) {
+        Err(e) if crate::player::wants_fallback(&e) => {
+            if compositor.is_active() {
+                log::info!("{}: transition cut for the gif crate's heap", playing.path);
+                compositor.finish(canvas);
+            }
+            playing.gif.fall_back(canvas, e, compositor.gate())
+        }
+        r => r,
+    }
+}
+
 /// What the decoder will still allocate before its first frame is on the
 /// canvas (a transition's gate has to leave room for it): the `gif` crate's
 /// LZW state. gifslim allocates everything when it opens, and a virtual
@@ -791,7 +818,7 @@ impl Engine {
                 self.compositor
                     .begin(canvas, first_frame_heap(&playing.gif));
             }
-            let frame = playing.gif.next_frame_gated(canvas, self.compositor.gate());
+            let frame = decode_frame(playing, &mut self.compositor, canvas);
             note_fallback(playing);
             let frame = match frame {
                 Ok(f) => f,
@@ -893,7 +920,7 @@ impl Engine {
                 self.compositor
                     .begin(canvas, first_frame_heap(&playing.gif));
             }
-            let frame = playing.gif.next_frame_gated(canvas, self.compositor.gate());
+            let frame = decode_frame(playing, &mut self.compositor, canvas);
             note_fallback(playing);
             match frame? {
                 Some(delay) => {
@@ -1871,6 +1898,84 @@ mod tests {
         );
         e.set_transition(transition);
         e
+    }
+
+    #[test]
+    fn a_fallback_under_a_running_transition_cuts_it_first() {
+        use crate::compositor::Kind;
+        const RED: Rgb = Rgb::new(255, 0, 0);
+        const BLUE: Rgb = Rgb::new(0, 0, 255);
+        let ms = Duration::from_millis;
+        // B needs the gif crate from frame 0: Previous disposal.
+        let mut b = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut b, 128, 32, &[]).unwrap();
+            enc.set_repeat(Repeat::Infinite).unwrap();
+            for _ in 0..2 {
+                let mut f = Frame {
+                    width: 128,
+                    height: 32,
+                    buffer: Cow::Owned(vec![1u8; 128 * 32]),
+                    dispose: DisposalMethod::Previous,
+                    delay: 5,
+                    ..Default::default()
+                };
+                f.palette = Some(vec![0, 0, 0, 0, 0, 255]);
+                enc.write_frame(&f).unwrap();
+            }
+        }
+        let mut e = engine_with(
+            &[
+                ("/gifs/Consoles/NES_A_01.gif", solid_gif(255, 0, 0)),
+                ("/gifs/Consoles/NES_B_01.gif", b),
+            ],
+            "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
+            DwellPolicy {
+                min: Duration::from_secs(1),
+                max: Duration::from_secs(30),
+                min_loops: 1,
+            },
+        );
+        e.set_transition(Transition::new(Kind::Dissolve, ms(400)));
+        // The gate sees every request: the transition's first, then the
+        // fallback asking for the crate's bytes once the transition is over.
+        static ASKED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+        ASKED.lock().unwrap().clear();
+        e.set_transition_gate(Some(|n| {
+            ASKED.lock().unwrap().push(n);
+            true
+        }));
+        let mut canvas = Canvas::new();
+        e.tick(ms(0), &mut canvas).unwrap();
+        assert_eq!(e.display(&canvas).get(5, 5), RED);
+        // Past A's dwell: B starts under a Dissolve, and falls back at once.
+        let TickOutcome::Frame {
+            playing,
+            transitioning,
+            ..
+        } = e.tick(ms(1000), &mut canvas).unwrap()
+        else {
+            panic!("expected B's first frame");
+        };
+        assert_eq!(playing.title, "B");
+        assert!(
+            !transitioning && !e.is_transitioning(),
+            "the transition was cut first"
+        );
+        assert!(canvas.as_slice().iter().all(|p| *p == BLUE));
+        assert_eq!(e.display(&canvas).get(5, 5), BLUE);
+        let asked = ASKED.lock().unwrap().clone();
+        assert_eq!(
+            asked,
+            vec![
+                crate::compositor::BUFFER_BYTES,
+                crate::player::GIF_CRATE_BYTES
+            ],
+            "{asked:?}"
+        );
+        // And it carries on with the crate.
+        e.tick(ms(1100), &mut canvas).unwrap();
+        assert_eq!(e.current.as_ref().unwrap().gif.kind(), "gif");
     }
 
     #[test]

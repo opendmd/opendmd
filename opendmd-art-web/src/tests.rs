@@ -499,3 +499,50 @@ fn prepare_gif_matches_the_core_recoder_byte_for_byte() {
     }
     assert!(crate::prepare_gif(b"GIF89a but not really").is_err());
 }
+
+/// FNV-1a 64: a fingerprint of bytes, the same on every platform.
+fn fnv64(b: &[u8]) -> u64 {
+    b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &x| {
+        (h ^ x as u64).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
+/// A 2 px-per-frame scroll of generated pixel art, 50 ms a frame.
+fn two_px_scroll() -> Vec<u8> {
+    let stage = flatten_pad(&pixel_art(128, 80, 3));
+    let mut anim = render(
+        &stage,
+        &Plan {
+            motion: Motion::Scroll,
+            ..Plan::default()
+        },
+    );
+    // Every other frame: 2 px a step.
+    anim.frames = anim.frames.into_iter().step_by(2).collect();
+    anim.delays_ms = vec![50; anim.frames.len()];
+    encode(&anim)
+}
+
+/// Smooth motion: stepwise == one call, marked, and the same bytes natively
+/// and in wasm (the fingerprint is pinned: a change here is a change in
+/// every smoothed copy on every card).
+#[test]
+fn smoothing_is_deterministic_and_stepwise_equals_one_call() {
+    let gif = two_px_scroll();
+    let mut s = crate::Smoother::new(&gif).map_err(|_| ()).unwrap();
+    while !s.analyse(3).map_err(|_| ()).unwrap() {}
+    assert!(s.offered());
+    assert!(s.tweened() > 0 && s.added() == s.tweened());
+    while !s.tween(4).map_err(|_| ()).unwrap() {}
+    let copy = s.prepare().map_err(|_| ()).unwrap();
+    let once = crate::prepare_smooth_gif(&gif).map_err(|_| ()).unwrap();
+    assert_eq!(copy, once);
+    let m = opendmd_core::tween::marker(&copy).unwrap();
+    assert_eq!((m.pairs as u32, m.added as u32), (s.tweened(), s.added()));
+    let mut native = Vec::new();
+    opendmd_core::tween::smooth_gif(&gif, &mut native, &opendmd_core::gifslim::PREPARED).unwrap();
+    assert_eq!(native, copy);
+    assert_eq!(fnv64(&copy), SMOOTH_FINGERPRINT, "{:#x}", fnv64(&copy));
+}
+
+const SMOOTH_FINGERPRINT: u64 = 0x232e_36c6_5c2b_7b7d;

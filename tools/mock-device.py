@@ -68,6 +68,15 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `set`/`platforms`/`shuffle`. A rebuild that still fails (`set` = "" on a
   card with neither default manifest) is a 500 with the settings kept, as in
   `main.rs`.
+- **Smooth motion's list, `/sets/.smooth`** (one card-absolute GIF path a
+  line; `opendmd_core::tween::LIST_PATH`), needs nothing of its own, on the
+  device or here: `GET /sets/.smooth` serves it like any file under
+  `/sets/`, and `PUT /api/files/sets/.smooth` is — like anything directly in
+  `sets/` — a manifest install (no `.idx` to delete, never the active
+  playlist, so just the swap); the web app lists only `sets/*.txt` as
+  playlists. Its smoothed copies are ordinary uploads under `cache/`; the
+  simulated player drops its cached frame delays whenever a copy or a GIF
+  is written, since a smoothed copy has more frames.
 - **No `GET`/`DELETE /api/sets/*` route** — sets are read at
   `GET /sets/<name>.txt` and deleted at `DELETE /api/files/sets/<name>.txt`.
 - **`.gz` preference is `www/`-only**, and unconditional (no `Accept-Encoding`
@@ -2572,6 +2581,7 @@ def make_handler(ctx: Context, quiet: bool):
             removed = ctx.fs.read_path(copy.lstrip("/")) is not None and ctx.fs.delete(copy.lstrip("/"))
             if removed:
                 ctx.cache.invalidate()
+                ctx.player.delays.clear()
             return removed
 
         def h_cache_forget(self, path):
@@ -2751,6 +2761,11 @@ def make_handler(ctx: Context, quiet: bool):
             written = ctx.fs.write_bytes(rel, data)
             if rel.lower().startswith(CACHE_DIR + "/"):
                 ctx.cache.invalidate()
+            if rel.lower().startswith((CACHE_DIR + "/", "gifs/")):
+                # A new copy (a smoothed one has more frames) or a replaced
+                # GIF: what the simulated player plays changed.
+                with ctx.lock:
+                    ctx.player.delays.clear()
             self.send_json(200, {"ok": True, "path": "/" + rel, "bytes": written})
 
         def h_files_delete(self, path):
@@ -2790,6 +2805,7 @@ def make_handler(ctx: Context, quiet: bool):
                 if is_manifest_path(rel):
                     ctx.fs.delete(rel + ".idx")
                 existed = ctx.fs.delete(rel)
+                ctx.player.delays.clear()
                 if existed:
                     self.forget_copy("/" + rel)
                     if rel.lower().startswith(CACHE_DIR + "/"):

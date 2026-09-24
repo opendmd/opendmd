@@ -78,7 +78,7 @@ pub fn find_sources(dir: &Path, suffix: Option<&str>) -> io::Result<Vec<PathBuf>
 type Collected<T> = (Vec<(String, T)>, Vec<(String, String)>);
 
 /// Run `work` over `files` on `jobs` threads, collecting `Ok`s and errors.
-fn parallel<T: Send>(
+pub(crate) fn parallel<T: Send>(
     files: &[PathBuf],
     jobs: usize,
     root: &Path,
@@ -121,7 +121,7 @@ fn parallel<T: Send>(
     (r, e)
 }
 
-fn jobs_or_all(jobs: Option<usize>) -> usize {
+pub(crate) fn jobs_or_all(jobs: Option<usize>) -> usize {
     jobs.unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
         .max(1)
 }

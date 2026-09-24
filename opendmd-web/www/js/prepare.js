@@ -23,6 +23,11 @@
 //   bar the ones this encoder can do (colours, size).
 // - network: a GET or PUT that failed is tried again after 2 s, then once
 //   more at the end of the run; what still fails is listed together.
+//
+// Smooth motion (js/smooth.js): a GIF listed in /sets/.smooth is prepared
+// smooth, and a listed GIF whose file is not the smooth one — the device's
+// own builder makes plain ones, e.g. after the cache was cleared — is made
+// again in the same run.
 
 import { app } from './state.js';
 import { emit, store } from './util.js';
@@ -47,13 +52,13 @@ export async function prepareBytes(gifPath, bytes) {
 }
 
 // The entries of the playlist in play (under the device's platform filter,
-// as its count is) that have no prepared copy yet.
+// as its count is), and those of them that have no prepared copy yet.
 export async function missing() {
   const text = await app.text(app.activePath, true);
   if (text == null) throw new Error('the playlist could not be read');
   const paths = app.wasm.filterManifest(text, JSON.stringify({ platforms: app.config?.platforms || '' }));
   const have = new Set((await app.src.cacheList()).map((p) => p.toLowerCase()));
-  return paths.filter((p) => { const c = app.wasm.cachePathFor(p); return c && !have.has(c.toLowerCase()); });
+  return { paths, missing: paths.filter((p) => { const c = app.wasm.cachePathFor(p); return c && !have.has(c.toLowerCase()); }) };
 }
 
 // --- the damaged list -----------------------------------------------------
@@ -89,14 +94,15 @@ async function recordDamaged(path, reason) {
 
 // --- the run ----------------------------------------------------------------
 // One file: 'ok', 'damaged' (recorded) or 'net' (after its retry, if any).
-async function one(path, retry) {
+async function one(path, retry, smooth) {
   for (let i = 0; ; i++) {
     let bytes;
     try {
       bytes = await app.src.readBytes(path);
       const m = await art();
       let copy;
-      try { copy = m.prepareGif(bytes).copy; } catch (e) {
+      // (One the tweener cannot take is prepared plain.)
+      try { copy = (smooth && await smooth.smoothCopy(bytes).catch(() => null)) || m.prepareGif(bytes).copy; } catch (e) {
         const reason = String(e.message || e);
         job.damaged.push({ path, reason });
         await recordDamaged(path, reason);
@@ -116,13 +122,15 @@ export async function start() {
   Object.assign(job, { running: true, stopping: false, phase: 'checking', todo: 0, done: 0, current: '', errors: [], t0: 0, damaged: [], net: [], tried: 0 });
   tell();
   try {
-    const [list, bad] = await Promise.all([missing(), damagedList()]);
+    const [{ paths, missing: list }, bad, sm] = await Promise.all([missing(), damagedList(), import('./smooth.js')]);
+    const { listed, redo } = await sm.pending(paths, list);
     const todo = [];
-    for (const p of list) {
+    for (const p of [...list, ...redo]) {
       const why = bad.get(p.toLowerCase());
       if (why != null) job.damaged.push({ path: p, reason: why, known: true });
       else todo.push(p);
     }
+    const how = (p) => (listed.has(p.toLowerCase()) ? sm : null);
     Object.assign(job, { phase: 'preparing', todo: todo.length, t0: performance.now() });
     tell();
     const later = [];
@@ -130,7 +138,7 @@ export async function start() {
       if (job.stopping) break;
       job.current = path;
       tell();
-      const r = await one(path, true);
+      const r = await one(path, true, how(path));
       job.tried++;
       if (r === 'ok') job.done++;
       else if (r === 'net') { later.push(path); job.net.push(path); }
@@ -140,7 +148,7 @@ export async function start() {
       if (job.stopping) break;
       job.current = path;
       tell();
-      const r = await one(path, false);
+      const r = await one(path, false, how(path));
       if (r !== 'net') job.net.splice(job.net.indexOf(path), 1);
       if (r === 'ok') job.done++;
       tell();

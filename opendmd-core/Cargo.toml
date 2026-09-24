@@ -12,6 +12,11 @@ color_quant = "1.1"
 gif = "0.13"
 log = "0.4"
 
+[features]
+# Smooth motion (src/tween.rs): the shift tweener for prepared copies. Only
+# opendmd-pack and the art wasm module enable it; the firmware never does.
+tween = []
+
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
 [patch.crates-io]
 gif = { path = "../third_party/gif" }
