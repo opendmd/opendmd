@@ -59,6 +59,10 @@ export class DeviceSource {
   cache() { return this.json('GET', '/api/cache', undefined, 15000); }
   async cacheList() { return (await this.json('GET', '/api/cache/list', undefined, 180000)).paths; }
   forget(path) { return this.json('POST', '/api/cache/forget', JSON.stringify({ path })); }
+  // GIFs that can never be prepared ([{path, reason}], the device's
+  // /odm/.failed), and recording one. Not in every firmware yet.
+  cacheFailed() { return this.json('GET', '/api/cache/failed'); }
+  cacheFail(path, reason) { return this.json('POST', '/api/cache/failed', JSON.stringify({ path, reason })); }
   // A playlist's per-GIF overrides, parsed: {set, playlist, overrides: [...]}.
   overrides(set) { return this.json('GET', '/api/overrides?set=' + encodeURIComponent(set)); }
   // The schedule (rules + night mode), whole; and suspending it for a while.

@@ -78,6 +78,7 @@ export async function mount(el) {
   const cacheBar = h('i');
   const cacheMsg = h('div.muted', { id: 'pc-progress' });
   const cacheErr = h('div.log.bad', { id: 'pc-errors' });
+  const cacheSum = h('div', { id: 'pc-summary' });
   // The device prepares files by itself when idle (auto_prepare): one
   // sentence, and whether it may also do so, slowly, while playing.
   const autoLine = h('span', { id: 'pc-auto' });
@@ -109,7 +110,7 @@ export async function mount(el) {
     h('div.card', { id: 'pc' }, h('h2', 'Playback cache'),
       h('p.cap', 'Prepared copies play with less memory and start faster. Originals stay as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
-      h('div.bar', { style: 'margin:10px 0' }, cacheBar), cacheMsg, cacheErr, autoBox),
+      h('div.bar', { style: 'margin:10px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox),
     h('div.card', h('h2', 'Network'), h('p.cap', 'WiFi and hostname changes need a reboot. With no saved network the player raises the open OpenDMD-Setup access point.'),
       h('div.form',
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
@@ -236,14 +237,22 @@ export async function mount(el) {
   function renderJob(j) {
     cacheBtn.textContent = j.running ? (j.stopping ? 'Stopping after this file…' : 'Stop') : 'Prepare remaining files';
     cacheBtn.disabled = j.stopping;
-    const n = j.done + j.failed;
+    const n = j.tried, dmg = j.damaged.length, net = j.net.length, num = (x) => x.toLocaleString();
+    const files = (k, what) => `${num(k)} ${what}${k === 1 ? '' : 's'}`;
     cacheBar.style.width = j.todo ? `${(100 * n) / j.todo}%` : j.phase === 'finished' ? '100%' : '0';
     const left = prep.eta();
+    const skipped = dmg ? ` · ${files(dmg, 'damaged file')} skipped (${dmg === 1 ? 'it' : 'they'} can't be played either)` : '';
     cacheMsg.textContent = j.phase === 'checking' ? 'Finding the files that are not prepared yet…'
-      : j.phase === 'preparing' ? `${n.toLocaleString()} of ${j.todo.toLocaleString()}` + (j.failed ? ` · ${j.failed} failed` : '') + (left != null ? ` · about ${mins(left)} left` : '') + (j.current ? ` · ${base(j.current)}` : '')
-      : j.phase === 'finished' ? (j.todo ? `Done: ${j.done.toLocaleString()} prepared` + (j.failed ? `, ${j.failed} failed` : '') + '.' : 'Every file is already prepared.')
-      : j.phase === 'stopped' ? `Stopped after ${j.done.toLocaleString()} of ${j.todo.toLocaleString()}. Start again to carry on.` : '';
-    clear(cacheErr, j.errors.slice(-20).map((e) => h('div', e)));
+      : j.phase === 'preparing' ? `${num(n)} of ${num(j.todo)} · ${num(j.done)} prepared` + (dmg ? ` · ${num(dmg)} damaged skipped` : '')
+        + (net ? ` · ${num(net)} couldn't download` : '') + (left != null && n < j.todo ? ` · about ${mins(left)} left` : '') + (j.current ? ` · ${base(j.current)}` : '')
+      : j.phase === 'finished' ? (j.todo ? files(j.done, 'file') + ' prepared' : dmg ? 'Every other file is already prepared' : 'Every file is already prepared') + skipped + '.'
+      : j.phase === 'stopped' ? `Stopped after ${num(n)} of ${num(j.todo)}` + skipped + '. Start again to carry on.' : '';
+    // Once a run is over: what was skipped, and what could not be fetched.
+    const list = (id, head, rows) => h('details', { id }, h('summary', head), h('div.log', rows.map((r) => h('div', r))));
+    clear(cacheSum, !j.running && dmg > 0 && list('pc-damaged', 'Damaged files', j.damaged.map((d) => `${d.path} — ${d.reason}`)),
+      !j.running && net > 0 && h('div', { id: 'pc-net' }, h('span.bad', `Couldn't download ${files(net, 'file')} — `),
+        h('button.sm', { onclick: () => prep.start() }, 'try again'), list('pc-net-list', 'Which files', j.net)));
+    clear(cacheErr, j.errors.map((e) => h('div', e)));
     if (!j.running && j.phase !== 'idle') loadCache();
   }
   on('prepare', renderJob);
