@@ -95,7 +95,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   after one answers `"counting"` with the previous figure (null before the
   first count), as the device does. `GET /api/cache/list` is every copy's
   path; `POST /api/cache/forget {"path":"/gifs/…"}` deletes a GIF's copy;
-  `DELETE /api/files/gifs/…` takes the copy with it.
+  `DELETE /api/files/gifs/…` takes the copy with it. `GET /api/cache/failed`
+  is `[{path, reason}]` from `odm/.failed` and `POST
+  /api/cache/failed {"path","reason"}` appends a line to it (once per path;
+  `{ok, path, added}`): the GIFs that can never be prepared. The firmware
+  has no such routes yet (it writes the file, served by `/odm/*`), so
+  `--strict` 404s them as it does.
 - **Auto prepare** (`auto_prepare` in the config: `"idle"` by default,
   `"always"`, `"off"`, anything else a 400). `/api/cache` ends with
   `"auto":{mode,state,reason,policy,session,failed,avg_full_s,avg_drip_s,
@@ -162,7 +167,9 @@ Behave like the current firmware where this mock otherwise differs on
 purpose: a `..` escape through the `/*` catch-all is a plain 404 (not 400),
 and `/api/stat` and `/api/play` cost a FAT directory scan of the parent
 (15 ms + 0.15 ms per entry: ~20 ms in a bucket, ~590 ms in `gifs/Consoles`),
-so a UI that stats or plays in a big directory feels it.
+so a UI that stats or plays in a big directory feels it; and
+`/api/cache/failed` (GET and POST), which the firmware does not have yet,
+is its 404.
 - OTA validates the ESP image magic byte (`0xE9`) and the 1,572,864 B slot
   size, and demands a `Content-Length`.
 
@@ -223,6 +230,7 @@ from pathlib import Path
 MANIFEST_REL = "filelist.txt"          # config::MANIFEST_PATH, relative to the card root
 OBSOLETE_SET = "filelist.odm.txt"      # config::OBSOLETE_ODM_MANIFEST: ignored, refused as a set
 MAX_JSON_BODY = 8192                   # http.rs MAX_JSON_BODY
+FAILED_REL = "odm/.failed"             # config::BUILDER_FAILED_PATH, card-relative
 SET_NOT_FOUND = "set not found"        # state::SET_NOT_FOUND
 SETS_DIR = "sets"                      # config::SETS_DIR
 OTA_SLOT_SIZE = 1_572_864              # the board's OTA slot (ota.rs)
@@ -1943,6 +1951,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/cache"), {"GET": self.h_cache}),
                 (m_exact("/api/cache/list"), {"GET": self.h_cache_list}),
                 (m_exact("/api/cache/forget"), {"POST": self.h_cache_forget}),
+                (m_exact("/api/cache/failed"), {"GET": self.h_cache_failed_get, "POST": self.h_cache_failed_post}),
                 (m_exact("/api/files"), {"GET": self.h_files_list}),
                 (m_exact("/api/wifi/scan"), {"GET": self.h_wifi_scan}),
                 (m_exact("/api/ota"), {"POST": self.h_ota}),
@@ -2567,6 +2576,56 @@ def make_handler(ctx: Context, quiet: bool):
                 return
             removed = self.forget_copy(p)
             self.send_json(200, {"ok": True, "path": p, "removed": removed})
+
+        # /odm/.failed: `path<TAB>reason` a line, the GIFs that can never be
+        # prepared (the firmware's cache builder writes it; the mock's
+        # simulated builder does not). The routes are the mock's proposal:
+        # the firmware has none yet (the file itself is served by /odm/*),
+        # so `--strict` answers them with the firmware's 404.
+        def h_cache_failed_get(self, path):
+            if ctx.strict:
+                self.send_error_json(404, path)
+                return
+            fp = ctx.fs.read_path(FAILED_REL)
+            rows = []
+            if fp is not None:
+                for line in fp.read_text(encoding="utf-8", errors="replace").split("\n"):
+                    gif, _, why = line.partition("\t")
+                    if gif.strip():
+                        rows.append({"path": gif.strip(), "reason": why.strip()})
+            self.send_json(200, rows)
+
+        def h_cache_failed_post(self, path):
+            if ctx.strict:
+                self.send_error_json(404, path)
+                return
+            raw = self.json_body()
+            if raw is None:
+                return
+            try:
+                req = json.loads(raw)
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"invalid JSON: {e}")
+                return
+            p = req.get("path") if isinstance(req, dict) else None
+            why = req.get("reason", "") if isinstance(req, dict) else ""
+            if not isinstance(p, str) or not isinstance(why, str):
+                self.send_error_json(400, "invalid JSON: missing field `path`")
+                return
+            if card_path(p) is None or bucketed_path(p) is None:
+                self.send_error_json(400, "path must be a card-absolute /gifs/….gif")
+                return
+            why = " ".join(why.split())[:200]
+            with ctx.lock:
+                fp = ctx.fs.read_path(FAILED_REL)
+                old = fp.read_bytes() if fp is not None else b""
+                known = {l.split(b"\t")[0].strip().lower() for l in old.split(b"\n")}
+                added = p.encode().lower() not in known
+                if added:
+                    if old and not old.endswith(b"\n"):
+                        old += b"\n"
+                    ctx.fs.write_bytes(FAILED_REL, old + f"{p}\t{why}\n".encode())
+            self.send_json(200, {"ok": True, "path": p, "added": added})
 
         def h_wifi_scan(self, path):
             time.sleep(1.5)

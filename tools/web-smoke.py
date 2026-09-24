@@ -35,6 +35,12 @@ every view like a person would:
             Settings card reads "0 of 3"; "Prepare remaining files" makes all
             three, byte-identical to `opendmd-pack convert --layout
             bucketed`, and the card reads "3 of 3"
+  Damaged   a playlist of two of them (copies forgotten) and two damaged
+            GIFs written into the overlay (cut short, broken header); the
+            first GET of one good GIF aborted (Playwright route) is retried:
+            one summary line "2 files prepared · 2 damaged files skipped
+            (they can't be played either).", both listed in the disclosure
+            and in /api/cache/failed; a second run never fetches them
   Add GIFs  two GIFs uploaded into Consoles from Library: each GIF and its
             prepared copy land (the copy byte-identical to opendmd-pack), and
             the confirm adds both to `cachetest` ("5 of 5"); deleting one of
@@ -66,9 +72,9 @@ every view like a person would:
 Every view's visible text (and every title tooltip) is checked for "odm" and
 "bucket": prepared copies are an implementation detail.
 
-A few requests fail on purpose (the 404/415 plays, and a preview's try for a
-prepared copy that is not there); they are listed in `expected` and are not
-counted as console errors.
+A few requests fail on purpose (the 404/415 plays, a preview's try for a
+prepared copy that is not there, and the aborted GIF download); they are
+listed in `expected` and are not counted as console errors.
 
 Real-device pass (--device): the local build served through
 `mock-device.py --proxy`, so nothing is uploaded to the card's www/. Now
@@ -888,7 +894,7 @@ def mock_pass(browser) -> None:
         check(a["session"] > 0 and a["avg_full_s"] == 2.0, f"auto: paused -> prepared at full pace ('{t}', session {a['session']})")
         post_json(base + "/api/pause", {})
         page.click("#pc-go")
-        page.wait_for_function("document.querySelector('#pc-progress').textContent.startsWith('Done')", timeout=120000)
+        page.wait_for_function("document.querySelector('#pc-progress').textContent.startsWith('3 files prepared')", timeout=120000)
         line = wait_cache_line(page, "3 of 3")
         check(True, f"cache: prepared -> '{line}' ({page.inner_text('#pc-progress')})")
         made = {bucketed(p): CARD / p.lstrip("/") for p in selected}
@@ -902,6 +908,7 @@ def mock_pass(browser) -> None:
         page.locator("#pc").screenshot(path=str(OUT / "settings-auto-laptop.png"))
         page.uncheck("#pc-always")
         check(wait_config(base, lambda c: c.get("auto_prepare") == "idle").get("auto_prepare") == "idle", "auto: unticked -> auto_prepare idle")
+        damage_checks(page, base, overlay, selected)
         # Add GIFs: two new files into Consoles, prepared, added to cachetest.
         src_dir = OUT / "add-src"
         shutil.rmtree(src_dir, ignore_errors=True)
@@ -1239,6 +1246,91 @@ def studio_device(page: Page) -> None:
     no_leaks(page, "device studio")
     shot(page, "device-studio", "laptop")
     page.click("#st-close")
+
+
+def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> None:
+    """"Prepare remaining files" over a playlist `damagetest`: two of the
+    selected GIFs (their copies forgotten) and two damaged GIFs written into
+    the overlay (one cut short, one with a broken header). The first GET of
+    one good GIF is aborted (Playwright route): it is retried after 2 s and
+    made. The run ends in one summary line; the damaged GIFs are recorded in
+    /odm/.failed (POST /api/cache/failed) and a second run never fetches
+    them. cachetest is back in play, "3 of 3", afterwards."""
+    good = selected[:2]
+    src = CARD / good[0].lstrip("/")
+    data = src.read_bytes()
+    damaged = ["/gifs/Consoles/SNES_Smoke_Damaged_01.gif", "/gifs/Consoles/SNES_Smoke_Damaged_02.gif"]
+    for p, b in zip(damaged, [data[: len(data) * 2 // 5], b"GIF00x" + data[6:]]):
+        (overlay / p.lstrip("/")).parent.mkdir(parents=True, exist_ok=True)
+        (overlay / p.lstrip("/")).write_bytes(b)
+    for p in good:
+        post_json(base + "/api/cache/forget", {"path": p})
+    put_text(base + "/api/sets/damagetest", "".join(p + "\n" for p in good + damaged))
+    put_json(base + "/api/config", {"set": "damagetest"})
+    card = lambda u: urllib.parse.unquote(urllib.parse.urlparse(u).path)
+    flaky, hits = good[1], []
+    aborted = []
+    def once(route):
+        if not aborted:
+            aborted.append(route.request.url)
+            route.abort()
+        else:
+            route.continue_()
+    match = lambda u: card(u) == flaky
+    watch = lambda r: card(r.url) in damaged and hits.append(card(r.url))
+    page.route(match, once)
+    page.on("request", watch)
+    # Chromium's console line for the aborted GET carries its URL.
+    expected.append(urllib.parse.quote(base_name(flaky)))
+    goto_view(page, "sets")
+    goto_view(page, "settings")
+    sync_app(page)
+    wait_cache_line(page, "0 of 4")
+    page.click("#pc-go")
+    page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=120000)
+    line = page.inner_text("#pc-progress")
+    check(line == "2 files prepared · 2 damaged files skipped (they can't be played either).",
+          f"damage: summary line '{line}' (first GET of {base_name(flaky)} aborted: {len(aborted)})")
+    check(len(aborted) == 1 and page.locator("#pc-net").count() == 0 and page.inner_text("#pc-errors") == "",
+          "damage: the aborted download was retried, nothing listed as failed")
+    page.click("#pc-damaged summary")
+    listed = page.inner_text("#pc-damaged")
+    check(all(p in listed for p in damaged) and page.inner_text("#pc-summary").strip().endswith("malformed GIF header"),
+          f"damage: the disclosure lists both damaged GIFs, nothing else ({listed!r})")
+    check(page.locator("#toasts .toast.bad").count() == 0, "damage: no error toasts")
+    shot(page, "settings-damaged", "laptop")
+    rows = get_json(base + "/api/cache/failed")
+    check(sorted(r["path"] for r in rows) == damaged and all(r["reason"] for r in rows),
+          f"damage: recorded in /odm/.failed ({rows})")
+    compare_with_pack(overlay, {bucketed(p): CARD / p.lstrip("/") for p in good})
+    n = len(hits)
+    page.click("#pc-go")
+    page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=60000)
+    line = page.inner_text("#pc-progress")
+    check(line == "Every other file is already prepared · 2 damaged files skipped (they can't be played either)."
+          and len(hits) == n, f"damage: second run '{line}', damaged GIFs fetched again: {len(hits) - n}")
+    page.unroute(match)
+    page.remove_listener("request", watch)
+    expected.remove(urllib.parse.quote(base_name(flaky)))
+    put_json(base + "/api/config", {"set": "cachetest"})
+    req = urllib.request.Request(base + "/api/files/sets/damagetest.txt", method="DELETE")
+    urllib.request.urlopen(req, timeout=30).read()
+    for p in damaged:
+        (overlay / p.lstrip("/")).unlink()
+    sync_app(page)
+    goto_view(page, "sets")
+    goto_view(page, "settings")
+    line = wait_cache_line(page, "3 of 3")
+    check(True, f"damage: cachetest back in play, '{line}'")
+
+
+def sync_app(page: Page) -> None:
+    """The page catches up with a config change made behind its back."""
+    page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); await app.refreshStatus(); }")
+
+
+def base_name(path: str) -> str:
+    return path.rsplit("/", 1)[-1]
 
 
 def compare_with_pack(overlay: Path, made: dict[str, Path]) -> None:
