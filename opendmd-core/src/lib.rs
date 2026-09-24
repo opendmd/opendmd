@@ -10,6 +10,7 @@ pub mod compositor;
 pub mod engine;
 pub mod filter;
 pub mod follow;
+pub mod gifslim;
 pub mod index;
 pub mod layout;
 pub mod manifest;

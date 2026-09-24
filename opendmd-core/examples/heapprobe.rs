@@ -13,7 +13,13 @@
 //!
 //! `-v` also prints where the steady bytes went, by taking a reading at each
 //! construction step.
+//!
+//! `--slim <cap>` (3..=12, or `auto` for the file's hint) opens every file
+//! with `gifslim::GifSlim` instead (the gifslim experiment): the small
+//! capped-LZW decoder, whose heap is the read buffer, `2^cap` x 3 B of
+//! tables and the global palette.
 use opendmd_core::canvas::{Canvas, HEIGHT, WIDTH};
+use opendmd_core::gifslim::GifSlim;
 use opendmd_core::player::FrameSource;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fs::File;
@@ -41,6 +47,12 @@ fn main() {
     let verbose = args.first().map(|a| a == "-v").unwrap_or(false);
     if verbose {
         args.remove(0);
+    }
+    if args.first().map(|a| a == "--slim").unwrap_or(false) {
+        let cap = args[1].parse::<u8>().ok();
+        args.drain(..2);
+        slim(&args, cap, verbose);
+        return;
     }
 
     for path in args {
@@ -142,6 +154,81 @@ fn main() {
                 (at_source - at_reader).saturating_sub(own_screen + w * h),
                 after_first - at_source,
                 peak - after_first,
+            );
+        }
+    }
+}
+
+fn slim(paths: &[String], cap: Option<u8>, verbose: bool) {
+    for path in paths {
+        let base = LIVE.load(SeqCst);
+        PEAK.store(base, SeqCst);
+        let mut canvas = Canvas::new();
+        let at_canvas = LIVE.load(SeqCst) - base;
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(e) => {
+                println!("{path}: {e}");
+                continue;
+            }
+        };
+        let reader: Box<dyn std::io::Read> = Box::new(file);
+        let at_reader = LIVE.load(SeqCst) - base;
+        let opened = match cap {
+            Some(c) => GifSlim::with_cap(reader, c),
+            None => GifSlim::new(reader),
+        };
+        let mut src = match opened {
+            Ok(s) => s,
+            Err(e) => {
+                println!("{path}: {e}");
+                continue;
+            }
+        };
+        let at_source = LIVE.load(SeqCst) - base;
+        let (mut frames, mut after_first, mut error) = (0, 0, String::new());
+        loop {
+            match src.next_frame(&mut canvas) {
+                Ok(Some(_)) => {
+                    frames += 1;
+                    if frames == 1 {
+                        after_first = LIVE.load(SeqCst) - base;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    error = format!("  ERROR {e}");
+                    break;
+                }
+            }
+        }
+        let peak = PEAK.load(SeqCst) - base;
+        let (w, h) = src.logical_size();
+        println!(
+            "{:<45} slim{:<2} {:>3}x{:<3} frames {:>5}  steady {:>6} B  peak {:>6} B{}",
+            path.rsplit('/').next().unwrap(),
+            src.cap(),
+            w,
+            h,
+            frames,
+            after_first,
+            peak,
+            error
+        );
+        if verbose {
+            let tables = 3usize << src.cap();
+            println!(
+                "    canvas {} B | + source reader {} B | + GifSlim {} B \
+                 (2 KiB read buffer + tables {} + palette/screen {}) | \
+                 + first frame {} B | transient {} B | heap_bytes() {}",
+                at_canvas,
+                at_reader - at_canvas,
+                at_source - at_reader,
+                tables,
+                (at_source - at_reader).saturating_sub(2048 + tables),
+                after_first - at_source,
+                peak - after_first,
+                src.heap_bytes(),
             );
         }
     }
