@@ -1,0 +1,32 @@
+[package]
+name = "opendmd-art-web"
+version = "0.1.0"
+edition = "2021"
+description = "The web app's Studio (\"Make art\"): turn a picture into a 128x32 GIF. Loaded lazily, separately from opendmd-web."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rossduggan/opendmd"
+publish = false
+
+[lib]
+# cdylib is what wasm-pack links; rlib for `wasm-pack test --node` and the
+# `render` example (the smoke test's reference output).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Only for `follow::clean_game_name` / `console_name`: what a card calls a
+# game and a platform. The pixel work below uses none of the core.
+opendmd-core = { path = "../opendmd-core" }
+gif = "0.13"            # the encoder: one global palette, every frame whole
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+# The vendored gif 0.13.3 (see third_party/gif/README-OPENDMD.md); a patch is
+# per-lockfile, so every crate repeats it.
+[patch.crates-io]
+gif = { path = "../third_party/gif" }

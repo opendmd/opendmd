@@ -4,8 +4,9 @@
 // entries for a playlist. On a device, "Send to panel" plays the previewed
 // GIF now (POST /api/play; the device finds the prepared copy itself), and
 // "Add GIFs" uploads files into the category shown, prepares each one in the
-// browser, and offers to add them to the playlist in play. Listings come
-// from GET /api/files, one directory at a time.
+// browser, and offers to add them to the playlist in play. "Make art…"
+// opens the Studio (js/studio.js, loaded on first use), which saves the
+// same way. Listings come from GET /api/files, one directory at a time.
 
 import { app, playlistLabel } from './state.js';
 import { Overrides, glyphs, menu, moreButton, playlistSelect } from './overrides.js';
@@ -43,6 +44,7 @@ export async function mount(el) {
   const addErr = h('div.log.bad', { id: 'lib-add-errors' });
   const addCard = h('div.card', { id: 'lib-add', hidden: true }, h('div.bar', { style: 'margin-bottom:8px' }, addBar), addMsg, addErr);
   const addBtn = app.device && h('label.btn', { id: 'lib-add-btn', title: 'Upload GIFs into the category shown' }, 'Add GIFs…', addInput);
+  const artBtn = h('button', { id: 'lib-art', title: 'Make a GIF for the panel from a picture', onclick: () => art() }, 'Make art…');
 
   // Favourite / hide / play longer act on one playlist: the one in play,
   // unless another is chosen here.
@@ -58,20 +60,20 @@ export async function mount(el) {
       clear(row, box,
         h('span.t', label(it.e), it.e.platform && h('span.tag', it.e.platform), ...it.e.flags.map((f) => h('span.tag', f))),
         glyphs(o),
-        h('span.n.mono', it.name), moreButton(ov, it.path));
+        h('span.n.mono', it.name), moreButton(ov, it.path, artItem(it)));
       row.classList.toggle('cur', it.path === current);
       row.classList.toggle('hid', !!o?.never);
       row.dataset.path = it.path;
     },
     onClick: (it) => preview(it),
-    onMenu: (it, _i, x, y) => menu(ov, it.path, x, y),
+    onMenu: (it, _i, x, y) => menu(ov, it.path, x, y, artItem(it)),
   });
   list.el.id = 'lib-list';
 
   el.append(h('div.libgrid',
     h('div',
       h('div.card',
-        h('div.row', cat, h('div.grow', { style: 'min-width:140px' }, search), count, addBtn),
+        h('div.row', cat, h('div.grow', { style: 'min-width:140px' }, search), count, addBtn, artBtn),
         h('div', { style: 'margin-top:8px' }, chips),
         h('div', { style: 'margin-top:8px' }, ovHolder)),
       addCard, list.el, selbar),
@@ -152,10 +154,21 @@ export async function mount(el) {
     list.set(shown);
   }
 
-  // Upload each GIF into the category shown and prepare it straight away:
-  // the GIF (PUT /api/files/gifs/…), then its prepared copy, encoded here.
-  // One file at a time; a GIF that will not encode is still added (it plays
-  // as it is) and any stale copy of an older file by that name is forgotten.
+  // Upload one GIF into a category and prepare it straight away: the GIF
+  // (PUT /api/files/gifs/…), then its prepared copy, encoded here. A GIF
+  // that will not encode is still added (it plays as it is; `warn` says so)
+  // and any stale copy of an older file by that name is forgotten.
+  async function addOne(category, name, bytes, warn) {
+    const path = `/gifs/${category}/${name}`;
+    await app.src.writeFile(path, bytes);
+    try { await prepareBytes(path, bytes); } catch (e) {
+      warn?.(`${name}: added, but it could not be prepared (${e.message || e}); it will play as it is`);
+      try { await app.src.forget(path); } catch { /* nothing to forget */ }
+    }
+    return path;
+  }
+
+  // Each GIF into the category shown, one file at a time.
   async function addGifs(picked) {
     const gifs = picked.filter((f) => /\.gif$/i.test(f.name));
     if (!gifs.length) { toast('choose .gif files', 'bad'); return; }
@@ -164,19 +177,12 @@ export async function mount(el) {
     addCard.hidden = false;
     addErr.replaceChildren();
     const added = [];
+    const warn = (m) => addErr.append(h('div', m));
     for (let i = 0; i < gifs.length; i++) {
-      const f = gifs[i], path = `/gifs/${category}/${f.name}`;
+      const f = gifs[i];
       addMsg.textContent = `Adding ${i + 1} of ${gifs.length} to ${category} · ${f.name}`;
       addBar.style.width = `${(100 * i) / gifs.length}%`;
-      try {
-        const bytes = new Uint8Array(await f.arrayBuffer());
-        await app.src.writeFile(path, bytes);
-        added.push(path);
-        try { await prepareBytes(path, bytes); } catch (e) {
-          addErr.append(h('div', `${f.name}: added, but it could not be prepared (${e.message || e}); it will play as it is`));
-          try { await app.src.forget(path); } catch { /* nothing to forget */ }
-        }
-      } catch (e) { addErr.append(h('div', `${f.name}: ${e.message || e}`)); }
+      try { added.push(await addOne(category, f.name, new Uint8Array(await f.arrayBuffer()), warn)); } catch (e) { warn(`${f.name}: ${e.message || e}`); }
     }
     addBar.style.width = '100%';
     addMsg.textContent = `${added.length} of ${gifs.length} added to ${category}.`;
@@ -185,6 +191,20 @@ export async function mount(el) {
       await offerPlaylist(added);
     }
   }
+
+  // "Make art": the Studio, loaded on first use (with its own wasm). It
+  // saves through addOne, like Add GIFs, then offers the playlist.
+  async function art(e) {
+    try {
+      (await import('./studio.js')).open({
+        entry: e, category: e?.category || cat.value, categories: [...cat.options].map((o) => o.value),
+        names: async (c) => (c === cat.value ? items : await app.src.list(`/gifs/${c}`).catch(() => [])).map((f) => f.name),
+        save: addOne,
+        async saved(c, paths) { if (c === cat.value) await load(); await offerPlaylist(paths); },
+      });
+    } catch (err) { toast('Make art: ' + err.message, 'bad'); }
+  }
+  const artItem = (it) => ['✎ Make art from this', () => art(it.e)];
 
   // Add the new GIFs to the playlist in play, if the user wants them there.
   async function offerPlaylist(paths) {

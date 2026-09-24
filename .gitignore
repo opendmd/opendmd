@@ -21,6 +21,7 @@ filelist.odm.txt
 
 # wasm-pack output and `make web`'s precompressed copies
 opendmd-web/www/pkg/
+opendmd-web/www/pkg-art/
 opendmd-web/www/**/*.gz
 opendmd-web/www/version.txt
 

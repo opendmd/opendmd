@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["playwright>=1.45"]
+# dependencies = ["playwright>=1.45", "pillow"]
 # ///
 """Headless-Chromium smoke test of the management UI, in device mode.
 
@@ -39,6 +39,17 @@ every view like a person would:
             prepared copy land (the copy byte-identical to opendmd-pack), and
             the confirm adds both to `cachetest` ("5 of 5"); deleting one of
             the GIFs takes its copy with it
+  Studio    "Make art" from Library: a CC0 PNG (a crop of
+            experiments/art/process/out/a_source_windows.png, a 3x copy of
+            a Kenney scene) imported; the 3x found, Pixels, Pan, the auto
+            band; saved as SNES_Studio_Test_01.gif: the GIF and its prepared
+            copy land where they belong (the copy byte-identical to
+            opendmd-pack's), the GIF's frames and delays equal the Rust
+            pipeline's (`cargo run --example render` in opendmd-art-web),
+            parsePath of the name gives SNES / "Studio Test" / 1, and it is
+            appended to `cachetest`; "Find art for a game" against a stubbed
+            name index and stubbed libretro pictures (one of them a link to
+            another), no network
   Auto      preparing by the device (auto_prepare): /api/cache `auto` and
             /api/status `cache` keys; the card's sentence while playing
             ("…when the panel is idle · 0 of 3"), with the mock paused (its
@@ -67,7 +78,9 @@ Library (+ a preview, sent to the panel with POST /api/play, which must show
 up in /api/status), a preview of a GIF that has a prepared copy (fetched from
 the copy, never the GIF), the cache count (/api/cache, waited until ready),
 the playlists listed by name, Settings (read only; the auto-prepare fields
-and sentence, the setting left alone) and one write: save a set
+and sentence, the setting left alone), the Studio (opens, "Find art for a
+game" finds Super Metroid in the real SNES index and loads its pictures
+from GitHub; nothing saved) and one write: save a set
 named `smoke` and delete it. No preparing, no filelist or config changes.
 
 Screenshots of every view at 1280x800 and 390x844 go to target/web-smoke/.
@@ -920,6 +933,7 @@ def mock_pass(browser) -> None:
         gone = not (overlay / bucketed(gif_paths[1]).lstrip("/")).exists()
         r = cache_ready(base)
         check(gone and r["prepared"] == 4, f"add: deleting a GIF took its copy with it ({r['prepared']} of {r['total']})")
+        studio_checks(page, base, overlay)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
         page.click("#sets-list [data-path='/sets/cachetest.txt'] >> text=Delete")
@@ -1053,6 +1067,178 @@ def mock_pass(browser) -> None:
     finally:
         proc.terminate()
     report_errors("mock", errors)
+
+
+# --- The Studio ("Make art") ---------------------------------------------------
+
+ART = REPO / "opendmd-art-web"
+STUB_INDEX = {"repo": "Stub_-_Repo", "names": ["Other Game (Europe)", "Studio Test (Japan)", "Studio Test (USA)"],
+              "kinds": "123"}
+
+
+def studio_fixture() -> Path:
+    """The CC0 test picture: the top 768x426 of a_source_windows.png (a 3x
+    nearest-neighbour copy of a Kenney "Pixel Platformer" scene; the red and
+    green boxes drawn on it start lower down). Plus its raw RGBA."""
+    from PIL import Image
+    src = REPO / "opendmd-web" / "experiments" / "art" / "process" / "out" / "a_source_windows.png"
+    out = OUT / "studio-fixture.png"
+    im = Image.open(src).convert("RGB").crop((0, 0, 768, 426))
+    im.save(out)
+    (OUT / "studio-fixture.rgba").write_bytes(im.convert("RGBA").tobytes())
+    return out
+
+
+def studio_expected(*opts: str) -> tuple[dict, bytes]:
+    """The Rust pipeline's frames for the fixture: (its JSON line, raw RGB)."""
+    rgb = OUT / "studio-expected.rgb"
+    r = subprocess.run(["cargo", "run", "--release", "--quiet", "--example", "render", "--",
+                        str(OUT / "studio-fixture.rgba"), "768", "426", str(rgb), *opts],
+                       cwd=ART, check=True, capture_output=True, text=True, env={**os.environ, "RUSTUP_TOOLCHAIN": "stable"})
+    return json.loads(r.stdout), rgb.read_bytes()
+
+
+def gif_frames(path: Path) -> tuple[list[bytes], list[int]]:
+    from PIL import Image
+    im = Image.open(path)
+    frames, delays = [], []
+    for i in range(im.n_frames):
+        im.seek(i)
+        frames.append(im.convert("RGB").tobytes())
+        delays.append(im.info.get("duration", 0))
+    return frames, delays
+
+
+def stub_art(page: Page, hits: list[str]) -> None:
+    """A three-name SNES index, and libretro pictures served from the fixture;
+    the USA snap is a link (a few bytes naming the Japan one), as some are."""
+    png = (OUT / "studio-fixture.png").read_bytes()
+
+    def raw(route) -> None:
+        u = urllib.parse.unquote(route.request.url)
+        hits.append(u)
+        if "Named_Snaps/Studio Test (USA)" in u:
+            route.fulfill(status=200, body="Studio Test (Japan).png", headers={"access-control-allow-origin": "*", "content-type": "text/plain"})
+        else:
+            route.fulfill(status=200, body=png, headers={"access-control-allow-origin": "*", "content-type": "image/png"})
+    page.route("**/art/SNES.json", lambda r: r.fulfill(status=200, body=json.dumps(STUB_INDEX), headers={"content-type": "application/json"}))
+    page.route("https://raw.githubusercontent.com/**", raw)
+
+
+def open_studio(page: Page) -> None:
+    goto_view(page, "library")
+    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    page.click("#lib-art")
+    page.wait_for_selector("#studio:not([hidden])", timeout=20000)
+
+
+def studio_data(page: Page) -> dict:
+    return page.evaluate("({...document.querySelector('#studio').dataset})")
+
+
+def studio_shots(page: Page, size: str) -> None:
+    page.evaluate("document.querySelector('#studio').scrollTop = 0")
+    shot(page, "studio", size)
+    page.evaluate("document.querySelector('#studio').scrollTop = 1e6")
+    page.wait_for_timeout(200)
+    shot(page, "studio-save", size)
+    page.evaluate("document.querySelector('#studio').scrollTop = 0")
+
+
+def studio_checks(page: Page, base: str, overlay: Path) -> None:
+    fixture = studio_fixture()
+    hits: list[str] = []
+    stub_art(page, hits)
+    open_studio(page)
+    # Find art for a game: the stubbed index, then a game's pictures.
+    page.select_option("#st-find-plat", "SNES")
+    page.fill("#st-find-q", "studio test")
+    page.click("#st-find-go")
+    page.wait_for_selector("#st-hits .st-hit")
+    rows = page.eval_on_selector_all("#st-hits .st-hit", "els => els.map(e => e.textContent)")
+    check(rows == ["Studio TestUSA", "Studio TestJapan"], f"studio find: 'studio test' on SNES -> {rows}")
+    page.click("#st-hits .st-hit >> nth=0")
+    page.wait_for_function("document.querySelectorAll('#st-thumbs .st-thumb:not([disabled])').length === 2", timeout=10000)
+    kinds = page.eval_on_selector_all("#st-thumbs .st-thumb", "els => els.map(e => e.dataset.kind)")
+    linked = any(h.endswith("Named_Snaps/Studio Test (Japan).png") for h in hits)
+    check(kinds == ["Named_Titles", "Named_Snaps"] and linked,
+          f"studio find: title and snap pictures load, the snap through its link ({kinds}, {len(hits)} requests)")
+    page.click("#st-thumbs .st-thumb[data-kind=Named_Titles]")
+    page.wait_for_function("document.querySelector('#studio').dataset.frames", timeout=20000)
+    d = studio_data(page)
+    check(d.get("platform") == "SNES" and d.get("title") == "Studio Test",
+          f"studio find: a picked picture fills in platform and title ({d.get('platform')}, {d.get('title')})")
+    # The same picture from a file: the upscale undone, Pixels, Pan.
+    page.set_input_files("#st-file", str(fixture))
+    page.wait_for_function("document.querySelector('#st-msg').textContent.startsWith('Picture: 768')", timeout=20000)
+    page.click("#st-fit [data-v=pixels]")
+    page.click("#st-motion [data-v=pan]")
+    page.wait_for_timeout(400)
+    exp, rgb = studio_expected("fit=pixels", "motion=pan")
+    d = studio_data(page)
+    check(d.get("scale") == "3" and d.get("stage") == f"{exp['stage'][0]}x{exp['stage'][1]}",
+          f"studio frame: 3x found, stage {d.get('stage')} (pipeline {exp['stage']})")
+    check([int(d["x"]), int(d["y"])] == exp["window"] and d.get("motion") == "pan" and int(d["frames"]) == exp["frames"],
+          f"studio frame: auto band at {d.get('x')},{d.get('y')} == pipeline {exp['window']}, {d.get('frames')} frames")
+    page.select_option("#st-plat", "SNES")
+    page.fill("#st-title", "Studio Test")
+    page.wait_for_timeout(500)
+    name = "SNES_Studio_Test_01.gif"
+    d = studio_data(page)
+    check(d.get("name") == name, f"studio save: the name is {d.get('name')}")
+    parsed = page.evaluate(f"import('./js/state.js').then(m => m.app.wasm.parsePath('/gifs/Consoles/{name}'))")
+    check((parsed["platform"], parsed["title"], parsed["variant"], parsed["flags"]) == ("SNES", "Studio Test", 1, []),
+          f"studio save: parsePath -> {parsed['platform']} / {parsed['title']!r} / {parsed['variant']} / {parsed['flags']}")
+    check(f"“{parsed['title']} 01”" in page.inner_text("#st-name") and not page.inner_text("#st-warn"),
+          f"studio save: shows the listed title ({page.inner_text('#st-name')})")
+    # The grammar catch: a title word that is a tag is flagged before saving.
+    page.fill("#st-title", "Toy Story")
+    page.wait_for_timeout(300)
+    check("“Toy”" in page.inner_text("#st-warn"), f"studio save: 'Toy Story' warned ({page.inner_text('#st-warn')})")
+    page.fill("#st-title", "Studio Test")
+    page.wait_for_timeout(500)
+    no_leaks(page, "studio")
+    studio_shots(page, "laptop")
+    page.click("#st-save")
+    page.wait_for_function("document.querySelector('#studio').dataset.saved", timeout=60000)
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast.ok')].some(t => t.textContent.startsWith('1 added to “cachetest”'))", timeout=60000)
+    path = f"/gifs/Consoles/{name}"
+    got = overlay / path.lstrip("/")
+    check(got.exists() and (overlay / bucketed(path).lstrip("/")).exists(),
+          f"studio save: {path} and its prepared copy {bucketed(path)} landed")
+    compare_with_pack(overlay, {bucketed(path): got})
+    frames, delays = gif_frames(got)
+    want = [rgb[i * 128 * 32 * 3:(i + 1) * 128 * 32 * 3] for i in range(exp["frames"])]
+    same = sum(a == b for a, b in zip(frames, want))
+    check(len(frames) == exp["frames"] and same == len(frames) and delays == exp["delays"],
+          f"studio save: the GIF's {len(frames)} frames and delays equal the Rust pipeline's ({same} identical)")
+    plist = (overlay / "sets" / "cachetest.txt").read_text().split("\n")
+    check(path in plist, "studio save: appended to cachetest")
+    page.click("#st-close")
+    page.wait_for_selector("#studio", state="hidden")
+    page.unroute("**/art/SNES.json")
+    page.unroute("https://raw.githubusercontent.com/**")
+
+
+def studio_device(page: Page) -> None:
+    """Read only: the Studio opens and finds a game in the real SNES index;
+    its pictures come from GitHub. Nothing is saved."""
+    open_studio(page)
+    page.select_option("#st-find-plat", "SNES")
+    page.fill("#st-find-q", "super metroid")
+    page.click("#st-find-go")
+    page.wait_for_selector("#st-hits .st-hit", timeout=20000)
+    rows = page.eval_on_selector_all("#st-hits .st-hit", "els => els.map(e => e.textContent)")
+    check(any(r.startswith("Super Metroid") for r in rows), f"device studio: 'super metroid' -> {rows[:3]}")
+    page.click("#st-hits .st-hit >> nth=0")
+    try:
+        page.wait_for_selector("#st-thumbs .st-thumb:not([disabled])", timeout=20000)
+        check(True, f"device studio: pictures load ({page.locator('#st-thumbs .st-thumb').count()})")
+    except PlaywrightTimeoutError:
+        check(False, "device studio: no picture loaded from GitHub (network?)")
+    no_leaks(page, "device studio")
+    shot(page, "device-studio", "laptop")
+    page.click("#st-close")
 
 
 def compare_with_pack(overlay: Path, made: dict[str, Path]) -> None:
@@ -1218,6 +1404,20 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
         shot(page, view, "phone")
     overflow = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
     check(overflow <= 0, f"phone: no horizontal scroll ({overflow}px)")
+    # The Studio on a phone: one column, nothing wider than the screen.
+    hits: list[str] = []
+    stub_art(page, hits)
+    open_studio(page)
+    page.set_input_files("#st-file", str(OUT / "studio-fixture.png"))
+    page.wait_for_function("document.querySelector('#studio').dataset.frames", timeout=20000)
+    page.select_option("#st-find-plat", "SNES")
+    page.fill("#st-find-q", "studio")
+    page.click("#st-find-go")
+    page.wait_for_selector("#st-hits .st-hit")
+    wide = page.evaluate("document.querySelector('#studio').scrollWidth - document.querySelector('#studio').clientWidth")
+    check(wide <= 0, f"phone studio: no horizontal scroll ({wide}px)")
+    no_leaks(page, "phone studio")
+    studio_shots(page, "phone")
     page.context.close()
 
 
@@ -1309,6 +1509,7 @@ def device_pass(browser, device: str) -> None:
         check(page.is_checked("#pc-always") == (a.get("mode") == "always"), f"device auto: card reads '{t}'")
         no_leaks(page, "device settings")
         shot(page, "device-settings", "laptop")
+        studio_device(page)
         # The one write: save and delete a set named smoke (never activated).
         n = build_smoke_set(page)
         rows = root_manifest_rows(page)

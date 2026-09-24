@@ -5,6 +5,7 @@ CORE   := opendmd-core
 RENDER := opendmd-render
 SIM    := opendmd-sim
 WEB    := opendmd-web
+ART    := opendmd-art-web
 PACK   := opendmd-pack
 FW     := firmware
 
@@ -64,6 +65,8 @@ test:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(WEB)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(ART)"
+	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo test
 
@@ -71,6 +74,7 @@ test:
 # on this box that the browser path really works. Needs node on PATH.
 test-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
+	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 
 # Needs a real card dump; see CLAUDE.md. ODM_ROOT is tools/odm-proto.py's output
 # (the cross-implementation check); the test skips itself if it is missing.
@@ -113,22 +117,28 @@ check-wasm:
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(WEB) for $(WASM_TARGET)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
+	@echo "==> Checking $(ART) for $(WASM_TARGET)"
+	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 
 # wasm-pack: `cargo install --locked wasm-pack`. Output is gitignored.
 # Then every file the device serves gets a `<file>.gz` beside it: the firmware
 # sends `<file>.gz` under /www in preference to `<file>`, unconditionally
 # (see "Serving gzip" in CLAUDE.md). wasm-pack's package.json, .d.ts files and
 # README are deleted so `make card-sync` does not push them to the card.
-# The budget is enforced here: wasm <= 250 KB, JS + CSS <= 80 KB (raw).
-# www/version.txt (gitignored) is `git describe` of this build; the firmware
-# reports it as `www_version` in /api/status once it is on the card.
+# The Studio's own wasm (opendmd-art-web, "Make art") goes to www/pkg-art,
+# loaded only when the Studio opens. The budgets (gzipped) are enforced by
+# tools/web-size.py. www/version.txt (gitignored) is `git describe` of this
+# build; the firmware reports it as `www_version` in /api/status once it is
+# on the card.
 WEB_WWW := $(WEB)/www
 web:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
+	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-art
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
+	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
 	git describe --always --dirty --tags > $(WEB_WWW)/version.txt
 	find $(WEB_WWW) -name '*.gz' -delete
-	find $(WEB_WWW) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' \) \
+	find $(WEB_WWW) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' -o -name '*.json' \) \
 		-exec gzip -9 -n -k -f {} \;
 	@uv run tools/web-size.py $(WEB_WWW)
 
@@ -157,6 +167,7 @@ fmt:
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
+	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo fmt
 
 clippy:
@@ -168,6 +179,9 @@ clippy:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(WEB)"
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
+	@echo "==> Clippy $(ART)"
+	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
 	@echo "==> Clippy $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 
@@ -176,8 +190,9 @@ clean:
 	cd $(RENDER) && cargo clean
 	cd $(SIM) && cargo clean
 	cd $(WEB) && cargo clean
+	cd $(ART) && cargo clean
 	cd $(PACK) && cargo clean
-	rm -rf $(WEB)/www/pkg ./target
+	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art ./target
 
 # --- ESP32 firmware ---------------------------------------------------------
 # First build clones ESP-IDF v5.3 into ~/.espressif (shared between projects,
