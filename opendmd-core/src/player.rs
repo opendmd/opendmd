@@ -387,7 +387,7 @@ impl Compositor<'_> {
 /// Before a disposal rewrites `rect` of a `Direct` screen (where screen and
 /// canvas coordinates coincide), mark the pixels it will change: those that
 /// differ from `to`, or from black when `to` is `None`.
-fn mark_changes(
+pub(crate) fn mark_changes(
     screen: &[u8],
     to: Option<&[u8]>,
     dirty: Option<&mut DirtyMap>,
@@ -410,7 +410,7 @@ fn mark_changes(
     }
 }
 
-fn clear_rect(screen: &mut [u8], screen_width: usize, rect: Rect) {
+pub(crate) fn clear_rect(screen: &mut [u8], screen_width: usize, rect: Rect) {
     let height = screen.len() / (screen_width * 3);
     for y in 0..rect.height {
         let dy = rect.top + y;

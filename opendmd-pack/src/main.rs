@@ -30,6 +30,7 @@
 //! longer needs such a manifest (the firmware ignores `filelist.odm.txt`).
 
 mod layout;
+mod recode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -70,6 +71,48 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Experiment (docs/gifslim-experiment.md): write <name>.cap<N>[d].gif
+    /// beside every original GIF — a standard GIF whose LZW codes never
+    /// exceed N bits — and optionally verify it frame by frame.
+    Recode {
+        card_root: PathBuf,
+        /// Widest LZW code, 3..=12.
+        #[arg(long)]
+        cap: u8,
+        /// Delta frames (changed rectangle, unchanged pixels transparent).
+        #[arg(long, value_enum)]
+        delta: recode::OnOff,
+        /// Output tag instead of cap<N>[d]: <name>.<suffix>.gif.
+        #[arg(long)]
+        out_suffix: Option<String>,
+        #[arg(long)]
+        jobs: Option<usize>,
+        /// Play original and copy (gif crate and gifslim) and compare.
+        #[arg(long)]
+        verify: bool,
+        /// Leave out the OPENDMD1LZW application extension.
+        #[arg(long)]
+        no_hint: bool,
+        /// Unchanged pixels in a delta rectangle always transparent (the
+        /// textbook rule), never continuing the previous pixel's run.
+        #[arg(long)]
+        no_keep_runs: bool,
+        /// Encode nothing: verify the copies a previous run wrote.
+        #[arg(long)]
+        verify_only: bool,
+        /// Write a per-file table here.
+        #[arg(long)]
+        tsv: Option<PathBuf>,
+    },
+    /// Experiment: play every original GIF with gifslim at caps 9..12
+    /// against GifSource.
+    Gifscan {
+        card_root: PathBuf,
+        #[arg(long)]
+        jobs: Option<usize>,
+        #[arg(long)]
+        tsv: Option<PathBuf>,
+    },
     /// For tooling/tests only: rewrite a manifest's paths to .odm wherever the
     /// .odm exists. Playback does not need this; `convert --layout bucketed`
     /// is all a card needs.
@@ -102,6 +145,34 @@ fn main() -> Result<()> {
             manifest,
             out,
         } => rewrite_manifest(&card_root, layout, &manifest, &out),
+        Cmd::Recode {
+            card_root,
+            cap,
+            delta,
+            out_suffix,
+            jobs,
+            verify,
+            no_hint,
+            no_keep_runs,
+            verify_only,
+            tsv,
+        } => recode::recode(
+            &card_root,
+            cap,
+            delta,
+            out_suffix,
+            jobs,
+            verify,
+            !no_hint,
+            !no_keep_runs,
+            verify_only,
+            tsv,
+        ),
+        Cmd::Gifscan {
+            card_root,
+            jobs,
+            tsv,
+        } => recode::gifscan(&card_root, jobs, tsv),
     }
 }
 
@@ -142,7 +213,11 @@ fn find_gifs(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
         } else if path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("gif"))
+            && !path
+                .file_name()
+                .is_some_and(|n| recode::is_recode_output(&n.to_string_lossy(), None))
         {
+            // (`recode`'s experimental copies are not GIFs to convert.)
             out.push(path);
         }
     }
