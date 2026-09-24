@@ -1078,15 +1078,18 @@ fn rebuild_context(
         let index = File::open(&ctx.index).with_context(|| format!("opening {}", ctx.index))?;
         let mut catalog = IndexedCatalog::open(manifest, index)?;
         let ov = catalog.overrides()?;
-        Ok((engine_over(Box::new(catalog), &ov, settings), ov))
+        // Its own no-repeat window, so a small set of matches can cycle.
+        let window = opendmd_core::follow::context_window(ov.len());
+        Ok((engine_over(Box::new(catalog), &ov, settings, window), ov))
     })();
     let outcome = match built {
         Ok((e, ov)) if e.catalog_len() > 0 => {
             let entries = e.catalog_len();
             log::info!(
-                "follow: playing context {} ({entries} entries, {} weighted) in {} ms, heap {} B free",
+                "follow: playing context {} ({entries} entries, {} weighted, no-repeat window {}) in {} ms, heap {} B free",
                 ctx.index,
                 ov.len(),
+                opendmd_core::follow::context_window(ov.len()),
                 started.elapsed().as_millis(),
                 free_heap()
             );
@@ -1460,7 +1463,7 @@ fn build_engine(
 ) -> Result<(Engine, IndexSource, Overrides)> {
     let (catalog, overrides, source) = open_catalog(path, &build_filter(settings), force)?;
     Ok((
-        engine_over(catalog, &overrides, settings),
+        engine_over(catalog, &overrides, settings, config::NO_REPEAT_WINDOW),
         source,
         overrides,
     ))
@@ -1469,7 +1472,12 @@ fn build_engine(
 /// An engine over `catalog` with the settings' order, dwell and transition,
 /// `overrides` applied, carrying over the picture on the panel if there is
 /// one.
-fn engine_over(catalog: Box<dyn Catalog>, overrides: &Overrides, settings: &Settings) -> Engine {
+fn engine_over(
+    catalog: Box<dyn Catalog>,
+    overrides: &Overrides,
+    settings: &Settings,
+    no_repeat: usize,
+) -> Engine {
     let catalog: Box<dyn Catalog> = if probe::ENABLED {
         Box::new(probe::TimedCatalog(catalog))
     } else {
@@ -1480,8 +1488,7 @@ fn engine_over(catalog: Box<dyn Catalog>, overrides: &Overrides, settings: &Sett
     } else {
         Mode::Sequential
     };
-    let scheduler =
-        Scheduler::new(catalog.len(), mode, random_seed()).with_no_repeat(config::NO_REPEAT_WINDOW);
+    let scheduler = Scheduler::new(catalog.len(), mode, random_seed()).with_no_repeat(no_repeat);
     let mut engine = Engine::new(
         catalog,
         scheduler,

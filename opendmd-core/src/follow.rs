@@ -45,21 +45,23 @@ pub const STRONG: f32 = 0.6;
 /// [`Match::Related`]).
 pub const WEAK: f32 = 0.35;
 
-/// Share of a context playlist's draws the strong matches get together,
-/// when there are any...
-pub const STRONG_SHARE: f32 = STRONG_PCT as f32 / 100.0;
-/// ...and the related ones, alongside them.
-pub const RELATED_SHARE: f32 = RELATED_PCT as f32 / 100.0;
-/// The related matches' share when there are no strong ones.
-pub const RELATED_ONLY_SHARE: f32 = RELATED_ONLY_PCT as f32 / 100.0;
-const STRONG_PCT: u32 = 60;
-const RELATED_PCT: u32 = 15;
-const RELATED_ONLY_PCT: u32 = 40;
+/// Share of a context playlist's draws, in percent, the game's matches
+/// (strong and related together) get. Strong takes as much of it as
+/// [`MAX_WEIGHT`] and the no-repeat window let it; related gets the rest.
+pub const MATCH_PCT: u32 = 60;
 /// No entry of a context playlist weighs more than this. The scheduler's
 /// draw is rejection sampling against the largest weight, so this also
-/// bounds how many tries a draw takes (and a single entry that should have
-/// 60% of 635 draws would need a weight of ~1,450).
-pub const MAX_WEIGHT: f32 = 64.0;
+/// bounds how many tries a draw takes (~1-2% of tries accept at 255 on a
+/// 600-1,000 entry platform: a failed draw — 1,024 rejections — is ~1e-8).
+pub const MAX_WEIGHT: u32 = 255;
+
+/// The no-repeat window of a context playlist with `n_matches` strong +
+/// related entries: `clamp(n_matches - 1, 4, 32)`, so a small match set can
+/// cycle (the global window is 32, which would let one strong GIF play at
+/// most once every 33 draws).
+pub fn context_window(n_matches: usize) -> usize {
+    n_matches.saturating_sub(1).clamp(4, 32)
+}
 
 const STRONG_MARK: f32 = 2.0;
 const RELATED_MARK: f32 = 1.5;
@@ -110,142 +112,143 @@ pub fn classify(score: f32) -> Option<Match> {
 }
 
 /// The per-entry weights of a context playlist, from how many entries it
-/// has of each kind. The rest of the platform weighs 1; the strong matches
-/// together get [`STRONG_SHARE`] of the draws and the related ones
-/// [`RELATED_SHARE`] (or [`RELATED_ONLY_SHARE`] with no strong match), the
-/// rest the remainder — so a platform with 635 entries and one match weighs
-/// that match far more than one with 60 entries and ten.
+/// has of each kind and its no-repeat window ([`context_window`]). The rest
+/// of the platform weighs 1; the matches together should get [`MATCH_PCT`]
+/// of the draws — strong first, as far as [`MAX_WEIGHT`] and the window
+/// allow, then related (at 1 if strong alone gets there). Weights are whole
+/// numbers, and all of this is integer arithmetic (see "Gotchas" in
+/// CLAUDE.md: the Xtensa backend and float constants).
 ///
-/// Each weight is capped at [`MAX_WEIGHT`] (`capped` says it bound) and
-/// floored at 1 (a match never plays less often than any other entry); a
-/// class held at either gets what that gives, and the others still get
-/// their target share, the rest of the platform taking up the difference.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// The model behind it (`shares_ppm`), for weights `w` over `k` entries of
+/// a class and a window `W`: at steady state `W * s` of a class's entries
+/// sit in the window (`s` its share of draws), so with `E` the weight of
+/// every entry *not* in the window, `s = w k / (E + w W)` — which tends to
+/// `k / W` however large `w` gets. `E` is whatever makes the shares sum to
+/// 1. The unit tests check it against the scheduler itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContextWeights {
-    pub strong: f32,
-    pub related: f32,
-    /// A class wanted more than [`MAX_WEIGHT`].
+    pub strong: u32,
+    pub related: u32,
+    /// The matches can't reach [`MATCH_PCT`] even at [`MAX_WEIGHT`].
     pub capped: bool,
+    /// The no-repeat window the playlist plays with.
+    pub window: u32,
     pub n_strong: u32,
     pub n_related: u32,
     /// Entries in the playlist, matches included.
     pub total: u32,
 }
 
+/// Fixed-point scale of `E` in [`ContextWeights::shares_ppm`].
+const E_ONE: u64 = 256;
+
 impl ContextWeights {
     pub fn for_counts(total: u32, n_strong: u32, n_related: u32) -> Self {
-        let n_rest = total.saturating_sub(n_strong + n_related);
-        // In whole percent, and through `black_box`: LLVM turns a choice
-        // between two float constants into a load from a two-entry constant
-        // table, which the Xtensa backend cannot select ("Cannot select ...
-        // PCREL_WRAPPER TargetConstantPool" — a compiler crash, not a
-        // warning), and it folds a plain integer choice back into one.
-        let (ts, tr): (u32, u32) = std::hint::black_box(match (n_strong > 0, n_related > 0) {
-            (true, true) => (STRONG_PCT, RELATED_PCT),
-            (true, false) => (STRONG_PCT, 0),
-            (false, true) => (0, RELATED_ONLY_PCT),
-            (false, false) => (0, 0),
-        });
-        let (ts, tr) = (ts as f32 / 100.0, tr as f32 / 100.0);
-        // (count, target share, weight once fixed at the cap or the floor)
-        let mut classes = [(n_strong as f32, ts, None), (n_related as f32, tr, None)];
-        let mut capped = false;
-        if n_rest == 0 {
-            // Nothing else to weigh against: the classes against each other,
-            // the lighter entry 1.
-            let per = |(n, t, _): (f32, f32, Option<f32>)| if n > 0.0 { t / n } else { 0.0 };
-            let (ps, pr) = (per(classes[0]), per(classes[1]));
-            let base = [ps, pr]
-                .into_iter()
-                .filter(|p| *p > 0.0)
-                .fold(f32::MAX, f32::min);
-            let mut w = |p: f32| {
-                if p > 0.0 {
-                    let w = p / base;
-                    capped |= w > MAX_WEIGHT;
-                    w.min(MAX_WEIGHT)
-                } else {
-                    1.0
-                }
-            };
-            let (strong, related) = (w(ps), w(pr));
-            return ContextWeights {
-                strong,
-                related,
-                capped,
-                n_strong,
-                n_related,
-                total,
-            };
-        }
-        // Water-filling: a class not held gets exactly its share of the total
-        // mass M, where M = (rest + held classes' mass) / (1 - free shares).
-        // Holding one changes M, so repeat until nothing more is held (at most
-        // once per class).
-        let mut weights = [1.0f32; 2];
-        for _ in 0..=classes.len() {
-            let held: f32 = classes
-                .iter()
-                .filter_map(|(n, _, w)| w.map(|w| w * n))
-                .sum();
-            let free: f32 = classes
-                .iter()
-                .filter(|(n, _, w)| w.is_none() && *n > 0.0)
-                .map(|(_, t, _)| t)
-                .sum();
-            let mass = (n_rest as f32 + held) / (1.0 - free);
-            let mut changed = false;
-            for (k, (n, t, fixed)) in classes.iter_mut().enumerate() {
-                if *n == 0.0 {
-                    continue;
-                }
-                if let Some(w) = fixed {
-                    weights[k] = *w;
-                    continue;
-                }
-                let w = *t * mass / *n;
-                weights[k] = w;
-                if w > MAX_WEIGHT {
-                    *fixed = Some(MAX_WEIGHT);
-                    capped = true;
-                    changed = true;
-                } else if w < 1.0 {
-                    *fixed = Some(1.0);
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        ContextWeights {
-            strong: weights[0],
-            related: weights[1],
-            capped,
+        let window = context_window((n_strong + n_related) as usize) as u32;
+        let mut w = ContextWeights {
+            strong: 1,
+            related: 1,
+            capped: false,
+            window,
             n_strong,
             n_related,
             total,
+        };
+        let target = MATCH_PCT * 10_000;
+        let matched = |w: &ContextWeights| {
+            let [s, r, _] = w.shares_ppm();
+            s + r
+        };
+        if n_strong + n_related == 0 || matched(&w) >= target {
+            return w;
         }
+        // The smallest weight in 1..=MAX_WEIGHT at which the matches reach
+        // the target (they only grow with it), or None.
+        let search = |w: &mut ContextWeights, strong: bool| -> bool {
+            let set = |w: &mut ContextWeights, v: u32| {
+                if strong {
+                    w.strong = v
+                } else {
+                    w.related = v
+                }
+            };
+            set(w, MAX_WEIGHT);
+            if matched(w) < target {
+                return false;
+            }
+            let (mut lo, mut hi) = (1u32, MAX_WEIGHT);
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                set(w, mid);
+                if matched(w) >= target {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            set(w, lo);
+            true
+        };
+        if n_strong > 0 && search(&mut w, true) {
+            return w;
+        }
+        if n_related > 0 && search(&mut w, false) {
+            return w;
+        }
+        w.capped = true;
+        w
     }
 
-    pub fn weight(&self, m: Match) -> f32 {
+    pub fn weight(&self, m: Match) -> u32 {
         match m {
             Match::Strong => self.strong,
             Match::Related => self.related,
         }
     }
 
-    /// The expected share of draws of `(strong, related, rest)` with these
-    /// weights (no no-repeat window).
-    pub fn shares(&self) -> (f32, f32, f32) {
-        let s = self.strong * self.n_strong as f32;
-        let r = self.related * self.n_related as f32;
-        let o = self.total.saturating_sub(self.n_strong + self.n_related) as f32;
-        let m = s + r + o;
-        if m <= 0.0 {
-            return (0.0, 0.0, 0.0);
+    /// The expected share of draws of `(strong, related, rest)`, in parts
+    /// per million, with these weights and the window (see the type's doc).
+    pub fn shares_ppm(&self) -> [u32; 3] {
+        let n_rest = self.total.saturating_sub(self.n_strong + self.n_related);
+        // The scheduler never lets the window exclude every entry.
+        let win = u64::from(self.window.min(self.total.saturating_sub(1)));
+        let classes = [
+            (u64::from(self.strong), u64::from(self.n_strong)),
+            (u64::from(self.related), u64::from(self.n_related)),
+            (1, u64::from(n_rest)),
+        ];
+        let share = |e: u64, (w, k): (u64, u64)| {
+            if k == 0 {
+                0
+            } else {
+                w * k * E_ONE * 1_000_000 / (e + w * win * E_ONE).max(1)
+            }
+        };
+        let sum = |e: u64| classes.iter().map(|c| share(e, *c)).sum::<u64>();
+        // The shares fall as E grows: the largest E whose shares still sum
+        // to at least 1.
+        let (mut lo, mut hi) = (
+            0u64,
+            classes.iter().map(|(w, k)| w * k).sum::<u64>() * E_ONE,
+        );
+        if hi == 0 {
+            return [0; 3];
         }
-        (s / m, r / m, o / m)
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if sum(mid) >= 1_000_000 {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        classes.map(|c| share(lo, c).min(1_000_000) as u32)
+    }
+
+    /// [`Self::shares_ppm`] as fractions.
+    pub fn shares(&self) -> (f32, f32, f32) {
+        let [s, r, o] = self.shares_ppm();
+        (s as f32 / 1e6, r as f32 / 1e6, o as f32 / 1e6)
     }
 }
 
@@ -264,7 +267,10 @@ pub fn weigh_context(count: u32, resolved: &mut Overrides) -> ContextWeights {
     let w = ContextWeights::for_counts(count, s, r);
     for ov in resolved.values_mut() {
         if let Some(m) = Match::of_mark(ov) {
-            ov.weight = Some(w.weight(m));
+            // Through `black_box`: an integer choice converted to a float
+            // is folded into a table of float constants, which the Xtensa
+            // backend cannot compile (see CLAUDE.md "Gotchas").
+            ov.weight = Some(std::hint::black_box(w.weight(m)) as f32);
         }
     }
     w
@@ -568,7 +574,7 @@ pub fn context_fingerprint(platform: &str, game_name: &str) -> u64 {
         h ^= 0xff;
         h = h.wrapping_mul(0x0100_0000_01b3);
     };
-    eat(b"follow-context-v2");
+    eat(b"follow-context-v3");
     eat(platform.as_bytes());
     for t in tokens(game_name) {
         eat(t.as_bytes());
@@ -976,10 +982,15 @@ mod tests {
         );
     }
 
-    /// A synthetic manifest per game, through the same one-pass index build
-    /// as the firmware (`write_index_resolving_then` + `weigh_context`),
-    /// read back, and drawn from: the strong matches get 60% of the draws,
-    /// the related 15%, the rest of the platform 25%.
+    /// A synthetic manifest per game with the stock card's counts (Sonic 3:
+    /// 1 strong, 27 related of 635 Mega Drive entries; Super Mario World: 26
+    /// strong, 91 related of 1,052 SNES), through the same one-pass index
+    /// build as the firmware (`write_index_resolving_then` +
+    /// `weigh_context`), read back, and drawn from with the context window:
+    /// strong + related get 60% of the draws, by the model and by 60,000
+    /// draws of the scheduler. (The model is an average: with only two or
+    /// three matches at weight 255 and the window at its floor it overstates
+    /// them — 2 strong + 1 related of 63 is 60% by the model, 53% drawn.)
     #[test]
     fn context_weights_hit_their_shares() {
         use crate::engine::Catalog;
@@ -987,20 +998,21 @@ mod tests {
         use crate::index::{write_index_resolving_then, IndexedCatalog};
         use std::io::Cursor;
         let others = ["StreetsOfRage", "Plok", "Gunstar Heroes", "Ecco", "Contra"];
+        let target = MATCH_PCT as f32 / 100.0;
         for (platform, game, strong, related, n) in [
             (
                 "MD",
                 "Sonic the Hedgehog 3 (USA)",
                 "Sonic3",
                 "SonicTheHedgehog",
-                (2, 8, 45),
+                (1, 27, 607),
             ),
             (
                 "SNES",
                 "Super Mario World (USA)",
                 "SuperMarioWorld",
                 "SuperMarioKart",
-                (5, 10, 100),
+                (26, 91, 935),
             ),
         ] {
             let mut m = String::new();
@@ -1040,74 +1052,74 @@ mod tests {
                 "{game}"
             );
             assert_eq!(w.total, header.count);
+            assert_eq!(w.window as usize, context_window(n.0 + n.1));
             assert!(!w.capped, "{game}: {w:?}");
-            let (s, r, o) = w.shares();
-            near(s, STRONG_SHARE, "weights: strong");
-            near(r, RELATED_SHARE, "weights: related");
-            near(o, 1.0 - STRONG_SHARE - RELATED_SHARE, "weights: rest");
+            let (s, r, _) = w.shares();
+            near(
+                s + r,
+                target,
+                &format!("{game} {n:?}: matches by the model ({w:?})"),
+            );
 
             let mut cat =
                 IndexedCatalog::open(Cursor::new(m.into_bytes()), Cursor::new(out.into_inner()))
                     .unwrap();
             assert_eq!(cat.len(), header.count as usize);
-            let (s, r, o) = draw_shares(&mut cat, game, 0, 60_000);
-            near(s, STRONG_SHARE, &format!("{game}: drawn strong"));
-            near(r, RELATED_SHARE, &format!("{game}: drawn related"));
-            near(
-                o,
-                1.0 - STRONG_SHARE - RELATED_SHARE,
-                &format!("{game}: drawn rest"),
+            let (ds, dr, _) = draw_shares(&mut cat, game, w.window as usize, 60_000);
+            println!(
+                "{game} {n:?}: window {}, weights {} / {}, model {s:.3} / {r:.3}, drawn {ds:.3} / {dr:.3}",
+                w.window, w.strong, w.related
             );
+            near(ds + dr, target, &format!("{game} {n:?}: drawn matches"));
+            near(ds, s, &format!("{game} {n:?}: drawn strong vs the model"));
+            near(dr, r, &format!("{game} {n:?}: drawn related vs the model"));
         }
     }
 
     #[test]
-    fn context_weights_scale_cap_and_floor() {
-        // Uncapped: the owner's formula, w = share / rest share * n_rest / n.
-        let w = ContextWeights::for_counts(600, 30, 40);
-        assert!(
-            (w.strong - 0.60 / 0.25 * 530.0 / 30.0).abs() < 1e-3,
-            "{w:?}"
-        );
-        assert!(
-            (w.related - 0.15 / 0.25 * 530.0 / 40.0).abs() < 1e-3,
-            "{w:?}"
-        );
-        assert!(!w.capped);
-        // Sonic 3 on the stock card (635 MD entries, 1 strong, 27 related):
-        // the one strong entry would need ~1,457; held at 64, the related
-        // entries still get their 15%.
+    fn context_weights_and_windows() {
+        assert_eq!(context_window(0), 4);
+        assert_eq!(context_window(3), 4);
+        assert_eq!(context_window(10), 9);
+        assert_eq!(context_window(28), 27);
+        assert_eq!(context_window(117), 32);
+        // Sonic 3: one strong GIF can't reach 60% (at most 1 draw in 28),
+        // so it goes to 255 and the related carry the rest.
         let w = ContextWeights::for_counts(635, 1, 27);
-        assert!(w.capped);
-        assert_eq!(w.strong, MAX_WEIGHT);
-        let (s, r, _) = w.shares();
-        near(r, RELATED_SHARE, "sonic 3: related");
-        assert!((s - 64.0 / (64.0 + 607.0) * 0.85).abs() < 1e-3, "{s}");
-        // Super Mario World (1,052 SNES entries, 26 strong, 91 related): 86
-        // wanted, 64 given.
-        let w = ContextWeights::for_counts(1052, 26, 91);
-        assert!(w.capped && w.strong == MAX_WEIGHT, "{w:?}");
-        near(w.shares().1, RELATED_SHARE, "smw: related");
-        // Only related matches: 40%.
-        let w = ContextWeights::for_counts(300, 0, 10);
-        assert!(
-            (w.related - 0.40 / 0.60 * 290.0 / 10.0).abs() < 1e-3,
+        assert_eq!(
+            (w.strong, w.window, w.capped),
+            (MAX_WEIGHT, 27, false),
             "{w:?}"
         );
-        near(w.shares().1, RELATED_ONLY_SHARE, "related only");
-        // Strong only: 60%, the rest 40%.
-        let w = ContextWeights::for_counts(100, 10, 0);
-        near(w.shares().0, STRONG_SHARE, "strong only");
-        // Matches everywhere: never below 1.
-        let w = ContextWeights::for_counts(100, 90, 5);
-        assert!(w.strong >= 1.0 && w.related >= 1.0, "{w:?}");
-        let w = ContextWeights::for_counts(10, 4, 6);
-        assert!(w.related == 1.0 && w.strong > 1.0, "{w:?}");
-        assert_eq!(ContextWeights::for_counts(50, 0, 0).shares().2, 1.0);
+        assert!(w.related > 1);
+        // Strong alone gets there: related stay at 1.
+        let w = ContextWeights::for_counts(600, 30, 40);
+        assert!(w.strong < MAX_WEIGHT && w.related == 1, "{w:?}");
+        let (s, r, _) = w.shares();
+        near(s + r, 0.60, "strong enough");
+        // Matches already the majority: everything 1.
+        let w = ContextWeights::for_counts(100, 70, 10);
+        assert_eq!((w.strong, w.related, w.capped), (1, 1, false));
+        // Too few to get there even at 255: capped.
+        let w = ContextWeights::for_counts(100_000, 1, 0);
+        assert!(w.capped && w.strong == MAX_WEIGHT, "{w:?}");
         assert_eq!(
-            ContextWeights::for_counts(0, 0, 0).shares(),
-            (0.0, 0.0, 0.0)
+            ContextWeights::for_counts(50, 0, 0).shares_ppm(),
+            [0, 0, 1_000_000]
         );
+        assert_eq!(ContextWeights::for_counts(0, 0, 0).shares_ppm(), [0; 3]);
+        // The model without a window reduces to plain proportions.
+        let w = ContextWeights {
+            strong: 10,
+            related: 2,
+            capped: false,
+            window: 0,
+            n_strong: 5,
+            n_related: 10,
+            total: 115,
+        };
+        let [s, r, o] = w.shares_ppm();
+        assert!(s.abs_diff(294_117) < 50 && r.abs_diff(117_647) < 50 && o.abs_diff(588_235) < 50);
     }
 
     #[test]

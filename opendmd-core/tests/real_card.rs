@@ -359,12 +359,11 @@ fn prototype_odm_files_decode_like_the_gifs() {
 /// What "Follow RePlayOS" would build for a few games on this card: the
 /// platform's entries, how many score as this game (strong) or related,
 /// the weights those counts earn (`follow::ContextWeights`), and the logo it
-/// would show. For Sonic 3 and Super Mario World it asserts the shares of
-/// the draw: 60% strong, 15% related (a class whose weight hits
-/// `follow::MAX_WEIGHT` gets what the cap gives instead, and says so), both
-/// from the weights and from 60,000 draws of the scheduler over the index
-/// read back. It also prints the draws with the firmware's no-repeat window
-/// (32), which is what the panel actually plays.
+/// would show. For Sonic 3 and Super Mario World it asserts that the
+/// matches (strong + related) get 60% of the draws, by the weights' model
+/// and by 60,000 draws of the scheduler over the index read back with the
+/// context's no-repeat window (`follow::context_window`) — what the panel
+/// plays. For every game, the draws match the model within 3 points.
 #[test]
 #[ignore = "needs DMD_CARD_ROOT pointing at a real card dump"]
 fn follow_context_on_the_real_card() {
@@ -424,15 +423,16 @@ fn follow_context_on_the_real_card() {
         let (s, r, o) = w.shares();
         println!(
             "{game} ({platform}): {} entries, {} weighted, {} strong {:?}, related e.g. {weak:?}, logo {logo:?} of {}\n  \
-             weights strong {:.2} related {:.2}{}; shares by weight {:.1}% / {:.1}% / {:.1}%",
+             window {}, weights strong {} related {}{}; shares by the model {:.1}% / {:.1}% / {:.1}%",
             header.count,
             ov.len(),
             strong.len(),
             strong,
             logos.len(),
+            w.window,
             w.strong,
             w.related,
-            if w.capped { " (the cap binds)" } else { "" },
+            if w.capped { " (capped: 60% out of reach)" } else { "" },
             s * 100.0,
             r * 100.0,
             o * 100.0,
@@ -471,45 +471,26 @@ fn follow_context_on_the_real_card() {
                 c[2] as f32 / n as f32,
             )
         };
-        let (ds, dr, d_o) = draw(0);
-        let (ws, wr, wo) = draw(32);
+        let (ds, dr, d_o) = draw(w.window as usize);
+        let (gs, gr, go) = draw(32);
         println!(
-            "  drawn {:.1}% / {:.1}% / {:.1}%; with the no-repeat window of 32 {:.1}% / {:.1}% / {:.1}%",
+            "  drawn {:.1}% / {:.1}% / {:.1}% (with the global window of 32 instead: {:.1}% / {:.1}% / {:.1}%)",
             ds * 100.0,
             dr * 100.0,
             d_o * 100.0,
-            ws * 100.0,
-            wr * 100.0,
-            wo * 100.0
+            gs * 100.0,
+            gr * 100.0,
+            go * 100.0
         );
-        near(ds, s, &format!("{game}: drawn strong vs weights"));
-        near(dr, r, &format!("{game}: drawn related vs weights"));
-        near(d_o, o, &format!("{game}: drawn rest vs weights"));
+        near(ds, s, &format!("{game}: drawn strong vs the model"));
+        near(dr, r, &format!("{game}: drawn related vs the model"));
+        near(d_o, o, &format!("{game}: drawn rest vs the model"));
         if !check {
             continue;
         }
-        assert!(w.n_strong > 0 && w.n_related > 0, "{game}: {w:?}");
-        let rest_n = (w.total - w.n_strong - w.n_related) as f32;
-        let capped_strong = w.strong == follow::MAX_WEIGHT;
-        if capped_strong {
-            // What 64 per strong entry gives, with the related at 15%.
-            let m = w.n_strong as f32 * follow::MAX_WEIGHT;
-            let want = m / (m + rest_n) * (1.0 - follow::RELATED_SHARE);
-            println!(
-                "  the cap binds: strong would need {:.0} per entry for 60%; gets {:.1}%",
-                follow::STRONG_SHARE / (1.0 - follow::STRONG_SHARE - follow::RELATED_SHARE)
-                    * rest_n
-                    / w.n_strong as f32,
-                want * 100.0
-            );
-            assert!(w.capped);
-            near(s, want, &format!("{game}: strong (capped)"));
-            near(ds, want, &format!("{game}: drawn strong (capped)"));
-        } else {
-            near(s, follow::STRONG_SHARE, &format!("{game}: strong"));
-            near(ds, follow::STRONG_SHARE, &format!("{game}: drawn strong"));
-        }
-        near(r, follow::RELATED_SHARE, &format!("{game}: related"));
-        near(dr, follow::RELATED_SHARE, &format!("{game}: drawn related"));
+        assert!(!w.capped, "{game}: {w:?}");
+        let target = follow::MATCH_PCT as f32 / 100.0;
+        near(s + r, target, &format!("{game}: matches by the model"));
+        near(ds + dr, target, &format!("{game}: matches drawn"));
     }
 }
