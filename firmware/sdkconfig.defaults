@@ -16,6 +16,18 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
 
+# --- lwip on CPU0 --------------------------------------------------------
+# lwip's tcpip task has no core affinity by default (priority 18), so the
+# copy of every send buffer into its pbufs could run on CPU1, the display
+# core. Serving the web app from the memory-mapped www pack made that
+# measurable: the copy pulled the pack through CPU1's flash cache and evicted
+# the display loop's code (+66/+80 deadline misses per 90 s at ~450 KB/s,
+# against +5 idle). The firmware stages each slice in RAM on CPU0 first
+# (www.rs), which halves it; pinning the task to CPU0 keeps every byte of
+# network work off the display core. The WiFi task is already pinned to
+# core 0 (CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0, the default).
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+
 # --- Tasks -------------------------------------------------------------
 # Main task on CPU1, same as stripe-dashboard: keeps the render/blit loop off
 # the core that services system (and, later, WiFi) interrupts.

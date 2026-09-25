@@ -287,13 +287,15 @@ pub fn serve(req: &mut Req, rel: &str) -> Result<Served> {
     req.header("Cache-Control", files::cache_for(&logical))?;
     req.begin_sized("200 OK", files::mime_for(&logical), entry.data.len() as u64)?;
     // **Every read of the mapping happens here, on CPU0.** lwip copies a
-    // send buffer into its pbufs on the tcpip task, which is not pinned
-    // (priority 18): handed the mapping itself, that copy often ran on CPU1
-    // and pulled the pack through CPU1's flash cache, evicting the display
-    // loop's code — measured, a steady UI download at ~450 KB/s cost +66 and
-    // +80 deadline misses per 90 s (idle: +5, card files at ~270 KB/s: +6).
-    // So each slice is staged on this task's stack first (the stream and
-    // httpd tasks are both pinned to CPU0) and lwip copies RAM.
+    // send buffer into its pbufs on the tcpip task (priority 18): before
+    // that task was pinned to CPU0 (`CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0`
+    // in sdkconfig.defaults), handed the mapping itself the copy often ran
+    // on CPU1 and pulled the pack through CPU1's flash cache, evicting the
+    // display loop's code — measured, a steady UI download at ~450 KB/s
+    // cost +66 and +80 deadline misses per 90 s (idle: +5; pinned and
+    // staged: +8). Each slice is still staged on this task's stack first
+    // (the stream and httpd tasks are pinned to CPU0 too) so lwip only ever
+    // copies RAM, whatever core a future lwip path copies on.
     let mut staging = [0u8; STAGING];
     let mut pieces = entry.data.chunks(STAGING).peekable();
     while let Some(piece) = pieces.next() {
