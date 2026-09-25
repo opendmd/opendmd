@@ -105,9 +105,11 @@ its gzip budgets (which are about load time over WiFi, not flash).
   mapping's lock is held for the whole response; the file goes out in 1 KB
   slices, each copied from the mapping into a buffer on the stream task's
   stack (CPU0) and then sent. Not the mapping itself: lwip copies a send
-  buffer on its tcpip task, which is not pinned, and that copy running on
-  CPU1 would pull the pack through the flash cache the display loop runs
-  from (CLAUDE.md, "Frame time", has the numbers).
+  buffer on its tcpip task, and that copy running on CPU1 would pull the
+  pack through the flash cache the display loop runs from. The tcpip task
+  is pinned to CPU0 as well (`CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0`), which
+  is what took a flat-out UI download from +66 to +8 deadline misses per
+  90 s (CLAUDE.md, "Frame time", has the numbers).
 - **Updating** (`PUT /api/www`, `www::receive`, on the stream task): the
   whole pack as the body, `Content-Length` required (411 without, 413 over
   the partition). The first 64 bytes are read and parsed before anything is
