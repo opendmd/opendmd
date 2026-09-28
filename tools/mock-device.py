@@ -1859,6 +1859,13 @@ class Context:
         self.schedule = Schedule(self)
         self.player = Player(self)
         self.follow = Follow(self)
+        # The card's health (firmware `sdhealth.rs`): the clock it runs at,
+        # the slow-clock fallback, card-failure restarts. Driven by the same
+        # test hooks as the device: POST /api/reboot?sd_io_fail=3 plays a
+        # card-failure restart (the next "boot" is at 20 MHz, reset_note
+        # "card failure"); ?sd_fallback=clear forgets it.
+        self.sd = {"clock_khz": 40000, "fallback": False, "failures": 0, "reboots": 0}
+        self.reset_note = None
         self.schedule.evaluate()  # picks up the playlist rebuilt just above
 
 
@@ -2138,7 +2145,10 @@ def make_handler(ctx: Context, quiet: bool):
                     "deadline_misses": player.deadline_misses,
                     "worst_lateness_ms": player.worst_lateness_ms,
                     "gifs_started": player.gifs_started,
-                    "sd": {"mounted": True, "capacity_bytes": SD_CAPACITY_BYTES},
+                    "sd": {"mounted": True, "capacity_bytes": SD_CAPACITY_BYTES, "error": None,
+                           "attempts": 1, **ctx.sd},
+                    "reset_reason": "software" if ctx.reset_note else "poweron",
+                    "reset_note": ctx.reset_note,
                     "overrides": player.overrides_count,
                     "hidden": player.hidden_count,
                     "mode": ctx.schedule.mode,
@@ -2709,8 +2719,18 @@ def make_handler(ctx: Context, quiet: bool):
             self.send_json(200, www_info(ctx.www_root))
 
         def h_reboot(self, path):
+            query = self.path.partition("?")[2] or None
             with ctx.lock:
                 ctx.player.reset_boot()
+                ctx.reset_note = None
+                if query_param(query, "sd_fallback") == "clear":
+                    ctx.sd.update(clock_khz=40000, fallback=False, reboots=0)
+                io = query_param(query, "sd_io_fail")
+                if io and io.isdigit() and int(io) >= 3:
+                    # The chain in one step: the failing boot, then the
+                    # restart it causes.
+                    ctx.sd.update(clock_khz=20000, fallback=True, reboots=min(ctx.sd["reboots"] + 1, 3))
+                    ctx.reset_note = "card failure"
             self.send_json(200, {"ok": True, "rebooting": True})
 
         def h_manifest_put(self, path):

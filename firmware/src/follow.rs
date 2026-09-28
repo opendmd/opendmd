@@ -578,10 +578,17 @@ impl Poller {
 
     /// `get_status`, read through [`StatusScan`]: the reply is never held
     /// whole, whatever its size.
-    fn get_status(&mut self, host: &str, code: &str) -> Result<(u16, Result<Observed, String>), String> {
+    fn get_status(
+        &mut self,
+        host: &str,
+        code: &str,
+    ) -> Result<(u16, Result<Observed, String>), String> {
         let mut scan = StatusScan::new();
         let status = self.get(host, "get_status", Some(code), &mut |b| scan.feed(b))?;
-        Ok((status, scan.finish().map_err(|e| format!("bad reply ({e})"))))
+        Ok((
+            status,
+            scan.finish().map_err(|e| format!("bad reply ({e})")),
+        ))
     }
 
     fn poll_status(&mut self) -> Result<Observed, String> {

@@ -732,6 +732,29 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             );
             crate::sd::simulate_mount_failures(n.min(20));
         }
+        // Test hook: `?sd_io_fail=N[&sd_io_boots=B]` — on each of the next
+        // B boots (default 1, at most 5), from 10 s after boot, the player's
+        // next N card reads of a file that had read fail with EIO (after
+        // them, any `sd_fail` mount failures): N >= 3 trips the card
+        // failure (`sdhealth`), so B boots in a row run the restart chain.
+        if let Some(n) = query_param(req.query(), "sd_io_fail").and_then(|v| v.parse::<u32>().ok()) {
+            let boots = query_param(req.query(), "sd_io_boots")
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(1)
+                .min(5);
+            info!(
+                "the player's first {} card read(s) will fail on purpose on each of the next {boots} boot(s)",
+                n.min(20)
+            );
+            crate::sdhealth::simulate_io_failures(n.min(20), boots);
+        }
+        // `?sd_fallback=clear`: the next boot forgets the slow-clock record
+        // (NVS and RTC) and the card-failure restart count — the bench's
+        // stand-in for inserting a different card.
+        if query_param(req.query(), "sd_fallback").as_deref() == Some("clear") {
+            info!("the next boot forgets the card's slow clock and its card-failure restarts");
+            crate::sdhealth::request_clear();
+        }
         req.json(r#"{"ok":true,"rebooting":true}"#)?;
         reboot_after_response()
     })?;
@@ -1019,6 +1042,7 @@ fn stream_file(req: &mut Req, path: String, rel: String) -> Result<()> {
 pub fn reboot_after_response() -> ! {
     // The handler never returns to the wrapper that records this.
     crate::httpd::note_httpd_stack();
+    crate::sdhealth::note_restart();
     // No card write in flight at the reset (the drain wait runs meanwhile).
     let t = std::time::Instant::now();
     crate::cache_builder::quiesce(Duration::from_secs(3));
@@ -1254,7 +1278,7 @@ fn status_json(s: &Status) -> String {
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"heap_floor_at":{},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"#,
-            r#""sd":{{"mounted":{},"capacity_bytes":{},"error":{},"attempts":{}}},"reset_reason":{},"#,
+            r#""sd":{{"mounted":{},"capacity_bytes":{},"error":{},"attempts":{},{}}},"reset_reason":{},"reset_note":{},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
             r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{}}}"#
@@ -1294,7 +1318,9 @@ fn status_json(s: &Status) -> String {
         s.sd_capacity_bytes,
         opt_json(s.sd_error.as_deref()),
         s.sd_attempts,
+        crate::sdhealth::status_json(),
         json_string(s.reset_reason),
+        opt_json(crate::sdhealth::reset_note()),
         s.overrides,
         s.hidden,
         json_string(s.mode),

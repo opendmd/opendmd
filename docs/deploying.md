@@ -42,6 +42,16 @@ and no slow regions. A card that stalls on a bad sector hangs the player —
 that is how the original 128 GB DMDoS card failed — so a new card is worth a
 contiguous read scan before it goes into the cabinet.
 
+If a card starts failing in service, the player notices (three card read
+errors within a minute), restarts itself, and from then on runs **that
+card** at 20 MHz instead of 40; the Settings page says "Card running at
+reduced speed after errors". The slow clock is remembered by the card's
+serial number, so it survives power cuts and only goes away when a
+different card is inserted. After three such restarts within 15 minutes it
+stops restarting, stays on the network without the card and tries it again
+every minute ("Card errors: N, retrying"). Either message means: replace
+the card (and scan the old one before trusting it again).
+
 ### The DMDoS pack
 
 Copy the pack's `gifs/` tree and its `filelist.txt` to the card root, exactly

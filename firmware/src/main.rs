@@ -50,6 +50,7 @@ mod panel;
 mod probe;
 mod sched;
 mod sd;
+mod sdhealth;
 mod state;
 mod stream;
 mod wifi;
@@ -182,23 +183,45 @@ fn main() -> Result<()> {
     // of the boot — WiFi and the web server included — goes ahead without
     // it, and the main loop keeps trying (`try_mount`). `card` unmounts on
     // drop, so it lives to the end.
+    //
+    // The card's records first (`sdhealth`): a card that failed at full
+    // speed mounts at the fallback clock, and a device that has already
+    // restarted `SD_REBOOT_CAP` times for card failure does not mount at
+    // boot at all but remounts every `SD_REMOUNT_INTERVAL`. So the settings'
+    // NVS handle is opened here, before the mount (it used to be just after).
+    let mut nvs_config = Config::new(nvs_partition.clone())?;
+    let health = {
+        let poweron = matches!(reset_reason, "poweron" | "brownout");
+        let health = sdhealth::boot(poweron, nvs_config.sd_slow());
+        if health.clear_nvs {
+            if let Err(e) = nvs_config.set_sd_slow(None) {
+                log::error!("clearing the slow-clock record in NVS failed ({e:#})");
+            }
+        }
+        health
+    };
     let mut sd_error = None;
     let mut card: Option<SdCard> = None;
-    for attempt in 1..=config::SD_BOOT_ATTEMPTS {
-        match try_mount(&mut bus) {
-            Ok(c) => {
-                card = Some(c);
-                break;
-            }
-            Err(e) => {
-                sd_error = Some(e);
-                if attempt < config::SD_BOOT_ATTEMPTS {
-                    thread::sleep(Duration::from_secs(1));
+    if health.capped {
+        sd_error = Some(sdhealth::capped_error(0, None));
+    } else {
+        for attempt in 1..=config::SD_BOOT_ATTEMPTS {
+            match try_mount(&mut bus, health.speed_khz) {
+                Ok(c) => {
+                    check_card(&c, &health, &nvs_partition);
+                    card = Some(c);
+                    break;
+                }
+                Err(e) => {
+                    sd_error = Some(e);
+                    if attempt < config::SD_BOOT_ATTEMPTS {
+                        thread::sleep(Duration::from_secs(1));
+                    }
                 }
             }
         }
     }
-    if card.is_none() {
+    if card.is_none() && !health.capped {
         log::warn!(
             "microSD: no card yet; starting the network and the web server anyway, and retrying every {} s",
             config::RETRY_INTERVAL.as_secs()
@@ -206,7 +229,6 @@ fn main() -> Result<()> {
     }
 
     // --- Settings ---------------------------------------------------------
-    let mut nvs_config = Config::new(nvs_partition.clone())?;
     if nvs_config.seed_credentials_from_build() {
         log::info!("first boot with build-time credentials; they are now in NVS");
     }
@@ -317,6 +339,16 @@ fn main() -> Result<()> {
         );
     }
     let mut last_mount_try = Instant::now();
+    // No card mounted: how often to try again (a spent restart budget
+    // waits longer, see `sdhealth`), and the remounts made that way.
+    let remount_interval = if health.capped {
+        config::SD_REMOUNT_INTERVAL
+    } else {
+        config::RETRY_INTERVAL
+    };
+    let mut remounts: u32 = 0;
+    // The card failed again with no restart left: the player has stopped.
+    let mut card_dead = false;
 
     // The HTTP server next, still before the first GIF is decoded: its task
     // stack and the file-streaming task's are contiguous internal allocations
@@ -354,7 +386,7 @@ fn main() -> Result<()> {
     net_worker::spawn(net_worker::NetWorker {
         modem,
         sysloop,
-        nvs: nvs_partition,
+        nvs: nvs_partition.clone(),
         ssid: settings.wifi_ssid.clone(),
         password: settings.wifi_pass.clone(),
         hostname: settings.hostname.clone(),
@@ -767,6 +799,22 @@ fn main() -> Result<()> {
             reboot_to_apply();
         }
 
+        // The card is failing (`sdhealth`): restart, or stop playing.
+        if sdhealth::tripped() {
+            if let Some(c) = card.as_ref().filter(|_| !card_dead) {
+                card_failed(c, &mut nvs_config, &status);
+                // Still here: no restart left. Let go of the card's files.
+                // (The cache builder backs off from card errors by itself.)
+                retire(&mut engine, &mut canvas);
+                card_dead = true;
+            }
+        }
+        // A command (a playlist change, `play`) may have built a new engine
+        // on the stopped card since: let it go again.
+        if card_dead && engine.is_some() {
+            retire(&mut engine, &mut canvas);
+        }
+
         // 2. No engine (boot, or a reindex that failed): try to build one.
         let Some(eng) = engine.as_mut() else {
             fresh = true;
@@ -774,12 +822,38 @@ fn main() -> Result<()> {
                 cache_builder::Pace::Stop(cache_builder::Reason::NoPlaylist),
                 settings.auto_prepare,
             );
+            // The card failed with no restart left: nothing plays. One
+            // restart once the budget's window has run out.
+            if card_dead {
+                if sdhealth::window_left_ms() == 0 {
+                    log::error!("microSD: the card-failure window has run out; restarting to try the card again");
+                    sdhealth::restart_after_window();
+                    restart_for_card();
+                }
+                if let Ok(mut s) = status.lock() {
+                    s.uptime_secs = epoch.elapsed().as_secs();
+                    s.heap_free = free_heap();
+                }
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
             // No card yet: try again every so often, draining commands (and
             // so answering the API) in between.
             if card.is_none() {
-                if last_mount_try.elapsed() >= config::RETRY_INTERVAL {
+                if last_mount_try.elapsed() >= remount_interval {
                     last_mount_try = Instant::now();
-                    let mounted = try_mount(&mut bus);
+                    remounts += 1;
+                    if health.capped {
+                        log::warn!(
+                            "microSD: remount {remounts} at {} kHz (the card failed repeatedly; every {} s)",
+                            health.speed_khz,
+                            remount_interval.as_secs()
+                        );
+                    }
+                    let mounted = try_mount(&mut bus, health.speed_khz);
+                    if let Ok(c) = mounted.as_ref() {
+                        check_card(c, &health, &nvs_partition);
+                    }
                     let mut s = status.lock().unwrap();
                     s.sd_attempts = bus.attempts();
                     match mounted {
@@ -791,6 +865,9 @@ fn main() -> Result<()> {
                             card = Some(c);
                             card_mounted_checks(&mut settings, &mut nvs_config);
                             *shared_settings.lock().unwrap() = settings.clone();
+                        }
+                        Err(e) if health.capped => {
+                            s.sd_error = Some(sdhealth::capped_error(remounts, Some(&e)))
                         }
                         Err(e) => s.sd_error = Some(e),
                     }
@@ -1538,7 +1615,7 @@ fn engine_over(
         catalog
     };
     // The lookup is the card work of choosing the next file: `open` time.
-    let catalog: Box<dyn Catalog> = Box::new(frametime::CountedCatalog(catalog));
+    let catalog: Box<dyn Catalog> = Box::new(frametime::CountedCatalog(catalog, false));
     let mode = if settings.shuffle {
         Mode::Shuffle
     } else {
@@ -1859,17 +1936,19 @@ fn retire(engine: &mut Option<Engine>, canvas: &mut Canvas) {
 /// Called at boot and whenever the main loop has no engine. `""` (the default)
 /// is never "missing" here: if the card has no `filelist.txt` either, the loop
 /// keeps retrying exactly as it does for a card with nothing on it.
-/// One mount attempt, logged: the card, or the error as status shows it.
-fn try_mount(bus: &mut SdBus) -> std::result::Result<SdCard, String> {
-    match bus.mount() {
+/// One mount attempt at `khz`, logged: the card, or the error as status
+/// shows it.
+fn try_mount(bus: &mut SdBus, khz: u32) -> std::result::Result<SdCard, String> {
+    match bus.mount(khz) {
         Ok(card) => {
             log::info!(
-                "microSD mounted at {} ({:.2} GB) on attempt {}, SPI clock {} kHz (asked {}), heap {} B free",
+                "microSD mounted at {} ({:.2} GB, card {:#010x}) on attempt {}, SPI clock {} kHz (asked {}), heap {} B free",
                 config::SD_MOUNT,
                 card.capacity_bytes as f64 / 1e9,
+                card.serial,
                 bus.attempts(),
                 card.real_freq_khz,
-                config::SD_SPEED_KHZ,
+                khz,
                 free_heap()
             );
             Ok(card)
@@ -1879,6 +1958,77 @@ fn try_mount(bus: &mut SdBus) -> std::result::Result<SdCard, String> {
             Err(format!("{e:#}"))
         }
     }
+}
+
+/// A card just mounted: if it was mounted slow for a card that failed at
+/// full speed and it is a different card, forget that record and restart
+/// at full speed (a clean boot rather than a remount on a live bus);
+/// otherwise note its clock for status.
+fn check_card(card: &SdCard, health: &sdhealth::Boot, nvs: &EspDefaultNvsPartition) {
+    let full = card.real_freq_khz as u32 >= config::SD_SPEED_KHZ;
+    match health.slow_serial {
+        Some(slow) if slow != card.serial => {
+            log::warn!(
+                "microSD: card {:#010x} is not the card that failed ({slow:#010x}); forgetting the slow clock and restarting at {} kHz",
+                card.serial,
+                config::SD_SPEED_KHZ
+            );
+            match Config::new(nvs.clone()).and_then(|mut c| c.set_sd_slow(None)) {
+                Ok(()) => {}
+                Err(e) => log::error!("clearing the slow-clock record in NVS failed ({e:#})"),
+            }
+            sdhealth::forget_for_new_card();
+            restart_for_card();
+        }
+        Some(slow) => {
+            // The same card. NVS may not have it (a failed write at the
+            // trip, RTC's copy used): make sure it does.
+            if let Ok(mut c) = Config::new(nvs.clone()) {
+                if c.sd_slow() != Some(slow) {
+                    if let Err(e) = c.set_sd_slow(Some(slow)) {
+                        log::error!("recording the slow clock in NVS failed ({e:#})");
+                    }
+                }
+            }
+        }
+        None => {}
+    }
+    sdhealth::mounted(card.real_freq_khz as u32, !full);
+}
+
+/// The card has failed (`sdhealth`): the error line (with the counts),
+/// status, the slow-clock record in NVS when it failed at full speed, then
+/// a restart once the log has reached the console. Returns only when the
+/// restart budget is spent.
+fn card_failed(card: &SdCard, nvs: &mut Config, status: &Mutex<Status>) {
+    let trip = sdhealth::trip(card.serial, card.real_freq_khz as u32);
+    log::error!("microSD: {}", trip.summary);
+    if trip.slow_down {
+        if let Err(e) = nvs.set_sd_slow(Some(card.serial)) {
+            log::error!(
+                "recording the slow clock in NVS failed ({e:#}); RTC memory has it until a power cycle"
+            );
+        }
+    }
+    status.lock().unwrap().sd_error = Some(trip.summary);
+    if trip.restart {
+        restart_for_card();
+    }
+    // Nothing plays from here on.
+    let mut s = status.lock().unwrap();
+    s.path.clear();
+    s.title.clear();
+}
+
+/// A restart for the card's sake: the cache builder out of its card
+/// write, the log ring out to the console, then `esp_restart`.
+fn restart_for_card() -> ! {
+    cache_builder::quiesce(Duration::from_secs(3));
+    if !logring::flush(config::SD_RESTART_LOG_FLUSH) {
+        log::warn!("log ring not drained before the restart");
+    }
+    // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.
+    unsafe { esp_idf_sys::esp_restart() }
 }
 
 /// What the boot checks on the card once it is mounted: a saved playlist
@@ -1963,6 +2113,7 @@ fn heal_missing_set(settings: &mut Settings, nvs: &mut Config) -> bool {
 /// `.idx` file. The reply has already been queued; the sleep is for the
 /// handler on the other core, which is still writing it.
 fn reboot_to_apply() -> ! {
+    sdhealth::note_restart();
     cache_builder::quiesce(Duration::from_secs(3));
     thread::sleep(Duration::from_secs(2));
     // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.
@@ -1993,7 +2144,7 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B{}, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms; {}), \
-         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}",
+         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}{}",
         floor.heartbeat(),
         misses.heartbeat(),
         TRANSITIONS_CUT.load(Ordering::Relaxed),
@@ -2001,6 +2152,7 @@ fn heartbeat(
         frametime::stack_unused(),
         sd::period_summary(),
         cache_builder::heartbeat(entries, cache::peek()),
+        sdhealth::heartbeat(),
         logring::summary(),
         probe::period_summary()
     );

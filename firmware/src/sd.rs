@@ -63,8 +63,12 @@ pub struct SdCard {
     /// Usable capacity in bytes, as reported by the card's CSD.
     pub capacity_bytes: u64,
     /// The SPI clock the bus really runs at: 80 MHz over a whole divider
-    /// (40, 26.7, 20, 16 … MHz), the nearest to [`config::SD_SPEED_KHZ`].
+    /// (40, 26.7, 20, 16 … MHz), the nearest to the clock asked for
+    /// ([`config::SD_SPEED_KHZ`], or [`config::SD_SPEED_FALLBACK_KHZ`]).
     pub real_freq_khz: i32,
+    /// The card's CID serial number: which card this is, for the
+    /// slow-clock record ([`crate::sdhealth`]).
+    pub serial: u32,
 }
 
 impl SdBus {
@@ -95,7 +99,12 @@ impl SdBus {
     /// API never formats, which is the `format_if_mount_failed = false` the
     /// brief asks for: a card that won't mount is a card to look at, not one
     /// to erase.
-    pub fn mount(&mut self) -> Result<SdCard> {
+    ///
+    /// `speed_khz` is the clock to ask for after the card's 400 kHz init.
+    /// Only a clock the driver refuses fails *at* the clock switch, and that
+    /// failure's teardown crashes (CLAUDE.md, "When the card will not
+    /// mount"); 40 MHz on `SPI3` and the 20 MHz fallback are both allowed.
+    pub fn mount(&mut self, speed_khz: u32) -> Result<SdCard> {
         self.attempts += 1;
         if take_simulated_failure() {
             anyhow::bail!("simulated failure (POST /api/reboot?sd_fail=N)");
@@ -132,7 +141,7 @@ impl SdBus {
         .context("SD SPI host init failed")?;
 
         let mut cfg = SdCardConfiguration::new();
-        cfg.speed_khz = config::SD_SPEED_KHZ;
+        cfg.speed_khz = speed_khz;
         if self.attempts > 1 {
             cfg.command_timeout_ms = config::SD_RETRY_CMD_TIMEOUT_MS;
         }
@@ -142,6 +151,9 @@ impl SdBus {
         let raw = card.card();
         let capacity_bytes = (raw.csd.capacity as u64) * (raw.csd.sector_size as u64);
         let real_freq_khz = raw.real_freq_khz;
+        // SAFETY: `cid` is the union's decoded view, which the SD init
+        // fills (`raw_cid` is MMC's).
+        let serial = unsafe { raw.__bindgen_anon_1.cid.serial } as u32;
 
         let fatfs = Fatfs::new_sdcard(0, card).context("FAT driver registration failed")?;
         let mounted = MountedFatfs::mount(fatfs, config::SD_MOUNT, config::SD_MAX_FILES)
@@ -151,6 +163,7 @@ impl SdBus {
             _fs: mounted,
             capacity_bytes,
             real_freq_khz,
+            serial,
         })
     }
 }
@@ -175,6 +188,11 @@ pub fn simulate_mount_failures(n: u32) {
 }
 
 fn take_simulated_failure() -> bool {
+    // A chain of simulated card failures (`sd_io_fail`) goes first: these
+    // then fail the remounts after it.
+    if crate::sdhealth::sim_pending() {
+        return false;
+    }
     // SAFETY: the main task is the only one mounting, see above.
     unsafe {
         let p = &raw mut SIM_FAIL;
@@ -295,12 +313,23 @@ fn open_file(full: &str) -> io::Result<Box<dyn ReadSeek>> {
     // instead of opening it again, and why prepared copies live in
     // ~15-entry bucket directories.
     use crate::frametime::Counted;
+    let file = if crate::probe::ENABLED {
+        crate::probe::open(full)
+    } else {
+        File::open(full)
+    };
+    let file = match file {
+        Ok(f) => f,
+        Err(e) => {
+            crate::sdhealth::open_failed(crate::sdhealth::Kind::Open, full, &e);
+            return Err(e);
+        }
+    };
+    crate::sdhealth::opened(full);
     if crate::probe::ENABLED {
-        return Ok(Box::new(Counted(crate::probe::TimedFile(
-            crate::probe::open(full)?,
-        ))));
+        return Ok(Box::new(Counted::new(crate::probe::TimedFile(file))));
     }
-    Ok(Box::new(Counted(File::open(full)?)))
+    Ok(Box::new(Counted::new(file)))
 }
 
 /// The prepared copy at `full`, if it opens and is a GIF. The magic is read

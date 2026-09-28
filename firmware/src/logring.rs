@@ -484,3 +484,28 @@ fn flush_now() {
         release(head, size);
     }
 }
+
+/// Wait, on the caller, until the drain has written every line logged so
+/// far (and the UART's FIFO has emptied), for at most `timeout`: what a
+/// deliberate restart does first so its reason reaches the console
+/// (`sdhealth`'s card-failure restart). `false` if it timed out. Before
+/// [`start`] every line was written synchronously, so there is nothing to
+/// wait for.
+pub fn flush(timeout: Duration) -> bool {
+    if !STARTED.load(Ordering::Acquire) {
+        return true;
+    }
+    let t = Instant::now();
+    let tail = TAIL.load(Ordering::Acquire);
+    // Everything reserved up to now has been released by the drain.
+    while (tail.wrapping_sub(HEAD.load(Ordering::Acquire)) as i32) > 0 {
+        if t.elapsed() >= timeout {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The drain's last write left up to a FIFO's worth (128 B, ~1.4 ms at
+    // 921600 baud) still shifting out.
+    std::thread::sleep(Duration::from_millis(20));
+    true
+}
