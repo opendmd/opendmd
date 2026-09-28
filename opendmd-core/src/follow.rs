@@ -609,6 +609,227 @@ impl Observed {
     }
 }
 
+/// `get_status`'s reply read as it arrives, keeping only what [`Observed`]
+/// needs: the top-level `system`, `game_file`, `game_name`, `view`
+/// (strings, each cut at [`StatusScan::MAX_FIELD`] bytes) and `paused`,
+/// `halted` (booleans). Everything else — other fields, nested objects and
+/// arrays, however long — is skipped a byte at a time, so a reply of any
+/// size is read in the same few hundred bytes (the firmware's poll used to
+/// buffer the body, capped at 2 KB, and parse it with serde).
+///
+/// Lenient about what it skips; strict only in that the reply must be one
+/// complete top-level object ([`StatusScan::finish`]).
+#[derive(Debug, Default)]
+pub struct StatusScan {
+    depth: u32,
+    seen_object: bool,
+    closed: bool,
+    in_string: bool,
+    /// 0: none; 1: after a backslash; 2..=5: reading `\u` hex digits.
+    escape: u8,
+    hex: u32,
+    /// At depth 1: the next string is a key (after `{` or `,`).
+    expect_key: bool,
+    /// The string being read is a top-level key.
+    reading_key: bool,
+    key: Vec<u8>,
+    /// Which wanted field the current top-level value is for.
+    field: Option<Field>,
+    value: Vec<u8>,
+    /// The first byte of a bare top-level value (`t`, `f`, a digit, `n`).
+    bare: Option<u8>,
+    out: Observed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Field {
+    System,
+    GameFile,
+    GameName,
+    View,
+    Paused,
+    Halted,
+}
+
+impl StatusScan {
+    /// Longest string field kept, in bytes (the rest is dropped).
+    pub const MAX_FIELD: usize = 256;
+    const MAX_KEY: usize = 16;
+
+    pub fn new() -> Self {
+        StatusScan::default()
+    }
+
+    /// The next piece of the reply, any size.
+    pub fn feed(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.byte(b);
+        }
+    }
+
+    fn byte(&mut self, b: u8) {
+        if self.closed {
+            return;
+        }
+        if self.in_string {
+            self.string_byte(b);
+            return;
+        }
+        match b {
+            b'"' => {
+                self.in_string = true;
+                self.reading_key = self.depth == 1 && self.expect_key;
+                self.key.clear();
+                self.value.clear();
+            }
+            b'{' | b'[' => {
+                if self.depth == 0 {
+                    if b != b'{' {
+                        self.closed = true;
+                        return;
+                    }
+                    self.seen_object = true;
+                    self.expect_key = true;
+                }
+                self.depth += 1;
+            }
+            b'}' | b']' => {
+                if self.depth == 1 {
+                    self.end_bare();
+                }
+                self.depth = self.depth.saturating_sub(1);
+                if self.depth == 0 {
+                    self.closed = true;
+                }
+            }
+            b':' if self.depth == 1 => self.expect_key = false,
+            b',' if self.depth == 1 => {
+                self.end_bare();
+                self.expect_key = true;
+                self.field = None;
+            }
+            b' ' | b'\t' | b'\r' | b'\n' => {}
+            _ if self.depth == 1 && !self.expect_key && self.bare.is_none() => {
+                self.bare = Some(b);
+            }
+            _ => {}
+        }
+    }
+
+    fn string_byte(&mut self, b: u8) {
+        match self.escape {
+            0 => match b {
+                b'\\' => self.escape = 1,
+                b'"' => {
+                    self.in_string = false;
+                    self.end_string();
+                }
+                _ => self.keep(&[b]),
+            },
+            1 => {
+                self.escape = 0;
+                let c = match b {
+                    b'n' => b'\n',
+                    b't' => b'\t',
+                    b'r' => b'\r',
+                    b'b' => 0x08,
+                    b'f' => 0x0c,
+                    b'u' => {
+                        self.escape = 2;
+                        self.hex = 0;
+                        return;
+                    }
+                    other => other,
+                };
+                self.keep(&[c]);
+            }
+            _ => {
+                let d = (b as char).to_digit(16).unwrap_or(0);
+                self.hex = self.hex * 16 + d;
+                if self.escape == 5 {
+                    self.escape = 0;
+                    // A lone surrogate half (a pair's two escapes are not
+                    // joined) becomes U+FFFD, like any other bad escape.
+                    let c = char::from_u32(self.hex).unwrap_or('\u{fffd}');
+                    let mut buf = [0u8; 4];
+                    self.keep(c.encode_utf8(&mut buf).as_bytes());
+                } else {
+                    self.escape += 1;
+                }
+            }
+        }
+    }
+
+    /// Keep string bytes if they are a top-level key or a wanted value.
+    fn keep(&mut self, bytes: &[u8]) {
+        if self.reading_key {
+            if self.key.len() + bytes.len() <= Self::MAX_KEY {
+                self.key.extend_from_slice(bytes);
+            } else {
+                // Longer than any wanted key: poison it.
+                self.key.clear();
+                self.key.push(0);
+            }
+        } else if self.depth == 1
+            && matches!(
+                self.field,
+                Some(Field::System | Field::GameFile | Field::GameName | Field::View)
+            )
+            && self.value.len() + bytes.len() <= Self::MAX_FIELD
+        {
+            self.value.extend_from_slice(bytes);
+        }
+    }
+
+    fn end_string(&mut self) {
+        if self.reading_key {
+            self.reading_key = false;
+            self.field = match self.key.as_slice() {
+                b"system" => Some(Field::System),
+                b"game_file" => Some(Field::GameFile),
+                b"game_name" => Some(Field::GameName),
+                b"view" => Some(Field::View),
+                b"paused" => Some(Field::Paused),
+                b"halted" => Some(Field::Halted),
+                _ => None,
+            };
+            return;
+        }
+        if self.depth != 1 {
+            return;
+        }
+        let text = || String::from_utf8_lossy(&self.value).into_owned();
+        match self.field {
+            Some(Field::System) => self.out.system = text(),
+            Some(Field::GameFile) => self.out.game_file = text(),
+            Some(Field::GameName) => self.out.game_name = text(),
+            Some(Field::View) => self.out.view = text(),
+            _ => {}
+        }
+        self.field = None;
+    }
+
+    /// A bare top-level value (`true`, `false`, a number, `null`) ended.
+    fn end_bare(&mut self) {
+        if let Some(first) = self.bare.take() {
+            match self.field {
+                Some(Field::Paused) => self.out.paused = first == b't',
+                Some(Field::Halted) => self.out.halted = first == b't',
+                _ => {}
+            }
+        }
+    }
+
+    /// The fields, if the reply was one complete JSON object.
+    pub fn finish(self) -> Result<Observed, &'static str> {
+        match (self.seen_object, self.closed && self.depth == 0) {
+            (true, true) => Ok(self.out),
+            (true, false) => Err("truncated"),
+            _ => Err("not a JSON object"),
+        }
+    }
+}
+
 /// A game being followed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
@@ -828,6 +1049,58 @@ impl Follow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scan(chunks: &[&[u8]]) -> Result<Observed, &'static str> {
+        let mut s = StatusScan::new();
+        for c in chunks {
+            s.feed(c);
+        }
+        s.finish()
+    }
+
+    #[test]
+    fn status_scan_reads_the_real_reply() {
+        let reply = br#"{"system":"sega_smd","game_file":"/roms/sega_smd/Sonic 3.md","game_name":"Sonic the Hedgehog 3 (USA)","paused":false,"halted":false,"view":"game_play","view_id":2,"core_file":"genesis_plus_gx_libretro.so","core_info":"Genesis Plus GX v1.7.4"}"#;
+        let o = scan(&[reply]).unwrap();
+        assert_eq!(o.system, "sega_smd");
+        assert_eq!(o.game_file, "/roms/sega_smd/Sonic 3.md");
+        assert_eq!(o.game_name, "Sonic the Hedgehog 3 (USA)");
+        assert_eq!(o.view, "game_play");
+        assert!(!o.paused && !o.halted);
+        // Byte by byte, the same.
+        let bytes: Vec<&[u8]> = reply.chunks(1).collect();
+        assert_eq!(scan(&bytes).unwrap(), o);
+    }
+
+    #[test]
+    fn status_scan_skips_what_it_does_not_want_however_big() {
+        let pad = "x".repeat(100_000);
+        let reply = format!(
+            r#"{{ "core_info" : "{pad}", "nested": {{"system":"no","list":[1,{{"view":"no"}},"a\"b"]}},
+               "system" : "nintendo_snes" , "paused" : true, "halted":null,
+               "game_name":"Café \"Mario\" \\ World\n", "view":"game_options", "extra":[{pad:?}] }}"#
+        );
+        let chunks: Vec<&[u8]> = reply.as_bytes().chunks(97).collect();
+        let o = scan(&chunks).unwrap();
+        assert_eq!(o.system, "nintendo_snes");
+        assert!(o.paused && !o.halted);
+        assert_eq!(o.game_name, "Café \"Mario\" \\ World\n");
+        assert_eq!(o.view, "game_options");
+        assert_eq!(o.game_file, "");
+    }
+
+    #[test]
+    fn status_scan_cuts_long_fields_and_refuses_broken_replies() {
+        let long = "a".repeat(1000);
+        let o = scan(&[format!(r#"{{"game_name":"{long}"}}"#).as_bytes()]).unwrap();
+        assert_eq!(o.game_name.len(), StatusScan::MAX_FIELD);
+        assert_eq!(scan(&[br#"{"system":"sega_smd","view":"game"#]), Err("truncated"));
+        assert_eq!(scan(&[b"[1,2]"]), Err("not a JSON object"));
+        assert_eq!(scan(&[b""]), Err("not a JSON object"));
+        assert_eq!(scan(&[br#"{"error":"unauthorized"}"#]).unwrap(), Observed::default());
+        // Trailing bytes after the object are ignored.
+        assert_eq!(scan(&[br#"{"view":"system_list"} junk"#]).unwrap().view, "system_list");
+    }
 
     fn s(secs: u64) -> Duration {
         Duration::from_secs(secs)

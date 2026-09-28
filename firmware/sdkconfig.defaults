@@ -95,6 +95,11 @@ CONFIG_ESP32_HUB75_USE_GFX=n
 
 # --- Logging -----------------------------------------------------------
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+# The log ring's drain (src/logring.rs) is a periodic FreeRTOS timer: it runs
+# on the timer service task, which is idle otherwise (every other timer here
+# is an esp_timer) and had no core affinity. CPU0 keeps its UART writes off
+# the display core, and the task already exists, so the drain costs no heap.
+CONFIG_FREERTOS_TIMER_TASK_AFFINITY_CPU0=y
 
 # 1 ms scheduler tick: the display loop sleeps for the remainder of each GIF frame
 # delay, and 10 ms ticks rounded every sleep up, running content 5-10% slow.

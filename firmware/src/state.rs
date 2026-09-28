@@ -102,12 +102,17 @@ pub struct Status {
     pub heap_free: u32,
     pub heap_floor: u32,
     pub heap_idf_min: u32,
+    /// Who was running on each core, and the largest free block, when
+    /// `heap_floor` was reached — a hint (`frametime::FloorAt`).
+    pub heap_floor_at: Option<crate::frametime::FloorAt>,
     // The display's health. These three are the acceptance metrics for the
     // networking phase: if serving files costs the panel anything, it shows up
     // here first.
     pub refresh_hz: u8,
     pub deadline_misses: u64,
     pub worst_lateness_ms: u64,
+    /// The misses by cause and by lateness (`frametime`).
+    pub misses: crate::frametime::Misses,
     pub gifs_started: u64,
     pub sd_mounted: bool,
     pub sd_capacity_bytes: u64,
@@ -161,9 +166,11 @@ impl Status {
             heap_free: 0,
             heap_floor: 0,
             heap_idf_min: 0,
+            heap_floor_at: None,
             refresh_hz: 0,
             deadline_misses: 0,
             worst_lateness_ms: 0,
+            misses: Default::default(),
             gifs_started: 0,
             sd_mounted: false,
             sd_capacity_bytes: 0,

@@ -78,6 +78,9 @@ def snapshot(host):
         "gifs_started": s["gifs_started"],
         "refresh_hz": s["refresh_hz"],
         "uptime_secs": s["uptime_secs"],
+        # Firmware with miss attribution (absent before): by cause, by lateness.
+        "misses": s.get("misses"),
+        "heap_floor_at": s.get("heap_floor_at"),
     }
 
 def print_snapshot(label, snap):
@@ -185,6 +188,11 @@ def main():
     print(f"delta      misses +{after['deadline_misses'] - before['deadline_misses']}, "
           f"worst {before['worst_lateness_ms']} -> {after['worst_lateness_ms']} ms, "
           f"floor {before['heap_floor']:,} -> {after['heap_floor']:,} B")
+    if before["misses"] and after["misses"]:
+        for group, label in (("by_cause", "by cause"), ("late_ms", "late (ms)")):
+            b, a = before["misses"][group], after["misses"][group]
+            print(f"           {label}: " + " ".join(f"{k} +{a[k] - b.get(k, 0)}" for k in a))
+        print(f"           heap floor at: {after['heap_floor_at']}")
     if after["uptime_secs"] < before["uptime_secs"]:
         print("!! the device rebooted during the run")
         sys.exit(1)

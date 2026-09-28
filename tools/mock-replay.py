@@ -13,7 +13,7 @@ sequence of menu / game_play / pause-menu transitions a real box would.
 
     uv run tools/mock-replay.py [--host 0.0.0.0] [--port 55356] [--token 1234] \
         [--timeline FILE.json] [--loop | --no-loop] [--speed 1.0] \
-        [--start-step 0] [--quiet]
+        [--start-step 0] [--quiet] [--any-token] [--pad BYTES]
 
 Real API mimicked (base `http://<host>:<port>/api/v1/`, all GET, JSON, HTTP
 only):
@@ -63,6 +63,13 @@ Control endpoints for tests (no token required):
                                   "remaining", "status": {...get_status...}}
   - `POST /mock/goto?step=N` -> jump to step N now, restarting its clock.
   - `POST /mock/token?value=X` -> change the accepted token at runtime.
+
+`--any-token` accepts any `X-RePlay-Token` (a device whose saved code you
+do not know can be pointed here without touching it); `--pad BYTES` makes
+every `get_status` reply that much bigger (a `padding` field of that many
+characters before the real ones, then a nested object and an array holding
+decoy `system`/`view` keys) — for testing a client that must read a large
+reply in bounded memory.
 
 `--speed` multiplies wall-clock time for quick local runs (e.g. `--speed 10`
 makes the whole default timeline play out in ~33 s). `--start-step` picks
@@ -273,7 +280,16 @@ def ticker_loop(state, stop_event):
         stop_event.wait(0.02)
 
 
-def make_handler(state, quiet):
+def padded(body, pad):
+    """`body` with `pad` bytes of decoys in front (see `--pad`)."""
+    if pad <= 0:
+        return body
+    decoys = {"padding": "x" * pad,
+              "nested": {"system": "decoy", "view": "game_play", "list": [1, {"view": "decoy"}]}}
+    return {**decoys, **body}
+
+
+def make_handler(state, quiet, any_token=False, pad=0):
     import http.server
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -317,14 +333,14 @@ def make_handler(state, quiet):
                     self._send_json(status, {"version": "1.8.0", "name": "RePlayOS"})
                 elif method == "GET" and path == "/api/v1/get_status":
                     supplied = self.headers.get("X-RePlay-Token")
-                    token_ok = supplied is not None and supplied == state.get_token()
+                    token_ok = supplied is not None and (any_token or supplied == state.get_token())
                     if not token_ok:
                         status = 401
                         self._send_json(status, {"error": "unauthorized"})
                     else:
                         status = 200
                         _idx, _e, _r, step = state.snapshot()
-                        self._send_json(status, status_body(step))
+                        self._send_json(status, padded(status_body(step), pad))
                 elif method == "GET" and path.startswith("/api/v1/"):
                     status = 404
                     self._send_json(status, {"error": "not found"})
@@ -387,6 +403,9 @@ def parse_args():
     ap.add_argument("--speed", type=float, default=1.0, help="time multiplier (default: 1.0)")
     ap.add_argument("--start-step", type=int, default=0, help="step index to start at (default: 0)")
     ap.add_argument("--quiet", action="store_true", help="suppress the one-line-per-request log")
+    ap.add_argument("--any-token", action="store_true", help="accept any X-RePlay-Token")
+    ap.add_argument("--pad", type=int, default=0, metavar="BYTES",
+                    help="make every get_status reply this many bytes bigger (decoy fields first)")
     return ap.parse_args()
 
 
@@ -410,7 +429,7 @@ def main():
     ticker = threading.Thread(target=ticker_loop, args=(state, stop_event), daemon=True)
     ticker.start()
 
-    handler_cls = make_handler(state, args.quiet)
+    handler_cls = make_handler(state, args.quiet, args.any_token, args.pad)
     server = http.server.ThreadingHTTPServer((args.host, args.port), handler_cls)
     server.daemon_threads = True
 

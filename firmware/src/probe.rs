@@ -5,8 +5,9 @@
 //! (`make fw-build FW_FEATURES=probe`; add `probe-http` for the httpd lines).
 //! Every hook is guarded by [`ENABLED`] / [`HTTP_LOG`], which are `cfg!`
 //! constants, so in a default build the branches — and the clock reads
-//! behind [`stamp`] / [`http_stamp`], which return `None` — are removed by the
-//! optimiser: no timing call is left on the frame path.
+//! behind [`http_stamp`], which returns `None` — are removed by the
+//! optimiser. (The frame loop's own few clock reads per frame are always on
+//! now: `frametime`.)
 //!
 //! What it measures, when on: `File::open` in [`crate::sd::SdSource`], every
 //! read and rewind through [`TimedFile`], every catalog lookup through
@@ -23,11 +24,15 @@
 //! timings directly), so `Relaxed` atomics are plenty; they are atomics only
 //! so they can be statics.
 //!
-//! **Logging is deferred.** A UART line at 115200 baud costs ~87 µs a byte,
-//! and the console write blocks, so an `info!` inside the timed region would
-//! be counted as lateness. Open events and miss reports are queued and
-//! printed at the top of the next loop iteration, after the frame's sleep,
-//! which the lateness metric does not measure.
+//! **Lines are logged where they arise.** They used to be queued and printed
+//! after the frame's sleep, because a UART line (~87 µs a byte, blocking)
+//! inside the timed region counted as lateness; since every line goes
+//! through the log ring (`logring`: formatted by the caller, written to the
+//! UART by a CPU0 task) a line costs the frame only its formatting.
+//!
+//! The always-on part of the miss attribution (a cause per miss, a lateness
+//! histogram) is `frametime`; this adds the per-miss detail line, the SD
+//! tables and the blit bench.
 
 use opendmd_core::engine::Catalog;
 use opendmd_core::manifest::Entry;
@@ -44,14 +49,8 @@ pub const ENABLED: bool = cfg!(feature = "probe");
 /// feature. Separate because those lines cost UART time on the other core too.
 pub const HTTP_LOG: bool = ENABLED && cfg!(feature = "probe-http");
 
-/// A start time for [`elapsed_us`], or `None` (no clock read) when the probe
-/// is off.
-#[inline(always)]
-pub fn stamp() -> Option<Instant> {
-    ENABLED.then(Instant::now)
-}
-
-/// [`stamp`] for the httpd side, which is gated on [`HTTP_LOG`].
+/// A start time for [`elapsed_us`] on the httpd side, or `None` (no clock
+/// read) unless [`HTTP_LOG`] is on.
 #[inline(always)]
 pub fn http_stamp() -> Option<Instant> {
     HTTP_LOG.then(Instant::now)
@@ -201,7 +200,7 @@ pub fn transition_frame(transitioning: bool, decoded: bool, t: &FrameTimes, free
     if !transitioning {
         let r = run.take().unwrap();
         P_TRUNS.fetch_add(1, Relaxed);
-        defer(format!(
+        emit(format!(
             "transition: {} steps in {} ms, heap free {} B before, {} B lowest during, {} B after (dip {} B)",
             r.steps,
             r.start.elapsed().as_millis(),
@@ -226,9 +225,6 @@ fn hist_p50(h: &[u32; BLIT_BUCKETS]) -> u32 {
     0
 }
 
-/// Log lines waiting for the untimed part of the loop.
-static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
 fn us_since(t: Instant) -> u32 {
     t.elapsed().as_micros().min(u32::MAX as u128) as u32
 }
@@ -252,7 +248,7 @@ pub fn open(full: &str) -> io::Result<File> {
     max(&P_OPEN_MAX_US, us);
     A_OPENS.fetch_add(1, Relaxed);
     max(&A_OPEN_MAX_US, us);
-    defer(format!(
+    emit(format!(
         "sdopen {us} us {}{full}",
         if r.is_err() { "(failed) " } else { "" }
     ));
@@ -315,27 +311,9 @@ impl Catalog for TimedCatalog {
     }
 }
 
-fn defer(line: String) {
-    if let Ok(mut q) = PENDING.lock() {
-        // Bounded: a runaway could otherwise eat the heap.
-        if q.len() < 16 {
-            q.push(line);
-        }
-    }
-}
-
-/// Print whatever the timed region queued. Call where lateness is not measured.
-pub fn flush() {
-    if !ENABLED {
-        return;
-    }
-    let lines = match PENDING.lock() {
-        Ok(mut q) if !q.is_empty() => std::mem::take(&mut *q),
-        _ => return,
-    };
-    for l in lines {
-        log::info!("{l}");
-    }
+/// One probe line, logged at once (see the module note).
+fn emit(line: String) {
+    log::info!("{line}");
 }
 
 /// Snapshot of one loop iteration's SD work, taken when the frame is judged.
@@ -417,7 +395,7 @@ pub fn frame(t: &FrameTimes, late_ms: Option<u64>, is_new: bool, path: &str) {
     } else {
         P_MISS_NOOPEN.fetch_add(1, Relaxed);
     }
-    defer(format!(
+    emit(format!(
         "miss late={late}ms delay={}ms work={}us tick={}us new={} opens={} open={}us cat={}us \
          reads={} rd_tot={}us rd_max={}us cpu~{}us blit={}us px={} log={}us @{} {path}",
         t.delay_ms,

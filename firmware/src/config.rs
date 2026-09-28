@@ -360,25 +360,40 @@ pub const BUILDER_STACK: usize = 9 * 1024 + 512;
 /// Below the stream task (2): the builder runs only when nothing that
 /// answers a client wants CPU0.
 pub const BUILDER_PRIORITY: u8 = 1;
-/// A file is only started at the drip pace with this much heap free, the
-/// task already running; what the encoder leaves is the network's and the
-/// player's (see [`BUILDER_MIN_HEAP_FULL`] for the full pace). The task
-/// itself is only started with its stack + 1 KB more than this free (64.5
-/// KB). The encoder (`recode_gif_streaming`, gifslim at cap 12 as the
-/// source decoder) peaks at 42.9-43.6 KB for a 128x32 GIF by the host's
-/// count (`encodeprobe --heap`, the whole stock card; 56.5 KB for the
-/// 132x32 stray), against ~57 KB (63 KB at most) for the pre-rendered
-/// encoder this replaced, whose threshold was 66 KB: the same ~10 KB over
-/// the host's figure is kept. With a prepared file playing the rig has
-/// ~74-78 KB free, so the drip runs; with an original, the pace stops it
-/// anyway (`gif on screen`). [`BUILDER_ABORT_HEAP`] catches the big ones.
-pub const BUILDER_MIN_HEAP: u32 = 54 * 1024;
-/// [`BUILDER_MIN_HEAP`] at the full pace (paused, night mode "off", no
-/// playlist): nothing animates and the player opens nothing without
-/// stopping the builder first (`player_opening`), so the margin is only
-/// the network's, and every transfer stops the builder too. 1.5 KB under
-/// the drip figure, as before (the old encoder: 64.5 KB against 66).
-pub const BUILDER_MIN_HEAP_FULL: u32 = 52 * 1024 + 512;
+/// The encoder's peak heap for a 128x32 GIF, the largest over the whole
+/// stock card by the host's count (`encodeprobe --heap`: mean 43,181 B, max
+/// 43,648): gifslim at cap 12 as the source decoder (~15 KB), a canvas (12
+/// KB), the previous frame's indices (4 KB), changed bits, the colour table,
+/// the LZW dictionary at cap 9 and the write buffer. The rig agrees: ~66 KB
+/// free with the task up and idle, 20.3-22.9 KB while encoding.
+pub const BUILDER_ENCODER_PEAK: u32 = 43_648;
+/// The same for the card's wider strays (132x32, 135x32): 56,483 B.
+pub const BUILDER_WIDE_ENCODER_PEAK: u32 = 56_483;
+/// Heap left free at the encoder's peak, for everything else on the board
+/// at the same moment: WiFi's RX buffers, an lwip connection, a Follow
+/// RePlayOS poll (~4-6 KB), a status reply, a heartbeat. With the old ~9-10
+/// KB (52.5 KB thresholds against a 43.6 KB peak) a night run reached a
+/// sampled floor of 5,916 B (idf-min 1,504 B) with the encoder at ~22 KB
+/// free: something transient took ~16 KB on top of it.
+pub const BUILDER_PEAK_MARGIN: u32 = 20 * 1024;
+/// A file is only started at the full pace (paused, night mode "off", no
+/// playlist) with this much heap free, the task already running: the
+/// encoder's peak plus [`BUILDER_PEAK_MARGIN`] (64,128 B, 62.6 KB). The
+/// task itself is only started with its stack + 1 KB more than this free
+/// (74,880 B). At night on the rig the builder saw ~66 KB free between
+/// files with the task up (~78 KB before it started), so both still pass —
+/// with ~2 KB to spare per file: anything that takes 2 KB more for good
+/// stops the night run (`paused: low memory`). Nothing animates at this
+/// pace and the player opens nothing without stopping the builder first
+/// (`player_opening`), and every transfer stops it too.
+pub const BUILDER_MIN_HEAP_FULL: u32 = BUILDER_ENCODER_PEAK + BUILDER_PEAK_MARGIN;
+/// [`BUILDER_MIN_HEAP_FULL`] at the drip pace (`auto_prepare = "always"`,
+/// a prepared file playing): 1.5 KB more, as before, since the player's
+/// frames and transitions go on beside it (65,664 B; the task starts at
+/// 76,416 B). A prepared file on screen leaves ~74-78 KB free, so the drip
+/// starts less often than it did at 54 KB; with an original on screen the
+/// pace stops it anyway (`gif on screen`).
+pub const BUILDER_MIN_HEAP: u32 = BUILDER_MIN_HEAP_FULL + 1536;
 /// A GIF gifslim does not decode (interlaced frames, `Previous` disposal: 5
 /// of the stock card's 11,047) is decoded with the `gif` crate instead only
 /// if this much is free when gifslim gives up: the encoder then peaks at
@@ -389,8 +404,9 @@ pub const BUILDER_MIN_HEAP_FULL: u32 = 52 * 1024 + 512;
 /// failed, "too large to prepare here", and the browser prepares them.
 pub const BUILDER_FULL_DECODER_HEAP: u32 = 60 * 1024;
 /// Mid-file, the encode is abandoned (and its heap freed) if free heap falls
-/// under this.
-pub const BUILDER_ABORT_HEAP: u32 = 8 * 1024;
+/// under this: with [`BUILDER_PEAK_MARGIN`] a file only gets here if
+/// something else took 8 KB more than the margin allows for.
+pub const BUILDER_ABORT_HEAP: u32 = 12 * 1024;
 /// Drip pace: the sleep before every 2 KB of card I/O and every `stat` while
 /// a file plays (frames are CPU0 work and are not paced: the card is what the
 /// builder shares with the player).
@@ -415,6 +431,9 @@ pub const BUILDER_RELEASE_WAIT: Duration = Duration::from_millis(1000);
 /// work (giving its stack and TCB, ~9.4 KB of heap, back to the player) and
 /// is started again by the main loop when it may.
 pub const BUILDER_RESPAWN: Duration = Duration::from_secs(1);
+/// The builder waits at most this long for a running `/api/cache` count
+/// (see `cache_builder::work`, step 4) before starting a file anyway.
+pub const BUILDER_COUNT_WAIT: Duration = Duration::from_secs(120);
 /// After a card error (not the GIF's fault), wait this long before retrying.
 pub const BUILDER_CARD_BACKOFF: Duration = Duration::from_secs(30);
 /// The largest logical screen the builder will take on (the card's biggest
@@ -432,6 +451,10 @@ pub const BUILDER_MAX_FAILED: usize = 1024;
 pub const FOLLOW_PORT: u16 = 55356;
 /// Connect and read timeout for one poll.
 pub const FOLLOW_TIMEOUT: Duration = Duration::from_secs(3);
+/// A `get_status` reply is read (and scanned, `follow::StatusScan`) up to
+/// this many bytes; a real one is ~300 B. The scan needs no buffer, so this
+/// only bounds the time a strange reply can keep the worker reading.
+pub const FOLLOW_MAX_BODY: usize = 16 * 1024;
 /// Where the context indexes (and the logos list) are cached.
 pub const FOLLOW_CTX_DIR: &str = "/sdcard/sets/.ctx";
 /// At most this many context indexes are kept; the oldest go first.
