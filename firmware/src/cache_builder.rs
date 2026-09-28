@@ -32,7 +32,7 @@
 //! [`config::BUILDER_ABORT_HEAP`] during one).
 //!
 //! **A stop abandons the file in hand and frees everything** — the encoder
-//! (see [`config::BUILDER_MIN_HEAP`] for its size), which the player needs
+//! (see [`config::BUILDER_ENCODER_PEAK`] for its size), which the player needs
 //! back the moment its next file turns out to be an original. The check runs before
 //! every frame and every 2 KB of card I/O, and the player's open *waits* for
 //! the release ([`player_opening`], bounded by
@@ -530,6 +530,11 @@ fn spawn() -> anyhow::Result<()> {
 /// The task exists. It exits as soon as there is nothing it may do, giving
 /// its stack back, and [`publish`] starts it again when there is.
 static ALIVE: AtomicBool = AtomicBool::new(false);
+/// The task exists (for attributing a heap dip seen elsewhere).
+pub fn task_up() -> bool {
+    ALIVE.load(SeqCst)
+}
+
 /// Heap the last start cost (logged by the task).
 static SPAWN_COST: AtomicU32 = AtomicU32::new(0);
 /// When a start was last tried (ms since boot), to space out attempts.
@@ -697,6 +702,8 @@ fn run() {
 /// Prepare files until there is nothing the builder may do; why it stopped.
 /// The task never waits around holding its stack: any stop ends it.
 fn work(walk: &mut Option<Walk>) -> (State, Option<Reason>) {
+    // Since when this task has been waiting for a cache count (step 4).
+    let mut count_wait: Option<Instant> = None;
     loop {
         httpd_stack_low_water();
         // 1. Allowed at all?
@@ -745,11 +752,31 @@ fn work(walk: &mut Option<Walk>) -> (State, Option<Reason>) {
             }
             *w = Walk::new(w.manifest.clone(), w.platforms.clone());
         }
-        // 4. Heap for a whole encoder, with the player's margin left.
+        // 4. Not while the `/api/cache` count runs (on the network worker,
+        //    which this very loop asks for at its first file). The count
+        //    sizes its key slice (up to 12 KB) to the heap free when it
+        //    starts, so an encoder starting beside it took the rig's heap to
+        //    5,284 B (largest block 3 KB: the night floors of ~6 KB); and
+        //    reading the manifest flat out at the worker's priority it holds
+        //    the FAT lock so much that this task's reads waited out FATFS's
+        //    10 s lock timeout (`ETIMEDOUT`, "card error ... backing off").
+        //    A count is seconds (a full card, ~25 s); wait for it — up to
+        //    [`config::BUILDER_COUNT_WAIT`], in case the worker is held up
+        //    elsewhere (a WiFi reconnect) and the count never comes.
+        if cache::counting() {
+            let since = *count_wait.get_or_insert_with(Instant::now);
+            if since.elapsed() < config::BUILDER_COUNT_WAIT {
+                thread::sleep(Duration::from_millis(250));
+                continue;
+            }
+        } else {
+            count_wait = None;
+        }
+        // 5. Heap for a whole encoder, with the player's margin left.
         if free_heap() < min_heap() || largest_free_block() < 16 * 1024 {
             return (State::Paused, Some(Reason::LowMemory));
         }
-        // 5. The next file that needs a copy.
+        // 6. The next file that needs a copy.
         match next_candidate(w) {
             Ok(Some((line_at, next_at, gif, copy))) => {
                 match prepare(&gif, &copy) {
@@ -1172,6 +1199,16 @@ fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64
         u16::from_le_bytes([head[8], head[9]]) as usize,
     );
     if w * h > config::BUILDER_MAX_PIXELS {
+        return Err(Fail::Bad(format!("{w}x{h} is too large to prepare here")));
+    }
+    // Wider than the panel (the card's 132x32 and 135x32 strays): the
+    // encoder peaks ~13 KB higher than the start threshold allows for, so
+    // such a file is only started with its own peak plus the margin free
+    // (~75 KB, which this board never has while the builder runs); else
+    // it is left to the browser like the other files too large for here.
+    if w * h > 128 * 32
+        && free_heap() < config::BUILDER_WIDE_ENCODER_PEAK + config::BUILDER_PEAK_MARGIN
+    {
         return Err(Fail::Bad(format!("{w}x{h} is too large to prepare here")));
     }
     if src.seek(SeekFrom::Start(0)).is_err() {

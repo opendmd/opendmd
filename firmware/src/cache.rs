@@ -153,6 +153,11 @@ pub fn increment_prepared() {
     }
 }
 
+/// A count has been asked for and has not finished (debounce included).
+pub fn counting() -> bool {
+    STATE.lock().unwrap().counting
+}
+
 /// The last count without asking for one (the heartbeat's view).
 pub fn peek() -> Option<usize> {
     STATE.lock().unwrap().prepared

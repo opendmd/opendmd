@@ -270,7 +270,9 @@ pub fn period_summary() -> String {
     )
 }
 
-/// One `File::open`, through the probe when it is built in.
+/// One `File::open`, through the probe when it is built in; its reads and
+/// seeks are timed for the display loop's miss attribution
+/// ([`crate::frametime::Counted`]).
 fn open_file(full: &str) -> io::Result<Box<dyn ReadSeek>> {
     // No `BufReader` here: gifslim wraps whatever it is handed in a 2 KiB
     // `BufReader` of its own (the `gif` crate, the fallback, in 8 KiB), so
@@ -281,10 +283,11 @@ fn open_file(full: &str) -> io::Result<Box<dyn ReadSeek>> {
     // is why the engine loops a file by seeking this handle back to 0
     // instead of opening it again, and why prepared copies live in
     // ~15-entry bucket directories.
+    use crate::frametime::Counted;
     if crate::probe::ENABLED {
-        return Ok(Box::new(crate::probe::TimedFile(crate::probe::open(full)?)));
+        return Ok(Box::new(Counted(crate::probe::TimedFile(crate::probe::open(full)?))));
     }
-    Ok(Box::new(File::open(full)?))
+    Ok(Box::new(Counted(File::open(full)?)))
 }
 
 /// The prepared copy at `full`, if it opens and is a GIF. The magic is read
@@ -304,26 +307,31 @@ fn open_prepared(full: &str) -> Option<Box<dyn ReadSeek>> {
 }
 
 impl Source for SdSource {
+    /// All of it is the display loop's `open` time ([`crate::frametime::open`]).
     fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
-        // The cache builder lets go of its heap first: this may be an
-        // original, whose decoder needs more than a copy's, and the open's
-        // directory scan should not queue behind its card I/O either.
-        crate::cache_builder::player_opening();
-        let Some(prepared) = layout::cache_path(path) else {
-            let f = open_file(&format!("{}{path}", config::SD_MOUNT))?;
-            record(Served::Direct);
-            return Ok(f);
-        };
-        let t = Instant::now();
-        if let Some(f) = open_prepared(&format!("{}{prepared}", config::SD_MOUNT)) {
-            record(Served::Prepared {
-                try_us: t.elapsed().as_micros() as u32,
-            });
-            return Ok(f);
-        }
-        let miss_us = t.elapsed().as_micros() as u32;
-        let f = open_file(&format!("{}{path}", config::SD_MOUNT))?;
-        record(Served::Original { miss_us });
-        Ok(f)
+        crate::frametime::open(|| open_resolved(path))
     }
+}
+
+fn open_resolved(path: &str) -> io::Result<Box<dyn ReadSeek>> {
+    // The cache builder lets go of its heap first: this may be an
+    // original, whose decoder needs more than a copy's, and the open's
+    // directory scan should not queue behind its card I/O either.
+    crate::cache_builder::player_opening();
+    let Some(prepared) = layout::cache_path(path) else {
+        let f = open_file(&format!("{}{path}", config::SD_MOUNT))?;
+        record(Served::Direct);
+        return Ok(f);
+    };
+    let t = Instant::now();
+    if let Some(f) = open_prepared(&format!("{}{prepared}", config::SD_MOUNT)) {
+        record(Served::Prepared {
+            try_us: t.elapsed().as_micros() as u32,
+        });
+        return Ok(f);
+    }
+    let miss_us = t.elapsed().as_micros() as u32;
+    let f = open_file(&format!("{}{path}", config::SD_MOUNT))?;
+    record(Served::Original { miss_us });
+    Ok(f)
 }

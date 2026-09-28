@@ -40,8 +40,10 @@ mod config;
 mod dns_server;
 mod files;
 mod follow;
+mod frametime;
 mod http;
 mod httpd;
+mod logring;
 mod net_worker;
 mod nvs_config;
 mod panel;
@@ -57,7 +59,6 @@ use anyhow::{Context, Result};
 use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, Pin};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
-use esp_idf_svc::log::EspLogger;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use opendmd_core::canvas::Canvas;
 use opendmd_core::engine::{Catalog, DwellPolicy, Engine, FileCatalog, TickOutcome};
@@ -115,7 +116,8 @@ fn transition_gate(need: usize) -> bool {
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
-    EspLogger::initialize_default();
+    // Synchronous until `logring::start` below, like EspLogger before it.
+    logring::init();
 
     // Two version strings on purpose: the crate's, and the one the bootloader
     // recorded in `esp_app_desc_t` (`"<version> 4mb"` for a release image,
@@ -253,16 +255,22 @@ fn main() -> Result<()> {
     // use esp_get_minimum_free_heap_size() for this: it is the SUM of each
     // heap region's own minimum, which drifts ~30 KB below the true floor as
     // large blocks (the LZW decoder) land in different regions over time.
-    let mut sampled_min = free_heap();
-    let mut low_water = sampled_min;
+    // A new low also notes who was running on each core (`frametime::Floor`).
+    let mut floor = frametime::Floor::new();
+    let mut low_water = floor.min;
     // The display's health, reported in the heartbeat and in /api/status.
     let mut deadline_misses: u64 = 0;
     let mut worst_lateness_ms: u64 = 0;
+    let mut misses = frametime::Misses::default();
     let mut started: u64 = 0;
-    // Log lines raised while a frame is being produced, printed after its
-    // sleep (see step 3): a UART line costs ~87 µs a byte and the console
-    // write blocks, so printing inside the frame would count as lateness.
-    let mut deferred: Vec<Deferred> = Vec::with_capacity(2);
+    // Where an iteration's time went before its tick (see `frametime`):
+    // when the last sleep ended, how much later than planned, and the
+    // heartbeat's time since. `fresh`: the last iteration had no engine, so
+    // there is nothing to attribute.
+    let mut woke = Instant::now();
+    let mut wake_us: u32 = 0;
+    let mut log_us: u32 = 0;
+    let mut fresh = true;
     // The file frame last published to status, `(ordinal, frame)`: a
     // transition step that decoded nothing moves the picture but not the
     // file's position.
@@ -322,6 +330,9 @@ fn main() -> Result<()> {
     // aborts with "assert failed: tcpip_send_msg_wait_sem ... (Invalid mbox)".
     // `esp_netif_init` is idempotent, so the worker's later call is a no-op.
     //
+    // Logging goes asynchronous first (a ring drained by a CPU0 task,
+    // `logring`): from here on no task waits for the UART.
+    logring::start();
     // SAFETY: an argument-free IDF initialiser, safe to call more than once.
     esp_idf_sys::esp!(unsafe { esp_idf_sys::esp_netif_init() })?;
 
@@ -758,6 +769,7 @@ fn main() -> Result<()> {
 
         // 2. No engine (boot, or a reindex that failed): try to build one.
         let Some(eng) = engine.as_mut() else {
+            fresh = true;
             cache_builder::publish(
                 cache_builder::Pace::Stop(cache_builder::Reason::NoPlaylist),
                 settings.auto_prepare,
@@ -827,14 +839,18 @@ fn main() -> Result<()> {
             continue;
         };
 
-        // 3. One frame. First whatever the previous frame deferred: we are
-        //    past its sleep, and this frame's clock has not started yet.
-        for line in deferred.drain(..) {
-            line.log();
-        }
-        probe::flush();
+        // 3. One frame. What the loop did since the last sleep ended is
+        //    the frame's `other` (less the heartbeat's `log`, and any card
+        //    work a command did, which is `open`/`read`): see `frametime`.
         let entries = eng.catalog_len();
         probe::tick_begin();
+        let (pre_open, pre_read) = frametime::take();
+        let tick_start = Instant::now();
+        if fresh {
+            fresh = false;
+            (woke, wake_us, log_us) = (tick_start, 0, 0);
+        }
+        let pre_us = us(tick_start.duration_since(woke));
         let tick_now = epoch.elapsed();
         // Night mode "off": the panel is dark and nothing is decoded.
         let off = sched.off();
@@ -843,12 +859,9 @@ fn main() -> Result<()> {
         } else {
             eng.tick(tick_now, &mut canvas)?
         };
-        let tick_us = if probe::ENABLED {
-            epoch.elapsed().saturating_sub(tick_now).as_micros() as u32
-        } else {
-            0
-        };
-        sampled_min = sampled_min.min(free_heap());
+        let tick_us = us(tick_start.elapsed());
+        let (open_us, read_us) = frametime::take();
+        floor.sample();
         // What goes to /api/status from this frame: the file's position
         // (content time, see `NowPlaying::elapsed`) and frame number, when the
         // frame went up and when the next is due — all values the loop holds
@@ -857,6 +870,7 @@ fn main() -> Result<()> {
         let mut shown = None;
         let mut new_file = None;
         let mut exhausted = false;
+        let mut judged = None;
         let sleep_for = match outcome {
             TickOutcome::Frame {
                 playing,
@@ -865,14 +879,17 @@ fn main() -> Result<()> {
                 transitioning,
             } => {
                 // The composited picture while a transition runs.
-                let blit_start = probe::stamp();
+                let blit_start = Instant::now();
                 let blit_px = panel.blit(eng.display_mut(&mut canvas));
-                let blit_us = probe::elapsed_us(blit_start);
+                let blit_us = us(blit_start.elapsed());
                 let free = free_heap();
-                sampled_min = sampled_min.min(free);
+                floor.note(free);
                 FRAME_SHOWN.store(true, Ordering::Relaxed);
                 let decoded = (playing.ordinal, playing.frame) != published;
-                let log_start = probe::stamp();
+                // The loop's own lines (a GIF started, a heap low-water
+                // mark) are logged here: formatted into the log ring, not
+                // written to the UART (`logring`).
+                let log_start = Instant::now();
                 if is_new {
                     started = playing.ordinal;
                     // (A virtual file — Follow RePlayOS's cards — opened
@@ -891,26 +908,24 @@ fn main() -> Result<()> {
                         ),
                         _ => false,
                     };
-                    deferred.push(Deferred::Started {
-                        ordinal: playing.ordinal,
-                        path: playing.path.clone(),
-                        served,
-                    });
+                    log_started(playing.ordinal, &playing.path, served);
                 }
                 // Attribute every new low-water mark to the GIF on screen, so
                 // a heap regression names the file that caused it.
-                if sampled_min + 2048 < low_water {
-                    deferred.push(Deferred::LowWater {
-                        from: low_water,
-                        to: sampled_min,
-                        ordinal: playing.ordinal,
-                        path: playing.path.clone(),
-                    });
-                    low_water = sampled_min;
+                if floor.min + 2048 < low_water {
+                    log::warn!(
+                        "heap low-water {low_water} B -> {} B during [{}] {}",
+                        floor.min,
+                        playing.ordinal,
+                        playing.path
+                    );
+                    low_water = floor.min;
                 }
+                let post_log_us = us(log_start.elapsed());
                 // Hold the frame for its GIF delay. Read the clock again,
                 // because the blit itself took time.
                 let now = epoch.elapsed();
+                judged = Some(Instant::now());
                 // The deadline is the file's next frame. A transition step
                 // in between (`next_frame_at` is then earlier) is not one:
                 // a step a few ms late shows nothing different, and if its
@@ -921,7 +936,7 @@ fn main() -> Result<()> {
                         tick_us,
                         blit_us,
                         blit_px,
-                        log_us: probe::elapsed_us(log_start),
+                        log_us: post_log_us,
                         work_us: now.saturating_sub(tick_now).as_micros() as u32,
                         delay_ms: next_frame_at.saturating_sub(tick_now).as_millis() as u64,
                     };
@@ -950,6 +965,17 @@ fn main() -> Result<()> {
                         deadline_misses += 1;
                         let late = now.saturating_sub(deadline).as_millis() as u64;
                         worst_lateness_ms = worst_lateness_ms.max(late);
+                        let phases = frametime::Phases {
+                            wake: wake_us,
+                            log: log_us + post_log_us,
+                            other: pre_us.saturating_sub(log_us + pre_open + pre_read),
+                            open: pre_open + open_us,
+                            read: pre_read + read_us,
+                            decode: tick_us.saturating_sub(open_us + read_us),
+                            blit: blit_us,
+                            transitioning,
+                        };
+                        misses.record(phases.cause(), late);
                         config::CATCHUP_SLEEP
                     }
                 }
@@ -966,6 +992,8 @@ fn main() -> Result<()> {
             }
         };
 
+        let judged = judged.unwrap_or_else(Instant::now);
+
         // The cache builder's pace for what the panel is doing now.
         cache_builder::publish(
             builder_pace(&settings, off, eng, current_prepared),
@@ -979,9 +1007,11 @@ fn main() -> Result<()> {
             s.uptime_secs = epoch.elapsed().as_secs();
             s.entries = entries;
             s.heap_free = free_heap();
-            s.heap_floor = sampled_min;
+            s.heap_floor = floor.min;
+            s.heap_floor_at = floor.at;
             s.deadline_misses = deadline_misses;
             s.worst_lateness_ms = worst_lateness_ms;
+            s.misses = misses;
             if let Some(playing) = new_file {
                 s.ordinal = playing.ordinal;
                 s.path = playing.path;
@@ -996,12 +1026,18 @@ fn main() -> Result<()> {
             }
         }
 
+        // The sleep should end at `judged + sleep_for`; anything after that
+        // (publishing above, preemption on CPU1) is the next frame's `wake`.
+        let planned = judged + sleep_for;
         thread::sleep(sleep_for);
+        woke = Instant::now();
+        wake_us = us(woke.saturating_duration_since(planned));
+        log_us = 0;
         if exhausted {
             // The index is still good: reseed and rewind, don't re-read.
             eng.reset(random_seed());
         } else if shown.is_some() {
-            sampled_min = sampled_min.min(free_heap());
+            floor.sample();
         }
 
         if last_heartbeat.elapsed() >= config::HEARTBEAT_INTERVAL {
@@ -1010,11 +1046,13 @@ fn main() -> Result<()> {
                 &panel,
                 &status,
                 started,
-                sampled_min,
+                &floor,
                 deadline_misses,
                 worst_lateness_ms,
+                &misses,
                 &(sched.summary() + &follow::summary()),
             );
+            log_us = us(last_heartbeat.elapsed());
         }
     }
 }
@@ -1400,54 +1438,31 @@ fn apply_schedule(
     sched.publish(status);
 }
 
-/// A log line owed by a frame, printed after that frame's sleep.
-enum Deferred {
-    /// A GIF started. The heap figures are read when the line is printed,
-    /// between frames: `heap_caps_get_largest_free_block` walks the heap.
-    Started {
-        ordinal: u64,
-        path: String,
-        /// How `SdSource` served it: the prepared copy or the original.
-        served: Option<sd::Served>,
-    },
-    LowWater {
-        from: u32,
-        to: u32,
-        ordinal: u64,
-        path: String,
-    },
+/// The GIF-start line: how `SdSource` served it (the prepared copy or the
+/// original) and the heap as it starts. Logged from inside the frame, which
+/// only costs the formatting (`logring`), and the heap walk behind
+/// `largest_free_block`.
+fn log_started(ordinal: u64, path: &str, served: Option<sd::Served>) {
+    log::info!(
+        "[{ordinal}] {path} <- {} (heap {} B free, largest block {} B)",
+        match served {
+            Some(sd::Served::Prepared { try_us }) => {
+                format!("prepared, open {:.1} ms", try_us as f32 / 1000.0)
+            }
+            Some(sd::Served::Original { miss_us }) => {
+                format!("original, miss {:.1} ms", miss_us as f32 / 1000.0)
+            }
+            None if path.starts_with('@') => "drawn".to_string(),
+            Some(sd::Served::Direct) | None => "as named".to_string(),
+        },
+        free_heap(),
+        largest_free_block()
+    );
 }
 
-impl Deferred {
-    fn log(self) {
-        match self {
-            Deferred::Started {
-                ordinal,
-                path,
-                served,
-            } => log::info!(
-                "[{ordinal}] {path} <- {} (heap {} B free, largest block {} B)",
-                match served {
-                    Some(sd::Served::Prepared { try_us }) => {
-                        format!("prepared, open {:.1} ms", try_us as f32 / 1000.0)
-                    }
-                    Some(sd::Served::Original { miss_us }) => {
-                        format!("original, miss {:.1} ms", miss_us as f32 / 1000.0)
-                    }
-                    None if path.starts_with('@') => "drawn".to_string(),
-                    Some(sd::Served::Direct) | None => "as named".to_string(),
-                },
-                free_heap(),
-                largest_free_block()
-            ),
-            Deferred::LowWater {
-                from,
-                to,
-                ordinal,
-                path,
-            } => log::warn!("heap low-water {from} B -> {to} B during [{ordinal}] {path}"),
-        }
-    }
+/// A duration in whole µs, saturated.
+fn us(d: Duration) -> u32 {
+    d.as_micros().min(u32::MAX as u128) as u32
 }
 
 /// 64 bits from the hardware RNG.
@@ -1522,6 +1537,8 @@ fn engine_over(
     } else {
         catalog
     };
+    // The lookup is the card work of choosing the next file: `open` time.
+    let catalog: Box<dyn Catalog> = Box::new(frametime::CountedCatalog(catalog));
     let mode = if settings.shuffle {
         Mode::Shuffle
     } else {
@@ -1955,11 +1972,13 @@ fn heartbeat(
     panel: &Panel,
     status: &Arc<Mutex<Status>>,
     started: u64,
-    sampled_min: u32,
+    floor: &frametime::Floor,
     deadline_misses: u64,
     worst_lateness_ms: u64,
+    misses: &frametime::Misses,
     schedule: &str,
 ) {
+    let sampled_min = floor.min;
     let free = free_heap();
     let min_free = min_free_heap();
     let refresh = panel.refresh_rate();
@@ -1970,13 +1989,17 @@ fn heartbeat(
         (s.ip.clone(), s.wifi, s.entries)
     };
     log::info!(
-        "heartbeat: heap {free} B free (floor {sampled_min} B, idf-min {min_free} B), refresh {refresh} Hz, \
-         {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms), \
-         transitions cut {}, streams aborted {}, wifi {wifi} {ip}, {schedule}{}{}{}",
+        "heartbeat: heap {free} B free (floor {sampled_min} B{}, idf-min {min_free} B), refresh {refresh} Hz, \
+         {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms; {}), \
+         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}",
+        floor.heartbeat(),
+        misses.heartbeat(),
         TRANSITIONS_CUT.load(Ordering::Relaxed),
         httpd::streams_aborted(),
+        frametime::stack_unused(),
         sd::period_summary(),
         cache_builder::heartbeat(entries, cache::peek()),
+        logring::summary(),
         probe::period_summary()
     );
 }

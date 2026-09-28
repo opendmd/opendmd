@@ -35,7 +35,7 @@ use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
 use esp_idf_svc::http::Method;
 use opendmd_core::engine::Engine;
 use opendmd_core::filter::Filter;
-use opendmd_core::follow::{self as rules, Action, Follow, Game, Observed, State};
+use opendmd_core::follow::{self as rules, Action, Follow, Game, Observed, State, StatusScan};
 use opendmd_core::index::{write_index_resolving_then, IndexHeader};
 use opendmd_core::manifest::{self, Entry};
 use opendmd_core::overrides::Override;
@@ -217,18 +217,6 @@ fn base_url(host: &str) -> String {
     }
 }
 
-/// `get_status`, the fields the state machine wants.
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct StatusReply {
-    system: String,
-    game_file: String,
-    game_name: String,
-    paused: bool,
-    halted: bool,
-    view: String,
-}
-
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct VersionReply {
@@ -294,7 +282,13 @@ pub struct Poller {
     // Heap and time accounting, for the heartbeat-style line every 5
     // minutes (since the last one).
     polls: u32,
+    /// The deepest heap dip of a poll during which nothing else on the
+    /// board is known to have allocated much (no GIF started, the cache
+    /// builder down), and of the others. The dip is global free heap, so
+    /// a GIF's decoder or the builder's encoder landing during a poll is
+    /// counted too: that was the "43 KB per poll" in the night log.
     poll_dip_max: u32,
+    poll_dip_busy_max: u32,
     poll_ms_sum: u32,
     poll_ms_max: u32,
     last_report: Instant,
@@ -319,6 +313,7 @@ impl Poller {
             cmd,
             polls: 0,
             poll_dip_max: 0,
+            poll_dip_busy_max: 0,
             poll_ms_sum: 0,
             poll_ms_max: 0,
             last_report: Instant::now(),
@@ -395,15 +390,17 @@ impl Poller {
         if self.last_report.elapsed() >= config::FOLLOW_REPORT {
             self.last_report = Instant::now();
             log::info!(
-                "follow: {} polls, per-poll heap dip max {} B, time avg {} ms max {} ms, heap {} B free",
+                "follow: {} polls, per-poll heap dip max {} B ({} B while a GIF started or the cache builder ran), time avg {} ms max {} ms, heap {} B free",
                 self.polls,
                 self.poll_dip_max,
+                self.poll_dip_busy_max,
                 self.poll_ms_sum / self.polls.max(1),
                 self.poll_ms_max,
                 free_heap()
             );
             self.polls = 0;
             self.poll_dip_max = 0;
+            self.poll_dip_busy_max = 0;
             self.poll_ms_sum = 0;
             self.poll_ms_max = 0;
         }
@@ -511,17 +508,20 @@ impl Poller {
         }
     }
 
-    /// One GET on a connection of its own, closed after: `(status, body)`.
-    /// The body is capped at 2 KB (a status reply is ~300 B). Nothing is
-    /// kept between polls — a kept-alive `esp_http_client` held 3.35 KB of
-    /// heap for a request every 2 s.
+    /// One GET on a connection of its own, closed after: the HTTP status;
+    /// the body goes to `body` as it is read, 256 B at a time (nothing is
+    /// buffered here). Nothing is kept between polls — a kept-alive
+    /// `esp_http_client` held 3.35 KB of heap for a request every 2 s.
     fn get(
         &mut self,
         host: &str,
         path: &str,
         token: Option<&str>,
-    ) -> Result<(u16, Vec<u8>), String> {
+        body: &mut dyn FnMut(&[u8]),
+    ) -> Result<u16, String> {
         let started = Instant::now();
+        let gifs_before = self.status.lock().map_or(0, |s| s.gifs_started);
+        let builder_before = crate::cache_builder::task_up();
         let before = free_heap();
         let mut low = before;
         let url = format!("{}{path}", base_url(host));
@@ -536,51 +536,63 @@ impl Poller {
                 buffer_size_tx: Some(256),
                 ..Default::default()
             })?;
+            low = low.min(free_heap());
             conn.initiate_request(Method::Get, &url, headers)?;
+            low = low.min(free_heap());
             conn.initiate_response()?;
             low = low.min(free_heap());
             let status = conn.status();
-            let mut body = Vec::with_capacity(512);
             let mut buf = [0u8; 256];
+            let mut read = 0usize;
             loop {
                 let n = conn.read(&mut buf)?;
-                if n == 0 || body.len() >= 2048 {
+                low = low.min(free_heap());
+                // A status reply is ~300 B; a body this long is not one,
+                // and would only keep the worker (and the socket) busy.
+                if n == 0 || read >= config::FOLLOW_MAX_BODY {
                     break;
                 }
-                body.extend_from_slice(&buf[..n]);
+                read += n;
+                body(&buf[..n]);
             }
-            low = low.min(free_heap());
-            Ok::<_, esp_idf_svc::sys::EspError>((status, body))
+            Ok::<_, esp_idf_svc::sys::EspError>(status)
         })();
         let ms = started.elapsed().as_millis() as u32;
         self.polls += 1;
         self.poll_ms_sum = self.poll_ms_sum.saturating_add(ms);
         self.poll_ms_max = self.poll_ms_max.max(ms);
         // What the request took at its deepest (connection, buffers, socket,
-        // body), all of it given back by now.
-        self.poll_dip_max = self.poll_dip_max.max(before.saturating_sub(low));
+        // body), all of it given back by now — or, if a GIF started or the
+        // cache builder ran meanwhile, whatever they took too.
+        let busy = builder_before
+            || crate::cache_builder::task_up()
+            || self.status.lock().map_or(0, |s| s.gifs_started) != gifs_before;
+        let dip = before.saturating_sub(low);
+        if busy {
+            self.poll_dip_busy_max = self.poll_dip_busy_max.max(dip);
+        } else {
+            self.poll_dip_max = self.poll_dip_max.max(dip);
+        }
         result.map_err(|e| describe(&e))
+    }
+
+    /// `get_status`, read through [`StatusScan`]: the reply is never held
+    /// whole, whatever its size.
+    fn get_status(&mut self, host: &str, code: &str) -> Result<(u16, Result<Observed, String>), String> {
+        let mut scan = StatusScan::new();
+        let status = self.get(host, "get_status", Some(code), &mut |b| scan.feed(b))?;
+        Ok((status, scan.finish().map_err(|e| format!("bad reply ({e})"))))
     }
 
     fn poll_status(&mut self) -> Result<Observed, String> {
         let host = self.cfg.host.clone();
         let code = self.cfg.code.clone();
-        let (status, body) = self.get(&host, "get_status", Some(&code))?;
+        let (status, observed) = self.get_status(&host, &code)?;
         match status {
-            200 => {}
-            401 => return Err("401 (wrong code)".into()),
-            n => return Err(format!("HTTP {n}")),
+            200 => observed,
+            401 => Err("401 (wrong code)".into()),
+            n => Err(format!("HTTP {n}")),
         }
-        let r: StatusReply =
-            serde_json::from_slice(&body).map_err(|e| format!("bad reply ({e})"))?;
-        Ok(Observed {
-            view: r.view,
-            paused: r.paused,
-            halted: r.halted,
-            system: r.system,
-            game_name: r.game_name,
-            game_file: r.game_file,
-        })
     }
 
     /// `POST /api/follow/test`: `get_version` (no code needed), then
@@ -596,11 +608,17 @@ impl Poller {
         if host.is_empty() {
             return r#"{"ok":false,"reachable":false,"error":"no host"}"#.to_string();
         }
-        let version = match self.get(&host, "get_version", None) {
-            Ok((200, body)) => serde_json::from_slice::<VersionReply>(&body)
+        // `get_version` is a few dozen bytes: kept (at most 1 KB) and parsed.
+        let mut body = Vec::new();
+        let version = match self.get(&host, "get_version", None, &mut |b| {
+            if body.len() + b.len() <= 1024 {
+                body.extend_from_slice(b);
+            }
+        }) {
+            Ok(200) => serde_json::from_slice::<VersionReply>(&body)
                 .map(|v| v.version)
                 .unwrap_or_default(),
-            Ok((n, _)) => {
+            Ok(n) => {
                 return format!(
                     r#"{{"ok":false,"reachable":true,"error":{}}}"#,
                     json_string(&format!("get_version: HTTP {n}"))
@@ -613,7 +631,7 @@ impl Poller {
                 )
             }
         };
-        let (status, body) = match self.get(&host, "get_status", Some(&code)) {
+        let (status, observed) = match self.get_status(&host, &code) {
             Ok(r) => r,
             Err(e) => {
                 return format!(
@@ -623,16 +641,12 @@ impl Poller {
                 )
             }
         };
-        let r: Option<StatusReply> = (status == 200)
-            .then(|| serde_json::from_slice(&body).ok())
-            .flatten();
-        let error = match (status, &r) {
-            (200, Some(_)) => None,
-            (200, None) => Some("bad reply".to_string()),
-            (401, _) => Some("401 (wrong code)".to_string()),
-            (n, _) => Some(format!("HTTP {n}")),
+        let (r, error) = match (status, observed) {
+            (200, Ok(o)) => (o, None),
+            (200, Err(e)) => (Observed::default(), Some(e)),
+            (401, _) => (Observed::default(), Some("401 (wrong code)".to_string())),
+            (n, _) => (Observed::default(), Some(format!("HTTP {n}"))),
         };
-        let r = r.unwrap_or_default();
         format!(
             r#"{{"ok":{},"reachable":true,"version":{},"status":{},"view":{},"system":{},"game":{},"error":{}}}"#,
             error.is_none(),
