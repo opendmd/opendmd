@@ -180,11 +180,15 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
     let t = probe::http_stamp();
     let (mut file, actual) = match fs::File::open(path) {
         Ok(f) => (f, path),
-        Err(_) => {
+        Err(e) => {
+            // A card error counts towards the card's health (`sdhealth`);
+            // it is still answered as a miss, as before.
+            crate::sdhealth::open_failed(crate::sdhealth::Kind::Serve, path, &e);
             probe::http_log("open-miss", t_all, path);
             return Ok(false);
         }
     };
+    crate::sdhealth::opened(path);
     let open_us = probe::elapsed_us(t);
     // `fstat` on the handle: FATFS answers it from the open file object.
     let Some(total) = file
@@ -220,7 +224,14 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
     while left > 0 {
         let t = probe::http_stamp();
         let want = (left as usize).min(buf.len());
-        let n = file.read(&mut buf[..want])?;
+        let n = match file.read(&mut buf[..want]) {
+            Ok(n) => n,
+            Err(e) => {
+                // Proven (the card, not the file) once this file has read.
+                crate::sdhealth::read_failed(crate::sdhealth::Kind::Serve, left < total, path, &e);
+                return Err(e.into());
+            }
+        };
         if probe::HTTP_LOG {
             let us = probe::elapsed_us(t);
             reads += 1;

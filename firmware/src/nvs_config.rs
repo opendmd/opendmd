@@ -46,6 +46,9 @@ const KEY_FOLLOW: &str = "follow";
 const KEY_FOLLOW_HOST: &str = "follow_host";
 const KEY_FOLLOW_CODE: &str = "follow_code";
 const KEY_ATTRACT_SET: &str = "attract_set";
+/// Internal, not a setting: the CID serial of the card that failed at full
+/// speed and mounts at the fallback clock (`sdhealth`). Absent = none.
+const KEY_SD_SLOW: &str = "sd_slow";
 /// What NVS holds in `attract_set` for "the current playlist" (a `*` can
 /// never be a set's name: FAT refuses it in a file name).
 const CURRENT_PLAYLIST: &str = "*";
@@ -364,6 +367,30 @@ impl Config {
                 false
             }
         }
+    }
+
+    /// The slow-clock record: the CID serial of the card that failed at
+    /// full speed (`sdhealth`). Not part of [`Settings`]: never in
+    /// `/api/config`, never written by [`save`](Self::save).
+    pub fn sd_slow(&self) -> Option<u32> {
+        match self.nvs.get_u32(KEY_SD_SLOW) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("NVS get '{KEY_SD_SLOW}': {e}");
+                None
+            }
+        }
+    }
+
+    /// Record (`Some(serial)`) or forget (`None`) the slow-clock card.
+    pub fn set_sd_slow(&mut self, serial: Option<u32>) -> anyhow::Result<()> {
+        match serial {
+            Some(v) => self.nvs.set_u32(KEY_SD_SLOW, v)?,
+            None => {
+                self.nvs.remove(KEY_SD_SLOW)?;
+            }
+        }
+        Ok(())
     }
 
     /// [`get_string`](Self::get_string) for a value up to `max` bytes, read

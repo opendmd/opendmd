@@ -111,6 +111,32 @@ pub const SD_RETRY_CMD_TIMEOUT_MS: u32 = 3_000;
 /// anyway; the main loop keeps trying every [`RETRY_INTERVAL`] after that.
 pub const SD_BOOT_ATTEMPTS: u32 = 2;
 
+// Card failure while running (`sdhealth.rs`, CLAUDE.md "When the card will
+// not mount"). Only card-class I/O errors count (`EIO`, `ETIMEDOUT`,
+// `ENODEV` from FATFS: a command timeout, a CRC error, a card gone), never
+// a missing file or a GIF that will not decode.
+
+/// Card I/O errors within [`SD_FAIL_WINDOW`] that mean the card, not a
+/// file, is failing (at least one must be on a file that had read fine).
+pub const SD_FAIL_TRIP: usize = 3;
+/// The window [`SD_FAIL_TRIP`] errors must fall in.
+pub const SD_FAIL_WINDOW: Duration = Duration::from_secs(60);
+/// The clock a card that failed at [`SD_SPEED_KHZ`] mounts at from then on
+/// (under both the SD default-speed 25 MHz every card supports and the
+/// GPIO matrix's 26.7 MHz cap, so the driver can never refuse it at the
+/// clock switch). Kept per card, by its CID serial, in NVS.
+pub const SD_SPEED_FALLBACK_KHZ: u32 = 20_000;
+/// At most this many restarts for card failure within [`SD_REBOOT_WINDOW`];
+/// after that the device stays up without the card and remounts it every
+/// [`SD_REMOUNT_INTERVAL`] instead.
+pub const SD_REBOOT_CAP: u32 = 3;
+pub const SD_REBOOT_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// How often a device that has used up its restarts tries the card again.
+pub const SD_REMOUNT_INTERVAL: Duration = Duration::from_secs(60);
+/// How long a card-failure restart waits for the log ring to reach the
+/// console first.
+pub const SD_RESTART_LOG_FLUSH: Duration = Duration::from_secs(2);
+
 // ---------------------------------------------------------------------------
 // Playlist
 // ---------------------------------------------------------------------------

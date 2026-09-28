@@ -56,6 +56,8 @@ export async function mount(el) {
   const banner = h('div.banner', { hidden: true, id: 'st-reboot' }, 'Saved. WiFi and hostname changes take effect after a reboot. ',
     h('button.sm', { onclick: reboot }, 'Reboot now'));
   const facts = h('div.grid', { id: 'st-facts' });
+  // One quiet line, only when the card has had trouble (sdhealth on the device).
+  const cardNote = h('p.cap', { id: 'st-card-note', hidden: true, style: 'margin-top:10px' });
 
   // The playlist choices, rebuilt whenever the config changes or the view
   // is shown: a playlist made or deleted elsewhere must not linger here.
@@ -115,7 +117,7 @@ export async function mount(el) {
         h('label.stack', 'hostname (.local)', f.hostname)),
       h('div.row', { style: 'margin-top:10px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
       h('div.row', { style: 'margin-top:12px' }, h('button.pri', { id: 'st-save-net', onclick: () => save(['wifi_ssid', 'wifi_pass', 'hostname']) }, 'Save network'))),
-    h('div.card', h('h2', 'Device'), facts,
+    h('div.card', h('h2', 'Device'), facts, cardNote,
       h('p.cap', { style: 'margin-top:10px' }, 'Firmware updates are installed over USB with the browser flasher.'),
       h('div.row', { style: 'margin-top:12px' },
         h('button', { id: 'st-reindex', onclick: reindex }, 'Rebuild index'),
@@ -129,6 +131,11 @@ export async function mount(el) {
       fact('playlist', playlistLabel(s.manifest)), fact('entries', s.entries.toLocaleString()),
       fact('index', s.index_state ?? '–'), fact('web app', s.www_version ?? '–'),
       fact('card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'not mounted'));
+    const sd = s.sd;
+    const errs = sd.failures || (!sd.mounted && sd.reboots) || 0;
+    cardNote.textContent = errs ? `Card errors: ${errs}, retrying`
+      : sd.fallback ? 'Card running at reduced speed after errors' : '';
+    cardNote.hidden = !cardNote.textContent;
     // A set change while an index is being built would queue behind it.
     f.set.disabled = s.index_state === 'building';
     f.set.title = f.set.disabled ? 'the device is building an index' : '';

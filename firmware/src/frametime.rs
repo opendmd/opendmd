@@ -58,13 +58,43 @@ pub fn open<T>(f: impl FnOnce() -> T) -> T {
 }
 
 /// The player's file, its reads and seeks timed into the iteration's `read`.
-pub struct Counted<R>(pub R);
+///
+/// Also the player's half of card-failure counting ([`crate::sdhealth`]):
+/// a card-class error is recorded, *proven* (the card, not the file) when
+/// this handle had already read (`.1`). The flag fits the `Box`'s minimum
+/// heap block, so it costs nothing.
+pub struct Counted<R>(pub R, pub bool);
+
+impl<R> Counted<R> {
+    pub fn new(r: R) -> Self {
+        Counted(r, false)
+    }
+}
 
 impl<R: Read> Read for Counted<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let t = Instant::now();
-        let r = self.0.read(buf);
+        // The I/O test hook fails only reads of a file that has read fine,
+        // as a card failing under a playing GIF does.
+        let sim = if self.1 {
+            crate::sdhealth::take_sim_read()
+        } else {
+            None
+        };
+        let r = match sim {
+            Some(e) => Err(e),
+            None => self.0.read(buf),
+        };
         READ_US.fetch_add(us_since(t), Relaxed);
+        match &r {
+            Ok(n) => self.1 |= *n > 0,
+            Err(e) => crate::sdhealth::read_failed(
+                crate::sdhealth::Kind::Read,
+                self.1,
+                "the playing file",
+                e,
+            ),
+        }
         r
     }
 }
@@ -74,13 +104,22 @@ impl<R: Seek> Seek for Counted<R> {
         let t = Instant::now();
         let r = self.0.seek(pos);
         READ_US.fetch_add(us_since(t), Relaxed);
+        if let Err(e) = &r {
+            crate::sdhealth::read_failed(
+                crate::sdhealth::Kind::Read,
+                self.1,
+                "the playing file (seek)",
+                e,
+            );
+        }
         r
     }
 }
 
 /// The playlist lookup (an index seek and a manifest line) timed as `open`:
-/// it is the card work of choosing the next file.
-pub struct CountedCatalog(pub Box<dyn Catalog>);
+/// it is the card work of choosing the next file. Its card errors count as
+/// reads, proven once a lookup has succeeded (`.1`).
+pub struct CountedCatalog(pub Box<dyn Catalog>, pub bool);
 
 impl Catalog for CountedCatalog {
     fn len(&self) -> usize {
@@ -88,7 +127,14 @@ impl Catalog for CountedCatalog {
     }
 
     fn entry(&mut self, i: usize) -> io::Result<Entry> {
-        open(|| self.0.entry(i))
+        let r = open(|| self.0.entry(i));
+        match &r {
+            Ok(_) => self.1 = true,
+            Err(e) => {
+                crate::sdhealth::read_failed(crate::sdhealth::Kind::Read, self.1, "the playlist", e)
+            }
+        }
+        r
     }
 }
 
@@ -153,7 +199,10 @@ impl Phases {
             (Cause::Wake, self.wake),
         ]
         .into_iter()
-        .fold((Cause::Other, 0), |best, (c, us)| if us > best.1 { (c, us) } else { best })
+        .fold(
+            (Cause::Other, 0),
+            |best, (c, us)| if us > best.1 { (c, us) } else { best },
+        )
         .0
     }
 }
