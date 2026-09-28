@@ -50,6 +50,10 @@ use crate::config::{
 };
 
 const MAGIC: u32 = 0x5d_4e_a1_7b;
+/// `Rtc::clear` values: forget the slow-clock record and the restart count
+/// (`?sd_fallback=clear`), or the restart count alone (a deliberate reboot).
+const CLEAR_ALL: u32 = 1;
+const CLEAR_COUNT: u32 = 2;
 
 /// Why the last restart was made, for the next boot's status.
 const NOTE_NONE: u32 = 0;
@@ -203,7 +207,18 @@ pub fn boot(poweron: bool, nvs_slow: Option<u32>) -> Boot {
         set(w!(RTC.magic), MAGIC);
     }
     let mut clear_nvs = false;
-    if get(w!(RTC.clear)) == 1 {
+    if get(w!(RTC.clear)) == CLEAR_COUNT {
+        set(w!(RTC.clear), 0);
+        if get(w!(RTC.reboots)) > 0 {
+            log::warn!(
+                "microSD: card-failure restart count cleared ({} in this window) by a deliberate reboot; the slow-clock record is kept",
+                get(w!(RTC.reboots))
+            );
+        }
+        set(w!(RTC.reboots), 0);
+        set(w!(RTC.window_ms), 0);
+    }
+    if get(w!(RTC.clear)) == CLEAR_ALL {
         for f in [
             w!(RTC.clear),
             w!(RTC.slow),
@@ -309,7 +324,18 @@ pub fn forget_for_new_card() {
 /// Ask the next boot to forget the slow-clock record and the restart
 /// budget (`POST /api/reboot?sd_fallback=clear`).
 pub fn request_clear() {
-    set(w!(RTC.clear), 1);
+    set(w!(RTC.clear), CLEAR_ALL);
+}
+
+/// A deliberate reboot (`POST /api/reboot` with no test hook, i.e. the
+/// UI's button): the next boot forgets the card-failure restart count and
+/// its window, so a person's own restart mounts the card at once instead
+/// of inheriting the cap's 60 s wait. The slow-clock record is kept: the
+/// card is still the card that failed.
+pub fn request_fresh_start() {
+    if get(w!(RTC.clear)) == 0 {
+        set(w!(RTC.clear), CLEAR_COUNT);
+    }
 }
 
 /// Every planned restart: this run's uptime goes into the budget's window,

@@ -755,6 +755,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             info!("the next boot forgets the card's slow clock and its card-failure restarts");
             crate::sdhealth::request_clear();
         }
+        // A plain reboot (the UI's button, no hook) is a person's fresh
+        // start: the card-failure restart count goes, the slow clock stays.
+        let hooked = ["sd_fail", "sd_io_fail", "sd_fallback"]
+            .iter()
+            .any(|k| query_param(req.query(), k).is_some());
+        if !hooked {
+            crate::sdhealth::request_fresh_start();
+        }
         req.json(r#"{"ok":true,"rebooting":true}"#)?;
         reboot_after_response()
     })?;
