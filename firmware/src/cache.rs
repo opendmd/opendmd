@@ -25,9 +25,12 @@
 //!
 //! One slice (and one manifest pass) covers a card with up to ~3,000 copies;
 //! a fully prepared 11k-file card takes four. It runs on the network worker
-//! (CPU0), never the display task, in FAT-lock-sized pieces with a yield
-//! between directories, and restarts if the playlist or the copies change
-//! underneath it. Nothing counts until someone asks: the first
+//! (CPU0), never the display task, in FAT-lock-sized pieces with a short
+//! sleep after every bucket directory and every 2 KB of manifest
+//! ([`config::CACHE_PACE_BYTES`]: the cache builder and the stream task,
+//! below it on that core, get the CPU and the card too), not beside a file
+//! the builder has in hand, and restarts if the playlist or the copies
+//! change underneath it. Nothing counts until someone asks: the first
 //! `GET /api/cache` starts it, and after that every change (an upload to
 //! `cache/`, a forget, a reindex or set change) recounts, debounced by
 //! [`config::CACHE_DEBOUNCE`] so a browser uploading copies one after another
@@ -41,7 +44,7 @@ use std::io::{self, BufReader, Read};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::config;
 use crate::http::NetCommand;
@@ -214,6 +217,17 @@ pub fn run_count() {
             return;
         }
         let started = Instant::now();
+        // Not beside a cache builder file. The builder does not start one
+        // while a count is pending (it waits for `counting`), but one it
+        // began before this was asked for is still being encoded: the key
+        // slice would be sized to the ~20 KB free beside the encoder (256
+        // keys: 37 manifest passes, 115 s on the rig instead of 4 passes,
+        // 29 s), and the encoder's reads would compete with the count's.
+        // It is seconds (a file is 0.2-6 s at full speed); bounded all the
+        // same.
+        while crate::cache_builder::holding() && started.elapsed() < config::CACHE_BUILDER_WAIT {
+            thread::sleep(Duration::from_millis(50));
+        }
         match count(&manifest, &platforms, gen) {
             Ok(Some((c, report))) => {
                 let ms = started.elapsed().as_millis() as u64;
@@ -338,9 +352,13 @@ fn discover_all() -> io::Result<(Vec<Parent>, u32)> {
 
 /// Step 2 for one bucket: call `visit` with the card path of every `.gif` in
 /// bucket `b` of every parent. Returns the number of directories read.
+/// `pace`: slept after each directory (the count, see
+/// [`config::CACHE_PACE_BYTES`]); zero yields instead (the listing, which
+/// is on the httpd task and has a client waiting).
 fn walk_bucket(
     parents: &[Parent],
     b: u8,
+    pace: Duration,
     mut visit: impl FnMut(&str) -> Result<()>,
 ) -> Result<u32> {
     let mut dirs = 0;
@@ -362,7 +380,11 @@ fn walk_bucket(
                 visit(&format!("{}/{b:02x}/{name}", p.card))?;
             }
         }
-        thread::yield_now();
+        if pace.is_zero() {
+            thread::yield_now();
+        } else {
+            thread::sleep(pace);
+        }
     }
     Ok(dirs)
 }
@@ -374,9 +396,14 @@ fn walk_bucket(
 /// allocating an error per turn, starving the idle task (task watchdog) and,
 /// with it, the httpd and WiFi (found on the rig when a config change landed
 /// mid-count).
+///
+/// Also where the manifest pass is paced: a sleep every
+/// [`config::CACHE_PACE_BYTES`] read, a yield after every other read.
 struct Abortable<R> {
     inner: R,
     gen: u32,
+    /// Bytes read since the last pacing sleep.
+    since_pause: usize,
 }
 
 impl<R: Read> Read for Abortable<R> {
@@ -385,7 +412,13 @@ impl<R: Read> Read for Abortable<R> {
             return Err(io::Error::other("superseded"));
         }
         let n = self.inner.read(buf)?;
-        thread::yield_now();
+        self.since_pause += n;
+        if self.since_pause >= config::CACHE_PACE_BYTES {
+            self.since_pause = 0;
+            thread::sleep(config::CACHE_PACE_SLEEP);
+        } else {
+            thread::yield_now();
+        }
         Ok(n)
     }
 }
@@ -412,7 +445,7 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
             if GEN.load(Relaxed) != gen {
                 return Ok(None);
             }
-            dirs += walk_bucket(&parents, hi as u8, |path| {
+            dirs += walk_bucket(&parents, hi as u8, config::CACHE_PACE_SLEEP, |path| {
                 keys.push(layout::prepared_key(path));
                 Ok(())
             })?;
@@ -432,7 +465,14 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
         }
         let tp = Instant::now();
         let file = fs::File::open(manifest)?;
-        let reader = BufReader::with_capacity(1024, Abortable { inner: file, gen });
+        let reader = BufReader::with_capacity(
+            1024,
+            Abortable {
+                inner: file,
+                gen,
+                since_pause: 0,
+            },
+        );
         let c =
             match layout::count_prepared(reader, &filter, (lo as u8, hi as u8), &keys, passes == 0)
             {
@@ -468,7 +508,7 @@ pub fn stream_list(req: &mut Req) -> Result<()> {
     out.push_str(r#"{"paths":["#);
     let mut n = 0usize;
     for b in 0..=255u8 {
-        walk_bucket(&parents, b, |path| {
+        walk_bucket(&parents, b, Duration::ZERO, |path| {
             if n > 0 {
                 out.push(',');
             }

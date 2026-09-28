@@ -216,7 +216,10 @@ make fw-release-flash PORT=/dev/ttyUSB0   # web app pack at 0x2C0000, then bootl
 ```
 
 Flash at 115200 (the default here): faster rates give `verify_failed` on
-these CH340 boards. Without `fw-erase` this is the keep-settings path, like
+these CH340 boards. The firmware's console (its log) is a different rate,
+**921600 baud**: `make fw-monitor` and `tools/serial-capture.py` use it; any
+other serial monitor must be set to 921600 (the browser flasher's "Logs &
+console" opens at 115200 and shows garbage). Without `fw-erase` this is the keep-settings path, like
 the flasher's. On the bench, `make fw-flash` does the same with the bench
 build (`dev-credentials`).
 

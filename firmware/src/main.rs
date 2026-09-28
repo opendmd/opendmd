@@ -173,7 +173,7 @@ fn main() -> Result<()> {
     let mosi = expect_pin(AnyOutputPin::from(pins.gpio23), config::SD_MOSI, "SD MOSI");
     let miso = expect_pin(AnyIOPin::from(pins.gpio19), config::SD_MISO, "SD MISO");
     let cs = expect_pin(AnyOutputPin::from(pins.gpio5), config::SD_CS, "SD CS");
-    let mut bus = SdBus::new(peripherals.spi2, sck, mosi, miso, cs);
+    let mut bus = SdBus::new(peripherals.spi3, sck, mosi, miso, cs);
     let reset_reason = reset_reason();
     log::info!("reset reason: {reset_reason}");
 
@@ -1864,10 +1864,12 @@ fn try_mount(bus: &mut SdBus) -> std::result::Result<SdCard, String> {
     match bus.mount() {
         Ok(card) => {
             log::info!(
-                "microSD mounted at {} ({:.2} GB) on attempt {}, heap {} B free",
+                "microSD mounted at {} ({:.2} GB) on attempt {}, SPI clock {} kHz (asked {}), heap {} B free",
                 config::SD_MOUNT,
                 card.capacity_bytes as f64 / 1e9,
                 bus.attempts(),
+                card.real_freq_khz,
+                config::SD_SPEED_KHZ,
                 free_heap()
             );
             Ok(card)

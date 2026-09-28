@@ -164,7 +164,8 @@ for ts, msg in hb:
     if head and first is None:
         first = head
     tail = msg.split("| sd:")[-1] if "| sd:" in msg else ""
-    blit = re.search(r"blit p50 (\d+)us max (\d+)us \(run p50 (\d+)us max (\d+)us\) px/frame (\d+)", tail)
+    blit = re.search(r"blit p50 (\d+)us (?:p90 \d+us )?max (\d+)us \(run p50 (\d+)us (?:p90 \d+us )?max (\d+)us\) px/frame (\d+)", tail)
+    dec = re.search(r"decode p50 (\d+)us (?:p90 (\d+)us )?max (\d+)us", tail)
     rew = re.search(r"rewinds (\d+)", tail)
     opens_hb = re.search(r"opens (\d+) avg (\d+)us max (\d+)us", tail)
     parts = [f"@{ts}:"]
@@ -172,15 +173,20 @@ for ts, msg in hb:
         parts.append(f"floor {head.group(1)} misses {head.group(2)} worst {head.group(3)}")
     if blit:
         parts.append(f"blit p50 {blit.group(1)} max {blit.group(2)} us, px/frame {blit.group(5)}")
+    if dec:
+        parts.append(f"decode p50 {dec.group(1)}" + (f" p90 {dec.group(2)}" if dec.group(2) else "") + f" max {dec.group(3)} us")
     if opens_hb:
         parts.append(f"opens {opens_hb.group(1)} max {int(opens_hb.group(3)) / 1000:.0f} ms")
     if rew:
         parts.append(f"rewinds {rew.group(1)}")
     print("  " + "  ".join(parts))
 if hb:
-    run = re.search(r"\(run p50 (\d+)us max (\d+)us\)", hb[-1][1])
-    if run:
-        print(f"  blit over the whole boot (last heartbeat): p50 {run.group(1)} us, max {run.group(2)} us")
+    tail = hb[-1][1].split("| sd:")[-1]
+    for what in ("blit", "decode"):
+        run = re.search(what + r" p50 \d+us (?:p90 \d+us )?max \d+us \(run p50 (\d+)us (?:p90 (\d+)us )?max (\d+)us\)", tail)
+        if run:
+            p90 = f", p90 {run.group(2)} us" if run.group(2) else ""
+            print(f"  {what} over the whole boot (last heartbeat): p50 {run.group(1)} us{p90}, max {run.group(3)} us")
 if hb and first:
     last = re.search(r"floor (\d+) B.*?(\d+) deadline misses \(worst (\d+) ms\)", hb[-1][1])
     if last:

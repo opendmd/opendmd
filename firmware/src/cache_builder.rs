@@ -1075,6 +1075,13 @@ impl Seek for Paced {
     }
 }
 
+/// A file is in hand: the encoder's heap is allocated (or about to be). The
+/// `/api/cache` count waits for this to clear before it sizes its key slice
+/// ([`crate::cache::run_count`]).
+pub fn holding() -> bool {
+    HOLDING.load(SeqCst)
+}
+
 /// Take the heap, or find out we may not after all.
 fn hold() -> bool {
     HOLDING.store(true, SeqCst);

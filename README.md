@@ -431,7 +431,7 @@ git submodule update --init          # the HUB75 driver
 ```bash
 make fw-build                        # first build clones ESP-IDF v5.3 (~5-10 min)
 make fw-erase   PORT=/dev/ttyUSB0    # once, if the board ran other firmware
-make fw-flash   PORT=/dev/ttyUSB0    # build + flash (bootloader, table, app, web app pack) at 115200 + monitor
+make fw-flash   PORT=/dev/ttyUSB0    # build + flash (bootloader, table, app, web app pack) at 115200 + monitor (console: 921600 baud)
 make fw-monitor PORT=/dev/ttyUSB0
 make fw-clean
 

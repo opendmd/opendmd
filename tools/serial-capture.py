@@ -7,15 +7,19 @@
 `cat /dev/ttyUSBx` and most terminal tools toggle DTR/RTS on open/close; on a
 DevKit V1 that yanks EN and reboots (or holds) the chip. This opens the port
 with DTR/RTS deasserted and leaves them alone on exit.
-Usage: serial-capture.py PORT SECONDS [outfile] [--reset]
+Usage: serial-capture.py PORT SECONDS [outfile] [--reset] [--baud=N]
 --reset pulses EN via RTS (DTR low) so the boot log is captured, then runs.
+--baud=N: the console's rate, 921600 by default (sdkconfig.defaults since
+2026-09-28; firmware from before that logs at 115200). The ROM bootloader's
+first lines after a reset are always 115200, so they read as garbage.
 """
 import sys, time, serial
 port, secs = sys.argv[1], float(sys.argv[2])
 args = [a for a in sys.argv[3:] if not a.startswith("--")]
 out = open(args[0], "ab") if args else None
 s = serial.Serial()
-s.port, s.baudrate, s.timeout = port, 115200, 0.2
+baud = next((int(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--baud=")), 921600)
+s.port, s.baudrate, s.timeout = port, baud, 0.2
 s.dtr = False; s.rts = False          # applied at open: no reset pulse
 s.open()
 s.dtr = False; s.rts = False

@@ -225,13 +225,18 @@ fw-build:
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
 	@ls -l $(FW_BINARY)
 
-# 460800 baud gives frequent verify_failed errors on these CH340 boards.
+# The console (the firmware's log) runs at 921600 baud (sdkconfig.defaults,
+# CONFIG_ESP_CONSOLE_UART_BAUDRATE): every monitor and capture must match.
+# Flashing is a separate rate: 460800 gives frequent verify_failed errors on
+# these CH340 boards, so it stays at 115200.
+MONITOR_BAUD := 921600
+
 # Bootloader + partition table + app, then the web app's pack at WWW_OFFSET
 # (a second espflash call: `flash` takes one app image), then the monitor.
 # A board still on the old dual-OTA table wants `make fw-erase` first (NVS
 # goes too); see docs/deploying.md.
 fw-flash: fw-build web
-	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(WWW_PACK) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_BOOTLOADER) --partition-table $(FW)/partitions.csv --flash-size 4mb --monitor $(FW_BINARY)'
+	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(WWW_PACK) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_BOOTLOADER) --partition-table $(FW)/partitions.csv --flash-size 4mb --monitor --monitor-baud $(MONITOR_BAUD) $(FW_BINARY)'
 
 # NOTE: do NOT capture serial with `cat $(PORT)` or stty tricks — they toggle
 # DTR/RTS and the DevKit V1's auto-reset circuit reboots (or holds) the chip,
@@ -239,13 +244,15 @@ fw-flash: fw-build web
 # capture use tools/serial-capture.py (a uv inline-metadata script), which
 # holds DTR/RTS inactive and timestamps every line:
 #
-#   uv run tools/serial-capture.py $(PORT) 120 capture.log [--reset]
+#   uv run tools/serial-capture.py $(PORT) 120 capture.log [--reset] [--baud=N]
+#
+# (921600 by default, the console's rate; --baud=115200 for older firmware.)
 #
 # `--reset` pulses EN cleanly so the boot banner is in the log. Opening and
 # closing the port at all reboots the board, so take one long capture rather
 # than several short ones.
 fw-monitor:
-	bash -c '. $(ESPUP_ENV) && espflash monitor --port $(PORT)'
+	bash -c '. $(ESPUP_ENV) && espflash monitor --port $(PORT) --monitor-baud $(MONITOR_BAUD)'
 
 # Logged capture that does not disturb the board. SECS=120 by default.
 SECS ?= 120
@@ -358,7 +365,7 @@ fw-release: web
 # parts as dist/ (bootloader, table, app, pack). From DMDoS, other firmware or
 # the old dual-OTA table: `make fw-erase` first.
 fw-release-flash: fw-release
-	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW)/partitions.csv --flash-size $(FW_VARIANT) --monitor $(FW_RELEASE_BINARY)'
+	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW)/partitions.csv --flash-size $(FW_VARIANT) --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
 
 # The web app over WiFi: PUT the pack to /api/www, then check the version
 # the device reports. make www-push HOST=opendmd.local [WWW_PACK=dist/...]
