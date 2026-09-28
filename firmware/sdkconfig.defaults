@@ -115,3 +115,15 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # card timed out under concurrent reads (see "Frame time" in CLAUDE.md). Rust
 # code is governed by Cargo's profiles, not this.
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# --- Console UART --------------------------------------------------------
+# 921600 baud (IDF default 115200). With the log ring (src/logring.rs) the
+# baud no longer costs the display anything; this is the wire's speed only,
+# and every serial tool must match it (tools/serial-capture.py, fw-monitor).
+# Byte-clean on the rig: 0 malformed lines in 60 min of play (CLAUDE.md,
+# "Gotchas").
+# The baud is only settable on a "custom" UART console: UART0 on GPIO1/3,
+# the same port and pins as the default one.
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_CUSTOM_NUM_0=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600

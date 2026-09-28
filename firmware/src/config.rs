@@ -65,7 +65,7 @@ pub const DOUBLE_BUFFER: bool = false;
 pub const BRIGHTNESS: u8 = 96;
 
 // ---------------------------------------------------------------------------
-// microSD, SPI (not SDMMC) on VSPI/SPI2. hardware/PINOUT.md, "microSD".
+// microSD, SPI (not SDMMC) on VSPI (`SPI3`, IO_MUX pins). hardware/PINOUT.md, "microSD".
 // ---------------------------------------------------------------------------
 pub const SD_SCK: u32 = 18;
 pub const SD_MISO: u32 = 19;
@@ -79,8 +79,30 @@ pub const SD_MOUNT: &str = "/sdcard";
 /// engine is playing); the httpd task needs a few more for the file it is
 /// serving or the upload it is streaming to the card.
 pub const SD_MAX_FILES: usize = 8;
-/// Conservative: the carrier's SD wiring is long and unshielded.
-pub const SD_SPEED_KHZ: u32 = 20_000;
+/// The SD bus clock. The SPI master divides 80 MHz by a whole number, so
+/// the only clocks are 40, 26.7, 20, 16 … MHz (the nearest is taken: 26 and
+/// 32 MHz both give 26.7). 40 MHz needs the IO_MUX pins, i.e. `SPI3` (see
+/// `sd.rs`); through the GPIO matrix the driver refuses anything over
+/// 26.7 MHz. 40 MHz is the top: the next divider is 80 MHz itself, over the
+/// card's 50 MHz high-speed limit.
+///
+/// Stepped on the rig (2026-09-28, the carrier's long unshielded wiring,
+/// `filelist.txt` playing, Dissolve on; each step: 3 min idle, 90
+/// back-to-back `GET /filelist.txt` in three runs of 30 (the `0x107`
+/// repro), `api-load WORKERS=3` 120 s, 10 `gifs/Consoles` GETs, 10 min idle,
+/// plus 40 copies rebuilt by the cache builder):
+///
+/// | clock | card errors / `0x107` | api-load misses (read) | ≥ 250 ms late | `gifs/Consoles` scan |
+/// |---|---|---|---|---|
+/// | 20 MHz (`SPI2`, before) | — (short run) | +81 (74) | 31 | 142 ms per 1,000 entries |
+/// | 26.7 MHz (`SPI2`) | 0 / 0 of 90 | +60 (39) | 20 | 127 ms |
+/// | 40 MHz, `SPI2` | driver refuses the clock (see "When the card will not mount") | | | |
+/// | **40 MHz (`SPI3`)** | **0 / 0 of 90** | +75 (69) | 20 | **115 ms** |
+///
+/// Every step mounted on the first attempt and passed its 10 min idle.
+/// Directory scans are mostly per-sector latency, not bus time: 2x the
+/// clock is ~19% off a scan. See "Frame time" in CLAUDE.md.
+pub const SD_SPEED_KHZ: u32 = 40_000;
 /// Per-command timeout for every mount attempt after the first (the IDF
 /// default, used by the first, is 1 s): a card still finishing what a reset
 /// interrupted may take longer to come out of busy. See `sd::SdBus`.
@@ -342,6 +364,22 @@ pub const CACHE_KEYS_PER_PASS: usize = 3072;
 /// browser uploading prepared copies one after another causes one count at the
 /// end, not one per file.
 pub const CACHE_DEBOUNCE: Duration = Duration::from_secs(3);
+/// The `/api/cache` count's pacing. It runs on the network worker at
+/// priority 5 on CPU0, where the cache builder (priority 1) and the stream
+/// task (2) only get the CPU when it blocks, and a `yield_now` only goes to
+/// equal or higher priorities: flat out, a count mid-way through a builder
+/// file starved it of the CPU until FATFS's 10 s lock wait gave up
+/// (`card error ... Connection timed out`). So the count **sleeps**
+/// [`CACHE_PACE_SLEEP`] after every bucket directory it reads and after
+/// every [`CACHE_PACE_BYTES`] of manifest (~15% of CPU0 left to the lower
+/// priorities, the lock free while it sleeps). Nothing on the heap.
+pub const CACHE_PACE_BYTES: usize = 2048;
+/// See [`CACHE_PACE_BYTES`]. Two ticks at `CONFIG_FREERTOS_HZ=1000`.
+pub const CACHE_PACE_SLEEP: Duration = Duration::from_millis(2);
+/// How long a count waits for the cache builder to finish the file it has
+/// in hand before counting anyway (beside the encoder: a small key slice,
+/// many manifest passes). See `cache::run_count`.
+pub const CACHE_BUILDER_WAIT: Duration = Duration::from_secs(20);
 
 // ---------------------------------------------------------------------------
 // The cache builder (`cache_builder.rs`): the device preparing its own copies

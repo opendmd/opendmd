@@ -27,7 +27,10 @@ Sanity check: this is the library's ESP32 default map with only A/B/C moved
 
 ## microSD (SPI, on the 6-pin socket module — NOT SDMMC)
 
-VSPI defaults: SCK=18, MISO=19, MOSI=23, CS=5. Module also has 3V3 and GND
+VSPI defaults: SCK=18, MISO=19, MOSI=23, CS=5 — VSPI's IO_MUX pins, so the
+firmware drives them from SPI3 (= VSPI; SPI2 is HSPI and would route them
+through the GPIO matrix, which caps reads at 26.7 MHz): 40 MHz since
+2026-09-28 (config.rs `SD_SPEED_KHZ`). Module also has 3V3 and GND
 (3V3 is the last hole on the back-side row; shorting it to GND resets the board).
 Roles CONFIRMED 2026-09-22: SDCard init succeeds and a raw CMD0 probe gets R1=0x01
 only with sck=18 miso=19 mosi=23 cs=5 (all 23 other role permutations silent).

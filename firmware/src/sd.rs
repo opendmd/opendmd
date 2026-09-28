@@ -1,8 +1,14 @@
 //! microSD over SPI, mounted as FAT at `/sdcard`.
 //!
 //! The DMDos carrier wires the card to a plain SPI socket, not the SDMMC
-//! peripheral: VSPI/SPI2, `SCK=18 MISO=19 MOSI=23 CS=5` (measured, see
+//! peripheral: `SCK=18 MISO=19 MOSI=23 CS=5` (measured, see
 //! `hardware/PINOUT.md`). Card detect and write protect are not wired.
+//!
+//! Those are VSPI's IO_MUX pins, and VSPI is `SPI3` (`SPI3_HOST`); `SPI2` is
+//! HSPI. Driven from `SPI2` they went through the GPIO matrix, whose input
+//! delay caps a full-duplex read at 26.7 MHz (`spi_hal: ... frequency >
+//! 26.7MHz, device cannot read correct data`). On `SPI3` they are IO_MUX
+//! and the driver allows 40 MHz. See [`config::SD_SPEED_KHZ`].
 //!
 //! Note that long filenames are a build-time concern, not a runtime one:
 //! `CONFIG_FATFS_LFN_HEAP=y` and `CONFIG_FATFS_MAX_LFN=255` in
@@ -14,7 +20,7 @@ use esp_idf_hal::peripheral::Peripheral;
 use esp_idf_hal::sd::spi::SdSpiHostDriver;
 use esp_idf_hal::sd::{SdCardConfiguration, SdCardDriver};
 use esp_idf_hal::spi::config::DriverConfig;
-use esp_idf_hal::spi::{Dma, SpiDriver, SPI2};
+use esp_idf_hal::spi::{Dma, SpiDriver, SPI3};
 use esp_idf_svc::fs::fatfs::Fatfs;
 use esp_idf_svc::io::vfs::MountedFatfs;
 use opendmd_core::engine::{ReadSeek, Source};
@@ -43,7 +49,7 @@ type Card = SdCardDriver<Host>;
 /// the failed attempt left it. Attempts after the first also give each
 /// command longer ([`config::SD_RETRY_CMD_TIMEOUT_MS`]).
 pub struct SdBus {
-    spi: SPI2,
+    spi: SPI3,
     sck: AnyOutputPin,
     mosi: AnyOutputPin,
     miso: AnyIOPin,
@@ -56,11 +62,14 @@ pub struct SdCard {
     _fs: MountedFatfs<Fatfs<Card>>,
     /// Usable capacity in bytes, as reported by the card's CSD.
     pub capacity_bytes: u64,
+    /// The SPI clock the bus really runs at: 80 MHz over a whole divider
+    /// (40, 26.7, 20, 16 … MHz), the nearest to [`config::SD_SPEED_KHZ`].
+    pub real_freq_khz: i32,
 }
 
 impl SdBus {
     pub fn new(
-        spi: SPI2,
+        spi: SPI3,
         sck: AnyOutputPin,
         mosi: AnyOutputPin,
         miso: AnyIOPin,
@@ -132,6 +141,7 @@ impl SdBus {
 
         let raw = card.card();
         let capacity_bytes = (raw.csd.capacity as u64) * (raw.csd.sector_size as u64);
+        let real_freq_khz = raw.real_freq_khz;
 
         let fatfs = Fatfs::new_sdcard(0, card).context("FAT driver registration failed")?;
         let mounted = MountedFatfs::mount(fatfs, config::SD_MOUNT, config::SD_MAX_FILES)
@@ -140,6 +150,7 @@ impl SdBus {
         Ok(SdCard {
             _fs: mounted,
             capacity_bytes,
+            real_freq_khz,
         })
     }
 }
@@ -285,7 +296,9 @@ fn open_file(full: &str) -> io::Result<Box<dyn ReadSeek>> {
     // ~15-entry bucket directories.
     use crate::frametime::Counted;
     if crate::probe::ENABLED {
-        return Ok(Box::new(Counted(crate::probe::TimedFile(crate::probe::open(full)?))));
+        return Ok(Box::new(Counted(crate::probe::TimedFile(
+            crate::probe::open(full)?,
+        ))));
     }
     Ok(Box::new(Counted(File::open(full)?)))
 }

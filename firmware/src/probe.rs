@@ -126,13 +126,16 @@ impl BlitHist {
         self.run_max = self.run_max.max(us);
     }
 
-    /// `p50 Xus max Yus (run p50 Zus max Wus)`, then the period is reset.
+    /// `p50 Xus p90 Xus max Yus (run p50 Zus p90 Zus max Wus)`, then the
+    /// period is reset.
     fn take_summary(&mut self) -> String {
         let s = format!(
-            "p50 {}us max {}us (run p50 {}us max {}us)",
-            hist_p50(&self.period),
+            "p50 {}us p90 {}us max {}us (run p50 {}us p90 {}us max {}us)",
+            hist_pct(&self.period, 50),
+            hist_pct(&self.period, 90),
             self.period_max,
-            hist_p50(&self.run),
+            hist_pct(&self.run, 50),
+            hist_pct(&self.run, 90),
             self.run_max,
         );
         self.period = [0; BLIT_BUCKETS];
@@ -213,12 +216,13 @@ pub fn transition_frame(transitioning: bool, decoded: bool, t: &FrameTimes, free
 }
 
 /// Median of a histogram, as the bucket's midpoint in µs.
-fn hist_p50(h: &[u32; BLIT_BUCKETS]) -> u32 {
+/// The `pct`th percentile's bucket midpoint (µs).
+fn hist_pct(h: &[u32; BLIT_BUCKETS], pct: u32) -> u32 {
     let n: u32 = h.iter().sum();
     let mut seen = 0;
     for (i, c) in h.iter().enumerate() {
         seen += c;
-        if n > 0 && seen * 2 >= n {
+        if n > 0 && seen * 100 >= n * pct {
             return i as u32 * BLIT_BUCKET_US + BLIT_BUCKET_US / 2;
         }
     }
