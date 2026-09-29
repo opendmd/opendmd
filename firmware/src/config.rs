@@ -193,6 +193,16 @@ pub const TRANSITION: opendmd_core::compositor::Transition =
 /// counted the decoder. Refusals are the heartbeat's `transitions cut`.
 pub const TRANSITION_HEAP_RESERVE: usize = 12 * 1024;
 
+/// Phosphor glow (`glow` short/long) keeps a 12 KB copy of the panel while
+/// it is lit (`Panel::blit`). It takes the copy only with at least this much
+/// free (so ~28 KB stay for everything else), and gives it back as soon as
+/// the main loop sees the free heap under [`GLOW_YIELD_HEAP`] — the network
+/// side's transients (an upload, three downloads at once) come first. Before
+/// the yield, `make api-load WORKERS=3` with glow on took the sampled floor
+/// from 16.9 KB (glow off) to 4.7 KB (largest block 1.5 KB) on a probe build.
+pub const GLOW_TAKE_HEAP: usize = 40 * 1024;
+pub const GLOW_YIELD_HEAP: usize = 20 * 1024;
+
 // ---------------------------------------------------------------------------
 // Loop timing
 // ---------------------------------------------------------------------------

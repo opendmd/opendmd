@@ -60,7 +60,10 @@ export const app = {
   // /sets is only listed when the root shows it: a card that never had a
   // playlist has no directory to 404 on. Each is {path, value, label, root}:
   // `value` is what `set` holds to play it ("" for All files, the default).
-  async playlists() {
+  // Callers at the same moment (a config change refreshes several views)
+  // share one listing: the device has four sockets.
+  playlists() { return (this.pl ??= this.listPlaylists().finally(() => { this.pl = null; })).then((l) => [...l]); },
+  async listPlaylists() {
     let root = [], sets = [];
     try { root = await this.src.list('/'); } catch { /* a pick of gifs/ alone */ }
     if (root.some((f) => f.dir && f.name === 'sets')) {

@@ -39,7 +39,99 @@
 //! across frames. At scale 10 that is 4096 LEDs x 400 taps — under two million
 //! multiply-adds, and black LEDs (most of a DMD frame) are skipped outright.
 
-use opendmd_core::canvas::{Canvas, HEIGHT, WIDTH};
+use opendmd_core::canvas::{Canvas, DirtyMap, HEIGHT, WIDTH};
+use opendmd_core::look::{tint, Glow, GlowLevel, Look, GLOW_STEP};
+use std::time::Duration;
+
+/// The panel's own treatment of the picture, before the LEDs: the DMD tint
+/// ([`Look`]) and the phosphor glow ([`GlowLevel`]), exactly as the
+/// firmware's `Panel::blit` applies them (the same `opendmd_core::look`
+/// code), so the simulator and the browser preview show what the panel
+/// shows. [`present`](Self::present) turns the engine's picture into the
+/// one to render.
+///
+/// The firmware steps the glow every 10 ms of its frame loop; here the
+/// steps are counted from the caller's clock at each `present`, so a 60 Hz
+/// page takes one or two per animation frame. Same decay, same end.
+pub struct PanelModel {
+    look: Look,
+    glow: Glow,
+    /// When the glow last stepped (the caller's clock).
+    stepped: Option<Duration>,
+    out: Canvas,
+}
+
+/// At most this many glow steps per `present` (a page that was hidden for
+/// a while catches up in one go: the decay is over long before).
+const MAX_STEPS: u32 = 32;
+
+impl PanelModel {
+    pub fn new(look: Look, glow: GlowLevel) -> Self {
+        PanelModel {
+            look,
+            glow: Glow::new(glow),
+            stepped: None,
+            out: Canvas::new(),
+        }
+    }
+
+    pub fn look(&self) -> Look {
+        self.look
+    }
+
+    pub fn glow(&self) -> GlowLevel {
+        self.glow.level()
+    }
+
+    /// Change the tint and the glow (a glow turned off lets its copy go).
+    pub fn set(&mut self, look: Look, glow: GlowLevel) {
+        self.look = look;
+        self.glow.set_level(glow);
+    }
+
+    /// Forget what was shown (a new, unrelated picture: no glow from it).
+    pub fn reset(&mut self) {
+        self.glow.release();
+        self.stepped = None;
+    }
+
+    /// A dot is still fading: present again at the next step even with no
+    /// new frame.
+    pub fn is_animating(&self) -> bool {
+        self.glow.is_decaying()
+    }
+
+    /// What the panel shows at `now` for the engine's `canvas`: the glow's
+    /// steps since the last call, the picture over them, then the tint.
+    /// With neither in effect, `canvas` itself.
+    pub fn present<'a>(&'a mut self, canvas: &'a Canvas, now: Duration) -> &'a Canvas {
+        let mut push = DirtyMap::default();
+        let glowing = if self.glow.level() == GlowLevel::Off {
+            false
+        } else {
+            let last = *self.stepped.get_or_insert(now);
+            // Whole 10 ms steps (no u128 division: ~1 KB of wasm).
+            let since = now.saturating_sub(last);
+            let due = (since.as_secs() * 100 + u64::from(since.subsec_millis() / 10))
+                .min(u64::from(u32::MAX)) as u32;
+            for _ in 0..due.min(MAX_STEPS) {
+                self.glow.step(canvas, &mut push);
+            }
+            self.stepped = Some(last + GLOW_STEP * due);
+            self.glow.frame_all(canvas, &mut push)
+        };
+        let src = match (glowing, self.glow.shown()) {
+            (true, Some(shown)) => shown,
+            _ if self.look == Look::Colour => return canvas,
+            _ => canvas.as_slice(),
+        };
+        let look = self.look;
+        for (o, p) in self.out.as_mut_slice().iter_mut().zip(src) {
+            *o = tint(*p, look);
+        }
+        &self.out
+    }
+}
 
 /// Diameter of the lit emitter, in pitches. Mean of the measured 0.40 / 0.44
 /// FWHM; see the module docs.
@@ -314,6 +406,37 @@ mod tests {
         let r = (buf[5 * dw + 5] >> 16) & 0xff;
         // 0.25 of full linear intensity is ~0.5 after encoding at gamma 2.2.
         assert!((120..=145).contains(&r), "gain 0.25 gave {r}");
+    }
+
+    #[test]
+    fn the_panel_model_tints_and_glows_like_the_panel() {
+        use opendmd_core::look::{GlowLevel, Look, DECAY_SHORT};
+        let ms = Duration::from_millis;
+        let mut canvas = Canvas::new();
+        canvas.set(1, 1, Rgb::new(200, 100, 50));
+        // Neither: the canvas itself.
+        let mut m = PanelModel::new(Look::Colour, GlowLevel::Off);
+        assert!(std::ptr::eq(m.present(&canvas, ms(0)), &canvas));
+        // Amber: luminance 124 of (255, 88, 32).
+        m.set(Look::Amber, GlowLevel::Off);
+        assert_eq!(m.present(&canvas, ms(0)).get(1, 1), Rgb::new(124, 43, 16));
+        // Glow: the dot goes out and fades a step per 10 ms.
+        m.set(Look::Colour, GlowLevel::Short);
+        m.present(&canvas, ms(0));
+        canvas.set(1, 1, Rgb::BLACK);
+        assert_eq!(m.present(&canvas, ms(5)).get(1, 1), Rgb::new(200, 100, 50));
+        assert!(m.is_animating());
+        let d = |v: u8| DECAY_SHORT[v as usize];
+        assert_eq!(
+            m.present(&canvas, ms(10)).get(1, 1),
+            Rgb::new(d(200), d(100), d(50))
+        );
+        assert_eq!(
+            m.present(&canvas, ms(30)).get(1, 1),
+            Rgb::new(d(d(d(200))), d(d(d(100))), d(d(d(50))))
+        );
+        assert_eq!(m.present(&canvas, ms(500)).get(1, 1), Rgb::BLACK);
+        assert!(!m.is_animating());
     }
 
     #[test]

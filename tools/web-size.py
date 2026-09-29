@@ -13,7 +13,9 @@ hand-written JS + CSS <= 48 KB (40 KB until Follow RePlayOS's Settings card,
 which had ~0.6 KB left). The Studio ("Make art") is loaded only when it
 opens and has lines of its own: its wasm + glue (`pkg-art/`) <= 150 KB, and
 `js/studio.js` + `studio.css` <= 24 KB — neither counts against the lines
-above. The name index for "Find art for a game" (`art/*.json`, one file
+above. Library's "Live" items (`js/live.js`: the clock and the scrolling
+text, imported only when that category is chosen) have a line of their
+own too, <= 4 KB. The name index for "Find art for a game" (`art/*.json`, one file
 fetched per search) is printed, with no budget. Raw sizes are printed for
 information. A file with no `.gz` beside it counts at its raw size. Exits 1
 when over budget.
@@ -33,6 +35,8 @@ JS_CSS_GZ_BUDGET = 48 * 1024
 ART_WASM_GZ_BUDGET = 150 * 1024
 STUDIO_GZ_BUDGET = 24 * 1024
 STUDIO = {"js/studio.js", "studio.css"}
+LIVE_GZ_BUDGET = 4 * 1024
+LIVE = {"js/live.js"}
 
 
 def main() -> int:
@@ -57,6 +61,8 @@ def main() -> int:
             kind = "art wasm"
         elif rel in STUDIO:
             kind = "studio"
+        elif rel in LIVE:
+            kind = "live"
         elif rel.startswith("art/"):
             kind = "art index"
             t = totals.setdefault(kind, [0, 0])
@@ -73,6 +79,7 @@ def main() -> int:
     ok = True
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
+                         ("live", LIVE_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

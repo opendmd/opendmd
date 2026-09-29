@@ -408,3 +408,47 @@ mod js {
         assert_eq!(render_overrides(list), text);
     }
 }
+
+#[test]
+fn a_live_item_plays_with_no_bytes_and_the_panel_look_applies() {
+    // Flat at scale 1: the RGBA is the canvas as the panel shows it.
+    let mut p = Player::new(1, Look { flat: true, ..LOOK });
+    p.set_transition(Transition::new(
+        opendmd_core::compositor::Kind::None,
+        ms(400),
+    ));
+    p.load("@text?msg=Hi&scroll=0&font=normal", Vec::new(), ms(0));
+    assert_eq!(p.tick(ms(0)).unwrap(), Tick::Frame);
+    let lit = |p: &Player| {
+        p.rgba()
+            .chunks(4)
+            .filter(|c| c[0] != 0 || c[1] != 0 || c[2] != 0)
+            .count()
+    };
+    let n = lit(&p);
+    assert!(n > 10, "{n} lit");
+    // Amber: every lit pixel is the tint's hue.
+    p.set_display(
+        opendmd_core::look::Look::Amber,
+        opendmd_core::look::GlowLevel::Off,
+    );
+    let px: Vec<&[u8]> = p.rgba().chunks(4).filter(|c| c[0] != 0).collect();
+    assert_eq!(px.len(), n);
+    assert!(px.iter().all(|c| c[0] > c[1] && c[1] > c[2]));
+    // Glow: going to a blank file, the text fades rather than vanishing,
+    // and has gone within 110 ms (short).
+    p.set_display(
+        opendmd_core::look::Look::Colour,
+        opendmd_core::look::GlowLevel::Short,
+    );
+    p.load("@text?msg=&scroll=0", Vec::new(), ms(1000));
+    assert_eq!(p.tick(ms(1000)).unwrap(), Tick::Frame);
+    assert_eq!(lit(&p), n, "held on the first frame");
+    let mut t = 1000;
+    while lit(&p) > 0 {
+        t += 10;
+        assert!(t <= 1120, "still lit at {t} ms");
+        p.tick(ms(t)).unwrap();
+    }
+    assert!(t >= 1060);
+}

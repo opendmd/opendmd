@@ -76,6 +76,20 @@ every view like a person would:
             byte-identical to opendmd-pack's; then analysis, tween and
             recode timed in wasm for MD_Demons_Of_Asteborg_01_sephirot68
             (4,489 frames) and OTHER_SCROLL_Xmen01
+  Looks     Settings -> Playback's #st-look / #st-glow: Amber + Short saved
+            show in /api/config and /api/status (glow_held 12288 while
+            playing), the Now preview wears amber (every bright pixel r > g
+            > b; now-amber-laptop.png), back to Full colour / Off; the bad
+            look/glow/attract values are 400s
+  Live      Library -> Live: five rows (four clocks and a scrolling text),
+            the text form, a preview, the text row following #live-msg;
+            Send to panel of the clock and the text (title, frame advancing;
+            library-live-laptop.png); POST /api/play of live items 200, of
+            @nonsense 415; the simulator (opendmd-sim --play
+            '@text?msg=OpenDMD&scroll=0' --screenshot-canvas, default and
+            --look amber) and a wasm Preview on a detached canvas draw the
+            same 128x32 pixels (the device pass skips the simulator and
+            sending; it does the read-only checks and the look round trip)
   Web app   GET /api/www {version, bytes, entries, ok} (the version is
             www/version.txt, what the pack's header carries) and the same
             object as `www` in /api/status; PUT /api/www of the built pack
@@ -463,6 +477,10 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
     # Chromium's console line for a failed load has no URL; this does.
     page.on("response", lambda r: r.status >= 400 and unexpected(r.url)
             and errors.append(f"[{size}] HTTP {r.status} {r.request.method} {r.url}"))
+    # And which load a connection closed with no response was (Chromium's
+    # ERR_EMPTY_RESPONSE console line has no URL either).
+    page.on("requestfailed", lambda r: "EMPTY_RESPONSE" in (r.failure or "")
+            and print(f"  ..   [{size}] no response: {r.method} {r.url}"))
     page.on("dialog", lambda d: d.accept())
     return page
 
@@ -679,6 +697,229 @@ def wait_auto_text(page: Page, pattern: str, timeout_ms: int = 20000) -> str:
     return page.inner_text("#pc-auto")
 
 
+# --- Looks and live items ---------------------------------------------------------
+
+AMBER_PIXELS = """(sel) => {
+    const c = document.querySelector(sel);
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let bright = 0, bad = 0;
+    for (let i = 0; i < d.length; i += 4) {
+        if (Math.max(d[i], d[i+1], d[i+2]) <= 80) continue;
+        bright++;
+        if (!(d[i] > d[i+1] && d[i+1] > d[i+2])) bad++;
+    }
+    return { bright, bad };
+}"""
+
+# A Preview built on a detached 128 px canvas (scale 1, flat: its pixels are the
+# panel's), showing `path` after `look`; the 128x32 RGBA bytes as a list.
+WASM_CANVAS = """async ([path, look]) => {
+    const m = await import('./pkg/opendmd_web.js');
+    const o = document.createElement('canvas');
+    o.width = 128;
+    const p = new m.Preview(o, 2.2, 1, 0.22, true);
+    p.setTransition('none', 400);
+    p.setDisplay(look, 'off');
+    p.load(path, new Uint8Array());
+    p.frame();
+    const d = o.getContext('2d').getImageData(0, 0, 128, 32).data;
+    p.free();
+    return Array.from(d);
+}"""
+
+
+def put_status(url: str, obj) -> int:
+    """PUT /api/config and return the HTTP status (200 or the error's)."""
+    try:
+        put_json(url + "/api/config", obj)
+        return 200
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def look_validation(base: str) -> None:
+    for bad in ({"look": "purple"}, {"glow": "medium"}, {"attract": "text:"}, {"attract": "bogus"}):
+        check(put_status(base, bad) == 400, f"settings: {bad} refused (400)")
+
+
+def save_look(page: Page, base: str, look: str, glow: str) -> None:
+    """Settings -> Playback: choose a look and glow, Save playback; status
+    and config must report them."""
+    goto_view(page, "settings")
+    page.wait_for_selector("#st-look", timeout=20000)
+    page.select_option("#st-look", look)
+    page.select_option("#st-glow", glow)
+    page.click("#st-save-play")
+    cfg = wait_config(base, lambda c: c.get("look") == look and c.get("glow") == glow)
+    deadline = time.time() + 10
+    st = get_json(base + "/api/status")
+    while (st.get("look"), st.get("glow")) != (look, glow) and time.time() < deadline:
+        time.sleep(0.2)
+        st = get_json(base + "/api/status")
+    check((cfg.get("look"), cfg.get("glow")) == (look, glow) and (st.get("look"), st.get("glow")) == (look, glow),
+          f"settings: Save playback -> look {look}, glow {glow} in /api/config and /api/status "
+          f"({st.get('look')}, {st.get('glow')}, glow_held {st.get('glow_held')})")
+
+
+def look_checks(page: Page, base: str, mock: bool) -> None:
+    """The Playback card's look and glow selects, their API validation, and
+    the Now preview wearing the look. Leaves the original values saved."""
+    goto_view(page, "settings")
+    page.wait_for_selector("#st-look", timeout=20000)
+    opts = page.eval_on_selector_all("#st-look option", "els => els.map(e => [e.value, e.textContent])")
+    check(opts == [["colour", "Full colour"], ["amber", "Amber"], ["red", "Red"], ["green", "Green"], ["blue", "Blue"], ["white", "White"]],
+          f"settings: #st-look options {opts}")
+    check(page.eval_on_selector_all("#st-glow option", "els => els.map(e => e.value)") == ["off", "short", "long"],
+          "settings: #st-glow options off/short/long")
+    cfg0 = get_json(base + "/api/config")
+    st0 = get_json(base + "/api/status")
+    check(all(k in cfg0 for k in ("attract", "look", "glow")) and list(cfg0)[-3:] == ["attract", "look", "glow"],
+          f"config: attract/look/glow end the object ({list(cfg0)[-4:]})")
+    check(list(st0)[-4:] == ["look", "glow", "glow_held", "attract_live"],
+          f"status: look/glow/glow_held/attract_live end the object ({list(st0)[-5:]})")
+    check(page.input_value("#st-look") == cfg0["look"] and page.input_value("#st-glow") == cfg0["glow"],
+          f"settings: the selects show the config ({cfg0['look']}, {cfg0['glow']})")
+    look_validation(base)
+    orig = (cfg0["look"], cfg0["glow"])
+    try:
+        save_look(page, base, "amber", "short")
+        st = get_json(base + "/api/status")
+        if mock:
+            check(st["glow_held"] == 12288 or st["paused"], f"status: glow short while playing holds 12288 B ({st['glow_held']})")
+        goto_view(page, "now")
+        wait_lit(page, "#now-panel", "now (amber)")
+        page.wait_for_timeout(600)
+        r = page.evaluate(AMBER_PIXELS, "#now-panel")
+        check(r["bright"] > 100 and r["bad"] == 0,
+              f"now: the preview wears amber (every one of {r['bright']} bright pixels has r > g > b; {r['bad']} do not)")
+        shot(page, "now-amber", "laptop")
+        # The tint is the page's (look), never a re-render of the file: colour restores it.
+        save_look(page, base, "colour", "off")
+        st = get_json(base + "/api/status")
+        check(st["glow_held"] == 0, f"status: glow off holds nothing ({st['glow_held']})")
+        goto_view(page, "now")
+        page.wait_for_timeout(600)
+        r = page.evaluate(AMBER_PIXELS, "#now-panel")
+        check(r["bad"] > 0, f"now: back to full colour, the preview is no longer amber ({r['bad']} pixels off-hue)")
+    finally:
+        if (get_json(base + "/api/config")["look"], get_json(base + "/api/config")["glow"]) != orig:
+            put_json(base + "/api/config", {"look": orig[0], "glow": orig[1]})
+    cfg = get_json(base + "/api/config")
+    check((cfg["look"], cfg["glow"]) == orig, f"settings: look/glow left as found {orig}")
+    no_leaks(page, "settings (look)")
+    goto_view(page, "now")
+
+
+def open_live(page: Page) -> None:
+    goto_view(page, "library")
+    page.wait_for_selector("#lib-cat option[value='@']", state="attached", timeout=30000)
+    # A search left over from the Library checks filters the Live rows too.
+    page.fill("#lib-search", "")
+    page.select_option("#lib-cat", "@")
+    page.wait_for_selector("#lib-live #live-msg", timeout=10000)
+    page.wait_for_function("document.querySelectorAll('#lib-list .vrow:not([hidden])').length >= 5", timeout=10000)
+
+
+def live_rows(page: Page) -> list[str]:
+    return page.eval_on_selector_all("#lib-list .vrow:not([hidden])", "els => els.map(e => e.dataset.path)")
+
+
+def live_checks(page: Page, base: str, mock: bool) -> None:
+    """Library -> Live: the clocks and the scrolling text; the form; a preview;
+    on the mock, sent to the panel (and POST /api/play directly)."""
+    goto_view(page, "library")
+    page.wait_for_selector("#lib-cat option[value='@']", state="attached", timeout=30000)
+    opts = page.eval_on_selector_all("#lib-cat option", "els => els.map(e => [e.value, e.textContent])")
+    check(opts[-1] == ["@", "Live"] and len(opts) > 1, f"library: the categories end with Live ({opts[-2:]})")
+    open_live(page)
+    rows = live_rows(page)
+    want = ["@clock", "@clock?seconds=1", "@clock?date=1", "@clock?style=small&seconds=1&date=1", "@text?msg=OpenDMD"]
+    check(rows == want, f"library: Live lists five rows ({rows})")
+    check(page.is_visible("#lib-live") and page.input_value("#live-msg") == "OpenDMD"
+          and page.eval_on_selector_all("#live-speed option", "els => els.map(e => e.value)") == ["60", "40", "25"],
+          "library: Live form: #live-msg 'OpenDMD', #live-speed 60/40/25")
+    page.click("#lib-list .vrow:not([hidden]) >> nth=0")
+    wait_lit(page, "#lib-panel", "library live clock")
+    cap = page.inner_text("#lib-cap")
+    check("clock" in cap.lower() or "@clock" in cap, f"library: previewing the clock ('{cap}')")
+    page.fill("#live-msg", "Hello smoke")
+    page.dispatch_event("#live-msg", "change")
+    # Leave the field now (its own change on blur redraws the list, which would
+    # swallow the next click on a row).
+    page.evaluate("document.activeElement.blur()")
+    page.wait_for_timeout(400)
+    page.wait_for_function("[...document.querySelectorAll('#lib-list .vrow')].some(e => e.dataset.path === '@text?msg=Hello%20smoke')", timeout=5000)
+    check(live_rows(page)[-1] == "@text?msg=Hello%20smoke", f"library: the text row follows the field ({live_rows(page)[-1]})")
+    wait_lit(page, "#lib-panel", "library live text")
+    no_leaks(page, "library (live)")
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "library-live", "laptop")
+    if not mock:
+        page.fill("#live-msg", "OpenDMD")
+        page.dispatch_event("#live-msg", "change")
+        return
+    expected.append("/api/play")
+    for i, (path, title) in enumerate((("@clock", "Clock"), ("@text?msg=Hello%20smoke", "Hello smoke"))):
+        page.click(f"#lib-list .vrow:not([hidden])[data-path='{path}']")
+        page.wait_for_function(f"document.querySelector('#lib-play').title === {json.dumps(path)}", timeout=10000)
+        page.click("#lib-play")
+        cur = wait_playing(base, path)
+        np_ = get_json(base + "/api/status")["now_playing"]
+        check(cur == path and np_["title"] == title, f"library: Send to panel -> now_playing {path} '{np_['title']}'")
+        f0 = np_["frame"]
+        time.sleep(1.1)
+        f1 = get_json(base + "/api/status")["now_playing"]["frame"]
+        check(f1 > f0, f"status: {path} frame advances ({f0} -> {f1})")
+    # The API directly.
+    for path in ("@clock", "@text?msg=OpenDMD", "@clock?style=big&seconds=1&date=1&h12=1&color=FF8800",
+                 "@text?msg=Hi&speed=25&font=small&color=00FF00&scroll=0"):
+        try:
+            r = post_json(base + "/api/play", {"path": path})
+            check(r.get("ok") is True and r.get("path") == path, f"api: POST /api/play {path} -> 200")
+        except urllib.error.HTTPError as e:
+            check(False, f"api: POST /api/play {path} -> {e.code}")
+    try:
+        post_json(base + "/api/play", {"path": "@nonsense"})
+        check(False, "api: POST /api/play @nonsense refused")
+    except urllib.error.HTTPError as e:
+        check(e.code == 415, f"api: POST /api/play @nonsense -> {e.code} (415)")
+    expected.remove("/api/play")
+
+
+def sim_png(root: Path, look: str, out: Path) -> bytes:
+    """The desktop simulator's canvas for `@text?msg=OpenDMD&scroll=0` after
+    `look`, as 128x32 RGBA bytes."""
+    from PIL import Image
+    (root / "gifs").mkdir(parents=True, exist_ok=True)
+    cmd = ["cargo", "run", "--release", "-q", "--", "--root", str(root), "--play", "@text?msg=OpenDMD&scroll=0",
+           "--screenshot-canvas", str(out)]
+    if look != "colour":
+        cmd += ["--look", look]
+    r = subprocess.run(cmd, cwd=REPO / "opendmd-sim", env={**os.environ, "RUSTUP_TOOLCHAIN": "stable"},
+                       capture_output=True, text=True, timeout=900)
+    if r.returncode:
+        raise RuntimeError(f"opendmd-sim failed:\n{r.stdout}\n{r.stderr}")
+    im = Image.open(out).convert("RGBA")
+    assert im.size == (128, 32), im.size
+    return im.tobytes()
+
+
+def sim_checks(page: Page) -> None:
+    """A live text plays in the page's wasm Preview pixel for pixel as in the
+    desktop simulator (default look, and amber)."""
+    goto_view(page, "now")
+    tmp = OUT / "sim"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    for look in ("colour", "amber"):
+        want = sim_png(tmp / "root", look, tmp / f"sim-{look}.png")
+        got = bytes(page.evaluate(WASM_CANVAS, ["@text?msg=OpenDMD&scroll=0", "" if look == "colour" else look]))
+        lit_n = sum(1 for i in range(0, len(want), 4) if max(want[i:i + 3]) > 60)
+        diff = sum(1 for i in range(0, len(want), 4) if want[i:i + 3] != got[i:i + 3])
+        check(len(got) == len(want) and diff == 0 and lit_n > 50,
+              f"sim: @text?msg=OpenDMD&scroll=0 ({look}) identical in the page and the simulator ({diff} of 4096 px differ, {lit_n} lit)")
+
+
 def mock_pass(browser) -> None:
     overlay = OUT / "overlay"
     shutil.rmtree(overlay, ignore_errors=True)
@@ -721,6 +962,10 @@ def mock_pass(browser) -> None:
         print("  " + summarise("mock drift over 8 s", drifts, rtts))
         check(bool(drifts) and max(abs(d) for d in drifts) < 60, "now: every sync on the mock under 60 ms")
         transition_checks(page, base)
+        look_checks(page, base, True)
+        live_checks(page, base, True)
+        sim_checks(page)
+        post_json(base + "/api/skip", {})
         before = page.inner_text("#now-path")
         page.click("#now-skip")
         page.wait_for_function(f"document.querySelector('#now-path').textContent !== {json.dumps(before)}", timeout=10000)
@@ -1858,6 +2103,11 @@ def device_pass(browser, device: str) -> None:
         check(page.is_checked("#pc-always") == (a.get("mode") == "always"), f"device auto: card reads '{t}'")
         no_leaks(page, "device settings")
         shot(page, "device-settings", "laptop")
+        # Looks and live items, light: the API shapes, the validation (nothing
+        # saved), the Playback card's round trip back to the original values,
+        # and the Live list and preview (nothing sent to the panel).
+        look_checks(page, base, False)
+        live_checks(page, base, False)
         studio_device(page)
         # The one write: save and delete a set named smoke (never activated).
         n = build_smoke_set(page)

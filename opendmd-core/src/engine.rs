@@ -958,6 +958,12 @@ impl Engine {
         // one is built. A GifSource owns the LZW state plus its buffers;
         // holding two at once is the difference between a ~17 KB and a
         // ~47 KB free-heap floor on the ESP32.
+        // A virtual file loops in place: a clock's second or a text's pass.
+        if let Some(p) = self.current.as_mut() {
+            if p.gif.rewind_virtual() {
+                return true;
+            }
+        }
         let Some(playing) = self.current.take() else {
             return false;
         };

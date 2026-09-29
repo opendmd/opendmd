@@ -23,6 +23,7 @@
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
 use log::warn;
 use opendmd_core::compositor::Transition;
+use opendmd_core::look::{GlowLevel, Look};
 
 use crate::config;
 
@@ -46,6 +47,11 @@ const KEY_FOLLOW: &str = "follow";
 const KEY_FOLLOW_HOST: &str = "follow_host";
 const KEY_FOLLOW_CODE: &str = "follow_code";
 const KEY_ATTRACT_SET: &str = "attract_set";
+const KEY_LOOK: &str = "look";
+const KEY_GLOW: &str = "glow";
+const KEY_ATTRACT: &str = "attract";
+/// The longest `attract` value (`text:` and the message).
+pub const ATTRACT_MAX: usize = 205;
 /// Internal, not a setting: the CID serial of the card that failed at full
 /// speed and mounts at the fallback clock (`sdhealth`). Absent = none.
 const KEY_SD_SLOW: &str = "sd_slow";
@@ -148,6 +154,36 @@ pub struct Settings {
     /// The playlist attract mode plays (a `set` value); `None` = whatever
     /// would play anyway (the saved playlist, or the schedule's).
     pub attract_set: Option<String>,
+    /// What attract mode shows instead of a playlist: `""` (the playlist,
+    /// as before), `"clock"` (the live clock) or `"text:<message>"` (the
+    /// scrolling text). See [`attract_path`].
+    pub attract: String,
+    /// The DMD tint (`opendmd_core::look`), applied at the blit.
+    pub look: Look,
+    /// Phosphor glow; off by default (it holds 12 KB while lit).
+    pub glow: GlowLevel,
+}
+
+/// Is `v` an `attract` value `PUT /api/config` may store?
+pub fn valid_attract(v: &str) -> bool {
+    match v.strip_prefix("text:") {
+        _ if v.is_empty() || v == "clock" => true,
+        Some(msg) => {
+            !msg.trim().is_empty() && v.len() <= ATTRACT_MAX && !msg.chars().any(char::is_control)
+        }
+        None => false,
+    }
+}
+
+/// The virtual file an `attract` value plays (`@clock`, `@text?msg=…`),
+/// `None` for the playlist.
+pub fn attract_path(v: &str) -> Option<String> {
+    use opendmd_core::synth;
+    match v.strip_prefix("text:") {
+        _ if v == "clock" => Some(synth::CLOCK.to_string()),
+        Some(msg) if !msg.trim().is_empty() => Some(synth::text_path(msg)),
+        _ => None,
+    }
 }
 
 impl Default for Settings {
@@ -172,6 +208,9 @@ impl Default for Settings {
             follow_host: String::new(),
             follow_code: String::new(),
             attract_set: None,
+            attract: String::new(),
+            look: Look::Colour,
+            glow: GlowLevel::Off,
         }
     }
 }
@@ -295,6 +334,18 @@ impl Config {
                 Some(s) if s == CURRENT_PLAYLIST => None,
                 Some(s) => Some(s),
             },
+            attract: self
+                .get_string(KEY_ATTRACT)
+                .filter(|s| valid_attract(s))
+                .unwrap_or(d.attract),
+            look: self
+                .get_string(KEY_LOOK)
+                .and_then(|s| Look::from_name(&s))
+                .unwrap_or(d.look),
+            glow: self
+                .get_string(KEY_GLOW)
+                .and_then(|s| GlowLevel::from_name(&s))
+                .unwrap_or(d.glow),
         }
     }
 
@@ -324,6 +375,9 @@ impl Config {
             KEY_ATTRACT_SET,
             s.attract_set.as_deref().unwrap_or(CURRENT_PLAYLIST),
         )?;
+        self.nvs.set_str(KEY_ATTRACT, &s.attract)?;
+        self.nvs.set_str(KEY_LOOK, s.look.name())?;
+        self.nvs.set_str(KEY_GLOW, s.glow.name())?;
         Ok(())
     }
 

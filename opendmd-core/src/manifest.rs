@@ -126,6 +126,18 @@ impl Entry {
     /// Parse a manifest path into an entry. Never fails: worst case the title
     /// is the whole filename stem.
     pub fn from_path(path: &str) -> Entry {
+        // A virtual file (`@clock`, `@text?msg=…`): what it shows is its
+        // title; no category, no platform.
+        if crate::synth::is_virtual(path) {
+            return Entry {
+                path: path.to_string(),
+                category: None,
+                platform: None,
+                title: crate::synth::title(path).unwrap_or_else(|| path.to_string()),
+                variant: None,
+                flags: Vec::new(),
+            };
+        }
         let category = category_of(path);
         let stem = stem_of(path);
         let mut entry = parse_stem(stem);

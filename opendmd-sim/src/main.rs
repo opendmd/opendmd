@@ -13,9 +13,11 @@ use opendmd_core::engine::{
     Catalog, DwellPolicy, Engine, FileCatalog, ReadSeek, Source, TickOutcome,
 };
 use opendmd_core::filter::Filter;
+use opendmd_core::look::{GlowLevel, Look};
 use opendmd_core::manifest::Entry;
 use opendmd_core::scheduler::{Mode, Scheduler};
-use opendmd_render::{LedRenderer, MIN_LED_SCALE};
+use opendmd_core::synth::{self, WallTime};
+use opendmd_render::{LedRenderer, PanelModel, MIN_LED_SCALE};
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -115,6 +117,64 @@ struct Args {
     /// (e.g. `wipe_left:250`; 20..2000, default 400).
     #[arg(long, default_value = "dissolve:400", value_parser = parse_transition)]
     transition: Transition,
+
+    /// The panel's tint, as the device's `look` setting: colour, amber,
+    /// red, green, blue or white.
+    #[arg(long, default_value = "colour", value_parser = parse_look)]
+    look: Look,
+
+    /// Phosphor glow, as the device's `glow` setting: off, short or long.
+    #[arg(long, default_value = "off", value_parser = parse_glow)]
+    glow: GlowLevel,
+
+    /// Play just this path instead of the manifest: a card path, or a
+    /// virtual file (`@clock?style=small&date=1`, `@text?msg=Hello`).
+    #[arg(long)]
+    play: Option<String>,
+}
+
+fn parse_look(s: &str) -> Result<Look, String> {
+    Look::from_name(s).ok_or_else(|| format!("'{s}': colour, amber, red, green, blue or white"))
+}
+
+fn parse_glow(s: &str) -> Result<GlowLevel, String> {
+    GlowLevel::from_name(s).ok_or_else(|| format!("'{s}': off, short or long"))
+}
+
+/// The host's offset from UTC in seconds, from `date +%z` (`+0100`); 0 if
+/// that is not available. Read once: the live clock's local time.
+fn utc_offset() -> i64 {
+    let out = std::process::Command::new("date").arg("+%z").output().ok();
+    let s = out
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    let s = s.trim();
+    let (sign, digits) = match s.as_bytes().first() {
+        Some(b'-') => (-1, &s[1..]),
+        Some(b'+') => (1, &s[1..]),
+        _ => return 0,
+    };
+    match (
+        digits.get(0..2).and_then(|h| h.parse::<i64>().ok()),
+        digits.get(2..4).and_then(|m| m.parse::<i64>().ok()),
+    ) {
+        (Some(h), Some(m)) => sign * (h * 3600 + m * 60),
+        _ => 0,
+    }
+}
+
+static UTC_OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+
+/// The live clock's source: the host's local time.
+fn host_time() -> Option<WallTime> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    let offset = *UTC_OFFSET.get_or_init(utc_offset);
+    Some(WallTime::from_unix(
+        now.as_secs() as i64 + offset,
+        now.subsec_millis() as u16,
+    ))
 }
 
 fn parse_transition(s: &str) -> Result<Transition, String> {
@@ -302,17 +362,28 @@ fn main() -> Result<()> {
         log::warn!("{} has no gifs/ directory", args.root.display());
     }
 
+    synth::set_wall_clock(Some(host_time));
     let manifest_path = args
         .manifest
         .clone()
         .unwrap_or_else(|| args.root.join("filelist.txt"));
-    let file = std::fs::File::open(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    // `--play`: a one-line playlist in memory.
+    let file: Box<dyn ReadSeek> = match &args.play {
+        Some(p) => Box::new(io::Cursor::new(format!("{p}\n").into_bytes())),
+        None => Box::new(
+            std::fs::File::open(&manifest_path)
+                .with_context(|| format!("reading {}", manifest_path.display()))?,
+        ),
+    };
 
     // One streaming pass builds the offset index and the summary together;
     // the manifest is never materialised as entries. Same code path as the
     // firmware, which is the point of the simulator.
-    let filter = build_filter(&args);
+    let filter = if args.play.is_some() {
+        Filter::new()
+    } else {
+        build_filter(&args)
+    };
     let mut stats = ManifestStats::default();
     let catalog = FileCatalog::build_with(file, &filter, |entry, matched| {
         stats.observe(entry, matched)
@@ -374,6 +445,8 @@ fn main() -> Result<()> {
     let mut buffer = vec![0u32; win_w * win_h];
     let mut canvas = Canvas::new();
     canvas.fill(Rgb::BLACK);
+    // The panel's tint and glow, as the firmware applies them.
+    let mut model = PanelModel::new(args.look, args.glow);
 
     // Headless: render the first frame of the first scheduled GIF and exit
     // without ever touching the window system. This is the only check that
@@ -381,8 +454,9 @@ fn main() -> Result<()> {
     if args.screenshot.is_some() || args.screenshot_canvas.is_some() {
         let path = first_frame(&mut engine, &mut canvas)?;
         println!("screenshot of {path}");
+        let shown = model.present(&canvas, Duration::ZERO);
         if let Some(out) = &args.screenshot {
-            draw(mode, &canvas, scale, &mut renderer, &mut buffer);
+            draw(mode, shown, scale, &mut renderer, &mut buffer);
             write_png(out, win_w, win_h, &buffer)?;
             println!(
                 "wrote {} ({win_w}x{win_h}, {})",
@@ -391,7 +465,8 @@ fn main() -> Result<()> {
             );
         }
         if let Some(out) = &args.screenshot_canvas {
-            let raw: Vec<u32> = canvas.as_slice().iter().map(|p| p.to_u32()).collect();
+            // The canvas as the panel shows it (after the tint).
+            let raw: Vec<u32> = shown.as_slice().iter().map(|p| p.to_u32()).collect();
             write_png(out, WIDTH, HEIGHT, &raw)?;
             println!("wrote {} ({WIDTH}x{HEIGHT}, raw canvas)", out.display());
         }
@@ -443,7 +518,7 @@ fn main() -> Result<()> {
             // Redraw now so the toggle is visible even while paused.
             draw(
                 mode,
-                engine.display(&canvas),
+                model.present(engine.display(&canvas), now),
                 scale,
                 &mut renderer,
                 &mut buffer,
@@ -463,12 +538,24 @@ fn main() -> Result<()> {
                 // The compositor's output while a transition runs.
                 draw(
                     mode,
-                    engine.display(&canvas),
+                    model.present(engine.display(&canvas), now),
                     scale,
                     &mut renderer,
                     &mut buffer,
                 );
                 window.update_with_buffer(&buffer, win_w, win_h)?;
+            }
+            TickOutcome::Idle if model.is_animating() => {
+                // A dot still fading (phosphor glow).
+                draw(
+                    mode,
+                    model.present(engine.display(&canvas), now),
+                    scale,
+                    &mut renderer,
+                    &mut buffer,
+                );
+                window.update_with_buffer(&buffer, win_w, win_h)?;
+                std::thread::sleep(POLL);
             }
             TickOutcome::Idle => {
                 // Keep the event loop responsive without redrawing.

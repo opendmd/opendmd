@@ -38,6 +38,8 @@ export async function mount(el) {
   // Smooth motion for the previewed GIF (device only; js/smooth.js, loaded
   // on the first preview): shown only when there is motion to smooth.
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true, style: 'margin-top:10px' });
+  // "Live" (js/live.js, loaded when chosen): the clock and a scrolling text.
+  const liveBox = h('div', { id: 'lib-live', hidden: true });
   const platforms = new Set();
 
   // --- Add GIFs (device only)
@@ -80,7 +82,7 @@ export async function mount(el) {
         h('div', { style: 'margin-top:8px' }, chips),
         h('div', { style: 'margin-top:8px' }, ovHolder)),
       addCard, list.el, selbar),
-    h('div.side', h('div.card', canvas, cap, sendBtn && h('div.row', { style: 'margin-top:8px' }, sendBtn), smoothBox))));
+    h('div.side', h('div.card', canvas, cap, sendBtn && h('div.row', { style: 'margin-top:8px' }, sendBtn), smoothBox, liveBox))));
 
   const pv = new PanelPreview(canvas, { onError: (m) => { cap.textContent = 'preview: ' + m; } });
 
@@ -94,7 +96,7 @@ export async function mount(el) {
     try {
       if (await pv.show(it.path, async (p) => (bytes = await app.previewBytes(p)))) {
         cap.textContent = `${label(it.e)} · ${it.name}`;
-        if (smoothBox) import('./smooth.js').then((m) => m.detail(smoothBox, it, bytes, pv, cap)).catch(() => {});
+        if (smoothBox && it.path[0] != '@') import('./smooth.js').then((m) => m.detail(smoothBox, it, bytes, pv, cap)).catch(() => {});
       }
     } catch (e) { cap.textContent = 'preview: ' + e.message; }
   }
@@ -122,6 +124,7 @@ export async function mount(el) {
     let dirs = [];
     try { dirs = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(); } catch (e) { toast('listing /gifs: ' + e.message, 'bad'); }
     for (const d of dirs) cat.append(h('option', { value: d }, d));
+    cat.append(h('option', { value: '@' }, 'Live'));
     const want = store.get('lib.cat', 'Consoles');
     if ([...cat.options].some((o) => o.value === want)) cat.value = want;
     await load();
@@ -129,10 +132,18 @@ export async function mount(el) {
 
   async function load() {
     store.set('lib.cat', cat.value);
+    if (!(liveBox.hidden = cat.value != '@')) {
+      items = (await import('./live.js')).items(liveBox, preview, () => list.refresh());
+      platforms.clear();
+      renderChips();
+      return apply();
+    }
     count.textContent = 'loading…';
     const dir = `/gifs/${cat.value}`;
     let files = [];
     try { files = (await app.src.list(dir)).filter((f) => !f.dir).map((f) => f.name); } catch (e) { toast(`listing ${dir}: ${e.message}`, 'bad'); }
+    // Another category was chosen while this one listed (a big one takes seconds on the device).
+    if (dir != `/gifs/${cat.value}`) return;
     items = files.filter((n) => /\.gif$/i.test(n)).map((name) => {
       const path = `${dir}/${name}`;
       const e = app.wasm.parsePath(path);
@@ -233,7 +244,6 @@ export async function mount(el) {
     } catch (e) { toast(`adding to “${name}”: ${e.message}`, 'bad'); }
   }
 
-  cat.onchange = load;
   search.oninput = apply;
 
   async function playlists() {
@@ -245,6 +255,7 @@ export async function mount(el) {
     if (want !== ov.path) await ov.load(want);
   }
 
+  cat.onchange = load;
   await categories();
   await playlists();
   sync();

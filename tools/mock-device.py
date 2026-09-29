@@ -142,6 +142,21 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   schedule resumes at the next dwell. 404 if it does not open, 415 if it does
   not start with `GIF8` (the firmware's error text there comes from the
   decoder; here it is a fixed one), 400 for a relative or escaping path.
+- **Looks and live items.** `look` (`colour`, `amber`, `red`, `green`, `blue`,
+  `white`; `color` is stored as `colour`), `glow` (`off`, `short`, `long`) and
+  `attract` (`""`, `"clock"`, `"text:<message>"`, at most 205 characters, no
+  control characters) are config fields, validated as the firmware does (a
+  400, nothing saved) and applied live, no reindex. Status ends with `look`,
+  `glow`, `glow_held` (12288 while glow is not `off` and the simulated player
+  is playing, else 0) and `attract_live` (null, or `@clock` / `@text?msg=..`
+  while following RePlayOS in its attract state with `attract` set).
+  `POST /api/play` also takes live items: `@clock[?style=..&seconds=1&date=1&
+  h12=1&color=RRGGBB]` and `@text?msg=..[&speed=ms&font=..&color=..&scroll=0]`
+  (plus `@power-on`, `@card:`); any other `@...` is a 415. They read no file:
+  a clock is 1000 ms frames, a text is frames of `speed` ms looping over
+  (text width + 129) frames (one 1000 ms frame for a `scroll=0` text that
+  fits). A playlist line may be one too; `/api/cache` never counts them as
+  needing a copy.
 - **`GET /api/stat?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
 - **`/api/status`** has `index_state` (`ready`, or `unavailable` when the
@@ -280,7 +295,14 @@ DEFAULT_SETTINGS = {
     "follow_host": "",
     "follow_code": "",          # the NET CONTROL code -- never echoed back
     "attract_set": None,        # None = "the current playlist", else a `set` value
+    "attract": "",              # "" (the playlist), "clock" or "text:<message>"
+    "look": "colour",           # colour / amber / red / green / blue / white
+    "glow": "off",              # off / short / long
 }
+LOOKS = ("colour", "amber", "red", "green", "blue", "white")
+GLOWS = ("off", "short", "long")
+ATTRACT_MAX = 205               # "text:" + at most 200 characters
+GLOW_HELD_BYTES = 12288         # the glow's 12 KB copy
 
 # opendmd_core::compositor::Kind names, and the duration range
 TRANSITIONS = ["dissolve", "wipe_left", "wipe_right", "wipe_down", "wipe_up", "blinds", "push", "fade", "none"]
@@ -305,6 +327,9 @@ FIELD_TYPES = {
     "follow": "bool",
     "follow_host": "str",
     "follow_code": "str",
+    "attract": "str",
+    "look": "str",
+    "glow": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
     # alongside "set" (see h_config_put).
 }
@@ -583,14 +608,60 @@ def compute_matches(ctx: "Context", platform: str | None, game_clean: str) -> in
 VIRTUAL_POWER_ON = "@power-on"
 
 
+def live_parse(path: str):
+    """A live item (`@clock[?..]`, `@text?msg=..[&..]`) -> ("clock"|"text",
+    {param: value}) with the values percent-decoded, or None for anything
+    else (a text needs a non-empty `msg`)."""
+    head, _, query = path.partition("?")
+    if head not in ("@clock", "@text"):
+        return None
+    params: dict[str, str] = {}
+    for part in query.split("&") if query else []:
+        k, _, v = part.partition("=")
+        params[k] = urllib.parse.unquote(v)
+    if head == "@text" and not params.get("msg"):
+        return None
+    return head[1:], params
+
+
+def is_live(path: str) -> bool:
+    """A path the player draws itself: a live item, `@power-on` or `@card:`."""
+    return path == VIRTUAL_POWER_ON or path.startswith("@card:") or live_parse(path) is not None
+
+
+def live_delays(kind: str, params: dict[str, str]) -> list[int]:
+    """Frame delays of a live item: a clock is 1000 ms frames; a text is
+    frames of `speed` ms (default 40, 20..1000) over (width + 129) frames,
+    width being len*5-1 px (x2 for the big font) or len*4-1 (small); a
+    `scroll=0` text that fits in 128 px is one 1000 ms frame."""
+    if kind == "clock":
+        return [1000]
+    msg = params.get("msg", "")
+    font = params.get("font", "big")
+    width = (len(msg) * 4 - 1) if font == "small" else (len(msg) * 5 - 1)
+    if font not in ("small", "normal"):
+        width *= 2
+    if params.get("scroll") == "0" and width <= 128:
+        return [1000]
+    try:
+        speed = int(params.get("speed", "40"))
+    except ValueError:
+        speed = 40
+    speed = max(20, min(1000, speed))
+    return [speed] * (width + 129)
+
+
 def virtual_delays(path: str) -> list[int] | None:
     """Frame delays for a virtual "file" (a Follow RePlayOS card): a single
     3000 ms frame for a card (`@card:...`), 35 x 20 ms for the power-on
-    effect; None for a real path."""
+    effect, a live item's per live_delays; None for a real path."""
     if path == VIRTUAL_POWER_ON:
         return [20] * 35
     if path.startswith("@card:"):
         return [3000]
+    live = live_parse(path)
+    if live is not None:
+        return live_delays(*live)
     return None
 
 
@@ -600,6 +671,19 @@ def virtual_title(path: str) -> str | None:
         return "Power on"
     if path.startswith("@card:"):
         return path[len("@card:"):].split("|", 1)[0]
+    live = live_parse(path)
+    if live is not None:
+        return "Clock" if live[0] == "clock" else live[1]["msg"]
+    return None
+
+
+def attract_live_path(attract: str) -> str | None:
+    """The live item Follow RePlayOS's attract state shows for the config's
+    `attract` value (None for "" = the playlist)."""
+    if attract == "clock":
+        return "@clock"
+    if attract.startswith("text:"):
+        return "@text?msg=" + urllib.parse.quote(attract[5:].encode(), safe="-_.~")
     return None
 
 
@@ -1739,6 +1823,8 @@ class Cache:
             n = 0
             missing = []
             for p in playlist:
+                if p.startswith("@"):  # a live item: layout::classify says never
+                    continue
                 if p.lower().startswith("/cache/"):
                     n += 1
                     continue
@@ -2160,7 +2246,13 @@ def make_handler(ctx: Context, quiet: bool):
                     "schedule": {"rule": ctx.schedule.rule_idx, "set": ctx.schedule.rule_set, "until": ctx.schedule.until},
                     "cache": ctx.auto.status_fields(),
                     "context": ctx.follow.fields(),
+                    "look": ctx.settings["look"],
+                    "glow": ctx.settings["glow"],
+                    "glow_held": GLOW_HELD_BYTES if ctx.settings["glow"] != "off" and not player._frozen() else 0,
+                    "attract_live": None,
                 }
+                if ctx.settings["follow"] and ctx.follow.state == "attract":
+                    obj["attract_live"] = attract_live_path(ctx.settings["attract"])
             self.send_json(200, obj)
 
         def h_skip(self, path):
@@ -2196,6 +2288,9 @@ def make_handler(ctx: Context, quiet: bool):
                     "follow_host": s["follow_host"],
                     "follow_code_set": bool(s["follow_code"]),
                     "attract_set": s["attract_set"],
+                    "attract": s["attract"],
+                    "look": s["look"],
+                    "glow": s["glow"],
                 }
             self.send_json(200, obj)
 
@@ -2288,6 +2383,22 @@ def make_handler(ctx: Context, quiet: bool):
                             return
                     if field == "transition_ms" and not TRANSITION_MS[0] <= v <= TRANSITION_MS[1]:
                         self.send_error_json(400, f"transition_ms must be {TRANSITION_MS[0]}..={TRANSITION_MS[1]}")
+                        return
+                    if field == "look":
+                        v = "colour" if v == "color" else v
+                        if v not in LOOKS:
+                            self.send_error_json(400, "look must be colour, amber, red, green, blue or white")
+                            return
+                    if field == "glow" and v not in GLOWS:
+                        self.send_error_json(400, "glow must be off, short or long")
+                        return
+                    if field == "attract" and not (
+                        v in ("", "clock")
+                        or (v.startswith("text:") and v[5:].strip() and len(v.encode()) <= ATTRACT_MAX
+                            and not any(ord(c) < 32 or 0x7F <= ord(c) < 0xA0 for c in v))
+                    ):
+                        self.send_error_json(
+                            400, 'attract must be "" (the playlist), "clock" or "text:<message>" (at most 200 characters, one line)')
                         return
                     if field == "auto_prepare" and v not in AUTO_PREPARE:
                         self.send_error_json(400, "auto_prepare must be idle, always or off")
@@ -2546,6 +2657,18 @@ def make_handler(ctx: Context, quiet: bool):
             p = req.get("path") if isinstance(req, dict) else None
             if not isinstance(p, str):
                 self.send_error_json(400, "invalid JSON: missing field `path`")
+                return
+            if p.startswith("@"):
+                # A live item: drawn by the player, no file lookup.
+                if not is_live(p):
+                    self.send_error_json(415, f"{p}: not a playable file")
+                    return
+                with ctx.lock:
+                    if not ctx.player.playlist:
+                        self.send_error_json(503, "no playlist is running")
+                        return
+                    ctx.player.play_now(p)
+                self.send_json(200, {"ok": True, "path": p})
                 return
             rel = card_path(p) if p.startswith("/") else None
             if rel is None:

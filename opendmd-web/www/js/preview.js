@@ -13,9 +13,10 @@ export const look = { ...DEFAULT_LOOK, ...store.get('look', {}) };
 const live = new Set();
 let raf = 0;
 
-// Files come in with the device's transition (the engine's own, in wasm);
-// local mode keeps the engine default, Dissolve 400 ms.
-const trans = (p, c = app.config) => c && p.setTransition(c.transition ?? 'dissolve', c.transition_ms ?? 400);
+// Files come in with the device's transition (the engine's own, in wasm),
+// and show in its colour and glow; local mode keeps the engine default,
+// Dissolve 400 ms, full colour, no glow.
+const trans = (p, c = app.config) => c && (p.setTransition(c.transition ?? 'dissolve', c.transition_ms ?? 400), p.setDisplay(c.look ?? '', c.glow ?? ''));
 on('config', (c) => { for (const p of live) trans(p.p, c); });
 
 function loop() {

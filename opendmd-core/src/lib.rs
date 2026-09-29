@@ -14,6 +14,7 @@ pub mod follow;
 pub mod gifslim;
 pub mod index;
 pub mod layout;
+pub mod look;
 pub mod manifest;
 pub mod overrides;
 pub mod player;

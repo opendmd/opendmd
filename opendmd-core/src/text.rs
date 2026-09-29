@@ -58,7 +58,7 @@ impl Font {
         }
     }
 
-    fn rows(self, c: char) -> &'static [u8] {
+    pub(crate) fn rows(self, c: char) -> &'static [u8] {
         let i = (c as usize).wrapping_sub(32);
         match self {
             Font::Normal => &FONT_5X7[if i < 95 { i } else { b'?' as usize - 32 }],

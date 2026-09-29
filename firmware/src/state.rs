@@ -15,6 +15,7 @@
 //! blocks on the httpd task (which is allowed to wait) instead of the display
 //! loop blocking on the handler (which is not).
 
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -55,6 +56,14 @@ pub fn largest_free_block() -> usize {
     // SAFETY: a read-only query with a capability mask argument.
     unsafe { esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_8BIT) }
 }
+
+/// The phosphor glow holds its 12 KB copy now (`/api/status` `glow_held`),
+/// and Follow RePlayOS's attract mode shows its live item (`attract_live`,
+/// the path from the `attract` setting) instead of a playlist. Flags the
+/// main loop sets rather than [`Status`] fields, so the looks pass costs
+/// the status object no heap; `look` and `glow` are read from the settings.
+pub static GLOW_HELD: AtomicBool = AtomicBool::new(false);
+pub static ATTRACT_LIVE: AtomicBool = AtomicBool::new(false);
 
 /// The player's health and what it is doing, as `/api/status` reports it.
 #[derive(Clone, Debug)]
@@ -138,6 +147,7 @@ pub struct Status {
     pub rule_until: Option<String>,
     /// While a manual wake has the schedule suspended: until when, `"HH:MM"`.
     pub wake_until: Option<String>,
+
     /// The zone's display name (`Europe/Dublin`).
     pub tz_name: String,
 }

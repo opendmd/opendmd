@@ -70,6 +70,28 @@ Everything that depends only on the scale — the per-LED kernel, the backdrop,
 the gamma tables — is built once, and the float accumulator is reused, so a
 frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.
 
+**Colour, glow and the live items.** The player can show everything in one
+colour like a classic dot-matrix display — Settings → Playback → *colour*:
+full colour (the default), amber (the plasma-DMD orange), red, green, blue or
+white; each pixel becomes that colour at its own brightness (Rec. 601
+luminance) — and can give the dots a **phosphor glow**, *off* (the default),
+*short* or *long*: a dot that goes dark fades out over ~110 ms or ~200 ms
+instead of switching off, as on a plasma display. Both are the last step
+before the LEDs, applied by the firmware as it writes the panel and by the
+same code (`opendmd_core::look`) in the simulator (`--look`, `--glow`) and in
+every preview in the web app, so transitions, title cards and everything
+else pass through them. Glow is opt-in because it keeps a 12 KB copy of what
+the panel shows while it is lit (none while it is dark or paused), which
+transitions and the cache builder would otherwise have. Library → *Live*
+lists the two things the panel draws itself: a **clock** (the player's own
+time, set over the network; four layouts) and a **scrolling text** (type the
+message); preview them, send them to the panel, or add them to a playlist
+like any GIF — in a playlist they are lines such as `@clock?date=1` or
+`@text?msg=Game%20over` (options: `@clock?style=big|small&seconds=1&date=1&h12=1&color=RRGGBB`,
+`@text?msg=…&speed=<ms per pixel, 20..1000>&font=big|normal|small&color=RRGGBB&scroll=0`).
+Follow RePlayOS can show the clock in the menus instead of its attract
+playlist (Settings → Follow RePlayOS → *attract playlist*: The clock).
+
 ```
 --root <dir>              card root, holding gifs/ and filelist.txt (required)
 --manifest <path>         default <root>/filelist.txt
@@ -92,6 +114,11 @@ frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.
 --screenshot <out.png>    render the first frame of the first scheduled GIF
                           and exit, without opening a window
 --screenshot-canvas <out.png>   the same frame as the raw 128x32 canvas
+                          (after --look)
+--look <name>             colour (default), amber, red, green, blue or white
+--glow off|short|long     phosphor glow, default off
+--play <path>             play just this: a card path or a live item,
+                          e.g. '@clock?date=1', '@text?msg=Hello'
 ```
 
 Below `--scale 6` there are too few window pixels per LED for a dot and a
