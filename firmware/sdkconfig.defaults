@@ -129,3 +129,26 @@ CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_ESP_CONSOLE_UART_CUSTOM=y
 CONFIG_ESP_CONSOLE_UART_CUSTOM_NUM_0=y
 CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+
+# --- Brownout detector -------------------------------------------------
+# The panels and the ESP32 share one 5 V supply (the DevKit's LDO makes the
+# 3.3 V from it). At brightness 192 on a full-white screen the chip froze
+# with no reset (2026-09-29, 3 of 3; config::BRIGHTNESS_SAFE_MAX): the rail
+# sagged below what the flash/CPU tolerate (the WROOM module is specified
+# for 3.0-3.6 V, typical SPI NOR flash for >= 2.7 V) but not below the IDF's
+# default detector level, 0 (2.43 V +/- 0.05). The ESP32 levels (IDF v5.3,
+# esp_system/port/soc/esp32/Kconfig.system; estimates, per chip variation):
+#   0 2.43 V, 1 2.48 V, 2 2.58 V, 3 2.62 V, 4 2.67 V, 5 2.70 V, 6 2.77 V,
+#   7 2.80 V (each +/- 0.05).
+# Level 7 is the only one whose whole tolerance band (2.75-2.85 V) sits
+# above the flash's 2.7 V minimum, so a sag that would corrupt flash reads
+# trips the detector first and ends in a clean `brownout` reset, which safe
+# start (main.rs `SafeStart`) then recovers from. Still ~0.45 V below the
+# 3.3 V rail, and checked on the rig for spurious resets (normal play at
+# brightness 40, reboots). On this IDF the ESP32's detector works through
+# its interrupt (ESP_SYSTEM_BROWNOUT_INTR, selected by ESP32_REV_MIN_0 and
+# SPI_FLASH_BROWNOUT_RESET): the ISR stalls the other core, resets the flash
+# chip and does a software system reset. Deleting the generated sdkconfig
+# (target/.../esp-idf-sys-*/out/sdkconfig) is needed for this to take effect.
+CONFIG_ESP_BROWNOUT_DET=y
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7=y

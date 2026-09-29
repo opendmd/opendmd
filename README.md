@@ -235,7 +235,9 @@ names the format or shows a copy's path.
   GIF paths.
 - **Settings** — WiFi (with a scan) and hostname, which need a reboot;
   brightness, dwell, shuffle, platform filter and playlist, which apply
-  live (not while an index is building); the **Playback cache** card ("9,826
+  live (not while an index is building); a **Maximum brightness** under
+  Power (default 144, below the level tested safe on the supplied power supply;
+  raising it shows a warning, because the panel can reset above it); the **Playback cache** card ("9,826
   of 10,133 files prepared", from `GET /api/cache`) with **Prepare remaining
   files**, which works out what the playlist in play is missing
   (`GET /api/cache/list`) and encodes and uploads it in the background, one

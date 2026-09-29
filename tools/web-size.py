@@ -22,7 +22,8 @@ above. Library's "Live" items and "Effects" (`js/live.js`: the clock, the
 scrolling text and the effects' option forms, imported only when either
 category is chosen) have a line of their own too, <= 4 KB, and so does
 Settings' Start-up card (`js/boot.js`, imported by the Settings view: the
-`boot_show` select and the previews of the start-up show), <= 2 KB. The name index for "Find art for a game" (`art/*.json`, one file
+`boot_show` select and the previews of the start-up show), <= 2 KB, and Settings' Power card (`js/power.js`: the Maximum brightness
+control and its warning), <= 2 KB. The name index for "Find art for a game" (`art/*.json`, one file
 fetched per search) is printed, with no budget. Raw sizes are printed for
 information. A file with no `.gz` beside it counts at its raw size. Exits 1
 when over budget.
@@ -48,6 +49,8 @@ LIVE_GZ_BUDGET = 4 * 1024
 LIVE = {"js/live.js"}
 BOOT_GZ_BUDGET = 2 * 1024
 BOOT = {"js/boot.js"}
+POWER_GZ_BUDGET = 2 * 1024
+POWER = {"js/power.js"}
 
 
 def main() -> int:
@@ -76,6 +79,8 @@ def main() -> int:
             kind = "live"
         elif rel in BOOT:
             kind = "boot"
+        elif rel in POWER:
+            kind = "power"
         elif rel.startswith("art/"):
             kind = "art index"
             t = totals.setdefault(kind, [0, 0])
@@ -93,6 +98,7 @@ def main() -> int:
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
+                         ("power", POWER_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

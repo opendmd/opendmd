@@ -33,6 +33,7 @@ const NAMESPACE: &str = "opendmd";
 const KEY_WIFI_SSID: &str = "wifi_ssid";
 const KEY_WIFI_PASS: &str = "wifi_pass";
 const KEY_BRIGHTNESS: &str = "brightness";
+const KEY_MAX_BRIGHTNESS: &str = "max_bright";
 const KEY_DWELL_MIN: &str = "dwell_min";
 const KEY_DWELL_MAX: &str = "dwell_max";
 const KEY_SHUFFLE: &str = "shuffle";
@@ -121,6 +122,9 @@ pub struct Settings {
     pub wifi_ssid: String,
     pub wifi_pass: String,
     pub brightness: u8,
+    /// Ceiling for `brightness` (16..=255), default
+    /// [`config::BRIGHTNESS_SAFE_MAX`]. `brightness <= max_brightness` always.
+    pub max_brightness: u8,
     pub dwell_min: u64,
     pub dwell_max: u64,
     pub shuffle: bool,
@@ -174,7 +178,8 @@ pub struct Settings {
 pub fn valid_attract(v: &str) -> bool {
     if let Some(spec) = v.strip_prefix("fx:") {
         return v.len() <= ATTRACT_MAX
-            && opendmd_core::fx::Fx::parse(&format!("{}{spec}", opendmd_core::fx::PREFIX)).is_some();
+            && opendmd_core::fx::Fx::parse(&format!("{}{spec}", opendmd_core::fx::PREFIX))
+                .is_some();
     }
     match v.strip_prefix("text:") {
         _ if v.is_empty() || v == "clock" => true,
@@ -206,6 +211,7 @@ impl Default for Settings {
             wifi_ssid: String::new(),
             wifi_pass: String::new(),
             brightness: config::BRIGHTNESS,
+            max_brightness: config::BRIGHTNESS_SAFE_MAX,
             dwell_min: config::DWELL_MIN_SECS,
             dwell_max: config::DWELL_MAX_SECS,
             shuffle: config::SHUFFLE,
@@ -288,15 +294,30 @@ impl Config {
     /// Read everything, falling back to [`Settings::default`] field by field.
     pub fn load(&self) -> Settings {
         let d = Settings::default();
-        Settings {
-            wifi_ssid: self.get_string(KEY_WIFI_SSID).unwrap_or(d.wifi_ssid),
-            wifi_pass: self.get_string(KEY_WIFI_PASS).unwrap_or(d.wifi_pass),
-            brightness: self
-                .nvs
+        // A device without the key gets the default ceiling; a saved
+        // brightness above the ceiling (a key out of range, or a device that
+        // saved more than the default before the ceiling existed) is read
+        // as the ceiling, so the pair is always consistent.
+        let max_brightness = self
+            .nvs
+            .get_u8(KEY_MAX_BRIGHTNESS)
+            .ok()
+            .flatten()
+            .filter(|&m| m >= opendmd_core::brightness::MIN_MAX)
+            .unwrap_or(d.max_brightness);
+        let brightness = opendmd_core::brightness::effective(
+            self.nvs
                 .get_u8(KEY_BRIGHTNESS)
                 .ok()
                 .flatten()
                 .unwrap_or(d.brightness),
+            max_brightness,
+        );
+        Settings {
+            wifi_ssid: self.get_string(KEY_WIFI_SSID).unwrap_or(d.wifi_ssid),
+            wifi_pass: self.get_string(KEY_WIFI_PASS).unwrap_or(d.wifi_pass),
+            brightness,
+            max_brightness,
             dwell_min: self
                 .get_string(KEY_DWELL_MIN)
                 .and_then(|s| s.parse().ok())
@@ -373,6 +394,7 @@ impl Config {
         self.nvs.set_str(KEY_WIFI_SSID, &s.wifi_ssid)?;
         self.nvs.set_str(KEY_WIFI_PASS, &s.wifi_pass)?;
         self.nvs.set_u8(KEY_BRIGHTNESS, s.brightness)?;
+        self.nvs.set_u8(KEY_MAX_BRIGHTNESS, s.max_brightness)?;
         self.nvs.set_str(KEY_DWELL_MIN, &s.dwell_min.to_string())?;
         self.nvs.set_str(KEY_DWELL_MAX, &s.dwell_max.to_string())?;
         self.nvs.set_u8(KEY_SHUFFLE, u8::from(s.shuffle))?;

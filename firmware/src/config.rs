@@ -64,6 +64,37 @@ pub const DOUBLE_BUFFER: bool = false;
 /// 0..255. The panels are extremely bright; this is a living-room level.
 pub const BRIGHTNESS: u8 = 96;
 
+/// The default for the `max_brightness` setting, and the ceiling during
+/// [`SAFE_START`]: the highest brightness taken as safe on the reference
+/// rig's power supply. The panels and the ESP32 share one 5 V supply.
+///
+/// Measured 2026-09-29 on the rig (DMDPower supply, both panels, the
+/// all-white GIF as a one-GIF playlist: the worst case), each trial either
+/// 60 s under `make api-load` (3 workers, WiFi transmitting) or a reboot
+/// into white at that level watched to 90 s uptime:
+///
+/// | brightness | trials | failures |
+/// |---|---|---|
+/// | 144 | 2 load + 5 boot | 0 |
+/// | 160 | 5 load + 20 boot on white, + 1 load + 3 boot on the normal playlist | 0 (per-trial rate < ~9% at 95%) |
+/// | 168 | 2 load + 5 boot (+ 1 step) | 3 brownout resets, mostly under load |
+/// | 192 | — | froze the chip at the IDF's default detector level; a clean brownout reset at level 7 |
+///
+/// 144 is one measurement step (16) below the highest clean level and 24
+/// below the first failing one: the error bar. The margin will differ with
+/// other supplies, cables and panels; Settings warns above this value, and
+/// safe start plus the level-7 brownout detector make a too-high setting
+/// recoverable (the device resets and is reachable for ~30 s).
+pub const BRIGHTNESS_SAFE_MAX: u8 = 144;
+
+/// Safe start: how long after boot the panel is held at
+/// `min(max_brightness, BRIGHTNESS_SAFE_MAX)` before the saved
+/// `max_brightness` takes over — counted from the later of boot and the
+/// network coming up (joined, or the setup AP), so a device whose saved
+/// brightness browns it out is still reachable for this long after any
+/// reset. See "Safe start" in CLAUDE.md.
+pub const SAFE_START: Duration = Duration::from_secs(30);
+
 // ---------------------------------------------------------------------------
 // microSD, SPI (not SDMMC) on VSPI (`SPI3`, IO_MUX pins). hardware/PINOUT.md, "microSD".
 // ---------------------------------------------------------------------------

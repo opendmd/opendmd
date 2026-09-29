@@ -118,6 +118,8 @@ struct ConfigPatch {
     wifi_ssid: Option<String>,
     wifi_pass: Option<String>,
     brightness: Option<u8>,
+    /// Read wider than `u8` so an out-of-range value gets the range message.
+    max_brightness: Option<u32>,
     dwell_min: Option<u64>,
     dwell_max: Option<u64>,
     shuffle: Option<bool>,
@@ -261,8 +263,17 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if let Some(v) = patch.wifi_pass {
             next.wifi_pass = v;
         }
-        if let Some(v) = patch.brightness {
-            next.brightness = v;
+        match opendmd_core::brightness::resolve(
+            next.brightness,
+            next.max_brightness,
+            patch.brightness,
+            patch.max_brightness,
+        ) {
+            Ok((b, m)) => {
+                next.brightness = b;
+                next.max_brightness = m;
+            }
+            Err(e) => return req.bad_request(&e),
         }
         if let Some(v) = patch.dwell_min {
             next.dwell_min = v.max(1);
@@ -381,6 +392,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             return req.bad_request("dwell_max must be >= dwell_min");
         }
         let wifi_changed = (next.wifi_ssid.clone(), next.wifi_pass.clone()) != wifi_before;
+        let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
 
         let (tx, rx) = mpsc::channel();
         if c.cmd
@@ -394,7 +406,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         match rx.recv_timeout(REINDEX_TIMEOUT) {
             Ok(Ok(applied)) => req.json(&format!(
-                r#"{{"ok":true,{},"reboot_required":{wifi_changed}}}"#,
+                r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{wifi_changed}}}"#,
                 applied_json(&applied)
             )),
             // Checked by the main task before anything was saved: the
@@ -1398,7 +1410,8 @@ fn status_json(s: &Status, looks: &str) -> String {
     )
 }
 
-/// The end of the status object: `"look","glow","glow_held","attract_live"`
+/// The end of the status object: `"look","glow","glow_held","attract_live",
+/// "max_brightness","brightness_safe_max","safe_start_until"`
 /// (see the API table), from the settings and the main loop's flags.
 fn looks_json(set: &Settings) -> String {
     use std::sync::atomic::Ordering::Relaxed;
@@ -1407,7 +1420,7 @@ fn looks_json(set: &Settings) -> String {
         .then(|| crate::nvs_config::attract_path(&set.attract))
         .flatten();
     format!(
-        r#""look":"{}","glow":"{}","glow_held":{},"attract_live":{}"#,
+        r#""look":"{}","glow":"{}","glow_held":{},"attract_live":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{}"#,
         set.look.name(),
         set.glow.name(),
         if crate::state::GLOW_HELD.load(Relaxed) {
@@ -1415,7 +1428,13 @@ fn looks_json(set: &Settings) -> String {
         } else {
             0
         },
-        opt_json(live.as_deref())
+        opt_json(live.as_deref()),
+        set.max_brightness,
+        crate::config::BRIGHTNESS_SAFE_MAX,
+        match crate::state::SAFE_START_UNTIL.load(Relaxed) {
+            0 => "null".to_string(),
+            n => n.to_string(),
+        },
     )
 }
 
@@ -1429,7 +1448,7 @@ fn opt_json(s: Option<&str>) -> String {
 fn settings_json(s: &Settings) -> String {
     format!(
         concat!(
-            r#"{{"wifi_ssid":{},"wifi_pass_set":{},"brightness":{},"#,
+            r#"{{"wifi_ssid":{},"wifi_pass_set":{},"brightness":{},"max_brightness":{},"#,
             r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
@@ -1438,6 +1457,7 @@ fn settings_json(s: &Settings) -> String {
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
         s.brightness,
+        s.max_brightness,
         s.dwell_min,
         s.dwell_max,
         s.shuffle,

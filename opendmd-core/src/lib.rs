@@ -7,6 +7,7 @@
 //! dependency of `gif`) and `log`.
 
 pub mod boot;
+pub mod brightness;
 pub mod canvas;
 pub mod chan;
 pub mod compositor;
