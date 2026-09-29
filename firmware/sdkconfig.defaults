@@ -69,7 +69,9 @@ CONFIG_ESP_WIFI_NVS_ENABLED=n
 # of httpd (one receiving, two queued: stream.rs asserts the sum); and
 # nothing here speaks IPv6, so the default windows and mailbox depths are
 # oversized. A socket is a few dozen bytes of table until it is used.
-CONFIG_LWIP_MAX_SOCKETS=11
+# 14 = HTTP_MAX_SOCKETS (7, six for a browser's keep-alive connections plus
+# one evictable) + 3 (listening, control, spare) + 1 (DNS) + 3 (uploads).
+CONFIG_LWIP_MAX_SOCKETS=14
 CONFIG_LWIP_IPV6=n
 # One MSS each. Two MSS was measurably faster and measurably closer to the
 # out-of-memory line; with a ~20 KB floor the margin is worth more than the

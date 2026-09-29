@@ -370,7 +370,19 @@ pub const STREAM_START_HEAP: u32 = HEAP_RESERVE + 8 * 1024;
 /// stopped three concurrent multi-hundred KB downloads running the heap to
 /// zero). What bounds the heap now is that only one file is ever being sent;
 /// a waiting request costs its ~1.7 KB request copy and an idle TCP pcb.
-pub const HTTP_MAX_SOCKETS: u16 = 4;
+///
+/// **Why 7 and not the 4 the stream task needs.** httpd's LRU purge evicts
+/// the least recently used *idle* keep-alive connection when a new one
+/// arrives and every slot is taken. A browser keeps up to six connections
+/// to one host and reuses whichever is idle, so with four slots the purge
+/// regularly closed a connection at the instant the browser was sending
+/// its next request on it: `ERR_EMPTY_RESPONSE`, seen on `GET /api/cache`
+/// in 4 of 6 device smoke runs (2026-09-29), with nothing in the device's
+/// log because nothing went wrong on its side. Seven slots hold the
+/// browser's six plus one evictable, so the purge only ever closes a
+/// connection the browser has abandoned. An idle keep-alive socket costs
+/// a TCP pcb (~200 B) and nothing else until it is used.
+pub const HTTP_MAX_SOCKETS: u16 = 7;
 
 /// Where the playlists live on the card. (The web app is not on the card: it
 /// is a www pack in flash, `www.rs`.)
