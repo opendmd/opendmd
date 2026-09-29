@@ -43,7 +43,14 @@ ESPUP_ENV := $$HOME/.espup-env.sh
 # root, so a relative path in sdkconfig.defaults silently fails to find the
 # table. Generate a sdkconfig fragment with an absolute path and layer it on
 # via ESP_IDF_SDKCONFIG_DEFAULTS. (Same workaround as ~/projects/stripe-dashboard.)
-FW_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(CURDIR)/$(FW)/target/sdkconfig.partitions
+#
+# A `FW_FEATURES=diag-heap` build (src/diag.rs) also layers on
+# firmware/sdkconfig.diag (heap poisoning, the end-of-stack watchpoint); the
+# normal and release builds never see it. Switching between the two deletes
+# the generated sdkconfig (see `fw-sdkconfig-flavour`), which would otherwise
+# keep the other flavour's values for the symbols it already has.
+FW_DIAG = $(findstring diag-heap,$(FW_FEATURES))
+FW_SDKCONFIG = $(CURDIR)/$(FW)/sdkconfig.defaults;$(CURDIR)/$(FW)/target/sdkconfig.partitions$(if $(FW_DIAG),;$(CURDIR)/$(FW)/sdkconfig.diag)
 
 # Optional bench-rig credentials. `firmware/.env` is gitignored (template in
 # firmware/.env.example); when it exists, OPENDMD_WIFI_SSID/PASS are exported
@@ -60,7 +67,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
-	fw-build fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
+	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-flash www-push flasher flasher-smoke card-sync api-load
 
 test:
@@ -219,11 +226,27 @@ FW_DEV_FEATURES = dev-credentials$(if $(FW_FEATURES),$(comma)$(FW_FEATURES))
 comma := ,
 FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 
-fw-build:
+# Every build ends with tools/check-stack-realign.py: a function that moves
+# its stack pointer without MOVSP (an over-aligned local) corrupts its
+# caller's registers now and then (firmware/src/chan.rs). The diag build's
+# std-channel torture test keeps one such function on purpose.
+#
+# Delete the generated sdkconfig when the bench flavour (normal/diag) changes.
+fw-sdkconfig-flavour:
+	@mkdir -p $(FW)/target
+	@want=$(if $(FW_DIAG),diag,normal); have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
+	 if [ "$$want" != "$$have" ]; then \
+	   echo "==> sdkconfig flavour $${have:-unknown} -> $$want: removing the generated sdkconfig"; \
+	   rm -f $(FW)/target/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig; \
+	   echo $$want > $(FW)/target/sdkconfig.flavour; \
+	 fi
+
+fw-build: fw-sdkconfig-flavour
 	@mkdir -p $(FW)/target
 	@echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"' > $(FW)/target/sdkconfig.partitions
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
 	@ls -l $(FW_BINARY)
+	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_BINARY) $(if $(FW_DIAG),--allow "mpmc7channel.*9PlayError")'
 
 # The console (the firmware's log) runs at 921600 baud (sdkconfig.defaults,
 # CONFIG_ESP_CONSOLE_UART_BAUDRATE): every monitor and capture must match.
@@ -267,7 +290,7 @@ fw-erase:
 
 # Both feature sets: the bench build (dev-credentials + FW_FEATURES) and the
 # release build (no features, no .env), so neither cfg branch rots.
-fw-clippy:
+fw-clippy: fw-sdkconfig-flavour
 	@mkdir -p $(FW)/target
 	@echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"' > $(FW)/target/sdkconfig.partitions
 	@echo "==> Clippy firmware, --features $(FW_DEV_FEATURES)"
@@ -325,6 +348,7 @@ fw-release: web
 	   echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	   echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; } > $(FW_RELEASE_SDKCONFIG_FRAG)
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" cargo build --release --target-dir "$(FW_RELEASE_TARGET_DIR)"'
+	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_RELEASE_BINARY)'
 	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
 	@desc=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
 	 echo "app descriptor version: '$$desc'"; \

@@ -35,8 +35,10 @@
 
 mod cache;
 mod cache_builder;
+mod chan;
 mod clock;
 mod config;
+mod diag;
 mod dns_server;
 mod files;
 mod follow;
@@ -56,6 +58,7 @@ mod stream;
 mod wifi;
 mod www;
 
+use crate::chan as mpsc;
 use anyhow::{Context, Result};
 use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, Pin};
 use esp_idf_hal::peripherals::Peripherals;
@@ -71,7 +74,6 @@ use opendmd_core::scheduler::{Mode, Scheduler};
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1123,7 +1125,10 @@ fn main() -> Result<()> {
         }
         // And whenever the heap runs low: the network side comes first.
         if panel.glow_yield(eng.display(&canvas)) {
-            log::info!("glow: heap low ({} B free), its copy given back", free_heap());
+            log::info!(
+                "glow: heap low ({} B free), its copy given back",
+                free_heap()
+            );
         }
         state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
 
@@ -2266,6 +2271,7 @@ fn heartbeat(
     misses: &frametime::Misses,
     schedule: &str,
 ) {
+    diag::check("heartbeat");
     let sampled_min = floor.min;
     let free = free_heap();
     let min_free = min_free_heap();
@@ -2279,7 +2285,7 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B{}, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms; {}), \
-         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}{}{}",
+         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}{}{}{}",
         floor.heartbeat(),
         misses.heartbeat(),
         TRANSITIONS_CUT.load(Ordering::Relaxed),
@@ -2290,6 +2296,7 @@ fn heartbeat(
         sdhealth::heartbeat(),
         logring::summary(),
         probe::period_summary(),
-        panel.glow_summary()
+        panel.glow_summary(),
+        diag::summary()
     );
 }
