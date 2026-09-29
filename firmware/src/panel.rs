@@ -246,6 +246,9 @@ impl Panel {
         let tinted = look != self.look;
         self.look = look;
         self.repaint |= tinted;
+        // Live effects hold to 50 fps under the glow (its blit and a
+        // 100 fps effect do not fit a 10 ms frame).
+        opendmd_core::fx::set_frame_floor(opendmd_core::fx::glow_floor(glow));
         let was_held = self.glow.is_held();
         let refade = self.glow.set_level(glow);
         if was_held && !self.glow.is_held() {

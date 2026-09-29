@@ -100,6 +100,11 @@ struct Args {
     #[arg(long = "screenshot-canvas")]
     screenshot_canvas: Option<PathBuf>,
 
+    /// Take the screenshot this far into the file (ms of its own timeline)
+    /// instead of at its first frame: a live effect mid-loop.
+    #[arg(long = "screenshot-at", default_value_t = 0)]
+    screenshot_at: u64,
+
     /// Minimum seconds to hold one GIF.
     #[arg(long = "min-dwell", default_value_t = 3.0)]
     min_dwell: f64,
@@ -128,7 +133,8 @@ struct Args {
     glow: GlowLevel,
 
     /// Play just this path instead of the manifest: a card path, or a
-    /// virtual file (`@clock?style=small&date=1`, `@text?msg=Hello`).
+    /// virtual file (`@clock?style=small&date=1`, `@text?msg=Hello`,
+    /// `@fx:tunnel?palette=chrono&cycle=1`).
     #[arg(long)]
     play: Option<String>,
 }
@@ -447,12 +453,17 @@ fn main() -> Result<()> {
     canvas.fill(Rgb::BLACK);
     // The panel's tint and glow, as the firmware applies them.
     let mut model = PanelModel::new(args.look, args.glow);
+    // Effects hold to 50 fps under the glow, as on the device.
+    opendmd_core::fx::set_frame_floor(opendmd_core::fx::glow_floor(args.glow));
 
     // Headless: render the first frame of the first scheduled GIF and exit
     // without ever touching the window system. This is the only check that
     // runs on a box with no display.
     if args.screenshot.is_some() || args.screenshot_canvas.is_some() {
         let path = first_frame(&mut engine, &mut canvas)?;
+        if args.screenshot_at > 0 {
+            engine.seek_elapsed(Duration::from_millis(args.screenshot_at), &mut canvas)?;
+        }
         println!("screenshot of {path}");
         let shown = model.present(&canvas, Duration::ZERO);
         if let Some(out) = &args.screenshot {

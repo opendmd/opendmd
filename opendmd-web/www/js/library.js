@@ -38,7 +38,8 @@ export async function mount(el) {
   // Smooth motion for the previewed GIF (device only; js/smooth.js, loaded
   // on the first preview): shown only when there is motion to smooth.
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true, style: 'margin-top:10px' });
-  // "Live" (js/live.js, loaded when chosen): the clock and a scrolling text.
+  // "Live" and "Effects" (js/live.js, loaded when chosen): the clock, a
+  // scrolling text, the effects.
   const liveBox = h('div', { id: 'lib-live', hidden: true });
   const platforms = new Set();
 
@@ -88,6 +89,7 @@ export async function mount(el) {
 
   async function preview(it) {
     current = it.path;
+    it.pick?.();
     list.refresh();
     if (sendBtn) { sendPath = it.path; sendBtn.disabled = false; sendBtn.title = it.path; }
     cap.textContent = `${label(it.e)} · loading…`;
@@ -95,6 +97,8 @@ export async function mount(el) {
     let bytes;
     try {
       if (await pv.show(it.path, async (p) => (bytes = await app.previewBytes(p)))) {
+        // An effect may run faster than the page's frames: play it by the clock.
+        if (it.pick) pv.syncTo(0, performance.now());
         cap.textContent = `${label(it.e)} · ${it.name}`;
         if (smoothBox && it.path[0] != '@') import('./smooth.js').then((m) => m.detail(smoothBox, it, bytes, pv, cap)).catch(() => {});
       }
@@ -124,7 +128,7 @@ export async function mount(el) {
     let dirs = [];
     try { dirs = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(); } catch (e) { toast('listing /gifs: ' + e.message, 'bad'); }
     for (const d of dirs) cat.append(h('option', { value: d }, d));
-    cat.append(h('option', { value: '@' }, 'Live'));
+    cat.append(h('option', { value: '@' }, 'Live'), h('option', { value: '@fx' }, 'Effects'));
     const want = store.get('lib.cat', 'Consoles');
     if ([...cat.options].some((o) => o.value === want)) cat.value = want;
     await load();
@@ -132,8 +136,8 @@ export async function mount(el) {
 
   async function load() {
     store.set('lib.cat', cat.value);
-    if (!(liveBox.hidden = cat.value != '@')) {
-      items = (await import('./live.js')).items(liveBox, preview, () => list.refresh());
+    if (!(liveBox.hidden = cat.value[0] != '@')) {
+      items = (await import('./live.js'))[cat.value == '@' ? 'items' : 'effects'](liveBox, preview, () => list.refresh());
       platforms.clear();
       renderChips();
       return apply();

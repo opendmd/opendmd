@@ -92,6 +92,32 @@ like any GIF — in a playlist they are lines such as `@clock?date=1` or
 Follow RePlayOS can show the clock in the menus instead of its attract
 playlist (Settings → Follow RePlayOS → *attract playlist*: The clock).
 
+**Effects.** Library → *Effects* lists four pictures the panel computes
+every frame, at 100 frames a second (the panel's refresh rate): a
+**tunnel** (the Chrono Trigger time warp: two textures turning in opposite
+directions, flying forward, lit by depth and by a light going round, the
+palette cycling through it), **rotozoom** (Mode 7: two textures turning
+against each other, breathing in and out, with the warp's sine wobble on
+rows and columns — or laid out as a floor running to the horizon), a
+**starfield** (192 stars as warp streaks, or dots) and a **wireframe** (a
+sphere opening into a torus and a flower and back, or a cube, octahedron,
+icosahedron, torus or a 4D tesseract, turning and sweeping across the
+panel, every line lit by its depth). Each has a few options — palette
+(chrono, fire, ice, amber, rainbow), texture, layers, speed, frame rate
+and so on — shown beside the preview, and plays, sends to the panel and
+goes in a playlist like any GIF, as a line such as
+`@fx:tunnel?palette=fire&drift=1` (the options, all optional: `speed=1..4`,
+`fps=100|50|25`, `palette=`, `cycle=0|1`; tunnel `texture=checker|rings|
+noise&layers=1|2&twist=0..3&drift=1`; rotozoom `texture=…&layers=1|2&
+wobble=0..3&zoom=1..4&floor=1`; starfield `density=1..3&warp=0`; wire
+`shape=morph|cube|octahedron|icosahedron|torus|tesseract&color=RRGGBB&
+shade=0`). An effect's loop — one turn of the tunnel, one pass through the
+stars — is what the dwell counts. They cost the player no memory (their
+tables are in flash) and 1-3.5 ms a frame. The palettes are stepped and
+have a black band on purpose: the panel shows smooth, dim gradients as
+bands anyway. Follow RePlayOS can show one in the menus too (`PUT
+/api/config {"attract":"fx:tunnel"}`).
+
 ```
 --root <dir>              card root, holding gifs/ and filelist.txt (required)
 --manifest <path>         default <root>/filelist.txt
@@ -118,7 +144,10 @@ playlist (Settings → Follow RePlayOS → *attract playlist*: The clock).
 --look <name>             colour (default), amber, red, green, blue or white
 --glow off|short|long     phosphor glow, default off
 --play <path>             play just this: a card path or a live item,
-                          e.g. '@clock?date=1', '@text?msg=Hello'
+                          e.g. '@clock?date=1', '@text?msg=Hello',
+                          '@fx:tunnel?palette=chrono&cycle=1'
+--screenshot-at <ms>      take the screenshot that far into the file (an
+                          effect mid-loop), default 0
 ```
 
 Below `--scale 6` there are too few window pixels per LED for a dot and a

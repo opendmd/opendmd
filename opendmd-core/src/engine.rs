@@ -836,7 +836,19 @@ impl Engine {
                 Some(delay) => {
                     let started = playing.first_frame;
                     playing.first_frame = false;
-                    playing.next_frame_at = now + delay;
+                    // A file's next frame is timed from this tick. A live
+                    // effect (10 ms frames) keeps its own schedule when the
+                    // tick came within half a frame of it: timed from the
+                    // tick, the sleep's rounding (~0.9 ms a frame on the rig)
+                    // played 100 fps effects at 0.91x.
+                    let due = playing.next_frame_at;
+                    playing.next_frame_at = if playing.path.starts_with(crate::fx::PREFIX)
+                        && now.saturating_sub(due) < delay / 2
+                    {
+                        due + delay
+                    } else {
+                        now + delay
+                    };
                     playing.advance(delay);
                     self.compositor.frame_decoded();
                     return Ok(TickOutcome::Frame {

@@ -145,17 +145,21 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
 - **Looks and live items.** `look` (`colour`, `amber`, `red`, `green`, `blue`,
   `white`; `color` is stored as `colour`), `glow` (`off`, `short`, `long`) and
   `attract` (`""`, `"clock"`, `"text:<message>"`, at most 205 characters, no
-  control characters) are config fields, validated as the firmware does (a
+  control characters, or `"fx:<effect>[?options]"`) are config fields, validated as the firmware does (a
   400, nothing saved) and applied live, no reindex. Status ends with `look`,
   `glow`, `glow_held` (12288 while glow is not `off` and the simulated player
   is playing, else 0) and `attract_live` (null, or `@clock` / `@text?msg=..`
-  while following RePlayOS in its attract state with `attract` set).
+  / `@fx:..` while following RePlayOS in its attract state with `attract`
+  set).
   `POST /api/play` also takes live items: `@clock[?style=..&seconds=1&date=1&
   h12=1&color=RRGGBB]` and `@text?msg=..[&speed=ms&font=..&color=..&scroll=0]`
-  (plus `@power-on`, `@card:`); any other `@...` is a 415. They read no file:
+  and the effects `@fx:tunnel|rotozoom|starfield|wire[?..]` (plus
+  `@power-on`, `@card:`); any other `@...` is a 415. They read no file:
   a clock is 1000 ms frames, a text is frames of `speed` ms looping over
   (text width + 129) frames (one 1000 ms frame for a `scroll=0` text that
-  fits). A playlist line may be one too; `/api/cache` never counts them as
+  fits; an effect's loop is 480/960/240/480 frames of 20 ms at speed 1,
+  divided by `speed` (1..4, default 2): 10 ms frames and twice as many by
+  default (`fps=100`), 40 ms and half as many at `fps=25`). A playlist line may be one too; `/api/cache` never counts them as
   needing a copy.
 - **`GET /api/stat?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
@@ -608,12 +612,21 @@ def compute_matches(ctx: "Context", platform: str | None, game_clean: str) -> in
 VIRTUAL_POWER_ON = "@power-on"
 
 
+# Live effects (`@fx:<name>[?..]`): name -> (title, loop frames at speed 1
+# and 50 fps), as opendmd_core::fx; every one plays at 100 fps by default.
+FX = {"tunnel": ("Tunnel", 480), "rotozoom": ("Rotozoom", 960),
+      "starfield": ("Starfield", 240), "wire": ("Wireframe", 480)}
+
+
 def live_parse(path: str):
-    """A live item (`@clock[?..]`, `@text?msg=..[&..]`) -> ("clock"|"text",
-    {param: value}) with the values percent-decoded, or None for anything
-    else (a text needs a non-empty `msg`)."""
+    """A live item (`@clock[?..]`, `@text?msg=..[&..]`, `@fx:<name>[?..]`)
+    -> ("clock"|"text"|"fx:<name>", {param: value}) with the values
+    percent-decoded, or None for anything else (a text needs a non-empty
+    `msg`, an effect a known name)."""
     head, _, query = path.partition("?")
-    if head not in ("@clock", "@text"):
+    if head.startswith("@fx:") and head[4:] in FX:
+        pass
+    elif head not in ("@clock", "@text"):
         return None
     params: dict[str, str] = {}
     for part in query.split("&") if query else []:
@@ -636,6 +649,12 @@ def live_delays(kind: str, params: dict[str, str]) -> list[int]:
     `scroll=0` text that fits in 128 px is one 1000 ms frame."""
     if kind == "clock":
         return [1000]
+    if kind.startswith("fx:"):
+        # A loop: the base frames x 20 / delay / speed (1..4, default 2);
+        # 10 ms frames (fps=100, the default), 20 (50) or 40 (25).
+        speed = int(params["speed"]) if params.get("speed") in ("1", "2", "3", "4") else 2
+        delay = {"50": 20, "25": 40}.get(params.get("fps", ""), 10)
+        return [delay] * (FX[kind[3:]][1] * 20 // delay // speed)
     msg = params.get("msg", "")
     font = params.get("font", "big")
     width = (len(msg) * 4 - 1) if font == "small" else (len(msg) * 5 - 1)
@@ -673,6 +692,8 @@ def virtual_title(path: str) -> str | None:
         return path[len("@card:"):].split("|", 1)[0]
     live = live_parse(path)
     if live is not None:
+        if live[0].startswith("fx:"):
+            return FX[live[0][3:]][0]
         return "Clock" if live[0] == "clock" else live[1]["msg"]
     return None
 
@@ -684,6 +705,8 @@ def attract_live_path(attract: str) -> str | None:
         return "@clock"
     if attract.startswith("text:"):
         return "@text?msg=" + urllib.parse.quote(attract[5:].encode(), safe="-_.~")
+    if attract.startswith("fx:"):
+        return "@" + attract
     return None
 
 
@@ -2394,11 +2417,12 @@ def make_handler(ctx: Context, quiet: bool):
                         return
                     if field == "attract" and not (
                         v in ("", "clock")
+                        or (v.startswith("fx:") and len(v.encode()) <= ATTRACT_MAX and live_parse("@" + v))
                         or (v.startswith("text:") and v[5:].strip() and len(v.encode()) <= ATTRACT_MAX
                             and not any(ord(c) < 32 or 0x7F <= ord(c) < 0xA0 for c in v))
                     ):
                         self.send_error_json(
-                            400, 'attract must be "" (the playlist), "clock" or "text:<message>" (at most 200 characters, one line)')
+                            400, 'attract must be "" (the playlist), "clock", "text:<message>" (at most 200 characters, one line) or "fx:<effect>[?options]"')
                         return
                     if field == "auto_prepare" and v not in AUTO_PREPARE:
                         self.send_error_json(400, "auto_prepare must be idle, always or off")

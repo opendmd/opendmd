@@ -8,14 +8,17 @@
 
 Budget (gzipped bytes — what actually crosses the WiFi, since the firmware
 serves `<file>.gz` in preference): the wasm module plus its wasm-bindgen JS
-glue (`pkg/`, generated, grows with the export list) <= 100 KB; the
+glue (`pkg/`, generated, grows with the export list) <= 112 KB (100 KB
+until the live effects, `opendmd_core::fx`, which the wasm player needs:
+~11.4 KB gz of renderers and tables; served from flash at ~320 KB/s, the
+extra 12 KB is ~40 ms of a page load); the
 hand-written JS + CSS <= 48 KB (40 KB until Follow RePlayOS's Settings card,
 which had ~0.6 KB left). The Studio ("Make art") is loaded only when it
 opens and has lines of its own: its wasm + glue (`pkg-art/`) <= 150 KB, and
 `js/studio.js` + `studio.css` <= 24 KB — neither counts against the lines
-above. Library's "Live" items (`js/live.js`: the clock and the scrolling
-text, imported only when that category is chosen) have a line of their
-own too, <= 4 KB. The name index for "Find art for a game" (`art/*.json`, one file
+above. Library's "Live" items and "Effects" (`js/live.js`: the clock, the
+scrolling text and the effects' option forms, imported only when either
+category is chosen) have a line of their own too, <= 4 KB. The name index for "Find art for a game" (`art/*.json`, one file
 fetched per search) is printed, with no budget. Raw sizes are printed for
 information. A file with no `.gz` beside it counts at its raw size. Exits 1
 when over budget.
@@ -30,7 +33,8 @@ import argparse
 import sys
 from pathlib import Path
 
-WASM_GZ_BUDGET = 100 * 1024
+# 100 KB until the live effects (see the docstring).
+WASM_GZ_BUDGET = 112 * 1024
 JS_CSS_GZ_BUDGET = 48 * 1024
 ART_WASM_GZ_BUDGET = 150 * 1024
 STUDIO_GZ_BUDGET = 24 * 1024

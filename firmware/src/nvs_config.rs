@@ -155,8 +155,9 @@ pub struct Settings {
     /// would play anyway (the saved playlist, or the schedule's).
     pub attract_set: Option<String>,
     /// What attract mode shows instead of a playlist: `""` (the playlist,
-    /// as before), `"clock"` (the live clock) or `"text:<message>"` (the
-    /// scrolling text). See [`attract_path`].
+    /// as before), `"clock"` (the live clock), `"text:<message>"` (the
+    /// scrolling text) or `"fx:<name>[?options]"` (a live effect). See
+    /// [`attract_path`].
     pub attract: String,
     /// The DMD tint (`opendmd_core::look`), applied at the blit.
     pub look: Look,
@@ -166,6 +167,10 @@ pub struct Settings {
 
 /// Is `v` an `attract` value `PUT /api/config` may store?
 pub fn valid_attract(v: &str) -> bool {
+    if let Some(spec) = v.strip_prefix("fx:") {
+        return v.len() <= ATTRACT_MAX
+            && opendmd_core::fx::Fx::parse(&format!("{}{spec}", opendmd_core::fx::PREFIX)).is_some();
+    }
     match v.strip_prefix("text:") {
         _ if v.is_empty() || v == "clock" => true,
         Some(msg) => {
@@ -175,10 +180,13 @@ pub fn valid_attract(v: &str) -> bool {
     }
 }
 
-/// The virtual file an `attract` value plays (`@clock`, `@text?msg=…`),
-/// `None` for the playlist.
+/// The virtual file an `attract` value plays (`@clock`, `@text?msg=…`,
+/// `@fx:…`), `None` for the playlist.
 pub fn attract_path(v: &str) -> Option<String> {
     use opendmd_core::synth;
+    if let Some(spec) = v.strip_prefix("fx:") {
+        return Some(format!("{}{spec}", opendmd_core::fx::PREFIX));
+    }
     match v.strip_prefix("text:") {
         _ if v == "clock" => Some(synth::CLOCK.to_string()),
         Some(msg) if !msg.trim().is_empty() => Some(synth::text_path(msg)),
