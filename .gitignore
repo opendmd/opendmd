@@ -1,6 +1,6 @@
-target/
-**/target/
-.embuild/
+target
+**/target
+.embuild
 sdkconfig
 
 # Never commit the DMDoS GIF pack or a card dump — third-party content, not
