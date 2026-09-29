@@ -114,6 +114,79 @@ const CARD_NOT_READY: &str = "the card is not ready";
 /// Transitions refused by [`transition_gate`] since boot (heartbeat).
 static TRANSITIONS_CUT: AtomicU32 = AtomicU32::new(0);
 
+/// Safe start: from boot until [`config::SAFE_START`] has passed — counted
+/// from the later of boot and the network first coming up (`state::NET_UP`)
+/// — the panel's ceiling is `min(max_brightness, BRIGHTNESS_SAFE_MAX)`, so a
+/// saved brightness that browns the supply out (or freezes the chip) cannot
+/// make a device unreachable: after any reset it is up and answering at a
+/// safe level for that long, and a `PUT /api/config` can lower it. Then the
+/// saved `max_brightness` applies. Times are uptime (`epoch`, like
+/// `uptime_secs`); the deadline is published in `state::SAFE_START_UNTIL`.
+struct SafeStart {
+    /// When the ceiling lifts; `None` once it has.
+    until: Option<Duration>,
+    /// The network's arrival has been counted.
+    net_seen: bool,
+}
+
+impl SafeStart {
+    fn new(settings: &Settings) -> Self {
+        let until = config::SAFE_START;
+        state::SAFE_START_UNTIL.store(until.as_secs() as u32, Ordering::Relaxed);
+        log::info!(
+            "safe start: brightness held at {} until {} s (saved brightness {}, max {})",
+            settings
+                .brightness
+                .min(settings.max_brightness)
+                .min(config::BRIGHTNESS_SAFE_MAX),
+            until.as_secs(),
+            settings.brightness,
+            settings.max_brightness,
+        );
+        SafeStart {
+            until: Some(until),
+            net_seen: false,
+        }
+    }
+
+    /// The panel's ceiling for a saved `max_brightness` right now.
+    fn ceiling(&self, max: u8) -> u8 {
+        if self.until.is_some() {
+            max.min(config::BRIGHTNESS_SAFE_MAX)
+        } else {
+            max
+        }
+    }
+
+    /// Called every loop iteration with the uptime; true exactly once, when
+    /// safe start has just ended (the caller lifts the ceiling).
+    fn poll(&mut self, now: Duration) -> bool {
+        let Some(until) = self.until else {
+            return false;
+        };
+        if !self.net_seen && state::NET_UP.load(Ordering::Relaxed) {
+            self.net_seen = true;
+            let later = now + config::SAFE_START;
+            if later > until {
+                self.until = Some(later);
+                let secs = later.as_secs_f32().ceil() as u32;
+                state::SAFE_START_UNTIL.store(secs, Ordering::Relaxed);
+                log::info!(
+                    "safe start: network up at {:.1} s, held until {secs} s",
+                    now.as_secs_f32()
+                );
+                return false;
+            }
+        }
+        if now < until {
+            return false;
+        }
+        self.until = None;
+        state::SAFE_START_UNTIL.store(0, Ordering::Relaxed);
+        true
+    }
+}
+
 /// Whether a transition may take its buffers now: `need` is its 24 KB plus
 /// what the new file's decoder has still to allocate (a GIF's LZW state);
 /// the heap must keep [`config::TRANSITION_HEAP_RESERVE`] after both, and a
@@ -211,6 +284,10 @@ fn main() -> Result<()> {
         log::info!("first boot with build-time credentials; they are now in NVS");
     }
     let mut settings = nvs_config.load();
+    // The ceiling first, so nothing below (the show included) can exceed it;
+    // until safe start is over it is no higher than `BRIGHTNESS_SAFE_MAX`.
+    let mut safe = SafeStart::new(&settings);
+    panel.set_max_brightness(safe.ceiling(settings.max_brightness));
     panel.set_brightness(settings.brightness);
     panel.set_display(settings.look, settings.glow);
     clock::set_timezone(&settings.tz, &settings.tz_name);
@@ -220,8 +297,9 @@ fn main() -> Result<()> {
     // Follow RePlayOS: the overlay and the sequence (`follow.rs`).
     let mut runner = follow::Runner::default();
     log::info!(
-        "settings: brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, boot_show={}, tz='{}' ({}), schedule {} rule(s){}, host='{}', wifi={}",
+        "settings: brightness={} (max {}), look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, boot_show={}, tz='{}' ({}), schedule {} rule(s){}, host='{}', wifi={}",
         settings.brightness,
+        settings.max_brightness,
         settings.look.name(),
         settings.glow.name(),
         settings.dwell_min,
@@ -358,6 +436,13 @@ fn main() -> Result<()> {
     let mut last_build_try: Option<Instant> = None;
 
     loop {
+        // 0. Safe start: extended once when the network comes up, then the
+        //    saved ceiling takes over.
+        if safe.poll(epoch.elapsed()) {
+            panel.set_max_brightness(settings.max_brightness);
+            log::info!("safe start: over, brightness {}", panel.brightness());
+        }
+
         // 1. Commands from the HTTP handlers. Non-blocking, and everything that
         //    rebuilds the engine or swaps a file on the card happens here — on
         //    this task, between frames, never on the httpd thread.
@@ -494,6 +579,10 @@ fn main() -> Result<()> {
                             // Brightness and dwell apply to what is on screen
                             // right now; a filter, set or order change means a
                             // new catalog — rebuilt in place, never a reboot.
+                            // (Under safe start's ceiling while it lasts: a
+                            // lower brightness applies now, a higher one when
+                            // it ends.)
+                            panel.set_max_brightness(safe.ceiling(settings.max_brightness));
                             if !sched.off() {
                                 panel.set_brightness(sched.brightness(&settings));
                             }
@@ -1513,8 +1602,12 @@ impl Scheduling {
         eff
     }
 
+    /// The level a rule or night mode asks for, under the ceiling.
     fn brightness(&self, settings: &Settings) -> u8 {
-        self.decision.brightness.unwrap_or(settings.brightness)
+        opendmd_core::brightness::effective(
+            self.decision.brightness.unwrap_or(settings.brightness),
+            settings.max_brightness,
+        )
     }
 
     fn off(&self) -> bool {

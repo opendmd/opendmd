@@ -85,6 +85,9 @@ fn publish(status: &Arc<Mutex<Status>>, state: WifiState, ip: Option<String>) {
     if let Ok(mut s) = status.lock() {
         s.wifi = state.as_str();
         s.ip = ip.unwrap_or_default();
+        if !s.ip.is_empty() {
+            crate::state::NET_UP.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 

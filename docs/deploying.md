@@ -199,7 +199,7 @@ firmware does not speak Improv Serial):
 - **Erase ticked — a first install, or a board coming from DMDoS or any
   other firmware.** The whole chip is erased, then the bootloader, the
   partition table, the app and the web app are written. *Everything* on the
-  board goes, NVS included: WiFi credentials, brightness, playlist, the
+  board goes, NVS included: WiFi credentials, brightness and its maximum, playlist, the
   schedule and night window, Follow RePlayOS. The board comes up as the
   `OpenDMD-Setup` access point (below). The card is not touched.
 - **Erase unticked — a firmware update that keeps the settings.** ESP Web

@@ -102,6 +102,13 @@ every view like a person would:
             it; on the mock POST /api/play of @boot?len=card&.. plays as
             "Startup"; the simulator and the page draw that status card
             identically (settings-boot-laptop.png)
+  Power     Settings -> Power (js/power.js): the Playback brightness slider's
+            max follows max_brightness (also after a save); brightness above
+            max_brightness is a 400 with the plain message, in the same request
+            too; max outside 16..255 is a 400; lowering max lowers brightness in
+            the same save (config and PUT reply carry both); the warning is
+            hidden at/below brightness_safe_max and shown above it; the
+            control saves and round-trips (mock only; settings restored)
   Web app   GET /api/www {version, bytes, entries, ok} (the version is
             www/version.txt, what the pack's header carries) and the same
             object as `www` in /api/status; PUT /api/www of the built pack
@@ -787,8 +794,13 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
     st0 = get_json(base + "/api/status")
     check(list(cfg0)[-4:] == ["attract", "look", "glow", "boot_show"],
           f"config: attract/look/glow/boot_show end the object ({list(cfg0)[-5:]})")
-    check(list(st0)[-4:] == ["look", "glow", "glow_held", "attract_live"],
-          f"status: look/glow/glow_held/attract_live end the object ({list(st0)[-5:]})")
+    check(list(st0)[-7:] == ["look", "glow", "glow_held", "attract_live", "max_brightness",
+                             "brightness_safe_max", "safe_start_until"],
+          f"status: look/glow/glow_held/attract_live/max_brightness/brightness_safe_max/safe_start_until"
+          f" end the object ({list(st0)[-8:]})")
+    ssu = st0["safe_start_until"]
+    check(ssu is None or (isinstance(ssu, int) and ssu >= st0["uptime_secs"] - 1),
+          f"status: safe_start_until is null or an uptime not yet passed ({ssu}, uptime {st0['uptime_secs']})")
     check(page.input_value("#st-look") == cfg0["look"] and page.input_value("#st-glow") == cfg0["glow"],
           f"settings: the selects show the config ({cfg0['look']}, {cfg0['glow']})")
     look_validation(base)
@@ -876,6 +888,103 @@ def boot_checks(page: Page, base: str, mock: bool) -> None:
               f"play: @boot plays as 'Startup' ({st['now_playing']['path']}, {st['now_playing']['title']})")
         post_json(base + "/api/skip", {})
     no_leaks(page, "settings (start-up)")
+    goto_view(page, "now")
+
+
+def power_checks(page: Page, base: str) -> None:
+    """Settings -> Power (js/power.js): the ceiling, its 400s, the slider and
+    the warning. Mock only (it writes brightness and max_brightness, and puts
+    them back)."""
+    def cfg():
+        return get_json(base + "/api/config")
+
+    def slider_max():
+        return int(page.eval_on_selector("#st-brightness", "e => e.max"))
+
+    def reload_settings():
+        # The page reads the config once; a PUT made behind its back needs a reload.
+        goto_view(page, "settings")
+        page.reload()
+        page.wait_for_selector("#st-maxbright", state="attached", timeout=20000)
+
+    orig = cfg()
+    safe = get_json(base + "/api/status")["brightness_safe_max"]
+    st = get_json(base + "/api/status")
+    check(st["max_brightness"] == orig["max_brightness"] and isinstance(safe, int),
+          f"power: status carries max_brightness {st['max_brightness']} and brightness_safe_max {safe}")
+    try:
+        put_json(base + "/api/config", {"max_brightness": safe, "brightness": 100})
+        reload_settings()
+        check(slider_max() == safe, f"power: the brightness slider's max is {safe} (follows max_brightness)")
+        check(not page.is_visible("#st-maxbright"), "power: the control is behind the Advanced disclosure")
+        page.click("#st-power summary")
+        check(page.input_value("#st-maxbright") == str(safe), "power: the control shows max_brightness")
+        check(not page.is_visible("#st-maxbright-warn"), "power: no warning at the tested limit")
+        text = page.inner_text("#st-power-card")
+        check(f"Above {safe} the panel can reset" in text and "especially on white screens" in text,
+              "power: the explanation names the safe value")
+        for jargon in ("brownout", "NVS", "rail"):
+            check(jargon not in text, f"power: no jargon ({jargon})")
+        # Refusals: nothing changes.
+        r = put_status(base, {"brightness": safe + 1})
+        check(r == 400, f"power: brightness above max is a 400 ({r})")
+        c = cfg()
+        check(c["brightness"] == 100 and c["max_brightness"] == safe, "power: a refused brightness changed nothing")
+        req = urllib.request.Request(base + "/api/config", data=json.dumps({"brightness": 200}).encode(),
+                                     method="PUT", headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req)
+            msg = ""
+        except urllib.error.HTTPError as e:
+            msg = e.read().decode()
+        check(f"brightness 200 is above the maximum {safe}; raise Maximum brightness first" in msg,
+              f"power: the 400 says what to do ({msg.strip()})")
+        for bad in (15, 0, 256, 1000):
+            check(put_status(base, {"max_brightness": bad}) == 400, f"power: max_brightness {bad} is a 400")
+        check(put_status(base, {"max_brightness": 150, "brightness": 151}) == 400,
+              "power: brightness is judged against the same request's max")
+        check(cfg()["max_brightness"] == safe, "power: refused maximums changed nothing")
+        # Raising both at once is fine, and shows the warning.
+        r = put_json(base + "/api/config", {"max_brightness": safe + 40, "brightness": safe + 20})
+        check(r.get("brightness") == safe + 20 and r.get("max_brightness") == safe + 40,
+              f"power: PUT reply carries both ({r.get('brightness')}, {r.get('max_brightness')})")
+        reload_settings()
+        check(slider_max() == safe + 40, f"power: slider max follows a raised max_brightness ({slider_max()})")
+        check(page.is_visible("#st-maxbright"), "power: the disclosure opens by itself above the tested limit")
+        check(page.is_visible("#st-maxbright-warn"), "power: warning shown above the tested limit")
+        w = page.inner_text("#st-maxbright-warn")
+        check(w == f"Above the tested limit ({safe}). The display may reset. Only raise this with a stronger power supply.",
+              f"power: warning text ({w})")
+        shot(page, "settings-power", "laptop")
+        # The control: lower the max below the brightness; both saved.
+        page.fill("#st-maxbright", str(safe - 60))
+        check(not page.is_visible("#st-maxbright-warn"), "power: warning hides when the control drops to the safe value")
+        page.click("#st-save-power")
+        deadline = time.time() + 10
+        while cfg()["max_brightness"] != safe - 60 and time.time() < deadline:
+            time.sleep(0.2)
+        c = cfg()
+        check(c["max_brightness"] == safe - 60 and c["brightness"] == safe - 60,
+              f"power: lowering max lowers brightness in the same save ({c['brightness']}/{c['max_brightness']})")
+        page.wait_for_function("+document.getElementById('st-brightness').max == %d" % (safe - 60), timeout=5000)
+        check(int(page.input_value("#st-brightness")) == safe - 60, "power: the slider follows the lowered brightness")
+        # Typing above the safe value shows the warning before saving.
+        page.fill("#st-maxbright", str(safe + 1))
+        check(page.is_visible("#st-maxbright-warn"), "power: warning shows as soon as the control is above the safe value")
+        page.fill("#st-maxbright", str(safe))
+        check(not page.is_visible("#st-maxbright-warn"), "power: warning hidden at the safe value")
+        # Round trip through the Playback save too.
+        page.eval_on_selector("#st-brightness", "e => { e.value = 40; e.dispatchEvent(new Event('input')); }")
+        page.click("#st-save-play")
+        page.wait_for_timeout(600)
+        check(cfg()["brightness"] == 40 and cfg()["max_brightness"] == safe - 60, "power: Playback save leaves the maximum alone")
+    finally:
+        put_json(base + "/api/config", {"max_brightness": orig["max_brightness"]})
+        put_json(base + "/api/config", {"brightness": orig["brightness"]})
+    c = cfg()
+    check((c["brightness"], c["max_brightness"]) == (orig["brightness"], orig["max_brightness"]),
+          "power: brightness and maximum left as found")
+    no_leaks(page, "settings (power)")
     goto_view(page, "now")
 
 
@@ -1126,6 +1235,7 @@ def mock_pass(browser) -> None:
         transition_checks(page, base)
         look_checks(page, base, True)
         boot_checks(page, base, True)
+        power_checks(page, base)
         live_checks(page, base, True)
         effects_checks(page, base, True)
         sim_checks(page)

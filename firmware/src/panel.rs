@@ -89,6 +89,12 @@ impl PanelConfig {
 /// only be one (the shim holds a single static instance).
 pub struct Panel {
     cfg: PanelConfig,
+    /// The brightness ceiling (`max_brightness`): every `set_brightness` is
+    /// clamped to it, so no caller can drive the panel above it. Starts at
+    /// the safe default until `main` has read the settings.
+    max_brightness: u8,
+    /// What the last `set_brightness` asked for, before the clamp.
+    wanted_brightness: u8,
     /// The DMD tint, applied to every pixel pushed (`opendmd_core::look`).
     look: Look,
     /// Phosphor glow: what the panel shows, while it is held (12 KB).
@@ -170,6 +176,8 @@ impl Panel {
 
         let mut panel = Panel {
             cfg: *cfg,
+            max_brightness: config::BRIGHTNESS_SAFE_MAX,
+            wanted_brightness: cfg.brightness,
             look: Look::Colour,
             glow: Glow::new(GlowLevel::Off),
             stepped: Instant::now(),
@@ -459,10 +467,26 @@ impl Panel {
         self.clear();
     }
 
+    /// Apply `min(brightness, max_brightness)`. The one place panel
+    /// brightness is set, so the ceiling holds for play, the schedule's
+    /// level, boot and anything added later.
     pub fn set_brightness(&mut self, brightness: u8) {
-        self.cfg.brightness = brightness;
+        self.wanted_brightness = brightness;
+        let applied = opendmd_core::brightness::effective(brightness, self.max_brightness);
+        self.cfg.brightness = applied;
         // SAFETY: no arguments to get wrong; a no-op before init.
-        unsafe { hub75::hub75_set_brightness(brightness) };
+        unsafe { hub75::hub75_set_brightness(applied) };
+    }
+
+    /// What the panel is driven at now (after the ceiling).
+    pub fn brightness(&self) -> u8 {
+        self.cfg.brightness
+    }
+
+    /// Set the ceiling and re-apply the last requested brightness under it.
+    pub fn set_max_brightness(&mut self, max: u8) {
+        self.max_brightness = max;
+        self.set_brightness(self.wanted_brightness);
     }
 
     /// Blank the DMA buffer. The canvas does not know: a caller that clears

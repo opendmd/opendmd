@@ -16,7 +16,7 @@
 //! loop blocking on the handler (which is not).
 
 use crate::chan as mpsc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::time::{Duration, Instant};
 
 /// Which flash layout this build is for, compiled in by `build.rs`
@@ -64,6 +64,14 @@ pub fn largest_free_block() -> usize {
 /// the status object no heap; `look` and `glow` are read from the settings.
 pub static GLOW_HELD: AtomicBool = AtomicBool::new(false);
 pub static ATTRACT_LIVE: AtomicBool = AtomicBool::new(false);
+
+/// Safe start (`main.rs` `SafeStart`): the uptime second at which the
+/// brightness ceiling lifts from `min(max_brightness, BRIGHTNESS_SAFE_MAX)`
+/// to `max_brightness`, 0 once it has (`/api/status` `safe_start_until`).
+pub static SAFE_START_UNTIL: AtomicU32 = AtomicU32::new(0);
+/// The network worker has published an address (joined the WiFi, or raised
+/// the setup AP): safe start's window is counted from here too.
+pub static NET_UP: AtomicBool = AtomicBool::new(false);
 
 /// The player's health and what it is doing, as `/api/status` reports it.
 #[derive(Clone, Debug)]

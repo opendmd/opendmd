@@ -142,6 +142,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   schedule resumes at the next dwell. 404 if it does not open, 415 if it does
   not start with `GIF8` (the firmware's error text there comes from the
   decoder; here it is a fixed one), 400 for a relative or escaping path.
+- **Maximum brightness.** `max_brightness` (16..255, default 128 =
+  `BRIGHTNESS_SAFE_MAX`) is a config field; a `brightness` above it (or the
+  same request's) is a 400, lowering it lowers `brightness` in the same save,
+  and the PUT reply and `/api/config` carry both. Status has `max_brightness`,
+  `brightness_safe_max` and `safe_start_until` (30 for the mock's first 30 s,
+  then null; the mock's "panel" is not held down, there is none).
 - **Looks and live items.** `look` (`colour`, `amber`, `red`, `green`, `blue`,
   `white`; `color` is stored as `colour`), `glow` (`off`, `short`, `long`) and
   `attract` (`""`, `"clock"`, `"text:<message>"`, at most 205 characters, no
@@ -282,10 +288,36 @@ SETS_DIR = "sets"                      # config::SETS_DIR
 WWW_PARTITION_SIZE = 1_310_720         # the www partition (partitions.csv)
 SD_CAPACITY_BYTES = 31_266_439_168     # a plausible "measured" capacity for /api/status
 
+# firmware config::BRIGHTNESS_SAFE_MAX (128: measured on the rig, see there);
+# the ceiling's range is opendmd-core brightness::MIN_MAX..=255.
+BRIGHTNESS_SAFE_MAX = 144
+# firmware config::SAFE_START: /api/status `safe_start_until` is this (uptime
+# seconds) until the mock's uptime passes it, then null. The mock has no
+# network to wait for, so the window is counted from its start only.
+SAFE_START_SECS = 30
+MIN_MAX_BRIGHTNESS = 16
+
+
+def resolve_brightness(brightness, max_b, new_brightness, new_max):
+    """opendmd_core::brightness::resolve: (brightness, max) to save, or an
+    error message for a 400."""
+    if new_max is not None:
+        if not (MIN_MAX_BRIGHTNESS <= new_max <= 255):
+            return None, f"max_brightness must be {MIN_MAX_BRIGHTNESS}..=255, not {new_max}"
+        max_b = new_max
+    if new_brightness is not None:
+        if new_brightness > max_b:
+            return None, (f"brightness {new_brightness} is above the maximum {max_b}; "
+                          "raise Maximum brightness first")
+        brightness = new_brightness
+    return (min(brightness, max_b), max_b), None
+
+
 DEFAULT_SETTINGS = {
     "wifi_ssid": "MockNet",
     "wifi_pass": "secret",
     "brightness": 96,
+    "max_brightness": BRIGHTNESS_SAFE_MAX,
     "dwell_min": 3,
     "dwell_max": 30,
     "shuffle": True,
@@ -325,6 +357,7 @@ FIELD_TYPES = {
     "wifi_ssid": "str",
     "wifi_pass": "str",
     "brightness": "u8",
+    "max_brightness": "u32",
     "dwell_min": "u64",
     "dwell_max": "u64",
     "shuffle": "bool",
@@ -2287,6 +2320,10 @@ def make_handler(ctx: Context, quiet: bool):
                     "glow": ctx.settings["glow"],
                     "glow_held": GLOW_HELD_BYTES if ctx.settings["glow"] != "off" and not player._frozen() else 0,
                     "attract_live": None,
+                    "max_brightness": ctx.settings["max_brightness"],
+                    "brightness_safe_max": BRIGHTNESS_SAFE_MAX,
+                    "safe_start_until": SAFE_START_SECS
+                    if time.monotonic() - player.boot_time < SAFE_START_SECS else None,
                 }
                 if ctx.settings["follow"] and ctx.follow.state == "attract":
                     obj["attract_live"] = attract_live_path(ctx.settings["attract"])
@@ -2310,6 +2347,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "wifi_ssid": s["wifi_ssid"],
                     "wifi_pass_set": bool(s["wifi_pass"]),
                     "brightness": s["brightness"],
+                    "max_brightness": s["max_brightness"],
                     "dwell_min": s["dwell_min"],
                     "dwell_max": s["dwell_max"],
                     "shuffle": s["shuffle"],
@@ -2384,7 +2422,7 @@ def make_handler(ctx: Context, quiet: bool):
                     return isinstance(v, bool)
                 if kind == "u8":
                     return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 255
-                if kind == "u64":
+                if kind in ("u64", "u32"):
                     return isinstance(v, int) and not isinstance(v, bool) and v >= 0
                 return False
 
@@ -2499,6 +2537,14 @@ def make_handler(ctx: Context, quiet: bool):
                         self.send_error_json(404, SET_NOT_FOUND)
                         return
 
+                pair, err = resolve_brightness(
+                    before["brightness"], before["max_brightness"],
+                    patch.get("brightness"), patch.get("max_brightness"))
+                if err:
+                    self.send_error_json(400, err)
+                    return
+                next_settings["brightness"], next_settings["max_brightness"] = pair
+
                 # Same rule for "attract_set" when it changes and is non-empty.
                 if next_settings["attract_set"] != before["attract_set"] and next_settings["attract_set"]:
                     if next_settings["attract_set"].lower() == OBSOLETE_SET:
@@ -2538,7 +2584,10 @@ def make_handler(ctx: Context, quiet: bool):
                 ctx.schedule.evaluate()
                 fields = self.playlist_fields(index, index_ms)
 
-            self.send_json(200, {"ok": True, **fields, "reboot_required": wifi_changed})
+            self.send_json(200, {"ok": True, **fields,
+                                 "brightness": ctx.settings["brightness"],
+                                 "max_brightness": ctx.settings["max_brightness"],
+                                 "reboot_required": wifi_changed})
 
         def h_reindex(self, path):
             with ctx.lock:
