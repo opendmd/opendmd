@@ -28,7 +28,11 @@ export async function mount(el) {
     hostname: h('input', { type: 'text', id: 'st-hostname', value: c.hostname }),
     transition: h('select', { id: 'st-trans' }, [['dissolve', 'Dissolve'], ['wipe_left', 'Wipe'], ['blinds', 'Blinds'], ['push', 'Push'], ['fade', 'Fade'], ['none', 'None']].map(([v, l]) => h('option', { value: v }, l))),
     transition_ms: h('select', { id: 'st-trans-ms', 'data-num': 1 }, [[250, 'Quick'], [400, 'Normal'], [700, 'Slow']].map(([v, l]) => h('option', { value: v }, l))),
+    look: h('select', { id: 'st-look' }, [['colour', 'Full colour'], ['amber', 'Amber'], ['red', 'Red'], ['green', 'Green'], ['blue', 'Blue'], ['white', 'White']].map(([v, l]) => h('option', { value: v }, l))),
+    glow: h('select', { id: 'st-glow' }, ['off', 'short', 'long'].map((v) => h('option', { value: v }, v))),
   };
+  f.look.value = c.look ?? 'colour';
+  f.glow.value = c.glow ?? 'off';
   // A value set some other way (another wipe direction, another duration)
   // is shown as it is rather than silently replaced.
   const pick = (sel, v, label) => { if (![...sel.options].some((o) => o.value == v)) sel.append(h('option', { value: v }, label)); sel.value = v; };
@@ -95,11 +99,13 @@ export async function mount(el) {
     h('div.card', h('h2', 'Playback'), h('p.cap', 'Applied live. A playlist, platform or shuffle change rebuilds the index on the card (a few seconds).'),
       h('div.form',
         h('label.stack', 'brightness', h('div.row', f.brightness, brightOut)),
+        h('label.stack', 'colour', f.look),
+        h('label.stack', 'phosphor glow', f.glow),
         h('label.stack', 'dwell min / max (s)', h('div.row', f.dwell_min, f.dwell_max)),
         h('label.stack', 'platforms', f.platforms),
         h('label.stack', 'playlist', f.set),
         h('label', f.shuffle, 'shuffle')),
-      h('div.row', { style: 'margin-top:12px' }, h('button.pri', { id: 'st-save-play', onclick: () => save(['brightness', 'dwell_min', 'dwell_max', 'shuffle', 'platforms', 'set']) }, 'Save playback'))),
+      h('div.row', { style: 'margin-top:12px' }, h('button.pri', { id: 'st-save-play', onclick: () => save(['brightness', 'look', 'glow', 'dwell_min', 'dwell_max', 'shuffle', 'platforms', 'set']) }, 'Save playback'))),
     h('div.card', { id: 'st-trans-card' }, h('h2', 'Transition'), h('p.cap', 'How the panel moves from one GIF to the next.'),
       h('div.form', h('label.stack', 'style', f.transition), h('label.stack', 'speed', f.transition_ms)),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-trans-preview', onclick: previewTrans }, 'Preview'),

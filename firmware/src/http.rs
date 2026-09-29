@@ -136,6 +136,10 @@ struct ConfigPatch {
     /// `null` = the current playlist, else a `set` value.
     #[serde(default, deserialize_with = "double_option")]
     attract_set: Option<Option<String>>,
+    /// `""`, `"clock"` or `"text:<message>"`.
+    attract: Option<String>,
+    look: Option<String>,
+    glow: Option<String>,
 }
 
 /// Wire format for `POST /api/wake`.
@@ -191,9 +195,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // --- JSON API ----------------------------------------------------------
     let c = ctx.clone();
     server.route("/api/status", Method::Get, move |req| {
+        // The settings' part first (never both locks at once).
+        let looks = {
+            let set = c.settings.lock().unwrap();
+            looks_json(&set)
+        };
         let json = {
             let s = c.status.lock().unwrap();
-            status_json(&s)
+            status_json(&s, &looks)
         };
         req.json(&json)
     })?;
@@ -330,6 +339,27 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 }
             }
             next.attract_set = v;
+        }
+        if let Some(v) = patch.attract {
+            if !crate::nvs_config::valid_attract(&v) {
+                return req.bad_request(&format!(
+                    "attract must be \"\" (the playlist), \"clock\" or \"text:<message>\" (at most {} characters, one line)",
+                    crate::nvs_config::ATTRACT_MAX - 5
+                ));
+            }
+            next.attract = v;
+        }
+        if let Some(v) = patch.look {
+            let Some(look) = opendmd_core::look::Look::from_name(&v) else {
+                return req.bad_request("look must be colour, amber, red, green, blue or white");
+            };
+            next.look = look;
+        }
+        if let Some(v) = patch.glow {
+            let Some(glow) = opendmd_core::look::GlowLevel::from_name(&v) else {
+                return req.bad_request("glow must be off, short or long");
+            };
+            next.glow = glow;
         }
         if next.dwell_max < next.dwell_min {
             return req.bad_request("dwell_max must be >= dwell_min");
@@ -495,8 +525,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
-        if !play.path.starts_with('/') || files::card_path(config::SD_MOUNT, &play.path).is_none() {
-            return req.bad_request("path must be card-absolute and stay on the card");
+        // A virtual file (`@clock`, `@text?msg=…`) is drawn, not read; one
+        // this build does not know is a 415 from the engine.
+        let virtual_file = opendmd_core::synth::is_virtual(&play.path);
+        if !virtual_file
+            && (!play.path.starts_with('/')
+                || files::card_path(config::SD_MOUNT, &play.path).is_none())
+        {
+            return req.bad_request("path must be card-absolute and stay on the card, or a live item (@clock, @text?msg=…)");
         }
         let (tx, rx) = mpsc::channel();
         if c.cmd
@@ -1276,7 +1312,7 @@ fn applied_json(a: &Applied) -> String {
 /// moment this is built, and `now_playing.elapsed_ms` the file's position at
 /// that same moment — the pair a browser needs to put its preview in step
 /// with the panel, correcting for its own request latency the NTP way.
-fn status_json(s: &Status) -> String {
+fn status_json(s: &Status, looks: &str) -> String {
     let t = s.epoch.elapsed();
     let www = crate::www::info();
     format!(
@@ -1289,7 +1325,8 @@ fn status_json(s: &Status) -> String {
             r#""sd":{{"mounted":{},"capacity_bytes":{},"error":{},"attempts":{},{}}},"reset_reason":{},"reset_note":{},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
-            r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{}}}"#
+            r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{},"#,
+            r#"{}}}"#
         ),
         json_string(s.version),
         json_string(crate::state::FLASH_VARIANT),
@@ -1342,6 +1379,28 @@ fn status_json(s: &Status) -> String {
         opt_json(s.rule_until.as_deref()),
         crate::cache_builder::status_json(s.entries, crate::cache::peek()),
         crate::follow::status_json(),
+        looks,
+    )
+}
+
+/// The end of the status object: `"look","glow","glow_held","attract_live"`
+/// (see the API table), from the settings and the main loop's flags.
+fn looks_json(set: &Settings) -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let live = crate::state::ATTRACT_LIVE
+        .load(Relaxed)
+        .then(|| crate::nvs_config::attract_path(&set.attract))
+        .flatten();
+    format!(
+        r#""look":"{}","glow":"{}","glow_held":{},"attract_live":{}"#,
+        set.look.name(),
+        set.glow.name(),
+        if crate::state::GLOW_HELD.load(Relaxed) {
+            opendmd_core::look::GLOW_BYTES
+        } else {
+            0
+        },
+        opt_json(live.as_deref())
     )
 }
 
@@ -1358,7 +1417,8 @@ fn settings_json(s: &Settings) -> String {
             r#"{{"wifi_ssid":{},"wifi_pass_set":{},"brightness":{},"#,
             r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
-            r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{}}}"#
+            r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
+            r#""look":"{}","glow":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -1378,6 +1438,9 @@ fn settings_json(s: &Settings) -> String {
         json_string(&s.follow_host),
         !s.follow_code.is_empty(),
         opt_json(s.attract_set.as_deref()),
+        json_string(&s.attract),
+        s.look.name(),
+        s.glow.name(),
     )
 }
 

@@ -65,6 +65,37 @@ fn local_tm() -> Option<esp_idf_sys::tm> {
     ok.then_some(tm)
 }
 
+/// The local time for the live clock (`@clock`, `opendmd_core::synth`,
+/// installed at boot with `synth::set_wall_clock`); `None` before the
+/// first sync, which the clock shows as `--:--`. Called on the main task at
+/// most once a second while a clock plays: `gettimeofday` + `localtime_r`.
+pub fn wall_now() -> Option<opendmd_core::synth::WallTime> {
+    // SAFETY: `timeval` is plain old data; a null zone is allowed.
+    let mut tv: esp_idf_sys::timeval = unsafe { std::mem::zeroed() };
+    if unsafe { esp_idf_sys::gettimeofday(&mut tv, std::ptr::null_mut()) } != 0 {
+        return None;
+    }
+    let now = tv.tv_sec;
+    if now < VALID_AFTER {
+        return None;
+    }
+    // SAFETY: as in `local_tm`.
+    let mut tm: esp_idf_sys::tm = unsafe { std::mem::zeroed() };
+    if unsafe { esp_idf_sys::localtime_r(&now, &mut tm).is_null() } {
+        return None;
+    }
+    Some(opendmd_core::synth::WallTime {
+        year: (tm.tm_year + 1900).clamp(0, 9999) as u16,
+        month: (tm.tm_mon + 1) as u8,
+        day: tm.tm_mday as u8,
+        weekday: if tm.tm_wday == 0 { 7 } else { tm.tm_wday as u8 },
+        hour: tm.tm_hour as u8,
+        minute: tm.tm_min as u8,
+        second: tm.tm_sec.min(59) as u8,
+        millis: (tv.tv_usec / 1000).clamp(0, 999) as u16,
+    })
+}
+
 /// Local weekday and minute, for the schedule; `None` before the first sync.
 pub fn local_now() -> Option<LocalTime> {
     local_tm().map(|tm| LocalTime::from_tm(tm.tm_wday, tm.tm_hour, tm.tm_min))

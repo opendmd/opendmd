@@ -242,13 +242,18 @@ fn main() -> Result<()> {
         card_mounted_checks(&mut settings, &mut nvs_config);
     }
     panel.set_brightness(settings.brightness);
+    panel.set_display(settings.look, settings.glow);
     clock::set_timezone(&settings.tz, &settings.tz_name);
+    // The live clock (`@clock`) reads local time from here.
+    opendmd_core::synth::set_wall_clock(Some(clock::wall_now));
     let mut sched = Scheduling::new(&settings.schedule);
     // Follow RePlayOS: the overlay and the sequence (`follow.rs`).
     let mut runner = follow::Runner::default();
     log::info!(
-        "settings: brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, tz='{}' ({}), schedule {} rule(s){}, host='{}', wifi={}",
+        "settings: brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, tz='{}' ({}), schedule {} rule(s){}, host='{}', wifi={}",
         settings.brightness,
+        settings.look.name(),
+        settings.glow.name(),
         settings.dwell_min,
         settings.dwell_max,
         settings.shuffle,
@@ -300,6 +305,9 @@ fn main() -> Result<()> {
     // The file on screen is a prepared copy (the cache builder may borrow
     // its headroom while it plays).
     let mut current_prepared = false;
+    // Glow steps taken between frames since the last frame: counted into
+    // the next frame's `blit` phase if it is late (`frametime`).
+    let mut glow_us: u32 = 0;
 
     // --- Shared state, the HTTP server, and the network worker ------------
     let status = Arc::new(Mutex::new(Status::new(
@@ -509,7 +517,10 @@ fn main() -> Result<()> {
                     );
                     let needs_reindex = eff_next.platforms != eff_now.platforms
                         || eff_next.set != eff_now.set
-                        || eff_next.shuffle != eff_now.shuffle;
+                        || eff_next.shuffle != eff_now.shuffle
+                        // Attract shows the clock or a text instead now.
+                        || (runner.mode() == follow::Mode::Attract
+                            && next.attract != settings.attract);
                     let tz_changed = next.tz != settings.tz || next.tz_name != settings.tz_name;
 
                     match nvs_config.save(&next) {
@@ -525,7 +536,22 @@ fn main() -> Result<()> {
                             if !sched.off() {
                                 panel.set_brightness(sched.brightness(&settings));
                             }
-                            if let Some(e) = engine.as_mut() {
+                            // The tint and the glow: the panel repainted
+                            // at once if what it shows no longer matches
+                            // (a dark panel is repainted when it lights).
+                            if panel.set_display(settings.look, settings.glow) && !sched.off() {
+                                let shown = match engine.as_mut() {
+                                    Some(e) => e.display_mut(&mut canvas),
+                                    None => &mut canvas,
+                                };
+                                shown.dirty_mut().mark_all();
+                                panel.blit(shown);
+                            }
+                            state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
+                            // (Attract's clock or text plays for as long as
+                            // attract lasts: not the playlist's dwell.)
+                            let live = state::ATTRACT_LIVE.load(Ordering::Relaxed);
+                            if let Some(e) = engine.as_mut().filter(|_| !live) {
                                 e.set_dwell(dwell_policy(&settings));
                                 e.set_transition(settings.transition);
                                 // Night mode with the builder newly allowed:
@@ -548,14 +574,17 @@ fn main() -> Result<()> {
                                 );
                             }
                             log::info!(
-                                "config applied (reindex={needs_reindex}): brightness={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}",
+                                "config applied (reindex={needs_reindex}): brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}'",
                                 settings.brightness,
+                                settings.look.name(),
+                                settings.glow.name(),
                                 settings.dwell_min,
                                 settings.dwell_max,
                                 settings.shuffle,
                                 settings.platforms,
                                 settings.set,
-                                settings.transition
+                                settings.transition,
+                                settings.attract
                             );
                             let outcome = if needs_reindex {
                                 // A current `.idx` for the new set/filter is
@@ -818,6 +847,10 @@ fn main() -> Result<()> {
         // 2. No engine (boot, or a reindex that failed): try to build one.
         let Some(eng) = engine.as_mut() else {
             fresh = true;
+            // Nothing plays: finish any fade on the picture left up, then
+            // let the glow's copy go.
+            panel.glow_tick(&canvas);
+            panel.glow_settle();
             cache_builder::publish(
                 cache_builder::Pace::Stop(cache_builder::Reason::NoPlaylist),
                 settings.auto_prepare,
@@ -956,6 +989,10 @@ fn main() -> Result<()> {
                 transitioning,
             } => {
                 // The composited picture while a transition runs.
+                if is_new {
+                    // The glow's copy may fit now if it did not before.
+                    panel.glow_retry();
+                }
                 let blit_start = Instant::now();
                 let blit_px = panel.blit(eng.display_mut(&mut canvas));
                 let blit_us = us(blit_start.elapsed());
@@ -1032,8 +1069,11 @@ fn main() -> Result<()> {
                 if is_new {
                     new_file = Some(playing);
                 }
+                let glow_between = std::mem::take(&mut glow_us);
+                // A dot fading (glow): wake for its next step.
+                let glow_wait = panel.glow_wait().map(|w| w.max(Duration::from_millis(1)));
                 match next_frame_at.checked_sub(now) {
-                    Some(remaining) => remaining,
+                    Some(remaining) => glow_wait.map_or(remaining, |w| remaining.min(w)),
                     None if now <= deadline => config::CATCHUP_SLEEP,
                     None => {
                         // Already late. This is the acceptance metric: count it
@@ -1049,7 +1089,8 @@ fn main() -> Result<()> {
                             open: pre_open + open_us,
                             read: pre_read + read_us,
                             decode: tick_us.saturating_sub(open_us + read_us),
-                            blit: blit_us,
+                            // Glow steps between frames count as blit.
+                            blit: blit_us + glow_between,
                             transitioning,
                         };
                         misses.record(phases.cause(), late);
@@ -1058,7 +1099,11 @@ fn main() -> Result<()> {
                 }
             }
             TickOutcome::Idle if off => config::OFF_SLEEP,
-            TickOutcome::Idle => config::IDLE_SLEEP,
+            TickOutcome::Idle => {
+                // Between frames: the glow's next step, if one is due.
+                glow_us += panel.glow_tick(eng.display(&canvas));
+                config::IDLE_SLEEP
+            }
             TickOutcome::Exhausted => {
                 log::error!(
                     "playlist exhausted — nothing opened. Reshuffling in {}s",
@@ -1070,6 +1115,17 @@ fn main() -> Result<()> {
         };
 
         let judged = judged.unwrap_or_else(Instant::now);
+
+        // Nothing moving (paused, or dark): once the fade is over the
+        // glow's 12 KB goes back (the builder works at full speed now).
+        if off || eng.is_paused() {
+            panel.glow_settle();
+        }
+        // And whenever the heap runs low: the network side comes first.
+        if panel.glow_yield(eng.display(&canvas)) {
+            log::info!("glow: heap low ({} B free), its copy given back", free_heap());
+        }
+        state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
 
         // The cache builder's pace for what the panel is doing now.
         cache_builder::publish(
@@ -1120,7 +1176,7 @@ fn main() -> Result<()> {
         if last_heartbeat.elapsed() >= config::HEARTBEAT_INTERVAL {
             last_heartbeat = Instant::now();
             heartbeat(
-                &panel,
+                &mut panel,
                 &status,
                 started,
                 &floor,
@@ -1152,9 +1208,18 @@ fn follow_todo(
         return;
     }
     if runner.context().is_none() && !was_context {
-        let eff = runner.overlay(sched.effective(settings));
+        let base = sched.effective(settings);
         let playing = status.lock().unwrap().manifest.clone();
-        if engine.is_some() && files::same_card_path(&eff.manifest_path(), &playing) {
+        // (The live item shown is always the one `attract` names: a
+        // change to it is a config change, which rebuilds.)
+        let live_now = state::ATTRACT_LIVE.load(Ordering::Relaxed);
+        let same = match attract_live(runner, &base) {
+            Some(_) => live_now,
+            None => {
+                !live_now && files::same_card_path(&runner.overlay(base).manifest_path(), &playing)
+            }
+        };
+        if engine.is_some() && same {
             return;
         }
     }
@@ -1192,6 +1257,15 @@ fn replay(
             }
         }
     }
+    if let Some(live) = attract_live(runner, &base) {
+        match rebuild_live(engine, &live, &base, status, canvas) {
+            Ok(a) => return Ok(a),
+            Err(e) => {
+                log::warn!("follow: attract {live} will not play ({e}); the playlist instead");
+                runner.attract_failed();
+            }
+        }
+    }
     let eff = runner.overlay(base.clone());
     let outcome = rebuild(engine, &eff, force, status, canvas);
     if outcome.is_err() && eff.set != base.set {
@@ -1203,6 +1277,64 @@ fn replay(
         return rebuild(engine, &base, force, status, canvas);
     }
     outcome
+}
+
+/// What Follow RePlayOS's attract mode shows instead of a playlist, if the
+/// `attract` setting names a live item (`clock`, `text:<message>`) and
+/// attract is what the runner is in.
+fn attract_live(runner: &follow::Runner, settings: &Settings) -> Option<String> {
+    (runner.mode() == follow::Mode::Attract && !runner.attract_is_broken())
+        .then(|| nvs_config::attract_path(&settings.attract))
+        .flatten()
+}
+
+/// A playlist of one path, held as the path: the attract mode's live item.
+struct OneEntry(String);
+
+impl Catalog for OneEntry {
+    fn len(&self) -> usize {
+        1
+    }
+
+    fn entry(&mut self, _i: usize) -> std::io::Result<opendmd_core::manifest::Entry> {
+        Ok(opendmd_core::manifest::Entry::from_path(&self.0))
+    }
+}
+
+/// An engine over one virtual file (`@clock`, `@text?msg=…`), played for as
+/// long as attract lasts: a playlist of that one path, no card involved, no
+/// dwell.
+fn rebuild_live(
+    engine: &mut Option<Engine>,
+    path: &str,
+    settings: &Settings,
+    status: &Mutex<Status>,
+    canvas: &mut Canvas,
+) -> Result<Applied, String> {
+    cache_builder::publish(
+        cache_builder::Pace::Stop(cache_builder::Reason::Reindex),
+        settings.auto_prepare,
+    );
+    retire(engine, canvas);
+    let catalog = OneEntry(path.to_string());
+    let mut e = engine_over(Box::new(catalog), &Overrides::default(), settings, 1);
+    e.set_dwell(DwellPolicy {
+        min: Duration::MAX,
+        max: Duration::MAX,
+        min_loops: u32::MAX,
+    });
+    *engine = Some(e);
+    log::info!("follow: attract shows {path}, heap {} B free", free_heap());
+    let mut s = status.lock().unwrap();
+    // `manifest` stays the playlist attract would otherwise play (what the
+    // web app offers new GIFs to); the live item is noted beside it.
+    s.manifest = settings.manifest_path();
+    state::ATTRACT_LIVE.store(true, Ordering::Relaxed);
+    s.entries = 1;
+    s.overrides = 0;
+    s.hidden = 0;
+    s.index_state = "ready";
+    Ok(Applied::unchanged(1))
 }
 
 /// Rebuild the engine over a Follow RePlayOS context index — built (and
@@ -1223,6 +1355,7 @@ fn rebuild_context(
     {
         let mut s = status.lock().unwrap();
         s.manifest = ctx.manifest.clone();
+        state::ATTRACT_LIVE.store(false, Ordering::Relaxed);
         s.index_state = "building";
     }
     let started = Instant::now();
@@ -1458,6 +1591,7 @@ fn apply_schedule(
     let playing = status.lock().unwrap().manifest.clone();
     if engine.is_some()
         && runner.mode() != follow::Mode::Game
+        && attract_live(runner, &eff).is_none()
         && !files::same_card_path(&eff.manifest_path(), &playing)
     {
         log::info!("schedule: playlist {} -> {}", playing, eff.manifest_path());
@@ -1850,6 +1984,7 @@ fn rebuild(
     {
         let mut s = status.lock().unwrap();
         s.manifest = path.clone();
+        state::ATTRACT_LIVE.store(false, Ordering::Relaxed);
         s.index_state = "building";
     }
     let outcome = build_and_report(engine, settings, &path, force);
@@ -2122,7 +2257,7 @@ fn reboot_to_apply() -> ! {
 
 #[allow(clippy::too_many_arguments)]
 fn heartbeat(
-    panel: &Panel,
+    panel: &mut Panel,
     status: &Arc<Mutex<Status>>,
     started: u64,
     floor: &frametime::Floor,
@@ -2144,7 +2279,7 @@ fn heartbeat(
     log::info!(
         "heartbeat: heap {free} B free (floor {sampled_min} B{}, idf-min {min_free} B), refresh {refresh} Hz, \
          {started} GIFs started, {deadline_misses} deadline misses (worst {worst_lateness_ms} ms; {}), \
-         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}{}",
+         transitions cut {}, streams aborted {}, main stack {} B unused, wifi {wifi} {ip}, {schedule}{}{}{}{}{}{}",
         floor.heartbeat(),
         misses.heartbeat(),
         TRANSITIONS_CUT.load(Ordering::Relaxed),
@@ -2154,6 +2289,7 @@ fn heartbeat(
         cache_builder::heartbeat(entries, cache::peek()),
         sdhealth::heartbeat(),
         logring::summary(),
-        probe::period_summary()
+        probe::period_summary(),
+        panel.glow_summary()
     );
 }

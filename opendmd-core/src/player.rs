@@ -624,6 +624,19 @@ impl<R: Read + io::Seek> FrameSource<R> {
         })
     }
 
+    /// Loop a virtual file in place ([`SynthSource::rewind`](crate::synth::SynthSource::rewind)):
+    /// true if this is one (nothing reopened, nothing allocated), false for
+    /// a GIF, which the caller rewinds and reopens.
+    pub fn rewind_virtual(&mut self) -> bool {
+        match &mut self.dec {
+            Dec::Synth(s) => {
+                s.rewind();
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// `"slim"` (gifslim), `"gif"` (the `gif` crate) or `"synth"`, for logs
     /// and tools.
     pub fn kind(&self) -> &'static str {

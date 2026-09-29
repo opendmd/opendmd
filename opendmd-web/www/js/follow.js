@@ -38,17 +38,18 @@ export function followCard() {
   async function playlists() {
     const cur = app.config?.attract_set ?? null;
     const lists = await app.playlists().catch(() => []);
-    clear(attract, h('option', { value: '*' }, 'The current playlist'),
+    clear(attract, h('option', { value: '*' }, 'The current playlist'), h('option', { value: '@' }, 'The clock'),
       lists.map((p) => h('option', { value: p.value }, p.label)));
     if (cur != null && ![...attract.options].some((o) => o.value === cur)) attract.append(h('option', { value: cur }, cur || 'All files'));
-    attract.value = cur ?? '*';
+    attract.value = app.config?.attract == 'clock' ? '@' : cur ?? '*';
   }
   playlists();
   on('config', (cfg) => { on_.checked = !!cfg.follow; if (document.activeElement !== host) host.value = cfg.follow_host ?? ''; setPh(); playlists(); });
   on('status', (s) => { state.textContent = followLine(s) ?? 'Not following.'; });
 
   async function save() {
-    const patch = { follow: on_.checked, follow_host: host.value.trim(), attract_set: attract.value === '*' ? null : attract.value };
+    const a = attract.value;
+    const patch = { follow: on_.checked, follow_host: host.value.trim(), attract_set: a == '*' || a == '@' ? null : a, attract: a == '@' ? 'clock' : '' };
     if (code.value) patch.follow_code = code.value;
     if (patch.follow && !patch.follow_host) { toast('enter the RePlayOS box’s address first', 'bad'); return; }
     try {

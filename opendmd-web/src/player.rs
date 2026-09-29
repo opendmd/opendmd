@@ -36,9 +36,10 @@ use opendmd_core::canvas::{Canvas, HEIGHT, WIDTH};
 use opendmd_core::compositor::Transition;
 use opendmd_core::engine::{Catalog, DwellPolicy, Engine, ReadSeek, Source, TickOutcome};
 
+use opendmd_core::look::{GlowLevel, Look as Tint};
 use opendmd_core::manifest::Entry;
 use opendmd_core::scheduler::{Mode, Scheduler};
-use opendmd_render::{LedRenderer, MIN_LED_SCALE};
+use opendmd_render::{LedRenderer, PanelModel, MIN_LED_SCALE};
 use std::io::{self, Cursor};
 use std::rc::Rc;
 use std::time::Duration;
@@ -205,6 +206,11 @@ pub struct Player {
     mode: RenderMode,
     renderer: Option<LedRenderer>,
     look: Look,
+    /// The panel's tint and glow (the device's `look` and `glow`), applied
+    /// to the picture before it is rendered.
+    model: PanelModel,
+    /// The clock of the last tick: what the glow steps by.
+    now: Duration,
     buffer: Vec<u32>,
     rgba: Vec<u8>,
 }
@@ -229,6 +235,8 @@ impl Player {
             mode: RenderMode::Flat,
             renderer: None,
             look,
+            model: PanelModel::new(Tint::Colour, GlowLevel::Off),
+            now: Duration::ZERO,
             buffer: vec![0; WIDTH * scale * HEIGHT * scale],
             rgba: vec![255; WIDTH * scale * HEIGHT * scale * 4],
         };
@@ -305,6 +313,14 @@ impl Player {
         self.path.clear();
         self.canvas = Canvas::new();
         self.shown = false;
+        self.model.reset();
+        self.draw();
+    }
+
+    /// The panel's tint and phosphor glow, as the device's config has them
+    /// (see `opendmd_core::look`); redrawn at once.
+    pub fn set_display(&mut self, look: Tint, glow: GlowLevel) {
+        self.model.set(look, glow);
         self.draw();
     }
 
@@ -441,6 +457,17 @@ impl Player {
         Some(drift)
     }
 
+    /// Nothing new from the engine, but a dot is still fading: draw the
+    /// glow's next step.
+    fn fade(&mut self) -> Tick {
+        if self.model.is_animating() {
+            self.draw();
+            Tick::Frame
+        } else {
+            Tick::Idle
+        }
+    }
+
     /// Synced: seek to where the panel is now. Draws when a frame changed.
     fn follow(&mut self, now: Duration) -> Result<Tick, String> {
         let (Some(sync), Some(bytes)) = (self.sync.as_mut(), self.bytes.as_ref()) else {
@@ -470,7 +497,7 @@ impl Player {
                     self.frame_delay_ms = ms_of(seek.delay);
                     self.shown_ms = ms_of(now);
                 } else if !stepped {
-                    return Ok(Tick::Idle);
+                    return Ok(self.fade());
                 }
                 self.draw();
                 Ok(Tick::Frame)
@@ -488,11 +515,12 @@ impl Player {
     /// [`Player::rgba`]. In step with the panel ([`Player::sync_to`]) this
     /// is a seek instead.
     pub fn tick(&mut self, now: Duration) -> Result<Tick, String> {
+        self.now = now;
         if self.sync.is_some() {
             return self.follow(now);
         }
         let Some(engine) = self.engine.as_mut() else {
-            return Ok(Tick::Idle);
+            return Ok(self.fade());
         };
         match engine.tick(now, &mut self.canvas) {
             Ok(TickOutcome::Frame {
@@ -511,7 +539,7 @@ impl Player {
                     Tick::Frame
                 })
             }
-            Ok(TickOutcome::Idle) => Ok(Tick::Idle),
+            Ok(TickOutcome::Idle) => Ok(self.fade()),
             Ok(TickOutcome::Exhausted) => {
                 let path = std::mem::take(&mut self.path);
                 self.engine = None;
@@ -528,6 +556,7 @@ impl Player {
             Some(e) => e.display(&self.canvas),
             None => &self.canvas,
         };
+        let shown = self.model.present(shown, self.now);
         match (self.mode, self.renderer.as_mut()) {
             (RenderMode::Led, Some(r)) => r.render(shown, &mut self.buffer),
             _ => paint_flat(shown, self.scale, &mut self.buffer),

@@ -446,6 +446,14 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
                 return Ok(None);
             }
             dirs += walk_bucket(&parents, hi as u8, config::CACHE_PACE_SLEEP, |path| {
+                // A bucket is walked whole, so the slice can outgrow `cap`;
+                // growing it doubles the block (24 KB for a 3,072-key slice),
+                // which aborted the board beside the builder's encoder
+                // (2026-09-29: `memory allocation of 24576 bytes failed` in
+                // this push). Fallibly: no room fails the count, which is
+                // asked again later, instead of the device.
+                keys.try_reserve(1)
+                    .map_err(|_| anyhow::anyhow!("no heap to grow the count's key slice"))?;
                 keys.push(layout::prepared_key(path));
                 Ok(())
             })?;
