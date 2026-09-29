@@ -90,6 +90,9 @@ export async function mount(el) {
   } });
   const autoBox = h('div', { hidden: true, style: 'margin-top:10px' }, autoLine, h('label', always, 'also while playing (slower)'));
 
+  // Start-up: its own module and size line (js/boot.js), loaded here.
+  const boot = h('div.card', { id: 'st-boot-card' });
+  import('./boot.js').then((m) => m.bootCard(boot));
   const time = timeCard();
   const sched = scheduleCard();
   const follow = followCard();
@@ -111,7 +114,7 @@ export async function mount(el) {
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-trans-preview', onclick: previewTrans }, 'Preview'),
         h('button.pri', { id: 'st-save-trans', onclick: () => save(['transition', 'transition_ms']) }, 'Save transition')),
       pvBox),
-    time.el, sched.el, follow.el,
+    boot, time.el, sched.el, follow.el,
     h('div.card', { id: 'pc' }, h('h2', 'Playback cache'),
       h('p.cap', 'Prepared copies play with less memory and start faster. Originals stay as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),

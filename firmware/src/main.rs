@@ -1,9 +1,11 @@
 //! OpenDMD firmware — phase 3a: a networked player.
 //!
-//! Boot -> HUB75 panel up -> mount the microSD -> read settings from NVS ->
-//! build a seekable index over the manifest -> start the network worker ->
-//! run `opendmd_core::engine::Engine`, pushing every frame to two chained
-//! 64x32 HUB75 P4 panels (128x32) over the mrcodetastic DMA driver.
+//! Boot -> HUB75 panel up -> settings from NVS -> the boot task (`boot.rs`,
+//! CPU0: the microSD and a seekable index over the manifest, the HTTP server,
+//! the web app, then the network worker) while this task plays the start-up
+//! show (`show.rs`) -> the handover -> run `opendmd_core::engine::Engine`,
+//! pushing every frame to two chained 64x32 HUB75 P4 panels (128x32) over the
+//! mrcodetastic DMA driver.
 //!
 //! Neither the manifest nor its index is held in RAM. One streaming pass over
 //! the card's 450 KB / 10,162-line `filelist.txt` writes a `u32` byte offset
@@ -16,7 +18,8 @@
 //!
 //! | task | core | what it does |
 //! |---|---|---|
-//! | main | CPU1 | panel, SD, engine, this loop. Never touches WiFi or a socket. |
+//! | main | CPU1 | panel, engine, this loop, the start-up show and the status card. Never touches WiFi or a socket; the card only after the handover. |
+//! | `boot` | CPU0 | until the handover: the card's mounts and the playlist index, the httpd, the web app, then the network worker |
 //! | `net-worker` | CPU0 | WiFi (connect, reconnect, AP fallback), mDNS, starts the httpd |
 //! | `httpd` | CPU0 | every HTTP handler; the only task allowed to block |
 //! | (net-worker) | CPU0 | also Follow RePlayOS's polls and context index builds (`follow.rs`) |
@@ -33,6 +36,7 @@
 //! the worst lateness seen, and the sampled heap floor. If serving files costs
 //! the panel anything, those are where it shows.
 
+mod boot;
 mod cache;
 mod cache_builder;
 mod chan;
@@ -53,6 +57,7 @@ mod probe;
 mod sched;
 mod sd;
 mod sdhealth;
+mod show;
 mod state;
 mod stream;
 mod wifi;
@@ -82,6 +87,7 @@ use crate::http::{Ctx, NetCommand};
 use crate::nvs_config::{Config, Settings};
 use crate::panel::{Panel, PanelConfig};
 use crate::sd::{SdBus, SdCard, SdSource};
+use crate::show::{Screen, CARD_FAILING};
 use crate::state::{
     free_heap, largest_free_block, Applied, Command, IndexSource, PlayError, Status,
 };
@@ -100,6 +106,11 @@ static REBOOT_PENDING: AtomicBool = AtomicBool::new(false);
 /// playlist change) transitions in from the picture on the panel rather than
 /// cutting in. The first engine at boot has nothing to transition from.
 static FRAME_SHOWN: AtomicBool = AtomicBool::new(false);
+/// The boot task has handed the card over (`boot.rs`): until then the main
+/// task does not touch the card at all — every rebuild, set check and
+/// manifest install answers [`CARD_NOT_READY`], as they did with no card.
+static CARD_READY: AtomicBool = AtomicBool::new(false);
+const CARD_NOT_READY: &str = "the card is not ready";
 /// Transitions refused by [`transition_gate`] since boot (heartbeat).
 static TRANSITIONS_CUT: AtomicU32 = AtomicU32::new(0);
 
@@ -162,11 +173,6 @@ fn main() -> Result<()> {
         panel.bench();
     }
 
-    // The web app: the www pack in flash, mapped and CRC-checked once here
-    // (`www.rs`). No card involved, so the UI and the setup flow work without
-    // one; a bad pack is logged and reported, never fatal.
-    www::init();
-
     // GPIO 2 (onboard LED) is deliberately untouched — see hardware/PINOUT.md.
     //
     // The GPIO peripherals are typed (`Gpio18` and friends), so the numbers in
@@ -176,21 +182,15 @@ fn main() -> Result<()> {
     let mosi = expect_pin(AnyOutputPin::from(pins.gpio23), config::SD_MOSI, "SD MOSI");
     let miso = expect_pin(AnyIOPin::from(pins.gpio19), config::SD_MISO, "SD MISO");
     let cs = expect_pin(AnyOutputPin::from(pins.gpio5), config::SD_CS, "SD CS");
-    let mut bus = SdBus::new(peripherals.spi3, sck, mosi, miso, cs);
+    let bus = SdBus::new(peripherals.spi3, sck, mosi, miso, cs);
     let reset_reason = reset_reason();
     log::info!("reset reason: {reset_reason}");
 
-    // A missing or unreadable card must neither crash-loop the panel nor
-    // leave the device unreachable: a couple of attempts here, then the rest
-    // of the boot — WiFi and the web server included — goes ahead without
-    // it, and the main loop keeps trying (`try_mount`). `card` unmounts on
-    // drop, so it lives to the end.
-    //
-    // The card's records first (`sdhealth`): a card that failed at full
-    // speed mounts at the fallback clock, and a device that has already
-    // restarted `SD_REBOOT_CAP` times for card failure does not mount at
-    // boot at all but remounts every `SD_REMOUNT_INTERVAL`. So the settings'
-    // NVS handle is opened here, before the mount (it used to be just after).
+    // The card's records first (`sdhealth`, before any other task exists):
+    // a card that failed at full speed mounts at the fallback clock, and a
+    // device that has already restarted `SD_REBOOT_CAP` times for card
+    // failure does not mount at boot at all but remounts every
+    // `SD_REMOUNT_INTERVAL`. The mount itself is the boot task's (`boot.rs`).
     let mut nvs_config = Config::new(nvs_partition.clone())?;
     let health = {
         let poweron = matches!(reset_reason, "poweron" | "brownout");
@@ -202,47 +202,15 @@ fn main() -> Result<()> {
         }
         health
     };
-    let mut sd_error = None;
-    let mut card: Option<SdCard> = None;
-    if health.capped {
-        sd_error = Some(sdhealth::capped_error(0, None));
-    } else {
-        for attempt in 1..=config::SD_BOOT_ATTEMPTS {
-            match try_mount(&mut bus, health.speed_khz) {
-                Ok(c) => {
-                    check_card(&c, &health, &nvs_partition);
-                    card = Some(c);
-                    break;
-                }
-                Err(e) => {
-                    sd_error = Some(e);
-                    if attempt < config::SD_BOOT_ATTEMPTS {
-                        thread::sleep(Duration::from_secs(1));
-                    }
-                }
-            }
-        }
-    }
-    if card.is_none() && !health.capped {
-        log::warn!(
-            "microSD: no card yet; starting the network and the web server anyway, and retrying every {} s",
-            config::RETRY_INTERVAL.as_secs()
-        );
-    }
 
     // --- Settings ---------------------------------------------------------
+    // Read before the card now: the show needs them (and the brightness, the
+    // look), and nothing here touches the card. A saved playlist that no
+    // longer opens is found by the boot task and cleared at the handover.
     if nvs_config.seed_credentials_from_build() {
         log::info!("first boot with build-time credentials; they are now in NVS");
     }
     let mut settings = nvs_config.load();
-    // A set whose manifest no longer opens (deleted off-device, another card,
-    // or saved by a firmware that did not check) would leave the board with no
-    // playlist, retrying forever across reboots. Forget it and play the
-    // default instead.
-    // (Only with a card: without one every set "does not open".)
-    if card.is_some() {
-        card_mounted_checks(&mut settings, &mut nvs_config);
-    }
     panel.set_brightness(settings.brightness);
     panel.set_display(settings.look, settings.glow);
     clock::set_timezone(&settings.tz, &settings.tz_name);
@@ -252,7 +220,7 @@ fn main() -> Result<()> {
     // Follow RePlayOS: the overlay and the sequence (`follow.rs`).
     let mut runner = follow::Runner::default();
     log::info!(
-        "settings: brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, tz='{}' ({}), schedule {} rule(s){}, host='{}', wifi={}",
+        "settings: brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, boot_show={}, tz='{}' ({}), schedule {} rule(s){}, host='{}', wifi={}",
         settings.brightness,
         settings.look.name(),
         settings.glow.name(),
@@ -262,6 +230,7 @@ fn main() -> Result<()> {
         settings.platforms,
         settings.set,
         settings.transition,
+        settings.boot_show.name(),
         settings.tz,
         settings.tz_name,
         sched.schedule.rules.len(),
@@ -311,7 +280,7 @@ fn main() -> Result<()> {
     // the next frame's `blit` phase if it is late (`frametime`).
     let mut glow_us: u32 = 0;
 
-    // --- Shared state, the HTTP server, and the network worker ------------
+    // --- Shared state, and the boot task ----------------------------------
     let status = Arc::new(Mutex::new(Status::new(
         VERSION,
         settings.hostname.clone(),
@@ -319,10 +288,6 @@ fn main() -> Result<()> {
     )));
     {
         let mut s = status.lock().unwrap();
-        s.sd_mounted = card.is_some();
-        s.sd_capacity_bytes = card.as_ref().map_or(0, |c| c.capacity_bytes);
-        s.sd_error = sd_error.take();
-        s.sd_attempts = bus.attempts();
         s.reset_reason = reset_reason;
         s.refresh_hz = panel.refresh_rate();
         s.tz_name = tz_label(&settings);
@@ -332,79 +297,65 @@ fn main() -> Result<()> {
     let (net_tx, net_rx) = mpsc::channel::<NetCommand>();
     cache::init(net_tx.clone());
 
-    // The playlist: the manifest and its on-card index, opened (or built) once
-    // and kept open; `Exhausted` reseeds the scheduler rather than re-reading
-    // either. Done before anything network-shaped exists, so that the
-    // in-RAM fallback — the only path that still needs a large block — has a
-    // fresh heap to work with. If the card has no readable manifest the loop
-    // below keeps retrying.
-    let mut engine: Option<Engine> = None;
-    if card.is_some() {
-        let _ = rebuild(
-            &mut engine,
-            &sched.effective(&settings),
-            false,
-            &status,
-            &mut canvas,
-        );
-    }
-    let mut last_mount_try = Instant::now();
-    // No card mounted: how often to try again (a spent restart budget
-    // waits longer, see `sdhealth`), and the remounts made that way.
-    let remount_interval = if health.capped {
-        config::SD_REMOUNT_INTERVAL
-    } else {
-        config::RETRY_INTERVAL
-    };
-    let mut remounts: u32 = 0;
-    // The card failed again with no restart left: the player has stopped.
-    let mut card_dead = false;
-
-    // The HTTP server next, still before the first GIF is decoded: its task
-    // stack and the file-streaming task's are contiguous internal allocations
-    // (`config::HTTP_STACK`, `STREAM_STACK`), and the largest free block
-    // while a GIF is playing can be smaller than that. It is pinned to CPU0
-    // by its own config, so starting it from this task is fine. Held for the
-    // life of the program; dropping it would stop the httpd task.
+    // Logging goes asynchronous first (a ring drained by a CPU0 task,
+    // `logring`): from here on no task waits for the UART — the show's
+    // frames included.
+    logring::start();
     // lwip has to exist before anything can bind a socket. Normally the WiFi
     // driver's construction does this on the worker thread, but the server is
-    // started before that now, and `httpd_start` on a stack that is not up
-    // aborts with "assert failed: tcpip_send_msg_wait_sem ... (Invalid mbox)".
-    // `esp_netif_init` is idempotent, so the worker's later call is a no-op.
-    //
-    // Logging goes asynchronous first (a ring drained by a CPU0 task,
-    // `logring`): from here on no task waits for the UART.
-    logring::start();
+    // started before that (by the boot task), and `httpd_start` on a stack
+    // that is not up aborts with "assert failed: tcpip_send_msg_wait_sem ...
+    // (Invalid mbox)". `esp_netif_init` is idempotent, so the worker's later
+    // call is a no-op.
     // SAFETY: an argument-free IDF initialiser, safe to call more than once.
     esp_idf_sys::esp!(unsafe { esp_idf_sys::esp_netif_init() })?;
 
-    let _server = match http::start(Arc::new(Ctx {
-        status: status.clone(),
-        settings: shared_settings.clone(),
-        cmd: cmd_tx.clone(),
-        net: net_tx,
-    })) {
-        Ok(server) => Some(server),
-        Err(e) => {
-            log::error!("HTTP server failed to start ({e:#}); the player carries on without it");
-            None
-        }
-    };
-
-    // WiFi last and off this core, so it cannot delay first pixels.
-    HEAP_FRESH.store(false, Ordering::Relaxed);
-    net_worker::spawn(net_worker::NetWorker {
-        modem,
-        sysloop,
+    // The boot task (`boot.rs`, CPU0): the card and its playlist index, the
+    // HTTP server, the web app in flash, then WiFi — everything slow
+    // the boot used to do here before the first frame. It hands the card and
+    // the catalog over on `boot_rx`; until then this loop plays the show and
+    // never touches the card (`CARD_READY`).
+    let (boot_tx, boot_rx) = mpsc::channel::<boot::Event>();
+    // Dropped once the card is handed over: the channel's few hundred bytes
+    // are not kept for the life of the run.
+    let mut boot_rx = Some(boot_rx);
+    boot::spawn(boot::BootTask {
+        bus,
+        health,
         nvs: nvs_partition.clone(),
-        ssid: settings.wifi_ssid.clone(),
-        password: settings.wifi_pass.clone(),
-        hostname: settings.hostname.clone(),
-        status: status.clone(),
-        rx: net_rx,
-        settings: shared_settings.clone(),
-        cmd: cmd_tx.clone(),
+        ctx: Arc::new(Ctx {
+            status: status.clone(),
+            settings: shared_settings.clone(),
+            cmd: cmd_tx.clone(),
+            net: net_tx,
+        }),
+        net: net_worker::NetWorker {
+            modem,
+            sysloop,
+            nvs: nvs_partition.clone(),
+            ssid: settings.wifi_ssid.clone(),
+            password: settings.wifi_pass.clone(),
+            hostname: settings.hostname.clone(),
+            status: status.clone(),
+            rx: net_rx,
+            settings: shared_settings.clone(),
+            cmd: cmd_tx.clone(),
+        },
+        tx: boot_tx,
     })?;
+
+    // `card` unmounts on drop, so it lives to the end once handed over.
+    let mut card: Option<SdCard> = None;
+    let mut engine: Option<Engine> = None;
+    // The card failed again with no restart left: the player has stopped.
+    let mut card_dead = false;
+    // The start-up show, then the status card while there is no card (or
+    // nothing to play from it); see `Screen`.
+    let mut screen = Screen::new(settings.boot_show);
+    // A handover waiting for the show's minimum.
+    let mut pending: Option<Box<boot::Handover>> = None;
+    // With the card but no engine: when the playlist was last tried.
+    let mut last_build_try: Option<Instant> = None;
 
     loop {
         // 1. Commands from the HTTP handlers. Non-blocking, and everything that
@@ -492,7 +443,12 @@ fn main() -> Result<()> {
                     }
                     if next.set != settings.set && !next.set.is_empty() {
                         let path = next.manifest_path();
-                        if let Err(e) = File::open(&path) {
+                        let opens = if CARD_READY.load(Ordering::Relaxed) {
+                            File::open(&path).map(drop)
+                        } else {
+                            Err(std::io::Error::other(CARD_NOT_READY))
+                        };
+                        if let Err(e) = opens {
                             log::warn!("config: set '{}' rejected, {path}: {e}", next.set);
                             let _ = reply.send(Err(state::SET_NOT_FOUND.to_string()));
                             continue;
@@ -502,7 +458,10 @@ fn main() -> Result<()> {
                     if let Some(a) = next.attract_set.as_ref().filter(|a| !a.is_empty()) {
                         if next.attract_set != settings.attract_set {
                             let path = nvs_config::manifest_path_for(a);
-                            if nvs_config::is_obsolete_set(a) || File::open(&path).is_err() {
+                            if nvs_config::is_obsolete_set(a)
+                                || !CARD_READY.load(Ordering::Relaxed)
+                                || File::open(&path).is_err()
+                            {
                                 log::warn!("config: attract playlist '{a}' rejected ({path})");
                                 let _ = reply.send(Err(state::SET_NOT_FOUND.to_string()));
                                 continue;
@@ -588,7 +547,13 @@ fn main() -> Result<()> {
                                 settings.transition,
                                 settings.attract
                             );
-                            let outcome = if needs_reindex {
+                            let outcome = if needs_reindex && !CARD_READY.load(Ordering::Relaxed) {
+                                // No card yet: saved, and the playlist the
+                                // card brings is built with it (the
+                                // handover compares, the boot task reads
+                                // the settings when a late card mounts).
+                                Ok(Applied::unchanged(0))
+                            } else if needs_reindex {
                                 // A current `.idx` for the new set/filter is
                                 // reused; anything else is rebuilt.
                                 replay(
@@ -625,6 +590,11 @@ fn main() -> Result<()> {
                     let _ = reply.send(outcome);
                 }
                 Command::InstallManifest { temp, dest, reply } => {
+                    // (Before the handover the card is the boot task's.)
+                    if !CARD_READY.load(Ordering::Relaxed) {
+                        let _ = reply.send(Err(CARD_NOT_READY.to_string()));
+                        continue;
+                    }
                     // The engine may hold `dest` and `dest.idx` open, and FAT
                     // must not have an open file replaced under it — so drop it
                     // first. Then the sidecar rule: the stale `.idx` is deleted
@@ -663,6 +633,10 @@ fn main() -> Result<()> {
                     let _ = reply.send(outcome);
                 }
                 Command::InstallMeta { temp, dest, reply } => {
+                    if !CARD_READY.load(Ordering::Relaxed) {
+                        let _ = reply.send(Err(CARD_NOT_READY.to_string()));
+                        continue;
+                    }
                     // The same sequence as a manifest install: the index
                     // carries the resolved overrides and this file's
                     // fingerprint, so it goes first, and the playlist in
@@ -846,110 +820,157 @@ fn main() -> Result<()> {
             retire(&mut engine, &mut canvas);
         }
 
-        // 2. No engine (boot, or a reindex that failed): try to build one.
+        // The boot task's news: no card for now, or the card and its
+        // playlist — taken over once the show has run its minimum.
+        if let Some(rx) = boot_rx.as_ref().filter(|_| pending.is_none()) {
+            match rx.try_recv() {
+                Ok(boot::Event::NoCard) => screen.no_card(),
+                Ok(boot::Event::Ready(h)) => {
+                    screen.ready();
+                    pending = Some(h);
+                    boot_rx = None;
+                }
+                Err(_) => {}
+            }
+        }
+        if let Some(h) = pending.take_if(|_| screen.may_end()) {
+            let boot::Handover {
+                card: mounted,
+                built,
+                manifest,
+                platforms,
+                index_ms,
+                healed_set,
+            } = *h;
+            card = Some(mounted);
+            CARD_READY.store(true, Ordering::Relaxed);
+            // The saved playlist would not open: forget it (NVS is ours).
+            if healed_set.is_some_and(|set| set == settings.set) {
+                settings.set.clear();
+                if let Err(e) = nvs_config.save(&settings) {
+                    log::error!("clearing the set in NVS failed ({e:#}); the default plays for this boot only");
+                }
+                *shared_settings.lock().unwrap() = settings.clone();
+            }
+            // Still what should play? A schedule rule, Follow RePlayOS or
+            // a filter change since the boot task read the settings means
+            // another playlist: built here, the card being ours now.
+            let eff = runner.overlay(sched.effective(&settings));
+            let same = runner.context().is_none()
+                && attract_live(&runner, &eff).is_none()
+                && files::same_card_path(&eff.manifest_path(), &manifest)
+                && eff.platforms == platforms;
+            let outcome = if same {
+                status.lock().unwrap().manifest = manifest.clone();
+                finish_build(&mut engine, &eff, &manifest, built, index_ms, &status)
+            } else {
+                drop(built);
+                replay(
+                    &mut engine,
+                    &settings,
+                    &sched,
+                    &mut runner,
+                    false,
+                    &status,
+                    &mut canvas,
+                )
+            };
+            if let Err(e) = &outcome {
+                screen.playlist_problem(e);
+            }
+            last_build_try = Some(Instant::now());
+            screen.handed_over(engine.is_some());
+        }
+
+        // 2. No engine: the start-up show or the status card (booting, no
+        //    card, nothing to play on it, a card that failed), and the
+        //    playlist tried again every so often.
         let Some(eng) = engine.as_mut() else {
             fresh = true;
-            // Nothing plays: finish any fade on the picture left up, then
-            // let the glow's copy go.
-            panel.glow_tick(&canvas);
-            panel.glow_settle();
             cache_builder::publish(
                 cache_builder::Pace::Stop(cache_builder::Reason::NoPlaylist),
                 settings.auto_prepare,
             );
             // The card failed with no restart left: nothing plays. One
             // restart once the budget's window has run out.
-            if card_dead {
-                if sdhealth::window_left_ms() == 0 {
-                    log::error!("microSD: the card-failure window has run out; restarting to try the card again");
-                    sdhealth::restart_after_window();
-                    restart_for_card();
-                }
-                if let Ok(mut s) = status.lock() {
-                    s.uptime_secs = epoch.elapsed().as_secs();
-                    s.heap_free = free_heap();
-                }
-                thread::sleep(Duration::from_millis(50));
-                continue;
+            if card_dead && sdhealth::window_left_ms() == 0 {
+                log::error!("microSD: the card-failure window has run out; restarting to try the card again");
+                sdhealth::restart_after_window();
+                restart_for_card();
             }
-            // No card yet: try again every so often, draining commands (and
-            // so answering the API) in between.
-            if card.is_none() {
-                if last_mount_try.elapsed() >= remount_interval {
-                    last_mount_try = Instant::now();
-                    remounts += 1;
-                    if health.capped {
-                        log::warn!(
-                            "microSD: remount {remounts} at {} kHz (the card failed repeatedly; every {} s)",
-                            health.speed_khz,
-                            remount_interval.as_secs()
-                        );
-                    }
-                    let mounted = try_mount(&mut bus, health.speed_khz);
-                    if let Ok(c) = mounted.as_ref() {
-                        check_card(c, &health, &nvs_partition);
-                    }
-                    let mut s = status.lock().unwrap();
-                    s.sd_attempts = bus.attempts();
-                    match mounted {
-                        Ok(c) => {
-                            s.sd_mounted = true;
-                            s.sd_capacity_bytes = c.capacity_bytes;
-                            s.sd_error = None;
-                            drop(s);
-                            card = Some(c);
-                            card_mounted_checks(&mut settings, &mut nvs_config);
-                            *shared_settings.lock().unwrap() = settings.clone();
-                        }
-                        Err(e) if health.capped => {
-                            s.sd_error = Some(sdhealth::capped_error(remounts, Some(&e)))
-                        }
-                        Err(e) => s.sd_error = Some(e),
-                    }
-                }
-                if card.is_none() {
-                    if let Ok(mut s) = status.lock() {
-                        s.uptime_secs = epoch.elapsed().as_secs();
-                        s.heap_free = free_heap();
-                    }
-                    thread::sleep(config::IDLE_SLEEP.max(Duration::from_millis(50)));
-                    continue;
-                }
-            }
-            let eff = sched.effective(&settings);
-            if replay(
-                &mut engine,
-                &settings,
-                &sched,
-                &mut runner,
-                false,
-                &status,
-                &mut canvas,
-            )
-            .is_err()
+            // The card, and nothing playing from it: the playlist again
+            // every `RETRY_INTERVAL` (the status card says why meanwhile).
+            if card.is_some()
+                && !card_dead
+                && last_build_try.is_none_or(|t| t.elapsed() >= config::RETRY_INTERVAL)
             {
-                // A schedule rule's playlist that will not build is set
-                // aside (until the rule changes) and the saved one plays.
-                if eff.set != settings.set {
-                    log::warn!(
-                        "schedule: playlist '{}' will not open; playing the saved one",
-                        eff.set
-                    );
-                    sched.broken_set = Some(eff.set.clone());
-                    sched.publish(&status);
-                    continue;
+                last_build_try = Some(Instant::now());
+                let eff = sched.effective(&settings);
+                match replay(
+                    &mut engine,
+                    &settings,
+                    &sched,
+                    &mut runner,
+                    false,
+                    &status,
+                    &mut canvas,
+                ) {
+                    Ok(_) => {
+                        screen.handed_over(true);
+                        continue;
+                    }
+                    Err(e) => {
+                        screen.playlist_problem(&e);
+                        // A schedule rule's playlist that will not build is
+                        // set aside (until the rule changes) and the saved
+                        // one plays.
+                        if eff.set != settings.set {
+                            log::warn!(
+                                "schedule: playlist '{}' will not open; playing the saved one",
+                                eff.set
+                            );
+                            sched.broken_set = Some(eff.set.clone());
+                            sched.publish(&status);
+                            last_build_try = None;
+                            continue;
+                        }
+                        // The set may have gone missing under us (deleted
+                        // off-device, card swapped): fall back to the default
+                        // at once rather than retrying a manifest that is not
+                        // there.
+                        if heal_missing_set(&mut settings, &mut nvs_config) {
+                            *shared_settings.lock().unwrap() = settings.clone();
+                            last_build_try = None;
+                            continue;
+                        }
+                    }
                 }
-                // The set may have gone missing under us (deleted off-device,
-                // card swapped): fall back to the default at once rather than
-                // retrying a manifest that is not there.
-                if heal_missing_set(&mut settings, &mut nvs_config) {
-                    *shared_settings.lock().unwrap() = settings.clone();
-                    continue;
-                }
-                thread::sleep(config::RETRY_INTERVAL);
             }
+            let wait = if sched.off() {
+                // Night mode "off": the panel stays dark.
+                panel.glow_settle();
+                config::OFF_SLEEP
+            } else {
+                let problem = if card_dead {
+                    Some(CARD_FAILING)
+                } else {
+                    card.is_some().then_some(screen.playlist_note)
+                };
+                let wait = screen.frame(&mut panel, &mut canvas, &status, problem);
+                if screen.drawn() {
+                    FRAME_SHOWN.store(true, Ordering::Relaxed);
+                }
+                wait
+            };
+            if let Ok(mut s) = status.lock() {
+                s.uptime_secs = epoch.elapsed().as_secs();
+                s.heap_free = free_heap();
+            }
+            thread::sleep(wait);
             continue;
         };
+
+        screen.playing();
 
         // 3. One frame. What the loop did since the last sleep ended is
         //    the frame's `other` (less the heartbeat's `log`, and any card
@@ -1352,6 +1373,9 @@ fn rebuild_context(
     status: &Mutex<Status>,
     canvas: &mut Canvas,
 ) -> Result<Applied, String> {
+    if !CARD_READY.load(Ordering::Relaxed) {
+        return Err(CARD_NOT_READY.to_string());
+    }
     cache_builder::publish(
         cache_builder::Pace::Stop(cache_builder::Reason::Reindex),
         settings.auto_prepare,
@@ -1723,27 +1747,11 @@ fn dwell_policy(settings: &Settings) -> DwellPolicy {
     }
 }
 
-/// A fresh engine over the configured manifest's playlist index, shuffled with
-/// a hardware-random seed so two boots do not play the same order, with the
-/// playlist's overrides (its `.meta`) applied.
-fn build_engine(
-    settings: &Settings,
-    path: &str,
-    force: bool,
-) -> Result<(Engine, IndexSource, Overrides)> {
-    let (catalog, overrides, source) = open_catalog(path, &build_filter(settings), force)?;
-    Ok((
-        engine_over(catalog, &overrides, settings, config::NO_REPEAT_WINDOW),
-        source,
-        overrides,
-    ))
-}
-
 /// An engine over `catalog` with the settings' order, dwell and transition,
 /// `overrides` applied, carrying over the picture on the panel if there is
 /// one.
 fn engine_over(
-    catalog: Box<dyn Catalog>,
+    catalog: Box<dyn Catalog + Send>,
     overrides: &Overrides,
     settings: &Settings,
     no_repeat: usize,
@@ -1825,7 +1833,7 @@ fn open_catalog(
     path: &str,
     filter: &Filter,
     force: bool,
-) -> Result<(Box<dyn Catalog>, Overrides, IndexSource)> {
+) -> Result<(Box<dyn Catalog + Send>, Overrides, IndexSource)> {
     let manifest = File::open(path).with_context(|| format!("opening {path}"))?;
     let len = manifest
         .metadata()
@@ -1978,6 +1986,9 @@ fn rebuild(
     status: &Mutex<Status>,
     canvas: &mut Canvas,
 ) -> Result<Applied, String> {
+    if !CARD_READY.load(Ordering::Relaxed) {
+        return Err(CARD_NOT_READY.to_string());
+    }
     // The builder stops for a playlist change (it may be walking this very
     // manifest); the main loop publishes its pace again afterwards.
     cache_builder::publish(
@@ -1992,7 +2003,70 @@ fn rebuild(
         state::ATTRACT_LIVE.store(false, Ordering::Relaxed);
         s.index_state = "building";
     }
-    let outcome = build_and_report(engine, settings, &path, force);
+    let started = Instant::now();
+    let built = open_catalog(&path, &build_filter(settings), force);
+    finish_build(
+        engine,
+        settings,
+        &path,
+        built,
+        started.elapsed().as_millis() as u64,
+        status,
+    )
+}
+
+/// An engine over the catalog `open_catalog` gave for `path` (here, or on
+/// the boot task), reported — the log line, status, the cache's playlist —
+/// or why there is none, for the HTTP caller.
+fn finish_build(
+    engine: &mut Option<Engine>,
+    settings: &Settings,
+    path: &str,
+    built: boot::Built,
+    ms: u64,
+    status: &Mutex<Status>,
+) -> Result<Applied, String> {
+    let outcome = match built {
+        Ok((catalog, ov, source)) => {
+            let built = engine_over(catalog, &ov, settings, config::NO_REPEAT_WINDOW);
+            let entries = built.catalog_len();
+            if entries == 0 {
+                log::error!("{path} matched no entries under the configured filter");
+                Err(format!("{path} matched no entries"))
+            } else {
+                let (hidden, weighted, timed) = ov.summary();
+                log::info!(
+                    "manifest indexed: {path}, {entries} entries, index {} in {ms} ms ({} B {}), \
+                     overrides {} ({hidden} hidden, {weighted} more/less often, {timed} timed), heap {} B free",
+                    source.as_str(),
+                    entries * 4,
+                    if source == IndexSource::InRam { "in RAM" } else { "on card" },
+                    ov.len(),
+                    free_heap()
+                );
+                if hidden >= entries {
+                    log::warn!("{path}: every entry is hidden; nothing will play");
+                }
+                *engine = Some(built);
+                Ok(Applied {
+                    entries,
+                    index: Some(source),
+                    index_ms: ms,
+                    overrides: ov.len(),
+                    hidden,
+                })
+            }
+        }
+        Err(e) => {
+            if e.downcast_ref::<NeedsFreshHeap>().is_some() {
+                log::error!("{path}: {e:#}");
+                REBOOT_PENDING.store(true, Ordering::Relaxed);
+            } else {
+                log::error!("{path} unreadable ({e:#})");
+            }
+            Err(format!("{path}: {e:#}"))
+        }
+    };
     let mut s = status.lock().unwrap();
     // `entries` too, so a status read right after the reply is already right
     // (the frame loop only republishes it after its next frame).
@@ -2006,58 +2080,9 @@ fn rebuild(
     };
     drop(s);
     if outcome.is_ok() {
-        cache::set_playlist(&path, &settings.platforms);
+        cache::set_playlist(path, &settings.platforms);
     }
     outcome
-}
-
-fn build_and_report(
-    engine: &mut Option<Engine>,
-    settings: &Settings,
-    path: &str,
-    force: bool,
-) -> Result<Applied, String> {
-    let started = Instant::now();
-    match build_engine(settings, path, force) {
-        Ok((built, source, ov)) => {
-            let ms = started.elapsed().as_millis() as u64;
-            let entries = built.catalog_len();
-            if entries == 0 {
-                log::error!("{path} matched no entries under the configured filter");
-                return Err(format!("{path} matched no entries"));
-            }
-            let (hidden, weighted, timed) = ov.summary();
-            log::info!(
-                "manifest indexed: {path}, {entries} entries, index {} in {ms} ms ({} B {}), \
-                 overrides {} ({hidden} hidden, {weighted} more/less often, {timed} timed), heap {} B free",
-                source.as_str(),
-                entries * 4,
-                if source == IndexSource::InRam { "in RAM" } else { "on card" },
-                ov.len(),
-                free_heap()
-            );
-            if hidden >= entries {
-                log::warn!("{path}: every entry is hidden; nothing will play");
-            }
-            *engine = Some(built);
-            Ok(Applied {
-                entries,
-                index: Some(source),
-                index_ms: ms,
-                overrides: ov.len(),
-                hidden,
-            })
-        }
-        Err(e) => {
-            if e.downcast_ref::<NeedsFreshHeap>().is_some() {
-                log::error!("{path}: {e:#}");
-                REBOOT_PENDING.store(true, Ordering::Relaxed);
-                return Err(format!("{path}: {e:#}"));
-            }
-            log::error!("{path} unreadable ({e:#})");
-            Err(format!("{path}: {e:#}"))
-        }
-    }
 }
 
 /// Drop the engine, first ending any transition it is running, so the
@@ -2161,20 +2186,38 @@ fn card_failed(card: &SdCard, nvs: &mut Config, status: &Mutex<Status>) {
 }
 
 /// A restart for the card's sake: the cache builder out of its card
-/// write, the log ring out to the console, then `esp_restart`.
+/// write, then [`restart`].
 fn restart_for_card() -> ! {
     cache_builder::quiesce(Duration::from_secs(3));
-    if !logring::flush(config::SD_RESTART_LOG_FLUSH) {
+    restart()
+}
+
+/// Every planned restart ends here: the panel off, the log ring out to the
+/// console, then `esp_restart`.
+///
+/// The panel first because `esp_restart` on the ESP32 resets only the CPUs
+/// (`esp_restart_noos`: WiFi, timers, SPI and UART are reset, I2S and the
+/// GPIO matrix are not). Left alone, I2S1's DMA keeps clocking the last
+/// frame's buffers, then whatever the bootloader and the next app's start-up
+/// write over them, onto the panel through the ~0.8 s to `Panel::new`, OE
+/// included; two `POST /api/reboot`s on the boot-show build were followed by
+/// a brownout reset right after the next app's `cpu_start` (where the
+/// brownout detector is armed). `panel::blank` drives OE high as a GPIO,
+/// which survives that reset, and stops the DMA. Callable from any task.
+pub fn restart() -> ! {
+    panel::blank();
+    log::info!("restarting (panel off)");
+    if !logring::flush(config::RESTART_LOG_FLUSH) {
         log::warn!("log ring not drained before the restart");
     }
     // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.
     unsafe { esp_idf_sys::esp_restart() }
 }
 
-/// What the boot checks on the card once it is mounted: a saved playlist
-/// that no longer opens is forgotten, and an obsolete one is pointed out.
-fn card_mounted_checks(settings: &mut Settings, nvs: &mut Config) {
-    heal_missing_set(settings, nvs);
+/// What the boot checks on a card once it is mounted, besides the saved
+/// playlist (`boot::prepare`): the retired format's files, pointed out once
+/// and never played.
+fn retired_files_checks() {
     // Prepared copies are found per GIF now; a playlist of paths into the
     // retired format's tree from before that is dead weight. Say so once,
     // and never play it.
@@ -2256,8 +2299,7 @@ fn reboot_to_apply() -> ! {
     sdhealth::note_restart();
     cache_builder::quiesce(Duration::from_secs(3));
     thread::sleep(Duration::from_secs(2));
-    // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.
-    unsafe { esp_idf_sys::esp_restart() }
+    restart()
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -140,6 +140,7 @@ struct ConfigPatch {
     attract: Option<String>,
     look: Option<String>,
     glow: Option<String>,
+    boot_show: Option<String>,
 }
 
 /// Wire format for `POST /api/wake`.
@@ -150,15 +151,16 @@ struct WakeRequest {
 
 /// Start the server and register every route.
 ///
-/// Called from the main task before the display loop, *not* from the network
-/// worker, and deliberately so: the httpd task's stack (and the streaming
-/// task's, started here too) is one contiguous internal allocation, and by the
-/// time WiFi has associated the first GIF is already decoding and the largest
-/// free block has fallen below it
-/// (`httpd_start` then fails with `ESP_ERR_HTTPD_TASK`, 0xb008 — measured on
-/// this board). Starting here, right after the index is built, takes the
-/// allocation while the heap is still whole. `core_id` is in the config, so the
-/// server still runs on CPU0 however it was started.
+/// Called by the boot task (`boot.rs`) once the card's playlist is open and
+/// before it hands the card over, *not* from the network worker, and
+/// deliberately so: the httpd task's stack (and the
+/// streaming task's, started here too) is one contiguous internal allocation,
+/// and by the time WiFi has associated the first GIF is already decoding and
+/// the largest free block has fallen below it (`httpd_start` then fails with
+/// `ESP_ERR_HTTPD_TASK`, 0xb008 — measured on this board). Starting here,
+/// before the first GIF, takes the allocation while the heap is still
+/// whole. `core_id` is in the config, so the server runs on CPU0 however it
+/// was started.
 ///
 /// That means the mode is not known yet, so the captive-portal routes are
 /// always registered and read the live WiFi state out of [`Status`] when a
@@ -368,6 +370,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 return req.bad_request("glow must be off, short or long");
             };
             next.glow = glow;
+        }
+        if let Some(v) = patch.boot_show {
+            let Some(len) = opendmd_core::boot::ShowLength::from_name(&v) else {
+                return req.bad_request("boot_show must be off, short or full");
+            };
+            next.boot_show = len;
         }
         if next.dwell_max < next.dwell_min {
             return req.bad_request("dwell_max must be >= dwell_min");
@@ -1099,8 +1107,7 @@ pub fn reboot_after_response() -> ! {
     let t = std::time::Instant::now();
     crate::cache_builder::quiesce(Duration::from_secs(3));
     std::thread::sleep(Duration::from_secs(1).saturating_sub(t.elapsed()));
-    // SAFETY: an argument-free IDF call, declared `-> !` by the bindings.
-    unsafe { esp_idf_sys::esp_restart() }
+    crate::restart()
 }
 
 fn send_setup(req: &mut Req) -> Result<()> {
@@ -1426,7 +1433,7 @@ fn settings_json(s: &Settings) -> String {
             r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
-            r#""look":"{}","glow":"{}"}}"#
+            r#""look":"{}","glow":"{}","boot_show":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -1449,6 +1456,7 @@ fn settings_json(s: &Settings) -> String {
         json_string(&s.attract),
         s.look.name(),
         s.glow.name(),
+        s.boot_show.name(),
     )
 }
 

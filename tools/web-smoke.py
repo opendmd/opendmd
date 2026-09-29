@@ -95,6 +95,13 @@ every view like a person would:
             --look amber) and a wasm Preview on a detached canvas draw the
             same 128x32 pixels (the device pass skips the simulator and
             sending; it does the read-only checks and the look round trip)
+  Start-up  Settings -> Start-up (js/boot.js): #st-boot off/short/full shows
+            the config's boot_show; saved as the other value and back (the
+            device pass too: it restores it); "long", "" and 2 are 400s;
+            Preview lights #st-boot-panel and moves, "No card screen" lights
+            it; on the mock POST /api/play of @boot?len=card&.. plays as
+            "Startup"; the simulator and the page draw that status card
+            identically (settings-boot-laptop.png)
   Web app   GET /api/www {version, bytes, entries, ok} (the version is
             www/version.txt, what the pack's header carries) and the same
             object as `www` in /api/status; PUT /api/www of the built pack
@@ -778,8 +785,8 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
           "settings: #st-glow options off/short/long")
     cfg0 = get_json(base + "/api/config")
     st0 = get_json(base + "/api/status")
-    check(all(k in cfg0 for k in ("attract", "look", "glow")) and list(cfg0)[-3:] == ["attract", "look", "glow"],
-          f"config: attract/look/glow end the object ({list(cfg0)[-4:]})")
+    check(list(cfg0)[-4:] == ["attract", "look", "glow", "boot_show"],
+          f"config: attract/look/glow/boot_show end the object ({list(cfg0)[-5:]})")
     check(list(st0)[-4:] == ["look", "glow", "glow_held", "attract_live"],
           f"status: look/glow/glow_held/attract_live end the object ({list(st0)[-5:]})")
     check(page.input_value("#st-look") == cfg0["look"] and page.input_value("#st-glow") == cfg0["glow"],
@@ -812,6 +819,63 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
     cfg = get_json(base + "/api/config")
     check((cfg["look"], cfg["glow"]) == orig, f"settings: look/glow left as found {orig}")
     no_leaks(page, "settings (look)")
+    goto_view(page, "now")
+
+
+BOOT_CARD = "@boot?len=card&v=0.3.0&ip=192.168.1.69&note=Insert%20a%20microSD%20card"
+
+
+def boot_checks(page: Page, base: str, mock: bool) -> None:
+    """Settings -> Start-up (js/boot.js, imported by the view): the select and
+    its round trip through /api/config (short -> full -> back), boot_show's
+    validation, and the previews of the show and the no-card screen drawn in
+    the page. On the mock, POST /api/play of @boot plays it as "Startup"."""
+    goto_view(page, "settings")
+    page.wait_for_selector("#st-boot", timeout=20000)
+    opts = page.eval_on_selector_all("#st-boot option", "els => els.map(e => [e.value, e.textContent])")
+    check(opts == [["off", "Off"], ["short", "Short"], ["full", "Full"]], f"settings: #st-boot options {opts}")
+    cfg0 = get_json(base + "/api/config")
+    orig = cfg0.get("boot_show")
+    check(orig in ("off", "short", "full") and page.input_value("#st-boot") == orig,
+          f"settings: #st-boot shows the config's boot_show ({orig})")
+    for bad in ({"boot_show": "long"}, {"boot_show": ""}, {"boot_show": 2}):
+        check(put_status(base, bad) == 400, f"settings: {bad} refused (400)")
+    check(get_json(base + "/api/config")["boot_show"] == orig, "settings: a refused boot_show changed nothing")
+    other = "full" if orig != "full" else "short"
+    try:
+        page.select_option("#st-boot", other)
+        page.click("#st-save-boot")
+        deadline = time.time() + 10
+        while get_json(base + "/api/config")["boot_show"] != other and time.time() < deadline:
+            time.sleep(0.2)
+        check(get_json(base + "/api/config")["boot_show"] == other, f"settings: Save start-up -> boot_show {other}")
+        page.select_option("#st-boot", orig)
+        page.click("#st-save-boot")
+        deadline = time.time() + 10
+        while get_json(base + "/api/config")["boot_show"] != orig and time.time() < deadline:
+            time.sleep(0.2)
+    finally:
+        if get_json(base + "/api/config")["boot_show"] != orig:
+            put_json(base + "/api/config", {"boot_show": orig})
+    check(get_json(base + "/api/config")["boot_show"] == orig, f"settings: boot_show left as found ({orig})")
+    # The show, previewed: lit, and moving (two samples differ).
+    page.select_option("#st-boot", "short")
+    page.click("#st-boot-preview")
+    wait_lit(page, "#st-boot-panel", "settings: start-up preview")
+    a = canvas_sum(page, "#st-boot-panel")
+    page.wait_for_timeout(300)
+    check(a != canvas_sum(page, "#st-boot-panel"), "settings: the start-up preview moves")
+    page.click("#st-boot-nocard")
+    wait_lit(page, "#st-boot-panel", "settings: no-card screen preview")
+    page.select_option("#st-boot", orig)
+    shot(page, "settings-boot", "laptop")
+    if mock:
+        post_json(base + "/api/play", {"path": BOOT_CARD})
+        st = get_json(base + "/api/status")
+        check(st["now_playing"]["path"] == BOOT_CARD and st["now_playing"]["title"] == "Startup",
+              f"play: @boot plays as 'Startup' ({st['now_playing']['path']}, {st['now_playing']['title']})")
+        post_json(base + "/api/skip", {})
+    no_leaks(page, "settings (start-up)")
     goto_view(page, "now")
 
 
@@ -977,12 +1041,12 @@ def effects_checks(page: Page, base: str, mock: bool) -> None:
     no_leaks(page, "playlists (effects)")
 
 
-def sim_png(root: Path, look: str, out: Path) -> bytes:
+def sim_png(root: Path, look: str, out: Path, path: str = "@text?msg=OpenDMD&scroll=0") -> bytes:
     """The desktop simulator's canvas for `@text?msg=OpenDMD&scroll=0` after
     `look`, as 128x32 RGBA bytes."""
     from PIL import Image
     (root / "gifs").mkdir(parents=True, exist_ok=True)
-    cmd = ["cargo", "run", "--release", "-q", "--", "--root", str(root), "--play", "@text?msg=OpenDMD&scroll=0",
+    cmd = ["cargo", "run", "--release", "-q", "--", "--root", str(root), "--play", path,
            "--screenshot-canvas", str(out)]
     if look != "colour":
         cmd += ["--look", look]
@@ -1009,6 +1073,13 @@ def sim_checks(page: Page) -> None:
         diff = sum(1 for i in range(0, len(want), 4) if want[i:i + 3] != got[i:i + 3])
         check(len(got) == len(want) and diff == 0 and lit_n > 50,
               f"sim: @text?msg=OpenDMD&scroll=0 ({look}) identical in the page and the simulator ({diff} of 4096 px differ, {lit_n} lit)")
+    # The start-up show's status card: the same core in both.
+    want = sim_png(tmp / "root", "colour", tmp / "sim-boot.png", BOOT_CARD)
+    got = bytes(page.evaluate(WASM_CANVAS, [BOOT_CARD, ""]))
+    lit_n = sum(1 for i in range(0, len(want), 4) if max(want[i:i + 3]) > 60)
+    diff = sum(1 for i in range(0, len(want), 4) if want[i:i + 3] != got[i:i + 3])
+    check(len(got) == len(want) and diff == 0 and lit_n > 200,
+          f"sim: the start-up status card identical in the page and the simulator ({diff} of 4096 px differ, {lit_n} lit)")
 
 
 def mock_pass(browser) -> None:
@@ -1054,6 +1125,7 @@ def mock_pass(browser) -> None:
         check(bool(drifts) and max(abs(d) for d in drifts) < 60, "now: every sync on the mock under 60 ms")
         transition_checks(page, base)
         look_checks(page, base, True)
+        boot_checks(page, base, True)
         live_checks(page, base, True)
         effects_checks(page, base, True)
         sim_checks(page)
@@ -2199,6 +2271,7 @@ def device_pass(browser, device: str) -> None:
         # saved), the Playback card's round trip back to the original values,
         # and the Live list and preview (nothing sent to the panel).
         look_checks(page, base, False)
+        boot_checks(page, base, False)
         live_checks(page, base, False)
         effects_checks(page, base, False)
         studio_device(page)

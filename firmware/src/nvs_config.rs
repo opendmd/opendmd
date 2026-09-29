@@ -22,6 +22,7 @@
 
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
 use log::warn;
+use opendmd_core::boot::ShowLength;
 use opendmd_core::compositor::Transition;
 use opendmd_core::look::{GlowLevel, Look};
 
@@ -50,6 +51,7 @@ const KEY_ATTRACT_SET: &str = "attract_set";
 const KEY_LOOK: &str = "look";
 const KEY_GLOW: &str = "glow";
 const KEY_ATTRACT: &str = "attract";
+const KEY_BOOT_SHOW: &str = "boot_show";
 /// The longest `attract` value (`text:` and the message).
 pub const ATTRACT_MAX: usize = 205;
 /// Internal, not a setting: the CID serial of the card that failed at full
@@ -163,6 +165,9 @@ pub struct Settings {
     pub look: Look,
     /// Phosphor glow; off by default (it holds 12 KB while lit).
     pub glow: GlowLevel,
+    /// The start-up show: `off`, `short` (the default) or `full`
+    /// (`opendmd_core::boot`, `show.rs`).
+    pub boot_show: ShowLength,
 }
 
 /// Is `v` an `attract` value `PUT /api/config` may store?
@@ -219,6 +224,7 @@ impl Default for Settings {
             attract: String::new(),
             look: Look::Colour,
             glow: GlowLevel::Off,
+            boot_show: ShowLength::Short,
         }
     }
 }
@@ -354,6 +360,10 @@ impl Config {
                 .get_string(KEY_GLOW)
                 .and_then(|s| GlowLevel::from_name(&s))
                 .unwrap_or(d.glow),
+            boot_show: self
+                .get_string(KEY_BOOT_SHOW)
+                .and_then(|s| ShowLength::from_name(&s))
+                .unwrap_or(d.boot_show),
         }
     }
 
@@ -386,6 +396,7 @@ impl Config {
         self.nvs.set_str(KEY_ATTRACT, &s.attract)?;
         self.nvs.set_str(KEY_LOOK, s.look.name())?;
         self.nvs.set_str(KEY_GLOW, s.glow.name())?;
+        self.nvs.set_str(KEY_BOOT_SHOW, s.boot_show.name())?;
         Ok(())
     }
 

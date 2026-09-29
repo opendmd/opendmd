@@ -9,13 +9,24 @@
 #include <string.h>
 
 #include "ESP32-HUB75-MatrixPanel-I2S-DMA.h"
+#include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_private/startup_internal.h"
+#include "esp_rom_gpio.h"
+#include "esp_system.h"
+#include "hal/gpio_ll.h"
+#include "soc/gpio_sig_map.h"
+#include "soc/soc_caps.h"
 
 static const char *TAG = "hub75_shim";
 
 static MatrixPanel_I2S_DMA *s_panel = nullptr;
 static uint16_t s_width = 0;
 static uint16_t s_height = 0;
+/* OE's GPIO, for the shutdown handler (-1 before hub75_init). */
+static int8_t s_oe = -1;
+/* hub75_blank has stopped the DMA (it is not restarted). */
+static bool s_stopped = false;
 /* hub75_draw_span's fast path is usable (see hub75_init). */
 static bool s_fast = false;
 /*
@@ -49,6 +60,69 @@ struct FbTag {
     friend type get(FbTag);
 };
 template struct Rob<FbTag, &MatrixPanel_I2S_DMA::fb>;
+
+/*
+ * OE driven high as a plain GPIO: GPIO_OUT's bit first, output enable, the
+ * pad's matrix output back from I2S to GPIO_OUT, the pad's IO_MUX function
+ * last (a no-op once the library has selected it; after a power-on the pad
+ * is MTDO). Register writes only, no locks: fine in the early init hook,
+ * from a shutdown handler, or on either core.
+ */
+static bool oe_pin_ok(uint32_t pin) {
+    return pin < SOC_GPIO_PIN_COUNT && ((SOC_GPIO_VALID_OUTPUT_GPIO_MASK >> pin) & 1U) != 0;
+}
+
+static void oe_high(uint32_t pin) {
+    gpio_ll_set_level(&GPIO, pin, 1);
+    gpio_ll_output_enable(&GPIO, pin);
+    esp_rom_gpio_connect_out_signal(pin, SIG_GPIO_OUT_IDX, false, false);
+    esp_rom_gpio_pad_select_gpio(pin);
+}
+
+extern "C" void hub75_blank(int8_t oe_gpio) {
+    if (oe_gpio >= 0 && oe_pin_ok(oe_gpio)) {
+        oe_high(static_cast<uint32_t>(oe_gpio));
+    }
+    if (s_panel != nullptr && !s_stopped) {
+        s_stopped = true;
+        // Black buffers (memory only), then the I2S DMA stopped.
+        s_panel->stopDMAoutput();
+    }
+}
+
+static void blank_on_shutdown(void) {
+    hub75_blank(s_oe);
+}
+
+/*
+ * OE's pin, kept for the next boot's early hook: RTC slow memory survives
+ * the CPU-only resets (esp_restart, a panic, the watchdogs) that leave I2S1
+ * and the GPIO matrix running. The pin in the low byte, a tag above it.
+ */
+#define OE_RTC_TAG 0x0E0E7500u
+RTC_NOINIT_ATTR static uint32_t s_rtc_oe;
+
+/*
+ * The earliest the app can blank the panel: IDF's CORE start-up stage,
+ * priority 2 (after the eFuse check, before the heap, and before the
+ * brownout detector is armed at 104), on CPU0 — about 0.75 s after the
+ * reset, the bootloader's time. After a CPU-only reset that did not go
+ * through hub75_blank (a panic, a watchdog), the last run's I2S DMA is still
+ * clocking its buffers — being overwritten by the bootloader and this
+ * start-up — onto the panel, OE included; this stops that at OE. After a
+ * power-on, brownout or EN reset the pads were reset (GPIO15 is an input with
+ * its pull-up: OE off) and this only drives what the pull-up already does.
+ * It is not a strapping concern: MTDO is latched only at a chip reset, and
+ * high is its default (ROM boot log on); VDD_SDIO is MTDI (GPIO12, G2).
+ */
+ESP_SYSTEM_INIT_FN(hub75_early_blank, CORE, BIT(0), 2) {
+    const uint32_t v = s_rtc_oe;
+    const uint32_t pin = v & 0xFFu;
+    if ((v & ~0xFFu) == OE_RTC_TAG && oe_pin_ok(pin)) {
+        oe_high(pin);
+    }
+    return ESP_OK;
+}
 
 extern "C" bool hub75_init(const hub75_cfg_t *cfg) {
     if (s_panel != nullptr) {
@@ -108,6 +182,11 @@ extern "C" bool hub75_init(const hub75_cfg_t *cfg) {
     s_fast = false;
 #endif
     ESP_LOGI(TAG, "span writer: %s", s_fast ? "direct" : "per-pixel fallback");
+    s_oe = cfg->oe;
+    s_rtc_oe = cfg->oe >= 0 ? OE_RTC_TAG | static_cast<uint8_t>(cfg->oe) : 0;
+    if (esp_register_shutdown_handler(blank_on_shutdown) != ESP_OK) {
+        ESP_LOGW(TAG, "no shutdown handler: a restart outside hub75_blank leaves the panel lit");
+    }
     s_panel->clearScreen();
     ESP_LOGI(TAG, "panel %ux%u up, refresh %d Hz", s_width, s_height,
              s_panel->calculated_refresh_rate);

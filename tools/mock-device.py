@@ -153,7 +153,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   set).
   `POST /api/play` also takes live items: `@clock[?style=..&seconds=1&date=1&
   h12=1&color=RRGGBB]` and `@text?msg=..[&speed=ms&font=..&color=..&scroll=0]`
-  and the effects `@fx:tunnel|rotozoom|starfield|wire[?..]` (plus
+  and the effects `@fx:tunnel|rotozoom|starfield|wire[?..]` and the start-up
+  show `@boot[?len=short|full|card&v=&ip=&ap=&note=]` (10 ms frames over
+  1300 / 5600 ms, or the status card's 16384 ms loop; titled "Startup") (plus
   `@power-on`, `@card:`); any other `@...` is a 415. They read no file:
   a clock is 1000 ms frames, a text is frames of `speed` ms looping over
   (text width + 129) frames (one 1000 ms frame for a `scroll=0` text that
@@ -302,9 +304,15 @@ DEFAULT_SETTINGS = {
     "attract": "",              # "" (the playlist), "clock" or "text:<message>"
     "look": "colour",           # colour / amber / red / green / blue / white
     "glow": "off",              # off / short / long
+    "boot_show": "short",       # the start-up show: off / short / full
 }
 LOOKS = ("colour", "amber", "red", "green", "blue", "white")
 GLOWS = ("off", "short", "long")
+BOOT_SHOWS = ("off", "short", "full")
+# The start-up show as a live item (`@boot[?len=short|full|card&..]`,
+# opendmd_core::boot): the show once (1300 / 5600 ms) or one loop of the
+# status card (16384 ms), in 10 ms frames.
+BOOT_MS = {"short": 1300, "full": 5600, "card": 16384}
 ATTRACT_MAX = 205               # "text:" + at most 200 characters
 GLOW_HELD_BYTES = 12288         # the glow's 12 KB copy
 
@@ -334,6 +342,7 @@ FIELD_TYPES = {
     "attract": "str",
     "look": "str",
     "glow": "str",
+    "boot_show": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
     # alongside "set" (see h_config_put).
 }
@@ -626,7 +635,7 @@ def live_parse(path: str):
     head, _, query = path.partition("?")
     if head.startswith("@fx:") and head[4:] in FX:
         pass
-    elif head not in ("@clock", "@text"):
+    elif head not in ("@clock", "@text", "@boot"):
         return None
     params: dict[str, str] = {}
     for part in query.split("&") if query else []:
@@ -649,6 +658,9 @@ def live_delays(kind: str, params: dict[str, str]) -> list[int]:
     `scroll=0` text that fits in 128 px is one 1000 ms frame."""
     if kind == "clock":
         return [1000]
+    if kind == "boot":
+        length = params.get("len", "short")
+        return [10] * (BOOT_MS.get(length, BOOT_MS["short"]) // 10)
     if kind.startswith("fx:"):
         # A loop: the base frames x 20 / delay / speed (1..4, default 2);
         # 10 ms frames (fps=100, the default), 20 (50) or 40 (25).
@@ -694,6 +706,8 @@ def virtual_title(path: str) -> str | None:
     if live is not None:
         if live[0].startswith("fx:"):
             return FX[live[0][3:]][0]
+        if live[0] == "boot":
+            return "Startup"
         return "Clock" if live[0] == "clock" else live[1]["msg"]
     return None
 
@@ -2314,6 +2328,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "attract": s["attract"],
                     "look": s["look"],
                     "glow": s["glow"],
+                    "boot_show": s["boot_show"],
                 }
             self.send_json(200, obj)
 
@@ -2414,6 +2429,9 @@ def make_handler(ctx: Context, quiet: bool):
                             return
                     if field == "glow" and v not in GLOWS:
                         self.send_error_json(400, "glow must be off, short or long")
+                        return
+                    if field == "boot_show" and v not in BOOT_SHOWS:
+                        self.send_error_json(400, "boot_show must be off, short or full")
                         return
                     if field == "attract" and not (
                         v in ("", "clock")

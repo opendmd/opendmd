@@ -76,6 +76,22 @@ typedef struct {
  */
 bool hub75_init(const hub75_cfg_t *cfg);
 
+/*
+ * Turn the panel off, from any task on either core, before or after
+ * hub75_init: OE (active low) is taken off the I2S matrix and driven high as
+ * a plain GPIO output, then (once the panel is up) the I2S DMA is stopped.
+ * For a restart: esp_restart on the ESP32 resets only the CPUs, not I2S nor
+ * the GPIO matrix, so without this the I2S DMA goes on clocking out whatever
+ * the bootloader and the next app's start-up leave in its buffers, with OE
+ * wherever those bits say. OE driven high stays high through that reset
+ * (GPIO_OUT and the matrix are not reset) until the next hub75_init routes it
+ * back to I2S. Also registered with esp_register_shutdown_handler by
+ * hub75_init, so any esp_restart blanks the panel; the resets that skip
+ * esp_restart's handlers (a panic, a watchdog) are covered at the next boot
+ * by an early start-up hook (hub75_shim.cpp). No heap; idempotent.
+ */
+void hub75_blank(int8_t oe_gpio);
+
 /* 0..255. No-op before hub75_init. */
 void hub75_set_brightness(uint8_t brightness);
 
