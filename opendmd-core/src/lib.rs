@@ -7,6 +7,7 @@
 //! dependency of `gif`) and `log`.
 
 pub mod canvas;
+pub mod chan;
 pub mod compositor;
 pub mod engine;
 pub mod filter;

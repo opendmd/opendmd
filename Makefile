@@ -228,7 +228,7 @@ FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 
 # Every build ends with tools/check-stack-realign.py: a function that moves
 # its stack pointer without MOVSP (an over-aligned local) corrupts its
-# caller's registers now and then (firmware/src/chan.rs). The diag build's
+# caller's registers now and then (opendmd-core/src/chan.rs). The diag build's
 # std-channel torture test keeps one such function on purpose.
 #
 # Delete the generated sdkconfig when the bench flavour (normal/diag) changes.
