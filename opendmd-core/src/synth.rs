@@ -34,6 +34,10 @@
 //! loop restarts in place ([`SynthSource::rewind`]: no reopen, no
 //! allocation). Their state is a few words and the message's bytes inside
 //! the decoder; nothing is allocated per frame.
+//!
+//! **Effects.** `@fx:<name>[?options]` ([`crate::fx`]) is drawn every
+//! frame the same way: frame `n` of the effect's loop at `t = n × delay`,
+//! the loop's length what dwell counts, rewound in place.
 
 use crate::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
 use crate::text::{self, Font};
@@ -237,7 +241,7 @@ fn url_decode(b: &[u8]) -> String {
 }
 
 /// `RRGGBB` (a `#` in front, `%23` in a URL, is allowed).
-fn parse_colour(s: &[u8]) -> Option<Rgb> {
+pub(crate) fn parse_colour(s: &[u8]) -> Option<Rgb> {
     let s = s.strip_prefix(b"%23").or(s.strip_prefix(b"#")).unwrap_or(s);
     let mut v = 0u32;
     for &b in s {
@@ -358,6 +362,7 @@ pub fn title(path: &str) -> Option<String> {
         Spec::Card { title, .. } => Some(title),
         Spec::Clock(_) => Some("Clock".to_string()),
         Spec::Text(t) => Some(t.msg.iter().map(|&b| b as char).collect()),
+        Spec::Fx(f) => Some(f.title().to_string()),
     }
 }
 
@@ -380,11 +385,15 @@ enum Spec {
     Card { title: String, subtitle: String },
     Clock(ClockSpec),
     Text(TextSpec),
+    Fx(crate::fx::Fx),
 }
 
 fn parse(path: &str) -> Option<Spec> {
     if path == POWER_ON {
         return Some(Spec::PowerOn);
+    }
+    if path.starts_with(crate::fx::PREFIX) {
+        return crate::fx::Fx::parse(path).map(Spec::Fx);
     }
     let (base, query) = path.split_once('?').unwrap_or((path, ""));
     if base == CLOCK {
@@ -461,7 +470,7 @@ impl<R: Read> SynthSource<R> {
     }
 
     pub fn next_frame(&mut self, canvas: &mut Canvas) -> io::Result<Option<Duration>> {
-        let delay = match &self.spec {
+        let delay = match &mut self.spec {
             Spec::PowerOn => {
                 if self.frames >= u64::from(POWER_ON_FRAMES) {
                     self.table = None;
@@ -496,6 +505,12 @@ impl<R: Read> SynthSource<R> {
                 now.map_or(HOLD, |t| {
                     Duration::from_millis((1000 - u64::from(t.millis.min(999))).max(20))
                 })
+            }
+            Spec::Fx(f) => {
+                if self.frames >= u64::from(f.loop_frames()) {
+                    return Ok(None);
+                }
+                f.frame(f.delay() * self.frames as u32, canvas)
             }
             Spec::Text(t) => {
                 let width = text::text_width(t.font, bytes_str(&t.msg), t.scale) as i32;
@@ -1158,6 +1173,99 @@ mod tests {
         assert_eq!(starts[1].1, "@text?msg=Hi");
         assert_eq!(starts[1].2, "Hi");
         assert_eq!(starts[1].0, 3000);
+    }
+
+    #[test]
+    fn effects_play_by_the_loop_under_dwell() {
+        use crate::engine::{DwellPolicy, Engine, FileCatalog, Source, TickOutcome};
+        use crate::filter::Filter;
+        use crate::scheduler::{Mode, Scheduler};
+        struct NoFiles;
+        impl Source for NoFiles {
+            fn open(&self, p: &str) -> io::Result<Box<dyn crate::engine::ReadSeek>> {
+                Err(io::Error::new(io::ErrorKind::NotFound, p.to_string()))
+            }
+        }
+        assert_eq!(title("@fx:tunnel?cycle=1").as_deref(), Some("Tunnel"));
+        assert_eq!(title("@fx:nope"), None);
+        let m = "@fx:starfield?fps=50\n@fx:wire?speed=4\n".to_string();
+        let cat = FileCatalog::build(Cursor::new(m.into_bytes()), &Filter::new()).unwrap();
+        let dwell = DwellPolicy {
+            min: Duration::from_secs(3),
+            max: Duration::from_secs(30),
+            min_loops: 1,
+        };
+        let mut e = Engine::new(
+            Box::new(cat),
+            Scheduler::new(2, Mode::Sequential, 0),
+            dwell,
+            Box::new(NoFiles),
+        );
+        let mut canvas = Canvas::new();
+        let mut t = Duration::ZERO;
+        let mut starts = Vec::new();
+        let mut frames = 0;
+        while t < Duration::from_secs(8) {
+            if let TickOutcome::Frame {
+                playing, started, ..
+            } = e.tick(t, &mut canvas).unwrap()
+            {
+                frames += 1;
+                if started {
+                    starts.push((t.as_millis(), playing.path));
+                }
+            }
+            t += Duration::from_millis(5);
+        }
+        // The starfield's loop is 2.4 s: two loops cover the 3 s minimum.
+        assert_eq!(starts[0], (0, "@fx:starfield?fps=50".to_string()));
+        assert_eq!(starts[1], (4800, "@fx:wire?speed=4".to_string()));
+        // 4.8 s at 50 frames a second, then 3.2 s at the default 100.
+        assert!((555..=565).contains(&frames), "{frames}");
+    }
+
+    #[test]
+    fn effects_keep_their_schedule_when_ticked_late() {
+        use crate::engine::{DwellPolicy, Engine, FileCatalog, Source, TickOutcome};
+        use crate::filter::Filter;
+        use crate::scheduler::{Mode, Scheduler};
+        struct NoFiles;
+        impl Source for NoFiles {
+            fn open(&self, p: &str) -> io::Result<Box<dyn crate::engine::ReadSeek>> {
+                Err(io::Error::new(io::ErrorKind::NotFound, p.to_string()))
+            }
+        }
+        // Ticked every 3 ms, a 10 ms frame is seen 0-2 ms late: timed from
+        // the tick it would come every 12 ms (83 fps); it keeps 100.
+        for (path, want) in [("@fx:starfield", 600), ("@text?msg=Hi&speed=20", 286)] {
+            let cat = FileCatalog::build(
+                Cursor::new(format!("{path}\n").into_bytes()),
+                &Filter::new(),
+            )
+            .unwrap();
+            let dwell = DwellPolicy {
+                min: Duration::from_secs(60),
+                max: Duration::from_secs(60),
+                min_loops: 1,
+            };
+            let mut e = Engine::new(
+                Box::new(cat),
+                Scheduler::new(1, Mode::Sequential, 0),
+                dwell,
+                Box::new(NoFiles),
+            );
+            let mut canvas = Canvas::new();
+            let mut frames = 0;
+            for i in 0..2000u64 {
+                if let TickOutcome::Frame { .. } =
+                    e.tick(Duration::from_millis(i * 3), &mut canvas).unwrap()
+                {
+                    frames += 1;
+                }
+            }
+            // (A text, not an effect, is still timed from the tick: 21 ms.)
+            assert!((want - 5..=want + 5).contains(&frames), "{path}: {frames}");
+        }
     }
 
     #[test]

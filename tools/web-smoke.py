@@ -81,6 +81,11 @@ every view like a person would:
             playing), the Now preview wears amber (every bright pixel r > g
             > b; now-amber-laptop.png), back to Full colour / Off; the bad
             look/glow/attract values are 400s
+  Effects   Library -> Effects: the four effects preview and move, each with
+            its options form, an option changes the row's path
+            (library-effects-laptop.png); on the mock: Send to panel, POST
+            /api/play of each (415 for an unknown one), attract "fx:..."
+            validated, an @fx: playlist line survives a save and a reload
   Live      Library -> Live: five rows (four clocks and a scrolling text),
             the text form, a preview, the text row following #live-msg;
             Send to panel of the clock and the text (title, frame advancing;
@@ -830,7 +835,8 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
     goto_view(page, "library")
     page.wait_for_selector("#lib-cat option[value='@']", state="attached", timeout=30000)
     opts = page.eval_on_selector_all("#lib-cat option", "els => els.map(e => [e.value, e.textContent])")
-    check(opts[-1] == ["@", "Live"] and len(opts) > 1, f"library: the categories end with Live ({opts[-2:]})")
+    check(opts[-2:] == [["@", "Live"], ["@fx", "Effects"]] and len(opts) > 2,
+          f"library: the categories end with Live, Effects ({opts[-2:]})")
     open_live(page)
     rows = live_rows(page)
     want = ["@clock", "@clock?seconds=1", "@clock?date=1", "@clock?style=small&seconds=1&date=1", "@text?msg=OpenDMD"]
@@ -884,6 +890,91 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
     except urllib.error.HTTPError as e:
         check(e.code == 415, f"api: POST /api/play @nonsense -> {e.code} (415)")
     expected.remove("/api/play")
+
+
+FX_ROWS = ["@fx:tunnel", "@fx:rotozoom", "@fx:starfield", "@fx:wire"]
+
+
+def effects_checks(page: Page, base: str, mock: bool) -> None:
+    """Library -> Effects: the four effects, each previewing (lit, frames
+    moving) with its options form; an option changes the row's path; on the
+    mock, Send to panel, POST /api/play of each, and an effect's playlist
+    line surviving a save and a reload."""
+    goto_view(page, "library")
+    page.wait_for_selector("#lib-cat option[value='@fx']", state="attached", timeout=30000)
+    page.fill("#lib-search", "")
+    page.select_option("#lib-cat", "@fx")
+    page.wait_for_function("document.querySelectorAll('#lib-list .vrow:not([hidden])').length == 4", timeout=10000)
+    rows = live_rows(page)
+    check(rows == FX_ROWS, f"library: Effects lists the four effects ({rows})")
+    titles = page.eval_on_selector_all("#lib-list .vrow:not([hidden]) .t", "els => els.map(e => e.textContent)")
+    check(titles == ["Tunnel", "Rotozoom", "Starfield", "Wireframe"], f"library: effect titles {titles}")
+    for i, path in enumerate(FX_ROWS):
+        page.click(f"#lib-list .vrow:not([hidden]) >> nth={i}")
+        name = path[4:]
+        page.wait_for_selector(f"#lib-live #fx-{name}", timeout=5000)
+        wait_lit(page, "#lib-panel", f"library effect {name}")
+        a = canvas_sum(page, "#lib-panel")
+        page.wait_for_timeout(400)
+        b = canvas_sum(page, "#lib-panel")
+        keys = page.eval_on_selector_all(f"#fx-{name} select", "els => els.map(e => e.dataset.key)")
+        check(a != b and len(keys) >= 4, f"library: {name} previews and moves ({a} -> {b}); options {keys}")
+    page.click("#lib-list .vrow:not([hidden]) >> nth=0")
+    page.select_option("#fx-tunnel select[data-key='palette']", "fire")
+    page.select_option("#fx-tunnel select[data-key='cycle']", "0")
+    want = "@fx:tunnel?palette=fire&cycle=0"
+    page.wait_for_function(f"[...document.querySelectorAll('#lib-list .vrow')].some(e => e.dataset.path === {json.dumps(want)})", timeout=5000)
+    check(live_rows(page)[0] == want, f"library: the tunnel row follows its options ({live_rows(page)[0]})")
+    wait_lit(page, "#lib-panel", "library effect tunnel (fire)")
+    no_leaks(page, "library (effects)")
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "library-effects", "laptop")
+    if not mock:
+        return
+    expected.append("/api/play")
+    page.wait_for_function(f"document.querySelector('#lib-play').title === {json.dumps(want)}", timeout=10000)
+    page.click("#lib-play")
+    cur = wait_playing(base, want)
+    np_ = get_json(base + "/api/status")["now_playing"]
+    check(cur == want and np_["title"] == "Tunnel", f"library: Send to panel -> now_playing {cur} '{np_['title']}'")
+    f0 = np_["frame"]
+    time.sleep(0.5)
+    f1 = get_json(base + "/api/status")["now_playing"]["frame"]
+    check(f1 > f0 + 25, f"status: {want} frame advances at 100 fps ({f0} -> {f1})")
+    for path in FX_ROWS + ["@fx:starfield?warp=0&density=3&fps=25", "@fx:wire?shape=tesseract&color=ff8800&fps=50"]:
+        try:
+            r = post_json(base + "/api/play", {"path": path})
+            check(r.get("ok") is True and r.get("path") == path, f"api: POST /api/play {path} -> 200")
+        except urllib.error.HTTPError as e:
+            check(False, f"api: POST /api/play {path} -> {e.code}")
+    try:
+        post_json(base + "/api/play", {"path": "@fx:nonsense"})
+        check(False, "api: POST /api/play @fx:nonsense refused")
+    except urllib.error.HTTPError as e:
+        check(e.code == 415, f"api: POST /api/play @fx:nonsense -> {e.code} (415)")
+    expected.remove("/api/play")
+    for bad, code in (({"attract": "fx:nonsense"}, 400), ({"attract": "fx:tunnel?palette=fire"}, 200)):
+        check(put_status(base, bad) == code, f"settings: {bad} -> {code}")
+    put_json(base + "/api/config", {"attract": ""})
+    # A playlist with the effect's line: saved, read back, reloaded.
+    page.click(f"#lib-list .vrow:not([hidden])[data-path='{want}'] input[type=checkbox]")
+    page.click("#lib-to-set")
+    page.wait_for_selector("#view-sets.on")
+    page.evaluate(f"async () => {{ const {{ app }} = await import('./js/state.js'); const {{ emit }} = await import('./js/util.js'); app.draft.paths = [{json.dumps(want)}]; app.draft.name = ''; emit('draft'); }}")
+    page.fill("#set-name", "fxsmoke")
+    page.click("#set-save")
+    page.wait_for_selector("#sets-list [data-path='/sets/fxsmoke.txt']", timeout=30000)
+    with urllib.request.urlopen(base + "/sets/fxsmoke.txt", timeout=30) as resp:
+        text = resp.read().decode()
+    check(text.splitlines() == [want], f"playlists: sets/fxsmoke.txt holds the effect's line ({text!r})")
+    page.evaluate("async () => { const { app } = await import('./js/state.js'); app.selection.clear(); }")
+    page.reload()
+    goto_view(page, "sets")
+    page.click("#sets-list [data-path='/sets/fxsmoke.txt'] button.sm >> nth=0")
+    page.wait_for_selector(f"#set-entries .vrow[data-path='{want}']", timeout=20000)
+    t = page.inner_text(f"#set-entries .vrow[data-path='{want}'] .t")
+    check(t.startswith("Tunnel"), f"playlists: after a reload the playlist lists the effect as '{t}'")
+    no_leaks(page, "playlists (effects)")
 
 
 def sim_png(root: Path, look: str, out: Path) -> bytes:
@@ -964,6 +1055,7 @@ def mock_pass(browser) -> None:
         transition_checks(page, base)
         look_checks(page, base, True)
         live_checks(page, base, True)
+        effects_checks(page, base, True)
         sim_checks(page)
         post_json(base + "/api/skip", {})
         before = page.inner_text("#now-path")
@@ -2108,6 +2200,7 @@ def device_pass(browser, device: str) -> None:
         # and the Live list and preview (nothing sent to the panel).
         look_checks(page, base, False)
         live_checks(page, base, False)
+        effects_checks(page, base, False)
         studio_device(page)
         # The one write: save and delete a set named smoke (never activated).
         n = build_smoke_set(page)

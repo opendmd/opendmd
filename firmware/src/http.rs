@@ -136,7 +136,7 @@ struct ConfigPatch {
     /// `null` = the current playlist, else a `set` value.
     #[serde(default, deserialize_with = "double_option")]
     attract_set: Option<Option<String>>,
-    /// `""`, `"clock"` or `"text:<message>"`.
+    /// `""`, `"clock"`, `"text:<message>"` or `"fx:<effect>[?options]"`.
     attract: Option<String>,
     look: Option<String>,
     glow: Option<String>,
@@ -343,7 +343,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if let Some(v) = patch.attract {
             if !crate::nvs_config::valid_attract(&v) {
                 return req.bad_request(&format!(
-                    "attract must be \"\" (the playlist), \"clock\" or \"text:<message>\" (at most {} characters, one line)",
+                    "attract must be \"\" (the playlist), \"clock\", \"text:<message>\" (at most {} characters, one line) or \"fx:<effect>[?options]\"",
                     crate::nvs_config::ATTRACT_MAX - 5
                 ));
             }
