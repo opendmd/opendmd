@@ -71,6 +71,14 @@ pub struct SdCard {
     pub serial: u32,
 }
 
+// SAFETY: the card is mounted on the boot task and handed to the main task
+// once (`boot::Handover`), which only keeps it (dropping it unmounts). What
+// it holds is C state for the driver and the FATFS volume — raw pointers
+// with no tie to the task that made them: FATFS is reentrant (its own lock)
+// and every other task reaches the volume through the VFS, never through
+// this value.
+unsafe impl Send for SdCard {}
+
 impl SdBus {
     pub fn new(
         spi: SPI3,
@@ -179,7 +187,7 @@ const SIM_MAGIC: u32 = 0x5d_fa_11_ed;
 /// Arm [`SIM_FAIL`]: the next boot's first `n` mount attempts fail.
 pub fn simulate_mount_failures(n: u32) {
     // SAFETY: written once, from the httpd task, just before a restart;
-    // read only by the main task during boot.
+    // read only by the boot task (`boot.rs`), which makes every mount.
     unsafe {
         let p = &raw mut SIM_FAIL;
         (*p)[0] = SIM_MAGIC;
@@ -193,7 +201,7 @@ fn take_simulated_failure() -> bool {
     if crate::sdhealth::sim_pending() {
         return false;
     }
-    // SAFETY: the main task is the only one mounting, see above.
+    // SAFETY: the boot task is the only one mounting, see above.
     unsafe {
         let p = &raw mut SIM_FAIL;
         if (*p)[0] != SIM_MAGIC || (*p)[1] == 0 {

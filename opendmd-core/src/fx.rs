@@ -80,7 +80,7 @@ pub fn set_frame_floor(ms: u8) {
 }
 
 #[cfg(not(test))]
-fn floor() -> u8 {
+pub(crate) fn floor() -> u8 {
     FLOOR_MS.load(Ordering::Relaxed)
 }
 
@@ -91,7 +91,7 @@ thread_local! {
 }
 
 #[cfg(test)]
-fn floor() -> u8 {
+pub(crate) fn floor() -> u8 {
     TEST_FLOOR.with(|f| f.get())
 }
 
@@ -218,7 +218,7 @@ fn cos16(ph: u32) -> i32 {
 }
 
 /// A small integer hash (lowbias32), for the textures and the stars.
-const fn hash(mut x: u32) -> u32 {
+pub(crate) const fn hash(mut x: u32) -> u32 {
     x ^= x >> 16;
     x = x.wrapping_mul(0x7feb_352d);
     x ^= x >> 15;
@@ -262,7 +262,7 @@ impl Palette {
         })
     }
 
-    fn table(self) -> &'static [Rgb; PAL_LEN] {
+    pub(crate) fn table(self) -> &'static [Rgb; PAL_LEN] {
         &PALETTES[self as usize]
     }
 }
@@ -602,7 +602,7 @@ fn phase(i: u32, n: u32) -> u32 {
 
 /// `c` at `k` / 256.
 #[inline]
-fn scale(c: Rgb, k: u32) -> Rgb {
+pub(crate) fn scale(c: Rgb, k: u32) -> Rgb {
     Rgb::new(
         ((u32::from(c.r) * k) >> 8) as u8,
         ((u32::from(c.g) * k) >> 8) as u8,
@@ -976,13 +976,13 @@ impl Effect for Starfield {
 }
 
 /// A line's end: x, y and its brightness in 256ths.
-type End = (i32, i32, i32);
+pub(crate) type End = (i32, i32, i32);
 
 /// A line from `a` to `b` (x, y, brightness in 256ths), `c` scaled by the
 /// brightness interpolated along it in eight steps (strong steps: the
 /// panel bands smooth ones anyway), clipped to the canvas, writing only
 /// pixels that differ. (Bresenham; the brightness in 16.16.)
-fn line(canvas: &mut Canvas, a: End, b: End, c: Rgb) {
+pub(crate) fn line(canvas: &mut Canvas, a: End, b: End, c: Rgb) {
     let (x1, y1) = (b.0, b.1);
     let (dx, dy) = ((x1 - a.0).abs(), -(y1 - a.1).abs());
     let (sx, sy) = (if a.0 < x1 { 1 } else { -1 }, if a.1 < y1 { 1 } else { -1 });

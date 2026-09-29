@@ -140,6 +140,16 @@ fn rgb_bytes(p: &[Rgb]) -> &[u8] {
     unsafe { core::slice::from_raw_parts(p.as_ptr().cast::<u8>(), p.len() * 3) }
 }
 
+/// Turn the panel off: OE driven high as a plain GPIO, the DMA stopped
+/// (`hub75_blank`). Callable from any task, before or after [`Panel::new`];
+/// the panel stays dark until the next boot's `Panel::new`. For
+/// [`crate::restart`]; the shim blanks again at the next boot's start-up
+/// (`hub75_early_blank`), before `main`.
+pub fn blank() {
+    // SAFETY: register writes and a flag; no heap, no pointer arguments.
+    unsafe { hub75::hub75_blank(config::PIN_OE) };
+}
+
 impl Panel {
     pub fn new(cfg: &PanelConfig) -> Result<Panel> {
         let surface = cfg.surface_width() as usize;

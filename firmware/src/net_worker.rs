@@ -51,9 +51,9 @@ pub struct NetWorker {
 
 /// Spawn the worker on CPU0 and return immediately.
 ///
-/// `ThreadSpawnConfiguration` is process-wide state consulted by the next
-/// `thread::spawn`, so it is set, used, and put back before anything else can
-/// spawn a thread — the display loop has not started yet at this point.
+/// `ThreadSpawnConfiguration` (`esp_pthread_set_cfg`) is consulted by the
+/// next `thread::spawn` from the same thread (ESP-IDF keeps it per thread),
+/// so it is set, used, and put back. Called by the boot task (`boot.rs`).
 pub fn spawn(worker: NetWorker) -> anyhow::Result<()> {
     let previous = ThreadSpawnConfiguration::get();
     ThreadSpawnConfiguration {
@@ -192,7 +192,7 @@ fn run(worker: NetWorker) {
         None
     };
 
-    // The HTTP server is already up: `main` starts it before the display loop,
+    // The HTTP server is already up: the boot task starts it before the card,
     // while the heap is still whole enough for its task stack (see
     // `http::start`). All this thread does is tell the world where to find it.
     match wifi.state() {

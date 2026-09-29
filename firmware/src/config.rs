@@ -108,7 +108,8 @@ pub const SD_SPEED_KHZ: u32 = 40_000;
 /// interrupted may take longer to come out of busy. See `sd::SdBus`.
 pub const SD_RETRY_CMD_TIMEOUT_MS: u32 = 3_000;
 /// Mount attempts at boot before the network and the web server are started
-/// anyway; the main loop keeps trying every [`RETRY_INTERVAL`] after that.
+/// anyway; the boot task (`boot.rs`) keeps trying every [`RETRY_INTERVAL`]
+/// after that.
 pub const SD_BOOT_ATTEMPTS: u32 = 2;
 
 // Card failure while running (`sdhealth.rs`, CLAUDE.md "When the card will
@@ -133,9 +134,9 @@ pub const SD_REBOOT_CAP: u32 = 3;
 pub const SD_REBOOT_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// How often a device that has used up its restarts tries the card again.
 pub const SD_REMOUNT_INTERVAL: Duration = Duration::from_secs(60);
-/// How long a card-failure restart waits for the log ring to reach the
-/// console first.
-pub const SD_RESTART_LOG_FLUSH: Duration = Duration::from_secs(2);
+/// How long a planned restart (`crate::restart`) waits for the log ring to
+/// reach the console first.
+pub const RESTART_LOG_FLUSH: Duration = Duration::from_secs(2);
 
 // ---------------------------------------------------------------------------
 // Playlist
@@ -254,6 +255,12 @@ pub const WIFI_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// playing GIF, and the deepest path (scan -> connect) has been exercised on
 /// the rig at this size.
 pub const NET_WORKER_STACK: usize = 12 * 1024;
+/// The boot task's stack (`boot.rs`, CPU0, alive only until the card is
+/// handed over): the web app's CRC pass, the HTTP server's start, the mount
+/// attempts and the playlist index (opened, or built: one streaming pass
+/// with its buffers on the heap), as the main task (16 KB) did them before.
+/// The `boot task done (stack N B unused)` line says what was left.
+pub const BOOT_STACK: usize = 10 * 1024;
 /// The httpd task's stack, and one contiguous internal allocation — which is
 /// why the server is started before the first GIF is decoded. stripe-dashboard
 /// needs 16 KB because its OTA handler buffers on the stack; ours reads into a

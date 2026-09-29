@@ -363,6 +363,7 @@ pub fn title(path: &str) -> Option<String> {
         Spec::Clock(_) => Some("Clock".to_string()),
         Spec::Text(t) => Some(t.msg.iter().map(|&b| b as char).collect()),
         Spec::Fx(f) => Some(f.title().to_string()),
+        Spec::Boot(_) => Some("Startup".to_string()),
     }
 }
 
@@ -386,6 +387,62 @@ enum Spec {
     Clock(ClockSpec),
     Text(TextSpec),
     Fx(crate::fx::Fx),
+    Boot(BootSpec),
+}
+
+/// `@boot[?len=short|full|card&v=&ip=&ap=&note=]`: the start-up show once
+/// (`len`, default short), or one loop of the status card, with its text
+/// from the options ([`crate::boot`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BootSpec {
+    /// The status card instead of the show.
+    card: bool,
+    len: crate::boot::ShowLength,
+    version: String,
+    ip: String,
+    ap: String,
+    note: String,
+}
+
+fn parse_boot(query: &str) -> BootSpec {
+    use crate::boot::ShowLength;
+    let mut b = BootSpec {
+        card: false,
+        len: ShowLength::Short,
+        version: String::new(),
+        ip: String::new(),
+        ap: String::new(),
+        note: String::new(),
+    };
+    for (k, v) in options(query) {
+        // One line of the small font across the panel at most.
+        let text = || {
+            url_decode(v)
+                .trim()
+                .chars()
+                .map(text::fold_char)
+                .take(32)
+                .collect()
+        };
+        match k {
+            b"len" => {
+                (b.card, b.len) = (
+                    v == b"card",
+                    if v == b"full" {
+                        ShowLength::Full
+                    } else {
+                        ShowLength::Short
+                    },
+                )
+            }
+            b"v" => b.version = text(),
+            b"ip" => b.ip = text(),
+            b"ap" => b.ap = text(),
+            b"note" => b.note = text(),
+            _ => {}
+        }
+    }
+    b
 }
 
 fn parse(path: &str) -> Option<Spec> {
@@ -401,6 +458,9 @@ fn parse(path: &str) -> Option<Spec> {
     }
     if base == TEXT {
         return Some(Spec::Text(parse_text(query)));
+    }
+    if base == crate::boot::PATH {
+        return Some(Spec::Boot(parse_boot(query)));
     }
     let rest = path.strip_prefix(CARD_PREFIX)?;
     let (title, subtitle) = rest.split_once('|').unwrap_or((rest, ""));
@@ -511,6 +571,31 @@ impl<R: Read> SynthSource<R> {
                     return Ok(None);
                 }
                 f.frame(f.delay() * self.frames as u32, canvas)
+            }
+            Spec::Boot(b) => {
+                let delay = crate::boot::frame_delay();
+                let ms = delay.as_millis() as u32;
+                let t = self.frames as u32 * ms;
+                let length = if b.card {
+                    crate::boot::CARD_LOOP_MS
+                } else {
+                    b.len.min_ms()
+                };
+                if t >= length {
+                    return Ok(None);
+                }
+                let info = crate::boot::Info {
+                    version: &b.version,
+                    ip: &b.ip,
+                    ap: &b.ap,
+                    note: &b.note,
+                };
+                if b.card {
+                    crate::boot::card(canvas, t, &info, None);
+                } else {
+                    crate::boot::show(canvas, b.len, t, &info);
+                }
+                delay
             }
             Spec::Text(t) => {
                 let width = text::text_width(t.font, bytes_str(&t.msg), t.scale) as i32;
