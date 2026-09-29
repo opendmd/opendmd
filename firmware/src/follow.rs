@@ -31,6 +31,7 @@
 //! dark nothing starts, and a game in progress is picked up — without the
 //! sequence — when it lights again).
 
+use crate::chan as mpsc;
 use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
 use esp_idf_svc::http::Method;
 use opendmd_core::engine::Engine;
@@ -42,7 +43,7 @@ use opendmd_core::overrides::Override;
 use opendmd_core::synth;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -529,6 +530,7 @@ impl Poller {
             Some(t) => &[("X-RePlay-Token", t), ("Connection", "close")],
             None => &[("Connection", "close")],
         };
+        crate::diag::check("follow: before a poll");
         let result = (|| {
             let mut conn = EspHttpConnection::new(&Configuration {
                 timeout: Some(config::FOLLOW_TIMEOUT),
@@ -557,6 +559,7 @@ impl Poller {
             }
             Ok::<_, esp_idf_svc::sys::EspError>(status)
         })();
+        crate::diag::check("follow: after a poll");
         let ms = started.elapsed().as_millis() as u32;
         self.polls += 1;
         self.poll_ms_sum = self.poll_ms_sum.saturating_add(ms);

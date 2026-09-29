@@ -13,9 +13,9 @@
 //! Registration order is load-bearing. ESP-IDF prefers an exact match, but
 //! among wildcards the *earliest* registration wins, so `/*` goes last.
 
+use crate::chan as mpsc;
 use anyhow::Result;
 use log::info;
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -195,6 +195,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // --- JSON API ----------------------------------------------------------
     let c = ctx.clone();
     server.route("/api/status", Method::Get, move |req| {
+        // `diag-heap` only: `?diag_chan=N&impl=std|ours` makes N channels
+        // here first (see `diag::channel_torture`).
+        #[cfg(feature = "diag-heap")]
+        if let Some(n) = query_param(req.query(), "diag_chan").and_then(|n| n.parse().ok()) {
+            let which = query_param(req.query(), "impl").unwrap_or_default();
+            let line = crate::diag::channel_torture(n, &which);
+            return req.ok("text/plain", line.as_bytes());
+        }
         // The settings' part first (never both locks at once).
         let looks = {
             let set = c.settings.lock().unwrap();

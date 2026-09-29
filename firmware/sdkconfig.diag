@@ -1,0 +1,5 @@
+# Added to sdkconfig.defaults by the Makefile for `FW_FEATURES=diag-heap`
+# builds only (see src/diag.rs). Never in a normal or release build: the
+# canaries cost 12 B per heap block and the fills cost every malloc/free.
+CONFIG_HEAP_POISONING_COMPREHENSIVE=y
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y

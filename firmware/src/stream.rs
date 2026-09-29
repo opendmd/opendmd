@@ -255,7 +255,13 @@ where
 /// (already logged) is answered with its status if one can still be sent,
 /// any other failure with a 500 if nothing was sent yet. Dropping `up` ends
 /// the connection.
-fn run_upload(mut up: Upload, work: UploadWork) {
+fn run_upload(up: Upload, work: UploadWork) {
+    crate::diag::check("stream: upload start");
+    run_upload_inner(up, work);
+    crate::diag::check("stream: upload end");
+}
+
+fn run_upload_inner(mut up: Upload, work: UploadWork) {
     up.start_clock();
     // As for a download: a transfer starts only with room to finish. The
     // chunk buffer is taken fallibly as well (`files::stream_body_to`).

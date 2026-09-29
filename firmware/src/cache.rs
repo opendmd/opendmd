@@ -36,13 +36,14 @@
 //! [`config::CACHE_DEBOUNCE`] so a browser uploading copies one after another
 //! causes one count at the end.
 
+use crate::chan as mpsc;
 use anyhow::Result;
 use opendmd_core::filter::Filter;
 use opendmd_core::layout::{self, CacheCount};
 use std::fs;
 use std::io::{self, BufReader, Read};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 

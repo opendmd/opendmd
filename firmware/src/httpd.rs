@@ -271,6 +271,8 @@ impl Server {
         }
         self.uris.push(uri_c);
         self.handlers.push(boxed);
+        #[cfg(feature = "diag-heap")]
+        guard::register(boxed);
         Ok(())
     }
 }
@@ -296,9 +298,15 @@ unsafe extern "C" fn trampoline(raw: *mut sys::httpd_req_t) -> sys::esp_err_t {
     if handler.is_null() {
         return sys::ESP_FAIL;
     }
+    crate::diag::check("httpd: handler start");
+    #[cfg(feature = "diag-heap")]
+    guard::verify(handler, "handler start");
     let mut req = Req::new(raw);
     let result = (*handler)(&mut req);
     stack_low_water("httpd", &HTTPD_STACK_LOW);
+    crate::diag::check("httpd: handler end");
+    #[cfg(feature = "diag-heap")]
+    guard::verify(handler, "handler end");
     if req.taken {
         // The connection is an `Upload`'s now; httpd must let the session
         // go without touching the socket. With body bytes still to come,
@@ -345,6 +353,54 @@ unsafe extern "C" fn trampoline(raw: *mut sys::httpd_req_t) -> sys::esp_err_t {
                 );
                 sys::ESP_OK
             }
+        }
+    }
+}
+
+/// `diag-heap` only: every registered handler's box — the `Box<dyn Fn>`
+/// fat pointer that `user_ctx` points at — as it was when registered,
+/// checked on every request. The `/api/play` crash (CLAUDE.md) faulted
+/// loading the closure's `Arc<Ctx>` through a null environment pointer.
+#[cfg(feature = "diag-heap")]
+mod guard {
+    use super::Handler;
+    use std::sync::Mutex;
+
+    static TABLE: Mutex<Vec<(usize, [usize; 2])>> = Mutex::new(Vec::new());
+
+    fn words(h: *const Handler) -> [usize; 2] {
+        // SAFETY: `h` is a live `Box<Box<dyn Fn>>` allocation; its two
+        // words are the inner box's data and vtable pointers.
+        unsafe { std::ptr::read(h.cast::<[usize; 2]>()) }
+    }
+
+    pub fn register(h: *mut Handler) {
+        let w = words(h);
+        TABLE.lock().unwrap().push((h as usize, w));
+    }
+
+    /// Every entry unchanged, and `h` one of them.
+    pub fn verify(h: *const Handler, site: &str) {
+        let table = TABLE.lock().unwrap();
+        let mut known = false;
+        for &(at, was) in table.iter() {
+            known |= at == h as usize;
+            let now = words(at as *const Handler);
+            if now != was {
+                // SAFETY: NUL-terminated format; plain integers.
+                unsafe {
+                    esp_idf_sys::esp_rom_printf(
+                        c"\nDIAG: handler box at 0x%08x changed: data 0x%08x -> 0x%08x, vtable 0x%08x -> 0x%08x\n".as_ptr(),
+                        at as u32, was[0] as u32, now[0] as u32, was[1] as u32, now[1] as u32,
+                    );
+                    esp_idf_sys::abort();
+                }
+            }
+        }
+        if !known {
+            log::error!("DIAG: {site}: user_ctx {:p} is not a registered handler", h);
+            // SAFETY: plain abort.
+            unsafe { esp_idf_sys::abort() };
         }
     }
 }
@@ -1271,6 +1327,7 @@ where
     F: FnOnce(&mut Req) -> Result<()>,
 {
     let Detached { raw, session } = detached;
+    crate::diag::check("stream: download start");
     // A client that left while this waited in the queue (a page reload, a
     // cancelled preview): do not open its file at all.
     if *session.gone.lock().unwrap_or_else(|p| p.into_inner()) {
@@ -1308,6 +1365,7 @@ where
     };
     drop(req);
     release(raw, &session, abort);
+    crate::diag::check("stream: download end");
 }
 
 /// Quote and escape a string as a JSON value.

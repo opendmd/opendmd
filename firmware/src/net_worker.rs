@@ -15,6 +15,7 @@
 //! open `OpenDMD-Setup` AP with the captive-portal DNS server, on a timeout
 //! that reboots rather than leaving an open network up forever.
 
+use crate::chan as mpsc;
 use esp_idf_hal::cpu::Core;
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
@@ -22,7 +23,6 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::nvs::{EspNvsPartition, NvsDefault};
 use log::{error, info, warn};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -236,6 +236,7 @@ fn run(worker: NetWorker) {
         }
 
         crate::clock::log_new_syncs();
+        crate::diag::check("net-worker: loop");
 
         // Follow RePlayOS: a poll when one is due (station mode only).
         follow.tick(wifi.state() == WifiState::Connected && wifi.is_associated());

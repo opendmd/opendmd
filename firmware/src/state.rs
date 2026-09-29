@@ -15,8 +15,8 @@
 //! blocks on the httpd task (which is allowed to wait) instead of the display
 //! loop blocking on the handler (which is not).
 
+use crate::chan as mpsc;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// Which flash layout this build is for, compiled in by `build.rs`
