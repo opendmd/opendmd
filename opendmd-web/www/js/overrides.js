@@ -17,7 +17,7 @@ const FAV = 3, LESS = 0.5;
 
 // The overrides file beside a playlist: /sets/x.txt -> /sets/x.meta,
 // /filelist.txt -> /filelist.meta, /filelist.hall -> /filelist.hall.meta.
-const fileFor = (p) => (p.endsWith('.txt') ? p.slice(0, -4) : p) + '.meta';
+export const fileFor = (p) => (p.endsWith('.txt') ? p.slice(0, -4) : p) + '.meta';
 
 export class Overrides {
   constructor() {
@@ -119,12 +119,20 @@ export function menu(ov, path, x, y, extra) {
     item('ov-reset', false, 'Reset', () => put({ never: null, w: null, dwell: null, dwell_x: null, loops: null })),
     extra && item('ov-extra', false, extra[0], () => { closeMenu(); extra[1](); }));
   open.querySelector('#ov-reset').disabled = !ov.get(path);
-  document.body.append(open);
+  popup(open, x, y);
+}
+
+// Show a `.menu` element at (x, y), or as a sheet along the bottom on a
+// phone; one at a time, closed by Escape or a tap elsewhere.
+export function popup(el, x, y) {
+  if (open !== el) closeMenu();
+  open = el;
+  document.body.append(el);
   if (innerWidth > 600) {
-    const r = open.getBoundingClientRect();
-    open.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
-    open.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
-  } else open.classList.add('sheet');
+    const r = el.getBoundingClientRect();
+    el.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
+    el.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
+  } else el.classList.add('sheet');
 }
 
 // The "…" button a row carries so the menu is discoverable.

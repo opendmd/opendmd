@@ -212,15 +212,34 @@ names the format or shows a copy's path.
   bloom, gamma, flat) are here too and are remembered per browser. In local
   mode this view is the simulator: a manifest or the whole folder, a platform
   filter, shuffle and a seed, with the firmware's 3-30 s dwell.
-- **Library** — the card's GIFs by category (`GET /api/files`), thousands
-  of entries in a virtualised list, each name run through the core's tag
-  parser. Search titles (normalised the way the core matches them), filter by
-  platform chips, click to preview (and, on a device, **Send to panel**).
-  Select entries to add them to a playlist. **Add GIFs** (device) uploads
-  files into the category shown, prepares each in the browser (GIF, then its
-  copy, one file at a time) and offers to add them to the playlist in play.
-  **Make art…** (and "Make art from this" in an entry's menu) opens the
-  Studio, below.
+- **Library** — one row across the top: a search field (titles, normalised
+  the way the core matches them), **Add GIFs…** and **Make art**; under it the
+  categories as tabs (the card's folders under `gifs/`, then *Live* and
+  *Effects*) and the platform chips. The list (virtualised: thousands of
+  rows) shows each GIF's title, platform and favourite/hidden marks. Pick one
+  and the **Details** panel (the right-hand column; a sheet from the bottom
+  on a phone) plays it with the panel look and shows its title, platform,
+  category, author and file name, with **Send to panel**, **Add to
+  playlist…**, **Edit in Make art**, **Favourite** and **Hide** (in the
+  playlist chosen beside them), Smooth motion where it applies, **Edit
+  details…** and **Delete…**. Select several rows to add them to a playlist
+  together.
+
+  **A GIF's details are its file name** —
+  `/gifs/<Category>/<PLATFORM>_<Title_Words>_<NN>[_<author>].gif`, which
+  every part of OpenDMD reads the same way (below, "Tag grammar"). **Add
+  GIFs** (device) asks for each picked file's title, platform, category (or a
+  new one) and author, guessing the title from the file's own name (none for
+  a name like `QT6JDNGFS3Q4OO6GBKO4LBW2ZZ4MO375.gif`, which must then be
+  given one) and showing the name it will get as you type — the number is
+  the next free one for that platform and title, so a second Super Metroid
+  is `_02`. It uploads each under that name, prepares it in the browser (the
+  GIF, then its copy, one file at a time) and offers to add them to the
+  playlist in play. **Edit details** changes the same fields, which renames
+  the GIF on the card (`POST /api/files/move`: its prepared copy and its
+  Smooth motion setting follow) and in every playlist and favourite that
+  names it. **Delete** asks first, then removes the GIF, its copy and every
+  playlist line and favourite; a category left empty goes too.
 - **Playlists** (`#sets`) — the card's own (`filelist.txt` as **All files**,
   the default; `filelist.hall` **Halloween**; `filelist.xmas` **Christmas**;
   any other `filelist.*` by file name; an obsolete `filelist.odm.*` never)
@@ -247,8 +266,12 @@ names the format or shows a copy's path.
   (`www_version`, from the pack's header). Firmware updates are over USB
   (below, "Deploying").
 
-**Make art.** A sheet over Library that turns a picture into a GIF for the
-panel, in five steps:
+**Make art.** A view of its own (in the navigation, and the **Make art**
+button in the Library) that turns a picture into a GIF for the panel, in
+five steps. **Edit in Make art** on a Library GIF opens it here with that
+GIF as the picture (its first frame, for now: editing an animation is a
+later step), its platform and title filled in and the game's art a search
+away.
 
 1. **Import** — choose a file, drop one, paste one (Ctrl/⌘-V; copy an
    image in any tab), give its address (most sites don't let a page read
@@ -285,9 +308,10 @@ is `docs/art-pipeline.md`.
 
 **Size budget**, checked by `make web` (`tools/web-size.py`) on the gzipped
 sizes, which are what crosses the WiFi: the wasm module plus its generated JS
-glue at most 100 KB, the hand-written JS and CSS at most 48 KB; the Studio's
+glue at most 116 KB, the hand-written JS and CSS at most 56 KB; the Studio's
 own wasm at most 150 KB and its JS and CSS at most 24 KB, loaded only when it
-opens. Today that is 95.4 KB, 48.6 KB, 100.4 KB and 9.1 KB. The game name
+opens; the Add GIFs / Edit details dialogs at most 8 KB, loaded when first
+used. Today that is 115.8 KB, 51.3 KB, 110.0 KB, 9.3 KB and 6.3 KB. The game name
 lists (2.4 MB, 527 KB gzipped, one platform fetched at a time) are printed
 without a budget. `make web` writes a `<file>.gz` beside each file, and the
 player sends those in preference.
@@ -460,6 +484,40 @@ matching a user's own collection list.
 Against the real card this parses 10,162 entries with a non-empty title each,
 and 3,784 of 3,786 `gifs/Consoles` entries get a platform (99.95%; the two
 misses are `Nes_Gradius.gif` and `NEs_Captain_America...gif`).
+
+**Writing a name** (the web app's Add GIFs and Edit details;
+`manifest::NameFields` / `build_name` in the core, behind its `names`
+feature) is the inverse, and is only allowed when the name reads back as
+exactly the fields it was built from:
+
+- The form is `[SEASON_]PLATFORM_Title_Words_NN[_author][_FLAG…].gif` under
+  `/gifs/<Category>/`. The number is always written (two digits, last before
+  the author), so a title may end in a number: `MD_Streets_of_Rage_2_03`.
+- Title words are split on spaces; each may use printable ASCII except
+  `_` (the separator) and FAT's `" * / : < > ? \ |`, and the title may not
+  start with `.`. No platform means no number and no author (the parser
+  reads the whole name as the title then), and the first word may not look
+  like a platform (`THE END` would read as platform `THE`).
+- An author is one token of `A-Za-z0-9.-`, three or more long, not a keyword
+  and not all digits; it is written starting lower-case (`Ross` → `ross`)
+  unless it is a known handle (`RattenJager`), because that is how the parser
+  recognises one.
+- A title word that the parser would take for a tag is refused rather than
+  written: `Toy Story` (→ `Toy` + `Story`), `Intro Stage`. A category is 48
+  bytes at most, a file name 120.
+
+| Fields | Name |
+|---|---|
+| Super Metroid · SNES · Consoles · 1 | `/gifs/Consoles/SNES_Super_Metroid_01.gif` |
+| Streets of Rage 2 · MD · Consoles · 3 · ross | `/gifs/Consoles/MD_Streets_of_Rage_2_03_ross.gif` |
+| Sunset · no platform · Mine | `/gifs/Mine/Sunset.gif` |
+| Toy Story · SNES | refused (reads back as "Toy") |
+
+Every name on the stock card read into fields and built back reads as the
+same fields (`make test-card`): 10,145 of 10,162; the other 17 cannot be
+rebuilt as they stand (16 have a title word that is also a keyword, like the
+`Story` of `PINBALL_STORY_IndianaJones_Story02`, one an author with a space
+in it).
 
 ## Firmware
 

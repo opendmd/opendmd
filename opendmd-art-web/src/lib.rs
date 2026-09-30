@@ -305,3 +305,97 @@ pub fn prepare_smooth_gif(gif: &[u8]) -> Result<Vec<u8>, JsError> {
         .map_err(js_err)?;
     Ok(out)
 }
+
+// --- GIF names ------------------------------------------------------------
+// A GIF's metadata is its file name (`opendmd_core::manifest::NameFields`):
+// "Add GIFs" and "Edit details" write names through these. Here, not in
+// the main module, which has no room for them (~3 KB gz); the dialogs load
+// this module anyway to prepare the GIFs they add.
+
+fn js_set(o: &js_sys::Object, k: &str, v: JsValue) {
+    let _ = js_sys::Reflect::set(o, &JsValue::from_str(k), &v);
+}
+
+fn js_str(v: &Option<String>) -> JsValue {
+    v.as_deref().map_or(JsValue::NULL, JsValue::from_str)
+}
+
+/// A GIF's metadata as its path carries it (`NameFields::from_path`):
+/// `{title, platform, category, ordinal, author, flags}` — absent = `null`,
+/// `category` `""` for a GIF directly in `gifs/`.
+#[wasm_bindgen(js_name = nameFields)]
+pub fn name_fields(path: &str) -> JsValue {
+    let f = opendmd_core::manifest::NameFields::from_path(path);
+    let o = js_sys::Object::new();
+    js_set(&o, "title", f.title.as_str().into());
+    js_set(&o, "platform", js_str(&f.platform));
+    js_set(&o, "category", f.category.as_str().into());
+    js_set(
+        &o,
+        "ordinal",
+        f.ordinal.map_or(JsValue::NULL, JsValue::from),
+    );
+    js_set(&o, "author", js_str(&f.author));
+    js_set(
+        &o,
+        "flags",
+        f.flags
+            .iter()
+            .map(|s| JsValue::from_str(s))
+            .collect::<js_sys::Array>()
+            .into(),
+    );
+    o.into()
+}
+
+/// The card path for an object of [`name_fields`]' shape (its inverse,
+/// `NameFields::path`); throws the reason's code (`title`, `title-char`,
+/// `platform`, `category`, `author`, `needs-platform`, `too-long`,
+/// `reads-back`) when the fields cannot be written as a name that reads
+/// back as the same fields.
+#[wasm_bindgen(js_name = buildName)]
+pub fn build_name(fields: &JsValue) -> Result<String, JsValue> {
+    let get =
+        |k: &str| js_sys::Reflect::get(fields, &JsValue::from_str(k)).unwrap_or(JsValue::UNDEFINED);
+    let text = |k: &str| get(k).as_string().filter(|s| !s.trim().is_empty());
+    let flags = get("flags");
+    let flags = if js_sys::Array::is_array(&flags) {
+        js_sys::Array::from(&flags)
+            .iter()
+            .filter_map(|v| v.as_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    opendmd_core::manifest::NameFields {
+        title: text("title").unwrap_or_default(),
+        platform: text("platform"),
+        category: get("category").as_string().unwrap_or_default(),
+        ordinal: get("ordinal")
+            .as_f64()
+            .filter(|n| *n >= 0.0 && *n < 1e6)
+            .map(|n| n as u32),
+        author: text("author"),
+        flags,
+    }
+    .path()
+    .map_err(|e| JsValue::from_str(e.code()))
+}
+
+/// The platform tags the parser knows, written as a name carries them
+/// (`NDS`, not `NINTENDO_DS`).
+#[wasm_bindgen]
+pub fn platforms() -> js_sys::Array {
+    use opendmd_core::manifest::{MULTI_PLATFORMS, PLATFORMS};
+    PLATFORMS
+        .iter()
+        .copied()
+        .chain(
+            MULTI_PLATFORMS
+                .iter()
+                .map(|(_, n)| *n)
+                .filter(|n| !PLATFORMS.contains(n)),
+        )
+        .map(JsValue::from_str)
+        .collect()
+}

@@ -546,3 +546,64 @@ fn smoothing_is_deterministic_and_stepwise_equals_one_call() {
 }
 
 const SMOOTH_FINGERPRINT: u64 = 0x232e_36c6_5c2b_7b7d;
+
+/// The browser's `nameFields` / `buildName` are the core's
+/// `NameFields::from_path` / `path`: over real card names (and a few
+/// refusals), the JS objects go through and come back as the core's paths
+/// and error codes. JS values exist only in wasm, so this runs under node
+/// (`make test-wasm`); the core's own tests cover the grammar natively.
+#[cfg(target_arch = "wasm32")]
+#[test]
+fn build_name_in_the_browser_is_the_cores() {
+    use opendmd_core::manifest::NameFields;
+    use wasm_bindgen::JsValue;
+    for path in [
+        "/gifs/Consoles/SNES_Donkey_Kong_Country_05.gif",
+        "/gifs/Consoles/MD_Sonic3_RattenJager.gif",
+        "/gifs/Consoles/SNES_Asterix01.gif",
+        "/gifs/NEW 2021/NINTENDO_DS_Mario_Kart_DS_01..gif",
+        "/gifs/Consoles/NES_Unknow_01_Invert.gif",
+        "/gifs/Halloween/HALLOWEEN_ARCADE_GoldenAxe16.gif",
+        "/gifs/Consoles/MD_LOGO_Sega31.gif",
+        "/gifs/Consoles/PSP_Parasite_Eve_01__sephirot68.gif",
+        "/gifs/Spectrum_Slide/Exolon2.gif",
+        "/gifs/Computers/PC_Leilanis Island_42.gif",
+        "/gifs/Consoles/GAMEGEAR_Columns_01_bd.azerty.p.gif",
+        "/gifs/Consoles/VIRTUAL_BOY_Mario_Clash_01.gif",
+        "/gifs/Other/OTHER_037.gif",
+    ] {
+        let want = NameFields::from_path(path).path().unwrap();
+        let got = crate::build_name(&crate::name_fields(path)).unwrap();
+        assert_eq!(got, want, "{path}");
+    }
+    let obj = |title: &str, platform: Option<&str>, ordinal: Option<u32>, author: Option<&str>| {
+        let o = js_sys::Object::new();
+        crate::js_set(&o, "title", title.into());
+        crate::js_set(
+            &o,
+            "platform",
+            platform.map_or(JsValue::NULL, JsValue::from),
+        );
+        crate::js_set(&o, "category", "Consoles".into());
+        crate::js_set(&o, "ordinal", ordinal.map_or(JsValue::NULL, JsValue::from));
+        crate::js_set(&o, "author", author.map_or(JsValue::NULL, JsValue::from));
+        JsValue::from(o)
+    };
+    assert_eq!(
+        crate::build_name(&obj("Super Metroid", Some("SNES"), Some(1), None)).unwrap(),
+        "/gifs/Consoles/SNES_Super_Metroid_01.gif"
+    );
+    for (o, code) in [
+        (obj("", Some("SNES"), Some(1), None), "title"),
+        (obj("Toy Story", Some("SNES"), Some(1), None), "reads-back"),
+        (obj("Art", None, Some(1), None), "needs-platform"),
+        (obj("Art", Some("SNES"), Some(1), Some("ab")), "author"),
+    ] {
+        assert_eq!(
+            crate::build_name(&o).unwrap_err().as_string().as_deref(),
+            Some(code)
+        );
+    }
+    assert!(crate::platforms().includes(&"VIRTUAL_BOY".into(), 0));
+    assert!(!crate::platforms().includes(&"NINTENDO_DS".into(), 0));
+}

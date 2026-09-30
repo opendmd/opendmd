@@ -1,6 +1,7 @@
 // Entry point: load the wasm module, find out whether a device is serving us
 // (GET /api/status) or we are a static page on a laptop (local mode), and
-// route between the four views. Each view is a module with
+// route between the five views (Make art is the Studio, js/studio.js, whose
+// stylesheet and wasm load when it is first opened). Each view is a module with
 // `mount(el) -> {show, hide}`, mounted on first visit.
 
 import init from './pkg/opendmd_web.js';
@@ -10,7 +11,7 @@ import { $, h, clear, emit, toast } from './js/util.js';
 
 await init();
 
-const VIEWS = ['now', 'library', 'sets', 'settings'];
+const VIEWS = ['now', 'library', 'studio', 'sets', 'settings'];
 const mounted = {};
 let current = '';
 

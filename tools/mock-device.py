@@ -77,6 +77,14 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   playlists. Its smoothed copies are ordinary uploads under `cache/`; the
   simulated player drops its cached frame delays whenever a copy or a GIF
   is written, since a smoothed copy has more frames.
+- **`POST /api/files/move {"from","to"}`** renames a GIF under `gifs/` as
+  `http.rs` `move_file` does: 400 unless both are card-absolute
+  `/gifs/….gif` paths (no tab or line break) and differ, 404 if `from` is
+  not there, 409 if `to` is (a case-only rename is not a clash); the
+  prepared copy moves to the new name's bucket (a stale copy there goes
+  first), and the GIF's lines in `/sets/.smooth` and `/cache/.failed` are
+  renamed. `{ok, from, to, copy: "moved"|"removed"|"none", smooth, failed}`.
+  Playlists and overrides are the client's to rewrite.
 - **No `GET`/`DELETE /api/sets/*` route** — sets are read at
   `GET /sets/<name>.txt` and deleted at `DELETE /api/files/sets/<name>.txt`.
 - **`.gz` preference is `www/`-only**, and unconditional (no `Accept-Encoding`
@@ -1308,6 +1316,8 @@ class CardFS:
 
     def is_dir(self, rel: str) -> bool:
         with self.lock:
+            if rel in self.tombstones:
+                return False
             if self.overlay_dir is not None:
                 p = self.overlay_dir / rel if rel else self.overlay_dir
                 if p.is_dir():
@@ -1357,6 +1367,10 @@ class CardFS:
             tmp.write_bytes(data)
             os.replace(tmp, dest)
             self.tombstones.discard(rel)
+            # A directory tombstoned when it was emptied comes back with it.
+            parts = rel.split("/")
+            for i in range(1, len(parts)):
+                self.tombstones.discard("/".join(parts[:i]))
             return len(data)
 
     def cache_files(self) -> list[str]:
@@ -2170,6 +2184,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/reboot"), {"POST": self.h_reboot}),
                 (m_exact("/api/manifest"), {"PUT": self.h_manifest_put}),
                 (m_prefix("/api/sets/"), {"PUT": self.h_sets_put}),
+                (m_exact("/api/files/move"), {"POST": self.h_files_move}),
                 (m_prefix("/api/files/"), {"PUT": self.h_files_put, "DELETE": self.h_files_delete}),
                 (m_prefix("/filelist"), {"GET": self.h_filelist}),
                 (m_prefix("/gifs/"), {"GET": self.h_serve_under}),
@@ -3069,6 +3084,25 @@ def make_handler(ctx: Context, quiet: bool):
                     return
                 if is_manifest_path(rel):
                     ctx.fs.delete(rel + ".idx")
+                # An empty category under gifs/ goes too (http.rs); one with
+                # files in it is a 409.
+                if rel.lower().startswith("gifs/") and ctx.fs.is_dir(rel):
+                    left = ctx.fs.listdir(rel) or []
+                    if left:
+                        self.send_error_json(409, f"{rel}: not empty")
+                        return
+                    # --root is never written when there is an overlay: the
+                    # overlay's copy goes, the card's is tombstoned.
+                    ov = ctx.fs.overlay_dir
+                    if ov is not None and (ov / rel).is_dir():
+                        shutil.rmtree(ov / rel)
+                    if (ctx.fs.root_dir / rel).is_dir():
+                        if ov is None:
+                            (ctx.fs.root_dir / rel).rmdir()
+                        else:
+                            ctx.fs.tombstones.add(rel)
+                    self.send_json(200, {"ok": True})
+                    return
                 existed = ctx.fs.delete(rel)
                 ctx.player.delays.clear()
                 if existed:
@@ -3079,6 +3113,82 @@ def make_handler(ctx: Context, quiet: bool):
                 self.send_json(200, {"ok": True})
             else:
                 self.send_error_json(404, enoent(rel))
+
+        # POST /api/files/move {"from","to"}: http.rs `move_file`. Renames a
+        # GIF under gifs/; its prepared copy moves to the new name's bucket
+        # (a stale copy already there goes; one that cannot move is
+        # removed), and its lines in /sets/.smooth and /cache/.failed follow.
+        # Playlists and overrides are the client's.
+        def h_files_move(self, path):
+            raw = self.json_body()
+            if raw is None:
+                return
+            try:
+                req = json.loads(raw)
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"invalid JSON: {e}")
+                return
+            src = req.get("from") if isinstance(req, dict) else None
+            dst = req.get("to") if isinstance(req, dict) else None
+            if not isinstance(src, str) or not isinstance(dst, str):
+                self.send_error_json(400, "invalid JSON: missing field `from` or `to`")
+                return
+
+            def ok(p):
+                return (p[:6].lower() == "/gifs/" and not any(c in p for c in "\t\r\n")
+                        and card_path(p) is not None and cache_path(p) is not None)
+
+            if not ok(src) or not ok(dst):
+                self.send_error_json(400, "from and to must be card-absolute /gifs/….gif paths")
+                return
+            if src == dst:
+                self.send_error_json(400, "from and to are the same")
+                return
+            srel, drel = src.lstrip("/"), dst.lstrip("/")
+            with ctx.lock:
+                if ctx.fs.read_path(srel) is None:
+                    self.send_error_json(404, src)
+                    return
+                if srel.lower() != drel.lower() and ctx.fs.read_path(drel) is not None:
+                    self.send_error_json(409, f"{dst} already exists")
+                    return
+                data = ctx.fs.read_path(srel).read_bytes()
+                ctx.fs.write_bytes(drel, data)
+                if srel != drel:
+                    ctx.fs.delete(srel)
+                old_c, new_c = cache_path(src).lstrip("/"), cache_path(dst).lstrip("/")
+                if old_c.lower() != new_c.lower() and ctx.fs.read_path(new_c) is not None:
+                    ctx.fs.delete(new_c)
+                copy = "none"
+                cp = ctx.fs.read_path(old_c)
+                if cp is not None:
+                    copy_bytes = cp.read_bytes()
+                    ctx.fs.write_bytes(new_c, copy_bytes)
+                    if old_c != new_c:
+                        ctx.fs.delete(old_c)
+                    copy = "moved"
+                ctx.player.delays.clear()
+
+                def rename_line(rel):
+                    fp = ctx.fs.read_path(rel)
+                    if fp is None:
+                        return False
+                    lines = fp.read_bytes().split(b"\n")
+                    hit = False
+                    for i, line in enumerate(lines):
+                        head, tab, rest = line.partition(b"\t")
+                        if head.strip().lower() == src.encode().lower():
+                            lines[i] = dst.encode() + tab + rest
+                            hit = True
+                    if hit:
+                        ctx.fs.write_bytes(rel, b"\n".join(lines))
+                    return hit
+
+                smooth = rename_line("sets/.smooth")
+                failed = rename_line(FAILED_REL)
+            ctx.cache.invalidate()
+            self.send_json(200, {"ok": True, "from": src, "to": dst, "copy": copy,
+                                 "smooth": smooth, "failed": failed})
 
         def h_files_list(self, path):
             _, _, query = self.path.partition("?")

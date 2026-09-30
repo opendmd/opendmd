@@ -44,8 +44,23 @@ every view like a person would:
   Add GIFs  two GIFs uploaded into Consoles from Library: each GIF and its
             prepared copy land (the copy byte-identical to opendmd-pack), and
             the confirm adds both to `cachetest` ("5 of 5"); deleting one of
-            the GIFs takes its copy with it
-  Studio    "Make art" from Library: a CC0 PNG (a crop of
+            the GIFs takes its copy with it. The names come from the Add GIFs
+            dialog (#dl): SNES_Smoke_Added_01/_02 as picked
+  Details   POST /api/files/move's 400/404/409; the Details panel of
+            SNES_Mega_Man_X_08_sephirot68 (title, platform, category,
+            author, every action shown); the Add GIFs dialog guessing
+            "Super Metroid" / SNES from SNES_Super_Metroid_01.gif and naming
+            it the next free number in Consoles (_11), no title for
+            QT6JDNGFS3Q4OO6GBKO4LBW2ZZ4MO375.gif (Add disabled until given
+            one), "Toy Story" refused, the name shown as typed; both
+            uploaded and prepared; favourited in cachetest and listed in
+            /sets/.smooth, then Edit details to another title and category:
+            the GIF, its copy, the playlist line, the favourite and the
+            Smooth motion line all follow; Edit in Make art loads it (first
+            frame, title, platform); Delete takes it all away. Phone: the
+            Details sheet opens and closes, no horizontal scroll
+  Studio    "Make art" (a view: from Library's button, and the nav on a
+            phone): a CC0 PNG (a crop of
             experiments/art/process/out/a_source_windows.png, a 3x copy of
             a Kenney scene) imported; the 3x found, Pixels, Pan, the auto
             band; saved as SNES_Studio_Test_01.gif: the GIF and its prepared
@@ -504,6 +519,14 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
     return page
 
 
+def pick_cat(page: Page, value: str) -> None:
+    """Library: the category tab `value` (a directory under gifs/, `@` Live,
+    `@fx` Effects)."""
+    sel = f"#lib-cats [data-cat={json.dumps(value)}]"
+    page.wait_for_selector(sel, timeout=30000)
+    page.click(sel)
+
+
 def goto_view(page: Page, view: str) -> None:
     page.evaluate(f"location.hash = '#{view}'")
     page.wait_for_selector(f"#view-{view}.on")
@@ -567,8 +590,7 @@ def no_leaks(page: Page, where: str) -> None:
 
 def open_library(page: Page) -> None:
     goto_view(page, "library")
-    page.wait_for_selector("#lib-cat option[value='Consoles']", state="attached", timeout=30000)
-    page.select_option("#lib-cat", "Consoles")
+    pick_cat(page, "Consoles")
     page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
     page.fill("#lib-search", "mario")
     page.wait_for_selector("#lib-chips [data-platform='SNES']")
@@ -671,11 +693,19 @@ def open_row_menu(page: Page, list_sel: str, idx: int, via: str = "more") -> Non
     rendered (unhidden, pooled) rows of a VList -- its "…" button, or a
     right-click on the row itself."""
     row = f"{list_sel} .vrow:not([hidden]) >> nth={idx}"
-    if via == "more":
-        page.click(f"{row} >> button.more")
-    else:
-        page.click(row, button="right")
-    page.wait_for_selector("#ov-menu")
+    # A row re-rendered between press and release (the overrides loading)
+    # swallows the click: try again once.
+    for attempt in range(2):
+        if via == "more":
+            page.click(f"{row} >> button.more")
+        else:
+            page.click(row, button="right")
+        try:
+            page.wait_for_selector("#ov-menu", timeout=5000 if attempt == 0 else 30000)
+            return
+        except PlaywrightTimeoutError:
+            if attempt:
+                raise
 
 
 def row_path(page: Page, list_sel: str, idx: int) -> str:
@@ -990,10 +1020,9 @@ def power_checks(page: Page, base: str) -> None:
 
 def open_live(page: Page) -> None:
     goto_view(page, "library")
-    page.wait_for_selector("#lib-cat option[value='@']", state="attached", timeout=30000)
+    pick_cat(page, "@")
     # A search left over from the Library checks filters the Live rows too.
     page.fill("#lib-search", "")
-    page.select_option("#lib-cat", "@")
     page.wait_for_selector("#lib-live #live-msg", timeout=10000)
     page.wait_for_function("document.querySelectorAll('#lib-list .vrow:not([hidden])').length >= 5", timeout=10000)
 
@@ -1006,10 +1035,10 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
     """Library -> Live: the clocks and the scrolling text; the form; a preview;
     on the mock, sent to the panel (and POST /api/play directly)."""
     goto_view(page, "library")
-    page.wait_for_selector("#lib-cat option[value='@']", state="attached", timeout=30000)
-    opts = page.eval_on_selector_all("#lib-cat option", "els => els.map(e => [e.value, e.textContent])")
-    check(opts[-2:] == [["@", "Live"], ["@fx", "Effects"]] and len(opts) > 2,
-          f"library: the categories end with Live, Effects ({opts[-2:]})")
+    page.wait_for_selector("#lib-cats [data-cat='@']", timeout=30000)
+    opts = page.eval_on_selector_all("#lib-cats [data-cat]", "els => els.map(e => [e.dataset.cat, e.textContent])")
+    check(opts[-2:] == [["@", "Live"], ["@fx", "Effects"]] and len(opts) > 2 and page.locator("#lib-cat").count() == 0,
+          f"library: the category tabs end with Live, Effects, and there is no category select ({opts[-2:]})")
     open_live(page)
     rows = live_rows(page)
     want = ["@clock", "@clock?seconds=1", "@clock?date=1", "@clock?style=small&seconds=1&date=1", "@text?msg=OpenDMD"]
@@ -1019,8 +1048,8 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
           "library: Live form: #live-msg 'OpenDMD', #live-speed 60/40/25")
     page.click("#lib-list .vrow:not([hidden]) >> nth=0")
     wait_lit(page, "#lib-panel", "library live clock")
-    cap = page.inner_text("#lib-cap")
-    check("clock" in cap.lower() or "@clock" in cap, f"library: previewing the clock ('{cap}')")
+    cap = page.inner_text("#lib-d-title")
+    check("clock" in cap.lower() and "@" not in cap, f"library: previewing the clock ('{cap}')")
     page.fill("#live-msg", "Hello smoke")
     page.dispatch_event("#live-msg", "change")
     # Leave the field now (its own change on blur redraws the list, which would
@@ -1074,9 +1103,8 @@ def effects_checks(page: Page, base: str, mock: bool) -> None:
     mock, Send to panel, POST /api/play of each, and an effect's playlist
     line surviving a save and a reload."""
     goto_view(page, "library")
-    page.wait_for_selector("#lib-cat option[value='@fx']", state="attached", timeout=30000)
+    pick_cat(page, "@fx")
     page.fill("#lib-search", "")
-    page.select_option("#lib-cat", "@fx")
     page.wait_for_function("document.querySelectorAll('#lib-list .vrow:not([hidden])').length == 4", timeout=10000)
     rows = live_rows(page)
     check(rows == FX_ROWS, f"library: Effects lists the four effects ({rows})")
@@ -1324,8 +1352,7 @@ def mock_pass(browser) -> None:
         phone.goto(base + "/")
         phone.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
         goto_view(phone, "library")
-        phone.wait_for_selector("#lib-cat option[value='Consoles']", state="attached", timeout=30000)
-        phone.select_option("#lib-cat", "Consoles")
+        pick_cat(phone, "Consoles")
         phone.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
         open_row_menu(phone, "#lib-list", 0, via="more")
         check("sheet" in (phone.get_attribute("#ov-menu", "class") or ""), "phone: override menu renders as a bottom sheet")
@@ -1463,9 +1490,13 @@ def mock_pass(browser) -> None:
             shutil.copy(CARD / p.lstrip("/"), dst)
             adds.append(dst)
         goto_view(page, "library")
-        page.select_option("#lib-cat", "Consoles")
+        pick_cat(page, "Consoles")
         page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
         page.set_input_files("#lib-add-files", [str(a) for a in adds])
+        # The Add GIFs dialog: both named from their own names, the second
+        # the next number; then Add.
+        page.wait_for_function("(e => e && e.dataset.name === 'SNES_Smoke_Added_02.gif')(document.querySelector('#dl .dl-item[data-i=\"1\"]'))", timeout=20000)
+        page.click("#dl-ok")
         page.wait_for_function("document.querySelector('#lib-add-progress').textContent.startsWith('2 of 2 added')", timeout=60000)
         page.wait_for_function("[...document.querySelectorAll('#toasts .toast.ok')].some(t => t.textContent.includes('cachetest'))", timeout=60000)
         gif_paths = [f"/gifs/Consoles/{a.name}" for a in adds]
@@ -1484,6 +1515,7 @@ def mock_pass(browser) -> None:
         gone = not (overlay / cache_path(gif_paths[1]).lstrip("/")).exists()
         r = cache_ready(base)
         check(gone and r["prepared"] == 4, f"add: deleting a GIF took its copy with it ({r['prepared']} of {r['total']})")
+        details_checks(page, base, overlay)
         studio_checks(page, base, overlay)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
@@ -1613,8 +1645,9 @@ def mock_pass(browser) -> None:
         goto_view(page, "settings")
         page.wait_for_function("!document.querySelector('#st-set').disabled", timeout=8000)
         check(True, "settings: ready again -> set select enabled")
-        check(page.locator("#nav a[data-view]").count() == 4 and page.locator("#view-convert").count() == 0,
-              "nav: four views, no Convert")
+        views = page.eval_on_selector_all("#nav a[data-view]", "els => els.map(e => e.textContent.trim().slice(1))")
+        check(views == ["Now", "Library", "Make art", "Playlists", "Settings"] and page.locator("#view-convert").count() == 0,
+              f"nav: five views with Make art, no Convert ({views})")
         follow_checks(page, base, errors)
         phone_pass(browser, base, errors)
     finally:
@@ -1678,11 +1711,14 @@ def stub_art(page: Page, hits: list[str]) -> None:
     page.route("https://raw.githubusercontent.com/**", raw)
 
 
-def open_studio(page: Page) -> None:
-    goto_view(page, "library")
-    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
-    page.click("#lib-art")
-    page.wait_for_selector("#studio:not([hidden])", timeout=20000)
+def open_studio(page: Page, via: str = "#lib-art") -> None:
+    """Make art: from the Library's header button, or the nav (`#nav-art`)."""
+    if via == "#lib-art":
+        goto_view(page, "library")
+        page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    page.click(via)
+    page.wait_for_selector("#view-studio.on #studio .st-grid", timeout=20000)
+    check(page.url.endswith("#studio"), f"studio: {via} opens the Make art view ({page.url.rsplit('/', 1)[-1]})")
 
 
 def studio_data(page: Page) -> dict:
@@ -1690,12 +1726,12 @@ def studio_data(page: Page) -> dict:
 
 
 def studio_shots(page: Page, size: str) -> None:
-    page.evaluate("document.querySelector('#studio').scrollTop = 0")
+    page.evaluate("scrollTo(0, 0)")
     shot(page, "studio", size)
-    page.evaluate("document.querySelector('#studio').scrollTop = 1e6")
+    page.evaluate("scrollTo(0, 1e6)")
     page.wait_for_timeout(200)
     shot(page, "studio-save", size)
-    page.evaluate("document.querySelector('#studio').scrollTop = 0")
+    page.evaluate("scrollTo(0, 0)")
 
 
 def studio_checks(page: Page, base: str, overlay: Path) -> None:
@@ -1716,6 +1752,8 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
     linked = any(h.endswith("Named_Snaps/Studio Test (Japan).png") for h in hits)
     check(kinds == ["Named_Titles", "Named_Snaps"] and linked,
           f"studio find: title and snap pictures load, the snap through its link ({kinds}, {len(hits)} requests)")
+    # (The view keeps its picture between visits: forget the last one's frames.)
+    page.evaluate("delete document.querySelector('#studio').dataset.frames")
     page.click("#st-thumbs .st-thumb[data-kind=Named_Titles]")
     page.wait_for_function("document.querySelector('#studio').dataset.frames", timeout=20000)
     d = studio_data(page)
@@ -1734,6 +1772,7 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
     check([int(d["x"]), int(d["y"])] == exp["window"] and d.get("motion") == "pan" and int(d["frames"]) == exp["frames"],
           f"studio frame: auto band at {d.get('x')},{d.get('y')} == pipeline {exp['window']}, {d.get('frames')} frames")
     page.select_option("#st-plat", "SNES")
+    page.select_option("#st-cat", "Consoles")
     page.fill("#st-title", "Studio Test")
     page.wait_for_timeout(500)
     name = "SNES_Studio_Test_01.gif"
@@ -1767,10 +1806,152 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
           f"studio save: the GIF's {len(frames)} frames and delays equal the Rust pipeline's ({same} identical)")
     plist = (overlay / "sets" / "cachetest.txt").read_text().split("\n")
     check(path in plist, "studio save: appended to cachetest")
-    page.click("#st-close")
-    page.wait_for_selector("#studio", state="hidden")
+    goto_view(page, "library")
     page.unroute("**/art/SNES.json")
     page.unroute("https://raw.githubusercontent.com/**")
+
+
+def move_api_checks(base: str) -> None:
+    """POST /api/files/move's refusals (the mock mirrors http.rs)."""
+    for body, code in (({"from": "/sets/x.txt", "to": "/gifs/Other/x.gif"}, 400),
+                       ({"from": "/gifs/Other/a.gif", "to": "/gifs/Other/a.gif"}, 400),
+                       ({"from": "/gifs/Other/no-such.gif", "to": "/gifs/Other/x.gif"}, 404),
+                       ({"from": "/gifs/Consoles/SNES_Super_Metroid_02.gif", "to": "/gifs/Consoles/SNES_Super_Metroid_03.gif"}, 409)):
+        try:
+            post_json(base + "/api/files/move", body)
+            got = 200
+        except urllib.error.HTTPError as e:
+            got = e.code
+        check(got == code, f"move api: {body} -> {got} (want {code})")
+
+
+def lib_row(page: Page, path: str) -> None:
+    """Pick one GIF in the Library (its category, a search, the row)."""
+    goto_view(page, "library")
+    pick_cat(page, path.split("/")[2])
+    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    page.fill("#lib-search", path.rsplit("/", 1)[1][:-4])
+    sel = f"#lib-list .vrow[data-path={json.dumps(path)}]"
+    page.wait_for_selector(sel, timeout=20000)
+    page.click(sel)
+    page.wait_for_function(f"document.querySelector('#lib-cap').textContent === {json.dumps(path.rsplit('/', 1)[1])}", timeout=30000)
+
+
+def details_checks(page: Page, base: str, overlay: Path) -> None:
+    """The Details panel of a known GIF; Add GIFs' dialog (a title guessed
+    from a name in the grammar, none from a hash-like one, which must be
+    given one); Edit details renaming it through POST /api/files/move, its
+    prepared copy, playlist line, favourite and Smooth motion line
+    following; Edit in Make art; Delete taking all of it."""
+    move_api_checks(base)
+    known = "/gifs/Consoles/SNES_Mega_Man_X_08_sephirot68.gif"
+    lib_row(page, known)
+    got = {k: page.inner_text(f"#lib-d-{k}") for k in ("title", "platform", "category", "author")}
+    check(got == {"title": "Mega Man X 08", "platform": "SNES", "category": "Consoles", "author": "sephirot68"},
+          f"details: the fields of {known.rsplit('/', 1)[1]} ({got})")
+    for sel in ("#lib-play", "#lib-d-add", "#lib-d-art", "#lib-d-fav", "#lib-d-hide", "#lib-ovset", "#lib-d-edit", "#lib-d-del"):
+        check(page.is_visible(sel), f"details: {sel} shown")
+    no_leaks(page, "library (details)")
+    shot(page, "library-details", "laptop")
+    # Add GIFs: a grammar name and a hash-like one.
+    src = OUT / "add-named"
+    shutil.rmtree(src, ignore_errors=True)
+    src.mkdir(parents=True)
+    small = CARD / "gifs" / "Consoles" / "SNES_Asterix01.gif"
+    named, hashy = src / "SNES_Super_Metroid_01.gif", src / "QT6JDNGFS3Q4OO6GBKO4LBW2ZZ4MO375.gif"
+    for f in (named, hashy):
+        shutil.copy(small, f)
+    have = [int(m.group(1)) for n in os.listdir(CARD / "gifs" / "Consoles")
+            if (m := re.fullmatch(r"SNES_Super_Metroid_(\d+)\.gif", n))]
+    want_named = f"SNES_Super_Metroid_{max(have, default=0) + 1:02d}.gif"
+    pick_cat(page, "Consoles")
+    page.set_input_files("#lib-add-files", [str(named), str(hashy)])
+    page.wait_for_function("(e => e && e.dataset.name)(document.querySelector('#dl .dl-item[data-i=\"0\"]'))", timeout=20000)
+    item = lambda i, sel: f"#dl .dl-item[data-i='{i}'] {sel}"
+    t0, p0 = page.input_value(item(0, ".dl-title")), page.input_value(item(0, ".dl-plat"))
+    n0 = page.get_attribute("#dl .dl-item[data-i='0']", "data-name")
+    check((t0, p0, n0) == ("Super Metroid", "SNES", want_named),
+          f"add dialog: {named.name} -> '{t0}' on {p0}, named {n0} (want {want_named}: the next free number)")
+    t1 = page.input_value(item(1, ".dl-title"))
+    err = page.inner_text(item(1, ".dl-err"))
+    check(t1 == "" and "title" in err.lower() and page.is_disabled("#dl-ok"),
+          f"add dialog: {hashy.name} -> no title guessed, one required ('{err}', Add disabled)")
+    page.fill(item(1, ".dl-title"), "Toy Story")
+    page.select_option(item(1, ".dl-plat"), "OTHER")
+    page.wait_for_timeout(300)
+    check("“Toy”" in page.inner_text(item(1, ".dl-err")) and page.is_disabled("#dl-ok"),
+          f"add dialog: a title word read as a tag is refused ({page.inner_text(item(1, '.dl-err'))})")
+    page.fill(item(1, ".dl-title"), "Smoke Test Card")
+    page.fill(item(1, ".dl-author"), "Smoker")
+    page.wait_for_function("document.querySelector('#dl .dl-item[data-i=\"1\"]').dataset.name === 'OTHER_Smoke_Test_Card_01_smoker.gif'", timeout=10000)
+    check("OTHER_Smoke_Test_Card_01_smoker.gif" in page.inner_text(item(1, ".dl-name")) and page.is_enabled("#dl-ok"),
+          f"add dialog: the name shown as typed ({page.inner_text(item(1, '.dl-name'))})")
+    no_leaks(page, "add dialog")
+    shot(page, "library-add-dialog", "laptop")
+    page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+    page.click("#dl-ok")
+    page.wait_for_function("document.querySelector('#lib-add-progress').textContent.startsWith('2 of 2 added')", timeout=60000)
+    added = ["/gifs/Consoles/" + want_named, "/gifs/Consoles/OTHER_Smoke_Test_Card_01_smoker.gif"]
+    check(all((overlay / p.lstrip("/")).exists() and (overlay / cache_path(p).lstrip("/")).exists() for p in added),
+          f"add dialog: both uploaded under their names, prepared ({added})")
+    page.wait_for_function("[...document.querySelectorAll('#toasts .toast.ok')].some(t => t.textContent.startsWith('2 added to'))", timeout=30000)
+    card = added[1]
+    plist_file = overlay / "sets" / "cachetest.txt"
+    check(card in plist_file.read_text().split("\n"), "add dialog: offered and appended to the playlist in play")
+    # Mark it: a favourite in cachetest, Smooth motion's list.
+    lib_row(page, card)
+    page.select_option("#lib-ovset", "/sets/cachetest.txt")
+    page.wait_for_timeout(500)
+    page.click("#lib-d-fav")
+    meta = overlay / "sets" / "cachetest.meta"
+    deadline = time.time() + 10
+    while time.time() < deadline and not (meta.exists() and card in meta.read_text()):
+        page.wait_for_timeout(100)
+    check(meta.exists() and meta.read_text().startswith(card + "\t"), "details: ★ Favourite written for cachetest")
+    smooth = overlay / "sets" / ".smooth"
+    smooth_before = smooth.read_text() if smooth.exists() else None
+    smooth.parent.mkdir(parents=True, exist_ok=True)
+    smooth.write_text((smooth_before or "") + card + "\n")
+    # Edit details: a new title and another category -> a move.
+    page.click("#lib-d-edit")
+    page.wait_for_selector("#dl .dl-item[data-i='0'][data-name]", timeout=20000)
+    f = {k: page.input_value(item(0, f".dl-{k}")) for k in ("title", "plat", "cat", "author")}
+    check(f == {"title": "Smoke Test Card", "plat": "OTHER", "cat": "Consoles", "author": "smoker"}, f"edit: the fields read back ({f})")
+    page.fill(item(0, ".dl-title"), "Smoke Renamed")
+    page.select_option(item(0, ".dl-cat"), "Other")
+    to = "/gifs/Other/OTHER_Smoke_Renamed_01_smoker.gif"
+    page.wait_for_function(f"document.querySelector('#dl .dl-item[data-i=\"0\"]').dataset.name === {json.dumps(to.rsplit('/', 1)[1])}", timeout=10000)
+    shot(page, "library-edit-dialog", "laptop")
+    page.click("#dl-ok")
+    page.wait_for_function(f"document.querySelector('#lib-cap').textContent === {json.dumps(to.rsplit('/', 1)[1])}", timeout=60000)
+    check(not (overlay / card.lstrip("/")).exists() and (overlay / to.lstrip("/")).exists(), f"edit: renamed on the card to {to}")
+    check(not (overlay / cache_path(card).lstrip("/")).exists() and (overlay / cache_path(to).lstrip("/")).exists(),
+          f"edit: the prepared copy moved to {cache_path(to)}")
+    lines_now = plist_file.read_text().split("\n")
+    check(to in lines_now and card not in lines_now, "edit: the playlist line follows")
+    check(meta.read_text().startswith(to + "\t"), "edit: the favourite follows")
+    check(smooth.read_text().split("\n").count(to) == 1 and card not in smooth.read_text(), "edit: the Smooth motion line follows")
+    check(page.inner_text("#lib-d-title") == "Smoke Renamed 01" and page.inner_text("#lib-d-category") == "Other",
+          f"edit: the Details show the new fields ({page.inner_text('#lib-d-title')}, {page.inner_text('#lib-d-category')})")
+    # Edit in Make art: the GIF is the Studio's picture (its first frame).
+    page.click("#lib-d-art")
+    page.wait_for_function("document.querySelector('#st-msg') && document.querySelector('#st-msg').textContent.includes('first frame')", timeout=30000)
+    check(page.input_value("#st-title") == "Smoke Renamed" and page.input_value("#st-plat") == "OTHER",
+          f"edit in make art: loaded with its title and platform ({page.input_value('#st-title')}, {page.input_value('#st-plat')})")
+    # Delete: after asking, the GIF, its copy, its playlist line, favourite, Smooth line.
+    lib_row(page, to)
+    page.click("#lib-d-del")
+    page.wait_for_function("document.querySelector('#lib-d-body').hidden", timeout=60000)
+    check(not (overlay / to.lstrip("/")).exists() and not (overlay / cache_path(to).lstrip("/")).exists(), "delete: the GIF and its copy are gone")
+    check(to not in plist_file.read_text().split("\n"), "delete: the playlist line is gone")
+    check(not meta.exists() or to not in meta.read_text(), "delete: the favourite is gone")
+    check(to not in (smooth.read_text() if smooth.exists() else ""), "delete: the Smooth motion line is gone")
+    # Leave /sets/.smooth as it was for the Smooth motion checks.
+    if smooth_before is None:
+        smooth.unlink(missing_ok=True)
+    else:
+        smooth.write_text(smooth_before)
+    no_leaks(page, "library (edit, delete)")
 
 
 def studio_device(page: Page) -> None:
@@ -1791,7 +1972,7 @@ def studio_device(page: Page) -> None:
         check(False, "device studio: no picture loaded from GitHub (network?)")
     no_leaks(page, "device studio")
     shot(page, "device-studio", "laptop")
-    page.click("#st-close")
+    goto_view(page, "library")
 
 
 def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> None:
@@ -1938,7 +2119,7 @@ def preview_in_library(page: Page, gif: str) -> str:
     once the analysis is done."""
     goto_view(page, "library")
     cat, name = gif.split("/")[2], gif.rsplit("/", 1)[1]
-    page.select_option("#lib-cat", cat)
+    pick_cat(page, cat)
     page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
     page.fill("#lib-search", name[:-4])
     page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(gif)}]", timeout=20000)
@@ -2186,17 +2367,28 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
         shot(page, view, "phone")
     overflow = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
     check(overflow <= 0, f"phone: no horizontal scroll ({overflow}px)")
-    # The Studio on a phone: one column, nothing wider than the screen.
+    # The Library's Details on a phone: a sheet over the list.
+    goto_view(page, "library")
+    check(not page.is_visible("#lib-side"), "phone library: no Details until a GIF is picked")
+    page.click("#lib-list .vrow:not([hidden]) >> nth=0")
+    page.wait_for_selector("#lib-side.open #lib-d-title", timeout=10000)
+    wait_lit(page, "#lib-panel", "phone details")
+    wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+    check(page.is_visible("#lib-d-close") and wide <= 0, f"phone library: Details open as a sheet ({wide}px over)")
+    shot(page, "library-details", "phone")
+    page.click("#lib-d-close")
+    check(not page.is_visible("#lib-side"), "phone library: the sheet closes")
+    # The Studio on a phone, from the nav: one column, nothing wider than the screen.
     hits: list[str] = []
     stub_art(page, hits)
-    open_studio(page)
+    open_studio(page, "#nav-art")
     page.set_input_files("#st-file", str(OUT / "studio-fixture.png"))
     page.wait_for_function("document.querySelector('#studio').dataset.frames", timeout=20000)
     page.select_option("#st-find-plat", "SNES")
     page.fill("#st-find-q", "studio")
     page.click("#st-find-go")
     page.wait_for_selector("#st-hits .st-hit")
-    wide = page.evaluate("document.querySelector('#studio').scrollWidth - document.querySelector('#studio').clientWidth")
+    wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
     check(wide <= 0, f"phone studio: no horizontal scroll ({wide}px)")
     no_leaks(page, "phone studio")
     studio_shots(page, "phone")
@@ -2331,7 +2523,7 @@ def device_pass(browser, device: str) -> None:
             reqs: list[tuple[str, int]] = []
             page.on("response", lambda r: reqs.append((urllib.parse.unquote(r.url), r.status)))
             goto_view(page, "library")
-            page.select_option("#lib-cat", cat)
+            pick_cat(page, cat)
             page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
             for chip in page.query_selector_all("#lib-chips .chip.on"):
                 chip.click()

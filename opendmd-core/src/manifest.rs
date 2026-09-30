@@ -471,6 +471,257 @@ fn parse_stem(stem: &str) -> Entry {
     }
 }
 
+// --- Building a name from fields ------------------------------------------
+//
+// The inverse of the parser: what the web app's "Add GIFs" and "Edit
+// details" write. The metadata of a GIF *is* its path — there is no other
+// store — so a rename is how a title, platform, category or author changes.
+
+/// Longest file name [`build_name`] writes, `.gif` included. The card's
+/// longest is ~70 bytes; FAT's limit is 255 UTF-16 units per component, and
+/// the prepared copy's path (`/cache/<Category>/<xx>/<name>`) and every
+/// playlist line must stay well inside [`MAX_LINE`].
+#[cfg(feature = "names")]
+pub const MAX_NAME_LEN: usize = 120;
+/// Longest category (directory under `gifs/`) [`build_name`] accepts.
+#[cfg(feature = "names")]
+pub const MAX_CATEGORY_LEN: usize = 48;
+
+/// Why fields cannot be written as a name that reads back as the same
+/// fields. [`NameError::code`] is a stable string for the web app.
+#[cfg(feature = "names")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NameError {
+    /// No title (or nothing but separators).
+    EmptyTitle,
+    /// A character FAT or the grammar cannot take: `"*/:<>?\|`, `_`
+    /// (the separator; spaces become `_`), control or non-ASCII.
+    TitleChar,
+    /// Not a platform the parser would read back: `A-Z`, `0-9`, `-` with a
+    /// letter, or one of the multi-token names (`VIRTUAL_BOY`).
+    Platform,
+    /// Empty, too long, or a character a directory name cannot have.
+    Category,
+    /// An author handle is one token of `A-Za-z0-9.-`, at least three long,
+    /// not a keyword (`INTRO`) nor all digits.
+    Author,
+    /// A number or an author needs a platform: without one the parser reads
+    /// the whole name as the title.
+    NeedsPlatform,
+    /// Longer than [`MAX_NAME_LEN`].
+    TooLong,
+    /// Built, but the parser would read it back differently (a title word
+    /// taken for a tag: `Toy Story` -> `Toy` + `Story`, or `THE END` with
+    /// no platform -> platform `THE`). Reword.
+    ReadsBack,
+}
+
+#[cfg(feature = "names")]
+impl NameError {
+    pub fn code(self) -> &'static str {
+        match self {
+            NameError::EmptyTitle => "title",
+            NameError::TitleChar => "title-char",
+            NameError::Platform => "platform",
+            NameError::Category => "category",
+            NameError::Author => "author",
+            NameError::NeedsPlatform => "needs-platform",
+            NameError::TooLong => "too-long",
+            NameError::ReadsBack => "reads-back",
+        }
+    }
+}
+
+/// A GIF's metadata, as its path carries it: the fields [`build_name`]
+/// takes, plus any other flags (`INVERT`, `LOGO`, a season) the path had,
+/// which a rename keeps.
+#[cfg(feature = "names")]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct NameFields {
+    pub title: String,
+    pub platform: Option<String>,
+    /// The directory under `gifs/` (empty for a GIF directly in `gifs/`).
+    pub category: String,
+    pub ordinal: Option<u32>,
+    pub author: Option<String>,
+    /// Keyword and season flags, verbatim.
+    pub flags: Vec<String>,
+}
+
+#[cfg(feature = "names")]
+impl NameFields {
+    /// The fields of a card path (the parser's view, with the author
+    /// split out of the flags and the title's whitespace collapsed). The inverse of [`NameFields::path`].
+    pub fn from_path(path: &str) -> NameFields {
+        // `Entry::from_path` without its virtual-file branch: a name is
+        // never one, and the art module that carries this must not pull in
+        // the live items' titles.
+        let mut e = parse_stem(stem_of(path));
+        e.category = category_of(path);
+        let mut author = None;
+        let mut flags = Vec::new();
+        for f in e.flags {
+            let other = is_keyword_flag(&f) || SEASONS.contains(&f.as_str());
+            if author.is_none() && !other {
+                author = Some(f.trim().to_string());
+            } else {
+                flags.push(f);
+            }
+        }
+        NameFields {
+            // As it would be written: runs of whitespace are one separator.
+            title: e.title.split_whitespace().collect::<Vec<_>>().join(" "),
+            platform: e.platform,
+            category: e.category.unwrap_or_default(),
+            ordinal: e.variant,
+            author,
+            flags,
+        }
+    }
+
+    /// The card path these fields are written as: `/gifs/<Category>/` +
+    /// [`NameFields::file_name`].
+    pub fn path(&self) -> Result<String, NameError> {
+        let name = self.file_name()?;
+        Ok(if self.category.is_empty() {
+            format!("/gifs/{name}")
+        } else {
+            format!("/gifs/{}/{name}", self.category)
+        })
+    }
+
+    /// `[SEASON_]PLATFORM_Title_Words_NN[_author][_FLAG…].gif`, checked by
+    /// reading it back with [`Entry::from_path`]: `Ok` only if the parser
+    /// gives exactly these fields (the title with its whitespace collapsed,
+    /// an author's first letter lowercased unless it is a known handle).
+    pub fn file_name(&self) -> Result<String, NameError> {
+        let words: Vec<&str> = self.title.split_whitespace().collect();
+        if words.is_empty() {
+            return Err(NameError::EmptyTitle);
+        }
+        if !words.iter().all(|w| w.chars().all(name_char)) || self.title.starts_with('.') {
+            return Err(NameError::TitleChar);
+        }
+        let cat = self.category.as_str();
+        if cat.len() > MAX_CATEGORY_LEN
+            || cat.trim() != cat
+            || cat.starts_with('.')
+            || !cat.chars().all(|c| c == '_' || c == ' ' || name_char(c))
+        {
+            return Err(NameError::Category);
+        }
+        let author = match self
+            .author
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+        {
+            None => None,
+            Some(a) => Some(author_handle(a).ok_or(NameError::Author)?),
+        };
+        let mut parts: Vec<&str> = Vec::new();
+        let season = self.flags.iter().find(|f| SEASONS.contains(&f.as_str()));
+        match self.platform.as_deref().filter(|p| !p.is_empty()) {
+            Some(p) => {
+                let multi = MULTI_PLATFORMS.iter().any(|(_, n)| *n == p);
+                if !multi && !looks_like_platform(p) {
+                    return Err(NameError::Platform);
+                }
+                if let Some(s) = season {
+                    parts.push(s);
+                }
+                parts.push(p);
+            }
+            None if self.ordinal.is_some() || author.is_some() || !self.flags.is_empty() => {
+                return Err(NameError::NeedsPlatform)
+            }
+            None => {}
+        }
+        parts.extend(&words);
+        let ordinal = self.ordinal.map(|n| format!("{n:02}"));
+        parts.extend(ordinal.as_deref());
+        parts.extend(author.as_deref());
+        // Trailing tags are read right to left: written reversed, they read
+        // back in this order.
+        parts.extend(
+            self.flags
+                .iter()
+                .rev()
+                .filter(|f| !SEASONS.contains(&f.as_str()))
+                .map(String::as_str),
+        );
+        let name = parts.join("_") + ".gif";
+        if name.len() > MAX_NAME_LEN {
+            return Err(NameError::TooLong);
+        }
+        // The one rule that matters: it reads back as what was asked for.
+        let back = NameFields::from_path(&format!("/gifs/x/{name}"));
+        let same_flags = back.flags.len() == self.flags.len()
+            && self
+                .flags
+                .iter()
+                .all(|f| back.flags.iter().any(|b| b.eq_ignore_ascii_case(f)));
+        if back.title != words.join(" ")
+            || back.platform.as_deref() != self.platform.as_deref().filter(|p| !p.is_empty())
+            || back.ordinal != self.ordinal
+            || back.author != author
+            || !same_flags
+        {
+            return Err(NameError::ReadsBack);
+        }
+        Ok(name)
+    }
+}
+
+/// The card path for a GIF with these fields (see [`NameFields::file_name`]
+/// for the form and the checks). `category` is the directory under `gifs/`.
+#[cfg(feature = "names")]
+pub fn build_name(
+    title: &str,
+    platform: Option<&str>,
+    category: &str,
+    ordinal: Option<u32>,
+    author: Option<&str>,
+) -> Result<String, NameError> {
+    NameFields {
+        title: title.to_string(),
+        platform: platform.map(str::to_string),
+        category: category.to_string(),
+        ordinal,
+        author: author.map(str::to_string),
+        flags: Vec::new(),
+    }
+    .path()
+}
+
+/// A character a title word (or a category) may have: printable ASCII
+/// except FAT's `"*/:<>?\|`, and not `_`, the grammar's separator.
+#[cfg(feature = "names")]
+fn name_char(c: char) -> bool {
+    c.is_ascii_graphic() && !"\"*/:<>?\\|_".contains(c)
+}
+
+/// An author as the grammar reads one back: a known handle (any case) as
+/// it is, else
+/// one `A-Za-z0-9.-` token of three or more with its first letter
+/// lowercased (`Ross` -> `ross`); not a keyword flag, not all digits.
+#[cfg(feature = "names")]
+fn author_handle(a: &str) -> Option<String> {
+    if KNOWN_AUTHORS.iter().any(|k| k.eq_ignore_ascii_case(a)) {
+        return Some(a.to_string());
+    }
+    let ok = a.len() >= 3
+        && a.starts_with(|c: char| c.is_ascii_alphabetic())
+        && a.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+        && !is_keyword_flag(a);
+    ok.then(|| {
+        let mut s = a.to_string();
+        s[..1].make_ascii_lowercase();
+        s
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,6 +744,279 @@ mod tests {
         assert_eq!(e.variant, variant, "variant of {name}");
         let got: Vec<&str> = e.flags.iter().map(|s| s.as_str()).collect();
         assert_eq!(got, flags, "flags of {name}");
+    }
+
+    /// Real names from the card (`~/scratch/dmdos-card/filelist.txt`),
+    /// picked for their variety: glued and standalone numbers, authors
+    /// known and lowercase, keyword flags leading and trailing, seasons,
+    /// multi-token platforms, no platform, a space inside a token, a
+    /// trailing `..gif`.
+    #[cfg(feature = "names")]
+    pub(crate) const CORPUS: &[&str] = &[
+        "/gifs/Consoles/SNES_Donkey_Kong_Country_05.gif",
+        "/gifs/Consoles/MD_Sonic3_RattenJager.gif",
+        "/gifs/Consoles/SNES_Asterix01.gif",
+        "/gifs/Consoles/SNES_Mother02_RattenJager.gif",
+        "/gifs/NEW 2021/NINTENDO_DS_Mario_Kart_DS_01..gif",
+        "/gifs/Consoles/NES_Unknow_01_Invert.gif",
+        "/gifs/Halloween/HALLOWEEN_ARCADE_GoldenAxe16.gif",
+        "/gifs/Halloween/HALLOWEEN_Dracula_01.gif",
+        "/gifs/Consoles/SMS_Aladdin_Intro.gif",
+        "/gifs/Consoles/PICO-8_Downstream_Dream_02.gif",
+        "/gifs/Consoles/MD_LOGO_Sega31.gif",
+        "/gifs/Consoles/NES_The_Ren_n_Stimpy_Show.gif",
+        "/gifs/Consoles/PSP_Parasite_Eve_01__sephirot68.gif",
+        "/gifs/Consoles/Nes_Gradius.gif",
+        "/gifs/Spectrum_Slide/Exolon2.gif",
+        "/gifs/Pinball_Short/PINBALL_SHORT_STTNG30.gif",
+        "/gifs/The_80s_90s/The_80s_90s_MacGyver_02_sephirot68.gif",
+        "/gifs/Consoles/GBA_CT_Special_Forces_3_Bioterror_09.gif",
+        "/gifs/Other/OTHER_NINTENDO_SuperMarioBads03.gif",
+        "/gifs/Pinball_Short/PINBALL_SHORT_JurassicPark_NEW_02.gif",
+        "/gifs/Arcade/ARCADE_Green_Beret_02_RattenJager.gif",
+        "/gifs/Consoles/NES_King_Kong_2_01.gif",
+        "/gifs/Consoles/MD_RoiLion06_raph.gif",
+        "/gifs/Consoles/SNES_MegaManHelmet02Title.gif",
+        "/gifs/Arcade/ARCADE_SunsetRiders11Intro02.gif",
+        "/gifs/Consoles/SNES_The_Great_Battle_IV.gif",
+        "/gifs/Arcade/ARCADE_NEOGEO_Metal_Slug_X_02_INVERT.gif",
+        "/gifs/Consoles/GAMEGEAR_Columns_01_bd.azerty.p.gif",
+        "/gifs/Other/OTHER_037.gif",
+        "/gifs/Movies/MOVIES_HORROR_Leatherface_pandemo.gif",
+        "/gifs/Pinball_Short/PINBALL_SHORT_ID4_33.gif",
+        "/gifs/Computers/PC_Leilanis Island_42.gif",
+        "/gifs/Consoles/NGPC_CardFightersClashII05_RattenJager.gif",
+        "/gifs/Arcade/ARCADE_LOGO_NEOGEO_Snk01.gif",
+        "/gifs/Consoles/MD_Chase_HQ_II_01_Clivefrog.gif",
+        "/gifs/Other/OTHER_SCROLL_Xmen01.gif",
+        "/gifs/Consoles/MD_Demons_Of_Asteborg_01_sephirot68.gif",
+        "/gifs/Consoles/SNES_Street_Fighter_II_Turbo_03.gif",
+        "/gifs/Arcade/ARCADE_Pac-Man_01.gif",
+        "/gifs/Consoles/VIRTUAL_BOY_Mario_Clash_01.gif",
+        "/gifs/Consoles/SEGA_MEGACD_Snatcher_02.gif",
+        "/gifs/Xmas/XMAS_SNES_Christmas_Tree_01.gif",
+    ];
+
+    #[cfg(feature = "names")]
+    #[test]
+    fn built_names_read_back_as_the_same_fields() {
+        let mut built = 0;
+        for &path in CORPUS {
+            let f = NameFields::from_path(path);
+            match f.path() {
+                Ok(p) => {
+                    built += 1;
+                    assert_eq!(NameFields::from_path(&p), f, "{path} -> {p}");
+                    // Building again from what it reads back is a fixed point.
+                    assert_eq!(NameFields::from_path(&p).path().as_deref(), Ok(p.as_str()));
+                }
+                Err(e) => panic!("{path}: {e:?} for {f:?}"),
+            }
+        }
+        assert_eq!(built, CORPUS.len());
+    }
+
+    #[cfg(feature = "names")]
+    #[test]
+    fn canonical_names_are_rebuilt_byte_for_byte() {
+        for path in [
+            "/gifs/Consoles/SNES_Donkey_Kong_Country_05.gif",
+            "/gifs/Consoles/MD_Sonic3_RattenJager.gif",
+            "/gifs/Consoles/PICO-8_Downstream_Dream_02.gif",
+            "/gifs/Consoles/SNES_Mega_Man_X_08_sephirot68.gif",
+            "/gifs/Arcade/ARCADE_NEOGEO_Metal_Slug_X_02_INVERT.gif",
+            "/gifs/Spectrum_Slide/Exolon2.gif",
+            "/gifs/NEW 2021/NES_King_Kong_2_01.gif",
+        ] {
+            assert_eq!(NameFields::from_path(path).path().as_deref(), Ok(path));
+        }
+        // Not canonical, same fields: the number padded and last, the space
+        // an underscore, the stray dot gone, NINTENDO_DS written NDS.
+        for (path, want) in [
+            (
+                "/gifs/Consoles/SNES_Asterix01.gif",
+                "/gifs/Consoles/SNES_Asterix_01.gif",
+            ),
+            (
+                "/gifs/Computers/PC_Leilanis Island_42.gif",
+                "/gifs/Computers/PC_Leilanis_Island_42.gif",
+            ),
+            (
+                "/gifs/N/NINTENDO_DS_Mario_Kart_DS_01..gif",
+                "/gifs/N/NDS_Mario_Kart_DS_01.gif",
+            ),
+            (
+                "/gifs/Consoles/MD_LOGO_Sega31.gif",
+                "/gifs/Consoles/MD_Sega_31_LOGO.gif",
+            ),
+            (
+                "/gifs/H/HALLOWEEN_ARCADE_GoldenAxe16.gif",
+                "/gifs/H/HALLOWEEN_ARCADE_GoldenAxe_16.gif",
+            ),
+            (
+                "/gifs/C/PSP_Parasite_Eve_01__sephirot68.gif",
+                "/gifs/C/PSP_Parasite_Eve_01_sephirot68.gif",
+            ),
+        ] {
+            assert_eq!(
+                NameFields::from_path(path).path().as_deref(),
+                Ok(want),
+                "{path}"
+            );
+        }
+    }
+
+    #[cfg(feature = "names")]
+    #[test]
+    fn build_name_writes_the_grammar() {
+        let b = build_name;
+        assert_eq!(
+            b("Super Metroid", Some("SNES"), "Consoles", Some(1), None).as_deref(),
+            Ok("/gifs/Consoles/SNES_Super_Metroid_01.gif")
+        );
+        // A title ending in a number stays a title, with the number after it.
+        assert_eq!(
+            b(
+                "Streets of Rage 2",
+                Some("MD"),
+                "Consoles",
+                Some(3),
+                Some("ross")
+            )
+            .as_deref(),
+            Ok("/gifs/Consoles/MD_Streets_of_Rage_2_03_ross.gif")
+        );
+        // Whitespace collapses; an author is written the way it reads back.
+        assert_eq!(
+            b(
+                "  Sunset   Riders ",
+                Some("ARCADE"),
+                "Arcade",
+                Some(12),
+                Some("Ross")
+            )
+            .as_deref(),
+            Ok("/gifs/Arcade/ARCADE_Sunset_Riders_12_ross.gif")
+        );
+        assert_eq!(
+            b(
+                "my art",
+                Some("OTHER"),
+                "NEW 2021",
+                Some(2),
+                Some("rattenjager")
+            )
+            .as_deref(),
+            Ok("/gifs/NEW 2021/OTHER_my_art_02_rattenjager.gif")
+        );
+        assert_eq!(
+            b("Ms. Pac-Man", Some("ARCADE"), "Arcade", Some(1), None).as_deref(),
+            Ok("/gifs/Arcade/ARCADE_Ms._Pac-Man_01.gif")
+        );
+        assert_eq!(
+            b("VB Thing", Some("VIRTUAL_BOY"), "C", Some(1), None).as_deref(),
+            Ok("/gifs/C/VIRTUAL_BOY_VB_Thing_01.gif")
+        );
+        // No platform: the whole name is the title, so no number or author.
+        assert_eq!(
+            b("Sunset", None, "Mine", None, None).as_deref(),
+            Ok("/gifs/Mine/Sunset.gif")
+        );
+        assert_eq!(
+            b("my sunset 2", None, "Mine", None, None).as_deref(),
+            Ok("/gifs/Mine/my_sunset_2.gif")
+        );
+        assert_eq!(
+            b("Sunset", None, "Mine", Some(1), None),
+            Err(NameError::NeedsPlatform)
+        );
+        assert_eq!(
+            b("Sunset", None, "Mine", None, Some("ross")),
+            Err(NameError::NeedsPlatform)
+        );
+
+        // What cannot be written, or would not read back.
+        assert_eq!(
+            b("  ", Some("SNES"), "C", Some(1), None),
+            Err(NameError::EmptyTitle)
+        );
+        for bad in [
+            "a_b",
+            "a/b",
+            "what?",
+            "a:b",
+            "caf\u{e9}",
+            "a*b",
+            "tab\u{7f}",
+            ".hidden",
+        ] {
+            assert_eq!(
+                b(bad, Some("SNES"), "C", Some(1), None),
+                Err(NameError::TitleChar),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            b("X", Some("Snes"), "C", Some(1), None),
+            Err(NameError::Platform)
+        );
+        assert_eq!(
+            b("X", Some("SN ES"), "C", Some(1), None),
+            Err(NameError::Platform)
+        );
+        for cat in ["", "a/b", " x", ".x", "x?"] {
+            assert_eq!(
+                b("X", Some("SNES"), cat, Some(1), None).map(|_| ()),
+                if cat.is_empty() {
+                    Ok(())
+                } else {
+                    Err(NameError::Category)
+                },
+                "{cat:?}"
+            );
+        }
+        assert_eq!(
+            b("X", Some("SNES"), "", Some(1), None).as_deref(),
+            Ok("/gifs/SNES_X_01.gif")
+        );
+        for bad in ["ab", "intro", "123", "a b", "-ab"] {
+            assert_eq!(
+                b("X", Some("SNES"), "C", Some(1), Some(bad)),
+                Err(NameError::Author),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            b(&"Long ".repeat(30), Some("SNES"), "C", Some(1), None),
+            Err(NameError::TooLong)
+        );
+        // A title word the grammar takes for a tag.
+        assert_eq!(
+            b("Toy Story", Some("SNES"), "C", Some(1), None),
+            Err(NameError::ReadsBack)
+        );
+        assert_eq!(
+            b("Intro Stage", Some("SNES"), "C", Some(1), None),
+            Err(NameError::ReadsBack)
+        );
+        assert_eq!(
+            b("THE END", None, "C", None, None),
+            Err(NameError::ReadsBack)
+        );
+        assert_eq!(
+            b("Doom 64", Some("N64"), "C", None, None),
+            Err(NameError::ReadsBack)
+        );
+        assert_eq!(
+            b("Doom 64", Some("N64"), "C", Some(1), None).as_deref(),
+            Ok("/gifs/C/N64_Doom_64_01.gif")
+        );
+        assert_eq!(
+            b("ARCADE Night", Some("HALLOWEEN"), "C", Some(1), None),
+            Err(NameError::ReadsBack)
+        );
+        // Error codes are what the web app maps to sentences.
+        assert_eq!(NameError::ReadsBack.code(), "reads-back");
     }
 
     #[test]

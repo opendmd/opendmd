@@ -425,6 +425,10 @@ pub const HTTP_MAX_SOCKETS: u16 = 7;
 /// Where the playlists live on the card. (The web app is not on the card: it
 /// is a www pack in flash, `www.rs`.)
 pub const SETS_DIR: &str = "/sdcard/sets";
+/// Smooth motion's list (`/sets/.smooth`, one GIF path a line): the GIFs
+/// whose prepared copy is the tweened one. The web app keeps it; the
+/// firmware only renames a line when a GIF is moved (`POST /api/files/move`).
+pub const SMOOTH_LIST: &str = "/sdcard/sets/.smooth";
 
 // ---------------------------------------------------------------------------
 // Playback cache (prepared copies)

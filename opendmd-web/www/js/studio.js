@@ -1,10 +1,11 @@
-// The Studio: "Make art" in Library. A picture in (a file, a drop, a paste,
-// an address, or "Find art for a game"), a 128x32 GIF out, in five steps on
-// one sheet: Import, Frame, Look, Preview, Save.
+// The Studio: the "Make art" view. A picture in (a file, a drop, a paste,
+// an address, "Find art for a game", or a GIF from the Library's "Edit in
+// Make art" — its first frame, for now), a 128x32 GIF out, in five steps on
+// one page: Import, Frame, Look, Preview, Save.
 //
-// Loaded on first use, with its own wasm module (pkg-art/: the pixel work
-// and the GIF writer, opendmd-art-web), so the app everyone loads does not
-// grow. The picture is decoded by the browser into RGBA and handed to a
+// Loaded when the view is first opened, with its stylesheet and its own
+// wasm module (pkg-art/: the pixel work and the GIF writer,
+// opendmd-art-web), so the app everyone loads does not grow. The picture is decoded by the browser into RGBA and handed to a
 // wasm `Studio`, which keeps it; every change of a control re-renders the
 // GIF there and the preview plays it. Save goes through Library's Add GIFs
 // path (the GIF into a category, its prepared copy beside it) — or, with no
@@ -19,8 +20,9 @@
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
-import { h, clear, toast, debounce } from './util.js';
+import { h, clear, toast, debounce, label } from './util.js';
 import { art as artModule } from './artmod.js';
+import { addOne, offerPlaylist } from './library.js';
 
 const PLATFORMS = ['MD', 'SNES', 'GB', 'GBC', 'GBA', 'SATURN', 'NDS', 'NES', 'SMS', 'PCE', 'PS1', 'N64', 'ARCADE'];
 const RAW = 'https://raw.githubusercontent.com/libretro-thumbnails/';
@@ -30,17 +32,11 @@ const HOLDS = [['No pause', 0], ['Pause 1.5 s', 1500], ['Pause 3 s', 3000]];
 const MAX_PX = 4e6; // bigger pictures are scaled down on the way in
 
 let art = null; // the wasm module
-let sheet = null; // the one Studio, built on first open
 
-// Open the Studio. `o`: {entry?, category, categories, names(category) ->
-// file names, save(category, name, bytes) -> path, saved(category, paths)}.
-export async function open(o) {
-  if (!art) {
-    [art] = await Promise.all([artModule(), css()]);
-  }
-  sheet ??= build();
-  sheet.open(o);
-  return sheet;
+// The view: built once, into `root`.
+export async function mount(root) {
+  [art] = await Promise.all([artModule(), css()]);
+  return build(root);
 }
 
 function css() {
@@ -76,7 +72,7 @@ export function fileName(platform, title, logo, n) {
   return [platform, logo && 'LOGO', ...(w.length ? w : ['Untitled']), String(n).padStart(2, '0')].filter(Boolean).join('_') + '.gif';
 }
 
-function build() {
+function build(root) {
   const S = { studio: null, fit: 'pixels', motion: 'still', x: 0, y: 0, gif: null, opts: null, names: new Map(), index: new Map(), urls: [] };
   const id = (x) => 'st-' + x;
   const seg = (name, items, onpick) => {
@@ -151,10 +147,11 @@ function build() {
     h('div.row', { style: 'margin-top:8px' }, h('label', logo, 'It is a logo')),
     name, warn, h('div.row', { style: 'margin-top:8px' }, saveBtn));
 
-  const close = h('button', { id: id('close'), 'aria-label': 'Close', onclick: () => hide() }, '✕');
-  const box = h('div.st-box', h('div.row.sp', h('h2', 'Make art'), close), h('div.st-grid', imp, frm, look, prev, sv));
-  const el = h('div.st-sheet', { id: 'studio', hidden: true }, box);
-  document.body.append(el);
+  const box = h('div.st-box', h('h2', 'Make art'),
+    h('p.muted', 'Turn a picture — a screenshot, box art, a logo — into a GIF for the panel.'),
+    h('div.st-grid', imp, frm, look, prev, sv));
+  const el = h('div.st-root', { id: 'studio' }, box);
+  root.append(el);
 
   for (const p of PLATFORMS) {
     plat.append(h('option', { value: p }, art.consoleName(p) || p));
@@ -166,6 +163,7 @@ function build() {
   async function load(blob, from = {}) {
     msg.textContent = 'Reading the picture…';
     let bm;
+    // (A GIF gives its first frame.)
     try { bm = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }); } catch {
       msg.textContent = 'That is not a picture this browser can read.';
       return false;
@@ -406,43 +404,51 @@ function build() {
     if (f) load(f, { label: 'Dropped' });
     else { const u = e.dataTransfer.getData('text/uri-list').split('\n')[0].trim(); if (u) { url.value = u; fromUrl(u); } }
   });
-  el.addEventListener('click', (e) => { if (e.target === el) hide(); });
-  const onKey = (e) => { if (e.key === 'Escape') hide(); };
 
-  function hide() {
-    el.hidden = true;
-    document.body.classList.remove('st-open');
-    removeEventListener('paste', onPaste);
-    removeEventListener('keydown', onKey);
-  }
+  // Where it saves: a category on the card (Add GIFs' path: the GIF, its
+  // prepared copy), then the offer to add it to the playlist in play.
+  S.opts = {
+    names: async (c) => (await app.src.list(`/gifs/${c}`).catch(() => [])).map((f) => f.name),
+    save: addOne,
+    saved: (_c, paths) => offerPlaylist(paths),
+  };
 
   return {
     el,
     load,
-    open(o) {
-      S.opts = o;
-      const e = o.entry;
-      clear(cat, (app.device ? o.categories : [o.category]).filter(Boolean).map((c) => h('option', { value: c }, c)));
-      cat.value = e?.category || (o.categories.includes('Consoles') ? 'Consoles' : o.category);
+    async show() {
+      addEventListener('paste', onPaste);
+      let cats = [];
+      if (app.device) try { cats = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(); } catch { /* none yet */ }
+      if (!cats.length) cats = ['Consoles'];
+      const was = cat.value;
+      clear(cat, cats.map((c) => h('option', { value: c }, c)));
+      cat.value = cats.includes(was) ? was : cats.includes('Consoles') ? 'Consoles' : cats[0];
       cat.parentElement.hidden = !app.device;
       saveBtn.textContent = app.device ? 'Save to the card' : 'Download GIF';
-      if (e) {
-        setPlatform(e.platform || splat.value || 'MD');
-        title.value = e.title || '';
-        if (PLATFORMS.includes(e.platform)) plat.value = e.platform;
-        query.value = e.title || '';
-      }
-      el.hidden = false;
-      document.body.classList.add('st-open');
-      addEventListener('paste', onPaste);
-      addEventListener('keydown', onKey);
       if (!pv) {
         pv = new PanelPreview(panel, { onError: (m) => { stats.textContent = 'preview: ' + m; } });
         pv.p.setTransition('none', 0);
       }
       if (S.studio) frame();
       naming();
-      if (e && query.value) find();
+      // "Edit in Make art" in the Library: that GIF (its first frame) is
+      // the picture, its platform and title the name's, and the game's
+      // art a search away.
+      const from = app.artFrom;
+      app.artFrom = null;
+      if (from) {
+        const e = from.e;
+        if (cats.includes(e.category)) cat.value = e.category;
+        if (e.platform) setPlatform(e.platform);
+        title.value = e.title || '';
+        if (PLATFORMS.includes(e.platform)) plat.value = e.platform;
+        query.value = e.title || '';
+        try {
+          await load(new Blob([await app.src.readBytes(from.path)], { type: 'image/gif' }), { platform: e.platform, title: e.title, label: `${label(e)} (its first frame)` });
+        } catch (err) { msg.textContent = `Could not load ${label(e)}: ${err.message}`; }
+      }
     },
+    hide() { removeEventListener('paste', onPaste); },
   };
 }

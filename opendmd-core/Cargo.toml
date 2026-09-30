@@ -16,6 +16,11 @@ log = "0.4"
 # Smooth motion (src/tween.rs): the shift tweener for prepared copies. Only
 # opendmd-pack and the art wasm module enable it; the firmware never does.
 tween = []
+# Building a GIF's name from its fields (`manifest::NameFields`, `build_name`):
+# the web app's Add GIFs / Edit details, through the art wasm module. Behind a
+# feature because its mere presence moved the main wasm module's inlining
+# (+150-250 B gz there, where there is ~1 KB left) though it never calls it.
+names = []
 
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
 [patch.crates-io]

@@ -88,6 +88,14 @@ where
     <Option<String> as serde::Deserialize>::deserialize(d).map(Some)
 }
 
+/// Wire format for `POST /api/files/move`: rename a GIF (and what follows
+/// it by name).
+#[derive(serde::Deserialize)]
+struct MoveRequest {
+    from: String,
+    to: String,
+}
+
 /// Wire format for `POST /api/cache/forget`.
 #[derive(serde::Deserialize)]
 struct ForgetRequest {
@@ -168,7 +176,7 @@ struct WakeRequest {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route` below (42 now, the captive-portal loop counting six; 44 leaves two spare). Registration past
+    // URI handler slots: one per `route` below (43 now, the captive-portal loop counting six; 44 leaves one spare). Registration past
     // the limit fails the whole server, so count when adding a route.
     let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 44)?;
 
@@ -873,6 +881,16 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         stream::receive(req, move |up| put_file(up, &c, &rel))
     })?;
 
+    // Rename a GIF (`{"from","to"}`): its prepared copy, its Smooth motion
+    // line and its failure line follow. On the stream task, like the other
+    // card writes: two FAT directory scans per rename, up to ~0.5 s each in
+    // gifs/Consoles, must not hold the API.
+    let c = ctx.clone();
+    server.route("/api/files/move", Method::Post, move |req| {
+        let c = c.clone();
+        stream::receive(req, move |up| move_file(up, &c))
+    })?;
+
     // --- Delete ---------------------------------------------------------------
 
     let c = ctx.clone();
@@ -934,6 +952,17 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     crate::cache::invalidate();
                 }
                 req.json(r#"{"ok":true}"#)
+            }
+            // An empty category (a directory under gifs/) goes too: what is
+            // left when its last GIF was deleted or moved away.
+            Err(_)
+                if std::fs::metadata(&path).is_ok_and(|m| m.is_dir())
+                    && files::under(&path, &format!("{}/gifs", config::SD_MOUNT)) =>
+            {
+                match std::fs::remove_dir(&path) {
+                    Ok(()) => req.json(r#"{"ok":true}"#),
+                    Err(e) => req.error(409, "409 Conflict", &format!("{rel}: not empty ({e})")),
+                }
             }
             Err(e) => req.not_found(&format!("{rel}: {e}")),
         }
@@ -1180,6 +1209,110 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
     up.json(&format!(
         r#"{{"ok":true,"path":{},"bytes":{written}}}"#,
         json_string(&format!("/{}", rel.trim_start_matches('/')))
+    ))
+}
+
+/// `POST /api/files/move`, on the stream task: `{"from":"/gifs/A/x.gif",
+/// "to":"/gifs/B/y.gif"}`. Both must be card-absolute `.gif` paths under
+/// `/gifs/` with no tab or line break (400); `from` must exist (404) and
+/// `to` must not, unless it is `from` in another case (409). Renames the
+/// GIF (creating `to`'s directory), then its prepared copy to the new
+/// bucket — or deletes it if that fails, and deletes any stale copy at the
+/// new place, so no copy is ever left for a name that does not exist or
+/// played for the wrong GIF — then renames its line in `/sets/.smooth` and
+/// in `/cache/.failed`. Playlists and their overrides are the client's
+/// (the web app rewrites them). `{"ok","from","to","copy":"moved"|"removed"
+/// |"none","smooth","failed"}`. Everything it holds is transient.
+fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
+    if up.content_len() > MAX_JSON_BODY as u64 {
+        return up.error(413, "413 Payload Too Large", "body over 8 KB");
+    }
+    let mut body = Vec::with_capacity(up.content_len() as usize);
+    let mut buf = [0u8; 128];
+    loop {
+        match up.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => body.extend_from_slice(&buf[..n]),
+            Err(e) => return up.error(408, "408 Request Timeout", &format!("{e:#}")),
+        }
+    }
+    let m: MoveRequest = match serde_json::from_slice(&body) {
+        Ok(m) => m,
+        Err(e) => return up.bad_request(&format!("invalid JSON: {e}")),
+    };
+    drop(body);
+    let gif = |p: &str| {
+        let under_gifs = p.get(..6).is_some_and(|g| g.eq_ignore_ascii_case("/gifs/"));
+        (under_gifs && !p.contains(['\t', '\r', '\n']))
+            .then(|| files::card_path(config::SD_MOUNT, p))
+            .flatten()
+            .filter(|_| opendmd_core::layout::cache_path(p).is_some())
+    };
+    let (Some(from), Some(to)) = (gif(&m.from), gif(&m.to)) else {
+        return up.bad_request("from and to must be card-absolute /gifs/….gif paths");
+    };
+    if m.from == m.to {
+        return up.bad_request("from and to are the same");
+    }
+    if std::fs::metadata(&from).map_or(true, |md| md.is_dir()) {
+        return up.not_found(&m.from);
+    }
+    // FAT compares names case-insensitively: a case-only rename finds
+    // itself at `to`, which is not a clash.
+    if !files::same_card_path(&from, &to) && std::fs::metadata(&to).is_ok() {
+        return up.error(409, "409 Conflict", &format!("{} already exists", m.to));
+    }
+    // The player must not have the GIF, or its copy, open under a rename.
+    skip_if_playing(c, &from);
+    if let Some(dir) = std::path::Path::new(&to).parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            return up.error(
+                500,
+                "500 Internal Server Error",
+                &format!("{}: {e}", dir.display()),
+            );
+        }
+    }
+    if let Err(e) = std::fs::rename(&from, &to) {
+        return up.error(
+            500,
+            "500 Internal Server Error",
+            &format!("rename {} -> {}: {e}", m.from, m.to),
+        );
+    }
+    // The prepared copy follows the name: its bucket is the name's.
+    let copy = match (
+        opendmd_core::layout::cache_path(&m.from),
+        opendmd_core::layout::cache_path(&m.to),
+    ) {
+        (Some(old), Some(new)) => {
+            let (old, new) = (
+                format!("{}{old}", config::SD_MOUNT),
+                format!("{}{new}", config::SD_MOUNT),
+            );
+            files::move_copy(&old, &new)
+        }
+        _ => "none",
+    };
+    crate::cache::invalidate();
+    let smooth = files::rename_line(config::SMOOTH_LIST, &m.from, &m.to).unwrap_or_else(|e| {
+        log::warn!("move {}: {}: {e}", m.from, config::SMOOTH_LIST);
+        false
+    });
+    let failed = crate::cache_builder::rename_failed(&m.from, &m.to).unwrap_or_else(|e| {
+        log::warn!("move {}: {}: {e}", m.from, config::BUILDER_FAILED_PATH);
+        false
+    });
+    info!(
+        "move {} -> {}: copy {copy}, smooth {smooth}, failed {failed} in {:.1} s",
+        m.from,
+        m.to,
+        up.elapsed().as_secs_f32()
+    );
+    up.json(&format!(
+        r#"{{"ok":true,"from":{},"to":{},"copy":"{copy}","smooth":{smooth},"failed":{failed}}}"#,
+        json_string(&m.from),
+        json_string(&m.to)
     ))
 }
 

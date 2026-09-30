@@ -1470,3 +1470,18 @@ fn record_failure(gif: &str, why: &str) {
         log::warn!("cache builder: recording the failure of {gif}: {e}");
     }
 }
+
+/// `POST /api/files/move`: the failure line of GIF `from`, if there is one,
+/// now names `to` (and the walk skips `to` from its next step). Whether a
+/// line was renamed.
+pub fn rename_failed(from: &str, to: &str) -> io::Result<bool> {
+    let _file = FAILED_FILE.lock().unwrap_or_else(|p| p.into_inner());
+    let renamed = crate::files::rename_line(config::BUILDER_FAILED_PATH, from, to)?;
+    if renamed {
+        FAILED_ADDED
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(layout::prepared_key(to));
+    }
+    Ok(renamed)
+}
