@@ -79,7 +79,7 @@ export function guess(name) {
 
 // Per category: its file names (lowercased) and, per platform + title, the
 // highest number in use. Listed once per dialog.
-function listings(known) {
+export function listings(known) {
   const got = new Map();
   return (c) => {
     if (!got.has(c)) {
@@ -196,21 +196,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
       const f = { title: it.title.value.trim(), platform: it.platform.value || null, category: c, author: it.author.value.trim() || null, flags: it.init.flags || [], ordinal: null };
       const l = await listing(c);
       if (t !== refresh.t) return;
-      const unchanged = keep && c === keep.category && f.platform === keep.platform && app.wasm.normalizeTitle(f.title) === app.wasm.normalizeTitle(keep.title);
-      const self = keep && lc(keep.path);
-      const free = (p) => !taken.has(lc(p)) && (p.toLowerCase() === self || !l.names.has(lc(base(p))));
-      let path = null, why = '';
-      try {
-        if (f.platform) {
-          f.ordinal = unchanged ? keep.ordinal : (l.max.get(key(f.platform, f.title)) || 0) + 1;
-          for (path = m.buildName(f); !free(path); path = m.buildName(f)) f.ordinal = (f.ordinal || 1) + 1;
-        } else {
-          const t0 = f.title;
-          for (let n = 2, p = m.buildName(f); ; p = m.buildName({ ...f, title: `${t0} ${n++}` })) if (free(p)) { path = p; break; }
-        }
-      } catch (c0) {
-        why = WHY[c0] || readsBack(f);
-      }
+      const { path = null, why = '' } = pickName(m, f, l, keep, taken);
       it.out = path && { file: it.file, category: c, name: base(path), path };
       it.title.classList.toggle('bad', !f.title);
       it.name.textContent = path ? `→ ${base(path)}${app.device ? ` in ${c}` : ''}` : '';
@@ -220,11 +206,37 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
     }
     okBtn.disabled = bad > 0;
   }
-  // What the parser would make of it: a word in the title taken for a tag.
-  function readsBack(f) {
-    const words = f.title.split(/\s+/);
-    const e = app.wasm.parsePath('/gifs/x/' + [f.platform, ...words, String(f.ordinal ?? 1).padStart(2, '0'), f.author].filter(Boolean).join('_') + '.gif');
-    return `That would read back as “${e.title}”: a word in the title is taken for a tag. Try other words.`;
+}
+
+// What the parser would make of it: a word in the title taken for a tag.
+function readsBack(f) {
+  const words = f.title.split(/\s+/);
+  const e = app.wasm.parsePath('/gifs/x/' + [f.platform, ...words, String(f.ordinal ?? 1).padStart(2, '0'), f.author].filter(Boolean).join('_') + '.gif');
+  return `That would read back as “${e.title}”: a word in the title is taken for a tag. Try other words.`;
+}
+
+// The name for fields `f` (`nameFields`' shape) in a category's listing
+// `l` (from `listings`): the next free number for that platform and title
+// — the one it had when `keep` (a GIF being edited) has the same platform,
+// title and category —, or, with no platform, the title suffixed until
+// the name is free; never one in `taken`. {path} or {why} (the reason, in
+// words). Add GIFs, Edit details and the Studio's Save all name through it.
+export function pickName(m, f, l, keep, taken = new Set()) {
+  f = { ...f };
+  const unchanged = keep && f.category === keep.category && f.platform === keep.platform && app.wasm.normalizeTitle(f.title) === app.wasm.normalizeTitle(keep.title);
+  const self = keep && lc(keep.path);
+  const free = (p) => !taken.has(lc(p)) && (p.toLowerCase() === self || !l.names.has(lc(base(p))));
+  try {
+    if (f.platform) {
+      f.ordinal = unchanged ? keep.ordinal : (l.max.get(key(f.platform, f.title)) || 0) + 1;
+      let path = m.buildName(f);
+      for (; !free(path); path = m.buildName(f)) f.ordinal = (f.ordinal || 1) + 1;
+      return { path };
+    }
+    const t0 = f.title;
+    for (let n = 2, p = m.buildName(f); ; p = m.buildName({ ...f, title: `${t0} ${n++}` })) if (free(p)) return { path: p };
+  } catch (c0) {
+    return { why: WHY[c0] || readsBack(f) };
   }
 }
 

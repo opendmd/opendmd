@@ -1,7 +1,16 @@
-// The Studio: the "Make art" view. A picture in (a file, a drop, a paste,
-// an address, "Find art for a game", or a GIF from the Library's "Edit in
-// Make art" — its first frame, for now), a 128x32 GIF out, in five steps on
-// one page: Import, Frame, Look, Preview, Save.
+// The Studio: the "Make art" view. A picture or an animated GIF in (a file,
+// a drop, a paste, an address, "Find art for a game", or a GIF from the
+// Library's "Edit in Make art"), a 128x32 GIF out, in six steps on one
+// page: Import, Frame, Look, Text, Preview (with the timeline for an
+// animation), Save.
+//
+// An animated GIF is decoded in the art module (every frame composited as
+// the player does, kept there), in ~12 ms slices with the page given back
+// between them, as Smooth motion does. Frame, Look and Text apply to every
+// frame; frames are rendered when shown (the preview is fed one frame at a
+// time, at the GIF's own timing) and all of them when it is saved. The
+// timeline trims, deletes, speeds up or slows down, reverses and ping-pongs;
+// the order and delays are the module's (`setEdit`), not worked out here.
 //
 // Loaded when the view is first opened, with its stylesheet and its own
 // wasm module (pkg-art/: the pixel work and the GIF writer,
@@ -20,14 +29,33 @@
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
-import { h, clear, toast, debounce, label } from './util.js';
+import { h, clear, toast, debounce, label, base } from './util.js';
 import { art as artModule } from './artmod.js';
 import { addOne, offerPlaylist } from './library.js';
+import { listings, pickName, renameGif } from './details.js';
+import { prepareBytes } from './prepare.js';
 
 const PLATFORMS = ['MD', 'SNES', 'GB', 'GBC', 'GBA', 'SATURN', 'NDS', 'NES', 'SMS', 'PCE', 'PS1', 'N64', 'ARCADE'];
 const RAW = 'https://raw.githubusercontent.com/libretro-thumbnails/';
 const KINDS = [[1, 'Named_Titles', 'Title screen'], [2, 'Named_Snaps', 'In the game'], [4, 'Named_Boxarts', 'Box'], [8, 'Named_Logos', 'Logo']];
 const SPEEDS = [['Slow', 50], ['Normal', 40], ['Fast', 30]];
+const RATES = [25, 50, 75, 100, 150, 200, 300, 400];
+const PLAYS = [['Plays forever', 0], ['Plays once', 1], ['Plays 2 times', 2], ['Plays 3 times', 3], ['Plays 5 times', 5], ['Plays 10 times', 10]];
+const CW = 100; // a timeline cell, px
+const later = () => new Promise((r) => setTimeout(r, 0));
+const secs = (ms) => { const s = ms / 1000; return s < 10 ? s.toFixed(1) : String(Math.round(s)); };
+
+// Call `step` (a little wasm work; true when done) until done, giving the
+// page back every ~12 ms. False if `alive()` said stop.
+async function run(step, alive, progress) {
+  for (;;) {
+    const t = performance.now();
+    do { if (step()) return true; } while (performance.now() - t < 12);
+    progress?.();
+    await later();
+    if (alive && !alive()) return false;
+  }
+}
 const HOLDS = [['No pause', 0], ['Pause 1.5 s', 1500], ['Pause 3 s', 3000]];
 const MAX_PX = 4e6; // bigger pictures are scaled down on the way in
 
@@ -59,21 +87,8 @@ async function thumb(url, hops = 3) {
   return b;
 }
 
-// Lowercase joining words stay lowercase in a name; everything else starts
-// with a capital, as the pack's names do.
-const SMALL = new Set(['of', 'the', 'a', 'an', 'and', 'in', 'on', 'to', 'vs', 'de', 'no']);
-const words = (t) => t.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, ' ').trim().split(' ').filter(Boolean)
-  .map((w, i) => (i && SMALL.has(w.toLowerCase()) ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1)));
-
-// PLATFORM[_LOGO]_Title_Words_NN.gif — the variant last, so a title ending
-// in a number ("Streets of Rage 2") stays a title.
-export function fileName(platform, title, logo, n) {
-  const w = words(title);
-  return [platform, logo && 'LOGO', ...(w.length ? w : ['Untitled']), String(n).padStart(2, '0')].filter(Boolean).join('_') + '.gif';
-}
-
 function build(root) {
-  const S = { studio: null, fit: 'pixels', motion: 'still', x: 0, y: 0, gif: null, opts: null, names: new Map(), index: new Map(), urls: [] };
+  const S = { studio: null, fit: 'pixels', motion: 'still', x: 0, y: 0, gif: null, opts: null, index: new Map(), urls: [], tok: 0, from: null, listing: null, cats: [] };
   const id = (x) => 'st-' + x;
   const seg = (name, items, onpick) => {
     const el = h('div.st-seg', { id: id(name), role: 'group' }, items.map(([v, t]) => h('button', { 'data-v': v, onclick: () => onpick(v) }, t)));
@@ -81,6 +96,7 @@ function build(root) {
     return el;
   };
   const select = (name, items, value) => h('select', { id: id(name) }, items.map(([t, v]) => h('option', { value: v, selected: v === value }, t)));
+  const num = (name, attrs) => h('input', { type: 'number', id: id(name), inputMode: 'numeric', ...attrs });
 
   // --- 1 Import
   const file = h('input', { type: 'file', accept: 'image/*', hidden: true, id: id('file'), onchange: () => { if (file.files[0]) load(file.files[0]); file.value = ''; } });
@@ -91,7 +107,7 @@ function build(root) {
   const hits = h('div.st-hits', { id: id('hits') });
   const thumbs = h('div.st-thumbs', { id: id('thumbs') });
   const imp = h('section.card', { id: id('import') }, h('h3', '1 · Import'),
-    h('div.row', h('label.btn', 'Choose a picture…', file), h('span.muted', 'or drop or paste one here')),
+    h('div.row', h('label.btn', 'Choose a picture or GIF…', file), h('span.muted', 'or drop or paste one here')),
     h('div.row.st-url', h('div.grow', url), h('button', { id: id('url-go'), onclick: () => fromUrl(url.value.trim()) }, 'Load')),
     h('div.st-find', h('b', 'Find art for a game'),
       h('div.row', plat, h('div.grow', query), h('button', { id: id('find-go'), onclick: () => find() }, 'Search')), hits, thumbs),
@@ -111,9 +127,9 @@ function build(root) {
   const speed = select('speed', SPEEDS, 40);
   const hold = select('hold', HOLDS, 1500);
   const fcap = h('div.cap', { id: id('fcap') });
+  const moveRow = h('div.row', motion, speed, hold);
   const frm = h('section.card.st-step', { id: id('frame') }, h('h3', '2 · Frame'), view, fcap,
-    h('div.row', fit, h('button.sm', { id: id('auto'), onclick: () => restage(true) }, 'Auto')),
-    h('div.row', motion, speed, hold));
+    h('div.row', fit, h('button.sm', { id: id('auto'), onclick: () => restage(true) }, 'Auto')), moveRow);
 
   // --- 3 Look
   const colours = select('colours', [['Colours: auto', 0], ['256 colours', 256], ['64 colours', 64], ['16 colours', 16]], 0);
@@ -126,48 +142,97 @@ function build(root) {
     h('div.row', h('label', lift, 'Brighten dark outlines (logos)')),
     h('div.row', h('label', 'Brightness', gain, gout)));
 
-  // --- 4 Preview
+  // --- 4 Text: a line in one of the panel's two fonts, at one of nine
+  // places, over all frames or some.
+  const tmsg = h('input', { type: 'text', id: id('text'), placeholder: 'Text (optional)', maxLength: 40 });
+  const font = seg('font', [['small', 'Small'], ['normal', 'Normal']], (v) => { S.font = v; font.set(v); text(); });
+  const tcol = h('input', { type: 'color', id: id('tcolour'), value: '#ffffff', 'aria-label': 'Text colour' });
+  const anchor = h('div.st-anchor', { id: id('anchor'), role: 'group', 'aria-label': 'Where' },
+    [...Array(9)].map((_, i) => h('button', { 'data-v': i, 'aria-label': ['Top left', 'Top', 'Top right', 'Left', 'Middle', 'Right', 'Bottom left', 'Bottom', 'Bottom right'][i], onclick: () => { S.anchor = i; setAnchor(); text(); } })));
+  const setAnchor = () => { for (const b of anchor.children) b.classList.toggle('on', +b.dataset.v === S.anchor); };
+  const dx = num('dx', { value: 0, min: -128, max: 128, 'aria-label': 'Nudge right' });
+  const dy = num('dy', { value: 0, min: -32, max: 32, 'aria-label': 'Nudge down' });
+  const trange = select('trange', [['On every frame', 'all'], ['On frames…', 'some']], 'all');
+  const tfrom = num('tfrom', { value: 1, min: 1, 'aria-label': 'From frame' });
+  const tto = num('tto', { value: 1, min: 1, 'aria-label': 'To frame' });
+  const rangeRow = h('div.row', { hidden: true }, trange, h('span', { id: id('tspan') }, tfrom, ' to ', tto));
+  const txt = h('section.card.st-step', { id: id('text-step') }, h('h3', '4 · Text'),
+    h('div.row', h('div.grow', tmsg), tcol),
+    h('div.row.st-tpos', anchor, h('div', h('div.row', font), h('div.row', h('label', '→', dx), h('label', '↓', dy)))),
+    rangeRow);
+  Object.assign(S, { font: 'normal', anchor: 7 });
+  font.set('normal'); setAnchor();
+
+  // --- 5 Preview (and, for an animation, the timeline)
   const panel = h('canvas.panel', { id: id('panel') });
   const stats = h('div.cap', { id: id('stats') });
-  const prev = h('section.card.st-step', { id: id('preview') }, h('h3', '4 · Preview'), panel, stats);
+  const playBtn = h('button.sm', { id: id('play'), 'aria-label': 'Play or pause', onclick: () => playPause() }, '❚❚');
+  const scrub = h('input', { type: 'range', id: id('scrub'), min: 0, max: 0, value: 0, 'aria-label': 'Frame' });
+  const posOut = h('output.mono', { id: id('pos') });
+  const track = h('div.st-track');
+  const strip = h('div.st-strip', { id: id('strip'), tabIndex: 0, 'aria-label': 'Frames' }, track);
+  const hin = h('div.st-h.in', { id: id('in'), title: 'Start' }), hout = h('div.st-h.out', { id: id('out'), title: 'End' });
+  track.append(hin, hout);
+  const rate = select('rate', RATES.map((r) => [`Speed ${r / 100}×`, r]), 100);
+  const rev = h('input', { type: 'checkbox', id: id('rev') });
+  const pp = h('input', { type: 'checkbox', id: id('pp') });
+  const plays = select('plays', PLAYS, 0);
+  const undoBtn = h('button.sm', { id: id('undo'), disabled: true, onclick: () => undo() }, 'Undo');
+  const tlcap = h('div.cap', { id: id('tlcap') });
+  const tl = h('div.st-tl', { id: id('tl'), hidden: true },
+    h('div.row.st-play', playBtn, h('div.grow', scrub), posOut),
+    strip, tlcap,
+    h('div.row',
+      h('button.sm', { id: id('set-in'), onclick: () => trim('from') }, 'Start here'),
+      h('button.sm', { id: id('set-out'), onclick: () => trim('to') }, 'End here'),
+      h('button.sm', { id: id('del'), onclick: () => del() }, 'Delete frame'), undoBtn),
+    h('div.row', rate, h('label', rev, 'Reverse'), h('label', pp, 'Ping-pong'), plays));
+  const prev = h('section.card.st-step', { id: id('preview') }, h('h3', '5 · Preview'), panel, stats, tl);
 
-  // --- 5 Save
+  // --- 6 Save: the fields Add GIFs asks for; the name is built from them.
   const splat = h('select', { id: id('plat') });
-  const title = h('input', { type: 'text', id: id('title'), placeholder: 'Title' });
+  const title = h('input', { type: 'text', id: id('title'), placeholder: 'What it shows' });
+  const author = h('input', { type: 'text', id: id('author'), placeholder: 'optional' });
   const logo = h('input', { type: 'checkbox', id: id('logo') });
-  const nn = h('input', { type: 'number', id: id('nn'), min: 1, max: 99, value: 1, style: 'width:72px' });
   const cat = h('select', { id: id('cat') });
+  const mode = seg('mode', [['replace', 'Replace the original'], ['new', 'Save as new']], (v) => { S.mode = v; mode.set(v); naming(); });
   const name = h('div.cap', { id: id('name') });
   const warn = h('div.cap.bad', { id: id('warn') });
   const saveBtn = h('button.pri', { id: id('save'), onclick: () => save() }, 'Save');
-  const sv = h('section.card.st-step', { id: id('save-step') }, h('h3', '5 · Save'),
+  const sv = h('section.card.st-step', { id: id('save-step') }, h('h3', '6 · Save'),
+    h('div.row', { id: id('mode-row'), hidden: true }, mode),
     h('div.form',
-      h('label.stack', 'Platform', splat), h('label.stack', 'Title', title),
-      h('label.stack', 'Number', nn), h('label.stack', { id: id('cat-l') }, 'Category', cat)),
+      h('label.stack', 'Title', title), h('label.stack', 'Platform', splat),
+      h('label.stack', { id: id('cat-l') }, 'Category', cat), h('label.stack', 'Author', author)),
     h('div.row', { style: 'margin-top:8px' }, h('label', logo, 'It is a logo')),
     name, warn, h('div.row', { style: 'margin-top:8px' }, saveBtn));
 
   const box = h('div.st-box', h('h2', 'Make art'),
-    h('p.muted', 'Turn a picture — a screenshot, box art, a logo — into a GIF for the panel.'),
-    h('div.st-grid', imp, frm, look, prev, sv));
+    h('p.muted', 'Turn a picture — a screenshot, box art, a logo — or an animated GIF into a GIF for the panel.'),
+    h('div.st-grid', imp, frm, look, txt, prev, sv));
   const el = h('div.st-root', { id: 'studio' }, box);
   root.append(el);
 
-  for (const p of PLATFORMS) {
-    plat.append(h('option', { value: p }, art.consoleName(p) || p));
-    splat.append(h('option', { value: p }, p));
-  }
+  for (const p of PLATFORMS) plat.append(h('option', { value: p }, art.consoleName(p) || p));
+  splat.append(h('option', { value: '' }, 'None'), ...art.platforms().sort().map((p) => h('option', { value: p }, art.consoleName(p) ? `${p} · ${art.consoleName(p)}` : p)));
   let pv = null;
+  const A = { on: false }; // the animation's timeline (see `animate`)
 
-  // --- Loading a picture
+  // --- Loading a picture or an animation
   async function load(blob, from = {}) {
-    msg.textContent = 'Reading the picture…';
+    const tok = ++S.tok;
+    msg.textContent = 'Reading…';
+    const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+    if (String.fromCharCode(...head) === 'GIF8') {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (art.gifFrames(bytes) > 1) return loadGif(bytes, from, tok);
+    }
     let bm;
-    // (A GIF gives its first frame.)
     try { bm = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }); } catch {
       msg.textContent = 'That is not a picture this browser can read.';
       return false;
     }
+    if (tok !== S.tok) return false;
     const { width: ow, height: oh } = bm;
     let [w, hh] = [ow, oh];
     const k = Math.min(1, Math.sqrt(MAX_PX / (w * hh)));
@@ -178,18 +243,62 @@ function build(root) {
     g.drawImage(bm, 0, 0, w, hh);
     bm.close?.();
     const data = g.getImageData(0, 0, w, hh).data;
+    adopt(new art.Studio(data, w, hh), from);
+    msg.textContent = `${from.label || 'Picture'}: ${ow} × ${oh}`;
+    restage(true);
+    return true;
+  }
+
+  // An animated GIF: decoded in slices, then the timeline.
+  async function loadGif(bytes, from, tok) {
+    const t0 = performance.now();
+    let st;
+    try { st = art.Studio.fromGif(bytes); } catch (e) {
+      msg.textContent = `That GIF could not be read (${e.message || e}).`;
+      return false;
+    }
+    const all = st.inFile;
+    const ok = await run(() => st.decode(2), () => tok === S.tok, () => { msg.textContent = `Reading frames… ${st.sourceFrames} of ${all}`; });
+    if (!ok) { st.free(); return false; }
+    const [ow, oh, ww, wh, reduce, damaged, capped] = st.info();
+    adopt(st, from);
+    const n = st.sourceFrames;
+    msg.textContent = `${from.label || 'GIF'}: ${ow} × ${oh} · ${n} frames`
+      + (reduce > 1 ? ` · working at ${ww} × ${wh} (1/${reduce} size) to fit in memory` : '')
+      + (capped ? ` · only the first ${n.toLocaleString()} frames are kept` : '')
+      + (damaged ? ' · the rest of the file is damaged' : '');
+    el.dataset.tImport = Math.round(performance.now() - t0);
+    restage(true);
+    return true;
+  }
+
+  // A new picture in the Studio: its fields, the timeline for an animation.
+  function adopt(st, from) {
+    stop();
     S.studio?.free();
-    S.studio = new art.Studio(data, w, hh);
-    S.fit = S.studio.autoFit();
+    S.studio = st;
+    S.fit = st.autoFit();
     lift.checked = S.fit === 'fit';
-    logo.checked = !!from.logo;
+    S.from = from.path ? from : null;
+    S.mode = S.from ? 'replace' : 'new';
+    mode.set(S.mode);
+    mode.parentElement.hidden = !S.from;
+    const f = from.fields || {};
+    logo.checked = !!from.logo || (f.flags || []).includes('LOGO');
     if (from.platform) setPlatform(from.platform);
     if (from.title) title.value = from.title;
-    msg.textContent = `${from.label || 'Picture'}: ${ow} × ${oh}`;
+    author.value = f.author || ''; // another picture is not the last GIF's author's
     el.classList.add('has');
-    restage(true);
-    await names();
-    return true;
+    const anim = st.animated;
+    el.classList.toggle('anim', anim);
+    moveRow.hidden = anim;
+    rangeRow.hidden = !anim;
+    tl.hidden = !anim;
+    if (anim) animate(st);
+    else A.on = false;
+    Object.assign(el.dataset, { srcFrames: st.sourceFrames, animated: anim ? 1 : '' });
+    text(true);
+    naming();
   }
 
   async function fromUrl(u) {
@@ -207,17 +316,18 @@ function build(root) {
   // Build the stage for the fit; `auto` also re-picks window and motion.
   function restage(auto) {
     if (!S.studio) return;
-    S.studio.prepare(S.fit, lift.checked);
+    const st = S.studio;
+    st.prepare(S.fit, lift.checked);
     if (auto) {
-      S.motion = S.studio.autoMotion();
-      [S.x, S.y] = S.studio.autoWindow(S.motion);
+      S.motion = st.animated ? 'still' : st.autoMotion();
+      [S.x, S.y] = st.autoWindow(S.motion);
       S.moved = false;
     }
-    const st = S.studio;
     cv.width = st.width; cv.height = st.height;
     cv.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(st.pixels().buffer), st.width, st.height), 0, 0);
     const k = st.scale;
-    fcap.textContent = `${st.width} × ${st.height}` + (S.fit === 'fit' ? ' · fitted to the panel' : k > 1 ? ` · the picture was enlarged ${k}×; using its real pixels` : '');
+    fcap.textContent = `${st.width} × ${st.height}` + (S.fit === 'fit' ? ' · fitted to the panel' : k > 1 ? ` · the picture was enlarged ${k}×; using its real pixels` : '')
+      + (st.animated ? ' · the first frame' : '');
     fit.set(S.fit);
     frame();
     render();
@@ -245,14 +355,37 @@ function build(root) {
   function render() {
     if (!S.studio) return;
     const st = S.studio;
+    if (st.animated) {
+      const t0 = performance.now();
+      st.look(S.x, S.y, key.checked, +gain.value, +colours.value);
+      refresh();
+      el.dataset.tLook = (performance.now() - t0).toFixed(1);
+      return;
+    }
     S.gif = st.render(S.motion, S.x, S.y, +speed.value, +hold.value, key.checked, +gain.value, +colours.value);
-    const secs = st.durationMs / 1000;
-    stats.textContent = `${st.frames} frame${st.frames > 1 ? 's' : ''} · ${secs < 10 ? secs.toFixed(1) : Math.round(secs)} s · ${st.colours} colour${st.colours > 1 ? 's' : ''}`;
+    stats.textContent = `${st.frames} frame${st.frames > 1 ? 's' : ''} · ${secs(st.durationMs)} s · ${st.colours} colour${st.colours > 1 ? 's' : ''}`;
     el.dataset.frames = st.frames;
-    pv?.show(fileNameNow(), async () => S.gif);
-    naming();
+    pv?.show('studio.gif', async () => S.gif);
   }
-  const later = debounce(render, 120);
+  const later2 = debounce(render, 120);
+
+  // The text, to the module (every frame of a still; a range of an animation's).
+  function text(quiet) {
+    const st = S.studio;
+    if (!st) return;
+    const some = st.animated && trange.value === 'some';
+    const n = st.sourceFrames;
+    tspanShow(some);
+    const c = parseInt(tcol.value.slice(1), 16) || 0;
+    st.setText(tmsg.value, S.font === 'small', c, S.anchor, +dx.value || 0, +dy.value || 0,
+      some ? Math.max(0, (+tfrom.value || 1) - 1) : 0, some ? Math.min(n, +tto.value || n) - 1 : 0x7fffffff);
+    el.dataset.text = tmsg.value.trim() ? 1 : '';
+    if (!quiet) st.animated ? refresh() : render();
+  }
+  const tspanShow = (v) => { tfrom.parentElement.hidden = !v; tfrom.max = tto.max = S.studio?.sourceFrames || 1; };
+  const retext = debounce(() => text(), 150);
+  for (const c of [tmsg, dx, dy, tfrom, tto]) c.addEventListener('input', retext);
+  for (const c of [tcol, trange]) c.addEventListener('change', () => text());
 
   // Dragging the window; a tap elsewhere on the picture moves it there.
   let drag = null;
@@ -276,7 +409,210 @@ function build(root) {
 
   for (const c of [speed, hold, colours, key]) c.onchange = render;
   lift.onchange = () => restage(false);
-  gain.oninput = () => { gout.textContent = gain.value + '%'; later(); };
+  gain.oninput = () => { gout.textContent = gain.value + '%'; later2(); };
+
+  // --- The timeline ------------------------------------------------------------
+  // Source frames are numbered from 1 in the UI. `items` are the frames not
+  // deleted, in source order (the strip); `seq`/`ms` the play order and
+  // delays from the module; `pos` the place in it; `peek` a frame outside
+  // the trim that was clicked. Frames are rendered when shown.
+  function animate(st) {
+    const n = st.sourceFrames;
+    Object.assign(A, { on: true, n, from: 0, to: n - 1, deleted: new Set(), sel: new Set(), hist: [], pos: 0, peek: null, playing: true, due: 0, done: 0, shown: -1, gen: 0, drawn: new Map() });
+    rate.value = 100; rev.checked = pp.checked = false;
+    const p = st.info()[7];
+    plays.value = PLAYS.some(([, v]) => v === p) ? p : 0;
+    tfrom.value = 1; tto.value = n; trange.value = 'all';
+    track.style.width = n * CW + 'px';
+    strip.scrollLeft = 0;
+    edit();
+    start();
+  }
+
+  function edit() {
+    const flat = S.studio.setEdit(A.from, A.to, +rate.value, rev.checked, pp.checked, Uint32Array.from(A.deleted));
+    A.seq = []; A.ms = [];
+    for (let i = 0; i < flat.length; i += 2) { A.seq.push(flat[i]); A.ms.push(flat[i + 1]); }
+    A.items = [];
+    for (let i = 0; i < A.n; i++) if (!A.deleted.has(i)) A.items.push(i);
+    track.style.width = A.items.length * CW + 'px';
+    A.pos = Math.min(A.pos, Math.max(0, A.seq.length - 1));
+    A.due = 0;
+    scrub.max = Math.max(0, A.seq.length - 1);
+    const total = A.ms.reduce((a, b) => a + b, 0);
+    const p = +plays.value;
+    stats.textContent = `${A.seq.length} frame${A.seq.length === 1 ? '' : 's'} · ${secs(total)} s · ${p ? (p === 1 ? 'plays once' : `plays ${p} times`) : 'plays forever'}`;
+    const cut = A.n - A.items.length;
+    tlcap.textContent = `Frames ${A.from + 1}–${A.to + 1} of ${A.n}` + (cut ? ` · ${cut} deleted` : '') + ' · click a frame to see it; Shift or Ctrl to pick more, then Delete';
+    undoBtn.disabled = !A.hist.length;
+    Object.assign(el.dataset, { frames: A.seq.length, duration: total, from: A.from, to: A.to, deleted: A.deleted.size, plays: p });
+    A.shown = -1;
+    drawStrip();
+  }
+
+  // Everything the preview shows is made again (a Look or Text change).
+  function refresh() {
+    if (!A.on) return;
+    A.gen++; A.shown = -1;
+    show();
+    drawStrip();
+  }
+
+  let raf = 0;
+  function start() { if (!raf && A.on) raf = requestAnimationFrame(tick); }
+  function stop() { cancelAnimationFrame(raf); raf = 0; }
+  function tick(now) {
+    raf = 0;
+    if (!A.on || !el.isConnected) return;
+    if (A.playing && A.seq.length && el.offsetParent) {
+      if (!A.due) A.due = now + A.ms[A.pos];
+      while (now >= A.due) {
+        if (++A.pos >= A.seq.length) {
+          A.pos = 0;
+          if (+plays.value && ++A.done >= +plays.value) { A.pos = A.seq.length - 1; A.playing = false; playBtn.textContent = '▶'; break; }
+        }
+        A.due += A.ms[A.pos];
+        if (now - A.due > 500) A.due = now + A.ms[A.pos];
+      }
+    }
+    show();
+    raf = requestAnimationFrame(tick);
+  }
+
+  // The frame at `pos` (or the one peeked at) into the preview.
+  function show() {
+    if (!A.on || !pv || !A.seq.length) return;
+    const src = A.peek ?? A.seq[A.pos];
+    scrub.value = A.pos;
+    posOut.textContent = `${A.pos + 1} / ${A.seq.length}`;
+    if (src === A.shown) return;
+    A.shown = src;
+    pv.p.load('studio.gif', S.studio.frameGif(src));
+    Object.assign(el.dataset, { pos: A.pos, shown: src });
+    for (const c of track.children) c.classList?.toggle('cur', +c.dataset.i === src);
+  }
+
+  function playPause() {
+    A.playing = !A.playing;
+    A.peek = null;
+    if (A.playing && +plays.value && A.done >= +plays.value) { A.done = 0; A.pos = 0; }
+    A.due = 0;
+    playBtn.textContent = A.playing ? '❚❚' : '▶';
+  }
+  function pause() { A.playing = false; playBtn.textContent = '▶'; }
+  scrub.oninput = () => { pause(); A.peek = null; A.pos = +scrub.value; show(); };
+  for (const c of [rate, rev, pp]) c.onchange = () => edit();
+  plays.onchange = () => { A.done = 0; edit(); };
+
+  // Undo: the frames kept and the trim, as they were.
+  const snap = () => { A.hist.push({ deleted: [...A.deleted], from: A.from, to: A.to }); if (A.hist.length > 100) A.hist.shift(); };
+  function undo() {
+    const s = A.hist.pop();
+    if (!s) return;
+    A.deleted = new Set(s.deleted); A.from = s.from; A.to = s.to; A.sel.clear();
+    edit();
+  }
+  const current = () => A.peek ?? A.seq[A.pos] ?? A.from;
+  function trim(end) {
+    snap();
+    const c = current();
+    A[end] = c;
+    if (A.from > A.to) end === 'from' ? (A.to = A.from) : (A.from = A.to);
+    edit();
+  }
+  function del() {
+    const pick = A.sel.size ? [...A.sel] : [current()];
+    const left = A.items.filter((i) => i >= A.from && i <= A.to && !pick.includes(i));
+    if (!left.length) { toast('Keep at least one frame', 'bad'); return; }
+    snap();
+    for (const i of pick) A.deleted.add(i);
+    A.sel.clear(); A.peek = null;
+    edit();
+  }
+
+  // The strip: only the cells in view exist; each thumbnail is rendered
+  // when it first shows (in slices).
+  const pool = [];
+  let queue = [], painting = false;
+  function drawStrip() {
+    if (!A.on) return;
+    const w = strip.clientWidth || 600;
+    const a = Math.max(0, Math.floor(strip.scrollLeft / CW) - 1), b = Math.min(A.items.length, Math.ceil((strip.scrollLeft + w) / CW) + 1);
+    while (pool.length < b - a) {
+      const c = h('div.st-cell', h('canvas', { width: 128, height: 32 }), h('span'));
+      c.onclick = (e) => pick(+c.dataset.i, e);
+      pool.push(c); track.append(c);
+    }
+    const src = A.peek ?? A.seq[A.pos];
+    queue = [];
+    pool.forEach((c, j) => {
+      const k = a + j;
+      c.hidden = k >= b;
+      if (c.hidden) return;
+      const i = A.items[k];
+      c.dataset.i = i;
+      c.style.left = k * CW + 'px';
+      c.lastChild.textContent = i + 1;
+      c.classList.toggle('cur', i === src);
+      c.classList.toggle('sel', A.sel.has(i));
+      c.classList.toggle('out', i < A.from || i > A.to);
+      if (A.drawn.get(c) !== `${i}@${A.gen}`) queue.push(c);
+    });
+    const at = (i, right) => { let k = A.items.findIndex((x) => (right ? x > i : x >= i)); if (k < 0) k = A.items.length; return k * CW; };
+    hin.style.left = at(A.from) + 'px';
+    hout.style.left = at(A.to, true) - 4 + 'px';
+    paint();
+  }
+  async function paint() {
+    if (painting) return;
+    painting = true;
+    await run(() => {
+      const c = queue.shift();
+      if (!c) return true;
+      const i = +c.dataset.i;
+      const px = S.studio.thumb(i);
+      c.firstChild.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(px.buffer), 128, 32), 0, 0);
+      A.drawn.set(c, `${i}@${A.gen}`);
+      return !queue.length;
+    });
+    painting = false;
+    if (queue.length) paint();
+  }
+  strip.addEventListener('scroll', () => drawStrip(), { passive: true });
+  function pick(i, e) {
+    if (e.shiftKey && A.last != null) {
+      const [a, b] = [Math.min(A.last, i), Math.max(A.last, i)];
+      for (const x of A.items) if (x >= a && x <= b) A.sel.add(x);
+    } else if (e.ctrlKey || e.metaKey) A.sel.has(i) ? A.sel.delete(i) : A.sel.add(i);
+    else { A.sel.clear(); A.sel.add(i); }
+    A.last = i;
+    pause();
+    const k = A.seq.indexOf(i);
+    A.peek = k < 0 ? i : null;
+    if (k >= 0) A.pos = k;
+    show();
+    drawStrip();
+    strip.focus({ preventScroll: true });
+  }
+  el.addEventListener('keydown', (e) => {
+    if (!A.on || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); del(); }
+    else if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); }
+    else if (e.key === ' ' && e.target === strip) { e.preventDefault(); playPause(); }
+  });
+  // Trim handles: drag along the strip.
+  for (const [hd, end] of [[hin, 'from'], [hout, 'to']]) {
+    hd.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); hd.setPointerCapture(e.pointerId); snap(); hd.drag = true; });
+    hd.addEventListener('pointermove', (e) => {
+      if (!hd.drag) return;
+      const r = track.getBoundingClientRect();
+      const k = Math.max(0, Math.min(A.items.length - 1, Math.floor((e.clientX - r.left) / CW)));
+      const i = A.items[k];
+      if (end === 'from' ? i > A.to : i < A.from) return;
+      if (A[end] !== i) { A[end] = i; edit(); }
+    });
+    hd.addEventListener('pointerup', () => { hd.drag = false; });
+  }
 
   // --- Find art for a game
   async function index(p) {
@@ -308,11 +644,11 @@ function build(root) {
     if (!found.length) { clear(hits, h('span.muted', `No ${art.consoleName(p) || p} game matches “${q}”.`)); return; }
     clear(hits, found.slice(0, 24).map(([, , , i]) => {
       const region = d.names[i].match(/\(([^)]*)\)/)?.[1] || '';
-      return h('button.st-hit', { 'data-i': i, onclick: (e) => pick(p, d, i, e.currentTarget) }, art.cleanGameName(d.names[i]), region && h('small', region));
+      return h('button.st-hit', { 'data-i': i, onclick: (e) => pickGame(p, d, i, e.currentTarget) }, art.cleanGameName(d.names[i]), region && h('small', region));
     }));
   }
 
-  async function pick(p, d, i, btn) {
+  async function pickGame(p, d, i, btn) {
     for (const b of hits.children) b.classList?.toggle('on', b === btn);
     for (const u of S.urls) URL.revokeObjectURL(u);
     S.urls = [];
@@ -335,57 +671,83 @@ function build(root) {
     if (![...splat.options].some((o) => o.value === p)) splat.append(h('option', { value: p }, p));
     splat.value = p;
   }
-  const fileNameNow = () => fileName(splat.value, title.value, logo.checked, +nn.value || 1);
 
-  // The next free number for this platform and title in the category.
-  async function names() {
+  // The fields as a name (Add GIFs' rules: the next free number for this
+  // platform and title in the category; replacing keeps the original's),
+  // and what the Library will list it as.
+  async function naming() {
+    const t = (naming.t = (naming.t || 0) + 1);
     const c = cat.value || 'Consoles';
-    if (!S.names.has(c)) S.names.set(c, new Set((await S.opts.names(c).catch(() => [])).map((n) => n.toLowerCase())));
-    const have = S.names.get(c);
-    let n = 1;
-    while (have.has(fileName(splat.value, title.value, logo.checked, n).toLowerCase()) && n < 99) n++;
-    nn.value = n;
-    naming();
-  }
-  const renumber = debounce(names, 250);
-
-  // The name, and what the Library will list it as (read back with the
-  // core's parser): a word the grammar takes for a tag shows up here.
-  function naming() {
-    const f = fileNameNow(), c = cat.value || 'Consoles';
-    const e = app.wasm.parsePath(`/gifs/${c}/${f}`);
-    const shown = `${e.title}${e.variant != null ? ' ' + String(e.variant).padStart(2, '0') : ''}`;
-    clear(name, 'File ', h('b.mono', f), app.device ? ` in ${c}` : '', ` · listed as “${shown}”`, e.flags.length ? ` (${e.flags.join(', ').toLowerCase()})` : '');
-    const typed = words(title.value).join(' ');
-    warn.textContent = typed && app.wasm.normalizeTitle(e.title) !== app.wasm.normalizeTitle(typed)
-      ? `The Library will read the title as “${e.title}”: a word in it is taken for a tag. Try another wording.` : '';
-    Object.assign(el.dataset, { name: f, title: e.title, platform: e.platform || '' });
-  }
-  for (const c of [splat, title, logo, cat]) c.addEventListener(c === title ? 'input' : 'change', () => { naming(); renumber(); });
-  nn.oninput = naming;
-
-  async function save() {
-    if (!S.gif) return;
-    const f = fileNameNow(), c = cat.value;
-    if (!app.device) {
-      const a = h('a', { href: URL.createObjectURL(new Blob([S.gif], { type: 'image/gif' })), download: f });
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      toast(`downloaded ${f}`, 'ok');
+    const flags = (S.from?.fields?.flags || []).filter((x) => x !== 'LOGO' && x !== S.from.fields.author);
+    const f = { title: title.value.trim(), platform: splat.value || null, category: c, author: author.value.trim() || null, flags: logo.checked ? [...flags, 'LOGO'] : flags, ordinal: null };
+    S.listing ??= listings(S.cats);
+    const l = await S.listing(c);
+    if (t !== naming.t) return;
+    const keep = S.mode === 'replace' && S.from ? { ...S.from.fields, path: S.from.path } : null;
+    const { path, why } = pickName(art, f, l, keep);
+    S.path = path;
+    saveBtn.disabled = !path || !S.studio;
+    if (!path) {
+      clear(name);
+      warn.textContent = why;
+      Object.assign(el.dataset, { name: '', title: '', platform: '' });
       return;
     }
-    if (S.names.get(c)?.has(f.toLowerCase()) && !confirm(`${f} is already in ${c}. Replace it?`)) return;
+    const e = app.wasm.parsePath(path);
+    const n = base(path);
+    clear(name, S.from && S.mode === 'replace' ? (path === S.from.path ? 'Replaces ' : 'Replaces and renames to ') : 'File ', h('b.mono', n), app.device ? ` in ${c}` : '', ` · listed as “${label(e)}”`);
+    warn.textContent = '';
+    Object.assign(el.dataset, { name: n, title: e.title, platform: e.platform || '' });
+  }
+  const renaming = debounce(naming, 200);
+  for (const c of [title, author]) c.addEventListener('input', renaming);
+  for (const c of [splat, logo, cat]) c.addEventListener('change', naming);
+
+  async function save() {
+    const st = S.studio;
+    if (!st || !S.path) return;
     saveBtn.disabled = true;
     try {
-      const problems = [];
-      const path = await S.opts.save(c, f, S.gif, (m) => problems.push(m));
-      S.names.get(c)?.add(f.toLowerCase());
+      if (st.animated) {
+        const t0 = performance.now();
+        st.saveBegin(+plays.value);
+        await run(() => st.saveStep(8), null, () => { const [d, of] = st.saveProgress(); clear(name, `Saving… ${Math.round((100 * d) / of)}%`); });
+        S.gif = st.saved();
+        el.dataset.tSave = Math.round(performance.now() - t0);
+        el.dataset.colours = st.colours;
+      }
+      if (!S.gif) return;
+      const path = S.path, f = base(path), c = path.split('/')[2];
+      if (!app.device) {
+        const a = h('a', { href: URL.createObjectURL(new Blob([S.gif], { type: 'image/gif' })), download: f });
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        toast(`downloaded ${f}`, 'ok');
+        return;
+      }
+      const t1 = performance.now();
+      if (S.from && S.mode === 'replace') {
+        // The same file, so every playlist keeps it; a changed name is a
+        // rename, which playlists follow too.
+        const orig = S.from.path;
+        await app.src.writeFile(orig, S.gif);
+        try { await prepareBytes(orig, S.gif); } catch { await app.src.forget(orig).catch(() => {}); }
+        if (path.toLowerCase() !== orig.toLowerCase()) await renameGif(orig, path);
+        S.from = { ...S.from, path, fields: art.nameFields(path) };
+        toast(`${f} saved`, 'ok');
+      } else {
+        const problems = [];
+        await S.opts.save(c, f, S.gif, (m) => problems.push(m));
+        toast(`${f} saved to ${c}`, 'ok');
+        for (const m of problems) toast(m, 'bad');
+        await S.opts.saved(c, [path]);
+      }
+      el.dataset.tUpload = Math.round(performance.now() - t1);
       el.dataset.saved = path;
-      toast(`${f} saved to ${c}`, 'ok');
-      for (const m of problems) toast(m, 'bad');
-      await S.opts.saved(c, [path]);
-      await names();
-    } catch (e) { toast(`saving ${f}: ${e.message || e}`, 'bad'); } finally { saveBtn.disabled = false; }
+      S.listing = null;
+    } catch (e) { toast(`saving: ${e.message || e}`, 'bad'); } finally {
+      await naming();
+    }
   }
 
   // --- Drop and paste, while open
@@ -405,13 +767,9 @@ function build(root) {
     else { const u = e.dataTransfer.getData('text/uri-list').split('\n')[0].trim(); if (u) { url.value = u; fromUrl(u); } }
   });
 
-  // Where it saves: a category on the card (Add GIFs' path: the GIF, its
-  // prepared copy), then the offer to add it to the playlist in play.
-  S.opts = {
-    names: async (c) => (await app.src.list(`/gifs/${c}`).catch(() => [])).map((f) => f.name),
-    save: addOne,
-    saved: (_c, paths) => offerPlaylist(paths),
-  };
+  // Where a new one saves: a category on the card (Add GIFs' path: the GIF,
+  // its prepared copy), then the offer to add it to the playlist in play.
+  S.opts = { save: addOne, saved: (_c, paths) => offerPlaylist(paths) };
 
   return {
     el,
@@ -421,6 +779,8 @@ function build(root) {
       let cats = [];
       if (app.device) try { cats = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(); } catch { /* none yet */ }
       if (!cats.length) cats = ['Consoles'];
+      S.cats = cats;
+      S.listing = null;
       const was = cat.value;
       clear(cat, cats.map((c) => h('option', { value: c }, c)));
       cat.value = cats.includes(was) ? was : cats.includes('Consoles') ? 'Consoles' : cats[0];
@@ -431,24 +791,25 @@ function build(root) {
         pv.p.setTransition('none', 0);
       }
       if (S.studio) frame();
+      if (A.on) { A.shown = -1; start(); drawStrip(); }
       naming();
-      // "Edit in Make art" in the Library: that GIF (its first frame) is
-      // the picture, its platform and title the name's, and the game's
-      // art a search away.
+      // "Edit in Make art" in the Library: that GIF — every frame — with its
+      // title, platform, category and author, to replace or save as new.
       const from = app.artFrom;
       app.artFrom = null;
       if (from) {
-        const e = from.e;
+        const e = from.e, fields = art.nameFields(from.path);
         if (cats.includes(e.category)) cat.value = e.category;
-        if (e.platform) setPlatform(e.platform);
-        title.value = e.title || '';
+        setPlatform(fields.platform || '');
+        title.value = fields.title || '';
+        author.value = fields.author || '';
         if (PLATFORMS.includes(e.platform)) plat.value = e.platform;
         query.value = e.title || '';
         try {
-          await load(new Blob([await app.src.readBytes(from.path)], { type: 'image/gif' }), { platform: e.platform, title: e.title, label: `${label(e)} (its first frame)` });
+          await load(new Blob([await app.src.readBytes(from.path)], { type: 'image/gif' }), { path: from.path, fields, label: label(e) });
         } catch (err) { msg.textContent = `Could not load ${label(e)}: ${err.message}`; }
       }
     },
-    hide() { removeEventListener('paste', onPaste); },
+    hide() { removeEventListener('paste', onPaste); stop(); },
   };
 }

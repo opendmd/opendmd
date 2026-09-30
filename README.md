@@ -267,11 +267,12 @@ names the format or shows a copy's path.
   (below, "Deploying").
 
 **Make art.** A view of its own (in the navigation, and the **Make art**
-button in the Library) that turns a picture into a GIF for the panel, in
-five steps. **Edit in Make art** on a Library GIF opens it here with that
-GIF as the picture (its first frame, for now: editing an animation is a
-later step), its platform and title filled in and the game's art a search
-away.
+button in the Library) that turns a picture — or an animated GIF — into a
+GIF for the panel, in six steps. **Edit in Make art** on a Library GIF
+opens it here, every frame of it, with its title, platform, category and
+author filled in, to **Replace the original** (the same file, so every
+playlist keeps it; a changed title renames it, and playlists follow) or
+**Save as new**.
 
 1. **Import** — choose a file, drop one, paste one (Ctrl/⌘-V; copy an
    image in any tab), give its address (most sites don't let a page read
@@ -280,23 +281,37 @@ away.
    NES, SMS, PC Engine, PS1, N64, Arcade), type a title, pick a game, and
    its title screen, in-game shot, box and logo (whichever exist) load from
    the [libretro-thumbnails](https://github.com/libretro-thumbnails)
-   collections.
-2. **Frame** — the picture zoomed with the 128x32 window on it: drag it,
-   tap to move it, **Auto** to re-pick the busiest spot. **Pixels** uses the
-   picture's own pixels 1:1 (a 2x or 3x enlarged screenshot is detected and
-   undone), **Pixels ½** halves it keeping only colours it has, **Fit**
-   scales a logo or photo to the panel's height. **Still**, **Pan →** or
-   **Scroll ↓**, at 50 / 40 / 30 ms a pixel, with a pause at the ends.
+   collections. A GIF with two or more frames comes in as an animation
+   (with a progress line while its frames are read). A very big one is
+   worked on at a smaller size, and the Studio says so.
+2. **Frame** — the picture (an animation's first frame) zoomed with the
+   128x32 window on it: drag it, tap to move it, **Auto** to re-pick the
+   busiest spot. **Pixels** uses the picture's own pixels 1:1 (a 2x or 3x
+   enlarged screenshot or GIF is detected and undone), **Pixels ½** halves
+   it keeping only colours it has, **Fit** scales a logo or photo to the
+   panel's height. A still picture can **Pan →** or **Scroll ↓**, at 50 /
+   40 / 30 ms a pixel, with a pause at the ends; an animation keeps its own
+   timing.
 3. **Look** — colours (auto, or 256 / 64 / 16, picked so that a small
    bright detail survives), background to black, brighten dark outlines
-   (black lettering vanishes on the panel), brightness. No dithering.
-4. **Preview** — the panel look, looping.
-5. **Save** — platform, title, number (the next free one) and "it is a
-   logo"; the file name follows the tag grammar and the Studio shows what
-   the Library will list it as (and warns when a word in the title would be
-   read as a tag). On a device it goes into the chosen category, prepared,
-   and the Studio offers to add it to the playlist in play; in local mode it
-   downloads.
+   (black lettering vanishes on the panel), brightness. No dithering. For
+   an animation, every frame.
+4. **Text** — a line of text in the panel's small or normal font, any
+   colour, at one of nine places (plus a nudge in pixels), on every frame
+   or on a range of an animation's frames.
+5. **Preview** — the panel look, playing. For an animation: play/pause, a
+   scrubber, and the **timeline**: a strip of the frames (click one to see
+   it; Shift or Ctrl to pick several), **Start here** / **End here** (or
+   drag the handles) to trim, **Delete frame** (or the Delete key) and
+   **Undo** (Ctrl/⌘-Z), speed ¼× to 4×, **Reverse**, **Ping-pong** (there
+   and back), and how many times it plays (forever, or 1 to 10). The frame
+   count and the length update as you go.
+6. **Save** — title, platform, category, author and "it is a logo", as
+   Add GIFs asks for them: the file name is built from them (the number is
+   the next free one) and the Studio shows what the Library will list it
+   as, or why it can't be named that way. On a device it goes into the
+   chosen category, prepared, and the Studio offers to add it to the
+   playlist in play; in local mode it downloads.
 
 The pixel work and the GIF writer are Rust (`opendmd-art-web`), in a second
 wasm module loaded only when the Studio opens. The game name lists are on

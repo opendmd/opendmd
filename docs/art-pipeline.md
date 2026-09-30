@@ -5,8 +5,10 @@ milestone below has since landed as "Make art" in Library (2026-09-24:
 `opendmd-art-web/`, `www/js/studio.js`, `tools/art-index.py`; see README
 "Make art"). On 2026-09-30 it moved out of the sheet into a view of its own
 (the navigation's **Make art**, and a primary button in the Library), and a
-Library GIF can be opened in it ("Edit in Make art", its first frame for
-now); the rest of this document is as it was written. The prototypes are in `opendmd-web/experiments/art/`
+Library GIF can be opened in it ("Edit in Make art"). Later the same day
+it learned animated GIFs — every frame through the Frame and Look steps, a
+timeline, a text overlay: see §6 at the end. The rest of this document is
+as it was written. The prototypes are in `opendmd-web/experiments/art/`
 (`README.md` there says how to run each one). All sample inputs are CC0 or
 public domain, so the committed PNGs hold no third-party game art.
 
@@ -730,3 +732,42 @@ would have to visit pixilart in the same browser first, and the clearance
 expires. **Decision (owner, 2026-09-23): filed as potential, not included** —
 no source that needs extra hoops. Pixilart works today as a paste /
 drag-and-drop source, which is how it should appear in the Studio.
+
+## 6. Animated GIFs in the Studio (2026-09-30)
+
+The owner's ask: "uploading a GIF in make art just shows a still frame. I
+want to be able to edit the gif." What landed (`opendmd-art-web/src/anim.rs`,
+`pipeline.rs`'s `stage_frame` / `Overlay` / `sequence`, `www/js/studio.js`):
+
+- **Import.** Any GIF with two or more image descriptors (`gifFrames`: a
+  walk over the blocks, no decoding) is an animation, from any source —
+  file, drop, paste, address, or the Library's "Edit in Make art". Frames
+  are decoded in the art module by the core's `GifSource`, so disposal
+  (`Background` -> black, `Previous` -> restored) and transparency are
+  composited exactly as the panel does; each kept frame is a full opaque
+  picture. Decoding runs in ~12 ms slices with a progress line.
+- **Memory.** A nearest-neighbour upscale found on frame 0 is undone as the
+  frames come in (lossless). Frames are kept as RGB; if they would take
+  more than 64 MB, each side is divided by the smallest whole number that
+  fits, area-averaged, and the Studio says "working at W × H (1/f size) to
+  fit in memory". At most 5,000 frames are kept. A 300-frame 256x224 GIF
+  is 51.6 MB and kept whole; a 700x700 × 50 one is worked at 350x350.
+- **Per-frame pipeline.** Frame (fit, window) and Look (key, brightness,
+  colours) apply to every frame; the dark-stroke decision and the key
+  colour come from frame 0, once. Pan and Scroll are for stills and are
+  hidden. Frames are rendered when shown (each with its own ≤ 256-colour
+  palette) and cached until a control changes; the save renders them all
+  and picks one palette over them (their own colours when they fit
+  together — then the preview was exact —, else spread-picked).
+- **Timeline.** Trim (from..to, source frames), delete (any frames, with
+  Undo), speed 25-400% (`max(20, round10(ms × 100 / speed))` on the
+  player's delays: 0 -> 100 ms, floor 20), reverse, ping-pong (`0 1 2 3 2 1`,
+  ends not repeated), plays forever / N (NETSCAPE 0 / no block / N - 1).
+- **Text.** A line in the panel's 4x6 or 5x7 font, any colour, nine
+  anchors plus a nudge, on all frames or a range; drawn after the Look.
+- **Save.** Named like Add GIFs (`details.js`' `pickName`); from the
+  Library, **Replace the original** (same path, playlists untouched, a
+  rename if the fields changed) or **Save as new**.
+- **Measured** (headless Chromium): 300 × 256x224 — import 0.17-0.30 s,
+  a Look change 8 ms for the frame shown, save 0.24 s; 50 × 128x32 — 7 ms,
+  4 ms, 16 ms.

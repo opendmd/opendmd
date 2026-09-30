@@ -111,6 +111,9 @@ export async function mount(el) {
     const keep = baseSel.value;
     clear(baseSel, lists.map((p) => h('option', { value: p.path }, p.label)));
     baseSel.value = keep && known.includes(keep) ? keep : '/filelist.txt';
+    // The list may arrive after the builder first counted (a listing the
+    // busy device answered late): count again now that there is a base.
+    if (!keep && lists.length) count();
   }
 
   async function open(p) {
