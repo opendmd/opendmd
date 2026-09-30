@@ -64,11 +64,22 @@ export const app = {
   // share one listing: the device has four sockets.
   playlists() { return (this.pl ??= this.listPlaylists().finally(() => { this.pl = null; })).then((l) => [...l]); },
   async listPlaylists() {
-    let root = [], sets = [];
-    try { root = await this.src.list('/'); } catch { /* a pick of gifs/ alone */ }
-    if (root.some((f) => f.dir && f.name === 'sets')) {
-      try { sets = await this.src.list('/sets'); } catch { /* gone meanwhile */ }
-    }
+    // A listing that fails for any reason but "not there" (a request the
+    // busy device dropped while the Library was loading) is tried again:
+    // an empty list here would show Playlists with nothing to pick until a
+    // reload. A 404 is a locally picked folder without a root, or /sets
+    // gone meanwhile, and stays an empty list.
+    const listOr = async (dir) => {
+      for (let attempt = 1; ; attempt++) {
+        try { return await this.src.list(dir); } catch (e) {
+          if (e && e.status === 404) return [];
+          if (attempt >= 3) throw e;
+          await new Promise((r) => setTimeout(r, 700 * attempt));
+        }
+      }
+    };
+    const root = await listOr('/');
+    const sets = root.some((f) => f.dir && f.name === 'sets') ? await listOr('/sets') : [];
     const roots = root.filter((f) => !f.dir && /^filelist\./.test(f.name) && !OBSOLETE.test(f.name) && !/\.(idx|part|tmp|bak|meta)$/.test(f.name))
       .map((f) => f.name).sort((a, b) => (a === 'filelist.txt' ? -1 : b === 'filelist.txt' ? 1 : a.localeCompare(b)));
     const names = sets.filter((f) => !f.dir && /\.txt$/.test(f.name)).map((f) => f.name.replace(/\.txt$/, '')).sort();

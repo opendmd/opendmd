@@ -34,3 +34,23 @@
   .st-grid{grid-template-columns:minmax(0,1fr)}
   .st-thumb img{height:64px;max-width:110px}
 }
+/* Text: the nine places. Preview spans the grid; the timeline under it. */
+.st-tpos{align-items:flex-start;gap:14px}
+.st-anchor{display:grid;grid-template-columns:repeat(3,26px);gap:3px}
+.st-anchor button{min-height:0;height:20px;padding:0;border-radius:3px}
+.st-anchor button.on{background:var(--acc)}
+#st-dx,#st-dy,#st-tfrom,#st-tto{width:64px}
+#st-preview{grid-column:1/-1}
+#st-preview canvas.panel{max-width:760px;display:block;margin:0 auto}
+.st-play{gap:8px}.st-play input{width:100%}
+#st-play{width:40px}
+.st-strip{position:relative;overflow-x:auto;overflow-y:hidden;height:62px;margin-top:8px;background:var(--bg);border-radius:var(--r);outline-offset:2px}
+.st-track{position:relative;height:48px}
+.st-cell{position:absolute;top:4px;width:96px;cursor:pointer;text-align:center;font-size:10px;line-height:12px;color:var(--mut)}
+.st-cell canvas{display:block;width:96px;height:24px;image-rendering:pixelated;background:#000;border-radius:2px;outline:1px solid transparent}
+.st-cell.out{opacity:.3}
+.st-cell.sel canvas{outline:2px solid #fff}
+.st-cell.cur canvas{outline:2px solid var(--acc)}
+.st-cell.cur span{color:var(--acc)}
+.st-h{position:absolute;top:0;width:4px;height:44px;background:var(--acc);cursor:ew-resize;touch-action:none;z-index:1;border-radius:2px}
+.st-h::before{content:'';position:absolute;inset:0 -10px}

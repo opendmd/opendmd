@@ -607,9 +607,12 @@ def open_library(page: Page) -> None:
 
 def build_smoke_set(page: Page) -> int:
     goto_view(page, "sets")
+    # The base-playlist select fills when the root listing answers, which a
+    # busy device can do late; "0 match" before that is not a count.
+    page.wait_for_function("document.querySelectorAll('#b-base option').length > 0", timeout=30000)
     page.fill("#b-platforms", "MD,SNES")
     page.dispatch_event("#b-platforms", "change")
-    page.wait_for_function("/\\d+ match/.test(document.querySelector('#b-count').textContent)", timeout=30000)
+    page.wait_for_function("/^[1-9][\\d,]* match/.test(document.querySelector('#b-count').textContent)", timeout=30000)
     page.click("#b-use")
     page.wait_for_function("/^[1-9]/.test(document.querySelector('#set-count').textContent)")
     page.fill("#set-name", "smoke")
@@ -1517,6 +1520,7 @@ def mock_pass(browser) -> None:
         check(gone and r["prepared"] == 4, f"add: deleting a GIF took its copy with it ({r['prepared']} of {r['total']})")
         details_checks(page, base, overlay)
         studio_checks(page, base, overlay)
+        studio_anim_checks(page, base, overlay)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
         page.click("#sets-list [data-path='/sets/cachetest.txt'] >> text=Delete")
@@ -1811,6 +1815,139 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
     page.unroute("https://raw.githubusercontent.com/**")
 
 
+def anim_fixture(path: Path, n: int, w: int, h: int, delay: int) -> list[tuple[int, int, int]]:
+    """An n-frame GIF: each frame a flat colour of its own with a yellow bar
+    that moves (Pillow may store only what changed; the Studio composites).
+    Returns the frames' colours."""
+    from PIL import Image, ImageDraw
+    cols = [((i * 53) % 200 + 30, (i * 97) % 200 + 30, (i * 31) % 200 + 30) for i in range(n)]
+    frames = []
+    for i, c in enumerate(cols):
+        im = Image.new("RGB", (w, h), c)
+        d = ImageDraw.Draw(im)
+        x = (i * 7) % max(1, w - 8)
+        d.rectangle([x, 0, x + 6, h // 3], fill=(250, 210, 30))
+        d.ellipse([w - x - 18, h // 2, w - x - 2, h // 2 + 12], fill=(230, 60, 40))
+        frames.append(im.quantize(64) if n > 20 else im.convert("P", palette=Image.Palette.ADAPTIVE, colors=16))
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=delay, loop=0, optimize=False)
+    return cols
+
+
+def studio_timings(page: Page, where: str) -> None:
+    """Import, a Look change (the frame shown made again) and a save (every
+    frame rendered and the GIF written; then, apart, its copy prepared and
+    both uploaded) of a 300-frame 256x224 GIF and a 50-frame 128x32 one."""
+    for name, n, w, h, d in (("anim-300x256x224.gif", 300, 256, 224, 40), ("anim-50x128x32.gif", 50, 128, 32, 60)):
+        f = OUT / name
+        anim_fixture(f, n, w, h, d)
+        page.evaluate("delete document.querySelector('#studio').dataset.tImport")
+        page.set_input_files("#st-file", str(f))
+        page.wait_for_function("document.querySelector('#studio').dataset.tImport", timeout=60000)
+        t_import = int(studio_data(page)["tImport"])
+        page.eval_on_selector("#st-gain", "e => { e.value = 90; e.dispatchEvent(new Event('input')); }")
+        page.wait_for_timeout(400)
+        t_look = float(studio_data(page)["tLook"])
+        title = f"Timing {n} Frames"
+        page.select_option("#st-plat", "OTHER")
+        page.fill("#st-title", title)
+        page.wait_for_function(f"document.querySelector('#studio').dataset.title === {json.dumps(title)}", timeout=10000)
+        page.evaluate("delete document.querySelector('#studio').dataset.saved")
+        page.click("#st-save")
+        page.wait_for_function("document.querySelector('#studio').dataset.saved", timeout=120000)
+        t_save, t_up = int(studio_data(page)["tSave"]), int(studio_data(page)["tUpload"])
+        page.eval_on_selector("#st-gain", "e => { e.value = 100; e.dispatchEvent(new Event('input')); }")
+        page.wait_for_timeout(300)
+        check(int(studio_data(page)["srcFrames"]) == n, f"{where} studio timing {name}: {n} frames in")
+        print(f"  studio timing {name}: import {t_import} ms, look change {t_look:.1f} ms (the frame shown), "
+              f"save {t_save} ms (every frame rendered + written), then {t_up} ms to prepare + upload")
+
+
+def studio_anim_checks(page: Page, base: str, overlay: Path) -> None:
+    """An animated GIF in Make art: a 12-frame fixture loads with its frame
+    count shown and the preview advancing; trim to frames 3-10, speed 2x,
+    delete frame 6 (Undo, then again), text over it; saved, the GIF decodes
+    to the 7 frames expected with 30 ms delays and the text, its prepared
+    copy is in place and the Library lists it; Edit in Make art brings it
+    back whole, Reverse and Replace the original rewrite the same file."""
+    goto_view(page, "studio")
+    fx = OUT / "anim-fixture.gif"
+    cols = anim_fixture(fx, 12, 128, 32, 60)
+    page.evaluate("delete document.querySelector('#studio').dataset.tImport")
+    page.set_input_files("#st-file", str(fx))
+    page.wait_for_function("document.querySelector('#studio').dataset.tImport", timeout=30000)
+    d = studio_data(page)
+    check(d.get("srcFrames") == "12" and "12 frames" in page.inner_text("#st-msg") and page.inner_text("#st-stats").startswith("12 frames · 0.7 s"),
+          f"studio anim: 12 frames in, shown ('{page.inner_text('#st-msg')}', '{page.inner_text('#st-stats')}')")
+    check(page.is_visible("#st-tl") and not page.is_visible("#st-motion"), "studio anim: the timeline shows, Pan/Scroll do not")
+    p0 = studio_data(page).get("pos")
+    page.wait_for_timeout(400)
+    p1 = studio_data(page).get("pos")
+    check(p0 != p1, f"studio anim: the preview plays (frame {p0} -> {p1})")
+    cell = lambda i: f"#st-strip .st-cell[data-i='{i}']"
+    page.click(cell(2))
+    page.click("#st-set-in")
+    page.click(cell(9))
+    page.click("#st-set-out")
+    page.select_option("#st-rate", "200")
+    page.click(cell(5))
+    page.keyboard.press("Delete")
+    d = studio_data(page)
+    check((d.get("from"), d.get("to"), d.get("frames"), d.get("duration"), d.get("deleted")) == ("2", "9", "7", "210", "1"),
+          f"studio anim: trim 3-10, 2x, frame 6 deleted -> {d.get('frames')} frames, {d.get('duration')} ms")
+    page.click("#st-undo")
+    d = studio_data(page)
+    check((d.get("frames"), d.get("deleted")) == ("8", "0"), f"studio anim: Undo brings frame 6 back ({d.get('frames')} frames)")
+    page.click(cell(5))
+    page.keyboard.press("Delete")
+    page.fill("#st-text", "HI")
+    page.wait_for_function("document.querySelector('#studio').dataset.text === '1'", timeout=5000)
+    page.select_option("#st-plat", "SNES")
+    page.fill("#st-author", "")
+    page.fill("#st-title", "Smoke Frames")
+    name = "SNES_Smoke_Frames_01.gif"
+    page.wait_for_function(f"document.querySelector('#studio').dataset.name === '{name}'", timeout=10000)
+    page.evaluate("document.querySelector('#st-preview').scrollIntoView()")
+    page.wait_for_timeout(300)
+    no_leaks(page, "studio (animation)")
+    shot(page, "studio-anim", "laptop")
+    page.evaluate("delete document.querySelector('#studio').dataset.saved")
+    page.click("#st-save")
+    page.wait_for_function("document.querySelector('#studio').dataset.saved", timeout=60000)
+    path = f"/gifs/Consoles/{name}"
+    got = overlay / path.lstrip("/")
+    check(got.exists() and (overlay / cache_path(path).lstrip("/")).exists(), f"studio anim: {path} and its prepared copy landed")
+    frames, delays = gif_frames(got)
+    order = [2, 3, 4, 6, 7, 8, 9]
+    firsts = [tuple(f[(10 * 128 + 127) * 3:(10 * 128 + 127) * 3 + 3]) for f in frames]
+    texted = [sum(1 for i in range(24 * 128, 32 * 128) if f[i * 3:i * 3 + 3] == b"\xff\xff\xff") for f in frames]
+    check(len(frames) == 7 and delays == [30] * 7 and firsts == [cols[i] for i in order] and all(t > 10 for t in texted),
+          f"studio anim: saved GIF is frames {[i + 1 for i in order]} at 30 ms with the text ({len(frames)} frames, {delays}, text px {texted})")
+    compare_with_pack(overlay, {cache_path(path): got})
+    goto_view(page, "library")
+    lib_row(page, path)
+    check(page.inner_text("#lib-d-title") == "Smoke Frames 01", f"studio anim: listed in the Library ({page.inner_text('#lib-d-title')})")
+    # Edit in Make art: the whole animation back; reversed, the original replaced.
+    page.click("#lib-d-art")
+    page.wait_for_function("(d => d.dataset.animated && d.dataset.srcFrames === '7')(document.querySelector('#studio'))", timeout=30000)
+    check(page.input_value("#st-title") == "Smoke Frames" and page.is_visible("#st-mode [data-v=replace].on"),
+          "studio anim: Edit in Make art brings the 7 frames, its title, Replace the original chosen")
+    page.fill("#st-text", "")
+    page.check("#st-rev")
+    page.wait_for_function(f"document.querySelector('#studio').dataset.name === '{name}'", timeout=10000)
+    page.evaluate("delete document.querySelector('#studio').dataset.saved")
+    page.click("#st-save")
+    page.wait_for_function("document.querySelector('#studio').dataset.saved", timeout=60000)
+    frames2, delays2 = gif_frames(got)
+    firsts2 = [tuple(f[(10 * 128 + 127) * 3:(10 * 128 + 127) * 3 + 3]) for f in frames2]
+    same_dir = sorted(p.name for p in got.parent.iterdir() if p.name.startswith("SNES_Smoke_Frames"))
+    check(firsts2 == firsts[::-1] and delays2 == [30] * 7 and same_dir == [name],
+          f"studio anim: replaced in place, reversed ({same_dir})")
+    compare_with_pack(overlay, {cache_path(path): got})
+    goto_view(page, "studio")
+    studio_timings(page, "mock")
+    goto_view(page, "library")
+
+
 def move_api_checks(base: str) -> None:
     """POST /api/files/move's refusals (the mock mirrors http.rs)."""
     for body, code in (({"from": "/sets/x.txt", "to": "/gifs/Other/x.gif"}, 400),
@@ -1933,11 +2070,18 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     check(smooth.read_text().split("\n").count(to) == 1 and card not in smooth.read_text(), "edit: the Smooth motion line follows")
     check(page.inner_text("#lib-d-title") == "Smoke Renamed 01" and page.inner_text("#lib-d-category") == "Other",
           f"edit: the Details show the new fields ({page.inner_text('#lib-d-title')}, {page.inner_text('#lib-d-category')})")
-    # Edit in Make art: the GIF is the Studio's picture (its first frame).
+    # Edit in Make art: the GIF — every frame — is the Studio's source.
     page.click("#lib-d-art")
-    page.wait_for_function("document.querySelector('#st-msg') && document.querySelector('#st-msg').textContent.includes('first frame')", timeout=30000)
-    check(page.input_value("#st-title") == "Smoke Renamed" and page.input_value("#st-plat") == "OTHER",
-          f"edit in make art: loaded with its title and platform ({page.input_value('#st-title')}, {page.input_value('#st-plat')})")
+    page.wait_for_function("(d => d && d.dataset.animated && d.dataset.srcFrames)(document.querySelector('#studio'))", timeout=30000)
+    from PIL import Image
+    want = Image.open(small).n_frames
+    got = int(studio_data(page)["srcFrames"])
+    check(got == want and f"{want} frames" in page.inner_text("#st-msg"),
+          f"edit in make art: the whole animation loads ({got} frames, the file has {want}; '{page.inner_text('#st-msg')}')")
+    check(page.input_value("#st-title") == "Smoke Renamed" and page.input_value("#st-plat") == "OTHER"
+          and page.input_value("#st-author") == "smoker" and page.is_visible("#st-mode"),
+          f"edit in make art: loaded with its fields ({page.input_value('#st-title')}, {page.input_value('#st-plat')}, "
+          f"{page.input_value('#st-author')}) and Replace / Save as new")
     # Delete: after asking, the GIF, its copy, its playlist line, favourite, Smooth line.
     lib_row(page, to)
     page.click("#lib-d-del")
@@ -1970,6 +2114,16 @@ def studio_device(page: Page) -> None:
         check(True, f"device studio: pictures load ({page.locator('#st-thumbs .st-thumb').count()})")
     except PlaywrightTimeoutError:
         check(False, "device studio: no picture loaded from GitHub (network?)")
+    # An animated GIF from a file, played and edited here; nothing saved.
+    fx = OUT / "anim-fixture.gif"
+    anim_fixture(fx, 12, 128, 32, 60)
+    page.evaluate("delete document.querySelector('#studio').dataset.tImport")
+    page.set_input_files("#st-file", str(fx))
+    page.wait_for_function("document.querySelector('#studio').dataset.tImport", timeout=30000)
+    p0 = studio_data(page).get("pos")
+    page.wait_for_timeout(400)
+    d = studio_data(page)
+    check(d.get("srcFrames") == "12" and d.get("pos") != p0, f"device studio: a 12-frame GIF loads and plays ({d.get('srcFrames')}, frame {p0} -> {d.get('pos')})")
     no_leaks(page, "device studio")
     shot(page, "device-studio", "laptop")
     goto_view(page, "library")

@@ -15,19 +15,30 @@
 //! frames its Preview plays and the smoothed copy — in steps the page
 //! yields between, byte-identical to `opendmd-pack`'s.
 
+pub mod anim;
 pub mod encode;
 pub mod pipeline;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_anim;
 
-use pipeline::{Colours, Fit, Image, Motion, Plan, Scale};
+use anim::Anim;
+use pipeline::{Colours, Edit, Fit, Image, Motion, Overlay, Plan, Scale};
 use wasm_bindgen::prelude::*;
 
 /// One picture being made into art. `new Studio(rgba, width, height)` from
 /// `ImageData`; then `prepare(fit, lift)` builds the stage (the picture the
 /// window moves over, `width` x `height`, `pixels()`), `autoMotion()` and
 /// `autoWindow(motion)` suggest, and `render(...)` makes the GIF.
+///
+/// Or an animated GIF: `Studio.fromGif(bytes)`, then `decode(n)` until true
+/// (the frames, `n` a call, so the page can yield), `prepare` as above (the
+/// stage is the first frame's), `look(...)` for the Frame and Look steps,
+/// `setEdit(...)` for the timeline, `frameGif(i)` / `thumb(i)` per source
+/// frame (rendered when first asked for), and `saveBegin(plays)`,
+/// `saveStep(n)` until true, `saved()` for the GIF ([`anim`]).
 #[wasm_bindgen]
 pub struct Studio {
     raw: Image,
@@ -36,6 +47,11 @@ pub struct Studio {
     frames: usize,
     colours: usize,
     duration_ms: f64,
+    anim: Option<Anim>,
+    fit: Fit,
+    lift: bool,
+    text: Option<Overlay>,
+    seq: Vec<(usize, u32)>,
 }
 
 #[wasm_bindgen]
@@ -53,25 +69,246 @@ impl Studio {
             frames: 0,
             colours: 0,
             duration_ms: 0.0,
+            anim: None,
+            fit: Fit::Pixels,
+            lift: false,
+            text: None,
+            seq: Vec::new(),
         })
+    }
+
+    /// An animated GIF: its header and first frame read (throws if it does
+    /// not decode); `decode` reads the rest.
+    #[wasm_bindgen(js_name = fromGif)]
+    pub fn from_gif(bytes: Vec<u8>) -> Result<Studio, JsError> {
+        let a = Anim::open(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+        let raw = a.image(0);
+        let stage = pipeline::stage_frame(&raw, Fit::Pixels, false);
+        Ok(Studio {
+            raw,
+            scale: Scale { k: 1, x0: 0, y0: 0 },
+            stage,
+            frames: 0,
+            colours: 0,
+            duration_ms: 0.0,
+            anim: Some(a),
+            fit: Fit::Pixels,
+            lift: false,
+            text: None,
+            seq: Vec::new(),
+        })
+    }
+
+    /// Decode up to `n` more frames; true once all are in.
+    pub fn decode(&mut self, n: u32) -> bool {
+        self.anim.as_mut().is_none_or(|a| a.decode(n as usize))
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn animated(&self) -> bool {
+        self.anim.is_some()
+    }
+
+    /// Source frames decoded (all of them once `decode` is done).
+    #[wasm_bindgen(getter, js_name = sourceFrames)]
+    pub fn source_frames(&self) -> usize {
+        self.anim.as_ref().map_or(1, |a| a.len())
+    }
+
+    /// Frames the file has (read before decoding them).
+    #[wasm_bindgen(getter, js_name = inFile)]
+    pub fn in_file(&self) -> usize {
+        self.anim.as_ref().map_or(1, |a| a.in_file)
+    }
+
+    /// `[width, height, workWidth, workHeight, reduce, damaged, capped, plays]`
+    /// of an animation (plays: 0 forever); empty for a still.
+    pub fn info(&self) -> Vec<u32> {
+        self.anim.as_ref().map_or(Vec::new(), |a| {
+            vec![
+                a.orig.0 as u32,
+                a.orig.1 as u32,
+                a.w as u32,
+                a.h as u32,
+                a.reduce as u32,
+                a.damaged as u32,
+                a.capped() as u32,
+                a.loops,
+            ]
+        })
+    }
+
+    /// Source frame delays as the player shows them, ms.
+    pub fn delays(&self) -> Vec<u32> {
+        self.anim.as_ref().map_or(Vec::new(), |a| a.delays.clone())
     }
 
     /// The upscale undone by the pixel fits (1: none found).
     #[wasm_bindgen(getter)]
     pub fn scale(&self) -> usize {
-        self.scale.k
+        self.anim.as_ref().map_or(self.scale.k, |a| a.scale.k)
     }
 
     /// `"pixels"`, `"half"` or `"fit"`: what to start with.
     #[wasm_bindgen(js_name = autoFit)]
     pub fn auto_fit(&self) -> String {
-        pipeline::auto_fit(&self.raw, self.scale).name().into()
+        match &self.anim {
+            // Frames are kept at their native pixels already; a big picture
+            // with no pixel grid is a video still or a photo: Fit.
+            Some(a) if a.scale.k == 1 && a.orig.0.max(a.orig.1) > 640 => Fit::Smooth,
+            _ => pipeline::auto_fit(&self.raw, self.scale),
+        }
+        .name()
+        .into()
     }
 
     /// Build the stage for a fit (`"pixels"`, `"half"`, `"fit"`), lifting
     /// dark strokes first when asked.
     pub fn prepare(&mut self, fit: &str, lift: bool) {
-        self.stage = pipeline::stage(&self.raw, self.scale, Fit::parse(fit), lift);
+        self.fit = Fit::parse(fit);
+        self.lift = lift;
+        self.stage = match &self.anim {
+            Some(_) => pipeline::stage_frame(
+                &self.raw,
+                self.fit,
+                lift && pipeline::should_lift(&self.raw),
+            ),
+            None => pipeline::stage(&self.raw, self.scale, self.fit, lift),
+        };
+    }
+
+    /// An animation's Frame and Look steps (the window at `x`, `y`; the
+    /// rest as `render`). Rendered frames are kept if nothing changed.
+    pub fn look(&mut self, x: u32, y: u32, key: bool, gain: u32, colours: u32) {
+        let (fit, lift) = (self.fit, self.lift);
+        if let Some(a) = self.anim.as_mut() {
+            a.configure(
+                fit,
+                lift,
+                x as usize,
+                y as usize,
+                key,
+                gain.clamp(10, 200),
+                Colours::from_count(colours),
+            );
+        }
+    }
+
+    /// Text over the frames: `msg` in the small (4x6) or normal (5x7)
+    /// font, colour `0xRRGGBB`, anchor 0..=8 (top-left, row by row), nudged
+    /// by `dx`, `dy`, over source frames `from..=to` (an animation's). An
+    /// empty message is no text.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = setText)]
+    pub fn set_text(
+        &mut self,
+        msg: &str,
+        small: bool,
+        colour: u32,
+        anchor: u8,
+        dx: i32,
+        dy: i32,
+        from: u32,
+        to: u32,
+    ) {
+        let t = (!msg.trim().is_empty()).then(|| Overlay {
+            msg: msg.into(),
+            small,
+            colour,
+            anchor: anchor.min(8),
+            dx: dx.clamp(-128, 128),
+            dy: dy.clamp(-32, 32),
+            from: from as usize,
+            to: to as usize,
+        });
+        if let Some(a) = self.anim.as_mut() {
+            a.set_text(t.clone());
+        }
+        self.text = t;
+    }
+
+    /// The timeline: source frames `from..=to` less `deleted`, at `speed`
+    /// percent, reversed, ping-pong ([`pipeline::sequence`]). Returns the
+    /// play order flattened, `[frame, delay ms, frame, delay ms, ...]`.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = setEdit)]
+    pub fn set_edit(
+        &mut self,
+        from: u32,
+        to: u32,
+        speed: u32,
+        reverse: bool,
+        pingpong: bool,
+        deleted: &[u32],
+    ) -> Vec<u32> {
+        let e = Edit {
+            from: from as usize,
+            to: to as usize,
+            speed,
+            reverse,
+            pingpong,
+            deleted: deleted.iter().map(|&d| d as usize).collect(),
+        };
+        self.seq = self.anim.as_ref().map_or(Vec::new(), |a| a.sequence(&e));
+        self.frames = self.seq.len();
+        self.duration_ms = self.seq.iter().map(|s| s.1 as f64).sum();
+        self.seq.iter().flat_map(|&(i, d)| [i as u32, d]).collect()
+    }
+
+    /// Source frame `i`, edited, as a one-frame GIF for the preview.
+    #[wasm_bindgen(js_name = frameGif)]
+    pub fn frame_gif(&mut self, i: usize) -> Vec<u8> {
+        self.anim
+            .as_mut()
+            .map_or(Vec::new(), |a| a.frame_gif(i.min(a.len() - 1)))
+    }
+
+    /// Source frame `i`, edited, as 128x32 RGBA (a thumbnail).
+    pub fn thumb(&mut self, i: usize) -> Vec<u8> {
+        self.anim
+            .as_mut()
+            .map_or(Vec::new(), |a| a.render(i.min(a.len() - 1)).rgba())
+    }
+
+    /// Whether `thumb(i)` is ready without work.
+    #[wasm_bindgen(js_name = isRendered)]
+    pub fn is_rendered(&self, i: usize) -> bool {
+        self.anim.as_ref().is_some_and(|a| a.is_rendered(i))
+    }
+
+    /// Start writing the edited animation (the last `setEdit`), played
+    /// `plays` times (0: forever).
+    #[wasm_bindgen(js_name = saveBegin)]
+    pub fn save_begin(&mut self, plays: u32) {
+        let seq = self.seq.clone();
+        if let Some(a) = self.anim.as_mut() {
+            a.save_begin(seq, plays);
+        }
+    }
+
+    /// `n` frames' worth of the save; true once written.
+    #[wasm_bindgen(js_name = saveStep)]
+    pub fn save_step(&mut self, n: u32) -> bool {
+        self.anim.as_mut().is_none_or(|a| a.save_step(n as usize))
+    }
+
+    /// `[done, of]`: the save's progress, in frames of work.
+    #[wasm_bindgen(js_name = saveProgress)]
+    pub fn save_progress(&self) -> Vec<u32> {
+        let (d, t) = self.anim.as_ref().map_or((0, 0), |a| a.save_progress());
+        vec![d as u32, t as u32]
+    }
+
+    /// The saved GIF (then `colours` is its palette's size).
+    pub fn saved(&mut self) -> Vec<u8> {
+        match self.anim.as_mut() {
+            Some(a) => {
+                let b = a.saved();
+                self.colours = a.colours;
+                b
+            }
+            None => Vec::new(),
+        }
     }
 
     #[wasm_bindgen(getter)]
@@ -131,7 +368,7 @@ impl Studio {
             gain: gain.clamp(10, 200),
             colours: Colours::from_count(colours),
         };
-        let anim = pipeline::render(&self.stage, &plan);
+        let anim = pipeline::render_with(&self.stage, &plan, self.text.as_ref());
         self.frames = anim.frames.len();
         self.colours = anim.palette.len();
         self.duration_ms = anim.duration_ms() as f64;
@@ -398,4 +635,11 @@ pub fn platforms() -> js_sys::Array {
         )
         .map(JsValue::from_str)
         .collect()
+}
+
+/// How many frames a GIF has, from its block structure (no decoding): the
+/// Studio edits a GIF of two or more as an animation.
+#[wasm_bindgen(js_name = gifFrames)]
+pub fn gif_frames(bytes: &[u8]) -> usize {
+    anim::scan_frames(bytes)
 }

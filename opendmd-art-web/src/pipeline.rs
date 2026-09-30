@@ -87,7 +87,7 @@ impl Image {
     }
 }
 
-fn rgb_key(p: Px) -> u32 {
+pub fn rgb_key(p: Px) -> u32 {
     (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32
 }
 
@@ -502,11 +502,24 @@ fn is_dark(p: Px) -> bool {
 /// red "M" and green "D" stand on it). Run at full resolution, before any
 /// resample.
 pub fn lift_dark(img: &Image) -> Image {
+    if should_lift(img) {
+        flip_dark(img)
+    } else {
+        img.clone()
+    }
+}
+
+/// [`lift_dark`]'s decision on its own: there are dark strokes, and they
+/// are not a backing plate. An animation decides once, from its first
+/// frame, so the strokes do not flicker between frames.
+pub fn should_lift(img: &Image) -> bool {
     let (_, _, w, h) = opaque_box(img);
     let dark = img.px.iter().filter(|&&p| is_dark(p)).count();
-    if dark == 0 || dark as f64 > 0.6 * (w * h) as f64 {
-        return img.clone();
-    }
+    dark > 0 && dark as f64 <= 0.6 * (w * h) as f64
+}
+
+/// Flip the lightness of every dark stroke pixel, unconditionally.
+pub fn flip_dark(img: &Image) -> Image {
     let mut out = img.clone();
     for p in &mut out.px {
         if is_dark(*p) {
@@ -597,6 +610,30 @@ pub fn stage(raw: &Image, scale: Scale, fit: Fit, lift: bool) -> Image {
         }
     };
     flatten_pad(&img)
+}
+
+/// One frame of an animation as a stage: [`stage`] for a picture already
+/// at its native pixels (an animation's frames are reduced on import), the
+/// dark strokes flipped when the animation decided so ([`should_lift`] on
+/// its first frame). Frames are opaque (a GIF's screen has no alpha), so
+/// *Fit* never trims and every frame gets the same size.
+pub fn stage_frame(img: &Image, fit: Fit, flip: bool) -> Image {
+    let flipped;
+    let base = if flip {
+        flipped = flip_dark(img);
+        &flipped
+    } else {
+        img
+    };
+    let out = match fit {
+        Fit::Pixels => return flatten_pad(base),
+        Fit::Half => down_mode(base, 2),
+        Fit::Smooth => {
+            let (w, h) = smooth_size(base.w, base.h);
+            resize_area(base, w, h)
+        }
+    };
+    flatten_pad(&out)
 }
 
 /// The fit the Studio starts with. A transparent picture with no pixel grid
@@ -722,6 +759,13 @@ pub fn delays(n: usize, motion: Motion, step_ms: u32, hold_ms: u32) -> Vec<u32> 
 /// "Background to black": the commonest colour of `img` and everything
 /// within `tol` of it on every channel become black. Returns that colour.
 pub fn key_background(img: &mut Image, tol: u8) -> Option<[u8; 3]> {
+    let bgc = commonest(img)?;
+    key_colour(img, bgc, tol);
+    Some(bgc)
+}
+
+/// The commonest colour of `img` (ties: the lower `0xRRGGBB`).
+pub fn commonest(img: &Image) -> Option<[u8; 3]> {
     let mut counts: HashMap<u32, u32> = HashMap::new();
     for &p in &img.px {
         *counts.entry(rgb_key(p)).or_default() += 1;
@@ -729,13 +773,16 @@ pub fn key_background(img: &mut Image, tol: u8) -> Option<[u8; 3]> {
     let (&bg, _) = counts
         .iter()
         .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))?;
-    let bgc = [(bg >> 16) as u8, (bg >> 8) as u8, bg as u8];
+    Some([(bg >> 16) as u8, (bg >> 8) as u8, bg as u8])
+}
+
+/// Everything within `tol` of `bgc` on every channel becomes black.
+pub fn key_colour(img: &mut Image, bgc: [u8; 3], tol: u8) {
     for p in &mut img.px {
         if (0..3).all(|c| p[c].abs_diff(bgc[c]) <= tol) {
             *p = [0, 0, 0, p[3]];
         }
     }
-    Some(bgc)
 }
 
 /// Brightness as a gain on the pixels, in percent (the panel's own
@@ -767,7 +814,7 @@ impl Colours {
             Colours::Max((n as usize).clamp(2, 256))
         }
     }
-    fn max(self) -> usize {
+    pub fn max(self) -> usize {
         match self {
             Colours::Auto => 256,
             Colours::Max(n) => n,
@@ -922,16 +969,33 @@ impl Animation {
 /// key, brightness and palette are worked out over what the windows cover
 /// together, once; each frame is then a crop of its indices.
 pub fn render(stage: &Image, plan: &Plan) -> Animation {
+    render_with(stage, plan, None)
+}
+
+/// [`render`], with a text overlay drawn over every frame (after the Look:
+/// the text keeps its colour; its colour joins the palette).
+pub fn render_with(stage: &Image, plan: &Plan, text: Option<&Overlay>) -> Animation {
     let (rect, wins) = windows(stage.w, stage.h, plan.motion, plan.x, plan.y);
     let mut region = stage.crop(rect.0, rect.1, rect.2, rect.3);
     if plan.key {
         key_background(&mut region, 12);
     }
     gain(&mut region, plan.gain);
-    let counts = colour_counts(&region);
+    let mask = text.map(|t| (t.mask(), t.rgb()));
+    let mut counts = colour_counts(&region);
+    if let Some((m, c)) = &mask {
+        let lit = m.iter().filter(|&&b| b).count() as u32 * wins.len() as u32;
+        match counts.iter_mut().find(|e| e.0 == *c) {
+            Some(e) => e.1 += lit,
+            None if lit > 0 => counts.push((*c, lit)),
+            None => {}
+        }
+        counts.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    }
     let palette = spread_pick(&counts, plan.colours.max());
     let mut map = Mapper::new(&palette);
     let idx: Vec<u8> = region.px.iter().map(|&p| map.index(rgb_key(p))).collect();
+    let text_idx = mask.as_ref().map(|(_, c)| map.index(*c));
     let frames = wins
         .iter()
         .map(|&(x, y)| {
@@ -939,6 +1003,13 @@ pub fn render(stage: &Image, plan: &Plan) -> Animation {
             let mut f = Vec::with_capacity(W * H);
             for row in oy..oy + H {
                 f.extend_from_slice(&idx[row * rect.2 + ox..row * rect.2 + ox + W]);
+            }
+            if let (Some((m, _)), Some(k)) = (&mask, text_idx) {
+                for (p, &on) in f.iter_mut().zip(m) {
+                    if on {
+                        *p = k;
+                    }
+                }
             }
             f
         })
@@ -949,4 +1020,172 @@ pub fn render(stage: &Image, plan: &Plan) -> Animation {
         frames,
         delays_ms,
     }
+}
+
+// --- Text -----------------------------------------------------------------------
+
+/// A line of text over the frames, in one of the core's two panel fonts
+/// (`opendmd_core::text`: 4x6 and 5x7), at one of nine anchors (0..=8,
+/// row-major from the top left, a 1 px margin) plus a nudge, over the
+/// source frames `from..=to` (an animation; a still's frames are all
+/// covered).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Overlay {
+    pub msg: String,
+    pub small: bool,
+    /// `0xRRGGBB`.
+    pub colour: u32,
+    pub anchor: u8,
+    pub dx: i32,
+    pub dy: i32,
+    pub from: usize,
+    pub to: usize,
+}
+
+impl Overlay {
+    fn font(&self) -> opendmd_core::text::Font {
+        if self.small {
+            opendmd_core::text::Font::Small
+        } else {
+            opendmd_core::text::Font::Normal
+        }
+    }
+
+    /// Top-left of the text on the panel.
+    pub fn origin(&self) -> (i32, i32) {
+        let f = self.font();
+        let (w, h) = (
+            opendmd_core::text::text_width(f, &self.msg, 1) as i32,
+            f.height() as i32,
+        );
+        let at = |slot: u8, room: i32| match slot {
+            0 => 1,
+            1 => room / 2,
+            _ => room - 1,
+        };
+        (
+            at(self.anchor % 3, W as i32 - w) + self.dx,
+            at((self.anchor / 3).min(2), H as i32 - h) + self.dy,
+        )
+    }
+
+    /// The lit pixels, `W * H`, row-major.
+    pub fn mask(&self) -> Vec<bool> {
+        use opendmd_core::canvas::{Canvas, Rgb};
+        let mut c = Canvas::new();
+        let (x, y) = self.origin();
+        opendmd_core::text::draw_text_with(
+            &mut c,
+            x,
+            y,
+            &self.msg,
+            Rgb::new(255, 255, 255),
+            self.font(),
+            1,
+        );
+        (0..W * H).map(|i| c.get(i % W, i / W).r != 0).collect()
+    }
+
+    pub fn rgb(&self) -> u32 {
+        self.colour & 0xFF_FFFF
+    }
+
+    pub fn covers(&self, frame: usize) -> bool {
+        (self.from..=self.to).contains(&frame)
+    }
+
+    /// Draw it (given its [`mask`](Self::mask)) over a 128x32 frame.
+    pub fn draw(&self, mask: &[bool], img: &mut Image) {
+        let c = self.rgb();
+        let px = [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
+        for (p, &on) in img.px.iter_mut().zip(mask) {
+            if on {
+                *p = px;
+            }
+        }
+    }
+}
+
+// --- Timeline -------------------------------------------------------------------
+
+/// A GIF frame's delay as the player shows it (`opendmd_core::player`): the
+/// file's hundredths, 0 meaning 100 ms, never under 20 ms.
+pub fn player_delay(hundredths: u16) -> u32 {
+    if hundredths == 0 {
+        100
+    } else {
+        (hundredths as u32 * 10).max(20)
+    }
+}
+
+/// The shortest delay written (the player's floor).
+pub const MIN_DELAY_MS: u32 = 20;
+
+/// What the timeline decides: the source frames `from..=to` (trim) minus
+/// the deleted ones, played at `speed` percent, backwards, and/or there and
+/// back again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Edit {
+    pub from: usize,
+    pub to: usize,
+    /// Percent: 25 (a quarter speed) to 400 (4x).
+    pub speed: u32,
+    pub reverse: bool,
+    pub pingpong: bool,
+    /// Source frames taken out (any order).
+    pub deleted: Vec<usize>,
+}
+
+impl Edit {
+    /// Every frame, as it came.
+    pub fn all(n: usize) -> Edit {
+        Edit {
+            from: 0,
+            to: n.saturating_sub(1),
+            speed: 100,
+            reverse: false,
+            pingpong: false,
+            deleted: Vec::new(),
+        }
+    }
+}
+
+/// A delay at a speed: `ms * 100 / speed`, rounded to the 10 ms a GIF can
+/// hold, never under [`MIN_DELAY_MS`].
+pub fn scaled_delay(ms: u32, speed: u32) -> u32 {
+    let speed = speed.clamp(25, 400) as u64;
+    let v = (ms as u64 * 100 + speed * 5) / (speed * 10) * 10;
+    (v as u32).max(MIN_DELAY_MS)
+}
+
+/// The edited animation as `(source frame, delay ms)` in play order.
+/// Trim and delete pick the frames (in source order), reverse turns them
+/// round, ping-pong appends them backwards without repeating either end
+/// (`0 1 2 3` -> `0 1 2 3 2 1`, then the loop starts at 0 again). Delays
+/// are the source's ([`player_delay`]) scaled by [`scaled_delay`]. Empty
+/// when nothing is left.
+pub fn sequence(delays_ms: &[u32], e: &Edit) -> Vec<(usize, u32)> {
+    let n = delays_ms.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut gone = vec![false; n];
+    for &d in &e.deleted {
+        if d < n {
+            gone[d] = true;
+        }
+    }
+    let (a, b) = (e.from.min(n - 1), e.to.min(n - 1));
+    let (a, b) = (a.min(b), a.max(b));
+    let mut base: Vec<usize> = (a..=b).filter(|&i| !gone[i]).collect();
+    if e.reverse {
+        base.reverse();
+    }
+    if e.pingpong && base.len() > 2 {
+        let back: Vec<usize> = base[1..base.len() - 1].iter().rev().copied().collect();
+        base.extend(back);
+    }
+    base.into_iter()
+        .map(|i| (i, scaled_delay(delays_ms[i], e.speed)))
+        .collect()
 }
