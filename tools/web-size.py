@@ -14,8 +14,10 @@ until the live effects, `opendmd_core::fx`, which the wasm player needs:
 extra 12 KB is ~40 ms of a page load; 112 KB until the start-up show,
 `opendmd_core::boot`, which Settings previews as the `@boot` virtual file
 so the page draws exactly what the panel does: +2.4 KB gz); the
-hand-written JS + CSS <= 48 KB (40 KB until Follow RePlayOS's Settings card,
-which had ~0.6 KB left). The Studio ("Make art") is loaded only when it
+hand-written JS + CSS <= 56 KB (40 KB until Follow RePlayOS's Settings card,
+which had ~0.6 KB left; 48 KB until the Library's redesign — the Details
+panel, the category tabs, Make art as a view —, +8 KB being ~25 ms of a
+page load from flash). The Studio ("Make art") is loaded only when it
 opens and has lines of its own: its wasm + glue (`pkg-art/`) <= 150 KB, and
 `js/studio.js` + `studio.css` <= 24 KB — neither counts against the lines
 above. Library's "Live" items and "Effects" (`js/live.js`: the clock, the
@@ -23,7 +25,9 @@ scrolling text and the effects' option forms, imported only when either
 category is chosen) have a line of their own too, <= 4 KB, and so does
 Settings' Start-up card (`js/boot.js`, imported by the Settings view: the
 `boot_show` select and the previews of the start-up show), <= 2 KB, and Settings' Power card (`js/power.js`: the Maximum brightness
-control and its warning), <= 2 KB. The name index for "Find art for a game" (`art/*.json`, one file
+control and its warning), <= 2 KB, and the Library's Add GIFs and Edit
+details dialogs with Delete (`js/details.js`, imported when first used),
+<= 8 KB. The name index for "Find art for a game" (`art/*.json`, one file
 fetched per search) is printed, with no budget. Raw sizes are printed for
 information. A file with no `.gz` beside it counts at its raw size. Exits 1
 when over budget.
@@ -41,7 +45,10 @@ from pathlib import Path
 # 100 KB until the live effects, 112 KB until the start-up show (see the
 # docstring).
 WASM_GZ_BUDGET = 116 * 1024
-JS_CSS_GZ_BUDGET = 48 * 1024
+# 48 KB until the Library's redesign (the Details panel, the category tabs,
+# Make art as a view): the UI is served from the flash pack at ~320 KB/s, so
+# +8 KB is ~25 ms of a page load.
+JS_CSS_GZ_BUDGET = 56 * 1024
 ART_WASM_GZ_BUDGET = 150 * 1024
 STUDIO_GZ_BUDGET = 24 * 1024
 STUDIO = {"js/studio.js", "studio.css"}
@@ -51,6 +58,8 @@ BOOT_GZ_BUDGET = 2 * 1024
 BOOT = {"js/boot.js"}
 POWER_GZ_BUDGET = 2 * 1024
 POWER = {"js/power.js"}
+DETAILS_GZ_BUDGET = 8 * 1024
+DETAILS = {"js/details.js"}
 
 
 def main() -> int:
@@ -81,6 +90,8 @@ def main() -> int:
             kind = "boot"
         elif rel in POWER:
             kind = "power"
+        elif rel in DETAILS:
+            kind = "details"
         elif rel.startswith("art/"):
             kind = "art index"
             t = totals.setdefault(kind, [0, 0])
@@ -98,7 +109,7 @@ def main() -> int:
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
-                         ("power", POWER_GZ_BUDGET),
+                         ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

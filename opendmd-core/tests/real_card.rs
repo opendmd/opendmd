@@ -497,3 +497,45 @@ fn follow_context_on_the_real_card() {
         near(ds + dr, target, &format!("{game}: matches drawn"));
     }
 }
+
+/// Every name on the card read as fields, built back into a name and read
+/// again gives the same fields (`manifest::NameFields`, what the web app's
+/// "Edit details" writes). The few that cannot be built are printed with
+/// why; there must be very few.
+#[cfg(feature = "names")]
+#[test]
+#[ignore = "needs DMD_CARD_ROOT pointing at a real card dump"]
+fn real_card_names_round_trip_through_the_builder() {
+    use opendmd_core::manifest::NameFields;
+    let Ok(root) = std::env::var("DMD_CARD_ROOT") else {
+        eprintln!("DMD_CARD_ROOT not set, nothing to do");
+        return;
+    };
+    let text = std::fs::read_to_string(PathBuf::from(root).join("filelist.txt"))
+        .expect("read filelist.txt");
+    let (mut ok, mut same, mut refused) = (0usize, 0usize, BTreeMap::<&str, Vec<String>>::new());
+    for e in parse_manifest(&text) {
+        let f = NameFields::from_path(&e.path);
+        match f.path() {
+            Ok(p) => {
+                assert_eq!(NameFields::from_path(&p), f, "{} -> {p}", e.path);
+                ok += 1;
+                same += usize::from(p == e.path);
+            }
+            Err(why) => refused.entry(why.code()).or_default().push(e.path.clone()),
+        }
+    }
+    let n_refused: usize = refused.values().map(Vec::len).sum();
+    println!("names: {ok} rebuilt ({same} byte-identical), {n_refused} refused");
+    for (why, paths) in &refused {
+        println!(
+            "  {why}: {} e.g. {:?}",
+            paths.len(),
+            &paths[..paths.len().min(5)]
+        );
+    }
+    assert!(
+        n_refused * 100 <= ok,
+        "more than 1% of the card cannot be rebuilt"
+    );
+}

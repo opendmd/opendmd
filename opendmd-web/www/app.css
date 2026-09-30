@@ -85,8 +85,36 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 .grow>input,.grow>select,label.stack>input,label.stack>select{width:100%}
 .libgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,38%);gap:12px;align-items:start}
 .libgrid>.side{position:sticky;top:56px}
-@media (max-width:1000px){.libgrid{grid-template-columns:minmax(0,1fr)}.libgrid>.side{order:-1;top:48px;z-index:2}}
-@media (max-width:760px){.chips.scroll{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}.chips.scroll>*{flex:none}.libgrid .side .card{padding:8px;margin:0}}
+.chips.scroll{flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}.chips.scroll>*{flex:none}
+.libhead>.row{gap:8px}
+.lib-q{flex:1 1 220px}
+#lib-search{font-size:16px;min-height:42px;padding:8px 16px;border-radius:99px}
+.tabs{display:flex;overflow-x:auto;margin-top:12px;border-bottom:1px solid var(--line);scrollbar-width:thin}
+.tab{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--mut);padding:6px 12px;min-height:36px;white-space:nowrap;flex:none}
+.tab:hover:not(.on){color:var(--fg)}
+.tab.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
+.libhead .chips{margin-top:10px}
+.lib-progress{margin-top:10px}.lib-progress .bar{height:3px}.lib-progress .cap{margin-top:4px}
+#lib-d-title{font-size:17px;margin:12px 0 2px}
+.facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 14px;margin:8px 0 0;font-size:13px}
+.facts dt{color:var(--mut)}.facts dd{margin:0;overflow-wrap:anywhere}
+.acts{margin-top:12px;gap:8px}
+.acts.end{border-top:1px solid var(--line);padding-top:12px;margin-top:14px}
+#lib-smooth{margin-top:12px}
+#lib-detail{position:relative}
+#lib-cap{overflow-wrap:anywhere}
+.close{display:none}
+.vrow .t{flex:0 1 auto}
+.vrow .tag{margin-left:0}
+button.more{margin-left:auto}
+@media (max-width:1000px){
+  .libgrid{grid-template-columns:minmax(0,1fr)}
+  .libgrid>.side{position:fixed;left:0;right:0;top:auto;bottom:0;z-index:8;max-height:85vh;overflow:auto;overscroll-behavior:contain}
+  .libgrid>.side:not(.open){display:none}
+  .libgrid>.side>.card{margin:0;border-radius:12px 12px 0 0;box-shadow:0 -8px 28px #000c;padding-top:44px}
+  .close{display:inline-flex;position:absolute;right:10px;top:8px}
+}
+@media (max-width:760px){.libgrid>.side{bottom:calc(58px + env(safe-area-inset-bottom));max-height:calc(100vh - 120px)}}
 
 .ov{display:inline-flex;gap:4px;flex:none;font-style:normal}
 .ov i{font-style:normal;font-size:12px;color:var(--acc)}.ov i.hid{color:var(--bad)}.ov i.less{color:var(--mut)}

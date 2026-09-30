@@ -71,8 +71,8 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 	fw-release fw-release-flash www-push flasher flasher-smoke card-sync api-load
 
 test:
-	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion)"
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween
+	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names
 	@echo "==> Testing $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(SIM)"
@@ -95,7 +95,7 @@ test-wasm:
 test-card:
 	@echo "==> Testing $(CORE) against $(CARD_ROOT) (its cache/ from opendmd-pack convert)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable DMD_CARD_ROOT=$(CARD_ROOT) \
-		cargo test --release --features tween -- --ignored --nocapture
+		cargo test --release --features tween,names -- --ignored --nocapture
 
 sim:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo run --release -- $(ARGS)
@@ -111,7 +111,7 @@ pack:
 
 check:
 	@echo "==> Checking $(CORE)"
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features tween
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features tween,names
 	@echo "==> Checking $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(SIM)"
@@ -126,7 +126,7 @@ WASM_TARGET := wasm32-unknown-unknown
 check-wasm:
 	@echo "==> Checking $(CORE) for $(WASM_TARGET)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --features tween
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --features tween,names
 	@echo "==> Checking $(RENDER) for $(WASM_TARGET)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(WEB) for $(WASM_TARGET)"
@@ -191,7 +191,7 @@ fmt:
 clippy:
 	@echo "==> Clippy $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names -- -D warnings
 	@echo "==> Clippy $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(SIM)"

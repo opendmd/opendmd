@@ -89,7 +89,7 @@ make pack ARGS="convert $CARD --verify"
 `make pack` is `opendmd-pack` built in release; the same arguments work on
 the binary directly (`opendmd-pack convert --verify <card>`). That is the
 whole step: no manifest to write. A GIF with no copy simply plays as a GIF.
-Files added later from the web app (Library, **Add GIFs**, the Studio) are
+Files added later from the web app (Library → **Add GIFs**, **Make art**) are
 prepared by the browser as they are uploaded, the player prepares the rest
 itself at night, and **Settings → Playback cache** shows how many of the
 playlist's files are prepared and can prepare the rest in the background.

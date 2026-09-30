@@ -150,12 +150,11 @@ export async function detail(box, it, bytes, pv, cap) {
 
   // Play the smooth version in the preview above, or go back.
   async function preview() {
-    const name = cap.textContent.split(' · ')[0];
     if (showing) {
       showing = false;
       pvBtn.textContent = 'Preview';
       await pv.show(it.path, async () => bytes);
-      cap.textContent = `${name} · ${it.name}`;
+      cap.textContent = it.name;
       return;
     }
     pvBtn.disabled = true;
@@ -167,7 +166,7 @@ export async function detail(box, it, bytes, pv, cap) {
       await pv.show(it.path, async () => g);
       showing = true;
       pvBtn.textContent = 'Show original';
-      cap.textContent = `${name} · smooth motion preview`;
+      cap.textContent = `${it.name} · smooth motion preview`;
       msg.textContent = '';
     } catch (e) { msg.textContent = 'Preview: ' + (e.message || e); } finally { pvBtn.disabled = false; }
   }

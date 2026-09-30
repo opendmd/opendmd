@@ -572,3 +572,102 @@ pub fn replace(temp: &str, dest: &str) -> Result<()> {
     }
     Ok(())
 }
+
+/// Move a prepared copy from `old` to `new` (filesystem paths) when its GIF
+/// was renamed: `"moved"`; `"removed"` if it could not be moved (it is
+/// deleted instead: a copy for a name that no longer exists would never be
+/// found again); `"none"` if there was none. A copy already at `new` is
+/// stale — made for an earlier GIF of that name — and goes first either
+/// way, since the player would play it for the renamed GIF.
+pub fn move_copy(old: &str, new: &str) -> &'static str {
+    let same = same_card_path(old, new);
+    if !same && fs::metadata(new).is_ok() {
+        if let Err(e) = fs::remove_file(new) {
+            log::warn!("move: a stale copy at {new}: {e}");
+        }
+    }
+    if fs::metadata(old).is_err() {
+        return "none";
+    }
+    let moved = Path::new(new)
+        .parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .and_then(|()| fs::rename(old, new));
+    match moved {
+        Ok(()) => "moved",
+        Err(e) => {
+            log::warn!("move: {old} -> {new}: {e}; removing the copy");
+            let _ = fs::remove_file(old);
+            "removed"
+        }
+    }
+}
+
+/// Rename the line for GIF `from` to `to` in a one-path-a-line file (the
+/// part before a tab is the path; what follows is kept): Smooth motion's
+/// list, the cache builder's failure list. `Ok(false)` if the file or the
+/// line is not there. Read once to look, then written to `<file>.part` a
+/// line at a time and swapped in: nothing bigger than a line is held.
+pub fn rename_line(file: &str, from: &str, to: &str) -> std::io::Result<bool> {
+    use std::io::BufRead;
+    let key = |line: &[u8]| -> bool {
+        let path = line.split(|&b| b == b'\t').next().unwrap_or(&[]);
+        path.trim_ascii().eq_ignore_ascii_case(from.as_bytes())
+    };
+    let open = |p: &str| fs::File::open(p).map(|f| std::io::BufReader::with_capacity(512, f));
+    let mut reader = match open(file) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let mut line = Vec::with_capacity(128);
+    let mut found = false;
+    while !found {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        found = key(&line);
+    }
+    if !found {
+        return Ok(false);
+    }
+    let mut reader = open(file)?;
+    let temp = format!("{file}.part");
+    let mut out = std::io::BufWriter::with_capacity(512, fs::File::create(&temp)?);
+    let written = (|| -> std::io::Result<()> {
+        loop {
+            line.clear();
+            if reader.read_until(b'\n', &mut line)? == 0 {
+                break;
+            }
+            if key(&line) {
+                let rest = line.iter().position(|&b| b == b'\t').map_or_else(
+                    || {
+                        if line.ends_with(b"\n") {
+                            &b"\n"[..]
+                        } else {
+                            &b""[..]
+                        }
+                    },
+                    |i| &line[i..],
+                );
+                out.write_all(to.as_bytes())?;
+                out.write_all(rest)?;
+            } else {
+                out.write_all(&line)?;
+            }
+        }
+        out.flush()
+    })();
+    drop(out);
+    drop(reader);
+    if let Err(e) = written.and_then(|()| {
+        fs::remove_file(file)?;
+        fs::rename(&temp, file)
+    }) {
+        let _ = fs::remove_file(&temp);
+        return Err(e);
+    }
+    Ok(true)
+}

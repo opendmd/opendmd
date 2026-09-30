@@ -59,6 +59,9 @@ export class DeviceSource {
   cache() { return this.json('GET', '/api/cache', undefined, 15000); }
   async cacheList() { return (await this.json('GET', '/api/cache/list', undefined, 180000)).paths; }
   forget(path) { return this.json('POST', '/api/cache/forget', JSON.stringify({ path })); }
+  // Rename a GIF: its prepared copy, Smooth motion line and failure line
+  // follow on the device; playlists and overrides are the caller's.
+  move(from, to) { return this.json('POST', '/api/files/move', JSON.stringify({ from, to })); }
   // GIFs that can never be prepared ([{path, reason}], the device's
   // /cache/.failed), and recording one. Not in every firmware yet.
   cacheFailed() { return this.json('GET', '/api/cache/failed'); }

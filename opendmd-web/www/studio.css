@@ -1,15 +1,13 @@
-/* The Studio sheet ("Make art"), loaded with js/studio.js. */
-body.st-open{overflow:hidden}
-.st-sheet{position:fixed;inset:0;z-index:30;background:#000b;overflow:auto;overscroll-behavior:contain}
-.st-sheet.drop .st-box{outline:2px dashed var(--acc);outline-offset:-6px}
-.st-box{background:var(--bg);width:min(1200px,100% - 32px);margin:24px auto;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
-.st-box>.row h2{margin:0}
+/* The Studio (the "Make art" view), loaded with js/studio.js. */
+.st-root.drop .st-box{outline:2px dashed var(--acc);outline-offset:4px;border-radius:10px}
+.st-box>h2{font-size:18px;margin:0}
+.st-box>p{margin:2px 0 0}
 .st-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:10px;align-items:start}
 .st-grid>.card{margin:0}
 #st-save-step{grid-column:1/-1}
 .st-grid h3{margin:0 0 10px}
 .st-step{opacity:.45;pointer-events:none}
-.st-sheet.has .st-step{opacity:1;pointer-events:auto}
+.st-root.has .st-step{opacity:1;pointer-events:auto}
 .st-grid .row+.row,.st-find{margin-top:8px}
 .st-find select{flex:1 1 150px}.st-find .grow{min-width:150px}
 .st-find{border-top:1px solid var(--line);padding-top:10px}
@@ -33,7 +31,6 @@ body.st-open{overflow:hidden}
 #st-gain{width:130px}
 #st-name b{color:var(--fg)}
 @media (max-width:760px){
-  .st-box{width:100%;margin:0;border-radius:0;border:0;min-height:100%;padding:10px}
   .st-grid{grid-template-columns:minmax(0,1fr)}
   .st-thumb img{height:64px;max-width:110px}
 }

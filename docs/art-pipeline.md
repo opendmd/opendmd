@@ -3,7 +3,10 @@
 Status: investigation and throwaway prototypes, 2026-09-23. The first
 milestone below has since landed as "Make art" in Library (2026-09-24:
 `opendmd-art-web/`, `www/js/studio.js`, `tools/art-index.py`; see README
-"Make art"); the rest of this document is as it was written. The prototypes are in `opendmd-web/experiments/art/`
+"Make art"). On 2026-09-30 it moved out of the sheet into a view of its own
+(the navigation's **Make art**, and a primary button in the Library), and a
+Library GIF can be opened in it ("Edit in Make art", its first frame for
+now); the rest of this document is as it was written. The prototypes are in `opendmd-web/experiments/art/`
 (`README.md` there says how to run each one). All sample inputs are CC0 or
 public domain, so the committed PNGs hold no third-party game art.
 
