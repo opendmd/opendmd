@@ -97,7 +97,7 @@ function gifcities(q) {
     }).then((rows) => rows.filter((x) => x && x.checksum).map((x) => {
       const url = `${GC_BLOB}${x.checksum}.gif`;
       const title = tidy(x.url_text) || 'GIF';
-      return { id: x.checksum, title, hint: title.replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/(\s+\d+)+$/, '').replace(/\s+/g, ' ').trim(), w: +x.width || 0, h: +x.height || 0, rank: +x.weight || 0, preview: url, fetch: () => fetch(url).then((r) => { if (!r.ok) throw new Error(r.status); return r.blob(); }), link: x.page, source: 'gifcities' };
+      return { id: x.checksum, title, hint: title.replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/(\s+\d+)+$/, '').replace(/\s+/g, ' ').trim(), w: +x.width || 0, h: +x.height || 0, rank: +x.weight || 0, preview: url, fetch: () => fetch(url, { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error(r.status); return r.blob(); }), link: x.page, source: 'gifcities' };
     }));
     p.catch(() => gcCache.delete(k));
     gcCache.set(k, p);
@@ -192,7 +192,10 @@ export function mountResults(el, { onPick }) {
     el.dataset.shown = hits.length;
     clear(grid, hits.map((x) => {
       const dims = h('small', x.w ? `${x.w}×${x.h}` : '');
-      const img = h('img', { loading: 'lazy', alt: x.title, src: x.preview });
+      // crossOrigin: the same request as fetch() below, so the browser's
+      // cache serves the bytes to it; a plain <img> entry (no Origin sent,
+      // so no CORS header back from blob.gifcities.org) would fail that fetch.
+      const img = h('img', { loading: 'lazy', alt: x.title, crossOrigin: 'anonymous', src: x.preview });
       img.onload = () => {
         if (!x.w) { x.w = img.naturalWidth; x.h = img.naturalHeight; dims.textContent = `${x.w}×${x.h}`; }
         // Small GIFs at a whole-number zoom, as the panel would show pixels.

@@ -2108,6 +2108,17 @@ GC_HITS = [  # GifCities' JSON (gifcities.archive.org/api/v1/gifsearch): three s
 ]
 
 
+# blob.gifcities.org (SeaweedFS) answers with a CORS header only when the
+# request carries Origin. A plain <img> sends none, so if the tiles were
+# plain images Chromium's cache would hand the later fetch() of the bytes a
+# no-CORS entry and it would fail (seen on the rig, 2026-10-01); the tiles
+# load with crossOrigin so the cache entry serves both.
+def gc_blob_headers(request):
+    h = {"content-type": "image/gif", "cache-control": "max-age=3600"}
+    if request.headers.get("origin"):
+        h["access-control-allow-origin"] = "*"
+    return h
+
 def find_checks(page: Page) -> None:
     """Library -> GifCities against a canned answer and a 2-frame 88x31 GIF
     (Playwright routes; no network): the search, the count, the Wide chip
@@ -2128,7 +2139,12 @@ def find_checks(page: Page) -> None:
         asked.append(route.request.url)
         route.fulfill(status=200, body=json.dumps(GC_HITS), headers={"access-control-allow-origin": "*", "content-type": "application/json"})
     page.route("https://gifcities.archive.org/api/v1/gifsearch*", api)
-    page.route("https://blob.gifcities.org/**", lambda r: r.fulfill(status=200, body=gif.read_bytes(), headers={"access-control-allow-origin": "*", "content-type": "image/gif"}))
+    origins: list[str | None] = []
+
+    def blob(route) -> None:
+        origins.append(route.request.headers.get("origin"))
+        route.fulfill(status=200, body=gif.read_bytes(), headers=gc_blob_headers(route.request))
+    page.route("https://blob.gifcities.org/**", blob)
     goto_view(page, "library")
     pick_cat(page, "Consoles")
     page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
@@ -2147,6 +2163,10 @@ def find_checks(page: Page) -> None:
     dims = page.eval_on_selector_all("#find-grid .find-hit small", "els => els.map(e => e.textContent)")
     check(dims == ["64×64", "88×31", "50×120"], f"find: 3 of 3, best match first, sizes shown ({dims})")
     page.wait_for_function("[...document.querySelectorAll('#find-grid img')].every(i => i.complete && i.naturalWidth === 88)", timeout=10000)
+    # Routed answers never enter Chromium's cache, so the rig's failure (a
+    # plain <img> entry served to fetch()) cannot be reproduced here: check
+    # its cause instead — every tile asked with Origin (crossOrigin set).
+    check(len(origins) >= 3 and all(origins), f"find: the tiles load with CORS (Origin sent on {sum(1 for o in origins if o)} of {len(origins)})")
     page.click("#find-shape [data-v=wide]")
     ids = page.eval_on_selector_all("#find-grid .find-hit", "els => els.map(e => e.dataset.id)")
     check(page.inner_text("#find-count") == "1 of 3" and ids == ["WIDECHECKSUM"], f"find: Wide narrows to the wide one ({page.inner_text('#find-count')}, {ids})")
@@ -2780,7 +2800,7 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     # GifCities on a phone (find_checks' canned answer and GIF).
     gif = (OUT / "find-fixture.gif").read_bytes()
     page.route("https://gifcities.archive.org/api/v1/gifsearch*", lambda r: r.fulfill(status=200, body=json.dumps(GC_HITS), headers={"access-control-allow-origin": "*", "content-type": "application/json"}))
-    page.route("https://blob.gifcities.org/**", lambda r: r.fulfill(status=200, body=gif, headers={"access-control-allow-origin": "*", "content-type": "image/gif"}))
+    page.route("https://blob.gifcities.org/**", lambda r: r.fulfill(status=200, body=gif, headers=gc_blob_headers(r.request)))
     page.click("#lib-src [data-src=gifcities]")
     page.wait_for_selector("#lib-find:not([hidden]) #find-narrow")
     page.fill("#lib-search", "mario")
