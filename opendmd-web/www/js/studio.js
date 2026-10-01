@@ -26,10 +26,16 @@
 // platform on the card, pictures from libretro-thumbnails), shared with the
 // Library's "Game art"; a GIF or picture found from the Library arrives as
 // `app.artFrom.blob`. Nothing here says where anything is stored.
+//
+// Smooth motion (js/smooth.js, imported when the switch is first used or a
+// listed GIF is opened): the switch beside speed and reverse analyses what
+// Save would write — a draft through the same save path — and the preview
+// then plays the smoothed frames; any edit makes the draft again (debounced).
+// Save keeps the choice: the GIF listed or not, and its copy made to match.
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
-import { h, clear, toast, debounce, label, base } from './util.js';
+import { h, clear, toast, debounce, label, base, emit } from './util.js';
 import { art as artModule } from './artmod.js';
 import { addOne, offerPlaylist } from './library.js';
 import { listings, pickName, renameGif } from './details.js';
@@ -162,6 +168,9 @@ function build(root) {
   const rev = h('input', { type: 'checkbox', id: id('rev') });
   const pp = h('input', { type: 'checkbox', id: id('pp') });
   const plays = select('plays', PLAYS, 0);
+  const smoothOn = h('input', { type: 'checkbox', id: id('smooth') });
+  const smoothCap = h('div.cap', { id: id('smooth-cap'), 'aria-live': 'polite' });
+  const smoothRow = h('div', { id: id('smooth-row'), hidden: true }, h('div.row', h('label', smoothOn, 'Smooth motion')), smoothCap);
   const undoBtn = h('button.sm', { id: id('undo'), disabled: true, onclick: () => undo() }, 'Undo');
   const tlcap = h('div.cap', { id: id('tlcap') });
   const tl = h('div.st-tl', { id: id('tl'), hidden: true },
@@ -171,7 +180,7 @@ function build(root) {
       h('button.sm', { id: id('set-in'), onclick: () => trim('from') }, 'Start here'),
       h('button.sm', { id: id('set-out'), onclick: () => trim('to') }, 'End here'),
       h('button.sm', { id: id('del'), onclick: () => del() }, 'Delete frame'), undoBtn),
-    h('div.row', rate, h('label', rev, 'Reverse'), h('label', pp, 'Ping-pong'), plays));
+    h('div.row', rate, h('label', rev, 'Reverse'), h('label', pp, 'Ping-pong'), plays), smoothRow);
   const prev = h('section.card.st-step', { id: id('preview') }, h('h3', '5 · Preview'), panel, stats, tl);
 
   // --- 6 Save: the fields Add GIFs asks for; the name is built from them.
@@ -202,6 +211,9 @@ function build(root) {
   splat.append(h('option', { value: '' }, 'None'), ...art.platforms().sort().map((p) => h('option', { value: p }, art.consoleName(p) ? `${p} · ${art.consoleName(p)}` : p)));
   let pv = null;
   const A = { on: false }; // the animation's timeline (see `animate`)
+  // Smooth motion: `on` the switch; `s` the Smoother over `bytes` (a draft of
+  // what Save writes), `gif` its frames for the preview; `gen` ends a draft.
+  const SM = { on: false, gen: 0, s: null, bytes: null, gif: null };
 
   // --- Loading a picture or an animation
   async function load(blob, from = {}) {
@@ -279,6 +291,7 @@ function build(root) {
     moveRow.hidden = anim;
     rangeRow.hidden = !anim;
     tl.hidden = !anim;
+    smoothSet(false);
     if (anim) animate(st);
     else A.on = false;
     Object.assign(el.dataset, { srcFrames: st.sourceFrames, animated: anim ? 1 : '' });
@@ -432,6 +445,8 @@ function build(root) {
     undoBtn.disabled = !A.hist.length;
     Object.assign(el.dataset, { frames: A.seq.length, duration: total, from: A.from, to: A.to, deleted: A.deleted.size, plays: p });
     A.shown = -1;
+    smoothRow.hidden = !app.device || A.seq.length < 2;
+    smoothStale();
     drawStrip();
   }
 
@@ -439,6 +454,7 @@ function build(root) {
   function refresh() {
     if (!A.on) return;
     A.gen++; A.shown = -1;
+    smoothStale();
     show();
     drawStrip();
   }
@@ -467,10 +483,17 @@ function build(root) {
   // The frame at `pos` (or the one peeked at) into the preview.
   function show() {
     if (!A.on || !pv || !A.seq.length) return;
-    const src = A.peek ?? A.seq[A.pos];
+    // Playing with Smooth motion on: the smoothed frames, at their delays.
+    const src = SM.gif && A.playing && A.peek == null ? 'smooth' : A.peek ?? A.seq[A.pos];
     scrub.value = A.pos;
     posOut.textContent = `${A.pos + 1} / ${A.seq.length}`;
     if (src === A.shown) return;
+    if (src === 'smooth') {
+      A.shown = src;
+      pv.p.load('studio-smooth.gif', SM.gif);
+      el.dataset.shown = src;
+      return;
+    }
     A.shown = src;
     pv.p.load('studio.gif', S.studio.frameGif(src));
     Object.assign(el.dataset, { pos: A.pos, shown: src });
@@ -599,6 +622,63 @@ function build(root) {
     hd.addEventListener('pointerup', () => { hd.drag = false; });
   }
 
+  // --- Smooth motion ------------------------------------------------------------
+  let smod = null;
+  const smooth = async () => (smod ??= await import('./smooth.js'));
+  const smoothSay = (state, t) => { el.dataset.smooth = state; smoothCap.textContent = t; };
+  const smoothWanted = () => SM.on && A.on && !smoothRow.hidden;
+  // The draft no longer matches (or is not wanted): drop it, stop one running.
+  function smoothDrop() {
+    SM.gen++;
+    SM.s?.free();
+    SM.s = SM.bytes = SM.gif = null;
+    if (A.shown === 'smooth') A.shown = -1;
+  }
+  function smoothSet(on) {
+    smoothOn.checked = SM.on = on;
+    smoothDrop();
+    smoothSay(on ? 'analysing' : 'off', on ? 'Looking at the motion…' : '');
+  }
+  // An edit changed the output: look again, once the edits settle.
+  function smoothStale() {
+    if (!SM.s && !SM.on) return;
+    smoothDrop();
+    if (smoothWanted()) { smoothSay('analysing', 'Looking at the motion…'); smoothLater(); }
+  }
+  // A draft of what Save would write (the same path, in slices), then the
+  // analysis and the in-between frames over it.
+  async function smoothLook() {
+    const st = S.studio;
+    if (!smoothWanted() || S.saving || SM.s) return;
+    const g = ++SM.gen;
+    const alive = () => g === SM.gen && S.studio === st;
+    smoothSay('analysing', 'Looking at the motion…');
+    try {
+      st.saveBegin(+plays.value);
+      if (!(await run(() => st.saveStep(8), alive))) return;
+      const bytes = st.saved();
+      const s = await (await smooth()).smoother(bytes, { tween: true, alive });
+      if (!s) return;
+      if (!alive()) { s.free(); return; }
+      el.dataset.smoothAdded = s.added;
+      if (!s.added) {
+        // Nothing to smooth (as it is now): the switch stays on, says so, and
+        // looks again after the next edit (a speed of 2x can be too fast to
+        // smooth, 1x not).
+        s.free();
+        smoothSay('none', 'Nothing here moves in steps it can smooth');
+        return;
+      }
+      Object.assign(SM, { s, bytes, gif: s.gif() });
+      const n = (x) => x.toLocaleString();
+      smoothSay('on', `Adds ${n(s.added)} frame${s.added === 1 ? '' : 's'} across ${n(s.tweened)} move${s.tweened === 1 ? '' : 's'}`);
+      A.shown = -1;
+      show();
+    } catch (e) { if (alive()) smoothSay('error', `Smooth motion: ${e.message || e}`); }
+  }
+  const smoothLater = debounce(smoothLook, 400);
+  smoothOn.onchange = () => { smoothSet(smoothOn.checked); smoothLook(); show(); };
+
   // --- Find art for a game (js/find.js): games, then a game's pictures.
   async function find() {
     const p = plat.value, q = query.value.trim();
@@ -669,6 +749,12 @@ function build(root) {
     const st = S.studio;
     if (!st || !S.path) return;
     saveBtn.disabled = true;
+    // Smooth motion as the switch says (an animation of 2 frames or more, on
+    // a device); a draft being made stops, a finished one is reused.
+    const smoothOnSave = smoothWanted();
+    const ready = SM.s;
+    SM.gen++;
+    S.saving = true;
     try {
       if (st.animated) {
         const t0 = performance.now();
@@ -688,18 +774,24 @@ function build(root) {
         return;
       }
       const t1 = performance.now();
+      const problems = [];
+      // The copy: Smooth motion's (and the list) when it is on, or when the
+      // original was listed and is now off; else the plain one.
+      const same = ready && SM.bytes?.length === S.gif.length && SM.bytes.every((b, i) => b === S.gif[i]);
+      const keep = async (p, b) => { const w = await (await smooth()).keep(p, b, smoothOnSave, same ? ready : null); if (w) problems.push(w); };
       if (S.from && S.mode === 'replace') {
         // The same file, so every playlist keeps it; a changed name is a
-        // rename, which playlists follow too.
+        // rename, which playlists follow too (and so does Smooth motion's list).
         const orig = S.from.path;
         await app.src.writeFile(orig, S.gif);
-        try { await prepareBytes(orig, S.gif); } catch { await app.src.forget(orig).catch(() => {}); }
+        try { await (smoothOnSave || S.from.listed ? keep : prepareBytes)(orig, S.gif); } catch { await app.src.forget(orig).catch(() => {}); }
         if (path.toLowerCase() !== orig.toLowerCase()) await renameGif(orig, path);
-        S.from = { ...S.from, path, fields: art.nameFields(path) };
+        S.from = { ...S.from, path, fields: art.nameFields(path), listed: smoothOnSave };
         toast(`${f} saved`, 'ok');
+        for (const m of problems) toast(m, 'bad');
+        emit('gifs', c);
       } else {
-        const problems = [];
-        await S.opts.save(c, f, S.gif, (m) => problems.push(m));
+        await S.opts.save(c, f, S.gif, (m) => problems.push(m), smoothOnSave ? keep : undefined);
         toast(`${f} saved to ${c}`, 'ok');
         for (const m of problems) toast(m, 'bad');
         await S.opts.saved(c, [path]);
@@ -708,6 +800,8 @@ function build(root) {
       el.dataset.saved = path;
       S.listing = null;
     } catch (e) { toast(`saving: ${e.message || e}`, 'bad'); } finally {
+      S.saving = false;
+      if (smoothWanted() && !SM.s) smoothLook();
       await naming();
     }
   }
@@ -772,7 +866,12 @@ function build(root) {
         if (PLATFORMS.includes(e.platform)) plat.value = e.platform;
         query.value = e.title || '';
         try {
-          await load(new Blob([await app.src.readBytes(from.path)], { type: 'image/gif' }), { path: from.path, fields, label: label(e) });
+          // On Smooth motion's list: the switch starts on, and looks once loaded.
+          const listed = app.device && (await (await smooth()).readList().catch(() => [])).some((p) => p.toLowerCase() === from.path.toLowerCase());
+          if (await load(new Blob([await app.src.readBytes(from.path)], { type: 'image/gif' }), { path: from.path, fields, label: label(e), listed }) && listed && A.on) {
+            smoothSet(true);
+            smoothLook();
+          }
         } catch (err) { msg.textContent = `Could not load ${label(e)}: ${err.message}`; }
       }
     },

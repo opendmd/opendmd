@@ -323,7 +323,12 @@ playlist keeps it; a changed title renames it, and playlists follow) or
    drag the handles) to trim, **Delete frame** (or the Delete key) and
    **Undo** (Ctrl/⌘-Z), speed ¼× to 4×, **Reverse**, **Ping-pong** (there
    and back), and how many times it plays (forever, or 1 to 10). The frame
-   count and the length update as you go.
+   count and the length update as you go. On a device, **Smooth motion**
+   (below) is a switch here too: it looks at the animation as it will be
+   saved, says how many frames it adds ("Adds 32 frames across 16 moves")
+   and the preview plays it smoothed; if nothing moves in steps it can
+   smooth (a speed of 2× can be too fast to smooth), it says so and looks
+   again after your next change. Save keeps the choice.
 6. **Save** — title, platform, category, author and "it is a logo", as
    Add GIFs asks for them: the file name is built from them (the number is
    the next free one) and the Studio shows what the Library will list it
@@ -359,7 +364,9 @@ switching it on makes the panel play it with the in-between frames added —
 each one the picture moved by whole pixels, never a blend, the timing
 unchanged — and switching it off goes back to the original frames. Your GIF
 itself is never changed. The switch only appears where there is something
-to smooth (about one GIF in ten on the stock card); the choice is kept on
+to smooth (about one GIF in ten on the stock card); Make art has the same
+switch for an animation you make or edit there, and a GIF that is on stays
+on when you edit it there and replace it. The choice is kept on
 the card in `/sets/.smooth` and survives clearing the playback cache.
 `opendmd-pack smooth analyse <card> [--write]` lists (and can switch on)
 every GIF worth smoothing, and `opendmd-pack convert` honours the list. The

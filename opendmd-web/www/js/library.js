@@ -28,11 +28,12 @@ export const authorOf = (e) => e.flags.find((f) => !TAGS.test(f)) || '';
 // Upload one GIF into a category and prepare it straight away: the GIF
 // (PUT /api/files/gifs/…), then its prepared copy, encoded here. A GIF that
 // will not encode is still added (it plays as it is; `warn` says so) and any
-// stale copy of an older file by that name is forgotten.
-export async function addOne(category, name, bytes, warn) {
+// stale copy of an older file by that name is forgotten. `prep` makes and
+// uploads the copy (Make art passes Smooth motion's).
+export async function addOne(category, name, bytes, warn, prep = prepareBytes) {
   const path = `/gifs/${category}/${name}`;
   await app.src.writeFile(path, bytes);
-  try { await prepareBytes(path, bytes); } catch (e) {
+  try { await prep(path, bytes); } catch (e) {
     warn?.(`${name}: added, but it could not be prepared (${e.message || e}); it will play as it is`);
     try { await app.src.forget(path); } catch { /* nothing to forget */ }
   }
@@ -244,7 +245,11 @@ export async function mount(el) {
   async function useSource(id) {
     if ((web?.id || '') === id) return;
     let m = null;
+    // Text typed while the search code loads (its first use) is meant for
+    // the web source, not the list.
+    const before = search.value, top = list.el.scrollTop;
     if (id) try { m = await import('./find.js'); await m.style(); } catch { toast('the search could not be loaded', 'bad'); return; }
+    const typed = search.value !== before ? search.value : null;
     for (const b of srcs.children) b.classList.toggle('on', b.dataset.src === id);
     if (!m) {
       web = null;
@@ -254,10 +259,10 @@ export async function mount(el) {
       grid.classList.remove('web');
       findBox.hidden = goBtn.hidden = true;
       list.el.scrollTop = libTop;
-      list.refresh();
+      apply();
       return;
     }
-    if (!web) { libQ = search.value; libTop = list.el.scrollTop; search.value = webQ; }
+    if (!web) { libQ = before; libTop = top; search.value = typed ?? webQ; }
     web = m.sources.find((s) => s.id === id);
     R ??= m.mountResults(findBox, { onPick: toArt });
     R.use(web);
@@ -407,7 +412,8 @@ export async function mount(el) {
     show() {
       sync();
       playlists();
-      if (dirty) { dirty = false; categories(); }
+      // (the GIF in Details too: Make art may have changed it, or its Smooth motion)
+      if (dirty) { dirty = false; const was = current; categories().then(() => { const it = was && current === was && items.find((x) => x.path === was.path); if (it) preview(it); }); }
     },
   };
 }

@@ -71,6 +71,16 @@ every view like a person would:
             appended to `cachetest`; "Find art for a game" against a stubbed
             name index and stubbed libretro pictures (one of them a link to
             another), no network
+  Studio    Smooth motion in Make art: a 16-frame 128x32 GIF scrolling 4 px
+  smooth    a frame (made with Pillow) loads, the switch on -> "Adds N
+            frames across M moves" (N > 0) and the preview plays the
+            smoothed frames; a speed change looks again; a GIF with nothing
+            to smooth keeps the switch on and says so; saved as
+            new -> listed in /sets/.smooth, the copy marked and
+            byte-identical to opendmd-pack's with the list, Details shows
+            it on; Edit in Make art starts with the switch on, Reverse and
+            Replace the original keep it listed and smooth; switched off and
+            replaced -> unlisted, the plain copy (opendmd-pack's)
   Find      Library -> GifCities against a canned answer (three shapes) and
             a 2-frame 88x31 GIF, both Playwright routes: the count, the
             Wide / Square-ish chips, size order, "Seen on", Open in Make art
@@ -1526,6 +1536,7 @@ def mock_pass(browser) -> None:
         details_checks(page, base, overlay)
         studio_checks(page, base, overlay)
         studio_anim_checks(page, base, overlay)
+        studio_smooth_checks(page, base, overlay)
         find_checks(page)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
@@ -1952,6 +1963,137 @@ def studio_anim_checks(page: Page, base: str, overlay: Path) -> None:
     goto_view(page, "studio")
     studio_timings(page, "mock")
     goto_view(page, "library")
+
+
+def scroll_fixture(path: Path, n: int = 16, step: int = 4) -> None:
+    """An n-frame 128x32 GIF of a random block pattern scrolling `step` px
+    left a frame, looping seamlessly: every pair a shift Smooth motion takes
+    (opendmd-pack smooth analyse: 16 of 16 pairs, +32 frames)."""
+    import random
+    from PIL import Image, ImageDraw
+    rnd = random.Random(7)
+    period = n * step
+    pal = [(250, 210, 30), (230, 60, 40), (40, 120, 230), (30, 30, 30), (240, 240, 240), (60, 200, 90)]
+    tile = Image.new("RGB", (period, 32), (10, 10, 40))
+    d = ImageDraw.Draw(tile)
+    for _ in range(40):
+        x, y, w, h = rnd.randrange(period), rnd.randrange(32), rnd.randrange(3, 10), rnd.randrange(3, 10)
+        d.rectangle([x, y, x + w, y + h], fill=rnd.choice(pal))
+    strip = Image.new("RGB", (128 + period * 2, 32))
+    for k in range(0, strip.width, period):
+        strip.paste(tile, (k, 0))
+    frames = [strip.crop((i * step, 0, i * step + 128, 32)).convert("P", palette=Image.Palette.ADAPTIVE, colors=16) for i in range(n)]
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=60, loop=0, optimize=False)
+
+
+def pack_ref(gif_file: Path, path: str, smooth: bool) -> bytes:
+    """opendmd-pack convert's copy of a GIF saved at `path`, listed in
+    /sets/.smooth or not, on a card of its own."""
+    mini = OUT / "pack-studio-smooth"
+    shutil.rmtree(mini, ignore_errors=True)
+    dst = mini / path.lstrip("/")
+    dst.parent.mkdir(parents=True)
+    shutil.copy(gif_file, dst)
+    if smooth:
+        (mini / "sets").mkdir()
+        (mini / "sets" / ".smooth").write_text(path + "\n")
+    pack("convert", str(mini), "--verify")
+    return (mini / cache_path(path).lstrip("/")).read_bytes()
+
+
+def studio_smooth_checks(page: Page, base: str, overlay: Path) -> None:
+    """Smooth motion in Make art: the switch analyses the output, the
+    preview plays it smoothed, Save lists it and writes the smooth copy;
+    Replace the original keeps it, or drops it when switched off."""
+    listing = overlay / "sets" / ".smooth"
+    before = listing.read_text() if listing.exists() else None
+    listed = lambda: [l for l in (listing.read_text() if listing.exists() else "").split("\n") if l]
+    smooth_state = "document.querySelector('#studio').dataset.smooth"
+    settled = f"(s => s && s !== 'analysing')({smooth_state})"
+    goto_view(page, "studio")
+    # Nothing to smooth: the 12 flat-colour frames of studio_anim_checks.
+    page.evaluate("delete document.querySelector('#studio').dataset.tImport")
+    page.set_input_files("#st-file", str(OUT / "anim-fixture.gif"))
+    page.wait_for_function("document.querySelector('#studio').dataset.tImport", timeout=30000)
+    check(page.is_visible("#st-smooth") and not page.is_checked("#st-smooth"), "studio smooth: the switch shows for an animation, off")
+    page.check("#st-smooth")
+    page.wait_for_function(settled, timeout=60000)
+    st, cap = page.evaluate(smooth_state), page.inner_text("#st-smooth-cap")
+    check(st == "none" and page.is_checked("#st-smooth") and cap == "Nothing here moves in steps it can smooth",
+          f"studio smooth: nothing to smooth -> on, but says so: '{cap}' ({st})")
+    # A scroll: on -> analysed, the preview plays the smoothed frames.
+    fx = OUT / "scroll-fixture.gif"
+    scroll_fixture(fx)
+    page.evaluate("delete document.querySelector('#studio').dataset.tImport")
+    page.set_input_files("#st-file", str(fx))
+    page.wait_for_function("document.querySelector('#studio').dataset.srcFrames === '16' && document.querySelector('#studio').dataset.tImport", timeout=30000)
+    check(page.evaluate(smooth_state) == "off" and not page.is_checked("#st-smooth"), "studio smooth: a new GIF starts off")
+    page.check("#st-smooth")
+    page.wait_for_function(settled, timeout=60000)
+    cap = page.inner_text("#st-smooth-cap")
+    m = re.fullmatch(r"Adds (\d+) frames? across (\d+) moves?", cap)
+    check(page.evaluate(smooth_state) == "on" and m is not None and int(m[1]) > 0, f"studio smooth: on -> '{cap}'")
+    page.wait_for_function("document.querySelector('#studio').dataset.shown === 'smooth'", timeout=10000)
+    wait_lit(page, "#st-panel", "studio smooth preview")
+    check(True, "studio smooth: the preview plays the smoothed frames")
+    # An edit makes the draft again.
+    page.select_option("#st-rate", "200")
+    check(page.evaluate(smooth_state) == "analysing", "studio smooth: a speed change looks again")
+    page.wait_for_function(settled, timeout=60000)
+    print(f"  studio smooth at 2x: '{page.inner_text('#st-smooth-cap')}'")
+    page.select_option("#st-rate", "100")
+    page.wait_for_function(settled, timeout=60000)
+    check(page.inner_text("#st-smooth-cap") == cap, f"studio smooth: back at 1x, the same answer ('{page.inner_text('#st-smooth-cap')}')")
+    shot(page, "studio-smooth", "laptop")
+    # Save as new: listed, the copy smooth.
+    page.select_option("#st-plat", "SNES")
+    page.fill("#st-author", "")
+    page.fill("#st-title", "Smoke Smooth")
+    name = "SNES_Smoke_Smooth_01.gif"
+    page.wait_for_function(f"document.querySelector('#studio').dataset.name === '{name}'", timeout=10000)
+    page.evaluate("delete document.querySelector('#studio').dataset.saved")
+    page.click("#st-save")
+    page.wait_for_function("document.querySelector('#studio').dataset.saved", timeout=60000)
+    path = f"/gifs/Consoles/{name}"
+    got, copy = overlay / path.lstrip("/"), overlay / cache_path(path).lstrip("/")
+    c = copy.read_bytes() if copy.exists() else b""
+    check(path in listed() and marked(c), f"studio smooth: saved as new -> listed ({listed()}), the copy marked ({len(c)} B)")
+    check(c == pack_ref(got, path, True), "studio smooth: the copy byte-identical to opendmd-pack's with the list")
+    lib_row(page, path)
+    page.wait_for_function("(s => s && s !== 'analysing')(document.querySelector('#lib-smooth').dataset.state)", timeout=60000)
+    check(page.get_attribute("#lib-smooth", "data-state") == "on", "studio smooth: Details shows it on")
+    # Edit in Make art: on from the start; reversed, the original replaced.
+    page.click("#lib-d-art")
+    page.wait_for_selector("#st-mode [data-v=replace].on", state="visible", timeout=30000)
+    page.wait_for_function(f"{smooth_state} === 'on'", timeout=60000)
+    check(page.is_checked("#st-smooth") and page.evaluate(smooth_state) == "on" and page.is_visible("#st-mode [data-v=replace].on"),
+          f"studio smooth: a listed GIF opens with the switch on ('{page.inner_text('#st-smooth-cap')}')")
+    page.check("#st-rev")
+    page.wait_for_function(settled, timeout=60000)
+    page.evaluate("delete document.querySelector('#studio').dataset.saved")
+    page.click("#st-save")
+    page.wait_for_function("document.querySelector('#studio').dataset.saved", timeout=60000)
+    c = copy.read_bytes()
+    check(listed().count(path) == 1 and marked(c) and c == pack_ref(got, path, True),
+          f"studio smooth: Replace the original, left on -> still listed, the copy smooth ({len(c)} B)")
+    # Off, replaced: the plain copy, unlisted.
+    page.uncheck("#st-smooth")
+    check(page.evaluate(smooth_state) == "off", "studio smooth: switched off")
+    page.evaluate("delete document.querySelector('#studio').dataset.saved")
+    page.click("#st-save")
+    page.wait_for_function("document.querySelector('#studio').dataset.saved", timeout=60000)
+    c = copy.read_bytes()
+    check(path not in listed() and not marked(c) and c == pack_ref(got, path, False),
+          f"studio smooth: off and replaced -> unlisted ({listed()}), the plain copy ({len(c)} B)")
+    lib_row(page, path)
+    page.wait_for_function("(s => s && s !== 'analysing')(document.querySelector('#lib-smooth').dataset.state)", timeout=60000)
+    check(page.get_attribute("#lib-smooth", "data-state") == "off", "studio smooth: Details shows it off")
+    no_leaks(page, "studio (smooth)")
+    # Leave /sets/.smooth as it was for the Smooth motion checks.
+    if before is None:
+        listing.unlink(missing_ok=True)
+    else:
+        listing.write_text(before)
 
 
 # --- The Library's web sources (js/find.js) ------------------------------------
