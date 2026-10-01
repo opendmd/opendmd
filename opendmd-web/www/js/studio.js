@@ -22,10 +22,10 @@
 // and read back with the core's parser, so what the Library will list is
 // what the user sees before saving.
 //
-// "Find art for a game" searches a name index per platform on the card
-// (art/<PLATFORM>.json, from tools/art-index.py) and loads the pictures from
-// the libretro-thumbnails repositories on raw.githubusercontent.com, which
-// lets pages read them. Nothing here says where anything is stored.
+// "Find art for a game" is js/find.js' game-art search (a name index per
+// platform on the card, pictures from libretro-thumbnails), shared with the
+// Library's "Game art"; a GIF or picture found from the Library arrives as
+// `app.artFrom.blob`. Nothing here says where anything is stored.
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
@@ -34,10 +34,8 @@ import { art as artModule } from './artmod.js';
 import { addOne, offerPlaylist } from './library.js';
 import { listings, pickName, renameGif } from './details.js';
 import { prepareBytes } from './prepare.js';
+import { PLATFORMS, findGames, gamePictures } from './find.js';
 
-const PLATFORMS = ['MD', 'SNES', 'GB', 'GBC', 'GBA', 'SATURN', 'NDS', 'NES', 'SMS', 'PCE', 'PS1', 'N64', 'ARCADE'];
-const RAW = 'https://raw.githubusercontent.com/libretro-thumbnails/';
-const KINDS = [[1, 'Named_Titles', 'Title screen'], [2, 'Named_Snaps', 'In the game'], [4, 'Named_Boxarts', 'Box'], [8, 'Named_Logos', 'Logo']];
 const SPEEDS = [['Slow', 50], ['Normal', 40], ['Fast', 30]];
 const RATES = [25, 50, 75, 100, 150, 200, 300, 400];
 const PLAYS = [['Plays forever', 0], ['Plays once', 1], ['Plays 2 times', 2], ['Plays 3 times', 3], ['Plays 5 times', 5], ['Plays 10 times', 10]];
@@ -74,21 +72,8 @@ function css() {
   });
 }
 
-// Fetch a picture from libretro-thumbnails. Some entries there are links:
-// the file then holds the name of the real one (a few dozen bytes of text).
-async function thumb(url, hops = 3) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(r.status);
-  const b = await r.blob();
-  if (b.size < 512 && hops) {
-    const head = new Uint8Array(await b.slice(0, 1).arrayBuffer());
-    if (head[0] !== 0x89) return thumb(new URL((await b.text()).trim().split('/').map(encodeURIComponent).join('/'), url).href, hops - 1);
-  }
-  return b;
-}
-
 function build(root) {
-  const S = { studio: null, fit: 'pixels', motion: 'still', x: 0, y: 0, gif: null, opts: null, index: new Map(), urls: [], tok: 0, from: null, listing: null, cats: [] };
+  const S = { studio: null, fit: 'pixels', motion: 'still', x: 0, y: 0, gif: null, opts: null, urls: [], tok: 0, from: null, listing: null, cats: [] };
   const id = (x) => 'st-' + x;
   const seg = (name, items, onpick) => {
     const el = h('div.st-seg', { id: id(name), role: 'group' }, items.map(([v, t]) => h('button', { 'data-v': v, onclick: () => onpick(v) }, t)));
@@ -614,53 +599,30 @@ function build(root) {
     hd.addEventListener('pointerup', () => { hd.drag = false; });
   }
 
-  // --- Find art for a game
-  async function index(p) {
-    if (!S.index.has(p)) {
-      const r = await fetch(`./art/${p}.json`);
-      if (!r.ok) throw new Error(r.status);
-      const d = await r.json();
-      d.norm = d.names.map((n) => app.wasm.normalizeTitle(art.cleanGameName(n)));
-      S.index.set(p, d);
-    }
-    return S.index.get(p);
-  }
-
+  // --- Find art for a game (js/find.js): games, then a game's pictures.
   async function find() {
     const p = plat.value, q = query.value.trim();
     clear(thumbs);
     if (!q) return;
     clear(hits, h('span.muted', 'Searching…'));
-    let d;
-    try { d = await index(p); } catch { clear(hits, h('span.bad', 'The game list could not be loaded.')); return; }
-    const qn = app.wasm.normalizeTitle(q);
-    const qw = q.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).map((w) => app.wasm.normalizeTitle(w));
-    const found = [];
-    d.norm.forEach((n, i) => {
-      const s = n === qn ? 0 : n.startsWith(qn) ? 1 : n.includes(qn) ? 2 : qw.every((w) => n.includes(w)) ? 3 : -1;
-      if (s >= 0) found.push([s, /\((USA|World)/.test(d.names[i]) ? 0 : /\(Europe/.test(d.names[i]) ? 1 : 2, d.names[i].length, i]);
-    });
-    found.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
-    if (!found.length) { clear(hits, h('span.muted', `No ${art.consoleName(p) || p} game matches “${q}”.`)); return; }
-    clear(hits, found.slice(0, 24).map(([, , , i]) => {
-      const region = d.names[i].match(/\(([^)]*)\)/)?.[1] || '';
-      return h('button.st-hit', { 'data-i': i, onclick: (e) => pickGame(p, d, i, e.currentTarget) }, art.cleanGameName(d.names[i]), region && h('small', region));
-    }));
+    let r;
+    try { r = await findGames(p, q); } catch { clear(hits, h('span.bad', 'The game list could not be loaded.')); return; }
+    if (!r.games.length) { clear(hits, h('span.muted', `No ${art.consoleName(p) || p} game matches “${q}”.`)); return; }
+    clear(hits, r.games.map((g) => h('button.st-hit', { 'data-i': g.i, onclick: (e) => pickGame(p, r.d, g, e.currentTarget) }, g.game, g.region && h('small', g.region))));
   }
 
-  async function pickGame(p, d, i, btn) {
+  function pickGame(p, d, g, btn) {
     for (const b of hits.children) b.classList?.toggle('on', b === btn);
     for (const u of S.urls) URL.revokeObjectURL(u);
     S.urls = [];
-    const kinds = parseInt(d.kinds[i], 16), game = art.cleanGameName(d.names[i]);
-    clear(thumbs, KINDS.filter(([bit]) => kinds & bit).map(([bit, dir, label]) => {
-      const img = h('img', { alt: label });
-      const tile = h('button.st-thumb', { 'data-kind': dir, disabled: true, title: label }, img, h('small', label));
-      thumb(`${RAW}${d.repo}/master/${dir}/${encodeURIComponent(d.names[i])}.png`).then((b) => {
+    clear(thumbs, gamePictures(p, d, g).map((x) => {
+      const img = h('img', { alt: x.what });
+      const tile = h('button.st-thumb', { 'data-kind': x.kind, disabled: true, title: x.what }, img, h('small', x.what));
+      x.fetch().then((b) => {
         img.src = URL.createObjectURL(b);
         S.urls.push(img.src);
         tile.disabled = false;
-        tile.onclick = () => load(b, { platform: p, title: game, logo: bit === 8, label: `${game} · ${label}` });
+        tile.onclick = () => load(b, { platform: p, title: x.game, logo: x.logo, label: x.title });
       }).catch(() => tile.remove());
       return tile;
     }));
@@ -797,7 +759,11 @@ function build(root) {
       // title, platform, category and author, to replace or save as new.
       const from = app.artFrom;
       app.artFrom = null;
-      if (from) {
+      if (from?.blob) {
+        // A GIF or picture found on the web from the Library.
+        title.value = from.title || '';
+        await load(from.blob, from);
+      } else if (from) {
         const e = from.e, fields = art.nameFields(from.path);
         if (cats.includes(e.category)) cat.value = e.category;
         setPlatform(fields.platform || '');

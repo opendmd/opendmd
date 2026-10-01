@@ -240,6 +240,22 @@ names the format or shows a copy's path.
   Smooth motion setting follow) and in every playlist and favourite that
   names it. **Delete** asks first, then removes the GIF, its copy and every
   playlist line and favourite; a category left empty goes too.
+
+  **Find GIFs on the web.** Under the search field, **Your GIFs** (the
+  card's, as above) can be switched to **GifCities** — the Internet
+  Archive's search over the GIFs of GeoCities — or **Game art** (the
+  title screens, in-game shots, boxes and logos Make art's "Find art for a
+  game" finds, with the platform beside the results). The same field
+  searches it (Enter or **Search**); the results are a grid of the GIFs
+  themselves, moving, each with its size. GifCities' can be narrowed
+  without asking again: **Wide (suits the panel)** (at least twice as wide
+  as tall), **Square-ish** or **Any**, **At least 48 px wide** (on by
+  default), best match or biggest first, with a count ("37 of 300"). Pick
+  one for **Open in Make art** (it arrives in step 1 with a title to save
+  it under; an 88x31 banner needs Make art's framing anyway) and **Seen
+  on…**, the archived page it was on. GifCities' results are unfiltered.
+  Nothing is added to the card until it is saved from Make art; back on
+  **Your GIFs** the list is as it was.
 - **Playlists** (`#sets`) — the card's own (`filelist.txt` as **All files**,
   the default; `filelist.hall` **Halloween**; `filelist.xmas` **Christmas**;
   any other `filelist.*` by file name; an obsolete `filelist.odm.*` never)
@@ -281,7 +297,9 @@ playlist keeps it; a changed title renames it, and playlists follow) or
    NES, SMS, PC Engine, PS1, N64, Arcade), type a title, pick a game, and
    its title screen, in-game shot, box and logo (whichever exist) load from
    the [libretro-thumbnails](https://github.com/libretro-thumbnails)
-   collections. A GIF with two or more frames comes in as an animation
+   collections (the Library's **Game art** is the same search). A GIF or
+   picture opened from the Library's GifCities or Game art arrives here
+   too. A GIF with two or more frames comes in as an animation
    (with a progress line while its frames are read). A very big one is
    worked on at a smaller size, and the Studio says so.
 2. **Frame** — the picture (an animation's first frame) zoomed with the
