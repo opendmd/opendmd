@@ -27,7 +27,11 @@ Settings' Start-up card (`js/boot.js`, imported by the Settings view: the
 `boot_show` select and the previews of the start-up show), <= 2 KB, and Settings' Power card (`js/power.js`: the Maximum brightness
 control and its warning), <= 2 KB, and the Library's Add GIFs and Edit
 details dialogs with Delete (`js/details.js`, imported when first used),
-<= 8 KB. The name index for "Find art for a game" (`art/*.json`, one file
+<= 8 KB, and so does the Library's search of the web (`js/find.js` +
+`find.css`: "GifCities" and "Game art", the results grid, and the game-art
+search Make art's "Find art for a game" shares; imported when a web source
+is first picked or Make art opens), <= 10 KB. The name index for "Find art
+for a game" (`art/*.json`, one file
 fetched per search) is printed, with no budget. Raw sizes are printed for
 information. A file with no `.gz` beside it counts at its raw size. Exits 1
 when over budget.
@@ -60,6 +64,8 @@ POWER_GZ_BUDGET = 2 * 1024
 POWER = {"js/power.js"}
 DETAILS_GZ_BUDGET = 8 * 1024
 DETAILS = {"js/details.js"}
+FIND_GZ_BUDGET = 10 * 1024
+FIND = {"js/find.js", "find.css"}
 
 
 def main() -> int:
@@ -92,6 +98,8 @@ def main() -> int:
             kind = "power"
         elif rel in DETAILS:
             kind = "details"
+        elif rel in FIND:
+            kind = "find"
         elif rel.startswith("art/"):
             kind = "art index"
             t = totals.setdefault(kind, [0, 0])
@@ -109,7 +117,7 @@ def main() -> int:
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
-                         ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET),
+                         ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

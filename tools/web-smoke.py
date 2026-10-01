@@ -71,6 +71,11 @@ every view like a person would:
             appended to `cachetest`; "Find art for a game" against a stubbed
             name index and stubbed libretro pictures (one of them a link to
             another), no network
+  Find      Library -> GifCities against a canned answer (three shapes) and
+            a 2-frame 88x31 GIF, both Playwright routes: the count, the
+            Wide / Square-ish chips, size order, "Seen on", Open in Make art
+            (2 frames, the title from the hit), a failed query's sentence;
+            Your GIFs brings the list and its search back as they were
   Auto      preparing by the device (auto_prepare): /api/cache `auto` and
             /api/status `cache` keys; the card's sentence while playing
             ("…when the panel is idle · 0 of 3"), with the mock paused (its
@@ -1521,6 +1526,7 @@ def mock_pass(browser) -> None:
         details_checks(page, base, overlay)
         studio_checks(page, base, overlay)
         studio_anim_checks(page, base, overlay)
+        find_checks(page)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
         page.click("#sets-list [data-path='/sets/cachetest.txt'] >> text=Delete")
@@ -1946,6 +1952,103 @@ def studio_anim_checks(page: Page, base: str, overlay: Path) -> None:
     goto_view(page, "studio")
     studio_timings(page, "mock")
     goto_view(page, "library")
+
+
+# --- The Library's web sources (js/find.js) ------------------------------------
+
+GC_HITS = [  # GifCities' JSON (gifcities.archive.org/api/v1/gifsearch): three shapes
+    {"url_text": "spinning  mario 2", "weight": 90, "gif": "x/a.gif", "checksum": "SQUARECHECKSUM", "height": 64, "width": 64,
+     "page": "https://web.archive.org/web/2009/http://geocities.com/a/index.html"},
+    {"url_text": "cool mario banner 1", "weight": 50, "gif": "x/b.gif", "checksum": "WIDECHECKSUM", "height": 31, "width": 88,
+     "page": "https://web.archive.org/web/2009/http://geocities.com/b/index.html"},
+    {"url_text": "mario tower", "weight": 20, "gif": "x/c.gif", "checksum": "TALLCHECKSUM", "height": 120, "width": 50,
+     "page": "https://web.archive.org/web/2009/http://geocities.com/c/index.html"},
+]
+
+
+def find_checks(page: Page) -> None:
+    """Library -> GifCities against a canned answer and a 2-frame 88x31 GIF
+    (Playwright routes; no network): the search, the count, the Wide chip
+    narrowing to the one wide hit, "Seen on" the page it was on, Open in Make
+    art loading it (2 frames, the title hint in Save); back to Your GIFs with
+    the list and its search as they were."""
+    from PIL import Image, ImageDraw
+    gif = OUT / "find-fixture.gif"
+    frames = []
+    for i in range(2):
+        im = Image.new("RGB", (88, 31), (20, 30, 120) if i == 0 else (120, 30, 20))
+        ImageDraw.Draw(im).rectangle([4 + 40 * i, 6, 40 + 40 * i, 24], fill=(250, 210, 30))
+        frames.append(im)
+    frames[0].save(gif, save_all=True, append_images=frames[1:], duration=200, loop=0)
+    asked: list[str] = []
+
+    def api(route) -> None:
+        asked.append(route.request.url)
+        route.fulfill(status=200, body=json.dumps(GC_HITS), headers={"access-control-allow-origin": "*", "content-type": "application/json"})
+    page.route("https://gifcities.archive.org/api/v1/gifsearch*", api)
+    page.route("https://blob.gifcities.org/**", lambda r: r.fulfill(status=200, body=gif.read_bytes(), headers={"access-control-allow-origin": "*", "content-type": "image/gif"}))
+    goto_view(page, "library")
+    pick_cat(page, "Consoles")
+    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    page.fill("#lib-search", "mario")
+    page.wait_for_timeout(300)
+    before = (page.inner_text("#lib-count"), page.eval_on_selector_all("#lib-list .vrow:not([hidden]) .t", "els => els.slice(0, 5).map(e => e.textContent)"))
+    page.click("#lib-src [data-src=gifcities]")
+    page.wait_for_selector("#lib-find:not([hidden]) #find-narrow")
+    check(not page.is_visible("#lib-list") and not page.is_visible("#lib-cats") and page.input_value("#lib-search") == ""
+          and page.get_attribute("#lib-search", "placeholder") == "Search GifCities",
+          "find: GifCities hides the list and the tabs; the box searches GifCities")
+    page.fill("#lib-search", "mario")
+    page.press("#lib-search", "Enter")
+    page.wait_for_function("document.querySelector('#find-count').textContent === '3 of 3'", timeout=10000)
+    check(len(asked) == 1 and "q=mario" in asked[0] and "limit=300" in asked[0], f"find: one query, 300 asked for ({asked})")
+    dims = page.eval_on_selector_all("#find-grid .find-hit small", "els => els.map(e => e.textContent)")
+    check(dims == ["64×64", "88×31", "50×120"], f"find: 3 of 3, best match first, sizes shown ({dims})")
+    page.wait_for_function("[...document.querySelectorAll('#find-grid img')].every(i => i.complete && i.naturalWidth === 88)", timeout=10000)
+    page.click("#find-shape [data-v=wide]")
+    ids = page.eval_on_selector_all("#find-grid .find-hit", "els => els.map(e => e.dataset.id)")
+    check(page.inner_text("#find-count") == "1 of 3" and ids == ["WIDECHECKSUM"], f"find: Wide narrows to the wide one ({page.inner_text('#find-count')}, {ids})")
+    page.click("#find-shape [data-v=square]")
+    ids = page.eval_on_selector_all("#find-grid .find-hit", "els => els.map(e => e.dataset.id)")
+    check(ids == ["SQUARECHECKSUM"], f"find: Square-ish -> {ids}")
+    page.click("#find-shape [data-v=any]")
+    page.uncheck("#find-min")
+    page.select_option("#find-sort", "size")
+    ids = page.eval_on_selector_all("#find-grid .find-hit", "els => els.map(e => e.dataset.id)")
+    check(ids == ["TALLCHECKSUM", "SQUARECHECKSUM", "WIDECHECKSUM"], f"find: biggest first -> {ids}")
+    page.select_option("#find-sort", "rank")
+    page.check("#find-min")
+    page.click("#find-grid .find-hit[data-id=WIDECHECKSUM]")
+    page.wait_for_selector("#find-pick:not([hidden])")
+    check(page.get_attribute("#find-seen", "href") == GC_HITS[1]["page"] and "Cool Mario Banner 1" in page.inner_text("#find-pick"),
+          f"find: the picked one, 'Seen on' its page ({page.inner_text('#find-pick')!r})")
+    check("Results are unfiltered." in page.inner_text("#find-caption"), "find: the caption says results are unfiltered")
+    no_leaks(page, "library (GifCities)")
+    shot(page, "library-find", "laptop")
+    page.evaluate("delete document.querySelector('#studio')?.dataset.tImport")
+    page.click("#find-art")
+    page.wait_for_selector("#view-studio.on", timeout=20000)
+    page.wait_for_function("(d => d && d.dataset.tImport && d.dataset.srcFrames === '2')(document.querySelector('#studio'))", timeout=30000)
+    msg = page.inner_text("#st-msg")
+    check(msg.startswith("Cool Mario Banner 1: 88 × 31 · 2 frames") and page.input_value("#st-title") == "Cool Mario Banner",
+          f"find: Open in Make art loads it ({msg!r}, title {page.input_value('#st-title')!r})")
+    # A failed query: a sentence, the Library still there.
+    expected.append("gifcities.archive.org")
+    page.unroute("https://gifcities.archive.org/api/v1/gifsearch*")
+    page.route("https://gifcities.archive.org/api/v1/gifsearch*", lambda r: r.abort())
+    goto_view(page, "library")
+    page.fill("#lib-search", "luigi")
+    page.click("#lib-go")
+    page.wait_for_function("document.querySelector('#find-status').textContent.includes('didn’t answer')", timeout=10000)
+    check(page.inner_text("#find-count") == "", f"find: no answer -> '{page.inner_text('#find-status')}'")
+    page.click("#lib-src [data-src='']")
+    page.wait_for_selector("#lib-list", state="visible")
+    after = (page.inner_text("#lib-count"), page.eval_on_selector_all("#lib-list .vrow:not([hidden]) .t", "els => els.slice(0, 5).map(e => e.textContent)"))
+    check(after == before and page.input_value("#lib-search") == "mario" and page.is_hidden("#lib-find"),
+          f"find: Your GIFs brings the list back as it was ({after[0]})")
+    page.fill("#lib-search", "")
+    page.unroute("https://gifcities.archive.org/api/v1/gifsearch*")
+    page.unroute("https://blob.gifcities.org/**")
 
 
 def move_api_checks(base: str) -> None:
@@ -2532,6 +2635,20 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     shot(page, "library-details", "phone")
     page.click("#lib-d-close")
     check(not page.is_visible("#lib-side"), "phone library: the sheet closes")
+    # GifCities on a phone (find_checks' canned answer and GIF).
+    gif = (OUT / "find-fixture.gif").read_bytes()
+    page.route("https://gifcities.archive.org/api/v1/gifsearch*", lambda r: r.fulfill(status=200, body=json.dumps(GC_HITS), headers={"access-control-allow-origin": "*", "content-type": "application/json"}))
+    page.route("https://blob.gifcities.org/**", lambda r: r.fulfill(status=200, body=gif, headers={"access-control-allow-origin": "*", "content-type": "image/gif"}))
+    page.click("#lib-src [data-src=gifcities]")
+    page.wait_for_selector("#lib-find:not([hidden]) #find-narrow")
+    page.fill("#lib-search", "mario")
+    page.click("#lib-go")
+    page.wait_for_function("document.querySelector('#find-count').textContent === '3 of 3'", timeout=10000)
+    page.click("#find-grid .find-hit >> nth=1")
+    wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+    check(page.is_visible("#find-art") and wide <= 0, f"phone library: GifCities results, a hit picked ({wide}px over)")
+    shot(page, "library-find", "phone")
+    page.click("#lib-src [data-src='']")
     # The Studio on a phone, from the nav: one column, nothing wider than the screen.
     hits: list[str] = []
     stub_art(page, hits)

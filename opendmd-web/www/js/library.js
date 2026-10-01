@@ -75,8 +75,15 @@ export async function mount(el) {
   const platforms = new Set();
 
   // --- The header: search, Add GIFs, Make art; the category tabs; the platforms.
-  const search = h('input', { type: 'search', id: 'lib-search', placeholder: 'Search GIFs', enterKeyHint: 'search', oninput: () => apply() });
+  const search = h('input', { type: 'search', id: 'lib-search', placeholder: 'Search GIFs', enterKeyHint: 'search', oninput: () => web || apply(), onkeydown: (e) => web && e.key === 'Enter' && R.search(search.value) });
   const count = h('span.muted', { id: 'lib-count' });
+  // Your GIFs, or GIFs and pictures from the web (js/find.js, loaded then):
+  // the same search box drives either, and the list comes back as it was.
+  let web = null, R = null, libQ = '', webQ = '', libTop = 0;
+  const srcs = h('div.chips', { id: 'lib-src' }, [['', 'Your GIFs'], ['gifcities', 'GifCities'], ['gameart', 'Game art']]
+    .map(([v, t]) => h('button.chip' + (v ? '' : '.on'), { 'data-src': v, onclick: () => useSource(v) }, t)));
+  const goBtn = h('button', { id: 'lib-go', hidden: true, onclick: () => R.search(search.value) }, 'Search');
+  const findBox = h('div.card', { id: 'lib-find', hidden: true });
   const tabs = h('div.tabs', { id: 'lib-cats', role: 'tablist' });
   const chips = h('div.chips.scroll', { id: 'lib-chips' });
   const addInput = h('input', { type: 'file', multiple: true, accept: '.gif,image/gif', hidden: true, id: 'lib-add-files', onchange: () => { addGifs([...addInput.files]); addInput.value = ''; } });
@@ -150,13 +157,14 @@ export async function mount(el) {
       h('button.sm.close', { id: 'lib-d-close', 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
       canvas, cap, body, liveBox));
 
-  el.append(h('div.libgrid',
+  const grid = h('div.libgrid',
     h('div',
       h('div.card.libhead',
-        h('div.row', h('div.grow.lib-q', search), count, addBtn, artBtn),
-        tabs, chips, addCard),
-      list.el, selbar),
-    side));
+        h('div.row', h('div.grow.lib-q', search), goBtn, count, addBtn, artBtn),
+        srcs, tabs, chips, addCard),
+      findBox, list.el, selbar),
+    side);
+  el.append(grid);
 
   const pv = new PanelPreview(canvas, { onError: (m) => { cap.textContent = 'preview: ' + m; } });
 
@@ -233,6 +241,37 @@ export async function mount(el) {
     app.go('sets');
   }
 
+  async function useSource(id) {
+    if ((web?.id || '') === id) return;
+    let m = null;
+    if (id) try { m = await import('./find.js'); await m.style(); } catch { toast('the search could not be loaded', 'bad'); return; }
+    for (const b of srcs.children) b.classList.toggle('on', b.dataset.src === id);
+    if (!m) {
+      web = null;
+      webQ = search.value;
+      search.value = libQ;
+      search.placeholder = 'Search GIFs';
+      grid.classList.remove('web');
+      findBox.hidden = goBtn.hidden = true;
+      list.el.scrollTop = libTop;
+      list.refresh();
+      return;
+    }
+    if (!web) { libQ = search.value; libTop = list.el.scrollTop; search.value = webQ; }
+    web = m.sources.find((s) => s.id === id);
+    R ??= m.mountResults(findBox, { onPick: toArt });
+    R.use(web);
+    search.placeholder = web.placeholder;
+    grid.classList.add('web');
+    findBox.hidden = goBtn.hidden = false;
+    if (search.value.trim()) R.search(search.value);
+  }
+  // A web GIF or picture into Make art (there to frame, then save).
+  async function toArt(hit) {
+    app.artFrom = { blob: await hit.fetch(), label: hit.title, title: hit.hint, source: hit.source, platform: hit.platform, logo: hit.logo };
+    app.go('studio');
+  }
+
   // --- Categories and the list
   const real = () => cats.filter(([v]) => v[0] != '@').map(([v]) => v);
   async function categories() {
@@ -287,8 +326,9 @@ export async function mount(el) {
   }
 
   function apply() {
-    const q = app.wasm.normalizeTitle(search.value);
-    const qn = search.value.trim().toLowerCase();
+    const text = web ? libQ : search.value; // (the box holds a web search meanwhile)
+    const q = app.wasm.normalizeTitle(text);
+    const qn = text.trim().toLowerCase();
     shown = items.filter((it) => (!platforms.size || platforms.has(it.e.platform))
       && (!q || it.norm.includes(q) || (qn && it.name.toLowerCase().includes(qn))));
     count.textContent = `${shown.length.toLocaleString()} of ${items.length.toLocaleString()}`;
