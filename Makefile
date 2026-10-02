@@ -68,11 +68,11 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-flash www-push flasher flasher-smoke card-sync api-load
+	fw-release fw-release-flash fw-sign www-push flasher flasher-smoke card-sync api-load
 
 test:
-	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder)"
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names
+	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features tween,names,ota
 	@echo "==> Testing $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(SIM)"
@@ -111,7 +111,7 @@ pack:
 
 check:
 	@echo "==> Checking $(CORE)"
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features tween,names
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets --features tween,names,ota
 	@echo "==> Checking $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(SIM)"
@@ -196,7 +196,7 @@ fmt:
 clippy:
 	@echo "==> Clippy $(CORE)"
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features tween,names,ota -- -D warnings
 	@echo "==> Clippy $(RENDER)"
 	cd $(RENDER) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(SIM)"
@@ -323,6 +323,7 @@ fw-clean:
 #   partition-table.bin            at 0x8000
 #   opendmd-<ver>-4mb-full.bin     all four merged into one 4 MB image (offset 0)
 #   manifest.json                  ESP Web Tools: the four parts and offsets
+#   opendmd-<ver>.odfw             the signed bundle for PUT /api/firmware (fw-sign)
 #
 # The version comes from firmware/Cargo.toml and is also written into the app
 # descriptor as "<version> 4mb" (checked below at offset 0x30 of the image).
@@ -363,6 +364,7 @@ fw-release: web
 	 pct=$$(awk "BEGIN { printf \"%.1f\", $$size * 100 / $(FW_APP_BYTES) }"); \
 	 echo "$(FW_APP_IMAGE): $$size B = $$pct% of the $(FW_APP_BYTES) B app partition (limit $(FW_APP_MAX_PCT)% = $$limit B)"; \
 	 test $$size -le $$limit || { echo "image exceeds $(FW_APP_MAX_PCT)% of the app partition"; exit 1; }
+	$(MAKE) --no-print-directory fw-sign
 	cp $(WWW_PACK) $(FW_WWW_IMAGE)
 	cp $(FW_RELEASE_BOOTLOADER) $(DIST)/bootloader.bin
 	bash -c '. $(ESPUP_ENV) && espflash partition-table --to-binary -o $(DIST)/partition-table.bin $(FW)/partitions.csv'
@@ -388,7 +390,21 @@ fw-release: web
 	  '    }' \
 	  '  ]' \
 	  '}' > $(DIST)/manifest.json
-	@echo "dist/:"; ls -l $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(FW_FULL_IMAGE) $(DIST)/manifest.json
+	@echo "dist/:"; ls -l $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(FW_BUNDLE) $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(FW_FULL_IMAGE) $(DIST)/manifest.json
+
+# The signed bundle for a LAN update (docs/ota.md): the release app image
+# behind a 140-byte header signed with the private key, which never enters
+# the repo (`uv run tools/fw-sign.py keygen` made it; FW_SIGN_KEY moves it).
+# Checked against the committed public key, firmware/keys/opendmd.pub, the
+# one the firmware compiles in. Run by fw-release; on its own it signs
+# whatever app image dist/ holds for this version.
+FW_SIGN_KEY ?= $(HOME)/.config/opendmd/opendmd.key
+FW_BUNDLE := $(DIST)/opendmd-$(FW_VERSION).odfw
+fw-sign:
+	@test -f $(FW_APP_IMAGE) || { echo "no $(FW_APP_IMAGE): run make fw-release first"; exit 2; }
+	@test -f $(FW_SIGN_KEY) || { echo "no signing key at $(FW_SIGN_KEY): uv run tools/fw-sign.py keygen (once), or FW_SIGN_KEY=..."; exit 2; }
+	uv run --quiet tools/fw-sign.py sign $(FW_APP_IMAGE) --version $(FW_VERSION) --out $(FW_BUNDLE) --key $(FW_SIGN_KEY)
+	uv run --quiet tools/fw-sign.py verify $(FW_BUNDLE) --pub $(FW)/keys/opendmd.pub
 
 # First install on a board over USB, from the release build: the same four
 # parts as dist/ (bootloader, table, app, pack). From DMDoS, other firmware or

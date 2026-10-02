@@ -30,3 +30,6 @@ opendmd-web/www.pack
 # Release images (make fw-release)
 dist/
 __pycache__/
+
+# Firmware signing keys: only the public half is committed (firmware/keys/opendmd.pub).
+*.key
