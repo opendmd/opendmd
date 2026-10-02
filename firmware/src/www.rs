@@ -565,7 +565,7 @@ fn stage_on_card(
 /// `PUT /api/www`, on the stream task: write a whole pack into the partition
 /// and serve it.
 ///
-/// **With a card** (`card_mounted`: mounted and readable), the pack is
+/// **With a card** (`no_card` is `None`: mounted and readable), the pack is
 /// received onto the card first (`/update/www.pack.part`) and its CRC
 /// checked there, while the old pack stays mapped: an upload cut short, or a file that is not a good
 /// pack, is answered (408, 422, …) with the web app in flash untouched.
@@ -576,7 +576,8 @@ fn stage_on_card(
 /// card on which the staging file cannot be created (logged with the
 /// reason). The reply's `staged` says which it was. Either way the header
 /// is checked before anything happens (400).
-pub fn receive(up: &mut Upload, card_mounted: bool) -> Result<()> {
+pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
+    let card_mounted = no_card.is_none();
     let Some(part) = partition() else {
         return up.error(
             500,
@@ -641,7 +642,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool) -> Result<()> {
             }
         }
     } else {
-        Err("no card".to_string())
+        Err(no_card.unwrap_or("no card").to_string())
     };
     let staged = match staged {
         Ok(f) => Some(f),
