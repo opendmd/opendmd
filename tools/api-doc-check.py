@@ -9,6 +9,7 @@
 Run by `make web`. Both ways:
 
 - every `/api/` route registered with `server.route("<uri>", Method::X, …)`
+  (or `server.route_json`)
   has a `### METHOD /api/…` heading in docs/api.md, and every such heading
   is a registered route with that method;
 - every `/api/…` path mentioned anywhere in docs/api.md is a route
@@ -29,7 +30,7 @@ def main() -> int:
     rs_path = Path(sys.argv[2]) if len(sys.argv) > 2 else REPO / "firmware" / "src" / "http.rs"
     rs = rs_path.read_text(encoding="utf-8")
     md = md_path.read_text(encoding="utf-8")
-    routes = {(m, u) for u, m in re.findall(r'server\.route\(\s*"(/api/[^"]*)",\s*Method::(\w+)', rs)}
+    routes = {(m, u) for u, m in re.findall(r'server\.route(?:_json)?\(\s*"(/api/[^"]*)",\s*Method::(\w+)', rs)}
     routes = {(m.upper(), u) for m, u in routes}
     uris = {u for _, u in routes}
 

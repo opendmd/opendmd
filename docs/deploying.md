@@ -323,13 +323,15 @@ make www-push HOST=opendmd.local          # WWW_PACK=dist/opendmd-<v>-www.pack f
 `GET /api/www` back and checks the device serves a verified pack with the
 version in the pack's header. No reboot. The device checks the header before
 it erases anything (a file that is not a pack, or whose length disagrees with
-its header, is a 400 and the app in flash is untouched), then writes the
-partition as the body arrives and verifies the CRC before serving it. While
+its header, is a 400 and the app in flash is untouched); with a card in, it
+receives the pack onto the card and checks its CRC there before touching
+flash (a cut-short or damaged upload then leaves the old app working), then
+writes the partition, header last, and verifies the CRC before serving it. While
 it writes (~7 s for today's 782 KB; it is received like any upload, so the
 same 120 s limit applies; the panel keeps playing, about one late frame per
 push) the API answers as usual, a browser that already
 has the app open keeps working, and a page load waits for the write and then
-loads the new app. A cut-short
+loads the new app. Without a card, a cut-short
 or damaged upload leaves the API up and every page answering **503** with the
 reason in plain text (`/api/status` `www.error` says it too) until a good
 pack is pushed; the setup page (`/setup`) can also write one (**Web app** →

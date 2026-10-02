@@ -1,7 +1,18 @@
 # Firmware updates over the LAN (OTA), design
 
-Status: design 2026-10-02, implementation in progress. Replaces the "no
-OTA" statement in `deploying.md` once it lands.
+Status: implemented 2026-10-02 (host-tested; the device drills below are
+still to run on a spare DevKit). `deploying.md` describes the procedure.
+
+Where things are: the bundle format and its verifier
+`opendmd-core/src/ota.rs`; the signer `tools/fw-sign.py`; the device side
+`firmware/src/ota.rs` (`PUT`/`GET /api/firmware`, the boot-time tidy-up);
+the updater `ota/updater/` (`make updater`); `make fw-sign`, `make fw-ota
+HOST=`. Two details differ from the sketch below: the firmware checks the
+signature as soon as the 140-byte header is in, on the network worker
+(Ed25519 needs ~8 KB of stack; the stream task has 6 KB), before anything
+is written to the card; and the updater hashes the whole file on the card
+once *before* it erases anything (a damaged file then boots the old
+firmware, untouched), then again as it writes.
 
 ## Why not two app slots
 

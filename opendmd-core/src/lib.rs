@@ -6,6 +6,7 @@
 //! tests read back), `color_quant` (the recoder's quantiser, already a
 //! dependency of `gif`) and `log`.
 
+pub mod access;
 pub mod boot;
 pub mod brightness;
 pub mod canvas;

@@ -287,6 +287,8 @@ fn prepare(card: SdCard, settings: &Settings, status: &Mutex<Status>) -> Handove
         }
     };
     crate::retired_files_checks();
+    // A firmware update that ran (or did not): log it, tidy /update/.
+    crate::ota::after_boot();
     let manifest = s.manifest_path();
     {
         let mut st = status.lock().unwrap();

@@ -2,8 +2,9 @@
 # The DevKit V1 boards on this project are 4 MB (verified with esptool).
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
-# Partition table — one factory app and the `www` data partition (the web
-# app's pack), 4 MB; no OTA. NOTE: ESP-IDF's cmake resolves this path
+# Partition table v2 — otadata, the firmware in `factory`, the updater in
+# `ota_0`, and the `www` data partition (the web app's pack), 4 MB; see
+# partitions.csv and docs/ota.md. NOTE: ESP-IDF's cmake resolves this path
 # relative to its own CMakeLists inside the esp-idf-sys build dir, not the
 # crate root, so the Makefile overrides it with an absolute path via
 # ESP_IDF_SDKCONFIG_DEFAULTS. See the root CLAUDE.md "Build quirk".

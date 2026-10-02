@@ -48,6 +48,8 @@ const KEY_AUTO_PREPARE: &str = "auto_prepare";
 const KEY_FOLLOW: &str = "follow";
 const KEY_FOLLOW_HOST: &str = "follow_host";
 const KEY_FOLLOW_CODE: &str = "follow_code";
+/// The API key (`opendmd_core::access`), empty = none.
+const KEY_API_KEY: &str = "api_key";
 const KEY_ATTRACT_SET: &str = "attract_set";
 const KEY_LOOK: &str = "look";
 const KEY_GLOW: &str = "glow";
@@ -172,6 +174,10 @@ pub struct Settings {
     /// The start-up show: `off`, `short` (the default) or `full`
     /// (`opendmd_core::boot`, `show.rs`).
     pub boot_show: ShowLength,
+    /// The API key every API and card request must carry when set
+    /// (`httpd::gate`, docs/api.md "Security"); empty = none. Never
+    /// returned by the API (only `api_key_set`).
+    pub api_key: String,
 }
 
 /// Is `v` an `attract` value `PUT /api/config` may store?
@@ -231,6 +237,7 @@ impl Default for Settings {
             look: Look::Colour,
             glow: GlowLevel::Off,
             boot_show: ShowLength::Short,
+            api_key: String::new(),
         }
     }
 }
@@ -385,6 +392,10 @@ impl Config {
                 .get_string(KEY_BOOT_SHOW)
                 .and_then(|s| ShowLength::from_name(&s))
                 .unwrap_or(d.boot_show),
+            api_key: self
+                .get_string(KEY_API_KEY)
+                .filter(|k| opendmd_core::access::valid_key(k))
+                .unwrap_or(d.api_key),
         }
     }
 
@@ -419,6 +430,7 @@ impl Config {
         self.nvs.set_str(KEY_LOOK, s.look.name())?;
         self.nvs.set_str(KEY_GLOW, s.glow.name())?;
         self.nvs.set_str(KEY_BOOT_SHOW, s.boot_show.name())?;
+        self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
         Ok(())
     }
 

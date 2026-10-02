@@ -12,7 +12,8 @@ license = "MIT OR Apache-2.0"
 esp-idf-hal = "0.45"
 esp-idf-svc = { version = "0.51", features = ["experimental"] }
 esp-idf-sys = "0.36"
-opendmd-core = { path = "../opendmd-core" }
+# `ota`: the signed firmware bundle's verifier (Ed25519, SHA-256), src/ota.rs.
+opendmd-core = { path = "../opendmd-core", features = ["ota"] }
 anyhow = "1"
 log = "0.4"
 # The JSON API. Responses are formatted by hand (see `httpd::json_string`) so

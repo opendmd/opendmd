@@ -52,6 +52,7 @@ mod httpd;
 mod logring;
 mod net_worker;
 mod nvs_config;
+mod ota;
 mod panel;
 mod probe;
 mod sched;
