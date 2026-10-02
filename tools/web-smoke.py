@@ -1853,27 +1853,43 @@ def studio_shots(page: Page, size: str) -> None:
     page.evaluate("scrollTo(0, 0)")
 
 
+def studio_boxes(page: Page) -> list[list[float]]:
+    """[x, y, width] of the six steps, in order 1-6."""
+    return [page.eval_on_selector(f"#st-{x}", "e => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width]; }")
+            for x in ("import", "frame", "look", "text-step", "preview", "save-step")]
+
+
 def studio_checks(page: Page, base: str, overlay: Path) -> None:
     fixture = studio_fixture()
     hits: list[str] = []
     stub_art(page, hits)
     open_studio(page)
+    # Laptop: Import + Frame left, Look + Text right, Preview and Save full width;
+    # the steps headed "1 Import" ...; Save the view's one primary.
+    imp, frm, look, txt, prv, sv = studio_boxes(page)
+    check(imp[0] == frm[0] < look[0] == txt[0] and imp[1] == look[1] and frm[1] > imp[1] and txt[1] > look[1]
+          and prv[2] == sv[2] > 2 * imp[2] and prv[1] > max(frm[1], txt[1]) and sv[1] > prv[1],
+          f"studio layout: two columns, then Preview and Save ({[b[:2] for b in (imp, frm, look, txt, prv, sv)]})")
+    heads = page.eval_on_selector_all("#studio .card > h2", "els => els.map(e => e.textContent)")
+    pri = page.eval_on_selector_all("#studio button.pri", "els => els.map(e => e.id)")
+    check(heads == ["1 Import", "2 Frame", "3 Look", "4 Text", "5 Preview", "6 Save"] and pri == ["st-save"],
+          f"studio: step headings {heads}, primary {pri}")
     # Find art for a game: the stubbed index, then a game's pictures.
     page.select_option("#st-find-plat", "SNES")
     page.fill("#st-find-q", "studio test")
     page.click("#st-find-go")
-    page.wait_for_selector("#st-hits .st-hit")
-    rows = page.eval_on_selector_all("#st-hits .st-hit", "els => els.map(e => e.textContent)")
-    check(rows == ["Studio TestUSA", "Studio TestJapan"], f"studio find: 'studio test' on SNES -> {rows}")
-    page.click("#st-hits .st-hit >> nth=0")
-    page.wait_for_function("document.querySelectorAll('#st-thumbs .st-thumb:not([disabled])').length === 2", timeout=10000)
-    kinds = page.eval_on_selector_all("#st-thumbs .st-thumb", "els => els.map(e => e.dataset.kind)")
+    # The pictures of the games found, best game first, as the find.js tile grid.
+    page.wait_for_selector("#st-hits .find-hit")
+    tiles = page.eval_on_selector_all("#st-hits .find-hit", "els => els.map(e => [e.dataset.kind, e.innerText.replace(/\\n+/g, ' / ')])")
+    check(tiles == [["Named_Titles", "Studio Test (USA) / Title screen"], ["Named_Snaps", "Studio Test (USA) / In the game"],
+                    ["Named_Snaps", "Studio Test (Japan) / In the game"]], f"studio find: 'studio test' on SNES -> tiles {tiles}")
+    page.wait_for_function("[...document.querySelectorAll('#st-hits .find-hit img')].filter(i => i.complete && i.naturalWidth).length === 3", timeout=10000)
     linked = any(h.endswith("Named_Snaps/Studio Test (Japan).png") for h in hits)
-    check(kinds == ["Named_Titles", "Named_Snaps"] and linked,
-          f"studio find: title and snap pictures load, the snap through its link ({kinds}, {len(hits)} requests)")
+    check(linked and page.locator("#studio .st-hit, #studio .st-thumb").count() == 0,
+          f"studio find: every picture loads, the USA snap through its link ({len(hits)} requests)")
     # (The view keeps its picture between visits: forget the last one's frames.)
     page.evaluate("delete document.querySelector('#studio').dataset.frames")
-    page.click("#st-thumbs .st-thumb[data-kind=Named_Titles]")
+    page.click("#st-hits .find-hit[data-kind=Named_Titles]")
     page.wait_for_function("document.querySelector('#studio').dataset.frames", timeout=20000)
     d = studio_data(page)
     check(d.get("platform") == "SNES" and d.get("title") == "Studio Test",
@@ -1998,7 +2014,12 @@ def studio_anim_checks(page: Page, base: str, overlay: Path) -> None:
     page.wait_for_timeout(400)
     p1 = studio_data(page).get("pos")
     check(p0 != p1, f"studio anim: the preview plays (frame {p0} -> {p1})")
-    cell = lambda i: f"#st-strip .st-cell[data-i='{i}']"
+    def cell(i: int) -> str:
+        """Frame i's cell, the strip scrolled to it (only the cells in view exist)."""
+        page.eval_on_selector("#st-strip", "(s, i) => { s.scrollLeft = Math.max(0, i * 136 - 200); s.dispatchEvent(new Event('scroll')); }", i)
+        sel = f"#st-strip .st-cell[data-i='{i}']:not([hidden])"
+        page.wait_for_selector(sel, timeout=5000)
+        return sel
     page.click(cell(2))
     page.click("#st-set-in")
     page.click(cell(9))
@@ -2474,13 +2495,12 @@ def studio_device(page: Page) -> None:
     page.select_option("#st-find-plat", "SNES")
     page.fill("#st-find-q", "super metroid")
     page.click("#st-find-go")
-    page.wait_for_selector("#st-hits .st-hit", timeout=20000)
-    rows = page.eval_on_selector_all("#st-hits .st-hit", "els => els.map(e => e.textContent)")
+    page.wait_for_selector("#st-hits .find-hit", timeout=20000)
+    rows = page.eval_on_selector_all("#st-hits .find-hit", "els => els.map(e => e.title)")
     check(any(r.startswith("Super Metroid") for r in rows), f"device studio: 'super metroid' -> {rows[:3]}")
-    page.click("#st-hits .st-hit >> nth=0")
     try:
-        page.wait_for_selector("#st-thumbs .st-thumb:not([disabled])", timeout=20000)
-        check(True, f"device studio: pictures load ({page.locator('#st-thumbs .st-thumb').count()})")
+        page.wait_for_function("[...document.querySelectorAll('#st-hits .find-hit img')].some(i => i.complete && i.naturalWidth)", timeout=20000)
+        check(True, f"device studio: pictures load ({page.locator('#st-hits .find-hit').count()} tiles)")
     except PlaywrightTimeoutError:
         check(False, "device studio: no picture loaded from GitHub (network?)")
     # An animated GIF from a file, played and edited here; nothing saved.
@@ -2923,16 +2943,35 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     hits: list[str] = []
     stub_art(page, hits)
     open_studio(page, "#nav-art")
+    # Nothing in yet: one column in order 1-6, steps 2-6 dimmed (not hidden),
+    # the one hint in step 1.
+    boxes = studio_boxes(page)
+    dim = page.eval_on_selector_all("#studio .card", "els => els.map(e => +getComputedStyle(e).opacity)")
+    check(all(b[0] == boxes[0][0] for b in boxes) and [b[1] for b in boxes] == sorted(b[1] for b in boxes)
+          and dim[0] == 1 and all(0 < o < 1 for o in dim[1:]) and page.inner_text("#st-msg").startswith("Start here")
+          and not page.inner_text("#st-warn") and page.locator("#studio .cap:visible").count() == 2,
+          f"phone studio: empty, one column 1-6, steps 2-6 dimmed {dim}, the hint in step 1 only")
+    page.evaluate("scrollTo(0, 0)")
+    shot(page, "studio-empty", "phone")
     page.set_input_files("#st-file", str(OUT / "studio-fixture.png"))
     page.wait_for_function("document.querySelector('#studio').dataset.frames", timeout=20000)
     page.select_option("#st-find-plat", "SNES")
     page.fill("#st-find-q", "studio")
     page.click("#st-find-go")
-    page.wait_for_selector("#st-hits .st-hit")
+    page.wait_for_selector("#st-hits .find-hit")
     wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
     check(wide <= 0, f"phone studio: no horizontal scroll ({wide}px)")
     no_leaks(page, "phone studio")
     studio_shots(page, "phone")
+    # An animation on a phone: the timeline and the Trim / Motion groups fit.
+    page.evaluate("delete document.querySelector('#studio').dataset.tImport")
+    page.set_input_files("#st-file", str(OUT / "anim-fixture.gif"))
+    page.wait_for_function("document.querySelector('#studio').dataset.tImport", timeout=30000)
+    page.evaluate("document.querySelector('#st-preview').scrollIntoView()")
+    page.wait_for_timeout(300)
+    wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+    check(wide <= 0 and page.is_visible("#st-tl"), f"phone studio: an animation's timeline, no horizontal scroll ({wide}px)")
+    shot(page, "studio-anim", "phone")
     page.context.close()
 
 

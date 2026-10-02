@@ -78,7 +78,8 @@ export function gamePictures(p, d, g) {
   const kinds = parseInt(d.kinds[g.i], 16);
   return KINDS.filter(([bit]) => kinds & bit).map(([bit, kind, what]) => {
     const url = `${RAW}${d.repo}/master/${kind}/${encodeURIComponent(d.names[g.i])}.png`;
-    return { id: url, title: `${g.game} · ${what}`, hint: g.game, what, kind, game: g.game, platform: p, logo: bit === 8, w: 0, h: 0, preview: url, fetch: () => thumb(url), source: 'gameart' };
+    const name = g.game + (g.region ? ` (${g.region})` : '');
+    return { id: url, title: `${name} · ${what}`, name, hint: g.game, what, kind, game: g.game, platform: p, logo: bit === 8, w: 0, h: 0, preview: url, fetch: () => thumb(url), source: 'gameart' };
   });
 }
 
@@ -148,6 +149,28 @@ export const sources = [
 let styled = null;
 export const style = () => (styled ??= new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './find.css', onload: res, onerror: res }))));
 
+// A result tile: the picture (small GIFs at a whole-number zoom, as the panel
+// would show pixels), its title and size (a game picture: the game, and which picture); `onPick(hit, tile)` on a click.
+// Object URLs made for previews that will not load straight go in `urls`.
+export function tile(x, onPick, urls) {
+  const dims = h('small', x.what || (x.w ? `${x.w}×${x.h}` : ''));
+  // crossOrigin: the same request as fetch() below, so the browser's
+  // cache serves the bytes to it; a plain <img> entry (no Origin sent,
+  // so no CORS header back from blob.gifcities.org) would fail that fetch.
+  const img = h('img', { loading: 'lazy', alt: x.title, crossOrigin: 'anonymous', src: x.preview });
+  img.onload = () => {
+    if (!x.w) { x.w = img.naturalWidth; x.h = img.naturalHeight; if (!x.what) dims.textContent = `${x.w}×${x.h}`; }
+    img.style.width = x.w * Math.max(1, Math.min(4, Math.floor(Math.min(136 / x.w, 72 / x.h)))) + 'px';
+  };
+  // A preview that will not load straight (a game-art link): its bytes.
+  img.onerror = () => {
+    img.onerror = () => t.remove();
+    x.fetch().then((b) => { const u = URL.createObjectURL(b); urls.push(u); img.src = u; }, () => t.remove());
+  };
+  const t = h('button.find-hit', { 'data-id': x.id, 'data-kind': x.kind, title: x.title, onclick: () => onPick(x, t) }, h('span.find-img', img), h('span.find-t', x.name || x.title), dims);
+  return t;
+}
+
 // A results grid into `el`, with the narrowing row above it and, for the
 // hit picked, a strip with "Open in Make art" (`onPick(hit)`, awaited) and
 // "Seen on…"; the narrowing row goes into `narrow` when given (the
@@ -192,25 +215,7 @@ export function mountResults(el, { onPick, narrow }) {
     const hits = src.narrow ? src.narrow([...all], o()) : all;
     count.textContent = all.length ? `${hits.length.toLocaleString()} of ${all.length.toLocaleString()}` : '';
     el.dataset.shown = hits.length;
-    clear(grid, hits.map((x) => {
-      const dims = h('small', x.w ? `${x.w}×${x.h}` : '');
-      // crossOrigin: the same request as fetch() below, so the browser's
-      // cache serves the bytes to it; a plain <img> entry (no Origin sent,
-      // so no CORS header back from blob.gifcities.org) would fail that fetch.
-      const img = h('img', { loading: 'lazy', alt: x.title, crossOrigin: 'anonymous', src: x.preview });
-      img.onload = () => {
-        if (!x.w) { x.w = img.naturalWidth; x.h = img.naturalHeight; dims.textContent = `${x.w}×${x.h}`; }
-        // Small GIFs at a whole-number zoom, as the panel would show pixels.
-        img.style.width = x.w * Math.max(1, Math.min(4, Math.floor(Math.min(136 / x.w, 72 / x.h)))) + 'px';
-      };
-      // A preview that will not load straight (a game-art link): its bytes.
-      img.onerror = () => {
-        img.onerror = () => tile.remove();
-        x.fetch().then((b) => { const u = URL.createObjectURL(b); urls.push(u); img.src = u; }, () => tile.remove());
-      };
-      const tile = h('button.find-hit', { 'data-id': x.id, title: x.title, onclick: () => choose(x, tile) }, h('span.find-img', img), h('span.find-t', x.title), dims);
-      return tile;
-    }));
+    clear(grid, hits.map((x) => tile(x, choose, urls)));
   }
 
   function choose(x, tile) {

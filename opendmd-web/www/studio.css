@@ -1,56 +1,56 @@
-/* The Studio (the "Make art" view), loaded with js/studio.js. */
+/* The Studio (the "Make art" view), loaded with js/studio.js. Laptop: two
+   columns (Import + Frame, Look + Text), Preview and Save full width; phone:
+   one column, 1-6. */
 .st-root.drop .st-box{outline:2px dashed var(--acc);outline-offset:4px;border-radius:10px}
 .st-box>h2{font-size:24px;margin:0}
 .st-box>p{margin:4px 0 0}
-.st-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px;align-items:start}
-.st-grid>.card{margin:0}
-#st-save-step{grid-column:1/-1}
-.st-grid h3{margin:0 0 12px}
+.st-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:24px;align-items:start}
+.st-col{display:flex;flex-direction:column;gap:16px;min-width:0}
+.st-grid .card{margin:0}
+#st-save-step,#st-preview{grid-column:1/-1}
 .st-step{opacity:.45;pointer-events:none}
 .st-root.has .st-step{opacity:1;pointer-events:auto}
-.st-grid .row+.row,.st-find{margin-top:8px}
-.st-find select{flex:1 1 150px}.st-find .grow{min-width:150px}
-.st-find{border-top:1px solid var(--line);padding-top:12px}
-.st-hits{display:flex;flex-direction:column;gap:2px;max-height:220px;overflow:auto;margin-top:8px}
-.st-hit{background:none;border:0;justify-content:space-between;text-align:left;min-height:32px;padding:4px 8px}
-.st-hit:hover,.st-hit.on{background:var(--bg3)}
-.st-hit small{color:var(--mut);margin-left:8px;white-space:nowrap}
-.st-thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-.st-thumb{flex-direction:column;padding:4px;gap:2px;min-height:0}
-.st-thumb img{height:84px;max-width:150px;object-fit:contain;background:#000;image-rendering:pixelated;display:block}
-.st-thumb small{color:var(--mut);font-size:13px}
-.st-view{position:relative;max-width:100%;background:#000;cursor:crosshair;margin:0 auto}
+.st-grid .row+.row,.st-grid .row+.cap{margin-top:8px}
+.st-grid .row>.cap{margin:0}
+.st-url{flex-wrap:nowrap}
+#st-import h3{margin:24px 0 8px}
+.st-find select{flex:1 1 150px}.st-find .grow{flex:2 1 150px}
+.st-hits{margin-top:8px;max-height:300px;overflow-y:auto}
+.st-hits>p{grid-column:1/-1;margin:0}
+.st-view{position:relative;max-width:100%;background:#000;cursor:crosshair;margin:0 auto;overflow:hidden}
 .st-view canvas{display:block;width:100%;image-rendering:pixelated}
 .st-win{position:absolute;box-shadow:0 0 0 2px var(--acc),0 0 0 9999px #0006;cursor:move;touch-action:none}
 .st-band{position:absolute;border:1px dashed #fff8;pointer-events:none}
-.st-view{overflow:hidden}
 .st-seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
-.st-seg button{border:0;border-radius:0;min-height:32px;padding:4px 10px}
+.st-seg button{border:0;border-radius:0;min-height:32px;padding:4px 12px;color:var(--mut)}
 .st-seg button+button{border-left:1px solid var(--line)}
-.st-seg button.on{background:var(--acc);color:#111}
+.st-seg button.on,.st-seg button.on:hover{background:var(--line);color:var(--fg)}
 #st-gain{width:130px}
-#st-name b{color:var(--fg)}
-@media (max-width:760px){
-  .st-grid{grid-template-columns:minmax(0,1fr)}
-  .st-thumb img{height:64px;max-width:110px}
-}
-/* Text: the nine places. Preview spans the grid; the timeline under it. */
+/* Text: the nine places. */
 .st-tpos{align-items:flex-start;gap:16px}
 .st-anchor{display:grid;grid-template-columns:repeat(3,24px);gap:4px}
 .st-anchor button{min-height:0;height:20px;padding:0;border-radius:3px}
 .st-anchor button.on{background:var(--acc)}
 #st-dx,#st-dy,#st-tfrom,#st-tto{width:64px}
-#st-preview{grid-column:1/-1}
-
+/* Preview: the timeline, then Trim and Motion side by side. */
 .st-play{gap:8px}.st-play input{width:100%}
 #st-play{width:40px}
-.st-strip{position:relative;overflow-x:auto;overflow-y:hidden;height:62px;margin-top:8px;background:var(--bg);border-radius:var(--r);outline-offset:2px}
-.st-track{position:relative;height:48px}
-.st-cell{position:absolute;top:4px;width:96px;cursor:pointer;text-align:center;font-size:10px;line-height:12px;color:var(--mut)}
-.st-cell canvas{display:block;width:96px;height:24px;image-rendering:pixelated;background:#000;border-radius:2px;outline:1px solid transparent}
+.st-strip{position:relative;overflow-x:auto;overflow-y:hidden;height:70px;margin:8px 0 4px;background:var(--bg);border-radius:var(--r);outline-offset:2px}
+.st-track{position:relative;height:56px}
+.st-cell{position:absolute;top:4px;width:128px;cursor:pointer;text-align:center;font-size:13px;line-height:16px;color:var(--mut)}
+.st-cell canvas{display:block;width:128px;height:32px;image-rendering:pixelated;background:#000;border-radius:2px;outline:1px solid transparent}
 .st-cell.out{opacity:.3}
 .st-cell.sel canvas{outline:2px solid #fff}
 .st-cell.cur canvas{outline:2px solid var(--acc)}
 .st-cell.cur span{color:var(--acc)}
-.st-h{position:absolute;top:0;width:4px;height:44px;background:var(--acc);cursor:ew-resize;touch-action:none;z-index:1;border-radius:2px}
+.st-h{position:absolute;top:0;width:4px;height:56px;background:var(--acc);cursor:ew-resize;touch-action:none;z-index:1;border-radius:2px}
 .st-h::before{content:'';position:absolute;inset:0 -10px}
+.st-ctl{gap:16px 32px;align-items:flex-start}
+.st-ctl .lbl{margin:0 0 4px}.st-ctl .row{gap:8px}
+.st-ctl select{min-height:28px;padding:4px 8px}.st-ctl select,.st-ctl label{font-size:13px}
+.st-root:not(.has) .st-view{display:none}
+.st-logo,.st-go{margin-top:16px}
+@media (max-width:760px){
+  .st-grid{grid-template-columns:minmax(0,1fr)}
+  .st-find select{flex-basis:100%}
+}
