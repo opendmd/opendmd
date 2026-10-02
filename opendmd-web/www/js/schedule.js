@@ -6,7 +6,7 @@
 // brightness saved in Playback: when a rule ends, those come back.
 
 import { app, playlistLabel, setPath } from './state.js';
-import { h, clear, toast } from './util.js';
+import { h, clear, toast, note } from './util.js';
 
 // A short list of common zones (POSIX TZ strings, what the device's clock
 // library reads); anything else goes in "Custom".
@@ -55,7 +55,7 @@ export function timeCard() {
   const known = ZONES.find(([, tz]) => tz === c.tz);
   zone.value = known ? c.tz : '';
   const custom = h('input', { type: 'text', id: 'tm-custom', placeholder: 'e.g. GMT0IST,M3.5.0/1,M10.5.0', value: known ? '' : c.tz || '' });
-  const customRow = h('label.stack', { hidden: !!known }, 'custom zone (POSIX TZ)', custom);
+  const customRow = h('label.stack', { hidden: !!known }, 'Custom zone (POSIX TZ)', custom);
   zone.onchange = () => { customRow.hidden = !!zone.value; };
   const now = h('b', { id: 'tm-now' }, '…');
   const synced = h('span.muted', { id: 'tm-synced' });
@@ -80,8 +80,8 @@ export function timeCard() {
 
   const el = h('div.card', { id: 'tm' }, h('h2', 'Time'),
     h('p', now, synced),
-    h('div.form', h('label.stack', 'time zone', zone), customRow),
-    h('div.row', { style: 'margin-top:10px' }, h('button.pri', { id: 'tm-save', onclick: save }, 'Save time zone')));
+    h('div.form', h('label.stack', 'Time zone', zone), customRow),
+    h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'tm-save', onclick: save }, 'Save time zone')));
   return { el, render };
 }
 
@@ -90,14 +90,14 @@ export function scheduleCard() {
   let sched = { rules: [], night: null };
   let editing = -1; // rule index being edited; rules.length = a new one
   const list = h('div.list', { id: 'sc-rules' });
-  const editor = h('div.card.sub', { id: 'sc-edit', hidden: true });
+  const editor = h('div.sub', { id: 'sc-edit', hidden: true });
   const nightOn = h('input', { type: 'checkbox', id: 'sc-night-on' });
   const nFrom = h('input', { type: 'time', id: 'sc-night-from', value: '23:30' });
   const nTo = h('input', { type: 'time', id: 'sc-night-to', value: '07:00' });
   const nMode = h('select', { id: 'sc-night-mode' }, h('option', { value: 'off' }, 'Panel off'), h('option', { value: 'dim' }, 'Dim'));
   const nLevel = h('input', { type: 'range', min: 1, max: 255, id: 'sc-night-level', value: 8 });
   const nLevelOut = h('output.mono', '8');
-  const levelRow = h('label', 'level', nLevel, nLevelOut);
+  const levelRow = h('label', 'Level', nLevel, nLevelOut);
   nLevel.oninput = () => { nLevelOut.textContent = nLevel.value; };
   nMode.onchange = () => { levelRow.hidden = nMode.value !== 'dim'; };
 
@@ -116,7 +116,7 @@ export function scheduleCard() {
     clear(list, sched.rules.length ? sched.rules.map((r, i) => h('div', { 'data-rule': i },
       h('span.grow', ruleText(r)),
       h('button.sm', { onclick: () => edit(i) }, 'Edit'),
-      h('button.sm.danger', { onclick: () => put({ ...sched, rules: sched.rules.filter((_, k) => k !== i) }, 'rule deleted') }, 'Delete')))
+      h('button.sm', { onclick: () => put({ ...sched, rules: sched.rules.filter((_, k) => k !== i) }, 'rule deleted') }, 'Delete')))
       : h('div.muted', 'No rules: the playlist and brightness in Playback apply all the time.'));
     const n = sched.night;
     nightOn.checked = !!n;
@@ -133,7 +133,7 @@ export function scheduleCard() {
     }, d)));
     const from = h('input', { type: 'time', id: 'sc-from', value: r.from });
     const to = h('input', { type: 'time', id: 'sc-to', value: r.to });
-    const set = h('select', { id: 'sc-set' }, h('option', { value: '\u0000' }, '(keep the chosen playlist)'));
+    const set = h('select', { id: 'sc-set' }, h('option', { value: '\u0000' }, 'Keep the chosen playlist'));
     for (const p of await app.playlists().catch(() => [])) set.append(h('option', { value: p.value }, p.label));
     set.value = r.set ?? '\u0000';
     const bOn = h('input', { type: 'checkbox', id: 'sc-bright-on', checked: r.brightness != null });
@@ -153,12 +153,12 @@ export function scheduleCard() {
     }
     clear(editor, h('h3', { style: 'margin-top:0' }, editing < sched.rules.length ? 'Edit rule' : 'New rule'),
       days,
-      h('div.form', { style: 'margin-top:10px' },
-        h('label.stack', 'from', from), h('label.stack', 'to', to),
-        h('label.stack', 'play', set),
-        h('label.stack', 'brightness', h('div.row', bOn, bright, bOut))),
-      h('div.row', { style: 'margin-top:10px' },
-        h('button.pri', { id: 'sc-rule-save', onclick: save }, 'Save rule'),
+      h('div.form', { style: 'margin-top:12px' },
+        h('label.stack', 'From', from), h('label.stack', 'To', to),
+        h('label.stack', 'Play', set),
+        h('label.stack', 'Brightness', h('div.row', bOn, bright, bOut))),
+      h('div.row', { style: 'margin-top:12px' },
+        h('button', { id: 'sc-rule-save', onclick: save }, 'Save rule'),
         h('button', { onclick: () => { editor.hidden = true; } }, 'Cancel')));
     editor.hidden = false;
   }
@@ -174,13 +174,13 @@ export function scheduleCard() {
   }
 
   const el = h('div.card', { id: 'sc' }, h('h2', 'Schedule'),
-    h('p.cap', 'The first rule that matches the day and time wins. A rule’s playlist and brightness last while it runs; afterwards the ones in Playback come back.'),
+    note('The first rule that matches the day and time wins', 'A rule’s playlist and brightness last while it runs; afterwards the ones in Playback come back.'),
     list,
-    h('div.row', { style: 'margin-top:10px' }, h('button', { id: 'sc-add', onclick: () => edit(sched.rules.length) }, 'Add rule')),
+    h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'sc-add', onclick: () => edit(sched.rules.length) }, 'Add rule')),
     editor,
     h('h3', 'Night mode'),
-    h('div.row', h('label', nightOn, 'every night from'), nFrom, h('span', 'to'), nTo, nMode, levelRow),
-    h('div.row', { style: 'margin-top:10px' }, h('button.pri', { id: 'sc-night-save', onclick: saveNight }, 'Save night mode')));
+    h('div.row', h('label', nightOn, 'Every night from'), nFrom, h('span', 'to'), nTo, nMode, levelRow),
+    h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'sc-night-save', onclick: saveNight }, 'Save night mode')));
   load();
   return { el, load, night: () => sched.night };
 }

@@ -1,16 +1,16 @@
 /* The Studio (the "Make art" view), loaded with js/studio.js. */
 .st-root.drop .st-box{outline:2px dashed var(--acc);outline-offset:4px;border-radius:10px}
-.st-box>h2{font-size:18px;margin:0}
-.st-box>p{margin:2px 0 0}
-.st-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:10px;align-items:start}
+.st-box>h2{font-size:24px;margin:0}
+.st-box>p{margin:4px 0 0}
+.st-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px;align-items:start}
 .st-grid>.card{margin:0}
 #st-save-step{grid-column:1/-1}
-.st-grid h3{margin:0 0 10px}
+.st-grid h3{margin:0 0 12px}
 .st-step{opacity:.45;pointer-events:none}
 .st-root.has .st-step{opacity:1;pointer-events:auto}
 .st-grid .row+.row,.st-find{margin-top:8px}
 .st-find select{flex:1 1 150px}.st-find .grow{min-width:150px}
-.st-find{border-top:1px solid var(--line);padding-top:10px}
+.st-find{border-top:1px solid var(--line);padding-top:12px}
 .st-hits{display:flex;flex-direction:column;gap:2px;max-height:220px;overflow:auto;margin-top:8px}
 .st-hit{background:none;border:0;justify-content:space-between;text-align:left;min-height:32px;padding:4px 8px}
 .st-hit:hover,.st-hit.on{background:var(--bg3)}
@@ -18,7 +18,7 @@
 .st-thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .st-thumb{flex-direction:column;padding:4px;gap:2px;min-height:0}
 .st-thumb img{height:84px;max-width:150px;object-fit:contain;background:#000;image-rendering:pixelated;display:block}
-.st-thumb small{color:var(--mut);font-size:11.5px}
+.st-thumb small{color:var(--mut);font-size:13px}
 .st-view{position:relative;max-width:100%;background:#000;cursor:crosshair;margin:0 auto}
 .st-view canvas{display:block;width:100%;image-rendering:pixelated}
 .st-win{position:absolute;box-shadow:0 0 0 2px var(--acc),0 0 0 9999px #0006;cursor:move;touch-action:none}
@@ -35,13 +35,13 @@
   .st-thumb img{height:64px;max-width:110px}
 }
 /* Text: the nine places. Preview spans the grid; the timeline under it. */
-.st-tpos{align-items:flex-start;gap:14px}
-.st-anchor{display:grid;grid-template-columns:repeat(3,26px);gap:3px}
+.st-tpos{align-items:flex-start;gap:16px}
+.st-anchor{display:grid;grid-template-columns:repeat(3,24px);gap:4px}
 .st-anchor button{min-height:0;height:20px;padding:0;border-radius:3px}
 .st-anchor button.on{background:var(--acc)}
 #st-dx,#st-dy,#st-tfrom,#st-tto{width:64px}
 #st-preview{grid-column:1/-1}
-#st-preview canvas.panel{max-width:760px;display:block;margin:0 auto}
+
 .st-play{gap:8px}.st-play input{width:100%}
 #st-play{width:40px}
 .st-strip{position:relative;overflow-x:auto;overflow-y:hidden;height:62px;margin-top:8px;background:var(--bg);border-radius:var(--r);outline-offset:2px}

@@ -1,6 +1,6 @@
 // Now: what the panel is doing. On a device, /api/status every 500 ms while
-// this view is up, the remote control (skip, pause, brightness, send a path
-// to the panel with POST /api/play) and a panel-look preview of the file on
+// this view is up, the remote control (skip, pause, brightness; sending a
+// GIF to the panel is the Library's) and a panel-look preview of the file on
 // screen, fetched once per change and kept in step with the panel by clock
 // (elapsed_ms at the device's t_ms, offset estimated NTP-style; CLAUDE.md,
 // "The Now preview is in step"). In local mode, a simulator over the picked
@@ -10,14 +10,13 @@ import { app, playlistLabel } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
-import { h, clear, on, store, debounce, toast, bytes, uptime, label } from './util.js';
+import { h, clear, on, store, debounce, toast, bytes, uptime, label, niceName, flagName } from './util.js';
 
 const POLL_MS = 500;
-const CAP = 'preview · in step with the panel';
 
 function tags(e) {
-  return [e.platform && h('span.tag', e.platform), e.category && h('span.tag', e.category),
-    ...e.flags.map((f) => h('span.tag', f))];
+  return [e.platform && h('span.tag', e.platform), e.category && h('span.tag', niceName(e.category)),
+    ...e.flags.map((f) => h('span.tag', flagName(f)))];
 }
 
 export async function mount(el) {
@@ -27,10 +26,11 @@ export async function mount(el) {
 function mountDevice(el) {
   const canvas = h('canvas.panel', { id: 'now-panel' });
   const follow = h('input', { type: 'checkbox', id: 'now-follow', checked: store.get('follow', true) });
-  const cap = h('div.cap', { id: 'now-cap' }, CAP);
+  const cap = h('div.cap', { id: 'now-cap' });
   const drift = h('span.mono.muted', { id: 'now-drift' });
   const title = h('h2', { id: 'now-title' }, '…');
-  const meta = h('div.muted.mono', { id: 'now-path' });
+  // The file's path: never shown (the title says what it is); kept for tools/web-smoke.py.
+  const meta = h('span', { id: 'now-path', hidden: true });
   const followEl = h('div', { id: 'now-follow-line', hidden: true });
   const ord = h('span.muted', { id: 'now-ord' });
   const pauseBtn = h('button', { id: 'now-pause', onclick: togglePause }, 'Pause');
@@ -38,19 +38,17 @@ function mountDevice(el) {
   const brightOut = h('output.mono', bright.value);
   const grid = h('div.grid', { id: 'now-stats' });
   const conn = h('span', { id: 'now-conn' });
-  const playPath = h('input', { type: 'text', id: 'now-play-path', placeholder: '/gifs/… (card path)', onkeydown: (e) => e.key === 'Enter' && send() });
 
   const banner = h('div.banner', { id: 'now-banner', hidden: true });
   el.append(
     banner,
-    h('div.card', canvas, h('div.row.sp', cap, h('label.cap', follow, 'preview follows the panel'))),
+    h('div.card', canvas, h('div.row', cap, h('label.cap', { style: 'margin-left:auto' }, follow, 'Follow the panel'))),
     h('div.card',
-      h('div.row.sp', h('div.grow', title, followEl, h('div', { id: 'now-tags' }), meta), h('div', ord, ' ', conn)),
-      h('div.row', { style: 'margin-top:10px' },
+      h('div.row.sp', h('div.grow', title, followEl, h('div', { id: 'now-tags' }), meta), h('div.muted', ord, ' ', conn)),
+      h('div.row', { style: 'margin-top:12px' },
         h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn,
-        h('label', 'Brightness', bright, brightOut)),
-      h('div.row', { style: 'margin-top:10px' }, h('div.grow', playPath), h('button', { id: 'now-play', onclick: send }, 'Send to panel'))),
-    h('div.card', h('h3', { style: 'margin-top:0' }, 'Health'), grid),
+        h('label', 'Brightness', bright, brightOut))),
+    h('div.card', h('h2', 'Health'), grid),
     lookControls(drift));
 
   const preview = new PanelPreview(canvas, { onError: (m) => { cap.textContent = 'preview: ' + m; } });
@@ -71,10 +69,7 @@ function mountDevice(el) {
   async function skip() {
     try { await app.src.skip(); setTimeout(poll, 400); } catch (e) { toast(e.message, 'bad'); }
   }
-  async function send() {
-    const p = playPath.value.trim();
-    if (p && await app.play(p)) setTimeout(poll, 400);
-  }
+
   async function togglePause() {
     try { const r = await app.src.pause(); app.status.paused = r.paused; render(app.status); } catch (e) { toast(e.message, 'bad'); }
   }
@@ -85,11 +80,10 @@ function mountDevice(el) {
   async function follow_(path) {
     if (!follow.checked || !path || path === shownPath) return;
     shownPath = path;
-    cap.textContent = 'preview — not frame-synced · loading…';
-    cap.textContent = 'preview · loading…';
+    cap.textContent = 'Loading…';
     try {
-      if (await preview.show(path, (p) => app.previewBytes(p))) { cap.textContent = CAP; sync(); poll(); }
-    } catch (e) { cap.textContent = 'preview: ' + e.message; }
+      if (await preview.show(path, (p) => app.previewBytes(p))) { cap.textContent = ''; sync(); poll(); }
+    } catch (e) { cap.textContent = 'Preview: ' + e.message; }
   }
 
   // One status sample, requested at local t0 and answered at t1.
@@ -121,7 +115,7 @@ function mountDevice(el) {
     const ds = drift.dataset;
     ds.k = ds.path === last.path ? +ds.k + 1 : 1;
     Object.assign(ds, { path: last.path, drift: d.toFixed(1), rtt: best.rtt.toFixed(1), rate: last.rate.toFixed(4), paused: preview.paused });
-    drift.textContent = `drift ${Math.round(d)} ms · rtt ${Math.round(best.rtt)} ms`;
+    drift.textContent = `Drift ${Math.round(d)} ms · RTT ${Math.round(best.rtt)} ms`;
   }
 
   function stat(name, value, cls = '') { return h('div.stat', h('b' + cls, value), h('span', name)); }
@@ -132,13 +126,13 @@ function mountDevice(el) {
     // A virtual file (`@…`: Follow RePlayOS's cards) shows its title only.
     const virt = np.path?.startsWith('@');
     const e = app.wasm.parsePath(virt ? '' : np.path || '');
-    title.textContent = virt ? np.title : np.path ? label(e) : '(nothing playing)';
+    title.textContent = virt ? np.title : np.path ? label(e) : 'Nothing playing';
     clear(el.querySelector('#now-tags'), np.path && !virt ? tags(e) : null);
     meta.textContent = virt ? '' : np.path;
     const fl = followLine(s);
     followEl.hidden = !fl;
     followEl.textContent = fl ?? '';
-    ord.textContent = `#${np.ordinal} · ${s.entries.toLocaleString()} entries`;
+    ord.textContent = `${np.ordinal} of ${s.entries.toLocaleString()}`;
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
     const b = bannerFor(s, () => setTimeout(poll, 300));
     banner.hidden = !b;
@@ -146,16 +140,16 @@ function mountDevice(el) {
     if (b) clear(banner, b);
     const set = playlistLabel(s.manifest);
     clear(grid,
-      stat('uptime', uptime(s.uptime_secs)),
-      stat(`${s.wifi} · ${s.hostname}.local`, s.ip || '–'),
-      stat('heap free', bytes(s.heap.free)),
-      stat('heap floor (sampled)', bytes(s.heap.floor), s.heap.floor < 20000 ? '.bad' : ''),
-      stat('refresh', s.refresh_hz + ' Hz'),
-      stat('deadline misses', s.deadline_misses.toLocaleString()),
-      stat('worst lateness', s.worst_lateness_ms + ' ms'),
-      stat('files started', s.gifs_started.toLocaleString()),
-      stat('playlist', set),
-      stat('card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'not mounted', s.sd.mounted ? '' : '.bad'));
+      stat('Uptime', uptime(s.uptime_secs)),
+      stat('Address', s.ip || '–'),
+      stat('Free memory', bytes(s.heap.free)),
+      stat('Lowest free memory', bytes(s.heap.floor), s.heap.floor < 20000 ? '.bad' : ''),
+      stat('Refresh', s.refresh_hz + ' Hz'),
+      stat('Deadline misses', s.deadline_misses.toLocaleString()),
+      stat('Worst lateness', s.worst_lateness_ms + ' ms'),
+      stat('Files started', s.gifs_started.toLocaleString()),
+      stat('Playlist', set),
+      stat('Card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'Not mounted', s.sd.mounted ? '' : '.bad'));
     if (preview.paused !== s.paused) preview.setPaused(s.paused);
     follow_(np.path);
   }
@@ -173,14 +167,14 @@ function mountDevice(el) {
       clock(s, t0, performance.now());
       render(s);
       sync();
-      if (failures && preview.path) cap.textContent = CAP;
+      if (failures && preview.path) cap.textContent = '';
       failures = 0;
       conn.className = 'ok';
-      conn.textContent = '● live';
+      conn.textContent = '● Live';
     } catch (e) {
       conn.className = 'bad';
-      conn.textContent = ++failures > 1 ? '● offline' : '● retrying';
-      if (preview.path) cap.textContent = 'preview · panel not reachable';
+      conn.textContent = ++failures > 1 ? '● Offline' : '● Retrying';
+      if (preview.path) cap.textContent = 'Panel not reachable';
     } finally { busy = false; }
   }
 
@@ -194,7 +188,7 @@ function mountDevice(el) {
 function mountLocal(el) {
   const canvas = h('canvas.panel', { id: 'now-panel' });
   const title = h('h2', { id: 'now-title' }, 'Local simulator');
-  const line = h('div.muted.mono', { id: 'now-path' });
+  const line = h('div.muted', { id: 'now-path' });
   const listSel = h('select', { id: 'sim-list' });
   const plats = h('input', { type: 'text', id: 'sim-platforms', placeholder: 'MD,SNES — blank for all', size: 18 });
   const shuffle = h('input', { type: 'checkbox', id: 'sim-shuffle' });
@@ -205,10 +199,10 @@ function mountLocal(el) {
   let i = -1;
 
   el.append(
-    h('div.card', canvas, h('div.cap', 'local simulator — one file in memory at a time, the firmware’s 3–30 s dwell')),
+    h('div.card', canvas, h('div.cap', 'One file in memory at a time, with the firmware’s 3–30 s dwell')),
     h('div.card', title, line,
-      h('div.row', { style: 'margin-top:10px' },
-        h('label', 'playlist', listSel), h('label', 'platforms', plats), h('label', shuffle, 'shuffle'), h('label', 'seed', seed),
+      h('div.row', { style: 'margin-top:12px' },
+        h('label', 'Playlist', listSel), h('label', 'Platforms', plats), h('label', shuffle, 'Shuffle'), h('label', 'Seed', seed),
         h('button.pri', { id: 'sim-play', onclick: play }, 'Play'), nextBtn, pauseBtn)),
     lookControls());
 
@@ -221,7 +215,7 @@ function mountLocal(el) {
   const src = app.src;
   const manifests = [...src.files.keys()].filter((p) => /^\/filelist\.[^/]*$|^\/sets\/[^/]+\.txt$/.test(p) && !/\/filelist\.odm\.|\.(idx|part|tmp|bak|meta)$/.test(p));
   for (const m of manifests) listSel.append(h('option', { value: m }, playlistLabel(m)));
-  listSel.append(h('option', { value: '' }, 'every GIF in the folder'));
+  listSel.append(h('option', { value: '' }, 'Every GIF in the folder'));
 
   async function play() {
     let text;
@@ -243,7 +237,7 @@ function mountLocal(el) {
     if (!src.files.has(path)) return next(tries + 1);
     const e = app.wasm.parsePath(path);
     title.textContent = label(e);
-    line.textContent = `[${i + 1}/${list.length}] ${path}`;
+    line.textContent = `${i + 1} of ${list.length}`;
     await preview.show(path, (p) => app.previewBytes(p));
   }
 

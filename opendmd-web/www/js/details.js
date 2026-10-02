@@ -30,7 +30,7 @@ import { app, setValue } from './state.js';
 import { art } from './artmod.js';
 import { fileFor } from './overrides.js';
 import { authorOf, savePlaylist } from './library.js';
-import { h, clear, toast, base, dir, enc } from './util.js';
+import { h, clear, toast, base, dir, enc, label, niceName, byNice } from './util.js';
 
 const WHY = {
   title: 'Give it a title.',
@@ -126,7 +126,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
   const listing = listings(opts.categories);
   const urls = [];
   const plats = [...new Set([...m.platforms(), ...(opts.platforms || [])])].sort();
-  let cats = [...new Set([...opts.categories, ...inits.map((i) => i.category).filter(Boolean)])].sort();
+  let cats = [...new Set([...opts.categories, ...inits.map((i) => i.category).filter(Boolean)])].sort(byNice);
   const items = inits.map((init, i) => row(init, i, files?.[i]));
   const okBtn = h('button.pri', { id: 'dl-ok', disabled: true, onclick: () => done(items.map((it) => it.out)) }, ok);
   const el = h('div.dlg', { id: 'dl', role: 'dialog', 'aria-modal': 'true' },
@@ -170,7 +170,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
     category.onchange = () => {
       if (category.value === '\n') {
         const c = (prompt('Name of the new category') || '').trim();
-        if (c && !cats.includes(c)) cats = [...cats, c].sort();
+        if (c && !cats.includes(c)) cats = [...cats, c].sort(byNice);
         for (const x of items) fillCats(x, x === it ? c || x.cat : x.cat);
       }
       refresh();
@@ -179,7 +179,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
   }
 
   function fillCats(it, value) {
-    clear(it.category, cats.map((c) => h('option', { value: c }, c)), h('option', { value: '\n' }, 'New category…'));
+    clear(it.category, cats.map((c) => h('option', { value: c }, niceName(c))), h('option', { value: '\n' }, 'New category…'));
     it.category.value = cats.includes(value) ? value : cats.includes(opts.category) ? opts.category : cats[0] || '';
     it.cat = it.category.value;
   }
@@ -263,7 +263,7 @@ export async function editDialog(path, opts) {
   if (!to || to === path) return null;
   try {
     await renameGif(path, to);
-    toast(`renamed to ${base(to)}`, 'ok');
+    toast(`renamed to “${label(app.wasm.parsePath(to))}”`, 'ok');
     return to;
   } catch (e) { toast(`renaming: ${e.message}`, 'bad'); return null; }
 }

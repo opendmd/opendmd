@@ -84,3 +84,26 @@ export const lines = (text) => text.replace(/^﻿/, '').split('\n').map((l) => l
 export const label = (e) => (e.title || base(e.path)) + (e.variant != null ? ' ' + String(e.variant).padStart(2, '0') : '');
 
 export function confirmBox(msg) { return window.confirm(msg); }
+
+// Human names (values, paths and API calls keep the raw ones): a category
+// `BEST_OF_TOP_30` "Best of Top 30", `NEW 2021` as it is; `_x` a system list.
+const SMALL = /^(OF|THE|AND|A|AN|IN|ON|TO|FOR)$/;
+export const isSys = (c) => c[0] === '_';
+export function niceName(c) {
+  let s = isSys(c) ? c.slice(1) : c;
+  s = s[0].toUpperCase() + s.slice(1);
+  if (!s.includes('_')) return s;
+  const w = s.split('_').filter(Boolean);
+  return (s === s.toUpperCase() ? w.map((x, i) => (i && SMALL.test(x) ? x.toLowerCase() : x[0] + x.slice(1).toLowerCase())) : w).join(' ');
+}
+// By name, system lists last.
+export const byNice = (a, b) => isSys(a) - isSys(b) || niceName(a).localeCompare(niceName(b));
+
+// opendmd_core::manifest KEYWORD_FLAGS + SEASONS (keep in step); others are authors.
+export const FLAGS = { INVERT: 'Inverted', INTRO: 'Intro', LOGO: 'Logo', SLIDE: 'Slide', STORY: 'Story', ANIM: 'Animated', STATIC: 'Still', HALLOWEEN: 'Halloween', XMAS: 'Christmas' };
+export const isFlag = (f) => f.toUpperCase() in FLAGS;
+export const flagName = (f) => FLAGS[f.toUpperCase()] || f;
+export const flagCode = (n) => Object.keys(FLAGS).find((k) => FLAGS[k].toLowerCase() === n.toLowerCase()) || n;
+
+// A one-line caption; the rest in a "?" tooltip.
+export const note = (text, more) => h('p.cap', text, more && h('span.q', { title: more, tabIndex: 0 }, '?'));

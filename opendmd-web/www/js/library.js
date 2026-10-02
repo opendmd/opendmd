@@ -18,12 +18,10 @@ import { Overrides, glyphs, menu, moreButton, playlistSelect, popup, closeMenu }
 import { PanelPreview } from './preview.js';
 import { prepareBytes } from './prepare.js';
 import { VList } from './vlist.js';
-import { h, clear, emit, on, store, toast, label, lines } from './util.js';
+import { h, clear, emit, on, store, toast, label, lines, niceName, flagName, isFlag, isSys, byNice } from './util.js';
 
-// Keyword and season flags (opendmd_core::manifest KEYWORD_FLAGS, SEASONS);
-// any other flag is the author's handle.
-const TAGS = /^(INVERT|INTRO|LOGO|SLIDE|STORY|ANIM|STATIC|HALLOWEEN|XMAS)$/i;
-export const authorOf = (e) => e.flags.find((f) => !TAGS.test(f)) || '';
+// A flag that is not a keyword or season (util.js FLAGS) is the author's handle.
+export const authorOf = (e) => e.flags.find((f) => !isFlag(f)) || '';
 
 // Upload one GIF into a category and prepare it straight away: the GIF
 // (PUT /api/files/gifs/…), then its prepared copy, encoded here. A GIF that
@@ -89,7 +87,7 @@ export async function mount(el) {
   const chips = h('div.chips.scroll', { id: 'lib-chips' });
   const addInput = h('input', { type: 'file', multiple: true, accept: '.gif,image/gif', hidden: true, id: 'lib-add-files', onchange: () => { addGifs([...addInput.files]); addInput.value = ''; } });
   const addBtn = app.device && h('label.btn', { id: 'lib-add-btn', title: 'Upload GIFs to the card' }, 'Add GIFs…', addInput);
-  const artBtn = h('button.pri', { id: 'lib-art', title: 'Make a GIF for the panel from a picture', onclick: () => app.go('studio') }, '✎ Make art');
+  const artBtn = h('button', { id: 'lib-art', title: 'Make a GIF for the panel from a picture', onclick: () => app.go('studio') }, '✎ Make art');
   // Uploads in progress: a thin bar and a line.
   const addBar = h('i');
   const addMsg = h('span', { id: 'lib-add-progress' });
@@ -101,7 +99,7 @@ export async function mount(el) {
     h('span', selCount, ' selected'),
     h('div.row',
       h('button', { id: 'lib-all', onclick: selectAll }, 'Select shown'),
-      h('button.pri', { id: 'lib-to-set', onclick: toSet }, 'Add to playlist'),
+      h('button', { id: 'lib-to-set', onclick: toSet }, 'Add to playlist'),
       h('button', { onclick: () => { app.selection.clear(); sync(); } }, 'Clear')));
 
   // Favourite / hide / play longer act on one playlist: the one in play,
@@ -126,7 +124,7 @@ export async function mount(el) {
 
   // --- Details
   const canvas = h('canvas.panel', { id: 'lib-panel' });
-  const cap = h('div.cap.mono', { id: 'lib-cap' }, 'Pick a GIF to see it here');
+  const cap = h('div.cap', { id: 'lib-cap' }, 'Pick a GIF to see it here');
   const dTitle = h('h2', { id: 'lib-d-title' });
   const dd = (id) => h('dd', { id });
   const [dPlat, dCat, dAuthor, dTags] = ['lib-d-platform', 'lib-d-category', 'lib-d-author', 'lib-d-tags'].map(dd);
@@ -145,14 +143,18 @@ export async function mount(el) {
   // scrolling text, the effects.
   const liveBox = h('div', { id: 'lib-live', hidden: true });
   const editBtn = app.device && h('button', { id: 'lib-d-edit', onclick: () => edit() }, 'Edit details…');
-  const delBtn = app.device && h('button.danger', { id: 'lib-d-del', onclick: () => remove() }, 'Delete…');
-  const gifOnly = [facts, editArt, editBtn, delBtn].filter(Boolean);
+  const delBtn = app.device && h('button', { id: 'lib-d-del', onclick: () => remove() }, 'Delete…');
+  // The one place a GIF's path shows: small, last.
+  const dPath = h('span.mono');
+  const dFile = h('div.file.muted', { id: 'lib-d-file' }, 'File ', dPath);
+  const gifOnly = [facts, editArt, editBtn, delBtn, dFile].filter(Boolean);
   const body = h('div', { id: 'lib-d-body', hidden: true },
     dTitle, facts,
     h('div.row.acts', sendBtn, plBtn, editArt),
     smoothBox,
     h('div.row.acts', favBtn, hideBtn, ovHolder),
-    app.device && h('div.row.acts.end', editBtn, delBtn));
+    app.device && h('div.row.acts.end', editBtn, delBtn),
+    dFile);
   const side = h('div.side', { id: 'lib-side' },
     h('div.card', { id: 'lib-detail' },
       h('button.sm.close', { id: 'lib-d-close', 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
@@ -167,7 +169,7 @@ export async function mount(el) {
     side);
   el.append(grid);
 
-  const pv = new PanelPreview(canvas, { onError: (m) => { cap.textContent = 'preview: ' + m; } });
+  const pv = new PanelPreview(canvas, { onError: (m) => { cap.textContent = 'Preview: ' + m; } });
 
   async function preview(it) {
     current = it;
@@ -179,24 +181,28 @@ export async function mount(el) {
     dTitle.textContent = label(e);
     for (const x of gifOnly) x.hidden = !gif;
     dPlat.textContent = e.platform || '—';
-    dCat.textContent = e.category || '—';
+    dCat.textContent = e.category ? niceName(e.category) : '—';
     dAuthor.textContent = authorOf(e) || '—';
-    const tags = e.flags.filter((f) => TAGS.test(f));
-    dTags.textContent = tags.join(' · ');
+    const tags = e.flags.filter(isFlag);
+    dTags.textContent = tags.map(flagName).join(' · ');
+    dPath.textContent = it.path;
     tagsDt.hidden = dTags.hidden = !tags.length;
     syncOv();
-    if (sendBtn) { sendBtn.disabled = false; sendBtn.title = it.path; }
-    cap.textContent = 'loading…';
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.dataset.path = it.path; }
+    cap.textContent = 'Loading…';
+    delete cap.dataset.shown;
     if (smoothBox) Object.assign(smoothBox, { hidden: true }).dataset.state = 'analysing';
     let bytes;
     try {
       if (await pv.show(it.path, async (p) => (bytes = await app.previewBytes(p)))) {
         // An effect may run faster than the page's frames: play it by the clock.
         if (it.pick) pv.syncTo(0, performance.now());
-        cap.textContent = it.name;
+        // (data-shown: what the preview plays, for tools/web-smoke.py)
+        cap.textContent = '';
+        cap.dataset.shown = it.name;
         if (smoothBox && gif) import('./smooth.js').then((m) => m.detail(smoothBox, it, bytes, pv, cap)).catch(() => {});
       }
-    } catch (err) { cap.textContent = 'preview: ' + err.message; }
+    } catch (err) { cap.textContent = 'Preview: ' + err.message; }
   }
 
   // Favourite and Hide, in the chosen playlist.
@@ -281,14 +287,14 @@ export async function mount(el) {
   const real = () => cats.filter(([v]) => v[0] != '@').map(([v]) => v);
   async function categories() {
     let dirs = [];
-    try { dirs = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(); } catch (e) { toast('listing /gifs: ' + e.message, 'bad'); }
-    cats = [...dirs.map((d) => [d, d]), ['@', 'Live'], ['@fx', 'Effects']];
+    try { dirs = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch (e) { toast('listing /gifs: ' + e.message, 'bad'); }
+    cats = [...dirs.map((d) => [d, niceName(d)]), ['@', 'Live'], ['@fx', 'Effects']];
     if (!cats.some(([v]) => v === cat)) cat = dirs.includes('Consoles') ? 'Consoles' : cats[0][0];
     renderTabs();
     await load();
   }
   function renderTabs() {
-    clear(tabs, cats.map(([v, t]) => h('button.tab' + (v === cat ? '.on' : ''), {
+    clear(tabs, cats.map(([v, t]) => h('button.tab' + (v === cat ? '.on' : '') + (isSys(v) ? '.sys' : ''), {
       role: 'tab', 'data-cat': v, 'aria-selected': String(v === cat),
       onclick: () => { if (v !== cat) { cat = v; renderTabs(); load(); } },
     }, t)));
@@ -303,7 +309,7 @@ export async function mount(el) {
       renderChips();
       return apply();
     }
-    count.textContent = 'loading…';
+    count.textContent = 'Loading…';
     const want = cat, dir = `/gifs/${cat}`;
     let files = [];
     try { files = (await app.src.list(dir)).filter((f) => !f.dir).map((f) => f.name); } catch (e) { toast(`listing ${dir}: ${e.message}`, 'bad'); }
@@ -369,8 +375,8 @@ export async function mount(el) {
       try { added.push(await addOne(category, name, new Uint8Array(await file.arrayBuffer()), warn)); } catch (e) { warn(`${name}: ${e.message || e}`); }
     }
     addBar.style.width = '100%';
-    const where = [...new Set(plan.map((p) => p.category))].join(', ');
-    addMsg.textContent = `${added.length} of ${plan.length} added to ${where}.`;
+    const where = [...new Set(plan.map((p) => niceName(p.category)))].join(', ');
+    addMsg.textContent = `${added.length} of ${plan.length} added to ${where}`;
     if (added.length) {
       await reveal(added[0]);
       await offerPlaylist(added);
@@ -398,7 +404,7 @@ export async function mount(el) {
     if (!lists.length) lists.push({ path: '/filelist.txt', label: 'All files' });
     const want = ov.path && lists.some((p) => p.path === ov.path) ? ov.path
       : lists.some((p) => p.path === app.activePath) ? app.activePath : lists[0].path;
-    clear(ovHolder, 'in', playlistSelect(lists, want, (p) => ov.load(p)));
+    clear(ovHolder, 'In', playlistSelect(lists, want, (p) => ov.load(p)));
     if (want !== ov.path) await ov.load(want);
   }
 

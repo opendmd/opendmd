@@ -8,7 +8,7 @@ import * as prep from './prepare.js';
 import { timeCard, scheduleCard } from './schedule.js';
 import { followCard } from './follow.js';
 import { PanelPreview } from './preview.js';
-import { h, clear, on, toast, bytes, uptime, base } from './util.js';
+import { h, clear, on, toast, bytes, uptime, base, note } from './util.js';
 
 export async function mount(el) {
   if (!app.device) {
@@ -29,7 +29,7 @@ export async function mount(el) {
     transition: h('select', { id: 'st-trans' }, [['dissolve', 'Dissolve'], ['wipe_left', 'Wipe'], ['blinds', 'Blinds'], ['push', 'Push'], ['fade', 'Fade'], ['none', 'None']].map(([v, l]) => h('option', { value: v }, l))),
     transition_ms: h('select', { id: 'st-trans-ms', 'data-num': 1 }, [[250, 'Quick'], [400, 'Normal'], [700, 'Slow']].map(([v, l]) => h('option', { value: v }, l))),
     look: h('select', { id: 'st-look' }, [['colour', 'Full colour'], ['amber', 'Amber'], ['red', 'Red'], ['green', 'Green'], ['blue', 'Blue'], ['white', 'White']].map(([v, l]) => h('option', { value: v }, l))),
-    glow: h('select', { id: 'st-glow' }, ['off', 'short', 'long'].map((v) => h('option', { value: v }, v))),
+    glow: h('select', { id: 'st-glow' }, [['off', 'Off'], ['short', 'Short'], ['long', 'Long']].map(([v, l]) => h('option', { value: v }, l))),
   };
   f.look.value = c.look ?? 'colour';
   f.glow.value = c.glow ?? 'off';
@@ -61,7 +61,9 @@ export async function mount(el) {
     h('button.sm', { onclick: reboot }, 'Reboot now'));
   const facts = h('div.grid', { id: 'st-facts' });
   // One quiet line, only when the card has had trouble (sdhealth on the device).
-  const cardNote = h('p.cap', { id: 'st-card-note', hidden: true, style: 'margin-top:10px' });
+  const cardNote = h('p.cap', { id: 'st-card-note', hidden: true, style: 'margin-top:12px' });
+  // Where and what this player is: its address, its firmware and this page's version.
+  const about = h('p.cap', { id: 'st-about' });
 
   // The playlist choices, rebuilt whenever the config changes or the view
   // is shown: a playlist made or deleted elsewhere must not linger here.
@@ -77,7 +79,7 @@ export async function mount(el) {
   on('config', loadPlaylists);
   // --- playback cache
   const cacheLine = h('b', { id: 'pc-count' }, '…');
-  const cacheBtn = h('button.pri', { id: 'pc-go', onclick: () => (prep.job.running ? prep.stop() : prep.start()) }, 'Prepare remaining files');
+  const cacheBtn = h('button', { id: 'pc-go', onclick: () => (prep.job.running ? prep.stop() : prep.start()) }, 'Prepare remaining files');
   const cacheBar = h('i');
   const cacheMsg = h('div.muted', { id: 'pc-progress' });
   const cacheErr = h('div.log.bad', { id: 'pc-errors' });
@@ -88,7 +90,7 @@ export async function mount(el) {
   const always = h('input', { type: 'checkbox', id: 'pc-always', onchange: async () => {
     try { await app.src.putConfig({ auto_prepare: always.checked ? 'always' : 'idle' }); await app.refreshConfig(); loadCache(); } catch (e) { toast('save: ' + e.message, 'bad'); }
   } });
-  const autoBox = h('div', { hidden: true, style: 'margin-top:10px' }, autoLine, h('label', always, 'also while playing (slower)'));
+  const autoBox = h('div', { hidden: true, style: 'margin-top:12px' }, autoLine, h('label', always, 'Also while playing (slower)'));
 
   // Start-up: its own module and size line (js/boot.js), loaded here.
   const boot = h('div.card', { id: 'st-boot-card' });
@@ -101,47 +103,47 @@ export async function mount(el) {
   on('status', time.render);
 
   el.append(banner,
-    h('div.card', h('h2', 'Playback'), h('p.cap', 'Applied live. A playlist, platform or shuffle change rebuilds the index on the card (a few seconds).'),
+    h('div.card', h('h2', 'Playback'), note('A playlist, platform or shuffle change rebuilds the index', 'The card’s index is rebuilt in a few seconds; the panel holds its frame meanwhile.'),
       h('div.form',
-        h('label.stack', 'brightness', h('div.row', f.brightness, brightOut)),
-        h('label.stack', 'colour', f.look),
-        h('label.stack', 'phosphor glow', f.glow),
-        h('label.stack', 'dwell min / max (s)', h('div.row', f.dwell_min, f.dwell_max)),
-        h('label.stack', 'platforms', f.platforms),
-        h('label.stack', 'playlist', f.set),
-        h('label', f.shuffle, 'shuffle')),
-      h('div.row', { style: 'margin-top:12px' }, h('button.pri', { id: 'st-save-play', onclick: () => save(['brightness', 'look', 'glow', 'dwell_min', 'dwell_max', 'shuffle', 'platforms', 'set']) }, 'Save playback'))),
-    h('div.card', { id: 'st-trans-card' }, h('h2', 'Transition'), h('p.cap', 'How the panel moves from one GIF to the next.'),
-      h('div.form', h('label.stack', 'style', f.transition), h('label.stack', 'speed', f.transition_ms)),
+        h('label.stack', 'Brightness', h('div.row', f.brightness, brightOut)),
+        h('label.stack', 'Colour', f.look),
+        h('label.stack', 'Phosphor glow', f.glow),
+        h('label.stack', 'Dwell min / max (s)', h('div.row', f.dwell_min, f.dwell_max)),
+        h('label.stack', 'Platforms', f.platforms),
+        h('label.stack', 'Playlist', f.set),
+        h('label', f.shuffle, 'Shuffle')),
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-play', onclick: () => save(['brightness', 'look', 'glow', 'dwell_min', 'dwell_max', 'shuffle', 'platforms', 'set']) }, 'Save playback'))),
+    h('div.card', { id: 'st-trans-card' }, h('h2', 'Transition'), h('p.cap', 'How the panel moves from one GIF to the next'),
+      h('div.form', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-trans-preview', onclick: previewTrans }, 'Preview'),
-        h('button.pri', { id: 'st-save-trans', onclick: () => save(['transition', 'transition_ms']) }, 'Save transition')),
+        h('button', { id: 'st-save-trans', onclick: () => save(['transition', 'transition_ms']) }, 'Save transition')),
       pvBox),
     boot, power, time.el, sched.el, follow.el,
     h('div.card', { id: 'pc' }, h('h2', 'Playback cache'),
-      h('p.cap', 'Prepared copies play with less memory and start faster. Originals stay as they are.'),
+      note('Prepared copies play with less memory and start faster', 'Originals stay as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
-      h('div.bar', { style: 'margin:10px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox),
-    h('div.card', h('h2', 'Network'), h('p.cap', 'WiFi and hostname changes need a reboot. With no saved network the player raises the open OpenDMD-Setup access point.'),
+      h('div.bar', { style: 'margin:12px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox),
+    h('div.card', h('h2', 'Network'), note('WiFi and hostname changes need a reboot', 'With no saved network the player raises the open OpenDMD-Setup access point.'),
       h('div.form',
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
         h('label.stack', 'WiFi password', f.wifi_pass),
-        h('label.stack', 'hostname (.local)', f.hostname)),
-      h('div.row', { style: 'margin-top:10px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
-      h('div.row', { style: 'margin-top:12px' }, h('button.pri', { id: 'st-save-net', onclick: () => save(['wifi_ssid', 'wifi_pass', 'hostname']) }, 'Save network'))),
+        h('label.stack', 'Hostname (.local)', f.hostname)),
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: () => save(['wifi_ssid', 'wifi_pass', 'hostname']) }, 'Save network'))),
     h('div.card', h('h2', 'Device'), facts, cardNote,
-      h('p.cap', { style: 'margin-top:10px' }, 'Firmware updates are installed over USB with the browser flasher.'),
+      h('p.cap', { style: 'margin-top:12px' }, 'Firmware updates are installed over USB with the browser flasher'),
       h('div.row', { style: 'margin-top:12px' },
         h('button', { id: 'st-reindex', onclick: reindex }, 'Rebuild index'),
-        h('button.danger', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))));
+        h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
+    about);
 
   function renderFacts(s) {
     if (!s) return;
-    const fact = (k, v) => h('div.stat', h('b', { style: 'font-size:14px' }, v), h('span', k));
-    clear(facts, fact('firmware', s.version), fact('flash variant', s.variant), fact('panel', `128×32 · ${s.refresh_hz} Hz`),
-      fact('WiFi', `${s.wifi} · ${s.ip}`), fact('hostname', s.hostname + '.local'), fact('uptime', uptime(s.uptime_secs)),
-      fact('playlist', playlistLabel(s.manifest)), fact('entries', s.entries.toLocaleString()),
-      fact('index', s.index_state ?? '–'), fact('web app', s.www_version ?? '–'),
-      fact('card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'not mounted'));
+    const fact = (k, v) => h('div.stat', h('b', { style: 'font-size:15px' }, v), h('span', k));
+    clear(facts, fact('Panel', `128×32 · ${s.refresh_hz} Hz`), fact('Uptime', uptime(s.uptime_secs)),
+      fact('Playlist', playlistLabel(s.manifest)), fact('Entries', s.entries.toLocaleString()),
+      fact('Index', s.index_state ?? '–'), fact('Card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'Not mounted'));
+    about.textContent = `About · ${s.hostname}.local · ${s.ip} (${s.wifi}) · firmware ${s.version} ${s.variant} · web app ${s.www_version ?? '–'}`;
     const sd = s.sd;
     const errs = sd.failures || (!sd.mounted && sd.reboots) || 0;
     cardNote.textContent = errs ? `Card errors: ${errs}, retrying`
@@ -178,7 +180,7 @@ export async function mount(el) {
   }
 
   async function scan() {
-    clear(nets, h('span.muted', 'scanning…'));
+    clear(nets, h('span.muted', 'Scanning…'));
     try {
       const aps = await app.src.wifiScan();
       clear(nets, aps.sort((a, b) => b.rssi - a.rssi).map((ap) => h('button.chip', {

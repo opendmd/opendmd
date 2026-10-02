@@ -30,8 +30,8 @@ export function items(box, preview, refresh) {
   msg.onkeyup = (e) => e.key == 'Enter' && preview(text);
   speed.onchange = () => { set(); refresh(); preview(text); };
   set();
-  box.replaceChildren(h('div.form', { style: 'margin-top:10px' }, h('label.stack', 'scrolling text', msg), h('label.stack', 'speed', speed)),
-    h('p.cap', 'The clock shows the player’s own time. Add these to a playlist like any GIF.'));
+  box.replaceChildren(h('div.form', { style: 'margin-top:12px' }, h('label.stack', 'Scrolling text', msg), h('label.stack', 'Speed', speed)),
+    h('p.cap', 'The clock shows the player’s own time; add these to a playlist like any GIF'));
   return [...CLOCKS.map(([p, n]) => item(p, n)), text];
 }
 
@@ -50,22 +50,22 @@ const FX = [
 ];
 
 export function effects(box, preview, refresh) {
-  box.replaceChildren(h('p.cap', 'Pick an effect for its options.'));
+  box.replaceChildren(h('p.cap', 'Pick an effect for its options'));
   return FX.map(([fx, name, opts]) => {
     const it = { name };
     const sels = Object.entries(opts).map(([label, [vals, def, key = label]]) => {
       const s = h('select', { 'data-key': key, 'data-def': def }, vals.map((v) => { const [val, text = val] = [].concat(v); return h('option', { value: val }, text); }));
       s.value = def;
       s.onchange = () => { set(); refresh(); preview(it); };
-      return h('label.stack', label, s);
+      return h('label.stack', label[0].toUpperCase() + label.slice(1), s);
     });
-    const form = h('div.form', { id: 'fx-' + fx, style: 'margin-top:10px;grid-template-columns:repeat(auto-fill,minmax(110px,1fr))' }, sels);
+    const form = h('div.form', { id: 'fx-' + fx, style: 'margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(110px,1fr))' }, sels);
     const set = () => {
       const q = sels.map((l) => l.lastChild).filter((s) => s.value != s.dataset.def).map((s) => s.dataset.key + '=' + s.value).join('&');
       const path = `@fx:${fx}${q ? '?' + q : ''}`;
       Object.assign(it, { path, e: app.wasm.parsePath(path) }).norm = app.wasm.normalizeTitle(it.e.title);
     };
-    it.pick = () => box.firstChild != form && box.replaceChildren(form, h('p.cap', 'Drawn live by the panel. Add it to a playlist like any GIF.'));
+    it.pick = () => box.firstChild != form && box.replaceChildren(form, h('p.cap', 'Drawn live by the panel; add it to a playlist like any GIF'));
     set();
     return it;
   });

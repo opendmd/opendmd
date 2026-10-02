@@ -4,7 +4,7 @@
 // Drive · Sonic the Hedgehog 3 · 14 matching", or the sequence step).
 
 import { app } from './state.js';
-import { h, clear, on, toast } from './util.js';
+import { h, clear, on, toast, note } from './util.js';
 
 const STEPS = { power_on: 'powering on', logo: 'console logo', title: 'title card', waiting: 'title card' };
 
@@ -76,14 +76,14 @@ export function followCard() {
   }
 
   const el = h('div.card', { id: 'fo' }, h('h2', 'Follow RePlayOS'),
-    h('p.cap', 'When your RePlayOS box starts a game the panel shows the console’s logo and a title card, then art from that game and console. In the menus it plays the attract playlist. Turn on NET CONTROL on the box and copy its code from System → Information.'),
+    note('Show what your RePlayOS box is playing', 'When your RePlayOS box starts a game the panel shows the console’s logo and a title card, then art from that game and console. In the menus it plays the attract playlist. Turn on NET CONTROL on the box and copy its code from System → Information.'),
     h('div.form',
-      h('label', on_, 'follow RePlayOS'),
+      h('label', on_, 'Follow RePlayOS'),
       h('label.stack', 'RePlayOS address', host),
       h('label.stack', 'NET CONTROL code', code),
-      h('label.stack', 'attract playlist', attract)),
+      h('label.stack', 'Attract playlist', attract)),
     h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'fo-test', onclick: test }, 'Test'),
-      h('button.pri', { id: 'fo-save', onclick: save }, 'Save')),
+      h('button', { id: 'fo-save', onclick: save }, 'Save')),
     result, state);
   state.textContent = followLine(app.status) ?? 'Not following.';
   return { el };
