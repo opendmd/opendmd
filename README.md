@@ -186,6 +186,12 @@ make web-smoke                             # headless Chromium through every vie
 make www-push HOST=opendmd.local           # write the pack into the player's flash over WiFi
 ```
 
+**The API.** Every route the player serves, with its parameters, replies,
+limits and a `curl` example, is in [`docs/api.md`](docs/api.md). The same
+reference is in the web app (Settings → Advanced → About → API reference,
+`http://opendmd.local/api.html`), with the examples already pointing at
+that player.
+
 **Device mode or local mode.** The page asks `GET /api/status`; if a player
 answers, it is in device mode and everything below talks to that device. If
 not (a laptop running `make web-serve`), it offers a folder picker: point it

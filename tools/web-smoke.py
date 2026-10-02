@@ -148,7 +148,10 @@ every view like a person would:
             back; WiFi scan; the playlist choices are labelled; with
             /api/status rewritten to index_state "building" (Playwright
             route), set switching is disabled in Settings and Sets, and comes
-            back when it reads "ready"
+            back when it reads "ready"; About's "API reference" opens
+            api.html: served, `$DMD` replaced by the mock's origin in every
+            example, its contents links landing, no sideways scroll at phone
+            width
 
 Every view's visible text (and every title tooltip) is checked for "odm" and
 "bucket": prepared copies are an implementation detail.
@@ -1349,6 +1352,37 @@ def sim_checks(page: Page) -> None:
           f"sim: the start-up status card identical in the page and the simulator ({diff} of 4096 px differ, {lit_n} lit)")
 
 
+def api_page_checks(page: Page, base: str) -> None:
+    """The API reference (api.html, rendered from docs/api.md by `make web`):
+    linked from Settings -> About in a new tab, served from the pack, every
+    `$DMD` in its examples replaced by the page's own origin, a contents
+    list whose links all land, a Copy button per example, no sideways scroll
+    at phone width. (tools/api-doc-check.py, run by `make web`, holds the
+    doc's routes to http.rs.)"""
+    link = page.eval_on_selector("#st-api", "a => [a.getAttribute('href'), a.target]")
+    check(link == ["./api.html", "_blank"], f"api page: About links ./api.html in a new tab ({link})")
+    doc = page.context.new_page()
+    try:
+        r = doc.goto(base + "/api.html")
+        check(r is not None and r.status == 200 and r.headers.get("content-type", "").startswith("text/html"),
+              f"api page: served ({r.status if r else None}, {r.headers.get('content-type') if r else None})")
+        doc.wait_for_selector("pre button")
+        codes = doc.eval_on_selector_all("pre code", "els => els.map(e => e.textContent)")
+        want = f"curl -s {base}/api/status"
+        check(any(want in c for c in codes) and not any("$DMD" in c for c in codes),
+              f"api page: $DMD replaced by the origin in all {len(codes)} examples ('{want}')")
+        check(doc.locator("pre button").count() == len(codes), "api page: a Copy button per example")
+        bad = doc.evaluate("""() => [...document.querySelectorAll('nav.toc a')].filter(a =>
+            !document.getElementById(decodeURIComponent(a.hash.slice(1)))).map(a => a.hash)""")
+        n = doc.locator("nav.toc a").count()
+        check(n >= 30 and not bad, f"api page: {n} contents links, all landing ({bad[:3]})")
+        doc.set_viewport_size({"width": 390, "height": 800})
+        over = doc.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        check(over <= 0, f"api page: no sideways scroll at 390 px ({over} px over)")
+    finally:
+        doc.close()
+
+
 def mock_pass(browser) -> None:
     overlay = OUT / "overlay"
     shutil.rmtree(overlay, ignore_errors=True)
@@ -1691,6 +1725,7 @@ def mock_pass(browser) -> None:
         about = page.inner_text("#st-about")
         check(version in about and "ready" in facts, f"settings: www_version {version} (About) and index_state shown")
         www_mock_checks(page, base, version)
+        api_page_checks(page, base)
         opts = page.eval_on_selector_all("#st-set option", "els => els.map(e => [e.value, e.textContent])")
         check(opts[0] == ["", "All files (default)"] and ["filelist.xmas", "Christmas"] in opts
               and not any("odm" in v for v, _ in opts), f"settings: playlist choices {opts[:4]}")

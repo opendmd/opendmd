@@ -145,7 +145,10 @@ check-wasm:
 # (gzipped) are enforced by tools/web-size.py; the packer refuses a pack over
 # the www partition. www/version.txt (gitignored) is `git describe` of this
 # build: the pack's header carries it and the firmware reports it as
-# `www_version` in /api/status (the file itself is not packed).
+# `www_version` in /api/status (the file itself is not packed). The API
+# reference page, www/api.html (gitignored), is rendered from docs/api.md on
+# every build (tools/api-page.py), after tools/api-doc-check.py has checked
+# the doc's routes against firmware/src/http.rs both ways.
 WEB_WWW := $(WEB)/www
 web:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
@@ -153,6 +156,8 @@ web:
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
 	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
 	git describe --always --dirty --tags > $(WEB_WWW)/version.txt
+	uv run tools/api-doc-check.py
+	uv run tools/api-page.py docs/api.md $(WEB_WWW)/api.html
 	find $(WEB_WWW) -name '*.gz' -delete
 	find $(WEB_WWW) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' -o -name '*.json' \) \
 		-exec gzip -9 -n -k -f {} \;
