@@ -273,7 +273,7 @@ up as an **open access point, `OpenDMD-Setup`**:
 3. The player joins the network as **<http://opendmd.local/>**.
 4. Nothing to select for the prepared copies: the player finds them per
    file (section 1). A playlist is selected from the app, or with
-   `curl -X PUT -d '{"set":"<name>"}' http://opendmd.local/api/config`; a
+   `curl -X PUT --json '{"set":"<name>"}' http://opendmd.local/api/config`; a
    name that does not exist on the card is refused with a 404 and nothing is
    saved. The first selection of a manifest builds its `.idx` (~6 s for the
    full card, the display holds its frame meanwhile).
