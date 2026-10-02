@@ -72,7 +72,7 @@ export function followCard() {
     const body = { host: host.value.trim() };
     if (code.value) body.code = code.value;
     try {
-      const r = await app.src.json('POST', '/api/follow/test', JSON.stringify(body), 25000);
+      const r = await app.src.json('POST', '/api/follow/test', body, 25000);
       result.className = r.ok ? 'ok' : 'bad';
       result.textContent = r.ok
         ? `RePlayOS ${r.version || ''} answered · ${r.view === 'game_play' ? `playing ${r.game || r.system}` : r.view ? `in ${r.view.replace('_', ' ')}` : 'ok'}`

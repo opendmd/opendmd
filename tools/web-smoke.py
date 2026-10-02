@@ -142,8 +142,30 @@ every view like a person would:
   Web app   GET /api/www {version, bytes, entries, ok} (the version is
             www/version.txt, what the pack's header carries) and the same
             object as `www` in /api/status; PUT /api/www of the built pack
-            is a 200, of something that is not a pack a 400; no firmware
-            update card in Settings (OTA is gone)
+            is a 200, of something that is not a pack a 400
+  Firmware  a throwaway key pair (tools/fw-sign.py keygen; the mock started
+            with --ota-pub) and a fake image (0xE9 + random bytes) signed as
+            9.9.9-smoke, plus a copy with one image byte flipped. Settings ->
+            Advanced -> Firmware shows GET /api/firmware's version; a file
+            that is not a bundle is refused in the page; the tampered bundle
+            is refused by the mock (422, the reason shown, the version
+            unchanged); the good one shows its progress, "Restarting…", then
+            "Updated to 9.9.9-smoke" once /api/status reports it after the
+            mock's simulated restart (its API a 503 for 3 s), the updater's
+            `last` line shown and About updated
+  Security  the JSON routes without Content-Type application/json are 415
+            (any case, parameters allowed; raw uploads take any type); a
+            page from another origin (127.0.0.1:<another port>)
+            POSTs /api/skip (no-cors fetch) and submits a form to /api/play:
+            both 403, nothing skipped or played; the same Origin from a
+            script is a 403, its own origin (any case, :80 dropped) is not.
+            The API key (last): a bad one is a 400; Settings -> Advanced ->
+            Security's switch makes a 24-character key and shows it once
+            (not after a reload, the switch still on); then the API and card
+            files need it (401 + WWW-Authenticate: Bearer without; the header
+            or ?key= with; the app's own files stay open); a fresh browser
+            gets the key dialog, a wrong key asks again, the right one loads
+            Now; the switch off opens the API again
   Settings  www_version and index_state shown; PUT brightness, read it
             back; WiFi scan; the playlist choices are labelled; with
             /api/status rewritten to index_state "building" (Playwright
@@ -185,6 +207,7 @@ Any console error or page error fails the run.
 """
 import argparse
 import filecmp
+import http.server
 import json
 import os
 import re
@@ -192,6 +215,8 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -950,8 +975,8 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
           "settings: #st-glow options off/short/long")
     cfg0 = get_json(base + "/api/config")
     st0 = get_json(base + "/api/status")
-    check(list(cfg0)[-4:] == ["attract", "look", "glow", "boot_show"],
-          f"config: attract/look/glow/boot_show end the object ({list(cfg0)[-5:]})")
+    check(list(cfg0)[-5:] == ["attract", "look", "glow", "boot_show", "api_key_set"],
+          f"config: attract/look/glow/boot_show/api_key_set end the object ({list(cfg0)[-6:]})")
     check(list(st0)[-7:] == ["look", "glow", "glow_held", "attract_live", "max_brightness",
                              "brightness_safe_max", "safe_start_until"],
           f"status: look/glow/glow_held/attract_live/max_brightness/brightness_safe_max/safe_start_until"
@@ -1383,11 +1408,274 @@ def api_page_checks(page: Page, base: str) -> None:
         doc.close()
 
 
+OTA_VERSION = "9.9.9-smoke"
+
+
+def ota_bundles(tmp: Path) -> dict[str, Path]:
+    """A throwaway key pair, a fake app image signed as OTA_VERSION, a copy
+    of the bundle with one image byte flipped (tools/fw-sign.py), and a file
+    that is not a bundle at all."""
+    sign = ["uv", "run", "--quiet", str(REPO / "tools" / "fw-sign.py")]
+    subprocess.run([*sign, "keygen", "--key", str(tmp / "k"), "--pub", str(tmp / "p")], check=True, stdout=subprocess.DEVNULL)
+    (tmp / "app.bin").write_bytes(b"\xE9" + os.urandom(300_000))
+    good = tmp / "opendmd-9.9.9-smoke.odfw"
+    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", OTA_VERSION, "--out", str(good), "--key", str(tmp / "k")],
+                   check=True, stdout=subprocess.DEVNULL)
+    b = bytearray(good.read_bytes())
+    b[140 + 1000] ^= 1
+    bad = tmp / "tampered.odfw"
+    bad.write_bytes(bytes(b))
+    junk = tmp / "notes.odfw"
+    junk.write_bytes(b"not firmware at all " * 20)
+    return {"pub": tmp / "p", "good": good, "bad": bad, "junk": junk}
+
+
+def status_of(req: urllib.request.Request) -> tuple[int, dict]:
+    """The HTTP status and headers of a request, error or not."""
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+            return r.status, dict(r.headers)
+    except urllib.error.HTTPError as e:
+        e.read()
+        return e.code, dict(e.headers)
+
+
+def fw_message(page: Page, pattern: str, timeout_ms: int = 30000) -> str:
+    page.wait_for_function("p => new RegExp(p).test(document.querySelector('#fw-msg').textContent)", arg=pattern,
+                           timeout=timeout_ms)
+    return page.inner_text("#fw-msg")
+
+
+FW_WATCH = """() => { window.__fw = []; window.__fwBar = 0;
+  new MutationObserver(() => {
+    window.__fw.push(document.querySelector('#fw-msg').textContent);
+    window.__fwBar = Math.max(window.__fwBar, parseFloat(document.querySelector('#st-fw .bar i').style.width) || 0);
+  }).observe(document.querySelector('#st-fw'), { subtree: true, childList: true, characterData: true, attributes: true }); }"""
+
+
+def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
+    """Settings -> Advanced -> Firmware (js/firmware.js) against the mock's
+    PUT /api/firmware, verified with the throwaway key."""
+    goto_view(page, "settings")
+    page.wait_for_selector("#fw-facts dd", timeout=20000)
+    fw = get_json(base + "/api/firmware")
+    check(sorted(fw) == ["build", "last", "pending", "variant", "version"] and fw["pending"] is None,
+          f"firmware: GET /api/firmware {fw}")
+    v0 = fw["version"]
+    facts = page.inner_text("#fw-facts")
+    check(v0 in facts and fw["build"] in facts, f"firmware: the card shows {v0} ({facts!r})")
+    check(page.is_visible("#fw-go") and page.get_attribute("#fw-file", "accept") == ".odfw",
+          "firmware: Update from file… (.odfw)")
+    asked: list[str] = []
+    record = lambda d: asked.append(d.message)  # noqa: E731 - new_page's handler accepts
+    page.on("dialog", record)
+    page.set_input_files("#fw-file", str(ota["junk"]))
+    t = fw_message(page, "not an OpenDMD firmware file")
+    check(not asked, f"firmware: a file that is not a bundle is refused in the page ('{t}')")
+    expected.append("/api/firmware")
+    page.set_input_files("#fw-file", str(ota["bad"]))
+    t = fw_message(page, "^The player refused this file")
+    check("SHA-256 mismatch" in t and asked == [f"Install firmware {OTA_VERSION}? The panel goes dark for about half a minute."],
+          f"firmware: the tampered bundle is refused ('{t}'; asked {asked})")
+    check(get_json(base + "/api/firmware")["version"] == v0 and get_json(base + "/api/status")["version"] == v0,
+          "firmware: refused -> the version is unchanged")
+    check(not page.is_disabled("#fw-go"), "firmware: the button is back")
+    page.evaluate(FW_WATCH)
+    # The restart: the mock's API is a 503 for a few seconds.
+    expected.append("/api/")
+    try:
+        page.set_input_files("#fw-file", str(ota["good"]))
+        fw_message(page, "^Restarting… the panel comes back in about 20 s")
+        check(page.is_disabled("#fw-go"), "firmware: 'Restarting…', the button waits")
+        t = fw_message(page, f"^Updated to {re.escape(OTA_VERSION)}$", 60000)
+        check(True, f"firmware: '{t}' after the mock's restart")
+    finally:
+        expected.remove("/api/")
+        page.remove_listener("dialog", record)
+    sending = [m for m in page.evaluate("window.__fw") if m.startswith("Sending…")]
+    bar = page.evaluate("window.__fwBar")
+    check("Sending… 100%" in sending and bar == 100, f"firmware: upload progress shown ({sending[0] if sending else None} … "
+          f"{sending[-1] if sending else None}, bar {bar}%)")
+    fw = get_json(base + "/api/firmware")
+    st = get_json(base + "/api/status")
+    check(fw["version"] == OTA_VERSION and st["version"] == OTA_VERSION and fw["pending"] is None
+          and (fw["last"] or "").startswith("updater +") and f"updated to {OTA_VERSION}" in fw["last"],
+          f"firmware: the mock runs {OTA_VERSION} ({fw})")
+    page.wait_for_function("v => document.querySelector('#fw-facts').textContent.includes('updated to ' + v)"
+                           " && document.querySelector('#st-about').textContent.includes(v)", arg=OTA_VERSION, timeout=10000)
+    check(True, f"firmware: the card shows {OTA_VERSION} and the updater's line, About too")
+    page.locator("#st-fw").screenshot(path=str(OUT / "settings-firmware-laptop.png"))
+    expected.remove("/api/firmware")
+
+
+def json_type_checks(base: str) -> None:
+    """docs/api.md "Ground rules": a JSON body needs its content type."""
+    def req(method, path, body, ctype):
+        return status_of(urllib.request.Request(base + path, data=body, method=method,
+                                                headers={"Content-Type": ctype} if ctype else {}))[0]
+    j = b'{"path":"/gifs/Consoles/no-such-file.gif"}'
+    for method, path in (("POST", "/api/play"), ("PUT", "/api/config"), ("PUT", "/api/schedule"), ("POST", "/api/wake"),
+                         ("POST", "/api/cache/forget"), ("POST", "/api/cache/failed"), ("POST", "/api/follow/test"),
+                         ("POST", "/api/files/move")):
+        codes = (req(method, path, j, None), req(method, path, j, "text/plain"),
+                 req(method, path, j, "application/x-www-form-urlencoded"))
+        check(codes == (415, 415, 415), f"content type: {method} {path} without application/json -> {codes}")
+    check(req("PUT", "/api/config", b"{}", "Application/JSON; charset=utf-8") == 200,
+          "content type: 'Application/JSON; charset=utf-8' is JSON")
+    check(req("POST", "/api/skip", b"", None) == 200, "content type: an empty body needs none")
+    check(req("PUT", "/api/files/sets/cttest.txt", b"/gifs/x.gif\n", "text/plain") == 200
+          and req("DELETE", "/api/files/sets/cttest.txt", None, None) == 200, "content type: raw uploads take any")
+
+
+EVIL = """<!doctype html>
+<iframe name=sink></iframe>
+<form id=f method=post action="{base}/api/play" target=sink><input name=path value="{victim}"></form>
+<script>fetch('{base}/api/skip', {{method: 'POST', mode: 'no-cors'}}).finally(() => document.getElementById('f').submit());</script>"""
+
+
+def origin_checks(browser, base: str) -> None:
+    """docs/api.md "Security": a page from elsewhere cannot drive the player
+    through the browser; scripts (no Origin) and the app (its own) can."""
+    host = urllib.parse.urlsplit(base).netloc
+    if not get_json(base + "/api/status")["paused"]:
+        post_json(base + "/api/pause", {})  # the mock advances by itself otherwise
+    before = get_json(base + "/api/status")["now_playing"]
+    victim = next(f"/gifs/Consoles/{f['name']}" for f in get_json(base + "/api/files?dir=/gifs/Consoles")["entries"]
+                  if not f["dir"] and f["name"].endswith(".gif") and f"/gifs/Consoles/{f['name']}" != before["path"])
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    seen: dict[str, int] = {}
+    page.on("response", lambda r: r.url.startswith(base + "/api/") and seen.__setitem__(r.url[len(base):], r.status))
+    # Another origin: a page served from another port on this machine.
+    # (Chromium's local network checks keep a routed or made-up host from
+    # reaching 127.0.0.1 at all, which would prove nothing about the mock.)
+    html = EVIL.format(base=base, victim=victim).encode()
+
+    class Evil(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
+
+        def log_message(self, *_a):
+            pass
+    evil = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Evil)
+    threading.Thread(target=evil.serve_forever, daemon=True).start()
+    try:
+        page.goto(f"http://127.0.0.1:{evil.server_port}/evil.html")
+        deadline = time.time() + 10
+        while len(seen) < 2 and time.time() < deadline:
+            page.wait_for_timeout(100)
+    finally:
+        ctx.close()
+        evil.shutdown()
+    after = get_json(base + "/api/status")["now_playing"]
+    check(seen == {"/api/skip": 403, "/api/play": 403}, f"origin: another site's no-cors fetch and form post -> {seen}")
+    check(after["ordinal"] == before["ordinal"] and after["path"] == before["path"],
+          f"origin: nothing skipped or played (#{before['ordinal']} -> #{after['ordinal']}, {after['path']})")
+    post_json(base + "/api/pause", {})
+
+    def put_cfg(origin: str, host_hdr: str | None = None) -> int:
+        hd = {"Content-Type": "application/json", "Origin": origin}
+        if host_hdr:
+            hd["Host"] = host_hdr
+        return status_of(urllib.request.Request(base + "/api/config", data=b"{}", method="PUT", headers=hd))[0]
+    code, _ = status_of(urllib.request.Request(base + "/api/skip", data=b"", method="POST", headers={"Origin": "http://evil.test"}))
+    check(code == 403, f"origin: a script sending Origin http://evil.test -> {code}")
+    port = host.split(":")[1]
+    codes = (put_cfg(f"http://{host}"), put_cfg(f"HTTP://{host.upper()}"), put_cfg("http://opendmd.local", "opendmd.local:80"),
+             put_cfg("http://opendmd.local:8080", "opendmd.local"), put_cfg(f"http://localhost:{port}"))
+    check(codes == (200, 200, 200, 403, 403), f"origin: its own (any case, :80 dropped) allowed, others not {codes}")
+
+
+def key_checks(browser, page: Page, base: str) -> None:
+    """The optional API key: Settings -> Advanced -> Security, the 401s, the
+    key dialog in a fresh browser, and off again. Last: nothing after it may
+    need a key."""
+    check(put_status(base, {"api_key": "short"}) == 400 and put_status(base, {"api_key": "has a space"}) == 400,
+          "key: a bad api_key is a 400")
+    cfg = get_json(base + "/api/config")
+    check(cfg.get("api_key_set") is False and "api_key" not in cfg, "key: config has api_key_set false, never the key")
+    goto_view(page, "settings")
+    page.wait_for_selector("#sec-key", timeout=20000)
+    check(not page.is_checked("#sec-key") and "plain HTTP" in page.inner_text("#st-sec"), "key: Security card, switch off")
+    expected.append("/api/")  # 401s are the point from here on
+    try:
+        page.check("#sec-key")
+        page.wait_for_selector("#sec-key-val", timeout=10000)
+        key = page.input_value("#sec-key-val")
+        check(re.fullmatch(r"[A-Za-z0-9]{24}", key) is not None and "It is not shown again" in page.inner_text("#st-sec"),
+              f"key: a 24-character key, shown once ({key})")
+        page.locator("#st-sec").screenshot(path=str(OUT / "settings-security-laptop.png"))
+        check(json.loads(page.evaluate("localStorage.getItem('odmd.apiKey')")) == key, "key: kept in this browser")
+        code, hd = status_of(urllib.request.Request(base + "/api/status"))
+        check(code == 401 and hd.get("WWW-Authenticate") == "Bearer",
+              f"key: /api/status without it -> {code}, WWW-Authenticate {hd.get('WWW-Authenticate')}")
+        gif = next(l for l in (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n") if l.strip().endswith(".gif")).strip()
+        gif_url = base + urllib.parse.quote(gif)
+        codes = [status_of(urllib.request.Request(u))[0] for u in (gif_url, base + "/filelist.txt", base + "/sets/x.txt",
+                                                                  base + "/cache/x.gif")]
+        check(codes == [401] * 4, f"key: card files without it -> {codes}")
+        k = {"Authorization": "Bearer " + key}
+        codes = [status_of(urllib.request.Request(base + "/api/config", headers=k))[0],
+                 status_of(urllib.request.Request(base + "/api/status?key=" + key))[0],
+                 status_of(urllib.request.Request(gif_url, headers=k))[0],
+                 status_of(urllib.request.Request(gif_url + "?key=" + key))[0],
+                 status_of(urllib.request.Request(base + "/api/status", headers={"Authorization": "Bearer wrong-wrong"}))[0]]
+        check(codes == [200, 200, 200, 200, 401], f"key: the header or ?key= -> 200, a wrong one 401 {codes}")
+        codes = [status_of(urllib.request.Request(base + u))[0] for u in ("/", "/index.html", "/app.js", "/js/source.js", "/api.html")]
+        check(codes == [200] * 5, f"key: the app's own files need none {codes}")
+        check(page.locator("#st-sec .tick.bad").count() == 0 and page.is_checked("#sec-key"), "key: the switch is on, saved")
+        # Shown once: a reload (the key is kept here, so no dialog) has the
+        # switch on and no key in sight.
+        page.reload()
+        goto_view(page, "settings")
+        page.wait_for_function("document.querySelector('#sec-key') && document.querySelector('#sec-key').checked", timeout=20000)
+        check(page.locator("#sec-key-val").count() == 0 and page.locator("#key-dlg").count() == 0,
+              "key: after a reload the switch is on, the key not shown, no dialog")
+        # Another browser: the dialog; a wrong key asks again; the right one works.
+        fresh: list[str] = []
+        other = new_page(browser, "laptop", fresh)
+        other.goto(base + "/")
+        other.wait_for_selector("#key-dlg[open]", timeout=20000)
+        check("This player needs its API key" in other.inner_text("#key-dlg"), "key: a fresh browser gets the key dialog")
+        other.screenshot(path=str(OUT / "key-dialog-laptop.png"))
+        other.fill("#key-in", "wrong-key-wrong")
+        other.click("#key-dlg button.pri")
+        other.wait_for_selector("#key-dlg[open]", timeout=10000)
+        check(True, "key: a wrong key asks again")
+        other.fill("#key-in", key)
+        other.click("#key-dlg button.pri")
+        other.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')",
+                                timeout=20000)
+        wait_lit(other, "#now-panel", "key: now")
+        check(other.locator("#key-dlg").count() == 0 and json.loads(other.evaluate("localStorage.getItem('odmd.apiKey')")) == key,
+              "key: the right key loads Now (preview lit) and is kept")
+        other.context.close()
+        bad = [e for e in fresh if "HTTP 401" not in e and "401 (Unauthorized)" not in e]
+        check(not bad, f"key: the fresh browser's only errors are its 401s {bad[:3]}")
+        # Off again: the API is open, the key forgotten here.
+        page.uncheck("#sec-key")
+        deadline = time.time() + 10
+        while status_of(urllib.request.Request(base + "/api/config"))[0] != 200 and time.time() < deadline:
+            time.sleep(0.2)
+        page.wait_for_function("!JSON.parse(localStorage.getItem('odmd.apiKey') || 'null')", timeout=10000)
+        check(get_json(base + "/api/config")["api_key_set"] is False and page.locator("#sec-key-val").count() == 0,
+              "key: switched off -> the API is open, the key forgotten here")
+    finally:
+        expected.remove("/api/")
+
+
 def mock_pass(browser) -> None:
     overlay = OUT / "overlay"
     shutil.rmtree(overlay, ignore_errors=True)
     overlay.mkdir(parents=True)
-    proc, base = start_mock(["--root", str(CARD), "--overlay", str(overlay), "--dwell", "4"])
+    ota_tmp = tempfile.TemporaryDirectory(prefix="web-smoke-ota-")
+    ota = ota_bundles(Path(ota_tmp.name))
+    proc, base = start_mock(["--root", str(CARD), "--overlay", str(overlay), "--dwell", "4", "--ota-pub", str(ota["pub"])])
     errors: list[str] = []
     try:
         print(f"\n== mock device at {base} (overlay {overlay})")
@@ -1837,8 +2125,13 @@ def mock_pass(browser) -> None:
               f"nav: five views with Make art, no Convert ({views})")
         follow_checks(page, base, errors)
         phone_pass(browser, base, errors)
+        json_type_checks(base)
+        origin_checks(browser, base)
+        firmware_checks(page, base, ota)
+        key_checks(browser, page, base)
     finally:
         proc.terminate()
+        ota_tmp.cleanup()
     report_errors("mock", errors)
 
 
@@ -3070,7 +3363,6 @@ def www_mock_checks(page: Page, base: str, version: str) -> None:
         except urllib.error.HTTPError as e:
             code = e.code
         check(code == want, f"web app: PUT /api/www ({len(body):,} B) -> {code}")
-    check(page.locator("#st-ota, #st-ota-go").count() == 0, "web app: no firmware update card in Settings")
 
 
 def pack_files(www: Path) -> dict[str, tuple[Path, bool]]:

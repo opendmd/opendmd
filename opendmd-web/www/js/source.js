@@ -10,7 +10,7 @@
 // Paths are card-absolute (`/gifs/Consoles/X.gif`). Nothing is cached here;
 // a file's bytes live only as long as the caller holds them.
 
-import { enc, base } from './util.js';
+import { enc, base, store } from './util.js';
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -23,19 +23,34 @@ async function check(res) {
   throw new HttpError(res.status, `${res.status}: ${msg}`);
 }
 
+// The API key (Settings → Advanced → Security) goes with every request; a
+// 401 asks for it (js/firmware.js; once for all callers, Cancel: not again)
+// and retries.
+let asking;
+const askKey = async () => { const k = await (asking ??= import('./firmware.js').then((m) => m.askKey())); if (k) asking = null; return k; };
+export const auth = (hd) => { const k = store.get('apiKey'); return k ? { ...hd, Authorization: 'Bearer ' + k } : hd; };
+export async function dfetch(url, init = {}, ms = 90000) {
+  for (;;) {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
+    let r;
+    try { r = await fetch(url, { cache: 'no-store', ...init, signal: ctl.signal, headers: auth(init.headers) }); } finally { clearTimeout(t); }
+    if (r.status !== 401 || !await askKey()) return r;
+  }
+}
+
 export class DeviceSource {
   kind = 'device';
   canWrite = true;
 
-  async req(method, url, body, timeout = 90000) {
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), timeout);
+  // A plain object goes as JSON; text, bytes or a Blob as they are.
+  async req(method, url, body, timeout) {
+    const j = body?.constructor === Object;
     try {
-      return await check(await fetch(url, { method, body, signal: ctl.signal, cache: 'no-store' }));
+      return await check(await dfetch(url, { method, body: j ? JSON.stringify(body) : body, headers: j ? { 'Content-Type': 'application/json' } : {} }, timeout));
     } catch (e) {
       if (e.name === 'AbortError') throw new HttpError(0, `${method} ${url}: timed out`);
       throw e;
-    } finally { clearTimeout(t); }
+    }
   }
   json(method, url, body, timeout) { return this.req(method, url, body, timeout).then((r) => r.json()); }
 
@@ -43,14 +58,14 @@ export class DeviceSource {
   config() { return this.json('GET', '/api/config'); }
   // A playlist change (set, platforms, shuffle) rebuilds the index on the
   // device, which takes seconds; the firmware waits up to 60 s for it.
-  putConfig(patch) { return this.json('PUT', '/api/config', JSON.stringify(patch)); }
+  putConfig(patch) { return this.json('PUT', '/api/config', patch); }
   skip() { return this.json('POST', '/api/skip'); }
   pause() { return this.json('POST', '/api/pause'); }
   reindex() { return this.json('POST', '/api/reindex'); }
   reboot() { return this.json('POST', '/api/reboot'); }
   wifiScan() { return this.json('GET', '/api/wifi/scan', undefined, 20000); }
   // One file onto the panel now: 404 if it does not open, 415 if not a GIF.
-  play(path) { return this.json('POST', '/api/play', JSON.stringify({ path })); }
+  play(path) { return this.json('POST', '/api/play', { path }); }
   // {path, exists, size, is_dir} from one `stat`, i.e. one scan of the parent
   // directory on the device: ~20 ms in a bucket, ~600 ms in gifs/Consoles.
   stat(path) { return this.json('GET', '/api/stat?path=' + encodeURIComponent(path)); }
@@ -58,20 +73,20 @@ export class DeviceSource {
   // card paths of every prepared copy; and forgetting a GIF's copy.
   cache() { return this.json('GET', '/api/cache', undefined, 15000); }
   async cacheList() { return (await this.json('GET', '/api/cache/list', undefined, 180000)).paths; }
-  forget(path) { return this.json('POST', '/api/cache/forget', JSON.stringify({ path })); }
+  forget(path) { return this.json('POST', '/api/cache/forget', { path }); }
   // Rename a GIF: its prepared copy, Smooth motion line and failure line
   // follow on the device; playlists and overrides are the caller's.
-  move(from, to) { return this.json('POST', '/api/files/move', JSON.stringify({ from, to })); }
+  move(from, to) { return this.json('POST', '/api/files/move', { from, to }); }
   // GIFs that can never be prepared ([{path, reason}], the device's
   // /cache/.failed), and recording one. Not in every firmware yet.
   cacheFailed() { return this.json('GET', '/api/cache/failed'); }
-  cacheFail(path, reason) { return this.json('POST', '/api/cache/failed', JSON.stringify({ path, reason })); }
+  cacheFail(path, reason) { return this.json('POST', '/api/cache/failed', { path, reason }); }
   // A playlist's per-GIF overrides, parsed: {set, playlist, overrides: [...]}.
   overrides(set) { return this.json('GET', '/api/overrides?set=' + encodeURIComponent(set)); }
   // The schedule (rules + night mode), whole; and suspending it for a while.
   schedule() { return this.json('GET', '/api/schedule'); }
-  putSchedule(s) { return this.json('PUT', '/api/schedule', JSON.stringify(s)); }
-  wake(minutes) { return this.json('POST', '/api/wake', JSON.stringify({ minutes })); }
+  putSchedule(s) { return this.json('PUT', '/api/schedule', s); }
+  wake(minutes) { return this.json('POST', '/api/wake', { minutes }); }
 
   async list(dir) {
     const r = await this.json('GET', '/api/files?dir=' + encodeURIComponent(dir));
@@ -189,9 +204,7 @@ export class LocalSource {
 // Device mode is whatever answers `GET /api/status` like the firmware.
 export async function detect() {
   try {
-    const ctl = new AbortController();
-    setTimeout(() => ctl.abort(), 4000);
-    const r = await fetch('/api/status', { signal: ctl.signal, cache: 'no-store' });
+    const r = await dfetch('/api/status', {}, 4000);
     if (!r.ok) return null;
     const s = await r.json();
     return s && 'now_playing' in s ? { src: new DeviceSource(), status: s } : null;

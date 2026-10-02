@@ -3,7 +3,8 @@
 // reboot). Four cards (Playback, Transition, Start-up, Power) that save as
 // they change; everything else under Advanced: time, schedule, Follow
 // RePlayOS, the playback cache, network (its own Save: it reboots), the
-// device's facts, reindex and reboot, and the About line.
+// device's facts, reindex and reboot, firmware and security (js/firmware.js),
+// and the About line.
 
 import { app, playlistLabel } from './state.js';
 import * as prep from './prepare.js';
@@ -118,7 +119,10 @@ export async function mount(el) {
   const sched = scheduleCard();
   const follow = followCard();
   on('status', time.render);
-  const adv = h('details.card', { id: 'st-adv', open: store.get('advanced', false), ontoggle: () => store.set('advanced', adv.open) }, h('summary', 'Advanced'),
+  const fw = h('div.grp', { id: 'st-fw', hidden: true }), sec = h('div.grp', { id: 'st-sec', hidden: true });
+  let fwq;
+  const fwLoad = () => adv.open && (fwq ??= import('./firmware.js').then((m) => m.fwCards(fw, sec)));
+  const adv = h('details.card', { id: 'st-adv', open: store.get('advanced', false), ontoggle: () => { store.set('advanced', adv.open); fwLoad(); } }, h('summary', 'Advanced'),
     time.el, sched.el, follow.el,
     h('div.grp', { id: 'pc' }, pcH,
       note('Prepared copies play with less memory and start faster', 'Originals stay as they are.'),
@@ -132,11 +136,10 @@ export async function mount(el) {
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: () => save(['wifi_ssid', 'wifi_pass', 'hostname'], net) }, 'Save network'))),
     h('div.grp', h('h3', 'Device'), facts, cardNote,
-      h('p.cap', { style: 'margin-top:12px' }, 'Firmware updates are installed over USB with the browser flasher'),
       h('div.row', { style: 'margin-top:12px' },
         h('button', { id: 'st-reindex', onclick: reindex }, 'Rebuild index'),
         h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
-    h('div.grp', h('h3', 'About'), about));
+    fw, sec, h('div.grp', h('h3', 'About'), about));
 
   el.append(banner,
     h('div.card', playH, note('A playlist, platform or shuffle change rebuilds the index', 'The card’s index is rebuilt in a few seconds; the panel holds its frame meanwhile.'),
@@ -281,6 +284,7 @@ export async function mount(el) {
   on('prepare', renderJob);
 
   import('./power.js').then((m) => m.powerCard(power));
+  fwLoad();
   renderFacts(app.status);
   time.render(app.status);
   renderJob(prep.job);

@@ -14,6 +14,7 @@
 
 import { app } from './state.js';
 import { art } from './artmod.js';
+import { dfetch } from './source.js';
 import { h, clear, enc, toast } from './util.js';
 
 export const LIST = '/sets/.smooth';
@@ -57,7 +58,7 @@ const writeList = (list) => app.src.writeFile(LIST, list.map((p) => p + '\n').jo
 // is in (the device ignores Range; asking costs nothing).
 async function isSmooth(path) {
   const m = await art();
-  const res = await fetch(enc(app.wasm.cachePathFor(path)), { cache: 'no-store', headers: { Range: 'bytes=0-1023' } });
+  const res = await dfetch(enc(app.wasm.cachePathFor(path)), { headers: { Range: 'bytes=0-1023' } });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const r = res.body.getReader();
