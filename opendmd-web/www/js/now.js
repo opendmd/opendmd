@@ -10,14 +10,12 @@ import { app, playlistLabel } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
-import { h, clear, on, store, debounce, toast, bytes, uptime, label, niceName, flagName } from './util.js';
+import { h, clear, on, store, debounce, toast, bytes, uptime, label, niceName, flagName, brightSlider } from './util.js';
 
 const POLL_MS = 500;
 
-function tags(e) {
-  return [e.platform && h('span.tag', e.platform), e.category && h('span.tag', niceName(e.category)),
-    ...e.flags.map((f) => h('span.tag', flagName(f)))];
-}
+// "Exolon2 · Spectrum · Slide": the platform, category and flags by name.
+const tags = (e) => [e.platform, e.category && niceName(e.category), ...e.flags.map(flagName)].filter(Boolean).map((t) => ' · ' + t).join('');
 
 export async function mount(el) {
   return app.device ? mountDevice(el) : mountLocal(el);
@@ -28,30 +26,33 @@ function mountDevice(el) {
   const follow = h('input', { type: 'checkbox', id: 'now-follow', checked: store.get('follow', true) });
   const cap = h('div.cap', { id: 'now-cap' });
   const drift = h('span.mono.muted', { id: 'now-drift' });
-  const title = h('h2', { id: 'now-title' }, '…');
+  const title = h('b', { id: 'now-title' }, '…');
   // The file's path: never shown (the title says what it is); kept for tools/web-smoke.py.
   const meta = h('span', { id: 'now-path', hidden: true });
-  const followEl = h('div', { id: 'now-follow-line', hidden: true });
-  const ord = h('span.muted', { id: 'now-ord' });
+  const followEl = h('span.tag.fl', { id: 'now-follow-line', hidden: true });
+  const tagsEl = h('span', { id: 'now-tags' });
+  const ord = h('span', { id: 'now-ord' });
   const pauseBtn = h('button', { id: 'now-pause', onclick: togglePause }, 'Pause');
-  const bright = h('input', { type: 'range', min: 1, max: 255, step: 1, id: 'now-bright', value: app.config?.brightness ?? 96 });
-  const brightOut = h('output.mono', bright.value);
-  const grid = h('div.grid', { id: 'now-stats' });
-  const conn = h('span', { id: 'now-conn' });
+  const bright = brightSlider('now-bright', app.config?.brightness ?? 96);
+  bright.ceil(app.config?.max_brightness);
+  const grid = h('span.figs', { id: 'now-stats' });
+  const facts = h('dl.facts', { id: 'now-facts', style: 'margin-top:16px' });
+  const conn = h('span.dot', { id: 'now-conn' });
+  const more = h('details.card', { id: 'now-more', open: store.get('health', false), ontoggle: () => store.set('health', more.open) },
+    h('summary', grid, h('span.muted', 'More')), facts);
 
   const banner = h('div.banner', { id: 'now-banner', hidden: true });
   el.append(
     banner,
-    h('div.card', canvas, h('div.row', cap, h('label.cap', { style: 'margin-left:auto' }, follow, 'Follow the panel'))),
-    h('div.card',
-      h('div.row.sp', h('div.grow', title, followEl, h('div', { id: 'now-tags' }), meta), h('div.muted', ord, ' ', conn)),
-      h('div.row', { style: 'margin-top:12px' },
-        h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'), pauseBtn,
-        h('label', 'Brightness', bright, brightOut))),
-    h('div.card', h('h2', 'Health'), grid),
+    h('div.card', canvas, cap,
+      h('div.row.capl', h('span.grow', title, h('span.muted', tagsEl, ' · ', ord), ' ', followEl, ' ', conn, meta),
+        h('label.cap', follow, 'Follow the panel')),
+      h('div.row', { style: 'margin-top:12px' }, pauseBtn, h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'),
+        h('label', 'Brightness', bright.el))),
+    more,
     lookControls(drift));
 
-  const preview = new PanelPreview(canvas, { onError: (m) => { cap.textContent = 'preview: ' + m; } });
+  const preview = new PanelPreview(canvas, { wrap: el, onError: (m) => { cap.textContent = 'Preview: ' + m; } });
   let shownPath = '';
   let timer = 0;
   let failures = 0;
@@ -63,8 +64,8 @@ function mountDevice(el) {
   const sendBright = debounce(async (v) => {
     try { await app.src.putConfig({ brightness: v }); if (app.config) app.config.brightness = v; } catch (e) { toast('brightness: ' + e.message, 'bad'); }
   }, 300);
-  bright.oninput = () => { brightOut.textContent = bright.value; sendBright(+bright.value); };
-  on('config', (c) => { if (document.activeElement !== bright) { bright.value = c.brightness; brightOut.textContent = c.brightness; } });
+  bright.input.addEventListener('input', () => sendBright(+bright.input.value));
+  on('config', (c) => { bright.ceil(c.max_brightness); if (document.activeElement !== bright.input) bright.set(c.brightness); });
 
   async function skip() {
     try { await app.src.skip(); setTimeout(poll, 400); } catch (e) { toast(e.message, 'bad'); }
@@ -118,7 +119,8 @@ function mountDevice(el) {
     drift.textContent = `Drift ${Math.round(d)} ms · RTT ${Math.round(best.rtt)} ms`;
   }
 
-  function stat(name, value, cls = '') { return h('div.stat', h('b' + cls, value), h('span', name)); }
+  const stat = (name, value) => h('span.stat', h('b', value), h('span', name));
+  const fact = (name, value, bad) => [h('dt', name), h('dd' + (bad ? '.bad' : ''), value)];
 
   function render(s) {
     if (!s) return;
@@ -127,29 +129,29 @@ function mountDevice(el) {
     const virt = np.path?.startsWith('@');
     const e = app.wasm.parsePath(virt ? '' : np.path || '');
     title.textContent = virt ? np.title : np.path ? label(e) : 'Nothing playing';
-    clear(el.querySelector('#now-tags'), np.path && !virt ? tags(e) : null);
+    tagsEl.textContent = np.path && !virt ? tags(e) : '';
     meta.textContent = virt ? '' : np.path;
     const fl = followLine(s);
     followEl.hidden = !fl;
-    followEl.textContent = fl ?? '';
+    followEl.textContent = followEl.title = fl ?? '';
     ord.textContent = `${np.ordinal} of ${s.entries.toLocaleString()}`;
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
     const b = bannerFor(s, () => setTimeout(poll, 300));
     banner.hidden = !b;
     banner.dataset.mode = s.mode || 'normal';
     if (b) clear(banner, b);
-    const set = playlistLabel(s.manifest);
     clear(grid,
       stat('Uptime', uptime(s.uptime_secs)),
-      stat('Address', s.ip || '–'),
       stat('Free memory', bytes(s.heap.free)),
-      stat('Lowest free memory', bytes(s.heap.floor), s.heap.floor < 20000 ? '.bad' : ''),
-      stat('Refresh', s.refresh_hz + ' Hz'),
-      stat('Deadline misses', s.deadline_misses.toLocaleString()),
-      stat('Worst lateness', s.worst_lateness_ms + ' ms'),
-      stat('Files started', s.gifs_started.toLocaleString()),
-      stat('Playlist', set),
-      stat('Card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'Not mounted', s.sd.mounted ? '' : '.bad'));
+      stat('Deadline misses', s.deadline_misses.toLocaleString()));
+    clear(facts,
+      fact('Address', s.ip || '–'),
+      fact('Lowest free memory', bytes(s.heap.floor), s.heap.floor < 20000),
+      fact('Refresh', s.refresh_hz + ' Hz'),
+      fact('Worst lateness', s.worst_lateness_ms + ' ms'),
+      fact('Files started', s.gifs_started.toLocaleString()),
+      fact('Playlist', playlistLabel(s.manifest)),
+      fact('Card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'Not mounted', !s.sd.mounted));
     if (preview.paused !== s.paused) preview.setPaused(s.paused);
     follow_(np.path);
   }
@@ -169,11 +171,11 @@ function mountDevice(el) {
       sync();
       if (failures && preview.path) cap.textContent = '';
       failures = 0;
-      conn.className = 'ok';
-      conn.textContent = '● Live';
+      conn.className = 'dot ok';
+      conn.title = 'Live';
     } catch (e) {
-      conn.className = 'bad';
-      conn.textContent = ++failures > 1 ? '● Offline' : '● Retrying';
+      conn.className = 'dot bad';
+      conn.title = ++failures > 1 ? 'Offline' : 'Retrying';
       if (preview.path) cap.textContent = 'Panel not reachable';
     } finally { busy = false; }
   }
@@ -187,8 +189,8 @@ function mountDevice(el) {
 
 function mountLocal(el) {
   const canvas = h('canvas.panel', { id: 'now-panel' });
-  const title = h('h2', { id: 'now-title' }, 'Local simulator');
-  const line = h('div.muted', { id: 'now-path' });
+  const title = h('b', { id: 'now-title' }, 'Local simulator');
+  const line = h('span.muted', { id: 'now-path' });
   const listSel = h('select', { id: 'sim-list' });
   const plats = h('input', { type: 'text', id: 'sim-platforms', placeholder: 'MD,SNES — blank for all', size: 18 });
   const shuffle = h('input', { type: 'checkbox', id: 'sim-shuffle' });
@@ -199,14 +201,15 @@ function mountLocal(el) {
   let i = -1;
 
   el.append(
-    h('div.card', canvas, h('div.cap', 'One file in memory at a time, with the firmware’s 3–30 s dwell')),
-    h('div.card', title, line,
+    h('div.card', canvas,
+      h('div.row.capl', h('span.grow', title, ' ', line), h('span.cap', 'One file in memory at a time, with the firmware’s 3–30 s dwell')),
       h('div.row', { style: 'margin-top:12px' },
         h('label', 'Playlist', listSel), h('label', 'Platforms', plats), h('label', shuffle, 'Shuffle'), h('label', 'Seed', seed),
-        h('button.pri', { id: 'sim-play', onclick: play }, 'Play'), nextBtn, pauseBtn)),
+        h('button.pri', { id: 'sim-play', onclick: play }, 'Play'), pauseBtn, nextBtn)),
     lookControls());
 
   const preview = new PanelPreview(canvas, {
+    wrap: el,
     onDwellEnd: () => next(),
     onError: (m) => { toast(m, 'bad'); next(); },
   });
@@ -237,7 +240,7 @@ function mountLocal(el) {
     if (!src.files.has(path)) return next(tries + 1);
     const e = app.wasm.parsePath(path);
     title.textContent = label(e);
-    line.textContent = `${i + 1} of ${list.length}`;
+    line.textContent = `· ${i + 1} of ${list.length}`;
     await preview.show(path, (p) => app.previewBytes(p));
   }
 
