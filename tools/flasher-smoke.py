@@ -11,8 +11,9 @@ index.html, firmware/ with dist/'s manifest and the files it names), serves
 it on a free localhost port, and checks: ESP Web Tools loads from jsDelivr
 (the pinned version) and defines `<esp-web-install-button>`; the button's
 Install control renders (headless Chromium has `navigator.serial`, so the
-"unsupported" slot must not be what shows); the manifest parses, names four
-parts at 0x1000/0x8000/0x10000/0x2C0000, each one is served, and the page
+"unsupported" slot must not be what shows); the manifest parses, names six
+parts at 0x1000/0x8000/0xF000/0x20000/0x260000/0x2C0000 (layout v2,
+docs/ota.md), each one is served, and the page
 lists them; the parts' sizes add up inside 4 MB; no console or page errors.
 
 What it cannot do: the flash itself. Web Serial's port picker needs a
@@ -55,7 +56,7 @@ def main() -> int:
         shutil.copy(DIST / part["path"], SITE / "firmware" / part["path"])
 
     offsets = [p["offset"] for p in parts]
-    check(m["builds"][0]["chipFamily"] == "ESP32" and offsets == [0x1000, 0x8000, 0x10000, 0x2C0000],
+    check(m["builds"][0]["chipFamily"] == "ESP32" and offsets == [0x1000, 0x8000, 0xF000, 0x20000, 0x260000, 0x2C0000],
           f"manifest: ESP32, parts at {[hex(o) for o in offsets]}")
     check(m.get("new_install_prompt_erase") is True, "manifest: the installer asks whether to erase")
     ends = [p["offset"] + (DIST / p["path"]).stat().st_size for p in parts]
@@ -89,9 +90,9 @@ def main() -> int:
         visible = page.locator("#install-activate").is_visible()
         unsupported = page.evaluate("document.querySelector('#install').hasAttribute('install-unsupported')")
         check(visible and not unsupported, f"the Install button renders (visible {visible}, unsupported {unsupported})")
-        page.wait_for_function("document.querySelectorAll('#parts tr').length === 4", timeout=10000)
+        page.wait_for_function("document.querySelectorAll('#parts tr').length === 6", timeout=10000)
         rows = page.eval_on_selector_all("#parts tr", "rs => rs.map(r => r.innerText.replace(/\\s+/g, ' ').trim())")
-        check(len(rows) == 4 and rows[-1].endswith("0x2C0000"), f"the page lists the parts: {rows}")
+        check(len(rows) == 6 and rows[-1].endswith("0x2C0000"), f"the page lists the parts: {rows}")
         check(page.inner_text("#version") == f"OpenDMD {m['version']}", f"the page shows {page.inner_text('#version')!r}")
         for part in parts:
             r = page.request.get(f"{base}/firmware/{part['path']}")

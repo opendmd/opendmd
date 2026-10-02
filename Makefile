@@ -24,9 +24,13 @@ FW_BINARY := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/opendmd-firmware
 # with this sdkconfig rather than espflash's bundled one.
 FW_BOOTLOADER := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/bootloader.bin
 
-# The flash layout (firmware/partitions.csv): one app, then the web app's
-# www pack in its own partition. Keep in step with the CSV.
-FW_APP_BYTES := 2818048
+# The flash layout v2 (firmware/partitions.csv, docs/ota.md): otadata, the
+# firmware in factory, the updater in ota_0, the web app's www pack. Keep in
+# step with the CSV.
+OTADATA_OFFSET := 0xF000
+FW_APP_OFFSET := 0x20000
+FW_APP_BYTES := 2359296
+UPDATER_OFFSET := 0x260000
 WWW_OFFSET := 0x2C0000
 WWW_BYTES := 1310720
 # `make web` writes the pack here (gitignored); fw-flash writes it at WWW_OFFSET.
@@ -68,7 +72,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-flash fw-sign www-push flasher flasher-smoke card-sync api-load
+	fw-release fw-release-flash fw-sign updater www-push flasher flasher-smoke card-sync api-load
 
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
@@ -259,12 +263,14 @@ fw-build: fw-sdkconfig-flavour
 # these CH340 boards, so it stays at 115200.
 MONITOR_BAUD := 921600
 
-# Bootloader + partition table + app, then the web app's pack at WWW_OFFSET
-# (a second espflash call: `flash` takes one app image), then the monitor.
-# A board still on the old dual-OTA table wants `make fw-erase` first (NVS
-# goes too); see docs/deploying.md.
-fw-flash: fw-build web
-	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(WWW_PACK) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_BOOTLOADER) --partition-table $(FW)/partitions.csv --flash-size 4mb --monitor --monitor-baud $(MONITOR_BAUD) $(FW_BINARY)'
+# Bootloader + partition table + app (into factory, otadata erased so it
+# boots), then the web app's pack at WWW_OFFSET and the updater at
+# UPDATER_OFFSET (`write-bin`s: `flash` takes one app image), then the
+# monitor. A board on an older table (v1: one app at 0x10000; or the
+# dual-OTA one before it) wants `make fw-erase` first (NVS goes too); see
+# docs/deploying.md.
+fw-flash: fw-build web updater
+	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(WWW_PACK) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(UPDATER_BIN) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_BOOTLOADER) --partition-table $(FW)/partitions.csv --erase-parts otadata --flash-size 4mb --monitor --monitor-baud $(MONITOR_BAUD) $(FW_BINARY)'
 
 # NOTE: do NOT capture serial with `cat $(PORT)` or stty tricks — they toggle
 # DTR/RTS and the DevKit V1's auto-reset circuit reboots (or holds) the chip,
@@ -317,12 +323,14 @@ fw-clean:
 # app, as a set of files in dist/ for the browser flasher (flasher/, ESP Web
 # Tools) or espflash:
 #
-#   opendmd-<ver>-app.bin          the app image, flashed at 0x10000
+#   opendmd-<ver>-app.bin          the app image, flashed at 0x20000 (factory)
+#   updater.bin                    the updater (ota/updater), at 0x260000 (ota_0)
+#   ota_data_initial.bin           otadata erased (8 KB of 0xFF) at 0xF000: boots factory
 #   opendmd-<ver>-www.pack         the web app, flashed at 0x2C0000
 #   bootloader.bin                 at 0x1000
 #   partition-table.bin            at 0x8000
-#   opendmd-<ver>-4mb-full.bin     all four merged into one 4 MB image (offset 0)
-#   manifest.json                  ESP Web Tools: the four parts and offsets
+#   opendmd-<ver>-4mb-full.bin     all six merged into one 4 MB image (offset 0)
+#   manifest.json                  ESP Web Tools: the six parts and offsets
 #   opendmd-<ver>.odfw             the signed bundle for PUT /api/firmware (fw-sign)
 #
 # The version comes from firmware/Cargo.toml and is also written into the app
@@ -344,10 +352,10 @@ DIST := dist
 FW_APP_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-app.bin
 FW_WWW_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-www.pack
 FW_FULL_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT)-full.bin
-# The app image may use at most this share of the factory partition.
-FW_APP_MAX_PCT := 95
+# The app image must leave at least this much of the factory partition free.
+FW_APP_SPARE := 65536
 
-fw-release: web
+fw-release: web updater
 	@test -n "$(FW_VERSION)" || { echo "cannot read the version from $(FW)/Cargo.toml"; exit 2; }
 	@mkdir -p $(FW)/target $(DIST)
 	@{ echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"'; \
@@ -360,18 +368,24 @@ fw-release: web
 	 echo "app descriptor version: '$$desc'"; \
 	 test "$$desc" = "$(FW_VERSION) $(FW_VARIANT)" || { echo "expected '$(FW_VERSION) $(FW_VARIANT)' at 0x30"; exit 1; }
 	@size=$$(stat -c %s $(FW_APP_IMAGE)); \
-	 limit=$$(( $(FW_APP_BYTES) * $(FW_APP_MAX_PCT) / 100 )); \
+	 spare=$$(( $(FW_APP_BYTES) - size )); \
 	 pct=$$(awk "BEGIN { printf \"%.1f\", $$size * 100 / $(FW_APP_BYTES) }"); \
-	 echo "$(FW_APP_IMAGE): $$size B = $$pct% of the $(FW_APP_BYTES) B app partition (limit $(FW_APP_MAX_PCT)% = $$limit B)"; \
-	 test $$size -le $$limit || { echo "image exceeds $(FW_APP_MAX_PCT)% of the app partition"; exit 1; }
+	 echo "$(FW_APP_IMAGE): $$size B = $$pct% of the $(FW_APP_BYTES) B factory partition, $$spare B spare (need $(FW_APP_SPARE))"; \
+	 test $$spare -ge $(FW_APP_SPARE) || { echo "the app image leaves less than $(FW_APP_SPARE) B of the factory partition"; exit 1; }
 	$(MAKE) --no-print-directory fw-sign
 	cp $(WWW_PACK) $(FW_WWW_IMAGE)
 	cp $(FW_RELEASE_BOOTLOADER) $(DIST)/bootloader.bin
+	cp $(UPDATER_BIN) $(DIST)/updater.bin
+	cp $(UPDATER_BUILD)/build/ota_data_initial.bin $(DIST)/ota_data_initial.bin
 	bash -c '. $(ESPUP_ENV) && espflash partition-table --to-binary -o $(DIST)/partition-table.bin $(FW)/partitions.csv'
 	@# The merged image: espflash lays out bootloader, table and app padded to
-	@# 4 MB with 0xFF; the pack goes in at its offset on top.
+	@# 4 MB with 0xFF (so otadata is erased: the bootloader boots factory);
+	@# the updater and the pack go in at their offsets on top.
 	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW)/partitions.csv $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
+	dd if=$(DIST)/updater.bin of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(UPDATER_OFFSET) / 4096 )) conv=notrunc status=none
 	dd if=$(FW_WWW_IMAGE) of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(WWW_OFFSET) / 4096 )) conv=notrunc status=none
+	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(FW_APP_OFFSET) / 4096 )) count=1 status=none | head -c 1 | od -An -tx1 | tr -d ' ')" = e9 || { echo "no app image at $(FW_APP_OFFSET) in $(FW_FULL_IMAGE)"; exit 1; }
+	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(OTADATA_OFFSET) / 4096 )) count=2 status=none | tr -d '\377' | wc -c)" = 0 || { echo "otadata is not erased in $(FW_FULL_IMAGE)"; exit 1; }
 	@test $$(stat -c %s $(FW_FULL_IMAGE)) -eq 4194304 || { echo "$(FW_FULL_IMAGE) is not 4 MB"; exit 1; }
 	@printf '%s\n' '{' \
 	  '  "name": "OpenDMD",' \
@@ -384,13 +398,15 @@ fw-release: web
 	  '      "parts": [' \
 	  '        { "path": "bootloader.bin", "offset": 4096 },' \
 	  '        { "path": "partition-table.bin", "offset": 32768 },' \
-	  '        { "path": "opendmd-$(FW_VERSION)-app.bin", "offset": 65536 },' \
+	  '        { "path": "ota_data_initial.bin", "offset": '$$(( $(OTADATA_OFFSET) ))' },' \
+	  '        { "path": "opendmd-$(FW_VERSION)-app.bin", "offset": '$$(( $(FW_APP_OFFSET) ))' },' \
+	  '        { "path": "updater.bin", "offset": '$$(( $(UPDATER_OFFSET) ))' },' \
 	  '        { "path": "opendmd-$(FW_VERSION)-www.pack", "offset": '$$(( $(WWW_OFFSET) ))' }' \
 	  '      ]' \
 	  '    }' \
 	  '  ]' \
 	  '}' > $(DIST)/manifest.json
-	@echo "dist/:"; ls -l $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(FW_BUNDLE) $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(FW_FULL_IMAGE) $(DIST)/manifest.json
+	@echo "dist/:"; ls -l $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(FW_BUNDLE) $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(FW_FULL_IMAGE) $(DIST)/manifest.json
 
 # The signed bundle for a LAN update (docs/ota.md): the release app image
 # behind a 140-byte header signed with the private key, which never enters
@@ -406,17 +422,45 @@ fw-sign:
 	uv run --quiet tools/fw-sign.py sign $(FW_APP_IMAGE) --version $(FW_VERSION) --out $(FW_BUNDLE) --key $(FW_SIGN_KEY)
 	uv run --quiet tools/fw-sign.py verify $(FW_BUNDLE) --pub $(FW)/keys/opendmd.pub
 
-# First install on a board over USB, from the release build: the same four
-# parts as dist/ (bootloader, table, app, pack). From DMDoS, other firmware or
-# the old dual-OTA table: `make fw-erase` first.
+# First install on a board over USB, from the release build: the same parts
+# as dist/ (bootloader, table, otadata erased, app, updater, pack). From
+# DMDoS, other firmware or an older table: `make fw-erase` first.
 fw-release-flash: fw-release
-	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW)/partitions.csv --flash-size $(FW_VARIANT) --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
+	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(DIST)/updater.bin && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW)/partitions.csv --erase-parts otadata --flash-size $(FW_VARIANT) --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
 
 # The web app over WiFi: PUT the pack to /api/www, then check the version
 # the device reports. make www-push HOST=opendmd.local [WWW_PACK=dist/...]
 www-push:
 	@test -n "$(HOST)" || { echo "usage: make www-push HOST=<ip-or-name> [WWW_PACK=$(WWW_PACK)]"; exit 2; }
 	tools/www-push.sh $(HOST) $(WWW_PACK)
+
+# The updater (ota/updater, docs/ota.md): a small C ESP-IDF app for the
+# ota_0 partition that copies a staged firmware image from the card into
+# factory. Built with idf.py against the same ESP-IDF v5.3 checkout that
+# esp-idf-sys uses (~/.espressif, ESP_IDF_TOOLS_INSTALL_DIR = "global").
+# Not through export.sh: embuild installed only the tools a build needs, and
+# export.sh refuses to run without the debuggers; the environment below is
+# what it would set for those. The build dir and sdkconfig live under
+# UPDATER_BUILD, outside the tree. Must fit ota_0 (0x60000) with 32 KB spare.
+ESPRESSIF := $(HOME)/.espressif
+UPDATER_IDF := $(ESPRESSIF)/esp-idf/v5.3
+UPDATER_PYENV := $(ESPRESSIF)/python_env/idf5.3_py3.13_env
+UPDATER_BUILD ?= ~/scratch/opendmd-target/updater
+UPDATER_BIN := $(UPDATER_BUILD)/build/opendmd-updater.bin
+UPDATER_SLOT := 393216
+UPDATER_SPARE := 32768
+UPDATER_ENV := IDF_PATH=$(UPDATER_IDF) IDF_PYTHON_ENV_PATH=$(UPDATER_PYENV) \
+	ESP_ROM_ELF_DIR=$(ESPRESSIF)/tools/esp-rom-elfs/20240305/ \
+	PATH=$(UPDATER_PYENV)/bin:$(ESPRESSIF)/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf/bin:$(ESPRESSIF)/tools/cmake/3.24.0/bin:$(ESPRESSIF)/tools/ninja/1.11.1:$(UPDATER_IDF)/tools:$$PATH
+updater:
+	@mkdir -p $(UPDATER_BUILD)
+	@# idf.py only reads sdkconfig.defaults into a new sdkconfig.
+	@if [ ota/updater/sdkconfig.defaults -nt $(UPDATER_BUILD)/sdkconfig ]; then rm -f $(UPDATER_BUILD)/sdkconfig; fi
+	cd ota/updater && env $(UPDATER_ENV) python $(UPDATER_IDF)/tools/idf.py \
+		-B $(UPDATER_BUILD)/build -DSDKCONFIG=$(UPDATER_BUILD)/sdkconfig build
+	@size=$$(stat -c %s $(UPDATER_BIN)); \
+	 echo "$(UPDATER_BIN): $$size B of the $(UPDATER_SLOT) B ota_0 slot, $$(( $(UPDATER_SLOT) - size )) B spare (need $(UPDATER_SPARE))"; \
+	 test $$(( size + $(UPDATER_SPARE) )) -le $(UPDATER_SLOT) || { echo "the updater does not fit ota_0 with $(UPDATER_SPARE) B spare"; exit 1; }
 
 # The browser flasher (flasher/index.html, ESP Web Tools) with the dist/ set
 # from `make fw-release`, on http://localhost:8765: Web Serial needs a secure
@@ -427,7 +471,7 @@ flasher:
 	@test -f $(DIST)/manifest.json || { echo "no $(DIST)/manifest.json: run make fw-release first"; exit 2; }
 	rm -rf $(FLASHER_SITE) && mkdir -p $(FLASHER_SITE)/firmware
 	cp flasher/index.html $(FLASHER_SITE)/
-	cp $(DIST)/manifest.json $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(FLASHER_SITE)/firmware/
+	cp $(DIST)/manifest.json $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(FLASHER_SITE)/firmware/
 	cp $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(FW_FULL_IMAGE) $(FLASHER_SITE)/firmware/
 	@echo "open http://localhost:$(FLASHER_PORT)/ in Chrome or Edge"
 	uv run python -m http.server $(FLASHER_PORT) --bind 127.0.0.1 -d $(FLASHER_SITE)

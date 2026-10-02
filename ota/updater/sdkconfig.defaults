@@ -1,0 +1,50 @@
+# OpenDMD updater (ota/updater, docs/ota.md). Small on purpose: it must fit
+# the 384 KB ota_0 partition with room to spare.
+CONFIG_IDF_TARGET="esp32"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# The firmware's table; the path is relative to this project's directory.
+# Keep the offsets in updater.c's comments and the Makefile in step with it.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../firmware/partitions.csv"
+
+# Same console as the firmware (every serial tool on the project is 921600);
+# the baud is only settable on a "custom" UART console: UART0 on GPIO1/3.
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_CUSTOM_NUM_0=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+
+# Size over speed: the copy is bound by the card and the flash, not the CPU.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# No radio at all: Bluetooth off; WiFi is never initialised, so none of
+# its libraries are linked (ESP_WIFI_ENABLED has no prompt in v5.3).
+CONFIG_BT_ENABLED=n
+
+# FATFS with long names, as the firmware (the card is the same card).
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+
+# The task watchdog watches both idle tasks; the copy loop yields after
+# every 4 KB write and every 64 KB erase, and a hang (a wedged card) resets
+# into the updater again, which retries from the file.
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=15
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# A panic restarts (and so retries) rather than halting.
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+
+# Flash erases yield, so the idle tasks run during the long ones.
+CONFIG_SPI_FLASH_YIELD_DURING_ERASE=y
+
+CONFIG_APP_PROJECT_VER_FROM_CONFIG=y
+CONFIG_APP_PROJECT_VER="updater 1"
+
+# app_main does the copy: FATFS, printf and the SHA context want more than
+# the 3.5 KB default (the 4 KB copy buffer is static, not on the stack).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

@@ -72,7 +72,7 @@
           player's settings in NVS: <b>WiFi network and password, brightness, the playlist, the schedule and night window, and
           Follow RePlayOS</b>. The board then starts as the open WiFi access point <code>OpenDMD-Setup</code>; join it and enter your
           network.</li>
-        <li><b>Unticked</b> (an update of a board already running OpenDMD): only the firmware, the web app, the bootloader and the
+        <li><b>Unticked</b> (an update of a board already running OpenDMD): only the firmware, its updater, the web app, the bootloader and the
           partition table are written. The settings stay, and the player comes back on your network.</li>
       </ul>
     </li>
@@ -85,7 +85,9 @@
     <thead><tr><th>part</th><th>offset</th></tr></thead>
     <tbody id="parts"><tr><td colspan="2" style="color: var(--muted)">reading the manifest…</td></tr></tbody>
   </table>
-  <p>These four parts are what the <a href="firmware/manifest.json">manifest</a> lists. The same four merged into one
+  <p>These six parts are what the <a href="firmware/manifest.json">manifest</a> lists: the bootloader, the partition table,
+    <code>otadata</code> erased (so the board boots the firmware), the firmware, the small updater that installs later firmware
+    updates sent over WiFi, and the web app. The same six merged into one
     4 MB image, <code>opendmd-&lt;version&gt;-4mb-full.bin</code>, sits beside it for tools that flash one file at offset 0
     (<code>esptool write-flash 0 …</code>): that rewrites all 4 MB, settings included. Without a browser, from a checkout:
     <code>make fw-release-flash</code>.</p>
