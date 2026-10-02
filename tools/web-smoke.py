@@ -139,10 +139,11 @@ every view like a person would:
             the same save (config and PUT reply carry both); the warning is
             hidden at/below brightness_safe_max and shown above it; the
             control saves and round-trips (mock only; settings restored)
-  Web app   GET /api/www {version, bytes, entries, ok} (the version is
-            www/version.txt, what the pack's header carries) and the same
-            object as `www` in /api/status; PUT /api/www of the built pack
-            is a 200, of something that is not a pack a 400
+  Web app   GET /api/www {version, bytes, entries, ok, error, staged} (the
+            version is www/version.txt, what the pack's header carries;
+            staged null before a PUT) and the same object as `www` in
+            /api/status; PUT /api/www of the built pack is a 200 with staged
+            true (kept by GET), of something that is not a pack a 400
   Firmware  a throwaway key pair (tools/fw-sign.py keygen; the mock started
             with --ota-pub) and a fake image (0xE9 + random bytes) signed as
             9.9.9-smoke, plus a copy with one image byte flipped. Settings ->
@@ -167,7 +168,9 @@ every view like a person would:
             gets the key dialog, a wrong key asks again, the right one loads
             Now; the switch off opens the API again
   Settings  www_version and index_state shown; PUT brightness, read it
-            back; WiFi scan; the playlist choices are labelled; with
+            back; WiFi scan; a hostname change replies reboot_required true
+            (a brightness write false) and Save network shows the reboot
+            prompt for it (hostname restored); the playlist choices are labelled; with
             /api/status rewritten to index_state "building" (Playwright
             route), set switching is disabled in Settings and Sets, and comes
             back when it reads "ready"; About's "API reference" opens
@@ -177,6 +180,11 @@ every view like a person would:
 
 Every view's visible text (and every title tooltip) is checked for "odm" and
 "bucket": prepared copies are an implementation detail.
+
+Unreadable-card pass: a second mock with `--sd unreadable` (a card that
+mounts but cannot be read, exFAT): status `sd` {mounted: true, readable:
+false, error naming FAT32}, the Now page's Card line "Not readable: format
+it FAT32" in red, and PUT /api/www replying staged false.
 
 A few requests fail on purpose (the 404/415 plays, a preview's try for a
 prepared copy that is not there, and the aborted GIF download); they are
@@ -2008,6 +2016,7 @@ def mock_pass(browser) -> None:
         page.click("#st-scan")
         page.wait_for_selector("#st-nets .chip", timeout=15000)
         check(True, "settings: WiFi scan listed networks")
+        hostname_checks(page, base)
         version = (REPO / "opendmd-web" / "www" / "version.txt").read_text().strip()
         facts = page.inner_text("#st-facts")
         about = page.inner_text("#st-about")
@@ -3346,23 +3355,78 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
+def hostname_checks(page: Page, base: str) -> None:
+    """A hostname change needs a reboot: the reply says so, and Settings →
+    Network shows the reboot prompt for it (not only for WiFi)."""
+    before = get_json(base + "/api/config")["hostname"]
+    r = put_json(base + "/api/config", {"brightness": get_json(base + "/api/config")["brightness"]})
+    check(r.get("reboot_required") is False, f"config: no reboot for a brightness write ({r.get('reboot_required')})")
+    r = put_json(base + "/api/config", {"hostname": before + "-x"})
+    check(r.get("reboot_required") is True, f"config: a hostname change replies reboot_required true ({r.get('reboot_required')})")
+    put_json(base + "/api/config", {"hostname": before})
+    page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
+    page.wait_for_function(f"document.querySelector('#st-hostname').value === {json.dumps(before)}", timeout=5000)
+    check(page.is_hidden("#st-reboot"), "settings: no reboot prompt before a network change")
+    page.fill("#st-hostname", before + "-smoke")
+    page.click("#st-save-net")
+    page.wait_for_selector("#st-reboot", state="visible", timeout=5000)
+    check("hostname" in page.inner_text("#st-reboot") and get_json(base + "/api/config")["hostname"] == before + "-smoke",
+          "settings: Save network with a new hostname shows the reboot prompt")
+    put_json(base + "/api/config", {"hostname": before})
+    page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
+    page.evaluate("document.querySelector('#st-reboot').hidden = true")
+
+
+def put_www(base: str, body: bytes) -> tuple[int, dict | None]:
+    req = urllib.request.Request(base + "/api/www", data=body, method="PUT",
+                                 headers={"Content-Type": "application/octet-stream"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.load(r)
+    except urllib.error.HTTPError as e:
+        return e.code, None
+
+
 def www_mock_checks(page: Page, base: str, version: str) -> None:
     """GET/PUT /api/www against the mock; the OTA card is gone."""
     w = get_json(base + "/api/www")
-    check(sorted(w) == ["bytes", "entries", "error", "ok", "version"] and w["ok"] and w["version"] == version
-          and w["entries"] > 10, f"web app: GET /api/www {w}")
+    check(sorted(w) == ["bytes", "entries", "error", "ok", "staged", "version"] and w["ok"] and w["version"] == version
+          and w["entries"] > 10 and w["staged"] is None, f"web app: GET /api/www {w}")
     st = get_json(base + "/api/status")
     check(st.get("www") == w and st.get("www_version") == version, "web app: /api/status carries www and www_version")
     pack = REPO / "opendmd-web" / "www.pack"
     for body, want in ((pack.read_bytes(), 200), (b"not a pack at all", 400)):
-        req = urllib.request.Request(base + "/api/www", data=body, method="PUT",
-                                     headers={"Content-Type": "application/octet-stream"})
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                code = r.status
-        except urllib.error.HTTPError as e:
-            code = e.code
+        code, reply = put_www(base, body)
         check(code == want, f"web app: PUT /api/www ({len(body):,} B) -> {code}")
+        if want == 200:
+            check(reply is not None and reply.get("staged") is True and get_json(base + "/api/www")["staged"] is True,
+                  f"web app: PUT /api/www with a card replies staged true, and GET /api/www keeps it ({reply})")
+
+
+def sd_unreadable_pass(browser) -> None:
+    """`mock-device.py --sd unreadable`: a card that mounts but cannot be
+    read (exFAT). Status says so, the Now page names it, nothing is staged."""
+    proc, base = start_mock(["--root", str(CARD), "--sd", "unreadable"])
+    errors: list[str] = []
+    try:
+        print(f"\n== mock device with an unreadable card at {base}")
+        sd = get_json(base + "/api/status")["sd"]
+        check(sd["mounted"] is True and sd["readable"] is False and "FAT32" in (sd["error"] or ""),
+              f"unreadable card: status sd {{mounted: true, readable: false, error}} ({sd})")
+        page = new_page(browser, "laptop", errors)
+        page.goto(base + "/")
+        page.wait_for_function("[...document.querySelectorAll('#now-facts dt')].some(e => e.textContent === 'Card')", timeout=20000)
+        card = page.evaluate("() => { const dt = [...document.querySelectorAll('#now-facts dt')].find(e => e.textContent === 'Card');"
+                             " const dd = dt.nextElementSibling; return [dd.textContent, dd.classList.contains('bad')]; }")
+        check(card == ["Not readable: format it FAT32", True], f"unreadable card: Now's Card line says so, in red ({card})")
+        shot(page, "now-sd-unreadable", "laptop")
+        code, reply = put_www(base, (REPO / "opendmd-web" / "www.pack").read_bytes())
+        check(code == 200 and reply is not None and reply.get("staged") is False,
+              f"unreadable card: PUT /api/www is not staged ({code}, staged {reply and reply.get('staged')})")
+        page.context.close()
+    finally:
+        proc.terminate()
+    report_errors("mock (unreadable card)", errors)
 
 
 def pack_files(www: Path) -> dict[str, tuple[Path, bool]]:
@@ -3576,6 +3640,7 @@ def main() -> int:
         browser = p.chromium.launch(headless=True)
         if not args.device_only:
             mock_pass(browser)
+            sd_unreadable_pass(browser)
         if args.device:
             device_pass(browser, args.device.rstrip("/"))
         browser.close()

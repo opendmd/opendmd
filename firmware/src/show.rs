@@ -37,6 +37,11 @@ pub const CARD_FAILING: &str = "The card is failing";
 /// ... and when the card is there but its playlist will not play.
 const NO_PLAYLIST: &str = "No playlist on the card";
 const EMPTY_PLAYLIST: &str = "The playlist is empty";
+/// ... and when the card mounts but its filesystem cannot be read (exFAT:
+/// `config::SD_UNREADABLE`).
+const CARD_UNREADABLE: &str = "Card not readable: needs FAT32";
+// The small font's 4 px advance: 32 characters fill the 128 px panel.
+const _: () = assert!(CARD_UNREADABLE.len() <= 32);
 /// How often the text is read from status.
 const TEXT_EVERY: Duration = Duration::from_millis(250);
 
@@ -94,6 +99,7 @@ impl Text {
         t.note = match problem {
             Some(p) => p,
             None if ready => "",
+            None if s.sd_mounted && !s.sd_readable => CARD_UNREADABLE,
             None if s.sd_mounted => "Loading the playlist",
             None => s.sd_error.as_deref().map_or("Reading the card", plain),
         };

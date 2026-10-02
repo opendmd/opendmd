@@ -198,7 +198,7 @@ export async function mount(el) {
       await app.refreshConfig();
       f.wifi_pass.value = '';
       f.wifi_pass.placeholder = app.config.wifi_pass_set ? 'unchanged (one is saved)' : 'none saved';
-      if (r.reboot_required || 'hostname' in patch) banner.hidden = false;
+      if (r.reboot_required) banner.hidden = false;
     });
   }
 

@@ -41,6 +41,15 @@ the card slower and wear it harder. So use a card of 32 GB or less and leave
 its filesystem alone. (Cards of 64 GB and up are SDXC and ship as exFAT, which
 the player cannot read; don't use one.)
 
+What an exFAT card looks like: it is found and mounted (the log says
+`microSD mounted at /sdcard (62.53 GB …)`), but nothing on it can be read
+(`No such device`), so nothing plays. The panel's status card says **Card
+not readable: needs FAT32**, the web app's Now page says **Card: Not
+readable: format it FAT32**, and `/api/status` has `sd.mounted` true,
+`sd.readable` false and `sd.error` "card not readable: format it FAT32, or
+use a card of 32 GB or less". The player tries the card again once a
+minute, so a FAT32 card swapped in is picked up without a restart.
+
 The rig's card is a 32 GB card that was full-surface scanned with zero errors
 and no slow regions. A card that stalls on a bad sector hangs the player —
 that is how the original 128 GB DMDoS card failed — so a new card is worth a

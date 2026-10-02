@@ -193,7 +193,16 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `entries` the files the pack would hold. `/api/status` carries the same
   object as `www`, and `www_version`. `PUT /api/www` wants a
   `Content-Length` (411), at most 1,310,720 B (413) and the `ODWP` magic
-  (400); it replies as `GET` does and changes nothing served.
+  (400); it replies as `GET` does and changes nothing served. `staged` is
+  null until a PUT, then whether it would have been staged on the card
+  (true unless `--sd` is `unreadable` or `none`).
+- **The card** (`--sd`): `ok` (the default); `unreadable`, a card that
+  mounts but whose filesystem cannot be read (exFAT; firmware `sd::probe`):
+  `sd` is `{mounted: true, readable: false, error: "card not readable: …"}`
+  and nothing plays (`now_playing.path` "", `entries` 0, `index_state`
+  `unavailable`); `none`, no card (`mounted: false`). Only `/api/status`,
+  `PUT /api/www`'s `staged` and `GET /api/firmware`'s `pending`/`last`
+  follow it; the card copy is still served.
 - **Security** (docs/api.md "Security"), checked in `route` before any
   handler: a `POST`/`PUT`/`DELETE` whose `Origin` names another host[:port]
   than `Host` (scheme dropped, `:80` dropped, case ignored) is a 403
@@ -2132,6 +2141,24 @@ class Context:
         self.fw_last = None
         self.down_until = 0.0
         self.ota_pub = None
+        # --sd: "ok", "unreadable" (mounts, filesystem unreadable) or "none".
+        self.sd_state = "ok"
+        # PUT /api/www's last `staged` (None: no PUT yet).
+        self.www_staged = None
+
+
+SD_UNREADABLE = "card not readable: format it FAT32, or use a card of 32 GB or less"
+
+
+def sd_fields(ctx: "Context") -> dict:
+    """/api/status's `sd`, per --sd."""
+    base = {"mounted": True, "readable": True, "capacity_bytes": SD_CAPACITY_BYTES, "error": None, "attempts": 1}
+    if ctx.sd_state == "unreadable":
+        base.update(readable=False, capacity_bytes=63_864_569_856, error=SD_UNREADABLE)
+    elif ctx.sd_state == "none":
+        base.update(mounted=False, readable=False, capacity_bytes=0, attempts=2,
+                    error="no card, or card init failed: ESP_ERR_TIMEOUT")
+    return {**base, **ctx.sd}
 
 
 def ticker_loop(ctx: Context, stop: threading.Event):
@@ -2448,14 +2475,13 @@ def make_handler(ctx: Context, quiet: bool):
                     "manifest": "/sdcard/" + player.manifest_rel(),
                     "index_state": player.index_state,
                     "www_version": www_version(ctx.www_root),
-                    "www": www_info(ctx.www_root),
+                    "www": {**www_info(ctx.www_root), "staged": ctx.www_staged},
                     "heap": {"free": free, "floor": floor, "idf_min": idf_min},
                     "refresh_hz": 100,
                     "deadline_misses": player.deadline_misses,
                     "worst_lateness_ms": player.worst_lateness_ms,
                     "gifs_started": player.gifs_started,
-                    "sd": {"mounted": True, "capacity_bytes": SD_CAPACITY_BYTES, "error": None,
-                           "attempts": 1, **ctx.sd},
+                    "sd": sd_fields(ctx),
                     "reset_reason": "software" if ctx.reset_note else "poweron",
                     "reset_note": ctx.reset_note,
                     "overrides": player.overrides_count,
@@ -2480,6 +2506,11 @@ def make_handler(ctx: Context, quiet: bool):
                 }
                 if ctx.settings["follow"] and ctx.follow.state == "attract":
                     obj["attract_live"] = attract_live_path(ctx.settings["attract"])
+                if ctx.sd_state != "ok":
+                    # No card the player can use: nothing plays (the boot
+                    # task never hands an unreadable card over).
+                    obj["now_playing"].update(path="", title="", elapsed_ms=0, frame=0)
+                    obj.update(entries=0, index_state="unavailable")
             self.send_json(200, obj)
 
         def h_skip(self, path):
@@ -2674,9 +2705,11 @@ def make_handler(ctx: Context, quiet: bool):
                     self.send_error_json(400, "dwell_max must be >= dwell_min")
                     return
 
-                wifi_changed = (
+                # WiFi and the hostname take effect after a reboot.
+                reboot_required = (
                     next_settings["wifi_ssid"] != before["wifi_ssid"]
                     or next_settings["wifi_pass"] != before["wifi_pass"]
+                    or next_settings["hostname"] != before["hostname"]
                 )
                 needs_reindex = (
                     next_settings["platforms"] != before["platforms"]
@@ -2744,7 +2777,7 @@ def make_handler(ctx: Context, quiet: bool):
             self.send_json(200, {"ok": True, **fields,
                                  "brightness": ctx.settings["brightness"],
                                  "max_brightness": ctx.settings["max_brightness"],
-                                 "reboot_required": wifi_changed})
+                                 "reboot_required": reboot_required})
 
         def h_reindex(self, path):
             with ctx.lock:
@@ -3065,7 +3098,7 @@ def make_handler(ctx: Context, quiet: bool):
             self.send_json(200, WIFI_SCAN_RESULTS)
 
         def h_www_get(self, path):
-            self.send_json(200, www_info(ctx.www_root))
+            self.send_json(200, {**www_info(ctx.www_root), "staged": ctx.www_staged})
 
         def h_www_put(self, path):
             length_hdr = self.headers.get("Content-Length")
@@ -3087,7 +3120,8 @@ def make_handler(ctx: Context, quiet: bool):
             if data[:4] != b"ODWP":
                 self.send_error_json(400, "not a www pack: not a www pack (bad magic)")
                 return
-            self.send_json(200, www_info(ctx.www_root))
+            ctx.www_staged = ctx.sd_state == "ok"
+            self.send_json(200, {**www_info(ctx.www_root), "staged": ctx.www_staged})
 
         def h_firmware_get(self, path):
             with ctx.lock:
@@ -3559,6 +3593,8 @@ def parse_args():
                          "a '..' via the catch-all is a 404, stat/play cost a directory scan")
     ap.add_argument("--quiet", action="store_true", help="suppress the one-line-per-request log")
     ap.add_argument("--proxy", help="forward everything but --www to a real device at this URL")
+    ap.add_argument("--sd", choices=["ok", "unreadable", "none"], default="ok",
+                    help="the card: ok, unreadable (mounts, exFAT: nothing plays) or none")
     ap.add_argument("--ota-pub", help="the Ed25519 public key (32 B) PUT /api/firmware verifies against "
                                       "(default: <repo>/firmware/keys/opendmd.pub)")
     return ap.parse_args()
@@ -3591,6 +3627,7 @@ def main():
             overlay_dir.mkdir(parents=True, exist_ok=True)
         fs = CardFS(root_dir, overlay_dir)
         ctx = Context(fs, www_root, args.dwell, args.strict)
+        ctx.sd_state = args.sd
         pub = Path(args.ota_pub) if args.ota_pub else Path(__file__).resolve().parent.parent / "firmware" / "keys" / "opendmd.pub"
         try:
             from nacl.signing import VerifyKey

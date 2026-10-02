@@ -43,6 +43,7 @@
 use anyhow::Result;
 use esp_idf_sys as sys;
 use opendmd_core::www_pack::{Header, Pack, PackError, HEADER_LEN};
+use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -112,6 +113,10 @@ static INFO: Mutex<Info> = Mutex::new(Info {
     error: None,
 });
 
+/// Whether this boot's last `PUT /api/www` was staged on the card:
+/// 0 none yet, 1 no (written to flash from the upload), 2 yes.
+static STAGED_LAST: AtomicU8 = AtomicU8::new(0);
+
 pub fn info() -> Info {
     INFO.lock().unwrap_or_else(|p| p.into_inner()).clone()
 }
@@ -130,12 +135,14 @@ fn broken(error: String) -> Info {
     }
 }
 
-/// `{"version","bytes","entries","ok","error"}` — `GET /api/www`, and the
-/// `www` object in `/api/status`.
+/// `{"version","bytes","entries","ok","error","staged"}` — `GET /api/www`,
+/// `PUT /api/www`'s reply, and the `www` object in `/api/status`. `staged`:
+/// whether this boot's last update was staged on the card first (null:
+/// none since boot).
 pub fn info_json() -> String {
     let i = info();
     format!(
-        r#"{{"version":{},"bytes":{},"entries":{},"ok":{},"error":{}}}"#,
+        r#"{{"version":{},"bytes":{},"entries":{},"ok":{},"error":{},"staged":{}}}"#,
         i.version
             .as_deref()
             .map_or_else(|| "null".into(), json_string),
@@ -145,6 +152,11 @@ pub fn info_json() -> String {
         i.error
             .as_deref()
             .map_or_else(|| "null".into(), json_string),
+        match STAGED_LAST.load(Relaxed) {
+            1 => "false",
+            2 => "true",
+            _ => "null",
+        },
     )
 }
 
@@ -488,21 +500,28 @@ fn write_pack(
 }
 
 /// Receive the body after the header onto the card, and check its CRC
-/// there. `Ok(None)`: no card to stage on (write straight to flash
-/// instead). `Ok(Some(file))`: staged and good, rewound. `Err`: answered (or
-/// the client went away); the web app in flash is untouched.
+/// there. `Ok(Err(why))`: the staging file could not be created (write
+/// straight to flash instead). `Ok(Ok(file))`: staged and good, rewound.
+/// `Err`: answered (or the client went away); the web app in flash is
+/// untouched.
+#[allow(clippy::type_complexity)]
 fn stage_on_card(
     up: &mut Upload,
     header: &Header,
     len: usize,
     buf: &mut [u8],
-) -> std::result::Result<Option<std::fs::File>, Result<()>> {
+) -> std::result::Result<std::result::Result<std::fs::File, String>, Result<()>> {
     use std::io::{Read, Seek};
-    if std::fs::create_dir_all(format!("{}/update", config::SD_MOUNT)).is_err()
-        || std::fs::File::create(STAGED).is_err()
-    {
-        return Ok(None);
+    let dir = format!("{}/update", config::SD_MOUNT);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return Ok(Err(format!("{dir}: {e}")));
     }
+    if let Err(e) = std::fs::File::create(STAGED) {
+        return Ok(Err(format!("{STAGED}: {e}")));
+    }
+    log::info!(
+        "www: staging on the card ({STAGED}), the web app in flash stays until the pack checks out"
+    );
     if let Err(e) = files::stream_body_to(up, STAGED) {
         // Logged and removed by stream_body_to; the caller of `receive`
         // answers an `UploadAborted` with its status.
@@ -530,7 +549,7 @@ fn stage_on_card(
         Ok(f)
     })();
     match checked {
-        Ok(f) => Ok(Some(f)),
+        Ok(f) => Ok(Ok(f)),
         Err(why) => {
             let _ = std::fs::remove_file(STAGED);
             log::warn!("PUT /api/www: refused, the web app in flash is unchanged: {why}");
@@ -546,15 +565,17 @@ fn stage_on_card(
 /// `PUT /api/www`, on the stream task: write a whole pack into the partition
 /// and serve it.
 ///
-/// **With a card** (`card_mounted`), the pack is received onto the card
-/// first (`/update/www.pack.part`) and its CRC checked there, while the old
-/// pack stays mapped: an upload cut short, or a file that is not a good
+/// **With a card** (`card_mounted`: mounted and readable), the pack is
+/// received onto the card first (`/update/www.pack.part`) and its CRC
+/// checked there, while the old pack stays mapped: an upload cut short, or a file that is not a good
 /// pack, is answered (408, 422, …) with the web app in flash untouched.
 /// Only then is the old pack unmapped and the partition rewritten from the
 /// card, ~3 s, header last ([`write_pack`]). **Without a card**, the body is
 /// written to flash as it arrives (header last as well), so a failure in
-/// the middle leaves no web app until a good pack is written. Either way
-/// the header is checked before anything happens (400).
+/// the middle leaves no web app until a good pack is written; so does a
+/// card on which the staging file cannot be created (logged with the
+/// reason). The reply's `staged` says which it was. Either way the header
+/// is checked before anything happens (400).
 pub fn receive(up: &mut Upload, card_mounted: bool) -> Result<()> {
     let Some(part) = partition() else {
         return up.error(
@@ -605,26 +626,37 @@ pub fn receive(up: &mut Upload, card_mounted: bool) -> Result<()> {
         ));
     }
     log::info!(
-        "www: receiving pack '{}', {len} B, {} entries{}",
+        "www: receiving pack '{}', {len} B, {} entries",
         header.version(),
         header.count,
-        if card_mounted {
-            ", staged on the card first"
-        } else {
-            ", straight to flash (no card)"
-        }
     );
 
     let started = Instant::now();
     let staged = if card_mounted {
         match stage_on_card(up, &header, len, &mut buf) {
             Ok(f) => f,
-            Err(answered) => return answered,
+            Err(answered) => {
+                STAGED_LAST.store(2, Relaxed);
+                return answered;
+            }
         }
     } else {
-        None
+        Err("no card".to_string())
+    };
+    let staged = match staged {
+        Ok(f) => Some(f),
+        Err(why) => {
+            let line = format!("www: no card staging ({why}): writing to flash from the upload, the old web app is replaced during the transfer");
+            if card_mounted {
+                log::warn!("{line}");
+            } else {
+                log::info!("{line}");
+            }
+            None
+        }
     };
     let from_card = staged.is_some();
+    STAGED_LAST.store(if from_card { 2 } else { 1 }, Relaxed);
     let mut body = match staged {
         Some(f) => Body::Card(f),
         None => Body::Upload(&mut *up),

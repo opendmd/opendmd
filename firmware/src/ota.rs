@@ -194,7 +194,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         return up.error(
             503,
             "503 Service Unavailable",
-            "no card: a firmware update is staged on the card, insert one",
+            "no card (or one that cannot be read): a firmware update is staged on the card, insert one",
         );
     }
 

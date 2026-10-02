@@ -9,7 +9,10 @@
 # restarts into the new firmware (~20-40 s, the panel dark). This script
 # then polls GET /api/firmware until the version in the bundle's header
 # (bytes 8..40, NUL-padded) answers, and prints the device's last update
-# log line. OPENDMD_API_KEY=<key> when the player has an API key set.
+# log line. OPENDMD_API_KEY=<key> when the player has an API key set: the
+# first GET /api/firmware reports a missing or wrong key in words (the PUT
+# is refused before its body is read, which curl reports only as
+# "Connection reset by peer").
 set -euo pipefail
 
 host=${1:?usage: tools/fw-ota.sh <host> <bundle.odfw>}
@@ -21,7 +24,19 @@ auth=()
 
 want=$(dd if="$bundle" bs=1 skip=8 count=32 2>/dev/null | tr -d '\000')
 size=$(stat -c %s "$bundle")
-before=$(curl -sS --max-time 10 "${auth[@]}" "http://$host/api/firmware" || true)
+pre=$(curl -sS --max-time 10 -w '\n%{http_code}' "${auth[@]}" "http://$host/api/firmware") \
+    || { echo "cannot reach http://$host/api/firmware" >&2; exit 1; }
+before=${pre%$'\n'*}
+case "${pre##*$'\n'}" in
+    200) ;;
+    401) if [ -n "${OPENDMD_API_KEY:-}" ]; then
+             echo "http://$host refused the API key in OPENDMD_API_KEY (401): check it in Settings > Security" >&2
+         else
+             echo "http://$host has an API key set (401): run it again with OPENDMD_API_KEY=<key>" >&2
+         fi
+         exit 1 ;;
+    *) echo "GET http://$host/api/firmware: HTTP ${pre##*$'\n'}: $before" >&2; exit 1 ;;
+esac
 echo "device: $before"
 echo "pushing $bundle ($size B, version '$want') to http://$host/api/firmware"
 

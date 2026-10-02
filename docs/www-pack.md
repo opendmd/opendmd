@@ -123,9 +123,15 @@ its gzip budgets (which are about load time over WiFi, not flash).
     leaves **the web app in flash exactly as it was**, still served. Only
     a staged pack whose CRC matched is written to flash, from the card
     (~3 s for 800 KB, most of it the erase pauses).
-  - **Without a card**, the body is written to flash as it arrives, as
-    before: a failure part-way leaves no web app until a good pack is
-    written (the setup page and the API carry on).
+  - **Without a card** (none, one that cannot be read, or one where
+    `/update/www.pack.part` cannot be created), the body is written to
+    flash as it arrives, as before: a failure part-way leaves no web app
+    until a good pack is written (the setup page and the API carry on).
+    The log says which it was: `www: staging on the card (…)` only once
+    the staging file exists, otherwise `www: no card staging (<reason>):
+    writing to flash from the upload, the old web app is replaced during
+    the transfer`; the reply's `staged` is false, and `make www-push`
+    prints a warning.
   - **The header is written last** either way. Under the mapping's lock:
     unmap; erase sector 0 and the sectors ahead of each piece
     (`esp_partition_erase_range`, then a 20 ms pause so the display loop
@@ -143,8 +149,11 @@ its gzip budgets (which are about load time over WiFi, not flash).
   The reply is `GET /api/www`'s object; a pack that does not verify after
   writing is a 422, one cut short a 408 (or nothing, if the client went
   away). 782 KB takes ~7 s over WiFi plus the flash write.
-- **`GET /api/www`**: `{"version","bytes","entries","ok","error"}`; the
-  same object is `www` in `/api/status`.
+- **`GET /api/www`**: `{"version","bytes","entries","ok","error","staged"}`;
+  the same object is `www` in `/api/status`, and `PUT /api/www`'s reply.
+  `staged`: whether this boot's last update was staged on the card (true,
+  also for one refused after staging), written from the upload (false), or
+  none yet (null).
 
 A response in flight and an update never overlap: both run on the one
 stream task, one job at a time, and the lock makes that hold even if the

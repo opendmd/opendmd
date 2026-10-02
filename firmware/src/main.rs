@@ -2189,34 +2189,17 @@ fn retire(engine: &mut Option<Engine>, canvas: &mut Canvas) {
     *engine = None;
 }
 
-/// If the configured set's manifest will not open, fall back to the default
-/// manifest and clear `set` in NVS. Returns true if it did.
-///
-/// Called at boot and whenever the main loop has no engine. `""` (the default)
-/// is never "missing" here: if the card has no `filelist.txt` either, the loop
-/// keeps retrying exactly as it does for a card with nothing on it.
-/// One mount attempt at `khz`, logged: the card, or the error as status
-/// shows it.
-fn try_mount(bus: &mut SdBus, khz: u32) -> std::result::Result<SdCard, String> {
-    match bus.mount(khz) {
-        Ok(card) => {
-            log::info!(
-                "microSD mounted at {} ({:.2} GB, card {:#010x}) on attempt {}, SPI clock {} kHz (asked {}), heap {} B free",
-                config::SD_MOUNT,
-                card.capacity_bytes as f64 / 1e9,
-                card.serial,
-                bus.attempts(),
-                card.real_freq_khz,
-                khz,
-                free_heap()
-            );
-            Ok(card)
-        }
-        Err(e) => {
-            log::warn!("microSD mount attempt {} failed ({e:#})", bus.attempts());
-            Err(format!("{e:#}"))
-        }
-    }
+/// A card just mounted (`boot::mount`), logged: where, how big, which
+/// card, on which attempt, at what clock.
+fn log_mounted(card: &SdCard, attempt: u32, khz: u32) {
+    log::info!(
+        "microSD mounted at {} ({:.2} GB, card {:#010x}) on attempt {attempt}, SPI clock {} kHz (asked {khz}), heap {} B free",
+        config::SD_MOUNT,
+        card.capacity_bytes as f64 / 1e9,
+        card.serial,
+        card.real_freq_khz,
+        free_heap()
+    );
 }
 
 /// A card just mounted: if it was mounted slow for a card that failed at
@@ -2358,6 +2341,12 @@ fn reset_reason() -> &'static str {
     }
 }
 
+/// If the configured set's manifest will not open, fall back to the default
+/// manifest and clear `set` in NVS. Returns true if it did.
+///
+/// Called at boot and whenever the main loop has no engine. `""` (the default)
+/// is never "missing" here: if the card has no `filelist.txt` either, the loop
+/// keeps retrying exactly as it does for a card with nothing on it.
 fn heal_missing_set(settings: &mut Settings, nvs: &mut Config) -> bool {
     if settings.set.is_empty() {
         return false;
