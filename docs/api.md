@@ -7,7 +7,6 @@ already carry it).
 
 ```sh
 DMD=http://opendmd.local
-J='Content-Type: application/json'   # every JSON body says so
 curl -s $DMD/api/status
 ```
 
@@ -17,7 +16,8 @@ curl -s $DMD/api/status
   delete files and rewrite its firmware, unless an API key is set (see
   "Security"). Keep it on a trusted network; never forward a port to it.
 - **JSON in, JSON out.** Bodies are JSON unless a route takes raw bytes; a
-  JSON body needs `Content-Type: application/json` (`415` otherwise).
+  JSON body needs `Content-Type: application/json` (`415` otherwise:
+  `curl --json` sets it).
   Every error is a non-2xx status with `{"error":"<why>"}`, except `405`
   (a route that exists for another method), the server's own `text/html`.
 - **Size limits.** JSON bodies ≤ 8 KB (`413` over), the schedule ≤ 2 KB,
@@ -66,8 +66,8 @@ live item this firmware does not know (`@fx:nonsense`); `503` no playlist is
 running; `413` body over 8 KB.
 
 ```sh
-curl -s -X POST $DMD/api/play -H "$J" -d '{"path":"/gifs/Consoles/SNES_Super_Metroid_01.gif"}'
-curl -s -X POST $DMD/api/play -H "$J" -d '{"path":"@clock?seconds=1&date=1"}'
+curl -s $DMD/api/play --json '{"path":"/gifs/Consoles/SNES_Super_Metroid_01.gif"}'
+curl -s $DMD/api/play --json '{"path":"@clock?seconds=1&date=1"}'
 ```
 
 ### POST /api/pause
@@ -212,8 +212,8 @@ the saved `brightness` lowers it too. `404 {"error":"set not found"}` when
 the playlist does not open. `413` body over 8 KB.
 
 ```sh
-curl -s -X PUT $DMD/api/config -H "$J" -d '{"brightness":64,"transition":"wipe_left","transition_ms":300}'
-curl -s -X PUT $DMD/api/config -H "$J" -d '{"set":"consoles","shuffle":true}'
+curl -s -X PUT $DMD/api/config --json '{"brightness":64,"transition":"wipe_left","transition_ms":300}'
+curl -s -X PUT $DMD/api/config --json '{"set":"consoles","shuffle":true}'
 ```
 
 ### GET /api/wifi/scan
@@ -309,7 +309,7 @@ Errors: `400` not two different `/gifs/….gif` paths; `404` no `from`;
 `409` `to` exists (a change of case is fine).
 
 ```sh
-curl -s -X POST $DMD/api/files/move -H "$J" -d '{"from":"/gifs/Other/a.gif","to":"/gifs/Arcade/ARCADE_A_01.gif"}'
+curl -s $DMD/api/files/move --json '{"from":"/gifs/Other/a.gif","to":"/gifs/Arcade/ARCADE_A_01.gif"}'
 ```
 
 ## Playlists
@@ -398,7 +398,7 @@ mode or playlist name (the message names the rule); `404` `set not found:
 <names>`; `413` over 2 KB.
 
 ```sh
-curl -s -X PUT $DMD/api/schedule -H "$J" -d '{"rules":[],"night":{"from":"00:00","to":"07:00","mode":"off"}}'
+curl -s -X PUT $DMD/api/schedule --json '{"rules":[],"night":{"from":"00:00","to":"07:00","mode":"off"}}'
 ```
 
 ### POST /api/wake
@@ -408,7 +408,7 @@ Suspend the schedule for a while (normal mode, the saved playlist):
 `{"ok":true,"minutes":N,"wake_until":"HH:MM"|null}`. `400` over 1440.
 
 ```sh
-curl -s -X POST $DMD/api/wake -H "$J" -d '{"minutes":60}'
+curl -s $DMD/api/wake --json '{"minutes":60}'
 ```
 
 ## Prepared copies
@@ -464,7 +464,7 @@ line, ≤ 200 characters). Reply: `{"ok":true,"path","added":bool}` (`added`
 false if it was there). `400` not a `/gifs/….gif` path.
 
 ```sh
-curl -s -X POST $DMD/api/cache/failed -H "$J" -d '{"path":"/gifs/Other/broken.gif","reason":"image truncated"}'
+curl -s $DMD/api/cache/failed --json '{"path":"/gifs/Other/broken.gif","reason":"image truncated"}'
 ```
 
 ### DELETE /api/cache/failed
@@ -483,7 +483,7 @@ Delete one GIF's prepared copy (after replacing the GIF):
 Reply: `{"ok":true,"path","removed":bool}`. `400` not a `/gifs/….gif` path.
 
 ```sh
-curl -s -X POST $DMD/api/cache/forget -H "$J" -d '{"path":"/gifs/Consoles/SNES_Super_Metroid_01.gif"}'
+curl -s $DMD/api/cache/forget --json '{"path":"/gifs/Consoles/SNES_Super_Metroid_01.gif"}'
 ```
 
 ## Follow RePlayOS
@@ -504,7 +504,7 @@ Reply: `{"ok","reachable","version","status","view","system","game","error"}`;
 only `ok`, `reachable`, `error` (and `version`).
 
 ```sh
-curl -s -X POST $DMD/api/follow/test -H "$J" -d '{"host":"192.168.1.20","code":"1234"}'
+curl -s $DMD/api/follow/test --json '{"host":"192.168.1.20","code":"1234"}'
 ```
 
 ## Network
@@ -523,33 +523,27 @@ and restarts every 10 minutes to try again.
 Set the network with `PUT /api/config`, then reboot:
 
 ```sh
-curl -s -X PUT $DMD/api/config -H "$J" -d '{"wifi_ssid":"MyNet","wifi_pass":"secret"}'
+curl -s -X PUT $DMD/api/config --json '{"wifi_ssid":"MyNet","wifi_pass":"secret"}'
 curl -s -X POST $DMD/api/reboot
 ```
 
 ## Security
 
-The player speaks plain HTTP, so this protects it from casual use on a
-trusted network (a guest's phone, a script, a web page in a browser on the
-same network), not from someone on the same WiFi who can read its traffic.
+Plain HTTP: this keeps out casual use on a trusted network (a guest, a
+script, another web page in your browser), not someone on the same WiFi.
 
-- **Other web pages.** A `POST`, `PUT` or `DELETE` whose `Origin` header
-  names another host than the request's `Host` is a `403`: a page from
-  elsewhere cannot drive the player through your browser. Scripts (no
-  `Origin`) are not affected.
-- **An optional API key** (Settings → Advanced → Security). With `api_key`
-  set (`PUT /api/config`, 8..64 of `A-Z a-z 0-9 . _ ~ -`; `""` turns it off;
-  `GET /api/config` shows only `api_key_set`), every API request and
-  every card file (`/gifs/…`, `/cache/…`, `/sets/…`, `/filelist*`) needs
-  `Authorization: Bearer <key>`, or `?key=<key>` where a header cannot be
-  sent (an `<img>`); else `401`. The web app's own files and `/setup` stay
-  open, and in setup mode (`OpenDMD-Setup`) no key is asked, so a lost key
-  is cleared there (or by a USB install with Erase).
+- A `POST`/`PUT`/`DELETE` whose `Origin` is another host than its `Host`
+  is a `403` (no `Origin`, as from curl, is fine).
+- **API key** (Settings → Advanced → Security): with `api_key` set (`PUT
+  /api/config`, 8..64 of `A-Z a-z 0-9 . _ ~ -`, `""` = off; `GET` shows
+  `api_key_set`), the API and the card's files need `Authorization: Bearer
+  <key>` or `?key=<key>`, else `401`. Not the web app's files or `/setup`,
+  nor in setup mode (`OpenDMD-Setup`), where a lost key can be cleared.
 
 ```sh
 K='Authorization: Bearer <key>'
 curl -s -H "$K" $DMD/api/status
-curl -s -X PUT $DMD/api/config -H "$K" -H "$J" -d '{"api_key":""}'
+curl -s -X PUT $DMD/api/config -H "$K" --json '{"api_key":""}'
 ```
 
 ## Web app update
@@ -573,13 +567,11 @@ curl -s $DMD/api/www
 
 Write a new pack (the whole file). Its header is checked before anything
 is erased: not a pack, an unknown format, or a length that is not the
-body's is a `400`, and the app in flash stays. With a card in, the pack is
-received onto the card and its CRC checked there first, so a `408` (cut
-short) or `422` (bad CRC) leaves the old app in flash, still served. Then
-it is written to flash (~7 s for 800 KB in all), header last, and served
-at once; no reboot. Without a card it goes straight to flash, and after a
-`408`/`422` pages are `503` until a good pack is written (the API and
-`/setup` carry on).
+body's is a `400`, and the app in flash stays. With a card in, it is
+staged and CRC-checked on the card first, so a `408` (cut short) or `422`
+(bad CRC) leaves the old app in place. Then it is written to flash (~7 s
+for 800 KB in all) and served at once; no reboot. Without a card, after a
+`408`/`422` pages are `503` until a good pack is written.
 
 Reply: `GET /api/www`'s object. `411` no length; `413` too big. Any good
 pack is accepted, older or newer: check `GET /api/www` reports the version
@@ -592,17 +584,15 @@ curl -s $DMD/api/www
 
 ## Firmware update
 
-A signed bundle, `dist/opendmd-<version>.odfw` from `make fw-release`, is
-received onto the card (`/update/`), checked, and installed by the updater
-in flash, which restarts into the new firmware (`docs/ota.md`). Needs a
-card. `make fw-ota HOST=…` does both steps below.
+A signed bundle (`dist/opendmd-<version>.odfw`, `make fw-release`) is
+staged on the card, checked and installed (`docs/ota.md`). Needs a card.
+`make fw-ota HOST=…` does it.
 
 ### GET /api/firmware
 
-`{"version","build","variant","pending","last"}`: the running firmware
-(`build` is its image descriptor, `"0.4.0 4mb"`), a staged update not yet
-installed (its version, else null), and the last line of
-`/update/log.txt` (null if none).
+`{"version","build","variant","pending","last"}`: the running firmware,
+a staged update not yet installed (or null), the last line of the card's
+`/update/log.txt` (or null).
 
 ```sh
 curl -s $DMD/api/firmware
@@ -610,13 +600,11 @@ curl -s $DMD/api/firmware
 
 ### PUT /api/firmware
 
-The bundle as the body, `Content-Length` required (`411`), at most the
-firmware partition plus its 140 B header (`413`). Checked as it arrives and
-at the end: the header, that the image fits, the ESP image magic, its
-SHA-256 and the Ed25519 signature against the key in the running
-firmware. Any failure is a `422` with the reason, and nothing staged; cut
-short, `408`; no card, `503`. Then `{"ok":true,"version":"…",
-"rebooting":true}`, and the panel goes dark for ~20-40 s while it installs.
+The bundle as the body (`411` no length, `413` too big). Its header, size,
+SHA-256 and Ed25519 signature are checked: a failure is a `422` with the
+reason and nothing is staged; cut short `408`; no card `503`. Then
+`{"ok":true,"version":"…","rebooting":true}`, and the panel is dark for
+~20-40 s while it installs.
 
 ```sh
 curl -s -X PUT --data-binary @dist/opendmd-0.4.0.odfw $DMD/api/firmware
@@ -635,7 +623,7 @@ work).
 `h12=1` (12-hour), `color=RRGGBB`. One loop is one second.
 
 ```sh
-curl -s -X POST $DMD/api/play -H "$J" -d '{"path":"@clock?style=small&seconds=1&color=ff8000"}'
+curl -s $DMD/api/play --json '{"path":"@clock?style=small&seconds=1&color=ff8000"}'
 ```
 
 **`@text`** — scrolling text. `msg=<url-encoded>` (≤ 200 characters, ASCII
@@ -644,7 +632,7 @@ shown), `speed=<ms per pixel>` (20..=1000, default 40),
 and centred if it fits). One loop is one pass across the panel.
 
 ```sh
-curl -s -X POST $DMD/api/play -H "$J" -d '{"path":"@text?msg=Game%20over&speed=30&color=00ff00"}'
+curl -s $DMD/api/play --json '{"path":"@text?msg=Game%20over&speed=30&color=00ff00"}'
 ```
 
 **`@fx:<effect>`** — a live effect: `tunnel`, `rotozoom`, `starfield` or
@@ -657,7 +645,7 @@ curl -s -X POST $DMD/api/play -H "$J" -d '{"path":"@text?msg=Game%20over&speed=3
 `color=RRGGBB`, `shade=0`. An unknown effect is a `415`.
 
 ```sh
-curl -s -X POST $DMD/api/play -H "$J" -d '{"path":"@fx:wire?shape=tesseract&speed=3"}'
+curl -s $DMD/api/play --json '{"path":"@fx:wire?shape=tesseract&speed=3"}'
 ```
 
 **`@boot`** — the start-up show. `len=short|full|card` (`card`: the status
@@ -665,7 +653,7 @@ card), and for the card `v=<version>`, `ip=<address>`, `ap=<network>`,
 `note=<text>` (≤ 32 characters each).
 
 ```sh
-curl -s -X POST $DMD/api/play -H "$J" -d '{"path":"@boot?len=full"}'
+curl -s $DMD/api/play --json '{"path":"@boot?len=full"}'
 ```
 
 Also `@power-on` (the power-on effect) and `@card:<title>|<subtitle>` (a
