@@ -20,6 +20,8 @@ pub mod index;
 pub mod layout;
 pub mod look;
 pub mod manifest;
+#[cfg(feature = "ota")]
+pub mod ota;
 pub mod overrides;
 pub mod player;
 pub mod schedule;

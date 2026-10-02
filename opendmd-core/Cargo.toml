@@ -11,6 +11,11 @@ publish = false
 color_quant = "1.1"
 gif = "0.13"
 log = "0.4"
+# Firmware bundles (src/ota.rs, `ota` feature): verify-only Ed25519 and the
+# image's SHA-256. No `rand`, no `std` requirement, no zeroize: the device
+# only ever holds the public key.
+ed25519-dalek = { version = "3", default-features = false, features = ["fast"], optional = true }
+sha2 = { version = "0.11", default-features = false, optional = true }
 
 [features]
 # Smooth motion (src/tween.rs): the shift tweener for prepared copies. Only
@@ -21,6 +26,9 @@ tween = []
 # feature because its mere presence moved the main wasm module's inlining
 # (+150-250 B gz there, where there is ~1 KB left) though it never calls it.
 names = []
+# The signed firmware bundle (src/ota.rs): the firmware and the tests only,
+# so the wasm modules never see the crypto crates.
+ota = ["dep:ed25519-dalek", "dep:sha2"]
 
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
 [patch.crates-io]
