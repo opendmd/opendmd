@@ -119,8 +119,10 @@ impl SdBus {
         }
         // SAFETY: the peripheral and the pins are this struct's alone, and
         // the drivers built on them here are either kept (inside the
-        // returned `SdCard`, after which `mount` is never called again) or
-        // dropped before this returns — never two at once.
+        // returned `SdCard`, which is dropped — unmounted — before `mount`
+        // is called again: the boot task's remount of a card that cannot be
+        // read, and otherwise never) or dropped before this returns — never
+        // two at once.
         let (spi, sck, mosi, miso, cs) = unsafe {
             (
                 self.spi.clone_unchecked(),
@@ -173,6 +175,26 @@ impl SdBus {
             real_freq_khz,
             serial,
         })
+    }
+}
+
+/// The filesystem of the card just mounted, probed once: a `read_dir` of
+/// the root, which is when FATFS first reads the volume (`MountedFatfs`
+/// mounts lazily, so a card whose SD init answered mounts even when its
+/// filesystem is one FATFS cannot read). `Err` only for a card-class error
+/// (`sdhealth::is_card_error`: `ENODEV` for exFAT or no filesystem, `EIO`):
+/// that card is never handed to the player.
+pub fn probe() -> io::Result<()> {
+    match std::fs::read_dir(config::SD_MOUNT) {
+        Ok(_) => Ok(()),
+        Err(e) if crate::sdhealth::is_card_error(&e) => Err(e),
+        Err(e) => {
+            log::warn!(
+                "microSD: listing {}: {e} (not a card error; carrying on)",
+                config::SD_MOUNT
+            );
+            Ok(())
+        }
     }
 }
 

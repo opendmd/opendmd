@@ -163,8 +163,16 @@ pub const SD_SPEED_FALLBACK_KHZ: u32 = 20_000;
 /// [`SD_REMOUNT_INTERVAL`] instead.
 pub const SD_REBOOT_CAP: u32 = 3;
 pub const SD_REBOOT_WINDOW: Duration = Duration::from_secs(15 * 60);
-/// How often a device that has used up its restarts tries the card again.
+/// How often a device that has used up its restarts tries the card again;
+/// also how often a card that mounts but cannot be read
+/// ([`SD_UNREADABLE`]) is remounted, to notice it being swapped.
 pub const SD_REMOUNT_INTERVAL: Duration = Duration::from_secs(60);
+/// `sd.error` for a card that mounts at the SD level but whose filesystem
+/// does not answer (every access `ENODEV`): exFAT, which the FATFS build
+/// does not include, i.e. a 64 GB card as it comes. CLAUDE.md, "When the
+/// card will not mount".
+pub const SD_UNREADABLE: &str =
+    "card not readable: format it FAT32, or use a card of 32 GB or less";
 /// How long a planned restart (`crate::restart`) waits for the log ring to
 /// reach the console first.
 pub const RESTART_LOG_FLUSH: Duration = Duration::from_secs(2);

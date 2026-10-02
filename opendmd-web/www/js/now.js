@@ -151,7 +151,7 @@ function mountDevice(el) {
       fact('Worst lateness', s.worst_lateness_ms + ' ms'),
       fact('Files started', s.gifs_started.toLocaleString()),
       fact('Playlist', playlistLabel(s.manifest)),
-      fact('Card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'Not mounted', !s.sd.mounted));
+      fact('Card', !s.sd.mounted ? 'Not mounted' : s.sd.readable === false ? 'Not readable: format it FAT32' : bytes(s.sd.capacity_bytes), s.sd.readable === false || !s.sd.mounted));
     if (preview.paused !== s.paused) preview.setPaused(s.paused);
     follow_(np.path);
   }

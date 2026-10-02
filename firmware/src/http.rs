@@ -279,6 +279,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         };
         let mut next = c.settings.lock().unwrap().clone();
         let wifi_before = (next.wifi_ssid.clone(), next.wifi_pass.clone());
+        let hostname_before = next.hostname.clone();
         if let Some(v) = patch.wifi_ssid {
             next.wifi_ssid = v;
         }
@@ -423,7 +424,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if next.dwell_max < next.dwell_min {
             return req.bad_request("dwell_max must be >= dwell_min");
         }
-        let wifi_changed = (next.wifi_ssid.clone(), next.wifi_pass.clone()) != wifi_before;
+        // WiFi and the hostname are read once, when the network starts
+        // (`net_worker`: the STA netif's DHCP name, mDNS): saved now, in
+        // effect after a reboot.
+        let reboot_required = (next.wifi_ssid.clone(), next.wifi_pass.clone()) != wifi_before
+            || next.hostname != hostname_before;
         let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
 
         let (tx, rx) = mpsc::channel();
@@ -443,7 +448,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     info!("API key {}", if k.is_empty() { "cleared" } else { "set" });
                 }
                 req.json(&format!(
-                    r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{wifi_changed}}}"#,
+                    r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{reboot_required}}}"#,
                     applied_json(&applied)
                 ))
             }
@@ -821,7 +826,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/api/www", Method::Get, |req| req.json(&www::info_json()))?;
     let c = ctx.clone();
     server.route("/api/www", Method::Put, move |req| {
-        let mounted = c.status.lock().unwrap().sd_mounted;
+        let mounted = c.status.lock().unwrap().sd_usable();
         stream::receive(req, move |up| www::receive(up, mounted))
     })?;
 
@@ -829,12 +834,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // bundle received onto the card on the stream task, then the updater.
     let c = ctx.clone();
     server.route("/api/firmware", Method::Get, move |req| {
-        let mounted = c.status.lock().unwrap().sd_mounted;
+        let mounted = c.status.lock().unwrap().sd_usable();
         req.json(&crate::ota::info_json(mounted))
     })?;
     let c = ctx.clone();
     server.route("/api/firmware", Method::Put, move |req| {
-        let mounted = c.status.lock().unwrap().sd_mounted;
+        let mounted = c.status.lock().unwrap().sd_usable();
         let net = c.net.clone();
         stream::receive(req, move |up| crate::ota::receive(up, mounted, &net))
     })?;
@@ -1528,7 +1533,7 @@ fn status_json(s: &Status, looks: &str) -> String {
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"heap_floor_at":{},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"#,
-            r#""sd":{{"mounted":{},"capacity_bytes":{},"error":{},"attempts":{},{}}},"reset_reason":{},"reset_note":{},"#,
+            r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"error":{},"attempts":{},{}}},"reset_reason":{},"reset_note":{},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
             r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{},"#,
@@ -1566,6 +1571,7 @@ fn status_json(s: &Status, looks: &str) -> String {
         crate::httpd::streams_aborted(),
         crate::logring::drops(),
         s.sd_mounted,
+        s.sd_usable(),
         s.sd_capacity_bytes,
         opt_json(s.sd_error.as_deref()),
         s.sd_attempts,

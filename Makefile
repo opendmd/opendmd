@@ -240,10 +240,19 @@ FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 # caller's registers now and then (opendmd-core/src/chan.rs). The diag build's
 # std-channel torture test keeps one such function on purpose.
 #
-# Delete the generated sdkconfig when the bench flavour (normal/diag) changes.
+# The bench builds' sdkconfig fragment: the partition table's absolute path,
+# and the app descriptor's version as the release sets it ("<version> 4mb",
+# `GET /api/firmware`'s `build`), not IDF's default (`git describe`, or "1").
+FW_BENCH_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"'; \
+	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
+	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; } > $(FW)/target/sdkconfig.partitions
+
+# Delete the generated sdkconfig when the bench flavour (normal/diag) or the
+# version changes: it keeps the values it already has (the descriptor's
+# version among them) over a changed fragment.
 fw-sdkconfig-flavour:
 	@mkdir -p $(FW)/target
-	@want=$(if $(FW_DIAG),diag,normal); have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
+	@want="$(if $(FW_DIAG),diag,normal) $(FW_VERSION)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
 	 if [ "$$want" != "$$have" ]; then \
 	   echo "==> sdkconfig flavour $${have:-unknown} -> $$want: removing the generated sdkconfig"; \
 	   rm -f $(FW)/target/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig; \
@@ -252,7 +261,7 @@ fw-sdkconfig-flavour:
 
 fw-build: fw-sdkconfig-flavour
 	@mkdir -p $(FW)/target
-	@echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"' > $(FW)/target/sdkconfig.partitions
+	@$(FW_BENCH_FRAGMENT)
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
 	@ls -l $(FW_BINARY)
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_BINARY) $(if $(FW_DIAG),--allow "mpmc7channel.*9PlayError")'
@@ -303,7 +312,7 @@ fw-erase:
 # release build (no features, no .env), so neither cfg branch rots.
 fw-clippy: fw-sdkconfig-flavour
 	@mkdir -p $(FW)/target
-	@echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"' > $(FW)/target/sdkconfig.partitions
+	@$(FW_BENCH_FRAGMENT)
 	@echo "==> Clippy firmware, --features $(FW_DEV_FEATURES)"
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets $(FW_CARGO_FEATURES) -- -D warnings'
 	@echo "==> Clippy firmware, release feature set (none)"

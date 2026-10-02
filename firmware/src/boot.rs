@@ -25,7 +25,10 @@
 //! starts the HTTP server and the network anyway, and keeps trying every
 //! `RETRY_INTERVAL` (60 s at 20 MHz with the budget spent) — full
 //! re-initialisations, as the main loop's retries were — until a mount
-//! works, then builds and hands over as above. It exits after the
+//! works, then builds and hands over as above. A card that mounts but whose
+//! filesystem cannot be read (`sd::probe`: exFAT) is treated the same way
+//! — never handed over, the status card says so — and is unmounted and
+//! mounted again every `SD_REMOUNT_INTERVAL` (60 s) to notice a swap. It exits after the
 //! handover; its stack goes back to the heap.
 //!
 //! **Who touches the card when.** Until the handover the display loop does
@@ -121,13 +124,75 @@ pub fn spawn(task: BootTask) -> Result<()> {
     Ok(())
 }
 
-/// The card's fields in status, after a mount attempt.
-fn publish(status: &Mutex<Status>, card: Option<&SdCard>, error: Option<String>, attempts: u32) {
+/// The card's fields in status, after a mount attempt: `card` mounted,
+/// `readable` its filesystem answered [`crate::sd::probe`].
+fn publish(
+    status: &Mutex<Status>,
+    card: Option<&SdCard>,
+    readable: bool,
+    error: Option<String>,
+    attempts: u32,
+) {
     let mut s = status.lock().unwrap();
     s.sd_mounted = card.is_some();
+    s.sd_readable = card.is_some() && readable;
     s.sd_capacity_bytes = card.map_or(0, |c| c.capacity_bytes);
     s.sd_error = error;
     s.sd_attempts = attempts;
+}
+
+/// What a mount attempt found.
+enum Mount {
+    /// Mounted, and its filesystem reads: the player's.
+    Ready(SdCard),
+    /// Mounted at the SD level, but its filesystem cannot be read
+    /// (`sd::probe`: exFAT, no filesystem). Never handed over.
+    Unreadable(SdCard),
+    /// Not mounted: the error as status shows it.
+    Failed(String),
+}
+
+/// One mount attempt: the mount, the probe, `check_card`, each logged.
+/// `quiet_for`: the serial of a card that could not be read and was just
+/// unmounted to be tried again — the same card, still unreadable, is not
+/// logged again (once a minute, for as long as it stays in).
+fn mount(
+    bus: &mut SdBus,
+    health: &sdhealth::Boot,
+    nvs: &EspDefaultNvsPartition,
+    quiet_for: Option<u32>,
+) -> Mount {
+    let khz = health.speed_khz;
+    let card = match bus.mount(khz) {
+        Ok(c) => c,
+        Err(e) => {
+            let e = format!("{e:#}");
+            log::warn!("microSD mount attempt {} failed ({e})", bus.attempts());
+            return Mount::Failed(e);
+        }
+    };
+    let probed = crate::sd::probe();
+    let same = probed.is_err() && quiet_for == Some(card.serial);
+    if !same {
+        crate::log_mounted(&card, bus.attempts(), khz);
+    }
+    crate::check_card(&card, health, nvs);
+    match probed {
+        Ok(()) => Mount::Ready(card),
+        Err(e) => {
+            if !same {
+                log::warn!(
+                    "microSD: card {:#010x} mounted, but its filesystem cannot be read ({e}): {}. \
+                     exFAT (a 64 GB card as sold) is not supported. Not playing from it; \
+                     trying it again every {} s",
+                    card.serial,
+                    config::SD_UNREADABLE,
+                    config::SD_REMOUNT_INTERVAL.as_secs()
+                );
+            }
+            Mount::Unreadable(card)
+        }
+    }
 }
 
 fn run(task: BootTask) {
@@ -144,21 +209,29 @@ fn run(task: BootTask) {
     let settings = ctx.settings.clone();
 
     // The card: a couple of attempts, then the rest of the boot goes ahead
-    // without it (CLAUDE.md, "When the card will not mount").
+    // without it (CLAUDE.md, "When the card will not mount"). A card that
+    // mounts but cannot be read is not tried again at once: it will not
+    // read on the second attempt either.
     let mut card = None;
+    let mut unreadable = None;
     let mut error = None;
     if health.capped {
         error = Some(sdhealth::capped_error(0, None));
     } else {
         for attempt in 1..=config::SD_BOOT_ATTEMPTS {
-            match crate::try_mount(&mut bus, health.speed_khz) {
-                Ok(c) => {
-                    crate::check_card(&c, &health, &nvs);
+            match mount(&mut bus, &health, &nvs, None) {
+                Mount::Ready(c) => {
                     card = Some(c);
+                    error = None;
                     break;
                 }
-                Err(e) => {
-                    publish(&status, None, Some(e.clone()), bus.attempts());
+                Mount::Unreadable(c) => {
+                    unreadable = Some(c);
+                    error = Some(config::SD_UNREADABLE.to_string());
+                    break;
+                }
+                Mount::Failed(e) => {
+                    publish(&status, None, false, Some(e.clone()), bus.attempts());
                     error = Some(e);
                     if attempt < config::SD_BOOT_ATTEMPTS {
                         thread::sleep(Duration::from_secs(1));
@@ -167,7 +240,13 @@ fn run(task: BootTask) {
             }
         }
     }
-    publish(&status, card.as_ref(), error.clone(), bus.attempts());
+    publish(
+        &status,
+        card.as_ref().or(unreadable.as_ref()),
+        card.is_some(),
+        error.clone(),
+        bus.attempts(),
+    );
 
     if let Some(c) = card {
         let snapshot = settings.lock().unwrap().clone();
@@ -185,7 +264,7 @@ fn run(task: BootTask) {
         return;
     }
 
-    if !health.capped {
+    if !health.capped && unreadable.is_none() {
         log::warn!(
             "microSD: no card yet; starting the network and the web server anyway, and retrying every {} s",
             config::RETRY_INTERVAL.as_secs()
@@ -197,14 +276,16 @@ fn run(task: BootTask) {
     start_network(net);
 
     // No card mounted: try again every so often (a spent restart budget
-    // waits longer, see `sdhealth`).
-    let interval = if health.capped {
-        config::SD_REMOUNT_INTERVAL
-    } else {
-        config::RETRY_INTERVAL
-    };
+    // waits longer, see `sdhealth`). A card that cannot be read is
+    // unmounted and mounted again once a minute, so a card swapped in
+    // (there is no card-detect pin) is noticed; the same card stays quiet.
     let mut remounts: u32 = 0;
     loop {
+        let interval = if health.capped || unreadable.is_some() {
+            config::SD_REMOUNT_INTERVAL
+        } else {
+            config::RETRY_INTERVAL
+        };
         thread::sleep(interval);
         remounts += 1;
         if health.capped {
@@ -214,10 +295,12 @@ fn run(task: BootTask) {
                 interval.as_secs()
             );
         }
-        match crate::try_mount(&mut bus, health.speed_khz) {
-            Ok(c) => {
-                crate::check_card(&c, &health, &nvs);
-                publish(&status, Some(&c), None, bus.attempts());
+        // Dropping the card unmounts it (and frees the bus) before the
+        // next attempt builds it all again.
+        let quiet_for = unreadable.take().map(|c: SdCard| c.serial);
+        match mount(&mut bus, &health, &nvs, quiet_for) {
+            Mount::Ready(c) => {
+                publish(&status, Some(&c), true, None, bus.attempts());
                 let now = settings.lock().unwrap().clone();
                 let _ = tx.send(Event::Ready(Box::new(prepare(c, &now, &status))));
                 log::info!(
@@ -226,13 +309,32 @@ fn run(task: BootTask) {
                 );
                 return;
             }
-            Err(e) if health.capped => publish(
+            Mount::Unreadable(c) => {
+                publish(
+                    &status,
+                    Some(&c),
+                    false,
+                    Some(config::SD_UNREADABLE.to_string()),
+                    bus.attempts(),
+                );
+                unreadable = Some(c);
+            }
+            Mount::Failed(e) if health.capped => publish(
                 &status,
                 None,
+                false,
                 Some(sdhealth::capped_error(remounts, Some(&e))),
                 bus.attempts(),
             ),
-            Err(e) => publish(&status, None, Some(e), bus.attempts()),
+            Mount::Failed(e) => {
+                if quiet_for.is_some() {
+                    log::warn!(
+                        "microSD: the card that could not be read no longer mounts (taken out?); retrying every {} s",
+                        config::RETRY_INTERVAL.as_secs()
+                    );
+                }
+                publish(&status, None, false, Some(e), bus.attempts())
+            }
         }
     }
 }

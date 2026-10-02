@@ -132,8 +132,14 @@ pub struct Status {
     pub misses: crate::frametime::Misses,
     pub gifs_started: u64,
     pub sd_mounted: bool,
+    /// The mounted card's filesystem answered the boot task's probe (a
+    /// `read_dir` of the root). False with `sd_mounted` true: a card that
+    /// mounts at the SD level whose filesystem cannot be read (exFAT, a
+    /// 64 GB card as sold), which is never handed to the player.
+    pub sd_readable: bool,
     pub sd_capacity_bytes: u64,
-    /// Why the card is not mounted (the last attempt's error), while it is not.
+    /// Why the card is not mounted (the last attempt's error), why a
+    /// mounted one cannot be read, or why it stopped (a card failure).
     pub sd_error: Option<String>,
     /// Mount attempts so far (1 on a normal boot).
     pub sd_attempts: u32,
@@ -191,6 +197,7 @@ impl Status {
             misses: Default::default(),
             gifs_started: 0,
             sd_mounted: false,
+            sd_readable: false,
             sd_capacity_bytes: 0,
             sd_error: None,
             sd_attempts: 0,
@@ -209,6 +216,11 @@ impl Status {
 }
 
 impl Status {
+    /// A card the device can use: mounted, and its filesystem readable.
+    pub fn sd_usable(&self) -> bool {
+        self.sd_mounted && self.sd_readable
+    }
+
     /// Where the file on screen is, in its own timeline, at `t` (since
     /// `epoch`): the frame's start plus the time it has been up, but never
     /// past its hold — a frame that is late (a deadline miss) is still the

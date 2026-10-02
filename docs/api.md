@@ -116,7 +116,7 @@ Counts are since boot.
 | `deadline_misses`, `worst_lateness_ms` | frames shown late; the latest, ms |
 | `misses` | `{by_cause: {open, read, decode, transition, blit, log, other, wake}, late_ms: {"<5", "<20", "<50", "<100", "<250", "<500", ">=500"}}`: late frames by cause and by ms late |
 | `gifs_started`, `streams_aborted`, `log_drops` | files opened; responses cut short; log lines dropped |
-| `sd` | `{mounted, capacity_bytes, error, attempts, clock_khz, fallback, failures, reboots}`: the card; `error` why it is not mounted; `fallback` slowed after failing at full speed; `failures` errors in the last 60 s; `reboots` card-failure restarts in the last 15 min |
+| `sd` | `{mounted, readable, capacity_bytes, error, attempts, clock_khz, fallback, failures, reboots}`: the card; `readable` false when it mounts but its filesystem cannot be read (exFAT: nothing plays); `error` why it is not mounted, not readable or failing; `fallback` slowed after failing at full speed; `failures` errors in the last 60 s; `reboots` card-failure restarts in the last 15 min |
 | `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `task watchdog`, `brownout`, …; `"card failure"`, `"different card"` or null |
 | `overrides`, `hidden` | as in "Fields that recur" |
 | `mode`, `mode_until` | `normal`, `dim` or `off` (night mode); until `"HH:MM"` |
@@ -203,7 +203,7 @@ reboot.
 Reply: `{"ok":true, entries, index, index_ms, overrides, hidden,
 "brightness":N, "max_brightness":N, "reboot_required":bool}` (the playlist
 fields as in "Fields that recur"; `reboot_required` is true when the WiFi
-settings changed).
+settings or the hostname changed).
 
 Errors (nothing is saved): `400` a value out of range or not one of the
 names (the message says which), including `brightness N is above the
@@ -555,9 +555,10 @@ Its files are served at `/…` and `/www/…`.
 
 ### GET /api/www
 
-`{"version","bytes","entries","ok","error"}`: the pack's version
-(`git describe` of its build), size, file count, whether it verified, and
-why not (`error`: erased, damaged, an update cut short, being written).
+`{"version","bytes","entries","ok","error","staged"}`: the pack's version
+(`git describe` of its build), size, file count, whether it verified, why
+not (`error`: erased, damaged, an update cut short, being written), and
+whether the last update since boot was staged on the card (null: none).
 
 ```sh
 curl -s $DMD/api/www
@@ -570,10 +571,11 @@ is erased: not a pack, an unknown format, or a length that is not the
 body's is a `400`, and the app in flash stays. With a card in, it is
 staged and CRC-checked on the card first, so a `408` (cut short) or `422`
 (bad CRC) leaves the old app in place. Then it is written to flash (~7 s
-for 800 KB in all) and served at once; no reboot. Without a card, after a
-`408`/`422` pages are `503` until a good pack is written.
+for 800 KB in all) and served at once; no reboot. Without a card (or one
+that cannot be written), after a `408`/`422` pages are `503` until a good
+pack is written.
 
-Reply: `GET /api/www`'s object. `411` no length; `413` too big. Any good
+Reply: `GET /api/www`'s object; `staged` false means no card staging. `411` no length; `413` too big. Any good
 pack is accepted, older or newer: check `GET /api/www` reports the version
 you sent (`make www-push HOST=…` does).
 
@@ -590,9 +592,10 @@ staged on the card, checked and installed (`docs/ota.md`). Needs a card.
 
 ### GET /api/firmware
 
-`{"version","build","variant","pending","last"}`: the running firmware,
-a staged update not yet installed (or null), the last line of the card's
-`/update/log.txt` (or null).
+`{"version","build","variant","pending","last"}`: the running firmware
+(`build`: its image's version, `"<version> 4mb"`), a staged update not yet
+installed (or null), the last line of the card's `/update/log.txt` (or
+null).
 
 ```sh
 curl -s $DMD/api/firmware
