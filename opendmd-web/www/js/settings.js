@@ -78,7 +78,7 @@ export async function mount(el) {
   const facts = h('dl.facts', { id: 'st-facts' });
   // One quiet line, only when the card has had trouble (sdhealth on the device).
   const cardNote = h('p.cap', { id: 'st-card-note', hidden: true, style: 'margin-top:12px' });
-  // Where and what this player is: its address, its firmware and this page's version.
+  // Where and what this player is: its address, its firmware and this page's version; the API reference (api.html, from docs/api.md).
   const about = h('dl.facts', { id: 'st-about' });
 
   // The playlist choices, rebuilt whenever the config changes or the view
@@ -159,7 +159,8 @@ export async function mount(el) {
     const fact = (k, v) => [h('dt', k), h('dd', v)];
     // (Uptime, memory, playlist and card: Now's health line and More.)
     clear(facts, fact('Entries', s.entries.toLocaleString()), fact('Index', s.index_state ?? '–'));
-    clear(about, fact('Address', `${s.hostname}.local · ${s.ip}`), fact('Firmware', `${s.version} (${s.variant})`), fact('Web app', s.www_version ?? '–'));
+    clear(about, fact('Address', `${s.hostname}.local · ${s.ip}`), fact('Firmware', `${s.version} (${s.variant})`), fact('Web app', s.www_version ?? '–'),
+      fact('API', h('a', { id: 'st-api', href: './api.html', target: '_blank', rel: 'noopener' }, 'API reference')));
     const sd = s.sd;
     const errs = sd.failures || (!sd.mounted && sd.reboots) || 0;
     cardNote.textContent = errs ? `Card errors: ${errs}, retrying`
