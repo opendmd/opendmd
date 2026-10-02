@@ -139,7 +139,7 @@ async function loadConfig() {
 }
 
 async function put(path, body) {
-  const r = await fetch(path, { method: 'PUT', body: JSON.stringify(body) });
+  const r = await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || r.status);
   return j;
