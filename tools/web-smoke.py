@@ -718,8 +718,18 @@ def thumbs_checks(page: Page) -> None:
     check(page.locator("#lib-list .vrow:not([hidden]) canvas.th").count() == 0, "thumbnails: off again -> no canvases")
 
 
+PLAYING = "(document.querySelector('#sets-list .tag.act')?.closest('button.pl').textContent || '')"
+
+
+def open_builder(page: Page) -> None:
+    if not page.eval_on_selector("#builder", "d => d.open"):
+        page.click("#builder > summary")
+    page.wait_for_function("document.querySelectorAll('#b-plats .chip').length > 0 || document.querySelector('#b-count').textContent", timeout=30000)
+
+
 def build_smoke_set(page: Page) -> int:
     goto_view(page, "sets")
+    open_builder(page)
     # The base-playlist select fills when the root listing answers, which a
     # busy device can do late; "0 match" before that is not a count.
     page.wait_for_function("document.querySelectorAll('#b-base option').length > 0", timeout=30000)
@@ -1490,6 +1500,22 @@ def mock_pass(browser) -> None:
         no_leaks(page, "library")
         shot(page, "library", "laptop")
         thumbs_checks(page)
+        # Sets: opening the view reads no root playlist (nor /gifs) until
+        # "Build from filters" is opened.
+        fresh = new_page(browser, "laptop", errors)
+        reqs: list[str] = []
+        fresh.on("request", lambda r: reqs.append(urllib.parse.urlparse(r.url).path))
+        fresh.goto(base + "/#sets")
+        fresh.wait_for_selector("#view-sets.on")
+        fresh.wait_for_selector("#sets-list [data-path='/filelist.xmas']", timeout=20000)
+        fresh.wait_for_timeout(1500)
+        bad = [r for r in reqs if r.startswith("/gifs") or re.fullmatch(r"/filelist\.[a-z.]+", r)]
+        check(not bad and not fresh.eval_on_selector("#builder", "d => d.open"),
+              f"sets: no root playlist or /gifs request until Build from filters opens ({bad})")
+        fresh.click("#builder > summary")
+        fresh.wait_for_function("document.querySelectorAll('#b-plats .chip').length > 0", timeout=20000)
+        check(any(r == "/filelist.txt" for r in reqs), "sets: opening Build from filters reads the base playlist")
+        fresh.context.close()
         # Sets: the playlists by name, the default, activation by value
         goto_view(page, "sets")
         page.wait_for_selector("#sets-list [data-path='/filelist.xmas']", timeout=20000)
@@ -1501,16 +1527,17 @@ def mock_pass(browser) -> None:
               f"sets: friendly labels {labels}")
         dflt = page.eval_on_selector_all("#sets-list [data-path] .tag:not(.act)", "els => els.filter(e => e.textContent === 'Default').map(e => e.closest('[data-path]').dataset.path)")
         check(dflt == ["/filelist.txt"], f"sets: default marked on {dflt}")
-        check("All files" in page.inner_text("#set-active"), f"sets: '{page.inner_text('#set-active')}'")
+        playing = page.eval_on_selector("#sets-list .tag.act", "e => e.closest('button.pl').textContent")
+        check("All files" in playing, f"sets: playing '{playing}'")
         sets_do(page, '/filelist.xmas', "activate")
-        page.wait_for_function("document.querySelector('#set-active').textContent.includes('Christmas')", timeout=60000)
+        page.wait_for_function(f"{PLAYING}.includes('Christmas')", timeout=60000)
         st, cf = get_json(base + "/api/status"), get_json(base + "/api/config")
         check(cf["set"] == "filelist.xmas" and st["manifest"] == "/sdcard/filelist.xmas",
               f"sets: Christmas activated as set \"filelist.xmas\" ({st['entries']} entries)")
         no_leaks(page, "sets")
         shot(page, "sets-root", "laptop")
         sets_do(page, '/filelist.txt', "activate")
-        page.wait_for_function("document.querySelector('#set-active').textContent.includes('All files')", timeout=60000)
+        page.wait_for_function(f"{PLAYING}.includes('All files')", timeout=60000)
         st, cf = get_json(base + "/api/status"), get_json(base + "/api/config")
         check(cf["set"] == "" and st["manifest"] == "/sdcard/filelist.txt", "sets: All files activated as set \"\"")
         n = build_smoke_set(page)
@@ -1519,7 +1546,7 @@ def mock_pass(browser) -> None:
         got = written.read_text().split("\n")[:-1] if written.exists() else []
         check(written.exists() and got == want, f"sets: sets/smoke.txt holds the {len(want)} MD/SNES lines in order (got {len(got)}, editor {n})")
         sets_do(page, '/sets/smoke.txt', "activate")
-        page.wait_for_function("document.querySelector('#set-active').textContent.includes('smoke')", timeout=60000)
+        page.wait_for_function(f"{PLAYING}.includes('smoke')", timeout=60000)
         st = get_json(base + "/api/status")
         check(get_json(base + "/api/config")["set"] == "smoke" and st["manifest"] == "/sdcard/sets/smoke.txt",
               f"sets: activated ({st['entries']} entries)")
@@ -1559,7 +1586,7 @@ def mock_pass(browser) -> None:
         page.evaluate("async () => { const { app } = await import('./js/state.js'); const { emit } = await import('./js/util.js'); app.draft.paths = [...app.selection]; app.draft.name = ''; emit('draft'); }")
         page.fill("#set-name", "cachetest")
         page.click("#set-save-activate")
-        page.wait_for_function("document.querySelector('#set-active').textContent.includes('cachetest')", timeout=60000)
+        page.wait_for_function(f"{PLAYING}.includes('cachetest')", timeout=60000)
         check(get_json(base + "/api/status")["entries"] == 3, "cache: playlist cachetest (the three selected) playing")
         forgot = [post_json(base + "/api/cache/forget", {"path": p})["removed"] for p in selected]
         check(all(forgot), f"cache: POST /api/cache/forget removed the three copies ({forgot})")
@@ -1902,7 +1929,7 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
           f"studio find: a picked picture fills in platform and title ({d.get('platform')}, {d.get('title')})")
     # The same picture from a file: the upscale undone, Pixels, Pan.
     page.set_input_files("#st-file", str(fixture))
-    page.wait_for_function("document.querySelector('#st-msg').textContent.startsWith('Picture: 768')", timeout=20000)
+    page.wait_for_function("document.querySelector('#st-msg').textContent.startsWith('Picture 768')", timeout=20000)
     page.click("#st-fit [data-v=pixels]")
     page.click("#st-motion [data-v=pan]")
     page.wait_for_timeout(400)

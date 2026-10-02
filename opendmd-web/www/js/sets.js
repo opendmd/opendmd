@@ -1,9 +1,9 @@
 // Playlists: list, editor, builder; save PUT /api/sets/<name>, activate PUT /api/config {set}.
 
-import { app, playlistLabel } from './state.js';
+import { app } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions } from './overrides.js';
 import { VList } from './vlist.js';
-import { h, clear, on, toast, label, lines, note, niceName, isSys, byNice, FLAGS } from './util.js';
+import { h, clear, on, toast, label, lines, note, niceName, isSys, byNice, store, FLAGS } from './util.js';
 
 // Not `filelist.*`: the firmware reads such a `set` as a root manifest.
 const NAME_RE = /^(?!filelist\.)[A-Za-z0-9][A-Za-z0-9 _.-]{0,40}$/;
@@ -25,7 +25,6 @@ export async function mount(el) {
   const name = h('input', { type: 'text', id: 'set-name', placeholder: 'e.g. consoles', value: app.draft.name });
   const eCount = h('span.muted', { id: 'set-count' });
   const eSearch = h('input', { type: 'search', id: 'set-search', placeholder: 'Filter entries' });
-  const activeNote = h('span.muted', { id: 'set-active' });
   let view = [];
   const picked = new Set();
 
@@ -67,9 +66,10 @@ export async function mount(el) {
 
   el.append(h('div.cols',
     h('div',
-      h('div.card', h('div.row.sp', h('h2', 'Playlists'), activeNote), setsList,
+      h('div.card', h('h2', 'Playlists'), setsList,
         note('“All files” plays when no other playlist is chosen', 'Activating rebuilds the index on the device (a few seconds; the panel holds its frame).')),
-      h('div.card', h('h2', 'Build from filters'),
+      h('details.card', { id: 'builder', open: store.get('builder', false), ontoggle: (e) => { store.set('builder', e.currentTarget.open); if (e.currentTarget.open) initBuilder(); } },
+        h('summary', 'Build from filters'),
         h('div.form',
           h('label.stack', 'From playlist', baseSel),
           h('label.stack', 'Title contains (any of)', bTitle)),
@@ -95,8 +95,6 @@ export async function mount(el) {
     const lists = await app.playlists();
     known = lists.map((p) => p.path);
     const active = app.activeSet;
-    const activePl = lists.find((p) => p.value === active);
-    activeNote.textContent = app.device ? `Playing ${activePl ? activePl.label : playlistLabel(active || 'filelist.txt')}` : '';
     const rows = lists.sort((a, b) => a.root - b.root || byNice(a.label, b.label)).map((p) => {
       const isActive = app.device && p.value === active, n = h('span.n');
       const acts = (app.device && !isActive) || !p.root;
@@ -111,7 +109,7 @@ export async function mount(el) {
     const keep = baseSel.value;
     clear(baseSel, lists.map((p) => h('option', { value: p.path }, p.label)));
     baseSel.value = keep && known.includes(keep) ? keep : '/filelist.txt';
-    if (!keep && lists.length) platChips();
+    if (!keep && lists.length && built) platChips();
     counts(rows);
   }
   async function counts(rows) {
@@ -169,6 +167,14 @@ export async function mount(el) {
     } catch (e) { toast('delete: ' + e.message, 'bad'); }
   }
 
+  // The builder reads the base playlist and /gifs only once it is first opened.
+  let built = false;
+  function initBuilder() {
+    if (built) return;
+    built = true;
+    categories();
+    platChips();
+  }
   async function categories() {
     let dirs = [];
     try { dirs = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch { /* none */ }
@@ -280,8 +286,8 @@ export async function mount(el) {
   if (app.draft.path) ov.load(app.draft.path);
   on('config', () => loadSets());
 
-  await Promise.all([loadSets(), categories()]);
+  await loadSets();
   refresh();
-  platChips();
+  if (store.get('builder', false)) initBuilder();
   return { show() { name.value = app.draft.name; refresh(); if (app.device) app.refreshStatus().catch(() => {}); } };
 }
