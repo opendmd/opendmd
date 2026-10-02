@@ -245,7 +245,7 @@ function build(root) {
     bm.close?.();
     const data = g.getImageData(0, 0, w, hh).data;
     adopt(new art.Studio(data, w, hh), from);
-    msg.textContent = `${from.label || 'Picture'}: ${ow} × ${oh}`;
+    msg.textContent = `${from.label ? from.label + ':' : 'Picture'} ${ow} × ${oh}`;
     restage(true);
     return true;
   }
