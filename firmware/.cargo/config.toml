@@ -4,6 +4,11 @@ target = "xtensa-esp32-espidf"
 [target.xtensa-esp32-espidf]
 linker = "ldproxy"
 runner = "espflash flash --monitor"
+# sha2's compact software rounds instead of the fully unrolled ones: the
+# unrolled SHA-512 compress alone was 50 KB of flash (Ed25519 hashes with
+# it, in src/ota.rs), SHA-256's 13 KB. Speed is irrelevant here: one
+# 2 MB image hashed per firmware update.
+rustflags = ["--cfg", 'sha2_backend_soft="compact"']
 
 [unstable]
 build-std = ["std", "panic_abort"]
