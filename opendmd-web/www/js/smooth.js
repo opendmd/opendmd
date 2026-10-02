@@ -165,10 +165,10 @@ export async function detail(box, it, bytes, pv, cap) {
 
   let showing = false;
   const msg = h('div.cap', { id: 'lib-smooth-msg' });
-  const sw = h('input', { type: 'checkbox', id: 'lib-smooth-on', checked: on, onchange: toggle });
-  const pvBtn = h('button.sm', { id: 'lib-smooth-preview', onclick: preview }, 'Preview');
+  const sw = h('input.sw', { type: 'checkbox', role: 'switch', id: 'lib-smooth-on', checked: on, onchange: toggle });
+  const pvBtn = h('button.sm.txt', { id: 'lib-smooth-preview', onclick: preview }, 'Preview');
   clear(box,
-    h('div.row.sp', h('label', sw, h('b', 'Smooth motion')), pvBtn),
+    h('div.swrow', h('label', sw, 'Smooth motion'), pvBtn),
     h('div.cap', { id: 'lib-smooth-text' },
       `${s.percent}% of this animation moves in steps of 2 px or more. Smooth motion adds ${s.added.toLocaleString()} frames.`),
     msg);

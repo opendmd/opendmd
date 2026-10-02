@@ -1,6 +1,4 @@
-// A virtualised list: thousands of rows (3,781 in gifs/Consoles, 10,133 in
-// filelist.txt) with only the visible ones in the DOM. Fixed row height; a
-// pool of row elements is re-rendered on scroll.
+// A virtualised list: fixed row height, a pool of rows re-rendered on scroll.
 
 import { h } from './util.js';
 

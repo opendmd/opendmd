@@ -12,9 +12,11 @@ import { followCard } from './follow.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, on, toast, base, note, store, debounce, saver, brightSlider } from './util.js';
 
+const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', !app.device), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library');
+
 export async function mount(el) {
   if (!app.device) {
-    el.append(h('div.card', h('h2', 'Settings'), h('p.muted', 'Device settings, WiFi and reboot live on the player. This page is in local mode: open it from the player (http://opendmd.local/) to use them.')));
+    el.append(h('div.card', h('h2', 'Settings'), h('p.muted', 'Device settings, WiFi and reboot live on the player. This page is in local mode: open it from the player (http://opendmd.local/) to use them.'), thumbs()));
     return {};
   }
   const c = app.config || await app.refreshConfig();
@@ -121,7 +123,7 @@ export async function mount(el) {
     h('div.grp', { id: 'pc' }, pcH,
       note('Prepared copies play with less memory and start faster', 'Originals stay as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
-      h('div.bar', { style: 'margin:12px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox),
+      h('div.bar', { style: 'margin:12px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox, thumbs()),
     h('div.grp', netH, note('WiFi and hostname changes need a reboot', 'With no saved network the player raises the open OpenDMD-Setup access point.'),
       h('div.form.f2',
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),

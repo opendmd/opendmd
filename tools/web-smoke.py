@@ -591,6 +591,26 @@ def row_label(page: Page, path: str) -> str:
     return page.eval_on_selector(f"#sets-list [data-path='{path}'] .grow", "e => e.firstChild.textContent")
 
 
+def sets_do(page: Page, path: str, what: str) -> None:
+    """Playlists: a row's "…" menu, then Activate or Delete."""
+    page.click(f"#sets-list [data-path='{path}'] button.more")
+    page.click(f"#sets-menu [data-do={what}]")
+
+
+def add_files(page: Page, files) -> None:
+    """Library: + Add, then Add GIFs… and the files picked."""
+    page.click("#lib-add-btn")
+    with page.expect_file_chooser() as fc:
+        page.click("#lib-add-gifs")
+    fc.value.set_files([str(f) for f in files])
+
+
+def details_do(page: Page, item: str) -> None:
+    """Library Details: the "…" menu, then one of its items."""
+    page.click("#lib-d-more")
+    page.click(item)
+
+
 # Visible copy that would leak the implementation: prepared copies are a
 # cache the user never has to know the format or layout of, and per-GIF
 # overrides are "favourite"/"hide"/"play longer"/"loop N times" -- never
@@ -630,13 +650,75 @@ def open_library(page: Page) -> None:
     wait_lit(page, "#lib-panel", "library")
 
 
+def draft(page: Page) -> list[str]:
+    return page.evaluate("async () => { const { app } = await import('./js/state.js'); return [...app.draft.paths]; }")
+
+
+def reorder_checks(page: Page, two: list[str]) -> None:
+    """The playlist editor: Alt+↓ on an entry's handle moves it (the focus
+    follows), Alt+↑ back; a drag of the handle moves it; the Arrange menu."""
+    grip = "#set-entries .vrow:not([hidden]) >> nth=0 >> button.grip"
+    page.focus(grip)
+    page.keyboard.press("Alt+ArrowDown")
+    focus = page.evaluate("document.activeElement.closest('.vrow')?._i")
+    check(draft(page) == two[::-1] and focus == 1, f"playlists: Alt+Down moves the entry, focus follows ({draft(page)}, row {focus})")
+    page.keyboard.press("Alt+ArrowUp")
+    check(draft(page) == two, "playlists: Alt+Up moves it back")
+    box = page.locator(grip).bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x, y + 25, steps=4)
+    page.mouse.move(x, y + 45, steps=4)
+    page.mouse.up()
+    check(draft(page) == two[::-1], f"playlists: dragging the handle down a row moves the entry ({draft(page)})")
+    page.click("#set-arrange")
+    items = page.eval_on_selector_all("#set-arrange-menu .mi", "els => els.map(e => e.textContent + (e.classList.contains('danger') ? '!' : ''))")
+    check(items == ["Shuffle", "Sort A–Z", "Picked to top", "Remove picked!", "Clear!"], f"playlists: the Arrange menu ({items})")
+    page.click("#set-sort")
+    check(page.locator("#set-arrange-menu").count() == 0 and len(draft(page)) == 2, "playlists: Sort A–Z from Arrange")
+    page.evaluate(f"async () => {{ const {{ app }} = await import('./js/state.js'); const {{ emit }} = await import('./js/util.js'); app.draft.paths = {json.dumps(two)}; emit('draft'); }}")
+
+
+def thumbs_checks(page: Page) -> None:
+    """Settings → Advanced → Thumbnails on: the visible Library rows get a
+    first-frame canvas within 3 s, and the list still scrolls (new rows
+    get theirs). Off again after."""
+    goto_view(page, "settings")
+    check(not page.is_checked("#st-thumbs"), "thumbnails: off by default on a device")
+    page.check("#st-thumbs")
+    goto_view(page, "library")
+    pick_cat(page, "Consoles")
+    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    page.fill("#lib-search", "")
+    t0 = time.time()
+    in_view = "[...document.querySelectorAll('#lib-list .vrow:not([hidden])')].filter(r => { const t = r.getBoundingClientRect().top, l = document.querySelector('#lib-list').getBoundingClientRect(); return t >= l.top && t < l.bottom - 40; })"
+    page.wait_for_function(f"{in_view}.slice(0, 6).every(r => r.querySelector('canvas.th[data-done]'))", timeout=3000)
+    check(True, f"thumbnails: six rows drawn in {time.time() - t0:.1f} s")
+    lit = page.evaluate("""() => { const c = document.querySelector('#lib-list .vrow:not([hidden]) canvas.th[data-done="1"]');
+        if (!c) return 0; const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
+        for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }""")
+    check(lit > 50, f"thumbnails: a first frame drawn ({lit} lit px)")
+    shot(page, "library-thumbs", "laptop")
+    first = row_path(page, "#lib-list", 0)
+    page.eval_on_selector("#lib-list", "e => { e.scrollTop = 4000; }")
+    page.wait_for_function(f"document.querySelector('#lib-list').scrollTop > 3000 && document.querySelector('#lib-list .vrow:not([hidden])').dataset.path !== {json.dumps(first)}", timeout=3000)
+    page.wait_for_function(f"{in_view}.slice(0, 6).every(r => r.querySelector('canvas.th[data-done]'))", timeout=3000)
+    check(True, "thumbnails: the list scrolls and the new rows get theirs")
+    page.eval_on_selector("#lib-list", "e => { e.scrollTop = 0; }")
+    goto_view(page, "settings")
+    page.uncheck("#st-thumbs")
+    goto_view(page, "library")
+    check(page.locator("#lib-list .vrow:not([hidden]) canvas.th").count() == 0, "thumbnails: off again -> no canvases")
+
+
 def build_smoke_set(page: Page) -> int:
     goto_view(page, "sets")
     # The base-playlist select fills when the root listing answers, which a
     # busy device can do late; "0 match" before that is not a count.
     page.wait_for_function("document.querySelectorAll('#b-base option').length > 0", timeout=30000)
-    page.fill("#b-platforms", "MD,SNES")
-    page.dispatch_event("#b-platforms", "change")
+    for p in ("MD", "SNES"):
+        page.click(f"#b-plats [data-platform={p}]")
     page.wait_for_function("/^[1-9][\\d,]* match/.test(document.querySelector('#b-count').textContent)", timeout=30000)
     page.click("#b-use")
     page.wait_for_function("/^[1-9]/.test(document.querySelector('#set-count').textContent)")
@@ -1201,7 +1283,7 @@ def effects_checks(page: Page, base: str, mock: bool) -> None:
     page.evaluate("async () => { const { app } = await import('./js/state.js'); app.selection.clear(); }")
     page.reload()
     goto_view(page, "sets")
-    page.click("#sets-list [data-path='/sets/fxsmoke.txt'] button.sm >> nth=0")
+    page.click("#sets-list [data-path='/sets/fxsmoke.txt'] button.pl")
     page.wait_for_selector(f"#set-entries .vrow[data-path='{want}']", timeout=20000)
     t = page.inner_text(f"#set-entries .vrow[data-path='{want}'] .t")
     check(t.startswith("Tunnel"), f"playlists: after a reload the playlist lists the effect as '{t}'")
@@ -1401,6 +1483,7 @@ def mock_pass(browser) -> None:
               "library overrides: reset all -> filelist.meta gone (or empty)")
         no_leaks(page, "library")
         shot(page, "library", "laptop")
+        thumbs_checks(page)
         # Sets: the playlists by name, the default, activation by value
         goto_view(page, "sets")
         page.wait_for_selector("#sets-list [data-path='/filelist.xmas']", timeout=20000)
@@ -1413,14 +1496,14 @@ def mock_pass(browser) -> None:
         dflt = page.eval_on_selector_all("#sets-list [data-path] .tag:not(.act)", "els => els.filter(e => e.textContent === 'Default').map(e => e.closest('[data-path]').dataset.path)")
         check(dflt == ["/filelist.txt"], f"sets: default marked on {dflt}")
         check("All files" in page.inner_text("#set-active"), f"sets: '{page.inner_text('#set-active')}'")
-        page.click("#sets-list [data-path='/filelist.xmas'] >> text=Activate")
+        sets_do(page, '/filelist.xmas', "activate")
         page.wait_for_function("document.querySelector('#set-active').textContent.includes('Christmas')", timeout=60000)
         st, cf = get_json(base + "/api/status"), get_json(base + "/api/config")
         check(cf["set"] == "filelist.xmas" and st["manifest"] == "/sdcard/filelist.xmas",
               f"sets: Christmas activated as set \"filelist.xmas\" ({st['entries']} entries)")
         no_leaks(page, "sets")
         shot(page, "sets-root", "laptop")
-        page.click("#sets-list [data-path='/filelist.txt'] >> text=Activate")
+        sets_do(page, '/filelist.txt', "activate")
         page.wait_for_function("document.querySelector('#set-active').textContent.includes('All files')", timeout=60000)
         st, cf = get_json(base + "/api/status"), get_json(base + "/api/config")
         check(cf["set"] == "" and st["manifest"] == "/sdcard/filelist.txt", "sets: All files activated as set \"\"")
@@ -1429,13 +1512,13 @@ def mock_pass(browser) -> None:
         want = expected_md_snes()
         got = written.read_text().split("\n")[:-1] if written.exists() else []
         check(written.exists() and got == want, f"sets: sets/smoke.txt holds the {len(want)} MD/SNES lines in order (got {len(got)}, editor {n})")
-        page.click("#sets-list [data-path='/sets/smoke.txt'] >> text=Activate")
+        sets_do(page, '/sets/smoke.txt', "activate")
         page.wait_for_function("document.querySelector('#set-active').textContent.includes('smoke')", timeout=60000)
         st = get_json(base + "/api/status")
         check(get_json(base + "/api/config")["set"] == "smoke" and st["manifest"] == "/sdcard/sets/smoke.txt",
               f"sets: activated ({st['entries']} entries)")
         shot(page, "sets", "laptop")
-        page.click("#sets-list [data-path='/sets/smoke.txt'] >> text=Delete")
+        sets_do(page, '/sets/smoke.txt', "delete")
         page.wait_for_selector("#sets-list [data-path='/sets/smoke.txt']", state="detached", timeout=60000)
         check(not written.exists() and get_json(base + "/api/config")["set"] == "",
               "sets: deleted after switching back to the default")
@@ -1447,7 +1530,7 @@ def mock_pass(browser) -> None:
         # (it otherwise only does that on a config change).
         page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
         page.wait_for_selector("#sets-list [data-path='/sets/overridetest.txt']", timeout=20000)
-        page.click("#sets-list [data-path='/sets/overridetest.txt'] >> text=Open")
+        page.click("#sets-list [data-path='/sets/overridetest.txt'] button.pl")
         page.wait_for_selector("#set-entries .vrow[data-path]")
         ov_row_path = row_path(page, "#set-entries", 0)
         check(ov_row_path == ov_set_lines[0], f"playlists: editor opened overridetest ({ov_row_path})")
@@ -1461,6 +1544,7 @@ def mock_pass(browser) -> None:
         got_ov_meta = ov_meta_file.read_text() if ov_meta_file.exists() else ""
         check(got_ov_meta == want_ov_meta, f"playlists: sets/overridetest.meta byte-for-byte ({got_ov_meta!r})")
         check(page.locator("#set-entries .vrow:not([hidden]) >> nth=0 >> i.fav").count() == 1, "playlists: favourite glyph in editor")
+        reorder_checks(page, ov_set_lines)
         no_leaks(page, "playlists (overrides)")
         # Cache: the three selected GIFs as a playlist, their copies forgotten.
         goto_view(page, "library")
@@ -1523,7 +1607,7 @@ def mock_pass(browser) -> None:
         goto_view(page, "library")
         pick_cat(page, "Consoles")
         page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
-        page.set_input_files("#lib-add-files", [str(a) for a in adds])
+        add_files(page, adds)
         # The Add GIFs dialog: both named from their own names, the second
         # the next number; then Add.
         page.wait_for_function("(e => e && e.dataset.name === 'SNES_Smoke_Added_02.gif')(document.querySelector('#dl .dl-item[data-i=\"1\"]'))", timeout=20000)
@@ -1553,7 +1637,7 @@ def mock_pass(browser) -> None:
         find_checks(page)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
-        page.click("#sets-list [data-path='/sets/cachetest.txt'] >> text=Delete")
+        sets_do(page, '/sets/cachetest.txt', "delete")
         page.wait_for_selector("#sets-list [data-path='/sets/cachetest.txt']", state="detached", timeout=60000)
         check(get_json(base + "/api/config")["set"] == "", "cache: cachetest deleted, All files playing")
         smooth_checks(page, base, overlay)
@@ -1670,9 +1754,10 @@ def mock_pass(browser) -> None:
         check("building" in page.inner_text("#st-facts"), "settings: building -> set select disabled")
         shot(page, "settings-building", "laptop")
         goto_view(page, "sets")
-        page.wait_for_function("[...document.querySelectorAll('#sets-list [data-act]')].every(b => b.disabled)", timeout=5000)
-        check(page.locator("#sets-list [data-act]").count() > 0, "sets: building -> every Activate disabled")
+        page.click("#sets-list [data-path='/filelist.xmas'] button.more")
+        check(page.is_disabled("#sets-menu [data-do=activate]"), "sets: building -> Activate disabled")
         shot(page, "sets-building", "laptop")
+        page.keyboard.press("Escape")
         page.unroute("**/api/status")
         goto_view(page, "settings")
         page.wait_for_function("!document.querySelector('#st-set').disabled", timeout=8000)
@@ -1748,6 +1833,8 @@ def open_studio(page: Page, via: str = "#lib-art") -> None:
     if via == "#lib-art":
         goto_view(page, "library")
         page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    if via == "#lib-art":
+        page.click("#lib-add-btn")
     page.click(via)
     page.wait_for_selector("#view-studio.on #studio .st-grid", timeout=20000)
     check(page.url.endswith("#studio"), f"studio: {via} opens the Make art view ({page.url.rsplit('/', 1)[-1]})")
@@ -2163,7 +2250,7 @@ def find_checks(page: Page) -> None:
     page.wait_for_timeout(300)
     before = (page.inner_text("#lib-count"), page.eval_on_selector_all("#lib-list .vrow:not([hidden]) .t", "els => els.slice(0, 5).map(e => e.textContent)"))
     page.click("#lib-src [data-src=gifcities]")
-    page.wait_for_selector("#lib-find:not([hidden]) #find-narrow")
+    page.wait_for_selector("#lib-narrow:not([hidden]) #find-narrow")
     check(not page.is_visible("#lib-list") and not page.is_visible("#lib-cats") and page.input_value("#lib-search") == ""
           and page.get_attribute("#lib-search", "placeholder") == "Search GifCities",
           "find: GifCities hides the list and the tabs; the box searches GifCities")
@@ -2262,8 +2349,15 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     got = {k: page.inner_text(f"#lib-d-{k}") for k in ("title", "platform", "category", "author")}
     check(got == {"title": "Mega Man X 08", "platform": "SNES", "category": "Consoles", "author": "sephirot68"},
           f"details: the fields of {known.rsplit('/', 1)[1]} ({got})")
-    for sel in ("#lib-play", "#lib-d-add", "#lib-d-art", "#lib-d-fav", "#lib-d-hide", "#lib-ovset", "#lib-d-edit", "#lib-d-del"):
+    meta = page.inner_text("#lib-d-meta")
+    check(meta == "SNES · Consoles · by sephirot68", f"details: one line '{meta}'")
+    for sel in ("#lib-play", "#lib-d-add", "#lib-d-art", "#lib-d-more"):
         check(page.is_visible(sel), f"details: {sel} shown")
+    page.click("#lib-d-more")
+    for sel in ("#lib-d-fav", "#lib-d-hide", "#lib-d-edit", "#lib-d-del"):
+        check(page.is_visible(sel), f"details: {sel} in the … menu")
+    check("danger" in (page.get_attribute("#lib-d-del", "class") or ""), "details: Delete… is destructive in the menu")
+    page.keyboard.press("Escape")
     no_leaks(page, "library (details)")
     shot(page, "library-details", "laptop")
     # Add GIFs: a grammar name and a hash-like one.
@@ -2278,7 +2372,7 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
             if (m := re.fullmatch(r"SNES_Super_Metroid_(\d+)\.gif", n))]
     want_named = f"SNES_Super_Metroid_{max(have, default=0) + 1:02d}.gif"
     pick_cat(page, "Consoles")
-    page.set_input_files("#lib-add-files", [str(named), str(hashy)])
+    add_files(page, [named, hashy])
     page.wait_for_function("(e => e && e.dataset.name)(document.querySelector('#dl .dl-item[data-i=\"0\"]'))", timeout=20000)
     item = lambda i, sel: f"#dl .dl-item[data-i='{i}'] {sel}"
     t0, p0 = page.input_value(item(0, ".dl-title")), page.input_value(item(0, ".dl-plat"))
@@ -2313,9 +2407,8 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     check(card in plist_file.read_text().split("\n"), "add dialog: offered and appended to the playlist in play")
     # Mark it: a favourite in cachetest, Smooth motion's list.
     lib_row(page, card)
-    page.select_option("#lib-ovset", "/sets/cachetest.txt")
-    page.wait_for_timeout(500)
-    page.click("#lib-d-fav")
+    details_do(page, "#lib-d-fav")
+    page.click("#lib-in-menu [data-path='/sets/cachetest.txt']")
     meta = overlay / "sets" / "cachetest.meta"
     deadline = time.time() + 10
     while time.time() < deadline and not (meta.exists() and card in meta.read_text()):
@@ -2326,7 +2419,7 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     smooth.parent.mkdir(parents=True, exist_ok=True)
     smooth.write_text((smooth_before or "") + card + "\n")
     # Edit details: a new title and another category -> a move.
-    page.click("#lib-d-edit")
+    details_do(page, "#lib-d-edit")
     page.wait_for_selector("#dl .dl-item[data-i='0'][data-name]", timeout=20000)
     f = {k: page.input_value(item(0, f".dl-{k}")) for k in ("title", "plat", "cat", "author")}
     check(f == {"title": "Smoke Test Card", "plat": "OTHER", "cat": "Consoles", "author": "smoker"}, f"edit: the fields read back ({f})")
@@ -2360,7 +2453,7 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
           f"{page.input_value('#st-author')}) and Replace / Save as new")
     # Delete: after asking, the GIF, its copy, its playlist line, favourite, Smooth line.
     lib_row(page, to)
-    page.click("#lib-d-del")
+    details_do(page, "#lib-d-del")
     page.wait_for_function("document.querySelector('#lib-d-body').hidden", timeout=60000)
     check(not (overlay / to.lstrip("/")).exists() and not (overlay / cache_path(to).lstrip("/")).exists(), "delete: the GIF and its copy are gone")
     check(to not in plist_file.read_text().split("\n"), "delete: the playlist line is gone")
@@ -2799,6 +2892,8 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     check(overflow <= 0, f"phone: no horizontal scroll ({overflow}px)")
     # The Library's Details on a phone: a sheet over the list.
     goto_view(page, "library")
+    w = page.eval_on_selector("#lib-search", "e => e.getBoundingClientRect().width")
+    check(w >= 150, f"phone library: the search box has room ({w:.0f} px)")
     check(not page.is_visible("#lib-side"), "phone library: no Details until a GIF is picked")
     page.click("#lib-list .vrow:not([hidden]) >> nth=0")
     page.wait_for_selector("#lib-side.open #lib-d-title", timeout=10000)
@@ -2812,8 +2907,9 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     gif = (OUT / "find-fixture.gif").read_bytes()
     page.route("https://gifcities.archive.org/api/v1/gifsearch*", lambda r: r.fulfill(status=200, body=json.dumps(GC_HITS), headers={"access-control-allow-origin": "*", "content-type": "application/json"}))
     page.route("https://blob.gifcities.org/**", lambda r: r.fulfill(status=200, body=gif, headers=gc_blob_headers(r.request)))
-    page.click("#lib-src [data-src=gifcities]")
-    page.wait_for_selector("#lib-find:not([hidden]) #find-narrow")
+    page.click("#lib-src .on")
+    page.click("#lib-src-menu [data-src=gifcities]")
+    page.wait_for_selector("#lib-narrow:not([hidden]) #find-narrow")
     page.fill("#lib-search", "mario")
     page.click("#lib-go")
     page.wait_for_function("document.querySelector('#find-count').textContent === '3 of 3'", timeout=10000)
@@ -2821,7 +2917,8 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
     check(page.is_visible("#find-art") and wide <= 0, f"phone library: GifCities results, a hit picked ({wide}px over)")
     shot(page, "library-find", "phone")
-    page.click("#lib-src [data-src='']")
+    page.click("#lib-src .on")
+    page.click("#lib-src-menu [data-src='']")
     # The Studio on a phone, from the nav: one column, nothing wider than the screen.
     hits: list[str] = []
     stub_art(page, hits)
@@ -3032,7 +3129,7 @@ def device_pass(browser, device: str) -> None:
             body = resp.read().decode()
         check(len(body.split("\n")) - 1 == n and body.endswith("\n"), f"device sets: /sets/smoke.txt saved ({n} lines)")
         shot(page, "device-sets", "laptop")
-        page.click("#sets-list [data-path='/sets/smoke.txt'] >> text=Delete")
+        sets_do(page, '/sets/smoke.txt', "delete")
         page.wait_for_selector("#sets-list [data-path='/sets/smoke.txt']", state="detached", timeout=30000)
         listing = get_json(base + "/api/files?dir=/sets")
         check(not any(e["name"].startswith("smoke.txt") for e in listing["entries"]), "device sets: smoke deleted")

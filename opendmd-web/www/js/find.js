@@ -150,8 +150,9 @@ export const style = () => (styled ??= new Promise((res) => document.head.append
 
 // A results grid into `el`, with the narrowing row above it and, for the
 // hit picked, a strip with "Open in Make art" (`onPick(hit)`, awaited) and
-// "Seen on…". Returns { use(source), search(q) }.
-export function mountResults(el, { onPick }) {
+// "Seen on…"; the narrowing row goes into `narrow` when given (the
+// Library's header). Returns { use(source), search(q) }.
+export function mountResults(el, { onPick, narrow }) {
   style();
   let src = null, all = [], tok = 0, q = '', urls = [];
   const opts = {}; // per source id: the filters' values
@@ -164,7 +165,8 @@ export function mountResults(el, { onPick }) {
   const seen = h('a', { id: 'find-seen', target: '_blank', rel: 'noopener' }, 'Seen on…');
   const pick = h('div.find-pick.row', { id: 'find-pick', hidden: true }, h('div.grow', pTitle, ' ', pDims, h('div', pMsg)), seen, artBtn);
   const caption = h('p.cap', { id: 'find-caption' });
-  el.append(h('div.find', { id: 'find' }, narrowRow, status, grid, pick, caption));
+  el.append(h('div.find', { id: 'find' }, !narrow && narrowRow, status, grid, pick, caption));
+  narrow?.append(narrowRow);
 
   const o = () => opts[src.id];
   function controls() {
