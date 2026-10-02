@@ -826,8 +826,13 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/api/www", Method::Get, |req| req.json(&www::info_json()))?;
     let c = ctx.clone();
     server.route("/api/www", Method::Put, move |req| {
-        let mounted = c.status.lock().unwrap().sd_usable();
-        stream::receive(req, move |up| www::receive(up, mounted))
+        // Why staging on the card is not possible, if it is not: the log
+        // and the reply say so in words (no card, or one that cannot be read).
+        let card = {
+            let st = c.status.lock().unwrap();
+            if st.sd_usable() { None } else if st.sd_mounted { Some("card not readable") } else { Some("no card") }
+        };
+        stream::receive(req, move |up| www::receive(up, card))
     })?;
 
     // Firmware updates over the LAN (`ota.rs`, docs/ota.md): a signed
