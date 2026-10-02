@@ -34,9 +34,13 @@ is first picked or Make art opens), <= 10 KB, and so does Smooth motion
 (`js/smooth.js`: the Library's control, the list, the smoothed copy, Make
 art's save of it; imported by a Library preview on a device, a prepare run,
 or Make art's switch; counted with the page until 2026-10-01), <= 6 KB,
-and so does the API reference page (`api.html`, rendered from docs/api.md
+and so do Settings' Firmware and Security groups (`js/firmware.js`: the
+firmware version, "Update from file…" with its progress and wait for the
+restart, and the API key switch; imported when Advanced is first open),
+<= 4 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
 by tools/api-page.py, opened from Settings -> About in its own tab), <=
-12 KB. The name index for "Find art
+13 KB (12 KB until the Security and Firmware update sections, 2026-10-02;
+the page is only fetched when opened from Settings → About). The name index for "Find art
 for a game" (`art/*.json`, one file
 fetched per search) is printed, with no budget. Raw sizes are printed for
 information. A file with no `.gz` beside it counts at its raw size. Exits 1
@@ -74,7 +78,9 @@ FIND_GZ_BUDGET = 10 * 1024
 FIND = {"js/find.js", "find.css"}
 SMOOTH_GZ_BUDGET = 6 * 1024
 SMOOTH = {"js/smooth.js"}
-API_GZ_BUDGET = 12 * 1024
+FIRMWARE_GZ_BUDGET = 4 * 1024
+FIRMWARE = {"js/firmware.js"}
+API_GZ_BUDGET = 13 * 1024
 API = {"api.html"}
 
 
@@ -112,6 +118,8 @@ def main() -> int:
             kind = "find"
         elif rel in SMOOTH:
             kind = "smooth"
+        elif rel in FIRMWARE:
+            kind = "firmware"
         elif rel in API:
             kind = "api page"
         elif rel.startswith("art/"):
@@ -132,7 +140,7 @@ def main() -> int:
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
-                         ("smooth", SMOOTH_GZ_BUDGET), ("api page", API_GZ_BUDGET),
+                         ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("api page", API_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

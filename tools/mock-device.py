@@ -1,13 +1,13 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["pynacl>=1.5"]
 # ///
 """A fake OpenDMD ESP32 device, for testing the browser management UI without
 hardware.
 
     uv run tools/mock-device.py --root ~/scratch/dmdos-card [--overlay DIR] \
         [--www opendmd-web/www] [--host 127.0.0.1] [--port 8080] [--dwell SECS] \
-        [--strict] [--quiet]
+        [--strict] [--quiet] [--ota-pub firmware/keys/opendmd.pub]
 
     uv run tools/mock-device.py --proxy http://192.168.1.69 [--www ...] [--port 8080]
 
@@ -194,6 +194,29 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   object as `www`, and `www_version`. `PUT /api/www` wants a
   `Content-Length` (411), at most 1,310,720 B (413) and the `ODWP` magic
   (400); it replies as `GET` does and changes nothing served.
+- **Security** (docs/api.md "Security"), checked in `route` before any
+  handler: a `POST`/`PUT`/`DELETE` whose `Origin` names another host[:port]
+  than `Host` (scheme dropped, `:80` dropped, case ignored) is a 403
+  `{"error":"cross-origin request refused"}` (no `Origin`: allowed); with
+  `api_key` set (`PUT /api/config`, 8..64 of `A-Za-z0-9._~-`, `""` clears;
+  `GET /api/config` shows only `api_key_set`) every `/api/*` request and
+  every `GET` of `/gifs/*`, `/cache/*`, `/sets/*`, `/filelist*` needs
+  `Authorization: Bearer <key>` or `?key=<key>`, else 401 `{"error":"API key
+  required"}` + `WWW-Authenticate: Bearer` (the web app's own files never
+  do; setup mode is not modelled); and the JSON routes (`JSON_ROUTES`) with
+  a non-empty body whose `Content-Type` is not `application/json` are a 415
+  `{"error":"Content-Type must be application/json"}`.
+- **Firmware update** (docs/ota.md): `GET /api/firmware` is `{version,
+  build, variant, pending, last}`; `PUT /api/firmware` takes a signed bundle
+  and verifies it as `tools/fw-sign.py verify` does against `--ota-pub`
+  (default `firmware/keys/opendmd.pub`): 411 without a length, 413 over
+  140 B + the 2,359,296 B factory partition, 422 `{"error":"<reason>"}` for
+  any failure (nothing changes). Success: `{"ok":true,"version",
+  "rebooting":true}`, then a simulated restart: for `RESTART_SECS` every
+  `/api/*` request is a 503 `{"error":"restarting"}` (`Retry-After: 1`),
+  then the player "boots" again reporting the new `version` in
+  `/api/status` and `/api/firmware`, with `last` an updater-style line and
+  `pending` null. Nothing is written to disk.
 - **JSON bodies over 8 KB** (`PUT /api/config`, `POST /api/play`) are a 413
   `{"error":"body is N B, the limit is 8192 B"}`, judged on `Content-Length`.
 - **Per-GIF overrides** (`opendmd_core::overrides`): a playlist's `.meta`
@@ -267,6 +290,7 @@ randomness every time).
 
 import argparse
 import datetime
+import hashlib
 import http.client
 import http.server
 import json
@@ -294,6 +318,22 @@ LEGACY_DIR = "odm"                     # the old prepared format's tree: ignored
 SET_NOT_FOUND = "set not found"        # state::SET_NOT_FOUND
 SETS_DIR = "sets"                      # config::SETS_DIR
 WWW_PARTITION_SIZE = 1_310_720         # the www partition (partitions.csv)
+# Firmware update (docs/ota.md, tools/fw-sign.py): the bundle header and the
+# v2 factory partition the image must fit.
+OTA_MAGIC = b"ODFW1\0\0\0"
+OTA_HEADER_LEN = 140
+OTA_SIGNED_LEN = 76
+OTA_FACTORY_BYTES = 0x240000           # 2,359,296
+RESTART_SECS = 3.0                     # the simulated restart after an update
+MOCK_VERSION = "0.1.0-mock"
+# docs/api.md "Security": the API key's alphabet and length, and the routes
+# whose body is JSON (a non-empty body must say application/json).
+API_KEY_RE = re.compile(r"[A-Za-z0-9._~-]{8,64}")
+JSON_ROUTES = {
+    ("PUT", "/api/config"), ("PUT", "/api/schedule"), ("POST", "/api/wake"), ("POST", "/api/play"),
+    ("POST", "/api/cache/failed"), ("POST", "/api/cache/forget"), ("POST", "/api/follow/test"),
+    ("POST", "/api/files/move"),
+}
 SD_CAPACITY_BYTES = 31_266_439_168     # a plausible "measured" capacity for /api/status
 
 # firmware config::BRIGHTNESS_SAFE_MAX (128: measured on the rig, see there);
@@ -345,6 +385,7 @@ DEFAULT_SETTINGS = {
     "look": "colour",           # colour / amber / red / green / blue / white
     "glow": "off",              # off / short / long
     "boot_show": "short",       # the start-up show: off / short / full
+    "api_key": "",              # "" = no key asked; never echoed back
 }
 LOOKS = ("colour", "amber", "red", "green", "blue", "white")
 GLOWS = ("off", "short", "long")
@@ -384,6 +425,7 @@ FIELD_TYPES = {
     "look": "str",
     "glow": "str",
     "boot_show": "str",
+    "api_key": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
     # alongside "set" (see h_config_put).
 }
@@ -398,11 +440,15 @@ STATUS_TEXT = {
     200: "OK",
     302: "Found",
     400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
     404: "Not Found",
     405: "Method Not Allowed",
     409: "Conflict",
+    411: "Length Required",
     413: "Payload Too Large",
     415: "Unsupported Media Type",
+    422: "Unprocessable Entity",
     500: "Internal Server Error",
     503: "Service Unavailable",
 }
@@ -1084,6 +1130,49 @@ def gif_delays(b: bytes) -> list[int]:
         else:
             break  # 0x3B trailer, or junk
     return delays
+
+
+def ota_check(data: bytes, pub) -> str:
+    """The bundle's version, or ValueError(reason): opendmd_core::ota's
+    checks in the firmware's order (the header and its signature as it
+    arrives, then whether it fits, then the image) and its messages."""
+    from nacl.exceptions import BadSignatureError
+    if len(data) < OTA_HEADER_LEN:
+        raise ValueError(f"truncated: {len(data)} B, the bundle header is {OTA_HEADER_LEN} B")
+    if data[:8] != OTA_MAGIC:
+        raise ValueError("not an OpenDMD firmware bundle (bad magic)")
+    v = data[8:40].rstrip(b"\0")
+    try:
+        version = v.decode()
+    except UnicodeDecodeError:
+        version = ""
+    if not version or "\0" in version or not version.isprintable():
+        raise ValueError("the bundle's version field is malformed")
+    if pub is None:
+        raise ValueError("the firmware's public key is invalid")
+    try:
+        pub.verify(data[:OTA_SIGNED_LEN], data[OTA_SIGNED_LEN:OTA_HEADER_LEN])
+    except BadSignatureError:
+        raise ValueError("bad signature: not signed by this firmware's key, or the header was changed") from None
+    length = int.from_bytes(data[40:44], "little")
+    if length > OTA_FACTORY_BYTES:
+        raise ValueError(f"the image is {length} B, the firmware partition is {OTA_FACTORY_BYTES} B")
+    image = data[OTA_HEADER_LEN:]
+    if length != len(image):
+        raise ValueError(f"length mismatch: the header says {length} B, the image is {len(image)} B")
+    if image[:1] != b"\xE9":
+        raise ValueError("not an ESP32 app image (the first byte is not 0xE9)")
+    if hashlib.sha256(image).digest() != data[44:76]:
+        raise ValueError("SHA-256 mismatch: the image is damaged")
+    return version
+
+
+def host_port(s: str) -> str:
+    """`Origin`/`Host` -> host[:port], lowercased, scheme and `:80` dropped."""
+    s = s.strip().lower()
+    s = s.split("://", 1)[1] if "://" in s else s
+    s = s.split("/", 1)[0]
+    return s[:-3] if s.endswith(":80") else s
 
 
 def enoent(path: str) -> str:
@@ -2037,6 +2126,12 @@ class Context:
         self.sd = {"clock_khz": 40000, "fallback": False, "failures": 0, "reboots": 0}
         self.reset_note = None
         self.schedule.evaluate()  # picks up the playlist rebuilt just above
+        # Firmware update: the running version, the updater's last line, the
+        # simulated restart's end (monotonic), the Ed25519 key (VerifyKey).
+        self.version = MOCK_VERSION
+        self.fw_last = None
+        self.down_until = 0.0
+        self.ota_pub = None
 
 
 def ticker_loop(ctx: Context, stop: threading.Event):
@@ -2095,19 +2190,59 @@ def make_handler(ctx: Context, quiet: bool):
 
         # -- response helpers --------------------------------------------
 
-        def send_json(self, code: int, obj) -> None:
+        def send_json(self, code: int, obj, headers: dict | None = None) -> None:
             body = json.dumps(obj, separators=(",", ":")).encode("utf-8")
             self.send_response(code, STATUS_TEXT.get(code, ""))
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(body)
             self._resp_status = code
             self._resp_bytes = len(body)
 
-        def send_error_json(self, code: int, message: str) -> None:
-            self.send_json(code, {"error": message})
+        def send_error_json(self, code: int, message: str, headers: dict | None = None) -> None:
+            self.send_json(code, {"error": message}, headers)
+
+        def drain(self) -> None:
+            """Read and drop the request body, so the connection stays usable."""
+            remaining = int(self.headers.get("Content-Length") or 0)
+            while remaining > 0:
+                chunk = self.rfile.read(min(65536, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+
+        def refuse(self, code: int, message: str, headers: dict | None = None) -> None:
+            self.drain()
+            self.send_error_json(code, message, headers)
+
+        def guard(self, method: str, path: str, query) -> bool:
+            """docs/api.md "Security" and "Ground rules": True when the request
+            was refused (and answered) here. Every handler runs behind it."""
+            if time.monotonic() < ctx.down_until and path.startswith("/api/"):
+                self.drain()
+                self.send_error_json(503, "restarting", {"Retry-After": "1"})
+                return True
+            origin = self.headers.get("Origin")
+            if method in ("POST", "PUT", "DELETE") and origin is not None \
+                    and host_port(origin) != host_port(self.headers.get("Host") or ""):
+                self.refuse(403, "cross-origin request refused")
+                return True
+            key = ctx.settings["api_key"]
+            if key and (path.startswith("/api/") or (method == "GET" and (
+                    path.startswith(("/gifs/", "/cache/", "/sets/", "/filelist"))))):
+                auth = self.headers.get("Authorization") or ""
+                if auth != "Bearer " + key and query_param(query, "key") != key:
+                    self.refuse(401, "API key required", {"WWW-Authenticate": "Bearer"})
+                    return True
+            if (method, path) in JSON_ROUTES and int(self.headers.get("Content-Length") or 0) > 0 \
+                    and not (self.headers.get("Content-Type") or "").lower().startswith("application/json"):
+                self.refuse(415, "Content-Type must be application/json")
+                return True
+            return False
 
         def stream_file(self, actual: Path, logical_rel: str, gzipped: bool) -> None:
             try:
@@ -2153,6 +2288,8 @@ def make_handler(ctx: Context, quiet: bool):
         def route(self, method: str):
             path, _, query = self.path.partition("?")
             query = query if "?" in self.path else None
+            if self.guard(method, path, query):
+                return
 
             def m_exact(p):
                 return lambda cur: cur == p
@@ -2182,6 +2319,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/wifi/scan"), {"GET": self.h_wifi_scan}),
                 (m_exact("/api/www"), {"GET": self.h_www_get, "PUT": self.h_www_put}),
                 (m_exact("/api/reboot"), {"POST": self.h_reboot}),
+                (m_exact("/api/firmware"), {"GET": self.h_firmware_get, "PUT": self.h_firmware_put}),
                 (m_exact("/api/manifest"), {"PUT": self.h_manifest_put}),
                 (m_prefix("/api/sets/"), {"PUT": self.h_sets_put}),
                 (m_exact("/api/files/move"), {"POST": self.h_files_move}),
@@ -2291,7 +2429,7 @@ def make_handler(ctx: Context, quiet: bool):
                 now_local = ctx.schedule.local_now()
                 time_synced_s = min(int(time.monotonic() - player.boot_time), 600)
                 obj = {
-                    "version": "0.1.0-mock",
+                    "version": ctx.version,
                     "variant": "4mb",
                     "uptime_secs": int(time.monotonic() - player.boot_time),
                     "t_ms": int((time.monotonic() - player.boot_time) * 1000),
@@ -2382,6 +2520,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "look": s["look"],
                     "glow": s["glow"],
                     "boot_show": s["boot_show"],
+                    "api_key_set": bool(s["api_key"]),
                 }
             self.send_json(200, obj)
 
@@ -2482,6 +2621,9 @@ def make_handler(ctx: Context, quiet: bool):
                             return
                     if field == "glow" and v not in GLOWS:
                         self.send_error_json(400, "glow must be off, short or long")
+                        return
+                    if field == "api_key" and v != "" and not API_KEY_RE.fullmatch(v):
+                        self.send_error_json(400, "api_key must be 8..64 of A-Z a-z 0-9 . _ ~ - (or \"\" for none)")
                         return
                     if field == "boot_show" and v not in BOOT_SHOWS:
                         self.send_error_json(400, "boot_show must be off, short or full")
@@ -2947,6 +3089,41 @@ def make_handler(ctx: Context, quiet: bool):
                 return
             self.send_json(200, www_info(ctx.www_root))
 
+        def h_firmware_get(self, path):
+            with ctx.lock:
+                self.send_json(200, {"version": ctx.version, "build": f"{ctx.version} 4mb", "variant": "4mb",
+                                     "pending": None, "last": ctx.fw_last})
+
+        def h_firmware_put(self, path):
+            length_hdr = self.headers.get("Content-Length")
+            if not length_hdr:
+                self.send_error_json(411, "Content-Length required")
+                return
+            length = int(length_hdr)
+            if length > OTA_HEADER_LEN + OTA_FACTORY_BYTES:
+                self.drain()
+                self.send_error_json(413, f"the bundle is {length} B, at most {OTA_HEADER_LEN + OTA_FACTORY_BYTES} B fits the firmware partition")
+                return
+            data = self.rfile.read(length)
+            t0 = time.monotonic()
+            try:
+                version = ota_check(data, ctx.ota_pub)
+            except ValueError as e:
+                self.send_error_json(422, str(e))
+                return
+            self.send_json(200, {"ok": True, "version": version, "rebooting": True})
+            # The restart: the API is down for RESTART_SECS, then the player
+            # "boots" the new firmware (uptime from zero, as after a reboot).
+            n = length - OTA_HEADER_LEN
+            took = 12.0 + n / 200_000 + (time.monotonic() - t0)
+            with ctx.lock:
+                ctx.down_until = time.monotonic() + RESTART_SECS
+                ctx.version = version
+                ctx.fw_last = f"updater +{took:.1f} s: updated to {version} ({n} B, SHA-256 ok, image verified)"
+                ctx.player.reset_boot()
+                ctx.player.boot_time += RESTART_SECS
+                ctx.reset_note = None
+
         def h_reboot(self, path):
             query = self.path.partition("?")[2] or None
             with ctx.lock:
@@ -3332,9 +3509,14 @@ def make_proxy_handler(www_root: Path, target: str, quiet: bool):
         def proxy_forward(self, method):
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length) if length else None
+            # The page's own Origin (this proxy's host) is dropped: the device
+            # refuses a mutation whose Origin is not its own Host. A foreign
+            # Origin goes through, to be refused there. Authorization (the
+            # API key) is forwarded as it is.
+            own = host_port(self.headers.get("Origin") or "") == host_port(self.headers.get("Host") or "-")
             headers = {
                 k: v for k, v in self.headers.items()
-                if k.lower() not in ("host", "connection")
+                if k.lower() not in ("host", "connection") and not (own and k.lower() == "origin")
             }
             conn_cls = http.client.HTTPSConnection if parsed_target.scheme == "https" else http.client.HTTPConnection
             port = parsed_target.port or (443 if parsed_target.scheme == "https" else 80)
@@ -3344,7 +3526,7 @@ def make_proxy_handler(www_root: Path, target: str, quiet: bool):
                 resp = conn.getresponse()
                 data = resp.read()
                 self.send_response(resp.status, resp.reason or STATUS_TEXT.get(resp.status, ""))
-                for hk in ("Content-Type", "Content-Encoding", "Cache-Control"):
+                for hk in ("Content-Type", "Content-Encoding", "Cache-Control", "WWW-Authenticate", "Retry-After"):
                     v = resp.getheader(hk)
                     if v is not None:
                         self.send_header(hk, v)
@@ -3377,6 +3559,8 @@ def parse_args():
                          "a '..' via the catch-all is a 404, stat/play cost a directory scan")
     ap.add_argument("--quiet", action="store_true", help="suppress the one-line-per-request log")
     ap.add_argument("--proxy", help="forward everything but --www to a real device at this URL")
+    ap.add_argument("--ota-pub", help="the Ed25519 public key (32 B) PUT /api/firmware verifies against "
+                                      "(default: <repo>/firmware/keys/opendmd.pub)")
     return ap.parse_args()
 
 
@@ -3407,6 +3591,12 @@ def main():
             overlay_dir.mkdir(parents=True, exist_ok=True)
         fs = CardFS(root_dir, overlay_dir)
         ctx = Context(fs, www_root, args.dwell, args.strict)
+        pub = Path(args.ota_pub) if args.ota_pub else Path(__file__).resolve().parent.parent / "firmware" / "keys" / "opendmd.pub"
+        try:
+            from nacl.signing import VerifyKey
+            ctx.ota_pub = VerifyKey(pub.read_bytes())
+        except Exception as e:  # noqa: BLE001 - the mock runs on without updates
+            print(f"mock-device: no firmware key ({pub}: {e}); every update is refused", file=sys.stderr)
         handler_cls = make_handler(ctx, args.quiet)
         ticker = threading.Thread(target=ticker_loop, args=(ctx, stop), daemon=True)
         ticker.start()
