@@ -70,6 +70,14 @@ pub enum NetCommand {
         code: Option<String>,
         reply: mpsc::Sender<String>,
     },
+    /// `PUT /api/firmware`: check a bundle header's Ed25519 signature
+    /// (`ota::verify_signature`). Here because the network worker's 12 KB
+    /// stack has room for it (~8.5 KB at most, measured from the ELF's
+    /// frames) and the stream task's 6 KB does not.
+    VerifyBundle {
+        header: Box<[u8; opendmd_core::ota::HEADER_LEN]>,
+        reply: mpsc::Sender<Result<opendmd_core::ota::Meta, opendmd_core::ota::OtaError>>,
+    },
 }
 
 /// Wire format for `POST /api/follow/test`.
@@ -151,6 +159,9 @@ struct ConfigPatch {
     look: Option<String>,
     glow: Option<String>,
     boot_show: Option<String>,
+    /// The API key (`opendmd_core::access`); `""` turns it off. Never
+    /// echoed back (only `api_key_set`).
+    api_key: Option<String>,
 }
 
 /// Wire format for `POST /api/wake`.
@@ -176,9 +187,12 @@ struct WakeRequest {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route` below (43 now, the captive-portal loop counting six; 44 leaves one spare). Registration past
-    // the limit fails the whole server, so count when adding a route.
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 44)?;
+    // URI handler slots: one per `route`/`route_json` below (45 now, the
+    // captive-portal loop counting six; 46 leaves one spare). Registration
+    // past the limit fails the whole server, so count when adding a route.
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 46)?;
+    // The API key, if one is set (`api_key`; `httpd::gate` checks it).
+    crate::httpd::set_api_key(&ctx.settings.lock().unwrap().api_key);
 
     // --- The web app, and the setup page ------------------------------------
     // Every file goes out from the streaming task (`stream`), so a big
@@ -255,7 +269,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/config", Method::Put, move |req| {
+    server.route_json("/api/config", Method::Put, move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -396,6 +410,16 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             };
             next.boot_show = len;
         }
+        if let Some(v) = &patch.api_key {
+            if !v.is_empty() && !opendmd_core::access::valid_key(v) {
+                return req.bad_request(&format!(
+                    "api_key must be {}..{} of A-Z a-z 0-9 . _ ~ - (or \"\" for none)",
+                    opendmd_core::access::KEY_MIN,
+                    opendmd_core::access::KEY_MAX
+                ));
+            }
+            next.api_key = v.clone();
+        }
         if next.dwell_max < next.dwell_min {
             return req.bad_request("dwell_max must be >= dwell_min");
         }
@@ -413,10 +437,16 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
         match rx.recv_timeout(REINDEX_TIMEOUT) {
-            Ok(Ok(applied)) => req.json(&format!(
-                r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{wifi_changed}}}"#,
-                applied_json(&applied)
-            )),
+            Ok(Ok(applied)) => {
+                if let Some(k) = &patch.api_key {
+                    crate::httpd::set_api_key(k);
+                    info!("API key {}", if k.is_empty() { "cleared" } else { "set" });
+                }
+                req.json(&format!(
+                    r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{wifi_changed}}}"#,
+                    applied_json(&applied)
+                ))
+            }
             // Checked by the main task before anything was saved: the
             // configuration and the running playlist are as they were.
             Ok(Err(e)) if e == SET_NOT_FOUND => req.not_found(SET_NOT_FOUND),
@@ -467,7 +497,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     let c = ctx.clone();
-    server.route("/api/schedule", Method::Put, move |req| {
+    server.route_json("/api/schedule", Method::Put, move |req| {
         let declared = req.content_len();
         if declared > crate::nvs_config::SCHEDULE_MAX {
             return req.error(
@@ -516,7 +546,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // Suspend the schedule: `{"minutes": 60}` (0 resumes it now).
     let c = ctx.clone();
-    server.route("/api/wake", Method::Post, move |req| {
+    server.route_json("/api/wake", Method::Post, move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -553,7 +583,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // Play one file now (a Library preview sent to the panel), then carry on
     // with the schedule. `{"path": "/gifs/…"}`, card-absolute.
     let c = ctx.clone();
-    server.route("/api/play", Method::Post, move |req| {
+    server.route_json("/api/play", Method::Post, move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -672,7 +702,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
     // A GIF the browser could not prepare either (`{"path","reason"}`):
     // recorded once per path, so the device's builder skips it too.
-    server.route("/api/cache/failed", Method::Post, |req| {
+    server.route_json("/api/cache/failed", Method::Post, |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -704,7 +734,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // Remove the prepared copy of a GIF (it was replaced, or is going), if
     // there is one. `{"path": "/gifs/…"}`.
     let c = ctx.clone();
-    server.route("/api/cache/forget", Method::Post, move |req| {
+    server.route_json("/api/cache/forget", Method::Post, move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -758,7 +788,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // Follow RePlayOS's "Test" button: the network worker asks the box (it
     // owns the HTTP client); nothing is saved.
     let c = ctx.clone();
-    server.route("/api/follow/test", Method::Post, move |req| {
+    server.route_json("/api/follow/test", Method::Post, move |req| {
         let Some(body) = json_body(req)? else {
             return Ok(());
         };
@@ -789,8 +819,24 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // body is received on the stream task like every other upload, which is
     // also where every web app file is sent from: the two never overlap.
     server.route("/api/www", Method::Get, |req| req.json(&www::info_json()))?;
-    server.route("/api/www", Method::Put, |req| {
-        stream::receive(req, www::receive)
+    let c = ctx.clone();
+    server.route("/api/www", Method::Put, move |req| {
+        let mounted = c.status.lock().unwrap().sd_mounted;
+        stream::receive(req, move |up| www::receive(up, mounted))
+    })?;
+
+    // Firmware updates over the LAN (`ota.rs`, docs/ota.md): a signed
+    // bundle received onto the card on the stream task, then the updater.
+    let c = ctx.clone();
+    server.route("/api/firmware", Method::Get, move |req| {
+        let mounted = c.status.lock().unwrap().sd_mounted;
+        req.json(&crate::ota::info_json(mounted))
+    })?;
+    let c = ctx.clone();
+    server.route("/api/firmware", Method::Put, move |req| {
+        let mounted = c.status.lock().unwrap().sd_mounted;
+        let net = c.net.clone();
+        stream::receive(req, move |up| crate::ota::receive(up, mounted, &net))
     })?;
 
     server.route("/api/reboot", Method::Post, |req| {
@@ -886,7 +932,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // card writes: two FAT directory scans per rename, up to ~0.5 s each in
     // gifs/Consoles, must not hold the API.
     let c = ctx.clone();
-    server.route("/api/files/move", Method::Post, move |req| {
+    server.route_json("/api/files/move", Method::Post, move |req| {
         let c = c.clone();
         stream::receive(req, move |up| move_file(up, &c))
     })?;
@@ -1585,7 +1631,7 @@ fn settings_json(s: &Settings) -> String {
             r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
-            r#""look":"{}","glow":"{}","boot_show":"{}"}}"#
+            r#""look":"{}","glow":"{}","boot_show":"{}","api_key_set":{}}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -1610,6 +1656,7 @@ fn settings_json(s: &Settings) -> String {
         s.look.name(),
         s.glow.name(),
         s.boot_show.name(),
+        !s.api_key.is_empty(),
     )
 }
 

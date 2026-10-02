@@ -40,7 +40,9 @@ pub const PUBLIC_KEY_LEN: usize = 32;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OtaError {
     /// Fewer bytes than the header.
-    Truncated { have: usize },
+    Truncated {
+        have: usize,
+    },
     BadMagic,
     /// Empty, not UTF-8, or a NUL before the padding.
     BadVersion,
@@ -49,9 +51,15 @@ pub enum OtaError {
     /// The signature does not verify: wrong key, or the header was changed.
     BadSignature,
     /// The image's length is not the header's.
-    LengthMismatch { header: u32, actual: u64 },
+    LengthMismatch {
+        header: u32,
+        actual: u64,
+    },
     /// The image is larger than the partition it goes into.
-    TooLarge { length: u32, partition: u32 },
+    TooLarge {
+        length: u32,
+        partition: u32,
+    },
     /// The image does not start with 0xE9.
     NotAnImage,
     /// The image's SHA-256 is not the header's.
@@ -62,7 +70,10 @@ impl fmt::Display for OtaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OtaError::Truncated { have } => {
-                write!(f, "truncated: {have} B, the bundle header is {HEADER_LEN} B")
+                write!(
+                    f,
+                    "truncated: {have} B, the bundle header is {HEADER_LEN} B"
+                )
             }
             OtaError::BadMagic => f.write_str("not an OpenDMD firmware bundle (bad magic)"),
             OtaError::BadVersion => f.write_str("the bundle's version field is malformed"),

@@ -72,7 +72,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-flash fw-sign updater www-push flasher flasher-smoke card-sync api-load
+	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke card-sync api-load
 
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
@@ -461,6 +461,15 @@ updater:
 	@size=$$(stat -c %s $(UPDATER_BIN)); \
 	 echo "$(UPDATER_BIN): $$size B of the $(UPDATER_SLOT) B ota_0 slot, $$(( $(UPDATER_SLOT) - size )) B spare (need $(UPDATER_SPARE))"; \
 	 test $$(( size + $(UPDATER_SPARE) )) -le $(UPDATER_SLOT) || { echo "the updater does not fit ota_0 with $(UPDATER_SPARE) B spare"; exit 1; }
+
+# A firmware update over WiFi (docs/ota.md): PUT the signed bundle to
+# /api/firmware, then wait for the device to come back running it.
+# make fw-ota HOST=opendmd.local [BUNDLE=dist/opendmd-<v>.odfw]; with an API
+# key set on the device, OPENDMD_API_KEY=<key> in the environment.
+BUNDLE ?= $(FW_BUNDLE)
+fw-ota:
+	@test -n "$(HOST)" || { echo "usage: make fw-ota HOST=<ip-or-name> [BUNDLE=$(FW_BUNDLE)]"; exit 2; }
+	tools/fw-ota.sh $(HOST) $(BUNDLE)
 
 # The browser flasher (flasher/index.html, ESP Web Tools) with the dist/ set
 # from `make fw-release`, on http://localhost:8765: Web Serial needs a secure

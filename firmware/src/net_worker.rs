@@ -84,6 +84,8 @@ pub fn spawn(worker: NetWorker) -> anyhow::Result<()> {
 fn publish(status: &Arc<Mutex<Status>>, state: WifiState, ip: Option<String>) {
     if let Ok(mut s) = status.lock() {
         s.wifi = state.as_str();
+        // The setup network asks for no API key (`httpd::gate`).
+        crate::httpd::set_setup_mode(s.wifi == "ap");
         s.ip = ip.unwrap_or_default();
         if !s.ip.is_empty() {
             crate::state::NET_UP.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -230,6 +232,9 @@ fn run(worker: NetWorker) {
             Ok(NetCommand::CountCache) => crate::cache::run_count(),
             Ok(NetCommand::FollowTest { host, code, reply }) => {
                 let _ = reply.send(follow.test(&host, code.as_deref()));
+            }
+            Ok(NetCommand::VerifyBundle { header, reply }) => {
+                let _ = reply.send(crate::ota::verify_signature(&header));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {

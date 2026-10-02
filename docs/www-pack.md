@@ -114,15 +114,35 @@ its gzip budgets (which are about load time over WiFi, not flash).
   whole pack as the body, `Content-Length` required (411 without, 413 over
   the partition). The first 64 bytes are read and parsed before anything is
   erased — not a pack, or a header whose total length differs from the
-  body's, is a 400 and the app in flash stays. Then, under the mapping's
-  lock: unmap, then for each piece of the body erase the 4 KB sectors ahead
-  of it (`esp_partition_erase_range`, then a 20 ms pause so the display
-  loop runs: an erase stops both CPUs' flash caches) and write it
-  (`esp_partition_write`), then parse, CRC-check and map again. 782 KB
-  takes ~7 s over WiFi. The reply is `GET /api/www`'s object;
-  a pack that does not verify after writing is a 422, one cut short a 408
-  (or nothing, if the client went away), and either leaves `www.error`
-  saying so until a good pack is written.
+  body's, is a 400 and the app in flash stays. Then:
+  - **With a card** (the usual case), the rest of the body is received onto
+    the card first, `/update/www.pack.part` (the GIF upload path: a 2 KB
+    buffer, one open file), and its CRC is checked there, all while the old
+    pack stays mapped. An upload cut short (408), a client that went away,
+    a card write that failed (500) or a CRC that does not match (422)
+    leaves **the web app in flash exactly as it was**, still served. Only
+    a staged pack whose CRC matched is written to flash, from the card
+    (~3 s for 800 KB, most of it the erase pauses).
+  - **Without a card**, the body is written to flash as it arrives, as
+    before: a failure part-way leaves no web app until a good pack is
+    written (the setup page and the API carry on).
+  - **The header is written last** either way. Under the mapping's lock:
+    unmap; erase sector 0 and the sectors ahead of each piece
+    (`esp_partition_erase_range`, then a 20 ms pause so the display loop
+    runs: an erase stops both CPUs' flash caches) and write the body from
+    offset 64 (`esp_partition_write`), leaving the header's 64 bytes erased;
+    read the body back from flash and compute its CRC; only if it matches
+    the header's, write the 64-byte header into the erased bytes; then
+    parse, CRC-check and map again. So **a pack header in flash always
+    means a whole pack whose CRC verified from flash**: a reset or a
+    failure during the write leaves an erased header ("no web app"), never
+    a header over a half-written body. The window in which the device has
+    no web app is the flash write itself (~3 s from the card), not the
+    network transfer.
+
+  The reply is `GET /api/www`'s object; a pack that does not verify after
+  writing is a 422, one cut short a 408 (or nothing, if the client went
+  away). 782 KB takes ~7 s over WiFi plus the flash write.
 - **`GET /api/www`**: `{"version","bytes","entries","ok","error"}`; the
   same object is `www` in `/api/status`.
 

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Update a running player's firmware over WiFi (docs/ota.md).
+#
+#   tools/fw-ota.sh <host> <bundle.odfw>        (normally via `make fw-ota HOST=...`)
+#
+# PUTs the signed bundle (`make fw-release` writes dist/opendmd-<v>.odfw) to
+# /api/firmware and prints the reply. The device stages it on its card,
+# checks the signature, restarts into the updater, which installs it and
+# restarts into the new firmware (~20-40 s, the panel dark). This script
+# then polls GET /api/firmware until the version in the bundle's header
+# (bytes 8..40, NUL-padded) answers, and prints the device's last update
+# log line. OPENDMD_API_KEY=<key> when the player has an API key set.
+set -euo pipefail
+
+host=${1:?usage: tools/fw-ota.sh <host> <bundle.odfw>}
+bundle=${2:?usage: tools/fw-ota.sh <host> <bundle.odfw>}
+[ -f "$bundle" ] || { echo "no such bundle: $bundle (run make fw-release first)" >&2; exit 2; }
+[ "$(head -c 5 "$bundle")" = "ODFW1" ] || { echo "$bundle is not a firmware bundle" >&2; exit 2; }
+auth=()
+[ -n "${OPENDMD_API_KEY:-}" ] && auth=(-H "Authorization: Bearer $OPENDMD_API_KEY")
+
+want=$(dd if="$bundle" bs=1 skip=8 count=32 2>/dev/null | tr -d '\000')
+size=$(stat -c %s "$bundle")
+before=$(curl -sS --max-time 10 "${auth[@]}" "http://$host/api/firmware" || true)
+echo "device: $before"
+echo "pushing $bundle ($size B, version '$want') to http://$host/api/firmware"
+
+t0=$(date +%s.%N)
+reply=$(curl -sS --max-time 300 -w '\n%{http_code}' -X PUT "${auth[@]}" \
+    -H 'Content-Type: application/octet-stream' --data-binary @"$bundle" \
+    "http://$host/api/firmware")
+code=${reply##*$'\n'}
+body=${reply%$'\n'*}
+t1=$(date +%s.%N)
+awk -v c="$code" -v a="$t0" -v b="$t1" -v r="$body" 'BEGIN { printf "HTTP %s in %.1f s: %s\n", c, b - a, r }'
+[ "$code" = 200 ] || exit 1
+
+echo "installing: waiting for the device to answer with '$want' (up to 180 s)"
+for _ in $(seq 1 60); do
+    sleep 3
+    info=$(curl -sS --max-time 3 "${auth[@]}" "http://$host/api/firmware" 2>/dev/null || true)
+    case "$info" in
+        *"\"version\":\"$want\""*)
+            t2=$(date +%s.%N)
+            awk -v a="$t1" -v b="$t2" 'BEGIN { printf "back after %.0f s\n", b - a }'
+            echo "GET /api/firmware: $info"
+            echo "ok: the device runs '$want'"
+            exit 0 ;;
+        '') printf '.' ;;
+        *) printf '+' ;;
+    esac
+done
+echo
+echo "the device did not come back with '$want' in 180 s; last answer: ${info:-none}" >&2
+echo "(the updater logs every step to /update/log.txt on the card and to the console at 921600)" >&2
+exit 1

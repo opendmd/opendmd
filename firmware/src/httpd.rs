@@ -162,6 +162,67 @@ pub fn streams_aborted() -> u32 {
 /// A boxed handler. `Sync` is not strictly required (one task) but it is free.
 type Handler = Box<dyn Fn(&mut Req) -> Result<()> + Send + Sync + 'static>;
 
+// --- The request gate (`opendmd_core::access`, docs/api.md "Security") ----
+
+/// The API key (`api_key` in the settings), empty = none. Set at start-up
+/// and by `PUT /api/config`.
+static API_KEY: Mutex<String> = Mutex::new(String::new());
+/// The device is the setup access point: no key is asked, so a lost key can
+/// be cleared from the setup network.
+static SETUP_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_api_key(key: &str) {
+    *API_KEY.lock().unwrap_or_else(|p| p.into_inner()) = key.to_string();
+}
+
+pub fn set_setup_mode(on: bool) {
+    SETUP_MODE.store(on, Ordering::Relaxed);
+}
+
+/// Every request passes here before its handler (see [`trampoline`]): the
+/// API key where one is set (401), then a mutating request from a page on
+/// another host (403). `Some(close)` if it was refused (the answer is sent;
+/// `close` drops the connection rather than letting httpd read the rest of
+/// a large body on its own task).
+fn gate(req: &mut Req) -> Option<bool> {
+    use opendmd_core::access;
+    let path = req.path().to_string();
+    let close = req.content_len() > 8192;
+    if access::needs_key(&path) && !SETUP_MODE.load(Ordering::Relaxed) {
+        let key = API_KEY.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if !key.is_empty() {
+            let auth = req.request_header(c"Authorization");
+            let q = query_param(req.query(), "key");
+            if !access::key_ok(&key, auth.as_deref(), q.as_deref()) {
+                log::info!("{} {path}: 401, no or wrong API key", req.method_name());
+                let _ = req.header("WWW-Authenticate", "Bearer");
+                if close {
+                    let _ = req.header("Connection", "close");
+                }
+                let _ = req.error(401, "401 Unauthorized", "API key required");
+                return Some(close);
+            }
+        }
+    }
+    if req.method_name() != "GET" {
+        if let Some(origin) = req.request_header(c"Origin") {
+            let host = req.request_header(c"Host").unwrap_or_default();
+            if !access::same_origin(&origin, &host) {
+                log::warn!(
+                    "{} {path}: 403, a page from {origin} (the device is {host})",
+                    req.method_name()
+                );
+                if close {
+                    let _ = req.header("Connection", "close");
+                }
+                let _ = req.error(403, "403 Forbidden", "cross-origin request refused");
+                return Some(close);
+            }
+        }
+    }
+    None
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Method {
     Get,
@@ -245,6 +306,28 @@ impl Server {
         })
     }
 
+    /// [`Server::route`] for a handler that reads a JSON body: a non-empty
+    /// body must come as `Content-Type: application/json`, else 415 (see
+    /// `opendmd_core::access`).
+    pub fn route_json<F>(&mut self, uri: &str, method: Method, handler: F) -> Result<()>
+    where
+        F: Fn(&mut Req) -> Result<()> + Send + Sync + 'static,
+    {
+        self.route(uri, method, move |req| {
+            if req.content_len() > 0 {
+                let ct = req.request_header(c"Content-Type").unwrap_or_default();
+                if !opendmd_core::access::is_json(&ct) {
+                    return req.error(
+                        415,
+                        "415 Unsupported Media Type",
+                        "Content-Type must be application/json",
+                    );
+                }
+            }
+            handler(req)
+        })
+    }
+
     /// Register one route. Wildcard routes (`/www/*`) must be registered after
     /// the exact routes they would otherwise shadow: ESP-IDF prefers exact
     /// matches, but among wildcards the earlier registration wins.
@@ -302,6 +385,9 @@ unsafe extern "C" fn trampoline(raw: *mut sys::httpd_req_t) -> sys::esp_err_t {
     #[cfg(feature = "diag-heap")]
     guard::verify(handler, "handler start");
     let mut req = Req::new(raw);
+    if let Some(close) = gate(&mut req) {
+        return if close { sys::ESP_FAIL } else { sys::ESP_OK };
+    }
     let result = (*handler)(&mut req);
     stack_low_water("httpd", &HTTPD_STACK_LOW);
     crate::diag::check("httpd: handler end");
@@ -487,6 +573,29 @@ impl Req {
     /// The raw query string, if any.
     pub fn query(&self) -> Option<&str> {
         self.uri().split_once('?').map(|(_, q)| q)
+    }
+
+    /// A request header's value (at most 256 B; longer is treated as absent).
+    pub fn request_header(&self, field: &CStr) -> Option<String> {
+        // SAFETY: a live request and a NUL-terminated field name.
+        let len = unsafe { sys::httpd_req_get_hdr_value_len(self.raw, field.as_ptr()) };
+        if len == 0 || len > 256 {
+            return None;
+        }
+        let mut buf = [0u8; 257];
+        // SAFETY: `buf` holds `len` bytes and the NUL.
+        let err = unsafe {
+            sys::httpd_req_get_hdr_value_str(
+                self.raw,
+                field.as_ptr(),
+                buf.as_mut_ptr().cast(),
+                len + 1,
+            )
+        };
+        if err != sys::ESP_OK {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&buf[..len]).into_owned())
     }
 
     fn method_name(&self) -> &'static str {

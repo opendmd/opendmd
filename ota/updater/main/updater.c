@@ -90,6 +90,7 @@ static const uint8_t MAGIC[8] = {'O', 'D', 'F', 'W', '1', 0, 0, 0};
 #define PIECE 4096
 #define BLOCK (64 * 1024)
 #define RETRY_MS 10000
+#define MOUNT_TRIES 3
 #define BLINK_SLOW_MS 500
 #define BLINK_FAST_MS 100
 
@@ -362,7 +363,16 @@ static outcome_t attempt(void)
         note("no factory partition in this table");
         return R_UNTOUCHED;
     }
-    if (mount() != ESP_OK) {
+    /* A card can take a moment after a reset: three tries, a second apart,
+     * before "no card" (which boots the old firmware and loses the update). */
+    esp_err_t mounted = ESP_FAIL;
+    for (int i = 0; i < MOUNT_TRIES && mounted != ESP_OK; i++) {
+        if (i > 0) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        mounted = mount();
+    }
+    if (mounted != ESP_OK) {
         return R_UNTOUCHED;
     }
     FILE *f = fopen(BUNDLE_PATH, "rb");
