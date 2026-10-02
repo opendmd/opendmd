@@ -35,17 +35,17 @@
 
 import { app } from './state.js';
 import { PanelPreview, fitScale } from './preview.js';
-import { h, clear, toast, debounce, label, base, emit, niceName, byNice } from './util.js';
+import { h, clear, toast, debounce, label, base, emit, niceName, byNice, note } from './util.js';
 import { art as artModule } from './artmod.js';
 import { addOne, offerPlaylist } from './library.js';
 import { listings, pickName, renameGif } from './details.js';
 import { prepareBytes } from './prepare.js';
-import { PLATFORMS, findGames, gamePictures } from './find.js';
+import { PLATFORMS, findGames, gamePictures, tile, style } from './find.js';
 
 const SPEEDS = [['Slow', 50], ['Normal', 40], ['Fast', 30]];
 const RATES = [25, 50, 75, 100, 150, 200, 300, 400];
 const PLAYS = [['Plays forever', 0], ['Plays once', 1], ['Plays 2 times', 2], ['Plays 3 times', 3], ['Plays 5 times', 5], ['Plays 10 times', 10]];
-const CW = 100; // a timeline cell, px
+const CW = 136; // a timeline cell, px (a 128x32 thumbnail at 1:1)
 const later = () => new Promise((r) => setTimeout(r, 0));
 const secs = (ms) => { const s = ms / 1000; return s < 10 ? s.toFixed(1) : String(Math.round(s)); };
 
@@ -67,7 +67,7 @@ let art = null; // the wasm module
 
 // The view: built once, into `root`.
 export async function mount(root) {
-  [art] = await Promise.all([artModule(), css()]);
+  [art] = await Promise.all([artModule(), css(), style()]);
   return build(root);
 }
 
@@ -88,21 +88,22 @@ function build(root) {
   };
   const select = (name, items, value) => h('select', { id: id(name) }, items.map(([t, v]) => h('option', { value: v, selected: v === value }, t)));
   const num = (name, attrs) => h('input', { type: 'number', id: id(name), inputMode: 'numeric', ...attrs });
+  // A numbered step; 2-6 are dimmed until there is a picture.
+  const step = (n, t, sid, ...kids) => h('section.card' + (n > 1 ? '.st-step' : ''), { id: id(sid) }, h('h2', h('span.muted', n), ' ', t), ...kids);
 
   // --- 1 Import
   const file = h('input', { type: 'file', accept: 'image/*', hidden: true, id: id('file'), onchange: () => { if (file.files[0]) load(file.files[0]); file.value = ''; } });
   const url = h('input', { type: 'text', id: id('url'), inputMode: 'url', placeholder: 'Picture address (https://…)' });
-  const msg = h('div.cap', { id: id('msg'), 'aria-live': 'polite' });
+  const msg = h('div.cap', { id: id('msg'), 'aria-live': 'polite' }, 'Start here with a picture or GIF');
   const plat = h('select', { id: id('find-plat') });
   const query = h('input', { type: 'search', id: id('find-q'), placeholder: 'Game title', enterKeyHint: 'search', onkeydown: (e) => e.key === 'Enter' && find() });
-  const hits = h('div.st-hits', { id: id('hits') });
-  const thumbs = h('div.st-thumbs', { id: id('thumbs') });
-  const imp = h('section.card', { id: id('import') }, h('h3', '1 · Import'),
-    h('div.row', h('label.btn', 'Choose a picture or GIF…', file), h('span.muted', 'or drop or paste one here')),
+  const hits = h('div.find-grid.st-hits', { id: id('hits') });
+  const imp = step(1, 'Import', 'import',
+    h('div.row', h('label.btn', 'Choose a picture or GIF…', file), h('span.cap', 'or drop or paste one here')),
+    msg,
     h('div.row.st-url', h('div.grow', url), h('button', { id: id('url-go'), onclick: () => fromUrl(url.value.trim()) }, 'Load')),
-    h('div.st-find', h('b', 'Find art for a game'),
-      h('div.row', plat, h('div.grow', query), h('button', { id: id('find-go'), onclick: () => find() }, 'Search')), hits, thumbs),
-    msg);
+    h('h3', 'Find art for a game'),
+    h('div.row.st-find', plat, h('div.grow', query), h('button', { id: id('find-go'), onclick: () => find() }, 'Search')), hits);
 
   // --- 2 Frame
   const cv = h('canvas', { id: id('src') });
@@ -119,16 +120,16 @@ function build(root) {
   const hold = select('hold', HOLDS, 1500);
   const fcap = h('div.cap', { id: id('fcap') });
   const moveRow = h('div.row', motion, speed, hold);
-  const frm = h('section.card.st-step', { id: id('frame') }, h('h3', '2 · Frame'), view, fcap,
+  const frm = step(2, 'Frame', 'frame', view, fcap,
     h('div.row', fit, h('button.sm', { id: id('auto'), onclick: () => restage(true) }, 'Auto')), moveRow);
 
   // --- 3 Look
-  const colours = select('colours', [['Colours: auto', 0], ['256 colours', 256], ['64 colours', 64], ['16 colours', 16]], 0);
+  const colours = select('colours', [['Auto colours', 0], ['256 colours', 256], ['64 colours', 64], ['16 colours', 16]], 0);
   const key = h('input', { type: 'checkbox', id: id('key') });
   const lift = h('input', { type: 'checkbox', id: id('lift') });
   const gain = h('input', { type: 'range', id: id('gain'), min: 30, max: 150, step: 5, value: 100 });
   const gout = h('output.mono', '100%');
-  const look = h('section.card.st-step', { id: id('look') }, h('h3', '3 · Look'),
+  const look = step(3, 'Look', 'look',
     h('div.row', colours, h('label', key, 'Background to black')),
     h('div.row', h('label', lift, 'Brighten dark outlines (logos)')),
     h('div.row', h('label', 'Brightness', gain, gout)));
@@ -147,7 +148,7 @@ function build(root) {
   const tfrom = num('tfrom', { value: 1, min: 1, 'aria-label': 'From frame' });
   const tto = num('tto', { value: 1, min: 1, 'aria-label': 'To frame' });
   const rangeRow = h('div.row', { hidden: true }, trange, h('span', { id: id('tspan') }, tfrom, ' to ', tto));
-  const txt = h('section.card.st-step', { id: id('text-step') }, h('h3', '4 · Text'),
+  const txt = step(4, 'Text', 'text-step',
     h('div.row', h('div.grow', tmsg), tcol),
     h('div.row.st-tpos', anchor, h('div', h('div.row', font), h('div.row', h('label', '→', dx), h('label', '↓', dy)))),
     rangeRow);
@@ -168,20 +169,23 @@ function build(root) {
   const rev = h('input', { type: 'checkbox', id: id('rev') });
   const pp = h('input', { type: 'checkbox', id: id('pp') });
   const plays = select('plays', PLAYS, 0);
-  const smoothOn = h('input', { type: 'checkbox', id: id('smooth') });
+  const smoothOn = h('input.sw', { type: 'checkbox', id: id('smooth') });
   const smoothCap = h('div.cap', { id: id('smooth-cap'), 'aria-live': 'polite' });
-  const smoothRow = h('div', { id: id('smooth-row'), hidden: true }, h('div.row', h('label', smoothOn, 'Smooth motion')), smoothCap);
+  const smoothRow = h('label', { id: id('smooth-row'), hidden: true }, smoothOn, 'Smooth motion');
   const undoBtn = h('button.sm', { id: id('undo'), disabled: true, onclick: () => undo() }, 'Undo');
-  const tlcap = h('div.cap', { id: id('tlcap') });
+  const tlcap = h('span', { id: id('tlcap') });
+  const grp = (t, ...kids) => h('div', h('div.lbl', t), h('div.row', ...kids));
   const tl = h('div.st-tl', { id: id('tl'), hidden: true },
     h('div.row.st-play', playBtn, h('div.grow', scrub), posOut),
-    strip, tlcap,
-    h('div.row',
-      h('button.sm', { id: id('set-in'), onclick: () => trim('from') }, 'Start here'),
-      h('button.sm', { id: id('set-out'), onclick: () => trim('to') }, 'End here'),
-      h('button.sm', { id: id('del'), onclick: () => del() }, 'Delete frame'), undoBtn),
-    h('div.row', rate, h('label', rev, 'Reverse'), h('label', pp, 'Ping-pong'), plays), smoothRow);
-  const prev = h('section.card.st-step', { id: id('preview') }, h('h3', '5 · Preview'), panel, stats, tl);
+    strip, note(tlcap, 'Click a frame to see it; Shift- or Ctrl-click to pick more, then Delete'),
+    h('div.row.st-ctl',
+      grp('Trim',
+        h('button.sm', { id: id('set-in'), onclick: () => trim('from') }, 'Start here'),
+        h('button.sm', { id: id('set-out'), onclick: () => trim('to') }, 'End here'),
+        h('button.sm', { id: id('del'), onclick: () => del() }, 'Delete frame'), undoBtn),
+      grp('Motion', rate, h('label', rev, 'Reverse'), h('label', pp, 'Ping-pong'), plays, smoothRow)),
+    smoothCap);
+  const prev = step(5, 'Preview', 'preview', panel, stats, tl);
 
   // --- 6 Save: the fields Add GIFs asks for; the name is built from them.
   const splat = h('select', { id: id('plat') });
@@ -190,20 +194,20 @@ function build(root) {
   const logo = h('input', { type: 'checkbox', id: id('logo') });
   const cat = h('select', { id: id('cat') });
   const mode = seg('mode', [['replace', 'Replace the original'], ['new', 'Save as new']], (v) => { S.mode = v; mode.set(v); naming(); });
-  const name = h('div.cap', { id: id('name') });
+  const name = h('div.file.muted', { id: id('name') });
   const warn = h('div.cap.bad', { id: id('warn') });
   const saveBtn = h('button.pri', { id: id('save'), onclick: () => save() }, 'Save');
-  const sv = h('section.card.st-step', { id: id('save-step') }, h('h3', '6 · Save'),
+  const sv = step(6, 'Save', 'save-step',
     h('div.row', { id: id('mode-row'), hidden: true }, mode),
-    h('div.form',
+    h('div.form.f2',
       h('label.stack', 'Title', title), h('label.stack', 'Platform', splat),
       h('label.stack', { id: id('cat-l') }, 'Category', cat), h('label.stack', 'Author', author)),
-    h('div.row', { style: 'margin-top:8px' }, h('label', logo, 'It is a logo')),
-    name, warn, h('div.row', { style: 'margin-top:8px' }, saveBtn));
+    h('div.row.st-logo', h('label', logo, 'It is a logo')),
+    name, warn, h('div.row.st-go', saveBtn));
 
   const box = h('div.st-box', h('h2', 'Make art'),
     h('p.muted', 'Turn a picture — a screenshot, box art, a logo — or an animated GIF into a GIF for the panel'),
-    h('div.st-grid', imp, frm, look, txt, prev, sv));
+    h('div.st-grid', h('div.st-col', imp, frm), h('div.st-col', look, txt), prev, sv));
   const el = h('div.st-root', { id: 'studio' }, box);
   root.append(el);
 
@@ -226,7 +230,7 @@ function build(root) {
     }
     let bm;
     try { bm = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }); } catch {
-      msg.textContent = 'That is not a picture this browser can read.';
+      msg.textContent = 'That is not a picture this browser can read';
       return false;
     }
     if (tok !== S.tok) return false;
@@ -251,7 +255,7 @@ function build(root) {
     const t0 = performance.now();
     let st;
     try { st = art.Studio.fromGif(bytes); } catch (e) {
-      msg.textContent = `That GIF could not be read (${e.message || e}).`;
+      msg.textContent = `That GIF could not be read (${e.message || e})`;
       return false;
     }
     const all = st.inFile;
@@ -304,10 +308,10 @@ function build(root) {
     msg.textContent = 'Loading…';
     let r;
     try { r = await fetch(u); } catch {
-      msg.textContent = 'That site doesn’t allow it — save the image and drop it here.';
+      msg.textContent = 'That site doesn’t allow it — save the image and drop it here';
       return;
     }
-    if (!r.ok) { msg.textContent = `That address did not give a picture (${r.status}).`; return; }
+    if (!r.ok) { msg.textContent = `That address did not give a picture (${r.status})`; return; }
     await load(await r.blob(), { label: 'From the address' });
   }
 
@@ -441,7 +445,7 @@ function build(root) {
     const p = +plays.value;
     stats.textContent = `${A.seq.length} frame${A.seq.length === 1 ? '' : 's'} · ${secs(total)} s · ${p ? (p === 1 ? 'plays once' : `plays ${p} times`) : 'plays forever'}`;
     const cut = A.n - A.items.length;
-    tlcap.textContent = `Frames ${A.from + 1}–${A.to + 1} of ${A.n}` + (cut ? ` · ${cut} deleted` : '') + ' · click a frame to see it; Shift or Ctrl to pick more, then Delete';
+    tlcap.textContent = `Frames ${A.from + 1}–${A.to + 1} of ${A.n}` + (cut ? ` · ${cut} deleted` : '');
     undoBtn.disabled = !A.hist.length;
     Object.assign(el.dataset, { frames: A.seq.length, duration: total, from: A.from, to: A.to, deleted: A.deleted.size, plays: p });
     A.shown = -1;
@@ -679,33 +683,23 @@ function build(root) {
   const smoothLater = debounce(smoothLook, 400);
   smoothOn.onchange = () => { smoothSet(smoothOn.checked); smoothLook(); show(); };
 
-  // --- Find art for a game (js/find.js): games, then a game's pictures.
+  // --- Find art for a game (js/find.js): the best games' pictures as tiles;
+  // a tile loads its picture.
   async function find() {
     const p = plat.value, q = query.value.trim();
-    clear(thumbs);
-    if (!q) return;
-    clear(hits, h('span.muted', 'Searching…'));
-    let r;
-    try { r = await findGames(p, q); } catch { clear(hits, h('span.bad', 'The game list could not be loaded.')); return; }
-    if (!r.games.length) { clear(hits, h('span.muted', `No ${art.consoleName(p) || p} game matches “${q}”.`)); return; }
-    clear(hits, r.games.map((g) => h('button.st-hit', { 'data-i': g.i, onclick: (e) => pickGame(p, r.d, g, e.currentTarget) }, g.game, g.region && h('small', g.region))));
-  }
-
-  function pickGame(p, d, g, btn) {
-    for (const b of hits.children) b.classList?.toggle('on', b === btn);
     for (const u of S.urls) URL.revokeObjectURL(u);
     S.urls = [];
-    clear(thumbs, gamePictures(p, d, g).map((x) => {
-      const img = h('img', { alt: x.what });
-      const tile = h('button.st-thumb', { 'data-kind': x.kind, disabled: true, title: x.what }, img, h('small', x.what));
-      x.fetch().then((b) => {
-        img.src = URL.createObjectURL(b);
-        S.urls.push(img.src);
-        tile.disabled = false;
-        tile.onclick = () => load(b, { platform: p, title: x.game, logo: x.logo, label: x.title });
-      }).catch(() => tile.remove());
-      return tile;
-    }));
+    const say = (t) => clear(hits, h('p.cap', t));
+    if (!q) return clear(hits);
+    say('Searching…');
+    let r;
+    try { r = await findGames(p, q); } catch { say('The game list could not be loaded'); return; }
+    if (!r.games.length) return say(`No ${art.consoleName(p) || p} game matches “${q}”`);
+    clear(hits, r.games.slice(0, 12).flatMap((g) => gamePictures(p, r.d, g)).map((x) => tile(x, pickArt, S.urls)));
+  }
+  function pickArt(x, t) {
+    for (const c of hits.children) c.classList.toggle('on', c === t);
+    x.fetch().then((b) => load(b, { platform: x.platform, title: x.game, logo: x.logo, label: x.title }), () => { msg.textContent = 'That picture could not be loaded. Try another'; });
   }
 
   // --- Save
@@ -731,13 +725,13 @@ function build(root) {
     saveBtn.disabled = !path || !S.studio;
     if (!path) {
       clear(name);
-      warn.textContent = why;
+      warn.textContent = S.studio ? why : ''; // (no picture: step 1 says what to do)
       Object.assign(el.dataset, { name: '', title: '', platform: '' });
       return;
     }
     const e = app.wasm.parsePath(path);
     const n = base(path);
-    clear(name, S.from && S.mode === 'replace' ? (path === S.from.path ? 'Replaces ' : 'Replaces and renames to ') : 'File ', h('b.mono', n), app.device ? ` in ${niceName(c)}` : '', ` · listed as “${label(e)}”`);
+    clear(name, h('span', S.from && S.mode === 'replace' ? (path === S.from.path ? 'Replaces' : 'Replaces and renames to') : 'File'), h('span', h('span.mono', n), app.device ? ` in ${niceName(c)}` : '', ` · listed as “${label(e)}”`));
     warn.textContent = '';
     Object.assign(el.dataset, { name: n, title: e.title, platform: e.platform || '' });
   }
