@@ -16,7 +16,7 @@ const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type:
 
 export async function mount(el) {
   if (!app.device) {
-    el.append(h('div.card', h('h2', 'Settings'), h('p.muted', 'Device settings, WiFi and reboot live on the player. This page is in local mode: open it from the player (http://opendmd.local/) to use them.'), thumbs()));
+    el.append(h('div.card', h('h2', 'Settings'), h('p.muted', 'Device settings, WiFi and reboot live on the player. This page is in local mode: open it from the player (http://opendmd.local/) to use them'), thumbs()));
     return {};
   }
   const c = app.config || await app.refreshConfig();
@@ -79,7 +79,7 @@ export async function mount(el) {
   // One quiet line, only when the card has had trouble (sdhealth on the device).
   const cardNote = h('p.cap', { id: 'st-card-note', hidden: true, style: 'margin-top:12px' });
   // Where and what this player is: its address, its firmware and this page's version.
-  const about = h('p.cap', { id: 'st-about', style: 'margin-top:24px' });
+  const about = h('dl.facts', { id: 'st-about' });
 
   // The playlist choices, rebuilt whenever the config changes or the view
   // is shown: a playlist made or deleted elsewhere must not linger here.
@@ -136,7 +136,7 @@ export async function mount(el) {
       h('div.row', { style: 'margin-top:12px' },
         h('button', { id: 'st-reindex', onclick: reindex }, 'Rebuild index'),
         h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
-    about);
+    h('div.grp', h('h3', 'About'), about));
 
   el.append(banner,
     h('div.card', playH, note('A playlist, platform or shuffle change rebuilds the index', 'The card’s index is rebuilt in a few seconds; the panel holds its frame meanwhile.'),
@@ -159,7 +159,7 @@ export async function mount(el) {
     const fact = (k, v) => [h('dt', k), h('dd', v)];
     // (Uptime, memory, playlist and card: Now's health line and More.)
     clear(facts, fact('Entries', s.entries.toLocaleString()), fact('Index', s.index_state ?? '–'));
-    about.textContent = `About · ${s.hostname}.local · ${s.ip} (${s.wifi}) · firmware ${s.version} ${s.variant} · web app ${s.www_version ?? '–'}`;
+    clear(about, fact('Address', `${s.hostname}.local · ${s.ip}`), fact('Firmware', `${s.version} (${s.variant})`), fact('Web app', s.www_version ?? '–'));
     const sd = s.sd;
     const errs = sd.failures || (!sd.mounted && sd.reboots) || 0;
     cardNote.textContent = errs ? `Card errors: ${errs}, retrying`
@@ -267,8 +267,8 @@ export async function mount(el) {
     cacheMsg.textContent = j.phase === 'checking' ? 'Finding the files that are not prepared yet…'
       : j.phase === 'preparing' ? `${num(n)} of ${num(j.todo)} · ${num(j.done)} prepared` + (dmg ? ` · ${num(dmg)} damaged skipped` : '')
         + (net ? ` · ${num(net)} couldn't download` : '') + (left != null && n < j.todo ? ` · about ${mins(left)} left` : '') + (j.current ? ` · ${base(j.current)}` : '')
-      : j.phase === 'finished' ? (j.todo ? files(j.done, 'file') + ' prepared' : dmg ? 'Every other file is already prepared' : 'Every file is already prepared') + skipped + '.'
-      : j.phase === 'stopped' ? `Stopped after ${num(n)} of ${num(j.todo)}` + skipped + '. Start again to carry on.' : '';
+      : j.phase === 'finished' ? (j.todo ? files(j.done, 'file') + ' prepared' : dmg ? 'Every other file is already prepared' : 'Every file is already prepared') + skipped
+      : j.phase === 'stopped' ? `Stopped after ${num(n)} of ${num(j.todo)}` + skipped + '. Start again to carry on' : '';
     // Once a run is over: what was skipped, and what could not be fetched.
     const list = (id, head, rows) => h('details', { id }, h('summary', head), h('div.log', rows.map((r) => h('div', r))));
     clear(cacheSum, !j.running && dmg > 0 && list('pc-damaged', 'Damaged files', j.damaged.map((d) => `${d.path} — ${d.reason}`)),

@@ -123,7 +123,7 @@ export const sources = [
         || (o.shape === 'wide' ? x.w >= 2 * x.h : x.w < 2 * x.h && x.h < 2 * x.w)));
       return out.sort(o.sort === 'size' ? (a, b) => b.w * b.h - a.w * a.h : (a, b) => b.rank - a.rank);
     },
-    fail: 'GifCities didn’t answer. Try again in a moment.',
+    fail: 'GifCities didn’t answer. Try again in a moment',
     caption: () => ['From the Internet Archive’s GeoCities collection. Results are unfiltered. ', h('a', { href: 'https://gifcities.org/', target: '_blank', rel: 'noopener' }, 'gifcities.org')],
   },
   {
@@ -138,8 +138,8 @@ export const sources = [
       { id: 'platform', type: 'select', value: PLATFORMS[0], search: true, label: 'Platform',
         items: async () => { const art = await artModule(); return PLATFORMS.map((p) => [p, art.consoleName(p) || p]); } },
     ],
-    fail: 'The game list could not be loaded.',
-    caption: () => ['Title screens, in-game shots, boxes and logos from the ', h('a', { href: 'https://github.com/libretro-thumbnails', target: '_blank', rel: 'noopener' }, 'libretro-thumbnails'), ' collections.'],
+    fail: 'The game list could not be loaded',
+    caption: () => ['Title screens, in-game shots, boxes and logos from the ', h('a', { href: 'https://github.com/libretro-thumbnails', target: '_blank', rel: 'noopener' }, 'libretro-thumbnails'), ' collections'],
   },
 ];
 
@@ -229,7 +229,7 @@ export function mountResults(el, { onPick, narrow }) {
     artBtn.onclick = async () => {
       artBtn.disabled = true;
       pMsg.textContent = 'Loading…';
-      try { await onPick(x); pMsg.textContent = ''; } catch { pMsg.textContent = 'That one could not be loaded. Try another.'; }
+      try { await onPick(x); pMsg.textContent = ''; } catch { pMsg.textContent = 'That one could not be loaded. Try another'; }
       artBtn.disabled = false;
     };
     pick.hidden = false;
@@ -245,7 +245,7 @@ export function mountResults(el, { onPick, narrow }) {
       const hits = await src.search(q, o());
       if (t !== tok) return;
       all = hits;
-      status.textContent = hits.length ? '' : `Nothing found for “${q}”.`;
+      status.textContent = hits.length ? '' : `Nothing found for “${q}”`;
     } catch {
       if (t !== tok) return;
       status.textContent = src.fail;

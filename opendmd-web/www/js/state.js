@@ -49,9 +49,15 @@ export const app = {
 
   get device() { return this.src?.kind === 'device'; },
 
-  // A manifest's text, fetched once per session (filelist.txt is 450 KB).
+  // A manifest's text, fetched once per session (filelist.txt is 450 KB);
+  // callers at the same moment share the one fetch.
+  tq: new Map(),
   async text(path, fresh = false) {
-    if (fresh || !this.texts.has(path)) this.texts.set(path, await this.src.readText(path));
+    if (fresh || !this.texts.has(path)) {
+      let q = !fresh && this.tq.get(path);
+      if (!q) this.tq.set(path, q = this.src.readText(path).finally(() => this.tq.delete(path)));
+      this.texts.set(path, await q);
+    }
     return this.texts.get(path);
   },
 

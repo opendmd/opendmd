@@ -53,4 +53,5 @@
 @media (max-width:760px){
   .st-grid{grid-template-columns:minmax(0,1fr)}
   .st-find select{flex-basis:100%}
+  .st-seg button,.st-ctl select{min-height:36px}input[type=color]{height:36px}.st-anchor{grid-template-columns:repeat(3,36px)}.st-anchor button{height:36px}
 }

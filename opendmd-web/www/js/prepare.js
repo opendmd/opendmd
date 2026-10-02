@@ -1,33 +1,9 @@
-// Preparing files for playback. A GIF's prepared copy is a GIF re-encoded
-// so the player plays it with less memory and opens it faster. The device makes them
-// itself when idle; this is the fast path (and the only one past 256
-// colours): encoded here with the core's encoder (byte-identical to
-// opendmd-pack; it lives in the second wasm module, js/artmod.js, loaded on
-// first use), uploaded to where the player looks (cachePathFor). The GIF
-// itself is never touched.
-//
-// `start()` prepares whatever the playlist in play is missing, one file at
-// a time: every transfer costs the playing device heap, so there is no
-// prefetch. It lives here, not in a view, so it keeps going while the user
-// looks at something else; progress goes out as `prepare` events. Stopping
-// and starting again carries on where it left off, because what is missing
-// is worked out afresh from the device's list of copies each time.
-//
-// Two kinds of trouble, neither of which stops the run:
-// - damaged: the encoder refused the GIF (bad LZW, truncated, not a GIF;
-//   past 256 colours is quantised, not an error). It will never work, so
-//   it is recorded and skipped from then on: `POST /api/cache/failed` where
-//   the device has it (the list is `/cache/.failed`, shared with its own cache
-//   builder), else in this browser's storage, per device. The builder's own
-//   verdicts are read too (`GET /api/cache/failed`, or the file itself),
-//   bar the ones this encoder can do (colours, size).
-// - network: a GET or PUT that failed is tried again after 2 s, then once
-//   more at the end of the run; what still fails is listed together.
-//
-// Smooth motion (js/smooth.js): a GIF listed in /sets/.smooth is prepared
-// smooth, and a listed GIF whose file is not the smooth one — the device's
-// own builder makes plain ones, e.g. after the cache was cleared — is made
-// again in the same run.
+// Preparing files for playback: a GIF's copy, re-encoded here with the core's
+// encoder (js/artmod.js) and uploaded to cachePathFor; the GIF is never touched.
+// `start()` runs one file at a time over what the playlist in play is missing,
+// emitting `prepare` events; damaged files are recorded and skipped, network
+// failures retried; GIFs in /sets/.smooth are made smooth. CLAUDE.md, "Prepare
+// remaining files", has the whole story.
 
 import { app } from './state.js';
 import { emit, store } from './util.js';

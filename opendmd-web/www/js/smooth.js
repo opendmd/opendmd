@@ -170,7 +170,7 @@ export async function detail(box, it, bytes, pv, cap) {
   clear(box,
     h('div.swrow', h('label', sw, 'Smooth motion'), pvBtn),
     h('div.cap', { id: 'lib-smooth-text' },
-      `${s.percent}% of this animation moves in steps of 2 px or more. Smooth motion adds ${s.added.toLocaleString()} frames.`),
+      `${s.percent}% of this animation moves in steps of 2 px or more. Smooth motion adds ${s.added.toLocaleString()} frames`),
     msg);
   box.dataset.state = on ? 'on' : 'off';
   box.hidden = false;
@@ -207,7 +207,7 @@ export async function detail(box, it, bytes, pv, cap) {
     try {
       await set(it.path, want);
       box.dataset.state = want ? 'on' : 'off';
-      msg.textContent = want ? 'On: the panel plays it smoothly from the next time it starts.' : 'Off: the panel plays the original frames.';
+      msg.textContent = want ? 'On: the panel plays it smoothly from the next time it starts' : 'Off: the panel plays the original frames';
     } catch (e) {
       sw.checked = !want;
       msg.textContent = '';

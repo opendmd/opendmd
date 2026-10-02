@@ -39,7 +39,7 @@ every view like a person would:
             GIFs written into the overlay (cut short, broken header); the
             first GET of one good GIF aborted (Playwright route) is retried:
             one summary line "2 files prepared · 2 damaged files skipped
-            (they can't be played either).", both listed in the disclosure
+            (they can't be played either)", both listed in the disclosure
             and in /api/cache/failed; a second run never fetches them
   Add GIFs  two GIFs uploaded into Consoles from Library: each GIF and its
             prepared copy land (the copy byte-identical to opendmd-pack), and
@@ -687,6 +687,10 @@ def thumbs_checks(page: Page) -> None:
     goto_view(page, "settings")
     check(not page.is_checked("#st-thumbs"), "thumbnails: off by default on a device")
     page.check("#st-thumbs")
+    # On a device a thumbnail is a prepared copy or nothing: never the GIF.
+    gifs: list[str] = []
+    on_req = lambda r: "/gifs/" in r.url and gifs.append(r.url)
+    page.on("request", on_req)
     goto_view(page, "library")
     pick_cat(page, "Consoles")
     page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
@@ -705,6 +709,8 @@ def thumbs_checks(page: Page) -> None:
     page.wait_for_function(f"document.querySelector('#lib-list').scrollTop > 3000 && document.querySelector('#lib-list .vrow:not([hidden])').dataset.path !== {json.dumps(first)}", timeout=3000)
     page.wait_for_function(f"{in_view}.slice(0, 6).every(r => r.querySelector('canvas.th[data-done]'))", timeout=3000)
     check(True, "thumbnails: the list scrolls and the new rows get theirs")
+    page.remove_listener("request", on_req)
+    check(not gifs, f"thumbnails: no GIF fetched for one ({gifs[:2]})")
     page.eval_on_selector("#lib-list", "e => { e.scrollTop = 0; }")
     goto_view(page, "settings")
     page.uncheck("#st-thumbs")
@@ -1093,7 +1099,7 @@ def power_checks(page: Page, base: str) -> None:
         check(page.is_visible("#st-maxbright"), "power: the control is in the Power card")
         check(page.is_visible("#st-maxbright-warn"), "power: warning shown above the tested limit")
         w = page.inner_text("#st-maxbright-warn")
-        check(w == f"Above the tested limit ({safe}). The display may reset. Only raise this with a stronger power supply.",
+        check(w == f"Above the tested limit ({safe}). The display may reset. Only raise this with a stronger power supply",
               f"power: warning text ({w})")
         page.evaluate("document.querySelector('#st-power-card').scrollIntoView({block: 'center'})")
         shot(page, "settings-power", "laptop")
@@ -2559,7 +2565,7 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
     page.click("#pc-go")
     page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=120000)
     line = page.inner_text("#pc-progress")
-    check(line == "2 files prepared · 2 damaged files skipped (they can't be played either).",
+    check(line == "2 files prepared · 2 damaged files skipped (they can't be played either)",
           f"damage: summary line '{line}' (first GET of {base_name(flaky)} aborted: {len(aborted)})")
     check(len(aborted) == 1 and page.locator("#pc-net").count() == 0 and page.inner_text("#pc-errors") == "",
           "damage: the aborted download was retried, nothing listed as failed")
@@ -2577,7 +2583,7 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
     page.click("#pc-go")
     page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=60000)
     line = page.inner_text("#pc-progress")
-    check(line == "Every other file is already prepared · 2 damaged files skipped (they can't be played either)."
+    check(line == "Every other file is already prepared · 2 damaged files skipped (they can't be played either)"
           and len(hits) == n, f"damage: second run '{line}', damaged GIFs fetched again: {len(hits) - n}")
     page.unroute(match)
     page.remove_listener("request", watch)
@@ -2691,7 +2697,7 @@ def smooth_checks(page: Page, base: str, overlay: Path) -> None:
     # A candidate: the sentence with the CLI's numbers.
     state = preview_in_library(page, SMOOTH_ON)
     text = page.inner_text("#lib-smooth-text") if state in ("on", "off") else ""
-    want = f"{int(pct)}% of this animation moves in steps of 2 px or more. Smooth motion adds {added:,} frames."
+    want = f"{int(pct)}% of this animation moves in steps of 2 px or more. Smooth motion adds {added:,} frames"
     check(state == "off" and page.locator("#lib-smooth").is_visible() and text == want,
           f"smooth: shown for {SMOOTH_ON}: '{text}' (analysis {page.get_attribute('#lib-smooth', 'data-analyse-ms')} ms)")
     no_leaks(page, "library (smooth)")
@@ -2910,6 +2916,14 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
         shot(page, view, "phone")
     overflow = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
     check(overflow <= 0, f"phone: no horizontal scroll ({overflow}px)")
+    # And at 360 px, the narrowest phones in use.
+    page.set_viewport_size({"width": 360, "height": 780})
+    for view in ["now", "library", "sets", "settings", "studio"]:
+        goto_view(page, view)
+        page.wait_for_timeout(500)
+        over = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        check(over <= 0, f"phone 360: {view} has no horizontal scroll ({over}px)")
+    page.set_viewport_size({"width": 390, "height": 844})
     # The Library's Details on a phone: a sheet over the list.
     goto_view(page, "library")
     w = page.eval_on_selector("#lib-search", "e => e.getBoundingClientRect().width")

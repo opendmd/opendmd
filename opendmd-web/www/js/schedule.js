@@ -112,7 +112,7 @@ export function scheduleCard() {
       h('span.grow', ruleText(r)),
       h('button.sm', { onclick: () => edit(i) }, 'Edit'),
       h('button.sm', { onclick: () => run(() => put({ ...sched, rules: sched.rules.filter((_, k) => k !== i) })) }, 'Delete')))
-      : h('div.muted', 'No rules: the playlist and brightness in Playback apply all the time.'));
+      : h('div.muted', 'No rules: the playlist and brightness in Playback apply all the time'));
   }
   // The night fields from the device (on load only: they save as they change).
   function renderNight() {

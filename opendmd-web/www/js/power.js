@@ -17,7 +17,7 @@ export function powerCard(card) {
     const s = safe();
     q.title = `Above ${s ?? 'the tested level'} the panel can reset on the supplied power supply, especially on white screens.`;
     warn.hidden = !(s && +num.value > s);
-    warn.textContent = `Above the tested limit (${s}). The display may reset. Only raise this with a stronger power supply.`;
+    warn.textContent = `Above the tested limit (${s}). The display may reset. Only raise this with a stronger power supply`;
   }
   function sync(c) {
     if (document.activeElement !== num) num.value = c.max_brightness ?? 255;
