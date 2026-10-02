@@ -1,33 +1,15 @@
-// Library: the card's GIFs by category (tabs, plus Live and Effects), a
-// search over titles and the platform chips, and a Details panel for the
-// one picked: its preview (from its prepared copy when there is one — the
-// same frames, a cheaper fetch), what its name says (title, platform,
-// category, author: the name *is* the metadata), and what can be done with
-// it — Send to panel (POST /api/play), Add to playlist, Edit in Make art,
-// Favourite / Hide in a playlist, Smooth motion, Edit details (a rename on
-// the card) and Delete. On a narrow screen the panel is a sheet.
-//
-// "Add GIFs" asks for a title, platform, category and author per file
-// (js/details.js, loaded then, with the Edit details dialog and Delete),
-// uploads each under the name those make, prepares it in the browser and
-// offers to add them to the playlist in play. "Make art" is its own view
-// (js/studio.js). Listings come from GET /api/files, one directory at a time.
+// Library: the card's GIFs by category, the web sources (js/find.js), and
+// Details for the one picked. See "The Library's layout" in CLAUDE.md.
 
 import { app, playlistLabel } from './state.js';
-import { Overrides, glyphs, menu, moreButton, playlistSelect, popup, closeMenu } from './overrides.js';
+import { Overrides, glyphs, menu, moreButton, actions } from './overrides.js';
 import { PanelPreview } from './preview.js';
 import { prepareBytes } from './prepare.js';
 import { VList } from './vlist.js';
 import { h, clear, emit, on, store, toast, label, lines, niceName, flagName, isFlag, isSys, byNice } from './util.js';
 
-// A flag that is not a keyword or season (util.js FLAGS) is the author's handle.
 export const authorOf = (e) => e.flags.find((f) => !isFlag(f)) || '';
 
-// Upload one GIF into a category and prepare it straight away: the GIF
-// (PUT /api/files/gifs/…), then its prepared copy, encoded here. A GIF that
-// will not encode is still added (it plays as it is; `warn` says so) and any
-// stale copy of an older file by that name is forgotten. `prep` makes and
-// uploads the copy (Make art passes Smooth motion's).
 export async function addOne(category, name, bytes, warn, prep = prepareBytes) {
   const path = `/gifs/${category}/${name}`;
   await app.src.writeFile(path, bytes);
@@ -39,8 +21,6 @@ export async function addOne(category, name, bytes, warn, prep = prepareBytes) {
   return path;
 }
 
-// Save a playlist's text: a set through PUT /api/sets, a root playlist as a
-// file; the device reindexes if it is the one in play.
 export async function savePlaylist(path, text) {
   if (path.startsWith('/sets/')) await app.src.saveSet(path.slice(6).replace(/\.txt$/, ''), text);
   else await app.src.writeFile(path, text);
@@ -48,7 +28,6 @@ export async function savePlaylist(path, text) {
   if (path === app.activePath) await app.refreshStatus().catch(() => {});
 }
 
-// Append GIFs to a playlist (those not in it already).
 export async function appendTo(path, paths) {
   const name = playlistLabel(path);
   try {
@@ -61,34 +40,69 @@ export async function appendTo(path, paths) {
   } catch (e) { toast(`adding to “${name}”: ${e.message}`, 'bad'); }
 }
 
-// Add new GIFs to the playlist in play, if the user wants them there.
 export async function offerPlaylist(paths) {
   const n = paths.length;
   if (confirm(`Add ${n} new GIF${n > 1 ? 's' : ''} to the playlist “${playlistLabel(app.activePath)}”?`)) await appendTo(app.activePath, paths);
 }
 
+// Thumbnails: first frames, two fetches at a time, rows gone skipped, 200 kept.
+const TH = new Map(), thBusy = new Set();
+let thQ = [];
+export const thumbsOn = () => store.get('thumbs', !app.device);
+function paint(cv) {
+  const b = TH.get(cv._p);
+  TH.delete(cv._p);
+  TH.set(cv._p, b);
+  if (b) {
+    const s = Math.min(128 / b.width, 32 / b.height), w = b.width * s, y = b.height * s;
+    cv.getContext('2d').drawImage(b, (128 - w) / 2, (32 - y) / 2, w, y);
+  }
+  cv.dataset.done = b ? 1 : 0;
+}
+function thumb(cv, p) {
+  cv._p = p;
+  if (TH.has(p)) paint(cv); else { thQ.push(cv); pump(); }
+}
+function pump() {
+  while (thBusy.size < 2 && thQ.length) {
+    const cv = thQ.shift(), p = cv._p;
+    if (!cv.isConnected || cv.parentNode.hidden || thBusy.has(p)) continue;
+    if (TH.has(p)) { paint(cv); continue; }
+    thBusy.add(p);
+    app.previewBytes(p).then((b) => createImageBitmap(new Blob([b]))).catch(() => null).then((b) => {
+      TH.set(p, b);
+      if (TH.size > 200) { const [k, v] = TH.entries().next().value; TH.delete(k); v?.close(); }
+      thBusy.delete(p);
+      for (const c of document.querySelectorAll('canvas.th')) if (c._p === p && !c.dataset.done) paint(c);
+      thQ = thQ.filter((c) => c.isConnected && !c.dataset.done);
+      pump();
+    });
+  }
+}
+
 export async function mount(el) {
   let cat = store.get('lib.cat', 'Consoles');
-  let cats = []; // [value, label]
-  let items = [], shown = [], current = null;
+  let cats = [];
+  let items = [], shown = [], current = null, thumbs = thumbsOn();
   const platforms = new Set();
 
-  // --- The header: search, Add GIFs, Make art; the category tabs; the platforms.
   const search = h('input', { type: 'search', id: 'lib-search', placeholder: 'Search GIFs', enterKeyHint: 'search', oninput: () => web || apply(), onkeydown: (e) => web && e.key === 'Enter' && R.search(search.value) });
   const count = h('span.muted', { id: 'lib-count' });
-  // Your GIFs, or GIFs and pictures from the web (js/find.js, loaded then):
-  // the same search box drives either, and the list comes back as it was.
   let web = null, R = null, libQ = '', webQ = '', libTop = 0;
-  const srcs = h('div.chips', { id: 'lib-src' }, [['', 'Your GIFs'], ['gifcities', 'GifCities'], ['gameart', 'Game art']]
-    .map(([v, t]) => h('button.chip' + (v ? '' : '.on'), { 'data-src': v, onclick: () => useSource(v) }, t)));
+  const SRC = [['', 'Your GIFs'], ['gifcities', 'GifCities'], ['gameart', 'Game art']];
+  const srcs = h('div.seg', { id: 'lib-src' }, SRC.map(([v, t]) => h('button' + (v ? '' : '.on'), {
+    'data-src': v,
+    onclick: (e) => (innerWidth > 760 ? useSource(v) : actions(e.currentTarget, 'lib-src-menu', SRC.map(([x, y]) => [{ 'data-src': x }, y, () => useSource(x)]))),
+  }, t)));
   const goBtn = h('button', { id: 'lib-go', hidden: true, onclick: () => R.search(search.value) }, 'Search');
-  const findBox = h('div.card', { id: 'lib-find', hidden: true });
+  const findBox = h('div', { id: 'lib-find', hidden: true });
   const tabs = h('div.tabs', { id: 'lib-cats', role: 'tablist' });
   const chips = h('div.chips.scroll', { id: 'lib-chips' });
+  const narrow = h('div.lib-r2', { id: 'lib-narrow', hidden: true });
   const addInput = h('input', { type: 'file', multiple: true, accept: '.gif,image/gif', hidden: true, id: 'lib-add-files', onchange: () => { addGifs([...addInput.files]); addInput.value = ''; } });
-  const addBtn = app.device && h('label.btn', { id: 'lib-add-btn', title: 'Upload GIFs to the card' }, 'Add GIFs…', addInput);
-  const artBtn = h('button', { id: 'lib-art', title: 'Make a GIF for the panel from a picture', onclick: () => app.go('studio') }, '✎ Make art');
-  // Uploads in progress: a thin bar and a line.
+  const addBtn = h('button', { id: 'lib-add-btn', 'aria-haspopup': 'menu', onclick: (e) => actions(e.currentTarget, 'lib-add-menu', [
+    app.device && ['lib-add-gifs', 'Add GIFs…', () => addInput.click()],
+    ['lib-art', '✎ Make art', () => app.go('studio')]]) }, '+ Add');
   const addBar = h('i');
   const addMsg = h('span', { id: 'lib-add-progress' });
   const addErr = h('div.log.bad', { id: 'lib-add-errors' });
@@ -98,21 +112,20 @@ export async function mount(el) {
   const selbar = h('div.selbar.row.sp', { hidden: true, id: 'lib-selbar' },
     h('span', selCount, ' selected'),
     h('div.row',
-      h('button', { id: 'lib-all', onclick: selectAll }, 'Select shown'),
-      h('button', { id: 'lib-to-set', onclick: toSet }, 'Add to playlist'),
-      h('button', { onclick: () => { app.selection.clear(); sync(); } }, 'Clear')));
+      h('button.txt', { id: 'lib-all', onclick: selectAll }, 'Select shown'),
+      h('button.txt', { onclick: () => { app.selection.clear(); sync(); } }, 'Clear'),
+      h('button', { id: 'lib-to-set', onclick: toSet }, 'Add to playlist')));
 
-  // Favourite / hide / play longer act on one playlist: the one in play,
-  // unless another is chosen in the Details panel.
   const ov = new Overrides();
-  ov.onChange = () => { list.refresh(); syncOv(); };
+  ov.onChange = () => list.refresh();
 
   const list = new VList({
     rowHeight: 44,
     render(row, it) {
       const box = h('input', { type: 'checkbox', checked: app.selection.has(it.path), 'aria-label': 'select', onclick: (e) => { e.stopPropagation(); toggle(it.path, box.checked); } });
-      const o = ov.get(it.path);
-      clear(row, box, h('span.t', label(it.e)), it.e.platform && h('span.tag', it.e.platform), glyphs(o), moreButton(ov, it.path));
+      const o = ov.get(it.path), cv = thumbs && it.path[0] != '@' && h('canvas.th', { width: 128, height: 32 });
+      clear(row, box, cv, h('span.t', label(it.e)), glyphs(o), it.e.platform && h('span.tag', it.e.platform), moreButton(ov, it.path));
+      if (cv) thumb(cv, it.path);
       row.classList.toggle('cur', it.path === current?.path);
       row.classList.toggle('hid', !!o?.never);
       row.dataset.path = it.path;
@@ -122,38 +135,23 @@ export async function mount(el) {
   });
   list.el.id = 'lib-list';
 
-  // --- Details
   const canvas = h('canvas.panel', { id: 'lib-panel' });
   const cap = h('div.cap', { id: 'lib-cap' }, 'Pick a GIF to see it here');
   const dTitle = h('h2', { id: 'lib-d-title' });
-  const dd = (id) => h('dd', { id });
-  const [dPlat, dCat, dAuthor, dTags] = ['lib-d-platform', 'lib-d-category', 'lib-d-author', 'lib-d-tags'].map(dd);
-  const tagsDt = h('dt', 'Tags');
-  const facts = h('dl.facts', { id: 'lib-d-facts' }, h('dt', 'Platform'), dPlat, h('dt', 'Category'), dCat, h('dt', 'Author'), dAuthor, tagsDt, dTags);
+  const meta = h('div.cap', { id: 'lib-d-meta' });
   const sendBtn = app.device && h('button.pri', { id: 'lib-play', disabled: true, onclick: () => app.play(current.path) }, 'Send to panel');
   const plBtn = h('button', { id: 'lib-d-add', onclick: (e) => pickPlaylist(e.currentTarget) }, 'Add to playlist…');
-  const editArt = h('button', { id: 'lib-d-art', title: 'Open it in Make art', onclick: () => { app.artFrom = { path: current.path, e: current.e }; app.go('studio'); } }, '✎ Edit in Make art');
-  const favBtn = h('button', { id: 'lib-d-fav', onclick: () => put((o) => ({ w: o.w > 1 ? null : 3, never: null })) });
-  const hideBtn = h('button', { id: 'lib-d-hide', onclick: () => put((o) => ({ never: o.never ? null : true, w: null })) });
-  const ovHolder = h('label.cap', { id: 'lib-ovfor' });
-  // Smooth motion for the previewed GIF (device only; js/smooth.js, loaded
-  // on the first preview): shown only when there is motion to smooth.
+  const editArt = h('button', { id: 'lib-d-art', onclick: () => { app.artFrom = { path: current.path, e: current.e }; app.go('studio'); } }, '✎ Edit in Make art');
+  const moreBtn = h('button.more', { id: 'lib-d-more', 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => detailMenu(e.currentTarget) }, '…');
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true });
-  // "Live" and "Effects" (js/live.js, loaded when chosen): the clock, a
-  // scrolling text, the effects.
   const liveBox = h('div', { id: 'lib-live', hidden: true });
-  const editBtn = app.device && h('button', { id: 'lib-d-edit', onclick: () => edit() }, 'Edit details…');
-  const delBtn = app.device && h('button', { id: 'lib-d-del', onclick: () => remove() }, 'Delete…');
-  // The one place a GIF's path shows: small, last.
   const dPath = h('span.mono');
   const dFile = h('div.file.muted', { id: 'lib-d-file' }, 'File ', dPath);
-  const gifOnly = [facts, editArt, editBtn, delBtn, dFile].filter(Boolean);
+  const gifOnly = [meta, editArt, moreBtn, dFile];
   const body = h('div', { id: 'lib-d-body', hidden: true },
-    dTitle, facts,
-    h('div.row.acts', sendBtn, plBtn, editArt),
-    smoothBox,
-    h('div.row.acts', favBtn, hideBtn, ovHolder),
-    app.device && h('div.row.acts.end', editBtn, delBtn),
+    h('div.dhead', h('div.grow', dTitle, meta), moreBtn),
+    h('div.row.acts', sendBtn, plBtn),
+    h('div.row.acts', editArt), smoothBox,
     dFile);
   const side = h('div.side', { id: 'lib-side' },
     h('div.card', { id: 'lib-detail' },
@@ -163,8 +161,8 @@ export async function mount(el) {
   const grid = h('div.libgrid',
     h('div',
       h('div.card.libhead',
-        h('div.row', h('div.grow.lib-q', search), goBtn, count, addBtn, artBtn),
-        srcs, tabs, chips, addCard),
+        h('div.lib-q', search, srcs), count, goBtn, addBtn, addInput,
+        h('div.lib-r2', { id: 'lib-r2' }, tabs, h('i.vsep'), chips), narrow, addCard),
       findBox, list.el, selbar),
     side);
   el.append(grid);
@@ -180,14 +178,10 @@ export async function mount(el) {
     const e = it.e, gif = it.path[0] != '@';
     dTitle.textContent = label(e);
     for (const x of gifOnly) x.hidden = !gif;
-    dPlat.textContent = e.platform || '—';
-    dCat.textContent = e.category ? niceName(e.category) : '—';
-    dAuthor.textContent = authorOf(e) || '—';
-    const tags = e.flags.filter(isFlag);
-    dTags.textContent = tags.map(flagName).join(' · ');
+    const a = authorOf(e), sp = (id, t) => t && h('span', { id }, t);
+    clear(meta, [sp('lib-d-platform', e.platform), sp('lib-d-category', e.category && niceName(e.category)),
+      a && ['by ', sp('lib-d-author', a)], ...e.flags.filter(isFlag).map(flagName)].filter(Boolean).flatMap((x, i) => (i ? [' · ', x] : [x])));
     dPath.textContent = it.path;
-    tagsDt.hidden = dTags.hidden = !tags.length;
-    syncOv();
     if (sendBtn) { sendBtn.disabled = false; sendBtn.dataset.path = it.path; }
     cap.textContent = 'Loading…';
     delete cap.dataset.shown;
@@ -195,9 +189,7 @@ export async function mount(el) {
     let bytes;
     try {
       if (await pv.show(it.path, async (p) => (bytes = await app.previewBytes(p)))) {
-        // An effect may run faster than the page's frames: play it by the clock.
         if (it.pick) pv.syncTo(0, performance.now());
-        // (data-shown: what the preview plays, for tools/web-smoke.py)
         cap.textContent = '';
         cap.dataset.shown = it.name;
         if (smoothBox && gif) import('./smooth.js').then((m) => m.detail(smoothBox, it, bytes, pv, cap)).catch(() => {});
@@ -205,29 +197,29 @@ export async function mount(el) {
     } catch (err) { cap.textContent = 'Preview: ' + err.message; }
   }
 
-  // Favourite and Hide, in the chosen playlist.
-  function put(patch) {
-    if (!ov.path) { toast('save the playlist first', 'bad'); return; }
+  function detailMenu(btn) {
     const o = ov.get(current.path) || {};
-    ov.set(current.path, { ...o, ...patch(o) });
+    actions(btn, 'lib-d-menu', [
+      ['lib-d-fav', (o.w > 1 ? '★' : '☆') + ' Favourite in…', () => inList(btn, (x) => ({ w: x.w > 1 ? null : 3, never: null }), (x) => x.w > 1)],
+      ['lib-d-hide', '⊘ Hide in…', () => inList(btn, (x) => ({ never: x.never ? null : true, w: null }), (x) => x.never)],
+      app.device && ['lib-d-edit', 'Edit details…', edit],
+      app.device && ['lib-d-del', 'Delete…', remove, '.danger']], label(current.e));
   }
-  function syncOv() {
-    const o = (current && ov.get(current.path)) || {};
-    favBtn.textContent = o.w > 1 ? '★ Favourite' : '☆ Favourite';
-    hideBtn.textContent = o.never ? '⊘ Hidden' : '⊘ Hide';
-    favBtn.classList.toggle('on', o.w > 1);
-    hideBtn.classList.toggle('on', !!o.never);
+  async function inList(btn, patch, is) {
+    const it = current, lists = await app.playlists().catch(() => []);
+    if (!lists.length) lists.push({ path: '/filelist.txt', label: 'All files' });
+    const o = ov.get(it.path) || {};
+    actions(btn, 'lib-in-menu', lists.map((p) => [{ 'data-path': p.path }, [h('span.ck', p.path === ov.path && is(o) ? '✓' : ''), p.label], async () => {
+      if (p.path !== ov.path) { await ov.load(p.path); store.set('lib.ov', p.path); }
+      const x = ov.get(it.path) || {};
+      ov.set(it.path, { ...x, ...patch(x) });
+    }]), 'In which playlist?');
   }
 
-  // "Add to playlist…": a playlist from a menu, or a new one.
   async function pickPlaylist(btn) {
-    const it = current;
-    const lists = await app.playlists().catch(() => []);
-    const r = btn.getBoundingClientRect();
-    popup(h('div.menu', { id: 'lib-pl-menu', role: 'menu' },
-      h('div.mh', h('b', label(it.e)), h('span.muted', ' — add to')),
-      lists.map((p) => h('button.mi', { 'data-path': p.path, onclick: () => { closeMenu(); appendTo(p.path, [it.path]); } }, p.label)),
-      h('button.mi', { id: 'lib-pl-new', onclick: () => { closeMenu(); app.selection.add(it.path); toSet(); } }, 'New playlist…')), r.left, r.bottom + 4);
+    const it = current, lists = await app.playlists().catch(() => []);
+    actions(btn, 'lib-pl-menu', [...lists.map((p) => [{ 'data-path': p.path }, p.label, () => appendTo(p.path, [it.path])]),
+      ['lib-pl-new', 'New playlist…', () => { app.selection.add(it.path); toSet(); }]], 'Add to');
   }
 
   function toggle(path, onOff) {
@@ -251,44 +243,39 @@ export async function mount(el) {
   async function useSource(id) {
     if ((web?.id || '') === id) return;
     let m = null;
-    // Text typed while the search code loads (its first use) is meant for
-    // the web source, not the list.
     const before = search.value, top = list.el.scrollTop;
     if (id) try { m = await import('./find.js'); await m.style(); } catch { toast('the search could not be loaded', 'bad'); return; }
     const typed = search.value !== before ? search.value : null;
     for (const b of srcs.children) b.classList.toggle('on', b.dataset.src === id);
+    grid.classList.toggle('web', !!m);
+    findBox.hidden = goBtn.hidden = narrow.hidden = !m;
     if (!m) {
       web = null;
       webQ = search.value;
       search.value = libQ;
       search.placeholder = 'Search GIFs';
-      grid.classList.remove('web');
-      findBox.hidden = goBtn.hidden = true;
       list.el.scrollTop = libTop;
       apply();
       return;
     }
     if (!web) { libQ = before; libTop = top; search.value = typed ?? webQ; }
     web = m.sources.find((s) => s.id === id);
-    R ??= m.mountResults(findBox, { onPick: toArt });
+    R ??= m.mountResults(findBox, { onPick: toArt, narrow });
     R.use(web);
     search.placeholder = web.placeholder;
-    grid.classList.add('web');
-    findBox.hidden = goBtn.hidden = false;
     if (search.value.trim()) R.search(search.value);
   }
-  // A web GIF or picture into Make art (there to frame, then save).
   async function toArt(hit) {
     app.artFrom = { blob: await hit.fetch(), label: hit.title, title: hit.hint, source: hit.source, platform: hit.platform, logo: hit.logo };
     app.go('studio');
   }
 
-  // --- Categories and the list
   const real = () => cats.filter(([v]) => v[0] != '@').map(([v]) => v);
   async function categories() {
     let dirs = [];
     try { dirs = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch (e) { toast('listing /gifs: ' + e.message, 'bad'); }
-    cats = [...dirs.map((d) => [d, niceName(d)]), ['@', 'Live'], ['@fx', 'Effects']];
+    const tab = (d) => [d, niceName(d)];
+    cats = [...dirs.filter((d) => !isSys(d)).map(tab), ['@', 'Live'], ['@fx', 'Effects'], ...dirs.filter(isSys).map(tab)];
     if (!cats.some(([v]) => v === cat)) cat = dirs.includes('Consoles') ? 'Consoles' : cats[0][0];
     renderTabs();
     await load();
@@ -298,7 +285,8 @@ export async function mount(el) {
       role: 'tab', 'data-cat': v, 'aria-selected': String(v === cat),
       onclick: () => { if (v !== cat) { cat = v; renderTabs(); load(); } },
     }, t)));
-    tabs.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const on = tabs.querySelector('.on');
+    if (on) for (const s of [tabs, tabs.parentNode]) s.scrollLeft = on.offsetLeft - s.offsetLeft - 24;
   }
 
   async function load() {
@@ -313,7 +301,6 @@ export async function mount(el) {
     const want = cat, dir = `/gifs/${cat}`;
     let files = [];
     try { files = (await app.src.list(dir)).filter((f) => !f.dir).map((f) => f.name); } catch (e) { toast(`listing ${dir}: ${e.message}`, 'bad'); }
-    // Another category was chosen while this one listed (a big one takes seconds on the device).
     if (want != cat) return;
     items = files.filter((n) => /\.gif$/i.test(n)).map((name) => {
       const path = `${dir}/${name}`;
@@ -329,7 +316,7 @@ export async function mount(el) {
     const counts = new Map();
     for (const it of items) if (it.e.platform) counts.set(it.e.platform, (counts.get(it.e.platform) || 0) + 1);
     const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 24);
-    chips.hidden = top.length < 2;
+    grid.classList.toggle('noplat', top.length < 2);
     clear(chips, top.map(([p, n]) => h('button.chip' + (platforms.has(p) ? '.on' : ''), {
       'data-platform': p,
       onclick: () => { if (!platforms.delete(p)) platforms.add(p); renderChips(); apply(); },
@@ -337,7 +324,7 @@ export async function mount(el) {
   }
 
   function apply() {
-    const text = web ? libQ : search.value; // (the box holds a web search meanwhile)
+    const text = web ? libQ : search.value;
     const q = app.wasm.normalizeTitle(text);
     const qn = text.trim().toLowerCase();
     shown = items.filter((it) => (!platforms.size || platforms.has(it.e.platform))
@@ -346,7 +333,6 @@ export async function mount(el) {
     list.set(shown);
   }
 
-  // Show a GIF: its category's tab, the row, its details.
   async function reveal(path) {
     const c = path.slice(6, path.lastIndexOf('/'));
     search.value = '';
@@ -357,7 +343,6 @@ export async function mount(el) {
     if (it) { list.el.scrollTop = shown.indexOf(it) * list.rh; preview(it); }
   }
 
-  // --- Add GIFs: a name for each (the dialog), then one file at a time.
   const opts = () => ({ category: cat[0] == '@' ? '' : cat, categories: real(), platforms: [...new Set(items.map((x) => x.e.platform).filter(Boolean))] });
   async function addGifs(picked) {
     const gifs = picked.filter((f) => /\.gif$/i.test(f.name));
@@ -377,13 +362,13 @@ export async function mount(el) {
     addBar.style.width = '100%';
     const where = [...new Set(plan.map((p) => niceName(p.category)))].join(', ');
     addMsg.textContent = `${added.length} of ${plan.length} added to ${where}`;
+    if (!addErr.firstChild) setTimeout(() => { addCard.hidden = true; }, 6000);
     if (added.length) {
       await reveal(added[0]);
       await offerPlaylist(added);
     }
   }
 
-  // Edit details (a rename) and Delete, from js/details.js.
   async function edit() {
     const to = await (await import('./details.js')).editDialog(current.path, opts());
     if (to) { await ov.load(ov.path); await reveal(to); }
@@ -401,14 +386,11 @@ export async function mount(el) {
 
   async function playlists() {
     const lists = await app.playlists().catch(() => []);
-    if (!lists.length) lists.push({ path: '/filelist.txt', label: 'All files' });
-    const want = ov.path && lists.some((p) => p.path === ov.path) ? ov.path
-      : lists.some((p) => p.path === app.activePath) ? app.activePath : lists[0].path;
-    clear(ovHolder, 'In', playlistSelect(lists, want, (p) => ov.load(p)));
+    const has = (p) => p && lists.some((x) => x.path === p);
+    const want = [ov.path, store.get('lib.ov'), app.activePath].find(has) || lists[0]?.path || '/filelist.txt';
     if (want !== ov.path) await ov.load(want);
   }
 
-  // The Studio saved a GIF, or the card's GIFs changed some other way.
   let dirty = false;
   on('gifs', () => { dirty = true; });
   await categories();
@@ -416,9 +398,9 @@ export async function mount(el) {
   sync();
   return {
     show() {
+      thumbs = thumbsOn();
       sync();
       playlists();
-      // (the GIF in Details too: Make art may have changed it, or its Smooth motion)
       if (dirty) { dirty = false; const was = current; categories().then(() => { const it = was && current === was && items.find((x) => x.path === was.path); if (it) preview(it); }); }
     },
   };

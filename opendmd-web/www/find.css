@@ -1,6 +1,7 @@
 /* The Library's web sources (js/find.js): loaded with it. */
 .libgrid.web{grid-template-columns:minmax(0,1fr)}
-.libgrid.web>.side,.libgrid.web #lib-cats,.libgrid.web #lib-chips,.libgrid.web #lib-count,.libgrid.web #lib-list,.libgrid.web #lib-selbar,.libgrid.web #lib-add,.libgrid.web #lib-add-btn{display:none!important}
+.libgrid.web>.side,.libgrid.web #lib-r2,.libgrid.web #lib-count,.libgrid.web #lib-list,.libgrid.web #lib-selbar,.libgrid.web #lib-add{display:none!important}
+#lib-narrow .find-narrow{margin:0;flex-wrap:nowrap;overflow-x:auto}#lib-narrow .find-narrow>*{flex:none}
 .find-narrow{margin:4px 0 8px}
 .find-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
 .find-hit{flex-direction:column;align-items:stretch;padding:6px;gap:4px;min-width:0;text-align:center}

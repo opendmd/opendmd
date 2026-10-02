@@ -1,22 +1,13 @@
-// What the user said about one GIF in one playlist: favourite, play less,
-// hide, play longer, loop N times. Shown as small glyphs on Library and
-// Playlist rows; changed from a menu (right-click, long-press, or the row's
-// "…" button). Each playlist keeps its own: the same GIF can be a favourite
-// in one and hidden in another.
-//
-// On the card it is a small text file beside the playlist, parsed and
-// written by the core (wasm parseOverrides/renderOverrides); the device reads
-// it back as GET /api/overrides?set=. Saving writes the whole file, and the
-// device rebuilds that playlist's index (a few seconds when it is the one
-// playing). None of that shows in the page's words.
+// Per-GIF overrides per playlist (favourite, play less, hide, play longer,
+// loop N times): the row glyphs and the menu. On the card, a `.meta` file
+// beside the playlist (wasm parseOverrides/renderOverrides; GET
+// /api/overrides?set=); the page never says so.
 
 import { app, playlistLabel, setValue } from './state.js';
-import { h, clear, toast, label, base } from './util.js';
+import { h, toast, label, base } from './util.js';
 
 const FAV = 3, LESS = 0.5;
 
-// The overrides file beside a playlist: /sets/x.txt -> /sets/x.meta,
-// /filelist.txt -> /filelist.meta, /filelist.hall -> /filelist.hall.meta.
 export const fileFor = (p) => (p.endsWith('.txt') ? p.slice(0, -4) : p) + '.meta';
 
 export class Overrides {
@@ -76,7 +67,6 @@ export class Overrides {
   }
 }
 
-// The little marks on a row.
 export function glyphs(o) {
   if (!o) return null;
   const g = [];
@@ -96,10 +86,11 @@ addEventListener('pointerdown', (e) => { if (open && !open.contains(e.target)) c
 addEventListener('resize', closeMenu);
 
 // The menu for one GIF, at (x, y) — a sheet along the bottom on a phone.
-// `extra`: an optional [text, action] item at the end (Library's "Make art").
+// `extra`: an optional [text, action] item at the end (Playlists' Remove);
+// with no saved playlist, the only one.
 export function menu(ov, path, x, y, extra) {
   closeMenu();
-  if (!ov.path) { toast('save the playlist first', 'bad'); return; }
+  if (!ov.path && !extra) { toast('save the playlist first', 'bad'); return; }
   const o = ov.get(path) || {};
   const put = (patch) => { closeMenu(); ov.set(path, { ...o, ...patch }); };
   const secs = h('input', { type: 'number', min: 1, max: 86400, placeholder: 's', id: 'ov-secs', value: o.dwell || '', style: 'width:72px' });
@@ -107,8 +98,8 @@ export function menu(ov, path, x, y, extra) {
   const item = (id, on, text, act) => h('button.mi' + (on ? '.on' : ''), { id, onclick: act }, h('span.ck', on ? '✓' : ''), text);
   const e = app.wasm.parsePath(path);
   open = h('div.menu', { id: 'ov-menu', role: 'menu' },
-    h('div.mh', h('b', label(e)), h('span.muted', ` in “${ov.name}”`)),
-    item('ov-fav', o.w > 1, '★ Favourite — plays more often', () => put({ w: o.w > 1 ? null : FAV, never: null })),
+    h('div.mh', h('b', label(e)), ov.path && h('span.muted', ` in “${ov.name}”`)),
+    ov.path && [item('ov-fav', o.w > 1, '★ Favourite — plays more often', () => put({ w: o.w > 1 ? null : FAV, never: null })),
     item('ov-less', o.w != null && o.w < 1, '▽ Play less often', () => put({ w: o.w != null && o.w < 1 ? null : LESS, never: null })),
     item('ov-hide', o.never, '⊘ Hide from this playlist', () => put({ never: o.never ? null : true, w: null })),
     h('div.mr', h('span', 'Play longer'),
@@ -116,9 +107,10 @@ export function menu(ov, path, x, y, extra) {
       secs, h('button.sm', { id: 'ov-secs-set', onclick: () => { const v = +secs.value; if (v >= 1 && v <= 86400) put({ dwell: Math.round(v), dwell_x: null }); else toast('seconds: 1 to 86400', 'bad'); } }, 'Set')),
     h('div.mr', h('span', 'Loop'), loops, h('span.muted', 'times'),
       h('button.sm', { id: 'ov-loops-set', onclick: () => { const v = +loops.value; if (v >= 1 && v <= 1000) put({ loops: Math.round(v) }); else toast('loops: 1 to 1000', 'bad'); } }, 'Set')),
-    item('ov-reset', false, 'Reset', () => put({ never: null, w: null, dwell: null, dwell_x: null, loops: null })),
+    item('ov-reset', false, 'Reset', () => put({ never: null, w: null, dwell: null, dwell_x: null, loops: null }))],
     extra && item('ov-extra', false, extra[0], () => { closeMenu(); extra[1](); }));
-  open.querySelector('#ov-reset').disabled = !ov.get(path);
+  const r = open.querySelector('#ov-reset');
+  if (r) r.disabled = !ov.get(path);
   popup(open, x, y);
 }
 
@@ -135,18 +127,17 @@ export function popup(el, x, y) {
   } else el.classList.add('sheet');
 }
 
-// The "…" button a row carries so the menu is discoverable.
+// A menu of actions under `btn`: items [id or attributes, text, act,
+// '.cls', disabled] (falsy ones skipped).
+export function actions(btn, id, items, head) {
+  const r = btn.getBoundingClientRect();
+  popup(h('div.menu', { id, role: 'menu' }, head && h('div.mh', head),
+    items.filter(Boolean).map(([i, t, act, c = '', off]) => h('button.mi' + c, { ...(i?.at ? { id: i } : i), disabled: off, onclick: () => { closeMenu(); act(); } }, t))), r.right - 250, r.bottom + 4);
+}
+
 export function moreButton(ov, path, extra) {
   return h('button.sm.more', {
     title: 'Favourite, hide, play longer…', 'aria-label': `options for ${base(path)}`,
     onclick: (ev) => { ev.stopPropagation(); const r = ev.currentTarget.getBoundingClientRect(); menu(ov, path, r.left - 200, r.bottom + 4, extra); },
   }, '…');
-}
-
-// A playlist chooser for views that act on "the playlist" (Library).
-export function playlistSelect(lists, value, onchange) {
-  const sel = h('select', { id: 'lib-ovset', title: 'Favourites and hiding apply to this playlist', onchange: () => onchange(sel.value) });
-  clear(sel, lists.map((p) => h('option', { value: p.path }, p.label)));
-  sel.value = value;
-  return sel;
 }

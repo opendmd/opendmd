@@ -1,44 +1,34 @@
-// Sets: the playlists — the card's own (filelist.txt is "All files", the
-// default; filelist.hall "Halloween", filelist.xmas "Christmas") and the
-// ones in /sets/*.txt. Open one to edit it, build a new one from filters (the
-// core's Filter, run here over the whole manifest) or from the Library
-// selection, reorder, save with PUT /api/sets/<name> and activate with
-// PUT /api/config {"set": value} — "" for All files, a root manifest's file
-// name for the card's others, a set's name for the rest. Entries are GIF
-// paths; the device plays a file's prepared copy by itself.
-// The `.idx` sidecar rule is the device's business: a manifest PUT deletes
-// the stale index first and reindexes if the set is the active one.
+// Playlists: list, editor, builder; save PUT /api/sets/<name>, activate PUT /api/config {set}.
 
 import { app, playlistLabel } from './state.js';
-import { Overrides, glyphs, menu, moreButton } from './overrides.js';
+import { Overrides, glyphs, menu, moreButton, actions } from './overrides.js';
 import { VList } from './vlist.js';
-import { h, clear, on, toast, label, lines, note, niceName, isSys, byNice, flagCode } from './util.js';
+import { h, clear, on, toast, label, lines, note, niceName, isSys, byNice, FLAGS } from './util.js';
 
 // Not `filelist.*`: the firmware reads such a `set` as a root manifest.
 const NAME_RE = /^(?!filelist\.)[A-Za-z0-9][A-Za-z0-9 _.-]{0,40}$/;
+const picks = (box, k) => [...box.querySelectorAll('.on')].map((c) => c.dataset[k]);
 
 export async function mount(el) {
   const setsList = h('div.list', { id: 'sets-list' });
-  // --- builder
-  const baseSel = h('select', { id: 'b-base' });
-  const bPlat = h('input', { type: 'text', id: 'b-platforms', placeholder: 'MD,SNES' });
+  const tog = (e) => { e.currentTarget.classList.toggle('on'); count(); };
+  const baseSel = h('select', { id: 'b-base', onchange: () => platChips() });
+  const bPlats = h('div.chips', { id: 'b-plats' });
+  const bPlat = h('input', { type: 'text', id: 'b-platforms', placeholder: 'MD,SNES', hidden: true });
   const bCats = h('div.chips', { id: 'b-cats' });
   const bTitle = h('input', { type: 'text', id: 'b-title', placeholder: 'mario, sonic' });
-  const bFlags = h('input', { type: 'text', id: 'b-flags', placeholder: 'Inverted, Logo', value: '' });
+  const bFlags = h('div.chips', { id: 'b-flags' }, Object.entries(FLAGS).map(([k, n]) => h('button.chip', { 'data-flag': k, onclick: tog }, n)));
   const bShuffle = h('input', { type: 'checkbox', id: 'b-shuffle' });
   const bSeed = h('input', { type: 'number', id: 'b-seed', value: 1, min: 0, style: 'width:90px' });
   const bLimit = h('input', { type: 'number', id: 'b-limit', placeholder: 'all', min: 1, style: 'width:90px' });
   const bCount = h('span.muted', { id: 'b-count' });
-  // --- editor
   const name = h('input', { type: 'text', id: 'set-name', placeholder: 'e.g. consoles', value: app.draft.name });
   const eCount = h('span.muted', { id: 'set-count' });
   const eSearch = h('input', { type: 'search', id: 'set-search', placeholder: 'Filter entries' });
-  const activeNote = h('span', { id: 'set-active' });
+  const activeNote = h('span.muted', { id: 'set-active' });
   let view = [];
   const picked = new Set();
 
-  // Favourite / hide / play longer, for the playlist open in the editor
-  // (a saved one: a draft has nowhere to keep them yet).
   const ov = new Overrides();
   ov.onChange = () => list.refresh();
   const list = new VList({
@@ -47,22 +37,33 @@ export async function mount(el) {
       const p = app.draft.paths[i];
       const e = app.wasm.parsePath(p);
       const o = ov.get(p);
-      clear(row, h('span.muted.mono', { style: 'width:44px;text-align:right' }, i + 1),
-        h('span.t', label(e), e.platform && h('span.tag', e.platform)),
-        glyphs(o),
-        h('span.n', e.category ? niceName(e.category) : ''),
-        moreButton(ov, p),
-        h('button.sm', { title: 'Move up', onclick: (ev) => { ev.stopPropagation(); move(i, -1); } }, '↑'),
-        h('button.sm', { title: 'Move down', onclick: (ev) => { ev.stopPropagation(); move(i, 1); } }, '↓'),
-        h('button.sm', { title: 'Remove', onclick: (ev) => { ev.stopPropagation(); remove(i); } }, '✕'));
+      clear(row, h('button.grip', { title: 'Drag to move (or Alt+↑/↓)', 'aria-label': 'Move', onpointerdown: (ev) => drag(ev, row, i) }, '⠿'),
+        h('span.t', label(e)), glyphs(o), e.platform && h('span.tag', e.platform),
+        moreButton(ov, p, ['Remove from playlist', () => remove(i)]));
       row.classList.toggle('cur', picked.has(i));
       row.classList.toggle('hid', !!o?.never);
       row.dataset.path = p;
     },
-    onClick: (i) => { if (!picked.delete(i)) picked.add(i); list.refresh(); },
+    onClick: (i, _k, e) => { if (e.target.closest('.grip')) return; if (!picked.delete(i)) picked.add(i); list.refresh(); },
     onMenu: (i, _k, x, y) => menu(ov, app.draft.paths[i], x, y),
   });
   list.el.id = 'set-entries';
+  list.el.addEventListener('keydown', (e) => {
+    const row = e.target.closest('.vrow'), d = { ArrowUp: -1, ArrowDown: 1 }[e.key];
+    if (!e.altKey || !d || !row) return;
+    e.preventDefault();
+    const k = row._i, t = k + d;
+    if (t < 0 || t >= view.length) return;
+    moveTo(view[k], view[t]);
+    list.scrollTo(t);
+    [...list.el.querySelectorAll('.vrow')].find((r) => r._i === t && !r.hidden)?.querySelector('.grip').focus();
+  });
+  const arrange = (b) => actions(b, 'set-arrange-menu', [
+    ['set-shuffle', 'Shuffle', shuffle],
+    ['set-sort', 'Sort A–Z', sortTitle],
+    ['set-top', 'Picked to top', movePicked, '', !picked.size],
+    ['set-rm-picked', 'Remove picked', removePicked, '.danger', !picked.size],
+    ['set-clear', 'Clear', () => { if (confirm('Remove every entry from the editor?')) { app.draft.paths = []; picked.clear(); refresh(); } }, '.danger']]);
 
   el.append(h('div.cols',
     h('div',
@@ -71,49 +72,55 @@ export async function mount(el) {
       h('div.card', h('h2', 'Build from filters'),
         h('div.form',
           h('label.stack', 'From playlist', baseSel),
-          h('label.stack', 'Platforms (any of)', bPlat),
-          h('label.stack', 'Title contains (any of)', bTitle),
-          h('label.stack', 'Flags to drop', bFlags)),
-        h('h3', 'Categories'), note('Any of those picked; none picked is all'), bCats,
-        h('div.row', { style: 'margin-top:12px' }, h('label', bShuffle, 'Shuffle'), h('label', 'Seed', bSeed), h('label', 'Limit', bLimit)),
+          h('label.stack', 'Title contains (any of)', bTitle)),
+        h('div.lbl', 'Platforms (any of)'), bPlats, bPlat,
+        h('div.lbl', 'Categories (any of)'), bCats,
+        h('div.lbl', 'Flags to drop'), bFlags,
+        h('div.row', { style: 'margin-top:16px' }, h('label', bShuffle, 'Shuffle'), h('label', 'Seed', bSeed), h('label', 'Limit', bLimit)),
         h('div.row.sp', { style: 'margin-top:12px' }, bCount,
           h('div.row', h('button', { id: 'b-append', onclick: () => build(true) }, 'Append to editor'),
             h('button', { id: 'b-use', onclick: () => build(false) }, 'Replace editor'))))),
     h('div.card',
       h('div.row', h('label.stack.grow', 'Playlist name', name), eCount),
-      h('div.row', { style: 'margin:8px 0' }, h('div.grow', eSearch),
-        h('button.sm', { onclick: shuffle }, 'Shuffle'), h('button.sm', { onclick: sortTitle }, 'Sort A–Z'),
-        h('button.sm', { onclick: () => movePicked(-1e9) }, 'Picked to top'),
-        h('button.sm', { onclick: removePicked }, 'Remove picked'),
-        h('button.sm', { onclick: () => { app.draft.paths = []; picked.clear(); refresh(); } }, 'Clear')),
-      note('Right-click or long-press an entry for more', 'Make it a favourite, hide it, or play it longer in this playlist (the … button does the same).'),
+      h('div.row', { style: 'margin:12px 0 8px' }, h('div.grow', eSearch),
+        h('button', { id: 'set-arrange', 'aria-haspopup': 'menu', onclick: (e) => arrange(e.currentTarget) }, 'Arrange ▾')),
+      note('Drag ⠿ to reorder; tap entries to pick them', 'Alt+↑/↓ moves the focused entry; its … menu favourites, hides or plays it longer'),
       list.el,
       h('div.row', { style: 'margin-top:12px' },
         h('button.pri', { id: 'set-save', onclick: () => save(false) }, 'Save'),
-        app.device && h('button', { id: 'set-save-activate', onclick: () => save(true) }, 'Save & activate')))));
+        app.device && h('button.txt', { id: 'set-save-activate', onclick: () => save(true) }, 'Save & activate')))));
 
-  // --- sets list ----------------------------------------------------------
-  let known = [];
+  let known = [], ctok = 0;
   async function loadSets() {
     const lists = await app.playlists();
     known = lists.map((p) => p.path);
     const active = app.activeSet;
     const activePl = lists.find((p) => p.value === active);
     activeNote.textContent = app.device ? `Playing ${activePl ? activePl.label : playlistLabel(active || 'filelist.txt')}` : '';
-    clear(setsList, lists.map((p) => {
-      const isActive = app.device && p.value === active;
-      return h('div', { 'data-path': p.path, 'data-value': p.value },
-        h('span.grow', p.label, !p.value && h('span.tag', 'Default'), isActive && h('span.tag.act', 'Playing')),
-        h('button.sm', { onclick: () => open(p) }, 'Open'),
-        app.device && !isActive && h('button.sm', { 'data-act': 1, disabled: app.building, onclick: () => activate(p) }, 'Activate'),
-        !p.root && h('button.sm', { onclick: () => del(p) }, 'Delete'));
-    }));
+    const rows = lists.sort((a, b) => a.root - b.root || byNice(a.label, b.label)).map((p) => {
+      const isActive = app.device && p.value === active, n = h('span.n');
+      const acts = (app.device && !isActive) || !p.root;
+      return [p, n, h('div' + (p.path === app.draft.path ? '.cur' : ''), { 'data-path': p.path, 'data-value': p.value },
+        h('button.grow.pl' + (isSys(p.label) ? '.sys' : ''), { onclick: () => open(p) },
+          p.label, !p.value && h('span.tag', 'Default'), isActive && h('span.tag.act', 'Playing'), n),
+        acts && h('button.more', { 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => actions(e.currentTarget, 'sets-menu', [
+          app.device && !isActive && [{ 'data-do': 'activate' }, 'Activate', () => activate(p), '', app.building],
+          !p.root && [{ 'data-do': 'delete' }, 'Delete…', () => del(p), '.danger']], p.label) }, '…'), !acts && h('i.more'))];
+    });
+    clear(setsList, rows.map((r) => r[2]));
     const keep = baseSel.value;
     clear(baseSel, lists.map((p) => h('option', { value: p.path }, p.label)));
     baseSel.value = keep && known.includes(keep) ? keep : '/filelist.txt';
-    // The list may arrive after the builder first counted (a listing the
-    // busy device answered late): count again now that there is a base.
-    if (!keep && lists.length) count();
+    if (!keep && lists.length) platChips();
+    counts(rows);
+  }
+  async function counts(rows) {
+    for (const t = ++ctok; rows.length;) {
+      const [p, n] = rows.shift();
+      const text = await app.text(p.path).catch(() => null);
+      if (t !== ctok) return;
+      if (text != null) n.textContent = lines(text).length.toLocaleString();
+    }
   }
 
   async function open(p) {
@@ -127,6 +134,7 @@ export async function mount(el) {
       name.value = app.draft.name;
       picked.clear();
       refresh();
+      for (const r of setsList.children) r.classList.toggle('cur', r.dataset.path === p.path);
       toast(`${p.label}: ${app.draft.paths.length} entries`);
     } catch (e) { toast(`${p.label}: ${e.message}`, 'bad'); }
   }
@@ -138,7 +146,7 @@ export async function mount(el) {
       toast(`activating ${n} — the device is rebuilding its index…`);
       const r = await app.src.putConfig({ set });
       await app.refreshStatus();
-      await app.refreshConfig(); // -> loadSets
+      await app.refreshConfig();
       toast(`active: ${n} · ${r.entries} entries · index ${r.index ?? 'unchanged'} ${r.index_ms ? `(${r.index_ms} ms)` : ''}`, 'ok');
     } catch (e) { toast('activate: ' + e.message, 'bad'); }
   }
@@ -156,16 +164,21 @@ export async function mount(el) {
     } catch (e) { toast('delete: ' + e.message, 'bad'); }
   }
 
-  // --- builder ------------------------------------------------------------
   async function categories() {
     let dirs = [];
     try { dirs = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch { /* none */ }
-    clear(bCats, dirs.map((d) => h('button.chip' + (isSys(d) ? '.sys' : ''), { 'data-cat': d, onclick: (e) => { e.target.closest('.chip').classList.toggle('on'); count(); } }, niceName(d))));
+    clear(bCats, dirs.map((d) => h('button.chip' + (isSys(d) ? '.sys' : ''), { 'data-cat': d, onclick: tog }, niceName(d))));
+  }
+  async function platChips() {
+    const text = await app.text(baseSel.value).catch(() => null), n = new Map(), keep = picks(bPlats, 'platform');
+    if (text) for (const e of app.wasm.parseManifest(text)) if (e.platform) n.set(e.platform, (n.get(e.platform) || 0) + 1);
+    bPlat.hidden = !!n.size;
+    clear(bPlats, [...n].sort((a, b) => b[1] - a[1]).map(([p, c]) => h('button.chip' + (keep.includes(p) ? '.on' : ''), { 'data-platform': p, onclick: tog }, p, h('small', c.toLocaleString()))));
+    count();
   }
   const spec = () => ({
-    // Flags typed by name ("Inverted") or code ("INVERT").
-    platforms: bPlat.value, titles: bTitle.value, exclude_flags: bFlags.value.split(',').map((f) => flagCode(f.trim())).join(','),
-    categories: [...bCats.querySelectorAll('.chip.on')].map((c) => c.dataset.cat),
+    platforms: bPlat.hidden ? picks(bPlats, 'platform') : bPlat.value, titles: bTitle.value, exclude_flags: picks(bFlags, 'flag'),
+    categories: picks(bCats, 'cat'),
     shuffle: bShuffle.checked, seed: +bSeed.value || 0, ...(+bLimit.value > 0 ? { limit: +bLimit.value } : {}),
   });
   async function run() {
@@ -186,9 +199,8 @@ export async function mount(el) {
       toast(`${paths.length} entries ${append ? 'appended' : 'in the editor'}`, 'ok');
     } catch (e) { toast(e.message, 'bad'); }
   }
-  for (const i of [baseSel, bPlat, bTitle, bFlags, bShuffle, bSeed, bLimit]) i.addEventListener('change', count);
+  for (const i of [baseSel, bPlat, bTitle, bShuffle, bSeed, bLimit]) i.addEventListener('change', count);
 
-  // --- editor -------------------------------------------------------------
   function refresh() {
     const q = app.wasm.normalizeTitle(eSearch.value);
     const all = app.draft.paths.map((_, i) => i);
@@ -196,13 +208,29 @@ export async function mount(el) {
     eCount.textContent = `${app.draft.paths.length.toLocaleString()} entries${q ? ` · ${view.length} shown` : ''}`;
     list.set(view);
   }
-  function move(i, d) {
-    const j = i + d;
+  function moveTo(i, j) {
     const p = app.draft.paths;
-    if (j < 0 || j >= p.length) return;
-    [p[i], p[j]] = [p[j], p[i]];
+    p.splice(j, 0, ...p.splice(i, 1));
     picked.clear();
     refresh();
+  }
+  function drag(ev, row, i) {
+    if (ev.button) return;
+    const g = ev.currentTarget, y0 = ev.clientY, k0 = row._i, at = row.style.transform;
+    let k = k0;
+    g.setPointerCapture(ev.pointerId);
+    row.classList.add('drag');
+    g.onpointermove = (e) => {
+      const dy = e.clientY - y0;
+      k = Math.max(0, Math.min(view.length - 1, k0 + Math.round(dy / list.rh)));
+      row.style.transform = `translateY(${k0 * list.rh + dy}px)`;
+    };
+    g.onpointerup = g.onpointercancel = () => {
+      g.onpointermove = g.onpointerup = g.onpointercancel = null;
+      row.classList.remove('drag');
+      row.style.transform = at;
+      if (k !== k0) moveTo(i, view[k]);
+    };
   }
   function movePicked() {
     const p = app.draft.paths;
@@ -246,10 +274,9 @@ export async function mount(el) {
   on('draft', () => { name.value = app.draft.name; refresh(); });
   if (app.draft.path) ov.load(app.draft.path);
   on('config', () => loadSets());
-  on('status', () => { for (const b of setsList.querySelectorAll('[data-act]')) b.disabled = app.building; });
 
   await Promise.all([loadSets(), categories()]);
   refresh();
-  count();
+  platChips();
   return { show() { name.value = app.draft.name; refresh(); if (app.device) app.refreshStatus().catch(() => {}); } };
 }

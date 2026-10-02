@@ -57,7 +57,7 @@ label.stack>*{color:var(--fg);font-size:15px}
 p.cap{margin:0 0 12px}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{border:1px solid var(--line);background:none;border-radius:99px;padding:4px 12px;font-size:13px;cursor:pointer;color:var(--fg)}
-.chip.on{background:var(--acc);border-color:var(--acc);color:#111}
+.chip.on,.chip.on:hover{background:var(--acc);border-color:var(--acc);color:#111}
 .chip small{opacity:.7;margin-left:4px}
 .sys{color:var(--mut)}
 .tag{display:inline-block;border-radius:4px;padding:0 8px;font-size:13px;background:#2b3138;color:#b8c2cc;margin-left:8px;white-space:nowrap}
@@ -68,10 +68,12 @@ p.cap{margin:0 0 12px}
 .vrow:hover{background:var(--bg3)}
 .vrow.cur{background:#2a2418}
 .vrow .t{overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;min-width:0}
-.vrow .n{color:var(--mut);font-size:13px;overflow:hidden;text-overflow:ellipsis;max-width:40%}
-.vrow .tag{margin-left:0}
-@media (max-width:760px){.vrow .n{display:none}}
-.list>div{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+.list>div{display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line)}
+button.pl{border:0;justify-content:flex-start;text-align:left;padding:4px 8px;gap:0}
+.pl>.n{margin-left:auto;padding-left:12px;color:var(--mut);font-size:13px}
+#sets-list .more{width:36px;flex:none}.lbl{font-size:13px;color:var(--mut);margin:16px 0 8px}#b-plats{max-height:128px;overflow-y:auto}
+button.grip{border:0;padding:0 4px;min-height:28px;cursor:grab;touch-action:none;color:var(--mut)}
+.vrow.drag{z-index:2;background:var(--bg3);box-shadow:0 4px 16px #0008}
 .list>div:last-child{border-bottom:0}
 .list>div.cur{background:#2a2418}
 .bar{height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}
@@ -90,20 +92,37 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 .libgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,38%);gap:16px;align-items:start}
 .libgrid>.side{position:sticky;top:60px}
 .chips.scroll{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}.chips.scroll>*{flex:none}
-.libhead>.row{gap:8px}
-.lib-q{flex:1 1 220px}
-#lib-search{font-size:16px;min-height:44px;padding:8px 16px;border-radius:99px}
-.tabs{display:flex;overflow-x:auto;margin-top:12px;border-bottom:1px solid var(--line);scrollbar-width:thin}
+.libhead{display:grid;grid-template:"q n a" "r r r"/minmax(0,1fr) auto auto;gap:12px;align-items:center}
+.lib-q{grid-area:q;display:flex;align-items:center;background:var(--bg3);border:1px solid var(--line);border-radius:99px;padding-right:4px}
+#lib-search{flex:1;font-size:16px;min-height:42px;padding:8px 16px;border:0;background:none;outline:0}.lib-q:focus-within{border-color:var(--mut)}
+#lib-count,#lib-go{grid-area:n}#lib-add-btn{grid-area:a}#lib-add{grid-column:1/-1}
+.seg{display:flex;gap:2px;flex:none}
+.seg>button{min-height:32px;border:0;border-radius:99px;padding:0 12px;font-size:13px;color:var(--mut)}
+.seg>.on,.seg>.on:hover{background:var(--bg2);color:var(--fg)}
+.lib-r2{grid-area:r;display:flex;align-items:center;gap:12px;min-width:0}
+.lib-r2>*{flex:1 1 0;min-width:0}.lib-r2>.tabs{max-width:max-content}
+.vsep{flex:none;width:1px;align-self:stretch;margin:4px 0;background:var(--line)}
+.noplat .vsep,.noplat #lib-chips{display:none}
+#lib-narrow .chips{flex-wrap:nowrap}
+@media (max-width:760px){
+  .libhead{grid-template:"q q a" "r n n"/minmax(0,1fr) auto auto;gap:8px 12px}.seg>button{padding:0 8px}
+  .seg>:not(.on){display:none}.seg>.on::after{content:"▾"}
+  #lib-count{font-size:13px}
+  #lib-r2{overflow-x:auto;scrollbar-width:none}#lib-r2>*{flex:none;overflow:visible;max-width:none}
+}
+.tabs{display:flex;overflow-x:auto;scrollbar-width:none}
 .tab{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--mut);padding:4px 12px;white-space:nowrap;flex:none}
 .tab:hover:not(:disabled){color:var(--fg);background:none}
 .tab.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
 .tab.sys:not(.on){opacity:.6}
-.libhead .chips,.lib-progress{margin-top:12px}.lib-progress .bar{height:4px}
-#lib-d-title{font-size:17px;margin:12px 0 4px}
-.facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 16px;margin:8px 0 0;font-size:13px}
-.facts dt{color:var(--mut)}.facts dd{margin:0;overflow-wrap:anywhere}
+.lib-progress .bar{height:4px}
+.dhead{display:flex;gap:8px;align-items:flex-start;margin-top:12px}
+#lib-d-title{margin:0 0 4px}#lib-d-meta{margin:0}
 .acts,#lib-smooth{margin-top:12px}
-.acts.end{border-top:1px solid var(--line);padding-top:12px;margin-top:16px}
+.swrow{display:flex;gap:8px;align-items:center;min-height:36px}.swrow>label{flex:1}
+input.sw{appearance:none;width:32px;height:18px;border-radius:9px;background:var(--line);position:relative;flex:none;margin:0}
+input.sw::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--fg)}
+input.sw:checked{background:var(--acc)}input.sw:checked::after{left:16px}
 #lib-detail{position:relative}
 .file{display:flex;gap:16px;font-size:13px;margin-top:16px}.file>span{min-width:0;overflow-wrap:anywhere}
 .close{display:none}
@@ -119,7 +138,11 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 .ov{display:inline-flex;gap:4px;flex:none;font-style:normal}
 .ov i{font-style:normal;font-size:13px;color:var(--acc)}.ov i.hid{color:var(--bad)}.ov i.less{color:var(--mut)}
 .vrow.hid .t{opacity:.45;text-decoration:line-through}
-button.more{min-height:28px;padding:0 8px;flex:none;margin-left:auto}
+button.more{min-height:28px;padding:0 8px;flex:none;border-color:transparent}
+.vrow .tag,.vrow .more{margin-left:auto}.vrow .tag{background:none;color:var(--mut);padding:0}.vrow .tag+.more{margin-left:0}
+@media (hover:hover){.vrow .more{opacity:0}.vrow:hover .more,.vrow:focus-within .more{opacity:1}}
+canvas.th{width:64px;height:16px;flex:none;background:#000;border-radius:2px}
+button.txt{border-color:transparent;color:var(--mut)}
 .menu{position:fixed;z-index:20;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 8px 28px #000a;padding:8px;min-width:250px;display:flex;flex-direction:column;gap:4px}
 .menu.sheet{left:0;right:0;bottom:0;border-radius:12px 12px 0 0;padding:12px 12px calc(16px + env(safe-area-inset-bottom))}
 .menu .mh{padding:4px 8px 8px;border-bottom:1px solid var(--line);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
