@@ -115,8 +115,13 @@ export async function mount(el) {
     counts(rows);
   }
   async function counts(rows) {
+    // A device's root lists (~400 KB) are not fetched to be counted.
     for (const t = ++ctok; rows.length;) {
       const [p, n] = rows.shift();
+      if (app.device && p.root && !app.texts.has(p.path)) {
+        if (p.value === app.activeSet && app.status?.entries != null) n.textContent = app.status.entries.toLocaleString();
+        continue;
+      }
       const text = await app.text(p.path).catch(() => null);
       if (t !== ctok) return;
       if (text != null) n.textContent = lines(text).length.toLocaleString();

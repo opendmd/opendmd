@@ -33,13 +33,13 @@ import { authorOf, savePlaylist } from './library.js';
 import { h, clear, toast, base, dir, enc, label, niceName, byNice } from './util.js';
 
 const WHY = {
-  title: 'Give it a title.',
-  'title-char': 'A title can’t have _ " * / : < > ? \\ | or accented letters.',
-  platform: 'That is not a platform name.',
-  category: 'A category name can’t have / " * : < > ? \\ | or accented letters.',
-  author: 'An author is one word of letters and digits, 3 or more, like “sephirot68”.',
-  'needs-platform': 'An author needs a platform.',
-  'too-long': 'That name is too long: shorten the title.',
+  title: 'Give it a title',
+  'title-char': 'A title can’t have _ " * / : < > ? \\ | or accented letters',
+  platform: 'That is not a platform name',
+  category: 'A category name can’t have / " * : < > ? \\ | or accented letters',
+  author: 'An author is one word of letters and digits, 3 or more, like “sephirot68”',
+  'needs-platform': 'An author needs a platform',
+  'too-long': 'That name is too long: shorten the title',
 };
 const lc = (s) => s.toLowerCase();
 
@@ -110,8 +110,8 @@ const CSS = `.dlg{position:fixed;inset:0;z-index:25;background:#000b;overflow:au
 .dl-item img{width:128px;aspect-ratio:4/1;object-fit:contain;background:#000;image-rendering:pixelated;border-radius:4px}
 .dl-item .form{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
 .dl-item .dl-title{width:100%}
-.dl-name{margin-top:6px;word-break:break-all}
-.dl-err{font-size:12.5px;margin-top:4px}
+.dl-name{margin-top:8px;word-break:break-all}
+.dl-err{font-size:13px;margin-top:4px}
 .dl-item input.bad{border-color:var(--bad)}
 .dl-foot{justify-content:flex-end;margin-top:12px}
 @media (max-width:600px){.dlg{padding:0}.dlg>.card{border-radius:0;min-height:100%;margin:0}.dl-item{grid-template-columns:minmax(0,1fr)}}`;
@@ -212,7 +212,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
 function readsBack(f) {
   const words = f.title.split(/\s+/);
   const e = app.wasm.parsePath('/gifs/x/' + [f.platform, ...words, String(f.ordinal ?? 1).padStart(2, '0'), f.author].filter(Boolean).join('_') + '.gif');
-  return `That would read back as “${e.title}”: a word in the title is taken for a tag. Try other words.`;
+  return `That would read back as “${e.title}”: a word in the title is taken for a tag. Try other words`;
 }
 
 // The name for fields `f` (`nameFields`' shape) in a category's listing

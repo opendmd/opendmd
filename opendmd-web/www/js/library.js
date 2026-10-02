@@ -59,6 +59,11 @@ function paint(cv) {
   }
   cv.dataset.done = b ? 1 : 0;
 }
+// On a device only a prepared copy is a thumbnail, never the GIF itself.
+function thumbCopy(p) {
+  const c = app.wasm.cachePathFor(p);
+  return c ? app.src.readBytes(c) : Promise.reject();
+}
 function thumb(cv, p) {
   cv._p = p;
   if (TH.has(p)) paint(cv); else { thQ.push(cv); pump(); }
@@ -69,7 +74,7 @@ function pump() {
     if (!cv.isConnected || cv.parentNode.hidden || thBusy.has(p)) continue;
     if (TH.has(p)) { paint(cv); continue; }
     thBusy.add(p);
-    app.previewBytes(p).then((b) => createImageBitmap(new Blob([b]))).catch(() => null).then((b) => {
+    (app.device ? thumbCopy(p) : app.previewBytes(p)).then((b) => createImageBitmap(new Blob([b]))).catch(() => null).then((b) => {
       TH.set(p, b);
       if (TH.size > 200) { const [k, v] = TH.entries().next().value; TH.delete(k); v?.close(); }
       thBusy.delete(p);

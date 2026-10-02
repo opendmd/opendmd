@@ -47,7 +47,7 @@ export function followCard() {
   playlists();
   // (The fields are the user's: a save in flight must not undo a later change.)
   on('config', () => { setPh(); playlists(); });
-  on('status', (s) => { state.textContent = followLine(s) ?? 'Not following.'; });
+  on('status', (s) => { state.textContent = followLine(s) ?? 'Not following'; });
 
   // Saved as it changes: the switch and the playlist at once, the address
   // when typing settles, the code when the field is left (then cleared).
@@ -90,6 +90,6 @@ export function followCard() {
       h('label.stack', 'Attract playlist', attract)),
     h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'fo-test', onclick: test }, 'Test')),
     result, state);
-  state.textContent = followLine(app.status) ?? 'Not following.';
+  state.textContent = followLine(app.status) ?? 'Not following';
   return { el };
 }
