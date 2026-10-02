@@ -181,7 +181,8 @@ export async function detail(box, it, bytes, pv, cap) {
       showing = false;
       pvBtn.textContent = 'Preview';
       await pv.show(it.path, async () => bytes);
-      cap.textContent = it.name;
+      cap.textContent = '';
+      cap.dataset.shown = it.name;
       return;
     }
     pvBtn.disabled = true;
@@ -193,7 +194,8 @@ export async function detail(box, it, bytes, pv, cap) {
       await pv.show(it.path, async () => g);
       showing = true;
       pvBtn.textContent = 'Show original';
-      cap.textContent = `${it.name} · smooth motion preview`;
+      cap.textContent = 'Smooth motion preview';
+      cap.dataset.shown = `${it.name} · smooth`;
       msg.textContent = '';
     } catch (e) { msg.textContent = 'Preview: ' + (e.message || e); } finally { pvBtn.disabled = false; }
   }

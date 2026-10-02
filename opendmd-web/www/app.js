@@ -45,7 +45,7 @@ function localPicker() {
     const files = e.target.files;
     if (!files.length) return;
     const src = new LocalSource(files, app.wasm.cardPath);
-    $('#where').textContent = `local · ${src.label || 'picked files'} · ${src.count} files`;
+    $('#where').textContent = `${src.label || 'Picked files'} · ${src.count} files`;
     toast(`${src.count} files picked — nothing is read until it plays`);
     setSource(src);
   };
@@ -60,11 +60,12 @@ if (found) {
   app.src = found.src;
   app.status = found.status;
   const s = found.status;
-  $('#where').textContent = `${s.hostname || 'device'} · ${s.ip} · ${s.version} ${s.variant}`;
+  // The device's name; its address and version are in Settings → About.
+  $('#where').textContent = s.hostname || 'OpenDMD player';
   app.refreshConfig().catch((e) => toast('config: ' + e.message, 'bad'));
   route();
 } else {
-  $('#where').textContent = 'local mode — no device answered /api/status';
+  $('#where').textContent = 'Local mode';
   for (const v of VIEWS) $('#view-' + v).append(h('div', localPicker()));
   route();
   // Re-offer the picker from any view until something is picked.

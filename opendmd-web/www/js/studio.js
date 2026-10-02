@@ -34,8 +34,8 @@
 // Save keeps the choice: the GIF listed or not, and its copy made to match.
 
 import { app } from './state.js';
-import { PanelPreview } from './preview.js';
-import { h, clear, toast, debounce, label, base, emit } from './util.js';
+import { PanelPreview, fitScale } from './preview.js';
+import { h, clear, toast, debounce, label, base, emit, niceName, byNice } from './util.js';
 import { art as artModule } from './artmod.js';
 import { addOne, offerPlaylist } from './library.js';
 import { listings, pickName, renameGif } from './details.js';
@@ -202,7 +202,7 @@ function build(root) {
     name, warn, h('div.row', { style: 'margin-top:8px' }, saveBtn));
 
   const box = h('div.st-box', h('h2', 'Make art'),
-    h('p.muted', 'Turn a picture — a screenshot, box art, a logo — or an animated GIF into a GIF for the panel.'),
+    h('p.muted', 'Turn a picture — a screenshot, box art, a logo — or an animated GIF into a GIF for the panel'),
     h('div.st-grid', imp, frm, look, txt, prev, sv));
   const el = h('div.st-root', { id: 'studio' }, box);
   root.append(el);
@@ -339,9 +339,9 @@ function build(root) {
     S.x = Math.max(0, Math.min(S.x, W - 128)); S.y = Math.max(0, Math.min(S.y, H - 32));
     const pct = (v, of) => (100 * v) / of + '%';
     const box = (e, x, y, w, hh) => Object.assign(e.style, { left: pct(x, W), top: pct(y, H), width: pct(w, W), height: pct(hh, H) });
-    // Whole-number zoom when there is room for 2x or more, else the width.
-    const room = frm.clientWidth - 30 || 600, z = Math.floor(room / W);
-    view.style.width = (z >= 2 ? W * z : room) + 'px';
+    // The shared scale rule (a whole number of device pixels per pixel), else the width.
+    const room = frm.clientWidth - 32 || 600, z = fitScale(room, W);
+    view.style.width = (z ? (W * z) / devicePixelRatio : room) + 'px';
     box(win, S.motion === 'pan' ? 0 : S.x, S.motion === 'scroll' ? 0 : S.y, 128, 32);
     band.hidden = S.motion === 'still';
     if (S.motion === 'pan') box(band, 0, S.y, W, 32);
@@ -737,7 +737,7 @@ function build(root) {
     }
     const e = app.wasm.parsePath(path);
     const n = base(path);
-    clear(name, S.from && S.mode === 'replace' ? (path === S.from.path ? 'Replaces ' : 'Replaces and renames to ') : 'File ', h('b.mono', n), app.device ? ` in ${c}` : '', ` · listed as “${label(e)}”`);
+    clear(name, S.from && S.mode === 'replace' ? (path === S.from.path ? 'Replaces ' : 'Replaces and renames to ') : 'File ', h('b.mono', n), app.device ? ` in ${niceName(c)}` : '', ` · listed as “${label(e)}”`);
     warn.textContent = '';
     Object.assign(el.dataset, { name: n, title: e.title, platform: e.platform || '' });
   }
@@ -833,12 +833,12 @@ function build(root) {
     async show() {
       addEventListener('paste', onPaste);
       let cats = [];
-      if (app.device) try { cats = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(); } catch { /* none yet */ }
+      if (app.device) try { cats = (await app.src.list('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch { /* none yet */ }
       if (!cats.length) cats = ['Consoles'];
       S.cats = cats;
       S.listing = null;
       const was = cat.value;
-      clear(cat, cats.map((c) => h('option', { value: c }, c)));
+      clear(cat, cats.map((c) => h('option', { value: c }, niceName(c))));
       cat.value = cats.includes(was) ? was : cats.includes('Consoles') ? 'Consoles' : cats[0];
       cat.parentElement.hidden = !app.device;
       saveBtn.textContent = app.device ? 'Save to the card' : 'Download GIF';

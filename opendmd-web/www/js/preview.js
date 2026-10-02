@@ -25,14 +25,34 @@ function loop() {
   if (live.size) raf = requestAnimationFrame(loop);
 }
 
+// The one scale rule (dot matrix, Make art's frame): whole device pixels per
+// pixel that fit `room` CSS px; 0 when none.
+export const fitScale = (room, w) => Math.floor((room * devicePixelRatio) / w);
+
+// The width to fill, or a guess while hidden (Library's closed sheet).
+function room(c) {
+  c.style.width = '';
+  return c.getBoundingClientRect().width || Math.min(innerWidth, 1240) - 32;
+}
+
 export class PanelPreview {
-  // The LED scale is fixed at construction from the canvas's on-screen width
-  // (device pixels / 128, clamped to 6..10: below 6 there is no room for a
-  // dot and its bloom, above 10 costs frame time for nothing).
+  // Rendered at 6..10 px a dot (fixed here: below 6 no room for the bloom,
+  // above 10 frame time for nothing), shown at the whole multiple that fits
+  // (fitScale), so every view draws the same dots; too narrow: scaled down.
   constructor(canvas, { onDwellEnd, onError } = {}) {
     this.canvas = canvas;
-    const css = canvas.getBoundingClientRect().width || 900;
-    canvas.width = 128 * Math.max(6, Math.min(10, Math.round((css * devicePixelRatio) / 128)));
+    const s = fitScale(room(canvas), 128);
+    let r = 6;
+    for (let k = 10; k > 6; k--) if (k * Math.floor(s / k) > r * Math.floor(s / r)) r = k;
+    canvas.width = 128 * r;
+    const fit = () => {
+      const m = Math.floor(fitScale(room(canvas), 128) / r);
+      canvas.style.width = m ? (128 * r * m) / devicePixelRatio + 'px' : '';
+      canvas.style.imageRendering = m ? '' : 'auto';
+    };
+    // (Width changes only, in the next frame: no ResizeObserver loop.)
+    let w = -1;
+    new ResizeObserver(([e]) => { if (e.contentRect.width !== w) { w = e.contentRect.width; requestAnimationFrame(fit); } }).observe(canvas.parentElement);
     this.p = new Preview(canvas, look.gamma, look.gain, look.bloom, look.flat);
     trans(this.p);
     this.onDwellEnd = onDwellEnd;
@@ -85,11 +105,11 @@ export function lookControls(extra) {
       type: 'range', min, max, step, value: look[key], id: 'look-' + key,
       oninput: () => { out.textContent = (+input.value).toFixed(2); setLook({ [key]: +input.value }); },
     });
-    return h('label', key, input, out);
+    return h('label', key[0].toUpperCase() + key.slice(1), input, out);
   };
   const flat = h('input', { type: 'checkbox', id: 'look-flat', checked: look.flat, onchange: () => setLook({ flat: flat.checked }) });
   return h('details.card', h('summary', 'Panel look'),
     h('div.row', slider('gain', 0, 4, 0.05), slider('bloom', 0, 1, 0.01), slider('gamma', 0.5, 4, 0.05),
-      h('label', flat, 'flat'),
-      h('button.sm', { onclick: (e) => { setLook(DEFAULT_LOOK); const d = lookControls(extra); d.open = true; e.target.closest('details').replaceWith(d); } }, 'reset'), extra));
+      h('label', flat, 'Flat'),
+      h('button.sm', { onclick: (e) => { setLook(DEFAULT_LOOK); const d = lookControls(extra); d.open = true; e.target.closest('details').replaceWith(d); } }, 'Reset'), extra));
 }

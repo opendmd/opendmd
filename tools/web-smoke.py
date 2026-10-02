@@ -567,7 +567,7 @@ def last_toast(page: Page, kind: str) -> str:
 
 def send_from_library(page: Page, base: str, what: str) -> None:
     page.wait_for_selector("#lib-play:not([disabled])", timeout=10000)
-    path = page.get_attribute("#lib-play", "title")
+    path = page.get_attribute("#lib-play", "data-path")
     page.click("#lib-play")
     cur = wait_playing(base, path)
     check(cur == path, f"{what}: Send to panel -> /api/status plays {path} (got {cur})")
@@ -968,7 +968,7 @@ def power_checks(page: Page, base: str) -> None:
         page.click("#st-power summary")
         check(page.input_value("#st-maxbright") == str(safe), "power: the control shows max_brightness")
         check(not page.is_visible("#st-maxbright-warn"), "power: no warning at the tested limit")
-        text = page.inner_text("#st-power-card")
+        text = page.get_attribute("#st-maxbright-note .q", "title") or ""
         check(f"Above {safe} the panel can reset" in text and "especially on white screens" in text,
               "power: the explanation names the safe value")
         for jargon in ("brownout", "NVS", "rail"):
@@ -1087,7 +1087,7 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
     expected.append("/api/play")
     for i, (path, title) in enumerate((("@clock", "Clock"), ("@text?msg=Hello%20smoke", "Hello smoke"))):
         page.click(f"#lib-list .vrow:not([hidden])[data-path='{path}']")
-        page.wait_for_function(f"document.querySelector('#lib-play').title === {json.dumps(path)}", timeout=10000)
+        page.wait_for_function(f"document.querySelector('#lib-play').dataset.path === {json.dumps(path)}", timeout=10000)
         page.click("#lib-play")
         cur = wait_playing(base, path)
         np_ = get_json(base + "/api/status")["now_playing"]
@@ -1151,7 +1151,7 @@ def effects_checks(page: Page, base: str, mock: bool) -> None:
     if not mock:
         return
     expected.append("/api/play")
-    page.wait_for_function(f"document.querySelector('#lib-play').title === {json.dumps(want)}", timeout=10000)
+    page.wait_for_function(f"document.querySelector('#lib-play').dataset.path === {json.dumps(want)}", timeout=10000)
     page.click("#lib-play")
     cur = wait_playing(base, want)
     np_ = get_json(base + "/api/status")["now_playing"]
@@ -1255,7 +1255,7 @@ def mock_pass(browser) -> None:
         # In step with the mock's clock: a first sync, then two polls.
         st = wait_sync(page, 3)
         check(abs(float(st.get("drift", 1e9))) < 60, f"now: preview in step after two polls (drift {st.get('drift')} ms, rtt {st.get('rtt')} ms, {st.get('path')})")
-        check(page.inner_text("#now-cap") == "preview · in step with the panel", "now: caption says in step")
+        check(page.eval_on_selector("#now-cap", "e => e.textContent") == "", "now: no caption once in step")
         # A skip on the device (not through the UI): the preview loads the
         # new file and is in step with it.
         post_json(base + "/api/skip", {})
@@ -1295,25 +1295,25 @@ def mock_pass(browser) -> None:
         check(get_json(base + "/api/status")["paused"], "now: pause reached the device")
         page.click("#now-pause")
         page.wait_for_function("document.querySelector('#now-pause').textContent.startsWith('Pause')")
-        # Send to panel: a real GIF, then a miss (404) and a manifest (415).
+        # Send to panel (the Library's button calls app.play; Now has no
+        # path box): a real GIF, then a miss (404) and a manifest (415).
+        check(page.locator("#now-play-path, #now-play").count() == 0 and page.is_hidden("#now-path"),
+              "now: no card path shown, no path box")
+        play = "p => import('./js/state.js').then(m => m.app.play(p))"
         gif = next(l for l in (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n") if l.strip().endswith(".gif")).strip()
-        page.fill("#now-play-path", gif)
-        page.click("#now-play")
+        page.evaluate(play, gif)
         cur = wait_playing(base, gif)
         check(cur == gif, f"now: Send to panel {gif} -> /api/status (got {cur})")
         page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(gif)}", timeout=10000)
         expected.append("/api/play")
-        page.fill("#now-play-path", "/gifs/Consoles/no-such-file.gif")
-        page.click("#now-play")
+        page.evaluate(play, "/gifs/Consoles/no-such-file.gif")
         t = last_toast(page, "bad")
         check("not on the card" in t, f"now: 404 play -> toast '{t}'")
         page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
-        page.fill("#now-play-path", "/filelist.txt")
-        page.click("#now-play")
+        page.evaluate(play, "/filelist.txt")
         t = last_toast(page, "bad")
         check("not a GIF" in t and not LEAK.search(t), f"now: 415 play -> toast '{t}'")
         page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
-        page.fill("#now-play-path", "")
         no_leaks(page, "now")
         shot(page, "now", "laptop")
         expected.remove("/api/play")
@@ -1397,7 +1397,7 @@ def mock_pass(browser) -> None:
         labels = {p: row_label(page, p) for p in ["/filelist.txt", "/filelist.hall", "/filelist.xmas"]}
         check(labels == {"/filelist.txt": "All files", "/filelist.hall": "Halloween", "/filelist.xmas": "Christmas"},
               f"sets: friendly labels {labels}")
-        dflt = page.eval_on_selector_all("#sets-list [data-path] .tag:not(.act)", "els => els.filter(e => e.textContent === 'default').map(e => e.closest('[data-path]').dataset.path)")
+        dflt = page.eval_on_selector_all("#sets-list [data-path] .tag:not(.act)", "els => els.filter(e => e.textContent === 'Default').map(e => e.closest('[data-path]').dataset.path)")
         check(dflt == ["/filelist.txt"], f"sets: default marked on {dflt}")
         check("All files" in page.inner_text("#set-active"), f"sets: '{page.inner_text('#set-active')}'")
         page.click("#sets-list [data-path='/filelist.xmas'] >> text=Activate")
@@ -1556,7 +1556,8 @@ def mock_pass(browser) -> None:
         check(True, "settings: WiFi scan listed networks")
         version = (REPO / "opendmd-web" / "www" / "version.txt").read_text().strip()
         facts = page.inner_text("#st-facts")
-        check(version in facts and "ready" in facts, f"settings: www_version {version} and index_state shown")
+        about = page.inner_text("#st-about")
+        check(version in about and "ready" in facts, f"settings: www_version {version} (About) and index_state shown")
         www_mock_checks(page, base, version)
         opts = page.eval_on_selector_all("#st-set option", "els => els.map(e => [e.value, e.textContent])")
         check(opts[0] == ["", "All files (default)"] and ["filelist.xmas", "Christmas"] in opts
@@ -2236,7 +2237,7 @@ def lib_row(page: Page, path: str) -> None:
     sel = f"#lib-list .vrow[data-path={json.dumps(path)}]"
     page.wait_for_selector(sel, timeout=20000)
     page.click(sel)
-    page.wait_for_function(f"document.querySelector('#lib-cap').textContent === {json.dumps(path.rsplit('/', 1)[1])}", timeout=30000)
+    page.wait_for_function(f"(document.querySelector('#lib-cap').dataset.shown || '') === {json.dumps(path.rsplit('/', 1)[1])}", timeout=30000)
 
 
 def details_checks(page: Page, base: str, overlay: Path) -> None:
@@ -2325,7 +2326,7 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     page.wait_for_function(f"document.querySelector('#dl .dl-item[data-i=\"0\"]').dataset.name === {json.dumps(to.rsplit('/', 1)[1])}", timeout=10000)
     shot(page, "library-edit-dialog", "laptop")
     page.click("#dl-ok")
-    page.wait_for_function(f"document.querySelector('#lib-cap').textContent === {json.dumps(to.rsplit('/', 1)[1])}", timeout=60000)
+    page.wait_for_function(f"(document.querySelector('#lib-cap').dataset.shown || '') === {json.dumps(to.rsplit('/', 1)[1])}", timeout=60000)
     check(not (overlay / card.lstrip("/")).exists() and (overlay / to.lstrip("/")).exists(), f"edit: renamed on the card to {to}")
     check(not (overlay / cache_path(card).lstrip("/")).exists() and (overlay / cache_path(to).lstrip("/")).exists(),
           f"edit: the prepared copy moved to {cache_path(to)}")
@@ -2543,7 +2544,7 @@ def preview_in_library(page: Page, gif: str) -> str:
     page.fill("#lib-search", name[:-4])
     page.wait_for_selector(f"#lib-list .vrow[data-path={json.dumps(gif)}]", timeout=20000)
     page.click(f"#lib-list .vrow[data-path={json.dumps(gif)}]")
-    page.wait_for_function(f"document.querySelector('#lib-cap').textContent.endsWith({json.dumps(name)})", timeout=30000)
+    page.wait_for_function(f"(document.querySelector('#lib-cap').dataset.shown || '').endsWith({json.dumps(name)})", timeout=30000)
     page.wait_for_function("(s => s && s !== 'analysing')(document.querySelector('#lib-smooth').dataset.state)", timeout=120000)
     return page.get_attribute("#lib-smooth", "data-state")
 
@@ -2574,11 +2575,11 @@ def smooth_checks(page: Page, base: str, overlay: Path) -> None:
     shot(page, "library-smooth", "laptop")
     # Preview: the smooth version plays in the Library preview, then back.
     page.click("#lib-smooth-preview")
-    page.wait_for_function("document.querySelector('#lib-cap').textContent.endsWith('smooth motion preview')", timeout=60000)
+    page.wait_for_function("(document.querySelector('#lib-cap').dataset.shown || '').endsWith(' · smooth')", timeout=60000)
     wait_lit(page, "#lib-panel", "smooth preview")
     check(page.inner_text("#lib-smooth-preview") == "Show original", "smooth: Preview plays the smooth version")
     page.click("#lib-smooth-preview")
-    page.wait_for_function(f"document.querySelector('#lib-cap').textContent.endsWith({json.dumps(SMOOTH_ON.rsplit('/', 1)[1])})", timeout=30000)
+    page.wait_for_function(f"(document.querySelector('#lib-cap').dataset.shown || '').endsWith({json.dumps(SMOOTH_ON.rsplit('/', 1)[1])})", timeout=30000)
     check(page.inner_text("#lib-smooth-preview") == "Preview", "smooth: and back to the original")
     # On: the list line and a marked file, as opendmd-pack makes it.
     page.click("#lib-smooth-on")
@@ -2901,7 +2902,7 @@ def device_flash_ui(browser, device: str, errors: list[str]) -> None:
     wait_lit(page, "#now-panel", "device web app", 40)
     goto_view(page, "settings")
     page.wait_for_selector("#st-facts .stat", timeout=20000)
-    check(w.get("version", "?") in page.inner_text("#st-facts"), "device web app: Settings shows the pack's version")
+    check(w.get("version", "?") in page.inner_text("#st-about"), "device web app: Settings shows the pack's version")
     page.context.close()
     st1 = get_json(device + "/api/status")
     print(f"  device across the flash-UI checks: misses {st0['deadline_misses']} -> {st1['deadline_misses']}, "
@@ -2963,12 +2964,12 @@ def device_pass(browser, device: str) -> None:
             page.fill("#lib-search", name[:-4])
             page.wait_for_timeout(500)
             page.click(f"#lib-list .vrow:not([hidden]) >> nth=0")
-            page.wait_for_function(f"document.querySelector('#lib-cap').textContent.endsWith({json.dumps(name[:-4] + '.gif')})", timeout=40000)
+            page.wait_for_function(f"(document.querySelector('#lib-cap').dataset.shown || '').endsWith({json.dumps(name[:-4] + '.gif')})", timeout=40000)
             wait_lit(page, "#lib-panel", f"device library {gif}", 40)
             fetched = [(u.split(base, 1)[-1], s) for u, s in reqs if "/cache/" in u or "/gifs/" in u]
             check((pick, 200) in fetched and not any(u == gif for u, _ in fetched),
                   f"device library: {gif} previewed from its prepared copy ({fetched})")
-            check(page.inner_text("#lib-cap").endswith(name[:-4] + ".gif"), f"device library: caption names the GIF ({page.inner_text('#lib-cap')})")
+            check((page.get_attribute("#lib-cap", "data-shown") or '').endswith(name[:-4] + ".gif"), f"device library: the preview plays the GIF ({page.get_attribute('#lib-cap', 'data-shown')})")
             no_leaks(page, "device library")
         # The cache count.
         t0 = time.time()
@@ -2982,7 +2983,7 @@ def device_pass(browser, device: str) -> None:
         check(cfg.get("transition") and page.input_value("#st-trans-ms") == str(cfg.get("transition_ms")),
               f"device settings: transition {cfg.get('transition')}:{cfg.get('transition_ms')} shown")
         st = get_json(base + "/api/status")
-        facts = page.inner_text("#st-facts")
+        facts = page.inner_text("#st-facts") + page.inner_text("#st-about")
         check(st.get("index_state") in facts and (st.get("www_version") or "–") in facts,
               f"device settings: index_state {st.get('index_state')}, www_version {st.get('www_version')} shown")
         # Follow RePlayOS: read-only here -- the card renders and the API
