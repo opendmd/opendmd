@@ -107,3 +107,35 @@ export const flagCode = (n) => Object.keys(FLAGS).find((k) => FLAGS[k].toLowerCa
 
 // A one-line caption; the rest in a "?" tooltip.
 export const note = (text, more) => h('p.cap', text, more && h('span.q', { title: more, tabIndex: 0 }, '?'));
+
+// Settings apply as they change: saver(heading) returns run(fn), which
+// runs saves in order (fn returning false: nothing to save) and shows
+// "✓ Saved" in the heading for 2 s, or "Couldn't save: why".
+export function saver(head) {
+  const tick = head.appendChild(h('span.tick'));
+  let q, t;
+  return (fn) => (q = Promise.resolve(q).then(fn).then((r) => {
+    if (r === false) return;
+    tick.dataset.n = -~tick.dataset.n;
+    tick.className = 'tick';
+    tick.textContent = '✓ Saved';
+    clearTimeout(t);
+    t = setTimeout(() => { tick.textContent = ''; }, 2000);
+  }, (e) => { clearTimeout(t); tick.className = 'tick bad'; tick.textContent = 'Couldn’t save: ' + e.message; }));
+}
+
+// Brightness 1..255, the ceiling (Power's maximum) marked and enforced.
+export function brightSlider(id, v) {
+  const input = h('input', { type: 'range', min: 1, max: 255, id, value: v });
+  const mark = h('i'), out = h('output.mono', v);
+  let m = 255;
+  const ceil = (x = 255) => {
+    input.dataset.ceiling = m = x;
+    mark.hidden = m > 254;
+    mark.style.left = `calc(8px + (100% - 16px) * ${(m - 1) / 254})`;
+    if (+input.value > m) input.value = m;
+    out.textContent = input.value;
+  };
+  input.addEventListener('input', () => ceil(m));
+  return { el: h('span.bri', h('span.rng', input, mark), out), input, ceil, set: (x) => { input.value = x; ceil(m); } };
+}

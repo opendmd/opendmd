@@ -461,13 +461,9 @@ def transition_checks(page: Page, base: str) -> None:
             check(e.code == 400, f"settings: {bad} refused ({e.code})")
     for kind, label in (("dissolve", "Dissolve"), ("wipe_left", "Wipe")):
         goto_view(page, "settings")
+        # Saved as chosen (no Save button).
         page.select_option("#st-trans", kind)
         page.select_option("#st-trans-ms", "400")
-        # Saving the same value is "nothing changed"; flip the speed first.
-        if get_json(base + "/api/config")["transition"] == kind:
-            put_json(base + "/api/config", {"transition_ms": 250})
-            page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
-        page.click("#st-save-trans")
         cfg = wait_config(base, lambda c: c["transition"] == kind and c["transition_ms"] == 400)
         check(cfg["transition"] == kind and cfg["transition_ms"] == 400, f"settings: {label} / Normal saved ({cfg['transition']}:{cfg['transition_ms']})")
         goto_view(page, "now")
@@ -476,9 +472,11 @@ def transition_checks(page: Page, base: str) -> None:
               f"now: {label} 400 ms, {r['dt']:.0f} ms after the new file loaded the preview differs from the old "
               f"picture ({r['vs_before']} px) and from the new file's first frame ({r['vs_first']} px); "
               f"those two differ by {r['before_first']} px ({r['path']})")
-    # The card's Preview: the panel's file, restarted with a transition, on the page only.
+    # The card's Preview: the panel's file, restarted with a transition, on
+    # the page only (choosing Blinds saves it; the panel is not restarted).
     goto_view(page, "settings")
     page.select_option("#st-trans", "blinds")
+    wait_config(base, lambda c: c["transition"] == "blinds")
     before = get_json(base + "/api/status")["now_playing"]
     page.click("#st-trans-preview")
     wait_lit(page, "#st-trans-panel", "settings transition preview")
@@ -489,10 +487,9 @@ def transition_checks(page: Page, base: str) -> None:
     page.locator("#st-trans-card").screenshot(path=str(card))
     print(f"  shot {card}")
     after = get_json(base + "/api/status")
-    check(get_json(base + "/api/config")["transition"] == "wipe_left" and after["now_playing"]["ordinal"] == before["ordinal"],
-          "settings: Preview plays on the page only (config and the panel untouched)")
+    check(get_json(base + "/api/config")["transition"] == "blinds" and after["now_playing"]["ordinal"] == before["ordinal"],
+          "settings: Blinds saved as chosen; Preview plays on the page only (the panel untouched)")
     page.select_option("#st-trans", "dissolve")
-    page.click("#st-save-trans")
     check(wait_config(base, lambda c: c["transition"] == "dissolve")["transition"] == "dissolve", "settings: back to Dissolve")
     no_leaks(page, "settings (transition)")
     goto_view(page, "now")
@@ -545,7 +542,20 @@ def pick_cat(page: Page, value: str) -> None:
 def goto_view(page: Page, view: str) -> None:
     page.evaluate(f"location.hash = '#{view}'")
     page.wait_for_selector(f"#view-{view}.on")
+    if view == "settings":
+        # Everything past the four cards is under Advanced (remembered open).
+        page.wait_for_selector("#st-adv", state="attached", timeout=20000)
+        page.evaluate("document.querySelector('#st-adv').open = true")
     page.wait_for_timeout(300)
+
+
+def wait_schedule(base: str, ok, timeout_s: float = 10) -> dict:
+    deadline = time.time() + timeout_s
+    while True:
+        sched = get_json(base + "/api/schedule")
+        if ok(sched) or time.time() > deadline:
+            return sched
+        time.sleep(0.2)
 
 
 def wait_playing(base: str, path: str, timeout_s: float = 6) -> str:
@@ -810,13 +820,12 @@ def look_validation(base: str) -> None:
 
 
 def save_look(page: Page, base: str, look: str, glow: str) -> None:
-    """Settings -> Playback: choose a look and glow, Save playback; status
+    """Settings -> Playback: choose a look and glow (saved as chosen); status
     and config must report them."""
     goto_view(page, "settings")
     page.wait_for_selector("#st-look", timeout=20000)
     page.select_option("#st-look", look)
     page.select_option("#st-glow", glow)
-    page.click("#st-save-play")
     cfg = wait_config(base, lambda c: c.get("look") == look and c.get("glow") == glow)
     deadline = time.time() + 10
     st = get_json(base + "/api/status")
@@ -824,7 +833,7 @@ def save_look(page: Page, base: str, look: str, glow: str) -> None:
         time.sleep(0.2)
         st = get_json(base + "/api/status")
     check((cfg.get("look"), cfg.get("glow")) == (look, glow) and (st.get("look"), st.get("glow")) == (look, glow),
-          f"settings: Save playback -> look {look}, glow {glow} in /api/config and /api/status "
+          f"settings: chosen (saved as changed) -> look {look}, glow {glow} in /api/config and /api/status "
           f"({st.get('look')}, {st.get('glow')}, glow_held {st.get('glow_held')})")
 
 
@@ -904,13 +913,11 @@ def boot_checks(page: Page, base: str, mock: bool) -> None:
     other = "full" if orig != "full" else "short"
     try:
         page.select_option("#st-boot", other)
-        page.click("#st-save-boot")
         deadline = time.time() + 10
         while get_json(base + "/api/config")["boot_show"] != other and time.time() < deadline:
             time.sleep(0.2)
-        check(get_json(base + "/api/config")["boot_show"] == other, f"settings: Save start-up -> boot_show {other}")
+        check(get_json(base + "/api/config")["boot_show"] == other, f"settings: start-up {other} saved as chosen")
         page.select_option("#st-boot", orig)
-        page.click("#st-save-boot")
         deadline = time.time() + 10
         while get_json(base + "/api/config")["boot_show"] != orig and time.time() < deadline:
             time.sleep(0.2)
@@ -928,6 +935,7 @@ def boot_checks(page: Page, base: str, mock: bool) -> None:
     page.click("#st-boot-nocard")
     wait_lit(page, "#st-boot-panel", "settings: no-card screen preview")
     page.select_option("#st-boot", orig)
+    wait_config(base, lambda c: c["boot_show"] == orig)
     shot(page, "settings-boot", "laptop")
     if mock:
         post_json(base + "/api/play", {"path": BOOT_CARD})
@@ -947,7 +955,7 @@ def power_checks(page: Page, base: str) -> None:
         return get_json(base + "/api/config")
 
     def slider_max():
-        return int(page.eval_on_selector("#st-brightness", "e => e.max"))
+        return int(page.eval_on_selector("#st-brightness", "e => e.dataset.ceiling"))
 
     def reload_settings():
         # The page reads the config once; a PUT made behind its back needs a reload.
@@ -963,9 +971,11 @@ def power_checks(page: Page, base: str) -> None:
     try:
         put_json(base + "/api/config", {"max_brightness": safe, "brightness": 100})
         reload_settings()
-        check(slider_max() == safe, f"power: the brightness slider's max is {safe} (follows max_brightness)")
-        check(not page.is_visible("#st-maxbright"), "power: the control is behind the Advanced disclosure")
-        page.click("#st-power summary")
+        check(slider_max() == safe, f"power: the brightness slider's ceiling is {safe} (follows max_brightness)")
+        page.eval_on_selector("#st-brightness", "e => { e.value = 255; e.dispatchEvent(new Event('input')); }")
+        check(int(page.input_value("#st-brightness")) == safe, "power: the slider stops at the ceiling")
+        page.eval_on_selector("#st-brightness", "e => { e.value = 100; e.dispatchEvent(new Event('input')); }")
+        wait_config(base, lambda c: c["brightness"] == 100)
         check(page.input_value("#st-maxbright") == str(safe), "power: the control shows max_brightness")
         check(not page.is_visible("#st-maxbright-warn"), "power: no warning at the tested limit")
         text = page.get_attribute("#st-maxbright-note .q", "title") or ""
@@ -998,34 +1008,36 @@ def power_checks(page: Page, base: str) -> None:
               f"power: PUT reply carries both ({r.get('brightness')}, {r.get('max_brightness')})")
         reload_settings()
         check(slider_max() == safe + 40, f"power: slider max follows a raised max_brightness ({slider_max()})")
-        check(page.is_visible("#st-maxbright"), "power: the disclosure opens by itself above the tested limit")
+        check(page.is_visible("#st-maxbright"), "power: the control is in the Power card")
         check(page.is_visible("#st-maxbright-warn"), "power: warning shown above the tested limit")
         w = page.inner_text("#st-maxbright-warn")
         check(w == f"Above the tested limit ({safe}). The display may reset. Only raise this with a stronger power supply.",
               f"power: warning text ({w})")
+        page.evaluate("document.querySelector('#st-power-card').scrollIntoView({block: 'center'})")
         shot(page, "settings-power", "laptop")
         # The control: lower the max below the brightness; both saved.
         page.fill("#st-maxbright", str(safe - 60))
         check(not page.is_visible("#st-maxbright-warn"), "power: warning hides when the control drops to the safe value")
-        page.click("#st-save-power")
+        page.dispatch_event("#st-maxbright", "change")
         deadline = time.time() + 10
         while cfg()["max_brightness"] != safe - 60 and time.time() < deadline:
             time.sleep(0.2)
         c = cfg()
         check(c["max_brightness"] == safe - 60 and c["brightness"] == safe - 60,
               f"power: lowering max lowers brightness in the same save ({c['brightness']}/{c['max_brightness']})")
-        page.wait_for_function("+document.getElementById('st-brightness').max == %d" % (safe - 60), timeout=5000)
+        page.wait_for_function("+document.getElementById('st-brightness').dataset.ceiling == %d" % (safe - 60), timeout=5000)
         check(int(page.input_value("#st-brightness")) == safe - 60, "power: the slider follows the lowered brightness")
         # Typing above the safe value shows the warning before saving.
         page.fill("#st-maxbright", str(safe + 1))
         check(page.is_visible("#st-maxbright-warn"), "power: warning shows as soon as the control is above the safe value")
         page.fill("#st-maxbright", str(safe))
         check(not page.is_visible("#st-maxbright-warn"), "power: warning hidden at the safe value")
-        # Round trip through the Playback save too.
+        page.fill("#st-maxbright", str(safe - 60))
+        page.dispatch_event("#st-maxbright", "change")
+        # Round trip through the Playback slider too (saved when it settles).
         page.eval_on_selector("#st-brightness", "e => { e.value = 40; e.dispatchEvent(new Event('input')); }")
-        page.click("#st-save-play")
-        page.wait_for_timeout(600)
-        check(cfg()["brightness"] == 40 and cfg()["max_brightness"] == safe - 60, "power: Playback save leaves the maximum alone")
+        c = wait_config(base, lambda c: c["brightness"] == 40)
+        check(c["brightness"] == 40 and c["max_brightness"] == safe - 60, "power: the brightness slider leaves the maximum alone")
     finally:
         put_json(base + "/api/config", {"max_brightness": orig["max_brightness"]})
         put_json(base + "/api/config", {"brightness": orig["brightness"]})
@@ -1249,7 +1261,8 @@ def mock_pass(browser) -> None:
         page.goto(base + "/")
         # Now
         page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
-        check(page.locator("#now-stats .stat").count() >= 8, "now: status grid renders")
+        check(page.locator("#now-stats .stat").count() == 3 and page.locator("#now-facts dt").count() >= 7,
+              "now: health line (three figures) and its More list render")
         check(get_json(base + "/api/status")["manifest"] == "/sdcard/filelist.txt", "now: the default playlist is filelist.txt")
         wait_lit(page, "#now-panel", "now")
         # In step with the mock's clock: a first sync, then two polls.
@@ -1546,11 +1559,11 @@ def mock_pass(browser) -> None:
         smooth_checks(page, base, overlay)
         # Settings
         goto_view(page, "settings")
-        page.wait_for_selector("#st-facts .stat")
+        page.wait_for_selector("#st-facts dt")
         page.eval_on_selector("#st-brightness", "e => { e.value = 120; e.dispatchEvent(new Event('input')); }")
-        page.click("#st-save-play")
-        page.wait_for_timeout(800)
-        check(get_json(base + "/api/config")["brightness"] == 120, "settings: brightness PUT and read back")
+        check(wait_config(base, lambda c: c["brightness"] == 120)["brightness"] == 120, "settings: brightness saved as it settles, read back")
+        page.wait_for_function("document.querySelector('#view-settings .card h2 .tick').dataset.n > 0", timeout=5000)
+        check(True, "settings: the Playback heading shows the Saved tick")
         page.click("#st-scan")
         page.wait_for_selector("#st-nets .chip", timeout=15000)
         check(True, "settings: WiFi scan listed networks")
@@ -1563,10 +1576,10 @@ def mock_pass(browser) -> None:
         check(opts[0] == ["", "All files (default)"] and ["filelist.xmas", "Christmas"] in opts
               and not any("odm" in v for v, _ in opts), f"settings: playlist choices {opts[:4]}")
         no_leaks(page, "settings")
+        page.evaluate("window.scrollTo(0, 0)")
         shot(page, "settings", "laptop")
         # Time: pick a zone, save, and check the POSIX TZ string landed.
         page.select_option("#tm-zone", label="Europe/Dublin")
-        page.click("#tm-save")
         page.wait_for_function("document.querySelector('#tm-now').textContent.includes('Europe/Dublin')", timeout=10000)
         cfg = get_json(base + "/api/config")
         check(cfg["tz"] == "GMT0IST,M3.5.0/1,M10.5.0" and cfg["tz_name"] == "Europe/Dublin",
@@ -1598,9 +1611,8 @@ def mock_pass(browser) -> None:
         page.fill("#sc-night-from", night_from)
         page.fill("#sc-night-to", night_to)
         page.select_option("#sc-night-mode", value="off")
-        page.click("#sc-night-save")
-        page.wait_for_function("document.querySelector('#sc-night-on').checked", timeout=10000)
-        sched = get_json(base + "/api/schedule")
+        want = {"from": night_from, "to": night_to, "mode": "off", "brightness": 8}
+        sched = wait_schedule(base, lambda s: s.get("night") == want)
         # schedule.js always sends the night brightness slider's value (8 by
         # default) alongside from/to/mode.
         check(sched.get("night") == {"from": night_from, "to": night_to, "mode": "off", "brightness": 8},
@@ -1642,9 +1654,7 @@ def mock_pass(browser) -> None:
         page.click("#sc-rules [data-rule='0'] >> text=Delete")
         page.wait_for_selector("#sc-rules [data-rule]", state="detached", timeout=10000)
         page.uncheck("#sc-night-on")
-        page.click("#sc-night-save")
-        page.wait_for_function("!document.querySelector('#sc-night-on').checked", timeout=10000)
-        sched = get_json(base + "/api/schedule")
+        sched = wait_schedule(base, lambda s: s.get("night") is None)
         check(sched == {"rules": [], "night": None}, f"settings: schedule cleared -> empty form ({sched})")
         goto_view(page, "now")
         page.wait_for_selector("#now-banner", state="hidden", timeout=15000)
@@ -2653,7 +2663,7 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         print(f"\n== mock RePlayOS at {replay_base}")
         goto_view(page, "settings")
         page.wait_for_selector("#fo", timeout=10000)
-        for sel in ("#fo-on", "#fo-host", "#fo-code", "#fo-attract", "#fo-test", "#fo-save"):
+        for sel in ("#fo-on", "#fo-host", "#fo-code", "#fo-attract", "#fo-test"):
             check(page.locator(sel).count() == 1, f"follow: {sel} renders")
         page.wait_for_selector("#fo-attract option[value='*']", state="attached", timeout=10000)
 
@@ -2670,13 +2680,14 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         t = page.inner_text("#fo-result")
         check("answered" in t, f"follow: Test with the right code -> '{t}'")
 
-        # Save: follow on, host, code 4321, attract = the current playlist.
+        # Saved as changed: follow on, host, code 4321 (when the field is
+        # left), attract = the current playlist.
         page.check("#fo-on")
         page.fill("#fo-host", host_val)
         page.fill("#fo-code", "4321")
+        page.dispatch_event("#fo-code", "change")
         page.select_option("#fo-attract", "*")
-        page.click("#fo-save")
-        cfg = wait_config(base, lambda c: c.get("follow") is True)
+        cfg = wait_config(base, lambda c: c.get("follow") is True and c.get("follow_host") == host_val)
         raw_cfg = json.dumps(cfg)
         check(cfg.get("follow") is True and cfg.get("follow_host") == host_val
               and cfg.get("follow_code_set") is True and cfg.get("attract_set") is None
@@ -2766,8 +2777,7 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         if page.is_checked("#fo-on"):
             page.uncheck("#fo-on")
         page.fill("#fo-host", "")
-        page.click("#fo-save")
-        cfg = wait_config(base, lambda c: c.get("follow") is False)
+        cfg = wait_config(base, lambda c: c.get("follow") is False and c.get("follow_host") == "")
         check(cfg.get("follow") is False and cfg.get("follow_host") == "",
               f"follow: disabled and host cleared before finishing ({cfg})")
         goto_view(page, "now")
@@ -2897,11 +2907,11 @@ def device_flash_ui(browser, device: str, errors: list[str]) -> None:
     page.goto(device + "/")
     page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')",
                            timeout=30000)
-    check(page.locator("#now-stats .stat").count() >= 8,
+    check(page.locator("#now-stats .stat").count() == 3,
           f"device web app: the page from flash renders the Now view ({time.time() - t0:.1f} s)")
     wait_lit(page, "#now-panel", "device web app", 40)
     goto_view(page, "settings")
-    page.wait_for_selector("#st-facts .stat", timeout=20000)
+    page.wait_for_selector("#st-facts dt", timeout=20000)
     check(w.get("version", "?") in page.inner_text("#st-about"), "device web app: Settings shows the pack's version")
     page.context.close()
     st1 = get_json(device + "/api/status")
@@ -2923,7 +2933,7 @@ def device_pass(browser, device: str) -> None:
         page = new_page(browser, "laptop", errors)
         page.goto(base + "/")
         page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=30000)
-        check(page.locator("#now-stats .stat").count() >= 8, "device now: status grid renders")
+        check(page.locator("#now-stats .stat").count() == 3, "device now: health line renders")
         wait_lit(page, "#now-panel", "device now", 40)
         st0 = get_json(base + "/api/status")
         check(all(k in st0["now_playing"] for k in ("elapsed_ms", "frame")) and "t_ms" in st0,
@@ -2977,7 +2987,7 @@ def device_pass(browser, device: str) -> None:
         check(r["state"] == "ready" and r["prepared"] is not None,
               f"device cache: /api/cache {r['prepared']} of {r['total']} prepared (count {r['count_ms']} ms, ready after {time.time() - t0:.1f} s)")
         goto_view(page, "settings")
-        page.wait_for_selector("#st-facts .stat", timeout=20000)
+        page.wait_for_selector("#st-facts dt", timeout=20000)
         check(page.input_value("#st-hostname") != "", "device settings: config GET rendered")
         cfg = get_json(base + "/api/config")
         check(cfg.get("transition") and page.input_value("#st-trans-ms") == str(cfg.get("transition_ms")),
@@ -2992,8 +3002,8 @@ def device_pass(browser, device: str) -> None:
         check(all(k in cfg for k in follow_keys), f"device config: follow keys present ({sorted(cfg)})")
         check("context" in st, f"device status: context present ({st.get('context')})")
         page.wait_for_selector("#fo", timeout=10000)
-        check(page.locator("#fo-on").count() == 1 and page.locator("#fo-host").count() == 1
-              and page.locator("#fo-save").count() == 1, "device settings: Follow RePlayOS card renders")
+        check(page.locator("#fo-on").count() == 1 and page.locator("#fo-host").count() == 1,
+              "device settings: Follow RePlayOS group renders")
         line = wait_cache_line(page, f"{r['prepared']:,} of {r['total']:,}")
         check(True, f"device settings: cache card reads '{line}'")
         # Auto prepare, read only (the device's setting is left as it is).
@@ -3033,7 +3043,7 @@ def device_pass(browser, device: str) -> None:
         wait_lit(phone, "#now-panel", "device phone now", 40)
         shot(phone, "device-now", "phone")
         goto_view(phone, "settings")
-        phone.wait_for_selector("#st-facts .stat", timeout=20000)
+        phone.wait_for_selector("#st-facts dt", timeout=20000)
         shot(phone, "device-settings", "phone")
         phone.context.close()
         st = get_json(base + "/api/status")

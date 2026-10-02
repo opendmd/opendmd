@@ -39,20 +39,26 @@ export class PanelPreview {
   // Rendered at 6..10 px a dot (fixed here: below 6 no room for the bloom,
   // above 10 frame time for nothing), shown at the whole multiple that fits
   // (fitScale), so every view draws the same dots; too narrow: scaled down.
-  constructor(canvas, { onDwellEnd, onError } = {}) {
+  // `wrap` (Now): the view is narrowed to the preview's card, so the dots
+  // fill it with no gutter; the room is then #main's, not the card's.
+  constructor(canvas, { onDwellEnd, onError, wrap } = {}) {
     this.canvas = canvas;
-    const s = fitScale(room(canvas), 128);
+    const card = canvas.parentElement, out = wrap?.parentElement;
+    const px = (e) => { const s = getComputedStyle(e); return parseFloat(s.paddingLeft) + parseFloat(s.paddingRight); };
+    const roomOf = () => (wrap ? out.clientWidth - px(out) - px(card) : room(canvas));
+    const s = fitScale(roomOf(), 128);
     let r = 6;
     for (let k = 10; k > 6; k--) if (k * Math.floor(s / k) > r * Math.floor(s / r)) r = k;
     canvas.width = 128 * r;
     const fit = () => {
-      const m = Math.floor(fitScale(room(canvas), 128) / r);
-      canvas.style.width = m ? (128 * r * m) / devicePixelRatio + 'px' : '';
+      const m = Math.floor(fitScale(roomOf(), 128) / r), w = (128 * r * m) / devicePixelRatio;
+      canvas.style.width = m ? w + 'px' : '';
       canvas.style.imageRendering = m ? '' : 'auto';
+      if (wrap) wrap.style.maxWidth = m ? w + px(card) + 'px' : '';
     };
     // (Width changes only, in the next frame: no ResizeObserver loop.)
     let w = -1;
-    new ResizeObserver(([e]) => { if (e.contentRect.width !== w) { w = e.contentRect.width; requestAnimationFrame(fit); } }).observe(canvas.parentElement);
+    new ResizeObserver(([e]) => { if (e.contentRect.width !== w) { w = e.contentRect.width; requestAnimationFrame(fit); } }).observe(out || card);
     this.p = new Preview(canvas, look.gamma, look.gain, look.bloom, look.flat);
     trans(this.p);
     this.onDwellEnd = onDwellEnd;

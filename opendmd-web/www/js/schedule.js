@@ -6,7 +6,7 @@
 // brightness saved in Playback: when a rule ends, those come back.
 
 import { app, playlistLabel, setPath } from './state.js';
-import { h, clear, toast, note } from './util.js';
+import { h, clear, toast, note, saver, debounce } from './util.js';
 
 // A short list of common zones (POSIX TZ strings, what the device's clock
 // library reads); anything else goes in "Custom".
@@ -56,7 +56,6 @@ export function timeCard() {
   zone.value = known ? c.tz : '';
   const custom = h('input', { type: 'text', id: 'tm-custom', placeholder: 'e.g. GMT0IST,M3.5.0/1,M10.5.0', value: known ? '' : c.tz || '' });
   const customRow = h('label.stack', { hidden: !!known }, 'Custom zone (POSIX TZ)', custom);
-  zone.onchange = () => { customRow.hidden = !!zone.value; };
   const now = h('b', { id: 'tm-now' }, '…');
   const synced = h('span.muted', { id: 'tm-synced' });
 
@@ -66,22 +65,21 @@ export function timeCard() {
     synced.textContent = ' · ' + ago(s.time_synced_s);
   }
 
-  async function save() {
+  const head = h('h3', 'Time'), run = saver(head);
+  const save = () => run(async () => {
     const tz = zone.value || custom.value.trim();
-    if (!tz) { toast('enter a zone', 'bad'); return; }
+    if (!tz || tz === app.config.tz) return false;
     const name = zone.value ? ZONES.find(([, t]) => t === tz)[0] : 'Custom';
-    try {
-      await app.src.putConfig({ tz, tz_name: name });
-      await app.refreshConfig();
-      render(await app.refreshStatus());
-      toast(`time zone: ${name}`, 'ok');
-    } catch (e) { toast('time zone: ' + e.message, 'bad'); }
-  }
+    await app.src.putConfig({ tz, tz_name: name });
+    await app.refreshConfig();
+    render(await app.refreshStatus());
+  });
+  zone.onchange = () => { customRow.hidden = !!zone.value; save(); };
+  custom.onchange = save;
 
-  const el = h('div.card', { id: 'tm' }, h('h2', 'Time'),
+  const el = h('div.grp', { id: 'tm' }, head,
     h('p', now, synced),
-    h('div.form', h('label.stack', 'Time zone', zone), customRow),
-    h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'tm-save', onclick: save }, 'Save time zone')));
+    h('div.form.f2', h('label.stack', 'Time zone', zone), customRow));
   return { el, render };
 }
 
@@ -99,25 +97,25 @@ export function scheduleCard() {
   const nLevelOut = h('output.mono', '8');
   const levelRow = h('label', 'Level', nLevel, nLevelOut);
   nLevel.oninput = () => { nLevelOut.textContent = nLevel.value; };
-  nMode.onchange = () => { levelRow.hidden = nMode.value !== 'dim'; };
 
-  async function put(next, what) {
-    try {
-      await app.src.putSchedule(next);
-      sched = next;
-      render();
-      app.refreshStatus().catch(() => {});
-      toast(what, 'ok');
-      return true;
-    } catch (e) { toast('schedule: ' + e.message, 'bad'); return false; }
+  const head = h('h3', 'Schedule'), nightH = h('h3', 'Night mode');
+  const run = saver(head);
+  async function put(next) {
+    await app.src.putSchedule(next);
+    sched = next;
+    renderRules();
+    app.refreshStatus().catch(() => {});
   }
 
-  function render() {
+  function renderRules() {
     clear(list, sched.rules.length ? sched.rules.map((r, i) => h('div', { 'data-rule': i },
       h('span.grow', ruleText(r)),
       h('button.sm', { onclick: () => edit(i) }, 'Edit'),
-      h('button.sm', { onclick: () => put({ ...sched, rules: sched.rules.filter((_, k) => k !== i) }, 'rule deleted') }, 'Delete')))
+      h('button.sm', { onclick: () => run(() => put({ ...sched, rules: sched.rules.filter((_, k) => k !== i) })) }, 'Delete')))
       : h('div.muted', 'No rules: the playlist and brightness in Playback apply all the time.'));
+  }
+  // The night fields from the device (on load only: they save as they change).
+  function renderNight() {
     const n = sched.night;
     nightOn.checked = !!n;
     if (n) { nFrom.value = n.from; nTo.value = n.to; nMode.value = n.mode; nLevel.value = n.brightness ?? 8; nLevelOut.textContent = nLevel.value; }
@@ -140,17 +138,18 @@ export function scheduleCard() {
     const bright = h('input', { type: 'range', min: 1, max: 255, id: 'sc-bright', value: r.brightness ?? 96 });
     const bOut = h('output.mono', bright.value);
     bright.oninput = () => { bOut.textContent = bright.value; bOn.checked = true; };
-    async function save() {
+    const save = () => run(async () => {
       const picked = [...days.querySelectorAll('.chip.on')].map((c) => +c.dataset.day);
-      if (!picked.length) { toast('pick at least one day', 'bad'); return; }
-      if (!from.value || !to.value) { toast('enter both times', 'bad'); return; }
+      if (!picked.length) throw new Error('pick at least one day');
+      if (!from.value || !to.value) throw new Error('enter both times');
       const rule = { days: picked, from: from.value, to: to.value };
       if (set.value !== '\u0000') rule.set = set.value;
       if (bOn.checked) rule.brightness = +bright.value;
       const rules = [...sched.rules];
       rules.splice(editing, editing < rules.length ? 1 : 0, rule);
-      if (await put({ ...sched, rules }, 'rule saved')) editor.hidden = true;
-    }
+      await put({ ...sched, rules });
+      editor.hidden = true;
+    });
     clear(editor, h('h3', { style: 'margin-top:0' }, editing < sched.rules.length ? 'Edit rule' : 'New rule'),
       days,
       h('div.form', { style: 'margin-top:12px' },
@@ -163,24 +162,26 @@ export function scheduleCard() {
     editor.hidden = false;
   }
 
-  function saveNight() {
+  const saveNight = () => run(async () => {
     const night = nightOn.checked ? { from: nFrom.value, to: nTo.value, mode: nMode.value, brightness: +nLevel.value } : null;
-    if (night && (!night.from || !night.to)) { toast('enter both times', 'bad'); return; }
-    put({ ...sched, night }, night ? 'night mode saved' : 'night mode off');
-  }
+    if (night && (!night.from || !night.to)) throw new Error('enter both times');
+    await put({ ...sched, night });
+  });
+  nightOn.onchange = nFrom.onchange = nTo.onchange = saveNight;
+  nMode.onchange = () => { levelRow.hidden = nMode.value !== 'dim'; saveNight(); };
+  nLevel.addEventListener('input', debounce(saveNight, 400));
 
   async function load() {
-    try { sched = await app.src.schedule(); sched.rules ||= []; render(); } catch (e) { toast('schedule: ' + e.message, 'bad'); }
+    try { sched = await app.src.schedule(); sched.rules ||= []; renderRules(); renderNight(); } catch (e) { toast('schedule: ' + e.message, 'bad'); }
   }
 
-  const el = h('div.card', { id: 'sc' }, h('h2', 'Schedule'),
+  const el = h('div.grp', { id: 'sc' }, head,
     note('The first rule that matches the day and time wins', 'A rule’s playlist and brightness last while it runs; afterwards the ones in Playback come back.'),
     list,
     h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'sc-add', onclick: () => edit(sched.rules.length) }, 'Add rule')),
     editor,
-    h('h3', 'Night mode'),
-    h('div.row', h('label', nightOn, 'Every night from'), nFrom, h('span', 'to'), nTo, nMode, levelRow),
-    h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'sc-night-save', onclick: saveNight }, 'Save night mode')));
+    nightH,
+    h('div.row', h('label', nightOn, 'Every night from'), nFrom, h('span', 'to'), nTo, nMode, levelRow));
   load();
   return { el, load, night: () => sched.night };
 }

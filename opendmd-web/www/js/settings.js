@@ -1,14 +1,16 @@
 // Settings: the device's NVS config (GET/PUT /api/config — a PUT is a
 // partial patch, applied live except WiFi and hostname, which need a
-// reboot), a WiFi scan, reindex, reboot, the facts from status, and
-// the playback cache (how many files are prepared; prepare the rest).
+// reboot). Four cards (Playback, Transition, Start-up, Power) that save as
+// they change; everything else under Advanced: time, schedule, Follow
+// RePlayOS, the playback cache, network (its own Save: it reboots), the
+// device's facts, reindex and reboot, and the About line.
 
 import { app, playlistLabel } from './state.js';
 import * as prep from './prepare.js';
 import { timeCard, scheduleCard } from './schedule.js';
 import { followCard } from './follow.js';
 import { PanelPreview } from './preview.js';
-import { h, clear, on, toast, bytes, uptime, base, note } from './util.js';
+import { h, clear, on, toast, base, note, store, debounce, saver, brightSlider } from './util.js';
 
 export async function mount(el) {
   if (!app.device) {
@@ -16,12 +18,14 @@ export async function mount(el) {
     return {};
   }
   const c = app.config || await app.refreshConfig();
+  const bright = brightSlider('st-brightness', c.brightness);
+  bright.ceil(c.max_brightness);
   const f = {
-    brightness: h('input', { type: 'range', min: 1, max: 255, id: 'st-brightness', value: c.brightness }),
+    brightness: bright.input,
     dwell_min: h('input', { type: 'number', min: 1, id: 'st-dwell-min', value: c.dwell_min, style: 'width:100px' }),
     dwell_max: h('input', { type: 'number', min: 1, id: 'st-dwell-max', value: c.dwell_max, style: 'width:100px' }),
     shuffle: h('input', { type: 'checkbox', id: 'st-shuffle', checked: c.shuffle }),
-    platforms: h('input', { type: 'text', id: 'st-platforms', value: c.platforms, placeholder: 'blank = all, or MD,SNES' }),
+    platforms: h('input', { type: 'text', id: 'st-platforms', value: c.platforms, placeholder: 'All, or MD,SNES' }),
     set: h('select', { id: 'st-set' }),
     wifi_ssid: h('input', { type: 'text', id: 'st-ssid', value: c.wifi_ssid, autocomplete: 'off' }),
     wifi_pass: h('input', { type: 'password', id: 'st-pass', placeholder: c.wifi_pass_set ? 'unchanged (one is saved)' : 'none saved', autocomplete: 'new-password' }),
@@ -54,16 +58,26 @@ export async function mount(el) {
     }
     pv.p.replay();
   }
-  const brightOut = h('output.mono', c.brightness);
-  f.brightness.oninput = () => { brightOut.textContent = f.brightness.value; };
+  const playH = h('h2', 'Playback'), transH = h('h2', 'Transition'), netH = h('h3', 'Network');
+  const play = saver(playH), trans = saver(transH), net = saver(netH);
+  // Saved as changed: the slider when it settles, typed fields when left
+  // (a platforms change rebuilds the index: not on every keystroke).
+  let held = 0; // a slider change not saved yet: another card's config must not undo it
+  const later = debounce(() => save(['brightness'], play).then(() => { held = 0; }), 400);
+  f.brightness.addEventListener('input', () => { held = 1; later(); });
+  for (const k of ['look', 'glow', 'shuffle', 'set', 'platforms']) f[k].onchange = () => save([k], play);
+  f.dwell_min.onchange = f.dwell_max.onchange = () => save(['dwell_min', 'dwell_max'], play);
+  f.transition.onchange = f.transition_ms.onchange = () => save(['transition', 'transition_ms'], trans);
+  on('config', (cf) => { bright.ceil(cf.max_brightness); if (!held) bright.set(cf.brightness); });
+
   const nets = h('div.chips', { id: 'st-nets' });
   const banner = h('div.banner', { hidden: true, id: 'st-reboot' }, 'Saved. WiFi and hostname changes take effect after a reboot. ',
     h('button.sm', { onclick: reboot }, 'Reboot now'));
-  const facts = h('div.grid', { id: 'st-facts' });
+  const facts = h('dl.facts', { id: 'st-facts' });
   // One quiet line, only when the card has had trouble (sdhealth on the device).
   const cardNote = h('p.cap', { id: 'st-card-note', hidden: true, style: 'margin-top:12px' });
   // Where and what this player is: its address, its firmware and this page's version.
-  const about = h('p.cap', { id: 'st-about' });
+  const about = h('p.cap', { id: 'st-about', style: 'margin-top:24px' });
 
   // The playlist choices, rebuilt whenever the config changes or the view
   // is shown: a playlist made or deleted elsewhere must not linger here.
@@ -87,9 +101,10 @@ export async function mount(el) {
   // The device prepares files by itself when idle (auto_prepare): one
   // sentence, and whether it may also do so, slowly, while playing.
   const autoLine = h('span', { id: 'pc-auto' });
-  const always = h('input', { type: 'checkbox', id: 'pc-always', onchange: async () => {
-    try { await app.src.putConfig({ auto_prepare: always.checked ? 'always' : 'idle' }); await app.refreshConfig(); loadCache(); } catch (e) { toast('save: ' + e.message, 'bad'); }
-  } });
+  const pcH = h('h3', 'Playback cache'), pcRun = saver(pcH);
+  const always = h('input', { type: 'checkbox', id: 'pc-always', onchange: () => pcRun(async () => {
+    await app.src.putConfig({ auto_prepare: always.checked ? 'always' : 'idle' }); await app.refreshConfig(); loadCache();
+  }) });
   const autoBox = h('div', { hidden: true, style: 'margin-top:12px' }, autoLine, h('label', always, 'Also while playing (slower)'));
 
   // Start-up: its own module and size line (js/boot.js), loaded here.
@@ -101,48 +116,47 @@ export async function mount(el) {
   const sched = scheduleCard();
   const follow = followCard();
   on('status', time.render);
-
-  el.append(banner,
-    h('div.card', h('h2', 'Playback'), note('A playlist, platform or shuffle change rebuilds the index', 'The card’s index is rebuilt in a few seconds; the panel holds its frame meanwhile.'),
-      h('div.form',
-        h('label.stack', 'Brightness', h('div.row', f.brightness, brightOut)),
-        h('label.stack', 'Colour', f.look),
-        h('label.stack', 'Phosphor glow', f.glow),
-        h('label.stack', 'Dwell min / max (s)', h('div.row', f.dwell_min, f.dwell_max)),
-        h('label.stack', 'Platforms', f.platforms),
-        h('label.stack', 'Playlist', f.set),
-        h('label', f.shuffle, 'Shuffle')),
-      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-play', onclick: () => save(['brightness', 'look', 'glow', 'dwell_min', 'dwell_max', 'shuffle', 'platforms', 'set']) }, 'Save playback'))),
-    h('div.card', { id: 'st-trans-card' }, h('h2', 'Transition'), h('p.cap', 'How the panel moves from one GIF to the next'),
-      h('div.form', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),
-      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-trans-preview', onclick: previewTrans }, 'Preview'),
-        h('button', { id: 'st-save-trans', onclick: () => save(['transition', 'transition_ms']) }, 'Save transition')),
-      pvBox),
-    boot, power, time.el, sched.el, follow.el,
-    h('div.card', { id: 'pc' }, h('h2', 'Playback cache'),
+  const adv = h('details.card', { id: 'st-adv', open: store.get('advanced', false), ontoggle: () => store.set('advanced', adv.open) }, h('summary', 'Advanced'),
+    time.el, sched.el, follow.el,
+    h('div.grp', { id: 'pc' }, pcH,
       note('Prepared copies play with less memory and start faster', 'Originals stay as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
       h('div.bar', { style: 'margin:12px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox),
-    h('div.card', h('h2', 'Network'), note('WiFi and hostname changes need a reboot', 'With no saved network the player raises the open OpenDMD-Setup access point.'),
-      h('div.form',
+    h('div.grp', netH, note('WiFi and hostname changes need a reboot', 'With no saved network the player raises the open OpenDMD-Setup access point.'),
+      h('div.form.f2',
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
         h('label.stack', 'WiFi password', f.wifi_pass),
         h('label.stack', 'Hostname (.local)', f.hostname)),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
-      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: () => save(['wifi_ssid', 'wifi_pass', 'hostname']) }, 'Save network'))),
-    h('div.card', h('h2', 'Device'), facts, cardNote,
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: () => save(['wifi_ssid', 'wifi_pass', 'hostname'], net) }, 'Save network'))),
+    h('div.grp', h('h3', 'Device'), facts, cardNote,
       h('p.cap', { style: 'margin-top:12px' }, 'Firmware updates are installed over USB with the browser flasher'),
       h('div.row', { style: 'margin-top:12px' },
         h('button', { id: 'st-reindex', onclick: reindex }, 'Rebuild index'),
         h('button', { id: 'st-reboot-btn', onclick: reboot }, 'Reboot'))),
     about);
 
+  el.append(banner,
+    h('div.card', playH, note('A playlist, platform or shuffle change rebuilds the index', 'The card’s index is rebuilt in a few seconds; the panel holds its frame meanwhile.'),
+      h('div.form.f2',
+        h('label.stack', 'Brightness', bright.el),
+        h('label.stack', 'Colour', f.look),
+        h('label.stack', 'Phosphor glow', f.glow),
+        h('label.stack', 'Dwell min / max (s)', h('div.row', f.dwell_min, f.dwell_max)),
+        h('label.stack', 'Playlist', f.set),
+        h('label.stack', 'Platforms', f.platforms),
+        h('label', f.shuffle, 'Shuffle'))),
+    h('div.card', { id: 'st-trans-card' }, transH, h('p.cap', 'How the panel moves from one GIF to the next'),
+      h('div.form.f2', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-trans-preview', onclick: previewTrans }, 'Preview')),
+      pvBox),
+    boot, power, adv);
+
   function renderFacts(s) {
     if (!s) return;
-    const fact = (k, v) => h('div.stat', h('b', { style: 'font-size:15px' }, v), h('span', k));
-    clear(facts, fact('Panel', `128×32 · ${s.refresh_hz} Hz`), fact('Uptime', uptime(s.uptime_secs)),
-      fact('Playlist', playlistLabel(s.manifest)), fact('Entries', s.entries.toLocaleString()),
-      fact('Index', s.index_state ?? '–'), fact('Card', s.sd.mounted ? bytes(s.sd.capacity_bytes) : 'Not mounted'));
+    const fact = (k, v) => [h('dt', k), h('dd', v)];
+    // (Uptime, memory, playlist and card: Now's health line and More.)
+    clear(facts, fact('Entries', s.entries.toLocaleString()), fact('Index', s.index_state ?? '–'));
     about.textContent = `About · ${s.hostname}.local · ${s.ip} (${s.wifi}) · firmware ${s.version} ${s.variant} · web app ${s.www_version ?? '–'}`;
     const sd = s.sd;
     const errs = sd.failures || (!sd.mounted && sd.reboots) || 0;
@@ -158,25 +172,28 @@ export async function mount(el) {
   let recheck = 0;
   on('status', renderFacts);
 
-  async function save(keys) {
-    const cur = app.config;
-    const patch = {};
+  // The fields `keys`, read now (a config event may redraw them before the
+  // save runs), PUT through `run` where they differ from the config then.
+  function save(keys, run) {
+    const vals = {};
     for (const k of keys) {
       const el_ = f[k];
-      const v = el_.type === 'checkbox' ? el_.checked : el_.type === 'number' || el_.type === 'range' || el_.dataset.num ? +el_.value : el_.value.trim();
-      if (k === 'wifi_pass') { if (el_.value) patch[k] = el_.value; continue; }
-      if (v !== cur[k]) patch[k] = v;
+      vals[k] = el_.type === 'checkbox' ? el_.checked : el_.type === 'number' || el_.type === 'range' || el_.dataset.num ? +el_.value : el_.value.trim();
     }
-    if (patch.dwell_max < (patch.dwell_min ?? cur.dwell_min) || (patch.dwell_min > (patch.dwell_max ?? cur.dwell_max))) { toast('dwell max must be ≥ dwell min', 'bad'); return; }
-    if (!Object.keys(patch).length) { toast('nothing changed'); return; }
-    try {
+    return run(async () => {
+      const cur = app.config;
+      const patch = {};
+      for (const k of keys) {
+        if (k === 'wifi_pass') { if (f[k].value) patch[k] = f[k].value; } else if (vals[k] !== cur[k]) patch[k] = vals[k];
+      }
+      if (!Object.keys(patch).length) return false;
+      if ((patch.dwell_max ?? cur.dwell_max) < (patch.dwell_min ?? cur.dwell_min)) throw new Error('dwell max must be at least dwell min');
       const r = await app.src.putConfig(patch);
       await app.refreshConfig();
       f.wifi_pass.value = '';
       f.wifi_pass.placeholder = app.config.wifi_pass_set ? 'unchanged (one is saved)' : 'none saved';
       if (r.reboot_required || 'hostname' in patch) banner.hidden = false;
-      toast(`saved ${Object.keys(patch).filter((k) => k !== 'wifi_pass').concat('wifi_pass' in patch ? ['password'] : []).join(', ')}${r.index ? ` · index ${r.index} (${r.index_ms} ms) · ${r.entries} entries` : ''}`, 'ok');
-    } catch (e) { toast('save: ' + e.message, 'bad'); }
+    });
   }
 
   async function scan() {
