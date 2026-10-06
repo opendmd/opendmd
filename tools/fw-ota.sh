@@ -42,6 +42,16 @@ case "${pre##*$'\n'}" in
     *) echo "GET http://$host/api/firmware: HTTP ${pre##*$'\n'}: $before" >&2; exit 1 ;;
 esac
 echo "device: $before"
+# The bundle path defaults to dist/opendmd-<Cargo.toml version>.odfw, which
+# after a `make fw-release FW_VERSION=…` can be an old bundle; the device
+# installs an older one without asking (docs/ota.md), so ask here.
+have=$(printf '%s' "$before" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+if [ -n "$have" ] && [ "${OPENDMD_ALLOW_OLDER:-}" != 1 ] \
+   && [ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | tail -1)" = "$have" ]; then
+    echo "$bundle is '$want', not newer than the device's '$have': pass BUNDLE= or FW_VERSION=," >&2
+    echo "or OPENDMD_ALLOW_OLDER=1 to install it anyway" >&2
+    exit 2
+fi
 echo "pushing $bundle ($size B, version '$want') to http://$host/api/firmware"
 
 t0=$(date +%s.%N)
