@@ -474,7 +474,9 @@ updater:
 # A firmware update over WiFi (docs/ota.md): PUT the signed bundle to
 # /api/firmware, then wait for the device to come back running it.
 # make fw-ota HOST=opendmd.local [BUNDLE=dist/opendmd-<v>.odfw]; with an API
-# key set on the device, OPENDMD_API_KEY=<key> in the environment.
+# key set on the device, OPENDMD_API_KEY=<key> in the environment. A bundle
+# that is not newer than the device's firmware is refused here unless
+# OPENDMD_ALLOW_OLDER=1 (pass the FW_VERSION you released, or BUNDLE=).
 BUNDLE ?= $(FW_BUNDLE)
 fw-ota:
 	@test -n "$(HOST)" || { echo "usage: make fw-ota HOST=<ip-or-name> [BUNDLE=$(FW_BUNDLE)]"; exit 2; }
