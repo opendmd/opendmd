@@ -1014,6 +1014,7 @@ impl Req {
             recv_timeout: Duration::from_secs(RECV_TIMEOUT_S.into()),
             extra_headers: String::new(),
             responded: false,
+            read_failed: false,
         })
     }
 }
@@ -1023,6 +1024,9 @@ impl Req {
 const PENDING_MAX: usize = 128;
 /// How long a finished [`Upload`] waits for the client to close first.
 const UPLOAD_LINGER: Duration = Duration::from_secs(1);
+/// How long an [`Upload`] refused before its body was all in keeps reading
+/// (and dropping) the body after its reply, for the client to stop.
+const REFUSED_LINGER: Duration = Duration::from_secs(2);
 
 /// A taken-over session's `recv` while its buffered bytes are drained: never
 /// touch the socket (httpd then returns what it had buffered).
@@ -1088,6 +1092,18 @@ static TAKEN: Mutex<Vec<Taken>> = Mutex::new(Vec::new());
 /// [`Upload::start_clock`], however steadily a trickle keeps it alive. Every
 /// response closes the connection (`Connection: close`): it may be sent
 /// before the body is all in.
+///
+/// **A refusal goes out at once**, not after the body: a handler that
+/// answers before it has read everything (a bad signature at the bundle's
+/// 140-byte header, a pack header that is wrong, no card, …) simply replies
+/// and returns. curl stops sending when a 4xx/5xx arrives mid-upload and
+/// closes ("HTTP error before end of send, stop sending"); the drop then
+/// reads and discards whatever is still in flight for up to
+/// [`REFUSED_LINGER`], until the client's FIN, before it closes, because
+/// closing a socket with unread data makes lwip send a reset, which could
+/// overtake the reply. A client that keeps sending (a browser's XHR) gets
+/// that reset after [`REFUSED_LINGER`]; Chromium then reads the reply that
+/// came before it.
 pub struct Upload {
     fd: i32,
     method: &'static str,
@@ -1101,6 +1117,9 @@ pub struct Upload {
     recv_timeout: Duration,
     extra_headers: String,
     responded: bool,
+    /// A read failed (cut short, timed out, the client went): nothing more
+    /// will come worth waiting for.
+    read_failed: bool,
 }
 
 impl Upload {
@@ -1140,6 +1159,14 @@ impl Upload {
     /// Read up to `buf.len()` body bytes; `Ok(0)` once all `Content-Length`
     /// bytes are in. A failure is a [`BodyError`].
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let r = self.read_inner(buf);
+        if r.is_err() {
+            self.read_failed = true;
+        }
+        r
+    }
+
+    fn read_inner(&mut self, buf: &mut [u8]) -> Result<usize> {
         if self.received >= self.len || buf.is_empty() {
             return Ok(0);
         }
@@ -1208,6 +1235,12 @@ impl Upload {
         .into())
     }
 
+    /// Close at once when dropped, even after an early reply: for a refusal
+    /// made on the httpd task, which must not wait [`REFUSED_LINGER`].
+    pub fn no_linger(&mut self) {
+        self.read_failed = true;
+    }
+
     /// Append a response header (before the response).
     pub fn header(&mut self, field: &str, value: &str) {
         self.extra_headers.push_str(field);
@@ -1265,10 +1298,20 @@ impl Drop for Upload {
     /// for at most [`UPLOAD_LINGER`]; only an upload cut short — body bytes
     /// may still be arriving — is shut down at once.
     fn drop(&mut self) {
-        if self.responded && self.received >= self.len {
-            set_recv_timeout(self.fd, UPLOAD_LINGER);
-            let until = Instant::now() + UPLOAD_LINGER;
-            let mut sink = [0u8; 64];
+        let complete = self.received >= self.len;
+        if self.responded && (complete || !self.read_failed) {
+            // Complete: wait for the client's FIN. Refused early (see the
+            // type's docs): read off the rest of the body as it stops, so
+            // the close does not reset the connection under the reply.
+            let linger = if complete {
+                UPLOAD_LINGER
+            } else {
+                REFUSED_LINGER
+            };
+            set_recv_timeout(self.fd, linger);
+            let until = Instant::now() + linger;
+            let mut sink = [0u8; 256];
+            let mut dropped = 0usize;
             loop {
                 // SAFETY: a live buffer; the socket is ours.
                 let n = unsafe {
@@ -1277,6 +1320,18 @@ impl Drop for Upload {
                 if n <= 0 || Instant::now() >= until {
                     break;
                 }
+                dropped += n as usize;
+            }
+            if !complete {
+                log::info!(
+                    "{} {}: refused at {} of {} B; {dropped} B more read off before closing",
+                    self.method,
+                    self.path,
+                    self.received,
+                    self.len
+                );
+                // SAFETY: as below.
+                unsafe { sys::lwip_shutdown(self.fd, sys::SHUT_RDWR as i32) };
             }
         } else {
             // SAFETY: the socket is still open (see `Taken`): end the

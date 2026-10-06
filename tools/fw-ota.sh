@@ -6,10 +6,14 @@
 # PUTs the signed bundle (`make fw-release` writes dist/opendmd-<v>.odfw) to
 # /api/firmware and prints the reply. The device stages it on its card,
 # checks the signature, restarts into the updater, which installs it and
-# restarts into the new firmware (~20-40 s, the panel dark). This script
-# then polls GET /api/firmware until the version in the bundle's header
-# (bytes 8..40, NUL-padded) answers, and prints the device's last update
-# log line. OPENDMD_API_KEY=<key> when the player has an API key set: the
+# restarts into the new firmware (~45 s from the end of the upload to
+# playback, the panel dark). This script then polls GET /api/firmware until
+# its `version` (the app descriptor's, which the build's FW_VERSION sets and
+# the bundle's header carries) is the one in the bundle's header (bytes
+# 8..40, NUL-padded), and prints the device's answer with the end of its
+# update log. A bundle the device refuses (another key: at its header) is
+# answered at once, not after the upload. OPENDMD_API_KEY=<key> when the
+# player has an API key set: the
 # first GET /api/firmware reports a missing or wrong key in words (the PUT
 # is refused before its body is read, which curl reports only as
 # "Connection reset by peer").
@@ -50,7 +54,7 @@ t1=$(date +%s.%N)
 awk -v c="$code" -v a="$t0" -v b="$t1" -v r="$body" 'BEGIN { printf "HTTP %s in %.1f s: %s\n", c, b - a, r }'
 [ "$code" = 200 ] || exit 1
 
-echo "installing: waiting for the device to answer with '$want' (up to 180 s)"
+echo "installing: waiting for the device to answer with '$want' (~45 s, up to 180 s)"
 for _ in $(seq 1 60); do
     sleep 3
     info=$(curl -sS --max-time 3 "${auth[@]}" "http://$host/api/firmware" 2>/dev/null || true)

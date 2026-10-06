@@ -358,6 +358,8 @@ fn run(task: BootTask) {
         let _ = tx.send(Event::Ready(Box::new(handover)));
         let ready = t0.elapsed().as_millis();
         crate::www::init();
+        // A pack an update left on the card, when flash has none (`www.rs`).
+        crate::www::restore_from_card();
         start_network(net);
         log::info!(
             "boot: card handed over {ready} ms after the boot task started; boot task done in {} ms (stack {} B unused)",

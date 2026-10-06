@@ -93,8 +93,6 @@ use crate::state::{
     free_heap, largest_free_block, Applied, Command, IndexSource, PlayError, Status,
 };
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 /// True until the network worker is spawned: the heap is still whole, so the
 /// in-RAM fallback index may simply be attempted (it always fitted at boot).
 /// After that it is only attempted if the block it needs is really there.
@@ -207,11 +205,11 @@ fn main() -> Result<()> {
     // Synchronous until `logring::start` below, like EspLogger before it.
     logring::init();
 
-    // Two version strings on purpose: the crate's, and the one the bootloader
-    // recorded in `esp_app_desc_t` (`"<version> 4mb"` for a release image,
-    // `git describe` for a bench build).
+    // The version (`state::firmware_version`: the app descriptor's, which
+    // `FW_VERSION` sets) and the descriptor itself (`"<version> 4mb"`).
     log::info!(
-        "OpenDMD firmware v{VERSION} ({}, app desc '{}') — 128x32 HUB75 GIF player",
+        "OpenDMD firmware v{} ({}, app desc '{}') — 128x32 HUB75 GIF player",
+        state::firmware_version(),
         state::FLASH_VARIANT,
         state::running_version()
     );
@@ -361,7 +359,7 @@ fn main() -> Result<()> {
 
     // --- Shared state, and the boot task ----------------------------------
     let status = Arc::new(Mutex::new(Status::new(
-        VERSION,
+        state::firmware_version(),
         settings.hostname.clone(),
         epoch,
     )));

@@ -15,10 +15,14 @@
 //!
 //! **Updating it** is `PUT /api/www` with a whole pack ([`receive`]), on the
 //! stream task like every other upload. The header is read and checked
-//! before anything is erased. With a card in, the rest of the body is staged
-//! on the card and CRC-checked there while the old pack stays mapped, so a
-//! failed upload leaves the web app as it was; without one it is written as
-//! it arrives. Either way [`write_pack`] writes the header last: the body
+//! before anything is erased. With a card in, the whole pack is staged on
+//! the card and read back whole (size and CRC, every card read retried a
+//! few times) while the old pack stays mapped, so a failed upload, or a
+//! card that will not read it back, leaves the web app as it was; without
+//! one it is written as it arrives. If the write from the card still fails
+//! once the partition is erased, the checked copy stays on the card and the
+//! next boot writes it ([`restore_from_card`]). Either way [`write_pack`]
+//! writes the header last: the body
 //! from offset 64 (a 4 KB sector erased ahead of each write), its CRC read
 //! back through a fresh mapping, then the 64-byte header into the still
 //! erased bytes, so a header in flash always means a whole, verified pack.
@@ -114,7 +118,8 @@ static INFO: Mutex<Info> = Mutex::new(Info {
 });
 
 /// Whether this boot's last `PUT /api/www` was staged on the card:
-/// 0 none yet, 1 no (written to flash from the upload), 2 yes.
+/// 0 none yet (or the last one was refused before it got that far: at its
+/// header), 1 no (written to flash from the upload), 2 yes.
 static STAGED_LAST: AtomicU8 = AtomicU8::new(0);
 
 pub fn info() -> Info {
@@ -137,8 +142,8 @@ fn broken(error: String) -> Info {
 
 /// `{"version","bytes","entries","ok","error","staged"}` — `GET /api/www`,
 /// `PUT /api/www`'s reply, and the `www` object in `/api/status`. `staged`:
-/// whether this boot's last update was staged on the card first (null:
-/// none since boot).
+/// whether this boot's last update attempt was staged on the card first
+/// (null: none since boot, or the last one was refused at its header).
 pub fn info_json() -> String {
     let i = info();
     format!(
@@ -339,43 +344,155 @@ pub fn unavailable(req: &mut Req, why: &str) -> Result<()> {
     )
 }
 
-/// Where `PUT /api/www` stages a pack on the card before it touches flash.
+/// Where `PUT /api/www` stages a pack on the card before it touches flash:
+/// the whole pack, header included, so a copy kept after a failed write can
+/// be checked and written again at the next boot ([`restore_from_card`]).
 const STAGED: &str = "/sdcard/update/www.pack.part";
+
+/// One update at a time: `PUT /api/www` and the boot-time restore both
+/// read and write [`STAGED`].
+static UPDATE: Mutex<()> = Mutex::new(());
 
 /// Why writing a pack failed: the message, and the status to answer (none
 /// when the client has gone).
 type Failure = (String, Option<(u16, &'static str)>);
 
+const INTERNAL: Option<(u16, &str)> = Some((500, "500 Internal Server Error"));
+
+/// The staged pack on the card, read by offset. **A read the card fails is
+/// tried again** ([`config::WWW_CARD_READ_TRIES`] in all, a pause between):
+/// a 64 GB card at 40 MHz failed one 4 KB read with a data CRC error in a
+/// pass that read the rest fine. FATFS remembers a disk error in the open
+/// file (`FIL.err`) and fails every later call on it, so each retry opens
+/// the file again and seeks. One open file and the caller's buffer: no heap
+/// of its own beyond FATFS's per-file state.
+struct Staged {
+    file: Option<std::fs::File>,
+    /// Where the open file's position is.
+    pos: u64,
+    /// Reads that needed more than one attempt.
+    retried: u32,
+}
+
+impl Staged {
+    fn new() -> Staged {
+        Staged {
+            file: None,
+            pos: 0,
+            retried: 0,
+        }
+    }
+
+    fn try_read(&mut self, off: u64, out: &mut [u8]) -> std::io::Result<()> {
+        use std::io::{Read, Seek, SeekFrom};
+        let f = match &mut self.file {
+            Some(f) => f,
+            None => {
+                self.pos = 0;
+                self.file.insert(std::fs::File::open(STAGED)?)
+            }
+        };
+        if self.pos != off {
+            f.seek(SeekFrom::Start(off))?;
+            self.pos = off;
+        }
+        f.read_exact(out)?;
+        self.pos += out.len() as u64;
+        Ok(())
+    }
+
+    /// Fill `out` from byte `off` of the staged pack.
+    fn read_at(&mut self, off: usize, out: &mut [u8]) -> std::result::Result<(), String> {
+        let tries = config::WWW_CARD_READ_TRIES;
+        let mut attempt = 1;
+        loop {
+            let err = match self.try_read(off as u64, out) {
+                Ok(()) => {
+                    if attempt > 1 {
+                        self.retried += 1;
+                        log::info!("www: the staged pack at byte {off} read on attempt {attempt}");
+                    }
+                    return Ok(());
+                }
+                Err(e) => e,
+            };
+            // The handle is poisoned (see above): open it again next time.
+            self.file = None;
+            if attempt >= tries {
+                // One failure for the card's health count, however many
+                // attempts it took: retries are not more evidence.
+                crate::sdhealth::read_failed(crate::sdhealth::Kind::Serve, true, STAGED, &err);
+                return Err(format!(
+                    "reading the staged pack from the card at byte {off} failed {tries} times: {err}"
+                ));
+            }
+            log::warn!(
+                "www: reading the staged pack at byte {off} failed (attempt {attempt} of {tries}): {err}; trying again"
+            );
+            std::thread::sleep(config::WWW_CARD_RETRY_PAUSE * attempt);
+            attempt += 1;
+        }
+    }
+
+    /// The whole staged pack read back and checked against `header`: its
+    /// size, and the CRC of everything after the header.
+    fn check(&mut self, header: &Header, buf: &mut [u8]) -> std::result::Result<(), Unfit> {
+        let len = header.total_len as usize;
+        let size = std::fs::metadata(STAGED)
+            .map_err(|e| Unfit::Unreadable(format!("{STAGED}: {e}")))?
+            .len();
+        if size != len as u64 {
+            return Err(Unfit::Bad(format!("{size} B staged, the pack is {len} B")));
+        }
+        let crc = crc_of(|off, out| self.read_at(off, out), len, buf).map_err(Unfit::Unreadable)?;
+        if crc != header.crc32 {
+            return Err(Unfit::Bad(format!(
+                "CRC mismatch: the header says {:08x}, the staged pack is {crc:08x}",
+                header.crc32
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Why a staged pack cannot be written.
+enum Unfit {
+    /// It is not the pack its header describes (the client's fault: 422).
+    Bad(String),
+    /// The card would not read it back (the device's: 500).
+    Unreadable(String),
+}
+
 /// Where the body after the header comes from: the connection itself, or
 /// the copy staged on the card.
 enum Body<'a> {
     Upload(&'a mut Upload),
-    Card(std::fs::File),
+    Card(Staged),
 }
 
 impl Body<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::result::Result<usize, Failure> {
+    /// Up to `buf.len()` bytes of the pack from offset `off` (the next
+    /// bytes, for an upload).
+    fn read(&mut self, off: usize, buf: &mut [u8]) -> std::result::Result<usize, Failure> {
         match self {
             Body::Upload(up) => up.read(buf).map_err(|e| {
                 let status = e.downcast_ref::<BodyError>().and_then(|b| b.status);
                 (format!("{e:#}"), status)
             }),
-            Body::Card(f) => std::io::Read::read(f, buf).map_err(|e| {
-                (
-                    format!("reading the staged pack from the card: {e}"),
-                    Some((500, "500 Internal Server Error")),
-                )
-            }),
+            Body::Card(staged) => staged
+                .read_at(off, buf)
+                .map(|()| buf.len())
+                .map_err(|e| (e, INTERNAL)),
         }
     }
 }
 
 /// CRC-32 of the `len - HEADER_LEN` bytes after the header, from `read`.
-fn crc_of(
-    mut read: impl FnMut(usize, &mut [u8]) -> std::result::Result<(), Failure>,
+fn crc_of<E>(
+    mut read: impl FnMut(usize, &mut [u8]) -> std::result::Result<(), E>,
     len: usize,
     buf: &mut [u8],
-) -> std::result::Result<u32, Failure> {
+) -> std::result::Result<u32, E> {
     let mut crc = opendmd_core::www_pack::Crc32::new();
     let mut off = HEADER_LEN;
     while off < len {
@@ -404,12 +521,12 @@ fn write_pack(
     body: &mut Body,
     buf: &mut [u8],
 ) -> std::result::Result<(), Failure> {
-    let flash_fail = |what: String| (what, Some((500u16, "500 Internal Server Error")));
+    let flash_fail = |what: String| (what, INTERNAL);
     let mut off = HEADER_LEN;
     let mut erased = 0usize;
     while off < len {
         let want = (len - off).min(buf.len());
-        let n = body.read(&mut buf[..want])?;
+        let n = body.read(off, &mut buf[..want])?;
         if n == 0 {
             return Err((
                 format!("the body ended at {off} of {len} B"),
@@ -499,19 +616,19 @@ fn write_pack(
     Ok(())
 }
 
-/// Receive the body after the header onto the card, and check its CRC
-/// there. `Ok(Err(why))`: the staging file could not be created (write
-/// straight to flash instead). `Ok(Ok(file))`: staged and good, rewound.
-/// `Err`: answered (or the client went away); the web app in flash is
-/// untouched.
+/// Receive the whole pack onto the card ([`STAGED`], the header first) and
+/// read it back, checking its size and CRC, retrying what the card fails
+/// to read ([`Staged::read_at`]). `Ok(Err(why))`: the staging file could
+/// not be created (write straight to flash instead). `Ok(Ok(staged))`:
+/// staged and good. `Err`: answered (or the client went away); nothing in
+/// flash has been touched.
 #[allow(clippy::type_complexity)]
 fn stage_on_card(
     up: &mut Upload,
+    head: &[u8; HEADER_LEN],
     header: &Header,
-    len: usize,
     buf: &mut [u8],
-) -> std::result::Result<std::result::Result<std::fs::File, String>, Result<()>> {
-    use std::io::{Read, Seek};
+) -> std::result::Result<std::result::Result<Staged, String>, Result<()>> {
     let dir = format!("{}/update", config::SD_MOUNT);
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return Ok(Err(format!("{dir}: {e}")));
@@ -522,40 +639,37 @@ fn stage_on_card(
     log::info!(
         "www: staging on the card ({STAGED}), the web app in flash stays until the pack checks out"
     );
-    if let Err(e) = files::stream_body_to(up, STAGED) {
-        // Logged and removed by stream_body_to; the caller of `receive`
+    if let Err(e) = files::stream_body_after(up, STAGED, head) {
+        // Logged and removed by stream_body_after; the caller of `receive`
         // answers an `UploadAborted` with its status.
         return Err(Err(e));
     }
-    let checked = (|| -> std::result::Result<std::fs::File, String> {
-        let mut f = std::fs::File::open(STAGED).map_err(|e| e.to_string())?;
-        let got = f.metadata().map_err(|e| e.to_string())?.len() as usize + HEADER_LEN;
-        if got != len {
-            return Err(format!("{got} B staged, the pack is {len} B"));
+    let t = Instant::now();
+    let mut staged = Staged::new();
+    match staged.check(header, buf) {
+        Ok(()) => {
+            log::info!(
+                "www: the staged pack checks out (read back in {} ms{})",
+                t.elapsed().as_millis(),
+                match staged.retried {
+                    0 => String::new(),
+                    1 => ", 1 read needed another attempt".to_string(),
+                    n => format!(", {n} reads needed another attempt"),
+                }
+            );
+            Ok(Ok(staged))
         }
-        let crc = crc_of(
-            |_, out| f.read_exact(out).map_err(|e| (e.to_string(), None)),
-            len,
-            buf,
-        )
-        .map_err(|(e, _)| e)?;
-        if crc != header.crc32 {
-            return Err(format!(
-                "CRC mismatch: the header says {:08x}, the pack is {crc:08x}",
-                header.crc32
-            ));
-        }
-        f.rewind().map_err(|e| e.to_string())?;
-        Ok(f)
-    })();
-    match checked {
-        Ok(f) => Ok(Ok(f)),
-        Err(why) => {
+        Err(unfit) => {
+            drop(staged);
             let _ = std::fs::remove_file(STAGED);
+            let (code, line, why) = match unfit {
+                Unfit::Bad(why) => (422, "422 Unprocessable Entity", why),
+                Unfit::Unreadable(why) => (500, "500 Internal Server Error", why),
+            };
             log::warn!("PUT /api/www: refused, the web app in flash is unchanged: {why}");
             Err(up.error(
-                422,
-                "422 Unprocessable Entity",
+                code,
+                line,
                 &format!("{why}; the web app in flash is unchanged"),
             ))
         }
@@ -566,17 +680,26 @@ fn stage_on_card(
 /// and serve it.
 ///
 /// **With a card** (`no_card` is `None`: mounted and readable), the pack is
-/// received onto the card first (`/update/www.pack.part`) and its CRC
-/// checked there, while the old pack stays mapped: an upload cut short, or a file that is not a good
-/// pack, is answered (408, 422, …) with the web app in flash untouched.
-/// Only then is the old pack unmapped and the partition rewritten from the
-/// card, ~3 s, header last ([`write_pack`]). **Without a card**, the body is
-/// written to flash as it arrives (header last as well), so a failure in
-/// the middle leaves no web app until a good pack is written; so does a
-/// card on which the staging file cannot be created (logged with the
-/// reason). The reply's `staged` says which it was. Either way the header
-/// is checked before anything happens (400).
+/// received onto the card first (`/update/www.pack.part`) and read back
+/// whole, its size and CRC checked, while the old pack stays mapped: an
+/// upload cut short, a file that is not a good pack, or a card that will
+/// not read it back (after retries) is answered (408, 422, 500, …) with the
+/// web app in flash untouched. Only then is the old pack unmapped and the
+/// partition rewritten from the card, ~3 s, header last ([`write_pack`]),
+/// each card read retried as in the check. If that still fails, the whole
+/// write is tried once more from the start; if that fails too, the
+/// verified copy stays on the card and the next boot writes it
+/// ([`restore_from_card`]). **Without a card**, the body is written to
+/// flash as it arrives (header last as well), so a failure in the middle
+/// leaves no web app until a good pack is written; so does a card on which
+/// the staging file cannot be created (logged with the reason). The reply's
+/// `staged` says which it was. Either way the header is checked before
+/// anything happens (400).
 pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
+    let _one = UPDATE.lock().unwrap_or_else(|p| p.into_inner());
+    // `staged` describes this attempt from here on: null until it gets as
+    // far as choosing.
+    STAGED_LAST.store(0, Relaxed);
     let card_mounted = no_card.is_none();
     let Some(part) = partition() else {
         return up.error(
@@ -634,18 +757,16 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
 
     let started = Instant::now();
     let staged = if card_mounted {
-        match stage_on_card(up, &header, len, &mut buf) {
+        STAGED_LAST.store(2, Relaxed);
+        match stage_on_card(up, &head, &header, &mut buf) {
             Ok(f) => f,
-            Err(answered) => {
-                STAGED_LAST.store(2, Relaxed);
-                return answered;
-            }
+            Err(answered) => return answered,
         }
     } else {
         Err(no_card.unwrap_or("no card").to_string())
     };
     let staged = match staged {
-        Ok(f) => Some(f),
+        Ok(s) => Some(s),
         Err(why) => {
             let line = format!("www: no card staging ({why}): writing to flash from the upload, the old web app is replaced during the transfer");
             if card_mounted {
@@ -659,7 +780,7 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
     let from_card = staged.is_some();
     STAGED_LAST.store(if from_card { 2 } else { 1 }, Relaxed);
     let mut body = match staged {
-        Some(f) => Body::Card(f),
+        Some(s) => Body::Card(s),
         None => Body::Upload(&mut *up),
     };
 
@@ -670,30 +791,55 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
         error: Some("the web app is being updated; reload in a moment".into()),
         ..broken(String::new())
     });
-    let written = write_pack(part, &head, &header, len, &mut body, &mut buf);
+    let mut written = write_pack(part, &head, &header, len, &mut body, &mut buf);
     drop(body);
-    drop(buf);
     if from_card {
-        let _ = std::fs::remove_file(STAGED);
+        if let Err((why, _)) = &written {
+            // The partition is erased by now. The copy on the card checked
+            // out a moment ago, so try the whole write once more before
+            // giving up on it.
+            log::warn!(
+                "PUT /api/www: writing the pack from the card failed after {:.1} s ({why}); writing it again from the start",
+                started.elapsed().as_secs_f32()
+            );
+            std::thread::sleep(config::WWW_CARD_RETRY_PAUSE * config::WWW_CARD_READ_TRIES);
+            written = write_pack(
+                part,
+                &head,
+                &header,
+                len,
+                &mut Body::Card(Staged::new()),
+                &mut buf,
+            );
+        }
     }
+    drop(buf);
 
     if let Err((why, status)) = written {
         log::warn!(
             "PUT /api/www: writing the pack failed after {:.1} s ({}): {why}",
             started.elapsed().as_secs_f32(),
             if from_card {
-                "from the card"
+                "from the card; the checked copy stays there and is written at the next boot"
             } else {
                 "from the upload"
             }
         );
-        set_info(broken(format!(
-            "the last web app update failed ({why}): `make www-push` again"
-        )));
+        let error = if from_card {
+            format!(
+                "the last web app update failed while writing it to flash ({why}); the checked pack stays on the card and is written at the next restart, or `make www-push` again"
+            )
+        } else {
+            format!("the last web app update failed ({why}): `make www-push` again")
+        };
+        set_info(broken(error.clone()));
         return match status {
-            Some((code, line)) => up.error(code, line, &why),
+            Some((code, line)) => up.error(code, line, &error),
             None => Ok(()),
         };
+    }
+    if from_card {
+        let _ = std::fs::remove_file(STAGED);
     }
 
     let written_s = started.elapsed().as_secs_f32();
@@ -716,6 +862,76 @@ pub fn receive(up: &mut Upload, no_card: Option<&'static str>) -> Result<()> {
             drop(map);
             set_info(broken(e.clone()));
             up.error(422, "422 Unprocessable Entity", &e)
+        }
+    }
+}
+
+/// At boot, once the card is mounted and [`init`] has looked at the flash:
+/// a pack staged on the card is left there only when a `PUT /api/www`
+/// failed after it had erased the partition (see [`receive`]). With no good
+/// pack in flash it is checked (size, CRC) and written, as `PUT` would;
+/// otherwise it is stale and removed. On the boot task (CPU0); the erase
+/// pauses are the same. Never fails the boot.
+pub fn restore_from_card() {
+    if std::fs::metadata(STAGED).is_err() {
+        return;
+    }
+    if info().ok {
+        let _ = std::fs::remove_file(STAGED);
+        log::info!("www: removed a staged pack left on the card (the web app in flash is good)");
+        return;
+    }
+    let _one = UPDATE.lock().unwrap_or_else(|p| p.into_inner());
+    let t = Instant::now();
+    // `Unfit::Bad`: the file goes; anything else, it stays for next time.
+    let restored = (|| -> std::result::Result<String, Unfit> {
+        let part = partition().ok_or(Unfit::Unreadable("no www partition".into()))?;
+        let mut buf =
+            files::chunk_buffer().ok_or(Unfit::Unreadable("no heap for a buffer".into()))?;
+        let mut staged = Staged::new();
+        let mut head = [0u8; HEADER_LEN];
+        staged.read_at(0, &mut head).map_err(Unfit::Unreadable)?;
+        let header =
+            Header::parse(&head).map_err(|e| Unfit::Bad(format!("not a www pack: {e}")))?;
+        let len = header.total_len as usize;
+        if len > part.size as usize {
+            return Err(Unfit::Bad(format!(
+                "{len} B, the partition is {} B",
+                part.size
+            )));
+        }
+        log::warn!(
+            "www: no web app in flash, and pack '{}' ({len} B) staged on the card by an update that failed: checking it",
+            header.version()
+        );
+        staged.check(&header, &mut buf)?;
+        let mut map = MAP.lock().unwrap_or_else(|p| p.into_inner());
+        *map = None;
+        write_pack(part, &head, &header, len, &mut Body::Card(staged), &mut buf)
+            .map_err(|(why, _)| Unfit::Unreadable(why))?;
+        let (mapping, info) = load().map_err(Unfit::Unreadable)?;
+        *map = Some(mapping);
+        drop(map);
+        let v = info.version.clone().unwrap_or_default();
+        set_info(info);
+        Ok(v)
+    })();
+    match restored {
+        Ok(v) => {
+            let _ = std::fs::remove_file(STAGED);
+            log::info!(
+                "www: pack '{v}' written from the card in {:.1} s; the web app is back",
+                t.elapsed().as_secs_f32()
+            );
+        }
+        Err(Unfit::Bad(why)) => {
+            let _ = std::fs::remove_file(STAGED);
+            log::warn!("www: the pack staged on the card is not usable ({why}); removed it");
+        }
+        Err(Unfit::Unreadable(why)) => {
+            log::warn!(
+                "www: the pack staged on the card could not be written ({why}); it stays for the next boot"
+            );
         }
     }
 }

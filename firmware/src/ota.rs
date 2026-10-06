@@ -49,6 +49,8 @@ const PENDING: &str = "/sdcard/update/pending.txt";
 const LOG: &str = "/sdcard/update/log.txt";
 /// The longest `last` line `GET /api/firmware` reports.
 const LAST_MAX: usize = 200;
+/// The most of the log's end `GET /api/firmware` reports as `log`.
+const LOG_TAIL: usize = 1024;
 
 fn app_partition(subtype: sys::esp_partition_subtype_t) -> Option<&'static sys::esp_partition_t> {
     // SAFETY: a read-only query of the partition table; the entry lives for
@@ -131,16 +133,16 @@ fn check_header(
     Ok(meta)
 }
 
-/// Refuse the bundle: the rest of the body is read and dropped first, so the
-/// client (a browser's XHR in particular) gets the 422 rather than a reset.
+/// Refuse the bundle: 422 at once, however much of the body is still to
+/// come (a wrong key is known at the 140-byte header). The [`Upload`] reads
+/// off what the client still sends while it stops, then closes (see there).
 fn refuse(up: &mut Upload, why: &str) -> Result<()> {
-    log::warn!("PUT /api/firmware: refused: {why}");
-    let mut sink = [0u8; 512];
-    while let Ok(n) = up.read(&mut sink) {
-        if n == 0 {
-            break;
-        }
-    }
+    log::warn!(
+        "PUT /api/firmware: refused at {} of {} B after {:.1} s: {why}",
+        up.received(),
+        up.content_len(),
+        up.elapsed().as_secs_f32()
+    );
     up.error(422, "422 Unprocessable Entity", why)
 }
 
@@ -327,16 +329,28 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
     crate::http::reboot_after_response()
 }
 
-/// The last line of `/update/log.txt`, at most [`LAST_MAX`] bytes.
-fn last_log_line() -> Option<String> {
+/// The end of `/update/log.txt`: at most [`LOG_TAIL`] bytes, from the
+/// first whole line in them. One small read on the card.
+fn log_tail() -> Option<String> {
     let mut f = fs::File::open(LOG).ok()?;
     let size = f.seek(SeekFrom::End(0)).ok()?;
-    let from = size.saturating_sub(LAST_MAX as u64 + 2);
+    let from = size.saturating_sub(LOG_TAIL as u64);
     f.seek(SeekFrom::Start(from)).ok()?;
     let mut tail = Vec::with_capacity((size - from) as usize);
-    f.take(LAST_MAX as u64 + 2).read_to_end(&mut tail).ok()?;
+    f.take(LOG_TAIL as u64).read_to_end(&mut tail).ok()?;
     let text = String::from_utf8_lossy(&tail);
-    text.lines()
+    // A cut first line is dropped, unless it is all there is.
+    let text = match (from > 0, text.find('\n')) {
+        (true, Some(i)) if i + 1 < text.len() => &text[i + 1..],
+        _ => &text[..],
+    };
+    let text = text.trim_end();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// The last line of a [`log_tail`], at most [`LAST_MAX`] characters.
+fn last_line(tail: &str) -> Option<String> {
+    tail.lines()
         .rev()
         .find(|l| !l.trim().is_empty())
         .map(|l| l.chars().take(LAST_MAX).collect())
@@ -348,22 +362,25 @@ fn pending_version() -> Option<String> {
     (!v.is_empty() && v.len() <= 32).then(|| v.to_string())
 }
 
-/// `GET /api/firmware`: `{"version","build","variant","pending","last"}`.
-/// Reads two small files on the card when it is mounted.
+/// `GET /api/firmware`: `{"version","build","variant","pending","last","log"}`.
+/// Reads two small files on the card when it is mounted (at most
+/// [`LOG_TAIL`] bytes of the log).
 pub fn info_json(card_mounted: bool) -> String {
-    let (pending, last) = if card_mounted {
-        (pending_version(), last_log_line())
+    let (pending, log) = if card_mounted {
+        (pending_version(), log_tail())
     } else {
         (None, None)
     };
+    let last = log.as_deref().and_then(last_line);
     let opt = |v: Option<String>| v.as_deref().map_or_else(|| "null".into(), json_string);
     format!(
-        r#"{{"version":{},"build":{},"variant":{},"pending":{},"last":{}}}"#,
-        json_string(env!("CARGO_PKG_VERSION")),
+        r#"{{"version":{},"build":{},"variant":{},"pending":{},"last":{},"log":{}}}"#,
+        json_string(crate::state::firmware_version()),
         json_string(&crate::state::running_version()),
         json_string(crate::state::FLASH_VARIANT),
         opt(pending),
         opt(last),
+        opt(log),
     )
 }
 
@@ -384,13 +401,13 @@ pub fn after_boot() {
             done.push((name.clone(), v.to_string()));
         }
     }
-    let running = env!("CARGO_PKG_VERSION");
+    let running = crate::state::firmware_version();
     for (name, v) in &done {
         if v == running {
             log::info!("firmware updated over the LAN to {v} (the updater installed it)");
         } else {
             log::warn!(
-                "the updater installed {v}, but this firmware is {running} (a version string that does not match Cargo.toml?)"
+                "the updater installed {v}, but this firmware is {running} (the bundle's version is not the one its image was built with: FW_VERSION?)"
             );
         }
         log_line(&format!("booted after the updater installed {v}"));
@@ -413,6 +430,5 @@ pub fn after_boot() {
         let _ = fs::remove_file(PENDING);
     }
     let _ = fs::remove_file(BUNDLE_PART);
-    // A web app upload staged on the card and never written (`www.rs`).
-    let _ = fs::remove_file(format!("{dir}/www.pack.part"));
+    // A web app pack staged on the card is `www::restore_from_card`'s.
 }

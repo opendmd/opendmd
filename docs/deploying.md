@@ -307,9 +307,13 @@ device receives the bundle onto the card (`/update/opendmd.bin`), checks
 it (its header, that it fits, the ESP image magic, the SHA-256 and the
 Ed25519 signature against the key compiled into the running firmware;
 anything wrong is a 422 and nothing changes), restarts into the updater,
-which copies it into `factory` and restarts into the new firmware: ~20-40 s
-with the panel dark. `GET /api/firmware` then reports the new version;
-`/update/log.txt` on the card has every step. If the updater cannot finish
+which copies it into `factory` and restarts into the new firmware: ~45 s
+from the end of the upload to playback, with the panel dark. `GET
+/api/firmware` then reports the new version; `/update/log.txt` on the card
+has every step, and its end is `log` in `GET /api/firmware` (the Firmware
+card's "Update log"). A bundle signed with another key is refused with a
+422 as soon as its header is in. An older version is installed too (the
+web app asks first). If the updater cannot finish
 (the card pulled mid-copy), it keeps retrying from the card every 10 s with
 the LED blinking fast; put the card back. `docs/ota.md` has the details.
 The web app is separate: push it too when the API changed

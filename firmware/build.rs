@@ -30,6 +30,16 @@ fn main() {
     println!("cargo:rustc-env=OPENDMD_FLASH_VARIANT={variant}");
     println!("cargo:rerun-if-env-changed=OPENDMD_FLASH_VARIANT");
 
+    // The firmware's version: the Makefile's FW_VERSION (which also goes
+    // into the app descriptor), else the crate's. `state::firmware_version`
+    // reads the descriptor and falls back to this; the setup page shows it.
+    let version = std::env::var("OPENDMD_FW_VERSION")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap_or_default());
+    println!("cargo:rustc-env=OPENDMD_FW_VERSION={version}");
+    println!("cargo:rerun-if-env-changed=OPENDMD_FW_VERSION");
+
     // Dev convenience for the test rig, `dev-credentials` feature only:
     // `firmware/.env` (gitignored, see `.env.example`) is exported by the
     // Makefile's bench targets, and these become `option_env!` values that seed
@@ -58,10 +68,7 @@ fn main() {
     tera.add_raw_template("setup", &raw)
         .expect("parsing web/setup.html");
     let mut ctx = Context::new();
-    ctx.insert(
-        "version",
-        &std::env::var("CARGO_PKG_VERSION").unwrap_or_default(),
-    );
+    ctx.insert("version", &version);
     ctx.insert("variant", &variant);
     let html = tera
         .render("setup", &ctx)

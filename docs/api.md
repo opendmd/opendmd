@@ -571,7 +571,8 @@ Its files are served at `/…` and `/www/…`.
 `{"version","bytes","entries","ok","error","staged"}`: the pack's version
 (`git describe` of its build), size, file count, whether it verified, why
 not (`error`: erased, damaged, an update cut short, being written), and
-whether the last update since boot was staged on the card (null: none).
+whether the last update attempt since boot was staged on the card (null:
+none, or the last one was refused at its header).
 
 ```sh
 curl -s $DMD/api/www
@@ -581,10 +582,14 @@ curl -s $DMD/api/www
 
 Write a new pack (the whole file). Its header is checked before anything
 is erased: not a pack, an unknown format, or a length that is not the
-body's is a `400`, and the app in flash stays. With a card in, it is
-staged and CRC-checked on the card first, so a `408` (cut short) or `422`
-(bad CRC) leaves the old app in place. Then it is written to flash (~7 s
-for 800 KB in all) and served at once; no reboot. Without a card (or one
+body's is a `400` (sent at once, before the rest of the body), and the app
+in flash stays. With a card in, it is staged on the card and read back
+whole first (size and CRC; a read the card fails is retried), so a `408`
+(cut short), `422` (bad CRC) or `500` (the card would not read it back)
+leaves the old app in place. Then it is written to flash from the card
+(~7 s for 800 KB in all) and served at once; no reboot. If that write
+still fails (a `500`), pages are `503` and the checked pack stays on the
+card: the next restart writes it, or push again. Without a card (or one
 that cannot be written), after a `408`/`422` pages are `503` until a good
 pack is written.
 
@@ -605,10 +610,12 @@ staged on the card, checked and installed (`docs/ota.md`). Needs a card.
 
 ### GET /api/firmware
 
-`{"version","build","variant","pending","last"}`: the running firmware
-(`build`: its image's version, `"<version> 4mb"`), a staged update not yet
-installed (or null), the last line of the card's `/update/log.txt` (or
-null).
+`{"version","build","variant","pending","last","log"}`: the running
+firmware's version (the one a bundle for it carries, also `version` in
+`/api/status`; `build`: its image's descriptor, `"<version> 4mb"`), a
+staged update not yet installed (or null), the last line of the card's
+`/update/log.txt` and its end (`log`: at most 1 KB of whole lines, what
+the firmware and the updater wrote; both null without a card or a log).
 
 ```sh
 curl -s $DMD/api/firmware
@@ -618,9 +625,14 @@ curl -s $DMD/api/firmware
 
 The bundle as the body (`411` no length, `413` too big). Its header, size,
 SHA-256 and Ed25519 signature are checked: a failure is a `422` with the
-reason and nothing is staged; cut short `408`; no card `503`. Then
-`{"ok":true,"version":"…","rebooting":true}`, and the panel is dark for
-~20-40 s while it installs.
+reason and nothing is staged; cut short `408`; no card `503`. The
+signature is checked when the 140-byte header is in, so a bundle signed
+with another key is refused then, without waiting for the rest of the
+body (curl stops sending; the device reads off what is in flight for up
+to 2 s before it closes). Any validly signed bundle is accepted, older
+versions too. Then `{"ok":true,"version":"…","rebooting":true}`, and the
+panel is dark for ~45 s (from the end of the upload to playback) while it
+installs.
 
 ```sh
 curl -s -X PUT --data-binary @dist/opendmd-0.4.0.odfw $DMD/api/firmware

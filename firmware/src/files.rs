@@ -503,6 +503,12 @@ pub fn remove_index_beside(manifest: &str) -> Result<()> {
 /// upload aborted at <received> of <Content-Length> B after <s> s: <why>`),
 /// and the error is an [`UploadAborted`] carrying what to answer.
 pub fn stream_body_to(up: &mut Upload, temp: &str) -> Result<()> {
+    stream_body_after(up, temp, &[])
+}
+
+/// [`stream_body_to`], with `prefix` written to the file first (bytes of the
+/// body the caller has already read: `www::receive`'s pack header).
+pub fn stream_body_after(up: &mut Upload, temp: &str, prefix: &[u8]) -> Result<()> {
     if let Some(parent) = Path::new(temp).parent() {
         fs::create_dir_all(parent)?;
     }
@@ -520,6 +526,15 @@ pub fn stream_body_to(up: &mut Upload, temp: &str) -> Result<()> {
         .into());
     };
     let mut file = fs::File::create(temp)?;
+    if let Err(e) = file.write_all(prefix) {
+        drop(file);
+        let _ = fs::remove_file(temp);
+        log::warn!("{} {}: {temp}: {e}", up.method(), up.path());
+        return Err(UploadAborted {
+            status: Some((500, "500 Internal Server Error")),
+        }
+        .into());
+    }
     let outcome = loop {
         let n = match up.read(&mut buf) {
             Ok(0) => {
