@@ -28,8 +28,10 @@
 //! works, then builds and hands over as above. A card that mounts but whose
 //! filesystem cannot be read (`sd::probe`: exFAT) is treated the same way
 //! — never handed over, the status card says so — and is unmounted and
-//! mounted again every `SD_REMOUNT_INTERVAL` (60 s) to notice a swap. It exits after the
-//! handover; its stack goes back to the heap.
+//! mounted again every `SD_REMOUNT_INTERVAL` (60 s) to notice a swap — or,
+//! asked over HTTP (`POST /api/card/format`, [`request_format`]), unmounted,
+//! formatted FAT32 (`sd::SdBus::format`) and mounted again at once. It exits
+//! after the handover; its stack goes back to the heap.
 //!
 //! **Who touches the card when.** Until the handover the display loop does
 //! not touch the card at all (`CARD_READY` is false: every rebuild, set
@@ -49,7 +51,7 @@ use opendmd_core::engine::Catalog;
 use opendmd_core::overrides::Overrides;
 use std::fs::File;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -124,6 +126,42 @@ pub fn spawn(task: BootTask) -> Result<()> {
     Ok(())
 }
 
+/// A format asked for over HTTP, which ends the remount loop's wait at once.
+static FORMAT_ASKED: Mutex<bool> = Mutex::new(false);
+static FORMAT_WAKE: Condvar = Condvar::new();
+
+/// Ask for the unreadable card to be formatted (`POST /api/card/format`).
+/// The caller has already set `Status::sd_formatting`, under the status
+/// lock and with the check that this card may be formatted
+/// (`opendmd_core::card::may_format`); the remount loop below does it
+/// and clears the flag. Only that loop holds an unreadable card, so a
+/// request can only be accepted while it runs.
+pub fn request_format() {
+    *FORMAT_ASKED.lock().unwrap() = true;
+    FORMAT_WAKE.notify_one();
+}
+
+/// The remount loop's wait: `interval`, or less if a format is asked for
+/// (true).
+fn wait_for_format(interval: Duration) -> bool {
+    let asked = FORMAT_ASKED.lock().unwrap();
+    let (mut asked, _) = FORMAT_WAKE
+        .wait_timeout_while(asked, interval, |a| !*a)
+        .unwrap();
+    std::mem::take(&mut *asked)
+}
+
+/// A format asked for is over (done, failed, or nothing left to format):
+/// status says so, with `error` why it failed. Nothing changes when none
+/// was asked for.
+fn format_over(status: &Mutex<Status>, error: Option<String>) {
+    let mut s = status.lock().unwrap();
+    if s.sd_formatting {
+        s.sd_formatting = false;
+        s.sd_format_error = error;
+    }
+}
+
 /// The card's fields in status, after a mount attempt: `card` mounted,
 /// `readable` its filesystem answered [`crate::sd::probe`].
 fn publish(
@@ -183,8 +221,8 @@ fn mount(
             if !same {
                 log::warn!(
                     "microSD: card {:#010x} mounted, but its filesystem cannot be read ({e}): {}. \
-                     exFAT (a 64 GB card as sold) is not supported. Not playing from it; \
-                     trying it again every {} s",
+                     exFAT (a 64 GB card as sold) is not supported; POST /api/card/format \
+                     makes it FAT32. Not playing from it; trying it again every {} s",
                     card.serial,
                     config::SD_UNREADABLE,
                     config::SD_REMOUNT_INTERVAL.as_secs()
@@ -192,6 +230,71 @@ fn mount(
             }
             Mount::Unreadable(card)
         }
+    }
+}
+
+/// The format asked for over HTTP: the unreadable `card` unmounted,
+/// formatted ([`SdBus::format`]) and mounted again as any card is. A card
+/// that then mounts gets what a fresh card needs. Returns the mount, and
+/// why the format failed if it did.
+fn format(
+    bus: &mut SdBus,
+    health: &sdhealth::Boot,
+    nvs: &EspDefaultNvsPartition,
+    card: SdCard,
+) -> (Mount, Option<String>) {
+    log::warn!(
+        "microSD: formatting card {:#010x} ({:.2} GB) FAT32, as asked over HTTP; everything on it is erased",
+        card.serial,
+        card.capacity_bytes as f64 / 1e9
+    );
+    // Dropping it unmounts: `/sdcard` leaves the VFS, so no other task can
+    // reach the card while it is formatted.
+    drop(card);
+    // (Not `heap_caps_monitor_local_minimum_free_size_*` for the low-water:
+    // its restore takes each heap region's minimum separately, and their
+    // sum, from different moments, left `heap.idf_min` far below anything
+    // the heap really reached.)
+    let free = crate::state::free_heap();
+    let done = bus.format(health.speed_khz);
+    let error = match done {
+        Ok(f) => {
+            log::info!(
+                "microSD: formatted {:.2} GB in {} ms; free heap {free} B before, {} B at the lowest since boot",
+                f.capacity_bytes as f64 / 1e9,
+                f.ms,
+                // SAFETY: an argument-free read of the heap's accounting.
+                unsafe { esp_idf_sys::esp_get_minimum_free_heap_size() }
+            );
+            None
+        }
+        Err(e) => {
+            log::error!("microSD: the format failed: {e:#}");
+            Some(format!("{e:#}"))
+        }
+    };
+    let found = mount(bus, health, nvs, None);
+    if let (Mount::Ready(_), None) = (&found, &error) {
+        fresh_card();
+    }
+    (found, error)
+}
+
+/// What a freshly formatted card is given: the stock layout's `gifs/`
+/// folder and an empty "All files" playlist, so the panel says "The
+/// playlist is empty" rather than "No playlist on the card" until GIFs are
+/// added. Everything else (`cache/`, `sets/`, `update/`, …) is made by
+/// whatever first writes there.
+fn fresh_card() {
+    let gifs = format!("{}/gifs", config::SD_MOUNT);
+    if let Err(e) = std::fs::create_dir_all(&gifs) {
+        log::warn!("microSD: making {gifs} on the new card: {e}");
+    }
+    if let Err(e) = File::create(config::MANIFEST_PATH) {
+        log::warn!(
+            "microSD: making {} on the new card: {e}",
+            config::MANIFEST_PATH
+        );
     }
 }
 
@@ -279,6 +382,7 @@ fn run(task: BootTask) {
     // waits longer, see `sdhealth`). A card that cannot be read is
     // unmounted and mounted again once a minute, so a card swapped in
     // (there is no card-detect pin) is noticed; the same card stays quiet.
+    // A format asked for over HTTP ends the wait and is done instead.
     let mut remounts: u32 = 0;
     loop {
         let interval = if health.capped || unreadable.is_some() {
@@ -286,9 +390,12 @@ fn run(task: BootTask) {
         } else {
             config::RETRY_INTERVAL
         };
-        thread::sleep(interval);
+        let asked = wait_for_format(interval);
         remounts += 1;
-        if health.capped {
+        // Asked for while the card was being remounted (no unreadable card
+        // held then): still asked for, `sd_formatting`, and done now.
+        let format_now = unreadable.is_some() && (asked || status.lock().unwrap().sd_formatting);
+        if health.capped && !format_now {
             log::warn!(
                 "microSD: remount {remounts} at {} kHz (the card failed repeatedly; every {} s)",
                 health.speed_khz,
@@ -297,17 +404,24 @@ fn run(task: BootTask) {
         }
         // Dropping the card unmounts it (and frees the bus) before the
         // next attempt builds it all again.
-        let quiet_for = unreadable.take().map(|c: SdCard| c.serial);
-        match mount(&mut bus, &health, &nvs, quiet_for) {
+        let mut quiet_for = None;
+        let mut format_error = None;
+        let found = match unreadable.take() {
+            Some(c) if format_now => {
+                let (found, error) = format(&mut bus, &health, &nvs, c);
+                format_error = error;
+                found
+            }
+            c => {
+                quiet_for = c.map(|c: SdCard| c.serial);
+                mount(&mut bus, &health, &nvs, quiet_for)
+            }
+        };
+        let gone = matches!(found, Mount::Failed(_));
+        let ready = match found {
             Mount::Ready(c) => {
                 publish(&status, Some(&c), true, None, bus.attempts());
-                let now = settings.lock().unwrap().clone();
-                let _ = tx.send(Event::Ready(Box::new(prepare(c, &now, &status))));
-                log::info!(
-                    "boot: card handed over after {remounts} retries; boot task done (stack {} B unused)",
-                    stack_unused()
-                );
-                return;
+                Some(c)
             }
             Mount::Unreadable(c) => {
                 publish(
@@ -318,14 +432,18 @@ fn run(task: BootTask) {
                     bus.attempts(),
                 );
                 unreadable = Some(c);
+                None
             }
-            Mount::Failed(e) if health.capped => publish(
-                &status,
-                None,
-                false,
-                Some(sdhealth::capped_error(remounts, Some(&e))),
-                bus.attempts(),
-            ),
+            Mount::Failed(e) if health.capped => {
+                publish(
+                    &status,
+                    None,
+                    false,
+                    Some(sdhealth::capped_error(remounts, Some(&e))),
+                    bus.attempts(),
+                );
+                None
+            }
             Mount::Failed(e) => {
                 if quiet_for.is_some() {
                     log::warn!(
@@ -333,8 +451,27 @@ fn run(task: BootTask) {
                         config::RETRY_INTERVAL.as_secs()
                     );
                 }
-                publish(&status, None, false, Some(e), bus.attempts())
+                publish(&status, None, false, Some(e), bus.attempts());
+                None
             }
+        };
+        // A format asked for is over once it ran, or once there is no
+        // unreadable card left to run it on (taken out, or readable after
+        // all). After the card's fields, so a poll never sees it over
+        // with the old card state.
+        if format_now {
+            format_over(&status, format_error);
+        } else if unreadable.is_none() {
+            format_over(&status, gone.then(|| "the card was taken out".to_string()));
+        }
+        if let Some(c) = ready {
+            let now = settings.lock().unwrap().clone();
+            let _ = tx.send(Event::Ready(Box::new(prepare(c, &now, &status))));
+            log::info!(
+                "boot: card handed over after {remounts} retries; boot task done (stack {} B unused)",
+                stack_unused()
+            );
+            return;
         }
     }
 }

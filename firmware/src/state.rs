@@ -143,6 +143,11 @@ pub struct Status {
     pub sd_error: Option<String>,
     /// Mount attempts so far (1 on a normal boot).
     pub sd_attempts: u32,
+    /// A format of the unreadable card is asked for or running (`POST
+    /// /api/card/format` sets it, the boot task clears it when done).
+    pub sd_formatting: bool,
+    /// Why the last format failed, until the next one is asked for.
+    pub sd_format_error: Option<String>,
     /// Why the chip last reset (`esp_reset_reason`), e.g. `panic`, `poweron`.
     pub reset_reason: &'static str,
     /// The playlist's resolved overrides (`.meta`), and how many of them hide
@@ -201,6 +206,8 @@ impl Status {
             sd_capacity_bytes: 0,
             sd_error: None,
             sd_attempts: 0,
+            sd_formatting: false,
+            sd_format_error: None,
             reset_reason: "unknown",
             overrides: 0,
             hidden: 0,

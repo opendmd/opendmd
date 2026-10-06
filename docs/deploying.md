@@ -31,24 +31,32 @@ make web && make www-push HOST=opendmd.local
 
 ## 1. The card
 
-### Filesystem: FAT32, as shipped — do not reformat
+### Filesystem: FAT32
 
 The firmware mounts the card with ESP-IDF's FATFS over SPI, which reads FAT32
 (FAT12/16 too) but **not exFAT**. A 32 GB (SDHC) card comes from the factory
 as FAT32, and that factory layout is aligned to the card controller's erase
 blocks; a generic `mkfs.vfat` with default options can misalign it and make
-the card slower and wear it harder. So use a card of 32 GB or less and leave
-its filesystem alone. (Cards of 64 GB and up are SDXC and ship as exFAT, which
-the player cannot read; don't use one.)
+the card slower and wear it harder. So leave a FAT32 card's filesystem alone.
+Cards of 64 GB and up are SDXC and ship as exFAT, which the player cannot
+read; the player formats such a card itself (below).
 
 What an exFAT card looks like: it is found and mounted (the log says
 `microSD mounted at /sdcard (62.53 GB …)`), but nothing on it can be read
 (`No such device`), so nothing plays. The panel's status card says **Card
-not readable: needs FAT32**, the web app's Now page says **Card: Not
-readable: format it FAT32**, and `/api/status` has `sd.mounted` true,
-`sd.readable` false and `sd.error` "card not readable: format it FAT32, or
-use a card of 32 GB or less". The player tries the card again once a
-minute, so a FAT32 card swapped in is picked up without a restart.
+unreadable: format in app**, the web app's Now page says **This card can’t
+be read: it needs FAT32** with a **Format card…** button, and `/api/status`
+has `sd.mounted` true, `sd.readable` false and `sd.error` "card not
+readable: it needs FAT32; format it from the web app". The player tries the
+card again once a minute, so a FAT32 card swapped in is picked up without a
+restart.
+
+**Format card…** erases the card and makes it FAT32 on the device (`POST
+/api/card/format`; it refuses a card that can be read): 32 KB clusters, the
+data area aligned to 4 MiB, two FATs. Then the card plays like any other:
+add GIFs from the Library, or copy the pack onto it from a laptop (FAT32
+reads everywhere). A card of any size works; 32 GB is only the Windows
+formatter's limit for FAT32.
 
 The rig's card is a 32 GB card that was full-surface scanned with zero errors
 and no slow regions. A card that stalls on a bad sector hangs the player —

@@ -42,9 +42,14 @@ function mountDevice(el) {
     h('summary', grid, h('span.muted', 'More')), facts);
 
   const banner = h('div.banner', { id: 'now-banner', hidden: true });
+  // A card the panel can't read (exFAT, as most cards over 32 GB come): say
+  // so, with the way out (js/card.js, imported when first used).
+  const sdText = h('span.grow.bad', { id: 'now-sd-text' });
+  const sdLine = h('div.row', { id: 'now-sd', hidden: true, style: 'margin-top:12px' }, sdText,
+    h('button.sm', { id: 'now-format', onclick: () => import('./card.js').then((m) => m.formatCard()) }, 'Format card…'));
   el.append(
     banner,
-    h('div.card', canvas, cap,
+    h('div.card', canvas, cap, sdLine,
       h('div.row.capl', h('span.grow', title, h('span.muted', tagsEl, ' · ', ord), ' ', followEl, ' ', conn, meta),
         h('label.cap', follow, 'Follow the panel')),
       h('div.row', { style: 'margin-top:12px' }, pauseBtn, h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'),
@@ -151,7 +156,9 @@ function mountDevice(el) {
       fact('Worst lateness', s.worst_lateness_ms + ' ms'),
       fact('Files started', s.gifs_started.toLocaleString()),
       fact('Playlist', playlistLabel(s.manifest)),
-      fact('Card', !s.sd.mounted ? 'Not mounted' : s.sd.readable === false ? 'Not readable: format it FAT32' : bytes(s.sd.capacity_bytes), s.sd.readable === false || !s.sd.mounted));
+      fact('Card', !s.sd.mounted ? 'Not mounted' : s.sd.formatting ? 'Formatting…' : s.sd.readable === false ? 'Not readable: needs FAT32' : bytes(s.sd.capacity_bytes), s.sd.readable === false || !s.sd.mounted));
+    sdLine.hidden = !s.sd.mounted || s.sd.readable !== false;
+    sdText.textContent = s.sd.formatting ? 'Formatting the card…' : 'This card can’t be read: it needs FAT32';
     if (preview.paused !== s.paused) preview.setPaused(s.paused);
     follow_(np.path);
   }

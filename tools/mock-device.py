@@ -202,7 +202,10 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   and nothing plays (`now_playing.path` "", `entries` 0, `index_state`
   `unavailable`); `none`, no card (`mounted: false`). Only `/api/status`,
   `PUT /api/www`'s `staged` and `GET /api/firmware`'s `pending`/`last`
-  follow it; the card copy is still served.
+  follow it; the card copy is still served. `POST /api/card/format`
+  (`{"confirm":true}`) formats an unreadable card: 202, `sd.formatting`
+  true for 3 s, then the card reads (`--sd ok` from then on); a readable
+  card, no card or a format already running is a 409, as on the device.
 - **Security** (docs/api.md "Security"), checked in `route` before any
   handler: a `POST`/`PUT`/`DELETE` whose `Origin` names another host[:port]
   than `Host` (scheme dropped, `:80` dropped, case ignored) is a 403
@@ -341,8 +344,9 @@ API_KEY_RE = re.compile(r"[A-Za-z0-9._~-]{8,64}")
 JSON_ROUTES = {
     ("PUT", "/api/config"), ("PUT", "/api/schedule"), ("POST", "/api/wake"), ("POST", "/api/play"),
     ("POST", "/api/cache/failed"), ("POST", "/api/cache/forget"), ("POST", "/api/follow/test"),
-    ("POST", "/api/files/move"),
+    ("POST", "/api/files/move"), ("POST", "/api/card/format"),
 }
+FORMAT_SECS = 3.0                      # POST /api/card/format's simulated format
 SD_CAPACITY_BYTES = 31_266_439_168     # a plausible "measured" capacity for /api/status
 
 # firmware config::BRIGHTNESS_SAFE_MAX (128: measured on the rig, see there);
@@ -447,6 +451,7 @@ WAKE_MAX_MINUTES = 24 * 60     # config::WAKE_MAX_MINUTES
 
 STATUS_TEXT = {
     200: "OK",
+    202: "Accepted",
     302: "Found",
     400: "Bad Request",
     401: "Unauthorized",
@@ -2143,16 +2148,26 @@ class Context:
         self.ota_pub = None
         # --sd: "ok", "unreadable" (mounts, filesystem unreadable) or "none".
         self.sd_state = "ok"
+        # POST /api/card/format: when the simulated format ends (monotonic,
+        # 0: none running), and why the last one failed.
+        self.format_until = 0.0
+        self.format_error = None
         # PUT /api/www's last `staged` (None: no PUT yet).
         self.www_staged = None
 
 
-SD_UNREADABLE = "card not readable: format it FAT32, or use a card of 32 GB or less"
+SD_UNREADABLE = "card not readable: it needs FAT32; format it from the web app"
 
 
 def sd_fields(ctx: "Context") -> dict:
-    """/api/status's `sd`, per --sd."""
-    base = {"mounted": True, "readable": True, "capacity_bytes": SD_CAPACITY_BYTES, "error": None, "attempts": 1}
+    """/api/status's `sd`, per --sd (and a POST /api/card/format)."""
+    if ctx.format_until and time.monotonic() >= ctx.format_until:
+        # The format is over: the card reads now (an empty FAT32 card on a
+        # device; the mock keeps serving --root).
+        ctx.format_until = 0.0
+        ctx.sd_state = "ok"
+    base = {"mounted": True, "readable": True, "capacity_bytes": SD_CAPACITY_BYTES, "error": None, "attempts": 1,
+            "formatting": bool(ctx.format_until), "format_error": ctx.format_error}
     if ctx.sd_state == "unreadable":
         base.update(readable=False, capacity_bytes=63_864_569_856, error=SD_UNREADABLE)
     elif ctx.sd_state == "none":
@@ -2334,6 +2349,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/overrides"), {"GET": self.h_overrides_get}),
                 (m_exact("/api/schedule"), {"GET": self.h_schedule_get, "PUT": self.h_schedule_put}),
                 (m_exact("/api/wake"), {"POST": self.h_wake}),
+                (m_exact("/api/card/format"), {"POST": self.h_card_format}),
                 (m_exact("/api/follow/test"), {"POST": self.h_follow_test}),
                 (m_exact("/api/play"), {"POST": self.h_play}),
                 (m_exact("/api/stat"), {"GET": self.h_stat}),
@@ -3157,6 +3173,35 @@ def make_handler(ctx: Context, quiet: bool):
                 ctx.player.reset_boot()
                 ctx.player.boot_time += RESTART_SECS
                 ctx.reset_note = None
+
+        def h_card_format(self, path):
+            """http.rs: `{"confirm":true}` (400 otherwise), only a card that
+            mounts but cannot be read (409), 202; status `sd.formatting`
+            for FORMAT_SECS, then the card reads."""
+            body = self.json_body()
+            if body is None:
+                return
+            try:
+                req = json.loads(body or b"null")
+            except ValueError as e:
+                self.send_error_json(400, f"invalid JSON: {e}")
+                return
+            if not isinstance(req, dict) or req.get("confirm") is not True:
+                self.send_error_json(400, 'send {"confirm":true}: everything on the card is erased')
+                return
+            with ctx.lock:
+                sd = sd_fields(ctx)
+                why = ("the card is being formatted already" if sd["formatting"]
+                       else "no card to format" if not sd["mounted"]
+                       else "the card can be read; only an unreadable card is formatted" if sd["readable"]
+                       else None)
+                if why is None:
+                    ctx.format_until = time.monotonic() + FORMAT_SECS
+                    ctx.format_error = None
+            if why:
+                self.send_error_json(409, why)
+            else:
+                self.send_json(202, {"ok": True, "formatting": True})
 
         def h_reboot(self, path):
             query = self.path.partition("?")[2] or None

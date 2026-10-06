@@ -106,7 +106,7 @@ impl SdBus {
     /// present, the card is unreadable, or it is not FAT — the Rust `Fatfs`
     /// API never formats, which is the `format_if_mount_failed = false` the
     /// brief asks for: a card that won't mount is a card to look at, not one
-    /// to erase.
+    /// to erase. (Erasing is [`SdBus::format`], only ever asked for.)
     ///
     /// `speed_khz` is the clock to ask for after the card's 400 kHz init.
     /// Only a clock the driver refuses fails *at* the clock switch, and that
@@ -117,12 +117,36 @@ impl SdBus {
         if take_simulated_failure() {
             anyhow::bail!("simulated failure (POST /api/reboot?sd_fail=N)");
         }
+        let card = self.init(speed_khz)?;
+
+        let raw = card.card();
+        let capacity_bytes = (raw.csd.capacity as u64) * (raw.csd.sector_size as u64);
+        let real_freq_khz = raw.real_freq_khz;
+        // SAFETY: `cid` is the union's decoded view, which the SD init
+        // fills (`raw_cid` is MMC's).
+        let serial = unsafe { raw.__bindgen_anon_1.cid.serial } as u32;
+
+        let fatfs = Fatfs::new_sdcard(0, card).context("FAT driver registration failed")?;
+        let mounted = MountedFatfs::mount(fatfs, config::SD_MOUNT, config::SD_MAX_FILES)
+            .context("FAT mount failed")?;
+
+        Ok(SdCard {
+            _fs: mounted,
+            capacity_bytes,
+            real_freq_khz,
+            serial,
+        })
+    }
+
+    /// The bus, the SD SPI host and the card's init sequence, built afresh
+    /// (see the struct's doc); dropping the result tears all three down.
+    fn init(&mut self, speed_khz: u32) -> Result<Card> {
         // SAFETY: the peripheral and the pins are this struct's alone, and
         // the drivers built on them here are either kept (inside the
         // returned `SdCard`, which is dropped — unmounted — before `mount`
         // is called again: the boot task's remount of a card that cannot be
-        // read, and otherwise never) or dropped before this returns — never
-        // two at once.
+        // read, and otherwise never; or by `format`, until it returns) or
+        // dropped before this returns — never two at once.
         let (spi, sck, mosi, miso, cs) = unsafe {
             (
                 self.spi.clone_unchecked(),
@@ -156,25 +180,85 @@ impl SdBus {
             cfg.command_timeout_ms = config::SD_RETRY_CMD_TIMEOUT_MS;
         }
 
-        let card = SdCardDriver::new_spi(host, &cfg).context("no card, or card init failed")?;
+        SdCardDriver::new_spi(host, &cfg).context("no card, or card init failed")
+    }
 
-        let raw = card.card();
-        let capacity_bytes = (raw.csd.capacity as u64) * (raw.csd.sector_size as u64);
-        let real_freq_khz = raw.real_freq_khz;
-        // SAFETY: `cid` is the union's decoded view, which the SD init
-        // fills (`raw_cid` is MMC's).
-        let serial = unsafe { raw.__bindgen_anon_1.cid.serial } as u32;
-
+    /// Format the card in the socket FAT32 (FAT16 if it is too small for
+    /// FAT32's cluster count): an MBR with one partition, two FATs, 32 KB
+    /// clusters, the data area aligned to 4 MiB (`opendmd_core::card`).
+    /// Everything on the card is lost. The caller has unmounted it (the
+    /// unreadable `SdCard` dropped), so `/sdcard` is not in the VFS while
+    /// this runs and no other task can reach the card; afterwards it is
+    /// mounted as any card is ([`SdBus::mount`]).
+    ///
+    /// One blocking `f_mkfs`: on a 64 GB card ~15 MB of FAT written in
+    /// [`config::SD_FORMAT_BUF`] pieces, ~63 s. The SD SPI driver polls (no
+    /// interrupt, no yield), so the calling task drops to the idle
+    /// priority for the duration: CPU0's idle task then shares the core
+    /// with it and keeps feeding the task watchdog, and everything else on
+    /// CPU0 (WiFi, the httpd answering status polls) comes first. CPU1 is
+    /// not involved: the bus is `SPI3`, its interrupt is CPU0's, and the
+    /// display never touches an unreadable card.
+    pub fn format(&mut self, speed_khz: u32) -> Result<Formatted> {
+        let card = self.init(speed_khz)?;
+        let capacity_bytes = {
+            let raw = card.card();
+            (raw.csd.capacity as u64) * (raw.csd.sector_size as u64)
+        };
+        // `u8` spelled out: the pointer goes out as `c_void`, and an
+        // inferred element type was `i32` — four times the heap.
+        let mut buf: Vec<u8> = Vec::new();
+        buf.try_reserve_exact(config::SD_FORMAT_BUF)
+            .map_err(|_| anyhow::anyhow!("no memory for the format's work buffer"))?;
+        buf.resize(config::SD_FORMAT_BUF, 0);
         let fatfs = Fatfs::new_sdcard(0, card).context("FAT driver registration failed")?;
-        let mounted = MountedFatfs::mount(fatfs, config::SD_MOUNT, config::SD_MAX_FILES)
-            .context("FAT mount failed")?;
+        let opt = esp_idf_sys::MKFS_PARM {
+            fmt: esp_idf_sys::FM_ANY as u8,
+            n_fat: 2,
+            align: opendmd_core::card::ALIGN_SECTORS,
+            n_root: 0,
+            au_size: opendmd_core::card::ALLOCATION_UNIT,
+        };
+        // SAFETY: lowering, then restoring, the calling task's own priority.
+        let prio = unsafe { esp_idf_sys::uxTaskPriorityGet(std::ptr::null_mut()) };
+        unsafe { esp_idf_sys::vTaskPrioritySet(std::ptr::null_mut(), 0) };
+        let t = Instant::now();
+        // SAFETY: drive 0 is registered just above (`fatfs`, unregistered
+        // when it drops) and mounted nowhere; `buf` outlives the call.
+        let res = unsafe {
+            esp_idf_sys::f_mkfs(
+                c"0:".as_ptr(),
+                &opt,
+                buf.as_mut_ptr().cast(),
+                buf.len() as u32,
+            )
+        };
+        let ms = t.elapsed().as_millis() as u32;
+        unsafe { esp_idf_sys::vTaskPrioritySet(std::ptr::null_mut(), prio) };
+        drop(fatfs);
+        if res != esp_idf_sys::FRESULT_FR_OK {
+            anyhow::bail!("{} (FatFs {res}) after {ms} ms", mkfs_error(res));
+        }
+        Ok(Formatted { capacity_bytes, ms })
+    }
+}
 
-        Ok(SdCard {
-            _fs: mounted,
-            capacity_bytes,
-            real_freq_khz,
-            serial,
-        })
+/// What [`SdBus::format`] did.
+pub struct Formatted {
+    pub capacity_bytes: u64,
+    /// The `f_mkfs` call's duration.
+    pub ms: u32,
+}
+
+/// A failed `f_mkfs` in words.
+fn mkfs_error(res: esp_idf_sys::FRESULT) -> &'static str {
+    match res {
+        esp_idf_sys::FRESULT_FR_DISK_ERR => "a card write failed",
+        esp_idf_sys::FRESULT_FR_NOT_READY => "the card did not answer",
+        esp_idf_sys::FRESULT_FR_WRITE_PROTECTED => "the card is write-protected",
+        esp_idf_sys::FRESULT_FR_MKFS_ABORTED => "the card's size does not suit FAT",
+        esp_idf_sys::FRESULT_FR_NOT_ENOUGH_CORE => "not enough memory",
+        _ => "the format failed",
     }
 }
 

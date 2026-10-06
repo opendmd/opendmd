@@ -164,6 +164,14 @@ struct ConfigPatch {
     api_key: Option<String>,
 }
 
+/// Wire format for `POST /api/card/format`: `{"confirm": true}`, so an
+/// empty or stray POST never erases a card.
+#[derive(serde::Deserialize)]
+struct FormatRequest {
+    #[serde(default)]
+    confirm: bool,
+}
+
 /// Wire format for `POST /api/wake`.
 #[derive(serde::Deserialize)]
 struct WakeRequest {
@@ -187,10 +195,10 @@ struct WakeRequest {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route`/`route_json` below (45 now, the
-    // captive-portal loop counting six; 46 leaves one spare). Registration
+    // URI handler slots: one per `route`/`route_json` below (46 now, the
+    // captive-portal loop counting six; 47 leaves one spare). Registration
     // past the limit fails the whole server, so count when adding a route.
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 46)?;
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 47)?;
     // The API key, if one is set (`api_key`; `httpd::gate` checks it).
     crate::httpd::set_api_key(&ctx.settings.lock().unwrap().api_key);
 
@@ -847,6 +855,39 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let mounted = c.status.lock().unwrap().sd_usable();
         let net = c.net.clone();
         stream::receive(req, move |up| crate::ota::receive(up, mounted, &net))
+    })?;
+
+    // Format the card FAT32 — only one that is mounted but cannot be read
+    // (exFAT, as most cards over 32 GB come); never a readable one
+    // (`opendmd_core::card::may_format`). The boot task, which holds such
+    // a card, does it (`boot::request_format`); `sd.formatting` says when
+    // it is over, and `sd.readable` how it went.
+    let c = ctx.clone();
+    server.route_json("/api/card/format", Method::Post, move |req| {
+        let Some(body) = json_body(req)? else {
+            return Ok(());
+        };
+        const UNCONFIRMED: &str = r#"send {"confirm":true}: everything on the card is erased"#;
+        match serde_json::from_slice::<FormatRequest>(&body) {
+            Ok(f) if f.confirm => {}
+            Ok(_) => return req.bad_request(UNCONFIRMED),
+            Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
+        }
+        {
+            let mut s = c.status.lock().unwrap();
+            if let Err(r) =
+                opendmd_core::card::may_format(s.sd_mounted, s.sd_readable, s.sd_formatting)
+            {
+                drop(s);
+                info!("card format refused: {}", r.reason());
+                return req.error(409, "409 Conflict", r.reason());
+            }
+            s.sd_formatting = true;
+            s.sd_format_error = None;
+        }
+        info!("card format requested over HTTP");
+        crate::boot::request_format();
+        req.respond_json("202 Accepted", r#"{"ok":true,"formatting":true}"#)
     })?;
 
     server.route("/api/reboot", Method::Post, |req| {
@@ -1538,7 +1579,7 @@ fn status_json(s: &Status, looks: &str) -> String {
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"heap_floor_at":{},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"#,
-            r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"error":{},"attempts":{},{}}},"reset_reason":{},"reset_note":{},"#,
+            r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"error":{},"attempts":{},"formatting":{},"format_error":{},{}}},"reset_reason":{},"reset_note":{},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
             r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{},"#,
@@ -1580,6 +1621,8 @@ fn status_json(s: &Status, looks: &str) -> String {
         s.sd_capacity_bytes,
         opt_json(s.sd_error.as_deref()),
         s.sd_attempts,
+        s.sd_formatting,
+        opt_json(s.sd_format_error.as_deref()),
         crate::sdhealth::status_json(),
         json_string(s.reset_reason),
         opt_json(crate::sdhealth::reset_note()),
