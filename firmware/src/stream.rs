@@ -239,6 +239,8 @@ where
                 return Ok(());
             };
             log::warn!("PUT {}: stream queue full, 503", refused.path());
+            // On the httpd task: no lingering over the rest of the body.
+            refused.no_linger();
             refused.header("Retry-After", "1");
             let _ = refused.error(
                 503,

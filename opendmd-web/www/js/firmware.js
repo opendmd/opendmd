@@ -1,8 +1,10 @@
 // Settings → Advanced → Firmware and Security (imported when Advanced is
 // first open; its own size line). Firmware: the running version (GET
-// /api/firmware) and "Update from file…": a signed bundle (.odfw,
-// docs/ota.md) checked here for its header, PUT with progress, then
-// /api/status polled until the player is back on the new version. Security:
+// /api/firmware), the updater's log behind "Update log", and "Update from
+// file…": a signed bundle (.odfw, docs/ota.md) checked here for its header
+// (an older version than the running one asks again: `older`), PUT with
+// progress, then /api/status polled until the player is back on the new
+// version. Security:
 // the optional API key (docs/api.md "Security"), made here, shown once.
 // And the dialog a 401 opens to ask for the key (source.js).
 
@@ -23,6 +25,25 @@ export const askKey = () => new Promise((res) => {
   document.body.append(d);
   d.showModal();
 });
+
+// Whether version `a` is older than `b`, semver-ish: the dot-separated
+// numbers compared as numbers (a leading v ignored, a missing part is 0),
+// and a pre-release (`-rc.1`) before its release. The device accepts any
+// validly signed bundle, older ones included (a way back); this only decides
+// whether the page asks twice.
+export function older(a, b) {
+  const parse = (s) => {
+    const [core, pre] = String(s).trim().replace(/^v/i, '').split('+')[0].split(/-(.*)/s);
+    return [core.split('.').map((x) => parseInt(x, 10) || 0), pre || null];
+  };
+  const [an, ap] = parse(a), [bn, bp] = parse(b);
+  for (let i = 0; i < Math.max(an.length, bn.length); i++) {
+    const d = (an[i] || 0) - (bn[i] || 0);
+    if (d) return d < 0;
+  }
+  if (ap === bp || ap === null) return false;
+  return bp === null || ap.localeCompare(bp, undefined, { numeric: true }) < 0;
+}
 
 // The PUT as an XMLHttpRequest, for its upload progress.
 function send(file, progress) {
@@ -53,10 +74,16 @@ export function fwCards(fw, sec) {
   const file = h('input', { type: 'file', accept: '.odfw', id: 'fw-file', hidden: true, onchange: pick });
   const btn = h('button', { id: 'fw-go', onclick: () => file.click() }, 'Update from file…');
   const say = (t, bad) => { msg.textContent = t; msg.className = bad ? 'cap bad' : 'cap'; };
+  const logText = h('div.log', { id: 'fw-log-text', style: 'white-space:pre-wrap' });
+  const log = h('details', { id: 'fw-log', hidden: true }, h('summary', 'Update log'), logText);
+  let running = null;
   async function load() {
     try {
       const f = await app.src.json('GET', '/api/firmware');
+      running = f.version;
       clear(facts, fact('Version', f.version), fact('Build', f.build), fact('Waiting to install', f.pending), fact('Last update', f.last));
+      logText.textContent = f.log || '';
+      log.hidden = !f.log;
     } catch (e) { clear(facts, fact('Version', 'unknown: ' + e.message)); }
   }
   async function pick() {
@@ -66,17 +93,19 @@ export function fwCards(fw, sec) {
     const head = new Uint8Array(await f.slice(0, 140).arrayBuffer()), td = new TextDecoder();
     if (f.size < 140 || td.decode(head.subarray(0, 5)) !== 'ODFW1') return say('This is not an OpenDMD firmware file (.odfw)', 1);
     const v = td.decode(head.subarray(8, 40)).replace(/\0+$/, '');
-    if (!confirm(`Install firmware ${v}? The panel goes dark for about half a minute.`)) return;
+    const ask = running && older(v, running) ? `Firmware ${v}: this is older than the firmware on the panel (${running}). Install it anyway?`
+      : `Install firmware ${v}?`;
+    if (!confirm(`${ask} The panel goes dark for about a minute.`)) return;
     btn.disabled = true;
     barBox.hidden = false;
     try {
       await send(f, (p) => { bar.style.width = `${100 * p}%`; say(`Sending… ${Math.round(100 * p)}%`); });
       barBox.hidden = true;
-      say('Restarting… the panel comes back in about 20 s');
+      say('Restarting… the panel comes back in about 45 s');
       for (const t = Date.now(); ;) {
         await sleep(2000);
         try { if ((await app.src.status()).version === v) break; } catch { /* still restarting */ }
-        if (Date.now() - t > 120000) throw new Error(`The player has not come back with ${v} after 2 minutes. Check it has power, then reload this page`);
+        if (Date.now() - t > 180000) throw new Error(`The player has not come back with ${v} after 3 minutes. Check it has power, then reload this page (Update log says what the updater did)`);
       }
       say(`Updated to ${v}`);
       app.refreshStatus().catch(() => {});
@@ -85,7 +114,7 @@ export function fwCards(fw, sec) {
     btn.disabled = false;
     barBox.hidden = true;
   }
-  fw.append(h('h3', 'Firmware'), facts, barBox, msg, h('div.row', { style: 'margin-top:12px' }, btn, file));
+  fw.append(h('h3', 'Firmware'), facts, log, barBox, msg, h('div.row', { style: 'margin-top:12px' }, btn, file));
   fw.hidden = false;
   load();
 

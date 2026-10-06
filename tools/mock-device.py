@@ -194,14 +194,15 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   object as `www`, and `www_version`. `PUT /api/www` wants a
   `Content-Length` (411), at most 1,310,720 B (413) and the `ODWP` magic
   (400); it replies as `GET` does and changes nothing served. `staged` is
-  null until a PUT, then whether it would have been staged on the card
-  (true unless `--sd` is `unreadable` or `none`).
+  null until a PUT, then whether the last one would have been staged on the
+  card (true unless `--sd` is `unreadable` or `none`; null again after one
+  refused at its header, as on the device).
 - **The card** (`--sd`): `ok` (the default); `unreadable`, a card that
   mounts but whose filesystem cannot be read (exFAT; firmware `sd::probe`):
   `sd` is `{mounted: true, readable: false, error: "card not readable: …"}`
   and nothing plays (`now_playing.path` "", `entries` 0, `index_state`
   `unavailable`); `none`, no card (`mounted: false`). Only `/api/status`,
-  `PUT /api/www`'s `staged` and `GET /api/firmware`'s `pending`/`last`
+  `PUT /api/www`'s `staged` and `GET /api/firmware`'s `pending`/`last`/`log`
   follow it; the card copy is still served. `POST /api/card/format`
   (`{"confirm":true}`) formats an unreadable card: 202, `sd.formatting`
   true for 3 s, then the card reads (`--sd ok` from then on); a readable
@@ -219,7 +220,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   a non-empty body whose `Content-Type` is not `application/json` are a 415
   `{"error":"Content-Type must be application/json"}`.
 - **Firmware update** (docs/ota.md): `GET /api/firmware` is `{version,
-  build, variant, pending, last}`; `PUT /api/firmware` takes a signed bundle
+  build, variant, pending, last, log}` (`log`: the card's
+  `/update/log.txt`, its last ≤1 KB of whole lines, or null); `PUT /api/firmware` takes a signed bundle
   and verifies it as `tools/fw-sign.py verify` does against `--ota-pub`
   (default `firmware/keys/opendmd.pub`): 411 without a length, 413 over
   140 B + the 2,359,296 B factory partition, 422 `{"error":"<reason>"}` for
@@ -227,7 +229,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   "rebooting":true}`, then a simulated restart: for `RESTART_SECS` every
   `/api/*` request is a 503 `{"error":"restarting"}` (`Retry-After: 1`),
   then the player "boots" again reporting the new `version` in
-  `/api/status` and `/api/firmware`, with `last` an updater-style line and
+  `/api/status` and `/api/firmware`, with `last` an updater-style line,
+  `log` the lines the firmware and the updater would have appended, and
   `pending` null. Nothing is written to disk.
 - **JSON bodies over 8 KB** (`PUT /api/config`, `POST /api/play`) are a 413
   `{"error":"body is N B, the limit is 8192 B"}`, judged on `Content-Length`.
@@ -2144,6 +2147,7 @@ class Context:
         # simulated restart's end (monotonic), the Ed25519 key (VerifyKey).
         self.version = MOCK_VERSION
         self.fw_last = None
+        self.fw_log = None
         self.down_until = 0.0
         self.ota_pub = None
         # --sd: "ok", "unreadable" (mounts, filesystem unreadable) or "none".
@@ -3132,6 +3136,8 @@ def make_handler(ctx: Context, quiet: bool):
                     remaining -= len(chunk)
                 self.send_error_json(413, f"the pack is {length} B, the www partition is {WWW_PARTITION_SIZE} B")
                 return
+            # `staged` describes this attempt: null if refused at the header.
+            ctx.www_staged = None
             data = self.rfile.read(length)
             if data[:4] != b"ODWP":
                 self.send_error_json(400, "not a www pack: not a www pack (bad magic)")
@@ -3141,8 +3147,10 @@ def make_handler(ctx: Context, quiet: bool):
 
         def h_firmware_get(self, path):
             with ctx.lock:
+                card = ctx.sd_state == "ok"  # the firmware reads both off the card
                 self.send_json(200, {"version": ctx.version, "build": f"{ctx.version} 4mb", "variant": "4mb",
-                                     "pending": None, "last": ctx.fw_last})
+                                     "pending": None, "last": ctx.fw_last if card else None,
+                                     "log": ctx.fw_log if card else None})
 
         def h_firmware_put(self, path):
             length_hdr = self.headers.get("Content-Length")
@@ -3167,9 +3175,21 @@ def make_handler(ctx: Context, quiet: bool):
             n = length - OTA_HEADER_LEN
             took = 12.0 + n / 200_000 + (time.monotonic() - t0)
             with ctx.lock:
+                old = ctx.version
                 ctx.down_until = time.monotonic() + RESTART_SECS
                 ctx.version = version
                 ctx.fw_last = f"updater +{took:.1f} s: updated to {version} ({n} B, SHA-256 ok, image verified)"
+                # The log's end as the firmware reports it (at most 1 KB,
+                # whole lines): what the firmware and the updater appended.
+                lines = [f"firmware {old}: staged {version} ({n} B), restarting into the updater",
+                         "updater +0.4 s: OpenDMD updater started (panel off)",
+                         f"updater +{took - 1:.1f} s: written in {took - 2:.1f} s; verifying the image",
+                         f"updater +{took:.1f} s: renamed the bundle to /update/done-{version}.bin",
+                         ctx.fw_last]
+                log = "\n".join((ctx.fw_log or "").splitlines() + lines)
+                while len(log.encode()) > 1024 and "\n" in log:
+                    log = log.split("\n", 1)[1]
+                ctx.fw_log = log
                 ctx.player.reset_boot()
                 ctx.player.boot_time += RESTART_SECS
                 ctx.reset_note = None

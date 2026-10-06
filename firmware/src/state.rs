@@ -23,6 +23,26 @@ use std::time::{Duration, Instant};
 /// (`/api/status` `variant`, the boot banner).
 pub const FLASH_VARIANT: &str = env!("OPENDMD_FLASH_VARIANT");
 
+/// The firmware's version: **the one source of truth** for `/api/status`,
+/// `GET /api/firmware`, the boot banner and the post-update check. It is
+/// the app descriptor's (`"<version> <variant>"`, which the Makefile writes
+/// from `FW_VERSION`, by default `Cargo.toml`'s), i.e. what a bundle for
+/// this image carries in its header; [`BUILD_VERSION`] (the same
+/// `FW_VERSION`, passed to `build.rs`) if the descriptor is in another form.
+pub fn firmware_version() -> &'static str {
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        let desc = running_version();
+        opendmd_core::ota::version_from_app_desc(&desc, FLASH_VARIANT)
+            .unwrap_or(BUILD_VERSION)
+            .to_string()
+    })
+}
+
+/// `FW_VERSION` at build time (`build.rs`: `OPENDMD_FW_VERSION`, else the
+/// crate's version).
+pub const BUILD_VERSION: &str = env!("OPENDMD_FW_VERSION");
+
 /// The running firmware's version, as the bootloader records it in the app
 /// descriptor (`"<version> 4mb"` for `make fw-release`, `git describe` for a
 /// bench build).

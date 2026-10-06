@@ -80,7 +80,7 @@ impl Text {
 
     fn info(&self) -> Info<'_> {
         Info {
-            version: crate::VERSION,
+            version: crate::state::firmware_version(),
             ip: std::str::from_utf8(&self.ip[..usize::from(self.ip_len)]).unwrap_or(""),
             ap: if self.ap { config::AP_SSID } else { "" },
             note: self.note,

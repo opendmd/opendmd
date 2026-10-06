@@ -287,9 +287,38 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
 
+/// The firmware version from the running image's app descriptor
+/// (`esp_app_desc_t.version`), which the build sets to `"<version>
+/// <variant>"` (`make fw-build` / `fw-release`, `FW_VERSION`, by default
+/// `firmware/Cargo.toml`'s): the version a bundle for this image carries in
+/// its header, and the updater names `done-<version>.bin` after. `None`
+/// for a descriptor in any other form (IDF's default, `git describe`), so
+/// the caller falls back to the crate's version.
+pub fn version_from_app_desc<'a>(desc: &'a str, variant: &str) -> Option<&'a str> {
+    let v = desc.strip_suffix(variant)?.strip_suffix(' ')?;
+    (!v.is_empty() && v.len() <= VERSION_LEN && !v.contains(char::is_whitespace)).then_some(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_from_the_app_descriptor() {
+        assert_eq!(version_from_app_desc("0.3.1 4mb", "4mb"), Some("0.3.1"));
+        assert_eq!(
+            version_from_app_desc("0.4.0-rc.1 4mb", "4mb"),
+            Some("0.4.0-rc.1")
+        );
+        assert_eq!(version_from_app_desc("0.3.1 8mb", "4mb"), None);
+        assert_eq!(version_from_app_desc("0.3.1", "4mb"), None);
+        assert_eq!(version_from_app_desc(" 4mb", "4mb"), None);
+        assert_eq!(version_from_app_desc("4mb", "4mb"), None);
+        assert_eq!(version_from_app_desc("v0.3-12-gabc", "4mb"), None);
+        assert_eq!(version_from_app_desc("a b 4mb", "4mb"), None);
+        let long = format!("{} 4mb", "9".repeat(VERSION_LEN + 1));
+        assert_eq!(version_from_app_desc(&long, "4mb"), None);
+    }
 
     fn unhex(s: &str) -> Vec<u8> {
         (0..s.len())

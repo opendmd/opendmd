@@ -346,6 +346,13 @@ pub const IO_CHUNK: usize = 2048;
 /// display loop runs between erases (each stops both CPUs' flash caches for
 /// ~15-20 ms). Costs ~4 s on a 0.8 MB pack (~190 sectors).
 pub const WWW_ERASE_BREATHER: Duration = Duration::from_millis(20);
+/// `PUT /api/www` reads its staged pack back from the card twice (the check,
+/// then the copy into flash); a read the card fails is tried this many times
+/// in all, the file opened again each time (`www::Staged`). Seen: a 64 GB
+/// card at 40 MHz failed one read with a data CRC error, the rest read fine.
+pub const WWW_CARD_READ_TRIES: u32 = 4;
+/// The pause before a retry, times the attempt number (100, 200, 300 ms).
+pub const WWW_CARD_RETRY_PAUSE: Duration = Duration::from_millis(100);
 /// Contiguous heap needed for the in-RAM playlist index, the fallback when the
 /// card will not take `<manifest>.idx`.
 ///

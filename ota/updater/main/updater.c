@@ -504,6 +504,8 @@ static outcome_t attempt(void)
     unlink(done);
     if (rename(BUNDLE_PATH, done) != 0) {
         note("renaming the bundle to %s failed (the firmware is updated anyway)", done + sizeof MOUNT - 1);
+    } else {
+        note("renamed the bundle to %s", done + sizeof MOUNT - 1);
     }
     note("updated to %s (%u B, SHA-256 ok, image verified)", version, (unsigned)len);
     return R_DONE;

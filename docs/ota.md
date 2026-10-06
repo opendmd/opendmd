@@ -1,7 +1,7 @@
 # Firmware updates over the LAN (OTA), design
 
-Status: implemented 2026-10-02 (host-tested; the device drills below are
-still to run on a spare DevKit). `deploying.md` describes the procedure.
+Status: implemented 2026-10-02; drilled on the spare DevKit 2026-10-06
+(updates, a wrong key, a tampered and a cut-off bundle). `deploying.md` describes the procedure.
 
 Where things are: the bundle format and its verifier
 `opendmd-core/src/ota.rs`; the signer `tools/fw-sign.py`; the device side
@@ -10,9 +10,43 @@ the updater `ota/updater/` (`make updater`); `make fw-sign`, `make fw-ota
 HOST=`. Two details differ from the sketch below: the firmware checks the
 signature as soon as the 140-byte header is in, on the network worker
 (Ed25519 needs ~8 KB of stack; the stream task has 6 KB), before anything
-is written to the card; and the updater hashes the whole file on the card
-once *before* it erases anything (a damaged file then boots the old
-firmware, untouched), then again as it writes.
+is written to the card, and a bundle that fails it is answered 422 there
+and then, without waiting for the rest of the body (the device reads off
+and drops what is still in flight for up to 2 s, until the client stops,
+so the close does not reset the connection under the reply; curl stops
+sending as soon as an error status arrives); and the updater hashes the
+whole file on the card once *before* it erases anything (a damaged file
+then boots the old firmware, untouched), then again as it writes.
+
+**Versions.** One version string, from the build: `make fw-build` /
+`fw-release` write `FW_VERSION` (default `firmware/Cargo.toml`'s; `make
+fw-build FW_VERSION=x.y.z` overrides it) into the app descriptor as
+`"<version> 4mb"`, and the release signs the bundle with the same
+`FW_VERSION` in its header. The firmware reports the descriptor's
+version (`state::firmware_version`, `opendmd_core::ota::version_from_app_desc`)
+as `version` in `/api/status` and `GET /api/firmware`, in the boot banner
+and on the setup page, and compares it with the `done-<version>.bin` the
+updater leaves after an update (a mismatch is a warning in the log).
+`make fw-ota` waits for exactly that string.
+
+**Older bundles.** A validly signed bundle is installed whatever its
+version: going back is a feature (a release that misbehaves). The web
+app's Firmware card reads the chosen file's header and, when its version
+is older than the running one (semver-ish: dot-separated numbers, a
+pre-release before its release; `older()` in `js/firmware.js`), asks
+"This is older than the firmware on the panel (X). Install it anyway?"
+first. `make fw-ota` does not ask.
+
+**Timing**, measured on the spare DevKit (2026-10-06, 64 GB card at 20
+MHz, 0.3.4 -> 0.3.5): the 2.09 MB bundle uploads in ~10-16 s; the updater
+takes ~19 s (SHA-256 on the card 2.9 s, the write 13.7 s, the image check
+1.4 s); `GET /api/firmware` answers with the new version ~33 s after the
+upload ends, playback ~45 s. A bundle signed with another key is refused
+at its header: curl has the 422 after 1.06 s (its `Expect: 100-continue`
+wait: the device never sends `100 Continue`; 0.07 s with `-H 'Expect:'`),
+having sent 64 KB of the 2 MB; Chromium (the Firmware card's XHR) keeps
+sending until the device closes, ~2 s later, and shows the reason after
+~4.6 s. Before 2026-10-06 the device read the whole body first: 16.4 s.
 
 ## Why not two app slots
 
@@ -74,8 +108,9 @@ by the device with a 422 and nothing on the card changes.
    checked by the firmware; the updater has no Ed25519 to keep it small),
    erases and writes the factory partition in 4 KB pieces, runs
    `esp_image_verify` on the result, sets the boot partition back to
-   factory, renames the file to `/update/done-<version>.bin`, writes
-   `/update/log.txt`, restarts. The LED (GPIO 2) blinks while writing.
+   factory, renames the file to `/update/done-<version>.bin` (logged),
+   writes `/update/log.txt`, restarts. The LED (GPIO 2) blinks while
+   writing.
 4. **Failure in the updater**: card missing or file unreadable → if the
    factory image verifies, boot it (nothing was written); else stay, blink
    fast, retry every 10 s (the card may be inserted). Write failed
@@ -86,13 +121,18 @@ by the device with a 422 and nothing on the card changes.
 5. **After boot**: the firmware sees `/update/done-*.bin`, logs the version
    change in the log ring, deletes the file, and the web app's Firmware card
    shows the new version. `GET /api/firmware` reports `{version, build,
-   pending, last}`.
+   variant, pending, last, log}`: `log` is the end of `/update/log.txt`
+   (≤ 1 KB of whole lines; the Firmware card's "Update log"), so the
+   updater's account can be read without taking the card out.
 
 ## Hardening that ships with it (same cable session)
 
-- `PUT /api/www` keeps serving the old pack until the new one has verified:
-  write to the partition, verify CRC, then flip the header's valid flag
-  last (the partition's first page is written last).
+- `PUT /api/www` keeps serving the old pack until the new one has verified
+  on the card (staged, then read back whole, size and CRC, every card
+  read retried): only then is the partition erased and written from the
+  card, header last (`docs/www-pack.md`). If the copy still fails after
+  the erase, the checked pack stays on the card and the next boot writes
+  it.
 - Mutating `/api` requests reject a foreign `Origin` header and require
   `Content-Type: application/json` where a JSON body is expected.
 - Optional API key (`api_key` setting; `Authorization: Bearer`).

@@ -153,7 +153,11 @@ every view like a person would:
             unchanged); the good one shows its progress, "Restarting…", then
             "Updated to 9.9.9-smoke" once /api/status reports it after the
             mock's simulated restart (its API a 503 for 3 s), the updater's
-            `last` line shown and About updated
+            `last` line shown, the "Update log" disclosure with the log's
+            end (`log`), and About updated. A bundle older than the running
+            version asks "… older than the firmware on the panel (X).
+            Install it anyway?" (declined: nothing sent); `older()` itself
+            on a table of version pairs
   Security  the JSON routes without Content-Type application/json are 415
             (any case, parameters allowed; raw uploads take any type); a
             page from another origin (127.0.0.1:<another port>)
@@ -1422,6 +1426,12 @@ def api_page_checks(page: Page, base: str) -> None:
 
 
 OTA_VERSION = "9.9.9-smoke"
+OTA_OLD_VERSION = "0.0.1"
+# js/firmware.js `older(a, b)`: (a, b, a is older).
+OLDER_CASES = [("0.3.0", "0.3.1", True), ("0.3.1", "0.3.0", False), ("0.3.0", "0.3.0", False),
+               ("0.10.0", "0.9.9", False), ("0.9.9", "0.10.0", True), ("1.0", "1.0.0", False),
+               ("1.0.0-rc.1", "1.0.0", True), ("1.0.0", "1.0.0-rc.1", False), ("1.0.0-rc.2", "1.0.0-rc.10", True),
+               ("v0.4.0", "0.3.9", False), ("0.0.1", "9.9.9-smoke", True), ("9.9.9-smoke", "0.3.3", False)]
 
 
 def ota_bundles(tmp: Path) -> dict[str, Path]:
@@ -1440,7 +1450,10 @@ def ota_bundles(tmp: Path) -> dict[str, Path]:
     bad.write_bytes(bytes(b))
     junk = tmp / "notes.odfw"
     junk.write_bytes(b"not firmware at all " * 20)
-    return {"pub": tmp / "p", "good": good, "bad": bad, "junk": junk}
+    old = tmp / "opendmd-0.0.1.odfw"
+    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", OTA_OLD_VERSION, "--out", str(old), "--key", str(tmp / "k")],
+                   check=True, stdout=subprocess.DEVNULL)
+    return {"pub": tmp / "p", "good": good, "bad": bad, "junk": junk, "old": old}
 
 
 def status_of(req: urllib.request.Request) -> tuple[int, dict]:
@@ -1473,8 +1486,13 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     goto_view(page, "settings")
     page.wait_for_selector("#fw-facts dd", timeout=20000)
     fw = get_json(base + "/api/firmware")
-    check(sorted(fw) == ["build", "last", "pending", "variant", "version"] and fw["pending"] is None,
+    check(sorted(fw) == ["build", "last", "log", "pending", "variant", "version"] and fw["pending"] is None,
           f"firmware: GET /api/firmware {fw}")
+    got = page.evaluate("async (cases) => { const { older } = await import('/js/firmware.js');"
+                        " return cases.map(([a, b]) => older(a, b)); }", [[a, b] for a, b, _ in OLDER_CASES])
+    wrong = [(a, b, g) for (a, b, w), g in zip(OLDER_CASES, got) if g != w]
+    check(not wrong, f"firmware: older() on {len(OLDER_CASES)} version pairs (wrong: {wrong})")
+    check(page.is_hidden("#fw-log") == (fw["log"] is None), "firmware: 'Update log' only when there is one")
     v0 = fw["version"]
     facts = page.inner_text("#fw-facts")
     check(v0 in facts and fw["build"] in facts, f"firmware: the card shows {v0} ({facts!r})")
@@ -1489,8 +1507,20 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     expected.append("/api/firmware")
     page.set_input_files("#fw-file", str(ota["bad"]))
     t = fw_message(page, "^The player refused this file")
-    check("SHA-256 mismatch" in t and asked == [f"Install firmware {OTA_VERSION}? The panel goes dark for about half a minute."],
+    check("SHA-256 mismatch" in t and asked == [f"Install firmware {OTA_VERSION}? The panel goes dark for about a minute."],
           f"firmware: the tampered bundle is refused ('{t}'; asked {asked})")
+    # An older bundle: asked differently; declined, nothing is sent.
+    page.evaluate("() => { window.__confirm = window.confirm; window.__asked = [];"
+                  " window.confirm = (m) => { window.__asked.push(m); return false; }; }")
+    try:
+        page.set_input_files("#fw-file", str(ota["old"]))
+        page.wait_for_function("() => window.__asked.length > 0", timeout=10000)
+    finally:
+        older_asked = page.evaluate("() => { window.confirm = window.__confirm; return window.__asked; }")
+    want = (f"Firmware {OTA_OLD_VERSION}: this is older than the firmware on the panel ({v0}). Install it anyway?"
+            " The panel goes dark for about a minute.")
+    check(older_asked == [want] and get_json(base + "/api/firmware")["version"] == v0 and not page.is_disabled("#fw-go"),
+          f"firmware: an older bundle asks first, declined sends nothing ({older_asked})")
     check(get_json(base + "/api/firmware")["version"] == v0 and get_json(base + "/api/status")["version"] == v0,
           "firmware: refused -> the version is unchanged")
     check(not page.is_disabled("#fw-go"), "firmware: the button is back")
@@ -1499,7 +1529,7 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     expected.append("/api/")
     try:
         page.set_input_files("#fw-file", str(ota["good"]))
-        fw_message(page, "^Restarting… the panel comes back in about 20 s")
+        fw_message(page, "^Restarting… the panel comes back in about 45 s")
         check(page.is_disabled("#fw-go"), "firmware: 'Restarting…', the button waits")
         t = fw_message(page, f"^Updated to {re.escape(OTA_VERSION)}$", 60000)
         check(True, f"firmware: '{t}' after the mock's restart")
@@ -1518,6 +1548,12 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     page.wait_for_function("v => document.querySelector('#fw-facts').textContent.includes('updated to ' + v)"
                            " && document.querySelector('#st-about').textContent.includes(v)", arg=OTA_VERSION, timeout=10000)
     check(True, f"firmware: the card shows {OTA_VERSION} and the updater's line, About too")
+    check(len(fw["log"].encode()) <= 1024 and "renamed the bundle to /update/done-" in fw["log"]
+          and fw["log"].endswith(fw["last"]), f"firmware: GET /api/firmware's log is the log's end ({fw['log']!r})")
+    page.click("#fw-log summary")
+    log_text = page.inner_text("#fw-log-text")
+    check(page.is_visible("#fw-log-text") and f"renamed the bundle to /update/done-{OTA_VERSION}.bin" in log_text,
+          f"firmware: 'Update log' opens on the log ({log_text[-120:]!r})")
     page.locator("#st-fw").screenshot(path=str(OUT / "settings-firmware-laptop.png"))
     expected.remove("/api/firmware")
 
@@ -3406,6 +3442,9 @@ def www_mock_checks(page: Page, base: str, version: str) -> None:
         if want == 200:
             check(reply is not None and reply.get("staged") is True and get_json(base + "/api/www")["staged"] is True,
                   f"web app: PUT /api/www with a card replies staged true, and GET /api/www keeps it ({reply})")
+        else:
+            check(get_json(base + "/api/www")["staged"] is None,
+                  "web app: a PUT refused at its header leaves staged null (it describes the last attempt)")
 
 
 def post_code(url: str, obj) -> tuple[int, dict | None]:

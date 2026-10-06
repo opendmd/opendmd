@@ -114,15 +114,51 @@ its gzip budgets (which are about load time over WiFi, not flash).
   whole pack as the body, `Content-Length` required (411 without, 413 over
   the partition). The first 64 bytes are read and parsed before anything is
   erased — not a pack, or a header whose total length differs from the
-  body's, is a 400 and the app in flash stays. Then:
-  - **With a card** (the usual case), the rest of the body is received onto
-    the card first, `/update/www.pack.part` (the GIF upload path: a 2 KB
-    buffer, one open file), and its CRC is checked there, all while the old
-    pack stays mapped. An upload cut short (408), a client that went away,
-    a card write that failed (500) or a CRC that does not match (422)
-    leaves **the web app in flash exactly as it was**, still served. Only
-    a staged pack whose CRC matched is written to flash, from the card
-    (~3 s for 800 KB, most of it the erase pauses).
+  body's, is a 400 (answered at once, without waiting for the rest of the
+  body) and the app in flash stays. Then:
+  - **With a card** (the usual case), the whole pack, header first, is
+    received onto the card, `/update/www.pack.part` (the GIF upload path:
+    a 2 KB buffer, one open file), and **read back whole before anything
+    in flash is touched**: its size, and its CRC against the header's,
+    all while the old pack stays mapped. An upload cut short (408), a
+    client that went away, a card write that failed (500), a CRC that
+    does not match (422) or a card that will not read the file back (500,
+    `reading the staged pack from the card at byte N failed 4 times: …;
+    the web app in flash is unchanged`) leaves **the web app in flash
+    exactly as it was**, still served. Only a staged pack that read back
+    good is written to flash, from the card (~3 s for 800 KB, most of it
+    the erase pauses).
+  - **Card reads are retried.** Seen on a 64 GB card at 40 MHz: one read
+    of the staged pack failed with a data CRC error (`sdmmc_read_sectors_dma
+    … 0x108`) in a pass that read the rest fine; before 2026-10-06 that
+    happened in the copy, after the erase, and left no web app. Now every
+    read of the staged file, in the check and in the copy, is tried up to
+    `config::WWW_CARD_READ_TRIES` (4) times, 100/200/300 ms apart, the file
+    opened again each time (FATFS remembers a disk error in the open file
+    and fails every later call on it). Only a read that fails every time
+    counts as one card error for the card's health (`sdhealth`).
+  - **If the copy still fails** after the erase (the card gave up between
+    the check and the copy, or a flash write failed), the whole write is
+    tried once more from the start; if that fails too, the reply is a 500
+    saying so, pages are 503, and the checked pack **stays on the card**.
+    At the next boot, once the card is mounted and `www::init` has found no
+    pack in flash, `www::restore_from_card` checks the staged file again
+    (size, CRC) and writes it the same way (logged: `www: pack '…' written
+    from the card in N s; the web app is back`). A staged file found while
+    flash holds a good pack is stale and deleted; one that is not a good
+    pack is deleted; one the card will not read stays for the next boot.
+    A new push replaces it either way. The boot task does this before it
+    starts the network, so WiFi comes up that much later (~9 s for 877 KB).
+  - **Drilled** on the spare (2026-10-06, 20 MHz card) with temporary
+    fault injection (reads of the staged file past 256 KB failing with
+    `EIO`; not in the tree): failing every attempt in the check, the PUT
+    was a 500 after 3.7 s naming the byte and the error, and `/` kept
+    serving the old pack; failing two attempts, the push succeeded (12.0 s,
+    "1 read needed another attempt"); failing every attempt in the copy,
+    the PUT was a 500 after 9.9 s (two whole copies), `/` a 503 saying the
+    checked pack stays on the card — then the card-failure rule (3 errors
+    in 60 s, the check's failure included) restarted the board and the
+    boot wrote the staged pack back in 8.8 s.
   - **Without a card** (none, one that cannot be read, or one where
     `/update/www.pack.part` cannot be created), the body is written to
     flash as it arrives, as before: a failure part-way leaves no web app
@@ -148,12 +184,13 @@ its gzip budgets (which are about load time over WiFi, not flash).
 
   The reply is `GET /api/www`'s object; a pack that does not verify after
   writing is a 422, one cut short a 408 (or nothing, if the client went
-  away). 782 KB takes ~7 s over WiFi plus the flash write.
+  away), a copy from the card that failed twice a 500. 782 KB takes ~7 s over WiFi plus the flash write.
 - **`GET /api/www`**: `{"version","bytes","entries","ok","error","staged"}`;
   the same object is `www` in `/api/status`, and `PUT /api/www`'s reply.
-  `staged`: whether this boot's last update was staged on the card (true,
-  also for one refused after staging), written from the upload (false), or
-  none yet (null).
+  `staged`: whether this boot's last update attempt was staged on the
+  card (true, also for one refused after staging), written from the
+  upload (false), or none yet (null; also after an attempt refused at its
+  header, so it never describes an earlier push).
 
 A response in flight and an update never overlap: both run on the one
 stream task, one job at a time, and the lock makes that hold even if the
