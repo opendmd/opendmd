@@ -183,8 +183,13 @@ Every view's visible text (and every title tooltip) is checked for "odm" and
 
 Unreadable-card pass: a second mock with `--sd unreadable` (a card that
 mounts but cannot be read, exFAT): status `sd` {mounted: true, readable:
-false, error naming FAT32}, the Now page's Card line "Not readable: format
-it FAT32" in red, and PUT /api/www replying staged false.
+false, error naming FAT32}, the Now page's Card line "Not readable: needs
+FAT32" in red and its "Format card…" line, and PUT /api/www replying
+staged false. Then the format: POST /api/card/format without `confirm` is
+a 400; the dialog (warning, red button) cancelled changes nothing; Format
+card shows progress with `sd.formatting` true (a second POST: 409), ends
+"Done" with the card readable, and a format of the now readable card is a
+409.
 
 A few requests fail on purpose (the 404/415 plays, a preview's try for a
 prepared copy that is not there, and the aborted GIF download); they are
@@ -3403,26 +3408,78 @@ def www_mock_checks(page: Page, base: str, version: str) -> None:
                   f"web app: PUT /api/www with a card replies staged true, and GET /api/www keeps it ({reply})")
 
 
+def post_code(url: str, obj) -> tuple[int, dict | None]:
+    """A JSON POST's status and body, errors included."""
+    req = urllib.request.Request(url, data=json.dumps(obj).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.load(e)
+        except ValueError:
+            return e.code, None
+
+
 def sd_unreadable_pass(browser) -> None:
     """`mock-device.py --sd unreadable`: a card that mounts but cannot be
-    read (exFAT). Status says so, the Now page names it, nothing is staged."""
+    read (exFAT). Status says so, the Now page names it, nothing is staged;
+    then Now's "Format card…" dialog formats it and the card reads, and a
+    second format is refused (409: only an unreadable card is formatted)."""
     proc, base = start_mock(["--root", str(CARD), "--sd", "unreadable"])
     errors: list[str] = []
     try:
         print(f"\n== mock device with an unreadable card at {base}")
         sd = get_json(base + "/api/status")["sd"]
-        check(sd["mounted"] is True and sd["readable"] is False and "FAT32" in (sd["error"] or ""),
-              f"unreadable card: status sd {{mounted: true, readable: false, error}} ({sd})")
+        check(sd["mounted"] is True and sd["readable"] is False and "FAT32" in (sd["error"] or "")
+              and "32 GB" not in sd["error"] and sd["formatting"] is False,
+              f"unreadable card: status sd {{mounted: true, readable: false, error, formatting: false}} ({sd})")
         page = new_page(browser, "laptop", errors)
         page.goto(base + "/")
         page.wait_for_function("[...document.querySelectorAll('#now-facts dt')].some(e => e.textContent === 'Card')", timeout=20000)
         card = page.evaluate("() => { const dt = [...document.querySelectorAll('#now-facts dt')].find(e => e.textContent === 'Card');"
                              " const dd = dt.nextElementSibling; return [dd.textContent, dd.classList.contains('bad')]; }")
-        check(card == ["Not readable: format it FAT32", True], f"unreadable card: Now's Card line says so, in red ({card})")
+        check(card == ["Not readable: needs FAT32", True], f"unreadable card: Now's Card line says so, in red ({card})")
+        check(page.is_visible("#now-sd") and page.is_visible("#now-format"),
+              "unreadable card: Now shows the card line and Format card… outside More")
         shot(page, "now-sd-unreadable", "laptop")
         code, reply = put_www(base, (REPO / "opendmd-web" / "www.pack").read_bytes())
         check(code == 200 and reply is not None and reply.get("staged") is False,
               f"unreadable card: PUT /api/www is not staged ({code}, staged {reply and reply.get('staged')})")
+        code, reply = post_code(base + "/api/card/format", {})
+        check(code == 400, f"card format: no confirm is a 400 ({code} {reply})")
+        # The dialog: Cancel changes nothing.
+        page.click("#now-format")
+        page.wait_for_selector("#fmt-dlg", state="visible", timeout=5000)
+        text = page.inner_text("#fmt-dlg")
+        check("Everything on it is erased" in text and "exFAT" in text and "FAT32" in text,
+              f"card format: the dialog warns and explains ({text!r})")
+        check(page.evaluate("() => document.querySelector('#fmt-go').classList.contains('danger')"),
+              "card format: the destructive button is red (.danger)")
+        shot(page, "card-format-dialog", "laptop")
+        page.click("#fmt-close")
+        page.wait_for_selector("#fmt-dlg", state="detached", timeout=5000)
+        check(get_json(base + "/api/status")["sd"]["readable"] is False, "card format: Cancel leaves the card alone")
+        # Format: progress, then the card reads.
+        page.click("#now-format")
+        page.click("#fmt-go")
+        page.wait_for_function("document.querySelector('#fmt-msg')?.textContent.startsWith('Formatting')", timeout=5000)
+        check(page.is_visible("#fmt-prog") and page.is_disabled("#fmt-close"), "card format: progress shown, the dialog held open")
+        busy = get_json(base + "/api/status")["sd"]
+        check(busy["formatting"] is True, f"card format: status sd.formatting while it runs ({busy})")
+        code, reply = post_code(base + "/api/card/format", {"confirm": True})
+        check(code == 409 and "already" in (reply or {}).get("error", ""), f"card format: a second one while running is a 409 ({code} {reply})")
+        page.wait_for_function("document.querySelector('#fmt-msg')?.textContent.startsWith('Done')", timeout=20000)
+        shot(page, "card-format-done", "laptop")
+        sd = get_json(base + "/api/status")["sd"]
+        check(sd["readable"] is True and sd["formatting"] is False and sd["format_error"] is None,
+              f"card format: the card reads afterwards ({sd})")
+        page.click("#fmt-close")
+        page.wait_for_selector("#now-sd", state="hidden", timeout=5000)
+        code, reply = post_code(base + "/api/card/format", {"confirm": True})
+        check(code == 409 and "can be read" in (reply or {}).get("error", ""),
+              f"card format: a readable card is a 409 ({code} {reply})")
         page.context.close()
     finally:
         proc.terminate()

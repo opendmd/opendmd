@@ -116,7 +116,7 @@ Counts are since boot.
 | `deadline_misses`, `worst_lateness_ms` | frames shown late; the latest, ms |
 | `misses` | `{by_cause: {open, read, decode, transition, blit, log, other, wake}, late_ms: {"<5", "<20", "<50", "<100", "<250", "<500", ">=500"}}`: late frames by cause and by ms late |
 | `gifs_started`, `streams_aborted`, `log_drops` | files opened; responses cut short; log lines dropped |
-| `sd` | `{mounted, readable, capacity_bytes, error, attempts, clock_khz, fallback, failures, reboots}`: the card; `readable` false when it mounts but its filesystem cannot be read (exFAT: nothing plays); `error` why it is not mounted, not readable or failing; `fallback` slowed after failing at full speed; `failures` errors in the last 60 s; `reboots` card-failure restarts in the last 15 min |
+| `sd` | `{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots}`: the card; `readable` false when it mounts but its filesystem cannot be read (exFAT: nothing plays); `formatting`, `format_error` see `POST /api/card/format`; `error` why it is not mounted, not readable or failing; `fallback` slowed after failing at full speed; `failures` errors in the last 60 s; `reboots` card-failure restarts in the last 15 min |
 | `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `task watchdog`, `brownout`, …; `"card failure"`, `"different card"` or null |
 | `overrides`, `hidden` | as in "Fields that recur" |
 | `mode`, `mode_until` | `normal`, `dim` or `off` (night mode); until `"HH:MM"` |
@@ -155,6 +155,19 @@ Bench test hooks: `?sd_fail=N` (next N card mounts fail),
 
 ```sh
 curl -s -X POST $DMD/api/reboot
+```
+
+### POST /api/card/format
+
+Formats the card FAT32, erasing it: `{"confirm":true}`, only for a card
+that mounts but cannot be read (`sd.readable` false: exFAT, as most cards
+over 32 GB come). `202` `{"ok":true,"formatting":true}`; `sd.formatting`
+stays true until it is done (~a minute for 64 GB), then `sd.readable` is
+true, or `sd.format_error` says why not. `400` no `confirm`; `409` no card,
+a readable card, or a format running.
+
+```sh
+curl -s $DMD/api/card/format --json '{"confirm":true}'
 ```
 
 ## Settings

@@ -37,7 +37,9 @@ or Make art's switch; counted with the page until 2026-10-01), <= 6 KB,
 and so do Settings' Firmware and Security groups (`js/firmware.js`: the
 firmware version, "Update from file…" with its progress and wait for the
 restart, and the API key switch; imported when Advanced is first open),
-<= 4 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
+<= 4 KB, and so does Now's card format dialog (`js/card.js`: "Format
+card…" for a card the panel can't read, the POST and the wait for it;
+imported when first opened), <= 2 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
 by tools/api-page.py, opened from Settings -> About in its own tab), <=
 13 KB (12 KB until the Security and Firmware update sections, 2026-10-02;
 the page is only fetched when opened from Settings → About). The name index for "Find art
@@ -78,6 +80,8 @@ FIND_GZ_BUDGET = 10 * 1024
 FIND = {"js/find.js", "find.css"}
 SMOOTH_GZ_BUDGET = 6 * 1024
 SMOOTH = {"js/smooth.js"}
+CARD_GZ_BUDGET = 2 * 1024
+CARD = {"js/card.js"}
 FIRMWARE_GZ_BUDGET = 4 * 1024
 FIRMWARE = {"js/firmware.js"}
 API_GZ_BUDGET = 13 * 1024
@@ -120,6 +124,8 @@ def main() -> int:
             kind = "smooth"
         elif rel in FIRMWARE:
             kind = "firmware"
+        elif rel in CARD:
+            kind = "card"
         elif rel in API:
             kind = "api page"
         elif rel.startswith("art/"):
@@ -140,7 +146,8 @@ def main() -> int:
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
-                         ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("api page", API_GZ_BUDGET),
+                         ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
+                         ("api page", API_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

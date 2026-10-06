@@ -10,6 +10,7 @@ pub mod access;
 pub mod boot;
 pub mod brightness;
 pub mod canvas;
+pub mod card;
 pub mod chan;
 pub mod compositor;
 pub mod engine;
