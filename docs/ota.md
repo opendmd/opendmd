@@ -147,5 +147,13 @@ by the device with a 422 and nothing on the card changes.
   between), then the fault drills: a tampered bundle (422), a cut-off upload
   (408, nothing staged), card pulled during the updater's write (recovers on
   reinsertion). The serial capture watches the updater's log.
+  Run 2026-10-09 on the spare (0.3.8 → 0.3.9, 64 GB FAT32 card at 20 MHz):
+  card pulled ~2 s into the write, `reading the card failed at 589824 of
+  2090272 B, mid-write`; one retry hit `card mount failed: ESP_ERR_TIMEOUT`;
+  on reinsertion the updater re-hashed the file, rewrote factory (13.6 s),
+  verified it and booted 0.3.9, playing with 0 deadline misses. The card's
+  `/update/log.txt` lacks the lines written while the card was out (only
+  the console has them) and lists the lines around the retry slightly out
+  of order.
 - Rig: once the spare passes, one USB flash for the layout, then every
   further firmware update over WiFi.
