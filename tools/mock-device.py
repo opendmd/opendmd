@@ -1562,6 +1562,12 @@ class Player:
         self.last_advance = 0.0
         self.deadline_misses = 0
         self.worst_lateness_ms = 0
+        # As the firmware counts them (opendmd-core frametime): every late
+        # frame by cause and lateness; the headline only from 5 ms, steady
+        # or at a GIF change.
+        self.miss_cause = dict.fromkeys(["open", "read", "decode", "transition", "blit", "log", "other", "wake"], 0)
+        self.miss_late = dict.fromkeys(["<5", "<20", "<50", "<100", "<250", "<500", ">=500"], 0)
+        self.miss_steady = self.miss_switch = self.worst_steady_ms = 0
         self.manifest = MANIFEST_REL
         self.manifest_last_set: str | None = None
         self.index_state = "building"
@@ -1675,9 +1681,28 @@ class Player:
         self.ordinal += 1
         self.gifs_started += 1
         self.last_advance = self.file_t0 = time.monotonic()
-        if random.random() < 0.03:
-            self.deadline_misses += 1
-            self.worst_lateness_ms = max(self.worst_lateness_ms, random.randint(420, 560))
+        # The real rig: ~1 file start in 10 has its first frame a few ms
+        # late (the open); steady play almost never misses, and then by 1 ms.
+        if random.random() < 0.1:
+            self.record_miss("open", random.randint(0, 7), steady=False)
+        if random.random() < 0.02:
+            self.record_miss("read", 1, steady=True)
+
+    def record_miss(self, cause: str, late_ms: int, steady: bool):
+        self.deadline_misses += 1
+        self.worst_lateness_ms = max(self.worst_lateness_ms, late_ms)
+        self.miss_cause[cause] += 1
+        edges = [5, 20, 50, 100, 250, 500]
+        self.miss_late[list(self.miss_late)[sum(late_ms >= e for e in edges)]] += 1
+        if steady:
+            self.worst_steady_ms = max(self.worst_steady_ms, late_ms)
+            self.miss_steady += late_ms >= 5
+        else:
+            self.miss_switch += late_ms >= 5
+
+    def misses_json(self) -> dict:
+        return {"steady": self.miss_steady, "switch": self.miss_switch, "threshold_ms": 5, "window_ms": 500,
+                "worst_steady_ms": self.worst_steady_ms, "by_cause": dict(self.miss_cause), "late_ms": dict(self.miss_late)}
 
     def set_paused(self, paused: bool):
         """As the engine does: a pause freezes the file's position, and
@@ -2500,6 +2525,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "refresh_hz": 100,
                     "deadline_misses": player.deadline_misses,
                     "worst_lateness_ms": player.worst_lateness_ms,
+                    "misses": player.misses_json(),
                     "gifs_started": player.gifs_started,
                     "sd": sd_fields(ctx),
                     "reset_reason": "software" if ctx.reset_note else "poweron",

@@ -337,6 +337,9 @@ fn main() -> Result<()> {
     let mut deadline_misses: u64 = 0;
     let mut worst_lateness_ms: u64 = 0;
     let mut misses = frametime::Misses::default();
+    // When the file on screen's first frame went up (epoch time): a miss
+    // within `frametime::SWITCH_WINDOW` of it is the GIF change's.
+    let mut first_shown: Option<Duration> = None;
     let mut started: u64 = 0;
     // Where an iteration's time went before its tick (see `frametime`):
     // when the last sleep ended, how much later than planned, and the
@@ -1073,6 +1076,13 @@ fn main() -> Result<()> {
         }
         let pre_us = us(tick_start.duration_since(woke));
         let tick_now = epoch.elapsed();
+        let due_in_us = if probe::ENABLED {
+            eng.frame_due()
+                .map(|d| d.as_micros() as i64 - tick_now.as_micros() as i64)
+        } else {
+            None
+        };
+        probe::tick_due(due_in_us);
         // Night mode "off": the panel is dark and nothing is decoded.
         let off = sched.off();
         let outcome = if off {
@@ -1151,6 +1161,9 @@ fn main() -> Result<()> {
                 // because the blit itself took time.
                 let now = epoch.elapsed();
                 judged = Some(Instant::now());
+                if is_new {
+                    first_shown = Some(now);
+                }
                 // The deadline is the file's next frame. A transition step
                 // in between (`next_frame_at` is then earlier) is not one:
                 // a step a few ms late shows nothing different, and if its
@@ -1164,6 +1177,7 @@ fn main() -> Result<()> {
                         log_us: post_log_us,
                         work_us: now.saturating_sub(tick_now).as_micros() as u32,
                         delay_ms: next_frame_at.saturating_sub(tick_now).as_millis() as u64,
+                        due_in_us: due_in_us.unwrap_or(0),
                     };
                     let late_ms =
                         (now > deadline).then(|| now.saturating_sub(deadline).as_millis() as u64);
@@ -1204,7 +1218,12 @@ fn main() -> Result<()> {
                             blit: blit_us + glow_between,
                             transitioning,
                         };
-                        misses.record(phases.cause(), late);
+                        let when = frametime::when(
+                            is_new,
+                            transitioning,
+                            first_shown.map(|t| now.saturating_sub(t)),
+                        );
+                        misses.record(phases.cause(), late, when);
                         config::CATCHUP_SLEEP
                     }
                 }
@@ -1213,7 +1232,14 @@ fn main() -> Result<()> {
             TickOutcome::Idle => {
                 // Between frames: the glow's next step, if one is due.
                 glow_us += panel.glow_tick(eng.display(&canvas));
-                config::IDLE_SLEEP
+                // A wake before the file's frame (a glow step's) sleeps no
+                // further than the frame: a flat 5 ms made it up to 5 ms
+                // late, which nothing counted.
+                let due = eng.frame_due().filter(|_| !eng.is_paused());
+                match due.and_then(|d| d.checked_sub(epoch.elapsed())) {
+                    Some(left) if !left.is_zero() => left.min(config::IDLE_SLEEP),
+                    _ => config::IDLE_SLEEP,
+                }
             }
             TickOutcome::Exhausted => {
                 log::error!(

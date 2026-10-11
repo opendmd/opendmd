@@ -1,9 +1,12 @@
 //! Where a deadline miss came from, always on: a few clock reads per frame.
 //!
 //! The display loop splits every iteration into phases and, when a frame is
-//! late, counts the miss against the largest one ([`Cause`]); it also keeps
-//! a histogram of how late ([`LATE_BUCKETS`]). Both go in the heartbeat and
-//! in `/api/status` (`misses: {by_cause, late_ms}`). The phases:
+//! late, counts the miss against the largest one (`Cause`); it also keeps
+//! a histogram of how late (`LATE_BUCKETS`), and the headline: misses of
+//! 5 ms or more, steady or at a GIF change (`opendmd_core::frametime`, which
+//! holds the counters). All of it goes in the heartbeat and in
+//! `/api/status` (`misses: {steady, switch, …, by_cause, late_ms}`). The
+//! phases:
 //!
 //! - `open`: [`crate::sd::SdSource::open`] (the copy lookup, the file's own
 //!   open and its magic check, the builder's release wait) and the
@@ -138,119 +141,8 @@ impl Catalog for CountedCatalog {
     }
 }
 
-/// What a missed frame's iteration spent most of its time on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cause {
-    Open,
-    Read,
-    Decode,
-    Transition,
-    Blit,
-    Log,
-    Other,
-    Wake,
-}
-
-/// The names, in [`Cause`] order (heartbeat and JSON keys).
-pub const CAUSES: [&str; 8] = [
-    "open",
-    "read",
-    "decode",
-    "transition",
-    "blit",
-    "log",
-    "other",
-    "wake",
-];
-
-/// Lateness buckets, ms: under 5, 20, 50, 100, 250, 500, and the rest.
-pub const LATE_BUCKETS: [&str; 7] = ["<5", "<20", "<50", "<100", "<250", "<500", ">=500"];
-const LATE_EDGES: [u64; 6] = [5, 20, 50, 100, 250, 500];
-
-/// One iteration's phases, µs.
-#[derive(Default, Clone, Copy, Debug)]
-pub struct Phases {
-    pub wake: u32,
-    pub log: u32,
-    pub other: u32,
-    pub open: u32,
-    pub read: u32,
-    /// The tick's own time (decode or composite).
-    pub decode: u32,
-    pub blit: u32,
-    pub transitioning: bool,
-}
-
-impl Phases {
-    /// The largest phase (the first of equals, in [`Cause`] order).
-    pub fn cause(&self) -> Cause {
-        let decode = if self.transitioning {
-            Cause::Transition
-        } else {
-            Cause::Decode
-        };
-        [
-            (Cause::Open, self.open),
-            (Cause::Read, self.read),
-            (decode, self.decode),
-            (Cause::Blit, self.blit),
-            (Cause::Log, self.log),
-            (Cause::Other, self.other),
-            (Cause::Wake, self.wake),
-        ]
-        .into_iter()
-        .fold(
-            (Cause::Other, 0),
-            |best, (c, us)| if us > best.1 { (c, us) } else { best },
-        )
-        .0
-    }
-}
-
-/// Misses by cause and by lateness, since boot.
-#[derive(Default, Clone, Copy, Debug)]
-pub struct Misses {
-    pub by_cause: [u32; 8],
-    pub late: [u32; 7],
-}
-
-impl Misses {
-    pub fn record(&mut self, cause: Cause, late_ms: u64) {
-        self.by_cause[cause as usize] += 1;
-        let b = LATE_EDGES.iter().take_while(|&&e| late_ms >= e).count();
-        self.late[b] += 1;
-    }
-
-    /// `misses: open 12 read 0 …; late <5:3 <20:1 …`
-    pub fn heartbeat(&self) -> String {
-        let mut s = String::from("misses:");
-        for (name, n) in CAUSES.iter().zip(self.by_cause) {
-            s.push_str(&format!(" {name} {n}"));
-        }
-        s.push_str("; late");
-        for (name, n) in LATE_BUCKETS.iter().zip(self.late) {
-            s.push_str(&format!(" {name}:{n}"));
-        }
-        s
-    }
-
-    /// `{"by_cause":{"open":N,…},"late_ms":{"<5":N,…}}`
-    pub fn json(&self) -> String {
-        let obj = |names: &[&str], counts: &[u32]| {
-            let fields: Vec<String> = names
-                .iter()
-                .zip(counts)
-                .map(|(k, v)| format!(r#""{k}":{v}"#))
-                .collect();
-            format!("{{{}}}", fields.join(","))
-        };
-        format!(
-            r#"{{"by_cause":{},"late_ms":{}}}"#,
-            obj(&CAUSES, &self.by_cause),
-            obj(&LATE_BUCKETS, &self.late)
-        )
-    }
-}
+// The counters and the steady/switch rule are host-tested in the core.
+pub use opendmd_core::frametime::{when, Misses, Phases};
 
 /// A FreeRTOS task name (≤ 15 bytes), copied.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]

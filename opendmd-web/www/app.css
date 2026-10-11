@@ -33,7 +33,7 @@ p{margin:8px 0}
 .row.sp{justify-content:space-between}
 .grow{flex:1;min-width:0}
 .stat{white-space:nowrap}.stat b{display:block;font-weight:600;font-variant-numeric:tabular-nums}
-.stat span{color:var(--mut);font-size:13px}
+.stat span{color:var(--mut);font-size:13px}.stat.w{white-space:normal;min-width:0}.stat b span{color:inherit;font-size:inherit}
 .cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
 @media (max-width:1000px){.cols{grid-template-columns:minmax(0,1fr)}}
 button,.btn,select,input[type=text],input[type=number],input[type=password],input[type=search],input[type=time]{font:inherit;color:var(--fg);background:var(--bg3);border:1px solid var(--line);border-radius:var(--r);padding:4px 12px;min-height:36px}
@@ -159,7 +159,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #now-more>summary>.muted{margin-left:auto}
 .figs{display:flex;gap:24px}
 .f2{grid-template-columns:repeat(2,minmax(0,1fr))}
-@media (max-width:760px){.figs,#now-more>summary{gap:12px}.f2{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:760px){.figs,#now-more>summary{gap:12px}#now-stats{flex-wrap:wrap;row-gap:8px;flex:1}.stat.w{flex-basis:100%}.f2{grid-template-columns:minmax(0,1fr)}}
 .grp{border-top:1px solid var(--line);margin-top:16px;padding-top:16px}.grp>h3:first-child{margin-top:0}
 .look>summary,#st-adv>summary,#builder>summary{font-size:17px;font-weight:600}#st-adv>summary,#builder>summary{color:var(--fg)}
 .facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 16px;margin:8px 0 0;font-size:13px}.facts dt{color:var(--mut)}.facts dd{margin:0;overflow-wrap:anywhere}

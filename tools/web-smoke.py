@@ -1734,6 +1734,16 @@ def mock_pass(browser) -> None:
         page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
         check(page.locator("#now-stats .stat").count() == 3 and page.locator("#now-facts dt").count() >= 7,
               "now: health line (three figures) and its More list render")
+        # Late frames in plain words (5 ms or more, during play / at GIF
+        # changes), the raw count of every late frame only under More.
+        page.wait_for_function("/^\\d+ during play · \\d+ at GIF changes$/.test(document.querySelector('#now-late b')?.textContent || '')", timeout=10000)
+        m = get_json(base + "/api/status")["misses"]
+        late_b = page.locator("#now-late b").text_content()
+        check(all(k in m for k in ("steady", "switch", "threshold_ms", "window_ms", "worst_steady_ms", "by_cause", "late_ms")),
+              "now: status misses carry steady/switch/threshold_ms/window_ms beside by_cause/late_ms")
+        check("Late frames, any size" in page.locator("#now-facts").text_content() and "Deadline" not in page.locator("#now-more").text_content()
+              and "5 ms" in (page.locator("#now-late").get_attribute("title") or ""),
+              f"now: late frames read '{late_b}', the raw count under More, the threshold in the tooltip")
         check(get_json(base + "/api/status")["manifest"] == "/sdcard/filelist.txt", "now: the default playlist is filelist.txt")
         wait_lit(page, "#now-panel", "now")
         # In step with the mock's clock: a first sync, then two polls.
@@ -3581,7 +3591,8 @@ def device_flash_ui(browser, device: str, errors: list[str]) -> None:
     check(w.get("version", "?") in page.inner_text("#st-about"), "device web app: Settings shows the pack's version")
     page.context.close()
     st1 = get_json(device + "/api/status")
-    print(f"  device across the flash-UI checks: misses {st0['deadline_misses']} -> {st1['deadline_misses']}, "
+    print(f"  device across the flash-UI checks: misses {st0['deadline_misses']} -> {st1['deadline_misses']} "
+          f"(>=5 ms steady {st1['misses'].get('steady', '-')}, switch {st1['misses'].get('switch', '-')}), "
           f"worst {st1['worst_lateness_ms']} ms, heap free {st1['heap']['free']} floor {st0['heap']['floor']} -> {st1['heap']['floor']}")
 
 
@@ -3608,7 +3619,8 @@ def device_pass(browser, device: str) -> None:
         drifts, rtts = drift_stats(page, secs)
         st1 = get_json(base + "/api/status")
         print("  " + summarise(f"device drift over {secs:.0f} s", drifts, rtts))
-        print(f"  device over that minute: misses {st0['deadline_misses']} -> {st1['deadline_misses']}, "
+        print(f"  device over that minute: misses {st0['deadline_misses']} -> {st1['deadline_misses']} "
+              f"(>=5 ms steady {st1['misses'].get('steady', '-')}, switch {st1['misses'].get('switch', '-')}), "
               f"worst {st1['worst_lateness_ms']} ms, files {st0['gifs_started']} -> {st1['gifs_started']}")
         check(len(drifts) > secs, f"device now: the preview kept syncing ({len(drifts)} syncs)")
         no_leaks(page, "device now")

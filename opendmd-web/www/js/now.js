@@ -125,6 +125,14 @@ function mountDevice(el) {
   }
 
   const stat = (name, value) => h('span.stat', h('b', value), h('span', name));
+  // Late frames a person could see (5 ms or more), playing on and at a GIF
+  // change (the new file's first frame and transition); every late frame,
+  // any size, only under More. Firmware before 0.3.12 has just the total.
+  // (One line on a laptop, two on a phone.)
+  const late = (m, n) => m?.steady === undefined ? n.toLocaleString()
+    : [h('span', `${m.steady.toLocaleString()} during play`), h('span.sep', ' · '), h('span', `${m.switch.toLocaleString()} at GIF changes`)];
+  const lateTip = (m) => m?.threshold_ms === undefined ? ''
+    : `Frames ${m.threshold_ms} ms or more late. GIF changes: the new GIF's first frame, its transition and its first ${m.window_ms / 1000} s`;
   const fact = (name, value, bad) => [h('dt', name), h('dd' + (bad ? '.bad' : ''), value)];
 
   function render(s) {
@@ -148,12 +156,12 @@ function mountDevice(el) {
     clear(grid,
       stat('Uptime', uptime(s.uptime_secs)),
       stat('Free memory', bytes(s.heap.free)),
-      stat('Deadline misses', s.deadline_misses.toLocaleString()));
+      Object.assign(stat('Late frames', late(s.misses, s.deadline_misses)), { id: 'now-late', className: 'stat w', title: lateTip(s.misses) }));
     clear(facts,
       fact('Address', s.ip || '–'),
       fact('Lowest free memory', bytes(s.heap.floor), s.heap.floor < 20000),
       fact('Refresh', s.refresh_hz + ' Hz'),
-      fact('Worst lateness', s.worst_lateness_ms + ' ms'),
+      fact('Late frames, any size', `${s.deadline_misses.toLocaleString()} · worst ${s.worst_lateness_ms} ms`),
       fact('Files started', s.gifs_started.toLocaleString()),
       fact('Playlist', playlistLabel(s.manifest)),
       fact('Card', !s.sd.mounted ? 'Not mounted' : s.sd.formatting ? 'Formatting…' : s.sd.readable === false ? 'Not readable: needs FAT32' : bytes(s.sd.capacity_bytes), s.sd.readable === false || !s.sd.mounted));
