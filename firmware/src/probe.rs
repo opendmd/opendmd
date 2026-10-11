@@ -91,7 +91,9 @@ counters!(
     P_WORK_MAX_US,
     P_MISS_OPEN,
     P_MISS_NOOPEN,
-    P_BLIT_PX
+    P_BLIT_PX,
+    P_EARLY,
+    P_EARLY_MAX_US
 );
 // For the life of the run.
 counters!(A_OPENS, A_OPEN_MAX_US, A_REWINDS);
@@ -368,6 +370,24 @@ pub struct FrameTimes {
     pub log_us: u32,
     pub work_us: u32,
     pub delay_ms: u64,
+    /// How long before the file's frame was due the tick began (µs;
+    /// negative: after).
+    pub due_in_us: i64,
+}
+
+/// A tick began `due_in_us` before the file's frame was due (negative:
+/// after). One that began less than a scheduler tick early is a wake the
+/// sleep's rounding brought forward (`usleep` sleeps whole 1 ms ticks from
+/// wherever in the current tick it was called): the heartbeat's `early
+/// wakes`.
+pub fn tick_due(due_in_us: Option<i64>) {
+    if !ENABLED {
+        return;
+    }
+    if let Some(d @ 1..=1000) = due_in_us {
+        P_EARLY.fetch_add(1, Relaxed);
+        max(&P_EARLY_MAX_US, d as u32);
+    }
 }
 
 /// Account a frame; on a miss, queue a line that attributes it.
@@ -400,9 +420,10 @@ pub fn frame(t: &FrameTimes, late_ms: Option<u64>, is_new: bool, path: &str) {
         P_MISS_NOOPEN.fetch_add(1, Relaxed);
     }
     emit(format!(
-        "miss late={late}ms delay={}ms work={}us tick={}us new={} opens={} open={}us cat={}us \
+        "miss late={late}ms delay={}ms due_in={}us work={}us tick={}us new={} opens={} open={}us cat={}us \
          reads={} rd_tot={}us rd_max={}us cpu~{}us blit={}us px={} log={}us @{} {path}",
         t.delay_ms,
+        t.due_in_us,
         t.work_us,
         t.tick_us,
         is_new as u8,
@@ -461,7 +482,7 @@ pub fn period_summary() -> String {
     format!(
         " | sd: frames {frames} work-max {}us, {blit}, {decode}{trans}opens {opens} avg {}us max {}us \
          (all-time {} max {}us), rewinds {} (all-time {}), cat-max {}us, reads {} max {}us \
-         >=5ms {} >=20ms {} >=100ms {}, misses open {} no-open {}",
+         >=5ms {} >=20ms {} >=100ms {}, misses open {} no-open {}, early wakes {} max {}us",
         take(&P_WORK_MAX_US),
         open_us.checked_div(opens).unwrap_or(0),
         take(&P_OPEN_MAX_US),
@@ -477,6 +498,8 @@ pub fn period_summary() -> String {
         take(&P_R100),
         take(&P_MISS_OPEN),
         take(&P_MISS_NOOPEN),
+        take(&P_EARLY),
+        take(&P_EARLY_MAX_US),
     )
 }
 

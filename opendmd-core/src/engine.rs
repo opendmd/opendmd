@@ -336,6 +336,18 @@ pub const SEEK_MAX_FRAMES: u32 = 2_000;
 /// file costs one bounded stall rather than an unbounded one.
 pub const SEEK_MAX_CONTENT: Duration = Duration::from_secs(60);
 
+/// A frame due within this of the tick is decoded at it, and timed from
+/// when it was due. The firmware's sleep comes in whole 1 ms scheduler ticks
+/// counted from wherever in the current one it began, so the wake for a
+/// frame lands a few µs before it about once in 40 frames (the probe's
+/// `early wakes`: 383 in 15,775 frames on the spare, 1-62 µs early). Judged
+/// not due, that wake cost the frame the loop's 5 ms idle sleep, uncounted,
+/// or, with a transition running, ran the step the frame was meant to carry
+/// on its own and put the frame behind its work: counted as late, 0-1 ms
+/// (the rig's "transition" and "blit" misses; 54 of 55 misses on the spare
+/// with skips every 2.5 s, none after).
+pub const WAKE_SLACK: Duration = Duration::from_millis(1);
+
 struct Playing {
     index: usize,
     /// This entry's override, if it bends the dwell (`dwell`/`loops`).
@@ -792,7 +804,7 @@ impl Engine {
                 }
                 continue;
             }
-            if now < playing.next_frame_at {
+            if now + WAKE_SLACK < playing.next_frame_at {
                 return Ok(TickOutcome::Idle);
             }
 
@@ -841,13 +853,15 @@ impl Engine {
                     // tick came within half a frame of it: timed from the
                     // tick, the sleep's rounding (~0.9 ms a frame on the rig)
                     // played 100 fps effects at 0.91x.
+                    // A tick inside `WAKE_SLACK` before the frame times
+                    // the next one from when this one was due.
                     let due = playing.next_frame_at;
                     playing.next_frame_at = if playing.path.starts_with(crate::fx::PREFIX)
                         && now.saturating_sub(due) < delay / 2
                     {
                         due + delay
                     } else {
-                        now + delay
+                        now.max(due) + delay
                     };
                     playing.advance(delay);
                     self.compositor.frame_decoded();
@@ -2067,6 +2081,61 @@ mod tests {
             panic!("B loops");
         };
         assert_eq!(next_frame_at, ms(1500));
+    }
+
+    /// A wake a few µs before the frame (the sleep's 1 ms tick rounding) is
+    /// the frame's: decoded at it and timed from when it was due — in steady
+    /// play and under a transition, where it used to run the step the frame
+    /// was to carry on its own and leave the frame for the next tick.
+    #[test]
+    fn a_wake_just_before_the_frame_decodes_it() {
+        use crate::compositor::Kind;
+        let ms = Duration::from_millis;
+        let early = Duration::from_micros(30);
+        let mut e = two_solids(Transition::new(Kind::Dissolve, ms(400)));
+        let mut canvas = Canvas::new();
+        assert!(matches!(
+            e.tick(ms(0), &mut canvas).unwrap(),
+            TickOutcome::Frame { .. }
+        ));
+        assert_eq!(e.frame_due(), Some(ms(50)));
+        // More than the slack early: not yet.
+        assert!(matches!(
+            e.tick(ms(50) - WAKE_SLACK - early, &mut canvas).unwrap(),
+            TickOutcome::Idle
+        ));
+        // Inside it: the frame, the next one 50 ms after this one was due.
+        let TickOutcome::Frame { next_frame_at, .. } = e.tick(ms(50) - early, &mut canvas).unwrap()
+        else {
+            panic!("A's second frame");
+        };
+        assert_eq!((next_frame_at, e.frame_due()), (ms(100), Some(ms(100))));
+
+        // B comes in at 1000 with its transition: steps at 1000 and 1020,
+        // and the one at 1040 is left to B's frame at 1050.
+        let TickOutcome::Frame { next_frame_at, .. } = e.tick(ms(1000), &mut canvas).unwrap()
+        else {
+            panic!("B");
+        };
+        assert_eq!(next_frame_at, ms(1020));
+        let TickOutcome::Frame { next_frame_at, .. } = e.tick(ms(1020), &mut canvas).unwrap()
+        else {
+            panic!("a step");
+        };
+        assert_eq!((next_frame_at, e.frame_due()), (ms(1050), Some(ms(1050))));
+        // The wake for 1050 comes 30 µs early: B's frame is decoded (and
+        // composited) at it, not a step without it.
+        let TickOutcome::Frame {
+            next_frame_at,
+            transitioning,
+            ..
+        } = e.tick(ms(1050) - early, &mut canvas).unwrap()
+        else {
+            panic!("B's second frame");
+        };
+        assert!(transitioning);
+        assert_eq!(e.frame_due(), Some(ms(1100)));
+        assert_eq!(next_frame_at, ms(1050) - early + crate::compositor::STEP);
     }
 
     /// The firmware's pause: paused, then the file let go of (its decoder's

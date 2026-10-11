@@ -16,6 +16,7 @@ pub mod compositor;
 pub mod engine;
 pub mod filter;
 pub mod follow;
+pub mod frametime;
 pub mod fx;
 pub mod gifslim;
 pub mod index;

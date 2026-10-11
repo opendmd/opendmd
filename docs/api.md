@@ -113,8 +113,8 @@ Counts are since boot.
 | `heap` | `{free, floor, idf_min}`, bytes: now, lowest, the system's lowest |
 | `heap_floor_at` | `{task0, task1, largest}`: tasks on each core and the largest free block at the lowest; null until then |
 | `refresh_hz` | panel refresh rate |
-| `deadline_misses`, `worst_lateness_ms` | frames shown late; the latest, ms |
-| `misses` | `{by_cause: {open, read, decode, transition, blit, log, other, wake}, late_ms: {"<5", "<20", "<50", "<100", "<250", "<500", ">=500"}}`: late frames by cause and by ms late |
+| `deadline_misses`, `worst_lateness_ms` | all late frames; the latest, ms |
+| `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: `steady`, `switch` frames ≥ `threshold_ms` late in play, or at a GIF change (first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`) |
 | `gifs_started`, `streams_aborted`, `log_drops` | files opened; responses cut short; log lines dropped |
 | `sd` | `{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots}`: the card; `readable` false when it mounts but its filesystem cannot be read (exFAT: nothing plays); `formatting`, `format_error` see `POST /api/card/format`; `error` why it is not mounted, not readable or failing; `fallback` slowed after failing at full speed; `failures` errors in the last 60 s; `reboots` card-failure restarts in the last 15 min |
 | `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `task watchdog`, `brownout`, …; `"card failure"`, `"different card"` or null |

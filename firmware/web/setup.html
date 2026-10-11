@@ -119,7 +119,7 @@ async function loadStatus() {
       ['Paused', s.paused],
       ['Heap free / floor', kb(s.heap.free) + ' / ' + kb(s.heap.floor)],
       ['Refresh', s.refresh_hz + ' Hz'],
-      ['Deadline misses', s.deadline_misses + ' (worst ' + s.worst_lateness_ms + ' ms late)'],
+      ['Late frames', (s.misses && s.misses.steady !== undefined ? s.misses.steady + ' during play, ' + s.misses['switch'] + ' at GIF changes; ' : '') + s.deadline_misses + ' of any size (worst ' + s.worst_lateness_ms + ' ms)'],
       ['GIFs started', s.gifs_started],
       ['SD card', s.sd.mounted ? (s.sd.capacity_bytes / 1e9).toFixed(2) + ' GB' : 'not mounted'],
     ];
