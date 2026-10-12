@@ -93,20 +93,16 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
 .libgrid>.side{position:sticky;top:60px}
 .chips.scroll{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}.chips.scroll>*{flex:none}
 .libhead{display:grid;grid-template:"q n a" "r r r"/minmax(0,1fr) auto auto;gap:12px;align-items:center}
-.lib-q{grid-area:q;display:flex;align-items:center;background:var(--bg3);border:1px solid var(--line);border-radius:99px;padding-right:4px}
+.lib-q{grid-area:q;display:flex;align-items:center;background:var(--bg3);border:1px solid var(--line);border-radius:99px}
 #lib-search{flex:1;font-size:16px;min-height:42px;padding:8px 16px;border:0;background:none;outline:0}.lib-q:focus-within{border-color:var(--mut)}
-#lib-count,#lib-go{grid-area:n}#lib-add-btn{grid-area:a}#lib-add{grid-column:1/-1}
-.seg{display:flex;gap:2px;flex:none}
-.seg>button{min-height:32px;border:0;border-radius:99px;padding:0 12px;font-size:13px;color:var(--mut)}
-.seg>.on,.seg>.on:hover{background:var(--bg2);color:var(--fg)}
+#lib-count{grid-area:n}#lib-add-btn{grid-area:a}#lib-add{grid-column:1/-1}
 .lib-r2{grid-area:r;display:flex;align-items:center;gap:12px;min-width:0}
 .lib-r2>*{flex:1 1 0;min-width:0}.lib-r2>.tabs{max-width:max-content}
 .vsep{flex:none;width:1px;align-self:stretch;margin:4px 0;background:var(--line)}
 .noplat .vsep,.noplat #lib-chips{display:none}
-#lib-narrow .chips{flex-wrap:nowrap}
+.lib-web{margin:12px 4px;color:var(--mut)}.lib-web b{color:var(--fg)}.lib-web .txt{color:var(--acc)}
 @media (max-width:760px){
-  .libhead{grid-template:"q q a" "r n n"/minmax(0,1fr) auto auto;gap:8px 12px}.seg>button{padding:0 8px}
-  .seg>:not(.on){display:none}.seg>.on::after{content:"▾"}
+  .libhead{grid-template:"q q a" "r n n"/minmax(0,1fr) auto auto;gap:8px 12px}
   #lib-count{font-size:13px}
   #lib-r2{overflow-x:auto;scrollbar-width:none}#lib-r2>*{flex:none;overflow:visible;max-width:none}
 }
@@ -167,7 +163,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .bri{display:flex;align-items:center;gap:8px}.rng{position:relative;display:flex;flex:1;min-width:160px;max-width:320px}.rng>input{width:100%}
 .rng>i{position:absolute;bottom:-6px;width:2px;height:6px;margin-left:-1px;background:var(--mut)}
 /* Phone: tap targets 36-44 px. */
-@media (max-width:760px){button.sm,button.more,button.grip,.seg>button{min-height:36px}details>summary{padding:8px 0}}
+@media (max-width:760px){button.sm,button.more,button.grip{min-height:36px}details>summary{padding:8px 0}}
 /* Motion: a panel, menu or dialog fades in; the Live dot pulses. */
 @keyframes fade{from{opacity:0}}@keyframes pulse{50%{opacity:.5}}
 .menu,.dlg,.side.open{animation:fade .15s}.dot.ok{animation:pulse 2s infinite}

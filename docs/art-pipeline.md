@@ -7,7 +7,11 @@ milestone below has since landed as "Make art" in Library (2026-09-24:
 (the navigation's **Make art**, and a primary button in the Library), and a
 Library GIF can be opened in it ("Edit in Make art"). Later the same day
 it learned animated GIFs — every frame through the Frame and Look steps, a
-timeline, a text overlay: see §6 at the end. The rest of this document is
+timeline, a text overlay: see §6 at the end. On 2026-10-12 the view was
+renamed **Create Art** and took over finding art: its first step, Find,
+holds Game art, GifCities and your own file or address (the Library lost
+its web sources and keeps only what is on the player; see README
+"Create Art"). The rest of this document is
 as it was written. The prototypes are in `opendmd-web/experiments/art/`
 (`README.md` there says how to run each one). All sample inputs are CC0 or
 public domain, so the committed PNGs hold no third-party game art.

@@ -1,5 +1,6 @@
-// Library: the card's GIFs by category, the web sources (js/find.js), and
-// Details for the one picked. See "The Library's layout" in CLAUDE.md.
+// Library: the GIFs on the player by category, and Details for the one
+// picked (finding new art on the web is Create Art's, js/studio.js). See
+// "The Library's layout" in CLAUDE.md.
 
 import { app, playlistLabel } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions } from './overrides.js';
@@ -91,23 +92,16 @@ export async function mount(el) {
   let items = [], shown = [], current = null, thumbs = thumbsOn();
   const platforms = new Set();
 
-  const search = h('input', { type: 'search', id: 'lib-search', placeholder: 'Search GIFs', enterKeyHint: 'search', oninput: () => web || apply(), onkeydown: (e) => web && e.key === 'Enter' && R.search(search.value) });
+  const search = h('input', { type: 'search', id: 'lib-search', placeholder: 'Search GIFs', enterKeyHint: 'search', oninput: () => apply() });
   const count = h('span.muted', { id: 'lib-count' });
-  let web = null, R = null, libQ = '', webQ = '', libTop = 0;
-  const SRC = [['', 'Your GIFs'], ['gifcities', 'GifCities'], ['gameart', 'Game art']];
-  const srcs = h('div.seg', { id: 'lib-src' }, SRC.map(([v, t]) => h('button' + (v ? '' : '.on'), {
-    'data-src': v,
-    onclick: (e) => (innerWidth > 760 ? useSource(v) : actions(e.currentTarget, 'lib-src-menu', SRC.map(([x, y]) => [{ 'data-src': x }, y, () => useSource(x)]))),
-  }, t)));
-  const goBtn = h('button', { id: 'lib-go', hidden: true, onclick: () => R.search(search.value) }, 'Search');
-  const findBox = h('div', { id: 'lib-find', hidden: true });
   const tabs = h('div.tabs', { id: 'lib-cats', role: 'tablist' });
   const chips = h('div.chips.scroll', { id: 'lib-chips' });
-  const narrow = h('div.lib-r2', { id: 'lib-narrow', hidden: true });
   const addInput = h('input', { type: 'file', multiple: true, accept: '.gif,image/gif', hidden: true, id: 'lib-add-files', onchange: () => { addGifs([...addInput.files]); addInput.value = ''; } });
-  const addBtn = h('button', { id: 'lib-add-btn', 'aria-haspopup': 'menu', onclick: (e) => actions(e.currentTarget, 'lib-add-menu', [
-    app.device && ['lib-add-gifs', 'Add GIFs…', () => addInput.click()],
-    ['lib-art', '✎ Make art', () => app.go('studio')]]) }, '+ Add');
+  const addBtn = app.device && h('button', { id: 'lib-add-btn', onclick: () => addInput.click() }, '+ Add GIFs');
+  // Nothing on the player matches: the same words in Create Art.
+  const webQ = h('b');
+  const webHint = h('div.lib-web', { id: 'lib-web', hidden: true }, 'Nothing here matches “', webQ, '”. ',
+    h('button.txt', { id: 'lib-web-go', onclick: () => { app.artFind = { q: search.value.trim() }; app.go('create'); } }, 'Search the web in Create Art →'));
   const addBar = h('i');
   const addMsg = h('span', { id: 'lib-add-progress' });
   const addErr = h('div.log.bad', { id: 'lib-add-errors' });
@@ -146,7 +140,7 @@ export async function mount(el) {
   const meta = h('div.cap', { id: 'lib-d-meta' });
   const sendBtn = app.device && h('button.pri', { id: 'lib-play', disabled: true, onclick: () => app.play(current.path) }, 'Send to panel');
   const plBtn = h('button', { id: 'lib-d-add', onclick: (e) => pickPlaylist(e.currentTarget) }, 'Add to playlist…');
-  const editArt = h('button', { id: 'lib-d-art', onclick: () => { app.artFrom = { path: current.path, e: current.e }; app.go('studio'); } }, '✎ Edit in Make art');
+  const editArt = h('button', { id: 'lib-d-art', onclick: () => { app.artFrom = { path: current.path, e: current.e }; app.go('create'); } }, '✎ Edit in Create Art');
   const moreBtn = h('button.more', { id: 'lib-d-more', 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => detailMenu(e.currentTarget) }, '…');
   const smoothBox = app.device && h('div', { id: 'lib-smooth', hidden: true });
   const liveBox = h('div', { id: 'lib-live', hidden: true });
@@ -166,9 +160,9 @@ export async function mount(el) {
   const grid = h('div.libgrid',
     h('div',
       h('div.card.libhead',
-        h('div.lib-q', search, srcs), count, goBtn, addBtn, addInput,
-        h('div.lib-r2', { id: 'lib-r2' }, tabs, h('i.vsep'), chips), narrow, addCard),
-      findBox, list.el, selbar),
+        h('div.lib-q', search), count, addBtn, addInput,
+        h('div.lib-r2', { id: 'lib-r2' }, tabs, h('i.vsep'), chips), addCard),
+      webHint, list.el, selbar),
     side);
   el.append(grid);
 
@@ -245,36 +239,6 @@ export async function mount(el) {
     app.go('sets');
   }
 
-  async function useSource(id) {
-    if ((web?.id || '') === id) return;
-    let m = null;
-    const before = search.value, top = list.el.scrollTop;
-    if (id) try { m = await import('./find.js'); await m.style(); } catch { toast('the search could not be loaded', 'bad'); return; }
-    const typed = search.value !== before ? search.value : null;
-    for (const b of srcs.children) b.classList.toggle('on', b.dataset.src === id);
-    grid.classList.toggle('web', !!m);
-    findBox.hidden = goBtn.hidden = narrow.hidden = !m;
-    if (!m) {
-      web = null;
-      webQ = search.value;
-      search.value = libQ;
-      search.placeholder = 'Search GIFs';
-      list.el.scrollTop = libTop;
-      apply();
-      return;
-    }
-    if (!web) { libQ = before; libTop = top; search.value = typed ?? webQ; }
-    web = m.sources.find((s) => s.id === id);
-    R ??= m.mountResults(findBox, { onPick: toArt, narrow });
-    R.use(web);
-    search.placeholder = web.placeholder;
-    if (search.value.trim()) R.search(search.value);
-  }
-  async function toArt(hit) {
-    app.artFrom = { blob: await hit.fetch(), label: hit.title, title: hit.hint, source: hit.source, platform: hit.platform, logo: hit.logo };
-    app.go('studio');
-  }
-
   const real = () => cats.filter(([v]) => v[0] != '@').map(([v]) => v);
   async function categories() {
     let dirs = [];
@@ -329,13 +293,15 @@ export async function mount(el) {
   }
 
   function apply() {
-    const text = web ? libQ : search.value;
+    const text = search.value;
     const q = app.wasm.normalizeTitle(text);
     const qn = text.trim().toLowerCase();
     shown = items.filter((it) => (!platforms.size || platforms.has(it.e.platform))
       && (!q || it.norm.includes(q) || (qn && it.name.toLowerCase().includes(qn))));
     count.textContent = `${shown.length.toLocaleString()} of ${items.length.toLocaleString()}`;
     list.set(shown);
+    webQ.textContent = text.trim();
+    webHint.hidden = shown.length || !text.trim() || cat[0] == '@';
   }
 
   async function reveal(path) {

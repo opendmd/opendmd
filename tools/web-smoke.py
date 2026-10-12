@@ -56,11 +56,11 @@ every view like a person would:
             uploaded and prepared; favourited in cachetest and listed in
             /sets/.smooth, then Edit details to another title and category:
             the GIF, its copy, the playlist line, the favourite and the
-            Smooth motion line all follow; Edit in Make art loads it (first
+            Smooth motion line all follow; Edit in Create Art loads it (first
             frame, title, platform); Delete takes it all away. Phone: the
             Details sheet opens and closes, no horizontal scroll
-  Studio    "Make art" (a view: from Library's button, and the nav on a
-            phone): a CC0 PNG (a crop of
+  Studio    "Create Art" (a view, from the nav; only step 1 Find until a
+            picture is in, then Find folds to one line): a CC0 PNG (a crop of
             experiments/art/process/out/a_source_windows.png, a 3x copy of
             a Kenney scene) imported; the 3x found, Pixels, Pan, the auto
             band; saved as SNES_Studio_Test_01.gif: the GIF and its prepared
@@ -68,24 +68,26 @@ every view like a person would:
             opendmd-pack's), the GIF's frames and delays equal the Rust
             pipeline's (`cargo run --example render` in opendmd-art-web),
             parsePath of the name gives SNES / "Studio Test" / 1, and it is
-            appended to `cachetest`; "Find art for a game" against a stubbed
+            appended to `cachetest`; Find's Game art against a stubbed
             name index and stubbed libretro pictures (one of them a link to
-            another), no network
-  Studio    Smooth motion in Make art: a 16-frame 128x32 GIF scrolling 4 px
+            another), no network; a click on a result loads it
+  Studio    Smooth motion in Create Art: a 16-frame 128x32 GIF scrolling 4 px
   smooth    a frame (made with Pillow) loads, the switch on -> "Adds N
             frames across M moves" (N > 0) and the preview plays the
             smoothed frames; a speed change looks again; a GIF with nothing
             to smooth keeps the switch on and says so; saved as
             new -> listed in /sets/.smooth, the copy marked and
             byte-identical to opendmd-pack's with the list, Details shows
-            it on; Edit in Make art starts with the switch on, Reverse and
+            it on; Edit in Create Art starts with the switch on, Reverse and
             Replace the original keep it listed and smooth; switched off and
             replaced -> unlisted, the plain copy (opendmd-pack's)
-  Find      Library -> GifCities against a canned answer (three shapes) and
-            a 2-frame 88x31 GIF, both Playwright routes: the count, the
-            Wide / Square-ish chips, size order, "Seen on", Open in Make art
-            (2 frames, the title from the hit), a failed query's sentence;
-            Your GIFs brings the list and its search back as they were
+  Find      Create Art -> GifCities against a canned answer (three shapes)
+            and a 2-frame 88x31 GIF, both Playwright routes: the count, the
+            Wide / Square-ish chips, size order, a click loading the hit
+            (2 frames, the title from the hit, "Seen on" its page, Find
+            folded), Change picture, a failed query's sentence; the
+            Library has no web sources, and a search that finds nothing
+            there hands its words to Create Art
   Auto      preparing by the device (auto_prepare): /api/cache `auto` and
             /api/status `cache` keys; the card's sentence while playing
             ("…when the panel is idle · 0 of 3"), with the mock paused (its
@@ -643,10 +645,9 @@ def sets_do(page: Page, path: str, what: str) -> None:
 
 
 def add_files(page: Page, files) -> None:
-    """Library: + Add, then Add GIFs… and the files picked."""
-    page.click("#lib-add-btn")
+    """Library: + Add GIFs and the files picked."""
     with page.expect_file_chooser() as fc:
-        page.click("#lib-add-gifs")
+        page.click("#lib-add-btn")
     fc.value.set_files([str(f) for f in files])
 
 
@@ -2181,8 +2182,8 @@ def mock_pass(browser) -> None:
         page.wait_for_function("!document.querySelector('#st-set').disabled", timeout=8000)
         check(True, "settings: ready again -> set select enabled")
         views = page.eval_on_selector_all("#nav a[data-view]", "els => els.map(e => e.textContent.trim().slice(1))")
-        check(views == ["Now", "Library", "Make art", "Playlists", "Settings"] and page.locator("#view-convert").count() == 0,
-              f"nav: five views with Make art, no Convert ({views})")
+        check(views == ["Now", "Library", "Create Art", "Playlists", "Settings"] and page.locator("#view-convert").count() == 0,
+              f"nav: five views with Create Art, no Convert ({views})")
         follow_checks(page, base, errors)
         phone_pass(browser, base, errors)
         json_type_checks(base)
@@ -2195,7 +2196,7 @@ def mock_pass(browser) -> None:
     report_errors("mock", errors)
 
 
-# --- The Studio ("Make art") ---------------------------------------------------
+# --- The Studio ("Create Art") -------------------------------------------------
 
 ART = REPO / "opendmd-art-web"
 STUB_INDEX = {"repo": "Stub_-_Repo", "names": ["Other Game (Europe)", "Studio Test (Japan)", "Studio Test (USA)"],
@@ -2251,16 +2252,14 @@ def stub_art(page: Page, hits: list[str]) -> None:
     page.route("https://raw.githubusercontent.com/**", raw)
 
 
-def open_studio(page: Page, via: str = "#lib-art") -> None:
-    """Make art: from the Library's header button, or the nav (`#nav-art`)."""
-    if via == "#lib-art":
-        goto_view(page, "library")
-        page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
-    if via == "#lib-art":
-        page.click("#lib-add-btn")
-    page.click(via)
-    page.wait_for_selector("#view-studio.on #studio .st-grid", timeout=20000)
-    check(page.url.endswith("#studio"), f"studio: {via} opens the Make art view ({page.url.rsplit('/', 1)[-1]})")
+def open_studio(page: Page, via: str = "#nav-art") -> None:
+    """Create Art from the nav (`#nav-art`), or its old address `#studio`."""
+    if via.startswith("#nav"):
+        page.click(via)
+    else:
+        page.evaluate(f"location.hash = '{via}'")
+    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
+    check(page.url.endswith("#create"), f"studio: {via} opens the Create Art view ({page.url.rsplit('/', 1)[-1]})")
 
 
 def studio_data(page: Page) -> dict:
@@ -2286,37 +2285,47 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
     fixture = studio_fixture()
     hits: list[str] = []
     stub_art(page, hits)
-    open_studio(page)
-    # Laptop: Import + Frame left, Look + Text right, Preview and Save full width;
-    # the steps headed "1 Import" ...; Save the view's one primary.
-    imp, frm, look, txt, prv, sv = studio_boxes(page)
-    check(imp[0] == frm[0] < look[0] == txt[0] and imp[1] == look[1] and frm[1] > imp[1] and txt[1] > look[1]
-          and prv[2] == sv[2] > 2 * imp[2] and prv[1] > max(frm[1], txt[1]) and sv[1] > prv[1],
-          f"studio layout: two columns, then Preview and Save ({[b[:2] for b in (imp, frm, look, txt, prv, sv)]})")
-    heads = page.eval_on_selector_all("#studio .card > h2", "els => els.map(e => e.textContent)")
-    pri = page.eval_on_selector_all("#studio button.pri", "els => els.map(e => e.id)")
-    check(heads == ["1 Import", "2 Frame", "3 Look", "4 Text", "5 Preview", "6 Save"] and pri == ["st-save"],
-          f"studio: step headings {heads}, primary {pri}")
-    # Find art for a game: the stubbed index, then a game's pictures.
-    page.select_option("#st-find-plat", "SNES")
-    page.fill("#st-find-q", "studio test")
-    page.click("#st-find-go")
+    open_studio(page, "#studio")
+    # (A picture from an earlier check folds Find: open it again.)
+    if page.is_visible("#st-change"):
+        page.click("#st-change")
+    # Find's Game art: the stubbed index, then a game's pictures.
+    page.click("#st-src [data-v=gameart]")
+    page.select_option("#find-platform", "SNES")
+    page.fill("#st-q", "studio test")
+    page.click("#st-go")
     # The pictures of the games found, best game first, as the find.js tile grid.
-    page.wait_for_selector("#st-hits .find-hit")
-    tiles = page.eval_on_selector_all("#st-hits .find-hit", "els => els.map(e => [e.dataset.kind, e.innerText.replace(/\\n+/g, ' / ')])")
+    page.wait_for_selector("#find-grid .find-hit")
+    tiles = page.eval_on_selector_all("#find-grid .find-hit", "els => els.map(e => [e.dataset.kind, e.innerText.replace(/\\n+/g, ' / ')])")
     check(tiles == [["Named_Titles", "Studio Test (USA) / Title screen"], ["Named_Snaps", "Studio Test (USA) / In the game"],
                     ["Named_Snaps", "Studio Test (Japan) / In the game"]], f"studio find: 'studio test' on SNES -> tiles {tiles}")
-    page.wait_for_function("[...document.querySelectorAll('#st-hits .find-hit img')].filter(i => i.complete && i.naturalWidth).length === 3", timeout=10000)
+    page.wait_for_function("[...document.querySelectorAll('#find-grid .find-hit img')].filter(i => i.complete && i.naturalWidth).length === 3", timeout=10000)
     linked = any(h.endswith("Named_Snaps/Studio Test (Japan).png") for h in hits)
     check(linked and page.locator("#studio .st-hit, #studio .st-thumb").count() == 0,
           f"studio find: every picture loads, the USA snap through its link ({len(hits)} requests)")
     # (The view keeps its picture between visits: forget the last one's frames.)
     page.evaluate("delete document.querySelector('#studio').dataset.frames")
-    page.click("#st-hits .find-hit[data-kind=Named_Titles]")
+    page.click("#find-grid .find-hit[data-kind=Named_Titles]")
     page.wait_for_function("document.querySelector('#studio').dataset.frames", timeout=20000)
     d = studio_data(page)
     check(d.get("platform") == "SNES" and d.get("title") == "Studio Test",
-          f"studio find: a picked picture fills in platform and title ({d.get('platform')}, {d.get('title')})")
+          f"studio find: a click on a picture loads it, platform and title filled in ({d.get('platform')}, {d.get('title')})")
+    # Loaded: Find folds to one line; laptop: Frame left, Look + Text right,
+    # Preview and Save full width; the steps headed "1 Find" ...; Save the
+    # view's one primary.
+    check(not page.is_visible("#find-grid") and page.is_visible("#st-change") and page.is_visible("#st-frame"),
+          "studio find: Find folds, Change picture shown, the steps appear")
+    imp, frm, look, txt, prv, sv = studio_boxes(page)
+    check(imp[2] == prv[2] == sv[2] > 2 * frm[2] and frm[0] < look[0] == txt[0] and frm[1] == look[1] > imp[1]
+          and txt[1] > look[1] and prv[1] > max(frm[1], txt[1]) and sv[1] > prv[1],
+          f"studio layout: Find, two columns, then Preview and Save ({[b[:2] for b in (imp, frm, look, txt, prv, sv)]})")
+    heads = page.eval_on_selector_all("#studio .card > h2", "els => els.map(e => e.textContent)")
+    pri = page.eval_on_selector_all("#studio button.pri", "els => els.map(e => e.id)")
+    check(heads == ["1 Find", "2 Frame", "3 Look", "4 Text", "5 Preview", "6 Save"] and pri == ["st-save"],
+          f"studio: step headings {heads}, primary {pri}")
+    page.click("#st-change")
+    check(page.is_visible("#find-grid") and page.locator("#find-grid .find-hit").count() == 3 and page.input_value("#st-q") == "studio test",
+          "studio find: Change picture opens Find again, its results as they were")
     # The same picture from a file: the upscale undone, Pixels, Pan.
     page.set_input_files("#st-file", str(fixture))
     page.wait_for_function("document.querySelector('#st-msg').textContent.startsWith('Picture 768')", timeout=20000)
@@ -2417,13 +2426,13 @@ def studio_timings(page: Page, where: str) -> None:
 
 
 def studio_anim_checks(page: Page, base: str, overlay: Path) -> None:
-    """An animated GIF in Make art: a 12-frame fixture loads with its frame
+    """An animated GIF in Create Art: a 12-frame fixture loads with its frame
     count shown and the preview advancing; trim to frames 3-10, speed 2x,
     delete frame 6 (Undo, then again), text over it; saved, the GIF decodes
     to the 7 frames expected with 30 ms delays and the text, its prepared
-    copy is in place and the Library lists it; Edit in Make art brings it
+    copy is in place and the Library lists it; Edit in Create Art brings it
     back whole, Reverse and Replace the original rewrite the same file."""
-    goto_view(page, "studio")
+    goto_view(page, "create")
     fx = OUT / "anim-fixture.gif"
     cols = anim_fixture(fx, 12, 128, 32, 60)
     page.evaluate("delete document.querySelector('#studio').dataset.tImport")
@@ -2485,11 +2494,11 @@ def studio_anim_checks(page: Page, base: str, overlay: Path) -> None:
     goto_view(page, "library")
     lib_row(page, path)
     check(page.inner_text("#lib-d-title") == "Smoke Frames 01", f"studio anim: listed in the Library ({page.inner_text('#lib-d-title')})")
-    # Edit in Make art: the whole animation back; reversed, the original replaced.
+    # Edit in Create Art: the whole animation back; reversed, the original replaced.
     page.click("#lib-d-art")
     page.wait_for_function("(d => d.dataset.animated && d.dataset.srcFrames === '7')(document.querySelector('#studio'))", timeout=30000)
     check(page.input_value("#st-title") == "Smoke Frames" and page.is_visible("#st-mode [data-v=replace].on"),
-          "studio anim: Edit in Make art brings the 7 frames, its title, Replace the original chosen")
+          "studio anim: Edit in Create Art brings the 7 frames, its title, Replace the original chosen")
     page.fill("#st-text", "")
     page.check("#st-rev")
     page.wait_for_function(f"document.querySelector('#studio').dataset.name === '{name}'", timeout=10000)
@@ -2502,7 +2511,7 @@ def studio_anim_checks(page: Page, base: str, overlay: Path) -> None:
     check(firsts2 == firsts[::-1] and delays2 == [30] * 7 and same_dir == [name],
           f"studio anim: replaced in place, reversed ({same_dir})")
     compare_with_pack(overlay, {cache_path(path): got})
-    goto_view(page, "studio")
+    goto_view(page, "create")
     studio_timings(page, "mock")
     goto_view(page, "library")
 
@@ -2544,7 +2553,7 @@ def pack_ref(gif_file: Path, path: str, smooth: bool) -> bytes:
 
 
 def studio_smooth_checks(page: Page, base: str, overlay: Path) -> None:
-    """Smooth motion in Make art: the switch analyses the output, the
+    """Smooth motion in Create Art: the switch analyses the output, the
     preview plays it smoothed, Save lists it and writes the smooth copy;
     Replace the original keeps it, or drops it when switched off."""
     listing = overlay / "sets" / ".smooth"
@@ -2552,7 +2561,7 @@ def studio_smooth_checks(page: Page, base: str, overlay: Path) -> None:
     listed = lambda: [l for l in (listing.read_text() if listing.exists() else "").split("\n") if l]
     smooth_state = "document.querySelector('#studio').dataset.smooth"
     settled = f"(s => s && s !== 'analysing')({smooth_state})"
-    goto_view(page, "studio")
+    goto_view(page, "create")
     # Nothing to smooth: the 12 flat-colour frames of studio_anim_checks.
     page.evaluate("delete document.querySelector('#studio').dataset.tImport")
     page.set_input_files("#st-file", str(OUT / "anim-fixture.gif"))
@@ -2604,7 +2613,7 @@ def studio_smooth_checks(page: Page, base: str, overlay: Path) -> None:
     lib_row(page, path)
     page.wait_for_function("(s => s && s !== 'analysing')(document.querySelector('#lib-smooth').dataset.state)", timeout=60000)
     check(page.get_attribute("#lib-smooth", "data-state") == "on", "studio smooth: Details shows it on")
-    # Edit in Make art: on from the start; reversed, the original replaced.
+    # Edit in Create Art: on from the start; reversed, the original replaced.
     page.click("#lib-d-art")
     page.wait_for_selector("#st-mode [data-v=replace].on", state="visible", timeout=30000)
     page.wait_for_function(f"{smooth_state} === 'on'", timeout=60000)
@@ -2662,11 +2671,12 @@ def gc_blob_headers(request):
     return h
 
 def find_checks(page: Page) -> None:
-    """Library -> GifCities against a canned answer and a 2-frame 88x31 GIF
-    (Playwright routes; no network): the search, the count, the Wide chip
-    narrowing to the one wide hit, "Seen on" the page it was on, Open in Make
-    art loading it (2 frames, the title hint in Save); back to Your GIFs with
-    the list and its search as they were."""
+    """Create Art -> GifCities against a canned answer and a 2-frame 88x31
+    GIF (Playwright routes; no network): the search, the count, the Wide chip
+    narrowing to the one wide hit, a click loading it (2 frames, the title
+    hint in Save, "Seen on" the page it was on, Find folded); Change picture;
+    a failed query's sentence. The Library: no web sources, and a search that
+    finds nothing there offers the web, its words carried over."""
     from PIL import Image, ImageDraw
     gif = OUT / "find-fixture.gif"
     frames = []
@@ -2687,19 +2697,32 @@ def find_checks(page: Page) -> None:
         origins.append(route.request.headers.get("origin"))
         route.fulfill(status=200, body=gif.read_bytes(), headers=gc_blob_headers(route.request))
     page.route("https://blob.gifcities.org/**", blob)
+    # GifCities as Create Art's source, then the Library: only what is on
+    # the player; nothing found -> the web.
+    goto_view(page, "create")
+    if page.is_visible("#st-change") and page.inner_text("#st-change") == "Change picture":
+        page.click("#st-change")
+    page.click("#st-src [data-v=gifcities]")
     goto_view(page, "library")
     pick_cat(page, "Consoles")
     page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    check(page.locator("#lib-src, #lib-go, #lib-art").count() == 0, "find: the Library has no web sources")
     page.fill("#lib-search", "mario")
     page.wait_for_timeout(300)
-    before = (page.inner_text("#lib-count"), page.eval_on_selector_all("#lib-list .vrow:not([hidden]) .t", "els => els.slice(0, 5).map(e => e.textContent)"))
-    page.click("#lib-src [data-src=gifcities]")
-    page.wait_for_selector("#lib-narrow:not([hidden]) #find-narrow")
-    check(not page.is_visible("#lib-list") and not page.is_visible("#lib-cats") and page.input_value("#lib-search") == ""
-          and page.get_attribute("#lib-search", "placeholder") == "Search GifCities",
-          "find: GifCities hides the list and the tabs; the box searches GifCities")
-    page.fill("#lib-search", "mario")
-    page.press("#lib-search", "Enter")
+    check(not page.is_visible("#lib-web"), "find: a search that finds GIFs offers no web search")
+    page.fill("#lib-search", "zzqx mario banner")
+    page.wait_for_selector("#lib-web:not([hidden])")
+    check("“zzqx mario banner”" in page.inner_text("#lib-web"), f"find: nothing here -> '{page.inner_text('#lib-web')}'")
+    page.click("#lib-web-go")
+    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
+    page.wait_for_function("document.querySelector('#st-q').value === 'zzqx mario banner'", timeout=10000)
+    page.wait_for_function("document.querySelector('#find-count').textContent === '3 of 3'", timeout=10000)
+    check(page.url.endswith("#create") and page.is_visible("#find-grid") and page.inner_text("#st-change") == "Keep this picture"
+          and any("q=zzqx" in u for u in asked), "find: Search the web carries the words to Create Art and searches them, Find open")
+    check(page.get_attribute("#st-q", "placeholder") == "Search GifCities", "find: the box searches GifCities")
+    asked.clear()
+    page.fill("#st-q", "mario")
+    page.press("#st-q", "Enter")
     page.wait_for_function("document.querySelector('#find-count').textContent === '3 of 3'", timeout=10000)
     check(len(asked) == 1 and "q=mario" in asked[0] and "limit=300" in asked[0], f"find: one query, 300 asked for ({asked})")
     dims = page.eval_on_selector_all("#find-grid .find-hit small", "els => els.map(e => e.textContent)")
@@ -2722,34 +2745,33 @@ def find_checks(page: Page) -> None:
     check(ids == ["TALLCHECKSUM", "SQUARECHECKSUM", "WIDECHECKSUM"], f"find: biggest first -> {ids}")
     page.select_option("#find-sort", "rank")
     page.check("#find-min")
-    page.click("#find-grid .find-hit[data-id=WIDECHECKSUM]")
-    page.wait_for_selector("#find-pick:not([hidden])")
-    check(page.get_attribute("#find-seen", "href") == GC_HITS[1]["page"] and "Cool Mario Banner 1" in page.inner_text("#find-pick"),
-          f"find: the picked one, 'Seen on' its page ({page.inner_text('#find-pick')!r})")
     check("Results are unfiltered." in page.inner_text("#find-caption"), "find: the caption says results are unfiltered")
-    no_leaks(page, "library (GifCities)")
-    shot(page, "library-find", "laptop")
-    page.evaluate("delete document.querySelector('#studio')?.dataset.tImport")
-    page.click("#find-art")
-    page.wait_for_selector("#view-studio.on", timeout=20000)
+    no_leaks(page, "create art (GifCities)")
+    shot(page, "create-find", "laptop")
+    page.evaluate("delete document.querySelector('#studio').dataset.tImport")
+    page.click("#find-grid .find-hit[data-id=WIDECHECKSUM]")
     page.wait_for_function("(d => d && d.dataset.tImport && d.dataset.srcFrames === '2')(document.querySelector('#studio'))", timeout=30000)
     msg = page.inner_text("#st-msg")
     check(msg.startswith("Cool Mario Banner 1: 88 × 31 · 2 frames") and page.input_value("#st-title") == "Cool Mario Banner",
-          f"find: Open in Make art loads it ({msg!r}, title {page.input_value('#st-title')!r})")
-    # A failed query: a sentence, the Library still there.
+          f"find: a click loads it ({msg!r}, title {page.input_value('#st-title')!r})")
+    check(page.get_attribute("#st-seen", "href") == GC_HITS[1]["page"] and page.is_visible("#st-seen")
+          and not page.is_visible("#find-grid") and page.is_visible("#st-change"),
+          "find: Find folds to one line, 'Seen on' its page")
+    page.click("#st-change")
+    check(page.is_visible("#find-grid") and page.input_value("#st-q") == "mario", "find: Change picture brings the results back")
+    page.click("#st-change")
+    check(not page.is_visible("#find-grid") and page.inner_text("#st-change") == "Change picture", "find: Keep this picture folds Find again")
+    page.click("#st-change")
+    # A failed query: a sentence.
     expected.append("gifcities.archive.org")
     page.unroute("https://gifcities.archive.org/api/v1/gifsearch*")
     page.route("https://gifcities.archive.org/api/v1/gifsearch*", lambda r: r.abort())
-    goto_view(page, "library")
-    page.fill("#lib-search", "luigi")
-    page.click("#lib-go")
+    page.fill("#st-q", "luigi")
+    page.click("#st-go")
     page.wait_for_function("document.querySelector('#find-status').textContent.includes('didn’t answer')", timeout=10000)
     check(page.inner_text("#find-count") == "", f"find: no answer -> '{page.inner_text('#find-status')}'")
-    page.click("#lib-src [data-src='']")
-    page.wait_for_selector("#lib-list", state="visible")
-    after = (page.inner_text("#lib-count"), page.eval_on_selector_all("#lib-list .vrow:not([hidden]) .t", "els => els.slice(0, 5).map(e => e.textContent)"))
-    check(after == before and page.input_value("#lib-search") == "mario" and page.is_hidden("#lib-find"),
-          f"find: Your GIFs brings the list back as it was ({after[0]})")
+    page.click("#st-src [data-v=gameart]")
+    goto_view(page, "library")
     page.fill("#lib-search", "")
     page.unroute("https://gifcities.archive.org/api/v1/gifsearch*")
     page.unroute("https://blob.gifcities.org/**")
@@ -2786,7 +2808,7 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     from a name in the grammar, none from a hash-like one, which must be
     given one); Edit details renaming it through POST /api/files/move, its
     prepared copy, playlist line, favourite and Smooth motion line
-    following; Edit in Make art; Delete taking all of it."""
+    following; Edit in Create Art; Delete taking all of it."""
     move_api_checks(base)
     known = "/gifs/Consoles/SNES_Mega_Man_X_08_sephirot68.gif"
     lib_row(page, known)
@@ -2883,7 +2905,7 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     check(smooth.read_text().split("\n").count(to) == 1 and card not in smooth.read_text(), "edit: the Smooth motion line follows")
     check(page.inner_text("#lib-d-title") == "Smoke Renamed 01" and page.inner_text("#lib-d-category") == "Other",
           f"edit: the Details show the new fields ({page.inner_text('#lib-d-title')}, {page.inner_text('#lib-d-category')})")
-    # Edit in Make art: the GIF — every frame — is the Studio's source.
+    # Edit in Create Art: the GIF — every frame — is the Studio's source.
     page.click("#lib-d-art")
     page.wait_for_function("(d => d && d.dataset.animated && d.dataset.srcFrames)(document.querySelector('#studio'))", timeout=30000)
     from PIL import Image
@@ -2915,15 +2937,16 @@ def studio_device(page: Page) -> None:
     """Read only: the Studio opens and finds a game in the real SNES index;
     its pictures come from GitHub. Nothing is saved."""
     open_studio(page)
-    page.select_option("#st-find-plat", "SNES")
-    page.fill("#st-find-q", "super metroid")
-    page.click("#st-find-go")
-    page.wait_for_selector("#st-hits .find-hit", timeout=20000)
-    rows = page.eval_on_selector_all("#st-hits .find-hit", "els => els.map(e => e.title)")
+    page.click("#st-src [data-v=gameart]")
+    page.select_option("#find-platform", "SNES")
+    page.fill("#st-q", "super metroid")
+    page.click("#st-go")
+    page.wait_for_selector("#find-grid .find-hit", timeout=20000)
+    rows = page.eval_on_selector_all("#find-grid .find-hit", "els => els.map(e => e.title)")
     check(any(r.startswith("Super Metroid") for r in rows), f"device studio: 'super metroid' -> {rows[:3]}")
     try:
-        page.wait_for_function("[...document.querySelectorAll('#st-hits .find-hit img')].some(i => i.complete && i.naturalWidth)", timeout=20000)
-        check(True, f"device studio: pictures load ({page.locator('#st-hits .find-hit').count()} tiles)")
+        page.wait_for_function("[...document.querySelectorAll('#find-grid .find-hit img')].some(i => i.complete && i.naturalWidth)", timeout=20000)
+        check(True, f"device studio: pictures load ({page.locator('#find-grid .find-hit').count()} tiles)")
     except PlaywrightTimeoutError:
         check(False, "device studio: no picture loaded from GitHub (network?)")
     # An animated GIF from a file, played and edited here; nothing saved.
@@ -3335,7 +3358,7 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     check(overflow <= 0, f"phone: no horizontal scroll ({overflow}px)")
     # And at 360 px, the narrowest phones in use.
     page.set_viewport_size({"width": 360, "height": 780})
-    for view in ["now", "library", "sets", "settings", "studio"]:
+    for view in ["now", "library", "sets", "settings", "create"]:
         goto_view(page, view)
         page.wait_for_timeout(500)
         over = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
@@ -3358,38 +3381,37 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     gif = (OUT / "find-fixture.gif").read_bytes()
     page.route("https://gifcities.archive.org/api/v1/gifsearch*", lambda r: r.fulfill(status=200, body=json.dumps(GC_HITS), headers={"access-control-allow-origin": "*", "content-type": "application/json"}))
     page.route("https://blob.gifcities.org/**", lambda r: r.fulfill(status=200, body=gif, headers=gc_blob_headers(r.request)))
-    page.click("#lib-src .on")
-    page.click("#lib-src-menu [data-src=gifcities]")
-    page.wait_for_selector("#lib-narrow:not([hidden]) #find-narrow")
-    page.fill("#lib-search", "mario")
-    page.click("#lib-go")
+    goto_view(page, "create")
+    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
+    page.click("#st-src [data-v=gifcities]")
+    page.fill("#st-q", "mario")
+    page.click("#st-go")
     page.wait_for_function("document.querySelector('#find-count').textContent === '3 of 3'", timeout=10000)
-    page.click("#find-grid .find-hit >> nth=1")
     wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
-    check(page.is_visible("#find-art") and wide <= 0, f"phone library: GifCities results, a hit picked ({wide}px over)")
-    shot(page, "library-find", "phone")
-    page.click("#lib-src .on")
-    page.click("#lib-src-menu [data-src='']")
+    check(wide <= 0, f"phone create art: GifCities results fit ({wide}px over)")
+    shot(page, "create-find", "phone")
+    page.click("#st-src [data-v=gameart]")
+    goto_view(page, "library")
     # The Studio on a phone, from the nav: one column, nothing wider than the screen.
     hits: list[str] = []
     stub_art(page, hits)
     open_studio(page, "#nav-art")
-    # Nothing in yet: one column in order 1-6, steps 2-6 dimmed (not hidden),
-    # the one hint in step 1.
-    boxes = studio_boxes(page)
-    dim = page.eval_on_selector_all("#studio .card", "els => els.map(e => +getComputedStyle(e).opacity)")
-    check(all(b[0] == boxes[0][0] for b in boxes) and [b[1] for b in boxes] == sorted(b[1] for b in boxes)
-          and dim[0] == 1 and all(0 < o < 1 for o in dim[1:]) and page.inner_text("#st-msg").startswith("Start here")
-          and not page.inner_text("#st-warn") and page.locator("#studio .cap:visible").count() == 2,
-          f"phone studio: empty, one column 1-6, steps 2-6 dimmed {dim}, the hint in step 1 only")
+    # Nothing in yet: only step 1, Find.
+    shown = page.eval_on_selector_all("#studio .card", "els => els.filter(e => e.offsetParent).map(e => e.id)")
+    check(shown == ["st-import"] and not page.is_visible("#st-change"), f"phone studio: empty, only Find shows ({shown})")
     page.evaluate("scrollTo(0, 0)")
     shot(page, "studio-empty", "phone")
     page.set_input_files("#st-file", str(OUT / "studio-fixture.png"))
     page.wait_for_function("document.querySelector('#studio').dataset.frames", timeout=20000)
-    page.select_option("#st-find-plat", "SNES")
-    page.fill("#st-find-q", "studio")
-    page.click("#st-find-go")
-    page.wait_for_selector("#st-hits .find-hit")
+    boxes = studio_boxes(page)
+    check(all(b[0] == boxes[0][0] for b in boxes) and [b[1] for b in boxes] == sorted(b[1] for b in boxes),
+          "phone studio: one column, 1-6")
+    page.click("#st-change")
+    page.click("#st-src [data-v=gameart]")
+    page.select_option("#find-platform", "SNES")
+    page.fill("#st-q", "studio")
+    page.click("#st-go")
+    page.wait_for_selector("#find-grid .find-hit")
     wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
     check(wide <= 0, f"phone studio: no horizontal scroll ({wide}px)")
     no_leaks(page, "phone studio")
