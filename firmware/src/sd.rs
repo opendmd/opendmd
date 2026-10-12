@@ -27,7 +27,7 @@ use opendmd_core::engine::{ReadSeek, Source};
 use opendmd_core::layout;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU32, Ordering::{Relaxed, SeqCst}};
 use std::time::Instant;
 
 use crate::config;
@@ -483,7 +483,8 @@ impl Source for SdSource {
     }
 
     /// The copy alone (a path already under `cache/` as it is), never the
-    /// original; `Ok(None)` when there is no copy or it is not a GIF. A
+    /// original; `Ok(None)` when there is no copy, it is not a GIF, or a
+    /// transfer has just started (`cache_builder::busy()`). A
     /// card-class error is returned (and counted by `sdhealth`, in
     /// [`open_file`], exactly as the switch's open of the copy would be);
     /// any other failure is a miss. No builder release wait here: the main
@@ -501,12 +502,29 @@ impl Source for SdSource {
             let t = Instant::now();
             let key = layout::prepared_key(&copy);
             let full = format!("{}{copy}", config::SD_MOUNT);
+            // The key goes up before the open, and a transfer that started
+            // since the main loop looked (its handler may already have
+            // checked the key) means no open at all: see `state::AHEAD_KEY`.
+            // Once the handle exists, its drop clears the key.
+            use crate::state::AHEAD_KEY;
+            let unkey = || {
+                let _ = AHEAD_KEY.compare_exchange(key, 0, SeqCst, SeqCst);
+            };
+            AHEAD_KEY.store(key, SeqCst);
+            if crate::cache_builder::transfer_in_flight() {
+                unkey();
+                return Ok(None);
+            }
             let mut f = match open_file_keyed(&full, key) {
                 Ok(f) => f,
-                Err(e) if crate::sdhealth::is_card_error(&e) => return Err(e),
-                Err(_) => return Ok(None),
+                Err(e) => {
+                    unkey();
+                    if crate::sdhealth::is_card_error(&e) {
+                        return Err(e);
+                    }
+                    return Ok(None);
+                }
             };
-            crate::state::AHEAD_KEY.store(key, Relaxed);
             let mut magic = [0u8; 4];
             match f.read_exact(&mut magic) {
                 Ok(()) if &magic == b"GIF8" => {}

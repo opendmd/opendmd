@@ -102,15 +102,27 @@ pub static NET_UP: AtomicBool = AtomicBool::new(false);
 /// (`http::skip_if_playing`), as they check the path on screen: FAT must not
 /// have an open file replaced or unlinked. A key, not the path, so setting
 /// it allocates nothing on the display loop.
+///
+/// `SeqCst` on both sides, with `cache_builder::busy()`'s count: a handler
+/// takes `busy()` and then reads this, the open stores this and then reads
+/// `transfer_in_flight()` (giving up if it is set), so either the handler
+/// sees the key and asks for the copy back, or the open sees the transfer
+/// and opens nothing.
 pub static AHEAD_KEY: AtomicU32 = AtomicU32::new(0);
 
-/// Whether `fs_path` (under the mount point) is the copy opened ahead.
+/// Whether `fs_path` (under the mount point) is the copy opened ahead, or
+/// the GIF whose copy it is: a handler given a GIF's path that touches its
+/// copy too (a delete, a `forget`, a move) must have both let go.
 pub fn is_ahead(fs_path: &str) -> bool {
-    let key = AHEAD_KEY.load(Ordering::Relaxed);
+    use opendmd_core::layout::{cache_path, prepared_key};
+    let key = AHEAD_KEY.load(Ordering::SeqCst);
+    if key == 0 {
+        return false;
+    }
     let rel = fs_path
         .strip_prefix(crate::config::SD_MOUNT)
         .unwrap_or(fs_path);
-    key != 0 && opendmd_core::layout::prepared_key(rel) == key
+    prepared_key(rel) == key || cache_path(rel).is_some_and(|c| prepared_key(&c) == key)
 }
 
 /// The player's health and what it is doing, as `/api/status` reports it.
@@ -362,8 +374,10 @@ pub enum Command {
     Skip,
     /// Let go of the copy opened ahead for the next file (a handler is
     /// about to replace or delete it: `http::skip_if_playing`); the pick
-    /// stays and opens when it plays.
-    ReleaseAhead,
+    /// stays and opens when it plays. Answered once the handle is closed
+    /// (the loop reads commands only between frames, so a long frame delay
+    /// is waited out, not guessed at).
+    ReleaseAhead(mpsc::Sender<()>),
     /// Toggle pause and report the resulting state.
     TogglePause(mpsc::Sender<bool>),
     /// Play this card-absolute path (`/gifs/…`; its prepared copy if there is

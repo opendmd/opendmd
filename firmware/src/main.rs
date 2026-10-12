@@ -456,10 +456,11 @@ fn main() -> Result<()> {
                         e.skip();
                     }
                 }
-                Command::ReleaseAhead => {
+                Command::ReleaseAhead(reply) => {
                     if let Some(e) = engine.as_mut() {
                         ahead::release(e);
                     }
+                    let _ = reply.send(());
                 }
                 Command::TogglePause(reply) => {
                     let now = epoch.elapsed();

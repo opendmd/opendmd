@@ -335,6 +335,111 @@ fn read_header<R: Read>(
     Ok((width, height, global, hint, repeat))
 }
 
+/// What a GIF's first bytes say, read without a decoder ([`probe`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Probe {
+    pub width: usize,
+    pub height: usize,
+    pub hint: Option<Hint>,
+}
+
+/// The logical screen and the hint [`GifSlim::new`] would open `r` with,
+/// read as [`read_header`] reads them but straight off `r`, a few bytes at a
+/// time, seeking past the palette and the other extensions — no
+/// `BufReader`, no palette, no tables — and `r` rewound to 0 after. For a
+/// caller deciding whether a file may be opened at all before paying for
+/// its decoder (the engine's file held ahead, at most [`PREPARED`]'s cap):
+/// on the device each read is a copy out of FATFS's sector buffer for the
+/// file. An error is the reader's, or what [`GifSlim::new`] would return
+/// for the same header (a file that ends inside its palette reads as one
+/// with no hint; the decoder refuses it when it opens).
+pub fn probe<R: Read + Seek>(r: &mut R) -> io::Result<Probe> {
+    fn truncated(e: io::Error) -> io::Error {
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            invalid("GIF header is truncated")
+        } else {
+            e
+        }
+    }
+    fn skip_blocks<R: Read + Seek>(r: &mut R) -> io::Result<()> {
+        let mut len = [0u8; 1];
+        loop {
+            r.read_exact(&mut len).map_err(truncated)?;
+            if len[0] == 0 {
+                return Ok(());
+            }
+            r.seek(SeekFrom::Current(i64::from(len[0])))?;
+        }
+    }
+    let mut h = [0u8; 13];
+    r.read_exact(&mut h).map_err(truncated)?;
+    if &h[..6] != b"GIF87a" && &h[..6] != b"GIF89a" {
+        return Err(invalid("malformed GIF header"));
+    }
+    let width = u16::from_le_bytes([h[6], h[7]]) as usize;
+    let height = u16::from_le_bytes([h[8], h[9]]) as usize;
+    if width == 0 || height == 0 || width * height > MAX_LOGICAL_PIXELS {
+        return Err(invalid("GIF logical screen is zero or implausibly large"));
+    }
+    if h[10] & 0x80 != 0 {
+        r.seek(SeekFrom::Current(3 << ((h[10] & 7) + 1)))?;
+    }
+    // The extensions before the first frame, as `read_header` takes them:
+    // the last hint wins, and anything but an application or comment
+    // extension (or the end of the file) ends the look.
+    let mut hint = None;
+    loop {
+        let mut intro = [0u8; 2];
+        match r.read_exact(&mut intro) {
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
+            Ok(()) if intro[0] != 0x21 || !(intro[1] == 0xFF || intro[1] == 0xFE) => break,
+            Ok(()) if intro[1] == 0xFE => {
+                skip_blocks(r)?;
+                continue;
+            }
+            Ok(()) => {}
+        }
+        let mut id = [0u8; 12];
+        r.read_exact(&mut id[..1]).map_err(truncated)?;
+        match id[0] {
+            0 => continue,
+            11 => r.read_exact(&mut id[1..]).map_err(truncated)?,
+            n => {
+                r.seek(SeekFrom::Current(i64::from(n)))?;
+                skip_blocks(r)?;
+                continue;
+            }
+        }
+        if !id[1..].eq_ignore_ascii_case(HINT_APP_ID) {
+            skip_blocks(r)?;
+            continue;
+        }
+        // `[len, version, cap, flags]`, as `read_app_ext`.
+        let mut d = [0u8; 4];
+        r.read_exact(&mut d[..1]).map_err(truncated)?;
+        let len = d[0] as usize;
+        let k = if len >= 2 { len.min(3) } else { 0 };
+        r.read_exact(&mut d[1..=k]).map_err(truncated)?;
+        r.seek(SeekFrom::Current((len - k) as i64))?;
+        if k > 0 && d[1] == 1 && (MIN_CAP..=MAX_CAP).contains(&d[2]) {
+            hint = Some(Hint {
+                cap: d[2],
+                delta: d[3] & 1 != 0,
+            });
+        }
+        if len != 0 {
+            skip_blocks(r)?;
+        }
+    }
+    r.seek(SeekFrom::Start(0))?;
+    Ok(Probe {
+        width,
+        height,
+        hint,
+    })
+}
+
 /// Reads LZW codes, LSB first, out of a frame's data sub-blocks.
 struct Codes<'a, R: Read> {
     r: &'a mut BufReader<R>,
@@ -2991,6 +3096,37 @@ mod tests {
             s.heap_bytes(),
             READ_BUF + 512 * 2 + 512 + 128 + s.global.len()
         );
+    }
+
+    #[test]
+    fn probe_reads_what_new_would_open_with_and_rewinds() {
+        let plain = animation(128, 32, 3);
+        let (hinted, _) = streaming(&plain, &PREPARED, false).unwrap();
+        let (wide, _) = streaming(&animation(132, 32, 2), &PREPARED, false).unwrap();
+        for bytes in [&plain, &hinted, &wide] {
+            let mut c = Cursor::new(&bytes[..]);
+            let p = probe(&mut c).unwrap();
+            assert_eq!(c.position(), 0);
+            let s = GifSlim::new(&bytes[..]).unwrap();
+            assert_eq!((p.width, p.height), s.logical_size());
+            assert_eq!(p.hint, s.hint());
+        }
+        assert_eq!(probe(&mut Cursor::new(&hinted[..])).unwrap().hint.map(|h| h.cap), Some(9));
+        assert_eq!(probe(&mut Cursor::new(&plain[..])).unwrap().hint, None);
+        // A comment and a foreign application extension before the hint are
+        // stepped over, as `read_header` steps over them.
+        let at = 13 + 3 * (2 << (hinted[10] & 7));
+        let mut extra = hinted[..at].to_vec();
+        extra.extend_from_slice(&[0x21, 0xFE, 2, b'h', b'i', 0]);
+        extra.extend_from_slice(&[0x21, 0xFF, 11]);
+        extra.extend_from_slice(b"XMP DataXMP");
+        extra.extend_from_slice(&[1, 0, 0]);
+        extra.extend_from_slice(&hinted[at..]);
+        let p = probe(&mut Cursor::new(&extra[..])).unwrap();
+        assert_eq!(p.hint, GifSlim::new(&extra[..]).unwrap().hint());
+        assert!(p.hint.is_some());
+        // A bad header is the decoder's error.
+        assert!(probe(&mut Cursor::new(&b"GIF8zz\0\0"[..])).is_err());
     }
 
     #[test]

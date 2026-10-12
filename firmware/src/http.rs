@@ -760,7 +760,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         {
             return req.bad_request("path must be a card-absolute /gifs/….gif");
         }
-        skip_if_playing(&c, &format!("{}{}", config::SD_MOUNT, forget.path));
+        // The copy may be the one opened ahead (the GIF's path finds it).
+        let _busy = crate::cache_builder::busy();
+        if !skip_if_playing(&c, &format!("{}{}", config::SD_MOUNT, forget.path)) {
+            return req.error(503, "503 Service Unavailable", NOT_RELEASED);
+        }
         match crate::cache::forget(&forget.path) {
             Ok(removed) => req.json(&format!(
                 r#"{{"ok":true,"path":{},"removed":{}}}"#,
@@ -1036,7 +1040,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
             };
         }
-        skip_if_playing(&c, &path);
+        // Held to the end: the GIF's copy goes too, and nothing may open
+        // it ahead in between.
+        let _busy = crate::cache_builder::busy();
+        if !skip_if_playing(&c, &path) {
+            return req.error(503, "503 Service Unavailable", NOT_RELEASED);
+        }
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 // A GIF takes its prepared copy with it; a copy removed
@@ -1157,16 +1166,24 @@ fn portal_target(ctx: &Ctx) -> Option<String> {
 /// If the player has `fs_path` open — the GIF on screen, or the prepared copy
 /// it is actually reading for it — skip to the next entry and give it a beat
 /// to close the file: FAT must not have an open file replaced or unlinked.
-/// The copy it opened ahead for the next file is let go the same way (its
-/// pick then opens whatever is there when it plays).
-fn skip_if_playing(ctx: &Ctx, fs_path: &str) {
-    if crate::state::is_ahead(fs_path) {
-        let _ = ctx.cmd.send(Command::ReleaseAhead);
-        std::thread::sleep(Duration::from_millis(200));
+/// The copy it opened ahead for the next file — `fs_path` itself, or the
+/// copy of the GIF at `fs_path` — is let go first, and waited for (its pick
+/// then opens whatever is there when it plays). The caller holds
+/// `cache_builder::busy()` from before this to the end of its card work, so
+/// nothing is opened ahead meanwhile (`state::AHEAD_KEY`). False if the
+/// player did not answer: the caller refuses rather than touch the file.
+///
+/// The skip is still a beat, not an answer: the file on screen closes at
+/// the loop's next tick, which an answer would have to wait across
+/// iterations for.
+#[must_use]
+fn skip_if_playing(ctx: &Ctx, fs_path: &str) -> bool {
+    if crate::state::is_ahead(fs_path) && !release_ahead(ctx) {
+        return false;
     }
     let playing = ctx.status.lock().unwrap().path.clone();
     if playing.is_empty() {
-        return;
+        return true;
     }
     let gif = format!("{}{playing}", config::SD_MOUNT);
     let copy =
@@ -1177,7 +1194,27 @@ fn skip_if_playing(ctx: &Ctx, fs_path: &str) {
         let _ = ctx.cmd.send(Command::Skip);
         std::thread::sleep(Duration::from_millis(200));
     }
+    true
 }
+
+/// `Command::ReleaseAhead`, and its answer: true once the copy opened ahead
+/// is closed (or there was none), false if the main loop did not answer in
+/// [`REPLY_TIMEOUT`] (a frame held longer than that, or a stuck loop).
+fn release_ahead(ctx: &Ctx) -> bool {
+    let (tx, rx) = mpsc::channel();
+    if ctx.cmd.send(Command::ReleaseAhead(tx)).is_err() {
+        // No main loop: nothing is open.
+        return true;
+    }
+    let answered = rx.recv_timeout(REPLY_TIMEOUT).is_ok();
+    if !answered {
+        log::warn!("the player did not let go of the next file's copy");
+    }
+    answered
+}
+
+/// The answer when [`skip_if_playing`] got none: the file is left alone.
+const NOT_RELEASED: &str = "the player did not let go of the file; try again";
 
 /// `DELETE /api/files/<dir>?recursive=1`: everything under `path`, which
 /// must be `cache/` or the retired `odm/` tree (or a directory in one). The
@@ -1194,15 +1231,18 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
     let _busy = crate::cache_builder::busy();
     if files::under(path, config::CACHE_ROOT) || files::same_card_path(path, config::CACHE_ROOT) {
         // A copy opened ahead may be anywhere under it.
-        if crate::state::AHEAD_KEY.load(std::sync::atomic::Ordering::Relaxed) != 0 {
-            let _ = c.cmd.send(Command::ReleaseAhead);
-            std::thread::sleep(Duration::from_millis(200));
+        if crate::state::AHEAD_KEY.load(std::sync::atomic::Ordering::SeqCst) != 0
+            && !release_ahead(c)
+        {
+            return req.error(503, "503 Service Unavailable", NOT_RELEASED);
         }
         let playing = c.status.lock().unwrap().path.clone();
         if let Some(copy) = opendmd_core::layout::cache_path(&playing) {
             let copy = format!("{}{copy}", config::SD_MOUNT);
-            if files::same_card_path(path, &copy) || files::under(&copy, path) {
-                skip_if_playing(c, &copy);
+            if (files::same_card_path(path, &copy) || files::under(&copy, path))
+                && !skip_if_playing(c, &copy)
+            {
+                return req.error(503, "503 Service Unavailable", NOT_RELEASED);
             }
         }
     }
@@ -1305,7 +1345,9 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
     // If the player has this very file open — the GIF, or its prepared
     // copy — ask it to move on first: FAT cannot replace a file that is
     // being read.
-    skip_if_playing(c, &dest);
+    if !skip_if_playing(c, &dest) {
+        return up.error(503, "503 Service Unavailable", NOT_RELEASED);
+    }
     let written = files::receive_upload(up, &dest)?;
     info!(
         "PUT /{rel}: {written} B in {:.1} s",
@@ -1370,8 +1412,13 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
     if !files::same_card_path(&from, &to) && std::fs::metadata(&to).is_ok() {
         return up.error(409, "409 Conflict", &format!("{} already exists", m.to));
     }
-    // The player must not have the GIF, or its copy, open under a rename.
-    skip_if_playing(c, &from);
+    // The player must not have the GIF, or its copy, open under a rename;
+    // nor a stale copy at `to`'s place, which goes (a playlist line naming
+    // `to` would have played it). The stream task holds
+    // `cache_builder::busy()` throughout.
+    if !skip_if_playing(c, &from) || !skip_if_playing(c, &to) {
+        return up.error(503, "503 Service Unavailable", NOT_RELEASED);
+    }
     if let Some(dir) = std::path::Path::new(&to).parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
             return up.error(
