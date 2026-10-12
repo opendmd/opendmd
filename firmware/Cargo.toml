@@ -34,6 +34,9 @@ dev-credentials = []
 probe = []
 # Also log every httpd open/listing/transfer (costs UART time on CPU0).
 probe-http = ["probe"]
+# Measurements only: never open the next file ahead (src/ahead.rs), so a
+# probe build with and without it differ in nothing else.
+ahead-off = []
 # Heap-corruption diagnostics (src/diag.rs): heap walks at every handler,
 # stream, Follow poll and heartbeat, and a check of the handler table; the
 # Makefile adds sdkconfig.diag (comprehensive heap poisoning, end-of-stack

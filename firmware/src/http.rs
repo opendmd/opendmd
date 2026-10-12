@@ -1157,7 +1157,13 @@ fn portal_target(ctx: &Ctx) -> Option<String> {
 /// If the player has `fs_path` open — the GIF on screen, or the prepared copy
 /// it is actually reading for it — skip to the next entry and give it a beat
 /// to close the file: FAT must not have an open file replaced or unlinked.
+/// The copy it opened ahead for the next file is let go the same way (its
+/// pick then opens whatever is there when it plays).
 fn skip_if_playing(ctx: &Ctx, fs_path: &str) {
+    if crate::state::is_ahead(fs_path) {
+        let _ = ctx.cmd.send(Command::ReleaseAhead);
+        std::thread::sleep(Duration::from_millis(200));
+    }
     let playing = ctx.status.lock().unwrap().path.clone();
     if playing.is_empty() {
         return;
@@ -1187,6 +1193,11 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
     }
     let _busy = crate::cache_builder::busy();
     if files::under(path, config::CACHE_ROOT) || files::same_card_path(path, config::CACHE_ROOT) {
+        // A copy opened ahead may be anywhere under it.
+        if crate::state::AHEAD_KEY.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+            let _ = c.cmd.send(Command::ReleaseAhead);
+            std::thread::sleep(Duration::from_millis(200));
+        }
         let playing = c.status.lock().unwrap().path.clone();
         if let Some(copy) = opendmd_core::layout::cache_path(&playing) {
             let copy = format!("{}{copy}", config::SD_MOUNT);

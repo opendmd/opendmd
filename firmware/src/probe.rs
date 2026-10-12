@@ -217,6 +217,57 @@ pub fn transition_frame(transitioning: bool, decoded: bool, t: &FrameTimes, free
     }
 }
 
+/// A new file's first tick (open, lookup, first decode; the transition's
+/// start), split by whether the file came ready ahead (`ahead.rs`).
+static SWITCH_AHEAD: Mutex<BlitHist> = Mutex::new(BlitHist::new());
+static SWITCH_COLD: Mutex<BlitHist> = Mutex::new(BlitHist::new());
+/// The step ahead that ran since the last frame (µs; 0: none), for the
+/// next frame's miss line.
+static AHEAD_US: AtomicU32 = AtomicU32::new(0);
+
+/// A new file's first frame: its tick time, by how it was opened.
+pub fn switch_frame(tick_us: u32, ahead: bool) {
+    if !ENABLED {
+        return;
+    }
+    let h = if ahead { &SWITCH_AHEAD } else { &SWITCH_COLD };
+    if let Ok(mut h) = h.lock() {
+        h.add(tick_us);
+    }
+    let s = tick_snapshot();
+    emit(format!(
+        "switch tick={tick_us}us ahead={} opens={} open={}us cat={}us rd_tot={}us",
+        ahead as u8, s.opens, s.open_us, s.cat_us, s.read_us
+    ));
+}
+
+/// One step ahead ran: a line (stage, outcome, time, heap it took, path).
+pub fn ahead_step(
+    stage: opendmd_core::engine::AheadStage,
+    outcome: Option<opendmd_core::engine::AheadOutcome>,
+    us: u32,
+    took: u32,
+    late: bool,
+    next: Option<(&str, bool)>,
+) {
+    if !ENABLED {
+        return;
+    }
+    AHEAD_US.fetch_add(us, Relaxed);
+    emit(format!(
+        "ahead {stage:?} -> {outcome:?} {us} us, heap -{took} B{} {}",
+        if late { " LATE" } else { "" },
+        next.map_or("", |(p, _)| p)
+    ));
+}
+
+/// A step ahead refused for the heap.
+pub fn ahead_skip(stage: opendmd_core::engine::AheadStage, free: usize) {
+    if ENABLED {
+        emit(format!("ahead {stage:?} skipped: heap {free} B free"));
+    }
+}
+
 /// Median of a histogram, as the bucket's midpoint in µs.
 /// The `pct`th percentile's bucket midpoint (µs).
 fn hist_pct(h: &[u32; BLIT_BUCKETS], pct: u32) -> u32 {
@@ -413,6 +464,7 @@ pub fn frame(t: &FrameTimes, late_ms: Option<u64>, is_new: bool, path: &str) {
             h.add(cpu_us);
         }
     }
+    let ahead_us = AHEAD_US.swap(0, Relaxed);
     let Some(late) = late_ms else { return };
     if s.opens > 0 {
         P_MISS_OPEN.fetch_add(1, Relaxed);
@@ -421,7 +473,7 @@ pub fn frame(t: &FrameTimes, late_ms: Option<u64>, is_new: bool, path: &str) {
     }
     emit(format!(
         "miss late={late}ms delay={}ms due_in={}us work={}us tick={}us new={} opens={} open={}us cat={}us \
-         reads={} rd_tot={}us rd_max={}us cpu~{}us blit={}us px={} log={}us @{} {path}",
+         reads={} rd_tot={}us rd_max={}us cpu~{}us blit={}us px={} log={}us ahead={}us @{} {path}",
         t.delay_ms,
         t.due_in_us,
         t.work_us,
@@ -437,6 +489,7 @@ pub fn frame(t: &FrameTimes, late_ms: Option<u64>, is_new: bool, path: &str) {
         t.blit_us,
         t.blit_px,
         t.log_us,
+        ahead_us,
         // SAFETY: argument-free read of the log clock, for correlating with
         // the httpd lines by their `(ms)` stamps.
         unsafe { esp_idf_sys::esp_log_timestamp() },
@@ -479,8 +532,19 @@ pub fn period_summary() -> String {
             .unwrap_or_default(),
         take(&P_TPX).checked_div(steps).unwrap_or(0),
     );
+    let switch = format!(
+        "switch tick ahead {} cold {}, ",
+        SWITCH_AHEAD
+            .lock()
+            .map(|mut h| h.take_summary())
+            .unwrap_or_default(),
+        SWITCH_COLD
+            .lock()
+            .map(|mut h| h.take_summary())
+            .unwrap_or_default(),
+    );
     format!(
-        " | sd: frames {frames} work-max {}us, {blit}, {decode}{trans}opens {opens} avg {}us max {}us \
+        " | sd: frames {frames} work-max {}us, {blit}, {decode}{trans}{switch}opens {opens} avg {}us max {}us \
          (all-time {} max {}us), rewinds {} (all-time {}), cat-max {}us, reads {} max {}us \
          >=5ms {} >=20ms {} >=100ms {}, misses open {} no-open {}, early wakes {} max {}us",
         take(&P_WORK_MAX_US),
