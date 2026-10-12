@@ -399,7 +399,9 @@ pub enum AheadStage {
     Pick,
     /// Open its prepared copy ([`Source::open_ahead`]).
     Open,
-    /// Read the copy's header and palette; gifslim's tables are allocated.
+    /// Read the copy's header and palette; gifslim's tables are allocated
+    /// (only once [`gifslim::probe`](crate::gifslim::probe) says the file
+    /// can be held: else `Cold`, nothing allocated).
     Parse,
 }
 
@@ -474,6 +476,12 @@ impl Ahead {
     /// it opens when it plays. Nothing more is tried ahead this turn.
     fn release_file(&mut self) {
         self.blocked = true;
+        self.let_go();
+    }
+
+    /// [`release_file`](Self::release_file) without the stop: the copy may
+    /// be opened again this turn (after a pause).
+    fn let_go(&mut self) {
         if let Some(n) = self.next.as_mut() {
             if matches!(n.file, AheadFile::Opened(_) | AheadFile::Ready(_)) {
                 n.file = AheadFile::Picked;
@@ -498,6 +506,14 @@ fn holdable(gif: &Stream) -> bool {
     gif.kind() == "slim"
         && gif.cap().is_some_and(|c| c <= AHEAD_MAX_CAP)
         && gif.logical_size() == (crate::canvas::WIDTH, crate::canvas::HEIGHT)
+}
+
+/// [`holdable`] as far as the file's first bytes tell, before gifslim
+/// allocates its tables at whatever cap they name (12 for a file with no
+/// hint: a `/cache/` line played as it is, a copy some tool rewrote).
+fn may_hold(p: &crate::gifslim::Probe) -> bool {
+    p.hint.is_some_and(|h| h.cap <= AHEAD_MAX_CAP)
+        && (p.width, p.height) == (crate::canvas::WIDTH, crate::canvas::HEIGHT)
 }
 
 struct Playing {
@@ -877,10 +893,16 @@ impl Engine {
         self.paused_since.is_some()
     }
 
+    /// Freeze the file on screen. The next file's copy held ahead is let go
+    /// (its pick kept): a pause may last all night (the firmware's night
+    /// mode keeps the file on screen when nothing wants its heap), and an
+    /// open file is one a handler has to ask for. It is opened again once
+    /// resumed, if there is still time before the switch.
     pub fn pause(&mut self, now: Duration) {
         if self.paused_since.is_none() {
             self.paused_since = Some(now);
         }
+        self.ahead.let_go();
     }
 
     /// Resuming shifts the current GIF's clocks forward by the paused duration,
@@ -1033,14 +1055,21 @@ impl Engine {
                     Some(AheadOutcome::Failed)
                 }
             },
-            AheadFile::Opened(reader) => match Stream::open(reader) {
-                Ok(gif) if holdable(&gif) => {
+            // The header is probed first: gifslim allocates its tables (and
+            // a screen of its own for a stray) as it opens, at the cap the
+            // hint names or 12, so a file that could not be held is never
+            // opened beside the playing decoder, even for a moment.
+            AheadFile::Opened(mut reader) => match crate::gifslim::probe(&mut reader)
+                .and_then(|p| if may_hold(&p) { Stream::open(reader).map(Some) } else { Ok(None) })
+            {
+                Ok(Some(gif)) if holdable(&gif) => {
                     next.file = AheadFile::Ready(gif);
                     self.ahead.stats.ready += 1;
                     Some(AheadOutcome::Ready)
                 }
-                // A copy too big to hold beside the playing decoder (a
-                // stray wider than the panel): opened again when it plays.
+                // A copy too big to hold beside the playing decoder (no
+                // hint, a wider cap, a stray wider than the panel): opened
+                // again when it plays.
                 Ok(_) => Some(AheadOutcome::Cold),
                 Err(e) => {
                     log::warn!("skipping {}: {e}", next.path);
@@ -1382,7 +1411,6 @@ impl Engine {
             file,
         }) = self.ahead.next.take()
         {
-            self.ahead.stats.picks_used += 1;
             let gif = match file {
                 AheadFile::Ready(gif) => {
                     self.source.adopt(&path);
@@ -1398,6 +1426,7 @@ impl Engine {
             };
             match gif {
                 Ok(gif) => {
+                    self.ahead.stats.picks_used += 1;
                     self.started_count += 1;
                     let mut playing =
                         Playing::new(index, path, title, self.started_count, gif, now);
@@ -2864,9 +2893,16 @@ mod tests {
     const C: &str = "/gifs/Consoles/NES_C_01.gif";
 
     /// A, B, C in order (3 s minimum dwell, one-frame 50 ms GIFs), each
-    /// with a prepared copy unless named in `originals`; `copies` overrides
-    /// a copy's bytes.
+    /// with a prepared copy unless named in `originals`, none in `missing`.
     fn ahead_rig(originals: &[&str], missing: &[&str]) -> AheadRig {
+        let (gifs, copies) = ahead_files(originals, missing);
+        ahead_rig_with(gifs, copies)
+    }
+
+    type Files = HashMap<String, Vec<u8>>;
+
+    /// [`ahead_rig`]'s GIFs and copies, for a test to change a file's bytes.
+    fn ahead_files(originals: &[&str], missing: &[&str]) -> (Files, Files) {
         let mut gifs = HashMap::new();
         let mut copies = HashMap::new();
         for (path, rgb) in [(A, (255, 0, 0)), (B, (0, 255, 0)), (C, (0, 0, 255))] {
@@ -2879,6 +2915,10 @@ mod tests {
             }
             gifs.insert(path.to_string(), gif);
         }
+        (gifs, copies)
+    }
+
+    fn ahead_rig_with(gifs: Files, copies: Files) -> AheadRig {
         let opens = std::rc::Rc::new(std::cell::Cell::new(0));
         let adopted = std::rc::Rc::new(std::cell::Cell::new(0));
         let src = CopySource {
@@ -3112,6 +3152,117 @@ mod tests {
         assert_eq!(r.opens.get(), 2);
         // A new turn may open ahead again.
         assert_eq!(r.e.ahead_due(ms(4000)), Some(AheadStage::Pick));
+    }
+
+    #[test]
+    fn a_pause_lets_the_copy_go_and_a_resume_opens_it_again() {
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        run_ahead(&mut r.e, ms(1000));
+        assert_eq!(r.e.ahead_path(), Some((B, true)));
+        // Paused with the file still on screen (night mode, nothing
+        // wanting its heap): the handle goes, the pick stays.
+        r.e.pause(ms(1100));
+        assert_eq!(r.e.ahead_path(), Some((B, false)));
+        assert_eq!(r.e.ahead_stats().dropped, 1);
+        assert_eq!(r.e.ahead_due(ms(1100)), None);
+        r.e.resume(ms(60_000));
+        assert_eq!(
+            run_ahead(&mut r.e, ms(60_000)),
+            vec![AheadOutcome::Opened, AheadOutcome::Ready]
+        );
+        let b = started(&mut r.e, ms(62_000), &mut canvas);
+        assert_eq!(b.path, B);
+        assert!(r.e.started_ahead());
+        assert_eq!(r.opens.get(), 1);
+        let st = r.e.ahead_stats();
+        assert_eq!((st.ready, st.used, st.dropped, st.picks_used), (2, 1, 1, 1));
+    }
+
+    #[test]
+    fn a_corrupt_copy_fails_at_parse_and_that_entry_is_skipped() {
+        let ms = Duration::from_millis;
+        let (gifs, mut copies) = ahead_files(&[], &[]);
+        copies.insert(B.to_string(), b"GIF8zz not a header".to_vec());
+        let mut r = ahead_rig_with(gifs, copies);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        assert_eq!(
+            run_ahead(&mut r.e, ms(1000)),
+            vec![
+                AheadOutcome::Picked,
+                AheadOutcome::Opened,
+                AheadOutcome::Failed
+            ]
+        );
+        assert_eq!(r.e.ahead_path(), None);
+        assert_eq!(r.e.ahead_due(ms(1500)), None);
+        assert_eq!(started(&mut r.e, ms(3000), &mut canvas).path, C);
+        let st = r.e.ahead_stats();
+        assert_eq!((st.ready, st.dropped, st.picks_used), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_pick_that_fails_at_its_turn_is_not_counted_as_used() {
+        let ms = Duration::from_millis;
+        // B has no copy, and its original is not a GIF: kept as a pick
+        // (Cold), it fails when it opens and C plays instead.
+        let (mut gifs, copies) = ahead_files(&[B], &[]);
+        gifs.insert(B.to_string(), b"GIF8zz not a header".to_vec());
+        let mut r = ahead_rig_with(gifs, copies);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        assert_eq!(
+            run_ahead(&mut r.e, ms(1000)),
+            vec![AheadOutcome::Picked, AheadOutcome::Cold]
+        );
+        assert_eq!(started(&mut r.e, ms(3000), &mut canvas).path, C);
+        assert_eq!(r.e.ahead_stats().picks_used, 0);
+    }
+
+    #[test]
+    fn an_exhausted_order_has_nothing_to_pick() {
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        // Everything hidden while A plays on: no draw to make.
+        let mut ov = Overrides::default();
+        for i in 0..3 {
+            ov.push(
+                i,
+                Override {
+                    never: true,
+                    ..Override::default()
+                },
+            );
+        }
+        r.e.set_overrides(&ov);
+        assert_eq!(r.e.ahead_due(ms(1000)), Some(AheadStage::Pick));
+        assert_eq!(r.e.ahead_step(), None);
+        assert_eq!(r.e.ahead_path(), None);
+        assert_eq!(r.e.ahead_due(ms(1000)), None);
+    }
+
+    #[test]
+    fn reset_drops_the_pick_and_the_new_order_starts_afresh() {
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        run_ahead(&mut r.e, ms(1000));
+        assert_eq!(r.e.ahead_path(), Some((B, true)));
+        r.e.reset(7);
+        assert_eq!(r.e.ahead_path(), None);
+        assert_eq!(r.e.ahead_stats().dropped, 1);
+        // The rewound order's first entry plays, opened at its turn.
+        let first = started(&mut r.e, ms(1100), &mut canvas);
+        assert_eq!(first.path, A);
+        assert!(!r.e.started_ahead());
+        assert_eq!(r.opens.get(), 2);
+        assert_eq!(r.e.ahead_due(ms(2100)), Some(AheadStage::Pick));
     }
 
     #[test]

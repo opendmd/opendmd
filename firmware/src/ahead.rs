@@ -31,6 +31,7 @@ counters!(
     // Copies let go: low heap, a card error, a handler about to touch it.
     YIELDS,
     CARD_DROPS,
+    ASKED_DROPS,
     // Steps run, and the worst time of each kind since boot (µs).
     STEPS,
     PICK_MAX,
@@ -87,7 +88,7 @@ pub fn guard(eng: &mut Engine) {
 pub fn release(eng: &mut Engine) {
     if eng.ahead_path().is_some_and(|(_, open)| open) {
         eng.release_ahead_file();
-        YIELDS.fetch_add(1, Relaxed);
+        ASKED_DROPS.fetch_add(1, Relaxed);
     }
 }
 
@@ -164,13 +165,14 @@ pub fn summary(eng: Option<&Engine>) -> String {
     let st = eng.map(Engine::ahead_stats).unwrap_or_default();
     let n = HELD_N.load(Relaxed);
     format!(
-        ", ahead: {} ready, {} used, {} dropped (heap {}, card {}), {} heap skips, picks used {}, \
+        ", ahead: {} ready, {} used, {} dropped (heap {}, card {}, asked {}), {} heap skips, picks used {}, \
          held avg {} B (min {} max {}), steps {} max pick/open/parse {}/{}/{} us, overruns {}",
         st.ready,
         st.used,
         st.dropped,
         YIELDS.load(Relaxed),
         CARD_DROPS.load(Relaxed),
+        ASKED_DROPS.load(Relaxed),
         HEAP_SKIPS.load(Relaxed),
         st.picks_used,
         HELD_SUM.load(Relaxed).checked_div(n).unwrap_or(0),
