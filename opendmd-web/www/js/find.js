@@ -184,7 +184,7 @@ export function mountResults(el, { onPick, narrow }) {
   const grid = h('div.find-grid', { id: 'find-grid' });
   const caption = h('p.cap', { id: 'find-caption' });
   narrow.append(narrowRow);
-  el.append(h('div.find', { id: 'find' }, status, grid, caption));
+  el.append(h('div.find', { id: 'find' }, h('div.find-top', count, status), grid, caption));
 
   const o = () => opts[src.id];
   function controls() {
@@ -200,7 +200,7 @@ export function mountResults(el, { onPick, narrow }) {
       const fill = (items) => { clear(s, items.map(([x, t]) => h('option', { value: x, selected: v[f.id] === x }, t))); };
       if (typeof f.items === 'function') { fill(PLATFORMS.map((p) => [p, p])); f.items().then(fill, () => {}); } else fill(f.items);
       return s;
-    }), count);
+    }));
   }
 
   function show() {
