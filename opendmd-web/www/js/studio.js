@@ -872,8 +872,13 @@ function build(root) {
       const find = app.artFind;
       app.artFind = null;
       if (find) {
+        // The Library's one platform -> its game art; anything else, GifCities.
+        const p = PLATFORMS.includes(find.platform) && find.platform;
+        if (p) R.set('gameart', 'platform', p);
+        q.value = '';
+        useSource(p ? 'gameart' : 'gifcities');
         q.value = find.q;
-        if (S.src === 'own') useSource('gifcities');
+        S.searched = null;
         fold(false);
       }
       if (from) {

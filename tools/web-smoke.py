@@ -2697,12 +2697,12 @@ def find_checks(page: Page) -> None:
         origins.append(route.request.headers.get("origin"))
         route.fulfill(status=200, body=gif.read_bytes(), headers=gc_blob_headers(route.request))
     page.route("https://blob.gifcities.org/**", blob)
-    # GifCities as Create Art's source, then the Library: only what is on
-    # the player; nothing found -> the web.
+    # Game art as Create Art's source, then the Library: only what is on
+    # the player; nothing found -> the web (GifCities, no platform chip on).
     goto_view(page, "create")
     if page.is_visible("#st-change") and page.inner_text("#st-change") == "Change picture":
         page.click("#st-change")
-    page.click("#st-src [data-v=gifcities]")
+    page.click("#st-src [data-v=gameart]")
     goto_view(page, "library")
     pick_cat(page, "Consoles")
     page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
@@ -2713,6 +2713,12 @@ def find_checks(page: Page) -> None:
     page.fill("#lib-search", "zzqx mario banner")
     page.wait_for_selector("#lib-web:not([hidden])")
     check("“zzqx mario banner”" in page.inner_text("#lib-web"), f"find: nothing here -> '{page.inner_text('#lib-web')}'")
+    check(not page.is_visible("#view-library .vlist"), "find: no empty list under the hint")
+    pick_cat(page, "@")
+    page.wait_for_timeout(300)
+    check(not page.is_visible("#lib-web") and page.is_visible("#view-library .vlist"), "find: Live offers no web search")
+    pick_cat(page, "Consoles")
+    page.wait_for_selector("#lib-web:not([hidden])")
     page.click("#lib-web-go")
     page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
     page.wait_for_function("document.querySelector('#st-q').value === 'zzqx mario banner'", timeout=10000)
@@ -2771,7 +2777,20 @@ def find_checks(page: Page) -> None:
     page.wait_for_function("document.querySelector('#find-status').textContent.includes('didn’t answer')", timeout=10000)
     check(page.inner_text("#find-count") == "", f"find: no answer -> '{page.inner_text('#find-status')}'")
     page.click("#st-src [data-v=gameart]")
+    page.click("#st-src [data-v=gifcities]")
+    # One platform chip on: the hand-off searches that platform's game art.
     goto_view(page, "library")
+    page.click("#lib-chips [data-platform='SNES']")
+    page.fill("#lib-search", "zzqx harvest moon")
+    page.wait_for_selector("#lib-web:not([hidden])")
+    page.click("#lib-web-go")
+    page.wait_for_selector("#view-create.on #find-platform", timeout=20000)
+    page.wait_for_function("document.querySelector('#st-q').value === 'zzqx harvest moon'", timeout=10000)
+    check("on" in page.get_attribute("#st-src [data-v=gameart]", "class").split() and page.input_value("#find-platform") == "SNES",
+          f"find: with SNES picked, Search the web searches SNES game art ({page.input_value('#find-platform')})")
+    page.click("#st-src [data-v=gameart]")
+    goto_view(page, "library")
+    page.click("#lib-chips [data-platform='SNES']")
     page.fill("#lib-search", "")
     page.unroute("https://gifcities.archive.org/api/v1/gifsearch*")
     page.unroute("https://blob.gifcities.org/**")

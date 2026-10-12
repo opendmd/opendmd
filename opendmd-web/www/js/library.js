@@ -98,10 +98,11 @@ export async function mount(el) {
   const chips = h('div.chips.scroll', { id: 'lib-chips' });
   const addInput = h('input', { type: 'file', multiple: true, accept: '.gif,image/gif', hidden: true, id: 'lib-add-files', onchange: () => { addGifs([...addInput.files]); addInput.value = ''; } });
   const addBtn = app.device && h('button', { id: 'lib-add-btn', onclick: () => addInput.click() }, '+ Add GIFs');
-  // Nothing on the player matches: the same words in Create Art.
+  // Nothing on the player matches: the same words in Create Art (its Game
+  // art on the one platform chip picked, else GifCities).
   const webQ = h('b');
   const webHint = h('div.lib-web', { id: 'lib-web', hidden: true }, 'Nothing here matches “', webQ, '”. ',
-    h('button.txt', { id: 'lib-web-go', onclick: () => { app.artFind = { q: search.value.trim() }; app.go('create'); } }, 'Search the web in Create Art →'));
+    h('button.txt', { id: 'lib-web-go', onclick: () => { app.artFind = { q: search.value.trim(), platform: platforms.size === 1 ? [...platforms][0] : '' }; app.go('create'); } }, 'Search the web in Create Art →'));
   const addBar = h('i');
   const addMsg = h('span', { id: 'lib-add-progress' });
   const addErr = h('div.log.bad', { id: 'lib-add-errors' });
@@ -302,6 +303,7 @@ export async function mount(el) {
     list.set(shown);
     webQ.textContent = text.trim();
     webHint.hidden = shown.length || !text.trim() || cat[0] == '@';
+    list.el.hidden = !webHint.hidden; // no empty box under the hint
   }
 
   async function reveal(path) {
