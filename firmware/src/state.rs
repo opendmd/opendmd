@@ -16,7 +16,7 @@
 //! loop blocking on the handler (which is not).
 
 use crate::chan as mpsc;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 /// Which flash layout this build is for, compiled in by `build.rs`
@@ -92,6 +92,26 @@ pub static SAFE_START_UNTIL: AtomicU32 = AtomicU32::new(0);
 /// The network worker has published an address (joined the WiFi, or raised
 /// the setup AP): safe start's window is counted from here too.
 pub static NET_UP: AtomicBool = AtomicBool::new(false);
+
+/// The prepared copy the player opened ahead for the next file
+/// (`Engine::ahead_step`, `sd::SdSource::open_ahead`), as
+/// `layout::prepared_key` of its card path (no mount point); 0 for none. Set
+/// when the copy opens and cleared when that handle closes
+/// (`frametime::Counted`), so it covers the copy while it waits and while it
+/// plays. The handlers that replace or delete a file check it
+/// (`http::skip_if_playing`), as they check the path on screen: FAT must not
+/// have an open file replaced or unlinked. A key, not the path, so setting
+/// it allocates nothing on the display loop.
+pub static AHEAD_KEY: AtomicU32 = AtomicU32::new(0);
+
+/// Whether `fs_path` (under the mount point) is the copy opened ahead.
+pub fn is_ahead(fs_path: &str) -> bool {
+    let key = AHEAD_KEY.load(Ordering::Relaxed);
+    let rel = fs_path
+        .strip_prefix(crate::config::SD_MOUNT)
+        .unwrap_or(fs_path);
+    key != 0 && opendmd_core::layout::prepared_key(rel) == key
+}
 
 /// The player's health and what it is doing, as `/api/status` reports it.
 #[derive(Clone, Debug)]
@@ -340,6 +360,10 @@ pub enum PlayError {
 pub enum Command {
     /// End the current GIF at the next tick.
     Skip,
+    /// Let go of the copy opened ahead for the next file (a handler is
+    /// about to replace or delete it: `http::skip_if_playing`); the pick
+    /// stays and opens when it plays.
+    ReleaseAhead,
     /// Toggle pause and report the resulting state.
     TogglePause(mpsc::Sender<bool>),
     /// Play this card-absolute path (`/gifs/…`; its prepared copy if there is

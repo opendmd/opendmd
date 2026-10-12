@@ -65,12 +65,21 @@ pub fn open<T>(f: impl FnOnce() -> T) -> T {
 /// Also the player's half of card-failure counting ([`crate::sdhealth`]):
 /// a card-class error is recorded, *proven* (the card, not the file) when
 /// this handle had already read (`.1`). The flag fits the `Box`'s minimum
-/// heap block, so it costs nothing.
-pub struct Counted<R>(pub R, pub bool);
+/// heap block, so it costs nothing; so does `.2`, the copy's key when it
+/// was opened ahead for the next file ([`crate::state::AHEAD_KEY`], cleared
+/// when this handle closes; 0 otherwise).
+pub struct Counted<R>(pub R, pub bool, pub u32);
 
-impl<R> Counted<R> {
-    pub fn new(r: R) -> Self {
-        Counted(r, false)
+impl<R> Drop for Counted<R> {
+    fn drop(&mut self) {
+        if self.2 != 0 {
+            let _ = crate::state::AHEAD_KEY.compare_exchange(
+                self.2,
+                0,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
     }
 }
 

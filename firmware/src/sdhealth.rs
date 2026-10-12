@@ -465,6 +465,12 @@ fn in_window(now: u32) -> usize {
         .count()
 }
 
+/// Card-class errors counted since boot (any side): a change tells the main
+/// loop to let go of a copy it opened ahead.
+pub fn errors_seen() -> u32 {
+    get(w!(LIVE.next))
+}
+
 /// Failures in the last [`SD_FAIL_WINDOW`] (at most [`SD_FAIL_TRIP`]).
 pub fn failures() -> usize {
     in_window(now_ms())

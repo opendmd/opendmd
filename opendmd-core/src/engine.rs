@@ -28,6 +28,18 @@
 //! title card) sets [`Engine::set_hold`]: a file whose dwell is over then
 //! stays on its last frame ([`Engine::is_waiting`]) instead of the scheduler
 //! moving on, until the caller plays the next one or releases the hold.
+//!
+//! **The next file, ahead of time.** A caller with time to spare between
+//! frames (the firmware) can have the next file chosen and opened while the
+//! current one plays, in steps it times itself: [`Engine::ahead_due`] says
+//! which step is due, [`Engine::ahead_step`] does it — the pick (scheduler
+//! and catalog), the open of its prepared copy ([`Source::open_ahead`]), and
+//! the copy's header, palette and gifslim tables. When the file's turn comes
+//! only its first frame is left. Only a prepared copy (gifslim at cap ≤ 9,
+//! 128x32) is held ahead — its tables are 1.5 KB, never a second full LZW
+//! state —; anything else keeps just the pick and opens when it plays.
+//! Whatever changes what should come next lets it go
+//! ([`Engine::drop_ahead`], [`Engine::release_ahead_file`]).
 
 use crate::canvas::Canvas;
 use crate::compositor::{Compositor, Step, Transition, STEP};
@@ -143,6 +155,22 @@ impl<T: Read + Seek + ?Sized> ReadSeek for T {}
 /// source's job.
 pub trait Source {
     fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>>;
+
+    /// Open `path`'s prepared copy now, for a play that comes later
+    /// ([`Engine::ahead_step`]): `Ok(None)` if it has none (an original is
+    /// opened when it plays, never ahead). An error is a failed open, the
+    /// same as [`open`](Self::open)'s would be. The default opens nothing
+    /// ahead.
+    fn open_ahead(&self, path: &str) -> io::Result<Option<Box<dyn ReadSeek>>> {
+        let _ = path;
+        Ok(None)
+    }
+
+    /// A file [`open_ahead`](Self::open_ahead) opened is about to play: the
+    /// moment [`open`](Self::open) would have been called.
+    fn adopt(&self, path: &str) {
+        let _ = path;
+    }
 }
 
 /// What the engine plays: a decoder over whatever the source opened.
@@ -169,6 +197,7 @@ fn note_fallback(playing: &mut Playing) {
 fn decode_frame(
     playing: &mut Playing,
     compositor: &mut Compositor,
+    ahead: &mut Ahead,
     canvas: &mut Canvas,
 ) -> io::Result<Option<Duration>> {
     match playing.gif.try_frame(canvas) {
@@ -177,6 +206,9 @@ fn decode_frame(
                 log::info!("{}: transition cut for the gif crate's heap", playing.path);
                 compositor.finish(canvas);
             }
+            // And the next file's copy, if one is held: the crate's 54 KB
+            // come first.
+            ahead.release_file();
             playing.gif.fall_back(canvas, e, compositor.gate())
         }
         r => r,
@@ -348,6 +380,126 @@ pub const SEEK_MAX_CONTENT: Duration = Duration::from_secs(60);
 /// with skips every 2.5 s, none after).
 pub const WAKE_SLACK: Duration = Duration::from_millis(1);
 
+/// The next file is chosen and opened ahead ([`Engine::ahead_due`]) from
+/// this long before the file on screen could end its turn (its dwell's
+/// `min`): long enough for the few steps to find room between frames, short
+/// enough that a copy is not held for a whole long dwell.
+pub const AHEAD_LEAD: Duration = Duration::from_secs(2);
+
+/// The widest LZW cap a file held ahead may have: a prepared copy's
+/// ([`PREPARED`](crate::gifslim::PREPARED)), whose tables are 1.5 KB. An
+/// original at cap 12 (12 KB of tables) is never held beside the decoder
+/// playing.
+pub const AHEAD_MAX_CAP: u8 = crate::gifslim::PREPARED.cap;
+
+/// The step [`Engine::ahead_step`] would take next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AheadStage {
+    /// Choose the next entry: the scheduler's draw and the catalog lookup.
+    Pick,
+    /// Open its prepared copy ([`Source::open_ahead`]).
+    Open,
+    /// Read the copy's header and palette; gifslim's tables are allocated.
+    Parse,
+}
+
+/// What one [`Engine::ahead_step`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AheadOutcome {
+    /// The next entry is chosen.
+    Picked,
+    /// Its prepared copy is open.
+    Opened,
+    /// The copy is ready: only its first frame is left.
+    Ready,
+    /// Not held ahead (no copy, a live item, a copy too big to hold): the
+    /// pick is kept and the file opens when it plays.
+    Cold,
+    /// The lookup or the open failed: that entry is skipped, as a failed
+    /// open at the switch would be, and nothing more is tried ahead this
+    /// turn.
+    Failed,
+}
+
+/// Counts since the engine was built ([`Engine::ahead_stats`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AheadStats {
+    /// Prepared copies made ready ahead.
+    pub ready: u32,
+    /// Of those, played when their turn came.
+    pub used: u32,
+    /// Let go unused: an open copy or a ready one dropped because something
+    /// changed what comes next, or the heap or the card wanted it.
+    pub dropped: u32,
+    /// Picks made ahead that were played (ready or not).
+    pub picks_used: u32,
+}
+
+/// What [`Ahead`] holds of the next file. `Ready` holds the decoder inline
+/// (~560 B in the engine, which lives on the firmware's main stack) rather
+/// than boxed: a box would be one more heap block per file, as in
+/// `player::Dec`.
+#[allow(clippy::large_enum_variant)]
+enum AheadFile {
+    /// Chosen; nothing opened.
+    Picked,
+    /// Its prepared copy's handle, no decoder yet.
+    Opened(Box<dyn ReadSeek>),
+    /// The copy's decoder, header read and tables allocated.
+    Ready(Stream),
+    /// Opened when it plays, not ahead.
+    Cold,
+}
+
+/// The next file, chosen while the current one plays.
+struct Next {
+    index: usize,
+    path: String,
+    title: String,
+    file: AheadFile,
+}
+
+/// The engine's next file, if one has been chosen, and the counts.
+#[derive(Default)]
+struct Ahead {
+    next: Option<Next>,
+    stats: AheadStats,
+    /// Nothing more ahead until the next file starts: a step failed, or the
+    /// file held was let go (the heap or the card wanted it).
+    blocked: bool,
+}
+
+impl Ahead {
+    /// Let go of the opened copy (its handle and decoder), keeping the pick:
+    /// it opens when it plays. Nothing more is tried ahead this turn.
+    fn release_file(&mut self) {
+        self.blocked = true;
+        if let Some(n) = self.next.as_mut() {
+            if matches!(n.file, AheadFile::Opened(_) | AheadFile::Ready(_)) {
+                n.file = AheadFile::Picked;
+                self.stats.dropped += 1;
+            }
+        }
+    }
+
+    /// Drop the pick and whatever was opened of it; the index it drew.
+    fn take_pick(&mut self) -> Option<usize> {
+        let n = self.next.take()?;
+        if matches!(n.file, AheadFile::Opened(_) | AheadFile::Ready(_)) {
+            self.stats.dropped += 1;
+        }
+        Some(n.index)
+    }
+}
+
+/// Whether a decoder may be held ahead: gifslim at a prepared copy's cap,
+/// drawing straight onto the canvas (no 12 KB screen of its own).
+fn holdable(gif: &Stream) -> bool {
+    gif.kind() == "slim"
+        && gif.cap().is_some_and(|c| c <= AHEAD_MAX_CAP)
+        && gif.logical_size() == (crate::canvas::WIDTH, crate::canvas::HEIGHT)
+}
+
 struct Playing {
     index: usize,
     /// This entry's override, if it bends the dwell (`dwell`/`loops`).
@@ -446,6 +598,10 @@ pub struct Engine {
     /// A file whose dwell is over waits on its last frame instead of the
     /// scheduler moving on ([`Engine::set_hold`]).
     hold: bool,
+    /// The next file, chosen (and perhaps opened) ahead.
+    ahead: Ahead,
+    /// The file that started last came ready ahead.
+    started_ahead: bool,
 }
 
 impl Engine {
@@ -470,6 +626,8 @@ impl Engine {
             compositor: Compositor::default(),
             shown: false,
             hold: false,
+            ahead: Ahead::default(),
+            started_ahead: false,
         }
     }
 
@@ -586,6 +744,8 @@ impl Engine {
     /// opened. The indices are the catalog's, as the index build resolved
     /// them.
     pub fn set_overrides(&mut self, overrides: &Overrides) {
+        // The weights may change what comes next.
+        self.drop_ahead();
         self.timed.clear();
         for (index, ov) in overrides.iter() {
             if let Some(w) = ov.scheduler_weight() {
@@ -624,6 +784,9 @@ impl Engine {
         self.scheduler.reset(seed);
         self.current = None;
         self.skip_requested = false;
+        // The new order starts afresh: nothing to give back.
+        self.ahead.take_pick();
+        self.ahead.blocked = false;
     }
 
     /// Drop the file on screen now — its decoder, buffers and handle — and
@@ -636,6 +799,8 @@ impl Engine {
         self.compositor.finish(canvas);
         self.current = None;
         self.skip_requested = false;
+        // The next file's copy too; its pick is still what plays next.
+        self.ahead.release_file();
     }
 
     pub fn now_playing(&self) -> Option<NowPlaying> {
@@ -679,6 +844,11 @@ impl Engine {
         };
         self.current = None;
         self.skip_requested = false;
+        // The pick is still what comes after this file; a copy held for it
+        // is let go, as this file's decoder may be an original's.
+        self.ahead.release_file();
+        self.ahead.blocked = false;
+        self.started_ahead = false;
         let gif = Stream::open(reader)?;
         self.started_count += 1;
         // A paused engine has not run its clock; `resume` shifts these by the
@@ -776,6 +946,157 @@ impl Engine {
         self.current.as_ref().map(|p| p.next_frame_at)
     }
 
+    /// The step [`ahead_step`](Self::ahead_step) would take now, if one is
+    /// due: from [`AHEAD_LEAD`] before the file on screen could end its turn,
+    /// once its first frame is up and no transition runs, unless the engine
+    /// is paused, holding (a caller's sequence: what comes next is the
+    /// caller's), about to skip, or done for this turn. `None` once the next
+    /// file is as ready as it will get. The caller decides whether it has
+    /// the time (and the heap) for that step before the next frame.
+    pub fn ahead_due(&self, now: Duration) -> Option<AheadStage> {
+        if self.ahead.blocked
+            || self.hold
+            || self.skip_requested
+            || self.is_paused()
+            || self.compositor.is_active()
+        {
+            return None;
+        }
+        let p = self.current.as_ref()?;
+        if p.done || p.first_frame {
+            return None;
+        }
+        let dwell = self.current_dwell();
+        if now.saturating_sub(p.started_at) + AHEAD_LEAD < dwell.min.min(dwell.max) {
+            return None;
+        }
+        match self.ahead.next.as_ref().map(|n| &n.file) {
+            None => Some(AheadStage::Pick),
+            Some(AheadFile::Picked) => Some(AheadStage::Open),
+            Some(AheadFile::Opened(_)) => Some(AheadStage::Parse),
+            Some(AheadFile::Ready(_) | AheadFile::Cold) => None,
+        }
+    }
+
+    /// Take the next step towards having the next file ready (see
+    /// [`ahead_due`](Self::ahead_due), which says which and when): choose
+    /// it, open its prepared copy, or read the copy's header. The card work
+    /// is exactly what [`tick`](Self::tick) would do at the switch, moved
+    /// here; a lookup or open that fails skips that entry as it would have
+    /// there. `None` if nothing was left to do.
+    pub fn ahead_step(&mut self) -> Option<AheadOutcome> {
+        let Some(next) = self.ahead.next.as_mut() else {
+            let Some(index) = self.scheduler.next_index() else {
+                self.ahead.blocked = true;
+                return None;
+            };
+            let entry = match self.catalog.entry(index) {
+                Ok(entry) => entry,
+                Err(e) => {
+                    log::warn!("catalog entry {index} unreadable: {e}");
+                    self.ahead.blocked = true;
+                    return Some(AheadOutcome::Failed);
+                }
+            };
+            let (path, title) = (entry.path, entry.title);
+            let title = synth::title(&path).unwrap_or(title);
+            // A live item is drawn, not read: nothing to open ahead.
+            let file = if synth::is_virtual(&path) {
+                AheadFile::Cold
+            } else {
+                AheadFile::Picked
+            };
+            let cold = matches!(file, AheadFile::Cold);
+            self.ahead.next = Some(Next {
+                index,
+                path,
+                title,
+                file,
+            });
+            return Some(if cold {
+                AheadOutcome::Cold
+            } else {
+                AheadOutcome::Picked
+            });
+        };
+        match std::mem::replace(&mut next.file, AheadFile::Cold) {
+            AheadFile::Picked => match self.source.open_ahead(&next.path) {
+                Ok(Some(reader)) => {
+                    next.file = AheadFile::Opened(reader);
+                    Some(AheadOutcome::Opened)
+                }
+                Ok(None) => Some(AheadOutcome::Cold),
+                Err(e) => {
+                    log::warn!("skipping {}: {e}", next.path);
+                    self.ahead.next = None;
+                    self.ahead.blocked = true;
+                    Some(AheadOutcome::Failed)
+                }
+            },
+            AheadFile::Opened(reader) => match Stream::open(reader) {
+                Ok(gif) if holdable(&gif) => {
+                    next.file = AheadFile::Ready(gif);
+                    self.ahead.stats.ready += 1;
+                    Some(AheadOutcome::Ready)
+                }
+                // A copy too big to hold beside the playing decoder (a
+                // stray wider than the panel): opened again when it plays.
+                Ok(_) => Some(AheadOutcome::Cold),
+                Err(e) => {
+                    log::warn!("skipping {}: {e}", next.path);
+                    self.ahead.next = None;
+                    self.ahead.blocked = true;
+                    Some(AheadOutcome::Failed)
+                }
+            },
+            done @ (AheadFile::Ready(_) | AheadFile::Cold) => {
+                next.file = done;
+                None
+            }
+        }
+    }
+
+    /// Something changed what should come next (the weights, the order):
+    /// give the pick back to the scheduler — the next draw is made afresh —
+    /// and drop whatever was opened of it.
+    pub fn drop_ahead(&mut self) {
+        if let Some(index) = self.ahead.take_pick() {
+            self.scheduler.give_back(index);
+        }
+    }
+
+    /// Let go of the next file's opened copy — its handle, tables and buffer
+    /// — but keep the pick, which still plays next and is opened when it
+    /// does: for a caller that wants the heap back, or whose card failed, or
+    /// that is about to replace or delete that file. Nothing more is opened
+    /// ahead this turn (also when nothing was open: a caller that refuses a
+    /// step for its heap stops the steps with this).
+    pub fn release_ahead_file(&mut self) {
+        self.ahead.release_file();
+    }
+
+    /// The next file's path, if it has been chosen, and whether its copy is
+    /// open (a handle, or ready to play).
+    pub fn ahead_path(&self) -> Option<(&str, bool)> {
+        self.ahead.next.as_ref().map(|n| {
+            (
+                n.path.as_str(),
+                matches!(n.file, AheadFile::Opened(_) | AheadFile::Ready(_)),
+            )
+        })
+    }
+
+    /// Counts of the files made ready ahead, used and dropped.
+    pub fn ahead_stats(&self) -> AheadStats {
+        self.ahead.stats
+    }
+
+    /// The file that started last had been made ready ahead: its tick only
+    /// decoded its first frame.
+    pub fn started_ahead(&self) -> bool {
+        self.started_ahead
+    }
+
     /// The decoding half of [`tick`](Self::tick): open, loop and move on as
     /// the dwell says, decode the next frame when it is due, and start a
     /// transition in front of a new file's first frame.
@@ -830,7 +1151,7 @@ impl Engine {
                 self.compositor
                     .begin(canvas, first_frame_heap(&playing.gif));
             }
-            let frame = decode_frame(playing, &mut self.compositor, canvas);
+            let frame = decode_frame(playing, &mut self.compositor, &mut self.ahead, canvas);
             note_fallback(playing);
             let frame = match frame {
                 Ok(f) => f,
@@ -946,7 +1267,7 @@ impl Engine {
                 self.compositor
                     .begin(canvas, first_frame_heap(&playing.gif));
             }
-            let frame = decode_frame(playing, &mut self.compositor, canvas);
+            let frame = decode_frame(playing, &mut self.compositor, &mut self.ahead, canvas);
             note_fallback(playing);
             match frame? {
                 Some(delay) => {
@@ -1051,6 +1372,45 @@ impl Engine {
     /// Pull entries from the scheduler until one opens. A GIF that won't open
     /// or won't decode its header is logged and skipped, never fatal.
     fn open_next(&mut self, now: Duration) -> bool {
+        self.started_ahead = false;
+        self.ahead.blocked = false;
+        // The pick made ahead plays first, with whatever was opened of it.
+        if let Some(Next {
+            index,
+            path,
+            title,
+            file,
+        }) = self.ahead.next.take()
+        {
+            self.ahead.stats.picks_used += 1;
+            let gif = match file {
+                AheadFile::Ready(gif) => {
+                    self.source.adopt(&path);
+                    self.ahead.stats.used += 1;
+                    self.started_ahead = true;
+                    Ok(gif)
+                }
+                AheadFile::Opened(reader) => {
+                    self.source.adopt(&path);
+                    Stream::open(reader)
+                }
+                AheadFile::Picked | AheadFile::Cold => self.open_stream(&path),
+            };
+            match gif {
+                Ok(gif) => {
+                    self.started_count += 1;
+                    let mut playing =
+                        Playing::new(index, path, title, self.started_count, gif, now);
+                    playing.timed = self.timed_for(index);
+                    self.current = Some(playing);
+                    return true;
+                }
+                Err(e) => {
+                    self.started_ahead = false;
+                    log::warn!("skipping {path}: {e}");
+                }
+            }
+        }
         let budget = self.scheduler.len().saturating_mul(2).max(32);
         for _ in 0..budget {
             let Some(index) = self.scheduler.next_index() else {
@@ -2450,5 +2810,371 @@ mod tests {
         e2.tick(Duration::ZERO, &mut canvas).unwrap();
         e2.tick(Duration::from_millis(1_100), &mut canvas).unwrap();
         assert!(e2.is_waiting());
+    }
+
+    /// A source with prepared copies: `open_ahead` hands out a path's copy
+    /// (keyed by its GIF path), `open` the GIF itself; both counted.
+    struct CopySource {
+        gifs: HashMap<String, Vec<u8>>,
+        copies: HashMap<String, Vec<u8>>,
+        opens: std::rc::Rc<std::cell::Cell<u32>>,
+        adopted: std::rc::Rc<std::cell::Cell<u32>>,
+    }
+
+    impl Source for CopySource {
+        fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
+            self.opens.set(self.opens.get() + 1);
+            let bytes = self.copies.get(path).or_else(|| self.gifs.get(path));
+            match bytes {
+                Some(b) => Ok(Box::new(Cursor::new(b.clone()))),
+                None => Err(io::Error::new(io::ErrorKind::NotFound, path.to_string())),
+            }
+        }
+
+        fn open_ahead(&self, path: &str) -> io::Result<Option<Box<dyn ReadSeek>>> {
+            if let Some(b) = self.copies.get(path) {
+                return Ok(Some(Box::new(Cursor::new(b.clone()))));
+            }
+            if self.gifs.contains_key(path) {
+                Ok(None)
+            } else {
+                Err(io::Error::new(io::ErrorKind::NotFound, path.to_string()))
+            }
+        }
+
+        fn adopt(&self, _path: &str) {
+            self.adopted.set(self.adopted.get() + 1);
+        }
+    }
+
+    fn prepared(gif: &[u8]) -> Vec<u8> {
+        let mut copy = Vec::new();
+        crate::gifslim::recode_gif(gif, &mut copy, &crate::gifslim::PREPARED).unwrap();
+        copy
+    }
+
+    struct AheadRig {
+        e: Engine,
+        opens: std::rc::Rc<std::cell::Cell<u32>>,
+        adopted: std::rc::Rc<std::cell::Cell<u32>>,
+    }
+
+    const A: &str = "/gifs/Consoles/NES_A_01.gif";
+    const B: &str = "/gifs/Consoles/NES_B_01.gif";
+    const C: &str = "/gifs/Consoles/NES_C_01.gif";
+
+    /// A, B, C in order (3 s minimum dwell, one-frame 50 ms GIFs), each
+    /// with a prepared copy unless named in `originals`; `copies` overrides
+    /// a copy's bytes.
+    fn ahead_rig(originals: &[&str], missing: &[&str]) -> AheadRig {
+        let mut gifs = HashMap::new();
+        let mut copies = HashMap::new();
+        for (path, rgb) in [(A, (255, 0, 0)), (B, (0, 255, 0)), (C, (0, 0, 255))] {
+            if missing.contains(&path) {
+                continue;
+            }
+            let gif = solid_gif(rgb.0, rgb.1, rgb.2);
+            if !originals.contains(&path) {
+                copies.insert(path.to_string(), prepared(&gif));
+            }
+            gifs.insert(path.to_string(), gif);
+        }
+        let opens = std::rc::Rc::new(std::cell::Cell::new(0));
+        let adopted = std::rc::Rc::new(std::cell::Cell::new(0));
+        let src = CopySource {
+            gifs,
+            copies,
+            opens: opens.clone(),
+            adopted: adopted.clone(),
+        };
+        let manifest = format!("{A}\n{B}\n{C}\n");
+        let cat = catalog(&manifest, &Filter::new());
+        let sched = Scheduler::new(cat.len(), Mode::Sequential, 0);
+        let e = Engine::new(
+            Box::new(cat),
+            sched,
+            DwellPolicy {
+                min: Duration::from_secs(3),
+                max: Duration::from_secs(30),
+                min_loops: 1,
+            },
+            Box::new(src),
+        );
+        // Cuts: a transition would hold the steps off until it ends.
+        let mut e = e;
+        e.set_transition(Transition::NONE);
+        AheadRig { e, opens, adopted }
+    }
+
+    /// Every step ahead that is due at `now`, and what each did.
+    fn run_ahead(e: &mut Engine, now: Duration) -> Vec<AheadOutcome> {
+        let mut done = Vec::new();
+        while e.ahead_due(now).is_some() {
+            done.push(e.ahead_step().expect("a due step does something"));
+        }
+        done
+    }
+
+    fn started(e: &mut Engine, t: Duration, canvas: &mut Canvas) -> NowPlaying {
+        match e.tick(t, canvas).unwrap() {
+            TickOutcome::Frame {
+                playing,
+                started: true,
+                ..
+            } => playing,
+            other => panic!("expected a new file at {t:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_next_copy_is_opened_ahead_in_steps_and_plays_without_an_open() {
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        assert_eq!(started(&mut r.e, ms(0), &mut canvas).path, A);
+        assert_eq!(r.opens.get(), 1);
+        // Too early: more than AHEAD_LEAD before A's 3 s minimum.
+        assert_eq!(r.e.ahead_due(ms(500)), None);
+        assert_eq!(r.e.ahead_due(ms(1000)), Some(AheadStage::Pick));
+        assert_eq!(r.e.ahead_step(), Some(AheadOutcome::Picked));
+        assert_eq!(r.e.ahead_path(), Some((B, false)));
+        assert_eq!(r.e.ahead_due(ms(1000)), Some(AheadStage::Open));
+        assert_eq!(r.e.ahead_step(), Some(AheadOutcome::Opened));
+        assert_eq!(r.e.ahead_due(ms(1000)), Some(AheadStage::Parse));
+        assert_eq!(r.e.ahead_step(), Some(AheadOutcome::Ready));
+        assert_eq!(r.e.ahead_path(), Some((B, true)));
+        assert_eq!(r.e.ahead_due(ms(1000)), None);
+        assert_eq!(r.e.ahead_step(), None);
+        // A plays on (loops) meanwhile.
+        assert!(matches!(
+            r.e.tick(ms(1050), &mut canvas).unwrap(),
+            TickOutcome::Frame { started: false, .. }
+        ));
+        // Its turn over, B starts: no open, no catalog lookup — adopted.
+        let b = started(&mut r.e, ms(3000), &mut canvas);
+        assert_eq!((b.path.as_str(), b.title.as_str(), b.index), (B, "B", 1));
+        assert_eq!(canvas.get(0, 0), Rgb::new(0, 255, 0));
+        assert_eq!((r.opens.get(), r.adopted.get()), (1, 1));
+        assert!(r.e.started_ahead());
+        let st = r.e.ahead_stats();
+        assert_eq!((st.ready, st.used, st.dropped, st.picks_used), (1, 1, 0, 1));
+        // And the order carries on: C is next.
+        assert_eq!(run_ahead(&mut r.e, ms(4000)).len(), 3);
+        assert_eq!(r.e.ahead_path(), Some((C, true)));
+    }
+
+    #[test]
+    fn an_original_keeps_only_the_pick_and_opens_at_its_turn() {
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[B], &[]);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        assert_eq!(
+            run_ahead(&mut r.e, ms(1000)),
+            vec![AheadOutcome::Picked, AheadOutcome::Cold]
+        );
+        assert_eq!(r.e.ahead_path(), Some((B, false)));
+        let b = started(&mut r.e, ms(3000), &mut canvas);
+        assert_eq!(b.path, B);
+        assert!(!r.e.started_ahead());
+        assert_eq!((r.opens.get(), r.adopted.get()), (2, 0));
+        assert_eq!(r.e.ahead_stats().picks_used, 1);
+        assert_eq!(r.e.ahead_stats().ready, 0);
+    }
+
+    #[test]
+    fn a_copy_that_is_not_a_prepared_copy_is_not_held() {
+        // The "copy" is the original GIF: gifslim would play it at cap 12,
+        // whose 12 KB of tables are never held beside the playing decoder.
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        // Replace B's copy with the original's bytes.
+        let gif = solid_gif(0, 255, 0);
+        let mut copies = HashMap::new();
+        copies.insert(B.to_string(), gif.clone());
+        let mut gifs = HashMap::new();
+        gifs.insert(A.to_string(), solid_gif(255, 0, 0));
+        gifs.insert(B.to_string(), gif);
+        let manifest = format!("{A}\n{B}\n");
+        let cat = catalog(&manifest, &Filter::new());
+        r.e = Engine::new(
+            Box::new(cat),
+            Scheduler::new(2, Mode::Sequential, 0),
+            DwellPolicy::default(),
+            Box::new(CopySource {
+                gifs,
+                copies,
+                opens: r.opens.clone(),
+                adopted: r.adopted.clone(),
+            }),
+        );
+        started(&mut r.e, ms(0), &mut canvas);
+        assert_eq!(
+            run_ahead(&mut r.e, ms(1000)),
+            vec![
+                AheadOutcome::Picked,
+                AheadOutcome::Opened,
+                AheadOutcome::Cold
+            ]
+        );
+        assert_eq!(r.e.ahead_path(), Some((B, false)));
+        assert_eq!(started(&mut r.e, ms(3000), &mut canvas).path, B);
+        assert!(!r.e.started_ahead());
+    }
+
+    #[test]
+    fn a_skip_plays_the_ready_file_at_once() {
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        run_ahead(&mut r.e, ms(1000));
+        r.e.skip();
+        // Nothing more ahead while a skip is pending.
+        assert_eq!(r.e.ahead_due(ms(1001)), None);
+        let b = started(&mut r.e, ms(1001), &mut canvas);
+        assert_eq!(b.path, B);
+        assert!(r.e.started_ahead());
+        assert_eq!(r.opens.get(), 1);
+    }
+
+    #[test]
+    fn drop_ahead_gives_the_pick_back_and_new_weights_redraw_it() {
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        run_ahead(&mut r.e, ms(1000));
+        // Given back: the same entry is drawn again (a sequential order
+        // loses nothing).
+        r.e.drop_ahead();
+        assert_eq!(r.e.ahead_path(), None);
+        assert_eq!(r.e.ahead_stats().dropped, 1);
+        assert_eq!(run_ahead(&mut r.e, ms(1100)).len(), 3);
+        assert_eq!(r.e.ahead_path(), Some((B, true)));
+        // Overrides that hide B: the pick is redrawn under them.
+        let mut ov = Overrides::default();
+        ov.push(
+            1,
+            Override {
+                never: true,
+                ..Override::default()
+            },
+        );
+        r.e.set_overrides(&ov);
+        assert_eq!(r.e.ahead_path(), None);
+        assert_eq!(r.e.ahead_stats().dropped, 2);
+        run_ahead(&mut r.e, ms(1200));
+        assert_eq!(r.e.ahead_path(), Some((C, true)));
+        assert_eq!(started(&mut r.e, ms(3000), &mut canvas).path, C);
+        assert!(r.e.started_ahead());
+    }
+
+    #[test]
+    fn play_now_and_drop_current_let_the_copy_go_but_keep_the_pick() {
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        run_ahead(&mut r.e, ms(1000));
+        r.e.play_now(C, ms(1100)).unwrap();
+        assert_eq!(r.e.ahead_path(), Some((B, false)));
+        assert_eq!(r.e.ahead_stats().dropped, 1);
+        assert_eq!(started(&mut r.e, ms(1100), &mut canvas).path, C);
+        // C's turn may open B again; after C, B (the pick) plays.
+        assert_eq!(
+            run_ahead(&mut r.e, ms(2200)),
+            vec![AheadOutcome::Opened, AheadOutcome::Ready]
+        );
+        r.e.drop_current(&mut canvas);
+        assert_eq!(r.e.ahead_path(), Some((B, false)));
+        assert_eq!(r.e.ahead_due(ms(2300)), None);
+        let b = started(&mut r.e, ms(2300), &mut canvas);
+        assert_eq!(b.path, B);
+        assert!(!r.e.started_ahead());
+        assert_eq!(r.e.ahead_stats().dropped, 2);
+        assert_eq!(r.e.ahead_stats().used, 0);
+    }
+
+    #[test]
+    fn release_keeps_the_pick_and_stops_for_the_turn() {
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        assert_eq!(r.e.ahead_step(), Some(AheadOutcome::Picked));
+        assert_eq!(r.e.ahead_step(), Some(AheadOutcome::Opened));
+        r.e.release_ahead_file();
+        assert_eq!(r.e.ahead_path(), Some((B, false)));
+        assert_eq!(r.e.ahead_due(ms(1500)), None);
+        assert_eq!(started(&mut r.e, ms(3000), &mut canvas).path, B);
+        assert_eq!(r.opens.get(), 2);
+        // A new turn may open ahead again.
+        assert_eq!(r.e.ahead_due(ms(4000)), Some(AheadStage::Pick));
+    }
+
+    #[test]
+    fn a_failed_open_ahead_skips_that_entry_as_the_switch_would() {
+        let ms = Duration::from_millis;
+        // B is in the playlist but not on the card.
+        let mut r = ahead_rig(&[], &[B]);
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        assert_eq!(
+            run_ahead(&mut r.e, ms(1000)),
+            vec![AheadOutcome::Picked, AheadOutcome::Failed]
+        );
+        // Nothing more this turn; at the switch, C (B was used up).
+        assert_eq!(r.e.ahead_due(ms(1500)), None);
+        assert_eq!(r.e.ahead_path(), None);
+        assert_eq!(started(&mut r.e, ms(3000), &mut canvas).path, C);
+    }
+
+    #[test]
+    fn nothing_is_opened_ahead_while_holding_paused_or_transitioning() {
+        use crate::compositor::Kind;
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        // The first frame has to be up.
+        assert_eq!(r.e.ahead_due(ms(5000)), None);
+        started(&mut r.e, ms(0), &mut canvas);
+        r.e.set_hold(true);
+        assert_eq!(r.e.ahead_due(ms(1000)), None);
+        r.e.set_hold(false);
+        r.e.pause(ms(1000));
+        assert_eq!(r.e.ahead_due(ms(1000)), None);
+        r.e.resume(ms(1000));
+        assert_eq!(r.e.ahead_due(ms(1000)), Some(AheadStage::Pick));
+        // A transition in progress: after it.
+        r.e.set_transition(Transition::new(Kind::Dissolve, ms(400)));
+        let b = started(&mut r.e, ms(3000), &mut canvas);
+        assert_eq!(b.path, B);
+        assert!(r.e.is_transitioning());
+        assert_eq!(r.e.ahead_due(ms(4500)), None);
+    }
+
+    static GATE_NEED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    #[test]
+    fn a_ready_copy_asks_the_transition_gate_for_the_transition_alone() {
+        // Its tables are already allocated (counted in the heap the gate
+        // reads), so the gate is asked for the transition's buffers only.
+        use crate::compositor::{Kind, BUFFER_BYTES};
+        use std::sync::atomic::Ordering::Relaxed;
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        r.e.set_transition(Transition::new(Kind::Dissolve, ms(400)));
+        r.e.set_transition_gate(Some(|need| {
+            GATE_NEED.store(need, Relaxed);
+            true
+        }));
+        let mut canvas = Canvas::new();
+        started(&mut r.e, ms(0), &mut canvas);
+        run_ahead(&mut r.e, ms(1000));
+        started(&mut r.e, ms(3000), &mut canvas);
+        assert!(r.e.started_ahead() && r.e.is_transitioning());
+        assert_eq!(GATE_NEED.load(Relaxed), BUFFER_BYTES);
     }
 }

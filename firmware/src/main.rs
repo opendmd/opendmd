@@ -36,6 +36,7 @@
 //! the worst lateness seen, and the sampled heap floor. If serving files costs
 //! the panel anything, those are where it shows.
 
+mod ahead;
 mod boot;
 mod cache;
 mod cache_builder;
@@ -453,6 +454,11 @@ fn main() -> Result<()> {
                 Command::Skip => {
                     if let Some(e) = engine.as_mut() {
                         e.skip();
+                    }
+                }
+                Command::ReleaseAhead => {
+                    if let Some(e) = engine.as_mut() {
+                        ahead::release(e);
                     }
                 }
                 Command::TogglePause(reply) => {
@@ -1102,6 +1108,9 @@ fn main() -> Result<()> {
         let mut new_file = None;
         let mut exhausted = false;
         let mut judged = None;
+        // The next frame's due time, when this iteration may step the next
+        // file ahead after it (a file frame on time, no transition).
+        let mut slot = None;
         let sleep_for = match outcome {
             TickOutcome::Frame {
                 playing,
@@ -1135,7 +1144,7 @@ fn main() -> Result<()> {
                         sd::take_last()
                     };
                     current_prepared = match served {
-                        Some(sd::Served::Prepared { .. }) => true,
+                        Some(sd::Served::Prepared { .. } | sd::Served::Ahead { .. }) => true,
                         // A playlist line naming a copy under `cache/`.
                         Some(sd::Served::Direct) => matches!(
                             opendmd_core::layout::classify(&playing.path),
@@ -1144,6 +1153,7 @@ fn main() -> Result<()> {
                         _ => false,
                     };
                     log_started(playing.ordinal, &playing.path, served);
+                    probe::switch_frame(tick_us, eng.started_ahead());
                 }
                 // Attribute every new low-water mark to the GIF on screen, so
                 // a heap regression names the file that caused it.
@@ -1193,6 +1203,9 @@ fn main() -> Result<()> {
                 }
                 if is_new {
                     new_file = Some(playing);
+                }
+                if decoded && !transitioning && now < deadline {
+                    slot = Some(deadline);
                 }
                 let glow_between = std::mem::take(&mut glow_us);
                 // A dot fading (glow): wake for its next step.
@@ -1253,6 +1266,14 @@ fn main() -> Result<()> {
 
         let judged = judged.unwrap_or_else(Instant::now);
 
+        // The next file, ahead: a held copy let go on a card error or low
+        // heap; then the steps that fit before the next frame (`ahead.rs`).
+        ahead::guard(eng);
+        let stepped = match slot {
+            Some(deadline) if !off => ahead::between_frames(eng, deadline, &epoch),
+            _ => false,
+        };
+
         // Nothing moving (paused, or dark): once the fade is over the
         // glow's 12 KB goes back (the builder works at full speed now).
         if off || eng.is_paused() {
@@ -1302,7 +1323,11 @@ fn main() -> Result<()> {
         // The sleep should end at `judged + sleep_for`; anything after that
         // (publishing above, preemption on CPU1) is the next frame's `wake`.
         let planned = judged + sleep_for;
-        thread::sleep(sleep_for);
+        thread::sleep(if stepped {
+            planned.saturating_duration_since(Instant::now())
+        } else {
+            sleep_for
+        });
         woke = Instant::now();
         wake_us = us(woke.saturating_duration_since(planned));
         log_us = 0;
@@ -1323,7 +1348,7 @@ fn main() -> Result<()> {
                 deadline_misses,
                 worst_lateness_ms,
                 &misses,
-                &(sched.summary() + &follow::summary()),
+                &(sched.summary() + &follow::summary() + &ahead::summary(Some(eng))),
             );
             log_us = us(last_heartbeat.elapsed());
         }
@@ -1809,6 +1834,9 @@ fn log_started(ordinal: u64, path: &str, served: Option<sd::Served>) {
             }
             Some(sd::Served::Original { miss_us }) => {
                 format!("original, miss {:.1} ms", miss_us as f32 / 1000.0)
+            }
+            Some(sd::Served::Ahead { try_us }) => {
+                format!("prepared, opened ahead in {:.1} ms", try_us as f32 / 1000.0)
             }
             None if path.starts_with('@') => "drawn".to_string(),
             Some(sd::Served::Direct) | None => "as named".to_string(),

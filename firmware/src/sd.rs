@@ -349,6 +349,9 @@ pub enum Served {
     Original { miss_us: u32 },
     /// A path with no prepared form (already a copy, or not under `gifs/`).
     Direct,
+    /// The prepared copy, opened ahead while the previous file played
+    /// ([`SdSource::open_ahead`]) after `try_us` µs then.
+    Ahead { try_us: u32 },
 }
 
 static LAST_KIND: AtomicU32 = AtomicU32::new(0);
@@ -379,6 +382,11 @@ fn record(served: Served) {
             (2, miss_us)
         }
         Served::Direct => (3, 0),
+        Served::Ahead { try_us } => {
+            P_HITS.fetch_add(1, Relaxed);
+            B_HITS.fetch_add(1, Relaxed);
+            (4, try_us)
+        }
     };
     LAST_KIND.store(kind, Relaxed);
     LAST_US.store(us, Relaxed);
@@ -391,6 +399,7 @@ pub fn take_last() -> Option<Served> {
         1 => Some(Served::Prepared { try_us: us }),
         2 => Some(Served::Original { miss_us: us }),
         3 => Some(Served::Direct),
+        4 => Some(Served::Ahead { try_us: us }),
         _ => None,
     }
 }
@@ -417,6 +426,11 @@ pub fn period_summary() -> String {
 /// seeks are timed for the display loop's miss attribution
 /// ([`crate::frametime::Counted`]).
 fn open_file(full: &str) -> io::Result<Box<dyn ReadSeek>> {
+    open_file_keyed(full, 0)
+}
+
+/// [`open_file`], the handle carrying `ahead_key` (`frametime::Counted`).
+fn open_file_keyed(full: &str, ahead_key: u32) -> io::Result<Box<dyn ReadSeek>> {
     // No `BufReader` here: gifslim wraps whatever it is handed in a 2 KiB
     // `BufReader` of its own (the `gif` crate, the fallback, in 8 KiB), so
     // a second one buys nothing but heap.
@@ -441,9 +455,9 @@ fn open_file(full: &str) -> io::Result<Box<dyn ReadSeek>> {
     };
     crate::sdhealth::opened(full);
     if crate::probe::ENABLED {
-        return Ok(Box::new(Counted::new(crate::probe::TimedFile(file))));
+        return Ok(Box::new(Counted(crate::probe::TimedFile(file), false, ahead_key)));
     }
-    Ok(Box::new(Counted::new(file)))
+    Ok(Box::new(Counted(file, false, ahead_key)))
 }
 
 /// The prepared copy at `full`, if it opens and is a GIF. The magic is read
@@ -467,7 +481,65 @@ impl Source for SdSource {
     fn open(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
         crate::frametime::open(|| open_resolved(path))
     }
+
+    /// The copy alone (a path already under `cache/` as it is), never the
+    /// original; `Ok(None)` when there is no copy or it is not a GIF. A
+    /// card-class error is returned (and counted by `sdhealth`, in
+    /// [`open_file`], exactly as the switch's open of the copy would be);
+    /// any other failure is a miss. No builder release wait here: the main
+    /// loop only steps ahead while the builder's task is down. Open time.
+    fn open_ahead(&self, path: &str) -> io::Result<Option<Box<dyn ReadSeek>>> {
+        crate::frametime::open(|| {
+            let copy = match layout::classify(path) {
+                layout::Prepared::Direct => path.to_string(),
+                layout::Prepared::Candidate { .. } => match layout::cache_path(path) {
+                    Some(c) => c,
+                    None => return Ok(None),
+                },
+                layout::Prepared::Never => return Ok(None),
+            };
+            let t = Instant::now();
+            let key = layout::prepared_key(&copy);
+            let full = format!("{}{copy}", config::SD_MOUNT);
+            let mut f = match open_file_keyed(&full, key) {
+                Ok(f) => f,
+                Err(e) if crate::sdhealth::is_card_error(&e) => return Err(e),
+                Err(_) => return Ok(None),
+            };
+            crate::state::AHEAD_KEY.store(key, Relaxed);
+            let mut magic = [0u8; 4];
+            match f.read_exact(&mut magic) {
+                Ok(()) if &magic == b"GIF8" => {}
+                Err(e) if crate::sdhealth::is_card_error(&e) => return Err(e),
+                _ => {
+                    log::warn!("{full}: not a GIF; the original plays instead");
+                    return Ok(None);
+                }
+            }
+            f.seek(SeekFrom::Start(0))?;
+            AHEAD_US.store(t.elapsed().as_micros() as u32, Relaxed);
+            Ok(Some(f))
+        })
+    }
+
+    /// The copy opened ahead takes the screen: what the open at the switch
+    /// would have done besides opening — the builder lets go of its heap
+    /// (if it started meanwhile), and the GIF-start line says how it was
+    /// served.
+    fn adopt(&self, _path: &str) {
+        crate::frametime::open(|| {
+            if crate::cache_builder::task_up() {
+                crate::cache_builder::player_opening();
+            }
+            record(Served::Ahead {
+                try_us: AHEAD_US.load(Relaxed),
+            });
+        });
+    }
 }
+
+/// The open time of the copy opened ahead last (µs), for its GIF-start line.
+static AHEAD_US: AtomicU32 = AtomicU32::new(0);
 
 fn open_resolved(path: &str) -> io::Result<Box<dyn ReadSeek>> {
     // The cache builder lets go of its heap first: this may be an

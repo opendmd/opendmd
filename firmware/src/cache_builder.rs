@@ -306,6 +306,13 @@ impl Drop for Busy {
     }
 }
 
+/// A transfer that shares the card is in flight (a [`Busy`] is held): the
+/// player does not open the next file ahead meanwhile (`main.rs`), as its
+/// directory scans would queue behind the transfer's.
+pub fn transfer_in_flight() -> bool {
+    BUSY.load(SeqCst) > 0
+}
+
 /// Why the builder may not work right now, if it may not.
 fn blocked() -> Option<Reason> {
     if SHUTTING_DOWN.load(SeqCst) {

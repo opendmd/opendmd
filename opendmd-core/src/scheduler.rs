@@ -164,6 +164,25 @@ impl Scheduler {
         Some(index)
     }
 
+    /// Undo the latest draw, which returned `index`: a `Sequential` order
+    /// steps back so the next draw returns it again (or steps over it, if it
+    /// has been weighted to 0 since), and the no-repeat window forgets it. A
+    /// `Shuffle`'s generator is not rewound — the next draw is a fresh one,
+    /// with the weights as they are then. For the engine's pick of the next
+    /// file, made while the current one plays and given back when something
+    /// changes what should come next (`Engine::drop_ahead`).
+    pub fn give_back(&mut self, index: usize) {
+        if index >= self.len {
+            return;
+        }
+        if self.mode == Mode::Sequential {
+            self.cursor = index;
+        }
+        if self.history.back() == Some(&index) {
+            self.history.pop_back();
+        }
+    }
+
     fn remember(&mut self, index: usize) {
         if self.no_repeat == 0 {
             return;
@@ -372,5 +391,32 @@ mod tests {
         let mut s = Scheduler::new(1, Mode::Shuffle, 0);
         s.set_weight(0, 0.0);
         assert_eq!(s.next_index(), None);
+    }
+
+    #[test]
+    fn give_back_redraws_in_order_and_forgets_the_window() {
+        let mut s = Scheduler::new(4, Mode::Sequential, 0).with_no_repeat(2);
+        assert_eq!(take(&mut s, 2), vec![0, 1]);
+        let drawn = s.next_index().unwrap();
+        assert_eq!(drawn, 2);
+        s.give_back(drawn);
+        assert_eq!(take(&mut s, 3), vec![2, 3, 0]);
+        // Hidden since it was drawn: stepped over.
+        let drawn = s.next_index().unwrap();
+        assert_eq!(drawn, 1);
+        s.give_back(drawn);
+        s.set_weight(1, 0.0);
+        assert_eq!(take(&mut s, 2), vec![2, 3]);
+        // Wrapped: the cursor goes back to the end.
+        let mut s = Scheduler::new(3, Mode::Sequential, 0);
+        assert_eq!(take(&mut s, 3), vec![0, 1, 2]);
+        s.give_back(2);
+        assert_eq!(take(&mut s, 2), vec![2, 0]);
+        // A shuffle's window no longer holds the index given back.
+        let mut s = Scheduler::new(2, Mode::Shuffle, 7).with_no_repeat(1);
+        let a = s.next_index().unwrap();
+        s.give_back(a);
+        assert!(s.history.is_empty());
+        s.give_back(99); // out of range: ignored
     }
 }

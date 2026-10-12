@@ -237,6 +237,38 @@ pub const TRANSITION: opendmd_core::compositor::Transition =
 /// counted the decoder. Refusals are the heartbeat's `transitions cut`.
 pub const TRANSITION_HEAP_RESERVE: usize = 12 * 1024;
 
+/// The next file is opened ahead (`Engine::ahead_step`, "The next file,
+/// ahead" in CLAUDE.md) only while a step leaves this much free after the
+/// bytes it takes ([`AHEAD_OPEN_BYTES`], [`AHEAD_PARSE_BYTES`]) and a 16 KB
+/// block exists. Derived from the transition gate's arithmetic so a copy
+/// held ahead never costs the switch its transition: the gate wants the
+/// transition's 24 KB plus [`TRANSITION_HEAP_RESERVE`] free with the new
+/// file's tables already allocated — which they are either way, opened
+/// ahead or at the switch, so they are counted once, here — and the file
+/// on screen gives back at least a copy's ~4 KB at the switch. Above the
+/// ~20 KB the network side's transients need while it is held.
+pub const AHEAD_HEAP_RESERVE: usize = 24 * 1024 + TRANSITION_HEAP_RESERVE - 4 * 1024;
+/// Heap an open copy's handle takes (the `File`, FATFS's `FIL` with its
+/// 512 B sector buffer, the boxed reader): rounded up from the probe's
+/// measurement.
+pub const AHEAD_OPEN_BYTES: usize = 1536;
+/// Heap the copy's decoder takes when its header is read: gifslim's 2 KB
+/// read buffer, the 1.5 KB of cap-9 tables, the row, a palette of up to
+/// 768 B, allocator overhead.
+pub const AHEAD_PARSE_BYTES: usize = 5 * 1024;
+/// A copy held ahead is let go (the pick is kept) when the main loop sees
+/// the free heap under this: the network side's transients come first, as
+/// for the glow's copy ([`GLOW_YIELD_HEAP`]).
+pub const AHEAD_YIELD_HEAP: usize = 20 * 1024;
+/// A step ahead runs between frames only if the next frame is at least this
+/// far off: the step's worst case on the card (rig and spare, probe builds)
+/// plus a margin. The pick (an index read and a manifest line), the copy's
+/// open (the bucket lookup, the open and its magic) and the header (a 2 KB
+/// read and the tables).
+pub const AHEAD_PICK_SLACK: Duration = Duration::from_millis(9);
+pub const AHEAD_OPEN_SLACK: Duration = Duration::from_millis(16);
+pub const AHEAD_PARSE_SLACK: Duration = Duration::from_millis(7);
+
 /// Phosphor glow (`glow` short/long) keeps a 12 KB copy of the panel while
 /// it is lit (`Panel::blit`). It takes the copy only with at least this much
 /// free (so ~28 KB stay for everything else), and gives it back as soon as

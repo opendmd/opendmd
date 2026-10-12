@@ -1112,7 +1112,7 @@ static OCTA_E: [[u8; 2]; 12] = [
 /// The icosahedron: (0, ±1, ±φ) and its cyclic permutations, scaled to a
 /// radius of ~50; edges between the vertices 2 apart (30 of them).
 const fn icosahedron() -> ([[i8; 3]; 12], [[u8; 2]; 30]) {
-    let phi = 1.618_033_988_75;
+    let phi = std::f64::consts::GOLDEN_RATIO;
     let s = 26.0;
     let mut v = [[0i8; 3]; 12];
     let mut raw = [[0.0f64; 3]; 12];
