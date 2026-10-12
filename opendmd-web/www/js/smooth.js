@@ -6,7 +6,7 @@
 // from the tweened frames (byte-identical to opendmd-pack's), and the choice
 // is one line in the card's /sets/.smooth, outside the cache, so clearing
 // the cache keeps it. Loaded on first use (a Library preview on a device, a
-// prepare run, Make art's switch or a listed GIF opened there), so it costs
+// prepare run, Create Art's switch or a listed GIF opened there), so it costs
 // the page load nothing.
 //
 // The work runs in slices of ~12 ms with the page given back between them
@@ -108,7 +108,7 @@ export async function set(path, on) {
   }
 }
 
-// Make art saved `bytes` at `path` (js/studio.js): list it or not, and
+// Create Art saved `bytes` at `path` (js/studio.js): list it or not, and
 // write the file the panel plays to match, so the copy is right at once.
 // `ready` is a Smoother already tweened over these very bytes (optional).
 // On: the list first, then the smooth file (plain, with a warning returned,

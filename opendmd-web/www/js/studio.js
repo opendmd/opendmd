@@ -1,8 +1,10 @@
-// The Studio: the "Make art" view. A picture or an animated GIF in (a file,
-// a drop, a paste, an address, "Find art for a game", or a GIF from the
-// Library's "Edit in Make art"), a 128x32 GIF out, in six steps on one
-// page: Import, Frame, Look, Text, Preview (with the timeline for an
-// animation), Save.
+// The Studio: the "Create Art" view. A picture or an animated GIF in (found
+// on the web — Game art, GifCities —, your own file, drop, paste or
+// address, or a GIF from the Library's "Edit in Create Art"), a 128x32 GIF
+// out, in six steps on one page: Find, Frame, Look, Text, Preview (with the
+// timeline for an animation), Save. Until a picture is in only Find shows;
+// then Find folds to one line ("Change picture" opens it again, its search
+// as it was) and the rest appear.
 //
 // An animated GIF is decoded in the art module (every frame composited as
 // the player does, kept there), in ~12 ms slices with the page given back
@@ -22,10 +24,10 @@
 // and read back with the core's parser, so what the Library will list is
 // what the user sees before saving.
 //
-// "Find art for a game" is js/find.js' game-art search (a name index per
-// platform on the card, pictures from libretro-thumbnails), shared with the
-// Library's "Game art"; a GIF or picture found from the Library arrives as
-// `app.artFrom.blob`. Nothing here says where anything is stored.
+// Find's web sources are js/find.js' (Game art: a name index per platform
+// on the card, pictures from libretro-thumbnails; GifCities); a click on a
+// result loads it. The Library's "Search the web" hands its words over as
+// `app.artFind`. Nothing here says where anything is stored.
 //
 // Smooth motion (js/smooth.js, imported when the switch is first used or a
 // listed GIF is opened): the switch beside speed and reverse analyses what
@@ -35,12 +37,12 @@
 
 import { app } from './state.js';
 import { PanelPreview, fitScale } from './preview.js';
-import { h, clear, toast, debounce, label, base, emit, niceName, byNice, note } from './util.js';
+import { h, clear, toast, debounce, label, base, emit, niceName, byNice, note, store } from './util.js';
 import { art as artModule } from './artmod.js';
 import { addOne, offerPlaylist } from './library.js';
 import { listings, pickName, renameGif } from './details.js';
 import { prepareBytes } from './prepare.js';
-import { PLATFORMS, findGames, gamePictures, tile, style } from './find.js';
+import { PLATFORMS, sources, mountResults, style } from './find.js';
 
 const SPEEDS = [['Slow', 50], ['Normal', 40], ['Fast', 30]];
 const RATES = [25, 50, 75, 100, 150, 200, 300, 400];
@@ -79,7 +81,7 @@ function css() {
 }
 
 function build(root) {
-  const S = { studio: null, fit: 'pixels', motion: 'still', x: 0, y: 0, gif: null, opts: null, urls: [], tok: 0, from: null, listing: null, cats: [] };
+  const S = { studio: null, fit: 'pixels', motion: 'still', x: 0, y: 0, gif: null, opts: null, tok: 0, from: null, listing: null, cats: [] };
   const id = (x) => 'st-' + x;
   const seg = (name, items, onpick) => {
     const el = h('div.st-seg', { id: id(name), role: 'group' }, items.map(([v, t]) => h('button', { 'data-v': v, onclick: () => onpick(v) }, t)));
@@ -88,22 +90,54 @@ function build(root) {
   };
   const select = (name, items, value) => h('select', { id: id(name) }, items.map(([t, v]) => h('option', { value: v, selected: v === value }, t)));
   const num = (name, attrs) => h('input', { type: 'number', id: id(name), inputMode: 'numeric', ...attrs });
-  // A numbered step; 2-6 are dimmed until there is a picture.
+  // A numbered step; 2-6 are hidden until there is a picture.
   const step = (n, t, sid, ...kids) => h('section.card' + (n > 1 ? '.st-step' : ''), { id: id(sid) }, h('h2', h('span.muted', n), ' ', t), ...kids);
 
-  // --- 1 Import
+  // --- 1 Find: the web (find.js' sources) or your own picture.
+  const SRC = [['gameart', 'Game art'], ['gifcities', 'GifCities'], ['own', 'Your own']];
   const file = h('input', { type: 'file', accept: 'image/*', hidden: true, id: id('file'), onchange: () => { if (file.files[0]) load(file.files[0]); file.value = ''; } });
   const url = h('input', { type: 'text', id: id('url'), inputMode: 'url', placeholder: 'Picture address (https://…)' });
-  const msg = h('div.cap', { id: id('msg'), 'aria-live': 'polite' }, 'Start here with a picture or GIF');
-  const plat = h('select', { id: id('find-plat') });
-  const query = h('input', { type: 'search', id: id('find-q'), placeholder: 'Game title', enterKeyHint: 'search', onkeydown: (e) => e.key === 'Enter' && find() });
-  const hits = h('div.find-grid.st-hits', { id: id('hits') });
-  const imp = step(1, 'Import', 'import',
+  const msg = h('span.cap', { id: id('msg'), 'aria-live': 'polite' });
+  const seen = h('a', { id: id('seen'), target: '_blank', rel: 'noopener', hidden: true }, 'Seen on…');
+  const search = () => { S.searched = q.value; R.search(q.value); };
+  const q = h('input', { type: 'search', id: id('q'), enterKeyHint: 'search', onkeydown: (e) => e.key === 'Enter' && search() });
+  const narrow = h('div', { id: id('narrow') });
+  const results = h('div', { id: id('results') });
+  const src = seg('src', SRC, (v) => useSource(v, true));
+  const web = h('div', { id: id('web') }, narrow, h('div.row.st-q', h('div.grow', q), h('button', { id: id('go'), onclick: search }, 'Search')), results);
+  const own = h('div', { id: id('own'), hidden: true },
     h('div.row', h('label.btn', 'Choose a picture or GIF…', file), h('span.cap', 'or drop or paste one here')),
-    msg,
-    h('div.row.st-url', h('div.grow', url), h('button', { id: id('url-go'), onclick: () => fromUrl(url.value.trim()) }, 'Load')),
-    h('h3', 'Find art for a game'),
-    h('div.row.st-find', plat, h('div.grow', query), h('button', { id: id('find-go'), onclick: () => find() }, 'Search')), hits);
+    h('div.row.st-url', h('div.grow', url), h('button', { id: id('url-go'), onclick: () => fromUrl(url.value.trim()) }, 'Load')));
+  // Folded, "Change picture"; open with a picture in, "Keep this picture".
+  const change = h('button.sm', { id: id('change'), onclick: () => fold(!el.classList.contains('found')) }, 'Change picture');
+  const imp = h('section.card', { id: id('import') }, h('h2', h('span.muted', 1), ' Find'),
+    h('div.row.st-got', h('div.grow', msg, ' ', seen), change),
+    h('div.st-finder', h('div.row', src), web, own));
+  const R = mountResults(results, { narrow, onPick: async (x) => {
+    if (!(await load(await x.fetch(), { platform: x.platform, title: x.hint || '', logo: x.logo, label: x.title, link: x.link }))) throw new Error();
+  } });
+  function useSource(v, keep) {
+    if (!SRC.some(([x]) => x === v)) v = 'gameart';
+    S.src = v;
+    if (keep) store.set('art.src', v);
+    src.set(v);
+    web.hidden = v === 'own';
+    own.hidden = v !== 'own';
+    if (v === 'own') return;
+    const s = sources.find((x) => x.id === v);
+    R.use(s);
+    q.placeholder = s.placeholder;
+    if (q.value.trim()) search();
+  }
+  // Folded: Find is one line (what is loaded, "Change picture"). Opened
+  // again, words put in meanwhile (Edit in Create Art's) are searched.
+  function fold(on, focus = true) {
+    el.classList.toggle('found', on);
+    change.textContent = on ? 'Change picture' : 'Keep this picture';
+    if (on) return;
+    if (S.src !== 'own' && q.value.trim() && q.value !== S.searched) search();
+    if (focus) (S.src === 'own' ? url : q).focus();
+  }
 
   // --- 2 Frame
   const cv = h('canvas', { id: id('src') });
@@ -205,13 +239,14 @@ function build(root) {
     h('div.row.st-logo', h('label', logo, 'It is a logo')),
     name, warn, h('div.row.st-go', saveBtn));
 
-  const box = h('div.st-box', h('h2', 'Make art'),
-    h('p.muted', 'Turn a picture — a screenshot, box art, a logo — or an animated GIF into a GIF for the panel'),
-    h('div.st-grid', h('div.st-col', imp, frm), h('div.st-col', look, txt), prev, sv));
+  const box = h('div.st-box', h('h2', 'Create Art'),
+    h('p.muted', 'Find a picture — a title screen, box art, a logo — or an animated GIF, and make it into a GIF for the panel'),
+    h('div.st-grid', imp, h('div.st-col', frm), h('div.st-col', look, txt), prev, sv));
   const el = h('div.st-root', { id: 'studio' }, box);
   root.append(el);
 
-  for (const p of PLATFORMS) plat.append(h('option', { value: p }, art.consoleName(p) || p));
+  useSource(store.get('art.src', 'gameart'));
+  fold(false, false);
   splat.append(h('option', { value: '' }, 'None'), ...art.platforms().sort().map((p) => h('option', { value: p }, art.consoleName(p) ? `${p} · ${art.consoleName(p)}` : p)));
   let pv = null;
   const A = { on: false }; // the animation's timeline (see `animate`)
@@ -223,6 +258,7 @@ function build(root) {
   async function load(blob, from = {}) {
     const tok = ++S.tok;
     msg.textContent = 'Reading…';
+    seen.hidden = true;
     const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
     if (String.fromCharCode(...head) === 'GIF8') {
       const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -287,9 +323,13 @@ function build(root) {
     const f = from.fields || {};
     logo.checked = !!from.logo || (f.flags || []).includes('LOGO');
     if (from.platform) setPlatform(from.platform);
-    if (from.title) title.value = from.title;
+    if (from.title != null) title.value = from.title;
     author.value = f.author || ''; // another picture is not the last GIF's author's
     el.classList.add('has');
+    seen.hidden = !from.link;
+    if (from.link) seen.href = from.link;
+    fold(true);
+    imp.scrollIntoView?.({ block: 'nearest' });
     const anim = st.animated;
     el.classList.toggle('anim', anim);
     moveRow.hidden = anim;
@@ -683,25 +723,6 @@ function build(root) {
   const smoothLater = debounce(smoothLook, 400);
   smoothOn.onchange = () => { smoothSet(smoothOn.checked); smoothLook(); show(); };
 
-  // --- Find art for a game (js/find.js): the best games' pictures as tiles;
-  // a tile loads its picture.
-  async function find() {
-    const p = plat.value, q = query.value.trim();
-    for (const u of S.urls) URL.revokeObjectURL(u);
-    S.urls = [];
-    const say = (t) => clear(hits, h('p.cap', t));
-    if (!q) return clear(hits);
-    say('Searching…');
-    let r;
-    try { r = await findGames(p, q); } catch { say('The game list could not be loaded'); return; }
-    if (!r.games.length) return say(`No ${art.consoleName(p) || p} game matches “${q}”`);
-    clear(hits, r.games.slice(0, 12).flatMap((g) => gamePictures(p, r.d, g)).map((x) => tile(x, pickArt, S.urls)));
-  }
-  function pickArt(x, t) {
-    for (const c of hits.children) c.classList.toggle('on', c === t);
-    x.fetch().then((b) => load(b, { platform: x.platform, title: x.game, logo: x.logo, label: x.title }), () => { msg.textContent = 'That picture could not be loaded. Try another'; });
-  }
-
   // --- Save
   function setPlatform(p) {
     if (![...splat.options].some((o) => o.value === p)) splat.append(h('option', { value: p }, p));
@@ -843,22 +864,26 @@ function build(root) {
       if (S.studio) frame();
       if (A.on) { A.shown = -1; start(); drawStrip(); }
       naming();
-      // "Edit in Make art" in the Library: that GIF — every frame — with its
+      // "Edit in Create Art" in the Library: that GIF — every frame — with its
       // title, platform, category and author, to replace or save as new.
       const from = app.artFrom;
       app.artFrom = null;
-      if (from?.blob) {
-        // A GIF or picture found on the web from the Library.
-        title.value = from.title || '';
-        await load(from.blob, from);
-      } else if (from) {
+      // The Library's "Search the web": its words, in a web source.
+      const find = app.artFind;
+      app.artFind = null;
+      if (find) {
+        q.value = find.q;
+        if (S.src === 'own') useSource('gifcities');
+        fold(false);
+      }
+      if (from) {
         const e = from.e, fields = art.nameFields(from.path);
         if (cats.includes(e.category)) cat.value = e.category;
         setPlatform(fields.platform || '');
         title.value = fields.title || '';
         author.value = fields.author || '';
-        if (PLATFORMS.includes(e.platform)) plat.value = e.platform;
-        query.value = e.title || '';
+        if (PLATFORMS.includes(e.platform)) R.set('gameart', 'platform', e.platform);
+        q.value = e.title || '';
         try {
           // On Smooth motion's list: the switch starts on, and looks once loaded.
           const listed = app.device && (await (await smooth()).readList().catch(() => [])).some((p) => p.toLowerCase() === from.path.toLowerCase());

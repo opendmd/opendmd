@@ -1,12 +1,11 @@
-// Finding GIFs and pictures on the web: the Library's "GifCities" and "Game
-// art" sources (a results grid with a row of ways to narrow it), and the
-// game-art search Make art's "Find art for a game" uses. Loaded when first
-// needed, with find.css.
+// Finding GIFs and pictures on the web: Create Art's "Game art" and
+// "GifCities" sources (a results grid with a row of ways to narrow it).
+// Loaded with the Create Art view (js/studio.js), with find.css.
 //
 // A source is { id, label, search(q, opts) -> Promise<Hit[]>, filters,
 // narrow?(hits, opts), caption }. A Hit is { id, title, w, h, preview (an
 // image address), fetch() -> Promise<Blob>, link?, source, hint (a title
-// for Make art's Save step) }.
+// for Create Art's Save step) }.
 //
 // GifCities: the Internet Archive's search over the GIFs of GeoCities (an
 // old, undocumented JSON API: one answer per query, no pages, ~3 s, CORS for
@@ -171,10 +170,10 @@ export function tile(x, onPick, urls) {
   return t;
 }
 
-// A results grid into `el`, with the narrowing row above it and, for the
-// hit picked, a strip with "Open in Make art" (`onPick(hit)`, awaited) and
-// "Seen on…"; the narrowing row goes into `narrow` when given (the
-// Library's header). Returns { use(source), search(q) }.
+// A results grid into `el`, the narrowing row (with the platform select for
+// Game art) into `narrow`; a click on a hit is `onPick(hit)` (awaited; it
+// loads the picture into the editor, and throws if it could not).
+// Returns { use(source), search(q), set(source id, filter id, value) }.
 export function mountResults(el, { onPick, narrow }) {
   style();
   let src = null, all = [], tok = 0, q = '', urls = [];
@@ -183,13 +182,9 @@ export function mountResults(el, { onPick, narrow }) {
   const count = h('span.muted', { id: 'find-count' });
   const status = h('div.cap', { id: 'find-status', 'aria-live': 'polite' });
   const grid = h('div.find-grid', { id: 'find-grid' });
-  const pTitle = h('b'), pDims = h('span.muted'), pMsg = h('span.cap');
-  const artBtn = h('button.pri', { id: 'find-art' }, 'Open in Make art');
-  const seen = h('a', { id: 'find-seen', target: '_blank', rel: 'noopener' }, 'Seen on…');
-  const pick = h('div.find-pick.row', { id: 'find-pick', hidden: true }, h('div.grow', pTitle, ' ', pDims, h('div', pMsg)), seen, artBtn);
   const caption = h('p.cap', { id: 'find-caption' });
-  el.append(h('div.find', { id: 'find' }, !narrow && narrowRow, status, grid, pick, caption));
-  narrow?.append(narrowRow);
+  narrow.append(narrowRow);
+  el.append(h('div.find', { id: 'find' }, status, grid, caption));
 
   const o = () => opts[src.id];
   function controls() {
@@ -211,28 +206,16 @@ export function mountResults(el, { onPick, narrow }) {
   function show() {
     for (const u of urls) URL.revokeObjectURL(u);
     urls = [];
-    pick.hidden = true;
     const hits = src.narrow ? src.narrow([...all], o()) : all;
     count.textContent = all.length ? `${hits.length.toLocaleString()} of ${all.length.toLocaleString()}` : '';
     el.dataset.shown = hits.length;
     clear(grid, hits.map((x) => tile(x, choose, urls)));
   }
 
-  function choose(x, tile) {
-    for (const t of grid.children) t.classList.toggle('on', t === tile);
-    pTitle.textContent = x.title;
-    pDims.textContent = x.w ? `${x.w} × ${x.h}` : '';
-    pMsg.textContent = '';
-    seen.hidden = !x.link;
-    if (x.link) seen.href = x.link;
-    artBtn.disabled = false;
-    artBtn.onclick = async () => {
-      artBtn.disabled = true;
-      pMsg.textContent = 'Loading…';
-      try { await onPick(x); pMsg.textContent = ''; } catch { pMsg.textContent = 'That one could not be loaded. Try another'; }
-      artBtn.disabled = false;
-    };
-    pick.hidden = false;
+  async function choose(x, t) {
+    for (const c of grid.children) c.classList.toggle('on', c === t);
+    status.textContent = 'Loading…';
+    try { await onPick(x); status.textContent = ''; } catch { status.textContent = 'That one could not be loaded. Try another'; }
   }
 
   async function run() {
@@ -253,10 +236,11 @@ export function mountResults(el, { onPick, narrow }) {
     show();
   }
 
+  const init = (s) => (opts[s.id] ??= Object.fromEntries(s.filters.map((f) => [f.id, f.value])));
   return {
     use(s) {
       src = s;
-      opts[s.id] ??= Object.fromEntries(s.filters.map((f) => [f.id, f.value]));
+      init(s);
       el.dataset.source = s.id;
       clear(caption, s.caption());
       controls();
@@ -266,5 +250,10 @@ export function mountResults(el, { onPick, narrow }) {
       status.textContent = '';
     },
     search(text) { q = text.trim(); return run(); },
+    set(id, f, v) {
+      const s = sources.find((x) => x.id === id);
+      init(s)[f] = v;
+      if (s === src) controls();
+    },
   };
 }

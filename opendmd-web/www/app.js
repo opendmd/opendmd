@@ -1,7 +1,8 @@
 // Entry point: load the wasm module, find out whether a device is serving us
 // (GET /api/status) or we are a static page on a laptop (local mode), and
-// route between the five views (Make art is the Studio, js/studio.js, whose
-// stylesheet and wasm load when it is first opened). Each view is a module with
+// route between the five views (Create Art is the Studio, js/studio.js, whose
+// stylesheet and wasm load when it is first opened; `#studio`, its old
+// address, still leads there). Each view is a module with
 // `mount(el) -> {show, hide}`, mounted on first visit.
 
 import init from './pkg/opendmd_web.js';
@@ -11,11 +12,13 @@ import { $, h, clear, emit, toast } from './js/util.js';
 
 await init();
 
-const VIEWS = ['now', 'library', 'studio', 'sets', 'settings'];
+const VIEWS = ['now', 'library', 'create', 'sets', 'settings'];
+const MODULE = { create: 'studio' };
 const mounted = {};
 let current = '';
 
 async function route() {
+  if (location.hash === '#studio') { location.replace('#create'); return; }
   const name = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'now';
   if (name === current) return;
   if (current) mounted[current]?.hide?.();
@@ -24,7 +27,7 @@ async function route() {
   for (const a of document.querySelectorAll('#nav a')) a.classList.toggle('on', a.dataset.view === name);
   if (!app.src) return;
   if (!mounted[name]) {
-    const mod = await import(`./js/${name}.js`);
+    const mod = await import(`./js/${MODULE[name] || name}.js`);
     mounted[name] = await mod.mount($('#view-' + name));
   }
   mounted[name].show?.();

@@ -25,7 +25,7 @@ function loop() {
   if (live.size) raf = requestAnimationFrame(loop);
 }
 
-// The one scale rule (dot matrix, Make art's frame): whole device pixels per
+// The one scale rule (dot matrix, Create Art's frame): whole device pixels per
 // pixel that fit `room` CSS px; 0 when none.
 export const fitScale = (room, w) => Math.floor((room * devicePixelRatio) / w);
 

@@ -20,7 +20,7 @@ has its own xtensa build config under `firmware/`.
 | `opendmd-render/` | Library. The LED-panel renderer, shared by the simulator and the web app. Depends only on `opendmd-core`. |
 | `opendmd-sim/` | Binary. A `minifb` window that plays a card through `opendmd-core`, drawing it as a simulated LED panel. Glue only. |
 | `opendmd-web/` | WebAssembly front end: the same engine and renderer in a browser page. See "The web app". |
-| `opendmd-art-web/` | WebAssembly. The web app's "Make art" Studio: a picture in, a 128x32 GIF out. A second module, loaded only when the Studio opens. See "Make art". |
+| `opendmd-art-web/` | WebAssembly. The web app's "Create Art" Studio: a picture in, a 128x32 GIF out. A second module, loaded only when the Studio opens. See "Create Art". |
 | `opendmd-pack/` | Binary. Prepares a card: a prepared copy of every GIF (a smaller GIF the player decodes in less memory), which the player plays in its place. See "Prepared copies". |
 | `firmware/` | ESP32 firmware. microSD + HUB75 + the core engine. See "Firmware". |
 | `hardware/` | Measured HUB75 + SD SPI pinout and photos. See `hardware/PINOUT.md`. |
@@ -218,15 +218,17 @@ names the format or shows a copy's path.
   bloom, gamma, flat) are here too and are remembered per browser. In local
   mode this view is the simulator: a manifest or the whole folder, a platform
   filter, shuffle and a seed, with the firmware's 3-30 s dwell.
-- **Library** — one row across the top: a search field (titles, normalised
-  the way the core matches them), **Add GIFs…** and **Make art**; under it the
+- **Library** — the GIFs on the player, and only those (finding new art is
+  **Create Art**'s). One row across the top: a search field (titles, normalised
+  the way the core matches them; when nothing matches, a link searches the
+  web for the same words in Create Art) and **Add GIFs**; under it the
   categories as tabs (the card's folders under `gifs/`, then *Live* and
   *Effects*) and the platform chips. The list (virtualised: thousands of
   rows) shows each GIF's title, platform and favourite/hidden marks. Pick one
   and the **Details** panel (the right-hand column; a sheet from the bottom
   on a phone) plays it with the panel look and shows its title, platform,
   category, author and file name, with **Send to panel**, **Add to
-  playlist…**, **Edit in Make art**, **Favourite** and **Hide** (in the
+  playlist…**, **Edit in Create Art**, **Favourite** and **Hide** (in the
   playlist chosen beside them), Smooth motion where it applies, **Edit
   details…** and **Delete…**. Select several rows to add them to a playlist
   together.
@@ -246,22 +248,6 @@ names the format or shows a copy's path.
   Smooth motion setting follow) and in every playlist and favourite that
   names it. **Delete** asks first, then removes the GIF, its copy and every
   playlist line and favourite; a category left empty goes too.
-
-  **Find GIFs on the web.** Under the search field, **Your GIFs** (the
-  card's, as above) can be switched to **GifCities** — the Internet
-  Archive's search over the GIFs of GeoCities — or **Game art** (the
-  title screens, in-game shots, boxes and logos Make art's "Find art for a
-  game" finds, with the platform beside the results). The same field
-  searches it (Enter or **Search**); the results are a grid of the GIFs
-  themselves, moving, each with its size. GifCities' can be narrowed
-  without asking again: **Wide (suits the panel)** (at least twice as wide
-  as tall), **Square-ish** or **Any**, **At least 48 px wide** (on by
-  default), best match or biggest first, with a count ("37 of 300"). Pick
-  one for **Open in Make art** (it arrives in step 1 with a title to save
-  it under; an 88x31 banner needs Make art's framing anyway) and **Seen
-  on…**, the archived page it was on. GifCities' results are unfiltered.
-  Nothing is added to the card until it is saved from Make art; back on
-  **Your GIFs** the list is as it was.
 - **Playlists** (`#sets`) — the card's own (`filelist.txt` as **All files**,
   the default; `filelist.hall` **Halloween**; `filelist.xmas` **Christmas**;
   any other `filelist.*` by file name; an obsolete `filelist.odm.*` never)
@@ -288,24 +274,34 @@ names the format or shows a copy's path.
   (`www_version`, from the pack's header). Firmware updates are over USB
   (below, "Deploying").
 
-**Make art.** A view of its own (in the navigation, and the **Make art**
-button in the Library) that turns a picture — or an animated GIF — into a
-GIF for the panel, in six steps. **Edit in Make art** on a Library GIF
+**Create Art.** A view of its own in the navigation: find a picture or an
+animated GIF — on the web or of your own — and turn it into a GIF for the
+panel, in six steps. Until something is loaded only step 1 shows; then it
+folds to one line (**Change picture** opens it again, the search as it was)
+and the other steps appear. **Edit in Create Art** on a Library GIF
 opens it here, every frame of it, with its title, platform, category and
 author filled in, to **Replace the original** (the same file, so every
 playlist keeps it; a changed title renames it, and playlists follow) or
 **Save as new**.
 
-1. **Import** — choose a file, drop one, paste one (Ctrl/⌘-V; copy an
-   image in any tab), give its address (most sites don't let a page read
-   their pictures; then the Studio says so: save it and drop it), or **Find
-   art for a game**: pick a platform (MD, SNES, GB, GBC, GBA, Saturn, DS,
-   NES, SMS, PC Engine, PS1, N64, Arcade), type a title, pick a game, and
-   its title screen, in-game shot, box and logo (whichever exist) load from
-   the [libretro-thumbnails](https://github.com/libretro-thumbnails)
-   collections (the Library's **Game art** is the same search). A GIF or
-   picture opened from the Library's GifCities or Game art arrives here
-   too. A GIF with two or more frames comes in as an animation
+1. **Find** — three sources. **Game art**: pick a platform (MD, SNES, GB,
+   GBC, GBA, Saturn, DS, NES, SMS, PC Engine, PS1, N64, Arcade), type a
+   title, and the title screens, in-game shots, boxes and logos (whichever
+   exist) of the best-matching games load from the
+   [libretro-thumbnails](https://github.com/libretro-thumbnails)
+   collections. **GifCities**: the Internet Archive's search over the GIFs
+   of GeoCities, a grid of the GIFs themselves, moving, each with its size,
+   narrowed without asking again — **Wide (suits the panel)** (at least
+   twice as wide as tall), **Square-ish** or **Any**, **At least 48 px
+   wide** (on by default), best match or biggest first, with a count ("37
+   of 300"); results are unfiltered, and a loaded one links to the archived
+   page it was on (**Seen on…**). **Your own**: choose a file or give its
+   address (most sites don't let a page read their pictures; then the
+   Studio says so: save it and drop it). Dropping or pasting a picture
+   (Ctrl/⌘-V; copy an image in any tab) works whichever source is showing.
+   **Click a result to load it** — with a title to save it under, and for
+   game art its platform. Nothing is added to the card until it is saved.
+   A GIF with two or more frames comes in as an animation
    (with a progress line while its frames are read). A very big one is
    worked on at a smaller size, and the Studio says so.
 2. **Frame** — the picture (an animation's first frame) zoomed with the
@@ -370,7 +366,7 @@ switching it on makes the panel play it with the in-between frames added —
 each one the picture moved by whole pixels, never a blend, the timing
 unchanged — and switching it off goes back to the original frames. Your GIF
 itself is never changed. The switch only appears where there is something
-to smooth (about one GIF in ten on the stock card); Make art has the same
+to smooth (about one GIF in ten on the stock card); Create Art has the same
 switch for an animation you make or edit there, and a GIF that is on stays
 on when you edit it there and replace it. The choice is kept on
 the card in `/sets/.smooth` and survives clearing the playback cache.
