@@ -105,6 +105,8 @@ details>summary{cursor:pointer;color:var(--mut);padding:4px 0}
   .libhead{grid-template:"q q a" "r n n"/minmax(0,1fr) auto auto;gap:8px 12px}
   #lib-count{font-size:13px}
   #lib-r2{overflow-x:auto;scrollbar-width:none}#lib-r2>*{flex:none;overflow:visible;max-width:none}
+  #lib-r2.more{--fr:transparent}#lib-r2.less{--fl:transparent}
+  #lib-r2:is(.more,.less){-webkit-mask-image:linear-gradient(to right,var(--fl,#000),#000 48px,#000 calc(100% - 48px),var(--fr,#000));mask-image:linear-gradient(to right,var(--fl,#000),#000 48px,#000 calc(100% - 48px),var(--fr,#000))}
 }
 .tabs{display:flex;overflow-x:auto;scrollbar-width:none}
 .tab{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--mut);padding:4px 12px;white-space:nowrap;flex:none}

@@ -194,6 +194,7 @@ async function dialog({ title, intro, files, inits, ok, opts, keep }) {
       it.cat = it.category.value;
       const c = it.cat;
       const f = { title: it.title.value.trim(), platform: it.platform.value || null, category: c, author: it.author.value.trim() || null, flags: it.init.flags || [], ordinal: null };
+      it.author.placeholder = f.platform ? 'optional' : 'optional · needs a platform';
       const l = await listing(c);
       if (t !== refresh.t) return;
       const { path = null, why = '' } = pickName(m, f, l, keep, taken);
