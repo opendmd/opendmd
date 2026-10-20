@@ -6,6 +6,8 @@
   <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="License: MIT or Apache 2.0"></a>
 </p>
 
+![A tunnel effect, drawn the way the LED panel shows it](docs/images/hero.webp)
+
 OpenDMD is an open-source replacement for **DMDoS**, the closed ESP32 firmware that plays GIFs
 from a microSD card on two chained 64x32 HUB75 panels: a "DMD", like the dot-matrix display in a
 pinball machine. It plays an existing DMDoS card as it is, and adds a web app to manage it.
@@ -53,6 +55,19 @@ from an update that goes wrong.
   panel off or dims it.
 - **Smooth playback:** the player prepares a lighter copy of each GIF in the background, so files
   decode in less memory and open faster.
+
+## Screenshots
+
+| Library | Create Art |
+| --- | --- |
+| ![The Library, with a GIF's details playing](docs/images/library.png) | ![Create Art with a picture loaded: Frame, Look, Text, Preview and Save](docs/images/create-art.png) |
+| **Now playing** | **Effects** |
+| ![The Now view, previewing what the panel plays](docs/images/now.png) | ![A tunnel effect and its options](docs/images/effects.png) |
+| **Playlists** | **On a phone** |
+| ![A playlist open in the editor](docs/images/playlists.png) | <img src="docs/images/phone-library.png" width="300" alt="The Library on a phone"> |
+
+The demo card in these screenshots holds the panel's own effects and the
+[Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
 
 ## Documentation
 
