@@ -737,6 +737,7 @@ function build(root) {
     const c = cat.value || 'Consoles';
     const flags = (S.from?.fields?.flags || []).filter((x) => x !== 'LOGO' && x !== S.from.fields.author);
     const f = { title: title.value.trim(), platform: splat.value || null, category: c, author: author.value.trim() || null, flags: logo.checked ? [...flags, 'LOGO'] : flags, ordinal: null };
+    author.placeholder = f.platform ? 'optional' : 'optional · needs a platform';
     S.listing ??= listings(S.cats);
     const l = await S.listing(c);
     if (t !== naming.t) return;

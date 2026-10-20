@@ -21,7 +21,8 @@ const OBSOLETE = /^filelist\.odm\./i;
 export function playlistLabel(name) {
   const n = base(name);
   if (LABELS[n]) return LABELS[n];
-  return /^filelist\./.test(n) ? n : n.replace(/\.txt$/, '');
+  // A set named on the card with underscores reads as words (`Sprites_and_Clock`).
+  return /^filelist\./.test(n) ? n : n.replace(/\.txt$/, '').replace(/(?!^)_/g, ' ');
 }
 
 // The `set` value (config, schedule, GET /api/overrides) for a playlist's
@@ -91,7 +92,7 @@ export const app = {
     const names = sets.filter((f) => !f.dir && /\.txt$/.test(f.name)).map((f) => f.name.replace(/\.txt$/, '')).sort();
     return [
       ...roots.map((n) => ({ path: '/' + n, value: n === 'filelist.txt' ? '' : n, label: playlistLabel(n), root: true })),
-      ...names.map((n) => ({ path: `/sets/${n}.txt`, value: n, label: n, root: false })),
+      ...names.map((n) => ({ path: `/sets/${n}.txt`, value: n, label: playlistLabel(n), root: false })),
     ];
   },
 

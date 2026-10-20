@@ -65,7 +65,7 @@ export function effects(box, preview, refresh) {
       const path = `@fx:${fx}${q ? '?' + q : ''}`;
       Object.assign(it, { path, e: app.wasm.parsePath(path) }).norm = app.wasm.normalizeTitle(it.e.title);
     };
-    it.pick = () => box.firstChild != form && box.replaceChildren(form, h('p.cap', 'Drawn live by the panel; add it to a playlist like any GIF'));
+    it.pick = () => box.firstChild != form && box.replaceChildren(form, h('p.cap', { style: 'margin-top:12px' }, 'Drawn live by the panel; add it to a playlist like any GIF'));
     set();
     return it;
   });

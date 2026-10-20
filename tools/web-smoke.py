@@ -1297,6 +1297,10 @@ def effects_checks(page: Page, base: str, mock: bool) -> None:
         keys = page.eval_on_selector_all(f"#fx-{name} select", "els => els.map(e => e.dataset.key)")
         check(a != b and len(keys) >= 4, f"library: {name} previews and moves ({a} -> {b}); options {keys}")
     page.click("#lib-list .vrow:not([hidden]) >> nth=0")
+    gap = page.eval_on_selector("#fx-tunnel + p.cap", "e => getComputedStyle(e).marginTop")
+    check(gap == "12px", f"library: a gap between an effect's options and its caption ({gap})")
+    pl = page.evaluate("import('./js/state.js').then(m => ['/sets/Sprites_and_Clock.txt', '/sets/_x.txt', '/filelist.hall'].map(m.playlistLabel))")
+    check(pl == ["Sprites and Clock", "_x", "Halloween"], f"playlists: names on the card read as words ({pl})")
     page.select_option("#fx-tunnel select[data-key='palette']", "fire")
     page.select_option("#fx-tunnel select[data-key='cycle']", "0")
     want = "@fx:tunnel?palette=fire&cycle=0"
@@ -2307,6 +2311,11 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
     page.evaluate("delete document.querySelector('#studio').dataset.frames")
     page.click("#find-grid .find-hit[data-kind=Named_Titles]")
     page.wait_for_function("document.querySelector('#studio').dataset.frames", timeout=20000)
+    # (The name fields land after the frames: naming() awaits the category's listing.)
+    try:
+        page.wait_for_function("document.querySelector('#studio').dataset.title === 'Studio Test'", timeout=5000)
+    except Exception:
+        pass
     d = studio_data(page)
     check(d.get("platform") == "SNES" and d.get("title") == "Studio Test",
           f"studio find: a click on a picture loads it, platform and title filled in ({d.get('platform')}, {d.get('title')})")
@@ -2469,7 +2478,11 @@ def studio_anim_checks(page: Page, base: str, overlay: Path) -> None:
     page.keyboard.press("Delete")
     page.fill("#st-text", "HI")
     page.wait_for_function("document.querySelector('#studio').dataset.text === '1'", timeout=5000)
+    page.select_option("#st-plat", "")
+    ph0 = page.get_attribute("#st-author", "placeholder")
     page.select_option("#st-plat", "SNES")
+    ph1 = page.get_attribute("#st-author", "placeholder")
+    check("needs a platform" in ph0 and ph1 == "optional", f"studio: Author says it needs a platform until one is picked ({ph0!r} -> {ph1!r})")
     page.fill("#st-author", "")
     page.fill("#st-title", "Smoke Frames")
     name = "SNES_Smoke_Frames_01.gif"
@@ -3387,6 +3400,12 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     goto_view(page, "library")
     w = page.eval_on_selector("#lib-search", "e => e.getBoundingClientRect().width")
     check(w >= 150, f"phone library: the search box has room ({w:.0f} px)")
+    more = page.eval_on_selector("#lib-r2", "e => e.scrollWidth > e.clientWidth + 2 ? e.classList.contains('more') : null")
+    page.eval_on_selector("#lib-r2", "e => { e.scrollLeft = e.scrollWidth; }")
+    page.wait_for_timeout(150)
+    end = page.eval_on_selector("#lib-r2", "e => [e.classList.contains('more'), e.classList.contains('less')]")
+    page.eval_on_selector("#lib-r2", "e => { e.scrollLeft = 0; }")
+    check(more is not False and end in ([False, True], [False, False]), f"phone library: the tab row fades the side with more off it (start {more}, end {end})")
     check(not page.is_visible("#lib-side"), "phone library: no Details until a GIF is picked")
     page.click("#lib-list .vrow:not([hidden]) >> nth=0")
     page.wait_for_selector("#lib-side.open #lib-d-title", timeout=10000)

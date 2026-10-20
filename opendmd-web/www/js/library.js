@@ -158,11 +158,21 @@ export async function mount(el) {
       h('button.sm.close', { id: 'lib-d-close', 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
       canvas, cap, body, liveBox));
 
+  // On a phone the tabs and chips scroll sideways: fade an edge while more is off that side.
+  const r2 = h('div.lib-r2', { id: 'lib-r2' }, tabs, h('i.vsep'), chips);
+  const edge = () => {
+    r2.classList.toggle('more', r2.scrollLeft + r2.clientWidth < r2.scrollWidth - 2);
+    r2.classList.toggle('less', r2.scrollLeft > 2);
+  };
+  r2.addEventListener('scroll', edge, { passive: true });
+  const ro = new ResizeObserver(edge);
+  for (const x of [r2, tabs, chips]) ro.observe(x);
+
   const grid = h('div.libgrid',
     h('div',
       h('div.card.libhead',
         h('div.lib-q', search), count, addBtn, addInput,
-        h('div.lib-r2', { id: 'lib-r2' }, tabs, h('i.vsep'), chips), addCard),
+        r2, addCard),
       webHint, list.el, selbar),
     side);
   el.append(grid);

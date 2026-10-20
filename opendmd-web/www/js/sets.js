@@ -99,7 +99,7 @@ export async function mount(el) {
       const isActive = app.device && p.value === active, n = h('span.n');
       const acts = (app.device && !isActive) || !p.root;
       return [p, n, h('div' + (p.path === app.draft.path ? '.cur' : ''), { 'data-path': p.path, 'data-value': p.value },
-        h('button.grow.pl' + (isSys(p.label) ? '.sys' : ''), { onclick: () => open(p) },
+        h('button.grow.pl' + (!p.root && isSys(p.value) ? '.sys' : ''), { onclick: () => open(p) },
           p.label, !p.value && h('span.tag', 'Default'), isActive && h('span.tag.act', 'Playing'), n),
         acts && h('button.more', { 'aria-label': 'More', 'aria-haspopup': 'menu', onclick: (e) => actions(e.currentTarget, 'sets-menu', [
           app.device && !isActive && [{ 'data-do': 'activate' }, 'Activate', () => activate(p), '', app.building],
@@ -157,7 +157,7 @@ export async function mount(el) {
   async function del(p) {
     const path = p.path, set = p.value;
     const isActive = app.device && app.activeSet === set;
-    if (!confirm(isActive ? `"${set}" is playing. Switch the player back to All files and delete it?` : `Delete the playlist "${set}"?`)) return;
+    if (!confirm(isActive ? `"${p.label}" is playing. Switch the player back to All files and delete it?` : `Delete the playlist "${p.label}"?`)) return;
     try {
       if (isActive) { await app.src.putConfig({ set: '' }); await app.refreshStatus(); await app.refreshConfig(); }
       await app.src.deleteFile(path);
