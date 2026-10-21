@@ -252,7 +252,11 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   it (a boot trial by a simulated restart: the API 503s for
   `RESTART_SECS`); `panel: null` saves the defaults. Bad values are 400s
   with the firmware's messages, a confirm with no trial a 409. The mock has
-  no panel, so nothing visible changes.
+  no panel, so nothing visible changes. `POST /api/panel/test`
+  (`{"setting"}` / `{"stop":true}`) keeps the test's state and replies
+  (A and B, `left_s`), a 409 during a trial, with a change staged for a
+  restart, or `clk_phase` on a rising-edge-only chip; a stop, any config
+  PUT or 120 s end it.
 - **JSON bodies over 8 KB** (`PUT /api/config`, `POST /api/play`) are a 413
   `{"error":"body is N B, the limit is 8192 B"}`, judged on `Content-Length`.
 - **Per-GIF overrides** (`opendmd_core::overrides`): a playlist's `.meta`
@@ -404,6 +408,7 @@ def resolve_brightness(brightness, max_b, new_brightness, new_max):
 PANEL_DEFAULTS = {"clk_phase": True, "latch_blanking": 1, "driver": "shiftreg", "i2s_speed": 8, "min_refresh": 60}
 PANEL_DRIVERS = ("shiftreg", "fm6124", "fm6126a", "icn2038s", "mbi5124", "dp3246")
 PANEL_BOOT_KEYS = ("driver", "i2s_speed", "min_refresh")
+PANEL_TEST_S = 120  # panel_test::LIMIT
 
 
 def panel_patch(obj):
@@ -449,6 +454,7 @@ class PanelTuner:
         self.running = dict(PANEL_DEFAULTS)
         self.trial = None      # {"kind": "live"|"boot", "until": monotonic}
         self.staged = None
+        self.test = None       # POST /api/panel/test: {"setting", "until"}
 
     @staticmethod
     def same_boot(a, b):
@@ -466,8 +472,18 @@ class PanelTuner:
     def restart_needed(self):
         return self.next_boot() is not None
 
+    @staticmethod
+    def test_variants(setting, base):
+        """panel_test::variants: A and B for the setting under test."""
+        if setting == "clk_phase":
+            return dict(base, clk_phase=True), dict(base, clk_phase=False)
+        lb = base["latch_blanking"]
+        return dict(base), dict(base, latch_blanking=min(lb + 2, 4) if lb < 4 else 2)
+
     def poll(self):
         """Revert a trial whose time is up; True if that needs a restart."""
+        if self.test and time.monotonic() >= self.test["until"]:
+            self.test = None
         if self.trial and time.monotonic() >= self.trial["until"]:
             return self.revert()
         return False
@@ -2586,6 +2602,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/card/format"), {"POST": self.h_card_format}),
                 (m_exact("/api/follow/test"), {"POST": self.h_follow_test}),
                 (m_exact("/api/play"), {"POST": self.h_play}),
+                (m_exact("/api/panel/test"), {"POST": self.h_panel_test}),
                 (m_exact("/api/stat"), {"GET": self.h_stat}),
                 (m_exact("/api/cache"), {"GET": self.h_cache}),
                 (m_exact("/api/cache/list"), {"GET": self.h_cache_list}),
@@ -3062,6 +3079,9 @@ def make_handler(ctx: Context, quiet: bool):
                         self.send_error_json(409, "no panel trial is running (it may have ended)")
                         return
 
+                # A settings change ends the panel test (main.rs, before
+                # anything applies).
+                ctx.panel.test = None
                 # Settings are "saved" now, like the firmware saves to NVS
                 # before the rebuild.
                 ctx.settings.clear()
@@ -3257,6 +3277,47 @@ def make_handler(ctx: Context, quiet: bool):
                 "ok": error is None, "reachable": True, "version": version, "status": sstatus,
                 "view": view, "system": system, "game": game, "error": error,
             })
+
+        def h_panel_test(self, path):
+            """POST /api/panel/test (opendmd_core::panel_test): start or stop
+            the A/B test. The mock has no panel: only the state and the
+            replies (a 409 during a trial; ended by a stop, a config PUT or
+            PANEL_TEST_S)."""
+            raw = self.json_body()
+            if raw is None:
+                return
+            try:
+                req = json.loads(raw)
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"invalid JSON: {e}")
+                return
+            if not isinstance(req, dict) or set(req) - {"setting", "stop"}:
+                self.send_error_json(400, "invalid JSON: unknown field, expected `setting` or `stop`")
+                return
+            st, stop = req.get("setting"), req.get("stop")
+            if st is None and stop is True:
+                with ctx.lock:
+                    ctx.panel.test = None
+                self.send_json(200, {"ok": True})
+                return
+            if not isinstance(st, str) or stop not in (None, False):
+                self.send_error_json(400, 'send {"setting":"clk_phase"|"latch_blanking"} or {"stop":true}')
+                return
+            if st not in ("clk_phase", "latch_blanking"):
+                self.send_error_json(400, "setting must be clk_phase or latch_blanking")
+                return
+            with ctx.lock:
+                self.panel_poll()
+                why = ("a panel trial is running: keep or undo it first" if ctx.panel.trial
+                       else "A panel change is waiting for a restart: restart or undo it first" if ctx.panel.staged
+                       else "this driver chip always uses the rising edge: test latch_blanking instead"
+                       if st == "clk_phase" and ctx.panel.running["driver"] in ("mbi5124", "dp3246") else None)
+                if why:
+                    self.send_error_json(409, why)
+                    return
+                ctx.panel.test = {"setting": st, "until": time.monotonic() + PANEL_TEST_S}
+                a, b = ctx.panel.test_variants(st, ctx.panel.running)
+            self.send_json(200, {"ok": True, "setting": st, "a": a, "b": b, "left_s": PANEL_TEST_S})
 
         def h_play(self, path):
             raw = self.json_body()

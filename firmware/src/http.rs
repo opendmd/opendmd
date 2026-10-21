@@ -57,6 +57,15 @@ struct PlayRequest {
     path: String,
 }
 
+/// Wire format for `POST /api/panel/test`: `{"setting":"clk_phase"}` or
+/// `{"stop":true}`.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanelTestRequest {
+    setting: Option<String>,
+    stop: Option<bool>,
+}
+
 /// Requests the network worker answers on behalf of a handler.
 pub enum NetCommand {
     Scan(mpsc::Sender<Vec<ScannedAp>>),
@@ -224,10 +233,10 @@ struct WakeRequest {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route`/`route_json` below (46 now, the
-    // captive-portal loop counting six; 47 leaves one spare). Registration
+    // URI handler slots: one per `route`/`route_json` below (47 now, the
+    // captive-portal loop counting six; 48 leaves one spare). Registration
     // past the limit fails the whole server, so count when adding a route.
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 47)?;
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 48)?;
     // The API key, if one is set (`api_key`; `httpd::gate` checks it).
     crate::httpd::set_api_key(&ctx.settings.lock().unwrap().api_key);
 
@@ -720,6 +729,51 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(Err(PlayError::NoPlaylist)) => {
                 req.error(503, "503 Service Unavailable", "no playlist is running")
             }
+            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+        }
+    })?;
+
+    // The panel-timing test (`opendmd_core::panel_test`): the firmware's
+    // patterns with one live setting flipped between A and B, ended by
+    // `stop`, by any settings change or after two minutes; nothing saved.
+    let c = ctx.clone();
+    server.route_json("/api/panel/test", Method::Post, move |req| {
+        let Some(body) = json_body(req)? else {
+            return Ok(());
+        };
+        let w: PanelTestRequest = match serde_json::from_slice(&body) {
+            Ok(w) => w,
+            Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
+        };
+        use opendmd_core::panel_test::{self as pt, Setting};
+        let setting = match (w.setting.as_deref(), w.stop) {
+            (None, Some(true)) => None,
+            (Some(s), None | Some(false)) => match Setting::from_name(s) {
+                Some(s) => Some(s),
+                None => return req.bad_request("setting must be clk_phase or latch_blanking"),
+            },
+            _ => return req.bad_request(r#"send {"setting":"clk_phase"|"latch_blanking"} or {"stop":true}"#),
+        };
+        let (tx, rx) = mpsc::channel();
+        if c.cmd.send(Command::PanelTest { setting, reply: tx }).is_err() {
+            return req.error(503, "503 Service Unavailable", "player not running");
+        }
+        match rx.recv_timeout(REPLY_TIMEOUT) {
+            Ok(Ok(_)) => match setting {
+                None => req.json(r#"{"ok":true}"#),
+                Some(s) => {
+                    let running = c.status.lock().unwrap().panel.running;
+                    let (a, b) = pt::variants(s, &running);
+                    req.json(&format!(
+                        r#"{{"ok":true,"setting":"{}","a":{},"b":{},"left_s":{}}}"#,
+                        s.name(),
+                        a.json(),
+                        b.json(),
+                        pt::LIMIT.as_secs()
+                    ))
+                }
+            },
+            Ok(Err(e)) => req.error(409, "409 Conflict", &e),
             Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
         }
     })?;

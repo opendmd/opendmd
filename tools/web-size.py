@@ -42,6 +42,8 @@ release check, the downloads and the installs, imported on the first
 click), <= 4 KB, and so does Settings' Panel timing (`js/panel.js`: the
 HUB75 timing selects, the trial's Keep/Undo and Reset to defaults;
 imported when Advanced is first open, with js/firmware.js), <= 2 KB, and
+so does its guided "Test panel timing" (`js/paneltest.js`: the A/B
+questions and the save; imported on the first click), <= 2 KB, and
 so does Now's card format dialog (`js/card.js`: "Format
 card…" for a card the panel can't read, the POST and the wait for it;
 imported when first opened), <= 2 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
@@ -93,6 +95,8 @@ UPDATE_GZ_BUDGET = 4 * 1024
 UPDATE = {"js/update.js"}
 PANEL_GZ_BUDGET = 2 * 1024
 PANEL = {"js/panel.js"}
+PANEL_TEST_GZ_BUDGET = 2 * 1024
+PANEL_TEST = {"js/paneltest.js"}
 API_GZ_BUDGET = 14 * 1024
 API = {"api.html"}
 
@@ -137,6 +141,8 @@ def main() -> int:
             kind = "update"
         elif rel in PANEL:
             kind = "panel"
+        elif rel in PANEL_TEST:
+            kind = "panel test"
         elif rel in CARD:
             kind = "card"
         elif rel in API:
@@ -160,7 +166,7 @@ def main() -> int:
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
-                         ("panel", PANEL_GZ_BUDGET),
+                         ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET),
                          ("api page", API_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
