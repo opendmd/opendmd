@@ -20,7 +20,7 @@ const tags = (e) => [e.platform, e.category && niceName(e.category), ...e.flags.
 
 // ★: the GIF on screen a favourite in the playlist playing (not live items).
 function favButton() {
-  const ov = new Overrides(), b = h('button.more', { id: 'now-fav', hidden: true, onclick: () => ov.set(b.p, fav(ov.get(b.p))) });
+  const ov = new Overrides(), b = h('button.more', { id: 'now-fav', hidden: true, onclick: () => ov.set(b.p, fav) });
   b.ov = ov;
   b.set = (p, list) => {
     b.hidden = !(b.p = p) || p[0] == '@' || !list;
@@ -251,8 +251,8 @@ function mountDevice(el) {
 
   render(app.status);
   return {
-    show() { poll(); clearInterval(timer); timer = setInterval(poll, POLL_MS); },
-    hide() { clearInterval(timer); fb.ov.path = ''; }, // read again on return
+    show() { if (fb.ov.path) fb.ov.load(fb.ov.path); poll(); clearInterval(timer); timer = setInterval(poll, POLL_MS); }, // the Library may have changed it
+    hide() { clearInterval(timer); },
   };
 }
 

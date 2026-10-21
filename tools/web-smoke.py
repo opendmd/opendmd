@@ -923,9 +923,20 @@ def render_meta_line(path: str, ov: dict) -> str:
     return "\t".join(parts)
 
 
+def settle(base: str, n: int) -> None:
+    """Wait for the playlist in play to be reindexed with `n` overrides."""
+    deadline = time.time() + 10
+    while time.time() < deadline and ((st := get_json(base + "/api/status"))["overrides"] != n or st.get("index_state") == "building"):
+        time.sleep(0.1)
+    time.sleep(0.5)
+
+
 def now_fav_checks(page: Page, base: str) -> None:
     """Now's ★ (the mock paused): the GIF on screen a favourite in the
-    playlist playing, as the Library's Favourite in… does, and off again."""
+    playlist playing, as the Library's Favourite in… does, and off again.
+    Automatic preparing is off meanwhile: a long pause would let the mock's
+    builder run and change what the cache checks later expect."""
+    put_json(base + "/api/config", {"auto_prepare": "off"})
     page.wait_for_selector("#now-fav:not([hidden])", timeout=10000)
     path = page.text_content("#now-path")
     tip = page.get_attribute("#now-fav", "title")
@@ -936,12 +947,50 @@ def now_fav_checks(page: Page, base: str) -> None:
     r = wait_overrides(base, "", 1)
     check(r["overrides"] == [{"path": path, "w": 3}] and page.get_attribute("#now-fav", "aria-pressed") == "true",
           f"now fav: ★ -> GET /api/overrides?set= {r['overrides']}")
+    # The save reindexes the playlist, which can move the mock on: back to the GIF.
+    settle(base, 1)
+    if get_json(base + "/api/status")["now_playing"]["path"] != path:
+        post_json(base + "/api/play", {"path": path})
+    page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)} && document.querySelector('#now-fav').textContent === '★'", timeout=10000)
     page.click("#now-fav")
     page.wait_for_function("document.querySelector('#now-fav').textContent === '☆'")
     deadline = time.time() + 10
     while time.time() < deadline and get_json(base + "/api/overrides?set=")["overrides"]:
         time.sleep(0.1)
     check(not get_json(base + "/api/overrides?set=")["overrides"], "now fav: ☆ again -> no overrides left")
+    # Clicked while the list is still being read (slowed here): the others survive.
+    # (The last two of the playlist: the reindex the seeding causes may move what is on screen.)
+    others = [l.strip() for l in (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n") if l.strip().endswith(".gif")][-2:]
+    seeded = [{"path": others[0], "never": True}, {"path": others[1], "loops": 3}]
+    put_text(base + "/api/files/filelist.meta", "".join(render_meta_line(o["path"], o) + "\n" for o in seeded))
+    settle(base, 2)
+    path = get_json(base + "/api/status")["now_playing"]["path"]
+    goto_view(page, "library")
+    page.evaluate("import('./js/state.js').then(({ app }) => { const f = app.src.overrides.bind(app.src); app.src._ov = f; app.src.overrides = (s) => new Promise((r) => setTimeout(r, 2500)).then(() => f(s)); })")
+    page.evaluate("location.hash = '#now'")
+    page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)}", timeout=2000)
+    page.click("#now-fav")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '★'")
+    r = wait_overrides(base, "", 3)
+    got = sorted(r["overrides"], key=lambda o: o["path"])
+    check(got == sorted(seeded + [{"path": path, "w": 3}], key=lambda o: o["path"]), f"now fav: a click during the read keeps the others ({got})")
+    page.evaluate("import('./js/state.js').then(({ app }) => { app.src.overrides = app.src._ov; })")
+    settle(base, 3)
+    if get_json(base + "/api/status")["now_playing"]["path"] != path:
+        post_json(base + "/api/play", {"path": path})
+    page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)} && document.querySelector('#now-fav').textContent === '★'", timeout=10000)
+    page.click("#now-fav")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '☆'")
+    deadline = time.time() + 10  # its save landed (two left), then the file goes
+    while time.time() < deadline and len(get_json(base + "/api/overrides?set=")["overrides"]) != 2:
+        time.sleep(0.1)
+    page.wait_for_timeout(500)
+    req = urllib.request.Request(base + "/api/files/filelist.meta", method="DELETE")
+    urllib.request.urlopen(req, timeout=30).close()
+    deadline = time.time() + 10
+    while time.time() < deadline and get_json(base + "/api/overrides?set=")["overrides"]:
+        time.sleep(0.1)
+    put_json(base + "/api/config", {"auto_prepare": "idle"})
 
 
 def wait_overrides(base: str, set_value: str, n: int, timeout_s: float = 10) -> dict:
