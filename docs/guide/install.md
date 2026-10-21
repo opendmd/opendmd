@@ -63,8 +63,13 @@ network for you to join:
    network **OpenDMD-Setup**. After a fresh install it can take a minute
    or two to appear.
 2. **Enter your WiFi details.** Open <http://192.168.71.1/setup> in a
-   browser. Type your WiFi network's name (**Scan** lists the ones nearby)
-   and its password, then press **Save & reboot**.
+   browser. Pick your WiFi network (or type its name), enter its password,
+   then press **Connect**.
+
+    **Display name** is the display's address on your network:
+    `opendmd` becomes <http://opendmd.local/>. If you have more than one
+    display, give each its own name (`opendmd-cab`, `opendmd-desk`):
+    lowercase letters, digits and hyphens, up to 32.
 
     If the OpenDMD web app pops up by itself when you join, you can do the
     same there under **Settings → Advanced → Network**. The board restarts
@@ -72,8 +77,8 @@ network for you to join:
     moment and join it again.
 
 3. **Open the web app.** Rejoin your usual WiFi and open
-   **<http://opendmd.local/>**. That's the web app, where you manage
-   everything from now on.
+   **<http://opendmd.local/>** (or the name you gave it). That's the web
+   app, where you manage everything from now on.
 
 With your card in, the panel starts playing straight away. A card that
 worked with DMDoS works as it is. See [The SD card](card.md) for setting

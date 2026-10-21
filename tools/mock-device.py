@@ -67,7 +67,16 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   the settings are saved, then the playlist is rebuilt for a changed
   `set`/`platforms`/`shuffle`. A rebuild that still fails (`set` = "" on a
   card with neither default manifest) is a 500 with the settings kept, as in
-  `main.rs`.
+  `main.rs`. A platform filter (new, or kept across a `set` change) under
+  which the playlist would have no entries is a 400 `no GIFs in the playlist
+  match the platform filter "<filter>"; nothing was saved`, nothing saved
+  (the firmware builds it, finds it empty and rebuilds the previous one).
+- **`hostname`** is trimmed and lowercased, then must be 1-32 of a-z, 0-9
+  and `-`, not starting or ending with `-` (`nvs_config::valid_hostname`),
+  else a 400; `""` leaves it as it was. Status `mdns` (the name mDNS
+  answers to) is always the hostname here: no other display to clash with.
+- **`GET /setup`** serves `firmware/web/setup.html` with its two template
+  values filled in, as the firmware does (setup mode itself is not modelled).
 - **Smooth motion's list, `/sets/.smooth`** (one card-absolute GIF path a
   line; `opendmd_core::tween::LIST_PATH`), needs nothing of its own, on the
   device or here: `GET /sets/.smooth` serves it like any file under
@@ -789,6 +798,20 @@ def meta_manifest_for(rel: str) -> str | None:
 
 
 PLATFORM_PREFIX_RE = re.compile(r"^[A-Za-z0-9]+_")
+# nvs_config::valid_hostname
+HOSTNAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?")
+
+
+def platform_list(platforms: str) -> list[str]:
+    """The `platforms` setting as uppercased names, blanks dropped."""
+    return [p.strip().upper() for p in platforms.split(",") if p.strip()]
+
+
+def matches_platforms(line: str, platforms: list[str]) -> bool:
+    """The filter's approximation (see the module docstring): the file name
+    starts with `<PLATFORM>_` for any of them, case-insensitive."""
+    name = line.rsplit("/", 1)[-1].upper()
+    return any(name.startswith(p + "_") for p in platforms)
 TRAILING_NUM_RE = re.compile(r"_\d+$")
 
 
@@ -1792,19 +1815,13 @@ class Player:
         self.index_state = "ready" if lines is not None else "unavailable"
         base: list[str] = []
         if lines is not None:
-            platforms = [
-                p.strip().upper()
-                for p in self.ctx.settings["platforms"].split(",")
-                if p.strip()
-            ]
+            platforms = platform_list(self.ctx.settings["platforms"])
             for raw in lines:
                 line = raw.strip()
                 if not line:
                     continue
-                if platforms:
-                    name = line.rsplit("/", 1)[-1].upper()
-                    if not any(name.startswith(p + "_") for p in platforms):
-                        continue
+                if platforms and not matches_platforms(line, platforms):
+                    continue
                 base.append(line)
         # Per-GIF overrides for this playlist, resolved case-insensitively
         # against its entries (opendmd_core::overrides::OverrideSet).
@@ -2591,6 +2608,7 @@ def make_handler(ctx: Context, quiet: bool):
 
             routes = [
                 (m_exact("/"), {"GET": self.h_root}),
+                (m_exact("/setup"), {"GET": self.h_setup}),
                 (m_exact("/api/status"), {"GET": self.h_status}),
                 (m_exact("/api/skip"), {"POST": self.h_skip}),
                 (m_exact("/api/pause"), {"POST": self.h_pause}),
@@ -2648,6 +2666,16 @@ def make_handler(ctx: Context, quiet: bool):
         def h_root(self, path):
             if not self.serve_www_rel("index.html"):
                 self.send_error_json(404, "index.html")
+
+        def h_setup(self, path):
+            """The firmware's embedded setup page (build.rs renders it)."""
+            html = (Path(__file__).resolve().parent.parent / "firmware" / "web" / "setup.html").read_text()
+            body = html.replace("{{ version }}", ctx.version).replace("{{ variant }}", "4mb").encode()
+            self.send_response(200, "OK")
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def h_www(self, path):
             rel_raw = path[len("/www/"):]
@@ -2730,6 +2758,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "ip": "127.0.0.1",
                     "wifi": "sta",
                     "hostname": ctx.settings["hostname"],
+                    "mdns": ctx.settings["hostname"],
                     "now_playing": {
                         "ordinal": player.ordinal,
                         "path": cur if cur else "",
@@ -2989,6 +3018,10 @@ def make_handler(ctx: Context, quiet: bool):
                         self.send_error_json(400, "follow_code must be at most 64 characters, with no control characters")
                         return
                     if field == "hostname":
+                        v = v.strip().lower()
+                        if v != "" and not HOSTNAME_RE.fullmatch(v):
+                            self.send_error_json(400, "hostname must be 1-32 lowercase letters, digits and hyphens, not starting or ending with a hyphen")
+                            return
                         if v != "":
                             next_settings["hostname"] = v
                     elif field == "tz":
@@ -3034,6 +3067,18 @@ def make_handler(ctx: Context, quiet: bool):
                 if next_settings["set"] != before["set"] and next_settings["set"]:
                     if ctx.fs.read_path(ctx.player.resolve(next_settings["set"])) is None:
                         self.send_error_json(404, SET_NOT_FOUND)
+                        return
+
+                # A platform filter that would leave the playlist empty is
+                # refused, nothing saved (main.rs builds it first).
+                plats = platform_list(next_settings["platforms"])
+                if needs_reindex and plats and (
+                        next_settings["platforms"] != before["platforms"] or next_settings["set"] != before["set"]):
+                    rule_set = ctx.schedule.rule_set
+                    rel = ctx.player.resolve(rule_set if rule_set is not None else next_settings["set"])
+                    lines = ctx.fs.read_lines(rel)
+                    if lines is not None and not any(matches_platforms(l.strip(), plats) for l in lines if l.strip()):
+                        self.send_error_json(400, f'no GIFs in the playlist match the platform filter "{next_settings["platforms"].strip()}"; nothing was saved')
                         return
 
                 pair, err = resolve_brightness(

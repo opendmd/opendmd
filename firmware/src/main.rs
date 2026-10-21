@@ -115,6 +115,8 @@ static FRAME_SHOWN: AtomicBool = AtomicBool::new(false);
 /// manifest install answers [`CARD_NOT_READY`], as they did with no card.
 static CARD_READY: AtomicBool = AtomicBool::new(false);
 const CARD_NOT_READY: &str = "the card is not ready";
+/// How a build that matched nothing ends its error (`finish_build`).
+const NO_ENTRIES: &str = "matched no entries";
 /// Transitions refused by [`transition_gate`] since boot (heartbeat).
 static TRANSITIONS_CUT: AtomicU32 = AtomicU32::new(0);
 
@@ -634,8 +636,63 @@ fn main() -> Result<()> {
                             && next.attract != settings.attract);
                     let tz_changed = next.tz != settings.tz || next.tz_name != settings.tz_name;
 
+                    // A platform filter that would leave the playlist empty
+                    // is refused before anything is saved. The build is the
+                    // only count there is, so the new playlist is built
+                    // first. If that build fails in any way the settings are
+                    // not verified and nothing is saved: the previous
+                    // playlist is built again (its `.idx` was just replaced:
+                    // another ~6 s on the stock card), or, when the build
+                    // needs a fresh heap (`NeedsFreshHeap` set
+                    // REBOOT_PENDING), the restart after this reply comes
+                    // back on the old settings, which are still in NVS.
+                    let mut prebuilt = None;
+                    if needs_reindex
+                        && CARD_READY.load(Ordering::Relaxed)
+                        && !eff_next.platform_list().is_empty()
+                        && (eff_next.platforms != eff_now.platforms || eff_next.set != eff_now.set)
+                    {
+                        let tried =
+                            replay(&mut engine, &next, &sched, &mut runner, false, &status, &mut canvas);
+                        if let Err(e) = &tried {
+                            let restart = REBOOT_PENDING.load(Ordering::Relaxed);
+                            let back = if restart {
+                                Ok(Applied::unchanged(0))
+                            } else {
+                                replay(&mut engine, &settings, &sched, &mut runner, false, &status, &mut canvas)
+                            };
+                            log::warn!(
+                                "config: platforms '{}' in {} not verified ({e}); refused, nothing saved, previous playlist back: {back:?}",
+                                next.platforms,
+                                eff_next.manifest_path()
+                            );
+                            let msg = if e.ends_with(NO_ENTRIES) {
+                                format!("{} \"{}\"; nothing was saved", state::FILTER_EMPTY, next.platforms.trim())
+                            } else if restart {
+                                "the new playlist needs a restart to be built; restarting on the previous settings, nothing was saved".to_string()
+                            } else {
+                                format!("the new playlist could not be built ({e}); nothing was saved")
+                            };
+                            let _ = reply.send(Err(msg));
+                            continue;
+                        }
+                        prebuilt = Some(tried);
+                    }
+
                     match nvs_config.save(&next) {
                         Err(e) => {
+                            if prebuilt.is_some() {
+                                // Playing what was not saved: back to what was.
+                                let _ = replay(
+                                    &mut engine,
+                                    &settings,
+                                    &sched,
+                                    &mut runner,
+                                    false,
+                                    &status,
+                                    &mut canvas,
+                                );
+                            }
                             let _ = reply.send(Err(format!("saving settings: {e:#}")));
                         }
                         Ok(()) => {
@@ -720,7 +777,10 @@ fn main() -> Result<()> {
                                 settings.transition,
                                 settings.attract
                             );
-                            let outcome = if needs_reindex && !CARD_READY.load(Ordering::Relaxed) {
+                            let outcome = if let Some(built) = prebuilt {
+                                // Built above, before the save.
+                                built
+                            } else if needs_reindex && !CARD_READY.load(Ordering::Relaxed) {
                                 // No card yet: saved, and the playlist the
                                 // card brings is built with it (the
                                 // handover compares, the boot task reads
@@ -2355,7 +2415,7 @@ fn finish_build(
             let entries = built.catalog_len();
             if entries == 0 {
                 log::error!("{path} matched no entries under the configured filter");
-                Err(format!("{path} matched no entries"))
+                Err(format!("{path} {NO_ENTRIES}"))
             } else {
                 let (hidden, weighted, timed) = ov.summary();
                 log::info!(
