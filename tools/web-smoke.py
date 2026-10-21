@@ -1342,6 +1342,9 @@ def panel_test_checks(page: Page, base: str) -> None:
     put_json(base + "/api/config", {"panel": {"latch_blanking": 2}})
     check(post_status({"setting": "clk_phase"}) == 409, "panel test: refused during a trial (409)")
     put_json(base + "/api/config", {"panel_confirm": False})
+    put_json(base + "/api/config", {"panel": {"driver": "fm6126a"}})
+    check(post_status({"setting": "latch_blanking"}) == 409, "panel test: refused with a change waiting for a restart (409)")
+    put_json(base + "/api/config", {"panel_confirm": False})
     check(get_json(base + "/api/config")["panel"] == PANEL_DEFAULTS, "panel test: the API calls saved nothing")
 
     def start(question: str) -> None:
@@ -1372,6 +1375,31 @@ def panel_test_checks(page: Page, base: str) -> None:
     c = get_json(base + "/api/config")
     check(c["panel"] == dict(PANEL_DEFAULTS, clk_phase=False) and c["panel_trial_s"] is None,
           f"panel test: only the pick was saved ({c['panel']})")
+    # A trial started elsewhere closes the box.
+    start("Does A or B look cleaner?")
+    page.select_option("#pt-latch_blanking", "2")
+    page.wait_for_selector("#pt-box", state="hidden", timeout=8000)
+    check(not page.is_visible("#pt-box"), "panel test: a trial closes the box")
+    put_json(base + "/api/config", {"panel_confirm": False})
+    # A chip that forces the rising edge: no clock-edge test; the page
+    # starts at latch blanking.
+    put_json(base + "/api/config", {"panel": {"driver": "mbi5124"}, "panel_confirm": True})
+    expected.append("/api/")  # down through the restart that applies it
+    post_json(base + "/api/reboot", {})
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        try:
+            if get_json(base + "/api/config")["panel_now"]["driver"] == "mbi5124":
+                break
+        except urllib.error.HTTPError:
+            pass
+        time.sleep(0.3)
+    expected.remove("/api/")
+    check(post_status({"setting": "clk_phase"}) == 409, "panel test: clk_phase refused on MBI5124 (409)")
+    page.evaluate("async () => { const { app } = await import('/js/state.js'); await app.refreshConfig(); }")
+    start("Watch the panel. Does A or B look cleaner?")
+    check("One more setting" not in page.inner_text("#pt-box"), "panel test: MBI5124 starts at latch blanking, as the first question")
+    answer("B looks clean", "Saved: Latch blanking 3.")
     put_json(base + "/api/config", {"panel": None})
 
 
