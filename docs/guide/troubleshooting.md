@@ -23,6 +23,13 @@
 - If the player can't join its saved WiFi (a new router, a changed
   password), it opens the **OpenDMD-Setup** network again so you can enter
   the new details, as on [first start](install.md#first-start).
+- **Two displays with the same name.** Every display is called `opendmd`
+  until you rename it. When a second one joins your network with the same
+  name, one of them moves to `opendmd-2.local` (and it may be the one you
+  had first). Open `opendmd-2.local` or the display's address,
+  then give each display its own name in **Settings → Advanced → Network**
+  and reboot it. **Settings → About** shows the address a display really
+  has.
 
 ## The panel says there's no card, or the card can't be read
 

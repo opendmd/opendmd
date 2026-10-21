@@ -22,6 +22,9 @@ async function route() {
   const name = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'now';
   if (name === current) return;
   if (current) mounted[current]?.hide?.();
+  // Safari moves no focus on a link tap and keeps it in a hidden field: a
+  // field left focused would take the keyboard's typing from another view.
+  document.activeElement?.blur?.();
   current = name;
   for (const v of VIEWS) $('#view-' + v).classList.toggle('on', v === name);
   for (const a of document.querySelectorAll('#nav a')) a.classList.toggle('on', a.dataset.view === name);

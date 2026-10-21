@@ -27,6 +27,10 @@ again** restarts what is on now, and **Previous** steps back one at a time.
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
 
+When there's nothing to play, Now says why instead: no card, an empty
+playlist, or a platform filter that matches none of the playlist's GIFs
+(with a **Clear filter** button).
+
 ## Library
 
 ![The Library, with a GIF's details playing](../images/library.png)
@@ -101,7 +105,9 @@ another. **Reset** puts it back to normal.
 The everyday settings are at the top and save as you change them:
 
 - **Playback:** brightness, how long each GIF stays on (**Dwell min /
-  max**), which playlist plays, a platform filter and **Shuffle**. Here too:
+  max**), which playlist plays, **Platforms** and **Shuffle**. Platforms
+  lists the platforms in the playlist, with how many GIFs each has: tap
+  the ones to play, or **All**. Here too:
   **Colour**, to show everything in full colour or in a single colour like a
   classic dot-matrix display (amber, red, green, blue or white), and
   **Phosphor glow**, which makes dots fade out softly like an old plasma
@@ -128,8 +134,11 @@ Open **Advanced** for the rest:
 - **Playback cache** shows how many GIFs have a lighter copy ready. The
   player makes these by itself while the panel is idle; **Prepare remaining
   files** does the rest now from your browser.
-- **Network** changes the WiFi network or the player's name (`opendmd` in
-  `opendmd.local`). These need a reboot.
+- **Network** changes the WiFi network or the **Display name** (`opendmd`
+  in `opendmd.local`). Give each display its own name if you have more
+  than one. These need a reboot. **About** shows the address the display
+  really has: if another display already had its name, it's `<name>-2.local`
+  and About says so.
 - **Panel timing** is for a panel that shows a few wrong-coloured dots on
   some pictures: each change is tried for a minute and undone unless you
   press **Keep** (see [Troubleshooting](troubleshooting.md#some-leds-show-the-wrong-colours-on-certain-pictures)).

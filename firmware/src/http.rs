@@ -377,7 +377,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             next.set = v;
         }
         if let Some(v) = patch.hostname {
+            let v = v.trim().to_ascii_lowercase();
             if !v.is_empty() {
+                if !crate::nvs_config::valid_hostname(&v) {
+                    return req.bad_request(&format!(
+                        "hostname must be 1-{} lowercase letters, digits and hyphens, not starting or ending with a hyphen",
+                        crate::nvs_config::HOSTNAME_MAX
+                    ));
+                }
                 next.hostname = v;
             }
         }
@@ -550,6 +557,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             // Checked by the main task before anything was saved: the
             // configuration and the running playlist are as they were.
             Ok(Err(e)) if e == SET_NOT_FOUND => req.not_found(SET_NOT_FOUND),
+            // Likewise refused, the previous playlist rebuilt: nothing saved.
+            Ok(Err(e)) if e.starts_with(crate::state::FILTER_EMPTY) => req.bad_request(&e),
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
             Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
         }
@@ -1726,7 +1735,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
     let www = crate::www::info();
     format!(
         concat!(
-            r#"{{"version":{},"variant":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"#,
+            r#"{{"version":{},"variant":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
             r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}}},"paused":{},{}"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"heap_floor_at":{},"#,
@@ -1744,6 +1753,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         json_string(&s.ip),
         json_string(s.wifi),
         json_string(&s.hostname),
+        json_string(&s.mdns),
         s.ordinal,
         json_string(&s.path),
         json_string(&s.title),

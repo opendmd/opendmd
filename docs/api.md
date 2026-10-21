@@ -105,6 +105,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `uptime_secs` | seconds since boot |
 | `t_ms` | the player's clock, ms, as the reply was built |
 | `ip`, `wifi`, `hostname` | address; `"sta"` or `"ap"` (setup mode); name |
+| `mdns` | the name mDNS answers to (`<mdns>.local`): `hostname`, or `<hostname>-2` when another device has it; `""` without mDNS |
 | `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based |
 | `paused` | bool |
 | `recent`, `recent_at` | with `?recent=1`: up to 16 files played, newest first, once each; the index of the one on screen |
@@ -187,7 +188,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `shuffle` | bool, true | shuffle the playlist |
 | `platforms` | string, `""` | comma-separated platform prefixes to play, e.g. `"MD,SNES"`; empty = all |
 | `set` | string, `""` | the playlist (see "Fields that recur") |
-| `hostname` | string, `"opendmd"` | name on the network (`opendmd.local`) |
+| `hostname` | string, `"opendmd"` | name on the network (`opendmd.local`): 1-32 of `a-z 0-9 -`, no `-` at either end (lowercased) |
 | `tz`, `tz_name` | strings, `"UTC0"`, `"UTC"` | POSIX time zone (`GMT0IST,M3.5.0/1,M10.5.0`, ≤ 64 characters); its display name (≤ 64) |
 | `transition` | `dissolve` | `dissolve`, `wipe_left`, `wipe_right`, `wipe_down`, `wipe_up`, `blinds`, `push`, `fade`, `none` |
 | `transition_ms` | 20..=2000, 400 | transition length |
@@ -229,7 +230,9 @@ Errors (nothing saved): `400` a value out of range or not one of the names
 (the message says which), e.g. `brightness N is above the maximum M; raise
 Maximum brightness first` (lowering `max_brightness` below the saved
 `brightness` lowers it too); `404 {"error":"set not found"}` the playlist
-does not open; `409` a confirm with no trial; `413` over 8 KB.
+does not open; `409` a confirm with no trial; `413` over 8 KB. A
+`platforms` (or `set`) under which the playlist would be empty is a `400`
+naming the filter.
 
 ```sh
 curl -s -X PUT $DMD/api/config --json '{"brightness":64,"transition":"wipe_left","transition_ms":300}'

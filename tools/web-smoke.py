@@ -192,7 +192,18 @@ every view like a person would:
   Settings  www_version and index_state shown; PUT brightness, read it
             back; WiFi scan; a hostname change replies reboot_required true
             (a brightness write false) and Save network shows the reboot
-            prompt for it (hostname restored); the playlist choices are labelled; with
+            prompt for it (hostname restored); the Display name: a bad
+            hostname is a 400, " Rig-Two " is saved as rig-two, status
+            `mdns` is the hostname, and with it rewritten to <name>-2
+            (route) About shows that address and why; the setup page
+            (/setup) prefills Display name, explains the clash, refuses a
+            bad name before sending, and Connect sends the WiFi and the
+            name together and names http://<name>.local/ (PUT and reboot
+            caught); the platform chips: SNES then MD saved as tapped,
+            "All" clears, platforms "Loo" (alone, or with a set and a
+            brightness) a 400 naming it with nothing saved; Now with
+            status rewritten to an empty playlist names the filter and
+            Clear filter clears it; the playlist choices are labelled; with
             /api/status rewritten to index_state "building" (Playwright
             route), set switching is disabled in Settings and Sets, and comes
             back when it reads "ready"; About's "API reference" opens
@@ -2362,6 +2373,8 @@ def mock_pass(browser) -> None:
         page.wait_for_selector("#st-nets .chip", timeout=15000)
         check(True, "settings: WiFi scan listed networks")
         hostname_checks(page, base)
+        names_checks(page, base)
+        platform_checks(page, base)
         version = (REPO / "opendmd-web" / "www" / "version.txt").read_text().strip()
         facts = page.inner_text("#st-facts")
         about = page.inner_text("#st-about")
@@ -3969,11 +3982,146 @@ def hostname_checks(page: Page, base: str) -> None:
     page.fill("#st-hostname", before + "-smoke")
     page.click("#st-save-net")
     page.wait_for_selector("#st-reboot", state="visible", timeout=5000)
-    check("hostname" in page.inner_text("#st-reboot") and get_json(base + "/api/config")["hostname"] == before + "-smoke",
+    check("name" in page.inner_text("#st-reboot") and get_json(base + "/api/config")["hostname"] == before + "-smoke",
           "settings: Save network with a new hostname shows the reboot prompt")
     put_json(base + "/api/config", {"hostname": before})
     page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
     page.evaluate("document.querySelector('#st-reboot').hidden = true")
+
+
+STATUS_RE = re.compile(r"/api/status(\?|$)")
+
+
+def refresh_app(page: Page) -> None:
+    page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshStatus(); await app.refreshConfig(); }")
+
+
+def names_checks(page: Page, base: str) -> None:
+    """The display's name: PUT /api/config lowercases and validates it
+    (nvs_config::valid_hostname); status `mdns` is the name mDNS answers
+    to, and when it differs (another display had the name: faked here)
+    Settings → About and the setup page say where this one is. The setup
+    page's Display name is prefilled, checked, and saved with the WiFi."""
+    before = get_json(base + "/api/config")["hostname"]
+    for bad in ("Bad Name", "-rig", "rig-", "a" * 33, "rig.two"):
+        check(put_status(base, {"hostname": bad}) == 400, f"config: hostname {bad!r} refused (400)")
+    put_json(base + "/api/config", {"hostname": " Rig-Two "})
+    check(get_json(base + "/api/config")["hostname"] == "rig-two", "config: hostname trimmed and lowercased (rig-two)")
+    put_json(base + "/api/config", {"hostname": before})
+    st = get_json(base + "/api/status")
+    check(st.get("mdns") == st["hostname"], f"status: mdns is the hostname with no clash ({st.get('mdns')})")
+    label = page.inner_text("#view-settings label:has(#st-hostname)")
+    check("Display name" in label and ".local" in page.inner_text("#st-adv"), f"settings: the field is called Display name ({label!r})")
+
+    def clash(route):
+        r = route.fetch()
+        j = r.json()
+        route.fulfill(response=r, json={**j, "mdns": j["hostname"] + "-2"})
+    page.route(STATUS_RE, clash)
+    refresh_app(page)
+    page.wait_for_selector("#st-mdns", timeout=5000)
+    about = page.inner_text("#st-about")
+    check(f"{before}-2.local" in about and f"“{before}”" in page.inner_text("#st-mdns"),
+          f"settings: About shows the real address and why ({about!r})")
+    shot(page, "settings-mdns-clash", "laptop")
+    page.unroute(STATUS_RE)
+    refresh_app(page)
+    page.wait_for_selector("#st-mdns", state="detached", timeout=5000)
+
+    # The setup page (/setup): its own tab, the API answered for real
+    # except the save and the reboot, which are caught.
+    sp = page.context.new_page()
+    sp.route(STATUS_RE, clash)
+    sent: list[dict] = []
+
+    def save(route):
+        if route.request.method == "PUT":
+            sent.append(json.loads(route.request.post_data or "{}"))
+            route.fulfill(status=200, json={"ok": True, "reboot_required": True})
+        else:
+            route.continue_()
+    sp.route("**/api/config", save)
+    sp.route("**/api/reboot", lambda r: r.fulfill(status=200, json={"ok": True, "rebooting": True}))
+    sp.goto(base + "/setup")
+    sp.wait_for_function(f"document.querySelector('#host').value === {json.dumps(before)}", timeout=10000)
+    check(f"http://{before}.local/" in sp.inner_text("#hosturl"), "setup: Display name prefilled with the hostname, its address shown")
+    sp.wait_for_selector("#hostnote", state="visible", timeout=10000)
+    check(f"{before}-2.local" in sp.inner_text("#hostnote"), "setup: a name clash is explained under the field")
+    sp.fill("#ssid", "SmokeNet")
+    sp.fill("#host", "Bad Name")
+    sp.click("#savewifi")
+    check("display name" in sp.inner_text("#wifimsg") and not sent, "setup: a bad name is refused before anything is sent")
+    sp.fill("#host", "Rig-Two")
+    check(sp.inner_text("#hosturl") == "http://rig-two.local/", "setup: the address follows the name as typed")
+    sp.click("#savewifi")
+    sp.wait_for_function("document.querySelector('#wifimsg').textContent.startsWith('Saved')", timeout=5000)
+    check(sent == [{"wifi_ssid": "SmokeNet", "hostname": "rig-two"}] and "http://rig-two.local/" in sp.inner_text("#wifimsg"),
+          f"setup: Connect saves the name with the WiFi and says where to go next ({sent})")
+    shot(sp, "setup-name", "laptop")
+    sp.close()
+
+
+def platform_checks(page: Page, base: str) -> None:
+    """Settings → Playback's platform chips (the playlist's platforms with
+    their counts, "All" when none is picked) save as tapped; a filter that
+    would leave the playlist empty is refused (400, nothing saved), alone
+    or with a set; and Now explains an empty playlist, with Clear filter."""
+    cfg = get_json(base + "/api/config")
+    check(cfg["platforms"] == "" and cfg["set"] == "", f"platforms: start from All files, no filter ({cfg['platforms']!r})")
+    page.wait_for_selector("#st-plats [data-platform='SNES']", timeout=30000)
+    total = get_json(base + "/api/status")["entries"]
+    check(page.locator("#st-plats input").count() == 0 and page.locator("#st-platforms").count() == 0,
+          "settings: platforms are chips, no text field")
+    check("on" in page.get_attribute("#st-plats [data-platform='']", "class"), "settings: All is on with no filter")
+    page.click("#st-plats [data-platform='SNES']")
+    c = wait_config(base, lambda c: c["platforms"] == "SNES")
+    check(c["platforms"] == "SNES", f"settings: tapping SNES saves platforms SNES ({c['platforms']!r})")
+    page.click("#st-plats [data-platform='MD']")
+    c = wait_config(base, lambda c: set(c["platforms"].split(",")) == {"SNES", "MD"})
+    check(set(c["platforms"].split(",")) == {"SNES", "MD"}, f"settings: and MD adds to it ({c['platforms']!r})")
+    page.wait_for_function("document.querySelector(\"#st-plats [data-platform='MD']\").classList.contains('on')"
+                           " && !document.querySelector(\"#st-plats [data-platform='']\").classList.contains('on')", timeout=5000)
+    entries = get_json(base + "/api/status")["entries"]
+    check(0 < entries < total, f"platforms: MD,SNES plays some of the playlist ({entries} of {total})")
+    shot(page, "settings-platforms", "laptop")
+    # Refused: the filter alone, and with a set; nothing saved.
+    try:
+        put_json(base + "/api/config", {"platforms": "Loo"})
+        code, msg = 200, ""
+    except urllib.error.HTTPError as e:
+        code, msg = e.code, json.load(e).get("error", "")
+    after = get_json(base + "/api/config")
+    check(code == 400 and '"Loo"' in msg and set(after["platforms"].split(",")) == {"SNES", "MD"}
+          and get_json(base + "/api/status")["entries"] == entries,
+          f"config: platforms Loo (nothing would play) is a 400 naming it, nothing saved ({code} {msg!r})")
+    check(put_status(base, {"platforms": "Loo", "set": "filelist.xmas", "brightness": 33}) == 400
+          and get_json(base + "/api/config")["set"] == "" and get_json(base + "/api/config")["brightness"] != 33,
+          "config: Loo with a set change is refused too, nothing of the patch saved")
+    page.click("#st-plats [data-platform='']")
+    c = wait_config(base, lambda c: c["platforms"] == "")
+    check(c["platforms"] == "", "settings: All clears the filter")
+    # Now, with nothing to play under a filter (faked: the firmware refuses
+    # to get there, but a filter saved by older firmware can).
+    goto_view(page, "now")
+
+    def empty(route):
+        r = route.fetch()
+        j = r.json()
+        route.fulfill(response=r, json={**j, "entries": 0, "index_state": "unavailable",
+                                        "now_playing": {**j["now_playing"], "path": "", "title": "", "ordinal": 0}})
+    page.route(STATUS_RE, empty)
+    page.evaluate("async () => { const { app } = await import('./js/state.js'); app.config.platforms = 'Loo'; }")
+    page.wait_for_function("document.querySelector('#now-title').textContent.includes('platform filter (Loo)')", timeout=5000)
+    check(page.is_visible("#now-unfilter"), "now: an empty playlist names the platform filter, with Clear filter")
+    shot(page, "now-empty-filter", "laptop")
+    page.click("#now-unfilter")
+    page.wait_for_function("document.querySelector('#now-title').textContent.includes('playlist is empty')", timeout=5000)
+    check(page.is_hidden("#now-unfilter"), "now: Clear filter clears it (the message says the playlist is empty)")
+    page.unroute(STATUS_RE)
+    page.wait_for_function("!document.querySelector('#now-title').textContent.startsWith('Nothing')", timeout=10000)
+    check(True, "now: playing again once status has entries")
+    goto_view(page, "settings")
+    page.wait_for_selector("#st-facts dt")
 
 
 def put_www(base: str, body: bytes) -> tuple[int, dict | None]:
