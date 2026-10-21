@@ -1,10 +1,10 @@
 [package]
 name = "opendmd-web"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "WebAssembly front end for OpenDMD: plays a card's GIFs in the browser with the LED look."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/rossduggan/opendmd"
+repository = "https://github.com/opendmd/opendmd"
 publish = false
 
 [lib]

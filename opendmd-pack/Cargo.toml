@@ -1,10 +1,10 @@
 [package]
 name = "opendmd-pack"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Prepares a card: every GIF's prepared copy (a capped-LZW delta GIF) under cache/."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/rossduggan/opendmd"
+repository = "https://github.com/opendmd/opendmd"
 publish = false
 
 [dependencies]
