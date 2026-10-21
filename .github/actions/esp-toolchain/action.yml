@@ -1,0 +1,79 @@
+name: ESP32 toolchain
+description: >
+  The xtensa Rust toolchain (espup's `esp`, with its ~/.espup-env.sh, which
+  the Makefile sources), ldproxy and espflash; and the caches of ESP-IDF v5.3
+  in ~/.espressif (installed "global" by esp-idf-sys on the first firmware
+  build, see firmware/.cargo/config.toml) and of firmware/target. The
+  versions are the ones on the development machine.
+
+inputs:
+  espup:
+    default: "0.17.1"
+  esp-rust:
+    description: "The esp toolchain (rustc +esp --version: 1.97.0-nightly ... (1.97.0.0))"
+    default: "1.97.0.0"
+  espflash:
+    default: "4.6.0"
+  ldproxy:
+    default: "0.3.5"
+
+runs:
+  using: composite
+  steps:
+    - name: Cache the esp toolchain, espflash and ldproxy
+      id: esp-rust
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.rustup/toolchains/esp
+          ~/.espup-env.sh
+          ~/.cargo/bin/espup
+          ~/.cargo/bin/espflash
+          ~/.cargo/bin/ldproxy
+        key: esp-rust-${{ runner.os }}-espup${{ inputs.espup }}-${{ inputs.esp-rust }}-espflash${{ inputs.espflash }}-ldproxy${{ inputs.ldproxy }}
+
+    - name: Install espup, the esp toolchain, espflash and ldproxy
+      if: steps.esp-rust.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.cargo/bin "$RUNNER_TEMP/esp-dl"
+        cd "$RUNNER_TEMP/esp-dl"
+        gh release download -R esp-rs/espup "v${{ inputs.espup }}" -p 'espup-x86_64-unknown-linux-gnu.zip'
+        gh release download -R esp-rs/espflash "v${{ inputs.espflash }}" -p 'espflash-x86_64-unknown-linux-gnu.zip'
+        unzip -o -q espup-x86_64-unknown-linux-gnu.zip -d ~/.cargo/bin
+        unzip -o -q espflash-x86_64-unknown-linux-gnu.zip -d ~/.cargo/bin
+        chmod +x ~/.cargo/bin/espup ~/.cargo/bin/espflash
+        # No ldproxy release binary is newer than 0.3.2; build the one we use.
+        cargo install --locked ldproxy --version "${{ inputs.ldproxy }}"
+        ~/.cargo/bin/espup install --targets esp32 --toolchain-version "${{ inputs.esp-rust }}" \
+          --export-file ~/.espup-env.sh
+        rm -rf ~/.rustup/downloads ~/.rustup/tmp
+
+    - name: Show the toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        cat ~/.espup-env.sh
+        . ~/.espup-env.sh
+        rustc +esp --version
+        espflash --version
+
+    # ~/.espressif: the ESP-IDF checkout, its tools and Python venv (~2.5 GB).
+    # The downloaded archives in dist/ are left out.
+    - name: Cache ESP-IDF (~/.espressif)
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.espressif
+          !~/.espressif/dist
+        key: espressif-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}
+
+    - name: Cache firmware/target
+      uses: actions/cache@v4
+      with:
+        path: firmware/target
+        key: fw-target-${{ runner.os }}-${{ hashFiles('firmware/Cargo.lock', 'firmware/.cargo/config.toml', 'firmware/sdkconfig.defaults') }}
+        restore-keys: fw-target-${{ runner.os }}-
