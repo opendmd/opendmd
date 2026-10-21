@@ -279,9 +279,13 @@ these CH340 boards. The firmware's console (its log) is a different rate,
 **921600 baud**: `make fw-monitor` and `tools/serial-capture.py` use it; any
 other serial monitor must be set to 921600. The exception: when a host
 talks to it at 115200 (the browser installer, which only speaks Improv at
-that rate), the console switches to **115200 until the next restart**, so
-the installer's "Logs & Console" is readable; the heartbeat then ends
-`console at 115200 baud (Improv)`. Without `fw-erase` this is the keep-settings path, like
+that rate), the console switches to 115200, on trial until a valid Improv
+frame arrives (3 s, else back to 921600), then **until the next restart**,
+so the installer's "Logs & Console" is readable; the heartbeat then ends
+`console at 115200 baud (Improv)`. **Reset device** in Logs & Console
+restarts the board at 921600, so the console shows garbage from then on:
+close the dialog and click Install again (it talks Improv, which switches
+it back). Typing in the console does not do it. Without `fw-erase` this is the keep-settings path, like
 the flasher's. On the bench, `make fw-flash` does the same with the bench
 build (`dev-credentials`).
 

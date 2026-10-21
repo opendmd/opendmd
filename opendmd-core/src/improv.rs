@@ -31,6 +31,13 @@
 //!   result with one byte past the strings (the reader stops at the
 //!   strings' total, so it never sees it). The other frames we send are
 //!   one byte of data.
+//!
+//!   **This deviates from the spec**, which has an RPC result's data be
+//!   exactly its strings: the padded frame's length byte (and checksum)
+//!   covers one byte more than the strings do. The SDK reads the strings
+//!   by their own lengths and ignores the rest; a host that insisted the
+//!   lengths match exactly would reject these frames (rare: a scan entry
+//!   or URL whose strings total 8 bytes). We know of no such host.
 
 /// The frame's first six bytes.
 pub const HEADER: &[u8; 6] = b"IMPROV";
@@ -391,6 +398,84 @@ impl BaudSniffer {
         self.at = (self.at + 1) % Self::WINDOW;
         let total: usize = self.bytes.iter().map(|&b| usize::from(b)).sum();
         self.errors.iter().any(|&e| e) && total >= Self::MIN_BYTES
+    }
+}
+
+/// What [`BaudSwitch::poll`] wants done with the console's rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaudStep {
+    /// Leave it.
+    Stay,
+    /// Switch to 115200: a host seems to be talking at that rate.
+    ToImprov,
+    /// Back to the console's own rate: no Improv frame came in time.
+    Revert,
+}
+
+/// The console's rate over time, from [`BaudSniffer`]'s guess to a
+/// confirmed host. A switch to 115200 is provisional: unless a valid
+/// Improv frame ([`Self::frame`]) arrives within [`Self::TRIAL_POLLS`],
+/// the console goes back to its own rate (something else made the junk:
+/// a terminal at the wrong rate, line noise). Once a frame has arrived it
+/// stays at 115200 until restart, so the installer's "Logs & console"
+/// keeps working.
+#[derive(Debug, Default)]
+pub struct BaudSwitch {
+    sniffer: BaudSniffer,
+    /// 0: at the console's rate; `u16::MAX`: confirmed; else the polls
+    /// left in the trial.
+    trial: u16,
+}
+
+impl BaudSwitch {
+    /// The trial (5 ms polls: 3 s). The host repeats its first request
+    /// every second, so a real installer is heard well within it.
+    pub const TRIAL_POLLS: u16 = 600;
+    const CONFIRMED: u16 = u16::MAX;
+
+    pub const fn new() -> Self {
+        BaudSwitch {
+            sniffer: BaudSniffer::new(),
+            trial: 0,
+        }
+    }
+
+    /// One poll, as [`BaudSniffer::poll`] takes it.
+    pub fn poll(&mut self, bytes: usize, error: bool) -> BaudStep {
+        match self.trial {
+            Self::CONFIRMED => BaudStep::Stay,
+            0 => {
+                if self.sniffer.poll(bytes, error) {
+                    self.trial = Self::TRIAL_POLLS;
+                    BaudStep::ToImprov
+                } else {
+                    BaudStep::Stay
+                }
+            }
+            1 => {
+                self.trial = 0;
+                self.sniffer = BaudSniffer::new();
+                BaudStep::Revert
+            }
+            _ => {
+                self.trial -= 1;
+                BaudStep::Stay
+            }
+        }
+    }
+
+    /// A valid Improv frame arrived. `true` if that confirmed a trial.
+    pub fn frame(&mut self) -> bool {
+        let confirms = self.trial != 0 && self.trial != Self::CONFIRMED;
+        if confirms {
+            self.trial = Self::CONFIRMED;
+        }
+        confirms
+    }
+
+    /// The console is at 115200 (on trial or confirmed).
+    pub fn slow(&self) -> bool {
+        self.trial != 0
     }
 }
 
@@ -763,5 +848,44 @@ mod tests {
         for _ in 0..BaudSniffer::WINDOW {
             assert!(!s.poll(1, false));
         }
+    }
+
+    #[test]
+    fn baud_switch_is_provisional() {
+        let trip = |b: &mut BaudSwitch| {
+            assert_eq!(b.poll(2, true), BaudStep::Stay);
+            assert_eq!(b.poll(9, true), BaudStep::ToImprov);
+        };
+        // No frame within the trial: back, on the last poll of it.
+        let mut b = BaudSwitch::new();
+        assert!(!b.frame(), "a frame at the console's rate confirms nothing");
+        trip(&mut b);
+        assert!(b.slow());
+        for _ in 1..BaudSwitch::TRIAL_POLLS {
+            assert_eq!(b.poll(3, true), BaudStep::Stay, "junk during the trial");
+        }
+        assert_eq!(b.poll(0, false), BaudStep::Revert);
+        assert!(!b.slow());
+        // The sniffer starts afresh: the trial's junk does not count.
+        assert_eq!(b.poll(0, false), BaudStep::Stay);
+        // A second trip, confirmed by a frame: sticky for good.
+        trip(&mut b);
+        for _ in 0..100 {
+            assert_eq!(b.poll(0, false), BaudStep::Stay);
+        }
+        assert!(b.frame());
+        assert!(!b.frame(), "confirmed once");
+        for _ in 0..3 * BaudSwitch::TRIAL_POLLS {
+            assert_eq!(b.poll(5, true), BaudStep::Stay);
+        }
+        assert!(b.slow());
+        // A frame on the very last poll of a trial still counts.
+        let mut b = BaudSwitch::new();
+        trip(&mut b);
+        for _ in 1..BaudSwitch::TRIAL_POLLS {
+            b.poll(0, false);
+        }
+        assert!(b.frame());
+        assert_eq!(b.poll(0, false), BaudStep::Stay);
     }
 }

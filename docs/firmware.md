@@ -131,7 +131,9 @@ The browser installer does it over USB: after a fresh install it asks for
 your network, and for a board already running OpenDMD it offers **Change
 Wi-Fi** (Improv Serial, `src/improv.rs`). The player answers on its
 console UART (UART0, the USB port), switching the console from 921600 to
-the installer's 115200 baud when it hears it, until the next restart. It
+the installer's 115200 baud when it hears it (back to 921600 if no Improv
+request follows within 3 s), until the next restart. A connect to the
+saved network in progress stops for it. It
 joins the network it is given straight away, saves it only once it works,
 and reports `http://<ip>/`; a network it cannot join is reported as such,
 and the setup network (below) comes back if it was up.

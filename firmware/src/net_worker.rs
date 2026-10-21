@@ -126,6 +126,19 @@ fn start_mdns(hostname: &str) -> Option<EspMdns> {
     }
 }
 
+/// The setup network's captive-portal DNS (AP mode only). Kept alive by
+/// the caller.
+fn start_portal_dns(wifi: &WifiManager) -> Option<DnsServer> {
+    wifi.ap_ip_bytes()
+        .and_then(|ip| match DnsServer::start(ip) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                warn!("[net] captive portal DNS failed: {e:#}");
+                None
+            }
+        })
+}
+
 /// Save WiFi details the way `PUT /api/config` does: the whole settings,
 /// changed, through the main task (`Command::ApplyConfig`), which writes
 /// NVS.
@@ -183,6 +196,10 @@ fn run(worker: NetWorker) {
     // --- Associate, or raise the setup AP ---------------------------------
     let mut failures = 0u32;
     let mut ap_started_at: Option<Instant> = None;
+    // The boot decision (saved network, or the setup AP after
+    // STA_MAX_FAILURES) when the browser installer interrupted it: the
+    // failures so far, finished by the steady state's reconnects.
+    let mut boot_failures: Option<u32> = None;
 
     if ssid.is_empty() {
         info!("[net] no saved credentials; starting the setup AP");
@@ -190,6 +207,12 @@ fn run(worker: NetWorker) {
         while failures < config::STA_MAX_FAILURES {
             match wifi.connect_sta(&ssid, &password, None) {
                 Ok(true) => break,
+                // Gave way to the installer (`improv::pending`): its job
+                // first, then the loop below carries on from here.
+                Ok(false) if crate::improv::pending() => {
+                    boot_failures = Some(failures);
+                    break;
+                }
                 Ok(false) => failures += 1,
                 Err(e) => {
                     warn!("[net] connect error: {e:#}");
@@ -199,7 +222,7 @@ fn run(worker: NetWorker) {
         }
     }
 
-    if wifi.state() != WifiState::Connected {
+    if wifi.state() != WifiState::Connected && boot_failures.is_none() {
         match wifi.start_ap() {
             Ok(()) => ap_started_at = Some(Instant::now()),
             // Do not return: dropping `wifi` here would deinit the radio for
@@ -231,17 +254,12 @@ fn run(worker: NetWorker) {
 
     // --- Captive portal DNS, AP only --------------------------------------
     let mut _dns = if wifi.state() == WifiState::ApMode {
-        wifi.ap_ip_bytes()
-            .and_then(|ip| match DnsServer::start(ip) {
-                Ok(d) => Some(d),
-                Err(e) => {
-                    warn!("[net] captive portal DNS failed: {e:#}");
-                    None
-                }
-            })
+        start_portal_dns(&wifi)
     } else {
         None
     };
+    // The last scan, for the installer's rescans (`IMPROV_SCAN_FRESH`).
+    let mut last_scan: Option<(Instant, Vec<crate::wifi::ScannedAp>)> = None;
 
     // The HTTP server is already up: the boot task starts it before the card,
     // while the heap is still whole enough for its task stack (see
@@ -256,6 +274,9 @@ fn run(worker: NetWorker) {
             config::AP_SSID,
             ip.clone().unwrap_or_default()
         ),
+        WifiState::Disconnected if boot_failures.is_some() => {
+            info!("[net] connecting paused for the browser installer")
+        }
         WifiState::Disconnected => warn!("[net] no network; the HTTP server is unreachable"),
     }
 
@@ -263,12 +284,18 @@ fn run(worker: NetWorker) {
     loop {
         // Commands from the HTTP handlers. `recv_timeout` doubles as the poll
         // interval, so a scan is never left waiting for a sleep to finish.
-        match rx.recv_timeout(follow.wait().min(config::WIFI_POLL_INTERVAL)) {
+        let got = rx.recv_timeout(follow.wait().min(config::WIFI_POLL_INTERVAL));
+        crate::improv::log_events();
+        if matches!(got, Ok(NetCommand::Improv(_))) {
+            crate::improv::taken();
+        }
+        match got {
             Ok(NetCommand::Scan(reply)) => {
                 let aps = wifi.scan_networks().unwrap_or_else(|e| {
                     warn!("[net] scan failed: {e:#}");
                     Vec::new()
                 });
+                last_scan = Some((Instant::now(), aps.clone()));
                 let _ = reply.send(aps);
             }
             // The playback-cache count (`cache.rs`): a directory walk and a
@@ -288,12 +315,18 @@ fn run(worker: NetWorker) {
                 if at.elapsed() >= config::IMPROV_STALE {
                     // The installer stopped waiting while we were busy.
                     crate::improv::send_scan(&[]);
+                } else if let Some((_, aps)) = last_scan
+                    .as_ref()
+                    .filter(|(t, _)| t.elapsed() < config::IMPROV_SCAN_FRESH)
+                {
+                    crate::improv::send_scan(aps);
                 } else {
                     let aps = wifi.scan_networks().unwrap_or_else(|e| {
                         warn!("[net] improv scan failed: {e:#}");
                         Vec::new()
                     });
                     crate::improv::send_scan(&aps);
+                    last_scan = Some((Instant::now(), aps));
                 }
             }
             Ok(NetCommand::Improv(Job::Provision {
@@ -301,6 +334,7 @@ fn run(worker: NetWorker) {
                 password: new_password,
                 at,
             })) => {
+                info!("[net] improv: WiFi details for '{new_ssid}' received over USB");
                 if at.elapsed() >= config::IMPROV_STALE {
                     warn!("[net] improv: WiFi details for '{new_ssid}' waited too long; not tried");
                     crate::improv::provision_failed(opendmd_core::improv::Error::UnableToConnect);
@@ -328,6 +362,7 @@ fn run(worker: NetWorker) {
                         ssid = new_ssid;
                         password = new_password;
                         ap_started_at = None;
+                        boot_failures = None;
                         _dns = None;
                         let ip = wifi.ip_address();
                         publish(&status, WifiState::Connected, ip.clone());
@@ -399,7 +434,8 @@ fn run(worker: NetWorker) {
         // Reconnect if the association dropped, or was never made.
         let lost = wifi.state() == WifiState::Connected && !wifi.is_associated();
         let never = wifi.state() == WifiState::Disconnected && !ssid.is_empty();
-        if lost || never {
+        // Not while installer work is queued: that comes first.
+        if (lost || never) && !crate::improv::pending() {
             warn!("[net] WiFi dropped; reconnecting");
             publish(&status, WifiState::Disconnected, None);
             match wifi.connect_sta(&ssid, &password, None) {
@@ -407,8 +443,31 @@ fn run(worker: NetWorker) {
                     let ip = wifi.ip_address();
                     info!("[net] reconnected, IP {}", ip.clone().unwrap_or_default());
                     publish(&status, WifiState::Connected, ip);
+                    boot_failures = None;
+                    if mdns.is_none() {
+                        mdns = start_mdns(&hostname);
+                    }
                     if _sntp.is_none() {
                         _sntp = crate::clock::start_sntp();
+                    }
+                }
+                // Gave way to the installer: its job is next round.
+                Ok(false) if crate::improv::pending() => {}
+                Ok(false) | Err(_) if boot_failures.is_some() => {
+                    // Still the boot decision: the setup AP after
+                    // STA_MAX_FAILURES, as at boot.
+                    let n = boot_failures.unwrap_or(0) + 1;
+                    boot_failures = Some(n);
+                    if n >= config::STA_MAX_FAILURES {
+                        boot_failures = None;
+                        match wifi.start_ap() {
+                            Ok(()) => {
+                                ap_started_at = Some(Instant::now());
+                                _dns = start_portal_dns(&wifi);
+                                publish(&status, WifiState::ApMode, wifi.ip_address());
+                            }
+                            Err(e) => error!("[net] AP mode failed ({e:#}); staying down"),
+                        }
                     }
                 }
                 Ok(false) => warn!("[net] reconnect failed; will retry"),

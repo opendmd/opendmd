@@ -263,12 +263,22 @@ fn console(bytes: &[u8]) {
 
 /// A record to the wire: a line through the console, raw bytes straight to
 /// the UART.
+/// The drain's last byte out was a `\n` (or nothing went out yet): raw
+/// records must start a line, and a log line cut short at `MAX_LINE` does
+/// not end with one.
+static AT_LINE_START: AtomicBool = AtomicBool::new(true);
+
 fn out(bytes: &[u8], raw: bool) {
+    let Some(&last) = bytes.last() else { return };
     if raw {
+        if !AT_LINE_START.load(Ordering::Relaxed) && bytes[0] != b'\n' {
+            crate::improv::uart_raw(b"\n");
+        }
         crate::improv::uart_raw(bytes);
     } else {
         console(bytes);
     }
+    AT_LINE_START.store(last == b'\n', Ordering::Relaxed);
 }
 
 /// Queue `len` bytes to go to the UART exactly as `fill` writes them (it
