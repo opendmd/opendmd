@@ -823,7 +823,10 @@ fn main() -> Result<()> {
                             reply.send(Err(format!("{dest} is not a playlist's overrides file")));
                         continue;
                     };
-                    let active = files::same_card_path(&status.lock().unwrap().manifest, &manifest);
+                    let (active, on_screen) = {
+                        let s = status.lock().unwrap();
+                        (files::same_card_path(&s.manifest, &manifest), s.path.clone())
+                    };
                     if active {
                         retire(&mut engine, &mut canvas);
                     }
@@ -860,6 +863,17 @@ fn main() -> Result<()> {
                                 ))
                             }
                         });
+                    // The GIF on screen carries on (starting over), so a
+                    // favourite tapped on Now doesn't jump the panel to
+                    // another one; unless the new overrides hide it.
+                    if active && outcome.is_ok() && !on_screen.is_empty() && !on_screen.starts_with('@') {
+                        let hidden = read_meta(&dest).get(&on_screen).is_some_and(|o| o.never);
+                        if !hidden {
+                            if let Err(e) = play_now(engine.as_mut(), &on_screen, epoch.elapsed()) {
+                                log::warn!("overrides: {on_screen} did not carry on: {e:?}");
+                            }
+                        }
+                    }
                     log::info!(
                         "overrides {} at {dest} (playlist {manifest}, active={active}): {outcome:?}",
                         if temp.is_some() { "installed" } else { "removed" }
