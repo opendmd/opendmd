@@ -118,6 +118,11 @@ every view like a person would:
             (library-effects-laptop.png); on the mock: Send to panel, POST
             /api/play of each (415 for an unknown one), attract "fx:..."
             validated, an @fx: playlist line survives a save and a reload
+  Save as GIF  Effects -> Save as GIF… opens Create Art with one loop (240
+            frames), titled "Tunnel Fire Rings", FX in Demoscene; trimmed and
+            saved, its frames equal the simulator's and its copy
+            opendmd-pack's, listed in the Library; in the demo (local mode)
+            Download GIF gives the 240 frames
   Live      Library -> Live: five rows (four clocks and a scrolling text),
             the text form, a preview, the text row following #live-msg;
             Send to panel of the clock and the text (title, frame advancing;
@@ -1309,8 +1314,9 @@ def effects_checks(page: Page, base: str, mock: bool) -> None:
         keys = page.eval_on_selector_all(f"#fx-{name} select", "els => els.map(e => e.dataset.key)")
         check(a != b and len(keys) >= 4, f"library: {name} previews and moves ({a} -> {b}); options {keys}")
     page.click("#lib-list .vrow:not([hidden]) >> nth=0")
-    gap = page.eval_on_selector("#fx-tunnel + p.cap", "e => getComputedStyle(e).marginTop")
-    check(gap == "12px", f"library: a gap between an effect's options and its caption ({gap})")
+    gap = page.eval_on_selector("#fx-tunnel + .row", "e => getComputedStyle(e).marginTop")
+    btn = page.inner_text("#fx-tunnel + .row #fx-gif")
+    check(gap == "12px" and btn == "Save as GIF…", f"library: a gap between an effect's options and its '{btn}' button ({gap})")
     pl = page.evaluate("import('./js/state.js').then(m => ['/sets/Sprites_and_Clock.txt', '/sets/_x.txt', '/filelist.hall'].map(m.playlistLabel))")
     check(pl == ["Sprites and Clock", "_x", "Halloween"], f"playlists: names on the card read as words ({pl})")
     page.select_option("#fx-tunnel select[data-key='palette']", "fire")
@@ -1370,15 +1376,17 @@ def effects_checks(page: Page, base: str, mock: bool) -> None:
     no_leaks(page, "playlists (effects)")
 
 
-def sim_png(root: Path, look: str, out: Path, path: str = "@text?msg=OpenDMD&scroll=0") -> bytes:
+def sim_png(root: Path, look: str, out: Path, path: str = "@text?msg=OpenDMD&scroll=0", at_ms: int | None = None) -> bytes:
     """The desktop simulator's canvas for `@text?msg=OpenDMD&scroll=0` after
-    `look`, as 128x32 RGBA bytes."""
+    `look` (or `at_ms` into it), as 128x32 RGBA bytes."""
     from PIL import Image
     (root / "gifs").mkdir(parents=True, exist_ok=True)
     cmd = ["cargo", "run", "--release", "-q", "--", "--root", str(root), "--play", path,
            "--screenshot-canvas", str(out)]
     if look != "colour":
         cmd += ["--look", look]
+    if at_ms is not None:
+        cmd += ["--screenshot-at", str(at_ms)]
     r = subprocess.run(cmd, cwd=REPO / "opendmd-sim", env={**os.environ, "RUSTUP_TOOLCHAIN": "stable"},
                        capture_output=True, text=True, timeout=900)
     if r.returncode:
@@ -2223,6 +2231,7 @@ def mock_pass(browser) -> None:
         studio_checks(page, base, overlay)
         studio_anim_checks(page, base, overlay)
         studio_smooth_checks(page, base, overlay)
+        fx_gif_checks(page, base, overlay)
         find_checks(page)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
@@ -2358,6 +2367,7 @@ def mock_pass(browser) -> None:
               f"nav: five views with Create Art, no Convert ({views})")
         follow_checks(page, base, errors)
         phone_pass(browser, base, errors)
+        fx_gif_demo_pass(browser, base, errors)
         json_type_checks(base)
         origin_checks(browser, base)
         firmware_checks(page, base, ota)
@@ -2374,6 +2384,92 @@ def mock_pass(browser) -> None:
 ART = REPO / "opendmd-art-web"
 STUB_INDEX = {"repo": "Stub_-_Repo", "names": ["Other Game (Europe)", "Studio Test (Japan)", "Studio Test (USA)"],
               "kinds": "123"}
+
+
+FX_GIF = "@fx:tunnel?palette=fire&texture=rings"
+
+
+def fx_to_studio(page: Page) -> None:
+    """Library -> Effects: the tunnel set to fire and rings, then Save as
+    GIF…, which opens Create Art with one loop of it drawn."""
+    goto_view(page, "library")
+    pick_cat(page, "@fx")
+    page.fill("#lib-search", "")
+    page.wait_for_function("document.querySelectorAll('#lib-list .vrow:not([hidden])').length == 4", timeout=10000)
+    page.click("#lib-list .vrow:not([hidden]) >> nth=0")
+    page.wait_for_selector("#lib-live #fx-tunnel", timeout=5000)
+    page.select_option("#fx-tunnel select[data-key='palette']", "fire")
+    page.select_option("#fx-tunnel select[data-key='texture']", "rings")
+    page.wait_for_function(f"[...document.querySelectorAll('#lib-list .vrow')].some(e => e.dataset.path === {json.dumps(FX_GIF)})", timeout=5000)
+    page.click("#fx-gif")
+    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
+    page.wait_for_function("(d => d.dataset.animated && d.dataset.srcFrames === '240' && d.dataset.name)(document.querySelector('#studio'))", timeout=30000)
+
+
+def fx_gif_checks(page: Page, base: str, overlay: Path) -> None:
+    """Save as GIF from the Effects tab: Create Art opens with one loop of the
+    effect (240 frames at 20 ms), titled from its options, platform FX in
+    Demoscene; trimmed and saved, the GIF lands in the Library with its
+    prepared copy, its frames the simulator's pixel for pixel."""
+    fx_to_studio(page)
+    d = studio_data(page)
+    msg = page.inner_text("#st-msg")
+    name = "FX_Tunnel_Fire_Rings_01.gif"
+    check(page.input_value("#st-title") == "Tunnel Fire Rings" and page.input_value("#st-plat") == "FX"
+          and page.input_value("#st-cat") == "Demoscene" and d.get("name") == name,
+          f"fx gif: Create Art titles it '{page.input_value('#st-title')}', {page.input_value('#st-plat')} in {page.input_value('#st-cat')} -> {d.get('name')}")
+    check("240 frames" in msg and "one loop" in msg and page.inner_text("#st-stats").startswith("240 frames · 4.8 s"),
+          f"fx gif: one loop, 240 frames, 4.8 s ('{msg}', '{page.inner_text('#st-stats')}')")
+    # Trimmed to its first 100 frames, then saved.
+    page.eval_on_selector("#st-strip", "s => { s.scrollLeft = 99 * 136 - 200; s.dispatchEvent(new Event('scroll')); }")
+    page.wait_for_selector("#st-strip .st-cell[data-i='99']:not([hidden])", timeout=5000)
+    page.click("#st-strip .st-cell[data-i='99']:not([hidden])")
+    page.click("#st-set-out")
+    check(studio_data(page).get("frames") == "100", f"fx gif: trimmed to 100 frames ({studio_data(page).get('frames')})")
+    page.evaluate("delete document.querySelector('#studio').dataset.saved")
+    page.click("#st-save")
+    page.wait_for_function("document.querySelector('#studio').dataset.saved", timeout=120000)
+    path = f"/gifs/Demoscene/{name}"
+    got = overlay / path.lstrip("/")
+    check(got.exists() and (overlay / cache_path(path).lstrip("/")).exists(), f"fx gif: {path} and its prepared copy landed")
+    frames, delays = gif_frames(got)
+    tmp = OUT / "sim-fx"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    diffs = []
+    for i in (0, 37, 99):
+        want = sim_png(tmp / "root", "colour", tmp / f"fx-{i}.png", FX_GIF, i * 20)
+        want_rgb = b"".join(want[k:k + 3] for k in range(0, len(want), 4))
+        diffs.append(sum(1 for k in range(0, len(want_rgb), 3) if frames[i][k:k + 3] != want_rgb[k:k + 3]))
+    check(len(frames) == 100 and delays == [20] * 100 and diffs == [0, 0, 0],
+          f"fx gif: {len(frames)} frames at {set(delays)} ms, frames 1/38/100 equal the simulator's ({diffs} px differ)")
+    compare_with_pack(overlay, {cache_path(path): got})
+    lib_row(page, path)
+    check(page.inner_text("#lib-d-title") == "Tunnel Fire Rings 01", f"fx gif: listed in the Library ({page.inner_text('#lib-d-title')})")
+    no_leaks(page, "library (fx gif)")
+
+
+def fx_gif_demo_pass(browser, base: str, errors: list[str]) -> None:
+    """The same from the web demo (local mode, its card in memory: here an
+    empty one): Save as GIF opens Create Art with 240 frames, and Download
+    GIF hands over a GIF of them."""
+    page = new_page(browser, "laptop", errors)
+    page.route("**/api/status", lambda r: r.fulfill(status=200, body="{}", headers={"content-type": "application/json"}))
+    page.route("**/demo/index.json", lambda r: r.fulfill(status=200, body="[]", headers={"content-type": "application/json"}))
+    page.goto(base + "/")
+    page.wait_for_function("document.querySelector('#where').textContent.startsWith('Demo')", timeout=20000)
+    fx_to_studio(page)
+    check(page.input_value("#st-title") == "Tunnel Fire Rings" and page.inner_text("#st-save") == "Download GIF",
+          f"fx gif (demo): Create Art has the 240 frames, '{page.input_value('#st-title')}', '{page.inner_text('#st-save')}'")
+    with page.expect_download(timeout=120000) as dl:
+        page.click("#st-save")
+    out = OUT / "fx-demo.gif"
+    dl.value.save_as(out)
+    frames, delays = gif_frames(out)
+    check(dl.value.suggested_filename == "FX_Tunnel_Fire_Rings_01.gif" and len(frames) == 240 and set(delays) == {20},
+          f"fx gif (demo): downloaded {dl.value.suggested_filename}, {len(frames)} frames at {set(delays)} ms")
+    no_leaks(page, "create art (fx gif, demo)")
+    page.context.close()
 
 
 def studio_fixture() -> Path:

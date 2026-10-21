@@ -27,6 +27,20 @@ Classic demo-scene and 16-bit style animations, drawn live:
 Each has a few options beside its preview, such as colour palette, texture
 and speed.
 
+## Make it a GIF
+
+Found a look you like? Press **Save as GIF…** under the effect's options.
+[Create Art](create-art.md) opens with one loop of the effect drawn as an
+animation, with a title already filled in from your choices, like "Tunnel
+Fire Rings". From there it's like any other animation: add some text, trim
+it, change the speed, then save it to your card. The GIF lands in the
+Library (under **Demoscene**, unless you pick another category) and plays
+like the rest of your GIFs.
+
+The effect stays in the Effects tab too, so you can keep adding the live
+version to playlists. A long, slow effect becomes the first ten seconds or
+so of its loop; pick a faster speed first if you want the whole loop.
+
 ## Colour and glow
 
 Two settings change the look of everything the panel shows, GIFs included.

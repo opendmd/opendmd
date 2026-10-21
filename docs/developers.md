@@ -68,5 +68,7 @@ The crates are deliberately not a Cargo workspace.
 - [HTTP API](api.md): every route the player answers, with `curl`
   examples. Anything the web app does, a script can do too.
 - [The simulator](simulator.md): its options and how it draws LEDs.
+- [Writing an effect](writing-effects.md): how the panel's effects work,
+  their limits on the ESP32, and adding a new one, with a worked example.
 - [Hardware pinout](../hardware/PINOUT.md): the DMDoS carrier board's
   wiring.

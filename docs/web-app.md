@@ -119,7 +119,11 @@ and the other steps appear. **Edit in Create Art** on a Library GIF
 opens it here, every frame of it, with its title, platform, category and
 author filled in, to **Replace the original** (the same file, so every
 playlist keeps it; a changed title renames it, and playlists follow) or
-**Save as new**.
+**Save as new**. **Save as GIF…** under an effect's options in the
+Library's Effects tab opens it here too: one loop of the effect, drawn as
+an animation by the same code the panel runs, titled from the options
+("Tunnel Fire Rings"), platform FX in the Demoscene category (the demo
+card's recordings are named the same way), to save as new.
 
 1. **Find** — three sources. **Game art**: pick a platform (MD, SNES, GB,
    GBC, GBA, Saturn, DS, NES, SMS, PC Engine, PS1, N64, Arcade), type a
@@ -263,6 +267,27 @@ tables are in flash) and 1-3.5 ms a frame. The palettes are stepped and
 have a black band on purpose: the panel shows smooth, dim gradients as
 bands anyway. Follow RePlayOS can show one in the menus too (`PUT
 /api/config {"attract":"fx:tunnel"}`).
+
+**Save as GIF.** Under an effect's options, **Save as GIF…** hands the
+row's path (`app.artFrom = {fx, title}`) to Create Art, which draws it with
+the art module's `Studio.fromEffect(path)`: the core's `fx` compiled into
+the second wasm module, in ~12 ms slices like a GIF's import ("Drawing
+frames… N of M"), then the usual timeline, text and save. The length is
+`anim::effect_plan`: one loop at the effect's frame rate held to the GIF
+players' 20 ms floor (a 100 fps effect gives every other frame: the same
+motion), at 40 ms if that would be more than 240 frames, and cut to 240
+frames if even that is too long (the import line then says "the first
+9.6 s of it" instead of "one loop"). Every frame is drawn by a fresh copy
+of the effect on a cleared canvas, so the sparse effects (which erase the
+previous frame rather than clear) leave nothing behind when frames are
+skipped. The default tunnel is 240 frames at 20 ms, ~550 KB as a GIF
+(its prepared copy about the same); the rotozoom 240 at 40 ms, ~370 KB;
+the starfield and the wireframe under 100 KB. The suggested title is the
+effect's name plus the options that are words (palette, texture, shape,
+colour, the floor view, dots) when they differ from the defaults. The
+platform is FX and the category Demoscene (added to the list if the card
+has none yet), as the demo card names its recordings. Local mode and the
+demo download the GIF, as Create Art always does there.
 
 ## Size budget
 
