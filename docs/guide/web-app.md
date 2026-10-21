@@ -24,6 +24,12 @@ Missed something? **Recently played** under the preview lists what the panel
 showed last, even while no page was open: tap one to play it again. **Play
 again** restarts what is on now, and **Previous** steps back one at a time.
 
+Like what's on? Tap **☆** next to the title to make it a favourite in the
+playlist that's playing (it turns to **★**; tap again to undo). The
+message that pops up names the playlist. The **…** on a Recently played
+GIF has the rest: play less often, hide, play longer. Clocks, text and
+effects have no ☆.
+
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
 
@@ -35,9 +41,15 @@ playlist, or a platform filter that matches none of the playlist's GIFs
 
 ![The Library, with a GIF's details playing](../images/library.png)
 
-Every GIF on your card. Search by title, pick a category from the tabs
-(these are the folders on your card), or narrow it down by platform with the
-chips underneath.
+Every GIF on your card. Pick a category from the tabs (these are the
+folders on your card), or narrow it down by platform with the chips
+underneath.
+
+**Search** looks through every GIF on the card, whatever tab you were on.
+Chips under the box show where the matches are, with a count each, say
+**Consoles 42** or **SNES 17**: tap one to narrow the results, tap it again
+to undo. You can pick a category and a platform together. Clear the box to
+go back to the tab and chips you had before.
 
 Click a GIF to open its details: a preview, its title, platform, category
 and author, and what you can do with it:
@@ -98,7 +110,8 @@ use its **…** button) to tune how it plays in that playlist:
   number of times.
 
 These are per playlist, so a GIF can be a favourite in one and hidden in
-another. **Reset** puts it back to normal.
+another. **Reset** puts it back to normal. On **Now**, the ☆ next to the
+title makes the GIF on screen a favourite in the playlist that's playing.
 
 ## Settings
 
@@ -140,8 +153,9 @@ Open **Advanced** for the rest:
   really has: if another display already had its name, it's `<name>-2.local`
   and About says so.
 - **Panel timing** is for a panel that shows a few wrong-coloured dots on
-  some pictures: each change is tried for a minute and undone unless you
-  press **Keep** (see [Troubleshooting](troubleshooting.md#some-leds-show-the-wrong-colours-on-certain-pictures)).
+  some pictures: **Test panel timing** shows test pictures under A and B
+  and saves the one you pick; a change by hand is tried for a minute and
+  undone unless you press **Keep** (see [Troubleshooting](troubleshooting.md#some-leds-show-the-wrong-colours-on-certain-pictures)).
 - **Firmware** shows the version and installs updates (see
   [Updating](updating.md)).
 - **Security** can require a key before the player can be controlled,

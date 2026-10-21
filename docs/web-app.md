@@ -62,13 +62,20 @@ names the format or shows a copy's path.
   file on screen, and Previous is `POST /api/skip?back=1`, which walks back
   one entry a press (twice is two back, not a flip between the last two).
   The simulator keeps the same list in the page by the same rules; firmware
-  without it hides Previous and the list.
+  without it hides Previous and the list. A ☆ beside the title makes the
+  GIF on screen a favourite in the playlist in play (★ when it is; not for
+  live items); each Recently played row has the "…" overrides menu for
+  that playlist.
 - **Library** — the GIFs on the player, and only those (finding new art is
   **Create Art**'s). One row across the top: a search field (titles, normalised
   the way the core matches them; when nothing matches, a link searches the
   web for the same words in Create Art) and **Add GIFs**; under it the
   categories as tabs (the card's folders under `gifs/`, then *Live* and
-  *Effects*) and the platform chips. The list (virtualised: thousands of
+  *Effects*) and the platform chips. A search is of every GIF on the card
+  (each category listed once, then kept): the tabs give way to category
+  facets and the chips become platform facets, each with its match count,
+  most first, combining (category AND platform); clearing the box brings
+  back the tab and chips as they were. The list (virtualised: thousands of
   rows) shows each GIF's title, platform and favourite/hidden marks. Pick one
   and the **Details** panel (the right-hand column; a sheet from the bottom
   on a phone) plays it with the panel look and shows its title, platform,
@@ -113,7 +120,10 @@ names the format or shows a copy's path.
   timing** under Advanced (`js/panel.js`: the HUB75 clock edge, latch
   blanking, driver chip, data clock and minimum refresh, each change a
   trial with Keep/Undo and a countdown, the boot-time ones through "Restart
-  now", and Reset to defaults; see [`firmware.md`](firmware.md#panel-timing)); the **Playback cache** card ("9,826
+  now", and Reset to defaults; **Test panel timing**, `js/paneltest.js`,
+  loaded on the first click: `POST /api/panel/test` A/B questions for the
+  clock edge, then the latch blanking, the pick saved with
+  `panel_confirm`; see [`firmware.md`](firmware.md#panel-timing)); the **Playback cache** card ("9,826
   of 10,133 files prepared", from `GET /api/cache`) with **Prepare remaining
   files**, which works out what the playlist in play is missing
   (`GET /api/cache/list`) and encodes and uploads it in the background, one
