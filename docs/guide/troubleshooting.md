@@ -2,10 +2,14 @@
 
 ## The installer can't find or connect to the board
 
-- Use Chrome or Edge on a computer, not a phone.
+- Use Chrome, Edge or Opera on a computer, not Firefox, Safari or a phone.
 - Try a different USB cable: many only carry power.
-- On Windows or older macOS, install the CH340 USB driver, then plug the
-  board in again.
+- On Windows or older macOS, install the driver for the board's USB chip,
+  then plug the board in again:
+  [CH340/CH341](http://www.wch-ic.com/downloads/CH341SER_ZIP.html),
+  [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers)
+  or [FTDI](https://ftdichip.com/drivers/). The chip's name is printed on
+  it, next to the USB socket.
 - Hold the board's **BOOT** button while the installer says "Connecting".
 
 ## I can't open opendmd.local
@@ -58,3 +62,13 @@ again with **Erase device** unticked.
 Running the [installer](install.md) with **Erase device** ticked wipes the
 board back to a fresh install: WiFi details, settings and a forgotten
 security key all go. Your SD card, GIFs and playlists are kept.
+
+## Still stuck?
+
+- **Building the display, the hardware or GIFs:** the DMDoS community's
+  [Telegram group](https://t.me/DMD0S) is where people help each other.
+  The [Assembly section of dmdos.net](https://dmdos.net/) shows each step
+  of the build with a photo.
+- **OpenDMD itself:** open an issue on
+  [GitHub](https://github.com/opendmd/opendmd/issues). OpenDMD is an
+  independent project, so please don't ask the DMDoS team to fix it.

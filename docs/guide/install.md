@@ -3,53 +3,76 @@
 Put OpenDMD on your display straight from this page. It takes about a
 minute, and your SD card and its GIFs are left alone.
 
+OpenDMD replaces the DMDoS firmware on the same ESP32 board: nothing to
+rewire or swap. Want the original firmware back later? Install it again
+from the Software section of [dmdos.net](https://dmdos.net/).
+
+> **Works in:** Chrome, Edge or Opera (recent versions) on a computer:
+> Windows, macOS, Linux or ChromeOS. **Not** Firefox or Safari, and not
+> phones or tablets: they can't talk to USB boards from a web page.
+
 <!-- site:install-button -->
 
-## What you need
+## Before you start
 
-- **Chrome or Edge on a computer** (Windows, macOS, Linux or ChromeOS).
-  Firefox, Safari and phones can't talk to USB boards from a web page.
+- **A computer with one of those browsers.**
 - **A USB data cable.** Some cables only carry power; if the installer
   can't find the board, try another cable.
-- **The display's controller board**, an ESP32 DevKit V1: the small board
-  with a USB socket that the panels are wired to.
+- **The display's ESP32 board**, the ESP32 DevKit V1: the small board
+  with the USB socket that sits on the DMDoS Board. It can stay in the
+  display. Don't have a display yet? See [What you need](hardware.md).
 
-On Windows and older versions of macOS, the board's USB chip (a CH340) may
-need its driver installed before the computer can see it.
+## Step by step
 
-## Install
+<!-- site:steps -->
 
-1. Plug the board into your computer with the USB cable.
-2. Click **Install** and pick the board's port from the list. It is often
-   called "USB Serial" or "CH340".
-3. The installer asks whether to **Erase device**:
+1. **Plug in the board.** Connect the ESP32 to your computer with the USB
+   cable.
+2. **Click Install** above and pick the board's port from the list. It is
+   often called "USB Serial", "CH340" or "CP210x".
+3. **Choose whether to erase.** The installer asks whether to **Erase
+   device**:
     - **First install** (the board still runs DMDoS or anything else):
       **tick Erase.** This clears the board completely before installing.
     - **Updating** a board that already runs OpenDMD: **leave Erase
       unticked.** Your WiFi details and settings stay as they are.
-4. Wait for it to finish. The board restarts by itself.
+4. **Wait for it to finish.** It takes about a minute, and the board
+   restarts by itself.
 
-If the installer can't connect, hold down the board's **BOOT** button while
-it says "Connecting", and let go once it starts writing. Unplugging the
-board and trying again helps too.
+> **Connection problems?**
+>
+> - If the installer can't connect, hold down the board's **BOOT** button
+>   while it says "Connecting", and let go once it starts writing.
+>   Unplugging the board and trying again helps too.
+> - If the board doesn't show up in the list at all, try another cable,
+>   then install the driver for the board's USB chip (its name is printed
+>   on the small chip next to the USB socket) and plug the board in again:
+>   [CH340/CH341](http://www.wch-ic.com/downloads/CH341SER_ZIP.html),
+>   [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers)
+>   or [FTDI](https://ftdichip.com/drivers/). Windows and older versions
+>   of macOS are the ones that need it.
 
 ## First start
 
 A freshly installed player doesn't know your WiFi yet, so it makes its own
 network for you to join:
 
-1. On your phone or computer, join the WiFi network **OpenDMD-Setup**.
-2. Open <http://192.168.71.1/setup> in a browser. Type your WiFi
-   network's name (**Scan** lists the ones nearby) and its password, then
-   press **Save & reboot**.
+<!-- site:steps -->
+
+1. **Join the setup network.** On your phone or computer, join the WiFi
+   network **OpenDMD-Setup**.
+2. **Enter your WiFi details.** Open <http://192.168.71.1/setup> in a
+   browser. Type your WiFi network's name (**Scan** lists the ones nearby)
+   and its password, then press **Save & reboot**.
 
     If the OpenDMD web app pops up by itself when you join, you can do the
     same there under **Settings → Advanced → Network**. The board restarts
     every ten minutes while it waits; if the setup network vanishes, wait a
     moment and join it again.
 
-3. Rejoin your usual WiFi and open **<http://opendmd.local/>**. That's the
-   web app, where you manage everything from now on.
+3. **Open the web app.** Rejoin your usual WiFi and open
+   **<http://opendmd.local/>**. That's the web app, where you manage
+   everything from now on.
 
 With your card in, the panel starts playing straight away. A card that
 worked with DMDoS works as it is. See [The SD card](card.md) for setting
@@ -63,8 +86,17 @@ firmware from a file, here it is:
 
 <!-- site:firmware-bundle -->
 
+## Going back to DMDoS
+
+OpenDMD doesn't lock you in. To put the original DMDoS firmware back, use
+the browser installer in the Software section of
+[dmdos.net](https://dmdos.net/) the same way. Your SD card works with
+either.
+
 ## Next
 
 - [The web app](web-app.md): what each part of it does.
 - [Updating](updating.md): getting newer versions later.
 - [Troubleshooting](troubleshooting.md): if something doesn't work.
+- Stuck? Ask the DMDoS community in its
+  [Telegram group](https://t.me/DMD0S).

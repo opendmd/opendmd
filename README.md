@@ -1,6 +1,6 @@
 <h1 align="center">OpenDMD</h1>
 
-<p align="center">Open firmware for 128x32 LED dot-matrix displays that play animated GIFs.</p>
+<p align="center">New open firmware and a web app for the DMDoS LED dot-matrix display.</p>
 
 <p align="center">
   <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="License: MIT or Apache 2.0"></a>
@@ -10,9 +10,14 @@
 
 **[Try the demo in your browser](https://opendmd.github.io/demo/)** · [Documentation](https://opendmd.github.io/)
 
-OpenDMD is an open-source replacement for **DMDoS**, the closed ESP32 firmware that plays GIFs
-from a microSD card on two chained 64x32 HUB75 panels: a "DMD", like the dot-matrix display in a
-pinball machine. It plays an existing DMDoS card as it is, and adds a web app to manage it.
+<!-- site:hero -->
+
+OpenDMD is open-source firmware and a web app for the **DMDoS display**: a 128x32 LED
+dot-matrix display, two chained 64x32 HUB75 panels driven by an ESP32, that plays animated GIFs
+from a microSD card, like the "DMD" in a pinball machine. DMDoS is a community project from
+Spain, and **[dmdos.net](https://dmdos.net/)** is where to get the hardware, build the display
+and find GIFs. OpenDMD is an alternative firmware for the same board: it plays a DMDoS card as
+it is, and adds a web app to manage it.
 
 - **The firmware** runs on the display's own ESP32 board. It plays the card and serves the web
   app over WiFi.
@@ -20,9 +25,36 @@ pinball machine. It plays an existing DMDoS card as it is, and adds a web app to
   Previews and GIF preparation run right in the browser, using the same engine as the player.
 - **The simulator** plays a card in a desktop window, drawn as LEDs rather than flat pixels.
 
+<!-- site:tiles -->
+
+## OpenDMD and DMDoS
+
+OpenDMD only replaces the software on the ESP32. For everything else, go to DMDoS and the
+people around it:
+
+<!-- site:features -->
+
+- **The hardware:** the parts list, with where to buy each one, is in the Hardware section of
+  [dmdos.net](https://dmdos.net/). The DMDoS Board V3 is made by
+  [MORTACA](https://mortaca.com). [What you need](docs/guide/hardware.md) sums it up.
+- **Building it:** the Assembly section of [dmdos.net](https://dmdos.net/) walks through it
+  step by step, with a photo for each.
+- **A frame:** a 3D-printable frame by Janibol of
+  [Retromojones](https://www.youtube.com/@retromojones) is on
+  [Thingiverse](https://www.thingiverse.com/thing:6704880). The Frame section of dmdos.net has
+  printed kits and wooden frames.
+- **GIFs:** the DMDoS GIF pack is in the Software section of [dmdos.net](https://dmdos.net/).
+  A card set up with it plays on OpenDMD as it is.
+- **Help and ideas:** the DMDoS community's [Telegram group](https://t.me/DMD0S).
+
+OpenDMD is an independent project, not made by or affiliated with DMDoS or MORTACA. Questions
+about OpenDMD itself go to its [GitHub issues](https://github.com/opendmd/opendmd/issues). The
+original DMDoS firmware can be put back at any time from the Software section of dmdos.net.
+
 ## Install
 
-Open the **[installer](https://opendmd.github.io/install/)** in Chrome or Edge, plug the
+Open the **[installer](https://opendmd.github.io/install/)** in Chrome, Edge or Opera on a
+computer, plug the
 display's ESP32 board into your computer by USB, and click **Install**. On first start the
 player opens a WiFi network called `OpenDMD-Setup`: join it, enter your WiFi details, and the
 web app is at `http://opendmd.local/`. [Install](docs/guide/install.md) has the details.
@@ -30,6 +62,8 @@ web app is at `http://opendmd.local/`. [Install](docs/guide/install.md) has the 
 From source: `make fw-release && make flasher` (see [For developers](docs/developers.md)).
 
 ## What it does
+
+<!-- site:features -->
 
 - **Library:** search, browse by category and platform, preview each GIF with the panel look,
   send it to the panel, and add, rename or delete GIFs.
@@ -64,7 +98,8 @@ The demo card in these screenshots holds the panel's own effects and the
 
 The documentation is also at **[opendmd.github.io](https://opendmd.github.io/)**.
 
-- [Install](docs/guide/install.md) and [Updating](docs/guide/updating.md)
+- [What you need](docs/guide/hardware.md), [Install](docs/guide/install.md) and
+  [Updating](docs/guide/updating.md)
 - [The web app](docs/guide/web-app.md), [Create Art](docs/guide/create-art.md) and
   [Effects and live items](docs/guide/effects.md)
 - [The SD card](docs/guide/card.md): where GIFs go and how their names are read
@@ -83,4 +118,7 @@ Either [Apache 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option. Contr
 dual licensed the same way.
 
 OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
-project can't relicense or redistribute, so bring your own card or make art with Create Art.
+project can't relicense or redistribute: get the DMDoS GIF pack from
+[dmdos.net](https://dmdos.net/), or make your own with Create Art. The animations on the
+OpenDMD site are the panel's own effects and live items, recorded from the simulator, and the
+CC0 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites.
