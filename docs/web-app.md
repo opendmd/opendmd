@@ -200,8 +200,7 @@ switch for an animation you make or edit there, and a GIF that is on stays
 on when you edit it there and replace it. The choice is kept on
 the card in `/sets/.smooth` and survives clearing the playback cache.
 `opendmd-pack smooth analyse <card> [--write]` lists (and can switch on)
-every GIF worth smoothing, and `opendmd-pack convert` honours the list. The
-experiment behind it is [`docs/tweening-experiment.md`](tweening-experiment.md).
+every GIF worth smoothing, and `opendmd-pack convert` honours the list.
 
 ## Favourites, hiding and schedules
 

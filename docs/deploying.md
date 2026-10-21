@@ -98,7 +98,7 @@ needs ~16 KB of heap (canvas included) against ~27 KB for the original
 through the same decoder, is 0.61x its size on average, and lives in a
 directory of ~15 entries, so the ESP32 never scans the 3,781-file
 `gifs/Consoles` for it (each open there costs ~330 ms and shows as a late
-frame). Both are measured in CLAUDE.md ("GIF heap budget", "Frame time").
+frame).
 
 ```bash
 # A copy of every GIF; --verify plays copy and original and compares every
@@ -137,8 +137,8 @@ until curl -s -X DELETE "http://opendmd.local/api/files/odm?recursive=1" | grep 
 curl -X DELETE http://opendmd.local/api/cache/failed   # the old failure list went with odm/; start clean
 ```
 
-On the rig the stock card's tree (7,970 copies, 9,662 entries with their
-directories) took 62 requests, 250 s, while the panel played (the deletes
+On a stock card the tree (7,970 copies, 9,662 entries with their
+directories) takes about 60 requests, about 4 minutes, while the panel played (the deletes
 hold the card, so expect late frames meanwhile).
 
 The default playlist is `/filelist.txt` ("All files" in the app); `{"set":""}`
@@ -364,29 +364,23 @@ that changed it, push the web app from the same tree (the flasher and
 
 ## 3. What a healthy install looks like
 
-`curl http://opendmd.local/api/status` — numbers measured on the rig
-(CLAUDE.md, "Heap ceiling" and "Frame time"):
+`curl http://opendmd.local/api/status` — typical numbers on a stock card:
 
 | field | `filelist.txt`, few files prepared (mostly GIFs) | every file played from a prepared copy |
 |---|---|---|
-| `version` / `variant` | `0.3.0` / `4mb` | same |
+| `version` / `variant` | the release, e.g. `0.3.13` / `4mb` | same |
 | `manifest` | `/sdcard/filelist.txt` | `/sdcard/filelist.txt` (the copies are found per file) |
 | `index_state` | `ready` | `ready` |
 | `www_version` / `www` | the `git describe` of the `make web` that built the pack in flash; `www.ok` `true`, `www.error` `null` | same |
-| `heap.free` | ~62-64 KB (originals through gifslim at cap 12; 0.3.0 with the `gif` crate: ~49-60 KB) | ~76 KB (copies through gifslim at cap 9; 75.9-76.2 KB over 90 s idle on a 645-copy set) |
-| `heap.floor` (sampled low-water) | 24,980 B over the first 10 min after boot, which included deleting the old `odm/` tree (0.3.0: 12-18 KB; the older ~55-58 KB figures predate transitions and Follow) | 38,204 B over the first 2.5 min after boot (boot to idle on the copy set), 27,032 B after 120 s of `api-load WORKERS=3` |
+| `heap.free` | ~62-64 KB (originals through gifslim at cap 12) | ~76 KB (copies through gifslim at cap 9; 75.9-76.2 KB over 90 s idle on a 645-copy set) |
+| `heap.floor` (sampled low-water) | ~25 KB over the first 10 min after boot | 38,204 B over the first 2.5 min after boot (boot to idle on the copy set), 27,032 B after 120 s of `api-load WORKERS=3` |
 | `refresh_hz` | 100 | 100 |
 | `deadline_misses` | a handful per few minutes idle (19 in 5 min, worst ~520 ms: opening a file in a big directory) | 0 idle; 2 (worst 3 ms) in 2 min of back-to-back downloads of the same set |
 | `worst_lateness_ms` | up to ~550 | 0 idle, single digits under load |
 | `sd.mounted` | `true` | `true` |
 
-The heap rows were measured on the rig on 2026-09-24 with no copies on the
-card (5 min idle on `filelist.txt`, Dissolve, Follow RePlayOS in attract);
-the other rows are older measurements (per-file copy resolution with 200 of
-the 10,133 entries prepared as the retired `.odm` copies: 20 misses in 5
-min, worst 443 ms; each GIF open first pays a ~5-6 ms miss looking for its
-copy). The right column's misses were measured with a 200-entry set of
-`.odm` copies.
+Each GIF opened without a copy pays a ~5-6 ms miss looking for one, and
+opening a file in a big directory can show as a late frame.
 
 A floor that keeps falling towards 5 KB (`config::HEAP_RESERVE`, where the
 server starts answering 503) or misses by the hundred while nobody is using

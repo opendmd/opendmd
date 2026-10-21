@@ -108,8 +108,7 @@ Downloads and uploads both run on one transfer task, one at a time, so a
 slow or stalled client never holds up the API: an upload that sends nothing
 for 5 s, or takes over 120 s, is abandoned (`408`) and its partial file
 removed.
-The arithmetic is in "Heap ceiling" in [`CLAUDE.md`](../CLAUDE.md). Try it with
-`make api-load HOST=… WORKERS=1`.
+Try it with `make api-load HOST=… WORKERS=1`.
 
 Both `/api/status` and the serial heartbeat report the numbers this is judged
 on — frame-deadline misses, the worst lateness seen, and the sampled heap

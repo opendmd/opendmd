@@ -78,8 +78,7 @@ offset  size  field
 - the `--version-file` itself is left out.
 
 The firmware sends a gzip entry with `Content-Encoding: gzip`, without
-looking at `Accept-Encoding` (every browser accepts it: see "Serving gzip"
-in CLAUDE.md), and a `Content-Length` of the stored bytes.
+looking at `Accept-Encoding` (every browser accepts it), and a `Content-Length` of the stored bytes.
 
 The packer prints `pack: N B of 1,280 KB (P%)` and refuses a pack larger
 than `--max-bytes` (default and `make web`'s: 1,310,720, the partition),
@@ -109,7 +108,7 @@ its gzip budgets (which are about load time over WiFi, not flash).
   pack through the flash cache the display loop runs from. The tcpip task
   is pinned to CPU0 as well (`CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0`), which
   is what took a flat-out UI download from +66 to +8 deadline misses per
-  90 s (CLAUDE.md, "Frame time", has the numbers).
+  90 s.
 - **Updating** (`PUT /api/www`, `www::receive`, on the stream task): the
   whole pack as the body, `Content-Length` required (411 without, 413 over
   the partition). The first 64 bytes are read and parsed before anything is
@@ -128,10 +127,8 @@ its gzip budgets (which are about load time over WiFi, not flash).
     exactly as it was**, still served. Only a staged pack that read back
     good is written to flash, from the card (~3 s for 800 KB, most of it
     the erase pauses).
-  - **Card reads are retried.** Seen on a 64 GB card at 40 MHz: one read
-    of the staged pack failed with a data CRC error (`sdmmc_read_sectors_dma
-    … 0x108`) in a pass that read the rest fine; before 2026-10-06 that
-    happened in the copy, after the erase, and left no web app. Now every
+  - **Card reads are retried.** A card can fail one read with a data CRC
+    error and read the rest fine, so every
     read of the staged file, in the check and in the copy, is tried up to
     `config::WWW_CARD_READ_TRIES` (4) times, 100/200/300 ms apart, the file
     opened again each time (FATFS remembers a disk error in the open file
@@ -149,19 +146,9 @@ its gzip budgets (which are about load time over WiFi, not flash).
     pack is deleted; one the card will not read stays for the next boot.
     A new push replaces it either way. The boot task does this before it
     starts the network, so WiFi comes up that much later (~9 s for 877 KB).
-  - **Drilled** on the spare (2026-10-06, 20 MHz card) with temporary
-    fault injection (reads of the staged file past 256 KB failing with
-    `EIO`; not in the tree): failing every attempt in the check, the PUT
-    was a 500 after 3.7 s naming the byte and the error, and `/` kept
-    serving the old pack; failing two attempts, the push succeeded (12.0 s,
-    "1 read needed another attempt"); failing every attempt in the copy,
-    the PUT was a 500 after 9.9 s (two whole copies), `/` a 503 saying the
-    checked pack stays on the card — then the card-failure rule (3 errors
-    in 60 s, the check's failure included) restarted the board and the
-    boot wrote the staged pack back in 8.8 s.
   - **Without a card** (none, one that cannot be read, or one where
     `/update/www.pack.part` cannot be created), the body is written to
-    flash as it arrives, as before: a failure part-way leaves no web app
+    flash as it arrives: a failure part-way leaves no web app
     until a good pack is written (the setup page and the API carry on).
     The log says which it was: `www: staging on the card (…)` only once
     the staging file exists, otherwise `www: no card staging (<reason>):
