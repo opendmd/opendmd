@@ -271,17 +271,34 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             let set = c.settings.lock().unwrap();
             looks_json(&set)
         };
+        let recent = query_param(req.query(), "recent").as_deref() == Some("1");
         let json = {
             let s = c.status.lock().unwrap();
-            status_json(&s, &looks)
+            status_json(&s, &looks, recent)
         };
         req.json(&json)
     })?;
 
     let c = ctx.clone();
     server.route("/api/skip", Method::Post, move |req| {
-        let _ = c.cmd.send(Command::Skip);
-        req.json(r#"{"ok":true}"#)
+        // `?back=1`: Previous, one step back through Recently played.
+        if query_param(req.query(), "back").as_deref() != Some("1") {
+            let _ = c.cmd.send(Command::Skip);
+            return req.json(r#"{"ok":true}"#);
+        }
+        let (tx, rx) = mpsc::channel();
+        if c.cmd.send(Command::Back(tx)).is_err() {
+            return req.error(503, "503 Service Unavailable", "player not running");
+        }
+        match rx.recv_timeout(REPLY_TIMEOUT) {
+            Ok(Ok(())) => req.json(r#"{"ok":true}"#),
+            Ok(Err(PlayError::NotFound(e))) => req.not_found(&e),
+            Ok(Err(PlayError::Unplayable(e))) => req.error(415, "415 Unsupported Media Type", &e),
+            Ok(Err(PlayError::NoPlaylist)) => {
+                req.error(503, "503 Service Unavailable", "no playlist is running")
+            }
+            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+        }
     })?;
 
     let c = ctx.clone();
@@ -1695,13 +1712,20 @@ fn applied_json(a: &Applied) -> String {
 /// moment this is built, and `now_playing.elapsed_ms` the file's position at
 /// that same moment — the pair a browser needs to put its preview in step
 /// with the panel, correcting for its own request latency the NTP way.
-fn status_json(s: &Status, looks: &str) -> String {
+fn status_json(s: &Status, looks: &str, recent: bool) -> String {
     let t = s.epoch.elapsed();
+    // `?recent=1`: Recently played, newest first, and which is on screen.
+    let recent = if recent {
+        let paths: Vec<String> = s.recent.paths().map(|p| json_string(&p)).collect();
+        format!(r#""recent":[{}],"recent_at":{},"#, paths.join(","), s.recent.cursor())
+    } else {
+        String::new()
+    };
     let www = crate::www::info();
     format!(
         concat!(
             r#"{{"version":{},"variant":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"#,
-            r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}}},"paused":{},"#,
+            r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}}},"paused":{},{}"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"heap_floor_at":{},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"#,
@@ -1724,6 +1748,7 @@ fn status_json(s: &Status, looks: &str) -> String {
         s.position_at(t).as_millis(),
         s.frame,
         s.paused,
+        recent,
         s.entries,
         json_string(&s.manifest),
         json_string(s.index_state),

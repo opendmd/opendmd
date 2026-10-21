@@ -53,6 +53,16 @@ names the format or shows a copy's path.
   bloom, gamma, flat) are here too and are remembered per browser. In local
   mode this view is the simulator: a manifest or the whole folder, a platform
   filter, shuffle and a seed, with the firmware's 3-30 s dwell.
+  **Recently played** (under the preview) and **Previous** / **Play again**
+  (beside Pause and Skip): the device keeps the last 16 distinct files the
+  panel started, wherever they came from (`opendmd_core::history`, 640 B of
+  RAM, gone at a reboot); Now asks for it (`/api/status?recent=1`) only when
+  the file changes. Titles as the Library shows them, the one on screen
+  marked; a tap plays it again (`POST /api/play`), Play again restarts the
+  file on screen, and Previous is `POST /api/skip?back=1`, which walks back
+  one entry a press (twice is two back, not a flip between the last two).
+  The simulator keeps the same list in the page by the same rules; firmware
+  without it hides Previous and the list.
 - **Library** — the GIFs on the player, and only those (finding new art is
   **Create Art**'s). One row across the top: a search field (titles, normalised
   the way the core matches them; when nothing matches, a link searches the
