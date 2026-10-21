@@ -60,6 +60,7 @@ PAGES = {
     "docs/developers.md": "dev/index.html",
     "docs/api.md": "dev/api.html",
     "docs/simulator.md": "dev/simulator.html",
+    "docs/writing-effects.md": "dev/effects.html",
     "hardware/PINOUT.md": "dev/pinout.html",
 }
 # Pages that moved: old published path -> new one, kept as redirects.
@@ -94,6 +95,7 @@ MENU = [
     ("Building from source", "dev/index.html"),
     ("HTTP API", "dev/api.html"),
     ("The simulator", "dev/simulator.html"),
+    ("Writing an effect", "dev/effects.html"),
     ("Hardware pinout", "dev/pinout.html"),
 ]
 # The installer page: ESP Web Tools, pinned (the flashing itself is
