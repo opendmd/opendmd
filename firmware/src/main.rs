@@ -88,6 +88,8 @@ use std::time::{Duration, Instant};
 use crate::http::{Ctx, NetCommand};
 use crate::nvs_config::{Config, Settings};
 use crate::panel::{Panel, PanelConfig};
+use opendmd_core::look::{GlowLevel, Look};
+use opendmd_core::panel_test::{self, PanelTest};
 use opendmd_core::panel_timing::{self, Effects, PanelOp, PanelTiming, Tuner};
 use crate::sd::{SdBus, SdCard, SdSource};
 use crate::show::{Screen, CARD_FAILING};
@@ -459,6 +461,9 @@ fn main() -> Result<()> {
     let mut pending: Option<Box<boot::Handover>> = None;
     // With the card but no engine: when the playlist was last tried.
     let mut last_build_try: Option<Instant> = None;
+    // The panel-timing test (`POST /api/panel/test`): while it runs it owns
+    // the panel and the canvas, and nothing plays.
+    let mut ptest: Option<PanelTest> = None;
 
     loop {
         // 0. Safe start: extended once when the network comes up, then the
@@ -563,6 +568,9 @@ fn main() -> Result<()> {
                     reply,
                 } => {
                     let next = *next;
+                    // A settings change ends the panel test first: its live
+                    // timing and the look go back before anything applies.
+                    end_panel_test(&mut ptest, &mut panel, &mut canvas, &settings, "a settings change");
                     // A confirm must find a trial running (it may have just
                     // reverted): refused before anything is saved.
                     if panel_op == Some(PanelOp::Confirm) && tuner.trial.is_none() {
@@ -924,6 +932,69 @@ fn main() -> Result<()> {
                         &mut canvas,
                     );
                 }
+                Command::PanelTest { setting, reply } => {
+                    let outcome = match setting {
+                        Some(_) if tuner.trial.is_some() => Err(panel_test::TRIAL_RUNNING.to_string()),
+                        Some(_) if sched.off() => Err(panel_test::PANEL_OFF.to_string()),
+                        Some(s) => {
+                            if ptest.is_none() {
+                                // The file on screen goes (its decoder's heap
+                                // back; the next one opens after the test),
+                                // and the patterns go out untinted, unglowed.
+                                if let Some(e) = engine.as_mut() {
+                                    e.drop_current(&mut canvas);
+                                }
+                                panel.set_display(Look::Colour, GlowLevel::Off);
+                            }
+                            let t = PanelTest::start(s, tuner.running, epoch.elapsed());
+                            log::info!(
+                                "panel test: {} A {} / B {} for {} s",
+                                s.name(),
+                                t.a.to_nvs(),
+                                t.b.to_nvs(),
+                                panel_test::LIMIT.as_secs()
+                            );
+                            ptest = Some(t);
+                            Ok(Applied::unchanged(0))
+                        }
+                        None => {
+                            end_panel_test(&mut ptest, &mut panel, &mut canvas, &settings, "stopped");
+                            Ok(Applied::unchanged(0))
+                        }
+                    };
+                    let _ = reply.send(outcome);
+                }
+            }
+        }
+
+        // The panel-timing test: its pictures and live timing instead of
+        // the engine or the status card (neither is ticked, so nothing goes
+        // into Recently played), until it is stopped or its time is up.
+        if let Some(t) = ptest.as_mut() {
+            match t.step(epoch.elapsed()) {
+                panel_test::Step::Draw {
+                    pattern,
+                    side,
+                    timing,
+                    ..
+                } => {
+                    panel.set_live_timing(&timing.effective());
+                    panel_test::draw(&mut canvas, pattern, side);
+                    panel.blit(&mut canvas);
+                }
+                panel_test::Step::Wait(_) => {}
+                panel_test::Step::End => {
+                    end_panel_test(&mut ptest, &mut panel, &mut canvas, &settings, "time is up")
+                }
+            }
+            if ptest.is_some() {
+                fresh = true;
+                if let Ok(mut s) = status.lock() {
+                    s.uptime_secs = epoch.elapsed().as_secs();
+                    s.heap_free = free_heap();
+                }
+                thread::sleep(config::OFF_SLEEP);
+                continue;
             }
         }
 
@@ -2534,6 +2605,27 @@ fn panel_effects(
         log::info!("panel timing: restarting on the saved settings {}", tuner.saved.to_nvs());
         REBOOT_PENDING.store(true, Ordering::Relaxed);
     }
+}
+
+/// End the panel-timing test, if one runs: the timing that ran before it
+/// (the saved settings: a test never starts during a trial, and a settings
+/// change ends it before it applies) and the look back, the canvas black
+/// (the next file arrives from black; the status card redraws on it).
+fn end_panel_test(
+    test: &mut Option<PanelTest>,
+    panel: &mut Panel,
+    canvas: &mut Canvas,
+    settings: &Settings,
+    why: &str,
+) {
+    let Some(t) = test.take() else {
+        return;
+    };
+    panel.set_live_timing(&t.restore.effective());
+    panel.set_display(settings.look, settings.glow);
+    canvas.clear();
+    panel.blit(canvas);
+    log::info!("panel test: ended ({why}), timing back to {}", t.restore.to_nvs());
 }
 
 /// Reboot after the pending replies: so the in-RAM fallback index can be
