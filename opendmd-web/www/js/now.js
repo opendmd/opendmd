@@ -10,6 +10,7 @@ import { app, playlistLabel } from './state.js';
 import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
+import { Overrides, moreButton, fav } from './overrides.js';
 import { h, clear, on, store, debounce, toast, bytes, uptime, label, niceName, flagName, brightSlider } from './util.js';
 
 const POLL_MS = 500;
@@ -17,8 +18,24 @@ const POLL_MS = 500;
 // "Exolon2 · Spectrum · Slide": the platform, category and flags by name.
 const tags = (e) => [e.platform, e.category && niceName(e.category), ...e.flags.map(flagName)].filter(Boolean).map((t) => ' · ' + t).join('');
 
+// ★: the GIF on screen a favourite in the playlist playing (not live items).
+function favButton() {
+  const ov = new Overrides(), b = h('button.more', { id: 'now-fav', hidden: true, onclick: () => ov.set(b.p, fav(ov.get(b.p))) });
+  b.ov = ov;
+  b.set = (p, list) => {
+    b.hidden = !(b.p = p) || p[0] == '@' || !list;
+    if (list && list != ov.path) ov.load(list);
+    const on = ov.get(p)?.w > 1;
+    b.textContent = on ? '★' : '☆';
+    b.title = b.ariaLabel = `Favourite in “${ov.name}”`;
+    b.ariaPressed = on;
+  };
+  ov.onChange = () => b.set(b.p, ov.path);
+  return b;
+}
+
 // Recently played, newest first, `at` on screen; a tap plays one again.
-function recentCard(prev, pick) {
+function recentCard(prev, pick, fb) {
   const list = h('div.list', { id: 'now-recent' });
   const card = h('div.card', { hidden: true }, h('h3', { style: 'margin-top:0' }, 'Recently played'), list);
   card.set = (paths, at) => {
@@ -26,7 +43,8 @@ function recentCard(prev, pick) {
     prev.disabled = at + 1 >= paths.length;
     clear(list, paths.map((p, k) => {
       const e = app.wasm.parsePath(p);
-      return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(e).slice(3)));
+      return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(e).slice(3)),
+        fb.ov.path && p[0] != '@' && moreButton(fb.ov, p));
     }));
   };
   return card;
@@ -50,7 +68,8 @@ function mountDevice(el) {
   const pauseBtn = h('button', { id: 'now-pause', onclick: togglePause }, 'Pause');
   const prevBtn = h('button', { id: 'now-prev', hidden: true, onclick: back }, 'Previous');
   const againBtn = h('button', { id: 'now-again', onclick: () => pick(app.status?.now_playing?.path) }, 'Play again');
-  const rc = recentCard(prevBtn, pick);
+  const fb = favButton();
+  const rc = recentCard(prevBtn, pick, fb);
   const bright = brightSlider('now-bright', app.config?.brightness ?? 96);
   bright.ceil(app.config?.max_brightness);
   const grid = h('span.figs', { id: 'now-stats' });
@@ -68,7 +87,7 @@ function mountDevice(el) {
   el.append(
     banner,
     h('div.card', canvas, cap, sdLine,
-      h('div.row.capl', h('span.grow', title, h('span.muted', tagsEl, ' · ', ord), ' ', followEl, ' ', conn, meta),
+      h('div.row.capl', h('span.grow', title, ' ', fb, h('span.muted', tagsEl, ' · ', ord), ' ', followEl, ' ', conn, meta),
         h('label.cap', follow, 'Follow the panel')),
       h('div.row', { style: 'margin-top:12px' }, prevBtn, againBtn, pauseBtn, h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'),
         h('label', 'Brightness', bright.el))),
@@ -177,6 +196,7 @@ function mountDevice(el) {
     ord.textContent = `${np.ordinal} of ${s.entries.toLocaleString()}`;
     pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
     againBtn.disabled = !np.path;
+    fb.set(np.path, s.manifest && app.activePath);
     const b = bannerFor(s, () => setTimeout(poll, 300));
     banner.hidden = !b;
     banner.dataset.mode = s.mode || 'normal';
@@ -232,7 +252,7 @@ function mountDevice(el) {
   render(app.status);
   return {
     show() { poll(); clearInterval(timer); timer = setInterval(poll, POLL_MS); },
-    hide() { clearInterval(timer); },
+    hide() { clearInterval(timer); fb.ov.path = ''; }, // read again on return
   };
 }
 
@@ -247,7 +267,8 @@ function mountLocal(el) {
   const pauseBtn = h('button', { id: 'now-pause', disabled: true, onclick: () => { preview.setPaused(!preview.paused); pauseBtn.textContent = preview.paused ? 'Resume' : 'Pause'; } }, 'Pause');
   const nextBtn = h('button', { id: 'now-skip', disabled: true, onclick: () => next() }, 'Next');
   const prevBtn = h('button', { id: 'now-prev', disabled: true, onclick: () => cur + 1 < hist.length && show(hist[++cur]) }, 'Previous');
-  const rc = recentCard(prevBtn, (p) => show(p, 1));
+  const fb = favButton();
+  const rc = recentCard(prevBtn, (p) => show(p, 1), fb);
   let list = [];
   let i = -1;
   // Recently played, by the device's rules (opendmd-core history.rs).
@@ -256,7 +277,7 @@ function mountLocal(el) {
 
   el.append(
     h('div.card', canvas,
-      h('div.row.capl', h('span.grow', title, ' ', line), h('span.cap', 'One file in memory at a time, with the firmware’s 3–30 s dwell')),
+      h('div.row.capl', h('span.grow', title, ' ', fb, ' ', line), h('span.cap', 'One file in memory at a time, with the firmware’s 3–30 s dwell')),
       h('div.row', { style: 'margin-top:12px' },
         h('label', 'Playlist', listSel), h('label', 'Platforms', plats), h('label', shuffle, 'Shuffle'), h('label', 'Seed', seed),
         h('button.pri', { id: 'sim-play', onclick: play }, 'Play'), prevBtn, pauseBtn, nextBtn)),
@@ -304,6 +325,7 @@ function mountLocal(el) {
       cur = 0;
       hist = [path, ...hist.filter((p) => p !== path)].slice(0, 16);
     }
+    fb.set(path, listSel.value);
     rc.set(hist, cur);
     title.textContent = label(app.wasm.parsePath(path));
     await preview.show(path, (p) => app.previewBytes(p));
