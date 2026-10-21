@@ -25,9 +25,10 @@ showed last, even while no page was open: tap one to play it again. **Play
 again** restarts what is on now, and **Previous** steps back one at a time.
 
 Like what's on? Tap **☆** next to the title to make it a favourite in the
-playlist that's playing (it turns to **★**; tap again to undo). Hover over
-it to see which playlist. The **…** on a Recently played GIF has the rest:
-play less often, hide, play longer. Clocks, text and effects have no ☆.
+playlist that's playing (it turns to **★**; tap again to undo). The
+message that pops up names the playlist. The **…** on a Recently played
+GIF has the rest: play less often, hide, play longer. Clocks, text and
+effects have no ☆.
 
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
