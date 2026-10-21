@@ -19,8 +19,7 @@
 - /demo/       the web app with the demo card (tools/demo-card.py) beside it:
                with no player answering, it loads demo/index.json and plays
                that card in the browser (js/source.js, demoCard)
-- /art/        the strip across the top of every page, the landing page's
-               tiles and the wordmark (tools/site-art.py: recordings of the
+- /art/        the landing page's tiles and the wordmark (tools/site-art.py: recordings of the
                panel's own effects and live items, and CC0 sprites), drawn
                as LEDs by CSS
 
@@ -135,19 +134,6 @@ background:#000 radial-gradient(closest-side,#1d1d20 50%,transparent 75%) 0 0/ca
 background:radial-gradient(closest-side,transparent 62%,rgba(0,0,0,.72) 100%);
 background-size:calc(100% / var(--cols)) calc(100% / var(--rows))}
 
-/* The strip across the top */
-.strip{position:relative;overflow:hidden;background:#000;border-bottom:1px solid var(--line);--led:3px}
-.strip::before,.strip::after{content:"";position:absolute;top:0;bottom:0;width:48px;z-index:1;pointer-events:none}
-.strip::before{left:0;background:linear-gradient(90deg,#000,transparent)}
-.strip::after{right:0;background:linear-gradient(-90deg,#000,transparent)}
-.strip .track{display:flex;width:max-content;animation:marquee 90s linear infinite}
-.strip:hover .track,.still .strip .track{animation-play-state:paused}
-.strip .led{flex:none;width:calc(128 * var(--led));margin:calc(2 * var(--led)) calc(3 * var(--led))}
-.strip .led img{height:calc(32 * var(--led))}
-.strip button{position:absolute;right:8px;bottom:8px;z-index:2;font:600 12px system-ui,sans-serif;color:var(--fg);
-background:rgba(20,21,24,.85);border:1px solid var(--line);border-radius:999px;padding:3px 10px;cursor:pointer}
-@keyframes marquee{to{transform:translateX(-50%)}}
-
 .wrap{display:grid;grid-template-columns:248px minmax(0,1fr);max-width:1260px;margin:0 auto}
 nav{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:24px 16px;border-right:1px solid var(--line)}
 nav .brand{display:inline-block;margin:0 8px 18px;padding:8px 10px;border-radius:8px;background:#000;box-shadow:0 0 0 1px var(--line),0 0 24px rgba(247,165,49,.15)}
@@ -236,18 +222,12 @@ footer p{max-width:860px;border-top:1px solid var(--line);padding-top:16px}
   main{padding:22px 16px 56px}
   footer{padding:0 16px 32px}
   h1{font-size:28px}
-  .strip{--led:2px}
-  .strip .track{animation-duration:70s}
   .hero .plate{padding:12px 14px}
   .hero .plate .led{width:280px}
   .hero .tag{font-size:18px}
   ol.steps>li{padding:12px 14px 12px 56px}
   ol.steps>li::before{left:12px;width:30px;height:30px}
   .cards{grid-template-columns:minmax(0,1fr)}
-}
-@media (prefers-reduced-motion:reduce){
-  .strip .track{animation:none}
-  .strip button{display:none}
 }
 """
 
@@ -263,7 +243,6 @@ PAGE = """<!doctype html>
 </head>
 <body>
 <a class="skip" href="#main">Skip to the page</a>
-{strip}
 <div class="wrap">
 <nav aria-label="Site"><a class="brand" href="{up}index.html">{brand}</a><div class="links">{menu}</div></nav>
 <main id="main">
@@ -274,22 +253,11 @@ PAGE = """<!doctype html>
 the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
 OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
 Code under <a href="{up}LICENSE-MIT.txt">MIT</a> or <a href="{up}LICENSE-APACHE.txt">Apache 2.0</a>.</p></footer>
-</div>{script}
+</div>
 </body>
 </html>
 """
 DESCRIPTION = "OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display."
-# Pauses the strip (and swaps every animation for its still) on request, remembered per browser.
-SCRIPT = """
-<script>
-(function(){var d=document.documentElement,b=document.getElementById("strip-pause");if(!b)return;
-function set(p){d.classList.toggle("still",p);b.setAttribute("aria-pressed",p?"true":"false");b.textContent=p?"Play":"Pause";
-document.querySelectorAll("img[data-still]").forEach(function(i){if(!i.dataset.anim)i.dataset.anim=i.getAttribute("src");i.src=p?i.dataset.still:i.dataset.anim});
-try{localStorage.setItem("opendmd-still",p?"1":"")}catch(e){}}
-var s=false;try{s=localStorage.getItem("opendmd-still")==="1"}catch(e){}
-if(s)set(true);b.addEventListener("click",function(){set(!d.classList.contains("still"))})})();
-</script>"""
-
 LINK = re.compile(r'(\]\(|(?:src|href)=")([^)"\s]+)')
 
 
@@ -349,19 +317,6 @@ def led(up: str, item: dict, alt: str | None = None, lazy: bool = False, size: t
     return (f'<picture class="led"><source srcset="{still}" media="(prefers-reduced-motion: reduce)">'
             f'<img src="{gif}" data-still="{still}" alt="{alt}" width="{w}" height="{h}" decoding="async"'
             f'{LAZY if lazy else ""}></picture>')
-
-
-def strip(up: str, art: dict) -> str:
-    """The strip across the top: the strip's animations twice over (the
-    second set hidden from screen readers), scrolled by CSS half its width
-    so it loops seamlessly."""
-    items = [i for i in art["items"] if "strip" in i["where"]]
-    once = "".join(led(up, i) for i in items)
-    again = "".join(led(up, i, alt="") for i in items)
-    return (f'<header class="strip" aria-label="Animations drawn by OpenDMD">'
-            f'<div class="track">{once}<div style="display:contents" aria-hidden="true">{again}</div></div>'
-            f'<button type="button" id="strip-pause" aria-pressed="false" aria-label="Pause the animations">Pause</button>'
-            f'</header>')
 
 
 def tiles(art: dict) -> str:
@@ -498,7 +453,7 @@ def main() -> None:
         brand = (f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
                  f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>')
         dest.write_text(PAGE.format(title=html.escape(title), description=html.escape(DESCRIPTION), up=up, head=head,
-                                    strip=strip(up, art), brand=brand, menu=menu(page), body=body, script=SCRIPT))
+                                    brand=brand, menu=menu(page), body=body))
     # Pictures only the GitHub copy of a doc shows (the README's hero) stay off the site.
     assets = {a for a in assets if any(posixpath.basename(a) in b for b in bodies)}
     for target in sorted(assets):
