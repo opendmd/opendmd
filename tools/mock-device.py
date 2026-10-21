@@ -150,6 +150,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   schedule resumes at the next dwell. 404 if it does not open, 415 if it does
   not start with `GIF8` (the firmware's error text there comes from the
   decoder; here it is a fixed one), 400 for a relative or escaping path.
+- **Recently played** (opendmd_core::history): every file start is
+  recorded (distinct paths, newest first, at most 16 / 640 B stored; not
+  `@power-on` or `@card:`); `GET /api/status?recent=1` adds `recent` and
+  `recent_at` after `paused`, and `POST /api/skip?back=1` (Previous) plays
+  the entry one older than the one on screen without recording it (404
+  `nothing earlier` at the oldest).
 - **Maximum brightness.** `max_brightness` (16..255, default 128 =
   `BRIGHTNESS_SAFE_MAX`) is a config field; a `brightness` above it (or the
   same request's) is a 400, lowering it lowers `brightness` in the same save,
@@ -1586,6 +1592,12 @@ class Player:
         self.file_t0 = time.monotonic()
         self.frozen_at = 0.0
         self.delays: dict[str, list[int]] = {}
+        # Recently played (opendmd_core::history): distinct paths, newest
+        # first; `recent_at` is the one on screen after Previous,
+        # `recent_pending` the entry Previous asked for (-1: none).
+        self.recent: list[str] = []
+        self.recent_at = 0
+        self.recent_pending = -1
         self.rebuild_playlist()
 
     def _frozen(self) -> bool:
@@ -1675,6 +1687,33 @@ class Player:
         self.ordinal += 1
         self.gifs_started += 1
         self.last_advance = self.file_t0 = time.monotonic()
+        self.started(path)
+
+    def started(self, path: str):
+        """History::started: the panel started `path`."""
+        stored = recent_stored(path)
+        if stored is None:
+            return
+        pending, self.recent_pending = self.recent_pending, -1
+        if 0 <= pending < len(self.recent) and self.recent[pending] == path:
+            self.recent_at = pending
+            return
+        if self.recent_at:
+            self.recent.insert(0, self.recent.pop(self.recent_at))
+            self.recent_at = 0
+        if path in self.recent:
+            self.recent.remove(path)
+        self.recent.insert(0, path)
+        while len(self.recent) > RECENT_LEN or sum(len(recent_stored(p)) + 1 for p in self.recent) > RECENT_BYTES:
+            self.recent.pop()
+
+    def back(self) -> str | None:
+        """History::back: the entry one older than the one on screen."""
+        target = (self.recent_pending if self.recent_pending >= 0 else self.recent_at) + 1
+        if target >= len(self.recent):
+            return None
+        self.recent_pending = target
+        return self.recent[target]
 
     def advance(self):
         self.played = None
@@ -1686,6 +1725,7 @@ class Player:
         self.ordinal += 1
         self.gifs_started += 1
         self.last_advance = self.file_t0 = time.monotonic()
+        self.started(self.current())
         # The real rig: ~1 file start in 10 has its first frame a few ms
         # late (the open); steady play almost never misses, and then by 1 ms.
         if random.random() < 0.1:
@@ -1780,11 +1820,29 @@ class Player:
 
     def reset_boot(self):
         self.boot_time = time.monotonic()
+        self.recent, self.recent_at, self.recent_pending = [], 0, -1
         self.ordinal = 0
         self.gifs_started = 0
         self.pos = -1
         self.last_advance = 0.0
         self.advance()
+
+
+RECENT_LEN, RECENT_BYTES, RECENT_MAX_ENTRY = 16, 640, 200
+
+
+def recent_stored(path: str) -> str | None:
+    """opendmd_core::history's stored form of a path (/gifs/X.gif -> X), or
+    None if it is not recorded (Follow's power-on and cards, a relative path,
+    an entry over 200 B)."""
+    if not path or "\n" in path or path == "@power-on" or path.startswith("@card:"):
+        return None
+    s = path
+    if path.startswith("/gifs/") and path.endswith(".gif") and len(path) > 10 and path[6] not in "/@":
+        s = path[6:-4]
+    elif path[0] not in "/@":
+        return None
+    return s if len(s) <= RECENT_MAX_ENTRY else None
 
 
 def heap_numbers(player: Player):
@@ -2559,6 +2617,12 @@ def make_handler(ctx: Context, quiet: bool):
                 }
                 if ctx.settings["follow"] and ctx.follow.state == "attract":
                     obj["attract_live"] = attract_live_path(ctx.settings["attract"])
+                _, _, query = self.path.partition("?")
+                if query_param(query, "recent") == "1":
+                    # Recently played, right after `paused` as the firmware puts it.
+                    items = list(obj.items())
+                    k = list(obj).index("paused") + 1
+                    obj = dict(items[:k] + [("recent", list(player.recent)), ("recent_at", player.recent_at)] + items[k:])
                 if ctx.sd_state != "ok":
                     # No card the player can use: nothing plays (the boot
                     # task never hands an unreadable card over).
@@ -2567,8 +2631,28 @@ def make_handler(ctx: Context, quiet: bool):
             self.send_json(200, obj)
 
         def h_skip(self, path):
+            _, _, query = self.path.partition("?")
+            if query_param(query, "back") != "1":
+                with ctx.lock:
+                    ctx.player.advance()
+                self.send_json(200, {"ok": True})
+                return
+            # Previous: one step back through Recently played.
             with ctx.lock:
-                ctx.player.advance()
+                player = ctx.player
+                if not player.playlist:
+                    self.send_error_json(503, "no playlist is running")
+                    return
+                p = player.back()
+                if p is None:
+                    self.send_error_json(404, "nothing earlier")
+                    return
+                rel = card_path(p) if p.startswith("/") else None
+                if rel is not None and ctx.fs.read_path(rel) is None:
+                    player.recent_pending = -1
+                    self.send_error_json(404, enoent(p))
+                    return
+                player.play_now(p)
             self.send_json(200, {"ok": True})
 
         def h_pause(self, path):
