@@ -221,6 +221,11 @@ pub struct Status {
 
     /// The zone's display name (`Europe/Dublin`).
     pub tz_name: String,
+    /// Recently played (`opendmd_core::history`): the main loop records each
+    /// start with the path above; `/api/status?recent=1` lists it and
+    /// [`Command::Back`] steps through it. ~16 B here, 640 B of text from the
+    /// first start.
+    pub recent: opendmd_core::history::History,
 }
 
 impl Status {
@@ -270,6 +275,7 @@ impl Status {
             rule_until: None,
             wake_until: None,
             tz_name: String::new(),
+            recent: opendmd_core::history::History::new(),
         }
     }
 }
@@ -389,6 +395,9 @@ pub enum Command {
         path: String,
         reply: mpsc::Sender<Result<(), PlayError>>,
     },
+    /// Previous: play the entry of Recently played one older than the one on
+    /// screen (`History::back`), like `PlayNow`; `NotFound` if there is none.
+    Back(mpsc::Sender<Result<(), PlayError>>),
     /// Persist a new configuration and apply what can be applied live.
     ///
     /// NVS is owned by the main task, so the handler cannot write it itself.
