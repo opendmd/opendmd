@@ -20,6 +20,10 @@ moving preview of it drawn the way the LEDs look. Use it as a remote:
 **Skip** to the next GIF, **Pause** and **Resume**, and drag the brightness
 slider.
 
+Missed something? **Recently played** under the preview lists what the panel
+showed last, even while no page was open: tap one to play it again. **Play
+again** restarts what is on now, and **Previous** steps back one at a time.
+
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
 

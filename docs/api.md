@@ -1,9 +1,8 @@
 # OpenDMD HTTP API
 
-Everything the web app does goes through this API, and a script can do the
-same. The source of truth is `firmware/src/http.rs`. In the examples `$DMD`
-is the player's address (on the page the player serves, the examples
-already carry it).
+The web app uses only this API, and so can a script. The source of truth
+is `firmware/src/http.rs`. `$DMD` in the examples is the player's address
+(filled in on the page the player serves).
 
 ```sh
 DMD=http://opendmd.local
@@ -27,7 +26,7 @@ curl -s $DMD/api/status
   (`HTTP_MAX_SOCKETS`). Files go out and uploads come in one at a time, two
   more waiting; a third gets `503` + `Retry-After: 1` after 2 s. When the
   player needs its memory a listing or transfer is refused up front, `503` +
-  `Retry-After: 2`. Retry after the delay; do not fire requests in parallel.
+  `Retry-After: 2`. Retry after the delay, and never in parallel.
 - **Slow commands.** A playlist change waits up to 60 s for the index
   rebuild, other commands 10 s; then `504`. No player running: `503`.
 - **Paths** are card-absolute (`/gifs/Consoles/SNES_Super_Metroid_01.gif`);
@@ -52,15 +51,15 @@ that file at the root, any other name is `/sets/<name>.txt`. No `/` or `..`.
 
 ### POST /api/play
 
-Play one file now, then carry on with the playlist. The file is shown with
-the configured transition, using its prepared copy if there is one.
+Play one file now (with the transition, from its prepared copy if there is
+one), then the playlist carries on.
 
 Body: `{"path": string}`, a card-absolute GIF path or a live item (see
-"Live items" below).
+"Live items").
 
 Reply: `{"ok":true,"path":"…"}`.
 
-Errors: `400` the path is not card-absolute and is not a live item; `404`
+Errors: `400` neither card-absolute nor a live item; `404`
 the file does not open (what was playing carries on); `415` not a GIF, or a
 live item this firmware does not know (`@fx:nonsense`); `503` no playlist is
 running; `413` body over 8 KB.
@@ -74,10 +73,9 @@ curl -s $DMD/api/play --json '{"path":"@clock?seconds=1&date=1"}'
 
 Toggle pause. Reply: `{"ok":true,"paused":bool}`, the new state.
 
-While paused the panel holds the frame it was showing, and the player lets
-go of the file (its memory goes to preparing copies and to downloads). So
-resuming does not continue the same GIF: the next entry comes in with the
-transition, from the held frame.
+Paused, the panel holds its frame and the player lets go of the file (its
+memory goes to preparing copies and downloads), so resuming brings in
+the next entry, with the transition from the held frame.
 
 ```sh
 curl -s -X POST $DMD/api/pause
@@ -88,8 +86,12 @@ curl -s -X POST $DMD/api/pause
 Move on to the next entry now. No body. Reply: `{"ok":true}` (at once; the
 skip happens on the player's next frame).
 
+`?back=1` is Previous: play the `recent` entry one older than the one on
+screen (again: older still) as `/api/play` does; `404` at the oldest.
+
 ```sh
 curl -s -X POST $DMD/api/skip
+curl -s -X POST "$DMD/api/skip?back=1"
 ```
 
 ## Status and health
@@ -107,6 +109,7 @@ Counts are since boot.
 | `ip`, `wifi`, `hostname` | address; `"sta"` or `"ap"` (setup mode); name |
 | `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based |
 | `paused` | bool |
+| `recent`, `recent_at` | with `?recent=1`: up to 16 files played, newest first, once each; the index of the one on screen |
 | `entries`, `manifest` | playlist length; the playlist file in play (`/sdcard/…`) |
 | `index_state` | `"ready"`, `"building"` or `"unavailable"` |
 | `www_version`, `www` | the web app's version (null if none is good); `GET /api/www`'s object |
@@ -116,7 +119,7 @@ Counts are since boot.
 | `deadline_misses`, `worst_lateness_ms` | all late frames; the latest, ms |
 | `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: `steady`, `switch` frames ≥ `threshold_ms` late in play, or at a GIF change (first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`) |
 | `gifs_started`, `streams_aborted`, `log_drops` | files opened; responses cut short; log lines dropped |
-| `sd` | `{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots}`: the card; `readable` false when it mounts but its filesystem cannot be read (exFAT: nothing plays); `formatting`, `format_error` see `POST /api/card/format`; `error` why it is not mounted, not readable or failing; `fallback` slowed after failing at full speed; `failures` errors in the last 60 s; `reboots` card-failure restarts in the last 15 min |
+| `sd` | `{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots}`: the card; `readable` false if its filesystem cannot be read (exFAT: nothing plays); `formatting`, `format_error` see `POST /api/card/format`; `error` why it is not mounted, not readable or failing; `fallback` slowed after failing at full speed; `failures` errors in the last 60 s; `reboots` card-failure restarts in the last 15 min |
 | `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `task watchdog`, `brownout`, …; `"card failure"`, `"different card"` or null |
 | `overrides`, `hidden` | as in "Fields that recur" |
 | `mode`, `mode_until` | `normal`, `dim` or `off` (night mode); until `"HH:MM"` |
@@ -265,9 +268,8 @@ listing, streamed:
 
 `{"dir":"/gifs","entries":[{"name","size","dir"}],"count":N,"sizes":bool}`
 
-`size` is null without `sizes=1`. Sizes cost a directory scan each: a
-folder of thousands of files takes minutes with them. `404` no such
-directory.
+`size` is null without `sizes=1`; with it each costs a directory scan
+(minutes for a folder of thousands). `404` no such directory.
 
 ```sh
 curl -s "$DMD/api/files?dir=/sets&sizes=1"
@@ -314,7 +316,7 @@ curl -s -X DELETE "$DMD/api/files/cache?recursive=1"
 
 Rename a GIF: `{"from":"/gifs/A/x.gif","to":"/gifs/B/y.gif"}`. Its prepared
 copy follows; playlists and overrides are *not* rewritten (the web app
-does that itself).
+does that).
 
 Reply: `{"ok":true,"from","to","copy":"moved"|"removed"|"none","smooth":bool,"failed":bool}`.
 
@@ -334,8 +336,8 @@ A playlist is a text file, one card path a line. Read one at
 
 ### PUT /api/sets/&lt;name&gt;
 
-Write `/sets/<name>.txt` (`.txt` added if missing); the body is the file.
-If it is in play, it is reindexed at once.
+Write `/sets/<name>.txt` (`.txt` added if missing); the body is the file,
+reindexed at once if in play.
 
 Reply: `{"ok":true,"path":"/sdcard/sets/<name>.txt", entries, index,
 index_ms, overrides, hidden}`. `400` a name with `/` or `..`.
@@ -355,7 +357,7 @@ curl -s -X PUT --data-binary @filelist.txt $DMD/api/manifest
 
 ### POST /api/reindex
 
-Rebuild the index of the playlist in play (after the card changed some
+Reindex the playlist in play (after the card changed some
 other way). Reply: `{"ok":true, entries, "index":"built", index_ms, …}`.
 
 ```sh
@@ -399,12 +401,12 @@ Replace the schedule (≤ 2 KB, at most 16 rules):
  "night":{"from":"23:30","to":"07:00","mode":"off","brightness":8}}
 ```
 
-`days` are 1 (Monday) to 7 (empty or absent = every day); `set` and
-`brightness` are optional. Rules are tried in order, the first match wins; a
+`days` are 1 (Monday) to 7 (empty/absent: every day); `set` and
+`brightness` are optional. Rules are tried in order, first match wins; a
 window with `to` ≤ `from` runs past midnight. `night` (every day, beats every
 rule) has `mode` `"off"` (panel dark) or `"dim"` (at `brightness`, default
-8). A rule changes what plays without changing the saved settings. Nothing
-applies before the clock is set from the network.
+8). A rule never changes the saved settings. Nothing applies before network
+time.
 
 Reply: `{"ok":true,"rules":N,"night":bool}`. Errors: `400` a bad time, day,
 mode or playlist name (the message names the rule); `404` `set not found:
@@ -437,15 +439,15 @@ How many of the playlist's files are prepared:
 
 `{"total","prepared","state","count_ms","auto"}`: `total` the playlist's
 length; `prepared` how many have a copy (null until first counted);
-`state` `"counting"` or `"ready"` (poll until ready); `count_ms` how long the
-last count took. `auto` is the player's own preparing:
+`state` `"counting"` or `"ready"` (poll until ready); `count_ms` the last count's
+time. `auto` is the player's own preparing:
 `{"mode","state","reason","policy","session","failed","avg_full_s","avg_drip_s","eta_s","current"}`:
 `mode` is `auto_prepare`; `state` `idle`, `running`, `paused` or `done`;
 `reason` why it is not running (`off`, `playing`, `gif on screen`, `low
 memory`, `busy`, `transition`, `reindex`, `no playlist`, `card error`);
 `policy` `full` or `drip` (the pace); `session` copies made since boot;
 `failed` GIFs it cannot prepare; `avg_*_s` seconds per file at each pace;
-`eta_s` seconds left at the full pace; `current` the GIF being prepared.
+`eta_s` seconds left at full pace; `current` the GIF being prepared.
 
 ```sh
 curl -s $DMD/api/cache
@@ -453,8 +455,8 @@ curl -s $DMD/api/cache
 
 ### GET /api/cache/list
 
-Every prepared copy, streamed: `{"paths":["/cache/…"],"count":N}`.
-Subtract it from a playlist to find what is left to prepare.
+Each prepared copy, streamed: `{"paths":["/cache/…"],"count":N}`.
+Subtract it from a playlist: what is left to prepare.
 
 ```sh
 curl -s $DMD/api/cache/list | jq .count
@@ -462,7 +464,7 @@ curl -s $DMD/api/cache/list | jq .count
 
 ### GET /api/cache/failed
 
-The GIFs that cannot be prepared (and so cannot be played either), streamed:
+The GIFs that cannot be prepared (nor played), streamed:
 `[{"path":"/gifs/…","reason":"more than 256 colours"}]`, `[]` if none.
 
 ```sh
@@ -472,8 +474,8 @@ curl -s $DMD/api/cache/failed
 ### POST /api/cache/failed
 
 Record a GIF the browser could not prepare either, so the player skips it
-too: `{"path":"/gifs/….gif","reason":string}` (the reason is kept to one
-line, ≤ 200 characters). Reply: `{"ok":true,"path","added":bool}` (`added`
+too: `{"path":"/gifs/….gif","reason":string}` (the reason: one line,
+≤ 200 characters). Reply: `{"ok":true,"path","added":bool}` (`added`
 false if it was there). `400` not a `/gifs/….gif` path.
 
 ```sh
@@ -642,8 +644,8 @@ curl -s -X PUT --data-binary @dist/opendmd-0.4.0.odfw $DMD/api/firmware
 
 Paths beginning with `@` are drawn, not read from the card. Use them with
 `POST /api/play`, in a playlist line, and in `attract`. Options follow `?`
-as `key=value` pairs joined by `&`; unknown keys and bad values are ignored
-(the default stays). Colours are `RRGGBB` (`%23RRGGBB` or `#RRGGBB` also
+as `key=value&…`; an unknown key or bad value is ignored (the default
+stays). Colours are `RRGGBB` (`%23RRGGBB` or `#RRGGBB` also
 work).
 
 **`@clock`** — the time (local, from the network; `--:--` until set).
