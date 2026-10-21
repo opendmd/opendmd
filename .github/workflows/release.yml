@@ -245,7 +245,7 @@ jobs:
           gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber *
 
       - name: Publish the site
-        if: steps.plan.outputs.kind == 'release'
+        if: steps.plan.outputs.kind != 'dry'
         env:
           SITE_DEPLOY_KEY: ${{ secrets.SITE_DEPLOY_KEY }}
         run: |
