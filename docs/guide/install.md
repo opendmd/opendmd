@@ -60,7 +60,8 @@ network for you to join:
 <!-- site:steps -->
 
 1. **Join the setup network.** On your phone or computer, join the WiFi
-   network **OpenDMD-Setup**.
+   network **OpenDMD-Setup**. After a fresh install it can take a minute
+   or two to appear.
 2. **Enter your WiFi details.** Open <http://192.168.71.1/setup> in a
    browser. Type your WiFi network's name (**Scan** lists the ones nearby)
    and its password, then press **Save & reboot**.

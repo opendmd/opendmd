@@ -13,6 +13,11 @@
 //!   name labels — not at `query_len`, which would corrupt the reply whenever
 //!   the query carries an EDNS0 OPT record in its additional section.
 //!
+//! - only an A (or ANY) question gets the address. Any other type (AAAA, and
+//!   the HTTPS/SVCB lookups iOS sends alongside) gets an empty NOERROR: an A
+//!   record in reply to one is malformed, and an iPhone that sees it when it
+//!   joins skips the "sign in to network" sheet.
+//!
 //! The AP's DHCP server also has to advertise this address as the DNS server
 //! (see `wifi::WifiManager::start_ap`), or iOS and Android use cellular DNS and
 //! never see the portal at all.
@@ -163,8 +168,11 @@ fn dns_server_loop(ip: [u8; 4], stop_flag: &AtomicBool) -> anyhow::Result<()> {
                 None => continue,
             };
 
-            // Build response: header + question + one A-record answer
-            let resp_len = question_end + 16;
+            // Build response: header + question + one A-record answer, or no
+            // answer for any other type (see the module comment).
+            let qtype = u16::from_be_bytes([buf[question_end - 4], buf[question_end - 3]]);
+            let answer = qtype == 1 || qtype == 255;
+            let resp_len = question_end + if answer { 16 } else { 0 };
             if resp_len > DNS_MAX_PACKET {
                 continue;
             }
@@ -175,33 +183,22 @@ fn dns_server_loop(ip: [u8; 4], stop_flag: &AtomicBool) -> anyhow::Result<()> {
             // Response flags
             resp[2] = (DNS_FLAGS_RESPONSE >> 8) as u8;
             resp[3] = (DNS_FLAGS_RESPONSE & 0xFF) as u8;
-            // ANCOUNT = 1
+            // ANCOUNT = 1, or 0
             resp[6] = 0;
-            resp[7] = 1;
+            resp[7] = answer as u8;
             // NSCOUNT = 0, ARCOUNT = 0 (clear any additional records from query)
             resp[8] = 0;
             resp[9] = 0;
             resp[10] = 0;
             resp[11] = 0;
 
-            // Answer section
-            let ans = &mut resp[question_end..question_end + 16];
-            ans[0] = 0xC0;
-            ans[1] = 0x0C; // name pointer -> offset 12
-            ans[2] = 0x00;
-            ans[3] = 0x01; // type A
-            ans[4] = 0x00;
-            ans[5] = 0x01; // class IN
-            ans[6] = 0x00;
-            ans[7] = 0x00;
-            ans[8] = 0x00;
-            ans[9] = 0x3C; // TTL 60s
-            ans[10] = 0x00;
-            ans[11] = 0x04; // RDLENGTH 4
-            ans[12] = ip[0];
-            ans[13] = ip[1];
-            ans[14] = ip[2];
-            ans[15] = ip[3];
+            // Answer section: a pointer to the question's name, type A,
+            // class IN, TTL 60 s, RDLENGTH 4, the address.
+            if answer {
+                resp[question_end..resp_len].copy_from_slice(&[
+                    0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C, 0x00, 0x04, ip[0], ip[1], ip[2], ip[3],
+                ]);
+            }
 
             esp_idf_sys::lwip_sendto(
                 sock,

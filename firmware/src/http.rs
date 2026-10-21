@@ -241,12 +241,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     let c = ctx.clone();
     server.route("/", Method::Get, move |req| {
-        // In AP mode a device with no good web app shows the setup page, so
-        // the captive portal can always get it onto WiFi.
-        let portal = portal_target(&c).is_some();
+        // In AP mode it's the setup page, so the captive portal (and any
+        // address typed while joined to the setup network) lands on getting
+        // onto WiFi. The web app is still at /index.html there.
+        if portal_target(&c).is_some() {
+            return send_setup(req);
+        }
         stream::hand_off(req, move |req| match www::serve(req, "index.html")? {
             www::Served::Sent => Ok(()),
-            www::Served::NotFound | www::Served::Unavailable(_) if portal => send_setup(req),
             www::Served::NotFound => {
                 www::unavailable(req, "the web app in flash has no index.html")
             }

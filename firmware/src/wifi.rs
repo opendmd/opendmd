@@ -18,6 +18,8 @@
 //!   use cellular DNS and skip the captive portal entirely. The Rust
 //!   `EspNetif.handle` field is private, hence
 //!   `esp_netif_get_handle_from_ifkey`.
+//! - **The setup AP runs as AP+STA**, so the setup page's Scan works: an
+//!   AP-only radio can't scan.
 //!
 //! Everything in here runs on the network worker thread (CPU0). The display
 //! loop never calls into this module.
@@ -152,10 +154,6 @@ impl WifiManager {
     /// On-demand scan for the setup page. Unsupported in AP mode: a STA scan
     /// would tear the AP down and disconnect the browser that asked.
     pub fn scan_networks(&mut self) -> anyhow::Result<Vec<ScannedAp>> {
-        if self.state == WifiState::ApMode {
-            warn!("scan requested in AP mode — unsupported, returning empty");
-            return Ok(Vec::new());
-        }
         let aps = self
             .wifi
             .wifi_mut()
@@ -308,13 +306,16 @@ impl WifiManager {
     pub fn start_ap(&mut self) -> anyhow::Result<()> {
         info!("starting AP mode: {}", config::AP_SSID);
 
-        self.wifi
-            .set_configuration(&Configuration::AccessPoint(AccessPointConfiguration {
+        // AP+STA, with the STA side idle: only so that Scan works.
+        self.wifi.set_configuration(&Configuration::Mixed(
+            ClientConfiguration::default(),
+            AccessPointConfiguration {
                 ssid: config::AP_SSID.try_into().unwrap_or_default(),
                 auth_method: AuthMethod::None,
                 max_connections: 4,
                 ..Default::default()
-            }))?;
+            },
+        ))?;
         if self.wifi.is_started().unwrap_or(false) {
             self.wifi.stop()?;
         }
