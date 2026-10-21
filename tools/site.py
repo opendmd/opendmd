@@ -190,7 +190,7 @@ def main() -> None:
     out.mkdir(parents=True)
 
     # The demo: the app (the player sends the .gz copies; Pages compresses by itself) and its card.
-    shutil.copytree(a.www, out / "demo", ignore=shutil.ignore_patterns("*.gz"))
+    shutil.copytree(a.www, out / "demo", ignore=shutil.ignore_patterns("*.gz", ".gitignore"))
     shutil.copytree(a.card, out / "demo/demo")
 
     assets: set[str] = set()
