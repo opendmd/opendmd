@@ -380,6 +380,10 @@ DIST := dist
 FW_APP_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-app.bin
 FW_WWW_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-www.pack
 FW_FULL_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT)-full.bin
+# Panic locations name source files: the release names them from neutral
+# roots instead of this machine's paths (cargo joins these to the config's
+# rustflags).
+FW_RELEASE_REMAP := --remap-path-prefix=$(CURDIR)=/opendmd --remap-path-prefix=$(HOME)/.cargo=/cargo --remap-path-prefix=$(HOME)/.rustup=/rustup
 # The app image must leave at least this much of the factory partition free.
 FW_APP_SPARE := 65536
 
@@ -389,7 +393,7 @@ fw-release: web updater
 	@{ echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"'; \
 	   echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	   echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; } > $(FW_RELEASE_SDKCONFIG_FRAG)
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" cargo build --release --target-dir "$(FW_RELEASE_TARGET_DIR)"'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_TARGET_DIR)"'
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_RELEASE_BINARY)'
 	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
 	@desc=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
@@ -405,6 +409,7 @@ fw-release: web updater
 	cp $(FW_RELEASE_BOOTLOADER) $(DIST)/bootloader.bin
 	cp $(UPDATER_BIN) $(DIST)/updater.bin
 	cp $(UPDATER_BUILD)/build/ota_data_initial.bin $(DIST)/ota_data_initial.bin
+	@! strings $(FW_APP_IMAGE) $(DIST)/updater.bin $(DIST)/bootloader.bin | grep -q '$(HOME)' || { echo "the release names $(HOME): a build path got in"; exit 1; }
 	bash -c '. $(ESPUP_ENV) && espflash partition-table --to-binary -o $(DIST)/partition-table.bin $(FW)/partitions.csv'
 	@# The merged image: espflash lays out bootloader, table and app padded to
 	@# 4 MB with 0xFF (so otadata is erased: the bootloader boots factory);
