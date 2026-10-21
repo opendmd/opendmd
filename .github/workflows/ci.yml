@@ -82,6 +82,7 @@ jobs:
           cache-key: firmware
 
       - uses: ./.github/actions/esp-toolchain
+        id: esp
 
       - name: Cache the updater's build
         uses: actions/cache@v4
@@ -99,6 +100,14 @@ jobs:
 
       - name: Release build (make fw-release)
         run: make fw-release
+
+      - uses: ./.github/actions/esp-cache-save
+        if: always()
+        with:
+          espressif-key: ${{ steps.esp.outputs.espressif-key }}
+          espressif-hit: ${{ steps.esp.outputs.espressif-hit }}
+          fw-target-key: ${{ steps.esp.outputs.fw-target-key }}
+          fw-target-hit: ${{ steps.esp.outputs.fw-target-hit }}
 
       - name: The tree is clean after the build
         run: |
