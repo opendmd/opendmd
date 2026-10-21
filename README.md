@@ -1,14 +1,20 @@
-<h1 align="center">OpenDMD</h1>
+<h1 align="center"><img src="docs/images/wordmark.png" width="440" alt="OpenDMD"></h1>
 
 <p align="center">New open firmware and a web app for the DMDoS LED dot-matrix display.</p>
 
 <p align="center">
-  <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="License: MIT or Apache 2.0"></a>
+  <a href="https://opendmd.github.io/guide/hardware.html"><img src="https://img.shields.io/badge/for_the-DMDoS_display-33d1ff?labelColor=15171b" alt="For the DMDoS display"></a>
+  <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-MIT_%2F_Apache--2.0-5ef09a?labelColor=15171b" alt="License: MIT or Apache 2.0"></a>
+</p>
+
+<p align="center">
+  <a href="https://opendmd.github.io/demo/"><b>Try the demo in your browser →</b></a>
+  &nbsp;·&nbsp; <a href="https://opendmd.github.io/install/">Install on your display</a>
+  &nbsp;·&nbsp; <a href="https://opendmd.github.io/guide/hardware.html">What you need</a>
+  &nbsp;·&nbsp; <a href="https://opendmd.github.io/">Documentation</a>
 </p>
 
 ![A tunnel effect, drawn the way the LED panel shows it](docs/images/hero.webp)
-
-**[Try the demo in your browser](https://opendmd.github.io/demo/)** · [Documentation](https://opendmd.github.io/)
 
 <!-- site:hero -->
 
