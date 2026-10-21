@@ -15,7 +15,7 @@
 //!
 //! Only the two settings that apply live are tested ([`Setting`]): the
 //! clock edge (A rising, the default; B falling) and the latch blanking (A
-//! what runs; B two clocks more, [`variants`]). A test ends by itself after
+//! what runs; B two clocks more, at most 4, from 4 two fewer: [`variants`]). A test ends by itself after
 //! [`LIMIT`] (the browser may have gone), and ending it — however — puts back
 //! what ran before ([`PanelTest::restore`]); it never saves anything. Pure
 //! logic: the firmware draws what [`PanelTest::step`] says and applies its
@@ -24,7 +24,7 @@
 use std::time::Duration;
 
 use crate::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
-use crate::panel_timing::{PanelTiming, LATCH_MAX, LATCH_MIN};
+use crate::panel_timing::{PanelTiming, Tuner, LATCH_MAX, LATCH_MIN};
 
 /// How long one pattern is shown under one value.
 pub const SIDE: Duration = Duration::from_secs(2);
@@ -267,6 +267,27 @@ impl PanelTest {
 /// The API's 409s.
 pub const TRIAL_RUNNING: &str = "a panel trial is running: keep or undo it first";
 pub const PANEL_OFF: &str = "the panel is off (night mode)";
+pub const STAGED: &str = "A panel change is waiting for a restart: restart or undo it first";
+pub const RISING_ONLY: &str =
+    "this driver chip always uses the rising edge: test latch_blanking instead";
+
+/// Why a test of `setting` may not start now, if it may not: a trial runs
+/// (what runs would not be the saved timing), a boot-time change is staged
+/// (a pick's save would commit it too), night mode has the panel off, or
+/// the driver chip ignores the clock edge.
+pub fn refusal(setting: Setting, tuner: &Tuner, panel_off: bool) -> Option<&'static str> {
+    if tuner.trial.is_some() {
+        Some(TRIAL_RUNNING)
+    } else if tuner.staged.is_some() {
+        Some(STAGED)
+    } else if panel_off {
+        Some(PANEL_OFF)
+    } else if setting == Setting::ClkPhase && tuner.running.driver.forces_rising_edge() {
+        Some(RISING_ONLY)
+    } else {
+        None
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -450,6 +471,30 @@ mod tests {
         let mut t = PanelTest::start(Setting::LatchBlanking, saved, Duration::ZERO);
         let _ = t.step(LIMIT - MS(300));
         assert_eq!(t.step(LIMIT - MS(100)), Step::Wait(MS(100)));
+    }
+
+    #[test]
+    fn refused_when_a_test_would_mislead_or_commit_too_much() {
+        use crate::panel_timing::{PanelOp, PanelPatch};
+        let s = Duration::from_secs;
+        let t = Tuner::boot(None, None);
+        assert_eq!(refusal(Setting::ClkPhase, &t, false), None);
+        assert_eq!(refusal(Setting::ClkPhase, &t, true), Some(PANEL_OFF));
+        let mut tr = t;
+        let p = PanelPatch::new(Some(false), None, None, None, None).unwrap();
+        tr.apply(PanelOp::Try(p), s(1)).unwrap();
+        assert_eq!(
+            refusal(Setting::LatchBlanking, &tr, false),
+            Some(TRIAL_RUNNING)
+        );
+        let mut st = t;
+        let p = PanelPatch::new(None, None, Some("fm6126a"), None, None).unwrap();
+        st.apply(PanelOp::Try(p), s(1)).unwrap();
+        assert!(st.staged.is_some() && st.trial.is_none());
+        assert_eq!(refusal(Setting::LatchBlanking, &st, false), Some(STAGED));
+        let mbi = Tuner::boot(Some("1,1,mbi5124,8,60"), None);
+        assert_eq!(refusal(Setting::ClkPhase, &mbi, false), Some(RISING_ONLY));
+        assert_eq!(refusal(Setting::LatchBlanking, &mbi, false), None);
     }
 
     #[test]

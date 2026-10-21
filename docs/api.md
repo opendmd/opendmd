@@ -242,12 +242,14 @@ curl -s -X PUT $DMD/api/config --json '{"panel":{"clk_phase":false}}'
 The guided panel-timing test: the panel shows four test pictures, each
 under A then B (2 s each, the letter in the bottom-right corner), and
 nothing plays. `{"setting":"clk_phase"}` (A rising, B falling) or
-`"latch_blanking"` (A as saved, B two more) starts or restarts it;
-`{"stop":true}` ends it. It also ends after 120 s or on any `PUT
-/api/config`; either way the saved timing and playback come back. Nothing
-is saved: save the pick with `"panel_confirm":true`. Reply: `{"ok":true,
-"setting","a","b","left_s"}` (`a`, `b` as `panel`). `409` during a trial
-or with the panel off for the night.
+`"latch_blanking"` (A as saved, B two more, at most 4; from 4, two fewer)
+starts or restarts it; `{"stop":true}` ends it. It also ends after 120 s
+or on any `PUT /api/config`; either way the saved timing and playback come
+back. Nothing is saved (`panel_now` stays the saved values): save the pick
+with `"panel_confirm":true`. Reply: `{"ok":true, "setting","a","b",
+"left_s"}` (`a`, `b` as `panel`). `409` during a trial, with a change
+waiting for a restart, with the panel off for the night, or `clk_phase`
+on `mbi5124`/`dp3246`.
 
 ```sh
 curl -s $DMD/api/panel/test --json '{"setting":"clk_phase"}'

@@ -254,8 +254,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   with the firmware's messages, a confirm with no trial a 409. The mock has
   no panel, so nothing visible changes. `POST /api/panel/test`
   (`{"setting"}` / `{"stop":true}`) keeps the test's state and replies
-  (A and B, `left_s`), a 409 during a trial; a stop, any config PUT or
-  120 s end it.
+  (A and B, `left_s`), a 409 during a trial, with a change staged for a
+  restart, or `clk_phase` on a rising-edge-only chip; a stop, any config
+  PUT or 120 s end it.
 - **JSON bodies over 8 KB** (`PUT /api/config`, `POST /api/play`) are a 413
   `{"error":"body is N B, the limit is 8192 B"}`, judged on `Content-Length`.
 - **Per-GIF overrides** (`opendmd_core::overrides`): a playlist's `.meta`
@@ -3307,8 +3308,12 @@ def make_handler(ctx: Context, quiet: bool):
                 return
             with ctx.lock:
                 self.panel_poll()
-                if ctx.panel.trial:
-                    self.send_error_json(409, "a panel trial is running: keep or undo it first")
+                why = ("a panel trial is running: keep or undo it first" if ctx.panel.trial
+                       else "A panel change is waiting for a restart: restart or undo it first" if ctx.panel.staged
+                       else "this driver chip always uses the rising edge: test latch_blanking instead"
+                       if st == "clk_phase" and ctx.panel.running["driver"] in ("mbi5124", "dp3246") else None)
+                if why:
+                    self.send_error_json(409, why)
                     return
                 ctx.panel.test = {"setting": st, "until": time.monotonic() + PANEL_TEST_S}
                 a, b = ctx.panel.test_variants(st, ctx.panel.running)

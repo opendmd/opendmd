@@ -108,10 +108,14 @@ for 2 s, a 5 × 7 "A"/"B" label in the bottom-right corner, and applies A's
 or B's live values through the same `set_live_timing` a trial uses. The
 engine is not ticked (the file on screen is let go and the next one opens
 afterwards; nothing reaches Recently played), and the look and glow are
-off. It is refused during a trial or night mode's dark panel; it ends on
-`{"stop":true}`, on any `PUT /api/config` (before it applies) and after
-120 s, putting back the timing that ran before (the saved values), the
-look, and a black canvas. It never writes NVS: the web app saves the pick
+off. It is refused during a trial, with a boot-time change waiting for a
+restart, with night mode's panel dark, and for the clock edge on the chips
+that force the rising edge; it ends on `{"stop":true}`, on any `PUT
+/api/config` (before it applies), on a schedule change and after 120 s,
+putting back the timing that ran before (the saved values), the look, and
+the picture from before it (a paused file's frame; black if the 12 KB copy
+could not be made). Latch blanking's B is two clocks more, at most 4 (from
+4, two fewer). It never writes NVS: the web app saves the pick
 with `"panel_confirm":true`, no trial, since both values were just seen.
 
 To recover from saved settings that leave the panel unusable:
