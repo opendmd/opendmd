@@ -226,18 +226,30 @@ make fw-release    # once, for dist/
 make flasher       # serves the page and dist/ on http://localhost:8765
 ```
 
-Plug the DevKit in by USB, open <http://localhost:8765/>, click **Install**,
-pick the serial port (a CH340, "USB Serial" / `ttyUSB0`), and the page asks
-about **Erase device**, a box that starts unticked (the manifest sets
-`new_install_prompt_erase`; `new_install_improv_wait_time` 0, since the
-firmware does not speak Improv Serial):
+Plug the DevKit in by USB, open <http://localhost:8765/>, click **Install**
+and pick the serial port (a CH340, "USB Serial" / `ttyUSB0`).
+
+**A board already running OpenDMD answers Improv Serial**
+(`firmware/src/improv.rs`): the dialog shows its hostname and `OpenDMD
+<version> (ESP32)`, **Update OpenDMD** when its version is not the
+manifest's (no erase question: the settings stay), **Change Wi-Fi**,
+**Visit device** (`http://<ip>/`), **Logs & Console** and **Erase User
+Data** (a full install with erase). The manifest's `name` (`OpenDMD`) and
+`version` must match what the firmware reports for that to work: both come
+from the same `FW_VERSION`. A board that does not answer (anything else,
+or OpenDMD before Improv) gets **Install** and the **Erase device** box,
+which starts unticked (`new_install_prompt_erase`):
 
 - **Erase ticked — a first install, or a board coming from DMDoS or any
   other firmware.** The whole chip is erased, then the bootloader, the
   partition table, the app and the web app are written. *Everything* on the
   board goes, NVS included: WiFi credentials, brightness and its maximum, playlist, the
-  schedule and night window, Follow RePlayOS. The board comes up as the
-  `OpenDMD-Setup` access point (below). The card is not touched.
+  schedule and night window, Follow RePlayOS. The installer then waits up
+  to `new_install_improv_wait_time` (15 s) for the new firmware to answer
+  and asks for WiFi: the board scans, joins the network it is given (live,
+  within 35 s), saves it and reports its URL. Skipped or unanswered, the
+  board comes up as the `OpenDMD-Setup` access point (below). The card is
+  not touched.
 - **Erase unticked — a firmware update that keeps the settings.** ESP Web
   Tools writes only the six parts (the sectors they cover); NVS at 0x9000
   is not among them, so the WiFi, the schedule and every setting survive.
@@ -265,8 +277,11 @@ make fw-release-flash PORT=/dev/ttyUSB0   # web app pack, updater, then bootload
 Flash at 115200 (the default here): faster rates give `verify_failed` on
 these CH340 boards. The firmware's console (its log) is a different rate,
 **921600 baud**: `make fw-monitor` and `tools/serial-capture.py` use it; any
-other serial monitor must be set to 921600 (the browser flasher's "Logs &
-console" opens at 115200 and shows garbage). Without `fw-erase` this is the keep-settings path, like
+other serial monitor must be set to 921600. The exception: when a host
+talks to it at 115200 (the browser installer, which only speaks Improv at
+that rate), the console switches to **115200 until the next restart**, so
+the installer's "Logs & Console" is readable; the heartbeat then ends
+`console at 115200 baud (Improv)`. Without `fw-erase` this is the keep-settings path, like
 the flasher's. On the bench, `make fw-flash` does the same with the bench
 build (`dev-credentials`).
 

@@ -50,6 +50,7 @@ mod follow;
 mod frametime;
 mod http;
 mod httpd;
+mod improv;
 mod logring;
 mod net_worker;
 mod nvs_config;
@@ -403,6 +404,9 @@ fn main() -> Result<()> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
     let (net_tx, net_rx) = mpsc::channel::<NetCommand>();
     cache::init(net_tx.clone());
+    // Improv Serial (a browser installer over USB), answered from the log
+    // ring's drain from here on.
+    improv::init(&settings.hostname, net_tx.clone());
 
     // Logging goes asynchronous first (a ring drained by a CPU0 task,
     // `logring`): from here on no task waits for the UART — the show's

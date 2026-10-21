@@ -25,9 +25,12 @@ If the player won't start or you can't reach the web app, the
 
 1. Open the installer in Chrome, Edge, Opera or Firefox and plug the
    display's board into your computer by USB.
-2. Click **Install** and pick the board's port.
-3. **Leave Erase device unticked.** Ticking it wipes your WiFi details and
-   settings.
+2. Click **Install** and pick the board's port. The installer shows the
+   version the board runs.
+3. Click **Update OpenDMD**. (A board on an older version that the
+   installer doesn't recognise gets **Install** and the erase question
+   instead: **leave Erase device unticked.** Ticking it wipes your WiFi
+   details and settings.)
 
 The board restarts with the new version and rejoins your WiFi.
 

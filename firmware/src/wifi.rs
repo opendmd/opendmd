@@ -32,13 +32,19 @@ use esp_idf_svc::wifi::{
 };
 use log::{info, warn};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config;
 
 /// One rung of the connect ladder: auth method, optional channel and BSSID
 /// pins, and how many attempts to spend on it.
 type ConnectStage = (AuthMethod, Option<u8>, Option<[u8; 6]>, u32);
+
+/// The longest a failed connect attempt takes: esp-idf-svc's 15 s wait for
+/// the association (a wrong password never associates, so it is the whole
+/// wait), then the 2 s pause before the next. With a deadline, an attempt
+/// starts only if this much time is left.
+const ATTEMPT_WORST: Duration = Duration::from_secs(17);
 
 /// A nearby AP, as returned to the setup page by `GET /api/wifi/scan`.
 #[derive(Debug, Clone)]
@@ -206,8 +212,13 @@ impl WifiManager {
         }
     }
 
-    fn try_connect(&mut self, attempts: u32, stage: u8) -> bool {
+    fn try_connect(&mut self, attempts: u32, stage: u8, deadline: Option<Instant>) -> bool {
         for attempt in 1..=attempts {
+            if deadline.is_some_and(|d| d.saturating_duration_since(Instant::now()) < ATTEMPT_WORST)
+            {
+                info!("  STA stage {stage}: out of time");
+                return false;
+            }
             info!("  STA stage {stage}, attempt {attempt}/{attempts}");
             if self.wifi.connect().is_ok() && self.wifi.wait_netif_up().is_ok() {
                 if let Ok(ip) = self.wifi.wifi().sta_netif().get_ip_info() {
@@ -232,8 +243,15 @@ impl WifiManager {
     /// falling back through progressively looser configurations.
     ///
     /// `Ok(true)` on success. `Ok(false)` means "not in range, or every stage
-    /// failed" — the caller counts those and falls back to AP mode.
-    pub fn connect_sta(&mut self, ssid: &str, password: &str) -> anyhow::Result<bool> {
+    /// failed" — the caller counts those and falls back to AP mode. With a
+    /// `deadline` (WiFi details sent over USB, which the installer waits
+    /// 45 s for) no attempt starts that could end after it.
+    pub fn connect_sta(
+        &mut self,
+        ssid: &str,
+        password: &str,
+        deadline: Option<Instant>,
+    ) -> anyhow::Result<bool> {
         if ssid.is_empty() {
             return Ok(false);
         }
@@ -292,7 +310,7 @@ impl WifiManager {
                     ..Default::default()
                 }))?;
             self.fix_pmf();
-            if self.try_connect(attempts, stage as u8 + 1) {
+            if self.try_connect(attempts, stage as u8 + 1, deadline) {
                 return Ok(true);
             }
         }

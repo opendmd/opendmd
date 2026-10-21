@@ -14,6 +14,14 @@
 //! It also owns the boot decision: try STA, and on repeated failure raise the
 //! open `OpenDMD-Setup` AP with the captive-portal DNS server, on a timeout
 //! that reboots rather than leaving an open network up forever.
+//!
+//! WiFi details saved through the API take effect at the next boot. Those
+//! sent over USB by a browser installer (Improv Serial, `improv.rs`) are
+//! joined live instead, because the installer waits for the answer: the
+//! worker tries them (within [`config::IMPROV_ANSWER_WITHIN`]), saves them
+//! only once they work, and brings up what a boot onto the network would
+//! (mDNS, SNTP; the setup network and its DNS go). If they fail, the setup
+//! network comes back, or the worker's reconnect goes back to the old one.
 
 use crate::chan as mpsc;
 use esp_idf_hal::cpu::Core;
@@ -29,6 +37,7 @@ use std::time::Instant;
 use crate::config;
 use crate::dns_server::DnsServer;
 use crate::http::NetCommand;
+use crate::improv::Job;
 use crate::nvs_config::Settings;
 use crate::state::{Command, Status};
 use crate::wifi::{WifiManager, WifiState};
@@ -90,6 +99,56 @@ fn publish(status: &Arc<Mutex<Status>>, state: WifiState, ip: Option<String>) {
         if !s.ip.is_empty() {
             crate::state::NET_UP.store(true, std::sync::atomic::Ordering::Relaxed);
         }
+        crate::improv::set_network(s.wifi, &s.ip);
+    }
+}
+
+/// mDNS as `<hostname>.local`, station mode only. Kept alive by the
+/// caller: dropping it unregisters.
+fn start_mdns(hostname: &str) -> Option<EspMdns> {
+    match EspMdns::take() {
+        Ok(mut mdns) => {
+            let ok = mdns.set_hostname(hostname).is_ok()
+                // Per display, so two on one network are told apart.
+                && mdns.set_instance_name(format!("OpenDMD ({hostname})")).is_ok()
+                && mdns.add_service(None, "_http", "_tcp", 80, &[]).is_ok();
+            if ok {
+                info!("[net] mDNS responding as {hostname}.local");
+            } else {
+                warn!("[net] mDNS registration incomplete");
+            }
+            Some(mdns)
+        }
+        Err(e) => {
+            warn!("[net] mDNS unavailable: {e}");
+            None
+        }
+    }
+}
+
+/// Save WiFi details the way `PUT /api/config` does: the whole settings,
+/// changed, through the main task (`Command::ApplyConfig`), which writes
+/// NVS.
+fn save_wifi(
+    settings: &Arc<Mutex<Settings>>,
+    cmd: &mpsc::Sender<Command>,
+    ssid: &str,
+    password: &str,
+) -> Result<(), String> {
+    let mut next = settings.lock().map_err(|_| "settings poisoned")?.clone();
+    next.wifi_ssid = ssid.to_string();
+    next.wifi_pass = password.to_string();
+    let (tx, rx) = mpsc::channel();
+    cmd.send(Command::ApplyConfig {
+        settings: Box::new(next),
+        panel: None,
+        reply: tx,
+    })
+    .map_err(|_| "player not running")?;
+    match rx.recv_timeout(config::IMPROV_SAVE_TIMEOUT) {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err("player did not answer".into()),
     }
 }
 
@@ -106,6 +165,9 @@ fn run(worker: NetWorker) {
         settings,
         cmd,
     } = worker;
+    // The credentials in use: replaced by WiFi details joined over USB.
+    let (mut ssid, mut password) = (ssid, password);
+    let (save_settings, save_cmd) = (settings.clone(), cmd.clone());
     let mut follow = crate::follow::Poller::new(settings, status.clone(), cmd);
 
     info!("[net] worker started on CPU0");
@@ -126,7 +188,7 @@ fn run(worker: NetWorker) {
         info!("[net] no saved credentials; starting the setup AP");
     } else {
         while failures < config::STA_MAX_FAILURES {
-            match wifi.connect_sta(&ssid, &password) {
+            match wifi.connect_sta(&ssid, &password, None) {
                 Ok(true) => break,
                 Ok(false) => failures += 1,
                 Err(e) => {
@@ -152,25 +214,8 @@ fn run(worker: NetWorker) {
 
     // --- mDNS, STA only ----------------------------------------------------
     // Kept alive for the life of the worker: dropping it unregisters.
-    let _mdns = if wifi.state() == WifiState::Connected {
-        match EspMdns::take() {
-            Ok(mut mdns) => {
-                let ok = mdns.set_hostname(&hostname).is_ok()
-                    // Per display, so two on one network are told apart.
-                    && mdns.set_instance_name(format!("OpenDMD ({hostname})")).is_ok()
-                    && mdns.add_service(None, "_http", "_tcp", 80, &[]).is_ok();
-                if ok {
-                    info!("[net] mDNS responding as {hostname}.local");
-                } else {
-                    warn!("[net] mDNS registration incomplete");
-                }
-                Some(mdns)
-            }
-            Err(e) => {
-                warn!("[net] mDNS unavailable: {e}");
-                None
-            }
-        }
+    let mut mdns = if wifi.state() == WifiState::Connected {
+        start_mdns(&hostname)
     } else {
         None
     };
@@ -185,7 +230,7 @@ fn run(worker: NetWorker) {
     };
 
     // --- Captive portal DNS, AP only --------------------------------------
-    let _dns = if wifi.state() == WifiState::ApMode {
+    let mut _dns = if wifi.state() == WifiState::ApMode {
         wifi.ap_ip_bytes()
             .and_then(|ip| match DnsServer::start(ip) {
                 Ok(d) => Some(d),
@@ -237,6 +282,91 @@ fn run(worker: NetWorker) {
             Ok(NetCommand::VerifyBundle { header, reply }) => {
                 let _ = reply.send(crate::ota::verify_signature(&header));
             }
+            // Improv Serial (`improv.rs`): the answers go straight back to
+            // the USB host through the log ring.
+            Ok(NetCommand::Improv(Job::Scan { at })) => {
+                if at.elapsed() >= config::IMPROV_STALE {
+                    // The installer stopped waiting while we were busy.
+                    crate::improv::send_scan(&[]);
+                } else {
+                    let aps = wifi.scan_networks().unwrap_or_else(|e| {
+                        warn!("[net] improv scan failed: {e:#}");
+                        Vec::new()
+                    });
+                    crate::improv::send_scan(&aps);
+                }
+            }
+            Ok(NetCommand::Improv(Job::Provision {
+                ssid: new_ssid,
+                password: new_password,
+                at,
+            })) => {
+                if at.elapsed() >= config::IMPROV_STALE {
+                    warn!("[net] improv: WiFi details for '{new_ssid}' waited too long; not tried");
+                    crate::improv::provision_failed(opendmd_core::improv::Error::UnableToConnect);
+                } else {
+                    let was_ap = wifi.state() == WifiState::ApMode;
+                    let deadline = at + config::IMPROV_ANSWER_WITHIN;
+                    info!("[net] improv: joining '{new_ssid}'");
+                    let joined = matches!(
+                        wifi.connect_sta(&new_ssid, &new_password, Some(deadline)),
+                        Ok(true)
+                    );
+                    let saved = joined
+                        && match save_wifi(&save_settings, &save_cmd, &new_ssid, &new_password) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                error!(
+                                    "[net] improv: joined '{new_ssid}' but could not save it: {e}"
+                                );
+                                false
+                            }
+                        };
+                    if joined {
+                        // On the network whatever the save did: the old one is
+                        // gone, so this is the network to stay on until reboot.
+                        ssid = new_ssid;
+                        password = new_password;
+                        ap_started_at = None;
+                        _dns = None;
+                        let ip = wifi.ip_address();
+                        publish(&status, WifiState::Connected, ip.clone());
+                        if mdns.is_none() {
+                            mdns = start_mdns(&hostname);
+                        }
+                        if _sntp.is_none() {
+                            _sntp = crate::clock::start_sntp();
+                        }
+                        let ip = ip.unwrap_or_default();
+                        info!("[net] improv: on '{ssid}' at http://{ip}/ and http://{hostname}.local/");
+                        match (saved, crate::improv::parse_ipv4(&ip)) {
+                            (true, Some(octets)) => crate::improv::provisioned(octets),
+                            _ => crate::improv::provision_failed(
+                                opendmd_core::improv::Error::Unknown,
+                            ),
+                        }
+                    } else {
+                        warn!("[net] improv: could not join '{new_ssid}'");
+                        crate::improv::provision_failed(
+                            opendmd_core::improv::Error::UnableToConnect,
+                        );
+                        if was_ap {
+                            // Back to the setup network (its DNS server is
+                            // still running; the reboot timer carries on).
+                            match wifi.start_ap() {
+                                Ok(()) => publish(&status, WifiState::ApMode, wifi.ip_address()),
+                                Err(e) => {
+                                    error!("[net] setup network did not come back ({e:#})");
+                                    publish(&status, WifiState::Disconnected, None);
+                                }
+                            }
+                        } else {
+                            // The reconnect below goes back to the saved network.
+                            publish(&status, WifiState::Disconnected, None);
+                        }
+                    }
+                }
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 info!("[net] command channel closed; worker exiting");
@@ -249,7 +379,7 @@ fn run(worker: NetWorker) {
 
         // The name mDNS answers to: it takes `<name>-2` if another device
         // has the name, at start-up or later (a conflict re-probes).
-        if _mdns.is_some() {
+        if mdns.is_some() {
             publish_mdns(&status);
         }
 
@@ -272,7 +402,7 @@ fn run(worker: NetWorker) {
         if lost || never {
             warn!("[net] WiFi dropped; reconnecting");
             publish(&status, WifiState::Disconnected, None);
-            match wifi.connect_sta(&ssid, &password) {
+            match wifi.connect_sta(&ssid, &password, None) {
                 Ok(true) => {
                     let ip = wifi.ip_address();
                     info!("[net] reconnected, IP {}", ip.clone().unwrap_or_default());

@@ -1,7 +1,8 @@
 # Install OpenDMD
 
 Put OpenDMD on your display straight from this page. It takes about a
-minute, and your SD card and its GIFs are left alone.
+minute, your SD card and its GIFs are left alone, and the installer gets
+the board onto your WiFi before you unplug it.
 
 OpenDMD replaces the DMDoS firmware on the same ESP32 board: nothing to
 rewire or swap. Want the original firmware back later? Install it again
@@ -30,14 +31,16 @@ from the Software section of [dmdos.net](https://dmdos.net/).
    cable.
 2. **Click Install** above and pick the board's port from the list. It is
    often called "USB Serial", "CH340" or "CP210x".
-3. **Choose whether to erase.** The installer asks whether to **Erase
-   device**:
-    - **First install** (the board still runs DMDoS or anything else):
-      **tick Erase.** This clears the board completely before installing.
-    - **Updating** a board that already runs OpenDMD: **leave Erase
-      unticked.** Your WiFi details and settings stay as they are.
+3. **Choose whether to erase.** On a first install (the board still runs
+   DMDoS or anything else) the installer asks whether to **Erase
+   device**: **tick it.** This clears the board completely before
+   installing.
 4. **Wait for it to finish.** It takes about a minute, and the board
    restarts by itself.
+5. **Connect it to your WiFi.** When it says **Installation complete**,
+   click **Next**. The installer lists the WiFi networks the board can
+   see: pick yours, type its password and click **Connect**. Once the
+   board is on, **Visit device** opens the web app. That's it.
 
 > **Connection problems?**
 >
@@ -52,10 +55,28 @@ from the Software section of [dmdos.net](https://dmdos.net/).
 >   or [FTDI](https://ftdichip.com/drivers/). Windows and older versions
 >   of macOS are the ones that need it.
 
-## First start
+## A board that already runs OpenDMD
 
-A freshly installed player doesn't know your WiFi yet, so it makes its own
-network for you to join:
+Plug it in and click **Install**: the installer recognises it and shows
+its name and the version it runs. From there:
+
+- **Update OpenDMD** puts this page's version on it. Your WiFi and
+  settings stay. It only shows up when the versions differ.
+- **Change Wi-Fi** moves it to another network (or **Connect to Wi-Fi**
+  if it isn't on one).
+- **Visit device** opens its web app.
+- **Logs & Console** shows what the board is up to, handy when asking
+  for help.
+- **Erase User Data** reinstalls from scratch and forgets every setting.
+
+Boards on older OpenDMD versions don't introduce themselves yet, so the
+installer just offers **Install** and asks about erasing: **leave Erase
+unticked** and your WiFi and settings stay.
+
+## WiFi without the installer
+
+If you skipped the WiFi step, or the installer couldn't reach the board
+afterwards, the player makes its own network for you to join instead:
 
 <!-- site:steps -->
 

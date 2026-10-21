@@ -35,12 +35,14 @@ make fw-flash PORT=/dev/ttyUSB0   # bench build over USB, then the serial monito
 ```sh
 make fw-release              # dist/: firmware, web app pack, merged 4 MB image, signed update bundle
 make flasher                 # the browser installer with dist/ on http://localhost:8765
+make improv-check            # the real Improv Serial host library against the firmware's framing (node, npm)
 make fw-ota HOST=opendmd.local     # firmware over WiFi (signed bundle)
 make www-push HOST=opendmd.local   # web app only, over WiFi
 make site                    # this site, with dist/'s release under install/
 ```
 
-A release build has no WiFi credentials in it; the player starts its
+A release build has no WiFi credentials in it: the installer gives it
+your WiFi over USB (Improv Serial), or the player starts its
 `OpenDMD-Setup` network instead. Firmware updates over WiFi are signed
 bundles: the player checks the signature before installing, and a small
 updater program copies the new firmware into place from the SD card.

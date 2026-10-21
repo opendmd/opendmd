@@ -52,8 +52,9 @@
       </esp-web-install-button>
       <span id="version" class="mono" style="color: var(--muted)"></span>
     </div>
-    <p class="note">The installer asks whether to <b>Erase device</b> (unticked unless you tick it). <b>Tick it for a first
-      install</b>: it erases everything on the board, settings included. Leave it unticked to update and keep the settings.</p>
+    <p class="note">A board that already runs OpenDMD is recognised: the installer shows its version and offers <b>Update</b>
+      (settings kept), <b>Change Wi-Fi</b>, <b>Visit device</b> and its logs. On a first install it asks whether to
+      <b>Erase device</b>: <b>tick it</b> (it erases everything on the board), and when it is done it asks for your WiFi.</p>
   </div>
 
   <h2>Before you start</h2>
@@ -66,17 +67,23 @@
   <h2>Install</h2>
   <ol>
     <li>Click <b>Install</b> and choose the board's serial port (often "USB Serial", "CH340" or <code>ttyUSB0</code>).</li>
-    <li>The installer asks whether to <b>Erase device</b> (the box starts unticked):
+    <li>A board running OpenDMD introduces itself (Improv Serial over USB): its hostname, <code>OpenDMD &lt;version&gt;</code>, and
+      <b>Update OpenDMD</b> when the versions differ (it writes the six parts below, the settings stay), <b>Change Wi-Fi</b>,
+      <b>Visit device</b> (its address), <b>Logs &amp; Console</b> and <b>Erase User Data</b> (a full install with erase). Anything
+      else, including OpenDMD older than this, gets <b>Install</b> and the question whether to <b>Erase device</b> (the box starts
+      unticked):
       <ul>
         <li><b>Ticked</b> (a new board, or one that ran DMDoS or other firmware): the whole flash is erased first. That includes the
           player's settings in NVS: <b>WiFi network and password, brightness, the playlist, the schedule and night window, and
-          Follow RePlayOS</b>. The board then starts as the open WiFi access point <code>OpenDMD-Setup</code> (it can take a minute or two to
-          appear); join it and enter your network.</li>
+          Follow RePlayOS</b>. When it is done, <b>Next</b> asks for your WiFi (the board lists the networks it sees), the board joins and
+          saves it, and <b>Visit device</b> opens the web app. Skip that and the board starts as the open WiFi access point
+          <code>OpenDMD-Setup</code> (it can take a minute or two to appear); join it and enter your network.</li>
         <li><b>Unticked</b> (an update of a board already running OpenDMD): only the firmware, its updater, the web app, the bootloader and the
           partition table are written. The settings stay, and the player comes back on your network.</li>
       </ul>
     </li>
-    <li>Wait for it to finish (about a minute), then the board restarts by itself. Open <code>http://opendmd.local/</code>.</li>
+    <li>Wait for it to finish (about a minute), then the board restarts by itself. Open <code>http://opendmd.local/</code>, or
+      <b>Visit device</b>.</li>
   </ol>
   <p>If the installer cannot connect, hold the board's <b>BOOT</b> button while it says "connecting", or unplug and try again.</p>
 

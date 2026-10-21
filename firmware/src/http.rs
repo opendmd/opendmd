@@ -88,6 +88,9 @@ pub enum NetCommand {
         header: Box<[u8; opendmd_core::ota::HEADER_LEN]>,
         reply: mpsc::Sender<Result<opendmd_core::ota::Meta, opendmd_core::ota::OtaError>>,
     },
+    /// Improv Serial over USB (`improv.rs`): a scan, or WiFi details to
+    /// join and save. The worker sends the answer itself.
+    Improv(crate::improv::Job),
 }
 
 /// Wire format for `POST /api/follow/test`.

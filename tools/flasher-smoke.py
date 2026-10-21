@@ -99,8 +99,9 @@ def main() -> int:
             check(r.status == 200 and len(r.body()) == (DIST / part["path"]).stat().st_size,
                   f"served: firmware/{part['path']} ({len(r.body()):,} B)")
         text = page.inner_text("main")
-        check("Erase device" in text and "Chrome or Edge" in text and "NVS" in text,
-              "the page explains the browser, the erase and what it takes")
+        check("Erase device" in text and "Chrome, Edge" in text and "NVS" in text
+              and "Change Wi-Fi" in text,
+              "the page explains the browser, the erase, what it takes and the WiFi step")
         page.screenshot(path=str(SITE / "flasher.png"), full_page=True)
         browser.close()
     srv.shutdown()
