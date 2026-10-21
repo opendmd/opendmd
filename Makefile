@@ -387,13 +387,16 @@ FW_RELEASE_REMAP := --remap-path-prefix=$(CURDIR)=/opendmd --remap-path-prefix=$
 # The app image must leave at least this much of the factory partition free.
 FW_APP_SPARE := 65536
 
-fw-release: web updater
+fw-release: web
 	@test -n "$(FW_VERSION)" || { echo "cannot read the version from $(FW)/Cargo.toml"; exit 2; }
 	@mkdir -p $(FW)/target $(DIST)
 	@{ echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"'; \
 	   echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	   echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; } > $(FW_RELEASE_SDKCONFIG_FRAG)
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_TARGET_DIR)"'
+	@# The updater after the firmware: on a fresh machine (CI) it is the
+	@# firmware's build that installs the ESP-IDF checkout idf.py needs.
+	$(MAKE) --no-print-directory updater
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_RELEASE_BINARY)'
 	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
 	@desc=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
@@ -448,12 +451,15 @@ fw-release: web updater
 # one the firmware compiles in. Run by fw-release; on its own it signs
 # whatever app image dist/ holds for this version.
 FW_SIGN_KEY ?= $(HOME)/.config/opendmd/opendmd.key
+# The public key the bundle is checked against. Only a dry run (CI, a
+# throwaway key) points it elsewhere: a device trusts the committed one alone.
+FW_SIGN_PUB ?= $(FW)/keys/opendmd.pub
 FW_BUNDLE := $(DIST)/opendmd-$(FW_VERSION).odfw
 fw-sign:
 	@test -f $(FW_APP_IMAGE) || { echo "no $(FW_APP_IMAGE): run make fw-release first"; exit 2; }
 	@test -f $(FW_SIGN_KEY) || { echo "no signing key at $(FW_SIGN_KEY): uv run tools/fw-sign.py keygen (once), or FW_SIGN_KEY=..."; exit 2; }
 	uv run --quiet tools/fw-sign.py sign $(FW_APP_IMAGE) --version $(FW_VERSION) --out $(FW_BUNDLE) --key $(FW_SIGN_KEY)
-	uv run --quiet tools/fw-sign.py verify $(FW_BUNDLE) --pub $(FW)/keys/opendmd.pub
+	uv run --quiet tools/fw-sign.py verify $(FW_BUNDLE) --pub $(FW_SIGN_PUB)
 
 # First install on a board over USB, from the release build: the same parts
 # as dist/ (bootloader, table, otadata erased, app, updater, pack). From
@@ -477,7 +483,9 @@ www-push:
 # UPDATER_BUILD, outside the tree. Must fit ota_0 (0x60000) with 32 KB spare.
 ESPRESSIF := $(HOME)/.espressif
 UPDATER_IDF := $(ESPRESSIF)/esp-idf/v5.3
-UPDATER_PYENV := $(ESPRESSIF)/python_env/idf5.3_py3.13_env
+# embuild names the venv after the Python that made it (py3.13 here, py3.12
+# on the Ubuntu CI runner).
+UPDATER_PYENV := $(firstword $(wildcard $(ESPRESSIF)/python_env/idf5.3_py3*_env) $(ESPRESSIF)/python_env/idf5.3_py3.13_env)
 UPDATER_BUILD ?= ~/scratch/opendmd-target/updater
 UPDATER_BIN := $(UPDATER_BUILD)/build/opendmd-updater.bin
 UPDATER_SLOT := 393216
