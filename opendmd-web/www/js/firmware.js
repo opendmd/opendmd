@@ -4,7 +4,7 @@
 // file…": a signed bundle (.odfw, docs/ota.md) checked here for its header
 // (an older version than the running one asks again: `older`), PUT with
 // progress, then /api/status polled until the player is back on the new
-// version. Security:
+// version; "Check for updates" is js/update.js, which reuses both. Security:
 // the optional API key (docs/api.md "Security"), made here, shown once.
 // And the dialog a 401 opens to ask for the key (source.js).
 
@@ -45,25 +45,47 @@ export function older(a, b) {
   return bp === null || ap.localeCompare(bp, undefined, { numeric: true }) < 0;
 }
 
-// The PUT as an XMLHttpRequest, for its upload progress.
-function send(file, progress) {
-  return new Promise((res, rej) => {
-    const x = new XMLHttpRequest();
-    x.open('PUT', '/api/firmware');
-    for (const [k, v] of Object.entries(auth({}))) x.setRequestHeader(k, v);
-    x.upload.onprogress = (e) => progress(e.loaded / e.total);
-    x.onload = () => {
-      let why = x.statusText;
-      try { why = JSON.parse(x.responseText).error || why; } catch { /* not JSON */ }
-      const s = x.status;
-      if (s === 200) res();
-      else rej(new Error(s === 422 ? `The player refused this file: ${why}` : s === 408 ? 'The upload was cut short. Nothing was installed; try again'
-        : s === 413 ? 'This file is too big to be OpenDMD firmware' : s === 503 ? `The player can’t take it now (${why}). Try again in a moment`
-          : `Couldn’t update (${s}: ${why})`));
-    };
-    x.onerror = () => rej(new Error('The upload failed: the player stopped answering'));
-    x.send(file);
-  });
+// A PUT as an XMLHttpRequest, for its upload progress: resolves to the
+// status and the reply's `error` (or its text), rejects only when the player
+// stops answering. update.js sends the web app with it too.
+export const put = (path, body, progress) => new Promise((res, rej) => {
+  const x = new XMLHttpRequest();
+  x.open('PUT', path);
+  for (const [k, v] of Object.entries(auth({}))) x.setRequestHeader(k, v);
+  x.upload.onprogress = (e) => progress(e.loaded / e.total);
+  x.onload = () => {
+    let why = x.statusText;
+    try { why = JSON.parse(x.responseText).error || why; } catch { /* not JSON */ }
+    res({ s: x.status, why, text: x.responseText });
+  };
+  x.onerror = () => rej(new Error('The upload failed: the player stopped answering'));
+  x.send(body);
+});
+
+// The bundle's version from its 140-byte header, or null if it is not one.
+export function fwHead(b) {
+  const td = new TextDecoder();
+  return b.length >= 140 && td.decode(b.subarray(0, 5)) === 'ODFW1' ? td.decode(b.subarray(8, 40)).replace(/\0+$/, '') : null;
+}
+
+export async function sendFw(file, progress) {
+  const { s, why } = await put('/api/firmware', file, progress);
+  if (s !== 200) {
+    throw new Error(s === 422 ? `The player refused this file: ${why}` : s === 408 ? 'The upload was cut short. Nothing was installed; try again'
+      : s === 413 ? 'This file is too big to be OpenDMD firmware' : s === 503 ? `The player can’t take it now (${why}). Try again in a moment`
+        : `Couldn’t update (${s}: ${why})`);
+  }
+}
+
+// After a firmware PUT: /api/status polled until the player answers with
+// version `v` (docs/ota.md: ~33 s from the end of the upload, playback ~45 s).
+export async function restart(v, say) {
+  say('Restarting… the panel comes back in about 45 s');
+  for (const t = Date.now(); ;) {
+    await sleep(2000);
+    try { if ((await app.src.status()).version === v) return; } catch { /* still restarting */ }
+    if (Date.now() - t > 180000) throw new Error(`The player has not come back with ${v} after 3 minutes. Check it has power, then reload this page (Update log says what the updater did)`);
+  }
 }
 
 export function fwCards(fw, sec) {
@@ -74,6 +96,10 @@ export function fwCards(fw, sec) {
   const file = h('input', { type: 'file', accept: '.odfw', id: 'fw-file', hidden: true, onchange: pick });
   const btn = h('button', { id: 'fw-go', onclick: () => file.click() }, 'Update from file…');
   const say = (t, bad) => { msg.textContent = t; msg.className = bad ? 'cap bad' : 'cap'; };
+  // "Check for updates": js/update.js, imported on the first click.
+  const busy = (b) => { btn.disabled = chk.disabled = b; };
+  const ui = { say, bar, barBox, busy, load: () => load() };
+  const chk = h('button', { id: 'fw-check', onclick: () => import('./update.js').then((m) => m.check(ui)) }, 'Check for updates');
   const logText = h('div.log', { id: 'fw-log-text', style: 'white-space:pre-wrap' });
   const log = h('details', { id: 'fw-log', hidden: true }, h('summary', 'Update log'), logText);
   let running = null;
@@ -90,31 +116,25 @@ export function fwCards(fw, sec) {
     const f = file.files[0];
     file.value = '';
     if (!f) return;
-    const head = new Uint8Array(await f.slice(0, 140).arrayBuffer()), td = new TextDecoder();
-    if (f.size < 140 || td.decode(head.subarray(0, 5)) !== 'ODFW1') return say('This is not an OpenDMD firmware file (.odfw)', 1);
-    const v = td.decode(head.subarray(8, 40)).replace(/\0+$/, '');
+    const v = fwHead(new Uint8Array(await f.slice(0, 140).arrayBuffer()));
+    if (!v) return say('This is not an OpenDMD firmware file (.odfw)', 1);
     const ask = running && older(v, running) ? `Firmware ${v}: this is older than the firmware on the panel (${running}). Install it anyway?`
       : `Install firmware ${v}?`;
     if (!confirm(`${ask} The panel goes dark for about a minute.`)) return;
-    btn.disabled = true;
+    busy(true);
     barBox.hidden = false;
     try {
-      await send(f, (p) => { bar.style.width = `${100 * p}%`; say(`Sending… ${Math.round(100 * p)}%`); });
+      await sendFw(f, (p) => { bar.style.width = `${100 * p}%`; say(`Sending… ${Math.round(100 * p)}%`); });
       barBox.hidden = true;
-      say('Restarting… the panel comes back in about 45 s');
-      for (const t = Date.now(); ;) {
-        await sleep(2000);
-        try { if ((await app.src.status()).version === v) break; } catch { /* still restarting */ }
-        if (Date.now() - t > 180000) throw new Error(`The player has not come back with ${v} after 3 minutes. Check it has power, then reload this page (Update log says what the updater did)`);
-      }
+      await restart(v, say);
       say(`Updated to ${v}`);
       app.refreshStatus().catch(() => {});
       load();
     } catch (e) { say(e.message, 1); }
-    btn.disabled = false;
+    busy(false);
     barBox.hidden = true;
   }
-  fw.append(h('h3', 'Firmware'), facts, log, barBox, msg, h('div.row', { style: 'margin-top:12px' }, btn, file));
+  fw.append(h('h3', 'Firmware'), facts, log, barBox, msg, ui.row = h('div.row', { style: 'margin-top:12px' }, chk, btn, file));
   fw.hidden = false;
   load();
 
