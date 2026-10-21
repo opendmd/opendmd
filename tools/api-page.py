@@ -111,7 +111,8 @@ def convert(md: str) -> tuple[str, str, list[tuple[int, str, str]]]:
             else:
                 hid = slug(text, seen)
                 toc.append((level, hid, text))
-                out.append(f'<h{level} id="{hid}">{text}</h{level}>')
+                # Slugs are [a-z0-9-]: unquoted attributes are valid HTML.
+                out.append(f'<h{level} id={hid}>{text}</h{level}>')
             i += 1
             continue
         if line.startswith("|") and i + 1 < len(lines) and re.match(r"\|[-| :]+\|$", lines[i + 1].strip()):
@@ -193,7 +194,8 @@ c.parentNode.append(b)}})();
 
 def page(md: str) -> str:
     body, title, toc = convert(md)
-    links = "".join(f'<a class="l{lvl}" href="#{hid}">{text}</a>' for lvl, hid, text in toc)
+    # Only the third level is styled (and hidden on a narrow screen).
+    links = "".join(f'<a{" class=l3" if lvl == 3 else ""} href=#{hid}>{text}</a>' for lvl, hid, text in toc)
     return f"""<!doctype html>
 <html lang="en">
 <head>

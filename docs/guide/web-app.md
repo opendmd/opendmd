@@ -126,6 +126,9 @@ Open **Advanced** for the rest:
   files** does the rest now from your browser.
 - **Network** changes the WiFi network or the player's name (`opendmd` in
   `opendmd.local`). These need a reboot.
+- **Panel timing** is for a panel that shows a few wrong-coloured dots on
+  some pictures: each change is tried for a minute and undone unless you
+  press **Keep** (see [Troubleshooting](troubleshooting.md#some-leds-show-the-wrong-colours-on-certain-pictures)).
 - **Firmware** shows the version and installs updates (see
   [Updating](updating.md)).
 - **Security** can require a key before the player can be controlled,

@@ -236,6 +236,17 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `/api/status` and `/api/firmware`, with `last` an updater-style line,
   `log` the lines the firmware and the updater would have appended, and
   `pending` null. Nothing is written to disk.
+- **Panel timing** (`opendmd_core::panel_timing`, docs/firmware.md): the
+  config's `panel` (`clk_phase`, `latch_blanking` 1..4, `driver`,
+  `i2s_speed` 8/16/20, `min_refresh` 30..240), `panel_now`, `panel_next`
+  (what a restart would run, else null), `panel_trial_s`. A `panel` object is a trial (the clock
+  edge and blanking at once; a driver, clock or refresh change staged for
+  the next `POST /api/reboot`, which runs it on trial), reverting after
+  `--panel-trial` seconds (60) unless `panel_confirm: true`; `false` undoes
+  it (a boot trial by a simulated restart: the API 503s for
+  `RESTART_SECS`); `panel: null` saves the defaults. Bad values are 400s
+  with the firmware's messages, a confirm with no trial a 409. The mock has
+  no panel, so nothing visible changes.
 - **JSON bodies over 8 KB** (`PUT /api/config`, `POST /api/play`) are a 413
   `{"error":"body is N B, the limit is 8192 B"}`, judged on `Content-Length`.
 - **Per-GIF overrides** (`opendmd_core::overrides`): a playlist's `.meta`
@@ -379,6 +390,134 @@ def resolve_brightness(brightness, max_b, new_brightness, new_max):
                           "raise Maximum brightness first")
         brightness = new_brightness
     return (min(brightness, max_b), max_b), None
+
+
+# Panel timing (opendmd_core::panel_timing): the same state machine as the
+# device's `Tuner`. Times are monotonic seconds; `trial_secs` is the trial's
+# length (`--panel-trial`, 60 like the firmware's TRIAL).
+PANEL_DEFAULTS = {"clk_phase": True, "latch_blanking": 1, "driver": "shiftreg", "i2s_speed": 8, "min_refresh": 60}
+PANEL_DRIVERS = ("shiftreg", "fm6124", "fm6126a", "icn2038s", "mbi5124", "dp3246")
+PANEL_BOOT_KEYS = ("driver", "i2s_speed", "min_refresh")
+
+
+def panel_patch(obj):
+    """Validate a `panel` object as http.rs + PanelPatch::new do: (patch, None) or (None, error)."""
+    if not isinstance(obj, dict):
+        return None, "invalid JSON: field 'panel' must be an object or null"
+    for k in obj:
+        if k not in PANEL_DEFAULTS:
+            return None, f"invalid JSON: unknown field `{k}`, expected one of `clk_phase`, `latch_blanking`, `driver`, `i2s_speed`, `min_refresh`"
+    out = {}
+    for k, v in obj.items():
+        if v is None:
+            continue
+        isint = isinstance(v, int) and not isinstance(v, bool)
+        if k == "clk_phase":
+            if not isinstance(v, bool):
+                return None, "invalid JSON: panel.clk_phase must be a boolean"
+            out[k] = v
+        elif k == "driver":
+            if not isinstance(v, str):
+                return None, "invalid JSON: panel.driver must be a string"
+            d = v.strip().lower()
+            if d not in PANEL_DRIVERS:
+                return None, f"panel.driver must be {', '.join(PANEL_DRIVERS)}, not {json.dumps(v)}"
+            out[k] = d
+        elif not isint:
+            return None, f"invalid JSON: panel.{k} must be an integer"
+        elif k == "latch_blanking" and not 1 <= v <= 4:
+            return None, f"panel.latch_blanking must be 1..=4, not {v}"
+        elif k == "i2s_speed" and v not in (8, 16, 20):
+            return None, f"panel.i2s_speed must be 8, 16 or 20 (MHz), not {v}"
+        elif k == "min_refresh" and not 30 <= v <= 240:
+            return None, f"panel.min_refresh must be 30..=240 (Hz), not {v}"
+        else:
+            out[k] = v
+    return out, None
+
+
+class PanelTuner:
+    def __init__(self, trial_secs: float = 60.0):
+        self.trial_secs = trial_secs
+        self.saved = dict(PANEL_DEFAULTS)
+        self.running = dict(PANEL_DEFAULTS)
+        self.trial = None      # {"kind": "live"|"boot", "until": monotonic}
+        self.staged = None
+
+    @staticmethod
+    def same_boot(a, b):
+        return all(a[k] == b[k] for k in PANEL_BOOT_KEYS)
+
+    @staticmethod
+    def effective(t):
+        return dict(t, clk_phase=t["clk_phase"] or t["driver"] in ("mbi5124", "dp3246"))
+
+    def next_boot(self):
+        if self.staged:
+            return dict(self.staged)
+        return None if self.same_boot(self.saved, self.running) else dict(self.saved)
+
+    def restart_needed(self):
+        return self.next_boot() is not None
+
+    def poll(self):
+        """Revert a trial whose time is up; True if that needs a restart."""
+        if self.trial and time.monotonic() >= self.trial["until"]:
+            return self.revert()
+        return False
+
+    def base(self):
+        return dict(self.running) if self.trial else dict(self.staged or self.saved)
+
+    def revert(self):
+        self.staged = None
+        t, self.trial = self.trial, None
+        if t and t["kind"] == "boot":
+            return True
+        if t:
+            self.running.update(clk_phase=self.saved["clk_phase"], latch_blanking=self.saved["latch_blanking"])
+        return False
+
+    def try_(self, patch):
+        target = dict(self.base(), **patch)
+        if self.same_boot(target, self.running):
+            kind = self.trial["kind"] if self.trial else "live"
+            self.running = target
+            self.trial = {"kind": kind, "until": time.monotonic() + self.trial_secs}
+            self.staged = None
+        else:
+            self.staged = target
+
+    def save(self, patch):
+        target = dict(PANEL_DEFAULTS) if patch is None else dict(self.base(), **patch)
+        self.saved = target
+        self.trial = None
+        self.staged = None
+        self.running.update(clk_phase=target["clk_phase"], latch_blanking=target["latch_blanking"])
+
+    def confirm(self):
+        if not self.trial:
+            return False
+        self.trial = None
+        self.saved = dict(self.running)
+        return True
+
+    def boot(self):
+        """A (simulated) restart: a staged trial runs for this boot only."""
+        if self.staged:
+            self.running = self.staged
+            self.trial = {"kind": "boot", "until": time.monotonic() + self.trial_secs}
+        else:
+            self.running = dict(self.saved)
+            self.trial = None
+        self.staged = None
+
+    def fields(self):
+        left = None
+        if self.trial:
+            left = max(0, math.ceil(self.trial["until"] - time.monotonic()))
+        return {"panel": dict(self.saved), "panel_now": self.effective(self.running),
+                "panel_next": self.next_boot(), "panel_trial_s": left}
 
 
 DEFAULT_SETTINGS = {
@@ -2159,6 +2298,7 @@ class Context:
         self.dwell = dwell
         self.strict = strict
         self.settings = dict(DEFAULT_SETTINGS)
+        self.panel = PanelTuner()
         self.lock = threading.RLock()
         self.auto = AutoPrepare(self)
         self.cache = Cache(self)
@@ -2606,7 +2746,22 @@ def make_handler(ctx: Context, quiet: bool):
                     "boot_show": s["boot_show"],
                     "api_key_set": bool(s["api_key"]),
                 }
+                self.panel_poll()
+                obj.update(ctx.panel.fields())
             self.send_json(200, obj)
+
+        def panel_poll(self):
+            """A trial whose time is up reverts; a boot trial by a simulated
+            restart. Caller holds ctx.lock."""
+            if ctx.panel.poll():
+                self.panel_restart()
+
+        def panel_restart(self):
+            """A restart to undo a boot trial: as POST /api/reboot."""
+            ctx.panel.boot()
+            ctx.player.reset_boot()
+            ctx.down_until = time.monotonic() + RESTART_SECS
+            ctx.player.boot_time += RESTART_SECS
 
         def playlist_fields(self, index, index_ms) -> dict:
             """`"entries","index","index_ms","overrides","hidden"` for a
@@ -2797,6 +2952,32 @@ def make_handler(ctx: Context, quiet: bool):
                         self.send_error_json(404, SET_NOT_FOUND)
                         return
 
+                # Panel timing (http.rs: an object is a trial, null the
+                # defaults, panel_confirm keeps / undoes).
+                panel_op = None
+                if "panel" in patch or "panel_confirm" in patch:
+                    pc = patch.get("panel_confirm")
+                    if pc is not None and not isinstance(pc, bool):
+                        self.send_error_json(400, "invalid JSON: field 'panel_confirm' must be a boolean")
+                        return
+                    if "panel" in patch and patch["panel"] is None:
+                        panel_op = ("save", None)
+                    elif "panel" in patch:
+                        if pc is False:
+                            self.send_error_json(400, "panel_confirm false undoes a trial: send it without panel")
+                            return
+                        pp, err = panel_patch(patch["panel"])
+                        if err:
+                            self.send_error_json(400, err)
+                            return
+                        panel_op = ("save", pp) if pc else ("try", pp)
+                    elif pc is not None:
+                        panel_op = ("confirm",) if pc else ("revert",)
+                    self.panel_poll()
+                    if panel_op == ("confirm",) and not ctx.panel.trial:
+                        self.send_error_json(409, "no panel trial is running (it may have ended)")
+                        return
+
                 # Settings are "saved" now, like the firmware saves to NVS
                 # before the rebuild.
                 ctx.settings.clear()
@@ -2826,11 +3007,25 @@ def make_handler(ctx: Context, quiet: bool):
                 # any) is in force right now.
                 ctx.schedule.evaluate()
                 fields = self.playlist_fields(index, index_ms)
+                restart_now = False
+                if panel_op:
+                    if panel_op[0] == "try":
+                        ctx.panel.try_(panel_op[1])
+                    elif panel_op[0] == "save":
+                        ctx.panel.save(panel_op[1])
+                    elif panel_op[0] == "confirm":
+                        ctx.panel.confirm()
+                    else:
+                        restart_now = ctx.panel.revert()
+                    reboot_required = reboot_required or ctx.panel.restart_needed()
+                panel_fields = ctx.panel.fields()
+                if restart_now:
+                    self.panel_restart()
 
             self.send_json(200, {"ok": True, **fields,
                                  "brightness": ctx.settings["brightness"],
                                  "max_brightness": ctx.settings["max_brightness"],
-                                 "reboot_required": reboot_required})
+                                 "reboot_required": reboot_required, **panel_fields})
 
         def h_reindex(self, path):
             with ctx.lock:
@@ -3267,6 +3462,7 @@ def make_handler(ctx: Context, quiet: bool):
             query = self.path.partition("?")[2] or None
             with ctx.lock:
                 ctx.player.reset_boot()
+                ctx.panel.boot()
                 ctx.reset_note = None
                 if query_param(query, "sd_fallback") == "clear":
                     ctx.sd.update(clock_khz=40000, fallback=False, reboots=0)
@@ -3697,6 +3893,8 @@ def parse_args():
                     help="behave like the current firmware where the mock differs on purpose: "
                          "a '..' via the catch-all is a 404, stat/play cost a directory scan")
     ap.add_argument("--quiet", action="store_true", help="suppress the one-line-per-request log")
+    ap.add_argument("--panel-trial", type=float, default=60.0,
+                    help="seconds a panel-timing trial runs before it reverts (the firmware's 60)")
     ap.add_argument("--proxy", help="forward everything but --www to a real device at this URL")
     ap.add_argument("--sd", choices=["ok", "unreadable", "none"], default="ok",
                     help="the card: ok, unreadable (mounts, exFAT: nothing plays) or none")
@@ -3732,6 +3930,7 @@ def main():
             overlay_dir.mkdir(parents=True, exist_ok=True)
         fs = CardFS(root_dir, overlay_dir)
         ctx = Context(fs, www_root, args.dwell, args.strict)
+        ctx.panel.trial_secs = args.panel_trial
         ctx.sd_state = args.sd
         pub = Path(args.ota_pub) if args.ota_pub else Path(__file__).resolve().parent.parent / "firmware" / "keys" / "opendmd.pub"
         try:

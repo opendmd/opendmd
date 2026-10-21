@@ -27,6 +27,11 @@ static uint16_t s_height = 0;
 static int8_t s_oe = -1;
 /* hub75_blank has stopped the DMA (it is not restarted). */
 static bool s_stopped = false;
+/* The CLK pin and the driver, for hub75_set_clk_phase (-1 before init). */
+static int8_t s_clk = -1;
+static int32_t s_driver = 0;
+/* The last brightness set: hub75_set_latch_blanking re-renders OE at it. */
+static uint8_t s_brightness = 128;
 /* hub75_draw_span's fast path is usable (see hub75_init). */
 static bool s_fast = false;
 /*
@@ -183,6 +188,8 @@ extern "C" bool hub75_init(const hub75_cfg_t *cfg) {
 #endif
     ESP_LOGI(TAG, "span writer: %s", s_fast ? "direct" : "per-pixel fallback");
     s_oe = cfg->oe;
+    s_clk = cfg->clk;
+    s_driver = cfg->driver;
     s_rtc_oe = cfg->oe >= 0 ? OE_RTC_TAG | static_cast<uint8_t>(cfg->oe) : 0;
     if (esp_register_shutdown_handler(blank_on_shutdown) != ESP_OK) {
         ESP_LOGW(TAG, "no shutdown handler: a restart outside hub75_blank leaves the panel lit");
@@ -195,8 +202,33 @@ extern "C" bool hub75_init(const hub75_cfg_t *cfg) {
 
 extern "C" void hub75_set_brightness(uint8_t brightness) {
     if (s_panel != nullptr) {
+        s_brightness = brightness;
         s_panel->setBrightness8(brightness);
     }
+}
+
+extern "C" void hub75_set_clk_phase(bool clkphase) {
+    if (s_panel == nullptr || s_stopped || s_clk < 0 ||
+        s_driver == HUB75_DRIVER_MBI5124 || s_driver == HUB75_DRIVER_DP3246) {
+        return;
+    }
+    // As Bus_Parallel16::init routes it: the I2S WS output, inverted or not.
+#if defined(CONFIG_IDF_TARGET_ESP32S2)
+    const uint32_t sig = I2S0O_WS_OUT_IDX;
+#else
+    const uint32_t sig = I2S1O_WS_OUT_IDX;
+#endif
+    esp_rom_gpio_connect_out_signal(static_cast<uint32_t>(s_clk), sig, clkphase, false);
+    ESP_LOGI(TAG, "clock phase now %s edge", clkphase ? "rising" : "falling");
+}
+
+extern "C" void hub75_set_latch_blanking(uint8_t latch_blanking) {
+    if (s_panel == nullptr || s_stopped || latch_blanking < 1 || latch_blanking > MAX_LAT_BLANKING) {
+        return;
+    }
+    s_panel->setLatBlanking(latch_blanking);
+    s_panel->setBrightness8(s_brightness);
+    ESP_LOGI(TAG, "latch blanking now %u", latch_blanking);
 }
 
 extern "C" void hub75_clear(void) {

@@ -221,6 +221,9 @@ pub struct Status {
 
     /// The zone's display name (`Europe/Dublin`).
     pub tz_name: String,
+    /// The panel timing: saved, running, a trial and its deadline, a staged
+    /// trial (`/api/config` `panel*`), published by the main task.
+    pub panel: opendmd_core::panel_timing::Tuner,
 }
 
 impl Status {
@@ -270,6 +273,7 @@ impl Status {
             rule_until: None,
             wake_until: None,
             tz_name: String::new(),
+            panel: opendmd_core::panel_timing::Tuner::boot(None, None),
         }
     }
 }
@@ -402,8 +406,14 @@ pub enum Command {
     /// [`SET_NOT_FOUND`] with NVS and the running engine untouched. (Saving
     /// first used to leave the board with no playlist, retrying forever,
     /// across reboots.)
+    ///
+    /// `panel` is the request's panel-timing operation (`panel`,
+    /// `panel_confirm`), carried out after the save (`Tuner::apply`); a
+    /// confirm with no trial running is refused first with
+    /// [`opendmd_core::panel_timing::NO_TRIAL`], nothing saved.
     ApplyConfig {
         settings: Box<crate::nvs_config::Settings>,
+        panel: Option<opendmd_core::panel_timing::PanelOp>,
         reply: Reply,
     },
     /// Rebuild the engine and its on-card index — a fresh streaming pass over

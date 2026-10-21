@@ -28,6 +28,7 @@ use crate::stream;
 use crate::wifi::ScannedAp;
 use crate::www;
 use opendmd_core::compositor::{self, Kind as TransitionKind};
+use opendmd_core::panel_timing::{self, PanelOp, PanelPatch};
 
 /// The embedded setup page: rendered and gzipped by `build.rs`, served at
 /// `/setup` always, and at `/` in AP mode when there is no good web app in
@@ -96,6 +97,27 @@ where
     <Option<String> as serde::Deserialize>::deserialize(d).map(Some)
 }
 
+/// `panel`: absent, `null` (the defaults) or an object.
+fn double_option_panel<'de, D>(d: D) -> Result<Option<Option<PanelWire>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <Option<PanelWire> as serde::Deserialize>::deserialize(d).map(Some)
+}
+
+/// `PUT /api/config`'s `panel` object (`opendmd_core::panel_timing`): any
+/// subset; an unknown key is a 400, so a typo never passes for a trial.
+/// Numbers are read wide so a value out of range gets the range message.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanelWire {
+    clk_phase: Option<bool>,
+    latch_blanking: Option<i64>,
+    driver: Option<String>,
+    i2s_speed: Option<i64>,
+    min_refresh: Option<i64>,
+}
+
 /// Wire format for `POST /api/files/move`: rename a GIF (and what follows
 /// it by name).
 #[derive(serde::Deserialize)]
@@ -162,6 +184,13 @@ struct ConfigPatch {
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
     api_key: Option<String>,
+    /// Panel timing: an object is tried (reverts unless confirmed), `null`
+    /// saves the defaults (`PanelOp`).
+    #[serde(default, deserialize_with = "double_option_panel")]
+    panel: Option<Option<PanelWire>>,
+    /// `true` keeps the trial (with `panel`: saved without one), `false`
+    /// undoes it.
+    panel_confirm: Option<bool>,
 }
 
 /// Wire format for `POST /api/card/format`: `{"confirm": true}`, so an
@@ -269,10 +298,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     let c = ctx.clone();
     server.route("/api/config", Method::Get, move |req| {
-        let json = {
+        let mut json = {
             let s = c.settings.lock().unwrap();
             settings_json(&s)
         };
+        json.pop(); // the closing brace: the panel keys go in too
+        json.push(',');
+        json.push_str(&panel_json(&c.status.lock().unwrap()));
+        json.push('}');
         req.json(&json)
     })?;
 
@@ -432,6 +465,32 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if next.dwell_max < next.dwell_min {
             return req.bad_request("dwell_max must be >= dwell_min");
         }
+        let panel_op = match (patch.panel, patch.panel_confirm) {
+            (None, None) => None,
+            (None, Some(true)) => Some(PanelOp::Confirm),
+            (None, Some(false)) => Some(PanelOp::Revert),
+            (Some(None), _) => Some(PanelOp::Save(None)),
+            (Some(Some(_)), Some(false)) => {
+                return req.bad_request("panel_confirm false undoes a trial: send it without panel");
+            }
+            (Some(Some(w)), confirm) => {
+                let p = match PanelPatch::new(
+                    w.clk_phase,
+                    w.latch_blanking,
+                    w.driver.as_deref(),
+                    w.i2s_speed,
+                    w.min_refresh,
+                ) {
+                    Ok(p) => p,
+                    Err(e) => return req.bad_request(&e),
+                };
+                Some(if confirm == Some(true) {
+                    PanelOp::Save(Some(p))
+                } else {
+                    PanelOp::Try(p)
+                })
+            }
+        };
         // WiFi and the hostname are read once, when the network starts
         // (`net_worker`: the STA netif's DHCP name, mDNS): saved now, in
         // effect after a reboot.
@@ -443,6 +502,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if c.cmd
             .send(Command::ApplyConfig {
                 settings: Box::new(next),
+                panel: panel_op,
                 reply: tx,
             })
             .is_err()
@@ -455,11 +515,19 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     crate::httpd::set_api_key(k);
                     info!("API key {}", if k.is_empty() { "cleared" } else { "set" });
                 }
+                let (panel, restart) = {
+                    let st = c.status.lock().unwrap();
+                    (panel_json(&st), st.panel.restart_needed())
+                };
+                // A restart this request's panel change waits for (not one
+                // pending from before: the WiFi banner keys off this).
+                let reboot_required = reboot_required || (panel_op.is_some() && restart);
                 req.json(&format!(
-                    r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{reboot_required}}}"#,
+                    r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{reboot_required},{panel}}}"#,
                     applied_json(&applied)
                 ))
             }
+            Ok(Err(e)) if e == panel_timing::NO_TRIAL => req.error(409, "409 Conflict", &e),
             // Checked by the main task before anything was saved: the
             // configuration and the running playlist are as they were.
             Ok(Err(e)) if e == SET_NOT_FOUND => req.not_found(SET_NOT_FOUND),
@@ -1732,6 +1800,20 @@ fn looks_json(set: &Settings) -> String {
 /// A JSON string, or `null`.
 fn opt_json(s: Option<&str>) -> String {
     s.map_or_else(|| "null".to_string(), json_string)
+}
+
+/// `"panel":{saved},"panel_now":{running},"panel_next":{…}|null,"panel_trial_s":N|null`
+/// (`opendmd_core::panel_timing::Tuner`, published by the main task).
+fn panel_json(st: &Status) -> String {
+    let t = &st.panel;
+    let null = || "null".to_string();
+    format!(
+        r#""panel":{},"panel_now":{},"panel_next":{},"panel_trial_s":{}"#,
+        t.saved.json(),
+        t.running.effective().json(),
+        t.next_boot().map_or_else(null, |n| n.json()),
+        t.trial_left(st.epoch.elapsed()).map_or_else(null, |n| n.to_string()),
+    )
 }
 
 /// The saved configuration. The WiFi password and the RePlayOS code are never

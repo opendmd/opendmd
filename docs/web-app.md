@@ -99,7 +99,11 @@ names the format or shows a copy's path.
   brightness, dwell, shuffle, platform filter and playlist, which apply
   live (not while an index is building); a **Maximum brightness** under
   Power (default 144, below the level tested safe on the supplied power supply;
-  raising it shows a warning, because the panel can reset above it); the **Playback cache** card ("9,826
+  raising it shows a warning, because the panel can reset above it); **Panel
+  timing** under Advanced (`js/panel.js`: the HUB75 clock edge, latch
+  blanking, driver chip, data clock and minimum refresh, each change a
+  trial with Keep/Undo and a countdown, the boot-time ones through "Restart
+  now", and Reset to defaults; see [`firmware.md`](firmware.md#panel-timing)); the **Playback cache** card ("9,826
   of 10,133 files prepared", from `GET /api/cache`) with **Prepare remaining
   files**, which works out what the playlist in play is missing
   (`GET /api/cache/list`) and encodes and uploads it in the background, one

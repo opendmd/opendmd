@@ -88,6 +88,7 @@ use std::time::{Duration, Instant};
 use crate::http::{Ctx, NetCommand};
 use crate::nvs_config::{Config, Settings};
 use crate::panel::{Panel, PanelConfig};
+use opendmd_core::panel_timing::{self, Effects, PanelOp, PanelTiming, Tuner};
 use crate::sd::{SdBus, SdCard, SdSource};
 use crate::show::{Screen, CARD_FAILING};
 use crate::state::{
@@ -99,8 +100,9 @@ use crate::state::{
 /// After that it is only attempted if the block it needs is really there.
 static HEAP_FRESH: AtomicBool = AtomicBool::new(true);
 /// Set by [`rebuild`] when the only way to get a playlist is a reboot (see
-/// [`NeedsFreshHeap`]); acted on by the main loop *after* it has answered the
-/// command that caused it, so the HTTP caller gets its reply first.
+/// [`NeedsFreshHeap`]), and by [`panel_effects`] to undo a panel-timing boot
+/// trial; acted on by the main loop *after* it has answered the command that
+/// caused it, so the HTTP caller gets its reply first.
 static REBOOT_PENDING: AtomicBool = AtomicBool::new(false);
 /// A frame has been blitted since boot: an engine built from now on (a
 /// playlist change) transitions in from the picture on the panel rather than
@@ -228,16 +230,36 @@ fn main() -> Result<()> {
     // DRAM, and a heap already churned by other work is exactly what produces
     // "!KABOOM! HUB75 memory allocation failed". Claim the hard allocation on a
     // virgin heap. Doing it here also puts the I2S interrupt on CPU1.
-    let panel_cfg = PanelConfig::default();
+    //
+    // Its timing comes from NVS (`panel`), or from a trial staged for this
+    // one boot (`panel_try`), which is removed before the panel starts: if
+    // the trial leaves the panel dark or the chip crashes, the next boot is
+    // on the saved settings whatever happens (`opendmd_core::panel_timing`).
+    let mut nvs_config = Config::new(nvs_partition.clone())?;
+    let mut tuner = {
+        let (saved, staged) = nvs_config.panel();
+        if staged.is_some() {
+            if let Err(e) = nvs_config.set_panel_try(None) {
+                log::error!("panel timing: removing the staged trial from NVS failed ({e:#})");
+            }
+        }
+        Tuner::boot(saved.as_deref(), staged.as_deref())
+    };
+    let panel_cfg = PanelConfig::new(&tuner.running.effective());
     let mut panel = Panel::new(&panel_cfg)?;
     log::info!(
-        "panel up: {}x{} ({} x {}x{}), driver={}, double_buff={}, hub75_refresh_rate={} Hz",
+        "panel up: {}x{} ({} x {}x{}), timing {} ({}), double_buff={}, hub75_refresh_rate={} Hz",
         panel_cfg.surface_width(),
         panel_cfg.height,
         panel_cfg.chain,
         panel_cfg.width,
         panel_cfg.height,
-        panel_cfg.driver,
+        tuner.running.to_nvs(),
+        match tuner.trial {
+            Some(_) => "on trial: the staged settings, for this boot only",
+            None if tuner.running == PanelTiming::default() => "the defaults",
+            None => "saved",
+        },
         panel_cfg.double_buffer,
         panel.refresh_rate(),
     );
@@ -264,7 +286,6 @@ fn main() -> Result<()> {
     // device that has already restarted `SD_REBOOT_CAP` times for card
     // failure does not mount at boot at all but remounts every
     // `SD_REMOUNT_INTERVAL`. The mount itself is the boot task's (`boot.rs`).
-    let mut nvs_config = Config::new(nvs_partition.clone())?;
     let health = {
         let poweron = matches!(reset_reason, "poweron" | "brownout");
         let health = sdhealth::boot(poweron, nvs_config.sd_slow());
@@ -372,6 +393,7 @@ fn main() -> Result<()> {
         s.reset_reason = reset_reason;
         s.refresh_hz = panel.refresh_rate();
         s.tz_name = tz_label(&settings);
+        s.panel = tuner;
     }
     let shared_settings = Arc::new(Mutex::new(settings.clone()));
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
@@ -444,6 +466,12 @@ fn main() -> Result<()> {
         if safe.poll(epoch.elapsed()) {
             panel.set_max_brightness(settings.max_brightness);
             log::info!("safe start: over, brightness {}", panel.brightness());
+        }
+        // A panel-timing trial whose time is up goes back to the saved
+        // settings (live, or by a restart after the replies below).
+        if let Some(fx) = tuner.poll(epoch.elapsed(), state::NET_UP.load(Ordering::Relaxed)) {
+            log::warn!("panel timing: trial not kept within {} s, undoing it", panel_timing::TRIAL.as_secs());
+            panel_effects(fx, &tuner, &mut panel, &mut nvs_config, &status);
         }
 
         // 1. Commands from the HTTP handlers. Non-blocking, and everything that
@@ -521,9 +549,16 @@ fn main() -> Result<()> {
                 }
                 Command::ApplyConfig {
                     settings: next,
+                    panel: panel_op,
                     reply,
                 } => {
                     let next = *next;
+                    // A confirm must find a trial running (it may have just
+                    // reverted): refused before anything is saved.
+                    if panel_op == Some(PanelOp::Confirm) && tuner.trial.is_none() {
+                        let _ = reply.send(Err(panel_timing::NO_TRIAL.to_string()));
+                        continue;
+                    }
                     // Check the new set's manifest opens *before* anything is
                     // saved: persisting a set that does not exist used to leave
                     // the engine at None and the board retrying forever, across
@@ -585,6 +620,25 @@ fn main() -> Result<()> {
                         Ok(()) => {
                             settings = next;
                             *shared_settings.lock().unwrap() = settings.clone();
+                            if let Some(op) = panel_op {
+                                match tuner.apply(op, epoch.elapsed()) {
+                                    Ok(fx) => {
+                                        let pending = match (tuner.trial, tuner.staged) {
+                                            (Some(t), _) => format!("on trial until {} s", t.until.as_secs()),
+                                            (None, Some(st)) => format!("{} staged for the next boot", st.to_nvs()),
+                                            (None, None) if tuner.restart_needed() => "a restart applies the rest".into(),
+                                            (None, None) => "nothing pending".into(),
+                                        };
+                                        log::info!(
+                                            "panel timing: {op:?} -> running {}, saved {}, {pending}",
+                                            tuner.running.to_nvs(),
+                                            tuner.saved.to_nvs()
+                                        );
+                                        panel_effects(fx, &tuner, &mut panel, &mut nvs_config, &status);
+                                    }
+                                    Err(e) => log::warn!("panel timing: {e}"),
+                                }
+                            }
                             // Brightness and dwell apply to what is on screen
                             // right now; a filter, set or order change means a
                             // new catalog — rebuilt in place, never a reboot.
@@ -2426,10 +2480,42 @@ fn heal_missing_set(settings: &mut Settings, nvs: &mut Config) -> bool {
     true
 }
 
-/// Reboot so the in-RAM fallback index can be built on a fresh heap.
+/// Carry out what a panel-timing change asks (`Tuner::apply`/`poll`): the
+/// live values to the driver, NVS, the published state; a boot trial undone
+/// is a restart, after every pending reply (`REBOOT_PENDING`).
+fn panel_effects(
+    fx: Effects,
+    tuner: &Tuner,
+    panel: &mut Panel,
+    nvs: &mut Config,
+    status: &Arc<Mutex<Status>>,
+) {
+    if let Some(t) = fx.apply_live {
+        panel.set_live_timing(&t.effective());
+    }
+    if let Some(t) = fx.save {
+        if let Err(e) = nvs.set_panel(&t) {
+            log::error!("panel timing: saving {} failed ({e:#})", t.to_nvs());
+        }
+    }
+    if let Some(staged) = fx.stage {
+        if let Err(e) = nvs.set_panel_try(staged.as_ref()) {
+            log::error!("panel timing: staging the trial failed ({e:#})");
+        }
+    }
+    status.lock().unwrap().panel = *tuner;
+    if fx.restart {
+        log::info!("panel timing: restarting on the saved settings {}", tuner.saved.to_nvs());
+        REBOOT_PENDING.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Reboot after the pending replies: so the in-RAM fallback index can be
+/// built on a fresh heap, or to undo a panel-timing boot trial.
 ///
-/// Only reached through [`NeedsFreshHeap`], i.e. a card that refuses the
-/// `.idx` file. The reply has already been queued; the sleep is for the
+/// Reached through [`NeedsFreshHeap`], i.e. a card that refuses the `.idx`
+/// file, and through a panel-timing boot trial undone (`panel_effects`).
+/// The reply has already been queued; the sleep is for the
 /// handler on the other core, which is still writing it.
 fn reboot_to_apply() -> ! {
     sdhealth::note_restart();

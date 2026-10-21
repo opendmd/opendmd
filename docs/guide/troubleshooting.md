@@ -39,6 +39,18 @@ The power supply can't keep up at high brightness, especially on mostly
 white pictures. Lower the brightness, or lower **Maximum brightness** in
 **Settings → Power** if you raised it.
 
+## Some LEDs show the wrong colours on certain pictures
+
+If a few dots come out the wrong colour on some pictures but not others,
+the panel may be fussy about timing. Open **Settings → Advanced → Panel
+timing** and change one setting at a time, starting with **Clock edge**,
+then **Latch blanking**, and only then **Driver chip**. Each change is
+tried for a minute: press **Keep** if it looks better, or let it go back by
+itself. The driver chip needs a restart to try, and if the panel goes dark,
+just wait and it comes back on its own. **Reset to defaults** puts
+everything back. After trying a different driver chip, switch the display
+off and on before judging the result.
+
 ## Settings says "Card running at reduced speed" or shows card errors
 
 The card is wearing out. The player keeps going as best it can, but replace

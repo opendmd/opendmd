@@ -26,6 +26,7 @@ pub mod manifest;
 #[cfg(feature = "ota")]
 pub mod ota;
 pub mod overrides;
+pub mod panel_timing;
 pub mod player;
 pub mod schedule;
 pub mod scheduler;
