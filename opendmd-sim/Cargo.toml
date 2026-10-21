@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-sim"
-version = "1.1.0-rc.1"
+version = "1.0.0-beta.1"
 edition = "2021"
 description = "Desktop simulator for OpenDMD: plays a card's GIFs in a 128x32 window."
 license = "MIT OR Apache-2.0"
