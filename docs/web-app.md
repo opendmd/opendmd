@@ -277,6 +277,23 @@ lists (2.4 MB, 527 KB gzipped, one platform fetched at a time) are printed
 without a budget. `make web` writes a `<file>.gz` beside each file, and the
 player sends those in preference.
 
+## The demo
+
+[opendmd.github.io/demo](https://opendmd.github.io/demo/) is this app with no
+player behind it. When nothing answers `GET /api/status` but a
+`demo/index.json` sits beside the page, the app loads that card instead of
+offering the folder picker: its files are fetched as they are read, writes
+stay in the page, and Now starts playing All files by itself (live items
+included). **Use your own card…** in the header swaps in a card folder.
+
+The demo card is the panel's own effects, recorded by the simulator, the
+CC0 Kenney Pixel Platformer sprites and a playlist of live items
+(`tools/demo-card.py`). `make site` builds the whole public site into
+`target/site`: the README as the landing page, these docs as HTML, and the
+app with the demo card under `demo/` (`tools/site.py`). `make site-serve`
+serves it on :8081; `make site-publish` pushes it to the
+`opendmd/opendmd.github.io` repository, which GitHub Pages serves.
+
 ## The mock device
 
 **The mock device.** `tools/mock-device.py` (a `uv` script, standard library
