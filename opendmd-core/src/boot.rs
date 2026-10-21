@@ -1,39 +1,49 @@
 //! The startup sequence ("boot show") and the status card.
 //!
+//! Both are built on the wordmark: "OpenDMD" in the panel's big font (the
+//! 5x7 font at twice its size, what `@text` draws by default: 68 x 14 px),
+//! amber (`ffaa00`) on black, centred across the panel.
+//!
 //! **The show** plays on the panel from the moment it lights until the
-//! first GIF can take over: a warp (stars from a hash, as the starfield
-//! effect's, accelerating from a drift into hyperspace streaks) that jumps
-//! into the time-warp tunnel ([`crate::fx::Tunnel`], chrono palette) with a
-//! flash, the name "OpenDMD" (the 5x7 font, sampled at any scale) flying out
-//! of the tunnel's vanishing point to three times its size, overshooting a
-//! little and settling, a glint across it, and a status line in the small
-//! font: the version first, then the most useful thing there is to say (the
-//! WiFi network to join in setup mode, a card problem in plain words, the
-//! address once WiFi is up). [`ShowLength::Short`] is 1.3 s (a sting: the
-//! boot it covers takes ~0.4 s with a current playlist index), `Full` 5.6 s
-//! (a longer warp and a slower arrival); either holds its last beat (the
-//! tunnel dimmed behind the name, a glint every 2.4 s) for as long as the
-//! card takes. The firmware ends it at `max(minimum, card ready)`, and
-//! after [`CAP_MS`] shows the card instead.
+//! first GIF can take over. The name powers on as a dot-matrix display
+//! does: its dots light in a sweep from left to right, each with a little
+//! jitter, and each warms up like a phosphor (a dull ember, a brief hot
+//! peak, then settling to amber); a single glint sweeps across it once
+//! every dot has settled; and a status line fades in underneath in the
+//! small font: the version first, then the most useful thing there is to
+//! say (the WiFi network to join in setup mode, a card problem in plain
+//! words, the address once WiFi is up). [`ShowLength::Short`] is a 1.3 s
+//! sting (the boot it covers takes ~0.4 s with a current playlist index);
+//! `Full` is 5.6 s, the same idea paced slower, with the letters first
+//! glowing faintly like a cold filament and then lighting LED by LED rather
+//! than dot by dot. Either holds its last frame (a glint every
+//! [`HOLD_GLINT_MS`]) for as long as the card takes. The firmware ends it
+//! at `max(minimum, card ready)`, and after [`CAP_MS`] shows the card
+//! instead.
 //!
 //! **The status card** ([`card`]) is what the panel shows whenever there is
-//! no card to play from: the name at twice its size over a slow, dim star
-//! drift, and two lines — the problem in plain words (amber) and where to
-//! go (the address, or the setup network to join). Calm and looping
-//! ([`CARD_LOOP_MS`]).
+//! no card to play from: the same wordmark, a few pixels higher, and two
+//! lines — the problem in plain words (warm white) and where to go (amber:
+//! the address, or the setup network to join). Calm and looping
+//! ([`CARD_LOOP_MS`]: a glint every 4.1 s). Arriving from the show
+//! ([`INTRO_MS`]) the name glides up into place, the status line fades out
+//! and the two lines fade in.
 //!
 //! **Pure functions of time.** A frame is a function of the time since the
 //! scene began and the [`Info`] strings: nothing is remembered between
 //! frames, nothing is allocated (the text is drawn from up to two string
-//! slices), and every table is the effects' (`fx`: the sine, the palettes,
-//! the tunnel's). So the firmware's show, the simulator and the browser
+//! slices), and the name is drawn from the font's own rows ([`crate::text`],
+//! pixel for pixel what `@text?msg=OpenDMD&scroll=0&color=ffaa00` draws,
+//! unit-tested). So the firmware's show, the simulator and the browser
 //! draw the same pixels: the virtual file [`PATH`]
 //! (`@boot[?len=short|full|card&v=<version>&ip=<address>&ap=<network>&note=<text>]`,
 //! parsed by [`crate::synth`]) plays the show once (or the card for one
-//! loop) at the effects' frame rate.
+//! loop) at the effects' frame rate. A frame clears the canvas and walks
+//! the name's 68 x 14 box and one or two lines of text: ~1,000 pixels of
+//! integer arithmetic.
 
-use crate::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
-use crate::fx::{self, Common, Effect, Palette, Texture, Tunnel};
+use crate::canvas::{Canvas, Rgb, WIDTH};
+use crate::fx;
 use crate::text::{self, Font};
 use std::time::Duration;
 
@@ -79,43 +89,56 @@ impl ShowLength {
 /// How long the show may wait for the card before the status card takes
 /// over (ms since the show began).
 pub const CAP_MS: u32 = 8_000;
-/// The status card's loop (the stars' pass through the field; the glint's
-/// period divides it).
+/// The status card's loop (four glints).
 pub const CARD_LOOP_MS: u32 = 16_384;
-/// The card's arrival from the show: the name shrinking into place, the
-/// tunnel going out, the text coming up.
+/// The card's arrival from the show: the name gliding up into place, the
+/// status line going out, the card's lines coming up.
 pub const INTRO_MS: u32 = 700;
+/// While the show holds its last frame, a glint this often.
+pub const HOLD_GLINT_MS: u32 = 3_000;
 
 /// The show's timeline, in ms.
 struct Beats {
-    /// The jump: the tunnel fully in, the flash at its peak.
-    warp: u32,
-    /// The name leaves the vanishing point, and has settled.
-    logo0: u32,
-    logo1: u32,
-    /// The status line comes up.
+    /// The name's dots glow faintly (a cold filament) from `ember.0`, fully
+    /// by `ember.1`; `(0, 0)` for none.
+    ember: (u32, u32),
+    /// The first dot lights; the sweep's last column starts `sweep` later,
+    /// each dot up to `jitter` after its column; a dot's warm-up.
+    on: u32,
+    sweep: u32,
+    jitter: u32,
+    warm: u32,
+    /// Each LED (panel pixel) on its own time rather than each font dot.
+    led: bool,
+    /// The first glint; the status line comes up.
+    glint: u32,
     status: u32,
     /// The shortest show.
     min: u32,
-    stars: u32,
 }
 
 const SHORT: Beats = Beats {
-    warp: 600,
-    logo0: 480,
-    logo1: 1_100,
-    status: 950,
+    ember: (0, 0),
+    on: 60,
+    sweep: 420,
+    jitter: 90,
+    warm: 260,
+    led: false,
+    glint: 740,
+    status: 900,
     min: 1_300,
-    stars: 160,
 };
 
 const FULL: Beats = Beats {
-    warp: 2_800,
-    logo0: 2_650,
-    logo1: 4_400,
-    status: 4_200,
+    ember: (250, 1_150),
+    on: 1_150,
+    sweep: 1_400,
+    jitter: 450,
+    warm: 420,
+    led: true,
+    glint: 3_550,
+    status: 3_850,
     min: 5_600,
-    stars: 240,
 };
 
 fn beats(len: ShowLength) -> &'static Beats {
@@ -125,22 +148,21 @@ fn beats(len: ShowLength) -> &'static Beats {
     }
 }
 
-/// The show's beat at `t` (for the firmware's log): `warp`, `name` (it
-/// leaves the vanishing point), `jump` (into the tunnel), `status line`,
-/// `name settled`, then `hold` from the minimum on.
+/// The show's beat at `t` (for the firmware's log): `warm-up` (dark, or
+/// the name's faint glow in the full show), `power-on` (its dots
+/// lighting), `glint`, `status line`, then `hold` from the minimum on.
 pub fn phase(len: ShowLength, t: u32) -> &'static str {
     // (In this order in both timelines: `phases_in_order` checks.)
     let b = beats(len);
     [
         (b.min, "hold"),
-        (b.logo1, "name settled"),
         (b.status, "status line"),
-        (b.warp, "jump"),
-        (b.logo0, "name"),
+        (b.glint, "glint"),
+        (b.on, "power-on"),
     ]
     .iter()
     .find(|&&(at, _)| t >= at)
-    .map_or("warp", |&(_, name)| name)
+    .map_or("warm-up", |&(_, name)| name)
 }
 
 /// What the status line and the card say: the firmware's version, its
@@ -227,206 +249,55 @@ fn ramp(t: u32, a: u32, b: u32) -> u32 {
     }
 }
 
-// --- the pieces -------------------------------------------------------------
-
-/// The tunnel at `t` of its own time, its light at `level` / 256.
-fn tunnel(canvas: &mut Canvas, t: u32, level: u32) {
-    let mut tunnel = Tunnel {
-        common: Common {
-            speed: 2,
-            delay_ms: 10,
-            palette: Palette::Chrono,
-            cycle: true,
-        },
-        twist: 1,
-        texture: Texture::Checker,
-        drift: false,
-        layers: 2,
-    };
-    tunnel.frame(Duration::from_millis(u64::from(t)), canvas);
-    if level < 256 {
-        for b in canvas.as_mut_bytes() {
-            *b = ((u32::from(*b) * level) >> 8) as u8;
-        }
-    }
-}
-
-/// The tunnel's own time at `t` of the show: twice real time in the warp,
-/// easing to real time over the 700 ms before the name settles.
-fn tunnel_time(b: &Beats, t: u32) -> u32 {
-    const D: u32 = 700;
-    let a = b.logo1 - D;
-    if t <= a {
-        2 * t
-    } else if t <= b.logo1 {
-        let d = t - a;
-        2 * a + 2 * d - d * d / (2 * D)
-    } else {
-        2 * a + 2 * D - D / 2 + (t - b.logo1)
-    }
-}
-
-/// The tunnel's light in the show: in over the 400 ms to the jump, dimmed to
-/// 90 / 256 behind the name over the last two thirds of its flight.
-fn tunnel_level(b: &Beats, t: u32) -> u32 {
-    let up = ramp(t, b.warp - 400, b.warp);
-    let dim = (b.logo1 - b.logo0) * 2 / 3;
-    up.saturating_sub((256 - 90) * ramp(t, b.logo1 - dim, b.logo1) / 256)
-}
-
-/// Depth units of the stars' field.
-const DEPTH: i32 = 4096;
-
-/// Star `k`'s place: x and y spread, and its depth at travel 0.
-fn star(k: u32) -> (i32, i32, i32) {
-    let h = fx::hash(k.wrapping_mul(0x9e37_79b9) ^ 0xb007);
-    (
-        (h & 4095) as i32 - 2048,
-        ((h >> 12) & 1023) as i32 - 512,
-        (fx::hash(h) & 4095) as i32,
-    )
-}
-
-fn project(sx: i32, sy: i32, z: i32) -> (i32, i32) {
-    let zz = (z >> 4) + 4;
-    (
-        WIDTH as i32 / 2 + sx * 2 / zz,
-        HEIGHT as i32 / 2 + sy * 2 / zz,
-    )
-}
-
-/// `n` stars at `travel` depth units in, each a streak `len` units long,
-/// coloured by nearness from the chrono palette's first 24 entries (black,
-/// purple, blue, white) at `level` / 256.
-fn stars(canvas: &mut Canvas, n: u32, travel: i32, len: i32, level: u32) {
-    let pal = Palette::Chrono.table();
-    for k in 0..n {
-        let (sx, sy, z0) = star(k);
-        let z = (z0 - travel).rem_euclid(DEPTH);
-        let head = project(sx, sy, z);
-        if !(0..WIDTH as i32).contains(&head.0) || !(0..HEIGHT as i32).contains(&head.1) {
-            continue;
-        }
-        let c = pal[(((DEPTH - 1 - z) * 24) >> 12) as usize];
-        if c == Rgb::BLACK {
-            continue;
-        }
-        let tail = project(sx, sy, (z + len).min(DEPTH - 1));
-        fx::line(
-            canvas,
-            (tail.0, tail.1, 40),
-            (head.0, head.1, 256),
-            fx::scale(c, level),
-        );
-    }
-}
-
-/// The warp's stars at `t`: a drift accelerating as the cube of time into
-/// hyperspace (travel `0.6 t + 3 warp (t / warp)^4` depth units), streaks
-/// growing with the speed, fading in from black and out into the jump.
-fn warp_stars(canvas: &mut Canvas, b: &Beats, t: u32) {
-    let tau = u64::from(t.min(b.warp + 300)) * 1024 / u64::from(b.warp);
-    let travel = u64::from(t) * 6 / 10 + ((3 * u64::from(b.warp) * tau.pow(4)) >> 40);
-    let len = (18 + ((360 * tau.pow(3)) >> 30)).min(1800) as i32;
-    let level = ramp(t, 0, 200) * (256 - ramp(t, b.warp - 250, b.warp + 250)) / 256;
-    if level > 0 {
-        stars(canvas, b.stars, (travel % DEPTH as u64) as i32, len, level);
-    }
-}
-
-/// The jump: a lavender-white flash over everything, up in 60 ms to the
-/// warp beat and out over 200 ms.
-fn flash(canvas: &mut Canvas, b: &Beats, t: u32) {
-    let f = if t + 60 <= b.warp || t >= b.warp + 200 {
-        return;
-    } else if t < b.warp {
-        170 * (t + 60 - b.warp) / 60
-    } else {
-        170 * (b.warp + 200 - t) / 200
-    };
-    for px in canvas.as_mut_bytes().as_chunks_mut::<3>().0 {
-        px[0] = px[0].saturating_add((f * 3 / 4) as u8);
-        px[1] = px[1].saturating_add((f * 3 / 4) as u8);
-        px[2] = px[2].saturating_add(f as u8);
-    }
-}
+// --- the wordmark -------------------------------------------------------------
 
 const LOGO: &[u8; 7] = b"OpenDMD";
-/// The name's size in font pixels (5x7, 7 characters, no trailing gap).
-const LOGO_W: i32 = 34;
-const LOGO_H: i32 = 7;
-/// The name's colour by font row: chrome, from pale blue through white to
-/// violet.
-const GRAD: [Rgb; 7] = [
-    Rgb::new(190, 215, 255),
-    Rgb::new(255, 255, 255),
-    Rgb::new(225, 225, 255),
-    Rgb::new(185, 170, 255),
-    Rgb::new(150, 115, 255),
-    Rgb::new(120, 75, 235),
-    Rgb::new(95, 45, 205),
-];
+/// The big font: 5x7 at twice its size.
+const SCALE: i32 = 2;
+/// The name in font dots (7 characters, no trailing gap), and on the panel.
+const DOTS_W: i32 = 7 * Font::Normal.advance() as i32 - 1;
+const LOGO_W: i32 = DOTS_W * SCALE;
+const LOGO_H: i32 = Font::Normal.height() as i32 * SCALE;
+const LOGO_X: i32 = (WIDTH as i32 - LOGO_W) / 2;
+/// The name's top row in the show (over one line) and on the card (over
+/// two).
+const SHOW_Y: i32 = 5;
+const CARD_Y: i32 = 2;
+/// The text's top rows: the show's status line, the card's two lines.
+const SHOW_LINE_Y: i32 = 23;
+const CARD_LINE_Y: [i32; 2] = [18, 25];
 
-/// Where and how the name is drawn: its scale (Q8: 256 = one font pixel a
-/// panel pixel), its centre (Q8 pixels), its light (/ 256), and the glint's
-/// x (a band 6 px wide leaning with the rows; off the panel for none).
-struct Logo {
-    s: i32,
-    cx: i32,
-    cy: i32,
-    level: u32,
-    glint: i32,
+/// The wordmark's amber, as on the site.
+const AMBER: Rgb = Rgb::new(255, 170, 0);
+/// A dot's warm-up: a dull ember, a hot peak, amber; and the faint glow of
+/// the full show's cold filament.
+const EMBER: Rgb = Rgb::new(120, 30, 0);
+const HOT: Rgb = Rgb::new(255, 214, 130);
+const COLD: Rgb = Rgb::new(44, 10, 0);
+/// The glint's light, at most `GLINT_K` / 256 over the amber.
+const GLINT: Rgb = Rgb::new(255, 244, 210);
+const GLINT_K: u32 = 200;
+/// The text: the status line and the card's second line, amber
+/// (`text::SUBTITLE_COLOUR`); a problem on the card, warm white
+/// (`text::TITLE_COLOUR`).
+const LINE: Rgb = text::SUBTITLE_COLOUR;
+const PROBLEM: Rgb = text::TITLE_COLOUR;
+
+/// Whether font dot `(u, v)` of the name is lit.
+fn dot(u: i32, v: i32) -> bool {
+    let rows = Font::Normal.rows(LOGO[(u / 5) as usize] as char);
+    rows[v as usize] & (0x80 >> (u % 5)) != 0
 }
 
-impl Logo {
-    /// The font pixel under panel pixel `(x, y)`: its row, if lit.
-    fn at(&self, x: i32, y: i32) -> Option<usize> {
-        let u = x * 256 + 128 - (self.cx - LOGO_W * self.s / 2);
-        let v = y * 256 + 128 - (self.cy - LOGO_H * self.s / 2);
-        if u < 0 || v < 0 {
-            return None;
-        }
-        let (fu, fv) = (u / self.s, v / self.s);
-        if fu >= LOGO_W || fv >= LOGO_H {
-            return None;
-        }
-        let rows = Font::Normal.rows(LOGO[(fu / 5) as usize] as char);
-        (rows[fv as usize] & (0x80 >> (fu % 5)) != 0).then_some(fv as usize)
-    }
-
-    fn draw(&self, canvas: &mut Canvas) {
-        if self.s < 16 || self.level == 0 {
-            return;
-        }
-        // The box, a pixel wider all round for the outline.
-        let (hw, hh) = (LOGO_W * self.s / 2, LOGO_H * self.s / 2);
-        let x0 = ((self.cx - hw) >> 8) - 1;
-        let x1 = ((self.cx + hw) >> 8) + 1;
-        let y0 = ((self.cy - hh) >> 8) - 1;
-        let y1 = ((self.cy + hh) >> 8) + 1;
-        let outline = self.s >= 256;
-        for y in y0.max(0)..=y1.min(HEIGHT as i32 - 1) {
-            for x in x0.max(0)..=x1.min(WIDTH as i32 - 1) {
-                let c = match self.at(x, y) {
-                    Some(row) => {
-                        let mut c = GRAD[row];
-                        let g = x - self.glint - (y - (self.cy >> 8)) / 2;
-                        if (0..6).contains(&g) {
-                            c = mix(c, Rgb::new(255, 255, 255), 170);
-                        }
-                        fx::scale(c, self.level)
-                    }
-                    // A dark rim, so the name reads over the tunnel.
-                    None if outline
-                        && [(1, 0), (-1, 0), (0, 1), (0, -1)]
-                            .iter()
-                            .any(|&(dx, dy)| self.at(x + dx, y + dy).is_some()) =>
-                    {
-                        Rgb::BLACK
-                    }
-                    None => continue,
-                };
-                canvas.set(x as usize, y as usize, c);
+/// Draw the name with its top on row `y0`, each lit panel pixel `(x, y)`
+/// (of font dot `(u, v)`) in `colour(x, y, u, v)`.
+fn logo(canvas: &mut Canvas, y0: i32, colour: impl Fn(i32, i32, i32, i32) -> Rgb) {
+    for y in y0.max(0)..y0 + LOGO_H {
+        let v = (y - y0) / SCALE;
+        for x in LOGO_X..LOGO_X + LOGO_W {
+            let u = (x - LOGO_X) / SCALE;
+            if dot(u, v) {
+                canvas.set(x as usize, y as usize, colour(x, y, u, v));
             }
         }
     }
@@ -438,44 +309,67 @@ fn mix(a: Rgb, b: Rgb, k: u32) -> Rgb {
     Rgb::new(m(a.r, b.r), m(a.g, b.g), m(a.b, b.b))
 }
 
-/// The glint's x at `t` ms into its cycle of `period`: a 600 ms sweep from
-/// off the left to off the right, then nothing.
-fn glint(t: u32, period: u32) -> i32 {
-    let p = t % period;
-    if p < 600 {
-        -20 + (p * 168 / 600) as i32
+/// A dot `age` ms into its warm-up of `w`: from a dull ember up to a hot
+/// peak at a third of the way, then cooling to amber.
+fn warm(age: u32, w: u32) -> Rgb {
+    let k = ramp(age, 0, w);
+    if k < 85 {
+        mix(EMBER, HOT, k * 3)
     } else {
-        -1000
+        mix(HOT, AMBER, (k - 85) * 256 / 171)
     }
 }
 
-/// The status line's colour, and the card's: lavender, amber (a problem),
-/// pale blue.
-const LAVENDER: Rgb = Rgb::new(176, 160, 255);
-const AMBER: Rgb = Rgb::new(255, 176, 64);
-const PALE: Rgb = Rgb::new(140, 170, 255);
+/// The glint `p` ms into its pass (none after 520 ms): a soft band 7 px
+/// wide leaning like a `/`, sweeping the name from left to right.
+/// Returns its light at `(x, y)` (/ 256) for a name whose top is `y0`.
+fn glint(p: u32, x: i32, y: i32, y0: i32) -> u32 {
+    const PASS: u32 = 520;
+    if p >= PASS {
+        return 0;
+    }
+    let gx = LOGO_X - 10 + ((LOGO_W + 20) as u32 * p / PASS) as i32;
+    let d = (x - gx + (y - y0 - LOGO_H / 2) / 2).unsigned_abs();
+    (4u32.saturating_sub(d)) * GLINT_K / 4
+}
+
+/// The amber name with the glint `p` ms into its pass.
+fn glinting(c: Rgb, p: u32, x: i32, y: i32, y0: i32) -> Rgb {
+    match glint(p, x, y, y0) {
+        0 => c,
+        k => mix(c, GLINT, k),
+    }
+}
 
 fn parts_width(p: &Parts) -> i32 {
     let n = p[0].chars().count() + p[1].chars().count();
     (n as i32 * Font::Small.advance() as i32 - 1).max(0)
 }
 
-/// `p` in the small font, centred, its top at `y`, on a black box a pixel
-/// bigger than the text.
+/// `p` in the small font, centred, its top at `y`.
 fn line(canvas: &mut Canvas, y: i32, p: &Parts, colour: Rgb) {
     let w = parts_width(p);
-    if w == 0 {
+    if w == 0 || colour == Rgb::BLACK {
         return;
     }
     let x = (WIDTH as i32 - w) / 2;
-    for yy in (y - 1).max(0)..(y + Font::Small.height() as i32).min(HEIGHT as i32) {
-        for xx in (x - 1).max(0)..(x + w + 1).min(WIDTH as i32) {
-            canvas.set(xx as usize, yy as usize, Rgb::BLACK);
-        }
-    }
     let w0 = text::draw_text_with(canvas, x, y, p[0], colour, Font::Small, 1);
     let gap = if p[0].is_empty() { 0 } else { 1 };
     text::draw_text_with(canvas, x + w0 as i32 + gap, y, p[1], colour, Font::Small, 1);
+}
+
+/// The show's status line at `t`, and its light (/ 256): the version,
+/// fading in over 300 ms, then 1.2 s later what matters (a 150 ms dip out
+/// and back in, if that is different).
+fn status<'a>(b: &Beats, t: u32, info: &Info<'a>) -> (Parts<'a>, u32) {
+    let swap = b.status + 1_200;
+    let (version, then) = (info.version_line(), info.show_line());
+    let text = if t < swap { version } else { then };
+    let mut k = ramp(t, b.status, b.status + 300);
+    if version != then {
+        k = k.min(t.abs_diff(swap).min(150) * 256 / 150);
+    }
+    (text, k)
 }
 
 // --- the scenes ---------------------------------------------------------------
@@ -484,53 +378,34 @@ fn line(canvas: &mut Canvas, y: i32, p: &Parts, colour: Rgb) {
 /// pixel is written and marked.
 pub fn show(canvas: &mut Canvas, len: ShowLength, t: u32, info: &Info) {
     let b = beats(len);
-    let level = tunnel_level(b, t);
-    if level > 0 {
-        tunnel(canvas, tunnel_time(b, t), level);
+    canvas.clear();
+    let cold = if b.ember.1 > 0 {
+        fx::scale(COLD, ramp(t, b.ember.0, b.ember.1))
     } else {
-        canvas.clear();
-    }
-    if t < b.warp + 250 {
-        warp_stars(canvas, b, t);
-    }
-    flash(canvas, b, t);
-    if t >= b.logo0 {
-        // Out of the depth: the scale is 3 x (1 / z), z from 16 to 0.9 in
-        // the first 85% of the flight; then back from the overshoot (1.11x)
-        // to 3x, easing out.
-        let u = ramp(t, b.logo0, b.logo1) as i32;
-        let s = if u < 218 {
-            let z = 4096 - (4096 - 230) * u / 218;
-            768 * 256 / z
+        Rgb::BLACK
+    };
+    // The glint: the first pass, then one every `HOLD_GLINT_MS`.
+    let p = t
+        .checked_sub(b.glint)
+        .map_or(u32::MAX, |d| d % HOLD_GLINT_MS);
+    let last = (LOGO_W - 1) as u32;
+    logo(canvas, SHOW_Y, |x, y, u, v| {
+        // The sweep by column (of LEDs or of dots), a jitter from a hash.
+        let (col, key) = if b.led {
+            ((x - LOGO_X) as u32, (y * 128 + x) as u32)
         } else {
-            let e = (u - 218) * 256 / 38;
-            let e = 256 - (256 - e) * (256 - e) / 256;
-            855 - 87 * e / 256
+            ((u * SCALE) as u32, (v * 64 + u) as u32)
         };
-        // From the vanishing point (row 16) up to the name's place (its
-        // top on row 2) as it grows; brighter as it nears.
-        let near = s.min(768);
-        Logo {
-            s,
-            cx: 64 * 256,
-            cy: 16 * 256 - 896 * near / 768,
-            level: (s as u32 / 2).min(256),
-            glint: if t + 150 >= b.logo1 {
-                glint(t + 150 - b.logo1, 2_400)
-            } else {
-                -1000
-            },
+        let at = b.on + col * b.sweep / last + fx::hash(key ^ 0xb007) % b.jitter;
+        match t.checked_sub(at) {
+            None => cold,
+            Some(age) if age < b.warm => warm(age, b.warm),
+            Some(_) => glinting(AMBER, p, x, y, SHOW_Y),
         }
-        .draw(canvas);
-    }
+    });
     if t >= b.status {
-        let fade = ramp(t, b.status, b.status + 250);
-        let text = if t < b.status + 1_200 {
-            info.version_line()
-        } else {
-            info.show_line()
-        };
-        line(canvas, 26, &text, fx::scale(LAVENDER, fade));
+        let (text, k) = status(b, t, info);
+        line(canvas, SHOW_LINE_Y, &text, fx::scale(LINE, k));
     }
     canvas.dirty_mut().mark_all();
 }
@@ -540,44 +415,36 @@ pub fn show(canvas: &mut Canvas, len: ShowLength, t: u32, info: &Info) {
 /// arrives from it ([`INTRO_MS`]) rather than cutting in. Every pixel is
 /// written and marked.
 pub fn card(canvas: &mut Canvas, t: u32, info: &Info, from_show: Option<(ShowLength, u32)>) {
+    canvas.clear();
     let arrive = match from_show {
         Some(_) => ramp(t, 0, INTRO_MS),
         None => 256,
     };
-    match from_show {
-        Some((len, at)) if arrive < 256 => {
-            let b = beats(len);
-            let level = tunnel_level(b, at + t) * (256 - arrive) / 256;
-            tunnel(canvas, tunnel_time(b, at + t), level);
-        }
-        _ => canvas.clear(),
+    // The show's status line going out over the first half.
+    if let Some((len, at)) = from_show.filter(|_| arrive < 128) {
+        let (text, k) = status(beats(len), at + t, info);
+        let out = 256 - arrive * 2;
+        line(canvas, SHOW_LINE_Y, &text, fx::scale(LINE, k * out / 256));
     }
-    // A slow, dim drift: 64 stars, one pass through the field a loop.
-    stars(canvas, 64, (t / 4) as i32, 64, 128 * arrive / 256);
-    // The name: from the show's 3x at row 12.5 to 2x at row 8.
-    let s = 768 - 256 * arrive as i32 / 256;
-    Logo {
-        s,
-        cx: 64 * 256,
-        cy: 3200 - 1152 * arrive as i32 / 256,
-        level: 256,
-        glint: glint(t % 4_096, 4_096),
-    }
-    .draw(canvas);
+    // The name gliding up, easing out; a glint every 4,096 ms, the first
+    // 1.5 s in.
+    let e = 256 - (256 - arrive) * (256 - arrive) / 256;
+    let y0 = SHOW_Y - ((SHOW_Y - CARD_Y) as u32 * e).div_ceil(256) as i32;
+    let p = (t + 4_096 - 1_500) % 4_096;
+    logo(canvas, y0, |x, y, _, _| glinting(AMBER, p, x, y, y0));
+    // The lines coming up over the second half.
+    let k = ramp(arrive, 128, 256);
     let (first, second) = info.card_lines();
-    let c1 = if info.note.is_empty() {
-        LAVENDER
-    } else {
-        AMBER
-    };
-    line(canvas, 17, &first, fx::scale(c1, arrive));
-    line(canvas, 25, &second, fx::scale(PALE, arrive));
+    let c1 = if info.note.is_empty() { LINE } else { PROBLEM };
+    line(canvas, CARD_LINE_Y[0], &first, fx::scale(c1, k));
+    line(canvas, CARD_LINE_Y[1], &second, fx::scale(LINE, k));
     canvas.dirty_mut().mark_all();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canvas::HEIGHT;
 
     const INFO: Info = Info {
         version: "0.3.0",
@@ -588,6 +455,21 @@ mod tests {
 
     fn lit(c: &Canvas) -> usize {
         c.as_slice().iter().filter(|p| **p != Rgb::BLACK).count()
+    }
+
+    /// The name's panel pixels: what `text::draw_text_with` draws in the
+    /// big font with its top-left at `(LOGO_X, y0)`.
+    fn wordmark(y0: i32) -> Canvas {
+        let mut c = Canvas::new();
+        text::draw_text_with(&mut c, LOGO_X, y0, "OpenDMD", AMBER, Font::Normal, 2);
+        c
+    }
+
+    /// `c`'s rows `y0..y0 + LOGO_H` only (the name's band).
+    fn band(c: &Canvas, y0: i32) -> Vec<Rgb> {
+        (y0 as usize..(y0 + LOGO_H) as usize)
+            .flat_map(|y| (0..WIDTH).map(move |x| c.get(x, y)))
+            .collect()
     }
 
     #[test]
@@ -602,14 +484,7 @@ mod tests {
             }
             assert_eq!(
                 seen,
-                [
-                    "warp",
-                    "name",
-                    "jump",
-                    "status line",
-                    "name settled",
-                    "hold"
-                ],
+                ["warm-up", "power-on", "glint", "status line", "hold"],
                 "{len:?}"
             );
         }
@@ -661,58 +536,93 @@ mod tests {
     }
 
     #[test]
-    fn every_beat_draws_something_and_is_repeatable() {
+    fn every_beat_is_repeatable_and_the_name_only_grows() {
+        let mark = wordmark(SHOW_Y);
         for len in [ShowLength::Short, ShowLength::Full] {
-            for t in (0..=len.min_ms() + 3_000).step_by(50) {
+            let b = beats(len);
+            let mut before = 0;
+            for t in (0..=len.min_ms() + 3_000).step_by(10) {
                 let mut a = Canvas::new();
                 show(&mut a, len, t, &INFO);
                 // Pure: the same picture over whatever was there.
-                let mut b = Canvas::new();
-                b.fill(Rgb::new(9, 9, 9));
-                show(&mut b, len, t, &INFO);
-                assert_eq!(a, b, "{len:?} at {t} ms");
-                if t >= 100 {
-                    assert!(lit(&a) > 20, "{len:?} at {t} ms: {} lit", lit(&a));
+                let mut c = Canvas::new();
+                c.fill(Rgb::new(9, 9, 9));
+                show(&mut c, len, t, &INFO);
+                assert_eq!(a, c, "{len:?} at {t} ms");
+                // Nothing but the name's pixels above the status line.
+                for y in 0..SHOW_LINE_Y as usize {
+                    for x in 0..WIDTH {
+                        if mark.get(x, y) == Rgb::BLACK {
+                            assert_eq!(a.get(x, y), Rgb::BLACK, "{len:?} at {t} ms ({x}, {y})");
+                        }
+                    }
+                }
+                let n = lit(&a);
+                if t < b.status {
+                    assert!(n >= before, "{len:?} at {t} ms: {n} lit after {before}");
+                    before = n;
+                }
+                // Every dot lit once the sweep has passed.
+                if t >= b.on + b.sweep + b.jitter {
+                    assert!(n >= lit(&mark), "{len:?} at {t} ms: {n} lit");
                 }
             }
         }
     }
 
     #[test]
-    fn the_name_settles_at_exactly_three_times_the_font() {
-        // At the end of the flight, between glints, the name is the 5x7
-        // font at scale 3 with its top-left at (13, 2): what
-        // `text::draw_text_with` draws there.
-        let b = beats(ShowLength::Short);
-        let t = b.logo1 + 1_000;
-        let mut shown = Canvas::new();
-        show(&mut shown, ShowLength::Short, t, &INFO);
-        let mut want = Canvas::new();
-        text::draw_text_with(
-            &mut want,
-            13,
-            2,
-            "OpenDMD",
-            Rgb::new(1, 1, 1),
-            Font::Normal,
-            3,
-        );
-        let logo = Logo {
-            s: 768,
-            cx: 64 * 256,
-            cy: 3200,
-            level: 256,
-            glint: -1000,
-        };
-        for y in 0..HEIGHT {
-            for x in 0..WIDTH {
-                let drawn = want.get(x, y) != Rgb::BLACK;
-                assert_eq!(logo.at(x as i32, y as i32).is_some(), drawn, "({x}, {y})");
-                if drawn {
-                    assert!(GRAD.contains(&shown.get(x, y)), "({x}, {y})");
-                }
-            }
+    fn the_full_show_glows_before_it_lights() {
+        let b = beats(ShowLength::Full);
+        let mut c = Canvas::new();
+        show(&mut c, ShowLength::Full, b.on - 1, &INFO);
+        assert_eq!(lit(&c), lit(&wordmark(SHOW_Y)));
+        let glow = c.get(LOGO_X as usize, SHOW_Y as usize + 4);
+        assert!(glow != Rgb::BLACK && glow.r < 64, "{glow:?}");
+        assert!(c.as_slice().iter().all(|&p| p == Rgb::BLACK || p == glow));
+        let mut short = Canvas::new();
+        show(&mut short, ShowLength::Short, SHORT.on - 1, &INFO);
+        assert_eq!(lit(&short), 0);
+    }
+
+    #[test]
+    fn the_name_settles_as_the_big_font_draws_it() {
+        // Between glints, after the power-on, the name is exactly what
+        // `text::draw_text_with` draws in the big font, in amber.
+        for len in [ShowLength::Short, ShowLength::Full] {
+            let b = beats(len);
+            let t = b.glint + 1_000;
+            let mut shown = Canvas::new();
+            show(&mut shown, len, t, &INFO);
+            let settled = band(&shown, SHOW_Y);
+            assert_eq!(settled, band(&wordmark(SHOW_Y), SHOW_Y), "{len:?}");
+            // And mid-glint, lighter only on the name's pixels.
+            let mut g = Canvas::new();
+            show(&mut g, len, b.glint + HOLD_GLINT_MS + 260, &INFO);
+            let lighter = band(&g, SHOW_Y)
+                .iter()
+                .zip(&settled)
+                .filter(|(a, b)| a != b)
+                .inspect(|(a, b)| assert!(a.b > b.b && **b == AMBER))
+                .count();
+            assert!(lighter > 20, "{len:?}: {lighter} glinting");
         }
+    }
+
+    #[test]
+    fn the_wordmark_is_what_text_draws() {
+        // `@text?msg=OpenDMD&scroll=0&color=ffaa00`, the site's wordmark,
+        // is the same pixels as the card's name, moved.
+        use crate::synth::{self, SynthSource};
+        let mut src =
+            SynthSource::new(synth::open("@text?msg=OpenDMD&scroll=0&color=ffaa00").unwrap())
+                .unwrap();
+        let mut site = Canvas::new();
+        src.next_frame(&mut site).unwrap();
+        let y = (HEIGHT as i32 - LOGO_H) / 2;
+        let mut c = Canvas::new();
+        card(&mut c, 0, &Info::default(), None);
+        assert_eq!(band(&site, y), band(&c, CARD_Y));
+        assert_eq!(lit(&site), lit(&c));
     }
 
     #[test]
@@ -720,15 +630,24 @@ mod tests {
         let at = |info: &Info, t: u32| {
             let mut c = Canvas::new();
             show(&mut c, ShowLength::Short, t, info);
-            (21..HEIGHT)
+            (SHOW_LINE_Y as usize..HEIGHT)
                 .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
-                .filter(|&(x, y)| c.get(x, y) != Rgb::BLACK && y >= 25)
+                .filter(|&(x, y)| c.get(x, y) != Rgb::BLACK)
                 .count()
         };
         let b = beats(ShowLength::Short);
         let quiet = Info { ip: "", ..INFO };
-        // Up (the version, on its black box).
+        // Not yet, then up (the version).
+        assert_eq!(at(&INFO, b.status - 10), 0);
         assert!(at(&INFO, b.status + 400) > 0);
+        assert_eq!(status(b, b.status + 400, &INFO), (["v", "0.3.0"], 256));
+        // Then the address, dipping out and back in; no dip if it's the same.
+        assert_eq!(status(b, b.status + 1_200, &INFO).1, 0);
+        assert_eq!(
+            status(b, b.status + 1_500, &INFO),
+            (["192.168.1.69", ""], 256)
+        );
+        assert_eq!(status(b, b.status + 1_200, &quiet), (["v", "0.3.0"], 256));
         assert_eq!(INFO.show_line(), ["192.168.1.69", ""]);
         assert_eq!(quiet.show_line(), ["v", "0.3.0"]);
         let ap = Info {
@@ -778,20 +697,25 @@ mod tests {
             card(&mut c, t, &info, from);
             c
         };
-        // A loop later, the same picture (after the arrival).
-        assert_eq!(draw(1_000, None), draw(1_000 + CARD_LOOP_MS, None));
-        assert!(lit(&draw(0, None)) > 100);
-        // Arriving: the show's tunnel still there at first, gone after.
-        let from = Some((ShowLength::Short, CAP_MS));
-        assert!(
-            lit(&draw(0, from)) > lit(&draw(0, None)) + 1_000,
-            "{}",
-            lit(&draw(0, from))
-        );
+        // A loop later, the same picture; and it moves (the glint).
+        for t in [0, 1_000, 1_700] {
+            assert_eq!(draw(t, None), draw(t + CARD_LOOP_MS, None));
+        }
+        assert_ne!(draw(1_000, None), draw(1_700, None));
+        assert!(lit(&draw(0, None)) > 300);
+        // Arriving: the name where the show had it, the show's status line
+        // still there and the card's lines not yet; settled at the end, as
+        // the card drawn on its own.
+        let from = Some((ShowLength::Short, ShowLength::Short.min_ms()));
+        assert_eq!(band(&draw(0, from), SHOW_Y), band(&wordmark(SHOW_Y), SHOW_Y));
+        let row = |c: &Canvas, y: i32| (0..WIDTH).any(|x| c.get(x, y as usize) != Rgb::BLACK);
+        assert!(row(&draw(0, from), SHOW_LINE_Y + 1));
+        assert!(!row(&draw(0, from), CARD_LINE_Y[0] + 1));
         assert_eq!(draw(INTRO_MS, from), draw(INTRO_MS, None));
-        // The amber line is there.
-        let c = draw(2_000, None);
-        assert!((17..23).any(|y| (0..WIDTH).any(|x| c.get(x, y) == AMBER)));
-        assert!((25..31).any(|y| (0..WIDTH).any(|x| c.get(x, y) == PALE)));
+        // The problem in warm white, the address in amber.
+        let c = draw(1_000, None);
+        assert!((18..24).any(|y| (0..WIDTH).any(|x| c.get(x, y) == PROBLEM)));
+        assert!((25..31).any(|y| (0..WIDTH).any(|x| c.get(x, y) == LINE)));
+        assert_eq!(band(&c, CARD_Y), band(&wordmark(CARD_Y), CARD_Y));
     }
 }
