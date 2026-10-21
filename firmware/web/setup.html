@@ -47,6 +47,10 @@ details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 <input id="ssid" autocomplete="off" autocapitalize="off" spellcheck="false">
 <label for="pass">Password</label>
 <input id="pass" type="password" autocomplete="off">
+<label for="host">Display name</label>
+<input id="host" value="opendmd" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false">
+<p class="hint" id="hosthint" style="margin:4px 0 0;font-size:13px">Give each display its own name if you have more than one. It becomes <b id="hosturl">http://opendmd.local/</b></p>
+<div class="msg err" id="hostnote" hidden></div>
 <button id="savewifi">Connect</button>
 <div class="msg" id="wifimsg"></div>
 <p class="hint" style="margin-top:14px"><button class="link" id="scan">Look again</button> &middot; <a href="/index.html">Use the web app without WiFi</a></p>
@@ -114,7 +118,11 @@ file from a release. For firmware, use <b>Check for updates</b> in the web app, 
 const $ = id => document.getElementById(id);
 const say = (el, text, cls) => { const n = $(el); n.textContent = text; n.className = 'msg ' + (cls || ''); };
 const kb = n => (n / 1024).toFixed(1) + ' KB';
-let host = 'opendmd';
+// The display's name: what the firmware's PUT /api/config takes
+// (nvs_config::valid_hostname).
+const hostOk = n => /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(n);
+const hostVal = () => $('host').value.trim().toLowerCase();
+$('host').oninput = () => { $('hosturl').textContent = 'http://' + (hostVal() || 'opendmd') + '.local/'; };
 
 async function loadStatus() {
   try {
@@ -123,7 +131,7 @@ async function loadStatus() {
     const rows = [
       ['Version', s.version + ' (' + s.variant + ')'],
       ['WiFi', s.wifi + (s.ip ? ' — ' + s.ip : '')],
-      ['Hostname', s.hostname + '.local'],
+      ['Address', (s.mdns || s.hostname) + '.local'],
       ['Uptime', s.uptime_secs + ' s'],
       ['Playlist', s.entries + ' entries (' + s.manifest + ')'],
       ['Now playing', np.ordinal ? '[' + np.ordinal + '] ' + (np.title || np.path) : '—'],
@@ -135,6 +143,10 @@ async function loadStatus() {
       ['SD card', s.sd.mounted ? (s.sd.capacity_bytes / 1e9).toFixed(2) + ' GB' : 'not mounted'],
     ];
     $('status').innerHTML = rows.map(r => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('');
+    // mDNS renames a display whose name another one already has.
+    const n = $('hostnote');
+    n.hidden = !s.mdns || s.mdns === s.hostname;
+    n.textContent = 'Another display is using “' + s.hostname + '”; this one is at ' + s.mdns + '.local. Give it its own name above.';
   } catch (e) { $('status').innerHTML = '<tr><td>offline</td><td>' + e + '</td></tr>'; }
 }
 
@@ -146,7 +158,7 @@ async function loadConfig() {
     $('platforms').value = c.platforms; $('set').value = c.set;
     $('shuffle').value = String(c.shuffle);
     if (c.wifi_pass_set) $('pass').placeholder = 'saved; leave blank to keep it';
-    if (c.hostname) host = c.hostname;
+    if (c.hostname) { $('host').value = c.hostname; $('host').oninput(); }
   } catch (e) { /* the setup page is useful even if this fails */ }
 }
 
@@ -186,7 +198,9 @@ $('scan').onclick = scan;
 $('savewifi').onclick = async () => {
   const ssid = $('ssid').value.trim();
   if (!ssid) return say('wifimsg', 'Pick or type your network\'s name first.', 'err');
-  const body = { wifi_ssid: ssid };
+  const host = hostVal() || 'opendmd';
+  if (!hostOk(host)) return say('wifimsg', 'The display name can only use a-z, 0-9 and hyphens (up to 32, no hyphen at the start or end).', 'err');
+  const body = { wifi_ssid: ssid, hostname: host };
   if ($('pass').value) body.wifi_pass = $('pass').value;
   say('wifimsg', 'Saving…');
   try {

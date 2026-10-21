@@ -156,7 +156,8 @@ fn run(worker: NetWorker) {
         match EspMdns::take() {
             Ok(mut mdns) => {
                 let ok = mdns.set_hostname(&hostname).is_ok()
-                    && mdns.set_instance_name("OpenDMD").is_ok()
+                    // Per display, so two on one network are told apart.
+                    && mdns.set_instance_name(format!("OpenDMD ({hostname})")).is_ok()
                     && mdns.add_service(None, "_http", "_tcp", 80, &[]).is_ok();
                 if ok {
                     info!("[net] mDNS responding as {hostname}.local");
@@ -246,6 +247,12 @@ fn run(worker: NetWorker) {
         crate::clock::log_new_syncs();
         crate::diag::check("net-worker: loop");
 
+        // The name mDNS answers to: it takes `<name>-2` if another device
+        // has the name, at start-up or later (a conflict re-probes).
+        if _mdns.is_some() {
+            publish_mdns(&status);
+        }
+
         // Follow RePlayOS: a poll when one is due (station mode only).
         follow.tick(wifi.state() == WifiState::Connected && wifi.is_associated());
 
@@ -277,6 +284,29 @@ fn run(worker: NetWorker) {
                 Ok(false) => warn!("[net] reconnect failed; will retry"),
                 Err(e) => warn!("[net] reconnect error: {e:#}"),
             }
+        }
+    }
+}
+
+/// Copy the hostname mDNS is answering to into the status when it changed
+/// (`mdns_hostname_get` reads the responder's own copy, which its conflict
+/// handling renames; a lock and a copy, once a second).
+fn publish_mdns(status: &Arc<Mutex<Status>>) {
+    // MDNS_NAME_BUF_LEN is 65, or 69 with IPv6 reverse lookups.
+    let mut buf = [0u8; 72];
+    // SAFETY: `buf` holds at least MDNS_NAME_BUF_LEN bytes, as the call requires.
+    if unsafe { esp_idf_sys::mdns_hostname_get(buf.as_mut_ptr().cast()) } != esp_idf_sys::ESP_OK {
+        return;
+    }
+    let name = std::ffi::CStr::from_bytes_until_nul(&buf)
+        .map(|c| c.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if let Ok(mut s) = status.lock() {
+        if s.mdns != name {
+            if !s.mdns.is_empty() || name != s.hostname {
+                warn!("[net] mDNS name now {name}.local (configured {})", s.hostname);
+            }
+            s.mdns = name;
         }
     }
 }
