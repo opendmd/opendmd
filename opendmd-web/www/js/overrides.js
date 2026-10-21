@@ -8,6 +8,9 @@ import { h, toast, label, base } from './util.js';
 
 const FAV = 3, LESS = 0.5;
 
+// Favourite on/off (Library, the menu, Now's ★).
+export const fav = (o = {}) => ({ ...o, w: o.w > 1 ? null : FAV, never: null });
+
 export const fileFor = (p) => (p.endsWith('.txt') ? p.slice(0, -4) : p) + '.meta';
 
 export class Overrides {
@@ -99,7 +102,7 @@ export function menu(ov, path, x, y, extra) {
   const e = app.wasm.parsePath(path);
   open = h('div.menu', { id: 'ov-menu', role: 'menu' },
     h('div.mh', h('b', label(e)), ov.path && h('span.muted', ` in “${ov.name}”`)),
-    ov.path && [item('ov-fav', o.w > 1, '★ Favourite — plays more often', () => put({ w: o.w > 1 ? null : FAV, never: null })),
+    ov.path && [item('ov-fav', o.w > 1, '★ Favourite — plays more often', () => put(fav(o))),
     item('ov-less', o.w != null && o.w < 1, '▽ Play less often', () => put({ w: o.w != null && o.w < 1 ? null : LESS, never: null })),
     item('ov-hide', o.never, '⊘ Hide from this playlist', () => put({ never: o.never ? null : true, w: null })),
     h('div.mr', h('span', 'Play longer'),

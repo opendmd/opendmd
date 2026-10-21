@@ -597,8 +597,11 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
 
 def pick_cat(page: Page, value: str) -> None:
     """Library: the category tab `value` (a directory under gifs/, `@` Live,
-    `@fx` Effects)."""
+    `@fx` Effects). A search hides the tabs: it is cleared first."""
     sel = f"#lib-cats [data-cat={json.dumps(value)}]"
+    page.wait_for_selector("#lib-search")
+    if page.input_value("#lib-search"):
+        page.fill("#lib-search", "")
     page.wait_for_selector(sel, timeout=30000)
     page.click(sel)
 
@@ -696,14 +699,69 @@ def no_leaks(page: Page, where: str) -> None:
     check(not hits, f"{where}: no 'odm'/'bucket'/'weight'/'.meta'/'w='/'never' in visible text {lines if hits else ''}")
 
 
-def open_library(page: Page) -> None:
+def facets(page: Page, sel: str, attr: str) -> list:
+    return page.eval_on_selector_all(f"{sel} .chip", f"els => els.map(e => [e.dataset.{attr}, +e.querySelector('small').textContent.replace(/,/g, ''), e.classList.contains('on')])")
+
+
+def lib_count(page: Page) -> tuple[int, int]:
+    a, b = page.inner_text("#lib-count").replace(",", "").split(" of ")
+    return int(a), int(b)
+
+
+def search_checks(page: Page, exact: bool) -> None:
+    """The Library's search: every GIF on the card whatever the tab, category
+    and platform facets with counts (most first) that narrow and combine,
+    and the tab back when the box is cleared. Leaves 'mario' with the
+    Consoles and SNES facets on (open_library goes on from there). `exact`:
+    the counts against the card copy (the mock's)."""
+    gifs = [p for p in (CARD / "gifs").glob("*/*") if p.suffix.lower() == ".gif"]
+    want = [p for p in gifs if "mario" in p.name.lower()]
+    by_cat = {}
+    for p in want:
+        by_cat[p.parent.name] = by_cat.get(p.parent.name, 0) + 1
+    tab_n = lib_count(page)[1]
+    page.fill("#lib-search", "mario")
+    page.wait_for_selector("#lib-cats .chip[data-fcat]", timeout=60000)
+    shown, total = lib_count(page)
+    cats = facets(page, "#lib-cats", "fcat")
+    if not exact:
+        want, gifs, by_cat = [None] * shown, [None] * total, {c: n for c, n, _ in cats}
+    check(total == len(gifs) and shown == len(want) == sum(by_cat.values()), f"library search: 'mario' over every GIF -> {shown} of {total} (want {len(want)} of {len(gifs)})")
+    check({c: n for c, n, _ in cats} == by_cat and [n for _, n, _ in cats] == sorted((n for _, n, _ in cats), reverse=True),
+          f"library search: category facets, most first ({cats[:4]}…)")
+    check(page.locator("#lib-cats .tab").count() == 0, "library search: the facets stand in for the tabs")
+    shot(page, "library-search", "laptop")
+    page.click("#lib-cats .chip[data-fcat=Consoles]")
+    shown = lib_count(page)[0]
+    plats = facets(page, "#lib-chips", "platform")
+    snes = next((n for p, n, _ in plats if p == "SNES"), 0)
+    check(shown == by_cat.get("Consoles") and sum(n for _, n, _ in plats) <= shown and snes > 0,
+          f"library search: Consoles facet -> {shown}, platforms {plats[:3]}…")
+    page.click("#lib-chips .chip[data-platform=SNES]")
+    shown = lib_count(page)[0]
+    cats = facets(page, "#lib-cats", "fcat")
+    check(shown == snes and ["Consoles", True] in [[c, on] for c, _, on in cats],
+          f"library search: + SNES -> {shown} (facets combine; Consoles still on)")
+    # Instant on ~11k GIFs: five keystrokes, each a full pass and its facets.
+    ms = page.evaluate("""async () => { const s = document.querySelector('#lib-search'), t = performance.now();
+        for (const q of ['m', 'ma', 'mar', 'mari', 'mario']) { s.value = q; s.dispatchEvent(new Event('input')); await new Promise((r) => setTimeout(r)); }
+        return (performance.now() - t) / 5; }""")
+    check(ms < 50 and lib_count(page)[0] == snes, f"library search: {ms:.1f} ms a keystroke over {total:,} GIFs")
+    page.fill("#lib-search", "")
+    page.wait_for_selector("#lib-cats .tab.on[data-cat=Consoles]")
+    check(lib_count(page) == (tab_n, tab_n) and page.locator("#lib-chips .chip.on").count() == 0,
+          f"library search: cleared -> back on Consoles, facets gone ({page.inner_text('#lib-count')})")
+    page.fill("#lib-search", "mario")
+    page.wait_for_selector("#lib-cats .chip[data-fcat]")
+    page.click("#lib-cats .chip[data-fcat=Consoles]")
+    page.click("#lib-chips .chip[data-platform=SNES]")
+
+
+def open_library(page: Page, exact: bool = True) -> None:
     goto_view(page, "library")
     pick_cat(page, "Consoles")
     page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
-    page.fill("#lib-search", "mario")
-    page.wait_for_selector("#lib-chips [data-platform='SNES']")
-    page.click("#lib-chips [data-platform='SNES']")
-    page.wait_for_timeout(300)
+    search_checks(page, exact)
     count = page.inner_text("#lib-count")
     shown = int(count.split(" of ")[0].replace(",", ""))
     check(shown > 0, f"library: Consoles / 'mario' / SNES -> {count}")
@@ -762,9 +820,10 @@ def thumbs_checks(page: Page) -> None:
     in_view = "[...document.querySelectorAll('#lib-list .vrow:not([hidden])')].filter(r => { const t = r.getBoundingClientRect().top, l = document.querySelector('#lib-list').getBoundingClientRect(); return t >= l.top && t < l.bottom - 40; })"
     page.wait_for_function(f"{in_view}.slice(0, 6).every(r => r.querySelector('canvas.th[data-done]'))", timeout=3000)
     check(True, f"thumbnails: six rows drawn in {time.time() - t0:.1f} s")
-    lit = page.evaluate("""() => { const c = document.querySelector('#lib-list .vrow:not([hidden]) canvas.th[data-done="1"]');
-        if (!c) return 0; const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
-        for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }""")
+    # The brightest drawn row (some GIFs start on a black frame).
+    lit = page.evaluate("""() => Math.max(0, ...[...document.querySelectorAll('#lib-list .vrow:not([hidden]) canvas.th[data-done="1"]')].map((c) => {
+        const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
+        for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }))""")
     check(lit > 50, f"thumbnails: a first frame drawn ({lit} lit px)")
     shot(page, "library-thumbs", "laptop")
     first = row_path(page, "#lib-list", 0)
@@ -862,6 +921,27 @@ def render_meta_line(path: str, ov: dict) -> str:
     if "loops" in ov:
         parts.append(f"loops={ov['loops']}")
     return "\t".join(parts)
+
+
+def now_fav_checks(page: Page, base: str) -> None:
+    """Now's ★ (the mock paused): the GIF on screen a favourite in the
+    playlist playing, as the Library's Favourite in… does, and off again."""
+    page.wait_for_selector("#now-fav:not([hidden])", timeout=10000)
+    path = page.text_content("#now-path")
+    tip = page.get_attribute("#now-fav", "title")
+    check(page.inner_text("#now-fav") == "☆" and tip == "Favourite in “All files”" and page.get_attribute("#now-fav", "aria-pressed") == "false",
+          f"now fav: ☆ for {path.rsplit('/', 1)[-1]} ({tip!r})")
+    page.click("#now-fav")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '★'")
+    r = wait_overrides(base, "", 1)
+    check(r["overrides"] == [{"path": path, "w": 3}] and page.get_attribute("#now-fav", "aria-pressed") == "true",
+          f"now fav: ★ -> GET /api/overrides?set= {r['overrides']}")
+    page.click("#now-fav")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '☆'")
+    deadline = time.time() + 10
+    while time.time() < deadline and get_json(base + "/api/overrides?set=")["overrides"]:
+        time.sleep(0.1)
+    check(not get_json(base + "/api/overrides?set=")["overrides"], "now fav: ☆ again -> no overrides left")
 
 
 def wait_overrides(base: str, set_value: str, n: int, timeout_s: float = 10) -> dict:
@@ -2079,6 +2159,7 @@ def mock_pass(browser) -> None:
         page.click("#now-pause")
         page.wait_for_function("document.querySelector('#now-pause').textContent.startsWith('Resume')")
         check(get_json(base + "/api/status")["paused"], "now: pause reached the device")
+        now_fav_checks(page, base)
         page.click("#now-pause")
         page.wait_for_function("document.querySelector('#now-pause').textContent.startsWith('Pause')")
         recent_checks(page, base)
@@ -3215,11 +3296,6 @@ def find_checks(page: Page) -> None:
     page.wait_for_selector("#lib-web:not([hidden])")
     check("“zzqx mario banner”" in page.inner_text("#lib-web"), f"find: nothing here -> '{page.inner_text('#lib-web')}'")
     check(not page.is_visible("#view-library .vlist"), "find: no empty list under the hint")
-    pick_cat(page, "@")
-    page.wait_for_timeout(300)
-    check(not page.is_visible("#lib-web") and page.is_visible("#view-library .vlist"), "find: Live offers no web search")
-    pick_cat(page, "Consoles")
-    page.wait_for_selector("#lib-web:not([hidden])")
     page.click("#lib-web-go")
     page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
     page.wait_for_function("document.querySelector('#st-q').value === 'zzqx mario banner'", timeout=10000)
@@ -3281,6 +3357,7 @@ def find_checks(page: Page) -> None:
     page.click("#st-src [data-v=gifcities]")
     # One platform chip on: the hand-off searches that platform's game art.
     goto_view(page, "library")
+    page.fill("#lib-search", "")
     page.click("#lib-chips [data-platform='SNES']")
     page.fill("#lib-search", "zzqx harvest moon")
     page.wait_for_selector("#lib-web:not([hidden])")
@@ -3291,8 +3368,8 @@ def find_checks(page: Page) -> None:
           f"find: with SNES picked, Search the web searches SNES game art ({page.input_value('#find-platform')})")
     page.click("#st-src [data-v=gameart]")
     goto_view(page, "library")
-    page.click("#lib-chips [data-platform='SNES']")
     page.fill("#lib-search", "")
+    page.click("#lib-chips [data-platform='SNES']")
     page.unroute("https://gifcities.archive.org/api/v1/gifsearch*")
     page.unroute("https://blob.gifcities.org/**")
 
@@ -4173,7 +4250,7 @@ def device_pass(browser, device: str) -> None:
         check(len(drifts) > secs, f"device now: the preview kept syncing ({len(drifts)} syncs)")
         no_leaks(page, "device now")
         shot(page, "device-now", "laptop")
-        open_library(page)
+        open_library(page, exact=False)
         send_from_library(page, base, "device library")
         shot(page, "device-library", "laptop")
         # Smooth motion, read only: the control for a candidate (on or off,
