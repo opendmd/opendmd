@@ -88,6 +88,8 @@ use std::time::{Duration, Instant};
 use crate::http::{Ctx, NetCommand};
 use crate::nvs_config::{Config, Settings};
 use crate::panel::{Panel, PanelConfig};
+use opendmd_core::look::{GlowLevel, Look};
+use opendmd_core::panel_test::{self, PanelTest};
 use opendmd_core::panel_timing::{self, Effects, PanelOp, PanelTiming, Tuner};
 use crate::sd::{SdBus, SdCard, SdSource};
 use crate::show::{Screen, CARD_FAILING};
@@ -461,6 +463,12 @@ fn main() -> Result<()> {
     let mut pending: Option<Box<boot::Handover>> = None;
     // With the card but no engine: when the playlist was last tried.
     let mut last_build_try: Option<Instant> = None;
+    // The panel-timing test (`POST /api/panel/test`): while it runs it owns
+    // the panel and the canvas, and nothing plays.
+    let mut ptest: Option<PanelTest> = None;
+    // What the panel showed when the test started (a paused file's frame,
+    // the status card), put back after it; `None` if the 12 KB was not there.
+    let mut ptest_saved: Option<Canvas> = None;
 
     loop {
         // 0. Safe start: extended once when the network comes up, then the
@@ -565,6 +573,9 @@ fn main() -> Result<()> {
                     reply,
                 } => {
                     let next = *next;
+                    // A settings change ends the panel test first: its live
+                    // timing and the look go back before anything applies.
+                    end_panel_test(&mut ptest, &mut ptest_saved, &mut panel, &mut canvas, &settings, "a settings change");
                     // A confirm must find a trial running (it may have just
                     // reverted): refused before anything is saved.
                     if panel_op == Some(PanelOp::Confirm) && tuner.trial.is_none() {
@@ -868,7 +879,10 @@ fn main() -> Result<()> {
                             reply.send(Err(format!("{dest} is not a playlist's overrides file")));
                         continue;
                     };
-                    let active = files::same_card_path(&status.lock().unwrap().manifest, &manifest);
+                    let (active, on_screen) = {
+                        let s = status.lock().unwrap();
+                        (files::same_card_path(&s.manifest, &manifest), s.path.clone())
+                    };
                     if active {
                         retire(&mut engine, &mut canvas);
                     }
@@ -905,6 +919,17 @@ fn main() -> Result<()> {
                                 ))
                             }
                         });
+                    // The GIF on screen carries on (starting over), so a
+                    // favourite tapped on Now doesn't jump the panel to
+                    // another one; unless the new overrides hide it.
+                    if active && outcome.is_ok() && !on_screen.is_empty() && !on_screen.starts_with('@') {
+                        let hidden = read_meta(&dest).get(&on_screen).is_some_and(|o| o.never);
+                        if !hidden {
+                            if let Err(e) = play_now(engine.as_mut(), &on_screen, epoch.elapsed()) {
+                                log::warn!("overrides: {on_screen} did not carry on: {e:?}");
+                            }
+                        }
+                    }
                     log::info!(
                         "overrides {} at {dest} (playlist {manifest}, active={active}): {outcome:?}",
                         if temp.is_some() { "installed" } else { "removed" }
@@ -980,12 +1005,47 @@ fn main() -> Result<()> {
                         &mut canvas,
                     );
                 }
+                Command::PanelTest { setting, reply } => {
+                    let refused = setting.and_then(|s| panel_test::refusal(s, &tuner, sched.off()));
+                    let outcome = match (setting, refused) {
+                        (Some(_), Some(why)) => Err(why.to_string()),
+                        (Some(s), None) => {
+                            if ptest.is_none() {
+                                // The file on screen goes (its decoder's heap
+                                // back; the next one opens after the test),
+                                // the picture is kept to put back (a paused
+                                // file is not redrawn), and the patterns go
+                                // out untinted, unglowed.
+                                if let Some(e) = engine.as_mut() {
+                                    e.drop_current(&mut canvas);
+                                }
+                                ptest_saved = snapshot(&canvas);
+                                panel.set_display(Look::Colour, GlowLevel::Off);
+                            }
+                            let t = PanelTest::start(s, tuner.running, epoch.elapsed());
+                            log::info!(
+                                "panel test: {} A {} / B {} for {} s",
+                                s.name(),
+                                t.a.to_nvs(),
+                                t.b.to_nvs(),
+                                panel_test::LIMIT.as_secs()
+                            );
+                            ptest = Some(t);
+                            Ok(Applied::unchanged(0))
+                        }
+                        (None, _) => {
+                            end_panel_test(&mut ptest, &mut ptest_saved, &mut panel, &mut canvas, &settings, "stopped");
+                            Ok(Applied::unchanged(0))
+                        }
+                    };
+                    let _ = reply.send(outcome);
+                }
             }
         }
 
         // Follow RePlayOS's sequence: the next step once the engine has
         // finished the one on screen (it holds the last frame meanwhile).
-        if runner.in_sequence() && !sched.off() {
+        if runner.in_sequence() && !sched.off() && ptest.is_none() {
             if let Some(e) = engine.as_mut() {
                 let todo = runner.advance(e, epoch.elapsed());
                 follow_todo(
@@ -1004,6 +1064,9 @@ fn main() -> Result<()> {
         // The schedule: at most once a second look at the clock, and act only
         // when the local minute (or the schedule, zone or a wake) changed.
         if let Some(next) = sched.poll() {
+            // A change (night mode's dark panel, a rule's playlist or
+            // brightness) ends the panel test first, then applies.
+            end_panel_test(&mut ptest, &mut ptest_saved, &mut panel, &mut canvas, &settings, "a schedule change");
             apply_schedule(
                 next,
                 &mut sched,
@@ -1020,6 +1083,39 @@ fn main() -> Result<()> {
         // Only after every reply above has been sent.
         if REBOOT_PENDING.load(Ordering::Relaxed) {
             reboot_to_apply();
+        }
+
+        // The panel-timing test: its pictures and live timing instead of
+        // the engine or the status card (neither is ticked, so nothing goes
+        // into Recently played), until it is stopped or its time is up.
+        // After the schedule and the reboot check: a schedule change ends
+        // it (above), and a pending restart is not held up.
+        if let Some(t) = ptest.as_mut() {
+            match t.step(epoch.elapsed()) {
+                panel_test::Step::Draw {
+                    pattern,
+                    side,
+                    timing,
+                    ..
+                } => {
+                    panel.set_live_timing(&timing.effective());
+                    panel_test::draw(&mut canvas, pattern, side);
+                    panel.blit(&mut canvas);
+                }
+                panel_test::Step::Wait(_) => {}
+                panel_test::Step::End => {
+                    end_panel_test(&mut ptest, &mut ptest_saved, &mut panel, &mut canvas, &settings, "time is up")
+                }
+            }
+            if ptest.is_some() {
+                fresh = true;
+                if let Ok(mut s) = status.lock() {
+                    s.uptime_secs = epoch.elapsed().as_secs();
+                    s.heap_free = free_heap();
+                }
+                thread::sleep(config::OFF_SLEEP);
+                continue;
+            }
         }
 
         // The card is failing (`sdhealth`): restart, or stop playing.
@@ -2590,6 +2686,44 @@ fn panel_effects(
         log::info!("panel timing: restarting on the saved settings {}", tuner.saved.to_nvs());
         REBOOT_PENDING.store(true, Ordering::Relaxed);
     }
+}
+
+/// A copy of the picture, allocated fallibly (12 KB): `None` if it is not
+/// there.
+fn snapshot(canvas: &Canvas) -> Option<Canvas> {
+    let mut px = Vec::new();
+    px.try_reserve_exact(opendmd_core::canvas::PIXELS).ok()?;
+    px.extend_from_slice(canvas.as_slice());
+    Some(Canvas::from_parts(px, Default::default()))
+}
+
+/// End the panel-timing test, if one runs: the timing that ran before it
+/// (the saved settings: a test never starts during a trial or with a change
+/// staged, and a settings change ends it before it applies), the look, and
+/// the picture from before it (a paused file's frame stays on screen; the
+/// next file arrives from it) — black if there was no room to keep it.
+fn end_panel_test(
+    test: &mut Option<PanelTest>,
+    saved: &mut Option<Canvas>,
+    panel: &mut Panel,
+    canvas: &mut Canvas,
+    settings: &Settings,
+    why: &str,
+) {
+    let Some(t) = test.take() else {
+        return;
+    };
+    panel.set_live_timing(&t.restore.effective());
+    panel.set_display(settings.look, settings.glow);
+    match saved.take() {
+        Some(pic) => {
+            canvas.as_mut_slice().copy_from_slice(pic.as_slice());
+            canvas.dirty_mut().mark_all();
+        }
+        None => canvas.clear(),
+    }
+    panel.blit(canvas);
+    log::info!("panel test: ended ({why}), timing back to {}", t.restore.to_nvs());
 }
 
 /// Reboot after the pending replies: so the in-RAM fallback index can be

@@ -50,13 +50,20 @@ white pictures. Lower the brightness, or lower **Maximum brightness** in
 
 If a few dots come out the wrong colour on some pictures but not others,
 the panel may be fussy about timing. Open **Settings → Advanced → Panel
-timing** and change one setting at a time, starting with **Clock edge**,
-then **Latch blanking**, and only then **Driver chip**. Each change is
-tried for a minute: press **Keep** if it looks better, or let it go back by
-itself. The driver chip needs a restart to try, and if the panel goes dark,
-just wait and it comes back on its own. **Reset to defaults** puts
+timing** and press **Test panel timing**. The panel shows some test
+pictures, switching between **A** and **B** (the letter is in the bottom
+corner): pick the one that looks clean and it is saved. If both have dots,
+it tries a second setting the same way. Stop puts everything back, and so
+does leaving the page for two minutes.
+
+If neither helps, change the settings by hand, one at a time: **Clock
+edge**, then **Latch blanking**, and only then **Driver chip**. Each change
+is tried for a minute: press **Keep** if it looks better, or let it go back
+by itself. The driver chip needs a restart to try, and if the panel goes
+dark, just wait and it comes back on its own. **Reset to defaults** puts
 everything back. After trying a different driver chip, switch the display
-off and on before judging the result.
+off and on before judging the result. If nothing helps, the panel itself
+may be faulty.
 
 ## Settings says "Card running at reduced speed" or shows card errors
 

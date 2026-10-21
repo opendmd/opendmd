@@ -608,8 +608,11 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
 
 def pick_cat(page: Page, value: str) -> None:
     """Library: the category tab `value` (a directory under gifs/, `@` Live,
-    `@fx` Effects)."""
+    `@fx` Effects). A search hides the tabs: it is cleared first."""
     sel = f"#lib-cats [data-cat={json.dumps(value)}]"
+    page.wait_for_selector("#lib-search")
+    if page.input_value("#lib-search"):
+        page.fill("#lib-search", "")
     page.wait_for_selector(sel, timeout=30000)
     page.click(sel)
 
@@ -707,14 +710,69 @@ def no_leaks(page: Page, where: str) -> None:
     check(not hits, f"{where}: no 'odm'/'bucket'/'weight'/'.meta'/'w='/'never' in visible text {lines if hits else ''}")
 
 
-def open_library(page: Page) -> None:
+def facets(page: Page, sel: str, attr: str) -> list:
+    return page.eval_on_selector_all(f"{sel} .chip", f"els => els.map(e => [e.dataset.{attr}, +e.querySelector('small').textContent.replace(/,/g, ''), e.classList.contains('on')])")
+
+
+def lib_count(page: Page) -> tuple[int, int]:
+    a, b = page.inner_text("#lib-count").replace(",", "").split(" of ")
+    return int(a), int(b)
+
+
+def search_checks(page: Page, exact: bool) -> None:
+    """The Library's search: every GIF on the card whatever the tab, category
+    and platform facets with counts (most first) that narrow and combine,
+    and the tab back when the box is cleared. Leaves 'mario' with the
+    Consoles and SNES facets on (open_library goes on from there). `exact`:
+    the counts against the card copy (the mock's)."""
+    gifs = [p for p in (CARD / "gifs").glob("*/*") if p.suffix.lower() == ".gif"]
+    want = [p for p in gifs if "mario" in p.name.lower()]
+    by_cat = {}
+    for p in want:
+        by_cat[p.parent.name] = by_cat.get(p.parent.name, 0) + 1
+    tab_n = lib_count(page)[1]
+    page.fill("#lib-search", "mario")
+    page.wait_for_selector("#lib-cats .chip[data-fcat]", timeout=60000)
+    shown, total = lib_count(page)
+    cats = facets(page, "#lib-cats", "fcat")
+    if not exact:
+        want, gifs, by_cat = [None] * shown, [None] * total, {c: n for c, n, _ in cats}
+    check(total == len(gifs) and shown == len(want) == sum(by_cat.values()), f"library search: 'mario' over every GIF -> {shown} of {total} (want {len(want)} of {len(gifs)})")
+    check({c: n for c, n, _ in cats} == by_cat and [n for _, n, _ in cats] == sorted((n for _, n, _ in cats), reverse=True),
+          f"library search: category facets, most first ({cats[:4]}…)")
+    check(page.locator("#lib-cats .tab").count() == 0, "library search: the facets stand in for the tabs")
+    shot(page, "library-search", "laptop")
+    page.click("#lib-cats .chip[data-fcat=Consoles]")
+    shown = lib_count(page)[0]
+    plats = facets(page, "#lib-chips", "platform")
+    snes = next((n for p, n, _ in plats if p == "SNES"), 0)
+    check(shown == by_cat.get("Consoles") and sum(n for _, n, _ in plats) <= shown and snes > 0,
+          f"library search: Consoles facet -> {shown}, platforms {plats[:3]}…")
+    page.click("#lib-chips .chip[data-platform=SNES]")
+    shown = lib_count(page)[0]
+    cats = facets(page, "#lib-cats", "fcat")
+    check(shown == snes and ["Consoles", True] in [[c, on] for c, _, on in cats],
+          f"library search: + SNES -> {shown} (facets combine; Consoles still on)")
+    # Instant on ~11k GIFs: five keystrokes, each a full pass and its facets.
+    ms = page.evaluate("""async () => { const s = document.querySelector('#lib-search'), t = performance.now();
+        for (const q of ['m', 'ma', 'mar', 'mari', 'mario']) { s.value = q; s.dispatchEvent(new Event('input')); await new Promise((r) => setTimeout(r)); }
+        return (performance.now() - t) / 5; }""")
+    check(ms < 50 and lib_count(page)[0] == snes, f"library search: {ms:.1f} ms a keystroke over {total:,} GIFs")
+    page.fill("#lib-search", "")
+    page.wait_for_selector("#lib-cats .tab.on[data-cat=Consoles]")
+    check(lib_count(page) == (tab_n, tab_n) and page.locator("#lib-chips .chip.on").count() == 0,
+          f"library search: cleared -> back on Consoles, facets gone ({page.inner_text('#lib-count')})")
+    page.fill("#lib-search", "mario")
+    page.wait_for_selector("#lib-cats .chip[data-fcat]")
+    page.click("#lib-cats .chip[data-fcat=Consoles]")
+    page.click("#lib-chips .chip[data-platform=SNES]")
+
+
+def open_library(page: Page, exact: bool = True) -> None:
     goto_view(page, "library")
     pick_cat(page, "Consoles")
     page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
-    page.fill("#lib-search", "mario")
-    page.wait_for_selector("#lib-chips [data-platform='SNES']")
-    page.click("#lib-chips [data-platform='SNES']")
-    page.wait_for_timeout(300)
+    search_checks(page, exact)
     count = page.inner_text("#lib-count")
     shown = int(count.split(" of ")[0].replace(",", ""))
     check(shown > 0, f"library: Consoles / 'mario' / SNES -> {count}")
@@ -773,9 +831,10 @@ def thumbs_checks(page: Page) -> None:
     in_view = "[...document.querySelectorAll('#lib-list .vrow:not([hidden])')].filter(r => { const t = r.getBoundingClientRect().top, l = document.querySelector('#lib-list').getBoundingClientRect(); return t >= l.top && t < l.bottom - 40; })"
     page.wait_for_function(f"{in_view}.slice(0, 6).every(r => r.querySelector('canvas.th[data-done]'))", timeout=3000)
     check(True, f"thumbnails: six rows drawn in {time.time() - t0:.1f} s")
-    lit = page.evaluate("""() => { const c = document.querySelector('#lib-list .vrow:not([hidden]) canvas.th[data-done="1"]');
-        if (!c) return 0; const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
-        for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }""")
+    # The brightest drawn row (some GIFs start on a black frame).
+    lit = page.evaluate("""() => Math.max(0, ...[...document.querySelectorAll('#lib-list .vrow:not([hidden]) canvas.th[data-done="1"]')].map((c) => {
+        const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
+        for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }))""")
     check(lit > 50, f"thumbnails: a first frame drawn ({lit} lit px)")
     shot(page, "library-thumbs", "laptop")
     first = row_path(page, "#lib-list", 0)
@@ -873,6 +932,76 @@ def render_meta_line(path: str, ov: dict) -> str:
     if "loops" in ov:
         parts.append(f"loops={ov['loops']}")
     return "\t".join(parts)
+
+
+def settle(base: str, n: int) -> None:
+    """Wait for the playlist in play to be reindexed with `n` overrides."""
+    deadline = time.time() + 10
+    while time.time() < deadline and ((st := get_json(base + "/api/status"))["overrides"] != n or st.get("index_state") == "building"):
+        time.sleep(0.1)
+    time.sleep(0.5)
+
+
+def now_fav_checks(page: Page, base: str) -> None:
+    """Now's ★ (the mock paused): the GIF on screen a favourite in the
+    playlist playing, as the Library's Favourite in… does, and off again.
+    Automatic preparing is off meanwhile: a long pause would let the mock's
+    builder run and change what the cache checks later expect."""
+    put_json(base + "/api/config", {"auto_prepare": "off"})
+    page.wait_for_selector("#now-fav:not([hidden])", timeout=10000)
+    path = page.text_content("#now-path")
+    tip = page.get_attribute("#now-fav", "title")
+    check(page.inner_text("#now-fav") == "☆" and tip == "Favourite in “All files”" and page.get_attribute("#now-fav", "aria-pressed") == "false",
+          f"now fav: ☆ for {path.rsplit('/', 1)[-1]} ({tip!r})")
+    page.click("#now-fav")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '★'")
+    r = wait_overrides(base, "", 1)
+    check(r["overrides"] == [{"path": path, "w": 3}] and page.get_attribute("#now-fav", "aria-pressed") == "true",
+          f"now fav: ★ -> GET /api/overrides?set= {r['overrides']}")
+    # The save reindexes the playlist, which can move the mock on: back to the GIF.
+    settle(base, 1)
+    if get_json(base + "/api/status")["now_playing"]["path"] != path:
+        post_json(base + "/api/play", {"path": path})
+    page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)} && document.querySelector('#now-fav').textContent === '★'", timeout=10000)
+    page.click("#now-fav")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '☆'")
+    deadline = time.time() + 10
+    while time.time() < deadline and get_json(base + "/api/overrides?set=")["overrides"]:
+        time.sleep(0.1)
+    check(not get_json(base + "/api/overrides?set=")["overrides"], "now fav: ☆ again -> no overrides left")
+    # Clicked while the list is still being read (slowed here): the others survive.
+    # (The last two of the playlist: the reindex the seeding causes may move what is on screen.)
+    others = [l.strip() for l in (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n") if l.strip().endswith(".gif")][-2:]
+    seeded = [{"path": others[0], "never": True}, {"path": others[1], "loops": 3}]
+    put_text(base + "/api/files/filelist.meta", "".join(render_meta_line(o["path"], o) + "\n" for o in seeded))
+    settle(base, 2)
+    path = get_json(base + "/api/status")["now_playing"]["path"]
+    goto_view(page, "library")
+    page.evaluate("import('./js/state.js').then(({ app }) => { const f = app.src.overrides.bind(app.src); app.src._ov = f; app.src.overrides = (s) => new Promise((r) => setTimeout(r, 2500)).then(() => f(s)); })")
+    page.evaluate("location.hash = '#now'")
+    page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)}", timeout=2000)
+    page.click("#now-fav")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '★'")
+    r = wait_overrides(base, "", 3)
+    got = sorted(r["overrides"], key=lambda o: o["path"])
+    check(got == sorted(seeded + [{"path": path, "w": 3}], key=lambda o: o["path"]), f"now fav: a click during the read keeps the others ({got})")
+    page.evaluate("import('./js/state.js').then(({ app }) => { app.src.overrides = app.src._ov; })")
+    settle(base, 3)
+    if get_json(base + "/api/status")["now_playing"]["path"] != path:
+        post_json(base + "/api/play", {"path": path})
+    page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(path)} && document.querySelector('#now-fav').textContent === '★'", timeout=10000)
+    page.click("#now-fav")
+    page.wait_for_function("document.querySelector('#now-fav').textContent === '☆'")
+    deadline = time.time() + 10  # its save landed (two left), then the file goes
+    while time.time() < deadline and len(get_json(base + "/api/overrides?set=")["overrides"]) != 2:
+        time.sleep(0.1)
+    page.wait_for_timeout(500)
+    req = urllib.request.Request(base + "/api/files/filelist.meta", method="DELETE")
+    urllib.request.urlopen(req, timeout=30).close()
+    deadline = time.time() + 10
+    while time.time() < deadline and get_json(base + "/api/overrides?set=")["overrides"]:
+        time.sleep(0.1)
+    put_json(base + "/api/config", {"auto_prepare": "idle"})
 
 
 def wait_overrides(base: str, set_value: str, n: int, timeout_s: float = 10) -> dict:
@@ -1250,7 +1379,7 @@ def panel_checks(page: Page, base: str) -> None:
     goto_view(page, "settings")
     page.wait_for_selector("#st-panel:not([hidden]) #pt-driver", timeout=20000)
     text = page.inner_text("#st-panel")
-    check("Panel timing" in text and "If some LEDs show wrong colours on certain pictures, try these one at a time" in text,
+    check("Panel timing" in text and "If some LEDs show wrong colours on certain pictures, press Test panel timing, or try these one at a time" in text,
           "panel: the section and its explanation are under Advanced")
     vals = {k: page.input_value(f"#pt-{k}") for k in PANEL_DEFAULTS}
     check(vals == {k: json.dumps(v) for k, v in PANEL_DEFAULTS.items()}, f"panel: the selects show the defaults ({vals})")
@@ -1327,6 +1456,91 @@ def panel_checks(page: Page, base: str) -> None:
           f"panel: Reset to defaults saves and applies the defaults ({panel_of(c)})")
     page.wait_for_function("document.querySelector('#pt-clk_phase').value === 'true'", timeout=5000)
     page.locator("#st-panel").screenshot(path=str(OUT / "settings-panel-laptop.png"))
+    panel_test_checks(page, base)
+
+
+def panel_test_checks(page: Page, base: str) -> None:
+    """Test panel timing (js/paneltest.js, POST /api/panel/test): the API's
+    400s and the 409 during a trial, then the guided flow — B picked and
+    saved, both stages with dots, "the same", Stop. Mock only; starts and
+    ends on the defaults."""
+    def post_status(obj) -> int:
+        try:
+            post_json(base + "/api/panel/test", obj)
+            return 200
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    for bad in ({}, {"setting": "driver"}, {"setting": "clk_phase", "stop": True}, {"stop": False}, {"clkphase": 1}):
+        check(post_status(bad) == 400, f"panel test: {json.dumps(bad)} refused (400)")
+    r = post_json(base + "/api/panel/test", {"setting": "clk_phase"})
+    check(r.get("a", {}).get("clk_phase") is True and r.get("b", {}).get("clk_phase") is False and r.get("left_s") == 120,
+          f"panel test: clk_phase is A rising, B falling, 120 s ({r})")
+    r = post_json(base + "/api/panel/test", {"setting": "latch_blanking"})
+    check((r["a"]["latch_blanking"], r["b"]["latch_blanking"]) == (1, 3), f"panel test: latch blanking 1 against 3 ({r})")
+    check(post_json(base + "/api/panel/test", {"stop": True}) == {"ok": True}, "panel test: stop")
+    put_json(base + "/api/config", {"panel": {"latch_blanking": 2}})
+    check(post_status({"setting": "clk_phase"}) == 409, "panel test: refused during a trial (409)")
+    put_json(base + "/api/config", {"panel_confirm": False})
+    put_json(base + "/api/config", {"panel": {"driver": "fm6126a"}})
+    check(post_status({"setting": "latch_blanking"}) == 409, "panel test: refused with a change waiting for a restart (409)")
+    put_json(base + "/api/config", {"panel_confirm": False})
+    check(get_json(base + "/api/config")["panel"] == PANEL_DEFAULTS, "panel test: the API calls saved nothing")
+
+    def start(question: str) -> None:
+        page.click("#pt-test")
+        page.wait_for_function("(q) => document.querySelector('#pt-box:not([hidden])')?.innerText.includes(q)",
+                               arg=question, timeout=5000)
+
+    def answer(button: str, said: str) -> None:
+        page.locator("#pt-box button", has_text=button).click()
+        page.wait_for_function("(q) => document.querySelector('#pt-box').innerText.includes(q)", arg=said, timeout=5000)
+
+    check(page.is_visible("#pt-test") and not page.is_visible("#pt-box"), "panel test: the button, no box yet")
+    start("Watch the panel. Does A or B look cleaner?")
+    page.locator("#st-panel").screenshot(path=str(OUT / "settings-panel-test-laptop.png"))
+    answer("B looks clean", "Saved: Clock edge Falling.")
+    c = wait_config(base, lambda c: c["panel"]["clk_phase"] is False)
+    check(c["panel"]["clk_phase"] is False and c["panel_trial_s"] is None and c["panel_now"]["clk_phase"] is False,
+          f"panel test: B is saved at once, no trial ({c['panel']})")
+    page.wait_for_function("document.querySelector('#pt-clk_phase').value === 'false'", timeout=5000)
+    start("Does A or B look cleaner?")
+    answer("Both have dots", "One more setting.")
+    answer("Both have dots", "Try Driver chip below")
+    start("Does A or B look cleaner?")
+    answer("Both look the same / fine", "Nothing changed.")
+    start("Does A or B look cleaner?")
+    page.locator("#pt-box button", has_text="Stop").click()
+    page.wait_for_selector("#pt-box", state="hidden", timeout=5000)
+    c = get_json(base + "/api/config")
+    check(c["panel"] == dict(PANEL_DEFAULTS, clk_phase=False) and c["panel_trial_s"] is None,
+          f"panel test: only the pick was saved ({c['panel']})")
+    # A trial started elsewhere closes the box.
+    start("Does A or B look cleaner?")
+    page.select_option("#pt-latch_blanking", "2")
+    page.wait_for_selector("#pt-box", state="hidden", timeout=8000)
+    check(not page.is_visible("#pt-box"), "panel test: a trial closes the box")
+    put_json(base + "/api/config", {"panel_confirm": False})
+    # A chip that forces the rising edge: no clock-edge test; the page
+    # starts at latch blanking.
+    put_json(base + "/api/config", {"panel": {"driver": "mbi5124"}, "panel_confirm": True})
+    expected.append("/api/")  # down through the restart that applies it
+    post_json(base + "/api/reboot", {})
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        try:
+            if get_json(base + "/api/config")["panel_now"]["driver"] == "mbi5124":
+                break
+        except urllib.error.HTTPError:
+            pass
+        time.sleep(0.3)
+    expected.remove("/api/")
+    check(post_status({"setting": "clk_phase"}) == 409, "panel test: clk_phase refused on MBI5124 (409)")
+    page.evaluate("async () => { const { app } = await import('/js/state.js'); await app.refreshConfig(); }")
+    start("Watch the panel. Does A or B look cleaner?")
+    check("One more setting" not in page.inner_text("#pt-box"), "panel test: MBI5124 starts at latch blanking, as the first question")
+    answer("B looks clean", "Saved: Latch blanking 3.")
+    put_json(base + "/api/config", {"panel": None})
 
 
 def open_live(page: Page) -> None:
@@ -2090,6 +2304,7 @@ def mock_pass(browser) -> None:
         page.click("#now-pause")
         page.wait_for_function("document.querySelector('#now-pause').textContent.startsWith('Resume')")
         check(get_json(base + "/api/status")["paused"], "now: pause reached the device")
+        now_fav_checks(page, base)
         page.click("#now-pause")
         page.wait_for_function("document.querySelector('#now-pause').textContent.startsWith('Pause')")
         recent_checks(page, base)
@@ -3228,11 +3443,6 @@ def find_checks(page: Page) -> None:
     page.wait_for_selector("#lib-web:not([hidden])")
     check("“zzqx mario banner”" in page.inner_text("#lib-web"), f"find: nothing here -> '{page.inner_text('#lib-web')}'")
     check(not page.is_visible("#view-library .vlist"), "find: no empty list under the hint")
-    pick_cat(page, "@")
-    page.wait_for_timeout(300)
-    check(not page.is_visible("#lib-web") and page.is_visible("#view-library .vlist"), "find: Live offers no web search")
-    pick_cat(page, "Consoles")
-    page.wait_for_selector("#lib-web:not([hidden])")
     page.click("#lib-web-go")
     page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
     page.wait_for_function("document.querySelector('#st-q').value === 'zzqx mario banner'", timeout=10000)
@@ -3294,6 +3504,7 @@ def find_checks(page: Page) -> None:
     page.click("#st-src [data-v=gifcities]")
     # One platform chip on: the hand-off searches that platform's game art.
     goto_view(page, "library")
+    page.fill("#lib-search", "")
     page.click("#lib-chips [data-platform='SNES']")
     page.fill("#lib-search", "zzqx harvest moon")
     page.wait_for_selector("#lib-web:not([hidden])")
@@ -3304,8 +3515,8 @@ def find_checks(page: Page) -> None:
           f"find: with SNES picked, Search the web searches SNES game art ({page.input_value('#find-platform')})")
     page.click("#st-src [data-v=gameart]")
     goto_view(page, "library")
-    page.click("#lib-chips [data-platform='SNES']")
     page.fill("#lib-search", "")
+    page.click("#lib-chips [data-platform='SNES']")
     page.unroute("https://gifcities.archive.org/api/v1/gifsearch*")
     page.unroute("https://blob.gifcities.org/**")
 
@@ -4321,7 +4532,7 @@ def device_pass(browser, device: str) -> None:
         check(len(drifts) > secs, f"device now: the preview kept syncing ({len(drifts)} syncs)")
         no_leaks(page, "device now")
         shot(page, "device-now", "laptop")
-        open_library(page)
+        open_library(page, exact=False)
         send_from_library(page, base, "device library")
         shot(page, "device-library", "laptop")
         # Smooth motion, read only: the control for a candidate (on or off,
