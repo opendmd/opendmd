@@ -25,6 +25,7 @@ use log::warn;
 use opendmd_core::boot::ShowLength;
 use opendmd_core::compositor::Transition;
 use opendmd_core::look::{GlowLevel, Look};
+use opendmd_core::panel_timing::PanelTiming;
 
 use crate::config;
 
@@ -57,6 +58,11 @@ const KEY_ATTRACT: &str = "attract";
 const KEY_BOOT_SHOW: &str = "boot_show";
 /// The longest `attract` value (`text:` and the message).
 pub const ATTRACT_MAX: usize = 205;
+/// The panel timing (`opendmd_core::panel_timing`): the saved settings and
+/// a trial staged for the next boot, both in `PanelTiming::to_nvs` form.
+/// Not part of [`Settings`]: the main task's `Tuner` owns them.
+const KEY_PANEL: &str = "panel";
+const KEY_PANEL_TRY: &str = "panel_try";
 /// Internal, not a setting: the CID serial of the card that failed at full
 /// speed and mounts at the fallback clock (`sdhealth`). Absent = none.
 const KEY_SD_SLOW: &str = "sd_slow";
@@ -495,6 +501,28 @@ impl Config {
             Some(v) => self.nvs.set_u32(KEY_SD_SLOW, v)?,
             None => {
                 self.nvs.remove(KEY_SD_SLOW)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The saved panel timing and the trial staged for the next boot, as
+    /// stored (`Tuner::boot` parses them; absent or damaged = none).
+    pub fn panel(&self) -> (Option<String>, Option<String>) {
+        (self.get_string(KEY_PANEL), self.get_string(KEY_PANEL_TRY))
+    }
+
+    pub fn set_panel(&mut self, t: &PanelTiming) -> anyhow::Result<()> {
+        self.nvs.set_str(KEY_PANEL, &t.to_nvs())?;
+        Ok(())
+    }
+
+    /// Stage (`Some`) or drop (`None`) the trial for the next boot.
+    pub fn set_panel_try(&mut self, t: Option<&PanelTiming>) -> anyhow::Result<()> {
+        match t {
+            Some(t) => self.nvs.set_str(KEY_PANEL_TRY, &t.to_nvs())?,
+            None => {
+                self.nvs.remove(KEY_PANEL_TRY)?;
             }
         }
         Ok(())

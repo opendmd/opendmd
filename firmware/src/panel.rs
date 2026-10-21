@@ -11,6 +11,7 @@ use anyhow::{bail, Result};
 use esp_idf_sys::hub75;
 use opendmd_core::canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
 use opendmd_core::look::{tint, Glow, GlowLevel, Look, GLOW_STEP};
+use opendmd_core::panel_timing::PanelTiming;
 use std::time::{Duration, Instant};
 
 use crate::config;
@@ -31,25 +32,26 @@ pub struct PanelConfig {
     pub brightness: u8,
 }
 
-impl Default for PanelConfig {
-    /// The measured DMDos board v3 configuration (see `config`).
-    fn default() -> Self {
+impl PanelConfig {
+    /// The DMDos board v3 geometry (see `config`) with these timing
+    /// settings (`/api/config` `panel`; the defaults are what the firmware
+    /// always ran).
+    pub fn new(t: &PanelTiming) -> Self {
         PanelConfig {
             width: config::PANEL_WIDTH,
             height: config::PANEL_HEIGHT,
             chain: config::PANEL_CHAIN,
-            driver: config::DRIVER,
+            driver: t.driver.code(),
             double_buffer: config::DOUBLE_BUFFER,
-            i2s_speed: config::I2S_SPEED,
-            latch_blanking: config::LATCH_BLANKING,
-            clk_phase: config::CLK_PHASE,
-            min_refresh_rate: config::MIN_REFRESH_RATE,
+            // The shim's HUB75_SPEED_* are the literal Hz.
+            i2s_speed: i32::from(t.i2s_speed) * 1_000_000,
+            latch_blanking: t.latch_blanking,
+            clk_phase: t.clk_phase,
+            min_refresh_rate: t.min_refresh,
             brightness: config::BRIGHTNESS,
         }
     }
-}
 
-impl PanelConfig {
     /// Total addressable width: one module times the chain length.
     pub fn surface_width(&self) -> u16 {
         self.width * self.chain
@@ -501,6 +503,25 @@ impl Panel {
         unsafe {
             hub75::hub75_clear();
             hub75::hub75_flip();
+        }
+    }
+
+    /// The live half of the panel timing: the clock edge (the CLK pin's
+    /// inversion in the GPIO matrix) and the OE blanking around LAT (the OE
+    /// bits re-rendered at the current brightness). Neither reallocates nor
+    /// stops the DMA; the picture in the buffer stays. The rest of
+    /// [`PanelTiming`] only takes effect at boot (`Panel::new`).
+    pub fn set_live_timing(&mut self, t: &PanelTiming) {
+        if t.clk_phase != self.cfg.clk_phase {
+            // SAFETY: one GPIO-matrix register write; a no-op before init.
+            unsafe { hub75::hub75_set_clk_phase(t.clk_phase) };
+            self.cfg.clk_phase = t.clk_phase;
+        }
+        if t.latch_blanking != self.cfg.latch_blanking {
+            // SAFETY: rewrites OE bits inside the driver's own buffer; the
+            // shim range-checks the value.
+            unsafe { hub75::hub75_set_latch_blanking(t.latch_blanking) };
+            self.cfg.latch_blanking = t.latch_blanking;
         }
     }
 

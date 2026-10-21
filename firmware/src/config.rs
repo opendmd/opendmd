@@ -3,7 +3,6 @@
 //! The pin numbers are measured, not guessed — see `hardware/PINOUT.md` in the
 //! repository root (continuity walk, 2026-09-22, DMDos board v3).
 
-use esp_idf_sys::hub75;
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -36,22 +35,18 @@ pub const PANEL_HEIGHT: u16 = 32;
 pub const PANEL_CHAIN: u16 = 2;
 
 // ---------------------------------------------------------------------------
-// Panel timing. These five are the knobs to turn when the panel misbehaves;
-// nothing else in the firmware hardcodes them.
+// Panel timing (clock edge, latch blanking, driver chip, data clock, minimum
+// refresh) is a setting now: `opendmd_core::panel_timing::PanelTiming`, NVS
+// `panel`, `/api/config` `panel`, Settings -> Advanced -> Panel timing. Its
+// defaults are the constants that used to live here (positive edge, 1 clock
+// of blanking, SHIFTREG, 8 MHz, 60 Hz). A change is tried for
+// `panel_timing::TRIAL` and reverts unless kept; see docs/firmware.md.
 //
-// DRIVER: the shift-register chip on the panel is unknown, so we default to a
-// plain shift register. **If the panel stays completely dark, try FM6126A
-// first** — it is by far the most common panel that needs an init sequence,
-// and it shows as "no output at all" rather than as corruption.
+// The driver chip is unknown, so the default is a plain shift register.
+// **If the panel stays completely dark, try FM6126A first** — it is by far
+// the most common panel that needs an init sequence, and it shows as "no
+// output at all" rather than as corruption.
 // ---------------------------------------------------------------------------
-pub const DRIVER: i32 = hub75::HUB75_DRIVER_SHIFTREG as i32;
-/// Positive-edge clocking; the library's default since June 2021.
-pub const CLK_PHASE: bool = true;
-pub const I2S_SPEED: i32 = hub75::HUB75_SPEED_8M as i32;
-/// Clocks of OE blanking around LAT. >1 causes artefacts on ICS panels.
-pub const LATCH_BLANKING: u8 = 1;
-/// Asking for more costs colour depth; 60 Hz is flicker-free to the eye.
-pub const MIN_REFRESH_RATE: u8 = 60;
 /// Single-buffered on purpose. Double buffering composes a frame off-screen
 /// and swaps, so a blit can never tear — but it costs a second DMA framebuffer
 /// plus descriptors (~40 KB of heap, measured: 80 KB -> 120 KB free). A 128x32

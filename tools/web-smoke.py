@@ -1010,8 +1010,9 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
           "settings: #st-glow options off/short/long")
     cfg0 = get_json(base + "/api/config")
     st0 = get_json(base + "/api/status")
-    check(list(cfg0)[-5:] == ["attract", "look", "glow", "boot_show", "api_key_set"],
-          f"config: attract/look/glow/boot_show/api_key_set end the object ({list(cfg0)[-6:]})")
+    check(list(cfg0)[-9:] == ["attract", "look", "glow", "boot_show", "api_key_set",
+                              "panel", "panel_now", "panel_next", "panel_trial_s"],
+          f"config: attract/look/glow/boot_show/api_key_set, then the panel keys, end the object ({list(cfg0)[-10:]})")
     check(list(st0)[-7:] == ["look", "glow", "glow_held", "attract_live", "max_brightness",
                              "brightness_safe_max", "safe_start_until"],
           f"status: look/glow/glow_held/attract_live/max_brightness/brightness_safe_max/safe_start_until"
@@ -1207,6 +1208,114 @@ def power_checks(page: Page, base: str) -> None:
           "power: brightness and maximum left as found")
     no_leaks(page, "settings (power)")
     goto_view(page, "now")
+
+
+PANEL_TRIAL_S = 6  # the mock's --panel-trial in the mock pass (the firmware's is 60)
+PANEL_DEFAULTS = {"clk_phase": True, "latch_blanking": 1, "driver": "shiftreg", "i2s_speed": 8, "min_refresh": 60}
+
+
+def panel_checks(page: Page, base: str) -> None:
+    """Settings -> Advanced -> Panel timing (js/panel.js, loaded with
+    Advanced): the section, the API's 400s/409, a live trial kept, undone and
+    left to revert, a driver change through a restart and undone, and Reset to
+    defaults. Mock only (the mock's trial is PANEL_TRIAL_S)."""
+    def cfg():
+        return get_json(base + "/api/config")
+
+    def panel_of(c):
+        return {k: c[k] for k in ("panel", "panel_now", "panel_next", "panel_trial_s")}
+
+    c = cfg()
+    check(c["panel"] == PANEL_DEFAULTS and c["panel_now"] == PANEL_DEFAULTS and c["panel_next"] is None
+          and c["panel_trial_s"] is None, f"panel: /api/config carries the defaults ({panel_of(c)})")
+    for bad, code in (({"panel": {"latch_blanking": 0}}, 400), ({"panel": {"latch_blanking": 5}}, 400),
+                      ({"panel": {"i2s_speed": 10}}, 400), ({"panel": {"min_refresh": 241}}, 400),
+                      ({"panel": {"driver": "ws2812"}}, 400), ({"panel": {"clkphase": False}}, 400),
+                      ({"panel": {"clk_phase": "no"}}, 400), ({"panel": {"clk_phase": False}, "panel_confirm": False}, 400),
+                      ({"panel_confirm": True}, 409)):
+        check(put_status(base, bad) == code, f"panel: {json.dumps(bad)} refused ({code})")
+    check(panel_of(cfg()) == panel_of(c), "panel: nothing changed by the refused requests")
+
+    goto_view(page, "settings")
+    page.wait_for_selector("#st-panel:not([hidden]) #pt-driver", timeout=20000)
+    text = page.inner_text("#st-panel")
+    check("Panel timing" in text and "If some LEDs show wrong colours on certain pictures, try these one at a time" in text,
+          "panel: the section and its explanation are under Advanced")
+    vals = {k: page.input_value(f"#pt-{k}") for k in PANEL_DEFAULTS}
+    check(vals == {k: json.dumps(v) for k, v in PANEL_DEFAULTS.items()}, f"panel: the selects show the defaults ({vals})")
+    check(page.locator("#pt-driver option:checked").inner_text() == "Standard (default)", "panel: the default is marked")
+    check(not page.is_visible("#pt-bar"), "panel: no banner with nothing on trial")
+
+    # A live trial, kept.
+    page.select_option("#pt-clk_phase", "false")
+    c = wait_config(base, lambda c: c["panel_trial_s"] is not None)
+    check(c["panel_now"]["clk_phase"] is False and c["panel"]["clk_phase"] is True,
+          f"panel: choosing Falling tries it, unsaved ({panel_of(c)})")
+    page.wait_for_selector("#pt-keep", state="visible", timeout=5000)
+    check(re.search(r"go back in \d+ s unless you keep them", page.inner_text("#pt-bar")) is not None,
+          f"panel: the trial banner counts down ({page.inner_text('#pt-bar')!r})")
+    page.click("#pt-keep")
+    c = wait_config(base, lambda c: c["panel_trial_s"] is None)
+    check(c["panel"]["clk_phase"] is False and c["panel_now"]["clk_phase"] is False, "panel: Keep saves the trial")
+    page.wait_for_selector("#pt-bar", state="hidden", timeout=5000)
+
+    # A live trial, undone.
+    page.select_option("#pt-latch_blanking", "3")
+    wait_config(base, lambda c: c["panel_trial_s"] is not None)
+    page.wait_for_selector("#pt-undo", state="visible", timeout=5000)
+    page.click("#pt-undo")
+    c = wait_config(base, lambda c: c["panel_trial_s"] is None)
+    check(c["panel_now"]["latch_blanking"] == 1 and c["panel"]["latch_blanking"] == 1 and c["panel_now"]["clk_phase"] is False,
+          f"panel: Undo goes back to the saved settings ({panel_of(c)})")
+    page.wait_for_function("document.querySelector('#pt-latch_blanking').value === '1'", timeout=5000)
+
+    # A live trial left alone: it reverts by itself.
+    page.select_option("#pt-latch_blanking", "2")
+    wait_config(base, lambda c: c["panel_trial_s"] is not None)
+    c = wait_config(base, lambda c: c["panel_trial_s"] is None, timeout_s=PANEL_TRIAL_S + 5)
+    check(c["panel_now"]["latch_blanking"] == 1, f"panel: an unconfirmed trial reverts after {PANEL_TRIAL_S} s")
+    page.wait_for_function("document.querySelector('#pt-latch_blanking').value === '1'", timeout=8000)
+    check(not page.is_visible("#pt-bar"), "panel: the page follows the revert")
+
+    # A driver change: staged for a restart, tried after it, undone by another.
+    page.select_option("#pt-driver", '"fm6126a"')  # (option values are JSON)
+    c = wait_config(base, lambda c: c["panel_next"] is not None)
+    check(c["panel_next"]["driver"] == "fm6126a" and c["panel_now"]["driver"] == "shiftreg" and c["panel_trial_s"] is None,
+          f"panel: a driver change waits for a restart ({panel_of(c)})")
+    page.wait_for_selector("#pt-restart", state="visible", timeout=5000)
+    check("after a restart" in page.inner_text("#pt-bar"), "panel: the banner says it takes a restart")
+    check(put_json(base + "/api/config", {"panel": {"min_refresh": 90}}).get("reboot_required") is True,
+          "panel: PUT reply says reboot_required for a boot value")
+    page.click("#pt-restart")
+    c = wait_config(base, lambda c: c["panel_trial_s"] is not None)
+    check(c["panel_now"]["driver"] == "fm6126a" and c["panel_now"]["min_refresh"] == 90 and c["panel"]["driver"] == "shiftreg",
+          f"panel: after the restart the staged settings run on trial ({panel_of(c)})")
+    page.wait_for_selector("#pt-undo", state="visible", timeout=10000)
+    check(page.input_value("#pt-driver") == '"fm6126a"', "panel: the page shows the trial's driver")
+    expected.append("/api/")  # the API is down through the simulated restart
+    page.click("#pt-undo")
+    deadline = time.time() + 15
+    while True:  # (503s while it "restarts")
+        try:
+            c = cfg()
+            if (c["panel_trial_s"] is None and c["panel_next"] is None) or time.time() > deadline:
+                break
+        except urllib.error.HTTPError:
+            pass
+        time.sleep(0.3)
+    check(c["panel_now"]["driver"] == "shiftreg" and c["panel_now"]["min_refresh"] == 60,
+          f"panel: Undo of a restart trial restarts on the saved settings ({panel_of(c)})")
+    page.wait_for_function("document.querySelector('#pt-driver').value === '\"shiftreg\"'", timeout=15000)
+    page.wait_for_selector("#pt-bar", state="hidden", timeout=15000)
+    expected.remove("/api/")
+
+    # Reset to defaults (the saved Falling edge goes too).
+    page.click("#pt-reset")
+    c = wait_config(base, lambda c: c["panel"] == PANEL_DEFAULTS)
+    check(c["panel"] == PANEL_DEFAULTS and c["panel_now"] == PANEL_DEFAULTS and c["panel_next"] is None,
+          f"panel: Reset to defaults saves and applies the defaults ({panel_of(c)})")
+    page.wait_for_function("document.querySelector('#pt-clk_phase').value === 'true'", timeout=5000)
+    page.locator("#st-panel").screenshot(path=str(OUT / "settings-panel-laptop.png"))
 
 
 def open_live(page: Page) -> None:
@@ -1905,7 +2014,8 @@ def mock_pass(browser) -> None:
     overlay.mkdir(parents=True)
     ota_tmp = tempfile.TemporaryDirectory(prefix="web-smoke-ota-")
     ota = ota_bundles(Path(ota_tmp.name))
-    proc, base = start_mock(["--root", str(CARD), "--overlay", str(overlay), "--dwell", "4", "--ota-pub", str(ota["pub"])])
+    proc, base = start_mock(["--root", str(CARD), "--overlay", str(overlay), "--dwell", "4", "--ota-pub", str(ota["pub"]),
+                             "--panel-trial", str(PANEL_TRIAL_S)])
     errors: list[str] = []
     try:
         print(f"\n== mock device at {base} (overlay {overlay})")
@@ -1957,6 +2067,7 @@ def mock_pass(browser) -> None:
         look_checks(page, base, True)
         boot_checks(page, base, True)
         power_checks(page, base)
+        panel_checks(page, base)
         live_checks(page, base, True)
         effects_checks(page, base, True)
         sim_checks(page)

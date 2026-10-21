@@ -95,6 +95,23 @@ void hub75_blank(int8_t oe_gpio);
 /* 0..255. No-op before hub75_init. */
 void hub75_set_brightness(uint8_t brightness);
 
+/*
+ * The two timing values that change live, with no reallocation (the panel
+ * settings' trial, docs/firmware.md "Panel timing"). No-ops before
+ * hub75_init.
+ *
+ * hub75_set_clk_phase: the CLK pin's inversion in the GPIO matrix -- the
+ * only thing clkphase ever sets (Bus_Parallel16::init). Ignored for the
+ * MBI5124 and DP3246 drivers, which the library always clocks on the
+ * rising edge.
+ *
+ * hub75_set_latch_blanking: 1..4 clocks; the OE bits re-rendered at the
+ * current brightness (setBrightnessOE rewrites every column's OE bit, so
+ * the buffer ends as a fresh begin() with that blanking would leave it).
+ */
+void hub75_set_clk_phase(bool clkphase);
+void hub75_set_latch_blanking(uint8_t latch_blanking);
+
 /* Blank the back buffer. */
 void hub75_clear(void);
 

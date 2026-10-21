@@ -38,10 +38,73 @@ uv run tools/sdprobe-report.py serial.log --boot -1   # open latency, miss cause
 ```
 
 ESP-IDF is installed once into `~/.espressif` and shared between projects.
-Everything tunable — pin map, panel driver chip and timing, brightness,
-platform filter, dwell and retry intervals — is a constant in
-`firmware/src/config.rs`. If the panels stay dark, the first thing to change
-is `config::DRIVER` from `SHIFTREG` to `FM6126A`.
+Everything tunable — pin map, brightness, platform filter, dwell and retry
+intervals — is a constant in `firmware/src/config.rs`, except the panel
+timing, which is a setting (below). If the panels stay dark, the first thing
+to try is the `fm6126a` driver chip.
+
+## Panel timing
+
+The HUB75 driver's five timing options are settings, so a fussy panel can
+be tuned without a reflash: `PUT /api/config` `panel` (docs/api.md),
+Settings → Advanced → Panel timing in the web app. The defaults are what
+the firmware always ran.
+
+| key | default | what it is |
+|---|---|---|
+| `clk_phase` | `true` | the clock edge the data is sampled on: true rising, false falling (the library's `clkphase`) |
+| `latch_blanking` | 1 | clocks of OE blanking either side of LAT, 1..=4 |
+| `driver` | `shiftreg` | the panel's shift-register chip: `shiftreg`, `fm6126a`, `fm6124`, `icn2038s`, `mbi5124`, `dp3246`; the FM and ICN chips get an init sequence at start-up, `mbi5124` and `dp3246` are always clocked on the rising edge |
+| `i2s_speed` | 8 | the data clock, MHz: 8 (the slowest the library has), 16 or 20 |
+| `min_refresh` | 60 | Hz; the library trades colour-depth timing (its LSB/MSB transition bit) for at least this refresh rate |
+
+Colour depth is not a setting: the frame path's fast span writer is built
+for the library's 8-bit planes and falls back to its per-pixel path
+(~13.6 ms a frame) at any other depth.
+
+The model is `opendmd_core::panel_timing` (host-tested), executed by the
+main task:
+
+- **Live: `clk_phase` and `latch_blanking`.** Neither touches the DMA
+  buffers. The clock edge is only the CLK pin's inversion in the GPIO matrix
+  (`hub75_set_clk_phase`); the blanking re-renders the OE bits at the
+  current brightness (`hub75_set_latch_blanking`: `setLatBlanking`, then
+  `setBrightness8`, which rewrites every column's OE bit — the buffer ends
+  as a fresh `begin()` would leave it). Both run on the main task (CPU1)
+  between frames. At the brightness ceiling (144 by default) the OE window
+  is well inside the row, so blanking only matters near full brightness.
+- **At boot: `driver`, `i2s_speed`, `min_refresh`.** They need the driver
+  rebuilt: an init sequence bit-banged on the data pins, the I2S clock, and
+  the DMA descriptor chain (one contiguous block whose size follows
+  `min_refresh`). Rebuilding at runtime would free ~32 KB of row buffers and
+  that block and allocate them again while the network tasks on CPU0
+  allocate too; the panel is started first at boot for exactly this reason
+  (a churned heap is what produced `!KABOOM! HUB75 memory allocation
+  failed`). A failed reallocation would leave a dark panel until a restart
+  anyway, so a restart is what applies them, on a whole heap.
+
+**The trial.** A `panel` object is tried, not saved. Live values apply at
+once and revert after 60 s (`panel_timing::TRIAL`) unless
+`"panel_confirm":true` keeps them; nothing is written to NVS until then, so
+a restart reverts too. Boot values are staged in NVS (`panel_try`) and
+`reboot_required`/`panel_next` say so; at the next boot the main task reads
+`panel` and `panel_try`, **removes `panel_try` before the panel starts**,
+and runs the staged values on trial for this one boot: reverted by a
+restart 60 s after the later of boot and the network coming up, unless
+kept. Whatever the staged values do — a dark panel, a crash, a power cut —
+the boot after runs the saved ones. `"panel_confirm":false` undoes a trial
+at once (a boot trial by restarting); `"panel":null` saves the defaults.
+WiFi does not depend on the panel, so the web app and the API stay
+reachable throughout. The FM and ICN init sequences write registers in the
+panel's chips that a restart does not clear (it resets the ESP32, not the
+panel): after trying one, power the display off and on.
+
+To recover from saved settings that leave the panel unusable:
+
+```sh
+curl -s -X PUT http://opendmd.local/api/config --json '{"panel":null}'
+curl -s -X POST http://opendmd.local/api/reboot   # if panel_next is not null
+```
 
 ## Getting on WiFi the first time
 
@@ -118,7 +181,7 @@ floor:
 
 ```
 I opendmd_firmware: OpenDMD firmware v0.3.0 (4mb, app desc '0.3.0 4mb') — 128x32 HUB75 GIF player
-I opendmd_firmware: panel up: 128x32 (2 x 64x32), driver=0, double_buff=false, hub75_refresh_rate=100 Hz
+I opendmd_firmware: panel up: 128x32 (2 x 64x32), timing 1,1,shiftreg,8,60 (the defaults), double_buff=false, hub75_refresh_rate=100 Hz
 I opendmd_firmware: microSD mounted at /sdcard (31.27 GB), heap 175600 B free
 I opendmd_firmware: manifest indexed: /sdcard/filelist.txt, 10133 entries, index loaded in 9 ms (40532 B on card), heap 160664 B free
 I opendmd_firmware::httpd: httpd started on port 80, pinned to CPU0, 10240 B stack
