@@ -224,6 +224,11 @@ pub struct Status {
     /// The panel timing: saved, running, a trial and its deadline, a staged
     /// trial (`/api/config` `panel*`), published by the main task.
     pub panel: opendmd_core::panel_timing::Tuner,
+    /// Recently played (`opendmd_core::history`): the main loop records each
+    /// start with the path above; `/api/status?recent=1` lists it and
+    /// [`Command::Back`] steps through it. ~16 B here, 640 B of text from the
+    /// first start.
+    pub recent: opendmd_core::history::History,
 }
 
 impl Status {
@@ -274,6 +279,7 @@ impl Status {
             wake_until: None,
             tz_name: String::new(),
             panel: opendmd_core::panel_timing::Tuner::boot(None, None),
+            recent: opendmd_core::history::History::new(),
         }
     }
 }
@@ -393,6 +399,9 @@ pub enum Command {
         path: String,
         reply: mpsc::Sender<Result<(), PlayError>>,
     },
+    /// Previous: play the entry of Recently played one older than the one on
+    /// screen (`History::back`), like `PlayNow`; `NotFound` if there is none.
+    Back(mpsc::Sender<Result<(), PlayError>>),
     /// Persist a new configuration and apply what can be applied live.
     ///
     /// NVS is owned by the main task, so the handler cannot write it itself.

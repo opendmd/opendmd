@@ -93,7 +93,7 @@ UPDATE_GZ_BUDGET = 4 * 1024
 UPDATE = {"js/update.js"}
 PANEL_GZ_BUDGET = 2 * 1024
 PANEL = {"js/panel.js"}
-API_GZ_BUDGET = 13 * 1024
+API_GZ_BUDGET = 14 * 1024
 API = {"api.html"}
 
 

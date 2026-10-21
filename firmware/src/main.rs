@@ -530,20 +530,30 @@ fn main() -> Result<()> {
                     // One open, here between frames (a directory scan: ~6 ms
                     // in a bucket, ~330 ms in `gifs/Consoles`), then the file
                     // takes the screen at the next tick under the usual dwell.
-                    let outcome = match engine.as_mut() {
-                        Some(e) => e.play_now(&path, epoch.elapsed()).map_err(|err| {
-                            let msg = format!("{path}: {err}");
-                            if err.kind() == std::io::ErrorKind::InvalidData {
-                                PlayError::Unplayable(msg)
-                            } else {
-                                PlayError::NotFound(msg)
-                            }
-                        }),
-                        None => Err(PlayError::NoPlaylist),
-                    };
+                    let outcome = play_now(engine.as_mut(), &path, epoch.elapsed());
                     match &outcome {
                         Ok(()) => log::info!("play now: {path}"),
                         Err(e) => log::warn!("play now: {e:?}"),
+                    }
+                    let _ = reply.send(outcome);
+                }
+                Command::Back(reply) => {
+                    // The history lives in the status (one copy); its start
+                    // is recognised when published below.
+                    let target = status.lock().unwrap().recent.back();
+                    let outcome = match target {
+                        Some(path) => {
+                            let r = play_now(engine.as_mut(), &path, epoch.elapsed());
+                            match &r {
+                                Ok(()) => log::info!("previous: {path}"),
+                                Err(e) => log::warn!("previous: {e:?}"),
+                            }
+                            r
+                        }
+                        None => Err(PlayError::NotFound("nothing earlier".into())),
+                    };
+                    if outcome.is_err() {
+                        status.lock().unwrap().recent.back_failed();
                     }
                     let _ = reply.send(outcome);
                 }
@@ -1362,6 +1372,7 @@ fn main() -> Result<()> {
             s.worst_lateness_ms = worst_lateness_ms;
             s.misses = misses;
             if let Some(playing) = new_file {
+                s.recent.started(&playing.path);
                 s.ordinal = playing.ordinal;
                 s.path = playing.path;
                 s.title = playing.title;
@@ -1880,6 +1891,21 @@ fn apply_schedule(
 /// original) and the heap as it starts. Logged from inside the frame, which
 /// only costs the formatting (`logring`), and the heap walk behind
 /// `largest_free_block`.
+/// `Engine::play_now`, its error as `/api/play` reports it (404 / 415 / 503).
+fn play_now(engine: Option<&mut Engine>, path: &str, now: Duration) -> Result<(), PlayError> {
+    let Some(e) = engine else {
+        return Err(PlayError::NoPlaylist);
+    };
+    e.play_now(path, now).map_err(|err| {
+        let msg = format!("{path}: {err}");
+        if err.kind() == std::io::ErrorKind::InvalidData {
+            PlayError::Unplayable(msg)
+        } else {
+            PlayError::NotFound(msg)
+        }
+    })
+}
+
 fn log_started(ordinal: u64, path: &str, served: Option<sd::Served>) {
     log::info!(
         "[{ordinal}] {path} <- {} (heap {} B free, largest block {} B)",

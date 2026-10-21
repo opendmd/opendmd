@@ -2081,6 +2081,7 @@ def mock_pass(browser) -> None:
         check(get_json(base + "/api/status")["paused"], "now: pause reached the device")
         page.click("#now-pause")
         page.wait_for_function("document.querySelector('#now-pause').textContent.startsWith('Pause')")
+        recent_checks(page, base)
         # Send to panel (the Library's button calls app.play; Now has no
         # path box): a real GIF, then a miss (404) and a manifest (415).
         check(page.locator("#now-play-path, #now-play").count() == 0 and page.is_hidden("#now-path"),
@@ -2479,6 +2480,7 @@ def mock_pass(browser) -> None:
         follow_checks(page, base, errors)
         phone_pass(browser, base, errors)
         fx_gif_demo_pass(browser, base, errors)
+        recent_demo_pass(browser, base, errors)
         json_type_checks(base)
         origin_checks(browser, base)
         firmware_checks(page, base, ota)
@@ -2558,6 +2560,116 @@ def fx_gif_checks(page: Page, base: str, overlay: Path) -> None:
     lib_row(page, path)
     check(page.inner_text("#lib-d-title") == "Tunnel Fire Rings 01", f"fx gif: listed in the Library ({page.inner_text('#lib-d-title')})")
     no_leaks(page, "library (fx gif)")
+
+
+def recent_checks(page: Page, base: str) -> None:
+    """Recently played and Previous on Now, against the mock's history
+    (opendmd_core::history's rules): three GIFs played, Previous twice goes
+    two back (no ping-pong) without reordering, a tap on an entry plays it
+    and brings it to the front, Play again restarts the file on screen, and
+    Previous stops at the oldest (404, the button disabled). Paused on the
+    device for the length (preparing off), so its dwell cannot slip a file
+    in."""
+    def status(recent=True):
+        return get_json(base + "/api/status" + ("?recent=1" if recent else ""))
+
+    def back() -> int:
+        req = urllib.request.Request(base + "/api/skip?back=1", data=b"", method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30):
+                return 200
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def path_is(p):
+        page.wait_for_function(f"document.querySelector('#now-path').textContent === {json.dumps(p)}", timeout=10000)
+
+    def rows():
+        return page.eval_on_selector_all("#now-recent > div", "els => els.map(e => [e.dataset.path, e.classList.contains('cur'), e.querySelector('.grow').textContent])")
+
+    goto_view(page, "now")
+    # Preparing off while paused, or the mock's simulated builder would run
+    # (and leave an average the auto checks later do not expect).
+    auto = get_json(base + "/api/config")["auto_prepare"]
+    put_json(base + "/api/config", {"auto_prepare": "off"})
+    post_json(base + "/api/pause", {})
+    gifs = [l.strip() for l in (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n") if l.strip().endswith(".gif")]
+    a, b, c = gifs[3], gifs[4], gifs[5]
+    for g in (a, b, c):
+        post_json(base + "/api/play", {"path": g})
+    s = status()
+    check("recent" not in status(False) and s["recent"][:3] == [c, b, a] and s["recent_at"] == 0
+          and list(s).index("recent") == list(s).index("paused") + 1,
+          f"recent: status?recent=1 lists the three plays newest first after `paused`, plain status has none ({s['recent'][:3]})")
+    path_is(c)
+    page.wait_for_function(f"document.querySelector('#now-recent > div')?.dataset.path === {json.dumps(c)}", timeout=10000)
+    r = rows()
+    title = page.inner_text("#now-title")
+    check(r[0][1] and r[0][2] == title and not any(x[1] for x in r[1:]) and not page.is_hidden("#now-prev")
+          and "/" not in "".join(x[2] for x in r),
+          f"recent: the list shows titles like the Library ('{r[0][2]}' = '{title}'), the one on screen marked, Previous shown")
+    page.click("#now-prev")
+    path_is(b)
+    page.wait_for_function(f"document.querySelector('#now-recent > div.cur')?.dataset.path === {json.dumps(b)}", timeout=10000)
+    page.click("#now-prev")
+    path_is(a)
+    s = status()
+    check(s["recent"][:3] == [c, b, a] and s["recent_at"] == 2 and s["now_playing"]["path"] == a,
+          f"recent: Previous twice went two back without reordering (recent_at {s['recent_at']}, {s['now_playing']['path']})")
+    page.wait_for_function(f"document.querySelector('#now-recent > div.cur')?.dataset.path === {json.dumps(a)}", timeout=10000)
+    page.click(f"#now-recent > div[data-path={json.dumps(c)}]")
+    path_is(c)
+    s = status()
+    check(s["recent"][:3] == [c, a, b] and s["recent_at"] == 0,
+          f"recent: a tap plays the entry again, what was on screen just before it next ({s['recent'][:3]})")
+    ordinal = s["now_playing"]["ordinal"]
+    page.click("#now-again")
+    page.wait_for_function(f"document.querySelector('#now-ord').textContent.startsWith('{ordinal + 1} ')", timeout=10000)
+    s = status()
+    check(s["now_playing"]["path"] == c and s["recent"][:3] == [c, a, b],
+          f"recent: Play again restarts {c} (ordinal {ordinal} -> {s['now_playing']['ordinal']}), the list unchanged")
+    codes = [back() for _ in range(RECENT_MAX + 1)]
+    s = status()
+    check(codes[-1] == 404 and 200 in codes and s["recent_at"] == len(s["recent"]) - 1,
+          f"recent: Previous walks to the oldest of {len(s['recent'])}, then 404 ({codes.count(200)} steps)")
+    page.wait_for_function("document.querySelector('#now-prev').disabled", timeout=10000)
+    check(True, "recent: Previous disabled at the oldest")
+    shot(page, "now-recent", "laptop")
+    post_json(base + "/api/pause", {})
+    put_json(base + "/api/config", {"auto_prepare": auto})
+
+
+RECENT_MAX = 16
+
+
+def recent_demo_pass(browser, base: str, errors: list[str]) -> None:
+    """Recently played in the web demo (local mode): a playlist of three
+    live items, Next twice, Previous twice back to the first, a tap on an
+    entry plays it."""
+    page = new_page(browser, "laptop", errors)
+    text = "@clock\n@fx:tunnel\n@text?msg=Hi\n"
+    page.route("**/api/status", lambda r: r.fulfill(status=200, body="{}", headers={"content-type": "application/json"}))
+    page.route("**/demo/index.json", lambda r: r.fulfill(status=200, body=json.dumps([{"path": "/filelist.txt", "size": len(text)}]),
+                                                     headers={"content-type": "application/json"}))
+    page.route("**/demo/filelist.txt", lambda r: r.fulfill(status=200, body=text, headers={"content-type": "text/plain"}))
+    page.goto(base + "/")
+    page.wait_for_function("document.querySelector('#now-title')?.textContent === 'Clock'", timeout=20000)
+    titles = lambda: page.eval_on_selector_all("#now-recent > div", "els => els.map(e => (e.classList.contains('cur') ? '*' : '') + e.querySelector('.grow').textContent)")
+    page.click("#now-skip")
+    page.click("#now-skip")
+    page.wait_for_function("document.querySelector('#now-title').textContent === 'Hi'", timeout=10000)
+    t1 = titles()
+    page.click("#now-prev")
+    page.click("#now-prev")
+    page.wait_for_function("document.querySelector('#now-title').textContent === 'Clock'", timeout=10000)
+    t2 = titles()
+    check(t1 == ["*Hi", "Tunnel", "Clock"] and t2 == ["Hi", "Tunnel", "*Clock"] and page.is_disabled("#now-prev"),
+          f"recent (demo): Next twice {t1}, Previous twice {t2}, Previous disabled at the oldest")
+    page.click("#now-recent > div:nth-child(2)")
+    page.wait_for_function("document.querySelector('#now-title').textContent === 'Tunnel'", timeout=10000)
+    t3 = titles()
+    check(t3 == ["*Tunnel", "Clock", "Hi"], f"recent (demo): a tap plays the entry, the one on screen before it next ({t3})")
+    page.context.close()
 
 
 def fx_gif_demo_pass(browser, base: str, errors: list[str]) -> None:

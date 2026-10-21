@@ -50,11 +50,11 @@ that file at the root, any other name is `/sets/<name>.txt`. No `/` or `..`.
 
 ### POST /api/play
 
-Play one file now, then carry on with the playlist. The file is shown with
-the configured transition, using its prepared copy if there is one.
+Play one file now (with the transition, from its prepared copy if there is
+one), then the playlist carries on.
 
 Body: `{"path": string}`, a card-absolute GIF path or a live item (see
-"Live items" below).
+"Live items").
 
 Reply: `{"ok":true,"path":"…"}`.
 
@@ -85,8 +85,12 @@ curl -s -X POST $DMD/api/pause
 Move on to the next entry now. No body. Reply: `{"ok":true}` (at once; the
 skip happens on the player's next frame).
 
+`?back=1` is Previous: play the `recent` entry one older than the one on
+screen (again: older still) as `/api/play` does; `404` at the oldest.
+
 ```sh
 curl -s -X POST $DMD/api/skip
+curl -s -X POST "$DMD/api/skip?back=1"
 ```
 
 ## Status and health
@@ -103,6 +107,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `ip`, `wifi`, `hostname` | address; `"sta"` or `"ap"` (setup mode); name |
 | `now_playing` | `{ordinal, path, title, elapsed_ms, frame}`: `elapsed_ms` the position in the file at `t_ms` (loops included); `frame` 1-based |
 | `paused` | bool |
+| `recent`, `recent_at` | with `?recent=1`: up to 16 files played, newest first, once each; the index of the one on screen |
 | `entries`, `manifest` | playlist length; the playlist file in play (`/sdcard/…`) |
 | `index_state` | `"ready"`, `"building"` or `"unavailable"` |
 | `www_version`, `www` | the web app's version (null if none is good); `GET /api/www`'s object |
@@ -316,7 +321,7 @@ curl -s -X DELETE "$DMD/api/files/cache?recursive=1"
 
 Rename a GIF: `{"from":"/gifs/A/x.gif","to":"/gifs/B/y.gif"}`. Its prepared
 copy follows; playlists and overrides are *not* rewritten (the web app
-does that itself).
+does that).
 
 Reply: `{"ok":true,"from","to","copy":"moved"|"removed"|"none","smooth":bool,"failed":bool}`.
 
