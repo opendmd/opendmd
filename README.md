@@ -14,8 +14,6 @@
   &nbsp;·&nbsp; <a href="https://opendmd.github.io/">Documentation</a>
 </p>
 
-![A tunnel effect, drawn the way the LED panel shows it](docs/images/hero.webp)
-
 <!-- site:hero -->
 
 OpenDMD is open-source firmware and a web app for the **DMDoS display**: a 128x32 LED
