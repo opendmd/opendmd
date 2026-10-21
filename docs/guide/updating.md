@@ -23,8 +23,8 @@ goes wrong it tells you what, and nothing is left half-installed.
 If the player won't start or you can't reach the web app, the
 [installer](install.md) updates both parts over USB:
 
-1. Open the installer in Chrome or Edge and plug the display's board into
-   your computer by USB.
+1. Open the installer in Chrome, Edge, Opera or Firefox and plug the
+   display's board into your computer by USB.
 2. Click **Install** and pick the board's port.
 3. **Leave Erase device unticked.** Ticking it wipes your WiFi details and
    settings.

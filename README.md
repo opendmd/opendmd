@@ -51,8 +51,8 @@ original DMDoS firmware can be put back at any time from the Software section of
 
 ## Install
 
-Open the **[installer](https://opendmd.github.io/install/)** in Chrome, Edge or Opera on a
-computer, plug the
+Open the **[installer](https://opendmd.github.io/install/)** in Chrome, Edge, Opera or
+Firefox on a computer, plug the
 display's ESP32 board into your computer by USB, and click **Install**. On first start the
 player opens a WiFi network called `OpenDMD-Setup`: join it, enter your WiFi details, and the
 web app is at `http://opendmd.local/`. [Install](docs/guide/install.md) has the details.
