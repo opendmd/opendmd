@@ -249,10 +249,11 @@ firmware does not speak Improv Serial):
 
 The page cannot be tested end to end without a person at a real board (Web
 Serial asks for a port by hand); `tools/web-smoke.py`-style checks cover
-that it loads, the button renders and the manifest parses. When the repo is
-public, GitHub Pages will host the same page with the release files beside
-it (`flasher/index.html` plus a `firmware/` directory holding `dist/`'s
-files), so installing needs no toolchain at all.
+that it loads, the button renders and the manifest parses. The public
+site hosts a version of it at <https://opendmd.github.io/install/>
+(`docs/guide/install.md`, built by `tools/site.py --dist dist` with the
+current release's files under `install/firmware/`), so installing needs no
+toolchain at all.
 
 ### Installing with espflash (USB)
 
@@ -368,7 +369,7 @@ that changed it, push the web app from the same tree (the flasher and
 
 | field | `filelist.txt`, few files prepared (mostly GIFs) | every file played from a prepared copy |
 |---|---|---|
-| `version` / `variant` | the release, e.g. `0.3.13` / `4mb` | same |
+| `version` / `variant` | the release, e.g. `1.0.0` / `4mb` | same |
 | `manifest` | `/sdcard/filelist.txt` | `/sdcard/filelist.txt` (the copies are found per file) |
 | `index_state` | `ready` | `ready` |
 | `www_version` / `www` | the `git describe` of the `make web` that built the pack in flash; `www.ok` `true`, `www.error` `null` | same |

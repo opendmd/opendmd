@@ -14,31 +14,20 @@ OpenDMD is an open-source replacement for **DMDoS**, the closed ESP32 firmware t
 from a microSD card on two chained 64x32 HUB75 panels: a "DMD", like the dot-matrix display in a
 pinball machine. It plays an existing DMDoS card as it is, and adds a web app to manage it.
 
-- **The firmware** runs on a classic ESP32 (4 MB flash, no PSRAM). It plays the card, serves the
-  web app from its own flash, and answers a small JSON API.
-- **The web app** at `http://opendmd.local/` is WebAssembly. Previews, playlist filtering and GIF
-  preparation run in the browser, using the same Rust engine as the player.
+- **The firmware** runs on the display's own ESP32 board. It plays the card and serves the web
+  app over WiFi.
+- **The web app** at `http://opendmd.local/` works in any browser, on a phone or a computer.
+  Previews and GIF preparation run right in the browser, using the same engine as the player.
 - **The simulator** plays a card in a desktop window, drawn as LEDs rather than flat pixels.
 
 ## Install
 
-Build a release, then flash it over USB from Chrome or Edge:
+Open the **[installer](https://opendmd.github.io/install/)** in Chrome or Edge, plug the
+display's ESP32 board into your computer by USB, and click **Install**. On first start the
+player opens a WiFi network called `OpenDMD-Setup`: join it, enter your WiFi details, and the
+web app is at `http://opendmd.local/`. [Install](docs/guide/install.md) has the details.
 
-```sh
-make fw-release     # dist/: firmware, web app, merged image, signed update bundle
-make flasher        # http://localhost:8765 -> Install
-```
-
-On first boot the player opens a WiFi network called `OpenDMD-Setup`. Join it, enter your WiFi
-details, and the player rejoins your network as `opendmd.local`. Later updates go over WiFi:
-
-```sh
-make fw-ota HOST=opendmd.local       # firmware
-make www-push HOST=opendmd.local     # web app only
-```
-
-[`docs/deploying.md`](docs/deploying.md) covers preparing a card, first boot, and recovering
-from an update that goes wrong.
+From source: `make fw-release && make flasher` (see [For developers](docs/developers.md)).
 
 ## What it does
 
@@ -55,8 +44,8 @@ from an update that goes wrong.
 - **Looks:** full colour or a single amber, red, green, blue or white, with optional phosphor glow.
 - **Schedules:** a playlist or brightness for parts of the week, and a night mode that turns the
   panel off or dims it.
-- **Smooth playback:** the player prepares a lighter copy of each GIF in the background, so files
-  decode in less memory and open faster.
+- **Smooth playback:** the player prepares a lighter copy of each GIF in the background, so GIFs
+  start quickly and play smoothly.
 
 ## Screenshots
 
@@ -75,41 +64,18 @@ The demo card in these screenshots holds the panel's own effects and the
 
 The documentation is also at **[opendmd.github.io](https://opendmd.github.io/)**.
 
-- [The web app](docs/web-app.md): its views, Create Art, and the mock device
-- [HTTP API](docs/api.md): every route, with `curl` examples
-- [Firmware](docs/firmware.md): toolchain, flashing, WiFi setup, memory and timing
-- [The card](docs/card.md): layout, prepared copies and the file-name tag grammar
-- [The simulator](docs/simulator.md): its options and LED model
-- [Deploying](docs/deploying.md) and [firmware updates over WiFi](docs/ota.md)
-- [Hardware pinout](hardware/PINOUT.md)
+- [Install](docs/guide/install.md) and [Updating](docs/guide/updating.md)
+- [The web app](docs/guide/web-app.md), [Create Art](docs/guide/create-art.md) and
+  [Effects and live items](docs/guide/effects.md)
+- [The SD card](docs/guide/card.md): where GIFs go and how their names are read
+- [Troubleshooting](docs/guide/troubleshooting.md)
+- [For developers](docs/developers.md): building from source, the crates, the
+  [HTTP API](docs/api.md)
 
 ## Development
 
-The core, renderer, simulator and card tools build with stable Rust on any desktop. The web app
-needs the `wasm32-unknown-unknown` target and `wasm-pack`. The firmware needs the Espressif
-xtensa toolchain (see [Firmware](docs/firmware.md#toolchain)).
-
-```sh
-make test                    # unit tests for every host crate
-make clippy                  # clippy -D warnings, every crate
-make sim ARGS="--root /path/to/card"
-make web && make web-mock ROOT=/path/to/card   # the web app against a fake device on :8080
-make web-smoke               # headless Chromium through every view
-make fw-build                # the firmware (first build fetches ESP-IDF)
-```
-
-| Crate | What it is |
-| --- | --- |
-| `opendmd-core` | Manifests, tag parsing, filtering, scheduling, GIF playback and the playlist engine. No I/O. |
-| `opendmd-render` | The LED-panel renderer used by the simulator and the web app |
-| `opendmd-sim` | The desktop simulator |
-| `opendmd-web` | The web app: wasm module plus hand-written HTML, CSS and JS in `www/` |
-| `opendmd-art-web` | Create Art's image processing and GIF writer, loaded on demand |
-| `opendmd-pack` | Prepares a card's GIF copies offline |
-| `firmware` | The ESP32 firmware |
-
-The crates are deliberately not a Cargo workspace. [CLAUDE.md](CLAUDE.md) has detailed
-architecture notes for contributors.
+Everything builds from this repository with `make`; [For developers](docs/developers.md) lists
+the toolchains, the common targets and the crates.
 
 ## License
 
