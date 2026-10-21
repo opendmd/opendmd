@@ -26,8 +26,10 @@ on:
   push:
   pull_request:
 
+# A newer push to a branch or PR cancels the older run; on main every commit
+# runs to the end, so a long cold firmware build still fills the caches.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -65,6 +67,42 @@ jobs:
 
       - name: Build the web app
         run: make web
+
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(uv run --quiet --with 'playwright>=1.45' python -c 'from importlib.metadata import version; print(version("playwright"))')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright's Chromium
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Chromium and its system libraries
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" != true ]; then
+            uv run --quiet --with 'playwright==${{ steps.pw.outputs.version }}' playwright install --with-deps chromium
+          else
+            uv run --quiet --with 'playwright==${{ steps.pw.outputs.version }}' playwright install-deps chromium
+          fi
+
+      - name: A synthetic card (tools/ci-card.py)
+        run: uv run tools/ci-card.py "$RUNNER_TEMP/ci-card"
+
+      - name: Smoke test (make web-smoke)
+        env:
+          DMD_CARD_ROOT: ${{ runner.temp }}/ci-card
+        run: make web-smoke
+
+      - name: Upload the smoke test's screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-smoke
+          path: target/web-smoke
+          retention-days: 7
 
   firmware:
     runs-on: ubuntu-latest
