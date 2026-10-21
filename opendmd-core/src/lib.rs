@@ -19,6 +19,7 @@ pub mod follow;
 pub mod frametime;
 pub mod fx;
 pub mod gifslim;
+pub mod history;
 pub mod index;
 pub mod layout;
 pub mod look;
