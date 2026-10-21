@@ -1,0 +1,239 @@
+name: Release
+
+# Builds the release with `make fw-release` (the firmware, the updater, the
+# web app's pack, the merged 4 MB image, the ESP Web Tools manifest and the
+# signed .odfw bundle), then the public site with `make site`. What gets
+# published depends on the trigger:
+#
+#   tag v1.2.3          -> GitHub release on opendmd/opendmd (marked latest),
+#                          and the site pushed to opendmd/opendmd.github.io
+#   tag v1.2.3-rc1      -> GitHub pre-release (any tag with a "-" suffix);
+#                          the site is left alone
+#   manual dispatch     -> dry_run (the default): everything is built, signed
+#                          with a throwaway key made in the job (so the bundle
+#                          verifies against that key's public half, not the
+#                          committed firmware/keys/opendmd.pub), and dist/ and
+#                          target/site are uploaded as build artifacts;
+#                          nothing is published. Untick dry_run and pick a v*
+#                          tag in "Use workflow from" to redo a tag's release.
+#
+# Every run uploads dist/ and the site as artifacts. The tag must equal the
+# version in firmware/Cargo.toml with a leading "v" (v1.0.0 <-> 1.0.0), which
+# is also what fw-release writes into the app descriptor ("1.0.0 4mb").
+# A release drafted by hand for the tag keeps its notes; only the assets are
+# uploaded to it.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions),
+# for a real release only; a dry run needs none:
+#   OTA_SIGNING_KEY   base64 of the raw 32-byte Ed25519 seed that signs the
+#                     .odfw bundles (tools/fw-sign.py; the key whose public
+#                     half is firmware/keys/opendmd.pub):
+#                       base64 -w0 ~/.config/opendmd/opendmd.key | gh secret set OTA_SIGNING_KEY -R opendmd/opendmd
+#   SITE_DEPLOY_KEY   an SSH private key whose public half is a deploy key
+#                     with write access on opendmd/opendmd.github.io:
+#                       ssh-keygen -t ed25519 -N '' -C 'opendmd release' -f site_deploy
+#                       gh repo deploy-key add site_deploy.pub -R opendmd/opendmd.github.io --allow-write -t 'opendmd release'
+#                       gh secret set SITE_DEPLOY_KEY -R opendmd/opendmd < site_deploy
+#                       rm site_deploy site_deploy.pub
+# The release itself is made with the workflow's own GITHUB_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: build with a throwaway key, publish nothing"
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # The updater's idf.py build dir (the Makefile's default is on the dev box).
+      UPDATER_BUILD: ${{ github.workspace }}/target/updater
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the web app's version is `git describe --tags`
+          submodules: recursive
+
+      - name: Work out what to publish
+        id: plan
+        env:
+          DRY_INPUT: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' firmware/Cargo.toml | head -1)"
+          test -n "$VERSION" || { echo "::error::cannot read the version from firmware/Cargo.toml"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$DRY_INPUT" != false ]]; then
+            echo "kind=dry" >> "$GITHUB_OUTPUT"
+            echo "Dry run of $VERSION at $(git describe --always --tags)"
+            exit 0
+          fi
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "::error::a release needs a v* tag (picked in 'Use workflow from'), not $GITHUB_REF; or tick dry_run"
+            exit 1
+          fi
+          TAG="$GITHUB_REF_NAME"
+          if [[ "${TAG#v}" != "$VERSION" ]]; then
+            echo "::error::tag $TAG does not match firmware/Cargo.toml's version $VERSION (want tag v$VERSION, or bump the version)"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-* ]]; then echo "kind=prerelease" >> "$GITHUB_OUTPUT"
+          else echo "kind=release" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: ./.github/actions/web-tools
+        with:
+          cache-key: firmware
+
+      - uses: ./.github/actions/esp-toolchain
+        id: esp
+
+      - name: Cache the updater's build
+        uses: actions/cache@v4
+        with:
+          path: target/updater
+          key: updater-${{ runner.os }}-${{ hashFiles('ota/updater/**', 'firmware/.cargo/config.toml') }}
+          restore-keys: updater-${{ runner.os }}-
+
+      # The demo card's recordings (the simulator's effects, a frame at a
+      # time) are kept between runs unless the simulator or the script changed.
+      - name: Cache the site's demo card
+        uses: actions/cache@v4
+        with:
+          path: target/demo-card
+          key: demo-card-${{ hashFiles('tools/demo-card.py', 'opendmd-sim/src/**', 'opendmd-render/src/**', 'opendmd-core/src/**', 'opendmd-web/experiments/art/process/out/**') }}
+
+      - name: Signing key
+        env:
+          KIND: ${{ steps.plan.outputs.kind }}
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/sign"
+          if [[ "$KIND" == dry ]]; then
+            uv run --quiet tools/fw-sign.py keygen --key "$RUNNER_TEMP/sign/opendmd.key" --pub "$RUNNER_TEMP/sign/dry.pub"
+            echo "FW_SIGN_PUB=$RUNNER_TEMP/sign/dry.pub" >> "$GITHUB_ENV"
+          else
+            test -n "$OTA_SIGNING_KEY" || { echo "::error::the OTA_SIGNING_KEY secret is not set (see the header of release.yml)"; exit 1; }
+            printf '%s' "$OTA_SIGNING_KEY" | base64 -d > "$RUNNER_TEMP/sign/opendmd.key"
+            test "$(stat -c %s "$RUNNER_TEMP/sign/opendmd.key")" -eq 32 || { echo "::error::OTA_SIGNING_KEY does not decode to a 32-byte key"; exit 1; }
+          fi
+          echo "FW_SIGN_KEY=$RUNNER_TEMP/sign/opendmd.key" >> "$GITHUB_ENV"
+
+      - name: Release build (make fw-release)
+        run: make fw-release
+
+      - uses: ./.github/actions/esp-cache-save
+        if: always()
+        with:
+          espressif-key: ${{ steps.esp.outputs.espressif-key }}
+          espressif-hit: ${{ steps.esp.outputs.espressif-hit }}
+          fw-target-key: ${{ steps.esp.outputs.fw-target-key }}
+          fw-target-hit: ${{ steps.esp.outputs.fw-target-hit }}
+
+      - name: Remove the signing key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/sign/opendmd.key"
+
+      - name: Check the version in the image and the manifest
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          app="dist/opendmd-$VERSION-app.bin"
+          desc="$(dd if="$app" bs=1 skip=48 count=32 2>/dev/null | tr -d '\000')"
+          echo "app descriptor: '$desc'"
+          test "$desc" = "$VERSION 4mb" || { echo "::error::$app's descriptor is '$desc', want '$VERSION 4mb'"; exit 1; }
+          manifest="$(jq -r .version dist/manifest.json)"
+          test "$manifest" = "$VERSION" || { echo "::error::dist/manifest.json says $manifest, want $VERSION"; exit 1; }
+          uv run --quiet tools/fw-sign.py inspect "dist/opendmd-$VERSION.odfw"
+          ! strings "$app" dist/updater.bin dist/bootloader.bin | grep -n "$HOME" || { echo "::error::the release names $HOME"; exit 1; }
+
+      - name: The public site (make site)
+        run: make site
+
+      - name: The tree is clean after the build
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+
+      - name: Collect this version's assets
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/assets"
+          for f in "opendmd-$VERSION-app.bin" "opendmd-$VERSION-4mb-full.bin" "opendmd-$VERSION.odfw" \
+                   "opendmd-$VERSION-www.pack" bootloader.bin partition-table.bin ota_data_initial.bin \
+                   updater.bin manifest.json; do
+            cp "dist/$f" "$RUNNER_TEMP/assets/"
+          done
+          cd "$RUNNER_TEMP/assets"
+          sha256sum * | tee SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opendmd-${{ steps.plan.outputs.version }}-dist
+          path: ${{ runner.temp }}/assets
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opendmd-${{ steps.plan.outputs.version }}-site
+          path: target/site
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: steps.plan.outputs.kind == 'release' || steps.plan.outputs.kind == 'prerelease'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          KIND: ${{ steps.plan.outputs.kind }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/assets"
+          NOTES="$(printf 'SHA-256:\n\n```\n%s\n```\n' "$(cat SHA256SUMS)")"
+          # A release drafted by hand for this tag keeps its notes; only the assets are uploaded.
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --title "OpenDMD ${TAG#v}" \
+              --generate-notes --notes "$NOTES" $([[ "$KIND" == prerelease ]] && echo --prerelease)
+          fi
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber *
+
+      - name: Publish the site
+        if: steps.plan.outputs.kind == 'release'
+        env:
+          SITE_DEPLOY_KEY: ${{ secrets.SITE_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SITE_DEPLOY_KEY" || { echo "::error::the SITE_DEPLOY_KEY secret is not set (see the header of release.yml)"; exit 1; }
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SITE_DEPLOY_KEY" > "$RUNNER_TEMP/site_deploy"
+          # GitHub's published host key (docs: "GitHub's SSH key fingerprints").
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/site_deploy -o IdentitiesOnly=yes"
+          # site-publish.sh commits as this repo's identity.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          tools/site-publish.sh target/site git@github.com:opendmd/opendmd.github.io.git
+
+      - name: Remove the deploy key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/site_deploy"

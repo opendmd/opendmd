@@ -1,0 +1,47 @@
+name: Save the ESP32 caches
+description: >
+  Saves what ./.github/actions/esp-toolchain restored when it missed: ESP-IDF
+  (~/.espressif) once it is complete, firmware/target once cargo has linked
+  the release ELF. Run it with `if: always()` straight after the build, so a
+  failure later in the job still keeps them.
+
+inputs:
+  espressif-key:
+    required: true
+  espressif-hit:
+    required: true
+  fw-target-key:
+    required: true
+  fw-target-hit:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: What is complete
+      id: check
+      shell: bash
+      run: |
+        idf=false fw=false
+        if [ -d ~/.espressif/esp-idf/v5.3/.git ] && [ -d ~/.espressif/tools/xtensa-esp-elf ] \
+           && ls ~/.espressif/python_env/idf5.3_py3*_env/bin/python >/dev/null 2>&1; then idf=true; fi
+        if [ -f firmware/target/xtensa-esp32-espidf/release/opendmd-firmware ]; then fw=true; fi
+        echo "ESP-IDF complete: $idf; release ELF linked: $fw"
+        echo "idf=$idf" >> "$GITHUB_OUTPUT"
+        echo "fw=$fw" >> "$GITHUB_OUTPUT"
+
+    - name: Save ESP-IDF (~/.espressif)
+      if: inputs.espressif-hit != 'true' && steps.check.outputs.idf == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ~/.espressif
+          !~/.espressif/dist
+        key: ${{ inputs.espressif-key }}
+
+    - name: Save firmware/target
+      if: inputs.fw-target-hit != 'true' && steps.check.outputs.fw == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: firmware/target
+        key: ${{ inputs.fw-target-key }}

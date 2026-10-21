@@ -1,10 +1,13 @@
 name: ESP32 toolchain
 description: >
   The xtensa Rust toolchain (espup's `esp`, with its ~/.espup-env.sh, which
-  the Makefile sources), ldproxy and espflash; and the caches of ESP-IDF v5.3
-  in ~/.espressif (installed "global" by esp-idf-sys on the first firmware
-  build, see firmware/.cargo/config.toml) and of firmware/target. The
-  versions are the ones on the development machine.
+  the Makefile sources), ldproxy and espflash; and restores the caches of
+  ESP-IDF v5.3 in ~/.espressif (installed "global" by esp-idf-sys on the
+  first firmware build, see firmware/.cargo/config.toml) and of
+  firmware/target. Those two are saved by ./.github/actions/esp-cache-save
+  after the build, even when a later step fails, so a failed run does not
+  install ESP-IDF again. The versions are the ones on the development
+  machine.
 
 inputs:
   espup:
@@ -17,12 +20,30 @@ inputs:
   ldproxy:
     default: "0.3.5"
 
+outputs:
+  espressif-key:
+    value: ${{ steps.keys.outputs.espressif }}
+  espressif-hit:
+    value: ${{ steps.espressif.outputs.cache-hit }}
+  fw-target-key:
+    value: ${{ steps.keys.outputs.fw-target }}
+  fw-target-hit:
+    value: ${{ steps.fw-target.outputs.cache-hit }}
+
 runs:
   using: composite
   steps:
-    - name: Cache the esp toolchain, espflash and ldproxy
+    - name: Cache keys
+      id: keys
+      shell: bash
+      run: |
+        echo "rust=esp-rust-${{ runner.os }}-espup${{ inputs.espup }}-${{ inputs.esp-rust }}-espflash${{ inputs.espflash }}-ldproxy${{ inputs.ldproxy }}" >> "$GITHUB_OUTPUT"
+        echo "espressif=espressif-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}" >> "$GITHUB_OUTPUT"
+        echo "fw-target=fw-target-${{ runner.os }}-${{ hashFiles('firmware/Cargo.lock', 'firmware/.cargo/config.toml', 'firmware/sdkconfig.defaults') }}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the esp toolchain, espflash and ldproxy
       id: esp-rust
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: |
           ~/.rustup/toolchains/esp
@@ -30,7 +51,7 @@ runs:
           ~/.cargo/bin/espup
           ~/.cargo/bin/espflash
           ~/.cargo/bin/ldproxy
-        key: esp-rust-${{ runner.os }}-espup${{ inputs.espup }}-${{ inputs.esp-rust }}-espflash${{ inputs.espflash }}-ldproxy${{ inputs.ldproxy }}
+        key: ${{ steps.keys.outputs.rust }}
 
     - name: Install espup, the esp toolchain, espflash and ldproxy
       if: steps.esp-rust.outputs.cache-hit != 'true'
@@ -52,6 +73,18 @@ runs:
           --export-file ~/.espup-env.sh
         rm -rf ~/.rustup/downloads ~/.rustup/tmp
 
+    - name: Save the esp toolchain, espflash and ldproxy
+      if: steps.esp-rust.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ~/.rustup/toolchains/esp
+          ~/.espup-env.sh
+          ~/.cargo/bin/espup
+          ~/.cargo/bin/espflash
+          ~/.cargo/bin/ldproxy
+        key: ${{ steps.keys.outputs.rust }}
+
     - name: Show the toolchain
       shell: bash
       run: |
@@ -63,17 +96,19 @@ runs:
 
     # ~/.espressif: the ESP-IDF checkout, its tools and Python venv (~2.5 GB).
     # The downloaded archives in dist/ are left out.
-    - name: Cache ESP-IDF (~/.espressif)
-      uses: actions/cache@v4
+    - name: Restore ESP-IDF (~/.espressif)
+      id: espressif
+      uses: actions/cache/restore@v4
       with:
         path: |
           ~/.espressif
           !~/.espressif/dist
-        key: espressif-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}
+        key: ${{ steps.keys.outputs.espressif }}
 
-    - name: Cache firmware/target
-      uses: actions/cache@v4
+    - name: Restore firmware/target
+      id: fw-target
+      uses: actions/cache/restore@v4
       with:
         path: firmware/target
-        key: fw-target-${{ runner.os }}-${{ hashFiles('firmware/Cargo.lock', 'firmware/.cargo/config.toml', 'firmware/sdkconfig.defaults') }}
+        key: ${{ steps.keys.outputs.fw-target }}
         restore-keys: fw-target-${{ runner.os }}-
