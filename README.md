@@ -112,7 +112,5 @@ architecture notes for contributors.
 Either [Apache 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option. Contributions are
 dual licensed the same way.
 
-**The DMDoS GIF pack is not part of this repository.** The ~11,000 animations on a DMDoS card
-are third-party content that isn't ours to relicense or redistribute, and they must never be
-committed here. `.gitignore` guards against it, and every test fixture is a GIF generated in
-code at test time.
+OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
+project can't relicense or redistribute, so bring your own card or make art with Create Art.

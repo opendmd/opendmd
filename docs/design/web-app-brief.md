@@ -1,7 +1,7 @@
 # The web app: visual brief (2026-10-02)
 
-Status: the brief for the visual pass Ross asked for ("the web app feels a
-bit clunky; the panel feels snappy"). Written by Fable from the smoke
+Status: the brief for a visual pass (the web app "feels a
+bit clunky; the panel feels snappy"). Written from the smoke
 screenshots at 1280 px and 390 px (`target/web-smoke/*.png`, device and
 mock). Implementation lands in phases, each reviewed against this page.
 Budgets stay as they are (`tools/web-size.py`); this is mostly CSS and
