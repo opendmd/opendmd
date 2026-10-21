@@ -23,8 +23,15 @@ runs:
       shell: bash
       run: |
         idf=false fw=false
-        if [ -d ~/.espressif/esp-idf/v5.3/.git ] && [ -d ~/.espressif/tools/xtensa-esp-elf ] \
-           && ls ~/.espressif/python_env/idf5.3_py3*_env/bin/python >/dev/null 2>&1; then idf=true; fi
+        # Every tool esp-idf-sys installs (idf_tools.py removes one that
+        # fails its check), the checkout and the venv.
+        if [ -d ~/.espressif/esp-idf/v5.3/.git ] \
+           && ls ~/.espressif/python_env/idf5.3_py3*_env/bin/python >/dev/null 2>&1; then
+          idf=true
+          for t in xtensa-esp-elf esp-clang esp-rom-elfs cmake ninja esp32ulp-elf; do
+            [ -n "$(ls -A ~/.espressif/tools/$t 2>/dev/null)" ] || { echo "missing tool: $t"; idf=false; }
+          done
+        fi
         if [ -f firmware/target/xtensa-esp32-espidf/release/opendmd-firmware ]; then fw=true; fi
         echo "ESP-IDF complete: $idf; release ELF linked: $fw"
         echo "idf=$idf" >> "$GITHUB_OUTPUT"
@@ -32,7 +39,7 @@ runs:
 
     - name: Save ESP-IDF (~/.espressif)
       if: inputs.espressif-hit != 'true' && steps.check.outputs.idf == 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: |
           ~/.espressif
@@ -41,7 +48,7 @@ runs:
 
     - name: Save firmware/target
       if: inputs.fw-target-hit != 'true' && steps.check.outputs.fw == 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: firmware/target
         key: ${{ inputs.fw-target-key }}

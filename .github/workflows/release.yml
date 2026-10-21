@@ -59,12 +59,14 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest (Ubuntu 26): IDF v5.3's esp-clang 16 needs
+    # libxml2.so.2, which 26.04 no longer has.
+    runs-on: ubuntu-24.04
     env:
       # The updater's idf.py build dir (the Makefile's default is on the dev box).
       UPDATER_BUILD: ${{ github.workspace }}/target/updater
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # the web app's version is `git describe --tags`
           submodules: recursive
@@ -104,16 +106,16 @@ jobs:
         id: esp
 
       - name: Cache the updater's build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/updater
-          key: updater-${{ runner.os }}-${{ hashFiles('ota/updater/**', 'firmware/.cargo/config.toml') }}
-          restore-keys: updater-${{ runner.os }}-
+          key: updater-${{ steps.esp.outputs.image }}-${{ hashFiles('ota/updater/**', 'firmware/.cargo/config.toml') }}
+          restore-keys: updater-${{ steps.esp.outputs.image }}-
 
       # The demo card's recordings (the simulator's effects, a frame at a
       # time) are kept between runs unless the simulator or the script changed.
       - name: Cache the site's demo card
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/demo-card
           key: demo-card-${{ hashFiles('tools/demo-card.py', 'opendmd-sim/src/**', 'opendmd-render/src/**', 'opendmd-core/src/**', 'opendmd-web/experiments/art/process/out/**') }}
@@ -187,13 +189,13 @@ jobs:
           cd "$RUNNER_TEMP/assets"
           sha256sum * | tee SHA256SUMS
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: opendmd-${{ steps.plan.outputs.version }}-dist
           path: ${{ runner.temp }}/assets
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: opendmd-${{ steps.plan.outputs.version }}-site
           path: target/site

@@ -21,6 +21,9 @@ inputs:
     default: "0.3.5"
 
 outputs:
+  image:
+    description: "runner.os-ImageOS, for the caller's own cache keys"
+    value: ${{ steps.keys.outputs.image }}
   espressif-key:
     value: ${{ steps.keys.outputs.espressif }}
   espressif-hit:
@@ -33,17 +36,21 @@ outputs:
 runs:
   using: composite
   steps:
+    # Keyed on the runner image too (ImageOS, e.g. ubuntu24): ldproxy is
+    # built against its glibc, the IDF venv against its Python.
     - name: Cache keys
       id: keys
       shell: bash
       run: |
-        echo "rust=esp-rust-${{ runner.os }}-espup${{ inputs.espup }}-${{ inputs.esp-rust }}-espflash${{ inputs.espflash }}-ldproxy${{ inputs.ldproxy }}" >> "$GITHUB_OUTPUT"
-        echo "espressif=espressif-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}" >> "$GITHUB_OUTPUT"
-        echo "fw-target=fw-target-${{ runner.os }}-${{ hashFiles('firmware/Cargo.lock', 'firmware/.cargo/config.toml', 'firmware/sdkconfig.defaults') }}" >> "$GITHUB_OUTPUT"
+        image="${{ runner.os }}-${ImageOS:-unknown}"
+        echo "image=$image" >> "$GITHUB_OUTPUT"
+        echo "rust=esp-rust-$image-espup${{ inputs.espup }}-${{ inputs.esp-rust }}-espflash${{ inputs.espflash }}-ldproxy${{ inputs.ldproxy }}" >> "$GITHUB_OUTPUT"
+        echo "espressif=espressif-$image-${{ hashFiles('firmware/.cargo/config.toml') }}" >> "$GITHUB_OUTPUT"
+        echo "fw-target=fw-target-$image-${{ hashFiles('firmware/Cargo.lock', 'firmware/.cargo/config.toml', 'firmware/sdkconfig.defaults') }}" >> "$GITHUB_OUTPUT"
 
     - name: Restore the esp toolchain, espflash and ldproxy
       id: esp-rust
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: |
           ~/.rustup/toolchains/esp
@@ -75,7 +82,7 @@ runs:
 
     - name: Save the esp toolchain, espflash and ldproxy
       if: steps.esp-rust.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: |
           ~/.rustup/toolchains/esp
@@ -98,7 +105,7 @@ runs:
     # The downloaded archives in dist/ are left out.
     - name: Restore ESP-IDF (~/.espressif)
       id: espressif
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: |
           ~/.espressif
@@ -107,8 +114,8 @@ runs:
 
     - name: Restore firmware/target
       id: fw-target
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: firmware/target
         key: ${{ steps.keys.outputs.fw-target }}
-        restore-keys: fw-target-${{ runner.os }}-
+        restore-keys: fw-target-${{ steps.keys.outputs.image }}-
