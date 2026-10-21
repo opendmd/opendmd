@@ -14,10 +14,11 @@ until the live effects, `opendmd_core::fx`, which the wasm player needs:
 extra 12 KB is ~40 ms of a page load; 112 KB until the start-up show,
 `opendmd_core::boot`, which Settings previews as the `@boot` virtual file
 so the page draws exactly what the panel does: +2.4 KB gz); the
-hand-written JS + CSS <= 56 KB (40 KB until Follow RePlayOS's Settings card,
+hand-written JS + CSS <= 57 KB (40 KB until Follow RePlayOS's Settings card,
 which had ~0.6 KB left; 48 KB until the Library's redesign — the Details
 panel, the category tabs, Make art as a view —, +8 KB being ~25 ms of a
-page load from flash). The Studio ("Make art") is loaded only when it
+page load from flash; 56 KB until display names and the platform chips,
+2026-10-21, after the panel test and web-ux merges). The Studio ("Make art") is loaded only when it
 opens and has lines of its own: its wasm + glue (`pkg-art/`) <= 150 KB, and
 `js/studio.js` + `studio.css` <= 24 KB — neither counts against the lines
 above. Library's "Live" items and "Effects" (`js/live.js`: the clock, the
@@ -70,8 +71,9 @@ from pathlib import Path
 WASM_GZ_BUDGET = 116 * 1024
 # 48 KB until the Library's redesign (the Details panel, the category tabs,
 # Make art as a view): the UI is served from the flash pack at ~320 KB/s, so
-# +8 KB is ~25 ms of a page load.
-JS_CSS_GZ_BUDGET = 56 * 1024
+# +8 KB is ~25 ms of a page load. 56 KB until display names, the platform
+# chips and Now's empty-playlist line (2026-10-21).
+JS_CSS_GZ_BUDGET = 57 * 1024
 ART_WASM_GZ_BUDGET = 150 * 1024
 STUDIO_GZ_BUDGET = 24 * 1024
 STUDIO = {"js/studio.js", "studio.css"}

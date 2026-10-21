@@ -142,12 +142,13 @@ async function loadStatus() {
       ['GIFs started', s.gifs_started],
       ['SD card', s.sd.mounted ? (s.sd.capacity_bytes / 1e9).toFixed(2) + ' GB' : 'not mounted'],
     ];
-    $('status').innerHTML = rows.map(r => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('');
+    // Cells as text: names and titles come from the card and the network.
+    $('status').replaceChildren(...rows.map(r => { const tr = document.createElement('tr'); for (const c of r) tr.insertCell().textContent = c; return tr; }));
     // mDNS renames a display whose name another one already has.
     const n = $('hostnote');
     n.hidden = !s.mdns || s.mdns === s.hostname;
     n.textContent = 'Another display is using “' + s.hostname + '”; this one is at ' + s.mdns + '.local. Give it its own name above.';
-  } catch (e) { $('status').innerHTML = '<tr><td>offline</td><td>' + e + '</td></tr>'; }
+  } catch (e) { const tr = $('status').insertRow(); $('status').replaceChildren(tr); tr.insertCell().textContent = 'offline'; tr.insertCell().textContent = e; }
 }
 
 async function loadConfig() {

@@ -33,7 +33,7 @@ export async function mount(el) {
     set: h('select', { id: 'st-set' }),
     wifi_ssid: h('input', { type: 'text', id: 'st-ssid', value: c.wifi_ssid, autocomplete: 'off' }),
     wifi_pass: h('input', { type: 'password', id: 'st-pass', placeholder: c.wifi_pass_set ? 'unchanged (one is saved)' : 'none saved', autocomplete: 'new-password' }),
-    hostname: h('input', { type: 'text', id: 'st-hostname', value: c.hostname, maxLength: 32, pattern: '[a-z0-9]([a-z0-9\\-]*[a-z0-9])?' }),
+    hostname: h('input', { type: 'text', id: 'st-hostname', value: c.hostname, maxLength: 32, oninput: (e) => { const t = e.target, i = t.selectionStart; t.value = t.value.toLowerCase(); t.setSelectionRange(i, i); }, pattern: '[a-z0-9]([a-z0-9\\-]*[a-z0-9])?' }),
     transition: h('select', { id: 'st-trans' }, [['dissolve', 'Dissolve'], ['wipe_left', 'Wipe'], ['blinds', 'Blinds'], ['push', 'Push'], ['fade', 'Fade'], ['none', 'None']].map(([v, l]) => h('option', { value: v }, l))),
     transition_ms: h('select', { id: 'st-trans-ms', 'data-num': 1 }, [[250, 'Quick'], [400, 'Normal'], [700, 'Slow']].map(([v, l]) => h('option', { value: v }, l))),
     look: h('select', { id: 'st-look' }, [['colour', 'Full colour'], ['amber', 'Amber'], ['red', 'Red'], ['green', 'Green'], ['blue', 'Blue'], ['white', 'White']].map(([v, l]) => h('option', { value: v }, l))),
@@ -70,24 +70,24 @@ export async function mount(el) {
   const later = debounce(() => save(['brightness'], play).then(() => { held = 0; }), 400);
   f.brightness.addEventListener('input', () => { held = 1; later(); });
   for (const k of ['look', 'glow', 'shuffle', 'set']) f[k].onchange = () => save([k], play);
-  // Platforms: the playlist's as chips (a saved one it lacks shows 0), saved after the last tap.
+  // Platform chips, counted per manifest text; a config must not undo a tap not yet saved (gen > done).
   const plats = h('div.chips', { id: 'st-plats', style: 'margin-top:4px' });
-  let counted, tapped = 0; // taps not yet sent: a config arriving meanwhile must not undo them
+  let counted = [], gen = 0, done = 0;
   async function platChips() {
-    const path = setPath(app.config?.set), sel = new Set(f.platforms.value.toUpperCase().split(',').map((p) => p.trim()).filter(Boolean));
-    if (counted?.[0] !== path) {
-      const n = new Map(), text = await app.text(path).catch(() => '');
-      for (const e of text ? app.wasm.parseManifest(text) : []) if (e.platform) n.set(e.platform, -~n.get(e.platform));
-      counted = [path, [...n].sort((a, b) => b[1] - a[1])];
+    const text = await app.text(setPath(app.config?.set)).catch(() => '');
+    if (counted[0] !== text) {
+      const n = new Map();
+      for (const e of text ? app.wasm.parseManifest(text) : []) if (e.platform) { const p = e.platform.toUpperCase(); n.set(p, -~n.get(p)); }
+      counted = [text, [...n].sort((a, b) => b[1] - a[1])];
     }
-    const all = [...counted[1]], has = all.map(([p]) => p.toUpperCase());
-    for (const p of sel) has.includes(p) || all.push([p, 0]);
-    const pick = () => { tapped = 1; f.platforms.value = [...sel].join(','); platChips(); platSave(); };
+    const sel = new Set(f.platforms.value.toUpperCase().split(',').map((p) => p.trim()).filter(Boolean)), all = [...counted[1]];
+    for (const p of sel) all.some(([q]) => q == p) || all.push([p, 0]);
+    const pick = () => { gen++; f.platforms.value = [...sel].join(','); platChips(); platSave(); };
     clear(plats, h('button.chip' + (sel.size ? '' : '.on'), { 'data-platform': '', onclick: () => { sel.clear(); pick(); } }, 'All'),
-      all.map(([p, k]) => { const u = p.toUpperCase(); return h('button.chip' + (sel.has(u) ? '.on' : ''), { 'data-platform': p, onclick: () => { sel.delete(u) || sel.add(u); pick(); } }, p, h('small', k)); }));
+      all.map(([p, k]) => h('button.chip' + (sel.has(p) ? '.on' : ''), { 'data-platform': p, onclick: () => { sel.delete(p) || sel.add(p); pick(); } }, p, h('small', k))));
   }
-  const platSync = (cf = app.config) => { if (tapped) return; f.platforms.value = cf.platforms; platChips(); };
-  const platSave = debounce(() => { tapped = 0; return save(['platforms'], play).finally(() => platSync()); }, 700);
+  const platSync = (cf = app.config) => { if (gen == done) { f.platforms.value = cf.platforms; platChips(); } };
+  const platSave = debounce(() => { const g = gen; return save(['platforms'], play).finally(() => { done = g; platSync(); }); }, 700);
   on('config', platSync);
   platChips();
   f.dwell_min.onchange = f.dwell_max.onchange = () => save(['dwell_min', 'dwell_max'], play);
@@ -186,7 +186,7 @@ export async function mount(el) {
     // (Uptime, memory, playlist and card: Now's health line and More.)
     clear(facts, fact('Entries', s.entries.toLocaleString()), fact('Index', s.index_state ?? '–'));
     const m = s.mdns && s.mdns !== s.hostname;
-    clear(about, fact('Address', [`${m ? s.mdns : s.hostname}.local · ${s.ip}`, m && h('div.bad', { id: 'st-mdns' }, `Another display is using “${s.hostname}”; this one is at ${s.mdns}.local. Give it its own name.`)]), fact('Firmware', `${s.version} (${s.variant})`), fact('Web app', s.www_version ?? '–'),
+    clear(about, fact('Address', [`${m ? s.mdns : s.hostname}.local · ${s.ip}`, m && h('div.bad', { id: 'st-mdns' }, `“${s.hostname}” is taken; this display is at ${s.mdns}.local. Give it its own name.`)]), fact('Firmware', `${s.version} (${s.variant})`), fact('Web app', s.www_version ?? '–'),
       fact('API', h('a', { id: 'st-api', href: './api.html', target: '_blank', rel: 'noopener' }, 'API reference')));
     const sd = s.sd;
     const errs = sd.failures || (!sd.mounted && sd.reboots) || 0;

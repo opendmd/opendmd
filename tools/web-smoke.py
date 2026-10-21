@@ -4329,6 +4329,25 @@ def platform_checks(page: Page, base: str) -> None:
     page.wait_for_function("document.querySelector('#now-title').textContent.includes('playlist is empty')", timeout=5000)
     check(page.is_hidden("#now-unfilter"), "now: Clear filter clears it (the message says the playlist is empty)")
     page.unroute(STATUS_RE)
+
+    # No card: "No card" once a mount attempt has failed, nothing claimed
+    # while the card is still being mounted at boot.
+    def nocard(sd):
+        def f(route):
+            r = route.fetch()
+            j = r.json()
+            route.fulfill(response=r, json={**j, "entries": 0, "index_state": "unavailable", "sd": {**j["sd"], **sd},
+                                            "now_playing": {**j["now_playing"], "path": "", "title": "", "ordinal": 0}})
+        return f
+    page.route(STATUS_RE, nocard({"mounted": False, "readable": False, "attempts": 0, "error": None}))
+    page.wait_for_function("document.querySelector('#now-title').textContent === 'Nothing playing'", timeout=5000)
+    check(True, "now: no card claimed while the card is still mounting (no attempt yet)")
+    page.unroute(STATUS_RE)
+    page.route(STATUS_RE, nocard({"mounted": False, "readable": False, "attempts": 2,
+                                  "error": "no card, or card init failed: ESP_ERR_TIMEOUT"}))
+    page.wait_for_function("document.querySelector('#now-title').textContent === 'No card'", timeout=5000)
+    check(page.is_hidden("#now-unfilter"), "now: a failed mount says No card")
+    page.unroute(STATUS_RE)
     page.wait_for_function("!document.querySelector('#now-title').textContent.startsWith('Nothing')", timeout=10000)
     check(True, "now: playing again once status has entries")
     goto_view(page, "settings")
