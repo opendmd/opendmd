@@ -4,8 +4,11 @@ Your GIFs live on the microSD card in the display. OpenDMD plays a card
 made for DMDoS exactly as it is: no conversion, nothing to rename. The card
 also keeps working with DMDoS.
 
-OpenDMD doesn't come with any GIFs. Use the card your display came with,
-add your own from the [Library](web-app.md#library), or make some with
+OpenDMD doesn't come with any GIFs. A card you set up for DMDoS works as
+it is, and the DMDoS GIF pack (**DMDos GUI v1 + GIFs**) is in the Software
+section of [dmdos.net](https://dmdos.net/): copy it onto a FAT32 card as
+dmdos.net describes. You can also add your own GIFs from the
+[Library](web-app.md#library), or make some with
 [Create Art](create-art.md).
 
 ## What's on a card
@@ -63,6 +66,9 @@ that way. Bigger cards usually come formatted as exFAT, which the player
 can't read: put one in and the web app's **Now** view says it needs FAT32
 and offers **Format card…**, which sets it up for you. Formatting erases
 the card, so do it before adding GIFs.
+
+On a computer, a tool such as [Rufus](https://rufus.ie) (Windows) can
+format a card as FAT32 too, as dmdos.net suggests for its pack.
 
 To move a DMDoS collection to a new card, copy the `gifs` folder and the
 `filelist` files from the old card to the new one with a computer.
