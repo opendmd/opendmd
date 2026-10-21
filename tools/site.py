@@ -97,14 +97,14 @@ MENU = [
     ("Hardware pinout", "dev/pinout.html"),
 ]
 # The installer page: ESP Web Tools, pinned (the flashing itself is
-# esptool-js over Web Serial; Chrome, Edge or Opera, https or localhost).
+# esptool-js over Web Serial; Chrome, Edge, Opera or Firefox 151+, https or localhost).
 INSTALL_PAGE = "install/index.html"
 INSTALL_HEAD = ('<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/'
                 'install-button.js?module"></script>')
 INSTALL_BUTTON = """<div class="install">
 <esp-web-install-button id="install" manifest="firmware/manifest.json">
 <button slot="activate" id="install-activate">Install</button>
-<span slot="unsupported">This browser can't talk to USB boards. Open this page in Chrome, Edge or Opera on a computer.</span>
+<span slot="unsupported">This browser can't talk to USB boards. Open this page in Chrome, Edge, Opera or Firefox on a computer.</span>
 <span slot="not-allowed">This page has to be opened over https.</span>
 </esp-web-install-button>
 <span class="ver">OpenDMD {version}</span>

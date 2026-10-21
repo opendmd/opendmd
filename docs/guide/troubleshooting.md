@@ -2,7 +2,8 @@
 
 ## The installer can't find or connect to the board
 
-- Use Chrome, Edge or Opera on a computer, not Firefox, Safari or a phone.
+- Use Chrome, Edge, Opera or Firefox (151 or later) on a computer, not
+  Safari or a phone.
 - Try a different USB cable: many only carry power.
 - On Windows or older macOS, install the driver for the board's USB chip,
   then plug the board in again:

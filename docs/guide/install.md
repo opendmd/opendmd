@@ -7,8 +7,8 @@ OpenDMD replaces the DMDoS firmware on the same ESP32 board: nothing to
 rewire or swap. Want the original firmware back later? Install it again
 from the Software section of [dmdos.net](https://dmdos.net/).
 
-> **Works in:** Chrome, Edge or Opera (recent versions) on a computer:
-> Windows, macOS, Linux or ChromeOS. **Not** Firefox or Safari, and not
+> **Works in:** Chrome, Edge, Opera or Firefox (version 151 or later) on a
+> computer: Windows, macOS, Linux or ChromeOS. **Not** Safari, and not
 > phones or tablets: they can't talk to USB boards from a web page.
 
 <!-- site:install-button -->
