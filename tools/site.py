@@ -217,6 +217,9 @@ def main() -> None:
         shutil.copyfile(ROOT / src, out / dst)
     (out / "site.css").write_text(CSS.strip() + "\n")
     (out / ".nojekyll").write_text("")
+    (out / "README.md").write_text("# opendmd.github.io\n\nThe OpenDMD site: documentation and a browser demo of the web app "
+                                   "(https://opendmd.github.io/). Built by `make site` in the OpenDMD repository; "
+                                   "changes made here are overwritten by the next publish.\n")
     n = sum(1 for p in out.rglob("*") if p.is_file())
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
     print(f"{out}: {n} files, {size / 1e6:.1f} MB")
