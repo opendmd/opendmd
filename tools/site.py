@@ -446,7 +446,8 @@ def main() -> None:
                                extension_configs={"toc": {"permalink": "#"}})
         body = md.convert(text)
         m = re.search(r"<h1[^>]*>(.*?)</h1>", body, re.S)
-        title = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else "OpenDMD"
+        # Without the heading's permalink, whose text is "#".
+        title = re.sub(r'<a class="headerlink".*?</a>|<[^>]+>', "", m.group(1)).strip() if m else "OpenDMD"
         title = "OpenDMD" if title == "OpenDMD" else f"{title} · OpenDMD"
         if page == "index.html":
             body = hero(body, art).replace("<!-- site:tiles -->", tiles(art))

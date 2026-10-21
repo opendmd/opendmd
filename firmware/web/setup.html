@@ -24,31 +24,41 @@ td{padding:2px 0;vertical-align:top}td:first-child{color:var(--dim);width:45%}
 .ok{color:#5fd08a}.err{color:#ff6b6b}
 progress{width:100%;height:6px;margin-top:8px}
 code{background:#161a21;padding:1px 4px;border-radius:3px}
+p.hint{margin:0 0 10px;color:var(--dim);font-size:14px}
+.nets{display:grid;gap:6px;margin-bottom:6px}
+.nets button{margin:0;display:flex;justify-content:space-between;text-align:left;background:#161a21;color:var(--fg);border:1px solid var(--line);font-weight:400}
+.nets button.on{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.nets small{color:var(--dim)}
+button.link{width:auto;margin:0;padding:0;background:none;color:var(--accent);font-weight:400;text-decoration:underline}
+a{color:var(--accent)}
+details summary{cursor:pointer;color:var(--dim);margin:6px 0 14px}
 </style>
 </head>
 <body>
 <main>
 <h1>OpenDMD</h1>
-<p class="sub">firmware v{{ version }} ({{ variant }}) &middot; setup &amp; recovery page</p>
+<p class="sub">Connect your display to WiFi</p>
+
+<section>
+<h2>Your WiFi</h2>
+<p class="hint">Pick your WiFi network, enter its password and press <b>Connect</b>. The display restarts and joins it.</p>
+<div id="nets" class="nets"><div class="msg">Looking for networks&hellip;</div></div>
+<label for="ssid">Network name</label>
+<input id="ssid" autocomplete="off" autocapitalize="off" spellcheck="false">
+<label for="pass">Password</label>
+<input id="pass" type="password" autocomplete="off">
+<button id="savewifi">Connect</button>
+<div class="msg" id="wifimsg"></div>
+<p class="hint" style="margin-top:14px"><button class="link" id="scan">Look again</button> &middot; <a href="/index.html">Use the web app without WiFi</a></p>
+</section>
+
+<details>
+<summary>Advanced and recovery</summary>
 
 <section>
 <h2>Status</h2>
 <table id="status"><tr><td>loading&hellip;</td><td></td></tr></table>
 <button class="alt" id="refresh">Refresh</button>
-</section>
-
-<section>
-<h2>WiFi</h2>
-<label for="ssid">Network</label>
-<div class="row">
-  <input id="ssid" placeholder="SSID" list="scanned" autocomplete="off">
-  <button class="alt" id="scan" style="flex:0 0 96px;margin:0">Scan</button>
-</div>
-<datalist id="scanned"></datalist>
-<label for="pass">Password (leave blank to keep the saved one)</label>
-<input id="pass" type="password" autocomplete="off">
-<button id="savewifi">Save &amp; reboot</button>
-<div class="msg" id="wifimsg"></div>
 </section>
 
 <section>
@@ -86,10 +96,8 @@ code{background:#161a21;padding:1px 4px;border-radius:3px}
 
 <section>
 <h2>Web app</h2>
-<p class="sub" style="margin:0 0 8px">The web app lives in the device's flash as one file, a
-<code>.pack</code> (<code>make web</code> builds <code>opendmd-web/www.pack</code>;
-<code>make www-push HOST=&hellip;</code> sends it). Firmware updates are over USB
-(the browser flasher, or <code>make fw-flash</code>).</p>
+<p class="hint">The web app is stored on the display. To repair it, pick the <code>opendmd-&hellip;-www.pack</code>
+file from a release. For firmware, use <b>Check for updates</b> in the web app, or the installer.</p>
 <div class="msg" id="wwwinfo"></div>
 <label for="pack">Web app pack (.pack)</label>
 <input id="pack" type="file" accept=".pack">
@@ -98,12 +106,15 @@ code{background:#161a21;padding:1px 4px;border-radius:3px}
 <div class="msg" id="wwwmsg"></div>
 <button class="alt" id="reboot">Reboot now</button>
 </section>
+<p class="sub">firmware v{{ version }} ({{ variant }})</p>
+</details>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
 const say = (el, text, cls) => { const n = $(el); n.textContent = text; n.className = 'msg ' + (cls || ''); };
 const kb = n => (n / 1024).toFixed(1) + ' KB';
+let host = 'opendmd';
 
 async function loadStatus() {
   try {
@@ -134,7 +145,8 @@ async function loadConfig() {
     $('dmin').value = c.dwell_min; $('dmax').value = c.dwell_max;
     $('platforms').value = c.platforms; $('set').value = c.set;
     $('shuffle').value = String(c.shuffle);
-    if (c.wifi_pass_set) $('pass').placeholder = '(saved)';
+    if (c.wifi_pass_set) $('pass').placeholder = 'saved; leave blank to keep it';
+    if (c.hostname) host = c.hostname;
   } catch (e) { /* the setup page is useful even if this fails */ }
 }
 
@@ -147,25 +159,42 @@ async function put(path, body) {
 
 $('refresh').onclick = loadStatus;
 
-$('scan').onclick = async () => {
-  say('wifimsg', 'scanning…');
+// Nearby networks as buttons; tapping one fills in its name. Names are
+// set as text, never as HTML: they come from anyone in range.
+async function scan() {
+  const box = $('nets');
   try {
     const aps = await (await fetch('/api/wifi/scan')).json();
-    $('scanned').innerHTML = aps.map(a => '<option value="' + a.ssid + '">' + a.auth + ' ' + a.rssi + ' dBm</option>').join('');
-    say('wifimsg', aps.length ? aps.length + ' networks found — the SSID box is a dropdown now' :
-        'no networks (scanning is unavailable in AP mode)', aps.length ? 'ok' : 'err');
-  } catch (e) { say('wifimsg', 'scan failed: ' + e, 'err'); }
-};
+    box.replaceChildren(...aps.map(a => {
+      const b = document.createElement('button');
+      const name = document.createElement('span'), info = document.createElement('small');
+      name.textContent = a.ssid;
+      info.textContent = (a.secure ? '🔒 ' : '') + (a.rssi > -60 ? '▂▄▆█' : a.rssi > -70 ? '▂▄▆' : a.rssi > -80 ? '▂▄' : '▂');
+      b.append(name, info);
+      b.onclick = () => {
+        $('ssid').value = a.ssid;
+        for (const o of box.children) o.classList.toggle('on', o === b);
+        $('pass').focus();
+      };
+      return b;
+    }));
+    if (!aps.length) box.innerHTML = '<div class="msg">No networks found. Type the name below, or press Look again.</div>';
+  } catch (e) { box.innerHTML = '<div class="msg">Couldn\'t look for networks. Type the name below.</div>'; }
+}
+$('scan').onclick = scan;
 
 $('savewifi').onclick = async () => {
-  const body = { wifi_ssid: $('ssid').value };
+  const ssid = $('ssid').value.trim();
+  if (!ssid) return say('wifimsg', 'Pick or type your network\'s name first.', 'err');
+  const body = { wifi_ssid: ssid };
   if ($('pass').value) body.wifi_pass = $('pass').value;
-  say('wifimsg', 'saving…');
+  say('wifimsg', 'Saving…');
   try {
     await put('/api/config', body);
-    say('wifimsg', 'saved — rebooting to join the network', 'ok');
+    say('wifimsg', 'Saved. The display is restarting to join “' + ssid + '”.\n\nRejoin your usual WiFi, then open http://' + host + '.local/ to start using it. ' +
+        'If the setup network comes back instead, the name or password was wrong: join it again and retry.', 'ok');
     await fetch('/api/reboot', { method: 'POST' });
-  } catch (e) { say('wifimsg', 'failed: ' + e, 'err'); }
+  } catch (e) { say('wifimsg', 'That didn\'t work: ' + e.message, 'err'); }
 };
 
 $('savecfg').onclick = async () => {
@@ -237,7 +266,7 @@ $('reboot').onclick = async () => {
   await fetch('/api/reboot', { method: 'POST' }).catch(() => {});
 };
 
-loadStatus(); loadConfig(); loadWww(); setInterval(loadStatus, 10000);
+loadConfig(); scan(); loadStatus(); loadWww(); setInterval(loadStatus, 10000);
 </script>
 </body>
 </html>
