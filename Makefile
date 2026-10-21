@@ -192,7 +192,8 @@ web-smoke: web
 
 # The public site (opendmd.github.io): the README, the docs, and the web app
 # with a demo card of the panel's own effects and CC0 sprites (tools/site.py,
-# tools/demo-card.py). site-serve to look at it; site-publish pushes it.
+# tools/demo-card.py, and tools/site-art.py for the site's own animations).
+# site-serve to look at it; site-publish pushes it.
 SITE ?= target/site
 SITE_REPO ?= git@github.com:opendmd/opendmd.github.io.git
 # The installer under install/ publishes whatever release dist/ holds; site
@@ -200,7 +201,8 @@ SITE_REPO ?= git@github.com:opendmd/opendmd.github.io.git
 site: web sim-build
 	@test -f $(DIST)/manifest.json || { echo "no $(DIST)/manifest.json: the site publishes the release's installer, run make fw-release first"; exit 2; }
 	uv run tools/demo-card.py target/demo-card
-	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --dist $(DIST)
+	uv run tools/site-art.py target/site-art
+	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --art target/site-art --dist $(DIST)
 
 site-serve: site
 	uv run python -m http.server 8081 -d $(SITE)
