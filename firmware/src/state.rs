@@ -133,6 +133,10 @@ pub struct Status {
     pub ip: String,
     pub wifi: &'static str,
     pub hostname: String,
+    /// The name mDNS actually answers to (`net_worker`): `hostname` unless
+    /// another device had it first and mDNS took `<hostname>-2`; "" while
+    /// mDNS is not running.
+    pub mdns: String,
     // Now playing
     pub ordinal: u64,
     pub path: String,
@@ -239,6 +243,7 @@ impl Status {
             ip: String::new(),
             wifi: "disconnected",
             hostname,
+            mdns: String::new(),
             ordinal: 0,
             path: String::new(),
             title: String::new(),
@@ -367,6 +372,11 @@ pub type Reply = mpsc::Sender<Result<Applied, String>>;
 /// manifest does not open; the handler turns exactly this into a 404.
 pub const SET_NOT_FOUND: &str = "set not found";
 
+/// How [`Command::ApplyConfig`]'s reply starts when a platform filter would
+/// leave the playlist empty (the filter follows; nothing was saved): the
+/// handler turns it into a 400.
+pub const FILTER_EMPTY: &str = "no GIFs in the playlist match the platform filter";
+
 /// Why [`Command::PlayNow`] did not start the file. Each carries the message.
 #[derive(Debug)]
 pub enum PlayError {
@@ -414,7 +424,9 @@ pub enum Command {
     /// is opened first and, if it will not open, the reply is
     /// [`SET_NOT_FOUND`] with NVS and the running engine untouched. (Saving
     /// first used to leave the board with no playlist, retrying forever,
-    /// across reboots.)
+    /// across reboots.) So is a platform filter that would leave the
+    /// playlist empty: built first, and if it matches nothing the previous
+    /// playlist is rebuilt and the reply is [`FILTER_EMPTY`], nothing saved.
     ///
     /// `panel` is the request's panel-timing operation (`panel`,
     /// `panel_confirm`), carried out after the save (`Tuner::apply`); a

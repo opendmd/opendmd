@@ -33,6 +33,10 @@ effects have no ☆.
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
 
+When there's nothing to play, Now says why instead: no card, an empty
+playlist, or a platform filter that matches none of the playlist's GIFs
+(with a **Clear filter** button).
+
 ## Library
 
 ![The Library, with a GIF's details playing](../images/library.png)
@@ -114,7 +118,9 @@ title makes the GIF on screen a favourite in the playlist that's playing.
 The everyday settings are at the top and save as you change them:
 
 - **Playback:** brightness, how long each GIF stays on (**Dwell min /
-  max**), which playlist plays, a platform filter and **Shuffle**. Here too:
+  max**), which playlist plays, **Platforms** and **Shuffle**. Platforms
+  lists the platforms in the playlist, with how many GIFs each has: tap
+  the ones to play, or **All**. Here too:
   **Colour**, to show everything in full colour or in a single colour like a
   classic dot-matrix display (amber, red, green, blue or white), and
   **Phosphor glow**, which makes dots fade out softly like an old plasma
@@ -141,8 +147,11 @@ Open **Advanced** for the rest:
 - **Playback cache** shows how many GIFs have a lighter copy ready. The
   player makes these by itself while the panel is idle; **Prepare remaining
   files** does the rest now from your browser.
-- **Network** changes the WiFi network or the player's name (`opendmd` in
-  `opendmd.local`). These need a reboot.
+- **Network** changes the WiFi network or the **Display name** (`opendmd`
+  in `opendmd.local`). Give each display its own name if you have more
+  than one. These need a reboot. **About** shows the address the display
+  really has: if another display already had its name, it's `<name>-2.local`
+  and About says so.
 - **Panel timing** is for a panel that shows a few wrong-coloured dots on
   some pictures: **Test panel timing** shows test pictures under A and B
   and saves the one you pick; a change by hand is tried for a minute and

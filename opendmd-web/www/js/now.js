@@ -60,6 +60,7 @@ function mountDevice(el) {
   const cap = h('div.cap', { id: 'now-cap' });
   const drift = h('span.mono.muted', { id: 'now-drift' });
   const title = h('b', { id: 'now-title' }, '…');
+  const unfilter = h('button.sm', { id: 'now-unfilter', hidden: true, onclick: () => app.src.putConfig({ platforms: '' }).then(() => { app.refreshConfig(); poll(); }, (e) => toast(e.message, 'bad')) }, 'Clear filter');
   // The file's path: never shown (the title says what it is); kept for tools/web-smoke.py.
   const meta = h('span', { id: 'now-path', hidden: true });
   const followEl = h('span.tag.fl', { id: 'now-follow-line', hidden: true });
@@ -87,7 +88,7 @@ function mountDevice(el) {
   el.append(
     banner,
     h('div.card', canvas, cap, sdLine,
-      h('div.row.capl', h('span.grow', title, ' ', fb, h('span.muted', tagsEl, ' · ', ord), ' ', followEl, ' ', conn, meta),
+      h('div.row.capl', h('span.grow', title, ' ', fb, ' ', unfilter, h('span.muted', tagsEl, ' · ', ord), ' ', followEl, ' ', conn, meta),
         h('label.cap', follow, 'Follow the panel')),
       h('div.row', { style: 'margin-top:12px' }, prevBtn, againBtn, pauseBtn, h('button.pri', { id: 'now-skip', onclick: skip }, 'Skip'),
         h('label', 'Brightness', bright.el))),
@@ -187,7 +188,13 @@ function mountDevice(el) {
     // A virtual file (`@…`: Follow RePlayOS's cards) shows its title only.
     const virt = np.path?.startsWith('@');
     const e = app.wasm.parsePath(virt ? '' : np.path || '');
-    title.textContent = virt ? np.title : np.path ? label(e) : 'Nothing playing';
+    // Why the playlist is empty; "No card" once a mount has failed.
+    const sd = s.sd, unreadable = sd.mounted && sd.readable === false;
+    const empty = !np.path && !s.entries && s.index_state != 'building' && !unreadable && (sd.mounted || sd.attempts || sd.error);
+    const pf = empty && sd.mounted && app.config?.platforms?.trim();
+    unfilter.hidden = !pf;
+    title.textContent = virt ? np.title : np.path ? label(e) : !empty ? 'Nothing playing' : !sd.mounted ? 'No card'
+      : pf ? `No GIFs match the platform filter (${pf})` : 'The playlist is empty';
     tagsEl.textContent = np.path && !virt ? tags(e) : '';
     meta.textContent = virt ? '' : np.path;
     const fl = followLine(s);
