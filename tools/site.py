@@ -134,6 +134,8 @@ background:#000 radial-gradient(closest-side,#1d1d20 50%,transparent 75%) 0 0/ca
 background:radial-gradient(closest-side,transparent 62%,rgba(0,0,0,.72) 100%);
 background-size:calc(100% / var(--cols)) calc(100% / var(--rows))}
 
+.banner{padding:9px 16px;text-align:center;font-size:14px;line-height:1.45;color:#111;background:var(--acc)}
+.banner strong{font-weight:800}
 .wrap{display:grid;grid-template-columns:248px minmax(0,1fr);max-width:1260px;margin:0 auto}
 nav{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:24px 16px;border-right:1px solid var(--line)}
 nav .brand{display:inline-block;margin:0 8px 18px;padding:8px 10px;border-radius:8px;background:#000;box-shadow:0 0 0 1px var(--line),0 0 24px rgba(247,165,49,.15)}
@@ -243,7 +245,7 @@ PAGE = """<!doctype html>
 </head>
 <body>
 <a class="skip" href="#main">Skip to the page</a>
-<div class="wrap">
+{banner}<div class="wrap">
 <nav aria-label="Site"><a class="brand" href="{up}index.html">{brand}</a><div class="links">{menu}</div></nav>
 <main id="main">
 {body}
@@ -257,6 +259,9 @@ Code under <a href="{up}LICENSE-MIT.txt">MIT</a> or <a href="{up}LICENSE-APACHE.
 </body>
 </html>
 """
+# Until the public launch: a line across the top of every page. Set to "" to drop it.
+BANNER = ("<strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, "
+          "but it may change, and the source code isn't public yet.")
 DESCRIPTION = "OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display."
 LINK = re.compile(r'(\]\(|(?:src|href)=")([^)"\s]+)')
 
@@ -453,7 +458,8 @@ def main() -> None:
         brand = (f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
                  f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>')
         dest.write_text(PAGE.format(title=html.escape(title), description=html.escape(DESCRIPTION), up=up, head=head,
-                                    brand=brand, menu=menu(page), body=body))
+                                    brand=brand, menu=menu(page), body=body,
+                                    banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
     # Pictures only the GitHub copy of a doc shows (the README's hero) stay off the site.
     assets = {a for a in assets if any(posixpath.basename(a) in b for b in bodies)}
     for target in sorted(assets):
