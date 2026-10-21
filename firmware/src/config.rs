@@ -319,6 +319,19 @@ pub const AP_TIMEOUT: Duration = Duration::from_secs(600);
 pub const STA_MAX_FAILURES: u32 = 2;
 /// How often the worker re-checks that STA is still associated.
 pub const WIFI_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Improv Serial (`improv.rs`): WiFi details sent over USB are answered
+/// within this of their arrival (the network worker starts no connect
+/// attempt that could end later). ESP Web Tools waits 45 s; the save after
+/// a join ([`IMPROV_SAVE_TIMEOUT`]) has to fit in what is left.
+pub const IMPROV_ANSWER_WITHIN: Duration = Duration::from_secs(35);
+/// How long the network worker waits for the main task to save WiFi
+/// details joined over USB.
+pub const IMPROV_SAVE_TIMEOUT: Duration = Duration::from_secs(8);
+/// An Improv job that waited this long for the network worker (busy with
+/// its first connect, a cache count) is answered without being done: the
+/// installer is about to give up on it (scans: 30 s; WiFi details: 45 s,
+/// and a join needs ~20 s of [`IMPROV_ANSWER_WITHIN`]).
+pub const IMPROV_STALE: Duration = Duration::from_secs(15);
 
 /// Network worker thread: pinned to CPU0, named. stripe-dashboard uses 16 KB
 /// here; 12 KB is what fits alongside the panel, the manifest index and a

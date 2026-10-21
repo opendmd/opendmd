@@ -26,7 +26,7 @@ git submodule update --init          # the HUB75 driver
 ```bash
 make fw-build                        # first build clones ESP-IDF v5.3 (~5-10 min)
 make fw-erase   PORT=/dev/ttyUSB0    # once, if the board ran other firmware
-make fw-flash   PORT=/dev/ttyUSB0    # build + flash (bootloader, table, app, web app pack) at 115200 + monitor (console: 921600 baud)
+make fw-flash   PORT=/dev/ttyUSB0    # build + flash (bootloader, table, app, web app pack) at 115200 + monitor (console: 921600 baud; 115200 after a browser installer talked to it, until restart)
 make fw-monitor PORT=/dev/ttyUSB0
 make fw-clean
 
@@ -127,7 +127,16 @@ curl -s -X POST http://opendmd.local/api/reboot   # if panel_next is not null
 
 ## Getting on WiFi the first time
 
-With no credentials saved, the player raises an **open access point called
+The browser installer does it over USB: after a fresh install it asks for
+your network, and for a board already running OpenDMD it offers **Change
+Wi-Fi** (Improv Serial, `src/improv.rs`). The player answers on its
+console UART (UART0, the USB port), switching the console from 921600 to
+the installer's 115200 baud when it hears it, until the next restart. It
+joins the network it is given straight away, saves it only once it works,
+and reports `http://<ip>/`; a network it cannot join is reported as such,
+and the setup network (below) comes back if it was up.
+
+Otherwise, with no credentials saved, the player raises an **open access point called
 `OpenDMD-Setup`**. Join it from a phone or laptop and the setup page appears by
 itself as a "sign in to network" sheet; if it does not, open
 <http://192.168.71.1/> (the log prints the actual address). Enter your network

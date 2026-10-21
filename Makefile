@@ -72,7 +72,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke card-sync api-load \
+	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load \
 	site site-serve site-publish
 
 test:
@@ -360,7 +360,13 @@ fw-clean:
 #   bootloader.bin                 at 0x1000
 #   partition-table.bin            at 0x8000
 #   opendmd-<ver>-4mb-full.bin     all six merged into one 4 MB image (offset 0)
-#   manifest.json                  ESP Web Tools: the six parts and offsets
+#   manifest.json                  ESP Web Tools: the six parts and offsets; `name`
+#                                  "OpenDMD" and `version` are what the firmware's
+#                                  Improv Serial answer says (firmware/src/improv.rs:
+#                                  FIRMWARE_NAME, state::firmware_version), which is how
+#                                  the installer tells Update from Install; it waits
+#                                  `new_install_improv_wait_time` (s) after an install
+#                                  for the new firmware to answer, then asks for WiFi
 #   opendmd-<ver>.odfw             the signed bundle for PUT /api/firmware (fw-sign)
 #
 # The version comes from firmware/Cargo.toml and is also written into the app
@@ -429,7 +435,7 @@ fw-release: web
 	  '  "name": "OpenDMD",' \
 	  '  "version": "$(FW_VERSION)",' \
 	  '  "new_install_prompt_erase": true,' \
-	  '  "new_install_improv_wait_time": 0,' \
+	  '  "new_install_improv_wait_time": 15,' \
 	  '  "builds": [' \
 	  '    {' \
 	  '      "chipFamily": "ESP32",' \
@@ -534,6 +540,13 @@ flasher:
 # button, the manifest's parts are served (the flash itself needs a person).
 flasher-smoke:
 	uv run tools/flasher-smoke.py
+
+# The real Improv Serial host library (improv-wifi-serial-sdk 2.8.0, what ESP
+# Web Tools 10.4.0 runs) against opendmd-core's framing, under node: the
+# protocol half of what the installer does with a board (the UART half needs
+# a person at a real one). Fetches the SDK with npm once, into target/.
+improv-check:
+	tools/improv-sdk-check.sh
 
 # --- Device tools -----------------------------------------------------------
 # Both take HOST=<ip-or-hostname>, e.g. HOST=opendmd.local.

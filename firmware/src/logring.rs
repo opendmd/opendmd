@@ -23,6 +23,11 @@
 //! - **Full is a drop, never a wait**: the newest line is dropped and
 //!   counted ([`drops`]; `log_drops` in `/api/status`), and the drain prints
 //!   `N log lines dropped` once it has caught up.
+//! - **Raw records** ([`raw`]) carry bytes that must reach the wire as
+//!   they are: Improv Serial frames (`improv.rs`), which the browser
+//!   installer reads only between whole lines. The drain writes them
+//!   straight to the UART's FIFO (`improv::uart_raw`), without the console
+//!   VFS's `\n` → `\r\n`, in their place among the lines.
 //! - **Timestamps are the caller's** (`esp_log_timestamp` at format time:
 //!   IDF's macros take it before calling us, [`RingLogger`] as it formats),
 //!   so the capture's order and times stay true across tasks.
@@ -46,8 +51,9 @@ use esp_idf_sys as sys;
 pub const RING: usize = 4096;
 /// The longest line kept whole; the rest of a longer one is cut.
 const MAX_LINE: usize = 1536;
-/// A record: an 8-byte header — state (byte 0), the reserved payload
-/// capacity (bytes 2-3), the written length (bytes 4-5) — then the payload,
+/// A record: an 8-byte header — state (byte 0), kind (byte 1: [`TEXT`] or
+/// [`RAW`]), the reserved payload capacity (bytes 2-3), the written length
+/// (bytes 4-5) — then the payload,
 /// the whole padded to 8 bytes, so a gap at the end of the ring always has
 /// room for a filler header.
 const HDR: usize = 8;
@@ -55,6 +61,10 @@ const WRITING: u8 = 0;
 const COMMITTED: u8 = 1;
 /// Filler: the rest of the ring up to its end is unused; go to 0.
 const WRAP: u8 = 2;
+/// Record kinds: a log line (through the console VFS), raw bytes
+/// (straight to the UART).
+const TEXT: u8 = 0;
+const RAW: u8 = 1;
 
 #[repr(C, align(8))]
 struct Buf([u8; RING]);
@@ -95,6 +105,16 @@ fn put_u16(at: usize, v: u16) {
     // SAFETY: inside the ring; the header is the reserving writer's until
     // it commits.
     unsafe { core::ptr::copy_nonoverlapping(v.to_le_bytes().as_ptr(), base().add(at), 2) }
+}
+
+fn set_kind(at: usize, kind: u8) {
+    // SAFETY: inside the ring; the header is the reserving writer's.
+    unsafe { *base().add(at + 1) = kind }
+}
+
+fn kind(at: usize) -> u8 {
+    // SAFETY: inside the ring, a committed record's header.
+    unsafe { *base().add(at + 1) }
 }
 
 fn get_u16(at: usize) -> u16 {
@@ -157,6 +177,7 @@ fn reserve(len: usize) -> Option<Slot> {
         state(tail as usize % RING).store(WRAP, Ordering::Release);
     }
     state(at).store(WRITING, Ordering::Relaxed);
+    set_kind(at, TEXT);
     put_u16(at + 2, cap as u16);
     TAIL.store(tail.wrapping_add((skip + need) as u32), Ordering::Release);
     Some(Slot {
@@ -167,9 +188,10 @@ fn reserve(len: usize) -> Option<Slot> {
     })
 }
 
-/// The next committed record's payload, or `None` if the ring is empty or
-/// the oldest record is still being written. Drain side only.
-fn peek() -> Option<(u32, &'static [u8], usize)> {
+/// The next committed record's payload (and whether it is [`RAW`]), or
+/// `None` if the ring is empty or the oldest record is still being
+/// written. Drain side only.
+fn peek() -> Option<(u32, &'static [u8], usize, bool)> {
     loop {
         let head = HEAD.load(Ordering::Relaxed);
         if head == TAIL.load(Ordering::Acquire) {
@@ -185,7 +207,7 @@ fn peek() -> Option<(u32, &'static [u8], usize)> {
                 let size = padded(get_u16(at + 2) as usize);
                 // SAFETY: a committed record is immutable until HEAD passes it.
                 let bytes = unsafe { core::slice::from_raw_parts(base().add(at + HDR), len) };
-                return Some((head, bytes, size));
+                return Some((head, bytes, size, kind(at) == RAW));
             }
             _ => return None,
         }
@@ -201,16 +223,23 @@ pub fn drops() -> u32 {
     DROPS.load(Ordering::Relaxed)
 }
 
-/// The heartbeat's part: `log: N dropped, ring high N B, drain stack N B unused`.
+/// The heartbeat's part: `log: N dropped, ring high N B, drain stack N B
+/// unused`, and `console at 115200 baud (Improv)` once a browser installer
+/// switched it (`improv.rs`).
 pub fn summary() -> String {
     let stack = match STACK_LOW.load(Ordering::Relaxed) {
         u32::MAX => "-".to_string(),
         n => n.to_string(),
     };
     format!(
-        ", log: {} dropped, ring high {} B, drain stack {stack} B unused",
+        ", log: {} dropped, ring high {} B, drain stack {stack} B unused{}",
         drops(),
-        HIGH.load(Ordering::Relaxed)
+        HIGH.load(Ordering::Relaxed),
+        if crate::improv::switched() {
+            ", console at 115200 baud (Improv)"
+        } else {
+            ""
+        }
     )
 }
 
@@ -230,6 +259,37 @@ fn console(bytes: &[u8]) {
         }
         rest = &rest[n as usize..];
     }
+}
+
+/// A record to the wire: a line through the console, raw bytes straight to
+/// the UART.
+fn out(bytes: &[u8], raw: bool) {
+    if raw {
+        crate::improv::uart_raw(bytes);
+    } else {
+        console(bytes);
+    }
+}
+
+/// Queue `len` bytes to go to the UART exactly as `fill` writes them (it
+/// gets a `len`-byte buffer and returns how many it wrote), in order with
+/// the log lines: Improv Serial frames. Dropped and counted like a line if
+/// the ring is full. Before [`start`], written at once.
+pub fn raw(len: usize, fill: &mut dyn FnMut(&mut [u8]) -> usize) {
+    if len == 0 || len > MAX_LINE {
+        return;
+    }
+    if !STARTED.load(Ordering::Acquire) {
+        let mut buf = vec![0u8; len];
+        let n = fill(&mut buf).min(len);
+        crate::improv::uart_raw(&buf[..n]);
+        return;
+    }
+    let Some(mut slot) = reserve(len) else { return };
+    set_kind(slot.at, RAW);
+    let n = fill(slot.payload()).min(slot.cap);
+    slot.len = n;
+    slot.want = n;
 }
 
 /// [`console`] as a `fmt::Write`, for the lines before [`start`].
@@ -393,13 +453,16 @@ const TMR_COMMAND_START: i32 = 1;
 extern "C" fn drain(_: sys::TimerHandle_t) {
     static REPORTED: AtomicU32 = AtomicU32::new(0);
     let started = Instant::now();
+    // Improv Serial: anything a browser installer sent (answers go into the
+    // ring, so they go out below, this same call).
+    crate::improv::poll();
     let fill = TAIL
         .load(Ordering::Relaxed)
         .wrapping_sub(HEAD.load(Ordering::Relaxed));
     HIGH.fetch_max(fill, Ordering::Relaxed);
     let mut wrote = false;
-    while let Some((head, bytes, size)) = peek() {
-        console(bytes);
+    while let Some((head, bytes, size, raw)) = peek() {
+        out(bytes, raw);
         release(head, size);
         wrote = true;
         if started.elapsed() >= SLICE {
@@ -479,8 +542,8 @@ pub fn start() {
 /// the drain may print the record it was on a second time.
 fn flush_now() {
     STARTED.store(false, Ordering::Release);
-    while let Some((head, bytes, size)) = peek() {
-        console(bytes);
+    while let Some((head, bytes, size, raw)) = peek() {
+        out(bytes, raw);
         release(head, size);
     }
 }
@@ -505,7 +568,8 @@ pub fn flush(timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(5));
     }
     // The drain's last write left up to a FIFO's worth (128 B, ~1.4 ms at
-    // 921600 baud) still shifting out.
+    // 921600 baud, ~11 ms at 115200 after an installer switched it) still
+    // shifting out.
     std::thread::sleep(Duration::from_millis(20));
     true
 }

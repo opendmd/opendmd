@@ -564,7 +564,8 @@ minutes to try again.
 | GET | `/setup` | the built-in setup page: join a network |
 | GET | `/hotspot-detect.html`, `/generate_204`, … | captive-portal probes: a redirect to `/` in setup mode, else 404 |
 
-Set the network with `PUT /api/config`, then reboot:
+Over USB, the browser installer sets it with Improv Serial instead (the
+player joins at once, no reboot). Over HTTP, set the network with `PUT /api/config`, then reboot:
 
 ```sh
 curl -s -X PUT $DMD/api/config --json '{"wifi_ssid":"MyNet","wifi_pass":"secret"}'
