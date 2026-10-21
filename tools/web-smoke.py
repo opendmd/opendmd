@@ -160,6 +160,17 @@ every view like a person would:
             version asks "… older than the firmware on the panel (X).
             Install it anyway?" (declined: nothing sent); `older()` itself
             on a table of version pairs
+  Updates   Check for updates (js/update.js) against a fake project site on
+            another port (release.json + files, `Access-Control-Allow-Origin:
+            *` except under /nocors/): `wver()` on a table of web app
+            versions; `?updates=` naming the running versions -> "Up to
+            date"; a 404, no CORS header, not JSON, firmware ahead of the
+            release -> a message and no Update button; a release naming a
+            missing file, and one whose firmware is tampered (the mock's
+            422), install nothing and leave both versions alone; then
+            firmware 10.0.0 + web app v10.0.0: each step shown, the mock
+            restarts, PUT /api/www takes the pack, the page reloads, and a
+            new check says "Up to date (10.0.0)"
   Security  the JSON routes without Content-Type application/json are 415
             (any case, parameters allowed; raw uploads take any type); a
             page from another origin (127.0.0.1:<another port>)
@@ -564,7 +575,8 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
     ctx = browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=3 if phone else 1,
                               is_mobile=phone, has_touch=phone)
     page = ctx.new_page()
-    page.on("console", lambda m: m.type == "error" and unexpected(m.location.get("url", ""))
+    # (A CORS refusal's line names the URL in its text, not its location.)
+    page.on("console", lambda m: m.type == "error" and unexpected(m.location.get("url", "")) and unexpected(m.text)
             and errors.append(f"[{size}] console: {m.text}"))
     page.on("pageerror", lambda e: errors.append(f"[{size}] pageerror: {e}"))
     # Chromium's console line for a failed load has no URL; this does.
@@ -1432,11 +1444,13 @@ def api_page_checks(page: Page, base: str) -> None:
 
 OTA_VERSION = "9.9.9-smoke"
 OTA_OLD_VERSION = "0.0.1"
+UPD_VERSION = "10.0.0"   # "Check for updates": the release the fake site publishes
 # js/firmware.js `older(a, b)`: (a, b, a is older).
 OLDER_CASES = [("0.3.0", "0.3.1", True), ("0.3.1", "0.3.0", False), ("0.3.0", "0.3.0", False),
                ("0.10.0", "0.9.9", False), ("0.9.9", "0.10.0", True), ("1.0", "1.0.0", False),
                ("1.0.0-rc.1", "1.0.0", True), ("1.0.0", "1.0.0-rc.1", False), ("1.0.0-rc.2", "1.0.0-rc.10", True),
-               ("v0.4.0", "0.3.9", False), ("0.0.1", "9.9.9-smoke", True), ("9.9.9-smoke", "0.3.3", False)]
+               ("v0.4.0", "0.3.9", False), ("0.0.1", "9.9.9-smoke", True), ("9.9.9-smoke", "0.3.3", False),
+               ("0.3.13", "1.0.0", True), ("1.0.0", "0.3.13", False)]
 
 
 def ota_bundles(tmp: Path) -> dict[str, Path]:
@@ -1458,7 +1472,14 @@ def ota_bundles(tmp: Path) -> dict[str, Path]:
     old = tmp / "opendmd-0.0.1.odfw"
     subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", OTA_OLD_VERSION, "--out", str(old), "--key", str(tmp / "k")],
                    check=True, stdout=subprocess.DEVNULL)
-    return {"pub": tmp / "p", "good": good, "bad": bad, "junk": junk, "old": old}
+    newer = tmp / f"opendmd-{UPD_VERSION}.odfw"
+    subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", UPD_VERSION, "--out", str(newer), "--key", str(tmp / "k")],
+                   check=True, stdout=subprocess.DEVNULL)
+    b = bytearray(newer.read_bytes())
+    b[140 + 1000] ^= 1
+    newer_bad = tmp / "newer-tampered.odfw"
+    newer_bad.write_bytes(bytes(b))
+    return {"pub": tmp / "p", "good": good, "bad": bad, "junk": junk, "old": old, "newer": newer, "newer_bad": newer_bad}
 
 
 def status_of(req: urllib.request.Request) -> tuple[int, dict]:
@@ -1561,6 +1582,153 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
           f"firmware: 'Update log' opens on the log ({log_text[-120:]!r})")
     page.locator("#st-fw").screenshot(path=str(OUT / "settings-firmware-laptop.png"))
     expected.remove("/api/firmware")
+
+
+# js/update.js `wver(s)`: a web app version -> [release, development build].
+WVER_CASES = [("v1.0.0", ["1.0.0", False]), ("v1.0.0-3-gabc1234-dirty", ["1.0.0", True]),
+              ("v1.0.0-3-gabc1234", ["1.0.0", True]), ("v1.0.0-dirty", ["1.0.0", True]),
+              ("v1.0.0-rc.1", ["1.0.0-rc.1", False]), ("v1.0.0-rc.1-2-gabcdef0", ["1.0.0-rc.1", True]),
+              ("bb6a3eb", [None, True]), (None, [None, True])]
+
+
+def release_site(root: Path):
+    """The project site's /install/, faked: static files with
+    `Access-Control-Allow-Origin: *` as GitHub Pages sends it, except under
+    /nocors/. Returns the server and the paths it was asked for."""
+    asked: list[str] = []
+
+    class Site(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=str(root), **kw)
+
+        def end_headers(self):
+            asked.append(self.path)
+            if not self.path.startswith("/nocors/"):
+                self.send_header("Access-Control-Allow-Origin", "*")
+            super().end_headers()
+
+        def log_message(self, *_a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, asked
+
+
+def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
+    """Settings -> Advanced -> Firmware -> Check for updates (js/update.js)
+    against a locally served release.json and files, installed through the
+    mock (its simulated restart, and PUT /api/www adopting the pack's
+    version)."""
+    tmp = Path(tempfile.mkdtemp(prefix="web-smoke-site-"))
+    inst = tmp / "install"
+    (inst / "firmware").mkdir(parents=True)
+    (tmp / "nocors").symlink_to(tmp)
+    shutil.copy(ota["newer"], inst / "firmware" / f"opendmd-{UPD_VERSION}.odfw")
+    shutil.copy(ota["newer_bad"], inst / "firmware" / "tampered.odfw")
+    built = (REPO / "opendmd-web" / "www.pack").read_bytes()
+    pack = bytearray(built)
+    wv = f"v{UPD_VERSION}".encode()
+    pack[18] = len(wv)
+    pack[20:64] = wv.ljust(44, b"\0")
+    (inst / "firmware" / f"opendmd-{UPD_VERSION}-www.pack").write_bytes(bytes(pack))
+    fw0 = get_json(base + "/api/firmware")["version"]
+    w0 = get_json(base + "/api/www")["version"]
+
+    def release(name: str, **kw) -> str:
+        obj = {"version": UPD_VERSION, "firmware": f"firmware/opendmd-{UPD_VERSION}.odfw",
+               "www": f"firmware/opendmd-{UPD_VERSION}-www.pack", "www_version": f"v{UPD_VERSION}", **kw}
+        (inst / name).write_text(json.dumps(obj))
+        return f"{site}/install/{name}"
+    srv, asked = release_site(tmp)
+    site = f"http://127.0.0.1:{srv.server_port}"
+    (inst / "garbage.json").write_text("<html>not json</html>")
+    # 404s, the CORS refusal, the 422, the restart's 503s: on purpose.
+    expected.extend([site, "/api/firmware", "/api/status"])
+
+    def check_now(url: str | None = None) -> str:
+        if url is not None:
+            page.evaluate("u => localStorage.setItem('odmd.updates', JSON.stringify(u))", url)
+        page.evaluate("document.querySelector('#fw-msg').textContent = ''")
+        page.click("#fw-check")
+        page.wait_for_function("() => { const t = document.querySelector('#fw-msg').textContent;"
+                               " return t && !t.startsWith('Checking') && !document.querySelector('#fw-check').disabled; }",
+                               timeout=20000)
+        return page.inner_text("#fw-msg")
+    upd = lambda: page.locator("#fw-upd").count()  # noqa: E731
+    try:
+        got = page.evaluate("async (cases) => { const { wver } = await import('/js/update.js');"
+                            " return cases.map((c) => wver(c)); }", [c for c, _ in WVER_CASES])
+        wrong = [(c, g) for (c, w), g in zip(WVER_CASES, got) if g != w]
+        check(not wrong, f"update: wver() on {len(WVER_CASES)} web app versions (wrong: {wrong})")
+        # ?updates= in the address: this player's own versions -> up to date.
+        page.goto(base + "/?updates=" + urllib.parse.quote(release("current.json", version=fw0, www_version=w0)) + "#settings")
+        goto_view(page, "settings")
+        page.wait_for_selector("#fw-check", timeout=20000)
+        dev = ", development build" if w0 and "-g" in w0 else ""
+        t = check_now()
+        check(t == f"Up to date ({fw0}{dev})" and not upd(), f"update: ?updates= with the running versions -> '{t}'")
+        page.goto(base + "/#settings")
+        goto_view(page, "settings")
+        page.wait_for_selector("#fw-check", timeout=20000)
+        t = check_now(f"{site}/install/missing.json")
+        check("(404)" in t and "bad" in page.get_attribute("#fw-msg", "class") and not upd(), f"update: no release.json -> '{t}'")
+        t = check_now(f"{site}/nocors/install/{Path(release('release.json')).name}")
+        check(t.startswith(f"Couldn’t reach 127.0.0.1:{srv.server_port}") and not upd(), f"update: no CORS header -> '{t}'")
+        t = check_now(f"{site}/install/garbage.json")
+        check("not readable" in t and not upd(), f"update: a release.json that is not JSON -> '{t}'")
+        t = check_now(release("old.json", version="0.0.1"))
+        check(t == f"This player’s firmware ({fw0}) is newer than the latest release (0.0.1)" and not upd(),
+              f"update: firmware ahead of the release -> '{t}' (no web app offered either)")
+        # A file the release names is missing: nothing installed.
+        t = check_now(release("nofile.json", firmware="firmware/nope.odfw"))
+        check(t.startswith(f"Firmware {UPD_VERSION} is out (this player has {fw0}).") and upd() == 1, f"update: offered -> '{t}'")
+        page.click("#fw-upd")
+        page.wait_for_function("() => /404/.test(document.querySelector('#fw-msg').textContent) && !document.querySelector('#fw-check').disabled",
+                               timeout=20000)
+        t = page.inner_text("#fw-msg")
+        check(t == f"The firmware isn’t on 127.0.0.1:{srv.server_port} (404)" and get_json(base + "/api/firmware")["version"] == fw0
+              and get_json(base + "/api/www")["version"] == w0, f"update: a missing download installs nothing -> '{t}'")
+        # The player refuses the firmware (422): no web app sent after it.
+        check_now(release("tampered.json", firmware="firmware/tampered.odfw"))
+        page.click("#fw-upd")
+        page.wait_for_function("() => /SHA-256/.test(document.querySelector('#fw-msg').textContent) && !document.querySelector('#fw-check').disabled",
+                               timeout=30000)
+        t = page.inner_text("#fw-msg")
+        check(t.startswith("The player refused this file:") and get_json(base + "/api/firmware")["version"] == fw0
+              and get_json(base + "/api/www")["version"] == w0 and "/install/firmware/tampered.odfw" in asked,
+              f"update: a refused firmware stops there, the web app untouched -> '{t}'")
+        # The real thing: both, then the reload.
+        t = check_now(release("release.json"))
+        want = f"Firmware {UPD_VERSION} is out (this player has {fw0}). Web app {UPD_VERSION} is out"
+        check(t.startswith(want) and "The panel goes dark" in t and upd() == 1, f"update: both offered -> '{t}'")
+        page.locator("#st-fw").screenshot(path=str(OUT / "settings-update-laptop.png"))
+        page.evaluate("""() => { sessionStorage.setItem('upd', '[]');
+          new MutationObserver(() => { const l = JSON.parse(sessionStorage.getItem('upd'));
+            l.push(document.querySelector('#fw-msg').textContent); sessionStorage.setItem('upd', JSON.stringify(l)); })
+          .observe(document.querySelector('#fw-msg'), { subtree: true, childList: true, characterData: true }); }""")
+        with page.expect_navigation(timeout=90000):
+            page.click("#fw-upd")
+        page.wait_for_load_state()
+        log = json.loads(page.evaluate("sessionStorage.getItem('upd')") or "[]")
+        steps = ["Downloading the firmware", "Downloading the web app", "Sending the firmware to the player",
+                 "Restarting", "Sending the web app to the player", "Updated. Reloading the page"]
+        seen = [any(m.startswith(st) for m in log) for st in steps]
+        check(all(seen) and "Sending the firmware to the player… 100%" in log,
+              f"update: each step shown ({[st for st, ok in zip(steps, seen) if not ok]} missing; {len(log)} messages)")
+        fw, w = get_json(base + "/api/firmware"), get_json(base + "/api/www")
+        check(fw["version"] == UPD_VERSION and w["version"] == f"v{UPD_VERSION}" and w["ok"],
+              f"update: the mock runs firmware {fw['version']}, web app {w['version']}, and the page reloaded")
+        goto_view(page, "settings")
+        page.wait_for_selector("#fw-check", timeout=20000)
+        t = check_now()
+        check(t == f"Up to date ({UPD_VERSION})" and not upd(), f"update: after the update -> '{t}'")
+    finally:
+        for e in (site, "/api/firmware", "/api/status"):
+            expected.remove(e)
+        page.evaluate("localStorage.removeItem('odmd.updates')")
+        put_www(base, built)  # the mock's web app version back to this build's
+        srv.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def json_type_checks(base: str) -> None:
@@ -2193,6 +2361,7 @@ def mock_pass(browser) -> None:
         json_type_checks(base)
         origin_checks(browser, base)
         firmware_checks(page, base, ota)
+        update_checks(page, base, ota)
         key_checks(browser, page, base)
     finally:
         proc.terminate()

@@ -90,8 +90,8 @@ by the device with a 422 and nothing on the card changes.
 ## The flow
 
 1. **Browser or curl**: `PUT /api/firmware` with the bundle (Settings →
-   Advanced → Firmware: "Update from file…", later "Check for updates" via
-   GitHub releases fetched by the browser over HTTPS). The device streams
+   Advanced → Firmware: "Update from file…", or "Check for updates", below).
+   The device streams
    the body to `/update/opendmd.bin` on the card, hashing as it goes (the
    night window's heap rules apply: one transfer at a time, 4 KB buffers).
 2. **Verify on the device**: header magic, image fits the factory partition,
@@ -123,6 +123,61 @@ by the device with a 422 and nothing on the card changes.
    (≤ 1 KB of whole lines; the Firmware card's "Update log"), so the
    updater's account can be read without taking the card out.
 
+## Check for updates
+
+Settings → Advanced → Firmware → **Check for updates** (`js/update.js`)
+updates the firmware and the web app from the published release, with the
+browser doing the fetching: the player itself never goes to the internet.
+
+- **The release.** The project site publishes
+  `https://opendmd.github.io/install/release.json`:
+  `{"version": "1.0.0", "firmware": "firmware/opendmd-1.0.0.odfw", "www":
+  "firmware/opendmd-1.0.0-www.pack", "www_version": "v1.0.0"}`, the paths
+  relative to the JSON's own address, `www_version` the pack header's
+  version (what `GET /api/www` reports for it). The page is plain HTTP
+  from the player and fetches this over HTTPS; GitHub Pages sends
+  `Access-Control-Allow-Origin: *`, and the request carries no credentials
+  or custom headers, so there is no preflight. The player sends no
+  Content-Security-Policy, so nothing stops the page connecting there.
+  For testing, `?updates=<url>` in the page's address, or localStorage
+  `odmd.updates` (a JSON string), names another `release.json`.
+- **What counts as newer.** The firmware: the release's `version` against
+  `GET /api/firmware`'s, with `older()` (1.0.0 is newer than 0.3.13). The web
+  app: `www_version` against `GET /api/www`'s `version`, `git describe`
+  strings: a release reads `v1.0.0`, a development build
+  `v1.0.0-3-gabc1234-dirty` (or a bare commit hash). Any difference is an
+  update, except when the player's firmware is newer than the release, or
+  the web app is a development build of the release or later (installing
+  the release would be a step back). Versions are shown without the `v`,
+  and a development build as "1.0.0, development build". Both current:
+  "Up to date (1.0.0)".
+- **Update.** Everything needed is downloaded into memory first, with
+  progress, and checked: the firmware's header must carry the release's
+  version, the pack must start `ODWP` with its header's length equal to
+  the download, its version `www_version`, and at most 1,310,720 B. A
+  failure there installs nothing. Then the firmware, if it is newer:
+  `PUT /api/firmware` and the wait for the restart, exactly as "Update from
+  file…" does (`/api/status` polled every 2 s until it reports the new
+  version, up to 3 minutes). Then the web app, if it differs: `PUT
+  /api/www` with the pack (`Content-Type: application/octet-stream`, the
+  length set by the browser, as `make www-push` sends it), a `503` retried
+  up to four times 3 s apart, the reply checked for `ok` and the new
+  version. Then the page reloads itself, since its code is the old web
+  app's. Requests go one at a time and carry the API key as every other
+  request does (`Authorization: Bearer`); the page is the player's own
+  origin, so the `Origin` check passes.
+- **Failures** are said in words and never reported as an update: offline,
+  the site unreachable (a missing CORS header looks the same to the page),
+  a `404` for the JSON or a file, a JSON that does not parse, a download
+  cut short, a firmware the player refuses (`422`, with its reason; the web
+  app is then not sent), and each `PUT /api/www` reply of
+  [`www-pack.md`](www-pack.md) (`400`, `408`, `413`, `422`, `500`), after
+  which the page reads `GET /api/www` and says whether the old web app is
+  still in place. If the firmware went in and the web app did not, the
+  message says both.
+- In the web demo (no player) the Settings view has no Firmware card, so
+  there is nothing to check.
+
 ## Related protections
 
 - `PUT /api/www` keeps serving the old pack until the new one has verified
@@ -140,6 +195,11 @@ by the device with a 422 and nothing on the card changes.
 - Host: `tools/fw-sign.py` round-trips (sign, verify, tamper → fail);
   the firmware's verifier is in `opendmd-core::ota` with tests on the
   header and a known-answer signature.
+- Browser: `make web-smoke` installs a bundle through "Update from
+  file…" and runs "Check for updates" against a locally served
+  `release.json` and files, through `tools/mock-device.py` (its simulated
+  restart, and `PUT /api/www` taking on the pack's version): up to date,
+  each failure, and an update applied and the page reloaded.
 - Device: a spare DevKit with any FAT32 card (no panel needed): flash the v2
   layout once over USB, then `make fw-ota HOST=…` twice (a version bump
   between), then the fault drills: a tampered bundle (422), a cut-off upload

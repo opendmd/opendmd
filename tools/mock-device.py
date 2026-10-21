@@ -193,7 +193,11 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `entries` the files the pack would hold. `/api/status` carries the same
   object as `www`, and `www_version`. `PUT /api/www` wants a
   `Content-Length` (411), at most 1,310,720 B (413) and the `ODWP` magic
-  (400); it replies as `GET` does and changes nothing served. `staged` is
+  (400), a header whose total length is not the body's (400); it replies
+  as `GET` does and changes nothing served, but from then on reports the
+  pushed header's version (bytes 20.., length at 18) as `version` and
+  `www_version`, as the device would, so an update through the web app's
+  "Check for updates" can be followed. `staged` is
   null until a PUT, then whether the last one would have been staged on the
   card (true unless `--sd` is `unreadable` or `none`; null again after one
   refused at its header, as on the device).
@@ -1080,13 +1084,14 @@ def www_version(www_root: Path):
     return line[:44] or None
 
 
-def www_info(www_root: Path) -> dict:
-    """GET /api/www, from the files rather than the pack (see the docs)."""
+def www_info(www_root: Path, pushed: str | None = None) -> dict:
+    """GET /api/www, from the files rather than the pack (see the docs);
+    `pushed`, the version of the last pack PUT, replaces version.txt's."""
     pack = www_root.parent / "www.pack"
     entries = sum(1 for p in www_root.rglob("*")
                   if p.is_file() and p.suffix != ".gz" and not p.name.startswith(".")
                   and p.relative_to(www_root).as_posix() != "version.txt")
-    version = www_version(www_root)
+    version = pushed or www_version(www_root)
     ok = (www_root / "index.html").is_file()
     return {"version": version, "bytes": pack.stat().st_size if pack.is_file() else 0,
             "entries": entries, "ok": ok,
@@ -2183,6 +2188,8 @@ class Context:
         self.format_error = None
         # PUT /api/www's last `staged` (None: no PUT yet).
         self.www_staged = None
+        # The header version of the last pack PUT (None: version.txt's).
+        self.www_pushed = None
 
 
 SD_UNREADABLE = "card not readable: it needs FAT32; format it from the web app"
@@ -2519,8 +2526,8 @@ def make_handler(ctx: Context, quiet: bool):
                     "entries": len(player.playlist),
                     "manifest": "/sdcard/" + player.manifest_rel(),
                     "index_state": player.index_state,
-                    "www_version": www_version(ctx.www_root),
-                    "www": {**www_info(ctx.www_root), "staged": ctx.www_staged},
+                    "www_version": ctx.www_pushed or www_version(ctx.www_root),
+                    "www": {**www_info(ctx.www_root, ctx.www_pushed), "staged": ctx.www_staged},
                     "heap": {"free": free, "floor": floor, "idf_min": idf_min},
                     "refresh_hz": 100,
                     "deadline_misses": player.deadline_misses,
@@ -3144,7 +3151,7 @@ def make_handler(ctx: Context, quiet: bool):
             self.send_json(200, WIFI_SCAN_RESULTS)
 
         def h_www_get(self, path):
-            self.send_json(200, {**www_info(ctx.www_root), "staged": ctx.www_staged})
+            self.send_json(200, {**www_info(ctx.www_root, ctx.www_pushed), "staged": ctx.www_staged})
 
         def h_www_put(self, path):
             length_hdr = self.headers.get("Content-Length")
@@ -3168,8 +3175,15 @@ def make_handler(ctx: Context, quiet: bool):
             if data[:4] != b"ODWP":
                 self.send_error_json(400, "not a www pack: not a www pack (bad magic)")
                 return
+            total, vlen = int.from_bytes(data[8:12], "little"), data[18] if len(data) > 18 else 0
+            if len(data) < 64 or total != length or vlen > 44:
+                self.send_error_json(400, f"not a www pack: the header's length {total} is not the body's {length}")
+                return
+            # The update, simulated: what is served stays the same, the
+            # version reported becomes the pack header's (bytes 20..20+len).
+            ctx.www_pushed = data[20:20 + vlen].decode("utf-8", "replace") or None
             ctx.www_staged = ctx.sd_state == "ok"
-            self.send_json(200, {**www_info(ctx.www_root), "staged": ctx.www_staged})
+            self.send_json(200, {**www_info(ctx.www_root, ctx.www_pushed), "staged": ctx.www_staged})
 
         def h_firmware_get(self, path):
             with ctx.lock:

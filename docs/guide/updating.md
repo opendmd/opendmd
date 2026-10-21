@@ -1,39 +1,42 @@
 # Updating
 
 OpenDMD has two parts that get updated: the **firmware**, which runs the
-panel, and the **web app** you use at `opendmd.local`. There are two ways to
-update. Your settings, WiFi details, playlists and GIFs stay as they are
-either way.
+panel, and the **web app** you use at `opendmd.local`. Your settings, WiFi
+details, playlists and GIFs stay as they are whichever way you update.
 
-## With the installer (firmware and web app)
+## Over WiFi (the easy way)
 
-This updates both parts together, so it's the one to use when in doubt.
+1. In the web app, open **Settings → Advanced → Firmware** and press
+   **Check for updates**.
+2. If there's a new version, the app says what's new and shows an
+   **Update** button. Press it.
+3. Keep the page open and the SD card in. The panel goes dark for about a
+   minute while the firmware installs, then the web app updates and the
+   page reloads by itself.
 
-1. Open the [installer](install.md) in Chrome or Edge and plug the
-   display's board into your computer by USB.
+The phone or computer you're using needs to be online: the app downloads
+the update from this site before handing it to the player. If anything
+goes wrong it tells you what, and nothing is left half-installed.
+
+## With the installer
+
+If the player won't start or you can't reach the web app, the
+[installer](install.md) updates both parts over USB:
+
+1. Open the installer in Chrome or Edge and plug the display's board into
+   your computer by USB.
 2. Click **Install** and pick the board's port.
 3. **Leave Erase device unticked.** Ticking it wipes your WiFi details and
    settings.
 
 The board restarts with the new version and rejoins your WiFi.
 
-## Over WiFi (firmware only)
+## From a file
 
-You can update the firmware without unplugging anything:
-
-1. Download the latest firmware update file (it ends in `.odfw`) from the
-   [installer page](install.md#firmware-update-file).
-2. In the web app, open **Settings → Advanced → Firmware** and choose
-   **Update from file…**, then pick the file you downloaded.
-3. Keep the SD card in: the update is stored on it while it installs. The
-   panel goes dark for about a minute and then comes back on the new
-   version.
-
-If the file is older than what the player already runs, the app asks
-before installing it.
-
-This updates only the firmware. To update the web app as well, use the
-installer.
+You can also download the firmware update file (it ends in `.odfw`) from
+the [installer page](install.md#firmware-update-file) and use **Update from
+file…** next to Check for updates. This updates only the firmware; if the
+file is older than what the player runs, the app asks first.
 
 ## Which version do I have?
 

@@ -57,8 +57,9 @@ up a new one.
 
 ## Firmware update file
 
-To update the firmware over WiFi instead of USB, download this file and
-follow [Updating](updating.md#over-wifi-firmware-only):
+Once you're set up, **Check for updates** in the web app keeps the player
+current over WiFi ([Updating](updating.md)). If you'd rather install the
+firmware from a file, here it is:
 
 <!-- site:firmware-bundle -->
 
