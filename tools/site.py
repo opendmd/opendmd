@@ -7,7 +7,8 @@
     uv run tools/site.py OUT_DIR --www opendmd-web/www --card target/demo-card
 
 - /            the README, as the landing page
-- /docs/       the user and reference docs, plus the experiments behind them
+- /docs/       the user and reference docs (not the experiment and research
+               write-ups: those are working notes)
 - /demo/       the web app with the demo card (tools/demo-card.py) beside it:
                with no player answering, it loads demo/index.json and plays
                that card in the browser (js/source.js, demoCard)
@@ -41,9 +42,6 @@ PAGES = {
     "hardware/PINOUT.md": "docs/pinout.html",
     "docs/cache-format.md": "docs/cache-format.html",
     "docs/www-pack.md": "docs/www-pack.html",
-    "docs/gifslim-experiment.md": "docs/gifslim-experiment.html",
-    "docs/tweening-experiment.md": "docs/tweening-experiment.html",
-    "docs/art-pipeline.md": "docs/art-pipeline.html",
 }
 MENU = [
     ("Overview", "index.html"),
@@ -60,10 +58,6 @@ MENU = [
     ("HTTP API", "docs/api.html"),
     ("Prepared copy format", "docs/cache-format.html"),
     ("Web app pack format", "docs/www-pack.html"),
-    (None, "Background"),
-    ("The GIF decoder experiment", "docs/gifslim-experiment.html"),
-    ("Smooth motion experiment", "docs/tweening-experiment.html"),
-    ("Art pipeline", "docs/art-pipeline.html"),
 ]
 # Other files published as they are: repo path -> published path.
 FILES = {

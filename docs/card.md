@@ -35,8 +35,7 @@ across the stock card the copies are 0.61x the size of the GIFs (960 MB for
 1,575 MB). Any viewer, the browser included, plays them. All but 38 of
 11,039 files decode to exactly the frames the GIF player shows; those 38
 have more than 255 colours and are quantised (play the original for any that
-look wrong). The format is [`docs/cache-format.md`](cache-format.md);
-the experiment that chose it, [`docs/gifslim-experiment.md`](gifslim-experiment.md).
+look wrong). The format is [`docs/cache-format.md`](cache-format.md).
 
 **Users see GIFs and playlists; prepared copies are a cache.** Playlists
 only ever name GIFs. For every `/gifs/<Category>/<name>.gif` it opens, the
@@ -44,7 +43,7 @@ firmware first tries the copy at `/cache/<Category>/<xx>/<name>.gif` (`<xx>`
 = low byte of FNV-1a-32 of the file name, 256 buckets per category, so a
 lookup scans ~15 entries, never the 3,781-file `gifs/Consoles`) and plays it
 if it opens and is a GIF; otherwise the original. A miss costs ~5-6 ms (one
-failed open in a small directory, measured on the rig). Originals play
+failed open in a small directory). Originals play
 through the same small decoder at its full 12-bit table; the few it does
 not handle (interlaced frames, `Previous` disposal) fall back to the `gif`
 crate. To prepare a card copy:
@@ -70,9 +69,8 @@ are left for the browser, which has the quantiser and the memory).
 `"always"` (also slowly while a prepared file plays) or `"off"`; Settings →
 Playback cache shows it as one sentence ("Preparing files automatically
 when the panel is idle · 4,210 of 10,133 · about 3 nights left") with the
-option "also while playing (slower)". On the rig the stock card goes at
-~1.3-1.4 s per file at full speed (0.7-0.75 files a second: 620 in 15
-min, then 217 in 5 min), so a card with none prepared needs about 4 hours
+option "also while playing (slower)". A stock card goes at
+~1.3-1.4 s per file at full speed (0.7-0.75 files a second), so a card with none prepared needs about 4 hours
 — one night.
 
 That is all: no manifest to write, nothing to select. `GET /api/cache`

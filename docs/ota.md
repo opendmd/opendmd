@@ -1,13 +1,12 @@
-# Firmware updates over the LAN (OTA), design
+# Firmware updates over WiFi (OTA)
 
-Status: implemented 2026-10-02; drilled on the spare DevKit 2026-10-06
-(updates, a wrong key, a tampered and a cut-off bundle). `deploying.md` describes the procedure.
+How an update over WiFi works. [`deploying.md`](deploying.md) has the procedure.
 
 Where things are: the bundle format and its verifier
 `opendmd-core/src/ota.rs`; the signer `tools/fw-sign.py`; the device side
 `firmware/src/ota.rs` (`PUT`/`GET /api/firmware`, the boot-time tidy-up);
 the updater `ota/updater/` (`make updater`); `make fw-sign`, `make fw-ota
-HOST=`. Two details differ from the sketch below: the firmware checks the
+HOST=`. The firmware checks the
 signature as soon as the 140-byte header is in, on the network worker
 (Ed25519 needs ~8 KB of stack; the stream task has 6 KB), before anything
 is written to the card, and a bundle that fails it is answered 422 there
@@ -37,8 +36,7 @@ pre-release before its release; `older()` in `js/firmware.js`), asks
 "This is older than the firmware on the panel (X). Install it anyway?"
 first. `make fw-ota` does not ask.
 
-**Timing**, measured on the spare DevKit (2026-10-06, 64 GB card at 20
-MHz, 0.3.4 -> 0.3.5): the 2.09 MB bundle uploads in ~10-16 s; the updater
+**Timing**, on a 64 GB card at 20 MHz: the 2.09 MB bundle uploads in ~10-16 s; the updater
 takes ~19 s (SHA-256 on the card 2.9 s, the write 13.7 s, the image check
 1.4 s); `GET /api/firmware` answers with the new version ~33 s after the
 upload ends, playback ~45 s. A bundle signed with another key is refused
@@ -46,7 +44,7 @@ at its header: curl has the 422 after 1.06 s (its `Expect: 100-continue`
 wait: the device never sends `100 Continue`; 0.07 s with `-H 'Expect:'`),
 having sent 64 KB of the 2 MB; Chromium (the Firmware card's XHR) keeps
 sending until the device closes, ~2 s later, and shows the reason after
-~4.6 s. Before 2026-10-06 the device read the whole body first: 16.4 s.
+~4.6 s.
 
 ## Why not two app slots
 
@@ -125,7 +123,7 @@ by the device with a 422 and nothing on the card changes.
    (≤ 1 KB of whole lines; the Firmware card's "Update log"), so the
    updater's account can be read without taking the card out.
 
-## Hardening that ships with it (same cable session)
+## Related protections
 
 - `PUT /api/www` keeps serving the old pack until the new one has verified
   on the card (staged, then read back whole, size and CRC, every card
@@ -142,18 +140,10 @@ by the device with a 422 and nothing on the card changes.
 - Host: `tools/fw-sign.py` round-trips (sign, verify, tamper → fail);
   the firmware's verifier is in `opendmd-core::ota` with tests on the
   header and a known-answer signature.
-- Device: a spare DevKit with any FAT32 card, no panel: flash the v2
+- Device: a spare DevKit with any FAT32 card (no panel needed): flash the v2
   layout once over USB, then `make fw-ota HOST=…` twice (a version bump
   between), then the fault drills: a tampered bundle (422), a cut-off upload
   (408, nothing staged), card pulled during the updater's write (recovers on
   reinsertion). The serial capture watches the updater's log.
-  Run 2026-10-09 on the spare (0.3.8 → 0.3.9, 64 GB FAT32 card at 20 MHz):
-  card pulled ~2 s into the write, `reading the card failed at 589824 of
-  2090272 B, mid-write`; one retry hit `card mount failed: ESP_ERR_TIMEOUT`;
-  on reinsertion the updater re-hashed the file, rewrote factory (13.6 s),
-  verified it and booted 0.3.9, playing with 0 deadline misses. The card's
-  `/update/log.txt` lacks the lines written while the card was out (only
-  the console has them) and lists the lines around the retry slightly out
-  of order.
-- Rig: once the spare passes, one USB flash for the layout, then every
+- Then the real player: one USB flash for the layout, then every
   further firmware update over WiFi.

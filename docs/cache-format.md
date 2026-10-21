@@ -9,9 +9,7 @@ the copies are **0.61x the originals' size** (960 MB for 1,575 MB), so every
 frame also reads ~40% fewer bytes off a card the web server shares.
 
 Users never see a copy: playlists name GIFs, and the firmware finds each
-GIF's copy by itself (below). The format was chosen by the experiment in
-[`gifslim-experiment.md`](gifslim-experiment.md), which measured it against
-the pre-rendered format it replaced.
+GIF's copy by itself (below).
 
 ## The file
 
@@ -83,7 +81,7 @@ whole stock card (`encodeprobe`: 11,001 byte-identical, the 38 quantised ones
 refused by the streaming path, 8 undecodable by both, 0 mismatches; and the
 tree it wrote equals `opendmd-pack convert`'s file for file), in the
 art-web crate's wasm tests and web-smoke (every copy the browser makes
-equals `opendmd-pack convert`'s), and on the rig (40 of 40 copies the
+equals `opendmd-pack convert`'s), and on a player (copies the
 builder made, downloaded, equal `opendmd-pack`'s for the same sources).
 
 ## Smooth motion: a smoothed copy
@@ -91,8 +89,8 @@ builder made, downloaded, equal `opendmd-pack`'s for the same sources).
 A GIF can be marked for **Smooth motion** (Library, per GIF; or
 `opendmd-pack smooth analyse --write`): its copy is then made from the
 GIF's frames with **in-between frames added** where the motion moves in
-steps of 2 px or more — the integer-shift tweener of
-[`tweening-experiment.md`](tweening-experiment.md), `opendmd_core::tween`
+steps of 2 px or more — the integer-shift tweener,
+`opendmd_core::tween`
 (the `tween` cargo feature: built into `opendmd-pack` and the art wasm
 module only, never the firmware). Every in-between pixel is a pixel of one
 end moved by whole pixels; the total duration is unchanged. The GIF itself
@@ -197,7 +195,7 @@ seconds' work per request (`"done":false` means ask again).
 - **Resolution** (firmware `sd::SdSource::open`): for a `/gifs/…/X.gif`
   path, open `layout::cache_path` first; if it opens and starts with `GIF8`,
   play it, else play the GIF (a miss is one failed lookup in a small
-  directory, ~5-6 ms on the rig). A playlist line that already names a
+  directory, ~5-6 ms). A playlist line that already names a
   `/cache/` path is opened as it is. The engine, `/api/status` and the web
   app only ever see the GIF's path; the log says `<- prepared` or
   `<- original`.
@@ -212,7 +210,7 @@ seconds' work per request (`"done":false` means ask again).
   (info) and loops the file with the crate directly.
 - **Heap** (`heapprobe`, canvas included; steady == peak): a copy at cap 9
   16.1-16.8 KB; an original through gifslim at cap 12 26.8-27.5 KB; the `gif`
-  crate 53.6-54.4 KB. See "GIF heap budget" in `CLAUDE.md`.
+  crate 53.6-54.4 KB.
 
 ## The device's encoder
 
@@ -223,8 +221,7 @@ GIF: gifslim at cap 12 (~15 KB: the 2 KB read buffer, 12 KB of tables, a row,
 the source's palette), a canvas (12 KB), the previous frame's indices (4 KB),
 the changed bits (512 B), the colour table (~2.8 KB), the LZW dictionary
 (6 KB at cap 9) and the write buffer (2 KB). Measured with a counting
-allocator over the whole card: see `encodeprobe --heap` in "The cache
-builder" (`CLAUDE.md`). A file gifslim cannot decode needs the `gif` crate
+allocator over the whole card (`encodeprobe --heap`). A file gifslim cannot decode needs the `gif` crate
 (~26 KB more); the builder uses it only if that much is free and otherwise
 records the file as "too large to prepare here", which the browser then
 prepares. More than 256 colours is refused the same way.
