@@ -19,10 +19,14 @@
 //! - **The baud.** ESP Web Tools speaks Improv at 115200 only (its
 //!   `port.open({baudRate: 115200})` in 10.4.0), and the console runs at
 //!   921600 (`sdkconfig.defaults`). Bytes at an eighth of the rate arrive as
-//!   framing errors and junk, which [`BaudSniffer`] recognises; then the
-//!   console switches to 115200 until the next restart, the host's next
-//!   request (it repeats it every second) is understood, and the installer's
-//!   "Logs & console" is readable too. A 921600 terminal never triggers it.
+//!   framing errors and junk, which `BaudSniffer` recognises; then the
+//!   console switches to 115200 on trial ([`BaudSwitch`]): the host's next
+//!   request (it repeats it every second) is understood, and a valid frame
+//!   within 3 s makes it stick until the next restart, so the installer's
+//!   "Logs & console" is readable too. No frame: back to 921600. A 921600
+//!   terminal never triggers it.
+//! - **Nothing logs from the drain** (a 2 KB stack): events are flags the
+//!   network worker logs ([`log_events`]).
 //! - **Quick answers** (current state, device info) come from here, out of
 //!   atomics the network worker keeps current ([`set_network`]), so they
 //!   never wait behind a WiFi connect. **Scans and WiFi settings** go to the
@@ -37,11 +41,12 @@
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::OnceLock;
+use std::time::Duration;
 use std::time::Instant;
 
 use esp_idf_sys as sys;
 use log::info;
-use opendmd_core::improv::{self as imp, BaudSniffer, Error, Event, Parser, Rpc, State};
+use opendmd_core::improv::{self as imp, BaudStep, BaudSwitch, Error, Event, Parser, Rpc, State};
 
 use crate::chan as mpsc;
 use crate::http::NetCommand;
@@ -55,6 +60,11 @@ pub const FIRMWARE_NAME: &str = "OpenDMD";
 const CHIP: &str = "ESP32";
 /// The rate ESP Web Tools opens the port at.
 const IMPROV_BAUD: u32 = 115_200;
+/// The console's own rate.
+const CONSOLE_BAUD: u32 = sys::CONFIG_ESP_CONSOLE_UART_BAUDRATE;
+/// A WiFi-settings RPC unanswered this long is taken as failed: the worker
+/// answers within ~45 s, so something went wrong.
+const PROVISION_STUCK: Duration = Duration::from_secs(60);
 /// The most networks a scan answer lists (strongest first).
 const MAX_SCAN: usize = 16;
 
@@ -101,7 +111,7 @@ static CTX: OnceLock<Ctx> = OnceLock::new();
 /// [`init`] wrote it.
 struct Rx {
     parser: Parser,
-    sniffer: BaudSniffer,
+    baud: BaudSwitch,
     /// The first poll throws away whatever arrived before the drain ran
     /// (boot noise), so it cannot switch the baud.
     primed: bool,
@@ -117,10 +127,20 @@ static READY: AtomicBool = AtomicBool::new(false);
 /// 2 the setup network; and the station's IPv4 address (network order).
 static NET: AtomicU8 = AtomicU8::new(0);
 static IP: AtomicU32 = AtomicU32::new(0);
-/// A WiFi-settings RPC is being tried.
-static PROVISIONING: AtomicBool = AtomicBool::new(false);
-/// The console was switched to [`IMPROV_BAUD`].
+/// A WiFi-settings RPC is being tried, since this many ms after boot
+/// (0: none).
+static PROVISIONING: AtomicU32 = AtomicU32::new(0);
+/// The console is at [`IMPROV_BAUD`] (on trial or confirmed).
 static SWITCHED: AtomicBool = AtomicBool::new(false);
+/// Jobs queued for the network worker and not yet taken: a WiFi connect
+/// in progress gives way when there are any ([`pending`]).
+static PENDING: AtomicU32 = AtomicU32::new(0);
+/// Things for the worker to log ([`log_events`]): the drain does not.
+static EVENTS: AtomicU8 = AtomicU8::new(0);
+const EV_TRIAL: u8 = 1;
+const EV_CONFIRMED: u8 = 2;
+const EV_REVERTED: u8 = 4;
+const EV_STUCK: u8 = 8;
 
 /// Set up before `logring::start` (the drain calls [`poll`] from then on).
 /// `hostname` is the device name the installer shows; `net` reaches the
@@ -136,7 +156,7 @@ pub fn init(hostname: &str, net: mpsc::Sender<NetCommand>) {
     unsafe {
         (&raw mut RX).write(MaybeUninit::new(Rx {
             parser: Parser::new(),
-            sniffer: BaudSniffer::new(),
+            baud: BaudSwitch::new(),
             primed: false,
         }));
     }
@@ -243,37 +263,124 @@ pub fn poll() {
         }
         return;
     }
-    if !SWITCHED.load(Ordering::Relaxed)
-        && sys::CONFIG_ESP_CONSOLE_UART_BAUDRATE != IMPROV_BAUD
-        && rx.sniffer.poll(n, err)
-    {
-        for _ in 0..n {
-            rx_byte();
+    if CONSOLE_BAUD != IMPROV_BAUD {
+        match rx.baud.poll(n, err) {
+            BaudStep::Stay => {}
+            BaudStep::ToImprov => {
+                for _ in 0..n {
+                    rx_byte();
+                }
+                rx.parser.reset();
+                set_baud(IMPROV_BAUD, EV_TRIAL);
+                return;
+            }
+            BaudStep::Revert => {
+                rx.parser.reset();
+                set_baud(CONSOLE_BAUD, EV_REVERTED);
+            }
         }
-        rx.parser.reset();
-        switch_baud();
-        return;
     }
     while n > 0 {
         n -= 1;
         if let Some(ev) = rx.parser.push(rx_byte()) {
+            if matches!(ev, Event::Frame { .. }) && rx.baud.frame() {
+                note(EV_CONFIRMED);
+            }
             handle(ev);
         }
     }
 }
 
-/// Over to 115200 for good (until restart): the junk sent at 921600 so far
-/// ended mid-line for the host, so a newline first.
-fn switch_baud() {
-    // SAFETY: sets UART0's clock divider; the driver is not installed and
-    // the function needs no driver (it takes the HAL's spinlock only).
-    unsafe { sys::uart_set_baudrate(0, IMPROV_BAUD) };
-    SWITCHED.store(true, Ordering::Relaxed);
+/// The console to `baud`: waits for what is in the TX FIFO to go out at
+/// the old rate, then a newline at the new one (what went before ended
+/// mid-line for whoever listens now).
+fn set_baud(baud: u32, event: u8) {
+    // A full FIFO is 11 ms at 115200: up to 15 ms.
+    // SAFETY: reads the system timer.
+    let until = unsafe { sys::esp_timer_get_time() } + 15_000;
+    while (reg(STATUS) >> 16) & 0xFF != 0 && unsafe { sys::esp_timer_get_time() } < until {
+        core::hint::spin_loop();
+    }
+    // SAFETY: a busy-wait; then UART0's clock divider, which needs no
+    // driver (the HAL's spinlock only). 100 us: the shifter's last byte.
+    unsafe {
+        sys::esp_rom_delay_us(100);
+        sys::uart_set_baudrate(0, baud);
+    }
+    SWITCHED.store(
+        baud == IMPROV_BAUD && CONSOLE_BAUD != IMPROV_BAUD,
+        Ordering::Relaxed,
+    );
+    note(event);
     logring::raw(1, &mut |out| {
         out[0] = b'\n';
         1
     });
-    info!("console: a host is talking at {IMPROV_BAUD} baud (a browser installer, Improv Serial): the console is at {IMPROV_BAUD} until the next restart");
+}
+
+fn note(event: u8) {
+    EVENTS.fetch_or(event, Ordering::Relaxed);
+}
+
+/// Log what the drain noted since the last call (network worker).
+pub fn log_events() {
+    let ev = EVENTS.swap(0, Ordering::Relaxed);
+    if ev == 0 {
+        return;
+    }
+    if ev & EV_TRIAL != 0 {
+        info!("console: a host talked at {IMPROV_BAUD} baud (a browser installer?); the console went to {IMPROV_BAUD} on trial");
+    }
+    if ev & EV_CONFIRMED != 0 {
+        info!("console: Improv Serial heard; the console stays at {IMPROV_BAUD} baud until the next restart");
+    }
+    if ev & EV_REVERTED != 0 {
+        info!("console: no Improv Serial frame within 3 s; back to {CONSOLE_BAUD} baud");
+    }
+    if ev & EV_STUCK != 0 {
+        log::warn!(
+            "improv: WiFi details unanswered for {} s; reported as failed",
+            PROVISION_STUCK.as_secs()
+        );
+    }
+}
+
+/// Jobs are waiting for the network worker: a WiFi connect not made for
+/// the installer stops at its next step and lets the worker take them.
+pub fn pending() -> bool {
+    PENDING.load(Ordering::Acquire) > 0
+}
+
+/// The worker took a job off its queue.
+pub fn taken() {
+    let _ = PENDING.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1));
+}
+
+fn now_ms() -> u32 {
+    // SAFETY: reads the system timer. Never 0 (0 means "not provisioning").
+    (unsafe { sys::esp_timer_get_time() } / 1000).max(1) as u32
+}
+
+/// A WiFi-settings RPC is being tried. One stuck past [`PROVISION_STUCK`]
+/// is failed here (the error and Ready go out), so the installer is never
+/// shown Provisioning for ever.
+fn provisioning() -> bool {
+    let since = PROVISIONING.load(Ordering::Acquire);
+    if since == 0 {
+        return false;
+    }
+    if now_ms().wrapping_sub(since) < PROVISION_STUCK.as_millis() as u32 {
+        return true;
+    }
+    if PROVISIONING
+        .compare_exchange(since, 0, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        note(EV_STUCK);
+        send_error(Error::Unknown);
+        send_state(State::Ready);
+    }
+    false
 }
 
 fn handle(ev: Event<'_>) {
@@ -292,12 +399,15 @@ fn handle(ev: Event<'_>) {
                 }
             }
             Ok(Rpc::WifiSettings { ssid, password }) => {
-                if PROVISIONING.swap(true, Ordering::AcqRel) {
+                if provisioning()
+                    || PROVISIONING
+                        .compare_exchange(0, now_ms(), Ordering::AcqRel, Ordering::Acquire)
+                        .is_err()
+                {
                     // One at a time (the host serialises its RPCs anyway).
                     send_state(State::Provisioning);
                     return;
                 }
-                info!("improv: WiFi details for '{ssid}' received over USB; trying them");
                 send_error(Error::None);
                 send_state(State::Provisioning);
                 let job = Job::Provision {
@@ -317,8 +427,15 @@ fn handle(ev: Event<'_>) {
 }
 
 fn queue(job: Job) -> bool {
-    CTX.get()
-        .is_some_and(|c| c.net.send(NetCommand::Improv(job)).is_ok())
+    let Some(c) = CTX.get() else {
+        return false;
+    };
+    PENDING.fetch_add(1, Ordering::AcqRel);
+    let sent = c.net.send(NetCommand::Improv(job)).is_ok();
+    if !sent {
+        taken();
+    }
+    sent
 }
 
 /// The station address, if the device is on a network.
@@ -349,7 +466,7 @@ fn send_url(cmd: u8, ip: [u8; 4]) {
 }
 
 fn send_current_state() {
-    if PROVISIONING.load(Ordering::Acquire) {
+    if provisioning() {
         send_state(State::Provisioning);
     } else if let Some(ip) = station_ip() {
         send_state(State::Provisioned);
@@ -391,14 +508,14 @@ pub fn send_scan(aps: &[ScannedAp]) {
 /// The WiFi details worked and are saved (network worker): Provisioned,
 /// then the URL for "Visit device".
 pub fn provisioned(ip: [u8; 4]) {
-    PROVISIONING.store(false, Ordering::Release);
+    PROVISIONING.store(0, Ordering::Release);
     send_state(State::Provisioned);
     send_url(imp::CMD_WIFI_SETTINGS, ip);
 }
 
 /// They did not (network worker): the error, then back to Ready.
 pub fn provision_failed(error: Error) {
-    PROVISIONING.store(false, Ordering::Release);
+    PROVISIONING.store(0, Ordering::Release);
     send_error(error);
     send_state(State::Ready);
 }

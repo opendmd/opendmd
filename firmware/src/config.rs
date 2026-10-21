@@ -319,11 +319,12 @@ pub const AP_TIMEOUT: Duration = Duration::from_secs(600);
 pub const STA_MAX_FAILURES: u32 = 2;
 /// How often the worker re-checks that STA is still associated.
 pub const WIFI_POLL_INTERVAL: Duration = Duration::from_secs(1);
-/// Improv Serial (`improv.rs`): WiFi details sent over USB are answered
-/// within this of their arrival (the network worker starts no connect
-/// attempt that could end later). ESP Web Tools waits 45 s; the save after
-/// a join ([`IMPROV_SAVE_TIMEOUT`]) has to fit in what is left.
-pub const IMPROV_ANSWER_WITHIN: Duration = Duration::from_secs(35);
+/// Improv Serial (`improv.rs`): the join for WiFi details sent over USB
+/// ends within this of their arrival (every wait in `wifi.rs` is clipped to
+/// it). ESP Web Tools waits 45 s from sending them: 34 s, then the save
+/// ([`IMPROV_SAVE_TIMEOUT`], 8 s at worst), then starting mDNS and SNTP
+/// (well under a second) puts the answer at ~43 s at worst.
+pub const IMPROV_ANSWER_WITHIN: Duration = Duration::from_secs(34);
 /// How long the network worker waits for the main task to save WiFi
 /// details joined over USB.
 pub const IMPROV_SAVE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -332,6 +333,10 @@ pub const IMPROV_SAVE_TIMEOUT: Duration = Duration::from_secs(8);
 /// installer is about to give up on it (scans: 30 s; WiFi details: 45 s,
 /// and a join needs ~20 s of [`IMPROV_ANSWER_WITHIN`]).
 pub const IMPROV_STALE: Duration = Duration::from_secs(15);
+/// A scan this recent answers an Improv scan again instead of a new one
+/// (the installer rescans every 3 s while its WiFi form is open; a scan
+/// takes the radio for ~2 s).
+pub const IMPROV_SCAN_FRESH: Duration = Duration::from_secs(5);
 
 /// Network worker thread: pinned to CPU0, named. stripe-dashboard uses 16 KB
 /// here; 12 KB is what fits alongside the panel, the manifest index and a

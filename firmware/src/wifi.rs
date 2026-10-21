@@ -40,11 +40,31 @@ use crate::config;
 /// pins, and how many attempts to spend on it.
 type ConnectStage = (AuthMethod, Option<u8>, Option<[u8; 6]>, u32);
 
-/// The longest a failed connect attempt takes: esp-idf-svc's 15 s wait for
-/// the association (a wrong password never associates, so it is the whole
-/// wait), then the 2 s pause before the next. With a deadline, an attempt
-/// starts only if this much time is left.
-const ATTEMPT_WORST: Duration = Duration::from_secs(17);
+/// An attempt's two waits, each up to 15 s (esp-idf-svc's own limit): the
+/// association (a wrong password never associates, so it is the whole
+/// wait), then the interface getting an address (DHCP). Then a 2 s pause
+/// before the next attempt.
+const ASSOC_WAIT: Duration = Duration::from_secs(15);
+const NETIF_WAIT: Duration = Duration::from_secs(15);
+const RETRY_PAUSE: Duration = Duration::from_secs(2);
+/// The waits look at the driver this often, and at the installer's queue
+/// (`improv::pending`): a job waits at most this long for a connect to give
+/// way.
+const WAIT_SLICE: Duration = Duration::from_millis(100);
+/// With a deadline, an attempt starts only if this much is left (an
+/// association on a good network takes 1-3 s, DHCP about as long); every
+/// wait is clipped to the deadline, so none runs past it.
+const ATTEMPT_MIN: Duration = Duration::from_secs(8);
+
+/// How a wait ended.
+#[derive(PartialEq)]
+enum Waited {
+    Done,
+    TimedOut,
+    /// Work for the installer is queued (`improv::pending`) and this connect
+    /// is not the installer's own: stop and let the worker take it.
+    GaveWay,
+}
 
 /// A nearby AP, as returned to the setup page by `GET /api/wifi/scan`.
 #[derive(Debug, Clone)]
@@ -212,15 +232,62 @@ impl WifiManager {
         }
     }
 
-    fn try_connect(&mut self, attempts: u32, stage: u8, deadline: Option<Instant>) -> bool {
+    /// Wait up to `limit` (and never past `deadline`) for `done`. Without a
+    /// deadline (not the installer's own connect), gives way to queued
+    /// installer work.
+    fn wait(
+        &self,
+        limit: Duration,
+        deadline: Option<Instant>,
+        done: impl Fn(&Self) -> bool,
+    ) -> Waited {
+        let start = Instant::now();
+        let end = deadline.map_or(start + limit, |d| d.min(start + limit));
+        loop {
+            if done(self) {
+                return Waited::Done;
+            }
+            if deadline.is_none() && crate::improv::pending() {
+                return Waited::GaveWay;
+            }
+            let now = Instant::now();
+            if now >= end {
+                return Waited::TimedOut;
+            }
+            thread::sleep(WAIT_SLICE.min(end - now));
+        }
+    }
+
+    /// Connect attempts on the configuration set. `Err(())`: gave way to
+    /// the installer (see [`Waited::GaveWay`]).
+    fn try_connect(
+        &mut self,
+        attempts: u32,
+        stage: u8,
+        deadline: Option<Instant>,
+    ) -> Result<bool, ()> {
         for attempt in 1..=attempts {
-            if deadline.is_some_and(|d| d.saturating_duration_since(Instant::now()) < ATTEMPT_WORST)
-            {
+            if deadline.is_some_and(|d| d.saturating_duration_since(Instant::now()) < ATTEMPT_MIN) {
                 info!("  STA stage {stage}: out of time");
-                return false;
+                return Ok(false);
+            }
+            if deadline.is_none() && crate::improv::pending() {
+                return Err(());
             }
             info!("  STA stage {stage}, attempt {attempt}/{attempts}");
-            if self.wifi.connect().is_ok() && self.wifi.wait_netif_up().is_ok() {
+            // The driver's non-blocking connect, then our own waits
+            // (`BlockingWifi::connect` and `wait_netif_up` block 15 s each
+            // and can be neither interrupted nor clipped).
+            let mut waited = Waited::TimedOut;
+            if self.wifi.wifi_mut().connect().is_ok() {
+                waited = self.wait(ASSOC_WAIT, deadline, |s| {
+                    s.wifi.wifi().is_connected().unwrap_or(false)
+                });
+                if waited == Waited::Done {
+                    waited = self.wait(NETIF_WAIT, deadline, |s| s.wifi.is_up().unwrap_or(false));
+                }
+            }
+            if waited == Waited::Done {
                 if let Ok(ip) = self.wifi.wifi().sta_netif().get_ip_info() {
                     info!("WiFi connected, IP {}", ip.ip);
                     self.state = WifiState::Connected;
@@ -230,22 +297,32 @@ impl WifiManager {
                     unsafe {
                         esp_idf_sys::esp_wifi_set_ps(esp_idf_sys::wifi_ps_type_t_WIFI_PS_NONE);
                     }
-                    return true;
+                    return Ok(true);
                 }
             }
             let _ = self.wifi.disconnect();
-            thread::sleep(Duration::from_secs(2));
+            if waited == Waited::GaveWay {
+                return Err(());
+            }
+            if attempt < attempts && self.wait(RETRY_PAUSE, deadline, |_| false) == Waited::GaveWay
+            {
+                return Err(());
+            }
         }
-        false
+        Ok(false)
     }
 
     /// Scan, find the SSID, and connect with the auth method it advertises,
     /// falling back through progressively looser configurations.
     ///
     /// `Ok(true)` on success. `Ok(false)` means "not in range, or every stage
-    /// failed" — the caller counts those and falls back to AP mode. With a
-    /// `deadline` (WiFi details sent over USB, which the installer waits
-    /// 45 s for) no attempt starts that could end after it.
+    /// failed" — the caller counts those and falls back to AP mode. Also
+    /// `Ok(false)`, without a deadline, when work for the browser installer
+    /// was queued meanwhile (`improv::pending`): the connect stops at its
+    /// next step (within 100 ms) so the worker can take it; the caller
+    /// should not count that. With a `deadline` (WiFi details sent over
+    /// USB, which the installer waits 45 s for) nothing runs past it and
+    /// nothing gives way.
     pub fn connect_sta(
         &mut self,
         ssid: &str,
@@ -253,6 +330,10 @@ impl WifiManager {
         deadline: Option<Instant>,
     ) -> anyhow::Result<bool> {
         if ssid.is_empty() {
+            return Ok(false);
+        }
+        if deadline.is_none() && crate::improv::pending() {
+            self.state = WifiState::Disconnected;
             return Ok(false);
         }
         let fallback_auth = if password.is_empty() {
@@ -310,8 +391,14 @@ impl WifiManager {
                     ..Default::default()
                 }))?;
             self.fix_pmf();
-            if self.try_connect(attempts, stage as u8 + 1, deadline) {
-                return Ok(true);
+            match self.try_connect(attempts, stage as u8 + 1, deadline) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(()) => {
+                    info!("connect to '{ssid}' paused: the browser installer is waiting");
+                    self.state = WifiState::Disconnected;
+                    return Ok(false);
+                }
             }
         }
 
