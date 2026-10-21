@@ -91,8 +91,6 @@ up with it plays on OpenDMD as it is. You can also make your own with
 ## Next
 
 - [Install OpenDMD](install.md) on the ESP32.
-- Questions about the hardware or building it? The DMDoS community's
-  [Telegram group](https://t.me/DMD0S) is the place to ask.
 
 OpenDMD is an independent project, not made by or affiliated with DMDoS,
 MORTACA or Retromojones. Thanks to all three for the display, the board and

@@ -29,8 +29,8 @@ it is, and adds a web app to manage it.
 
 ## OpenDMD and DMDoS
 
-OpenDMD only replaces the software on the ESP32. For everything else, go to DMDoS and the
-people around it:
+OpenDMD only replaces the software on the ESP32. The hardware, the build and the GIFs come
+from DMDoS:
 
 <!-- site:features -->
 
@@ -45,10 +45,8 @@ people around it:
   printed kits and wooden frames.
 - **GIFs:** the DMDoS GIF pack is in the Software section of [dmdos.net](https://dmdos.net/).
   A card set up with it plays on OpenDMD as it is.
-- **Help and ideas:** the DMDoS community's [Telegram group](https://t.me/DMD0S).
 
-OpenDMD is an independent project, not made by or affiliated with DMDoS or MORTACA. Questions
-about OpenDMD itself go to its [GitHub issues](https://github.com/opendmd/opendmd/issues). The
+OpenDMD is an independent project, not made by or affiliated with DMDoS or MORTACA. The
 original DMDoS firmware can be put back at any time from the Software section of dmdos.net.
 
 ## Install
