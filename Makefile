@@ -195,9 +195,12 @@ web-smoke: web
 # tools/demo-card.py). site-serve to look at it; site-publish pushes it.
 SITE ?= target/site
 SITE_REPO ?= git@github.com:opendmd/opendmd.github.io.git
+# The installer under install/ publishes whatever release dist/ holds; site
+# does not build one (fw-release needs the xtensa toolchain).
 site: web sim-build
+	@test -f $(DIST)/manifest.json || { echo "no $(DIST)/manifest.json: the site publishes the release's installer, run make fw-release first"; exit 2; }
 	uv run tools/demo-card.py target/demo-card
-	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card
+	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --dist $(DIST)
 
 site-serve: site
 	uv run python -m http.server 8081 -d $(SITE)

@@ -4,11 +4,17 @@
 # ///
 """Build the public site (opendmd.github.io) as static files.
 
-    uv run tools/site.py OUT_DIR --www opendmd-web/www --card target/demo-card
+    uv run tools/site.py OUT_DIR --www opendmd-web/www --card target/demo-card --dist dist
 
 - /            the README, as the landing page
-- /docs/       the user and reference docs (not the experiment and research
-               write-ups: those are working notes)
+- /install/    the browser installer (docs/guide/install.md with ESP Web
+               Tools' button) and, under install/firmware/, the release in
+               dist/: the parts dist/manifest.json names, the merged image
+               and the signed update bundle, plus install/release.json
+               (what the web app's update check reads)
+- /guide/      the user guide (docs/guide/)
+- /dev/        the developer pages: an overview and a few clean references
+               (the detailed notes in docs/ stay in the repo)
 - /demo/       the web app with the demo card (tools/demo-card.py) beside it:
                with no player answering, it loads demo/index.json and plays
                that card in the browser (js/source.js, demoCard)
@@ -20,6 +26,7 @@ the link. `make site` runs this; `make site-publish` pushes it.
 
 import argparse
 import html
+import json
 import posixpath
 import re
 import shutil
@@ -32,33 +39,64 @@ ROOT = Path(__file__).resolve().parent.parent
 # Source (repo path) -> published path, in the order of the docs menu.
 PAGES = {
     "README.md": "index.html",
-    "docs/web-app.md": "docs/web-app.html",
-    "docs/api.md": "docs/api.html",
-    "docs/firmware.md": "docs/firmware.html",
-    "docs/card.md": "docs/card.html",
-    "docs/simulator.md": "docs/simulator.html",
-    "docs/deploying.md": "docs/deploying.html",
-    "docs/ota.md": "docs/ota.html",
-    "hardware/PINOUT.md": "docs/pinout.html",
-    "docs/cache-format.md": "docs/cache-format.html",
-    "docs/www-pack.md": "docs/www-pack.html",
+    "docs/guide/install.md": "install/index.html",
+    "docs/guide/web-app.md": "guide/web-app.html",
+    "docs/guide/create-art.md": "guide/create-art.html",
+    "docs/guide/effects.md": "guide/effects.html",
+    "docs/guide/card.md": "guide/card.html",
+    "docs/guide/updating.md": "guide/updating.html",
+    "docs/guide/troubleshooting.md": "guide/troubleshooting.html",
+    "docs/developers.md": "dev/index.html",
+    "docs/api.md": "dev/api.html",
+    "docs/simulator.md": "dev/simulator.html",
+    "hardware/PINOUT.md": "dev/pinout.html",
+}
+# Pages that moved: old published path -> new one, kept as redirects.
+MOVED = {
+    "docs/web-app.html": "guide/web-app.html",
+    "docs/card.html": "guide/card.html",
+    "docs/deploying.html": "install/index.html",
+    "docs/ota.html": "guide/updating.html",
+    "docs/firmware.html": "dev/index.html",
+    "docs/api.html": "dev/api.html",
+    "docs/simulator.html": "dev/simulator.html",
+    "docs/pinout.html": "dev/pinout.html",
+    "docs/cache-format.html": "dev/index.html",
+    "docs/www-pack.html": "dev/index.html",
+    "docs/gifslim-experiment.html": "index.html",
+    "docs/tweening-experiment.html": "index.html",
+    "docs/art-pipeline.html": "index.html",
 }
 MENU = [
     ("Overview", "index.html"),
     ("Try the demo", "demo/"),
-    (None, "Using it"),
-    ("The web app", "docs/web-app.html"),
-    ("Deploying", "docs/deploying.html"),
-    ("Firmware", "docs/firmware.html"),
-    ("Updates over WiFi", "docs/ota.html"),
-    ("The card", "docs/card.html"),
-    ("The simulator", "docs/simulator.html"),
-    ("Hardware pinout", "docs/pinout.html"),
-    (None, "Reference"),
-    ("HTTP API", "docs/api.html"),
-    ("Prepared copy format", "docs/cache-format.html"),
-    ("Web app pack format", "docs/www-pack.html"),
+    (None, "Guide"),
+    ("Install", "install/index.html"),
+    ("The web app", "guide/web-app.html"),
+    ("Create Art", "guide/create-art.html"),
+    ("Effects and live items", "guide/effects.html"),
+    ("The SD card", "guide/card.html"),
+    ("Updating", "guide/updating.html"),
+    ("Troubleshooting", "guide/troubleshooting.html"),
+    (None, "For developers"),
+    ("Building from source", "dev/index.html"),
+    ("HTTP API", "dev/api.html"),
+    ("The simulator", "dev/simulator.html"),
+    ("Hardware pinout", "dev/pinout.html"),
 ]
+# The installer page: ESP Web Tools, pinned (the flashing itself is
+# esptool-js over Web Serial; Chrome or Edge, https or localhost).
+INSTALL_PAGE = "install/index.html"
+INSTALL_HEAD = ('<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/'
+                'install-button.js?module"></script>')
+INSTALL_BUTTON = """<div class="install">
+<esp-web-install-button id="install" manifest="firmware/manifest.json">
+<button slot="activate" id="install-activate">Install</button>
+<span slot="unsupported">This browser can't talk to USB boards. Open this page in Chrome or Edge on a computer.</span>
+<span slot="not-allowed">This page has to be opened over https.</span>
+</esp-web-install-button>
+<span class="ver">OpenDMD {version}</span>
+</div>"""
 # Other files published as they are: repo path -> published path.
 FILES = {
     "LICENSE-MIT": "LICENSE-MIT.txt",
@@ -94,7 +132,11 @@ th{background:var(--bg2)}
 img{max-width:100%;height:auto;border-radius:6px}
 blockquote{margin:16px 0;padding:4px 16px;border-left:3px solid var(--acc);color:var(--mut)}
 hr{border:0;border-top:1px solid var(--line)}
-.cta{display:inline-block;margin:8px 0 24px;padding:10px 18px;border-radius:8px;background:var(--acc);color:#111;font-weight:700;text-decoration:none}
+.install{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin:8px 0 24px;padding:20px;border:1px solid var(--line);border-radius:10px;background:var(--bg2)}
+.install button{font:inherit;font-weight:700;padding:10px 26px;border-radius:8px;border:0;background:var(--acc);color:#111;cursor:pointer}
+.install .ver{color:var(--mut);font:14px ui-monospace,Menlo,Consolas,monospace}
+.cta{display:inline-block;margin:8px 8px 24px 0;padding:10px 18px;border-radius:8px;background:var(--acc);color:#111;font-weight:700;text-decoration:none}
+.cta.alt{background:none;color:var(--acc);box-shadow:inset 0 0 0 2px var(--acc)}
 @media (max-width:860px){
   .wrap{display:block}
   nav{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:16px}
@@ -111,7 +153,7 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>{title}</title>
-<link rel="stylesheet" href="{up}site.css">
+<link rel="stylesheet" href="{up}site.css">{head}
 </head>
 <body>
 <div class="wrap">
@@ -172,11 +214,53 @@ def menu(page: str) -> str:
     return "".join(out)
 
 
+def release(dist: Path, out: Path) -> dict:
+    """The current release in dist/ (fw-release keeps older versions there
+    too): the parts its manifest names, the merged image and the signed
+    bundle of that version only, under install/firmware/; and
+    install/release.json for the web app's update check."""
+    manifest = dist / "manifest.json"
+    if not manifest.is_file():
+        raise SystemExit(f"no {manifest}: run make fw-release first")
+    m = json.loads(manifest.read_text())
+    ver = m["version"]
+    fw = out / "install/firmware"
+    fw.mkdir(parents=True)
+    names = [p["path"] for b in m["builds"] for p in b["parts"]]
+    names += [f"opendmd-{ver}-4mb-full.bin", f"opendmd-{ver}.odfw"]
+    for name in ["manifest.json", *names]:
+        if not (dist / name).is_file():
+            raise SystemExit(f"no {dist / name}: run make fw-release")
+        shutil.copyfile(dist / name, fw / name)
+    # The www pack's version: the header's string (docs/www-pack.md), the
+    # one GET /api/www reports.
+    pack = (fw / f"opendmd-{ver}-www.pack").read_bytes()[:64]
+    if pack[:4] != b"ODWP":
+        raise SystemExit(f"opendmd-{ver}-www.pack is not a www pack")
+    www_version = pack[20:20 + pack[18]].decode()
+    info = {"version": ver, "firmware": f"firmware/opendmd-{ver}.odfw",
+            "www": f"firmware/opendmd-{ver}-www.pack", "www_version": www_version}
+    (out / "install/release.json").write_text(json.dumps(info, indent=2) + "\n")
+    return info
+
+
+def markers(page: str, text: str, rel_info: dict) -> str:
+    """Site-only pieces, written in the docs as HTML comments (invisible on
+    GitHub): the install button and the update bundle's download link."""
+    ver = html.escape(rel_info["version"])
+    bundle = rel(page, "install/" + rel_info["firmware"])
+    text = text.replace("<!-- site:install-button -->", INSTALL_BUTTON.format(version=ver))
+    return text.replace("<!-- site:firmware-bundle -->",
+                        f'<p><a href="{bundle}" download>Download the firmware update file</a> '
+                        f'(OpenDMD {ver}, <code>opendmd-{ver}.odfw</code>)</p>')
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("out", type=Path)
     ap.add_argument("--www", type=Path, required=True)
     ap.add_argument("--card", type=Path, required=True)
+    ap.add_argument("--dist", type=Path, required=True, help="the release from make fw-release")
     a = ap.parse_args()
     out: Path = a.out
     if out.exists():
@@ -186,24 +270,27 @@ def main() -> None:
     # The demo: the app (the player sends the .gz copies; Pages compresses by itself) and its card.
     shutil.copytree(a.www, out / "demo", ignore=shutil.ignore_patterns("*.gz", ".gitignore"))
     shutil.copytree(a.card, out / "demo/demo")
+    info = release(a.dist, out)
 
     assets: set[str] = set()
     for src, page in PAGES.items():
-        text = rewrite(src, page, (ROOT / src).read_text(), assets)
+        text = markers(page, rewrite(src, page, (ROOT / src).read_text(), assets), info)
         md = markdown.Markdown(extensions=["tables", "fenced_code", "toc", "sane_lists"],
                                extension_configs={"toc": {"permalink": "#"}})
         body = md.convert(text)
         if page == "index.html":
             # The landing page: the demo first, under the intro.
             at = body.find("</p>", body.find("hero.webp")) + 4
-            body = body[:at] + '\n<p><a class="cta" href="demo/">Try the demo in your browser →</a></p>' + body[at:]
+            body = body[:at] + ('\n<p><a class="cta" href="demo/">Try the demo in your browser →</a> '
+                                       '<a class="cta alt" href="install/">Install on your display</a></p>') + body[at:]
         m = re.search(r"<h1[^>]*>(.*?)</h1>", body, re.S)
         title = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else "OpenDMD"
         title = "OpenDMD" if title == "OpenDMD" else f"{title} · OpenDMD"
         up = "../" * page.count("/")
         dest = out / page
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(PAGE.format(title=html.escape(title), up=up, menu=menu(page), body=body))
+        head = "\n" + INSTALL_HEAD if page == INSTALL_PAGE else ""
+        dest.write_text(PAGE.format(title=html.escape(title), up=up, head=head, menu=menu(page), body=body))
     for target in sorted(assets):
         (out / target).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / target, out / target)
@@ -211,6 +298,12 @@ def main() -> None:
         shutil.copyfile(ROOT / src, out / dst)
     (out / "site.css").write_text(CSS.strip() + "\n")
     (out / ".nojekyll").write_text("")
+    for src, dst in MOVED.items():
+        to = html.escape(rel(src, dst))
+        (out / src).parent.mkdir(parents=True, exist_ok=True)
+        (out / src).write_text(f'<!doctype html><meta charset="utf-8"><title>Moved</title>'
+                               f'<meta http-equiv="refresh" content="0; url={to}"><link rel="canonical" href="{to}">'
+                               f'<p>This page moved: <a href="{to}">{to}</a></p>\n')
     (out / "README.md").write_text("# opendmd.github.io\n\nThe OpenDMD site: documentation and a browser demo of the web app "
                                    "(https://opendmd.github.io/). Built by `make site` in the OpenDMD repository; "
                                    "changes made here are overwritten by the next publish.\n")
