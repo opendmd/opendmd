@@ -63,12 +63,7 @@ Running the [installer](install.md) with **Erase device** ticked wipes the
 board back to a fresh install: WiFi details, settings and a forgotten
 security key all go. Your SD card, GIFs and playlists are kept.
 
-## Still stuck?
+## Building the display
 
-- **Building the display, the hardware or GIFs:** the DMDoS community's
-  [Telegram group](https://t.me/DMD0S) is where people help each other.
-  The [Assembly section of dmdos.net](https://dmdos.net/) shows each step
-  of the build with a photo.
-- **OpenDMD itself:** open an issue on
-  [GitHub](https://github.com/opendmd/opendmd/issues). OpenDMD is an
-  independent project, so please don't ask the DMDoS team to fix it.
+The [Assembly section of dmdos.net](https://dmdos.net/) shows each step of
+the build with a photo.

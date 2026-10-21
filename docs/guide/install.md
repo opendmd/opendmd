@@ -98,5 +98,3 @@ either.
 - [The web app](web-app.md): what each part of it does.
 - [Updating](updating.md): getting newer versions later.
 - [Troubleshooting](troubleshooting.md): if something doesn't work.
-- Stuck? Ask the DMDoS community in its
-  [Telegram group](https://t.me/DMD0S).
