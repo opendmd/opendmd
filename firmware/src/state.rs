@@ -461,6 +461,15 @@ pub enum Command {
     /// local `"HH:MM"` it lasts until is in `Status::wake_until` by the time
     /// the reply is sent.
     Wake { minutes: u32, reply: Reply },
+    /// `POST /api/panel/test`: start (or restart) the panel-timing test of
+    /// this setting, or end it (`None`), putting back what ran before
+    /// (`opendmd_core::panel_test`). Refused during a panel trial
+    /// ([`opendmd_core::panel_test::TRIAL_RUNNING`]) or with the panel off
+    /// for the night ([`opendmd_core::panel_test::PANEL_OFF`]).
+    PanelTest {
+        setting: Option<opendmd_core::panel_test::Setting>,
+        reply: Reply,
+    },
     /// Follow RePlayOS: what the network worker's poller decided (attract,
     /// a game started, its context index is ready, back to normal). No
     /// reply; see `follow::Runner`.

@@ -99,6 +99,21 @@ reachable throughout. The FM and ICN init sequences write registers in the
 panel's chips that a restart does not clear (it resets the ESP32, not the
 panel): after trying one, power the display off and on.
 
+**The test** (`POST /api/panel/test`, `opendmd_core::panel_test`, the web
+app's Test panel timing). The main task draws four full-screen 1 px
+patterns that exposed a real panel's bad clock edge (magenta/green and
+(83,72,108)/(172,183,147) checkerboards, white/black columns, a
+`v`/`255 - v` grey checkerboard with `v = row × 8`), each under A then B
+for 2 s, a 5 × 7 "A"/"B" label in the bottom-right corner, and applies A's
+or B's live values through the same `set_live_timing` a trial uses. The
+engine is not ticked (the file on screen is let go and the next one opens
+afterwards; nothing reaches Recently played), and the look and glow are
+off. It is refused during a trial or night mode's dark panel; it ends on
+`{"stop":true}`, on any `PUT /api/config` (before it applies) and after
+120 s, putting back the timing that ran before (the saved values), the
+look, and a black canvas. It never writes NVS: the web app saves the pick
+with `"panel_confirm":true`, no trial, since both values were just seen.
+
 To recover from saved settings that leave the panel unusable:
 
 ```sh
