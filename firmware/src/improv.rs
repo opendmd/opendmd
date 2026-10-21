@@ -96,6 +96,9 @@ pub enum Job {
         ssid: String,
         password: String,
         at: Instant,
+        /// Its provisioning stamp: the answer goes out only if this is
+        /// still the RPC being tried ([`provisioned`]).
+        stamp: u32,
     },
 }
 
@@ -256,6 +259,7 @@ pub fn poll() {
         set_reg(INT_CLR, raw & (ERR_BITS | OVF_BIT));
     }
     let mut n = rx_len();
+    let rx_count = n;
     if !rx.primed {
         rx.primed = true;
         for _ in 0..n {
@@ -263,23 +267,8 @@ pub fn poll() {
         }
         return;
     }
-    if CONSOLE_BAUD != IMPROV_BAUD {
-        match rx.baud.poll(n, err) {
-            BaudStep::Stay => {}
-            BaudStep::ToImprov => {
-                for _ in 0..n {
-                    rx_byte();
-                }
-                rx.parser.reset();
-                set_baud(IMPROV_BAUD, EV_TRIAL);
-                return;
-            }
-            BaudStep::Revert => {
-                rx.parser.reset();
-                set_baud(CONSOLE_BAUD, EV_REVERTED);
-            }
-        }
-    }
+    // This poll's bytes first, so a frame in the trial's last poll still
+    // confirms it (at the wrong rate they are junk the parser skips).
     while n > 0 {
         n -= 1;
         if let Some(ev) = rx.parser.push(rx_byte()) {
@@ -287,6 +276,19 @@ pub fn poll() {
                 note(EV_CONFIRMED);
             }
             handle(ev);
+        }
+    }
+    if CONSOLE_BAUD != IMPROV_BAUD {
+        match rx.baud.poll(rx_count, err) {
+            BaudStep::Stay => {}
+            BaudStep::ToImprov => {
+                rx.parser.reset();
+                set_baud(IMPROV_BAUD, EV_TRIAL);
+            }
+            BaudStep::Revert => {
+                rx.parser.reset();
+                set_baud(CONSOLE_BAUD, EV_REVERTED);
+            }
         }
     }
 }
@@ -399,9 +401,10 @@ fn handle(ev: Event<'_>) {
                 }
             }
             Ok(Rpc::WifiSettings { ssid, password }) => {
+                let stamp = now_ms();
                 if provisioning()
                     || PROVISIONING
-                        .compare_exchange(0, now_ms(), Ordering::AcqRel, Ordering::Acquire)
+                        .compare_exchange(0, stamp, Ordering::AcqRel, Ordering::Acquire)
                         .is_err()
                 {
                     // One at a time (the host serialises its RPCs anyway).
@@ -414,9 +417,10 @@ fn handle(ev: Event<'_>) {
                     ssid: ssid.to_string(),
                     password: password.to_string(),
                     at: Instant::now(),
+                    stamp,
                 };
                 if !queue(job) {
-                    provision_failed(Error::UnableToConnect);
+                    provision_failed(stamp, Error::UnableToConnect);
                 }
             }
             Ok(Rpc::Other(_)) => send_error(Error::UnknownRpc),
@@ -505,17 +509,28 @@ pub fn send_scan(aps: &[ScannedAp]) {
     });
 }
 
+/// Ends the provisioning `stamp` started: `false` if it is no longer the
+/// one being tried (failed as stuck, and maybe another begun), whose
+/// answer must not go out.
+fn finish(stamp: u32) -> bool {
+    PROVISIONING
+        .compare_exchange(stamp, 0, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
 /// The WiFi details worked and are saved (network worker): Provisioned,
 /// then the URL for "Visit device".
-pub fn provisioned(ip: [u8; 4]) {
-    PROVISIONING.store(0, Ordering::Release);
-    send_state(State::Provisioned);
-    send_url(imp::CMD_WIFI_SETTINGS, ip);
+pub fn provisioned(stamp: u32, ip: [u8; 4]) {
+    if finish(stamp) {
+        send_state(State::Provisioned);
+        send_url(imp::CMD_WIFI_SETTINGS, ip);
+    }
 }
 
 /// They did not (network worker): the error, then back to Ready.
-pub fn provision_failed(error: Error) {
-    PROVISIONING.store(0, Ordering::Release);
-    send_error(error);
-    send_state(State::Ready);
+pub fn provision_failed(stamp: u32, error: Error) {
+    if finish(stamp) {
+        send_error(error);
+        send_state(State::Ready);
+    }
 }

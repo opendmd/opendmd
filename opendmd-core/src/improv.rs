@@ -440,7 +440,9 @@ impl BaudSwitch {
         }
     }
 
-    /// One poll, as [`BaudSniffer::poll`] takes it.
+    /// One poll, as [`BaudSniffer::poll`] takes it. Report the frames in
+    /// this poll's bytes ([`Self::frame`]) first: a frame in the trial's
+    /// last poll then confirms it rather than arriving after the revert.
     pub fn poll(&mut self, bytes: usize, error: bool) -> BaudStep {
         match self.trial {
             Self::CONFIRMED => BaudStep::Stay,
@@ -879,13 +881,23 @@ mod tests {
             assert_eq!(b.poll(5, true), BaudStep::Stay);
         }
         assert!(b.slow());
-        // A frame on the very last poll of a trial still counts.
+        // A frame in the bytes of the trial's very last poll still counts:
+        // the firmware parses a poll's bytes (frame) before poll().
+        let mut b = BaudSwitch::new();
+        trip(&mut b);
+        for _ in 1..BaudSwitch::TRIAL_POLLS {
+            assert_eq!(b.poll(0, false), BaudStep::Stay);
+        }
+        assert!(b.frame());
+        assert_eq!(b.poll(12, false), BaudStep::Stay);
+        assert!(b.slow());
+        // The same poll without a frame is the revert.
         let mut b = BaudSwitch::new();
         trip(&mut b);
         for _ in 1..BaudSwitch::TRIAL_POLLS {
             b.poll(0, false);
         }
-        assert!(b.frame());
-        assert_eq!(b.poll(0, false), BaudStep::Stay);
+        assert_eq!(b.poll(12, false), BaudStep::Revert);
+        assert!(!b.frame(), "too late: back at the console's rate");
     }
 }

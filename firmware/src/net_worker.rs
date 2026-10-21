@@ -333,11 +333,15 @@ fn run(worker: NetWorker) {
                 ssid: new_ssid,
                 password: new_password,
                 at,
+                stamp,
             })) => {
                 info!("[net] improv: WiFi details for '{new_ssid}' received over USB");
                 if at.elapsed() >= config::IMPROV_STALE {
                     warn!("[net] improv: WiFi details for '{new_ssid}' waited too long; not tried");
-                    crate::improv::provision_failed(opendmd_core::improv::Error::UnableToConnect);
+                    crate::improv::provision_failed(
+                        stamp,
+                        opendmd_core::improv::Error::UnableToConnect,
+                    );
                 } else {
                     let was_ap = wifi.state() == WifiState::ApMode;
                     let deadline = at + config::IMPROV_ANSWER_WITHIN;
@@ -375,14 +379,16 @@ fn run(worker: NetWorker) {
                         let ip = ip.unwrap_or_default();
                         info!("[net] improv: on '{ssid}' at http://{ip}/ and http://{hostname}.local/");
                         match (saved, crate::improv::parse_ipv4(&ip)) {
-                            (true, Some(octets)) => crate::improv::provisioned(octets),
+                            (true, Some(octets)) => crate::improv::provisioned(stamp, octets),
                             _ => crate::improv::provision_failed(
+                                stamp,
                                 opendmd_core::improv::Error::Unknown,
                             ),
                         }
                     } else {
                         warn!("[net] improv: could not join '{new_ssid}'");
                         crate::improv::provision_failed(
+                            stamp,
                             opendmd_core::improv::Error::UnableToConnect,
                         );
                         if was_ap {
@@ -435,7 +441,12 @@ fn run(worker: NetWorker) {
         let lost = wifi.state() == WifiState::Connected && !wifi.is_associated();
         let never = wifi.state() == WifiState::Disconnected && !ssid.is_empty();
         // Not while installer work is queued: that comes first.
-        if (lost || never) && !crate::improv::pending() {
+        // Nor while the installer's WiFi form is open (it rescans every
+        // 3 s; a connect would hold the radio between its scans).
+        let form_open = last_scan
+            .as_ref()
+            .is_some_and(|(t, _)| t.elapsed() < config::IMPROV_SCAN_FRESH);
+        if (lost || never) && !crate::improv::pending() && !form_open {
             warn!("[net] WiFi dropped; reconnecting");
             publish(&status, WifiState::Disconnected, None);
             match wifi.connect_sta(&ssid, &password, None) {

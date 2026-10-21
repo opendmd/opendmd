@@ -250,6 +250,8 @@ impl WifiManager {
             if deadline.is_none() && crate::improv::pending() {
                 return Waited::GaveWay;
             }
+            // The worker's loop is not running meanwhile.
+            crate::improv::log_events();
             let now = Instant::now();
             if now >= end {
                 return Waited::TimedOut;
@@ -336,6 +338,12 @@ impl WifiManager {
             self.state = WifiState::Disconnected;
             return Ok(false);
         }
+        // Still on a network (Change Wi-Fi over USB while connected): leave
+        // it first, or the wait below sees the old association at once and
+        // takes it for the new one.
+        if self.wifi.is_connected().unwrap_or(false) {
+            let _ = self.wifi.disconnect();
+        }
         let fallback_auth = if password.is_empty() {
             AuthMethod::None
         } else {
@@ -355,7 +363,16 @@ impl WifiManager {
         }
 
         info!("scanning for '{ssid}'");
-        let scan = self.wifi.wifi_mut().scan().unwrap_or_default();
+        // A scan right after an association was abandoned can fail while
+        // the driver settles: once more, half a second later.
+        let scan = match self.wifi.wifi_mut().scan() {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("scan failed ({e}); retrying");
+                thread::sleep(Duration::from_millis(500));
+                self.wifi.wifi_mut().scan().unwrap_or_default()
+            }
+        };
         let found = scan
             .iter()
             .filter(|ap| ap.channel <= 14 && ap.ssid.as_str() == ssid)
