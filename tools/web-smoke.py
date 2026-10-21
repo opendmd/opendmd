@@ -1239,7 +1239,7 @@ def panel_checks(page: Page, base: str) -> None:
     goto_view(page, "settings")
     page.wait_for_selector("#st-panel:not([hidden]) #pt-driver", timeout=20000)
     text = page.inner_text("#st-panel")
-    check("Panel timing" in text and "If some LEDs show wrong colours on certain pictures, try these one at a time" in text,
+    check("Panel timing" in text and "If some LEDs show wrong colours on certain pictures, press Test panel timing, or try these one at a time" in text,
           "panel: the section and its explanation are under Advanced")
     vals = {k: page.input_value(f"#pt-{k}") for k in PANEL_DEFAULTS}
     check(vals == {k: json.dumps(v) for k, v in PANEL_DEFAULTS.items()}, f"panel: the selects show the defaults ({vals})")
@@ -1316,6 +1316,91 @@ def panel_checks(page: Page, base: str) -> None:
           f"panel: Reset to defaults saves and applies the defaults ({panel_of(c)})")
     page.wait_for_function("document.querySelector('#pt-clk_phase').value === 'true'", timeout=5000)
     page.locator("#st-panel").screenshot(path=str(OUT / "settings-panel-laptop.png"))
+    panel_test_checks(page, base)
+
+
+def panel_test_checks(page: Page, base: str) -> None:
+    """Test panel timing (js/paneltest.js, POST /api/panel/test): the API's
+    400s and the 409 during a trial, then the guided flow — B picked and
+    saved, both stages with dots, "the same", Stop. Mock only; starts and
+    ends on the defaults."""
+    def post_status(obj) -> int:
+        try:
+            post_json(base + "/api/panel/test", obj)
+            return 200
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    for bad in ({}, {"setting": "driver"}, {"setting": "clk_phase", "stop": True}, {"stop": False}, {"clkphase": 1}):
+        check(post_status(bad) == 400, f"panel test: {json.dumps(bad)} refused (400)")
+    r = post_json(base + "/api/panel/test", {"setting": "clk_phase"})
+    check(r.get("a", {}).get("clk_phase") is True and r.get("b", {}).get("clk_phase") is False and r.get("left_s") == 120,
+          f"panel test: clk_phase is A rising, B falling, 120 s ({r})")
+    r = post_json(base + "/api/panel/test", {"setting": "latch_blanking"})
+    check((r["a"]["latch_blanking"], r["b"]["latch_blanking"]) == (1, 3), f"panel test: latch blanking 1 against 3 ({r})")
+    check(post_json(base + "/api/panel/test", {"stop": True}) == {"ok": True}, "panel test: stop")
+    put_json(base + "/api/config", {"panel": {"latch_blanking": 2}})
+    check(post_status({"setting": "clk_phase"}) == 409, "panel test: refused during a trial (409)")
+    put_json(base + "/api/config", {"panel_confirm": False})
+    put_json(base + "/api/config", {"panel": {"driver": "fm6126a"}})
+    check(post_status({"setting": "latch_blanking"}) == 409, "panel test: refused with a change waiting for a restart (409)")
+    put_json(base + "/api/config", {"panel_confirm": False})
+    check(get_json(base + "/api/config")["panel"] == PANEL_DEFAULTS, "panel test: the API calls saved nothing")
+
+    def start(question: str) -> None:
+        page.click("#pt-test")
+        page.wait_for_function("(q) => document.querySelector('#pt-box:not([hidden])')?.innerText.includes(q)",
+                               arg=question, timeout=5000)
+
+    def answer(button: str, said: str) -> None:
+        page.locator("#pt-box button", has_text=button).click()
+        page.wait_for_function("(q) => document.querySelector('#pt-box').innerText.includes(q)", arg=said, timeout=5000)
+
+    check(page.is_visible("#pt-test") and not page.is_visible("#pt-box"), "panel test: the button, no box yet")
+    start("Watch the panel. Does A or B look cleaner?")
+    page.locator("#st-panel").screenshot(path=str(OUT / "settings-panel-test-laptop.png"))
+    answer("B looks clean", "Saved: Clock edge Falling.")
+    c = wait_config(base, lambda c: c["panel"]["clk_phase"] is False)
+    check(c["panel"]["clk_phase"] is False and c["panel_trial_s"] is None and c["panel_now"]["clk_phase"] is False,
+          f"panel test: B is saved at once, no trial ({c['panel']})")
+    page.wait_for_function("document.querySelector('#pt-clk_phase').value === 'false'", timeout=5000)
+    start("Does A or B look cleaner?")
+    answer("Both have dots", "One more setting.")
+    answer("Both have dots", "Try Driver chip below")
+    start("Does A or B look cleaner?")
+    answer("Both look the same / fine", "Nothing changed.")
+    start("Does A or B look cleaner?")
+    page.locator("#pt-box button", has_text="Stop").click()
+    page.wait_for_selector("#pt-box", state="hidden", timeout=5000)
+    c = get_json(base + "/api/config")
+    check(c["panel"] == dict(PANEL_DEFAULTS, clk_phase=False) and c["panel_trial_s"] is None,
+          f"panel test: only the pick was saved ({c['panel']})")
+    # A trial started elsewhere closes the box.
+    start("Does A or B look cleaner?")
+    page.select_option("#pt-latch_blanking", "2")
+    page.wait_for_selector("#pt-box", state="hidden", timeout=8000)
+    check(not page.is_visible("#pt-box"), "panel test: a trial closes the box")
+    put_json(base + "/api/config", {"panel_confirm": False})
+    # A chip that forces the rising edge: no clock-edge test; the page
+    # starts at latch blanking.
+    put_json(base + "/api/config", {"panel": {"driver": "mbi5124"}, "panel_confirm": True})
+    expected.append("/api/")  # down through the restart that applies it
+    post_json(base + "/api/reboot", {})
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        try:
+            if get_json(base + "/api/config")["panel_now"]["driver"] == "mbi5124":
+                break
+        except urllib.error.HTTPError:
+            pass
+        time.sleep(0.3)
+    expected.remove("/api/")
+    check(post_status({"setting": "clk_phase"}) == 409, "panel test: clk_phase refused on MBI5124 (409)")
+    page.evaluate("async () => { const { app } = await import('/js/state.js'); await app.refreshConfig(); }")
+    start("Watch the panel. Does A or B look cleaner?")
+    check("One more setting" not in page.inner_text("#pt-box"), "panel test: MBI5124 starts at latch blanking, as the first question")
+    answer("B looks clean", "Saved: Latch blanking 3.")
+    put_json(base + "/api/config", {"panel": None})
 
 
 def open_live(page: Page) -> None:
