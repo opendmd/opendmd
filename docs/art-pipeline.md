@@ -16,7 +16,7 @@ as it was written. The prototypes are in `opendmd-web/experiments/art/`
 (`README.md` there says how to run each one). All sample inputs are CC0 or
 public domain, so the committed PNGs hold no third-party game art.
 
-**The brief.** The owner wants panel art for the consoles and games he owns
+**The brief.** The owner wants panel art for the consoles and games they own
 (Mega Drive, SNES, Game Boy, Saturn, 3DS). The pack is thin on GB (14 files),
 Saturn (34) and has nothing for 3DS. The art is for personal use at home. The
 runtime is the web app: pull art from the web, process it in the browser,
@@ -252,7 +252,7 @@ party with no SLA. It is acceptable as an opt-in setting, not as a default.
 
 ## 2. Emulators in the browser
 
-The emulator agent's prototype is in `experiments/art/emulator/`
+The emulator prototype is in `experiments/art/emulator/`
 (`ejs.html`, `binjgb.html`, `grab.py`, `README.txt`, and `out/` with PNGs
 and `*_report.json` per run). All measurements were taken in headless
 Chromium with SwiftShader (software WebGL), so a real GPU is at least as
@@ -358,7 +358,7 @@ Checked from the licence texts in the repos and each core bundle's
 
 Every EmulatorJS core is RetroArch plus the core in one wasm file, so each
 bundle is GPLv3 combined with the core's own terms. For Genesis Plus GX and
-snes9x those terms conflict (the agent's reading, not legal advice).
+snes9x those terms conflict (a reading of the licences, not legal advice).
 
 - **(a) Shipping cores in this MIT/Apache repo or on the card image:** no.
   It brings GPL source obligations and non-commercial terms into the
@@ -648,7 +648,7 @@ no web-sys, tested natively like `player.rs`. The alternative doesn't fit:
 
 ## 5. Rights and etiquette
 
-The owner's stated scope is personal use in his home, for games he owns.
+The owner's stated scope is personal use at home, for games they own.
 Per source:
 
 | source | key | terms that matter here |
@@ -730,7 +730,7 @@ OpenDMD page's console:
 fetch('https://www.pixilart.com/api/w/gallery/10/33478920/popular').then(r => r.status).catch(e => e.message)
 ```
 
-Result: the owner got **200** from the app's origin — but only because his
+Result: the owner got **200** from the app's origin — but only because their
 browser had already passed the challenge on pixilart.com. A first-time user
 would have to visit pixilart in the same browser first, and the clearance
 expires. **Decision (owner, 2026-09-23): filed as potential, not included** —
