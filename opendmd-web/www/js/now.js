@@ -188,11 +188,12 @@ function mountDevice(el) {
     // A virtual file (`@…`: Follow RePlayOS's cards) shows its title only.
     const virt = np.path?.startsWith('@');
     const e = app.wasm.parsePath(virt ? '' : np.path || '');
-    // An empty playlist says why (an unreadable card has its own line).
-    const empty = !np.path && !s.entries && s.index_state != 'building' && s.sd.readable !== false;
-    const pf = empty && s.sd.mounted && app.config?.platforms?.trim();
+    // Why the playlist is empty; "No card" once a mount has failed.
+    const sd = s.sd, unreadable = sd.mounted && sd.readable === false;
+    const empty = !np.path && !s.entries && s.index_state != 'building' && !unreadable && (sd.mounted || sd.attempts || sd.error);
+    const pf = empty && sd.mounted && app.config?.platforms?.trim();
     unfilter.hidden = !pf;
-    title.textContent = virt ? np.title : np.path ? label(e) : !empty ? 'Nothing playing' : !s.sd.mounted ? 'No card'
+    title.textContent = virt ? np.title : np.path ? label(e) : !empty ? 'Nothing playing' : !sd.mounted ? 'No card'
       : pf ? `No GIFs match the platform filter (${pf})` : 'The playlist is empty';
     tagsEl.textContent = np.path && !virt ? tags(e) : '';
     meta.textContent = virt ? '' : np.path;

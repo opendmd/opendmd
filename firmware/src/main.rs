@@ -639,9 +639,13 @@ fn main() -> Result<()> {
                     // A platform filter that would leave the playlist empty
                     // is refused before anything is saved. The build is the
                     // only count there is, so the new playlist is built
-                    // first; if it matches nothing the previous one is built
-                    // again (its `.idx` was just replaced: another ~6 s on
-                    // the stock card) and the reply names the filter.
+                    // first. If that build fails in any way the settings are
+                    // not verified and nothing is saved: the previous
+                    // playlist is built again (its `.idx` was just replaced:
+                    // another ~6 s on the stock card), or, when the build
+                    // needs a fresh heap (`NeedsFreshHeap` set
+                    // REBOOT_PENDING), the restart after this reply comes
+                    // back on the old settings, which are still in NVS.
                     let mut prebuilt = None;
                     if needs_reindex
                         && CARD_READY.load(Ordering::Relaxed)
@@ -650,26 +654,26 @@ fn main() -> Result<()> {
                     {
                         let tried =
                             replay(&mut engine, &next, &sched, &mut runner, false, &status, &mut canvas);
-                        if tried.as_ref().is_err_and(|e| e.ends_with(NO_ENTRIES)) {
-                            let back = replay(
-                                &mut engine,
-                                &settings,
-                                &sched,
-                                &mut runner,
-                                false,
-                                &status,
-                                &mut canvas,
-                            );
+                        if let Err(e) = &tried {
+                            let restart = REBOOT_PENDING.load(Ordering::Relaxed);
+                            let back = if restart {
+                                Ok(Applied::unchanged(0))
+                            } else {
+                                replay(&mut engine, &settings, &sched, &mut runner, false, &status, &mut canvas)
+                            };
                             log::warn!(
-                                "config: platforms '{}' match nothing in {}; refused, nothing saved, previous playlist back: {back:?}",
+                                "config: platforms '{}' in {} not verified ({e}); refused, nothing saved, previous playlist back: {back:?}",
                                 next.platforms,
                                 eff_next.manifest_path()
                             );
-                            let _ = reply.send(Err(format!(
-                                "{} \"{}\"; nothing was saved",
-                                state::FILTER_EMPTY,
-                                next.platforms.trim()
-                            )));
+                            let msg = if e.ends_with(NO_ENTRIES) {
+                                format!("{} \"{}\"; nothing was saved", state::FILTER_EMPTY, next.platforms.trim())
+                            } else if restart {
+                                "the new playlist needs a restart to be built; restarting on the previous settings, nothing was saved".to_string()
+                            } else {
+                                format!("the new playlist could not be built ({e}); nothing was saved")
+                            };
+                            let _ = reply.send(Err(msg));
                             continue;
                         }
                         prebuilt = Some(tried);

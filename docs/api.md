@@ -230,9 +230,14 @@ Errors (nothing saved): `400` a value out of range or not one of the names
 (the message says which), e.g. `brightness N is above the maximum M; raise
 Maximum brightness first` (lowering `max_brightness` below the saved
 `brightness` lowers it too); `404 {"error":"set not found"}` the playlist
-does not open; `409` a confirm with no trial; `413` over 8 KB. A
-`platforms` (or `set`) under which the playlist would be empty is a `400`
-naming the filter.
+does not open; `409` a confirm with no trial; `413` over 8 KB. With a
+card in, a new `platforms` (or a `set` change with a filter kept) is checked
+against the playlist that would be in force (a schedule rule's `set` if one
+applies) before anything is saved: one that would leave it empty is a `400`
+naming the filter; one whose playlist cannot be built at all is refused too
+(`500`, nothing saved). Follow RePlayOS's game and attract playlists are not
+checked up front; if a filter leaves nothing to play, Now says so and offers
+Clear filter.
 
 ```sh
 curl -s -X PUT $DMD/api/config --json '{"brightness":64,"transition":"wipe_left","transition_ms":300}'
