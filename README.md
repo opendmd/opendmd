@@ -8,6 +8,8 @@
 
 ![A tunnel effect, drawn the way the LED panel shows it](docs/images/hero.webp)
 
+**[Try the demo in your browser](https://opendmd.github.io/demo/)** · [Documentation](https://opendmd.github.io/)
+
 OpenDMD is an open-source replacement for **DMDoS**, the closed ESP32 firmware that plays GIFs
 from a microSD card on two chained 64x32 HUB75 panels: a "DMD", like the dot-matrix display in a
 pinball machine. It plays an existing DMDoS card as it is, and adds a web app to manage it.
@@ -70,6 +72,8 @@ The demo card in these screenshots holds the panel's own effects and the
 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
 
 ## Documentation
+
+The documentation is also at **[opendmd.github.io](https://opendmd.github.io/)**.
 
 - [The web app](docs/web-app.md): its views, Create Art, and the mock device
 - [HTTP API](docs/api.md): every route, with `curl` examples

@@ -252,13 +252,14 @@ function mountLocal(el) {
     if (!list.length || tries > list.length) return;
     i = (i + 1) % list.length;
     const path = list[i];
-    if (!src.files.has(path)) return next(tries + 1);
+    if (path[0] !== '@' && !src.files.has(path)) return next(tries + 1);
     const e = app.wasm.parsePath(path);
     title.textContent = label(e);
     line.textContent = `· ${i + 1} of ${list.length}`;
     await preview.show(path, (p) => app.previewBytes(p));
   }
 
+  if (app.demo) { listSel.value = '/filelist.txt'; play(); }
   return { show() {}, hide() {} };
 }
 

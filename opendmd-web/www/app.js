@@ -7,7 +7,7 @@
 
 import init from './pkg/opendmd_web.js';
 import { app } from './js/state.js';
-import { detect, LocalSource } from './js/source.js';
+import { detect, demoCard, LocalSource } from './js/source.js';
 import { $, h, clear, emit, toast } from './js/util.js';
 
 await init();
@@ -67,6 +67,21 @@ if (found) {
   $('#where').textContent = s.hostname || 'OpenDMD player';
   app.refreshConfig().catch((e) => toast('config: ' + e.message, 'bad'));
   route();
+} else if ((app.demo = await demoCard(app.wasm.cardPath))) {
+  // The web demo: its own card, in memory; a card folder of yours can replace it.
+  $('#where').textContent = 'Demo · runs in your browser, nothing is uploaded';
+  const own = h('label.btn.sm.demo-own', 'Use your own card…', h('input', { type: 'file', webkitdirectory: true, hidden: true, onchange: (e) => {
+    const files = e.target.files;
+    if (!files.length) return;
+    const src = new LocalSource(files, app.wasm.cardPath);
+    app.demo = null;
+    own.remove();
+    $('#where').textContent = `${src.label || 'Picked files'} · ${src.count} files`;
+    setSource(src);
+  } }));
+  $('#top').append(own);
+  $('#top strong').replaceChildren(h('a', { href: '../', style: 'color:inherit;text-decoration:none' }, 'OpenDMD'));
+  setSource(app.demo);
 } else {
   $('#where').textContent = 'Local mode';
   for (const v of VIEWS) $('#view-' + v).append(h('div', localPicker()));

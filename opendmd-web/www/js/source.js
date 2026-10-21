@@ -120,7 +120,9 @@ function localPath(f, cardPath) {
 export class LocalSource {
   kind = 'local';
 
-  constructor(fileList, cardPath) {
+  // `memory`: writes and deletes stay in this page (the web demo's card).
+  constructor(fileList, cardPath, { memory = false } = {}) {
+    this.memory = memory;
     this.files = new Map();
     this.dirs = new Map([['/', new Map()]]);
     this.label = '';
@@ -168,6 +170,10 @@ export class LocalSource {
   // Chromium) — the card root — or, failing that, become downloads.
   async writeFile(path, data) {
     const blob = data instanceof Blob ? data : new Blob([data]);
+    if (this.memory) {
+      this.#add(path, new File([blob], base(path)));
+      return { ok: true, path, bytes: blob.size };
+    }
     if (!this.handle && window.showDirectoryPicker) {
       try { this.handle = await window.showDirectoryPicker({ mode: 'readwrite' }); } catch { /* declined */ }
     }
@@ -189,16 +195,42 @@ export class LocalSource {
     return { ok: true, path, bytes: blob.size };
   }
   async deleteFile(path) {
-    if (!this.handle) throw new HttpError(405, 'the picked folder is read-only here');
+    if (!this.handle && !this.memory) throw new HttpError(405, 'the picked folder is read-only here');
     const seg = path.split('/').filter(Boolean);
-    let d = this.handle;
-    for (const s of seg.slice(0, -1)) d = await d.getDirectoryHandle(s);
-    await d.removeEntry(seg.at(-1));
+    if (this.handle) {
+      let d = this.handle;
+      for (const s of seg.slice(0, -1)) d = await d.getDirectoryHandle(s);
+      await d.removeEntry(seg.at(-1));
+    }
     this.files.delete(path);
     this.dirs.get('/' + seg.slice(0, -1).join('/'))?.delete(seg.at(-1));
     return { ok: true };
   }
   saveSet(name, text) { return this.writeFile(`/sets/${name.replace(/\.txt$/, '')}.txt`, text); }
+}
+
+// The web demo's card: `demo/index.json` lists its files, fetched as they
+// are read. Null when the page has no demo card beside it.
+export async function demoCard(cardPath) {
+  let index;
+  try {
+    const r = await fetch('demo/index.json');
+    if (!r.ok) return null;
+    index = await r.json();
+  } catch { return null; }
+  const get = async (path) => {
+    const r = await fetch('demo' + enc(path));
+    if (!r.ok) throw new HttpError(r.status, `${path}: ${r.status}`);
+    return r;
+  };
+  const files = index.map(({ path, size }) => ({
+    name: base(path), size, webkitRelativePath: 'demo' + path,
+    text: async () => (await get(path)).text(),
+    arrayBuffer: async () => (await get(path)).arrayBuffer(),
+  }));
+  const src = new LocalSource(files, cardPath, { memory: true });
+  src.label = 'Demo card';
+  return src;
 }
 
 // Device mode is whatever answers `GET /api/status` like the firmware.

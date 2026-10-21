@@ -72,7 +72,8 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke card-sync api-load
+	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke card-sync api-load \
+	site site-serve site-publish
 
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
@@ -188,6 +189,21 @@ web-mock: web
 # a read-mostly pass against a real device): DMD_CARD_ROOT=... make web-smoke
 web-smoke: web
 	uv run tools/web-smoke.py $(if $(DEVICE),--device $(DEVICE))
+
+# The public site (opendmd.github.io): the README, the docs, and the web app
+# with a demo card of the panel's own effects and CC0 sprites (tools/site.py,
+# tools/demo-card.py). site-serve to look at it; site-publish pushes it.
+SITE ?= target/site
+SITE_REPO ?= git@github.com:opendmd/opendmd.github.io.git
+site: web sim-build
+	uv run tools/demo-card.py target/demo-card
+	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card
+
+site-serve: site
+	uv run python -m http.server 8081 -d $(SITE)
+
+site-publish: site
+	tools/site-publish.sh $(SITE) $(SITE_REPO)
 
 fmt:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo fmt
