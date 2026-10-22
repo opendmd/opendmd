@@ -264,6 +264,11 @@ jobs:
           fi
           gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber *
 
+      # The push to the public repo's main (a deploy key's push, so it
+      # triggers workflows there) runs its Pages workflow, which deploys the
+      # site with the gallery regenerated from main's gallery/ (the same
+      # tools/gallery_page.py as make site, vendored; see
+      # site/public-repo/.github/gallery-check/README.md "The deploy").
       - name: Publish the site
         if: steps.plan.outputs.kind != 'dry'
         env:
