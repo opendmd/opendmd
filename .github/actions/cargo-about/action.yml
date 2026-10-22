@@ -3,8 +3,7 @@ description: >
   The pinned cargo-about release binary (Linux x86-64), checked against its
   SHA-256, into ~/.cargo/bin: what `make notices-check` and `make
   fw-release` (tools/notices.py) need. The version must equal the
-  Makefile's CARGO_ABOUT_VERSION and release.yml's (its sim matrix pins
-  the other platforms' binaries).
+  Makefile's CARGO_ABOUT_VERSION.
 
 inputs:
   version:

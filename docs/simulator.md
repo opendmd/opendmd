@@ -1,131 +1,63 @@
 # The simulator
 
-`opendmd-sim` plays a card in a desktop window through the same
-`opendmd-core` engine the firmware runs. It opens a `128 * scale` by
-`32 * scale` window: 1280x320 at the default scale of 10.
+`opendmd-sim` plays a card, or any folder of GIFs, in a desktop window drawn
+as the panel's LEDs: the same `opendmd-core` engine the firmware runs, with
+a renderer that models the real P4 panel's dots and glow instead of flat
+squares. It is a tool for developers (checking an effect, a transition or a
+card without a board on the desk).
 
-## Download
+**Most people want the web demo instead.** It runs in any browser, with
+nothing to install, and plays a demo card on the same engine:
+[opendmd.github.io/demo](https://opendmd.github.io/demo/).
 
-<!-- site:sim-downloads -->
-Ready-made builds for macOS, Windows and Linux come with each release, on
-the [OpenDMD site's simulator page](https://opendmd.github.io/dev/simulator.html#download).
-<!-- site:sim-downloads-end -->
+![The simulator playing a fire tunnel effect](images/sim-tunnel.png)
 
-Each archive holds the program, a short README, the licences and the
-third-party notices for the open-source crates it is built from. Unpack it
-and double-click `opendmd-sim`: a folder picker opens. Choose a card (a
-folder with `filelist.txt` in it) or any folder of GIFs; cancel it for the
-built-in demo of the panel's effects and live items. On Windows you can
-also drop a folder, or a GIF, onto `opendmd-sim.exe`. From a terminal,
-`opendmd-sim <folder or GIF>` does the same, and `opendmd-sim --help` lists
-the options below.
+## Run it from source
 
-The builds aren't signed with a paid developer certificate, so the first
-start needs one extra step:
-
-- **macOS:** Control-click (or right-click) `opendmd-sim`, choose **Open**,
-  then **Open** again. Where macOS offers no Open button (macOS 15 and
-  later), try to open it once, then click **Open Anyway** in System
-  Settings > Privacy & Security. Or, in Terminal: `xattr -d
-  com.apple.quarantine opendmd-sim`. It runs in a Terminal window, which
-  shows what is playing.
-- **Windows:** if SmartScreen says it protected your PC, click **More
-  info**, then **Run anyway**. The console window beside the simulator
-  shows what is playing.
-- **Linux:** it needs glibc 2.34 or newer (Ubuntu 22.04, Debian 12,
-  Fedora 35 and later) and an X11 or Wayland desktop: `libX11` and
-  `libXcursor`, or `libwayland-client` and `libxkbcommon`, which every
-  desktop already has. The folder picker is the desktop's own, through
-  `xdg-desktop-portal`, or `zenity`; with neither, the demo plays, and a
-  folder can be given on the command line.
-
-## Build it
+You need a stable [Rust toolchain](https://rustup.rs/) and a desktop to
+open the window on. From a checkout:
 
 ```bash
-make sim ARGS="--root /path/to/card --platforms MD,SNES"
-make sim-dist     # this platform's download archive, in target/sim-dist/
+make sim                                  # a folder picker opens
+make sim ARGS="/path/to/card"             # a card: a folder with filelist.txt
+make sim ARGS="/path/to/gifs"             # any folder of GIFs, in name order
+make sim ARGS="/path/to/one.gif"          # a single GIF
+make sim ARGS="--demo"                    # the built-in demo, no files needed
 ```
 
-`make sim` needs a display.
+(`cd opendmd-sim && cargo run --release -- <options>` does the same.) With
+no argument a folder picker opens, and the demo plays if you cancel it. A
+folder or GIF dropped onto the program counts as the argument.
+`opendmd-sim --help` lists every option: filters for a card (`--platforms`,
+`--title`, `--category`), `--shuffle`, `--scale` (pixels per LED, default
+10), `--transition`, `--look` (the panel's tints), `--glow`, and
+`--play '@clock?date=1'` for a single live item or effect.
 
-## What it draws
+| Key | |
+|---|---|
+| `Space` | next GIF |
+| `P` | pause / resume |
+| `L` | LED or flat squares |
+| `Esc` | quit |
 
-By default the simulator doesn't draw pixels, it draws **LEDs**, because a P4
-HUB75 panel looks nothing like a grid of flat squares. The model in
-`opendmd-render/src/lib.rs` is measured off a close-up photo of the real panel
-(`hardware/IMG_0495.jpeg`), in units of the 4 mm LED pitch:
+![The clock live item](images/sim-clock.png)
 
-- a lit emitter is an anti-aliased disc of ~0.42 pitch across (measured FWHM
-  0.40 horizontally, 0.44 vertically — the package makes it slightly tall);
-- a soft bloom around it falls to the mask level by ~0.75 pitch, so bright
-  neighbours' halos overlap, exactly as they do in the photo;
-- the mask between LEDs is near black (5/255), and an unlit LED is a
-  barely-there square at 10/255 over half a pitch;
-- the panel is driven linearly (BCM/PWM), so canvas bytes are decoded to
-  linear light, accumulated there, and re-encoded on the way out. That is why
-  mid greys look brighter here than a naive blit makes them.
+The demo and the web demo's card use only OpenDMD's own effects and
+[Kenney](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
 
-Everything that depends only on the scale — the per-LED kernel, the backdrop,
-the gamma tables — is built once, and the float accumulator is reused, so a
-frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.
+## Screenshots without a window
 
-## Options
-
-```
-<CARD>                    a card (a folder holding filelist.txt), any folder
-                          of GIFs (played in name order; a cache/ folder is
-                          skipped), or one GIF
---root <dir>              card root, holding gifs/ and filelist.txt
---demo                    the built-in demo: effects, the clock and
-                          scrolling text, no card needed
---manifest <path>         default <root>/filelist.txt
---platforms MD,SNES       comma-separated platform prefixes
---title <substr>          repeatable, matched against the normalized title
---exclude-flag INVERT     repeatable
---category / --exclude-category   repeatable, matched against gifs/<Category>
---shuffle --seed <u64>    reproducible weighted shuffle
---scale <u32>             pixels per LED, default 10
---min-dwell / --max-dwell seconds, default 3 and 30
---transition kind[:ms]    how files come in: dissolve (default, 400 ms),
-                          wipe_left, wipe_right, wipe_down, wipe_up, blinds,
-                          push, fade or none; ms 20..2000
---flat                    flat squares with a 1 px gutter, the old renderer
---gamma <f32>             canvas byte -> linear light, default 2.2
---led-gain <f32>          scales LED intensity, default 1.0 — match the panel
-                          brightness by eye
---bloom <f32>             halo strength around each lit LED, default 0.22
-                          (fitted by eye to the photo — the knob to tune)
---screenshot <out.png>    render the first frame of the first scheduled GIF
-                          and exit, without opening a window
---screenshot-canvas <out.png>   the same frame as the raw 128x32 canvas
-                          (after --look)
---look <name>             colour (default), amber, red, green, blue or white
---glow off|short|long     phosphor glow, default off
---play <path>             play just this: a card path or a live item,
-                          e.g. '@clock?date=1', '@text?msg=Hello',
-                          '@fx:tunnel?palette=chrono&cycle=1'
---screenshot-at <ms>      take the screenshot that far into the file (an
-                          effect mid-loop), default 0
-```
-
-With no card, `--root` or `--play`, a folder picker opens, and the demo
-plays if it is cancelled (or when there is no desktop to show it on). With
-`--screenshot` and no card, the demo is played without asking. Started
-from the desktop, with no options, the simulator also shows an error in a
-dialog, since the console it prints to may close with it.
-
-Below `--scale 6` there are too few window pixels per LED for a dot and a
-bloom, so the flat renderer is used automatically and says so in the log.
-
-Keys: `Space` next, `P` pause/resume, `L` toggle LED/flat (the title bar shows
-which), `Esc` quit. Each new GIF prints
-`[n/total] /gifs/Consoles/SNES_Plok_08.gif`; startup prints the filter summary.
-
-The two `--screenshot*` flags are the only way to look at the renderer on a
-headless box, where `minifb` cannot open a window:
+`--screenshot out.png` renders one frame and exits, so it works on a
+headless machine; `--screenshot-at <ms>` picks the moment, and
+`--screenshot-canvas out.png` writes the raw 128x32 canvas. This is how the
+pictures on this page were made:
 
 ```bash
-cd opendmd-sim && cargo run --release -- --root /path/to/card \
-    --platforms SNES,MD --seed 7 --screenshot /tmp/led.png \
-    --screenshot-canvas /tmp/canvas.png
+make sim ARGS="--demo --screenshot demo.png --screenshot-at 500"
+make sim ARGS="--play '@clock?style=big&date=1' --screenshot clock.png"
 ```
+
+![Kenney sprites, a scene from the demo card](images/sim-sprites.png)
+
+How the LEDs are drawn (their size, bloom and gamma) is modelled in
+`opendmd-render/src/lib.rs`, measured from a close-up photo of the real panel.
