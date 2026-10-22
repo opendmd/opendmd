@@ -22,7 +22,7 @@ make www-push HOST=opendmd.local           # write the pack into the player's fl
 
 **The API.** Every route the player serves, with its parameters, replies,
 limits and a `curl` example, is in [`docs/api.md`](api.md). The same
-reference is in the web app (Settings → Advanced → About → API reference,
+reference is in the web app (Settings → Device → About → API reference,
 `http://opendmd.local/api.html`), with the examples already pointing at
 that player.
 
@@ -39,26 +39,32 @@ names the format or shows a copy's path.
 
 ## The views
 
-**The views** — a left rail on a laptop, a bottom bar on a phone:
+**The views** — a left rail on a laptop, a bottom bar on a phone, in this
+order: Now, Library, Playlists, Create Art, Settings. A view's address is
+`#now`, `#library`, `#sets`, `#create` or `#settings`; Settings' tabs and the
+Playlists editor have their own (`#settings/play`, `#settings/look`,
+`#settings/time`, `#settings/device`; `#sets/edit`), so a link or the back
+button lands on them.
 
-- **Now** — what the panel is playing (title, platform and category parsed
-  from the path), polled every 2 s, with skip, pause, a brightness slider and
-  **Send to panel** (any card path, `POST /api/play`: it plays now and the
-  schedule carries on), and the device's health: uptime, address, free heap and its sampled floor,
-  refresh rate, deadline misses and worst lateness. A **panel-look preview**
-  of the same file plays alongside — fetched once when the file changes and
-  played in the browser, so it is *not frame-synced* with the panel. It
-  fetches the file's prepared copy first (cheap for the device; one 404 when
-  there is none) and can be switched off. The LED-look controls (gain,
+- **Now** — what the panel is playing: the title, then its platform,
+  category and flags, then where it is in the playlist ("14 of 10,162"),
+  each on a line of its own; polled every 500 ms while the view is up. The
+  remote control is **Skip** (first, the primary), **Pause**, **Previous**
+  and **Replay**, a grid of four on a phone, and a brightness slider. A
+  **panel-look preview** of the same file plays alongside, kept in step with
+  the panel by clock. It fetches the file's prepared copy first (cheap for
+  the device; one 404 when there is none) and can be switched off (Settings
+  → Look → *Mirror the panel on Now*, per browser). The device's figures
+  (uptime, memory, late frames) are Settings → Device → Status. The LED-look controls (gain,
   bloom, gamma, flat) are here too and are remembered per browser. In local
   mode this view is the simulator: a manifest or the whole folder, a platform
   filter, shuffle and a seed, with the firmware's 3-30 s dwell.
-  **Recently played** (under the preview) and **Previous** / **Play again**
-  (beside Pause and Skip): the device keeps the last 16 distinct files the
+  **Recently played** (under the preview) and **Previous** / **Replay**
+  (beside Skip and Pause): the device keeps the last 16 distinct files the
   panel started, wherever they came from (`opendmd_core::history`, 640 B of
   RAM, gone at a reboot); Now asks for it (`/api/status?recent=1`) only when
   the file changes. Titles as the Library shows them, the one on screen
-  marked; a tap plays it again (`POST /api/play`), Play again restarts the
+  marked; a tap plays it again (`POST /api/play`), Replay restarts the
   file on screen, and Previous is `POST /api/skip?back=1`, which walks back
   one entry a press (twice is two back, not a flip between the last two).
   The simulator keeps the same list in the page by the same rules; firmware
@@ -71,7 +77,8 @@ names the format or shows a copy's path.
   the way the core matches them; when nothing matches, a link searches the
   web for the same words in Create Art) and **Add GIFs**; under it the
   categories as tabs (the card's folders under `gifs/`, then *Live* and
-  *Effects*) and the platform chips. A search is of every GIF on the card
+  *Effects*; on a phone a select, which shows the whole name) and the
+  platform chips. A search is of every GIF on the card
   (each category listed once, then kept): the tabs give way to category
   facets and the chips become platform facets, each with its match count,
   most first, combining (category AND platform); clearing the box brings
@@ -82,8 +89,11 @@ names the format or shows a copy's path.
   category, author and file name, with **Send to panel**, **Add to
   playlist…**, **Edit in Create Art**, **Favourite** and **Hide** (in the
   playlist chosen beside them), Smooth motion where it applies, **Edit
-  details…** and **Delete…**. Select several rows to add them to a playlist
-  together.
+  details…** and **Delete…**. **Select** (or a long press on a row, on a
+  phone) shows a checkbox on every row and a bar with **Select all shown**,
+  **Add to playlist** and **Done**: a tap then picks a row instead of opening
+  it. A GIF whose name has no title, or only a number (`N64_LOGO_01.gif`),
+  is listed by its platform and flags: "N64 Logo 01".
 
   **A GIF's details are its file name** —
   `/gifs/<Category>/<PLATFORM>_<Title_Words>_<NN>[_<author>].gif`, which
@@ -103,37 +113,63 @@ names the format or shows a copy's path.
 - **Playlists** (`#sets`) — the card's own (`filelist.txt` as **All files**,
   the default; `filelist.hall` **Halloween**; `filelist.xmas` **Christmas**;
   any other `filelist.*` by file name; an obsolete `filelist.odm.*` never)
-  and `/sets/*.txt`. Open one to edit it; build a new one with the core's
-  `Filter` (platforms, categories, title words, dropped flags, shuffle with a
-  seed, a limit) over any playlist, or from the Library selection; reorder,
-  remove, save (`PUT /api/sets/<name>`), activate (`PUT /api/config {"set":
-  …}` — `""` for All files, a root manifest's file name, or a set's name —
-  which rebuilds the device's index in a few seconds) and delete. Deleting
+  and `/sets/*.txt`. A tap opens one in the editor, a screen of its own
+  (`#sets/edit`: on a phone it replaces the list, with **‹ Playlists** to go
+  back; on a laptop it is the right-hand column, empty until something is
+  open). Its header names the playlist; the card's own are saved as a copy
+  (**Save a copy as**, prefilled "Halloween copy"). **+ New playlist** opens
+  an empty one with a Name field. **Add by filter…** is a sheet over the
+  editor that runs the core's `Filter` (platforms, categories, title words,
+  **Leave out** flags, shuffle with a seed, at most N) over any playlist; its
+  last row is **Add N GIFs** / **Replace with N GIFs**. Reorder, remove
+  (**Arrange**), **Save** / **Save & play** (`PUT /api/sets/<name>`, then
+  `PUT /api/config {"set": …}` — `""` for All files, a root manifest's file
+  name, or a set's name — which the device applies in a few seconds), kept
+  in reach at the bottom; a list row's **…** has **Play** and **Delete…**. Deleting
   the active playlist switches the player back to All files first. Switching
   is disabled while status says an index is `building`. Entries are always
   GIF paths.
-- **Settings** — WiFi (with a scan), which needs a reboot; the hostname,
-  live (Save network then says the new `<mdns>.local` address, from
-  `/api/status`, and links to it when the page was opened by a `.local`
-  name); brightness, dwell, shuffle, platform filter and playlist, which apply
-  live (not while an index is building); a **Maximum brightness** under
-  Power (default 144, below the level tested safe on the supplied power supply;
-  raising it shows a warning, because the panel can reset above it); **Panel
-  timing** under Advanced (`js/panel.js`: the HUB75 clock edge, latch
-  blanking, driver chip, data clock and minimum refresh, each change a
-  trial with Keep/Undo and a countdown, the boot-time ones through "Restart
-  now", and Reset to defaults; **Test panel timing**, `js/paneltest.js`,
-  loaded on the first click: `POST /api/panel/test` A/B questions for the
-  clock edge, then the latch blanking, the pick saved with
-  `panel_confirm`; see [`firmware.md`](firmware.md#panel-timing)); the **Playback cache** card ("9,826
-  of 10,133 files prepared", from `GET /api/cache`) with **Prepare remaining
-  files**, which works out what the playlist in play is missing
-  (`GET /api/cache/list`) and encodes and uploads it in the background, one
-  file at a time, with progress, an ETA and a stop button (starting again
-  carries on); rebuild the index and reboot; the firmware version, flash
-  variant, panel facts, `index_state` and the web app's own version
-  (`www_version`, from the pack's header). Firmware updates go over WiFi
-  ([`deploying.md`](deploying.md)).
+- **Settings** — four tabs (`#settings/<tab>`; bare `#settings` is the
+  first), only the open one in the page, everything saved as it changes
+  with a fading **Saved ✓** in the card's heading:
+  - **Playback**: brightness with **Maximum brightness** under it
+    (`js/power.js`; default 144, below the level tested safe on the
+    supplied power supply; raising it shows a warning, because the panel
+    can reset above it), the playlist, **Platforms** (one row — "All
+    (60)" or the ones picked — and **Choose…**, a sheet with a search box,
+    the playlist's platforms with their counts, those under 5 behind "+N
+    more", **Only these** and **All platforms**), shuffle, and **Each GIF
+    stays** min – max seconds (the dwell). These apply live (the playlist
+    not while the player is still reading one).
+  - **Look**: colour and phosphor glow, *Mirror the panel on Now* (this
+    browser's choice), the transition with a Preview and the start-up show
+    (`js/boot.js`).
+  - **Schedule**: time zone, schedule rules, night mode, Follow RePlayOS.
+  - **Device** (`js/device.js`, loaded when the tab first opens): **Status**
+    (the playlist and its count, the card, uptime, free memory and its
+    floor, late frames, refresh rate, GIFs started) with **Reload playlist**
+    (`POST /api/reindex`) and **Reboot**; the **Playback cache** card ("9,826
+    of 10,133 files prepared", from `GET /api/cache`) with **Prepare
+    remaining files**, which works out what the playlist in play is missing
+    (`GET /api/cache/list`) and encodes and uploads it in the background, one
+    file at a time, with progress, an ETA and a stop button (starting again
+    carries on); **Network**: WiFi (with a scan), which needs a reboot, and
+    the Display name, live (Save network then says the new `<mdns>.local`
+    address, from `/api/status`, and links to it when the page was opened by
+    a `.local` name; a name another display already answers to is said
+    under the field when it is left and stops Save network — `GET
+    /api/name-check` — and the device's 409 for one that slips by is
+    explained, nothing saved); **Panel timing** (`js/panel.js`: the HUB75 clock edge,
+    latch blanking, driver chip, data clock and minimum refresh, each change
+    a trial with Keep/Undo and a countdown, the boot-time ones through
+    "Restart now", and Reset to defaults; **Test panel timing**,
+    `js/paneltest.js`, loaded on the first click: `POST /api/panel/test` A/B
+    questions for the clock edge, then the latch blanking, the pick saved
+    with `panel_confirm`; see [`firmware.md`](firmware.md#panel-timing));
+    **Firmware** and **Security**; **About**: the address, the firmware
+    version and flash variant, and the web app's own version (`www_version`,
+    from the pack's header). Firmware updates go over WiFi
+    ([`deploying.md`](deploying.md)).
 
 ## Create Art
 
@@ -235,10 +271,11 @@ every GIF worth smoothing, and `opendmd-pack convert` honours the list.
 ## Favourites, hiding and schedules
 
 **Favourites, hiding and schedules.** Right-click a GIF in the Library or a
-playlist (long-press on a phone, or its "…" button) to make it a favourite,
-play it less, hide it, play it longer or loop it — per playlist, so a GIF can
-be a favourite in one and hidden in another. Settings → Time sets the zone
-(the player keeps time over NTP), and Settings → Schedule picks a playlist
+playlist (its "…" button; on a phone a long press in a playlist) to make it a
+favourite, play it less, hide it, or — a second step, **Play longer or
+loop…** — play it twice as long, for N seconds, or N times — per playlist, so a GIF can
+be a favourite in one and hidden in another. Settings → Schedule → Time sets the zone
+(the player keeps time over NTP), and its Schedule picks a playlist
 and/or brightness for parts of the week ("Weekdays 18:00–23:00 → Consoles")
 and a night mode that turns the panel off or dims it; Now shows when either
 is in force and can wake the panel for an hour. The saved playlist and
@@ -247,7 +284,7 @@ brightness come back when a rule ends.
 ## Colour, glow, live items and effects
 
 **Colour, glow and the live items.** The player can show everything in one
-colour like a classic dot-matrix display — Settings → Playback → *colour*:
+colour like a classic dot-matrix display — Settings → Look → *colour*:
 full colour (the default), amber (the plasma-DMD orange), red, green, blue or
 white; each pixel becomes that colour at its own brightness (Rec. 601
 luminance) — and can give the dots a **phosphor glow**, *off* (the default),
@@ -266,7 +303,7 @@ like any GIF — in a playlist they are lines such as `@clock?date=1` or
 `@text?msg=Game%20over` (options: `@clock?style=big|small&seconds=1&date=1&h12=1&color=RRGGBB`,
 `@text?msg=…&speed=<ms per pixel, 20..1000>&font=big|normal|small&color=RRGGBB&scroll=0`).
 Follow RePlayOS can show the clock in the menus instead of its attract
-playlist (Settings → Follow RePlayOS → *attract playlist*: The clock).
+playlist (Settings → Schedule → Follow RePlayOS → *attract playlist*: The clock).
 
 **Effects.** Library → *Effects* lists four pictures the panel computes
 every frame, at 100 frames a second (the panel's refresh rate): a

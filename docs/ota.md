@@ -90,7 +90,7 @@ by the device with a 422 and nothing on the card changes.
 ## The flow
 
 1. **Browser or curl**: `PUT /api/firmware` with the bundle (Settings →
-   Advanced → Firmware: "Update from file…", or "Check for updates", below).
+   Device → Firmware: "Update from file…", or "Check for updates", below).
    The device streams
    the body to `/update/opendmd.bin` on the card, hashing as it goes (the
    night window's heap rules apply: one transfer at a time, 4 KB buffers).
@@ -125,7 +125,7 @@ by the device with a 422 and nothing on the card changes.
 
 ## Check for updates
 
-Settings → Advanced → Firmware → **Check for updates** (`js/update.js`)
+Settings → Device → Firmware → **Check for updates** (`js/update.js`)
 updates the firmware and the web app from the published release, with the
 browser doing the fetching: the player itself never goes to the internet.
 
