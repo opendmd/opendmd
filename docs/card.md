@@ -96,7 +96,7 @@ real ~10k-file card. Tokens are split on `_`:
 | `NES_Unknow_01_Invert.gif` | NES | Unknow | 1 | Invert |
 | `HALLOWEEN_ARCADE_GoldenAxe16.gif` | ARCADE | GoldenAxe | 16 | HALLOWEEN |
 | `MD_LOGO_Sega31.gif` | MD | Sega | 31 | LOGO |
-| `Nes_Gradius.gif` | — | Nes Gradius | | |
+| `Nes_Gradius.gif` | NES | Gradius | | |
 | `HDB_Happy_Birday_03.gif` | — | HDB Happy Birday 03 | | |
 
 Rules, in order:
@@ -106,10 +106,10 @@ Rules, in order:
    the authoritative source of seasonality either way.
 2. Multi-token prefixes (`NINTENDO_DS` -> `NDS`, `SEGA_MEGACD`, `VIRTUAL_BOY`,
    `SEGA_PICO`), then the single-token list (`PLATFORMS` in
-   `opendmd-core/src/manifest.rs`), matched exactly, upper case. Nothing
-   else is a platform: an unlisted first word leaves the platform unset and
-   the whole stem becomes the title, so `THE_80s_90s_…` keeps its "THE" and
-   `Nes_Gradius` is "Nes Gradius".
+   `opendmd-core/src/manifest.rs`), matched in any case and stored as
+   listed (`Nes_Gradius` is `NES`). Nothing else is a platform: an unlisted
+   first word leaves the platform unset and the whole stem becomes the
+   title, so `THE_80s_90s_…` keeps its "THE".
 3. Keyword flags (`INVERT`, `INTRO`, `LOGO`, `SLIDE`, `STORY`, ...) directly
    after the platform.
 4. Trailing tags right-to-left: keyword flags, a standalone all-digit token as
@@ -127,9 +127,11 @@ title. Flags are stored verbatim; every flag comparison is case-insensitive.
 matching a user's own collection list.
 
 **The platform list is closed.** Until 2026-10-22 any all-caps first word
-counted, which put `THE` (4 files), `HDB` (10, the Happy Birthday folder),
-`LOGO` (2), `POKEMON` (1) and `XMAX` (1, a typo for XMAS) among the
-platforms in Settings, the Library and the playlist builder. A name carries
+counted, which put six junk prefixes (25 files) among the platforms in
+Settings, the Library and the playlist builder: `HDB` (10, the Happy
+Birthday folder), `SIGN` (7, `SIGN_eLLuiGi06_NES_SuperMario.gif` and
+friends in `Other/`), `THE` (4), `LOGO` (2), `POKEMON` (1) and `XMAX` (1, a
+typo for XMAS). A name carries
 nothing else that tells a platform from a word (those files have numbers
 and authors like any other), and the parser reads one name at a time (the
 firmware filters a 10k-line playlist line by line), so it cannot count how
@@ -145,10 +147,14 @@ recordings of the effects), and a few common systems the card lacks
 `VECTREX`, `DOS`). A new platform is one line in that list; the web app's
 Platform menus offer exactly the list.
 
+A season in a platform filter (`HALLOWEEN`, `XMAS`) also matches the
+season's flag, so `HALLOWEEN` plays `HALLOWEEN_PSX_…` (platform `PSX`) as
+well as `HALLOWEEN_Dracula_01` (platform `HALLOWEEN`): 711 of the stock
+`filelist.hall`'s 724 entries.
+
 Against the real card this parses 10,162 entries with a non-empty title each,
-and 3,782 of 3,786 `gifs/Consoles` entries get a platform (99.89%; the misses
-are `Nes_Gradius.gif`, `NEs_Captain_America...gif`, `LOGO_SATURN01.gif` and
-`POKEMON_MINI_01.gif`). Second words stay in the title: `ATARI_ST_…` is
+and 3,784 of 3,786 `gifs/Consoles` entries get a platform (99.95%; the misses
+are `LOGO_SATURN01.gif` and `POKEMON_MINI_01.gif`). Second words stay in the title: `ATARI_ST_…` is
 platform `ATARI`, title "ST …"; `ZX_SPECTRUM_…` is `ZX`; `WII_U_…` is `WII`.
 
 **Writing a name** (the web app's Add GIFs and Edit details;
@@ -163,7 +169,9 @@ exactly the fields it was built from:
   `_` (the separator) and FAT's `" * / : < > ? \ |`, and the title may not
   start with `.`. No platform means no number and no author (the parser
   reads the whole name as the title then), and the first word may not be a
-  platform (`SNES Classics` would read as platform `SNES`; `THE END` is fine).
+  platform in any case (`SNES Classics`, `Pinball Wizard` would read as
+  platforms `SNES` and `PINBALL`; `THE END` is fine). A platform given in
+  another case is written as listed (`snes` → `SNES_…`).
 - An author is one token of `A-Za-z0-9.-`, three or more long, not a keyword
   and not all digits; it is written starting lower-case (`Ross` → `ross`)
   unless it is a known handle (`RattenJager`), because that is how the parser
