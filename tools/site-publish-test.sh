@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# tools/site-publish.sh against a local bare repository standing in for the
+# public Pages repo: two publishes with a contribution merged in between, and
+# a third with nothing new. gallery/'s formulas must survive every publish,
+# .github/ must be ours (the gallery check and the checker's source, which
+# must build offline as the public repo's workflow builds it), and the site's
+# own files must be replaced. Run by `make test`; nothing leaves the machine.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+fail() { echo "site-publish-test: FAIL: $*" >&2; exit 1; }
+g() { git -c user.name=Test -c user.email=test@example.invalid -c init.defaultBranch=main "$@"; }
+
+# The public repo as it might be: an old site, an old workflow, a contribution.
+g init -q --bare "$tmp/pub.git"
+g clone -q "$tmp/pub.git" "$tmp/seed" 2>/dev/null
+mkdir -p "$tmp/seed/gallery" "$tmp/seed/.github/workflows"
+printf '<p>old</p>\n' > "$tmp/seed/index.html"
+printf 'stale\n' > "$tmp/seed/stale.html"
+printf 'name: old\n' > "$tmp/seed/.github/workflows/gallery-check.yml"
+printf -- '-- name: Theirs\n-- description: A contribution\n-- author: @someone\n-- licence: CC0-1.0\ngray(x)\n' > "$tmp/seed/gallery/theirs.psi"
+g -C "$tmp/seed" add -A && g -C "$tmp/seed" commit -qm seed && g -C "$tmp/seed" push -q origin HEAD:main
+
+site() { # a site build: its version and a page
+  rm -rf "$tmp/site"; mkdir -p "$tmp/site/install" "$tmp/site/f"
+  printf '{"version": "9.9.9"}\n' > "$tmp/site/install/release.json"
+  printf '<p>%s</p>\n' "$1" > "$tmp/site/index.html"
+  printf '<p>share</p>\n' > "$tmp/site/f/index.html"
+}
+publish() {
+  # (An identity of its own: CI's checkout has none for site-publish.sh to copy.)
+  GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.invalid GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=test@example.invalid \
+    SITE_REPO_WORK="$tmp/work" SITE_PUBLISH_ALLOW_DIRTY=1 tools/site-publish.sh "$tmp/site" "$tmp/pub.git"
+}
+look() { rm -rf "$tmp/look"; g clone -q "$tmp/pub.git" "$tmp/look" 2>/dev/null; }
+
+site v1
+publish >/dev/null
+look
+[ "$(cat "$tmp/look/index.html")" = "<p>v1</p>" ] || fail "the site's page was not replaced"
+[ ! -e "$tmp/look/stale.html" ] || fail "a file the site no longer has was kept"
+[ -f "$tmp/look/gallery/theirs.psi" ] || fail "the first publish removed a contribution"
+cmp -s "$tmp/look/gallery/README.md" site/public-repo/gallery/README.md || fail "gallery/README.md is not ours"
+cmp -s "$tmp/look/.github/workflows/gallery-check.yml" site/public-repo/.github/workflows/gallery-check.yml || fail "the workflow is not ours"
+for f in opendmd-psi/src/lib.rs opendmd-gallery/src/main.rs opendmd-gallery/Cargo.lock; do
+  cmp -s "$tmp/look/.github/gallery-check/$f" "$f" || fail "the checker's source lacks $f"
+done
+[ ! -e "$tmp/look/.github/gallery-check/opendmd-psi/target" ] || fail "a build folder was vendored"
+
+# A contribution merged in the public repo between two publishes.
+g -C "$tmp/look" checkout -q main
+printf -- '-- name: Merged\n-- description: Merged by a maintainer\n-- author: @other\n-- licence: CC-BY-4.0\ngray(y)\n' > "$tmp/look/gallery/merged.psi"
+g -C "$tmp/look" add -A && g -C "$tmp/look" commit -qm "Add merged.psi" && g -C "$tmp/look" push -q origin HEAD:main
+
+site v2
+publish >/dev/null
+look
+[ "$(cat "$tmp/look/index.html")" = "<p>v2</p>" ] || fail "the second publish did not replace the page"
+[ -f "$tmp/look/gallery/theirs.psi" ] && [ -f "$tmp/look/gallery/merged.psi" ] || fail "the second publish lost a contribution"
+cmp -s "$tmp/look/.github/workflows/gallery-check.yml" site/public-repo/.github/workflows/gallery-check.yml || fail "the second publish lost the workflow"
+[ "$(git -C "$tmp/look" log --format=%s -1)" = "Site v9.9.9, docs of $(date -u +%F)" ] || fail "commit message: $(git -C "$tmp/look" log --format=%s -1)"
+
+# Nothing new: no commit.
+out=$(publish)
+[ "$out" = "site: no changes" ] || fail "a publish with nothing new said: $out"
+
+# A site that brings its own gallery/ is refused (it would be skipped).
+mkdir -p "$tmp/site/gallery"
+if publish >/dev/null 2>&1; then fail "a site with a gallery/ was published"; fi
+
+# An untracked file beside the checker's source is refused (it would not be vendored).
+rmdir "$tmp/site/gallery"
+stray=opendmd-gallery/src/stray-site-publish-test.rs
+trap 'rm -rf "$tmp" "$stray"' EXIT
+: > "$stray"
+if publish >/dev/null 2>&1; then rm -f "$stray"; fail "a publish with an untracked file in the checker's source went ahead"; fi
+rm -f "$stray"
+
+# The vendored checker builds as the public workflow builds it: offline,
+# locked, from an empty cargo home, and checks a contribution.
+CARGO_HOME="$tmp/cargo" RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-stable} cargo build -q --release --locked --offline \
+  --manifest-path "$tmp/look/.github/gallery-check/opendmd-gallery/Cargo.toml" --target-dir "$tmp/target" ||
+  fail "the vendored checker does not build offline"
+"$tmp/target/release/opendmd-gallery" check "$tmp/look/gallery/merged.psi" 2>/dev/null || fail "the vendored checker refused a good file"
+echo "site-publish-test: ok (two publishes kept gallery/ and .github/; the vendored checker builds offline)"

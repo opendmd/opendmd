@@ -3135,9 +3135,13 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-ed-share")
     demo = page.input_value("#psi-link")
     url = page.get_attribute("#psi-copy-here", "data-url")
+    sub = page.get_attribute("#psi-submit", "href")
+    page.wait_for_timeout(400)
+    shot(page, "formulas-share", "laptop")
     page.keyboard.press("Escape")
-    check(demo.startswith("https://opendmd.github.io/demo/#formula=") and url.startswith(base + "/#formula=") and "&a=0.75" in url
-          and len(url) < 200, f"formulas: share links, the demo's first ({demo}, {url})")
+    check(demo.startswith("https://opendmd.github.io/f/#formula=") and url.startswith(base + "/#formula=") and "&a=0.75" in url
+          and len(url) < 200 and demo[demo.index("#"):] == url[url.index("#"):] and sub == demo + "&submit",
+          f"formulas: share links, the formula's page on the site first ({demo}, {url}), Submit to the gallery")
     other = new_page(browser, "laptop", errors)
     other.goto(url)
     other.wait_for_selector("#psi-ed #psi-src", timeout=20000)
@@ -3298,6 +3302,11 @@ def formulas_demo_pass(browser, base: str, errors: list[str]) -> None:
     wait_lit(page, "#psi-ed-panel", "formulas (demo): a shared formula")
     check(page.input_value("#psi-name") == "Demo rings" and page.input_value("#psi-src").startswith("loop 4\nrings"),
           f"formulas (demo): the link opened '{page.input_value('#psi-name')}'")
+    # The demo's share link is its own site's formula page.
+    page.click("#psi-ed-share")
+    link = page.input_value("#psi-link")
+    page.keyboard.press("Escape")
+    check(link.startswith(base + "/f/#formula=loop+4"), f"formulas (demo): Copy share link -> its site's /f/ ({link[:60]}…)")
     page.context.close()
 
 
