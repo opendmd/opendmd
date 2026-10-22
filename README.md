@@ -121,6 +121,11 @@ the toolchains, the common targets and the crates.
 Either [Apache 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option. Contributions are
 dual licensed the same way.
 
+The headings use [Silkscreen](https://github.com/googlefonts/silkscreen) by Jason Kottke, a
+pixel font under the [SIL Open Font License 1.1](opendmd-web/www/fonts/OFL.txt). A small
+subset of it is bundled with the web app and the setup page, so they work without the
+internet, and published with the site.
+
 OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
 project can't relicense or redistribute: get the DMDoS GIF pack from
 [dmdos.net](https://dmdos.net/), or make your own with Create Art. The animations on the
