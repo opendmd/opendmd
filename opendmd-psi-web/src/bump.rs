@@ -72,7 +72,7 @@ unsafe impl GlobalAlloc for Bump {
 
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         let h = &mut *self.0.get();
-        h.live -= 1;
+        h.live = h.live.saturating_sub(1);
         if h.live == 0 {
             h.next = h.base;
         } else if p as usize == h.last && p as usize + l.size() == h.next {

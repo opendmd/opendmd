@@ -1684,10 +1684,10 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
     goto_view(page, "library")
     page.wait_for_selector("#lib-cats [data-cat='@']", timeout=30000)
     opts = page.eval_on_selector_all("#lib-cats [data-cat]", "els => els.map(e => [e.dataset.cat, e.textContent])")
-    # System lists (a leading "_", e.g. a card's _bench) sort after Live, Effects and Formulas.
+    # System lists (a leading "_", e.g. a card's _bench) sort after Live and Effects.
     real = [o for o in opts if not o[0].startswith("_")]
-    check(real[-3:] == [["@", "Live"], ["@fx", "Effects"], ["@psi", "Formulas"]] and len(real) > 3 and page.locator("#lib-cat").count() == 0,
-          f"library: the category tabs end with Live, Effects, Formulas (system lists after), and there is no category select ({opts[-3:]})")
+    check(real[-2:] == [["@", "Live"], ["@fx", "Effects"]] and len(real) > 2 and page.locator("#lib-cat").count() == 0,
+          f"library: the category tabs end with Live, Effects (system lists after), and there is no category select ({opts[-3:]})")
     open_live(page)
     rows = live_rows(page)
     want = ["@clock", "@clock?seconds=1", "@clock?date=1", "@clock?style=small&seconds=1&date=1", "@text?msg=OpenDMD"]
@@ -2906,8 +2906,8 @@ def mock_pass(browser) -> None:
         page.wait_for_function("!document.querySelector('#st-set').disabled", timeout=8000)
         check(True, "settings: ready again -> set select enabled")
         views = page.eval_on_selector_all("#nav a[data-view]", "els => els.map(e => e.querySelector('span').textContent)")
-        check(views == ["Now", "Library", "Playlists", "Create Art", "Settings"] and page.locator("#view-convert").count() == 0,
-              f"nav: five views, Playlists third, no Convert ({views})")
+        check(views == ["Now", "Library", "Playlists", "Formulas", "Create Art", "Settings"] and page.locator("#view-convert").count() == 0,
+              f"nav: six views, Playlists third, Formulas before Create Art, no Convert ({views})")
         follow_checks(page, base, errors)
         font_checks(page, base, "laptop")
         phone_pass(browser, base, errors)
@@ -3002,8 +3002,7 @@ FORMULAS_JSON = REPO / "opendmd-web" / "www" / "formulas.json"
 
 
 def open_formulas(page: Page) -> None:
-    goto_view(page, "library")
-    pick_cat(page, "@psi")
+    goto_view(page, "formulas")
     page.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
 
 
@@ -3058,6 +3057,9 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(500)
     early = [u for u in asked if "pkg-psi" in u or "formulas" in u]
     check(not early, f"formulas: nothing of them loads with the app or the Library ({early})")
+    # The old address of the editor (Formulas were a Library tab) leads to the view's.
+    page.evaluate("location.hash = '#library/formula'")
+    page.wait_for_function("location.hash == '#formulas/edit'", timeout=20000)
     open_formulas(page)
     psi = [u for u in asked if "pkg-psi/" in u and u.endswith(".wasm")]
     examples = json.loads(FORMULAS_JSON.read_text())
@@ -3098,6 +3100,17 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.keyboard.press("Control+z")
     page.wait_for_timeout(300)
     check(page.input_value("#psi-src") == "gray(x*0.5)", f"formulas: one undo puts the drag back ({page.input_value('#psi-src')!r})")
+    # Below zero: a minus of its own, or brackets where it would make `--`.
+    scrub(page, 0, 8, -40)
+    neg = page.input_value("#psi-src")
+    page.fill("#psi-src", "gray(1-0.5)")
+    page.wait_for_timeout(300)
+    scrub(page, 0, 8, -40)
+    neg2 = page.input_value("#psi-src")
+    check(neg == "gray(x*-0.5)" and neg2 == "gray(1-(-0.5))" and page.get_attribute("#psi-ed", "data-err") is None,
+          f"formulas: a number dragged below zero ({neg!r}, {neg2!r}) still compiles")
+    page.fill("#psi-src", "gray(x*0.5)")
+    page.wait_for_timeout(300)
     # Alt+↑ on a number (keyboard).
     page.focus("#psi-src")
     page.evaluate("document.querySelector('#psi-src').setSelectionRange(8, 8)")
@@ -3117,23 +3130,26 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.fill("#psi-name", "Smoke brightness")
     page.click("#psi-save")
     page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
-    # The share link opens it, slider and all, in a fresh page.
+    # The share link: the online demo's first, then this display's; it opens the
+    # formula, slider and all, in a fresh page.
     page.click("#psi-ed-share")
-    url = page.input_value("#psi-link")
+    demo = page.input_value("#psi-link")
+    url = page.get_attribute("#psi-copy-here", "data-url")
     page.keyboard.press("Escape")
-    check(url.startswith(base + "/#formula=") and "&a=0.75" in url and len(url) < 200, f"formulas: share link {url}")
+    check(demo.startswith("https://opendmd.github.io/demo/#formula=") and url.startswith(base + "/#formula=") and "&a=0.75" in url
+          and len(url) < 200, f"formulas: share links, the demo's first ({demo}, {url})")
     other = new_page(browser, "laptop", errors)
     other.goto(url)
     other.wait_for_selector("#psi-ed #psi-src", timeout=20000)
     other.wait_for_timeout(500)
     got = (other.input_value("#psi-src"), other.input_value("#psi-name"), other.input_value("#psi-ed-sl-a"))
-    check(got == ("-- a: brightness\ngray(a)", "Smoke brightness", "0.75") and other.evaluate("location.hash") == "#library/formula",
+    check(got == ("-- a: brightness\ngray(a)", "Smoke brightness", "0.75") and other.evaluate("location.hash") == "#formulas/edit",
           f"formulas: the link opens the editor with it ({got})")
     other.context.close()
     page.click("#psi-back")
     page.wait_for_selector("#psi-mine .psi-tile", timeout=5000)
     check(page.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)") == ["Smoke brightness"]
-          and page.evaluate("location.hash") == "#library", "formulas: back to the gallery, saved under Your formulas")
+          and page.evaluate("location.hash") == "#formulas", "formulas: back to the gallery, saved under Your formulas")
     # Save as GIF: one loop (4 s at 20 ms) into Create Art.
     page.click("#psi-ex .psi-tile >> nth=0")
     formula_editor(page, "loop 4\npal(fire, saw(x - t/4)*0.5 + 0.5)")
@@ -3147,6 +3163,96 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
           and d.get("duration") == "4000", f"formulas: Save as GIF -> Create Art, {d.get('srcFrames')} frames, '{msg}', {d.get('name')}")
     shot(page, "formulas-gif", "laptop")
     page.context.close()
+    formulas_more(browser, base, errors)
+
+
+def psi_frames(page: Page, sel: str) -> int:
+    return int(page.get_attribute(sel, "data-frames") or 0)
+
+
+def formulas_more(browser, base: str, errors: list[str]) -> None:
+    """Drafts not saved are kept (Continue editing, an in-page question before
+    one is replaced); links that try to inject markup or are too long; the
+    drawing stops when nothing is shown; a trap in the module restarts it."""
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/")
+    page.wait_for_function("document.querySelector('#now-path')?.textContent.startsWith('/')", timeout=20000)
+    formula_editor(page, "gray(x*0.25)")
+    page.fill("#psi-name", "Smoke draft")
+    page.wait_for_timeout(400)
+    page.click("#psi-back")
+    page.wait_for_selector("#psi-cont", timeout=5000)
+    cont = page.inner_text("#psi-cont")
+    page.click("#psi-ex .psi-tile >> nth=1")
+    page.click("#psi-edit")
+    page.wait_for_selector("#psi-ask", timeout=5000)
+    page.click("#psi-ask button:has-text('Keep editing it')")
+    page.wait_for_selector("#psi-ed #psi-src", timeout=5000)
+    kept = page.input_value("#psi-src")
+    page.click("#psi-back")
+    page.wait_for_selector("#psi-cont", timeout=5000)
+    page.click("#psi-edit")
+    page.click("#psi-ask button:has-text('Replace it')")
+    page.wait_for_function("document.querySelector('#psi-name')?.value.endsWith(' remix')", timeout=5000)
+    page.click("#psi-back")
+    page.wait_for_timeout(500)
+    check("Smoke draft" in cont and kept == "gray(x*0.25)" and page.locator("#psi-cont").count() == 0,
+          f"formulas: an unsaved draft is offered ('{cont}'), kept on Keep ({kept!r}) and replaced only on Replace")
+    # The drawing stops once nothing shows (and starts again).
+    page.click("#psi-ex .psi-tile >> nth=0")
+    page.wait_for_timeout(300)
+    goto_view(page, "now")
+    n0 = psi_frames(page, "#psi-panel")
+    page.wait_for_timeout(600)
+    n1 = psi_frames(page, "#psi-panel")
+    idle = page.evaluate("new Promise(r => { let k = 0; const t = performance.now(); (function f() { if (++k < 30) requestAnimationFrame(f); else r(performance.now() - t); })(); })")
+    goto_view(page, "formulas")
+    page.wait_for_timeout(600)
+    n2 = psi_frames(page, "#psi-panel")
+    check(n0 == n1 and n2 > n1, f"formulas: no drawing while away ({n0} -> {n1}), drawing again on return ({n2}; rAF {idle:.0f} ms)")
+    # A trap inside the module (forced: the glue's compile throws what a
+    # trap throws) restarts it, and the editor carries on.
+    page.context.close()
+    page = new_page(browser, "laptop", errors)
+    def trap_glue(route):
+        r = route.fetch()
+        body = r.text().replace("export function compile(src) {",
+                                "export function compile(src) { if (globalThis.__psiTrap) { globalThis.__psiTrap = 0; throw new WebAssembly.RuntimeError('unreachable (smoke)'); }", 1)
+        route.fulfill(response=r, body=body)
+    page.route("**/pkg-psi/opendmd_psi_web.js*", trap_glue)
+    page.goto(base + "/")
+    page.wait_for_function("document.querySelector('#now-path')?.textContent.startsWith('/')", timeout=20000)
+    formula_editor(page, "gray(x*0.5)")
+    page.evaluate("globalThis.__psiTrap = 1")
+    page.fill("#psi-src", "gray(x*0.75)")
+    page.wait_for_selector("#toasts .toast:has-text('Formulas restarted')", timeout=10000)
+    page.wait_for_timeout(500)
+    page.fill("#psi-src", "loop 2\ngray(saw(x - t/2))")
+    page.wait_for_timeout(600)
+    f0 = psi_frames(page, "#psi-ed-panel")
+    page.wait_for_timeout(400)
+    check(page.get_attribute("#psi-ed", "data-err") is None and psi_frames(page, "#psi-ed-panel") > f0
+          and page.get_attribute("#psi-ed", "data-steps") is not None, "formulas: a trap in the module restarts it and the editor carries on")
+    page.context.close()
+    # Hostile and over-long links: shown as text, cut to size, nothing run.
+    page = new_page(browser, "laptop", errors)
+    evil = '<img src=x onerror="window.__pwned=1">'
+    page.goto(base + "/#formula=" + urllib.parse.quote("-- " + evil + "\ngray(x)") + "&name=" + urllib.parse.quote(evil))
+    page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
+    page.wait_for_timeout(500)
+    safe = (page.evaluate("window.__pwned") is None and page.locator("#psi-ed img, #psi-gal img").count() == 0
+            and page.input_value("#psi-name") == evil[:60] and page.input_value("#psi-src").startswith("-- <img"))
+    page.click("#psi-back")
+    page.wait_for_selector("#psi-ex .psi-tile", timeout=5000)
+    safe = safe and page.locator("#psi-gal img").count() == 0 and page.evaluate("window.__pwned") is None
+    check(safe, "formulas: markup in a link's name and formula stays text")
+    page.goto(base + "/#formula=" + urllib.parse.quote("gray(x)\n" + "-" * 6000) + "&name=" + "N" * 200)
+    page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
+    page.wait_for_timeout(500)
+    src_len, name_len = len(page.input_value("#psi-src")), len(page.input_value("#psi-name"))
+    toast = page.locator("#toasts .toast:has-text('too long')").count()
+    check(src_len == 4096 and name_len == 60 and toast == 1, f"formulas: an over-long link is cut ({src_len}, {name_len}) and says so")
+    page.context.close()
 
 
 def formulas_phone_pass(browser, base: str, errors: list[str]) -> None:
@@ -3156,7 +3262,7 @@ def formulas_phone_pass(browser, base: str, errors: list[str]) -> None:
     ctx = browser.new_context(viewport={"width": 360, "height": 780}, device_scale_factor=3, is_mobile=True, has_touch=True)
     page = ctx.new_page()
     page.on("pageerror", lambda e: errors.append(f"[360] pageerror: {e}"))
-    page.goto(base + "/#library")
+    page.goto(base + "/#formulas")
     open_formulas(page)
     over = [page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")]
     page.tap("#psi-ex .psi-tile >> nth=1")

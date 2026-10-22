@@ -127,8 +127,8 @@ pub fn error_at() -> Vec<u32> {
 }
 
 /// What the formula drawn is: `[steps, per frame, per row, per pixel, loop
-/// ms, sliders (bit 0 a, 1 b, 2 c), estimated µs a frame on the panel]`;
-/// empty before anything compiled.
+/// ms, inputs (bits 0-2 the sliders a b c, 3 t, 4 the clock), estimated µs
+/// a frame on the panel]`; empty before anything compiled.
 #[wasm_bindgen]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -143,7 +143,7 @@ pub fn info() -> Vec<u32> {
         r as u32,
         x as u32,
         p.loop_ms(),
-        u32::from(p.sliders()),
+        u32::from(p.inputs()),
         p.esp32_us(),
     ]
 }

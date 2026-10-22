@@ -1,6 +1,6 @@
 # Formulas
 
-![The Formulas tab: the examples, and Plasma playing in its details](../images/formulas.png)
+![Formulas: the examples, and Plasma playing in its details](../images/formulas.png)
 
 A formula is a few lines of maths that draw on the panel, every pixel at
 once. Change a number and the picture changes as you type. Formulas are
@@ -8,13 +8,12 @@ written in **Psi** (Ψ), OpenDMD's small language for the panel's pixels,
 but you don't need to know it to start: open an example, drag a number,
 and watch.
 
-Find them in the Library under the **Formulas** tab, next to Live and
-Effects. Formulas work in the [online demo](https://opendmd.github.io/demo/)
-too, with no player at all.
+Open **Formulas** (Ψ) in the app's menu. Formulas work in the
+[online demo](https://opendmd.github.io/demo/) too, with no player at all.
 
 ## The gallery
 
-The tab opens on the examples (plasma, fire, rain, a clock, a sunrise that
+Formulas opens on the examples (plasma, fire, rain, a clock, a sunrise that
 follows the time of day, and more) and the formulas you've saved. Pick one
 to see it playing in the panel look, with its sliders if it has any. From
 there:
@@ -25,20 +24,26 @@ there:
   [Sharing](#sharing)).
 - **+ New formula** starts a fresh one.
 
+If you leave the editor without saving, the gallery offers **Continue
+editing** at the top, and the app asks before anything replaces it.
+
 Formulas play here in the browser for now. To play one on the panel, save
 it as a GIF.
 
 ## The editor
 
-The preview is on top and the formula underneath; the preview follows as
-you type. If something is wrong, the editor says what in plain words, marks
-the place, and keeps playing the last version that worked.
+The preview is on top (on a phone it stays in view while you scroll) and
+the formula underneath; the preview follows as you type. Under it, a line
+says how long the loop is (or that the formula follows the clock) and how
+hard it is for the panel. If something is wrong, the editor says what in
+plain words just above the formula, marks the place, and keeps playing the
+last version that worked, dimmed.
 
 - **Drag a number** left or right to try other values. On a computer, drag
   it right in the text, or put the cursor on it and press Alt + ↑ or ↓
   (Shift for bigger steps). On a phone, tap a number and drag the bar that
-  appears under the formula, or use its − and + buttons. Ctrl+Z (⌘Z) undoes
-  a whole drag at once.
+  appears under the formula, or use its − and + buttons. Numbers can go
+  below zero. Ctrl+Z (⌘Z) undoes a whole drag at once.
 - **Sliders:** a formula that uses `a`, `b` or `c` gets a slider for each,
   0 to 1. A comment like `-- a: speed` gives the slider a name.
 - **Cheat sheet** lists everything the language has, with a line on each.
@@ -184,12 +189,11 @@ milliseconds); all the examples are light or medium.
 ## Sharing
 
 **Copy share link** gives a link with the whole formula in it, its name and
-its sliders. Anyone who opens it gets the editor with that formula.
+its sliders. It opens in the [online demo](https://opendmd.github.io/demo/),
+so anyone can open it, with or without a player.
 
-- A link copied from your player (`http://opendmd.local/…`) only opens on
-  your own network. The share box also offers a **demo link**, to the
-  [online demo](https://opendmd.github.io/demo/), which anyone can open.
-- Links copied in the demo open in the demo.
+- On your player, the share box also has **Copy a link to this display**:
+  that one opens the formula in your own player's app, on your own network.
 - Keep formulas short to share them: past about 1,500 characters the link
   gets long enough that some apps cut it, and the share box says so.
 

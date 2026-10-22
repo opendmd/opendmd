@@ -41,7 +41,7 @@ The effect stays in the Effects tab too, so you can keep adding the live
 version to playlists. A long, slow effect becomes the first ten seconds or
 so of its loop; pick a faster speed first if you want the whole loop.
 
-Want to make your own? [Formulas](formulas.md), the next tab along, are
+Want to make your own? [Formulas](formulas.md), in the menu, are
 effects you write yourself in a few lines.
 
 ## Colour and glow

@@ -62,7 +62,7 @@ part of every page load, but it is not JS or CSS), <= 4 KB; its licence
 The Library's Formulas (the editor, the examples and the gallery:
 `js/formulas.js`, `formulas.css` and the examples, `formulas.json`;
 imported when the Formulas tab is first chosen or a `#formula=` link
-opens) have a line of their own, <= 14 KB, and so does their wasm module
+opens) have a line of their own, <= 16 KB, and so does their wasm module
 (`pkg-psi/`: Psi, the language formulas are written in — its compiler and
 VM, the firmware's own crate — built without std; loaded with them),
 <= 36 KB: the spike's 24.7 KB measured a module that never read an error
@@ -130,7 +130,7 @@ API = {"api.html"}
 FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
 PSI_WASM_GZ_BUDGET = 36 * 1024
-FORMULAS_GZ_BUDGET = 14 * 1024
+FORMULAS_GZ_BUDGET = 16 * 1024
 FORMULAS = {"js/formulas.js", "formulas.css", "formulas.json"}
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}

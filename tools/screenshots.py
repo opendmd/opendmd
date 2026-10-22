@@ -144,7 +144,7 @@ def main() -> int:
             page.wait_for_timeout(800)
             shot(page, a.out, "effects.png")
             # Formulas: the gallery, the first example (Plasma) in Details.
-            page.click("#lib-cats [data-cat='@psi']")
+            go(page, "formulas")
             page.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
             wait_lit(page, "#psi-panel")
             page.wait_for_timeout(800)
