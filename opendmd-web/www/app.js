@@ -9,6 +9,7 @@ import init from './pkg/opendmd_web.js';
 import { app } from './js/state.js';
 import { detect, demoCard, LocalSource } from './js/source.js';
 import { $, h, clear, emit, toast } from './js/util.js';
+import { closeMenu } from './js/overrides.js';
 
 await init();
 
@@ -29,6 +30,7 @@ async function route() {
   if (name !== current) {
     if (shown) ready[shown]?.hide?.();
     shown = '';
+    closeMenu(); // a menu or sheet belongs to the view it opened in
     // Safari keeps focus (and the keyboard) in a field a nav tap hides.
     document.activeElement?.blur?.();
     current = name;
