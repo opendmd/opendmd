@@ -174,8 +174,9 @@ jobs:
           name="cargo-about-$CARGO_ABOUT_VERSION-$ASSET"
           mkdir -p "$RUNNER_TEMP/about"
           gh release download -R EmbarkStudios/cargo-about "$CARGO_ABOUT_VERSION" -p "$name.tar.gz" -D "$RUNNER_TEMP/about"
-          if command -v sha256sum >/dev/null; then sum=$(sha256sum "$RUNNER_TEMP/about/$name.tar.gz")
-          else sum=$(shasum -a 256 "$RUNNER_TEMP/about/$name.tar.gz"); fi
+          # From stdin: given a path with backslashes, sha256sum prefixes "\" to the hash.
+          if command -v sha256sum >/dev/null; then sum=$(sha256sum < "$RUNNER_TEMP/about/$name.tar.gz")
+          else sum=$(shasum -a 256 < "$RUNNER_TEMP/about/$name.tar.gz"); fi
           test "${sum%% *}" = "$SHA256" || { echo "::error::$name.tar.gz: SHA-256 ${sum%% *}, want $SHA256"; exit 1; }
           # (cd first: Git Bash's GNU tar takes "D:\..." for a remote host)
           (cd "$RUNNER_TEMP/about" && tar -xzf "$name.tar.gz")
