@@ -28,7 +28,8 @@ it is, and adds a web app to manage it.
 - **The web app** at `http://opendmd.local/` works in any browser, on a phone or a computer.
   Previews and GIF preparation run right in the browser, using the same engine as the player.
 - **The simulator** plays a card in a desktop window, drawn as LEDs rather than flat pixels
-  ([downloads](docs/simulator.md#download) for macOS, Windows and Linux).
+  (for developers: [build it from source](docs/simulator.md); everyone else can try the
+  [web demo](https://opendmd.github.io/demo/)).
 
 <!-- site:tiles -->
 

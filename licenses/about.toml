@@ -1,6 +1,6 @@
 # cargo-about (the pinned version: the Makefile's CARGO_ABOUT_VERSION) for
 # the firmware's and the web app's Rust crates, read by tools/notices.py
-# (the simulator has its own, opendmd-sim/about.toml). A crate under a
+# (the simulator is not distributed, so it has no notices). A crate under a
 # licence not listed here fails the build: check a new dependency's licence
 # before adding it. Where a crate offers a choice, the first accepted
 # licence in this order is the one listed (MIT first: its text is short).
