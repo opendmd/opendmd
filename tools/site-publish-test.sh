@@ -2,7 +2,8 @@
 # tools/site-publish.sh against a local bare repository standing in for the
 # public Pages repo: two publishes with a contribution merged in between, and
 # a third with nothing new. gallery/'s formulas must survive every publish,
-# .github/ must be ours (the gallery check and the checker's source, which
+# .github/ must be ours (the gallery check, the Pages workflow, the gallery
+# page's generator and the checker's source, which
 # must build offline as the public repo's workflow builds it), and the site's
 # own files must be replaced. Run by `make test`; nothing leaves the machine.
 set -euo pipefail
@@ -43,7 +44,8 @@ look
 [ -f "$tmp/look/gallery/theirs.psi" ] || fail "the first publish removed a contribution"
 cmp -s "$tmp/look/gallery/README.md" site/public-repo/gallery/README.md || fail "gallery/README.md is not ours"
 cmp -s "$tmp/look/.github/workflows/gallery-check.yml" site/public-repo/.github/workflows/gallery-check.yml || fail "the workflow is not ours"
-for f in opendmd-psi/src/lib.rs opendmd-gallery/src/main.rs opendmd-gallery/Cargo.lock; do
+cmp -s "$tmp/look/.github/workflows/pages.yml" site/public-repo/.github/workflows/pages.yml || fail "the Pages workflow is not ours"
+for f in opendmd-psi/src/lib.rs opendmd-gallery/src/main.rs opendmd-gallery/Cargo.lock tools/gallery_page.py; do
   cmp -s "$tmp/look/.github/gallery-check/$f" "$f" || fail "the checker's source lacks $f"
 done
 [ ! -e "$tmp/look/.github/gallery-check/opendmd-psi/target" ] || fail "a build folder was vendored"

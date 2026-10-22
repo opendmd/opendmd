@@ -11,9 +11,11 @@
 #   in the public repo. What is merged there is never touched here; only its
 #   README.md (how to contribute) is ours, from site/public-repo/gallery/;
 # - .github/: replaced as a whole with what the public repo runs, from
-#   site/public-repo/.github/ (the gallery's pull-request check) plus the
-#   checker's source, vendored from opendmd-psi/ and opendmd-gallery/ (the
-#   check builds it offline from the base branch's copy).
+#   site/public-repo/.github/ (the gallery's pull-request check and the
+#   Pages workflow) plus, under .github/gallery-check/, the checker's source,
+#   vendored from opendmd-psi/ and opendmd-gallery/ (both workflows build it
+#   offline from main's copy), and tools/gallery_page.py (the gallery page's
+#   generator, which the Pages workflow runs on every push to main).
 #
 # Commits as "Site <release>" only when something changed.
 # tools/site-publish-test.sh runs it against a local bare repository
@@ -38,9 +40,10 @@ trap 'rm -rf "$stage"' EXIT
 cp -a site/public-repo/. "$stage"/
 mkdir -p "$stage/.github/gallery-check"
 # Only what git tracks (as committed: the tree is clean), and nothing new beside it.
-untracked=$(git ls-files --others --exclude-standard -- opendmd-psi opendmd-gallery)
+vendored=(opendmd-psi opendmd-gallery tools/gallery_page.py)
+untracked=$(git ls-files --others --exclude-standard -- "${vendored[@]}")
 [ -z "$untracked" ] || { echo "refusing: untracked files in the checker's source: $untracked" >&2; exit 1; }
-git ls-files -z --cached -- opendmd-psi opendmd-gallery |
+git ls-files -z --cached -- "${vendored[@]}" |
   xargs -0 cp --parents -t "$stage/.github/gallery-check"
 
 if [ -d "$work/.git" ]; then
