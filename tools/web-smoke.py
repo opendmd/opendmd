@@ -92,7 +92,8 @@ every view like a person would:
             there hands its words to Create Art
   Auto      preparing by the device (auto_prepare): /api/cache `auto` and
             /api/status `cache` keys; the card's sentence while playing
-            ("…when the panel is idle · 0 of 3"), with the mock paused (its
+            ("…when the panel is idle · 0 of 3", plus the ETA if an
+            earlier pause let it measure its pace), with the mock paused (its
             simulated builder at full pace, "about N s of idle time left")
             and in night mode ("about N nights left"), "All files are
             prepared" after preparing; the option ticked -> "always",
@@ -2576,6 +2577,11 @@ def mock_pass(browser) -> None:
         page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
         page.wait_for_selector("#sets-list [data-path='/sets/overridetest.txt']", timeout=20000)
         page.click("#sets-list [data-path='/sets/overridetest.txt'] button.pl")
+        # The editor still shows the previous draft (smoke, MD only) until
+        # open() has fetched the file: wait for its header and count, which
+        # it sets together with the rows, not just for any row.
+        page.wait_for_function("document.querySelector('#set-title').textContent === 'overridetest'"
+                               f" && document.querySelector('#set-count').textContent.startsWith('{len(ov_set_lines)} GIFs')", timeout=20000)
         page.wait_for_selector("#set-entries .vrow[data-path]")
         ov_row_path = row_path(page, "#set-entries", 0)
         check(ov_row_path == ov_set_lines[0], f"playlists: editor opened overridetest ({ov_row_path})")
@@ -2610,8 +2616,14 @@ def mock_pass(browser) -> None:
         # simulated builder runs at full pace (it writes nothing).
         a = auto_fields(base, "auto")
         check(a["mode"] == "idle" and a["state"] == "paused" and a["reason"] == "playing", f"auto: playing -> paused ({a['state']}, {a['reason']})")
-        t = wait_auto_text(page, "^Files are prepared automatically when the panel is idle · 0 of 3\\.")
-        check(not page.is_checked("#pc-always"), f"auto: card reads '{t}', option unticked")
+        # The ETA follows once the mock's builder has measured its full pace:
+        # the earlier pauses (Now's preview, Now's Pause) can add up to a
+        # file's 2 s, so it may or may not have by now.
+        t = wait_auto_text(page, "^Files are prepared automatically when the panel is idle · 0 of 3( · about \\d+ s of idle time left)?\\.")
+        a = get_json(base + "/api/cache")["auto"]
+        eta = "of idle time left" in t
+        check(not page.is_checked("#pc-always") and eta == (a["avg_full_s"] is not None),
+              f"auto: card reads '{t}', option unticked (avg_full_s {a['avg_full_s']})")
         try:
             put_json(base + "/api/config", {"auto_prepare": "sometimes"})
             check(False, "auto: a bad auto_prepare is refused")
