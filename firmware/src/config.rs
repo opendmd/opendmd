@@ -323,6 +323,17 @@ pub const WIFI_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// How often the network worker tries again to give the mDNS responder the
 /// display's name after that failed (`net_worker::MdnsName`).
 pub const MDNS_RETRY: Duration = Duration::from_secs(5);
+/// How long the network worker listens for another device answering to a
+/// name (`net_worker::name_check`, an mDNS A query). A responder answers a
+/// unique record at once; the query ends early on the first answer.
+pub const NAME_QUERY: Duration = Duration::from_millis(1200);
+/// How long a handler waits for that answer (`GET /api/name-check`, a
+/// `PUT /api/config` that changes the name), on the httpd task: the query
+/// plus room for the worker to finish what it was doing (a Follow poll).
+/// A worker busy for longer (a connect: up to 34 s) gets no say: the check
+/// reads "could not ask" and a save goes ahead, and the worker skips a
+/// query that would end after the handler stopped waiting.
+pub const NAME_CHECK_WAIT: Duration = Duration::from_secs(3);
 /// Improv Serial (`improv.rs`): the join for WiFi details sent over USB
 /// ends within this of their arrival (every wait in `wifi.rs` is clipped to
 /// it). ESP Web Tools waits 45 s from sending them: 34 s, then the save
