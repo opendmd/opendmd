@@ -112,8 +112,10 @@ names the format or shows a copy's path.
   the active playlist switches the player back to All files first. Switching
   is disabled while status says an index is `building`. Entries are always
   GIF paths.
-- **Settings** — WiFi (with a scan) and hostname, which need a reboot;
-  brightness, dwell, shuffle, platform filter and playlist, which apply
+- **Settings** — WiFi (with a scan), which needs a reboot; the hostname,
+  live (Save network then says the new `<mdns>.local` address, from
+  `/api/status`, and links to it when the page was opened by a `.local`
+  name); brightness, dwell, shuffle, platform filter and playlist, which apply
   live (not while an index is building); a **Maximum brightness** under
   Power (default 144, below the level tested safe on the supplied power supply;
   raising it shows a warning, because the panel can reset above it); **Panel

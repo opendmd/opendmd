@@ -319,6 +319,10 @@ pub const AP_TIMEOUT: Duration = Duration::from_secs(600);
 pub const STA_MAX_FAILURES: u32 = 2;
 /// How often the worker re-checks that STA is still associated.
 pub const WIFI_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How often the network worker tries again to give the mDNS responder the
+/// display's name after that failed (`net_worker::MdnsName`).
+pub const MDNS_RETRY: Duration = Duration::from_secs(5);
 /// Improv Serial (`improv.rs`): the join for WiFi details sent over USB
 /// ends within this of their arrival (every wait in `wifi.rs` is clipped to
 /// it). ESP Web Tools waits 45 s from sending them: 34 s, then the save

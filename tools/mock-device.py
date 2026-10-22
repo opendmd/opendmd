@@ -72,9 +72,10 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   match the platform filter "<filter>"; nothing was saved`, nothing saved
   (the firmware builds it, finds it empty and rebuilds the previous one).
 - **`hostname`** is trimmed and lowercased, then must be 1-32 of a-z, 0-9
-  and `-`, not starting or ending with `-` (`nvs_config::valid_hostname`),
-  else a 400; `""` leaves it as it was. Status `mdns` (the name mDNS
-  answers to) is always the hostname here: no other display to clash with.
+  and `-`, not starting or ending with `-` (`opendmd_core::hostname::valid`),
+  else a 400; `""` leaves it as it was. A change is live at once, as on the
+  device (no `reboot_required`). Status `mdns` (the name mDNS answers to) is
+  always the hostname here: no other display to clash with.
 - **`GET /setup`** serves `firmware/web/setup.html` with its two template
   values filled in, as the firmware does (setup mode itself is not modelled).
 - **Smooth motion's list, `/sets/.smooth`** (one card-absolute GIF path a
@@ -798,7 +799,7 @@ def meta_manifest_for(rel: str) -> str | None:
 
 
 PLATFORM_PREFIX_RE = re.compile(r"^[A-Za-z0-9]+_")
-# nvs_config::valid_hostname
+# opendmd_core::hostname::valid
 HOSTNAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?")
 
 
@@ -3047,11 +3048,11 @@ def make_handler(ctx: Context, quiet: bool):
                     self.send_error_json(400, "dwell_max must be >= dwell_min")
                     return
 
-                # WiFi and the hostname take effect after a reboot.
+                # WiFi takes effect after a reboot; a new hostname at once
+                # (status `hostname`/`mdns` read the saved one).
                 reboot_required = (
                     next_settings["wifi_ssid"] != before["wifi_ssid"]
                     or next_settings["wifi_pass"] != before["wifi_pass"]
-                    or next_settings["hostname"] != before["hostname"]
                 )
                 needs_reindex = (
                     next_settings["platforms"] != before["platforms"]
