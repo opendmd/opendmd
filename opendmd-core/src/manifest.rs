@@ -341,16 +341,20 @@ fn is_keyword_flag(token: &str) -> bool {
     KEYWORD_FLAGS.iter().any(|k| token.eq_ignore_ascii_case(k))
 }
 
-/// The listed platform this token names, ignoring case (`Nes` -> `NES`).
+/// A listed platform, exactly as listed: the parser is case-sensitive
+/// (`Nes_Gradius` has no platform).
+fn is_known_platform(token: &str) -> bool {
+    PLATFORMS.contains(&token)
+}
+
+/// The listed platform a builder argument names, in any case (`snes` ->
+/// `SNES`): what a user picks or types is written as listed.
+#[cfg(feature = "names")]
 fn known_platform(token: &str) -> Option<&'static str> {
     PLATFORMS
         .iter()
         .copied()
         .find(|p| p.eq_ignore_ascii_case(token))
-}
-
-fn is_known_platform(token: &str) -> bool {
-    known_platform(token).is_some()
 }
 
 /// Author handle: a known handle, or any token starting with a lowercase
@@ -399,11 +403,9 @@ fn parse_stem(stem: &str) -> Entry {
             break;
         }
     }
-    if platform.is_none() && rest.len() > 1 {
-        if let Some(p) = known_platform(rest[0]) {
-            platform = Some(p.to_string());
-            rest = &rest[1..];
-        }
+    if platform.is_none() && rest.len() > 1 && is_known_platform(rest[0]) {
+        platform = Some(rest[0].to_string());
+        rest = &rest[1..];
     }
 
     // The whole stem is the title when there was no usable prefix.
@@ -832,6 +834,7 @@ mod tests {
     fn every_listed_platform_round_trips() {
         let multi = MULTI_PLATFORMS.iter().map(|(_, n)| *n);
         for p in PLATFORMS.iter().copied().chain(multi) {
+            // The builder takes the argument in any case, writes it as listed.
             for given in [p.to_string(), p.to_ascii_lowercase()] {
                 let path = build_name("Super Game", Some(&given), "C", Some(3), Some("ross"))
                     .unwrap_or_else(|e| panic!("{p}: {e:?}"));
@@ -841,7 +844,18 @@ mod tests {
                 assert_eq!(e.title, "Super Game", "{path}");
                 assert_eq!(e.variant, Some(3), "{path}");
             }
+            // A name in another case is no platform, so the title keeps it.
+            if !p.contains('_') && p.chars().any(|c| c.is_ascii_uppercase()) {
+                let low = p.to_ascii_lowercase();
+                let e = Entry::from_path(&format!("/gifs/C/{low}_Super_Game_03.gif"));
+                assert_eq!(e.platform, None, "{low}");
+            }
         }
+        // A title starting with a platform's name in another case is fine.
+        assert_eq!(
+            build_name("Pinball Wizard", None, "C", None, None).as_deref(),
+            Ok("/gifs/C/Pinball_Wizard.gif")
+        );
     }
 
     #[cfg(feature = "names")]
@@ -1260,10 +1274,10 @@ mod tests {
             assert!(e.flags.is_empty(), "{path}");
         }
 
-        // A listed platform in another case is that platform, as listed.
+        // Parsing is case-sensitive: mixed case is not a platform.
         let e = p("/gifs/Consoles/Nes_Gradius.gif");
-        assert_eq!(e.platform.as_deref(), Some("NES"));
-        assert_eq!(e.title, "Gradius");
+        assert_eq!(e.platform, None);
+        assert_eq!(e.title, "Nes Gradius");
 
         // A season in front of an unlisted word is the platform itself.
         let e = p("/gifs/XMAS/XMAS_SANTA_Panic_01.gif");
