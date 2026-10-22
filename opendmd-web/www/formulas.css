@@ -1,12 +1,9 @@
-/* Library → Formulas (js/formulas.js): the gallery and its details in the
-   Library's two columns, the editor as a screen of its own (#library/formula). */
-#psi-gal,#psi-side,#psi-ed{display:none}
-.psi:not(.lq) #psi-gal{display:block}
-.psi:not(.lq) #psi-side{display:block}
-.psi:not(.lq) :is(#lib-list,#lib-side,#lib-count,#lib-select,#lib-chips,.vsep){display:none}
+/* The Formulas view (js/formulas.js): the gallery and its details in the
+   Library's two columns, the editor as a screen of its own (#formulas/edit). */
+#psi-ed{display:none}
 .psied>:not(#psi-ed){display:none!important}
-.psied #psi-ed{display:block;grid-column:1/-1}
-#psi-gal .card{margin:16px 0 0}
+.psied>#psi-ed{display:block}
+#psi-gal .card{margin:0 0 16px}
 #psi-gal h3{margin-top:0}
 .psi-intro p{margin-top:0}
 .psi-mark{font:600 17px/1 system-ui,sans-serif;color:var(--acc)}
@@ -22,8 +19,9 @@
 .psi-sl input{flex:1;width:auto}
 .psi-edhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .psi-edhead input{flex:1;min-width:120px}
-.psi-view{display:grid;grid-template-columns:minmax(0,512px) minmax(240px,1fr);gap:16px;align-items:start}
-.psi-view .acts{margin-top:8px}
+.psi-edb{display:grid;grid-template-columns:minmax(0,512px) minmax(0,1fr);grid-template-areas:"top sl" "top acts" "err err" "code code";gap:8px 16px;align-items:start}
+.psi-top{grid-area:top}.psi-sl2{grid-area:sl}.psi-acts{grid-area:acts}#psi-err{grid-area:err}.psi-code{grid-area:code}
+.psi-acts .acts{margin-top:0}
 .psi-src{display:flex;border:1px solid var(--line);border-radius:var(--r);background:#0a0b0c;overflow:hidden}
 .psi-gut,.psi-hl,#psi-src{font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:2;padding:8px}
 .psi-gut{color:var(--mut);text-align:right;white-space:pre;user-select:none;min-width:2.5em;padding-right:6px;border:1px solid transparent;border-right-color:var(--line)}
@@ -36,7 +34,7 @@
 #psi-src{display:block;width:100%;resize:none;border:1px solid transparent;margin:0;background:transparent;color:transparent;caret-color:var(--fg);white-space:pre;overflow-x:auto;overflow-y:hidden;outline:0}
 #psi-src::selection{background:#f0a03055}
 .psi-src:focus-within{border-color:var(--acc)}
-#psi-err{margin-top:8px;font-size:14px}
+#psi-err{margin:0;font-size:14px}
 #psi-err code{color:var(--fg)}
 .psi-strip{display:flex;gap:8px;align-items:center;margin-top:8px}
 .psi-strip button{min-width:44px;min-height:44px;justify-content:center;font-size:18px}
@@ -46,13 +44,15 @@
 .psi-dl dt button{min-height:28px;padding:2px 4px;color:var(--acc);text-align:left}
 .psi-dl dd{margin:0;color:var(--mut);align-self:center}
 #psi-cheat h3{margin:8px 0 4px}
-@media (max-width:1000px){.psi-view{grid-template-columns:minmax(0,1fr);gap:4px}#psi-side:not(.open){display:none!important}}
+@media (max-width:1000px){.psi-edb{grid-template-columns:minmax(0,1fr);grid-template-areas:"top" "sl" "err" "code" "acts"}#psi-side:not(.open){display:none!important}}
 @media (max-width:760px){
+  .psi-top{position:sticky;top:44px;z-index:3;background:var(--bg2);margin:-12px -12px 0;padding:12px 12px 4px}
+  .psi-acts .cap{display:none}
   .psi-gut,.psi-hl,#psi-src{font-size:16px}
   .psi-tiles{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
   .psi-dl{grid-template-columns:1fr}
   .psi-dl dd{margin-bottom:6px}
 }
-.psi-view.stale canvas{opacity:.55}
-.psi-view.stale #psi-ed-cap::before{content:"Still playing the last version that worked · "}
+.psi-top.stale canvas{opacity:.55}
+.psi-top.stale #psi-ed-cap::before{content:"Still playing the last version that worked · "}
 .psi-sls:empty{display:none}

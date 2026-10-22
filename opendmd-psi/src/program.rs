@@ -223,18 +223,27 @@ impl Program {
         self.loop_ms
     }
 
-    /// Which sliders the steps read: bit 0 `a`, 1 `b`, 2 `c` (the web
-    /// app's editor shows a slider for each).
-    pub fn sliders(&self) -> u8 {
+    /// Which inputs the steps read: bits 0-2 the sliders `a`, `b`, `c`
+    /// (the web app's editor shows a slider for each), bit 3 `t`, bit 4
+    /// the wall clock (`hour`, `minute` or `second`).
+    pub fn inputs(&self) -> u8 {
         let mut m = 0;
         for op in &self.ops[..self.len()] {
             for &v in &[op.a, op.b, op.c][..code::arity(op.code)] {
-                if (S_A..=S_C).contains(&v) {
-                    m |= 1 << (v - S_A);
-                }
+                m |= match v {
+                    S_A..=S_C => 1 << (v - S_A),
+                    S_T => 8,
+                    S_HOUR..=S_SECOND => 16,
+                    _ => 0,
+                };
             }
         }
         m
+    }
+
+    /// Which sliders the steps read: bit 0 `a`, 1 `b`, 2 `c`.
+    pub fn sliders(&self) -> u8 {
+        self.inputs() & 7
     }
 
     /// An estimate of a frame's render time on the ESP32 in µs, from the

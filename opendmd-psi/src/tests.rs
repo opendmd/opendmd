@@ -410,6 +410,10 @@ fn sliders_and_the_esp32_estimate() {
     assert_eq!(s("gray(a)"), 1);
     assert_eq!(s("frame { k = c * 2 }\nrgb(x, k, b)"), 0b110);
     assert_eq!(s("k = a\ngray(x)"), 0, "an unused value is dropped");
+    let i = |src: &str| compile(src).unwrap().inputs();
+    assert_eq!(i("gray(x)"), 0);
+    assert_eq!(i("gray(sin(t))"), 8);
+    assert_eq!(i("gray(minute / 60 + b)"), 16 | 2);
     // Within 25 % of what psi-probe measured on the ESP32 (effect frame p50, µs).
     for (src, measured) in [
         (sketches::PLASMA, 7245),
