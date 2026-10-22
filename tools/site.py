@@ -27,7 +27,10 @@
                by OpenDMD, CC0) and the contributions merged into the public
                site repo's gallery/ (`--gallery`, fetched by release.yml),
                each checked again by opendmd-gallery (`--gallery-tool`)
-               before it is published; thumbnails drawn by it at build time
+               before it is published; thumbnails drawn by it at build time.
+               The page's body and thumbnails are tools/gallery_page.py's,
+               which the public repo's Pages workflow also runs (vendored)
+               on every push to its main, so a merge is live without a release
 - /art/        the landing page's tiles and the wordmark (tools/site-art.py: recordings of the
                panel's own effects and live items, and CC0 sprites), drawn
                as LEDs by CSS
@@ -50,19 +53,14 @@ the link. `make site` runs this; `make site-publish` pushes it.
 import argparse
 import html
 import json
-import os
 import posixpath
 import re
 import shutil
-import struct
-import subprocess
-import sys
-import tempfile
-import unicodedata
-import zlib
 from pathlib import Path
 
 import markdown
+
+import gallery_page  # tools/gallery_page.py, beside this file
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -485,152 +483,26 @@ def markers(page: str, text: str, rel_info: dict) -> str:
                         f'(OpenDMD {ver}, <code>opendmd-{ver}.odfw</code>)</p>')
 
 
-# The formula gallery (formulas/index.html).
-GALLERY_PAGE = "formulas/index.html"
-GALLERY_REPO = "https://github.com/opendmd/opendmd.github.io"
-LICENCE_LINKS = {"CC0-1.0": ("CC0", "https://creativecommons.org/publicdomain/zero/1.0/"),
-                 "CC-BY-4.0": ("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/")}
-# More files than this in gallery/ and the rest are left out (a sanity limit).
-GALLERY_MAX = 2000
+# The formula gallery (formulas/index.html): its body and thumbnails come
+# from tools/gallery_page.py, which the public site repo's Pages workflow
+# runs too (vendored), to regenerate them when a contribution is merged.
+GALLERY_PAGE = gallery_page.PAGE
 
 
-def urlencoded(pairs: list[tuple[str, str]]) -> str:
-    """application/x-www-form-urlencoded exactly as the browser's
-    URLSearchParams writes it (alphanumerics and *-._ kept, space as +), so
-    the gallery's links are the web app's (js/psikit.js `link`)."""
-    def enc(v: str) -> str:
-        out = []
-        for b in v.encode():
-            c = chr(b)
-            out.append(c if (c.isascii() and c.isalnum()) or c in "*-._" else "+" if c == " " else f"%{b:02X}")
-        return "".join(out)
-    return "&".join(f"{enc(k)}={enc(v)}" for k, v in pairs)
-
-
-def share_hash(e: dict, name: str | None = None) -> str:
-    """`#formula=…&name=…&a=…`: only the sliders the formula reads that are
-    not 0, as `+v.toFixed(2)` writes them."""
-    pairs = [("formula", e["src"]), ("name", name if name is not None else e["name"])]
-    for j, k in enumerate("abc"):
-        if e["inputs"] & (1 << j) and e.get(k):
-            pairs.append((k, f"{e[k]:.2f}".rstrip("0").rstrip(".")))
-    return "#" + urlencoded(pairs)
-
-
-def slugify(name: str) -> str:
-    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
-    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:48].strip("-")
-
-
-def recompress_png(data: bytes) -> bytes:
-    """opendmd-gallery writes stored (uncompressed) PNGs: the same image,
-    deflated."""
-    assert data[:8] == b"\x89PNG\r\n\x1a\n"
-    chunks, idat, i = [], b"", 8
-    while i < len(data):
-        n, kind = struct.unpack(">I4s", data[i:i + 8])
-        body = data[i + 8:i + 8 + n]
-        i += 12 + n
-        if kind == b"IDAT":
-            idat += body
-        else:
-            chunks.append((kind, body))
-    out = b"\x89PNG\r\n\x1a\n"
-    for kind, body in chunks:
-        if kind == b"IEND":
-            z = zlib.compress(zlib.decompress(idat), 9)
-            out += struct.pack(">I", len(z)) + b"IDAT" + z + struct.pack(">I", zlib.crc32(b"IDAT" + z))
-        out += struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
-    return out
-
-
-def check_gallery(tool: Path, files: list[Path], thumbs: Path, trusted: bool = False) -> tuple[list[dict], list[dict]]:
-    """opendmd-gallery check over `files`: (entries, failures). If the
-    checker itself fails on a batch (not a verdict: a crash), the files are
-    checked one at a time and the one it fails on is left out, so a bad
-    contribution can't stop a release."""
-    thumbs.mkdir(parents=True, exist_ok=True)
-    good, bad = [], []
-
-    def run(batch: list[Path]) -> bool:
-        r = subprocess.run([str(tool), "check", "--json", *(["--trusted"] if trusted else []), "--thumbs", str(thumbs),
-                            *map(str, batch)], capture_output=True, text=True)
-        if r.returncode not in (0, 1):
-            return False
-        for line in r.stdout.splitlines():
-            e = json.loads(line)
-            (bad if "problems" in e else good).append(e)
-        return True
-
-    for k in range(0, len(files), 200):
-        batch = files[k:k + 200]
-        if not run(batch):
-            for f in batch:
-                if not run([f]):
-                    bad.append({"file": f.name, "problems": ["the checker failed on it"]})
-    for p in thumbs.glob("*.png"):
-        p.write_bytes(recompress_png(p.read_bytes()))
-    return good, bad
-
-
-def gallery(out: Path, www: Path, contrib: Path | None, tool: Path) -> str:
-    """The gallery page's body: the contributions (checked again here, so a
-    file that should not have been merged is left out, not published) and
-    the examples, with thumbnails drawn at build time."""
-    examples = json.loads((www / "formulas.json").read_text())
-    with tempfile.TemporaryDirectory() as tmp:
-        files = []
-        for x in examples:
-            vals = " ".join(f"{k}={x[k]:.2f}".rstrip("0").rstrip(".") for k in "abc" if x.get(k))
-            head = [f"-- name: {x['name']}", f"-- description: {x['desc']}", "-- author: OpenDMD", "-- licence: CC0-1.0"]
-            if vals:
-                head.append(f"-- values: {vals}")
-            p = Path(tmp) / f"{slugify(x['name'])}.psi"
-            p.write_text("\n".join(head) + "\n" + x["src"].rstrip("\n") + "\n")
-            files.append(p)
-        seeds, bad = check_gallery(tool, files, out / "formulas/examples", trusted=True)
-        if bad or len(seeds) != len(examples):
-            raise SystemExit(f"an example fails the gallery's checks: {bad}")
-    entries: list[dict] = []
-    if contrib is not None:
-        if not contrib.is_dir():
-            raise SystemExit(f"--gallery {contrib}: not a folder")
-        # Regular files only: a link is never followed (lstat, not stat).
-        files = sorted(p for p in contrib.iterdir() if p.suffix == ".psi" and not p.is_symlink() and p.is_file())[:GALLERY_MAX]
-        for p in sorted(contrib.iterdir()):
-            if p.suffix == ".psi" and (p.is_symlink() or not p.is_file()):
-                print(f"gallery: left out {p.name!r}: not a plain file (a link or a folder)", file=sys.stderr)
-        entries, bad = check_gallery(tool, files, out / "formulas/thumbs")
-        for b in bad:
-            print(f"gallery: left out {b['file']!r}: {'; '.join(b['problems'])}", file=sys.stderr)
-        known = {e["src"].strip() for e in seeds}
-        dup = [e for e in entries if e["src"].strip() in known]
-        for e in dup:
-            print(f"gallery: left out {e['slug']!r}: the same formula as an example", file=sys.stderr)
-        entries = sorted((e for e in entries if e not in dup), key=lambda e: (e["name"].casefold(), e["slug"]))
-
-    def tile(e: dict, pic: str) -> str:
-        t = html.escape
-        lic, url = LICENCE_LINKS[e["licence"]]
-        name = e["name"]
-        return (f'<li class="ftile"><a class="fpic" href="../f/{t(share_hash(e))}" tabindex="-1" aria-hidden="true">'
-                f'<picture class="led"><img src="{t(pic)}" alt="" width="128" height="32" loading="lazy" decoding="async"></picture></a>'
-                f'<h3>{t(name)}</h3><p class="fdesc">{t(e["description"])}</p>'
-                f'<p class="fby">by {t(e["author"])} · <a href="{url}" rel="license">{lic}</a></p>'
-                f'<p class="facts"><a class="cta" href="../f/{t(share_hash(e))}">Open</a>'
-                f'<a class="cta alt" href="../demo/{t(share_hash(e, (name + " remix")[:60]))}">Remix</a></p></li>')
-    community = "".join(tile(e, f"thumbs/{e['slug']}.png") for e in entries)
-    ex = "".join(tile(e, f"examples/{e['slug']}.png") for e in seeds)
-    how = (f'<a href="{GALLERY_REPO}/tree/main/gallery">how to add yours</a>')
-    return (f'<h1>Formula gallery</h1>\n<p class="lead">Formulas are a few lines of maths that draw on the display, every pixel '
-            f'at once. Open one to watch it, change its sliders and send it to your display; Remix opens it in the demo\'s '
-            f'editor. Made one you like? Its page has <strong>Submit to the gallery</strong>, or read {how}.</p>\n'
-            f'<h2 id="community">From the community</h2>\n'
-            + (f'<ul class="ftiles">{community}</ul>\n' if community else
-               f'<p class="tiles-note">Nothing here yet: be the first. Make a formula in the <a href="../demo/#formulas">demo</a>, '
-               f'then Copy share link, and on its page, Submit to the gallery.</p>\n')
-            + f'<h2 id="examples">Examples</h2>\n<p class="tiles-note">By OpenDMD, the ones the web app comes with (CC0).</p>\n'
-            f'<ul class="ftiles">{ex}</ul>\n')
+def write_gallery(out: Path, www: Path, contrib: Path | None, tool: Path, wm: dict) -> None:
+    """formulas/index.html: the site's page around the gallery's markers."""
+    up = "../" * GALLERY_PAGE.count("/")
+    (out / GALLERY_PAGE).parent.mkdir(parents=True, exist_ok=True)
+    examples = json.loads((www / "formulas.json").read_text(encoding="utf-8"))
+    body = gallery_page.build((out / GALLERY_PAGE).parent, examples, contrib, tool)
+    (out / GALLERY_PAGE).write_text(PAGE.format(
+        title="Formula gallery · OpenDMD", description=html.escape("Formulas for the OpenDMD LED display: open one, "
+                                                                     "try it, send it to your display."),
+        up=up, head="",
+        brand=(f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
+               f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>'),
+        menu=menu(GALLERY_PAGE), body=gallery_page.marked(body),
+        banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""), encoding="utf-8")
 
 
 def main() -> None:
@@ -687,17 +559,7 @@ def main() -> None:
                                     brand=brand, menu=menu(page), body=body,
                                     banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
     # The formula gallery: generated, in the menu.
-    up = "../" * GALLERY_PAGE.count("/")
-    wm = art["wordmark"]
-    (out / GALLERY_PAGE).parent.mkdir(parents=True, exist_ok=True)
-    (out / GALLERY_PAGE).write_text(PAGE.format(
-        title="Formula gallery · OpenDMD", description=html.escape("Formulas for the OpenDMD LED display: open one, "
-                                                                     "try it, send it to your display."),
-        up=up, head="",
-        brand=(f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
-               f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>'),
-        menu=menu(GALLERY_PAGE), body=gallery(out, a.www, a.gallery, a.gallery_tool),
-        banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
+    write_gallery(out, a.www, a.gallery, a.gallery_tool, art["wordmark"])
     # The licences page: not a doc, so not in the menu; the footer links it.
     body = markdown.Markdown(extensions=["sane_lists"]).convert(LICENCES)
     up = "../" * LICENCES_PAGE.count("/")

@@ -102,6 +102,7 @@ test:
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo test
 	tools/site-publish-test.sh
 	uv run tools/gallery-check-test.py
+	uv run tools/gallery-pages-test.py
 
 # The same tests again, compiled to wasm and run under node — the only check
 # on this box that the browser path really works. Needs node on PATH.
