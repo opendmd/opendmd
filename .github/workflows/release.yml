@@ -219,8 +219,22 @@ jobs:
           uv run --quiet demos.py b d
           git checkout -- out
 
+      # The formula gallery's contributions: the public site repo's gallery/,
+      # read-only over https (a public repo: no token). tools/site.py checks
+      # every file again with this repo's opendmd-gallery before publishing
+      # it, never follows a link, and leaves out any that fail.
+      - name: Fetch the formula gallery
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/site-gallery"
+          git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/opendmd/opendmd.github.io "$dir"
+          git -C "$dir" sparse-checkout set --no-cone '/gallery/*.psi'
+          git -C "$dir" checkout -q
+          mkdir -p "$dir/gallery"
+          echo "$(find "$dir/gallery" -maxdepth 1 -name '*.psi' | wc -l) gallery files"
+
       - name: The public site (make site)
-        run: make site
+        run: make site GALLERY="$RUNNER_TEMP/site-gallery/gallery"
 
       - name: The tree is clean after the build
         run: |
