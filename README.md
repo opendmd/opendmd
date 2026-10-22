@@ -80,6 +80,8 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
   changing the file.
 - **Live items and effects:** a clock, scrolling text, a tunnel, Mode 7 rotozoom, a starfield
   and wireframe shapes, all drawn on the panel and usable in any playlist.
+- **Formulas:** a few lines of maths that draw the panel's pixels: plasma, fire, rain, a clock.
+  Remix an example, drag a number and watch, share it as a link, or save it as a GIF.
 - **Looks:** full colour or a single amber, red, green, blue or white, with optional phosphor glow.
 - **Schedules:** a playlist or brightness for parts of the week, and a night mode that turns the
   panel off or dims it.
@@ -106,8 +108,8 @@ The documentation is also at **[opendmd.github.io](https://opendmd.github.io/)**
 
 - [What you need](docs/guide/hardware.md), [Install](docs/guide/install.md) and
   [Updating](docs/guide/updating.md)
-- [The web app](docs/guide/web-app.md), [Create Art](docs/guide/create-art.md) and
-  [Effects and live items](docs/guide/effects.md)
+- [The web app](docs/guide/web-app.md), [Create Art](docs/guide/create-art.md),
+  [Effects and live items](docs/guide/effects.md) and [Formulas](docs/guide/formulas.md)
 - [The SD card](docs/guide/card.md): where GIFs go and how their names are read
 - [Troubleshooting](docs/guide/troubleshooting.md)
 - [For developers](docs/developers.md): building from source, the crates, the

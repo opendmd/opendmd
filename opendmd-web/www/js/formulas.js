@@ -34,7 +34,7 @@ const info = (src) => (take(src) ? P.info() : []);
 const sliderName = (src, k) => (src.match(new RegExp(`^\\s*(?:--|//)\\s*${k}\\s*[:=]\\s*(.+)$`, 'm')) || [])[1]?.trim() || k;
 const cost = (us) => (us <= 5000 ? 'light' : us <= 8000 ? 'medium' : 'heavy');
 const about = (i) => i.length ? `Loops every ${i[4] / 1000} s · ${i[0]} steps · ${cost(i[6])} for the panel` : '';
-const TIP = (i) => `About ${(i[6] / 1000).toFixed(1)} ms a frame on the panel (light: 100 frames a second; medium: 50; heavy: slower)`;
+const TIP = (i) => `About ${(i[6] / 1000).toFixed(1)} ms a frame on the panel (light: under 5 ms; medium: under 8)`;
 
 // A preview: the LED canvas, the formula it plays and its own clock.
 const views = new Set();
