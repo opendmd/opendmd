@@ -112,6 +112,29 @@ pub struct WifiManager {
     state: WifiState,
 }
 
+/// The station's DHCP client name (`esp_netif_set_hostname`). Before the
+/// driver starts, the first DHCP request carries it; on a running netif
+/// (a rename, `net_worker`) lwip sends it from the next lease renewal or
+/// reconnect. esp-netif copies the string and refuses more than 32 bytes
+/// (`opendmd_core::hostname::MAX`).
+pub fn set_sta_hostname(hostname: &str) {
+    let Ok(name) = std::ffi::CString::new(hostname) else {
+        return;
+    };
+    // SAFETY: the netif handle is checked for null; `name` outlives the call.
+    let err = unsafe {
+        let netif =
+            esp_idf_sys::esp_netif_get_handle_from_ifkey(c"WIFI_STA_DEF".as_ptr() as *const _);
+        if netif.is_null() {
+            return;
+        }
+        esp_idf_sys::esp_netif_set_hostname(netif, name.as_ptr())
+    };
+    if err != esp_idf_sys::ESP_OK {
+        warn!("[wifi] DHCP name {hostname} not set: error {err}");
+    }
+}
+
 impl WifiManager {
     pub fn new(
         modem: Modem,
@@ -129,19 +152,9 @@ impl WifiManager {
             esp_idf_sys::esp_wifi_set_storage(esp_idf_sys::wifi_storage_t_WIFI_STORAGE_RAM);
         }
 
-        // The STA hostname is what the router's device list and DHCP show, and
-        // it has to be set before start() to take effect.
-        // SAFETY: the netif handle is checked for null; `hostname` outlives the
-        // call because esp_netif copies the string.
-        unsafe {
-            let netif =
-                esp_idf_sys::esp_netif_get_handle_from_ifkey(c"WIFI_STA_DEF".as_ptr() as *const _);
-            if !netif.is_null() {
-                if let Ok(name) = std::ffi::CString::new(hostname) {
-                    esp_idf_sys::esp_netif_set_hostname(netif, name.as_ptr());
-                }
-            }
-        }
+        // The STA hostname is what the router's device list and DHCP show;
+        // set before start() it goes out with the first DHCP request.
+        set_sta_hostname(hostname);
 
         Ok(WifiManager {
             wifi,

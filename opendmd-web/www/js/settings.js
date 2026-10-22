@@ -1,8 +1,8 @@
 // Settings: the device's NVS config (GET/PUT /api/config — a PUT is a
-// partial patch, applied live except WiFi and hostname, which need a
-// reboot). Four cards (Playback, Transition, Start-up, Power) that save as
-// they change; everything else under Advanced: time, schedule, Follow
-// RePlayOS, the playback cache, network (its own Save: it reboots), the
+// partial patch, applied live except WiFi, which needs a reboot). Four
+// cards (Playback, Transition, Start-up, Power) that save as they change;
+// everything else under Advanced: time, schedule, Follow RePlayOS, the
+// playback cache, network (its own Save; a new name is live at once), the
 // panel timing (js/panel.js), the device's facts, reindex and reboot,
 // firmware and security (js/firmware.js),
 // and the About line.
@@ -95,7 +95,8 @@ export async function mount(el) {
   on('config', (cf) => { bright.ceil(cf.max_brightness); if (!held) bright.set(cf.brightness); });
 
   const nets = h('div.chips', { id: 'st-nets' });
-  const banner = h('div.banner', { hidden: true, id: 'st-reboot' }, 'Saved. WiFi and name changes take effect after a reboot. ',
+  const moved = h('div.banner', { hidden: true, id: 'st-moved', style: 'margin:12px 0 0' });
+  const banner = h('div.banner', { hidden: true, id: 'st-reboot' }, 'Saved. WiFi changes take effect after a reboot. ',
     h('button.sm', { onclick: reboot }, 'Reboot now'));
   const facts = h('dl.facts', { id: 'st-facts' });
   // One quiet line, only when the card has had trouble (sdhealth on the device).
@@ -150,14 +151,14 @@ export async function mount(el) {
       note('Prepared copies play with less memory and start faster', 'Originals stay as they are.'),
       h('div.row.sp', h('span', cacheLine), cacheBtn),
       h('div.bar', { style: 'margin:12px 0' }, cacheBar), cacheMsg, cacheSum, cacheErr, autoBox, thumbs()),
-    h('div.grp', netH, note('WiFi and name changes need a reboot', 'With no saved network the player raises the open OpenDMD-Setup access point.'),
+    h('div.grp', netH, note('WiFi changes need a reboot', 'With no saved network the player raises the open OpenDMD-Setup access point.'),
       h('div.form.f2',
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
         h('label.stack', 'WiFi password', f.wifi_pass),
         h('label.stack', 'Display name', f.hostname)),
       h('p.cap', 'Give each display its own name: it becomes http://<name>.local/'),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
-      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: () => f.hostname.reportValidity() && save(['wifi_ssid', 'wifi_pass', 'hostname'], net) }, 'Save network'))),
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: () => f.hostname.reportValidity() && save(['wifi_ssid', 'wifi_pass', 'hostname'], net) }, 'Save network')), moved),
     pt, h('div.grp', h('h3', 'Device'), facts, cardNote,
       h('div.row', { style: 'margin-top:12px' },
         h('button', { id: 'st-reindex', onclick: reindex }, 'Rebuild index'),
@@ -223,7 +224,27 @@ export async function mount(el) {
       f.wifi_pass.value = '';
       f.wifi_pass.placeholder = app.config.wifi_pass_set ? 'unchanged (one is saved)' : 'none saved';
       if (r.reboot_required) banner.hidden = false;
+      if (patch.hostname) rename(app.config.hostname);
     });
+  }
+
+  // A new name is live at once. Say where the display is now: the name
+  // mDNS answers to (`<name>-2` if another display has it), once the
+  // device reports it twice running; from a .local address, offer to go
+  // there (the old one stops resolving; an IP keeps working).
+  async function rename(name) {
+    const re = RegExp(`^${name}(-\\d+)?$`);
+    let m, last;
+    for (let i = 0; i < 8 && !(m && m === last); i++) {
+      last = m;
+      await new Promise((r) => setTimeout(r, 1000));
+      const s = await app.refreshStatus().catch(() => null);
+      m = s?.hostname === name && re.test(s.mdns) && s.mdns;
+    }
+    const at = `${m || name}.local`, u = new URL(location);
+    u.hostname = at;
+    clear(moved, `Saved. This display is now at ${at}. `, /\.local$/.test(location.hostname) && h('a', { id: 'st-goto', href: u }, `Go to ${at}`));
+    moved.hidden = false;
   }
 
   async function scan() {

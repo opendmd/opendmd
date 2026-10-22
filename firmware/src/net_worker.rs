@@ -15,7 +15,8 @@
 //! open `OpenDMD-Setup` AP with the captive-portal DNS server, on a timeout
 //! that reboots rather than leaving an open network up forever.
 //!
-//! WiFi details saved through the API take effect at the next boot. Those
+//! WiFi details saved through the API take effect at the next boot; a new
+//! display name is answered to at once ([`rename`]). WiFi details
 //! sent over USB by a browser installer (Improv Serial, `improv.rs`) are
 //! joined live instead, because the installer waits for the answer: the
 //! worker tries them (within [`config::IMPROV_ANSWER_WITHIN`]), saves them
@@ -108,9 +109,7 @@ fn publish(status: &Arc<Mutex<Status>>, state: WifiState, ip: Option<String>) {
 fn start_mdns(hostname: &str) -> Option<EspMdns> {
     match EspMdns::take() {
         Ok(mut mdns) => {
-            let ok = mdns.set_hostname(hostname).is_ok()
-                // Per display, so two on one network are told apart.
-                && mdns.set_instance_name(format!("OpenDMD ({hostname})")).is_ok()
+            let ok = name_mdns(&mut mdns, hostname)
                 && mdns.add_service(None, "_http", "_tcp", 80, &[]).is_ok();
             if ok {
                 info!("[net] mDNS responding as {hostname}.local");
@@ -123,6 +122,40 @@ fn start_mdns(hostname: &str) -> Option<EspMdns> {
             warn!("[net] mDNS unavailable: {e}");
             None
         }
+    }
+}
+
+/// The responder's host name and its service instance (per display, so two
+/// on one network are told apart). On a running responder (espressif/mdns
+/// 1.2.5) `mdns_hostname_set` waits for the mDNS task, which sends goodbyes
+/// for the old name's records, renames the service host, then probes and
+/// announces everything again — so a clash with the new name still takes
+/// `<name>-2` (`publish_mdns`); the instance change likewise says goodbye
+/// and re-announces the service.
+fn name_mdns(mdns: &mut EspMdns, hostname: &str) -> bool {
+    mdns.set_hostname(hostname).is_ok()
+        && mdns
+            .set_instance_name(opendmd_core::hostname::instance_name(hostname))
+            .is_ok()
+}
+
+/// A new display name saved through the API (`NetCommand::Rename`), in
+/// effect now: mDNS re-announced in place (not dropped and taken again,
+/// which would free and reallocate the responder's task and buffers on a
+/// heap that has little to spare), the station's DHCP name (sent from the
+/// next renewal), and the copies `/api/status` and Improv answer with.
+/// With no responder (setup network, not connected) the name is simply
+/// used when mDNS starts. The setup network's own name does not change.
+fn rename(mdns: Option<&mut EspMdns>, status: &Arc<Mutex<Status>>, hostname: &str) {
+    crate::wifi::set_sta_hostname(hostname);
+    crate::improv::set_hostname(hostname);
+    if let Ok(mut s) = status.lock() {
+        s.hostname = hostname.to_string();
+    }
+    match mdns.map(|m| name_mdns(m, hostname)) {
+        Some(true) => info!("[net] renamed: mDNS responding as {hostname}.local"),
+        Some(false) => warn!("[net] renamed to {hostname}; mDNS registration incomplete"),
+        None => info!("[net] renamed to {hostname}"),
     }
 }
 
@@ -172,7 +205,7 @@ fn run(worker: NetWorker) {
         nvs,
         ssid,
         password,
-        hostname,
+        mut hostname,
         status,
         rx,
         settings,
@@ -308,6 +341,12 @@ fn run(worker: NetWorker) {
             }
             Ok(NetCommand::VerifyBundle { header, reply }) => {
                 let _ = reply.send(crate::ota::verify_signature(&header));
+            }
+            Ok(NetCommand::Rename(name)) => {
+                if name != hostname {
+                    rename(mdns.as_mut(), &status, &name);
+                    hostname = name;
+                }
             }
             // Improv Serial (`improv.rs`): the answers go straight back to
             // the USB host through the log ring.
@@ -503,8 +542,13 @@ fn publish_mdns(status: &Arc<Mutex<Status>>) {
         .unwrap_or_default();
     if let Ok(mut s) = status.lock() {
         if s.mdns != name {
-            if !s.mdns.is_empty() || name != s.hostname {
-                warn!("[net] mDNS name now {name}.local (configured {})", s.hostname);
+            // Not the configured name: another device has it. (The
+            // configured name itself is logged by `start_mdns`/`rename`.)
+            if name != s.hostname {
+                warn!(
+                    "[net] mDNS name now {name}.local (configured {})",
+                    s.hostname
+                );
             }
             s.mdns = name;
         }

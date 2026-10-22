@@ -40,7 +40,7 @@
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -103,7 +103,8 @@ pub enum Job {
 }
 
 struct Ctx {
-    hostname: String,
+    /// Replaced by a rename ([`set_hostname`], network worker).
+    hostname: Mutex<String>,
     version: &'static str,
     net: mpsc::Sender<NetCommand>,
 }
@@ -150,7 +151,7 @@ const EV_STUCK: u8 = 8;
 /// network worker (commands queue until it runs).
 pub fn init(hostname: &str, net: mpsc::Sender<NetCommand>) {
     let _ = CTX.set(Ctx {
-        hostname: hostname.to_string(),
+        hostname: Mutex::new(hostname.to_string()),
         version: crate::state::firmware_version(),
         net,
     });
@@ -484,10 +485,22 @@ fn send_info() {
     let Some(c) = CTX.get() else {
         return;
     };
-    let strings = [FIRMWARE_NAME, c.version, CHIP, c.hostname.as_str()];
+    // Held for the encode only (no copy on the drain's 2 KB stack); the
+    // worker's rename holds it for a string swap.
+    let name = c.hostname.lock().unwrap_or_else(|e| e.into_inner());
+    let strings = [FIRMWARE_NAME, c.version, CHIP, name.as_str()];
     logring::raw(imp::rpc_result_len(&strings), &mut |out| {
         imp::encode_rpc_result(imp::CMD_DEVICE_INFO, &strings, out)
     });
+}
+
+/// The name the installer's device info shows from now on (a rename
+/// saved through the API, `net_worker`).
+pub fn set_hostname(name: &str) {
+    if let Some(c) = CTX.get() {
+        let name = name.to_string();
+        *c.hostname.lock().unwrap_or_else(|e| e.into_inner()) = name;
+    }
 }
 
 /// The answer to a scan (network worker): one result per network,
