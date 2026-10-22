@@ -39,8 +39,7 @@ make flasher                 # the browser installer with dist/ on http://localh
 make improv-check            # the real Improv Serial host library against the firmware's framing (node, npm)
 make fw-ota HOST=opendmd.local     # firmware over WiFi (signed bundle)
 make www-push HOST=opendmd.local   # web app only, over WiFi
-make sim-dist                # the simulator's download archive for this platform (release.yml builds all three)
-make site                    # this site, with dist/'s release under install/ (and target/sim-dist/'s simulators)
+make site                    # this site, with dist/'s release under install/
 make notices                 # rewrite the third-party licence notices from the last fw-release (needs cargo-about)
 ```
 
@@ -79,8 +78,8 @@ The crates are deliberately not a Cargo workspace.
 
 - [HTTP API](api.md): every route the player answers, with `curl`
   examples. Anything the web app does, a script can do too.
-- [The simulator](simulator.md): the downloads, its options and how it
-  draws LEDs.
+- [The simulator](simulator.md): running it from source, its keys and screenshots,
+  and where the LED model lives.
 - [Writing an effect](writing-effects.md): how the panel's effects work,
   their limits on the ESP32, and adding a new one, with a worked example.
 - [Hardware pinout](../hardware/PINOUT.md): the DMDoS carrier board's
