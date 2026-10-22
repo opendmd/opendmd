@@ -5,7 +5,7 @@
 """Build the public site (opendmd.github.io) as static files.
 
     uv run tools/site.py OUT_DIR --www opendmd-web/www --card target/demo-card \
-        --art target/site-art --dist dist [--sim-dist target/sim-dist]
+        --art target/site-art --dist dist
 
 - /            the README, as the landing page
 - /install/    the browser installer (docs/guide/install.md with ESP Web
@@ -13,11 +13,6 @@
                dist/: the parts dist/manifest.json names, the merged image
                and the signed update bundle, plus install/release.json
                (what the web app's update check reads)
-- /downloads/  the desktop simulator's builds of the same version, from
-               --sim-dist (release.yml's sim jobs, or make sim-dist): each
-               archive by its versioned name and a stable one
-               (opendmd-sim-macos-universal.zip always the latest), and
-               SHA256SUMS; listed on the simulator page
 - /guide/      the user guide (docs/guide/)
 - /dev/        the developer pages: an overview and a few clean references
                (the detailed notes in docs/ stay in the repo)
@@ -37,8 +32,6 @@ The docs mark site-only pieces with HTML comments, invisible on GitHub:
 own), `<!-- site:tiles -->` places the landing page's tiles, and
 `site:features`, `site:steps` and `site:cards` ... `site:cards-end` style
 the list or the h3 sections after them as cards or numbered steps.
-`site:sim-downloads` ... `site:sim-downloads-end` is replaced by the table
-of simulator downloads (what is between is the GitHub copy's text).
 
 Links between published pages are rewritten to the HTML pages; a link to
 anything not published (CLAUDE.md, source files) keeps its text and loses
@@ -46,7 +39,6 @@ the link. `make site` runs this; `make site-publish` pushes it.
 """
 
 import argparse
-import hashlib
 import html
 import json
 import posixpath
@@ -149,7 +141,6 @@ with each licence's full text:
   driver, and the Rust crates.
 - **[The web app](THIRD-PARTY-LICENSES-web.txt)**: the Rust crates in its WebAssembly, and the
   headings' font, Silkscreen ([SIL Open Font License 1.1](../fonts/OFL.txt)).
-- **The desktop simulator**: each download carries its own `THIRD-PARTY-LICENSES.txt`.
 - **The installer** uses [ESP Web Tools](https://github.com/esphome/esp-web-tools) (Apache 2.0),
   which your browser loads from jsDelivr.
 
@@ -159,13 +150,6 @@ Device › About › Open-source licences**.
 The demo's and this site's animations are recordings of OpenDMD's own effects, and the
 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
 """
-
-# The desktop simulator's builds: (platform, label, archive), in table order.
-SIM_PLATFORMS = [
-    ("macos-universal", "macOS (Apple silicon and Intel)", "zip"),
-    ("windows-x86_64", "Windows (x86-64)", "zip"),
-    ("linux-x86_64", "Linux (x86-64)", "tar.gz"),
-]
 
 CSS = """
 :root{--bg:#0d0e11;--bg2:#15171b;--bg3:#1e2025;--line:#2a2d33;--fg:#ecebe7;--mut:#a0a2a9;
@@ -460,55 +444,12 @@ def release(dist: Path, out: Path) -> dict:
     return info
 
 
-def downloads(sim_dist: Path | None, ver: str, out: Path) -> list[dict]:
-    """The desktop simulator's archives of this version under downloads/,
-    each by its versioned name and its stable one, with SHA256SUMS. Only
-    the platforms found are published (release.yml checks it has all
-    three)."""
-    found: list[dict] = []
-    if sim_dist is None:
-        return found
-    d = out / "downloads"
-    for plat, label, ext in SIM_PLATFORMS:
-        src = sim_dist / f"opendmd-sim-{ver}-{plat}.{ext}"
-        if not src.is_file():
-            continue
-        d.mkdir(exist_ok=True)
-        latest = f"opendmd-sim-{plat}.{ext}"
-        shutil.copyfile(src, d / src.name)
-        shutil.copyfile(src, d / latest)
-        data = src.read_bytes()
-        found.append({"label": label, "name": src.name, "latest": latest, "size": len(data),
-                      "sha256": hashlib.sha256(data).hexdigest()})
-    if found:
-        sums = "".join(f"{f['sha256']}  {n}\n" for f in found for n in (f["name"], f["latest"]))
-        (d / "SHA256SUMS").write_text(sums)
-    return found
-
-
-def sim_table(page: str, ver: str, sims: list[dict]) -> str:
-    if not sims:
-        return ("<p>There are no ready-made builds of this version yet: build it from source as "
-                "below.</p>")
-    rows = "".join(f'<tr><td>{html.escape(f["label"])}</td><td><a href="{rel(page, "downloads/" + f["name"])}">'
-                   f'<code>{html.escape(f["name"])}</code></a></td><td>{f["size"] / 1e6:.1f} MB</td></tr>'
-                   for f in sims)
-    latest = ", ".join(f'<a href="{rel(page, "downloads/" + f["latest"])}"><code>{html.escape(f["latest"])}</code></a>'
-                       for f in sims)
-    return (f'<table><thead><tr><th>Platform</th><th>Download (OpenDMD {html.escape(ver)})</th><th>Size</th></tr>'
-            f'</thead><tbody>{rows}</tbody></table>\n<p>Checksums: <a href="{rel(page, "downloads/SHA256SUMS")}">'
-            f'SHA256SUMS</a>. To link to whichever release is newest: {latest}.</p>')
-
-
-def markers(page: str, text: str, rel_info: dict, sims: list[dict]) -> str:
+def markers(page: str, text: str, rel_info: dict) -> str:
     """Site-only pieces, written in the docs as HTML comments (invisible on
-    GitHub): the install button, the update bundle's download link and the
-    simulator's downloads."""
+    GitHub): the install button, the update bundle's download link."""
     ver = html.escape(rel_info["version"])
     bundle = rel(page, "install/" + rel_info["firmware"])
     text = text.replace("<!-- site:install-button -->", INSTALL_BUTTON.format(version=ver))
-    text = re.sub(r"<!-- site:sim-downloads -->.*?<!-- site:sim-downloads-end -->",
-                  lambda m: sim_table(page, rel_info["version"], sims), text, flags=re.S)
     return text.replace("<!-- site:firmware-bundle -->",
                         f'<p><a href="{bundle}" download>Download the firmware update file</a> '
                         f'(OpenDMD {ver}, <code>opendmd-{ver}.odfw</code>)</p>')
@@ -521,7 +462,6 @@ def main() -> None:
     ap.add_argument("--card", type=Path, required=True)
     ap.add_argument("--art", type=Path, required=True, help="the artwork from tools/site-art.py")
     ap.add_argument("--dist", type=Path, required=True, help="the release from make fw-release")
-    ap.add_argument("--sim-dist", type=Path, help="the simulator's archives (release.yml, make sim-dist)")
     a = ap.parse_args()
     out: Path = a.out
     if out.exists():
@@ -532,7 +472,6 @@ def main() -> None:
     shutil.copytree(a.www, out / "demo", ignore=shutil.ignore_patterns("*.gz", ".gitignore"))
     shutil.copytree(a.card, out / "demo/demo")
     info = release(a.dist, out)
-    sims = downloads(a.sim_dist, info["version"], out)
     art = json.loads((a.art / "art.json").read_text())
     (out / "art/strip").mkdir(parents=True)
     for i in art["items"]:
@@ -543,7 +482,7 @@ def main() -> None:
     assets: set[str] = set()
     bodies: list[str] = []
     for src, page in PAGES.items():
-        text = markers(page, rewrite(src, page, (ROOT / src).read_text(), assets), info, sims)
+        text = markers(page, rewrite(src, page, (ROOT / src).read_text(), assets), info)
         md = markdown.Markdown(extensions=["tables", "fenced_code", "toc", "sane_lists"],
                                extension_configs={"toc": {"permalink": "#"}})
         body = md.convert(text)
@@ -597,8 +536,7 @@ def main() -> None:
                                    "changes made here are overwritten by the next publish.\n")
     n = sum(1 for p in out.rglob("*") if p.is_file())
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
-    print(f"{out}: {n} files, {size / 1e6:.1f} MB; simulator downloads: "
-          f"{', '.join(f['name'] for f in sims) or 'none'}")
+    print(f"{out}: {n} files, {size / 1e6:.1f} MB")
 
 
 if __name__ == "__main__":
