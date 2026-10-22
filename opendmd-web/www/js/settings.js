@@ -224,27 +224,36 @@ export async function mount(el) {
       f.wifi_pass.value = '';
       f.wifi_pass.placeholder = app.config.wifi_pass_set ? 'unchanged (one is saved)' : 'none saved';
       if (r.reboot_required) banner.hidden = false;
-      if (patch.hostname) rename(app.config.hostname);
+      if (keys.includes('hostname')) { moved.hidden = true; rn++; }
+      if (patch.hostname) rename(app.config.hostname, rn);
     });
   }
 
-  // A new name is live at once. Say where the display is now: the name
-  // mDNS answers to (`<name>-2` if another display has it), once the
-  // device reports it twice running; from a .local address, offer to go
-  // there (the old one stops resolving; an IP keeps working).
-  async function rename(name) {
+  // A new name is live at once, once the device's network worker gets to
+  // it (it may be busy for half a minute). Say where the display is then:
+  // the name mDNS answers to (`<name>-2` if another display has it), read
+  // twice the same; from a .local address, offer to go there (the old one
+  // stops resolving; an IP keeps working). No mDNS (setup network): no
+  // address. A later Save network (`rn`) ends this one.
+  let rn = 0;
+  async function rename(name, g) {
     const re = RegExp(`^${name}(-\\d+)?$`);
-    let m, last;
-    for (let i = 0; i < 8 && !(m && m === last); i++) {
+    let s, m, last;
+    clear(moved, 'Applying the new name…');
+    moved.hidden = false;
+    for (let i = 0; i < 30 && !(m && m === last); i++) {
       last = m;
       await new Promise((r) => setTimeout(r, 1000));
-      const s = await app.refreshStatus().catch(() => null);
+      if (g !== rn) return;
+      s = await app.refreshStatus().catch(() => s);
+      if (s?.hostname === name && !s.mdns) break;
       m = s?.hostname === name && re.test(s.mdns) && s.mdns;
     }
-    const at = `${m || name}.local`, u = new URL(location);
+    if (g !== rn) return;
+    const at = `${m}.local`, u = new URL(location);
     u.hostname = at;
-    clear(moved, `Saved. This display is now at ${at}. `, /\.local$/.test(location.hostname) && h('a', { id: 'st-goto', href: u }, `Go to ${at}`));
-    moved.hidden = false;
+    clear(moved, 'Saved. ', m ? [`This display is now at ${at}. `, /\.local$/.test(location.hostname) && h('a', { id: 'st-goto', href: u }, `Go to ${at}`)]
+      : s?.mdns && `For now it still answers at ${s.mdns}.local.`);
   }
 
   async function scan() {

@@ -549,7 +549,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(Ok(applied)) => {
                 if let Some(name) = renamed {
                     // Queued, not waited for: the worker may be mid-connect.
-                    let _ = c.net.send(NetCommand::Rename(name));
+                    if c.net.send(NetCommand::Rename(name)).is_err() {
+                        log::warn!("hostname saved, but the network worker is gone: in effect after a reboot");
+                    }
                 }
                 if let Some(k) = &patch.api_key {
                     crate::httpd::set_api_key(k);

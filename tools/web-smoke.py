@@ -4204,11 +4204,30 @@ def hostname_checks(page: Page, base: str) -> None:
           "settings: the Network note says only WiFi changes need a reboot")
     page.fill("#st-hostname", before + "-smoke")
     page.click("#st-save-net")
-    page.wait_for_selector("#st-moved", state="visible", timeout=15000)
+    page.wait_for_selector("#st-moved", state="visible", timeout=5000)
+    applying = page.inner_text("#st-moved")
+    page.wait_for_function("document.querySelector('#st-moved').textContent.includes('.local')", timeout=15000)
     moved = page.inner_text("#st-moved")
+    check("Applying" in applying, f"settings: Save network with a new name says it is being applied first ({applying!r})")
     check(f"{before}-smoke.local" in moved and page.query_selector("#st-goto") is None and page.is_hidden("#st-reboot")
           and get_json(base + "/api/config")["hostname"] == before + "-smoke",
           f"settings: from an IP, Save network with a new name says where it is now, no link, no reboot prompt ({moved!r})")
+
+    # No mDNS (status `mdns` "", as on the setup network): saved, no address.
+    page.route(STATUS_RE, lambda route: route.fulfill(json={**get_json(base + "/api/status"), "mdns": ""}))
+    page.fill("#st-hostname", before + "-nomdns")
+    page.click("#st-save-net")
+    page.wait_for_function("document.querySelector('#st-moved').textContent.trim() === 'Saved.'", timeout=15000)
+    moved = page.inner_text("#st-moved")
+    check(".local" not in moved, f"settings: with no mDNS a new name is saved with no address claimed ({moved!r})")
+    page.unroute(STATUS_RE)
+    # A later Save network that does not rename hides the notice.
+    page.fill("#st-ssid", page.input_value("#st-ssid") + "-x")
+    page.click("#st-save-net")
+    page.wait_for_selector("#st-reboot", state="visible", timeout=5000)
+    check(page.is_hidden("#st-moved"), "settings: a later WiFi-only save hides the name notice and shows the reboot prompt")
+    put_json(base + "/api/config", {"wifi_ssid": ssid})
+    page.evaluate("document.querySelector('#st-reboot').hidden = true")
 
     port = urllib.parse.urlsplit(base).port
     put_json(base + "/api/config", {"hostname": "smoke-a"})
