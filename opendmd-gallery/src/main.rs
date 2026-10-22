@@ -1,13 +1,14 @@
 //! The formula gallery's checker, on the command line.
 //!
 //! ```text
-//! opendmd-gallery check [--json] [--thumbs DIR] [--previews DIR] FILE...
+//! opendmd-gallery check [--json] [--trusted] [--thumbs DIR] [--previews DIR] FILE...
 //! opendmd-gallery pr --repo DIR [--base REV] [--head REV] [--previews DIR] [--summary FILE]
 //! ```
 //!
 //! `check` validates gallery files on disk (the site build: the merged
 //! gallery and the examples); `--json` prints one line per file, the entry
-//! or its problems; `--thumbs` writes each one's 128 × 32 thumbnail and
+//! or its problems; `--trusted` (OpenDMD's own examples only) lets the
+//! name or author be OpenDMD's; `--thumbs` writes each one's 128 × 32 thumbnail and
 //! `--previews` a sheet of eight frames, as `<slug>.png`. Only regular files
 //! are read (a symlink is refused, not followed).
 //!
@@ -27,14 +28,16 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use opendmd_gallery::{check_file, check_path, json, md, sheet, thumbnail, Entry, MAX_FILE};
+use opendmd_gallery::{
+    check_file, check_file_as, check_path, json, md, sheet, thumbnail, Entry, MAX_FILE,
+};
 
 /// The most files one pull request may add or change.
 const MAX_FILES: usize = 20;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  opendmd-gallery check [--json] [--thumbs DIR] [--previews DIR] FILE...\n  \
+        "usage:\n  opendmd-gallery check [--json] [--trusted] [--thumbs DIR] [--previews DIR] FILE...\n  \
          opendmd-gallery pr --repo DIR [--base REV] [--head REV] [--previews DIR] [--summary FILE]"
     );
     ExitCode::from(2)
@@ -42,6 +45,7 @@ fn usage() -> ExitCode {
 
 struct Opts {
     json: bool,
+    trusted: bool,
     thumbs: Option<PathBuf>,
     previews: Option<PathBuf>,
     repo: Option<PathBuf>,
@@ -58,6 +62,7 @@ fn main() -> ExitCode {
     };
     let mut o = Opts {
         json: false,
+        trusted: false,
         thumbs: None,
         previews: None,
         repo: None,
@@ -71,6 +76,10 @@ fn main() -> ExitCode {
         let r = match a.as_str() {
             "--json" => {
                 o.json = true;
+                Ok(())
+            }
+            "--trusted" => {
+                o.trusted = true;
                 Ok(())
             }
             "--thumbs" => val("--thumbs").map(|v| o.thumbs = Some(v.into())),
@@ -153,7 +162,7 @@ fn check(o: &Opts) -> ExitCode {
             .and_then(|slug| {
                 read_file(f)
                     .map_err(|e| vec![e])
-                    .and_then(|b| check_file(&slug, &b))
+                    .and_then(|b| check_file_as(&slug, &b, o.trusted))
             });
         match r {
             Ok(e) => {

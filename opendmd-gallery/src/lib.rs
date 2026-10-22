@@ -135,6 +135,7 @@ pub fn bad_char(c: char, in_formula: bool) -> Option<&'static str> {
         | 0x200B..=0x200D
         | 0x2060..=0x2065
         | 0x206A..=0x206F
+        | 0x2800
         | 0x3164
         | 0xFE00..=0xFE0F
         | 0xFEFF
@@ -147,6 +148,96 @@ pub fn bad_char(c: char, in_formula: bool) -> Option<&'static str> {
         0xE000..=0xF8FF | 0xF0000..=0x10FFFF => Some("a private-use character"),
         _ => None,
     }
+}
+
+/// Combining marks (the common blocks of Unicode's Mn): more than
+/// [`MAX_MARKS`] on one letter is "Zalgo" text, drawn over the lines around it.
+pub fn is_mark(c: char) -> bool {
+    matches!(c as u32,
+        0x0300..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05BD | 0x05BF | 0x05C1..=0x05C2 | 0x05C4..=0x05C5
+        | 0x05C7 | 0x0610..=0x061A | 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06DC | 0x06DF..=0x06E4
+        | 0x06E7..=0x06E8 | 0x06EA..=0x06ED | 0x0900..=0x0903 | 0x093A..=0x094F | 0x0E31 | 0x0E34..=0x0E3A
+        | 0x0E47..=0x0E4E | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0x302A..=0x302F
+        | 0x3099..=0x309A | 0xFE20..=0xFE2F)
+}
+/// The most combining marks one character may carry.
+pub const MAX_MARKS: usize = 2;
+
+/// Names a contribution's name or author may not pass for: the project and
+/// its maintainers (keep in step with site/public-repo/.github/CODEOWNERS).
+pub const RESERVED: [&str; 2] = ["opendmd", "duggan"];
+
+/// A rough "looks like" form of a name, for [`RESERVED`]: fullwidth letters
+/// as ASCII, lower case, accents dropped, common Cyrillic and Greek
+/// lookalikes as their Latin letters, 0 as o and 1 as l, and nothing but
+/// letters and digits (an approximation of NFKC + casefold + confusables,
+/// without the tables).
+pub fn skeleton(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        let c = match c as u32 {
+            0xFF01..=0xFF5E => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            _ => c,
+        };
+        if is_mark(c) {
+            continue;
+        }
+        for c in c.to_lowercase() {
+            let c = match c {
+                'а' => 'a',
+                'в' => 'b',
+                'с' => 'c',
+                'ԁ' => 'd',
+                'е' | 'ё' => 'e',
+                'һ' => 'h',
+                'і' | 'ї' => 'i',
+                'ј' => 'j',
+                'к' => 'k',
+                'м' => 'm',
+                'н' => 'h',
+                'о' => 'o',
+                'р' => 'p',
+                'ԛ' => 'q',
+                'ѕ' => 's',
+                'т' => 't',
+                'ц' => 'u',
+                'ѵ' => 'v',
+                'ԝ' => 'w',
+                'х' => 'x',
+                'у' => 'y',
+                'α' => 'a',
+                'β' => 'b',
+                'ε' => 'e',
+                'η' => 'n',
+                'ι' => 'i',
+                'κ' => 'k',
+                'μ' => 'm',
+                'ν' => 'v',
+                'ο' => 'o',
+                'ρ' => 'p',
+                'τ' => 't',
+                'υ' => 'u',
+                'χ' => 'x',
+                'ɡ' => 'g',
+                'ı' => 'i',
+                'ℓ' => 'l',
+                '0' => 'o',
+                '1' => 'l',
+                'à'..='å' => 'a',
+                'è'..='ë' => 'e',
+                'ì'..='ï' => 'i',
+                'ò'..='ö' => 'o',
+                'ù'..='ü' => 'u',
+                'ñ' => 'n',
+                'ç' => 'c',
+                c => c,
+            };
+            if c.is_ascii_alphanumeric() {
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// Check a field of the header.
@@ -211,6 +302,12 @@ fn header<'a>(line: Option<&'a str>, keys: &[&str]) -> Option<&'a str> {
 /// Check a whole gallery file (its slug from [`check_path`]): every
 /// problem, or the entry.
 pub fn check_file(slug: &str, bytes: &[u8]) -> Result<Entry, Vec<String>> {
+    check_file_as(slug, bytes, false)
+}
+
+/// [`check_file`]; `trusted` (OpenDMD's own examples, at the site build)
+/// lets the name or author be one of the [`RESERVED`].
+pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, Vec<String>> {
     if bytes.len() > MAX_FILE {
         return Err(vec![format!(
             "the file is {} bytes: {MAX_FILE} at most",
@@ -234,8 +331,25 @@ pub fn check_file(slug: &str, bytes: &[u8]) -> Result<Entry, Vec<String>> {
     };
     // Characters: where and what (each kind once); a tab only in the formula.
     let mut seen: Vec<&str> = Vec::new();
+    let crlf = text.contains("\r\n");
+    if crlf {
+        problems.push(
+            "the file has Windows line endings (CRLF): save it with plain (LF) line endings".into(),
+        );
+    }
     for (i, l) in lines.iter().enumerate() {
+        let mut marks = 0;
         for c in l.chars() {
+            marks = if is_mark(c) { marks + 1 } else { 0 };
+            if marks == MAX_MARKS + 1 {
+                problems.push(format!(
+                    "line {}: more than {MAX_MARKS} accents on one letter",
+                    i + 1
+                ));
+            }
+            if crlf && c == '\r' {
+                continue;
+            }
             if let Some(why) = bad_char(c, i >= skip) {
                 if !seen.contains(&why) {
                     seen.push(why);
@@ -262,6 +376,13 @@ pub fn check_file(slug: &str, bytes: &[u8]) -> Result<Entry, Vec<String>> {
     field(&mut problems, "name", name, MAX_NAME);
     field(&mut problems, "description", description, MAX_DESCRIPTION);
     field(&mut problems, "author", author, MAX_AUTHOR);
+    if !trusted {
+        for (what, v) in [("name", name), ("author", author)] {
+            if RESERVED.contains(&skeleton(v).as_str()) {
+                problems.push(format!("the {what} can't be OpenDMD's or a maintainer's"));
+            }
+        }
+    }
     if !LICENCES.contains(&licence) {
         problems.push(format!(
             "the licence must be one of {}",
