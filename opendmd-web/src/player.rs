@@ -317,6 +317,25 @@ impl Player {
         self.draw();
     }
 
+    /// Show a 128 × 32 RGB888 frame drawn elsewhere (a formula, by the
+    /// Psi module) in place of a file: the file is dropped and the frame
+    /// rendered with the look, the tint and the glow like any other.
+    pub fn show_rgb(&mut self, rgb: &[u8], now: Duration) {
+        if self.engine.is_some() {
+            self.engine = None;
+            self.bytes = None;
+            self.sync = None;
+            self.path.clear();
+        }
+        let (px, dirty) = self.canvas.bytes_and_dirty_mut();
+        let n = px.len().min(rgb.len());
+        px[..n].copy_from_slice(&rgb[..n]);
+        dirty.mark_all();
+        self.shown = true;
+        self.now = now;
+        self.draw();
+    }
+
     /// The panel's tint and phosphor glow, as the device's config has them
     /// (see `opendmd_core::look`); redrawn at once.
     pub fn set_display(&mut self, look: Tint, glow: GlowLevel) {

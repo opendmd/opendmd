@@ -272,6 +272,22 @@ fn swapping_files_transitions_from_the_old_frame() {
 }
 
 #[test]
+fn show_rgb_replaces_the_file() {
+    // A formula's frame (drawn by the Psi module) in place of a file, flat
+    // at scale 1: the bytes as they are, the file gone.
+    let mut player = Player::new(1, Look { flat: true, ..LOOK });
+    player.load("/gifs/X/A.gif", white_pixel_gif(1), ms(0));
+    player.tick(ms(0)).unwrap();
+    let mut rgb = vec![0u8; WIDTH * HEIGHT * 3];
+    rgb[3..6].copy_from_slice(&[10, 20, 30]);
+    player.show_rgb(&rgb, ms(10));
+    assert_eq!(player.path(), "");
+    assert_eq!(player.canvas().get(1, 0), Rgb::new(10, 20, 30));
+    assert_eq!(&player.rgba()[4..8], &[10, 20, 30, 255]);
+    assert_eq!(player.tick(ms(20)), Ok(Tick::Idle), "no file to tick");
+}
+
+#[test]
 fn pause_holds_the_frame_across_a_load() {
     let mut player = Player::new(2, LOOK);
     player.set_paused(true, ms(0));
