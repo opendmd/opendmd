@@ -536,7 +536,7 @@ def transition_checks(page: Page, base: str) -> None:
         except urllib.error.HTTPError as e:
             check(e.code == 400, f"settings: {bad} refused ({e.code})")
     for kind, label in (("dissolve", "Dissolve"), ("wipe_left", "Wipe")):
-        goto_view(page, "settings")
+        goto_view(page, "settings/look")
         # Saved as chosen (no Save button).
         page.select_option("#st-trans", kind)
         page.select_option("#st-trans-ms", "400")
@@ -550,7 +550,7 @@ def transition_checks(page: Page, base: str) -> None:
               f"those two differ by {r['before_first']} px ({r['path']})")
     # The card's Preview: the panel's file, restarted with a transition, on
     # the page only (choosing Blinds saves it; the panel is not restarted).
-    goto_view(page, "settings")
+    goto_view(page, "settings/look")
     page.select_option("#st-trans", "blinds")
     wait_config(base, lambda c: c["transition"] == "blinds")
     before = get_json(base + "/api/status")["now_playing"]
@@ -615,17 +615,39 @@ def pick_cat(page: Page, value: str) -> None:
     page.wait_for_selector("#lib-search")
     if page.input_value("#lib-search"):
         page.fill("#lib-search", "")
-    page.wait_for_selector(sel, timeout=30000)
-    page.click(sel)
+    page.wait_for_selector(sel, state="attached", timeout=30000)
+    if page.is_visible("#lib-csel"):  # a phone: the categories are a select
+        page.select_option("#lib-csel", value)
+    else:
+        page.click(sel)
+
+
+def settings_tab_checks(page: Page) -> None:
+    """Settings' four tabs: bare #settings is Playback, each tab its own
+    address, only the open one in the page, a click changes the address."""
+    goto_view(page, "settings")
+    tabs = page.eval_on_selector_all("#st-tabs .tab", "els => els.map(e => [e.dataset.tab, e.textContent, e.classList.contains('on')])")
+    check(tabs == [["play", "Playback", True], ["look", "Look", False], ["time", "Schedule", False], ["device", "Device", False]],
+          f"settings: four tabs, bare #settings opens Playback ({tabs})")
+    for t, sel in (("look", "#st-glow"), ("time", "#tm-zone"), ("device", "#st-hostname"), ("play", "#st-set")):
+        page.click(f"#st-tabs [data-tab={t}]")
+        page.wait_for_selector(f"#st-tab-{t}", timeout=20000)
+        page.wait_for_selector(sel, timeout=20000)
+        others = page.locator(".stab").count()
+        check(page.evaluate("location.hash") == f"#settings/{t}" and others == 1,
+              f"settings: the {t} tab at #settings/{t}, alone in the page ({others} tab panel(s))")
+    check(page.locator("#st-adv").count() == 0 and page.locator("#st-plats .chip").count() == 0,
+          "settings: no Advanced, no platform chip wall")
 
 
 def goto_view(page: Page, view: str) -> None:
+    """`view`, or `settings/<tab>` (play, look, time, device: only the open
+    tab is in the page) or `sets/edit`."""
     page.evaluate(f"location.hash = '#{view}'")
-    page.wait_for_selector(f"#view-{view}.on")
-    if view == "settings":
-        # Everything past the four cards is under Advanced (remembered open).
-        page.wait_for_selector("#st-adv", state="attached", timeout=20000)
-        page.evaluate("document.querySelector('#st-adv').open = true")
+    name, _, sub = view.partition("/")
+    page.wait_for_selector(f"#view-{name}.on")
+    if name == "settings":
+        page.wait_for_selector(f"#st-tab-{sub or 'play'}", timeout=20000)
     page.wait_for_timeout(300)
 
 
@@ -818,7 +840,7 @@ def thumbs_checks(page: Page) -> None:
     """Settings → Advanced → Thumbnails on: the visible Library rows get a
     first-frame canvas within 3 s, and the list still scrolls (new rows
     get theirs). Off again after."""
-    goto_view(page, "settings")
+    goto_view(page, "settings/device")
     check(not page.is_checked("#st-thumbs"), "thumbnails: off by default on a device")
     page.check("#st-thumbs")
     # On a device a thumbnail is a prepared copy or nothing: never the GIF.
@@ -847,7 +869,7 @@ def thumbs_checks(page: Page) -> None:
     page.remove_listener("request", on_req)
     check(not gifs, f"thumbnails: no GIF fetched for one ({gifs[:2]})")
     page.eval_on_selector("#lib-list", "e => { e.scrollTop = 0; }")
-    goto_view(page, "settings")
+    goto_view(page, "settings/device")
     page.uncheck("#st-thumbs")
     goto_view(page, "library")
     check(page.locator("#lib-list .vrow:not([hidden]) canvas.th").count() == 0, "thumbnails: off again -> no canvases")
@@ -857,21 +879,32 @@ PLAYING = "(document.querySelector('#sets-list .tag.act')?.closest('button.pl').
 
 
 def open_builder(page: Page) -> None:
-    if not page.eval_on_selector("#builder", "d => d.open"):
-        page.click("#builder > summary")
+    """Playlists: Add by filter, the sheet over the editor (a new playlist
+    when none is open)."""
+    if not page.is_visible("#set-build"):
+        page.click("#sets-new")
+    page.click("#set-build")
+    page.wait_for_selector("#builder", timeout=5000)
     page.wait_for_function("document.querySelectorAll('#b-plats .chip').length > 0 || document.querySelector('#b-count').textContent", timeout=30000)
 
 
 def build_smoke_set(page: Page) -> int:
     goto_view(page, "sets")
+    page.click("#sets-new")
+    page.wait_for_function("location.hash === '#sets/edit' && document.querySelector('#set-title').textContent === 'New playlist'", timeout=5000)
+    page.wait_for_selector("#set-editor", state="visible", timeout=5000)
+    check(page.is_visible("#set-name") and page.locator("#set-empty:not([hidden])").count() == 1,
+          "playlists: + New playlist opens an empty editor with a Name field and a hint")
     open_builder(page)
     # The base-playlist select fills when the root listing answers, which a
-    # busy device can do late; "0 match" before that is not a count.
+    # busy device can do late; "Add 0 GIFs" before that is not a count.
     page.wait_for_function("document.querySelectorAll('#b-base option').length > 0", timeout=30000)
     for p in ("MD", "SNES"):
         page.click(f"#b-plats [data-platform={p}]")
-    page.wait_for_function("/^[1-9][\\d,]* match/.test(document.querySelector('#b-count').textContent)", timeout=30000)
+    page.wait_for_function("/^Add [1-9][\\d,]* GIFs?$/.test(document.querySelector('#b-append').textContent)"
+                           " && document.querySelector('#b-use').textContent.startsWith('Replace with ')", timeout=30000)
     page.click("#b-use")
+    page.wait_for_selector("#builder", state="detached", timeout=5000)
     page.wait_for_function("/^[1-9]/.test(document.querySelector('#set-count').textContent)")
     page.fill("#set-name", "smoke")
     page.click("#set-save")
@@ -1125,7 +1158,7 @@ def look_validation(base: str) -> None:
 def save_look(page: Page, base: str, look: str, glow: str) -> None:
     """Settings -> Playback: choose a look and glow (saved as chosen); status
     and config must report them."""
-    goto_view(page, "settings")
+    goto_view(page, "settings/look")
     page.wait_for_selector("#st-look", timeout=20000)
     page.select_option("#st-look", look)
     page.select_option("#st-glow", glow)
@@ -1143,7 +1176,7 @@ def save_look(page: Page, base: str, look: str, glow: str) -> None:
 def look_checks(page: Page, base: str, mock: bool) -> None:
     """The Playback card's look and glow selects, their API validation, and
     the Now preview wearing the look. Leaves the original values saved."""
-    goto_view(page, "settings")
+    goto_view(page, "settings/look")
     page.wait_for_selector("#st-look", timeout=20000)
     opts = page.eval_on_selector_all("#st-look option", "els => els.map(e => [e.value, e.textContent])")
     check(opts == [["colour", "Full colour"], ["amber", "Amber"], ["red", "Red"], ["green", "Green"], ["blue", "Blue"], ["white", "White"]],
@@ -1203,7 +1236,7 @@ def boot_checks(page: Page, base: str, mock: bool) -> None:
     its round trip through /api/config (short -> full -> back), boot_show's
     validation, and the previews of the show and the no-card screen drawn in
     the page. On the mock, POST /api/play of @boot plays it as "Startup"."""
-    goto_view(page, "settings")
+    goto_view(page, "settings/look")
     page.wait_for_selector("#st-boot", timeout=20000)
     opts = page.eval_on_selector_all("#st-boot option", "els => els.map(e => [e.value, e.textContent])")
     check(opts == [["off", "Off"], ["short", "Short"], ["full", "Full"]], f"settings: #st-boot options {opts}")
@@ -1258,14 +1291,22 @@ def power_checks(page: Page, base: str) -> None:
     def cfg():
         return get_json(base + "/api/config")
 
+    def at(sel):
+        # Brightness is on Playback, its maximum on Look: open the tab first.
+        t = "play" if "st-brightness" in sel else "look"
+        if not page.locator(f"#st-tab-{t}").count():
+            page.click(f"#st-tabs [data-tab={t}]")
+            page.wait_for_selector(f"#st-tab-{t}", timeout=10000)
+        return sel
+
     def slider_max():
-        return int(page.eval_on_selector("#st-brightness", "e => e.dataset.ceiling"))
+        return int(page.eval_on_selector(at("#st-brightness"), "e => e.dataset.ceiling"))
 
     def reload_settings():
         # The page reads the config once; a PUT made behind its back needs a reload.
-        goto_view(page, "settings")
+        goto_view(page, "settings/look")
         page.reload()
-        page.wait_for_selector("#st-maxbright", state="attached", timeout=20000)
+        page.wait_for_selector(at("#st-maxbright"), state="attached", timeout=20000)
 
     orig = cfg()
     safe = get_json(base + "/api/status")["brightness_safe_max"]
@@ -1276,13 +1317,13 @@ def power_checks(page: Page, base: str) -> None:
         put_json(base + "/api/config", {"max_brightness": safe, "brightness": 100})
         reload_settings()
         check(slider_max() == safe, f"power: the brightness slider's ceiling is {safe} (follows max_brightness)")
-        page.eval_on_selector("#st-brightness", "e => { e.value = 255; e.dispatchEvent(new Event('input')); }")
-        check(int(page.input_value("#st-brightness")) == safe, "power: the slider stops at the ceiling")
-        page.eval_on_selector("#st-brightness", "e => { e.value = 100; e.dispatchEvent(new Event('input')); }")
+        page.eval_on_selector(at("#st-brightness"), "e => { e.value = 255; e.dispatchEvent(new Event('input')); }")
+        check(int(page.input_value(at("#st-brightness"))) == safe, "power: the slider stops at the ceiling")
+        page.eval_on_selector(at("#st-brightness"), "e => { e.value = 100; e.dispatchEvent(new Event('input')); }")
         wait_config(base, lambda c: c["brightness"] == 100)
-        check(page.input_value("#st-maxbright") == str(safe), "power: the control shows max_brightness")
-        check(not page.is_visible("#st-maxbright-warn"), "power: no warning at the tested limit")
-        text = page.get_attribute("#st-maxbright-note .q", "title") or ""
+        check(page.input_value(at("#st-maxbright")) == str(safe), "power: the control shows max_brightness")
+        check(not page.is_visible(at("#st-maxbright-warn")), "power: no warning at the tested limit")
+        text = page.get_attribute(at("#st-maxbright-note .q"), "title") or ""
         check(f"Above {safe} the panel can reset" in text and "especially on white screens" in text,
               "power: the explanation names the safe value")
         for jargon in ("brownout", "NVS", "rail"):
@@ -1312,34 +1353,35 @@ def power_checks(page: Page, base: str) -> None:
               f"power: PUT reply carries both ({r.get('brightness')}, {r.get('max_brightness')})")
         reload_settings()
         check(slider_max() == safe + 40, f"power: slider max follows a raised max_brightness ({slider_max()})")
-        check(page.is_visible("#st-maxbright"), "power: the control is in the Power card")
-        check(page.is_visible("#st-maxbright-warn"), "power: warning shown above the tested limit")
-        w = page.inner_text("#st-maxbright-warn")
+        check(page.is_visible(at("#st-maxbright")), "power: the control is in the Power card")
+        check(page.is_visible(at("#st-maxbright-warn")), "power: warning shown above the tested limit")
+        w = page.inner_text(at("#st-maxbright-warn"))
         check(w == f"Above the tested limit ({safe}). The display may reset. Only raise this with a stronger power supply",
               f"power: warning text ({w})")
-        page.evaluate("document.querySelector('#st-power-card').scrollIntoView({block: 'center'})")
+        at("#st-power-card") and page.evaluate("document.querySelector('#st-power-card').scrollIntoView({block: 'center'})")
         shot(page, "settings-power", "laptop")
         # The control: lower the max below the brightness; both saved.
-        page.fill("#st-maxbright", str(safe - 60))
-        check(not page.is_visible("#st-maxbright-warn"), "power: warning hides when the control drops to the safe value")
-        page.dispatch_event("#st-maxbright", "change")
+        page.fill(at("#st-maxbright"), str(safe - 60))
+        check(not page.is_visible(at("#st-maxbright-warn")), "power: warning hides when the control drops to the safe value")
+        page.dispatch_event(at("#st-maxbright"), "change")
         deadline = time.time() + 10
         while cfg()["max_brightness"] != safe - 60 and time.time() < deadline:
             time.sleep(0.2)
         c = cfg()
         check(c["max_brightness"] == safe - 60 and c["brightness"] == safe - 60,
               f"power: lowering max lowers brightness in the same save ({c['brightness']}/{c['max_brightness']})")
+        at("#st-brightness")
         page.wait_for_function("+document.getElementById('st-brightness').dataset.ceiling == %d" % (safe - 60), timeout=5000)
-        check(int(page.input_value("#st-brightness")) == safe - 60, "power: the slider follows the lowered brightness")
+        check(int(page.input_value(at("#st-brightness"))) == safe - 60, "power: the slider follows the lowered brightness")
         # Typing above the safe value shows the warning before saving.
-        page.fill("#st-maxbright", str(safe + 1))
-        check(page.is_visible("#st-maxbright-warn"), "power: warning shows as soon as the control is above the safe value")
-        page.fill("#st-maxbright", str(safe))
-        check(not page.is_visible("#st-maxbright-warn"), "power: warning hidden at the safe value")
-        page.fill("#st-maxbright", str(safe - 60))
-        page.dispatch_event("#st-maxbright", "change")
+        page.fill(at("#st-maxbright"), str(safe + 1))
+        check(page.is_visible(at("#st-maxbright-warn")), "power: warning shows as soon as the control is above the safe value")
+        page.fill(at("#st-maxbright"), str(safe))
+        check(not page.is_visible(at("#st-maxbright-warn")), "power: warning hidden at the safe value")
+        page.fill(at("#st-maxbright"), str(safe - 60))
+        page.dispatch_event(at("#st-maxbright"), "change")
         # Round trip through the Playback slider too (saved when it settles).
-        page.eval_on_selector("#st-brightness", "e => { e.value = 40; e.dispatchEvent(new Event('input')); }")
+        page.eval_on_selector(at("#st-brightness"), "e => { e.value = 40; e.dispatchEvent(new Event('input')); }")
         c = wait_config(base, lambda c: c["brightness"] == 40)
         check(c["brightness"] == 40 and c["max_brightness"] == safe - 60, "power: the brightness slider leaves the maximum alone")
     finally:
@@ -1378,7 +1420,7 @@ def panel_checks(page: Page, base: str) -> None:
         check(put_status(base, bad) == code, f"panel: {json.dumps(bad)} refused ({code})")
     check(panel_of(cfg()) == panel_of(c), "panel: nothing changed by the refused requests")
 
-    goto_view(page, "settings")
+    goto_view(page, "settings/device")
     page.wait_for_selector("#st-panel:not([hidden]) #pt-driver", timeout=20000)
     text = page.inner_text("#st-panel")
     check("Panel timing" in text and "If some LEDs show wrong colours on certain pictures, press Test panel timing, or try these one at a time" in text,
@@ -1572,6 +1614,8 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
     rows = live_rows(page)
     want = ["@clock", "@clock?seconds=1", "@clock?date=1", "@clock?style=small&seconds=1&date=1", "@text?msg=OpenDMD"]
     check(rows == want, f"library: Live lists five rows ({rows})")
+    titles = page.eval_on_selector_all("#lib-list .vrow:not([hidden]) .t", "els => els.map(e => e.textContent)")
+    check(len(set(titles)) == 5 and titles[1] == "Clock with seconds", f"library: the Live rows have names of their own ({titles})")
     check(page.is_visible("#lib-live") and page.input_value("#live-msg") == "OpenDMD"
           and page.eval_on_selector_all("#live-speed option", "els => els.map(e => e.value)") == ["60", "40", "25"],
           "library: Live form: #live-msg 'OpenDMD', #live-speed 60/40/25")
@@ -1692,10 +1736,11 @@ def effects_checks(page: Page, base: str, mock: bool) -> None:
         check(put_status(base, bad) == code, f"settings: {bad} -> {code}")
     put_json(base + "/api/config", {"attract": ""})
     # A playlist with the effect's line: saved, read back, reloaded.
+    page.click("#lib-select")
     page.click(f"#lib-list .vrow:not([hidden])[data-path='{want}'] input[type=checkbox]")
     page.click("#lib-to-set")
     page.wait_for_selector("#view-sets.on")
-    page.evaluate(f"async () => {{ const {{ app }} = await import('./js/state.js'); const {{ emit }} = await import('./js/util.js'); app.draft.paths = [{json.dumps(want)}]; app.draft.name = ''; emit('draft'); }}")
+    page.evaluate(f"async () => {{ const {{ app }} = await import('./js/state.js'); const {{ emit }} = await import('./js/util.js'); app.draft = {{ paths: [{json.dumps(want)}], name: '', path: '' }}; emit('draft'); }}")
     page.fill("#set-name", "fxsmoke")
     page.click("#set-save")
     page.wait_for_selector("#sets-list [data-path='/sets/fxsmoke.txt']", timeout=30000)
@@ -1853,7 +1898,7 @@ FW_WATCH = """() => { window.__fw = []; window.__fwBar = 0;
 def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     """Settings -> Advanced -> Firmware (js/firmware.js) against the mock's
     PUT /api/firmware, verified with the throwaway key."""
-    goto_view(page, "settings")
+    goto_view(page, "settings/device")
     page.wait_for_selector("#fw-facts dd", timeout=20000)
     fw = get_json(base + "/api/firmware")
     check(sorted(fw) == ["build", "last", "log", "pending", "variant", "version"] and fw["pending"] is None,
@@ -2005,14 +2050,14 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         wrong = [(c, g) for (c, w), g in zip(WVER_CASES, got) if g != w]
         check(not wrong, f"update: wver() on {len(WVER_CASES)} web app versions (wrong: {wrong})")
         # ?updates= in the address: this player's own versions -> up to date.
-        page.goto(base + "/?updates=" + urllib.parse.quote(release("current.json", version=fw0, www_version=w0)) + "#settings")
-        goto_view(page, "settings")
+        page.goto(base + "/?updates=" + urllib.parse.quote(release("current.json", version=fw0, www_version=w0)) + "#settings/device")
+        goto_view(page, "settings/device")
         page.wait_for_selector("#fw-check", timeout=20000)
         dev = ", development build" if w0 and "-g" in w0 else ""
         t = check_now()
         check(t == f"Up to date ({fw0}{dev})" and not upd(), f"update: ?updates= with the running versions -> '{t}'")
-        page.goto(base + "/#settings")
-        goto_view(page, "settings")
+        page.goto(base + "/#settings/device")
+        goto_view(page, "settings/device")
         page.wait_for_selector("#fw-check", timeout=20000)
         t = check_now(f"{site}/install/missing.json")
         check("(404)" in t and "bad" in page.get_attribute("#fw-msg", "class") and not upd(), f"update: no release.json -> '{t}'")
@@ -2062,7 +2107,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         fw, w = get_json(base + "/api/firmware"), get_json(base + "/api/www")
         check(fw["version"] == UPD_VERSION and w["version"] == f"v{UPD_VERSION}" and w["ok"],
               f"update: the mock runs firmware {fw['version']}, web app {w['version']}, and the page reloaded")
-        goto_view(page, "settings")
+        goto_view(page, "settings/device")
         page.wait_for_selector("#fw-check", timeout=20000)
         t = check_now()
         check(t == f"Up to date ({UPD_VERSION})" and not upd(), f"update: after the update -> '{t}'")
@@ -2165,7 +2210,7 @@ def key_checks(browser, page: Page, base: str) -> None:
           "key: a bad api_key is a 400")
     cfg = get_json(base + "/api/config")
     check(cfg.get("api_key_set") is False and "api_key" not in cfg, "key: config has api_key_set false, never the key")
-    goto_view(page, "settings")
+    goto_view(page, "settings/device")
     page.wait_for_selector("#sec-key", timeout=20000)
     check(not page.is_checked("#sec-key") and "plain HTTP" in page.inner_text("#st-sec"), "key: Security card, switch off")
     expected.append("/api/")  # 401s are the point from here on
@@ -2198,7 +2243,7 @@ def key_checks(browser, page: Page, base: str) -> None:
         # Shown once: a reload (the key is kept here, so no dialog) has the
         # switch on and no key in sight.
         page.reload()
-        goto_view(page, "settings")
+        goto_view(page, "settings/device")
         page.wait_for_function("document.querySelector('#sec-key') && document.querySelector('#sec-key').checked", timeout=20000)
         check(page.locator("#sec-key-val").count() == 0 and page.locator("#key-dlg").count() == 0,
               "key: after a reload the switch is on, the key not shown, no dialog")
@@ -2250,18 +2295,25 @@ def mock_pass(browser) -> None:
         page.goto(base + "/")
         # Now
         page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
-        check(page.locator("#now-stats .stat").count() == 3 and page.locator("#now-facts dt").count() >= 7,
-              "now: health line (three figures) and its More list render")
-        # Late frames in plain words (5 ms or more, during play / at GIF
-        # changes), the raw count of every late frame only under More.
-        page.wait_for_function("/^\\d+ during play · \\d+ at GIF changes$/.test(document.querySelector('#now-late b')?.textContent || '')", timeout=10000)
+        order = page.eval_on_selector_all("#view-now .transport > button:not([hidden])", "els => els.map(e => e.id)")
+        check(order[:2] == ["now-skip", "now-pause"] and "pri" in page.get_attribute("#now-skip", "class"),
+              f"now: the transport starts with Skip, the primary ({order})")
+        lines = page.eval_on_selector_all("#view-now .nowt > div:not([hidden])", "els => els.map(e => e.textContent.trim())")
+        check(len(lines) == 3 and re.match(r"^\d+ of [\d,]+$", lines[2]) and page.locator("#now-more, #now-stats, #now-follow").count() == 0,
+              f"now: title, tags and position on lines of their own; no device stats or Follow switch here ({lines})")
+        # The device's figures are Settings › Device's Status. Late frames in
+        # plain words (5 ms or more, during play / at GIF changes), every late
+        # frame of any size on a line of its own.
+        goto_view(page, "settings/device")
+        page.wait_for_function("/^\\d+ during play · \\d+ at GIF changes$/.test(document.querySelector('#st-late')?.textContent || '')", timeout=10000)
         m = get_json(base + "/api/status")["misses"]
-        late_b = page.locator("#now-late b").text_content()
+        late_b = page.locator("#st-late").text_content()
         check(all(k in m for k in ("steady", "switch", "threshold_ms", "window_ms", "worst_steady_ms", "by_cause", "late_ms")),
               "now: status misses carry steady/switch/threshold_ms/window_ms beside by_cause/late_ms")
-        check("Late frames, any size" in page.locator("#now-facts").text_content() and "Deadline" not in page.locator("#now-more").text_content()
-              and "5 ms" in (page.locator("#now-late").get_attribute("title") or ""),
-              f"now: late frames read '{late_b}', the raw count under More, the threshold in the tooltip")
+        check("Late frames, any size" in page.locator("#st-facts").text_content() and "Deadline" not in page.locator("#st-facts").text_content()
+              and "5 ms" in (page.locator("#st-late").get_attribute("title") or "") and page.locator("#st-facts dt").count() >= 7,
+              f"settings: Device's status reads late frames '{late_b}', the raw count beside it, the threshold in the tooltip")
+        goto_view(page, "now")
         check(get_json(base + "/api/status")["manifest"] == "/sdcard/filelist.txt", "now: the default playlist is filelist.txt")
         wait_lit(page, "#now-panel", "now")
         # In step with the mock's clock: a first sync, then two polls.
@@ -2335,9 +2387,17 @@ def mock_pass(browser) -> None:
         # Library, and three Mario GIFs for the cache test
         open_library(page)
         send_from_library(page, base, "library")
+        check(page.locator("#lib-list .vrow:not([hidden]) input[type=checkbox]").count() == 0 and page.is_hidden("#lib-selbar"),
+              "library: no checkboxes until Select")
+        page.click("#lib-select")
+        page.wait_for_selector("#lib-selbar:not([hidden])")
+        check(page.is_disabled("#lib-to-set") and page.locator("#lib-list .vrow:not([hidden]) input[type=checkbox]").count() > 0,
+              "library: Select shows the checkboxes and the bar, Add to playlist disabled with none picked")
+        page.click("#lib-list .vrow:not([hidden]) >> nth=0")
         page.eval_on_selector_all("#lib-list .vrow:not([hidden]) input[type=checkbox]",
-                                  "els => els.slice(0, 3).forEach(e => e.click())")
-        check(page.inner_text("#lib-selbar b") == "3", "library: three selected")
+                                  "els => els.slice(1, 3).forEach(e => e.click())")
+        check(page.inner_text("#lib-selbar b") == "3",
+              "library: in Select mode a row tap picks it (no preview); three selected")
         selected = page.evaluate("async () => { const { app } = await import('./js/state.js'); return [...app.selection]; }")
         # Per-GIF overrides on the playlist in play (filelist.txt): favourite,
         # hide, play longer 2x, loop 3, on four distinct rows.
@@ -2352,9 +2412,12 @@ def mock_pass(browser) -> None:
         page.click("#ov-hide")
         page.wait_for_selector("#ov-menu", state="detached")
         open_row_menu(page, "#lib-list", 5, via="more")
+        check(page.locator("#ov-menu #ov-2x, #ov-menu #ov-secs").count() == 0, "row menu: Play longer's fields are a second step")
+        page.click("#ov-longer")
         page.click("#ov-2x")
         page.wait_for_selector("#ov-menu", state="detached")
         open_row_menu(page, "#lib-list", 6, via="more")
+        page.click("#ov-longer")
         page.fill("#ov-loops", "3")
         page.click("#ov-loops-set")
         page.wait_for_selector("#ov-menu", state="detached")
@@ -2414,11 +2477,12 @@ def mock_pass(browser) -> None:
         fresh.wait_for_selector("#sets-list [data-path='/filelist.xmas']", timeout=20000)
         fresh.wait_for_timeout(1500)
         bad = [r for r in reqs if r.startswith("/gifs") or re.fullmatch(r"/filelist\.[a-z.]+", r)]
-        check(not bad and not fresh.eval_on_selector("#builder", "d => d.open"),
-              f"sets: no root playlist or /gifs request until Build from filters opens ({bad})")
-        fresh.click("#builder > summary")
+        check(not bad and fresh.locator("#builder").count() == 0 and fresh.is_hidden("#set-editor"),
+              f"sets: no editor until one is opened, no root playlist or /gifs request until Add by filter opens ({bad})")
+        fresh.click("#sets-new")
+        fresh.click("#set-build")
         fresh.wait_for_function("document.querySelectorAll('#b-plats .chip').length > 0", timeout=20000)
-        check(any(r == "/filelist.txt" for r in reqs), "sets: opening Build from filters reads the base playlist")
+        check(any(r == "/filelist.txt" for r in reqs), "sets: opening Add by filter reads the base playlist")
         fresh.context.close()
         # Sets: the playlists by name, the default, activation by value
         goto_view(page, "sets")
@@ -2487,14 +2551,14 @@ def mock_pass(browser) -> None:
         goto_view(page, "library")
         page.click("#lib-to-set")
         page.wait_for_selector("#view-sets.on")
-        page.evaluate("async () => { const { app } = await import('./js/state.js'); const { emit } = await import('./js/util.js'); app.draft.paths = [...app.selection]; app.draft.name = ''; emit('draft'); }")
+        page.evaluate("async (sel) => { const { app } = await import('./js/state.js'); const { emit } = await import('./js/util.js'); app.draft = { paths: sel, name: '', path: '' }; emit('draft'); }", selected)
         page.fill("#set-name", "cachetest")
         page.click("#set-save-activate")
         page.wait_for_function(f"{PLAYING}.includes('cachetest')", timeout=60000)
         check(get_json(base + "/api/status")["entries"] == 3, "cache: playlist cachetest (the three selected) playing")
         forgot = [post_json(base + "/api/cache/forget", {"path": p})["removed"] for p in selected]
         check(all(forgot), f"cache: POST /api/cache/forget removed the three copies ({forgot})")
-        goto_view(page, "settings")
+        goto_view(page, "settings/device")
         line = wait_cache_line(page, "0 of 3")
         check(True, f"cache: settings card reads '{line}'")
         no_leaks(page, "settings (cache)")
@@ -2511,7 +2575,7 @@ def mock_pass(browser) -> None:
             check(e.code == 400 and "idle, always or off" in e.read().decode(), f"auto: a bad auto_prepare is a {e.code}")
         post_json(base + "/api/pause", {})
         goto_view(page, "sets")
-        goto_view(page, "settings")
+        goto_view(page, "settings/device")
         t = wait_auto_text(page, "^Preparing files automatically while the panel is idle · [1-3] of 3 · about \\d+ s of idle time left\\.|^All files are prepared\\.")
         a = auto_fields(base, "auto (paused)")
         check(a["session"] > 0 and a["avg_full_s"] == 2.0, f"auto: paused -> prepared at full pace ('{t}', session {a['session']})")
@@ -2580,12 +2644,18 @@ def mock_pass(browser) -> None:
         check(get_json(base + "/api/config")["set"] == "", "cache: cachetest deleted, All files playing")
         smooth_checks(page, base, overlay)
         # Settings
-        goto_view(page, "settings")
-        page.wait_for_selector("#st-facts dt")
+        settings_tab_checks(page)
+        goto_view(page, "settings/play")
         page.eval_on_selector("#st-brightness", "e => { e.value = 120; e.dispatchEvent(new Event('input')); }")
         check(wait_config(base, lambda c: c["brightness"] == 120)["brightness"] == 120, "settings: brightness saved as it settles, read back")
-        page.wait_for_function("document.querySelector('#view-settings .card h2 .tick').dataset.n > 0", timeout=5000)
-        check(True, "settings: the Playback heading shows the Saved tick")
+        page.wait_for_function("document.querySelector('#st-tab-play .card h2 .tick').dataset.n > 0", timeout=5000)
+        tick = page.text_content("#st-tab-play .card h2 .tick")
+        anim = page.eval_on_selector("#st-tab-play .card h2 .tick", "e => getComputedStyle(e).animationName")
+        check(tick == "Saved ✓" and anim == "out", f"settings: the Playback heading shows Saved ✓, fading ({tick!r}, {anim})")
+        page.wait_for_function("document.querySelector('#st-tab-play .card h2 .tick').textContent === ''", timeout=5000)
+        check(True, "settings: the tick goes after a moment")
+        goto_view(page, "settings/device")
+        page.wait_for_selector("#st-facts dt")
         page.click("#st-scan")
         page.wait_for_selector("#st-nets .chip", timeout=15000)
         check(True, "settings: WiFi scan listed networks")
@@ -2593,17 +2663,23 @@ def mock_pass(browser) -> None:
         names_checks(page, base)
         platform_checks(page, base)
         version = (REPO / "opendmd-web" / "www" / "version.txt").read_text().strip()
+        goto_view(page, "settings/device")
         facts = page.inner_text("#st-facts")
         about = page.inner_text("#st-about")
-        check(version in about and "ready" in facts, f"settings: www_version {version} (About) and index_state shown")
+        check(version in about and "GIFs" in facts and "Late frames" in facts and "index" not in facts.lower(),
+              f"settings: www_version {version} (About), the status without 'index'")
         www_mock_checks(page, base, version)
         api_page_checks(page, base)
+        goto_view(page, "settings/play")
         opts = page.eval_on_selector_all("#st-set option", "els => els.map(e => [e.value, e.textContent])")
         check(opts[0] == ["", "All files (default)"] and ["filelist.xmas", "Christmas"] in opts
               and not any("odm" in v for v, _ in opts), f"settings: playlist choices {opts[:4]}")
-        no_leaks(page, "settings")
-        page.evaluate("window.scrollTo(0, 0)")
-        shot(page, "settings", "laptop")
+        for t in ("play", "look", "time", "device"):
+            goto_view(page, f"settings/{t}")
+            no_leaks(page, f"settings ({t})")
+            page.evaluate("window.scrollTo(0, 0)")
+            shot(page, f"settings-{t}", "laptop")
+        goto_view(page, "settings/time")
         # Time: pick a zone, save, and check the POSIX TZ string landed.
         page.select_option("#tm-zone", label="Europe/Dublin")
         page.wait_for_function("document.querySelector('#tm-now').textContent.includes('Europe/Dublin')", timeout=10000)
@@ -2648,7 +2724,7 @@ def mock_pass(browser) -> None:
         phone = new_page(browser, "phone", errors)
         phone.goto(base + "/")
         phone.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
-        goto_view(phone, "settings")
+        goto_view(phone, "settings/time")
         phone.wait_for_selector("#sc-rules [data-rule='0']", timeout=20000)
         shot(phone, "settings-schedule", "phone")
         goto_view(phone, "now")
@@ -2672,11 +2748,12 @@ def mock_pass(browser) -> None:
         page.wait_for_selector("#now-banner[data-mode='off']", timeout=15000)
         check(get_json(base + "/api/status")["mode"] == "off", "now: resumed -> back to night mode")
         # Clear the schedule: delete the rule, turn night mode off.
-        goto_view(page, "settings")
+        goto_view(page, "settings/device")
         # The panel is off for the night: the builder runs, counted in nights.
         t = wait_auto_text(page, "^Preparing files automatically while the panel is idle · [\\d,]+ of [\\d,]+ · about \\d+ nights? left\\.|^All files are prepared\\.")
         check(True, f"auto: night mode -> '{t}'")
         no_leaks(page, "settings (auto)")
+        goto_view(page, "settings/time")
         page.click("#sc-rules [data-rule='0'] >> text=Delete")
         page.wait_for_selector("#sc-rules [data-rule]", state="detached", timeout=10000)
         page.uncheck("#sc-night-on")
@@ -2685,15 +2762,17 @@ def mock_pass(browser) -> None:
         goto_view(page, "now")
         page.wait_for_selector("#now-banner", state="hidden", timeout=15000)
         check(get_json(base + "/api/status")["mode"] == "normal", "now: schedule cleared -> status mode normal")
-        goto_view(page, "settings")
+        goto_view(page, "settings/device")
         # index_state "building": set switching is disabled until it is ready.
         def building(route):
             r = route.fetch()
             route.fulfill(response=r, json={**r.json(), "index_state": "building"})
         page.route("**/api/status", building)
         page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshStatus(); }")
+        check("updating" in page.inner_text("#st-facts"), "settings: building -> the status says the playlist is updating")
+        goto_view(page, "settings/play")
         page.wait_for_function("document.querySelector('#st-set').disabled", timeout=5000)
-        check("building" in page.inner_text("#st-facts"), "settings: building -> set select disabled")
+        check(True, "settings: building -> set select disabled")
         shot(page, "settings-building", "laptop")
         goto_view(page, "sets")
         page.click("#sets-list [data-path='/filelist.xmas'] button.more")
@@ -2704,9 +2783,9 @@ def mock_pass(browser) -> None:
         goto_view(page, "settings")
         page.wait_for_function("!document.querySelector('#st-set').disabled", timeout=8000)
         check(True, "settings: ready again -> set select enabled")
-        views = page.eval_on_selector_all("#nav a[data-view]", "els => els.map(e => e.textContent.trim().slice(1))")
-        check(views == ["Now", "Library", "Create Art", "Playlists", "Settings"] and page.locator("#view-convert").count() == 0,
-              f"nav: five views with Create Art, no Convert ({views})")
+        views = page.eval_on_selector_all("#nav a[data-view]", "els => els.map(e => e.querySelector('span').textContent)")
+        check(views == ["Now", "Library", "Playlists", "Create Art", "Settings"] and page.locator("#view-convert").count() == 0,
+              f"nav: five views, Playlists third, no Convert ({views})")
         follow_checks(page, base, errors)
         phone_pass(browser, base, errors)
         fx_gif_demo_pass(browser, base, errors)
@@ -3745,7 +3824,7 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
     # Chromium's console line for the aborted GET carries its URL.
     expected.append(urllib.parse.quote(base_name(flaky)))
     goto_view(page, "sets")
-    goto_view(page, "settings")
+    goto_view(page, "settings/device")
     sync_app(page)
     wait_cache_line(page, "0 of 4")
     page.click("#pc-go")
@@ -3781,7 +3860,7 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
         (overlay / p.lstrip("/")).unlink()
     sync_app(page)
     goto_view(page, "sets")
-    goto_view(page, "settings")
+    goto_view(page, "settings/device")
     line = wait_cache_line(page, "3 of 3")
     check(True, f"damage: cachetest back in play, '{line}'")
 
@@ -3913,7 +3992,7 @@ def smooth_checks(page: Page, base: str, overlay: Path) -> None:
     put_text(base + "/api/sets/smoothtest", f"{SMOOTH_ON}\n{SMOOTH_NONE}\n")
     put_json(base + "/api/config", {"set": "smoothtest"})
     sync_app(page)
-    goto_view(page, "settings")
+    goto_view(page, "settings/device")
     page.click("#pc-go")
     page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=120000)
     line = page.inner_text("#pc-progress")
@@ -3966,7 +4045,7 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
     host_val = f"127.0.0.1:{replay_port}"
     try:
         print(f"\n== mock RePlayOS at {replay_base}")
-        goto_view(page, "settings")
+        goto_view(page, "settings/time")
         page.wait_for_selector("#fo", timeout=10000)
         for sel in ("#fo-on", "#fo-host", "#fo-code", "#fo-attract", "#fo-test"):
             check(page.locator(sel).count() == 1, f"follow: {sel} renders")
@@ -4077,7 +4156,7 @@ def follow_checks(page: Page, base: str, errors: list[str]) -> None:
         no_leaks(page, "now (follow)")
 
         # Leave the mock as it started: not following, no host.
-        goto_view(page, "settings")
+        goto_view(page, "settings/time")
         page.wait_for_selector("#fo-on", timeout=10000)
         if page.is_checked("#fo-on"):
             page.uncheck("#fo-on")
@@ -4109,7 +4188,48 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
         page.wait_for_timeout(500)
         over = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
         check(over <= 0, f"phone 360: {view} has no horizontal scroll ({over}px)")
+    for view in ["settings/look", "settings/time", "settings/device", "sets/edit"]:
+        goto_view(page, view)
+        page.wait_for_timeout(800)
+        over = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        check(over <= 0, f"phone 360: {view} has no horizontal scroll ({over}px)")
     page.set_viewport_size({"width": 390, "height": 844})
+    # Playlists on a phone: the editor replaces the list, with a ‹ back.
+    goto_view(page, "sets")
+    page.wait_for_selector("#sets-list [data-path='/filelist.hall']", timeout=20000)
+    check(page.is_hidden("#set-editor") and page.is_hidden(".sehint"), "phone playlists: the list alone, no empty editor")
+    page.click("#sets-list [data-path='/filelist.hall'] button.pl")
+    page.wait_for_function("location.hash === '#sets/edit'", timeout=10000)
+    page.wait_for_selector("#set-entries .vrow[data-path]", timeout=20000)
+    label = page.inner_text("#set-name-row > span")
+    check(page.is_hidden("#sets-list") and page.inner_text("#set-title") == "Halloween" and label == "Save a copy as"
+          and page.input_value("#set-name") == "Halloween copy" and page.inner_text("#set-save") == "Save copy",
+          f"phone playlists: Halloween opens as a screen of its own, named, saved as a copy ({label!r})")
+    foot = page.eval_on_selector(".edfoot", "e => [getComputedStyle(e).position, Math.round(e.getBoundingClientRect().bottom)]")
+    nav = page.eval_on_selector("#nav", "e => Math.round(e.getBoundingClientRect().top)")
+    check(foot[0] == "sticky" and foot[1] <= nav, f"phone playlists: Save stays in reach above the nav ({foot}, nav at {nav})")
+    shot(page, "sets-editor", "phone")
+    page.click("#set-build")
+    page.wait_for_selector("#builder.sheet", timeout=5000)
+    shot(page, "sets-builder", "phone")
+    page.keyboard.press("Escape")
+    page.click("#set-back")
+    page.wait_for_function("location.hash === '#sets'", timeout=5000)
+    check(page.is_visible("#sets-list") and page.is_hidden("#set-editor"), "phone playlists: ‹ Playlists goes back to the list")
+    # The Library's categories are a select on a phone, the chips beneath.
+    goto_view(page, "library")
+    cat = page.input_value("#lib-csel")
+    check(page.is_visible("#lib-csel") and page.is_hidden("#lib-cats") and cat == page.get_attribute("#lib-cats .tab.on", "data-cat"),
+          f"phone library: the category is a select showing {cat!r}, the tabs hidden")
+    other = page.eval_on_selector("#lib-csel", "(e, c) => [...e.options].map(o => o.value).find(v => v != c && v[0] != '@' && v[0] != '_')", cat)
+    page.select_option("#lib-csel", other)
+    page.wait_for_function(f"document.querySelector('#lib-cats .tab.on')?.dataset.cat === {json.dumps(other)}", timeout=20000)
+    check(True, f"phone library: choosing {other!r} in the select opens it")
+    page.select_option("#lib-csel", cat)
+    page.wait_for_function(f"document.querySelector('#lib-cats .tab.on')?.dataset.cat === {json.dumps(cat)}", timeout=20000)
+    lh = page.eval_on_selector("#lib-list", "e => Math.round(e.getBoundingClientRect().bottom)")
+    nav = page.eval_on_selector("#nav", "e => Math.round(e.getBoundingClientRect().top)")
+    check(nav - 120 <= lh <= nav, f"phone library: the list reaches down to the nav ({lh} vs nav {nav})")
     # The Library's Details on a phone: a sheet over the list.
     goto_view(page, "library")
     w = page.eval_on_selector("#lib-search", "e => e.getBoundingClientRect().width")
@@ -4200,7 +4320,7 @@ def hostname_checks(page: Page, base: str) -> None:
     put_json(base + "/api/config", {"hostname": before, "wifi_ssid": ssid})
     page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
     page.wait_for_function(f"document.querySelector('#st-hostname').value === {json.dumps(before)}", timeout=5000)
-    check("WiFi changes need a reboot" in page.inner_text("#st-adv") and "name changes" not in page.inner_text("#st-adv"),
+    check("WiFi changes need a reboot" in page.inner_text("#st-net") and "name changes" not in page.inner_text("#st-net"),
           "settings: the Network note says only WiFi changes need a reboot")
     page.fill("#st-hostname", before + "-smoke")
     page.click("#st-save-net")
@@ -4235,7 +4355,7 @@ def hostname_checks(page: Page, base: str) -> None:
     errs: list[str] = []
     lp.on("pageerror", lambda e: errs.append(str(e)))
     lp.goto(f"http://smoke-a.local:{port}/#settings")
-    goto_view(lp, "settings")
+    goto_view(lp, "settings/device")
     lp.wait_for_function("document.querySelector('#st-hostname').value === 'smoke-a'", timeout=10000)
     lp.fill("#st-hostname", "smoke-b")
     lp.click("#st-save-net")
@@ -4246,7 +4366,7 @@ def hostname_checks(page: Page, base: str) -> None:
           f"settings: from a .local address, a link to the new one ({href})")
     lp.click("#st-goto")
     lp.wait_for_url(f"http://smoke-b.local:{port}/**", timeout=10000)
-    goto_view(lp, "settings")
+    goto_view(lp, "settings/device")
     lp.wait_for_function("document.querySelector('#st-hostname').value === 'smoke-b'", timeout=10000)
     check(True, "settings: the link loads the app at the new address")
 
@@ -4298,7 +4418,7 @@ def names_checks(page: Page, base: str) -> None:
     st = get_json(base + "/api/status")
     check(st.get("mdns") == st["hostname"], f"status: mdns is the hostname with no clash ({st.get('mdns')})")
     label = page.inner_text("#view-settings label:has(#st-hostname)")
-    check("Display name" in label and ".local" in page.inner_text("#st-adv"), f"settings: the field is called Display name ({label!r})")
+    check("Display name" in label and ".local" in page.inner_text("#st-net"), f"settings: the field is called Display name ({label!r})")
 
     def clash(route):
         r = route.fetch()
@@ -4355,22 +4475,38 @@ def platform_checks(page: Page, base: str) -> None:
     or with a set; and Now explains an empty playlist, with Clear filter."""
     cfg = get_json(base + "/api/config")
     check(cfg["platforms"] == "" and cfg["set"] == "", f"platforms: start from All files, no filter ({cfg['platforms']!r})")
-    page.wait_for_selector("#st-plats [data-platform='SNES']", timeout=30000)
+    goto_view(page, "settings/play")
     total = get_json(base + "/api/status")["entries"]
-    check(page.locator("#st-plats input").count() == 0 and page.locator("#st-platforms").count() == 0,
-          "settings: platforms are chips, no text field")
-    check("on" in page.get_attribute("#st-plats [data-platform='']", "class"), "settings: All is on with no filter")
+    page.wait_for_function("/^All \\(\\d+\\)$/.test(document.querySelector('#st-plat-val').textContent)", timeout=30000)
+    check(page.locator("#st-plats").count() == 0 and page.locator("#st-platforms").count() == 0,
+          f"settings: platforms are one row, '{page.inner_text('#st-plat-val')}', no chips until Choose…")
+    page.click("#st-plat-btn")
+    page.wait_for_selector("#st-plat-sheet #st-plats [data-platform='SNES']", timeout=30000)
+    check(page.is_disabled("#st-plat-only"), "settings: the platform sheet opens with nothing picked, Only these disabled")
+    counts = page.eval_on_selector_all("#st-plats .chip[data-platform]", "els => els.map(e => +e.querySelector('small').textContent.replace(/,/g, ''))")
+    more = page.locator("#st-plat-more").count()
+    check(counts == sorted(counts, reverse=True) and (not more or min(counts) >= 5),
+          f"settings: chips most first, those under 5 behind +N more ({counts}, more {more})")
+    if more:
+        page.click("#st-plat-more")
+        check(page.locator("#st-plat-more").count() == 0, "settings: +N more shows the rest")
+    page.fill("#st-plat-q", "sn")
+    shown = page.eval_on_selector_all("#st-plats .chip[data-platform]", "els => els.map(e => e.dataset.platform)")
+    check("SNES" in shown and "MD" not in shown, f"settings: the sheet's search narrows the chips ({shown})")
     page.click("#st-plats [data-platform='SNES']")
-    c = wait_config(base, lambda c: c["platforms"] == "SNES")
-    check(c["platforms"] == "SNES", f"settings: tapping SNES saves platforms SNES ({c['platforms']!r})")
+    page.fill("#st-plat-q", "")
     page.click("#st-plats [data-platform='MD']")
+    shot(page, "settings-platforms", "laptop")
+    check(get_json(base + "/api/config")["platforms"] == "" and page.inner_text("#st-plat-only") == "Only these (2)",
+          "settings: nothing saved until Only these")
+    page.click("#st-plat-only")
     c = wait_config(base, lambda c: set(c["platforms"].split(",")) == {"SNES", "MD"})
-    check(set(c["platforms"].split(",")) == {"SNES", "MD"}, f"settings: and MD adds to it ({c['platforms']!r})")
-    page.wait_for_function("document.querySelector(\"#st-plats [data-platform='MD']\").classList.contains('on')"
-                           " && !document.querySelector(\"#st-plats [data-platform='']\").classList.contains('on')", timeout=5000)
+    check(set(c["platforms"].split(",")) == {"SNES", "MD"} and page.locator("#st-plat-sheet").count() == 0,
+          f"settings: Only these saves SNES and MD and closes the sheet ({c['platforms']!r})")
+    page.wait_for_function("document.querySelector('#st-plat-val').textContent === 'SNES, MD'", timeout=5000)
+    check(True, "settings: the row names them")
     entries = get_json(base + "/api/status")["entries"]
     check(0 < entries < total, f"platforms: MD,SNES plays some of the playlist ({entries} of {total})")
-    shot(page, "settings-platforms", "laptop")
     # Refused: the filter alone, and with a set; nothing saved.
     try:
         put_json(base + "/api/config", {"platforms": "Loo"})
@@ -4384,9 +4520,11 @@ def platform_checks(page: Page, base: str) -> None:
     check(put_status(base, {"platforms": "Loo", "set": "filelist.xmas", "brightness": 33}) == 400
           and get_json(base + "/api/config")["set"] == "" and get_json(base + "/api/config")["brightness"] != 33,
           "config: Loo with a set change is refused too, nothing of the patch saved")
-    page.click("#st-plats [data-platform='']")
+    page.click("#st-plat-btn")
+    page.wait_for_selector("#st-plats [data-platform='MD'].on", timeout=10000)
+    page.click("#st-plat-all")
     c = wait_config(base, lambda c: c["platforms"] == "")
-    check(c["platforms"] == "", "settings: All clears the filter")
+    check(c["platforms"] == "", "settings: All platforms clears the filter")
     # Now, with nothing to play under a filter (faked: the firmware refuses
     # to get there, but a filter saved by older firmware can).
     goto_view(page, "now")
@@ -4426,7 +4564,7 @@ def platform_checks(page: Page, base: str) -> None:
     page.unroute(STATUS_RE)
     page.wait_for_function("!document.querySelector('#now-title').textContent.startsWith('Nothing')", timeout=10000)
     check(True, "now: playing again once status has entries")
-    goto_view(page, "settings")
+    goto_view(page, "settings/device")
     page.wait_for_selector("#st-facts dt")
 
 
@@ -4488,12 +4626,15 @@ def sd_unreadable_pass(browser) -> None:
               f"unreadable card: status sd {{mounted: true, readable: false, error, formatting: false}} ({sd})")
         page = new_page(browser, "laptop", errors)
         page.goto(base + "/")
-        page.wait_for_function("[...document.querySelectorAll('#now-facts dt')].some(e => e.textContent === 'Card')", timeout=20000)
-        card = page.evaluate("() => { const dt = [...document.querySelectorAll('#now-facts dt')].find(e => e.textContent === 'Card');"
-                             " const dd = dt.nextElementSibling; return [dd.textContent, dd.classList.contains('bad')]; }")
-        check(card == ["Not readable: needs FAT32", True], f"unreadable card: Now's Card line says so, in red ({card})")
+        page.wait_for_selector("#now-sd:not([hidden])", timeout=20000)
         check(page.is_visible("#now-sd") and page.is_visible("#now-format"),
-              "unreadable card: Now shows the card line and Format card… outside More")
+              "unreadable card: Now shows the card line and Format card…")
+        goto_view(page, "settings/device")
+        page.wait_for_function("[...document.querySelectorAll('#st-facts dt')].some(e => e.textContent === 'Card')", timeout=20000)
+        card = page.evaluate("() => { const dt = [...document.querySelectorAll('#st-facts dt')].find(e => e.textContent === 'Card');"
+                             " const dd = dt.nextElementSibling; return [dd.textContent, dd.classList.contains('bad')]; }")
+        check(card == ["Not readable: needs FAT32", True], f"unreadable card: Settings › Device's Card line says so, in red ({card})")
+        goto_view(page, "now")
         shot(page, "now-sd-unreadable", "laptop")
         code, reply = put_www(base, (REPO / "opendmd-web" / "www.pack").read_bytes())
         check(code == 200 and reply is not None and reply.get("staged") is False,
@@ -4585,10 +4726,10 @@ def device_flash_ui(browser, device: str, errors: list[str]) -> None:
     page.goto(device + "/")
     page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')",
                            timeout=30000)
-    check(page.locator("#now-stats .stat").count() == 3,
+    check(page.locator("#now-skip").count() == 1,
           f"device web app: the page from flash renders the Now view ({time.time() - t0:.1f} s)")
     wait_lit(page, "#now-panel", "device web app", 40)
-    goto_view(page, "settings")
+    goto_view(page, "settings/device")
     page.wait_for_selector("#st-facts dt", timeout=20000)
     check(w.get("version", "?") in page.inner_text("#st-about"), "device web app: Settings shows the pack's version")
     page.context.close()
@@ -4612,7 +4753,7 @@ def device_pass(browser, device: str) -> None:
         page = new_page(browser, "laptop", errors)
         page.goto(base + "/")
         page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=30000)
-        check(page.locator("#now-stats .stat").count() == 3, "device now: health line renders")
+        check(page.locator("#now-skip").count() == 1, "device now: the view renders")
         wait_lit(page, "#now-panel", "device now", 40)
         st0 = get_json(base + "/api/status")
         check(all(k in st0["now_playing"] for k in ("elapsed_ms", "frame")) and "t_ms" in st0,
@@ -4666,7 +4807,7 @@ def device_pass(browser, device: str) -> None:
         r = cache_ready(base, 180)
         check(r["state"] == "ready" and r["prepared"] is not None,
               f"device cache: /api/cache {r['prepared']} of {r['total']} prepared (count {r['count_ms']} ms, ready after {time.time() - t0:.1f} s)")
-        goto_view(page, "settings")
+        goto_view(page, "settings/device")
         page.wait_for_selector("#st-facts dt", timeout=20000)
         check(page.input_value("#st-hostname") != "", "device settings: config GET rendered")
         cfg = get_json(base + "/api/config")
@@ -4722,7 +4863,7 @@ def device_pass(browser, device: str) -> None:
         phone.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=30000)
         wait_lit(phone, "#now-panel", "device phone now", 40)
         shot(phone, "device-now", "phone")
-        goto_view(phone, "settings")
+        goto_view(phone, "settings/device")
         phone.wait_for_selector("#st-facts dt", timeout=20000)
         shot(phone, "device-settings", "phone")
         phone.context.close()
