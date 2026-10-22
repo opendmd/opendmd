@@ -16,6 +16,9 @@ env_logger = "0.11"
 log = "0.4"
 minifb = "0.28"
 png = "0.17"
+# The folder picker when started with no card (double-clicked). On Linux
+# through the XDG desktop portal (D-Bus, pure Rust): no GTK at build or run time.
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
 [patch.crates-io]

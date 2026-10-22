@@ -1,14 +1,52 @@
 # The simulator
 
 `opendmd-sim` plays a card in a desktop window through the same
-`opendmd-core` engine the firmware runs.
+`opendmd-core` engine the firmware runs. It opens a `128 * scale` by
+`32 * scale` window: 1280x320 at the default scale of 10.
+
+## Download
+
+<!-- site:sim-downloads -->
+Ready-made builds for macOS, Windows and Linux come with each release, on
+the [OpenDMD site's simulator page](https://opendmd.github.io/dev/simulator.html#download).
+<!-- site:sim-downloads-end -->
+
+Each archive holds the program, a short README, the licences and the
+third-party notices for the open-source crates it is built from. Unpack it
+and double-click `opendmd-sim`: a folder picker opens. Choose a card (a
+folder with `filelist.txt` in it) or any folder of GIFs; cancel it for the
+built-in demo of the panel's effects and live items. On Windows you can
+also drop a folder, or a GIF, onto `opendmd-sim.exe`. From a terminal,
+`opendmd-sim <folder or GIF>` does the same, and `opendmd-sim --help` lists
+the options below.
+
+The builds aren't signed with a paid developer certificate, so the first
+start needs one extra step:
+
+- **macOS:** Control-click (or right-click) `opendmd-sim`, choose **Open**,
+  then **Open** again. Where macOS offers no Open button (macOS 15 and
+  later), try to open it once, then click **Open Anyway** in System
+  Settings > Privacy & Security. Or, in Terminal: `xattr -d
+  com.apple.quarantine opendmd-sim`. It runs in a Terminal window, which
+  shows what is playing.
+- **Windows:** if SmartScreen says it protected your PC, click **More
+  info**, then **Run anyway**. The console window beside the simulator
+  shows what is playing.
+- **Linux:** it needs glibc 2.34 or newer (Ubuntu 22.04, Debian 12,
+  Fedora 35 and later) and an X11 or Wayland desktop: `libX11` and
+  `libXcursor`, or `libwayland-client` and `libxkbcommon`, which every
+  desktop already has. The folder picker is the desktop's own, through
+  `xdg-desktop-portal`, or `zenity`; with neither, the demo plays, and a
+  folder can be given on the command line.
+
+## Build it
 
 ```bash
 make sim ARGS="--root /path/to/card --platforms MD,SNES"
+make sim-dist     # this platform's download archive, in target/sim-dist/
 ```
 
-`make sim` needs a display; the simulator opens a `128 * scale` by
-`32 * scale` window — 1280x320 at the default scale of 10.
+`make sim` needs a display.
 
 ## What it draws
 
@@ -34,7 +72,12 @@ frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.
 ## Options
 
 ```
---root <dir>              card root, holding gifs/ and filelist.txt (required)
+<CARD>                    a card (a folder holding filelist.txt), any folder
+                          of GIFs (played in name order; a cache/ folder is
+                          skipped), or one GIF
+--root <dir>              card root, holding gifs/ and filelist.txt
+--demo                    the built-in demo: effects, the clock and
+                          scrolling text, no card needed
 --manifest <path>         default <root>/filelist.txt
 --platforms MD,SNES       comma-separated platform prefixes
 --title <substr>          repeatable, matched against the normalized title
@@ -64,6 +107,12 @@ frame is a fixed ~1.6 M multiply-adds at scale 10 with no allocation.
 --screenshot-at <ms>      take the screenshot that far into the file (an
                           effect mid-loop), default 0
 ```
+
+With no card, `--root` or `--play`, a folder picker opens, and the demo
+plays if it is cancelled (or when there is no desktop to show it on). With
+`--screenshot` and no card, the demo is played without asking. Started
+from the desktop, with no options, the simulator also shows an error in a
+dialog, since the console it prints to may close with it.
 
 Below `--scale 6` there are too few window pixels per LED for a dot and a
 bloom, so the flat renderer is used automatically and says so in the log.
