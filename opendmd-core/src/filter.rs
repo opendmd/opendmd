@@ -153,9 +153,14 @@ impl Filter {
     /// deduplicated, since they are OR-ed) before it is hashed, strings are
     /// length-prefixed so `["ab","c"]` and `["a","bc"]` differ, and `None`
     /// ("no constraint") is distinct from `Some(empty)` ("match nothing").
+    ///
+    /// The salt's number goes up whenever the same filter can select
+    /// different lines (the name grammar or the matching changed), so every
+    /// index on a card is rebuilt once after such an update rather than
+    /// trusted: `/2` is the closed platform list.
     pub fn fingerprint(&self) -> u64 {
         let mut h = Fnv1a::new();
-        h.bytes(b"opendmd-filter/1");
+        h.bytes(b"opendmd-filter/2");
         h.opt_set(self.platforms.as_ref().map(sorted));
         h.opt_set(self.categories_include.as_ref().map(sorted));
         h.opt_set(Some(sorted(&self.categories_exclude)));

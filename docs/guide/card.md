@@ -54,6 +54,17 @@ title with underscores between words, then a number so several GIFs of the
 same game can sit side by side. An author name, in lower case, can go at
 the end.
 
+The first word only counts as the platform if it's one the player knows:
+the usual short names such as `SNES`, `NES`, `MD`, `N64`, `GBA`, `PS1`,
+`ARCADE`, `PINBALL`, `AMIGA`, `C64`, `SPECTRUM` and `PICO-8`, and the rest
+of the list in the Platform menu of **Add GIFs**. Any other first word
+isn't a platform: the GIF has no platform, and its whole file name becomes
+the title, so `THE_END.gif` is titled "THE END".
+
+If a platform you need is missing, it can't be added from the web app yet:
+the list is part of the player's software, and new platforms arrive with
+updates.
+
 You rarely need to type these yourself. **+ Add GIFs**, **Edit details…**
 and Create Art ask for a title, platform, category and author and build the
 name for you. If you copy GIFs onto the card from a computer, name them this

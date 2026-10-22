@@ -97,6 +97,7 @@ real ~10k-file card. Tokens are split on `_`:
 | `HALLOWEEN_ARCADE_GoldenAxe16.gif` | ARCADE | GoldenAxe | 16 | HALLOWEEN |
 | `MD_LOGO_Sega31.gif` | MD | Sega | 31 | LOGO |
 | `Nes_Gradius.gif` | — | Nes Gradius | | |
+| `HDB_Happy_Birday_03.gif` | — | HDB Happy Birday 03 | | |
 
 Rules, in order:
 
@@ -104,10 +105,11 @@ Rules, in order:
    prefix follows it; otherwise it *is* the platform. The directory category is
    the authoritative source of seasonality either way.
 2. Multi-token prefixes (`NINTENDO_DS` -> `NDS`, `SEGA_MEGACD`, `VIRTUAL_BOY`,
-   `SEGA_PICO`), then the known single-token list, then any unknown token that
-   *looks* like a platform: `A-Z`, `0-9`, `-`, at least one letter — so `PICO-8`
-   works and `Nes` doesn't. Anything else leaves the platform unset and the
-   whole stem becomes the title.
+   `SEGA_PICO`), then the single-token list (`PLATFORMS` in
+   `opendmd-core/src/manifest.rs`), matched exactly, upper case. Nothing
+   else is a platform: an unlisted first word leaves the platform unset and
+   the whole stem becomes the title, so `THE_80s_90s_…` keeps its "THE" and
+   `Nes_Gradius` is "Nes Gradius".
 3. Keyword flags (`INVERT`, `INTRO`, `LOGO`, `SLIDE`, `STORY`, ...) directly
    after the platform.
 4. Trailing tags right-to-left: keyword flags, a standalone all-digit token as
@@ -124,9 +126,39 @@ title. Flags are stored verbatim; every flag comparison is case-insensitive.
 `normalize_title` (lowercase, alphanumerics only) is the hook for fuzzy
 matching a user's own collection list.
 
+**The platform list is closed.** Until 2026-10-22 any all-caps first word
+counted, which put six junk prefixes (25 files) among the platforms in
+Settings, the Library and the playlist builder: `HDB` (10, the Happy
+Birthday folder), `SIGN` (7, `SIGN_eLLuiGi06_NES_SuperMario.gif` and
+friends in `Other/`), `THE` (4), `LOGO` (2), `POKEMON` (1) and `XMAX` (1, a
+typo for XMAS). A name carries
+nothing else that tells a platform from a word (those files have numbers
+and authors like any other), and the parser reads one name at a time (the
+firmware filters a 10k-line playlist line by line), so it cannot count how
+often a prefix occurs either. The list is therefore every prefix the DMDoS
+card uses as a platform (53 with the multi-token ones: the original 27 plus
+`SPECTRUM`, `ZX`, `LYNX`, `MSX`, `MSX2`, `SWITCH`, `PS`, `PSX`, `PS2`,
+`PSP`, `WII`, `WONDERSWAN`, `X68000`, `ATARI800`, `ATARIST`,
+`COLECOVISION`, `INTELLIVISION`, `DREAMCAST`, `XBOX`, `GAMECUBE`, `MAC`,
+`IOS` and `MOBILE`, five of them on a single file, which is why a minimum
+count would not do), `FX` (Create Art's
+recordings of the effects), and a few common systems the card lacks
+(`3DS`, `SG1000`, `32X`, `PS3`, `PS4`, `VITA`, `NEOGEO`, `JAGUAR`, `3DO`,
+`VECTREX`, `DOS`). A new platform is one line in that list; the web app's
+Platform menus offer exactly the list.
+
+With the season rule (1), 21 files in `Halloween/` whose second word is
+now listed (`HALLOWEEN_PSX_…`, `HALLOWEEN_ATARIST_…`, `HALLOWEEN_ZX_…`, …)
+count under their own platform, with a `HALLOWEEN` flag, instead of
+`HALLOWEEN`: a `HALLOWEEN` platform filter plays 82 of the stock
+`filelist.hall`'s entries where it played 103. A platform filter matches
+by platform only, so a chip's count is what it plays.
+
 Against the real card this parses 10,162 entries with a non-empty title each,
-and 3,784 of 3,786 `gifs/Consoles` entries get a platform (99.95%; the two
-misses are `Nes_Gradius.gif` and `NEs_Captain_America...gif`).
+and 3,782 of 3,786 `gifs/Consoles` entries get a platform (99.89%; the misses
+are `Nes_Gradius.gif`, `NEs_Captain_America...gif`, `LOGO_SATURN01.gif` and
+`POKEMON_MINI_01.gif`). Second words stay in the title: `ATARI_ST_…` is
+platform `ATARI`, title "ST …"; `ZX_SPECTRUM_…` is `ZX`; `WII_U_…` is `WII`.
 
 **Writing a name** (the web app's Add GIFs and Edit details;
 `manifest::NameFields` / `build_name` in the core, behind its `names`
@@ -139,8 +171,10 @@ exactly the fields it was built from:
 - Title words are split on spaces; each may use printable ASCII except
   `_` (the separator) and FAT's `" * / : < > ? \ |`, and the title may not
   start with `.`. No platform means no number and no author (the parser
-  reads the whole name as the title then), and the first word may not look
-  like a platform (`THE END` would read as platform `THE`).
+  reads the whole name as the title then), and the first word may not be a
+  platform (`SNES Classics` would read as platform `SNES`; `THE END` and
+  `Pinball Wizard` are fine). A platform given in another case is written
+  as listed (`snes` → `SNES_…`).
 - An author is one token of `A-Za-z0-9.-`, three or more long, not a keyword
   and not all digits; it is written starting lower-case (`Ross` → `ross`)
   unless it is a known handle (`RattenJager`), because that is how the parser

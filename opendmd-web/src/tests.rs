@@ -350,7 +350,7 @@ mod js {
         let flags = Array::from(&s(&e, "flags"));
         assert_eq!(flags.get(0).as_string().as_deref(), Some("HALLOWEEN"));
         // Absent fields are null, not missing.
-        let e = parse_path("/gifs/Other/Nes_Gradius.gif");
+        let e = parse_path("/gifs/Other/THE_End.gif");
         assert!(s(&e, "platform").is_null());
         assert!(s(&e, "variant").is_null());
         // A prepared copy has its GIF's tags, bucket skipped.
