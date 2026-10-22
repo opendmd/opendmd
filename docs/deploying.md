@@ -112,7 +112,7 @@ the binary directly (`opendmd-pack convert --verify <card>`). That is the
 whole step: no manifest to write. A GIF with no copy simply plays as a GIF.
 Files added later from the web app (Library → **Add GIFs**, **Create Art**) are
 prepared by the browser as they are uploaded, the player prepares the rest
-itself at night, and **Settings → Playback cache** shows how many of the
+itself at night, and **Settings → Device → Playback cache** shows how many of the
 playlist's files are prepared and can prepare the rest in the background.
 
 **Smooth motion (optional).** To switch it on for every GIF where it
@@ -321,7 +321,7 @@ erase the chip.
 ### Updating the firmware
 
 **Over WiFi** (a board already on layout v2, with a card in): `make
-fw-release`, then `make fw-ota HOST=opendmd.local`, or Settings → Advanced →
+fw-release`, then `make fw-ota HOST=opendmd.local`, or Settings → Device →
 Firmware → "Update from file…" with `dist/opendmd-<version>.odfw`. The
 device receives the bundle onto the card (`/update/opendmd.bin`), checks
 it (its header, that it fits, the ESP image magic, the SHA-256 and the

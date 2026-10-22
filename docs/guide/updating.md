@@ -6,7 +6,7 @@ details, playlists and GIFs stay as they are whichever way you update.
 
 ## Over WiFi (the easy way)
 
-1. In the web app, open **Settings → Advanced → Firmware** and press
+1. In the web app, open **Settings → Device → Firmware** and press
    **Check for updates**.
 2. If there's a new version, the app says what's new and shows an
    **Update** button. Press it.
@@ -43,5 +43,5 @@ file is older than what the player runs, the app asks first.
 
 ## Which version do I have?
 
-**Settings → Advanced → Firmware** shows the firmware version, and
-**Settings → Advanced → About** shows the web app's.
+**Settings → Device → Firmware** shows the firmware version, and
+**Settings → Device → About** shows the web app's.
