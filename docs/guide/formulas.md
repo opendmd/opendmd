@@ -20,7 +20,7 @@ there:
 
 - **Remix** (an example) or **Edit** (one of yours) opens it in the editor.
 - **Save as GIF…** makes a GIF of it in [Create Art](create-art.md).
-- **Copy share link** gives you a link that opens it (see
+- **Copy share link** gives you a link to its own page, for anyone (see
   [Sharing](#sharing)).
 - **+ New formula** starts a fresh one.
 
@@ -188,14 +188,42 @@ milliseconds); all the examples are light or medium.
 
 ## Sharing
 
-**Copy share link** gives a link with the whole formula in it, its name and
-its sliders. It opens in the [online demo](https://opendmd.github.io/demo/),
-so anyone can open it, with or without a player.
+**Copy share link** gives a link to the formula's own page on the OpenDMD
+site, with the whole formula in it, its name and its sliders. Anyone can
+open it, with or without a player: the page plays it in the panel look,
+shows its code and its sliders, and has
 
-- On your player, the share box also has **Copy a link to this display**:
-  that one opens the formula in your own player's app, on your own network.
-- Keep formulas short to share them: past about 1,500 characters the link
-  gets long enough that some apps cut it, and the share box says so.
+- **Open on my display**: asks once for your display's address (it
+  suggests `opendmd.local`; the name or IP address your display shows) and
+  opens the formula in your display's editor, where you can save it. Your
+  phone or computer must be on the same network as the display.
+- **Try it in the demo**: opens it in the [online demo](https://opendmd.github.io/demo/)'s
+  editor.
+- **Copy code** and **Copy link**, and a QR code of the link to open it on
+  a phone.
+- **Submit to the gallery** (see [The formula gallery](#the-formula-gallery)).
+
+On your player, the share box also has **Copy a link to this display**:
+that one opens the formula in your own player's app, on your own network.
+Keep formulas short to share them: past about 1,500 characters the link
+gets long enough that some apps cut it, and the share box says so.
+
+## The formula gallery
+
+The [formula gallery](https://opendmd.github.io/formulas/) on the OpenDMD
+site has formulas people have made, and the examples. **Open** shows one on
+its own page; **Remix** opens it in the demo's editor.
+
+To add yours, open its share link and press **Submit to the gallery**: give
+it a description, your name or GitHub handle and a licence (CC0, anyone may
+use it; or CC BY 4.0, with credit), then **Open on GitHub**. GitHub opens
+with the file ready and makes the pull request for you (you need a free
+GitHub account). A check says if anything needs fixing, a maintainer looks
+at it, and once it's merged it appears in the gallery with the next update
+of the site. The gallery takes formulas that are light enough for the panel
+(at most 8 ms a frame: "light" or "medium" in the editor) and at most 4 KB.
+The details are in the gallery's
+[README](https://github.com/opendmd/opendmd.github.io/tree/main/gallery).
 
 ## Saving as a GIF
 

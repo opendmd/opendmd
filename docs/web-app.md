@@ -381,6 +381,25 @@ app with the demo card under `demo/` (`tools/site.py`). `make site-serve`
 serves it on :8081; `make site-publish` pushes it to the
 `opendmd/opendmd.github.io` repository, which GitHub Pages serves.
 
+**A formula's page** (`/f/#formula=…&name=…&a=…`, from
+`opendmd-web/share/f/`) is what the app's **Copy share link** gives: the
+formula in the app's LED preview, its code, sliders, Open on my display
+(`http://<address>/#formula=…`, which the player's app opens in its
+editor), Try it in the demo, Copy code / Copy link, a QR code, and Submit
+to the gallery. It runs on the demo's own files (`js/psikit.js`, the share
+link's one encoder and decoder; `js/preview.js` and the wasm; `pkg-psi`).
+
+**The formula gallery** (`/formulas/`) is the app's examples plus the
+files merged into the public repository's `gallery/` by pull request. A
+workflow there (`site/public-repo/.github/`, installed by `make
+site-publish`, which otherwise leaves `gallery/` alone) checks each
+contribution with `opendmd-gallery` (`opendmd-gallery/`: the path, the
+text, the header, the licence, that it compiles and its cost on the panel;
+its threat model is in `site/public-repo/.github/gallery-check/README.md`).
+`make site GALLERY=<a checkout's gallery/>` checks every file again before
+publishing it and draws the thumbnails; the release workflow fetches it.
+`make site-smoke` drives both pages in Chromium.
+
 ## The mock device
 
 **The mock device.** `tools/mock-device.py` (a `uv` script, standard library

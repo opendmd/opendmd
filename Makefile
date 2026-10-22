@@ -9,6 +9,7 @@ ART    := opendmd-art-web
 PACK   := opendmd-pack
 PSI    := opendmd-psi
 PSIWEB := opendmd-psi-web
+GAL    := opendmd-gallery
 FW     := firmware
 
 # Serial port of the DevKit. Override: make fw-flash PORT=/dev/ttyUSB1
@@ -76,7 +77,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 	notices notices-check notices-check-web \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
-	site site-serve site-publish
+	site site-serve site-publish site-smoke gallery-tool
 
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
@@ -97,6 +98,10 @@ test:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	@echo "==> Testing $(PSIWEB) (the web app's Formulas module)"
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(GAL) (the formula gallery's checker)"
+	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo test
+	tools/site-publish-test.sh
+	uv run tools/gallery-check-test.py
 
 # The same tests again, compiled to wasm and run under node — the only check
 # on this box that the browser path really works. Needs node on PATH.
@@ -205,7 +210,7 @@ web:
 		-exec gzip -9 -n -k -f {} \;
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- \
 		www ../$(WEB_WWW) --out ../$(WWW_PACK) --version-file ../$(WEB_WWW)/version.txt --max-bytes $(WWW_BYTES)
-	@uv run tools/web-size.py $(WEB_WWW) --pack $(WWW_PACK) --pack-limit $(WWW_BYTES)
+	@uv run tools/web-size.py $(WEB_WWW) --pack $(WWW_PACK) --pack-limit $(WWW_BYTES) --share $(WEB)/share
 
 # The headings' pixel font (Silkscreen, OFL 1.1): fetched from google/fonts at
 # a pinned commit, checked, subset and written as committed files —
@@ -270,16 +275,30 @@ screenshots: web sim-build
 # The public site (opendmd.github.io): the README, the docs, and the web app
 # with a demo card of the panel's own effects and CC0 sprites (tools/site.py,
 # tools/demo-card.py, and tools/site-art.py for the site's own animations).
-# site-serve to look at it; site-publish pushes it.
+# site-serve to look at it; site-publish pushes it. The formula gallery
+# (formulas/) is the web app's examples plus the contributions in the public
+# site repo's gallery/: GALLERY=<a checkout's gallery/> (release.yml fetches
+# it; without it, the examples only). Each file is checked again by
+# opendmd-gallery (make gallery-tool) before it is published.
 SITE ?= target/site
+GALLERY ?=
+GALLERY_TOOL := $(GAL)/target/release/opendmd-gallery
 SITE_REPO ?= git@github.com:opendmd/opendmd.github.io.git
 # The installer under install/ publishes whatever release dist/ holds; site
 # does not build one (fw-release needs the xtensa toolchain).
-site: web sim-build
+gallery-tool:
+	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo build --release --locked
+
+site: web sim-build gallery-tool
 	@test -f $(DIST)/manifest.json || { echo "no $(DIST)/manifest.json: the site publishes the release's installer, run make fw-release first"; exit 2; }
 	uv run tools/demo-card.py target/demo-card
 	uv run tools/site-art.py target/site-art
-	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --art target/site-art --dist $(DIST)
+	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --art target/site-art --dist $(DIST) \
+		--gallery-tool $(GALLERY_TOOL) $(if $(GALLERY),--gallery $(GALLERY))
+
+# The site's pages in Chromium (the formula page and the gallery), after make site.
+site-smoke:
+	uv run tools/site-smoke.py $(SITE)
 
 site-serve: site
 	uv run python -m http.server 8081 -d $(SITE)
@@ -296,6 +315,7 @@ fmt:
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
+	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo fmt
 
 clippy:
 	@echo "==> Clippy $(CORE)"
@@ -321,6 +341,8 @@ clippy:
 	@echo "==> Clippy $(PSIWEB)"
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --lib --target $(WASM_TARGET) --features bare,bump -- -D warnings
+	@echo "==> Clippy $(GAL)"
+	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 
 clean:
 	cd $(CORE) && cargo clean
@@ -331,6 +353,7 @@ clean:
 	cd $(PACK) && cargo clean
 	cd $(PSI) && cargo clean
 	cd $(PSIWEB) && cargo clean
+	cd $(GAL) && cargo clean
 	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WWW_PACK) ./target
 
 # --- ESP32 firmware ---------------------------------------------------------
