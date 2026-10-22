@@ -70,7 +70,7 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
+.PHONY: test test-card test-wasm sim sim-build sim-dist sim-fetch check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load \
 	site site-serve site-publish
@@ -107,6 +107,32 @@ sim:
 
 sim-build:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo build --release
+
+# The simulator as a download for this host (release.yml builds all three:
+# macOS universal, Windows, Linux): $(SIM_DIST)/opendmd-sim-<v>-<platform>.zip|.tar.gz,
+# stripped. On macOS both architectures, joined with lipo.
+SIM_DIST ?= target/sim-dist
+SIM_HOST := $(shell uname -s)-$(shell uname -m)
+sim-dist:
+ifeq ($(SIM_HOST),Linux-x86_64)
+	cd $(SIM) && RUSTUP_TOOLCHAIN=stable CARGO_PROFILE_RELEASE_STRIP=symbols cargo build --release --target-dir target/dist
+	uv run tools/sim-package.py $(SIM)/target/dist/release/opendmd-sim --platform linux-x86_64 --out $(SIM_DIST)
+else ifneq ($(filter Darwin-%,$(SIM_HOST)),)
+	cd $(SIM) && for t in aarch64-apple-darwin x86_64-apple-darwin; do \
+		RUSTUP_TOOLCHAIN=stable CARGO_PROFILE_RELEASE_STRIP=symbols cargo build --release --target-dir target/dist --target $$t || exit 1; done
+	lipo -create -output $(SIM)/target/dist/opendmd-sim-universal \
+		$(SIM)/target/dist/aarch64-apple-darwin/release/opendmd-sim $(SIM)/target/dist/x86_64-apple-darwin/release/opendmd-sim
+	codesign --force --sign - $(SIM)/target/dist/opendmd-sim-universal
+	uv run tools/sim-package.py $(SIM)/target/dist/opendmd-sim-universal --platform macos-universal --out $(SIM_DIST)
+else
+	@echo "sim-dist: no package for $(SIM_HOST) (Linux x86_64 and macOS here; Windows in release.yml)"; exit 2
+endif
+
+# The simulator's archives of dist/'s release, from its GitHub release, so
+# a site built here (make site / site-publish) keeps its downloads. Needs gh.
+sim-fetch:
+	v=$$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' $(DIST)/manifest.json); \
+	gh release download "v$$v" -R opendmd/opendmd -p "opendmd-sim-$$v-*" -D $(SIM_DIST) --clobber
 
 # Prepare a card (every GIF's copy under cache/): make pack ARGS="convert ~/scratch/dmdos-card --verify".
 # See docs/cache-format.md.
@@ -197,12 +223,15 @@ web-smoke: web
 SITE ?= target/site
 SITE_REPO ?= git@github.com:opendmd/opendmd.github.io.git
 # The installer under install/ publishes whatever release dist/ holds; site
-# does not build one (fw-release needs the xtensa toolchain).
+# does not build one (fw-release needs the xtensa toolchain). The simulator
+# downloads are $(SIM_DIST)'s archives of the same version, if there are any
+# (make sim-dist, make sim-fetch, or release.yml's sim jobs).
 site: web sim-build
 	@test -f $(DIST)/manifest.json || { echo "no $(DIST)/manifest.json: the site publishes the release's installer, run make fw-release first"; exit 2; }
 	uv run tools/demo-card.py target/demo-card
 	uv run tools/site-art.py target/site-art
-	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --art target/site-art --dist $(DIST)
+	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --art target/site-art --dist $(DIST) \
+		$(if $(wildcard $(SIM_DIST)/opendmd-sim-*),--sim-dist $(SIM_DIST))
 
 site-serve: site
 	uv run python -m http.server 8081 -d $(SITE)
