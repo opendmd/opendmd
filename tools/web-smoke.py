@@ -661,6 +661,55 @@ def goto_view(page: Page, view: str) -> None:
     page.wait_for_timeout(300)
 
 
+# The headings' pixel font (www/fonts/silkscreen.woff2, tools/font-subset.py):
+# per view, the selectors that must be in Silkscreen and those that must not.
+FONT_VIEWS = {
+    "now": (["#top strong", "#view-now .look>summary"], ["#now-skip", "#nav a", ".nowt b"]),
+    "library": ([], [".lib-q input", ".vrow:not([hidden])", "#nav a"]),
+    "sets": (["#view-sets .sl h2"], ["#sets-new", "#sets-list button.pl"]),
+    "create": (["#view-create .st-box>h2", "#view-create section.card>h2"], ["#view-create .st-box>p"]),
+    "settings": (["#view-settings .ptitle", "#view-settings .stab h2"], ["#st-tabs .tab", "#view-settings label"]),
+    "settings/time": (["#view-settings .stab>.grp>h3"], ["#view-settings .stab .tick"]),
+    "settings/device": (["#view-settings .stab>.grp>h3"], ["#view-settings .facts dd"]),
+}
+
+
+def font_checks(page: Page, base: str, size: str) -> None:
+    """Silkscreen loads (self-hosted, `font/woff2`) and the headings use it at
+    a multiple of its 8 px grid, weight 400, no letter-spacing; body text,
+    buttons, inputs, tabs, nav and content titles do not. Each view is shot
+    into OUT/font/ for a look at crispness and wrapping."""
+    r = page.request.get(base + "/fonts/silkscreen.woff2")
+    check(r.ok and r.headers.get("content-type", "").startswith("font/woff2") and r.body()[:4] == b"wOF2",
+          f"font [{size}]: fonts/silkscreen.woff2 served as {r.headers.get('content-type')} ({len(r.body())} B)")
+    page.evaluate("document.fonts.ready")
+    loaded = page.evaluate("[...document.fonts].filter(f => f.family.replace(/\"/g, '') === 'Silkscreen').map(f => f.status)")
+    check(loaded == ["loaded"], f"font [{size}]: the Silkscreen face loaded ({loaded})")
+    (OUT / "font").mkdir(parents=True, exist_ok=True)
+    js = """sels => sels.flatMap(s => [...document.querySelectorAll(s)].filter(e => e.offsetParent).map(e => {
+        const c = getComputedStyle(e);
+        return [s, e.textContent.trim().slice(0, 24), c.fontFamily.split(',')[0].replace(/"/g, ''), c.fontSize, c.fontWeight, c.letterSpacing,
+                e.scrollWidth - e.clientWidth];
+      }))"""
+    for view, (pixel, plain) in FONT_VIEWS.items():
+        goto_view(page, view)
+        page.wait_for_timeout(500)
+        heads = page.evaluate(js, pixel)
+        bad = [h for h in heads if h[2] != "Silkscreen" or h[3] not in ("16px", "24px", "32px") or h[4] != "400"
+               or h[5] not in ("normal", "0px") or h[6] > 0]
+        check(bool(heads) or not pixel, f"font [{size}]: {view} has its headings ({len(heads)})")
+        check(not bad, f"font [{size}]: {view} headings in Silkscreen at 16/24 px, 400, no letter-spacing, no overflow"
+              + (f" ({bad})" if bad else ""))
+        others = [h for h in page.evaluate(js, plain) if h[2] == "Silkscreen"]
+        check(not others, f"font [{size}]: {view} body text, buttons, inputs and nav not in Silkscreen" + (f" ({others})" if others else ""))
+        page.screenshot(path=str(OUT / "font" / f"{view.replace('/', '-')}-{size}.png"))
+    # Content titles (computed even while the Details panel is closed).
+    goto_view(page, "library")
+    fam = page.eval_on_selector("#lib-d-title", "e => getComputedStyle(e).fontFamily")
+    check("Silkscreen" not in fam, f"font [{size}]: a GIF's title (Details) stays in the body face ({fam[:30]})")
+    goto_view(page, "now")
+
+
 def wait_schedule(base: str, ok, timeout_s: float = 10) -> dict:
     deadline = time.time() + timeout_s
     while True:
@@ -2831,6 +2880,7 @@ def mock_pass(browser) -> None:
         check(views == ["Now", "Library", "Playlists", "Create Art", "Settings"] and page.locator("#view-convert").count() == 0,
               f"nav: five views, Playlists third, no Convert ({views})")
         follow_checks(page, base, errors)
+        font_checks(page, base, "laptop")
         phone_pass(browser, base, errors)
         fx_gif_demo_pass(browser, base, errors)
         recent_demo_pass(browser, base, errors)
@@ -4219,6 +4269,7 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     page.wait_for_function("document.querySelector('#now-path') && document.querySelector('#now-path').textContent.startsWith('/')", timeout=20000)
     wait_lit(page, "#now-panel", "phone now")
     shot(page, "now", "phone")
+    font_checks(page, base, "phone")
     for view in ["library", "sets", "settings"]:
         goto_view(page, view)
         page.wait_for_timeout(1500)

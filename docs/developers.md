@@ -26,6 +26,7 @@ make clippy                  # clippy -D warnings, every crate
 make sim ARGS="--root /path/to/card"
 make web && make web-mock ROOT=/path/to/card   # the web app against a fake device on :8080
 make web-smoke               # headless Chromium through every view
+make font                    # the headings' pixel font (Silkscreen): subset it again
 make fw-build                # the firmware (the first build fetches ESP-IDF)
 make fw-flash PORT=/dev/ttyUSB0   # bench build over USB, then the serial monitor
 ```
