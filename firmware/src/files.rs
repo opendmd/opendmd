@@ -129,6 +129,7 @@ pub fn mime_for(path: &str) -> &'static str {
         "gif" => "image/gif",
         "jpg" | "jpeg" => "image/jpeg",
         "svg" => "image/svg+xml",
+        "woff2" => "font/woff2",
         "ico" => "image/x-icon",
         "txt" | "meta" => "text/plain; charset=utf-8",
         _ => "application/octet-stream",

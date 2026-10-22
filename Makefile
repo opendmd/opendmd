@@ -70,7 +70,7 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: test test-card test-wasm sim sim-build sim-dist sim-fetch check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
+.PHONY: test test-card test-wasm sim sim-build sim-dist sim-fetch check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve site-publish
@@ -207,6 +207,14 @@ web:
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- \
 		www ../$(WEB_WWW) --out ../$(WWW_PACK) --version-file ../$(WEB_WWW)/version.txt --max-bytes $(WWW_BYTES)
 	@uv run tools/web-size.py $(WEB_WWW) --pack $(WWW_PACK) --pack-limit $(WWW_BYTES)
+
+# The headings' pixel font (Silkscreen, OFL 1.1): fetched from google/fonts at
+# a pinned commit, checked, subset and written as committed files —
+# www/fonts/silkscreen.woff2 + OFL.txt (packed, and published with the site)
+# and the ASCII copy inlined in firmware/web/setup.html. Only needed to
+# change the subset; `make web` uses the committed files.
+font:
+	uv run tools/font-subset.py
 
 # Static server for the page; uv, never bare python. Then open
 # http://localhost:8080 — the file/directory picker does the rest.

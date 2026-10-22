@@ -123,6 +123,9 @@ INSTALL_BUTTON = """<div class="install">
 FILES = {
     "LICENSE-MIT": "LICENSE-MIT.txt",
     "LICENSE-APACHE": "LICENSE-APACHE.txt",
+    # The headings' pixel font (tools/font-subset.py), self-hosted, and its licence.
+    "opendmd-web/www/fonts/silkscreen.woff2": "fonts/silkscreen.woff2",
+    "opendmd-web/www/fonts/OFL.txt": "fonts/OFL.txt",
 }
 
 # The desktop simulator's builds: (platform, label, archive), in table order.
@@ -135,6 +138,7 @@ SIM_PLATFORMS = [
 CSS = """
 :root{--bg:#0d0e11;--bg2:#15171b;--bg3:#1e2025;--line:#2a2d33;--fg:#ecebe7;--mut:#a0a2a9;
 --acc:#f7a531;--pink:#ff4f8b;--cyan:#33d1ff;--green:#5ef09a;--violet:#a98bff;color-scheme:dark}
+@font-face{font-family:Silkscreen;src:url(fonts/silkscreen.woff2) format("woff2");font-display:swap}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -164,10 +168,14 @@ nav a.demo{color:#111;background:var(--acc);font-weight:700;margin:4px 0 8px}
 nav h4{margin:18px 10px 4px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
 main{padding:36px 44px 72px;min-width:0}
 main>*{max-width:860px}
-h1,h2,h3{line-height:1.25;text-wrap:balance}
-h1{font-size:36px;margin:4px 0 16px;letter-spacing:-.01em}
+/* Headings: Silkscreen, a pixel font on an 8 px grid, crisp only at 16/24/32 px, weight 400,
+   no fractional letter-spacing; geometricPrecision keeps FreeType's hinting off its edges */
+h1,h2,h3{font-family:Silkscreen,system-ui,sans-serif;font-weight:400;line-height:1.25;text-wrap:balance;
+overflow-wrap:break-word;text-rendering:geometricPrecision}
+h1,h2{color:var(--acc)}
+h1{font-size:32px;margin:4px 0 16px}
 h2{font-size:24px;margin:44px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
-h3{font-size:18px;margin:28px 0 8px}
+h3{font-size:16px;margin:28px 0 8px}
 h1 .headerlink{display:none}
 h2 .headerlink,h3 .headerlink{opacity:0;margin-left:6px;text-decoration:none;color:var(--mut)}
 h2:hover .headerlink,h3:hover .headerlink{opacity:1}
@@ -240,7 +248,7 @@ footer p{max-width:860px;border-top:1px solid var(--line);padding-top:16px}
   nav a.on{box-shadow:inset 0 -2px 0 var(--acc)}
   main{padding:22px 16px 56px}
   footer{padding:0 16px 32px}
-  h1{font-size:28px}
+  h1{font-size:24px}
   .hero .plate{padding:12px 14px}
   .hero .plate .led{width:280px}
   .hero .tag{font-size:18px}
@@ -258,6 +266,7 @@ PAGE = """<!doctype html>
 <meta name="color-scheme" content="dark">
 <meta name="description" content="{description}">
 <title>{title}</title>
+<link rel="preload" href="{up}fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{up}site.css">{head}
 </head>
 <body>
@@ -529,6 +538,7 @@ def main() -> None:
         (out / target).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / target, out / target)
     for src, dst in FILES.items():
+        (out / dst).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / src, out / dst)
     (out / "site.css").write_text(CSS.strip() + "\n")
     (out / ".nojekyll").write_text("")
