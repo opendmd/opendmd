@@ -3051,8 +3051,8 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page = new_page(browser, "laptop", errors)
     asked: list[str] = []
     page.on("request", lambda r: asked.append(r.url))
-    page.goto(base + "/")
-    page.wait_for_function("document.querySelector('#now-path')?.textContent.startsWith('/')", timeout=20000)
+    page.goto(base + "/#library")
+    page.wait_for_selector("#lib-search", timeout=20000)
     goto_view(page, "library")
     page.wait_for_timeout(500)
     early = [u for u in asked if "pkg-psi" in u or "formulas" in u]
@@ -3175,8 +3175,7 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     one is replaced); links that try to inject markup or are too long; the
     drawing stops when nothing is shown; a trap in the module restarts it."""
     page = new_page(browser, "laptop", errors)
-    page.goto(base + "/")
-    page.wait_for_function("document.querySelector('#now-path')?.textContent.startsWith('/')", timeout=20000)
+    page.goto(base + "/#formulas")
     formula_editor(page, "gray(x*0.25)")
     page.fill("#psi-name", "Smoke draft")
     page.wait_for_timeout(400)
@@ -3201,7 +3200,7 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     # The drawing stops once nothing shows (and starts again).
     page.click("#psi-ex .psi-tile >> nth=0")
     page.wait_for_timeout(300)
-    goto_view(page, "now")
+    goto_view(page, "settings")
     n0 = psi_frames(page, "#psi-panel")
     page.wait_for_timeout(600)
     n1 = psi_frames(page, "#psi-panel")
@@ -3220,8 +3219,7 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
                                 "export function compile(src) { if (globalThis.__psiTrap) { globalThis.__psiTrap = 0; throw new WebAssembly.RuntimeError('unreachable (smoke)'); }", 1)
         route.fulfill(response=r, body=body)
     page.route("**/pkg-psi/opendmd_psi_web.js*", trap_glue)
-    page.goto(base + "/")
-    page.wait_for_function("document.querySelector('#now-path')?.textContent.startsWith('/')", timeout=20000)
+    page.goto(base + "/#formulas")
     formula_editor(page, "gray(x*0.5)")
     page.evaluate("globalThis.__psiTrap = 1")
     page.fill("#psi-src", "gray(x*0.75)")
