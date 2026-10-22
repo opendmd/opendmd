@@ -34,3 +34,15 @@ __pycache__/
 
 # Firmware signing keys: only the public half is committed (firmware/keys/opendmd.pub).
 *.key
+
+# Experiment outputs made from third-party art (DMDoS pack GIFs, homebrew
+# ROMs, console logos): regenerate locally, never commit (CLAUDE.md "Content
+# licensing"). The Kenney (CC0) outputs in art/process/out stay committed.
+opendmd-web/experiments/tween/out/sheets/
+opendmd-web/experiments/art/emulator/out/*.png
+opendmd-web/experiments/art/process/out/c_logos.png
+opendmd-web/experiments/art/process/out/e_title_cards.png
+opendmd-web/experiments/art/process/out/f_emulator_title.png
+opendmd-web/experiments/art/studio/out/commons_saturn_logo.png
+opendmd-web/experiments/art/studio/out/paste_snes_logo.png
+opendmd-web/experiments/art/studio/out/studio_page.png
