@@ -5,11 +5,16 @@
 //!
 //!     cargo run --release --example sheet -- ../opendmd-web/www/formulas.json OUT_DIR
 
-use opendmd_psi::{compile, render, Inputs, Scratch, H, OWN, W};
-use opendmd_psi_web::examples;
-use std::io::Write;
+// (Host only: `wasm-pack test` builds the examples for wasm32 too.)
+#[cfg(target_arch = "wasm32")]
+fn main() {}
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    use opendmd_psi::{compile, render, Inputs, Scratch, H, OWN, W};
+    use opendmd_psi_web::examples;
+    use std::io::Write;
+
     let mut args = std::env::args().skip(1);
     let json = args.next().expect("formulas.json");
     let out = std::path::PathBuf::from(args.next().expect("output directory"));
@@ -54,7 +59,7 @@ fn main() {
             }
         }
         let mut f = std::fs::File::create(out.join(format!("{k:02}.ppm"))).unwrap();
-        write!(f, "P6 {iw} {ih} 255\n").unwrap();
+        writeln!(f, "P6 {iw} {ih} 255").unwrap();
         f.write_all(&img).unwrap();
     }
 }
