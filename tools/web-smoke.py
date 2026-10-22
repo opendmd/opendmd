@@ -190,9 +190,11 @@ every view like a person would:
             gets the key dialog, a wrong key asks again, the right one loads
             Now; the switch off opens the API again
   Settings  www_version and index_state shown; PUT brightness, read it
-            back; WiFi scan; a hostname change replies reboot_required true
-            (a brightness write false) and Save network shows the reboot
-            prompt for it (hostname restored); the Display name: a bad
+            back; WiFi scan; a hostname change is live (reboot_required
+            false, status hostname/mdns at once; a WiFi change true) and
+            Save network says where the display is now: no link from the
+            IP; from smoke-a.local a link to smoke-b.local that loads, and
+            to smoke-c-2.local on a (faked) clash; the Display name: a bad
             hostname is a 400, " Rig-Two " is saved as rig-two, status
             `mdns` is the hostname, and with it rewritten to <name>-2
             (route) About shows that address and why; the setup page
@@ -4179,25 +4181,99 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
 
 
 def hostname_checks(page: Page, base: str) -> None:
-    """A hostname change needs a reboot: the reply says so, and Settings →
-    Network shows the reboot prompt for it (not only for WiFi)."""
+    """A new hostname is live at once: the reply asks for no reboot (a WiFi
+    change still does), and Save network says where the display is now —
+    from an IP without a link, from a .local address (Chromium resolves
+    smoke-*.local to the mock: LOCAL_RULE) with one to the new address,
+    which loads; on a clash (status `mdns` <name>-2, faked) the link goes
+    there."""
     before = get_json(base + "/api/config")["hostname"]
     r = put_json(base + "/api/config", {"brightness": get_json(base + "/api/config")["brightness"]})
     check(r.get("reboot_required") is False, f"config: no reboot for a brightness write ({r.get('reboot_required')})")
     r = put_json(base + "/api/config", {"hostname": before + "-x"})
-    check(r.get("reboot_required") is True, f"config: a hostname change replies reboot_required true ({r.get('reboot_required')})")
-    put_json(base + "/api/config", {"hostname": before})
+    check(r.get("reboot_required") is False, f"config: a hostname change is live, no reboot_required ({r.get('reboot_required')})")
+    st = get_json(base + "/api/status")
+    check(st["hostname"] == st["mdns"] == before + "-x", f"status: hostname and mdns are the new name at once ({st['hostname']}, {st['mdns']})")
+    ssid = get_json(base + "/api/config")["wifi_ssid"]
+    r = put_json(base + "/api/config", {"wifi_ssid": ssid + "-x"})
+    check(r.get("reboot_required") is True, f"config: a WiFi change still replies reboot_required true ({r.get('reboot_required')})")
+    put_json(base + "/api/config", {"hostname": before, "wifi_ssid": ssid})
     page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
     page.wait_for_function(f"document.querySelector('#st-hostname').value === {json.dumps(before)}", timeout=5000)
-    check(page.is_hidden("#st-reboot"), "settings: no reboot prompt before a network change")
+    check("WiFi changes need a reboot" in page.inner_text("#st-adv") and "name changes" not in page.inner_text("#st-adv"),
+          "settings: the Network note says only WiFi changes need a reboot")
     page.fill("#st-hostname", before + "-smoke")
     page.click("#st-save-net")
+    page.wait_for_selector("#st-moved", state="visible", timeout=5000)
+    applying = page.inner_text("#st-moved")
+    page.wait_for_function("document.querySelector('#st-moved').textContent.includes('.local')", timeout=15000)
+    moved = page.inner_text("#st-moved")
+    check("Applying" in applying, f"settings: Save network with a new name says it is being applied first ({applying!r})")
+    check(f"{before}-smoke.local" in moved and page.query_selector("#st-goto") is None and page.is_hidden("#st-reboot")
+          and get_json(base + "/api/config")["hostname"] == before + "-smoke",
+          f"settings: from an IP, Save network with a new name says where it is now, no link, no reboot prompt ({moved!r})")
+
+    # No mDNS (status `mdns` "", as on the setup network): saved, no address.
+    page.route(STATUS_RE, lambda route: route.fulfill(json={**get_json(base + "/api/status"), "mdns": ""}))
+    page.fill("#st-hostname", before + "-nomdns")
+    page.click("#st-save-net")
+    page.wait_for_function("document.querySelector('#st-moved').textContent.trim() === 'Saved.'", timeout=15000)
+    moved = page.inner_text("#st-moved")
+    check(".local" not in moved, f"settings: with no mDNS a new name is saved with no address claimed ({moved!r})")
+    page.unroute(STATUS_RE)
+    # A later Save network that does not rename hides the notice.
+    page.fill("#st-ssid", page.input_value("#st-ssid") + "-x")
+    page.click("#st-save-net")
     page.wait_for_selector("#st-reboot", state="visible", timeout=5000)
-    check("name" in page.inner_text("#st-reboot") and get_json(base + "/api/config")["hostname"] == before + "-smoke",
-          "settings: Save network with a new hostname shows the reboot prompt")
+    check(page.is_hidden("#st-moved"), "settings: a later WiFi-only save hides the name notice and shows the reboot prompt")
+    put_json(base + "/api/config", {"wifi_ssid": ssid})
+    page.evaluate("document.querySelector('#st-reboot').hidden = true")
+
+    port = urllib.parse.urlsplit(base).port
+    put_json(base + "/api/config", {"hostname": "smoke-a"})
+    lp = page.context.new_page()
+    errs: list[str] = []
+    lp.on("pageerror", lambda e: errs.append(str(e)))
+    lp.goto(f"http://smoke-a.local:{port}/#settings")
+    goto_view(lp, "settings")
+    lp.wait_for_function("document.querySelector('#st-hostname').value === 'smoke-a'", timeout=10000)
+    lp.fill("#st-hostname", "smoke-b")
+    lp.click("#st-save-net")
+    lp.wait_for_selector("#st-goto", timeout=15000)
+    want = lp.evaluate("location.href").replace("smoke-a.local", "smoke-b.local")
+    href = lp.get_attribute("#st-goto", "href")
+    check(href == want and "smoke-b.local" in lp.inner_text("#st-moved"),
+          f"settings: from a .local address, a link to the new one ({href})")
+    lp.click("#st-goto")
+    lp.wait_for_url(f"http://smoke-b.local:{port}/**", timeout=10000)
+    goto_view(lp, "settings")
+    lp.wait_for_function("document.querySelector('#st-hostname').value === 'smoke-b'", timeout=10000)
+    check(True, "settings: the link loads the app at the new address")
+
+    def clash(route):
+        # (Asked of the mock by its IP: Playwright's own fetch does not use
+        # Chromium's resolver rule.)
+        j = get_json(base + "/api/status")
+        route.fulfill(json={**j, "mdns": j["hostname"] + "-2"})
+    lp.route(STATUS_RE, clash)
+    lp.fill("#st-hostname", "smoke-c")
+    lp.click("#st-save-net")
+    lp.wait_for_function("document.querySelector('#st-goto')?.href.includes('smoke-c')", timeout=15000)
+    href = lp.get_attribute("#st-goto", "href")
+    check(urllib.parse.urlsplit(href).hostname == "smoke-c-2.local" and "smoke-c-2.local" in lp.inner_text("#st-moved"),
+          f"settings: on a clash the link goes to the name mDNS took ({href})")
+    lp.unroute(STATUS_RE)
+    check(not errs, f"settings: no page errors at the .local addresses ({errs})")
+    lp.close()
     put_json(base + "/api/config", {"hostname": before})
     page.evaluate("async () => { const { app } = await import('./js/state.js'); await app.refreshConfig(); }")
-    page.evaluate("document.querySelector('#st-reboot').hidden = true")
+    page.evaluate("document.querySelector('#st-moved').hidden = true")
+
+
+# Chromium resolves these names to the mock, so a page can move to
+# <new>.local as on a real network (hostname_checks). Only smoke-*.local:
+# a DEVICE=http://<name>.local run still resolves for real.
+LOCAL_RULE = "MAP smoke-*.local 127.0.0.1"
 
 
 STATUS_RE = re.compile(r"/api/status(\?|$)")
@@ -4209,7 +4285,7 @@ def refresh_app(page: Page) -> None:
 
 def names_checks(page: Page, base: str) -> None:
     """The display's name: PUT /api/config lowercases and validates it
-    (nvs_config::valid_hostname); status `mdns` is the name mDNS answers
+    (opendmd_core::hostname::valid); status `mdns` is the name mDNS answers
     to, and when it differs (another display had the name: faked here)
     Settings → About and the setup page say where this one is. The setup
     page's Display name is prefilled, checked, and saved with the WiFi."""
@@ -4671,7 +4747,7 @@ def main() -> int:
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True, args=[f"--host-resolver-rules={LOCAL_RULE}"])
         if not args.device_only:
             mock_pass(browser)
             sd_unreadable_pass(browser)

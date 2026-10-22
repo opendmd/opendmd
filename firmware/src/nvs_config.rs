@@ -275,24 +275,6 @@ pub fn valid_set_name(set: &str) -> bool {
     !set.contains(['/', '\\', '\0']) && !set.contains("..")
 }
 
-/// The longest hostname `PUT /api/config` takes: esp-netif's limit for the
-/// DHCP client name (`esp_netif_set_hostname` refuses more), well inside
-/// mDNS's 63 even after a conflict's `-2`.
-pub const HOSTNAME_MAX: usize = 32;
-
-/// Is `name` a hostname `PUT /api/config` may store (the display's name:
-/// `http://<name>.local/` and the DHCP name)? 1..=[`HOSTNAME_MAX`] of `a-z`,
-/// `0-9` and `-`, not starting or ending with `-`. The handler lowercases
-/// first. The setup page and the web app check the same rule.
-pub fn valid_hostname(name: &str) -> bool {
-    (1..=HOSTNAME_MAX).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-}
-
 impl Settings {
     /// Filesystem path of the manifest this configuration selects. Pure
     /// string work: `""` is always `/filelist.txt`.
