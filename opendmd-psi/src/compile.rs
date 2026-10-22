@@ -1223,7 +1223,7 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
         }
         p.skip_newlines();
     }
-    let Some((colour, _)) = colour else {
+    let Some((colour, ct)) = colour else {
         let at = src.len();
         let msg = if p.locals.is_empty() {
             "empty: write a colour, e.g. `hsv(x + t/4, 1, 1)`"
@@ -1233,7 +1233,13 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
         return Err(Error::new(at, at, msg));
     };
     let frame_values = p.locals.iter().filter(|l| l.in_frame).count();
-    emit(&p.dag, &colour, prog)?;
+    // A limit hit while laying out the steps is the formula's as a whole:
+    // point at its colour line.
+    emit(&p.dag, &colour, prog).map_err(|e| Error {
+        start: ct.start,
+        end: ct.end,
+        ..e
+    })?;
     Ok(Info { frame_values })
 }
 
@@ -1272,6 +1278,10 @@ fn emit(dag: &Dag, colour: &Colour, prog: &mut Program) -> Result<(), Error> {
                 last_use[x as usize] = last_use[x as usize].max(i);
             }
         }
+    }
+    let steps = (0..n).filter(|&i| live[i] && nodes[i].code < K_CONST).count() + 1;
+    if steps > MAX_OPS {
+        return Err(too_long(steps));
     }
     // Where each node's value lives.
     let mut loc = alloc::vec![0u8; n];
