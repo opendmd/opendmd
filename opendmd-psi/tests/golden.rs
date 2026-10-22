@@ -261,7 +261,7 @@ fn random_formulas_render_or_refuse() {
 
 #[test]
 fn scalar_cap_is_a_friendly_error() {
-    let body: Vec<String> = (1..=300).map(|k| format!("x*{k}.{k}")).collect();
+    let body: Vec<String> = (1..=120).map(|k| format!("x*{k}.{k}")).collect();
     let src = format!("gray(frac({}))", body.join(" + "));
     let e = compile(&src).unwrap_err();
     assert!(e.msg.contains("too many numbers"), "{}", e.msg);
