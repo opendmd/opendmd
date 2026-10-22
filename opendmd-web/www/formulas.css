@@ -55,3 +55,4 @@
 }
 .psi-view.stale canvas{opacity:.55}
 .psi-view.stale #psi-ed-cap::before{content:"Still playing the last version that worked · "}
+.psi-sls:empty{display:none}
