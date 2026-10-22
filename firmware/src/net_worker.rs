@@ -376,6 +376,22 @@ fn run(worker: NetWorker) {
             Ok(NetCommand::VerifyBundle { header, reply }) => {
                 let _ = reply.send(crate::ota::verify_signature(&header));
             }
+            Ok(NetCommand::NameCheck { name, until, reply }) => {
+                // Not sent if it would end after the handler stopped
+                // waiting (it waited behind a connect or a count).
+                let check = if Instant::now() + config::NAME_QUERY > until {
+                    opendmd_core::hostname::Check::Unknown
+                } else if mdns.is_some()
+                    && wifi.state() == WifiState::Connected
+                    && wifi.is_associated()
+                {
+                    name_check(&name, wifi.ip_address().as_deref())
+                } else {
+                    // The setup network, or between networks: no one to ask.
+                    opendmd_core::hostname::Check::Unknown
+                };
+                let _ = reply.send(check);
+            }
             Ok(NetCommand::Rename(name)) => {
                 if name != hostname {
                     rename(&status, &name);
@@ -562,6 +578,61 @@ fn run(worker: NetWorker) {
             }
         }
     }
+}
+
+/// Does another device answer to `<name>.local`? One mDNS A query
+/// (`mdns_query`, at most [`config::NAME_QUERY`], ending at the first
+/// answer). The responder drops packets from our own address, and an
+/// answer from `own_ip` would not count anyway. A query that fails
+/// (`ESP_ERR_NO_MEM`, …) is `Unknown`, not `Free`. Transient heap only:
+/// the search and its result (~0.3 KB).
+fn name_check(name: &str, own_ip: Option<&str>) -> opendmd_core::hostname::Check {
+    use opendmd_core::hostname::Check;
+    use std::ptr;
+    let Ok(cname) = std::ffi::CString::new(name) else {
+        return Check::Unknown;
+    };
+    let mut results: *mut esp_idf_sys::mdns_result_t = ptr::null_mut();
+    // SAFETY: `cname` outlives the call, which blocks until the search ends;
+    // `results` is freed below with the component's own function.
+    let err = unsafe {
+        esp_idf_sys::mdns_query(
+            cname.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            esp_idf_sys::MDNS_TYPE_A as u16,
+            config::NAME_QUERY.as_millis() as u32,
+            1,
+            &mut results,
+        )
+    };
+    if err != esp_idf_sys::ESP_OK {
+        warn!("[net] name check for {name}.local failed ({err})");
+        return Check::Unknown;
+    }
+    let mut answers: Vec<[u8; 4]> = Vec::new();
+    let mut r = results;
+    // SAFETY: a list `mdns_query` built and nothing else holds; read, then
+    // freed once.
+    unsafe {
+        while !r.is_null() {
+            let mut a = (*r).addr;
+            while !a.is_null() {
+                if u32::from((*a).addr.type_) == esp_idf_sys::ESP_IPADDR_TYPE_V4 {
+                    answers.push((*a).addr.u_addr.ip4.addr.to_ne_bytes());
+                }
+                a = (*a).next;
+            }
+            r = (*r).next;
+        }
+        esp_idf_sys::mdns_query_results_free(results);
+    }
+    let check = Check::from_answers(&answers, own_ip.and_then(crate::improv::parse_ipv4));
+    match &check {
+        Check::Taken(by) => info!("[net] name check: {name}.local answers from {by}"),
+        _ => info!("[net] name check: {name}.local is free"),
+    }
+    check
 }
 
 /// Copy the hostname mDNS is answering to into the status when it changed

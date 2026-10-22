@@ -166,7 +166,7 @@ async function loadConfig() {
 async function put(path, body) {
   const r = await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || r.status);
+  if (!r.ok) throw Object.assign(new Error(j.error || r.status), { status: r.status });
   return j;
 }
 
@@ -209,7 +209,12 @@ $('savewifi').onclick = async () => {
     say('wifimsg', 'Saved. The display is restarting to join “' + ssid + '”.\n\nRejoin your usual WiFi, then open http://' + host + '.local/ to start using it. ' +
         'If the setup network comes back instead, the name or password was wrong: join it again and retry.', 'ok');
     await fetch('/api/reboot', { method: 'POST' });
-  } catch (e) { say('wifimsg', 'That didn\'t work: ' + e.message, 'err'); }
+  } catch (e) {
+    // 409: another device already answers to <name>.local (not on the
+    // setup network, which has no mDNS; /setup on the home network can).
+    say('wifimsg', e.status === 409 ? 'Another display on this network is already called “' + host + '”. Give this one its own name; nothing was saved.'
+                                    : 'That didn\'t work: ' + e.message, 'err');
+  }
 };
 
 $('savecfg').onclick = async () => {
