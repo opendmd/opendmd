@@ -4,7 +4,7 @@
 //! through [`normalize_title`](crate::manifest::normalize_title), so a user can
 //! type `donkeykong` and match `Donkey Kong Country`.
 
-use crate::manifest::{normalize_title, Entry};
+use crate::manifest::{normalize_title, Entry, SEASONS};
 use std::collections::HashSet;
 
 fn upper_set<I, S>(items: I) -> HashSet<String>
@@ -24,7 +24,10 @@ where
 /// the useful behaviour when a user passes an empty `--platforms` list.
 #[derive(Clone, Debug, Default)]
 pub struct Filter {
-    /// Uppercased platform names; an entry with no platform never matches.
+    /// Uppercased platform names. An entry matches by its platform, or, for
+    /// a season (`HALLOWEEN`, `XMAS`), by carrying that season's flag: a
+    /// `HALLOWEEN_PSX_…` file is platform `PSX` and still plays under a
+    /// `HALLOWEEN` filter. Anything else with no platform never matches.
     pub platforms: Option<HashSet<String>>,
     /// Uppercased category names to keep.
     pub categories_include: Option<HashSet<String>>,
@@ -103,9 +106,18 @@ impl Filter {
 
     pub fn matches(&self, entry: &Entry) -> bool {
         if let Some(wanted) = &self.platforms {
-            match &entry.platform {
-                Some(p) if wanted.contains(&p.to_uppercase()) => {}
-                _ => return false,
+            let by_platform = entry
+                .platform
+                .as_ref()
+                .is_some_and(|p| wanted.contains(&p.to_uppercase()));
+            let by_season = || {
+                entry.flags.iter().any(|f| {
+                    SEASONS.iter().any(|s| f.eq_ignore_ascii_case(s))
+                        && wanted.contains(&f.to_uppercase())
+                })
+            };
+            if !by_platform && !by_season() {
+                return false;
             }
         }
 
@@ -153,9 +165,14 @@ impl Filter {
     /// deduplicated, since they are OR-ed) before it is hashed, strings are
     /// length-prefixed so `["ab","c"]` and `["a","bc"]` differ, and `None`
     /// ("no constraint") is distinct from `Some(empty)` ("match nothing").
+    ///
+    /// The salt's number goes up whenever the same filter can select
+    /// different lines (the name grammar or the matching changed), so every
+    /// index on a card is rebuilt once after such an update rather than
+    /// trusted: `/2` is the closed platform list and season matching.
     pub fn fingerprint(&self) -> u64 {
         let mut h = Fnv1a::new();
-        h.bytes(b"opendmd-filter/1");
+        h.bytes(b"opendmd-filter/2");
         h.opt_set(self.platforms.as_ref().map(sorted));
         h.opt_set(self.categories_include.as_ref().map(sorted));
         h.opt_set(Some(sorted(&self.categories_exclude)));
@@ -306,6 +323,26 @@ mod tests {
             .platforms(Vec::<String>::new())
             .apply(&e)
             .is_empty());
+    }
+
+    #[test]
+    fn a_season_filter_keeps_files_that_have_their_own_platform() {
+        let psx = Entry::from_path("/gifs/Halloween/HALLOWEEN_PSX_Castlevania_01.gif");
+        let own = Entry::from_path("/gifs/Halloween/HALLOWEEN_Dracula_01.gif");
+        let xmas = Entry::from_path("/gifs/XMAS/XMAS_SNES_Santa_01.gif");
+        let plain = Entry::from_path("/gifs/Consoles/PSX_Castlevania_01.gif");
+        // An author flag that happens to read like a platform is not a season.
+        let by = Entry::from_path("/gifs/Consoles/MD_Sonic_01_snes.gif");
+        assert_eq!(psx.platform.as_deref(), Some("PSX"));
+        let hw = Filter::new().platforms(["halloween"]);
+        assert!(hw.matches(&psx) && hw.matches(&own));
+        assert!(!hw.matches(&xmas) && !hw.matches(&plain));
+        let x = Filter::new().platforms(["XMAS"]);
+        assert!(x.matches(&xmas) && !x.matches(&psx));
+        // The file's own platform still matches it.
+        let p = Filter::new().platforms(["PSX"]);
+        assert!(p.matches(&psx) && p.matches(&plain) && !p.matches(&own));
+        assert!(!Filter::new().platforms(["SNES"]).matches(&by));
     }
 
     #[test]

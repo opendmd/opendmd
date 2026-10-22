@@ -341,8 +341,16 @@ fn is_keyword_flag(token: &str) -> bool {
     KEYWORD_FLAGS.iter().any(|k| token.eq_ignore_ascii_case(k))
 }
 
+/// The listed platform this token names, ignoring case (`Nes` -> `NES`).
+fn known_platform(token: &str) -> Option<&'static str> {
+    PLATFORMS
+        .iter()
+        .copied()
+        .find(|p| p.eq_ignore_ascii_case(token))
+}
+
 fn is_known_platform(token: &str) -> bool {
-    PLATFORMS.contains(&token)
+    known_platform(token).is_some()
 }
 
 /// Author handle: a known handle, or any token starting with a lowercase
@@ -391,9 +399,11 @@ fn parse_stem(stem: &str) -> Entry {
             break;
         }
     }
-    if platform.is_none() && rest.len() > 1 && is_known_platform(rest[0]) {
-        platform = Some(rest[0].to_string());
-        rest = &rest[1..];
+    if platform.is_none() && rest.len() > 1 {
+        if let Some(p) = known_platform(rest[0]) {
+            platform = Some(p.to_string());
+            rest = &rest[1..];
+        }
     }
 
     // The whole stem is the title when there was no usable prefix.
@@ -607,12 +617,27 @@ impl NameFields {
         };
         let mut parts: Vec<&str> = Vec::new();
         let season = self.flags.iter().find(|f| SEASONS.contains(&f.as_str()));
-        match self.platform.as_deref().filter(|p| !p.is_empty()) {
+        // A listed platform in any case is written as listed (`snes` -> `SNES`).
+        let platform = match self
+            .platform
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            None => None,
+            Some(p) => Some(
+                known_platform(p)
+                    .or_else(|| {
+                        MULTI_PLATFORMS
+                            .iter()
+                            .map(|(_, n)| *n)
+                            .find(|n| n.eq_ignore_ascii_case(p))
+                    })
+                    .ok_or(NameError::Platform)?,
+            ),
+        };
+        match platform {
             Some(p) => {
-                let multi = MULTI_PLATFORMS.iter().any(|(_, n)| *n == p);
-                if !multi && !is_known_platform(p) {
-                    return Err(NameError::Platform);
-                }
                 if let Some(s) = season {
                     parts.push(s);
                 }
@@ -648,7 +673,7 @@ impl NameFields {
                 .iter()
                 .all(|f| back.flags.iter().any(|b| b.eq_ignore_ascii_case(f)));
         if back.title != words.join(" ")
-            || back.platform.as_deref() != self.platform.as_deref().filter(|p| !p.is_empty())
+            || back.platform.as_deref() != platform
             || back.ordinal != self.ordinal
             || back.author != author
             || !same_flags
@@ -804,6 +829,23 @@ mod tests {
 
     #[cfg(feature = "names")]
     #[test]
+    fn every_listed_platform_round_trips() {
+        let multi = MULTI_PLATFORMS.iter().map(|(_, n)| *n);
+        for p in PLATFORMS.iter().copied().chain(multi) {
+            for given in [p.to_string(), p.to_ascii_lowercase()] {
+                let path = build_name("Super Game", Some(&given), "C", Some(3), Some("ross"))
+                    .unwrap_or_else(|e| panic!("{p}: {e:?}"));
+                assert_eq!(path, format!("/gifs/C/{p}_Super_Game_03_ross.gif"));
+                let e = Entry::from_path(&path);
+                assert_eq!(e.platform.as_deref(), Some(p), "{path}");
+                assert_eq!(e.title, "Super Game", "{path}");
+                assert_eq!(e.variant, Some(3), "{path}");
+            }
+        }
+    }
+
+    #[cfg(feature = "names")]
+    #[test]
     fn canonical_names_are_rebuilt_byte_for_byte() {
         for path in [
             "/gifs/Consoles/SNES_Donkey_Kong_Country_05.gif",
@@ -942,9 +984,10 @@ mod tests {
                 "{bad}"
             );
         }
+        // A listed platform in any case is written as listed.
         assert_eq!(
-            b("X", Some("Snes"), "C", Some(1), None),
-            Err(NameError::Platform)
+            b("X", Some("Snes"), "C", Some(1), None).as_deref(),
+            Ok("/gifs/C/SNES_X_01.gif")
         );
         assert_eq!(
             b("X", Some("SN ES"), "C", Some(1), None),
@@ -1217,10 +1260,17 @@ mod tests {
             assert!(e.flags.is_empty(), "{path}");
         }
 
-        // Mixed case is not a platform: whole stem becomes the title.
+        // A listed platform in another case is that platform, as listed.
         let e = p("/gifs/Consoles/Nes_Gradius.gif");
-        assert_eq!(e.platform, None);
-        assert_eq!(e.title, "Nes Gradius");
+        assert_eq!(e.platform.as_deref(), Some("NES"));
+        assert_eq!(e.title, "Gradius");
+
+        // A season in front of an unlisted word is the platform itself.
+        let e = p("/gifs/XMAS/XMAS_SANTA_Panic_01.gif");
+        assert_eq!(e.platform.as_deref(), Some("XMAS"));
+        assert_eq!(e.title, "SANTA Panic");
+        assert_eq!(e.variant, Some(1));
+        assert!(e.flags.is_empty());
 
         // No underscore at all.
         let e = p("/gifs/Spectrum_Slide/Exolon2.gif");
