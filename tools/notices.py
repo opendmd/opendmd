@@ -618,6 +618,11 @@ def web(a: argparse.Namespace) -> None:
                      "url": "https://github.com/google/fonts/tree/main/ofl/silkscreen",
                      "note": "Jason Kottke's pixel font, fonts/silkscreen.woff2 (also inlined in the firmware's "
                              "setup page).", "text": str(n)})
+    packages.append({"name": "Game title lists (art/*.json)", "license": "credit, no licence text",
+                     "url": "https://github.com/libretro-thumbnails",
+                     "note": "The game names Create Art searches are taken from the file names of the "
+                             "libretro-thumbnails collections, which publish no licence; the pictures "
+                             "themselves are fetched from there at the user's request and never bundled."})
     crates = crate_entries(abouts, texts)
     packages.append(rust_std_entry(texts, []))
     write_or_check("web", render("Third-party licences: the OpenDMD web app", INTRO_WEB, packages, crates,
