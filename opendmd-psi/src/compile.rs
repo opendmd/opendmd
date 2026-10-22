@@ -130,8 +130,17 @@ fn describe(t: Tok) -> &'static str {
     }
 }
 
-/// A decimal number as Q16.16, rounded to the nearest 1/65,536.
-fn number(s: &str) -> Option<i32> {
+/// A decimal number (digits, an optional `.` and more digits; no sign) as
+/// Q16.16, rounded to the nearest 1/65,536: how the compiler reads numbers,
+/// for the sliders' `a=` options too.
+pub fn number(s: &str) -> Option<i32> {
+    if s.is_empty()
+        || s == "."
+        || s.matches('.').count() > 1
+        || !s.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+    {
+        return None;
+    }
     let (int, frac) = s.split_once('.').unwrap_or((s, ""));
     let mut v: i64 = 0;
     for b in int.bytes() {
@@ -296,6 +305,40 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
         end: b.len(),
     });
     Ok(out)
+}
+
+/// The same formula on one line, as short as it stays readable: comments
+/// dropped, runs of spaces made one, lines joined with `; ` (which the
+/// language reads as a line break, and ignores inside brackets, as it does
+/// a newline). For `@fx:psi?src=` paths, which are 512 B at most.
+pub fn compact(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        // Cut a comment (`--` or `//`) off the line.
+        let b = line.as_bytes();
+        let mut end = b.len();
+        for i in 0..b.len().saturating_sub(1) {
+            if (b[i] == b'-' && b[i + 1] == b'-') || (b[i] == b'/' && b[i + 1] == b'/') {
+                end = i;
+                break;
+            }
+        }
+        let mut code = String::new();
+        for w in line[..end].split_whitespace() {
+            if !code.is_empty() {
+                code.push(' ');
+            }
+            code.push_str(w);
+        }
+        if code.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str("; ");
+        }
+        out.push_str(&code);
+    }
+    out
 }
 
 // --- names ----------------------------------------------------------------------

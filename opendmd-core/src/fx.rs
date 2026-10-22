@@ -285,7 +285,7 @@ const fn expand(k: [[u8; 3]; 9]) -> [Rgb; PAL_LEN] {
     out
 }
 
-static PALETTES: [[Rgb; PAL_LEN]; 5] = [
+pub(crate) static PALETTES: [[Rgb; PAL_LEN]; 5] = [
     // fire
     expand([
         [0, 0, 0],
@@ -1366,13 +1366,18 @@ impl Effect for Wire {
 
 // --- the effect a path names -------------------------------------------------
 
-/// One of the effects, inline (no box: nothing on the heap).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One of the effects, inline (no box: nothing on the heap) — but for a
+/// Psi formula (the `psi` feature), whose program and working memory are
+/// one allocation made when it is opened ([`crate::fx_psi`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "psi"), derive(Copy))]
 pub enum Fx {
     Tunnel(Tunnel),
     Rotozoom(Rotozoom),
     Starfield(Starfield),
     Wire(Wire),
+    #[cfg(feature = "psi")]
+    Psi(crate::fx_psi::PsiBox),
 }
 
 const _: () = assert!(std::mem::size_of::<Fx>() <= 512);
@@ -1384,6 +1389,8 @@ impl Fx {
             Fx::Rotozoom(e) => e,
             Fx::Starfield(e) => e,
             Fx::Wire(e) => e,
+            #[cfg(feature = "psi")]
+            Fx::Psi(e) => &mut **e,
         }
     }
 
@@ -1393,6 +1400,8 @@ impl Fx {
             Fx::Rotozoom(e) => e.name(),
             Fx::Starfield(e) => e.name(),
             Fx::Wire(e) => e.name(),
+            #[cfg(feature = "psi")]
+            Fx::Psi(e) => e.name(),
         }
     }
 
@@ -1403,6 +1412,8 @@ impl Fx {
             Fx::Rotozoom(_) => "Rotozoom",
             Fx::Starfield(_) => "Starfield",
             Fx::Wire(_) => "Wireframe",
+            #[cfg(feature = "psi")]
+            Fx::Psi(_) => "Formula",
         }
     }
 
@@ -1417,6 +1428,8 @@ impl Fx {
             Fx::Rotozoom(e) => e.common.delay(),
             Fx::Starfield(e) => e.common.delay(),
             Fx::Wire(e) => e.common.delay(),
+            #[cfg(feature = "psi")]
+            Fx::Psi(e) => e.delay(),
         }
     }
 
@@ -1429,6 +1442,10 @@ impl Fx {
     pub fn parse(path: &str) -> Option<Fx> {
         let rest = path.strip_prefix(PREFIX)?;
         let (name, query) = rest.split_once('?').unwrap_or((rest, ""));
+        #[cfg(feature = "psi")]
+        if name == "psi" {
+            return crate::fx_psi::PsiFx::from_query(query).ok().map(Fx::Psi);
+        }
         let (palette, cycle) = match name {
             "starfield" => (Palette::Ice, false),
             "rotozoom" => (Palette::Fire, false),
@@ -1523,6 +1540,8 @@ impl Fx {
             Fx::Rotozoom(e) => e.common = common,
             Fx::Starfield(e) => e.common = common,
             Fx::Wire(e) => e.common = common,
+            #[cfg(feature = "psi")]
+            Fx::Psi(_) => {}
         }
         Some(fx)
     }
@@ -1559,7 +1578,11 @@ mod tests {
         assert!(TABLES.tunnel.depth[QW - 1] >> 14 == 3 && TABLES.tunnel.depth[QW - 1] & 1023 < 64);
         assert_eq!(TABLE_BYTES, 13_338);
         // The whole state of an effect, inline in the decoder.
+        #[cfg(not(feature = "psi"))]
         assert_eq!(std::mem::size_of::<Fx>(), 10);
+        // A formula's state is behind a pointer (`fx_psi`).
+        #[cfg(feature = "psi")]
+        assert!(std::mem::size_of::<Fx>() <= 16);
         for p in &PALETTES {
             assert_eq!(p[0], Rgb::BLACK);
         }
