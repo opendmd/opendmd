@@ -585,6 +585,9 @@ def gallery(out: Path, www: Path, contrib: Path | None, tool: Path) -> str:
             raise SystemExit(f"--gallery {contrib}: not a folder")
         # Regular files only: a link is never followed (lstat, not stat).
         files = sorted(p for p in contrib.iterdir() if p.suffix == ".psi" and not p.is_symlink() and p.is_file())[:GALLERY_MAX]
+        for p in sorted(contrib.iterdir()):
+            if p.suffix == ".psi" and (p.is_symlink() or not p.is_file()):
+                print(f"gallery: left out {p.name!r}: not a plain file (a link or a folder)", file=sys.stderr)
         entries, bad = check_gallery(tool, files, out / "formulas/thumbs")
         for b in bad:
             print(f"gallery: left out {b['file']!r}: {'; '.join(b['problems'])}", file=sys.stderr)
