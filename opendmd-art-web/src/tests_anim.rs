@@ -524,6 +524,28 @@ fn an_effect_saves_as_a_gif_the_player_plays() {
     assert_eq!(s.frames, 120);
 }
 
+// --- Frames drawn by the page (a formula's "Save as GIF") ----------------
+
+#[test]
+fn pushed_frames_become_an_animation() {
+    // Four 128x32 frames, each a different grey: kept as given, at the
+    // first one's delay; extra frames are ignored; a wrong size is refused.
+    let f = |v: u8| vec![v; W * H * 3];
+    assert!(Anim::frames(&[0; 12], 4, 40, false).is_none());
+    let mut a = Anim::frames(&f(10), 4, 40, true).unwrap();
+    assert_eq!((a.in_file, a.len(), a.cut, a.orig), (4, 1, true, (W, H)));
+    assert!(!a.push(&f(20)));
+    assert!(!a.push(&[1, 2, 3]), "a wrong size is not a frame");
+    assert!(!a.push(&f(30)));
+    assert!(a.push(&f(40)));
+    assert!(a.push(&f(50)), "more are ignored");
+    assert_eq!(a.len(), 4);
+    assert!(a.delays.iter().all(|&d| d == 40));
+    for (i, v) in [10, 20, 30, 40].into_iter().enumerate() {
+        assert_eq!(px(&a, i, 64, 16), [v, v, v]);
+    }
+}
+
 /// What an effect's GIF and its prepared copy weigh:
 /// `cargo test --release -- --ignored effect_gif_sizes --nocapture`.
 #[test]
