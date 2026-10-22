@@ -30,10 +30,14 @@
 //!    the flag is a convenience for files that get copied out of `Halloween/`.
 //! 2. **Platform prefix.** Multi-token prefixes first ([`MULTI_PLATFORMS`],
 //!    which is also where `NINTENDO_DS` is normalised to `NDS`), then the
-//!    known single-token list ([`PLATFORMS`]). An unknown first token is still
-//!    taken as the platform if it looks like one — all `A-Z`, `0-9`, `-`, with
-//!    at least one letter (`PICO-8` qualifies). Anything else leaves
-//!    `platform: None` and the whole stem becomes the title.
+//!    single-token list ([`PLATFORMS`]), matched exactly (upper case). Nothing else is a
+//!    platform: an unlisted first token (`THE_80s_90s_…`, `HDB_Happy_…`,
+//!    `Nes_Gradius`) leaves `platform: None` and the whole stem becomes the
+//!    title. The list is closed on purpose: every all-caps first word used to
+//!    count, which turned `THE`, `HDB`, `LOGO` and `POKEMON` into platforms
+//!    on the real card; a file name carries no other way to tell a platform
+//!    from a word, and the parser sees one name at a time (the firmware
+//!    filters a 10k-line playlist line by line), so it cannot count either.
 //! 3. **Leading keyword flags.** `LOGO`, `INTRO`, `INVERT` etc. directly after
 //!    the platform (`MD_LOGO_Sega31.gif`).
 //! 4. **Trailing tags**, consumed right-to-left: keyword flags, a standalone
@@ -55,35 +59,29 @@
 use crate::filter::Filter;
 use std::io::{self, BufRead, Read, Seek, SeekFrom};
 
-/// Known single-token platform prefixes.
+/// The single-token platform prefixes: the only first words read as a
+/// platform (with [`MULTI_PLATFORMS`]). What the DMDoS card uses, the tags
+/// Follow RePlayOS maps systems to, `FX` (Create Art's recordings of the
+/// effects), and a few common systems the card lacks. Adding one is safe
+/// (files with that prefix gain it); removing one takes it off every file.
+#[rustfmt::skip]
 pub const PLATFORMS: &[&str] = &[
-    "SNES",
-    "NES",
-    "MD",
-    "GBA",
-    "GBC",
-    "GB",
-    "SMS",
-    "PCE",
-    "PS1",
-    "N64",
-    "SATURN",
-    "GAMEGEAR",
-    "NGP",
-    "NGPC",
-    "NDS",
-    "PICO-8",
-    "AMIGA",
-    "C64",
-    "ATARI",
-    "AMSTRAD",
-    "PC",
-    "ARCADE",
-    "PINBALL",
-    "OTHER",
-    "MOVIES",
-    "HALLOWEEN",
-    "XMAS",
+    // Nintendo
+    "NES", "SNES", "N64", "GAMECUBE", "WII", "SWITCH", "GB", "GBC", "GBA", "NDS", "3DS",
+    // Sega
+    "SG1000", "SMS", "MD", "32X", "SATURN", "DREAMCAST", "GAMEGEAR",
+    // Sony, Microsoft
+    "PS", "PS1", "PSX", "PS2", "PS3", "PS4", "PSP", "VITA", "XBOX",
+    // Other consoles and handhelds
+    "PCE", "NGP", "NGPC", "NEOGEO", "LYNX", "JAGUAR", "3DO", "WONDERSWAN", "COLECOVISION",
+    "INTELLIVISION", "VECTREX",
+    // Computers
+    "AMIGA", "C64", "ATARI", "ATARI800", "ATARIST", "AMSTRAD", "SPECTRUM", "ZX", "MSX", "MSX2",
+    "X68000", "PC", "DOS", "MAC",
+    // Phones, fantasy consoles, our own
+    "IOS", "MOBILE", "PICO-8", "FX",
+    // DMDoS's catch-alls
+    "ARCADE", "PINBALL", "OTHER", "MOVIES", "HALLOWEEN", "XMAS",
 ];
 
 /// Multi-token platform prefixes, as `(tokens, canonical name)`. Matched before
@@ -339,15 +337,6 @@ fn stem_of(path: &str) -> &str {
     }
 }
 
-/// `A-Z`, `0-9` and `-` only, with at least one letter.
-fn looks_like_platform(token: &str) -> bool {
-    !token.is_empty()
-        && token.chars().any(|c| c.is_ascii_uppercase())
-        && token
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
-}
-
 fn is_keyword_flag(token: &str) -> bool {
     KEYWORD_FLAGS.iter().any(|k| token.eq_ignore_ascii_case(k))
 }
@@ -402,10 +391,7 @@ fn parse_stem(stem: &str) -> Entry {
             break;
         }
     }
-    if platform.is_none()
-        && rest.len() > 1
-        && (is_known_platform(rest[0]) || looks_like_platform(rest[0]))
-    {
+    if platform.is_none() && rest.len() > 1 && is_known_platform(rest[0]) {
         platform = Some(rest[0].to_string());
         rest = &rest[1..];
     }
@@ -497,8 +483,8 @@ pub enum NameError {
     /// A character FAT or the grammar cannot take: `"*/:<>?\|`, `_`
     /// (the separator; spaces become `_`), control or non-ASCII.
     TitleChar,
-    /// Not a platform the parser would read back: `A-Z`, `0-9`, `-` with a
-    /// letter, or one of the multi-token names (`VIRTUAL_BOY`).
+    /// Not a platform the parser would read back: one of [`PLATFORMS`] or a
+    /// multi-token name (`VIRTUAL_BOY`).
     Platform,
     /// Empty, too long, or a character a directory name cannot have.
     Category,
@@ -511,8 +497,8 @@ pub enum NameError {
     /// Longer than [`MAX_NAME_LEN`].
     TooLong,
     /// Built, but the parser would read it back differently (a title word
-    /// taken for a tag: `Toy Story` -> `Toy` + `Story`, or `THE END` with
-    /// no platform -> platform `THE`). Reword.
+    /// taken for a tag: `Toy Story` -> `Toy` + `Story`, or `SNES Classics`
+    /// with no platform -> platform `SNES`). Reword.
     ReadsBack,
 }
 
@@ -624,7 +610,7 @@ impl NameFields {
         match self.platform.as_deref().filter(|p| !p.is_empty()) {
             Some(p) => {
                 let multi = MULTI_PLATFORMS.iter().any(|(_, n)| *n == p);
-                if !multi && !looks_like_platform(p) {
+                if !multi && !is_known_platform(p) {
                     return Err(NameError::Platform);
                 }
                 if let Some(s) = season {
@@ -1000,8 +986,17 @@ mod tests {
             Err(NameError::ReadsBack)
         );
         assert_eq!(
-            b("THE END", None, "C", None, None),
+            b("SNES Classics", None, "C", None, None),
             Err(NameError::ReadsBack)
+        );
+        // A first word that is not a listed platform is just a word.
+        assert_eq!(
+            b("THE END", None, "C", None, None),
+            Ok("/gifs/C/THE_END.gif".into())
+        );
+        assert_eq!(
+            b("Mine Storm", Some("VCS"), "C", Some(1), None),
+            Err(NameError::Platform)
         );
         assert_eq!(
             b("Doom 64", Some("N64"), "C", None, None),
@@ -1190,12 +1185,37 @@ mod tests {
 
     #[test]
     fn unknown_prefixes() {
-        // All-caps token is taken as a platform even though it is not listed.
+        // A listed platform the original spec list missed.
         let e = p("/gifs/Consoles/PSP_Parasite_Eve_01__sephirot68.gif");
         assert_eq!(e.platform.as_deref(), Some("PSP"));
         assert_eq!(e.title, "Parasite Eve");
         assert_eq!(e.variant, Some(1));
         assert_eq!(e.flags, vec!["sephirot68"]);
+
+        // An unlisted all-caps first word is part of the title, which keeps
+        // every word (no number or author without a platform).
+        for (path, title) in [
+            (
+                "/gifs/The_80s_90s/THE_80s_90s_SCROLL_Judge_Dredd_01_sephirot68.gif",
+                "THE 80s 90s SCROLL Judge Dredd 01 sephirot68",
+            ),
+            (
+                "/gifs/Happy_Birthday/HDB_Happy_Birday_03.gif",
+                "HDB Happy Birday 03",
+            ),
+            ("/gifs/Consoles/POKEMON_MINI_01.gif", "POKEMON MINI 01"),
+            ("/gifs/Consoles/LOGO_SATURN01.gif", "LOGO SATURN01"),
+            (
+                "/gifs/XMAS/XMAX_PICO-8_Santa_Panic_01.gif",
+                "XMAX PICO-8 Santa Panic 01",
+            ),
+        ] {
+            let e = p(path);
+            assert_eq!(e.platform, None, "{path}");
+            assert_eq!(e.title, title, "{path}");
+            assert_eq!(e.variant, None, "{path}");
+            assert!(e.flags.is_empty(), "{path}");
+        }
 
         // Mixed case is not a platform: whole stem becomes the title.
         let e = p("/gifs/Consoles/Nes_Gradius.gif");
@@ -1206,6 +1226,18 @@ mod tests {
         let e = p("/gifs/Spectrum_Slide/Exolon2.gif");
         assert_eq!(e.platform, None);
         assert_eq!(e.title, "Exolon2");
+    }
+
+    #[test]
+    fn a_season_in_front_of_a_listed_platform_is_a_flag() {
+        let e = p("/gifs/Halloween/HALLOWEEN_PSX_Castlevania-Symphony_of_the_Night_01.gif");
+        assert_eq!(e.platform.as_deref(), Some("PSX"));
+        assert_eq!(e.title, "Castlevania-Symphony of the Night");
+        assert_eq!(e.flags, vec!["HALLOWEEN"]);
+        // `ATARI_ST`, `ZX_SPECTRUM`: the second word stays in the title.
+        let e = p("/gifs/Computers/ATARI_ST_Xenon_2_01.gif");
+        assert_eq!(e.platform.as_deref(), Some("ATARI"));
+        assert_eq!(e.title, "ST Xenon 2");
     }
 
     #[test]
