@@ -42,6 +42,13 @@ ahead-off = []
 # Makefile adds sdkconfig.diag (comprehensive heap poisoning, end-of-stack
 # watchpoint). Off by default, compiled out. `make fw-build FW_FEATURES=diag-heap`.
 diag-heap = []
+# Psi formulas as a live effect (`@fx:psi?src=…`, opendmd-core's `psi`): a
+# spike, off by default and in every release.
+psi = ["opendmd-core/psi"]
+# The Psi spike's measurement (src/psi_probe.rs): frame times, the golden
+# frames, per-step costs and the stack, logged once at boot (`psi-probe:`
+# lines). `make fw-release FW_RELEASE_FEATURES=probe,psi-probe` for the rig.
+psi-probe = ["psi"]
 
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }

@@ -1174,6 +1174,7 @@ dependencies = [
  "ed25519-dalek",
  "gif",
  "log",
+ "opendmd-psi",
  "sha2",
 ]
 
@@ -1193,6 +1194,10 @@ dependencies = [
  "serde_json",
  "tera",
 ]
+
+[[package]]
+name = "opendmd-psi"
+version = "0.0.0"
 
 [[package]]
 name = "pest"

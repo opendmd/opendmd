@@ -184,3 +184,17 @@ pub static ATAN: [u16; 257] = {
     }
     t
 };
+
+/// `√(i · 2^22)` for i in 64..=256 (index i − 64): the square root of a
+/// value normalised to 2^28..2^30 by its top byte, interpolated by
+/// `fixed::sqrt30` (≈ 15 significant bits). 386 B.
+pub static SQRT: [u16; 193] = {
+    let mut t = [0u16; 193];
+    let mut i = 0;
+    while i < 193 {
+        let v = round(sqrt_f((i + 64) as f64 * 4194304.0));
+        t[i] = if v > 65535 { 65535 } else { v as u16 };
+        i += 1;
+    }
+    t
+};

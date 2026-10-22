@@ -57,6 +57,8 @@ mod nvs_config;
 mod ota;
 mod panel;
 mod probe;
+#[cfg(feature = "psi-probe")]
+mod psi_probe;
 mod sched;
 mod sd;
 mod sdhealth;
@@ -272,6 +274,8 @@ fn main() -> Result<()> {
     if probe::ENABLED {
         panel.bench();
     }
+    #[cfg(feature = "psi-probe")]
+    psi_probe::run();
 
     // GPIO 2 (onboard LED) is deliberately untouched — see hardware/PINOUT.md.
     //
