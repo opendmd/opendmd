@@ -105,12 +105,14 @@ fn publish(status: &Arc<Mutex<Status>>, state: WifiState, ip: Option<String>) {
 }
 
 /// mDNS as `<hostname>.local`, station mode only. Kept alive by the
-/// caller: dropping it unregisters.
-fn start_mdns(hostname: &str) -> Option<EspMdns> {
+/// caller: dropping it unregisters. `named` is set to the name the
+/// responder took, or cleared if naming it failed (the loop retries).
+fn start_mdns(hostname: &str, named: &mut String) -> Option<EspMdns> {
     match EspMdns::take() {
         Ok(mut mdns) => {
-            let ok = name_mdns(&mut mdns, hostname)
-                && mdns.add_service(None, "_http", "_tcp", 80, &[]).is_ok();
+            let ok = name_mdns(&mut mdns, hostname);
+            *named = if ok { hostname.to_string() } else { String::new() };
+            let ok = ok && mdns.add_service(None, "_http", "_tcp", 80, &[]).is_ok();
             if ok {
                 info!("[net] mDNS responding as {hostname}.local");
             } else {
@@ -140,22 +142,53 @@ fn name_mdns(mdns: &mut EspMdns, hostname: &str) -> bool {
 }
 
 /// A new display name saved through the API (`NetCommand::Rename`), in
-/// effect now: mDNS re-announced in place (not dropped and taken again,
-/// which would free and reallocate the responder's task and buffers on a
-/// heap that has little to spare), the station's DHCP name (sent from the
-/// next renewal), and the copies `/api/status` and Improv answer with.
-/// With no responder (setup network, not connected) the name is simply
-/// used when mDNS starts. The setup network's own name does not change.
-fn rename(mdns: Option<&mut EspMdns>, status: &Arc<Mutex<Status>>, hostname: &str) {
+/// effect now: the station's DHCP name (sent from the next renewal) and
+/// the copies `/api/status` and Improv answer with. The running mDNS
+/// responder is renamed by the loop right after ([`MdnsName`]), in place:
+/// not dropped and taken again, which would free and reallocate its task
+/// and buffers on a heap that has little to spare. With no responder
+/// (setup network, not connected) the name is used when mDNS starts. The
+/// setup network's own name does not change.
+fn rename(status: &Arc<Mutex<Status>>, hostname: &str) {
     crate::wifi::set_sta_hostname(hostname);
     crate::improv::set_hostname(hostname);
     if let Ok(mut s) = status.lock() {
         s.hostname = hostname.to_string();
     }
-    match mdns.map(|m| name_mdns(m, hostname)) {
-        Some(true) => info!("[net] renamed: mDNS responding as {hostname}.local"),
-        Some(false) => warn!("[net] renamed to {hostname}; mDNS registration incomplete"),
-        None => info!("[net] renamed to {hostname}"),
+    info!("[net] renamed to {hostname}");
+}
+
+/// The name the mDNS responder was last given successfully, and when to
+/// try again if that is not the hostname: naming can fail on a short heap
+/// (`mdns_hostname_set`'s allocations, a full action queue), and the
+/// responder would otherwise answer to the old name until a reboot while
+/// a repeated save changes nothing.
+#[derive(Default)]
+struct MdnsName {
+    named: String,
+    retry_at: Option<Instant>,
+}
+
+impl MdnsName {
+    /// Name the responder `hostname` if it is not (now, or when the retry
+    /// is due); the first failure of a run of them warns.
+    fn sync(&mut self, mdns: &mut EspMdns, hostname: &str) {
+        if self.named == hostname || self.retry_at.is_some_and(|t| Instant::now() < t) {
+            return;
+        }
+        if name_mdns(mdns, hostname) {
+            info!("[net] mDNS responding as {hostname}.local");
+            self.named = hostname.to_string();
+            self.retry_at = None;
+        } else {
+            if self.retry_at.is_none() {
+                warn!(
+                    "[net] mDNS could not take the name {hostname}; retrying every {} s",
+                    config::MDNS_RETRY.as_secs()
+                );
+            }
+            self.retry_at = Some(Instant::now() + config::MDNS_RETRY);
+        }
     }
 }
 
@@ -270,8 +303,9 @@ fn run(worker: NetWorker) {
 
     // --- mDNS, STA only ----------------------------------------------------
     // Kept alive for the life of the worker: dropping it unregisters.
+    let mut mdns_name = MdnsName::default();
     let mut mdns = if wifi.state() == WifiState::Connected {
-        start_mdns(&hostname)
+        start_mdns(&hostname, &mut mdns_name.named)
     } else {
         None
     };
@@ -344,8 +378,10 @@ fn run(worker: NetWorker) {
             }
             Ok(NetCommand::Rename(name)) => {
                 if name != hostname {
-                    rename(mdns.as_mut(), &status, &name);
+                    rename(&status, &name);
                     hostname = name;
+                    // Named below, now: not after a failure's wait.
+                    mdns_name.retry_at = None;
                 }
             }
             // Improv Serial (`improv.rs`): the answers go straight back to
@@ -410,7 +446,7 @@ fn run(worker: NetWorker) {
                         let ip = wifi.ip_address();
                         publish(&status, WifiState::Connected, ip.clone());
                         if mdns.is_none() {
-                            mdns = start_mdns(&hostname);
+                            mdns = start_mdns(&hostname, &mut mdns_name.named);
                         }
                         if _sntp.is_none() {
                             _sntp = crate::clock::start_sntp();
@@ -459,7 +495,8 @@ fn run(worker: NetWorker) {
 
         // The name mDNS answers to: it takes `<name>-2` if another device
         // has the name, at start-up or later (a conflict re-probes).
-        if mdns.is_some() {
+        if let Some(m) = mdns.as_mut() {
+            mdns_name.sync(m, &hostname);
             publish_mdns(&status);
         }
 
@@ -495,7 +532,7 @@ fn run(worker: NetWorker) {
                     publish(&status, WifiState::Connected, ip);
                     boot_failures = None;
                     if mdns.is_none() {
-                        mdns = start_mdns(&hostname);
+                        mdns = start_mdns(&hostname, &mut mdns_name.named);
                     }
                     if _sntp.is_none() {
                         _sntp = crate::clock::start_sntp();

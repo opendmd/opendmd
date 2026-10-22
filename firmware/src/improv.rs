@@ -40,7 +40,7 @@
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -103,8 +103,6 @@ pub enum Job {
 }
 
 struct Ctx {
-    /// Replaced by a rename ([`set_hostname`], network worker).
-    hostname: Mutex<String>,
     version: &'static str,
     net: mpsc::Sender<NetCommand>,
 }
@@ -150,8 +148,8 @@ const EV_STUCK: u8 = 8;
 /// `hostname` is the device name the installer shows; `net` reaches the
 /// network worker (commands queue until it runs).
 pub fn init(hostname: &str, net: mpsc::Sender<NetCommand>) {
+    set_hostname(hostname);
     let _ = CTX.set(Ctx {
-        hostname: Mutex::new(hostname.to_string()),
         version: crate::state::firmware_version(),
         net,
     });
@@ -485,22 +483,56 @@ fn send_info() {
     let Some(c) = CTX.get() else {
         return;
     };
-    // Held for the encode only (no copy on the drain's 2 KB stack); the
-    // worker's rename holds it for a string swap.
-    let name = c.hostname.lock().unwrap_or_else(|e| e.into_inner());
-    let strings = [FIRMWARE_NAME, c.version, CHIP, name.as_str()];
+    let mut buf = [0u8; NAME_MAX];
+    let name = hostname(&mut buf);
+    let strings = [FIRMWARE_NAME, c.version, CHIP, name];
     logring::raw(imp::rpc_result_len(&strings), &mut |out| {
         imp::encode_rpc_result(imp::CMD_DEVICE_INFO, &strings, out)
     });
 }
 
+/// The display's name for the device-info answer: written by [`init`]
+/// and by the network worker on a rename ([`set_hostname`]), read on the
+/// drain. Atomics with a sequence count (a seqlock) rather than a
+/// `Mutex<String>`: std's mutex on ESP-IDF allocates its FreeRTOS mutex
+/// on the first `lock()`, which would happen on the drain (the timer
+/// service task's 2 KB stack, ~0.8 KB to spare) and take the heap there.
+/// One writer at a time: `init` at start-up, before the worker runs,
+/// then the worker only.
+const NAME_MAX: usize = opendmd_core::hostname::MAX;
+static NAME: [AtomicU8; NAME_MAX] = [const { AtomicU8::new(0) }; NAME_MAX];
+static NAME_LEN: AtomicU8 = AtomicU8::new(0);
+/// Odd while a write is in progress.
+static NAME_SEQ: AtomicU32 = AtomicU32::new(0);
+
 /// The name the installer's device info shows from now on (a rename
-/// saved through the API, `net_worker`).
+/// saved through the API, `net_worker`). Longer than a valid name is cut.
 pub fn set_hostname(name: &str) {
-    if let Some(c) = CTX.get() {
-        let name = name.to_string();
-        *c.hostname.lock().unwrap_or_else(|e| e.into_inner()) = name;
+    let b = &name.as_bytes()[..name.len().min(NAME_MAX)];
+    NAME_SEQ.fetch_add(1, Ordering::AcqRel);
+    for (slot, &c) in NAME.iter().zip(b) {
+        slot.store(c, Ordering::Relaxed);
     }
+    NAME_LEN.store(b.len() as u8, Ordering::Relaxed);
+    NAME_SEQ.fetch_add(1, Ordering::Release);
+}
+
+/// The name, copied into `buf` (a few tries if a rename is being written
+/// meanwhile; a valid name is ASCII, so even a torn copy is a `str`).
+fn hostname(buf: &mut [u8; NAME_MAX]) -> &str {
+    let mut len = 0;
+    for _ in 0..4 {
+        let seq = NAME_SEQ.load(Ordering::Acquire);
+        len = usize::from(NAME_LEN.load(Ordering::Relaxed)).min(NAME_MAX);
+        for (b, slot) in buf.iter_mut().zip(&NAME).take(len) {
+            *b = slot.load(Ordering::Relaxed);
+        }
+        core::sync::atomic::fence(Ordering::Acquire);
+        if seq.is_multiple_of(2) && NAME_SEQ.load(Ordering::Relaxed) == seq {
+            break;
+        }
+    }
+    core::str::from_utf8(&buf[..len]).unwrap_or("")
 }
 
 /// The answer to a scan (network worker): one result per network,
