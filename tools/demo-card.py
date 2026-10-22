@@ -45,9 +45,9 @@ RECORD = [
     ("Wire_Icosahedron", "@fx:wire?shape=icosahedron&color=66ff66", 75),
 ]
 KENNEY_GIFS = {
-    "b_walk.gif": "PIXEL_PLATFORMER_Walk_01_kenney.gif",
-    "b_pan.gif": "PIXEL_PLATFORMER_Pan_01_kenney.gif",
-    "d_scroll.gif": "PIXEL_PLATFORMER_Scroll_01_kenney.gif",
+    "b_walk.gif": "OTHER_Pixel_Platformer_Walk_01_kenney.gif",
+    "b_pan.gif": "OTHER_Pixel_Platformer_Pan_01_kenney.gif",
+    "d_scroll.gif": "OTHER_Pixel_Platformer_Scroll_01_kenney.gif",
 }
 # The demo's All files: live items, drawn by the panel, between the GIFs.
 LIVE = [

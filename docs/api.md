@@ -140,7 +140,7 @@ curl -s $DMD/api/status | jq .now_playing
 `?path=<card path>`: whether a file or directory exists, its size.
 
 Reply: `{"path","exists","size","is_dir"}`; `size` in bytes, null for a
-directory or a miss. One scan of the parent directory.
+directory or a miss.
 
 Errors: `400` no `path=`, or not card-absolute.
 
@@ -162,8 +162,7 @@ curl -s -X POST $DMD/api/reboot
 ### POST /api/card/format
 
 Formats the card FAT32, erasing it: `{"confirm":true}`, only for a card
-that mounts but cannot be read (`sd.readable` false: exFAT, as most cards
-over 32 GB come). `202` `{"ok":true,"formatting":true}`; `sd.formatting`
+that mounts but cannot be read (`sd.readable` false: exFAT). `202` `{"ok":true,"formatting":true}`; `sd.formatting`
 until done (~a minute for 64 GB), then `sd.readable` true or
 `sd.format_error`. `400` no `confirm`; `409` no card, a readable one, or a
 format running.
@@ -232,7 +231,7 @@ Errors (nothing saved): `400` a value out of range or not one of the names
 (the message says which), e.g. `brightness N is above the maximum M; raise
 Maximum brightness first` (lowering `max_brightness` below the saved
 `brightness` lowers it too); `404 {"error":"set not found"}` the playlist
-does not open; `409` a confirm with no trial; `413` over 8 KB. With a
+does not open; `409` a confirm with no trial, or a taken `hostname` (below); `413` over 8 KB. With a
 card in, a new `platforms` (or a `set` change with a filter kept) is checked
 against the playlist that would be in force (a schedule rule's `set` if one
 applies) before anything is saved: one that would leave it empty is a `400`
@@ -246,6 +245,14 @@ curl -s -X PUT $DMD/api/config --json '{"brightness":64,"transition":"wipe_left"
 curl -s -X PUT $DMD/api/config --json '{"set":"consoles","shuffle":true}'
 curl -s -X PUT $DMD/api/config --json '{"panel":{"clk_phase":false}}'
 ```
+
+### GET /api/name-check
+
+`?name=kitchen`: does another device answer to `kitchen.local`? Asked over
+mDNS (≤ 1.2 s): `{"name","valid","taken","by"}` (`by` its address;
+`taken` null if it could not ask: an invalid name, setup mode, the network
+busy; never for this player's own name). A taken `hostname` in `PUT
+/api/config` is a `409` `{"error":"name taken: …","name","by"}`.
 
 ### POST /api/panel/test
 
@@ -655,8 +662,7 @@ curl -s $DMD/api/firmware
 The bundle as the body (`411` no length, `413` too big). Header, size,
 SHA-256 and Ed25519 signature are checked: a failure is a `422` with the
 reason, nothing staged; cut short `408`; no card `503`. Another key's
-bundle is refused once the 140-byte header is in (curl stops sending; the
-device reads off what is in flight for up to 2 s, then closes). Any validly
+bundle is refused once the 140-byte header is in. Any validly
 signed bundle is accepted, older ones too. Then
 `{"ok":true,"version":"…","rebooting":true}`; the panel is dark ~45 s from
 the end of the upload to playback while it installs.

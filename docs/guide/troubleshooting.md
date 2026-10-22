@@ -30,8 +30,8 @@
   name, one of them moves to `opendmd-2.local` (and it may be the one you
   had first). Open `opendmd-2.local` or the display's address,
   then give each display its own name in **Settings → Device → Network**
-  and reboot it. **Settings → About** shows the address a display really
-  has.
+  (a name another display already has is refused). **Settings → Device →
+  About** shows the address a display really has.
 
 ## The panel says there's no card, or the card can't be read
 

@@ -76,6 +76,17 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   else a 400; `""` leaves it as it was. A change is live at once, as on the
   device (no `reboot_required`). Status `mdns` (the name mDNS answers to) is
   always the hostname here: no other display to clash with.
+- **A name another display has is refused.** `--taken NAME=IP,...`
+  (default `other-display=192.168.1.42`; `""` for none) are the names
+  other devices answer to (`<name>.local`). `GET /api/name-check?name=`
+  answers `{"name","valid","taken","by"}` as the firmware does (the name
+  trimmed and lowercased; `taken` null for an invalid name; the current
+  name is never taken), after the device's wait: up to 1.2 s for a free
+  name (`--name-query`), at once for a taken one. `PUT /api/config` with a
+  changed `hostname` that is taken is a 409 `{"error":"name taken:
+  <name>.local already answers from <ip>","name","by"}`, nothing saved.
+  The firmware says "could not ask" (`taken` null, the save allowed) in
+  setup mode or with its network worker busy; not modelled.
 - **`GET /setup`** serves `firmware/web/setup.html` with its two template
   values filled in, as the firmware does (setup mode itself is not modelled).
 - **Smooth motion's list, `/sets/.smooth`** (one card-absolute GIF path a
@@ -2414,6 +2425,10 @@ class Context:
         self.ota_pub = None
         # --sd: "ok", "unreadable" (mounts, filesystem unreadable) or "none".
         self.sd_state = "ok"
+        # Names other devices answer to (`--taken`), and how long a check
+        # listens when no one does (`--name-query`).
+        self.taken: dict[str, str] = {}
+        self.name_query = 1.2
         # POST /api/card/format: when the simulated format ends (monotonic,
         # 0: none running), and why the last one failed.
         self.format_until = 0.0
@@ -2457,6 +2472,14 @@ def ticker_loop(ctx: Context, stop: threading.Event):
 # --------------------------------------------------------------------------
 
 def make_handler(ctx: Context, quiet: bool):
+    def name_check(name: str) -> str | None:
+        """Who answers to <name>.local (its IP), or None: as the network
+        worker's mDNS query, quick when someone does, the whole wait when
+        no one does."""
+        by = ctx.taken.get(name)
+        time.sleep(0.05 if by else ctx.name_query)
+        return by
+
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "OpenDMD-mock/0.1"
@@ -2630,6 +2653,7 @@ def make_handler(ctx: Context, quiet: bool):
                                                 "DELETE": self.h_cache_failed_delete}),
                 (m_exact("/api/files"), {"GET": self.h_files_list}),
                 (m_exact("/api/wifi/scan"), {"GET": self.h_wifi_scan}),
+                (m_exact("/api/name-check"), {"GET": self.h_name_check}),
                 (m_exact("/api/www"), {"GET": self.h_www_get, "PUT": self.h_www_put}),
                 (m_exact("/api/reboot"), {"POST": self.h_reboot}),
                 (m_exact("/api/firmware"), {"GET": self.h_firmware_get, "PUT": self.h_firmware_put}),
@@ -3047,6 +3071,17 @@ def make_handler(ctx: Context, quiet: bool):
                 if next_settings["dwell_max"] < next_settings["dwell_min"]:
                     self.send_error_json(400, "dwell_max must be >= dwell_min")
                     return
+
+                # A name another device answers to is refused, nothing
+                # saved (http.rs asks the network worker last, before the
+                # main task's checks).
+                if next_settings["hostname"] != before["hostname"]:
+                    by = name_check(next_settings["hostname"])
+                    if by:
+                        name = next_settings["hostname"]
+                        self.send_json(409, {"error": f"name taken: {name}.local already answers from {by}",
+                                             "name": name, "by": by})
+                        return
 
                 # WiFi takes effect after a reboot; a new hostname at once
                 # (status `hostname`/`mdns` read the saved one).
@@ -3531,6 +3566,23 @@ def make_handler(ctx: Context, quiet: bool):
                         old += b"\n"
                     ctx.fs.write_bytes(FAILED_REL, old + f"{p}\t{why}\n".encode())
             self.send_json(200, {"ok": True, "path": p, "added": added})
+
+        def h_name_check(self, path):
+            _, _, query = self.path.partition("?")
+            raw = query_param(query if "?" in self.path else None, "name")
+            if raw is None:
+                self.send_error_json(400, "name= required")
+                return
+            name = raw.strip().lower()
+            valid = bool(HOSTNAME_RE.fullmatch(name))
+            if not valid:
+                taken, by = None, None
+            elif name == ctx.settings["hostname"]:
+                taken, by = False, None
+            else:
+                by = name_check(name)
+                taken = by is not None
+            self.send_json(200, {"name": name, "valid": valid, "taken": taken, "by": by})
 
         def h_wifi_scan(self, path):
             time.sleep(1.5)
@@ -4089,6 +4141,11 @@ def parse_args():
     ap.add_argument("--proxy", help="forward everything but --www to a real device at this URL")
     ap.add_argument("--sd", choices=["ok", "unreadable", "none"], default="ok",
                     help="the card: ok, unreadable (mounts, exFAT: nothing plays) or none")
+    ap.add_argument("--taken", default="other-display=192.168.1.42",
+                    help="NAME=IP,... : display names other devices answer to (<name>.local); "
+                         "GET /api/name-check and PUT /api/config's 409 use them. '' for none")
+    ap.add_argument("--name-query", type=float, default=1.2,
+                    help="seconds a name check listens when no one answers (the firmware's 1.2)")
     ap.add_argument("--ota-pub", help="the Ed25519 public key (32 B) PUT /api/firmware verifies against "
                                       "(default: <repo>/firmware/keys/opendmd.pub)")
     return ap.parse_args()
@@ -4123,6 +4180,11 @@ def main():
         ctx = Context(fs, www_root, args.dwell, args.strict)
         ctx.panel.trial_secs = args.panel_trial
         ctx.sd_state = args.sd
+        ctx.taken = dict(
+            (p.partition("=")[0].strip().lower(), p.partition("=")[2].strip() or "192.168.1.42")
+            for p in args.taken.split(",") if p.strip()
+        )
+        ctx.name_query = args.name_query
         pub = Path(args.ota_pub) if args.ota_pub else Path(__file__).resolve().parent.parent / "firmware" / "keys" / "opendmd.pub"
         try:
             from nacl.signing import VerifyKey

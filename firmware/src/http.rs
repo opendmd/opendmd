@@ -17,7 +17,7 @@ use crate::chan as mpsc;
 use anyhow::Result;
 use log::info;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config;
 use crate::files;
@@ -28,6 +28,7 @@ use crate::stream;
 use crate::wifi::ScannedAp;
 use crate::www;
 use opendmd_core::compositor::{self, Kind as TransitionKind};
+use opendmd_core::hostname::Check;
 use opendmd_core::panel_timing::{self, PanelOp, PanelPatch};
 
 /// The embedded setup page: rendered and gzipped by `build.rs`, served at
@@ -94,6 +95,32 @@ pub enum NetCommand {
     /// `PUT /api/config` saved a new `hostname`: answer to it now (mDNS,
     /// the DHCP name, `/api/status`, Improv's device info). No reply.
     Rename(String),
+    /// Does another device answer to `<name>.local`? (`net_worker::name_check`.)
+    /// The handler stops waiting at `until` ([`config::NAME_CHECK_WAIT`]);
+    /// a query that could not end by then is not sent.
+    NameCheck {
+        name: String,
+        until: Instant,
+        reply: mpsc::Sender<Check>,
+    },
+}
+
+/// Ask the network worker whether another device answers to `<name>.local`,
+/// waiting at most [`config::NAME_CHECK_WAIT`] on the httpd task: a worker
+/// that is busy for longer (a connect) or gone makes it `Check::Unknown`,
+/// never a hang.
+fn name_check(c: &Ctx, name: &str) -> Check {
+    let until = Instant::now() + config::NAME_CHECK_WAIT;
+    let (tx, rx) = mpsc::channel();
+    let cmd = NetCommand::NameCheck {
+        name: name.to_string(),
+        until,
+        reply: tx,
+    };
+    if c.net.send(cmd).is_err() {
+        return Check::Unknown;
+    }
+    rx.recv_timeout(config::NAME_CHECK_WAIT).unwrap_or(Check::Unknown)
 }
 
 /// Wire format for `POST /api/follow/test`.
@@ -239,10 +266,10 @@ struct WakeRequest {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route`/`route_json` below (47 now, the
-    // captive-portal loop counting six; 48 leaves one spare). Registration
+    // URI handler slots: one per `route`/`route_json` below (48 now, the
+    // captive-portal loop counting six; 49 leaves one spare). Registration
     // past the limit fails the whole server, so count when adding a route.
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 48)?;
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 49)?;
     // The API key, if one is set (`api_key`; `httpd::gate` checks it).
     crate::httpd::set_api_key(&ctx.settings.lock().unwrap().api_key);
 
@@ -532,6 +559,22 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // (`NetCommand::Rename`).
         let reboot_required = (next.wifi_ssid.clone(), next.wifi_pass.clone()) != wifi_before;
         let renamed = (next.hostname != hostname_before).then(|| next.hostname.clone());
+        // A name another device already answers to is refused: mDNS would
+        // hand it to this display and push the other to `<name>-2`. Asked
+        // last, once everything else is known good; "could not ask" (no
+        // mDNS, a busy worker) lets the save go ahead.
+        if let Some(name) = &renamed {
+            if let Check::Taken(by) = name_check(&c, name) {
+                info!("hostname {name} refused: {name}.local answers from {by}");
+                let body = format!(
+                    r#"{{"error":{},"name":{},"by":{}}}"#,
+                    json_string(&opendmd_core::hostname::taken_message(name, &by)),
+                    json_string(name),
+                    json_string(&by)
+                );
+                return req.respond_json("409 Conflict", &body);
+            }
+        }
         let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
 
         let (tx, rx) = mpsc::channel();
@@ -945,6 +988,31 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let sizes = query_param(req.query(), "sizes").is_some_and(|v| v == "1" || v == "true");
         let _busy = crate::cache_builder::busy();
         files::stream_dir_json(req, &dir, &fs_dir, sizes)
+    })?;
+
+    // Would a new display name clash? (`opendmd_core::hostname::Check`.)
+    // `{"name","valid","taken","by"}`: `taken` null when it could not ask.
+    let c = ctx.clone();
+    server.route("/api/name-check", Method::Get, move |req| {
+        let Some(raw) = query_param(req.query(), "name") else {
+            return req.bad_request("name= required");
+        };
+        let name = raw.trim().to_ascii_lowercase();
+        let valid = opendmd_core::hostname::valid(&name);
+        let check = if !valid {
+            Check::Unknown
+        } else if name == c.settings.lock().unwrap().hostname {
+            // Its own name: whoever else answers to it, this display has it.
+            Check::Free
+        } else {
+            name_check(&c, &name)
+        };
+        req.json(&format!(
+            r#"{{"name":{},"valid":{valid},"taken":{},"by":{}}}"#,
+            json_string(&name),
+            check.taken_json(),
+            check.by().map_or_else(|| "null".to_string(), json_string)
+        ))
     })?;
 
     let c = ctx.clone();
