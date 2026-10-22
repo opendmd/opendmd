@@ -86,6 +86,10 @@ time.
 itself: a clock, scrolling text, and animated effects. See
 [Effects and live items](effects.md).
 
+**Formulas** is the tab after them: a few lines of maths that draw on the
+panel, with examples to remix, a live editor, share links and Save as GIF.
+See [Formulas](formulas.md).
+
 ## Playlists
 
 ![A playlist open in the editor](../images/playlists.png)
