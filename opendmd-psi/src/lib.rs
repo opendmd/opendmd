@@ -29,7 +29,7 @@ mod program;
 mod tables;
 mod vm;
 
-pub use compile::{compile_into, Error, Info, MAX_DEPTH, MAX_NODES, MAX_SOURCE};
+pub use compile::{compact, compile_into, number, Error, Info, MAX_DEPTH, MAX_NODES, MAX_SOURCE};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, REGS, W};
 pub use tables::{Tables, ATAN};
 #[cfg(feature = "tables")]

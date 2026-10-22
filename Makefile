@@ -7,6 +7,7 @@ SIM    := opendmd-sim
 WEB    := opendmd-web
 ART    := opendmd-art-web
 PACK   := opendmd-pack
+PSI    := opendmd-psi
 FW     := firmware
 
 # Serial port of the DevKit. Override: make fw-flash PORT=/dev/ttyUSB1
@@ -70,7 +71,7 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: test test-card test-wasm sim sim-build sim-dist sim-fetch check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
+.PHONY: test test-card test-wasm sim sim-build psi-bench sim-dist sim-fetch check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve site-publish
@@ -88,12 +89,17 @@ test:
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(PSI) (Psi formulas; + core's and the simulator's psi feature)"
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features psi fx
+	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 
 # The same tests again, compiled to wasm and run under node — the only check
 # on this box that the browser path really works. Needs node on PATH.
 test-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 
 # Needs a real card dump; see CLAUDE.md. The prepared-copy test needs the
 # card's cache/ (make pack ARGS="convert <card-root> --verify").
@@ -102,11 +108,19 @@ test-card:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable DMD_CARD_ROOT=$(CARD_ROOT) \
 		cargo test --release --features tween,names -- --ignored --nocapture
 
+# SIM_FEATURES=psi: Psi formulas (make sim SIM_FEATURES=psi ARGS="--formula opendmd-psi/formulas/fire.psi").
+SIM_FEATURES ?=
+SIM_FEATURE_FLAG = $(if $(SIM_FEATURES),--features $(SIM_FEATURES),)
 sim:
-	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo run --release -- $(ARGS)
+	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo run --release $(SIM_FEATURE_FLAG) -- $(ARGS)
 
 sim-build:
-	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo build --release
+	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo build --release $(SIM_FEATURE_FLAG)
+
+# Psi's host timings: ns per frame of each sketch at lane widths 64 and 128
+# (ARGS="--list" for the step listings, "FILE.psi" for more formulas).
+psi-bench:
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo run --release --example bench -- $(if $(filter command line,$(origin ARGS)),$(ARGS),)
 
 # The simulator as a download for this host (release.yml builds all three:
 # macOS universal, Windows, Linux): $(SIM_DIST)/opendmd-sim-<v>-<platform>.zip|.tar.gz,
@@ -161,6 +175,8 @@ check:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
+	@echo "==> Checking $(PSI)"
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 
 # The UI is heading for the browser, so the core and the renderer have to stay
 # free of anything wasm can't do — `std::time::Instant` above all, which has no
@@ -176,6 +192,9 @@ check-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
 	@echo "==> Checking $(ART) for $(WASM_TARGET)"
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET)
+	@echo "==> Checking $(PSI) (and core's psi feature) for $(WASM_TARGET)"
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --no-default-features
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --features psi
 
 # wasm-pack: `cargo install --locked wasm-pack`. Output is gitignored.
 # Then every file the device serves gets a `<file>.gz` beside it, and the
@@ -273,6 +292,7 @@ fmt:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo fmt
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo fmt
 
 clippy:
 	@echo "==> Clippy $(CORE)"
@@ -289,6 +309,12 @@ clippy:
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --target $(WASM_TARGET) -- -D warnings
 	@echo "==> Clippy $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	@echo "==> Clippy $(PSI) (+ core's and the simulator's psi feature)"
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo clippy --lib --no-default-features -- -D warnings
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo clippy --lib --target $(WASM_TARGET) --no-default-features -- -D warnings
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features psi -- -D warnings
+	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features psi -- -D warnings
 
 clean:
 	cd $(CORE) && cargo clean
@@ -297,6 +323,7 @@ clean:
 	cd $(WEB) && cargo clean
 	cd $(ART) && cargo clean
 	cd $(PACK) && cargo clean
+	cd $(PSI) && cargo clean
 	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WWW_PACK) ./target
 
 # --- ESP32 firmware ---------------------------------------------------------
@@ -440,6 +467,11 @@ FW_RELEASE_BINARY := $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/opendm
 FW_RELEASE_BOOTLOADER := $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/bootloader.bin
 FW_RELEASE_SDKCONFIG_FRAG := $(CURDIR)/$(FW)/target/sdkconfig.release
 FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_RELEASE_SDKCONFIG_FRAG)
+# Measurement builds only, never a public release: the release set built
+# with these cargo features (e.g. FW_RELEASE_FEATURES=probe,psi-probe
+# DIST=/somewhere/else), signed like any other so it can go to the rig over
+# the LAN. Empty (the release feature set: none) by default.
+FW_RELEASE_FEATURES ?=
 DIST := dist
 FW_APP_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-app.bin
 FW_WWW_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-www.pack
@@ -457,7 +489,7 @@ fw-release: web
 	@{ echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"'; \
 	   echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	   echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; } > $(FW_RELEASE_SDKCONFIG_FRAG)
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_TARGET_DIR)"'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_TARGET_DIR)" $(if $(FW_RELEASE_FEATURES),--features $(FW_RELEASE_FEATURES),)'
 	@# The updater after the firmware: on a fresh machine (CI) it is the
 	@# firmware's build that installs the ESP-IDF checkout idf.py needs.
 	$(MAKE) --no-print-directory updater

@@ -141,8 +141,13 @@ dependencies = [
  "ed25519-dalek",
  "gif",
  "log",
+ "opendmd-psi",
  "sha2",
 ]
+
+[[package]]
+name = "opendmd-psi"
+version = "0.0.0"
 
 [[package]]
 name = "proc-macro2"
