@@ -254,13 +254,42 @@ impl Anim {
     pub fn effect(path: &str) -> Option<Anim> {
         let mut fx = Fx::parse(path)?;
         let (n, step, whole) = effect_plan(&mut fx);
-        let n = n as usize;
-        let mut a = Anim {
-            dec: Some(Decoding::Fx {
-                fx,
-                step,
-                canvas: Canvas::new(),
-            }),
+        let mut a = Anim::panel(n as usize, !whole);
+        a.dec = Some(Decoding::Fx {
+            fx,
+            step,
+            canvas: Canvas::new(),
+        });
+        a.decode(1);
+        Some(a)
+    }
+
+    /// Frames the page draws (a formula, by the Psi module): `n` panel
+    /// frames of 128x32 RGB888 at `delay_ms` each, `first` now and the rest
+    /// by [`push`](Self::push); `cut` as for an effect (not a whole loop).
+    pub fn frames(first: &[u8], n: usize, delay_ms: u32, cut: bool) -> Option<Anim> {
+        if first.len() != W * H * 3 {
+            return None;
+        }
+        let mut a = Anim::panel(n.clamp(1, MAX_FRAMES), cut);
+        a.keep(&rgb_image(first, W, H), delay_ms);
+        Some(a)
+    }
+
+    /// The next of [`frames`](Self::frames)' frames, at the first's delay;
+    /// true once all of them are in (more are ignored).
+    pub fn push(&mut self, rgb: &[u8]) -> bool {
+        if self.frames.len() < self.in_file && rgb.len() == W * H * 3 {
+            let d = self.delays[0];
+            self.keep(&rgb_image(rgb, W, H), d);
+        }
+        self.frames.len() >= self.in_file
+    }
+
+    /// An empty animation of `n` frames of the panel's size.
+    fn panel(n: usize, cut: bool) -> Anim {
+        Anim {
+            dec: None,
             orig: (W, H),
             in_file: n,
             scale: Scale { k: 1, x0: 0, y0: 0 },
@@ -271,7 +300,7 @@ impl Anim {
             delays: Vec::with_capacity(n),
             loops: 0,
             damaged: false,
-            cut: !whole,
+            cut,
             look: Look {
                 fit: Fit::Pixels,
                 lift: false,
@@ -288,9 +317,7 @@ impl Anim {
             cache: Vec::new(),
             saving: None,
             colours: 0,
-        };
-        a.decode(1);
-        Some(a)
+        }
     }
 
     fn keep(&mut self, img: &Image, delay_ms: u32) {

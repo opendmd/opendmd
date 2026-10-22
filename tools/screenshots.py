@@ -8,7 +8,7 @@ headless Chromium against tools/mock-device.py over the demo card.
     uv run tools/screenshots.py [--card target/demo-card] [--out docs/images]
 
 (`make screenshots` builds the app and the demo card first.) Writes
-library.png, effects.png, now.png, playlists.png (1280x800),
+library.png, effects.png, formulas.png, now.png, playlists.png (1280x800),
 create-art.png (1280 wide, the whole page) and phone-library.png (390x844
 at 2x). The card must be tools/demo-card.py's: the panel's own effects and
 live items and the CC0 Kenney sprites, nothing from the DMDoS pack and no
@@ -143,6 +143,12 @@ def main() -> int:
             wait_lit(page, "#lib-panel")
             page.wait_for_timeout(800)
             shot(page, a.out, "effects.png")
+            # Formulas: the gallery, the first example (Plasma) in Details.
+            go(page, "formulas")
+            page.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+            wait_lit(page, "#psi-panel")
+            page.wait_for_timeout(800)
+            shot(page, a.out, "formulas.png")
             # Playlists: one open in the editor.
             go(page, "sets")
             page.click("#sets-list [data-path='/sets/Demoscene.txt'] button.pl")

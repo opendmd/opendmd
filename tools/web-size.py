@@ -59,6 +59,15 @@ headings' pixel font (`fonts/silkscreen.woff2`, Silkscreen subset to ASCII
 and a few marks by tools/font-subset.py; preloaded by index.html, so it is
 part of every page load, but it is not JS or CSS), <= 4 KB; its licence
 (`fonts/OFL.txt`, packed beside it, never fetched by the page) is "other".
+The Library's Formulas (the editor, the examples and the gallery:
+`js/formulas.js`, `formulas.css` and the examples, `formulas.json`;
+imported when the Formulas tab is first chosen or a `#formula=` link
+opens) have a line of their own, <= 16 KB, and so does their wasm module
+(`pkg-psi/`: Psi, the language formulas are written in — its compiler and
+VM, the firmware's own crate — built without std; loaded with them),
+<= 36 KB: the spike's 24.7 KB measured a module that never read an error
+message, so the error texts and their formatting were dropped; with them,
+the wasm-bindgen glue and std it was 40 KB, without std 34.7 KB.
 The third-party licence notices (`licenses.txt`, the firmware's and the web
 app's from licenses/, opened from Settings -> Device -> About in a tab of
 its own, never part of a page load) have a line of their own, <= 40 KB:
@@ -120,6 +129,9 @@ API_GZ_BUDGET = 14 * 1024
 API = {"api.html"}
 FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
+PSI_WASM_GZ_BUDGET = 36 * 1024
+FORMULAS_GZ_BUDGET = 16 * 1024
+FORMULAS = {"js/formulas.js", "formulas.css", "formulas.json"}
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
 
@@ -144,6 +156,10 @@ def main() -> int:
             kind = "wasm+glue"
         elif rel.startswith("pkg-art/"):
             kind = "art wasm"
+        elif rel.startswith("pkg-psi/"):
+            kind = "psi wasm"
+        elif rel in FORMULAS:
+            kind = "formulas"
         elif rel in STUDIO:
             kind = "studio"
         elif rel in LIVE:
@@ -196,6 +212,7 @@ def main() -> int:
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
+                         ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET),
                          ("api page", API_GZ_BUDGET), ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])

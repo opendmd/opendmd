@@ -5,8 +5,9 @@ itself: open **<http://opendmd.local/>** on any phone, tablet or computer on
 the same WiFi. There is nothing to install.
 
 On a computer the views are listed down the left side; on a phone they are
-along the bottom: **Now**, **Library**, **Playlists**, **Create Art** and
-**Settings**.
+along the bottom: **Now**, **Library**, **Playlists**, **Formulas**,
+**Create Art** and **Settings** (on a small phone, Create Art is just
+**Create**).
 
 Want to look around first? The [demo](https://opendmd.github.io/demo/) is
 the same app running in your browser, with a few sample animations.
@@ -125,6 +126,11 @@ playlist:
 These are per playlist, so a GIF can be a favourite in one and hidden in
 another. **Reset** puts it back to normal. On **Now**, the ☆ next to the
 title makes the GIF on screen a favourite in the playlist that's playing.
+
+## Formulas
+
+A few lines of maths that draw on the panel, with examples to remix, a
+live editor, share links and Save as GIF. See [Formulas](formulas.md).
 
 ## Settings
 

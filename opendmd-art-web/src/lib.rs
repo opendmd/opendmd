@@ -123,6 +123,36 @@ impl Studio {
         })
     }
 
+    /// Frames drawn by the page — a formula's, by the Psi module: `n`
+    /// frames of 128x32 RGB888 at `delayMs` each, `first` now and the rest
+    /// by `push` (`cut`: they are not a whole loop). Throws on a frame of
+    /// the wrong size.
+    #[wasm_bindgen(js_name = fromFrames)]
+    pub fn from_frames(first: &[u8], n: u32, delay_ms: u32, cut: bool) -> Result<Studio, JsError> {
+        let a = Anim::frames(first, n as usize, delay_ms, cut)
+            .ok_or_else(|| JsError::new("not a 128x32 frame"))?;
+        let raw = a.image(0);
+        let stage = pipeline::stage_frame(&raw, Fit::Pixels, false);
+        Ok(Studio {
+            raw,
+            scale: Scale { k: 1, x0: 0, y0: 0 },
+            stage,
+            frames: 0,
+            colours: 0,
+            duration_ms: 0.0,
+            anim: Some(a),
+            fit: Fit::Pixels,
+            lift: false,
+            text: None,
+            seq: Vec::new(),
+        })
+    }
+
+    /// The next of `fromFrames`' frames; true once all are in.
+    pub fn push(&mut self, rgb: &[u8]) -> bool {
+        self.anim.as_mut().is_none_or(|a| a.push(rgb))
+    }
+
     /// Decode up to `n` more frames; true once all are in.
     pub fn decode(&mut self, n: u32) -> bool {
         self.anim.as_mut().is_none_or(|a| a.decode(n as usize))
