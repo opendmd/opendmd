@@ -2757,6 +2757,7 @@ def mock_pass(browser) -> None:
         studio_anim_checks(page, base, overlay)
         studio_smooth_checks(page, base, overlay)
         fx_gif_checks(page, base, overlay)
+        formulas_checks(browser, base, errors)
         find_checks(page)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
@@ -2912,6 +2913,8 @@ def mock_pass(browser) -> None:
         phone_pass(browser, base, errors)
         fx_gif_demo_pass(browser, base, errors)
         recent_demo_pass(browser, base, errors)
+        formulas_phone_pass(browser, base, errors)
+        formulas_demo_pass(browser, base, errors)
         json_type_checks(base)
         origin_checks(browser, base)
         firmware_checks(page, base, ota)
@@ -2991,6 +2994,207 @@ def fx_gif_checks(page: Page, base: str, overlay: Path) -> None:
     lib_row(page, path)
     check(page.inner_text("#lib-d-title") == "Tunnel Fire Rings 01", f"fx gif: listed in the Library ({page.inner_text('#lib-d-title')})")
     no_leaks(page, "library (fx gif)")
+
+
+# --- Formulas (Library → Formulas, js/formulas.js + pkg-psi) -------------------
+
+FORMULAS_JSON = REPO / "opendmd-web" / "www" / "formulas.json"
+
+
+def open_formulas(page: Page) -> None:
+    goto_view(page, "library")
+    pick_cat(page, "@psi")
+    page.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
+
+
+def formula_editor(page: Page, src: str) -> None:
+    """The editor with `src` typed in (+ New formula, then the text replaced)."""
+    open_formulas(page)
+    page.click("#psi-new")
+    page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
+    page.fill("#psi-src", src)
+    page.wait_for_timeout(400)  # the 150 ms compile, a frame or two
+
+
+def scrub(page: Page, line: int, col: float, dx: int) -> None:
+    """A mouse drag of `dx` px on the text at (line, column), 0-based."""
+    box = page.locator("#psi-src").bounding_box()
+    cw, lh = page.evaluate("""() => { const ta = document.querySelector('#psi-src'), s = document.createElement('span');
+        s.textContent = '0'.repeat(20); document.querySelector('.psi-hl').append(s);
+        const w = s.getBoundingClientRect().width / 20; s.remove(); return [w, parseFloat(getComputedStyle(ta).lineHeight)]; }""")
+    x, y = box["x"] + 1 + 8 + cw * (col + 0.5), box["y"] + 1 + 8 + lh * (line + 0.5)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + dx, y, steps=8)
+    page.mouse.up()
+    page.wait_for_timeout(400)
+
+
+def psi_memory_checks(page: Page) -> None:
+    """The module's bump allocator starts over between calls: thousands of
+    compiles (good and bad), errors and frames leave its memory as it was."""
+    grown = page.evaluate("""async () => {
+        const m = await import('./pkg-psi/opendmd_psi_web.js'), w = await m.default();
+        const srcs = ['loop 4\\nv = sin(x*2 + t/4)\\ngray(v)', 'gray(nope + 2x)', 'pal(fire, len(x - 0.5, y - 0.5))'];
+        for (let k = 0; k < 60; k++) { m.compile(srcs[k % 3]); m.error(); m.info(); }
+        const before = w.memory.buffer.byteLength;
+        for (let k = 0; k < 6000; k++) { m.compile(srcs[k % 3]); m.error(); m.errorAt(); m.info(); m.frame(k, 1, 2, 3, 0, 0, 0); }
+        return [before, w.memory.buffer.byteLength];
+    }""")
+    check(grown[0] == grown[1], f"formulas: 6,000 compiles leave the module's memory as it was ({grown})")
+
+
+def formulas_checks(browser, base: str, errors: list[str]) -> None:
+    """Library → Formulas: the module loads only then; the examples render;
+    a plain error with its line; a number scrubbed changes the text, the
+    preview and is one undo; a slider for `a`; saving; a share link round
+    trip; Save as GIF into Create Art with one loop of frames."""
+    page = new_page(browser, "laptop", errors)
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(r.url))
+    page.goto(base + "/")
+    page.wait_for_function("document.querySelector('#now-path')?.textContent.startsWith('/')", timeout=20000)
+    goto_view(page, "library")
+    page.wait_for_timeout(500)
+    early = [u for u in asked if "pkg-psi" in u or "formulas" in u]
+    check(not early, f"formulas: nothing of them loads with the app or the Library ({early})")
+    open_formulas(page)
+    psi = [u for u in asked if "pkg-psi/" in u and u.endswith(".wasm")]
+    examples = json.loads(FORMULAS_JSON.read_text())
+    tiles = page.eval_on_selector_all("#psi-ex .psi-tile", "els => els.map(e => e.dataset.name)")
+    dark = page.evaluate("""() => [...document.querySelectorAll('#psi-ex .psi-tile canvas')].filter(c => {
+        const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 90) return false; return true; }).length""")
+    check(len(psi) == 1 and tiles == [e["name"] for e in examples] and dark == 0,
+          f"formulas: opening the tab loads the module ({len(psi)}); {len(tiles)} examples, every thumbnail lit ({dark} dark)")
+    wait_lit(page, "#psi-panel", "formulas: the first example in Details")
+    a = canvas_sum(page, "#psi-panel")
+    page.wait_for_timeout(300)
+    check(canvas_sum(page, "#psi-panel") != a and page.inner_text("#psi-d-title") == examples[0]["name"]
+          and page.is_hidden("#psi-del") and page.inner_text("#psi-edit") == "Remix",
+          f"formulas: {examples[0]['name']} plays in Details, Remix, no Delete")
+    no_leaks(page, "library (formulas)")
+    shot(page, "library-formulas", "laptop")
+    psi_memory_checks(page)
+
+    # An error: a plain sentence with its line; the last version keeps playing.
+    formula_editor(page, "loop 4\nv = sin(x*2 + t/4)\ngray(tme)")
+    err = page.inner_text("#psi-err")
+    check(err == "Line 3: unknown name tme — did you mean t?" and page.get_attribute("#psi-ed", "data-err") == "3"
+          and page.locator(".psi-hl .e").inner_text() == "tme" and page.locator(".psi-gut b").inner_text() == "3",
+          f"formulas: an error says '{err}' and marks the word and the line")
+    shot(page, "formulas-error", "laptop")
+    # A still formula: a scrubbed number changes the text and the picture.
+    page.fill("#psi-src", "gray(x*0.5)")
+    page.wait_for_timeout(400)
+    wait_lit(page, "#psi-ed-panel", "formulas: the editor's preview")
+    before = canvas_sum(page, "#psi-ed-panel")
+    scrub(page, 0, 8, 40)
+    src = page.input_value("#psi-src")
+    page.wait_for_timeout(200)
+    m = re.fullmatch(r"gray\(x\*(\d\.\d)\)", src)
+    check(m is not None and float(m.group(1)) > 0.5,
+          f"formulas: dragging 0.5 right makes it bigger ({src!r})")
+    check(canvas_sum(page, "#psi-ed-panel") != before, "formulas: and the preview changes")
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == "gray(x*0.5)", f"formulas: one undo puts the drag back ({page.input_value('#psi-src')!r})")
+    # Alt+↑ on a number (keyboard).
+    page.focus("#psi-src")
+    page.evaluate("document.querySelector('#psi-src').setSelectionRange(8, 8)")
+    page.keyboard.press("Alt+ArrowUp")
+    page.wait_for_timeout(200)
+    check(page.input_value("#psi-src") == "gray(x*0.6)", f"formulas: Alt+↑ nudges the number ({page.input_value('#psi-src')!r})")
+    # A slider for `a`, named by its comment.
+    page.fill("#psi-src", "-- a: brightness\ngray(a)")
+    page.wait_for_timeout(400)
+    names = page.eval_on_selector_all("#psi-ed-sl .psi-sl span", "els => els.map(e => e.textContent)")
+    page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = 0.75; r.dispatchEvent(new Event('input')); }")
+    page.wait_for_timeout(300)
+    px = page.evaluate("""() => { const c = document.querySelector('#psi-ed-panel'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let m = 0; for (let i = 0; i < d.length; i += 4) m = Math.max(m, d[i]); return m; }""")
+    check(names == ["brightness"] and px > 120, f"formulas: a slider for a, named '{names}', lights the panel ({px})")
+    # Saved, then listed under Your formulas.
+    page.fill("#psi-name", "Smoke brightness")
+    page.click("#psi-save")
+    page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
+    # The share link opens it, slider and all, in a fresh page.
+    page.click("#psi-ed-share")
+    url = page.input_value("#psi-link")
+    page.keyboard.press("Escape")
+    check(url.startswith(base + "/#formula=") and "&a=0.75" in url and len(url) < 200, f"formulas: share link {url}")
+    other = new_page(browser, "laptop", errors)
+    other.goto(url)
+    other.wait_for_selector("#psi-ed #psi-src", timeout=20000)
+    other.wait_for_timeout(500)
+    got = (other.input_value("#psi-src"), other.input_value("#psi-name"), other.input_value("#psi-ed-sl-a"))
+    check(got == ("-- a: brightness\ngray(a)", "Smoke brightness", "0.75") and other.evaluate("location.hash") == "#library/formula",
+          f"formulas: the link opens the editor with it ({got})")
+    other.context.close()
+    page.click("#psi-back")
+    page.wait_for_selector("#psi-mine .psi-tile", timeout=5000)
+    check(page.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)") == ["Smoke brightness"]
+          and page.evaluate("location.hash") == "#library", "formulas: back to the gallery, saved under Your formulas")
+    # Save as GIF: one loop (4 s at 20 ms) into Create Art.
+    page.click("#psi-ex .psi-tile >> nth=0")
+    formula_editor(page, "loop 4\npal(fire, saw(x - t/4)*0.5 + 0.5)")
+    page.fill("#psi-name", "Smoke fire")
+    page.click("#psi-ed-gif")
+    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
+    page.wait_for_function("(d => d.dataset.animated && d.dataset.srcFrames === '200' && d.dataset.name)(document.querySelector('#studio'))", timeout=30000)
+    d = studio_data(page)
+    msg = page.inner_text("#st-msg")
+    check(d.get("name") == "FX_Smoke_fire_01.gif" and page.input_value("#st-plat") == "FX" and "200 frames" in msg and "one loop" in msg
+          and d.get("duration") == "4000", f"formulas: Save as GIF -> Create Art, {d.get('srcFrames')} frames, '{msg}', {d.get('name')}")
+    shot(page, "formulas-gif", "laptop")
+    page.context.close()
+
+
+def formulas_phone_pass(browser, base: str, errors: list[str]) -> None:
+    """At 360 px: no sideways scroll in the gallery, the Details sheet
+    (Escape closes it) or the editor; a tap on a number brings the strip,
+    whose + changes it."""
+    ctx = browser.new_context(viewport={"width": 360, "height": 780}, device_scale_factor=3, is_mobile=True, has_touch=True)
+    page = ctx.new_page()
+    page.on("pageerror", lambda e: errors.append(f"[360] pageerror: {e}"))
+    page.goto(base + "/#library")
+    open_formulas(page)
+    over = [page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")]
+    page.tap("#psi-ex .psi-tile >> nth=1")
+    page.wait_for_selector("#psi-side.open", timeout=5000)
+    over.append(page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth"))
+    shot(page, "formulas-details", "phone")
+    page.keyboard.press("Escape")
+    check(page.is_hidden("#psi-side"), "formulas (360): Escape closes the Details sheet")
+    page.tap("#psi-new")
+    page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
+    page.wait_for_timeout(400)
+    over.append(page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth"))
+    check(over == [0, 0, 0], f"formulas (360): no sideways scroll (gallery, details, editor: {over})")
+    shot(page, "formulas-editor", "phone")
+    page.fill("#psi-src", "gray(x*0.5)")
+    page.evaluate("(ta => { ta.focus(); ta.setSelectionRange(9, 9); })(document.querySelector('#psi-src'))")
+    page.wait_for_selector("#psi-scrub:not([hidden])", timeout=5000)
+    tall = page.evaluate("[...document.querySelectorAll('#psi-scrub > *')].every(e => e.getBoundingClientRect().height >= 44)")
+    page.tap("#psi-scrub button[aria-label=More]")
+    page.wait_for_timeout(300)
+    check(page.input_value("#psi-src") == "gray(x*0.6)" and tall,
+          f"formulas (360): the strip (44 px targets: {tall}) and its + ({page.input_value('#psi-src')!r})")
+    ctx.close()
+
+
+def formulas_demo_pass(browser, base: str, errors: list[str]) -> None:
+    """The web demo (status `{}`, its card in memory): a shared formula's link
+    opens the editor and plays."""
+    page = new_page(browser, "laptop", errors)
+    page.route("**/api/status", lambda r: r.fulfill(status=200, body="{}", headers={"content-type": "application/json"}))
+    page.route("**/demo/index.json", lambda r: r.fulfill(status=200, body="[]", headers={"content-type": "application/json"}))
+    page.goto(base + "/#formula=loop+4%0Arings+%3D+sin(x*4+-+t%2F4)%0Ahsv(rings*0.5,+1,+1)&name=Demo+rings")
+    page.wait_for_function("document.querySelector('#where').textContent.startsWith('Demo')", timeout=20000)
+    page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
+    wait_lit(page, "#psi-ed-panel", "formulas (demo): a shared formula")
+    check(page.input_value("#psi-name") == "Demo rings" and page.input_value("#psi-src").startswith("loop 4\nrings"),
+          f"formulas (demo): the link opened '{page.input_value('#psi-name')}'")
+    page.context.close()
 
 
 def recent_checks(page: Page, base: str) -> None:
