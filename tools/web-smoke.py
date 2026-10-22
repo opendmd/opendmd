@@ -1684,10 +1684,10 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
     goto_view(page, "library")
     page.wait_for_selector("#lib-cats [data-cat='@']", timeout=30000)
     opts = page.eval_on_selector_all("#lib-cats [data-cat]", "els => els.map(e => [e.dataset.cat, e.textContent])")
-    # System lists (a leading "_", e.g. a card's _bench) sort after Live and Effects.
+    # System lists (a leading "_", e.g. a card's _bench) sort after Live, Effects and Formulas.
     real = [o for o in opts if not o[0].startswith("_")]
-    check(real[-2:] == [["@", "Live"], ["@fx", "Effects"]] and len(real) > 2 and page.locator("#lib-cat").count() == 0,
-          f"library: the category tabs end with Live, Effects (system lists after), and there is no category select ({opts[-3:]})")
+    check(real[-3:] == [["@", "Live"], ["@fx", "Effects"], ["@psi", "Formulas"]] and len(real) > 3 and page.locator("#lib-cat").count() == 0,
+          f"library: the category tabs end with Live, Effects, Formulas (system lists after), and there is no category select ({opts[-3:]})")
     open_live(page)
     rows = live_rows(page)
     want = ["@clock", "@clock?seconds=1", "@clock?date=1", "@clock?style=small&seconds=1&date=1", "@text?msg=OpenDMD"]
