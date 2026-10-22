@@ -36,6 +36,8 @@
   td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 600; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  footer { max-width: 760px; margin: 0 auto; padding: 0 16px 40px; color: var(--muted); font-size: 14px; }
+  footer p { border-top: 1px solid var(--line); padding-top: 16px; margin: 0; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -103,6 +105,12 @@
   <p>The web app lives in the board's flash and can be updated over WiFi without this page: <code>make www-push HOST=opendmd.local</code>,
     or the <b>Web app</b> section of <code>http://opendmd.local/setup</code>.</p>
 </main>
+<footer>
+  <p>OpenDMD is open source, MIT or Apache 2.0. The firmware and the web app this page installs are built on other
+    open-source software, listed with their licences in <a href="firmware/THIRD-PARTY-LICENSES-firmware.txt">the
+    firmware's notices</a> and <a href="firmware/THIRD-PARTY-LICENSES-web.txt">the web app's</a>. This page uses
+    <a href="https://github.com/esphome/esp-web-tools">ESP Web Tools</a> (Apache 2.0), loaded from jsDelivr.</p>
+</footer>
 <script type="module">
   const hex = (n) => '0x' + n.toString(16).toUpperCase();
   try {

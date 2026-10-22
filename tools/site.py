@@ -27,6 +27,10 @@
 - /art/        the landing page's tiles and the wordmark (tools/site-art.py: recordings of the
                panel's own effects and live items, and CC0 sprites), drawn
                as LEDs by CSS
+- /licenses/   the licences: a page (LICENCES below, linked from every
+               page's footer) and the third-party notices from licenses/
+               (tools/notices.py), the same files the release and the
+               player carry
 
 The docs mark site-only pieces with HTML comments, invisible on GitHub:
 `<!-- site:hero -->` ends the README's GitHub header (the site draws its
@@ -126,7 +130,35 @@ FILES = {
     # The headings' pixel font (tools/font-subset.py), self-hosted, and its licence.
     "opendmd-web/www/fonts/silkscreen.woff2": "fonts/silkscreen.woff2",
     "opendmd-web/www/fonts/OFL.txt": "fonts/OFL.txt",
+    # The third-party notices (tools/notices.py, `make notices`).
+    "licenses/THIRD-PARTY-LICENSES-firmware.txt": "licenses/THIRD-PARTY-LICENSES-firmware.txt",
+    "licenses/THIRD-PARTY-LICENSES-web.txt": "licenses/THIRD-PARTY-LICENSES-web.txt",
 }
+# The licences page (licenses/index.html), linked from every page's footer.
+LICENCES_PAGE = "licenses/index.html"
+LICENCES = """# Licences
+
+OpenDMD is open source: [MIT](../LICENSE-MIT.txt) or [Apache 2.0](../LICENSE-APACHE.txt), at your option.
+
+It is built on other open-source software, used under the licences listed in these notices,
+with each licence's full text:
+
+- **[The firmware](THIRD-PARTY-LICENSES-firmware.txt)**: what the installer writes to the
+  board (the firmware, its bootloader and the updater): Espressif's ESP-IDF (Apache 2.0, with
+  FreeRTOS, lwIP, Mbed TLS, wpa_supplicant, FatFs and the C library), the HUB75 display
+  driver, and the Rust crates.
+- **[The web app](THIRD-PARTY-LICENSES-web.txt)**: the Rust crates in its WebAssembly, and the
+  headings' font, Silkscreen ([SIL Open Font License 1.1](../fonts/OFL.txt)).
+- **The desktop simulator**: each download carries its own `THIRD-PARTY-LICENSES.txt`.
+- **The installer** uses [ESP Web Tools](https://github.com/esphome/esp-web-tools) (Apache 2.0),
+  which your browser loads from jsDelivr.
+
+The player carries the firmware's and the web app's notices too: in the web app, **Settings ›
+Device › About › Open-source licences**.
+
+The demo's and this site's animations are recordings of OpenDMD's own effects, and the
+[Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
+"""
 
 # The desktop simulator's builds: (platform, label, archive), in table order.
 SIM_PLATFORMS = [
@@ -280,7 +312,8 @@ PAGE = """<!doctype html>
 <a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
 the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
 OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
-Code under <a href="{up}LICENSE-MIT.txt">MIT</a> or <a href="{up}LICENSE-APACHE.txt">Apache 2.0</a>.</p></footer>
+Code under <a href="{up}LICENSE-MIT.txt">MIT</a> or <a href="{up}LICENSE-APACHE.txt">Apache 2.0</a>;
+<a href="{up}licenses/">third-party licences</a>.</p></footer>
 </div>
 </body>
 </html>
@@ -532,6 +565,17 @@ def main() -> None:
         dest.write_text(PAGE.format(title=html.escape(title), description=html.escape(DESCRIPTION), up=up, head=head,
                                     brand=brand, menu=menu(page), body=body,
                                     banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
+    # The licences page: not a doc, so not in the menu; the footer links it.
+    body = markdown.Markdown(extensions=["sane_lists"]).convert(LICENCES)
+    up = "../" * LICENCES_PAGE.count("/")
+    wm = art["wordmark"]
+    (out / LICENCES_PAGE).parent.mkdir(parents=True, exist_ok=True)
+    (out / LICENCES_PAGE).write_text(PAGE.format(
+        title="Licences · OpenDMD", description=html.escape(DESCRIPTION), up=up, head="",
+        brand=(f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
+               f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>'),
+        menu=menu(LICENCES_PAGE), body=body,
+        banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
     # Pictures only the GitHub copy of a doc shows (the README's hero) stay off the site.
     assets = {a for a in assets if any(posixpath.basename(a) in b for b in bodies)}
     for target in sorted(assets):

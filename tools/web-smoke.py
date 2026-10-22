@@ -266,6 +266,7 @@ Any console error or page error fails the run.
 """
 import argparse
 import filecmp
+import gzip
 import http.server
 import json
 import os
@@ -1883,7 +1884,9 @@ def api_page_checks(page: Page, base: str) -> None:
     `$DMD` in its examples replaced by the page's own origin, a contents
     list whose links all land, a Copy button per example, no sideways scroll
     at phone width. (tools/api-doc-check.py, run by `make web`, holds the
-    doc's routes to http.rs.)"""
+    doc's routes to http.rs.)
+    And beside it, the third-party licences: licenses.txt, served as text.
+    """
     link = page.eval_on_selector("#st-api", "a => [a.getAttribute('href'), a.target]")
     check(link == ["./api.html", "_blank"], f"api page: About links ./api.html in a new tab ({link})")
     doc = page.context.new_page()
@@ -1906,6 +1909,19 @@ def api_page_checks(page: Page, base: str) -> None:
         check(over <= 0, f"api page: no sideways scroll at 390 px ({over} px over)")
     finally:
         doc.close()
+    # The third-party licences (licenses.txt: licenses/'s two notices, by
+    # `make web`), linked beside it, served from the pack as text.
+    link = page.eval_on_selector("#st-licences", "a => [a.getAttribute('href'), a.target, a.textContent]")
+    check(link == ["./licenses.txt", "_blank", "Open-source licences"],
+          f"licences: About links ./licenses.txt in a new tab ({link})")
+    with urllib.request.urlopen(base + "/licenses.txt") as r:
+        body = r.read()
+        if r.headers.get("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)
+        text, ctype = body.decode(), r.headers.get("Content-Type", "")
+    check(ctype.startswith("text/plain") and "the OpenDMD firmware" in text and "the OpenDMD web app" in text
+          and "ESP-IDF" in text and "wasm-bindgen" in text,
+          f"licences: served as {ctype}, the firmware's and the web app's notices ({len(text):,} chars)")
 
 
 OTA_VERSION = "9.9.9-smoke"

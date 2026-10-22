@@ -59,6 +59,10 @@ headings' pixel font (`fonts/silkscreen.woff2`, Silkscreen subset to ASCII
 and a few marks by tools/font-subset.py; preloaded by index.html, so it is
 part of every page load, but it is not JS or CSS), <= 4 KB; its licence
 (`fonts/OFL.txt`, packed beside it, never fetched by the page) is "other".
+The third-party licence notices (`licenses.txt`, the firmware's and the web
+app's from licenses/, opened from Settings -> Device -> About in a tab of
+its own, never part of a page load) have a line of their own, <= 40 KB:
+they cost flash, not load time, and grow with the dependencies.
 The name index for "Find art
 for a game" (`art/*.json`, one file
 fetched per search) is printed, with no budget. Raw sizes are printed for
@@ -116,6 +120,8 @@ API_GZ_BUDGET = 14 * 1024
 API = {"api.html"}
 FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
+LICENCES_GZ_BUDGET = 40 * 1024
+LICENCES = {"licenses.txt"}
 
 
 def main() -> int:
@@ -168,6 +174,8 @@ def main() -> int:
             kind = "api page"
         elif rel in FONT:
             kind = "font"
+        elif rel in LICENCES:
+            kind = "licences"
         elif rel.startswith("art/"):
             kind = "art index"
             t = totals.setdefault(kind, [0, 0])
@@ -188,7 +196,7 @@ def main() -> int:
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
-                         ("api page", API_GZ_BUDGET), ("font", FONT_GZ_BUDGET),
+                         ("api page", API_GZ_BUDGET), ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

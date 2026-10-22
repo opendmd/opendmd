@@ -1,0 +1,33 @@
+name: cargo-about
+description: >
+  The pinned cargo-about release binary (Linux x86-64), checked against its
+  SHA-256, into ~/.cargo/bin: what `make notices-check` and `make
+  fw-release` (tools/notices.py) need. The version must equal the
+  Makefile's CARGO_ABOUT_VERSION and release.yml's (its sim matrix pins
+  the other platforms' binaries).
+
+inputs:
+  version:
+    default: "0.9.2"
+  sha256:
+    description: "SHA-256 of cargo-about-<version>-x86_64-unknown-linux-musl.tar.gz"
+    default: "9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af"
+
+runs:
+  using: composite
+  steps:
+    - name: Install cargo-about
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ inputs.version }}
+        SHA256: ${{ inputs.sha256 }}
+      run: |
+        set -euo pipefail
+        name="cargo-about-$VERSION-x86_64-unknown-linux-musl"
+        mkdir -p "$RUNNER_TEMP/cargo-about" ~/.cargo/bin
+        gh release download -R EmbarkStudios/cargo-about "$VERSION" -p "$name.tar.gz" -D "$RUNNER_TEMP/cargo-about" --clobber
+        echo "$SHA256  $RUNNER_TEMP/cargo-about/$name.tar.gz" | sha256sum -c -
+        tar -xzf "$RUNNER_TEMP/cargo-about/$name.tar.gz" -C "$RUNNER_TEMP/cargo-about"
+        install -m 755 "$RUNNER_TEMP/cargo-about/$name/cargo-about" ~/.cargo/bin/cargo-about
+        cargo-about --version

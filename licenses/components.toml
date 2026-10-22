@@ -1,0 +1,337 @@
+# The C and C++ side of the firmware's third-party notices
+# (tools/notices.py firmware, run by `make fw-release` and `make notices`).
+#
+# What goes in is decided by the release build itself, not by this file:
+# notices.py reads the DWARF compile units of the three ELFs the installer
+# writes (the firmware, its bootloader, the updater), maps each source file
+# to its ESP-IDF component with the build's own project_description.json,
+# and names only the packages whose files were linked. This file says
+# which package a file belongs to and what its licence is:
+#
+#   [[rule]]     "component" or "component/sub/path" (relative to the
+#                component's directory) -> package ids; the longest match
+#                wins. A component in the ESP-IDF tree with no rule of its
+#                own is `idf_default`; any other component (managed, our
+#                own, the toolchain's) needs a rule or the build fails.
+#   [[blob]]     compile units with no source on disk (Espressif's binary
+#                libraries, the toolchain's libc): a glob on the path
+#                recorded in the ELF -> a component name for the rules.
+#   [[package]]  what the notices list: name, licence (SPDX), and where its
+#                text is read from at generation time, so an ESP-IDF bump
+#                re-reads them: `idf:` the ESP-IDF checkout, `comp:` the
+#                component's directory, `toolchain:` the xtensa toolchain's
+#                share/licenses, `repo:` this repository, `header:` (any of
+#                those) the leading comment block of a source file.
+#                `expect` must appear in each text, so a moved line range
+#                or a rewritten header fails instead of printing nonsense.
+#
+# The guard: every linked source file that is on disk has its licence
+# header read (SPDX-License-Identifier, or the wording of a GPL, BSD, MIT,
+# ISC or Apache notice). Its licence must be one of its packages' licences
+# (of either alternative, for a dual licence), so a file under another
+# licence inside a component, or a GPL-only file, fails the build until it
+# has a rule here. Package ids "opendmd" are ours (MIT OR Apache-2.0) and
+# are left out of the notices.
+#
+# Accepted licences (anything else fails): Apache-2.0, MIT, BSD-2-Clause,
+# BSD-3-Clause, ISC, the FatFs licence (BSD-1-Clause style), CC0-1.0, OFL-1.1
+# (a font), and
+# GPL-3.0-or-later WITH GCC-exception-3.1 for the compiler's runtime only.
+
+accepted = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "LicenseRef-FatFs",
+            "CC0-1.0", "OFL-1.1", "GPL-3.0-or-later WITH GCC-exception-3.1"]
+
+idf_default = ["esp-idf"]
+
+# --- Rules -------------------------------------------------------------------
+
+# Ours.
+[[rule]]
+match = "main"            # esp-idf-sys's generated main, and the updater's ota/updater/main
+packages = ["opendmd"]
+[[rule]]
+match = "hub75_shim"
+packages = ["opendmd"]
+
+# The HUB75 driver (git submodule): MIT, its ESP32 I2S DMA code derived
+# from LovyanGFX (FreeBSD licence, i.e. BSD-2-Clause).
+[[rule]]
+match = "ESP32-HUB75-MatrixPanel-I2S-DMA"
+packages = ["hub75"]
+[[rule]]
+match = "ESP32-HUB75-MatrixPanel-I2S-DMA/src/platforms"
+packages = ["hub75", "lovyangfx"]
+
+# The managed mDNS component (firmware/Cargo.toml, components_esp32.lock).
+[[rule]]
+match = "espressif__mdns"
+packages = ["mdns"]
+
+# Third-party code inside ESP-IDF.
+[[rule]]
+match = "freertos/FreeRTOS-Kernel"
+packages = ["freertos"]
+[[rule]]
+match = "lwip/lwip"
+packages = ["lwip"]
+[[rule]]
+match = "lwip/port"           # sys_arch.c is lwIP's
+packages = ["esp-idf", "lwip"]
+[[rule]]
+match = "esp_netif/lwip"      # wlanif.c is lwIP's
+packages = ["esp-idf", "lwip"]
+[[rule]]
+match = "mbedtls/mbedtls"
+packages = ["mbedtls"]
+[[rule]]
+# Several wpa_supplicant files still say "GPL v2, or alternatively BSD":
+# the project has used only the BSD option since 2012 (its COPYING).
+match = "wpa_supplicant/src"    # wpa_supplicant's own, and Espressif's crypto glue
+packages = ["wpa_supplicant", "esp-idf"]
+[[rule]]
+match = "wpa_supplicant/port"   # os_xtensa.c: wpa_supplicant's (BSD; see "wpa_supplicant/src")
+packages = ["esp-idf", "wpa_supplicant"]
+[[rule]]
+match = "wpa_supplicant/esp_supplicant/src/crypto/fastpbkdf2.c"
+packages = ["fastpbkdf2"]
+[[rule]]
+match = "heap/tlsf"
+packages = ["tlsf"]
+[[rule]]
+match = "fatfs/src"
+packages = ["fatfs"]
+[[rule]]
+match = "fatfs/port"
+packages = ["esp-idf", "fatfs"]
+[[rule]]
+match = "sdmmc"
+packages = ["esp-idf", "sdmmc-openbsd"]
+[[rule]]
+match = "esp_system/ubsan.c"
+packages = ["esp-idf", "ubsan"]
+[[rule]]
+match = "http_parser"
+packages = ["http_parser"]
+[[rule]]
+match = "xtensa"
+packages = ["esp-idf", "xtensa-cadence"]
+[[rule]]
+match = "xtensa-libhal"
+packages = ["xtensa-libhal"]
+[[rule]]
+match = "toolchain-newlib"
+packages = ["newlib"]
+[[rule]]
+match = "toolchain-libstdc++"
+packages = ["gcc-runtime"]
+[[rule]]
+match = "toolchain-libgcc"
+packages = ["gcc-runtime"]
+
+# --- Compile units with no source on disk -----------------------------------
+
+[[blob]]
+glob = "*/crosstool-NG/.build/*/src/newlib/*"
+component = "toolchain-newlib"
+[[blob]]
+glob = "*/crosstool-NG/.build/*/src/gcc/libstdc++-v3/*"
+component = "toolchain-libstdc++"
+[[blob]]
+glob = "*/crosstool-NG/.build/*/src/gcc/libgcc/*"
+component = "toolchain-libgcc"
+# components/xtensa/esp32/libxt_hal.a, built by Espressif from Cadence's HAL.
+[[blob]]
+glob = "*/esp32/hal/hal/*"
+component = "xtensa-libhal"
+[[blob]]
+glob = "windowspill_asm.S"
+component = "xtensa-libhal"
+# components/esp_phy/lib/esp32/libphy.a, librtc.a, libbtbb.a (Espressif, Apache-2.0).
+[[blob]]
+glob = "phy*.c"
+component = "esp_phy"
+[[blob]]
+glob = "rtc_analog.c"
+component = "esp_phy"
+[[blob]]
+glob = "bt_bb.c"
+component = "esp_phy"
+
+# --- Packages ----------------------------------------------------------------
+
+[[package]]
+id = "esp-idf"
+name = "ESP-IDF"
+version = "idf"
+url = "https://github.com/espressif/esp-idf"
+license = "Apache-2.0"
+texts = ["idf:LICENSE"]
+note = """Espressif's IoT Development Framework: the startup code, drivers, \
+FreeRTOS port, heap, flash, NVS, SD card, FAT, networking, HTTP server and \
+TLS glue, the second-stage bootloader, and Espressif's Wi-Fi, PHY and \
+coexistence libraries, which Espressif distributes in object form only \
+under the same Apache-2.0 licence (components/esp_wifi/lib/README.rst)."""
+
+[[package]]
+id = "freertos"
+name = "FreeRTOS kernel"
+version = "sbom:idf:components/freertos/FreeRTOS-Kernel/sbom.yml"
+url = "https://github.com/espressif/esp-idf/tree/master/components/freertos"
+license = "MIT"
+texts = ["header:idf:components/freertos/FreeRTOS-Kernel/tasks.c"]
+expect = "Amazon.com, Inc."
+note = "Amazon's FreeRTOS kernel, with Espressif's SMP changes."
+
+[[package]]
+id = "lwip"
+name = "lwIP"
+version = "sbom:idf:components/lwip/lwip/sbom.yml"
+url = "https://savannah.nongnu.org/projects/lwip/"
+license = "BSD-3-Clause"
+texts = ["idf:components/lwip/lwip/COPYING"]
+expect = "Swedish Institute of Computer Science"
+
+[[package]]
+id = "mbedtls"
+name = "Mbed TLS"
+version = "sbom:idf:components/mbedtls/mbedtls/sbom.yml"
+url = "https://github.com/Mbed-TLS/mbedtls"
+license = "Apache-2.0"
+texts = ["idf:LICENSE"]
+note = "Dual-licensed Apache-2.0 OR GPL-2.0-or-later; used here under Apache-2.0."
+
+[[package]]
+id = "wpa_supplicant"
+name = "wpa_supplicant"
+url = "https://w1.fi/wpa_supplicant/"
+license = "BSD-3-Clause"
+texts = ["lines:idf:components/wpa_supplicant/README:1-41"]
+expect = "Jouni Malinen"
+
+[[package]]
+id = "fastpbkdf2"
+name = "fastpbkdf2"
+url = "https://github.com/ctz/fastpbkdf2"
+license = "CC0-1.0"
+texts = []
+note = "Joseph Birr-Pixton's fast PBKDF2 (wpa_supplicant's esp_supplicant/src/crypto/fastpbkdf2.c), dedicated to the public domain under CC0 1.0."
+
+[[package]]
+id = "tlsf"
+name = "TLSF allocator"
+url = "https://github.com/espressif/tlsf"
+license = "BSD-3-Clause"
+texts = ["repo:licenses/texts/TLSF-BSD-3-Clause.txt"]
+expect = "Matthew Conte"
+note = "Matthew Conte's Two-Level Segregated Fit allocator (the text from upstream's tlsf.h at mattconte/tlsf deff9ab)."
+
+[[package]]
+id = "fatfs"
+name = "FatFs"
+version = "sbom:idf:components/fatfs/sbom.yml"
+url = "http://elm-chan.org/fsw/ff/"
+license = "LicenseRef-FatFs"
+license_name = "the FatFs licence (BSD-style, one clause)"
+texts = ["header:idf:components/fatfs/src/ff.h"]
+expect = "ChaN"
+
+[[package]]
+id = "sdmmc-openbsd"
+name = "SD/MMC protocol driver (from OpenBSD)"
+url = "https://github.com/openbsd/src/tree/master/sys/dev/sdmmc"
+license = "ISC"
+texts = ["header:idf:components/sdmmc/sdmmc_common.c"]
+expect = "Uwe Stuehler"
+
+[[package]]
+id = "ubsan"
+name = "UBSAN runtime (from HelenOS)"
+license = "BSD-2-Clause"
+texts = ["header:idf:components/esp_system/ubsan.c"]
+expect = "Linaro Limited"
+
+[[package]]
+id = "http_parser"
+name = "http-parser"
+version = "sbom:idf:components/http_parser/sbom.yml"
+url = "https://github.com/nodejs/http-parser"
+license = "MIT"
+texts = ["idf:components/http_parser/LICENSE.txt"]
+expect = "Joyent"
+
+[[package]]
+id = "xtensa-cadence"
+name = "Xtensa RTOS port (Cadence)"
+license = "MIT"
+texts = ["header:idf:components/xtensa/xtensa_intr.c"]
+expect = "Cadence Design Systems"
+
+[[package]]
+id = "xtensa-libhal"
+name = "Xtensa HAL library (libxt_hal, Tensilica)"
+license = "MIT"
+texts = ["section:idf:docs/en/COPYRIGHT.rst:Xtensa libhal MIT License"]
+expect = "Tensilica Inc"
+
+[[package]]
+id = "newlib"
+name = "newlib C library (Espressif's toolchain build)"
+version = "sbom:idf:components/newlib/sbom.yml"
+url = "https://sourceware.org/newlib/"
+license = "BSD-3-Clause"
+license_name = "BSD-style licences (COPYING.NEWLIB)"
+texts = ["toolchain:newlib/COPYING.NEWLIB"]
+expect = "Red Hat"
+note = """The C library's functions linked in (stdio, strings, time, locale) \
+are under the BSD-style licences listed in COPYING.NEWLIB, reproduced \
+below in full."""
+
+[[package]]
+id = "gcc-runtime"
+name = "GCC runtime libraries (libstdc++, libgcc)"
+url = "https://gcc.gnu.org/"
+license = "GPL-3.0-or-later WITH GCC-exception-3.1"
+texts = ["toolchain:gcc/COPYING.RUNTIME"]
+expect = "GCC RUNTIME LIBRARY EXCEPTION"
+note = """Linked from Espressif's GCC toolchain for the C++ HUB75 driver. The \
+GCC Runtime Library Exception lets a program compiled with GCC include \
+these libraries under terms of its choice: no source or licence \
+obligations follow; it is reproduced for information."""
+
+[[package]]
+id = "mdns"
+name = "ESP-IDF mDNS component (espressif/mdns)"
+version = "yaml:comp:idf_component.yml"
+url = "https://components.espressif.com/components/espressif/mdns"
+license = "Apache-2.0"
+texts = ["comp:LICENSE"]
+
+[[package]]
+id = "hub75"
+name = "ESP32-HUB75-MatrixPanel-DMA"
+version = "json:comp:library.json"
+url = "https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA"
+license = "MIT"
+texts = ["comp:LICENSE.txt"]
+expect = "Faptastic"
+
+[[package]]
+id = "lovyangfx"
+name = "LovyanGFX (the HUB75 driver's I2S DMA code)"
+url = "https://github.com/lovyan03/LovyanGFX"
+license = "BSD-2-Clause"
+texts = ["repo:licenses/texts/LovyanGFX-BSD-2-Clause.txt"]
+expect = "lovyan03"
+note = "The text from LovyanGFX's license.txt at d941fbf (the section for LovyanGFX itself)."
+
+# Not code: data compiled into the firmware. `always` puts it in the
+# notices without a compile unit to find.
+[[package]]
+id = "silkscreen"
+name = "Silkscreen (the setup page's heading font, a subset)"
+url = "https://github.com/google/fonts/tree/main/ofl/silkscreen"
+license = "OFL-1.1"
+texts = ["repo:opendmd-web/www/fonts/OFL.txt"]
+expect = "Silkscreen Project Authors"
+always = "firmware"
+note = "Jason Kottke's pixel font, inlined in firmware/web/setup.html by tools/font-subset.py."

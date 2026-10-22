@@ -25,6 +25,7 @@ opendmd-web/www/pkg-art/
 opendmd-web/www/**/*.gz
 opendmd-web/www/version.txt
 opendmd-web/www/api.html
+opendmd-web/www/licenses.txt
 opendmd-web/www.pack
 
 # Release images (make fw-release)

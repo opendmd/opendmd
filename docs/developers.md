@@ -41,7 +41,15 @@ make fw-ota HOST=opendmd.local     # firmware over WiFi (signed bundle)
 make www-push HOST=opendmd.local   # web app only, over WiFi
 make sim-dist                # the simulator's download archive for this platform (release.yml builds all three)
 make site                    # this site, with dist/'s release under install/ (and target/sim-dist/'s simulators)
+make notices                 # rewrite the third-party licence notices from the last fw-release (needs cargo-about)
 ```
+
+The third-party notices in `licenses/` are generated from what each build
+links: the firmware's from the release ELFs (every C and C++ source file
+compiled in, mapped to its package by `licenses/components.toml`) and
+`cargo-about` over its crates, the web app's from `cargo-about` over the
+WebAssembly crates. `make fw-release` and CI fail when they are out of date
+or a dependency's licence is not one the project accepts.
 
 A release build has no WiFi credentials in it: the installer gives it
 your WiFi over USB (Improv Serial), or the player starts its
