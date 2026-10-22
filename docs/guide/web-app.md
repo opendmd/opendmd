@@ -149,7 +149,9 @@ Open **Advanced** for the rest:
   files** does the rest now from your browser.
 - **Network** changes the WiFi network or the **Display name** (`opendmd`
   in `opendmd.local`). Give each display its own name if you have more
-  than one. A WiFi change needs a reboot; a new name works straight away:
+  than one; a name another display on your network already answers to is
+  refused, and nothing is saved. A WiFi change needs a reboot; a new name
+  works straight away:
   Settings shows the display's new address and, if you opened the web app
   by its old `.local` name (which stops working), a link to the new one.
   **About** shows the address the display really has: if another display

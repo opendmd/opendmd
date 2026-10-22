@@ -38,6 +38,60 @@ pub fn parse(v: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// The start of `PUT /api/config`'s 409 message when another device
+/// already answers to the new name (`<name>.local`): clients match on it,
+/// as on `FILTER_EMPTY`. [`taken_message`] builds the whole message.
+pub const NAME_TAKEN: &str = "name taken";
+
+/// The 409 message: `name taken: <name>.local already answers from <ip>`.
+pub fn taken_message(name: &str, by: &str) -> String {
+    format!("{NAME_TAKEN}: {name}.local already answers from {by}")
+}
+
+/// What asking the network for `<name>.local` found
+/// (`GET /api/name-check`, and `PUT /api/config` before a new name is
+/// saved). mDNS's own tie-break would otherwise hand the name to the
+/// display renamed last and push the one that had it to `<name>-2`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Check {
+    /// No other device answered.
+    Free,
+    /// Another device answered, from this IPv4 address.
+    Taken(String),
+    /// Could not ask: no mDNS (the setup network), the query failed, or the
+    /// network worker was busy. A save goes ahead.
+    Unknown,
+}
+
+impl Check {
+    /// The other device's address, from the IPv4 addresses that answered
+    /// (`answers`) and ours (`own`, if known): an answer from our own
+    /// address is not a clash.
+    pub fn from_answers(answers: &[[u8; 4]], own: Option<[u8; 4]>) -> Check {
+        match answers.iter().find(|a| Some(**a) != own && **a != [0; 4]) {
+            Some([a, b, c, d]) => Check::Taken(format!("{a}.{b}.{c}.{d}")),
+            None => Check::Free,
+        }
+    }
+
+    /// `"taken"`'s JSON: `true`, `false`, or `null` when it could not ask.
+    pub fn taken_json(&self) -> &'static str {
+        match self {
+            Check::Free => "false",
+            Check::Taken(_) => "true",
+            Check::Unknown => "null",
+        }
+    }
+
+    /// Who has it, if anyone.
+    pub fn by(&self) -> Option<&str> {
+        match self {
+            Check::Taken(ip) => Some(ip),
+            _ => None,
+        }
+    }
+}
+
 /// The mDNS service instance: per display, so two on one network are told
 /// apart in a browser's service list.
 pub fn instance_name(name: &str) -> String {
@@ -76,6 +130,34 @@ mod tests {
         let e = parse("bad name").unwrap_err();
         assert!(e.starts_with("hostname must be 1-32 "), "{e}");
         assert!(parse("-x").is_err());
+    }
+
+    #[test]
+    fn answers_from_elsewhere_are_a_clash() {
+        let own = Some([192, 168, 1, 20]);
+        assert_eq!(Check::from_answers(&[], own), Check::Free);
+        assert_eq!(Check::from_answers(&[[192, 168, 1, 20]], own), Check::Free);
+        assert_eq!(Check::from_answers(&[[0, 0, 0, 0]], own), Check::Free);
+        assert_eq!(
+            Check::from_answers(&[[192, 168, 1, 20], [192, 168, 1, 7]], own),
+            Check::Taken("192.168.1.7".into())
+        );
+        assert_eq!(
+            Check::from_answers(&[[10, 0, 0, 2]], None),
+            Check::Taken("10.0.0.2".into())
+        );
+    }
+
+    #[test]
+    fn check_json_and_message() {
+        assert_eq!(Check::Free.taken_json(), "false");
+        assert_eq!(Check::Unknown.taken_json(), "null");
+        let t = Check::Taken("10.0.0.2".into());
+        assert_eq!((t.taken_json(), t.by()), ("true", Some("10.0.0.2")));
+        assert_eq!(Check::Free.by(), None);
+        let m = taken_message("kitchen", "10.0.0.2");
+        assert_eq!(m, "name taken: kitchen.local already answers from 10.0.0.2");
+        assert!(m.starts_with(NAME_TAKEN));
     }
 
     #[test]

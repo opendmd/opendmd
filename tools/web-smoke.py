@@ -195,13 +195,15 @@ every view like a person would:
             Save network says where the display is now: no link from the
             IP; from smoke-a.local a link to smoke-b.local that loads, and
             to smoke-c-2.local on a (faked) clash; the Display name: a bad
-            hostname is a 400, " Rig-Two " is saved as rig-two, status
+            hostname is a 400, " Rig-Two " is saved as rig-two;
+            /api/name-check (taken by an address, free, invalid, its own
+            name) and a taken hostname a 409 with nothing saved; status
             `mdns` is the hostname, and with it rewritten to <name>-2
             (route) About shows that address and why; the setup page
             (/setup) prefills Display name, explains the clash, refuses a
             bad name before sending, and Connect sends the WiFi and the
             name together and names http://<name>.local/ (PUT and reboot
-            caught); the platform chips: SNES then MD saved as tapped,
+            caught), and a taken name (the mock's 409) is explained; the platform chips: SNES then MD saved as tapped,
             "All" clears, platforms "Loo" (alone, or with a set and a
             brightness) a 400 naming it with nothing saved; Now with
             status rewritten to an empty playlist names the filter and
@@ -4295,6 +4297,7 @@ def names_checks(page: Page, base: str) -> None:
     put_json(base + "/api/config", {"hostname": " Rig-Two "})
     check(get_json(base + "/api/config")["hostname"] == "rig-two", "config: hostname trimmed and lowercased (rig-two)")
     put_json(base + "/api/config", {"hostname": before})
+    name_taken_checks(base)
     st = get_json(base + "/api/status")
     check(st.get("mdns") == st["hostname"], f"status: mdns is the hostname with no clash ({st.get('mdns')})")
     label = page.inner_text("#view-settings label:has(#st-hostname)")
@@ -4345,7 +4348,61 @@ def names_checks(page: Page, base: str) -> None:
     check(sent == [{"wifi_ssid": "SmokeNet", "hostname": "rig-two"}] and "http://rig-two.local/" in sp.inner_text("#wifimsg"),
           f"setup: Connect saves the name with the WiFi and says where to go next ({sent})")
     shot(sp, "setup-name", "laptop")
+    # A name another device answers to: the mock's real 409, nothing saved.
+    sp.unroute("**/api/config")
+    cfg = get_json(base + "/api/config")
+    sp.fill("#host", TAKEN_NAME)
+    sp.click("#savewifi")
+    sp.wait_for_function("document.querySelector('#wifimsg').textContent.startsWith('Another display')", timeout=10000)
+    after = get_json(base + "/api/config")
+    check(f"“{TAKEN_NAME}”" in sp.inner_text("#wifimsg") and after["wifi_ssid"] == cfg["wifi_ssid"] and after["hostname"] == before,
+          f"setup: a taken name (409) says so, nothing saved ({sp.inner_text('#wifimsg')!r})")
     sp.close()
+
+
+# A name the mock says another device answers to (mock-device.py --taken's
+# default).
+TAKEN_NAME, TAKEN_BY = "other-display", "192.168.1.42"
+
+
+def name_taken_checks(base: str) -> None:
+    """GET /api/name-check answers {name, valid, taken, by} (the name
+    trimmed and lowercased; taken null for an invalid name; the current
+    name never taken), and PUT /api/config refuses a hostname another device
+    answers to: 409 "name taken: …" with name and by, nothing saved, the
+    rest of the patch included. API-level only (no Settings selectors)."""
+    def nc(name: str) -> dict:
+        return get_json(base + "/api/name-check?name=" + urllib.parse.quote(name))
+    cfg = get_json(base + "/api/config")
+    r = nc(" Other-Display ")
+    check(r == {"name": TAKEN_NAME, "valid": True, "taken": True, "by": TAKEN_BY},
+          f"name-check: a name another device answers to is taken, by its address ({r})")
+    r = nc("smoke-free")
+    check(r == {"name": "smoke-free", "valid": True, "taken": False, "by": None}, f"name-check: a free name ({r})")
+    r = nc("bad.name")
+    check(r == {"name": "bad.name", "valid": False, "taken": None, "by": None}, f"name-check: an invalid name, not asked ({r})")
+    r = nc(cfg["hostname"])
+    check(r["valid"] and r["taken"] is False, f"name-check: the display's own name is not taken ({r})")
+    try:
+        get_json(base + "/api/name-check")
+        code = 200
+    except urllib.error.HTTPError as e:
+        code = e.code
+    check(code == 400, f"name-check: no name= is a 400 ({code})")
+    bright = 33 if cfg["brightness"] != 33 else 34
+    try:
+        put_json(base + "/api/config", {"hostname": TAKEN_NAME, "brightness": bright})
+        code, body = 200, {}
+    except urllib.error.HTTPError as e:
+        code, body = e.code, json.load(e)
+    after = get_json(base + "/api/config")
+    check(code == 409 and body.get("error", "").startswith("name taken") and body.get("by") == TAKEN_BY
+          and body.get("name") == TAKEN_NAME,
+          f"config: a taken hostname is a 409 NAME_TAKEN with name and by ({code} {body})")
+    check(after["hostname"] == cfg["hostname"] and after["brightness"] == cfg["brightness"],
+          f"config: nothing of a refused patch saved ({after['hostname']}, {after['brightness']})")
+    # Re-saving the current name is never refused (not asked).
+    check(put_status(base, {"hostname": cfg["hostname"]}) == 200, "config: re-saving the current name is fine")
 
 
 def platform_checks(page: Page, base: str) -> None:
