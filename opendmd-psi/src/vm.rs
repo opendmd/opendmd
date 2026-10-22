@@ -50,8 +50,8 @@ pub fn q16(num: i32, den: i32) -> i32 {
 
 /// The VM's working memory for a lane width `N` (64 or 128): the lane
 /// registers, the `i` lane, the scalar slots, and the `x`/`px` columns
-/// (worked out once, by [`Scratch::new`] or [`Scratch::reset`]). 128: 8.7
-/// KB; 64: 5.6 KB. Plain integers, so a zeroed allocation plus `reset` is a
+/// (worked out once, by [`Scratch::new`] or [`Scratch::reset`]): 8,192 B
+/// at 128 lanes, 4,864 B at 64. Plain integers, so a zeroed allocation plus `reset` is a
 /// valid one.
 pub struct Scratch<const N: usize> {
     /// `[0]` is the `i` lane, then the [`REGS`] registers.
@@ -94,7 +94,10 @@ impl<const N: usize> Default for Scratch<N> {
 
 /// An operand inside a lane loop.
 trait Src: Copy {
+    /// The value `k` ahead of the cursor.
     fn at(self, k: usize) -> i32;
+    /// Move the cursor `n` ahead (a lane's pointer; a scalar stays).
+    fn step(&mut self, n: usize);
 }
 
 /// A lane: `N` values.
@@ -108,6 +111,12 @@ impl Src for L {
         // the step, and `k < N`.
         unsafe { *self.0.add(k) }
     }
+
+    #[inline(always)]
+    fn step(&mut self, n: usize) {
+        // SAFETY: stays within (or one past) the lane.
+        self.0 = unsafe { self.0.add(n) };
+    }
 }
 
 /// A scalar, the same in every pixel of the lane.
@@ -119,6 +128,9 @@ impl Src for S {
     fn at(self, _: usize) -> i32 {
         self.0
     }
+
+    #[inline(always)]
+    fn step(&mut self, _: usize) {}
 }
 
 #[derive(Clone, Copy)]
@@ -127,83 +139,153 @@ enum Arg {
     Sc(i32),
 }
 
-#[inline(always)]
-fn run1<const N: usize, A: Src>(d: &mut [i32; N], a: A, f: impl Fn(i32) -> i32) {
-    for (k, o) in d.iter_mut().enumerate() {
-        *o = f(a.at(k));
+// The loops. `run*` are one element a turn, for the steps whose work
+// dwarfs the loop's (`len`, `noise`, ...); `fast*` four a turn, for the
+// cheap ones, where the ESP32 would otherwise spend as long on the loop
+// (counter, branch, pointers: it has no post-increment loads) as on the
+// add. Each is its own function, not inlined into the dispatch: with the
+// whole VM in one function the ESP32's compiler ran out of registers and
+// reloaded constants from flash and spilled to the stack every element.
+
+#[inline(never)]
+fn fast1<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
+    for o in d.as_chunks_mut::<4>().0 {
+        o[0] = f(a.at(0));
+        o[1] = f(a.at(1));
+        o[2] = f(a.at(2));
+        o[3] = f(a.at(3));
+        a.step(4);
     }
 }
 
-#[inline(always)]
-fn run2<const N: usize, A: Src, B: Src>(d: &mut [i32; N], a: A, b: B, f: impl Fn(i32, i32) -> i32) {
-    for (k, o) in d.iter_mut().enumerate() {
-        *o = f(a.at(k), b.at(k));
-    }
-}
-
-#[inline(always)]
-fn run3<const N: usize, A: Src, B: Src, C: Src>(
+#[inline(never)]
+fn fast2<const N: usize, A: Src, B: Src>(
     d: &mut [i32; N],
-    a: A,
-    b: B,
-    c: C,
+    mut a: A,
+    mut b: B,
+    f: impl Fn(i32, i32) -> i32,
+) {
+    for o in d.as_chunks_mut::<4>().0 {
+        o[0] = f(a.at(0), b.at(0));
+        o[1] = f(a.at(1), b.at(1));
+        o[2] = f(a.at(2), b.at(2));
+        o[3] = f(a.at(3), b.at(3));
+        a.step(4);
+        b.step(4);
+    }
+}
+
+#[inline(never)]
+fn fast3<const N: usize, A: Src, B: Src, C: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    mut c: C,
     f: impl Fn(i32, i32, i32) -> i32,
 ) {
-    for (k, o) in d.iter_mut().enumerate() {
-        *o = f(a.at(k), b.at(k), c.at(k));
+    for o in d.as_chunks_mut::<4>().0 {
+        o[0] = f(a.at(0), b.at(0), c.at(0));
+        o[1] = f(a.at(1), b.at(1), c.at(1));
+        o[2] = f(a.at(2), b.at(2), c.at(2));
+        o[3] = f(a.at(3), b.at(3), c.at(3));
+        a.step(4);
+        b.step(4);
+        c.step(4);
     }
 }
 
-#[inline(always)]
+#[inline(never)]
+fn run1<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
+    for o in d.iter_mut() {
+        *o = f(a.at(0));
+        a.step(1);
+    }
+}
+
+#[inline(never)]
+fn run2<const N: usize, A: Src, B: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    f: impl Fn(i32, i32) -> i32,
+) {
+    for o in d.iter_mut() {
+        *o = f(a.at(0), b.at(0));
+        a.step(1);
+        b.step(1);
+    }
+}
+
+#[inline(never)]
+fn run3<const N: usize, A: Src, B: Src, C: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    mut c: C,
+    f: impl Fn(i32, i32, i32) -> i32,
+) {
+    for o in d.iter_mut() {
+        *o = f(a.at(0), b.at(0), c.at(0));
+        a.step(1);
+        b.step(1);
+        c.step(1);
+    }
+}
+
+#[inline(never)]
 fn out3<A: Src, B: Src, C: Src>(
     px: &mut [[u8; 3]],
-    a: A,
-    b: B,
-    c: C,
+    mut a: A,
+    mut b: B,
+    mut c: C,
     f: impl Fn(i32, i32, i32) -> [u8; 3],
 ) {
-    for (k, o) in px.iter_mut().enumerate() {
-        *o = f(a.at(k), b.at(k), c.at(k));
+    for o in px.iter_mut() {
+        *o = f(a.at(0), b.at(0), c.at(0));
+        a.step(1);
+        b.step(1);
+        c.step(1);
     }
 }
 
-#[inline(always)]
-fn out1<A: Src>(px: &mut [[u8; 3]], a: A, f: impl Fn(i32) -> [u8; 3]) {
-    for (k, o) in px.iter_mut().enumerate() {
-        *o = f(a.at(k));
+#[inline(never)]
+fn out1<A: Src>(px: &mut [[u8; 3]], mut a: A, f: impl Fn(i32) -> [u8; 3]) {
+    for o in px.iter_mut() {
+        *o = f(a.at(0));
+        a.step(1);
     }
 }
 
 macro_rules! un {
-    ($d:expr, $a:expr, $f:expr) => {
+    ($run:ident, $d:expr, $a:expr, $f:expr) => {
         match $a {
-            Arg::Lane(p) => run1($d, L(p), $f),
+            Arg::Lane(p) => $run($d, L(p), $f),
             Arg::Sc(v) => $d.fill(($f)(v)),
         }
     };
 }
 
 macro_rules! bin {
-    ($d:expr, $a:expr, $b:expr, $f:expr) => {
+    ($run:ident, $d:expr, $a:expr, $b:expr, $f:expr) => {
         match ($a, $b) {
-            (Arg::Lane(p), Arg::Lane(q)) => run2($d, L(p), L(q), $f),
-            (Arg::Lane(p), Arg::Sc(v)) => run2($d, L(p), S(v), $f),
-            (Arg::Sc(u), Arg::Lane(q)) => run2($d, S(u), L(q), $f),
+            (Arg::Lane(p), Arg::Lane(q)) => $run($d, L(p), L(q), $f),
+            (Arg::Lane(p), Arg::Sc(v)) => $run($d, L(p), S(v), $f),
+            (Arg::Sc(u), Arg::Lane(q)) => $run($d, S(u), L(q), $f),
             (Arg::Sc(u), Arg::Sc(v)) => $d.fill(($f)(u, v)),
         }
     };
 }
 
 macro_rules! tern {
-    ($d:expr, $a:expr, $b:expr, $c:expr, $f:expr) => {
+    ($run:ident, $d:expr, $a:expr, $b:expr, $c:expr, $f:expr) => {
         match ($a, $b, $c) {
-            (Arg::Lane(p), Arg::Lane(q), Arg::Lane(r)) => run3($d, L(p), L(q), L(r), $f),
-            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(w)) => run3($d, L(p), L(q), S(w), $f),
-            (Arg::Lane(p), Arg::Sc(v), Arg::Lane(r)) => run3($d, L(p), S(v), L(r), $f),
-            (Arg::Lane(p), Arg::Sc(v), Arg::Sc(w)) => run3($d, L(p), S(v), S(w), $f),
-            (Arg::Sc(u), Arg::Lane(q), Arg::Lane(r)) => run3($d, S(u), L(q), L(r), $f),
-            (Arg::Sc(u), Arg::Lane(q), Arg::Sc(w)) => run3($d, S(u), L(q), S(w), $f),
-            (Arg::Sc(u), Arg::Sc(v), Arg::Lane(r)) => run3($d, S(u), S(v), L(r), $f),
+            (Arg::Lane(p), Arg::Lane(q), Arg::Lane(r)) => $run($d, L(p), L(q), L(r), $f),
+            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(w)) => $run($d, L(p), L(q), S(w), $f),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Lane(r)) => $run($d, L(p), S(v), L(r), $f),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Sc(w)) => $run($d, L(p), S(v), S(w), $f),
+            (Arg::Sc(u), Arg::Lane(q), Arg::Lane(r)) => $run($d, S(u), L(q), L(r), $f),
+            (Arg::Sc(u), Arg::Lane(q), Arg::Sc(w)) => $run($d, S(u), L(q), S(w), $f),
+            (Arg::Sc(u), Arg::Sc(v), Arg::Lane(r)) => $run($d, S(u), S(v), L(r), $f),
             (Arg::Sc(u), Arg::Sc(v), Arg::Sc(w)) => $d.fill(($f)(u, v, w)),
         }
     };
@@ -311,43 +393,43 @@ fn lane_op<const N: usize>(s: &mut Scratch<N>, op: &Op, base: usize, t: &Tables)
     debug_assert!(op.d & LANE != 0 && op.d & !LANE >= L_REG0);
     let d: &mut [i32; N] = &mut s.lanes[di];
     match op.code {
-        ADD => bin!(d, a, b, fixed::add),
-        SUB => bin!(d, a, b, fixed::sub),
-        MUL => bin!(d, a, b, fixed::mul),
-        DIV => bin!(d, a, b, fixed::div),
-        MOD => bin!(d, a, b, fixed::modulo),
-        MASK => bin!(d, a, b, fixed::mask),
-        LT => bin!(d, a, b, fixed::lt),
-        LE => bin!(d, a, b, fixed::le),
-        GT => bin!(d, a, b, fixed::gt),
-        GE => bin!(d, a, b, fixed::ge),
-        EQ => bin!(d, a, b, fixed::eq),
-        NE => bin!(d, a, b, fixed::ne),
-        AND => bin!(d, a, b, fixed::and),
-        OR => bin!(d, a, b, fixed::or),
-        MIN => bin!(d, a, b, fixed::min),
-        MAX => bin!(d, a, b, fixed::max),
-        STEP => bin!(d, a, b, fixed::step),
-        ATAN2 => bin!(d, a, b, fixed::atan2),
-        HASH => bin!(d, a, b, fixed::hash),
-        LEN => bin!(d, a, b, fixed::len),
-        NEG => un!(d, a, fixed::neg),
-        NOT => un!(d, a, fixed::not),
-        ABS => un!(d, a, fixed::abs),
-        FLOOR => un!(d, a, fixed::floor),
-        FRAC => un!(d, a, fixed::frac),
-        SIN => un!(d, a, |v| fixed::sin(t, v)),
-        COS => un!(d, a, |v| fixed::cos(t, v)),
-        TRI => un!(d, a, fixed::tri),
-        SAW => un!(d, a, fixed::saw),
-        SQR => un!(d, a, fixed::sqr),
-        SQRT => un!(d, a, fixed::sqrt),
-        RECIP => un!(d, a, fixed::recip),
-        SELECT => tern!(d, a, b, c, fixed::select),
-        CLAMP => tern!(d, a, b, c, fixed::clamp),
-        MIX => tern!(d, a, b, c, fixed::mix),
-        SMOOTH => tern!(d, a, b, c, fixed::smooth),
-        NOISE => tern!(d, a, b, c, fixed::noise),
+        ADD => bin!(fast2, d, a, b, fixed::add),
+        SUB => bin!(fast2, d, a, b, fixed::sub),
+        MUL => bin!(fast2, d, a, b, fixed::mul),
+        DIV => bin!(run2, d, a, b, fixed::div),
+        MOD => bin!(run2, d, a, b, fixed::modulo),
+        MASK => bin!(fast2, d, a, b, fixed::mask),
+        LT => bin!(fast2, d, a, b, fixed::lt),
+        LE => bin!(fast2, d, a, b, fixed::le),
+        GT => bin!(fast2, d, a, b, fixed::gt),
+        GE => bin!(fast2, d, a, b, fixed::ge),
+        EQ => bin!(fast2, d, a, b, fixed::eq),
+        NE => bin!(fast2, d, a, b, fixed::ne),
+        AND => bin!(fast2, d, a, b, fixed::and),
+        OR => bin!(fast2, d, a, b, fixed::or),
+        MIN => bin!(fast2, d, a, b, fixed::min),
+        MAX => bin!(fast2, d, a, b, fixed::max),
+        STEP => bin!(fast2, d, a, b, fixed::step),
+        ATAN2 => bin!(run2, d, a, b, fixed::atan2),
+        HASH => bin!(run2, d, a, b, fixed::hash),
+        LEN => bin!(run2, d, a, b, fixed::len),
+        NEG => un!(fast1, d, a, fixed::neg),
+        NOT => un!(fast1, d, a, fixed::not),
+        ABS => un!(fast1, d, a, fixed::abs),
+        FLOOR => un!(fast1, d, a, fixed::floor),
+        FRAC => un!(fast1, d, a, fixed::frac),
+        SIN => un!(fast1, d, a, |v| fixed::sin(t, v)),
+        COS => un!(fast1, d, a, |v| fixed::cos(t, v)),
+        TRI => un!(fast1, d, a, fixed::tri),
+        SAW => un!(fast1, d, a, fixed::saw),
+        SQR => un!(fast1, d, a, fixed::sqr),
+        SQRT => un!(run1, d, a, fixed::sqrt),
+        RECIP => un!(run1, d, a, fixed::recip),
+        SELECT => tern!(fast3, d, a, b, c, fixed::select),
+        CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
+        MIX => tern!(fast3, d, a, b, c, fixed::mix),
+        SMOOTH => tern!(run3, d, a, b, c, fixed::smooth),
+        NOISE => tern!(run3, d, a, b, c, fixed::noise),
         _ => {}
     }
 }

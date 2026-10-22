@@ -8,8 +8,8 @@
 //! N` seconds; `t` is the frame's time into it, so the loop is seamless
 //! when everything the formula moves completes whole cycles in it.
 //!
-//! **Memory.** The program (1.8 KB) and the VM's working memory
-//! ([`opendmd_psi::Scratch`], 8.7 KB at 128 lanes) are one allocation made
+//! **Memory.** The program (1,808 B) and the VM's working memory
+//! ([`opendmd_psi::Scratch`], 8,192 B at 128 lanes) are one allocation made
 //! when the path is opened, zeroed and filled in place (never built on the
 //! main task's stack); no heap per frame, and [`Fx`](crate::fx::Fx) itself
 //! holds only the pointer. The sine and the palettes are lent from
@@ -155,7 +155,7 @@ mod alloc_box {
     use super::PsiFx;
 
     /// The one allocation: a `Box<PsiFx>` made zeroed (every field is
-    /// integers, so zero is a valid value) and filled in place, so ~10.5
+    /// integers, so zero is a valid value) and filled in place, so ~10
     /// KB never passes through the stack. `Clone` the same way.
     pub struct PsiBox(Box<PsiFx>);
 

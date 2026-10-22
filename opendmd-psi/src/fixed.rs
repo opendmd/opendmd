@@ -10,7 +10,7 @@
 //! they never overflow. Division by zero gives the saturated value of the
 //! numerator's sign (0 for 0 / 0); `%` by zero gives 0.
 
-use crate::tables::{Tables, ATAN};
+use crate::tables::{Tables, ATAN, SQRT};
 
 pub const ONE: i32 = 1 << 16;
 
@@ -25,19 +25,49 @@ pub fn sat(v: i64) -> i32 {
     }
 }
 
+/// The saturated value for a result whose sign is `sign`'s: the ends of
+/// the range. Out of line and cold, so the compiler lays the common
+/// (no-overflow) path out as the fall-through.
+#[cold]
+#[inline(never)]
+fn ends(sign: i32) -> i32 {
+    (sign >> 31) ^ i32::MAX
+}
+
 #[inline(always)]
 pub fn add(a: i32, b: i32) -> i32 {
-    a.saturating_add(b)
+    // As `saturating_add`, written so the (rare) overflow is one
+    // predictable branch on the ESP32 rather than several.
+    let r = a.wrapping_add(b);
+    if (a ^ r) & (b ^ r) < 0 {
+        ends(a)
+    } else {
+        r
+    }
 }
 
 #[inline(always)]
 pub fn sub(a: i32, b: i32) -> i32 {
-    a.saturating_sub(b)
+    let r = a.wrapping_sub(b);
+    if (a ^ b) & (a ^ r) < 0 {
+        ends(a)
+    } else {
+        r
+    }
 }
 
 #[inline(always)]
 pub fn mul(a: i32, b: i32) -> i32 {
-    sat((a as i64 * b as i64) >> 16)
+    // sat(a·b >> 16): the product's high word says whether it fits (it
+    // does iff hi is in −32,768..32,767), one test instead of two 64-bit
+    // compares.
+    let p = a as i64 * b as i64;
+    let hi = (p >> 32) as i32;
+    if (hi as u32).wrapping_add(0x8000) >> 16 != 0 {
+        ends(hi)
+    } else {
+        (p >> 16) as i32
+    }
 }
 
 #[inline(always)]
@@ -201,37 +231,33 @@ pub fn sqr(a: i32) -> i32 {
     }
 }
 
-/// ⌊√v⌋ of a u32, bit by bit (16 rounds).
+/// √v for `v` in 2^28..2^30 (≈ 2^14..2^15): the table at the top byte,
+/// interpolated by the next 16 bits. Linear interpolation of √ over a
+/// 1/64 step is good to ~2^−17; the table's rounding makes it ~15 bits.
+/// Ten-odd instructions where a bit-by-bit root takes fifteen rounds.
 #[inline(always)]
-fn isqrt32(mut v: u32) -> u32 {
-    let mut r = 0u32;
-    let mut bit = 1u32 << 30;
-    while bit > v {
-        bit >>= 2;
-    }
-    while bit != 0 {
-        if v >= r + bit {
-            v -= r + bit;
-            r = (r >> 1) + bit;
-        } else {
-            r >>= 1;
-        }
-        bit >>= 2;
-    }
-    r
+fn sqrt30(v: u32) -> u32 {
+    let i = (v >> 22) as usize - 64; // 0..192
+    let f = (v >> 6) & 0xffff;
+    let (a, b) = (SQRT[i] as u32, SQRT[(i + 1).min(192)] as u32);
+    a + (((b - a) * f) >> 16)
 }
 
-/// √ of a Q32 value (u64) as Q16, 16 significant bits: normalised so the
-/// top two bits are in the high word, one 32-bit square root, shifted back.
+/// √ of a Q32 value (u64) as Q16, ~15 significant bits: normalised to
+/// 2^28..2^30 by an even shift, the table root, shifted back.
 #[inline(always)]
 fn sqrt_q32(v: u64) -> i32 {
     if v == 0 {
         return 0;
     }
-    let s = v.leading_zeros() & !1;
-    let r = isqrt32(((v << s) >> 32) as u32) as u64;
-    // √(v) = √(v << s >> 32) · 2^16 / 2^(s/2)
-    let sh = 16 - (s / 2) as i32;
+    // Shift left by s (even) so the top bit lands at 28 or 29: then
+    // v' = (v << s) >> 34 is in 2^28..2^30.
+    let lz = v.leading_zeros() as i32; // 0..63
+    let s = lz & !1; // even, ≤ lz
+    let w = ((v << s) >> 34) as u32;
+    let r = sqrt30(w) as u64;
+    // √v = √(w · 2^34 / 2^s) = √w · 2^17 / 2^(s/2)
+    let sh = 17 - s / 2;
     let out = if sh >= 0 { r << sh } else { r >> -sh };
     sat(out as i64)
 }
@@ -303,41 +329,52 @@ pub fn hash(a: i32, b: i32) -> i32 {
     (mix32(a as u32 ^ mix32(b as u32 ^ 0x9e37_79b9)) >> 16) as i32
 }
 
+/// The lattice value at a corner, 0..65,535, from the corner's three
+/// coordinate terms (`x·P1`, `y·P2`, `z·P3`, so a neighbour is one add
+/// away): a xor and a one-multiply finaliser.
 #[inline(always)]
-fn lattice(x: i32, y: i32, z: i32) -> i32 {
-    let h = (x as u32).wrapping_mul(0x8da6_b343)
-        ^ (y as u32).wrapping_mul(0xd816_3841)
-        ^ (z as u32).wrapping_mul(0xcb1a_b31f);
-    (mix32(h) >> 16) as i32
+fn corner(hx: u32, hy: u32, hz: u32) -> i32 {
+    let mut h = hx ^ hy ^ hz;
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b_3c6d);
+    h ^= h >> 12;
+    (h >> 16) as i32
 }
 
-/// The smooth weight 3f² − 2f³ of a fraction 0..1 (Q16).
+/// The smooth weight 3f² − 2f³ of a fraction 0..1 (Q16), as 0..32,768
+/// (Q15: so a weighted difference of two 16-bit values fits an i32).
 #[inline(always)]
-fn fade(f: i32) -> i32 {
-    let f2 = ((f as i64 * f as i64) >> 16) as i32;
-    ((f2 as i64 * (3 * ONE - 2 * f) as i64) >> 16) as i32
+fn fade15(f: i32) -> i32 {
+    let f2 = ((f as u32 * f as u32) >> 16) as i32; // f < 2^16
+    ((f2 as i64 * (3 * ONE - 2 * f) as i64) >> 17) as i32
 }
 
 #[inline(always)]
-fn lerp_u(a: i32, b: i32, t: i32) -> i32 {
-    a + (((b - a) as i64 * t as i64) >> 16) as i32
+fn lerp15(a: i32, b: i32, t: i32) -> i32 {
+    a + (((b - a) * t) >> 15)
 }
+
+const P1: u32 = 0x8da6_b343;
+const P2: u32 = 0xd816_3841;
+const P3: u32 = 0xcb1a_b31f;
 
 /// 3D value noise, 0..1: a hash at every integer lattice point, blended
 /// with the smooth weight. One lattice cell per unit, so `noise(x*8, ...)`
 /// has eight cells across the panel.
 #[inline(always)]
 pub fn noise(x: i32, y: i32, z: i32) -> i32 {
-    let (ix, iy, iz) = (x >> 16, y >> 16, z >> 16);
-    let (fx, fy, fz) = (fade(x & 0xffff), fade(y & 0xffff), fade(z & 0xffff));
-    let (jx, jy, jz) = (ix.wrapping_add(1), iy.wrapping_add(1), iz.wrapping_add(1));
-    let x00 = lerp_u(lattice(ix, iy, iz), lattice(jx, iy, iz), fx);
-    let x10 = lerp_u(lattice(ix, jy, iz), lattice(jx, jy, iz), fx);
-    let x01 = lerp_u(lattice(ix, iy, jz), lattice(jx, iy, jz), fx);
-    let x11 = lerp_u(lattice(ix, jy, jz), lattice(jx, jy, jz), fx);
-    let y0 = lerp_u(x00, x10, fy);
-    let y1 = lerp_u(x01, x11, fy);
-    lerp_u(y0, y1, fz)
+    let (x0, y0, z0) = (
+        ((x >> 16) as u32).wrapping_mul(P1),
+        ((y >> 16) as u32).wrapping_mul(P2),
+        ((z >> 16) as u32).wrapping_mul(P3),
+    );
+    let (x1, y1, z1) = (x0.wrapping_add(P1), y0.wrapping_add(P2), z0.wrapping_add(P3));
+    let (fx, fy, fz) = (fade15(x & 0xffff), fade15(y & 0xffff), fade15(z & 0xffff));
+    let a = lerp15(corner(x0, y0, z0), corner(x1, y0, z0), fx);
+    let b = lerp15(corner(x0, y1, z0), corner(x1, y1, z0), fx);
+    let c = lerp15(corner(x0, y0, z1), corner(x1, y0, z1), fx);
+    let d = lerp15(corner(x0, y1, z1), corner(x1, y1, z1), fx);
+    lerp15(lerp15(a, b, fy), lerp15(c, d, fy), fz)
 }
 
 #[inline(always)]
@@ -377,17 +414,19 @@ pub fn chan(v: i32) -> u8 {
 }
 
 /// HSV (hue in turns, the fraction only; saturation and value 0..1) to
-/// 8-bit RGB.
+/// 8-bit RGB. Saturation and value 1.0 are taken as 65,535/65,536 so
+/// every product fits a u32 (the 8-bit result is the same).
 #[inline(always)]
 pub fn hsv(h: i32, s: i32, v: i32) -> [u8; 3] {
-    let s = clamp(s, 0, ONE);
-    let v = clamp(v, 0, ONE);
-    let h6 = (h & 0xffff) * 6; // 0..393,210
+    let s = clamp(s, 0, 0xffff) as u32;
+    let v = clamp(v, 0, 0xffff) as u32;
+    let h6 = (h & 0xffff) as u32 * 6; // 0..393,210
     let sector = h6 >> 16;
     let f = h6 & 0xffff;
-    let p = ((v as i64 * (ONE - s) as i64) >> 16) as i32;
-    let q = ((v as i64 * (ONE as i64 - ((s as i64 * f as i64) >> 16))) >> 16) as i32;
-    let t = ((v as i64 * (ONE as i64 - ((s as i64 * (ONE - f) as i64) >> 16))) >> 16) as i32;
+    let p = (v * (0x10000 - s)) >> 16;
+    let q = (v * (0x10000 - ((s * f) >> 16))) >> 16;
+    let t = (v * (0x10000 - ((s * (0x10000 - f)) >> 16))) >> 16;
+    let c8 = |x: u32| ((x * 255 + 0x8000) >> 16) as u8;
     let (r, g, b) = match sector {
         0 => (v, t, p),
         1 => (q, v, p),
@@ -396,7 +435,7 @@ pub fn hsv(h: i32, s: i32, v: i32) -> [u8; 3] {
         4 => (t, p, v),
         _ => (v, p, q),
     };
-    [chan(r), chan(g), chan(b)]
+    [c8(r), c8(g), c8(b)]
 }
 
 /// A palette entry for k in 0..1 (clamped): 32 stepped entries.

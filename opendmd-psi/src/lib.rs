@@ -94,5 +94,62 @@ rgb(ring*glow*0.3 + hand, ring*glow*0.5, ring*glow)
     ];
 }
 
+/// The golden frames: (name, source, ms into the loop, FNV-1a 64 of the
+/// RGB888 frame) under [`golden::inputs`]. Checked by `tests/golden.rs` on
+/// the host and in wasm, and by the firmware's `psi-probe` on the ESP32:
+/// the same hashes everywhere is bit-identical output.
+pub mod golden {
+    use crate::Inputs;
+
+    /// The inputs a golden frame is rendered with (10:09:30, sliders ½,
+    /// ¼, ¾).
+    pub fn inputs(ms: u32) -> Inputs {
+        Inputs {
+            t: Inputs::at_ms(ms),
+            hour: 10,
+            minute: 9,
+            second: 30,
+            a: 1 << 15,
+            b: 1 << 14,
+            c: 3 << 14,
+        }
+    }
+
+    /// FNV-1a, 64-bit.
+    pub fn fnv(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    pub const FRAMES: &[(&str, &str, u32, u64)] = &[
+        ("plasma", super::sketches::PLASMA, 0, 0xba0025be8e93c42d),
+        ("plasma", super::sketches::PLASMA, 2500, 0xf0b0ca78ce47c0de),
+        ("plasma", super::sketches::PLASMA, 7980, 0x40cf5c5d3b3bfc5),
+        ("fire", super::sketches::FIRE, 0, 0xbd8f0354e44e62e1),
+        ("fire", super::sketches::FIRE, 1230, 0xc4a40f51b506735f),
+        ("ring-clock", super::sketches::RING_CLOCK, 0, 0x9ecdc4f671bb2db5),
+        ("ring-clock", super::sketches::RING_CLOCK, 41_250, 0xac60627909815c81),
+        // Edge cases: saturation, division by zero, floored %, the quadrants
+        // of atan2, a constant colour, `i`, hash, sliders, comparisons.
+        ("saturate", "gray(t*t*t*1000 - 5 + x*30000)", 3000, 0xfe4ec469d4f39325),
+        ("div0", "v = x / (y - y)\nw2 = (x - 0.5) / 0\nrgb(v, w2 + 0.5, 0 / 0 + 0.25)", 0, 0xb8aafd09b9ba0b25),
+        ("mod", "rgb((x*10 - 5) % 3 / 3, (px - 64) % -7 / -7, (y - 0.5) % 0.25 * 4)", 0, 0x897f48091e041b41),
+        ("atan2", "hsv(atan2(y - 0.5, x - 0.5) + 0.5, 1, len(x - 0.5, y - 0.5)*2)", 0, 0xbfeee2097b9f6042),
+        ("const", "rgb(1, 0.5, 0.25)", 0, 0x2433c930830b3325),
+        ("index", "hsv(i / 4096, hash(i, 7), 1)", 0, 0xdf6cffa94510c228),
+        ("sliders", "rgb(a, b * x, c ? y : 0)", 0, 0x333771e31b603aa5),
+        ("logic", "gray(x < 0.5 and y > 0.5 or not (px % 8 < 4) ? 1 : 0.2)", 0, 0x2836493ef252ef25),
+        ("waves", "rgb(tri(x*2 + t), saw(y + t) * 0.5 + 0.5, sqr(x*4) * 0.5 + 0.5)", 1000, 0xe2f3ccaeb3a87095),
+        ("misc", "v = mix(0.2, 0.8, x) + floor(y * 4) / 4 + sqrt(x) - min(x, y) + max(0, cos(t))\ngray(frac(v))", 500, 0x4e537773ef7d12fe),
+        ("smooth", "pal(ocean, smoothstep(0.2, 0.8, x) * smoothstep(1, 0, y))", 0, 0x7d51aaf40701e136),
+        ("palettes", "pal(rainbow, x)", 0, 0xd2ee745daaab3f25),
+        ("clock", "frame { s = second / 60 }\npal(amber, step(x, s) + 0.3 * step(y, minute / 60))", 0, 0x2fa28273c4507f25),
+    ];
+}
+
 #[cfg(all(test, feature = "tables"))]
 mod tests;

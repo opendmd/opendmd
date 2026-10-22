@@ -3,32 +3,11 @@
 //! (`wasm-pack test --node`, `make test-wasm`) with the same expected
 //! hashes, so a pass on both is bit-identical output.
 
-use opendmd_psi::{compile, render_with, sketches, Inputs, Program, Scratch, H, MAX_OPS, OWN, W};
+use opendmd_psi::golden::{fnv, inputs, FRAMES as GOLDEN};
+use opendmd_psi::{compile, render_with, sketches, Program, Scratch, H, MAX_OPS, OWN, W};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
-
-/// FNV-1a, 64-bit.
-fn fnv(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
-}
-
-fn inputs(ms: u32) -> Inputs {
-    Inputs {
-        t: Inputs::at_ms(ms),
-        hour: 10,
-        minute: 9,
-        second: 30,
-        a: 1 << 15,
-        b: 1 << 14,
-        c: 3 << 14,
-    }
-}
 
 fn frame<const N: usize>(p: &Program, ms: u32) -> Vec<u8> {
     let mut s = Scratch::<N>::new();
@@ -48,31 +27,6 @@ fn hash(src: &str, ms: u32) -> u64 {
     );
     fnv(&a)
 }
-
-const GOLDEN: &[(&str, &str, u32, u64)] = &[
-    ("plasma", sketches::PLASMA, 0, 0x99203a5e70060839),
-    ("plasma", sketches::PLASMA, 2500, 0x1a338994de0e544c),
-    ("plasma", sketches::PLASMA, 7980, 0x2aac724bd12d4564),
-    ("fire", sketches::FIRE, 0, 0xb567cc1d7e62d87b),
-    ("fire", sketches::FIRE, 1230, 0x497aa4c42f29816d),
-    ("ring-clock", sketches::RING_CLOCK, 0, 0xb280c4b02b004232),
-    ("ring-clock", sketches::RING_CLOCK, 41_250, 0x790aba0ccbf110c9),
-    // Edge cases: saturation, division by zero, floored %, the quadrants
-    // of atan2, a constant colour, `i`, hash, sliders, comparisons.
-    ("saturate", "gray(t*t*t*1000 - 5 + x*30000)", 3000, 0xfe4ec469d4f39325),
-    ("div0", "v = x / (y - y)\nw2 = (x - 0.5) / 0\nrgb(v, w2 + 0.5, 0 / 0 + 0.25)", 0, 0xb8aafd09b9ba0b25),
-    ("mod", "rgb((x*10 - 5) % 3 / 3, (px - 64) % -7 / -7, (y - 0.5) % 0.25 * 4)", 0, 0x897f48091e041b41),
-    ("atan2", "hsv(atan2(y - 0.5, x - 0.5) + 0.5, 1, len(x - 0.5, y - 0.5)*2)", 0, 0xcce1a02a8c2a8745),
-    ("const", "rgb(1, 0.5, 0.25)", 0, 0x2433c930830b3325),
-    ("index", "hsv(i / 4096, hash(i, 7), 1)", 0, 0x825138092e3b09f0),
-    ("sliders", "rgb(a, b * x, c ? y : 0)", 0, 0x333771e31b603aa5),
-    ("logic", "gray(x < 0.5 and y > 0.5 or not (px % 8 < 4) ? 1 : 0.2)", 0, 0x2836493ef252ef25),
-    ("waves", "rgb(tri(x*2 + t), saw(y + t) * 0.5 + 0.5, sqr(x*4) * 0.5 + 0.5)", 1000, 0xe2f3ccaeb3a87095),
-    ("misc", "v = mix(0.2, 0.8, x) + floor(y * 4) / 4 + sqrt(x) - min(x, y) + max(0, cos(t))\ngray(frac(v))", 500, 0x4ecdd2cd2e39edff),
-    ("smooth", "pal(ocean, smoothstep(0.2, 0.8, x) * smoothstep(1, 0, y))", 0, 0x7d51aaf40701e136),
-    ("palettes", "pal(rainbow, x)", 0, 0xd2ee745daaab3f25),
-    ("clock", "frame { s = second / 60 }\npal(amber, step(x, s) + 0.3 * step(y, minute / 60))", 0, 0x2fa28273c4507f25),
-];
 
 #[test]
 fn golden_frames() {

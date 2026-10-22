@@ -380,7 +380,10 @@ fn program_is_plain_data() {
 
 #[test]
 fn compact_compiles_the_same() {
-    let extra = ["v = min(x,\n  y) -- c\n\n  // d\ngray(v)", "a1 = x +\n y\nframe {\n q = t\n}\nrgb(a1, q, - -x)"];
+    let extra = [
+        "v = min(x,\n  y) -- c\n\n  // d\ngray(v)",
+        "a1 = x +\n y\nframe {\n q = t\n}\nrgb(a1, q, - -x)",
+    ];
     for src in sketches::ALL.iter().map(|s| s.1).chain(extra) {
         let c = compact(src);
         assert!(!c.contains('\n') && !c.contains("--"), "{c}");
@@ -390,4 +393,12 @@ fn compact_compiles_the_same() {
         compact(sketches::FIRE),
         "loop 4; heat = noise(x*8, y*4 + t*2, t) * (1.3 - y); pal(fire, clamp(heat, 0, 1))"
     );
+}
+
+#[test]
+fn sizes() {
+    // What the docs say (Program, the scratch at 128 and 64 lanes).
+    assert_eq!(core::mem::size_of::<Program>(), 1808);
+    assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192);
+    assert_eq!(core::mem::size_of::<Scratch<64>>(), 4864);
 }
