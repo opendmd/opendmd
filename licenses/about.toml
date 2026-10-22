@@ -1,0 +1,13 @@
+# cargo-about (the pinned version: the Makefile's CARGO_ABOUT_VERSION) for
+# the firmware's and the web app's Rust crates, read by tools/notices.py
+# (the simulator has its own, opendmd-sim/about.toml). A crate under a
+# licence not listed here fails the build: check a new dependency's licence
+# before adding it. Where a crate offers a choice, the first accepted
+# licence in this order is the one listed (MIT first: its text is short).
+accepted = ["MIT", "Apache-2.0", "ISC", "Unicode-3.0", "BSD-3-Clause", "BSD-2-Clause", "Zlib"]
+# Build dependencies (what build scripts use) and dev-dependencies are not
+# linked into anything shipped.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# Our own crates (publish = false) are MIT OR Apache-2.0, like the rest.
+private = { ignore = true }

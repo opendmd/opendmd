@@ -14,7 +14,8 @@ Install control renders (headless Chromium has `navigator.serial`, so the
 "unsupported" slot must not be what shows); the manifest parses, names six
 parts at 0x1000/0x8000/0xF000/0x20000/0x260000/0x2C0000 (layout v2,
 docs/ota.md), each one is served, and the page
-lists them; the parts' sizes add up inside 4 MB; no console or page errors.
+lists them; the parts' sizes add up inside 4 MB; the footer links the
+third-party notices, which are served; no console or page errors.
 
 What it cannot do: the flash itself. Web Serial's port picker needs a
 person, and there is no board on the other end of a headless browser.
@@ -33,6 +34,8 @@ REPO = Path(__file__).resolve().parents[1]
 SITE = REPO / "target" / "flasher-smoke"
 DIST = REPO / "dist"
 failures = 0
+# The third-party notices fw-release puts in dist/, linked from the page's footer.
+NOTICES = ("THIRD-PARTY-LICENSES-firmware.txt", "THIRD-PARTY-LICENSES-web.txt")
 
 
 def check(ok: bool, what: str) -> None:
@@ -54,6 +57,8 @@ def main() -> int:
     parts = m["builds"][0]["parts"]
     for part in parts:
         shutil.copy(DIST / part["path"], SITE / "firmware" / part["path"])
+    for name in NOTICES:
+        shutil.copy(DIST / name, SITE / "firmware" / name)
 
     offsets = [p["offset"] for p in parts]
     check(m["builds"][0]["chipFamily"] == "ESP32" and offsets == [0x1000, 0x8000, 0xF000, 0x20000, 0x260000, 0x2C0000],
@@ -98,6 +103,11 @@ def main() -> int:
             r = page.request.get(f"{base}/firmware/{part['path']}")
             check(r.status == 200 and len(r.body()) == (DIST / part["path"]).stat().st_size,
                   f"served: firmware/{part['path']} ({len(r.body()):,} B)")
+        hrefs = page.eval_on_selector_all("footer a", "as => as.map(a => a.getAttribute('href'))")
+        for name in NOTICES:
+            r = page.request.get(f"{base}/firmware/{name}")
+            check(f"firmware/{name}" in hrefs and r.status == 200 and b"Third-party licences" in r.body(),
+                  f"the footer links firmware/{name}, served ({len(r.body()):,} B)")
         text = page.inner_text("main")
         check("Erase device" in text and "Chrome, Edge" in text and "NVS" in text
               and "Change Wi-Fi" in text,

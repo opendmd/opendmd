@@ -5,6 +5,7 @@ edition = "2021"
 resolver = "2"
 description = "OpenDMD ESP32 firmware: plays 128x32 GIFs from microSD onto two chained HUB75 panels"
 license = "MIT OR Apache-2.0"
+publish = false
 
 [dependencies]
 # Pinned to the same versions as ~/projects/stripe-dashboard, which is the

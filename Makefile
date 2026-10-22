@@ -71,6 +71,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build sim-dist sim-fetch check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
+	notices notices-check notices-check-web \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve site-publish
@@ -191,7 +192,10 @@ check-wasm:
 # `www_version` in /api/status (the file itself is not packed). The API
 # reference page, www/api.html (gitignored), is rendered from docs/api.md on
 # every build (tools/api-page.py), after tools/api-doc-check.py has checked
-# the doc's routes against firmware/src/http.rs both ways.
+# the doc's routes against firmware/src/http.rs both ways. www/licenses.txt
+# (gitignored) is the two committed third-party notices, firmware's then the
+# web app's (licenses/, `make notices`), served as text from the pack:
+# Settings -> Device -> About links it.
 WEB_WWW := $(WEB)/www
 web:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
@@ -201,8 +205,9 @@ web:
 	git describe --always --dirty --tags > $(WEB_WWW)/version.txt
 	uv run tools/api-doc-check.py
 	uv run tools/api-page.py docs/api.md $(WEB_WWW)/api.html
+	{ cat $(NOTICES_FW_TXT); printf '\n\n'; cat $(NOTICES_WEB_TXT); } > $(WEB_WWW)/licenses.txt
 	find $(WEB_WWW) -name '*.gz' -delete
-	find $(WEB_WWW) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' -o -name '*.json' \) \
+	find $(WEB_WWW) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' -o -name '*.json' -o -name licenses.txt \) \
 		-exec gzip -9 -n -k -f {} \;
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- \
 		www ../$(WEB_WWW) --out ../$(WWW_PACK) --version-file ../$(WEB_WWW)/version.txt --max-bytes $(WWW_BYTES)
@@ -215,6 +220,31 @@ web:
 # change the subset; `make web` uses the committed files.
 font:
 	uv run tools/font-subset.py
+
+# The third-party licence notices (tools/notices.py; licenses/ holds the
+# config and the two committed files). Both are generated from what is
+# built: the firmware's from the last `make fw-release` (the three ELFs'
+# compile units, the IDF build's component list, cargo-about over the
+# firmware's crates), the web app's from cargo-about over the wasm crates.
+# `make notices` rewrites both (commit them); fw-release checks both and CI
+# the web one: a stale file or a licence not accepted fails. Needs
+# CARGO_ABOUT at CARGO_ABOUT_VERSION (above) and, for the firmware, the
+# toolchain's readelf.
+NOTICES_FW_TXT := licenses/THIRD-PARTY-LICENSES-firmware.txt
+NOTICES_WEB_TXT := licenses/THIRD-PARTY-LICENSES-web.txt
+NOTICES_ABOUT = --about $(CARGO_ABOUT) --about-version $(CARGO_ABOUT_VERSION)
+NOTICES_FW = bash -c 'build=$$(ls -t $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/build/project_description.json 2>/dev/null | head -1) && \
+	uv run --quiet tools/notices.py firmware $(NOTICES_ABOUT) --elf $(FW_RELEASE_BINARY) --idf-build "$$(dirname "$${build:-none/x}")" \
+	--updater-build $(UPDATER_BUILD)/build --toolchain $(XTENSA_TOOLCHAIN) --readelf $(XTENSA_TOOLCHAIN)/bin/xtensa-esp32-elf-readelf $(1)'
+NOTICES_WEB = uv run --quiet tools/notices.py web $(NOTICES_ABOUT) $(1)
+notices:
+	$(call NOTICES_FW,)
+	$(call NOTICES_WEB,)
+notices-check:
+	$(call NOTICES_FW,--check)
+	$(call NOTICES_WEB,--check)
+notices-check-web:
+	$(call NOTICES_WEB,--check)
 
 # Static server for the page; uv, never bare python. Then open
 # http://localhost:8080 — the file/directory picker does the rest.
@@ -424,6 +454,9 @@ fw-clean:
 #                                  `new_install_improv_wait_time` (s) after an install
 #                                  for the new firmware to answer, then asks for WiFi
 #   opendmd-<ver>.odfw             the signed bundle for PUT /api/firmware (fw-sign)
+#   THIRD-PARTY-LICENSES-firmware.txt, THIRD-PARTY-LICENSES-web.txt
+#                                  the third-party notices (licenses/, `make notices`),
+#                                  checked against this build first
 #
 # The version comes from firmware/Cargo.toml and is also written into the app
 # descriptor as "<version> 4mb" (checked below at offset 0x30 of the image).
@@ -462,6 +495,8 @@ fw-release: web
 	@# firmware's build that installs the ESP-IDF checkout idf.py needs.
 	$(MAKE) --no-print-directory updater
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_RELEASE_BINARY)'
+	@# The third-party notices: the committed ones must be what this build links.
+	$(MAKE) --no-print-directory notices-check
 	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) $(FW_RELEASE_BINARY) $(FW_APP_IMAGE)'
 	@desc=$$(dd if=$(FW_APP_IMAGE) bs=1 skip=48 count=32 2>/dev/null | tr -d '\000'); \
 	 echo "app descriptor version: '$$desc'"; \
@@ -476,6 +511,7 @@ fw-release: web
 	cp $(FW_RELEASE_BOOTLOADER) $(DIST)/bootloader.bin
 	cp $(UPDATER_BIN) $(DIST)/updater.bin
 	cp $(UPDATER_BUILD)/build/ota_data_initial.bin $(DIST)/ota_data_initial.bin
+	cp $(NOTICES_FW_TXT) $(NOTICES_WEB_TXT) $(DIST)/
 	@! strings $(FW_APP_IMAGE) $(DIST)/updater.bin $(DIST)/bootloader.bin | grep -q '$(HOME)' || { echo "the release names $(HOME): a build path got in"; exit 1; }
 	bash -c '. $(ESPUP_ENV) && espflash partition-table --to-binary -o $(DIST)/partition-table.bin $(FW)/partitions.csv'
 	@# The merged image: espflash lays out bootloader, table and app padded to
@@ -506,7 +542,8 @@ fw-release: web
 	  '    }' \
 	  '  ]' \
 	  '}' > $(DIST)/manifest.json
-	@echo "dist/:"; ls -l $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(FW_BUNDLE) $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(FW_FULL_IMAGE) $(DIST)/manifest.json
+	@echo "dist/:"; ls -l $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(FW_BUNDLE) $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(FW_FULL_IMAGE) $(DIST)/manifest.json \
+	  $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt
 
 # The signed bundle for a LAN update (docs/ota.md): the release app image
 # behind a 140-byte header signed with the private key, which never enters
@@ -554,9 +591,11 @@ UPDATER_BUILD ?= ~/scratch/opendmd-target/updater
 UPDATER_BIN := $(UPDATER_BUILD)/build/opendmd-updater.bin
 UPDATER_SLOT := 393216
 UPDATER_SPARE := 32768
+# IDF v5.3's GCC (also what tools/notices.py reads the licences and readelf from).
+XTENSA_TOOLCHAIN := $(ESPRESSIF)/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf
 UPDATER_ENV := IDF_PATH=$(UPDATER_IDF) IDF_PYTHON_ENV_PATH=$(UPDATER_PYENV) \
 	ESP_ROM_ELF_DIR=$(ESPRESSIF)/tools/esp-rom-elfs/20240305/ \
-	PATH=$(UPDATER_PYENV)/bin:$(ESPRESSIF)/tools/xtensa-esp-elf/esp-13.2.0_20240530/xtensa-esp-elf/bin:$(ESPRESSIF)/tools/cmake/3.24.0/bin:$(ESPRESSIF)/tools/ninja/1.11.1:$(UPDATER_IDF)/tools:$$PATH
+	PATH=$(UPDATER_PYENV)/bin:$(XTENSA_TOOLCHAIN)/bin:$(ESPRESSIF)/tools/cmake/3.24.0/bin:$(ESPRESSIF)/tools/ninja/1.11.1:$(UPDATER_IDF)/tools:$$PATH
 updater:
 	@mkdir -p $(UPDATER_BUILD)
 	@# idf.py only reads sdkconfig.defaults into a new sdkconfig.
@@ -588,7 +627,7 @@ flasher:
 	rm -rf $(FLASHER_SITE) && mkdir -p $(FLASHER_SITE)/firmware
 	cp flasher/index.html $(FLASHER_SITE)/
 	cp $(DIST)/manifest.json $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(FLASHER_SITE)/firmware/
-	cp $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(FW_FULL_IMAGE) $(FLASHER_SITE)/firmware/
+	cp $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(FW_FULL_IMAGE) $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt $(FLASHER_SITE)/firmware/
 	@echo "open http://localhost:$(FLASHER_PORT)/ in Chrome or Edge"
 	uv run python -m http.server $(FLASHER_PORT) --bind 127.0.0.1 -d $(FLASHER_SITE)
 
