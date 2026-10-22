@@ -11,8 +11,10 @@ name: Release
 #
 #   tag v1.2.3          -> GitHub release on opendmd/opendmd (marked latest),
 #                          and the site pushed to opendmd/opendmd.github.io
-#   tag v1.2.3-rc1      -> GitHub pre-release (any tag with a "-" suffix);
-#                          the site is left alone
+#   tag v1.2.3-beta.1   -> GitHub pre-release (any tag with a "-" suffix),
+#                          and the site pushed too (until 1.0.0, betas are
+#                          what the site offers; see CLAUDE.md "CI and
+#                          releases")
 #   manual dispatch     -> dry_run (the default): everything is built, signed
 #                          with a throwaway key made in the job (so the bundle
 #                          verifies against that key's public half, not the
