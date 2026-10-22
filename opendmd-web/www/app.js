@@ -25,6 +25,8 @@ let current = '', shown = '';
 // known) mounts whatever the hash says once it can.
 async function route() {
   if (location.hash === '#studio') { location.replace('#create'); return; }
+  // A shared formula (js/formulas.js reads it): the Library's Formulas editor.
+  if (location.hash.startsWith('#formula=')) { app.formula = location.hash.slice(1); location.replace('#library/formula'); return; }
   const [v, sub = ''] = location.hash.slice(1).split('/');
   const name = VIEWS.includes(v) ? v : 'now';
   if (name !== current) {

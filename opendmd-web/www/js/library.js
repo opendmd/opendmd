@@ -272,7 +272,7 @@ export async function mount(el) {
     let dirs = [];
     try { dirs = (await listOr('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch (e) { toast('listing /gifs: ' + e.message, 'bad'); }
     const tab = (d) => [d, niceName(d)];
-    cats = [...dirs.filter((d) => !isSys(d)).map(tab), ['@', 'Live'], ['@fx', 'Effects'], ...dirs.filter(isSys).map(tab)];
+    cats = [...dirs.filter((d) => !isSys(d)).map(tab), ['@', 'Live'], ['@fx', 'Effects'], ['@psi', 'Formulas'], ...dirs.filter(isSys).map(tab)];
     if (!cats.some(([v]) => v === cat)) cat = dirs.includes('Consoles') ? 'Consoles' : cats[0][0];
     renderTabs();
     await load();
@@ -292,6 +292,9 @@ export async function mount(el) {
   async function load() {
     store.set('lib.cat', cat);
     platforms.clear();
+    // Formulas are their own gallery, details and editor (js/formulas.js).
+    grid.classList.toggle('psi', cat == '@psi');
+    if (cat == '@psi') { items = []; apply(); return (F ??= await import('./formulas.js')).open(grid); }
     if (!(liveBox.hidden = cat[0] != '@')) {
       items = (await import('./live.js'))[cat == '@' ? 'items' : 'effects'](liveBox, preview, () => list.refresh());
       return apply();
@@ -424,7 +427,7 @@ export async function mount(el) {
     await ov.load(want); // each time: Now's ☆ or the Playlists editor may have changed it
   }
 
-  let dirty = false;
+  let dirty = false, F;
   on('gifs', (c) => { byCat.delete(c); every = null; dirty = true; });
   // A restart or a card out and in: list everything again.
   let up = 0, sd = app.status?.sd?.mounted;
@@ -437,6 +440,8 @@ export async function mount(el) {
   await playlists();
   sync();
   return {
+    // `#library/formula`: the Formulas editor.
+    async sub(s) { if (s && cat != '@psi') { cat = '@psi'; renderTabs(); await load(); } F?.sub(s); },
     show() {
       thumbs = thumbsOn();
       scrollTab();
