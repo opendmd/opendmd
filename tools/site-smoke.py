@@ -137,6 +137,10 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
             page.fill("#f-addr", "evil.example/x?")
             page.click("#f-go")
             check(page.is_visible("#f-addr-err") and not seen, "/f/: a bad address is refused")
+            page.fill("#f-addr", "example.com")
+            page.click("#f-go")
+            check(page.is_visible("#f-addr-err") and "Press Open again" in page.inner_text("#f-addr-err") and not seen
+                  and page.url.startswith(base), "/f/: an address on the internet is asked about first")
             page.fill("#f-addr", "http://192.168.1.50/")
             with page.expect_navigation():
                 page.click("#f-go")

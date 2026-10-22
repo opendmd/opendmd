@@ -69,6 +69,14 @@ out=$(publish)
 mkdir -p "$tmp/site/gallery"
 if publish >/dev/null 2>&1; then fail "a site with a gallery/ was published"; fi
 
+# An untracked file beside the checker's source is refused (it would not be vendored).
+rmdir "$tmp/site/gallery"
+stray=opendmd-gallery/src/stray-site-publish-test.rs
+trap 'rm -rf "$tmp" "$stray"' EXIT
+: > "$stray"
+if publish >/dev/null 2>&1; then rm -f "$stray"; fail "a publish with an untracked file in the checker's source went ahead"; fi
+rm -f "$stray"
+
 # The vendored checker builds as the public workflow builds it: offline,
 # locked, from an empty cargo home, and checks a contribution.
 CARGO_HOME="$tmp/cargo" RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-stable} cargo build -q --release --locked --offline \

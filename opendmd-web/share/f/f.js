@@ -121,6 +121,17 @@ async function start() {
     $('f-addr-err').hidden = okAddr;
     $('f-addr-err').textContent = okAddr ? '' : 'That doesn’t look like an address: a name like opendmd.local, or numbers like 192.168.1.50.';
     if (!okAddr) return;
+    // On this network: a .local name, a name with no dots, a private or
+    // link-local address. Anything else could be anyone's: ask once.
+    const host = a.replace(/:\d+$/, '').toLowerCase();
+    const near = /\.local$/.test(host) || /^[^[.]+$/.test(host) || /^(10\.|192\.168\.|169\.254\.|127\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)
+      || /^\[(fe80|fc|fd|::1\])/.test(host);
+    if (!near && $('f-ask').dataset.sure !== a) {
+      $('f-ask').dataset.sure = a;
+      $('f-addr-err').hidden = false;
+      $('f-addr-err').textContent = `${a} doesn’t look like a display on your own network (like opendmd.local or 192.168.1.50): the formula would go to that site. Press Open again if you’re sure.`;
+      return;
+    }
     store.set('display', a);
     where();
     go(a);

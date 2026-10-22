@@ -2,9 +2,10 @@
 
 `.github/workflows/gallery-check.yml` runs on every pull request to this
 repository and checks the formulas it adds to `gallery/`. Everything under
-`.github/` here is installed by OpenDMD's `tools/site-publish.sh` from the
-main repository (`site/public-repo/`, and the checker's source from
-`opendmd-psi/` and `opendmd-gallery/`): change it there.
+`.github/` here (the workflow, `CODEOWNERS`, this file and the checker's
+source in `opendmd-psi/` and `opendmd-gallery/`) is installed by OpenDMD's
+`tools/site-publish.sh` from the main repository (`site/public-repo/`):
+change it there.
 
 ## What it checks
 
@@ -16,12 +17,15 @@ fails unless every change:
   no subfolder, no symbolic link, submodule or executable file, at most 20
   files;
 - has a slug of lower-case letters, digits and single hyphens (≤ 48);
-- is at most 4 KB of UTF-8 text with no control characters (a tab only in
-  the formula), no invisible, joining or direction-changing characters (the
-  "Trojan Source" ones: U+202A–202E, U+2066–2069, …), no private-use ones;
+- is at most 4 KB of UTF-8 text with LF line endings, no control characters
+  (a tab only in the formula), no invisible, joining or direction-changing
+  characters (the "Trojan Source" ones: U+202A–202E, U+2066–2069, …), no
+  private-use ones, no more than two accents stacked on a letter;
 - starts with the header: `-- name:` (≤ 40 characters), `-- description:`
   (≤ 120), `-- author:` (≤ 40), `-- licence:` (CC0-1.0 or CC-BY-4.0), and
-  optionally `-- values:` (`a=0.3 b=1`), with no `<` or `>` in them;
+  optionally `-- values:` (`a=0.3 b=1`), with no `<` or `>` in them, and a
+  name and author that don't pass for OpenDMD or a maintainer (lookalike
+  letters included);
 - compiles with OpenDMD's Psi compiler (the same crate the display runs) and
   costs at most 8 ms a frame on the display (`Program::esp32_us`).
 
@@ -32,71 +36,95 @@ summary on the run's page.
 ## Threat model
 
 **Who:** anyone with a GitHub account can open a pull request, from a fork.
-**What they control:** the whole pull request: the gallery file, and also
-anything else in the tree, including this workflow file and the checker's
-source in the pull request's copy.
+**What they control:** the whole pull request — the gallery file, and also
+anything else in its tree, including its own copies of this workflow and of
+the checker's source.
 
-**How the workflow is set up:**
+**How the check is set up** (the invariant is in a comment block at the top
+of the workflow: nothing from the pull request is ever checked out, built
+or run):
 
-- Trigger `pull_request` only, never `pull_request_target`. A fork's run
-  gets a read-only `GITHUB_TOKEN` and no secrets: GitHub withholds them
-  from fork runs no matter what the workflow file says.
-- `permissions: contents: read` and nothing else. The workflow uses no
-  secrets. Uploading an artifact needs no write permission.
+- Trigger `pull_request_target`: GitHub runs **main's** copy of the
+  workflow, so a pull request that edits it changes nothing, and the check's
+  result can be trusted as a required status check. (With `pull_request` a
+  pull request runs its own copy and can make its own check pass.)
+- `permissions: {}`: the job's token can do nothing. The repo is public, so
+  the pull request is fetched anonymously; the workflow uses no secrets
+  (the repository should have none).
+- No checkout action. `refs/pull/<n>/merge` is fetched as git objects only,
+  and its second parent must be the event's head SHA (else GitHub's merge
+  is stale: the check asks the API for `mergeable`, fetches again, and
+  otherwise fails asking for a re-run).
+- The checker is built only from the merge's **first parent**, verified to
+  be on main (`git archive refs/pr^1 .github/gallery-check`), never from the
+  pull request's copy, with `cargo build --locked --offline`: it depends on
+  nothing but its own source and OpenDMD's Psi crate, so nothing is
+  downloaded and no code from the contribution is compiled.
+- The contribution is only ever data: blobs read from git objects and
+  parsed; a formula is compiled and evaluated by Psi's VM, which has no I/O
+  (arithmetic over the pixel, the time and three sliders, a fixed-size
+  program of at most 256 steps).
+- Only the pull request's number and head SHA reach the scripts (through
+  env, checked as digits and 40 hex characters) — never a title, branch name
+  or anything else a contributor typed. Untrusted text is printed escaped
+  (`{:?}`) in the log, so it cannot start a workflow command, and as HTML
+  entities in the job summary.
 - One third-party action, `actions/upload-artifact`, pinned by full commit
-  SHA. No `actions/checkout`: the pull request is fetched with plain `git`
-  as objects, never checked out.
-- The checker is built from the **base branch's** copy (the merge commit's
-  first parent), with `cargo build --locked --offline`: it depends on
-  nothing but its own source and OpenDMD's Psi crate, both vendored here, so
-  nothing is downloaded and no build script runs from the contribution.
-- The contribution is only ever data: its files are read from git objects
-  and parsed; a formula is compiled and evaluated by Psi's VM, which has no
-  I/O (arithmetic over the pixel's position, the time and three sliders, a
-  fixed-size program of at most 256 steps). Nothing the contributor wrote
-  is executed as code.
-- Untrusted text is printed escaped (`{:?}`) in the log, so it cannot start
-  a workflow command, and as HTML entities in the job summary.
+  SHA. A 10-minute timeout; one run per pull request at a time.
 
-**What a malicious pull request can do:**
+**What a malicious pull request can do:** spend a few minutes of CI; show
+the reviewer a picture (drawn by the checker, not supplied) and escaped
+text; propose a formula that is offensive, misleading or copied — only a
+person can judge that, which is why every merge needs a maintainer's
+review (CODEOWNERS).
 
-- Edit `.github/workflows/gallery-check.yml` (or the checker) in its own
-  branch: under `pull_request` GitHub runs the pull request's version of the
-  workflow, so such a pull request **can make its own check pass**. It
-  still runs with a read-only token and no secrets, and can only spend CI
-  minutes (10 minutes a run) on GitHub's machine. This is why the check is
-  a help for the reviewer, not the gate: **the gate is the review.** A pull
-  request that changes anything outside `gallery/*.psi` is never merged,
-  whatever its check says (the "Files changed" tab shows it at a glance).
-- Make the reviewer look at a picture (the artifact) or text: the summary
-  escapes it, and the PNG is drawn by the checker, not supplied.
-- Submit a formula that is offensive, misleading or copied: only a person
-  can judge that.
+**What it cannot do:** change what the check runs; get a token that can
+write, or any secret; run its own code; reach the site without a
+maintainer merging it. And after a merge, the site build (`tools/site.py`
+in the main repository) checks every gallery file again with the main
+repository's own copy of the checker, leaves out any that fail, never
+follows a link, and renders every field as escaped text.
 
-**What it cannot do:**
+**The publish is the other way in.** The site is pushed to `main` by the
+main repository's release workflow with a deploy key, which bypasses the
+ruleset. Anyone who can run that workflow (or read its secrets) can rewrite
+the site and `gallery/`. So: keep the deploy key only in the main
+repository's secrets, put the publish step behind a GitHub Environment with
+a required reviewer, restrict who can push `v*` tags there, and if the main
+repository's secrets ever leak, remove and replace the deploy key here
+(Settings › Deploy keys) at once.
 
-- Get a token that can write to this repository, or any secret (there are
-  none in this workflow; GitHub withholds the repository's from forks).
-- Run its own code in the base branch's checker, or download anything into
-  it (offline, locked, no dependencies).
-- Reach the published site without a maintainer merging it. And after a
-  merge, the site build (`tools/site.py` in the main repository, run by its
-  release workflow) checks every gallery file again with the main
-  repository's own copy of the checker and leaves out any that fail — a
-  symlink is never followed, a bad file is never published — and renders
-  every field as escaped text.
+## Switching it on (the maintainers)
 
-## For the maintainers
+**This repository (opendmd/opendmd.github.io):**
 
-- Settings › Actions › General: "Require approval for all external
-  contributors" (fork pull request workflows), so a first-time
-  contributor's run waits for a maintainer to look at the pull request.
-- A ruleset on `main` (Settings › Rules › Rulesets): require a pull request
-  with one approving review, require the "Check the formulas" status check,
-  block force pushes and deletions. The site publish pushes to `main`
-  directly with its deploy key, so add "Deploy keys" to the ruleset's bypass
-  list.
-- Review checklist: only `gallery/*.psi` files changed; the check passed;
-  the preview looks right and works on a 128 × 32 panel; the name and
-  description are fine for everyone; the author owns it (or it is CC0 and
-  credited); no duplicate of an existing formula.
+1. Check `.github/CODEOWNERS` names the maintainers' real GitHub handles.
+2. Settings › Rules › Rulesets, a new branch ruleset for `main`, active:
+   - Require a pull request before merging: 1 approval; dismiss stale
+     approvals when new commits are pushed; require approval of the most
+     recent reviewable push; require review from Code Owners.
+   - Require status checks to pass: "Gallery check (trusted)", from the
+     source GitHub Actions; do **not** require branches to be up to date
+     (the check already runs on the merge with main).
+   - Require linear history (merge by squash).
+   - Block force pushes; restrict deletions.
+   - Bypass list: Deploy keys (the site publish) and Repository admin only.
+3. Settings › General: allow squash merging only; disable auto-merge.
+4. Settings › Actions › General:
+   - Allow only actions from this repository and `actions/upload-artifact`.
+   - Fork pull request workflows: require approval for all external
+     contributors.
+   - Workflow permissions: read repository contents only; do not allow
+     GitHub Actions to create or approve pull requests.
+5. Settings › Secrets and variables › Actions: confirm there are none.
+6. Settings › Pages: deploy from branch `main`, folder `/`; Enforce HTTPS.
+
+**The main repository (opendmd/opendmd):** restrict who can push `v*` tags
+(a tag ruleset), and consider an Environment with a required reviewer for
+the release workflow's "Publish the site" step.
+
+**Reviewing a contribution:** the check passed; only `gallery/*.psi`
+changed; the preview looks right on a 128 × 32 panel; the name and
+description are fine for everyone; the author owns it (or it is credited
+properly); not a duplicate. Squash and merge; it appears with the next site
+publish.

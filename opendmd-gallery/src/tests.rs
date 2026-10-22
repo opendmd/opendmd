@@ -226,7 +226,8 @@ fn the_examples_pass() {
         let desc = string_field(line, "desc");
         let src = string_field(line, "src");
         let file = format!("-- name: {name}\n-- description: {desc}\n-- author: OpenDMD\n-- licence: CC0-1.0\n{src}\n");
-        let e = check_file("example", file.as_bytes()).unwrap_or_else(|p| panic!("{name}: {p:?}"));
+        let e = check_file_as("example", file.as_bytes(), true)
+            .unwrap_or_else(|p| panic!("{name}: {p:?}"));
         assert_eq!(e.src, format!("{src}\n"));
         n += 1;
     }
@@ -255,4 +256,46 @@ fn string_field(line: &str, key: &str) -> String {
 #[test]
 fn png_crc() {
     assert_eq!(png::crc32(b"IEND"), 0xAE42_6082);
+}
+
+#[test]
+fn reserved_names_zalgo_braille_crlf() {
+    for (k, v) in [
+        ("Rainbow rings", "OpenDMD"),
+        ("@someone", "@duggan"),
+        ("@someone", "Ｏｐｅｎ ＤＭＤ"),
+        ("@someone", "0pen-DMD"),
+        ("Rainbow rings", "Opеndmd"),
+        ("@someone", "dúggan"),
+    ] {
+        let ps = problems("x", &GOOD.replace(k, v));
+        assert!(has(&ps, "OpenDMD's or a maintainer's"), "{v}: {ps:?}");
+    }
+    let mine = GOOD.replace("@someone", "OpenDMD");
+    assert!(check_file_as("x", mine.as_bytes(), true).is_ok());
+    assert!(check_file("x", GOOD.replace("@someone", "OpenDMD fan").as_bytes()).is_ok());
+    // Two accents on a letter are fine, three are not.
+    assert!(check_file(
+        "x",
+        GOOD.replace("Rainbow", "Rai\u{301}\u{308}nbow").as_bytes()
+    )
+    .is_ok());
+    assert!(has(
+        &problems(
+            "x",
+            &GOOD.replace("Rainbow", "Rai\u{301}\u{308}\u{30A}nbow")
+        ),
+        "accents on one letter"
+    ));
+    assert!(has(
+        &problems("x", &GOOD.replace("Rainbow rings", "Rainbow\u{2800}rings")),
+        "invisible"
+    ));
+    let crlf = GOOD.replace('\n', "\r\n");
+    let ps = problems("x", &crlf);
+    assert!(
+        has(&ps, "Windows line endings") && !has(&ps, "control"),
+        "{ps:?}"
+    );
+    assert_eq!(skeleton("Ｏｐｅｎ ＤＭＤ!"), "opendmd");
 }

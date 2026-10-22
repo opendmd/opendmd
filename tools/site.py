@@ -544,18 +544,30 @@ def recompress_png(data: bytes) -> bytes:
     return out
 
 
-def check_gallery(tool: Path, files: list[Path], thumbs: Path) -> tuple[list[dict], list[dict]]:
-    """opendmd-gallery check over `files`: (entries, failures)."""
+def check_gallery(tool: Path, files: list[Path], thumbs: Path, trusted: bool = False) -> tuple[list[dict], list[dict]]:
+    """opendmd-gallery check over `files`: (entries, failures). If the
+    checker itself fails on a batch (not a verdict: a crash), the files are
+    checked one at a time and the one it fails on is left out, so a bad
+    contribution can't stop a release."""
     thumbs.mkdir(parents=True, exist_ok=True)
     good, bad = [], []
-    for k in range(0, len(files), 200):
-        r = subprocess.run([str(tool), "check", "--json", "--thumbs", str(thumbs), *map(str, files[k:k + 200])],
-                           capture_output=True, text=True)
+
+    def run(batch: list[Path]) -> bool:
+        r = subprocess.run([str(tool), "check", "--json", *(["--trusted"] if trusted else []), "--thumbs", str(thumbs),
+                            *map(str, batch)], capture_output=True, text=True)
         if r.returncode not in (0, 1):
-            raise SystemExit(f"opendmd-gallery failed:\n{r.stderr}")
+            return False
         for line in r.stdout.splitlines():
             e = json.loads(line)
             (bad if "problems" in e else good).append(e)
+        return True
+
+    for k in range(0, len(files), 200):
+        batch = files[k:k + 200]
+        if not run(batch):
+            for f in batch:
+                if not run([f]):
+                    bad.append({"file": f.name, "problems": ["the checker failed on it"]})
     for p in thumbs.glob("*.png"):
         p.write_bytes(recompress_png(p.read_bytes()))
     return good, bad
@@ -576,7 +588,7 @@ def gallery(out: Path, www: Path, contrib: Path | None, tool: Path) -> str:
             p = Path(tmp) / f"{slugify(x['name'])}.psi"
             p.write_text("\n".join(head) + "\n" + x["src"].rstrip("\n") + "\n")
             files.append(p)
-        seeds, bad = check_gallery(tool, files, out / "formulas/examples")
+        seeds, bad = check_gallery(tool, files, out / "formulas/examples", trusted=True)
         if bad or len(seeds) != len(examples):
             raise SystemExit(f"an example fails the gallery's checks: {bad}")
     entries: list[dict] = []

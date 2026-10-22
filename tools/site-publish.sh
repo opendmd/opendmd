@@ -37,7 +37,10 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 cp -a site/public-repo/. "$stage"/
 mkdir -p "$stage/.github/gallery-check"
-git ls-files -z --cached --others --exclude-standard -- opendmd-psi opendmd-gallery |
+# Only what git tracks (as committed: the tree is clean), and nothing new beside it.
+untracked=$(git ls-files --others --exclude-standard -- opendmd-psi opendmd-gallery)
+[ -z "$untracked" ] || { echo "refusing: untracked files in the checker's source: $untracked" >&2; exit 1; }
+git ls-files -z --cached -- opendmd-psi opendmd-gallery |
   xargs -0 cp --parents -t "$stage/.github/gallery-check"
 
 if [ -d "$work/.git" ]; then
