@@ -33,8 +33,6 @@ p{margin:8px 0}
 .row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
 .row.sp{justify-content:space-between}
 .grow{flex:1;min-width:0}
-.stat{white-space:nowrap}.stat b{display:block;font-weight:600;font-variant-numeric:tabular-nums}
-.stat span{color:var(--mut);font-size:13px}.stat.w{white-space:normal;min-width:0}.stat b span{color:inherit;font-size:inherit}
 .cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
 @media (max-width:1000px){.cols{grid-template-columns:minmax(0,1fr)}}
 button,.btn,select,input[type=text],input[type=number],input[type=password],input[type=search],input[type=time]{font:inherit;color:var(--fg);background:var(--bg3);border:1px solid var(--line);border-radius:var(--r);padding:4px 12px;min-height:36px}
@@ -60,7 +58,7 @@ p.cap{margin:0 0 12px}
 .chip{border:1px solid var(--line);background:none;border-radius:99px;padding:4px 12px;font-size:13px;cursor:pointer;color:var(--fg)}
 .chip.on,.chip.on:hover{background:var(--acc);border-color:var(--acc);color:#111}
 .chip small{font:inherit;color:var(--mut);margin-left:4px}.chip.on small{color:inherit}
-.sys{color:var(--mut)}
+.sys{color:var(--mut)}.tab.sys,.chip.sys{font-style:italic}
 .tag{display:inline-block;border-radius:4px;padding:0 8px;font-size:13px;background:#2b3138;color:#b8c2cc;margin-left:8px;white-space:nowrap}
 .tag.act{background:var(--acc);color:#111}
 .vlist{position:relative;overflow:auto;border-radius:var(--r);background:var(--bg2);height:calc(100dvh - 240px);min-height:240px;contain:strict}
@@ -158,13 +156,10 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .capl{margin-top:8px;align-items:baseline}.capl>.grow{flex:1 1 auto}.capl>label.cap{margin:0 0 0 auto}
 #now-ord{white-space:nowrap}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor;margin-left:4px}
 .tag.fl{max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom;margin-left:4px}
-#now-more>summary{display:flex;align-items:center;gap:24px;padding:0;color:var(--fg)}
-#now-more>summary>.muted{margin-left:auto}
-.figs{display:flex;gap:24px}
 .f2{grid-template-columns:repeat(2,minmax(0,1fr))}
-@media (max-width:760px){.figs,#now-more>summary{gap:12px}#now-stats{flex-wrap:wrap;row-gap:8px;flex:1}.stat.w{flex-basis:100%}.f2{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:760px){.f2{grid-template-columns:minmax(0,1fr)}}
 .grp{border-top:1px solid var(--line);margin-top:16px;padding-top:16px}.grp>h3:first-child{margin-top:0}
-.look>summary,#st-adv>summary,#builder>summary{font-size:17px;font-weight:600}#st-adv>summary,#builder>summary{color:var(--fg)}
+.look>summary{font-size:17px;font-weight:600}
 .facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 16px;margin:8px 0 0;font-size:13px}.facts dt{color:var(--mut)}.facts dd{margin:0;overflow-wrap:anywhere}
 .tick{font-size:13px;font-weight:400;color:var(--ok);margin-left:12px}.tick.ok{animation:out 2.5s forwards}.tick.bad{color:var(--bad)}
 .bri{display:flex;align-items:center;gap:8px}.rng{position:relative;display:flex;flex:1;min-width:160px;max-width:320px}.rng>input{width:100%}
@@ -190,6 +185,6 @@ button.on{border-color:var(--acc);color:var(--acc)}
 /* Playlists: the editor a screen of its own on a phone. */
 #view-sets:not(.ed) #set-editor,#view-sets.ed .sehint,.back{display:none}
 #set-title{margin:0}.edfoot{position:sticky;bottom:0;background:var(--bg2);padding:12px 0 0;margin-top:4px}
-#set-entries{height:calc(100dvh - 380px)}
+#set-entries{height:calc(100dvh - 380px)}#set-name-row:not([hidden])~#set-entries{height:calc(100dvh - 450px)}
 @media (max-width:1000px){.ed .sl,#view-sets:not(.ed) .se{display:none}.back{display:inline-flex}}
-@media (max-width:760px){.edfoot{bottom:calc(58px + env(safe-area-inset-bottom))}#set-entries{height:calc(100dvh - 420px)}.transport>button{max-width:none}}
+@media (max-width:760px){.edfoot{bottom:calc(58px + env(safe-area-inset-bottom))}#set-entries{height:calc(100dvh - 420px)}#set-name-row:not([hidden])~#set-entries{height:calc(100dvh - 490px)}.transport>button{max-width:none}}

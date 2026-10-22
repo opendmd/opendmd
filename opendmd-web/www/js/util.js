@@ -114,7 +114,7 @@ export const note = (text, more) => h('p.cap', text, more && h('span.q', { title
 // runs saves in order (fn returning false: nothing to save) and shows
 // "Saved ✓" in the heading, fading out over 2.5 s, or "Couldn't save: why".
 export function saver(head) {
-  const tick = head.appendChild(h('span.tick'));
+  const tick = head.querySelector('.tick') || head.appendChild(h('span.tick'));
   let q, t;
   return (fn) => (q = Promise.resolve(q).then(fn).then((r) => {
     if (r === false) return;

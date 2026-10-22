@@ -226,5 +226,6 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   on('prepare', renderJob);
   const show = () => { renderFacts(app.status); renderJob(prep.job); loadCache(); };
   show();
-  return { show };
+  // Leaving the tab: no more cache polls, and a panel test in progress ends.
+  return { show, hide() { clearTimeout(cachePoll); app.endPanelTest?.(); } };
 }

@@ -132,17 +132,18 @@ button lands on them.
 - **Settings** — four tabs (`#settings/<tab>`; bare `#settings` is the
   first), only the open one in the page, everything saved as it changes
   with a fading **Saved ✓** in the card's heading:
-  - **Playback**: brightness, the playlist, **Platforms** (one row — "All
+  - **Playback**: brightness with **Maximum brightness** under it
+    (`js/power.js`; default 144, below the level tested safe on the
+    supplied power supply; raising it shows a warning, because the panel
+    can reset above it), the playlist, **Platforms** (one row — "All
     (60)" or the ones picked — and **Choose…**, a sheet with a search box,
     the playlist's platforms with their counts, those under 5 behind "+N
     more", **Only these** and **All platforms**), shuffle, and **Each GIF
     stays** min – max seconds (the dwell). These apply live (the playlist
     not while the player is still reading one).
   - **Look**: colour and phosphor glow, *Mirror the panel on Now* (this
-    browser's choice), the transition with a Preview, the start-up show
-    (`js/boot.js`) and **Maximum brightness** under Power (`js/power.js`;
-    default 144, below the level tested safe on the supplied power supply;
-    raising it shows a warning, because the panel can reset above it).
+    browser's choice), the transition with a Preview and the start-up show
+    (`js/boot.js`).
   - **Schedule**: time zone, schedule rules, night mode, Follow RePlayOS.
   - **Device** (`js/device.js`, loaded when the tab first opens): **Status**
     (the playlist and its count, the card, uptime, free memory and its

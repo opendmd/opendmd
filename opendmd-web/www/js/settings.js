@@ -1,10 +1,10 @@
 // Settings: the device's NVS config (GET/PUT /api/config — a PUT is a
 // partial patch, applied live except WiFi, which needs a reboot), in four
 // tabs, `#settings/play|look|time|device` (bare `#settings` is the first);
-// only the open tab is in the page. Playback (brightness, playlist,
-// platforms, shuffle, how long each GIF stays), Look (colour, glow,
-// mirroring on Now, the transition, Start-up js/boot.js, Power
-// js/power.js), Schedule (time, schedule, night mode, Follow RePlayOS) and
+// only the open tab is in the page. Playback (brightness and its maximum
+// js/power.js, playlist, platforms, shuffle, how long each GIF stays),
+// Look (colour, glow, mirroring on Now, the transition, Start-up
+// js/boot.js), Schedule (time, schedule, night mode, Follow RePlayOS) and
 // Device (status, the playback cache, network — its own Save; a new name
 // is live at once —, panel timing js/panel.js, firmware and security
 // js/firmware.js, About). Everything saves as it changes.
@@ -138,27 +138,26 @@ export async function mount(el) {
   }
   await loadPlaylists();
   on('config', loadPlaylists);
-  // Start-up (js/boot.js) and Maximum brightness (js/power.js): modules
-  // of their own, loaded when Look is first open.
-  const boot = h('div.card', { id: 'st-boot-card' }), power = h('div.card', { id: 'st-power-card' });
+  // Start-up (js/boot.js, loaded when Look is first open) and Maximum
+  // brightness (js/power.js, under Playback's Brightness): modules of their own.
+  const boot = h('div.card', { id: 'st-boot-card' }), power = h('div', { id: 'st-power-card', style: 'margin-top:12px' });
   const time = timeCard();
   const sched = scheduleCard();
   const follow = followCard();
   on('status', time.render);
 
-  const tab = (k, ...kids) => h('div.stab', { id: 'st-tab-' + k, role: 'tabpanel' }, kids);
+  const tab = (k, ...kids) => h('div.stab', { id: 'st-tab-' + k, role: 'tabpanel', 'aria-labelledby': 'st-t-' + k }, kids);
   const BUILD = {
-    play: () => tab('play',
+    play: () => (import('./power.js').then((m) => m.powerCard(power, playH)), tab('play',
       h('div.card', playH, note('A playlist, platform or shuffle change takes a few seconds', 'The player reads the playlist again; the panel holds its frame meanwhile.'),
         h('div.form.f2',
-          h('label.stack', 'Brightness', bright.el),
+          h('div', h('label.stack', 'Brightness', bright.el), power),
           h('label.stack', 'Playlist', f.set),
           h('div.stack', 'Platforms', h('div.row', platVal, h('button', { id: 'st-plat-btn', 'aria-haspopup': 'dialog', onclick: (e) => platSheet(e.currentTarget) }, 'Choose…'))),
           h('label.stack', 'Each GIF stays', h('div.row', f.dwell_min, '–', f.dwell_max, 's')),
-          h('label', f.shuffle, 'Shuffle')))),
+          h('label', f.shuffle, 'Shuffle'))))),
     look: () => {
       import('./boot.js').then((m) => m.bootCard(boot));
-      import('./power.js').then((m) => m.powerCard(power));
       return tab('look',
         h('div.card', lookH, h('p.cap', 'How the panel draws every GIF'),
           h('div.form.f2', h('label.stack', 'Colour', f.look), h('label.stack', 'Phosphor glow', f.glow)),
@@ -167,7 +166,7 @@ export async function mount(el) {
           h('div.form.f2', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),
           h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-trans-preview', onclick: previewTrans }, 'Preview')),
           pvBox),
-        boot, power);
+        boot);
     },
     time: () => tab('time', time.el, sched.el, follow.el),
     device: () => {
@@ -178,13 +177,14 @@ export async function mount(el) {
   };
   const built = {};
   const panel = h('div');
-  const tabs = h('div.tabs', { id: 'st-tabs', role: 'tablist' }, TABS.map(([k, t]) => h('button.tab', { role: 'tab', 'data-tab': k, onclick: () => location.replace('#settings/' + k) }, t)));
+  const tabs = h('div.tabs', { id: 'st-tabs', role: 'tablist' }, TABS.map(([k, t]) => h('button.tab', { role: 'tab', id: 'st-t-' + k, 'aria-controls': 'st-tab-' + k, 'data-tab': k, onclick: () => location.replace('#settings/' + k) }, t)));
   el.append(h('h1.ptitle', 'Settings'), banner, tabs, panel);
   let open = '', poll = 0, visible = true, dev;
   function go(k) {
     if (!BUILD[k]) k = 'play';
     for (const b of tabs.children) { b.classList.toggle('on', b.dataset.tab === k); b.ariaSelected = b.dataset.tab === k; }
     if (k === open) return;
+    if (open === 'device') dev?.hide();
     open = k;
     panel.replaceChildren(built[k] ??= BUILD[k]());
     if (k === 'device') dev?.show();
@@ -231,6 +231,6 @@ export async function mount(el) {
   return {
     show() { visible = true; app.refreshStatus().catch(() => {}); loadPlaylists(); if (open === 'device') dev?.show(); sched.load(); tick(); },
     sub: go,
-    hide() { visible = false; clearTimeout(poll); },
+    hide() { visible = false; clearTimeout(poll); if (open === 'device') dev?.hide(); },
   };
 }

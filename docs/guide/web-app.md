@@ -131,7 +131,10 @@ title makes the GIF on screen a favourite in the playlist that's playing.
 Settings has four tabs, and everything saves as you change it (a green
 **Saved ✓** says so):
 
-- **Playback:** brightness, which playlist plays, **Platforms** and
+- **Playback:** brightness, and under it **Maximum brightness**, a ceiling
+  for the brightness slider (going above the suggested level can make the
+  display reset on the power supply it came with, so only raise it if
+  you've fitted a stronger one); which playlist plays, **Platforms** and
   **Shuffle**, and how long **each GIF stays** on (3 to 30 seconds, say).
   Platforms says **All** with how many there are; **Choose…** lists them
   with how many GIFs each has (the rare ones behind **+N more**, and a box
@@ -142,11 +145,8 @@ Settings has four tabs, and everything saves as you change it (a green
   white); **Phosphor glow**, which makes dots fade out softly like an old
   plasma display; **Mirror the panel on Now**, the preview on Now (this
   browser only); the **Transition** from one GIF to the next (dissolve,
-  wipe, blinds, push, fade or none) and how fast; the **Start-up** show the
-  panel plays when it powers on; and **Power**: **Maximum brightness**, a
-  ceiling for the brightness slider. Going above the suggested level can
-  make the display reset on the power supply it came with, so only raise it
-  if you've fitted a stronger one.
+  wipe, blinds, push, fade or none) and how fast; and the **Start-up** show
+  the panel plays when it powers on.
 - **Schedule:**
   - **Time** sets your time zone, for the clock and schedules.
   - **Schedule** picks a playlist or brightness for certain days and times

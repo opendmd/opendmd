@@ -92,8 +92,15 @@ export function glyphs(o) {
   return g.length ? h('span.ov', g.map(([t, title, c]) => h('i.' + c, { title }, t))) : null;
 }
 
-let open = null;
-export function closeMenu() { open?.remove(); open = null; }
+// The element that had the focus when a menu opened gets it back on close.
+let open = null, opener = null;
+export function closeMenu() {
+  if (!open) return;
+  open.remove();
+  open = null;
+  if (opener?.isConnected) opener.focus({ preventScroll: true });
+  opener = null;
+}
 addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 addEventListener('pointerdown', (e) => { if (open && !open.contains(e.target)) closeMenu(); }, true);
 // (Not a phone keyboard coming up: only a change of width.)
@@ -136,8 +143,12 @@ export function menu(ov, path, x, y, extra) {
 // phone; one at a time, closed by Escape or a tap elsewhere.
 export function popup(el, x, y) {
   if (open !== el) closeMenu();
+  opener ??= document.activeElement;
   open = el;
   document.body.append(el);
+  // Focus inside: the first control, or (a touch screen: no keyboard popping up) the sheet itself.
+  el.tabIndex = -1;
+  (matchMedia('(pointer:coarse)').matches ? el : el.querySelector('input,select,button:not(:disabled)') || el).focus({ preventScroll: true });
   if (innerWidth > 600) {
     const r = el.getBoundingClientRect();
     el.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';

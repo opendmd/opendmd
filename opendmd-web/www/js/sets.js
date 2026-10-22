@@ -109,7 +109,7 @@ export async function mount(el) {
     title.textContent = d.path ? playlistLabel(d.path) : 'New playlist';
     nameRow.hidden = d.path && !root;
     nameL.textContent = root ? 'Save a copy as' : 'Name';
-    name.value = root ? `${playlistLabel(d.path)} copy` : d.name;
+    name.value = root ? (d.copyName ??= `${playlistLabel(d.path)} copy`) : d.name;
     saveB.textContent = root ? 'Save copy' : 'Save';
     if (playB) playB.textContent = root ? 'Save copy & play' : 'Save & play';
   }
@@ -168,6 +168,7 @@ export async function mount(el) {
       app.draft.paths = lines(text);
       app.draft.name = p.root ? '' : p.value;
       app.draft.path = p.path;
+      delete app.draft.copyName;
       ov.load(p.path);
       picked.clear();
       refresh();
@@ -244,7 +245,7 @@ export async function mount(el) {
     try {
       const paths = await run();
       if (append) app.draft.paths.push(...paths);
-      else { app.draft.paths = paths; app.draft.path = ''; ov.load(''); }
+      else app.draft.paths = paths; // the same playlist, new contents
       picked.clear();
       closeMenu();
       header();
@@ -308,9 +309,9 @@ export async function mount(el) {
 
   async function save(andActivate) {
     const n = name.value.trim().replace(/\.txt$/, '');
+    if (!n) { toast('give the playlist a name', 'bad'); name.focus(); return; }
     if (!NAME_RE.test(n)) { toast('playlist names are letters, digits, space, _ . - (no slashes, not filelist.*)', 'bad'); return; }
     if (!app.draft.paths.length) { toast('the playlist is empty', 'bad'); return; }
-    if (!n) { toast('give the playlist a name', 'bad'); name.focus(); return; }
     const path = `/sets/${n}.txt`;
     if (known.includes(path) && app.draft.name !== n && !confirm(`A playlist named "${n}" exists. Replace it?`)) return;
     try {
@@ -326,7 +327,7 @@ export async function mount(el) {
     } catch (e) { toast('save: ' + e.message, 'bad'); }
   }
 
-  name.oninput = () => { if (!app.draft.path) app.draft.name = name.value.trim(); };
+  name.oninput = () => { const d = app.draft, v = name.value.trim(); if (!d.path) d.name = v; else if (!d.path.startsWith('/sets/')) d.copyName = v; };
   eSearch.oninput = refresh;
   on('draft', () => { header(); refresh(); });
   if (app.draft.path) ov.load(app.draft.path);
