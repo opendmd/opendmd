@@ -151,6 +151,45 @@ struct Args {
     /// `@fx:tunnel?palette=chrono&cycle=1`).
     #[arg(long)]
     play: Option<String>,
+
+    /// Play a Psi formula (a `.psi` text file; the `psi` feature): compiled
+    /// here first, so an error shows its line, then played as
+    /// `@fx:psi?src=…` (which `--play` also takes). `--formula-opts
+    /// 'a=0.5&fps=100'` adds options.
+    #[cfg(feature = "psi")]
+    #[arg(long, conflicts_with_all = ["play", "demo"])]
+    formula: Option<PathBuf>,
+
+    /// Options for `--formula`: `a=`, `b=`, `c=` (the sliders), `fps=`.
+    #[cfg(feature = "psi")]
+    #[arg(long = "formula-opts", requires = "formula")]
+    formula_opts: Option<String>,
+}
+
+/// `--formula FILE`: the `@fx:psi` path for it, after a compile that
+/// reports errors with their line.
+#[cfg(feature = "psi")]
+fn formula_path(file: &Path, opts: Option<&str>) -> Result<String> {
+    use opendmd_core::psi;
+    let src = std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+    let prog = psi::compile(&src).map_err(|e| anyhow::anyhow!("{}: {}", file.display(), e.render(&src)))?;
+    let (f, r, p) = prog.counts();
+    println!(
+        "{}: {} steps ({f} per frame, {r} per row, {p} per pixel), {} registers, a {:.1} s loop",
+        file.display(),
+        prog.len(),
+        prog.regs(),
+        prog.loop_ms() as f64 / 1000.0
+    );
+    let path = opendmd_core::fx_psi::path(&src, opts.unwrap_or(""));
+    if path.len() > 512 {
+        bail!(
+            "{}: too long to play as a path ({} bytes encoded, 512 at most): shorten it",
+            file.display(),
+            path.len()
+        );
+    }
+    Ok(path)
 }
 
 fn parse_look(s: &str) -> Result<Look, String> {
@@ -617,7 +656,11 @@ fn main() -> Result<()> {
     result
 }
 
-fn run(args: Args) -> Result<()> {
+fn run(#[allow(unused_mut)] mut args: Args) -> Result<()> {
+    #[cfg(feature = "psi")]
+    if let Some(f) = &args.formula {
+        args.play = Some(formula_path(f, args.formula_opts.as_deref())?);
+    }
     if args.scale == 0 || args.scale > 32 {
         bail!("--scale must be between 1 and 32");
     }

@@ -16,6 +16,14 @@ log = "0.4"
 # only ever holds the public key.
 ed25519-dalek = { version = "3", default-features = false, features = ["fast"], optional = true }
 sha2 = { version = "0.11", default-features = false, optional = true }
+# Psi, the per-pixel effects language (`psi` feature, a spike): without
+# its own tables — `fx_psi` lends it fx's sine and palettes.
+opendmd-psi = { path = "../opendmd-psi", default-features = false, optional = true }
+
+[dev-dependencies]
+# Psi's own tables, for the test that core lends identical ones (dev
+# features are not unified into normal builds).
+opendmd-psi = { path = "../opendmd-psi" }
 
 [features]
 # Smooth motion (src/tween.rs): the shift tweener for prepared copies. Only
@@ -29,6 +37,9 @@ names = []
 # The signed firmware bundle (src/ota.rs): the firmware and the tests only,
 # so the wasm modules never see the crypto crates.
 ota = ["dep:ed25519-dalek", "dep:sha2"]
+# Psi formulas as a live effect, `@fx:psi?src=…` (src/fx_psi.rs): a spike,
+# off everywhere by default (the simulator, the firmware's psi/psi-probe).
+psi = ["dep:opendmd-psi"]
 
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
 [patch.crates-io]

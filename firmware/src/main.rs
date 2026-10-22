@@ -57,6 +57,8 @@ mod nvs_config;
 mod ota;
 mod panel;
 mod probe;
+#[cfg(feature = "psi-probe")]
+mod psi_probe;
 mod sched;
 mod sd;
 mod sdhealth;
@@ -272,6 +274,8 @@ fn main() -> Result<()> {
     if probe::ENABLED {
         panel.bench();
     }
+    #[cfg(feature = "psi-probe")]
+    psi_probe::run();
 
     // GPIO 2 (onboard LED) is deliberately untouched — see hardware/PINOUT.md.
     //
@@ -1165,6 +1169,10 @@ fn main() -> Result<()> {
                 healed_set,
             } = *h;
             card = Some(mounted);
+            // The boot-time probe's report, now that the card is ours
+            // (before anything plays or serves from it).
+            #[cfg(feature = "psi-probe")]
+            psi_probe::save(config::SD_MOUNT);
             CARD_READY.store(true, Ordering::Relaxed);
             // The saved playlist would not open: forget it (NVS is ours).
             if healed_set.is_some_and(|set| set == settings.set) {

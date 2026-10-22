@@ -18,6 +18,8 @@ pub mod filter;
 pub mod follow;
 pub mod frametime;
 pub mod fx;
+#[cfg(feature = "psi")]
+pub mod fx_psi;
 pub mod gifslim;
 pub mod history;
 pub mod hostname;
@@ -54,6 +56,9 @@ pub use index::{
 pub use manifest::{
     entry_at, index_matching, normalize_title, parse_manifest, render_manifest, scan, Entry,
 };
+/// The Psi language (the `psi` feature): see [`fx_psi`].
+#[cfg(feature = "psi")]
+pub use opendmd_psi as psi;
 pub use overrides::{Override, OverrideSet, Overrides};
 pub use player::{FrameSource, GifSource};
 pub use scheduler::{Mode, Scheduler};
