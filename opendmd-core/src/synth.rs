@@ -57,7 +57,7 @@ pub const POWER_ON_FRAME: Duration = Duration::from_millis(20);
 /// How long a title card holds its one frame (one loop).
 pub const CARD_DWELL: Duration = Duration::from_millis(3000);
 /// A virtual path longer than this is refused.
-const MAX_PATH: usize = 512;
+pub(crate) const MAX_PATH: usize = 512;
 /// The live clock's path (options after `?`: see [`ClockSpec`]).
 pub const CLOCK: &str = "@clock";
 /// The scrolling text's path prefix: `@text?msg=...` (see [`TextSpec`]).
@@ -135,7 +135,7 @@ pub fn set_wall_clock(clock: Option<WallClock>) {
     WALL.store(clock.map_or(0, |f| f as usize), Ordering::Relaxed);
 }
 
-fn wall_now() -> Option<WallTime> {
+pub(crate) fn wall_now() -> Option<WallTime> {
     match WALL.load(Ordering::Relaxed) {
         0 => None,
         a => {
@@ -219,7 +219,7 @@ fn hex_val(b: u8) -> Option<u8> {
 
 /// `application/x-www-form-urlencoded` decoding: `%XX` and `+` for a space;
 /// invalid UTF-8 decodes to nothing.
-fn url_decode(b: &[u8]) -> String {
+pub(crate) fn url_decode(b: &[u8]) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {

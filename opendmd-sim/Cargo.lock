@@ -691,7 +691,12 @@ dependencies = [
  "color_quant",
  "gif",
  "log",
+ "opendmd-psi",
 ]
+
+[[package]]
+name = "opendmd-psi"
+version = "0.0.0"
 
 [[package]]
 name = "opendmd-render"
