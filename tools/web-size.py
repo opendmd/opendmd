@@ -51,7 +51,7 @@ card…" for a card the panel can't read, the POST and the wait for it;
 imported when first opened), <= 2 KB, and so does Settings' Device tab
 (`js/device.js`: the status, the playback cache, network and the live
 rename, reload and reboot, About; imported when the tab is first open),
-<= 6 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
+<= 7 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
 by tools/api-page.py, opened from Settings -> About in its own tab), <=
 13 KB (12 KB until the Security and Firmware update sections, 2026-10-02;
 the page is only fetched when opened from Settings → About). The name index for "Find art
@@ -105,7 +105,7 @@ PANEL_GZ_BUDGET = 2 * 1024
 PANEL = {"js/panel.js"}
 PANEL_TEST_GZ_BUDGET = 2 * 1024
 PANEL_TEST = {"js/paneltest.js"}
-DEVICE_GZ_BUDGET = 6 * 1024
+DEVICE_GZ_BUDGET = 7 * 1024
 DEVICE = {"js/device.js"}
 API_GZ_BUDGET = 14 * 1024
 API = {"api.html"}

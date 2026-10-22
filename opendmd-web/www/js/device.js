@@ -18,6 +18,27 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     hostname: h('input', { type: 'text', id: 'st-hostname', value: c.hostname, maxLength: 32, oninput: (e) => { const t = e.target, i = t.selectionStart; t.value = t.value.toLowerCase(); t.setSelectionRange(i, i); }, pattern: '[a-z0-9]([a-z0-9\\-]*[a-z0-9])?' }),
   });
   const nets = h('div.chips', { id: 'st-nets' });
+  // A name another display already answers to: said under the field when
+  // it is left and before a save (GET /api/name-check; `taken` null —
+  // couldn't check — says nothing), and the device's 409 if it slips by.
+  const taken = h('p.cap.bad', { id: 'st-name-taken', hidden: true });
+  const say = (t) => { taken.textContent = t || ''; taken.hidden = !t; };
+  async function nameCheck() {
+    const n = f.hostname.value.trim().toLowerCase();
+    if (!n || n === app.config.hostname || !f.hostname.checkValidity()) return !say();
+    const r = await app.src.json('GET', '/api/name-check?name=' + encodeURIComponent(n), undefined, 5000).catch(() => null);
+    if (f.hostname.value.trim().toLowerCase() !== n) return true;
+    say(r?.taken && `Another display on this network (${r.by}) is already called “${r.name}”. Pick a different name.`);
+    return !r?.taken;
+  }
+  f.hostname.addEventListener('change', nameCheck);
+  f.hostname.addEventListener('input', () => say());
+  const netRun = (fn) => net(() => fn().catch((e) => {
+    const m = e.status == 409 && /name taken: (.+?)\.local already answers from (\S+)/.exec(e.message);
+    if (!m) throw e;
+    say(`“${m[1]}” is taken by another display (${m[2]}); nothing was saved.`);
+    throw Error('the name is taken');
+  }));
   const moved = h('div.banner', { hidden: true, id: 'st-moved', style: 'margin:12px 0 0' });
   const facts = h('dl.facts', { id: 'st-facts' });
   // One quiet line, only when the card has had trouble (sdhealth on the device).
@@ -58,9 +79,10 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
         h('label.stack', 'WiFi network (SSID)', f.wifi_ssid),
         h('label.stack', 'WiFi password', f.wifi_pass),
         h('label.stack', 'Display name', f.hostname)),
+      taken,
       h('p.cap', 'Give each display its own name: it becomes http://<name>.local/'),
       h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-scan', onclick: scan }, 'Scan for networks'), nets),
-      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: () => f.hostname.reportValidity() && save(['wifi_ssid', 'wifi_pass', 'hostname'], net) }, 'Save network')), moved),
+      h('div.row', { style: 'margin-top:12px' }, h('button', { id: 'st-save-net', onclick: async () => f.hostname.reportValidity() && await nameCheck() && save(['wifi_ssid', 'wifi_pass', 'hostname'], netRun) }, 'Save network')), moved),
     pt, fw, sec, h('div.grp', h('h3', 'About'), about));
 
   const late = (m, n) => m?.steady === undefined ? n.toLocaleString() : `${m.steady.toLocaleString()} during play · ${m.switch.toLocaleString()} at GIF changes`;
