@@ -10,7 +10,7 @@ to the panel, or add them to any playlist, just like a GIF.
 
 - **Clock:** the time, in one of four layouts, with the date and seconds if
   you want them. The player keeps its own time over the internet; set your
-  time zone in **Settings → Advanced → Time**.
+  time zone in **Settings → Schedule → Time**.
 - **Scrolling text:** type a message ("Game over", "Insert coin") and choose
   its font, colour and speed.
 
@@ -44,7 +44,7 @@ so of its loop; pick a faster speed first if you want the whole loop.
 ## Colour and glow
 
 Two settings change the look of everything the panel shows, GIFs included.
-Find them in **Settings → Playback**:
+Find them in **Settings → Look**:
 
 - **Colour:** full colour, or a single colour like a classic pinball
   display: amber, red, green, blue or white.

@@ -93,7 +93,7 @@ afterwards, the player makes its own network for you to join instead:
     lowercase letters, digits and hyphens, up to 32.
 
     If the OpenDMD web app pops up by itself when you join, you can do the
-    same there under **Settings → Advanced → Network**. The board restarts
+    same there under **Settings → Device → Network**. The board restarts
     every ten minutes while it waits; if the setup network vanishes, wait a
     moment and join it again.
 
