@@ -1,0 +1,71 @@
+# The formula gallery's check, on every pull request to the public site
+# repo (opendmd/opendmd.github.io). Installed by OpenDMD's
+# tools/site-publish.sh from site/public-repo/ in the main repository: edit
+# it there; a change made here is replaced at the next publish. The threat
+# model is in .github/gallery-check/README.md.
+#
+# - `pull_request` only, never `pull_request_target`: a contribution's run
+#   gets a read-only token and no secrets, like any run from a fork.
+# - `permissions: contents: read`, nothing else.
+# - The one action used is pinned by its full commit SHA.
+# - The contribution is data: fetched into git's object store and read by
+#   the checker with `git cat-file`; nothing from it is checked out, built
+#   or run. The checker is built from the base branch's copy (the merge
+#   commit's first parent), offline: it has no dependencies to download.
+name: Gallery check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gallery-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check the formulas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # refs/pull/<n>/merge: the pull request merged onto the current main.
+      MERGE: ${{ github.sha }}
+      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+    steps:
+      - name: Fetch the pull request (git objects only, nothing checked out)
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/pr"
+          git -C "$RUNNER_TEMP/pr" fetch -q --no-tags --depth=2 "$REPO_URL" "+$MERGE:refs/pr"
+          git -C "$RUNNER_TEMP/pr" log --format='%H %P' -1 refs/pr
+
+      - name: The checker's source, from the base branch
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/base"
+          git -C "$RUNNER_TEMP/pr" archive "refs/pr^1" .github/gallery-check | tar -x -C "$RUNNER_TEMP/base"
+
+      - name: Build the checker (offline, no dependencies)
+        run: |
+          cargo --version
+          cargo build --release --locked --offline \
+            --manifest-path "$RUNNER_TEMP/base/.github/gallery-check/opendmd-gallery/Cargo.toml" \
+            --target-dir "$RUNNER_TEMP/target"
+
+      - name: Check what the pull request adds
+        run: |
+          "$RUNNER_TEMP/target/release/opendmd-gallery" pr --repo "$RUNNER_TEMP/pr" \
+            --base "refs/pr^1" --head refs/pr \
+            --previews "$RUNNER_TEMP/previews" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the previews for the reviewer
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: formula-previews
+          path: ${{ runner.temp }}/previews
+          if-no-files-found: ignore
+          retention-days: 14

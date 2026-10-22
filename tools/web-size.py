@@ -68,6 +68,14 @@ VM, the firmware's own crate — built without std; loaded with them),
 <= 36 KB: the spike's 24.7 KB measured a module that never read an error
 message, so the error texts and their formatting were dropped; with them,
 the wasm-bindgen glue and std it was 40 KB, without std 34.7 KB.
+The formula page on the site (`--share opendmd-web/share`: `f/`'s page,
+script, style and QR encoder, gzipped here since `make web` does not
+compress them; never packed) has a line of its own, <= 12 KB (the in-house
+QR encoder is ~2.9 KB of it); it runs on the
+demo's files (the main wasm, js/preview.js and its imports, js/psikit.js,
+pkg-psi), which are counted in their own lines and printed as the page's
+first-visit total for information. js/psikit.js (the share link's encoder
+and decoder, the highlighting) counts with the Formulas line.
 The third-party licence notices (`licenses.txt`, the firmware's and the web
 app's from licenses/, opened from Settings -> Device -> About in a tab of
 its own, never part of a page load) have a line of their own, <= 40 KB:
@@ -131,7 +139,10 @@ FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
 PSI_WASM_GZ_BUDGET = 36 * 1024
 FORMULAS_GZ_BUDGET = 16 * 1024
-FORMULAS = {"js/formulas.js", "formulas.css", "formulas.json"}
+FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
+SHARE_GZ_BUDGET = 12 * 1024
+# What the formula page loads from the demo (its own files aside).
+SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
 
@@ -141,6 +152,7 @@ def main() -> int:
     ap.add_argument("root", nargs="?", default="opendmd-web/www")
     ap.add_argument("--pack", help="the www pack built from it")
     ap.add_argument("--pack-limit", type=int, default=1_310_720, help="the www partition, bytes")
+    ap.add_argument("--share", help="the site's formula page sources (opendmd-web/share)")
     args = ap.parse_args()
     root = Path(args.root)
     files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix != ".gz"
@@ -206,6 +218,23 @@ def main() -> int:
         print(f"{str(p.relative_to(root)):<40} {raw:>9,} {gz:>9,}")
     print()
     ok = True
+    if args.share:
+        import gzip
+        share = Path(args.share)
+        sraw = sgz = 0
+        for p in sorted(q for q in share.rglob("*") if q.is_file()):
+            b = p.read_bytes()
+            g = len(gzip.compress(b, 9, mtime=0))
+            sraw += len(b)
+            sgz += g
+            print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
+        uses = sum((q.with_name(q.name + ".gz").stat().st_size if q.with_name(q.name + ".gz").exists() else q.stat().st_size)
+                   for q in files if any(q.relative_to(root).as_posix().startswith(u) for u in SHARE_USES))
+        verdict = "ok" if sgz <= SHARE_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'share':<10} raw {sraw:>9,}           gz {sgz:>9,} / {SHARE_GZ_BUDGET // 1024} KB {verdict:<10}"
+              f"(first visit with the demo's files: {sgz + uses:,} B gz)")
+        print()
+        ok &= sgz <= SHARE_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
