@@ -95,7 +95,8 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
 | ![A playlist open in the editor](docs/images/playlists.png) | <img src="docs/images/phone-library.png" width="300" alt="The Library on a phone"> |
 
 The demo card in these screenshots holds the panel's own effects and the
-[Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
+[Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0);
+`make screenshots` takes them again (`tools/screenshots.py`).
 
 ## Documentation
 

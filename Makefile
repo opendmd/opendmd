@@ -72,7 +72,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build check check-wasm web web-serve web-mock web-smoke fmt clippy clean pack \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load \
+	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve site-publish
 
 test:
@@ -189,6 +189,13 @@ web-mock: web
 # a read-mostly pass against a real device): DMD_CARD_ROOT=... make web-smoke
 web-smoke: web
 	uv run tools/web-smoke.py $(if $(DEVICE),--device $(DEVICE))
+
+# The README's and the site's screenshots (docs/images/): the web app in
+# headless Chromium against the mock over the demo card (only the panel's
+# own effects and the CC0 Kenney sprites: they are published).
+screenshots: web sim-build
+	uv run tools/demo-card.py target/demo-card
+	uv run tools/screenshots.py --card target/demo-card --out docs/images
 
 # The public site (opendmd.github.io): the README, the docs, and the web app
 # with a demo card of the panel's own effects and CC0 sprites (tools/site.py,
