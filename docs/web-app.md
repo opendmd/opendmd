@@ -155,7 +155,10 @@ button lands on them.
     carries on); **Network**: WiFi (with a scan), which needs a reboot, and
     the Display name, live (Save network then says the new `<mdns>.local`
     address, from `/api/status`, and links to it when the page was opened by
-    a `.local` name); **Panel timing** (`js/panel.js`: the HUB75 clock edge,
+    a `.local` name; a name another display already answers to is said
+    under the field when it is left and stops Save network — `GET
+    /api/name-check` — and the device's 409 for one that slips by is
+    explained, nothing saved); **Panel timing** (`js/panel.js`: the HUB75 clock edge,
     latch blanking, driver chip, data clock and minimum refresh, each change
     a trial with Keep/Undo and a countdown, the boot-time ones through
     "Restart now", and Reset to defaults; **Test panel timing**,
