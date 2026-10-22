@@ -54,7 +54,12 @@ rename, reload and reboot, About; imported when the tab is first open),
 <= 7 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
 by tools/api-page.py, opened from Settings -> About in its own tab), <=
 13 KB (12 KB until the Security and Firmware update sections, 2026-10-02;
-the page is only fetched when opened from Settings → About). The name index for "Find art
+the page is only fetched when opened from Settings → About), and so does the
+headings' pixel font (`fonts/silkscreen.woff2`, Silkscreen subset to ASCII
+and a few marks by tools/font-subset.py; preloaded by index.html, so it is
+part of every page load, but it is not JS or CSS), <= 4 KB; its licence
+(`fonts/OFL.txt`, packed beside it, never fetched by the page) is "other".
+The name index for "Find art
 for a game" (`art/*.json`, one file
 fetched per search) is printed, with no budget. Raw sizes are printed for
 information. A file with no `.gz` beside it counts at its raw size. Exits 1
@@ -109,6 +114,8 @@ DEVICE_GZ_BUDGET = 7 * 1024
 DEVICE = {"js/device.js"}
 API_GZ_BUDGET = 14 * 1024
 API = {"api.html"}
+FONT_GZ_BUDGET = 4 * 1024
+FONT = {"fonts/silkscreen.woff2"}
 
 
 def main() -> int:
@@ -159,6 +166,8 @@ def main() -> int:
             kind = "device"
         elif rel in API:
             kind = "api page"
+        elif rel in FONT:
+            kind = "font"
         elif rel.startswith("art/"):
             kind = "art index"
             t = totals.setdefault(kind, [0, 0])
@@ -179,7 +188,7 @@ def main() -> int:
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
-                         ("api page", API_GZ_BUDGET),
+                         ("api page", API_GZ_BUDGET), ("font", FONT_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")
