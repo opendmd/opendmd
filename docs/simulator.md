@@ -11,7 +11,8 @@ Ready-made builds for macOS, Windows and Linux come with each release, on
 the [OpenDMD site's simulator page](https://opendmd.github.io/dev/simulator.html#download).
 <!-- site:sim-downloads-end -->
 
-Each archive holds the program, a short README and the licences. Unpack it
+Each archive holds the program, a short README, the licences and the
+third-party notices for the open-source crates it is built from. Unpack it
 and double-click `opendmd-sim`: a folder picker opens. Choose a card (a
 folder with `filelist.txt` in it) or any folder of GIFs; cancel it for the
 built-in demo of the panel's effects and live items. On Windows you can

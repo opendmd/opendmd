@@ -1,10 +1,15 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Package the desktop simulator for download: the binary, a README.txt and
-the licences, in one folder inside a zip (macOS, Windows) or a tar.gz (Linux).
+"""Package the desktop simulator for download: the binary, a README.txt, the
+licences and the third-party notices, in one folder inside a zip (macOS,
+Windows) or a tar.gz (Linux).
 
-    uv run tools/sim-package.py BINARY --platform macos-universal --out DIR
+    uv run tools/sim-package.py BINARY --platform macos-universal \
+        --notices THIRD-PARTY-LICENSES.txt --out DIR
+
+--notices is cargo-about's rendering of opendmd-sim/about.hbs for that
+platform's targets (its dependency tree differs per platform).
 
 PLATFORM is macos-universal, windows-x86_64 or linux-x86_64; the archive is
 DIR/opendmd-sim-<version>-<platform>.zip|.tar.gz, the version opendmd-sim's
@@ -56,8 +61,9 @@ Keys: Space next, P pause/resume, L LEDs/flat squares, Esc quit.
 More: {site}
 
 Licence: MIT or Apache-2.0, at your option (LICENSE-MIT.txt,
-LICENSE-APACHE.txt). OpenDMD is an independent project, not made by or
-affiliated with DMDoS.
+LICENSE-APACHE.txt). The open-source crates it is built from, and their
+licences, are listed in THIRD-PARTY-LICENSES.txt. OpenDMD is an
+independent project, not made by or affiliated with DMDoS.
 """
 
 START = {
@@ -129,6 +135,8 @@ def main() -> None:
     ap.add_argument("binary", type=Path)
     ap.add_argument("--platform", required=True, choices=PLATFORMS)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--notices", type=Path, required=True,
+                    help="THIRD-PARTY-LICENSES.txt from cargo-about for this platform")
     ap.add_argument("--version")
     a = ap.parse_args()
     if not a.binary.is_file():
@@ -140,8 +148,12 @@ def main() -> None:
     readme = README.format(version=version, label=label, rule="=" * len(title),
                            start=START[a.platform], run="opendmd-sim" if windows else "./opendmd-sim",
                            first_run=FIRST_RUN[a.platform], site=SITE)
+    notices = a.notices.read_text(encoding="utf-8")
+    if "Third-party licences" not in notices:
+        raise SystemExit(f"{a.notices} is not cargo-about's notices (opendmd-sim/about.hbs)")
     if windows:
         readme = readme.replace("\n", "\r\n")
+        notices = notices.replace("\r\n", "\n").replace("\n", "\r\n")
 
     base = f"opendmd-sim-{version}-{a.platform}"
     files = [  # (name in the folder, bytes, executable)
@@ -149,6 +161,7 @@ def main() -> None:
         ("README.txt", readme.encode(), False),
         ("LICENSE-MIT.txt", (ROOT / "LICENSE-MIT").read_bytes(), False),
         ("LICENSE-APACHE.txt", (ROOT / "LICENSE-APACHE").read_bytes(), False),
+        ("THIRD-PARTY-LICENSES.txt", notices.encode(), False),
     ]
     a.out.mkdir(parents=True, exist_ok=True)
     out = a.out / f"{base}.{kind}"

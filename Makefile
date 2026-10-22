@@ -111,19 +111,31 @@ sim-build:
 # The simulator as a download for this host (release.yml builds all three:
 # macOS universal, Windows, Linux): $(SIM_DIST)/opendmd-sim-<v>-<platform>.zip|.tar.gz,
 # stripped. On macOS both architectures, joined with lipo.
+# The third-party notices are cargo-about's (opendmd-sim/about.toml: an
+# unaccepted licence fails), the version release.yml pins:
+# cargo install --locked cargo-about@$(CARGO_ABOUT_VERSION), or CARGO_ABOUT=<path>.
 SIM_DIST ?= target/sim-dist
 SIM_HOST := $(shell uname -s)-$(shell uname -m)
+CARGO_ABOUT ?= cargo-about
+CARGO_ABOUT_VERSION := 0.9.2
+SIM_NOTICES = cd $(SIM) && v=$$($(CARGO_ABOUT) --version 2>/dev/null); \
+	[ "$$v" = "cargo-about $(CARGO_ABOUT_VERSION)" ] || { echo "need cargo-about $(CARGO_ABOUT_VERSION), have '$$v': cargo install --locked cargo-about@$(CARGO_ABOUT_VERSION)"; exit 2; }; \
+	RUSTUP_TOOLCHAIN=stable $(CARGO_ABOUT) generate --fail --locked about.hbs -o target/dist/THIRD-PARTY-LICENSES.txt
 sim-dist:
 ifeq ($(SIM_HOST),Linux-x86_64)
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable CARGO_PROFILE_RELEASE_STRIP=symbols cargo build --release --target-dir target/dist
-	uv run tools/sim-package.py $(SIM)/target/dist/release/opendmd-sim --platform linux-x86_64 --out $(SIM_DIST)
+	$(SIM_NOTICES) --target x86_64-unknown-linux-gnu
+	uv run tools/sim-package.py $(SIM)/target/dist/release/opendmd-sim --platform linux-x86_64 \
+		--notices $(SIM)/target/dist/THIRD-PARTY-LICENSES.txt --out $(SIM_DIST)
 else ifneq ($(filter Darwin-%,$(SIM_HOST)),)
 	cd $(SIM) && for t in aarch64-apple-darwin x86_64-apple-darwin; do \
 		RUSTUP_TOOLCHAIN=stable CARGO_PROFILE_RELEASE_STRIP=symbols cargo build --release --target-dir target/dist --target $$t || exit 1; done
 	lipo -create -output $(SIM)/target/dist/opendmd-sim-universal \
 		$(SIM)/target/dist/aarch64-apple-darwin/release/opendmd-sim $(SIM)/target/dist/x86_64-apple-darwin/release/opendmd-sim
 	codesign --force --sign - $(SIM)/target/dist/opendmd-sim-universal
-	uv run tools/sim-package.py $(SIM)/target/dist/opendmd-sim-universal --platform macos-universal --out $(SIM_DIST)
+	$(SIM_NOTICES) --target aarch64-apple-darwin --target x86_64-apple-darwin
+	uv run tools/sim-package.py $(SIM)/target/dist/opendmd-sim-universal --platform macos-universal \
+		--notices $(SIM)/target/dist/THIRD-PARTY-LICENSES.txt --out $(SIM_DIST)
 else
 	@echo "sim-dist: no package for $(SIM_HOST) (Linux x86_64 and macOS here; Windows in release.yml)"; exit 2
 endif
