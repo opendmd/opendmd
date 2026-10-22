@@ -31,12 +31,26 @@ const POLL: Duration = Duration::from_millis(5);
 #[derive(Parser, Debug)]
 #[command(
     name = "opendmd-sim",
-    about = "Play a DMDoS card's GIFs in a 128x32 desktop window"
+    version,
+    about = "Play a DMDoS card's GIFs in a 128x32 desktop window",
+    after_help = "With no card, a folder picker opens; cancel it (or pass --demo) for the built-in demo \
+                  of effects and live items."
 )]
 struct Args {
+    /// A card (a folder holding filelist.txt), any folder of GIFs, or one
+    /// GIF. A folder dropped onto the program arrives here.
+    #[arg(value_name = "CARD", conflicts_with = "root")]
+    card: Option<PathBuf>,
+
     /// Card root: the directory holding gifs/ and filelist.txt.
     #[arg(long)]
-    root: PathBuf,
+    root: Option<PathBuf>,
+
+    /// Play the built-in demo: the panel's effects, the clock and scrolling
+    /// text, no card needed (also what plays when the folder picker is
+    /// cancelled).
+    #[arg(long, conflicts_with_all = ["card", "root", "manifest", "play"])]
+    demo: bool,
 
     /// Manifest to play [default: <root>/filelist.txt].
     #[arg(long)]
@@ -345,10 +359,265 @@ fn first_frame(engine: &mut Engine, canvas: &mut Canvas) -> Result<String> {
     bail!("the engine produced no frame")
 }
 
-fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    let args = Args::parse();
+/// The built-in demo: live items only, drawn by the engine, so nothing is
+/// read from disk and nothing third-party is shown. The web demo's "All
+/// files" (tools/demo-card.py `LIVE`) without its GIFs.
+const DEMO: &[&str] = &[
+    "@fx:tunnel?palette=fire&texture=rings&twist=2",
+    "@text?msg=OpenDMD%20-%20open%20firmware%20for%20LED%20dot-matrix%20displays&speed=30&color=ffaa00",
+    "@fx:rotozoom?floor=1&palette=chrono&cycle=1",
+    "@fx:wire?shape=tesseract&color=ff66cc",
+    "@clock?style=big&date=1",
+    "@fx:starfield?palette=ice&density=3",
+    "@fx:tunnel?palette=chrono&cycle=1&drift=1",
+    "@text?msg=Open%20a%20folder%20of%20GIFs%20to%20play%20your%20own&speed=30&color=00ccff",
+    "@fx:rotozoom?palette=rainbow&texture=rings&wobble=2",
+    "@fx:wire?shape=morph",
+];
 
+/// Most GIFs a folder without a filelist.txt is scanned for.
+const MAX_SCAN: usize = 100_000;
+
+/// What to play: where card paths are opened from, and the playlist.
+struct Card {
+    root: PathBuf,
+    playlist: Playlist,
+    /// For messages: the folder, the GIF, or "the built-in demo".
+    label: String,
+}
+
+enum Playlist {
+    /// A manifest on disk: `filelist.txt` or `--manifest`.
+    File(PathBuf),
+    /// Lines made in memory: the demo, a folder's GIFs, one GIF, `--play`.
+    Lines(String),
+}
+
+impl Card {
+    fn demo() -> Card {
+        Card {
+            root: PathBuf::from("."),
+            playlist: Playlist::Lines(DEMO.join("\n") + "\n"),
+            label: "the built-in demo".into(),
+        }
+    }
+
+    /// `--root`, or a card folder: its filelist.txt unless `--manifest` or
+    /// `--play` says otherwise. Exactly the simulator's original behaviour.
+    fn at_root(args: &Args, root: &Path) -> Card {
+        if !root.join("gifs").is_dir() {
+            log::warn!("{} has no gifs/ directory", root.display());
+        }
+        let playlist = match &args.play {
+            Some(p) => Playlist::Lines(format!("{p}\n")),
+            None => Playlist::File(
+                args.manifest
+                    .clone()
+                    .unwrap_or_else(|| root.join("filelist.txt")),
+            ),
+        };
+        Card {
+            root: root.to_path_buf(),
+            playlist,
+            label: root.display().to_string(),
+        }
+    }
+
+    /// The positional argument (or the picked folder): a card, any folder
+    /// of GIFs, or one GIF.
+    fn open(args: &Args, path: &Path) -> Result<Card> {
+        if path.is_dir() {
+            if args.play.is_some() || args.manifest.is_some() || path.join("filelist.txt").is_file()
+            {
+                return Ok(Card::at_root(args, path));
+            }
+            let lines = scan_gifs(path)?;
+            if lines.is_empty() {
+                bail!(
+                    "{} has no filelist.txt and no GIFs: choose a card, or a folder with GIFs in it",
+                    path.display()
+                );
+            }
+            println!(
+                "{}: no filelist.txt, playing the {} GIFs in it",
+                path.display(),
+                lines.len()
+            );
+            return Ok(Card {
+                root: path.to_path_buf(),
+                playlist: Playlist::Lines(lines.join("\n") + "\n"),
+                label: path.display().to_string(),
+            });
+        }
+        if path.is_file() && is_gif(path) {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .with_context(|| format!("{}: the name is not UTF-8", path.display()))?;
+            let root = match path.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+                _ => PathBuf::from("."),
+            };
+            return Ok(Card {
+                root,
+                playlist: Playlist::Lines(format!("/{name}\n")),
+                label: path.display().to_string(),
+            });
+        }
+        if !path.exists() {
+            bail!("{} does not exist", path.display());
+        }
+        bail!("{} is not a folder or a GIF", path.display())
+    }
+
+    fn describe(&self) -> String {
+        match &self.playlist {
+            Playlist::File(p) => p.display().to_string(),
+            Playlist::Lines(_) => self.label.clone(),
+        }
+    }
+
+    fn reader(&self) -> Result<Box<dyn ReadSeek>> {
+        Ok(match &self.playlist {
+            Playlist::File(p) => Box::new(
+                std::fs::File::open(p).with_context(|| format!("reading {}", p.display()))?,
+            ),
+            Playlist::Lines(text) => Box::new(io::Cursor::new(text.clone().into_bytes())),
+        })
+    }
+}
+
+fn is_gif(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("gif"))
+}
+
+/// Every GIF under `root` as a card path (`/Sonic/SNES_Sonic_01.gif`),
+/// sorted. Hidden entries and a card's `cache/` (prepared copies of the
+/// same GIFs) are skipped; symlinked folders are not followed.
+fn scan_gifs(root: &Path) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), String::new())];
+    while let Some((dir, prefix)) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?;
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if name.starts_with('.') || name.contains(['\n', '\r']) {
+                continue;
+            }
+            let path = entry.path();
+            let card_path = format!("{prefix}/{name}");
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => {
+                    if !(prefix.is_empty() && name.eq_ignore_ascii_case("cache")) {
+                        stack.push((path, card_path));
+                    }
+                }
+                _ if path.is_file() && is_gif(&path) => {
+                    out.push(card_path);
+                    if out.len() >= MAX_SCAN {
+                        log::warn!("more than {MAX_SCAN} GIFs: playing the first {MAX_SCAN} found");
+                        out.sort();
+                        return Ok(out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// The native folder picker, or `None` if it was cancelled or there is no
+/// desktop to show it on. On Linux it is the XDG desktop portal (libdbus,
+/// loaded at run time), then zenity; neither present means `None`.
+fn pick_folder() -> Option<PathBuf> {
+    if !has_desktop() {
+        return None;
+    }
+    println!("Choose a card or a folder of GIFs (cancel for the built-in demo)");
+    rfd::FileDialog::new()
+        .set_title("OpenDMD: choose a card or a folder of GIFs")
+        .pick_folder()
+}
+
+/// Whether there is a desktop to show a dialog on: on Linux and the BSDs, an
+/// X11 or Wayland display (over SSH or on a server there is none).
+fn has_desktop() -> bool {
+    cfg!(any(windows, target_os = "macos"))
+        || std::env::var_os("DISPLAY").is_some()
+        || std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
+/// What to play, from the arguments; with none, the folder picker, and the
+/// demo if that is cancelled.
+fn choose_card(args: &Args) -> Result<Card> {
+    if args.demo {
+        return Ok(Card::demo());
+    }
+    if let Some(root) = &args.root {
+        return Ok(Card::at_root(args, root));
+    }
+    if let Some(path) = &args.card {
+        return Card::open(args, path);
+    }
+    if args.manifest.is_some() {
+        bail!("--manifest needs --root (or a card folder)");
+    }
+    if let Some(p) = &args.play {
+        // A live item needs no card; a card path is opened from here.
+        return Ok(Card {
+            root: PathBuf::from("."),
+            playlist: Playlist::Lines(format!("{p}\n")),
+            label: p.clone(),
+        });
+    }
+    if args.screenshot.is_some() || args.screenshot_canvas.is_some() {
+        return Ok(Card::demo());
+    }
+    match pick_folder() {
+        Some(dir) => Card::open(args, &dir),
+        None => {
+            println!("No folder chosen: playing the built-in demo (effects and live items)\n");
+            Ok(Card::demo())
+        }
+    }
+}
+
+/// Started the way a desktop starts it: double-clicked (no arguments), with
+/// a folder dropped on it, or `--demo`. Then an error is also shown in a
+/// dialog, because the console it was printed to closes with the program
+/// (Windows) or was never there (a Linux file manager).
+fn launched_from_desktop(args: &Args) -> bool {
+    std::env::args_os().len() <= 2
+        && args.root.is_none()
+        && args.play.is_none()
+        && args.screenshot.is_none()
+        && args.screenshot_canvas.is_none()
+}
+
+fn main() -> Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,rfd=off"))
+        .init();
+    let args = Args::parse();
+    let desktop = launched_from_desktop(&args);
+    let result = run(args);
+    if let (Err(e), true) = (&result, desktop && has_desktop()) {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("OpenDMD simulator")
+            .set_description(format!("{e:#}"))
+            .show();
+    }
+    result
+}
+
+fn run(args: Args) -> Result<()> {
     if args.scale == 0 || args.scale > 32 {
         bail!("--scale must be between 1 and 32");
     }
@@ -364,28 +633,15 @@ fn main() -> Result<()> {
     if !(0.0..=8.0).contains(&args.led_gain) {
         bail!("--led-gain must be between 0.0 and 8.0");
     }
-    if !args.root.join("gifs").is_dir() {
-        log::warn!("{} has no gifs/ directory", args.root.display());
-    }
+    let card = choose_card(&args)?;
 
     synth::set_wall_clock(Some(host_time));
-    let manifest_path = args
-        .manifest
-        .clone()
-        .unwrap_or_else(|| args.root.join("filelist.txt"));
-    // `--play`: a one-line playlist in memory.
-    let file: Box<dyn ReadSeek> = match &args.play {
-        Some(p) => Box::new(io::Cursor::new(format!("{p}\n").into_bytes())),
-        None => Box::new(
-            std::fs::File::open(&manifest_path)
-                .with_context(|| format!("reading {}", manifest_path.display()))?,
-        ),
-    };
+    let file = card.reader()?;
 
     // One streaming pass builds the offset index and the summary together;
     // the manifest is never materialised as entries. Same code path as the
     // firmware, which is the point of the simulator.
-    let filter = if args.play.is_some() {
+    let filter = if args.play.is_some() || args.demo {
         Filter::new()
     } else {
         build_filter(&args)
@@ -394,10 +650,10 @@ fn main() -> Result<()> {
     let catalog = FileCatalog::build_with(file, &filter, |entry, matched| {
         stats.observe(entry, matched)
     })
-    .with_context(|| format!("indexing {}", manifest_path.display()))?;
+    .with_context(|| format!("indexing {}", card.describe()))?;
 
     if stats.total == 0 {
-        bail!("{} has no entries", manifest_path.display());
+        bail!("{} has no entries", card.describe());
     }
     stats.print();
     if catalog.is_empty() {
@@ -422,7 +678,7 @@ fn main() -> Result<()> {
         scheduler,
         dwell,
         Box::new(DirSource {
-            root: args.root.clone(),
+            root: card.root.clone(),
         }),
     );
     engine.set_transition(args.transition);
@@ -573,9 +829,69 @@ fn main() -> Result<()> {
                 window.update();
                 std::thread::sleep(POLL);
             }
-            TickOutcome::Exhausted => bail!("nothing playable under {}", args.root.display()),
+            TickOutcome::Exhausted => bail!("nothing playable in {}", card.label),
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(argv: &[&str]) -> Args {
+        Args::try_parse_from(std::iter::once("opendmd-sim").chain(argv.iter().copied())).unwrap()
+    }
+
+    #[test]
+    fn a_folder_without_a_filelist_plays_its_gifs() {
+        let dir = std::env::temp_dir().join(format!("opendmd-sim-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for p in [
+            "b/MD_B_01.GIF",
+            "a.gif",
+            "cache/a/x.gif",
+            ".hidden/y.gif",
+            "notes.txt",
+        ] {
+            let p = dir.join(p);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"GIF89a").unwrap();
+        }
+        assert_eq!(scan_gifs(&dir).unwrap(), ["/a.gif", "/b/MD_B_01.GIF"]);
+        let card = Card::open(&args(&[]), &dir).unwrap();
+        assert!(matches!(&card.playlist, Playlist::Lines(t) if t == "/a.gif\n/b/MD_B_01.GIF\n"));
+        // One GIF: its folder is the root.
+        let card = Card::open(&args(&[]), &dir.join("b/MD_B_01.GIF")).unwrap();
+        assert_eq!(card.root, dir.join("b"));
+        assert!(matches!(&card.playlist, Playlist::Lines(t) if t == "/MD_B_01.GIF\n"));
+        // With a filelist.txt it is a card.
+        std::fs::write(dir.join("filelist.txt"), "/a.gif\n").unwrap();
+        let card = Card::open(&args(&[]), &dir).unwrap();
+        assert!(matches!(&card.playlist, Playlist::File(p) if p == &dir.join("filelist.txt")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_scripts_arguments_still_parse() {
+        // tools/demo-card.py, site-art.py and web-smoke.py
+        let a = args(&[
+            "--root",
+            "card",
+            "--play",
+            "@clock",
+            "--screenshot-canvas",
+            "f.png",
+            "--screenshot-at",
+            "40",
+        ]);
+        let card = choose_card(&a).unwrap();
+        assert_eq!(card.root, Path::new("card"));
+        assert!(matches!(&card.playlist, Playlist::Lines(t) if t == "@clock\n"));
+        // Headless with no card: the demo, never a dialog.
+        let card = choose_card(&args(&["--screenshot", "x.png"])).unwrap();
+        assert!(matches!(&card.playlist, Playlist::Lines(t) if t.lines().count() == DEMO.len()));
+        assert!(Args::try_parse_from(["opendmd-sim", "card", "--root", "card"]).is_err());
+    }
 }

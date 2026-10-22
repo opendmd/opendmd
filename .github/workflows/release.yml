@@ -2,8 +2,12 @@ name: Release
 
 # Builds the release with `make fw-release` (the firmware, the updater, the
 # web app's pack, the merged 4 MB image, the ESP Web Tools manifest and the
-# signed .odfw bundle), then the public site with `make site`. What gets
-# published depends on the trigger:
+# signed .odfw bundle), the desktop simulator for macOS (universal),
+# Windows and Linux (the `sim` jobs, one runner each), then the public site
+# with `make site`. The simulator's archives go on the GitHub release and,
+# because this repo's release assets are private, on the site under
+# downloads/ (versioned names, stable "latest" names and SHA256SUMS). What
+# gets published depends on the trigger:
 #
 #   tag v1.2.3          -> GitHub release on opendmd/opendmd (marked latest),
 #                          and the site pushed to opendmd/opendmd.github.io
@@ -17,7 +21,8 @@ name: Release
 #                          nothing is published. Untick dry_run and pick a v*
 #                          tag in "Use workflow from" to redo a tag's release.
 #
-# Every run uploads dist/ and the site as artifacts. The tag must equal the
+# Every run uploads dist/ (with the simulator's archives), each simulator
+# build and the site as artifacts. The tag must equal the
 # version in firmware/Cargo.toml with a leading "v" (v1.0.0 <-> 1.0.0), which
 # is also what fw-release writes into the app descriptor ("1.0.0 4mb").
 # A release drafted by hand for the tag keeps its notes; only the assets are
@@ -58,7 +63,98 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The desktop simulator as a download, built on each platform's own runner
+  # (macOS minutes cost 10x on a private repo, but only per release). The
+  # binary is stripped; on Windows the C runtime is linked in, so it needs
+  # no Visual C++ redistributable; on macOS both architectures are joined
+  # with lipo and ad-hoc signed (unsigned arm64 code does not run at all).
+  sim:
+    name: simulator (${{ matrix.platform }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos-universal
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: ubuntu-24.04 # glibc 2.39 here, but the binary needs only 2.34
+            platform: linux-x86_64
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stable Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          if [[ "$PLATFORM" == macos-universal ]]; then
+            rustup target add --toolchain stable aarch64-apple-darwin x86_64-apple-darwin
+          fi
+          if [[ "$PLATFORM" == windows-* ]]; then
+            echo "RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
+          fi
+          rustc +stable --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sim-${{ matrix.platform }}
+          workspaces: opendmd-sim
+
+      - uses: astral-sh/setup-uv@v10.3.0
+
+      - name: Build
+        working-directory: opendmd-sim
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            macos-universal)
+              for t in aarch64-apple-darwin x86_64-apple-darwin; do
+                cargo +stable build --release --locked --target "$t"
+              done
+              lipo -create -output target/opendmd-sim-universal \
+                target/aarch64-apple-darwin/release/opendmd-sim target/x86_64-apple-darwin/release/opendmd-sim
+              codesign --force --sign - target/opendmd-sim-universal
+              lipo -archs target/opendmd-sim-universal | grep -q x86_64
+              lipo -archs target/opendmd-sim-universal | grep -q arm64
+              bin=opendmd-sim/target/opendmd-sim-universal ;;
+            windows-x86_64)
+              cargo +stable build --release --locked
+              bin=opendmd-sim/target/release/opendmd-sim.exe ;;
+            linux-x86_64)
+              cargo +stable build --release --locked
+              bin=opendmd-sim/target/release/opendmd-sim ;;
+          esac
+          echo "BIN=$bin" >> "$GITHUB_ENV"
+
+      # No window on a runner: the headless screenshot of the built-in demo
+      # is the check that the binary starts and draws.
+      - name: It runs
+        run: |
+          set -euo pipefail
+          "$BIN" --version
+          "$BIN" --demo --screenshot "$RUNNER_TEMP/demo.png" --screenshot-at 500
+          test -s "$RUNNER_TEMP/demo.png"
+
+      - name: Package
+        run: uv run --quiet tools/sim-package.py "$BIN" --platform "$PLATFORM" --out "$RUNNER_TEMP/sim"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: opendmd-sim-${{ matrix.platform }}
+          path: ${{ runner.temp }}/sim
+          if-no-files-found: error
+
   release:
+    needs: sim
     # Not ubuntu-latest (Ubuntu 26): IDF v5.3's esp-clang 16 needs
     # libxml2.so.2, which 26.04 no longer has.
     runs-on: ubuntu-24.04
@@ -171,6 +267,13 @@ jobs:
       # prototypes, whose GIFs the repo ignores: made from the downloaded
       # Kenney pack unless cached. (The sheets they rewrite are committed
       # and come out the same.)
+      # The sim jobs' archives, where make site looks for them (SIM_DIST).
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: opendmd-sim-*
+          merge-multiple: true
+          path: target/sim-dist
+
       - name: Collect this version's assets
         env:
           VERSION: ${{ steps.plan.outputs.version }}
@@ -181,6 +284,11 @@ jobs:
                    "opendmd-$VERSION-www.pack" bootloader.bin partition-table.bin ota_data_initial.bin \
                    updater.bin manifest.json; do
             cp "dist/$f" "$RUNNER_TEMP/assets/"
+          done
+          for p in macos-universal.zip windows-x86_64.zip linux-x86_64.tar.gz; do
+            f="target/sim-dist/opendmd-sim-$VERSION-$p"
+            test -f "$f" || { echo "::error::no $f (is opendmd-sim/Cargo.toml's version $VERSION?)"; ls -l target/sim-dist; exit 1; }
+            cp "$f" "$RUNNER_TEMP/assets/"
           done
           cd "$RUNNER_TEMP/assets"
           sha256sum * | tee SHA256SUMS
@@ -214,7 +322,18 @@ jobs:
           git checkout -- out
 
       - name: The public site (make site)
-        run: make site
+        run: make site SIM_DIST=target/sim-dist
+
+      - name: The site has the simulator's downloads
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd target/site/downloads
+          for p in macos-universal.zip windows-x86_64.zip linux-x86_64.tar.gz; do
+            test -f "opendmd-sim-$VERSION-$p" && test -f "opendmd-sim-$p"
+          done
+          sha256sum -c SHA256SUMS
 
       - name: The tree is clean after the build
         run: |
