@@ -8,6 +8,7 @@ WEB    := opendmd-web
 ART    := opendmd-art-web
 PACK   := opendmd-pack
 PSI    := opendmd-psi
+PSIWEB := opendmd-psi-web
 FW     := firmware
 
 # Serial port of the DevKit. Override: make fw-flash PORT=/dev/ttyUSB1
@@ -94,6 +95,8 @@ test:
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features psi fx
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
+	@echo "==> Testing $(PSIWEB) (the web app's Formulas module)"
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo test
 
 # The same tests again, compiled to wasm and run under node — the only check
 # on this box that the browser path really works. Needs node on PATH.
@@ -101,6 +104,7 @@ test-wasm:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack test --node
 
 # Needs a real card dump; see CLAUDE.md. The prepared-copy test needs the
 # card's cache/ (make pack ARGS="convert <card-root> --verify").
@@ -143,6 +147,7 @@ check:
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 	@echo "==> Checking $(PSI)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo check --all-targets
 
 # The UI is heading for the browser, so the core and the renderer have to stay
 # free of anything wasm can't do — `std::time::Instant` above all, which has no
@@ -161,6 +166,7 @@ check-wasm:
 	@echo "==> Checking $(PSI) (and core's psi feature) for $(WASM_TARGET)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --no-default-features
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --features psi
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo check --target $(WASM_TARGET) --features bare,bump
 
 # wasm-pack: `cargo install --locked wasm-pack`. Output is gitignored.
 # Then every file the device serves gets a `<file>.gz` beside it, and the
@@ -169,7 +175,9 @@ check-wasm:
 # `Content-Encoding: gzip`, unconditionally (see "Serving gzip" in
 # CLAUDE.md). wasm-pack's package.json, .d.ts files and README are deleted
 # so they are not packed. The Studio's own wasm (opendmd-art-web, "Make
-# art") goes to www/pkg-art, loaded only when the Studio opens. The budgets
+# art") goes to www/pkg-art, loaded only when the Studio opens; the Formulas'
+# (opendmd-psi-web: Psi, no std, its own allocator) to www/pkg-psi, loaded
+# only when the Library's Formulas tab opens. The budgets
 # (gzipped) are enforced by tools/web-size.py; the packer refuses a pack over
 # the www partition. www/version.txt (gitignored) is `git describe` of this
 # build: the pack's header carries it and the firmware reports it as
@@ -184,8 +192,10 @@ WEB_WWW := $(WEB)/www
 web:
 	cd $(WEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir www/pkg
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-art
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable wasm-pack build --target web --release --out-dir ../$(WEB_WWW)/pkg-psi -- --features bare,bump
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
 	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
+	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
 	git describe --always --dirty --tags > $(WEB_WWW)/version.txt
 	uv run tools/api-doc-check.py
 	uv run tools/api-page.py docs/api.md $(WEB_WWW)/api.html
@@ -285,6 +295,7 @@ fmt:
 	cd $(ART) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo fmt
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo fmt
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo fmt
 
 clippy:
 	@echo "==> Clippy $(CORE)"
@@ -307,6 +318,9 @@ clippy:
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo clippy --lib --target $(WASM_TARGET) --no-default-features -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features psi -- -D warnings
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features psi -- -D warnings
+	@echo "==> Clippy $(PSIWEB)"
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --lib --target $(WASM_TARGET) --features bare,bump -- -D warnings
 
 clean:
 	cd $(CORE) && cargo clean
@@ -316,7 +330,8 @@ clean:
 	cd $(ART) && cargo clean
 	cd $(PACK) && cargo clean
 	cd $(PSI) && cargo clean
-	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WWW_PACK) ./target
+	cd $(PSIWEB) && cargo clean
+	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WWW_PACK) ./target
 
 # --- ESP32 firmware ---------------------------------------------------------
 # First build clones ESP-IDF v5.3 into ~/.espressif (shared between projects,

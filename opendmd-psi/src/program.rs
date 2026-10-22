@@ -223,6 +223,56 @@ impl Program {
         self.loop_ms
     }
 
+    /// Which sliders the steps read: bit 0 `a`, 1 `b`, 2 `c` (the web
+    /// app's editor shows a slider for each).
+    pub fn sliders(&self) -> u8 {
+        let mut m = 0;
+        for op in &self.ops[..self.len()] {
+            for &v in &[op.a, op.b, op.c][..code::arity(op.code)] {
+                if (S_A..=S_C).contains(&v) {
+                    m |= 1 << (v - S_A);
+                }
+            }
+        }
+        m
+    }
+
+    /// An estimate of a frame's render time on the ESP32 in µs, from the
+    /// per-step costs `psi-probe` measured (docs/research/psi-spike.md,
+    /// ns a pixel at 128 lanes over the `gray(x)` baseline of 160): the
+    /// per-pixel steps are nearly all of it; a per-row step is counted at
+    /// 32 runs of ~0.3 µs. Good to ~±25 % on the measured sketches; the
+    /// web app's editor shows it as light / medium / heavy.
+    pub fn esp32_us(&self) -> u32 {
+        use code::*;
+        let px: u32 = self.ops[self.row_end as usize..self.len()]
+            .iter()
+            .map(|op| match op.code {
+                ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
+                MUL => 86,
+                MOD => 113,
+                DIV | RECIP => 685,
+                ATAN2 => 529,
+                LEN => 642,
+                HASH => 220,
+                NEG | NOT | ABS | FLOOR | FRAC => 40,
+                SIN | COS => 110,
+                TRI | SAW | SQR => 60,
+                SQRT => 539,
+                SELECT | CLAMP => 60,
+                MIX => 130,
+                SMOOTH => 214,
+                NOISE => 855,
+                OUT_HSV => 195,
+                OUT_RGB => 120,
+                OUT_PAL => 0,
+                _ => 0,
+            })
+            .sum();
+        let row = (self.row_end - self.frame_end) as u32;
+        ((160 + px) * (W * H) as u32) / 1000 + row * 10
+    }
+
     /// Reset a program in place to the empty one (all fields zero but the
     /// defaults), for a zeroed allocation.
     pub fn clear(&mut self) {

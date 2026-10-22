@@ -402,3 +402,24 @@ fn sizes() {
     assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192);
     assert_eq!(core::mem::size_of::<Scratch<64>>(), 4864);
 }
+
+#[test]
+fn sliders_and_the_esp32_estimate() {
+    let s = |src: &str| compile(src).unwrap().sliders();
+    assert_eq!(s("gray(x)"), 0);
+    assert_eq!(s("gray(a)"), 1);
+    assert_eq!(s("frame { k = c * 2 }\nrgb(x, k, b)"), 0b110);
+    assert_eq!(s("k = a\ngray(x)"), 0, "an unused value is dropped");
+    // Within 25 % of what psi-probe measured on the ESP32 (effect frame p50, µs).
+    for (src, measured) in [
+        (sketches::PLASMA, 7245),
+        (sketches::FIRE, 4964),
+        (sketches::RING_CLOCK, 11817),
+    ] {
+        let est = compile(src).unwrap().esp32_us();
+        assert!(
+            est * 4 >= measured * 3 && est * 4 <= measured * 5,
+            "estimate {est} µs vs measured {measured} µs for {src}"
+        );
+    }
+}

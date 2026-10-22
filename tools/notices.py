@@ -25,7 +25,7 @@ bootloader and the updater. What is listed comes from the release build:
   library and the crates build-std links into it are listed as one entry.
 
 web: licenses/THIRD-PARTY-LICENSES-web.txt, the web app in the www pack:
-cargo-about over opendmd-web and opendmd-art-web for wasm32, the Rust
+cargo-about over opendmd-web, opendmd-art-web and opendmd-psi-web for wasm32, the Rust
 standard library, and the headings' font (Silkscreen, OFL 1.1).
 
 Both files are committed. --check regenerates in memory and fails when the
@@ -609,7 +609,7 @@ def rust_std_entry(texts: Texts, crates: list[str]) -> dict:
 
 def web(a: argparse.Namespace) -> None:
     abouts = [cargo_about(a.about, a.about_version, ROOT / c, "wasm32-unknown-unknown")
-              for c in ("opendmd-web", "opendmd-art-web")]
+              for c in ("opendmd-web", "opendmd-art-web", "opendmd-psi-web")]
     texts = Texts()
     packages = []
     font = ROOT / "opendmd-web/www/fonts/OFL.txt"
