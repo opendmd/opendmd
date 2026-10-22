@@ -14,11 +14,12 @@ until the live effects, `opendmd_core::fx`, which the wasm player needs:
 extra 12 KB is ~40 ms of a page load; 112 KB until the start-up show,
 `opendmd_core::boot`, which Settings previews as the `@boot` virtual file
 so the page draws exactly what the panel does: +2.4 KB gz); the
-hand-written JS + CSS <= 57 KB (40 KB until Follow RePlayOS's Settings card,
+hand-written JS + CSS <= 60 KB (40 KB until Follow RePlayOS's Settings card,
 which had ~0.6 KB left; 48 KB until the Library's redesign — the Details
 panel, the category tabs, Make art as a view —, +8 KB being ~25 ms of a
 page load from flash; 56 KB until display names and the platform chips,
-2026-10-21, after the panel test and web-ux merges). The Studio ("Make art") is loaded only when it
+2026-10-21, after the panel test and web-ux merges; 57 KB until the UX
+refresh, 2026-10-22, which treats 60 KB as a ceiling). The Studio ("Make art") is loaded only when it
 opens and has lines of its own: its wasm + glue (`pkg-art/`) <= 150 KB, and
 `js/studio.js` + `studio.css` <= 24 KB — neither counts against the lines
 above. Library's "Live" items and "Effects" (`js/live.js`: the clock, the
@@ -47,7 +48,10 @@ so does its guided "Test panel timing" (`js/paneltest.js`: the A/B
 questions and the save; imported on the first click), <= 2 KB, and
 so does Now's card format dialog (`js/card.js`: "Format
 card…" for a card the panel can't read, the POST and the wait for it;
-imported when first opened), <= 2 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
+imported when first opened), <= 2 KB, and so does Settings' Device tab
+(`js/device.js`: the status, the playback cache, network and the live
+rename, reload and reboot, About; imported when the tab is first open),
+<= 7 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
 by tools/api-page.py, opened from Settings -> About in its own tab), <=
 13 KB (12 KB until the Security and Firmware update sections, 2026-10-02;
 the page is only fetched when opened from Settings → About). The name index for "Find art
@@ -72,8 +76,10 @@ WASM_GZ_BUDGET = 116 * 1024
 # 48 KB until the Library's redesign (the Details panel, the category tabs,
 # Make art as a view): the UI is served from the flash pack at ~320 KB/s, so
 # +8 KB is ~25 ms of a page load. 56 KB until display names, the platform
-# chips and Now's empty-playlist line (2026-10-21).
-JS_CSS_GZ_BUDGET = 57 * 1024
+# chips and Now's empty-playlist line (2026-10-21); 57 KB until the UX
+# refresh (Settings in tabs, the Playlists editor as a screen, 2026-10-22):
+# a hard ceiling — the next feature pays for itself.
+JS_CSS_GZ_BUDGET = 60 * 1024
 ART_WASM_GZ_BUDGET = 150 * 1024
 STUDIO_GZ_BUDGET = 24 * 1024
 STUDIO = {"js/studio.js", "studio.css"}
@@ -99,6 +105,8 @@ PANEL_GZ_BUDGET = 2 * 1024
 PANEL = {"js/panel.js"}
 PANEL_TEST_GZ_BUDGET = 2 * 1024
 PANEL_TEST = {"js/paneltest.js"}
+DEVICE_GZ_BUDGET = 7 * 1024
+DEVICE = {"js/device.js"}
 API_GZ_BUDGET = 14 * 1024
 API = {"api.html"}
 
@@ -147,6 +155,8 @@ def main() -> int:
             kind = "panel test"
         elif rel in CARD:
             kind = "card"
+        elif rel in DEVICE:
+            kind = "device"
         elif rel in API:
             kind = "api page"
         elif rel.startswith("art/"):
@@ -168,7 +178,7 @@ def main() -> int:
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
-                         ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET),
+                         ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("api page", API_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])

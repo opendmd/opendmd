@@ -47,7 +47,7 @@ to try is the `fm6126a` driver chip.
 
 The HUB75 driver's five timing options are settings, so a fussy panel can
 be tuned without a reflash: `PUT /api/config` `panel` (docs/api.md),
-Settings → Advanced → Panel timing in the web app. The defaults are what
+Settings → Device → Panel timing in the web app. The defaults are what
 the firmware always ran.
 
 | key | default | what it is |

@@ -588,7 +588,7 @@ browser), not someone on the same WiFi: it is plain HTTP.
 
 - A `POST`/`PUT`/`DELETE` whose `Origin` is another host than its `Host`
   is a `403` (no `Origin`, as from curl, is fine).
-- **API key** (Settings → Advanced → Security): with `api_key` set (`PUT
+- **API key** (Settings → Device → Security): with `api_key` set (`PUT
   /api/config`, 8..64 of `A-Z a-z 0-9 . _ ~ -`, `""` = off; `GET` shows
   `api_key_set`), the API and the card's files need `Authorization: Bearer
   <key>` or `?key=<key>`, else `401`. Not the web app's files or `/setup`,

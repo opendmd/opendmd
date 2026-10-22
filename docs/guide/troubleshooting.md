@@ -29,9 +29,9 @@
   until you rename it. When a second one joins your network with the same
   name, one of them moves to `opendmd-2.local` (and it may be the one you
   had first). Open `opendmd-2.local` or the display's address,
-  then give each display its own name in **Settings → Advanced → Network**
-  (a name another display already has is refused). **Settings → About**
-  shows the address a display really has.
+  then give each display its own name in **Settings → Device → Network**
+  (a name another display already has is refused). **Settings → Device →
+  About** shows the address a display really has.
 
 ## The panel says there's no card, or the card can't be read
 
@@ -46,12 +46,12 @@
 
 The power supply can't keep up at high brightness, especially on mostly
 white pictures. Lower the brightness, or lower **Maximum brightness** in
-**Settings → Power** if you raised it.
+**Settings → Playback** if you raised it.
 
 ## Some LEDs show the wrong colours on certain pictures
 
 If a few dots come out the wrong colour on some pictures but not others,
-the panel may be fussy about timing. Open **Settings → Advanced → Panel
+the panel may be fussy about timing. Open **Settings → Device → Panel
 timing** and press **Test panel timing**. The panel shows some test
 pictures, switching between **A** and **B** (the letter is in the bottom
 corner): pick the one that looks clean and it is saved. If both have dots,

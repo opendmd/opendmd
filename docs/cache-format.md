@@ -134,7 +134,7 @@ is never touched.
   directly in `sets/` gets (no `.idx` to remove, never the playlist in play:
   just the temp + rename on the main task). There is no API for it; the
   browser writes it whole.
-- **Reconciliation, not enforcement.** Settings → Playback cache's "Prepare
+- **Reconciliation, not enforcement.** Settings → Device → Playback cache's "Prepare
   remaining files" reads the list and checks each listed GIF's copy (a GET
   of its first KB, the stream then cancelled — neither the firmware nor the
   mock serves ranges): missing, or without the marker (the builder made a
