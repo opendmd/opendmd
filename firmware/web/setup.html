@@ -119,7 +119,7 @@ const $ = id => document.getElementById(id);
 const say = (el, text, cls) => { const n = $(el); n.textContent = text; n.className = 'msg ' + (cls || ''); };
 const kb = n => (n / 1024).toFixed(1) + ' KB';
 // The display's name: what the firmware's PUT /api/config takes
-// (nvs_config::valid_hostname).
+// (opendmd_core::hostname::valid).
 const hostOk = n => /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(n);
 const hostVal = () => $('host').value.trim().toLowerCase();
 $('host').oninput = () => { $('hosturl').textContent = 'http://' + (hostVal() || 'opendmd') + '.local/'; };

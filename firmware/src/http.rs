@@ -91,6 +91,9 @@ pub enum NetCommand {
     /// Improv Serial over USB (`improv.rs`): a scan, or WiFi details to
     /// join and save. The worker sends the answer itself.
     Improv(crate::improv::Job),
+    /// `PUT /api/config` saved a new `hostname`: answer to it now (mDNS,
+    /// the DHCP name, `/api/status`, Improv's device info). No reply.
+    Rename(String),
 }
 
 /// Wire format for `POST /api/follow/test`.
@@ -389,15 +392,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             next.set = v;
         }
         if let Some(v) = patch.hostname {
-            let v = v.trim().to_ascii_lowercase();
-            if !v.is_empty() {
-                if !crate::nvs_config::valid_hostname(&v) {
-                    return req.bad_request(&format!(
-                        "hostname must be 1-{} lowercase letters, digits and hyphens, not starting or ending with a hyphen",
-                        crate::nvs_config::HOSTNAME_MAX
-                    ));
-                }
-                next.hostname = v;
+            match opendmd_core::hostname::parse(&v) {
+                Ok(Some(v)) => next.hostname = v,
+                Ok(None) => {}
+                Err(e) => return req.bad_request(&e),
             }
         }
         if let Some(v) = patch.tz {
@@ -529,11 +527,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 })
             }
         };
-        // WiFi and the hostname are read once, when the network starts
-        // (`net_worker`: the STA netif's DHCP name, mDNS): saved now, in
-        // effect after a reboot.
-        let reboot_required = (next.wifi_ssid.clone(), next.wifi_pass.clone()) != wifi_before
-            || next.hostname != hostname_before;
+        // WiFi details are read once, when the network starts: saved now,
+        // in effect after a reboot. A new name is applied live once saved
+        // (`NetCommand::Rename`).
+        let reboot_required = (next.wifi_ssid.clone(), next.wifi_pass.clone()) != wifi_before;
+        let renamed = (next.hostname != hostname_before).then(|| next.hostname.clone());
         let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
 
         let (tx, rx) = mpsc::channel();
@@ -549,6 +547,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         match rx.recv_timeout(REINDEX_TIMEOUT) {
             Ok(Ok(applied)) => {
+                if let Some(name) = renamed {
+                    // Queued, not waited for: the worker may be mid-connect.
+                    let _ = c.net.send(NetCommand::Rename(name));
+                }
                 if let Some(k) = &patch.api_key {
                     crate::httpd::set_api_key(k);
                     info!("API key {}", if k.is_empty() { "cleared" } else { "set" });

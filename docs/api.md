@@ -214,7 +214,9 @@ A partial update: only the fields to change, named as above (plus
 `wifi_pass`, and `follow_code`, `""` clearing it). Applied at once:
 brightness, look and glow repaint the panel; a transition applies from the
 next file; a new `set`, `platforms` or `shuffle` rebuilds the playlist in
-place. WiFi and hostname changes take effect after a reboot.
+place; a new `hostname` at once (mDNS re-announces, status `mdns` says the
+name it took; DHCP sends it from the next lease renewal). WiFi changes take
+effect after a reboot.
 
 Panel timing is tried: a `panel` object (any of its fields) runs for 60 s,
 then reverts unless `"panel_confirm":true` keeps it (`false` undoes it; with
@@ -224,7 +226,7 @@ others at a restart, and revert with one. `"panel":null` saves the defaults.
 Reply: `{"ok":true, entries, index, index_ms, overrides, hidden,
 "brightness", "max_brightness", "reboot_required", "panel", …}` (the
 playlist fields as in "Fields that recur", the panel ones as above;
-`reboot_required`: a WiFi, hostname or panel change waits for a reboot).
+`reboot_required`: a WiFi or panel change waits for a reboot).
 
 Errors (nothing saved): `400` a value out of range or not one of the names
 (the message says which), e.g. `brightness N is above the maximum M; raise
