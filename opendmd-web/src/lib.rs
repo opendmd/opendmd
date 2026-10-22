@@ -372,6 +372,15 @@ impl Preview {
         self.player.is_transitioning()
     }
 
+    /// Show one 128 × 32 RGB888 frame (a formula's, drawn by the Psi
+    /// module) instead of a file, in this preview's look.
+    #[wasm_bindgen(js_name = showRgb)]
+    pub fn show_rgb(&mut self, rgb: &[u8]) {
+        self.error.clear();
+        self.player.show_rgb(rgb, at(now_ms()));
+        let _ = self.blit();
+    }
+
     /// Stop and blank the panel.
     pub fn clear(&mut self) {
         self.error.clear();
