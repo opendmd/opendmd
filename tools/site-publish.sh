@@ -21,6 +21,13 @@ else
   git clone -q "$repo" "$work" 2>/dev/null || { mkdir -p "$work" && git -C "$work" init -q -b main && git -C "$work" remote add origin "$repo"; }
 fi
 # Commit as whoever commits here (this repo's identity may be local to it).
+# The simulator's downloads come from release.yml's sim jobs (or make
+# sim-fetch): a site built without them must not delete the published ones.
+if [ ! -d "$site/downloads" ] && [ -d "$work/downloads" ]; then
+  echo "refusing: $site has no downloads/ (the simulator's archives) but the published site does:" >&2
+  echo "run make sim-fetch (gh, this release's assets into target/sim-dist), then publish again" >&2
+  exit 1
+fi
 git -C "$work" config user.name "$(git config user.name)"
 git -C "$work" config user.email "$(git config user.email)"
 rsync -a --delete --exclude .git "$site"/ "$work"/
