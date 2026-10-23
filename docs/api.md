@@ -54,14 +54,14 @@ Play one file now (with the transition, from its prepared copy if there is
 one), then the playlist carries on.
 
 Body: `{"path": string}`, a card-absolute GIF path or a live item (see
-"Live items"); `"live":true`: only replace a formula on screen, else `409`.
+"Live items"). `"live":true`: only replace a formula on screen, else `409`.
 
 Reply: `{"ok":true,"path":"…"}`.
 
 Errors: `400` neither card-absolute nor a live item, or a bad formula;
 `404` the file does not open (what was playing carries on); `415` not a
 GIF, or a live item this firmware does not know (`@fx:nonsense`); `503` no
-playlist running; `413` body over 8 KB (a formula: 2 KB).
+playlist running; `413` body over 8 KB (formula 2 KB).
 
 ```sh
 curl -s $DMD/api/play --json '{"path":"/gifs/Consoles/SNES_Super_Metroid_01.gif"}'
@@ -703,14 +703,12 @@ curl -s $DMD/api/play --json '{"path":"@text?msg=Game%20over&speed=30&color=00ff
 `layers=1|2`. `rotozoom`: `zoom=1..4`, `floor=1` (a perspective floor),
 `wobble=0..3`, `texture=…`, `layers=1|2`. `starfield`: `density=1..3`,
 `warp=0`. `wire`: `shape=cube|octahedron|icosahedron|torus|tesseract|morph`,
-`color=RRGGBB`, `shade=0`. An unknown effect is a `415`.
+`color=RRGGBB`, `shade=0`. `psi`: a formula (`src=`). An unknown effect
+is a `415`.
 
 ```sh
 curl -s $DMD/api/play --json '{"path":"@fx:wire?shape=tesseract&speed=3"}'
 ```
-
-**`@fx:psi`** — a formula: `src=`, `a=`, `b=`, `c=`, `fps=` (status
-`now_playing.formula`).
 
 **`@boot`** — the start-up show. `len=short|full|card` (`card`: the status
 card), and for it `v=<version>`, `ip=<address>`, `ap=<network>`,
