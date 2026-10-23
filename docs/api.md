@@ -2,7 +2,7 @@
 
 Everything the web app does goes through this API, and a script can do the
 same. The source of truth is `firmware/src/http.rs`. In the examples `$DMD`
-is the player's address (filled in on the page the player serves).
+is the player's address.
 
 ```sh
 DMD=http://opendmd.local

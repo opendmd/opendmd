@@ -188,9 +188,10 @@ check-wasm:
 # the www partition. www/version.txt (gitignored) is `git describe` of this
 # build: the pack's header carries it and the firmware reports it as
 # `www_version` in /api/status (the file itself is not packed). The API
-# reference page, www/api.html (gitignored), is rendered from docs/api.md on
-# every build (tools/api-page.py), after tools/api-doc-check.py has checked
-# the doc's routes against firmware/src/http.rs both ways. www/licenses.txt
+# reference is not in the pack: it is docs/api.md, published on the site
+# (dev/api.html, and dev/api/v<version>.html per release, which Settings ->
+# About links); tools/api-doc-check.py checks the doc's routes against
+# firmware/src/http.rs both ways on every build. www/licenses.txt
 # (gitignored) is the two committed third-party notices, firmware's then the
 # web app's (licenses/, `make notices`), served as text from the pack:
 # Settings -> Device -> About links it.
@@ -204,7 +205,7 @@ web:
 	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
 	git describe --always --dirty --tags > $(WEB_WWW)/version.txt
 	uv run tools/api-doc-check.py
-	uv run tools/api-page.py docs/api.md $(WEB_WWW)/api.html
+	rm -f $(WEB_WWW)/api.html $(WEB_WWW)/api.html.gz
 	{ cat $(NOTICES_FW_TXT); printf '\n\n'; cat $(NOTICES_WEB_TXT); } > $(WEB_WWW)/licenses.txt
 	find $(WEB_WWW) -name '*.gz' -delete
 	find $(WEB_WWW) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' -o -name '*.json' -o -name licenses.txt \) \
@@ -283,6 +284,10 @@ screenshots: web sim-build
 # opendmd-gallery (make gallery-tool) before it is published.
 SITE ?= target/site
 GALLERY ?=
+# The public site repo's dev/api/ (the HTTP API page as each earlier release
+# described it; release.yml fetches it): API_ARCHIVE=<a checkout's dev/api/>.
+# This release's own copy is frozen only when the tree is its tag.
+API_ARCHIVE ?=
 GALLERY_TOOL := $(GAL)/target/release/opendmd-gallery
 SITE_REPO ?= git@github.com:opendmd/opendmd.github.io.git
 # The installer under install/ publishes whatever release dist/ holds; site
@@ -295,11 +300,11 @@ site: web sim-build gallery-tool
 	uv run tools/demo-card.py target/demo-card
 	uv run tools/site-art.py target/site-art
 	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --art target/site-art --dist $(DIST) \
-		--gallery-tool $(GALLERY_TOOL) $(if $(GALLERY),--gallery $(GALLERY))
+		--gallery-tool $(GALLERY_TOOL) $(if $(GALLERY),--gallery $(GALLERY)) $(if $(API_ARCHIVE),--api-archive $(API_ARCHIVE))
 
 # The site's pages in Chromium (the formula page and the gallery), after make site.
 site-smoke:
-	uv run tools/site-smoke.py $(SITE)
+	uv run tools/site-smoke.py $(SITE) --dist $(DIST) --art target/site-art
 
 site-serve: site
 	uv run python -m http.server 8081 -d $(SITE)

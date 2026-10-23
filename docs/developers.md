@@ -77,7 +77,10 @@ The crates are deliberately not a Cargo workspace.
 ## Reference
 
 - [HTTP API](api.md): every route the player answers, with `curl`
-  examples. Anything the web app does, a script can do too.
+  examples. Anything the web app does, a script can do too. The page
+  follows the latest docs; it links a copy for each release, as that
+  release described it, and the web app's Settings → Device → About opens
+  the one for the player's firmware.
 - [The simulator](simulator.md): running it from source, its keys and screenshots,
   and where the LED model lives.
 - [Writing an effect](writing-effects.md): how the panel's effects work,

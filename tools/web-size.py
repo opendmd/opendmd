@@ -51,10 +51,7 @@ card…" for a card the panel can't read, the POST and the wait for it;
 imported when first opened), <= 2 KB, and so does Settings' Device tab
 (`js/device.js`: the status, the playback cache, network and the live
 rename, reload and reboot, About; imported when the tab is first open),
-<= 7 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
-by tools/api-page.py, opened from Settings -> About in its own tab), <=
-15 KB (14 until Psi phase 2, 2026-10-23; 12 KB until the Security and Firmware update sections, 2026-10-02;
-the page is only fetched when opened from Settings → About), and so does the
+<= 7 KB, and so does the
 headings' pixel font (`fonts/silkscreen.woff2`, Silkscreen subset to ASCII
 and a few marks by tools/font-subset.py; preloaded by index.html, so it is
 part of every page load, but it is not JS or CSS), <= 4 KB; its licence
@@ -79,6 +76,9 @@ and decoder, the highlighting) counts with the Formulas line. Their "Show
 on panel" (`js/psishow.js`: the formula's path, the throttled live edits
 and their errors; imported with the view on a device only) has a line of
 its own, <= 2 KB.
+The API reference is not packed (until 2026-10-23 it was `api.html`, its
+own line, <= 15 KB, ~14.5 KB gz): Settings -> About links the HTTP API on
+the project site, docs/api.md as each release published it.
 The third-party licence notices (`licenses.txt`, the firmware's and the web
 app's from licenses/, opened from Settings -> Device -> About in a tab of
 its own, never part of a page load) have a line of their own, <= 40 KB:
@@ -136,8 +136,6 @@ PANEL_TEST_GZ_BUDGET = 2 * 1024
 PANEL_TEST = {"js/paneltest.js"}
 DEVICE_GZ_BUDGET = 7 * 1024
 DEVICE = {"js/device.js"}
-API_GZ_BUDGET = 15 * 1024  # 14 KB until 2026-10-23 (Psi phase 2: formulas on the panel)
-API = {"api.html"}
 FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
 PSI_WASM_GZ_BUDGET = 36 * 1024
@@ -205,8 +203,6 @@ def main() -> int:
             kind = "card"
         elif rel in DEVICE:
             kind = "device"
-        elif rel in API:
-            kind = "api page"
         elif rel in FONT:
             kind = "font"
         elif rel in LICENCES:
@@ -249,7 +245,7 @@ def main() -> int:
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET),
-                         ("api page", API_GZ_BUDGET), ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET),
+                         ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

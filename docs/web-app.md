@@ -21,10 +21,12 @@ make www-push HOST=opendmd.local           # write the pack into the player's fl
 ## Device mode and local mode
 
 **The API.** Every route the player serves, with its parameters, replies,
-limits and a `curl` example, is in [`docs/api.md`](api.md). The same
-reference is in the web app (Settings → Device → About → API reference,
-`http://opendmd.local/api.html`), with the examples already pointing at
-that player.
+limits and a `curl` example, is in [`docs/api.md`](api.md), published on
+the project site: `https://opendmd.github.io/dev/api.html` (the latest
+docs) and, for each release, `dev/api/v<version>.html` as that release
+described it. The web app does not carry it: Settings → Device → About →
+API reference opens the page for the player's firmware in a new tab (a
+release's own page; the latest for a build from source).
 
 **Device mode or local mode.** The page asks `GET /api/status`; if a player
 answers, it is in device mode and everything below talks to that device. If
