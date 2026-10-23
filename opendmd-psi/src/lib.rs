@@ -203,7 +203,10 @@ pub mod worst {
         format!("{s}\ngray(v)")
     }
 
-    pub const ALL: [(&str, fn() -> String); 3] =
+    /// A named generator.
+    pub type Case = (&'static str, fn() -> String);
+
+    pub const ALL: [Case; 3] =
         [("many locals", many_locals), ("chain", chain), ("distinct terms", distinct)];
 }
 
