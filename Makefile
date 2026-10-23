@@ -203,7 +203,7 @@ web:
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
 	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
-	git describe --always --dirty --tags > $(WEB_WWW)/version.txt
+	git describe --always --dirty --tags --match 'v*' > $(WEB_WWW)/version.txt
 	uv run tools/api-doc-check.py
 	rm -f $(WEB_WWW)/api.html $(WEB_WWW)/api.html.gz
 	{ cat $(NOTICES_FW_TXT); printf '\n\n'; cat $(NOTICES_WEB_TXT); } > $(WEB_WWW)/licenses.txt
@@ -286,8 +286,11 @@ SITE ?= target/site
 GALLERY ?=
 # The public site repo's dev/api/ (the HTTP API page as each earlier release
 # described it; release.yml fetches it): API_ARCHIVE=<a checkout's dev/api/>.
-# This release's own copy is frozen only when the tree is its tag.
+# This release's own copy is frozen when API_FREEZE says so: auto (only
+# when `git describe --match 'v*'` is exactly v<version>), yes (release.yml
+# for a tag), no.
 API_ARCHIVE ?=
+API_FREEZE ?= auto
 GALLERY_TOOL := $(GAL)/target/release/opendmd-gallery
 SITE_REPO ?= git@github.com:opendmd/opendmd.github.io.git
 # The installer under install/ publishes whatever release dist/ holds; site
@@ -300,7 +303,8 @@ site: web sim-build gallery-tool
 	uv run tools/demo-card.py target/demo-card
 	uv run tools/site-art.py target/site-art
 	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --art target/site-art --dist $(DIST) \
-		--gallery-tool $(GALLERY_TOOL) $(if $(GALLERY),--gallery $(GALLERY)) $(if $(API_ARCHIVE),--api-archive $(API_ARCHIVE))
+		--gallery-tool $(GALLERY_TOOL) $(if $(GALLERY),--gallery $(GALLERY)) $(if $(API_ARCHIVE),--api-archive $(API_ARCHIVE)) \
+		--api-freeze $(API_FREEZE)
 
 # The site's pages in Chromium (the formula page and the gallery), after make site.
 site-smoke:

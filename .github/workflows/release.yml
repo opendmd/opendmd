@@ -159,9 +159,10 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/sign/opendmd.key"
 
-      - name: Check the version in the image and the manifest
+      - name: Check the version in the image, the manifest and the www pack
         env:
           VERSION: ${{ steps.plan.outputs.version }}
+          KIND: ${{ steps.plan.outputs.kind }}
         run: |
           set -euo pipefail
           app="dist/opendmd-$VERSION-app.bin"
@@ -172,6 +173,15 @@ jobs:
           test "$manifest" = "$VERSION" || { echo "::error::dist/manifest.json says $manifest, want $VERSION"; exit 1; }
           uv run --quiet tools/fw-sign.py inspect "dist/opendmd-$VERSION.odfw"
           ! strings "$app" dist/updater.bin dist/bootloader.bin | grep -n "$HOME" || { echo "::error::the release names $HOME"; exit 1; }
+          # The web app pack's version (its header, docs/www-pack.md): what
+          # the player reports as www_version. Settings -> About links this
+          # release's API page only when it reads v<version>.
+          pack="dist/opendmd-$VERSION-www.pack"
+          wv="$(python3 -I -c 'import sys; b = open(sys.argv[1], "rb").read(64); assert b[:4] == b"ODWP"; print(b[20:20 + b[18]].decode())' "$pack")"
+          echo "www pack: '$wv'"
+          if [[ "$KIND" != dry ]]; then
+            test "$wv" = "v$VERSION" || { echo "::error::$pack's version is '$wv', want 'v$VERSION' (a dirty tree or another tag?)"; exit 1; }
+          fi
 
       - name: Collect this version's assets
         env:
@@ -238,8 +248,16 @@ jobs:
           echo "$(find "$dir/gallery" -maxdepth 1 -name '*.psi' | wc -l) gallery files"
           echo "$(find "$dir/dev/api" -maxdepth 1 -name 'v*.html' | wc -l) earlier API pages"
 
+      # A tag's site freezes its API page (dev/api/v<version>.html) outright:
+      # not by `git describe`, which another tag on the commit could change.
       - name: The public site (make site)
-        run: make site GALLERY="$RUNNER_TEMP/site-gallery/gallery" API_ARCHIVE="$RUNNER_TEMP/site-gallery/dev/api"
+        env:
+          KIND: ${{ steps.plan.outputs.kind }}
+        run: |
+          set -euo pipefail
+          freeze=auto
+          [[ "$KIND" == dry ]] || freeze=yes
+          make site GALLERY="$RUNNER_TEMP/site-gallery/gallery" API_ARCHIVE="$RUNNER_TEMP/site-gallery/dev/api" API_FREEZE=$freeze
 
       - name: The tree is clean after the build
         run: |
@@ -278,6 +296,10 @@ jobs:
         if: steps.plan.outputs.kind != 'dry'
         env:
           SITE_DEPLOY_KEY: ${{ secrets.SITE_DEPLOY_KEY }}
+          # The tag this run releases (checked against Cargo.toml by the
+          # plan; the tree checked clean after the build): site-publish.sh
+          # labels and freezes by it, not by git describe.
+          SITE_PUBLISH_DESCRIBE: ${{ steps.plan.outputs.tag }}
         run: |
           set -euo pipefail
           test -n "$SITE_DEPLOY_KEY" || { echo "::error::the SITE_DEPLOY_KEY secret is not set (see the header of release.yml)"; exit 1; }

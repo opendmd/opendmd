@@ -25,9 +25,11 @@ printf 'name: old\n' > "$tmp/seed/.github/workflows/gallery-check.yml"
 printf -- '-- name: Theirs\n-- description: A contribution\n-- author: @someone\n-- licence: CC0-1.0\ngray(x)\n' > "$tmp/seed/gallery/theirs.psi"
 g -C "$tmp/seed" add -A && g -C "$tmp/seed" commit -qm seed && g -C "$tmp/seed" push -q origin HEAD:main
 
-site() { # a site build: its version and a page
-  rm -rf "$tmp/site"; mkdir -p "$tmp/site/install" "$tmp/site/f" "$tmp/site/dev"
+site() { # a site build: its version, a page, and the public repo's API pages (as release.yml fetches them)
+  rm -rf "$tmp/site"; mkdir -p "$tmp/site/install" "$tmp/site/f" "$tmp/site/dev/api"
   printf '<p>dev</p>\n' > "$tmp/site/dev/index.html"
+  local pub="$tmp/seed"; [ ! -d "$tmp/look" ] || pub="$tmp/look"
+  cp "$pub"/dev/api/v*.html "$tmp/site/dev/api/" 2>/dev/null || true
   printf '{"version": "9.9.9"}\n' > "$tmp/site/install/release.json"
   printf '<p>%s</p>\n' "$1" > "$tmp/site/index.html"
   printf '<p>share</p>\n' > "$tmp/site/f/index.html"
@@ -45,7 +47,7 @@ look
 [ "$(cat "$tmp/look/index.html")" = "<p>v1</p>" ] || fail "the site's page was not replaced"
 [ ! -e "$tmp/look/stale.html" ] || fail "a file the site no longer has was kept"
 [ -f "$tmp/look/gallery/theirs.psi" ] || fail "the first publish removed a contribution"
-[ "$(cat "$tmp/look/dev/api/v0.9.0.html" 2>/dev/null)" = "<p>API of 0.9.0</p>" ] || fail "a publish without dev/api/ removed an earlier release's API page"
+[ "$(cat "$tmp/look/dev/api/v0.9.0.html" 2>/dev/null)" = "<p>API of 0.9.0</p>" ] || fail "a publish removed an earlier release's API page"
 cmp -s "$tmp/look/gallery/README.md" site/public-repo/gallery/README.md || fail "gallery/README.md is not ours"
 cmp -s "$tmp/look/.github/workflows/gallery-check.yml" site/public-repo/.github/workflows/gallery-check.yml || fail "the workflow is not ours"
 cmp -s "$tmp/look/.github/workflows/pages.yml" site/public-repo/.github/workflows/pages.yml || fail "the Pages workflow is not ours"
@@ -72,9 +74,17 @@ out=$(publish)
 [ "$out" = "site: no changes" ] || fail "a publish with nothing new said: $out"
 
 # dev/api/: the API page as each release described it.
-api() { # a site build carrying frozen API pages: <version>=<content> ...
-  site "api"; mkdir -p "$tmp/site/dev/api"
-  for kv in "$@"; do printf '<p>%s</p>\n' "${kv#*=}" > "$tmp/site/dev/api/v${kv%%=*}.html"; done
+api() { # a site build with these API pages changed: <version>=<content> (- removes it) ...
+  site "api"
+  for kv in "$@"; do
+    f="$tmp/site/dev/api/v${kv%%=*}.html"
+    if [ "${kv#*=}" = - ]; then rm -f "$f"; else printf '<p>%s</p>\n' "${kv#*=}" > "$f"; fi
+  done
+}
+refused() { # publish (with these variables) must be refused, saying this
+  local want=$1; shift
+  if ( [ $# -eq 0 ] || export "$@"; publish ) >/dev/null 2>"$tmp/err"; then return 1; fi
+  grep -q "$want" "$tmp/err" || { cat "$tmp/err" >&2; return 1; }
 }
 # From main between releases ("docs of <date>"): no page for its version;
 # an earlier release's page the repo lacks is added, one it has is kept.
@@ -86,7 +96,10 @@ look
 [ "$(cat "$tmp/look/dev/api/v0.8.0.html" 2>/dev/null)" = "<p>older</p>" ] || fail "a missing earlier release's API page was not added"
 # A release's site without its own page is refused.
 api 0.9.0=changed
-if SITE_PUBLISH_DESCRIBE=v9.9.9 publish >/dev/null 2>&1; then fail "a release's site without its API page was published"; fi
+refused "has no dev/api/v9.9.9.html" SITE_PUBLISH_DESCRIBE=v9.9.9 || fail "a release's site without its API page was not refused"
+# A site lacking a published release's page (built without API_ARCHIVE) is refused.
+api 0.8.0=-
+refused "lacks the published API pages dev/api/v0.8.0.html" || fail "a site without a published API page was not refused"
 # From the release's tag: its own page is added, then replaced by a republish.
 api 9.9.9=release 0.9.0=changed
 SITE_PUBLISH_DESCRIBE=v9.9.9 publish >/dev/null
@@ -108,14 +121,14 @@ site v3
 
 # A site that brings its own gallery/ is refused (it would be skipped).
 mkdir -p "$tmp/site/gallery"
-if publish >/dev/null 2>&1; then fail "a site with a gallery/ was published"; fi
+refused "the site has a gallery/" || fail "a site with a gallery/ was not refused"
 
 # An untracked file beside the checker's source is refused (it would not be vendored).
 rmdir "$tmp/site/gallery"
 stray=opendmd-gallery/src/stray-site-publish-test.rs
 trap 'rm -rf "$tmp" "$stray"' EXIT
 : > "$stray"
-if publish >/dev/null 2>&1; then rm -f "$stray"; fail "a publish with an untracked file in the checker's source went ahead"; fi
+refused "untracked files in the checker's source" || { rm -f "$stray"; fail "a publish with an untracked file in the checker's source was not refused"; }
 rm -f "$stray"
 
 # The vendored checker builds as the public workflow builds it: offline,

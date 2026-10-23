@@ -343,7 +343,7 @@ def api_pages(browser, site: Path, dist: Path, art: Path, errors: list[str]) -> 
         check(page.locator('nav a.on[href="api.html"]').count() == 1, "api: the frozen page's link leads back to the latest")
         page.context.close()
         # Off a tag (`git describe` is not v<version>), auto freezes nothing.
-        desc = subprocess.run(["git", "describe", "--always", "--dirty", "--tags"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+        desc = subprocess.run(["git", "describe", "--always", "--dirty", "--tags", "--match", "v*"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
         if desc != f"v{ver}":
             build("auto")
             names = sorted(p.name for p in (out / "dev/api").iterdir())

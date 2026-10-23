@@ -19,19 +19,24 @@
 # - dev/api/: the HTTP API page as each release described it
 #   (v<version>.html, tools/site.py). Nothing there is ever removed or
 #   replaced, with one exception: a release's own page, published from that
-#   release's tag (git describe is exactly v<version>), may replace an
-#   earlier publish of the same version. A publish from anywhere else (main
-#   between releases, "docs of <date>") adds no page for its version; the
-#   earlier releases' pages the site carries (copies of what is here, which
-#   release.yml fetched) are added only where missing.
+#   release's tag (git describe, or SITE_PUBLISH_DESCRIBE, is exactly
+#   v<version>), may replace an earlier publish of the same version. A
+#   publish from anywhere else (main between releases, "docs of <date>")
+#   adds no page for its version; the earlier releases' pages the site
+#   carries (copies of what is here, which release.yml fetched) are added
+#   only where missing. A site that lacks one the repo has is refused: its
+#   dev/api.html would not list it (build it with API_ARCHIVE, see the
+#   refusal).
 #
 # Commits as "Site <release>" only when something changed.
 # tools/site-publish-test.sh runs it against a local bare repository
 # (SITE_PUBLISH_ALLOW_DIRTY=1 is for that test only).
 set -euo pipefail
 site=$1 repo=$2 work=${SITE_REPO_WORK:-target/site-repo}
-# (SITE_PUBLISH_DESCRIBE stands in for git describe: that test only.)
-version=${SITE_PUBLISH_DESCRIBE:-$(git describe --always --dirty --tags)}
+# SITE_PUBLISH_DESCRIBE stands in for git describe: release.yml sets it to
+# the tag it releases (after checking the tree is clean), so another tag on
+# the same commit cannot change what is published; and the test.
+version=${SITE_PUBLISH_DESCRIBE:-$(git describe --always --dirty --tags --match 'v*')}
 case $version in *-dirty) [ "${SITE_PUBLISH_ALLOW_DIRTY:-}" = 1 ] || { echo "refusing: the working tree is dirty ($version); commit first" >&2; exit 1; };; esac
 for kept in gallery .github; do
   [ ! -e "$site/$kept" ] || { echo "refusing: the site has a $kept/, which the Pages repo keeps for itself" >&2; exit 1; }
@@ -64,6 +69,11 @@ if [ -d "$work/.git" ]; then
 else
   git clone -q "$repo" "$work" 2>/dev/null || { mkdir -p "$work" && git -C "$work" init -q -b main && git -C "$work" remote add origin "$repo"; }
 fi
+# Every earlier API page here must be in the site, or dev/api.html would not link it.
+missing=$(for f in "$work"/dev/api/v*.html; do [ ! -f "$f" ] || [ -f "$site/dev/api/${f##*/}" ] || printf ' dev/api/%s' "${f##*/}"; done)
+[ -z "$missing" ] || { echo "refusing: the site lacks the published API pages$missing, so its dev/api.html would not list them;" \
+  "fetch them (git clone --depth 1 --filter=blob:none --no-checkout $repo D && git -C D sparse-checkout set --no-cone '/dev/api/v*.html'" \
+  "&& git -C D checkout) and build with make site API_ARCHIVE=D/dev/api" >&2; exit 1; }
 # Commit as whoever commits here (this repo's identity may be local to it).
 git -C "$work" config user.name "$(git config user.name)"
 git -C "$work" config user.email "$(git config user.email)"

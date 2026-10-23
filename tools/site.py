@@ -510,7 +510,7 @@ def semver_key(v: str) -> tuple:
 def describe() -> str:
     """This tree's `git describe`, as tools/site-publish.sh reads it."""
     try:
-        return subprocess.run(["git", "describe", "--always", "--dirty", "--tags"], cwd=ROOT, check=True,
+        return subprocess.run(["git", "describe", "--always", "--dirty", "--tags", "--match", "v*"], cwd=ROOT, check=True,
                               capture_output=True, text=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return ""
@@ -601,7 +601,7 @@ def api_pages(out: Path, info: dict, art: dict, archive: Path | None, freeze: st
     """dev/api/: the earlier releases' frozen API pages, copied as they are,
     and, when `freeze` says so, this release's, rendered now (replacing an
     earlier publish of the same version). `freeze` "auto": only when this
-    tree is the release's tag, clean (`git describe` is exactly
+    tree is the release's tag, clean (`git describe --match 'v*'` is exactly
     v<version>, the test site-publish.sh makes); a site built from main
     between releases freezes nothing. Returns the versions, newest first."""
     ver = info["version"]
