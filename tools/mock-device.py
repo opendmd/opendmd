@@ -206,6 +206,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   divided by `speed` (1..4, default 2): 10 ms frames and twice as many by
   default (`fps=100`), 40 ms and half as many at `fps=25`). A playlist line may be one too; `/api/cache` never counts them as
   needing a copy.
+  **Formulas** (`@fx:psi?src=..[&a=&b=&c=&fps=]`, a non-empty `src`): 20 ms
+  frames (10 at `fps=100`, 40 at 25) over the source's `loop N` seconds
+  (default 8); not compiled here (any `src` plays). A formula over the
+  formula on screen replaces it in place (no new ordinal, a fresh dwell);
+  `"live":true` does only that and is a 409 when no formula is on screen.
+  Over 2,048 B a formula's path is a 413.
 - **`GET /api/stat?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
 - **`/api/status`** has `index_state` (`ready`, or `unavailable` when the
@@ -940,7 +946,9 @@ def live_parse(path: str):
     percent-decoded, or None for anything else (a text needs a non-empty
     `msg`, an effect a known name)."""
     head, _, query = path.partition("?")
-    if head.startswith("@fx:") and head[4:] in FX:
+    if head == "@fx:psi" and "src=" in query:
+        pass
+    elif head.startswith("@fx:") and head[4:] in FX:
         pass
     elif head not in ("@clock", "@text", "@boot"):
         return None
@@ -949,6 +957,8 @@ def live_parse(path: str):
         k, _, v = part.partition("=")
         params[k] = urllib.parse.unquote(v)
     if head == "@text" and not params.get("msg"):
+        return None
+    if head == "@fx:psi" and not params.get("src", "").strip():
         return None
     return head[1:], params
 
@@ -968,6 +978,12 @@ def live_delays(kind: str, params: dict[str, str]) -> list[int]:
     if kind == "boot":
         length = params.get("len", "short")
         return [10] * (BOOT_MS.get(length, BOOT_MS["short"]) // 10)
+    if kind == "fx:psi":
+        # A formula: its `loop N` seconds of 20 ms frames (fps=100: 10, 25: 40).
+        delay = {"100": 10, "25": 40}.get(params.get("fps", ""), 20)
+        m = re.search(r"(?:^|;|\n)\s*loop\s+([0-9.]+)", params.get("src", ""))
+        secs = min(3600.0, max(0.1, float(m.group(1)))) if m else 8.0
+        return [delay] * max(1, int(secs * 1000) // delay)
     if kind.startswith("fx:"):
         # A loop: the base frames x 20 / delay / speed (1..4, default 2);
         # 10 ms frames (fps=100, the default), 20 (50) or 40 (25).
@@ -1011,6 +1027,8 @@ def virtual_title(path: str) -> str | None:
         return path[len("@card:"):].split("|", 1)[0]
     live = live_parse(path)
     if live is not None:
+        if live[0] == "fx:psi":
+            return "Formula"
         if live[0].startswith("fx:"):
             return FX[live[0][3:]][0]
         if live[0] == "boot":
@@ -1875,6 +1893,12 @@ class Player:
         # now_playing entry right away instead of an empty one for up to
         # --dwell seconds.
         self.advance()
+
+    def retune(self, path: str):
+        """Engine::retune: a formula over the formula on screen, in place
+        (the same ordinal, a fresh dwell)."""
+        self.played = path
+        self.last_advance = time.monotonic()
 
     def play_now(self, path: str):
         self.played = path
@@ -3440,14 +3464,24 @@ def make_handler(ctx: Context, quiet: bool):
                 return
             if p.startswith("@"):
                 # A live item: drawn by the player, no file lookup.
+                formula = p.startswith("@fx:psi?")
+                if formula and len(p.encode()) > 2048:
+                    self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is 2048 B)")
+                    return
                 if not is_live(p):
-                    self.send_error_json(415, f"{p}: not a playable file")
+                    self.send_error_json(415, f"{p[:96]}: not a playable file")
                     return
                 with ctx.lock:
                     if not ctx.player.playlist:
                         self.send_error_json(503, "no playlist is running")
                         return
-                    ctx.player.play_now(p)
+                    if formula and (ctx.player.current() or "").startswith("@fx:psi?"):
+                        ctx.player.retune(p)
+                    elif req.get("live") is True:
+                        self.send_error_json(409, "no formula is on the panel now")
+                        return
+                    else:
+                        ctx.player.play_now(p)
                 self.send_json(200, {"ok": True, "path": p})
                 return
             rel = card_path(p) if p.startswith("/") else None

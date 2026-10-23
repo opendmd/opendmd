@@ -75,7 +75,10 @@ QR encoder is ~2.9 KB of it); it runs on the
 demo's files (the main wasm, js/preview.js and its imports, js/psikit.js,
 pkg-psi), which are counted in their own lines and printed as the page's
 first-visit total for information. js/psikit.js (the share link's encoder
-and decoder, the highlighting) counts with the Formulas line.
+and decoder, the highlighting) counts with the Formulas line. Their "Show
+on panel" (`js/psishow.js`: the formula's path, the throttled live edits
+and their errors; imported with the view on a device only) has a line of
+its own, <= 2 KB.
 The third-party licence notices (`licenses.txt`, the firmware's and the web
 app's from licenses/, opened from Settings -> Device -> About in a tab of
 its own, never part of a page load) have a line of their own, <= 40 KB:
@@ -140,6 +143,8 @@ FONT = {"fonts/silkscreen.woff2"}
 PSI_WASM_GZ_BUDGET = 36 * 1024
 FORMULAS_GZ_BUDGET = 16 * 1024
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
+SHOW_GZ_BUDGET = 2 * 1024
+SHOW = {"js/psishow.js"}
 SHARE_GZ_BUDGET = 12 * 1024
 # What the formula page loads from the demo (its own files aside).
 SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "fonts/silkscreen.woff2")
@@ -172,6 +177,8 @@ def main() -> int:
             kind = "psi wasm"
         elif rel in FORMULAS:
             kind = "formulas"
+        elif rel in SHOW:
+            kind = "show"
         elif rel in STUDIO:
             kind = "studio"
         elif rel in LIVE:
@@ -241,7 +248,7 @@ def main() -> int:
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
-                         ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET),
+                         ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET),
                          ("api page", API_GZ_BUDGET), ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET),
                          ("art index", None), ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
