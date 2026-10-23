@@ -94,7 +94,7 @@ test:
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PSI) (Psi formulas; + core's and the simulator's psi feature)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test
-	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features psi fx
+	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	@echo "==> Testing $(PSIWEB) (the web app's Formulas module)"
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo test
@@ -443,15 +443,18 @@ fw-capture:
 fw-erase:
 	$(HOME)/.local/bin/esptool --chip esp32 --port $(PORT) erase-flash
 
-# Both feature sets: the bench build (dev-credentials + FW_FEATURES) and the
-# release build (no features, no .env), so neither cfg branch rots.
+# The feature sets: the bench build (dev-credentials + FW_FEATURES), the
+# release build (the defaults, no .env) and none at all (no psi), so no cfg
+# branch rots.
 fw-clippy: fw-sdkconfig-flavour
 	@mkdir -p $(FW)/target
 	@$(FW_BENCH_FRAGMENT)
 	@echo "==> Clippy firmware, --features $(FW_DEV_FEATURES)"
 	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets $(FW_CARGO_FEATURES) -- -D warnings'
-	@echo "==> Clippy firmware, release feature set (none)"
+	@echo "==> Clippy firmware, release feature set (the defaults: psi)"
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets -- -D warnings'
+	@echo "==> Clippy firmware, no features (without psi)"
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets --no-default-features -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt

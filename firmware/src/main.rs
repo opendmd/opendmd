@@ -323,6 +323,9 @@ fn main() -> Result<()> {
     clock::set_timezone(&settings.tz, &settings.tz_name);
     // The live clock (`@clock`) reads local time from here.
     opendmd_core::synth::set_wall_clock(Some(clock::wall_now));
+    // Formulas time their frames (the governor: `fx_psi::Governor`).
+    #[cfg(feature = "psi")]
+    opendmd_core::fx_psi::set_clock(Some(|| unsafe { esp_idf_sys::esp_timer_get_time() } as u32));
     let mut sched = Scheduling::new(&settings.schedule);
     // Follow RePlayOS: the overlay and the sequence (`follow.rs`).
     let mut runner = follow::Runner::default();
@@ -544,14 +547,19 @@ fn main() -> Result<()> {
                     drop(s);
                     let _ = reply.send(paused);
                 }
-                Command::PlayNow { path, reply } => {
+                Command::PlayNow { path, live, reply } => {
                     // One open, here between frames (a directory scan: ~6 ms
                     // in a bucket, ~330 ms in `gifs/Consoles`), then the file
                     // takes the screen at the next tick under the usual dwell.
-                    let outcome = play_now(engine.as_mut(), &path, epoch.elapsed());
+                    // A formula over a formula is a live edit, in place.
+                    let outcome = match retune(engine.as_mut(), &path, epoch.elapsed()) {
+                        Some(r) => r,
+                        None if live => Err(PlayError::MovedOn),
+                        None => play_now(engine.as_mut(), &path, epoch.elapsed()),
+                    };
                     match &outcome {
-                        Ok(()) => log::info!("play now: {path}"),
-                        Err(e) => log::warn!("play now: {e:?}"),
+                        Ok(()) => log::info!("play now: {}", short(&path)),
+                        Err(e) => log::warn!("play now: {}: {e:?}", short(&path)),
                     }
                     let _ = reply.send(outcome);
                 }
@@ -2064,17 +2072,41 @@ fn play_now(engine: Option<&mut Engine>, path: &str, now: Duration) -> Result<()
     let Some(e) = engine else {
         return Err(PlayError::NoPlaylist);
     };
-    e.play_now(path, now).map_err(|err| {
-        let msg = format!("{path}: {err}");
-        if err.kind() == std::io::ErrorKind::InvalidData {
-            PlayError::Unplayable(msg)
-        } else {
-            PlayError::NotFound(msg)
-        }
-    })
+    e.play_now(path, now).map_err(|err| play_error(path, err))
+}
+
+fn play_error(path: &str, err: std::io::Error) -> PlayError {
+    match err.kind() {
+        // A formula's compiler (`fx_psi::io_error`): its sentence alone.
+        std::io::ErrorKind::InvalidInput => PlayError::BadFormula(err.to_string()),
+        std::io::ErrorKind::InvalidData => PlayError::Unplayable(format!("{}: {err}", short(path))),
+        _ => PlayError::NotFound(format!("{}: {err}", short(path))),
+    }
+}
+
+/// A formula over the formula on screen: in place (`Engine::retune`).
+/// `None` when either is not a formula.
+#[cfg(feature = "psi")]
+fn retune(engine: Option<&mut Engine>, path: &str, now: Duration) -> Option<Result<(), PlayError>> {
+    Some(engine?.retune(path, now)?.map_err(|e| play_error(path, e)))
+}
+
+#[cfg(not(feature = "psi"))]
+fn retune(_: Option<&mut Engine>, _: &str, _: Duration) -> Option<Result<(), PlayError>> {
+    None
+}
+
+/// A path for a log line: a formula's (up to 2 KB) cut to its start.
+fn short(path: &str) -> &str {
+    let mut n = path.len().min(96);
+    while !path.is_char_boundary(n) {
+        n -= 1;
+    }
+    &path[..n]
 }
 
 fn log_started(ordinal: u64, path: &str, served: Option<sd::Served>) {
+    let path = short(path);
     log::info!(
         "[{ordinal}] {path} <- {} (heap {} B free, largest block {} B)",
         match served {

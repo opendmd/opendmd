@@ -56,6 +56,24 @@ const MAX_JSON_BODY: usize = 8192;
 #[derive(serde::Deserialize)]
 struct PlayRequest {
     path: String,
+    /// A live edit of the formula on screen: 409 if there is none any more.
+    #[serde(default)]
+    live: bool,
+}
+
+/// `/api/play`'s and Previous's answer to a [`PlayError`] (or a timeout).
+fn play_reply<T>(req: &mut Req, r: Result<Result<(), PlayError>, T>, ok: &str) -> Result<()> {
+    match r {
+        Ok(Ok(())) => req.json(ok),
+        Ok(Err(PlayError::NotFound(e))) => req.not_found(&e),
+        Ok(Err(PlayError::Unplayable(e))) => req.error(415, "415 Unsupported Media Type", &e),
+        Ok(Err(PlayError::BadFormula(e))) => req.bad_request(&e),
+        Ok(Err(PlayError::MovedOn)) => req.error(409, "409 Conflict", "no formula is on the panel now"),
+        Ok(Err(PlayError::NoPlaylist)) => {
+            req.error(503, "503 Service Unavailable", "no playlist is running")
+        }
+        Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
+    }
 }
 
 /// Wire format for `POST /api/panel/test`: `{"setting":"clk_phase"}` or
@@ -334,15 +352,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if c.cmd.send(Command::Back(tx)).is_err() {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        match rx.recv_timeout(REPLY_TIMEOUT) {
-            Ok(Ok(())) => req.json(r#"{"ok":true}"#),
-            Ok(Err(PlayError::NotFound(e))) => req.not_found(&e),
-            Ok(Err(PlayError::Unplayable(e))) => req.error(415, "415 Unsupported Media Type", &e),
-            Ok(Err(PlayError::NoPlaylist)) => {
-                req.error(503, "503 Service Unavailable", "no playlist is running")
-            }
-            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
-        }
+        play_reply(req, rx.recv_timeout(REPLY_TIMEOUT), r#"{"ok":true}"#)
     })?;
 
     let c = ctx.clone();
@@ -759,6 +769,22 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
+        // A formula (`@fx:psi?src=…`) may be up to 2 KB; it is compiled on
+        // the main task as it opens (a compile error or one too heavy for
+        // the panel is a 400 with the compiler's sentence).
+        if opendmd_core::synth::is_formula(&play.path)
+            && play.path.len() > opendmd_core::synth::MAX_FORMULA_PATH
+        {
+            return req.error(
+                413,
+                "413 Payload Too Large",
+                &format!(
+                    "this formula is too long for the panel ({} B as sent; the limit is {} B)",
+                    play.path.len(),
+                    opendmd_core::synth::MAX_FORMULA_PATH
+                ),
+            );
+        }
         // A virtual file (`@clock`, `@text?msg=…`) is drawn, not read; one
         // this build does not know is a 415 from the engine.
         let virtual_file = opendmd_core::synth::is_virtual(&play.path);
@@ -772,24 +798,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if c.cmd
             .send(Command::PlayNow {
                 path: play.path.clone(),
+                live: play.live,
                 reply: tx,
             })
             .is_err()
         {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        match rx.recv_timeout(REPLY_TIMEOUT) {
-            Ok(Ok(())) => req.json(&format!(
-                r#"{{"ok":true,"path":{}}}"#,
-                json_string(&play.path)
-            )),
-            Ok(Err(PlayError::NotFound(e))) => req.not_found(&e),
-            Ok(Err(PlayError::Unplayable(e))) => req.error(415, "415 Unsupported Media Type", &e),
-            Ok(Err(PlayError::NoPlaylist)) => {
-                req.error(503, "503 Service Unavailable", "no playlist is running")
-            }
-            Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
-        }
+        let ok = format!(r#"{{"ok":true,"path":{}}}"#, json_string(&play.path));
+        play_reply(req, rx.recv_timeout(REPLY_TIMEOUT), &ok)
     })?;
 
     // The panel-timing test (`opendmd_core::panel_test`): the firmware's
@@ -1870,7 +1887,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
     format!(
         concat!(
             r#"{{"version":{},"variant":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
-            r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}}},"paused":{},{}"#,
+            r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}}},"paused":{},{}"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"heap_floor_at":{},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"#,
@@ -1893,6 +1910,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         json_string(&s.title),
         s.position_at(t).as_millis(),
         s.frame,
+        formula_json(&s.path),
         s.paused,
         recent,
         s.entries,
@@ -1938,6 +1956,26 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         crate::follow::status_json(),
         looks,
     )
+}
+
+/// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms"}` while
+/// a formula plays: its mean render time, the frame time its governor
+/// holds it to (`fx_psi::Governor`) and the one it asked for; empty
+/// otherwise.
+#[cfg(feature = "psi")]
+fn formula_json(path: &str) -> String {
+    let (us, ms, asked) = opendmd_core::fx_psi::stats();
+    if !opendmd_core::synth::is_formula(path) || ms == 0 {
+        return String::new();
+    }
+    format!(
+        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked}}}"#
+    )
+}
+
+#[cfg(not(feature = "psi"))]
+fn formula_json(_: &str) -> String {
+    String::new()
 }
 
 /// The end of the status object: `"look","glow","glow_held","attract_live",

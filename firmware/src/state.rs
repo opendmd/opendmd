@@ -386,6 +386,12 @@ pub enum PlayError {
     Unplayable(String),
     /// There is no playlist running to interrupt (503).
     NoPlaylist,
+    /// A formula that does not compile, or is too heavy (400): the
+    /// compiler's sentence.
+    BadFormula(String),
+    /// A live edit (`"live":true`) found no formula on screen any more: the
+    /// schedule moved on (409); nothing was played.
+    MovedOn,
 }
 
 /// Work for the main task. Everything the web API can change goes through here.
@@ -407,6 +413,9 @@ pub enum Command {
     /// what was on screen keeps playing.
     PlayNow {
         path: String,
+        /// Only change a formula already on screen (a live edit), else
+        /// [`PlayError::MovedOn`].
+        live: bool,
         reply: mpsc::Sender<Result<(), PlayError>>,
     },
     /// Previous: play the entry of Recently played one older than the one on
