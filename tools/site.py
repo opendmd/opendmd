@@ -34,6 +34,13 @@
 - /art/        the landing page's tiles and the wordmark (tools/site-art.py: recordings of the
                panel's own effects and live items, and CC0 sprites), drawn
                as LEDs by CSS
+- /dev/api/    the HTTP API as each release described it: v<version>.html, a
+               copy of dev/api.html frozen when the site is built from that
+               release's tag (`--api-freeze`), beside the earlier releases'
+               copies from the public site repo's dev/api/ (`--api-archive`,
+               fetched by release.yml; site-publish.sh never removes them).
+               dev/api.html (the latest) links them all; the web app's
+               Settings -> About links its firmware's
 - /licenses/   the licences: a page (LICENCES below, linked from every
                page's footer) and the third-party notices from licenses/
                (tools/notices.py), the same files the release and the
@@ -56,6 +63,7 @@ import json
 import posixpath
 import re
 import shutil
+import subprocess
 from pathlib import Path
 
 import markdown
@@ -281,6 +289,8 @@ ol.steps>li::before{content:counter(step);position:absolute;left:16px;top:13px;w
 border-radius:50%;background:var(--acc);color:#111;font-weight:800;box-shadow:0 0 16px rgba(247,165,49,.4)}
 ol.steps>li>:first-child{margin-top:0}ol.steps>li>:last-child{margin-bottom:0}
 
+p.vers{font-size:14px;color:var(--mut)}
+
 footer{grid-column:2;padding:0 44px 40px;color:var(--mut);font-size:13px}
 footer p{max-width:860px;border-top:1px solid var(--line);padding-top:16px}
 
@@ -334,6 +344,10 @@ Code under <a href="{up}LICENSE-MIT.txt">MIT</a> or <a href="{up}LICENSE-APACHE.
 BANNER = ("<strong>Preview.</strong> OpenDMD isn't publicly launched yet: what's here works, "
           "but it may change, and the source code isn't public yet.")
 DESCRIPTION = "OpenDMD: open firmware and a web app for the DMDoS LED dot-matrix display."
+# The HTTP API's frozen copies (see the docstring): dev/api/v<version>.html.
+API_PAGE = "docs/api.md"
+API_DIR = "dev/api"
+API_FROZEN = re.compile(r"v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\.html")
 LINK = re.compile(r'(\]\(|(?:src|href)=")([^)"\s]+)')
 
 
@@ -371,13 +385,15 @@ def rewrite(src: str, page: str, text: str, assets: set[str]) -> str:
     return re.sub(r"\[([^\]]+)\]\(#unpublished:[^)]*\)", r"\1", text)
 
 
-def menu(page: str) -> str:
+def menu(page: str, on: str | None = None) -> str:
+    """The docs menu for `page`, with `on` (default: the page itself) marked."""
+    on = on or page
     out = []
     for label, target in MENU:
         if label is None:
             out.append(f"<h4>{html.escape(target)}</h4>")
             continue
-        cls = "demo" if target == "demo/" else "on" if target == page else ""
+        cls = "demo" if target == "demo/" else "on" if target == on else ""
         out.append(f'<a href="{rel(page, target)}"{f" class={cls!r}" if cls else ""}>{html.escape(label)}</a>')
     return "".join(out)
 
@@ -483,6 +499,54 @@ def markers(page: str, text: str, rel_info: dict) -> str:
                         f'(OpenDMD {ver}, <code>opendmd-{ver}.odfw</code>)</p>')
 
 
+def semver_key(v: str) -> tuple:
+    """Sort key for a version: 1.0.0-beta.2 < 1.0.0-beta.10 < 1.0.0 < 1.0.1."""
+    core, _, pre = v.partition("-")
+    nums = tuple(int(x) for x in core.split("."))
+    ids = tuple((0, int(x), "") if x.isdigit() else (1, 0, x) for x in pre.split(".")) if pre else ()
+    return nums, not pre, ids
+
+
+def describe() -> str:
+    """This tree's `git describe`, as tools/site-publish.sh reads it."""
+    try:
+        return subprocess.run(["git", "describe", "--always", "--dirty", "--tags"], cwd=ROOT, check=True,
+                              capture_output=True, text=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+def api_archive(archive: Path | None) -> dict[str, Path]:
+    """The earlier releases' frozen API pages (the public repo's dev/api/):
+    version -> file. Plain files named v<version>.html only."""
+    found = {}
+    for p in sorted(archive.iterdir()) if archive and archive.is_dir() else ():
+        m = API_FROZEN.fullmatch(p.name)
+        if m and p.is_file() and not p.is_symlink():
+            found[m.group(1)] = p
+    return found
+
+
+def api_versions_line(page: str, versions: list[str]) -> str:
+    """dev/api.html's line linking each release's frozen copy, newest first."""
+    if not versions:
+        return ""
+    links = " · ".join(f'<a href="{rel(page, f"{API_DIR}/v{v}.html")}">{html.escape(v)}</a>' for v in versions)
+    return f'<p class="vers">The latest docs. The API of a particular release: {links}</p>\n'
+
+
+def api_frozen_line(page: str, version: str) -> str:
+    """A frozen copy's line: which release it describes, and the latest."""
+    return (f'<p class="vers">This page describes the HTTP API of <strong>OpenDMD {html.escape(version)}</strong>. '
+            f'<a href="{rel(page, PAGES[API_PAGE])}">The latest version</a></p>\n')
+
+
+def after_h1(body: str, extra: str) -> str:
+    """`extra` right after the page's heading."""
+    i = body.find("</h1>")
+    return body if i < 0 or not extra else body[:i + 5] + "\n" + extra + body[i + 5:]
+
+
 # The formula gallery (formulas/index.html): its body and thumbnails come
 # from tools/gallery_page.py, which the public site repo's Pages workflow
 # runs too (vendored), to regenerate them when a contribution is merged.
@@ -505,20 +569,89 @@ def write_gallery(out: Path, www: Path, contrib: Path | None, tool: Path, wm: di
         banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""), encoding="utf-8")
 
 
+def write_doc(out: Path, src: str, page: str, info: dict, art: dict, assets: set[str], extra: str = "",
+              on: str | None = None, title_note: str = "") -> str:
+    """One doc (`src`) as the published `page`, with `extra` after its
+    heading; returns its body."""
+    text = markers(page, rewrite(src, page, (ROOT / src).read_text(), assets), info)
+    md = markdown.Markdown(extensions=["tables", "fenced_code", "toc", "sane_lists"],
+                           extension_configs={"toc": {"permalink": "#"}})
+    body = md.convert(text)
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", body, re.S)
+    # Without the heading's permalink, whose text is "#".
+    title = re.sub(r'<a class="headerlink".*?</a>|<[^>]+>', "", m.group(1)).strip() if m else "OpenDMD"
+    title = "OpenDMD" if title == "OpenDMD" else f"{title}{title_note} · OpenDMD"
+    if page == "index.html":
+        body = hero(body, art).replace("<!-- site:tiles -->", tiles(art))
+    body = after_h1(decorate(body), extra)
+    up = "../" * page.count("/")
+    dest = out / page
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    head = "\n" + INSTALL_HEAD if page == INSTALL_PAGE else ""
+    wm = art["wordmark"]
+    brand = (f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
+             f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>')
+    dest.write_text(PAGE.format(title=html.escape(title), description=html.escape(DESCRIPTION), up=up, head=head,
+                                brand=brand, menu=menu(page, on), body=body,
+                                banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
+    return body
+
+
+def api_pages(out: Path, info: dict, art: dict, archive: Path | None, freeze: str, assets: set[str]) -> list[str]:
+    """dev/api/: the earlier releases' frozen API pages, copied as they are,
+    and, when `freeze` says so, this release's, rendered now (replacing an
+    earlier publish of the same version). `freeze` "auto": only when this
+    tree is the release's tag, clean (`git describe` is exactly
+    v<version>, the test site-publish.sh makes); a site built from main
+    between releases freezes nothing. Returns the versions, newest first."""
+    ver = info["version"]
+    frozen = api_archive(archive)
+    if frozen:
+        (out / API_DIR).mkdir(parents=True, exist_ok=True)
+    for v, p in frozen.items():
+        shutil.copyfile(p, out / API_DIR / p.name)
+    if freeze == "yes" or (freeze == "auto" and describe() == f"v{ver}"):
+        page = f"{API_DIR}/v{ver}.html"
+        write_doc(out, API_PAGE, page, info, art, assets, api_frozen_line(page, ver), on=PAGES[API_PAGE],
+                  title_note=f" ({ver})")
+        frozen[ver] = out / page
+    return sorted(frozen, key=semver_key, reverse=True)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("out", type=Path)
-    ap.add_argument("--www", type=Path, required=True)
-    ap.add_argument("--card", type=Path, required=True)
+    ap.add_argument("--www", type=Path)
+    ap.add_argument("--card", type=Path)
     ap.add_argument("--art", type=Path, required=True, help="the artwork from tools/site-art.py")
     ap.add_argument("--dist", type=Path, required=True, help="the release from make fw-release")
-    ap.add_argument("--gallery-tool", type=Path, required=True, help="opendmd-gallery, built (make gallery-tool)")
+    ap.add_argument("--gallery-tool", type=Path, help="opendmd-gallery, built (make gallery-tool)")
     ap.add_argument("--gallery", type=Path, help="the public site repo's gallery/ (contributions), if fetched")
+    ap.add_argument("--api-archive", type=Path, help="the public site repo's dev/api/ (earlier releases' API pages), if fetched")
+    ap.add_argument("--api-freeze", choices=("auto", "yes", "no"), default="auto",
+                    help="freeze this release's API page as dev/api/v<version>.html (auto: when built from its tag)")
+    ap.add_argument("--api-only", action="store_true",
+                    help="write only dev/api.html and dev/api/, into OUT as it is (tools/site-smoke.py's publish-like check)")
     a = ap.parse_args()
+    if not a.api_only and not (a.www and a.card and a.gallery_tool):
+        ap.error("--www, --card and --gallery-tool are required (unless --api-only)")
     out: Path = a.out
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
+    if a.api_only:  # into a site already built, or a new folder: only dev/api.html and dev/api/ are replaced
+        shutil.rmtree(out / API_DIR, ignore_errors=True)
+        out.mkdir(parents=True, exist_ok=True)
+    else:
+        if out.exists():
+            shutil.rmtree(out)
+        out.mkdir(parents=True)
+    if a.api_only:
+        m = json.loads((a.dist / "manifest.json").read_text())
+        info = {"version": m["version"], "firmware": f"firmware/opendmd-{m['version']}.odfw"}
+        art = json.loads((a.art / "art.json").read_text())
+        assets: set[str] = set()
+        versions = api_pages(out, info, art, a.api_archive, a.api_freeze, assets)
+        write_doc(out, API_PAGE, PAGES[API_PAGE], info, art, assets, api_versions_line(PAGES[API_PAGE], versions))
+        print(f"{out}: the API pages, frozen: {', '.join(versions) or 'none'}")
+        return
 
     # The demo: the app (the player sends the .gz copies; Pages compresses by itself) and its card.
     shutil.copytree(a.www, out / "demo", ignore=shutil.ignore_patterns("*.gz", ".gitignore"))
@@ -535,29 +668,10 @@ def main() -> None:
 
     assets: set[str] = set()
     bodies: list[str] = []
+    versions = api_pages(out, info, art, a.api_archive, a.api_freeze, assets)
     for src, page in PAGES.items():
-        text = markers(page, rewrite(src, page, (ROOT / src).read_text(), assets), info)
-        md = markdown.Markdown(extensions=["tables", "fenced_code", "toc", "sane_lists"],
-                               extension_configs={"toc": {"permalink": "#"}})
-        body = md.convert(text)
-        m = re.search(r"<h1[^>]*>(.*?)</h1>", body, re.S)
-        # Without the heading's permalink, whose text is "#".
-        title = re.sub(r'<a class="headerlink".*?</a>|<[^>]+>', "", m.group(1)).strip() if m else "OpenDMD"
-        title = "OpenDMD" if title == "OpenDMD" else f"{title} · OpenDMD"
-        if page == "index.html":
-            body = hero(body, art).replace("<!-- site:tiles -->", tiles(art))
-        body = decorate(body)
-        bodies.append(body)
-        up = "../" * page.count("/")
-        dest = out / page
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        head = "\n" + INSTALL_HEAD if page == INSTALL_PAGE else ""
-        wm = art["wordmark"]
-        brand = (f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
-                 f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>')
-        dest.write_text(PAGE.format(title=html.escape(title), description=html.escape(DESCRIPTION), up=up, head=head,
-                                    brand=brand, menu=menu(page), body=body,
-                                    banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
+        extra = api_versions_line(page, versions) if src == API_PAGE else ""
+        bodies.append(write_doc(out, src, page, info, art, assets, extra))
     # The formula gallery: generated, in the menu.
     write_gallery(out, a.www, a.gallery, a.gallery_tool, art["wordmark"])
     # The licences page: not a doc, so not in the menu; the footer links it.
@@ -590,7 +704,9 @@ def main() -> None:
     (out / "README.md").write_text("# opendmd.github.io\n\nThe OpenDMD site: documentation and a browser demo of the web app "
                                    "(https://opendmd.github.io/). Built by `make site` in the OpenDMD repository; "
                                    "changes made here are overwritten by the next publish, except in `gallery/`: the formula "
-                                   "gallery, which takes contributions by pull request (see gallery/README.md).\n")
+                                   "gallery, which takes contributions by pull request (see gallery/README.md), and "
+                                   "`dev/api/`: the HTTP API page as each release described it, kept from one publish "
+                                   "to the next.\n")
     n = sum(1 for p in out.rglob("*") if p.is_file())
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
     print(f"{out}: {n} files, {size / 1e6:.1f} MB")

@@ -6,7 +6,7 @@
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
-import { h, clear, store, toast, debounce, saver } from './util.js';
+import { h, clear, store, toast, debounce, saver, SITE } from './util.js';
 import { popup, closeMenu } from './overrides.js';
 import { link as mklink, parse, sliderName, about, TIP, marks } from './psikit.js';
 
@@ -120,7 +120,7 @@ async function copy(text) {
 }
 // The formula's own page on the site (/f/: a preview, its code, Open on my
 // display, Try it in the demo); the demo's links stay on its own site.
-const SHARE = () => (app.demo ? new URL('../f/', location.href).href : 'https://opendmd.github.io/f/');
+const SHARE = () => (app.demo ? new URL('../f/', location.href).href : SITE + 'f/');
 function share(btn, f) {
   const r = btn.getBoundingClientRect(), url = link(f, SHARE()), here = app.device && link(f);
   const field = h('input', { type: 'text', id: 'psi-link', readOnly: true, value: url, onfocus: (e) => e.target.select() });

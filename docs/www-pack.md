@@ -77,6 +77,11 @@ offset  size  field
 - anything else as it is (none today: all 37 files are gzipped);
 - the `--version-file` itself is left out.
 
+The HTTP API reference is not in the pack: it is docs/api.md on the project
+site (`dev/api.html`, and `dev/api/v<version>.html` for each release), which
+Settings → Device → About links (14.5 KB of flash, gzipped, until 2026-10-23,
+when it was `api.html` with a size line of its own).
+
 The firmware sends a gzip entry with `Content-Encoding: gzip`, without
 looking at `Accept-Encoding` (every browser accepts it), and a `Content-Length` of the stored bytes.
 

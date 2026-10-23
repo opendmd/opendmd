@@ -5,7 +5,7 @@
 """Headless-Chromium smoke test of the site's formula pages, over a built
 site (make site):
 
-    uv run tools/site-smoke.py target/site [--shots DIR] [--gallery-tool PATH]
+    uv run tools/site-smoke.py target/site [--shots DIR] [--gallery-tool PATH] [--dist dist --art target/site-art]
 
 - /f/ (a formula's own page): the name and the code shown as text (a link's
   markup stays text), the preview lit and moving, a slider, the QR code
@@ -17,17 +17,28 @@ site (make site):
   and a link with no formula;
 - the demo's Copy share link gives a /f/ link that opens there;
 - /formulas/ (the gallery): every example listed with its thumbnail, Open
-  and Remix leading to the formula.
+  and Remix leading to the formula;
+- the HTTP API: dev/api.html in the site, linking every frozen copy it
+  carries (dev/api/v<version>.html); then a publish-like build of the API
+  pages (`site.py --api-only` into a copy of the site's dev/ and styles)
+  with an archive standing in for the public repo's dev/api/ (an older
+  release's frozen page, kept byte for byte; a stray file and a link, left
+  out) and this release frozen: both exist and are listed newest first,
+  the frozen page says which release it describes and links the latest;
+  with `--api-freeze auto` off a tag, nothing new is frozen.
 
 Screenshots of /f/ and the gallery at laptop and phone sizes with --shots.
 Needs, once, `uv run --with playwright playwright install chromium`.
 """
 
 import argparse
+import filecmp
 import functools
 import http.server
 import io
 import json
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -282,11 +293,70 @@ def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
     print(f"  shots in {shots}")
 
 
+def api_pages(browser, site: Path, dist: Path, art: Path, errors: list[str]) -> None:
+    page_html = site / "dev/api.html"
+    check(page_html.is_file() and "HTTP API" in page_html.read_text(), "api: dev/api.html is in the site")
+    carried = sorted(p.name for p in (site / "dev/api").glob("v*.html"))
+    text = page_html.read_text() if page_html.is_file() else ""
+    check(all(f'href="api/{n}"' in text for n in carried), f"api: dev/api.html links every frozen copy the site carries {carried}")
+    ver = json.loads((dist / "manifest.json").read_text())["version"]
+    with tempfile.TemporaryDirectory() as t:
+        tmp = Path(t)
+        arch = tmp / "archive"
+        arch.mkdir()
+        old = arch / "v0.0.1.html"
+        old.write_text('<!doctype html><meta charset="utf-8"><title>HTTP API (0.0.1)</title><p>OpenDMD 0.0.1</p>\n')
+        (arch / "notes.html").write_text("<p>not a version</p>\n")
+        (arch / "v0.0.2.html").symlink_to(old)
+        out = tmp / "site"
+        for d in ("dev", "fonts", "art"):
+            shutil.copytree(site / d, out / d)
+        shutil.copyfile(site / "site.css", out / "site.css")
+
+        def build(freeze: str) -> str:
+            r = subprocess.run(["uv", "run", "--quiet", str(ROOT / "tools/site.py"), str(out), "--api-only", "--dist", str(dist),
+                                "--art", str(art), "--api-archive", str(arch), "--api-freeze", freeze],
+                               cwd=ROOT, capture_output=True, text=True)
+            check(r.returncode == 0, f"api: site.py --api-only --api-freeze {freeze} ({r.stderr.strip()[-200:]})")
+            return r.stdout
+        build("yes")
+        names = sorted(p.name for p in (out / "dev/api").iterdir())
+        check(names == sorted([f"v{ver}.html", "v0.0.1.html"]), f"api: the frozen pages are this release's and the archive's, nothing else {names}")
+        check(filecmp.cmp(old, out / "dev/api/v0.0.1.html", shallow=False), "api: an older release's frozen page is kept byte for byte")
+        latest = (out / "dev/api.html").read_text()
+        m = re.search(r'<p class="vers">(.*?)</p>', latest)
+        listed = re.findall(r'href="api/v([^"]+)\.html"', m.group(1)) if m else []
+        check(listed == [ver, "0.0.1"], f"api: dev/api.html lists the frozen pages, newest first {listed}")
+        frozen = (out / f"dev/api/v{ver}.html").read_text()
+        check(f"describes the HTTP API of <strong>OpenDMD {ver}</strong>" in frozen and 'href="../api.html"' in frozen
+              and f"<title>OpenDMD HTTP API ({ver}) · OpenDMD</title>" in frozen,
+              "api: the frozen page says which release it describes and links the latest")
+        base = serve(out)
+        page = new_page(browser, "laptop", errors)
+        page.goto(base + "/dev/api.html")
+        page.click(f'p.vers a[href="api/v{ver}.html"]')
+        page.wait_for_url(f"**/dev/api/v{ver}.html")
+        check(f"OpenDMD {ver}" in page.inner_text("p.vers") and page.locator("h2").count() > 10,
+              f"api: dev/api.html's link opens the frozen page ({page.locator('h2').count()} sections)")
+        page.click("p.vers a")
+        page.wait_for_url("**/dev/api.html")
+        check(page.locator('nav a.on[href="api.html"]').count() == 1, "api: the frozen page's link leads back to the latest")
+        page.context.close()
+        # Off a tag (`git describe` is not v<version>), auto freezes nothing.
+        desc = subprocess.run(["git", "describe", "--always", "--dirty", "--tags"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+        if desc != f"v{ver}":
+            build("auto")
+            names = sorted(p.name for p in (out / "dev/api").iterdir())
+            check(names == ["v0.0.1.html"], f"api: off the tag ({desc}), --api-freeze auto freezes nothing new {names}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("site", type=Path)
     ap.add_argument("--shots", type=Path)
     ap.add_argument("--gallery-tool", type=Path, default=ROOT / "opendmd-gallery/target/release/opendmd-gallery")
+    ap.add_argument("--dist", type=Path, default=ROOT / "dist", help="the release make site published (its manifest's version)")
+    ap.add_argument("--art", type=Path, default=ROOT / "target/site-art", help="tools/site-art.py's output")
     a = ap.parse_args()
     if a.shots:
         a.shots.mkdir(parents=True, exist_ok=True)
@@ -301,6 +371,8 @@ def main() -> int:
         demo_share(browser, base, errors)
         print("the gallery (/formulas/)")
         gallery(browser, base, errors, a.shots)
+        print("the HTTP API (dev/api.html, dev/api/)")
+        api_pages(browser, a.site, a.dist, a.art, errors)
         if a.shots:
             screenshots(browser, base, errors, a.shots)
         browser.close()

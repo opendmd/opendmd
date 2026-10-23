@@ -228,10 +228,12 @@ every view like a person would:
             Clear filter clears it; the playlist choices are labelled; with
             /api/status rewritten to index_state "building" (Playwright
             route), set switching is disabled in Settings and Sets, and comes
-            back when it reads "ready"; About's "API reference" opens
-            api.html: served, `$DMD` replaced by the mock's origin in every
-            example, its contents links landing, no sideways scroll at phone
-            width
+            back when it reads "ready"; About's "API reference" links the
+            HTTP API on the project site in a new tab: a release's own page
+            (dev/api/v<version>.html) when the status says firmware and web
+            app are that release, else (this build, `git describe`; a
+            version that is no release number) dev/api.html; no api.html in
+            the www pack, and the mock serves none
 
 Every view's visible text (and every title tooltip) is checked for "odm" and
 "bucket": prepared copies are an implementation detail.
@@ -1887,37 +1889,71 @@ def sim_checks(page: Page) -> None:
           f"sim: the start-up status card identical in the page and the simulator ({diff} of 4096 px differ, {lit_n} lit)")
 
 
+def www_pack_paths(pack: bytes) -> list[str]:
+    """The paths in a www pack's entry table (docs/www-pack.md)."""
+    assert pack[:4] == b"ODWP", "not a www pack"
+    n = int.from_bytes(pack[16:18], "little")
+    out = []
+    for i in range(n):
+        e = pack[64 + 16 * i:80 + 16 * i]
+        off, ln = int.from_bytes(e[0:4], "little"), int.from_bytes(e[12:14], "little")
+        out.append(pack[off:off + ln].decode())
+    return out
+
+
 def api_page_checks(page: Page, base: str) -> None:
-    """The API reference (api.html, rendered from docs/api.md by `make web`):
-    linked from Settings -> About in a new tab, served from the pack, every
-    `$DMD` in its examples replaced by the page's own origin, a contents
-    list whose links all land, a Copy button per example, no sideways scroll
-    at phone width. (tools/api-doc-check.py, run by `make web`, holds the
-    doc's routes to http.rs.)
+    """The API reference lives on the project site, not in the pack:
+    Settings -> About links this firmware's own page there
+    (https://opendmd.github.io/dev/api/v<version>.html, frozen when that
+    release was published) when the player runs a release (its firmware a
+    release number and its web app the same release, `v<version>`), else
+    the latest (dev/api.html): this build's web app is a `git describe`
+    and the mock's firmware 0.1.0-mock; then /api/status rewritten to a
+    release, and to a firmware version that is no release number. A new
+    tab, never the app's own. The www pack has no api.html, and the mock
+    serves none. (tools/api-doc-check.py, run by `make web`, holds
+    docs/api.md's routes to http.rs.)
     And beside it, the third-party licences: licenses.txt, served as text.
     """
-    link = page.eval_on_selector("#st-api", "a => [a.getAttribute('href'), a.target]")
-    check(link == ["./api.html", "_blank"], f"api page: About links ./api.html in a new tab ({link})")
-    doc = page.context.new_page()
+    site = "https://opendmd.github.io/"
+    st = get_json(base + "/api/status")
+    link = page.eval_on_selector("#st-api", "a => [a.getAttribute('href'), a.target, a.rel, a.textContent]")
+    check(link == [site + "dev/api.html", "_blank", "noopener", "API reference"],
+          f"api link: a development build (firmware {st['version']}, web app {st['www_version']}) links the latest docs in a new tab ({link})")
+
+    def as_status(**kw):
+        def fn(route):
+            r = route.fetch()
+            j = r.json()
+            route.fulfill(response=r, json={**j, **{k: v(j) for k, v in kw.items()}})
+        return fn
+
+    def href_becomes(want: str) -> str:
+        try:
+            page.wait_for_function("w => document.querySelector('#st-api')?.getAttribute('href') === w", arg=want, timeout=20000)
+        except Exception:  # noqa: BLE001 (reported below)
+            pass
+        return page.eval_on_selector("#st-api", "a => a.getAttribute('href')")
+
+    page.route("**/api/status", as_status(www_version=lambda j: "v" + j["version"]))
     try:
-        r = doc.goto(base + "/api.html")
-        check(r is not None and r.status == 200 and r.headers.get("content-type", "").startswith("text/html"),
-              f"api page: served ({r.status if r else None}, {r.headers.get('content-type') if r else None})")
-        doc.wait_for_selector("pre button")
-        codes = doc.eval_on_selector_all("pre code", "els => els.map(e => e.textContent)")
-        want = f"curl -s {base}/api/status"
-        check(any(want in c for c in codes) and not any("$DMD" in c for c in codes),
-              f"api page: $DMD replaced by the origin in all {len(codes)} examples ('{want}')")
-        check(doc.locator("pre button").count() == len(codes), "api page: a Copy button per example")
-        bad = doc.evaluate("""() => [...document.querySelectorAll('nav.toc a')].filter(a =>
-            !document.getElementById(decodeURIComponent(a.hash.slice(1)))).map(a => a.hash)""")
-        n = doc.locator("nav.toc a").count()
-        check(n >= 30 and not bad, f"api page: {n} contents links, all landing ({bad[:3]})")
-        doc.set_viewport_size({"width": 390, "height": 800})
-        over = doc.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
-        check(over <= 0, f"api page: no sideways scroll at 390 px ({over} px over)")
+        want = f"{site}dev/api/v{st['version']}.html"
+        got = href_becomes(want)
+        check(got == want, f"api link: a release (firmware {st['version']}, web app v{st['version']}) links its own page ({got})")
     finally:
-        doc.close()
+        page.unroute("**/api/status")
+    page.route("**/api/status", as_status(version=lambda j: "1.0.0 local", www_version=lambda j: "v1.0.0 local"))
+    try:
+        got = href_becomes(site + "dev/api.html")
+        check(got == site + "dev/api.html", f"api link: a firmware version that is no release number links the latest ({got})")
+    finally:
+        page.unroute("**/api/status")
+    href_becomes(site + "dev/api.html")
+    paths = www_pack_paths((REPO / "opendmd-web" / "www.pack").read_bytes())
+    check("index.html" in paths and not any(p.startswith("api.html") for p in paths),
+          f"api link: the www pack has no api.html ({len(paths)} entries)")
+    code = status_of(urllib.request.Request(base + "/api.html"))[0]
+    check(code == 404, f"api link: the mock serves no /api.html ({code})")
     # The third-party licences (licenses.txt: licenses/'s two notices, by
     # `make web`), linked beside it, served from the pack as text.
     link = page.eval_on_selector("#st-licences", "a => [a.getAttribute('href'), a.target, a.textContent]")
@@ -2339,7 +2375,7 @@ def key_checks(browser, page: Page, base: str) -> None:
                  status_of(urllib.request.Request(gif_url + "?key=" + key))[0],
                  status_of(urllib.request.Request(base + "/api/status", headers={"Authorization": "Bearer wrong-wrong"}))[0]]
         check(codes == [200, 200, 200, 200, 401], f"key: the header or ?key= -> 200, a wrong one 401 {codes}")
-        codes = [status_of(urllib.request.Request(base + u))[0] for u in ("/", "/index.html", "/app.js", "/js/source.js", "/api.html")]
+        codes = [status_of(urllib.request.Request(base + u))[0] for u in ("/", "/index.html", "/app.js", "/js/source.js", "/licenses.txt")]
         check(codes == [200] * 5, f"key: the app's own files need none {codes}")
         check(page.locator("#st-sec .tick.bad").count() == 0 and page.is_checked("#sec-key"), "key: the switch is on, saved")
         # Shown once: a reload (the key is kept here, so no dialog) has the

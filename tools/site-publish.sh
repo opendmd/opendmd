@@ -15,14 +15,23 @@
 #   Pages workflow) plus, under .github/gallery-check/, the checker's source,
 #   vendored from opendmd-psi/ and opendmd-gallery/ (both workflows build it
 #   offline from main's copy), and tools/gallery_page.py (the gallery page's
-#   generator, which the Pages workflow runs on every push to main).
+#   generator, which the Pages workflow runs on every push to main);
+# - dev/api/: the HTTP API page as each release described it
+#   (v<version>.html, tools/site.py). Nothing there is ever removed or
+#   replaced, with one exception: a release's own page, published from that
+#   release's tag (git describe is exactly v<version>), may replace an
+#   earlier publish of the same version. A publish from anywhere else (main
+#   between releases, "docs of <date>") adds no page for its version; the
+#   earlier releases' pages the site carries (copies of what is here, which
+#   release.yml fetched) are added only where missing.
 #
 # Commits as "Site <release>" only when something changed.
 # tools/site-publish-test.sh runs it against a local bare repository
 # (SITE_PUBLISH_ALLOW_DIRTY=1 is for that test only).
 set -euo pipefail
 site=$1 repo=$2 work=${SITE_REPO_WORK:-target/site-repo}
-version=$(git describe --always --dirty --tags)
+# (SITE_PUBLISH_DESCRIBE stands in for git describe: that test only.)
+version=${SITE_PUBLISH_DESCRIBE:-$(git describe --always --dirty --tags)}
 case $version in *-dirty) [ "${SITE_PUBLISH_ALLOW_DIRTY:-}" = 1 ] || { echo "refusing: the working tree is dirty ($version); commit first" >&2; exit 1; };; esac
 for kept in gallery .github; do
   [ ! -e "$site/$kept" ] || { echo "refusing: the site has a $kept/, which the Pages repo keeps for itself" >&2; exit 1; }
@@ -33,6 +42,10 @@ done
 release=v$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$site/install/release.json")
 label=$release
 [ "$version" = "$release" ] || label="$release, docs of $(date -u +%F)"
+# A release's site carries its own API page (tools/site.py freezes it when
+# built from the tag); without it the release would have none.
+[ "$version" != "$release" ] || [ -f "$site/dev/api/$release.html" ] ||
+  { echo "refusing: the site of $release has no dev/api/$release.html (make site freezes it from the tag)" >&2; exit 1; }
 
 # What the public repo keeps besides the site: .github/ and the gallery's README.
 stage=$(mktemp -d)
@@ -57,7 +70,17 @@ git -C "$work" config user.email "$(git config user.email)"
 # (rsync never deletes what it excludes.)
 # --checksum: a file checked out and rewritten in the same second at the same size
 # would pass rsync's size+mtime test and keep its old content.
-rsync -a --checksum --delete --exclude /.git --exclude /gallery/ --exclude /.github/ "$site"/ "$work"/
+rsync -a --checksum --delete --exclude /.git --exclude /gallery/ --exclude /.github/ --exclude /dev/api/ "$site"/ "$work"/
+api=dev/api
+if [ -d "$site/$api" ]; then
+  mkdir -p "$work/$api"
+  # Earlier releases' pages: added if missing, never replaced or removed.
+  rsync -a --ignore-existing --exclude "/$release.html" "$site/$api"/ "$work/$api"/
+  # This release's own page: only from its tag (it may replace an earlier publish of it).
+  if [ "$version" = "$release" ] && [ -f "$site/$api/$release.html" ]; then
+    cp "$site/$api/$release.html" "$work/$api/$release.html"
+  fi
+fi
 rsync -a --checksum --delete "$stage/.github/" "$work/.github/"
 mkdir -p "$work/gallery"
 cp "$stage/gallery/README.md" "$work/gallery/README.md"

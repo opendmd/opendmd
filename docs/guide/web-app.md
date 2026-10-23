@@ -181,7 +181,9 @@ Settings has four tabs, and everything saves as you change it (a green
     you opened the web app by its old `.local` name (which stops working), a
     link to the new one.
     **About** shows the address the display really has: if another display
-    already had its name, it's `<name>-2.local` and About says so.
+    already had its name, it's `<name>-2.local` and About says so. Its
+    **API reference** link opens, on the OpenDMD site, the HTTP API for the
+    display's firmware version, for scripts and home automation.
   - **Panel timing** is for a panel that shows a few wrong-coloured dots on
     some pictures: **Test panel timing** shows test pictures under A and B
     and saves the one you pick; a change by hand is tried for a minute and

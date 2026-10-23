@@ -118,7 +118,7 @@ mod tests {
             "/js/app.js",
             "/www/index.html",
             "/setup",
-            "/api.html",
+            "/licenses.txt",
             "/pkg/x.wasm",
             "/generate_204",
         ] {

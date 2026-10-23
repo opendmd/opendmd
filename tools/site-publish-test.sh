@@ -19,12 +19,15 @@ g clone -q "$tmp/pub.git" "$tmp/seed" 2>/dev/null
 mkdir -p "$tmp/seed/gallery" "$tmp/seed/.github/workflows"
 printf '<p>old</p>\n' > "$tmp/seed/index.html"
 printf 'stale\n' > "$tmp/seed/stale.html"
+mkdir -p "$tmp/seed/dev/api"
+printf '<p>API of 0.9.0</p>\n' > "$tmp/seed/dev/api/v0.9.0.html"
 printf 'name: old\n' > "$tmp/seed/.github/workflows/gallery-check.yml"
 printf -- '-- name: Theirs\n-- description: A contribution\n-- author: @someone\n-- licence: CC0-1.0\ngray(x)\n' > "$tmp/seed/gallery/theirs.psi"
 g -C "$tmp/seed" add -A && g -C "$tmp/seed" commit -qm seed && g -C "$tmp/seed" push -q origin HEAD:main
 
 site() { # a site build: its version and a page
-  rm -rf "$tmp/site"; mkdir -p "$tmp/site/install" "$tmp/site/f"
+  rm -rf "$tmp/site"; mkdir -p "$tmp/site/install" "$tmp/site/f" "$tmp/site/dev"
+  printf '<p>dev</p>\n' > "$tmp/site/dev/index.html"
   printf '{"version": "9.9.9"}\n' > "$tmp/site/install/release.json"
   printf '<p>%s</p>\n' "$1" > "$tmp/site/index.html"
   printf '<p>share</p>\n' > "$tmp/site/f/index.html"
@@ -42,6 +45,7 @@ look
 [ "$(cat "$tmp/look/index.html")" = "<p>v1</p>" ] || fail "the site's page was not replaced"
 [ ! -e "$tmp/look/stale.html" ] || fail "a file the site no longer has was kept"
 [ -f "$tmp/look/gallery/theirs.psi" ] || fail "the first publish removed a contribution"
+[ "$(cat "$tmp/look/dev/api/v0.9.0.html" 2>/dev/null)" = "<p>API of 0.9.0</p>" ] || fail "a publish without dev/api/ removed an earlier release's API page"
 cmp -s "$tmp/look/gallery/README.md" site/public-repo/gallery/README.md || fail "gallery/README.md is not ours"
 cmp -s "$tmp/look/.github/workflows/gallery-check.yml" site/public-repo/.github/workflows/gallery-check.yml || fail "the workflow is not ours"
 cmp -s "$tmp/look/.github/workflows/pages.yml" site/public-repo/.github/workflows/pages.yml || fail "the Pages workflow is not ours"
@@ -67,6 +71,41 @@ cmp -s "$tmp/look/.github/workflows/gallery-check.yml" site/public-repo/.github/
 out=$(publish)
 [ "$out" = "site: no changes" ] || fail "a publish with nothing new said: $out"
 
+# dev/api/: the API page as each release described it.
+api() { # a site build carrying frozen API pages: <version>=<content> ...
+  site "api"; mkdir -p "$tmp/site/dev/api"
+  for kv in "$@"; do printf '<p>%s</p>\n' "${kv#*=}" > "$tmp/site/dev/api/v${kv%%=*}.html"; done
+}
+# From main between releases ("docs of <date>"): no page for its version;
+# an earlier release's page the repo lacks is added, one it has is kept.
+api 9.9.9=unreleased 0.9.0=changed 0.8.0=older
+publish >/dev/null
+look
+[ ! -e "$tmp/look/dev/api/v9.9.9.html" ] || fail "a publish from main froze an API page for its unreleased version"
+[ "$(cat "$tmp/look/dev/api/v0.9.0.html")" = "<p>API of 0.9.0</p>" ] || fail "a publish replaced an earlier release's API page"
+[ "$(cat "$tmp/look/dev/api/v0.8.0.html" 2>/dev/null)" = "<p>older</p>" ] || fail "a missing earlier release's API page was not added"
+# A release's site without its own page is refused.
+api 0.9.0=changed
+if SITE_PUBLISH_DESCRIBE=v9.9.9 publish >/dev/null 2>&1; then fail "a release's site without its API page was published"; fi
+# From the release's tag: its own page is added, then replaced by a republish.
+api 9.9.9=release 0.9.0=changed
+SITE_PUBLISH_DESCRIBE=v9.9.9 publish >/dev/null
+look
+[ "$(cat "$tmp/look/dev/api/v9.9.9.html" 2>/dev/null)" = "<p>release</p>" ] || fail "the release's publish did not freeze its API page"
+[ "$(git -C "$tmp/look" log --format=%s -1)" = "Site v9.9.9" ] || fail "release commit message: $(git -C "$tmp/look" log --format=%s -1)"
+api 9.9.9=republished
+SITE_PUBLISH_DESCRIBE=v9.9.9 publish >/dev/null
+look
+[ "$(cat "$tmp/look/dev/api/v9.9.9.html")" = "<p>republished</p>" ] || fail "a republish of the release did not replace its own API page"
+[ "$(cat "$tmp/look/dev/api/v0.9.0.html")" = "<p>API of 0.9.0</p>" ] && [ -f "$tmp/look/dev/api/v0.8.0.html" ] ||
+  fail "a release's publish removed or replaced an earlier release's API page"
+# A later publish from main keeps the release's page as it is.
+api 9.9.9=main-again
+publish >/dev/null
+look
+[ "$(cat "$tmp/look/dev/api/v9.9.9.html")" = "<p>republished</p>" ] || fail "a publish from main replaced the release's API page"
+site v3
+
 # A site that brings its own gallery/ is refused (it would be skipped).
 mkdir -p "$tmp/site/gallery"
 if publish >/dev/null 2>&1; then fail "a site with a gallery/ was published"; fi
@@ -85,4 +124,4 @@ CARGO_HOME="$tmp/cargo" RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-stable} cargo build
   --manifest-path "$tmp/look/.github/gallery-check/opendmd-gallery/Cargo.toml" --target-dir "$tmp/target" ||
   fail "the vendored checker does not build offline"
 "$tmp/target/release/opendmd-gallery" check "$tmp/look/gallery/merged.psi" 2>/dev/null || fail "the vendored checker refused a good file"
-echo "site-publish-test: ok (two publishes kept gallery/ and .github/; the vendored checker builds offline)"
+echo "site-publish-test: ok (publishes kept gallery/, .github/ and earlier releases' dev/api/ pages; only a release froze its own; the vendored checker builds offline)"

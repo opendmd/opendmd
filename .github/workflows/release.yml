@@ -222,19 +222,24 @@ jobs:
       # The formula gallery's contributions: the public site repo's gallery/,
       # read-only over https (a public repo: no token). tools/site.py checks
       # every file again with this repo's opendmd-gallery before publishing
-      # it, never follows a link, and leaves out any that fail.
-      - name: Fetch the formula gallery
+      # it, never follows a link, and leaves out any that fail. And the
+      # earlier releases' API pages (dev/api/v<version>.html), which the site
+      # links from dev/api.html and carries as they are (site-publish.sh
+      # never removes or replaces them); this release's own is frozen by
+      # make site only when the tree is its tag.
+      - name: Fetch the formula gallery and the earlier API pages
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/site-gallery"
           git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/opendmd/opendmd.github.io "$dir"
-          git -C "$dir" sparse-checkout set --no-cone '/gallery/*.psi'
+          git -C "$dir" sparse-checkout set --no-cone '/gallery/*.psi' '/dev/api/v*.html'
           git -C "$dir" checkout -q
-          mkdir -p "$dir/gallery"
+          mkdir -p "$dir/gallery" "$dir/dev/api"
           echo "$(find "$dir/gallery" -maxdepth 1 -name '*.psi' | wc -l) gallery files"
+          echo "$(find "$dir/dev/api" -maxdepth 1 -name 'v*.html' | wc -l) earlier API pages"
 
       - name: The public site (make site)
-        run: make site GALLERY="$RUNNER_TEMP/site-gallery/gallery"
+        run: make site GALLERY="$RUNNER_TEMP/site-gallery/gallery" API_ARCHIVE="$RUNNER_TEMP/site-gallery/dev/api"
 
       - name: The tree is clean after the build
         run: |
