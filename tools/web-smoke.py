@@ -2767,6 +2767,7 @@ def mock_pass(browser) -> None:
         studio_smooth_checks(page, base, overlay)
         fx_gif_checks(page, base, overlay)
         formulas_checks(browser, base, errors)
+        formulas_panel_checks(browser, base, errors)
         find_checks(page)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
@@ -3179,6 +3180,83 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     formulas_more(browser, base, errors)
 
 
+def clear_toasts(page: Page) -> None:
+    page.evaluate("document.querySelectorAll('#toasts .toast').forEach(t => t.remove())")
+
+
+def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
+    """Show on panel: a formula plays on the (mock) panel as `@fx:psi?src=…`;
+    slider changes follow it there, ~200 ms apart and one at a time, as live
+    edits (the same ordinal); once the playlist moves on a change stops
+    following (409, no toast); an older firmware (415), a formula it refuses
+    (400) and no answer each say so."""
+    page = new_page(browser, "laptop", errors)
+    expected.append("/api/play")  # the 409, 415, 400 and the refused request below
+    plays: list[tuple[float, dict]] = []
+    page.on("request", lambda r: plays.append((time.time(), json.loads(r.post_data))) if r.url.endswith("/api/play") else None)
+    page.goto(base + "/#formulas")
+    open_formulas(page)
+    page.click("#psi-ex .psi-tile >> nth=0")
+    name = page.inner_text("#psi-d-title")
+    check(page.inner_text("#psi-show") == "Show on panel", "formulas panel: Show on panel in Details")
+    # The path is the device's own (`fx_psi::path`, its test has the same string).
+    enc = page.evaluate("import('./js/psishow.js').then(m => m.fpath({src: '-- a: x\\nv = x % 2 + 1 & 3 # é  // c', a: 0.5}))")
+    check(enc == "@fx:psi?src=v+=+x+%25+2+%2B+1+%26+3+%23+%C3%A9&a=0.5", f"formulas panel: the formula's path as the device writes it ({enc})")
+    clear_toasts(page)
+    page.click("#psi-show")
+    t = last_toast(page, "ok")
+    st = get_json(base + "/api/status")["now_playing"]
+    check(t == f"On the panel: {name}" and st["path"].startswith("@fx:psi?src=") and st["title"] == "Formula"
+          and page.inner_text("#psi-show") == "On the panel ✓" and plays[-1][1].get("live") is False,
+          f"formulas panel: {name} on the panel ('{t}', {st['path'][:40]}…, {st['title']})")
+    shot(page, "formulas-panel-on", "laptop")
+    # In the editor: a slider dragged for ~0.6 s follows it, throttled.
+    formula_editor(page, "-- a: level\nloop 4\ngray(a * x + saw(t / 4) * 0.1)")
+    page.click("#psi-ed-show")
+    page.wait_for_function("document.querySelector('#psi-ed-show').textContent == 'On the panel ✓'", timeout=5000)
+    ordinal = get_json(base + "/api/status")["now_playing"]["ordinal"]
+    n0, t0 = len(plays), time.time()
+    page.evaluate("""async () => { const r = document.querySelector('#psi-ed-sl-a');
+        for (let k = 1; k <= 60; k++) { r.value = k / 60; r.dispatchEvent(new Event('input')); await new Promise(f => setTimeout(f, 10)); } }""")
+    page.wait_for_timeout(800)
+    sent = plays[n0:]
+    gaps = [b[0] - a[0] for a, b in zip(sent, sent[1:])]
+    st = get_json(base + "/api/status")["now_playing"]
+    check(2 <= len(sent) <= 6 and all(p.get("live") is True for _, p in sent) and min(gaps, default=1) > 0.15
+          and sent[-1][1]["path"].endswith("&a=1") and st["ordinal"] == ordinal and st["path"] == sent[-1][1]["path"],
+          f"formulas panel: 60 slider moves in {time.time() - t0:.1f} s -> {len(sent)} live edits, gaps {[round(g, 2) for g in gaps]}, the last a=1 on the panel (ordinal {st['ordinal']})")
+    # The playlist moves on (the mock's 4 s dwell): a change stops following, quietly.
+    deadline = time.time() + 10
+    while time.time() < deadline and get_json(base + "/api/status")["now_playing"]["path"].startswith("@fx:psi"):
+        time.sleep(0.3)
+    clear_toasts(page)
+    n0 = len(plays)
+    page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = 0.5; r.dispatchEvent(new Event('input')); }")
+    page.wait_for_function("document.querySelector('#psi-ed-show').textContent == 'Show on panel'", timeout=5000)
+    bad = page.eval_on_selector_all("#toasts .toast.bad", "els => els.length")
+    check(len(plays) == n0 + 1 and plays[-1][1].get("live") is True and bad == 0
+          and not get_json(base + "/api/status")["now_playing"]["path"].startswith("@fx:psi"),
+          "formulas panel: after the playlist moved on, a change does not bring it back (409, no error shown)")
+    # What goes wrong, said plainly.
+    for status, body, want in ((415, "@fx:psi: not a playable file", "Update OpenDMD to show formulas on the panel"),
+                               (400, "unknown name `q`", "The panel can’t show"),
+                               (0, "", "Couldn’t reach the panel")):
+        def answer(route, _req, status=status, body=body):
+            if not status:
+                route.abort()
+            else:
+                route.fulfill(status=status, body=json.dumps({"error": body}), headers={"content-type": "application/json"})
+        page.route("**/api/play", answer)
+        clear_toasts(page)
+        page.click("#psi-ed-show")
+        t = last_toast(page, "bad")
+        page.unroute("**/api/play")
+        check(t.startswith(want) and page.inner_text("#psi-ed-show") == "Show on panel", f"formulas panel: a {status or 'failed request'} says '{t}'")
+    shot(page, "formulas-panel", "laptop")
+    page.context.close()
+    expected.remove("/api/play")
+
+
 def psi_frames(page: Page, sel: str) -> int:
     return int(page.get_attribute(sel, "data-frames") or 0)
 
@@ -3309,8 +3387,9 @@ def formulas_demo_pass(browser, base: str, errors: list[str]) -> None:
     page.wait_for_function("document.querySelector('#where').textContent.startsWith('Demo')", timeout=20000)
     page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
     wait_lit(page, "#psi-ed-panel", "formulas (demo): a shared formula")
-    check(page.input_value("#psi-name") == "Demo rings" and page.input_value("#psi-src").startswith("loop 4\nrings"),
-          f"formulas (demo): the link opened '{page.input_value('#psi-name')}'")
+    check(page.input_value("#psi-name") == "Demo rings" and page.input_value("#psi-src").startswith("loop 4\nrings")
+          and page.locator("#psi-ed-show, #psi-show").count() == 0,
+          f"formulas (demo): the link opened '{page.input_value('#psi-name')}', no Show on panel")
     # The demo's share link is its own site's formula page.
     page.click("#psi-ed-share")
     link = page.input_value("#psi-link")
