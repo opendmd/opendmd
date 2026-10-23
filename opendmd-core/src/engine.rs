@@ -884,6 +884,28 @@ impl Engine {
         Ok(())
     }
 
+    /// A formula on screen takes `path`'s formula in place (a live edit from
+    /// the web app: no transition, its clock and memory kept) with a fresh
+    /// dwell, as [`play_now`](Self::play_now) would give it. `None` if what
+    /// is on screen or `path` is not a formula (the caller plays it as
+    /// usual); `Some(Err)` if it does not compile — what is on screen
+    /// carries on.
+    #[cfg(feature = "psi")]
+    pub fn retune(&mut self, path: &str, now: Duration) -> Option<io::Result<()>> {
+        let at = self.paused_since.unwrap_or(now);
+        let p = self.current.as_mut()?;
+        let r = p.gif.synth_mut()?.retune(path)?;
+        if r.is_ok() {
+            p.path = path.to_string();
+            p.started_at = at;
+            p.loops = 0;
+            p.timed = None;
+            p.done = false;
+            self.skip_requested = false;
+        }
+        Some(r)
+    }
+
     /// Finish the current GIF at the next tick.
     pub fn skip(&mut self) {
         self.skip_requested = true;
@@ -1565,6 +1587,48 @@ mod tests {
         };
         assert_eq!(playing.path, "/gifs/Consoles/NES_B_01.gif");
         assert_eq!(e.catalog_len(), 2);
+    }
+
+    /// A live edit of a formula on screen: no transition, a fresh dwell,
+    /// the new path reported; a broken one leaves it playing; a GIF on
+    /// screen is not a formula's to replace.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn fx_psi_live_edit_replaces_the_formula_in_place() {
+        let mut e = engine_with(
+            &[("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0))],
+            "/gifs/Consoles/NES_A_01.gif",
+            DwellPolicy {
+                min: Duration::from_secs(10),
+                max: Duration::from_secs(10),
+                min_loops: 0,
+            },
+        );
+        let mut c = Canvas::new();
+        e.tick(Duration::ZERO, &mut c).unwrap();
+        let a = crate::fx_psi::path("rgb(a, x, 0)", "a=0.5");
+        let b = crate::fx_psi::path("rgb(a, y, 0)", "a=1");
+        assert!(e.retune(&a, Duration::ZERO).is_none(), "a GIF on screen");
+        e.play_now(&a, Duration::from_millis(100)).unwrap();
+        let mut t = 100;
+        while t < 9_000 {
+            e.tick(Duration::from_millis(t), &mut c).unwrap();
+            t += 20;
+        }
+        assert!(!e.is_transitioning());
+        e.retune(&b, Duration::from_millis(t)).unwrap().unwrap();
+        assert!(!e.is_transitioning());
+        let bad = crate::fx_psi::path("gray(nope)", "");
+        assert!(e.retune(&bad, Duration::from_millis(t)).unwrap().is_err());
+        // The fresh dwell: still on at t + 9 s (past the first one's 10 s).
+        let end = t + 9_000;
+        while t < end {
+            e.tick(Duration::from_millis(t), &mut c).unwrap();
+            assert!(!e.is_transitioning(), "{t}");
+            t += 20;
+        }
+        assert_eq!(e.now_playing().unwrap().path, b);
+        assert_eq!(c.get(0, 0).r, 255, "the new sliders");
     }
 
     #[test]

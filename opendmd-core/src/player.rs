@@ -624,6 +624,16 @@ impl<R: Read + io::Seek> FrameSource<R> {
         })
     }
 
+    /// The virtual file being drawn, if this is one (a live edit of a
+    /// formula on screen).
+    #[cfg(feature = "psi")]
+    pub fn synth_mut(&mut self) -> Option<&mut crate::synth::SynthSource<R>> {
+        match &mut self.dec {
+            Dec::Synth(s) => Some(s),
+            _ => None,
+        }
+    }
+
     /// Loop a virtual file in place ([`SynthSource::rewind`](crate::synth::SynthSource::rewind)):
     /// true if this is one (nothing reopened, nothing allocated), false for
     /// a GIF, which the caller rewinds and reopens.

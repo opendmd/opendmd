@@ -56,8 +56,25 @@ pub const POWER_ON_FRAMES: u32 = 35;
 pub const POWER_ON_FRAME: Duration = Duration::from_millis(20);
 /// How long a title card holds its one frame (one loop).
 pub const CARD_DWELL: Duration = Duration::from_millis(3000);
-/// A virtual path longer than this is refused.
+/// A virtual path longer than this is refused (a formula's may be
+/// [`MAX_FORMULA_PATH`]).
 pub(crate) const MAX_PATH: usize = 512;
+/// A formula's path (`@fx:psi?src=…`) may be this long: ~2 KB of compacted
+/// source. `POST /api/play` refuses a longer one with a 413.
+pub const MAX_FORMULA_PATH: usize = 2048;
+const MAX_READ: usize = if cfg!(feature = "psi") {
+    MAX_FORMULA_PATH
+} else {
+    MAX_PATH
+};
+/// A formula's path starts with this.
+pub const FORMULA: &str = "@fx:psi";
+
+/// Is `path` a formula (`@fx:psi?…`)?
+pub fn is_formula(path: &str) -> bool {
+    path.strip_prefix(FORMULA)
+        .is_some_and(|r| r.is_empty() || r.starts_with('?'))
+}
 /// The live clock's path (options after `?`: see [`ClockSpec`]).
 pub const CLOCK: &str = "@clock";
 /// The scrolling text's path prefix: `@text?msg=...` (see [`TextSpec`]).
@@ -357,6 +374,11 @@ pub fn card_path(title: &str, subtitle: &str) -> String {
 /// card's title, "Power on", "Clock", or a text's message. `None` for
 /// anything else.
 pub fn title(path: &str) -> Option<String> {
+    // Without compiling it (2-3 ms and 10 KB on the device), and in builds
+    // without Psi (the web app's Recently played).
+    if is_formula(path) {
+        return Some("Formula".to_string());
+    }
     match parse(path)? {
         Spec::PowerOn => Some("Power on".to_string()),
         Spec::Card { title, .. } => Some(title),
@@ -485,6 +507,9 @@ pub struct SynthSource<R: Read> {
     painted: bool,
     /// What the clock shows now (the fields it draws, packed).
     shows: u64,
+    /// An effect's position in its loop: the sum of the frame times it
+    /// returned (a formula's governor may hold frames longer).
+    elapsed: Duration,
 }
 
 impl<R: Read> SynthSource<R> {
@@ -493,13 +518,25 @@ impl<R: Read> SynthSource<R> {
     pub fn new(mut reader: R) -> io::Result<Self> {
         let mut raw = Vec::new();
         (&mut reader)
-            .take(MAX_PATH as u64 + 4)
+            .take(MAX_READ as u64 + 4)
             .read_to_end(&mut raw)?;
-        let spec = raw
+        let path = raw
             .strip_prefix(&MAGIC)
             .and_then(|p| std::str::from_utf8(p).ok())
-            .and_then(parse)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unknown virtual file"))?;
+            .unwrap_or("");
+        // Only a formula may be longer than a virtual path.
+        let path = if path.len() > MAX_PATH && !is_formula(path) {
+            ""
+        } else {
+            path
+        };
+        let Some(spec) = parse(path) else {
+            #[cfg(feature = "psi")]
+            if let Some(e) = crate::fx_psi::open_error(path) {
+                return Err(e);
+            }
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown virtual file"));
+        };
         Ok(SynthSource {
             reader,
             spec,
@@ -507,7 +544,24 @@ impl<R: Read> SynthSource<R> {
             table: None,
             painted: false,
             shows: u64::MAX,
+            elapsed: Duration::ZERO,
         })
+    }
+
+    /// A formula on screen takes `path`'s formula in place, keeping its
+    /// clock and memory (a live edit: no transition, no restart). `None` if
+    /// this or `path` is not a formula; `Some(Err)` (`InvalidInput`, the
+    /// compiler's sentence) if it does not compile.
+    #[cfg(feature = "psi")]
+    pub fn retune(&mut self, path: &str) -> Option<io::Result<()>> {
+        let Spec::Fx(crate::fx::Fx::Psi(cur)) = &mut self.spec else {
+            return None;
+        };
+        if !is_formula(path) {
+            return None;
+        }
+        let q = path[FORMULA.len()..].trim_start_matches('?');
+        Some(cur.retune_from(q).map_err(crate::fx_psi::io_error))
     }
 
     /// Start again from the first frame without reopening: a loop. The live
@@ -515,6 +569,7 @@ impl<R: Read> SynthSource<R> {
     /// frame), so a clock's next second draws only what changed.
     pub fn rewind(&mut self) {
         self.frames = 0;
+        self.elapsed = Duration::ZERO;
     }
 
     pub fn into_inner(self) -> R {
@@ -567,10 +622,12 @@ impl<R: Read> SynthSource<R> {
                 })
             }
             Spec::Fx(f) => {
-                if self.frames >= u64::from(f.loop_frames()) {
+                if self.elapsed >= f.loop_time() {
                     return Ok(None);
                 }
-                f.frame(f.delay() * self.frames as u32, canvas)
+                let d = f.frame(self.elapsed, canvas);
+                self.elapsed += d;
+                d
             }
             Spec::Boot(b) => {
                 let delay = crate::boot::frame_delay();
@@ -1273,6 +1330,9 @@ mod tests {
         }
         assert_eq!(title("@fx:tunnel?cycle=1").as_deref(), Some("Tunnel"));
         assert_eq!(title("@fx:nope"), None);
+        // A formula is "Formula", compiled or not, in any build.
+        assert_eq!(title("@fx:psi?src=gray(x)&a=0.5").as_deref(), Some("Formula"));
+        assert!(is_formula("@fx:psi") && !is_formula("@fx:psix?src=1") && !is_formula("@fx:tunnel"));
         let m = "@fx:starfield?fps=50\n@fx:wire?speed=4\n".to_string();
         let cat = FileCatalog::build(Cursor::new(m.into_bytes()), &Filter::new()).unwrap();
         let dwell = DwellPolicy {

@@ -1421,6 +1421,17 @@ impl Fx {
         self.effect().loop_frames()
     }
 
+    /// One loop's length as played: what [`crate::synth::SynthSource`]
+    /// counts frame times against (a formula's frames may be held longer
+    /// than [`delay`](Self::delay): `fx_psi::Governor`).
+    pub fn loop_time(&mut self) -> Duration {
+        #[cfg(feature = "psi")]
+        if let Fx::Psi(e) = self {
+            return e.loop_time();
+        }
+        self.delay() * self.loop_frames()
+    }
+
     /// The frame delay (20 ms, or 40 with `fps=25`).
     pub fn delay(&self) -> Duration {
         match self {
