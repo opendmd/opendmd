@@ -434,7 +434,6 @@ fn gif_round_trips_and_prepares_without_requantising() {
     // The prepared copy keeps these colours exactly.
     let prepared = &opendmd_core::gifslim::PREPARED;
     let stats = opendmd_core::gifslim::recode_gif(gif.as_slice(), Vec::new(), prepared).unwrap();
-    assert!(!stats.quantised);
     assert_eq!(stats.frames, 29);
     assert_eq!(stats.colours, anim.palette.len());
     // One colour still makes a valid file.
@@ -495,9 +494,30 @@ fn prepare_gif_matches_the_core_recoder_byte_for_byte() {
         let st = get(&got, "stats");
         assert_eq!(get(&st, "frames").as_f64(), Some(stats.frames as f64));
         assert_eq!(get(&st, "out_bytes").as_f64(), Some(want.len() as f64));
-        assert_eq!(get(&st, "quantised").as_bool(), Some(false));
     }
     assert!(crate::prepare_gif(b"GIF89a but not really").is_err());
+    // Past 256 colours: no copy (never a lossy one); the error says the GIF
+    // plays as it is, which is what js/prepare.js recognises and records.
+    let mut many = Vec::new();
+    {
+        let mut e = gif::Encoder::new(&mut many, 128, 32, &[]).unwrap();
+        for k in 0..3u16 {
+            let pal: Vec<u8> = (0..100)
+                .flat_map(|i: u16| [(i * 2) as u8, (k * 80) as u8, (255 - i) as u8])
+                .collect();
+            e.write_frame(&gif::Frame {
+                width: 128,
+                height: 32,
+                palette: Some(pal),
+                buffer: std::borrow::Cow::Owned((0..4096).map(|i| (i % 100) as u8).collect()),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+    }
+    let e = crate::prepare_gif(&many).map(|_| ()).unwrap_err();
+    let msg: String = js_sys::Error::from(JsValue::from(e)).message().into();
+    assert!(opendmd_core::gifslim::plays_original(&msg), "{msg}");
 }
 
 /// FNV-1a 64: a fingerprint of bytes, the same on every platform.

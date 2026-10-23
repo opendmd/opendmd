@@ -216,8 +216,8 @@ fn real_card_manifest() {
 /// the two strays (132x32 and 135x32) and eleven drawn with a fixed seed —
 /// must each be exactly `recode_gif`'s bytes for its GIF, open through
 /// `FrameSource` as gifslim at the hint's cap 9, and play every canvas and
-/// delay exactly as `GifSource` plays the GIF (quantised files, lossy by
-/// design, are left out of the draw). Then the engine plays 50 entries of
+/// delay exactly as `GifSource` plays the GIF (a GIF past 256 colours has
+/// no copy: it plays as it is, and a copy found for one is an error). Then the engine plays 50 entries of
 /// `filelist.txt` through a source that resolves each GIF's copy first, as
 /// the firmware's `SdSource` does.
 #[test]
@@ -269,23 +269,27 @@ fn prepared_copies_on_the_real_card() {
         checked += 1;
         let gif = std::fs::read(card.join(gif_path.trim_start_matches('/'))).unwrap();
         let mut want = Vec::new();
-        let Ok(stats) = recode_gif(&gif[..], &mut want, &PREPARED) else {
-            println!("  --  {gif_path}: does not recode (damaged), no copy expected");
-            continue;
-        };
         let copy_path = layout::cache_path(&gif_path).unwrap();
+        let stats = match recode_gif(&gif[..], &mut want, &PREPARED) {
+            Ok(s) => s,
+            Err(e) if opendmd_core::gifslim::is_too_many_colours(&e) => {
+                println!("  ==  {gif_path}: more than 256 colours, plays as it is");
+                assert!(
+                    !card.join(copy_path.trim_start_matches('/')).exists(),
+                    "{copy_path}: a lossy copy (opendmd-pack convert removes it)"
+                );
+                continue;
+            }
+            Err(_) => {
+                println!("  --  {gif_path}: does not recode (damaged), no copy expected");
+                continue;
+            }
+        };
         let copy = std::fs::read(card.join(copy_path.trim_start_matches('/')))
             .unwrap_or_else(|e| panic!("{copy_path}: {e}"));
         assert!(copy == want, "{copy_path}: not recode_gif's bytes");
         let mut c = FrameSource::open(io::Cursor::new(copy)).unwrap();
         assert_eq!((c.kind(), c.cap()), ("slim", Some(9)), "{copy_path}");
-        if stats.quantised {
-            println!(
-                "  ~~  {gif_path}: quantised ({} colours), not compared",
-                stats.colours
-            );
-            continue;
-        }
         let mut g = GifSource::new(&gif[..]).unwrap();
         let (mut cg, mut cc) = (Canvas::new(), Canvas::new());
         let mut frames = 0u64;

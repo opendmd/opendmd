@@ -38,7 +38,6 @@ use crate::player::{
     MAX_LOGICAL_PIXELS,
 };
 use gif::DisposalMethod;
-use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::time::Duration;
 
@@ -1357,8 +1356,6 @@ pub struct RecodeStats {
     /// Distinct colours in the palette written (not counting a transparent
     /// slot).
     pub colours: usize,
-    /// More than 256 colours (or 256 with delta frames): `NeuQuant`, lossy.
-    pub quantised: bool,
     /// Exactly 256 colours with delta frames: no slot to spare, so each
     /// frame's transparent index is one its changed pixels do not use.
     pub opaque_deltas: bool,
@@ -1376,17 +1373,20 @@ pub struct RecodeStats {
     pub lzw: LzwStats,
 }
 
-/// [`recode_gif_streaming`] met a 257th distinct colour: exact indexing is
-/// impossible and the quantising path ([`recode_gif`], i.e. the browser or
-/// `opendmd-pack`) has to make this file. Carried inside an `io::Error` of
-/// kind `InvalidData`; test with [`is_too_many_colours`]. Nothing has been
-/// written when it is returned.
+/// The recoder met a 257th distinct colour: an exact copy is impossible, so
+/// **there is no copy** and the player plays the GIF itself (gifslim at cap
+/// 12 plays it exactly; a quantised copy would only make it worse —
+/// `docs/research/cache-value.md`). Every caller — the device's builder,
+/// `opendmd-pack`, the browser — records it with [`ORIGINAL_REASON`] and
+/// counts it as done. Carried inside an `io::Error` of kind `InvalidData`;
+/// test with [`is_too_many_colours`]. Nothing has been written when it is
+/// returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TooManyColours;
 
 impl std::fmt::Display for TooManyColours {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("more than 256 colours (needs the quantising encoder)")
+        f.write_str(ORIGINAL_REASON)
     }
 }
 impl std::error::Error for TooManyColours {}
@@ -1395,7 +1395,52 @@ pub fn is_too_many_colours(e: &io::Error) -> bool {
     e.get_ref().is_some_and(|i| i.is::<TooManyColours>())
 }
 
-const NEUQUANT_SAMPLEFAC: i32 = 10;
+/// The reason recorded in `/cache/.failed` for a GIF that deliberately has
+/// no copy because it has more than 256 colours. [`plays_original`]
+/// recognises it, and the bare `"more than 256 colours"` earlier firmware
+/// wrote.
+pub const ORIGINAL_REASON: &str = "more than 256 colours: plays as it is";
+
+/// Does a `/cache/.failed` reason mean "no copy on purpose: the GIF plays
+/// as it is"? Such a GIF counts as done (`/api/cache`'s `prepared`), not as
+/// failed, and is never tried again.
+pub fn plays_original(reason: &str) -> bool {
+    let r = reason.trim_start().as_bytes();
+    let p = b"more than 256 colo";
+    r.len() >= p.len() && r[..p.len()].eq_ignore_ascii_case(p)
+}
+
+/// Could the copy whose first bytes are `head` be a quantised one (made
+/// before copies were exact-only)? A quantised copy always has a 256-entry
+/// global table (255 `NeuQuant` colours and the transparent slot), so a
+/// copy with a smaller table is exact; with a 256-entry table only the
+/// GIF's colour count ([`fits_palette`]) can tell.
+pub fn copy_may_be_quantised(head: &[u8]) -> bool {
+    head.len() >= 13 && head.starts_with(b"GIF8") && head[10] & 0x87 == 0x87
+}
+
+/// Does the GIF have at most 256 distinct colours (on its composited
+/// frames), i.e. can its prepared copy be exact? The recoder's first pass
+/// alone; it stops at the 257th colour.
+pub fn fits_palette<R: Read + Seek>(reader: R) -> io::Result<bool> {
+    let mut colours = Colours::new();
+    let mut fits = true;
+    scan(
+        reader,
+        false,
+        &mut || true,
+        &mut || Ok(()),
+        &mut |k, screen| {
+            if k == 0 {
+                // (A pass gifslim gave up part way is started again.)
+                colours = Colours::new();
+            }
+            fits = screen.as_chunks::<3>().0.iter().all(|&c| colours.see(c));
+            Ok(fits)
+        },
+    )?;
+    Ok(fits)
+}
 
 /// The source GIF's decoder: gifslim with the full 12-bit table (≈15 KB),
 /// or — for what gifslim does not decode (interlacing, `Previous`) — the
@@ -1533,21 +1578,6 @@ impl Indexer for Colours {
         }
         self.last = (rgb, self.index[s]);
         Ok(self.index[s])
-    }
-}
-
-/// The quantised path's indexer (desktop and browser only).
-struct Quantised {
-    nq: color_quant::NeuQuant,
-    cache: HashMap<[u8; 3], u8>,
-}
-
-impl Indexer for Quantised {
-    fn index_of(&mut self, c: [u8; 3]) -> io::Result<u8> {
-        Ok(*self
-            .cache
-            .entry(c)
-            .or_insert_with(|| self.nq.index_of(&[c[0], c[1], c[2], 255]) as u8))
     }
 }
 
@@ -1699,7 +1729,6 @@ pub fn recode_gif_streaming<R: Read + Seek, W: Write>(
         opts,
         &sc,
         palette,
-        false,
         &mut colours,
         gif_bytes,
         &mut between,
@@ -1732,10 +1761,9 @@ fn check_opts(opts: &RecodeOptions) -> io::Result<()> {
 }
 
 /// Re-encode a GIF held in memory (desktop, browser): exactly
-/// [`recode_gif_streaming`]'s bytes, plus the one thing the device cannot
-/// do — **past 256 colours** (255 with delta frames) `NeuQuant` (sample
-/// factor 10) builds the palette over every pixel of every frame, lossy,
-/// flagged in the stats.
+/// [`recode_gif_streaming`]'s bytes, through the same boxed entry point
+/// the device calls. Past 256 colours it is [`TooManyColours`] here too:
+/// such a GIF gets no copy and plays as it is (copies are exact or absent).
 pub fn recode_gif(
     mut reader: impl Read,
     mut out: impl Write,
@@ -1746,51 +1774,11 @@ pub fn recode_gif(
     reader.read_to_end(&mut gif)?;
     // Through the boxed entry point, like the device: one instantiation of
     // the decoders, shared with the player (the browser's wasm budget).
-    match recode_gif_streaming_dyn(
+    recode_gif_streaming_dyn(
         Box::new(io::Cursor::new(&gif[..])),
         &mut out,
         opts,
         &mut || true,
-        &mut || Ok(()),
-    ) {
-        Err(e) if is_too_many_colours(&e) => {}
-        r => return r,
-    }
-    // Quantised: every frame as RGBA for NeuQuant.
-    let mut rgba = Vec::new();
-    let (cursor, sc) = scan::<Box<dyn crate::engine::ReadSeek + '_>>(
-        Box::new(io::Cursor::new(&gif[..])),
-        false,
-        &mut || true,
-        &mut || Ok(()),
-        &mut |k, screen| {
-            // (A pass gifslim gave up part way is started again.)
-            if k == 0 {
-                rgba.clear();
-            }
-            for px in screen.as_chunks::<3>().0 {
-                rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
-            }
-            Ok(true)
-        },
-    )?;
-    let max_colours = if opts.delta { 255 } else { 256 };
-    let nq = color_quant::NeuQuant::new(NEUQUANT_SAMPLEFAC, max_colours, &rgba);
-    drop(rgba);
-    let palette = nq.color_map_rgb().as_chunks::<3>().0.to_vec();
-    let mut q = Quantised {
-        nq,
-        cache: HashMap::new(),
-    };
-    write_gif(
-        cursor,
-        &mut out,
-        opts,
-        &sc,
-        palette,
-        true,
-        &mut q,
-        gif.len() as u64,
         &mut || Ok(()),
     )
 }
@@ -1811,7 +1799,6 @@ fn write_gif<R: Read + Seek>(
     opts: &RecodeOptions,
     sc: &Scan,
     palette: Vec<[u8; 3]>,
-    quantised: bool,
     indexer: &mut dyn Indexer,
     gif_bytes: u64,
     between: &mut dyn FnMut() -> io::Result<()>,
@@ -1823,7 +1810,7 @@ fn write_gif<R: Read + Seek>(
     if width > u16::MAX as usize || height > u16::MAX as usize {
         return Err(invalid("GIF screen too large"));
     }
-    let opaque_deltas = opts.delta && !quantised && palette.len() == 256;
+    let opaque_deltas = opts.delta && palette.len() == 256;
     let transparent = (opts.delta && !opaque_deltas).then_some(palette.len() as u8);
     let entries = palette.len() + transparent.is_some() as usize;
     let table = entries.max(4).next_power_of_two();
@@ -1842,7 +1829,6 @@ fn write_gif<R: Read + Seek>(
         height,
         frames: sc.frames,
         colours: palette.len(),
-        quantised,
         opaque_deltas,
         gif_bytes,
         full_decoder: sc.full,
@@ -2405,7 +2391,6 @@ mod tests {
                 for delta in [false, true] {
                     let (re, st) = recode(&orig, cap, delta);
                     assert!(st.lzw.max_width <= cap);
-                    assert!(!st.quantised);
                     // A standard GIF: the gif crate plays it identically.
                     assert_eq!(play_gif(&re), (want.clone(), None));
                     let got = play_slim(&re, cap).unwrap();
@@ -2476,8 +2461,9 @@ mod tests {
     }
 
     #[test]
-    fn many_colours_are_quantised_and_256_are_kept() {
-        // 300 colours: NeuQuant, lossy; gif crate and gifslim still agree.
+    fn many_colours_get_no_copy_and_256_are_kept() {
+        // 300 colours: no copy at all (never a lossy one), nothing written;
+        // the GIF plays as it is, exactly, through gifslim at cap 12.
         let mut frames = Vec::new();
         for k in 0..3u16 {
             let pal: Vec<u8> = (0..100)
@@ -2487,12 +2473,17 @@ mod tests {
             frames.push((0, 0, 128, 32, px, DisposalMethod::Keep, 5, Some(pal), None));
         }
         let orig = build(128, 32, None, frames, false);
-        let (re, st) = recode(&orig, 10, true);
-        assert!(st.quantised);
-        assert_eq!(st.colours, 255);
-        let (want, _) = play_gif(&re);
-        assert_eq!(play_slim(&re, 10).unwrap(), want);
-        assert_eq!(want.len(), 3);
+        for delta in [false, true] {
+            let opts = RecodeOptions { delta, ..PREPARED };
+            let mut out = Vec::new();
+            let e = recode_gif(&orig[..], &mut out, &opts).unwrap_err();
+            assert!(is_too_many_colours(&e));
+            assert!(out.is_empty());
+            assert!(plays_original(&e.to_string()));
+        }
+        assert!(!fits_palette(Cursor::new(&orig[..])).unwrap());
+        let (want, _) = play_gif(&orig);
+        assert_eq!(play_slim(&orig, 12).unwrap(), want);
 
         // Exactly 256: kept exact, deltas without transparency.
         let pal = palette(256);
@@ -2508,8 +2499,9 @@ mod tests {
             ],
             false,
         );
+        assert!(fits_palette(Cursor::new(&orig[..])).unwrap());
         let (re, st) = recode(&orig, 9, true);
-        assert!(!st.quantised && st.opaque_deltas);
+        assert!(st.opaque_deltas && st.colours == 256);
         // The second frame changes every pixel through all 256 colours.
         assert_eq!(st.opaque_frames, 1);
         let (want, _) = play_gif(&orig);
@@ -2636,6 +2628,7 @@ mod tests {
     /// the reference the hand-written container is held to.
     mod reference {
         use super::super::*;
+        use std::collections::HashMap;
 
         fn enc_err(e: gif::EncodingError) -> io::Error {
             match e {
@@ -2668,8 +2661,7 @@ mod tests {
         /// shows. The raw delays (hundredths) and the loop count are copied from the
         /// source, so every viewer times it as before. Palette: the animation's
         /// distinct colours in first-seen order, plus a transparent slot with delta
-        /// frames; past 255 colours with deltas (256 without) `NeuQuant` builds
-        /// 255 (256) — lossy, flagged in the stats. Exactly 256 colours with deltas
+        /// frames; past 256 colours [`TooManyColours`]. Exactly 256 colours with deltas
         /// keep all 256 and send changed rectangles without transparency.
         pub fn reference_recode(
             mut reader: impl Read,
@@ -2722,25 +2714,10 @@ mod tests {
             if frames != delays.len() {
                 return Err(invalid("frame count differs between passes"));
             }
-            let max_colours = if opts.delta { 255 } else { 256 };
-            let quantise = too_many;
-            let opaque_deltas = opts.delta && !too_many && palette.len() == 256;
-            let quant = if quantise {
-                let mut rgba = Vec::with_capacity(frames * width * height * 4);
-                each_frame(&gif, |_, screen| {
-                    for px in screen.as_chunks::<3>().0 {
-                        rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
-                    }
-                    Ok(())
-                })?;
-                let nq = color_quant::NeuQuant::new(NEUQUANT_SAMPLEFAC, max_colours, &rgba);
-                drop(rgba);
-                palette = nq.color_map_rgb().as_chunks::<3>().0.to_vec();
-                lookup.clear();
-                Some(nq)
-            } else {
-                None
-            };
+            if too_many {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, TooManyColours));
+            }
+            let opaque_deltas = opts.delta && palette.len() == 256;
             let transparent = (opts.delta && !opaque_deltas).then_some(palette.len() as u8);
             let entries = palette.len() + transparent.is_some() as usize;
             let table = entries.max(4).next_power_of_two();
@@ -2764,7 +2741,6 @@ mod tests {
                 height,
                 frames: frames as u32,
                 colours: palette.len(),
-                quantised: quant.is_some(),
                 opaque_deltas,
                 gif_bytes: gif.len() as u64,
                 ..Default::default()
@@ -2798,16 +2774,8 @@ mod tests {
             each_frame(&gif, |k, screen| {
                 let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
                 for (i, &c) in screen.as_chunks::<3>().0.iter().enumerate() {
-                    let q = match (&quant, lookup.get(&c)) {
-                        (_, Some(&q)) => q,
-                        (Some(nq), None) => {
-                            let q = nq.index_of(&[c[0], c[1], c[2], 255]) as u8;
-                            lookup.insert(c, q);
-                            q
-                        }
-                        (None, None) => {
-                            return Err(invalid("GIF decoded differently on the second pass"))
-                        }
+                    let Some(&q) = lookup.get(&c) else {
+                        return Err(invalid("GIF decoded differently on the second pass"));
                     };
                     idx[i] = q;
                     let shown = &palette[q as usize];
@@ -3002,8 +2970,42 @@ mod tests {
             .unwrap_err();
         assert!(is_too_many_colours(&e));
         assert!(out.is_empty());
-        // The in-memory path quantises it instead.
-        assert!(recode_gif(&g[..], Vec::new(), &PREPARED).unwrap().quantised);
+        // The in-memory path refuses it the same way: no lossy copy.
+        let mut out = Vec::new();
+        assert!(is_too_many_colours(
+            &recode_gif(&g[..], &mut out, &PREPARED).unwrap_err()
+        ));
+        assert!(out.is_empty());
+        assert!(!fits_palette(Cursor::new(&g[..])).unwrap());
+    }
+
+    #[test]
+    fn the_original_reason_and_the_quantised_copy_test() {
+        // What .failed lines say: this build's reason, the bare one earlier
+        // firmware wrote, and nothing else.
+        assert!(plays_original(ORIGINAL_REASON));
+        assert!(plays_original("more than 256 colours"));
+        assert!(plays_original(" More than 256 colors"));
+        assert!(!plays_original("invalid LZW"));
+        assert!(!plays_original("132x32 is too large to prepare here"));
+        assert!(!plays_original(""));
+        // A copy with a small table cannot be a quantised one; a 256-entry
+        // table might be (and needs the GIF's colour count).
+        let small = recode(&animation(128, 32, 3), 9, true).0;
+        assert!(!copy_may_be_quantised(&small));
+        let pal = palette(256);
+        let px: Vec<u8> = (0..4096).map(|i| (i % 256) as u8).collect();
+        let full = build(
+            128,
+            32,
+            Some(pal),
+            vec![(0, 0, 128, 32, px, DisposalMethod::Keep, 5, None, None)],
+            false,
+        );
+        let big = recode(&full, 9, true).0;
+        assert!(copy_may_be_quantised(&big));
+        assert!(!copy_may_be_quantised(b"GIF8"));
+        assert!(!copy_may_be_quantised(&[0u8; 32]));
     }
 
     #[test]
@@ -3111,7 +3113,13 @@ mod tests {
             assert_eq!((p.width, p.height), s.logical_size());
             assert_eq!(p.hint, s.hint());
         }
-        assert_eq!(probe(&mut Cursor::new(&hinted[..])).unwrap().hint.map(|h| h.cap), Some(9));
+        assert_eq!(
+            probe(&mut Cursor::new(&hinted[..]))
+                .unwrap()
+                .hint
+                .map(|h| h.cap),
+            Some(9)
+        );
         assert_eq!(probe(&mut Cursor::new(&plain[..])).unwrap().hint, None);
         // A comment and a foreign application extension before the hint are
         // stepped over, as `read_header` steps over them.

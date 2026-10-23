@@ -26,10 +26,8 @@ written by `gifslim::recode_gif` / `recode_gif_streaming` with
 - **One global palette**: the animation's distinct colours, first seen
   scanning each composited frame in raster order, then a transparent slot;
   the table is padded to a power of two (≥ 4 entries) and the minimum code
-  size is its log2. Past 255 colours `NeuQuant` (sample factor 10) builds 255
-  — lossy, 38 files on the stock card, worst channel error 151; only the
-  desktop and the browser do this (the device refuses the file: "more than
-  256 colours"). **Exactly 256 colours** (114 files) keeps all 256 with no
+  size is its log2. **Past 256 colours there is no copy** (below).
+  **Exactly 256 colours** (114 files) keeps all 256 with no
   transparent slot: each frame's transparent index is any index its changed
   pixels do not use (a frame that used every one would be sent opaque; none
   on the card does).
@@ -68,17 +66,52 @@ written by `gifslim::recode_gif` / `recode_gif_streaming` with
   control extension before every frame, 255-byte data sub-blocks, the
   trailer) — a unit test holds the hand-written streaming writer to it.
 
+## Exact or absent: GIFs past 256 colours
+
+A copy is the GIF's frames exactly, or there is none. A GIF with more than
+256 distinct colours on its composited frames (38 on the stock card) could
+only get a quantised copy (`NeuQuant` made them until 2026-10-23: worst
+channel error 151), while the player plays the original exactly through
+gifslim at cap 12 (~27 KB of heap; `docs/research/cache-value.md`). So all
+three encoders refuse it (`gifslim::TooManyColours`, nothing written) and it
+**plays as it is**:
+
+- Whoever meets it records it in `cache/.failed` as
+  `/gifs/…/X.gif<TAB>more than 256 colours: plays as it is`
+  (`gifslim::ORIGINAL_REASON`; `gifslim::plays_original` also accepts the
+  bare `more than 256 colours` earlier firmware wrote): the device's
+  builder, the browser (`POST /api/cache/failed`), `opendmd-pack convert`
+  (once per path).
+- It **counts as done**: `GET /api/cache`'s `prepared` counts the playlist
+  entries with a copy *or* such a line, and the builder's `failed` leaves
+  them out. Nothing tries it again (deleting `cache/.failed` does, and it
+  is recorded again).
+- **Smooth motion** never applies: the tweened frames have the GIF's
+  colours, so their copy would be lossy too. The Library does not offer the
+  switch (`Smoother.fits`, `tween::Smooth::fits_palette`).
+- **Old lossy copies** are removed where they can be recognised. A
+  quantised copy always has a 256-entry global table (255 colours and the
+  transparent slot), so `gifslim::copy_may_be_quantised(header)` rules out
+  every copy with a smaller table, and `gifslim::fits_palette(GIF)` (the
+  colour pass alone, stopping at the 257th) decides the rest:
+  `opendmd-pack convert` checks every up-to-date copy that way and removes
+  the 38 on the stock card (19 s with `--verify` on 16 jobs). The browser
+  has no GIFs to count without downloading them all, so "Prepare remaining
+  files" removes a copy only for a GIF `cache/.failed` already says plays as
+  it is. A card whose lossy copies were made by an older browser or pack
+  and that the device's builder never met keeps them until
+  `opendmd-pack convert` runs on it.
+
 **One encoder, three callers, the same bytes.** `recode_gif_streaming` is two
 passes over a seekable source — the first collects colours, frame count, size
 and loop count, the second writes the GIF a frame at a time with the LZW
 streamed out as it is made — in bounded memory (below). `recode_gif`, the
-in-memory entry point, *is* that function over a `Cursor`, plus the quantiser
-for files past 256 colours. `opendmd-pack convert`, the browser (`prepareGif`, in the art wasm module
+in-memory entry point, *is* that function over a `Cursor`. `opendmd-pack convert`, the browser (`prepareGif`, in the art wasm module
 that `www/js/artmod.js` loads on first use, for "Prepare remaining files",
 Add GIFs and the Studio) and
 the device's cache builder therefore write identical files: checked over the
-whole stock card (`encodeprobe`: 11,001 byte-identical, the 38 quantised ones
-refused by the streaming path, 8 undecodable by both, 0 mismatches; and the
+whole stock card (`encodeprobe`: 11,001 byte-identical, the 38 past 256
+colours refused by both, 8 undecodable by both, 0 mismatches; and the
 tree it wrote equals `opendmd-pack convert`'s file for file), in the
 art-web crate's wasm tests and web-smoke (every copy the browser makes
 equals `opendmd-pack convert`'s), and on a player (copies the
@@ -100,7 +133,8 @@ is never touched.
   as a plain GIF (every frame whole, 12-bit LZW, the source's loop count;
   one global palette of the source's colours when it has ≤ 256, else one
   per frame) and that goes through the recoder in `PREPARED` like any GIF,
-  so everything above holds (cap 9, delta frames, the hint). The browser
+  so everything above holds (cap 9, delta frames, the hint; past 256 colours
+  no copy at all). The browser
   (the art module's `Smoother` / `prepareSmoothGif`) and `opendmd-pack
   convert` write byte-identical files (web-smoke compares them; the art
   crate's tests pin a fingerprint natively and in wasm). The device never
@@ -182,8 +216,10 @@ under `gifs/` *or* `cache/`; under `cache/` the directory holding the file is
 the bucket, never the category, so `/cache/Consoles/38/X.gif` gets exactly the
 tags of `/gifs/Consoles/X.gif`.
 
-`cache/.failed` is the cache builder's list of GIFs it could not prepare
-(`path<TAB>reason` a line; `GET/POST/DELETE /api/cache/failed`).
+`cache/.failed` is the list of GIFs with no copy: those the cache builder or
+the browser could not prepare, and those that play as they are (past 256
+colours, above) (`path<TAB>reason` a line; `GET/POST/DELETE
+/api/cache/failed`).
 
 **The retired format.** Cards prepared before this change have an `odm/`
 tree of `.odm` files. The firmware never reads it (it logs once at boot that
@@ -224,7 +260,7 @@ the changed bits (512 B), the colour table (~2.8 KB), the LZW dictionary
 allocator over the whole card (`encodeprobe --heap`). A file gifslim cannot decode needs the `gif` crate
 (~26 KB more); the builder uses it only if that much is free and otherwise
 records the file as "too large to prepare here", which the browser then
-prepares. More than 256 colours is refused the same way.
+prepares. More than 256 colours is recorded as playing as it is (above).
 
 ## Tools
 
@@ -233,11 +269,11 @@ prepares. More than 256 colours is refused the same way.
   copy with the GIF's mtime is up to date and skipped unless `--force`).
   `--verify` plays every copy against its GIF through three decoders at once
   (original/`GifSource`, copy/`GifSource`, copy/`GifSlim` at cap 9): every
-  canvas and delay identical, or for a quantised file the same frames and
-  delays with the colour error reported. Stock card, 16 jobs, loaded host:
-  11,039 copies in 116 s including the verification; 11,001 identical, 38
-  quantised, 1,791,896 frames compared, 0 failures; 8 GIFs neither decoder
-  can play get no copy.
+  canvas and delay identical. GIFs past 256 colours get none ("N play as
+  they are", any old lossy copy removed, `cache/.failed` lines added) and
+  count as done. Stock card, 16 jobs, loaded host: 11,001 copies
+  identical, 38 playing as they are (`done: 11039 of 11047`); 8 GIFs
+  neither decoder can play get no copy.
 - `cargo run --release --example encodeprobe -- [--heap] [--out <root>]
   <gifs-dir>` (in `opendmd-core`) — the in-memory and streaming encoders
   against each other over every file, and the streaming one's peak heap.

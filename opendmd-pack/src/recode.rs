@@ -136,11 +136,6 @@ pub enum Verdict {
     /// Original, `gif` crate on the copy and gifslim on the copy: every
     /// canvas and delay identical.
     Exact,
-    /// Quantised copy: the two decoders of the copy agree exactly; against
-    /// the original, frames and delays match and colours are within `max_err`.
-    Lossy {
-        max_err: u8,
-    },
     /// gifslim refused the copy at its cap (must never happen).
     NeedsFull(String),
     Fail(String),
@@ -200,15 +195,11 @@ pub fn recode(
         let gif = fs::read(path)?;
         let dst = out_path(path, &suffix);
         let (out, stats) = if verify_only {
-            // The copy on disk, as a previous run wrote it. Whether it was
-            // quantised is not known here: a copy that differs from the
-            // original while both its decoders agree is reported as
-            // "quantised", and the caller checks that list.
+            // The copy on disk, as a previous run wrote it.
             let out = fs::read(&dst)?;
             let stats = RecodeStats {
                 gif_bytes: gif.len() as u64,
                 out_bytes: out.len() as u64,
-                quantised: true,
                 ..Default::default()
             };
             (out, stats)
@@ -227,7 +218,7 @@ pub fn recode(
             (out, stats)
         };
         let (verdict, frames_compared, slim) = if verify || verify_only {
-            let (v, n, s) = compare(&gif, &out, cap, stats.quantised);
+            let (v, n, s) = compare(&gif, &out, cap);
             (Some(v), n, s)
         } else {
             (None, 0, SlimStats::default())
@@ -246,17 +237,16 @@ pub fn recode(
         let mut f = io::BufWriter::new(fs::File::create(&tsv)?);
         writeln!(
             f,
-            "rel\tgif\tout\tframes\tcolours\tquantised\topaque\trect_px\tclears\tmax_string\tverdict"
+            "rel\tgif\tout\tframes\tcolours\topaque\trect_px\tclears\tmax_string\tverdict"
         )?;
         for (rel, r) in &results {
             writeln!(
                 f,
-                "{rel}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{rel}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 r.gif_bytes,
                 r.stats.out_bytes,
                 r.stats.frames,
                 r.stats.colours,
-                r.stats.quantised as u8,
                 r.stats.opaque_deltas as u8,
                 r.stats.rect_px,
                 r.stats.lzw.clears,
@@ -264,7 +254,6 @@ pub fn recode(
                 match &r.verdict {
                     None => "-".to_string(),
                     Some(Verdict::Exact) => "exact".into(),
-                    Some(Verdict::Lossy { max_err }) => format!("lossy:{max_err}"),
                     Some(Verdict::NeedsFull(e)) => format!("needsfull:{e}"),
                     Some(Verdict::Fail(e)) => format!("FAIL:{e}"),
                 }
@@ -290,7 +279,8 @@ fn out_path(gif: &Path, suffix: &str) -> PathBuf {
 /// Play the original and the copy (twice) in lockstep: the original
 /// through `GifSource`, the copy through `GifSource` and through `GifSlim`
 /// at `cap`. Returns the verdict, the frames compared and gifslim's stats.
-pub fn compare(orig: &[u8], copy: &[u8], cap: u8, quantised: bool) -> (Verdict, u64, SlimStats) {
+/// Copies are exact or absent: any pixel that differs is a failure.
+pub fn compare(orig: &[u8], copy: &[u8], cap: u8) -> (Verdict, u64, SlimStats) {
     let run = || -> Result<(Verdict, u64, SlimStats)> {
         let mut a = GifSource::new(orig)?;
         let mut b = GifSource::new(copy)?;
@@ -343,10 +333,9 @@ pub fn compare(orig: &[u8], copy: &[u8], cap: u8, quantised: bool) -> (Verdict, 
             }
             frames += 1;
         }
-        let v = match (max_err, quantised) {
-            (0, _) => Verdict::Exact,
-            (e, true) => Verdict::Lossy { max_err: e },
-            (e, false) => Verdict::Fail(format!("pixels differ from the original by up to {e}")),
+        let v = match max_err {
+            0 => Verdict::Exact,
+            e => Verdict::Fail(format!("pixels differ from the original by up to {e}")),
         };
         Ok((v, frames, c.stats()))
     };
@@ -398,7 +387,6 @@ fn report(
             ratio(r)
         );
     }
-    let q = results.iter().filter(|r| r.1.stats.quantised).count();
     let o = results.iter().filter(|r| r.1.stats.opaque_deltas).count();
     let of: u64 = results.iter().map(|r| r.1.stats.opaque_frames).sum();
     let clears: u64 = results.iter().map(|r| r.1.stats.lzw.clears).sum();
@@ -414,7 +402,7 @@ fn report(
         .map(|r| r.1.stats.frames as u64 * (r.1.stats.width * r.1.stats.height) as u64)
         .sum();
     println!(
-        "quantised: {q}  exactly 256 colours with deltas: {o} (frames with no spare index: {of})  frame-rect pixels {:.1}% of all  \
+        "exactly 256 colours with deltas: {o} (frames with no spare index: {of})  frame-rect pixels {:.1}% of all  \
          codes {codes}  extra CLEARs {clears}  longest string {max_string}",
         100.0 * rect as f64 / px.max(1) as f64
     );
@@ -424,8 +412,7 @@ fn report(
     if verified.is_empty() {
         return;
     }
-    let (mut exact, mut lossy, mut worst_err, mut needs, mut fails, mut frames) =
-        (0, 0, 0u8, Vec::new(), Vec::new(), 0u64);
+    let (mut exact, mut needs, mut fails, mut frames) = (0, Vec::new(), Vec::new(), 0u64);
     let mut slim_max_string = 0;
     let mut slim_long = 0u64;
     let mut slim_codes = 0u64;
@@ -438,17 +425,13 @@ fn report(
         slim_width = slim_width.max(r.slim.max_width);
         match r.verdict.as_ref().unwrap() {
             Verdict::Exact => exact += 1,
-            Verdict::Lossy { max_err } => {
-                lossy += 1;
-                worst_err = worst_err.max(*max_err);
-            }
             Verdict::NeedsFull(e) => needs.push((rel.as_str(), e.as_str())),
             Verdict::Fail(e) => fails.push((rel.as_str(), e.as_str())),
         }
     }
     println!(
         "verify (original/GifSource vs copy/GifSource vs copy/GifSlim cap {cap}): {} files, {frames} frames: \
-         exact {exact}, quantised {lossy} (worst channel error {worst_err}), NeedsFullDecoder {}, FAIL {}",
+         exact {exact}, NeedsFullDecoder {}, FAIL {}",
         verified.len(),
         needs.len(),
         fails.len()

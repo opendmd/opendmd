@@ -426,7 +426,7 @@ fn saving_writes_the_edited_frames_and_delays() {
             &opendmd_core::gifslim::PREPARED,
         )
         .unwrap();
-        assert_eq!((s.frames, s.quantised), (6, false));
+        assert_eq!(s.frames, 6);
     }
 }
 

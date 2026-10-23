@@ -182,7 +182,6 @@ dependencies = [
 name = "opendmd-core"
 version = "1.0.0-beta.5"
 dependencies = [
- "color_quant",
  "gif",
  "log",
 ]

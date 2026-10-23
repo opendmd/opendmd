@@ -18,9 +18,16 @@
 //! through three decoders at once: the original through `GifSource`, the
 //! copy through `GifSource` (the `gif` crate: "it is a standard GIF") and
 //! the copy through `GifSlim` at cap 9 (what the player uses). Every canvas
-//! and delay must be identical, except for files whose palette had to be
-//! quantised (more than 255 colours), where the frame count and delays must
-//! match and the colour error is reported.
+//! and delay must be identical.
+//!
+//! **Copies are exact or absent.** A GIF with more than 256 colours gets no
+//! copy (it would have to be quantised, and the player plays the GIF itself
+//! exactly): it counts as done, "plays as it is", and is recorded in
+//! `cache/.failed` with `gifslim::ORIGINAL_REASON` so the device counts it
+//! as done and never tries it. A copy left by an older version that
+//! quantised one is removed: an up-to-date copy with a 256-entry table
+//! (`gifslim::copy_may_be_quantised`) has its GIF's colours counted
+//! (`gifslim::fits_palette`), and past 256 it goes.
 //!
 //! **Preparing a card is one command:** `convert <card-root> --verify`. The
 //! firmware looks for each GIF's copy there and plays it when it is, so
@@ -232,6 +239,15 @@ fn main() -> Result<()> {
 // convert
 // ---------------------------------------------------------------------------
 
+/// What became of one GIF.
+enum Outcome {
+    /// It has a copy (made now, or up to date).
+    Copy(Done),
+    /// More than 256 colours: no copy on purpose, the GIF plays as it is.
+    /// `removed`: a lossy copy an older version made was deleted.
+    Original { rel: String, removed: bool },
+}
+
 /// One file's result.
 struct Done {
     rel: String,
@@ -274,6 +290,7 @@ fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Resul
     let next = AtomicUsize::new(0);
     let finished = AtomicUsize::new(0);
     let results: Mutex<Vec<Done>> = Mutex::new(Vec::with_capacity(files.len()));
+    let originals: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
     let errors: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
     std::thread::scope(|s| {
         for _ in 0..jobs {
@@ -286,7 +303,10 @@ fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Resul
                     .to_string_lossy()
                     .replace(std::path::MAIN_SEPARATOR, "/");
                 match process(root, path, rel.clone(), force, verify, &choice) {
-                    Ok(done) => results.lock().unwrap().push(done),
+                    Ok(Outcome::Copy(done)) => results.lock().unwrap().push(done),
+                    Ok(Outcome::Original { rel, removed }) => {
+                        originals.lock().unwrap().push((rel, removed))
+                    }
                     Err(e) => errors
                         .lock()
                         .unwrap()
@@ -306,9 +326,20 @@ fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Resul
     let elapsed = t0.elapsed().as_secs_f64();
     let mut results = results.into_inner().unwrap();
     let mut errors = errors.into_inner().unwrap();
+    let mut originals = originals.into_inner().unwrap();
     results.sort_by(|a, b| a.rel.cmp(&b.rel));
     errors.sort();
-    report(&results, &errors, files.len(), jobs, elapsed);
+    originals.sort();
+    let recorded = record_originals(root, &originals)?;
+    report(
+        &results,
+        &errors,
+        &originals,
+        recorded,
+        files.len(),
+        jobs,
+        elapsed,
+    );
     let failed = results
         .iter()
         .filter(|r| {
@@ -324,6 +355,57 @@ fn convert(root: &Path, jobs: Option<usize>, verify: bool, force: bool) -> Resul
     Ok(())
 }
 
+/// Add the GIFs that play as they are to `cache/.failed` (the device's
+/// list, `path<TAB>reason` a line), with [`gifslim::ORIGINAL_REASON`], once
+/// per path: the device then counts them as done and never tries them.
+/// Returns how many lines were added.
+fn record_originals(root: &Path, originals: &[(String, bool)]) -> Result<usize> {
+    if originals.is_empty() {
+        return Ok(0);
+    }
+    let path = root.join("cache/.failed");
+    let old = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let known: std::collections::HashSet<String> = old
+        .lines()
+        .filter_map(|l| l.split('\t').next())
+        .map(|p| p.trim().to_lowercase())
+        .collect();
+    let mut text = old.clone();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    let mut added = 0;
+    for (rel, _) in originals {
+        let gif = format!("/gifs/{rel}");
+        if !known.contains(&gif.to_lowercase()) {
+            text.push_str(&format!("{gif}\t{}\n", gifslim::ORIGINAL_REASON));
+            added += 1;
+        }
+    }
+    if added > 0 {
+        fs::create_dir_all(root.join("cache"))?;
+        let tmp = path.with_extension("tmp");
+        fs::write(&tmp, text)?;
+        fs::rename(&tmp, &path)?;
+    }
+    Ok(added)
+}
+
+/// No copy for this GIF: it plays as it is. A copy already there (a lossy
+/// one an older version made) is removed.
+fn plays_as_is(copy_path: &Path, rel: String) -> Result<Outcome> {
+    let removed = match fs::remove_file(copy_path) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e).context("removing a lossy copy"),
+    };
+    Ok(Outcome::Original { rel, removed })
+}
+
 /// A copy at `path` exists and carries the GIF's mtime.
 fn is_current(path: &Path, gif_meta: &fs::Metadata) -> bool {
     fs::metadata(path)
@@ -337,15 +419,23 @@ fn process(
     force: bool,
     verify: bool,
     choice: &smooth::Choice,
-) -> Result<Done> {
+) -> Result<Outcome> {
     let copy_path = root.join(layout::cache_rel(&rel).context("not a .gif name")?);
     let gif_meta = fs::metadata(gif_path)?;
     let marked = smooth::copy_is_marked(&copy_path);
     let want_smooth = choice.wants(&rel, marked);
     // Up to date: the GIF's mtime, and smooth exactly when it should be.
     let up_to_date = !force && is_current(&copy_path, &gif_meta) && marked == want_smooth;
+    // A copy an older version quantised: a 256-entry table, and a GIF past
+    // 256 colours (counted only for such copies, a few percent of a card).
+    if up_to_date && may_be_quantised(&copy_path) {
+        let gif = std::io::BufReader::new(fs::File::open(gif_path)?);
+        if matches!(gifslim::fits_palette(gif), Ok(false)) {
+            return plays_as_is(&copy_path, rel);
+        }
+    }
     if up_to_date && !verify {
-        return Ok(Done {
+        return Ok(Outcome::Copy(Done {
             rel,
             gif_bytes: gif_meta.len(),
             copy_bytes: fs::metadata(&copy_path)?.len(),
@@ -353,13 +443,13 @@ fn process(
             verify: None,
             frames_compared: 0,
             smooth: None,
-        });
+        }));
     }
     let gif = fs::read(gif_path).context("reading the GIF")?;
     // A smooth copy is `recode_gif(tween(GIF))` + the marker; the tweened
     // frames (a plain GIF) are what it is verified against.
-    // A GIF the tweener cannot take (a frame past 256 colours) gets a
-    // plain copy, and says so.
+    // A GIF the tweener cannot take gets a plain copy, and says so; past
+    // 256 colours there is no copy of either kind (below).
     let smoothed = if want_smooth {
         let run = || -> std::io::Result<_> {
             let mut s = tween::Smooth::new(&gif[..])?;
@@ -370,6 +460,7 @@ fn process(
         };
         match run() {
             Ok(r) => Some(r),
+            Err(e) if gifslim::is_too_many_colours(&e) => None,
             Err(e) => {
                 eprintln!("  {rel}: not smoothed ({e}); a plain copy instead");
                 None
@@ -385,8 +476,13 @@ fn process(
             Some((_, copy, stats)) => (stats.clone(), copy.clone()),
             None => {
                 let mut out = Vec::with_capacity(gif.len());
-                let stats =
-                    gifslim::recode_gif(&gif[..], &mut out, &PREPARED).context("encoding")?;
+                let stats = match gifslim::recode_gif(&gif[..], &mut out, &PREPARED) {
+                    Ok(s) => s,
+                    Err(e) if gifslim::is_too_many_colours(&e) => {
+                        return plays_as_is(&copy_path, rel)
+                    }
+                    Err(e) => return Err(e).context("encoding"),
+                };
                 (stats, out)
             }
         };
@@ -407,10 +503,6 @@ fn process(
         (Some(stats), out)
     };
     let (verify, frames_compared) = if verify {
-        // For a skipped file whether it was quantised is not known: a copy
-        // whose two decoders agree while it differs from the original is
-        // reported as quantised, and a fresh encode says for sure.
-        let quantised = stats.as_ref().is_none_or(|s| s.quantised);
         match &smoothed {
             // Smoothed: the copy must be exactly the tweener's bytes, and
             // play the tweened frames through both decoders.
@@ -421,18 +513,18 @@ fn process(
                 0,
             ),
             Some((s, _, _)) => {
-                let (v, n, _) = recode::compare(s.tweened_gif(), &copy, PREPARED.cap, quantised);
+                let (v, n, _) = recode::compare(s.tweened_gif(), &copy, PREPARED.cap);
                 (Some(v), n)
             }
             None => {
-                let (v, n, _) = recode::compare(&gif, &copy, PREPARED.cap, quantised);
+                let (v, n, _) = recode::compare(&gif, &copy, PREPARED.cap);
                 (Some(v), n)
             }
         }
     } else {
         (None, 0)
     };
-    Ok(Done {
+    Ok(Outcome::Copy(Done {
         rel,
         gif_bytes: gif.len() as u64,
         copy_bytes: copy.len() as u64,
@@ -440,7 +532,16 @@ fn process(
         verify,
         frames_compared,
         smooth: smoothed.map(|(s, _, _)| s.summary()),
-    })
+    }))
+}
+
+/// The copy's first bytes say it may be a quantised one.
+fn may_be_quantised(copy_path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 13];
+    fs::File::open(copy_path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|()| gifslim::copy_may_be_quantised(&head))
 }
 
 fn verify_note(results: &[Done]) -> bool {
@@ -460,14 +561,45 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[lo] + (sorted[hi] - sorted[lo]) * (rank - lo as f64)
 }
 
-fn report(results: &[Done], errors: &[(String, String)], found: usize, jobs: usize, secs: f64) {
+fn report(
+    results: &[Done],
+    errors: &[(String, String)],
+    originals: &[(String, bool)],
+    recorded: usize,
+    found: usize,
+    jobs: usize,
+    secs: f64,
+) {
     let skipped = results.iter().filter(|r| r.stats.is_none()).count();
+    let removed = originals.iter().filter(|o| o.1).count();
     println!(
-        "convert pass done: {} ok ({} encoded, {skipped} up to date), {} errors, {secs:.1}s",
+        "convert pass done: {} ok ({} encoded, {skipped} up to date), {} play as they are \
+         (more than 256 colours: no copy; {removed} lossy copies removed, {recorded} added to cache/.failed), \
+         {} errors, {secs:.1}s",
         results.len(),
         results.len() - skipped,
+        originals.len(),
         errors.len()
     );
+    println!(
+        "done: {} of {found} (copies {} + playing as they are {})",
+        results.len() + originals.len(),
+        results.len(),
+        originals.len()
+    );
+    if !originals.is_empty() {
+        println!("\n=== PLAY AS THEY ARE (more than 256 colours) ===");
+        for (rel, removed) in originals {
+            println!(
+                "  {rel}{}",
+                if *removed {
+                    "  (lossy copy removed)"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
 
     println!("\n=== ERRORS (no copy; the player plays the GIF, if it can) ===");
     for (rel, e) in errors {
@@ -533,11 +665,6 @@ fn report(results: &[Done], errors: &[(String, String)], found: usize, jobs: usi
             }
         );
         println!(
-            "files needing quantisation (more than 255 colours): {} / {}",
-            encoded.iter().filter(|(_, s)| s.quantised).count(),
-            encoded.len()
-        );
-        println!(
             "exactly 256 colours (deltas without a spare transparent index): {}",
             encoded.iter().filter(|(_, s)| s.opaque_deltas).count()
         );
@@ -565,16 +692,12 @@ fn report(results: &[Done], errors: &[(String, String)], found: usize, jobs: usi
 
     let verified: Vec<&Done> = results.iter().filter(|r| r.verify.is_some()).collect();
     if !verified.is_empty() {
-        let (mut exact, mut lossy, mut worst_err, mut frames) = (0, 0, 0u8, 0u64);
+        let (mut exact, mut frames) = (0, 0u64);
         let mut fails = Vec::new();
         for r in &verified {
             frames += r.frames_compared;
             match r.verify.as_ref().unwrap() {
                 recode::Verdict::Exact => exact += 1,
-                recode::Verdict::Lossy { max_err } => {
-                    lossy += 1;
-                    worst_err = worst_err.max(*max_err);
-                }
                 recode::Verdict::NeedsFull(e) | recode::Verdict::Fail(e) => {
                     fails.push((r.rel.as_str(), e.as_str()))
                 }
@@ -585,11 +708,7 @@ fn report(results: &[Done], errors: &[(String, String)], found: usize, jobs: usi
             PREPARED.cap
         );
         println!("files verified: {} / {}", verified.len(), results.len());
-        println!(
-            "identical: {exact}  quantised (frames+delays match, colours approximate): {lossy} \
-             (worst channel error {worst_err})  fail: {}",
-            fails.len()
-        );
+        println!("identical: {exact}  fail: {}", fails.len());
         println!("frames compared: {frames}");
         for (rel, e) in fails.iter().take(20) {
             println!("  FAIL {rel}: {e}");
@@ -674,6 +793,99 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
+    /// Three 128x32 frames, each with its own 100 colours: 300 in all.
+    fn many_colours_gif() -> Vec<u8> {
+        let mut gif = Vec::new();
+        let mut enc = gif::Encoder::new(&mut gif, 128, 32, &[]).unwrap();
+        for k in 0..3u16 {
+            let pal: Vec<u8> = (0..100)
+                .flat_map(|i: u16| [(i * 2) as u8, (k * 80) as u8, (255 - i) as u8])
+                .collect();
+            enc.write_frame(&gif::Frame {
+                width: 128,
+                height: 32,
+                delay: 5,
+                palette: Some(pal),
+                buffer: std::borrow::Cow::Owned((0..4096).map(|i| (i % 100) as u8).collect()),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        drop(enc);
+        gif
+    }
+
+    #[test]
+    fn past_256_colours_there_is_no_copy_and_a_lossy_one_goes() {
+        let root = std::env::temp_dir().join(format!("opendmd-pack-orig-{}", std::process::id()));
+        let dir = root.join("gifs/Other");
+        fs::create_dir_all(&dir).unwrap();
+        let many = many_colours_gif();
+        fs::write(dir.join("Many.gif"), &many).unwrap();
+        // Listed for Smooth motion too: still no copy of either kind.
+        fs::write(dir.join("Listed.gif"), &many).unwrap();
+        fs::create_dir_all(root.join("sets")).unwrap();
+        fs::write(root.join("sets/.smooth"), "/gifs/Other/Listed.gif\n").unwrap();
+        // An old lossy copy of a third, up to date by its mtime, with the
+        // 256-entry table every quantised copy has; and a .failed line the
+        // device wrote for something else.
+        fs::write(dir.join("Old.gif"), &many).unwrap();
+        let old_copy = root.join(layout::cache_rel("Other/Old.gif").unwrap());
+        fs::create_dir_all(old_copy.parent().unwrap()).unwrap();
+        let mut lossy = Vec::new();
+        {
+            let pal: Vec<u8> = (0..=255u8).flat_map(|i| [i, i, 255 - i]).collect();
+            let mut enc = gif::Encoder::new(&mut lossy, 128, 32, &pal).unwrap();
+            enc.write_frame(&gif::Frame {
+                width: 128,
+                height: 32,
+                buffer: std::borrow::Cow::Owned(vec![7; 4096]),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        assert!(gifslim::copy_may_be_quantised(&lossy));
+        {
+            let f = fs::File::create(&old_copy).unwrap();
+            use std::io::Write as _;
+            (&f).write_all(&lossy).unwrap();
+            f.set_modified(
+                fs::metadata(dir.join("Old.gif"))
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+            )
+            .unwrap();
+        }
+        assert!(is_current(
+            &old_copy,
+            &fs::metadata(dir.join("Old.gif")).unwrap()
+        ));
+        fs::write(root.join("cache/.failed"), "/gifs/X/Bad.gif\tinvalid LZW").unwrap();
+
+        convert(&root, Some(1), true, false).unwrap();
+        for name in ["Many", "Listed", "Old"] {
+            let copy = root.join(layout::cache_rel(&format!("Other/{name}.gif")).unwrap());
+            assert!(!copy.exists(), "{name}: no copy");
+        }
+        let failed = fs::read_to_string(root.join("cache/.failed")).unwrap();
+        let reason = gifslim::ORIGINAL_REASON;
+        assert_eq!(
+            failed,
+            format!(
+                "/gifs/X/Bad.gif\tinvalid LZW\n/gifs/Other/Listed.gif\t{reason}\n\
+                 /gifs/Other/Many.gif\t{reason}\n/gifs/Other/Old.gif\t{reason}\n"
+            )
+        );
+        // Again: nothing to do, nothing added twice.
+        convert(&root, Some(1), false, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("cache/.failed")).unwrap(),
+            failed
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn convert_honours_the_smooth_list() {
         let root = std::env::temp_dir().join(format!("opendmd-pack-smooth-{}", std::process::id()));
@@ -681,7 +893,9 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         // A 2 px-per-frame scroll of a 64-wide stripe pattern, 50 ms a frame.
         let (w, h) = (128u16, 32u16);
-        let pal: Vec<u8> = (0..8u8).flat_map(|i| [i * 30, 200 - i * 20, i * 7]).collect();
+        let pal: Vec<u8> = (0..8u8)
+            .flat_map(|i| [i * 30, 200 - i * 20, i * 7])
+            .collect();
         let mut gif = Vec::new();
         {
             let mut enc = gif::Encoder::new(&mut gif, w, h, &pal).unwrap();
@@ -728,5 +942,4 @@ mod tests {
         assert_eq!(fs::read(&copy).unwrap(), want);
         fs::remove_dir_all(&root).unwrap();
     }
-
 }

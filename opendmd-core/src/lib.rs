@@ -3,8 +3,7 @@
 //! No hardware, windowing or filesystem dependencies. `std` is used freely
 //! (the ESP32 firmware target is `std`-capable via ESP-IDF), but the only
 //! outside crates are `gif` (the fallback decoder, and the metadata the
-//! tests read back), `color_quant` (the recoder's quantiser, already a
-//! dependency of `gif`) and `log`.
+//! tests read back) and `log`.
 
 pub mod access;
 pub mod boot;

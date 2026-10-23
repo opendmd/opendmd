@@ -8,7 +8,6 @@ repository = "https://github.com/opendmd/opendmd"
 publish = false
 
 [dependencies]
-color_quant = "1.1"
 gif = "0.13"
 log = "0.4"
 # Firmware bundles (src/ota.rs, `ota` feature): verify-only Ed25519 and the
