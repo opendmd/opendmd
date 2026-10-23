@@ -74,7 +74,7 @@ offset  size  field
   `.js`, `.css`, `.wasm`, `.svg` and `.json`, `gzip -9 -n`), the entry
   `<file>` holds the **`.gz`'s bytes** with the gzip flag, and the plain
   file is not stored; a lone `<file>.gz` is stored as `<file>`, gzipped;
-- anything else as it is (none today: all 37 files are gzipped);
+- anything else as it is (today the font and its licence, `fonts/`);
 - the `--version-file` itself is left out.
 
 The HTTP API reference is not in the pack: it is docs/api.md on the project
