@@ -25,8 +25,9 @@
 //!
 //! A GIF that plays as it is — more than 256 colours, so no copy on purpose,
 //! recorded in `/cache/.failed` with a reason
-//! [`gifslim::plays_original`] accepts — counts as prepared: its would-be
-//! copy's key joins its bucket's slice ([`originals`]).
+//! `gifslim::plays_original` accepts — counts as prepared: its would-be
+//! copy's key joins its bucket's slice ([`originals`],
+//! [`layout::plays_original_line`], tested on the host).
 //!
 //! One slice (and one manifest pass) covers a card with up to ~3,000 copies;
 //! a fully prepared 11k-file card takes four. It runs on the network worker
@@ -44,7 +45,6 @@
 use crate::chan as mpsc;
 use anyhow::Result;
 use opendmd_core::filter::Filter;
-use opendmd_core::gifslim;
 use opendmd_core::layout::{self, CacheCount};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read};
@@ -441,15 +441,10 @@ fn originals() -> Vec<(u8, u32)> {
     let mut out = Vec::new();
     for line in BufReader::with_capacity(512, f).lines() {
         let Ok(line) = line else { break };
-        let Some((path, reason)) = line.split_once('\t') else {
-            continue;
-        };
-        if !gifslim::plays_original(reason) || out.len() >= config::BUILDER_MAX_FAILED {
-            continue;
+        if out.len() >= config::BUILDER_MAX_FAILED {
+            break;
         }
-        if let layout::Prepared::Candidate { bucket, key } = layout::classify(path.trim()) {
-            out.push((bucket, key));
-        }
+        out.extend(layout::plays_original_line(&line));
     }
     out
 }

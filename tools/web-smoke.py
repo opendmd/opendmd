@@ -42,12 +42,16 @@ every view like a person would:
             of the card's GIFs past 256 colours (one with its copy
             forgotten, one keeping the card's lossy copy and a .failed line
             in earlier firmware's words); the first GET of one good GIF
-            aborted (Playwright route) is retried: one summary line "3 files
+            aborted (Playwright route) is retried: one summary line "4 files
             prepared · 2 damaged files skipped (they can't be played
             either)", the damaged ones listed in the disclosure and in
             /api/cache/failed, the two past 256 colours with no copy (the
             lossy one removed), recorded as playing as they are and counted
-            as done ("4 of 6"); a second run fetches none of them
+            as done ("4 of 6"); a second run fetches none of them. Then
+            the first is replaced by a GIF of 256 colours or fewer (PUT, as
+            Add GIFs and Replace do): its .failed line goes, its exact copy
+            survives a run; with the stale line put back (an older player,
+            a card edited elsewhere) a run keeps the copy too
   Add GIFs  two GIFs uploaded into Consoles from Library: each GIF and its
             prepared copy land (the copy byte-identical to opendmd-pack), and
             the confirm adds both to `cachetest` ("5 of 5"); deleting one of
@@ -4284,7 +4288,7 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
     page.click("#pc-go")
     page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=120000)
     line = page.inner_text("#pc-progress")
-    check(line == "3 files prepared · 2 damaged files skipped (they can't be played either)",
+    check(line == "4 files prepared · 2 damaged files skipped (they can't be played either)",
           f"damage: summary line '{line}' (first GET of {base_name(flaky)} aborted: {len(aborted)})")
     check(len(aborted) == 1 and page.locator("#pc-net").count() == 0 and page.inner_text("#pc-errors") == "",
           "damage: the aborted download was retried, nothing listed as failed")
@@ -4317,6 +4321,27 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
     page.unroute(match)
     page.remove_listener("request", watch)
     expected.remove(urllib.parse.quote(base_name(flaky)))
+    # A GIF that played as it is, replaced by one that fits 256 colours (the
+    # bytes of a good GIF, PUT as Add GIFs and Replace do, then its copy made
+    # by prepareBytes): the device drops its .failed line, and a run keeps
+    # the exact copy. With the stale line back, the run keeps it too.
+    rows_of = lambda: {r["path"]: r["reason"] for r in get_json(base + "/api/cache/failed")}
+    copies = lambda: {p.lower() for p in get_json(base + "/api/cache/list")["paths"]}
+    req = urllib.request.Request(base + "/api/files" + urllib.parse.quote(many[0]), data=data, method="PUT")
+    urllib.request.urlopen(req, timeout=30).read()
+    check(many[0] not in rows_of(), "replace: a GIF written anew drops its .failed line")
+    page.evaluate("async (p) => { const m = await import('./js/prepare.js'); const { app } = await import('./js/state.js');"
+                  " await m.prepareBytes(p, await app.src.readBytes(p)); }", many[0])
+    check(cache_path(many[0]).lower() in copies(), "replace: the replacement's exact copy is made")
+    for stale in (False, True):
+        if stale:
+            post_json(base + "/api/cache/failed", {"path": many[0], "reason": "more than 256 colours: plays as it is"})
+        page.click("#pc-go")
+        page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=60000)
+        check(cache_path(many[0]).lower() in copies(),
+              f"replace: a run keeps the replacement's exact copy{' (stale line back)' if stale else ''} ('{page.inner_text('#pc-progress')}')")
+    post_json(base + "/api/cache/forget", {"path": many[0]})
+    (overlay / many[0].lstrip("/")).unlink(missing_ok=True)
     put_json(base + "/api/config", {"set": "cachetest"})
     req = urllib.request.Request(base + "/api/files/sets/damagetest.txt", method="DELETE")
     urllib.request.urlopen(req, timeout=30).read()

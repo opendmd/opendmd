@@ -97,7 +97,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   playlist, so just the swap); the web app lists only `sets/*.txt` as
   playlists. Its smoothed copies are ordinary uploads under `cache/`; the
   simulated player drops its cached frame delays whenever a copy or a GIF
-  is written, since a smoothed copy has more frames.
+  is written, since a smoothed copy has more frames. A GIF written (`PUT
+  /api/files/gifs/…`) drops its `cache/.failed` line, as the device does.
 - **`POST /api/files/move {"from","to"}`** renames a GIF under `gifs/` as
   `http.rs` `move_file` does: 400 unless both are card-absolute
   `/gifs/….gif` paths (no tab or line break) and differ, 404 if `from` is
@@ -3822,6 +3823,18 @@ def make_handler(ctx: Context, quiet: bool):
             written = ctx.fs.write_bytes(rel, data)
             if rel.lower().startswith(CACHE_DIR + "/"):
                 ctx.cache.invalidate()
+            elif cache_path("/" + rel) is not None:
+                # cache_builder::drop_failed: a GIF written anew drops its
+                # cache/.failed line (a failure, or "plays as it is").
+                with ctx.lock:
+                    fp = ctx.fs.read_path(FAILED_REL)
+                    old = fp.read_bytes().split(b"\n") if fp is not None else []
+                    keep = [l for l in old if l.split(b"\t")[0].strip().lower() != ("/" + rel).lower().encode()]
+                    dropped = len(keep) < len(old)
+                    if dropped:
+                        ctx.fs.write_bytes(FAILED_REL, b"\n".join(keep))
+                if dropped:
+                    ctx.cache.invalidate()
             if rel.lower().startswith((CACHE_DIR + "/", "gifs/")):
                 # A new copy (a smoothed one has more frames) or a replaced
                 # GIF: what the simulated player plays changed.

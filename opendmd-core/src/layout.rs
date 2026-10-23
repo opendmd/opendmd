@@ -120,6 +120,21 @@ pub fn classify(manifest_path: &str) -> Prepared {
     }
 }
 
+/// One `/cache/.failed` line (`path<TAB>reason`): if it says the GIF plays
+/// as it is ([`crate::gifslim::plays_original`]: no copy on purpose), the
+/// bucket and [`prepared_key`] its copy would have, which the device's
+/// count takes as prepared. `None` for any other line.
+pub fn plays_original_line(line: &str) -> Option<(u8, u32)> {
+    let (path, reason) = line.split_once('\t')?;
+    if !crate::gifslim::plays_original(reason) {
+        return None;
+    }
+    match classify(path.trim()) {
+        Prepared::Candidate { bucket, key } => Some((bucket, key)),
+        _ => None,
+    }
+}
+
 /// Totals from [`count_prepared`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheCount {
@@ -185,6 +200,39 @@ pub fn count_prepared<R: std::io::BufRead>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plays_as_is_line_counts_as_its_copy() {
+        let gif = "/gifs/Consoles/MD_Sonic3_RattenJager.gif";
+        let (bucket, key) = (0x38, prepared_key(&cache_path(gif).unwrap()));
+        let want = Some((bucket, key));
+        assert_eq!(
+            plays_original_line(&format!("{gif}\tmore than 256 colours: plays as it is")),
+            want
+        );
+        // Earlier firmware's words, and the whitespace a hand edit leaves.
+        assert_eq!(
+            plays_original_line(&format!(" {gif} \tmore than 256 colours\r")),
+            want
+        );
+        // So a manifest line for that GIF counts as prepared.
+        let c = count_prepared(
+            format!("{gif}\n/gifs/Consoles/Other.gif\n").as_bytes(),
+            &crate::filter::Filter::new(),
+            (bucket, bucket),
+            &[key],
+            true,
+        )
+        .unwrap();
+        assert_eq!((c.total, c.prepared), (2, 1));
+        // Anything else is not.
+        assert_eq!(plays_original_line(&format!("{gif}\tinvalid LZW")), None);
+        assert_eq!(plays_original_line(gif), None);
+        assert_eq!(
+            plays_original_line("/logos/x.png\tmore than 256 colours"),
+            None
+        );
+    }
 
     /// Pinned: these values are baked into every prepared card in the wild,
     /// so a change here is a format break, not a refactor.

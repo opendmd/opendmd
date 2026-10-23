@@ -1580,6 +1580,10 @@ fn put_file(up: &mut Upload, c: &Ctx, rel: &str) -> Result<()> {
     );
     if files::under(&dest, config::CACHE_ROOT) {
         crate::cache::invalidate();
+    } else {
+        // A GIF written anew is a new file: its failure line (or "plays as
+        // it is") was about the old one.
+        crate::cache_builder::drop_failed(&format!("/{}", rel.trim_start_matches('/')));
     }
     up.json(&format!(
         r#"{{"ok":true,"path":{},"bytes":{written}}}"#,
@@ -1675,10 +1679,11 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
         _ => "none",
     };
     crate::cache::invalidate();
-    let smooth = files::rename_line(config::SMOOTH_LIST, &m.from, &m.to).unwrap_or_else(|e| {
-        log::warn!("move {}: {}: {e}", m.from, config::SMOOTH_LIST);
-        false
-    });
+    let smooth = files::rename_line(config::SMOOTH_LIST, &m.from, Some(&m.to))
+        .unwrap_or_else(|e| {
+            log::warn!("move {}: {}: {e}", m.from, config::SMOOTH_LIST);
+            false
+        });
     let failed = crate::cache_builder::rename_failed(&m.from, &m.to).unwrap_or_else(|e| {
         log::warn!("move {}: {}: {e}", m.from, config::BUILDER_FAILED_PATH);
         false

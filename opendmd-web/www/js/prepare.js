@@ -14,7 +14,7 @@ import { art } from './artmod.js';
 export const job = {
   running: false, stopping: false, phase: 'idle',
   todo: 0, done: 0, current: '', errors: [], t0: 0,
-  damaged: [], net: [], tried: 0, asis: 0,
+  damaged: [], net: [], tried: 0,
 };
 
 const tell = () => emit('prepare', job);
@@ -34,6 +34,15 @@ async function asIs(path, reason) {
   }
 }
 
+// A copy was made for `path` after all (the GIF was replaced): a "plays as it
+// is" remembered here is about the old file. (The device drops its own line
+// when the GIF is written.)
+export function madeCopy(path) {
+  const m = store.get(asIsKey(), {});
+  const k = Object.keys(m).find((p) => p.toLowerCase() === path.toLowerCase());
+  if (k) { delete m[k]; store.set(asIsKey(), m); }
+}
+
 // Encode one GIF's bytes and upload its prepared copy (none for one that
 // plays as it is: 0). Throws on failure.
 export async function prepareBytes(gifPath, bytes) {
@@ -42,6 +51,7 @@ export async function prepareBytes(gifPath, bytes) {
   try {
     const { copy } = (await art()).prepareGif(bytes);
     await app.src.writeFile(dest, copy);
+    madeCopy(gifPath);
     return copy.length;
   } catch (e) {
     if (!playsAsIs(e)) throw e;
@@ -115,6 +125,7 @@ async function one(path, retry, smooth) {
         return 'damaged';
       }
       await app.src.writeFile(app.wasm.cachePathFor(path), copy);
+      madeCopy(path);
       return 'ok';
     } catch (e) {
       if (!retry || i || job.stopping) return 'net';
@@ -125,18 +136,18 @@ async function one(path, retry, smooth) {
 
 export async function start() {
   if (job.running) return;
-  Object.assign(job, { running: true, stopping: false, phase: 'checking', todo: 0, done: 0, current: '', errors: [], t0: 0, damaged: [], net: [], tried: 0, asis: 0 });
+  Object.assign(job, { running: true, stopping: false, phase: 'checking', todo: 0, done: 0, current: '', errors: [], t0: 0, damaged: [], net: [], tried: 0 });
   tell();
   try {
     const [{ paths, have, missing: list }, { bad, plays }, sm] = await Promise.all([missing(), damagedList(), import('./smooth.js')]);
-    // GIFs that play as they are need nothing (they count as done), and a
-    // copy one still has is a lossy one from before: it goes.
-    for (const p of paths) {
-      if (!plays.has(p.toLowerCase())) continue;
-      job.asis++;
+    // GIFs that play as they are need nothing (they count as done). One
+    // that has a copy all the same is made again here: a lossy copy from
+    // before goes (one() finds it past 256 colours), while the copy of a GIF
+    // replaced since (the line is about the old file) is exact and stays.
+    const recheck = paths.filter((p) => {
       const c = app.wasm.cachePathFor(p);
-      if (c && have.has(c.toLowerCase())) await app.src.forget(p).catch(() => {});
-    }
+      return plays.has(p.toLowerCase()) && c && have.has(c.toLowerCase());
+    });
     const { listed, redo } = await sm.pending(paths, list);
     const todo = [];
     for (const p of [...list, ...redo]) {
@@ -145,6 +156,7 @@ export async function start() {
       if (why != null) job.damaged.push({ path: p, reason: why, known: true });
       else todo.push(p);
     }
+    todo.push(...recheck);
     const how = (p) => (listed.has(p.toLowerCase()) ? sm : null);
     Object.assign(job, { phase: 'preparing', todo: todo.length, t0: performance.now() });
     tell();
@@ -156,7 +168,6 @@ export async function start() {
       const r = await one(path, true, how(path));
       job.tried++;
       if (r === 'ok' || r === 'asis') job.done++;
-      if (r === 'asis') job.asis++;
       else if (r === 'net') { later.push(path); job.net.push(path); }
     }
     // Network failures get one more go at the end, once the rest is done.
@@ -167,7 +178,6 @@ export async function start() {
       const r = await one(path, false, how(path));
       if (r !== 'net') job.net.splice(job.net.indexOf(path), 1);
       if (r === 'ok' || r === 'asis') job.done++;
-      if (r === 'asis') job.asis++;
       tell();
     }
   } catch (e) {
