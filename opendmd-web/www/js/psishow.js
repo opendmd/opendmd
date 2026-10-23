@@ -34,7 +34,8 @@ export function mark() {
     b.setAttribute('aria-pressed', on);
   }
 }
-export function show(f) { if (f) { shown = f; next = [f, false]; pump(); mark(); } }
+// (Nothing to show before the editor's text has compiled once.)
+export function show(f) { if (f?.src) { shown = f; next = [f, false]; pump(); mark(); } }
 export function follow(f) { if (f === shown && !next) { next = [f, true]; pump(); } }
 export function drop(f) { if (shown === f) { shown = null; mark(); } }
 
@@ -48,7 +49,7 @@ async function pump() {
     await app.src.json('POST', '/api/play', { path: fpath(f), live }, 8000);
     if (!live) toast(`On the panel: ${name}`, 'ok');
   } catch (e) {
-    if (shown === f) shown = null;
+    if (shown === f) { shown = null; if (next?.[0] === f) next = null; }
     const s = e.status;
     // A change after the playlist moved on: it just stops following.
     if (s != 409) toast(s == 415 ? 'Update OpenDMD to show formulas on the panel' : s == 400 ? `The panel can’t show “${name}”: ${e.message.replace(/^400: /, '')}`

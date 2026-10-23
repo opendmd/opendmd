@@ -53,7 +53,7 @@ imported when first opened), <= 2 KB, and so does Settings' Device tab
 rename, reload and reboot, About; imported when the tab is first open),
 <= 7 KB, and so does the API reference page (`api.html`, rendered from docs/api.md
 by tools/api-page.py, opened from Settings -> About in its own tab), <=
-13 KB (12 KB until the Security and Firmware update sections, 2026-10-02;
+15 KB (14 until Psi phase 2, 2026-10-23; 12 KB until the Security and Firmware update sections, 2026-10-02;
 the page is only fetched when opened from Settings → About), and so does the
 headings' pixel font (`fonts/silkscreen.woff2`, Silkscreen subset to ASCII
 and a few marks by tools/font-subset.py; preloaded by index.html, so it is
@@ -62,7 +62,7 @@ part of every page load, but it is not JS or CSS), <= 4 KB; its licence
 The Library's Formulas (the editor, the examples and the gallery:
 `js/formulas.js`, `formulas.css` and the examples, `formulas.json`;
 imported when the Formulas tab is first chosen or a `#formula=` link
-opens) have a line of their own, <= 16 KB, and so does their wasm module
+opens) have a line of their own, <= 17 KB (16 until Psi phase 2), and so does their wasm module
 (`pkg-psi/`: Psi, the language formulas are written in — its compiler and
 VM, the firmware's own crate — built without std; loaded with them),
 <= 36 KB: the spike's 24.7 KB measured a module that never read an error
@@ -136,12 +136,12 @@ PANEL_TEST_GZ_BUDGET = 2 * 1024
 PANEL_TEST = {"js/paneltest.js"}
 DEVICE_GZ_BUDGET = 7 * 1024
 DEVICE = {"js/device.js"}
-API_GZ_BUDGET = 14 * 1024
+API_GZ_BUDGET = 15 * 1024  # 14 KB until 2026-10-23 (Psi phase 2: formulas on the panel)
 API = {"api.html"}
 FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
 PSI_WASM_GZ_BUDGET = 36 * 1024
-FORMULAS_GZ_BUDGET = 16 * 1024
+FORMULAS_GZ_BUDGET = 17 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel)
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}
