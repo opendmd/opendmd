@@ -85,7 +85,8 @@ three encoders refuse it (`gifslim::TooManyColours`, nothing written) and it
 - It **counts as done**: `GET /api/cache`'s `prepared` counts the playlist
   entries with a copy *or* such a line, and the builder's `failed` leaves
   them out. Nothing tries it again (deleting `cache/.failed` does, and it
-  is recorded again).
+  is recorded again) until the GIF is written anew: a `PUT` of a GIF drops
+  its line.
 - **Smooth motion** never applies: the tweened frames have the GIF's
   colours, so their copy would be lossy too. The Library does not offer the
   switch (`Smoother.fits`, `tween::Smooth::fits_palette`).
@@ -97,8 +98,9 @@ three encoders refuse it (`gifslim::TooManyColours`, nothing written) and it
   `opendmd-pack convert` checks every up-to-date copy that way and removes
   the 38 on the stock card (19 s with `--verify` on 16 jobs). The browser
   has no GIFs to count without downloading them all, so "Prepare remaining
-  files" removes a copy only for a GIF `cache/.failed` already says plays as
-  it is. A card whose lossy copies were made by an older browser or pack
+  files" re-checks only a GIF `cache/.failed` already says plays as it is
+  that has a copy all the same (made again: past 256 colours the copy goes,
+  else — a GIF replaced since — the exact copy stays). A card whose lossy copies were made by an older browser or pack
   and that the device's builder never met keeps them until
   `opendmd-pack convert` runs on it.
 

@@ -621,10 +621,11 @@ pub fn move_copy(old: &str, new: &str) -> &'static str {
 
 /// Rename the line for GIF `from` to `to` in a one-path-a-line file (the
 /// part before a tab is the path; what follows is kept): Smooth motion's
-/// list, the cache builder's failure list. `Ok(false)` if the file or the
+/// list, the cache builder's failure list. `to` `None` drops the line.
+/// `Ok(false)` if the file or the
 /// line is not there. Read once to look, then written to `<file>.part` a
 /// line at a time and swapped in: nothing bigger than a line is held.
-pub fn rename_line(file: &str, from: &str, to: &str) -> std::io::Result<bool> {
+pub fn rename_line(file: &str, from: &str, to: Option<&str>) -> std::io::Result<bool> {
     use std::io::BufRead;
     let key = |line: &[u8]| -> bool {
         let path = line.split(|&b| b == b'\t').next().unwrap_or(&[]);
@@ -658,6 +659,7 @@ pub fn rename_line(file: &str, from: &str, to: &str) -> std::io::Result<bool> {
                 break;
             }
             if key(&line) {
+                let Some(to) = to else { continue };
                 let rest = line.iter().position(|&b| b == b'\t').map_or_else(
                     || {
                         if line.ends_with(b"\n") {

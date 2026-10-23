@@ -1506,12 +1506,31 @@ fn record_failure(gif: &str, why: &str) {
     }
 }
 
+/// `PUT` of a GIF (`/gifs/….gif`): the file is new, so its failure line —
+/// a failure, or "plays as it is" — goes, and the count is asked again (a
+/// GIF that played as it is no longer counts as done). The walk under way
+/// may still skip it; the next pass reads the file afresh.
+pub fn drop_failed(gif: &str) {
+    if layout::cache_path(gif).is_none() {
+        return;
+    }
+    let _file = FAILED_FILE.lock().unwrap_or_else(|p| p.into_inner());
+    match crate::files::rename_line(config::BUILDER_FAILED_PATH, gif, None) {
+        Ok(true) => {
+            log::info!("cache builder: {gif} replaced, its failure line dropped");
+            cache::invalidate();
+        }
+        Ok(false) => {}
+        Err(e) => log::warn!("cache builder: dropping the failure line of {gif}: {e}"),
+    }
+}
+
 /// `POST /api/files/move`: the failure line of GIF `from`, if there is one,
 /// now names `to` (and the walk skips `to` from its next step). Whether a
 /// line was renamed.
 pub fn rename_failed(from: &str, to: &str) -> io::Result<bool> {
     let _file = FAILED_FILE.lock().unwrap_or_else(|p| p.into_inner());
-    let renamed = crate::files::rename_line(config::BUILDER_FAILED_PATH, from, to)?;
+    let renamed = crate::files::rename_line(config::BUILDER_FAILED_PATH, from, Some(to))?;
     if renamed {
         FAILED_ADDED
             .lock()

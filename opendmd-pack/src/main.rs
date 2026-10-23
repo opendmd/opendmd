@@ -816,6 +816,44 @@ mod tests {
     }
 
     #[test]
+    fn an_exact_copy_with_a_256_entry_table_is_kept() {
+        // 200 colours: the copy's table pads to 256 entries, the shape a
+        // quantised copy had, but its GIF fits, so it stays as it is.
+        let root = std::env::temp_dir().join(format!("opendmd-pack-keep-{}", std::process::id()));
+        let dir = root.join("gifs/Other");
+        fs::create_dir_all(&dir).unwrap();
+        let mut gif = Vec::new();
+        {
+            let pal: Vec<u8> = (0..200u8).flat_map(|i| [i, 255 - i, i / 2]).collect();
+            let mut enc = gif::Encoder::new(&mut gif, 128, 32, &pal).unwrap();
+            for k in 0..2u8 {
+                enc.write_frame(&gif::Frame {
+                    width: 128,
+                    height: 32,
+                    delay: 5,
+                    buffer: std::borrow::Cow::Owned(
+                        (0..4096u32).map(|i| ((i + k as u32) % 200) as u8).collect(),
+                    ),
+                    ..Default::default()
+                })
+                .unwrap();
+            }
+        }
+        fs::write(dir.join("Fits.gif"), &gif).unwrap();
+        convert(&root, Some(1), false, false).unwrap();
+        let copy = root.join(layout::cache_rel("Other/Fits.gif").unwrap());
+        let made = fs::read(&copy).unwrap();
+        assert!(gifslim::copy_may_be_quantised(&made));
+        let gif_meta = fs::metadata(dir.join("Fits.gif")).unwrap();
+        assert!(is_current(&copy, &gif_meta));
+        // Up to date and checked: kept, byte for byte; nothing recorded.
+        convert(&root, Some(1), true, false).unwrap();
+        assert_eq!(fs::read(&copy).unwrap(), made);
+        assert!(!root.join("cache/.failed").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn past_256_colours_there_is_no_copy_and_a_lossy_one_goes() {
         let root = std::env::temp_dir().join(format!("opendmd-pack-orig-{}", std::process::id()));
         let dir = root.join("gifs/Other");

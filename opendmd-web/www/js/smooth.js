@@ -17,7 +17,7 @@
 
 import { app } from './state.js';
 import { art } from './artmod.js';
-import { prepareBytes, playsAsIs } from './prepare.js';
+import { prepareBytes, playsAsIs, madeCopy } from './prepare.js';
 import { dfetch } from './source.js';
 import { h, clear, enc, toast } from './util.js';
 
@@ -110,6 +110,7 @@ export async function set(path, on) {
     }
     await writeList([...rest, path]);
     await app.src.writeFile(dest, copy);
+    madeCopy(path);
   } else {
     await prepareBytes(path, gif);
     await writeList(rest);
@@ -137,8 +138,7 @@ export async function keep(path, bytes, on, ready) {
     warn = playsAsIs(e) ? 'Smooth motion is not available for a GIF with more than 256 colours; it plays as it is'
       : `Smooth motion could not be made for this one (${e.message || e}); it plays as it is`;
   }
-  if (copy) await app.src.writeFile(dest, copy);
-  else await prepareBytes(path, bytes);
+  if (copy) { await app.src.writeFile(dest, copy); madeCopy(path); } else await prepareBytes(path, bytes);
   return warn;
 }
 
