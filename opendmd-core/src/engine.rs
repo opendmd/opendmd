@@ -902,6 +902,8 @@ impl Engine {
             p.timed = None;
             p.done = false;
             self.skip_requested = false;
+            // As `play_now`: what comes next is picked again from here.
+            self.ahead.let_go();
         }
         Some(r)
     }

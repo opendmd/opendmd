@@ -210,8 +210,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   frames (10 at `fps=100`, 40 at 25) over the source's `loop N` seconds
   (default 8); not compiled here (any `src` plays). A formula over the
   formula on screen replaces it in place (no new ordinal, a fresh dwell);
-  `"live":true` does only that and is a 409 when no formula is on screen.
-  Over 2,048 B a formula's path is a 413.
+  `"live":true` does only that and is a 409 when no formula is on screen
+  (400 with any other path); status names the new formula, as the
+  firmware does. Over 2,048 B a formula's path is a 413.
 - **`GET /api/stat?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
 - **`/api/status`** has `index_state` (`ready`, or `unavailable` when the
@@ -3461,6 +3462,9 @@ def make_handler(ctx: Context, quiet: bool):
             p = req.get("path") if isinstance(req, dict) else None
             if not isinstance(p, str):
                 self.send_error_json(400, "invalid JSON: missing field `path`")
+                return
+            if req.get("live") is True and not p.startswith("@fx:psi?"):
+                self.send_error_json(400, "\"live\" is only for a formula (@fx:psi?src=…)")
                 return
             if p.startswith("@"):
                 # A live item: drawn by the player, no file lookup.

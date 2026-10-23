@@ -80,6 +80,12 @@ impl Governor {
         self.skip = Self::SKIP;
     }
 
+    /// The budget at the slowest step on a `grid` ms grid: the heaviest
+    /// formula the governor can hold.
+    pub fn slowest_budget_us(grid: u32) -> u32 {
+        Self::budget_us(grid << Self::MAX_LEVEL)
+    }
+
     /// The render budget for a frame of `ms`.
     pub fn budget_us(ms: u32) -> u32 {
         if ms <= 10 {
@@ -153,7 +159,7 @@ thread_local! {
 }
 /// The formula on screen: its mean render time (µs), and its frame time
 /// and the one it asked for (ms, high and low half).
-static STATS: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+static STATS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
 
 /// Install the clock that turns the governor on (the firmware's
 /// `esp_timer`).
@@ -178,11 +184,11 @@ fn clock() -> Option<Clock> {
     }
 }
 
-/// The last formula drawn: (mean render µs, frame time ms, asked ms) — for
-/// `/api/status`. Zeros before any.
-pub fn stats() -> (u32, u32, u32) {
+/// The last formula drawn: (mean render µs, frame time ms, asked ms, the
+/// last compile's µs) — for `/api/status`. Zeros before any.
+pub fn stats() -> (u32, u32, u32, u32) {
     let d = STATS[1].load(Ordering::Relaxed);
-    (STATS[0].load(Ordering::Relaxed), d >> 16, d & 0xffff)
+    (STATS[0].load(Ordering::Relaxed), d >> 16, d & 0xffff, STATS[2].load(Ordering::Relaxed))
 }
 
 /// The tables Psi reads, lent from `fx`.
@@ -258,21 +264,34 @@ fn query(query: &str) -> Query {
 }
 
 /// Compile `q` into `prog` and hold it to [`MAX_EST_US`]; the estimate.
+/// Compile `q` into `prog` and hold it to what the [`Governor`] can keep in
+/// budget at its frame rate: [`MAX_EST_US`], and at 100 fps (grid 10 ms,
+/// slowest step 80 ms) 32 ms. The estimate.
 fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
+    let t0 = clock().map(|c| (c, c()));
     psi::compile_into(&q.src, prog)?;
+    if let Some((c, t0)) = t0 {
+        STATS[2].store(c().wrapping_sub(t0), Ordering::Relaxed);
+    }
     let est = prog.esp32_us();
-    if est > MAX_EST_US {
+    let limit = MAX_EST_US.min(Governor::slowest_budget_us(grid(q)));
+    if est > limit {
         return Err(psi::Error {
             start: 0,
             end: 0,
             msg: format!(
                 "this formula is too heavy for the panel (about {} ms a frame; the limit is {} ms) — simplify it",
                 est.div_ceil(1000),
-                MAX_EST_US / 1000
+                limit / 1000
             ),
         });
     }
     Ok(est)
+}
+
+/// The frame grid a query asks for (ms), floored like [`PsiFx::ms`].
+fn grid(q: &Query) -> u32 {
+    u32::from(q.delay_ms.max(crate::fx::floor()))
 }
 
 /// A formula's compile error as an open error: `InvalidInput` with the
@@ -555,6 +574,13 @@ mod tests {
         assert_eq!(Governor::new(6_000, 10).delay_ms(10), 20, "over 5 ms: no 100 fps");
         assert_eq!(Governor::new(MAX_EST_US, 20).delay_ms(20), 160);
         assert_eq!(Governor::new(u32::MAX / 2, 20).delay_ms(20), 160, "8 frames at most");
+        // At 100 fps the slowest step is 80 ms: 32 ms is the most it can
+        // hold, so a heavier formula asking for 100 fps does not open.
+        let g = Governor::new(40_000, 10);
+        assert_eq!(g.delay_ms(10), 80);
+        assert!(40_000 > Governor::budget_us(g.delay_ms(10)));
+        assert_eq!(Governor::slowest_budget_us(10), 32_000);
+        assert_eq!(Governor::slowest_budget_us(20), 64_000);
         // A steady 12 ms a frame from a light estimate: slowed within a few
         // frames, then stays put.
         let mut g = Governor::new(5_000, 20);
@@ -648,8 +674,10 @@ mod tests {
         assert!(delays[..3].contains(&10), "starts as asked: {delays:?}");
         assert!(delays[delays.len() / 2..].iter().all(|&d| d == 20));
         assert_eq!(t, 4000, "one loop, all of it");
-        assert_eq!(stats(), (stats().0, 20, 10));
-        assert!(stats().0.abs_diff(7_500) < 200, "{:?}", stats());
+        let st = stats();
+        assert_eq!((st.1, st.2), (20, 10));
+        assert!(st.0.abs_diff(7_500) < 200, "{st:?}");
+        assert_eq!(st.3, 7_500, "the compile, on the fake clock");
     }
 
     #[test]
@@ -696,6 +724,14 @@ mod tests {
         let e = open(&super::path(&heavy, "")).unwrap_err();
         assert_eq!(e.kind(), ErrorKind::InvalidInput);
         assert!(e.to_string().starts_with("this formula is too heavy for the panel (about 4"), "{e}");
+        // 32-40 ms: fine at 50 fps, too heavy for the governor at 100.
+        let mid = (0..9).map(|k| format!("noise(x*{k}, y, t)")).collect::<Vec<_>>().join(" + ");
+        let mid = format!("gray({mid})");
+        let est = psi::compile(&mid).unwrap().esp32_us();
+        assert!((32_001..=MAX_EST_US).contains(&est), "{est}");
+        open(&super::path(&mid, "")).unwrap();
+        let e = open(&super::path(&mid, "fps=100")).unwrap_err();
+        assert!(e.to_string().ends_with("the limit is 32 ms) — simplify it"), "{e}");
         // An unknown effect stays what it was: InvalidData (a 415).
         assert_eq!(open("@fx:nonsense").unwrap_err().kind(), ErrorKind::InvalidData);
         // A formula may be longer than other virtual paths, up to its limit.

@@ -787,6 +787,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         // A virtual file (`@clock`, `@text?msg=…`) is drawn, not read; one
         // this build does not know is a 415 from the engine.
+        if play.live && !opendmd_core::synth::is_formula(&play.path) {
+            return req.bad_request("\"live\" is only for a formula (@fx:psi?src=…)");
+        }
         let virtual_file = opendmd_core::synth::is_virtual(&play.path);
         if !virtual_file
             && (!play.path.starts_with('/')
@@ -1958,18 +1961,18 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
     )
 }
 
-/// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms"}` while
-/// a formula plays: its mean render time, the frame time its governor
-/// holds it to (`fx_psi::Governor`) and the one it asked for; empty
-/// otherwise.
+/// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms",
+/// "compile_us"}` while a formula plays: its mean render time, the frame
+/// time its governor holds it to (`fx_psi::Governor`), the one it asked
+/// for, and the last formula compile's time; empty otherwise.
 #[cfg(feature = "psi")]
 fn formula_json(path: &str) -> String {
-    let (us, ms, asked) = opendmd_core::fx_psi::stats();
+    let (us, ms, asked, compile_us) = opendmd_core::fx_psi::stats();
     if !opendmd_core::synth::is_formula(path) || ms == 0 {
         return String::new();
     }
     format!(
-        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked}}}"#
+        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"compile_us":{compile_us}}}"#
     )
 }
 

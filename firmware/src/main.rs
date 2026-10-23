@@ -553,7 +553,17 @@ fn main() -> Result<()> {
                     // takes the screen at the next tick under the usual dwell.
                     // A formula over a formula is a live edit, in place.
                     let outcome = match retune(engine.as_mut(), &path, epoch.elapsed()) {
-                        Some(r) => r,
+                        Some(r) => {
+                            // No new start (the ordinal stays), but status
+                            // names the formula now on the panel.
+                            if r.is_ok() {
+                                if let Ok(mut s) = status.lock() {
+                                    s.path.clone_from(&path);
+                                }
+                            }
+                            r
+                        }
+                        None if engine.is_none() => Err(PlayError::NoPlaylist),
                         None if live => Err(PlayError::MovedOn),
                         None => play_now(engine.as_mut(), &path, epoch.elapsed()),
                     };
