@@ -989,6 +989,13 @@ impl Smooth {
         &self.pairs
     }
 
+    /// After the analysis: the GIF has at most 256 colours, so a smoothed
+    /// copy can be made (exact). Past 256 there is no copy of any kind and
+    /// the GIF plays as it is, so Smooth motion is not offered.
+    pub fn fits_palette(&self) -> bool {
+        self.colours.is_some()
+    }
+
     pub fn summary(&self) -> Summary {
         let tweened = self.pairs.iter().filter(|p| p.k > 0).count() as u32;
         let added = self.pairs.iter().map(|p| p.k).sum();
@@ -1613,6 +1620,40 @@ mod tests {
             assert_eq!(inc, want[i]);
             assert!(!p.gate && p.k == 0, "the gate must reject it: {p:?}");
         }
+    }
+
+    #[test]
+    fn past_256_colours_there_is_no_smoothed_copy_either() {
+        // A 2 px scroll whose 20 frames each have their own 16 colours (320
+        // in all): the tweened frames are exact, but their copy could only
+        // be a lossy one, so there is none; the GIF plays as it is.
+        let mut gif = Vec::new();
+        {
+            let mut e = gif::Encoder::new(&mut gif, W as u16, H as u16, &[]).unwrap();
+            for f in 0..20i64 {
+                let pal: Vec<u8> = (0..16u8)
+                    .flat_map(|i| [i * 16, f as u8 * 12, 255 - i * 13])
+                    .collect();
+                let px: Vec<u8> = (0..H as i64)
+                    .flat_map(|y| (0..W as i64).map(move |x| texture(x + f * 2, y)))
+                    .collect();
+                e.write_frame(&gif::Frame {
+                    width: W as u16,
+                    height: H as u16,
+                    delay: 5,
+                    palette: Some(pal),
+                    buffer: Cow::Owned(px),
+                    ..Default::default()
+                })
+                .unwrap();
+            }
+        }
+        assert!(!analysed(&gif).fits_palette());
+        assert!(analysed(&scroll(8, 2, 5)).fits_palette());
+        let mut copy = Vec::new();
+        let e = smooth_gif(&gif, &mut copy, &PREPARED).unwrap_err();
+        assert!(gifslim::is_too_many_colours(&e), "{e}");
+        assert!(copy.is_empty());
     }
 
     #[test]

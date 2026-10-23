@@ -37,12 +37,17 @@ every view like a person would:
             Settings card reads "0 of 3"; "Prepare remaining files" makes all
             three, byte-identical to `opendmd-pack convert`, and the
             card reads "3 of 3"
-  Damaged   a playlist of two of them (copies forgotten) and two damaged
-            GIFs written into the overlay (cut short, broken header); the
-            first GET of one good GIF aborted (Playwright route) is retried:
-            one summary line "2 files prepared · 2 damaged files skipped
-            (they can't be played either)", both listed in the disclosure
-            and in /api/cache/failed; a second run never fetches them
+  Damaged   a playlist of two of them (copies forgotten), two damaged
+            GIFs written into the overlay (cut short, broken header) and two
+            of the card's GIFs past 256 colours (one with its copy
+            forgotten, one keeping the card's lossy copy and a .failed line
+            in earlier firmware's words); the first GET of one good GIF
+            aborted (Playwright route) is retried: one summary line "3 files
+            prepared · 2 damaged files skipped (they can't be played
+            either)", the damaged ones listed in the disclosure and in
+            /api/cache/failed, the two past 256 colours with no copy (the
+            lossy one removed), recorded as playing as they are and counted
+            as done ("4 of 6"); a second run fetches none of them
   Add GIFs  two GIFs uploaded into Consoles from Library: each GIF and its
             prepared copy land (the copy byte-identical to opendmd-pack), and
             the confirm adds both to `cachetest` ("5 of 5"); deleting one of
@@ -4230,13 +4235,23 @@ def studio_device(page: Page) -> None:
 
 def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> None:
     """"Prepare remaining files" over a playlist `damagetest`: two of the
-    selected GIFs (their copies forgotten) and two damaged GIFs written into
-    the overlay (one cut short, one with a broken header). The first GET of
-    one good GIF is aborted (Playwright route): it is retried after 2 s and
-    made. The run ends in one summary line; the damaged GIFs are recorded in
-    /cache/.failed (POST /api/cache/failed) and a second run never fetches
-    them. cachetest is back in play, "3 of 3", afterwards."""
+    selected GIFs (their copies forgotten), two damaged GIFs written into
+    the overlay (one cut short, one with a broken header) and two of the
+    card's GIFs with more than 256 colours: `many[0]` with its copy
+    forgotten, `many[1]` keeping the card's (lossy, quantised) copy, with a
+    .failed line in earlier firmware's words. The first GET of one good GIF
+    is aborted (Playwright route): it is retried after 2 s and made. The
+    run ends in one summary line; the damaged GIFs are recorded in
+    /cache/.failed (POST /api/cache/failed); the two past 256 colours get no
+    copy (the lossy one goes), are recorded as playing as they are and count
+    as done; a second run fetches none of them. cachetest is back in play,
+    "3 of 3", afterwards."""
     good = selected[:2]
+    many = ["/gifs/Arcade/ARCADE_SF2_GameOver01.gif", "/gifs/Arcade/ARCADE_SF2_GameOver02.gif"]
+    have = {p.lower() for p in get_json(base + "/api/cache/list")["paths"]}
+    check(all(cache_path(p).lower() in have for p in many), "damage: the card has lossy copies of the GIFs past 256 colours")
+    post_json(base + "/api/cache/forget", {"path": many[0]})
+    post_json(base + "/api/cache/failed", {"path": many[1], "reason": "more than 256 colours"})
     src = CARD / good[0].lstrip("/")
     data = src.read_bytes()
     damaged = ["/gifs/Consoles/SNES_Smoke_Damaged_01.gif", "/gifs/Consoles/SNES_Smoke_Damaged_02.gif"]
@@ -4245,7 +4260,7 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
         (overlay / p.lstrip("/")).write_bytes(b)
     for p in good:
         post_json(base + "/api/cache/forget", {"path": p})
-    put_text(base + "/api/sets/damagetest", "".join(p + "\n" for p in good + damaged))
+    put_text(base + "/api/sets/damagetest", "".join(p + "\n" for p in good + damaged + many))
     put_json(base + "/api/config", {"set": "damagetest"})
     card = lambda u: urllib.parse.unquote(urllib.parse.urlparse(u).path)
     flaky, hits = good[1], []
@@ -4257,7 +4272,7 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
         else:
             route.continue_()
     match = lambda u: card(u) == flaky
-    watch = lambda r: card(r.url) in damaged and hits.append(card(r.url))
+    watch = lambda r: card(r.url) in damaged + many and hits.append(card(r.url))
     page.route(match, once)
     page.on("request", watch)
     # Chromium's console line for the aborted GET carries its URL.
@@ -4265,23 +4280,33 @@ def damage_checks(page: Page, base: str, overlay: Path, selected: list[str]) -> 
     goto_view(page, "sets")
     goto_view(page, "settings/device")
     sync_app(page)
-    wait_cache_line(page, "0 of 4")
+    wait_cache_line(page, "1 of 6")
     page.click("#pc-go")
     page.wait_for_function("(t => /^\\d+ files? prepared|^Every/.test(t))(document.querySelector('#pc-progress').textContent)", timeout=120000)
     line = page.inner_text("#pc-progress")
-    check(line == "2 files prepared · 2 damaged files skipped (they can't be played either)",
+    check(line == "3 files prepared · 2 damaged files skipped (they can't be played either)",
           f"damage: summary line '{line}' (first GET of {base_name(flaky)} aborted: {len(aborted)})")
     check(len(aborted) == 1 and page.locator("#pc-net").count() == 0 and page.inner_text("#pc-errors") == "",
           "damage: the aborted download was retried, nothing listed as failed")
     page.click("#pc-damaged summary")
     listed = page.inner_text("#pc-damaged")
-    check(all(p in listed for p in damaged) and page.inner_text("#pc-summary").strip().endswith("malformed GIF header"),
+    check(all(p in listed for p in damaged) and not any(p in listed for p in many)
+          and page.inner_text("#pc-summary").strip().endswith("malformed GIF header"),
           f"damage: the disclosure lists both damaged GIFs, nothing else ({listed!r})")
     check(page.locator("#toasts .toast.bad").count() == 0, "damage: no error toasts")
     shot(page, "settings-damaged", "laptop")
     rows = get_json(base + "/api/cache/failed")
-    check(sorted(r["path"] for r in rows) == damaged and all(r["reason"] for r in rows),
+    asis = lambda r: re.match(r"more than 256 colou?rs", r["reason"])
+    check(sorted(r["path"] for r in rows if not asis(r)) == damaged and all(r["reason"] for r in rows),
           f"damage: recorded in /cache/.failed ({rows})")
+    check(sorted(r["path"] for r in rows if asis(r)) == many
+          and any(r["path"] == many[0] and r["reason"] == "more than 256 colours: plays as it is" for r in rows),
+          f"damage: the GIFs past 256 colours recorded as playing as they are ({rows})")
+    have = {p.lower() for p in get_json(base + "/api/cache/list")["paths"]}
+    check(not any(cache_path(p).lower() in have for p in many),
+          "damage: no copy of the GIFs past 256 colours (the lossy one removed)")
+    line = wait_cache_line(page, "4 of 6")
+    check(True, f"damage: the GIFs past 256 colours count as done, '{line}'")
     compare_with_pack(overlay, {cache_path(p): CARD / p.lstrip("/") for p in good})
     n = len(hits)
     page.click("#pc-go")

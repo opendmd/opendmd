@@ -127,8 +127,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   the resolved path.
 - **The playback cache.** `GET /api/cache` is `{total, prepared, state,
   count_ms, auto}`: `total` the playlist length, `prepared` how many of its entries
-  have a prepared copy at their cache path (`cache/<Category>/<xx>/X.gif`),
-  counted in a background thread after any change (an upload or delete under
+  have a prepared copy at their cache path (`cache/<Category>/<xx>/X.gif`)
+  or play as they are (a `cache/.failed` line whose reason starts "more than
+  256 colours": no copy on purpose, done), counted in a background thread after any change (an upload or delete under
   `cache/`, a forget, a GIF delete, a playlist rebuild) — the first request
   after one answers `"counting"` with the previous figure (null before the
   first count), as the device does. `GET /api/cache/list` is every copy's
@@ -136,7 +137,7 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `DELETE /api/files/gifs/…` takes the copy with it. `GET /api/cache/failed`
   is `[{path, reason}]` from `cache/.failed`, `POST
   /api/cache/failed {"path","reason"}` appends a line to it (once per path;
-  `{ok, path, added}`) and `DELETE /api/cache/failed` removes it
+  `{ok, path, added}`; one that plays as it is recounts) and `DELETE /api/cache/failed` removes it
   (`{ok, cleared}`): the GIFs that can never be prepared. A legacy `odm/`
   tree (the old prepared format) is ignored: never counted, listed or
   played. `DELETE /api/files/<dir>?recursive=1` removes a directory and
@@ -1302,6 +1303,13 @@ def fnv1a32(b: bytes) -> int:
     return h
 
 
+def plays_original(reason: str) -> bool:
+    """opendmd_core::gifslim::plays_original: a cache/.failed reason that
+    means "no copy on purpose, the GIF plays as it is" (more than 256
+    colours) -- done, not failed."""
+    return reason.lstrip().lower().startswith("more than 256 colo")
+
+
 def cache_path(path: str):
     """opendmd_core::layout::cache_path: /gifs/Cat/X.gif ->
     /cache/Cat/<xx>/X.gif (xx: FNV-1a of the file name), None for anything
@@ -2283,6 +2291,9 @@ class Cache:
             with self.ctx.lock:
                 playlist = list(self.ctx.player.playlist)
             have = {p.lower() for p in self.ctx.fs.cache_files()}
+            # GIFs that play as they are (no copy on purpose: more than 256
+            # colours, recorded in cache/.failed) count as prepared.
+            have |= {cache_path(g).lower() for g in self.ctx.plays_as_is() if cache_path(g)}
             n = 0
             missing = []
             for p in playlist:
@@ -2438,6 +2449,18 @@ class Context:
         self.www_staged = None
         # The header version of the last pack PUT (None: version.txt's).
         self.www_pushed = None
+
+    def plays_as_is(self) -> list[str]:
+        """The GIFs cache/.failed says play as they are (plays_original)."""
+        fp = self.fs.read_path(FAILED_REL)
+        if fp is None:
+            return []
+        out = []
+        for line in fp.read_text(encoding="utf-8", errors="replace").split("\n"):
+            gif, _, why = line.partition("\t")
+            if gif.strip() and plays_original(why):
+                out.append(gif.strip())
+        return out
 
 
 SD_UNREADABLE = "card not readable: it needs FAT32; format it from the web app"
@@ -3566,6 +3589,8 @@ def make_handler(ctx: Context, quiet: bool):
                     if old and not old.endswith(b"\n"):
                         old += b"\n"
                     ctx.fs.write_bytes(FAILED_REL, old + f"{p}\t{why}\n".encode())
+            if added and plays_original(why):
+                ctx.cache.invalidate()  # counted as done: a recount
             self.send_json(200, {"ok": True, "path": p, "added": added})
 
         def h_name_check(self, path):

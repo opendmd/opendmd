@@ -51,10 +51,12 @@
 //! The active manifest, in order, read a line at a time (no list in RAM):
 //! each `/gifs/…gif` entry that passes the playlist's platform filter, whose
 //! copy is not at `layout::cache_path` (one `stat` in a small bucket
-//! directory) and which has not failed before. Failures (more than 256
-//! colours — the browser's quantiser can do those —, a GIF that will not
+//! directory) and which has not failed before. Failures (a GIF that will not
 //! decode, a missing file) are appended to [`config::BUILDER_FAILED_PATH`],
-//! `path<TAB>reason` a line, and skipped by every later pass. A copy is
+//! `path<TAB>reason` a line, and skipped by every later pass. So is a GIF
+//! with more than 256 colours, with [`gifslim::ORIGINAL_REASON`]: it gets no
+//! copy anywhere (copies are exact or absent) and plays as it is, so it
+//! counts as done — in the cache count, not in `failed`. A copy is
 //! written to `<copy>.tmp` and renamed into place;
 //! the cache count is bumped per file ([`cache::increment_prepared`]) and
 //! recounted at the end of a pass. Nothing else persists: after a reboot the
@@ -557,7 +559,9 @@ static FAILED_CLEARED: AtomicBool = AtomicBool::new(false);
 /// GIFs added to the failure file from outside ([`add_failed`]), as
 /// `layout::prepared_key`s: the walk takes them into its list at its next
 /// step.
-static FAILED_ADDED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// The flag: the line counts as a failure (not a GIF that plays as it is,
+/// nor a renamed line already counted).
+static FAILED_ADDED: Mutex<Vec<(u32, bool)>> = Mutex::new(Vec::new());
 /// Held for every read-modify-write of the failure file: the builder
 /// appends from its task, `POST /api/cache/failed` from httpd's, and FATFS
 /// (built without `FF_FS_LOCK`) does not keep two appenders apart.
@@ -615,6 +619,10 @@ struct Walk {
     offset: u64,
     /// `layout::prepared_key` of every GIF in the failure file.
     failed: Vec<u32>,
+    /// How many of `failed` are not failures: GIFs that play as they are
+    /// ([`gifslim::plays_original`]), and renamed lines. `failed` in the
+    /// API is the rest.
+    originals: usize,
     /// The pass reached the end; the cache generation it recounted at.
     done_gen: Option<u32>,
     /// Files abandoned [`config::BUILDER_DRIP_TRIES`] times at the drip pace
@@ -649,8 +657,8 @@ impl Walk {
         } else {
             Filter::new().platforms(list)
         };
-        let failed = load_failed();
-        report().failed = failed.len() as u32;
+        let (failed, originals) = load_failed();
+        report().failed = (failed.len() - originals) as u32;
         log::info!(
             "cache builder: new pass over {manifest}{}, {} known failures",
             if platforms.is_empty() {
@@ -666,6 +674,7 @@ impl Walk {
             filter,
             offset: 0,
             failed,
+            originals,
             done_gen: None,
             deferred: Vec::new(),
             tries: (0, 0),
@@ -741,16 +750,18 @@ fn work(walk: &mut Option<Walk>) -> (State, Option<Reason>) {
             // or in the next one (the recount `clear_failed` asked for ends
             // a finished pass).
             w.failed.clear();
+            w.originals = 0;
             report().failed = 0;
         }
         let added = std::mem::take(&mut *FAILED_ADDED.lock().unwrap_or_else(|p| p.into_inner()));
         if !added.is_empty() {
-            for key in added {
+            for (key, counts) in added {
                 if !w.failed.contains(&key) && w.failed.len() < config::BUILDER_MAX_FAILED {
                     w.failed.push(key);
+                    w.originals += usize::from(!counts);
                 }
             }
-            report().failed = w.failed.len() as u32;
+            report().failed = (w.failed.len() - w.originals) as u32;
         }
         // 3. Done: over until the copies or the playlist change.
         if w.done_gen.is_some() {
@@ -794,7 +805,12 @@ fn work(walk: &mut Option<Walk>) -> (State, Option<Reason>) {
                     Outcome::Failed(why) => {
                         record_failure(&gif, &why);
                         w.failed.push(layout::prepared_key(&gif));
-                        report().failed = w.failed.len() as u32;
+                        if gifslim::plays_original(&why) {
+                            // Done: it plays as it is.
+                            w.originals += 1;
+                            cache::increment_prepared();
+                        }
+                        report().failed = (w.failed.len() - w.originals) as u32;
                         w.offset = next_at;
                     }
                     // Stopped part way: the same file is next again —
@@ -1284,8 +1300,10 @@ fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64
     let failure = match &result {
         Ok(_) => None,
         Err(_) if stopped.is_some() => stopped.map(Fail::Stopped),
+        // No copy on purpose: the GIF plays as it is (exactly; a copy
+        // would have to be quantised). Recorded so no one tries again.
         Err(e) if gifslim::is_too_many_colours(e) => {
-            Some(Fail::Bad("more than 256 colours".into()))
+            Some(Fail::Bad(gifslim::ORIGINAL_REASON.into()))
         }
         Err(e) if gifslim::is_unsupported(e) || gifslim::is_needs_full_decoder(e) => {
             Some(Fail::Bad(format!("{e} (too large to prepare here)")))
@@ -1334,20 +1352,23 @@ fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64
 
 static OUT_STOP: AtomicU8 = AtomicU8::new(0);
 
-/// The failure file's GIFs, as `layout::prepared_key`s.
-fn load_failed() -> Vec<u32> {
+/// The failure file's GIFs, as `layout::prepared_key`s, and how many of
+/// them play as they are ([`gifslim::plays_original`]).
+fn load_failed() -> (Vec<u32>, usize) {
     let Ok(f) = File::open(config::BUILDER_FAILED_PATH) else {
-        return Vec::new();
+        return (Vec::new(), 0);
     };
-    let mut keys = Vec::new();
+    let (mut keys, mut originals) = (Vec::new(), 0);
     for line in BufReader::with_capacity(512, f).lines() {
         let Ok(line) = line else { break };
-        let path = line.split('\t').next().unwrap_or("").trim();
+        let (path, reason) = line.split_once('\t').unwrap_or((&line, ""));
+        let path = path.trim();
         if !path.is_empty() && keys.len() < config::BUILDER_MAX_FAILED {
             keys.push(layout::prepared_key(path));
+            originals += usize::from(gifslim::plays_original(reason));
         }
     }
-    keys
+    (keys, originals)
 }
 
 /// `GET /api/cache/failed`: the failure file as
@@ -1414,7 +1435,9 @@ pub fn clear_failed() -> io::Result<bool> {
 }
 
 /// `POST /api/cache/failed`: record that `gif` cannot be prepared (the
-/// browser could not either), once per path — compared case-insensitively,
+/// browser could not either), or — `reason` [`gifslim::plays_original`] —
+/// that it has no copy on purpose and plays as it is (counted as done: a
+/// recount is asked for). Once per path — compared case-insensitively,
 /// as FAT names are. `reason` is kept on one line, at most 200 characters.
 /// Returns whether a line was added. The builder skips it from its next step.
 pub fn add_failed(gif: &str, reason: &str) -> io::Result<bool> {
@@ -1456,11 +1479,16 @@ pub fn add_failed(gif: &str, reason: &str) -> io::Result<bool> {
     let sep = if ends_in_newline { "" } else { "\n" };
     writeln!(f, "{sep}{gif}\t{reason}")?;
     drop(f);
+    let original = gifslim::plays_original(&reason);
     FAILED_ADDED
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .push(layout::prepared_key(gif));
-    report().failed += 1;
+        .push((layout::prepared_key(gif), !original));
+    if original {
+        cache::invalidate();
+    } else {
+        report().failed += 1;
+    }
     log::info!("cache builder: {gif} recorded as failed from outside ({reason})");
     Ok(true)
 }
@@ -1488,7 +1516,7 @@ pub fn rename_failed(from: &str, to: &str) -> io::Result<bool> {
         FAILED_ADDED
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .push(layout::prepared_key(to));
+            .push((layout::prepared_key(to), false));
     }
     Ok(renamed)
 }

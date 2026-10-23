@@ -462,8 +462,10 @@ pub fn console_name(platform: &str) -> String {
 /// GIF bytes -> its prepared copy with the core's recoder in the prepared
 /// format (the one `opendmd-pack` and the device run, so the output is
 /// byte-identical). Returns `{copy: Uint8Array, stats: {width, height,
-/// frames, colours, quantised, gif_bytes, out_bytes}}`; throws on a GIF the
-/// player could not play either.
+/// frames, colours, gif_bytes, out_bytes}}`; throws on a GIF the player
+/// could not play either, and — with `gifslim::ORIGINAL_REASON`, "more
+/// than 256 colours: plays as it is" — on one that gets no copy because
+/// only a lossy one could be made (the panel plays the GIF itself).
 #[wasm_bindgen(js_name = prepareGif)]
 pub fn prepare_gif(gif: &[u8]) -> Result<JsValue, JsError> {
     use js_sys::{Object, Reflect, Uint8Array};
@@ -478,7 +480,6 @@ pub fn prepare_gif(gif: &[u8]) -> Result<JsValue, JsError> {
     set(&stats, "height", (s.height as u32).into());
     set(&stats, "frames", s.frames.into());
     set(&stats, "colours", (s.colours as u32).into());
-    set(&stats, "quantised", s.quantised.into());
     set(&stats, "gif_bytes", (s.gif_bytes as f64).into());
     set(&stats, "out_bytes", (s.out_bytes as f64).into());
     let o = Object::new();
@@ -556,6 +557,13 @@ impl Smoother {
     #[wasm_bindgen(getter)]
     pub fn offered(&self) -> bool {
         self.s.summary().offered()
+    }
+
+    /// At most 256 colours, so a smoothed copy can be made at all (past
+    /// 256 the GIF plays as it is, never smoothed).
+    #[wasm_bindgen(getter)]
+    pub fn fits(&self) -> bool {
+        self.s.fits_palette()
     }
 
     /// The tweened frames as a plain GIF (empty until `tween` is done).

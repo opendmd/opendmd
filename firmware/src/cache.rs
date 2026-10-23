@@ -23,6 +23,11 @@
 //! 3. **One pass over the manifest** ([`layout::count_prepared`]) for that
 //!    slice of buckets, then carry on with the next slice.
 //!
+//! A GIF that plays as it is — more than 256 colours, so no copy on purpose,
+//! recorded in `/cache/.failed` with a reason
+//! [`gifslim::plays_original`] accepts — counts as prepared: its would-be
+//! copy's key joins its bucket's slice ([`originals`]).
+//!
 //! One slice (and one manifest pass) covers a card with up to ~3,000 copies;
 //! a fully prepared 11k-file card takes four. It runs on the network worker
 //! (CPU0), never the display task, in FAT-lock-sized pieces with a short
@@ -39,9 +44,10 @@
 use crate::chan as mpsc;
 use anyhow::Result;
 use opendmd_core::filter::Filter;
+use opendmd_core::gifslim;
 use opendmd_core::layout::{self, CacheCount};
 use std::fs;
-use std::io::{self, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -424,11 +430,36 @@ impl<R: Read> Read for Abortable<R> {
     }
 }
 
+/// The GIFs `/cache/.failed` says play as they are (no copy on purpose),
+/// as the bucket and [`layout::prepared_key`] of the copy each would have:
+/// the count takes them as prepared. At most
+/// [`config::BUILDER_MAX_FAILED`] (8 B each), read before the walk.
+fn originals() -> Vec<(u8, u32)> {
+    let Ok(f) = fs::File::open(config::BUILDER_FAILED_PATH) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in BufReader::with_capacity(512, f).lines() {
+        let Ok(line) = line else { break };
+        let Some((path, reason)) = line.split_once('\t') else {
+            continue;
+        };
+        if !gifslim::plays_original(reason) || out.len() >= config::BUILDER_MAX_FAILED {
+            continue;
+        }
+        if let layout::Prepared::Candidate { bucket, key } = layout::classify(path.trim()) {
+            out.push((bucket, key));
+        }
+    }
+    out
+}
+
 /// Steps 1-3. `Ok(None)` if superseded (the generation moved) part way.
 fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount, String)>> {
     let filter = build_filter(platforms);
     let t = Instant::now();
     let (parents, mut dirs) = discover_all()?;
+    let originals = originals();
     let discover_ms = t.elapsed().as_millis();
     // What this heap can spare right now, within the configured cap.
     let spare =
@@ -465,6 +496,16 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
         }
         walk_ms += tw.elapsed().as_millis();
         copies += keys.len();
+        // GIFs that play as they are, in this slice's buckets: done too (a
+        // stale copy beside one only repeats its key; a line counts once).
+        for &(_, key) in originals
+            .iter()
+            .filter(|o| (lo..=hi).contains(&u16::from(o.0)))
+        {
+            keys.try_reserve(1)
+                .map_err(|_| anyhow::anyhow!("no heap to grow the count's key slice"))?;
+            keys.push(key);
+        }
         keys.sort_unstable();
         // A slice with no copies in it needs no pass, except the first, which
         // is where `total` and the direct `/cache/` entries are counted.
@@ -498,9 +539,10 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
         lo = hi + 1;
     }
     let report = format!(
-        "{copies} copies in {} categories; discover {discover_ms} ms, walk {walk_ms} ms over {dirs} dirs, \
+        "{copies} copies in {} categories, {} playing as they are; discover {discover_ms} ms, walk {walk_ms} ms over {dirs} dirs, \
          {passes} manifest pass(es) {pass_ms} ms, {cap} keys/pass",
-        parents.len()
+        parents.len(),
+        originals.len()
     );
     Ok(Some((total, report)))
 }

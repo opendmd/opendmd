@@ -477,7 +477,7 @@ faster and uploads them to `/cache/<Category>/<xx>/<name>.gif`
 How many of the playlist's files are prepared:
 
 `{"total","prepared","state","count_ms","auto"}`: the playlist's length;
-how many have a copy (null until counted); `"counting"` or `"ready"` (poll
+how many have a copy or play as they are (null until counted); `"counting"` or `"ready"` (poll
 until ready); the last count's ms. `auto`, the player's own preparing:
 `{"mode","state","reason","policy","session","failed","avg_full_s","avg_drip_s","eta_s","current"}`:
 `mode` = `auto_prepare`; `state` `idle`, `running`, `paused`, `done`;
@@ -502,8 +502,9 @@ curl -s $DMD/api/cache/list | jq .count
 
 ### GET /api/cache/failed
 
-The GIFs that cannot be prepared (nor played), streamed:
-`[{"path":"/gifs/…","reason":"more than 256 colours"}]`, `[]` if none.
+The GIFs with no copy, streamed:
+`[{"path":"/gifs/…","reason":"image truncated"}]`, `[]` if none. Reason
+`more than 256 colours…`: it plays as it is (done).
 
 ```sh
 curl -s $DMD/api/cache/failed
@@ -511,8 +512,8 @@ curl -s $DMD/api/cache/failed
 
 ### POST /api/cache/failed
 
-Record a GIF the browser could not prepare either, so the player skips it
-too: `{"path":"/gifs/….gif","reason":string}` (kept to one line, ≤ 200
+Record a GIF the browser could not prepare either (or one that plays as it
+is), so the player skips it too: `{"path":"/gifs/….gif","reason":string}` (kept to one line, ≤ 200
 characters). Reply: `{"ok":true,"path","added":bool}` (false: it was
 there). `400` not a `/gifs/….gif` path.
 

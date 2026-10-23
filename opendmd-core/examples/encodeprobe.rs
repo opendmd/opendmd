@@ -6,8 +6,8 @@
 //! `gifslim::recode_gif` (in memory, what `opendmd-pack` and the browser
 //! run) and `gifslim::recode_gif_streaming` over a bare `File` (what the
 //! cache builder runs), both in the prepared format; the output must be
-//! identical unless the in-memory one had to quantise, in which case the
-//! streaming one must fail with `TooManyColours`. Runs on every core.
+//! identical, or both must fail (`TooManyColours` past 256 colours: no
+//! copy). Runs on every core.
 //!
 //! `--out <card-root>` also writes each streaming copy where the card keeps
 //! it (`<card-root>/cache/<Category>/<xx>/<name>.gif`, the GIF's path taken
@@ -132,7 +132,9 @@ fn main() {
                             t.written += 1;
                         }
                     }
-                    (Ok(ds), Err(e)) if ds.quantised && gifslim::is_too_many_colours(e) => {
+                    (Err(d), Err(e))
+                        if gifslim::is_too_many_colours(d) && gifslim::is_too_many_colours(e) =>
+                    {
                         t.too_many.push(name)
                     }
                     (Err(_), Err(_)) => t.both_fail.push(name),
@@ -158,7 +160,7 @@ fn main() {
     let t = tally.into_inner().unwrap();
     println!(
         "{} files in {:.1}s: {} byte-identical ({} of them through the gif crate), {} too many colours \
-         (quantised in memory, refused streaming), {} undecodable by both, {} MISMATCHES{}",
+         (no copy: refused by both), {} undecodable by both, {} MISMATCHES{}",
         t.files,
         t0.elapsed().as_secs_f64(),
         t.identical,
