@@ -12,9 +12,10 @@ comment, the card at the zip's root — and the same tree unzipped, for
     uv run tools/card-zip.py OUT_DIR
 
 writes OUT_DIR/card.zip and OUT_DIR/tree/ (and replaces an existing
-OUT_DIR). The zip holds, under gifs/ in four categories: ordinary
-animations, a 2-colour one, one of exactly 256 colours, one past 256
-colours (no lighter version: it plays as it is), one with `Previous`
+OUT_DIR). The zip holds, under gifs/ in six categories (and one GIF
+directly in gifs/): ordinary animations, a 2-colour one, one of exactly
+256 colours, one past 256 colours (no lighter version: it plays as it
+is), one with `Previous`
 disposal, a larger one (~100 frames), a cut-off one and one that is not
 a GIF at all past its header; a `.gif.mp4` stray; filelist.txt (with a
 line naming a GIF the zip doesn't have, and one GIF in no list),
@@ -144,6 +145,7 @@ def build(out: Path) -> None:
         put(f"gifs/Pinball_Short/{name}.gif", gif(blink(random.Random(name), 4)), listed)
     for name in ["SPECTRUM_Manic_Miner_1", "SPECTRUM_Manic_Miner_2"]:
         put(f"gifs/Spectrum/{name}.gif", gif(blink(random.Random(name), 3)), listed)
+    put("gifs/TOP_Level_01.gif", gif(blink(random.Random("top"), 3)), listed)  # directly in gifs/: no category
     put("gifs/Spectrum/SPECTRUM_Manic_Miner_3.gif.mp4", b"\x00\x00\x00\x18ftypmp42" + bytes(64))
     for name in ["HALLOWEEN_OTHER_Pumpkin_01", "HALLOWEEN_OTHER_Bats_01"]:
         put(f"gifs/Halloween/{name}.gif", gif(blink(random.Random(name), 4)), hall)

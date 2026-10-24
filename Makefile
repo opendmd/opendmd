@@ -323,7 +323,7 @@ site: web sim-build gallery-tool
 # The site's pages in Chromium (the formula page, the gallery, the API pages and
 # Set up a card, whose lighter versions are checked against opendmd-pack's), after make site.
 site-smoke:
-	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo build --release --quiet
+	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo build --release --locked --quiet
 	uv run tools/site-smoke.py $(SITE) --dist $(DIST) --art target/site-art --pack $(PACK)/target/release/opendmd-pack
 
 site-serve: site

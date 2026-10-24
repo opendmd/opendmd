@@ -6,7 +6,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deflateRawSync, crc32 as zcrc } from 'node:zlib';
+import { deflateRawSync } from 'node:zlib';
+
+// A bit-at-a-time CRC-32, the reference the table-driven one is checked
+// against (node:zlib's crc32 needs node 20.15+; this suite runs on 20.12).
+function zcrc(bytes) {
+  let c = 0xffffffff;
+  for (const b of bytes) { c ^= b; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; }
+  return ~c >>> 0;
+}
 import { readFileSync } from 'node:fs';
 import { readZip, entryBytes, crc32, ZipError } from '../zip.js';
 
@@ -68,10 +76,11 @@ const gifLike = (n, seed = 1) => {
 };
 const text = (b) => new TextDecoder().decode(b);
 
-test('crc32 matches zlib, at every length around the 4-byte step', () => {
+test('crc32 matches the reference, at every length around the 4-byte step', () => {
   for (let n = 0; n < 40; n++) assert.equal(crc32(gifLike(n, n)), zcrc(gifLike(n, n)));
   const big = gifLike(300000, 9);
   assert.equal(crc32(big), zcrc(big));
+  assert.equal(crc32(new TextEncoder().encode('123456789')), 0xcbf43926, 'the standard check value');
 });
 
 test('data descriptors: sizes and CRCs come from the central directory', async () => {
@@ -121,7 +130,7 @@ test('a bad CRC is the entry\'s error, not the zip\'s', async () => {
   const zip = makeZip([{ name: 'good.gif', data: 'fine' }, { name: 'bad.gif', data: 'broken' }], { crcFor: { 'bad.gif': 1234 } });
   const { entries } = await readZip(zip);
   assert.equal(text(await entryBytes(zip, entries[0])), 'fine');
-  await assert.rejects(entryBytes(zip, entries[1]), (e) => e instanceof ZipError && /damaged/.test(e.message));
+  await assert.rejects(entryBytes(zip, entries[1]), (e) => e instanceof ZipError && /damaged/.test(e.message) && e.kind === 'damaged');
 });
 
 test('damaged deflate data is refused', async () => {
@@ -145,9 +154,9 @@ test('password-protected and unknown methods are refused per entry', async () =>
   const zip = makeZip([{ name: 'locked.gif', data: 'x', flags: 1 }, { name: 'ok.gif', data: 'ok' }]);
   const { entries } = await readZip(zip);
   assert.equal(entries[0].encrypted, true);
-  await assert.rejects(entryBytes(zip, entries[0]), /password/);
+  await assert.rejects(entryBytes(zip, entries[0]), (e) => /password/.test(e.message) && e.kind === 'unsupported');
   assert.equal(text(await entryBytes(zip, entries[1])), 'ok');
-  await assert.rejects(entryBytes(zip, { ...entries[1], method: 12 }), /method 12/);
+  await assert.rejects(entryBytes(zip, { ...entries[1], method: 9 }), (e) => /method 9/.test(e.message) && e.kind === 'unsupported');
 });
 
 test('the fixture zip tools/card-zip.py writes (CARD_ZIP)', { skip: !process.env.CARD_ZIP }, async () => {

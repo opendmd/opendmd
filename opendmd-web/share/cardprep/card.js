@@ -14,7 +14,7 @@
 // run half-way.
 
 import { readZip, entryBytes, ZipError } from './zip.js';
-import { cardLayout, ordered, lastFiles, missingLines, planWork, failedText, failedPaths, strangers, onDisk, playlistName } from './plan.js';
+import { cardLayout, ordered, lastFiles, missingLines, planWork, failedText, failedReasons, insideCard, strangers, onDisk, playlistName } from './plan.js';
 
 const $ = (id) => document.getElementById(id);
 const app = $('cp');
@@ -155,7 +155,7 @@ async function pickCard() {
     return fail('cp-card-err', `The card couldn't be read: ${e.message}`);
   }
   card = root;
-  plan = planWork(ordered(layout, texts), lastFiles(layout), listing.have, failedPaths(listing.failed), (p) => wasm.cachePathFor(p));
+  plan = planWork(ordered(layout, texts), lastFiles(layout), listing.have, failedReasons(listing.failed), (p) => wasm.cachePathFor(p));
   const odd = listing.top.some((n) => /^gifs$/i.test(n)) ? [] : strangers(listing.top);
   const total = layout.gifs.length;
   let text;
@@ -166,12 +166,18 @@ async function pickCard() {
     text = `${plural(plan.items.length, 'GIF')} to write, about ${gb(bytes)}.`;
   } else if (!plan.items.length) {
     text = 'The GIFs are all on this card: only the playlists to write.';
+  } else if (plan.retries === plan.items.length && !plan.last.length) {
+    text = `Everything is already on this card: it's ready to play. ${plural(plan.retries, 'GIF')} couldn't be got ` +
+      `ready before; Start tries ${plan.retries === 1 ? 'it' : 'them'} again.`;
   } else if (plan.gifs === 0) {
     text = `The GIFs are already on this card: ${plural(plan.items.length, 'GIF')} to get ready to play.`;
   } else {
     text = `Picking up where it stopped: ${plural(plan.items.length, 'GIF')} to go.`;
   }
-  if (odd.length) {
+  if (insideCard(root.name)) {
+    text = `This is a folder called “${root.name}”: is it a folder on the card? Pick the card itself, the drive, ` +
+      `so the GIFs go where the player looks for them. ` + text;
+  } else if (odd.length) {
     const names = odd.slice(0, 3).join(', ') + (odd.length > 3 ? ', …' : '');
     text = `This folder has other things in it (${names}): is it the SD card? Writing adds a gifs folder and the ` +
       `playlists here, and deletes nothing. ` + text;
@@ -181,7 +187,7 @@ async function pickCard() {
   app.dataset.swaps = listing.swaps;
   if (plan.items.length || plan.last.length) {
     show('cp-start');
-    $('cp-start').textContent = odd.length ? 'Write here anyway' : 'Start';
+    $('cp-start').textContent = odd.length || insideCard(root.name) ? 'Write here anyway' : 'Start';
     state('listed');
   } else {
     state('ready');
@@ -217,7 +223,7 @@ async function start() {
   const items = plan.items.slice();
   const r = run = {
     t0: performance.now(), total: items.length, done: 0, samples: [], over: false, stopping: false, fatal: null,
-    gifs: 0, copies: 0, bytes: 0, asIs: [], made: [], damaged: [], bad: [], failed: [], lock: null,
+    gifs: 0, copies: 0, bytes: 0, asIs: [], made: [], damaged: [], bad: [], unsupported: [], failed: [], lock: null,
   };
   addEventListener('beforeunload', guard);
   document.addEventListener('visibilitychange', wake);
@@ -225,43 +231,66 @@ async function start() {
   progress(true);
   const timer = setInterval(() => progress(false), 1000);
   const workers = [];
+  let spawned = 0;
   await new Promise((resolve) => {
+    const settle = () => { if (workers.every((x) => x.idle)) resolve(); };
     const next = (w) => {
-      if (r.stopping || !items.length) {
-        w.idle = true;
-        if (workers.every((x) => x.idle)) resolve();
-        return;
-      }
-      w.postMessage({ type: 'work', items: items.splice(0, BATCH) });
+      if (r.stopping || !items.length) { w.idle = true; w.batch = null; settle(); return; }
+      w.batch = items.splice(0, BATCH);
+      w.postMessage({ type: 'work', items: w.batch });
     };
-    const stopAll = () => { r.stopping = true; for (const w of workers) w.postMessage({ type: 'stop' }); };
+    // Stop: each writer finishes the file in hand; one still busy after a
+    // grace period (an encoder that never returns) is cut off. Its write
+    // was either finished or never moved into place.
+    const stopAll = () => {
+      if (r.stopping) return;
+      r.stopping = true;
+      for (const w of workers) w.postMessage({ type: 'stop' });
+      setTimeout(() => {
+        for (const w of workers) if (!w.idle) { w.terminate(); w.idle = true; }
+        settle();
+      }, 5000);
+    };
     r.stopAll = stopAll;
-    for (let i = 0; i < Math.min(WORKERS, items.length); i++) {
+    const spawn = () => {
+      spawned++;
       const w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
       w.idle = false;
+      w.batch = null;
       workers.push(w);
       w.onmessage = ({ data: m }) => {
-        if (m.type === 'ready') next(w);
-        else if (m.type === 'batch') {
-          for (const d of m.done) tally(d);
-          progress(false);
-          if (!w.dead) next(w);
-        } else if (m.type === 'fatal') {
-          r.fatal ??= m;
-          w.dead = true;
-          stopAll();
+        if (m.type === 'ready') { next(w); return; }
+        if (m.type !== 'batch' || w.idle) return;
+        for (const d of m.done) tally(d);
+        // What the writer didn't get to goes back on the queue.
+        const got = new Set(m.done.map((d) => d.path));
+        const left = (w.batch || []).filter((it) => !got.has(it.path));
+        if (!r.stopping && !m.fatal) items.unshift(...left);
+        progress(false);
+        if (m.fatal) {
+          r.fatal ??= m.fatal;
           w.idle = true;
-          if (workers.every((x) => x.idle)) resolve();
-        }
+          stopAll();
+          settle();
+        } else if (m.dead) {
+          // A writer whose wasm went wrong: replace it (a few times at most).
+          w.terminate();
+          w.idle = true;
+          if (spawned < WORKERS + 8 && !r.stopping) spawn();
+          else if (!r.stopping) { r.fatal ??= { name: 'LoadError', message: 'the page\'s writers keep failing' }; stopAll(); }
+          settle();
+        } else next(w);
       };
       w.onerror = (e) => {
+        e.preventDefault?.();
         r.fatal ??= { name: 'LoadError', message: e.message || 'a writer stopped' };
-        w.dead = true; w.idle = true;
+        w.idle = true;
         stopAll();
-        if (workers.every((x) => x.idle)) resolve();
+        settle();
       };
       w.postMessage({ type: 'init', zip, root: card, pace: PACE });
-    }
+    };
+    for (let i = 0; i < Math.min(WORKERS, items.length); i++) spawn();
     if (!items.length) resolve();
   });
   // The boot logo and the playlists last (after the player's list of GIFs
@@ -274,7 +303,7 @@ async function start() {
       if (!r.stopping) say('cp-status', 'Writing the playlists…');
       const ft = failedText(listing.failed, [...r.asIs, ...r.damaged].map(([p, why]) => ['/' + p, why]), r.made.map((p) => '/' + p));
       if (ft != null) await writeFile(card, 'cache/.failed', new TextEncoder().encode(ft));
-      for (const f of r.stopping ? [] : plan.last) {
+      for (const f of r.stopping || r.done < r.total ? [] : plan.last) {
         await writeFile(card, f.path, raws.get(f.path) ?? await entryBytes(zip, f.entry));
         if (raws.has(f.path)) lists++;
       }
@@ -301,6 +330,7 @@ function tally(d) {
   if (d.asIs) r.asIs.push([d.path, d.asIs]);
   if (d.damaged) r.damaged.push([d.path, d.damaged]);
   if (d.bad) r.bad.push(d.path);
+  if (d.unsupported) r.unsupported.push(d.path);
   if (d.failed) r.failed.push(`${d.path}: ${d.failed}`);
 }
 
@@ -345,7 +375,10 @@ function done(r, lists) {
   const took = secs < 60 ? plural(Math.max(1, Math.round(secs)), 'second') : plural(Math.round(secs / 60), 'minute');
   const names = layout.playlists.map((p) => playlistName(p.path));
   let head, ok = false;
-  if (r.fatal?.name === 'QuotaExceededError') {
+  if (r.fatal?.name === 'ZipGone') {
+    head = `The zip couldn't be read any more after ${plural(r.done, 'GIF')} (was it moved, renamed or deleted?). Drop it ` +
+      `again, then choose the card again to carry on where it stopped.`;
+  } else if (r.fatal?.name === 'QuotaExceededError') {
     head = `The card is full after ${plural(r.done, 'GIF')}. Free some space or use a bigger card, then choose it again with ` +
       `Write to the card… to carry on.`;
   } else if (r.fatal && ['NotFoundError', 'NotAllowedError', 'SecurityError', 'InvalidStateError'].includes(r.fatal.name)) {
@@ -354,14 +387,14 @@ function done(r, lists) {
   } else if (r.fatal) {
     head = `Writing stopped after ${plural(r.done, 'GIF')}: ${r.fatal.message}. Reload the page and choose the card again ` +
       `to carry on where it stopped.`;
-  } else if (r.stopping) {
+  } else if (r.stopping || r.done < r.total) {
     head = `Stopped after ${fmt(r.done)} of ${plural(r.total, 'GIF')}. Nothing is half-written: choose the card again with ` +
       `Write to the card… to carry on where it stopped.`;
   } else {
     ok = true;
-    const all = layout.gifs.length - r.bad.length - r.failed.length;
+    const all = layout.gifs.length - r.bad.length - r.unsupported.length - r.failed.length;
     head = `Your card is ready: ${plural(all, 'GIF')} and ${plural(names.length, 'playlist')}` +
-      `${names.length ? ` (${names.join(', ')})` : ''}, ready to play at their smoothest from the first boot. It took ${took}.`;
+      `${names.length ? ` (${names.join(', ')})` : ''}, ready to play from the first boot. It took ${took}.`;
   }
   state(ok ? 'done' : r.stopping && !r.fatal ? 'stopped' : 'failed');
   say('cp-done-text', head);
@@ -369,6 +402,8 @@ function done(r, lists) {
   const notes = [
     ['cp-n-bad', r.bad, `${plural(r.bad.length, 'GIF')} in the zip ${r.bad.length === 1 ? 'is' : 'are'} damaged and ` +
       `${r.bad.length === 1 ? 'wasn\'t' : 'weren\'t'} put on the card. Download the pack again and run this page again to add them.`],
+    ['cp-n-unsupported', r.unsupported, `${plural(r.unsupported.length, 'GIF')} in the zip ${r.unsupported.length === 1 ? 'is' : 'are'} ` +
+      `packed in a way this page can't read (was the zip re-made?) and ${r.unsupported.length === 1 ? 'wasn\'t' : 'weren\'t'} put on the card.`],
     ['cp-n-failed', r.failed, `${plural(r.failed.length, 'GIF')} couldn't be written to the card. Run this page again to try them again.`],
     ['cp-n-damaged', r.damaged, `${plural(r.damaged.length, 'GIF')} can't be played by anything: ` +
       `${r.damaged.length === 1 ? 'it\'s' : 'they\'re'} on the card as ${r.damaged.length === 1 ? 'it is' : 'they are'}.`],
@@ -384,6 +419,7 @@ function done(r, lists) {
   show('cp-n-program', ok && layout.program);
   app.dataset.damaged = r.damaged.length;
   app.dataset.bad = r.bad.length;
+  app.dataset.unsupported = r.unsupported.length;
   app.dataset.failed = r.failed.length;
 }
 

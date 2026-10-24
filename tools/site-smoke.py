@@ -416,7 +416,7 @@ def card_page(browser, base: str, errors: list[str], pack: Path, shots: Path | N
         on_card = {k: v for k, v in zfiles.items() if (k.startswith("gifs/") and k.lower().endswith(".gif"))
                    or k in ("filelist.txt", "filelist.hall", "filelist.xmas", "logos/boot.gif")}
         gifs = [k for k in on_card if k.startswith("gifs/")]
-        cats = {k.split("/")[1] for k in gifs}
+        cats = {k.split("/")[1] for k in gifs if k.count("/") > 1}
         requests: list[str] = []
 
         def visible(page: Page, where: str) -> None:
@@ -498,12 +498,13 @@ def card_page(browser, base: str, errors: list[str], pack: Path, shots: Path | N
         page.wait_for_selector("#cp[data-state=done]", timeout=60000)
         summary = page.inner_text("#cp-done")
         check(summary.startswith(f"Your card is ready: {len(gifs)} GIFs and 3 playlists (All files, Halloween, Christmas), "
-                                 "ready to play at their smoothest from the first boot."), f"card: done: {summary[:160]}")
-        damaged = damaged_before + int(page.get_attribute("#cp", "data-damaged"))
-        left = damaged - damaged_before
-        check(damaged == 2 and (left == 0 or f"{left} GIF{'s' if left > 1 else ''} can't be played by anything" in summary)
+                                 "ready to play from the first boot."), f"card: done: {summary[:160]}")
+        # (Those met before the stop are in cache/.failed, but not as "plays as it is": tried again, met again.)
+        damaged = int(page.get_attribute("#cp", "data-damaged"))
+        check(damaged == 2 and "2 GIFs can't be played by anything" in summary
               and "1 line of the playlists names GIFs the pack doesn't have" in summary and "Windows program" in summary,
-              f"card: the notes: unplayable GIFs ({damaged_before} met before the stop, {left} after), the missing line, the Windows program")
+              f"card: the notes: unplayable GIFs ({damaged_before} met before the stop, {damaged} in the finishing run), "
+              "the missing line, the Windows program")
         check(page.is_visible("#cp-eject") and "Eject the card before you take it out" in page.inner_text("#cp-eject"),
               "card: it says to eject the card first")
         visible(page, "done")
@@ -521,20 +522,44 @@ def card_page(browser, base: str, errors: list[str], pack: Path, shots: Path | N
         extra = sorted(set(cards) - set(on_card) - set(want_copies) - {"cache/.failed"})
         check(not extra, f"card: nothing else on the card (no Windows program, no .mp4, no swap file) {extra}")
 
-        # 3. A finished card: nothing to write.
+        # 3. A finished card: nothing to write. The two GIFs nothing decodes are
+        # offered again (cache/.failed lines other than "plays as it is" are
+        # retried), and trying them writes nothing.
         page = open_page("?target=opfs", page=page)
         take_zip(page)
         pick(page)
-        check(page.get_attribute("#cp", "data-state") == "ready" and page.is_hidden("#cp-start")
-              and page.inner_text("#cp-card-text") == "Everything is already on this card: it's ready to play.",
+        check(page.get_attribute("#cp", "data-state") == "listed" and page.get_attribute("#cp", "data-todo") == "2"
+              and page.inner_text("#cp-card-text") == "Everything is already on this card: it's ready to play. "
+              "2 GIFs couldn't be got ready before; Start tries them again.",
               f"card: a finished card: {page.inner_text('#cp-card-text')}")
-        check(card(page) == got, "card: and nothing on it is touched")
+        page.click("#cp-start")
+        page.wait_for_selector("#cp[data-state=done]", timeout=30000)
+        check(card(page) == got and page.get_attribute("#cp", "data-written") == "0" and page.get_attribute("#cp", "data-made") == "0",
+              "card: trying them again writes nothing, and nothing on the card is touched")
         if shots:
             page.screenshot(path=str(shots / "card-laptop-ready.png"), full_page=True)
         page.evaluate(OPFS_CLEAR)
+
+        # 4. The zip changed on disk mid-run (moved, deleted, re-downloaded): the run stops, says so, writes no playlists.
+        moving = tmp / "moving.zip"
+        shutil.copyfile(zpath, moving)
+        page = open_page("?target=opfs&pace=500", page=page)
+        page.set_input_files("#cp-file", str(moving))
+        page.wait_for_selector("#cp[data-state=read]", timeout=20000)
+        pick(page)
+        page.click("#cp-start")
+        page.wait_for_function("+document.querySelector('#cp').dataset.done >= 2", timeout=30000)
+        moving.write_bytes(b"gone")
+        page.wait_for_selector("#cp[data-state=failed]", timeout=60000)
+        gone = page.inner_text("#cp-done-text")
+        names = set(card(page))
+        check(gone.startswith("The zip couldn't be read any more after") and "moved" in gone
+              and not any(k.startswith("filelist") for k in names) and int(page.get_attribute("#cp", "data-failed")) == 0,
+              f"card: the zip gone mid-run stops the run, no playlists: {gone}")
+        page.evaluate(OPFS_CLEAR)
         page.context.close()
 
-        # 4. Not a zip; a zip that isn't a card.
+        # 5. Not a zip; a zip that isn't a card.
         page = open_page("")
         notzip = tmp / "pack.zip"
         notzip.write_bytes(b"GIF89a this is not a zip " * 40)
@@ -549,7 +574,7 @@ def card_page(browser, base: str, errors: list[str], pack: Path, shots: Path | N
         check(page.is_visible("#cp-zip-err"), f"card: a zip that isn't a card is refused: {page.inner_text('#cp-zip-err')}")
         page.context.close()
 
-        # 5. A browser that can't write to a folder.
+        # 6. A browser that can't write to a folder.
         ctx_page = new_page(browser, "laptop", errors)
         ctx_page.add_init_script("delete window.showDirectoryPicker")
         ctx_page.goto(f"{base}/card/")
@@ -559,7 +584,7 @@ def card_page(browser, base: str, errors: list[str], pack: Path, shots: Path | N
               "card: without the directory picker, the hand-copy sentence instead of the button")
         ctx_page.context.close()
 
-        # 6. Phone width; and the links to the page.
+        # 7. Phone width; and the links to the page.
         page = open_page("", "phone")
         check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "card (phone): no sideways scroll")
         if shots:

@@ -12,7 +12,8 @@ export const playlistName = (p) => PLAYLIST_NAMES[p.split('.').pop().toLowerCase
 // The retired pre-rendered format's playlist: the player ignores it.
 const RETIRED = /^filelist\.odm\.txt$/i;
 const BOOT = /^logos\/boot\.gif$/i;
-const GIF = /^gifs\/[^/]+\/.+\.gif$/i;
+// (A GIF directly in gifs/ too: its lighter version goes in cache/<xx>/, docs/cache-format.md.)
+const GIF = /^gifs\/.+\.gif$/i;
 export const ORIGINAL_REASON = 'more than 256 colours: plays as it is';
 export const playsAsIs = (reason) => /^\s*more than 256 colou?rs/i.test(String(reason ?? ''));
 
@@ -38,7 +39,8 @@ export function cardLayout(entries) {
     if (odd) { out.dropped.push(path); continue; }
     if (GIF.test(path)) {
       out.gifs.push(item);
-      out.categories.add(path.split('/')[1]);
+      const parts = path.split('/');
+      if (parts.length > 2) out.categories.add(parts[1]);
     } else if (PLAYLIST.test(path) && !RETIRED.test(path)) out.playlists.push(item);
     else if (BOOT.test(path)) out.boot = item;
     else {
@@ -87,31 +89,35 @@ export function missingLines(layout, texts) {
 }
 
 // The work, given the card as it is. `have`: lowercased path -> size of
-// every file found; `noCopy`: lowercased `/gifs/…` paths cache/.failed
-// lists (they play as they are, or nothing can play them); `copyPath`: `/gifs/…` -> `/cache/…` or undefined (the
-// main module's cachePathFor). A GIF is written unless the card has it at
-// the zip's size (a 0-byte or short file is from an interrupted run); its
-// lighter version is made unless the card has a non-empty one, or
-// cache/.failed lists the GIF — and always when the GIF itself is (re)written, so it
-// never belongs to another file.
-export function planWork(files, last, have, noCopy, copyPath) {
+// every file found; `failed`: cache/.failed (failedReasons); `copyPath`:
+// `/gifs/…` -> `/cache/…` or undefined (the main module's cachePathFor).
+// A GIF is written unless the card has it at the zip's size (a 0-byte or
+// short file is from an interrupted run); its lighter version is made
+// unless the card has a non-empty one or cache/.failed says the GIF plays
+// as it is — and always when the GIF itself is (re)written, so it never
+// belongs to another file. A GIF cache/.failed lists for any other reason
+// (the device couldn't, a file nothing decoded) is tried again: a `retry`.
+export function planWork(files, last, have, failed, copyPath) {
   const items = [];
-  let gifs = 0, copies = 0, already = 0;
+  let gifs = 0, copies = 0, already = 0, retries = 0;
   for (const f of files) {
     const e = f.entry;
+    const key = '/' + f.path.toLowerCase();
     const writeGif = have.get(f.path.toLowerCase()) !== e.usize;
     const cp = copyPath('/' + f.path);
     const copy = cp ? cp.replace(/^\//, '') : null;
-    const makeCopy = !!copy && (writeGif || (!(have.get(copy.toLowerCase()) > 0) && !noCopy.has('/' + f.path.toLowerCase())));
+    const makeCopy = !!copy && (writeGif || (!(have.get(copy.toLowerCase()) > 0) && !playsAsIs(failed.get(key))));
     if (!writeGif && !makeCopy) { already++; continue; }
+    const retry = !writeGif && failed.has(key);
     if (writeGif) gifs++;
     if (makeCopy) copies++;
-    items.push({ path: f.path, copy: makeCopy ? copy : null, writeGif,
+    if (retry) retries++;
+    items.push({ path: f.path, copy: makeCopy ? copy : null, writeGif, retry,
       e: { lho: e.lho, csize: e.csize, usize: e.usize, crc: e.crc, method: e.method, flags: e.flags } });
   }
   // The last files, written as they are, the same way: unless the card has them at the zip's size.
   const rest = last.filter((p) => have.get(p.path.toLowerCase()) !== p.entry.usize);
-  return { items, gifs, copies, already, last: rest };
+  return { items, gifs, copies, already, retries, last: rest };
 }
 
 // cache/.failed after a run: the old text, without lines for GIFs that now
@@ -129,21 +135,25 @@ export function failedText(old, add, drop) {
   lines = lines.filter((l) => !dropSet.has(key(l)));
   const known = new Set(lines.map(key));
   const fresh = new Map();
-  for (const [p, why] of add) if (!known.has(p.toLowerCase())) fresh.set(p, String(why).replace(/\s+/g, ' ').trim());
+  // (A reason is one line of at most 200 characters, as the device writes them.)
+  for (const [p, why] of add) if (!known.has(p.toLowerCase())) fresh.set(p, [...String(why).replace(/\s+/g, ' ').trim()].slice(0, 200).join(''));
   if (!fresh.size && lines.length === before) return null;
   const sorted = [...fresh].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   return [...lines, ...sorted.map(([p, why]) => `${p}\t${why}`)].map((l) => l + '\n').join('');
 }
 
-// The GIFs cache/.failed lists (lowercased paths).
-export function failedPaths(text) {
-  const out = new Set();
+// cache/.failed as lowercased path -> reason.
+export function failedReasons(text) {
+  const out = new Map();
   for (const l of (text || '').split('\n')) {
-    const p = l.split('\t')[0].trim();
-    if (p) out.add(p.toLowerCase());
+    const [p, reason = ''] = l.split('\t');
+    if (p && p.trim()) out.set(p.trim().toLowerCase(), reason);
   }
   return out;
 }
+
+// A picked folder named like a folder *on* a card: probably not the card itself.
+export const insideCard = (name) => /^(gifs|cache|logos|sets)$/i.test(name || '');
 
 // Names at a folder's top that say "this is a card" (or OS litter on one).
 const CARD_NAMES = /^(gifs|cache|sets|logos|update|odm|filelist\..*|system volume information|\$recycle\.bin|\.trashes|\.trash-\d+|\.spotlight-v100|\.fseventsd|\.ds_store|\._.*|desktop\.ini|thumbs\.db|.*\.crswap|lost\+found|\.temporaryitems|indexervolumeguid)$/i;

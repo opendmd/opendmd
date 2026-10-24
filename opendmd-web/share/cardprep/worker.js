@@ -58,19 +58,35 @@ async function write(path, bytes) {
   }
 }
 
+// The zip itself can't be read any more (moved, renamed, deleted or
+// changed on disk after it was dropped): nothing after this can work.
+class ZipGone extends Error { constructor(m) { super(m); this.name = 'ZipGone'; } }
+
 async function one(it) {
   const r = { path: it.path, gif: 0, copy: 0 };
   let bytes;
   try { bytes = await entryBytes(zip, it.e); } catch (e) {
-    if (e instanceof ZipError) { r.bad = e.message; return r; }
-    throw e;
+    if (e instanceof ZipError) {
+      if (e.kind === 'unsupported') r.unsupported = e.message; else r.bad = e.message;
+      return r;
+    }
+    throw new ZipGone(`${e?.name || 'Error'}: ${e?.message ?? e}`);
   }
   if (it.writeGif) { await write(it.path, bytes); r.gif = bytes.length; }
   if (it.copy) {
     let copy = null;
     try { copy = prepareGif(bytes).copy; } catch (e) {
       const why = String(e?.message ?? e);
-      if (playsAsIs(why)) r.asIs = why; else r.damaged = why;
+      // The encoder's own verdict on the file is a plain Error (its JsError):
+      // past 256 colours, or nothing can decode it. Anything else (a wasm
+      // trap, out of memory) is this writer's trouble: retried next run, and
+      // this writer is replaced.
+      if (e?.name === 'Error') {
+        if (playsAsIs(why)) r.asIs = why; else r.damaged = why;
+      } else {
+        r.failed = `${e?.name || 'Error'}: ${why}`;
+        r.dead = true;
+      }
     }
     if (copy) { await write(it.copy, copy); r.copy = copy.length; }
   }
@@ -87,23 +103,30 @@ self.onmessage = async ({ data: m }) => {
       prepareGif = art.prepareGif;
       self.postMessage({ type: 'ready' });
     } catch (e) {
-      self.postMessage({ type: 'fatal', name: 'LoadError', message: String(e?.message ?? e) });
+      self.postMessage({ type: 'batch', done: [], fatal: { name: 'LoadError', message: String(e?.message ?? e) } });
     }
   } else if (m.type === 'stop') {
     stopping = true;
   } else if (m.type === 'work') {
+    // One message back per batch: what was done, and whether this writer
+    // can go on (`dead`) or the run can't (`fatal`). Items not in `done` were
+    // not started.
     const done = [];
+    let fatal = null, dead = false;
     for (const it of m.items) {
       if (stopping) break;
-      try { done.push(await one(it)); } catch (e) {
-        if (FATAL.has(e?.name)) {
-          self.postMessage({ type: 'batch', done });
-          self.postMessage({ type: 'fatal', name: e.name, message: String(e.message), path: it.path });
-          return;
+      try {
+        const r = await one(it);
+        done.push(r);
+        if (r.dead) { dead = true; break; }
+      } catch (e) {
+        if (FATAL.has(e?.name) || e?.name === 'ZipGone') {
+          fatal = { name: e.name, message: String(e.message), path: it.path };
+          break;
         }
         done.push({ path: it.path, gif: 0, copy: 0, failed: `${e?.name || 'Error'}: ${e?.message ?? e}` });
       }
     }
-    self.postMessage({ type: 'batch', done, stopped: stopping });
+    self.postMessage({ type: 'batch', done, fatal, dead });
   }
 };

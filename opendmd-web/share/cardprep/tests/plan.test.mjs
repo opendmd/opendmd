@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cardLayout, ordered, lastFiles, missingLines, planWork, failedText, failedPaths, strangers, playlistName, ORIGINAL_REASON, onDisk } from '../plan.js';
+import { cardLayout, ordered, lastFiles, missingLines, planWork, failedText, failedReasons, insideCard, strangers, playlistName, ORIGINAL_REASON, onDisk } from '../plan.js';
 
 let lho = 0;
 const E = (name, usize = 100) => ({ name, dir: name.endsWith('/'), method: 8, flags: 8, crc: 0, csize: usize, usize, lho: lho++ });
@@ -64,7 +64,7 @@ test('playing order: All files first, then the other lists, then the rest; the b
 
 test('an empty card: everything to write', () => {
   const l = cardLayout(PACK);
-  const p = planWork(ordered(l, TEXTS), lastFiles(l), new Map(), new Set(), copyPath);
+  const p = planWork(ordered(l, TEXTS), lastFiles(l), new Map(), new Map(), copyPath);
   assert.equal(p.items.length, 4);
   assert.equal(p.gifs, 4);
   assert.equal(p.copies, 4);
@@ -82,7 +82,7 @@ const full = () => new Map([
 
 test('a finished card: nothing to write (names compared case-insensitively)', () => {
   const l = cardLayout(PACK);
-  const p = planWork(ordered(l, TEXTS), lastFiles(l), full(), new Set(), copyPath);
+  const p = planWork(ordered(l, TEXTS), lastFiles(l), full(), new Map(), copyPath);
   assert.equal(p.items.length, 0);
   assert.equal(p.last.length, 0);
   assert.equal(p.already, 4);
@@ -97,7 +97,7 @@ test('a half-written card: the empty and short files an interrupted run leaves a
   have.set('gifs/arcade/arcade_c.gif', 1234); // another file of the same name
   have.delete('filelist.txt');
   have.set('logos/boot.gif', 0);
-  const p = planWork(ordered(l, TEXTS), lastFiles(l), have, new Set(), copyPath);
+  const p = planWork(ordered(l, TEXTS), lastFiles(l), have, new Map(), copyPath);
   assert.deepEqual(p.items.map((i) => [i.path, i.writeGif, !!i.copy]), [
     ['gifs/Arcade/ARCADE_C.gif', true, true], // rewritten, so its lighter version is made again too
     ['gifs/Consoles/SNES_B.gif', false, true],
@@ -112,24 +112,39 @@ test('the pack copied by hand: only the lighter versions to make', () => {
   const l = cardLayout(PACK);
   const have = full();
   for (const k of [...have.keys()]) if (k.startsWith('cache/')) have.delete(k);
-  const p = planWork(ordered(l, TEXTS), lastFiles(l), have, new Set(), copyPath);
+  const p = planWork(ordered(l, TEXTS), lastFiles(l), have, new Map(), copyPath);
   assert.equal(p.gifs, 0);
   assert.equal(p.copies, 4);
   assert.ok(p.items.every((i) => !i.writeGif));
 });
 
-test('a GIF cache/.failed lists gets no second try, unless the GIF is written anew', () => {
+test('cache/.failed: a GIF that plays as it is gets no second try; any other line is tried again; a GIF written anew is always', () => {
   const l = cardLayout(PACK);
   const have = full();
   have.delete('cache/arcade/00/arcade_c.gif');
   have.delete('cache/consoles/00/snes_b.gif');
-  const failed = `/gifs/Arcade/ARCADE_C.gif\t${ORIGINAL_REASON}\n/GIFS/consoles/SNES_B.gif\tinvalid LZW\n`;
-  const noCopy = failedPaths(failed);
-  assert.deepEqual([...noCopy], ['/gifs/arcade/arcade_c.gif', '/gifs/consoles/snes_b.gif']);
-  assert.equal(planWork(ordered(l, TEXTS), lastFiles(l), have, noCopy, copyPath).items.length, 0);
+  have.delete('cache/arcade/00/arcade_d.gif');
+  const failed = failedReasons(`/gifs/Arcade/ARCADE_C.gif\t${ORIGINAL_REASON}\n/GIFS/consoles/SNES_B.gif\tinvalid LZW\n` +
+    '/gifs/Arcade/ARCADE_D.GIF\ttoo large to prepare here\n');
+  assert.deepEqual([...failed.keys()], ['/gifs/arcade/arcade_c.gif', '/gifs/consoles/snes_b.gif', '/gifs/arcade/arcade_d.gif']);
+  let p = planWork(ordered(l, TEXTS), lastFiles(l), have, failed, copyPath);
+  assert.deepEqual(p.items.map((i) => [i.path, i.writeGif, !!i.copy, i.retry]),
+    [['gifs/Consoles/SNES_B.gif', false, true, true], ['gifs/Arcade/ARCADE_D.GIF', false, true, true]]);
+  assert.equal(p.retries, 2);
   have.set('gifs/arcade/arcade_c.gif', 7);
-  const p = planWork(ordered(l, TEXTS), lastFiles(l), have, noCopy, copyPath);
-  assert.deepEqual(p.items.map((i) => [i.path, i.writeGif, !!i.copy]), [['gifs/Arcade/ARCADE_C.gif', true, true]]);
+  p = planWork(ordered(l, TEXTS), lastFiles(l), have, failed, copyPath);
+  assert.deepEqual(p.items.map((i) => [i.path, i.writeGif, !!i.copy, i.retry]).slice(0, 1), [['gifs/Arcade/ARCADE_C.gif', true, true, false]]);
+});
+
+test('a GIF directly in gifs/ is a GIF too (no category)', () => {
+  const l = cardLayout([E('filelist.txt'), E('gifs/Top.gif'), E('gifs/A/x.gif')]);
+  assert.deepEqual(l.gifs.map((g) => g.path), ['gifs/Top.gif', 'gifs/A/x.gif']);
+  assert.deepEqual([...l.categories], ['A']);
+});
+
+test('a picked folder named like one on a card', () => {
+  assert.ok(insideCard('gifs') && insideCard('Cache') && insideCard('logos') && insideCard('sets'));
+  assert.ok(!insideCard('OPENDMD') && !insideCard('\\') && !insideCard(''));
 });
 
 test('cache/.failed: lines added once, sorted as opendmd-pack writes them; lines for GIFs that now have one dropped', () => {
@@ -138,6 +153,7 @@ test('cache/.failed: lines added once, sorted as opendmd-pack writes them; lines
     `/gifs/A/y.gif\tbad data here\n/gifs/B/z.gif\t${ORIGINAL_REASON}\n`);
   const old = `/gifs/A/old.gif\tinvalid LZW\n/gifs/B/z.gif\tmore than 256 colours`;
   assert.equal(failedText(old, [['/gifs/b/Z.gif', ORIGINAL_REASON]], []), null, 'already listed (any case)');
+  assert.equal(failedText('', [['/gifs/A/long.gif', 'x'.repeat(250)]], []), `/gifs/A/long.gif\t${'x'.repeat(200)}\n`, 'reasons capped at 200');
   assert.equal(failedText(old, [['/gifs/C/n.gif', ORIGINAL_REASON]], ['/GIFS/A/OLD.gif']),
     `/gifs/B/z.gif\tmore than 256 colours\n/gifs/C/n.gif\t${ORIGINAL_REASON}\n`);
 });

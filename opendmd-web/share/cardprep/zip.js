@@ -7,7 +7,12 @@
 // are UTF-8 when flag bit 11 says so, else CP437. Runs in a page, a worker
 // and node (Blob has slice/arrayBuffer/stream there too).
 
-export class ZipError extends Error {}
+// A fault in the zip itself. `kind`: 'damaged' (cut short or corrupt: download
+// it again) or 'unsupported' (a password, or packed in a way this reader
+// doesn't know, Deflate64 say: the zip was re-made with another tool).
+export class ZipError extends Error {
+  constructor(message, kind = 'damaged') { super(message); this.kind = kind; }
+}
 
 const EOCD = 0x06054b50, EOCD64 = 0x06064b50, LOC64 = 0x07064b50, CEN = 0x02014b50, LOC = 0x04034b50;
 const MAX_COMMENT = 0xffff;
@@ -125,8 +130,8 @@ export function crc32(bytes, crc = 0) {
 // One entry's bytes, whole, CRC-checked. Throws ZipError for anything the
 // zip itself gets wrong (bad header, unsupported method, wrong size or CRC).
 export async function entryBytes(blob, e) {
-  if (e.encrypted) throw new ZipError('protected with a password');
-  if (e.method !== 0 && e.method !== 8) throw new ZipError(`packed in a way this page can't read (method ${e.method})`);
+  if (e.encrypted) throw new ZipError('protected with a password', 'unsupported');
+  if (e.method !== 0 && e.method !== 8) throw new ZipError(`packed in a way this page can't read (method ${e.method})`, 'unsupported');
   const head = await bytesAt(blob, e.lho, e.lho + 30);
   const hv = new DataView(head.buffer);
   if (hv.getUint32(0, true) !== LOC) throw new ZipError('damaged in the download');
