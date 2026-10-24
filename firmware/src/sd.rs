@@ -285,19 +285,31 @@ pub fn probe() -> io::Result<()> {
 /// Test hook: mount attempts to fail on purpose after the next restart, so
 /// the no-card boot (network up, mount retried) can be exercised without
 /// pulling the card. Kept in RTC slow memory, which a software restart
-/// leaves alone and a power-on fills with garbage — hence the magic word.
+/// leaves alone and a power-on (or another firmware's layout, after an
+/// update) fills with garbage — hence the magic word.
+///
+/// **Every access is volatile.** The static's initializer is all the
+/// compiler knows of it, so with plain accesses LLVM may prove the word
+/// only ever holds 0 or the magic and shrink it to a one-byte flag
+/// (GlobalOpt): then any non-zero garbage byte "matches". It did, with
+/// `codegen-units = 1`: after an update from a build whose log ring sat
+/// there, a boot failed ~180 mounts (9 min without the card) on the spare.
 #[link_section = ".rtc_noinit"]
 static mut SIM_FAIL: [u32; 2] = [0; 2];
 const SIM_MAGIC: u32 = 0x5d_fa_11_ed;
+
+fn sim_word(i: usize) -> *mut u32 {
+    // SAFETY: an element of the static; only reached through volatile ops.
+    unsafe { (&raw mut SIM_FAIL).cast::<u32>().add(i) }
+}
 
 /// Arm [`SIM_FAIL`]: the next boot's first `n` mount attempts fail.
 pub fn simulate_mount_failures(n: u32) {
     // SAFETY: written once, from the httpd task, just before a restart;
     // read only by the boot task (`boot.rs`), which makes every mount.
     unsafe {
-        let p = &raw mut SIM_FAIL;
-        (*p)[0] = SIM_MAGIC;
-        (*p)[1] = n;
+        sim_word(0).write_volatile(SIM_MAGIC);
+        sim_word(1).write_volatile(n);
     }
 }
 
@@ -309,12 +321,12 @@ fn take_simulated_failure() -> bool {
     }
     // SAFETY: the boot task is the only one mounting, see above.
     unsafe {
-        let p = &raw mut SIM_FAIL;
-        if (*p)[0] != SIM_MAGIC || (*p)[1] == 0 {
-            (*p)[0] = 0;
+        let left = sim_word(1).read_volatile();
+        if sim_word(0).read_volatile() != SIM_MAGIC || left == 0 || left > 20 {
+            sim_word(0).write_volatile(0);
             return false;
         }
-        (*p)[1] -= 1;
+        sim_word(1).write_volatile(left - 1);
         true
     }
 }
