@@ -120,7 +120,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `entries`, `manifest` | playlist length; the playlist file in play (`/sdcard/…`) |
 | `index_state` | `"ready"`, `"building"` or `"unavailable"` |
 | `www_version`, `www` | the web app's version (null if none is good); `GET /api/www`'s object |
-| `heap` | `{free, floor, idf_min}`, bytes: now, lowest, the system's lowest |
+| `heap` | `{free, floor, idf_min, transitions_cut}`: bytes now, lowest, the system's lowest; transitions the heap gate cut since boot (a probe build adds `main_stack`, the main task's stack bytes never used, and `pushed`, pixels pushed to the panel) |
 | `heap_floor_at` | `{task0, task1, largest}`: tasks on each core and the largest free block at the lowest; null until then |
 | `refresh_hz` | panel refresh rate |
 | `deadline_misses`, `worst_lateness_ms` | all late frames; the latest, ms |

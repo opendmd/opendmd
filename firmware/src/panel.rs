@@ -590,5 +590,7 @@ fn push(bytes: &[u8], map: &DirtyMap, look: Look) -> u32 {
     }
     // SAFETY: no arguments; a no-op when single-buffered.
     unsafe { hub75::hub75_flip() };
+    #[cfg(feature = "probe")]
+    crate::state::PIXELS_PUSHED.fetch_add(pushed, std::sync::atomic::Ordering::Relaxed);
     pushed
 }
