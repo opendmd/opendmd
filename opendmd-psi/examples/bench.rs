@@ -83,7 +83,7 @@ fn main() {
         let (a50, a90) = bench::<64>(&p, frames);
         let (b50, b90) = bench::<128>(&p, frames);
         println!(
-            "{name:<12} {:>5} {:>14} {:>5} {:>9.1} µs {:>9.1} µs {:>9.1} µs {:>9.1} µs   (compile {:.1} µs)",
+            "{name:<12} {:>5} {:>14} {:>5} {:>9.1} µs {:>9.1} µs {:>9.1} µs {:>9.1} µs   (compile {:.1} µs, ESP32 est {} µs)",
             p.len(),
             format!("{f}/{r}/{px}"),
             p.regs(),
@@ -91,7 +91,8 @@ fn main() {
             a90 / 1e3,
             b50 / 1e3,
             b90 / 1e3,
-            ct.as_secs_f64() * 1e6
+            ct.as_secs_f64() * 1e6,
+            p.esp32_us()
         );
         if list {
             print!("{}", p.listing());

@@ -106,6 +106,7 @@ mod with_psi {
         /// The setting's formula (`""`: none). One that does not build
         /// (checked when saved, so a formula a later build refuses) is
         /// logged and left out.
+        #[inline(never)]
         pub fn set_saved(&mut self, path: &str, display: &mut Canvas) {
             if let Some(mut l) = self.saved.take() {
                 l.release(display);
@@ -124,6 +125,7 @@ mod with_psi {
         /// The editor's formula over the file on screen (`ordinal`), or a
         /// live edit of it (`live`: [`PlayError::MovedOn`] once the
         /// playlist has moved on); `""` takes it off.
+        #[inline(never)]
         pub fn show_over(
             &mut self,
             path: &str,
@@ -167,6 +169,7 @@ mod with_psi {
 
         /// A file started (`ordinal`): the editor's formula goes once the
         /// playlist has moved on; buffers refused before are asked again.
+        #[inline(never)]
         pub fn started(&mut self, ordinal: u64, display: &mut Canvas) {
             if self.over.as_ref().is_some_and(|(_, at)| *at != ordinal) {
                 if let Some((mut l, _)) = self.over.take() {
@@ -181,6 +184,7 @@ mod with_psi {
         /// What the panel shows over `display` at `now` (see
         /// `FormulaLook::apply`): its buffers taken first if the heap has
         /// room. `decode_us`: the frame's decoding.
+        #[inline(never)]
         pub fn apply<'a>(
             &'a mut self,
             now: Duration,
@@ -210,6 +214,7 @@ mod with_psi {
 
         /// When the look must be drawn whatever the picture does (its own
         /// frame), if it is drawn at all.
+        #[inline(never)]
         pub fn due(&self) -> Option<Duration> {
             match &self.over {
                 Some((l, _)) => l.due(),
@@ -219,6 +224,7 @@ mod with_psi {
 
         /// Give the buffers back (night mode's dark panel, the panel
         /// test); taken again when it draws next.
+        #[inline(never)]
         pub fn release(&mut self, display: &mut Canvas) {
             if let Some(l) = self.active().filter(|l| l.is_held()) {
                 l.release(display);
@@ -227,6 +233,7 @@ mod with_psi {
 
         /// The panel showed something else (a status card): every row is
         /// drawn again next time.
+        #[inline(never)]
         pub fn redraw(&mut self) {
             if let Some(l) = self.active() {
                 l.redraw();
@@ -234,6 +241,7 @@ mod with_psi {
         }
 
         /// The heap is low: give the buffers back. True if it did.
+        #[inline(never)]
         pub fn yield_heap(&mut self, display: &mut Canvas) -> bool {
             if free_heap() as usize >= config::GLOW_YIELD_HEAP {
                 return false;

@@ -27,8 +27,9 @@ there:
 If you leave the editor without saving, the gallery offers **Continue
 editing** at the top, and the app asks before anything replaces it.
 
-Formulas play here in the browser for now. To play one on the panel, save
-it as a GIF.
+On your player, **Show on panel** plays a formula there until the
+playlist moves on; save it as a GIF to keep it. Formulas that draw over a
+GIF have their own section, [Over a GIF](#over-a-gif).
 
 ## The editor
 
@@ -165,10 +166,81 @@ everything that moves should come back to where it started: use `t/N`,
 are worked out once a frame rather than for every pixel; they can't use
 the pixel's position.
 
+**Layers.** A formula can be a stack of layers, bottom to top, each with
+its own names and its own colour on its last line:
+
+```
+loop 4
+layer {
+  wave = sin(x*2 + t/4) + sin(y*1.5 - t/2)
+  hsv(wave/4 + t/4, 0.9, 1)
+}
+layer multiply { gray(py % 2 ? 1 : 0.6) }
+```
+
+The word after `layer` says how it goes onto what is below it: `over`
+(the default: it covers it), `add` (lighter), `multiply` (darker: white
+leaves it as it was), `screen` (lighter, softly), `max` or `min`. Names
+set outside the layers can be used in all of them; names set inside a
+layer are its own, so two layers can each have a `v`, and you can paste a
+whole formula into a `layer { … }` to combine it with another. `loop` goes
+on its own line outside the layers.
+
+**How much it covers.** Every colour takes one more value, if you like:
+how much of the pixel it covers, from 0 to 1 — `rgb(r, g, b, k)`,
+`hsv(h, s, v, k)`, `gray(v, k)`, `pal(fire, v, k)`. Where it covers less
+than all, what is below shows through.
+
 **Limits.** A formula can be 4,096 characters and 256 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop
 at the end instead of wrapping round, and dividing by zero gives the
 biggest number of the right sign rather than an error.
+
+## Over a GIF
+
+A formula can draw over a GIF instead of replacing it: scanlines, a colour
+grade, a vignette, sparkles, a clock in the corner. Four values say what
+is under it at the pixel:
+
+| name | what |
+| --- | --- |
+| `ur`, `ug`, `ub` | the red, green and blue under the formula, 0 to 1 |
+| `ul` | how bright it is there, 0 to 1 |
+
+The bottom layer, and any colour that covers less than all of a pixel,
+let it show through. For example, a sepia tone:
+
+```
+l = ul
+rgb(l*1.1 + 0.08, l*0.92 + 0.04, l*0.65)
+```
+
+or scanlines, which keep the GIF and darken every other row:
+
+```
+layer multiply { gray(py % 2 ? 1 : 0.55) }
+```
+
+The examples' **Over a GIF** section has more. In the editor and in a
+formula's details, such a formula is drawn over a sample picture; **Pick a
+GIF…** draws it over one of your GIFs (from the playlist) or a GIF file
+from your computer instead, moving as the GIF does. **Save as GIF…** then
+saves the formula over that GIF. A formula played on its own has nothing
+under it: `ur`, `ug`, `ub` and `ul` are 0 (black).
+
+On your player:
+
+- **Show over the panel’s GIF** draws it over whatever the panel is
+  playing, until the playlist moves on (changes you make follow it there).
+  Press it again to take it off.
+- **Use as the look** keeps it over every GIF the panel plays, before the
+  colour and the phosphor glow. Settings › Look shows which formula it is
+  (**Formula over every GIF**) and turns it off (**None**).
+
+A formula that is too heavy to draw over GIFs (more than about 8 ms a frame
+on the panel) is refused with a sentence saying so. When the player is
+short of memory (several downloads at once, say) it shows the GIFs without
+the formula for a while.
 
 ## Keeping them fast
 
@@ -185,6 +257,8 @@ milliseconds); all the examples are light or medium.
   several add up.
 - Anything that doesn't depend on the pixel (`hour/12`, `sin(t/8)`) is
   worked out once a frame, whatever line it's on.
+- Each layer costs about as much as a `smoothstep`; `screen` and colours
+  that cover only part of a pixel a little more.
 
 ## Sharing
 
@@ -238,6 +312,6 @@ browser, won't have them: share a link to yourself to move one.
 
 ## Coming next
 
-Playing formulas live on the panel, in playlists next to the effects, is
-coming. A formula then runs on the player itself, follows the clock and
-loops forever without the size of a GIF.
+Formulas in playlists, next to the effects, are coming: a formula then
+runs on the player itself, follows the clock and loops forever without the
+size of a GIF.
