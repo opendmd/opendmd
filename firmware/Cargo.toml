@@ -86,6 +86,13 @@ debug = true
 opt-level = 2
 debug = true           # keep symbols so panics decode to line numbers
 lto = "off"            # ESP-IDF does not tolerate LTO well
+# One codegen unit: the image is 19.2 KB smaller (2,247,312 -> 2,228,128 B
+# on the sector-512 tree), and a change's size is its own: with 16 units a
+# new module reshuffled inlining by 6-7 KB elsewhere. Costs ~12 s of build
+# (firmware crate 42 -> 54 s, clean 57 -> 69 s on the build host). Every
+# firmware build ships through this profile: fw-build (bench, probe, diag),
+# fw-release, CI and release.yml.
+codegen-units = 1
 
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
 [patch.crates-io]
