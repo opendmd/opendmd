@@ -46,7 +46,6 @@ mod clock;
 mod config;
 mod diag;
 mod dns_server;
-#[cfg(feature = "fat-index")]
 mod fatidx;
 mod files;
 mod follow;

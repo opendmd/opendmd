@@ -107,7 +107,14 @@ pub fn between_frames(eng: &mut Engine, deadline: Duration, epoch: &Instant) -> 
         let Some(stage) = eng.ahead_due(now) else {
             break;
         };
-        let (bytes, slack) = needs(stage);
+        // An original opened ahead (through the FAT index) is held only with
+        // the heap for its cap-12 decoder.
+        let wide = stage == AheadStage::Parse && crate::sd::ahead_is_original();
+        eng.set_ahead_wide(wide);
+        let (mut bytes, slack) = needs(stage);
+        if wide {
+            bytes += config::AHEAD_ORIGINAL_BYTES;
+        }
         if deadline.saturating_sub(now) < slack {
             break;
         }
