@@ -20,7 +20,10 @@ and enough Consoles rows for the Library list to scroll. Every GIF is
 mock's clock has real frame delays to run through.
 
 Then `opendmd-pack convert OUT_DIR --verify` makes the prepared copies
-under cache/ (skipped with --no-convert). The output is deterministic;
+under cache/ (skipped with --no-convert). Two Arcade GIFs past 256 colours
+(ARCADE_SF2_GameOver01/02, in no playlist) then get the lossy copy and no
+.failed line that earlier firmware and earlier opendmd-pack left, as on the
+real card dump: web-smoke's damage checks start from that. The output is deterministic;
 an existing OUT_DIR is replaced.
 """
 
@@ -51,6 +54,7 @@ CONSOLES = {
     "PCE": ["Bonk", "Ys_Book_I_II"],
     "SMS": ["Alex_Kidd", "Wonder_Boy"],
 }
+MANY = ["ARCADE_SF2_GameOver01", "ARCADE_SF2_GameOver02"]  # past 256 colours, in no playlist
 VARIANTS = 12  # _01.._12 of each title: ~570 Consoles rows, so the Library list scrolls well past 4000 px
 OTHER = 40
 ARCADE = ["Pacman", "Galaga", "Metal_Slug", "Outrun", "Final_Fight", "Bubble_Bobble", "Gauntlet", "Rastan"]
@@ -75,6 +79,37 @@ def to_p(img: Image.Image) -> Image.Image:
 def save(frames: list[Image.Image], delays: list[int], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frames = [to_p(f) for f in frames]
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=delays, loop=0,
+                   optimize=False, disposal=1)
+
+
+def many_colours(n: int = 3) -> tuple[list[Image.Image], list[int]]:
+    """Each frame a 200-colour gradient of its own hue, saved with its own
+    local colour table: past 256 colours across the GIF."""
+    frames = []
+    for f in range(n):
+        im = Image.new("RGB", (W, H))
+        px = im.load()
+        for x in range(W):
+            for y in range(H):
+                i = (x + y * W) % 200
+                px[x, y] = ((i + 80 * f) % 256, (40 * f + i // 2) % 256, (255 - i + 60 * f) % 256)
+        frames.append(im)
+    return frames, [100] * n
+
+
+def save_many(frames: list[Image.Image], delays: list[int], path: Path, shared: bool = False) -> None:
+    """Each frame its own 256-colour table, or (`shared`) one table for all
+    of them: the lossy, quantised version."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if shared:
+        sheet = Image.new("RGB", (W, H * len(frames)))
+        for i, f in enumerate(frames):
+            sheet.paste(f, (0, H * i))
+        pal = sheet.quantize(colors=256, method=Image.Quantize.MEDIANCUT)
+        frames = [f.quantize(palette=pal, dither=Image.Dither.NONE) for f in frames]
+    else:
+        frames = [f.quantize(colors=256, method=Image.Quantize.MEDIANCUT) for f in frames]
     frames[0].save(path, save_all=True, append_images=frames[1:], duration=delays, loop=0,
                    optimize=False, disposal=1)
 
@@ -169,6 +204,9 @@ def build(out: Path) -> None:
     hall = [add("Halloween", n, in_list=False) for n in HALLOWEEN]
     xmas = [add("XMAS", n, "scroll" if "SCROLL" in n else "blink", in_list=False) for n in XMAS]
 
+    for name in MANY:
+        save_many(*many_colours(), gifs / "Arcade" / f"{name}.gif")
+
     # A boot logo at the card root, as on the real card.
     make_gif(out / "logos" / "boot.gif", "boot")
     (out / "filelist.txt").write_text("".join(p + "\n" for p in listed))
@@ -179,6 +217,36 @@ def build(out: Path) -> None:
     print(f"{out}: {len(listed) + len(hall) + len(xmas)} GIFs, {len(listed)} in filelist.txt")
 
 
+def convert(root: Path) -> None:
+    subprocess.run(["cargo", "run", "--release", "--quiet", "--", "convert", str(root), "--verify"],
+                   cwd=REPO / "opendmd-pack", check=True, env={**os.environ, "RUSTUP_TOOLCHAIN": "stable"})
+
+
+def old_lossy_copies(out: Path) -> None:
+    """Give the GIFs past 256 colours what earlier converters left: a copy
+    of a 256-colour quantised version, and no .failed line. The copies
+    come from convert itself, run over the quantised GIFs in a scratch tree."""
+    tmp = out.parent / (out.name + ".lossy")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    for name in MANY:
+        save_many(*many_colours(), tmp / "gifs" / "Arcade" / f"{name}.gif", shared=True)
+    convert(tmp)
+    for src in (tmp / "cache").rglob("*.gif"):
+        dst = out / src.relative_to(tmp)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+    shutil.rmtree(tmp)
+    failed = out / "cache" / ".failed"
+    if failed.exists():
+        keep = [l for l in failed.read_text().splitlines(keepends=True)
+                if not any(f"/{n}.gif\t" in l for n in MANY)]
+        if keep:
+            failed.write_text("".join(keep))
+        else:
+            failed.unlink()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("out", type=Path)
@@ -187,8 +255,8 @@ def main() -> None:
     out = a.out.resolve()
     build(out)
     if not a.no_convert:
-        subprocess.run(["cargo", "run", "--release", "--quiet", "--", "convert", str(out), "--verify"],
-                       cwd=REPO / "opendmd-pack", check=True, env={**os.environ, "RUSTUP_TOOLCHAIN": "stable"})
+        convert(out)
+        old_lossy_copies(out)
 
 
 if __name__ == "__main__":

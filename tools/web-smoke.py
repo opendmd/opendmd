@@ -2191,7 +2191,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         page.goto(base + "/?updates=" + urllib.parse.quote(release("current.json", version=fw0, www_version=w0)) + "#settings/device")
         goto_view(page, "settings/device")
         page.wait_for_selector("#fw-check", timeout=20000)
-        dev = ", development build" if w0 and "-g" in w0 else ""
+        dev = ", development build" if w0 and ("-g" in w0 or w0.endswith("-dirty")) else ""
         t = check_now()
         check(t == f"Up to date ({fw0}{dev})" and not upd(), f"update: ?updates= with the running versions -> '{t}'")
         page.goto(base + "/#settings/device")
