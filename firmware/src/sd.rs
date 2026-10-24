@@ -478,6 +478,22 @@ fn open_file_keyed(full: &str, ahead_key: u32) -> io::Result<Box<dyn ReadSeek>> 
     // instead of opening it again, and why prepared copies live in
     // ~15-entry bucket directories.
     use crate::frametime::Counted;
+    #[cfg(feature = "fat-index")]
+    if crate::fatidx::PLAYER.load(Relaxed) {
+        if let Some(card) = full.strip_prefix(config::SD_MOUNT).filter(|c| c.starts_with("/gifs/")) {
+            match crate::fatidx::open(card) {
+                Some(Ok(f)) => {
+                    crate::sdhealth::opened(full);
+                    return Ok(Box::new(Counted(f, false, ahead_key)));
+                }
+                Some(Err(e)) => {
+                    crate::sdhealth::open_failed(crate::sdhealth::Kind::Open, full, &e);
+                    return Err(e);
+                }
+                None => {}
+            }
+        }
+    }
     let file = if crate::probe::ENABLED {
         crate::probe::open(full)
     } else {
