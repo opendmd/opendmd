@@ -1257,12 +1257,12 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
           "settings: #st-glow options off/short/long")
     cfg0 = get_json(base + "/api/config")
     st0 = get_json(base + "/api/status")
-    check(list(cfg0)[-9:] == ["attract", "look", "glow", "boot_show", "api_key_set",
+    check(list(cfg0)[-11:] == ["attract", "look", "glow", "look_formula", "look_formula_name", "boot_show", "api_key_set",
                               "panel", "panel_now", "panel_next", "panel_trial_s"],
-          f"config: attract/look/glow/boot_show/api_key_set, then the panel keys, end the object ({list(cfg0)[-10:]})")
-    check(list(st0)[-7:] == ["look", "glow", "glow_held", "attract_live", "max_brightness",
+          f"config: attract/look/glow/look_formula/look_formula_name/boot_show/api_key_set, then the panel keys, end the object ({list(cfg0)[-12:]})")
+    check(list(st0)[-8:] == ["look", "glow", "glow_held", "formula_look", "attract_live", "max_brightness",
                              "brightness_safe_max", "safe_start_until"],
-          f"status: look/glow/glow_held/attract_live/max_brightness/brightness_safe_max/safe_start_until"
+          f"status: look/glow/glow_held/formula_look/attract_live/max_brightness/brightness_safe_max/safe_start_until"
           f" end the object ({list(st0)[-8:]})")
     ssu = st0["safe_start_until"]
     check(ssu is None or (isinstance(ssu, int) and ssu >= st0["uptime_secs"] - 1),
@@ -2804,6 +2804,7 @@ def mock_pass(browser) -> None:
         fx_gif_checks(page, base, overlay)
         formulas_checks(browser, base, errors)
         formulas_panel_checks(browser, base, errors)
+        formulas_over_checks(browser, base, errors)
         find_checks(page)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
@@ -3045,6 +3046,8 @@ def fx_gif_checks(page: Page, base: str, overlay: Path) -> None:
 # --- Formulas (Library → Formulas, js/formulas.js + pkg-psi) -------------------
 
 FORMULAS_JSON = REPO / "opendmd-web" / "www" / "formulas.json"
+# An example that draws over a GIF: it reads what is under it, or has layers.
+OVER_RE = re.compile(r"\b(ur|ug|ub|ul|layer)\b")
 
 
 def open_formulas(page: Page) -> None:
@@ -3109,11 +3112,13 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     open_formulas(page)
     psi = [u for u in asked if "pkg-psi/" in u and u.endswith(".wasm")]
     examples = json.loads(FORMULAS_JSON.read_text())
-    tiles = page.eval_on_selector_all("#psi-ex .psi-tile", "els => els.map(e => e.dataset.name)")
-    dark = page.evaluate("""() => [...document.querySelectorAll('#psi-ex .psi-tile canvas')].filter(c => {
+    tiles = page.eval_on_selector_all("#psi-ex .psi-tile, #psi-ex-over .psi-tile", "els => els.map(e => e.dataset.name)")
+    dark = page.evaluate("""() => [...document.querySelectorAll('#psi-ex .psi-tile canvas, #psi-ex-over .psi-tile canvas')].filter(c => {
         const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 90) return false; return true; }).length""")
-    check(len(psi) == 1 and tiles == [e["name"] for e in examples] and dark == 0,
-          f"formulas: opening the tab loads the module ({len(psi)}); {len(tiles)} examples, every thumbnail lit ({dark} dark)")
+    # Those that draw over a GIF (they read what is under them) in a section of their own.
+    over = [e["name"] for e in examples if OVER_RE.search(e["src"])]
+    check(len(psi) == 1 and tiles == [e["name"] for e in examples if e["name"] not in over] + over and len(over) >= 4 and dark == 0,
+          f"formulas: opening the tab loads the module ({len(psi)}); {len(tiles)} examples ({len(over)} over a GIF), every thumbnail lit ({dark} dark)")
     wait_lit(page, "#psi-panel", "formulas: the first example in Details")
     a = canvas_sum(page, "#psi-panel")
     page.wait_for_timeout(300)
@@ -3291,6 +3296,76 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     shot(page, "formulas-panel", "laptop")
     page.context.close()
     expected.remove("/api/play")
+
+
+def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
+    """Formulas over a GIF: an example that draws over one plays over the
+    sample picture, then over a GIF picked from the playlist (decoded by
+    pkg-art) and changes with it; Show over the panel's GIF sends
+    `"over":true` and takes it off again; Use as the look sets the config,
+    Settings › Look lists it and None clears it; Save as GIF over the GIF."""
+    page = new_page(browser, "laptop", errors)
+    plays: list[dict] = []
+    page.on("request", lambda r: plays.append(json.loads(r.post_data)) if r.url.endswith("/api/play") else None)
+    page.goto(base + "/#formulas")
+    open_formulas(page)
+    page.click("#psi-ex-over .psi-tile[data-name='Old photo']")
+    wait_lit(page, "#psi-panel", "formulas over: Old photo in Details")
+    check(page.is_visible("#psi-under") and page.inner_text("#psi-under-name") == "a sample picture"
+          and page.inner_text("#psi-show") == "Show over the panel’s GIF" and page.is_visible("#psi-look"),
+          f"formulas over: drawn over the sample, Show over the panel’s GIF, Use as the look ({page.inner_text('#psi-show')!r})")
+    s0 = canvas_sum(page, "#psi-panel")
+    page.click("#psi-under-pick")
+    page.wait_for_selector("#psi-glist .mi", timeout=10000)
+    first = page.inner_text("#psi-glist .mi >> nth=0")
+    page.click("#psi-glist .mi >> nth=0")
+    page.wait_for_function(f"document.querySelector('#psi-under-name').textContent == {json.dumps(first)}", timeout=30000)
+    page.wait_for_timeout(500)
+    s1 = canvas_sum(page, "#psi-panel")
+    page.wait_for_timeout(700)
+    s2 = canvas_sum(page, "#psi-panel")
+    check(s1 != s0, f"formulas over: a GIF from the playlist ('{first}') is under it now ({s0} -> {s1}, then {s2})")
+    # On the (mock) panel: over its GIF, then off again.
+    clear_toasts(page)
+    page.click("#psi-show")
+    t = last_toast(page, "ok")
+    fl = get_json(base + "/api/status")["formula_look"]
+    check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1]["path"].startswith("@fx:psi?src=")
+          and (fl or {}).get("source") == "over_gif" and page.inner_text("#psi-show") == "Over the panel’s GIF ✓",
+          f"formulas over: shown over the panel's GIF ('{t}', {fl})")
+    clear_toasts(page)
+    page.click("#psi-show")
+    t = last_toast(page, "ok")
+    check(t == "Taken off the panel" and plays[-1] == {"path": "", "live": False, "over": True}
+          and get_json(base + "/api/status")["formula_look"] is None and page.inner_text("#psi-show") == "Show over the panel’s GIF",
+          f"formulas over: pressed again, it comes off ('{t}', {plays[-1]})")
+    # Kept as the look; Settings › Look lists it; None clears it.
+    clear_toasts(page)
+    page.click("#psi-look")
+    t = last_toast(page, "ok")
+    c = get_json(base + "/api/config")
+    fl = get_json(base + "/api/status")["formula_look"]
+    check(c["look_formula"].startswith("@fx:psi?src=") and c["look_formula_name"] == "Old photo" and (fl or {}).get("source") == "setting"
+          and t.startswith("“Old photo” is the panel’s look now"), f"formulas over: Use as the look ('{t}', {c['look_formula_name']!r}, {fl})")
+    goto_view(page, "settings")
+    page.evaluate("location.replace('#settings/look')")
+    page.wait_for_function("document.querySelector('#st-look-formula').selectedOptions[0]?.textContent == 'Old photo'", timeout=10000)
+    opts = page.eval_on_selector_all("#st-look-formula option", "els => els.map(e => e.textContent)")
+    page.select_option("#st-look-formula", "")
+    page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
+    c = get_json(base + "/api/config")
+    check(c["look_formula"] == "" and c["look_formula_name"] == "" and "Scanlines" in opts and opts[0] == "None",
+          f"formulas over: Settings › Look lists the looks ({len(opts)}) and None turns it off")
+    # Save as GIF over the picked GIF: Create Art, titled with both.
+    goto_view(page, "formulas")
+    page.click("#psi-ex-over .psi-tile[data-name='Old photo']")
+    page.click("#psi-gif")
+    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
+    page.wait_for_function("(d => d.dataset.animated && d.dataset.name)(document.querySelector('#studio'))", timeout=30000)
+    d = studio_data(page)
+    check(d.get("name", "").startswith("FX_Old_photo_over_"), f"formulas over: Save as GIF over the GIF ({d.get('name')}, {d.get('srcFrames')} frames)")
+    shot(page, "formulas-over", "laptop")
+    page.context.close()
 
 
 def psi_frames(page: Page, sel: str) -> int:

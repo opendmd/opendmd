@@ -453,10 +453,11 @@ pub const LOOK_MAX_EST_US: u32 = 8_000;
 /// room (as the glow's copy). Not held, [`apply`](FormulaLook::apply)
 /// passes the picture through.
 ///
-/// **Time.** A formula that reads `t` or the clock has frames of its own
-/// (on its grid, `fps=`, held longer by its [`Governor`]); between them,
-/// only the rows the picture under it changed are drawn again, with the same
-/// `t`. One that reads neither is drawn only where the picture changes.
+/// **Time.** A formula that reads `t` has frames of its own (on its grid,
+/// `fps=`, held longer by its [`Governor`]); one that reads the clock but
+/// not `t`, one a second; between them, only the rows the picture under it
+/// changed are drawn again, with the same `t`. One that reads neither is
+/// drawn only where the picture changes.
 pub struct FormulaLook {
     prog: Box<psi::Program>,
     held: Option<LookBuffers>,
@@ -576,6 +577,16 @@ impl FormulaLook {
         self.prog.inputs() & 24 != 0
     }
 
+    /// Its own frames' grid (ms): its frame time if it reads `t`, a second
+    /// if only the clock.
+    fn own_grid(&self) -> u32 {
+        if self.prog.inputs() & 8 != 0 {
+            self.ms()
+        } else {
+            1000
+        }
+    }
+
     fn ms(&self) -> u32 {
         u32::from(self.delay_ms.max(crate::fx::floor()))
     }
@@ -663,6 +674,9 @@ impl FormulaLook {
         extra_us: u32,
     ) -> &'a mut Canvas {
         let animated = self.is_animated();
+        let grid = self.own_grid();
+        // Only a formula that moves with `t` is governed.
+        let governed = self.prog.inputs() & 8 != 0;
         let Some(b) = self.held.as_mut() else {
             return under;
         };
@@ -675,7 +689,6 @@ impl FormulaLook {
         if rows == 0 {
             return &mut b.out;
         }
-        let grid = u32::from(self.delay_ms.max(crate::fx::floor()));
         if own {
             let t0 = *self.t0.get_or_insert(now);
             let el = now.saturating_sub(t0);
@@ -691,7 +704,7 @@ impl FormulaLook {
             }
             // The next frame of its own: on its grid, held as the governor
             // says, never in the past.
-            let held = u64::from(self.gov.delay_ms(grid));
+            let held = u64::from(if governed { self.gov.delay_ms(grid) } else { grid });
             let k = el.as_millis() as u64 / held + 1;
             self.next = Some(t0 + Duration::from_millis(k * held));
         }
@@ -723,7 +736,7 @@ impl FormulaLook {
         // governor (with the decoding next to it); any other only the mean.
         if let (Some(c), true) = (clock, rows == u32::MAX) {
             let us = c().wrapping_sub(t_start).saturating_add(extra_us);
-            if animated && own {
+            if governed && own {
                 if self.gov.observe(us, grid) {
                     log::info!(
                         "formula look: {} us a frame -> {} ms frames (asked {grid})",
@@ -735,7 +748,11 @@ impl FormulaLook {
                 self.gov.note(us);
             }
             LOOK_STATS[0].store(self.gov.avg_us(), Ordering::Relaxed);
-            let ms = if animated { self.gov.delay_ms(grid) } else { 0 };
+            let ms = match (animated, governed) {
+                (true, true) => self.gov.delay_ms(grid),
+                (true, false) => grid,
+                _ => 0,
+            };
             LOOK_STATS[1].store(ms, Ordering::Relaxed);
         }
         &mut b.out
@@ -1318,5 +1335,32 @@ mod tests {
             out.dirty_mut().clear();
             t += d;
         }
+    }
+
+    #[test]
+    fn a_clock_look_redraws_once_a_second_and_a_heavy_one_is_slowed() {
+        let ms = Duration::from_millis;
+        let mut under = picture();
+        let mut look = FormulaLook::from_path(&super::path(
+            "frame { m = minute / 60 }\nlayer { gray(1, step(px, m*128) * 0.3) }",
+            "",
+        ))
+        .unwrap();
+        assert!(look.is_animated() && look.take());
+        look.apply(ms(500), &mut under, 0);
+        assert_eq!(look.due(), Some(ms(1500)), "the clock alone: a frame a second");
+        // 7.5 ms a render (the fake clock) at 100 fps (5 ms): 20 ms frames.
+        set_clock(Some(fake_clock));
+        let mut look =
+            FormulaLook::from_path(&super::path("loop 4\nlayer add { gray(t/4, 0.2) }", "fps=100")).unwrap();
+        assert!(look.take());
+        let mut t = ms(0);
+        for _ in 0..20 {
+            look.apply(t, &mut under, 0);
+            t = look.due().unwrap();
+        }
+        let st = look_stats();
+        set_clock(None);
+        assert_eq!(st.1, 20, "{st:?}");
     }
 }
