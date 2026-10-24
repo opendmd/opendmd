@@ -22,7 +22,7 @@
 //! 8th frame of its own sequence, never a different picture, so a frame on
 //! the panel is still the browser's frame for the same `t`.
 
-use crate::canvas::{Canvas, Rgb};
+use crate::canvas::{Canvas, Rgb, PIXELS};
 use crate::fx::{Effect, PALETTES, SIN};
 pub use alloc_box::PsiBox;
 use opendmd_psi as psi;
@@ -118,6 +118,12 @@ impl Governor {
         self.avg_us
     }
 
+    /// A render that does not steer it (a formula look's frame drawn for
+    /// the picture under it): the mean only.
+    pub fn note(&mut self, us: u32) {
+        self.avg_us = self.avg_us - self.avg_us / 8 + us / 8;
+    }
+
     /// One frame took `us` to render; `true` if the frame time changed.
     pub fn observe(&mut self, us: u32, grid: u32) -> bool {
         let ms = self.delay_ms(grid);
@@ -188,7 +194,12 @@ fn clock() -> Option<Clock> {
 /// last compile's µs) — for `/api/status`. Zeros before any.
 pub fn stats() -> (u32, u32, u32, u32) {
     let d = STATS[1].load(Ordering::Relaxed);
-    (STATS[0].load(Ordering::Relaxed), d >> 16, d & 0xffff, STATS[2].load(Ordering::Relaxed))
+    (
+        STATS[0].load(Ordering::Relaxed),
+        d >> 16,
+        d & 0xffff,
+        STATS[2].load(Ordering::Relaxed),
+    )
 }
 
 /// The tables Psi reads, lent from `fx`.
@@ -422,6 +433,408 @@ impl Effect for PsiFx {
     }
 }
 
+/// A formula estimated to take longer than this a frame (µs on the ESP32)
+/// is not drawn over GIFs: it runs at the GIF's own frame rate whenever the
+/// GIF changes (a governor can only slow its own animation), next to the
+/// GIF's decoding (p90 ~4 ms) and the blit — 8 ms is the effect budget at
+/// 50 fps.
+pub const LOOK_MAX_EST_US: u32 = 8_000;
+
+/// Why a formula that never lets the picture under it show through (it
+/// reads none of `ur ug ub ul`, and its bottom layer covers every pixel) is
+/// not drawn over GIFs: the GIF would be hidden.
+pub const COVERS: &str = "this Formula covers the GIF entirely: let it show through with a layer, ur ug ub ul, or a coverage";
+
+/// A formula drawn over whatever the player shows — a GIF, a transition, a
+/// live item: the Look setting's formula, or the editor's "over the GIF".
+/// Its `ur ug ub ul` read the picture under it and its layers blend onto
+/// it; the panel then shows [`FormulaLook::apply`]'s picture instead (the
+/// tint and the glow still come after it, in `Panel::blit`).
+///
+/// **Memory.** The program (1.8 KB) is held from [`FormulaLook::from_path`];
+/// the VM's working memory and the picture it makes (8 + 12 KB) only
+/// between [`take`](FormulaLook::take) and [`release`](FormulaLook::release),
+/// both fallible, so the firmware can hold them only while the heap has
+/// room (as the glow's copy). Not held, [`apply`](FormulaLook::apply)
+/// passes the picture through.
+///
+/// **Time.** A formula that reads `t` has frames of its own (on its grid,
+/// `fps=`, held longer by its [`Governor`]); one that reads the clock but
+/// not `t`, one a second; between them, only the rows the picture under it
+/// changed are drawn again, with the same `t`. One that reads neither is
+/// drawn only where the picture changes.
+pub struct FormulaLook {
+    prog: Box<psi::Program>,
+    /// Boxed, so a `FormulaLook` (two of them in the firmware's main loop)
+    /// is small on the main task's stack: the picture's dirty map alone is
+    /// 516 B.
+    held: Option<Box<LookBuffers>>,
+    inputs: psi::Inputs,
+    delay_ms: u8,
+    gov: Governor,
+    /// When its loop started (its first frame of its own).
+    t0: Option<Duration>,
+    /// When its next frame of its own is due (animated formulas).
+    next: Option<Duration>,
+    /// Draw every row at the next `apply` (just taken, or a new formula).
+    fresh: bool,
+    /// Frames of its own still left out of the governor: the first after a
+    /// take, a new formula or a new file (a cold flash cache, the file's
+    /// open in the same tick).
+    cold: u8,
+}
+
+struct LookBuffers {
+    scratch: Box<psi::Scratch<LANES>>,
+    out: Canvas,
+}
+
+/// The formula drawn over the GIFs: its mean render (µs), its frame time
+/// (ms, 0: it has none of its own) and the heap it holds (B).
+static LOOK_STATS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+
+/// [`FormulaLook`]'s numbers for `/api/status`: (mean render µs, its frame
+/// time ms or 0, heap held B).
+pub fn look_stats() -> (u32, u32, u32) {
+    (
+        LOOK_STATS[0].load(Ordering::Relaxed),
+        LOOK_STATS[1].load(Ordering::Relaxed),
+        LOOK_STATS[2].load(Ordering::Relaxed),
+    )
+}
+
+impl FormulaLook {
+    /// The heap [`take`](Self::take) asks for: the working memory and the
+    /// picture.
+    pub const BUFFER_BYTES: usize =
+        std::mem::size_of::<psi::Scratch<LANES>>() + PIXELS * 3 + std::mem::size_of::<LookBuffers>();
+
+    /// The look for a formula's `@fx:psi?src=…` path (sliders and `fps=`
+    /// as for the effect), or why not: it does not compile, or it is too
+    /// heavy to draw over GIFs ([`LOOK_MAX_EST_US`]).
+    pub fn from_path(path: &str) -> Result<FormulaLook, psi::Error> {
+        let q = query(Self::query_of(path));
+        // SAFETY: `Program` is integers all the way down: zero is valid.
+        let mut prog = unsafe { Box::<psi::Program>::new_zeroed().assume_init() };
+        let est = Self::compile(&q, &mut prog)?;
+        let mut look = FormulaLook {
+            prog,
+            held: None,
+            inputs: psi::Inputs::default(),
+            delay_ms: q.delay_ms,
+            gov: Governor::default(),
+            t0: None,
+            next: None,
+            fresh: true,
+            cold: Governor::SKIP,
+        };
+        look.set(&q, est);
+        Ok(look)
+    }
+
+    fn query_of(path: &str) -> &str {
+        path.strip_prefix(crate::synth::FORMULA)
+            .unwrap_or(path)
+            .trim_start_matches('?')
+    }
+
+    fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
+        psi::compile_into(&q.src, prog)?;
+        if !prog.over() {
+            prog.clear();
+            return Err(psi::Error {
+                start: 0,
+                end: 0,
+                msg: COVERS.to_string(),
+            });
+        }
+        let est = prog.esp32_us();
+        if est > LOOK_MAX_EST_US {
+            prog.clear();
+            return Err(psi::Error {
+                start: 0,
+                end: 0,
+                msg: format!(
+                    "this formula is too heavy to draw over GIFs (about {} ms a frame; the limit is {} ms) — simplify it",
+                    est.div_ceil(1000),
+                    LOOK_MAX_EST_US / 1000
+                ),
+            });
+        }
+        Ok(est)
+    }
+
+    fn set(&mut self, q: &Query, est: u32) {
+        self.delay_ms = q.delay_ms;
+        self.inputs.a = q.sliders[0];
+        self.inputs.b = q.sliders[1];
+        self.inputs.c = q.sliders[2];
+        let g = Governor::new(est, self.ms());
+        if g.level > self.gov.level || self.t0.is_none() {
+            self.gov = g;
+        }
+        self.gov.edited();
+        self.cold = Governor::SKIP;
+        self.fresh = true;
+        self.next = None;
+    }
+
+    /// A new file is on screen: its first frames (its open in the same
+    /// tick, a cold cache) do not steer the governor.
+    pub fn new_file(&mut self) {
+        self.cold = Governor::SKIP;
+    }
+
+    /// Its mean render time, µs (the governor's).
+    pub fn avg_us(&self) -> u32 {
+        self.gov.avg_us()
+    }
+
+    /// The picture the panel shows while it is held and drawn: its own;
+    /// `None` when the panel shows the picture under it as it is.
+    pub fn shown(&self) -> Option<&Canvas> {
+        match &self.held {
+            Some(b) if !self.fresh => Some(&b.out),
+            _ => None,
+        }
+    }
+
+    /// Let the buffers go without asking for a repaint: the panel keeps
+    /// showing the look's last picture (paused: nothing is pushed until
+    /// it plays again, and the next take draws every row).
+    pub fn let_go(&mut self) {
+        self.held = None;
+        LOOK_STATS[2].store(0, Ordering::Relaxed);
+    }
+
+    /// Another formula in place (a live edit from the editor): the clock,
+    /// the buffers and the governor stay. On an error nothing changes.
+    pub fn retune(&mut self, path: &str) -> Result<(), psi::Error> {
+        let q = query(Self::query_of(path));
+        // SAFETY: as in `from_path`.
+        let mut prog = unsafe { Box::<psi::Program>::new_zeroed().assume_init() };
+        let est = Self::compile(&q, &mut prog)?;
+        self.prog = prog;
+        self.set(&q, est);
+        Ok(())
+    }
+
+    pub fn program(&self) -> &psi::Program {
+        &self.prog
+    }
+
+    /// Whether it has frames of its own (it reads `t` or the clock).
+    pub fn is_animated(&self) -> bool {
+        self.prog.inputs() & 24 != 0
+    }
+
+    /// Its own frames' grid (ms): its frame time if it reads `t`, a second
+    /// if only the clock.
+    fn own_grid(&self) -> u32 {
+        if self.prog.inputs() & 8 != 0 {
+            self.ms()
+        } else {
+            1000
+        }
+    }
+
+    fn ms(&self) -> u32 {
+        u32::from(self.delay_ms.max(crate::fx::floor()))
+    }
+
+    /// Take the working memory and the picture (8 + 12 KB), if the heap
+    /// has them; true if held. The next [`apply`](Self::apply) draws every
+    /// row.
+    pub fn take(&mut self) -> bool {
+        if self.held.is_some() {
+            return true;
+        }
+        let mut px: Vec<Rgb> = Vec::new();
+        if px.try_reserve_exact(PIXELS).is_err() {
+            return false;
+        }
+        px.resize(PIXELS, Rgb::BLACK);
+        let layout = std::alloc::Layout::new::<psi::Scratch<LANES>>();
+        // SAFETY: a non-zero-sized layout; `Scratch` is integers all the way
+        // down, so the zeroed memory is a valid value (and `reset` fills in
+        // its columns); the box frees it with the same layout.
+        let scratch = unsafe {
+            let p = std::alloc::alloc_zeroed(layout).cast::<psi::Scratch<LANES>>();
+            if p.is_null() {
+                return false;
+            }
+            Box::from_raw(p)
+        };
+        // The box itself, fallibly too (a full heap must not abort).
+        let layout = std::alloc::Layout::new::<LookBuffers>();
+        // SAFETY: a non-zero-sized layout; written before the box is made,
+        // and the box frees it with the same layout.
+        let mut b = unsafe {
+            let p = std::alloc::alloc(layout).cast::<LookBuffers>();
+            if p.is_null() {
+                return false;
+            }
+            p.write(LookBuffers {
+                scratch,
+                out: Canvas::from_parts(px, crate::canvas::DirtyMap::default()),
+            });
+            Box::from_raw(p)
+        };
+        b.scratch.reset();
+        self.held = Some(b);
+        self.fresh = true;
+        self.cold = Governor::SKIP;
+        LOOK_STATS[2].store(Self::BUFFER_BYTES as u32, Ordering::Relaxed);
+        true
+    }
+
+    /// Let the buffers go. `display` (the picture under the look, what the
+    /// panel shows from now on) is marked to be pushed in full, since the
+    /// panel still shows the look's picture.
+    pub fn release(&mut self, display: &mut Canvas) {
+        if self.held.take().is_some() {
+            display.dirty_mut().mark_all();
+        }
+        LOOK_STATS[2].store(0, Ordering::Relaxed);
+    }
+
+    pub fn is_held(&self) -> bool {
+        self.held.is_some()
+    }
+
+    /// The panel showed something else meanwhile (a status card, a test
+    /// pattern): every row is drawn again at the next `apply`.
+    pub fn redraw(&mut self) {
+        self.fresh = true;
+    }
+
+    /// When it must be drawn again whatever the picture under it does: its
+    /// next frame of its own, or at once after a take or a new formula;
+    /// `None` while not held, or when it only follows the picture.
+    pub fn due(&self) -> Option<Duration> {
+        self.held.as_ref()?;
+        if self.fresh {
+            return Some(Duration::ZERO);
+        }
+        if self.is_animated() {
+            self.next.or(Some(Duration::ZERO))
+        } else {
+            None
+        }
+    }
+
+    /// The picture to show at `now` over `under` (what the player shows;
+    /// its dirty map says what changed since the last call, and is cleared
+    /// here): the rows `under` changed drawn again — every row on a frame of
+    /// the look's own — into the look's picture, those rows marked in its
+    /// dirty map. Not held: `under` itself. `extra_us`: what the frame's
+    /// decoding took (µs), which the governor counts with the look's own
+    /// time.
+    pub fn apply<'a>(
+        &'a mut self,
+        now: Duration,
+        under: &'a mut Canvas,
+        extra_us: u32,
+    ) -> &'a mut Canvas {
+        let animated = self.is_animated();
+        let grid = self.own_grid();
+        // Only a formula that moves with `t` is governed.
+        let governed = self.prog.inputs() & 8 != 0;
+        let Some(b) = self.held.as_mut() else {
+            return under;
+        };
+        let own = self.fresh || (animated && self.next.is_none_or(|n| now >= n));
+        let rows = if own {
+            u32::MAX
+        } else {
+            under.dirty().row_mask()
+        };
+        if rows == 0 {
+            return &mut b.out;
+        }
+        if own {
+            let t0 = *self.t0.get_or_insert(now);
+            let el = now.saturating_sub(t0);
+            let el_ms = (el.as_secs() as u32)
+                .wrapping_mul(1000)
+                .wrapping_add(el.subsec_millis());
+            let n = (self.prog.loop_ms() / grid).max(1);
+            self.inputs.t = psi::Inputs::at_ms(el_ms / grid % n * grid);
+            if let Some(w) = crate::synth::wall_now() {
+                self.inputs.hour = w.hour;
+                self.inputs.minute = w.minute;
+                self.inputs.second = w.second;
+            }
+            // The next frame of its own: on its grid, held as the governor
+            // says, never in the past.
+            let held = u64::from(if governed { self.gov.delay_ms(grid) } else { grid });
+            let k = el.as_millis() as u64 / held + 1;
+            self.next = Some(t0 + Duration::from_millis(k * held));
+        }
+        let clock = clock();
+        let t_start = clock.map_or(0, |c| c());
+        let (bytes, dirty) = b.out.bytes_and_dirty_mut();
+        psi::render_rows::<LANES>(
+            &self.prog,
+            &mut b.scratch,
+            &self.inputs,
+            &tables(),
+            Some(under.as_bytes()),
+            rows,
+            bytes,
+        );
+        if rows == u32::MAX {
+            dirty.mark_all();
+        } else {
+            let mut r = rows;
+            while r != 0 {
+                let y = r.trailing_zeros() as usize;
+                r &= r - 1;
+                dirty.mark_span(y, 0, crate::canvas::WIDTH);
+            }
+        }
+        under.dirty_mut().clear();
+        self.fresh = false;
+        // Timed when it drew every row: a frame of its own steers the
+        // governor (with the decoding next to it); any other only the mean.
+        if let (Some(c), true) = (clock, rows == u32::MAX) {
+            let us = c().wrapping_sub(t_start).saturating_add(extra_us);
+            if governed && own && self.cold > 0 {
+                self.cold -= 1;
+            } else if governed && own {
+                if self.gov.observe(us, grid) {
+                    log::info!(
+                        "formula look: {} us a frame -> {} ms frames (asked {grid})",
+                        self.gov.avg_us(),
+                        self.gov.delay_ms(grid)
+                    );
+                }
+            } else {
+                self.gov.note(us);
+            }
+            LOOK_STATS[0].store(self.gov.avg_us(), Ordering::Relaxed);
+            let ms = match (animated, governed) {
+                (true, true) => self.gov.delay_ms(grid),
+                (true, false) => grid,
+                _ => 0,
+            };
+            LOOK_STATS[1].store(ms, Ordering::Relaxed);
+        }
+        &mut b.out
+    }
+}
+
+impl std::fmt::Debug for FormulaLook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "FormulaLook({:?}, held {})",
+            self.prog,
+            self.held.is_some()
+        )
+    }
+}
+
 mod alloc_box {
     use super::PsiFx;
 
@@ -571,9 +984,17 @@ mod tests {
         // 40 ms frames before it has drawn anything; light ones are not.
         assert_eq!(Governor::new(11_400, 20).delay_ms(20), 40);
         assert_eq!(Governor::new(7_000, 20).delay_ms(20), 20);
-        assert_eq!(Governor::new(6_000, 10).delay_ms(10), 20, "over 5 ms: no 100 fps");
+        assert_eq!(
+            Governor::new(6_000, 10).delay_ms(10),
+            20,
+            "over 5 ms: no 100 fps"
+        );
         assert_eq!(Governor::new(MAX_EST_US, 20).delay_ms(20), 160);
-        assert_eq!(Governor::new(u32::MAX / 2, 20).delay_ms(20), 160, "8 frames at most");
+        assert_eq!(
+            Governor::new(u32::MAX / 2, 20).delay_ms(20),
+            160,
+            "8 frames at most"
+        );
         // At 100 fps the slowest step is 80 ms: 32 ms is the most it can
         // hold, so a heavier formula asking for 100 fps does not open.
         let g = Governor::new(40_000, 10);
@@ -700,40 +1121,76 @@ mod tests {
             b: 1 << 16,
             ..Default::default()
         };
-        psi::render(&prog, &mut psi::Scratch::<128>::new(), &inputs, &psi::OWN, &mut want);
+        psi::render(
+            &prog,
+            &mut psi::Scratch::<128>::new(),
+            &inputs,
+            &psi::OWN,
+            &mut want,
+        );
         assert!(c.as_bytes() == want.as_slice());
-        let e = src.retune(&super::path("gray(tme)", "")).unwrap().unwrap_err();
+        let e = src
+            .retune(&super::path("gray(tme)", ""))
+            .unwrap()
+            .unwrap_err();
         assert_eq!(e.kind(), ErrorKind::InvalidInput);
         assert_eq!(e.to_string(), "unknown name `tme` — did you mean `t`?");
         assert!(src.retune("@clock").is_none());
         assert!(src.retune("@fx:psimple").is_none());
-        let mut clock = crate::synth::SynthSource::new(crate::synth::open("@clock").unwrap()).unwrap();
-        assert!(clock.retune(&b).is_none(), "a formula only replaces a formula");
+        let mut clock =
+            crate::synth::SynthSource::new(crate::synth::open("@clock").unwrap()).unwrap();
+        assert!(
+            clock.retune(&b).is_none(),
+            "a formula only replaces a formula"
+        );
     }
 
     #[test]
     fn opening_reports_why_and_holds_the_limits() {
         use std::io::ErrorKind;
-        let open = |p: &str| crate::synth::SynthSource::new(crate::synth::open(p).unwrap()).map(|_| ());
+        let open =
+            |p: &str| crate::synth::SynthSource::new(crate::synth::open(p).unwrap()).map(|_| ());
         let e = open(&super::path("gray(tme)", "")).unwrap_err();
-        assert_eq!((e.kind(), e.to_string().as_str()), (ErrorKind::InvalidInput, "unknown name `tme` — did you mean `t`?"));
+        assert_eq!(
+            (e.kind(), e.to_string().as_str()),
+            (
+                ErrorKind::InvalidInput,
+                "unknown name `tme` — did you mean `t`?"
+            )
+        );
         // Too heavy: ~48 ms a frame estimated.
-        let heavy = (0..11).map(|k| format!("noise(x*{k}, y, t)")).collect::<Vec<_>>().join(" + ");
+        let heavy = (0..11)
+            .map(|k| format!("noise(x*{k}, y, t)"))
+            .collect::<Vec<_>>()
+            .join(" + ");
         let heavy = format!("gray({heavy})");
         assert!(psi::compile(&heavy).unwrap().esp32_us() > MAX_EST_US);
         let e = open(&super::path(&heavy, "")).unwrap_err();
         assert_eq!(e.kind(), ErrorKind::InvalidInput);
-        assert!(e.to_string().starts_with("this formula is too heavy for the panel (about 4"), "{e}");
+        assert!(
+            e.to_string()
+                .starts_with("this formula is too heavy for the panel (about 4"),
+            "{e}"
+        );
         // 32-40 ms: fine at 50 fps, too heavy for the governor at 100.
-        let mid = (0..9).map(|k| format!("noise(x*{k}, y, t)")).collect::<Vec<_>>().join(" + ");
+        let mid = (0..9)
+            .map(|k| format!("noise(x*{k}, y, t)"))
+            .collect::<Vec<_>>()
+            .join(" + ");
         let mid = format!("gray({mid})");
         let est = psi::compile(&mid).unwrap().esp32_us();
         assert!((32_001..=MAX_EST_US).contains(&est), "{est}");
         open(&super::path(&mid, "")).unwrap();
         let e = open(&super::path(&mid, "fps=100")).unwrap_err();
-        assert!(e.to_string().ends_with("the limit is 32 ms) — simplify it"), "{e}");
+        assert!(
+            e.to_string().ends_with("the limit is 32 ms) — simplify it"),
+            "{e}"
+        );
         // An unknown effect stays what it was: InvalidData (a 415).
-        assert_eq!(open("@fx:nonsense").unwrap_err().kind(), ErrorKind::InvalidData);
+        assert_eq!(
+            open("@fx:nonsense").unwrap_err().kind(),
+            ErrorKind::InvalidData
+        );
         // A formula may be longer than other virtual paths, up to its limit.
         let mut src = String::from("loop 8\n");
         for k in 0..60 {
@@ -741,7 +1198,11 @@ mod tests {
         }
         src.push_str("gray(frac(v59))");
         let p = super::path(&src, "");
-        assert!(p.len() > crate::synth::MAX_PATH && p.len() <= crate::synth::MAX_FORMULA_PATH, "{}", p.len());
+        assert!(
+            p.len() > crate::synth::MAX_PATH && p.len() <= crate::synth::MAX_FORMULA_PATH,
+            "{}",
+            p.len()
+        );
         open(&p).unwrap();
         let text = format!("@text?msg={}", "x".repeat(600));
         assert_eq!(open(&text).unwrap_err().kind(), ErrorKind::InvalidData);
@@ -759,7 +1220,11 @@ mod tests {
             };
             assert!(*fx.program() == psi::compile(src).unwrap(), "{name}");
             let g = psi::golden::inputs(0);
-            assert_eq!((fx.inputs.a, fx.inputs.b, fx.inputs.c), (g.a, g.b, g.c), "{name}");
+            assert_eq!(
+                (fx.inputs.a, fx.inputs.b, fx.inputs.c),
+                (g.a, g.b, g.c),
+                "{name}"
+            );
         }
     }
 
@@ -768,7 +1233,10 @@ mod tests {
         let p = path(psi::sketches::FIRE);
         assert!(p.len() < crate::synth::MAX_PATH);
         assert_eq!(crate::synth::title(&p).as_deref(), Some("Formula"));
-        assert_eq!(crate::synth::title("@fx:psi?src=gray(nope)").as_deref(), Some("Formula"));
+        assert_eq!(
+            crate::synth::title("@fx:psi?src=gray(nope)").as_deref(),
+            Some("Formula")
+        );
         let mut src = crate::synth::SynthSource::new(crate::synth::open(&p).unwrap()).unwrap();
         let mut c = Canvas::new();
         let mut frames = 0;
@@ -776,5 +1244,253 @@ mod tests {
             frames += 1;
         }
         assert_eq!(frames, 4000 / 20);
+    }
+
+    // --- The formula look ------------------------------------------------------
+
+    fn picture() -> Canvas {
+        let mut c = Canvas::new();
+        psi::golden::picture(c.as_mut_bytes());
+        c.dirty_mut().mark_all();
+        c
+    }
+
+    /// The VM's frame of `src` at `ms` over `under`.
+    fn over(src: &str, ms: u32, under: &Canvas) -> Vec<u8> {
+        let prog = psi::compile(src).unwrap();
+        let mut want = vec![0u8; psi::W * psi::H * 3];
+        let inputs = psi::Inputs {
+            t: psi::Inputs::at_ms(ms),
+            ..Default::default()
+        };
+        psi::render_rows(
+            &prog,
+            &mut psi::Scratch::<128>::new(),
+            &inputs,
+            &psi::OWN,
+            Some(under.as_bytes()),
+            u32::MAX,
+            &mut want,
+        );
+        want
+    }
+
+    #[test]
+    fn a_look_draws_over_the_picture_and_follows_what_changes() {
+        const F: &str = "rgb(1 - ur, ug*0.5, ub)\n";
+        let mut look = FormulaLook::from_path(&super::path(F, "")).unwrap();
+        assert!(!look.is_animated());
+        let mut under = picture();
+        // Not held: the picture itself.
+        let p = &under as *const Canvas;
+        assert!(std::ptr::eq(look.apply(Duration::ZERO, &mut under, 0), p));
+        assert_eq!(look.due(), None);
+        assert!(look.take());
+        assert_eq!(look.due(), Some(Duration::ZERO), "drawn at once");
+        let want = over(F, 0, &under);
+        let out = look.apply(Duration::ZERO, &mut under, 0);
+        assert!(out.as_bytes() == want.as_slice());
+        assert_eq!(out.dirty().count(), 4096);
+        out.dirty_mut().clear();
+        assert!(under.dirty().is_clean(), "the look took what changed");
+        assert_eq!(look.due(), None, "it only follows the picture");
+        // Two rows change: only they are drawn again and marked.
+        under.set(3, 5, Rgb::new(10, 200, 30));
+        under.set(100, 20, Rgb::new(255, 255, 255));
+        let want = over(F, 0, &under);
+        let out = look.apply(Duration::from_millis(40), &mut under, 0);
+        assert_eq!(out.dirty().row_mask(), (1 << 5) | (1 << 20));
+        assert!(out.as_bytes() == want.as_slice());
+        out.dirty_mut().clear();
+        // Nothing changed: nothing drawn, nothing to push.
+        assert!(look
+            .apply(Duration::from_millis(60), &mut under, 0)
+            .dirty()
+            .is_clean());
+        // Let go: the picture under it goes up in full.
+        look.release(&mut under);
+        assert!(!look.is_held());
+        assert_eq!(under.dirty().count(), 4096);
+    }
+
+    #[test]
+    fn an_animated_look_has_frames_of_its_own_on_its_grid() {
+        const F: &str = "loop 2\nlayer add { gray(sin(t/2)*0.5 + 0.5, 0.3) }\n";
+        let mut look = FormulaLook::from_path(&super::path(F, "fps=25")).unwrap();
+        assert!(look.is_animated() && look.program().over());
+        assert!(look.take());
+        let mut under = picture();
+        let ms = Duration::from_millis;
+        look.apply(ms(1000), &mut under, 0).dirty_mut().clear();
+        assert_eq!(look.due(), Some(ms(1040)), "40 ms frames from its start");
+        // Before it: nothing changed, nothing drawn.
+        assert!(look.apply(ms(1030), &mut under, 0).dirty().is_clean());
+        // The picture changes between its frames: those rows, the same `t`.
+        under.set(0, 0, Rgb::new(1, 2, 3));
+        let want = over(F, 0, &under);
+        let out = look.apply(ms(1035), &mut under, 0);
+        assert_eq!(out.dirty().row_mask(), 1);
+        assert!(out.as_bytes() == want.as_slice());
+        out.dirty_mut().clear();
+        // Its frame, late: every row, at the grid frame it is in (2 x 40 ms).
+        let want = over(F, 80, &under);
+        let out = look.apply(ms(1093), &mut under, 0);
+        assert_eq!(out.dirty().count(), 4096);
+        assert!(out.as_bytes() == want.as_slice());
+        assert_eq!(look.due(), Some(ms(1120)));
+        // Its loop: 2 s, then t starts again.
+        look.apply(ms(3000), &mut under, 0);
+        assert!(look.held.as_ref().unwrap().out.as_bytes() == over(F, 0, &under).as_slice());
+        // A live edit: the buffers and the clock stay, drawn at once.
+        look.retune(&super::path(
+            "loop 2\nlayer multiply { gray(1 - t/4) }",
+            "fps=25",
+        ))
+        .unwrap();
+        assert!(look.is_held());
+        assert_eq!(look.due(), Some(Duration::ZERO));
+        let want = over("loop 2\nlayer multiply { gray(1 - t/4) }", 0, &under);
+        let out = look.apply(ms(3010), &mut under, 0);
+        assert!(out.as_bytes() == want.as_slice());
+        // A bad edit changes nothing.
+        assert!(look.retune(&super::path("gray(tme)", "")).is_err());
+        assert!(look.is_animated());
+    }
+
+    #[test]
+    fn a_look_is_held_to_what_fits_over_a_gif() {
+        // One that hides the GIF is no look.
+        let e = FormulaLook::from_path(&super::path("hsv(x, 1, 1)", "")).unwrap_err();
+        assert_eq!(e.msg, COVERS);
+        assert!(FormulaLook::from_path(&super::path("layer { hsv(x, 1, 1) }\nlayer add { gray(0.1) }", "")).is_err());
+        let e = FormulaLook::from_path(&super::path("layer multiply { gray(noise(x*8, y, t) + noise(x, y*8, t) + len(x, y) + len(y, x) + atan2(x, y) + sqrt(x) + noise(y, x, t)) }", "")).unwrap_err();
+        assert!(
+            e.msg
+                .starts_with("this formula is too heavy to draw over GIFs (about "),
+            "{}",
+            e.msg
+        );
+        assert!(
+            e.msg.ends_with("the limit is 8 ms) — simplify it"),
+            "{}",
+            e.msg
+        );
+        assert_eq!(
+            FormulaLook::from_path("@fx:psi?src=gray(tme)")
+                .unwrap_err()
+                .msg,
+            "unknown name `tme` — did you mean `t`?"
+        );
+        assert_eq!(FormulaLook::BUFFER_BYTES, 8192 + 12288 + std::mem::size_of::<LookBuffers>());
+    }
+
+    #[test]
+    fn a_look_over_an_effect_is_the_vm_over_its_frames() {
+        // A live effect underneath (as a GIF would be): every frame the
+        // panel would show is the VM's frame over the effect's.
+        const F: &str =
+            "layer multiply { gray(py % 2 ? 1 : 0.5) }\nlayer screen { rgb(0, 0, 0.1) }";
+        let mut look = FormulaLook::from_path(&super::path(F, "")).unwrap();
+        assert!(look.take());
+        let mut src =
+            crate::synth::SynthSource::new(crate::synth::open("@fx:starfield").unwrap()).unwrap();
+        let mut c = Canvas::new();
+        let mut t = Duration::ZERO;
+        for _ in 0..30 {
+            let d = src.next_frame(&mut c).unwrap().unwrap();
+            let snap = c.clone();
+            let out = look.apply(t, &mut c, 0);
+            assert!(out.as_bytes() == over(F, 0, &snap).as_slice());
+            out.dirty_mut().clear();
+            t += d;
+        }
+    }
+
+    #[test]
+    fn a_clock_look_redraws_once_a_second_and_a_heavy_one_is_slowed() {
+        let ms = Duration::from_millis;
+        let mut under = picture();
+        let mut look = FormulaLook::from_path(&super::path(
+            "frame { m = minute / 60 }\nlayer { gray(1, step(px, m*128) * 0.3) }",
+            "",
+        ))
+        .unwrap();
+        assert!(look.is_animated() && look.take());
+        look.apply(ms(500), &mut under, 0);
+        assert_eq!(look.due(), Some(ms(1500)), "the clock alone: a frame a second");
+        // 7.5 ms a render (the fake clock) at 100 fps (5 ms): 20 ms frames.
+        set_clock(Some(fake_clock));
+        let mut look =
+            FormulaLook::from_path(&super::path("loop 4\nlayer add { gray(t/4, 0.2) }", "fps=100")).unwrap();
+        assert!(look.take());
+        let mut t = ms(0);
+        for _ in 0..20 {
+            look.apply(t, &mut under, 0);
+            t = look.due().unwrap();
+        }
+        set_clock(None);
+        assert_eq!(look.gov.delay_ms(10), 20, "100 fps asked, 20 ms frames");
+    }
+
+    #[test]
+    fn the_glow_fades_towards_the_looks_picture() {
+        use crate::canvas::DirtyMap;
+        use crate::look::{Glow, GlowLevel};
+        // Pixel (0, 0) after a look blit, a darker GIF frame on its row (so
+        // the row fades) and one glow step towards `to_look`'s target.
+        let run = |to_look: bool| {
+            let mut look = FormulaLook::from_path(&super::path("layer add { gray(0.25) }", "")).unwrap();
+            assert!(look.take());
+            let mut under = Canvas::new();
+            under.set(0, 0, Rgb::new(40, 40, 40));
+            under.set(1, 0, Rgb::new(200, 200, 200));
+            under.dirty_mut().mark_all();
+            let mut glow = Glow::new(GlowLevel::Long);
+            let mut push = DirtyMap::default();
+            let out = look.apply(Duration::ZERO, &mut under, 0);
+            assert!(glow.frame(out, &mut push));
+            out.dirty_mut().clear();
+            let lit = look.shown().unwrap().get(0, 0);
+            under.set(1, 0, Rgb::new(0, 0, 0));
+            let out = look.apply(Duration::from_millis(20), &mut under, 0);
+            glow.frame(out, &mut push);
+            out.dirty_mut().clear();
+            match to_look {
+                true => glow.step(look.shown().unwrap(), &mut push),
+                false => glow.step(&under, &mut push),
+            }
+            (lit, glow.shown().unwrap()[0])
+        };
+        let (lit, kept) = run(true);
+        assert_eq!(lit, Rgb::new(104, 104, 104), "the look brightened it");
+        assert_eq!(kept, lit, "towards the look's picture it stays");
+        let (_, faded) = run(false);
+        assert!(faded.r < lit.r, "towards the GIF alone it fades: the step ran");
+    }
+
+    #[test]
+    fn a_new_files_open_does_not_steer_the_look() {
+        let ms = Duration::from_millis;
+        set_clock(Some(fake_clock));
+        let mut look = FormulaLook::from_path(&super::path("loop 4\nlayer add { gray(t/4, 0.2) }", "")).unwrap();
+        assert!(look.take());
+        let mut under = picture();
+        let mut t = ms(0);
+        for _ in 0..10 {
+            look.apply(t, &mut under, 0);
+            t = look.due().unwrap();
+        }
+        assert_eq!(look.gov.delay_ms(20), 20, "7.5 ms a frame fits 50 fps");
+        // A new file: its open (300 ms in the same tick) is left out.
+        look.new_file();
+        look.apply(t, &mut under, 300_000);
+        t = look.due().unwrap();
+        look.apply(t, &mut under, 300_000);
+        assert_eq!(look.gov.delay_ms(20), 20, "the level is unchanged");
+        // Later, a frame that really takes 300 ms slows it.
+        t = look.due().unwrap();
+        look.apply(t, &mut under, 300_000);
+        set_clock(None);
+        assert!(look.gov.delay_ms(20) > 20);
     }
 }

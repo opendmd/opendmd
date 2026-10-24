@@ -83,6 +83,14 @@ pub fn largest_free_block() -> usize {
 /// main loop sets rather than [`Status`] fields, so the looks pass costs
 /// the status object no heap; `look` and `glow` are read from the settings.
 pub static GLOW_HELD: AtomicBool = AtomicBool::new(false);
+/// The main task's stack high-water mark (bytes never used), for a probe
+/// build's `/api/status` `heap.main_stack`.
+/// Pixels pushed to the panel since boot (every push: frames, glow steps,
+/// repaints), for a probe build's `/api/status` `heap.pushed`.
+#[cfg(feature = "probe")]
+pub static PIXELS_PUSHED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(feature = "probe")]
+pub static MAIN_STACK_UNUSED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 pub static ATTRACT_LIVE: AtomicBool = AtomicBool::new(false);
 
 /// Safe start (`main.rs` `SafeStart`): the uptime second at which the
@@ -377,6 +385,11 @@ pub const SET_NOT_FOUND: &str = "set not found";
 /// handler turns it into a 400.
 pub const FILTER_EMPTY: &str = "no GIFs in the playlist match the platform filter";
 
+/// How [`Command::ApplyConfig`]'s reply starts when `look_formula` does
+/// not compile or is too heavy to draw over GIFs (then the compiler's
+/// sentence; nothing was saved): the handler turns it into a 400.
+pub const LOOK_FORMULA_BAD: &str = "look_formula: ";
+
 /// Why [`Command::PlayNow`] did not start the file. Each carries the message.
 #[derive(Debug)]
 pub enum PlayError {
@@ -416,6 +429,9 @@ pub enum Command {
         /// Only change a formula already on screen (a live edit), else
         /// [`PlayError::MovedOn`].
         live: bool,
+        /// Draw the formula over the file on screen instead of playing it
+        /// (`formula_look::Looks::show_over`; `""` takes it off).
+        over: bool,
         reply: mpsc::Sender<Result<(), PlayError>>,
     },
     /// Previous: play the entry of Recently played one older than the one on

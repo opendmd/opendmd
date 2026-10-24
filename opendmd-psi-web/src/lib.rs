@@ -28,7 +28,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use opendmd_psi::{compile_into, render, Inputs, Program, Scratch, H, OWN, W};
+use opendmd_psi::{compile_into, render_rows, Inputs, Program, Scratch, H, OWN, W};
 use wasm_bindgen::prelude::*;
 
 #[cfg(all(target_arch = "wasm32", feature = "bump"))]
@@ -59,6 +59,14 @@ struct Cell(UnsafeCell<Option<State>>);
 // for the length of the call only (nothing re-enters).
 unsafe impl Sync for Cell {}
 static STATE: Cell = Cell(UnsafeCell::new(None));
+
+/// The picture under the formula ([`under`]): a GIF's frame the page puts
+/// here for [`frame_over`]. A static of its own, all zero, so it costs the
+/// module no bytes (in `State`, `None`'s niche made the whole value data).
+struct Under(UnsafeCell<[u8; W * H * 3]>);
+// SAFETY: as `Cell`.
+unsafe impl Sync for Under {}
+static UNDER: Under = Under(UnsafeCell::new([0; W * H * 3]));
 
 fn state() -> &'static mut State {
     // SAFETY: see `Cell`; the exports below never hold two of these.
@@ -127,8 +135,9 @@ pub fn error_at() -> Vec<u32> {
 }
 
 /// What the formula drawn is: `[steps, per frame, per row, per pixel, loop
-/// ms, inputs (bits 0-2 the sliders a b c, 3 t, 4 the clock), estimated µs
-/// a frame on the panel]`; empty before anything compiled.
+/// ms, inputs (bits 0-2 the sliders a b c, 3 t, 4 the clock, 5 the picture
+/// under it: drawn over a GIF it changes the GIF), estimated µs a frame on
+/// the panel, layers]`; empty before anything compiled.
 #[wasm_bindgen]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -145,6 +154,7 @@ pub fn info() -> Vec<u32> {
         p.loop_ms(),
         u32::from(p.inputs()),
         p.esp32_us(),
+        p.layers() as u32,
     ]
 }
 
@@ -154,6 +164,18 @@ pub fn info() -> Vec<u32> {
 /// anything compiled.
 #[wasm_bindgen]
 pub fn frame(ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: i32) {
+    draw(false, ms, hour, minute, second, a, b, c);
+}
+
+/// [`frame`] over the picture at [`under`] (what `ur ug ub ul` read and
+/// what shows through the layers): the formula drawn over a GIF's frame.
+#[wasm_bindgen(js_name = frameOver)]
+pub fn frame_over(ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: i32) {
+    draw(true, ms, hour, minute, second, a, b, c);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw(over: bool, ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: i32) {
     let s = state();
     if s.ok {
         let inputs = Inputs {
@@ -165,8 +187,25 @@ pub fn frame(ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: i32) 
             b,
             c,
         };
-        render(&s.prog, &mut s.scratch, &inputs, &OWN, &mut s.out);
+        // SAFETY: as `state()`: nothing else holds it during the call.
+        let under = over.then(|| unsafe { &*UNDER.0.get() }.as_slice());
+        render_rows(
+            &s.prog,
+            &mut s.scratch,
+            &inputs,
+            &OWN,
+            under,
+            u32::MAX,
+            &mut s.out,
+        );
     }
+}
+
+/// Where the page puts the picture [`frame_over`] draws over: 128 × 32
+/// RGB888 bytes in the module's memory, top row first (kept until changed).
+#[wasm_bindgen]
+pub fn under() -> *mut u8 {
+    UNDER.0.get().cast()
 }
 
 /// Where the frame is in the module's memory: 128 × 32 RGB888 bytes, top
