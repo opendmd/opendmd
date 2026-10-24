@@ -213,6 +213,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `"live":true` does only that and is a 409 when no formula is on screen
   (400 with any other path); status names the new formula, as the
   firmware does. Over 2,048 B a formula's path is a 413.
+  `"over":true` draws the formula over the file on screen instead (the
+  firmware's Formula look from the editor): `{"ok":true,"path":..,"over":true}`,
+  until the ordinal changes; `""` takes it off; `live` with none on is a
+  409. Config `look_formula` (`""` or a formula's path; not compiled here)
+  and `look_formula_name` (at most 60 characters); status `formula_look`
+  (null, or `{"source":"setting"|"over_gif","held":20480,...}`).
 - **`GET /api/stat?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
 - **`/api/status`** has `index_state` (`ready`, or `unavailable` when the
@@ -595,6 +601,8 @@ DEFAULT_SETTINGS = {
     "attract": "",              # "" (the playlist), "clock" or "text:<message>"
     "look": "colour",           # colour / amber / red / green / blue / white
     "glow": "off",              # off / short / long
+    "look_formula": "",         # the Formula look: "" or a formula's @fx:psi?src=.. path
+    "look_formula_name": "",    # its name in the web app (display only)
     "boot_show": "short",       # the start-up show: off / short / full
     "api_key": "",              # "" = no key asked; never echoed back
 }
@@ -635,6 +643,8 @@ FIELD_TYPES = {
     "attract": "str",
     "look": "str",
     "glow": "str",
+    "look_formula": "str",
+    "look_formula_name": "str",
     "boot_show": "str",
     "api_key": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
@@ -1783,6 +1793,7 @@ class Player:
         self.boot_time = time.monotonic()
         self.ordinal = 0
         self.gifs_started = 0
+        self.over: tuple[str, int] | None = None  # the editor's formula over the GIF, its ordinal
         self.paused = False        # the manual toggle (POST /api/pause)
         self.scheduled_off = False  # night mode "off" (Schedule.evaluate)
         self.virtual_hold = False  # Follow RePlayOS's power-on/logo/title sequence in progress
@@ -1894,6 +1905,20 @@ class Player:
         # now_playing entry right away instead of an empty one for up to
         # --dwell seconds.
         self.advance()
+
+    def over_on(self) -> bool:
+        """The editor's formula is drawn over the file on screen (it goes
+        once the playlist moves on: another ordinal)."""
+        if self.over is not None and self.over[1] != self.ordinal:
+            self.over = None
+        return self.over is not None
+
+    def formula_look(self, setting: str):
+        """Status `formula_look`: what is drawn over the picture."""
+        source = "over_gif" if self.over_on() else "setting" if setting else None
+        if source is None:
+            return None
+        return {"source": source, "held": 20480, "frame_us": 0, "frame_ms": 0}
 
     def retune(self, path: str):
         """Engine::retune: a formula over the formula on screen, in place
@@ -2847,7 +2872,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "index_state": player.index_state,
                     "www_version": ctx.www_pushed or www_version(ctx.www_root),
                     "www": {**www_info(ctx.www_root, ctx.www_pushed), "staged": ctx.www_staged},
-                    "heap": {"free": free, "floor": floor, "idf_min": idf_min},
+                    "heap": {"free": free, "floor": floor, "idf_min": idf_min, "transitions_cut": 0},
                     "refresh_hz": 100,
                     "deadline_misses": player.deadline_misses,
                     "worst_lateness_ms": player.worst_lateness_ms,
@@ -2870,6 +2895,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "look": ctx.settings["look"],
                     "glow": ctx.settings["glow"],
                     "glow_held": GLOW_HELD_BYTES if ctx.settings["glow"] != "off" and not player._frozen() else 0,
+                    "formula_look": player.formula_look(ctx.settings["look_formula"]),
                     "attract_live": None,
                     "max_brightness": ctx.settings["max_brightness"],
                     "brightness_safe_max": BRIGHTNESS_SAFE_MAX,
@@ -2948,6 +2974,8 @@ def make_handler(ctx: Context, quiet: bool):
                     "attract": s["attract"],
                     "look": s["look"],
                     "glow": s["glow"],
+                    "look_formula": s["look_formula"],
+                    "look_formula_name": s["look_formula_name"],
                     "boot_show": s["boot_show"],
                     "api_key_set": bool(s["api_key"]),
                 }
@@ -3065,6 +3093,15 @@ def make_handler(ctx: Context, quiet: bool):
                             return
                     if field == "glow" and v not in GLOWS:
                         self.send_error_json(400, "glow must be off, short or long")
+                        return
+                    if field == "look_formula" and v and not v.startswith("@fx:psi?"):
+                        self.send_error_json(400, "look_formula must be \"\" or a formula (@fx:psi?src=…)")
+                        return
+                    if field == "look_formula" and len(v.encode()) > 2048:
+                        self.send_error_json(413, f"this formula is too long for the panel ({len(v.encode())} B as sent; the limit is 2048 B)")
+                        return
+                    if field == "look_formula_name" and (len(v) > 60 or any(ord(c) < 32 for c in v)):
+                        self.send_error_json(400, "look_formula_name must be one line of at most 60 characters")
                         return
                     if field == "api_key" and v != "" and not API_KEY_RE.fullmatch(v):
                         self.send_error_json(400, "api_key must be 8..64 of A-Z a-z 0-9 . _ ~ - (or \"\" for none)")
@@ -3465,6 +3502,28 @@ def make_handler(ctx: Context, quiet: bool):
                 return
             if req.get("live") is True and not p.startswith("@fx:psi?"):
                 self.send_error_json(400, "\"live\" is only for a formula (@fx:psi?src=…)")
+                return
+            if req.get("over") is True:
+                # The editor's formula over the file on screen, until the
+                # playlist moves on ("" takes it off).
+                if p and not p.startswith("@fx:psi?"):
+                    self.send_error_json(400, "\"over\" is only for a formula (@fx:psi?src=…), or \"\" to take it off")
+                    return
+                if len(p.encode()) > 2048:
+                    self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is 2048 B)")
+                    return
+                with ctx.lock:
+                    if not p:
+                        ctx.player.over = None
+                    elif not ctx.player.playlist:
+                        self.send_error_json(503, "no playlist is running")
+                        return
+                    elif req.get("live") is True and not ctx.player.over_on():
+                        self.send_error_json(409, "no formula is on the panel now")
+                        return
+                    else:
+                        ctx.player.over = (p, ctx.player.ordinal)
+                self.send_json(200, {"ok": True, "path": p, "over": True})
                 return
             if p.startswith("@"):
                 # A live item: drawn by the player, no file lookup.

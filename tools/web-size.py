@@ -59,10 +59,11 @@ part of every page load, but it is not JS or CSS), <= 4 KB; its licence
 The Library's Formulas (the editor, the examples and the gallery:
 `js/formulas.js`, `formulas.css` and the examples, `formulas.json`;
 imported when the Formulas tab is first chosen or a `#formula=` link
-opens) have a line of their own, <= 17 KB (16 until Psi phase 2), and so does their wasm module
+opens) have a line of their own, <= 20 KB (16 until Psi phase 2, 17 until
+layers and drawing over a GIF), and so does their wasm module
 (`pkg-psi/`: Psi, the language formulas are written in — its compiler and
 VM, the firmware's own crate — built without std; loaded with them),
-<= 36 KB: the spike's 24.7 KB measured a module that never read an error
+<= 40 KB (36 until layers and drawing over a GIF): the spike's 24.7 KB measured a module that never read an error
 message, so the error texts and their formatting were dropped; with them,
 the wasm-bindgen glue and std it was 40 KB, without std 34.7 KB.
 The formula page on the site (`--share opendmd-web/share`: `f/`'s page,
@@ -138,8 +139,10 @@ DEVICE_GZ_BUDGET = 7 * 1024
 DEVICE = {"js/device.js"}
 FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
-PSI_WASM_GZ_BUDGET = 36 * 1024
-FORMULAS_GZ_BUDGET = 17 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel)
+# The 40 KB and 20 KB below are Psi stage A's numbers (layers, drawing over
+# a GIF; branch psi-layers, 2026-10-24), approved by the owner the same day.
+PSI_WASM_GZ_BUDGET = 40 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB)
+FORMULAS_GZ_BUDGET = 20 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples)
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}

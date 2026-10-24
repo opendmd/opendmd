@@ -47,6 +47,7 @@ mod diag;
 mod dns_server;
 mod files;
 mod follow;
+mod formula_look;
 mod frametime;
 mod http;
 mod httpd;
@@ -202,7 +203,14 @@ impl SafeStart {
 /// 16 KB block (the LZW's largest piece) must exist. Called on the main task
 /// inside the tick; counts refusals.
 fn transition_gate(need: usize) -> bool {
-    let ok = free_heap() as usize >= need + config::TRANSITION_HEAP_RESERVE
+    // A formula look held is not given back during a transition: keep more
+    // room instead (the dissolve is cut, not the look).
+    let look = if formula_look::HELD.load(Ordering::Relaxed) {
+        config::LOOK_TRANSITION_MARGIN
+    } else {
+        0
+    };
+    let ok = free_heap() as usize >= need + config::TRANSITION_HEAP_RESERVE + look
         && largest_free_block() >= 16 * 1024;
     if !ok {
         TRANSITIONS_CUT.fetch_add(1, Ordering::Relaxed);
@@ -393,6 +401,14 @@ fn main() -> Result<()> {
     // Glow steps taken between frames since the last frame: counted into
     // the next frame's `blit` phase if it is late (`frametime`).
     let mut glow_us: u32 = 0;
+    // The Formula look (`formula_look.rs`): the setting's formula, and the
+    // editor's over the GIF. Its frames of its own between file frames
+    // count into the next frame's `decode` phase if it is late.
+    // Boxed: the main task's stack is the scarce thing (main's own frame
+    // is ~7.4 KB of its 16 KB).
+    let mut looks = Box::new(formula_look::Looks::new());
+    looks.set_saved(&settings.look_formula, &mut canvas);
+    let mut look_us: u32 = 0;
 
     // --- Shared state, and the boot task ----------------------------------
     let status = Arc::new(Mutex::new(Status::new(
@@ -547,29 +563,55 @@ fn main() -> Result<()> {
                     drop(s);
                     let _ = reply.send(paused);
                 }
-                Command::PlayNow { path, live, reply } => {
-                    // One open, here between frames (a directory scan: ~6 ms
-                    // in a bucket, ~330 ms in `gifs/Consoles`), then the file
-                    // takes the screen at the next tick under the usual dwell.
-                    // A formula over a formula is a live edit, in place.
-                    let outcome = match retune(engine.as_mut(), &path, epoch.elapsed()) {
-                        Some(r) => {
-                            // No new start (the ordinal stays), but status
-                            // names the formula now on the panel.
-                            if r.is_ok() {
-                                if let Ok(mut s) = status.lock() {
-                                    s.path.clone_from(&path);
-                                }
-                            }
-                            r
+                Command::PlayNow {
+                    path,
+                    live,
+                    over,
+                    reply,
+                } => {
+                    let outcome = if over {
+                        // Drawn over the file on screen, not played: its
+                        // ordinal ends it (`Looks::started`); drawn at once.
+                        let ordinal = engine
+                            .as_ref()
+                            .and_then(|e| e.now_playing())
+                            .map(|p| p.ordinal);
+                        let shown = match engine.as_mut() {
+                            Some(e) => e.display_mut(&mut canvas),
+                            None => &mut canvas,
+                        };
+                        let r = looks.show_over(&path, live, ordinal, shown);
+                        if r.is_ok() && !sched.off() {
+                            repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
                         }
-                        None if engine.is_none() => Err(PlayError::NoPlaylist),
-                        None if live => Err(PlayError::MovedOn),
-                        None => play_now(engine.as_mut(), &path, epoch.elapsed()),
+                        r
+                    } else {
+                        // One open, here between frames (a directory scan:
+                        // ~6 ms in a bucket, ~330 ms in `gifs/Consoles`),
+                        // then the file takes the screen at the next tick
+                        // under the usual dwell. A formula over a formula
+                        // is a live edit, in place.
+                        match retune(engine.as_mut(), &path, epoch.elapsed()) {
+                            Some(r) => {
+                                // No new start (the ordinal stays), but
+                                // status names the formula now on the panel.
+                                if r.is_ok() {
+                                    if let Ok(mut s) = status.lock() {
+                                        s.path.clone_from(&path);
+                                    }
+                                }
+                                r
+                            }
+                            None if engine.is_none() => Err(PlayError::NoPlaylist),
+                            None if live => Err(PlayError::MovedOn),
+                            None => play_now(engine.as_mut(), &path, epoch.elapsed()),
+                        }
                     };
+                    let what = if over { "over the GIF" } else { "play now" };
                     match &outcome {
-                        Ok(()) => log::info!("play now: {}", short(&path)),
-                        Err(e) => log::warn!("play now: {}: {e:?}", short(&path)),
+                        Ok(()) if over => log::debug!("{what}: {}", short(&path)),
+                        Ok(()) => log::info!("{what}: {}", short(&path)),
+                        Err(e) => log::warn!("{what}: {}: {e:?}", short(&path)),
                     }
                     let _ = reply.send(outcome);
                 }
@@ -629,6 +671,14 @@ fn main() -> Result<()> {
                         if let Err(e) = opens {
                             log::warn!("config: set '{}' rejected, {path}: {e}", next.set);
                             let _ = reply.send(Err(state::SET_NOT_FOUND.to_string()));
+                            continue;
+                        }
+                    }
+                    // A Formula look that does not build is refused likewise.
+                    if next.look_formula != settings.look_formula {
+                        if let Err(e) = formula_look::check(&next.look_formula) {
+                            log::warn!("config: look_formula refused: {e}");
+                            let _ = reply.send(Err(format!("{}{e}", state::LOOK_FORMULA_BAD)));
                             continue;
                         }
                     }
@@ -722,8 +772,21 @@ fn main() -> Result<()> {
                             let _ = reply.send(Err(format!("saving settings: {e:#}")));
                         }
                         Ok(()) => {
+                            let look_changed = next.look_formula != settings.look_formula;
                             settings = next;
                             *shared_settings.lock().unwrap() = settings.clone();
+                            if look_changed {
+                                let shown = match engine.as_mut() {
+                                    Some(e) => e.display_mut(&mut canvas),
+                                    None => &mut canvas,
+                                };
+                                looks.set_saved(&settings.look_formula, shown);
+                                // Drawn (or taken off) at once, whatever
+                                // the GIF does.
+                                if !sched.off() && engine.is_some() {
+                                    repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
+                                }
+                            }
                             if let Some(op) = panel_op {
                                 match tuner.apply(op, epoch.elapsed()) {
                                     Ok(fx) => {
@@ -757,12 +820,7 @@ fn main() -> Result<()> {
                             // at once if what it shows no longer matches
                             // (a dark panel is repainted when it lights).
                             if panel.set_display(settings.look, settings.glow) && !sched.off() {
-                                let shown = match engine.as_mut() {
-                                    Some(e) => e.display_mut(&mut canvas),
-                                    None => &mut canvas,
-                                };
-                                shown.dirty_mut().mark_all();
-                                panel.blit(shown);
+                                repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
                             }
                             state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
                             // (Attract's clock or text plays for as long as
@@ -1051,6 +1109,9 @@ fn main() -> Result<()> {
                                 }
                                 ptest_saved = snapshot(&canvas);
                                 panel.set_display(Look::Colour, GlowLevel::Off);
+                                // The formula look's buffers back too; it is
+                                // drawn afresh when the playlist resumes.
+                                looks.release(&mut canvas);
                             }
                             let t = PanelTest::start(s, tuner.running, epoch.elapsed());
                             log::info!(
@@ -1294,6 +1355,9 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            // A status card goes up as it is: the formula look is drawn
+            // afresh when a playlist plays again.
+            looks.redraw();
             let wait = if sched.off() {
                 // Night mode "off": the panel stays dark.
                 panel.glow_settle();
@@ -1347,7 +1411,7 @@ fn main() -> Result<()> {
         } else {
             eng.tick(tick_now, &mut canvas)?
         };
-        let tick_us = us(tick_start.elapsed());
+        let mut tick_us = us(tick_start.elapsed());
         let (open_us, read_us) = frametime::take();
         floor.sample();
         // What goes to /api/status from this frame: the file's position
@@ -1373,9 +1437,17 @@ fn main() -> Result<()> {
                 if is_new {
                     // The glow's copy may fit now if it did not before.
                     panel.glow_retry();
+                    // The editor's formula goes once the playlist moves on.
+                    looks.started(playing.ordinal, eng.display_mut(&mut canvas));
                 }
+                // The formula look over it (its time is the frame's
+                // `decode`, with the decoding the governor counts it with).
+                let look_start = Instant::now();
+                let decode_us = tick_us.saturating_sub(open_us);
+                let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), decode_us);
+                tick_us += us(look_start.elapsed()) + std::mem::take(&mut look_us);
                 let blit_start = Instant::now();
-                let blit_px = panel.blit(eng.display_mut(&mut canvas));
+                let blit_px = panel.blit(pic);
                 let blit_us = us(blit_start.elapsed());
                 let free = free_heap();
                 floor.note(free);
@@ -1459,8 +1531,16 @@ fn main() -> Result<()> {
                     slot = Some(deadline);
                 }
                 let glow_between = std::mem::take(&mut glow_us);
-                // A dot fading (glow): wake for its next step.
+                // A dot fading (glow), or the formula look's own frame:
+                // wake for its next step.
                 let glow_wait = panel.glow_wait().map(|w| w.max(Duration::from_millis(1)));
+                let look_wait = looks
+                    .due()
+                    .map(|d| d.saturating_sub(now).max(Duration::from_millis(1)));
+                let glow_wait = match (glow_wait, look_wait) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
                 match next_frame_at.checked_sub(now) {
                     Some(remaining) => glow_wait.map_or(remaining, |w| remaining.min(w)),
                     None if now <= deadline => config::CATCHUP_SLEEP,
@@ -1494,12 +1574,30 @@ fn main() -> Result<()> {
             }
             TickOutcome::Idle if off => config::OFF_SLEEP,
             TickOutcome::Idle => {
-                // Between frames: the glow's next step, if one is due.
-                glow_us += panel.glow_tick(eng.display(&canvas));
+                // Between frames: the formula look's own frame, if one is
+                // due (not while paused: the picture holds), then the
+                // glow's next step.
+                // A GIF frame due before the look's frame and its blit
+                // could be done: the frame draws the look anyway.
+                let at = epoch.elapsed();
+                let room = Duration::from_micros(u64::from(looks.avg_us()) + LOOK_BLIT_US);
+                let file_soon = eng.frame_due().is_some_and(|d| d.saturating_sub(at) < room);
+                if !eng.is_paused() && !file_soon && looks.due().is_some_and(|d| d <= at) {
+                    let t = Instant::now();
+                    let pic = looks.apply(at, eng.display_mut(&mut canvas), 0);
+                    panel.blit(pic);
+                    look_us += us(t.elapsed());
+                }
+                glow_us += panel.glow_tick(looks.shown(eng.display(&canvas)));
                 // A wake before the file's frame (a glow step's) sleeps no
                 // further than the frame: a flat 5 ms made it up to 5 ms
                 // late, which nothing counted.
                 let due = eng.frame_due().filter(|_| !eng.is_paused());
+                let look_due = looks.due().filter(|_| !eng.is_paused());
+                let due = match (due, look_due) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
                 match due.and_then(|d| d.checked_sub(epoch.elapsed())) {
                     Some(left) if !left.is_zero() => left.min(config::IDLE_SLEEP),
                     _ => config::IDLE_SLEEP,
@@ -1530,14 +1628,31 @@ fn main() -> Result<()> {
         if off || eng.is_paused() {
             panel.glow_settle();
         }
+        // Paused, the fade over: the look's buffers go (the panel keeps its
+        // picture; the next frame takes them again and draws every row).
+        if eng.is_paused() && panel.glow_wait().is_none() {
+            looks.let_go();
+        }
+        // The panel dark: the formula look's buffers go back too.
+        if off {
+            looks.release(eng.display_mut(&mut canvas));
+        }
         // And whenever the heap runs low: the network side comes first.
-        if panel.glow_yield(eng.display(&canvas)) {
+        if panel.glow_yield(looks.shown(eng.display(&canvas))) {
             log::info!(
                 "glow: heap low ({} B free), its copy given back",
                 free_heap()
             );
         }
         state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
+        // Then the formula look's buffers.
+        let transitioning = eng.is_transitioning();
+        if looks.yield_heap(eng.display_mut(&mut canvas), transitioning) {
+            log::info!(
+                "formula look: heap low ({} B free), its buffers given back",
+                free_heap()
+            );
+        }
 
         // The cache builder's pace for what the panel is doing now.
         cache_builder::publish(
@@ -2104,6 +2219,29 @@ fn retune(engine: Option<&mut Engine>, path: &str, now: Duration) -> Option<Resu
 #[cfg(not(feature = "psi"))]
 fn retune(_: Option<&mut Engine>, _: &str, _: Duration) -> Option<Result<(), PlayError>> {
     None
+}
+
+/// A full push's time, roughly (µs): what an Idle frame of the formula
+/// look adds beside its render (a GIF frame due sooner draws it instead).
+const LOOK_BLIT_US: u64 = 2_000;
+
+/// Draw the formula look (or, with none, the plain picture) over what is on
+/// screen now, every pixel: after a new look, one taken off or a new tint,
+/// so a still GIF or a paused one shows it at once.
+fn repaint_look(
+    looks: &mut formula_look::Looks,
+    panel: &mut Panel,
+    engine: Option<&mut Engine>,
+    canvas: &mut Canvas,
+    now: Duration,
+) {
+    let shown = match engine {
+        Some(e) => e.display_mut(canvas),
+        None => canvas,
+    };
+    shown.dirty_mut().mark_all();
+    looks.redraw();
+    panel.blit(looks.apply(now, shown, 0));
 }
 
 /// A path for a log line: a formula's (up to 2 KB) cut to its start.
@@ -2810,6 +2948,8 @@ fn heartbeat(
     schedule: &str,
 ) {
     diag::check("heartbeat");
+    #[cfg(feature = "probe")]
+    state::MAIN_STACK_UNUSED.store(frametime::stack_unused(), Ordering::Relaxed);
     let sampled_min = floor.min;
     let free = free_heap();
     let min_free = min_free_heap();
