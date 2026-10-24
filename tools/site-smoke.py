@@ -467,6 +467,7 @@ def card_page(browser, base: str, errors: list[str], pack: Path, shots: Path | N
         page.click("#cp-stop")
         page.wait_for_selector("#cp[data-state=stopped]", timeout=30000)
         done = int(page.get_attribute("#cp", "data-done"))
+        damaged_before = int(page.get_attribute("#cp", "data-damaged"))
         check(page.inner_text("#cp-done-text").startswith(f"Stopped after {done} of {len(gifs)} GIFs"),
               f"card: stopped: {page.inner_text('#cp-done-text')}")
         got = card(page)
@@ -498,8 +499,11 @@ def card_page(browser, base: str, errors: list[str], pack: Path, shots: Path | N
         summary = page.inner_text("#cp-done")
         check(summary.startswith(f"Your card is ready: {len(gifs)} GIFs and 3 playlists (All files, Halloween, Christmas), "
                                  "ready to play at their smoothest from the first boot."), f"card: done: {summary[:160]}")
-        check("2 GIFs can't be played by anything" in summary and "1 line of the playlists names GIFs the pack doesn't have" in summary
-              and "Windows program" in summary, "card: the notes: unplayable GIFs, the missing line, the Windows program")
+        damaged = damaged_before + int(page.get_attribute("#cp", "data-damaged"))
+        left = damaged - damaged_before
+        check(damaged == 2 and (left == 0 or f"{left} GIF{'s' if left > 1 else ''} can't be played by anything" in summary)
+              and "1 line of the playlists names GIFs the pack doesn't have" in summary and "Windows program" in summary,
+              f"card: the notes: unplayable GIFs ({damaged_before} met before the stop, {left} after), the missing line, the Windows program")
         check(page.is_visible("#cp-eject") and "Eject the card before you take it out" in page.inner_text("#cp-eject"),
               "card: it says to eject the card first")
         visible(page, "done")

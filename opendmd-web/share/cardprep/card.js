@@ -267,14 +267,15 @@ async function start() {
     if (!items.length) resolve();
   });
   // The boot logo and the playlists last (after the player's list of GIFs
-  // that play as they are): only when everything before them was written.
+  // with no lighter version): only when everything before them was written.
+  // (cache/.failed after a stop too, so the next run knows those GIFs are done.)
   let lists = 0;
-  if (!r.stopping && !r.fatal) {
+  if (!r.fatal) {
     try {
-      say('cp-status', 'Writing the playlists…');
+      if (!r.stopping) say('cp-status', 'Writing the playlists…');
       const ft = failedText(listing.failed, [...r.asIs, ...r.damaged].map(([p, why]) => ['/' + p, why]), r.made.map((p) => '/' + p));
       if (ft != null) await writeFile(card, 'cache/.failed', new TextEncoder().encode(ft));
-      for (const f of plan.last) {
+      for (const f of r.stopping ? [] : plan.last) {
         await writeFile(card, f.path, raws.get(f.path) ?? await entryBytes(zip, f.entry));
         if (raws.has(f.path)) lists++;
       }
