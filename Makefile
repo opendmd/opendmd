@@ -77,7 +77,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 	notices notices-check notices-check-web \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
-	site site-serve site-publish site-smoke gallery-tool
+	site site-serve site-publish site-smoke gallery-tool card-test
 
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
@@ -103,6 +103,13 @@ test:
 	tools/site-publish-test.sh
 	uv run tools/gallery-check-test.py
 	uv run tools/gallery-pages-test.py
+	$(MAKE) card-test
+
+# "Set up a card" (/card/): its zip reader and planner under node (node 20.12+:
+# DecompressionStream('deflate-raw')), with the synthetic card zip tools/card-zip.py writes.
+card-test:
+	@d=$$(mktemp -d) && trap 'rm -rf "$$d"' EXIT && uv run --quiet tools/card-zip.py "$$d/fx" >/dev/null && \
+		CARD_ZIP="$$d/fx/card.zip" node --test opendmd-web/share/cardprep/tests/*.test.mjs
 
 # The same tests again, compiled to wasm and run under node — the only check
 # on this box that the browser path really works. Needs node on PATH.
@@ -313,9 +320,11 @@ site: web sim-build gallery-tool
 		--gallery-tool $(GALLERY_TOOL) $(if $(GALLERY),--gallery $(GALLERY)) $(if $(API_ARCHIVE),--api-archive $(API_ARCHIVE)) \
 		--api-freeze $(API_FREEZE)
 
-# The site's pages in Chromium (the formula page and the gallery), after make site.
+# The site's pages in Chromium (the formula page, the gallery, the API pages and
+# Set up a card, whose lighter versions are checked against opendmd-pack's), after make site.
 site-smoke:
-	uv run tools/site-smoke.py $(SITE) --dist $(DIST) --art target/site-art
+	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo build --release --quiet
+	uv run tools/site-smoke.py $(SITE) --dist $(DIST) --art target/site-art --pack $(PACK)/target/release/opendmd-pack
 
 site-serve: site
 	uv run python -m http.server 8081 -d $(SITE)
