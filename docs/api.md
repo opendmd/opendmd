@@ -59,7 +59,10 @@ none is; `400` for any other path). `"over":true` with a formula: draw it
 over the file on screen instead of playing it, until the playlist moves on
 to another file (in place of the `look_formula` meanwhile); with `"live"`
 it changes that formula (`409` once the playlist has moved on); `"path":""`
-takes it off.
+takes it off. `"over"` skips the card-path check (the path is a formula or
+`""`); with no playlist running it is a `503`; a formula that covers the GIF
+entirely (it reads none of `ur ug ub ul` and nothing shows through it) or is
+too heavy to draw over GIFs is a `400` with the reason.
 
 Reply: `{"ok":true,"path":"…"}` (with `"over":true` when drawn over).
 
@@ -133,7 +136,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `cache` | `{state, prepared, total}`, see `GET /api/cache` |
 | `context` | Follow RePlayOS: `{source:"replayos", enabled, state, system, platform, console, game, matches, since, step, error}`; `state` `off`, `unreachable`, `attract`, `starting`, `game`, `cooldown`, for `since` s |
 | `look`, `glow`, `glow_held` | tint and glow as applied; bytes the glow holds |
-| `formula_look` | null, or the formula drawn over what plays: `{"source": "setting"\|"over_gif", "held": bytes (0: no room, the picture goes up as it is), "frame_us": mean render, "frame_ms": its own frame time (0: it follows the picture)}` |
+| `formula_look` | null, or the formula drawn over what plays: `{"source": "setting"\|"over_gif", "held": bytes (0: no room, the picture goes up as it is), "frame_us": mean render, "frame_ms": its own frame time (0: it follows the picture)}`, with `"error"` when the saved `look_formula` can no longer be drawn (e.g. after a firmware change) |
 | `attract_live` | the live item Follow RePlayOS shows in the menus, else null |
 | `max_brightness`, `brightness_safe_max`, `safe_start_until` | the saved ceiling; the safe default (144); uptime second the start-up limit ends (null after) |
 

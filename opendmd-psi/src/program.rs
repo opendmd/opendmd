@@ -359,9 +359,11 @@ impl Program {
                         _ => 0,
                     };
                     let (v, n) = operands(op);
-                    let covered = n > 0
-                        && !(self.is_const_slot(v[n - 1])
-                            && self.init[v[n - 1] as usize & 0x7f] >= ONE);
+                    // Covered unless the coverage is a constant slot of 1 or
+                    // more (a lane or an input never is one).
+                    let k = v[n.saturating_sub(1)];
+                    let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k);
+                    let covered = n > 0 && !(konst && self.init[k as usize] >= ONE);
                     base + match blend {
                         None => 0,
                         Some(crate::fixed::BLEND_MULTIPLY) => 210,

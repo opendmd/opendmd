@@ -231,6 +231,12 @@ pub const TRANSITION: opendmd_core::compositor::Transition =
 /// GIF's first frame failed and aborted the board — before this gate
 /// counted the decoder. Refusals are the heartbeat's `transitions cut`.
 pub const TRANSITION_HEAP_RESERVE: usize = 12 * 1024;
+/// With the formula look's buffers held (20.5 KB, `formula_look.rs`) the
+/// transition gate also keeps this much more: the look is not given back
+/// during a transition (it is the user's chosen setting and the dissolve is
+/// cosmetic), so the dissolve is cut sooner instead and the network side's
+/// transients still find room. Measured on the device later.
+pub const LOOK_TRANSITION_MARGIN: usize = 8 * 1024;
 
 /// The next file is opened ahead (`Engine::ahead_step`, "The next file,
 /// ahead" in CLAUDE.md) only while a step leaves this much free after the

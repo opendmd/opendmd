@@ -137,7 +137,7 @@ function overRow(id) {
 // On a device: kept as the panel's look (Settings › Look), over every GIF.
 async function useLook(f) {
   try {
-    await app.src.putConfig({ look_formula: (await import('./psishow.js')).fpath(f), look_formula_name: (f.name || 'Formula').slice(0, 60) });
+    await app.src.putConfig({ look_formula: (await import('./psishow.js')).fpath(f), look_formula_name: Array.from(f.name || 'Formula').slice(0, 60).join('') });
     await app.refreshConfig();
     toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Look turns it off)`, 'ok');
   } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Use as the look: ' + e.message, 'bad'); }

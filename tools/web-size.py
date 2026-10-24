@@ -139,6 +139,8 @@ DEVICE_GZ_BUDGET = 7 * 1024
 DEVICE = {"js/device.js"}
 FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
+# The 40 KB and 20 KB below are Psi stage A's numbers (layers, drawing over
+# a GIF; branch psi-layers, 2026-10-24), raised pending the owner's OK.
 PSI_WASM_GZ_BUDGET = 40 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB)
 FORMULAS_GZ_BUDGET = 20 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples)
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
