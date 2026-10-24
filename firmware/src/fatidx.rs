@@ -50,6 +50,9 @@ static BUILD_MS: AtomicU32 = AtomicU32::new(0);
 /// A build's thread is up (one at a time); its stack never used, last build.
 static BUILDING: AtomicBool = AtomicBool::new(false);
 static BUILD_STACK_FREE: AtomicU32 = AtomicU32::new(0);
+/// The last build failed: the next waits `FATIDX_MIN_GAP_S` even for a
+/// missing index (a failing card must not be walked in a loop).
+static FAILED: AtomicBool = AtomicBool::new(false);
 
 struct Loaded {
     file: File,
@@ -421,7 +424,7 @@ pub fn tick() {
     let quiet = now.saturating_sub(TOUCHED_S.load(Relaxed)) >= config::FATIDX_QUIET_S;
     // A missing index is built at once; a stale one waits its turn (a card
     // whose names cannot all be indexed must not rebuild in a loop).
-    let spaced = missing || now.saturating_sub(BUILT_S.load(Relaxed)) >= config::FATIDX_MIN_GAP_S;
+    let spaced = (missing && !FAILED.load(Relaxed)) || now.saturating_sub(BUILT_S.load(Relaxed)) >= config::FATIDX_MIN_GAP_S;
     if !quiet
         || !spaced
         || now < config::FATIDX_BOOT_DELAY_S
@@ -451,8 +454,12 @@ pub fn tick() {
     .set();
     let spawned = std::thread::Builder::new().stack_size(config::FATIDX_STACK).spawn(|| {
         let t = std::time::Instant::now();
-        if let Err(e) = build() {
+        let r = build();
+        FAILED.store(r.is_err(), Relaxed);
+        if let Err(e) = r {
             log::warn!("fat index: {e}");
+            // Walked again only after the gap.
+            DIRTY.store(true, Relaxed);
         }
         BUILD_MS.store(t.elapsed().as_millis() as u32, Relaxed);
         BUILDS.fetch_add(1, Relaxed);
