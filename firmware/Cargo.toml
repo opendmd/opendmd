@@ -58,9 +58,6 @@ bench = []
 # frames, per-step costs and the stack, logged once at boot (`psi-probe:`
 # lines). `make fw-release FW_RELEASE_FEATURES=probe,psi-probe` for the rig.
 psi-probe = ["psi"]
-# Spike (docs/research/fat-index.md): open GIFs from a side index of their
-# FAT directory entries (src/fatidx.rs), `GET /api/fatidx`. Not for release.
-fat-index = []
 
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }

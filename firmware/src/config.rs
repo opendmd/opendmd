@@ -291,6 +291,9 @@ pub const AHEAD_OPEN_BYTES: usize = 1536;
 /// read buffer, the 1.5 KB of cap-9 tables, the row, a palette of up to
 /// 768 B, allocator overhead.
 pub const AHEAD_PARSE_BYTES: usize = 5 * 1024;
+/// What an original's decoder takes on top of that when it is held ahead
+/// (opened through the FAT index): cap-12 LZW tables instead of cap 9's.
+pub const AHEAD_ORIGINAL_BYTES: usize = 11 * 1024;
 /// A copy held ahead is let go (the pick is kept) when the main loop sees
 /// the free heap under this: the network side's transients come first, as
 /// for the glow's copy ([`GLOW_YIELD_HEAP`]).
@@ -722,3 +725,19 @@ pub const FOLLOW_CTX_MAX: usize = 64;
 pub const FOLLOW_CONTEXT_WAIT: Duration = Duration::from_secs(30);
 /// How often the poller logs its request count and heap figures.
 pub const FOLLOW_REPORT: Duration = Duration::from_secs(300);
+
+// ---------------------------------------------------------------------------
+// The FAT index (`fatidx.rs`)
+// ---------------------------------------------------------------------------
+/// Index misses (a `/gifs` open it could not serve) that mark it stale.
+pub const FATIDX_STALE_REBUILD: u32 = 16;
+/// Seconds after the last change through the API before a rebuild.
+pub const FATIDX_QUIET_S: u32 = 30;
+/// Seconds between rebuilds for staleness (a missing index is built at once).
+pub const FATIDX_MIN_GAP_S: u32 = 600;
+/// No build in the first seconds after boot: the start-up show, the first GIF.
+pub const FATIDX_BOOT_DELAY_S: u32 = 20;
+/// Free heap a build needs to start: its buffers (a 4 KB sector batch, a
+/// 1 KB writer, and the records gathered per walk: up to 32 KB, what the
+/// largest block leaves over 16 KB) over the network side's transients.
+pub const FATIDX_BUILD_HEAP: usize = 48 * 1024;

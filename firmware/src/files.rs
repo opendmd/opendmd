@@ -179,35 +179,8 @@ pub fn cache_for(path: &str) -> &'static str {
 pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
     let t_all = probe::http_stamp();
     let t = probe::http_stamp();
-    // Spike: through the FAT side index when it is on (`fatidx`).
-    #[cfg(feature = "fat-index")]
-    let indexed = if crate::fatidx::SERVER.load(std::sync::atomic::Ordering::Relaxed) {
-        path.strip_prefix(config::SD_MOUNT)
-            .filter(|c| c.starts_with("/gifs/"))
-            .and_then(crate::fatidx::open)
-    } else {
-        None
-    };
-    #[cfg(not(feature = "fat-index"))]
-    let indexed: Option<std::io::Result<fs::File>> = None;
-    let opened: std::io::Result<(Box<dyn Read>, Option<u64>)> = match indexed {
-        #[cfg(feature = "fat-index")]
-        Some(Ok(f)) => {
-            let len = f.len();
-            Ok((Box::new(f), Some(len)))
-        }
-        #[cfg(not(feature = "fat-index"))]
-        Some(Ok(_)) => unreachable!(),
-        Some(Err(e)) => Err(e),
-        // `fstat` on the handle: FATFS answers it from the open file object.
-        None => fs::File::open(path).map(|f| {
-            let len = f.metadata().ok().filter(|m| m.is_file()).map(|m| m.len());
-            (Box::new(f) as Box<dyn Read>, len)
-        }),
-    };
-    let actual = path;
-    let (mut file, total) = match opened {
-        Ok(f) => f,
+    let (mut file, actual) = match crate::fatidx::open(path) {
+        Ok(f) => (f, path),
         Err(e) => {
             // A card error counts towards the card's health (`sdhealth`);
             // it is still answered as a miss, as before.
@@ -218,7 +191,13 @@ pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
     };
     crate::sdhealth::opened(path);
     let open_us = probe::elapsed_us(t);
-    let Some(total) = total else {
+    // `fstat` on the handle: FATFS answers it from the open file object.
+    let Some(total) = file
+        .metadata()
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+    else {
         return Ok(false);
     };
     if probe::HTTP_LOG {
@@ -600,6 +579,7 @@ pub fn stream_body_after(up: &mut Upload, temp: &str, prefix: &[u8]) -> Result<(
 /// Move `temp` over `dest`. FAT's `rename` refuses an existing destination, so
 /// the old file goes first; there is no atomic replace to be had here.
 pub fn replace(temp: &str, dest: &str) -> Result<()> {
+    crate::fatidx::touched(dest);
     if fs::metadata(dest).is_ok() {
         fs::remove_file(dest)?;
     }

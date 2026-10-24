@@ -966,63 +966,6 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         req.json(&json)
     })?;
 
-    // Spike (docs/research/fat-index.md): the FAT side index. `?op=build`
-    // [`&dirs=/gifs/A,/gifs/B`, default every /gifs dir], `op=mode&player=0|1
-    // &server=0|1`, `op=bench&list=<card file>&from=N&n=N`, `op=reset`, else
-    // the counters.
-    #[cfg(feature = "fat-index")]
-    server.route("/api/fatidx", Method::Get, |req| {
-        let q = req.query().map(str::to_string);
-        let q = q.as_deref();
-        let num = |k: &str, d: usize| query_param(q, k).and_then(|v| v.parse().ok()).unwrap_or(d);
-        match query_param(q, "op").unwrap_or_default().as_str() {
-            "build" => {
-                let dirs = match query_param(q, "dirs") {
-                    Some(d) => d.split(',').map(str::to_string).collect(),
-                    None => match crate::fatidx::gif_dirs() {
-                        Ok(d) => d,
-                        Err(e) => return req.error(500, "500 Internal Server Error", &format!("{e}")),
-                    },
-                };
-                let before = crate::state::free_heap();
-                let largest = unsafe { esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_8BIT) };
-                match crate::fatidx::build(&dirs) {
-                    Ok(st) => req.json(&format!(
-                        r#"{{"ok":true,"dirs":{},"files":{},"sectors":{},"walk_ms":{},"write_ms":{},"passes":{},"bytes":{},"heap_before":{before},"largest_before":{largest},"heap_after":{}}}"#,
-                        st.dirs, st.files, st.sectors, st.walk_ms, st.write_ms, st.passes, st.bytes, crate::state::free_heap()
-                    )),
-                    Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
-                }
-            }
-            "mode" => {
-                use std::sync::atomic::Ordering::Relaxed;
-                if let Some(v) = query_param(q, "player") {
-                    crate::fatidx::PLAYER.store(v == "1", Relaxed);
-                }
-                if let Some(v) = query_param(q, "server") {
-                    crate::fatidx::SERVER.store(v == "1", Relaxed);
-                }
-                req.json(&crate::fatidx::stats_json())
-            }
-            "reset" => {
-                crate::fatidx::reset_stats();
-                req.json(&crate::fatidx::stats_json())
-            }
-            "unload" => {
-                crate::fatidx::unload();
-                req.json(&crate::fatidx::stats_json())
-            }
-            "bench" => {
-                let list = query_param(q, "list").unwrap_or_else(|| "/fatidx-paths.txt".to_string());
-                match crate::fatidx::bench(&list, num("from", 0), num("n", 20)) {
-                    Ok(j) => req.json(&j),
-                    Err(e) => req.error(500, "500 Internal Server Error", &format!("{e}")),
-                }
-            }
-            _ => req.json(&crate::fatidx::stats_json()),
-        }
-    })?;
-
     // The playback cache. `total` is the playlist length the engine knows;
     // `prepared` is counted on the network worker (see `cache.rs`), so a
     // first request, or one after the card changed, answers "counting" with
@@ -1449,6 +1392,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if !skip_if_playing(&c, &path) {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
         }
+        crate::fatidx::touched(&path);
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 // A GIF takes its prepared copy with it; a copy removed
@@ -1835,6 +1779,7 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
             );
         }
     }
+    crate::fatidx::touched(&from);
     if let Err(e) = std::fs::rename(&from, &to) {
         return up.error(
             500,
@@ -2100,7 +2045,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.sd_attempts,
         s.sd_formatting,
         opt_json(s.sd_format_error.as_deref()),
-        crate::sdhealth::status_json(),
+        crate::sdhealth::status_json() + &crate::fatidx::status_json(),
         crate::cardspeed::Status,
         json_string(s.reset_reason),
         opt_json(crate::sdhealth::reset_note()),

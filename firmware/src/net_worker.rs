@@ -522,6 +522,9 @@ fn run(worker: NetWorker) {
         // Follow RePlayOS: a poll when one is due (station mode only).
         follow.tick(wifi.state() == WifiState::Connected && wifi.is_associated());
 
+        // The FAT index (`fatidx`): built or rebuilt when due.
+        crate::fatidx::tick();
+
         // An open AP does not stay up indefinitely. Rebooting (rather than
         // dropping back to STA in place) re-runs the whole boot decision with
         // whatever credentials were just saved.
