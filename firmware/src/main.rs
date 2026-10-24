@@ -404,7 +404,9 @@ fn main() -> Result<()> {
     // The Formula look (`formula_look.rs`): the setting's formula, and the
     // editor's over the GIF. Its frames of its own between file frames
     // count into the next frame's `decode` phase if it is late.
-    let mut looks = formula_look::Looks::new();
+    // Boxed: the main task's stack is the scarce thing (main's own frame
+    // is ~7.4 KB of its 16 KB).
+    let mut looks = Box::new(formula_look::Looks::new());
     looks.set_saved(&settings.look_formula, &mut canvas);
     let mut look_us: u32 = 0;
 
@@ -2946,6 +2948,8 @@ fn heartbeat(
     schedule: &str,
 ) {
     diag::check("heartbeat");
+    #[cfg(feature = "probe")]
+    state::MAIN_STACK_UNUSED.store(frametime::stack_unused(), Ordering::Relaxed);
     let sampled_min = floor.min;
     let free = free_heap();
     let min_free = min_free_heap();

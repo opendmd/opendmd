@@ -88,6 +88,11 @@ mod with_psi {
 
     /// A refused take is asked again no sooner than this.
     const RETRY: Duration = Duration::from_secs(1);
+    /// After a yield to low heap, the buffers are taken again only once
+    /// the heap has stayed at `TAKE_HEAP` for this long (the spare, 3
+    /// downloads at once: free swings above 48 KB between requests, and a
+    /// 1 s retry took and gave back the buffers in a loop).
+    const CALM: Duration = Duration::from_secs(10);
 
     #[derive(Default)]
     pub struct Looks {
@@ -95,9 +100,12 @@ mod with_psi {
         saved: Option<FormulaLook>,
         /// The editor's, and the ordinal of the file it was shown over.
         over: Option<(FormulaLook, u64)>,
-        /// When the buffers were last refused (the heap short, or given
-        /// back to it).
+        /// When the buffers were last refused (the heap short).
         refused: Option<Instant>,
+        /// When they were last given back to low heap, and since when the
+        /// heap has been back at `TAKE_HEAP` (a yield's calm).
+        yielded: Option<Instant>,
+        calm_since: std::cell::Cell<Option<Instant>>,
     }
 
     impl Looks {
@@ -134,9 +142,23 @@ mod with_psi {
         /// The buffers may be asked for now: not held, the heap has room,
         /// and no refusal in the last second.
         fn may_take(&self) -> bool {
-            self.active_ref().is_some_and(|l| !l.is_held())
-                && self.refused.is_none_or(|t| t.elapsed() >= RETRY)
-                && free_heap() as usize >= TAKE_HEAP
+            if !self.active_ref().is_some_and(|l| !l.is_held())
+                || self.refused.is_some_and(|t| t.elapsed() < RETRY)
+            {
+                return false;
+            }
+            let room = free_heap() as usize >= TAKE_HEAP;
+            if self.yielded.is_none() {
+                return room;
+            }
+            // After a yield: the heap at TAKE_HEAP for CALM, unbroken.
+            if !room {
+                self.calm_since.set(None);
+                return false;
+            }
+            let since = self.calm_since.get().unwrap_or_else(Instant::now);
+            self.calm_since.set(Some(since));
+            since.elapsed() >= CALM
         }
 
         /// The setting's formula (`""`: none). One that does not build
@@ -161,6 +183,7 @@ mod with_psi {
                 *e = why;
             }
             self.refused = None;
+            self.yielded = None;
             display.dirty_mut().mark_all();
             self.publish();
         }
@@ -181,6 +204,7 @@ mod with_psi {
                     l.release(display);
                 }
                 self.refused = None;
+                self.yielded = None;
                 self.publish();
                 return Ok(());
             }
@@ -204,6 +228,7 @@ mod with_psi {
                     }
                     self.over = Some((l, ordinal));
                     self.refused = None;
+                    self.yielded = None;
                 }
             }
             self.publish();
@@ -240,7 +265,10 @@ mod with_psi {
         ) -> &'a mut Canvas {
             if self.may_take() {
                 let took = self.active().is_some_and(FormulaLook::take);
-                if !took {
+                if took {
+                    self.yielded = None;
+                    self.calm_since.set(None);
+                } else {
                     self.refused = Some(Instant::now());
                     log::info!(
                         "formula look: no room for its {} B ({} B free); the picture goes up as it is",
@@ -322,7 +350,8 @@ mod with_psi {
                 None => false,
             };
             if gave {
-                self.refused = Some(Instant::now());
+                self.yielded = Some(Instant::now());
+                self.calm_since.set(None);
                 self.publish();
             }
             gave

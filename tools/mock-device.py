@@ -2872,7 +2872,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "index_state": player.index_state,
                     "www_version": ctx.www_pushed or www_version(ctx.www_root),
                     "www": {**www_info(ctx.www_root, ctx.www_pushed), "staged": ctx.www_staged},
-                    "heap": {"free": free, "floor": floor, "idf_min": idf_min},
+                    "heap": {"free": free, "floor": floor, "idf_min": idf_min, "transitions_cut": 0},
                     "refresh_hz": 100,
                     "deadline_misses": player.deadline_misses,
                     "worst_lateness_ms": player.worst_lateness_ms,

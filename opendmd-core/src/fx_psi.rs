@@ -465,7 +465,10 @@ pub const COVERS: &str = "this Formula covers the GIF entirely: let it show thro
 /// drawn only where the picture changes.
 pub struct FormulaLook {
     prog: Box<psi::Program>,
-    held: Option<LookBuffers>,
+    /// Boxed, so a `FormulaLook` (two of them in the firmware's main loop)
+    /// is small on the main task's stack: the picture's dirty map alone is
+    /// 516 B.
+    held: Option<Box<LookBuffers>>,
     inputs: psi::Inputs,
     delay_ms: u8,
     gov: Governor,
@@ -503,7 +506,8 @@ pub fn look_stats() -> (u32, u32, u32) {
 impl FormulaLook {
     /// The heap [`take`](Self::take) asks for: the working memory and the
     /// picture.
-    pub const BUFFER_BYTES: usize = std::mem::size_of::<psi::Scratch<LANES>>() + PIXELS * 3;
+    pub const BUFFER_BYTES: usize =
+        std::mem::size_of::<psi::Scratch<LANES>>() + PIXELS * 3 + std::mem::size_of::<LookBuffers>();
 
     /// The look for a formula's `@fx:psi?src=…` path (sliders and `fps=`
     /// as for the effect), or why not: it does not compile, or it is too
@@ -661,9 +665,20 @@ impl FormulaLook {
             }
             Box::from_raw(p)
         };
-        let mut b = LookBuffers {
-            scratch,
-            out: Canvas::from_parts(px, crate::canvas::DirtyMap::default()),
+        // The box itself, fallibly too (a full heap must not abort).
+        let layout = std::alloc::Layout::new::<LookBuffers>();
+        // SAFETY: a non-zero-sized layout; written before the box is made,
+        // and the box frees it with the same layout.
+        let mut b = unsafe {
+            let p = std::alloc::alloc(layout).cast::<LookBuffers>();
+            if p.is_null() {
+                return false;
+            }
+            p.write(LookBuffers {
+                scratch,
+                out: Canvas::from_parts(px, crate::canvas::DirtyMap::default()),
+            });
+            Box::from_raw(p)
         };
         b.scratch.reset();
         self.held = Some(b);
@@ -1366,7 +1381,7 @@ mod tests {
                 .msg,
             "unknown name `tme` — did you mean `t`?"
         );
-        assert_eq!(FormulaLook::BUFFER_BYTES, 8192 + 12288);
+        assert_eq!(FormulaLook::BUFFER_BYTES, 8192 + 12288 + std::mem::size_of::<LookBuffers>());
     }
 
     #[test]

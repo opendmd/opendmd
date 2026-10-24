@@ -1938,7 +1938,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
             r#"{{"version":{},"variant":{},"uptime_secs":{},"t_ms":{},"ip":{},"wifi":{},"hostname":{},"mdns":{},"#,
             r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}}},"paused":{},{}"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
-            r#""heap":{{"free":{},"floor":{},"idf_min":{}}},"heap_floor_at":{},"#,
+            r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"#,
             r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"error":{},"attempts":{},"formatting":{},"format_error":{},{}}},"reset_reason":{},"reset_note":{},"#,
             r#""overrides":{},"hidden":{},"#,
@@ -1970,6 +1970,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.heap_free,
         s.heap_floor,
         s.heap_idf_min,
+        main_stack_json(),
         s.heap_floor_at
             .as_ref()
             .map_or_else(|| "null".to_string(), |a| a.json()),
@@ -2025,6 +2026,23 @@ fn formula_json(path: &str) -> String {
 #[cfg(not(feature = "psi"))]
 fn formula_json(_: &str) -> String {
     String::new()
+}
+
+/// The end of `heap`: `transitions_cut` (the transition gate's refusals
+/// since boot: the heartbeat's figure), and in a probe build `main_stack`
+/// (the main task's stack high-water mark, bytes never used, as of the last
+/// heartbeat) and `pushed` (pixels pushed to the panel since boot).
+fn main_stack_json() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let cut = crate::TRANSITIONS_CUT.load(Relaxed);
+    #[cfg(feature = "probe")]
+    return format!(
+        r#","transitions_cut":{cut},"main_stack":{},"pushed":{}"#,
+        crate::state::MAIN_STACK_UNUSED.load(Relaxed),
+        crate::state::PIXELS_PUSHED.load(Relaxed)
+    );
+    #[cfg(not(feature = "probe"))]
+    format!(r#","transitions_cut":{cut}"#)
 }
 
 /// `formula_look` in the status: `null`, or what is drawn over the picture

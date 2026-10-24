@@ -83,6 +83,14 @@ pub fn largest_free_block() -> usize {
 /// main loop sets rather than [`Status`] fields, so the looks pass costs
 /// the status object no heap; `look` and `glow` are read from the settings.
 pub static GLOW_HELD: AtomicBool = AtomicBool::new(false);
+/// The main task's stack high-water mark (bytes never used), for a probe
+/// build's `/api/status` `heap.main_stack`.
+/// Pixels pushed to the panel since boot (every push: frames, glow steps,
+/// repaints), for a probe build's `/api/status` `heap.pushed`.
+#[cfg(feature = "probe")]
+pub static PIXELS_PUSHED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(feature = "probe")]
+pub static MAIN_STACK_UNUSED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 pub static ATTRACT_LIVE: AtomicBool = AtomicBool::new(false);
 
 /// Safe start (`main.rs` `SafeStart`): the uptime second at which the

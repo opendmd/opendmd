@@ -289,6 +289,41 @@ pub fn run() {
         );
     }
 
+    // The formula look as the main loop runs it (`FormulaLook::apply` over
+    // a picture, every row: a frame of its own), timed, with the heap its
+    // buffers take and the stack after (the high-water mark).
+    const LOOKS: [(&str, &str); 3] = [
+        ("Scanlines", "layer multiply { gray(py % 2 ? 1 : 0.3 + a*0.6) }"),
+        ("Old TV", "loop 4\ndx = (x - 0.5)*1.6; dy = (y - 0.5)*1.2\nlines = py % 2 ? 1 : 0.6\nroll = 0.85 + 0.15*max(0, tri(y/2 + t/4))\ncorners = clamp(1.5 - (dx*dx + dy*dy)*1.6, 0, 1)\nlayer multiply { gray(lines * roll * corners) }"),
+        ("Corner clock", "frame { hr = 104 + (hour % 12 + minute/60)/12*22; mn = 104 + minute/60*22 }\ntop = py > 3 and py < 6; bot = py > 0 and py < 3\nbar = (top or bot) * (px >= 104) * (px < (top ? hr : mn))\nlayer multiply { gray(1 - (px >= 101) * (py < 8) * 0.8) }\nlayer { rgb(1, 0.75, 0.3, bar) }"),
+
+    ];
+    let mut pic = Canvas::new();
+    pic.as_mut_bytes().copy_from_slice(&under);
+    for (name, src) in LOOKS {
+        let Ok(mut look) = fx_psi::FormulaLook::from_path(&fx_psi::path(src, "a=0.4")) else {
+            say!(error, "psi-probe: look {name}: refused");
+            continue;
+        };
+        let h0 = heap();
+        let took = look.take();
+        let h1 = heap();
+        let mut k = 0u32;
+        let (p50, p90, max) = timed(|_| {
+            look.redraw();
+            pic.dirty_mut().mark_all();
+            k += 1;
+            let out = look.apply(Duration::from_millis(u64::from(k) * 20), &mut pic, 0);
+            out.dirty_mut().clear();
+        });
+        say!(info,
+            "psi-probe: look {name}: est {} us, apply every row p50 {p50} p90 {p90} max {max} us, buffers {} ({h0} -> {h1} B free), main stack {} B unused",
+            look.program().esp32_us(),
+            if took { "taken" } else { "REFUSED" },
+            stack_unused()
+        );
+    }
+
     let stack1 = stack_unused();
     say!(info,
         "psi-probe: done: main stack {stack1} B unused (was {stack0} before the probe; the high-water mark is the deepest so far), heap {} B free, {} ms in all",
