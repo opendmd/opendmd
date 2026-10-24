@@ -164,6 +164,77 @@ struct Args {
     #[cfg(feature = "psi")]
     #[arg(long = "formula-opts", requires = "formula")]
     formula_opts: Option<String>,
+
+    /// Draw a Psi formula (a `.psi` file; the `psi` feature) over whatever
+    /// plays, as the device's Formula look: its `ur ug ub ul` read the GIF
+    /// under it and its layers blend onto it (before the tint and glow).
+    #[cfg(feature = "psi")]
+    #[arg(long = "look-formula")]
+    look_formula: Option<PathBuf>,
+
+    /// Options for `--look-formula`: `a=`, `b=`, `c=`, `fps=`.
+    #[cfg(feature = "psi")]
+    #[arg(long = "look-formula-opts", requires = "look_formula")]
+    look_formula_opts: Option<String>,
+}
+
+/// The formula drawn over what plays (`--look-formula`), or nothing.
+#[derive(Default)]
+struct Over {
+    #[cfg(feature = "psi")]
+    look: Option<opendmd_core::fx_psi::FormulaLook>,
+}
+
+impl Over {
+    #[cfg(feature = "psi")]
+    fn new(args: &Args) -> Result<Over> {
+        let Some(file) = &args.look_formula else {
+            return Ok(Over::default());
+        };
+        let src =
+            std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+        if let Err(e) = opendmd_core::psi::compile(&src) {
+            bail!("{}: {}", file.display(), e.render(&src));
+        }
+        let path =
+            opendmd_core::fx_psi::path(&src, args.look_formula_opts.as_deref().unwrap_or(""));
+        let mut look = opendmd_core::fx_psi::FormulaLook::from_path(&path)
+            .map_err(|e| anyhow::anyhow!("{}: {}", file.display(), e.msg))?;
+        look.take();
+        println!(
+            "{}: drawn over what plays ({} steps, {} layers{})",
+            file.display(),
+            look.program().len(),
+            look.program().layers(),
+            if look.is_animated() { ", animated" } else { "" }
+        );
+        Ok(Over { look: Some(look) })
+    }
+
+    #[cfg(not(feature = "psi"))]
+    fn new(_: &Args) -> Result<Over> {
+        Ok(Over::default())
+    }
+
+    /// What the panel shows over `display` at `now`.
+    fn show<'a>(&'a mut self, now: Duration, display: &'a mut Canvas) -> &'a Canvas {
+        #[cfg(feature = "psi")]
+        if let Some(l) = &mut self.look {
+            return l.apply(now, display, 0);
+        }
+        let _ = now;
+        display
+    }
+
+    /// It has a frame of its own due at `now`.
+    fn due(&self, now: Duration) -> bool {
+        #[cfg(feature = "psi")]
+        if let Some(l) = &self.look {
+            return l.due().is_some_and(|d| d <= now);
+        }
+        let _ = now;
+        false
+    }
 }
 
 /// `--formula FILE`: the `@fx:psi` path for it, after a compile that
@@ -171,8 +242,10 @@ struct Args {
 #[cfg(feature = "psi")]
 fn formula_path(file: &Path, opts: Option<&str>) -> Result<String> {
     use opendmd_core::psi;
-    let src = std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
-    let prog = psi::compile(&src).map_err(|e| anyhow::anyhow!("{}: {}", file.display(), e.render(&src)))?;
+    let src =
+        std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+    let prog = psi::compile(&src)
+        .map_err(|e| anyhow::anyhow!("{}: {}", file.display(), e.render(&src)))?;
     let (f, r, p) = prog.counts();
     println!(
         "{}: {} steps ({f} per frame, {r} per row, {p} per pixel), {} registers, a {:.1} s loop",
@@ -750,6 +823,7 @@ fn run(#[allow(unused_mut)] mut args: Args) -> Result<()> {
     let mut buffer = vec![0u32; win_w * win_h];
     let mut canvas = Canvas::new();
     canvas.fill(Rgb::BLACK);
+    let mut over = Over::new(&args)?;
     // The panel's tint and glow, as the firmware applies them.
     let mut model = PanelModel::new(args.look, args.glow);
     // Effects hold to 50 fps under the glow, as on the device.
@@ -764,7 +838,10 @@ fn run(#[allow(unused_mut)] mut args: Args) -> Result<()> {
             engine.seek_elapsed(Duration::from_millis(args.screenshot_at), &mut canvas)?;
         }
         println!("screenshot of {path}");
-        let shown = model.present(&canvas, Duration::ZERO);
+        let shown = model.present(
+            over.show(Duration::from_millis(args.screenshot_at), &mut canvas),
+            Duration::ZERO,
+        );
         if let Some(out) = &args.screenshot {
             draw(mode, shown, scale, &mut renderer, &mut buffer);
             write_png(out, win_w, win_h, &buffer)?;
@@ -828,7 +905,7 @@ fn run(#[allow(unused_mut)] mut args: Args) -> Result<()> {
             // Redraw now so the toggle is visible even while paused.
             draw(
                 mode,
-                model.present(engine.display(&canvas), now),
+                model.present(over.show(now, engine.display_mut(&mut canvas)), now),
                 scale,
                 &mut renderer,
                 &mut buffer,
@@ -848,18 +925,19 @@ fn run(#[allow(unused_mut)] mut args: Args) -> Result<()> {
                 // The compositor's output while a transition runs.
                 draw(
                     mode,
-                    model.present(engine.display(&canvas), now),
+                    model.present(over.show(now, engine.display_mut(&mut canvas)), now),
                     scale,
                     &mut renderer,
                     &mut buffer,
                 );
                 window.update_with_buffer(&buffer, win_w, win_h)?;
             }
-            TickOutcome::Idle if model.is_animating() => {
-                // A dot still fading (phosphor glow).
+            TickOutcome::Idle if model.is_animating() || over.due(now) => {
+                // A dot still fading (phosphor glow), or the formula
+                // look's own frame.
                 draw(
                     mode,
-                    model.present(engine.display(&canvas), now),
+                    model.present(over.show(now, engine.display_mut(&mut canvas)), now),
                     scale,
                     &mut renderer,
                     &mut buffer,

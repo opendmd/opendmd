@@ -364,9 +364,9 @@ impl Program {
                             && self.init[v[n - 1] as usize & 0x7f] >= ONE);
                     base + match blend {
                         None => 0,
-                        Some(crate::fixed::BLEND_MULTIPLY) => 240,
-                        Some(crate::fixed::BLEND_SCREEN) => 320,
-                        Some(_) => 175,
+                        Some(crate::fixed::BLEND_MULTIPLY) => 210,
+                        Some(crate::fixed::BLEND_SCREEN) => 290,
+                        Some(_) => 150,
                     } + if blend.is_some() && covered { 75 } else { 0 }
                 }
                 _ => 0,
