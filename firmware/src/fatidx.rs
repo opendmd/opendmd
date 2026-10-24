@@ -47,6 +47,9 @@ static MISSES: AtomicU32 = AtomicU32::new(0);
 static RECORDS: AtomicU32 = AtomicU32::new(0);
 static BUILDS: AtomicU32 = AtomicU32::new(0);
 static BUILD_MS: AtomicU32 = AtomicU32::new(0);
+/// A build's thread is up (one at a time); its stack never used, last build.
+static BUILDING: AtomicBool = AtomicBool::new(false);
+static BUILD_STACK_FREE: AtomicU32 = AtomicU32::new(0);
 
 struct Loaded {
     file: File,
@@ -95,8 +98,13 @@ fn open_dir(card_dir: &str) -> io::Result<(*mut sys::FATFS, u32)> {
         if sys::f_opendir(&mut d, path.as_ptr()) != sys::FRESULT_FR_OK {
             return Err(errno(sys::ENOENT));
         }
+        // Read before closing: `f_closedir` clears `obj.fs`.
+        let out = (d.obj.fs, d.obj.sclust);
         sys::f_closedir(&mut d);
-        Ok((d.obj.fs, d.obj.sclust))
+        if out.0.is_null() {
+            return Err(errno(sys::EIO));
+        }
+        Ok(out)
     }
 }
 
@@ -424,13 +432,38 @@ pub fn tick() {
     {
         return;
     }
-    let t = std::time::Instant::now();
-    BUILT_S.store(now, Relaxed);
-    if let Err(e) = build() {
-        log::warn!("fat index: {e}");
+    if BUILDING.swap(true, Relaxed) {
+        return;
     }
-    BUILD_MS.store(t.elapsed().as_millis() as u32, Relaxed);
-    BUILDS.fetch_add(1, Relaxed);
+    BUILT_S.store(now, Relaxed);
+    // Its own short-lived task (CPU0, the cache builder's priority): the
+    // walk's FatFs/SD calls are deep, and the network worker's stack is
+    // sized for its own work; and the worker keeps polling meanwhile.
+    use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
+    let previous = ThreadSpawnConfiguration::get();
+    let _ = ThreadSpawnConfiguration {
+        name: Some(b"fat-index\0"),
+        stack_size: config::FATIDX_STACK,
+        priority: config::BUILDER_PRIORITY,
+        pin_to_core: Some(esp_idf_hal::cpu::Core::Core0),
+        ..Default::default()
+    }
+    .set();
+    let spawned = std::thread::Builder::new().stack_size(config::FATIDX_STACK).spawn(|| {
+        let t = std::time::Instant::now();
+        if let Err(e) = build() {
+            log::warn!("fat index: {e}");
+        }
+        BUILD_MS.store(t.elapsed().as_millis() as u32, Relaxed);
+        BUILDS.fetch_add(1, Relaxed);
+        // SAFETY: the calling task's own high-water mark.
+        BUILD_STACK_FREE.store(unsafe { sys::uxTaskGetStackHighWaterMark(std::ptr::null_mut()) }, Relaxed);
+        BUILDING.store(false, Relaxed);
+    });
+    let _ = previous.unwrap_or_default().set();
+    if spawned.is_err() {
+        BUILDING.store(false, Relaxed);
+    }
 }
 
 fn build() -> io::Result<()> {
@@ -483,12 +516,13 @@ fn build() -> io::Result<()> {
 /// `/api/status`'s `"sd"` part: `,"fat_index":{...}`.
 pub fn status_json() -> String {
     format!(
-        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"build_ms":{},"stale":{}}}"#,
+        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"build_ms":{},"stack_free":{},"stale":{}}}"#,
         RECORDS.load(Relaxed),
         HITS.load(Relaxed),
         MISSES.load(Relaxed),
         BUILDS.load(Relaxed),
         BUILD_MS.load(Relaxed),
+        BUILD_STACK_FREE.load(Relaxed),
         DIRTY.load(Relaxed),
     )
 }
