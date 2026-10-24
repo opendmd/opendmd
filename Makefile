@@ -396,7 +396,7 @@ FW_BENCH_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(
 # version among them) over a changed fragment.
 fw-sdkconfig-flavour:
 	@mkdir -p $(FW)/target
-	@want="$(if $(FW_DIAG),diag,normal) $(FW_VERSION)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
+	@want="$(if $(FW_DIAG),diag,normal) $(FW_VERSION) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
 	 if [ "$$want" != "$$have" ]; then \
 	   echo "==> sdkconfig flavour $${have:-unknown} -> $$want: removing the generated sdkconfig"; \
 	   rm -f $(FW)/target/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig; \
@@ -535,6 +535,16 @@ fw-release: web
 	@{ echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"'; \
 	   echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
 	   echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; } > $(FW_RELEASE_SDKCONFIG_FRAG)
+	@# The generated sdkconfig keeps the values it has over changed defaults
+	@# (a new sdkconfig.defaults line or version would silently not apply):
+	@# remove it whenever the inputs change.
+	@want=$$(cat $(FW)/sdkconfig.defaults $(FW_RELEASE_SDKCONFIG_FRAG) | sha256sum | cut -c1-16); \
+	 have=$$(cat $(FW)/target/sdkconfig.release.stamp 2>/dev/null); \
+	 if [ "$$want" != "$$have" ]; then \
+	   echo "==> release sdkconfig inputs changed: removing the generated sdkconfig"; \
+	   rm -f $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig; \
+	   echo $$want > $(FW)/target/sdkconfig.release.stamp; \
+	 fi
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_TARGET_DIR)" $(if $(FW_RELEASE_FEATURES),--features $(FW_RELEASE_FEATURES),)'
 	@# The updater after the firmware: on a fresh machine (CI) it is the
 	@# firmware's build that installs the ESP-IDF checkout idf.py needs.

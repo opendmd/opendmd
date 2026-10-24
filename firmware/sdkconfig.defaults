@@ -16,6 +16,13 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # spaces (`/gifs/NEW 2021/...`). Without these two lines every open() fails.
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
+# FatFs's largest sector size is IDF's wear-levelling sector size (ffconf.h:
+# FF_MAX_SS = MAX(512, CONFIG_WL_SECTOR_SIZE)), and every FIL and the volume
+# window are FF_MAX_SS bytes. The default 4096 is for FAT on flash, which this
+# firmware does not have; with it each FIL is 4,136 B and the VFS preallocates
+# SD_MAX_FILES of them at mount. 512 (the SD card's sector) frees ~30 KB of
+# heap (docs/research/fat-index.md).
+CONFIG_WL_SECTOR_SIZE_512=y
 
 # --- lwip on CPU0 --------------------------------------------------------
 # lwip's tcpip task has no core affinity by default (priority 18), so the
