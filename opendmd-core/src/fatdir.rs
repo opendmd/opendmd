@@ -235,7 +235,7 @@ pub fn walk(
                     if back > 16 {
                         continue;
                     }
-                    let prev = (back > 0 && rel % geo.csize == 0).then_some(prev_rel);
+                    let prev = (back > 0 && rel.is_multiple_of(geo.csize)).then_some(prev_rel);
                     emit(Found { name, loc: l, prev_rel: prev })?;
                 }
                 prev_rel = rel;
@@ -276,6 +276,9 @@ impl Header {
     }
 }
 
+/// Walks every indexed directory, calling `emit(hash, loc, prev_rel)` per file.
+pub type WalkAll<'a> = dyn FnMut(&mut dyn FnMut(u32, u32, Option<u32>)) -> io::Result<()> + 'a;
+
 /// Write the index: `walk_all(emit)` walks every indexed directory, calling
 /// `emit(hash, loc, prev_rel)` per file. The first walk counts; then each
 /// walk gathers the buckets that fit `group` (8 bytes a record) and writes
@@ -283,7 +286,7 @@ impl Header {
 pub fn build_index(
     out: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     geo: &Geometry,
-    walk_all: &mut dyn FnMut(&mut dyn FnMut(u32, u32, Option<u32>)) -> io::Result<()>,
+    walk_all: &mut WalkAll,
     group: &mut [u8],
 ) -> io::Result<(u32, u32)> {
     let mut fanout = [0u32; FANOUT];

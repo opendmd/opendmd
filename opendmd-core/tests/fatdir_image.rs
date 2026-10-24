@@ -58,7 +58,7 @@ impl Img {
             for s in 0..self.geo.csize {
                 let lba = self.geo.database + (cl - 2) * self.geo.csize + s;
                 self.read(lba, &mut buf).unwrap();
-                for e in buf.chunks_exact(32) {
+                for e in buf.as_chunks::<32>().0 {
                     if e[11] & 0x10 != 0 && e[11] != 0x0F && e[..11] == want {
                         return (u16::from_le_bytes([e[20], e[21]]) as u32) << 16
                             | u16::from_le_bytes([e[26], e[27]]) as u32;
@@ -93,7 +93,7 @@ impl Img {
             Verify::NeedPrev => {
                 // Across a cluster boundary only an extra record knows the
                 // sector before; without one the device opens by path.
-                let p = if rel % self.geo.csize != 0 {
+                let p = if !rel.is_multiple_of(self.geo.csize) {
                     rel - 1
                 } else {
                     match prev_rel {

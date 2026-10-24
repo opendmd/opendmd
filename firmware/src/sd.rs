@@ -561,8 +561,8 @@ impl Source for SdSource {
                 // No copy: the original, if the FAT index opens it (never
                 // a directory scan here). `ahead` holds its decoder only
                 // with the heap for cap 12.
-                Err(_) => match Some(format!("{}{path}", config::SD_MOUNT))
-                    .filter(|_| copy != path)
+                Err(_) => match (copy != path)
+                    .then(|| format!("{}{path}", config::SD_MOUNT))
                     .and_then(|orig| crate::fatidx::indexed(&orig).map(|r| (orig, r)))
                 {
                     Some((orig, Ok(o))) => {

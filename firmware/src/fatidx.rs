@@ -311,7 +311,7 @@ fn open_at(loc: u32, prev: u32, name: &[u8]) -> io::Result<Option<File>> {
     read_locked(fs, geo.database + rel, cur)?;
     let mut v = fatdir::verify(cur, None, slot, name);
     if v == Verify::NeedPrev {
-        let p = if rel % geo.csize != 0 { rel - 1 } else { prev };
+        let p = if !rel.is_multiple_of(geo.csize) { rel - 1 } else { prev };
         if p == u32::MAX {
             return Ok(None);
         }
