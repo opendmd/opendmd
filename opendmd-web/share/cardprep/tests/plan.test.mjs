@@ -37,6 +37,13 @@ test('what the pack puts on the card, and what it leaves off', () => {
   assert.equal(l.bytes, 1000 + 2000 + 3000 + 4000 + 60 + 20 + 20 + 500);
 });
 
+test('names no card has are left off it', () => {
+  const l = cardLayout([E('filelist.txt'), E('gifs/A/ok.gif'), E('gifs/A/../../escape.gif'), E('gifs/./A/x.gif'),
+    E('gifs/A//y.gif'), E('gifs/A\\z.gif'), E('gifs/A/tab\tname.gif')]);
+  assert.deepEqual(l.gifs.map((g) => g.path), ['gifs/A/ok.gif']);
+  assert.equal(l.dropped.length, 5);
+});
+
 test('a card one folder down in the zip; and zips that are not cards', () => {
   const wrapped = cardLayout([E('My card/filelist.txt'), E('My card/gifs/Other/A.gif'), E('notes/filelist.txt'), E('readme.txt')]);
   assert.equal(wrapped.prefix, 'My card/');

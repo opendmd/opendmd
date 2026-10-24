@@ -143,7 +143,7 @@ async function pickCard() {
     if (e?.name === 'AbortError') return;
     return fail('cp-card-err', `The card couldn't be opened: ${e.message}`);
   }
-  for (const id of ['cp-card-err', 'cp-run', 'cp-done']) show(id, false);
+  for (const id of ['cp-card-err', 'cp-run', 'cp-done', 'cp-eject']) show(id, false);
   show('cp-card');
   show('cp-start', false);
   say('cp-card-text', 'Looking at what\'s on the card…');
@@ -226,7 +226,6 @@ async function start() {
   const timer = setInterval(() => progress(false), 1000);
   const workers = [];
   await new Promise((resolve) => {
-    let live = 0;
     const next = (w) => {
       if (r.stopping || !items.length) {
         w.idle = true;
@@ -241,7 +240,6 @@ async function start() {
       const w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
       w.idle = false;
       workers.push(w);
-      live++;
       w.onmessage = ({ data: m }) => {
         if (m.type === 'ready') next(w);
         else if (m.type === 'batch') {
@@ -270,6 +268,7 @@ async function start() {
   // with no lighter version): only when everything before them was written.
   // (cache/.failed after a stop too, so the next run knows those GIFs are done.)
   let lists = 0;
+  $('cp-stop').disabled = true;
   if (!r.fatal) {
     try {
       if (!r.stopping) say('cp-status', 'Writing the playlists…');

@@ -33,6 +33,9 @@ export function cardLayout(entries) {
     if (!e.name.startsWith(prefix)) continue;
     const path = e.name.slice(prefix.length);
     const item = { path, entry: e };
+    // (A name no card has: an empty, `.` or `..` part, a backslash, a control character.)
+    const odd = path.split('/').some((p) => p === '' || p === '.' || p === '..') || /[\\\x00-\x1f]/.test(path);
+    if (odd) { out.dropped.push(path); continue; }
     if (GIF.test(path)) {
       out.gifs.push(item);
       out.categories.add(path.split('/')[1]);
