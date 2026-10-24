@@ -113,12 +113,22 @@ fn zeroed<T>() -> Box<T> {
 }
 
 fn lanes<const N: usize>(prog: &psi::Program, loop_ms: u32, out: &mut [u8]) -> (u32, u32, u32) {
+    lanes_over::<N>(prog, loop_ms, None, out)
+}
+
+/// As [`lanes`], over `under` (the picture a formula look is drawn over).
+fn lanes_over<const N: usize>(
+    prog: &psi::Program,
+    loop_ms: u32,
+    under: Option<&[u8]>,
+    out: &mut [u8],
+) -> (u32, u32, u32) {
     let mut s = zeroed::<psi::Scratch<N>>();
     s.reset();
     let t = fx_psi::tables();
     timed(|k| {
         let inputs = psi::golden::inputs(k * 20 % loop_ms);
-        psi::render_with::<N>(prog, &mut s, &inputs, &t, out);
+        psi::render_rows::<N>(prog, &mut s, &inputs, &t, under, u32::MAX, out);
     })
 }
 
@@ -201,6 +211,28 @@ pub fn run() {
             );
         }
     }
+    // Layers, and formulas over a picture (the formula look's path).
+    let mut under = vec![0u8; psi::W * psi::H * 3];
+    psi::golden::picture(&mut under);
+    for &(name, src, ms, over, want) in psi::golden::OVER {
+        if psi::compile_into(src, &mut prog).is_err() {
+            bad += 1;
+            say!(error, "psi-probe: golden {name}: does not compile");
+            continue;
+        }
+        let u = over.then_some(under.as_slice());
+        psi::render_rows::<128>(&prog, &mut s, &psi::golden::inputs(ms), &t, u, u32::MAX, &mut out);
+        let got = psi::golden::fnv(&out);
+        if got == want {
+            ok += 1;
+        } else {
+            bad += 1;
+            say!(
+                error,
+                "psi-probe: golden {name} (over) at {ms} ms: {got:#018x}, host/wasm {want:#018x}"
+            );
+        }
+    }
     say!(
         info,
         "psi-probe: golden frames: {ok} match the host/wasm hashes, {bad} differ{}",
@@ -225,12 +257,31 @@ pub fn run() {
         ("out hsv", "hsv(x, 1, 1)"),
         ("out pal", "pal(fire, x)"),
     ];
-    for (what, src) in STEPS {
+    // Layers and what is under (drawn over the golden picture): the
+    // formula look's costs, for `Program::esp32_us`.
+    const LAYER_STEPS: [(&str, &str); 10] = [
+        ("ur", "gray(ur)"),
+        ("ul", "gray(ul)"),
+        ("shows through", "gray(x, 0.5)"),
+        ("+layer over 0.5", "layer { gray(x) }\nlayer { gray(x + t, 0.5) }"),
+        ("+layer add", "layer { gray(x) }\nlayer add { gray(x + t) }"),
+        ("+layer multiply", "layer { gray(x) }\nlayer multiply { gray(x + t) }"),
+        ("+layer screen", "layer { gray(x) }\nlayer screen { gray(x + t) }"),
+        ("+layer max", "layer { gray(x) }\nlayer max { gray(x + t) }"),
+        ("look scanlines", "layer multiply { gray(py % 2 ? 1 : 0.55) }"),
+        ("look 4 layers", "layer multiply { gray(y) }\nlayer add { gray(x) }\nlayer screen { gray(x + t) }\nlayer max { gray(py / 32) }"),
+    ];
+    let steps = STEPS
+        .iter()
+        .map(|&(w, s)| (w, s, false))
+        .chain(LAYER_STEPS.iter().map(|&(w, s)| (w, s, true)));
+    for (what, src, over) in steps {
         if psi::compile_into(src, &mut prog).is_err() {
             say!(error, "psi-probe: step {what}: does not compile");
             continue;
         }
-        let (p50, p90, _) = lanes::<128>(&prog, 8000, &mut out);
+        let u = over.then_some(under.as_slice());
+        let (p50, p90, _) = lanes_over::<128>(&prog, 8000, u, &mut out);
         let (_, row, px) = prog.counts();
         say!(info,
             "psi-probe: step {what:<18} pixel steps {px} (+{row} row): p50 {p50} p90 {p90} us a frame = {} ns a pixel",

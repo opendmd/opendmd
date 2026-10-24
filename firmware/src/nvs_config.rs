@@ -54,6 +54,12 @@ const KEY_API_KEY: &str = "api_key";
 const KEY_ATTRACT_SET: &str = "attract_set";
 const KEY_LOOK: &str = "look";
 const KEY_GLOW: &str = "glow";
+/// The Formula look: a formula's `@fx:psi?src=…` path (`""`: none) and the
+/// name the web app showed it under.
+const KEY_LOOK_FORMULA: &str = "look_fx";
+const KEY_LOOK_FORMULA_NAME: &str = "look_fx_name";
+/// The longest `look_formula_name`, characters.
+pub const LOOK_NAME_MAX: usize = 60;
 const KEY_ATTRACT: &str = "attract";
 const KEY_BOOT_SHOW: &str = "boot_show";
 /// The longest `attract` value (`text:` and the message).
@@ -177,6 +183,12 @@ pub struct Settings {
     pub look: Look,
     /// Phosphor glow; off by default (it holds 12 KB while lit).
     pub glow: GlowLevel,
+    /// The Formula look (`formula_look.rs`): a formula drawn over
+    /// everything that plays, as its `@fx:psi?src=…` path (at most
+    /// `synth::MAX_FORMULA_PATH`); `""` = none.
+    pub look_formula: String,
+    /// The formula's name in the web app (display only).
+    pub look_formula_name: String,
     /// The start-up show: `off`, `short` (the default) or `full`
     /// (`opendmd_core::boot`, `show.rs`).
     pub boot_show: ShowLength,
@@ -242,6 +254,8 @@ impl Default for Settings {
             attract: String::new(),
             look: Look::Colour,
             glow: GlowLevel::Off,
+            look_formula: String::new(),
+            look_formula_name: String::new(),
             boot_show: ShowLength::Short,
             api_key: String::new(),
         }
@@ -394,6 +408,12 @@ impl Config {
                 .get_string(KEY_GLOW)
                 .and_then(|s| GlowLevel::from_name(&s))
                 .unwrap_or(d.glow),
+            look_formula: self
+                .get_long_string(KEY_LOOK_FORMULA, opendmd_core::synth::MAX_FORMULA_PATH)
+                .unwrap_or(d.look_formula),
+            look_formula_name: self
+                .get_string(KEY_LOOK_FORMULA_NAME)
+                .unwrap_or(d.look_formula_name),
             boot_show: self
                 .get_string(KEY_BOOT_SHOW)
                 .and_then(|s| ShowLength::from_name(&s))
@@ -435,6 +455,9 @@ impl Config {
         self.nvs.set_str(KEY_ATTRACT, &s.attract)?;
         self.nvs.set_str(KEY_LOOK, s.look.name())?;
         self.nvs.set_str(KEY_GLOW, s.glow.name())?;
+        self.nvs.set_str(KEY_LOOK_FORMULA, &s.look_formula)?;
+        self.nvs
+            .set_str(KEY_LOOK_FORMULA_NAME, &s.look_formula_name)?;
         self.nvs.set_str(KEY_BOOT_SHOW, s.boot_show.name())?;
         self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
         Ok(())

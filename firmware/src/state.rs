@@ -377,6 +377,11 @@ pub const SET_NOT_FOUND: &str = "set not found";
 /// handler turns it into a 400.
 pub const FILTER_EMPTY: &str = "no GIFs in the playlist match the platform filter";
 
+/// How [`Command::ApplyConfig`]'s reply starts when `look_formula` does
+/// not compile or is too heavy to draw over GIFs (then the compiler's
+/// sentence; nothing was saved): the handler turns it into a 400.
+pub const LOOK_FORMULA_BAD: &str = "look_formula: ";
+
 /// Why [`Command::PlayNow`] did not start the file. Each carries the message.
 #[derive(Debug)]
 pub enum PlayError {
@@ -416,6 +421,9 @@ pub enum Command {
         /// Only change a formula already on screen (a live edit), else
         /// [`PlayError::MovedOn`].
         live: bool,
+        /// Draw the formula over the file on screen instead of playing it
+        /// (`formula_look::Looks::show_over`; `""` takes it off).
+        over: bool,
         reply: mpsc::Sender<Result<(), PlayError>>,
     },
     /// Previous: play the entry of Recently played one older than the one on
