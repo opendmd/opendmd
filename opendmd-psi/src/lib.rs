@@ -245,13 +245,31 @@ pub mod worst {
         format!("{s}\ngray(v)")
     }
 
+    /// Parts inside parts, each drawn at several places: the most reading
+    /// again (stopped by the compiler's bound on it).
+    pub fn parts() -> String {
+        let mut s = String::from("part p0 { v = sin(x*3 + t)*y\ngray(v) }\n");
+        for k in 1.. {
+            let j = k - 1;
+            let next = format!(
+                "part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v\ngray(v)\n}}\n"
+            );
+            if path_len(&format!("{next}p{k}")) > 2048 || k > 4 {
+                return format!("{s}p{j}");
+            }
+            s = next;
+        }
+        unreachable!()
+    }
+
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 3] = [
+    pub const ALL: [Case; 4] = [
         ("many locals", many_locals),
         ("chain", chain),
         ("distinct terms", distinct),
+        ("parts", parts),
     ];
 }
 

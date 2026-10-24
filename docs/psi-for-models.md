@@ -1,0 +1,722 @@
+# Psi for models: writing Formulas
+
+A compact, exact reference for a language model (or a person) writing
+**Formulas** in **Psi**, OpenDMD's language for a 128 × 32 LED panel. Every
+code block marked `psi` below is compiled by the tests
+(`opendmd-psi/tests/models.rs`); every worked example's frames are checked
+against golden hashes, so this document cannot drift from the language.
+Users see the words *Formula* and *GIF*; Psi is the language's name.
+
+**The feedback loop.** Write a candidate, then run
+
+```text
+make psi-check F=candidate.psi [ARGS="--out sheet.png --frames 8 --a 0.5"]
+```
+
+It prints `ok: …` (steps, layers, registers), the loop and what it reads,
+and `panel: ~N ms a frame: light|medium|heavy`, and writes a PNG contact
+sheet of frames across one loop (over a sample picture — sky, sun, hills —
+when the formula draws over what is under it). On a compile error it prints
+`error: line L, column C: <sentence>`, the line and carets, and exits 1.
+Look at the sheet: the numbers say it runs, only the picture says it is
+right. Aim for **≤ 8 ms** (light or medium).
+
+## 1. The model
+
+A formula is evaluated **for every pixel, every frame** (50 frames a
+second). It is a few lines of arithmetic ending in a colour. There are no
+loops, arrays, strings, recursion or state between frames: each frame is a
+pure function of the pixel's position, the time, the clock, three sliders,
+and (optionally) the picture under it.
+
+Coordinates: `x` is 0 at the left column to 1 at the right (`x = px/127`);
+`y` is 0 at the **bottom** row to 1 at the top (`y = py/31`). The panel is
+4 times wider than tall: a circle needs `len((x - 0.5)*4, y - 0.5)`, or work
+in pixels (`len(px - 63.5, py - 15.5)`).
+
+Angles and waves are in **turns**: `sin(0.25)` is 1; `sin(v)` repeats every 1.
+Time `t` is seconds into the loop, always a whole number of 20 ms frames.
+
+## 2. Grammar
+
+```text
+formula   = { sep } { stmt sep } colourline { sep }      -- or layers instead of colourline
+stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
+          | "frame" "{" { assign sep } "}"    -- values once a frame (no x, y, px, py, i, ur…)
+          | NAME "=" expr                     -- each name set once in its scope
+          | "layer" [BLEND] "{" { assign | frameblock } colourline "}"
+          | "part" NAME "{" formula-body "}"  -- another formula inside this one
+colourline= "rgb" "(" e "," e "," e [ "," cover ] ")"
+          | "hsv" "(" e "," e "," e [ "," cover ] ")"
+          | "pal" "(" PALETTE "," e [ "," cover ] ")"
+          | "gray" "(" e [ "," cover ] ")"
+          | PART [ "(" e "," e [ "," cover ] ")" ]   -- a part's colour, maybe elsewhere
+          | e                                  -- a bare value: gray(e)
+expr      = or [ "?" expr ":" expr ]           -- both arms are always evaluated
+or        = and { ("or" | "||") and }
+and       = not { ("and" | "&&") not }
+not       = ("not" | "!") not | cmp
+cmp       = sum { ("<" | "<=" | ">" | ">=" | "==" | "!=") sum }
+sum       = term { ("+" | "-") term }
+term      = unary { ("*" | "/" | "%") unary }
+unary     = ("-" | "+") unary | atom
+atom      = NUMBER | NAME | FUNC "(" args ")" | PART "." NAME
+          | PART "(" e "," e ")" "." NAME | "(" expr ")"
+sep       = newline | ";"                      -- newlines inside ( ) are spaces
+NUMBER    = digits [ "." digits ] | "." digits -- no sign, no exponent
+NAME      = [A-Za-z_][A-Za-z0-9_]*
+comment   = "--" or "//" to the end of the line
+```
+
+`and`/`or` bind looser than comparisons, `not` looser than comparisons too
+(`not x < 0.5` is `not (x < 0.5)`). An expression continues onto the next
+line after an operator or inside brackets. The colour line must be the last
+line (of the formula, of a part, or of a layer). With `layer` blocks, every
+colour goes inside a layer.
+
+## 3. Numbers
+
+Q16.16 fixed point: −32,768 to 32,767.99998, steps of 1/65,536. Arithmetic
+**saturates** (no wrap-around). `a / 0` is the largest number of `a`'s sign
+(0 for 0/0); `a % 0` is 0; `%` is floored (`-1 % 3` is 2; `v % 1` is
+`frac(v)`). Comparisons and logic give 1 or 0; any non-zero is true.
+The same formula gives the same bytes on the panel, in the browser and on a
+computer.
+
+## 4. Values
+
+| name | meaning | varies per |
+|---|---|---|
+| `x`, `y` | 0..1 across (left→right) and up (bottom→top) | pixel / row |
+| `px`, `py` | column 0..127, row 0..31 from the bottom (whole numbers) | pixel / row |
+| `i` | pixel number 0..4095 from the top left: `(31 − py)·128 + px` | pixel |
+| `t` | seconds into the loop (whole 20 ms frames) | frame |
+| `hour`, `minute`, `second` | the clock: 0..23, 0..59, 0..59 (whole) | frame |
+| `a`, `b`, `c` | sliders, 0..1; a comment `-- a: speed` names one | frame |
+| `w`, `h` | 128 and 32 (constants) | — |
+| `ur`, `ug`, `ub` | red, green, blue of the picture under the formula, 0..1 | pixel |
+| `ul` | its brightness (Rec. 601: `(77R + 150G + 29B + 128)/256`), 0..1 | pixel |
+
+Alone (not over a GIF), `ur ug ub ul` are 0. Built-in names, function
+names, palette names and keywords (`loop frame layer part use`) cannot be
+set.
+
+## 5. Functions
+
+| function | result |
+|---|---|
+| `sin(v)`, `cos(v)` | −1..1, period 1 (turns); a 256-entry table, interpolated |
+| `tri(v)` | triangle in step with sin: 0 at 0, 1 at ¼, 0 at ½, −1 at ¾ |
+| `saw(v)` | −1 at 0 rising to 1 at the end of each turn |
+| `sqr(v)` | 1 for the first half of each turn, −1 for the second |
+| `abs(v)`, `floor(v)`, `frac(v)` (or `fract(v)`) | size; whole part (towards −∞); `v − floor(v)` |
+| `sqrt(v)` | square root; 0 for v ≤ 0 |
+| `min(a, b)`, `max(a, b)`, `clamp(v, lo, hi)` | limits |
+| `mix(a, b, k)` | `a + (b − a)·k` (k is not clamped) |
+| `step(edge, v)` | 1 when `v ≥ edge`, else 0 — note the order: edge first |
+| `smoothstep(e0, e1, v)` | 0..1, smooth (3k² − 2k³); `e0 > e1` gives a falling step |
+| `len(dx, dy)` | √(dx² + dy²) |
+| `atan2(dy, dx)` | angle in turns, −½..½, 0 along +x, ¼ along +y |
+| `noise(x, y, z)` | smooth value noise 0..1, one hill per unit: scale inputs (`x*8`) |
+| `hash(a, b)` | a pseudo-random 0..1 from the exact bits of a and b (`hash(px, py)`: per pixel) |
+| `select(c, a, b)`, `c ? a : b` | `a` when c ≠ 0, else `b` (both are computed) |
+
+## 6. Colours and coverage
+
+The last line is the colour:
+
+| colour | meaning |
+|---|---|
+| `rgb(r, g, b)` | each 0..1, clamped, rounded to 0..255 |
+| `hsv(h, s, v)` | hue in turns (wraps: `frac`), saturation and value clamped 0..1 |
+| `pal(P, k)` | palette P at k (clamped 0..1), **32 steps** (bands on slow ramps) |
+| `gray(v)` | black to white; a bare value `v` means `gray(v)` |
+
+Palettes: `fire` (black, red, orange, yellow, near white), `ice` = `ocean`
+(black, navy, blue, cyan, near white), `amber` (black to warm amber),
+`rainbow` (**black at 0**, red, orange, yellow, green, blue, violet, magenta,
+dark at 1 — not cyclic: for a seamless rainbow use `hsv`), `chrono` (black,
+purple, blue, white at ~0.75, purple, dark), `gray`.
+
+Every colour takes one more, optional value: **coverage**, how much of the
+pixel it covers, 0..1 (clamped): `rgb(r, g, b, k)`, `hsv(h, s, v, k)`,
+`pal(P, v, k)`, `gray(v, k)`. Where it covers less than all, what is below
+shows through: `result = below + (colour − below)·k`, in 8-bit channels.
+
+## 7. Layers
+
+```psi
+loop 4
+layer { hsv(x + t/4, 1, 1) }
+layer multiply { gray(py % 2 ? 1 : 0.6) }
+```
+
+`layer [over|add|multiply|screen|max|min] { … }` blocks stack bottom to top,
+`over` by default. Per 8-bit channel, `d` below, `s` the layer's colour:
+over `s`; add `min(255, d + s)`; multiply `d·s/255`; screen `d + s − d·s/255`;
+max; min. Then coverage moves `d` towards that result. A layer has its own
+names (two layers may both set `v`) and may have its own `frame { }`; it
+sees names set before it outside the layers, but may not set them again.
+`loop` and `part` go outside layers. Layers do not nest. A layer under an
+opaque `over` layer (no coverage, or a constant ≥ 1) is dropped (free).
+
+## 8. Over a GIF
+
+A formula can draw over the GIF playing. The bottom of the stack is the
+picture under the formula: the bottom layer, a blend other than `over`, or a
+coverage below 1, let it show through, and `ur ug ub ul` read it at the
+pixel. A formula that does neither replaces the GIF (and is refused as a
+GIF look). Alone, the picture under it is black. Looks are capped at 8 ms.
+
+## 9. Parts: one formula inside another
+
+```psi
+part p {
+  loop 8
+  wave = sin(x*2 + t/8) + sin(y*1.5 - t/4)
+  hsv(wave/4 + t/8, 0.9, 1)
+}
+layer { p }
+layer add { p(1 - x, y, 0.5) }
+```
+
+- `part NAME { … }` holds a whole formula: `loop`, `frame { }`, names,
+  layers, parts, and (optionally) a colour line. It draws nothing until
+  used. It sees **only its own names** and the built-ins: outer names are
+  invisible inside, and its names are invisible outside except as `p.v`.
+  So any formula can be pasted in unchanged.
+- **As a colour** (a whole last line of the formula or of a layer): `p`;
+  `p(x', y')` draws it as if this pixel were at (x', y') — inside, `x`, `y`
+  are those, `px = floor(x'·127 + ½)`, `py = floor(y'·31 + ½)`, `i` from
+  them; `p(x', y', k)` also covers `k` of the pixel (like every colour's
+  extra value). `p(x, y)` is just `p`.
+- **As values**: `p.v` is the value `v` set at the part's top level;
+  `p(x', y').v` the same at another place. A part used only for values needs
+  no colour line.
+- **Its own time**: inside a part, `t` is `t % (its loop)` (its `loop`, or
+  8 s like any formula), unless the formula's loop is no longer than the
+  part's. Make the formula's loop a multiple of its parts' loops.
+- A part with layers keeps its blends: draw it with `layer { p }` (no blend
+  name) or as the last line; with coverage, each of its layers covers that
+  much less.
+- `ur ug ub ul` inside a part read the picture at the real pixel.
+- Each place a part is drawn at is its own steps (counted in the 256);
+  drawn where the pixel is, a part costs what it cost alone.
+- In the web editor, the line `use Plasma as p` pastes the saved formula or
+  example called Plasma in as `part p { … }`; anything shared or saved is
+  always the pasted, self-contained text. A model should write `part`
+  blocks directly.
+
+Masks and crossfades need nothing more: a crossfade is a second layer whose
+coverage moves with `t`; a mask is a coverage taken from another part's
+value (examples 23 and 24).
+
+## 10. Limits
+
+| limit | value | error says |
+|---|---|---|
+| source | 4,096 characters (a shared link past ~1,500 may be cut by apps) | too long |
+| steps | 256 in all: per frame + per row + per pixel + one per layer | too long for the panel (N steps) |
+| live per-pixel values at once | 12 | keeps too many values at once |
+| constants + per-frame/per-row values | ~119 | too many numbers and steps |
+| nesting | 24 levels of brackets and operators (a part level counts 3) | nested too deeply / parts go too deep |
+| `loop` | 0.1..3600 s | between 0.1 and 3600 seconds |
+| re-reading parts drawn at other places | bounded | draws its parts in too many places |
+
+Unused names and parts cost nothing; constants fold (`2*3` is 6; `x/8` is
+a multiply).
+
+## 11. The cost model
+
+The panel's processor runs each step for 4,096 pixels; the estimate is
+`(160 + Σ per-pixel step costs) ns × 4096` (+ ~10 µs per per-row step).
+**Hoisting is automatic**: a value is computed as rarely as its inputs
+change — constants once, `t`/clock/slider-only values once a frame,
+`y`/`py`-only values once per row (32 times), the rest per pixel. So
+`sin(t/8)` is free and `sin(y*4)` nearly free; only per-pixel work counts.
+
+| per pixel | ns | | per pixel | ns |
+|---|---|---|---|---|
+| + − compare min max step and or `%`2ⁿ | 50 | | `sin` `cos` | 110 |
+| `*` | 86 | | `tri` `saw` `sqr` `select` `clamp` | 60 |
+| `%` (other) | 113 | | `mix` | 130 |
+| neg abs floor frac not | 40 | | `smoothstep` | 214 + a division if its edges vary |
+| `/` by a varying value, `1/v` | 685 | | `hash` | 220 |
+| `sqrt` | 539 | | `atan2` | 529 |
+| `len` | 642 | | `noise` | 855 |
+| colour `rgb` | 120 | | colour `hsv` | 195 |
+| `ur` `ug` `ub` | 35 | | `ul` | 125 |
+| each extra layer | 150 (multiply 210, screen 290; +75 with coverage) | | showing the picture under | 50 |
+
+Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs, but
+the gallery and GIF looks take ≤ 8 ms). Division by a constant is a
+multiply. One `noise` or `len` is fine; four are heavy. Per-pixel `px`
+arithmetic costs the same as `x` arithmetic.
+
+## 12. Idioms
+
+- **Seamless loops**: with `loop N`, move things by `t/N` (or `t*k/N`, k
+  whole) inside periodic functions (`sin`, `frac`, `tri`, hue).
+- **Circles**: `d = len((x - 0.5)*4, y - 0.5)` or in pixels; soft edge:
+  `smoothstep(r + 0.5, r - 0.5, d)` (in pixels).
+- **Bands and cells**: `floor(px/8)`, `px % 8`, `frac(x*4)`; checker:
+  `(floor(px/8) + floor(py/8)) % 2`.
+- **Random per column/row/pixel**: `hash(px, 7)`, `hash(py, 3)`,
+  `hash(px, py)`; changing over time in steps: `hash(px, py + floor(t*12)*61)`.
+- **Per-frame values**: put clock maths in `frame { }` (it's hoisted anyway,
+  but `frame` also catches mistakes and documents intent).
+- **Lighten/darken a GIF**: `layer multiply { gray(k) }`; tint:
+  `layer multiply { rgb(…) }`; glow: `layer add { … }` or `screen`.
+- **Shapes over a GIF**: `layer { rgb(r, g, b, shape) }` where `shape` is
+  0..1: only the shape covers.
+- **Crossfade**: `k = smoothstep(0.25, 0.75, sin(t/N)*0.5 + 0.5)`; `layer { A }`,
+  `layer { B(x, y, k) }`.
+- **Mirror / tile / zoom a part**: `p(abs(x - 0.5)*2, y)`, `p(frac(x*4), y)`,
+  `p((x - 0.5)/2 + 0.5, (y - 0.5)/2 + 0.5)`.
+- **Ranges**: keep `hsv`'s value and `rgb`'s channels in 0..1 by design
+  (`*0.5 + 0.5` maps −1..1 to 0..1); out-of-range is clamped, so overshoot
+  just flattens.
+
+## 13. Common mistakes
+
+Each block below fails to compile with the sentence in its first comment.
+
+```psi error
+-- error: there is no power operator
+gray(x ^ 2)
+```
+
+Write `x * x`. Likewise there is no `pow`, `exp`, `log`, `pi` or `tan`
+(angles are turns: use `0.5` for half a turn).
+
+```psi error
+-- error: unknown function `pow`
+gray(pow(x, 2))
+```
+
+```psi error
+-- error: to multiply, write `2 * x`
+gray(2x)
+```
+
+```psi error
+-- error: `v` is already set on line 2
+v = x
+v = v * 2
+gray(v)
+```
+
+Each name is set once: pick a new name for each step.
+
+```psi error
+-- error: inside frame { } only values that are the same for every pixel
+frame { k = x * 2 }
+gray(k)
+```
+
+```psi error
+-- error: makes the colour, so it can only be the whole last line
+v = rgb(x, y, 0)
+gray(0)
+```
+
+Colours are not values: compute numbers, then end with one colour.
+
+```psi error
+-- error: the colour has to be the last line
+rgb(x, 0, 0)
+v = 1
+```
+
+```psi error
+-- error: with layers, every colour goes inside one
+layer { gray(x) }
+gray(y)
+```
+
+```psi error
+-- error: unknown palette `blue`
+pal(blue, x)
+```
+
+```psi error
+-- error: `t` is built in
+t = 2
+gray(t)
+```
+
+```psi error
+-- error: `p` is a part: draw it as a whole last line
+part p { gray(x) }
+gray(p * 0.5)
+```
+
+To scale a part, give it coverage (`p(x, y, 0.5)` in a layer) or use one of
+its values (`p.v`).
+
+```psi error
+-- error: unknown name `k`
+k = 0.5
+part p { gray(k) }
+p
+```
+
+A part sees only its own names: put `k` inside it.
+
+```psi error
+-- error: this part has layers of its own
+part p { layer { gray(x) }
+  layer multiply { gray(y) } }
+layer add { p }
+```
+
+Mistakes that compile but look wrong (the contact sheet shows them):
+
+- `y` is **up**: `y = 0` is the bottom row.
+- Forgetting the 4:1 aspect: `len(x - 0.5, y - 0.5)` makes ellipses.
+- `step(v, edge)` instead of `step(edge, v)`: the comparison is reversed.
+- A loop that jumps: something moved by `t/3` under `loop 4`.
+- `pal(rainbow, frac(…))` shows a black band where it wraps; use `hsv`.
+- `hash(x, y)` is random per *bit* of x: use `hash(px, py)` for per-pixel.
+- `sin` is in turns: `sin(x*6.28)` is about six waves across, not one.
+- Slow `pal` ramps band (32 steps); `rgb`/`hsv` are smooth.
+- Bright everything: `add` and `screen` layers only lighten.
+
+## 14. Worked examples
+
+Each: what it is for, then the formula. Frames are checked against golden
+hashes (at 10:09:30, sliders a = 0.5, b = 0.25, c = 0.75; those that read
+what is under drawn over a test picture).
+
+### 1. Gradient
+
+The smallest formula: a value as the last line is its gray.
+
+```psi example=gradient
+-- left to right: black to white
+gray(x)
+```
+
+### 2. Still sky
+
+A colour that depends only on `y`: computed once per row, nearly free.
+
+```psi example=sunset-sky
+-- a still sky: deep blue at the top to orange at the horizon
+rgb(1 - y*0.8, 0.45 - y*0.3, 0.2 + y*0.6)
+```
+
+### 3. Scrolling rainbow
+
+Seamless motion: `t/4` with `loop 4` comes back to where it started.
+
+```psi example=scrolling-rainbow
+loop 4
+-- the rainbow slides left once a loop (t/4 with loop 4: seamless)
+hsv(x + t/4, 1, 1)
+```
+
+### 4. Checkerboard
+
+Cells from whole pixels: `floor` and `%`.
+
+```psi example=checkerboard
+-- 8x8-pixel squares; floor makes whole cells, % 2 alternates them
+cell = (floor(px/8) + floor(py/8)) % 2
+rgb(cell*0.9, cell*0.2 + 0.1, 0.3)
+```
+
+### 5. Plasma
+
+Several waves summed into a hue: the classic.
+
+```psi example=plasma
+loop 8
+wave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)
+hsv(wave/6 + t/8, 0.9, 1)
+```
+
+### 6. Rings
+
+Distance from the middle with the 4:1 aspect corrected.
+
+```psi example=rings
+loop 4
+-- x counts 4 times: the panel is 4 times wider than tall
+d = len((x - 0.5)*4, y - 0.5)
+pal(rainbow, frac(d*1.5 - t/2))
+```
+
+### 7. Noise fire
+
+`noise` scaled and moving up, fading with height, through a palette.
+
+```psi example=noise-fire
+loop 4
+-- noise rises (y*3 - t*... moves it up); hotter at the bottom
+heat = noise(x*10, y*3 - t, t/2) * (1.4 - y*1.2)
+pal(fire, clamp(heat, 0, 1))
+```
+
+### 8. Rain
+
+Per-column randomness with `hash(px, …)`.
+
+```psi example=rain
+loop 4
+-- one made-up random number per column: its speed and offset
+r = hash(px, 7)
+drop = frac(y + t*(1 + floor(r*3))/4 + r)
+glow = max(0, 1 - drop*6) * step(0.5, r)
+rgb(glow*0.4, glow*0.7, glow)
+```
+
+### 9. Starfield
+
+Per-row randomness: three speeds of streaks.
+
+```psi example=starfield
+loop 8
+-- each row: no star, or a slow, medium or fast one
+r = hash(py, 3)
+speed = floor(r*4)
+p = frac(x*2 + t*speed/4 + r*5)
+gray(max(0, 1 - p*(14 - speed*3)) * speed/3)
+```
+
+### 10. Bouncing ball
+
+A shape whose position is worked out once a frame, with a soft edge.
+
+```psi example=bouncing-ball
+loop 2
+-- the ball's centre in pixels: across and back with tri, two bounces with abs(sin)
+frame { bx = 63.5 + 55*tri(t/2); by = 4.5 + 22*abs(sin(t/2)) }
+d = len(px - bx, py - by)
+-- 1 inside 3.5 px, 0 past 4.5 px: a soft-edged disc
+ball = smoothstep(4.5, 3.5, d)
+rgb(ball, ball*0.6, 0.15 + 0.1*y)
+```
+
+### 11. Spotlight
+
+A soft light on a path; values kept in range with `clamp`.
+
+```psi example=spotlight
+loop 8
+-- a soft disc moving along a figure of eight, over a dim floor
+dx = (x - 0.5 - 0.35*sin(t/8))*4; dy = y - 0.5 - 0.3*sin(t/4)
+light = clamp(1.3 - (dx*dx + dy*dy)*4, 0.12, 1)
+rgb(light, light*0.9, light*0.7)
+```
+
+### 12. Stripes with sliders
+
+Sliders `a` and `b`, named by comments, shaping the pattern.
+
+```psi example=slider-stripes
+loop 4
+-- a: stripe width
+-- b: tilt
+size = 6 + a*24
+band = sin((px + py*(b*4 - 2))/size - t/2)
+rgb(1, band*0.5 + 0.5, band*0.5 + 0.5)
+```
+
+### 13. Seconds bar
+
+Following the clock: a bar filling every minute, with ticks.
+
+```psi example=seconds-bar
+-- a bar that fills across the panel every minute; the ticks mark 5 s
+frame { s = second/60 }
+fill = step(x, s)
+tick = step(px % 21, 0.5) * step(py, 3)
+rgb(fill*0.2 + tick, fill*0.8 + tick, fill + tick)
+```
+
+### 14. Dot clock
+
+Hours as lit dots and minutes as a bar: comparisons as masks.
+
+```psi example=dot-clock
+-- top: twelve dots, the hours lit; bottom: a bar, one pixel a minute
+frame { hr = hour % 12; mn = minute }
+dot = step(abs(px % 10 - 4.5), 2.5) * step(abs(py - 22), 3) * step(px, 119)
+lit = step(floor(px/10), hr - 0.5)
+bar = step(abs(py - 8), 2) * step(px - 4, mn) * step(4, px)
+rgb(dot*(0.15 + lit*0.85), dot*(0.1 + lit*0.5) + bar*0.8, bar)
+```
+
+### 15. Sky by the time of day
+
+A whole-day cycle from `hour` and `minute`.
+
+```psi example=day-sky
+-- follows the clock: dark at night, blue by day, warm near sunrise and sunset
+frame { day = (hour + minute/60)/24; sun = -cos(day) }
+light = clamp(sun*1.5 + 0.3, 0, 1)
+warm = clamp(1 - abs(sun)*3, 0, 1) * (1 - y)
+rgb(0.02 + light*(0.6 - 0.4*y) + warm*0.9, 0.02 + light*(0.8 - 0.35*y) + warm*0.35, 0.1 + light*(0.9 - 0.1*y))
+```
+
+### 16. Layers
+
+A picture, scanlines multiplied on, a glow added with coverage.
+
+```psi example=layered-glow
+loop 4
+-- a plasma, scanlines multiplied on, then a warm glow added in the middle
+dx = x - 0.5; dy = y - 0.5
+layer {
+  wave = sin(x*2 + t/4) + sin(y*1.5 - t/2)
+  hsv(wave/4 + t/4, 0.9, 1)
+}
+layer multiply { gray(py % 2 ? 1 : 0.6) }
+layer add { rgb(1, 0.8, 0.4, 0.35 - (dx*dx*4 + dy*dy)*1.2) }
+```
+
+### 17. Scanlines over a GIF
+
+The cheapest look: a `multiply` layer that leaves white rows as they are.
+
+```psi example=scanlines-look
+-- over a GIF: every other row darker; white leaves the GIF as it is
+layer multiply { gray(py % 2 ? 1 : 0.55) }
+```
+
+### 18. Old photo over a GIF
+
+Reading the picture under: its colour and brightness, mixed by slider `a`.
+
+```psi example=sepia-look
+-- over a GIF: its brightness, tinted; a: how much (0: the GIF as it is)
+l = ul
+rgb(mix(ur, l*1.1 + 0.08, a), mix(ug, l*0.92 + 0.04, a), mix(ub, l*0.65, a))
+```
+
+### 19. Glitter over a GIF
+
+Sparkles `screen`ed on: they only lighten.
+
+```psi example=glitter-look
+loop 2
+-- over a GIF: a new handful of sparkles twelve times a second, screened on
+s = hash(px, py + floor(t*12)*61)
+sparkle = step(0.985, s) * (0.6 + 0.4*sin(t*6 + s*40))
+layer screen { rgb(sparkle, sparkle*0.9, sparkle*0.6) }
+```
+
+### 20. A badge over a GIF
+
+A shape with coverage: only the dot covers the GIF.
+
+```psi example=corner-badge
+loop 2
+-- over a GIF: a pulsing dot in the top-right corner; elsewhere the GIF shows
+d = len(px - 121, py - 25)
+k = smoothstep(3.5, 2.5, d)
+layer { rgb(1, 0.2, 0.2, k*(0.7 + 0.3*sin(t/2))) }
+```
+
+### 21. Kaleidoscope (a part drawn elsewhere)
+
+A pasted formula drawn at folded coordinates.
+
+```psi example=mirrored
+loop 8
+part plasma {
+  loop 8
+  wave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)
+  hsv(wave/6 + t/8, 0.9, 1)
+}
+-- folded twice: one quarter, mirrored into every corner
+plasma(abs(x - 0.5)*2, abs(y - 0.5)*2)
+```
+
+### 22. Tiles (a part repeated)
+
+`frac` repeats a part across the panel.
+
+```psi example=tiled
+loop 4
+part ring {
+  loop 4
+  d = len((x - 0.5)*1, y - 0.5)
+  pal(ice, frac(d*3 - t/4))
+}
+-- four square tiles across: frac repeats the part's 0..1 every quarter
+ring(frac(x*4), y)
+```
+
+### 23. Mask (a part's value as coverage)
+
+One part's value decides where another shows.
+
+```psi example=masked
+loop 4
+part stripes {
+  loop 4
+  s = clamp(sin((px + py)/10 - t/2)*1.5 + 0.5, 0, 1)
+  gray(s)
+}
+part plasma {
+  loop 8
+  wave = sin(x*2 + t/8) + sin(y*1.5 - t/4)
+  hsv(wave/4 + t/8, 0.9, 1)
+}
+-- the plasma shows where the stripes are white, dark blue elsewhere
+layer { rgb(0, 0, 0.2) }
+layer { plasma(x, y, stripes.s) }
+```
+
+### 24. Crossfade (two parts over time)
+
+A second layer whose coverage moves with `t`.
+
+```psi example=crossfade
+loop 16
+part bars {
+  loop 4
+  bar = max(0, 1 - abs(y - 0.5 - 0.35*sin(t/4))*5)
+  rgb(bar, bar*0.6, bar*0.2)
+}
+part rings {
+  loop 4
+  d = len((x - 0.5)*4, y - 0.5)
+  pal(rainbow, frac(d*1.5 - t/2))
+}
+-- 0 to 1 and back over the loop, resting at each end
+k = smoothstep(0.25, 0.75, sin(t/16)*0.5 + 0.5)
+layer { bars }
+layer { rings(x, y, k) }
+```
+
+### 25. Picture in picture
+
+A part squeezed into a window, its `px`/`py` following.
+
+```psi example=picture-in-picture
+loop 4
+part candy {
+  loop 4
+  -- px and py inside follow the place it is drawn at
+  band = sin((px + py)/12 - t/2)
+  s = clamp(band*1.5 + 0.5, 0, 1)
+  rgb(1, s, s)
+}
+-- a dark blue background, and the candy stripes in a window on the right
+inside = step(88, px) * step(px, 123) * step(4, py) * step(py, 27)
+layer { rgb(0.05, 0.08, 0.2) }
+layer { candy((px - 88)/35, (py - 4)/23, inside) }
+```
+
+## 15. In the product (not built)
+
+This reference and `psi-check` are tooling only: nothing in OpenDMD calls a
+model. If the owner wants it later, the natural place is the Formulas
+editor: a "Describe an effect…" box whose text, with this document as the
+system prompt, asks a model for a formula; the editor compiles the answer
+locally (errors and cost come from the same compiler), shows it in the
+preview, and could loop a few times on compile errors before showing
+anything. The decision (provider, keys, cost, privacy) is the owner's.

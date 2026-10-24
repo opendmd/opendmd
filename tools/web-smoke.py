@@ -3047,7 +3047,7 @@ def fx_gif_checks(page: Page, base: str, overlay: Path) -> None:
 
 FORMULAS_JSON = REPO / "opendmd-web" / "www" / "formulas.json"
 # An example that draws over a GIF: it reads what is under it, or has layers.
-OVER_RE = re.compile(r"\b(ur|ug|ub|ul|layer)\b")
+OVER_RE = re.compile(r"\b(ur|ug|ub|ul)\b|layer (multiply|add|screen|max|min)")
 
 
 def open_formulas(page: Page) -> None:
@@ -3219,6 +3219,7 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     shot(page, "formulas-gif", "laptop")
     page.context.close()
     formulas_more(browser, base, errors)
+    formulas_combine_checks(browser, base, errors)
 
 
 def clear_toasts(page: Page) -> None:
@@ -3370,6 +3371,35 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
 
 def psi_frames(page: Page, sel: str) -> int:
     return int(page.get_attribute(sel, "data-frames") or 0)
+
+
+def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
+    """`use <name> as p` pastes an example in as `part p { … }` once the
+    caret is off its line (the text stands alone), says plainly when there is
+    no formula by that name, and the combined formula plays."""
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#formulas")
+    formula_editor(page, "loop 8\nuse plasma as p\nlayer { p(1 - x, y) }")
+    src = page.input_value("#psi-src")
+    check("part p {\n  -- Plasma\n  loop 8\n" in src and "use " not in src and page.get_attribute("#psi-ed", "data-err") is None
+          and page.get_attribute("#psi-ed", "data-steps") is not None, f"formulas: use … as p pastes the example in as a part ({src[:60]!r})")
+    page.fill("#psi-src", "\nr")
+    page.focus("#psi-src")
+    page.keyboard.press("Control+Home")
+    page.keyboard.type("use Rings as r", delay=30)
+    page.wait_for_timeout(400)
+    typed, said = page.input_value("#psi-src"), page.inner_text("#psi-err")
+    typing = typed == "use Rings as r\nr" and "pastes in a formula" in said
+    page.keyboard.press("ArrowDown")
+    page.wait_for_timeout(500)
+    moved = "part r {" in page.input_value("#psi-src")
+    check(typing and moved, f"formulas: a use line waits while the caret is on it ({typed!r}, {said!r}) and pastes when it moves off ({moved})")
+    page.fill("#psi-src", "use No such thing as q\nq")
+    page.wait_for_timeout(400)
+    err = page.inner_text("#psi-err")
+    check(page.get_attribute("#psi-ed", "data-err") == "1" and "no formula called “No such thing”" in err,
+          f"formulas: a use line naming nothing says so ({err!r})")
+    page.context.close()
 
 
 def formulas_more(browser, base: str, errors: list[str]) -> None:
