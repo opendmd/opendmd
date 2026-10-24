@@ -4,7 +4,7 @@
 //! test: the formula is a static.
 
 use super::*;
-use opendmd_psi::golden::{fnv, inputs, FRAMES};
+use opendmd_psi::golden::{fnv, inputs, picture, FRAMES, OVER};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -54,6 +54,30 @@ fn formulas() {
     );
     assert!(compile("gray(x)"));
     assert!(error().is_empty());
+
+    // Over a picture: the golden frames over the golden picture.
+    // SAFETY: the static buffer, written before the next call.
+    picture(unsafe { core::slice::from_raw_parts_mut(under(), W * H * 3) });
+    for &(name, src, ms, over, want) in OVER {
+        assert!(compile(src), "{name}: {}", error());
+        let i = inputs(ms);
+        if over {
+            frame_over(ms, i.hour, i.minute, i.second, i.a, i.b, i.c);
+        } else {
+            frame(ms, i.hour, i.minute, i.second, i.a, i.b, i.c);
+        }
+        let got = fnv(unsafe { core::slice::from_raw_parts(pixels(), W * H * 3) });
+        assert_eq!(got, want, "{name} at {ms} ms");
+    }
+    assert!(compile(
+        "layer multiply { gray(ul) }\nlayer add { gray(x, 0.5) }"
+    ));
+    let i = info();
+    assert_eq!(
+        (i[5] & 32, i[7]),
+        (32, 2),
+        "draws over what is under, two layers"
+    );
 }
 
 /// The examples gallery: every one compiles, is short, and is light or

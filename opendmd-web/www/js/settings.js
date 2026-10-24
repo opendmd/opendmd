@@ -3,8 +3,8 @@
 // tabs, `#settings/play|look|time|device` (bare `#settings` is the first);
 // only the open tab is in the page. Playback (brightness and its maximum
 // js/power.js, playlist, platforms, shuffle, how long each GIF stays),
-// Look (colour, glow, mirroring on Now, the transition, Start-up
-// js/boot.js), Schedule (time, schedule, night mode, Follow RePlayOS) and
+// Look (colour, glow, a formula over every GIF, mirroring on Now, the
+// transition, Start-up js/boot.js), Schedule (time, schedule, night mode, Follow RePlayOS) and
 // Device (status, the playback cache, network — its own Save; a new name
 // is live at once —, panel timing js/panel.js, firmware and security
 // js/firmware.js, About). Everything saves as it changes.
@@ -72,6 +72,26 @@ export async function mount(el) {
   f.brightness.addEventListener('input', () => { held = 1; later(); });
   for (const k of ['shuffle', 'set']) f[k].onchange = () => save([k], play);
   for (const k of ['look', 'glow']) f[k].onchange = () => save([k], looks);
+  // A formula over every GIF: one saved in Formulas (this browser), or an
+  // example that draws over a GIF, or none; the one set elsewhere stays listed.
+  const lf = h('select', { id: 'st-look-formula' });
+  let lfs = [];
+  async function lookFormulas() {
+    const [ex, { fpath }] = await Promise.all([fetch('formulas.json').then((r) => r.json()).catch(() => []), import('./psishow.js')]);
+    const mine = store.get('psi.mine', []), cf = app.config || {};
+    lfs = [...(Array.isArray(mine) ? mine : []), ...(Array.isArray(ex) ? ex.filter((x) => /\b(ur|ug|ub|ul|layer)\b/.test(x.src)) : [])]
+      .filter((x) => typeof x?.src == 'string').map((x) => ({ name: x.name || 'Formula', path: fpath(x) }));
+    if (cf.look_formula && !lfs.some((x) => x.path === cf.look_formula)) lfs.unshift({ name: cf.look_formula_name || 'A formula', path: cf.look_formula });
+    clear(lf, h('option', { value: '' }, 'None'), lfs.map((x, k) => h('option', { value: k }, x.name)));
+    lf.value = String(lfs.findIndex((x) => x.path === cf.look_formula));
+    if (lf.value === '-1') lf.value = '';
+  }
+  lf.onchange = () => looks(async () => {
+    const x = lfs[lf.value];
+    await app.src.putConfig({ look_formula: x?.path || '', look_formula_name: x?.name || '' });
+    await app.refreshConfig();
+  });
+  on('config', lookFormulas);
 
   // Platforms: one row, "All (60)" or the ones picked, and a sheet to
   // choose them (counted per manifest text; the rare ones folded away).
@@ -161,6 +181,8 @@ export async function mount(el) {
       return tab('look',
         h('div.card', lookH, h('p.cap', 'How the panel draws every GIF'),
           h('div.form.f2', h('label.stack', 'Colour', f.look), h('label.stack', 'Phosphor glow', f.glow)),
+          (lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', lf)),
+          h('p.cap', 'A formula drawn over everything the panel plays, before the colour and glow: scanlines, a colour grade, a clock in the corner. Make or pick one in Formulas.'),
           h('label', { style: 'margin-top:12px' }, mirror, 'Mirror the panel on Now'), h('p.cap', 'Now shows what the panel is playing; off saves the player a download for each GIF (this browser only)')),
         h('div.card', { id: 'st-trans-card' }, transH, h('p.cap', 'How the panel moves from one GIF to the next'),
           h('div.form.f2', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),

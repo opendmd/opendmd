@@ -528,30 +528,30 @@ fn colour_step<const N: usize>(
     let mut row = [[0u8; 3]; W];
     let src = &mut row[..px.len()];
     colour(s, &plain, base, t, src);
-    let a = s.arg(v[n - 1], base);
-    // One loop per blend, so the blend is not a branch per channel (an
-    // indirect jump on the ESP32); a layer covering all of it (the usual:
-    // no coverage given) skips the coverage's multiply.
-    macro_rules! by_mode {
-        ($($m:path),*) => {
-            match (mode, a) {
-                $(
-                    ($m, Arg::Sc(k)) if k >= ONE => blend_all::<{ $m }>(px, src),
-                    ($m, Arg::Sc(k)) => blend_lane::<{ $m }, S>(px, src, S(k)),
-                    ($m, Arg::Lane(k)) => blend_lane::<{ $m }, L>(px, src, L(k)),
-                )*
-                _ => {}
+    // A layer that covers everything (the usual: no coverage given) is one
+    // loop per blend, so the blend is not a branch per channel (an indirect
+    // jump on the ESP32); one with a coverage, a lane or a value read with
+    // a stride of 0, shares one loop.
+    let one;
+    let (k, stride) = match s.arg(v[n - 1], base) {
+        Arg::Sc(v) if v >= ONE => {
+            match mode {
+                fixed::BLEND_ADD => blend_all::<{ fixed::BLEND_ADD }>(px, src),
+                fixed::BLEND_MULTIPLY => blend_all::<{ fixed::BLEND_MULTIPLY }>(px, src),
+                fixed::BLEND_SCREEN => blend_all::<{ fixed::BLEND_SCREEN }>(px, src),
+                fixed::BLEND_MAX => blend_all::<{ fixed::BLEND_MAX }>(px, src),
+                fixed::BLEND_MIN => blend_all::<{ fixed::BLEND_MIN }>(px, src),
+                _ => px.copy_from_slice(src),
             }
-        };
-    }
-    by_mode!(
-        fixed::BLEND_OVER,
-        fixed::BLEND_ADD,
-        fixed::BLEND_MULTIPLY,
-        fixed::BLEND_SCREEN,
-        fixed::BLEND_MAX,
-        fixed::BLEND_MIN
-    );
+            return;
+        }
+        Arg::Lane(p) => (p, 1),
+        Arg::Sc(v) => {
+            one = v;
+            (&one as *const i32, 0)
+        }
+    };
+    blend_cover(px, src, k, stride, mode);
 }
 
 #[inline(never)]
@@ -563,14 +563,18 @@ fn blend_all<const M: u8>(px: &mut [[u8; 3]], src: &[[u8; 3]]) {
     }
 }
 
+/// `px` (what is below) with `src` blended on by `mode`, covered by the
+/// values at `k`, `stride` apart (0: one value for the lane).
 #[inline(never)]
-fn blend_lane<const M: u8, A: Src>(px: &mut [[u8; 3]], src: &[[u8; 3]], mut a: A) {
+fn blend_cover(px: &mut [[u8; 3]], src: &[[u8; 3]], mut k: *const i32, stride: usize, mode: u8) {
     for (d, s) in px.iter_mut().zip(src) {
-        let k = a.at(0);
+        // SAFETY: `k` is a lane of at least `px.len()` values (stride 1) or
+        // one value (stride 0), alive for the call.
+        let a = unsafe { *k };
         for c in 0..3 {
-            d[c] = fixed::cover(d[c], fixed::blend(M, d[c], s[c]), k);
+            d[c] = fixed::cover(d[c], fixed::blend(mode, d[c], s[c]), a);
         }
-        a.step(1);
+        k = k.wrapping_add(stride);
     }
 }
 
