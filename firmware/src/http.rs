@@ -2030,7 +2030,8 @@ fn formula_json(_: &str) -> String {
 /// `formula_look` in the status: `null`, or what is drawn over the picture
 /// (`"setting"`, or `"over_gif"`: the editor's) with the heap its buffers
 /// hold (0: no room, the picture goes up as it is), its mean render (µs)
-/// and its own frame time (ms; 0: it only follows the picture).
+/// and its own frame time (ms; 0: it only follows the picture), and
+/// `error` when the setting's formula can no longer be drawn.
 fn formula_look_json() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let source = match crate::formula_look::SOURCE.load(Relaxed) {
@@ -2042,7 +2043,13 @@ fn formula_look_json() -> String {
     let (us, ms, held) = opendmd_core::fx_psi::look_stats();
     #[cfg(not(feature = "psi"))]
     let (us, ms, held) = (0, 0, 0);
-    format!(r#"{{"source":"{source}","held":{held},"frame_us":{us},"frame_ms":{ms}}}"#)
+    // The setting's formula no longer builds (a firmware change): why.
+    let error = crate::formula_look::ERROR
+        .lock()
+        .ok()
+        .filter(|e| !e.is_empty())
+        .map_or(String::new(), |e| format!(r#","error":{}"#, json_string(&e)));
+    format!(r#"{{"source":"{source}","held":{held},"frame_us":{us},"frame_ms":{ms}{error}}}"#)
 }
 
 /// The end of the status object: `"look","glow","glow_held","formula_look","attract_live",

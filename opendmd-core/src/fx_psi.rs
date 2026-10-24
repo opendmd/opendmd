@@ -440,6 +440,11 @@ impl Effect for PsiFx {
 /// 50 fps.
 pub const LOOK_MAX_EST_US: u32 = 8_000;
 
+/// Why a formula that never lets the picture under it show through (it
+/// reads none of `ur ug ub ul`, and its bottom layer covers every pixel) is
+/// not drawn over GIFs: the GIF would be hidden.
+pub const COVERS: &str = "this Formula covers the GIF entirely: let it show through with a layer, ur ug ub ul, or a coverage";
+
 /// A formula drawn over whatever the player shows — a GIF, a transition, a
 /// live item: the Look setting's formula, or the editor's "over the GIF".
 /// Its `ur ug ub ul` read the picture under it and its layers blend onto
@@ -470,6 +475,10 @@ pub struct FormulaLook {
     next: Option<Duration>,
     /// Draw every row at the next `apply` (just taken, or a new formula).
     fresh: bool,
+    /// Frames of its own still left out of the governor: the first after a
+    /// take, a new formula or a new file (a cold flash cache, the file's
+    /// open in the same tick).
+    cold: u8,
 }
 
 struct LookBuffers {
@@ -513,6 +522,7 @@ impl FormulaLook {
             t0: None,
             next: None,
             fresh: true,
+            cold: Governor::SKIP,
         };
         look.set(&q, est);
         Ok(look)
@@ -526,6 +536,14 @@ impl FormulaLook {
 
     fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
         psi::compile_into(&q.src, prog)?;
+        if !prog.over() {
+            prog.clear();
+            return Err(psi::Error {
+                start: 0,
+                end: 0,
+                msg: COVERS.to_string(),
+            });
+        }
         let est = prog.esp32_us();
         if est > LOOK_MAX_EST_US {
             prog.clear();
@@ -552,8 +570,37 @@ impl FormulaLook {
             self.gov = g;
         }
         self.gov.edited();
+        self.cold = Governor::SKIP;
         self.fresh = true;
         self.next = None;
+    }
+
+    /// A new file is on screen: its first frames (its open in the same
+    /// tick, a cold cache) do not steer the governor.
+    pub fn new_file(&mut self) {
+        self.cold = Governor::SKIP;
+    }
+
+    /// Its mean render time, µs (the governor's).
+    pub fn avg_us(&self) -> u32 {
+        self.gov.avg_us()
+    }
+
+    /// The picture the panel shows while it is held and drawn: its own;
+    /// `None` when the panel shows the picture under it as it is.
+    pub fn shown(&self) -> Option<&Canvas> {
+        match &self.held {
+            Some(b) if !self.fresh => Some(&b.out),
+            _ => None,
+        }
+    }
+
+    /// Let the buffers go without asking for a repaint: the panel keeps
+    /// showing the look's last picture (paused: nothing is pushed until
+    /// it plays again, and the next take draws every row).
+    pub fn let_go(&mut self) {
+        self.held = None;
+        LOOK_STATS[2].store(0, Ordering::Relaxed);
     }
 
     /// Another formula in place (a live edit from the editor): the clock,
@@ -621,6 +668,7 @@ impl FormulaLook {
         b.scratch.reset();
         self.held = Some(b);
         self.fresh = true;
+        self.cold = Governor::SKIP;
         LOOK_STATS[2].store(Self::BUFFER_BYTES as u32, Ordering::Relaxed);
         true
     }
@@ -736,7 +784,9 @@ impl FormulaLook {
         // governor (with the decoding next to it); any other only the mean.
         if let (Some(c), true) = (clock, rows == u32::MAX) {
             let us = c().wrapping_sub(t_start).saturating_add(extra_us);
-            if governed && own {
+            if governed && own && self.cold > 0 {
+                self.cold -= 1;
+            } else if governed && own {
                 if self.gov.observe(us, grid) {
                     log::info!(
                         "formula look: {} us a frame -> {} ms frames (asked {grid})",
@@ -1294,7 +1344,11 @@ mod tests {
 
     #[test]
     fn a_look_is_held_to_what_fits_over_a_gif() {
-        let e = FormulaLook::from_path(&super::path("gray(noise(x*8, y, t) + noise(x, y*8, t) + len(x, y) + len(y, x) + atan2(x, y) + sqrt(x) + noise(y, x, t))", "")).unwrap_err();
+        // One that hides the GIF is no look.
+        let e = FormulaLook::from_path(&super::path("hsv(x, 1, 1)", "")).unwrap_err();
+        assert_eq!(e.msg, COVERS);
+        assert!(FormulaLook::from_path(&super::path("layer { hsv(x, 1, 1) }\nlayer add { gray(0.1) }", "")).is_err());
+        let e = FormulaLook::from_path(&super::path("layer multiply { gray(noise(x*8, y, t) + noise(x, y*8, t) + len(x, y) + len(y, x) + atan2(x, y) + sqrt(x) + noise(y, x, t)) }", "")).unwrap_err();
         assert!(
             e.msg
                 .starts_with("this formula is too heavy to draw over GIFs (about "),
@@ -1359,8 +1413,69 @@ mod tests {
             look.apply(t, &mut under, 0);
             t = look.due().unwrap();
         }
-        let st = look_stats();
         set_clock(None);
-        assert_eq!(st.1, 20, "{st:?}");
+        assert_eq!(look.gov.delay_ms(10), 20, "100 fps asked, 20 ms frames");
+    }
+
+    #[test]
+    fn the_glow_fades_towards_the_looks_picture() {
+        use crate::canvas::DirtyMap;
+        use crate::look::{Glow, GlowLevel};
+        // Pixel (0, 0) after a look blit, a darker GIF frame on its row (so
+        // the row fades) and one glow step towards `to_look`'s target.
+        let run = |to_look: bool| {
+            let mut look = FormulaLook::from_path(&super::path("layer add { gray(0.25) }", "")).unwrap();
+            assert!(look.take());
+            let mut under = Canvas::new();
+            under.set(0, 0, Rgb::new(40, 40, 40));
+            under.set(1, 0, Rgb::new(200, 200, 200));
+            under.dirty_mut().mark_all();
+            let mut glow = Glow::new(GlowLevel::Long);
+            let mut push = DirtyMap::default();
+            let out = look.apply(Duration::ZERO, &mut under, 0);
+            assert!(glow.frame(out, &mut push));
+            out.dirty_mut().clear();
+            let lit = look.shown().unwrap().get(0, 0);
+            under.set(1, 0, Rgb::new(0, 0, 0));
+            let out = look.apply(Duration::from_millis(20), &mut under, 0);
+            glow.frame(out, &mut push);
+            out.dirty_mut().clear();
+            match to_look {
+                true => glow.step(look.shown().unwrap(), &mut push),
+                false => glow.step(&under, &mut push),
+            }
+            (lit, glow.shown().unwrap()[0])
+        };
+        let (lit, kept) = run(true);
+        assert_eq!(lit, Rgb::new(104, 104, 104), "the look brightened it");
+        assert_eq!(kept, lit, "towards the look's picture it stays");
+        let (_, faded) = run(false);
+        assert!(faded.r < lit.r, "towards the GIF alone it fades: the step ran");
+    }
+
+    #[test]
+    fn a_new_files_open_does_not_steer_the_look() {
+        let ms = Duration::from_millis;
+        set_clock(Some(fake_clock));
+        let mut look = FormulaLook::from_path(&super::path("loop 4\nlayer add { gray(t/4, 0.2) }", "")).unwrap();
+        assert!(look.take());
+        let mut under = picture();
+        let mut t = ms(0);
+        for _ in 0..10 {
+            look.apply(t, &mut under, 0);
+            t = look.due().unwrap();
+        }
+        assert_eq!(look.gov.delay_ms(20), 20, "7.5 ms a frame fits 50 fps");
+        // A new file: its open (300 ms in the same tick) is left out.
+        look.new_file();
+        look.apply(t, &mut under, 300_000);
+        t = look.due().unwrap();
+        look.apply(t, &mut under, 300_000);
+        assert_eq!(look.gov.delay_ms(20), 20, "the level is unchanged");
+        // Later, a frame that really takes 300 ms slows it.
+        t = look.due().unwrap();
+        look.apply(t, &mut under, 300_000);
+        set_clock(None);
+        assert!(look.gov.delay_ms(20) > 20);
     }
 }

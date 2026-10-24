@@ -237,8 +237,11 @@ On your player:
   colour and the phosphor glow. Settings › Look shows which formula it is
   (**Formula over every GIF**) and turns it off (**None**).
 
-A formula that is too heavy to draw over GIFs (more than about 8 ms a frame
-on the panel) is refused with a sentence saying so. When the player is
+A formula that would hide the GIF entirely (it reads none of `ur`, `ug`,
+`ub`, `ul` and nothing shows through it), or that is too heavy to draw over
+GIFs (more than about 8 ms a frame on the panel), is refused with a
+sentence saying so; Settings only lists formulas that let the GIF show
+through. When the player is
 short of memory (several downloads at once, say) it shows the GIFs without
 the formula for a while.
 

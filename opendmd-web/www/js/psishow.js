@@ -55,6 +55,8 @@ async function pump() {
   try {
     await app.src.json('POST', '/api/play', { path: f.src ? fpath(f) : '', live, ...(o && { over: true }) }, 8000);
     if (!live) toast(!f.src ? 'Taken off the panel' : o ? `Over the panel’s GIF: ${name}` : `On the panel: ${name}`, 'ok');
+    // Over the GIF, it needs the player's memory: say so if it is waiting for it.
+    if (o && f.src && !live) setTimeout(() => app.refreshStatus?.().then((st) => { if (shown === f && st?.formula_look?.held === 0) toast('The panel is short of memory just now: it draws this over the GIF as soon as there is room', 'bad'); }).catch(() => {}), 1500);
   } catch (e) {
     if (shown === f) { shown = null; if (next?.[0] === f) next = null; }
     const s = e.status;

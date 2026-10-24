@@ -203,7 +203,14 @@ impl SafeStart {
 /// 16 KB block (the LZW's largest piece) must exist. Called on the main task
 /// inside the tick; counts refusals.
 fn transition_gate(need: usize) -> bool {
-    let ok = free_heap() as usize >= need + config::TRANSITION_HEAP_RESERVE
+    // A formula look held is not given back during a transition: keep more
+    // room instead (the dissolve is cut, not the look).
+    let look = if formula_look::HELD.load(Ordering::Relaxed) {
+        config::LOOK_TRANSITION_MARGIN
+    } else {
+        0
+    };
+    let ok = free_heap() as usize >= need + config::TRANSITION_HEAP_RESERVE + look
         && largest_free_block() >= 16 * 1024;
     if !ok {
         TRANSITIONS_CUT.fetch_add(1, Ordering::Relaxed);
@@ -557,55 +564,52 @@ fn main() -> Result<()> {
                 Command::PlayNow {
                     path,
                     live,
-                    over: true,
+                    over,
                     reply,
                 } => {
-                    // Drawn over the file on screen, not played: its
-                    // ordinal ends it (`Looks::started`).
-                    let ordinal = engine
-                        .as_ref()
-                        .and_then(|e| e.now_playing())
-                        .map(|p| p.ordinal);
-                    let shown = match engine.as_mut() {
-                        Some(e) => e.display_mut(&mut canvas),
-                        None => &mut canvas,
-                    };
-                    let outcome = looks.show_over(&path, live, ordinal, shown);
-                    match &outcome {
-                        Ok(()) if path.is_empty() => log::info!("over the GIF: off"),
-                        Ok(()) => log::info!("over the GIF: {}", short(&path)),
-                        Err(e) => log::warn!("over the GIF: {}: {e:?}", short(&path)),
-                    }
-                    let _ = reply.send(outcome);
-                }
-                Command::PlayNow {
-                    path,
-                    live,
-                    over: false,
-                    reply,
-                } => {
-                    // One open, here between frames (a directory scan: ~6 ms
-                    // in a bucket, ~330 ms in `gifs/Consoles`), then the file
-                    // takes the screen at the next tick under the usual dwell.
-                    // A formula over a formula is a live edit, in place.
-                    let outcome = match retune(engine.as_mut(), &path, epoch.elapsed()) {
-                        Some(r) => {
-                            // No new start (the ordinal stays), but status
-                            // names the formula now on the panel.
-                            if r.is_ok() {
-                                if let Ok(mut s) = status.lock() {
-                                    s.path.clone_from(&path);
-                                }
-                            }
-                            r
+                    let outcome = if over {
+                        // Drawn over the file on screen, not played: its
+                        // ordinal ends it (`Looks::started`); drawn at once.
+                        let ordinal = engine
+                            .as_ref()
+                            .and_then(|e| e.now_playing())
+                            .map(|p| p.ordinal);
+                        let shown = match engine.as_mut() {
+                            Some(e) => e.display_mut(&mut canvas),
+                            None => &mut canvas,
+                        };
+                        let r = looks.show_over(&path, live, ordinal, shown);
+                        if r.is_ok() && !sched.off() {
+                            repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
                         }
-                        None if engine.is_none() => Err(PlayError::NoPlaylist),
-                        None if live => Err(PlayError::MovedOn),
-                        None => play_now(engine.as_mut(), &path, epoch.elapsed()),
+                        r
+                    } else {
+                        // One open, here between frames (a directory scan:
+                        // ~6 ms in a bucket, ~330 ms in `gifs/Consoles`),
+                        // then the file takes the screen at the next tick
+                        // under the usual dwell. A formula over a formula
+                        // is a live edit, in place.
+                        match retune(engine.as_mut(), &path, epoch.elapsed()) {
+                            Some(r) => {
+                                // No new start (the ordinal stays), but
+                                // status names the formula now on the panel.
+                                if r.is_ok() {
+                                    if let Ok(mut s) = status.lock() {
+                                        s.path.clone_from(&path);
+                                    }
+                                }
+                                r
+                            }
+                            None if engine.is_none() => Err(PlayError::NoPlaylist),
+                            None if live => Err(PlayError::MovedOn),
+                            None => play_now(engine.as_mut(), &path, epoch.elapsed()),
+                        }
                     };
+                    let what = if over { "over the GIF" } else { "play now" };
                     match &outcome {
-                        Ok(()) => log::info!("play now: {}", short(&path)),
-                        Err(e) => log::warn!("play now: {}: {e:?}", short(&path)),
+                        Ok(()) if over => log::debug!("{what}: {}", short(&path)),
+                        Ok(()) => log::info!("{what}: {}", short(&path)),
+                        Err(e) => log::warn!("{what}: {}: {e:?}", short(&path)),
                     }
                     let _ = reply.send(outcome);
                 }
@@ -775,6 +779,11 @@ fn main() -> Result<()> {
                                     None => &mut canvas,
                                 };
                                 looks.set_saved(&settings.look_formula, shown);
+                                // Drawn (or taken off) at once, whatever
+                                // the GIF does.
+                                if !sched.off() && engine.is_some() {
+                                    repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
+                                }
                             }
                             if let Some(op) = panel_op {
                                 match tuner.apply(op, epoch.elapsed()) {
@@ -809,13 +818,7 @@ fn main() -> Result<()> {
                             // at once if what it shows no longer matches
                             // (a dark panel is repainted when it lights).
                             if panel.set_display(settings.look, settings.glow) && !sched.off() {
-                                let shown = match engine.as_mut() {
-                                    Some(e) => e.display_mut(&mut canvas),
-                                    None => &mut canvas,
-                                };
-                                shown.dirty_mut().mark_all();
-                                looks.redraw();
-                                panel.blit(looks.apply(epoch.elapsed(), shown, 0));
+                                repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
                             }
                             state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
                             // (Attract's clock or text plays for as long as
@@ -1438,7 +1441,8 @@ fn main() -> Result<()> {
                 // The formula look over it (its time is the frame's
                 // `decode`, with the decoding the governor counts it with).
                 let look_start = Instant::now();
-                let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), tick_us);
+                let decode_us = tick_us.saturating_sub(open_us);
+                let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), decode_us);
                 tick_us += us(look_start.elapsed()) + std::mem::take(&mut look_us);
                 let blit_start = Instant::now();
                 let blit_px = panel.blit(pic);
@@ -1571,14 +1575,18 @@ fn main() -> Result<()> {
                 // Between frames: the formula look's own frame, if one is
                 // due (not while paused: the picture holds), then the
                 // glow's next step.
+                // A GIF frame due before the look's frame and its blit
+                // could be done: the frame draws the look anyway.
                 let at = epoch.elapsed();
-                if !eng.is_paused() && looks.due().is_some_and(|d| d <= at) {
+                let room = Duration::from_micros(u64::from(looks.avg_us()) + LOOK_BLIT_US);
+                let file_soon = eng.frame_due().is_some_and(|d| d.saturating_sub(at) < room);
+                if !eng.is_paused() && !file_soon && looks.due().is_some_and(|d| d <= at) {
                     let t = Instant::now();
                     let pic = looks.apply(at, eng.display_mut(&mut canvas), 0);
                     panel.blit(pic);
                     look_us += us(t.elapsed());
                 }
-                glow_us += panel.glow_tick(eng.display(&canvas));
+                glow_us += panel.glow_tick(looks.shown(eng.display(&canvas)));
                 // A wake before the file's frame (a glow step's) sleeps no
                 // further than the frame: a flat 5 ms made it up to 5 ms
                 // late, which nothing counted.
@@ -1618,12 +1626,17 @@ fn main() -> Result<()> {
         if off || eng.is_paused() {
             panel.glow_settle();
         }
+        // Paused, the fade over: the look's buffers go (the panel keeps its
+        // picture; the next frame takes them again and draws every row).
+        if eng.is_paused() && panel.glow_wait().is_none() {
+            looks.let_go();
+        }
         // The panel dark: the formula look's buffers go back too.
         if off {
             looks.release(eng.display_mut(&mut canvas));
         }
         // And whenever the heap runs low: the network side comes first.
-        if panel.glow_yield(eng.display(&canvas)) {
+        if panel.glow_yield(looks.shown(eng.display(&canvas))) {
             log::info!(
                 "glow: heap low ({} B free), its copy given back",
                 free_heap()
@@ -1631,7 +1644,8 @@ fn main() -> Result<()> {
         }
         state::GLOW_HELD.store(panel.glow_bytes() > 0, Ordering::Relaxed);
         // Then the formula look's buffers.
-        if looks.yield_heap(eng.display_mut(&mut canvas)) {
+        let transitioning = eng.is_transitioning();
+        if looks.yield_heap(eng.display_mut(&mut canvas), transitioning) {
             log::info!(
                 "formula look: heap low ({} B free), its buffers given back",
                 free_heap()
@@ -2203,6 +2217,29 @@ fn retune(engine: Option<&mut Engine>, path: &str, now: Duration) -> Option<Resu
 #[cfg(not(feature = "psi"))]
 fn retune(_: Option<&mut Engine>, _: &str, _: Duration) -> Option<Result<(), PlayError>> {
     None
+}
+
+/// A full push's time, roughly (µs): what an Idle frame of the formula
+/// look adds beside its render (a GIF frame due sooner draws it instead).
+const LOOK_BLIT_US: u64 = 2_000;
+
+/// Draw the formula look (or, with none, the plain picture) over what is on
+/// screen now, every pixel: after a new look, one taken off or a new tint,
+/// so a still GIF or a paused one shows it at once.
+fn repaint_look(
+    looks: &mut formula_look::Looks,
+    panel: &mut Panel,
+    engine: Option<&mut Engine>,
+    canvas: &mut Canvas,
+    now: Duration,
+) {
+    let shown = match engine {
+        Some(e) => e.display_mut(canvas),
+        None => canvas,
+    };
+    shown.dirty_mut().mark_all();
+    looks.redraw();
+    panel.blit(looks.apply(now, shown, 0));
 }
 
 /// A path for a log line: a formula's (up to 2 KB) cut to its start.
