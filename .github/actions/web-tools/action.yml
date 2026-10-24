@@ -1,7 +1,8 @@
 name: Host Rust and web tools
 description: >
   Stable Rust with clippy and the wasm32 target, wasm-pack (which fetches
-  wasm-bindgen and wasm-opt into ~/.cache/.wasm-pack on first use), uv, and
+  wasm-bindgen and wasm-opt into ~/.cache/.wasm-pack on first use), uv, node
+  (make test's card-test runs under it), and
   the caches: the crates' target dirs (Swatinem/rust-cache, keyed on each
   Cargo.lock), wasm-pack's downloads, uv's cache.
 
@@ -61,3 +62,9 @@ runs:
       with:
         enable-cache: true
         cache-dependency-glob: "tools/*.py"
+
+    # node, explicitly: make card-test (in make test) needs 20.12+ for
+    # DecompressionStream('deflate-raw').
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22

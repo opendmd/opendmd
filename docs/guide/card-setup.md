@@ -1,8 +1,8 @@
 # Set up a card
 
 Fill a microSD card with the DMDoS GIF pack, straight from this page: the
-GIFs and playlists exactly as the pack has them, each GIF ready to play at
-its smoothest from the first boot. The card keeps working with DMDoS too.
+GIFs and playlists exactly as the pack has them, each GIF ready to play
+from the first boot. The card keeps working with DMDoS too.
 
 > **Works in:** Chrome or Edge on a computer: Windows, macOS, Linux or
 > ChromeOS. Other browsers, phones and tablets can't write to a card from
