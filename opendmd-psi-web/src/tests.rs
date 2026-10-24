@@ -96,15 +96,18 @@ fn the_examples_are_light_enough_for_the_panel() {
         let p = opendmd_psi::compile(&e.src)
             .unwrap_or_else(|err| panic!("{}: {}", e.name, err.render(&e.src)));
         assert!(!e.name.is_empty() && !e.desc.is_empty(), "{e:?}");
-        assert!(
-            e.src
-                .lines()
-                .filter(|l| !l.trim_start().starts_with("--"))
-                .count()
-                <= 7,
-            "{}: too long for an example",
-            e.name
-        );
+        // Short: seven lines, not counting comments or the parts pasted in.
+        let mut depth = 0;
+        let own = e
+            .src
+            .lines()
+            .filter(|l| {
+                let inside = depth > 0 || l.trim_start().starts_with("part ");
+                depth += l.matches('{').count() as i32 - l.matches('}').count() as i32;
+                !inside && !l.trim_start().starts_with("--")
+            })
+            .count();
+        assert!(own <= 7, "{}: too long for an example", e.name);
         assert!(
             p.esp32_us() <= 8000,
             "{}: ~{} µs a frame on the panel",
@@ -119,6 +122,48 @@ fn the_examples_are_light_enough_for_the_panel() {
                 "{}: slider {k}",
                 e.name
             );
+        }
+    }
+}
+
+/// Every example pasted into another formula as a part (as the editor's
+/// `use … as p` does: indented, under a comment) and drawn whole: the same
+/// frames, over the golden picture too.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn every_example_pasted_in_as_a_part_draws_the_same() {
+    use opendmd_psi::{golden, render_rows, Scratch};
+    let json = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../opendmd-web/www/formulas.json"
+    ))
+    .unwrap();
+    let mut under = vec![0u8; W * H * 3];
+    golden::picture(&mut under);
+    let draw = |src: &str, ms: u32| {
+        let p = opendmd_psi::compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
+        let mut out = vec![0u8; W * H * 3];
+        render_rows::<128>(
+            &p,
+            &mut Scratch::new(),
+            &golden::inputs(ms),
+            &OWN,
+            Some(&under),
+            u32::MAX,
+            &mut out,
+        );
+        (out, p.loop_ms())
+    };
+    for e in crate::examples(&json) {
+        let inner: String = e.src.lines().map(|l| format!("  {l}\n")).collect();
+        for ms in [0, 1730, 6420] {
+            let (want, lp) = draw(&e.src, ms);
+            let src = format!(
+                "loop {}\npart p {{\n  -- {}\n{inner}}}\nlayer {{ p }}",
+                lp as f64 / 1000.0,
+                e.name
+            );
+            assert!(draw(&src, ms).0 == want, "{} at {ms} ms", e.name);
         }
     }
 }

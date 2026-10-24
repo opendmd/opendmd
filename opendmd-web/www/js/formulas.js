@@ -361,7 +361,9 @@ const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], 
   ['noise(x, y, z)', 'smooth random hills, 0 to 1'], ['hash(a, b)', 'random 0 to 1'], ['select(c, a, b)', 'a when c is true (not 0), else b; or c ? a : b'],
   ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'], ['%', 'remainder: v % 1 is the fraction'], [';', 'a new line, on the same line'],
   ['loop 8', 'the loop’s length in seconds (first line)'], ['frame { … }', 'values worked out once a frame'],
-  ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min']];
+  ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
+  ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }'], ['p.v', 'a value part p sets'],
+  ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']];
 const COLS = [['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'], ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
   ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'], ['gray(v)', 'white, 0 to 1'],
   ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through)']];
@@ -393,8 +395,8 @@ function editor() {
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta)), strip,
       h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values' : 'Drag a number (or Alt + ↑ ↓) to try other values'))),
-    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), look, h('button', { id: 'psi-ed-gif', onclick: () => toGif(B.draft) }, 'Save as GIF…'),
-      h('button', { id: 'psi-ed-share', onclick: (e) => share(e.currentTarget, B.draft) }, 'Copy share link')), h('p.cap', NOTE()))));
+    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), look, h('button', { id: 'psi-ed-gif', onclick: () => { compile(true); toGif(B.draft); } }, 'Save as GIF…'),
+      h('button', { id: 'psi-ed-share', onclick: (e) => { compile(true); share(e.currentTarget, B.draft); } }, 'Copy share link')), h('p.cap', NOTE()))));
   let pv = null, toks = [], bad = null, num = null, good = null;
   // What the preview plays: the last text that compiled, with the sliders as they are.
   const live = { get name() { return B.draft.name; }, get src() { return good; }, get a() { return B.draft.a; }, get b() { return B.draft.b; }, get c() { return B.draft.c; } };
@@ -409,12 +411,30 @@ function editor() {
     gut.innerHTML = Array.from({ length: n }, (_, k) => (k + 1 === el ? `<b>${k + 1}</b>` : k + 1)).join('\n');
     ta.style.height = `calc(${Math.max(8, n + 1) * 1.5}em + 18px)`;
   }
-  const build = debounce(compile, 150);
-  function compile() {
-    const f = B.draft;
+  const build = debounce(() => compile(), 150);
+  // `use Plasma as p`: one of yours or an example pasted in as `part p { … }`
+  // (the shared text stands alone), once the caret is off the line — every
+  // one (`all`) before saving or sharing. One it can't find: {s, e, n}.
+  function paste(all) {
+    const s = ta.value, cl = s.slice(0, ta.selectionStart).split('\n').length;
+    for (const m of s.matchAll(/^([ \t]*)use[ \t]+(.+?)[ \t]+as[ \t]+([A-Za-z_]\w*)[ \t]*$/gm)) {
+      if (!all && document.activeElement === ta && s.slice(0, m.index).split('\n').length === cl) continue;
+      const n = m[2].trim(), f = [...mine(), ...EX].find((x) => x.name.toLowerCase() === n.toLowerCase()), i = m[1];
+      if (!f) return { s: m.index, e: m.index + m[0].length, n };
+      const t = `${i}part ${m[3]} {\n${i}  -- ${f.name}\n${f.src.trim().replace(/^/gm, i + '  ')}\n${i}}`, c = ta.selectionStart;
+      put({ s: m.index, e: m.index + m[0].length }, t);
+      // The caret stays where it was (one undo takes the paste back).
+      const k = c > m.index ? c + t.length - m[0].length : c;
+      ta.setSelectionRange(k, k);
+      for (const k of 'abc') B.draft[k] ??= f[k];
+      return paste(all);
+    }
+  }
+  function compile(all) {
+    const f = B.draft, miss = paste(all);
     f.src = ta.value;
     // (The module restarting: the next compile catches up.)
-    const ok = T(() => P.compile(f.src), null);
+    const ok = miss ? false : T(() => P.compile(f.src), null);
     if (ok == null) return;
     if (ok) hold(f.src); else held = null;
     if (ok) {
@@ -434,11 +454,11 @@ function editor() {
       play(pv, live, i);
       PS?.follow(live);
     } else {
-      bad = T(() => P.errorAt(), [0, 0]);
+      bad = miss ? [miss.s, miss.e] : T(() => P.errorAt(), [0, 0]);
       top.classList.toggle('stale', good != null);
       const line = ta.value.slice(0, bad[0]).split('\n').length;
       el.dataset.err = line;
-      clear(err, `Line ${line}: `, T(() => P.error(), '').split('`').map((t, k) => (k % 2 ? h('code', t) : t)));
+      clear(err, `Line ${line}: `, (miss ? `there’s no formula called “${miss.n}” in yours or the examples` : T(() => P.error(), '')).split('`').map((t, k) => (k % 2 ? h('code', t) : t)));
       paint();
     }
     stash();
@@ -483,7 +503,7 @@ function editor() {
     strip.hidden = !num || !touch;
     if (num) pad.setAttribute('aria-valuenow', val.textContent = ta.value.slice(num.s, num.e));
   }
-  document.addEventListener('selectionchange', () => { if (document.activeElement === ta) scrubbable(); });
+  document.addEventListener('selectionchange', () => { if (document.activeElement === ta) { scrubbable(); if (/^\s*use\s/m.test(ta.value)) build(); } });
   ta.addEventListener('keydown', (e) => {
     if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && at(ta.selectionStart)) {
       e.preventDefault();
@@ -576,6 +596,7 @@ function editor() {
   }
 
   function save() {
+    compile(true);
     const f = B.draft, list = mine();
     f.name = name.value.trim() || `My formula ${list.length + 1}`;
     name.value = f.name;

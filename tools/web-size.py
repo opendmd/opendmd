@@ -63,7 +63,9 @@ opens) have a line of their own, <= 20 KB (16 until Psi phase 2, 17 until
 layers and drawing over a GIF), and so does their wasm module
 (`pkg-psi/`: Psi, the language formulas are written in — its compiler and
 VM, the firmware's own crate — built without std; loaded with them),
-<= 40 KB (36 until layers and drawing over a GIF): the spike's 24.7 KB measured a module that never read an error
+<= 43 KB (36 until layers and drawing over a GIF, 40 until parts — one
+formula inside another, drawn at other places: the compiler's scopes,
+re-reading and messages, ~+3 KB): the spike's 24.7 KB measured a module that never read an error
 message, so the error texts and their formatting were dropped; with them,
 the wasm-bindgen glue and std it was 40 KB, without std 34.7 KB.
 The formula page on the site (`--share opendmd-web/share`: `f/`'s page,
@@ -141,7 +143,7 @@ FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
 # The 40 KB and 20 KB below are Psi stage A's numbers (layers, drawing over
 # a GIF; branch psi-layers, 2026-10-24), approved by the owner the same day.
-PSI_WASM_GZ_BUDGET = 40 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB)
+PSI_WASM_GZ_BUDGET = 43 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another: +3 KB)
 FORMULAS_GZ_BUDGET = 20 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples)
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
