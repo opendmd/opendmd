@@ -59,6 +59,10 @@ struct PlayRequest {
     /// A live edit of the formula on screen: 409 if there is none any more.
     #[serde(default)]
     live: bool,
+    /// Draw the formula over the file on screen (until the playlist moves
+    /// on) instead of playing it; `""` takes it off.
+    #[serde(default)]
+    over: bool,
 }
 
 /// `/api/play`'s and Previous's answer to a [`PlayError`] (or a timeout).
@@ -240,6 +244,10 @@ struct ConfigPatch {
     attract: Option<String>,
     look: Option<String>,
     glow: Option<String>,
+    /// The Formula look: a formula's `@fx:psi?src=…` path, `""` = none
+    /// (checked by the main task before anything is saved).
+    look_formula: Option<String>,
+    look_formula_name: Option<String>,
     boot_show: Option<String>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
@@ -519,6 +527,32 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             };
             next.glow = glow;
         }
+        if let Some(v) = patch.look_formula {
+            if !v.is_empty() && !opendmd_core::synth::is_formula(&v) {
+                return req.bad_request("look_formula must be \"\" or a formula (@fx:psi?src=…)");
+            }
+            if v.len() > opendmd_core::synth::MAX_FORMULA_PATH {
+                return req.error(
+                    413,
+                    "413 Payload Too Large",
+                    &format!(
+                        "this formula is too long for the panel ({} B as sent; the limit is {} B)",
+                        v.len(),
+                        opendmd_core::synth::MAX_FORMULA_PATH
+                    ),
+                );
+            }
+            next.look_formula = v;
+        }
+        if let Some(v) = patch.look_formula_name {
+            let max = crate::nvs_config::LOOK_NAME_MAX;
+            if v.chars().count() > max || v.chars().any(char::is_control) {
+                return req.bad_request(&format!(
+                    "look_formula_name must be one line of at most {max} characters"
+                ));
+            }
+            next.look_formula_name = v;
+        }
         if let Some(v) = patch.boot_show {
             let Some(len) = opendmd_core::boot::ShowLength::from_name(&v) else {
                 return req.bad_request("boot_show must be off, short or full");
@@ -628,6 +662,8 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(Err(e)) if e == SET_NOT_FOUND => req.not_found(SET_NOT_FOUND),
             // Likewise refused, the previous playlist rebuilt: nothing saved.
             Ok(Err(e)) if e.starts_with(crate::state::FILTER_EMPTY) => req.bad_request(&e),
+            // The formula look does not compile or is too heavy: nothing saved.
+            Ok(Err(e)) if e.starts_with(crate::state::LOOK_FORMULA_BAD) => req.bad_request(&e),
             Ok(Err(e)) => req.error(500, "500 Internal Server Error", &e),
             Err(_) => req.error(504, "504 Gateway Timeout", "player did not answer"),
         }
@@ -790,8 +826,13 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if play.live && !opendmd_core::synth::is_formula(&play.path) {
             return req.bad_request("\"live\" is only for a formula (@fx:psi?src=…)");
         }
+        if play.over && !play.path.is_empty() && !opendmd_core::synth::is_formula(&play.path) {
+            return req.bad_request(
+                "\"over\" is only for a formula (@fx:psi?src=…), or \"\" to take it off",
+            );
+        }
         let virtual_file = opendmd_core::synth::is_virtual(&play.path);
-        if !virtual_file
+        if !play.over && !virtual_file
             && (!play.path.starts_with('/')
                 || files::card_path(config::SD_MOUNT, &play.path).is_none())
         {
@@ -802,13 +843,18 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             .send(Command::PlayNow {
                 path: play.path.clone(),
                 live: play.live,
+                over: play.over,
                 reply: tx,
             })
             .is_err()
         {
             return req.error(503, "503 Service Unavailable", "player not running");
         }
-        let ok = format!(r#"{{"ok":true,"path":{}}}"#, json_string(&play.path));
+        let ok = format!(
+            r#"{{"ok":true,"path":{}{}}}"#,
+            json_string(&play.path),
+            if play.over { r#","over":true"# } else { "" }
+        );
         play_reply(req, rx.recv_timeout(REPLY_TIMEOUT), &ok)
     })?;
 
@@ -1981,7 +2027,25 @@ fn formula_json(_: &str) -> String {
     String::new()
 }
 
-/// The end of the status object: `"look","glow","glow_held","attract_live",
+/// `formula_look` in the status: `null`, or what is drawn over the picture
+/// (`"setting"`, or `"over_gif"`: the editor's) with the heap its buffers
+/// hold (0: no room, the picture goes up as it is), its mean render (µs)
+/// and its own frame time (ms; 0: it only follows the picture).
+fn formula_look_json() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let source = match crate::formula_look::SOURCE.load(Relaxed) {
+        1 => "setting",
+        2 => "over_gif",
+        _ => return "null".to_string(),
+    };
+    #[cfg(feature = "psi")]
+    let (us, ms, held) = opendmd_core::fx_psi::look_stats();
+    #[cfg(not(feature = "psi"))]
+    let (us, ms, held) = (0, 0, 0);
+    format!(r#"{{"source":"{source}","held":{held},"frame_us":{us},"frame_ms":{ms}}}"#)
+}
+
+/// The end of the status object: `"look","glow","glow_held","formula_look","attract_live",
 /// "max_brightness","brightness_safe_max","safe_start_until"`
 /// (see the API table), from the settings and the main loop's flags.
 fn looks_json(set: &Settings) -> String {
@@ -1991,7 +2055,7 @@ fn looks_json(set: &Settings) -> String {
         .then(|| crate::nvs_config::attract_path(&set.attract))
         .flatten();
     format!(
-        r#""look":"{}","glow":"{}","glow_held":{},"attract_live":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{}"#,
+        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"attract_live":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{}"#,
         set.look.name(),
         set.glow.name(),
         if crate::state::GLOW_HELD.load(Relaxed) {
@@ -1999,6 +2063,7 @@ fn looks_json(set: &Settings) -> String {
         } else {
             0
         },
+        formula_look_json(),
         opt_json(live.as_deref()),
         set.max_brightness,
         crate::config::BRIGHTNESS_SAFE_MAX,
@@ -2037,7 +2102,8 @@ fn settings_json(s: &Settings) -> String {
             r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
-            r#""look":"{}","glow":"{}","boot_show":"{}","api_key_set":{}}}"#
+            r#""look":"{}","glow":"{}","look_formula":{},"look_formula_name":{},"#,
+            r#""boot_show":"{}","api_key_set":{}}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2061,6 +2127,8 @@ fn settings_json(s: &Settings) -> String {
         json_string(&s.attract),
         s.look.name(),
         s.glow.name(),
+        json_string(&s.look_formula),
+        json_string(&s.look_formula_name),
         s.boot_show.name(),
         !s.api_key.is_empty(),
     )

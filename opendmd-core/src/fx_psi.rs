@@ -628,6 +628,12 @@ impl FormulaLook {
         self.held.is_some()
     }
 
+    /// The panel showed something else meanwhile (a status card, a test
+    /// pattern): every row is drawn again at the next `apply`.
+    pub fn redraw(&mut self) {
+        self.fresh = true;
+    }
+
     /// When it must be drawn again whatever the picture under it does: its
     /// next frame of its own, or at once after a take or a new formula;
     /// `None` while not held, or when it only follows the picture.
