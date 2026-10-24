@@ -25,6 +25,8 @@ CONFIG_BT_ENABLED=n
 # FATFS with long names, as the firmware (the card is the same card).
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
+# 512 B FatFs buffers, as the firmware (see its sdkconfig.defaults).
+CONFIG_WL_SECTOR_SIZE_512=y
 
 # The task watchdog watches both idle tasks; the copy loop yields after
 # every 4 KB write and every 64 KB erase, and a hang (a wedged card) resets
