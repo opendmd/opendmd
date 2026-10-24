@@ -14,6 +14,11 @@
                and the signed update bundle, plus install/release.json
                (what the web app's update check reads)
 - /guide/      the user guide (docs/guide/)
+- /card/       "Set up a card": docs/guide/card-setup.md with the page's app
+               (opendmd-web/share/cardprep/: app.html at the page's
+               `<!-- site:card-prep -->`, its scripts beside the page), which
+               reads the DMDoS pack's zip in the browser and writes a card
+               with the demo's wasm (the main module and pkg-art)
 - /dev/        the developer pages: an overview and a few clean references
                (the detailed notes in docs/ stay in the repo)
 - /demo/       the web app with the demo card (tools/demo-card.py) beside it:
@@ -77,6 +82,7 @@ PAGES = {
     "README.md": "index.html",
     "docs/guide/hardware.md": "guide/hardware.html",
     "docs/guide/install.md": "install/index.html",
+    "docs/guide/card-setup.md": "card/index.html",
     "docs/guide/web-app.md": "guide/web-app.html",
     "docs/guide/create-art.md": "guide/create-art.html",
     "docs/guide/effects.md": "guide/effects.html",
@@ -113,6 +119,7 @@ MENU = [
     (None, "Guide"),
     ("What you need", "guide/hardware.html"),
     ("Install", "install/index.html"),
+    ("Set up a card", "card/index.html"),
     ("The web app", "guide/web-app.html"),
     ("Create Art", "guide/create-art.html"),
     ("Effects and live items", "guide/effects.html"),
@@ -140,6 +147,11 @@ INSTALL_BUTTON = """<div class="install">
 </esp-web-install-button>
 <span class="ver">OpenDMD {version}</span>
 </div>"""
+# "Set up a card": the page's app (markup at its marker, scripts beside it),
+# which runs on the demo's wasm (../demo/pkg/, ../demo/pkg-art/).
+CARD_PAGE = "card/index.html"
+CARD_SRC = ROOT / "opendmd-web/share/cardprep"
+CARD_HEAD = '<script type="module" src="card.js"></script>'
 # Other files published as they are: repo path -> published path.
 FILES = {
     "LICENSE-MIT": "LICENSE-MIT.txt",
@@ -166,6 +178,7 @@ with each licence's full text:
   driver, and the Rust crates.
 - **[The web app](THIRD-PARTY-LICENSES-web.txt)**: the Rust crates in its WebAssembly, and the
   headings' font, Silkscreen ([SIL Open Font License 1.1](../fonts/OFL.txt)).
+- **Set up a card** runs the web app's WebAssembly in your browser: nothing is uploaded.
 - **The installer** uses [ESP Web Tools](https://github.com/esphome/esp-web-tools) (Apache 2.0),
   which your browser loads from jsDelivr.
 
@@ -290,6 +303,26 @@ border-radius:50%;background:var(--acc);color:#111;font-weight:800;box-shadow:0 
 ol.steps>li>:first-child{margin-top:0}ol.steps>li>:last-child{margin-bottom:0}
 
 p.vers{font-size:14px;color:var(--mut)}
+
+/* Set up a card */
+.cardprep{margin:8px 0 24px;padding:20px;border:1px solid var(--line);border-radius:12px;
+background:linear-gradient(135deg,rgba(51,209,255,.10),rgba(247,165,49,.08) 60%,transparent),var(--bg2)}
+.cp-drop{position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;padding:26px 16px;border:2px dashed var(--line);border-radius:10px;
+text-align:center;cursor:pointer;color:var(--mut);overflow-wrap:anywhere}
+.cp-drop:hover,.cp-drop.over,.cp-drop:focus-within{border-color:var(--acc);color:var(--fg)}
+.cp-drop input{position:absolute;opacity:0;width:1px;height:1px}
+.cp-big{font-size:18px;font-weight:700;color:var(--fg)}
+.cp-msg{margin:14px 0 0}
+.cp-err{color:var(--pink)}
+.cp-acts{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0 0}
+.cp-btn{font:inherit;font-weight:700;padding:10px 22px;border-radius:8px;border:0;background:var(--acc);color:#111;cursor:pointer}
+.cp-btn.alt{background:none;color:var(--fg);box-shadow:inset 0 0 0 2px var(--line)}
+.cp-btn:disabled{opacity:.45;cursor:default}
+.cardprep progress{width:100%;height:14px;margin:10px 0 0;accent-color:var(--acc)}
+.cp-note{font-size:14px;color:var(--mut);margin:12px 0 0}
+.cardprep details{margin:10px 0 0;font-size:14px}.cardprep details ul{max-height:220px;overflow:auto}
+.cp-eject{margin:16px 0 0;padding:12px 16px;border-left:4px solid var(--green);border-radius:8px;background:var(--bg3)}
+.cp-eject p{margin:0}
 
 footer{grid-column:2;padding:0 44px 40px;color:var(--mut);font-size:13px}
 footer p{max-width:860px;border-top:1px solid var(--line);padding-top:16px}
@@ -494,6 +527,8 @@ def markers(page: str, text: str, rel_info: dict) -> str:
     ver = html.escape(rel_info["version"])
     bundle = rel(page, "install/" + rel_info["firmware"])
     text = text.replace("<!-- site:install-button -->", INSTALL_BUTTON.format(version=ver))
+    if "<!-- site:card-prep -->" in text:
+        text = text.replace("<!-- site:card-prep -->", (CARD_SRC / "app.html").read_text().strip())
     return text.replace("<!-- site:firmware-bundle -->",
                         f'<p><a href="{bundle}" download>Download the firmware update file</a> '
                         f'(OpenDMD {ver}, <code>opendmd-{ver}.odfw</code>)</p>')
@@ -587,7 +622,7 @@ def write_doc(out: Path, src: str, page: str, info: dict, art: dict, assets: set
     up = "../" * page.count("/")
     dest = out / page
     dest.parent.mkdir(parents=True, exist_ok=True)
-    head = "\n" + INSTALL_HEAD if page == INSTALL_PAGE else ""
+    head = "\n" + INSTALL_HEAD if page == INSTALL_PAGE else "\n" + CARD_HEAD if page == CARD_PAGE else ""
     wm = art["wordmark"]
     brand = (f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
              f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>')
@@ -658,6 +693,10 @@ def main() -> None:
     shutil.copytree(a.card, out / "demo/demo")
     # A formula's own page; it runs on the demo's files.
     shutil.copytree(ROOT / "opendmd-web/share/f", out / "f")
+    # Set up a card's scripts (its page is a doc, below); they run on the demo's wasm.
+    (out / CARD_PAGE).parent.mkdir(parents=True)
+    for js in sorted(CARD_SRC.glob("*.js")):
+        shutil.copyfile(js, out / posixpath.dirname(CARD_PAGE) / js.name)
     info = release(a.dist, out)
     art = json.loads((a.art / "art.json").read_text())
     (out / "art/strip").mkdir(parents=True)
