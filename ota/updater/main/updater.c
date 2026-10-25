@@ -1,7 +1,9 @@
 /*
  * The OpenDMD updater (docs/ota.md, steps 3 and 4).
  *
- * Lives in the `ota_0` partition (0x260000, 384 KB). The firmware boots it
+ * Lives in the `ota_0` partition (384 KB: 0x260000 in the 4 MB table,
+ * 0x320000 in the 8 MB one; the same build serves both, since it finds
+ * every partition by type at run time). The firmware boots it
  * once, after it has received a firmware bundle over the LAN, verified its
  * Ed25519 signature, written it to the card as /update/opendmd.bin and
  * pointed otadata at ota_0. This program then:
@@ -9,10 +11,13 @@
  *   1. blanks the panel (OE high, every other HUB75 line low) as early as
  *      the app can: the same CORE-stage hook as the firmware's hub75_shim;
  *   2. mounts the card on SPI3 (SCK 18, MISO 19, MOSI 23, CS 5) at 20 MHz;
- *   3. reads the 140-byte bundle header, checks the magic, that the image
- *      fits the factory partition, that the file holds exactly the image,
- *      and hashes the whole image off the card *before* erasing anything
- *      (SHA-256, mbedtls), with the ESP image magic 0xE9 at its start;
+ *   3. reads the 140-byte bundle header, checks the magic and that it names
+ *      this board's flash layout (the variant: the flash size the installed
+ *      bootloader set, 4 MB -> "4mb", 8 MB -> "8mb"), that the image fits
+ *      the factory partition, that the file holds exactly the image, and
+ *      hashes the whole image off the card *before* erasing anything
+ *      (SHA-256, mbedtls), with the ESP image magic 0xE9 at its start and
+ *      an app descriptor whose version ends in " <variant>";
  *   4. erases the factory partition a 64 KB block ahead of the writes and
  *      writes the image in 4 KB pieces, hashing again as it goes (the card
  *      is read twice: what was written is what was hashed);
@@ -43,7 +48,9 @@
 #include "driver/gpio.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
+#include "esp_app_desc.h"
 #include "esp_err.h"
+#include "esp_flash.h"
 #include "esp_image_format.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -82,8 +89,17 @@ static const uint8_t HUB75_LOW[] = {25, 26, 27, 14, 12, 13, 33, 32, 22, 17, 4, 1
 #define UPDATE_DIR MOUNT "/update"
 #define BUNDLE_PATH UPDATE_DIR "/opendmd.bin"
 #define LOG_PATH UPDATE_DIR "/log.txt"
-static const uint8_t MAGIC[8] = {'O', 'D', 'F', 'W', '1', 0, 0, 0};
+/* "ODFW1" + the flash layout: NULs for 4mb (every bundle before 8mb),
+ * "8mb". An updater from before the 8 MB layout knows only the first, so it
+ * refuses an 8mb bundle too. */
+static const uint8_t MAGIC_4MB[8] = {'O', 'D', 'F', 'W', '1', 0, 0, 0};
+static const uint8_t MAGIC_8MB[8] = {'O', 'D', 'F', 'W', '1', '8', 'm', 'b'};
+/* A third layout would be a new bundle format (ODFW2), not a third tag. */
 #define VERSION_LEN 32
+/* The image's app descriptor: its magic word at 0x20, the version at 0x30. */
+#define APP_DESC_OFFSET 0x20
+#define APP_DESC_VERSION_OFFSET 0x30
+#define APP_PREFIX_LEN (APP_DESC_VERSION_OFFSET + 32)
 #define HEADER_LEN 140
 #define ESP_IMAGE_MAGIC 0xE9
 
@@ -326,9 +342,14 @@ static void sanitize(char *s)
     }
 }
 
-/* SHA-256 of the next `len` bytes of `f`, first byte in *first. */
+/* The image's first APP_PREFIX_LEN bytes, kept by hash_file's first pass. */
+static uint8_t s_prefix[APP_PREFIX_LEN];
+
+/* SHA-256 of the next `len` bytes of `f`, first byte in *first, the first
+ * APP_PREFIX_LEN bytes in s_prefix (zeros past a shorter image). */
 static bool hash_file(FILE *f, uint32_t len, uint8_t out[32], uint8_t *first)
 {
+    memset(s_prefix, 0, sizeof s_prefix);
     mbedtls_sha256_context sha;
     mbedtls_sha256_init(&sha);
     mbedtls_sha256_starts(&sha, 0);
@@ -342,6 +363,7 @@ static bool hash_file(FILE *f, uint32_t len, uint8_t out[32], uint8_t *first)
         }
         if (off == 0) {
             *first = s_buf[0];
+            memcpy(s_prefix, s_buf, n < sizeof s_prefix ? n : sizeof s_prefix);
         }
         mbedtls_sha256_update(&sha, s_buf, n);
         off += n;
@@ -354,6 +376,32 @@ static bool hash_file(FILE *f, uint32_t len, uint8_t out[32], uint8_t *first)
     }
     mbedtls_sha256_free(&sha);
     return ok;
+}
+
+/* This board's flash layout: the flash size the installed bootloader's
+ * header gave (IDF keeps it in the default chip's `size`; the 8 MB table
+ * only ever runs with the 8mb bootloader, which checks the table against
+ * it). NULL for any other size. */
+static const char *board_variant(void)
+{
+    uint32_t size = esp_flash_default_chip != NULL ? esp_flash_default_chip->size : 0;
+    return size == 4u << 20 ? "4mb" : size == 8u << 20 ? "8mb" : NULL;
+}
+
+/* The image's app descriptor (s_prefix) is an OpenDMD build for `variant`:
+ * its magic word, and a version "<version> <variant>". */
+static bool desc_is(const char *variant, char found[33])
+{
+    uint32_t magic;
+    memcpy(&magic, s_prefix + APP_DESC_OFFSET, sizeof magic);
+    memcpy(found, s_prefix + APP_DESC_VERSION_OFFSET, 32);
+    found[32] = 0;
+    if (magic != ESP_APP_DESC_MAGIC_WORD) {
+        strcpy(found, "(no app descriptor)");
+        return false;
+    }
+    size_t n = strlen(found), v = strlen(variant);
+    return n > v + 1 && found[n - v - 1] == ' ' && strcmp(found + n - v, variant) == 0;
 }
 
 static outcome_t attempt(void)
@@ -387,8 +435,19 @@ static outcome_t attempt(void)
         fclose(f);
         return R_UNTOUCHED;
     }
-    if (memcmp(head, MAGIC, sizeof MAGIC) != 0) {
+    const char *variant = memcmp(head, MAGIC_4MB, 8) == 0   ? "4mb"
+                          : memcmp(head, MAGIC_8MB, 8) == 0 ? "8mb"
+                                                            : NULL;
+    if (variant == NULL) {
         note("not a firmware bundle (bad magic)");
+        fclose(f);
+        return R_UNTOUCHED;
+    }
+    const char *board = board_variant();
+    if (board == NULL || strcmp(board, variant) != 0) {
+        note("the bundle is for the %s flash layout, this board has the %s one (%u KB): not installed",
+             variant, board != NULL ? board : "unknown",
+             (unsigned)(esp_flash_default_chip != NULL ? esp_flash_default_chip->size / 1024 : 0));
         fclose(f);
         return R_UNTOUCHED;
     }
@@ -409,7 +468,7 @@ static outcome_t attempt(void)
         fclose(f);
         return R_UNTOUCHED;
     }
-    note("bundle %s, image %u B: checking it on the card", version, (unsigned)len);
+    note("bundle %s (%s), image %u B: checking it on the card", version, variant, (unsigned)len);
 
     /* Pass 1: the file, before the factory partition is touched. */
     uint8_t got[32];
@@ -426,6 +485,12 @@ static outcome_t attempt(void)
     }
     if (memcmp(got, want, 32) != 0) {
         note("SHA-256 mismatch on the card: the file is damaged");
+        fclose(f);
+        return R_UNTOUCHED;
+    }
+    char desc[33];
+    if (!desc_is(variant, desc)) {
+        note("the image is not an OpenDMD %s build (app descriptor '%s'): not installed", variant, desc);
         fclose(f);
         return R_UNTOUCHED;
     }

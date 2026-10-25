@@ -164,10 +164,12 @@ every view like a person would:
             /api/status; PUT /api/www of the built pack is a 200 with staged
             true (kept by GET), of something that is not a pack a 400
   Firmware  a throwaway key pair (tools/fw-sign.py keygen; the mock started
-            with --ota-pub) and a fake image (0xE9 + random bytes) signed as
-            9.9.9-smoke, plus a copy with one image byte flipped. Settings ->
-            Device -> Firmware shows GET /api/firmware's version; a file
-            that is not a bundle is refused in the page; the tampered bundle
+            with --ota-pub) and a fake image (0xE9 + random bytes, a 4mb app
+            descriptor) signed as 9.9.9-smoke, plus a copy with one image byte
+            flipped, and an 8mb one. Settings -> Device -> Firmware shows GET
+            /api/firmware's version and the board ("DevKit (4 MB)"); a file
+            that is not a bundle is refused in the page, and so is the 8mb
+            bundle, in words (the mock refuses its PUT too); the tampered bundle
             is refused by the mock (422, the reason shown, the version
             unchanged); the good one shows its progress, "Restarting…", then
             "Updated to 9.9.9-smoke" once /api/status reports it after the
@@ -183,7 +185,8 @@ every view like a person would:
             versions; `?updates=` naming the running versions -> "Up to
             date"; a 404, no CORS header, not JSON, firmware ahead of the
             release -> a message and no Update button; a release naming a
-            missing file, and one whose firmware is tampered (the mock's
+            missing file, one whose 4mb entry (`variants`) is the 8mb bundle
+            (refused in the page), and one whose firmware is tampered (the mock's
             422), install nothing and leave both versions alone; then
             firmware 10.0.0 + web app v10.0.0: each step shown, the mock
             restarts, PUT /api/www takes the pack, the page reloads, and a
@@ -1980,13 +1983,24 @@ OLDER_CASES = [("0.3.0", "0.3.1", True), ("0.3.1", "0.3.0", False), ("0.3.0", "0
                ("0.3.13", "1.0.0", True), ("1.0.0", "0.3.13", False)]
 
 
+def fake_app(path: Path, variant: str) -> None:
+    """300 KB that pass for an app image of `variant`: 0xE9 first, an app
+    descriptor (its magic word at 0x20, "<version> <variant>" at 0x30)."""
+    b = bytearray(b"\xE9" + os.urandom(300_000))
+    b[0x20:0x24] = (0xABCD5432).to_bytes(4, "little")
+    b[0x30:0x50] = f"9.9.9-smoke {variant}".encode().ljust(32, b"\0")
+    path.write_bytes(bytes(b))
+
+
 def ota_bundles(tmp: Path) -> dict[str, Path]:
     """A throwaway key pair, a fake app image signed as OTA_VERSION, a copy
-    of the bundle with one image byte flipped (tools/fw-sign.py), and a file
-    that is not a bundle at all."""
+    of the bundle with one image byte flipped (tools/fw-sign.py), a file
+    that is not a bundle at all, and bundles for the other flash layout
+    (8mb: the mock is a 4mb player)."""
     sign = ["uv", "run", "--quiet", str(REPO / "tools" / "fw-sign.py")]
     subprocess.run([*sign, "keygen", "--key", str(tmp / "k"), "--pub", str(tmp / "p")], check=True, stdout=subprocess.DEVNULL)
-    (tmp / "app.bin").write_bytes(b"\xE9" + os.urandom(300_000))
+    fake_app(tmp / "app.bin", "4mb")
+    fake_app(tmp / "app8.bin", "8mb")
     good = tmp / "opendmd-9.9.9-smoke.odfw"
     subprocess.run([*sign, "sign", str(tmp / "app.bin"), "--version", OTA_VERSION, "--out", str(good), "--key", str(tmp / "k")],
                    check=True, stdout=subprocess.DEVNULL)
@@ -2006,7 +2020,14 @@ def ota_bundles(tmp: Path) -> dict[str, Path]:
     b[140 + 1000] ^= 1
     newer_bad = tmp / "newer-tampered.odfw"
     newer_bad.write_bytes(bytes(b))
-    return {"pub": tmp / "p", "good": good, "bad": bad, "junk": junk, "old": old, "newer": newer, "newer_bad": newer_bad}
+    board8 = tmp / "opendmd-9.9.9-smoke-8mb.odfw"
+    subprocess.run([*sign, "sign", str(tmp / "app8.bin"), "--version", OTA_VERSION, "--variant", "8mb", "--out", str(board8),
+                    "--key", str(tmp / "k")], check=True, stdout=subprocess.DEVNULL)
+    newer8 = tmp / f"opendmd-{UPD_VERSION}-8mb.odfw"
+    subprocess.run([*sign, "sign", str(tmp / "app8.bin"), "--version", UPD_VERSION, "--variant", "8mb", "--out", str(newer8),
+                    "--key", str(tmp / "k")], check=True, stdout=subprocess.DEVNULL)
+    return {"pub": tmp / "p", "good": good, "bad": bad, "junk": junk, "old": old, "newer": newer, "newer_bad": newer_bad,
+            "board8": board8, "newer8": newer8}
 
 
 def status_of(req: urllib.request.Request) -> tuple[int, dict]:
@@ -2039,8 +2060,8 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     goto_view(page, "settings/device")
     page.wait_for_selector("#fw-facts dd", timeout=20000)
     fw = get_json(base + "/api/firmware")
-    check(sorted(fw) == ["build", "last", "log", "pending", "variant", "version"] and fw["pending"] is None,
-          f"firmware: GET /api/firmware {fw}")
+    check(sorted(fw) == ["build", "flash_size", "last", "log", "pending", "variant", "version"] and fw["pending"] is None
+          and fw["variant"] == "4mb" and fw["flash_size"] == 4 << 20, f"firmware: GET /api/firmware {fw}")
     got = page.evaluate("async (cases) => { const { older } = await import('/js/firmware.js');"
                         " return cases.map(([a, b]) => older(a, b)); }", [[a, b] for a, b, _ in OLDER_CASES])
     wrong = [(a, b, g) for (a, b, w), g in zip(OLDER_CASES, got) if g != w]
@@ -2048,7 +2069,8 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     check(page.is_hidden("#fw-log") == (fw["log"] is None), "firmware: 'Update log' only when there is one")
     v0 = fw["version"]
     facts = page.inner_text("#fw-facts")
-    check(v0 in facts and fw["build"] in facts, f"firmware: the card shows {v0} ({facts!r})")
+    check(v0 in facts and fw["build"] in facts and "DevKit (4 MB)" in facts and "This board has 8 MB" not in facts,
+          f"firmware: the card shows {v0} and the board ({facts!r})")
     check(page.is_visible("#fw-go") and page.get_attribute("#fw-file", "accept") == ".odfw",
           "firmware: Update from file… (.odfw)")
     asked: list[str] = []
@@ -2057,6 +2079,21 @@ def firmware_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     page.set_input_files("#fw-file", str(ota["junk"]))
     t = fw_message(page, "not an OpenDMD firmware file")
     check(not asked, f"firmware: a file that is not a bundle is refused in the page ('{t}')")
+    # A bundle for the other flash layout: refused in the page, in words,
+    # nothing sent; and the mock (as the firmware) refuses it too.
+    page.set_input_files("#fw-file", str(ota["board8"]))
+    t = fw_message(page, "^This file is for an 8 MB board in development")
+    check(not asked and t == "This file is for the 8 MB build, and this player runs the DevKit (4 MB) firmware."
+          " Use the DevKit (4 MB) update file", f"firmware: an 8mb bundle is refused in the page ('{t}')")
+    req = urllib.request.Request(base + "/api/firmware", data=ota["board8"].read_bytes(), method="PUT",
+                                 headers={"Content-Type": "application/octet-stream"})
+    try:
+        urllib.request.urlopen(req, timeout=30).read()
+        code, why = 200, ""
+    except urllib.error.HTTPError as e:
+        code, why = e.code, json.loads(e.read() or b"{}").get("error", "")
+    check(code == 422 and why.startswith("this update is for the 8 MB build and this player runs the DevKit (4 MB)")
+          and get_json(base + "/api/firmware")["version"] == v0, f"firmware: PUT of an 8mb bundle -> {code} '{why}'")
     expected.append("/api/firmware")
     page.set_input_files("#fw-file", str(ota["bad"]))
     t = fw_message(page, "^The player refused this file")
@@ -2151,6 +2188,7 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     (inst / "firmware").mkdir(parents=True)
     (tmp / "nocors").symlink_to(tmp)
     shutil.copy(ota["newer"], inst / "firmware" / f"opendmd-{UPD_VERSION}.odfw")
+    shutil.copy(ota["newer8"], inst / "firmware" / f"opendmd-{UPD_VERSION}-8mb.odfw")
     shutil.copy(ota["newer_bad"], inst / "firmware" / "tampered.odfw")
     built = (REPO / "opendmd-web" / "www.pack").read_bytes()
     pack = bytearray(built)
@@ -2162,7 +2200,11 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
     w0 = get_json(base + "/api/www")["version"]
 
     def release(name: str, **kw) -> str:
-        obj = {"version": UPD_VERSION, "firmware": f"firmware/opendmd-{UPD_VERSION}.odfw",
+        # As tools/site.py writes it: `firmware` (the 4mb bundle, for web
+        # apps before 8mb) and `variants`, each layout's file.
+        fw4 = kw.get("firmware", f"firmware/opendmd-{UPD_VERSION}.odfw")
+        obj = {"version": UPD_VERSION, "firmware": fw4,
+               "variants": {"4mb": {"firmware": fw4}, "8mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}-8mb.odfw"}},
                "www": f"firmware/opendmd-{UPD_VERSION}-www.pack", "www_version": f"v{UPD_VERSION}", **kw}
         (inst / name).write_text(json.dumps(obj))
         return f"{site}/install/{name}"
@@ -2215,8 +2257,19 @@ def update_checks(page: Page, base: str, ota: dict[str, Path]) -> None:
         t = page.inner_text("#fw-msg")
         check(t == f"The firmware isn’t on 127.0.0.1:{srv.server_port} (404)" and get_json(base + "/api/firmware")["version"] == fw0
               and get_json(base + "/api/www")["version"] == w0, f"update: a missing download installs nothing -> '{t}'")
+        # The release's file for the other layout (an 8mb bundle named as the
+        # 4mb one): its header gives it away, nothing is sent.
+        check_now(release("crossed.json", variants={"4mb": {"firmware": f"firmware/opendmd-{UPD_VERSION}-8mb.odfw"}}))
+        page.click("#fw-upd")
+        page.wait_for_function("() => /not the release/.test(document.querySelector('#fw-msg').textContent) && !document.querySelector('#fw-check').disabled",
+                               timeout=20000)
+        t = page.inner_text("#fw-msg")
+        check(t == "The firmware download is not the release it should be. Nothing was installed"
+              and get_json(base + "/api/firmware")["version"] == fw0 and f"/install/firmware/opendmd-{UPD_VERSION}-8mb.odfw" in asked,
+              f"update: the 8mb file named for a 4mb player installs nothing -> '{t}'")
         # The player refuses the firmware (422): no web app sent after it.
-        check_now(release("tampered.json", firmware="firmware/tampered.odfw"))
+        # (`variants` is what a player reads; `firmware` is the good file.)
+        check_now(release("tampered.json", variants={"4mb": {"firmware": "firmware/tampered.odfw"}}))
         page.click("#fw-upd")
         page.wait_for_function("() => /SHA-256/.test(document.querySelector('#fw-msg').textContent) && !document.querySelector('#fw-check').disabled",
                                timeout=30000)

@@ -320,7 +320,7 @@ def api_pages(browser, site: Path, dist: Path, art: Path, errors: list[str]) -> 
     carried = sorted(p.name for p in (site / "dev/api").glob("v*.html"))
     text = page_html.read_text() if page_html.is_file() else ""
     check(all(f'href="api/{n}"' in text for n in carried), f"api: dev/api.html links every frozen copy the site carries {carried}")
-    ver = json.loads((dist / "manifest.json").read_text())["version"]
+    ver = json.loads((dist / "manifest-4mb.json").read_text())["version"]
     with tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
         arch = tmp / "archive"

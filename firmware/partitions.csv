@@ -1,5 +1,6 @@
 # OpenDMD partition table v2, 4 MB flash (docs/ota.md): the firmware, a small
-# updater, and the web app.
+# updater, and the web app. Variant "4mb" (the ESP32 DevKit V1); the 8 MB
+# 8 MB build's is partitions-8mb.csv, the same scheme with bigger sizes.
 # - factory: the firmware. Never overwritten by itself: a LAN update
 #   (PUT /api/firmware) stages a signed bundle on the card, points otadata
 #   at ota_0 and restarts; the updater copies the image into factory, sets

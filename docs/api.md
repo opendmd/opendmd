@@ -109,7 +109,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 
 | field | meaning |
 |---|---|
-| `version`, `variant` | firmware version and flash variant (`"4mb"`) |
+| `version`, `variant` | firmware version and flash layout (`"4mb"`, the DevKit; `"8mb"`, an 8 MB board in development) |
 | `uptime_secs` | seconds since boot |
 | `t_ms` | the player's clock, ms, as the reply was built |
 | `ip`, `wifi`, `hostname` | address; `"sta"` or `"ap"` (setup mode); name |
@@ -653,15 +653,18 @@ curl -s $DMD/api/www
 
 ## Firmware update
 
-A signed bundle (`dist/opendmd-<version>.odfw`, `make fw-release`) is
+A signed bundle (`dist/opendmd-<version>-<variant>.odfw`, `make fw-release`) is
 staged on the card (one is needed), checked and installed (`docs/ota.md`);
 `make fw-ota HOST=…` does it.
 
 ### GET /api/firmware
 
-`{"version","build","variant","pending","last","log"}`: the running
-version (a bundle's, and `/api/status`'s; `build` its image descriptor,
-`"<version> 4mb"`), a staged update not yet installed (or null), the last
+`{"version","build","variant","flash_size","pending","last","log"}`: the
+running version (a bundle's, and `/api/status`'s; `build` its image
+descriptor, `"<version> <variant>"`), the flash layout it is built for
+(`variant`: `4mb` or `8mb`) and the flash chip's real size in bytes
+(`flash_size`; a 4mb build on an 8 MB board reports 8388608), a staged
+update not yet installed (or null), the last
 line of the card's `/update/log.txt` and its last ≤ 1 KB of whole lines
 (`log`, the firmware's and the updater's; both null without a card or log).
 
@@ -671,16 +674,18 @@ curl -s $DMD/api/firmware
 
 ### PUT /api/firmware
 
-The bundle as the body (`411` no length, `413` too big). Header, size,
-SHA-256 and Ed25519 signature are checked: a failure is a `422` with the
-reason, nothing staged; cut short `408`; no card `503`. Another key's
-bundle is refused once the 140-byte header is in. Any validly
+The bundle as the body (`411` no length, `413` too big). Header, the flash
+layout (the bundle's must be the player's `variant`), size, SHA-256,
+Ed25519 signature and the image's app descriptor are checked: a failure is
+a `422` with the reason, nothing staged; cut short `408`; no card `503`.
+Another key's bundle, or one for the other layout, is refused once the
+140-byte header is in. Any validly
 signed bundle is accepted, older ones too. Then
 `{"ok":true,"version":"…","rebooting":true}`; the panel is dark ~45 s from
 the end of the upload to playback while it installs.
 
 ```sh
-curl -s -X PUT --data-binary @dist/opendmd-0.4.0.odfw $DMD/api/firmware
+curl -s -X PUT --data-binary @dist/opendmd-0.4.0-4mb.odfw $DMD/api/firmware
 ```
 
 ## Live items

@@ -17,9 +17,9 @@ make pack ARGS="convert $CARD --verify"   # prepare every GIF (the playback cach
 sync && umount "$CARD"
 
 # once per board (and to move a board to the v2 flash layout): over USB
-make fw-release                            # dist/: app, updater, web app pack, bootloader, table, otadata, 4 MB image, manifest, signed bundle
-make flasher                               # http://localhost:8765 in Chrome/Edge -> Install
-#   or: make fw-release-flash PORT=/dev/ttyUSB0   (after `make fw-erase` if it ran anything else)
+make fw-release                            # dist/, both layouts (4mb DevKit, 8mb for an 8 MB board in development): app, bootloader, table, full image, manifest, signed bundle each; updater, otadata, web app pack
+make flasher                               # http://localhost:8765 in Chrome/Edge -> the board's Install button
+#   or: make fw-release-flash PORT=/dev/ttyUSB0 [VARIANT=8mb]   (after `make fw-erase` if it ran anything else)
 # join the OpenDMD-Setup WiFi, enter the network, then http://opendmd.local/
 
 # a firmware update over WiFi (the board must already have the v2 layout)
@@ -158,6 +158,12 @@ killed a USB reader on this machine before.
 
 ### The flash
 
+Two layouts: `4mb` for the ESP32 DevKit V1 (below) and `8mb` for the
+an 8 MB board in development (`firmware/partitions-8mb.csv`: `factory` 3 MB
+at 0x20000, `ota_0` at 0x320000, `www` 2 MB at 0x380000, a 2.5 MB `spare`
+at 0x580000; the first three partitions as below). Each has its own
+firmware image; `docs/ota.md` "Two flash layouts".
+
 | partition | offset | size | what |
 |---|---|---|---|
 | (bootloader) | 0x1000 | | the project's second-stage bootloader |
@@ -191,28 +197,31 @@ make fw-release
 This is a `cargo build --release` **without** the `dev-credentials` feature:
 `firmware/.env` is not read, the two WiFi variables are scrubbed from the
 build environment, and the code that would compile them in does not exist in
-this build. It runs `make web` first, then writes to `dist/`:
+this build. It runs `make web` first, then builds both layouts
+(`<var>` is `4mb` or `8mb`; `make fw-release VARIANT=8mb` builds one) and
+writes to `dist/`:
 
-| file | flashed at | |
+| file | flashed at (4mb / 8mb) | |
 |---|---|---|
-| `opendmd-<version>-app.bin` | 0x20000 | the app image; its descriptor carries `"<version> 4mb"` (checked) |
-| `updater.bin` | 0x260000 | the updater (`make updater`, `ota/updater`) |
+| `opendmd-<version>-<var>-app.bin` | 0x20000 | the app image; its descriptor carries `"<version> <var>"` (checked) |
+| `updater.bin` | 0x260000 / 0x320000 | the updater (`make updater`, `ota/updater`), the same for both |
 | `ota_data_initial.bin` | 0xF000 | `otadata` erased (8 KB of 0xFF): the bootloader boots `factory` |
-| `opendmd-<version>-www.pack` | 0x2C0000 | the web app |
-| `bootloader.bin` | 0x1000 | |
-| `partition-table.bin` | 0x8000 | |
-| `opendmd-<version>-4mb-full.bin` | 0x0 | all six merged and padded to 4 MB: `esptool write-flash 0 <it>` or any "flash one image" tool |
-| `manifest.json` | | ESP Web Tools: the six parts and their offsets |
-| `opendmd-<version>.odfw` | | the signed bundle for an update over WiFi (`make fw-ota`; `make fw-sign`) |
+| `opendmd-<version>-www.pack` | 0x2C0000 / 0x380000 | the web app, the same for both |
+| `bootloader-<var>.bin` | 0x1000 | its header carries the flash size (checked) |
+| `partition-table-<var>.bin` | 0x8000 | |
+| `opendmd-<version>-<var>-full.bin` | 0x0 | all six merged and padded to the flash size: `esptool write-flash 0 <it>` or any "flash one image" tool |
+| `manifest-<var>.json` | | ESP Web Tools: the six parts and their offsets |
+| `opendmd-<version>-<var>.odfw` | | the signed bundle for an update over WiFi (`make fw-ota [VARIANT=8mb]`; `make fw-sign`) |
 
-The target fails if the app image leaves less than 64 KB of the 2,359,296 B
-`factory` partition, if the updater leaves less than 32 KB of its 393,216 B
-`ota_0`, and the packer refuses a web app over the 1,310,720 B `www`
-partition. Signing needs the private key, `~/.config/opendmd/opendmd.key`
+The target fails if an app image leaves less than 64 KB of its layout's
+`factory` partition (2,359,296 B, or 3,145,728 B for 8mb), if the updater
+leaves less than 32 KB of its 393,216 B `ota_0`, and the packer refuses a
+web app over the smaller `www` partition (1,310,720 B: one pack for both). Signing needs the private key, `~/.config/opendmd/opendmd.key`
 (`uv run tools/fw-sign.py keygen` made it, once; it is never in the repo;
 `FW_SIGN_KEY=` points elsewhere); the device checks bundles against
-`firmware/keys/opendmd.pub`. The release build needs ~1.5 GB of scratch;
-`FW_RELEASE_TARGET_DIR=/roomier/dir make fw-release` puts it elsewhere.
+`firmware/keys/opendmd.pub`. The release build needs ~1.5 GB of scratch
+per layout; `FW_RELEASE_TARGET_DIR=/roomier/dir make fw-release` puts it
+elsewhere (the 8mb build in its `v8mb/`).
 
 ### Installing from a browser (the flasher)
 
@@ -321,12 +330,14 @@ erase the chip.
 ### Updating the firmware
 
 **Over WiFi** (a board already on layout v2, with a card in): `make
-fw-release`, then `make fw-ota HOST=opendmd.local`, or Settings → Device →
-Firmware → "Update from file…" with `dist/opendmd-<version>.odfw`. The
+fw-release`, then `make fw-ota HOST=opendmd.local` (`VARIANT=8mb` for the
+8 MB build), or Settings → Device → Firmware → "Update from file…" with
+`dist/opendmd-<version>-<variant>.odfw`, the board's own layout: the
+device, the web app and `fw-ota` refuse the other. The
 device receives the bundle onto the card (`/update/opendmd.bin`), checks
-it (its header, that it fits, the ESP image magic, the SHA-256 and the
-Ed25519 signature against the key compiled into the running firmware;
-anything wrong is a 422 and nothing changes), restarts into the updater,
+it (its header and layout, that it fits, the ESP image magic, the SHA-256,
+the Ed25519 signature against the key compiled into the running firmware
+and the image's app descriptor; anything wrong is a 422 and nothing changes), restarts into the updater,
 which copies it into `factory` and restarts into the new firmware: ~45 s
 from the end of the upload to playback, with the panel dark. `GET
 /api/firmware` then reports the new version; `/update/log.txt` on the card
@@ -388,7 +399,7 @@ that changed it, push the web app from the same tree (the flasher and
 
 | field | `filelist.txt`, few files prepared (mostly GIFs) | every file played from a prepared copy |
 |---|---|---|
-| `version` / `variant` | the release, e.g. `1.0.0` / `4mb` | same |
+| `version` / `variant` | the release, e.g. `1.0.0` / `4mb` (`8mb` on an 8 MB board in development) | same |
 | `manifest` | `/sdcard/filelist.txt` | `/sdcard/filelist.txt` (the copies are found per file) |
 | `index_state` | `ready` | `ready` |
 | `www_version` / `www` | the `git describe` of the `make web` that built the pack in flash; `www.ok` `true`, `www.error` `null` | same |

@@ -38,10 +38,13 @@ The board restarts with the new version and rejoins your WiFi.
 
 You can also download the firmware update file (it ends in `.odfw`) from
 the [installer page](install.md#firmware-update-file) and use **Update from
-file…** next to Check for updates. This updates only the firmware; if the
-file is older than what the player runs, the app asks first.
+file…** next to Check for updates. There is one file per board (DevKit
+4 MB, 8 MB build): take your board's, since the player refuses the
+other. This updates only the firmware; if the file is older than what the
+player runs, the app asks first.
 
 ## Which version do I have?
 
-**Settings → Device → Firmware** shows the firmware version, and
+**Settings → Device → Firmware** shows the firmware version and the
+board it is for, and
 **Settings → Device → About** shows the web app's.

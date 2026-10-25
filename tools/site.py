@@ -9,9 +9,10 @@
 
 - /            the README, as the landing page
 - /install/    the browser installer (docs/guide/install.md with ESP Web
-               Tools' button) and, under install/firmware/, the release in
-               dist/: the parts dist/manifest.json names, the merged image
-               and the signed update bundle, plus install/release.json
+               Tools' buttons, one per board: DevKit 4 MB, 8 MB build
+               8 MB) and, under install/firmware/, the release in dist/: the
+               parts dist/manifest-{4mb,8mb}.json name, the merged images
+               and the signed update bundles, plus install/release.json
                (what the web app's update check reads)
 - /guide/      the user guide (docs/guide/)
 - /card/       "Set up a card": docs/guide/card-setup.md with the page's app
@@ -139,14 +140,28 @@ MENU = [
 INSTALL_PAGE = "install/index.html"
 INSTALL_HEAD = ('<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/'
                 'install-button.js?module"></script>')
-INSTALL_BUTTON = """<div class="install">
-<esp-web-install-button id="install" manifest="firmware/manifest.json">
-<button slot="activate" id="install-activate">Install</button>
+# One button per flash layout (the firmware's `variant`): the board, the
+# words on its button, and what it says about the board.
+BOARDS = {
+    "4mb": ("DevKit (4 MB)", "Install on a DevKit",
+            "The ESP32 DevKit V1: the small board with a USB socket that plugs into the DMDoS board. Most displays have this one."),
+    "8mb": ("8 MB build", "Install the 8 MB build",
+            "For an 8 MB board in development. Its firmware has more room."),
+}
+INSTALL_ONE = """<div class="board" id="board-{v}">
+<h3>{board}</h3>
+<p>{about}</p>
+<esp-web-install-button id="install-{v}" manifest="firmware/manifest-{v}.json">
+<button slot="activate" id="install-activate-{v}">{label}</button>
 <span slot="unsupported">This browser can't talk to USB boards. Open this page in Chrome, Edge, Opera or Firefox on a computer.</span>
 <span slot="not-allowed">This page has to be opened over https.</span>
 </esp-web-install-button>
-<span class="ver">OpenDMD {version}</span>
 </div>"""
+INSTALL_BUTTON = ('<div class="install"><div class="boards">'
+                  + "".join(INSTALL_ONE.format(v=v, board=b, label=lab, about=about) for v, (b, lab, about) in BOARDS.items())
+                  + '</div><p class="ver">OpenDMD {version}. Not sure which board you have? Choose the DevKit: its firmware '
+                    "also runs on an 8 MB board in development, with less room. A DevKit given the 8 MB build's firmware won't start it: "
+                    "install again with the DevKit button and Erase device ticked.</p></div>")
 # "Set up a card": the page's app (markup at its marker, scripts beside it),
 # which runs on the demo's wasm (../demo/pkg/, ../demo/pkg-art/).
 CARD_PAGE = "card/index.html"
@@ -246,10 +261,13 @@ blockquote ul{padding-left:20px}
 hr{border:0;border-top:1px solid var(--line)}
 
 /* The installer */
-.install{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin:8px 0 24px;padding:20px;border:1px solid var(--line);border-radius:12px;
+.install{margin:8px 0 24px;padding:20px;border:1px solid var(--line);border-radius:12px;
 background:linear-gradient(135deg,rgba(247,165,49,.12),rgba(255,79,139,.08) 60%,transparent),var(--bg2)}
-.install button{font:inherit;font-weight:700;padding:11px 30px;border-radius:8px;border:0;background:var(--acc);color:#111;cursor:pointer;box-shadow:0 0 22px rgba(247,165,49,.35)}
-.install .ver{color:var(--mut);font:14px ui-monospace,Menlo,Consolas,monospace}
+.install .boards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.install .board h3{margin:0 0 4px}
+.install .board p{margin:0 0 14px;color:var(--mut)}
+.install button{font:inherit;font-weight:700;padding:11px 24px;border-radius:8px;border:0;background:var(--acc);color:#111;cursor:pointer;box-shadow:0 0 22px rgba(247,165,49,.35)}
+.install .ver{color:var(--mut);font-size:14px;margin:16px 0 0}
 
 /* Buttons, the landing page */
 .cta{display:inline-block;margin:6px 8px 6px 0;padding:10px 18px;border-radius:8px;background:var(--acc);color:#111;font-weight:700;text-decoration:none}
@@ -493,29 +511,41 @@ def decorate(body: str) -> str:
 
 def release(dist: Path, out: Path) -> dict:
     """The current release in dist/ (fw-release keeps older versions there
-    too): the parts its manifest names, the merged image and the signed
-    bundle of that version only, under install/firmware/; and
-    install/release.json for the web app's update check."""
-    manifest = dist / "manifest.json"
-    if not manifest.is_file():
-        raise SystemExit(f"no {manifest}: run make fw-release first")
-    m = json.loads(manifest.read_text())
-    ver = m["version"]
+    too), both flash layouts: the parts each manifest names, the merged
+    images and the signed bundles of that version only, under
+    install/firmware/; and install/release.json for the web app's update
+    check: `firmware` (the 4mb bundle: what web apps from before the 8 MB
+    layout read) and `variants`, each layout's bundle."""
+    ms = {}
+    for v in BOARDS:
+        manifest = dist / f"manifest-{v}.json"
+        if not manifest.is_file():
+            raise SystemExit(f"no {manifest}: run make fw-release first")
+        ms[v] = json.loads(manifest.read_text())
+    ver = ms["4mb"]["version"]
+    if any(m["version"] != ver for m in ms.values()):
+        raise SystemExit(f"the manifests are for different versions: {[m['version'] for m in ms.values()]}")
     fw = out / "install/firmware"
     fw.mkdir(parents=True)
-    names = [p["path"] for b in m["builds"] for p in b["parts"]]
-    names += [f"opendmd-{ver}-4mb-full.bin", f"opendmd-{ver}.odfw"]
-    for name in ["manifest.json", *names]:
+    names = [f"manifest-{v}.json" for v in ms]
+    names += sorted({p["path"] for m in ms.values() for b in m["builds"] for p in b["parts"]})
+    names += [f"opendmd-{ver}-{v}{suffix}" for v in ms for suffix in ("-full.bin", ".odfw")]
+    for name in names:
         if not (dist / name).is_file():
             raise SystemExit(f"no {dist / name}: run make fw-release")
         shutil.copyfile(dist / name, fw / name)
+    # The name installers before the 8 MB layout fetched: an installer tab
+    # left open across a release still finds a manifest (the DevKit's; its
+    # parts are named relative to it, so they are the ones published here).
+    shutil.copyfile(dist / "manifest-4mb.json", fw / "manifest.json")
     # The www pack's version: the header's string (docs/www-pack.md), the
     # one GET /api/www reports.
     pack = (fw / f"opendmd-{ver}-www.pack").read_bytes()[:64]
     if pack[:4] != b"ODWP":
         raise SystemExit(f"opendmd-{ver}-www.pack is not a www pack")
     www_version = pack[20:20 + pack[18]].decode()
-    info = {"version": ver, "firmware": f"firmware/opendmd-{ver}.odfw",
+    info = {"version": ver, "firmware": f"firmware/opendmd-{ver}-4mb.odfw",
+            "variants": {v: {"firmware": f"firmware/opendmd-{ver}-{v}.odfw"} for v in ms},
             "www": f"firmware/opendmd-{ver}-www.pack", "www_version": www_version}
     (out / "install/release.json").write_text(json.dumps(info, indent=2) + "\n")
     return info
@@ -525,13 +555,17 @@ def markers(page: str, text: str, rel_info: dict) -> str:
     """Site-only pieces, written in the docs as HTML comments (invisible on
     GitHub): the install button, the update bundle's download link."""
     ver = html.escape(rel_info["version"])
-    bundle = rel(page, "install/" + rel_info["firmware"])
-    text = text.replace("<!-- site:install-button -->", INSTALL_BUTTON.format(version=ver))
+    text = text.replace("<!-- site:install-button -->", INSTALL_BUTTON.replace("{version}", ver))
     if "<!-- site:card-prep -->" in text:
         text = text.replace("<!-- site:card-prep -->", (CARD_SRC / "app.html").read_text().strip())
+    links = []
+    for v, (board, _, _) in BOARDS.items():
+        f = rel_info.get("variants", {}).get(v, {}).get("firmware")
+        if f:
+            links.append(f'<li><a href="{rel(page, "install/" + f)}" download>{board}</a>: '
+                         f'<code>{html.escape(posixpath.basename(f))}</code></li>')
     return text.replace("<!-- site:firmware-bundle -->",
-                        f'<p><a href="{bundle}" download>Download the firmware update file</a> '
-                        f'(OpenDMD {ver}, <code>opendmd-{ver}.odfw</code>)</p>')
+                        f"<p>The firmware update file for OpenDMD {ver}, one per board:</p><ul>{''.join(links)}</ul>")
 
 
 def semver_key(v: str) -> tuple:
@@ -679,8 +713,8 @@ def main() -> None:
             shutil.rmtree(out)
         out.mkdir(parents=True)
     if a.api_only:
-        m = json.loads((a.dist / "manifest.json").read_text())
-        info = {"version": m["version"], "firmware": f"firmware/opendmd-{m['version']}.odfw"}
+        m = json.loads((a.dist / "manifest-4mb.json").read_text())
+        info = {"version": m["version"], "firmware": f"firmware/opendmd-{m['version']}-4mb.odfw"}
         art = json.loads((a.art / "art.json").read_text())
         assets: set[str] = set()
         versions = api_pages(out, info, art, a.api_archive, a.api_freeze, assets)

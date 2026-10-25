@@ -2,7 +2,8 @@ name: Save the ESP32 caches
 description: >
   Saves what ./.github/actions/esp-toolchain restored when it missed: ESP-IDF
   (~/.espressif) once it is complete, firmware/target once cargo has linked
-  the release ELF. Run it with `if: always()` straight after the build, so a
+  the release ELF of every layout the job builds (fw-variants, as given to
+  esp-toolchain). Run it with `if: always()` straight after the build, so a
   failure later in the job still keeps them.
 
 inputs:
@@ -14,6 +15,8 @@ inputs:
     required: true
   fw-target-hit:
     required: true
+  fw-variants:
+    default: "4mb"
 
 runs:
   using: composite
@@ -32,8 +35,14 @@ runs:
             [ -n "$(ls -A ~/.espressif/tools/$t 2>/dev/null)" ] || { echo "missing tool: $t"; idf=false; }
           done
         fi
-        if [ -f firmware/target/xtensa-esp32-espidf/release/opendmd-firmware ]; then fw=true; fi
-        echo "ESP-IDF complete: $idf; release ELF linked: $fw"
+        # Each layout's release ELF (the Makefile's FW_RELEASE_VTARGET: 4mb in
+        # firmware/target, any other in firmware/target/v<layout>).
+        fw=true
+        for v in ${{ inputs.fw-variants }}; do
+          d=firmware/target; [ "$v" = 4mb ] || d=firmware/target/v$v
+          [ -f "$d/xtensa-esp32-espidf/release/opendmd-firmware" ] || { echo "no $v release ELF"; fw=false; }
+        done
+        echo "ESP-IDF complete: $idf; release ELFs linked (${{ inputs.fw-variants }}): $fw"
         echo "idf=$idf" >> "$GITHUB_OUTPUT"
         echo "fw=$fw" >> "$GITHUB_OUTPUT"
 
