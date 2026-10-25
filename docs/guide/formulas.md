@@ -214,7 +214,9 @@ You don't have to type a part out: in the editor, write
 `use Rings as r` on a line of its own, with the name of one of your
 formulas or an example, and when you move to another line the editor puts
 that formula in as `part r { … }`, ready to change. Everything you save or
-share then has the whole of it, so it works anywhere.
+share then has the whole of it, so it works anywhere: if a `use` line names
+a formula there isn't (or the formula you're editing), the editor says so
+and won't save or share until it's fixed.
 
 - A part draws nothing until you use it. Its name on its own, as the last
   line (of the formula or of a layer), draws it: `layer { rings }`.

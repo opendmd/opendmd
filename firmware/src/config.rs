@@ -384,6 +384,13 @@ pub const BOOT_STACK: usize = 10 * 1024;
 /// refused); OTA's 3.2 KB went with OTA. 6.5 KB leaves ~2.4 KB over that, and gives
 /// the stream task's extra 1.5 KB back.
 pub const HTTP_STACK: usize = 6 * 1024 + 512;
+
+/// The stack a formula is compiled on (`psi_stack.rs`): Psi's compiler
+/// recurses to `psi::MAX_DEPTH` levels, ~393 B each on the ESP32, and used
+/// 10,048 B at its worst (`psi-probe`'s `worst nested`, 2026-10-25); taken
+/// from the heap for the compile only.
+#[cfg(feature = "psi")]
+pub const PSI_COMPILE_STACK: usize = 12 * 1024;
 /// The file-streaming task's stack (`stream.rs`): `files::serve` and, since
 /// uploads moved here, `files::stream_body_to` and the manifest/`.meta`
 /// installs, chunk buffers on the heap, plus logging. Also one contiguous

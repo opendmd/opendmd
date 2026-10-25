@@ -3047,7 +3047,11 @@ def fx_gif_checks(page: Page, base: str, overlay: Path) -> None:
 
 FORMULAS_JSON = REPO / "opendmd-web" / "www" / "formulas.json"
 # An example that draws over a GIF: it reads what is under it, or has layers.
-OVER_RE = re.compile(r"\b(ur|ug|ub|ul)\b|layer (multiply|add|screen|max|min)")
+def psi_over(page: Page, srcs: list[str]) -> list[bool]:
+    """Which formulas draw over what is under them: info()'s bit 5, asked of
+    a fresh instance of pkg-psi (the app's own rule)."""
+    return page.evaluate("""async (srcs) => { const m = await import('./pkg-psi/opendmd_psi_web.js?over'); await m.default();
+        return srcs.map(s => m.compile(s) && !!(m.info()[5] & 32)); }""", srcs)
 
 
 def open_formulas(page: Page) -> None:
@@ -3116,7 +3120,8 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     dark = page.evaluate("""() => [...document.querySelectorAll('#psi-ex .psi-tile canvas, #psi-ex-over .psi-tile canvas')].filter(c => {
         const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 90) return false; return true; }).length""")
     # Those that draw over a GIF (they read what is under them) in a section of their own.
-    over = [e["name"] for e in examples if OVER_RE.search(e["src"])]
+    over = psi_over(page, [e["src"] for e in examples])
+    over = [e["name"] for e, o in zip(examples, over) if o]
     check(len(psi) == 1 and tiles == [e["name"] for e in examples if e["name"] not in over] + over and len(over) >= 4 and dark == 0,
           f"formulas: opening the tab loads the module ({len(psi)}); {len(tiles)} examples ({len(over)} over a GIF), every thumbnail lit ({dark} dark)")
     wait_lit(page, "#psi-panel", "formulas: the first example in Details")
@@ -3389,7 +3394,7 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     page.keyboard.type("use Rings as r", delay=30)
     page.wait_for_timeout(400)
     typed, said = page.input_value("#psi-src"), page.inner_text("#psi-err")
-    typing = typed == "use Rings as r\nr" and "pastes in a formula" in said
+    typing = typed == "use Rings as r\nr" and "puts a formula in" in said
     page.keyboard.press("ArrowDown")
     page.wait_for_timeout(500)
     moved = "part r {" in page.input_value("#psi-src")
@@ -3399,6 +3404,32 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     err = page.inner_text("#psi-err")
     check(page.get_attribute("#psi-ed", "data-err") == "1" and "no formula called “No such thing”" in err,
           f"formulas: a use line naming nothing says so ({err!r})")
+    mine = lambda: page.evaluate("JSON.parse(localStorage.getItem('odmd.psi.mine') || '[]').map(f => f.name)")
+    before = mine()
+    page.click("#psi-save")
+    page.wait_for_timeout(400)
+    toast = page.locator("#toasts .toast:has-text('First fix line 1')").count()
+    check(toast >= 1 and mine() == before, f"formulas: Save refuses a use line it can't paste ({toast} toast, saved {mine()})")
+    # A formula naming itself: never pasted into itself, not saved bare.
+    page.fill("#psi-name", "Loopy")
+    page.fill("#psi-src", "use Loopy as p\np")
+    page.click("#psi-save")
+    page.wait_for_timeout(400)
+    err = page.inner_text("#psi-err")
+    check("can’t be put inside itself" in err and "Loopy" not in mine() and page.input_value("#psi-src") == "use Loopy as p\np",
+          f"formulas: a formula naming itself isn't pasted or saved ({err!r}, {mine()})")
+    page.context.close()
+    # A cycle in saved text (two formulas naming each other): one paste each,
+    # the inner use left as a comment, no runaway.
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#formulas")
+    page.evaluate("""localStorage.setItem('odmd.psi.mine', JSON.stringify([
+        {id: 1, name: 'Ay', src: 'use Bee as q\\nq'}, {id: 2, name: 'Bee', src: 'use Ay as p\\np'}]))""")
+    page.goto(base + "/#formula=" + urllib.parse.quote("use Bee as q\nq") + "&name=Ay")
+    page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
+    page.wait_for_timeout(600)
+    src = page.input_value("#psi-src")
+    check(src.count("part ") == 1 and "-- use Ay as p" in src, f"formulas: a cycle through saved formulas pastes once ({src!r})")
     page.context.close()
 
 

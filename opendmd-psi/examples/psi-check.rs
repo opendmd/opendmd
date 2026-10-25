@@ -218,7 +218,7 @@ fn main() {
             label.join(", "),
             COLS.min(shots.len()),
             if under.is_some() {
-                ", over the sample picture"
+                ", over a sample picture"
             } else {
                 ""
             }
