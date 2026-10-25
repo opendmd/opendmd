@@ -297,7 +297,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
 def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
     """/f/ (an example, as the gallery's Open gives it) and the gallery, at
     both sizes: the viewport and the whole page."""
-    e = json.loads((ROOT / "opendmd-web/www/formulas.json").read_text())[8]  # Stripes: a slider
+    e = next(x for x in json.loads((ROOT / "opendmd-web/www/formulas.json").read_text()) if x["name"] == "Stripes")  # a slider
     for size in SIZES:
         page = new_page(browser, size, errors)
         page.goto(share_link(base, e["src"], e["name"], a=e.get("a", 0)))

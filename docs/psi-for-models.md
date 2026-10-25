@@ -718,6 +718,31 @@ layer { rgb(0.05, 0.08, 0.2) }
 layer { candy((px - 88)/35, (py - 4)/23, inside) }
 ```
 
+### 26. Day and night (the showcase)
+
+What only a formula can do: it follows the real clock, never shows a seam,
+and every pixel is its own 24-bit colour. The tricks that keep it at
+~7 ms: everything that depends only on the row is nearly free, so the
+lake is the sky's rows read again (`ry`), squashed and darker, its ripple
+a per-row shift (`wob`); the sun, the moon, the glitter on the water and
+**one star a row** are a single `g - abs(px - cx)` with a per-row width
+`g` and centre `cx`; the clouds' wind goes round a circle in the noise
+(`40*sin(t/3600)`, `16*cos(t/3600)`), so the hour-long loop has no seam;
+`gray` on an `add` layer clamps below 0 for free.
+
+```psi example=day-and-night
+loop 3600
+-- a: clouds (left: clear sky, right: overcast)
+-- follows the clock: the sun crosses from 6:00 to 18:00, the moon from 18:00 to 6:00
+frame { d = (hour + minute/60)/24; e = -cos(d); lit = clamp(e*2 + 0.25, 0, 1); dusk = clamp(1 - abs(e)*4, 0, 1); ph = frac(d*2 - 0.5); sx = 4 + ph*120; sy = 10 + 20*sin(ph/2); r = e > 0 ? 14 : 7; m = 0.7 - a*0.4 - lit*0.15; ox = 40*sin(t/3600); oz = 16*cos(t/3600) }
+-- below row 10, water: the sky again, squashed, darker, rippling; above, one star a row
+wet = py < 10; ry = max(py, 30 - py*2); dim = wet ? 0.5 : 1; wob = wet*sin(py/2 + t)*2; dy = r - (ry - sy)*(ry - sy); g = wet ? sin(py*1.9 + t*2) + 1 : dy > 0 ? sqrt(dy) : 0.75 - (lit + dusk)*2 + sin(t/3 + py*0.37)*0.25; cx = wet + (dy > 0) ? sx - wob : py*53 % 128
+-- the sky: night, blue day, red and violet at dawn and dusk
+layer { rgb(dim*mix(lit*0.5 + dusk, dusk*0.25, ry/20 - 0.5), dim*mix(lit*0.75 + dusk*0.25, lit*0.25, ry/20 - 0.5), dim*mix(lit + 0.1, lit*0.75 + dusk*0.25, ry/20 - 0.5)) }
+-- clouds (noise on a slow wind, an hour before it comes round), sun, moon and stars, added on
+layer add { gray(max(noise(px/20 + (ox + wob/20), ry/8, oz) - m, g - abs(px - cx))) }
+```
+
 ## 15. In the product (not built)
 
 This reference and `psi-check` are tooling only: nothing in OpenDMD calls a
