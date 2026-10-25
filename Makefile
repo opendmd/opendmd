@@ -73,7 +73,7 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: test test-card test-wasm sim sim-build psi-bench check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
+.PHONY: test test-card test-wasm sim sim-build psi-bench psi-check check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
@@ -132,6 +132,13 @@ sim-build:
 # (ARGS="--list" for the step listings, "FILE.psi" for more formulas).
 psi-bench:
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo run --release --example bench -- $(if $(filter command line,$(origin ARGS)),$(ARGS),)
+
+# Check a candidate formula (docs/psi-for-models.md): errors with the line and
+# carets, steps, the panel's estimate, and a PNG contact sheet of its frames.
+# make psi-check F=my.psi [ARGS="--out sheet.png --frames 8 --a 0.5 --hash"]
+psi-check:
+	@test -n "$(F)" || { echo 'usage: make psi-check F=formula.psi [ARGS="--out sheet.png"]'; exit 2; }
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release --example psi-check -- $(abspath $(F)) $(if $(filter command line,$(origin ARGS)),$(ARGS),)
 
 CARGO_ABOUT ?= cargo-about
 CARGO_ABOUT_VERSION := 0.9.2

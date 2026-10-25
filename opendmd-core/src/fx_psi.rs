@@ -167,6 +167,29 @@ thread_local! {
 /// and the one it asked for (ms, high and low half).
 static STATS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
 
+/// How a formula is compiled: [`psi::compile_into`] in place, unless the
+/// firmware installs another with [`set_compiler`].
+pub type Compiler = fn(&str, &mut psi::Program) -> Result<psi::Info, psi::Error>;
+
+static COMPILER: std::sync::OnceLock<Compiler> = std::sync::OnceLock::new();
+
+/// Install how formulas are compiled (once). The firmware runs the compiler
+/// on a stack of its own: it recurses up to [`psi::MAX_DEPTH`] levels
+/// (~10 KB at the worst on the ESP32), more than the main task (16 KB, much
+/// of it used where a path opens) or the HTTP server (6.5 KB, which checks
+/// an attract effect) can spare.
+pub fn set_compiler(f: Compiler) {
+    let _ = COMPILER.set(f);
+}
+
+/// Compile `src` into `prog` the installed way.
+pub fn compile_into(src: &str, prog: &mut psi::Program) -> Result<psi::Info, psi::Error> {
+    match COMPILER.get() {
+        Some(f) => f(src, prog),
+        None => psi::compile_into(src, prog),
+    }
+}
+
 /// Install the clock that turns the governor on (the firmware's
 /// `esp_timer`).
 pub fn set_clock(clock: Option<Clock>) {
@@ -280,7 +303,7 @@ fn query(query: &str) -> Query {
 /// slowest step 80 ms) 32 ms. The estimate.
 fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
     let t0 = clock().map(|c| (c, c()));
-    psi::compile_into(&q.src, prog)?;
+    compile_into(&q.src, prog)?;
     if let Some((c, t0)) = t0 {
         STATS[2].store(c().wrapping_sub(t0), Ordering::Relaxed);
     }
@@ -539,7 +562,7 @@ impl FormulaLook {
     }
 
     fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
-        psi::compile_into(&q.src, prog)?;
+        crate::fx_psi::compile_into(&q.src, prog)?;
         if !prog.over() {
             prog.clear();
             return Err(psi::Error {

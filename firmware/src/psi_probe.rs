@@ -132,6 +132,103 @@ fn lanes_over<const N: usize>(
     })
 }
 
+/// The compiler's own stack on the worst inputs (`psi::worst`, the deepest
+/// last): each compiled on a thread of its own with a [`WORST_STACK`] stack
+/// (an overflow on the main task at boot would be a boot loop), reporting
+/// the bytes it used; then, only if that plus what the main task already
+/// uses leaves a 2 KB margin, the deepest again on the main task itself.
+const WORST_STACK: usize = 40 * 1024;
+
+fn worst_stack() {
+    let mut deepest = 0u32;
+    // The sources first, on a thread of their own: making some of them
+    // compiles deeper and deeper candidates.
+    let srcs: Vec<(&str, String)> = std::thread::Builder::new()
+        .stack_size(WORST_STACK)
+        .spawn(|| psi::worst::ALL.iter().map(|(n, f)| (*n, f())).collect())
+        .ok()
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    for (name, src) in srcs.iter().cloned() {
+        let r = std::thread::Builder::new()
+            .stack_size(WORST_STACK)
+            .spawn(move || {
+                let mut prog = zeroed::<psi::Program>();
+                let base = stack_unused();
+                let r = psi::compile_into(&src, &mut prog);
+                (
+                    src.len(),
+                    base.saturating_sub(stack_unused()),
+                    r.err().map(|e| e.msg),
+                )
+            })
+            .map(|h| h.join());
+        match r {
+            Ok(Ok((len, used, err))) => {
+                deepest = deepest.max(used);
+                say!(info,
+                    "psi-probe: worst {name}: {len} B source, compile used {used} B of a thread's stack ({})",
+                    err.as_deref().unwrap_or("ok")
+                );
+            }
+            _ => say!(
+                error,
+                "psi-probe: worst {name}: no thread (heap {} B free)",
+                heap()
+            ),
+        }
+    }
+    // Through `psi_stack` itself, on its own thread (the size the player
+    // uses, pinned and prioritised as it does): the compile time (what a
+    // frame deadline sees when a formula opens) and the bytes of that stack
+    // never touched — the real headroom, the thread's entry frames and any
+    // interrupt frames pushed on it included.
+    for (name, src) in &srcs {
+        let mut prog = zeroed::<psi::Program>();
+        let r = crate::psi_stack::run(|| {
+            let t0 = Instant::now();
+            let ok = psi::compile_into(src, &mut prog).is_ok();
+            (t0.elapsed().as_micros(), ok, stack_unused())
+        });
+        match r {
+            Some((us, ok, free)) => say!(info,
+                "psi-probe: worst {name} on psi_stack ({} B): compile {us} us ({}), {free} B of its stack never touched",
+                crate::config::PSI_COMPILE_STACK,
+                if ok { "ok" } else { "an error" }
+            ),
+            None => say!(error, "psi-probe: worst {name} on psi_stack: no thread (heap {} B free)", heap()),
+        }
+    }
+    // The deepest through the real path (`Fx::parse`, as the engine and the
+    // checks before saving open a formula): compiled on its own stack
+    // (`psi_stack`), so the main task's mark should not move.
+    for (name, src) in &srcs {
+        let fixed = src.replace("tme", "t");
+        let before = stack_unused();
+        let bad = Fx::parse(&fx_psi::path(src, "")).is_some();
+        let good = Fx::parse(&fx_psi::path(&fixed, "")).is_some();
+        say!(info,
+            "psi-probe: worst {name} as an effect on the main task: misspelt opened {bad}, fixed opened {good}, main stack {before} -> {} B unused",
+            stack_unused()
+        );
+    }
+    let unused = stack_unused();
+    if deepest > 0 && deepest + 2048 < unused {
+        let mut prog = zeroed::<psi::Program>();
+        for (_, src) in &srcs {
+            let _ = psi::compile_into(src, &mut prog);
+        }
+        say!(info,
+            "psi-probe: worst on the main task: {unused} B unused before, {} B after (deepest thread figure {deepest} B)",
+            stack_unused()
+        );
+    } else {
+        say!(warn,
+            "psi-probe: worst on the main task: skipped, {unused} B unused and the deepest compile takes {deepest} B"
+        );
+    }
+}
+
 pub fn run() {
     let start = Instant::now();
     let stack0 = stack_unused();
@@ -324,6 +421,7 @@ pub fn run() {
         );
     }
 
+    worst_stack();
     let stack1 = stack_unused();
     say!(info,
         "psi-probe: done: main stack {stack1} B unused (was {stack0} before the probe; the high-water mark is the deepest so far), heap {} B free, {} ms in all",
