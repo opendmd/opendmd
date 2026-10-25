@@ -268,6 +268,12 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
             e = examples[5]
             check(page.inner_text("#f-name") == e["name"] and page.locator("#f-code").inner_text().rstrip("\n") == e["src"],
                   f"gallery: Open leads to {e['name']}'s page")
+            # A Formula that draws over a GIF: /f/ shows it over the sample picture, not black.
+            e = next(x for x in examples if x["name"] == "Scanlines")
+            page.goto(share_link(base, e["src"], e["name"], a=e["a"]))
+            page.wait_for_function("+(document.querySelector('#f-panel').dataset.frames || 0) > 5", timeout=20000)
+            n = lit(page, "#f-panel")
+            check(n > 1000, f"/f/: {e['name']} (over a GIF) is lit, over the sample picture ({n} px)")
         else:
             check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "gallery (phone): no sideways scroll")
         page.context.close()

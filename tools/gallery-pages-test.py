@@ -41,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 
 import yaml
@@ -142,6 +143,25 @@ def run_build(bare: Path, rt: Path, target: Path, py: Path) -> tuple[bool, str, 
     return True, out, upload
 
 
+def dark_thumbs(thumbs: Path) -> list[str]:
+    """The thumbnails with no lit pixel (r + g + b over 90, as site-smoke
+    checks the page in Chromium): opendmd-gallery's 8-bit RGB, unfiltered."""
+    dark = []
+    for p in sorted(thumbs.glob("*.png")):
+        b, i, idat = p.read_bytes(), 8, b""
+        while i < len(b):
+            n = int.from_bytes(b[i:i + 4], "big")
+            if b[i + 4:i + 8] == b"IDAT":
+                idat += b[i + 8:i + 8 + n]
+            i += 12 + n
+        raw, w = zlib.decompress(idat), int.from_bytes(b[16:20], "big")
+        rows = [raw[k + 1:k + 1 + w * 3] for k in range(0, len(raw), w * 3 + 1)]
+        if b[24:26] != b"\x08\x02" or any(raw[k] for k in range(0, len(raw), w * 3 + 1)) or \
+                not any(sum(r[j:j + 3]) > 90 for r in rows for j in range(0, len(r), 3)):
+            dark.append(p.stem)
+    return dark
+
+
 def diff_trees(a: Path, b: Path) -> list[str]:
     """Every path that differs between two trees (content, type, presence)."""
     out = []
@@ -224,6 +244,9 @@ def main() -> int:
         rel1 = release_site("release-1", g1)
         page = (rel1 / "formulas/index.html").read_text()
         check(page.count("<!-- gallery:begin -->") == 1 and "Spiral sweep" in page, "the release's gallery page has its markers and the contribution")
+        thumbs = sorted((rel1 / "formulas").glob("*/*.png"))
+        dark = dark_thumbs(rel1 / "formulas/examples") + dark_thumbs(rel1 / "formulas/thumbs")
+        check(len(thumbs) > 20 and not dark, f"every thumbnail lit, those over a GIF over the sample picture ({len(thumbs)}, dark: {dark})")
         sh("tools/site-publish.sh", rel1, bare, cwd=ROOT, env={"SITE_REPO_WORK": str(tmp / "work"), "SITE_PUBLISH_ALLOW_DIRTY": "1"})
 
         target = tmp / "pages-target"
