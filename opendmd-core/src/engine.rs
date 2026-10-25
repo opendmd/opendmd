@@ -958,7 +958,19 @@ impl Engine {
             return Ok(TickOutcome::Idle);
         }
         let decoded = self.advance(now, canvas)?;
-        let stepped = self.compositor.step(now, canvas) != Step::Idle;
+        // A step on its own only when the file's next frame is not about to
+        // carry it (the same rule as the wake time below). The loop also
+        // wakes for other things — a glow step, a formula look's frame —
+        // and such a wake used to run the step the frame was meant to
+        // carry, whose work (with a look: every row drawn again) then made
+        // the frame late.
+        let carried = !matches!(decoded, TickOutcome::Frame { .. })
+            && self.compositor.step_at().is_some_and(|step| {
+                self.current
+                    .as_ref()
+                    .is_some_and(|p| now < p.next_frame_at && step + STEP / 2 >= p.next_frame_at)
+            });
+        let stepped = !carried && self.compositor.step(now, canvas) != Step::Idle;
         let (playing, started) = match decoded {
             TickOutcome::Frame {
                 playing, started, ..
@@ -2591,6 +2603,187 @@ mod tests {
         assert!(transitioning);
         assert_eq!(e.frame_due(), Some(ms(1100)));
         assert_eq!(next_frame_at, ms(1050) - early + crate::compositor::STEP);
+    }
+
+    /// A wake for something else (a glow step, a formula look's frame)
+    /// between a transition's steps does not run a step the file's next
+    /// frame is to carry: that step's work would make the frame late.
+    #[test]
+    fn a_wake_between_steps_leaves_the_frames_step_to_the_frame() {
+        use crate::compositor::Kind;
+        let ms = Duration::from_millis;
+        let mut e = two_solids(Transition::new(Kind::Dissolve, ms(400)));
+        let mut canvas = Canvas::new();
+        e.tick(ms(0), &mut canvas).unwrap();
+        // B at 1000 (frames every 50 ms): steps at 1000 and 1020; the one
+        // due at 1040 is within half a step of B's frame at 1050.
+        e.tick(ms(1000), &mut canvas).unwrap();
+        let TickOutcome::Frame { next_frame_at, .. } = e.tick(ms(1020), &mut canvas).unwrap()
+        else {
+            panic!("a step");
+        };
+        assert_eq!(next_frame_at, ms(1050));
+        let before = e.display(&canvas).as_slice().to_vec();
+        e.display_mut(&mut canvas).dirty_mut().clear();
+        // A wake at 1042 and at 1048: nothing to show, nothing composited.
+        for t in [1042, 1048] {
+            assert!(
+                matches!(e.tick(ms(t), &mut canvas).unwrap(), TickOutcome::Idle),
+                "at {t}"
+            );
+        }
+        assert!(e.display(&canvas).as_slice() == before.as_slice());
+        assert!(e.display(&canvas).dirty().is_clean());
+        // B's frame carries it.
+        let TickOutcome::Frame { transitioning, .. } = e.tick(ms(1050), &mut canvas).unwrap()
+        else {
+            panic!("B's frame");
+        };
+        assert!(transitioning);
+        assert!(e.display(&canvas).as_slice() != before.as_slice());
+        // A step that is its own (20 ms on, B's next frame 30 ms after it)
+        // still runs at a wake on time.
+        assert!(matches!(
+            e.tick(ms(1070), &mut canvas).unwrap(),
+            TickOutcome::Frame { .. }
+        ));
+    }
+
+    /// A one-frame solid GIF whose frame is `cs` hundredths of a second.
+    fn solid_gif_every(r: u8, g: u8, b: u8, cs: u16) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = Encoder::new(&mut out, 128, 32, &[]).unwrap();
+            enc.set_repeat(Repeat::Infinite).unwrap();
+            let mut f = Frame {
+                width: 128,
+                height: 32,
+                buffer: Cow::Owned(vec![1u8; 128 * 32]),
+                dispose: DisposalMethod::Keep,
+                delay: cs,
+                ..Default::default()
+            };
+            f.palette = Some(vec![0, 0, 0, r, g, b]);
+            enc.write_frame(&f).unwrap();
+        }
+        out
+    }
+
+    /// The firmware's loop with something (a glow) waking it every 1 ms,
+    /// through a Dissolve 400 into a file with `delay` frames, from the
+    /// tick B started at (`t0`, already ticked): an Idle tick changes
+    /// nothing on display, steps are at most 30 ms apart, the transition
+    /// ends 400-410 ms in, and with 20 ms frames every step is a frame's.
+    fn tick_through_a_dissolve(e: &mut Engine, canvas: &mut Canvas, t0: Duration, delay: u32) {
+        let ms = Duration::from_millis;
+        e.display_mut(canvas).dirty_mut().clear();
+        let mut last = t0;
+        let mut t = t0;
+        loop {
+            t += ms(1);
+            assert!(t < t0 + ms(600), "{delay} ms: the transition never ended");
+            let before = e.display(canvas).as_slice().to_vec();
+            let due = e.frame_due();
+            match e.tick(t, canvas).unwrap() {
+                TickOutcome::Idle => {
+                    let shown = e.display(canvas);
+                    assert!(
+                        shown.as_slice() == before.as_slice() && shown.dirty().is_clean(),
+                        "{delay} ms: an Idle tick at {:?} changed the picture",
+                        t - t0
+                    );
+                }
+                TickOutcome::Frame { transitioning, .. } => {
+                    assert!(
+                        t - last <= ms(30),
+                        "{delay} ms: {:?} between steps at {:?}",
+                        t - last,
+                        t - t0
+                    );
+                    last = t;
+                    if !transitioning {
+                        assert!(
+                            (ms(400)..=ms(410)).contains(&(t - t0)),
+                            "{delay} ms: ended {:?} in",
+                            t - t0
+                        );
+                        return;
+                    }
+                    // A step without a frame only when the frame is more
+                    // than half a step away (at 30 ms frames, the step 20 ms
+                    // after one is exactly half a step before the next:
+                    // carried by it). So at 20 ms, every step is a frame's.
+                    if e.frame_due() == due {
+                        let left = due.unwrap() - t;
+                        assert!(
+                            delay != 20 && left > STEP / 2,
+                            "{delay} ms: a step at {:?} without a frame, the frame {left:?} on",
+                            t - t0
+                        );
+                    }
+                    // The blit.
+                    e.display_mut(canvas).dirty_mut().clear();
+                }
+                other => panic!("{delay} ms: {other:?}"),
+            }
+        }
+    }
+
+    /// Ticks every 1 ms (a glow's wakes) through dissolves into files with
+    /// 20, 30 and 50 ms frames, and into a 10 ms live effect. 30 ms pins
+    /// the boundary: the step 20 ms after a frame is exactly half a step
+    /// before the next (`step + 10 == due`), so the frame carries it.
+    #[test]
+    fn a_dissolve_under_1_ms_wakes_steps_on_its_cadence_and_ends_on_time() {
+        use crate::compositor::Kind;
+        let ms = Duration::from_millis;
+        let dissolve = Transition::new(Kind::Dissolve, ms(400));
+        for delay in [20u32, 30, 50] {
+            let mut e = engine_with(
+                &[
+                    ("/gifs/Consoles/NES_A_01.gif", solid_gif(255, 0, 0)),
+                    (
+                        "/gifs/Consoles/NES_B_01.gif",
+                        solid_gif_every(0, 0, 255, (delay / 10) as u16),
+                    ),
+                ],
+                "/gifs/Consoles/NES_A_01.gif\n/gifs/Consoles/NES_B_01.gif",
+                DwellPolicy {
+                    min: Duration::from_secs(1),
+                    max: Duration::from_secs(30),
+                    min_loops: 1,
+                },
+            );
+            e.set_transition(dissolve);
+            let mut canvas = Canvas::new();
+            let mut t = ms(0);
+            let t0 = loop {
+                if let TickOutcome::Frame {
+                    playing, started, ..
+                } = e.tick(t, &mut canvas).unwrap()
+                {
+                    if started && playing.title == "B" {
+                        break t;
+                    }
+                }
+                t += ms(1);
+                assert!(t < ms(3000), "B never started");
+            };
+            assert!(e.is_transitioning());
+            tick_through_a_dissolve(&mut e, &mut canvas, t0, delay);
+        }
+        // A live effect at 100 fps.
+        let mut e = two_solids(dissolve);
+        let mut canvas = Canvas::new();
+        e.tick(ms(0), &mut canvas).unwrap();
+        e.tick(ms(50), &mut canvas).unwrap();
+        e.play_now("@fx:starfield?fps=100", ms(60)).unwrap();
+        let TickOutcome::Frame { started, .. } = e.tick(ms(60), &mut canvas).unwrap() else {
+            panic!("the effect");
+        };
+        assert!(started && e.is_transitioning());
+        assert_eq!(e.frame_due(), Some(ms(70)), "10 ms frames");
+        tick_through_a_dissolve(&mut e, &mut canvas, ms(60), 10);
     }
 
     /// The firmware's pause: paused, then the file let go of (its decoder's

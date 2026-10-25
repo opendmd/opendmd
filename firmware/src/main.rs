@@ -1448,8 +1448,18 @@ fn main() -> Result<()> {
                 }
                 // The formula look over it (its time is the frame's
                 // `decode`, with the decoding the governor counts it with).
+                // Not while a transition runs: the look's own frames ride
+                // on its steps then, and the step's compositing counted as
+                // decoding held the look at half its rate for a few
+                // seconds after most dissolves (the rig: 20% of the time
+                // at 40 ms frames, against 7% when they were drawn between
+                // the steps, timed alone).
                 let look_start = Instant::now();
-                let decode_us = tick_us.saturating_sub(open_us);
+                let decode_us = if transitioning {
+                    0
+                } else {
+                    tick_us.saturating_sub(open_us)
+                };
                 let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), decode_us);
                 tick_us += us(look_start.elapsed()) + std::mem::take(&mut look_us);
                 let blit_start = Instant::now();
@@ -1538,10 +1548,11 @@ fn main() -> Result<()> {
                 }
                 let glow_between = std::mem::take(&mut glow_us);
                 // A dot fading (glow), or the formula look's own frame:
-                // wake for its next step.
+                // wake for its next step. (Not the look's while a
+                // transition runs: its steps draw the look.)
                 let glow_wait = panel.glow_wait().map(|w| w.max(Duration::from_millis(1)));
                 let look_wait = looks
-                    .due()
+                    .due(transitioning)
                     .map(|d| d.saturating_sub(now).max(Duration::from_millis(1)));
                 let glow_wait = match (glow_wait, look_wait) {
                     (Some(a), Some(b)) => Some(a.min(b)),
@@ -1581,14 +1592,21 @@ fn main() -> Result<()> {
             TickOutcome::Idle if off => config::OFF_SLEEP,
             TickOutcome::Idle => {
                 // Between frames: the formula look's own frame, if one is
-                // due (not while paused: the picture holds), then the
-                // glow's next step.
+                // due (not while paused: the picture holds; not while a
+                // transition runs: its steps, at most 20 ms apart, draw
+                // the look, its own frames included — drawn here too, a
+                // dissolve's next step drew every row again and ran past
+                // the file's frame), then the glow's next step.
                 // A GIF frame due before the look's frame and its blit
                 // could be done: the frame draws the look anyway.
                 let at = epoch.elapsed();
+                let transitioning = eng.is_transitioning();
                 let room = Duration::from_micros(u64::from(looks.avg_us()) + LOOK_BLIT_US);
                 let file_soon = eng.frame_due().is_some_and(|d| d.saturating_sub(at) < room);
-                if !eng.is_paused() && !file_soon && looks.due().is_some_and(|d| d <= at) {
+                if !eng.is_paused()
+                    && !file_soon
+                    && looks.due(transitioning).is_some_and(|d| d <= at)
+                {
                     let t = Instant::now();
                     let pic = looks.apply(at, eng.display_mut(&mut canvas), 0);
                     panel.blit(pic);
@@ -1599,7 +1617,7 @@ fn main() -> Result<()> {
                 // further than the frame: a flat 5 ms made it up to 5 ms
                 // late, which nothing counted.
                 let due = eng.frame_due().filter(|_| !eng.is_paused());
-                let look_due = looks.due().filter(|_| !eng.is_paused());
+                let look_due = looks.due(transitioning).filter(|_| !eng.is_paused());
                 let due = match (due, look_due) {
                     (Some(a), Some(b)) => Some(a.min(b)),
                     (a, b) => a.or(b),
