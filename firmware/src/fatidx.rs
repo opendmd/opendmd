@@ -506,8 +506,10 @@ fn build() -> io::Result<()> {
         }
         Ok(())
     };
-    // The records gathered per walk: what the heap affords, up to 32 KB.
-    let n = crate::state::largest_free_block().saturating_sub(16 * 1024).clamp(4 * 1024, 32 * 1024);
+    // The records gathered per walk: up to 16 KB (2,048 records), less if
+    // the largest block is short. On the rig a 32 KB group took the sampled
+    // floor to 19 KB during a build; 16 KB costs two or three more walks.
+    let n = crate::state::largest_free_block().saturating_sub(16 * 1024).clamp(4 * 1024, config::FATIDX_GROUP);
     let mut group = vec![0u8; n];
     let mut out = BufWriter::with_capacity(1024, File::create(NEW)?);
     fatdir::build_index(&mut |b| out.write_all(b), &geo, &mut walk_all, &mut group)?;

@@ -737,10 +737,12 @@ pub const FATIDX_QUIET_S: u32 = 30;
 pub const FATIDX_MIN_GAP_S: u32 = 600;
 /// No build in the first seconds after boot: the start-up show, the first GIF.
 pub const FATIDX_BOOT_DELAY_S: u32 = 20;
-/// Free heap a build needs to start: its buffers (a 4 KB sector batch, a
-/// 1 KB writer, and the records gathered per walk: up to 32 KB, what the
-/// largest block leaves over 16 KB) over the network side's transients.
+/// Free heap a build needs to start: its task's stack (8 KB), a 4 KB
+/// sector batch, a 1 KB writer and the group (`FATIDX_GROUP`), over the
+/// network side's transients.
 pub const FATIDX_BUILD_HEAP: usize = 48 * 1024;
 /// The build's task stack (it exists only while it builds): the walk goes
 /// through FatFs and the SD SPI driver under two closures.
 pub const FATIDX_STACK: usize = 8 * 1024;
+/// The most records a build gathers per walk, in bytes (8 a record).
+pub const FATIDX_GROUP: usize = 16 * 1024;
