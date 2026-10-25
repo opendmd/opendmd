@@ -1,0 +1,42 @@
+<div class="cardprep" id="cp" data-state="loading">
+<label class="cp-drop" id="cp-drop" for="cp-file">
+<input type="file" id="cp-file" accept=".zip,application/zip">
+<span class="cp-big">Drop the pack's zip here</span>
+<span>or <u>choose it</u> — <span id="cp-drop-name">DMDos GUI v1 + GIFs, about 1 GB</span></span>
+</label>
+<p class="cp-msg cp-err" id="cp-zip-err" role="alert" hidden></p>
+<div id="cp-found" hidden><p class="cp-msg" id="cp-found-text" role="status"></p></div>
+<p class="cp-acts"><button type="button" class="cp-btn" id="cp-write" disabled>Write to the card…</button></p>
+<p class="cp-msg" id="cp-nowrite" hidden>This browser can't write to a card from a web page. Open this page in Chrome or
+Edge on a computer, or copy the pack onto the card yourself (see <a href="../guide/card.html">The SD card</a>): the
+player then gets every GIF ready to play smoothly by itself, over a night or two.</p>
+<div id="cp-card" hidden>
+<p class="cp-msg" id="cp-card-text" role="status"></p>
+<p class="cp-acts"><button type="button" class="cp-btn" id="cp-start" hidden>Start</button>
+<button type="button" class="cp-btn alt" id="cp-again">Choose another folder</button></p>
+</div>
+<p class="cp-msg cp-err" id="cp-card-err" role="alert" hidden></p>
+<div id="cp-run" hidden>
+<p class="cp-msg" id="cp-status" role="status" aria-live="polite"></p>
+<progress id="cp-bar" value="0" max="1"></progress>
+<p class="cp-acts"><button type="button" class="cp-btn alt" id="cp-stop">Stop</button></p>
+<p class="cp-note">Keep this tab open until it's finished: the page keeps your computer awake while it writes. If you
+stop or it's interrupted, nothing is half-written, and choosing the card again carries on where it stopped.</p>
+</div>
+<div id="cp-done" hidden>
+<p class="cp-msg" id="cp-done-text" role="status"></p>
+<details id="cp-n-bad" hidden><summary id="cp-n-bad-s"></summary><ul id="cp-n-bad-l"></ul></details>
+<details id="cp-n-unsupported" hidden><summary id="cp-n-unsupported-s"></summary><ul id="cp-n-unsupported-l"></ul></details>
+<details id="cp-n-failed" hidden><summary id="cp-n-failed-s"></summary><ul id="cp-n-failed-l"></ul></details>
+<details id="cp-n-damaged" hidden><summary id="cp-n-damaged-s"></summary><ul id="cp-n-damaged-l"></ul></details>
+<p class="cp-note" id="cp-n-missing" hidden></p>
+<p class="cp-note" id="cp-n-program" hidden>The DMDoS Windows program and its icon aren't needed on the card, so they
+weren't put on it.</p>
+</div>
+<div class="cp-eject" id="cp-eject" hidden>
+<p><strong>Eject the card before you take it out</strong>, so everything is really written to it: on Windows,
+<strong>Eject</strong> from the USB icon in the taskbar or the card's menu in File Explorer; on a Mac, the eject button
+beside the card in Finder; on Linux, <strong>Eject</strong> in the file manager. It can take a minute. Then put the
+card in the display and turn it on.</p>
+</div>
+</div>

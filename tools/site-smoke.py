@@ -25,9 +25,24 @@ site (make site):
   release's frozen page, kept byte for byte; a stray file and a link, left
   out) and this release frozen: both exist and are listed newest first,
   the frozen page says which release it describes and links the latest;
-  with `--api-freeze auto` off a tag, nothing new is frozen.
+  with `--api-freeze auto` off a tag, nothing new is frozen;
+- /card/ ("Set up a card"), run with `?target=opfs` (the browser's private
+  storage stands in for the picked card: the directory picker can't be
+  driven headless) on the synthetic card zip tools/card-zip.py writes: the
+  zip's counts; a run stopped half-way leaves only whole files and no
+  playlists; an empty file and a swap file an interrupted write leaves, and
+  a GIF of the same name but another size, are dealt with on the next run,
+  which finishes the card: every GIF and playlist byte-identical to the
+  zip, every lighter version byte-identical to `opendmd-pack convert`'s for
+  the unzipped tree (`--pack`), cache/.failed with convert's lines, nothing
+  the card doesn't need (the Windows program, the stray .mp4); then a run
+  that writes nothing. Its visible text never names how the player keeps
+  its lighter versions (CARD_LEAK); a browser without the directory picker
+  gets the hand-copy sentence; a file that isn't a zip, or a zip that isn't
+  a card, is refused; it asks nothing of any other site; the menu and the
+  links to it.
 
-Screenshots of /f/ and the gallery at laptop and phone sizes with --shots.
+Screenshots of /f/, the gallery and /card/ at laptop and phone sizes with --shots.
 Needs, once, `uv run --with playwright playwright install chromium`.
 """
 
@@ -350,6 +365,252 @@ def api_pages(browser, site: Path, dist: Path, art: Path, errors: list[str]) -> 
             check(names == ["v0.0.1.html"], f"api: off the tag ({desc}), --api-freeze auto freezes nothing new {names}")
 
 
+# Words "Set up a card" never shows: how the player keeps a GIF's lighter version is its business.
+CARD_LEAK = re.compile(r"odm|bucket|cache|prepar|cop(y|ies) of|lighter (version|cop)|\bcopies\b|\.crswap|opfs", re.I)
+
+# The card in the page's private storage, every file as base64 (and its
+# lastModified), and helpers to clear it and to put files in it.
+OPFS_JS = """
+async () => {
+  const root = await navigator.storage.getDirectory();
+  const out = {};
+  async function walk(d, pre) {
+    for await (const [name, h] of d.entries()) {
+      if (h.kind === 'directory') { await walk(h, pre + name + '/'); continue; }
+      const f = await h.getFile();
+      const b = new Uint8Array(await f.arrayBuffer());
+      let s = '';
+      for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+      out[pre + name] = [btoa(s), f.lastModified];
+    }
+  }
+  await walk(root, '');
+  return out;
+}"""
+OPFS_CLEAR = """async () => { const r = await navigator.storage.getDirectory();
+  for await (const [n] of r.entries()) await r.removeEntry(n, { recursive: true }); }"""
+OPFS_PUT = """async ([path, b64]) => {
+  const parts = path.split('/'); const name = parts.pop();
+  let d = await navigator.storage.getDirectory();
+  for (const p of parts) d = await d.getDirectoryHandle(p, { create: true });
+  const w = await (await d.getFileHandle(name, { create: true })).createWritable();
+  await w.write(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))); await w.close(); }"""
+
+
+def card_page(browser, base: str, errors: list[str], pack: Path, shots: Path | None) -> None:
+    import base64
+    import zipfile
+    with tempfile.TemporaryDirectory() as t:
+        tmp = Path(t)
+        r = subprocess.run(["uv", "run", "--quiet", str(ROOT / "tools/card-zip.py"), str(tmp / "fx")], capture_output=True, text=True)
+        check(r.returncode == 0, f"card: the synthetic card zip (tools/card-zip.py) {r.stderr.strip()[-200:]}")
+        zpath = tmp / "fx/card.zip"
+        conv = tmp / "conv"
+        shutil.copytree(tmp / "fx/tree", conv)
+        r = subprocess.run([str(pack), "convert", str(conv)], capture_output=True, text=True)
+        check(r.returncode == 0, f"card: opendmd-pack convert on the unzipped tree {r.stderr.strip()[-200:]}")
+        want_copies = {p.relative_to(conv).as_posix(): p.read_bytes() for p in (conv / "cache").rglob("*") if p.is_file() and p.name != ".failed"}
+        want_failed = (conv / "cache/.failed").read_text()
+        with zipfile.ZipFile(zpath) as z:
+            zfiles = {i.filename: z.read(i) for i in z.infolist() if not i.is_dir()}
+        on_card = {k: v for k, v in zfiles.items() if (k.startswith("gifs/") and k.lower().endswith(".gif"))
+                   or k in ("filelist.txt", "filelist.hall", "filelist.xmas", "logos/boot.gif")}
+        gifs = [k for k in on_card if k.startswith("gifs/")]
+        cats = {k.split("/")[1] for k in gifs if k.count("/") > 1}
+        requests: list[str] = []
+
+        def visible(page: Page, where: str) -> None:
+            text = page.inner_text("main")
+            hits = sorted({m.group(0) for m in CARD_LEAK.finditer(text)})
+            check(not hits, f"card: no hidden-machinery words on the page ({where}) {hits}")
+
+        def card(page: Page) -> dict[str, tuple[bytes, int]]:
+            return {k: (base64.b64decode(v[0]), v[1]) for k, v in page.evaluate(OPFS_JS).items()}
+
+        def open_page(query: str, size: str = "laptop", page: Page | None = None) -> Page:
+            """/card/ in a new context, or again in `page`'s (the same private storage: the same card)."""
+            if page is None:
+                page = new_page(browser, size, errors)
+                page.on("request", lambda rq: requests.append(rq.url))
+            page.goto(f"{base}/card/{query}")
+            page.wait_for_selector("#cp[data-state=idle]", timeout=20000)
+            return page
+
+        def take_zip(page: Page) -> None:
+            page.set_input_files("#cp-file", str(zpath))
+            page.wait_for_selector("#cp[data-state=read]", timeout=20000)
+
+        def pick(page: Page) -> None:
+            page.click("#cp-write")
+            page.wait_for_selector("#cp[data-state=listed], #cp[data-state=ready]", timeout=20000)
+
+        # 1. The zip, and a run stopped half-way.
+        page = open_page("?target=opfs&pace=500")
+        visible(page, "on arrival")
+        check(page.locator("nav a.on").inner_text() == "Set up a card"
+              and page.evaluate("[...document.querySelectorAll('nav a')].map(a => a.textContent).join('|')").count("Install|Set up a card|") == 1,
+              "card: in the menu, right after Install")
+        check(page.is_disabled("#cp-write") and page.is_hidden("#cp-nowrite"), "card: Write to the card… waits for the zip")
+        page.evaluate(OPFS_CLEAR)
+        take_zip(page)
+        found = page.inner_text("#cp-found-text")
+        check(found.startswith(f"Found {len(gifs)} GIFs in {len(cats)} categories and 3 playlists (All files, Halloween, Christmas)"),
+              f"card: what the zip holds: {found}")
+        visible(page, "the zip read")
+        pick(page)
+        listed = page.inner_text("#cp-card-text")
+        check(listed.startswith(f"{len(gifs)} GIFs to write"), f"card: an empty card: {listed}")
+        page.click("#cp-start")
+        page.wait_for_function("+document.querySelector('#cp').dataset.done >= 2", timeout=30000)
+        status = page.inner_text("#cp-status")
+        check(status.startswith("Writing GIFs and getting them ready · ") and f" of {len(gifs)}" in status, f"card: the progress line: {status}")
+        page.click("#cp-stop")
+        page.wait_for_selector("#cp[data-state=stopped]", timeout=30000)
+        done = int(page.get_attribute("#cp", "data-done"))
+        damaged_before = int(page.get_attribute("#cp", "data-damaged"))
+        check(page.inner_text("#cp-done-text").startswith(f"Stopped after {done} of {len(gifs)} GIFs"),
+              f"card: stopped: {page.inner_text('#cp-done-text')}")
+        got = card(page)
+        partial = [k for k, (b, _) in got.items() if (k in on_card and b != on_card[k]) or (k.startswith("cache/") and k != "cache/.failed" and b != want_copies.get(k))]
+        check(0 < done < len(gifs) and not partial and not any(k.endswith(".crswap") for k in got),
+              f"card: a stopped run leaves only whole files ({len(got)} files after {done} GIFs; bad: {partial})")
+        check(not any(k.startswith("filelist") for k in got), "card: and no playlists: they go last")
+        visible(page, "stopped")
+
+        # 2. What an interrupted write leaves, and another file of the same name; then the run that finishes the card.
+        written = sorted(k for k in got if k.startswith("gifs/"))
+        unwritten = sorted(k for k in gifs if k not in got)
+        page = open_page("?target=opfs", page=page)
+        empty, swap = unwritten[0], unwritten[1] + ".crswap"
+        page.evaluate(OPFS_PUT, [empty, ""])
+        page.evaluate(OPFS_PUT, [swap, base64.b64encode(b"half a swap file").decode()])
+        other = written[0]
+        page.evaluate(OPFS_PUT, [other, base64.b64encode(b"GIF89a another file of the same name").decode()])
+        other_copy = next((k for k in got if k.startswith("cache/") and k.endswith("/" + other.split("/")[-1])), None)
+        if other_copy:
+            page.evaluate(OPFS_PUT, [other_copy, base64.b64encode(b"GIF89a its old lighter version").decode()])
+        take_zip(page)
+        pick(page)
+        listed = page.inner_text("#cp-card-text")
+        check(listed.startswith("Picking up where it stopped: ") and page.get_attribute("#cp", "data-swaps") == "1",
+              f"card: half a card: {listed}")
+        page.click("#cp-start")
+        page.wait_for_selector("#cp[data-state=done]", timeout=60000)
+        summary = page.inner_text("#cp-done")
+        check(summary.startswith(f"Your card is ready: {len(gifs)} GIFs and 3 playlists (All files, Halloween, Christmas), "
+                                 "ready to play from the first boot."), f"card: done: {summary[:160]}")
+        # (Those met before the stop are in cache/.failed, but not as "plays as it is": tried again, met again.)
+        damaged = int(page.get_attribute("#cp", "data-damaged"))
+        check(damaged == 2 and "2 GIFs can't be played by anything" in summary
+              and "1 line of the playlists names GIFs the pack doesn't have" in summary and "Windows program" in summary,
+              f"card: the notes: unplayable GIFs ({damaged_before} met before the stop, {damaged} in the finishing run), "
+              "the missing line, the Windows program")
+        check(page.is_visible("#cp-eject") and "Eject the card before you take it out" in page.inner_text("#cp-eject"),
+              "card: it says to eject the card first")
+        visible(page, "done")
+        got = card(page)
+        cards = {k: b for k, (b, _) in got.items()}
+        check(all(cards.get(k) == v for k, v in on_card.items()), "card: every GIF, the playlists and the boot logo byte-identical to the zip")
+        mine = {k: v for k, v in cards.items() if k.startswith("cache/") and k != "cache/.failed"}
+        check(mine == want_copies, f"card: every lighter version byte-identical to opendmd-pack convert's ({len(mine)} of {len(want_copies)};"
+              f" differing: {sorted(k for k in set(mine) | set(want_copies) if mine.get(k) != want_copies.get(k))[:5]})")
+        failed = cards.get("cache/.failed", b"").decode()
+        asis = [l for l in failed.splitlines(keepends=True) if l.endswith("plays as it is\n")]
+        rest = sorted(l.split("\t")[0] for l in failed.splitlines() if not l.endswith("plays as it is"))
+        check("".join(asis) == want_failed and rest == ["/gifs/Pinball_Short/PINBALL_Cut_Short.gif", "/gifs/Pinball_Short/PINBALL_Not_A_GIF.gif"],
+              f"card: cache/.failed: convert's lines, and the two nothing can play {failed!r}")
+        extra = sorted(set(cards) - set(on_card) - set(want_copies) - {"cache/.failed"})
+        check(not extra, f"card: nothing else on the card (no Windows program, no .mp4, no swap file) {extra}")
+
+        # 3. A finished card: nothing to write. The two GIFs nothing decodes are
+        # offered again (cache/.failed lines other than "plays as it is" are
+        # retried), and trying them writes nothing.
+        page = open_page("?target=opfs", page=page)
+        take_zip(page)
+        pick(page)
+        check(page.get_attribute("#cp", "data-state") == "listed" and page.get_attribute("#cp", "data-todo") == "2"
+              and page.inner_text("#cp-card-text") == "Everything is already on this card: it's ready to play. "
+              "2 GIFs couldn't be got ready before; Start tries them again.",
+              f"card: a finished card: {page.inner_text('#cp-card-text')}")
+        page.click("#cp-start")
+        page.wait_for_selector("#cp[data-state=done]", timeout=30000)
+        check(card(page) == got and page.get_attribute("#cp", "data-written") == "0" and page.get_attribute("#cp", "data-made") == "0",
+              "card: trying them again writes nothing, and nothing on the card is touched")
+        if shots:
+            page.screenshot(path=str(shots / "card-laptop-ready.png"), full_page=True)
+        page.evaluate(OPFS_CLEAR)
+
+        # 4. The zip changed on disk mid-run (moved, deleted, re-downloaded): the run stops, says so, writes no playlists.
+        moving = tmp / "moving.zip"
+        shutil.copyfile(zpath, moving)
+        page = open_page("?target=opfs&pace=500", page=page)
+        page.set_input_files("#cp-file", str(moving))
+        page.wait_for_selector("#cp[data-state=read]", timeout=20000)
+        pick(page)
+        page.click("#cp-start")
+        page.wait_for_function("+document.querySelector('#cp').dataset.done >= 2", timeout=30000)
+        moving.write_bytes(b"gone")
+        page.wait_for_selector("#cp[data-state=failed]", timeout=60000)
+        gone = page.inner_text("#cp-done-text")
+        names = set(card(page))
+        check(gone.startswith("The zip couldn't be read any more after") and "moved" in gone
+              and not any(k.startswith("filelist") for k in names) and int(page.get_attribute("#cp", "data-failed")) == 0,
+              f"card: the zip gone mid-run stops the run, no playlists: {gone}")
+        page.evaluate(OPFS_CLEAR)
+        page.context.close()
+
+        # 5. Not a zip; a zip that isn't a card.
+        page = open_page("")
+        notzip = tmp / "pack.zip"
+        notzip.write_bytes(b"GIF89a this is not a zip " * 40)
+        page.set_input_files("#cp-file", str(notzip))
+        page.wait_for_selector("#cp[data-state=error]", timeout=20000)
+        check("can't be read as a zip" in page.inner_text("#cp-zip-err") and page.is_disabled("#cp-write"), "card: a file that isn't a zip is refused")
+        other_zip = tmp / "photos.zip"
+        with zipfile.ZipFile(other_zip, "w") as z:
+            z.writestr("holiday/beach.jpg", b"\xff\xd8 not really")
+        page.set_input_files("#cp-file", str(other_zip))
+        page.wait_for_function("document.querySelector('#cp-zip-err').textContent.includes('look like a card')", timeout=20000)
+        check(page.is_visible("#cp-zip-err"), f"card: a zip that isn't a card is refused: {page.inner_text('#cp-zip-err')}")
+        page.context.close()
+
+        # 6. A browser that can't write to a folder.
+        ctx_page = new_page(browser, "laptop", errors)
+        ctx_page.add_init_script("delete window.showDirectoryPicker")
+        ctx_page.goto(f"{base}/card/")
+        ctx_page.wait_for_selector("#cp[data-state=idle]", timeout=20000)
+        check(ctx_page.is_visible("#cp-nowrite") and ctx_page.is_hidden("#cp-write")
+              and "Open this page in Chrome or Edge on a computer" in ctx_page.inner_text("#cp-nowrite"),
+              "card: without the directory picker, the hand-copy sentence instead of the button")
+        ctx_page.context.close()
+
+        # 7. Phone width; and the links to the page.
+        page = open_page("", "phone")
+        check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "card (phone): no sideways scroll")
+        if shots:
+            page.screenshot(path=str(shots / "card-phone.png"), full_page=True)
+        page.context.close()
+        if shots:
+            page = open_page("?target=opfs")
+            take_zip(page)
+            page.screenshot(path=str(shots / "card-laptop.png"), full_page=True)
+            page.context.close()
+        foreign = sorted({u for u in requests if not u.startswith(base)})
+        check(not foreign, f"card: no request to any other site {foreign}")
+
+
+def card_links(site: Path) -> None:
+    install = (site / "install/index.html").read_text()
+    guide = (site / "guide/card.html").read_text()
+    page = (site / "card/index.html").read_text()
+    licences = (site / "licenses/index.html").read_text()
+    check('href="../card/index.html">Set up a card</a> from the' in install, "card: the install page's last step links it")
+    check('href="../card/index.html">Set up a card</a> write it' in guide, "card: the SD card guide links it")
+    check('href="https://dmdos.net/">dmdos.net</a>' in page and "download.php" not in page and ".zip\"" not in page,
+          "card: the pack is linked at dmdos.net's site, not the file")
+    check("Set up a card</strong> runs the web app's WebAssembly in your browser" in licences, "card: the licences page says what it runs")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("site", type=Path)
@@ -357,6 +618,8 @@ def main() -> int:
     ap.add_argument("--gallery-tool", type=Path, default=ROOT / "opendmd-gallery/target/release/opendmd-gallery")
     ap.add_argument("--dist", type=Path, default=ROOT / "dist", help="the release make site published (its manifest's version)")
     ap.add_argument("--art", type=Path, default=ROOT / "target/site-art", help="tools/site-art.py's output")
+    ap.add_argument("--pack", type=Path, default=ROOT / "opendmd-pack/target/release/opendmd-pack",
+                    help="opendmd-pack, built (the reference for /card/'s lighter versions)")
     a = ap.parse_args()
     if a.shots:
         a.shots.mkdir(parents=True, exist_ok=True)
@@ -373,6 +636,9 @@ def main() -> int:
         gallery(browser, base, errors, a.shots)
         print("the HTTP API (dev/api.html, dev/api/)")
         api_pages(browser, a.site, a.dist, a.art, errors)
+        print("set up a card (/card/)")
+        card_links(a.site)
+        card_page(browser, base, errors, a.pack, a.shots)
         if a.shots:
             screenshots(browser, base, errors, a.shots)
         browser.close()
