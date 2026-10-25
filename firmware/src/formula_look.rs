@@ -290,15 +290,21 @@ mod with_psi {
             self.active_ref().and_then(FormulaLook::shown).unwrap_or(display)
         }
 
-        /// When the look must be drawn whatever the picture does: its own
-        /// frame; at once while its buffers can be taken (after a
-        /// refusal or a yield, once the heap is back).
+        /// When the look must be drawn between the player's frames,
+        /// whatever the picture does: its own frame; at once while its
+        /// buffers can be taken (after a refusal or a yield, once the heap
+        /// is back). Never while a transition runs (`transitioning`): its
+        /// steps draw the look, its own frames included
+        /// (`FormulaLook::due_between`).
         #[inline(never)]
-        pub fn due(&self) -> Option<Duration> {
+        pub fn due(&self, transitioning: bool) -> Option<Duration> {
+            if transitioning {
+                return None;
+            }
             if self.may_take() {
                 return Some(Duration::ZERO);
             }
-            self.active_ref().and_then(FormulaLook::due)
+            self.active_ref().and_then(|l| l.due_between(transitioning))
         }
 
         /// Its mean render time, µs (0 with none).
@@ -394,7 +400,7 @@ mod without {
         pub fn shown<'a>(&'a self, display: &'a Canvas) -> &'a Canvas {
             display
         }
-        pub fn due(&self) -> Option<Duration> {
+        pub fn due(&self, _: bool) -> Option<Duration> {
             None
         }
         pub fn avg_us(&self) -> u32 {
