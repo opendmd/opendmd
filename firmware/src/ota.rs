@@ -5,10 +5,13 @@
 //! on the card: `PUT /api/firmware` ([`receive`], on the stream task like
 //! every upload) writes the signed bundle to `/update/opendmd.bin.part`,
 //! hashing the image as it goes and keeping the 140-byte header in memory,
-//! then checks it (`opendmd_core::ota`: the header, that the image fits the
-//! factory partition, the ESP image magic 0xE9, the SHA-256 and the Ed25519
-//! signature against [`PUBLIC_KEY`]). The signature is checked as soon as
-//! the header is in, before anything is written to the card. Any failure is
+//! then checks it (`opendmd_core::ota`: the header, that it is for this
+//! image's flash layout ([`crate::state::FLASH_VARIANT`]: a 4mb player
+//! refuses an 8mb bundle and the reverse), that the image fits the factory
+//! partition, the ESP image magic 0xE9, the SHA-256, the Ed25519 signature
+//! against [`PUBLIC_KEY`], and that the image's app descriptor is a build
+//! for the same layout). The layout and the signature are checked as soon
+//! as the header is in, before anything is written to the card. Any failure is
 //! a 422 and the card is as it was. Success renames the file to
 //! `/update/opendmd.bin`, writes `/update/pending.txt` (the version), points
 //! otadata at `ota_0` (the updater, `ota/updater`) and restarts once the
@@ -29,7 +32,9 @@
 
 use anyhow::Result;
 use esp_idf_sys as sys;
-use opendmd_core::ota::{verify_header, Header, ImageHasher, Meta, OtaError, HEADER_LEN};
+use opendmd_core::ota::{
+    check_app_desc, verify_header, Header, ImageHasher, Meta, OtaError, HEADER_LEN,
+};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -101,9 +106,9 @@ pub fn verify_signature(head: &[u8; HEADER_LEN]) -> Result<Meta, OtaError> {
     verify_header(&header, PUBLIC_KEY)
 }
 
-/// The header checks that need nothing but the header: shape, signature
-/// (on the network worker), that the image fits, that the body is exactly
-/// header + image. `Err(None)`: the worker did not answer.
+/// The header checks that need nothing but the header: shape, the flash
+/// layout, signature (on the network worker), that the image fits, that the
+/// body is exactly header + image. `Err(None)`: the worker did not answer.
 fn check_header(
     head: &[u8],
     body_len: u64,
@@ -116,8 +121,8 @@ fn check_header(
     }
     header.copy_from_slice(&head[..HEADER_LEN]);
     // The cheap checks first, here: no round trip for a file that is not a
-    // bundle at all.
-    Header::parse(&header[..])?;
+    // bundle at all, or one for the other flash layout.
+    Header::parse(&header[..])?.check_variant(crate::state::FLASH_VARIANT)?;
     let (tx, rx) = mpsc::channel();
     net.send(NetCommand::VerifyBundle { header, reply: tx })
         .map_err(|_| None)?;
@@ -284,8 +289,11 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         return up.error(500, "500 Internal Server Error", &format!("{e:#}"));
     }
 
-    let (got, first) = (hasher.len(), hasher.first());
-    if let Err(e) = meta.check_image(got, first, &hasher.finish()) {
+    let (got, first, prefix) = (hasher.len(), hasher.first(), *hasher.prefix());
+    if let Err(e) = meta
+        .check_image(got, first, &hasher.finish())
+        .and_then(|()| check_app_desc(&prefix, meta.variant))
+    {
         let _ = fs::remove_file(BUNDLE_PART);
         return refuse(up, &e.to_string());
     }
@@ -362,7 +370,25 @@ fn pending_version() -> Option<String> {
     (!v.is_empty() && v.len() <= 32).then(|| v.to_string())
 }
 
-/// `GET /api/firmware`: `{"version","build","variant","pending","last","log"}`.
+/// The flash chip's real size in bytes (`esp_flash_get_physical_size`: its
+/// JEDEC ID), 0 if it cannot be read. Asked once (a flash command, a few
+/// tens of µs with the cache off), then kept. A 4mb image on an 8 MB board
+/// runs (with the smaller layout); this is how the web app can tell.
+fn flash_size() -> u32 {
+    static SIZE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *SIZE.get_or_init(|| {
+        let mut size = 0u32;
+        // SAFETY: the default chip (null), an out-parameter on our stack.
+        let err = unsafe { sys::esp_flash_get_physical_size(std::ptr::null_mut(), &mut size) };
+        if err == sys::ESP_OK {
+            size
+        } else {
+            0
+        }
+    })
+}
+
+/// `GET /api/firmware`: `{"version","build","variant","flash_size","pending","last","log"}`.
 /// Reads two small files on the card when it is mounted (at most
 /// [`LOG_TAIL`] bytes of the log).
 pub fn info_json(card_mounted: bool) -> String {
@@ -374,10 +400,11 @@ pub fn info_json(card_mounted: bool) -> String {
     let last = log.as_deref().and_then(last_line);
     let opt = |v: Option<String>| v.as_deref().map_or_else(|| "null".into(), json_string);
     format!(
-        r#"{{"version":{},"build":{},"variant":{},"pending":{},"last":{},"log":{}}}"#,
+        r#"{{"version":{},"build":{},"variant":{},"flash_size":{},"pending":{},"last":{},"log":{}}}"#,
         json_string(crate::state::firmware_version()),
         json_string(&crate::state::running_version()),
         json_string(crate::state::FLASH_VARIANT),
+        flash_size(),
         opt(pending),
         opt(last),
         opt(log),

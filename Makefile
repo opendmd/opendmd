@@ -27,15 +27,45 @@ FW_BINARY := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/opendmd-firmware
 # with this sdkconfig rather than espflash's bundled one.
 FW_BOOTLOADER := $(FW)/target/xtensa-esp32-espidf/$(FW_PROFILE)/bootloader.bin
 
-# The flash layout v2 (firmware/partitions.csv, docs/ota.md): otadata, the
-# firmware in factory, the updater in ota_0, the web app's www pack. Keep in
-# step with the CSV.
+# The flash layouts, one firmware image each (docs/ota.md): `4mb`, layout v2
+# for the ESP32 DevKit V1 (firmware/partitions.csv), and `8mb` for the
+# 8 MB board in development (firmware/partitions-8mb.csv). Both:
+# otadata, the firmware in factory, the updater in ota_0, the web app's www
+# pack; the 8 MB one bigger. VARIANT=4mb|8mb picks one for the targets that
+# build, flash or update a board (default 4mb); `make fw-release` builds
+# both unless given one. Keep in step with the CSVs.
+FW_VARIANTS := 4mb 8mb
+VARIANT ?=
+FW_VARIANT := $(or $(VARIANT),4mb)
+ifeq ($(filter $(FW_VARIANT),$(FW_VARIANTS)),)
+$(error VARIANT=$(VARIANT): the flash layouts are $(FW_VARIANTS))
+endif
+FW_PARTITIONS_4mb := $(FW)/partitions.csv
+FW_PARTITIONS_8mb := $(FW)/partitions-8mb.csv
+FW_FLASH_BYTES_4mb := 4194304
+FW_FLASH_BYTES_8mb := 8388608
+FW_APP_BYTES_4mb := 2359296
+FW_APP_BYTES_8mb := 3145728
+UPDATER_OFFSET_4mb := 0x260000
+UPDATER_OFFSET_8mb := 0x320000
+WWW_OFFSET_4mb := 0x2C0000
+WWW_OFFSET_8mb := 0x380000
+WWW_BYTES_4mb := 1310720
+WWW_BYTES_8mb := 2097152
+# What ESP Web Tools' manifest calls the firmware: it must equal the Improv
+# answer's name (firmware/src/improv.rs FIRMWARE_NAME), per layout.
+FW_MANIFEST_NAME_4mb := OpenDMD
+FW_MANIFEST_NAME_8mb := OpenDMD 8 MB
+FW_PARTITIONS := $(FW_PARTITIONS_$(FW_VARIANT))
+FW_FLASH_BYTES := $(FW_FLASH_BYTES_$(FW_VARIANT))
 OTADATA_OFFSET := 0xF000
 FW_APP_OFFSET := 0x20000
-FW_APP_BYTES := 2359296
-UPDATER_OFFSET := 0x260000
-WWW_OFFSET := 0x2C0000
-WWW_BYTES := 1310720
+FW_APP_BYTES := $(FW_APP_BYTES_$(FW_VARIANT))
+UPDATER_OFFSET := $(UPDATER_OFFSET_$(FW_VARIANT))
+WWW_OFFSET := $(WWW_OFFSET_$(FW_VARIANT))
+WWW_BYTES := $(WWW_BYTES_$(FW_VARIANT))
+# One www pack for both layouts: built to fit the smaller www partition.
+WWW_PACK_BYTES := $(WWW_BYTES_4mb)
 # `make web` writes the pack here (gitignored); fw-flash writes it at WWW_OFFSET.
 WWW_PACK := $(WEB)/www.pack
 
@@ -76,7 +106,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 .PHONY: test test-card test-wasm sim sim-build psi-bench psi-check check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
-	fw-release fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
+	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve site-publish site-smoke gallery-tool card-test
 
 test:
@@ -225,8 +255,8 @@ web:
 	find $(WEB_WWW) -type f \( -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.wasm' -o -name '*.svg' -o -name '*.json' -o -name licenses.txt \) \
 		-exec gzip -9 -n -k -f {} \;
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo run --release --quiet -- \
-		www ../$(WEB_WWW) --out ../$(WWW_PACK) --version-file ../$(WEB_WWW)/version.txt --max-bytes $(WWW_BYTES)
-	@uv run tools/web-size.py $(WEB_WWW) --pack $(WWW_PACK) --pack-limit $(WWW_BYTES) --share $(WEB)/share
+		www ../$(WEB_WWW) --out ../$(WWW_PACK) --version-file ../$(WEB_WWW)/version.txt --max-bytes $(WWW_PACK_BYTES)
+	@uv run tools/web-size.py $(WEB_WWW) --pack $(WWW_PACK) --pack-limit $(WWW_PACK_BYTES) --share $(WEB)/share
 
 # The headings' pixel font (Silkscreen, OFL 1.1): fetched from google/fonts at
 # a pinned commit, checked, subset and written as committed files —
@@ -248,7 +278,7 @@ font:
 NOTICES_FW_TXT := licenses/THIRD-PARTY-LICENSES-firmware.txt
 NOTICES_WEB_TXT := licenses/THIRD-PARTY-LICENSES-web.txt
 NOTICES_ABOUT = --about $(CARGO_ABOUT) --about-version $(CARGO_ABOUT_VERSION)
-NOTICES_FW = bash -c 'build=$$(ls -t $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/build/project_description.json 2>/dev/null | head -1) && \
+NOTICES_FW = bash -c 'build=$$(ls -t $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/build/project_description.json 2>/dev/null | head -1) && \
 	uv run --quiet tools/notices.py firmware $(NOTICES_ABOUT) --elf $(FW_RELEASE_BINARY) --idf-build "$$(dirname "$${build:-none/x}")" \
 	--updater-build $(UPDATER_BUILD)/build --toolchain $(XTENSA_TOOLCHAIN) --readelf $(XTENSA_TOOLCHAIN)/bin/xtensa-esp32-elf-readelf $(1)'
 NOTICES_WEB = uv run --quiet tools/notices.py web $(NOTICES_ABOUT) $(1)
@@ -313,7 +343,7 @@ gallery-tool:
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo build --release --locked
 
 site: web sim-build gallery-tool
-	@test -f $(DIST)/manifest.json || { echo "no $(DIST)/manifest.json: the site publishes the release's installer, run make fw-release first"; exit 2; }
+	@test -f $(DIST)/manifest-4mb.json -a -f $(DIST)/manifest-8mb.json || { echo "no $(DIST)/manifest-{4mb,8mb}.json: the site publishes the release's installer, run make fw-release first"; exit 2; }
 	uv run tools/demo-card.py target/demo-card
 	uv run tools/site-art.py target/site-art
 	uv run tools/site.py $(SITE) --www $(WEB_WWW) --card target/demo-card --art target/site-art --dist $(DIST) \
@@ -400,19 +430,25 @@ FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 # caller's registers now and then (opendmd-core/src/chan.rs). The diag build's
 # std-channel torture test keeps one such function on purpose.
 #
-# The bench builds' sdkconfig fragment: the partition table's absolute path,
-# and the app descriptor's version as the release sets it ("<version> 4mb",
+# A layout's sdkconfig fragment: its partition table's absolute path, its
+# flash size (sdkconfig.defaults says 4 MB; the 8mb fragment overrides it,
+# which also sets the bootloader's and the app's image headers), and the app
+# descriptor's version as the release sets it ("<version> <variant>",
 # `GET /api/firmware`'s `build`), not IDF's default (`git describe`, or "1").
-FW_BENCH_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"'; \
+FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"'; \
+	$(if $(filter 8mb,$(FW_VARIANT)),echo 'CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n'; echo 'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y';) \
 	echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
-	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; } > $(FW)/target/sdkconfig.partitions
+	echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; }
+# The bench builds' (fw-build, fw-flash, fw-clippy; VARIANT=8mb for the
+# 8 MB layout, which shares the bench target dir: switching rebuilds IDF).
+FW_BENCH_FRAGMENT = $(FW_FRAGMENT) > $(FW)/target/sdkconfig.partitions
 
 # Delete the generated sdkconfig when the bench flavour (normal/diag) or the
 # version changes: it keeps the values it already has (the descriptor's
 # version among them) over a changed fragment.
 fw-sdkconfig-flavour:
 	@mkdir -p $(FW)/target
-	@want="$(if $(FW_DIAG),diag,normal) $(FW_VERSION) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
+	@want="$(if $(FW_DIAG),diag,normal) $(FW_VERSION) $(FW_VARIANT) $$(cat $(FW)/sdkconfig.defaults $(if $(FW_DIAG),$(FW)/sdkconfig.diag) | sha256sum | cut -c1-16)"; have=$$(cat $(FW)/target/sdkconfig.flavour 2>/dev/null); \
 	 if [ "$$want" != "$$have" ]; then \
 	   echo "==> sdkconfig flavour $${have:-unknown} -> $$want: removing the generated sdkconfig"; \
 	   rm -f $(FW)/target/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig; \
@@ -422,7 +458,7 @@ fw-sdkconfig-flavour:
 fw-build: fw-sdkconfig-flavour
 	@mkdir -p $(FW)/target
 	@$(FW_BENCH_FRAGMENT)
-	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
+	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo build $(FW_PROFILE_FLAG) $(FW_CARGO_FEATURES)'
 	@ls -l $(FW_BINARY)
 	bash -c '. $(ESPUP_ENV) && uv run --quiet tools/check-stack-realign.py $(FW_BINARY) $(if $(FW_DIAG),--allow "mpmc7channel.*9PlayError")'
 
@@ -437,9 +473,9 @@ MONITOR_BAUD := 921600
 # UPDATER_OFFSET (`write-bin`s: `flash` takes one app image), then the
 # monitor. A board on an older table (v1: one app at 0x10000; or the
 # dual-OTA one before it) wants `make fw-erase` first (NVS goes too); see
-# docs/deploying.md.
+# docs/deploying.md. VARIANT=8mb for an 8 MB board (an 8 MB board in development).
 fw-flash: fw-build web updater
-	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(WWW_PACK) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(UPDATER_BIN) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_BOOTLOADER) --partition-table $(FW)/partitions.csv --erase-parts otadata --flash-size 4mb --monitor --monitor-baud $(MONITOR_BAUD) $(FW_BINARY)'
+	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(WWW_PACK) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(UPDATER_BIN) && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --monitor --monitor-baud $(MONITOR_BAUD) $(FW_BINARY)'
 
 # NOTE: do NOT capture serial with `cat $(PORT)` or stty tricks — they toggle
 # DTR/RTS and the DevKit V1's auto-reset circuit reboots (or holds) the chip,
@@ -493,41 +529,57 @@ fw-clean:
 # features (so no firmware/.env credentials — the build does not even source
 # it, and the two variables are scrubbed from the environment), plus the web
 # app, as a set of files in dist/ for the browser flasher (flasher/, ESP Web
-# Tools) or espflash:
+# Tools) or espflash. It builds both flash layouts (FW_VARIANTS: 4mb, the
+# DevKit V1; 8mb, an 8 MB board in development), each with its own sdkconfig and target
+# dir; `make fw-release VARIANT=8mb` builds one. Per layout <var>:
 #
-#   opendmd-<ver>-app.bin          the app image, flashed at 0x20000 (factory)
-#   updater.bin                    the updater (ota/updater), at 0x260000 (ota_0)
-#   ota_data_initial.bin           otadata erased (8 KB of 0xFF) at 0xF000: boots factory
-#   opendmd-<ver>-www.pack         the web app, flashed at 0x2C0000
-#   bootloader.bin                 at 0x1000
-#   partition-table.bin            at 0x8000
-#   opendmd-<ver>-4mb-full.bin     all six merged into one 4 MB image (offset 0)
-#   manifest.json                  ESP Web Tools: the six parts and offsets; `name`
-#                                  "OpenDMD" and `version` are what the firmware's
-#                                  Improv Serial answer says (firmware/src/improv.rs:
-#                                  FIRMWARE_NAME, state::firmware_version), which is how
-#                                  the installer tells Update from Install; it waits
+#   opendmd-<ver>-<var>-app.bin    the app image, flashed at 0x20000 (factory)
+#   bootloader-<var>.bin           at 0x1000 (its header carries the flash size)
+#   partition-table-<var>.bin      at 0x8000
+#   opendmd-<ver>-<var>-full.bin   all six parts merged into one image the size
+#                                  of the flash (offset 0)
+#   opendmd-<ver>-<var>.odfw       the signed bundle for PUT /api/firmware (fw-sign);
+#                                  its magic names the layout
+#   manifest-<var>.json            ESP Web Tools: the six parts and offsets; `name`
+#                                  (FW_MANIFEST_NAME_<var>) and `version` are what the
+#                                  firmware's Improv Serial answer says
+#                                  (firmware/src/improv.rs: FIRMWARE_NAME,
+#                                  state::firmware_version), which is how the
+#                                  installer tells Update from Install; it waits
 #                                  `new_install_improv_wait_time` (s) after an install
 #                                  for the new firmware to answer, then asks for WiFi
-#   opendmd-<ver>.odfw             the signed bundle for PUT /api/firmware (fw-sign)
+#
+# and once, the same for both:
+#
+#   updater.bin                    the updater (ota/updater), at ota_0 (0x260000 / 0x320000)
+#   ota_data_initial.bin           otadata erased (8 KB of 0xFF) at 0xF000: boots factory
+#   opendmd-<ver>-www.pack         the web app, at www (0x2C0000 / 0x380000); built to
+#                                  fit the smaller www partition
 #   THIRD-PARTY-LICENSES-firmware.txt, THIRD-PARTY-LICENSES-web.txt
 #                                  the third-party notices (licenses/, `make notices`),
-#                                  checked against this build first
+#                                  checked against each build first
 #
 # The version comes from firmware/Cargo.toml and is also written into the app
-# descriptor as "<version> 4mb" (checked below at offset 0x30 of the image).
+# descriptor as "<version> <var>" (checked below at offset 0x30 of the image).
 # See docs/deploying.md.
 FW_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | head -1)
-FW_VARIANT := 4mb
-# The release build wants ~1.5 GB of its own (host build scripts plus a second
-# ESP-IDF build); FW_RELEASE_TARGET_DIR=/somewhere/roomier moves it.
+# The release build wants ~1.5 GB of its own per layout (host build scripts
+# plus a second ESP-IDF build); FW_RELEASE_TARGET_DIR=/somewhere/roomier
+# moves it (the 8mb build goes in its v8mb/: a layout is a different
+# sdkconfig, and sharing one dir would rebuild ESP-IDF at every switch).
 # CARGO_WORKSPACE_DIR is set below because embuild otherwise takes the crate
 # root to be the directory above the target dir, and with the target dir
 # elsewhere it would lose the extra_components (hub75, mdns) in Cargo.toml.
 FW_RELEASE_TARGET_DIR ?= $(CURDIR)/$(FW)/target
-FW_RELEASE_BINARY := $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/opendmd-firmware
-FW_RELEASE_BOOTLOADER := $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/bootloader.bin
-FW_RELEASE_SDKCONFIG_FRAG := $(CURDIR)/$(FW)/target/sdkconfig.release
+FW_RELEASE_VSUFFIX := $(if $(filter 4mb,$(FW_VARIANT)),,-$(FW_VARIANT))
+FW_RELEASE_VTARGET := $(FW_RELEASE_TARGET_DIR)$(if $(filter 4mb,$(FW_VARIANT)),,/v$(FW_VARIANT))
+FW_RELEASE_BINARY := $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/opendmd-firmware
+FW_RELEASE_BOOTLOADER := $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/bootloader.bin
+# The fragment and its stamp live in the layout's own target dir: with a
+# private FW_RELEASE_TARGET_DIR nothing a release build writes or removes
+# (the generated sdkconfig among it) touches another checkout's build.
+FW_RELEASE_SDKCONFIG_FRAG := $(FW_RELEASE_VTARGET)/sdkconfig.release
+FW_RELEASE_SDKCONFIG_STAMP := $(FW_RELEASE_VTARGET)/sdkconfig.release.stamp
 FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_RELEASE_SDKCONFIG_FRAG)
 # Measurement builds only, never a public release: the release set built
 # with these cargo features (e.g. FW_RELEASE_FEATURES=probe,psi-probe
@@ -535,33 +587,54 @@ FW_RELEASE_SDKCONFIG := $(CURDIR)/$(FW)/sdkconfig.defaults;$(FW_RELEASE_SDKCONFI
 # the LAN. Empty (the release feature set: none) by default.
 FW_RELEASE_FEATURES ?=
 DIST := dist
-FW_APP_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-app.bin
+FW_APP_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT)-app.bin
 FW_WWW_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-www.pack
 FW_FULL_IMAGE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT)-full.bin
+FW_DIST_BOOTLOADER := $(DIST)/bootloader-$(FW_VARIANT).bin
+FW_DIST_TABLE := $(DIST)/partition-table-$(FW_VARIANT).bin
+FW_MANIFEST := $(DIST)/manifest-$(FW_VARIANT).json
 # Panic locations name source files: the release names them from neutral
 # roots instead of this machine's paths (cargo joins these to the config's
 # rustflags).
 FW_RELEASE_REMAP := --remap-path-prefix=$(CURDIR)=/opendmd --remap-path-prefix=$(HOME)/.cargo=/cargo --remap-path-prefix=$(HOME)/.rustup=/rustup
-# The app image must leave at least this much of the factory partition free.
+# The app image must leave at least this much of the layout's factory
+# partition free (each layout against its own: 2,359,296 B or 3,145,728 B).
 FW_APP_SPARE := 65536
 
+# Both layouts (or VARIANT=), each through fw-release-variant, after one
+# `make web`: the one pack goes with both.
 fw-release: web
+	@for v in $(or $(VARIANT),$(FW_VARIANTS)); do \
+	  $(MAKE) --no-print-directory fw-release-variant VARIANT=$$v || exit 1; \
+	done
+	@echo "dist/:"; ls -l $(foreach v,$(or $(VARIANT),$(FW_VARIANTS)),$(DIST)/opendmd-$(FW_VERSION)-$(v)-app.bin $(DIST)/opendmd-$(FW_VERSION)-$(v).odfw \
+	  $(DIST)/opendmd-$(FW_VERSION)-$(v)-full.bin $(DIST)/bootloader-$(v).bin $(DIST)/partition-table-$(v).bin $(DIST)/manifest-$(v).json) \
+	  $(FW_WWW_IMAGE) $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt
+
+# One layout's release set (FW_VARIANT): needs `make web` done (fw-release).
+fw-release-variant:
 	@test -n "$(FW_VERSION)" || { echo "cannot read the version from $(FW)/Cargo.toml"; exit 2; }
-	@mkdir -p $(FW)/target $(DIST)
-	@{ echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW)/partitions.csv"'; \
-	   echo 'CONFIG_APP_PROJECT_VER_FROM_CONFIG=y'; \
-	   echo 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"'; } > $(FW_RELEASE_SDKCONFIG_FRAG)
+	@test -f $(WWW_PACK) || { echo "no $(WWW_PACK): run make fw-release (it runs make web first)"; exit 2; }
+	@echo "==> Release build, $(FW_VARIANT) ($(FW_PARTITIONS), target $(FW_RELEASE_VTARGET))"
+	@mkdir -p $(FW_RELEASE_VTARGET) $(DIST)
+	@$(FW_FRAGMENT) > $(FW_RELEASE_SDKCONFIG_FRAG)
 	@# The generated sdkconfig keeps the values it has over changed defaults
 	@# (a new sdkconfig.defaults line or version would silently not apply):
 	@# remove it whenever the inputs change.
 	@want=$$(cat $(FW)/sdkconfig.defaults $(FW_RELEASE_SDKCONFIG_FRAG) | sha256sum | cut -c1-16); \
-	 have=$$(cat $(FW)/target/sdkconfig.release.stamp 2>/dev/null); \
+	 have=$$(cat $(FW_RELEASE_SDKCONFIG_STAMP) 2>/dev/null); \
 	 if [ "$$want" != "$$have" ]; then \
-	   echo "==> release sdkconfig inputs changed: removing the generated sdkconfig"; \
-	   rm -f $(FW_RELEASE_TARGET_DIR)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig; \
-	   echo $$want > $(FW)/target/sdkconfig.release.stamp; \
+	   echo "==> release sdkconfig inputs changed ($(FW_VARIANT)): removing the generated sdkconfig"; \
+	   rm -f $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig; \
+	   echo $$want > $(FW_RELEASE_SDKCONFIG_STAMP); \
 	 fi
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_TARGET_DIR)" $(if $(FW_RELEASE_FEATURES),--features $(FW_RELEASE_FEATURES),)'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(if $(FW_RELEASE_FEATURES),--features $(FW_RELEASE_FEATURES),)'
+	@# The generated sdkconfig must carry the layout's flash size: a fragment
+	@# that failed to apply would build a 4 MB image under an 8mb name.
+	@cfg=$$(ls -t $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig | head -1); \
+	 want=$$(echo $(FW_VARIANT) | tr a-z A-Z); \
+	 grep -q "^CONFIG_ESPTOOLPY_FLASHSIZE=\"$$want\"" "$$cfg" || { echo "$$cfg: CONFIG_ESPTOOLPY_FLASHSIZE is not \"$$want\""; exit 1; }; \
+	 echo "sdkconfig: flash size $$want ($$cfg)"
 	@# The updater after the firmware: on a fresh machine (CI) it is the
 	@# firmware's build that installs the ESP-IDF checkout idf.py needs.
 	$(MAKE) --no-print-directory updater
@@ -575,69 +648,93 @@ fw-release: web
 	@size=$$(stat -c %s $(FW_APP_IMAGE)); \
 	 spare=$$(( $(FW_APP_BYTES) - size )); \
 	 pct=$$(awk "BEGIN { printf \"%.1f\", $$size * 100 / $(FW_APP_BYTES) }"); \
-	 echo "$(FW_APP_IMAGE): $$size B = $$pct% of the $(FW_APP_BYTES) B factory partition, $$spare B spare (need $(FW_APP_SPARE))"; \
-	 test $$spare -ge $(FW_APP_SPARE) || { echo "the app image leaves less than $(FW_APP_SPARE) B of the factory partition"; exit 1; }
+	 echo "$(FW_APP_IMAGE): $$size B = $$pct% of the $(FW_APP_BYTES) B $(FW_VARIANT) factory partition, $$spare B spare (need $(FW_APP_SPARE))"; \
+	 test $$spare -ge $(FW_APP_SPARE) || { echo "the app image leaves less than $(FW_APP_SPARE) B of the $(FW_VARIANT) factory partition"; exit 1; }
+	@size=$$(stat -c %s $(WWW_PACK)); \
+	 echo "$(WWW_PACK): $$size B of the $(WWW_BYTES) B $(FW_VARIANT) www partition"; \
+	 test $$size -le $(WWW_BYTES) || { echo "the www pack does not fit the $(FW_VARIANT) www partition"; exit 1; }
 	$(MAKE) --no-print-directory fw-sign
 	cp $(WWW_PACK) $(FW_WWW_IMAGE)
-	cp $(FW_RELEASE_BOOTLOADER) $(DIST)/bootloader.bin
+	cp $(FW_RELEASE_BOOTLOADER) $(FW_DIST_BOOTLOADER)
 	cp $(UPDATER_BIN) $(DIST)/updater.bin
 	cp $(UPDATER_BUILD)/build/ota_data_initial.bin $(DIST)/ota_data_initial.bin
 	cp $(NOTICES_FW_TXT) $(NOTICES_WEB_TXT) $(DIST)/
-	@! strings $(FW_APP_IMAGE) $(DIST)/updater.bin $(DIST)/bootloader.bin | grep -q '$(HOME)' || { echo "the release names $(HOME): a build path got in"; exit 1; }
-	bash -c '. $(ESPUP_ENV) && espflash partition-table --to-binary -o $(DIST)/partition-table.bin $(FW)/partitions.csv'
+	@! strings $(FW_APP_IMAGE) $(DIST)/updater.bin $(FW_DIST_BOOTLOADER) | grep -q '$(HOME)' || { echo "the release names $(HOME): a build path got in"; exit 1; }
+	bash -c '. $(ESPUP_ENV) && espflash partition-table --to-binary -o $(FW_DIST_TABLE) $(FW_PARTITIONS)'
+	@# The flash size in the image headers (byte 3's high nibble: 2 = 4 MB,
+	@# 3 = 8 MB): the bootloader's is what the board runs with.
+	@want=$$(case $(FW_VARIANT) in 4mb) echo 2;; 8mb) echo 3;; esac); \
+	 for f in $(FW_DIST_BOOTLOADER) $(FW_APP_IMAGE); do \
+	   got=$$(dd if=$$f bs=1 skip=3 count=1 status=none | od -An -tu1 | tr -d ' '); \
+	   test $$(( got >> 4 )) -eq $$want || { echo "$$f: flash size code $$(( got >> 4 )) in its header, want $$want ($(FW_VARIANT))"; exit 1; }; \
+	 done; echo "image headers: flash size $(FW_VARIANT) (bootloader, app)"
 	@# The merged image: espflash lays out bootloader, table and app padded to
-	@# 4 MB with 0xFF (so otadata is erased: the bootloader boots factory);
-	@# the updater and the pack go in at their offsets on top.
-	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW)/partitions.csv $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
+	@# the flash size with 0xFF (so otadata is erased: the bootloader boots
+	@# factory); the updater and the pack go in at their offsets on top.
+	bash -c '. $(ESPUP_ENV) && espflash save-image --chip esp32 --flash-size $(FW_VARIANT) --merge --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) $(FW_RELEASE_BINARY) $(FW_FULL_IMAGE)'
 	dd if=$(DIST)/updater.bin of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(UPDATER_OFFSET) / 4096 )) conv=notrunc status=none
 	dd if=$(FW_WWW_IMAGE) of=$(FW_FULL_IMAGE) bs=4096 seek=$$(( $(WWW_OFFSET) / 4096 )) conv=notrunc status=none
 	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(FW_APP_OFFSET) / 4096 )) count=1 status=none | head -c 1 | od -An -tx1 | tr -d ' ')" = e9 || { echo "no app image at $(FW_APP_OFFSET) in $(FW_FULL_IMAGE)"; exit 1; }
 	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(OTADATA_OFFSET) / 4096 )) count=2 status=none | tr -d '\377' | wc -c)" = 0 || { echo "otadata is not erased in $(FW_FULL_IMAGE)"; exit 1; }
-	@test $$(stat -c %s $(FW_FULL_IMAGE)) -eq 4194304 || { echo "$(FW_FULL_IMAGE) is not 4 MB"; exit 1; }
-	@printf '%s\n' '{' \
-	  '  "name": "OpenDMD",' \
+	@test $$(stat -c %s $(FW_FULL_IMAGE)) -eq $(FW_FLASH_BYTES) || { echo "$(FW_FULL_IMAGE) is not $(FW_FLASH_BYTES) B"; exit 1; }
+	@# The parts in the order ESP Web Tools writes them. 8mb: the updater and
+	@# the pack (the parts past 4 MB) first, so on a 4 MB DevKit chosen by
+	@# mistake their writes, which wrap round to the start of the chip, are
+	@# written over by the bootloader, table, otadata and app that follow (the
+	@# board then stops at boot with IDF's "Detected size(4096k) smaller than
+	@# the size in the binary image header(8192k)" instead of having no
+	@# bootloader at all); every part is in place on an 8 MB chip either way.
+	@boot='        { "path": "bootloader-$(FW_VARIANT).bin", "offset": 4096 }'; \
+	 table='        { "path": "partition-table-$(FW_VARIANT).bin", "offset": 32768 }'; \
+	 otadata='        { "path": "ota_data_initial.bin", "offset": '$$(( $(OTADATA_OFFSET) ))' }'; \
+	 app='        { "path": "opendmd-$(FW_VERSION)-$(FW_VARIANT)-app.bin", "offset": '$$(( $(FW_APP_OFFSET) ))' }'; \
+	 upd='        { "path": "updater.bin", "offset": '$$(( $(UPDATER_OFFSET) ))' }'; \
+	 www='        { "path": "opendmd-$(FW_VERSION)-www.pack", "offset": '$$(( $(WWW_OFFSET) ))' }'; \
+	 { printf '%s\n' '{' \
+	  '  "name": "$(FW_MANIFEST_NAME_$(FW_VARIANT))",' \
 	  '  "version": "$(FW_VERSION)",' \
 	  '  "new_install_prompt_erase": true,' \
 	  '  "new_install_improv_wait_time": 15,' \
 	  '  "builds": [' \
 	  '    {' \
 	  '      "chipFamily": "ESP32",' \
-	  '      "parts": [' \
-	  '        { "path": "bootloader.bin", "offset": 4096 },' \
-	  '        { "path": "partition-table.bin", "offset": 32768 },' \
-	  '        { "path": "ota_data_initial.bin", "offset": '$$(( $(OTADATA_OFFSET) ))' },' \
-	  '        { "path": "opendmd-$(FW_VERSION)-app.bin", "offset": '$$(( $(FW_APP_OFFSET) ))' },' \
-	  '        { "path": "updater.bin", "offset": '$$(( $(UPDATER_OFFSET) ))' },' \
-	  '        { "path": "opendmd-$(FW_VERSION)-www.pack", "offset": '$$(( $(WWW_OFFSET) ))' }' \
-	  '      ]' \
+	  '      "parts": ['; \
+	  sep=; for part in $(if $(filter 8mb,$(FW_VARIANT)),www upd boot table otadata app,boot table otadata app upd www); do \
+	    eval "line=\$$$$part"; [ -z "$$sep" ] || printf ',\n'; printf '%s' "$$line"; sep=1; done; echo; \
+	  printf '%s\n' '      ]' \
 	  '    }' \
 	  '  ]' \
-	  '}' > $(DIST)/manifest.json
-	@echo "dist/:"; ls -l $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(FW_BUNDLE) $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(FW_FULL_IMAGE) $(DIST)/manifest.json \
-	  $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt
+	  '}'; } > $(FW_MANIFEST)
+	@uv run --quiet python -I -c 'import json, sys; m = json.load(open(sys.argv[1])); assert len(m["builds"][0]["parts"]) == 6' $(FW_MANIFEST) \
+	  || { echo "$(FW_MANIFEST) is not the manifest it should be"; exit 1; }
+	@echo "==> $(FW_VARIANT) done: $(FW_MANIFEST)"
 
 # The signed bundle for a LAN update (docs/ota.md): the release app image
 # behind a 140-byte header signed with the private key, which never enters
 # the repo (`uv run tools/fw-sign.py keygen` made it; FW_SIGN_KEY moves it).
 # Checked against the committed public key, firmware/keys/opendmd.pub, the
-# one the firmware compiles in. Run by fw-release; on its own it signs
-# whatever app image dist/ holds for this version.
+# one the firmware compiles in. Run by fw-release for each layout; on its
+# own it signs whatever app image dist/ holds for this version and VARIANT
+# (the bundle's magic names the layout, and fw-sign.py refuses an image
+# whose app descriptor is for the other one).
 FW_SIGN_KEY ?= $(HOME)/.config/opendmd/opendmd.key
 # The public key the bundle is checked against. Only a dry run (CI, a
 # throwaway key) points it elsewhere: a device trusts the committed one alone.
 FW_SIGN_PUB ?= $(FW)/keys/opendmd.pub
-FW_BUNDLE := $(DIST)/opendmd-$(FW_VERSION).odfw
+FW_BUNDLE := $(DIST)/opendmd-$(FW_VERSION)-$(FW_VARIANT).odfw
 fw-sign:
 	@test -f $(FW_APP_IMAGE) || { echo "no $(FW_APP_IMAGE): run make fw-release first"; exit 2; }
 	@test -f $(FW_SIGN_KEY) || { echo "no signing key at $(FW_SIGN_KEY): uv run tools/fw-sign.py keygen (once), or FW_SIGN_KEY=..."; exit 2; }
-	uv run --quiet tools/fw-sign.py sign $(FW_APP_IMAGE) --version $(FW_VERSION) --out $(FW_BUNDLE) --key $(FW_SIGN_KEY)
+	uv run --quiet tools/fw-sign.py sign $(FW_APP_IMAGE) --version $(FW_VERSION) --variant $(FW_VARIANT) --out $(FW_BUNDLE) --key $(FW_SIGN_KEY)
 	uv run --quiet tools/fw-sign.py verify $(FW_BUNDLE) --pub $(FW_SIGN_PUB)
 
 # First install on a board over USB, from the release build: the same parts
-# as dist/ (bootloader, table, otadata erased, app, updater, pack). From
+# as dist/ (bootloader, table, otadata erased, app, updater, pack) for
+# VARIANT (default 4mb, the DevKit; VARIANT=8mb for an 8 MB board in development). From
 # DMDoS, other firmware or an older table: `make fw-erase` first.
-fw-release-flash: fw-release
-	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(DIST)/updater.bin && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW)/partitions.csv --erase-parts otadata --flash-size $(FW_VARIANT) --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
+fw-release-flash:
+	$(MAKE) --no-print-directory fw-release VARIANT=$(FW_VARIANT)
+	bash -c '. $(ESPUP_ENV) && espflash write-bin --port $(PORT) --baud 115200 $(WWW_OFFSET) $(FW_WWW_IMAGE) && espflash write-bin --port $(PORT) --baud 115200 $(UPDATER_OFFSET) $(DIST)/updater.bin && espflash flash --port $(PORT) --baud 115200 --bootloader $(FW_RELEASE_BOOTLOADER) --partition-table $(FW_PARTITIONS) --erase-parts otadata --flash-size $(FW_VARIANT) --monitor --monitor-baud $(MONITOR_BAUD) $(FW_RELEASE_BINARY)'
 
 # The web app over WiFi: PUT the pack to /api/www, then check the version
 # the device reports. make www-push HOST=opendmd.local [WWW_PACK=dist/...]
@@ -679,26 +776,29 @@ updater:
 
 # A firmware update over WiFi (docs/ota.md): PUT the signed bundle to
 # /api/firmware, then wait for the device to come back running it.
-# make fw-ota HOST=opendmd.local [BUNDLE=dist/opendmd-<v>.odfw]; with an API
-# key set on the device, OPENDMD_API_KEY=<key> in the environment. A bundle
-# that is not newer than the device's firmware is refused here unless
-# OPENDMD_ALLOW_OLDER=1 (pass the FW_VERSION you released, or BUNDLE=).
+# make fw-ota HOST=opendmd.local [VARIANT=8mb | BUNDLE=dist/opendmd-<v>-<var>.odfw];
+# with an API key set on the device, OPENDMD_API_KEY=<key> in the
+# environment. A bundle that is not newer than the device's firmware is
+# refused here unless OPENDMD_ALLOW_OLDER=1 (pass the FW_VERSION you
+# released, or BUNDLE=); one for the other flash layout always is.
 BUNDLE ?= $(FW_BUNDLE)
 fw-ota:
-	@test -n "$(HOST)" || { echo "usage: make fw-ota HOST=<ip-or-name> [BUNDLE=$(FW_BUNDLE)]"; exit 2; }
+	@test -n "$(HOST)" || { echo "usage: make fw-ota HOST=<ip-or-name> [VARIANT=8mb] [BUNDLE=$(FW_BUNDLE)]"; exit 2; }
 	tools/fw-ota.sh $(HOST) $(BUNDLE)
 
 # The browser flasher (flasher/index.html, ESP Web Tools) with the dist/ set
-# from `make fw-release`, on http://localhost:8765: Web Serial needs a secure
-# context, and localhost is one. Chrome or Edge.
+# from `make fw-release` (both layouts: the page offers one Install per
+# board), on http://localhost:8765: Web Serial needs a secure context, and
+# localhost is one. Chrome or Edge.
 FLASHER_PORT ?= 8765
 FLASHER_SITE := target/flasher-site
 flasher:
-	@test -f $(DIST)/manifest.json || { echo "no $(DIST)/manifest.json: run make fw-release first"; exit 2; }
+	@for v in $(FW_VARIANTS); do test -f $(DIST)/manifest-$$v.json || { echo "no $(DIST)/manifest-$$v.json: run make fw-release first"; exit 2; }; done
 	rm -rf $(FLASHER_SITE) && mkdir -p $(FLASHER_SITE)/firmware
 	cp flasher/index.html $(FLASHER_SITE)/
-	cp $(DIST)/manifest.json $(DIST)/bootloader.bin $(DIST)/partition-table.bin $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(FLASHER_SITE)/firmware/
-	cp $(FW_APP_IMAGE) $(FW_WWW_IMAGE) $(FW_FULL_IMAGE) $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt $(FLASHER_SITE)/firmware/
+	cp $(DIST)/updater.bin $(DIST)/ota_data_initial.bin $(FW_WWW_IMAGE) $(DIST)/THIRD-PARTY-LICENSES-firmware.txt $(DIST)/THIRD-PARTY-LICENSES-web.txt $(FLASHER_SITE)/firmware/
+	for v in $(FW_VARIANTS); do cp $(DIST)/manifest-$$v.json $(DIST)/bootloader-$$v.bin $(DIST)/partition-table-$$v.bin \
+	  $(DIST)/opendmd-$(FW_VERSION)-$$v-app.bin $(DIST)/opendmd-$(FW_VERSION)-$$v-full.bin $(FLASHER_SITE)/firmware/ || exit 1; done
 	@echo "open http://localhost:$(FLASHER_PORT)/ in Chrome or Edge"
 	uv run python -m http.server $(FLASHER_PORT) --bind 127.0.0.1 -d $(FLASHER_SITE)
 

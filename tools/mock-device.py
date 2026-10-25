@@ -266,12 +266,15 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   a non-empty body whose `Content-Type` is not `application/json` are a 415
   `{"error":"Content-Type must be application/json"}`.
 - **Firmware update** (docs/ota.md): `GET /api/firmware` is `{version,
-  build, variant, pending, last, log}` (`log`: the card's
-  `/update/log.txt`, its last ≤1 KB of whole lines, or null); `PUT /api/firmware` takes a signed bundle
-  and verifies it as `tools/fw-sign.py verify` does against `--ota-pub`
+  build, variant, flash_size, pending, last, log}` (`log`: the card's
+  `/update/log.txt`, its last ≤1 KB of whole lines, or null; `variant` is
+  `--variant`, 4mb by default, `flash_size` its flash, or `--flash-size`); `PUT /api/firmware` takes a signed bundle
+  and verifies it as the firmware does against `--ota-pub`
   (default `firmware/keys/opendmd.pub`): 411 without a length, 413 over
-  140 B + the 2,359,296 B factory partition, 422 `{"error":"<reason>"}` for
-  any failure (nothing changes). Success: `{"ok":true,"version",
+  140 B + the layout's factory partition (2,359,296 B, 3,145,728 B for 8mb),
+  422 `{"error":"<reason>"}` for any failure, a bundle for the other flash
+  layout and an image whose app descriptor is not `"<version> <variant>"`
+  among them (nothing changes). Success: `{"ok":true,"version",
   "rebooting":true}`, then a simulated restart: for `RESTART_SECS` every
   `/api/*` request is a 503 `{"error":"restarting"}` (`Retry-After: 1`),
   then the player "boots" again reporting the new `version` in
@@ -396,10 +399,11 @@ SETS_DIR = "sets"                      # config::SETS_DIR
 WWW_PARTITION_SIZE = 1_310_720         # the www partition (partitions.csv)
 # Firmware update (docs/ota.md, tools/fw-sign.py): the bundle header and the
 # v2 factory partition the image must fit.
-OTA_MAGIC = b"ODFW1\0\0\0"
+OTA_MAGICS = {"4mb": b"ODFW1\0\0\0", "8mb": b"ODFW18mb"}  # opendmd_core::ota, per flash layout
 OTA_HEADER_LEN = 140
 OTA_SIGNED_LEN = 76
-OTA_FACTORY_BYTES = 0x240000           # 2,359,296
+OTA_FACTORY_BYTES = {"4mb": 0x240000, "8mb": 0x300000}   # partitions.csv, partitions-8mb.csv
+OTA_BOARDS = {"4mb": "DevKit (4 MB)", "8mb": "8 MB build"}  # opendmd_core::ota::variant_name
 RESTART_SECS = 3.0                     # the simulated restart after an update
 MOCK_VERSION = "0.1.0-mock"
 # docs/api.md "Security": the API key's alphabet and length, and the routes
@@ -1389,14 +1393,16 @@ def gif_delays(b: bytes) -> list[int]:
     return delays
 
 
-def ota_check(data: bytes, pub) -> str:
+def ota_check(data: bytes, pub, variant: str = "4mb") -> str:
     """The bundle's version, or ValueError(reason): opendmd_core::ota's
-    checks in the firmware's order (the header and its signature as it
-    arrives, then whether it fits, then the image) and its messages."""
+    checks in the firmware's order (the header, its flash layout against
+    this player's `variant`, its signature as it arrives, then whether it
+    fits, then the image and its app descriptor) and its messages."""
     from nacl.exceptions import BadSignatureError
     if len(data) < OTA_HEADER_LEN:
         raise ValueError(f"truncated: {len(data)} B, the bundle header is {OTA_HEADER_LEN} B")
-    if data[:8] != OTA_MAGIC:
+    bundle = next((k for k, m in OTA_MAGICS.items() if data[:8] == m), None)
+    if bundle is None:
         raise ValueError("not an OpenDMD firmware bundle (bad magic)")
     v = data[8:40].rstrip(b"\0")
     try:
@@ -1405,6 +1411,9 @@ def ota_check(data: bytes, pub) -> str:
         version = ""
     if not version or "\0" in version or not version.isprintable():
         raise ValueError("the bundle's version field is malformed")
+    if bundle != variant:
+        raise ValueError(f"this update is for the {OTA_BOARDS[bundle]} and this player runs the {OTA_BOARDS[variant]} "
+                         f"firmware: use the {OTA_BOARDS[variant]} update file")
     if pub is None:
         raise ValueError("the firmware's public key is invalid")
     try:
@@ -1412,8 +1421,8 @@ def ota_check(data: bytes, pub) -> str:
     except BadSignatureError:
         raise ValueError("bad signature: not signed by this firmware's key, or the header was changed") from None
     length = int.from_bytes(data[40:44], "little")
-    if length > OTA_FACTORY_BYTES:
-        raise ValueError(f"the image is {length} B, the firmware partition is {OTA_FACTORY_BYTES} B")
+    if length > OTA_FACTORY_BYTES[variant]:
+        raise ValueError(f"the image is {length} B, the firmware partition is {OTA_FACTORY_BYTES[variant]} B")
     image = data[OTA_HEADER_LEN:]
     if length != len(image):
         raise ValueError(f"length mismatch: the header says {length} B, the image is {len(image)} B")
@@ -1421,6 +1430,13 @@ def ota_check(data: bytes, pub) -> str:
         raise ValueError("not an ESP32 app image (the first byte is not 0xE9)")
     if hashlib.sha256(image).digest() != data[44:76]:
         raise ValueError("SHA-256 mismatch: the image is damaged")
+    # opendmd_core::ota::check_app_desc: the descriptor's magic word at 0x20,
+    # its version at 0x30 ending in " <variant>".
+    desc = (image[0x30:0x50].split(b"\0", 1)[0].decode("utf-8", "replace")
+            if len(image) >= 0x50 and int.from_bytes(image[0x20:0x24], "little") == 0xABCD5432 else None)
+    if desc is None or not desc.endswith(" " + bundle) or len(desc) <= len(bundle) + 1:
+        raise ValueError(f"the image inside is not an OpenDMD {bundle} build "
+                         f"(its app descriptor says '{desc if desc is not None else 'nothing: no app descriptor'}')")
     return version
 
 
@@ -2486,6 +2502,9 @@ class Context:
         self.fw_log = None
         self.down_until = 0.0
         self.ota_pub = None
+        # --variant / --flash-size: the flash layout this player runs, and its chip.
+        self.variant = "4mb"
+        self.flash_size = 4 << 20
         # --sd: "ok", "unreadable" (mounts, filesystem unreadable) or "none".
         self.sd_state = "ok"
         # Names other devices answer to (`--taken`), and how long a check
@@ -2770,7 +2789,8 @@ def make_handler(ctx: Context, quiet: bool):
         def h_setup(self, path):
             """The firmware's embedded setup page (build.rs renders it)."""
             html = (Path(__file__).resolve().parent.parent / "firmware" / "web" / "setup.html").read_text()
-            body = html.replace("{{ version }}", ctx.version).replace("{{ variant }}", "4mb").encode()
+            body = (html.replace("{{ version }}", ctx.version).replace("{{ variant }}", ctx.variant)
+                    .replace("{{ variant_name }}", OTA_BOARDS[ctx.variant]).encode())
             self.send_response(200, "OK")
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", str(len(body)))
@@ -2852,7 +2872,7 @@ def make_handler(ctx: Context, quiet: bool):
                 time_synced_s = min(int(time.monotonic() - player.boot_time), 600)
                 obj = {
                     "version": ctx.version,
-                    "variant": "4mb",
+                    "variant": ctx.variant,
                     "uptime_secs": int(time.monotonic() - player.boot_time),
                     "t_ms": int((time.monotonic() - player.boot_time) * 1000),
                     "ip": "127.0.0.1",
@@ -3750,8 +3770,8 @@ def make_handler(ctx: Context, quiet: bool):
         def h_firmware_get(self, path):
             with ctx.lock:
                 card = ctx.sd_state == "ok"  # the firmware reads both off the card
-                self.send_json(200, {"version": ctx.version, "build": f"{ctx.version} 4mb", "variant": "4mb",
-                                     "pending": None, "last": ctx.fw_last if card else None,
+                self.send_json(200, {"version": ctx.version, "build": f"{ctx.version} {ctx.variant}", "variant": ctx.variant,
+                                     "flash_size": ctx.flash_size, "pending": None, "last": ctx.fw_last if card else None,
                                      "log": ctx.fw_log if card else None})
 
         def h_firmware_put(self, path):
@@ -3760,14 +3780,15 @@ def make_handler(ctx: Context, quiet: bool):
                 self.send_error_json(411, "Content-Length required")
                 return
             length = int(length_hdr)
-            if length > OTA_HEADER_LEN + OTA_FACTORY_BYTES:
+            factory = OTA_FACTORY_BYTES[ctx.variant]
+            if length > OTA_HEADER_LEN + factory:
                 self.drain()
-                self.send_error_json(413, f"the bundle is {length} B, at most {OTA_HEADER_LEN + OTA_FACTORY_BYTES} B fits the firmware partition")
+                self.send_error_json(413, f"the bundle is {length} B, at most {OTA_HEADER_LEN + factory} B fits the firmware partition")
                 return
             data = self.rfile.read(length)
             t0 = time.monotonic()
             try:
-                version = ota_check(data, ctx.ota_pub)
+                version = ota_check(data, ctx.ota_pub, ctx.variant)
             except ValueError as e:
                 self.send_error_json(422, str(e))
                 return
@@ -4282,6 +4303,10 @@ def parse_args():
                          "GET /api/name-check and PUT /api/config's 409 use them. '' for none")
     ap.add_argument("--name-query", type=float, default=1.2,
                     help="seconds a name check listens when no one answers (the firmware's 1.2)")
+    ap.add_argument("--variant", choices=sorted(OTA_MAGICS), default="4mb",
+                    help="the flash layout the mock's firmware is built for (GET /api/firmware, /api/status)")
+    ap.add_argument("--flash-size", type=int, default=0,
+                    help="GET /api/firmware's flash_size, bytes (default: the layout's)")
     ap.add_argument("--ota-pub", help="the Ed25519 public key (32 B) PUT /api/firmware verifies against "
                                       "(default: <repo>/firmware/keys/opendmd.pub)")
     return ap.parse_args()
@@ -4321,6 +4346,8 @@ def main():
             for p in args.taken.split(",") if p.strip()
         )
         ctx.name_query = args.name_query
+        ctx.variant = args.variant
+        ctx.flash_size = args.flash_size or (8 << 20 if args.variant == "8mb" else 4 << 20)
         pub = Path(args.ota_pub) if args.ota_pub else Path(__file__).resolve().parent.parent / "firmware" / "keys" / "opendmd.pub"
         try:
             from nacl.signing import VerifyKey
