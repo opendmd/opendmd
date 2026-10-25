@@ -1221,7 +1221,11 @@ mod tests {
             f,
             reference(&[((128 - 19 * 2) / 2, 10, "9:07", Font::Normal, 2)])
         );
-        set_wall_clock(None);
+        // No time: this thread's clock answers None (the same path as no
+        // clock installed). Unsetting the global WALL here raced with the
+        // other clock tests, which install it from their own threads.
+        set_wall_clock(Some(test_clock));
+        TEST_TIME.with(|t| t.set(None));
         let (f, d) = play_first(CLOCK);
         assert_eq!(
             f,
