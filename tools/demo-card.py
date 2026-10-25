@@ -32,17 +32,17 @@ KENNEY = ROOT / "opendmd-web/experiments/art/process/out"
 
 # (file title, live item, frames at 40 ms)
 RECORD = [
-    ("Tunnel_Chrono", "@fx:tunnel?palette=chrono&cycle=1", 75),
-    ("Tunnel_Fire_Rings", "@fx:tunnel?palette=fire&texture=rings&twist=2", 75),
-    ("Tunnel_Ice", "@fx:tunnel?palette=ice&texture=checker&layers=2", 75),
-    ("Rotozoom_Chrono", "@fx:rotozoom?palette=chrono&cycle=1", 75),
-    ("Rotozoom_Floor_Fire", "@fx:rotozoom?floor=1&palette=fire", 75),
-    ("Rotozoom_Rings_Rainbow", "@fx:rotozoom?palette=rainbow&texture=rings&wobble=2", 75),
     ("Starfield_Warp", "@fx:starfield?palette=chrono&density=3&speed=3", 75),
-    ("Starfield_Dots_Amber", "@fx:starfield?palette=amber&warp=0", 75),
+    ("Rotozoom_Floor_Fire", "@fx:rotozoom?floor=1&palette=fire", 75),
     ("Wire_Tesseract", "@fx:wire?shape=tesseract&color=ff66cc", 75),
+    ("Rotozoom_Chrono", "@fx:rotozoom?palette=chrono&cycle=1", 75),
+    ("Starfield_Dots_Amber", "@fx:starfield?palette=amber&warp=0", 75),
     ("Wire_Morph", "@fx:wire?shape=morph", 75),
+    ("Tunnel_Fire_Rings", "@fx:tunnel?palette=fire&texture=rings&twist=2", 75),
+    ("Rotozoom_Rings_Rainbow", "@fx:rotozoom?palette=rainbow&texture=rings&wobble=2", 75),
     ("Wire_Icosahedron", "@fx:wire?shape=icosahedron&color=66ff66", 75),
+    ("Tunnel_Chrono", "@fx:tunnel?palette=chrono&cycle=1", 75),
+    ("Tunnel_Ice", "@fx:tunnel?palette=ice&texture=checker&layers=2", 75),
 ]
 KENNEY_GIFS = {
     "b_walk.gif": "OTHER_Pixel_Platformer_Walk_01_kenney.gif",
@@ -50,14 +50,16 @@ KENNEY_GIFS = {
     "d_scroll.gif": "OTHER_Pixel_Platformer_Scroll_01_kenney.gif",
 }
 # The demo's All files: live items, drawn by the panel, between the GIFs.
+# It opens on the starfield and the Mode 7 floor (the strongest first
+# impressions), with a GIF third: the panel is a GIF player first.
 LIVE = [
-    "@fx:tunnel?palette=fire&texture=rings&twist=2",
+    "@fx:starfield?palette=chrono&density=3&speed=3",
     "@text?msg=OpenDMD%20-%20open%20firmware%20for%20LED%20dot-matrix%20displays&speed=30&color=ffaa00",
     "@fx:rotozoom?floor=1&palette=chrono&cycle=1",
     "@fx:wire?shape=tesseract&color=ff66cc",
     "@clock?style=big&date=1",
+    "@fx:tunnel?palette=fire&texture=rings&twist=2",
     "@fx:starfield?palette=ice&density=3",
-    "@fx:tunnel?palette=chrono&cycle=1&drift=1",
     "@text?msg=Made%20in%20the%20browser&speed=30&color=00ccff",
     "@fx:rotozoom?palette=rainbow&texture=rings&wobble=2",
     "@fx:wire?shape=morph",
@@ -105,7 +107,7 @@ def main() -> None:
     lines = []
     for i, item in enumerate(LIVE):
         lines.append(item)
-        if i % 2 and gifs:
+        if i >= 2 and i % 2 == 0 and gifs:
             lines.append(gifs.pop(0))
     lines += gifs
     (card / "filelist.txt").write_text("\n".join(lines) + "\n")
