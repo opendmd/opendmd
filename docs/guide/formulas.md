@@ -191,6 +191,51 @@ how much of the pixel it covers, from 0 to 1 — `rgb(r, g, b, k)`,
 `hsv(h, s, v, k)`, `gray(v, k)`, `pal(fire, v, k)`. Where it covers less
 than all, what is below shows through.
 
+**Two formulas in one.** A formula can hold another one as a *part*:
+
+```
+loop 16
+part bars {
+  loop 4
+  bar = max(0, 1 - abs(y - 0.5 - 0.35*sin(t/4))*5)
+  rgb(bar, bar*0.6, bar*0.2)
+}
+part rings {
+  loop 4
+  d = len((x - 0.5)*4, y - 0.5)
+  pal(rainbow, frac(d*1.5 - t/2))
+}
+k = smoothstep(0.25, 0.75, sin(t/16)*0.5 + 0.5)
+layer { bars }
+layer { rings(x, y, k) }
+```
+
+You don't have to type a part out: in the editor, write
+`use Rings as r` on a line of its own, with the name of one of your
+formulas or an example, and when you move to another line the editor puts
+that formula in as `part r { … }`, ready to change. Everything you save or
+share then has the whole of it, so it works anywhere: if a `use` line names
+a formula there isn't (or the formula you're editing), the editor says so
+and won't save or share until it's fixed.
+
+- A part draws nothing until you use it. Its name on its own, as the last
+  line (of the formula or of a layer), draws it: `layer { rings }`.
+- `rings(x2, y2)` draws it as if each pixel were somewhere else:
+  `rings(1 - x, y)` mirrors it, `rings(frac(x*4), y)` repeats it four times,
+  `rings(abs(x - 0.5)*2, abs(y - 0.5)*2)` folds it like a kaleidoscope.
+- Like every colour, it takes one more value, how much of the pixel it
+  covers: `rings(x, y, k)`. Moving `k` with `t` fades one formula into
+  another (above).
+- `rings.d` is a value the part sets, here its `d`: use one formula's
+  values in another, for example as how much it covers, so one formula
+  decides where the other shows.
+- Names inside a part are its own: it can use `d` or `wave` whatever the
+  rest of the formula uses. Inside a part, `t` follows the part's own
+  `loop`; make the whole formula's loop a multiple of it.
+
+The examples **Bars to stars**, **Rings through stripes** and
+**Kaleidoscope** are made this way.
+
 **Limits.** A formula can be 4,096 characters and 256 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop
 at the end instead of wrapping round, and dividing by zero gives the
@@ -262,6 +307,8 @@ milliseconds); all the examples are light or medium.
   worked out once a frame, whatever line it's on.
 - Each layer costs about as much as a `smoothstep`; `screen` and colours
   that cover only part of a pixel a little more.
+- A part costs what its formula costs, once for each place it is drawn
+  at: two formulas in one cost about as much as both.
 
 ## Sharing
 

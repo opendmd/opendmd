@@ -60,6 +60,8 @@ mod panel;
 mod probe;
 #[cfg(feature = "psi-probe")]
 mod psi_probe;
+#[cfg(feature = "psi")]
+mod psi_stack;
 mod sched;
 mod sd;
 mod sdhealth;
@@ -222,6 +224,10 @@ fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     // Synchronous until `logring::start` below, like EspLogger before it.
     logring::init();
+    // Formulas compile on a stack of their own (`psi_stack::compile`): the
+    // compiler's worst case is more than the main task or httpd can spare.
+    #[cfg(feature = "psi")]
+    opendmd_core::fx_psi::set_compiler(psi_stack::compile);
 
     // The version (`state::firmware_version`: the app descriptor's, which
     // `FW_VERSION` sets) and the descriptor itself (`"<version> 4mb"`).
