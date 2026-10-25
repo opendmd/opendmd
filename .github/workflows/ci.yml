@@ -15,6 +15,10 @@ name: CI
 #             is third-party content and never leaves the dev box); and
 #             make notices-check-web: the web app's third-party notices
 #             (licenses/) are current, every licence accepted
+#             (make site-smoke is not run here: make site needs dist/ from
+#             make fw-release and the art pipeline's downloaded Kenney GIFs.
+#             Its gallery check, every thumbnail lit, is in make test: the
+#             opendmd-gallery tests and tools/gallery-pages-test.py.)
 #   firmware  make fw-release with a throwaway signing key: the xtensa build
 #             (espup's esp toolchain, ESP-IDF v5.3 in ~/.espressif), the
 #             updater (idf.py), the web app's pack, every size, stack and
