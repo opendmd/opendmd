@@ -7,9 +7,10 @@ also keeps working with DMDoS.
 OpenDMD doesn't come with any GIFs. A card you set up for DMDoS works as
 it is, and the DMDoS GIF pack (**DMDos GUI v1 + GIFs**) is in the Software
 section of [dmdos.net](https://dmdos.net/): copy it onto a FAT32 card as
-dmdos.net describes. You can also add your own GIFs from the
-[Library](web-app.md#library), or make some with
-[Create Art](create-art.md).
+dmdos.net describes, or let [Set up a card](card-setup.md) write it to the
+card from your browser, every GIF ready to play from the first boot. You
+can also add your own GIFs from the [Library](web-app.md#library), or make
+some with [Create Art](create-art.md).
 
 ## What's on a card
 

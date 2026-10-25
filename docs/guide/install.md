@@ -42,6 +42,9 @@ from the Software section of [dmdos.net](https://dmdos.net/).
    see: pick yours, type its password and click **Connect**. Once the
    board is on, **Visit device** opens the web app. That's it.
 
+    No GIFs on your card yet? [Set up a card](card-setup.md) from the
+    DMDoS GIF pack, in your browser.
+
 > **Connection problems?**
 >
 > - If the installer can't connect, hold down the board's **BOOT** button
