@@ -143,12 +143,12 @@ FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}
 # The 40 KB and 20 KB below are Psi stage A's numbers (layers, drawing over
 # a GIF; branch psi-layers, 2026-10-24), approved by the owner the same day.
-# 43 KB for parts (2026-10-25): NOT YET APPROVED by the owner. Built at
+# 43 KB for parts (2026-10-25): approved by the owner 2026-10-25. Built at
 # opt-level "z" since then (42.6 KB; "s" was 44.2): the browser preview's
 # frame is ~0.07 ms mean, 0.14 ms worst under node (0.06 / 0.10 at "s").
 PSI_WASM_GZ_BUDGET = 43 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another)
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
-# examples): NOT YET APPROVED by the owner.
+# examples): approved by the owner 2026-10-25.
 FORMULAS_GZ_BUDGET = 21 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
