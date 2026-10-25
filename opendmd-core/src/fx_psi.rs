@@ -746,6 +746,22 @@ impl FormulaLook {
         }
     }
 
+    /// When it must be drawn *between* the player's frames: [`due`](Self::due),
+    /// unless a transition runs, and then never. A transition's steps come
+    /// at least every [`STEP`](crate::compositor::STEP) and each goes
+    /// through [`apply`](Self::apply), which draws the look's own frame
+    /// when it is due (every row, its `t` on its grid): the look keeps
+    /// moving over the transition at the steps' rate. Drawn between the
+    /// steps as well, a dissolve (it changes pixels on every row) had the
+    /// look draw all 32 rows twice within a few ms — its own frame, then
+    /// the step's — and the second ran past the file's frame.
+    pub fn due_between(&self, transitioning: bool) -> Option<Duration> {
+        if transitioning {
+            return None;
+        }
+        self.due()
+    }
+
     /// The picture to show at `now` over `under` (what the player shows;
     /// its dirty map says what changed since the last call, and is cleared
     /// here): the rows `under` changed drawn again — every row on a frame of
@@ -1515,5 +1531,63 @@ mod tests {
         look.apply(t, &mut under, 300_000);
         set_clock(None);
         assert!(look.gov.delay_ms(20) > 20);
+    }
+
+    #[test]
+    fn over_a_transition_only_its_steps_draw_the_look() {
+        // The firmware's loop, a tick a millisecond through a dissolve: a
+        // step draws the look (every row the dissolve changed, its own
+        // frame when that is due); between steps nothing does. Before
+        // `due_between`, the look's own frames were drawn between the
+        // steps as well, and the step after one drew every row again.
+        use crate::compositor::{Compositor, Kind, Step, Transition, STEP};
+        const F: &str = "loop 4\nlayer add { gray(t/4, 0.2) }";
+        let ms = Duration::from_millis;
+        let mut look = FormulaLook::from_path(&super::path(F, "fps=50")).unwrap();
+        assert!(look.take());
+        let mut canvas = picture();
+        look.apply(ms(990), &mut canvas, 0).dirty_mut().clear();
+        assert_eq!(look.due_between(false), Some(ms(1010)), "its own frames between the file's");
+        assert_eq!(look.due_between(true), None);
+        let mut c = Compositor::new(Transition::new(Kind::Dissolve, ms(400)));
+        c.begin(&canvas, 0);
+        // The new file's first frame.
+        for p in canvas.as_mut_slice() {
+            *p = Rgb::new(255 - p.r, p.g / 2, 255 - p.b);
+        }
+        canvas.dirty_mut().mark_all();
+        c.frame_decoded();
+        let (mut steps, mut own, mut between) = (0, 0, 0);
+        let mut last_step = None;
+        let mut now = ms(1000);
+        while c.is_active() {
+            if c.step(now, &mut canvas) == Step::Composited {
+                if let Some(l) = last_step {
+                    assert!(now - l <= STEP, "a step at least every {STEP:?}");
+                }
+                last_step = Some(now);
+                steps += 1;
+                let due = look.due();
+                let under = c.output_mut().unwrap();
+                let snap = under.clone();
+                let out = look.apply(now, under, 0);
+                if due.is_some_and(|d| d <= now) {
+                    // Its own frame, at the grid frame the step is in.
+                    own += 1;
+                    let t = (now - ms(990)).as_millis() as u32 / 20 * 20;
+                    assert_eq!(out.dirty().count(), 4096);
+                    assert!(out.as_bytes() == over(F, t, &snap).as_slice(), "t {t}");
+                }
+                out.dirty_mut().clear();
+            } else if c.is_active() && look.due_between(true).is_some_and(|d| d <= now) {
+                between += 1;
+            }
+            now += ms(1);
+        }
+        assert_eq!(between, 0, "nothing drawn between the steps");
+        assert!(steps >= 19, "{steps} steps");
+        assert_eq!(own, steps - 1, "every step but the first (t = 0) is a frame of its own");
+        // After it, its own frames between the file's again.
+        assert!(look.due_between(c.is_active()).is_some());
     }
 }

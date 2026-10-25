@@ -958,7 +958,19 @@ impl Engine {
             return Ok(TickOutcome::Idle);
         }
         let decoded = self.advance(now, canvas)?;
-        let stepped = self.compositor.step(now, canvas) != Step::Idle;
+        // A step on its own only when the file's next frame is not about to
+        // carry it (the same rule as the wake time below). The loop also
+        // wakes for other things — a glow step, a formula look's frame —
+        // and such a wake used to run the step the frame was meant to
+        // carry, whose work (with a look: every row drawn again) then made
+        // the frame late.
+        let carried = !matches!(decoded, TickOutcome::Frame { .. })
+            && self.compositor.step_at().is_some_and(|step| {
+                self.current
+                    .as_ref()
+                    .is_some_and(|p| now < p.next_frame_at && step + STEP / 2 >= p.next_frame_at)
+            });
+        let stepped = !carried && self.compositor.step(now, canvas) != Step::Idle;
         let (playing, started) = match decoded {
             TickOutcome::Frame {
                 playing, started, ..
@@ -2591,6 +2603,50 @@ mod tests {
         assert!(transitioning);
         assert_eq!(e.frame_due(), Some(ms(1100)));
         assert_eq!(next_frame_at, ms(1050) - early + crate::compositor::STEP);
+    }
+
+    /// A wake for something else (a glow step, a formula look's frame)
+    /// between a transition's steps does not run a step the file's next
+    /// frame is to carry: that step's work would make the frame late.
+    #[test]
+    fn a_wake_between_steps_leaves_the_frames_step_to_the_frame() {
+        use crate::compositor::Kind;
+        let ms = Duration::from_millis;
+        let mut e = two_solids(Transition::new(Kind::Dissolve, ms(400)));
+        let mut canvas = Canvas::new();
+        e.tick(ms(0), &mut canvas).unwrap();
+        // B at 1000 (frames every 50 ms): steps at 1000 and 1020; the one
+        // due at 1040 is within half a step of B's frame at 1050.
+        e.tick(ms(1000), &mut canvas).unwrap();
+        let TickOutcome::Frame { next_frame_at, .. } = e.tick(ms(1020), &mut canvas).unwrap()
+        else {
+            panic!("a step");
+        };
+        assert_eq!(next_frame_at, ms(1050));
+        let before = e.display(&canvas).as_slice().to_vec();
+        e.display_mut(&mut canvas).dirty_mut().clear();
+        // A wake at 1042 and at 1048: nothing to show, nothing composited.
+        for t in [1042, 1048] {
+            assert!(
+                matches!(e.tick(ms(t), &mut canvas).unwrap(), TickOutcome::Idle),
+                "at {t}"
+            );
+        }
+        assert!(e.display(&canvas).as_slice() == before.as_slice());
+        assert!(e.display(&canvas).dirty().is_clean());
+        // B's frame carries it.
+        let TickOutcome::Frame { transitioning, .. } = e.tick(ms(1050), &mut canvas).unwrap()
+        else {
+            panic!("B's frame");
+        };
+        assert!(transitioning);
+        assert!(e.display(&canvas).as_slice() != before.as_slice());
+        // A step that is its own (20 ms on, B's next frame 30 ms after it)
+        // still runs at a wake on time.
+        assert!(matches!(
+            e.tick(ms(1070), &mut canvas).unwrap(),
+            TickOutcome::Frame { .. }
+        ));
     }
 
     /// The firmware's pause: paused, then the file let go of (its decoder's
