@@ -74,6 +74,12 @@ bundle carries its layout, and every place that installs one checks it:
   image's app descriptor is `"<version> <variant>"` for the bundle's
   layout (`check_app_desc`), so an image signed under the wrong layout by
   mistake is refused too.
+- **One updater for both.** `updater.bin` is built once, with a 4 MB
+  image header, and goes into the 8 MB layout too. That is harmless: an
+  app's own header size is not used at run time (IDF takes the chip's size
+  from the bootloader's header, 8 MB on an 8mb board, and does not override
+  it from the app's), and neither selecting nor verifying the updater
+  looks at it.
 - **The updater** accepts both magics and installs a bundle only if its
   layout is the board's (the flash size the installed bootloader set: 4 MB
   is `4mb`, 8 MB is `8mb`; the 8 MB table runs only with the 8mb
@@ -94,9 +100,11 @@ A 4mb image runs on an 8 MB board (with the 4 MB layout; IDF uses the size
 in the bootloader's header), so the DevKit build is the safe choice when in
 doubt; `GET /api/firmware`'s `flash_size` (the chip's real size) lets the
 web app say when a board has room for the 8mb build. An 8mb image does not
-run on a 4 MB chip: IDF stops at boot with "Detected size(4096k) smaller
-than the size in the binary image header(8192k)" (an install from the
-wrong installer button; another install fixes it).
+run on a 4 MB chip (in QEMU, IDF stops at boot with "Detected size(4096k)
+smaller than the size in the binary image header(8192k)"). What the
+installer's 8 MB button does to a DevKit exactly is not tested on a board;
+either way the firmware won't start, and installing again with the DevKit
+button and Erase ticked recovers it.
 
 ## Why not two app slots
 

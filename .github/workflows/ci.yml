@@ -19,7 +19,7 @@ name: CI
 #             make fw-release and the art pipeline's downloaded Kenney GIFs.
 #             Its gallery check, every thumbnail lit, is in make test: the
 #             opendmd-gallery tests and tools/gallery-pages-test.py.)
-#   firmware  make fw-release with a throwaway signing key: the xtensa build
+#   firmware  make fw-release VARIANT=4mb (the DevKit layout; release.yml builds both) with a throwaway signing key: the xtensa build
 #             (espup's esp toolchain, ESP-IDF v5.3 in ~/.espressif), the
 #             updater (idf.py), the web app's pack, every size, stack and
 #             build-path check, the third-party notices against what was
@@ -163,8 +163,9 @@ jobs:
           echo "FW_SIGN_KEY=$RUNNER_TEMP/ci.key" >> "$GITHUB_ENV"
           echo "FW_SIGN_PUB=$RUNNER_TEMP/ci.pub" >> "$GITHUB_ENV"
 
-      - name: Release build (make fw-release)
-        run: make fw-release
+      # The DevKit layout only (CI minutes): release.yml builds both.
+      - name: Release build (make fw-release VARIANT=4mb)
+        run: make fw-release VARIANT=4mb
 
       - uses: ./.github/actions/esp-cache-save
         if: always()

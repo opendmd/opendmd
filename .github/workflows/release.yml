@@ -113,6 +113,8 @@ jobs:
 
       - uses: ./.github/actions/esp-toolchain
         id: esp
+        with:
+          fw-variants: 4mb 8mb
 
       - name: Cache the updater's build
         uses: actions/cache@v6
@@ -157,6 +159,7 @@ jobs:
           espressif-hit: ${{ steps.esp.outputs.espressif-hit }}
           fw-target-key: ${{ steps.esp.outputs.fw-target-key }}
           fw-target-hit: ${{ steps.esp.outputs.fw-target-hit }}
+          fw-variants: 4mb 8mb
 
       - name: Remove the signing key
         if: always()
@@ -178,6 +181,10 @@ jobs:
             uv run --quiet tools/fw-sign.py inspect "dist/opendmd-$VERSION-$v.odfw" | tee "$RUNNER_TEMP/inspect-$v.txt"
             grep -qx "variant  $v" "$RUNNER_TEMP/inspect-$v.txt" || { echo "::error::dist/opendmd-$VERSION-$v.odfw is not a $v bundle"; exit 1; }
             ! strings "$app" dist/updater.bin "dist/bootloader-$v.bin" | grep -n "$HOME" || { echo "::error::the release names $HOME"; exit 1; }
+            full="dist/opendmd-$VERSION-$v-full.bin"
+            want=$(( ${v%mb} * 1024 * 1024 ))
+            test "$(stat -c %s "$full")" -eq "$want" || { echo "::error::$full is $(stat -c %s "$full") B, want $want (the $v flash)"; exit 1; }
+            echo "$full: $want B"
           done
           # The web app pack's version (its header, docs/www-pack.md): what
           # the player reports as www_version. Settings -> About links this
@@ -267,6 +274,26 @@ jobs:
           freeze=auto
           [[ "$KIND" == dry ]] || freeze=yes
           make site GALLERY="$RUNNER_TEMP/site-gallery/gallery" API_ARCHIVE="$RUNNER_TEMP/site-gallery/dev/api" API_FREEZE=$freeze
+
+      # What the web app's Check for updates reads: the 4mb bundle as
+      # `firmware` (web apps from before the 8 MB layout), each layout's in
+      # `variants`, every file there; and the old manifest name kept.
+      - name: Check the site's release.json and installer
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          inst=target/site/install
+          cat "$inst/release.json"
+          test "$(jq -r .version "$inst/release.json")" = "$VERSION" || { echo "::error::release.json's version is not $VERSION"; exit 1; }
+          test "$(jq -r .firmware "$inst/release.json")" = "firmware/opendmd-$VERSION-4mb.odfw" || { echo "::error::release.json's firmware is not the 4mb bundle"; exit 1; }
+          for v in 4mb 8mb; do
+            f="$(jq -r ".variants[\"$v\"].firmware" "$inst/release.json")"
+            test "$f" = "firmware/opendmd-$VERSION-$v.odfw" || { echo "::error::release.json's variants.$v.firmware is '$f'"; exit 1; }
+            cmp "$inst/$f" "dist/opendmd-$VERSION-$v.odfw" || { echo "::error::$inst/$f is not dist's"; exit 1; }
+            grep -q "manifest=\"firmware/manifest-$v.json\"" "$inst/index.html" || { echo "::error::the install page has no $v button"; exit 1; }
+          done
+          cmp "$inst/firmware/manifest.json" dist/manifest-4mb.json || { echo "::error::install/firmware/manifest.json is not the 4mb manifest"; exit 1; }
 
       - name: The tree is clean after the build
         run: |

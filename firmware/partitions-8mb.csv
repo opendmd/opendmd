@@ -13,7 +13,12 @@
 #   on. Much more would be no use: the ESP32 maps at most 3.19 MB of code
 #   (IROM 0x400D0000..0x40400000), so a bigger image could not run.
 # - ota_0: the updater, 384 KB as in the 4 MB table (one updater.bin for
-#   both layouts: it finds the partitions by type at run time).
+#   both layouts: it finds the partitions by type at run time). Its image
+#   header says 4 MB (its own sdkconfig); harmless here: IDF takes the
+#   chip's size from the bootloader's header (the 8mb bootloader: 8 MB) and
+#   never acts on an app's own (CONFIG_SPI_FLASH_SIZE_OVERRIDE is off), and
+#   nothing that starts it (esp_ota_set_boot_partition, esp_image_verify)
+#   checks it.
 # - www: 2,048 KB. The pack is ~1 MB and is built to fit the 4 MB table's
 #   1,280 KB (one pack for both); the extra is room for later. The pack is
 #   memory-mapped into the 4 MB data window it shares with the app's

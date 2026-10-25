@@ -78,8 +78,8 @@
       </div>
     </div>
     <p class="note"><b>Not sure which you have?</b> Choose the DevKit: its firmware also runs on an 8 MB board in development, with
-      less room. The 8 MB build's firmware does <b>not</b> start on a DevKit; if it went on one by mistake, install
-      again with the DevKit button and tick <b>Erase device</b>.</p>
+      less room. A DevKit given the 8 MB build's firmware will <b>not</b> start it; installing again with the
+      DevKit button and <b>Erase device</b> ticked recovers it.</p>
     <p class="note">A board that already runs OpenDMD is recognised: the installer shows its version and offers <b>Update</b>
       (settings kept), <b>Change Wi-Fi</b>, <b>Visit device</b> and its logs. If it offers <b>Install</b> instead of
       <b>Update</b> for a board that runs OpenDMD, you chose the other board's button. On a first install it asks whether to
@@ -122,8 +122,8 @@
     <thead><tr><th>part</th><th>offset</th></tr></thead>
     <tbody id="parts-4mb"><tr><td colspan="2" style="color: var(--muted)">reading the manifest…</td></tr></tbody>
   </table>
-  <p>8 MB build, <a href="firmware/manifest-8mb.json">its manifest</a> (the web app first: on a 4 MB chip
-    chosen by mistake, the writes past 4 MB wrap round to the start, and what follows writes the start again):</p>
+  <p>8 MB build, <a href="firmware/manifest-8mb.json">its manifest</a> (the parts that reach past 4 MB
+    first):</p>
   <table>
     <thead><tr><th>part</th><th>offset</th></tr></thead>
     <tbody id="parts-8mb"><tr><td colspan="2" style="color: var(--muted)">reading the manifest…</td></tr></tbody>

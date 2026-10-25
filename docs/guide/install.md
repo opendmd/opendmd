@@ -25,9 +25,9 @@ There is one install button per board, because each has its own firmware:
   room.
 
 Not sure? Choose the DevKit: its firmware also runs on an 8 MB board in development,
-with less room. The 8 MB build's firmware does not start on a DevKit;
-if it went on one by mistake, install again with the DevKit button and
-tick **Erase device**.
+with less room. A DevKit given the 8 MB build's firmware won't start
+it; installing again with the DevKit button and **Erase device** ticked
+recovers it.
 
 ## Before you start
 
