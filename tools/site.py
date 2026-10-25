@@ -160,7 +160,8 @@ INSTALL_ONE = """<div class="board" id="board-{v}">
 INSTALL_BUTTON = ('<div class="install"><div class="boards">'
                   + "".join(INSTALL_ONE.format(v=v, board=b, label=lab, about=about) for v, (b, lab, about) in BOARDS.items())
                   + '</div><p class="ver">OpenDMD {version}. Not sure which board you have? Choose the DevKit: its firmware '
-                    "also runs on an 8 MB board in development, with less room. The 8 MB build's firmware does not start on a DevKit.</p></div>")
+                    "also runs on an 8 MB board in development, with less room. A DevKit given the 8 MB build's firmware won't start it: "
+                    "install again with the DevKit button and Erase device ticked.</p></div>")
 # "Set up a card": the page's app (markup at its marker, scripts beside it),
 # which runs on the demo's wasm (../demo/pkg/, ../demo/pkg-art/).
 CARD_PAGE = "card/index.html"
@@ -533,6 +534,10 @@ def release(dist: Path, out: Path) -> dict:
         if not (dist / name).is_file():
             raise SystemExit(f"no {dist / name}: run make fw-release")
         shutil.copyfile(dist / name, fw / name)
+    # The name installers before the 8 MB layout fetched: an installer tab
+    # left open across a release still finds a manifest (the DevKit's; its
+    # parts are named relative to it, so they are the ones published here).
+    shutil.copyfile(dist / "manifest-4mb.json", fw / "manifest.json")
     # The www pack's version: the header's string (docs/www-pack.md), the
     # one GET /api/www reports.
     pack = (fw / f"opendmd-{ver}-www.pack").read_bytes()[:64]

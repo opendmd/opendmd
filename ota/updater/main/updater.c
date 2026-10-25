@@ -94,6 +94,7 @@ static const uint8_t HUB75_LOW[] = {25, 26, 27, 14, 12, 13, 33, 32, 22, 17, 4, 1
  * refuses an 8mb bundle too. */
 static const uint8_t MAGIC_4MB[8] = {'O', 'D', 'F', 'W', '1', 0, 0, 0};
 static const uint8_t MAGIC_8MB[8] = {'O', 'D', 'F', 'W', '1', '8', 'm', 'b'};
+/* A third layout would be a new bundle format (ODFW2), not a third tag. */
 #define VERSION_LEN 32
 /* The image's app descriptor: its magic word at 0x20, the version at 0x30. */
 #define APP_DESC_OFFSET 0x20

@@ -442,6 +442,18 @@ FW_FRAGMENT = { echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PAR
 # The bench builds' (fw-build, fw-flash, fw-clippy; VARIANT=8mb for the
 # 8 MB layout, which shares the bench target dir: switching rebuilds IDF).
 FW_BENCH_FRAGMENT = $(FW_FRAGMENT) > $(FW)/target/sdkconfig.partitions
+# Before a build: any generated sdkconfig under $(1) (a glob) that does not
+# carry this build's flash size, app version and partition table (left by
+# the other layout, another version, or another checkout sharing the dir) is
+# removed, so IDF makes a new one from the fragment instead of keeping its
+# old values over it.
+FW_SDKCONFIG_GUARD = for cfg in $(1); do \
+	  [ -f "$$cfg" ] || continue; \
+	  grep -qx 'CONFIG_ESPTOOLPY_FLASHSIZE="$(shell echo $(FW_VARIANT) | tr a-z A-Z)"' "$$cfg" \
+	  && grep -qx 'CONFIG_APP_PROJECT_VER="$(FW_VERSION) $(FW_VARIANT)"' "$$cfg" \
+	  && grep -qx 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$(CURDIR)/$(FW_PARTITIONS)"' "$$cfg" \
+	  || { echo "==> $$cfg is not this build's ($(FW_VARIANT), $(FW_VERSION), $(FW_PARTITIONS)): removing it"; rm -f "$$cfg"; }; \
+	done
 
 # Delete the generated sdkconfig when the bench flavour (normal/diag) or the
 # version changes: it keeps the values it already has (the descriptor's
@@ -454,6 +466,7 @@ fw-sdkconfig-flavour:
 	   rm -f $(FW)/target/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig; \
 	   echo $$want > $(FW)/target/sdkconfig.flavour; \
 	 fi
+	@$(call FW_SDKCONFIG_GUARD,$(FW)/target/xtensa-esp32-espidf/*/build/esp-idf-sys-*/out/sdkconfig)
 
 fw-build: fw-sdkconfig-flavour
 	@mkdir -p $(FW)/target
@@ -511,11 +524,11 @@ fw-clippy: fw-sdkconfig-flavour
 	@mkdir -p $(FW)/target
 	@$(FW_BENCH_FRAGMENT)
 	@echo "==> Clippy firmware, --features $(FW_DEV_FEATURES)"
-	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets $(FW_CARGO_FEATURES) -- -D warnings'
+	cd $(FW) && bash -c '$(FW_ENV) . $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets $(FW_CARGO_FEATURES) -- -D warnings'
 	@echo "==> Clippy firmware, release feature set (the defaults: psi)"
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets -- -D warnings'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets -- -D warnings'
 	@echo "==> Clippy firmware, no features (without psi)"
-	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets --no-default-features -- -D warnings'
+	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_SDKCONFIG)" cargo clippy --all-targets --no-default-features -- -D warnings'
 
 fw-fmt:
 	cd $(FW) && RUSTUP_TOOLCHAIN=stable cargo fmt
@@ -551,7 +564,9 @@ fw-clean:
 #
 # and once, the same for both:
 #
-#   updater.bin                    the updater (ota/updater), at ota_0 (0x260000 / 0x320000)
+#   updater.bin                    the updater (ota/updater), at ota_0 (0x260000 / 0x320000);
+#                                  its image header says 4 MB in both: harmless, IDF
+#                                  sizes the chip from the bootloader's header
 #   ota_data_initial.bin           otadata erased (8 KB of 0xFF) at 0xF000: boots factory
 #   opendmd-<ver>-www.pack         the web app, at www (0x2C0000 / 0x380000); built to
 #                                  fit the smaller www partition
@@ -571,7 +586,6 @@ FW_VERSION := $(shell sed -n 's/^version *= *"\(.*\)"/\1/p' $(FW)/Cargo.toml | h
 # root to be the directory above the target dir, and with the target dir
 # elsewhere it would lose the extra_components (hub75, mdns) in Cargo.toml.
 FW_RELEASE_TARGET_DIR ?= $(CURDIR)/$(FW)/target
-FW_RELEASE_VSUFFIX := $(if $(filter 4mb,$(FW_VARIANT)),,-$(FW_VARIANT))
 FW_RELEASE_VTARGET := $(FW_RELEASE_TARGET_DIR)$(if $(filter 4mb,$(FW_VARIANT)),,/v$(FW_VARIANT))
 FW_RELEASE_BINARY := $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/opendmd-firmware
 FW_RELEASE_BOOTLOADER := $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/bootloader.bin
@@ -628,6 +642,7 @@ fw-release-variant:
 	   rm -f $(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig; \
 	   echo $$want > $(FW_RELEASE_SDKCONFIG_STAMP); \
 	 fi
+	@$(call FW_SDKCONFIG_GUARD,$(FW_RELEASE_VTARGET)/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig)
 	cd $(FW) && env -u OPENDMD_WIFI_SSID -u OPENDMD_WIFI_PASS bash -c '. $(ESPUP_ENV) && RUSTUP_TOOLCHAIN=esp CARGO_WORKSPACE_DIR="$(CURDIR)/$(FW)" OPENDMD_FLASH_VARIANT=$(FW_VARIANT) OPENDMD_FW_VERSION="$(FW_VERSION)" ESP_IDF_SDKCONFIG_DEFAULTS="$(FW_RELEASE_SDKCONFIG)" CARGO_TARGET_XTENSA_ESP32_ESPIDF_RUSTFLAGS="$(FW_RELEASE_REMAP)" cargo build --release --target-dir "$(FW_RELEASE_VTARGET)" $(if $(FW_RELEASE_FEATURES),--features $(FW_RELEASE_FEATURES),)'
 	@# The generated sdkconfig must carry the layout's flash size: a fragment
 	@# that failed to apply would build a 4 MB image under an 8mb name.
@@ -678,12 +693,13 @@ fw-release-variant:
 	@test "$$(dd if=$(FW_FULL_IMAGE) bs=4096 skip=$$(( $(OTADATA_OFFSET) / 4096 )) count=2 status=none | tr -d '\377' | wc -c)" = 0 || { echo "otadata is not erased in $(FW_FULL_IMAGE)"; exit 1; }
 	@test $$(stat -c %s $(FW_FULL_IMAGE)) -eq $(FW_FLASH_BYTES) || { echo "$(FW_FULL_IMAGE) is not $(FW_FLASH_BYTES) B"; exit 1; }
 	@# The parts in the order ESP Web Tools writes them. 8mb: the updater and
-	@# the pack (the parts past 4 MB) first, so on a 4 MB DevKit chosen by
-	@# mistake their writes, which wrap round to the start of the chip, are
-	@# written over by the bootloader, table, otadata and app that follow (the
-	@# board then stops at boot with IDF's "Detected size(4096k) smaller than
-	@# the size in the binary image header(8192k)" instead of having no
-	@# bootloader at all); every part is in place on an 8 MB chip either way.
+	@# the pack (the parts that reach past 4 MB) first, then the bootloader,
+	@# table, otadata and app. On an 8 MB chip the order changes nothing. On a
+	@# 4 MB DevKit given this manifest by mistake, the OpenDMD firmware does
+	@# not start whatever happens to the writes past 4 MB (the stub may
+	@# refuse them, or the chip may wrap them round to the start, which the
+	@# later parts would then write over); installing again with the DevKit
+	@# manifest and Erase ticked recovers the board. Not tested on a board.
 	@boot='        { "path": "bootloader-$(FW_VARIANT).bin", "offset": 4096 }'; \
 	 table='        { "path": "partition-table-$(FW_VARIANT).bin", "offset": 32768 }'; \
 	 otadata='        { "path": "ota_data_initial.bin", "offset": '$$(( $(OTADATA_OFFSET) ))' }'; \

@@ -33,7 +33,10 @@ use std::fmt;
 
 /// `ODFW1` and three NULs: a 4mb bundle (and every bundle before 8mb).
 pub const MAGIC: [u8; 8] = *b"ODFW1\0\0\0";
-/// An 8mb bundle: `ODFW1` and the variant.
+/// An 8mb bundle: `ODFW1` and the variant. Three bytes name a layout only
+/// while the names fit; a third layout (16 MB, another chip) should get a
+/// new format, `ODFW2`, with a proper variant field, rather than squeeze in
+/// here.
 pub const MAGIC_8MB: [u8; 8] = *b"ODFW18mb";
 /// The flash layouts, as the firmware names them (`/api/status`
 /// `variant`, the app descriptor's `"<version> <variant>"`).
