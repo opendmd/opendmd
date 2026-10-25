@@ -427,7 +427,9 @@ function editor() {
       const f = [...mine(), ...EX].find((x) => x.name.toLowerCase() === n.toLowerCase() && (x.id == null || x.id !== B.draft.id) && x.name.toLowerCase() !== me);
       if (!f || k > 15) return { ...at, why: k > 15 ? 'too many formulas put in at once' : n.toLowerCase() === me ? 'a formula can’t be put inside itself' : `there’s no formula called “${n}” in yours or the examples` };
       const t = `${i}part ${m[3]} {\n${i}  -- ${f.name}\n${f.src.trim().replace(/^(\s*)(use\s)/gm, '$1-- $2').replace(/^/gm, i + '  ')}\n${i}}`, c = ta.selectionStart;
-      ta.focus({ preventScroll: true });
+      // Before saving or sharing: focused, so one undo takes it back. Not on
+      // opening a draft or a link (no phone keyboard, the name keeps focus).
+      if (all) ta.focus({ preventScroll: true });
       put(at, t);
       // The caret stays where it was (one undo takes the paste back).
       const q = c > m.index ? c + t.length - m[0].length : c;
