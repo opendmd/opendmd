@@ -362,7 +362,7 @@ const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], 
   ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'], ['%', 'remainder: v % 1 is the fraction'], [';', 'a new line, on the same line'],
   ['loop 8', 'the loop’s length in seconds (first line)'], ['frame { … }', 'values worked out once a frame'],
   ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
-  ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }'], ['p.v', 'a value part p sets'],
+  ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'], ['p.v', 'a value part p sets'],
   ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']];
 const COLS = [['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'], ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
   ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'], ['gray(v)', 'white, 0 to 1'],
@@ -395,8 +395,8 @@ function editor() {
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta)), strip,
       h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values' : 'Drag a number (or Alt + ↑ ↓) to try other values'))),
-    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), look, h('button', { id: 'psi-ed-gif', onclick: () => { compile(true); toGif(B.draft); } }, 'Save as GIF…'),
-      h('button', { id: 'psi-ed-share', onclick: (e) => { compile(true); share(e.currentTarget, B.draft); } }, 'Copy share link')), h('p.cap', NOTE()))));
+    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
+      h('button', { id: 'psi-ed-share', onclick: (e) => { if (ready()) share(e.currentTarget, B.draft); } }, 'Copy share link')), h('p.cap', NOTE()))));
   let pv = null, toks = [], bad = null, num = null, good = null;
   // What the preview plays: the last text that compiled, with the sliders as they are.
   const live = { get name() { return B.draft.name; }, get src() { return good; }, get a() { return B.draft.a; }, get b() { return B.draft.b; }, get c() { return B.draft.c; } };
@@ -414,22 +414,30 @@ function editor() {
   const build = debounce(() => compile(), 150);
   // `use Plasma as p`: one of yours or an example pasted in as `part p { … }`
   // (the shared text stands alone), once the caret is off the line — every
-  // one (`all`) before saving or sharing. One it can't find: {s, e, n}.
+  // one (`all`) before saving or sharing. Never the formula itself; `use`
+  // lines inside what is pasted are left as comments; at most 16 a time.
+  // One it can't paste: {s, e, why}.
   function paste(all) {
-    const s = ta.value, cl = s.slice(0, ta.selectionStart).split('\n').length;
-    for (const m of s.matchAll(/^([ \t]*)use[ \t]+(.+?)[ \t]+as[ \t]+([A-Za-z_]\w*)[ \t]*$/gm)) {
-      if (!all && document.activeElement === ta && s.slice(0, m.index).split('\n').length === cl) continue;
-      const n = m[2].trim(), f = [...mine(), ...EX].find((x) => x.name.toLowerCase() === n.toLowerCase()), i = m[1];
-      if (!f) return { s: m.index, e: m.index + m[0].length, n };
-      const t = `${i}part ${m[3]} {\n${i}  -- ${f.name}\n${f.src.trim().replace(/^/gm, i + '  ')}\n${i}}`, c = ta.selectionStart;
-      put({ s: m.index, e: m.index + m[0].length }, t);
+    for (let k = 0; ; k++) {
+      const s = ta.value, cl = s.slice(0, ta.selectionStart).split('\n').length, me = name.value.trim().toLowerCase();
+      const m = [...s.matchAll(/^([ \t]*)use[ \t]+(.+?)[ \t]+as[ \t]+([A-Za-z_]\w*)[ \t]*$/gm)]
+        .find((m) => all || document.activeElement !== ta || s.slice(0, m.index).split('\n').length !== cl);
+      if (!m) return;
+      const n = m[2].trim(), at = { s: m.index, e: m.index + m[0].length }, i = m[1];
+      const f = [...mine(), ...EX].find((x) => x.name.toLowerCase() === n.toLowerCase() && (x.id == null || x.id !== B.draft.id) && x.name.toLowerCase() !== me);
+      if (!f || k > 15) return { ...at, why: k > 15 ? 'too many formulas put in at once' : n.toLowerCase() === me ? 'a formula can’t be put inside itself' : `there’s no formula called “${n}” in yours or the examples` };
+      const t = `${i}part ${m[3]} {\n${i}  -- ${f.name}\n${f.src.trim().replace(/^(\s*)(use\s)/gm, '$1-- $2').replace(/^/gm, i + '  ')}\n${i}}`, c = ta.selectionStart;
+      ta.focus({ preventScroll: true });
+      put(at, t);
       // The caret stays where it was (one undo takes the paste back).
-      const k = c > m.index ? c + t.length - m[0].length : c;
-      ta.setSelectionRange(k, k);
+      const q = c > m.index ? c + t.length - m[0].length : c;
+      ta.setSelectionRange(q, q);
       for (const k of 'abc') B.draft[k] ??= f[k];
-      return paste(all);
+      const lp = (x) => +(x.match(/^loop\s+([\d.]+)/m) || [0, 8])[1];
+      toast(`“${f.name}” is in as part ${m[3]}` + (lp(f.src) > lp(s) ? `: its loop (${lp(f.src)} s) is longer than this formula’s — try loop ${lp(f.src)}` : ''));
     }
   }
+  // A use line it couldn't paste: said, and returned (nothing is saved or shared).
   function compile(all) {
     const f = B.draft, miss = paste(all);
     f.src = ta.value;
@@ -458,11 +466,14 @@ function editor() {
       top.classList.toggle('stale', good != null);
       const line = ta.value.slice(0, bad[0]).split('\n').length;
       el.dataset.err = line;
-      clear(err, `Line ${line}: `, (miss ? `there’s no formula called “${miss.n}” in yours or the examples` : T(() => P.error(), '')).split('`').map((t, k) => (k % 2 ? h('code', t) : t)));
+      clear(err, `Line ${line}: `, (miss ? miss.why : T(() => P.error(), '')).split('`').map((t, k) => (k % 2 ? h('code', t) : t)));
       paint();
     }
     stash();
+    return miss;
   }
+  // Before saving or sharing: every use line pasted, or nothing happens.
+  const ready = () => { const m = compile(true); if (m) toast(`First fix line ${ta.value.slice(0, m.s).split('\n').length}: ${m.why}`, 'bad'); return !m; };
   ta.addEventListener('input', () => { paint(); scrubbable(); build(); });
   ta.addEventListener('scroll', () => { hl.scrollLeft = ta.scrollLeft; });
 
@@ -589,14 +600,14 @@ function editor() {
   function cheat(btn) {
     const r = btn.getBoundingClientRect();
     const ins = (t) => () => { closeMenu(); const s = ta.selectionStart; ta.focus(); ta.setSelectionRange(s, ta.selectionEnd); document.execCommand('insertText', false, t); };
-    const rows = (title, list) => [h('h3', title), h('dl.psi-dl', list.map(([k, v]) => [h('dt', h('button.txt.mono', { onclick: ins(k.split(/[ ,(]/)[0]) }, k)), h('dd', v)]))];
+    const rows = (title, list) => [h('h3', title), h('dl.psi-dl', list.map(([k, v, x]) => [h('dt', h('button.txt.mono', { onclick: ins(x || k.split(/[ ,(]/)[0]) }, k)), h('dd', v)]))];
     popup(h('div.menu.wide', { id: 'psi-cheat', role: 'dialog', 'aria-label': 'Cheat sheet' }, h('div.mh', 'Cheat sheet'),
       rows('Values', VARS), rows('Functions', FUNCS), rows('Colour (the last line, of the formula or a layer)', COLS),
       h('p.cap', 'Phases are in turns: sin(0.25) is 1. Tap a name to put it in. -- starts a comment.')), r.left, r.bottom + 4);
   }
 
   function save() {
-    compile(true);
+    if (!ready()) return;
     const f = B.draft, list = mine();
     f.name = name.value.trim() || `My formula ${list.length + 1}`;
     name.value = f.name;

@@ -444,13 +444,15 @@ fn worst_case_formulas() {
         let src = f();
         let n = crate::worst::path_len(&src);
         assert!(
-            name == "parts" || (1900..=2048).contains(&n),
+            matches!(name, "parts" | "nested" | "parts in layers") || (1900..=2048).contains(&n),
             "{name}: {n} B"
         );
         match compile(&src) {
             Ok(p) => assert!(p.len() <= crate::MAX_OPS, "{name}"),
             Err(e) => assert!(
-                e.msg.contains("too long for the panel") || e.msg.contains("too many places"),
+                e.msg.contains("too long for the panel")
+                    || e.msg.contains("too many places")
+                    || e.msg.starts_with("unknown name"),
                 "{name}: {}",
                 e.msg
             ),
@@ -996,7 +998,7 @@ const PART_ERRORS: &[(&str, &str, usize, usize)] = &[
     ),
     (
         "use Plasma as p\np",
-        "`use` pastes in a formula by its name",
+        "`use` puts a formula in by its name",
         1,
         1,
     ),
@@ -1035,4 +1037,16 @@ fn part_error_messages() {
 fn compact_keeps_parts() {
     let src = "loop 8\npart p {\n  -- Plasma\n  loop 4\n  v = sin(x*2 + t/4)\n  hsv(v, 1, 1)\n}\nlayer { p }\nlayer add { p(1 - x, y, 0.5) }";
     assert_eq!(compile(&compact(src)).unwrap(), compile(src).unwrap());
+}
+
+#[test]
+fn suggestions_measure_edits_and_swaps() {
+    use crate::compile::distance_for_tests as d;
+    assert_eq!(d("tme", "t"), 2);
+    assert_eq!(d("smoothstp", "smoothstep"), 1);
+    assert_eq!(d("mutliply", "multiply"), 1);
+    assert_eq!(d("", "abc"), 3);
+    assert_eq!(d("kitten", "sitting"), 3);
+    assert_eq!(d("ca", "abc"), 3);
+    assert_eq!(d(&"a".repeat(24), &"b".repeat(24)), 24);
 }

@@ -17,7 +17,9 @@ It prints `ok: …` (steps, layers, registers), the loop and what it reads,
 and `panel: ~N ms a frame: light|medium|heavy`, and writes a PNG contact
 sheet of frames across one loop (over a sample picture — sky, sun, hills —
 when the formula draws over what is under it). On a compile error it prints
-`error: line L, column C: <sentence>`, the line and carets, and exits 1.
+`error: line L, column C: <sentence>`, the line and carets, and fails:
+the tool itself exits 1 (2 for a missing file or a bad option), and
+`make psi-check` then exits 2, as make does for any failed command.
 Look at the sheet: the numbers say it runs, only the picture says it is
 right. Aim for **≤ 8 ms** (light or medium).
 
@@ -203,8 +205,9 @@ layer add { p(1 - x, y, 0.5) }
 - Each place a part is drawn at is its own steps (counted in the 256);
   drawn where the pixel is, a part costs what it cost alone.
 - In the web editor, the line `use Plasma as p` pastes the saved formula or
-  example called Plasma in as `part p { … }`; anything shared or saved is
-  always the pasted, self-contained text. A model should write `part`
+  example called Plasma in as `part p { … }` (never the formula being
+  edited; `use` lines inside what it pastes become comments); anything
+  shared or saved is always the pasted, self-contained text. A model should write `part`
   blocks directly.
 
 Masks and crossfades need nothing more: a crossfade is a second layer whose

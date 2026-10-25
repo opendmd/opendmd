@@ -179,3 +179,96 @@ fn the_reference_names_every_built_in() {
         compile(&format!("layer {b} {{ gray(x) }}")).unwrap();
     }
 }
+
+/// The reference's cost table is the estimate's (`Program::esp32_us`): each
+/// row's nanoseconds, a pixel, are what one more such step adds to it.
+#[test]
+fn the_cost_table_is_the_estimates() {
+    let us = |src: &str| {
+        compile(src)
+            .unwrap_or_else(|e| panic!("{src}: {}", e.msg))
+            .esp32_us() as i64
+    };
+    // (the row as the table prints it, ns, a formula, the same with one more step)
+    let rows: &[(&str, i64, &str, &str)] = &[
+        (
+            "| + − compare min max step and or `%`2ⁿ | 50 |",
+            50,
+            "gray(x*px)",
+            "gray(x*px + x)",
+        ),
+        ("| `*` | 86 |", 86, "gray(x)", "gray(x*px)"),
+        ("| `%` (other) | 113 |", 113, "gray(px)", "gray(px % 3)"),
+        (
+            "| neg abs floor frac not | 40 |",
+            40,
+            "gray(x*px)",
+            "gray(abs(x*px))",
+        ),
+        (
+            "| `/` by a varying value, `1/v` | 685 |",
+            685,
+            "gray(x)",
+            "gray(x / px)",
+        ),
+        ("| `sqrt` | 539 |", 539, "gray(x)", "gray(sqrt(x))"),
+        ("| `len` | 642 |", 642, "gray(x)", "gray(len(x, px))"),
+        ("| `sin` `cos` | 110 |", 110, "gray(x)", "gray(sin(x))"),
+        (
+            "| `tri` `saw` `sqr` `select` `clamp` | 60 |",
+            60,
+            "gray(x)",
+            "gray(tri(x))",
+        ),
+        ("| `mix` | 130 |", 130, "gray(x)", "gray(mix(x, px, x))"),
+        (
+            "| `smoothstep` | 214 ",
+            214,
+            "gray(x)",
+            "gray(smoothstep(0.2, 0.8, x))",
+        ),
+        ("| `hash` | 220 |", 220, "gray(x)", "gray(hash(px, x))"),
+        ("| `atan2` | 529 |", 529, "gray(x)", "gray(atan2(x, px))"),
+        ("| `noise` | 855 |", 855, "gray(x)", "gray(noise(x, px, x))"),
+        ("| colour `rgb` | 120 |", 120, "gray(x)", "rgb(x, x, x)"),
+        ("| colour `hsv` | 195 |", 195, "gray(x)", "hsv(x, x, x)"),
+        ("| `ur` `ug` `ub` | 35 |", 35, "gray(x)", "gray(ur)"),
+        ("| `ul` | 125 |", 125, "gray(x)", "gray(ul)"),
+        (
+            "| each extra layer | 150 (multiply 210, screen 290; +75 with coverage) |",
+            150,
+            "gray(x)",
+            "layer { gray(x) }\nlayer add { gray(px) }",
+        ),
+        (
+            "multiply 210",
+            210,
+            "gray(x)",
+            "layer { gray(x) }\nlayer multiply { gray(px) }",
+        ),
+        (
+            "screen 290",
+            290,
+            "gray(x)",
+            "layer { gray(x) }\nlayer screen { gray(px) }",
+        ),
+        (
+            "+75 with coverage",
+            225,
+            "gray(x)",
+            "layer { gray(x) }\nlayer add { gray(px, x) }",
+        ),
+    ];
+    for &(row, ns, base, more) in rows {
+        assert!(
+            DOC.contains(row),
+            "the reference's cost table has no {row:?}"
+        );
+        let got = us(more) - us(base);
+        let want = ns * 4096 / 1000;
+        assert!(
+            (got - want).abs() <= 1,
+            "{row}: one more step adds {got} µs, the table says {ns} ns a pixel ({want} µs)"
+        );
+    }
+}

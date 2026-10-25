@@ -34,6 +34,10 @@ name = "bench"
 required-features = ["tables"]
 
 [[example]]
+name = "stack"
+required-features = ["tables"]
+
+[[example]]
 name = "psi-check"
 required-features = ["tables"]
 
