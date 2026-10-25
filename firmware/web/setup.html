@@ -112,7 +112,7 @@ file from a release. For firmware, use <b>Check for updates</b> in the web app, 
 <div class="msg" id="wwwmsg"></div>
 <button class="alt" id="reboot">Reboot now</button>
 </section>
-<p class="sub">firmware v{{ version }} ({{ variant }})</p>
+<p class="sub">firmware v{{ version }}, {{ variant_name }}</p>
 </details>
 </main>
 
@@ -131,7 +131,7 @@ async function loadStatus() {
     const s = await (await fetch('/api/status')).json();
     const np = s.now_playing || {};
     const rows = [
-      ['Version', s.version + ' (' + s.variant + ')'],
+      ['Version', s.version + ', ' + ({ '4mb': 'DevKit (4 MB)', '8mb': '8 MB build' }[s.variant] || s.variant)],
       ['WiFi', s.wifi + (s.ip ? ' — ' + s.ip : '')],
       ['Address', (s.mdns || s.hostname) + '.local'],
       ['Uptime', s.uptime_secs + ' s'],
