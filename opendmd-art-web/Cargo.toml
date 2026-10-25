@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-art-web"
-version = "1.0.0-beta.7"
+version = "1.0.0-beta.8"
 edition = "2021"
 description = "The web app's Studio (\"Make art\"): turn a picture into a 128x32 GIF. Loaded lazily, separately from opendmd-web."
 license = "MIT OR Apache-2.0"
