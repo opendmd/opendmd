@@ -13,10 +13,18 @@ Open **Formulas** (Ψ) in the app's menu. Formulas work in the
 
 ## The gallery
 
-Formulas opens on the examples (plasma, fire, rain, a clock, a sunrise that
-follows the time of day, and more) and the formulas you've saved. Pick one
-to see it playing in the panel look, with its sliders if it has any. From
-there:
+Formulas opens on the examples (Day and night, plasma, fire, rain, a clock,
+and more) and the formulas you've saved. Pick one
+to see it playing in the panel look, with its sliders if it has any.
+
+**Day and night**, the first example, shows what a GIF can't do: its sun
+and moon cross a lake at the real time of day, with stars at night and red
+skies at dawn and dusk, and its clouds drift on a wind that takes an hour
+to come round. A GIF of that one hour alone would be hundreds of
+megabytes, and still couldn't tell the time; the formula is about a
+kilobyte. Slider **a** sets the clouds, from a clear sky to overcast.
+
+From there:
 
 - **Remix** (an example) or **Edit** (one of yours) opens it in the editor.
 - **Save as GIF…** makes a GIF of it in [Create Art](create-art.md).
@@ -355,7 +363,8 @@ The details are in the gallery's
 for loops longer than about 5 seconds, and at most 240 frames), and opens
 it in [Create Art](create-art.md), titled with its name. Add text, trim it
 or change its speed there, then save it to your card: it plays on the panel
-like any other GIF and goes in playlists.
+like any other GIF and goes in playlists. A formula with a long loop, or one that follows the
+clock, keeps only those few seconds, as they look when you save.
 
 Formulas you save are kept in this browser. Another browser, or a cleared
 browser, won't have them: share a link to yourself to move one.
