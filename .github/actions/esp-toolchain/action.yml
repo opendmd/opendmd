@@ -19,6 +19,13 @@ inputs:
     default: "4.6.0"
   ldproxy:
     default: "0.3.5"
+  fw-variants:
+    description: >
+      The flash layouts this job builds (make fw-release VARIANT=..., or
+      "4mb 8mb" for both): part of firmware/target's cache key, so a job
+      that builds one layout and a job that builds both keep their own
+      entries (esp-cache-save saves only when every layout's ELF is linked).
+    default: "4mb"
 
 outputs:
   image:
@@ -46,7 +53,13 @@ runs:
         echo "image=$image" >> "$GITHUB_OUTPUT"
         echo "rust=esp-rust-$image-espup${{ inputs.espup }}-${{ inputs.esp-rust }}-espflash${{ inputs.espflash }}-ldproxy${{ inputs.ldproxy }}" >> "$GITHUB_OUTPUT"
         echo "espressif=espressif-$image-${{ hashFiles('firmware/.cargo/config.toml') }}" >> "$GITHUB_OUTPUT"
-        echo "fw-target=fw-target-$image-${{ hashFiles('firmware/Cargo.lock', 'firmware/.cargo/config.toml', 'firmware/sdkconfig.defaults') }}" >> "$GITHUB_OUTPUT"
+        # The layouts (each its own target dir and sdkconfig) and their
+        # tables are in the key; "layouts2" retires the entries saved before
+        # there were two layouts, whose generated sdkconfig a release would
+        # only throw away.
+        layouts="$(echo ${{ inputs.fw-variants }} | tr ' ' '+')"
+        echo "fw-layouts=$layouts" >> "$GITHUB_OUTPUT"
+        echo "fw-target=fw-target-$image-layouts2-$layouts-${{ hashFiles('firmware/Cargo.lock', 'firmware/.cargo/config.toml', 'firmware/sdkconfig.defaults', 'firmware/partitions*.csv') }}" >> "$GITHUB_OUTPUT"
 
     - name: Restore the esp toolchain, espflash and ldproxy
       id: esp-rust
@@ -118,4 +131,4 @@ runs:
       with:
         path: firmware/target
         key: ${{ steps.keys.outputs.fw-target }}
-        restore-keys: fw-target-${{ steps.keys.outputs.image }}-
+        restore-keys: fw-target-${{ steps.keys.outputs.image }}-layouts2-${{ steps.keys.outputs.fw-layouts }}-

@@ -24,9 +24,16 @@ fn main() {
     println!("cargo:rerun-if-changed=components/hub75_shim/hub75_shim.cpp");
     println!("cargo:rerun-if-changed=web/setup.html");
 
-    // Which flash layout this image is for: `/api/status` reports it as
-    // `variant`, and the boot banner prints it.
+    // Which flash layout this image is for (the Makefile's FW_VARIANT, which
+    // also picks the partition table and the flash size): `/api/status`
+    // reports it as `variant`, the boot banner prints it, and a firmware
+    // update must be for the same one (`ota.rs`).
     let variant = std::env::var("OPENDMD_FLASH_VARIANT").unwrap_or_else(|_| "4mb".into());
+    let variant_name = match variant.as_str() {
+        "4mb" => "DevKit (4 MB)",
+        "8mb" => "8 MB build",
+        v => panic!("OPENDMD_FLASH_VARIANT={v}: the layouts are 4mb and 8mb"),
+    };
     println!("cargo:rustc-env=OPENDMD_FLASH_VARIANT={variant}");
     println!("cargo:rerun-if-env-changed=OPENDMD_FLASH_VARIANT");
 
@@ -70,6 +77,7 @@ fn main() {
     let mut ctx = Context::new();
     ctx.insert("version", &version);
     ctx.insert("variant", &variant);
+    ctx.insert("variant_name", variant_name);
     let html = tera
         .render("setup", &ctx)
         .expect("rendering web/setup.html");
