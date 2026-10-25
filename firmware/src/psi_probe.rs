@@ -178,6 +178,27 @@ fn worst_stack() {
             ),
         }
     }
+    // Through `psi_stack` itself, on its own thread (the size the player
+    // uses, pinned and prioritised as it does): the compile time (what a
+    // frame deadline sees when a formula opens) and the bytes of that stack
+    // never touched — the real headroom, the thread's entry frames and any
+    // interrupt frames pushed on it included.
+    for (name, src) in &srcs {
+        let mut prog = zeroed::<psi::Program>();
+        let r = crate::psi_stack::run(|| {
+            let t0 = Instant::now();
+            let ok = psi::compile_into(src, &mut prog).is_ok();
+            (t0.elapsed().as_micros(), ok, stack_unused())
+        });
+        match r {
+            Some((us, ok, free)) => say!(info,
+                "psi-probe: worst {name} on psi_stack ({} B): compile {us} us ({}), {free} B of its stack never touched",
+                crate::config::PSI_COMPILE_STACK,
+                if ok { "ok" } else { "an error" }
+            ),
+            None => say!(error, "psi-probe: worst {name} on psi_stack: no thread (heap {} B free)", heap()),
+        }
+    }
     // The deepest through the real path (`Fx::parse`, as the engine and the
     // checks before saving open a formula): compiled on its own stack
     // (`psi_stack`), so the main task's mark should not move.
