@@ -46,3 +46,8 @@ opendmd-web/experiments/art/process/out/f_emulator_title.png
 opendmd-web/experiments/art/studio/out/commons_saturn_logo.png
 opendmd-web/experiments/art/studio/out/paste_snes_logo.png
 opendmd-web/experiments/art/studio/out/studio_page.png
+
+# Lists of the DMDoS pack's files (derived from third-party content): generated, never committed
+opendmd-web/experiments/tween/out/candidates.json
+opendmd-web/experiments/tween/out/summary.json
+opendmd-web/experiments/tween/out/files.jsonl
