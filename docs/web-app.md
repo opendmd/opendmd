@@ -233,9 +233,10 @@ card's recordings are named the same way), to save as new.
    count and the length update as you go. On a device, **Smooth motion**
    (below) is a switch here too: it looks at the animation as it will be
    saved, says how many frames it adds ("Adds 32 frames across 16 moves")
-   and the preview plays it smoothed; if nothing moves in steps it can
-   smooth (a speed of 2× can be too fast to smooth), it says so and looks
-   again after your next change. Save keeps the choice.
+   and the preview plays it smoothed; if there is nothing to smooth it says
+   why — nothing slides, it already moves one pixel at a time, or its frames
+   are too quick (a speed of 2× can be) — and looks again after your next
+   change. Save keeps the choice.
 6. **Save** — title, platform, category, author and "it is a logo", as
    Add GIFs asks for them: the file name is built from them (the number is
    the next free one) and the Studio shows what the Library will list it
@@ -269,7 +270,10 @@ switching it on makes the panel play it with the in-between frames added —
 each one the picture moved by whole pixels, never a blend, the timing
 unchanged — and switching it off goes back to the original frames. Your GIF
 itself is never changed. The switch only appears where there is something
-to smooth (about one GIF in ten on the stock card); Create Art has the same
+to smooth (about one GIF in ten on the stock card). A slow scroll that
+moves one pixel a frame is already as smooth as the panel's pixels allow —
+there is no whole-pixel position between two frames a pixel apart — so the
+Library says so instead of offering the switch; Create Art has the same
 switch for an animation you make or edit there, and a GIF that is on stays
 on when you edit it there and replace it. The choice is kept on
 the card in `/sets/.smooth` and survives clearing the playback cache.
