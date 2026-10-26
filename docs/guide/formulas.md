@@ -165,7 +165,9 @@ character drawn big is just its column and row worked out from the pixel:
 `digit(7, floor(px/4), floor((31 - py)/4))` draws a 7 four times the size
 in the top-left corner (rows count down from the top here, though `py`
 counts up). Add `small` for the smaller font, 4 by 6 (digits 3 by 5):
-`digit(n, col, row, small)`. **Big clock** is made this way.
+`digit(n, col, row, small)`, or `bold` for chunky 3 by 5 digits (digits
+only): `digit(n, col, row, bold)`. **Big clock** is made this way, in
+`bold`.
 
 Operators: `+ - * / %`, comparisons `< <= > >= == !=` (1 for true, 0 for
 false), and `and`, `or`, `not`. There is no power operator: write `x * x`.

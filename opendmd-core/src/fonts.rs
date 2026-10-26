@@ -1,6 +1,7 @@
-// The panel's two bitmap fonts: the X11 "misc-fixed" `5x7` and `4x6`
-// (public domain; see `text`'s documentation), printable ASCII 32..=126,
-// one byte per row, the most significant bit leftmost.
+// The panel's bitmap fonts: the X11 "misc-fixed" `5x7` and `4x6` (public
+// domain; see `text`'s documentation), printable ASCII 32..=126, and
+// OpenDMD's own bold 3 × 5 digits; one byte per row, the most significant
+// bit leftmost.
 //
 // Plain items, no `use` and no inner attributes: opendmd-psi `include!`s
 // this file for its own copy (its `tables` feature, as with the sine and
@@ -202,4 +203,20 @@ pub static FONT_4X6: [[u8; 6]; 95] = [
     [0x40, 0x40, 0x40, 0x40, 0x40, 0x00], // '|'
     [0x80, 0x40, 0x60, 0x40, 0x40, 0x80], // '}'
     [0x50, 0xa0, 0x00, 0x00, 0x00, 0x00], // '~'
+];
+
+/// Bold 3 × 5 digits, 0..9 only (OpenDMD's own, from the first Big clock):
+/// three columns of a byte (the most significant bit leftmost), five rows.
+/// Not used by `text`; Psi's `digit(n, col, row, bold)` reads it.
+pub static FONT_BOLD: [[u8; 5]; 10] = [
+    [0xe0, 0xa0, 0xa0, 0xa0, 0xe0], // 0
+    [0x40, 0xc0, 0x40, 0x40, 0xe0], // 1
+    [0xe0, 0x20, 0xe0, 0x80, 0xe0], // 2
+    [0xe0, 0x20, 0xe0, 0x20, 0xe0], // 3
+    [0xa0, 0xa0, 0xe0, 0x20, 0x20], // 4
+    [0xe0, 0x80, 0xe0, 0x20, 0xe0], // 5
+    [0xe0, 0x80, 0xe0, 0xa0, 0xe0], // 6
+    [0xe0, 0x20, 0x20, 0x20, 0x20], // 7
+    [0xe0, 0xa0, 0xe0, 0xa0, 0xe0], // 8
+    [0xe0, 0xa0, 0xe0, 0x20, 0xe0], // 9
 ];

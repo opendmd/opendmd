@@ -5,10 +5,16 @@
 use crate::fixed::{self, ONE};
 use crate::tables::{Glyphs, Tables};
 
-/// The font a glyph step (`code::DIGIT..=GLYPH_S`) reads.
+/// The font a glyph step (`code::DIGIT..=DIGIT_B`) reads.
 #[inline]
 pub(crate) fn glyphs<'a>(t: &Tables<'a>, c: u8) -> Glyphs<'a> {
-    t.glyphs(c < code::DIGIT_S, c == code::DIGIT || c == code::DIGIT_S)
+    use crate::tables::{BOLD, NORMAL, SMALL};
+    let font = match c {
+        code::DIGIT | code::GLYPH => NORMAL,
+        code::DIGIT_S | code::GLYPH_S => SMALL,
+        _ => BOLD,
+    };
+    t.glyphs(font, c != code::GLYPH && c != code::GLYPH_S)
 }
 
 /// The panel the VM draws: 128 × 32.
@@ -100,7 +106,9 @@ pub(crate) mod code {
     pub const GLYPH: u8 = 70;
     pub const DIGIT_S: u8 = 71;
     pub const GLYPH_S: u8 = 72;
-    pub const LAST_TERN: u8 = 72;
+    // the bold digits (`digit(n, x, y, bold)`; no glyph of them)
+    pub const DIGIT_B: u8 = 73;
+    pub const LAST_TERN: u8 = 73;
     // nullary, per pixel: the picture under the formula (its red, green,
     // blue, luminance), 0..1
     pub const U_R: u8 = 80;
@@ -122,7 +130,7 @@ pub(crate) mod code {
     /// A step that reads a table (the sine, a font): never folded, run once
     /// a frame when its operands are constants.
     pub fn is_table(c: u8) -> bool {
-        matches!(c, SIN | COS | DIGIT..=GLYPH_S)
+        matches!(c, SIN | COS | DIGIT..=DIGIT_B)
     }
 
     /// A step that writes pixels rather than a value.
@@ -184,7 +192,7 @@ pub(crate) mod code {
             "neg", "not", "abs", "floor", "frac", "sin", "cos", "tri", "saw", "sqr", "sqrt",
             "recip",
         ];
-        const T: [&str; 9] = [
+        const T: [&str; 10] = [
             "select",
             "clamp",
             "mix",
@@ -194,6 +202,7 @@ pub(crate) mod code {
             "glyph",
             "digit_small",
             "glyph_small",
+            "digit_bold",
         ];
         match c {
             0..=LAST_BIN => N[c as usize],
@@ -385,7 +394,7 @@ impl Program {
                 MIX => 130,
                 SMOOTH => 214,
                 NOISE => 855,
-                DIGIT..=GLYPH_S => 100,
+                DIGIT..=DIGIT_B => 100,
                 U_R | U_G | U_B => 35,
                 U_L => 125,
                 c if is_colour(c) => {
@@ -540,7 +549,7 @@ pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
         MIX => fixed::mix(a, b, x),
         SMOOTH => fixed::smooth(a, b, x),
         NOISE => fixed::noise(a, b, x),
-        DIGIT..=GLYPH_S => t.map_or(0, |t| fixed::glyph(&glyphs(t, c), a, b, x)),
+        DIGIT..=DIGIT_B => t.map_or(0, |t| fixed::glyph(&glyphs(t, c), a, b, x)),
         _ => 0,
     }
 }

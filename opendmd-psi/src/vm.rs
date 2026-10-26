@@ -479,7 +479,7 @@ fn lane_op<const N: usize>(
         // One loop for the four, its operands read with a stride (0: a
         // value for the whole lane): the lookup dwarfs the loop, and seven
         // monomorphised copies would be ~1 KB more of wasm.
-        DIGIT..=GLYPH_S => glyph_lane(d, [a, b, c], &glyphs(t, op.code)),
+        DIGIT..=DIGIT_B => glyph_lane(d, [a, b, c], &glyphs(t, op.code)),
         U_R..=U_L => load_under(d, under, op.code - U_R),
         _ => {}
     }

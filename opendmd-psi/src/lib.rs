@@ -33,7 +33,7 @@ pub use compile::{compact, compile_into, number, Error, Info, MAX_DEPTH, MAX_NOD
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, REGS, W};
 pub use tables::{Glyphs, Tables, ATAN};
 #[cfg(feature = "tables")]
-pub use tables::{FONT_4X6, FONT_5X7, OWN, PALETTES, SIN};
+pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
 pub use vm::{q16, render_rows, render_with, Inputs, Scratch, Q16_ONE};
 
 /// The lane width the effect uses: one panel row.
@@ -155,6 +155,7 @@ pub mod golden {
         ("glyphs-small", "ch = 32 + floor(px/4) + floor((31 - py)/6)*32\nhsv(ch/95, 0.5, glyph(ch, px % 4 - 0.5, (31 - py) % 6 + 0.75, small))", 0, 0x34cfed23cec69500),
         ("digits", "rgb(digit(floor(px/5) % 12 - 1, px % 5, 31 - py), digit(floor(px/4) % 12 - 1, px % 4 - 1, 24 - py, small), bit(px, py % 8))", 0, 0xa7bad8a015931c40),
         ("digit-levels", "frame { d = second % 10 }\nr = 31 - py\nrgb(digit(d, 2, r), glyph('A', 1, r - 8)*0.5 + digit(7, 1, 1)*0.25, glyph(':', px % 5, r - 16, small))", 0, 0x1f18467e4e514c89),
+        ("digits-bold", "rgb(digit(floor(px/5) % 12 - 1, px % 5 - 1, (31 - py) % 7 - 1, bold), digit(second % 10, floor(px/8) % 4, floor((31 - py)/6), bold), 0.2)", 0, 0x19904e2c8f6ffcab),
         ("bits", "gray(bit(px*258 - 16000, floor(py/2) - 1) + bit(-px - 0.5, py)*0.5 + bit(t*1000, 3)*0.25)", 1500, 0xab556034d27ca745),
     ];
 
