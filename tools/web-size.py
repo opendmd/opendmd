@@ -165,7 +165,7 @@ SHOW = {"js/psishow.js"}
 SHARE_GZ_BUDGET = 12 * 1024
 # The site's "Set up a card" page (share/cardprep, published at /card/; its
 # tests/ aside): its own line since 2026-10-25, 16.9 KB at the time.
-CARD_GZ_BUDGET = 18 * 1024
+CARD_PAGE_GZ_BUDGET = 18 * 1024
 # What the formula page loads from the demo (its own files aside).
 SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
@@ -269,10 +269,10 @@ def main() -> int:
         verdict = "ok" if sgz <= SHARE_GZ_BUDGET else "OVER BUDGET"
         print(f"{'share':<10} raw {sraw:>9,}           gz {sgz:>9,} / {SHARE_GZ_BUDGET // 1024} KB {verdict:<10}"
               f"(first visit with the demo's files: {sgz + uses:,} B gz)")
-        cverdict = "ok" if cgz <= CARD_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'card page':<10} raw {craw:>9,}           gz {cgz:>9,} / {CARD_GZ_BUDGET // 1024} KB {cverdict}")
+        cverdict = "ok" if cgz <= CARD_PAGE_GZ_BUDGET else "OVER BUDGET"
+        print(f"{'card page':<10} raw {craw:>9,}           gz {cgz:>9,} / {CARD_PAGE_GZ_BUDGET // 1024} KB {cverdict}")
         print()
-        ok &= sgz <= SHARE_GZ_BUDGET and cgz <= CARD_GZ_BUDGET
+        ok &= sgz <= SHARE_GZ_BUDGET and cgz <= CARD_PAGE_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
