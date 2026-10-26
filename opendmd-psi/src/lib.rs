@@ -272,7 +272,9 @@ pub mod worst {
             let next = format!(
                 "part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v\ngray(v)\n}}\n"
             );
-            if path_len(&format!("{next}p{k}")) > 2048 || k > 4 {
+            if path_len(&format!("{next}p{k}")) > 2048
+                || crate::compile(&format!("{next}p{k}")).is_err_and(|e| e.msg.contains("too deep"))
+            {
                 return format!("{s}p{j}");
             }
             s = next;

@@ -313,7 +313,7 @@ value (examples 23 and 24).
 | steps | 256 in all: per frame + per row + per pixel + one per layer | too long for the panel (N steps) |
 | live per-pixel values at once | 12 | keeps too many values at once |
 | constants + per-frame/per-row values | ~119 | too many numbers and steps |
-| nesting | 24 levels of brackets and operators (a part level counts 3) | nested too deeply / parts go too deep |
+| nesting | 18 levels of brackets and operators (a part level counts 3) | nested too deeply / parts go too deep |
 | `loop` | 0.1..3600 s | between 0.1 and 3600 seconds |
 | re-reading parts drawn at other places | bounded | draws its parts in too many places |
 
@@ -341,7 +341,7 @@ change — constants once, `t`/clock/slider-only values once a frame,
 | colour `rgb` | 120 | | colour `hsv` | 195 |
 | `ur` `ug` `ub` | 35 | | `ul` | 125 |
 | `digit` `glyph` | ~100 (estimated) | | `bit` | 55 |
-| `pick` (values the same for every pixel) | 60 (estimated) | | `pick` of per-pixel values | its compares and selects |
+| `pick` (values the same for every pixel) | 100 | | `pick` of per-pixel values | its compares and selects |
 | each extra layer | 150 (multiply 210, screen 290; +75 with coverage) | | showing the picture under | 50 |
 
 Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs, but

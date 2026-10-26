@@ -1,8 +1,9 @@
 //! Formulas compile on a stack of their own. Psi's compiler is a recursive
 //! descent parser bounded at `psi::MAX_DEPTH` levels; at its worst (calls
 //! nested to the cap, a misspelt name at the bottom) it used 9,664 B of
-//! stack on the ESP32, ~390 B a nesting level (`psi-probe`, 2026-10-25;
-//! beta.7's compiler 13,152 B). Its callers are the main task (16 KB, ~8 KB
+//! stack on the ESP32 on 2026-10-25, 11,808 B on 2026-10-26 (the cap then
+//! 24; ~430 B a level), ~9.2 KB with the cap at 18 (beta.7's compiler
+//! 13,152 B). Its callers are the main task (16 KB, ~8 KB
 //! of it in use where a path opens) and the HTTP server's handlers (6.5 KB:
 //! an attract effect is checked there), so a deep formula sent by anyone on
 //! the network could overflow either and restart the player. Installed

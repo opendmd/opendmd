@@ -124,6 +124,7 @@ test:
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PSI) (Psi formulas; + core's and the simulator's psi feature)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable CARGO_PROFILE_RELEASE_OPT_LEVEL=2 cargo test --release --test stack
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	@echo "==> Testing $(PSIWEB) (the web app's Formulas module)"
