@@ -479,12 +479,14 @@ mod guard {
                         c"\nDIAG: handler box at 0x%08x changed: data 0x%08x -> 0x%08x, vtable 0x%08x -> 0x%08x\n".as_ptr(),
                         at as u32, was[0] as u32, now[0] as u32, was[1] as u32, now[1] as u32,
                     );
+                    crate::restarts::diag("handler box changed");
                     esp_idf_sys::abort();
                 }
             }
         }
         if !known {
             log::error!("DIAG: {site}: user_ctx {:p} is not a registered handler", h);
+            crate::restarts::diag("unregistered handler");
             // SAFETY: plain abort.
             unsafe { esp_idf_sys::abort() };
         }

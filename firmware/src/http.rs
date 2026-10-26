@@ -30,6 +30,7 @@ use crate::www;
 use opendmd_core::compositor::{self, Kind as TransitionKind};
 use opendmd_core::hostname::Check;
 use opendmd_core::panel_timing::{self, PanelOp, PanelPatch};
+use opendmd_core::restarts::Reason;
 
 /// The embedded setup page: rendered and gzipped by `build.rs`, served at
 /// `/setup` always, and at `/` in AP mode when there is no good web app in
@@ -712,7 +713,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     applied_json(&applied)
                 ))?;
                 if speed_applied == Some(crate::cardspeed::Applied::Restart) {
-                    reboot_after_response();
+                    reboot_after_response(Reason::CardClock);
                 }
                 Ok(())
             }
@@ -1258,7 +1259,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Err(e) => req.error(409, "409 Conflict", e),
             Ok(crate::cardspeed::Applied::Restart) => {
                 req.json(r#"{"ok":true,"applied":"restart","rebooting":true}"#)?;
-                reboot_after_response()
+                reboot_after_response(Reason::FullSpeed)
             }
             Ok(a) => req.json(&format!(
                 r#"{{"ok":true,"applied":"{}","clock_khz":{}}}"#,
@@ -1283,6 +1284,16 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             req.json(r#"{"ok":true,"panicking":true}"#)?;
             std::thread::sleep(Duration::from_millis(500));
             panic!("test panic asked for over HTTP (POST /api/reboot?panic=1)");
+        }
+        // `?overflow=1` (`bench` only): the stack-overflow hook's path, end
+        // to end (`restarts::overflow_on_purpose`) — after the restart
+        // `restarts[0]` is `stack_overflow`, `task httpd`.
+        #[cfg(feature = "bench")]
+        if query_param(req.query(), "overflow").is_some() {
+            log::warn!("overflowing the stack on purpose (POST /api/reboot?overflow=1, a bench test hook)");
+            req.json(r#"{"ok":true,"overflowing":true}"#)?;
+            std::thread::sleep(Duration::from_millis(500));
+            crate::restarts::overflow_on_purpose();
         }
         info!("reboot requested over HTTP");
         // Test hook: `?sd_fail=N` makes the next boot's first N card mounts
@@ -1326,7 +1337,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             crate::sdhealth::request_fresh_start();
         }
         req.json(r#"{"ok":true,"rebooting":true}"#)?;
-        reboot_after_response()
+        reboot_after_response(Reason::ApiReboot)
     })?;
 
     // --- Uploads ------------------------------------------------------------
@@ -1699,9 +1710,10 @@ fn stream_file(req: &mut Req, path: String, rel: String, wait: Duration) -> Resu
     })
 }
 
-/// Let the response drain out of the TCP stack, then restart
-/// (`POST /api/reboot`, and the network worker's AP timeout).
-pub fn reboot_after_response() -> ! {
+/// Let the response drain out of the TCP stack, then restart for `why`
+/// (`POST /api/reboot`, the card's clock, a firmware update, and the
+/// network worker's AP timeout).
+pub fn reboot_after_response(why: Reason) -> ! {
     // The handler never returns to the wrapper that records this.
     crate::httpd::note_httpd_stack();
     crate::sdhealth::note_restart();
@@ -1709,7 +1721,7 @@ pub fn reboot_after_response() -> ! {
     let t = std::time::Instant::now();
     crate::cache_builder::quiesce(Duration::from_secs(3));
     std::thread::sleep(Duration::from_secs(1).saturating_sub(t.elapsed()));
-    crate::restart()
+    crate::restart(why)
 }
 
 fn send_setup(req: &mut Req) -> Result<()> {
@@ -2064,7 +2076,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"stream_stack":{},"#,
-            r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"error":{},"attempts":{},"formatting":{},"format_error":{},{},{}}},"reset_reason":{},"reset_note":{},"#,
+            r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"error":{},"attempts":{},"formatting":{},"format_error":{},{},{}}},"reset_reason":{},"reset_note":{},{},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
             r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{},"#,
@@ -2116,7 +2128,8 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         crate::sdhealth::status_json() + &crate::fatidx::status_json(),
         crate::cardspeed::Status,
         json_string(s.reset_reason),
-        opt_json(crate::sdhealth::reset_note()),
+        opt_json(crate::sdhealth::reset_note().or_else(crate::restarts::reset_note)),
+        crate::restarts::status_json(),
         s.overrides,
         s.hidden,
         json_string(s.mode),

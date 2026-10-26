@@ -129,7 +129,8 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: frames ≥ `threshold_ms` late in play (`steady`) or at a GIF change (`switch`: first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`) |
 | `gifs_started`, `streams_aborted`, `log_drops`, `stream_stack` | files opened; responses cut short; log lines dropped; the file task's least unused stack after a job, bytes (null before one) |
 | `sd` | `{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries, fat_index}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `clock_khz` its SPI clock (20000 safe, 40000 fast; null unmounted); `fallback` a `fast` card slowed to 20 MHz after errors; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min; `probe` the check of a card at full speed soon after it mounts: null, `waiting`, `running`, `clean`, `slowed`, `skipped`; `slowdowns` times `fast` slowed the card in place this boot; `recoveries` failed transfers the card was stopped after (CMD12); `fat_index` `{files, hits, misses, builds, stale}` diagnostics of the index that opens GIFs without a directory scan |
-| `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `task watchdog`, `brownout`, …; `"card failure"`, `"different card"` or null |
+| `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `interrupt watchdog`, `task watchdog`, `brownout`, `external`, …; why this boot's restart was made in plain words — `"card failure"`, `"different card"`, `"restarted on request"`, `"restarted to apply a card speed change"`, `"crashed (panic)"`, `"restarted without a recorded reason"`, … — or null after a power-on |
+| `restarts` | the last 8 restarts, newest first (this boot's first), kept across restarts, cleared by a power-on: `{reason, reset, uptime_s, heap_free, largest, where?}`. `reason`: `api_reboot`, `firmware_update`, `ap_timeout` (setup network timed out), `card_full_speed`, `card_speed`, `fresh_heap` (playlist index needed a fresh heap), `panel_trial`, `card_failure`, `new_card`, `card_lost` (SPI device lost), `card_retry`, `panic`, `stack_overflow`, `diag_abort` (a `diag-heap` build's heap check), or, when the restart wrote nothing, from the reset alone: `power_on` (also the EN/reset button: the ESP32 reports it as a power-on, and the list starts again), `brownout`, `unrecorded` (a software restart), `unrecorded_crash`. `reset`: the chip's reset after it (`reset_reason`'s words; null if no boot has seen it yet). `uptime_s`, `heap_free`, `largest`: when it was written (for `unrecorded`/`unrecorded_crash`/`brownout`, the last heartbeat's, ≤ 30 s earlier; null when unknown; `largest` null for `panic`, `stack_overflow` and `diag_abort`, which do not walk the heap). `where`: a panic's `file:line message` (message ≤ 48 B), the overflowing task (`task <name>`), the heap check's site, or for `unrecorded_crash` the last failed allocation if it came at most 35 s before the last heartbeat or after it (up to ~65 s before the crash; it may have been a deliberate, handled probe) |
 | `overrides`, `hidden` | as in "Fields that recur" |
 | `mode`, `mode_until` | `normal`, `dim` or `off` (night mode); until `"HH:MM"` |
 | `time`, `tz`, `time_synced_s` | `"HH:MM"` (null before network time); zone name; seconds since the last sync |
@@ -168,7 +169,11 @@ Bench test hooks: `?sd_fail=N` (next N card mounts fail),
 `?sd_fallback=clear` (forget the card's slow clock at the next boot; see
 `POST /api/card/full-speed` for the live way), and in `bench` builds only
 `?panic=1` (replies `{"ok":true,"panicking":true}`, then panics on purpose;
-`reset_reason` in `/api/status` reads `panic` after the restart).
+`reset_reason` in `/api/status` reads `panic` after the restart, and
+`restarts[0]` is `{"reason":"panic", "where":"http.rs:… test panic …"}`), and
+`?overflow=1` (replies `{"ok":true,"overflowing":true}`, then overwrites the
+httpd task's stack canary so FreeRTOS's overflow check fires; `restarts[0]`
+is `{"reason":"stack_overflow", "where":"task httpd"}`).
 
 ```sh
 curl -s -X POST $DMD/api/reboot

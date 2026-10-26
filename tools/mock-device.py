@@ -271,6 +271,10 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `POST /api/card/full-speed` forgets the record (409 when `card_speed` is
   safe) and answers `{ok, applied, clock_khz}`; `POST /api/reboot?sd_io_fail=3`
   records the card slow too, `?sd_fallback=clear` forgets it.
+- **Restarts**: `/api/status` `restarts` starts at `power_on`; a reboot,
+  a firmware update, a panel trial undone and the `sd_io_fail` chain add
+  theirs (newest first, at most 8), and `reset_reason`/`reset_note` follow
+  the newest.
 - **Security** (docs/api.md "Security"), checked in `route` before any
   handler: a `POST`/`PUT`/`DELETE` whose `Origin` names another host[:port]
   than `Host` (scheme dropped, `:80` dropped, case ignored) is a 403
@@ -424,6 +428,11 @@ OTA_SIGNED_LEN = 76
 OTA_FACTORY_BYTES = {"4mb": 0x240000, "8mb": 0x300000}   # partitions.csv, partitions-8mb.csv
 OTA_BOARDS = {"4mb": "DevKit (4 MB)", "8mb": "8 MB build"}  # opendmd_core::ota::variant_name
 RESTART_SECS = 3.0                     # the simulated restart after an update
+# `reset_note` for the reasons the mock plays (firmware `Reason::note`).
+RESTART_NOTES = {"api_reboot": "restarted on request",
+                 "firmware_update": "restarted to install a firmware update",
+                 "panel_trial": "restarted to undo a panel timing trial",
+                 "card_failure": "card failure"}
 MOCK_VERSION = "0.1.0-mock"
 # docs/api.md "Security": the API key's alphabet and length, and the routes
 # whose body is JSON (a non-empty body must say application/json).
@@ -2535,7 +2544,10 @@ class Context:
         # Whether this card is recorded slow (what `card_speed: fast` reads;
         # `--sd slowed` and a card-failure restart set it).
         self.sd_slow_record = False
-        self.reset_note = None
+        # Every restart's reason (firmware `restarts.rs`), newest first, at
+        # most 8; a power-on starts it. `restart()` adds one.
+        self.restarts = [{"reason": "power_on", "reset": "poweron",
+                          "uptime_s": None, "heap_free": None, "largest": None}]
         # Card file serving as the tests see it (`GET /mock/io`, mock only):
         # requests for card files (/gifs/, /cache/) in flight and at most,
         # bytes actually sent (a client that hangs up stops the count), and
@@ -2576,6 +2588,14 @@ class Context:
         self.www_staged = None
         # The header version of the last pack PUT (None: version.txt's).
         self.www_pushed = None
+
+    def restart(self, reason: str):
+        """A restart for `reason` (firmware `crate::restart`): its entry
+        first in `restarts`, paired with a software reset. Caller holds
+        the lock."""
+        self.restarts = [{"reason": reason, "reset": "software",
+                          "uptime_s": int(time.monotonic() - self.player.boot_time),
+                          "heap_free": 98000, "largest": 45056}] + self.restarts[:7]
 
     def plays_as_is(self) -> list[str]:
         """The GIFs cache/.failed says play as they are (plays_original)."""
@@ -3087,8 +3107,9 @@ def make_handler(ctx: Context, quiet: bool):
                     "misses": player.misses_json(),
                     "gifs_started": player.gifs_started,
                     "sd": sd_fields(ctx),
-                    "reset_reason": "software" if ctx.reset_note else "poweron",
-                    "reset_note": ctx.reset_note,
+                    "reset_reason": ctx.restarts[0]["reset"],
+                    "reset_note": RESTART_NOTES.get(ctx.restarts[0]["reason"]),
+                    "restarts": ctx.restarts,
                     "overrides": player.overrides_count,
                     "hidden": player.hidden_count,
                     "mode": ctx.schedule.mode,
@@ -3209,6 +3230,7 @@ def make_handler(ctx: Context, quiet: bool):
 
         def panel_restart(self):
             """A restart to undo a boot trial: as POST /api/reboot."""
+            ctx.restart("panel_trial")
             ctx.panel.boot()
             ctx.player.reset_boot()
             ctx.down_until = time.monotonic() + RESTART_SECS
@@ -4028,9 +4050,9 @@ def make_handler(ctx: Context, quiet: bool):
                 while len(log.encode()) > 1024 and "\n" in log:
                     log = log.split("\n", 1)[1]
                 ctx.fw_log = log
+                ctx.restart("firmware_update")
                 ctx.player.reset_boot()
                 ctx.player.boot_time += RESTART_SECS
-                ctx.reset_note = None
 
         def h_card_format(self, path):
             """http.rs: `{"confirm":true}` (400 otherwise), only a card that
@@ -4079,9 +4101,9 @@ def make_handler(ctx: Context, quiet: bool):
         def h_reboot(self, path):
             query = self.path.partition("?")[2] or None
             with ctx.lock:
+                ctx.restart("api_reboot")
                 ctx.player.reset_boot()
                 ctx.panel.boot()
-                ctx.reset_note = None
                 if query_param(query, "sd_fallback") == "clear":
                     ctx.sd_slow_record = False
                     ctx.sd.update(reboots=0, probe=None)
@@ -4093,7 +4115,7 @@ def make_handler(ctx: Context, quiet: bool):
                     ctx.sd_slow_record = True
                     ctx.sd.update(reboots=min(ctx.sd["reboots"] + 1, 3))
                     apply_card_speed(ctx)
-                    ctx.reset_note = "card failure"
+                    ctx.restart("card_failure")
             self.send_json(200, {"ok": True, "rebooting": True})
 
         def h_manifest_put(self, path):
