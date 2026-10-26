@@ -1,7 +1,21 @@
 //! The Psi spike's on-device measurement (`--features psi-probe`, which
-//! implies `psi`): run once at boot on the main task — CPU1, the core and
+//! implies `psi`): run once a boot on the main task — CPU1, the core and
 //! the stack the effects render on, with the panel's DMA interrupt live —
-//! right after the panel's own bench.
+//! when the boot task hands the card over: the httpd and the network are
+//! up by then, so a board running it stays reachable (and can be updated
+//! back over WiFi) whatever a step does.
+//!
+//! **Crash-safe** (2026-10-26, after a probe build that never came up on
+//! the rig: it ran before WiFi, so nothing could reach it): every line is
+//! appended to [`REPORT_NAME`] on the card as it is said, the first line
+//! written before any measurement; a report there without its `done` line
+//! is a probe that did not finish (a panic, an overflow, out of memory),
+//! and the next boot does not run it again — the player starts and the
+//! partial report says how far it got. Delete the file to probe again. The
+//! compiler's worst cases come first (what the probe is for); each is
+//! compiled on a thread of [`WORST_STACK`] and only then, if what it used
+//! leaves [`PSI_MARGIN`] of `config::PSI_COMPILE_STACK`, on the player's
+//! own compile stack (`psi_stack`) and through `Fx::parse`.
 //!
 //! For each of the report's three sketches: the compile time and the free
 //! heap around the effect's one allocation; the frame time through the
@@ -15,11 +29,8 @@
 //! Every line starts `psi-probe:`. Between frames it sleeps 1 ms (outside
 //! the timed region) so CPU1's idle task feeds the watchdog. Takes ~25 s.
 //!
-//! **The report on the card.** The probe runs before the card is mounted
-//! (nothing else is running yet: the cleanest measurement), so its lines
-//! are also kept in memory and written, once the boot task hands the card
-//! over and before the player starts, to [`REPORT_NAME`] at the card's root
-//! (overwritten every boot) — for a board with no serial console. The name
+//! **The report on the card**, [`REPORT_NAME`] at its root, for a board
+//! with no serial console. The name
 //! starts `filelist` so the existing read-only `GET /filelist*` route
 //! serves it (`http://<board>/filelist-psi-probe.txt`), but not
 //! `filelist.`, so nothing takes it for a playlist (the firmware's and the
@@ -35,44 +46,67 @@ use std::time::{Duration, Instant};
 /// The report's file name at the card's root.
 pub const REPORT_NAME: &str = "filelist-psi-probe.txt";
 
-/// The lines so far, for [`save`].
-static REPORT: Mutex<String> = Mutex::new(String::new());
+/// The report, open for appending while the probe runs.
+static REPORT: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
-/// Log a line and keep it for the report.
+/// Log a line and append it to the report on the card at once (synced:
+/// a crash after it leaves it there).
 macro_rules! say {
     ($level:ident, $($arg:tt)*) => {{
         let line = format!($($arg)*);
         log::$level!("{line}");
         if let Ok(mut r) = REPORT.lock() {
-            r.push_str(&line);
-            r.push('\n');
+            if let Some(f) = r.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(f, "{line}");
+                let _ = f.sync_data();
+            }
         }
     }};
 }
 
-/// Write the report to the card (mounted at `root`), replacing last boot's.
-/// Called by the main task once the card is its own.
-pub fn save(root: &str) {
-    let text = match REPORT.lock() {
-        Ok(mut r) => std::mem::take(&mut *r),
-        Err(_) => return,
-    };
-    if text.is_empty() {
-        return;
-    }
+/// The line a finished probe ends its report with.
+const DONE: &str = "psi-probe: done";
+
+/// The compile threads' stack for the worst cases: the host's high-water
+/// for the deepest is ~16 KB (bigger frames than the ESP32's ~10 KB).
+const WORST_STACK: usize = 24 * 1024;
+
+/// What a worst case must leave of the player's compile stack before the
+/// probe compiles it there (an overflow there is a crash).
+const PSI_MARGIN: u32 = 1024;
+
+/// Open the report at `root` for this boot's probe: `false` (and nothing
+/// to run) when last boot's report is there without its [`DONE`] line.
+fn open_report(root: &str) -> bool {
     let path = format!("{root}/{REPORT_NAME}");
-    let header = format!(
-        "# OpenDMD {} psi-probe report, written {} ms after boot\n",
-        crate::state::firmware_version(),
-        // SAFETY: a clock read.
-        unsafe { esp_idf_sys::esp_timer_get_time() } / 1000
-    );
-    match std::fs::write(&path, header + &text) {
-        Ok(()) => log::info!(
-            "psi-probe: report written to /{REPORT_NAME} ({} B): GET /{REPORT_NAME}",
-            text.len()
-        ),
-        Err(e) => log::error!("psi-probe: writing {path} failed: {e}"),
+    if let Ok(old) = std::fs::read_to_string(&path) {
+        if !old.contains(DONE) {
+            log::warn!(
+                "psi-probe: /{REPORT_NAME} has no `{DONE}` line: last boot's probe did not finish; not running it again (delete the file to)"
+            );
+            return false;
+        }
+    }
+    match std::fs::File::create(&path) {
+        Ok(mut f) => {
+            use std::io::Write;
+            let _ = writeln!(
+                f,
+                "# OpenDMD {} psi-probe report, started {} ms after boot",
+                crate::state::firmware_version(),
+                // SAFETY: a clock read.
+                unsafe { esp_idf_sys::esp_timer_get_time() } / 1000
+            );
+            let _ = f.sync_data();
+            *REPORT.lock().unwrap() = Some(f);
+            log::info!("psi-probe: writing /{REPORT_NAME} as it goes: GET /{REPORT_NAME}");
+            true
+        }
+        Err(e) => {
+            log::error!("psi-probe: cannot write {path} ({e}); not running");
+            false
+        }
     }
 }
 
@@ -133,12 +167,11 @@ fn lanes_over<const N: usize>(
 }
 
 /// The compiler's own stack on the worst inputs (`psi::worst`, the deepest
-/// last): each compiled on a thread of its own with a [`WORST_STACK`] stack
-/// (an overflow on the main task at boot would be a boot loop), reporting
-/// the bytes it used; then, only if that plus what the main task already
-/// uses leaves a 2 KB margin, the deepest again on the main task itself.
-const WORST_STACK: usize = 40 * 1024;
-
+/// last): each compiled on a thread of its own with a [`WORST_STACK`] stack,
+/// reporting the bytes it used; then on the player's compile stack and
+/// through `Fx::parse` only those that fit it with [`PSI_MARGIN`] to spare;
+/// then, only if the deepest plus what the main task already uses leaves a
+/// 2 KB margin, the deepest again on the main task itself.
 fn worst_stack() {
     let mut deepest = 0u32;
     // The sources first, on a thread of their own: making some of them
@@ -149,7 +182,9 @@ fn worst_stack() {
         .ok()
         .and_then(|h| h.join().ok())
         .unwrap_or_default();
-    for (name, src) in srcs.iter().cloned() {
+    let mut used_by: Vec<u32> = Vec::new();
+    for (name, src) in &srcs {
+        let src = src.clone();
         let r = std::thread::Builder::new()
             .stack_size(WORST_STACK)
             .spawn(move || {
@@ -166,24 +201,37 @@ fn worst_stack() {
         match r {
             Ok(Ok((len, used, err))) => {
                 deepest = deepest.max(used);
+                used_by.push(used);
                 say!(info,
                     "psi-probe: worst {name}: {len} B source, compile used {used} B of a thread's stack ({})",
                     err.as_deref().unwrap_or("ok")
                 );
             }
-            _ => say!(
-                error,
-                "psi-probe: worst {name}: no thread (heap {} B free)",
-                heap()
-            ),
+            _ => {
+                used_by.push(u32::MAX);
+                say!(
+                    error,
+                    "psi-probe: worst {name}: no thread (heap {} B free)",
+                    heap()
+                )
+            }
         }
     }
+    let fits = |k: usize| used_by[k] as usize + PSI_MARGIN as usize <= crate::config::PSI_COMPILE_STACK;
     // Through `psi_stack` itself, on its own thread (the size the player
     // uses, pinned and prioritised as it does): the compile time (what a
     // frame deadline sees when a formula opens) and the bytes of that stack
     // never touched — the real headroom, the thread's entry frames and any
     // interrupt frames pushed on it included.
-    for (name, src) in &srcs {
+    for (k, (name, src)) in srcs.iter().enumerate() {
+        if !fits(k) {
+            say!(warn,
+                "psi-probe: worst {name} on psi_stack ({} B): NOT RUN, it needs {} B (+{PSI_MARGIN} B margin)",
+                crate::config::PSI_COMPILE_STACK,
+                used_by[k]
+            );
+            continue;
+        }
         let mut prog = zeroed::<psi::Program>();
         let r = crate::psi_stack::run(|| {
             let t0 = Instant::now();
@@ -202,7 +250,10 @@ fn worst_stack() {
     // The deepest through the real path (`Fx::parse`, as the engine and the
     // checks before saving open a formula): compiled on its own stack
     // (`psi_stack`), so the main task's mark should not move.
-    for (name, src) in &srcs {
+    for (k, (name, src)) in srcs.iter().enumerate() {
+        if !fits(k) {
+            continue;
+        }
         let fixed = src.replace("tme", "t");
         let before = stack_unused();
         let bad = Fx::parse(&fx_psi::path(src, "")).is_some();
@@ -213,7 +264,7 @@ fn worst_stack() {
         );
     }
     let unused = stack_unused();
-    if deepest > 0 && deepest + 2048 < unused {
+    if deepest > 0 && deepest != u32::MAX && deepest + 2048 < unused {
         let mut prog = zeroed::<psi::Program>();
         for (_, src) in &srcs {
             let _ = psi::compile_into(src, &mut prog);
@@ -229,7 +280,12 @@ fn worst_stack() {
     }
 }
 
-pub fn run() {
+/// The probe, when the card at `root` is the main task's (see the module
+/// docs).
+pub fn run(root: &str) {
+    if !open_report(root) {
+        return;
+    }
     let start = Instant::now();
     let stack0 = stack_unused();
     say!(info,
@@ -239,6 +295,8 @@ pub fn run() {
         std::mem::size_of::<psi::Scratch<128>>(),
         std::mem::size_of::<psi::Scratch<64>>()
     );
+    // What the probe is for first: the compiler's stack.
+    worst_stack();
     let mut out = vec![0u8; psi::W * psi::H * 3];
     let mut canvas = Canvas::new();
 
@@ -271,7 +329,8 @@ pub fn run() {
         });
         drop(fx);
         let (a50, a90, amax) = lanes::<128>(&prog, prog.loop_ms(), &mut out);
-        let (b50, b90, bmax) = lanes::<64>(&prog, prog.loop_ms(), &mut out);
+        // No N=64 run: its VM instantiation no longer fits a 4mb probe image.
+        let (b50, b90, bmax) = (0, 0, 0);
         say!(info,
             "psi-probe: {name}: steps {} ({f} frame / {row} row / {px} pixel), regs {}, compile {compile_us} us, open {open_us} us, heap {h0} -> {h1} B ({} B for the effect), path {} B",
             prog.len(),
@@ -338,7 +397,7 @@ pub fn run() {
 
     // What one step costs: each formula is the baseline plus one or two
     // per-pixel steps (t is a frame value, so nothing folds away).
-    const STEPS: [(&str, &str); 16] = [
+    const STEPS: [(&str, &str); 21] = [
         ("base gray(x)", "gray(x)"),
         ("add", "gray(x + t)"),
         ("mul", "gray(x * t)"),
@@ -353,6 +412,11 @@ pub fn run() {
         ("select (+lt)", "gray(x < t ? x : 0.5)"),
         ("digit (+2 mask)", "gray(digit(px % 8, px % 4, y * 6))"),
         ("bit", "gray(bit(px, t))"),
+        ("pick (+mul)", "gray(pick(x * 4, t, 0.5, 0.75, 1))"),
+        ("pick 8 (+mul)", "gray(pick(x * 8, t, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7))"),
+        ("chain 4 (+mul)", "k = x * 4\ngray(k < 0 ? 0 : k < 1 ? t : k < 2 ? 0.5 : k < 3 ? 0.75 : k < 4 ? 1 : 0)"),
+        ("big clock", "loop 60\n-- Big clock: the time in four big digits, and a seconds bar along the bottom\nframe {\n  h1 = floor(hour/10); h2 = hour % 10       -- the hours' two digits\n  m1 = floor(minute/10); m2 = minute % 10   -- the minutes' two digits\n  end = (second + 1)*128/60                 -- where the seconds bar ends\n}\n-- a digit: the bold font's 3 x 5 pixels, each 8 px wide, 6 tall (24 x 30)\nq = px >= 64 ? px - 8 : px     -- the minutes sit 8 px further right\nk = floor(q/32)                -- which digit: one every 32 px (0 1, then 2 3)\nn = pick(k, h1, h2, m1, m2)    -- and its value\ncol = floor(q % 32 / 8)        -- the font's column, 0 to 2 (then the gap)\nrow = floor(ty/6)              -- its row from the top, 0 to 4 (5: below)\nbar = py < 1                   -- the bottom row is the seconds bar\nlit = bar ? px < end : digit(n, col, row, bold)\n-- a rainbow drifting through the digits, tilted by row; the bar is white\nhue = py/64 + hour/24 + t/10\nhsv(x + hue, bar ? 0 : 1, lit)"),
+        ("big clock (beta.10)", "loop 60\n-- Big clock: the time in four big digits, and a seconds bar along the bottom\nframe {\n  h1 = floor(hour/10); h2 = hour % 10       -- the hours' two digits\n  m1 = floor(minute/10); m2 = minute % 10   -- the minutes' two digits\n  end = (second + 1)*128/60                 -- where the seconds bar ends\n}\n-- a digit: the bold font's 3 x 5 pixels, each 8 px wide, 6 tall (24 x 30)\nq = px >= 64 ? px - 8 : px     -- the minutes sit 8 px further right\nk = floor(q/32)                -- which digit: one every 32 px (0 1, then 2 3)\nn = k < 1 ? h1 : k < 2 ? h2 : k < 3 ? m1 : m2   -- and its value\ncol = floor(q % 32 / 8)        -- the font's column, 0 to 2 (then the gap)\nrow = floor((31 - py)/6)       -- its row from the top, 0 to 4 (5: below)\nbar = py < 1                   -- the bottom row is the seconds bar\nlit = bar ? px < end : digit(n, col, row, bold)\n-- a rainbow drifting through the digits, tilted by row; the bar is white\nhue = py/64 + hour/24 + t/10\nhsv(x + hue, bar ? 0 : 1, lit)"),
         ("out hsv", "hsv(x, 1, 1)"),
         ("out pal", "pal(fire, x)"),
     ];
@@ -423,11 +487,11 @@ pub fn run() {
         );
     }
 
-    worst_stack();
     let stack1 = stack_unused();
     say!(info,
-        "psi-probe: done: main stack {stack1} B unused (was {stack0} before the probe; the high-water mark is the deepest so far), heap {} B free, {} ms in all",
+        "{DONE}: main stack {stack1} B unused (was {stack0} before the probe; the high-water mark is the deepest so far), heap {} B free, {} ms in all",
         heap(),
         start.elapsed().as_millis()
     );
+    *REPORT.lock().unwrap() = None;
 }
