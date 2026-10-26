@@ -79,9 +79,15 @@ every view like a person would:
             opendmd-pack's), the GIF's frames and delays equal the Rust
             pipeline's (`cargo run --example render` in opendmd-art-web),
             parsePath of the name gives SNES / "Studio Test" / 1, and it is
-            appended to `cachetest`; Find's Game art against a stubbed
-            name index and stubbed libretro pictures (one of them a link to
-            another), no network; a click on a result loads it
+            appended to `cachetest`; Find's Game art: the name index is
+            fetched from the project site (opendmd.github.io/art-index/v1/,
+            not the pack: /art/ is a 404), whose stand-in is a Playwright
+            route serving opendmd-web/art-index/ with the CORS header (no
+            network): unreachable -> the sentence and Try again, which then
+            finds N64 games in the real index, fetched once for two
+            searches; then a stubbed SNES index and stubbed libretro
+            pictures (one of them a link to another); a click on a result
+            loads it
   Studio    Smooth motion in Create Art: a 16-frame 128x32 GIF scrolling 4 px
   smooth    a frame (made with Pillow) loads, the switch on -> "Adds N
             frames across M moves" (N > 0) and the preview plays the
@@ -323,6 +329,12 @@ def card_gifs() -> list[str]:
     lines = (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n")
     return [l.strip() for l in lines if l.strip().endswith(".gif") and (CARD / l.strip().lstrip("/")).is_file()]
 OUT = Path(os.environ.get("WEB_SMOKE_OUT", REPO / "target" / "web-smoke"))
+# Create Art's game name index, published on the site (tools/site.py); every
+# page's context answers it from the committed files (site_art_index), so no
+# test reaches the network. Requests seen: [(url, Origin header)].
+SITE_ART = "https://opendmd.github.io/art-index/v1/"
+ART_INDEX = REPO / "opendmd-web" / "art-index"
+site_art_asked: list[tuple[str, str | None]] = []
 SIZES = {"laptop": (1280, 800), "phone": (390, 844)}
 VIEWS = ["now", "library", "sets", "settings"]
 
@@ -636,6 +648,7 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
     phone = size == "phone"
     ctx = browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=3 if phone else 1,
                               is_mobile=phone, has_touch=phone)
+    site_art_index(ctx)
     page = ctx.new_page()
     # (A CORS refusal's line names the URL in its text, not its location.)
     page.on("console", lambda m: m.type == "error" and unexpected(m.location.get("url", "")) and unexpected(m.text)
@@ -650,6 +663,19 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
             and print(f"  ..   [{size}] no response: {r.method} {r.url}"))
     page.on("dialog", lambda d: d.accept())
     return page
+
+
+def site_art_index(ctx) -> None:
+    """The site's art-index/v1/ for this context, from opendmd-web/art-index/,
+    with GitHub Pages' `Access-Control-Allow-Origin: *`."""
+    def answer(route) -> None:
+        site_art_asked.append((route.request.url, route.request.headers.get("origin")))
+        f = ART_INDEX / urllib.parse.urlsplit(route.request.url).path.rsplit("/", 1)[-1]
+        if f.is_file():
+            route.fulfill(status=200, body=f.read_bytes(), headers={"access-control-allow-origin": "*", "content-type": "application/json"})
+        else:
+            route.fulfill(status=404, body="", headers={"access-control-allow-origin": "*"})
+    ctx.route(SITE_ART + "*", answer)
 
 
 def pick_cat(page: Page, value: str) -> None:
@@ -3819,7 +3845,8 @@ def stub_art(page: Page, hits: list[str]) -> None:
             route.fulfill(status=200, body="Studio Test (Japan).png", headers={"access-control-allow-origin": "*", "content-type": "text/plain"})
         else:
             route.fulfill(status=200, body=png, headers={"access-control-allow-origin": "*", "content-type": "image/png"})
-    page.route("**/art/SNES.json", lambda r: r.fulfill(status=200, body=json.dumps(STUB_INDEX), headers={"content-type": "application/json"}))
+    page.route(SITE_ART + "SNES.json", lambda r: r.fulfill(status=200, body=json.dumps(STUB_INDEX),
+                                                           headers={"access-control-allow-origin": "*", "content-type": "application/json"}))
     page.route("https://raw.githubusercontent.com/**", raw)
 
 
@@ -3860,8 +3887,41 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
     # (A picture from an earlier check folds Find: open it again.)
     if page.is_visible("#st-change"):
         page.click("#st-change")
-    # Find's Game art: the stubbed index, then a game's pictures.
+    # Find's Game art: the index is not in the pack, it is the site's.
+    try:
+        urllib.request.urlopen(base + "/art/SNES.json")
+        packed = True
+    except urllib.error.HTTPError as e:
+        packed = e.code != 404
+    check(not packed, "studio find: the art index is not served from the player (/art/SNES.json 404)")
+    # The site unreachable: a sentence and Try again; then the real N64 index
+    # from the site's stand-in, fetched once for two searches.
+    n64 = SITE_ART + "N64.json"
+    expected.append(n64)
+    page.route(n64, lambda r: r.abort("internetdisconnected"))
     page.click("#st-src [data-v=gameart]")
+    page.select_option("#find-platform", "N64")
+    page.fill("#st-q", "mario")
+    page.click("#st-go")
+    page.wait_for_selector("#find-status #find-retry", timeout=20000)
+    t = page.inner_text("#find-status")
+    check(t.startswith("Game art needs the internet") and page.locator("#find-grid .find-hit").count() == 0,
+          f"studio find: the site unreachable -> '{t}'")
+    page.unroute(n64)
+    before = len(site_art_asked)
+    page.click("#find-retry")
+    page.wait_for_selector("#find-grid .find-hit", timeout=20000)
+    names = page.eval_on_selector_all("#find-grid .find-hit .find-t", "els => els.map(e => e.textContent)")
+    got = site_art_asked[before:]
+    check(bool(names) and all("mario" in n.lower() for n in names) and [u for u, _ in got] == [n64] and all(o for _, o in got),
+          f"studio find: Try again -> N64 'mario' from the site's index, asked with CORS ({len(names)} tiles, e.g. {names[:1]}; {got})")
+    page.fill("#st-q", "zelda")
+    page.click("#st-go")
+    page.wait_for_function("[...document.querySelectorAll('#find-grid .find-t')].some(e => e.textContent.toLowerCase().includes('zelda'))", timeout=20000)
+    check(len(site_art_asked) == before + 1, f"studio find: a second search uses the index already fetched ({len(site_art_asked) - before} fetches)")
+    expected.remove(n64)
+    # The stubbed SNES index, then a game's pictures.
+    page.fill("#st-q", "")
     page.select_option("#find-platform", "SNES")
     page.fill("#st-q", "studio test")
     page.click("#st-go")
@@ -3950,7 +4010,7 @@ def studio_checks(page: Page, base: str, overlay: Path) -> None:
     plist = (overlay / "sets" / "cachetest.txt").read_text().split("\n")
     check(path in plist, "studio save: appended to cachetest")
     goto_view(page, "library")
-    page.unroute("**/art/SNES.json")
+    page.unroute(SITE_ART + "SNES.json")
     page.unroute("https://raw.githubusercontent.com/**")
 
 

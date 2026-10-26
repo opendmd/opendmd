@@ -4,7 +4,7 @@
 # ///
 """Build the "Find art for a game" name index from libretro-thumbnails.
 
-    uv run tools/art-index.py [--out opendmd-web/www/art] [PLATFORM ...]
+    uv run tools/art-index.py [--out opendmd-web/art-index] [PLATFORM ...]
 
 One JSON file per platform tag, `<out>/<PLATFORM>.json`:
 
@@ -15,12 +15,21 @@ One JSON file per platform tag, `<out>/<PLATFORM>.json`:
 `Named_Snaps`, `Named_Boxarts` or `Named_Logos` (betas, prototypes,
 demos, hacks and bad dumps left out), sorted; `kinds` holds one
 hex digit per name, a bit per folder that has it (1 titles, 2 snaps, 4 box
-art, 8 logos). The Studio (`www/js/studio.js`) fetches the platform's file
-from the card on the first search, matches titles in the browser, and loads
+art, 8 logos). The files are committed. They are not in the www pack: the
+site publishes them (tools/site.py) at `/art-index/v1/<PLATFORM>.json`,
+and Create Art's Game art (`www/js/find.js`) fetches the platform's file
+from there on the first search, matches titles in the browser, and loads
 the pictures from raw.githubusercontent.com (which, unlike
 thumbnails.libretro.com, sends `Access-Control-Allow-Origin: *`).
 
-Why a file on the card and not the GitHub API (which pages can read): one
+`v1` is the format above. A web app asks for the format it reads, so a
+change to the shape (a key added, renamed or reinterpreted) is a new
+version: bump ART_INDEX_FORMAT in tools/site.py and `ART_INDEX` in
+find.js together, and keep publishing the old version's files for the web
+apps already on players. tools/site.py refuses files that are not exactly
+this shape.
+
+Why a prepared index and not the GitHub API (which pages can read): one
 folder's tree is 1.3 MB of JSON (SNES titles alone; 175 KB gzipped), a
 search wants three or four of them, and unauthenticated calls are capped at
 60 an hour per IP, shared by everything in the house. These files are 2.4 MB
@@ -28,6 +37,7 @@ for all thirteen platforms, 530 KB gzipped (SNES: 132 KB, 32 KB gzipped),
 and the Studio fetches only the platform searched. The
 index is read with `git ls-tree` on a blobless, depth-1 clone — no API
 calls, no images downloaded. Re-run it now and then; libretro adds games.
+A refresh reaches every player with the next site publish, no release.
 """
 import argparse
 import gzip
@@ -84,7 +94,7 @@ def listing(repo: str, tmp: Path) -> dict[str, int]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("platforms", nargs="*", help="platform tags (default: all)")
-    ap.add_argument("--out", default="opendmd-web/www/art")
+    ap.add_argument("--out", default="opendmd-web/art-index")
     a = ap.parse_args()
     want = a.platforms or list(REPOS)
     out = Path(a.out)
