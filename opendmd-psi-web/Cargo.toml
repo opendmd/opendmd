@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-psi-web"
-version = "1.0.0-beta.8"
+version = "1.0.0-beta.9"
 edition = "2021"
 description = "The web app's Formulas: Psi (opendmd-psi) compiled to wasm, loaded lazily when the Library's Formulas tab opens."
 license = "MIT OR Apache-2.0"
