@@ -471,9 +471,13 @@ fn lane_op<const N: usize>(
         SQR => un!(fast1, d, a, fixed::sqr),
         SQRT => un!(run1, d, a, fixed::sqrt),
         RECIP => un!(run1, d, a, fixed::recip),
+        // (k is always a lane: a pick with a scalar k is compares and
+        // selects.)
         PICK => {
-            let sc = &s.sc;
-            un!(run1, d, a, |k| pick(sc, op.b, op.c, k))
+            if let Arg::Lane(p) = a {
+                let sc = &s.sc;
+                run1(d, L(p), |k| pick(sc, op.b, op.c, k))
+            }
         }
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
