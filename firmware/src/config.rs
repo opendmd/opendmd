@@ -51,9 +51,11 @@ pub const PANEL_CHAIN: u16 = 2;
 /// and swaps, so a blit can never tear — but it costs a second DMA framebuffer
 /// plus descriptors (~40 KB of heap, measured: 80 KB -> 120 KB free). A 128x32
 /// blit takes ~1 ms against a 10 ms refresh, and eyes-on-panel testing across
-/// scrolls, sprites and logos found no visible tearing (2026-09-22). If a
-/// future panel shows it, the cheaper fallback is double buffering at 6-bit
-/// colour (48 KB instead of 64 KB), not going back to 8-bit double buffering.
+/// scrolls, sprites and logos found no visible tearing (2026-09-22). It is
+/// there (2026-10-26: a rolling seam on scrolling text, Insert_Coin.gif;
+/// 78-93% of blits on the bench straddle a refresh), and the fix that costs
+/// no heap is pacing the blit to the scan (`panel_sync`,
+/// `panel.rs`), not a second buffer.
 pub const DOUBLE_BUFFER: bool = false;
 
 /// 0..255. The panels are extremely bright; this is a living-room level.

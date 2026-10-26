@@ -151,6 +151,32 @@ void hub75_flip(void);
 /* Achieved scan rate in Hz, saturated to 255. 0 before hub75_init. */
 uint8_t hub75_refresh_rate(void);
 
+/*
+ * Where the scan is: the row pair the I2S DMA is sending and how far into
+ * it, as microseconds of scan time into the refresh (0 .. 16 * row_us).
+ * Read from the DMA's current-descriptor register and the descriptor
+ * layout (one descriptor of all colour planes, then equal ones for the
+ * extra passes of the high planes, per row pair). One register read and
+ * a division; any core, any time. Returns UINT32_MAX when it is not known:
+ * before hub75_scan_init, after hub75_blank, double-buffered, or a
+ * descriptor layout this does not model.
+ */
+uint32_t hub75_scan_pos(void);
+
+/*
+ * Set up hub75_scan_pos (after hub75_init, before the first read): check
+ * the descriptor layout and time the refresh (spins ~2-3 refreshes). Until
+ * it has, and if it cannot, hub75_scan_pos is unknown.
+ */
+void hub75_scan_init(void);
+
+/*
+ * One row pair's share of a refresh, in microseconds of scan time: the
+ * refresh period measured at hub75_init (two wraps of hub75_scan_pos,
+ * timed) divided by the row pairs. 0 when hub75_scan_pos is unknown.
+ */
+uint32_t hub75_scan_row_us(void);
+
 #ifdef __cplusplus
 }
 #endif

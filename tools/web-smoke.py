@@ -1752,14 +1752,14 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
           "settings: #st-glow options off/short/long")
     cfg0 = get_json(base + "/api/config")
     st0 = get_json(base + "/api/status")
-    check(list(cfg0)[-13:] == ["attract", "look", "glow", "look_formula", "look_formula_name", "look_blend", "look_amount", "boot_show",
-                              "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"],
-          f"config: attract/look/glow/look_formula/look_formula_name/look_blend/look_amount/boot_show/api_key_set, then the panel keys,"
-          f" end the object ({list(cfg0)[-14:]})")
-    check(list(st0)[-8:] == ["look", "glow", "glow_held", "formula_look", "attract_live", "max_brightness",
-                             "brightness_safe_max", "safe_start_until"],
-          f"status: look/glow/glow_held/formula_look/attract_live/max_brightness/brightness_safe_max/safe_start_until"
-          f" end the object ({list(st0)[-8:]})")
+    check(list(cfg0)[-15:] == ["attract", "look", "glow", "look_formula", "look_formula_name", "look_blend", "look_amount", "boot_show",
+                              "panel_sync", "panel_split", "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"],
+          f"config: attract/look/glow/look_formula/look_formula_name/look_blend/look_amount/boot_show/panel_sync/panel_split/"
+          f"api_key_set, then the panel keys, end the object ({list(cfg0)[-16:]})")
+    check(list(st0)[-9:] == ["look", "glow", "glow_held", "formula_look", "attract_live", "max_brightness",
+                             "brightness_safe_max", "safe_start_until", "scan"],
+          f"status: look/glow/glow_held/formula_look/attract_live/max_brightness/brightness_safe_max/safe_start_until/scan"
+          f" end the object ({list(st0)[-9:]})")
     ssu = st0["safe_start_until"]
     check(ssu is None or (isinstance(ssu, int) and ssu >= st0["uptime_secs"] - 1),
           f"status: safe_start_until is null or an uptime not yet passed ({ssu}, uptime {st0['uptime_secs']})")
@@ -1991,6 +1991,18 @@ def panel_checks(page: Page, base: str) -> None:
 
     goto_view(page, "settings/device")
     page.wait_for_selector("#st-panel:not([hidden]) #pt-driver", timeout=20000)
+    # Moving pictures: both on by default; the second greys out with the
+    # first off, and each saves at once.
+    page.wait_for_selector("#st-sync:not([hidden]) #ps-sync", timeout=5000)
+    check(page.is_checked("#ps-sync") and page.is_checked("#ps-split") and page.is_enabled("#ps-split"),
+          "sync: both on by default, the second enabled")
+    check("Sync to the panel’s refresh (stops tearing)" in page.inner_text("#st-sync"), "sync: the plain label")
+    page.uncheck("#ps-sync")
+    page.wait_for_function("() => document.querySelector('#ps-split').disabled", timeout=5000)
+    check(cfg()["panel_sync"] is False and cfg()["panel_split"] is True, "sync: off saved, split kept")
+    page.check("#ps-sync")
+    page.wait_for_function("() => !document.querySelector('#ps-split').disabled", timeout=5000)
+    check(cfg()["panel_sync"] is True, "sync: on again")
     text = page.inner_text("#st-panel")
     check("Panel timing" in text and "If some LEDs show wrong colours on certain pictures, press Test panel timing, or try these one at a time" in text,
           "panel: the section and its explanation are under Device")
