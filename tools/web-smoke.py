@@ -661,6 +661,12 @@ def unexpected(url: str) -> bool:
     return not any(e in url for e in expected)
 
 
+def retried(url: str) -> bool:
+    """A 503 here is the stream queue being full, and the web app asks again
+    (thumbs.js for GIFs, source.js `queued` for listings and card reads)."""
+    return any(p in url for p in ("/gifs/", "/api/files", "/api/cache/list", "/api/cache/failed"))
+
+
 def new_page(browser, size: str, errors: list[str]) -> Page:
     w, h = SIZES[size]
     phone = size == "phone"
@@ -670,10 +676,11 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
     page = ctx.new_page()
     # (A CORS refusal's line names the URL in its text, not its location.)
     page.on("console", lambda m: m.type == "error" and unexpected(m.location.get("url", "")) and unexpected(m.text)
+            and not ("status of 503" in m.text and retried(m.location.get("url", "")))
             and errors.append(f"[{size}] console: {m.text}"))
     page.on("pageerror", lambda e: errors.append(f"[{size}] pageerror: {e}"))
     # Chromium's console line for a failed load has no URL; this does.
-    page.on("response", lambda r: r.status >= 400 and unexpected(r.url) and not (r.status == 503 and "/gifs/" in r.url)
+    page.on("response", lambda r: r.status >= 400 and unexpected(r.url) and not (r.status == 503 and retried(r.url))
             and errors.append(f"[{size}] HTTP {r.status} {r.request.method} {r.url}"))
     # And which load a connection closed with no response was (Chromium's
     # ERR_EMPTY_RESPONSE console line has no URL either).
