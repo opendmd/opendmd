@@ -715,8 +715,9 @@ function build(root) {
         // Nothing to smooth (as it is now): the switch stays on, says so, and
         // looks again after the next edit (a speed of 2x can be too fast to
         // smooth, 1x not).
+        const why = (await smooth()).quietText(s.hint);
         s.free();
-        smoothSay('none', 'Nothing here moves in steps it can smooth');
+        smoothSay('none', why);
         return;
       }
       Object.assign(SM, { s, bytes, gif: s.gif() });

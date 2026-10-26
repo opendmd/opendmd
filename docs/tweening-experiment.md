@@ -13,6 +13,18 @@
 > added for all 11,036 files both decode (1,002 at ≥ 10%; the 1,003rd,
 > `Consoles/NES_Unknow_01_Invert`, has a header Pillow accepts and our
 > decoders refuse).
+>
+> **Re-checked (2026-10-26)** after "Smooth motion rarely does anything"
+> (`Other/OTHER_SCROLL_The_Oluk_Squid_Game`: 226 of its 229 pairs are a
+> rigid 1 px vertical scroll at 50 ms, fit 1.0 on the right axis — nothing
+> to put between them). No analyser bug: of 607 `*SCROLL*` files, 50 are
+> offered and 423 are dominated by 1 px moves; the Library (which analyses
+> the prepared copy) agrees with `smooth analyse` on all 1,002. Loosening
+> the fit gate to 0.94 would offer 189 more files, but their in-betweens
+> mix poses (a walking sprite's arm) and tear edges (a sliding panel's
+> border), so it stays at 0.97. The UI now says *why* there is nothing to
+> add (`Summary::hint`: steady 1 px motion, frames too quick, or nothing
+> sliding) instead of only "nothing moves in steps it can smooth".
 
 The question: many pack GIFs run at 10–25 fps. Can we add in-between frames
 that make motion smoother on the panel (100 Hz refresh, frames down to 20 ms)

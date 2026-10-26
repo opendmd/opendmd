@@ -46,6 +46,15 @@ export async function smoother(bytes, { tween = false, alive } = {}) {
   return null;
 }
 
+// What to say when there is little or nothing to smooth (`s.hint`): a slow
+// scroll that moves a pixel at a time is already as smooth as the panel's
+// pixels allow, which is not the same as nothing moving.
+export function quietText(hint) {
+  if (hint === 'steady') return 'This already moves one pixel at a time, as smooth as the panel can show';
+  if (hint === 'fast') return 'Its frames are too quick to fit smoother steps between';
+  return 'Nothing here slides across the screen in steps it can smooth';
+}
+
 // The smoothed file the panel plays for this GIF (its bytes).
 export async function smoothCopy(bytes) {
   const s = await smoother(bytes, { tween: true });
@@ -155,6 +164,7 @@ export async function detail(box, it, bytes, pv, cap) {
   held = null;
   box.hidden = true;
   box.dataset.state = 'analysing';
+  delete box.dataset.hint;
   clear(box);
   let s, on;
   const t0 = performance.now();
@@ -170,7 +180,17 @@ export async function detail(box, it, bytes, pv, cap) {
   if (!alive()) { s.free(); return; }
   held = s;
   box.dataset.analyseMs = Math.round(performance.now() - t0);
-  if ((!s.offered || !s.fits) && !on) { box.dataset.state = 'none'; return; }
+  if ((!s.offered || !s.fits) && !on) {
+    box.dataset.state = 'none';
+    // Moving, but nothing to add (a 1 px scroll, or frames too quick): say
+    // why rather than leave the switch's absence unexplained.
+    if (s.fits && (s.hint === 'steady' || s.hint === 'fast')) {
+      box.dataset.hint = s.hint;
+      clear(box, h('div.cap', { id: 'lib-smooth-text' }, quietText(s.hint)));
+      box.hidden = false;
+    }
+    return;
+  }
 
   let showing = false;
   const msg = h('div.cap', { id: 'lib-smooth-msg' });
