@@ -14,9 +14,10 @@ fresh browser), so it measures first visits. It writes one playlist,
 
 Per scenario it reports, from Chrome's own network events (CDP):
   - card-file requests (/gifs/, /cache/) and the bytes the browser received;
-  - the bytes the thumbnails used (js/thumbs.js `stats.bytes`) and the
-    browser's tail per cut-off read (received minus used, over the reads
-    cut). What the device sent after a cut never reaches the browser (the
+  - the bytes the thumbnails used (js/thumbs.js `stats.bytes`) and what
+    each cut-off read brought the browser (`per_cut`; whole reads, such as
+    a Details preview's file, are left out: counting them made "tail per
+    cut" 9,488 B on the spare). What the device sent after a cut never reaches the browser (the
     proxy stops reading when the browser hangs up, as the browser would):
     read it in the device's log, the "client went away" lines' byte counts;
   - new TCP connections (distinct connection ids; a cut read closes one);
@@ -120,7 +121,8 @@ class Net:
         new = [v for k, v in self.req.items() if k not in before]
         return {"requests": len(new), "received": sum(v["bytes"] for v in new),
                 "connections": len({v.get("conn") for v in new if v.get("conn") is not None}),
-                "r503": sum(v.get("status") == 503 for v in new), "cut": sum(bool(v.get("cut")) for v in new)}
+                "r503": sum(v.get("status") == 503 for v in new), "cut": sum(bool(v.get("cut")) for v in new),
+                "received_by_cut": sum(v["bytes"] for v in new if v.get("cut"))}
 
 
 def thumbs(page) -> dict:
@@ -145,7 +147,9 @@ def scenario(name, page, net, st, run) -> dict:
     th = thumbs(page)
     out = {"scenario": name, "seconds": round(time.time() - t0, 1), **net.since(n0), **st.since(s0),
            "thumb_bytes_used": th["bytes"] - th0["bytes"], "thumb_r503": th["r503"] - th0["r503"], "thumb_failed": th["failed"] - th0["failed"]}
-    out["tail_per_cut"] = round((out["received"] - out["thumb_bytes_used"]) / out["cut"]) if out["cut"] else None
+    # What a cut read brought the browser (the first frame and what came with
+    # it; whole reads, a Details preview's file, are left out).
+    out["per_cut"] = round(out["received_by_cut"] / out["cut"]) if out["cut"] else None
     print(json.dumps(out))
     return out
 
