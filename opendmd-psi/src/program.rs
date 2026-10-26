@@ -496,8 +496,9 @@ impl Program {
 
 /// The scalar evaluation of one arithmetic op: the per-frame and per-row
 /// steps, and the constant folder (which never asks for the steps that read
-/// a table, [`code::is_table`], hence the `Option`: `None` there).
-#[inline]
+/// a table, [`code::is_table`], hence the `Option`: `None` there). Out of
+/// line: one copy for both (inlined, the ESP32 build carried two, 2.4 KB).
+#[inline(never)]
 pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
     use code::*;
     match c {
