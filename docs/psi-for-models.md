@@ -82,7 +82,11 @@ Q16.16 fixed point: −32,768 to 32,767.99998, steps of 1/65,536. Arithmetic
 **saturates** (no wrap-around). `a / 0` is the largest number of `a`'s sign
 (0 for 0/0); `a % 0` is 0; `%` is floored (`-1 % 3` is 2; `v % 1` is
 `frac(v)`). Comparisons and logic give 1 or 0; any non-zero is true.
-The same formula gives the same bytes on the panel, in the browser and on a
+Division by a constant is exact once a frame or a row (`floor(minute/10)`
+is 5 from 50 to 59); per pixel it is a multiply by 1/k, which `floor`
+takes rounded up, so `floor(n/k)` is exact for whole numbers with
+n·k < 65,536 (`floor(px/10)`, `floor(i/12)`); elsewhere `px/3` may be off
+by a step or two of 1/65,536. The same formula gives the same bytes on the panel, in the browser and on a
 computer.
 
 ## 4. Values
@@ -712,6 +716,32 @@ part candy {
 inside = step(88, px) * step(px, 123) * step(4, py) * step(py, 27)
 layer { rgb(0.05, 0.08, 0.2) }
 layer { candy((px - 88)/35, (py - 4)/23, inside) }
+```
+
+### 26. Big clock (the showcase)
+
+What only a formula can do, readable in two seconds: the real time, in
+digits that fill the panel, with a seconds bar that crosses the bottom
+row once a minute. A 3x5 font is 15 bits a digit: each digit's bits are
+looked up once a frame (a units digit from five numbers holding two
+digits each, d in the whole part and d + 5 in the fraction, so the
+lookups fit the ~119 values), a per-row power of 8 picks the band's 3
+bits, and per pixel one 4-way select picks the digit, another the column,
+and `frac(m*(p*F)) >= 0.5` is the bit (all exact powers of two). The bar
+is the same lookup: in row 0 the first digit's bits are all ones and its
+right edge follows `second`.
+
+```psi example=big-clock
+loop 60
+-- the time, drawn live: a 3x5 font, each digit's 15 bits looked up by value (the units: digit d in the whole part, d + 5 in the fraction)
+frame { g = floor(hour/10); k = hour % 10; n = floor(minute/10); j = minute % 10; m0 = g < 1 ? 31599 : g < 2 ? 11415 : 29671; a1 = k % 5; c1 = a1 < 1 ? 31599.951629638672 : a1 < 2 ? 11415.952606201172 : a1 < 3 ? 29671.892852783203 : a1 < 4 ? 29647.968231201172 : 23497.967254638672; m1 = k < 5 ? floor(c1) : frac(c1)*16384*2; m2 = n < 1 ? 31599 : n < 2 ? 11415 : n < 3 ? 29671 : n < 4 ? 29647 : n < 5 ? 23497 : 31183; a3 = j % 5; c3 = a3 < 1 ? 31599.951629638672 : a3 < 2 ? 11415.952606201172 : a3 < 3 ? 29671.892852783203 : a3 < 4 ? 29647.968231201172 : 23497.967254638672; m3 = j < 5 ? floor(c3) : frac(c3)*16384*2 }
+-- rows 2 to 31: five bands, a power of 8 picks the band's 3 bits; row 0: the seconds bar, across in a minute
+bar = py < 1; p = bar ? 2 : py < 2 ? 0 : py < 8 ? 1 : py < 14 ? 0.125 : py < 20 ? 0.015625 : py < 26 ? 0.001953125 : 0.000244140625; t1 = bar ? (second + 1)*128/60 : 32; t2 = bar ? 0 : 64; t3 = bar ? 0 : 104; z0 = bar ? 32767.99998 : m0; z3 = bar ? 0 : m3
+-- each digit: 3 columns of 8 pixels, then a gap; the minutes sit 8 pixels further right
+u = (px - (px < 64 ? 0 : 8)) % 32; m = px < t1 ? z0 : px < t2 ? m1 : px < t3 ? m2 : z3
+lit = frac(m*(p*(u < 8 ? 0.125 : u < 16 ? 0.25 : u < 24 ? 0.5 : 0.0000152587890625))) >= 0.5
+-- a rainbow drifting through the digits
+hsv(x + (py/64 + hour/24 + t/10), bar ? 0 : 1, lit)
 ```
 
 ## 15. In the product (not built)
