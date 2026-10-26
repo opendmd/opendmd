@@ -1,4 +1,4 @@
-// Measured on the spare by psi-probe (2026-10-27, 1.0.0-beta.10-anylook-a): VM p50 µs a frame.
+// Measured on the spare by psi-probe (2026-10-26, 1.0.0-beta.10-anylook-a): VM p50 µs a frame.
 pub const STEPS: &[(&str, &str, u32)] = &[
     ("base gray(x)", "gray(x)", 678),
     ("add", "gray(x + t)", 897),

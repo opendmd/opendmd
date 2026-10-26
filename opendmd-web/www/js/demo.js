@@ -165,6 +165,7 @@ function putConfig(patch) {
     else if (k in c && k != 'brightness' && k != 'max_brightness') c[k] = v;
     else if (!/^(brightness|max_brightness|panel|panel_confirm)$/.test(k)) bad(`unknown field ${k}`);
   }
+  if ('look_formula' in patch && !('look_blend' in patch) && !('look_amount' in patch)) Object.assign(c, { look_blend: 'over', look_amount: 100 });
   if (c.dwell_max < c.dwell_min) bad('dwell_max must be >= dwell_min');
   if (mx != null) { if (!(mx >= 16 && mx <= 255)) bad(`max_brightness must be 16..=255, not ${mx}`); c.max_brightness = mx; }
   if (b != null) { if (b > c.max_brightness) bad(`brightness ${b} is above the maximum ${c.max_brightness}; raise Maximum brightness first`); c.brightness = b; }

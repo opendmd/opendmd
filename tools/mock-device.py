@@ -3353,6 +3353,9 @@ def make_handler(ctx: Context, quiet: bool):
                         next_settings[field] = max(1, v)
                     else:
                         next_settings[field] = v
+                # A new look sent without how it was composed is drawn as it is.
+                if "look_formula" in patch and "look_blend" not in patch and "look_amount" not in patch:
+                    next_settings["look_blend"], next_settings["look_amount"] = "over", 100
 
                 # "attract_set" is null-or-string, so it is not in
                 # FIELD_TYPES; validated the same way as "set" below.

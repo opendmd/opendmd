@@ -3934,6 +3934,25 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     c4 = get_json(base + "/api/config")
     check(ui == ("add", "25") and c4["look_formula"] == gone.replace("0.25", "0.35") and (c4["look_formula_name"], c4["look_blend"], c4["look_amount"]) == ("Gone", "add", 35),
           f"looks: a look saved elsewhere is listed and re-edited ({ui}; {c4['look_formula'][-50:]!r})")
+    # Refused by the player: the controls go back to what it has.
+    def refuse(route):
+        if route.request.method == "PUT":
+            route.fulfill(status=400, body=json.dumps({"error": "look_formula: refused for the test"}), headers={"content-type": "application/json"})
+        else:
+            route.continue_()
+    page.route("**/api/config", refuse)
+    expected.append("/api/config")  # the refusal's 400, on purpose
+    page.eval_on_selector("#st-look-amt", "r => { r.value = 70; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }")
+    page.wait_for_function("document.querySelector('#st-look-amt').value == '35'", timeout=10000)
+    tick = page.inner_text("#st-tab-look .tick")
+    page.unroute("**/api/config", refuse)
+    page.wait_for_timeout(300)
+    expected.remove("/api/config")
+    check("refused for the test" in tick, f"looks: a refusal puts the controls back (35%, '{tick}')")
+    # A look set over the API alone is drawn as it is: over, 100 %.
+    put_json(base + "/api/config", {"look_formula": "@fx:psi?src=gray(ul)", "look_formula_name": "API"})
+    c6 = get_json(base + "/api/config")
+    check((c6["look_blend"], c6["look_amount"]) == ("over", 100), f"looks: a look_formula alone resets the blend and amount ({c6['look_blend']} {c6['look_amount']})")
     # The editor's Use as the look, with a blend: the preview shows it meanwhile.
     open_formulas(page)
     page.click("#psi-ex .psi-tile[data-name='Plasma']")
