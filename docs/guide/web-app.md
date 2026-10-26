@@ -44,15 +44,21 @@ playlist, or a platform filter that matches none of the playlist's GIFs
 
 ![The Library, with a GIF's details playing](../images/library.png)
 
-Every GIF on your card. Pick a category from the tabs (these are the
-folders on your card; on a phone, from the list at the top), or narrow it
-down by platform with the chips beside or under it.
+Every GIF on your card, by folder: the folders on your card (Arcade,
+Consoles, and so on), then **Live** and **Effects**, each with how many
+GIFs it holds. Click a folder to open it, again to close it; **⊟** closes
+them all. Big folders scroll smoothly however many GIFs they hold. Each GIF
+has a small picture of its first frame; rest the pointer on one (or move
+to it with the keyboard) and it plays a moment of it. The chips at the top
+narrow the list by platform.
 
-**Search** looks through every GIF on the card, whatever tab you were on.
-Chips under the box show where the matches are, with a count each, say
-**Consoles 42** or **SNES 17**: tap one to narrow the results, tap it again
-to undo. You can pick a category and a platform together. Clear the box to
-go back to the tab and chips you had before.
+**Search** looks through every GIF on the card. Only the folders with
+matches stay, opened, each saying how many it has; the chips show the
+platforms of the matches, say **SNES 17**: tap one to narrow the results,
+tap it again to undo. Clear the box to go back to the folders as they were.
+
+**With a keyboard:** ↑ and ↓ move, → opens a folder (or steps into it),
+← closes it (or steps back out), Enter opens a folder or a GIF.
 
 Click a GIF to open its details: a preview, its title, platform, category
 and author, and what you can do with it:
@@ -67,8 +73,9 @@ and author, and what you can do with it:
   asking first.
 
 **Several at once.** Press **Select** (or long-press a GIF on a phone):
-tick boxes appear, a tap picks a GIF, and **Add to playlist** puts them all
-in the playlist you're editing. **Done** leaves Select.
+tick boxes appear, a tap picks a GIF, a folder's box picks every GIF in it,
+and **Add to playlist** puts them all in the playlist you're editing.
+**Done** leaves Select.
 
 **Adding GIFs.** Press **+ Add GIFs** and pick files from your computer or
 phone. For each one, give it a title, a platform, a category (or a new one)
@@ -83,7 +90,7 @@ preview. Turn it on and the panel fills in the in-between steps so it glides
 instead. Your GIF file isn't changed, and you can switch it off again any
 time.
 
-**Live and Effects** are two extra tabs with things the panel draws by
+**Live and Effects** are two extra folders with things the panel draws by
 itself: a clock, scrolling text, and animated effects. See
 [Effects and live items](effects.md).
 
@@ -98,16 +105,20 @@ default and plays everything listed on your card; **Halloween** and
 Tap a playlist to open it. On a computer it opens beside the list; on a
 phone it takes the whole screen, and **‹ Playlists** goes back.
 
-- **Make one:** press **+ New playlist**, give it a name, then **Add by
-  filter…** to fill it from platforms, categories and title words (say,
-  every SNES and Mega Drive game with "Mario" in it; **Leave out** drops
-  logos, intros and the like). The last button says how many GIFs match:
-  **Add 412 GIFs**, or **Replace with 412 GIFs**. Or pick GIFs in the
+- **Make one:** press **+ New playlist** and give it a name. Then **+ Add
+  GIFs** shows your folders beside the playlist (on a phone, in its place;
+  **Done** goes back): tick GIFs, or a whole folder, and press **Add 12
+  ticked**. Or search, say "mario" with the **SNES** chip, and press **Add
+  all 41 shown**. A GIF already in the playlist has a ✓ and isn't added
+  twice. **Add by filter…** fills it by rules instead: platforms,
+  categories and title words (**Leave out** drops logos, intros and the
+  like), shuffled or cut to a number if you like. Or pick GIFs in the
   Library and choose **Add to playlist… → New playlist…**.
-- **Edit one:** open it, drag the ⠿ handles to reorder, pick GIFs and use
-  **Arrange** to move or remove them, then **Save**. The ones that come
-  with your card (All files, Halloween, Christmas) are saved as a copy
-  under a name of your own.
+- **Edit one:** open it; every GIF shows its first frame. Drag the ⠿
+  handles to reorder, ✕ to remove one, or pick GIFs and use **Arrange** to
+  move or remove them, then **Save**. The ones that come with your card
+  (All files, Halloween, Christmas) are saved as a copy under a name of
+  your own.
 - **Switch to one:** **Save & play** while editing, or **Play** from a
   playlist's **…** menu. The panel switches over in a few seconds.
 
@@ -198,5 +209,10 @@ Settings has four tabs, and everything saves as you change it (a green
 <img src="../images/phone-library.png" width="300" alt="The Library on a phone">
 
 Everything works on a phone too. The details of a GIF slide up from the
-bottom, a playlist opens as a screen of its own, and long-press replaces
+bottom, a playlist opens as a screen of its own (and its **+ Add GIFs**
+takes the whole screen until **Done**), and long-press replaces
 right-click (in the Library, long-press starts Select).
+
+**Thumbnails** are on unless you switch them off (Settings → Device →
+*Thumbnails in the Library and playlists*). Each GIF's picture is fetched
+once and kept by your browser, so they cost the panel next to nothing.

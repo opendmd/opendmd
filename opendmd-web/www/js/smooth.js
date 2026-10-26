@@ -21,6 +21,9 @@ import { prepareBytes, playsAsIs, madeCopy } from './prepare.js';
 import { dfetch } from './source.js';
 import { h, clear, enc, toast } from './util.js';
 
+// A copy rewritten: its thumbnail (js/thumbs.js, if loaded or kept) is made again.
+const forgetThumb = (path) => import('./thumbs.js').then((m) => m.forget(path)).catch(() => {});
+
 export const LIST = '/sets/.smooth';
 const lc = (s) => s.toLowerCase();
 const later = () => new Promise((r) => setTimeout(r, 0));
@@ -119,6 +122,7 @@ export async function set(path, on) {
     }
     await writeList([...rest, path]);
     await app.src.writeFile(dest, copy);
+    forgetThumb(path);
     madeCopy(path);
   } else {
     await prepareBytes(path, gif);
@@ -148,6 +152,7 @@ export async function keep(path, bytes, on, ready) {
       : `Smooth motion could not be made for this one (${e.message || e}); it plays as it is`;
   }
   if (copy) { await app.src.writeFile(dest, copy); madeCopy(path); } else await prepareBytes(path, bytes);
+  forgetThumb(path);
   return warn;
 }
 

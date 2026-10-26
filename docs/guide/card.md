@@ -28,8 +28,8 @@ filelist.xmas
 ```
 
 - **`gifs/`** holds the animations, one folder per **category**. The
-  folders are the category tabs in the Library. Make a new folder and you
-  have a new category.
+  Library shows the same folders. Make a new folder and you have a new
+  category.
 - **`filelist.txt`** is the list the panel plays: **All files** in the web
   app. It doesn't have to list every GIF on the card. When you add GIFs
   from the web app, it offers to add them to the playlist that's playing.

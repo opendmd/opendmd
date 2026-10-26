@@ -16,7 +16,7 @@ import { PanelPreview } from './preview.js';
 import { popup, closeMenu } from './overrides.js';
 import { h, clear, on, note, store, debounce, saver, brightSlider } from './util.js';
 
-const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', !app.device), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library');
+const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', true), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library and playlists');
 const TABS = [['play', 'Playback'], ['look', 'Look'], ['time', 'Schedule'], ['device', 'Device']];
 // The examples (formulas.json), fetched once a session; pkg-psi's "lets the GIF show through".
 let exQ = null, psiOver = null;

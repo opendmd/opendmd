@@ -89,6 +89,12 @@ def go(page: Page, view: str) -> None:
     page.wait_for_timeout(500)
 
 
+def folder(page: Page, cat: str) -> None:
+    """The Library with the folder `cat` alone open, at the top (`#library/<cat>`)."""
+    page.evaluate(f"location.hash = '#library/' + encodeURIComponent({json.dumps(cat)})")
+    page.wait_for_function(f"(t => t && t.open.has({json.dumps(cat)}) && t.rows.some(r => r.path))(document.querySelector('#lib-list')?._tree)", timeout=20000)
+
+
 def row(page: Page, path: str) -> None:
     sel = f"#lib-list .vrow:not([hidden])[data-path='{path}']"
     page.wait_for_selector(sel, timeout=20000)
@@ -131,12 +137,12 @@ def main() -> int:
             shot(page, a.out, "now.png")
             # Library: Demoscene, a tunnel in Details.
             go(page, "library")
-            page.click("#lib-cats [data-cat=Demoscene]")
+            folder(page, "Demoscene")
             row(page, "/gifs/Demoscene/FX_Tunnel_Fire_Rings_01.gif")
             wait_lit(page, "#lib-panel")
             shot(page, a.out, "library.png")
             # Effects: the tunnel and its options.
-            page.click("#lib-cats [data-cat='@fx']")
+            folder(page, "@fx")
             page.wait_for_selector("#lib-list .vrow:not([hidden])[data-path^='@fx:tunnel']", timeout=20000)
             page.click("#lib-list .vrow:not([hidden])[data-path^='@fx:tunnel']")
             page.select_option("#fx-tunnel select[data-key=palette]", "fire")
@@ -184,8 +190,8 @@ def main() -> int:
             browser = pw.chromium.launch()
             phone = browser.new_page(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
             phone.goto(base + "/#library")
-            phone.wait_for_selector("#lib-csel", timeout=20000)
-            phone.select_option("#lib-csel", "Demoscene")
+            phone.wait_for_selector("#lib-list", timeout=20000)
+            folder(phone, "Demoscene")
             row(phone, "/gifs/Demoscene/FX_Tunnel_Chrono_01.gif")
             phone.wait_for_selector("#lib-side.open", timeout=10000)
             wait_lit(phone, "#lib-panel")
