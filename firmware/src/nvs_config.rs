@@ -211,8 +211,8 @@ pub struct Settings {
     /// (`opendmd_core::boot`, `show.rs`).
     pub boot_show: ShowLength,
     /// Refresh-synchronised blits (`panel.rs`, `opendmd_core::scan`): wait
-    /// for a scan position from which a frame shows no seam. Off by
-    /// default while it is measured.
+    /// for a scan position from which a frame shows no seam. On by
+    /// default since the rig eye test (2026-10-26).
     pub panel_sync: bool,
     /// With `panel_sync`: each frame's bottom half (rows 16-31) a refresh
     /// after its top half, so the time each row is lit rises smoothly down
@@ -300,7 +300,7 @@ impl Default for Settings {
             look_blend: LOOK_BLENDS[0],
             look_amount: 100,
             boot_show: ShowLength::Short,
-            panel_sync: false,
+            panel_sync: true,
             panel_split: true,
             api_key: String::new(),
             card_speed: CardSpeed::Safe,

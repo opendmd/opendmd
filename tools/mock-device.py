@@ -630,6 +630,8 @@ DEFAULT_SETTINGS = {
     "look_blend": "over",       # how the web app composed it (display only): over/screen/add/multiply/max/min
     "look_amount": 100,         # and at what amount, 0..=100 (display only)
     "boot_show": "short",       # the start-up show: off / short / full
+    "panel_sync": True,         # writes paced to the panel's refresh (no tearing)
+    "panel_split": True,        # with it, each frame's bottom half a refresh after the top
     "api_key": "",              # "" = no key asked; never echoed back
 }
 LOOKS = ("colour", "amber", "red", "green", "blue", "white")
@@ -676,6 +678,8 @@ FIELD_TYPES = {
     "look_blend": "str",
     "look_amount": "u8",
     "boot_show": "str",
+    "panel_sync": "bool",
+    "panel_split": "bool",
     "api_key": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
     # alongside "set" (see h_config_put).
@@ -3105,6 +3109,11 @@ def make_handler(ctx: Context, quiet: bool):
                     "brightness_safe_max": BRIGHTNESS_SAFE_MAX,
                     "safe_start_until": SAFE_START_SECS
                     if time.monotonic() - player.boot_time < SAFE_START_SECS else None,
+                    # The panel's scan (no seams counted: there is no panel).
+                    "scan": {"row_us": 499, "sync": ctx.settings["panel_sync"], "blits": 0, "torn": 0,
+                             "in_pair": 0, "waited": 0, "wait_us": 0, "wait_max_us": 0, "gave_up": 0,
+                             "split_on": ctx.settings["panel_sync"] and ctx.settings["panel_split"],
+                             "split": 0, "split_ok": 0, "unsplit": 0},
                 }
                 if ctx.settings["follow"] and ctx.follow.state == "attract":
                     obj["attract_live"] = attract_live_path(ctx.settings["attract"])
@@ -3184,6 +3193,8 @@ def make_handler(ctx: Context, quiet: bool):
                     "look_blend": s["look_blend"],
                     "look_amount": s["look_amount"],
                     "boot_show": s["boot_show"],
+                    "panel_sync": s["panel_sync"],
+                    "panel_split": s["panel_split"],
                     "api_key_set": bool(s["api_key"]),
                 }
                 self.panel_poll()
