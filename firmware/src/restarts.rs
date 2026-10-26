@@ -76,10 +76,12 @@ fn store<const N: usize>(p: *mut [u32; N], v: &[u32; N]) {
 struct Rtc;
 
 impl Store for Rtc {
+    #[inline(never)]
     fn read(&self, i: usize) -> Slot {
         // SAFETY: `i < SLOTS` (the core's loops); a raw pointer, no reference.
         load(unsafe { &raw mut RING[i] })
     }
+    #[inline(never)]
     fn write(&mut self, i: usize, s: &Slot) {
         // SAFETY: as above.
         store(unsafe { &raw mut RING[i] }, s)
@@ -132,6 +134,7 @@ pub fn reset_now() -> Reset {
 /// Pair the last entry with this boot's reset, log it, then install the
 /// hooks. Once, first thing in `main` (before anything can fail an
 /// allocation: the previous run's record is read first).
+#[inline(never)]
 pub fn boot(reset: Reset) {
     let alive = ring::decode_alive(&load(&raw mut ALIVE));
     let alloc = ring::decode_alloc(&load(&raw mut ALLOC));
@@ -152,7 +155,11 @@ pub fn boot(reset: Reset) {
     } else {
         format!(", {}", e.text())
     };
-    log::info!("reset reason: {} ({}){up}{at}", reset.name(), e.reason.name());
+    log::info!(
+        "reset reason: {} ({}){up}{at}",
+        reset.name(),
+        e.reason.name()
+    );
     install();
 }
 
@@ -169,6 +176,7 @@ fn install() {
 
 /// The panic's entry: no allocation (the heap queries take its lock only
 /// briefly, and no Rust code panics holding it).
+#[inline(never)]
 fn panicked(info: &std::panic::PanicHookInfo) {
     let mut e = Entry::new(Reason::Panic, Some(figures()));
     let (file, line) = info.location().map_or(("?", 0), |l| (l.file(), l.line()));
@@ -206,7 +214,10 @@ pub unsafe extern "C" fn vApplicationStackOverflowHook(
     e.set_text(format_args!("task {name}"));
     ring::push(&mut Rtc, e);
     let mut msg = Msg([0; 80], 0);
-    let _ = write!(msg, "***ERROR*** A stack overflow in task {name} has been detected.");
+    let _ = write!(
+        msg,
+        "***ERROR*** A stack overflow in task {name} has been detected."
+    );
     let end = msg.1.min(msg.0.len() - 1);
     msg.0[end] = 0;
     // SAFETY: a NUL-terminated buffer; does not return.
@@ -226,17 +237,20 @@ impl core::fmt::Write for Msg {
 }
 
 /// A planned restart's entry ([`crate::restart`]).
+#[inline(never)]
 pub fn record(why: Reason) {
     ring::push(&mut Rtc, Entry::new(why, Some(figures())));
 }
 
 /// The heartbeat's figures, for a crash that writes nothing.
+#[inline(never)]
 pub fn alive() {
     store(&raw mut ALIVE, &ring::encode_alive(&figures()));
 }
 
 /// `ota::after_boot` found the updater's mark: a boot that recorded nothing
 /// came out of the updater (after an update from firmware with no ring).
+#[inline(never)]
 pub fn booted_after_update() {
     if ring::mark_update(&mut Rtc) {
         log::info!("reset reason: the restart out of the updater (firmware_update)");
@@ -244,6 +258,7 @@ pub fn booted_after_update() {
 }
 
 /// This boot's entry.
+#[inline(never)]
 fn this_boot() -> Option<Entry> {
     let seq = BOOT_SEQ.load(Relaxed);
     ring::newest_first(&Rtc).find(|e| e.seq == seq)
@@ -256,6 +271,7 @@ pub fn reset_note() -> Option<&'static str> {
 }
 
 /// `"restarts":[…]`, newest first.
+#[inline(never)]
 pub fn status_json() -> String {
     let mut out = String::from(r#""restarts":["#);
     for (i, e) in ring::newest_first(&Rtc).enumerate() {
@@ -276,7 +292,11 @@ pub fn status_json() -> String {
                     f.uptime_ms / 1000,
                     f.heap_free,
                     // 0: not measured (a stack overflow's hook).
-                    if f.largest == 0 { "null".to_string() } else { f.largest.to_string() }
+                    if f.largest == 0 {
+                        "null".to_string()
+                    } else {
+                        f.largest.to_string()
+                    }
                 );
             }
             None => out.push_str(r#""uptime_s":null,"heap_free":null,"largest":null"#),
