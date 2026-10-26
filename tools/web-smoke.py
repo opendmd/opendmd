@@ -22,9 +22,25 @@ every view like a person would:
             paused and holds its frame; skip, pause from the UI; "Send
             to panel" of a card path (POST /api/play) shows in status, and a
             missing path / a non-GIF give the 404 / 415 toasts
-  Library   open Consoles, search "mario", platform chip SNES, preview one,
-            send it to the panel; no checkboxes until Select, then select
-            three (a row tap picks in Select mode)
+  Library   open Consoles (#library/Consoles), search "mario" (only the
+            folders with matches, open, counted), platform chip SNES,
+            preview one, send it to the panel; no checkboxes until Select,
+            then select three (a row tap picks in Select mode)
+  Tree      a fresh browser, laptop and phone: the folders (Live, Effects,
+            then system ones), ⊟, the keys (↓ → → ↓ Enter ← ←), Consoles'
+            3,781 GIFs in a few dozen rows with End reaching the last,
+            #library/NEW%202021, Select's folder tick
+  Thumbs    a fresh browser, the mock pacing card files (GET /mock/io
+            ?kbps=400): the rows in view drawn, <= 2 requests in flight
+            (page and mock), each read cut after the first frame (bytes
+            per request against the whole copies), copies not GIFs, a
+            fling fetching only where it stops, a reload fetching nothing
+            (IndexedDB), a hover's clip (kept too), the switch off
+  Editor    + Add GIFs in a new playlist: three ticked in Arcade (added in
+            that order, ✓ in the tree), a folder's tick (Pixel_Art), 'mario'
+            + SNES and Add all N shown (again: none added), thumbnails on
+            the entries, Alt+↓, ✕, saved in order; the phone's panes take
+            turns
   Sets      the playlists are listed by name (All files — the default —,
             Halloween, Christmas; never the obsolete filelist.odm.*);
             Play Christmas (set "filelist.xmas") and All files back as
@@ -680,18 +696,24 @@ def site_art_index(ctx) -> None:
     ctx.route(SITE_ART + "*", answer)
 
 
+TREE = "document.querySelector('#lib-list')?._tree"
+
+
 def pick_cat(page: Page, value: str) -> None:
-    """Library: the category tab `value` (a directory under gifs/, `@` Live,
-    `@fx` Effects). A search hides the tabs: it is cleared first."""
-    sel = f"#lib-cats [data-cat={json.dumps(value)}]"
-    page.wait_for_selector("#lib-search")
+    """Library: the folder `value` (a directory under gifs/, `@` Live, `@fx`
+    Effects) open at the top, the others closed: `#library/<folder>`, what a
+    link to a folder does. A search or a platform chip would filter it: they
+    are cleared first."""
+    page.evaluate("location.hash = '#library'")
+    page.wait_for_selector("#view-library.on")
+    page.wait_for_selector("#lib-search", timeout=30000)
     if page.input_value("#lib-search"):
         page.fill("#lib-search", "")
-    page.wait_for_selector(sel, state="attached", timeout=30000)
-    if page.is_visible("#lib-csel"):  # a phone: the categories are a select
-        page.select_option("#lib-csel", value)
-    else:
-        page.click(sel)
+    for chip in page.query_selector_all("#lib-chips .chip.on"):  # platforms picked without a search
+        chip.click()
+    page.evaluate(f"location.hash = '#library/' + encodeURIComponent({json.dumps(value)})")
+    page.wait_for_function(f"(t => t && t.open.size === 1 && t.open.has({json.dumps(value)}) && t.rows.some(r => r.cat === {json.dumps(value)} && !r.path)"
+                           f" && !t.rows.some(r => r.ld))({TREE})", timeout=30000)
 
 
 def settings_tab_checks(page: Page) -> None:
@@ -864,11 +886,21 @@ def lib_count(page: Page) -> tuple[int, int]:
     return int(a), int(b)
 
 
+def folder_counts(page: Page) -> list:
+    """The folders the tree shows, with their counts: [[folder, n], ...]."""
+    return page.evaluate(f"{TREE}.rows.filter(r => !r.path && !r.ld).map(r => [r.cat, r.n])")
+
+
+def wait_counted(page: Page) -> None:
+    page.wait_for_function("/^[\\d,]+ of [\\d,]+/.test(document.querySelector('#lib-count').textContent)", timeout=60000)
+
+
 def search_checks(page: Page, exact: bool) -> None:
-    """The Library's search: every GIF on the card whatever the tab, category
-    and platform facets with counts (most first) that narrow and combine,
-    and the tab back when the box is cleared. Leaves 'mario' with the
-    Consoles and SNES facets on (open_library goes on from there). `exact`:
+    """The Library's search: every GIF on the card whatever was open, the
+    folders with matches open with their counts (the category facets the
+    tabs used to become), platform chips with counts (most first) that
+    narrow the tree, and the folder back as it was when the box is cleared.
+    Leaves 'mario' with SNES on (open_library goes on from there). `exact`:
     the counts against the card copy (the mock's)."""
     gifs = [p for p in (CARD / "gifs").glob("*/*") if p.suffix.lower() == ".gif"]
     want = [p for p in gifs if "mario" in p.name.lower()]
@@ -877,46 +909,48 @@ def search_checks(page: Page, exact: bool) -> None:
         by_cat[p.parent.name] = by_cat.get(p.parent.name, 0) + 1
     tab_n = lib_count(page)[1]
     page.fill("#lib-search", "mario")
-    page.wait_for_selector("#lib-cats .chip[data-fcat]", timeout=60000)
+    wait_counted(page)
     shown, total = lib_count(page)
-    cats = facets(page, "#lib-cats", "fcat")
+    cats = folder_counts(page)
     if not exact:
-        want, gifs, by_cat = [None] * shown, [None] * total, {c: n for c, n, _ in cats}
+        want, gifs, by_cat = [None] * shown, [None] * total, {c: n for c, n in cats}
     check(total == len(gifs) and shown == len(want) == sum(by_cat.values()), f"library search: 'mario' over every GIF -> {shown} of {total} (want {len(want)} of {len(gifs)})")
-    check({c: n for c, n, _ in cats} == by_cat and [n for _, n, _ in cats] == sorted((n for _, n, _ in cats), reverse=True),
-          f"library search: category facets, most first ({cats[:4]}…)")
-    check(page.locator("#lib-cats .tab").count() == 0, "library search: the facets stand in for the tabs")
+    check({c: n for c, n in cats} == by_cat and all(n > 0 for _, n in cats),
+          f"library search: only the folders with matches, each with its count ({cats[:4]}…)")
+    opened = page.evaluate(f"{TREE}.rows.filter(r => !r.path && !r.ld).every(r => r.open)")
+    check(opened, "library search: the folders with matches open")
     shot(page, "library-search", "laptop")
-    page.click("#lib-cats .chip[data-fcat=Consoles]")
-    shown = lib_count(page)[0]
     plats = facets(page, "#lib-chips", "platform")
     snes = next((n for p, n, _ in plats if p == "SNES"), 0)
-    check(shown == by_cat.get("Consoles") and sum(n for _, n, _ in plats) <= shown and snes > 0,
-          f"library search: Consoles facet -> {shown}, platforms {plats[:3]}…")
+    check(sum(n for _, n, _ in plats) <= shown and snes > 0 and [n for _, n, _ in plats] == sorted((n for _, n, _ in plats), reverse=True),
+          f"library search: platform chips, most first ({plats[:3]}…)")
     page.click("#lib-chips .chip[data-platform=SNES]")
     shown = lib_count(page)[0]
-    cats = facets(page, "#lib-cats", "fcat")
-    check(shown == snes and ["Consoles", True] in [[c, on] for c, _, on in cats],
-          f"library search: + SNES -> {shown} (facets combine; Consoles still on)")
-    # Instant on ~11k GIFs: five keystrokes, each a full pass and its facets.
+    cats = folder_counts(page)
+    check(shown == snes and sum(n for _, n in cats) == snes, f"library search: + SNES -> {shown}, the folders counting SNES only ({cats[:3]}…)")
+    # Instant on ~11k GIFs: five keystrokes, each a full pass and its chips.
     ms = page.evaluate("""async () => { const s = document.querySelector('#lib-search'), t = performance.now();
         for (const q of ['m', 'ma', 'mar', 'mari', 'mario']) { s.value = q; s.dispatchEvent(new Event('input')); await new Promise((r) => setTimeout(r)); }
         return (performance.now() - t) / 5; }""")
     check(ms < 50 and lib_count(page)[0] == snes, f"library search: {ms:.1f} ms a keystroke over {total:,} GIFs")
+    # A folder closed in a search stays closed for it; its count stays.
+    first = cats[0][0]
+    page.click(f"#lib-list .vdir[data-cat={json.dumps(first)}]")
+    page.wait_for_function(f"{TREE}.rows.some(r => r.cat === {json.dumps(first)} && !r.path && !r.open)", timeout=5000)
+    check(lib_count(page)[0] == snes, f"library search: closing {first} keeps the count ({page.inner_text('#lib-count')})")
     page.fill("#lib-search", "")
-    page.wait_for_selector("#lib-cats .tab.on[data-cat=Consoles]")
+    wait_counted(page)
     check(lib_count(page) == (tab_n, tab_n) and page.locator("#lib-chips .chip.on").count() == 0,
-          f"library search: cleared -> back on Consoles, facets gone ({page.inner_text('#lib-count')})")
+          f"library search: cleared -> the folder as it was, platforms off ({page.inner_text('#lib-count')})")
     page.fill("#lib-search", "mario")
-    page.wait_for_selector("#lib-cats .chip[data-fcat]")
-    page.click("#lib-cats .chip[data-fcat=Consoles]")
+    wait_counted(page)
     page.click("#lib-chips .chip[data-platform=SNES]")
 
 
 def open_library(page: Page, exact: bool = True) -> None:
     goto_view(page, "library")
     pick_cat(page, "Consoles")
-    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
+    wait_counted(page)
     search_checks(page, exact)
     count = page.inner_text("#lib-count")
     shown = int(count.split(" of ")[0].replace(",", ""))
@@ -957,43 +991,297 @@ def reorder_checks(page: Page, two: list[str]) -> None:
     page.evaluate(f"async () => {{ const {{ app }} = await import('./js/state.js'); const {{ emit }} = await import('./js/util.js'); app.draft.paths = {json.dumps(two)}; emit('draft'); }}")
 
 
-def thumbs_checks(page: Page) -> None:
-    """Settings → Device → Thumbnails on: the visible Library rows get a
-    first-frame canvas within 3 s, and the list still scrolls (new rows
-    get theirs). Off again after."""
-    goto_view(page, "settings/device")
-    check(not page.is_checked("#st-thumbs"), "thumbnails: off by default on a device")
-    page.check("#st-thumbs")
-    # On a device a thumbnail is a prepared copy or nothing: never the GIF.
-    gifs: list[str] = []
-    on_req = lambda r: "/gifs/" in r.url and gifs.append(r.url)
-    page.on("request", on_req)
-    goto_view(page, "library")
+# The Library's rows in view (not the pooled rows above and below it).
+IN_VIEW = ("[...document.querySelectorAll('#lib-list .vrow:not([hidden])')].filter(r => { const t = r.getBoundingClientRect().top,"
+           " l = document.querySelector('#lib-list').getBoundingClientRect(); return t >= l.top && t < l.bottom - 40; })")
+
+
+def card_requests(page: Page) -> dict:
+    """The page's requests for card files (/gifs/, /cache/): how many are in
+    flight now and at most, and every URL."""
+    io = {"n": 0, "max": 0, "urls": []}
+    card = lambda r: "/cache/" in r.url or "/gifs/" in r.url
+
+    def start(r):
+        if card(r):
+            io["n"] += 1
+            io["max"] = max(io["max"], io["n"])
+            io["urls"].append(urllib.parse.unquote(urllib.parse.urlsplit(r.url).path))
+
+    def end(r):
+        if card(r):
+            io["n"] -= 1
+    page.on("request", start)
+    page.on("requestfinished", end)
+    page.on("requestfailed", end)
+    return io
+
+
+def thumbs_stats(page: Page) -> dict:
+    return page.evaluate("import('./js/thumbs.js').then(m => ({ ...m.stats }))")
+
+
+def thumbs_checks(browser, base: str, errors: list[str]) -> None:
+    """Thumbnails (js/thumbs.js), on by default, in a fresh browser (an
+    empty thumbnail store) with the mock pacing card files at 400 KB/s in
+    the firmware's 2 KB pieces: the rows in view of Consoles get a first
+    frame; at most two requests in flight (the page's and the mock's
+    count); each read cut off after the first image (bytes per request);
+    the prepared copy, never the GIF when there is one; a fling fetches only
+    where it stops; a reload fetches nothing (IndexedDB); a hover plays a
+    short clip, also kept; the switch in Settings turns them off."""
+    page = new_page(browser, "laptop", errors)
+    io = card_requests(page)
+    page.goto(base + "/#settings/device")
+    page.wait_for_selector("#st-thumbs", timeout=20000)
+    check(page.is_checked("#st-thumbs"), "thumbnails: on by default")
+    get_json(base + "/mock/io?reset=1&kbps=400")
     pick_cat(page, "Consoles")
-    page.wait_for_function("document.querySelector('#lib-count').textContent.includes(' of ')", timeout=60000)
-    page.fill("#lib-search", "")
     t0 = time.time()
-    in_view = "[...document.querySelectorAll('#lib-list .vrow:not([hidden])')].filter(r => { const t = r.getBoundingClientRect().top, l = document.querySelector('#lib-list').getBoundingClientRect(); return t >= l.top && t < l.bottom - 40; })"
-    page.wait_for_function(f"{in_view}.slice(0, 6).every(r => r.querySelector('canvas.th[data-done]'))", timeout=3000)
-    check(True, f"thumbnails: six rows drawn in {time.time() - t0:.1f} s")
-    # The brightest drawn row (some GIFs start on a black frame).
+    page.wait_for_function(f"{IN_VIEW}.length >= 10 && {IN_VIEW}.every(r => r.querySelector('canvas.th[data-done]'))", timeout=20000)
+    rows = page.evaluate(f"{IN_VIEW}.map(r => r.dataset.path)")
+    page.wait_for_timeout(500)
+    m = get_json(base + "/mock/io")
+    whole = sum((CARD / cache_path(p).lstrip("/")).stat().st_size for p in rows if (CARD / cache_path(p).lstrip("/")).exists())
+    per = m["bytes"] / max(1, m["gets"])
+    check(True, f"thumbnails: {len(rows)} rows in view drawn in {time.time() - t0:.1f} s: {m['gets']} requests, {m['bytes']:,} B sent"
+          f" ({per:,.0f} B a request; their whole copies are {whole:,} B), {m['cut']} cut off")
+    check(m["gets"] <= len(rows) + 2, f"thumbnails: only the rows in view asked ({m['gets']} requests for {len(rows)} rows)")
+    check(io["max"] <= 2 and m["max"] <= 2, f"thumbnails: at most 2 requests in flight (page {io['max']}, mock {m['max']})")
+    check(per < 12 * 1024 and m["bytes"] < whole / 4, f"thumbnails: each read stops after the first frame ({per:,.0f} B a request)")
     lit = page.evaluate("""() => Math.max(0, ...[...document.querySelectorAll('#lib-list .vrow:not([hidden]) canvas.th[data-done="1"]')].map((c) => {
         const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let n = 0;
         for (let i = 0; i < d.length; i += 4) n += d[i] + d[i + 1] + d[i + 2] > 60; return n; }))""")
     check(lit > 50, f"thumbnails: a first frame drawn ({lit} lit px)")
+    copied = [u for u in io["urls"] if u.startswith("/gifs/") and (CARD / cache_path(u).lstrip("/")).exists()]
+    check(not copied, f"thumbnails: the prepared copy, never the GIF when there is one ({copied[:2]})")
     shot(page, "library-thumbs", "laptop")
-    first = row_path(page, "#lib-list", 0)
-    page.eval_on_selector("#lib-list", "e => { e.scrollTop = 4000; }")
-    page.wait_for_function(f"document.querySelector('#lib-list').scrollTop > 3000 && document.querySelector('#lib-list .vrow:not([hidden])').dataset.path !== {json.dumps(first)}", timeout=3000)
-    page.wait_for_function(f"{in_view}.slice(0, 6).every(r => r.querySelector('canvas.th[data-done]'))", timeout=3000)
-    check(True, "thumbnails: the list scrolls and the new rows get theirs")
-    page.remove_listener("request", on_req)
-    check(not gifs, f"thumbnails: no GIF fetched for one ({gifs[:2]})")
+    # A fling: nothing on the way, the screen where it stops.
+    get_json(base + "/mock/io?reset=1")
+    page.evaluate("""async () => { const l = document.querySelector('#lib-list');
+        for (let i = 0; i < 30; i++) { l.scrollTop += 4000; await new Promise((r) => setTimeout(r, 12)); } }""")
+    page.wait_for_function(f"{IN_VIEW}.length >= 10 && {IN_VIEW}.every(r => r.querySelector('canvas.th[data-done]'))", timeout=20000)
+    page.wait_for_timeout(500)
+    m = get_json(base + "/mock/io")
+    check(m["gets"] <= len(rows) + 2, f"thumbnails: a fling through {30 * 4000 // 44:,} rows fetches only where it stops ({m['gets']} requests)")
     page.eval_on_selector("#lib-list", "e => { e.scrollTop = 0; }")
+    # A reload: every one of them from the browser's store.
+    page.reload()
+    get_json(base + "/mock/io?reset=1")
+    io["urls"].clear()
+    pick_cat(page, "Consoles")
+    page.wait_for_function(f"{IN_VIEW}.length >= 10 && {IN_VIEW}.every(r => r.querySelector('canvas.th[data-done]'))", timeout=20000)
+    page.wait_for_timeout(500)
+    m, st = get_json(base + "/mock/io"), thumbs_stats(page)
+    check(m["gets"] == 0 and st["idb"] >= len(rows) - 1, f"thumbnails: after a reload none fetched again ({m['gets']} requests, {st['idb']} from the store)")
+    # Hover: a short clip over the row, read once.
+    # (A GIF that starts dark had its clip read with its still: a row without one.)
+    bare = page.evaluate("""async (paths) => {
+        const d = (await indexedDB.databases()).find((x) => x.name.startsWith('odmd-thumbs-'));
+        const db = await new Promise((r) => { const q = indexedDB.open(d.name); q.onsuccess = () => r(q.result); });
+        const out = [];
+        for (const p of paths) {
+            const rec = await new Promise((r) => { const q = db.transaction('t').objectStore('t').get(p); q.onsuccess = () => r(q.result); });
+            if (rec && rec.still && !rec.clip) out.push(p);
+        }
+        db.close();
+        return out; }""", rows)
+    get_json(base + "/mock/io?reset=1")
+    row = f"#lib-list .vrow[data-path={json.dumps(bare[0])}]"
+    page.hover(f"{row} .t")
+    page.wait_for_selector(f"{row} img.th", timeout=10000)
+    m = get_json(base + "/mock/io")
+    check(m["gets"] in (1, 2) and m["bytes"] <= 40 * 1024, f"thumbnails: a hover plays a clip ({m['gets']} request, {m['bytes']:,} B; {len(rows) - len(bare)} of {len(rows)} rows started dark and read theirs with the still)")
+    page.mouse.move(5, 5)
+    page.wait_for_selector(f"{row} img.th", state="detached", timeout=5000)
+    page.reload()
+    get_json(base + "/mock/io?reset=1")
+    pick_cat(page, "Consoles")
+    page.wait_for_selector(f"{row} canvas.th[data-done='1']", timeout=20000)
+    # (Once the page has settled: a scroll of the list, as its rows come, ends a hover.)
+    page.wait_for_timeout(1500)
+    page.hover(f"{row} .t")
+    page.wait_for_selector(f"{row} img.th", timeout=10000)
+    check(get_json(base + "/mock/io")["gets"] == 0, "thumbnails: the clip again after a reload, from the store")
+    get_json(base + "/mock/io?kbps=0")
     goto_view(page, "settings/device")
     page.uncheck("#st-thumbs")
     goto_view(page, "library")
-    check(page.locator("#lib-list .vrow:not([hidden]) canvas.th").count() == 0, "thumbnails: off again -> no canvases")
+    check(page.locator("#lib-list .vrow:not([hidden]) canvas.th").count() == 0, "thumbnails: off -> no canvases")
+    page.context.close()
+
+
+def tree_checks(browser, base: str, errors: list[str]) -> None:
+    """The Library's folder tree in a fresh browser: the folders (Live and
+    Effects after the card's, system ones last), ⊟, the keys (↓ → → ↓ Enter
+    ← ←), Consoles virtualised (3,781 GIFs, a few dozen rows in the page,
+    the last GIF reached by End), a link to a folder, Select's folder tick;
+    shots at laptop and phone widths."""
+    for size in ("laptop", "phone"):
+        page = new_page(browser, size, errors)
+        page.goto(base + "/#library")
+        page.wait_for_function(f"{TREE}?.folders.length > 2", timeout=30000)
+        page.click("#lib-fold")
+        page.wait_for_function(f"{TREE}.rows.every(r => !r.path)", timeout=5000)
+        folders = page.evaluate(f"{TREE}.folders.map(f => [f.cat, f.name])")
+        real = [f for f in folders if not f[0].startswith("_")]
+        check(real[-2:] == [["@", "Live"], ["@fx", "Effects"]] and len(real) > 2 and page.locator("#lib-cats, #lib-csel").count() == 0,
+              f"tree [{size}]: the card's folders, then Live and Effects, system ones last; no tabs, no select ({folders[-3:]})")
+        if size == "phone":
+            pick_cat(page, "Consoles")
+            shot(page, "library-tree", "phone")
+            page.context.close()
+            continue
+        ci = [f[0] for f in folders].index("Consoles")
+        page.focus("#lib-list .vdir >> nth=0")
+        for _ in range(ci):
+            page.keyboard.press("ArrowDown")
+        focus = page.evaluate("document.activeElement.dataset.cat")
+        page.keyboard.press("ArrowRight")
+        page.wait_for_function(f"{TREE}.rows.filter(r => r.path).length === 3781", timeout=30000)
+        exp = page.evaluate("document.activeElement.getAttribute('aria-expanded')")
+        check(focus == "Consoles" and exp == "true", f"tree: ↓ to Consoles ({focus}), → opens it (aria-expanded {exp})")
+        page.keyboard.press("ArrowRight")
+        page.keyboard.press("ArrowDown")
+        first = page.evaluate("document.activeElement.dataset.path")
+        page.keyboard.press("Enter")
+        page.wait_for_function(f"(document.querySelector('#lib-cap').dataset.shown || '') === {json.dumps(first.rsplit('/', 1)[-1] if first else '')}", timeout=20000)
+        check(first and first.startswith("/gifs/Consoles/"), f"tree: → steps in, ↓, Enter opens the details of {first}")
+        page.keyboard.press("ArrowLeft")
+        back = page.evaluate("document.activeElement.dataset.cat")
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_function(f"{TREE}.rows.every(r => !r.path)", timeout=5000)
+        check(back == "Consoles", f"tree: ← steps out to the folder ({back}), ← closes it")
+        # Virtualised: the model has every GIF, the page a screenful.
+        page.keyboard.press("ArrowRight")
+        page.wait_for_function(f"{TREE}.rows.filter(r => r.path).length === 3781", timeout=30000)
+        page.keyboard.press("End")
+        last = page.evaluate(f"{TREE}.rows.at(-1)")
+        page.wait_for_function("document.activeElement?.dataset?.cat || document.activeElement?.dataset?.path", timeout=5000)
+        dom = page.locator("#lib-list .vrow, #lib-list .vdir").count()
+        at = page.evaluate("document.activeElement.dataset.path || document.activeElement.dataset.cat")
+        check(dom <= 40 and at == (last.get("path") or last.get("cat")), f"tree: Consoles' 3,781 GIFs in {dom} rows; End reaches the last row ({at})")
+        shot(page, "library-tree", "laptop")
+        # A link to a folder: it alone, open, at the top.
+        page.goto(base + "/#library/" + urllib.parse.quote("NEW 2021"))
+        page.wait_for_function(f"(t => t && t.open.size === 1 && t.open.has('NEW 2021') && t.rows.some(r => r.path))({TREE})", timeout=30000)
+        top = page.evaluate("document.querySelector('#lib-list').scrollTop")
+        idx = page.evaluate(f"{TREE}.rows.findIndex(r => r.cat === 'NEW 2021' && !r.path)")
+        check(abs(top - idx * 44) < 2, f"tree: #library/NEW%202021 opens that folder at the top ({top} px, row {idx})")
+        # Select: a folder's tick takes every GIF in it.
+        page.click("#lib-select")
+        page.click("#lib-list .vdir[data-cat='NEW 2021'] input[type=checkbox]")
+        n = len(list((CARD / "gifs" / "NEW 2021").glob("*.gif")))
+        page.wait_for_function(f"document.querySelector('#lib-selbar b').textContent === '{n}'", timeout=10000)
+        check(page.is_checked("#lib-list .vdir[data-cat='NEW 2021'] input[type=checkbox]"), f"tree: Select's folder tick picks its {n} GIFs")
+        page.click("#lib-sel-done")
+        no_leaks(page, "library (tree)")
+        page.context.close()
+
+
+def entries(page: Page) -> list[str]:
+    return page.evaluate("async () => { const { app } = await import('./js/state.js'); return [...app.draft.paths]; }")
+
+
+def editor_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Playlist editing by browsing (js/pledit.js), in a fresh browser: + New
+    playlist, + Add GIFs (the folder tree beside the entries on a laptop):
+    three GIFs ticked in Arcade and added in that order (✓ on them in the
+    tree); a whole folder ticked (Pixel_Art); a search with a platform and
+    "Add all N shown" (those already in skipped, said in the toast);
+    thumbnails on the entries; Alt+↓ and ✕; saved, the file holding the
+    entries in order. Then the phone: the panes take turns."""
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#sets")
+    page.wait_for_selector("#sets-new", timeout=20000)
+    page.click("#sets-new")
+    page.wait_for_selector("#set-editor", state="visible", timeout=10000)
+    check(page.is_hidden("#set-add-pane") and page.locator("#set-add-list .vdir").count() == 0,
+          "editor: the Add pane (and its folder listing) only once asked for")
+    page.click("#set-add")
+    page.wait_for_selector("#set-add-pane", state="visible", timeout=5000)
+    page.wait_for_selector("#set-add-list .vdir[data-cat=Arcade]", timeout=20000)
+    check(page.is_visible("#set-ent-pane") and page.is_hidden("#sets-list"),
+          "editor: on a laptop the tree sits beside the entries, the playlist list steps aside")
+    page.click("#set-add-list .vdir[data-cat=Arcade]")
+    page.wait_for_selector("#set-add-list .vrow:not([hidden])", timeout=20000)
+    picks = [page.get_attribute(f"#set-add-list .vrow:not([hidden]) >> nth={i}", "data-path") for i in (2, 0, 1)]
+    for p in picks:
+        page.click(f"#set-add-list .vrow[data-path={json.dumps(p)}] .t")
+    check(page.inner_text("#set-add-ticked") == "Add 3 ticked", f"editor: three ticked ({page.inner_text('#set-add-ticked')})")
+    page.click("#set-add-ticked")
+    page.wait_for_function("document.querySelector('#set-count').textContent.startsWith('3 ')", timeout=5000)
+    marks = page.locator("#set-add-list .vrow:not([hidden]) i.inpl").count()
+    check(entries(page) == picks and marks == 3 and page.inner_text("#set-add-ticked") == "Add 0 ticked",
+          f"editor: added in the order ticked, ✓ on them in the tree ({marks})")
+    # A whole folder.
+    page.click("#set-add-list .vdir[data-cat=Arcade]")  # closed again
+    page.wait_for_selector("#set-add-list .vdir[data-cat=Pixel_Art]", timeout=5000)
+    page.click("#set-add-list .vdir[data-cat=Pixel_Art] input[type=checkbox]")
+    pix = sorted(f"/gifs/Pixel_Art/{p.name}" for p in (CARD / "gifs" / "Pixel_Art").glob("*.gif"))
+    page.wait_for_function(f"document.querySelector('#set-add-ticked').textContent === 'Add {len(pix)} ticked'", timeout=20000)
+    page.click("#set-add-ticked")
+    got = entries(page)
+    check(sorted(got[3:]) == pix and len(got) == 3 + len(pix), f"editor: a folder's tick adds its {len(pix)} GIFs")
+    # A search's results: every SNES Mario, from every folder.
+    page.fill("#set-add-q", "mario")
+    page.wait_for_selector("#set-add-chips .chip[data-platform=SNES]", timeout=60000)
+    page.click("#set-add-chips .chip[data-platform=SNES]")
+    page.wait_for_function("/^Add all [1-9]/.test(document.querySelector('#set-add-all').textContent)", timeout=20000)
+    n = int(page.inner_text("#set-add-all").split()[2].replace(",", ""))
+    want = sorted(f"/gifs/{p.parent.name}/{p.name}" for p in (CARD / "gifs").glob("*/*.gif")
+                  if "mario" in p.name.lower() and re.match(r"^(?:(?:HALLOWEEN|XMAS)_)?SNES_", p.name, re.I))
+    check(n == len(want), f"editor: 'mario' + SNES -> Add all {n} shown (the card has {len(want)})")
+    page.click("#set-add-all")
+    before = len(got)
+    got = entries(page)
+    check(sorted(got[before:]) == want, f"editor: Add all adds the {len(want)} results")
+    page.click("#set-add-all")
+    t = last_toast(page, "ok")
+    check(len(entries(page)) == len(got) and "0 added" in t and "already in it" in t, f"editor: adding them again adds none ('{t}')")
+    # Thumbnails on the entries, in view only.
+    in_view = IN_VIEW.replace("#lib-list", "#set-entries")
+    page.wait_for_function(f"{in_view}.length >= 5 && {in_view}.every(r => r.querySelector('canvas.th[data-done]'))", timeout=20000)
+    shot(page, "playlist-add", "laptop")
+    page.click("#set-add-done")
+    page.wait_for_selector("#set-add-pane", state="hidden", timeout=5000)
+    # Reorder and remove.
+    page.eval_on_selector("#set-entries", "e => { e.scrollTop = 0; }")
+    page.wait_for_function("document.querySelector('#set-entries .vrow:not([hidden])')._i === 0", timeout=5000)
+    page.focus("#set-entries .vrow:not([hidden]) >> nth=0 >> button.grip")
+    page.keyboard.press("Alt+ArrowDown")
+    order = entries(page)
+    check(order[:2] == [got[1], got[0]], "editor: Alt+↓ moves the first entry down")
+    page.hover("#set-entries .vrow:not([hidden]) >> nth=2")
+    gone = order[2]
+    page.click("#set-entries .vrow:not([hidden]) >> nth=2 >> button.rm")
+    order = entries(page)
+    check(gone not in order and len(order) == len(got) - 1, f"editor: ✕ removes {gone.rsplit('/', 1)[1]}")
+    page.fill("#set-name", "browse")
+    page.click("#set-save")
+    page.wait_for_selector("#sets-list [data-path='/sets/browse.txt']", timeout=30000)
+    f = overlay / "sets" / "browse.txt"
+    check(f.exists() and f.read_text().split("\n")[:-1] == order, f"editor: saved, sets/browse.txt holds the {len(order)} entries in order")
+    no_leaks(page, "playlists (add)")
+    page.context.close()
+    # The phone: one pane at a time.
+    phone = new_page(browser, "phone", errors)
+    phone.goto(base + "/#sets")
+    phone.click("#sets-list [data-path='/sets/browse.txt'] button.pl")
+    phone.wait_for_selector("#set-editor", state="visible", timeout=10000)
+    phone.click("#set-add")
+    phone.wait_for_selector("#set-add-list .vdir", timeout=20000)
+    check(phone.is_hidden("#set-entries") and phone.is_visible("#set-add-list"), "editor [phone]: Add GIFs takes the entries' place")
+    phone.click("#set-add-list .vdir[data-cat=Consoles]")
+    phone.wait_for_selector("#set-add-list .vrow:not([hidden]) canvas.th[data-done]", timeout=20000)
+    wide = phone.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+    check(wide <= 0, f"editor [phone]: no sideways scroll ({wide}px)")
+    shot(phone, "playlist-add", "phone")
+    phone.click("#set-add-done")
+    phone.wait_for_selector("#set-entries", state="visible", timeout=5000)
+    check(phone.is_hidden("#set-add-pane"), "editor [phone]: Done brings the entries back")
+    phone.context.close()
+    urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/browse.txt", method="DELETE"), timeout=30)
 
 
 PLAYING = "(document.querySelector('#sets-list .tag.act')?.closest('button.pl').textContent || '')"
@@ -1742,12 +2030,12 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
     """Library -> Live: the clocks and the scrolling text; the form; a preview;
     on the mock, sent to the panel (and POST /api/play directly)."""
     goto_view(page, "library")
-    page.wait_for_selector("#lib-cats [data-cat='@']", timeout=30000)
-    opts = page.eval_on_selector_all("#lib-cats [data-cat]", "els => els.map(e => [e.dataset.cat, e.textContent])")
+    page.wait_for_function(f"{TREE}?.folders.some(f => f.cat === '@')", timeout=30000)
+    opts = page.evaluate(f"{TREE}.folders.map(f => [f.cat, f.name])")
     # System lists (a leading "_", e.g. a card's _bench) sort after Live and Effects.
     real = [o for o in opts if not o[0].startswith("_")]
-    check(real[-2:] == [["@", "Live"], ["@fx", "Effects"]] and len(real) > 2 and page.locator("#lib-cat").count() == 0,
-          f"library: the category tabs end with Live, Effects (system lists after), and there is no category select ({opts[-3:]})")
+    check(real[-2:] == [["@", "Live"], ["@fx", "Effects"]] and len(real) > 2,
+          f"library: the folders end with Live, Effects (system lists after) ({opts[-3:]})")
     open_live(page)
     rows = live_rows(page)
     want = ["@clock", "@clock?seconds=1", "@clock?date=1", "@clock?style=small&seconds=1&date=1", "@text?msg=OpenDMD"]
@@ -2705,7 +2993,9 @@ def mock_pass(browser) -> None:
               "library overrides: reset all -> filelist.meta gone (or empty)")
         no_leaks(page, "library")
         shot(page, "library", "laptop")
-        thumbs_checks(page)
+        tree_checks(browser, base, errors)
+        thumbs_checks(browser, base, errors)
+        editor_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.
         fresh = new_page(browser, "laptop", errors)
@@ -5190,17 +5480,14 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     page.click("#set-back")
     page.wait_for_function("location.hash === '#sets'", timeout=5000)
     check(page.is_visible("#sets-list") and page.is_hidden("#set-editor"), "phone playlists: ‹ Playlists goes back to the list")
-    # The Library's categories are a select on a phone, the chips beneath.
+    # The Library's folders on a phone: a tap opens one, another tap closes it.
     goto_view(page, "library")
-    cat = page.input_value("#lib-csel")
-    check(page.is_visible("#lib-csel") and page.is_hidden("#lib-cats") and cat == page.get_attribute("#lib-cats .tab.on", "data-cat"),
-          f"phone library: the category is a select showing {cat!r}, the tabs hidden")
-    other = page.eval_on_selector("#lib-csel", "(e, c) => [...e.options].map(o => o.value).find(v => v != c && v[0] != '@' && v[0] != '_')", cat)
-    page.select_option("#lib-csel", other)
-    page.wait_for_function(f"document.querySelector('#lib-cats .tab.on')?.dataset.cat === {json.dumps(other)}", timeout=20000)
-    check(True, f"phone library: choosing {other!r} in the select opens it")
-    page.select_option("#lib-csel", cat)
-    page.wait_for_function(f"document.querySelector('#lib-cats .tab.on')?.dataset.cat === {json.dumps(cat)}", timeout=20000)
+    pick_cat(page, "Consoles")
+    other = page.evaluate(f"(f => f[f.indexOf('Consoles') - 1])({TREE}.folders.map(f => f.cat))")  # the folder just above
+    page.click(f"#lib-list .vdir[data-cat={json.dumps(other)}]")
+    page.wait_for_function(f"{TREE}.open.has({json.dumps(other)}) && {TREE}.rows.some(r => r.path?.startsWith('/gifs/' + {json.dumps(other)} + '/'))", timeout=20000)
+    check(page.locator("#lib-csel, #lib-cats").count() == 0, f"phone library: a tap on {other!r} opens it beside Consoles, no select or tabs")
+    pick_cat(page, "Consoles")
     lh = page.eval_on_selector("#lib-list", "e => Math.round(e.getBoundingClientRect().bottom)")
     nav = page.eval_on_selector("#nav", "e => Math.round(e.getBoundingClientRect().top)")
     check(nav - 120 <= lh <= nav, f"phone library: the list reaches down to the nav ({lh} vs nav {nav})")
@@ -5213,7 +5500,7 @@ def phone_pass(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(150)
     end = page.eval_on_selector("#lib-r2", "e => [e.classList.contains('more'), e.classList.contains('less')]")
     page.eval_on_selector("#lib-r2", "e => { e.scrollLeft = 0; }")
-    check(more is not False and end in ([False, True], [False, False]), f"phone library: the tab row fades the side with more off it (start {more}, end {end})")
+    check(more is not False and end in ([False, True], [False, False]), f"phone library: the chip row fades the side with more off it (start {more}, end {end})")
     check(not page.is_visible("#lib-side"), "phone library: no Details until a GIF is picked")
     page.click("#lib-list .vrow:not([hidden]) >> nth=0")
     page.wait_for_selector("#lib-side.open #lib-d-title", timeout=10000)

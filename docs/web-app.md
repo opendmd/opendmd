@@ -84,25 +84,50 @@ button lands on them.
 - **Library** — the GIFs on the player, and only those (finding new art is
   **Create Art**'s). One row across the top: a search field (titles, normalised
   the way the core matches them; when nothing matches, a link searches the
-  web for the same words in Create Art) and **Add GIFs**; under it the
-  categories as tabs (the card's folders under `gifs/`, then *Live* and
-  *Effects*; on a phone a select, which shows the whole name) and the
-  platform chips. A search is of every GIF on the card
-  (each category listed once, then kept): the tabs give way to category
-  facets and the chips become platform facets, each with its match count,
-  most first, combining (category AND platform); clearing the box brings
-  back the tab and chips as they were. The list (virtualised: thousands of
-  rows) shows each GIF's title, platform and favourite/hidden marks. Pick one
-  and the **Details** panel (the right-hand column; a sheet from the bottom
-  on a phone) plays it with the panel look and shows its title, platform,
-  category, author and file name, with **Send to panel**, **Add to
-  playlist…**, **Edit in Create Art**, **Favourite** and **Hide** (in the
-  playlist chosen beside them), Smooth motion where it applies, **Edit
+  web for the same words in Create Art), the count, **⊟** (close every
+  folder), **Select** and **Add GIFs**; under it the platform chips. The
+  list is a **tree of folders** (`js/tree.js`): the card's folders under
+  `gifs/` by human name, then *Live* and *Effects*, then the system `_x`
+  ones, each with its count (the last one seen, remembered by the browser,
+  until the folder is listed again); a folder opens into its GIFs (each
+  folder is listed once a session, when first opened, and shared with the
+  playlist editor). The rows are virtualised: Consoles' 3,781 GIFs are a
+  screenful of elements. `#library/<folder>` opens one folder at the top
+  with the others closed. Keys: ↑/↓, Home/End, PgUp/PgDn, → opens a folder
+  or steps into it, ← closes it or steps out, Enter opens a folder or a
+  GIF's details, Space ticks in Select mode (`role="tree"`, `treeitem`,
+  `aria-level`, `aria-expanded`). A search is of every GIF on the card
+  (each folder listed once, one at a time, then kept): only the folders
+  with matches show, open, with their match counts — the category facets —
+  and the platform chips count the matches, most first, and narrow them;
+  clearing the box clears the platforms picked with it. Each GIF row shows
+  a thumbnail (below), its title, platform and favourite/hidden marks. Pick
+  one and the **Details** panel (the right-hand column; a sheet from the
+  bottom on a phone) plays it with the panel look and shows its title,
+  platform, category, author and file name, with **Send to panel**, **Add
+  to playlist…**, **Edit in Create Art**, **Favourite** and **Hide** (in
+  the playlist chosen beside them), Smooth motion where it applies, **Edit
   details…** and **Delete…**. **Select** (or a long press on a row, on a
-  phone) shows a checkbox on every row and a bar with **Select all shown**,
-  **Add to playlist** and **Done**: a tap then picks a row instead of opening
-  it. A GIF whose name has no title, or only a number (`N64_LOGO_01.gif`),
-  is listed by its platform and flags: "N64 Logo 01".
+  phone) shows a checkbox on every row and folder (a folder's ticks every
+  GIF in it that the search shows) and a bar with **Select all shown**,
+  **Add to playlist** and **Done**: a tap then picks a row instead of
+  opening it. A GIF whose name has no title, or only a number
+  (`N64_LOGO_01.gif`), is listed by its platform and flags: "N64 Logo 01".
+
+  **Thumbnails** (`js/thumbs.js`; on by default, Settings → Device →
+  *Thumbnails in the Library and playlists*, per browser): the first frame,
+  64×16 CSS px, and on hover or keyboard focus (350 ms) a short clip of the
+  first frames. Light on the device by design
+  ([`research/library-playlists.md`](research/library-playlists.md)): only
+  rows in view ask, at most two requests in flight, none while a list is
+  flung; the prepared copy first (`cachePathFor`), the GIF on a 404, read as
+  a stream and **cut off once the first image is in** (~1 KB of a copy that
+  averages ~87 KB); decoded by the browser (a GIF that starts dark reads on to its clip, ≤ 32 KB, and shows its first lit frame where the browser has WebCodecs' `ImageDecoder`); kept in IndexedDB per card
+  (`odmd-thumbs-<card>`), keyed by path with the file's size, capped at
+  24 MB (least recently used out), so a GIF is asked for once, across
+  visits. A Details preview, which reads the whole file anyway, re-makes a
+  thumbnail whose size no longer matches; the app's own Add, Edit details
+  and Delete forget it.
 
   **A GIF's details are its file name** —
   `/gifs/<Category>/<PLATFORM>_<Title_Words>_<NN>[_<author>].gif`, which
@@ -122,22 +147,30 @@ button lands on them.
 - **Playlists** (`#sets`) — the card's own (`filelist.txt` as **All files**,
   the default; `filelist.hall` **Halloween**; `filelist.xmas` **Christmas**;
   any other `filelist.*` by file name; an obsolete `filelist.odm.*` never)
-  and `/sets/*.txt`. A tap opens one in the editor, a screen of its own
-  (`#sets/edit`: on a phone it replaces the list, with **‹ Playlists** to go
-  back; on a laptop it is the right-hand column, empty until something is
-  open). Its header names the playlist; the card's own are saved as a copy
-  (**Save a copy as**, prefilled "Halloween copy"). **+ New playlist** opens
-  an empty one with a Name field. **Add by filter…** is a sheet over the
-  editor that runs the core's `Filter` (platforms, categories, title words,
-  **Leave out** flags, shuffle with a seed, at most N) over any playlist; its
-  last row is **Add N GIFs** / **Replace with N GIFs**. Reorder, remove
-  (**Arrange**), **Save** / **Save & play** (`PUT /api/sets/<name>`, then
-  `PUT /api/config {"set": …}` — `""` for All files, a root manifest's file
-  name, or a set's name — which the device applies in a few seconds), kept
-  in reach at the bottom; a list row's **…** has **Play** and **Delete…**. Deleting
-  the active playlist switches the player back to All files first. Switching
-  is disabled while status says an index is `building`. Entries are always
-  GIF paths.
+  and `/sets/*.txt`. A tap opens one in the editor (`js/pledit.js`, loaded
+  the first time one opens), a screen of its own (`#sets/edit`: on a phone
+  it replaces the list, with **‹ Playlists** to go back; on a laptop it is
+  the right-hand column, empty until something is open). Its header names
+  the playlist; the card's own are saved as a copy (**Save a copy as**,
+  prefilled "Halloween copy"). **+ New playlist** opens an empty one with a
+  Name field. The entries show their thumbnails; drag ⠿ (or Alt+↑/↓) to
+  reorder, ✕ to remove, a tap picks them for **Arrange** (Shuffle, Sort
+  A–Z, Picked to top, Remove picked, Clear). **+ Add GIFs** opens the same
+  folder tree as the Library, with a checkbox on every GIF and folder (on a
+  laptop beside the entries, the playlist list stepping aside; on a phone
+  in their place, **Done** to go back): tick GIFs or whole folders and
+  **Add N ticked**, or search (title words, platform chips) and **Add all N
+  shown**; a GIF already in the playlist has a ✓ and is not added twice.
+  **Add by filter…** is a sheet over the editor that runs the core's
+  `Filter` (platforms, categories, title words, **Leave out** flags,
+  shuffle with a seed, at most N) over any playlist; its last row is **Add
+  N GIFs** / **Replace with N GIFs**. **Save** / **Save & play** (`PUT
+  /api/sets/<name>`, then `PUT /api/config {"set": …}` — `""` for All files,
+  a root manifest's file name, or a set's name — which the device applies
+  in a few seconds), kept in reach at the bottom; a list row's **…** has
+  **Play** and **Delete…**. Deleting the active playlist switches the
+  player back to All files first. Switching is disabled while status says
+  an index is `building`. Entries are always GIF paths (or live items).
 - **Settings** — four tabs (`#settings/<tab>`; bare `#settings` is the
   first), only the open one in the page, everything saved as it changes
   with a fading **Saved ✓** in the card's heading:
@@ -378,7 +411,11 @@ sizes, which are what crosses the WiFi: the wasm module plus its generated JS
 glue at most 116 KB, the hand-written JS and CSS at most 56 KB; the Studio's
 own wasm at most 150 KB and its JS and CSS at most 24 KB, loaded only when it
 opens; the Add GIFs / Edit details dialogs at most 8 KB, loaded when first
-used. Today that is 115.8 KB, 51.3 KB, 110.0 KB, 9.3 KB and 6.3 KB. The game name
+used; the Library's folder tree with the thumbnails (`js/tree.js`,
+`js/thumbs.js`, `tree.css`) at most 12 KB and the playlist editor
+(`js/pledit.js`) at most 6 KB, loaded with the Library and when a playlist
+first opens (11.1 KB and 5.9 KB on 2026-10-26, which took the JS and CSS
+line from 59.6 to 53.7 KB). Today that is 115.8 KB, 51.3 KB, 110.0 KB, 9.3 KB and 6.3 KB. The game name
 lists (2.4 MB, 527 KB gzipped, one platform fetched at a time) are printed
 without a budget. `make web` writes a `<file>.gz` beside each file, and the
 player sends those in preference.
@@ -442,4 +479,8 @@ scan, and the card's files — with the firmware's JSON shapes and quirks.
 `--overlay dir` sends every write there so the card copy is never modified;
 `--strict` drops the mock's few deliberate deviations and adds the
 firmware's directory-scan cost to stat and play; `--proxy URL` forwards
-everything but the app to a real device.
+everything but the app to a real device. `GET /mock/io` (mock only, no
+firmware route) counts the card-file requests in flight and at most and the
+bytes actually sent (a reader that hangs up stops the count); `?reset=1`
+zeroes it, `&kbps=N` paces card files in the firmware's 2 KB pieces, so the
+smoke measures the thumbnails' early cut-off as a device would see it.
