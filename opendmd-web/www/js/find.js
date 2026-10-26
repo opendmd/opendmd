@@ -29,7 +29,7 @@ const GC_LIMIT = 300;
 export const PLATFORMS = ['MD', 'SNES', 'GB', 'GBC', 'GBA', 'SATURN', 'NDS', 'NES', 'SMS', 'PCE', 'PS1', 'N64', 'ARCADE'];
 const RAW = 'https://raw.githubusercontent.com/libretro-thumbnails/';
 // The index's format is in its address: a web app asks for the version it
-// reads (tools/site.py ART_INDEX_FORMAT; a new shape is a new version).
+// reads (tools/site.py ART_INDEX_FORMATS; a new shape is a new version).
 const ART_INDEX = 'art-index/v1/';
 const KINDS = [[1, 'Named_Titles', 'Title screen'], [2, 'Named_Snaps', 'In the game'], [4, 'Named_Boxarts', 'Box'], [8, 'Named_Logos', 'Logo']];
 

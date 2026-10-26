@@ -22,6 +22,9 @@ printf 'stale\n' > "$tmp/seed/stale.html"
 mkdir -p "$tmp/seed/dev/api"
 printf '<p>API of 0.9.0</p>\n' > "$tmp/seed/dev/api/v0.9.0.html"
 printf 'name: old\n' > "$tmp/seed/.github/workflows/gallery-check.yml"
+mkdir -p "$tmp/seed/art-index/v0" "$tmp/seed/art-index/v1"
+printf '{"old":0}\n' > "$tmp/seed/art-index/v0/GB.json"
+printf '{"names":"old"}\n' > "$tmp/seed/art-index/v1/GB.json"
 printf -- '-- name: Theirs\n-- description: A contribution\n-- author: @someone\n-- licence: CC0-1.0\ngray(x)\n' > "$tmp/seed/gallery/theirs.psi"
 g -C "$tmp/seed" add -A && g -C "$tmp/seed" commit -qm seed && g -C "$tmp/seed" push -q origin HEAD:main
 
@@ -33,6 +36,8 @@ site() { # a site build: its version, a page, and the public repo's API pages (a
   printf '{"version": "9.9.9"}\n' > "$tmp/site/install/release.json"
   printf '<p>%s</p>\n' "$1" > "$tmp/site/index.html"
   printf '<p>share</p>\n' > "$tmp/site/f/index.html"
+  mkdir -p "$tmp/site/art-index/v1"
+  printf '{"names":"%s"}\n' "$1" > "$tmp/site/art-index/v1/GB.json"
 }
 publish() {
   # (An identity of its own: CI's checkout has none for site-publish.sh to copy.)
@@ -48,6 +53,8 @@ look
 [ ! -e "$tmp/look/stale.html" ] || fail "a file the site no longer has was kept"
 [ -f "$tmp/look/gallery/theirs.psi" ] || fail "the first publish removed a contribution"
 [ "$(cat "$tmp/look/dev/api/v0.9.0.html" 2>/dev/null)" = "<p>API of 0.9.0</p>" ] || fail "a publish removed an earlier release's API page"
+[ "$(cat "$tmp/look/art-index/v0/GB.json" 2>/dev/null)" = '{"old":0}' ] || fail "a publish removed an art index format the site no longer builds"
+[ "$(cat "$tmp/look/art-index/v1/GB.json" 2>/dev/null)" = '{"names":"v1"}' ] || fail "a publish did not refresh the art index"
 cmp -s "$tmp/look/gallery/README.md" site/public-repo/gallery/README.md || fail "gallery/README.md is not ours"
 cmp -s "$tmp/look/.github/workflows/gallery-check.yml" site/public-repo/.github/workflows/gallery-check.yml || fail "the workflow is not ours"
 cmp -s "$tmp/look/.github/workflows/pages.yml" site/public-repo/.github/workflows/pages.yml || fail "the Pages workflow is not ours"
@@ -137,4 +144,4 @@ CARGO_HOME="$tmp/cargo" RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-stable} cargo build
   --manifest-path "$tmp/look/.github/gallery-check/opendmd-gallery/Cargo.toml" --target-dir "$tmp/target" ||
   fail "the vendored checker does not build offline"
 "$tmp/target/release/opendmd-gallery" check "$tmp/look/gallery/merged.psi" 2>/dev/null || fail "the vendored checker refused a good file"
-echo "site-publish-test: ok (publishes kept gallery/, .github/ and earlier releases' dev/api/ pages; only a release froze its own; the vendored checker builds offline)"
+echo "site-publish-test: ok (publishes kept gallery/, .github/ and earlier releases' dev/api/ pages and every art-index/ format, refreshed; only a release froze its own; the vendored checker builds offline)"

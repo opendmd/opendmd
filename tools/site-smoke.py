@@ -268,6 +268,7 @@ ART_PLATFORMS = ("MD", "SNES", "GB", "GBC", "GBA", "SATURN", "NDS", "NES", "SMS"
 def art_index(browser, base: str, site: Path, errors: list[str]) -> None:
     """The game name index at art-index/v1/, and the demo using it same-origin."""
     bad = []
+    cors = None
     for plat in ART_PLATFORMS:
         f = site / "art-index/v1" / f"{plat}.json"
         src = ROOT / "opendmd-web/art-index" / f"{plat}.json"

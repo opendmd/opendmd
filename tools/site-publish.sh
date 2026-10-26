@@ -28,6 +28,13 @@
 #   dev/api.html would not list it (build it with API_ARCHIVE, see the
 #   refusal).
 #
+# - art-index/: Create Art's game name index, one folder per format
+#   (art-index/v<N>/, tools/site.py ART_INDEX_FORMATS). Each folder the
+#   site carries is copied in (files added and refreshed, never deleted),
+#   and a folder the site no longer builds stays: web apps already on
+#   players ask for the format they read, so a published format is never
+#   removed by a publish.
+#
 # Commits as "Site <release>" only when something changed.
 # tools/site-publish-test.sh runs it against a local bare repository
 # (SITE_PUBLISH_ALLOW_DIRTY=1 is for that test only).
@@ -82,7 +89,12 @@ git -C "$work" config user.email "$(git config user.email)"
 # (rsync never deletes what it excludes.)
 # --checksum: a file checked out and rewritten in the same second at the same size
 # would pass rsync's size+mtime test and keep its old content.
-rsync -a --checksum --delete --exclude /.git --exclude /gallery/ --exclude /.github/ --exclude /dev/api/ "$site"/ "$work"/
+rsync -a --checksum --delete --exclude /.git --exclude /gallery/ --exclude /.github/ --exclude /dev/api/ --exclude /art-index/ "$site"/ "$work"/
+# The art index: refreshed, never deleted (see art-index/ above).
+if [ -d "$site/art-index" ]; then
+  mkdir -p "$work/art-index"
+  rsync -a --checksum "$site/art-index"/ "$work/art-index"/
+fi
 api=dev/api
 if [ -d "$site/$api" ]; then
   mkdir -p "$work/$api"

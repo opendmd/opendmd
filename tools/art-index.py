@@ -24,10 +24,11 @@ thumbnails.libretro.com, sends `Access-Control-Allow-Origin: *`).
 
 `v1` is the format above. A web app asks for the format it reads, so a
 change to the shape (a key added, renamed or reinterpreted) is a new
-version: bump ART_INDEX_FORMAT in tools/site.py and `ART_INDEX` in
-find.js together, and keep publishing the old version's files for the web
-apps already on players. tools/site.py refuses files that are not exactly
-this shape.
+version: a new entry in ART_INDEX_FORMATS in tools/site.py (its own
+source folder and validator; the old entry stays, so the web apps already
+on players keep their format) and `ART_INDEX` in find.js. tools/site.py
+refuses files that are not exactly their format's shape, and
+site-publish.sh never deletes a published format.
 
 Why a prepared index and not the GitHub API (which pages can read): one
 folder's tree is 1.3 MB of JSON (SNES titles alone; 175 KB gzipped), a

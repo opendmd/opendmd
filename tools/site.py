@@ -45,9 +45,10 @@
                pack; the web app on a player fetches it from here (GitHub
                Pages sends `Access-Control-Allow-Origin: *` and compresses
                JSON), the demo same-origin. `v1` is the format
-               (ART_INDEX_FORMAT): each file is checked to be exactly that
-               shape, so a changed format cannot be published under the old
-               version an older web app asks for
+               (ART_INDEX_FORMATS: each format its own source folder and
+               validator, every one published, so a new format cannot drop
+               an old one; site-publish.sh never deletes art-index/): each
+               file is checked to be exactly its format's shape
 - /art/        the landing page's tiles and the wordmark (tools/site-art.py: recordings of the
                panel's own effects and live items, and CC0 sprites), drawn
                as LEDs by CSS
@@ -195,12 +196,26 @@ FILES = {
 # The licences page (licenses/index.html), linked from every page's footer.
 LICENCES_PAGE = "licenses/index.html"
 # Create Art's game name index (tools/art-index.py): published at
-# art-index/v<ART_INDEX_FORMAT>/<PLATFORM>.json. The web app's find.js asks
-# for that version (`ART_INDEX`); bump both together when the shape changes,
-# and keep publishing the old version for the web apps already on players.
-ART_INDEX_SRC = ROOT / "opendmd-web/art-index"
-ART_INDEX_FORMAT = 1
+# art-index/v<N>/<PLATFORM>.json for every format N in ART_INDEX_FORMATS.
+# The web app's find.js asks for the one it reads (`ART_INDEX`). A new shape
+# is a new entry here (its own source folder and validator) and a new
+# `ART_INDEX` in find.js; the older entries stay, so the web apps already on
+# players keep their format (and site-publish.sh never deletes art-index/).
 ART_INDEX_PLATFORMS = ("MD", "SNES", "GB", "GBC", "GBA", "SATURN", "NDS", "NES", "SMS", "PCE", "PS1", "N64", "ARCADE")
+
+
+def art_index_v1(d) -> bool:
+    """Format 1: {"repo", "names", "kinds"}, one hex digit of kinds per name."""
+    return (isinstance(d, dict) and set(d) == {"repo", "names", "kinds"} and isinstance(d["repo"], str)
+            and isinstance(d["names"], list) and all(isinstance(n, str) for n in d["names"])
+            and isinstance(d["kinds"], str) and len(d["kinds"]) == len(d["names"])
+            and re.fullmatch(r"[0-9a-f]*", d["kinds"]) is not None)
+
+
+# format -> (source folder, validator)
+ART_INDEX_FORMATS = {
+    1: (ROOT / "opendmd-web/art-index", art_index_v1),
+}
 LICENCES = """# Licences
 
 OpenDMD is open source: [MIT](../LICENSE-MIT.txt) or [Apache 2.0](../LICENSE-APACHE.txt), at your option.
@@ -722,26 +737,21 @@ def api_pages(out: Path, info: dict, art: dict, archive: Path | None, freeze: st
 
 
 def write_art_index(out: Path) -> None:
-    """Create Art's game name index: art-index/v<format>/<PLATFORM>.json,
-    copied byte for byte (compact JSON; Pages gzips it on the way), each
-    checked to be format 1's shape: {"repo", "names", "kinds"}, one hex
-    digit of kinds per name."""
-    dst = out / f"art-index/v{ART_INDEX_FORMAT}"
-    dst.mkdir(parents=True)
-    have = sorted(p.stem for p in ART_INDEX_SRC.glob("*.json"))
-    if have != sorted(ART_INDEX_PLATFORMS):
-        raise SystemExit(f"{ART_INDEX_SRC}: expected {sorted(ART_INDEX_PLATFORMS)}, found {have}")
-    for plat in ART_INDEX_PLATFORMS:
-        src = ART_INDEX_SRC / f"{plat}.json"
-        d = json.loads(src.read_text(encoding="utf-8"))
-        ok = (isinstance(d, dict) and set(d) == {"repo", "names", "kinds"} and isinstance(d["repo"], str)
-              and isinstance(d["names"], list) and all(isinstance(n, str) for n in d["names"])
-              and isinstance(d["kinds"], str) and len(d["kinds"]) == len(d["names"])
-              and re.fullmatch(r"[0-9a-f]*", d["kinds"]) is not None)
-        if not ok:
-            raise SystemExit(f"{src}: not art index format {ART_INDEX_FORMAT} (a new shape is a new version: "
-                             "ART_INDEX_FORMAT here and ART_INDEX in find.js)")
-        shutil.copyfile(src, dst / src.name)
+    """Create Art's game name index: art-index/v<N>/<PLATFORM>.json for every
+    format in ART_INDEX_FORMATS, copied byte for byte (compact JSON; Pages
+    gzips it on the way), each file checked by its format's validator."""
+    for fmt, (srcdir, valid) in ART_INDEX_FORMATS.items():
+        dst = out / f"art-index/v{fmt}"
+        dst.mkdir(parents=True)
+        have = sorted(p.stem for p in srcdir.glob("*.json"))
+        if have != sorted(ART_INDEX_PLATFORMS):
+            raise SystemExit(f"{srcdir}: expected {sorted(ART_INDEX_PLATFORMS)}, found {have}")
+        for plat in ART_INDEX_PLATFORMS:
+            src = srcdir / f"{plat}.json"
+            if not valid(json.loads(src.read_text(encoding="utf-8"))):
+                raise SystemExit(f"{src}: not art index format {fmt} (a new shape is a new format: "
+                                 "an entry in ART_INDEX_FORMATS and ART_INDEX in find.js)")
+            shutil.copyfile(src, dst / src.name)
 
 
 def main() -> None:
