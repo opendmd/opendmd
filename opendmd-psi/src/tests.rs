@@ -486,7 +486,10 @@ fn worst_case_formulas() {
         let src = f();
         let n = crate::worst::path_len(&src);
         assert!(
-            matches!(name, "parts" | "nested" | "parts in layers") || (1900..=2048).contains(&n),
+            matches!(
+                name,
+                "parts" | "nested" | "nested digit" | "parts in layers"
+            ) || (1900..=2048).contains(&n),
             "{name}: {n} B"
         );
         match compile(&src) {
@@ -501,6 +504,13 @@ fn worst_case_formulas() {
         }
     }
     assert!(compile(&crate::worst::many_locals()).is_ok());
+    // As deep as `sin(` nesting goes.
+    let d = crate::worst::nested_digit();
+    assert_eq!(
+        d.matches("digit(").count(),
+        crate::worst::nested().matches("sin(").count(),
+        "{d}"
+    );
 }
 
 // --- Layers and what is under ---------------------------------------------------

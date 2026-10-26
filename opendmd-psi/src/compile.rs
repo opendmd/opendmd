@@ -1536,7 +1536,9 @@ impl<'s> Parser<'s> {
         // Functions added after formulas were saved stay settable names
         // (a call is still the function): a saved `glyph = …` compiles.
         if CONSTS.iter().any(|e| e.0 == name)
-            || FUNCS.iter().any(|e| e.0 == name && !LATER_FUNCS.contains(&name))
+            || FUNCS
+                .iter()
+                .any(|e| e.0 == name && !LATER_FUNCS.contains(&name))
             || COLOURS.iter().any(|e| e.0 == name)
             || KEYWORDS.contains(&name)
         {
