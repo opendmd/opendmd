@@ -116,10 +116,6 @@ pub struct Panel {
     sync: ScanSync,
 }
 
-/// The scan position is read, blits judged and (with `panel_sync`)
-/// synchronised only in builds with the `panel-sync` feature.
-const SCAN: bool = cfg!(feature = "panel-sync");
-
 /// The scan, for refresh-synchronised blits ([`opendmd_core::scan`]):
 /// whether to wait for a clear start, and the scan time of a row pair (0:
 /// the shim cannot read the scan position, so nothing waits and nothing
@@ -158,7 +154,7 @@ pub fn scan_json() -> String {
     use counters::*;
     use std::sync::atomic::Ordering::Relaxed;
     let row_us = ROW_US.load(Relaxed);
-    if !SCAN || row_us == 0 {
+    if row_us == 0 {
         return "null".into();
     }
     format!(
@@ -268,13 +264,9 @@ impl Panel {
             sync: ScanSync {
                 on: false,
                 // SAFETY: the shim's set-up and a value it set; after init.
-                row_us: if SCAN {
-                    unsafe {
-                        hub75::hub75_scan_init();
-                        hub75::hub75_scan_row_us()
-                    }
-                } else {
-                    0
+                row_us: unsafe {
+                    hub75::hub75_scan_init();
+                    hub75::hub75_scan_row_us()
                 },
             },
         };
@@ -693,7 +685,7 @@ fn push(bytes: &[u8], map: &DirtyMap, look: Look, sync: &mut ScanSync, budget_us
     let row_of = |y: usize| &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
     let tinted = look != Look::Colour;
     let full_row = |y: usize| rows & (1 << y) != 0 && map.row_spans(y).eq([(0, WIDTH)]);
-    let scan = SCAN && sync.row_us > 0;
+    let scan = sync.row_us > 0;
     let pacer = if scan && sync.on && budget_us > 0 {
         pace_plan(pairs, tinted, sync.row_us, budget_us)
     } else {
