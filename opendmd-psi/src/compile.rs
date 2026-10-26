@@ -34,7 +34,7 @@ pub struct Error {
 }
 
 impl Error {
-#[inline(never)]
+    #[inline(never)]
     fn new(start: usize, end: usize, msg: impl Into<String>) -> Error {
         Error {
             start,
@@ -714,7 +714,7 @@ impl Dag {
         self.nodes[id as usize].level
     }
 
-#[inline(never)]
+    #[inline(never)]
     fn konst(&self, id: Id) -> Option<i32> {
         let n = &self.nodes[id as usize];
         (n.code == K_CONST).then_some(n.val)
@@ -932,13 +932,21 @@ impl Dag {
             }
             return Ok(acc);
         }
-        self.picks.push(opts);
+        // The same choices, the same table (a colour expression reads a
+        // pick three times: one node, one step).
+        let b = match self.picks.iter().position(|p| *p == opts) {
+            Some(j) => j,
+            None => {
+                self.picks.push(opts);
+                self.picks.len() - 1
+            }
+        };
         let why = self.nodes[k as usize].why;
         self.push(
             Node {
                 code: code::PICK,
                 a: k,
-                b: (self.picks.len() - 1) as Id,
+                b: b as Id,
                 c: 0,
                 val: 0,
                 level: LV_PIXEL,
@@ -1073,12 +1081,12 @@ fn infix_bp(t: Tok) -> Option<(u8, u8, u8)> {
 }
 
 impl<'s> Parser<'s> {
-#[inline(never)]
+    #[inline(never)]
     fn peek(&self) -> Token {
         self.toks[self.pos]
     }
 
-#[inline(never)]
+    #[inline(never)]
     fn next(&mut self) -> Token {
         let t = self.toks[self.pos];
         if self.pos + 1 < self.toks.len() {
@@ -1091,7 +1099,7 @@ impl<'s> Parser<'s> {
         sub(self.src, t.start, t.end)
     }
 
-#[inline(never)]
+    #[inline(never)]
     fn line_of(&self, at: usize) -> usize {
         sub(self.src, 0, at).matches('\n').count() + 1
     }
@@ -1162,7 +1170,7 @@ impl<'s> Parser<'s> {
 
     /// A `(` whose `)` was expected at `found` on a later line: the
     /// newline was swallowed, so say which bracket is open.
-#[inline(never)]
+    #[inline(never)]
     fn unclosed(&self, open: Token, found: Token) -> Result<(), Error> {
         if found.tok == Tok::Eof || self.line_of(found.start) > self.line_of(open.start) {
             return self.err(open, "this `(` is never closed — add `)`");
@@ -1178,7 +1186,7 @@ impl<'s> Parser<'s> {
     }
 
     /// An expression (Pratt): operators binding tighter than `min_bp`.
-#[inline(never)]
+    #[inline(never)]
     fn expr(&mut self, min_bp: u8) -> Result<Id, Error> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
@@ -1285,7 +1293,7 @@ impl<'s> Parser<'s> {
 
     /// Whether names set in `scope` can be seen here: this scope's and its
     /// parents', up to the part it is in (a part sees nothing outside it).
-        fn visible(&self, scope: u16) -> bool {
+    fn visible(&self, scope: u16) -> bool {
         let mut s = self.scope;
         loop {
             if s == scope {
