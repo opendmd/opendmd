@@ -53,7 +53,13 @@ psi = ["opendmd-core/psi"]
 # `POST /api/card/full-speed?test_errors=N` (`cardspeed.rs`). On for
 # `make fw-build`/`fw-flash`/`fw-clippy` (with `dev-credentials`); a
 # release measurement build adds it with `FW_RELEASE_FEATURES=bench`.
-bench = []
+bench = ["panel-sync"]
+# Refresh-synchronised blits (`/api/config` `panel_sync`, src/panel.rs,
+# opendmd-core's `scan`) and the seam count (`/api/status` `scan`). Off in
+# releases for now (~7 KB of flash against the 4mb layout's 64 KB spare);
+# in every bench build through `bench`; a release measurement build adds it
+# with `FW_RELEASE_FEATURES=panel-sync`.
+panel-sync = []
 # The Psi spike's measurement (src/psi_probe.rs): frame times, the golden
 # frames, per-step costs and the stack, logged once at boot (`psi-probe:`
 # lines). `make fw-release FW_RELEASE_FEATURES=probe,psi-probe` for the rig.

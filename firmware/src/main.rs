@@ -337,6 +337,7 @@ fn main() -> Result<()> {
     panel.set_max_brightness(safe.ceiling(settings.max_brightness));
     panel.set_brightness(settings.brightness);
     panel.set_display(settings.look, settings.glow);
+    panel.set_sync(settings.panel_sync);
     clock::set_timezone(&settings.tz, &settings.tz_name);
     // The live clock (`@clock`) reads local time from here.
     opendmd_core::synth::set_wall_clock(Some(clock::wall_now));
@@ -828,6 +829,7 @@ fn main() -> Result<()> {
                             // The tint and the glow: the panel repainted
                             // at once if what it shows no longer matches
                             // (a dark panel is repainted when it lights).
+                            panel.set_sync(settings.panel_sync);
                             if panel.set_display(settings.look, settings.glow) && !sched.off() {
                                 repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
                             }
@@ -858,7 +860,7 @@ fn main() -> Result<()> {
                                 );
                             }
                             log::info!(
-                                "config applied (reindex={needs_reindex}): brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}'",
+                                "config applied (reindex={needs_reindex}): brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}', panel_sync={}",
                                 settings.brightness,
                                 settings.look.name(),
                                 settings.glow.name(),
@@ -868,7 +870,8 @@ fn main() -> Result<()> {
                                 settings.platforms,
                                 settings.set,
                                 settings.transition,
-                                settings.attract
+                                settings.attract,
+                                settings.panel_sync
                             );
                             let outcome = if let Some(built) = prebuilt {
                                 // Built above, before the save.
@@ -1478,8 +1481,12 @@ fn main() -> Result<()> {
                 };
                 let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), decode_us);
                 tick_us += us(look_start.elapsed()) + std::mem::take(&mut look_us);
+                // With `panel_sync` the blit may wait for the scan, as
+                // long as that leaves the next frame its slack.
                 let blit_start = Instant::now();
-                let blit_px = panel.blit(pic);
+                let budget_us = us(next_frame_at.saturating_sub(tick_now))
+                    .saturating_sub(us(tick_start.elapsed()) + SYNC_SLACK_US);
+                let blit_px = panel.blit_within(pic, budget_us);
                 let blit_us = us(blit_start.elapsed());
                 let free = free_heap();
                 floor.note(free);
@@ -2264,6 +2271,11 @@ fn retune(_: Option<&mut Engine>, _: &str, _: Duration) -> Option<Result<(), Pla
 /// A full push's time, roughly (µs): what an Idle frame of the formula
 /// look adds beside its render (a GIF frame due sooner draws it instead).
 const LOOK_BLIT_US: u64 = 2_000;
+
+/// What a refresh-synchronised blit leaves of the time to the next frame
+/// (`Panel::blit_within`): the blit itself (a full frame ~1.2-1.8 ms) and
+/// the loop's own work after it.
+const SYNC_SLACK_US: u32 = 3_000;
 
 /// Draw the formula look (or, with none, the plain picture) over what is on
 /// screen now, every pixel: after a new look, one taken off or a new tint,

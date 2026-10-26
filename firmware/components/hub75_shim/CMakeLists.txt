@@ -1,6 +1,6 @@
 idf_component_register(SRCS "hub75_shim.cpp"
                        INCLUDE_DIRS "include"
-                       REQUIRES ESP32-HUB75-MatrixPanel-I2S-DMA)
+                       REQUIRES ESP32-HUB75-MatrixPanel-I2S-DMA esp_timer)
 
 # The project builds C components at -Os (CONFIG_COMPILER_OPTIMIZATION_SIZE).
 # hub75_draw_span is the per-frame hot loop, so this one file is optimised.
