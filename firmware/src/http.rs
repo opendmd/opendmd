@@ -248,6 +248,9 @@ struct ConfigPatch {
     /// (checked by the main task before anything is saved).
     look_formula: Option<String>,
     look_formula_name: Option<String>,
+    /// How the web app composed `look_formula` (display only).
+    look_blend: Option<String>,
+    look_amount: Option<u8>,
     boot_show: Option<String>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
@@ -550,6 +553,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     ),
                 );
             }
+            // A new look sent without how it was composed is drawn as it
+            // is: Settings must not show the last one's blend for it.
+            if patch.look_blend.is_none() && patch.look_amount.is_none() {
+                next.look_blend = crate::nvs_config::LOOK_BLENDS[0];
+                next.look_amount = 100;
+            }
             next.look_formula = v;
         }
         if let Some(v) = patch.look_formula_name {
@@ -560,6 +569,19 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 ));
             }
             next.look_formula_name = v;
+        }
+        if let Some(v) = patch.look_blend {
+            let Some(b) = crate::nvs_config::look_blend(&v) else {
+                return req
+                    .bad_request("look_blend must be over, screen, add, multiply, max or min");
+            };
+            next.look_blend = b;
+        }
+        if let Some(v) = patch.look_amount {
+            if v > 100 {
+                return req.bad_request("look_amount must be 0..=100");
+            }
+            next.look_amount = v;
         }
         if let Some(v) = patch.boot_show {
             let Some(len) = opendmd_core::boot::ShowLength::from_name(&v) else {
@@ -2204,7 +2226,7 @@ fn settings_json(s: &Settings) -> String {
             r#""dwell_min":{},"dwell_max":{},"shuffle":{},"platforms":{},"set":{},"hostname":{},"#,
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
-            r#""look":"{}","glow":"{}","look_formula":{},"look_formula_name":{},"#,
+            r#""look":"{}","glow":"{}","look_formula":{},"look_formula_name":{},"look_blend":"{}","look_amount":{},"#,
             r#""boot_show":"{}","api_key_set":{},"card_speed":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
@@ -2231,6 +2253,8 @@ fn settings_json(s: &Settings) -> String {
         s.glow.name(),
         json_string(&s.look_formula),
         json_string(&s.look_formula_name),
+        s.look_blend,
+        s.look_amount,
         s.boot_show.name(),
         !s.api_key.is_empty(),
         s.card_speed.as_str(),

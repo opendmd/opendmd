@@ -78,10 +78,24 @@ fn formulas() {
         (32, 2),
         "draws over what is under, two layers"
     );
+
+    // Any formula as a look: the text, and what it is.
+    let s = look("hsv(x, 1, 1)", "screen", 40);
+    assert_eq!(
+        s,
+        "part look {\n  hsv(x, 1, 1)\n}\nlayer screen { look(x, y, 0.4) }"
+    );
+    assert_eq!((info()[5] & 32, info()[7]), (32, 1));
+    assert_eq!(look("gray(ul)", "over", 100), "gray(ul)");
+    // (The module's state is a static: one test.)
+    #[cfg(not(target_arch = "wasm32"))]
+    every_example_as_a_look();
 }
 
 /// The examples gallery: every one compiles, is short, and is light or
-/// medium for the panel (the ESP32 estimate within the effects' 8 ms).
+/// medium for the panel (the ESP32 estimate within 10 ms: since the
+/// estimate was calibrated on the device, 2026-10-26, the heaviest five read
+/// 8.3-9.7 ms, which is how they always ran: at 25 frames a second).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn the_examples_are_light_enough_for_the_panel() {
@@ -112,7 +126,7 @@ fn the_examples_are_light_enough_for_the_panel() {
         let most = if e.name == "Big clock" { 16 } else { 7 };
         assert!(own <= most, "{}: too long for an example", e.name);
         assert!(
-            p.esp32_us() <= 8000,
+            p.esp32_us() <= 10_000,
             "{}: ~{} µs a frame on the panel",
             e.name,
             p.esp32_us()
@@ -169,4 +183,69 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
             assert!(draw(&src, ms).0 == want, "{} at {ms} ms", e.name);
         }
     }
+}
+
+/// Every example as a look, at the choice Settings starts it at (js/looks.js
+/// `choice`): one that draws over the GIF as it is (over, 100 %); one that
+/// covers it, screened at 40 %, or over at 30 % when that is too heavy (or
+/// it has layers of its own, which go over only) —
+/// within the looks' 12 ms (`fx_psi::LOOK_MAX_EST_US`), except the ones
+/// listed: too heavy to draw over every GIF at all.
+#[cfg(not(target_arch = "wasm32"))]
+fn every_example_as_a_look() {
+    const TOO_HEAVY: &[&str] = &[];
+    let json = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../opendmd-web/www/formulas.json"
+    ))
+    .unwrap();
+    let mut heavy = Vec::new();
+    let mut chosen = Vec::new();
+    for e in crate::examples(&json) {
+        assert!(compile(&e.src), "{}: {}", e.name, error());
+        let over = info()[5] & 32 != 0;
+        let tries: &[(&str, u8)] = if over {
+            &[("over", 100)]
+        } else {
+            &[("screen", 40), ("over", 30)]
+        };
+        let fit = tries.iter().find(|&&(b, k)| {
+            let s = look(&e.src, b, k);
+            // A formula with layers of its own goes over only.
+            if s.is_empty() && b == "screen" && error().contains("can only go over") {
+                return false;
+            }
+            assert!(!s.is_empty(), "{} {b} {k}: {}", e.name, error());
+            let i = info();
+            assert!(
+                i[5] & 32 != 0,
+                "{} {b} {k}: lets the GIF show through",
+                e.name
+            );
+            if over {
+                assert_eq!(s, e.src, "{}: today's look, unchanged", e.name);
+            } else {
+                assert!(
+                    s.starts_with("part look {") || s.starts_with("loop "),
+                    "{}",
+                    e.name
+                );
+            }
+            i[6] <= 12_000
+        });
+        match fit {
+            Some((b, k)) => chosen.push(format!("{} {b} {k}", e.name)),
+            None => heavy.push(e.name.clone()),
+        }
+    }
+    assert_eq!(heavy, TOO_HEAVY, "chosen: {chosen:?}");
+    // Another blend for a formula with layers is the compiler's error.
+    assert!(look("layer multiply { gray(0.5) }", "screen", 40).is_empty());
+    assert!(error().contains("can only go over"), "{}", error());
+    assert!(look("gray(x)", "lighten", 40).is_empty());
+    assert!(
+        error().starts_with("a look's blend is one of over"),
+        "{}",
+        error()
+    );
 }

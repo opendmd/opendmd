@@ -79,7 +79,11 @@ first-visit total for information. js/psikit.js (the share link's encoder
 and decoder, the highlighting) counts with the Formulas line. Their "Show
 on panel" (`js/psishow.js`: the formula's path, the throttled live edits
 and their errors; imported with the view on a device only) has a line of
-its own, <= 2 KB.
+its own, <= 2 KB. Any Formula as the panel's look (`js/looks.js`: the
+blend and amount controls, the defaults, the panel's refusals and the save;
+imported by Settings' Look tab and Formulas' "Use as the look"; 2026-10-26,
+branch any-look) has a line of its own, <= 3 KB, so neither the 60 KB page
+line nor the Formulas line carries it.
 The API reference is not packed (until 2026-10-23 it was `api.html`, its
 own line, <= 15 KB, ~14.5 KB gz): Settings -> About links the HTTP API on
 the project site, docs/api.md as each release published it.
@@ -162,7 +166,12 @@ FONT = {"fonts/silkscreen.woff2"}
 # 44 KB for the text built-ins (2026-10-26, branch psi-glyph: `digit`,
 # `glyph`, `bit`, 'A' character codes): the panel's two fonts (1,235 B, ~570
 # B gz) and their steps, +1.5 KB gz; a small raise the owner pre-approved.
-PSI_WASM_GZ_BUDGET = 44 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins
+# 45 KB for any Formula as a look (2026-10-26, branch any-look): `look()`,
+# the look's text composed in the module from the compiled formula
+# (opendmd_psi::look: one implementation, tested with golden frames, not a
+# second copy in JS), +1.4 KB gz; a small raise under the owner's standing
+# OK for budget lines while the firmware stays comfortable.
+PSI_WASM_GZ_BUDGET = 45 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
@@ -173,6 +182,9 @@ FORMULAS_GZ_BUDGET = 22 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on p
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}
+# Any Formula as a look (branch any-look, 2026-10-26): a new line, ~2.0 KB at the time.
+LOOKS_GZ_BUDGET = 3 * 1024
+LOOKS = {"js/looks.js"}
 SHARE_GZ_BUDGET = 12 * 1024
 # The site's "Set up a card" page (share/cardprep, published at /card/; its
 # tests/ aside): its own line since 2026-10-25, 16.9 KB at the time.
@@ -232,6 +244,8 @@ def main() -> int:
             kind = "formulas"
         elif rel in SHOW:
             kind = "show"
+        elif rel in LOOKS:
+            kind = "looks"
         elif rel in STUDIO:
             kind = "studio"
         elif rel in LIVE:
@@ -305,7 +319,7 @@ def main() -> int:
                          ("power", POWER_GZ_BUDGET), ("details", DETAILS_GZ_BUDGET), ("find", FIND_GZ_BUDGET),
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
-                         ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET),
+                         ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET),
                          ("other", None)):
