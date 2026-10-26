@@ -25,7 +25,6 @@ use esp_idf_svc::fs::fatfs::Fatfs;
 use esp_idf_svc::io::vfs::MountedFatfs;
 use opendmd_core::engine::{ReadSeek, Source};
 use opendmd_core::layout;
-use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicU32, Ordering::{Relaxed, SeqCst}};
 use std::time::Instant;
@@ -75,6 +74,7 @@ impl Drop for SdCard {
     fn drop(&mut self) {
         // Before the fields go: no clock change or raw read from here on.
         crate::cardspeed::detach();
+        crate::fatidx::unmounted();
     }
 }
 
@@ -481,7 +481,7 @@ fn open_file_keyed(full: &str, ahead_key: u32) -> io::Result<Box<dyn ReadSeek>> 
     let file = if crate::probe::ENABLED {
         crate::probe::open(full)
     } else {
-        File::open(full)
+        crate::fatidx::open(full)
     };
     let file = match file {
         Ok(f) => f,
@@ -552,15 +552,35 @@ impl Source for SdSource {
                 unkey();
                 return Ok(None);
             }
+            AHEAD_ORIGINAL.store(false, Relaxed);
             let mut f = match open_file_keyed(&full, key) {
                 Ok(f) => f,
-                Err(e) => {
+                Err(e) if crate::sdhealth::is_card_error(&e) => {
                     unkey();
-                    if crate::sdhealth::is_card_error(&e) {
+                    return Err(e);
+                }
+                // No copy: the original, if the FAT index opens it (never
+                // a directory scan here). `ahead` holds its decoder only
+                // with the heap for cap 12.
+                Err(_) => match (copy != path)
+                    .then(|| format!("{}{path}", config::SD_MOUNT))
+                    .and_then(|orig| crate::fatidx::indexed(&orig).map(|r| (orig, r)))
+                {
+                    Some((orig, Ok(o))) => {
+                        crate::sdhealth::opened(&orig);
+                        AHEAD_ORIGINAL.store(true, Relaxed);
+                        AHEAD_US.store(t.elapsed().as_micros() as u32, Relaxed);
+                        return Ok(Some(Box::new(crate::frametime::Counted(o, false, key)) as Box<dyn ReadSeek>));
+                    }
+                    Some((_, Err(e))) if crate::sdhealth::is_card_error(&e) => {
+                        unkey();
                         return Err(e);
                     }
-                    return Ok(None);
-                }
+                    _ => {
+                        unkey();
+                        return Ok(None);
+                    }
+                },
             };
             let mut magic = [0u8; 4];
             match f.read_exact(&mut magic) {
@@ -595,6 +615,12 @@ impl Source for SdSource {
 
 /// The open time of the copy opened ahead last (µs), for its GIF-start line.
 static AHEAD_US: AtomicU32 = AtomicU32::new(0);
+/// What was opened ahead last is an original (through the FAT index).
+static AHEAD_ORIGINAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn ahead_is_original() -> bool {
+    AHEAD_ORIGINAL.load(Relaxed)
+}
 
 fn open_resolved(path: &str) -> io::Result<Box<dyn ReadSeek>> {
     // The cache builder lets go of its heap first: this may be an

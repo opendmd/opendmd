@@ -103,8 +103,9 @@ pub const SD_MOUNT: &str = "/sdcard";
 /// FATFS file descriptors. Three are live in the player's steady state (the
 /// catalog's handles on `filelist.txt` and `filelist.txt.idx`, and the GIF the
 /// engine is playing); the httpd task needs a few more for the file it is
-/// serving or the upload it is streaming to the card.
-pub const SD_MAX_FILES: usize = 8;
+/// serving or the upload it is streaming to the card; the FAT index keeps
+/// its own file open (`fatidx.rs`), hence 10 (552 B each with 512 B sectors).
+pub const SD_MAX_FILES: usize = 10;
 /// The SD bus clock. The SPI master divides 80 MHz by a whole number, so
 /// the only clocks are 40, 26.7, 20, 16 … MHz (the nearest is taken: 26 and
 /// 32 MHz both give 26.7). 40 MHz needs the IO_MUX pins, i.e. `SPI3` (see
@@ -291,6 +292,9 @@ pub const AHEAD_OPEN_BYTES: usize = 1536;
 /// read buffer, the 1.5 KB of cap-9 tables, the row, a palette of up to
 /// 768 B, allocator overhead.
 pub const AHEAD_PARSE_BYTES: usize = 5 * 1024;
+/// What an original's decoder takes on top of that when it is held ahead
+/// (opened through the FAT index): cap-12 LZW tables instead of cap 9's.
+pub const AHEAD_ORIGINAL_BYTES: usize = 11 * 1024;
 /// A copy held ahead is let go (the pick is kept) when the main loop sees
 /// the free heap under this: the network side's transients come first, as
 /// for the glow's copy ([`GLOW_YIELD_HEAP`]).
@@ -722,3 +726,26 @@ pub const FOLLOW_CTX_MAX: usize = 64;
 pub const FOLLOW_CONTEXT_WAIT: Duration = Duration::from_secs(30);
 /// How often the poller logs its request count and heap figures.
 pub const FOLLOW_REPORT: Duration = Duration::from_secs(300);
+
+// ---------------------------------------------------------------------------
+// The FAT index (`fatidx.rs`)
+// ---------------------------------------------------------------------------
+/// Index misses (a `/gifs` open it could not serve) that mark it stale.
+pub const FATIDX_STALE_REBUILD: u32 = 16;
+/// Seconds after the last change through the API before a rebuild.
+pub const FATIDX_QUIET_S: u32 = 30;
+/// Seconds between rebuilds for staleness (a missing index is built at once).
+pub const FATIDX_MIN_GAP_S: u32 = 600;
+/// No build in the first seconds after boot: the start-up show, the first GIF.
+pub const FATIDX_BOOT_DELAY_S: u32 = 20;
+/// Free heap a build needs to start: its task's stack (8 KB), a 4 KB
+/// sector batch, a 1 KB writer and the group (`FATIDX_GROUP`), over the
+/// network side's transients.
+pub const FATIDX_BUILD_HEAP: usize = 48 * 1024;
+/// The build's task stack (it exists only while it builds): the walk goes
+/// through FatFs, card-speed's transfer and error path (`cardspeed`:
+/// a failed read is recovered and the clock slowed on the caller's task)
+/// and the SD SPI driver, under two closures.
+pub const FATIDX_STACK: usize = 10 * 1024;
+/// The most records a build gathers per walk, in bytes (8 a record).
+pub const FATIDX_GROUP: usize = 16 * 1024;

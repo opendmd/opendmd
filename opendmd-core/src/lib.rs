@@ -14,6 +14,7 @@ pub mod card_speed;
 pub mod chan;
 pub mod compositor;
 pub mod engine;
+pub mod fatdir;
 pub mod filter;
 pub mod follow;
 pub mod frametime;
