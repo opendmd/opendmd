@@ -156,7 +156,7 @@ PSI_WASM_GZ_BUDGET = 44 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
 # colours and the values about the middle, the editor's colour swatches;
 # +192 B gz, the rewritten examples 292 B shorter but only 22 B gz): a small
-# raise, to be approved.
+# raise, approved (the owner lets budget lines move with the firmware still comfortable).
 FORMULAS_GZ_BUDGET = 22 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
