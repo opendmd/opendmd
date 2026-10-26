@@ -251,6 +251,16 @@ card shows progress with `sd.formatting` true (a second POST: 409), ends
 "Done" with the card readable, and a format of the now readable card is a
 409.
 
+Slowed-card pass: a third mock with `--sd slowed` (a card set to Fast
+that has already been slowed in place): status sd {clock_khz 20000,
+fallback, slowdowns 1, probe "slowed"}; Settings › Device shows the Card
+speed group (#st-cs, Fast), "Card: ... Safe speed", and the slow line
+(#st-card-slow); "Try Fast again" hides it and the Card line reads Fast
+speed (status 40 MHz). Then the select (Safe and Fast only): Safe (Saved
+tick, config safe, status 20 MHz without fallback, its caption,
+POST /api/card/full-speed a 409), Fast (40 MHz, its caution); `full` over
+the API is accepted, `auto` is a 400.
+
 A few requests fail on purpose (the 404/415 plays, a preview's try for a
 prepared copy that is not there, and the aborted GIF download); they are
 listed in `expected` and are not counted as console errors.
@@ -304,6 +314,14 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 REPO = Path(__file__).resolve().parents[1]
 CARD = Path(os.environ.get("DMD_CARD_ROOT", "~/scratch/dmdos-card"))
+
+
+def card_gifs() -> list[str]:
+    """The playlist's GIFs (filelist.txt) that the card copy really holds:
+    the dump lists a few it does not, and a check that plays or fetches one
+    would meet a 404 (and a console error)."""
+    lines = (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n")
+    return [l.strip() for l in lines if l.strip().endswith(".gif") and (CARD / l.strip().lstrip("/")).is_file()]
 OUT = Path(os.environ.get("WEB_SMOKE_OUT", REPO / "target" / "web-smoke"))
 SIZES = {"laptop": (1280, 800), "phone": (390, 844)}
 VIEWS = ["now", "library", "sets", "settings"]
@@ -1081,7 +1099,7 @@ def now_fav_checks(page: Page, base: str) -> None:
     check(not get_json(base + "/api/overrides?set=")["overrides"], "now fav: ☆ again -> no overrides left")
     # Clicked while the list is still being read (slowed here): the others survive.
     # (The last two of the playlist: the reindex the seeding causes may move what is on screen.)
-    others = [l.strip() for l in (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n") if l.strip().endswith(".gif")][-2:]
+    others = card_gifs()[-2:]
     seeded = [{"path": others[0], "never": True}, {"path": others[1], "loops": 3}]
     put_text(base + "/api/files/filelist.meta", "".join(render_meta_line(o["path"], o) + "\n" for o in seeded))
     settle(base, 2)
@@ -2416,7 +2434,7 @@ def key_checks(browser, page: Page, base: str) -> None:
         code, hd = status_of(urllib.request.Request(base + "/api/status"))
         check(code == 401 and hd.get("WWW-Authenticate") == "Bearer",
               f"key: /api/status without it -> {code}, WWW-Authenticate {hd.get('WWW-Authenticate')}")
-        gif = next(l for l in (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n") if l.strip().endswith(".gif")).strip()
+        gif = card_gifs()[0]
         gif_url = base + urllib.parse.quote(gif)
         codes = [status_of(urllib.request.Request(u))[0] for u in (gif_url, base + "/filelist.txt", base + "/sets/x.txt",
                                                                   base + "/cache/x.gif")]
@@ -2558,7 +2576,7 @@ def mock_pass(browser) -> None:
         check(page.locator("#now-play-path, #now-play").count() == 0 and page.is_hidden("#now-path"),
               "now: no card path shown, no path box")
         play = "p => import('./js/state.js').then(m => m.app.play(p))"
-        gif = next(l for l in (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n") if l.strip().endswith(".gif")).strip()
+        gif = card_gifs()[0]
         page.evaluate(play, gif)
         cur = wait_playing(base, gif)
         check(cur == gif, f"now: Send to panel {gif} -> /api/status (got {cur})")
@@ -3654,7 +3672,7 @@ def recent_checks(page: Page, base: str) -> None:
     auto = get_json(base + "/api/config")["auto_prepare"]
     put_json(base + "/api/config", {"auto_prepare": "off"})
     post_json(base + "/api/pause", {})
-    gifs = [l.strip() for l in (CARD / "filelist.txt").read_text(encoding="utf-8-sig").split("\n") if l.strip().endswith(".gif")]
+    gifs = card_gifs()
     a, b, c = gifs[3], gifs[4], gifs[5]
     for g in (a, b, c):
         post_json(base + "/api/play", {"path": g})
@@ -5579,6 +5597,73 @@ def sd_unreadable_pass(browser) -> None:
     report_errors("mock (unreadable card)", errors)
 
 
+def sd_slowed_pass(browser) -> None:
+    """`mock-device.py --sd slowed`: Settings › Device's Card speed."""
+    proc, base = start_mock(["--root", str(CARD), "--sd", "slowed"])
+    errors: list[str] = []
+    try:
+        print(f"\n== mock device with a slowed card at {base}")
+        sd = get_json(base + "/api/status")["sd"]
+        check(sd["clock_khz"] == 20000 and sd["fallback"] is True and sd["slowdowns"] == 1 and sd["probe"] == "slowed",
+              f"slowed card: status sd 20 MHz, fallback, slowdowns 1, probe slowed ({sd})")
+        page = new_page(browser, "laptop", errors)
+        page.goto(base + "/")
+        goto_view(page, "settings/device")
+        page.wait_for_selector("#st-cs:not([hidden])", timeout=20000)
+        check(page.is_visible("#st-cs") and page.input_value("#st-card-speed") == "fast",
+              "card speed: the group is shown, Fast selected")
+        card = lambda: page.evaluate("() => { const dt = [...document.querySelectorAll('#st-facts dt')].find(e => e.textContent === 'Card');"
+                                     " return dt && dt.nextElementSibling.textContent; }")
+        page.wait_for_function("document.querySelector('#st-card-slow') && !document.querySelector('#st-card-slow').hidden", timeout=20000)
+        check("· Safe speed" in (card() or ""), f"card speed: the Card fact says Safe speed ({card()!r})")
+        check("runs at Safe" in page.inner_text("#st-card-slow"), "card speed: the slowed-from-Fast line is shown")
+        shot(page, "card-speed-slowed", "laptop")
+        page.click("#st-card-full")
+        page.wait_for_selector("#st-card-slow", state="hidden", timeout=10000)
+        page.wait_for_function("[...document.querySelectorAll('#st-facts dt')].some(e => e.textContent === 'Card' && e.nextElementSibling.textContent.includes('Fast speed'))", timeout=10000)
+        sd = get_json(base + "/api/status")["sd"]
+        check(sd["clock_khz"] == 40000 and sd["fallback"] is False and "Fast speed" in card(),
+              f"card speed: Try Fast again clears the slow line, Card reads Fast speed ({card()!r}, {sd})")
+        # The select: Safe and Fast (full is API-only).
+        check(page.evaluate("[...document.querySelectorAll('#st-card-speed option')].map(o => o.value).join()") == "safe,fast",
+              "card speed: the select offers Safe and Fast only")
+        def pick(v: str, n: int) -> None:
+            page.select_option("#st-card-speed", v)
+            page.wait_for_function(f"+document.querySelector('#st-cs h3 .tick').dataset.n >= {n}", timeout=10000)
+        pick("safe", 1)
+        check(page.text_content("#st-cs h3 .tick") == "Saved ✓", "card speed: Safe shows Saved ✓")
+        cfg = get_json(base + "/api/config")
+        sd = get_json(base + "/api/status")["sd"]
+        check(cfg["card_speed"] == "safe" and sd["clock_khz"] == 20000 and sd["fallback"] is False,
+              f"card speed: Safe saved, 20 MHz without fallback ({cfg['card_speed']}, {sd})")
+        check("Plenty fast" in page.text_content("#st-cs-cap") and not page.evaluate("document.querySelector('#st-cs-cap').classList.contains('bad')"),
+              f"card speed: the Safe caption ({page.text_content('#st-cs-cap')!r})")
+        code, reply = post_code(base + "/api/card/full-speed", {})
+        check(code == 409 and "card_speed is safe" in (reply or {}).get("error", ""), f"card speed: full-speed with Safe is a 409 ({code} {reply})")
+        pick("fast", 2)
+        sd = get_json(base + "/api/status")["sd"]
+        check(get_json(base + "/api/config")["card_speed"] == "fast" and sd["clock_khz"] == 40000 and sd["fallback"] is False
+              and "wrong data" in page.text_content("#st-cs-cap") and page.is_hidden("#st-card-slow"),
+              f"card speed: Fast saved, 40 MHz, its caution, no slow line ({sd})")
+        def put(v: str):
+            req = urllib.request.Request(base + "/api/config", data=json.dumps({"card_speed": v}).encode(), method="PUT",
+                                         headers={"Content-Type": "application/json"})
+            try:
+                return 200, json.load(urllib.request.urlopen(req, timeout=30))
+            except urllib.error.HTTPError as e:
+                return e.code, json.load(e)
+        code, reply = put("full")
+        check(code == 200 and get_json(base + "/api/config")["card_speed"] == "full" and get_json(base + "/api/status")["sd"]["clock_khz"] == 40000,
+              f"card speed: full (API only) saved, 40 MHz ({code} {reply})")
+        code, reply = put("auto")
+        check(code == 400 and reply.get("error") == "card_speed must be safe, fast or full", f"card speed: auto (gone) is a 400 ({code} {reply})")
+        put("safe")
+        page.context.close()
+    finally:
+        proc.terminate()
+    report_errors("mock (slowed card)", errors)
+
+
 def pack_files(www: Path) -> dict[str, tuple[Path, bool]]:
     """What `opendmd-pack www` puts in the pack, by served path: `<file>.gz`
     where there is one (gzip), else the file. version.txt is not packed."""
@@ -5793,6 +5878,7 @@ def main() -> int:
         if not args.device_only:
             mock_pass(browser)
             sd_unreadable_pass(browser)
+            sd_slowed_pass(browser)
         if args.device:
             device_pass(browser, args.device.rstrip("/"))
         browser.close()

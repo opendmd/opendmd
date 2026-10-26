@@ -49,6 +49,11 @@ diag-heap = []
 # the web app's Formulas "Show on panel" (`POST /api/play`). On by default
 # (~63 KB of flash); `--no-default-features` builds without.
 psi = ["opendmd-core/psi"]
+# Bench test hooks that a release does without: card speed's
+# `POST /api/card/full-speed?test_errors=N` (`cardspeed.rs`). On for
+# `make fw-build`/`fw-flash`/`fw-clippy` (with `dev-credentials`); a
+# release measurement build adds it with `FW_RELEASE_FEATURES=bench`.
+bench = []
 # The Psi spike's measurement (src/psi_probe.rs): frame times, the golden
 # frames, per-step costs and the stack, logged once at boot (`psi-probe:`
 # lines). `make fw-release FW_RELEASE_FEATURES=probe,psi-probe` for the rig.

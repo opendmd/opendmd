@@ -162,6 +162,40 @@ pub const SD_REBOOT_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// also how often a card that mounts but cannot be read
 /// ([`SD_UNREADABLE`]) is remounted, to notice it being swapped.
 pub const SD_REMOUNT_INTERVAL: Duration = Duration::from_secs(60);
+
+// The card's clock (`card_speed`, `cardspeed.rs`).
+const _: () = assert!(SD_SPEED_KHZ == opendmd_core::card_speed::FULL_KHZ);
+const _: () = assert!(SD_SPEED_FALLBACK_KHZ == opendmd_core::card_speed::SAFE_KHZ);
+/// How long after the handover the probe of a card at full speed starts
+/// (`cardspeed::probe_soon`): past the first GIF's open and the network's
+/// start.
+pub const SD_PROBE_DELAY: Duration = Duration::from_secs(3);
+/// What the probe reads: this much from sector 8192 (4 MiB, past the
+/// partition table's gap: where a card formatted for SD, or by the device,
+/// has its boot sector and FAT). The errors are the bus's, not the data's.
+pub const SD_PROBE_START: u32 = 8192;
+pub const SD_PROBE_BYTES: u32 = 4 * 1024 * 1024;
+/// In reads of this many 512 B sectors (the buffer, 2 KB, is the probe
+/// task's, freed with it)...
+pub const SD_PROBE_CHUNK: u32 = 4;
+/// ... with this pause after each, so the card is the player's most of
+/// the time.
+pub const SD_PROBE_PAUSE: Duration = Duration::from_millis(2);
+/// The probe task's stack.
+pub const SD_PROBE_STACK: usize = 4 * 1024;
+/// The probe starts only with this much largest free block: its task
+/// (4 KB stack, ~0.4 KB TCB) and its 2 KB buffer, with the rest of the
+/// heap's margin left (CLAUDE.md, "Heap ceiling").
+pub const SD_PROBE_HEAP: usize = 12 * 1024;
+/// While the cache builder's task is up or a transfer shares the card the
+/// probe waits (polling this often), for at most this long in all, then
+/// gives up: their own reads slow a card that cannot keep up just the same.
+pub const SD_PROBE_BUSY_POLL: Duration = Duration::from_millis(250);
+pub const SD_PROBE_WAIT: Duration = Duration::from_secs(60);
+/// The largest free internal block below which the clock is not changed
+/// in place (the SPI device is removed and added again: a few hundred
+/// bytes, and a failed add would leave the card with no device at all).
+pub const SD_CLOCK_HEAP: usize = 2048;
 /// `sd.error` for a card that mounts at the SD level but whose filesystem
 /// does not answer (every access `ENODEV`): exFAT, which the FATFS build
 /// does not include, i.e. a 64 GB card as it comes. The web app formats it

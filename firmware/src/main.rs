@@ -40,6 +40,7 @@ mod ahead;
 mod boot;
 mod cache;
 mod cache_builder;
+mod cardspeed;
 mod chan;
 mod clock;
 mod config;
@@ -119,7 +120,7 @@ static FRAME_SHOWN: AtomicBool = AtomicBool::new(false);
 /// The boot task has handed the card over (`boot.rs`): until then the main
 /// task does not touch the card at all — every rebuild, set check and
 /// manifest install answers [`CARD_NOT_READY`], as they did with no card.
-static CARD_READY: AtomicBool = AtomicBool::new(false);
+pub static CARD_READY: AtomicBool = AtomicBool::new(false);
 const CARD_NOT_READY: &str = "the card is not ready";
 /// How a build that matched nothing ends its error (`finish_build`).
 const NO_ENTRIES: &str = "matched no entries";
@@ -311,7 +312,9 @@ fn main() -> Result<()> {
     // `SD_REMOUNT_INTERVAL`. The mount itself is the boot task's (`boot.rs`).
     let health = {
         let poweron = matches!(reset_reason, "poweron" | "brownout");
-        let health = sdhealth::boot(poweron, nvs_config.sd_slow());
+        let mode = nvs_config.card_speed();
+        cardspeed::init(mode);
+        let health = sdhealth::boot(poweron, nvs_config.sd_slow(), mode);
         if health.clear_nvs {
             if let Err(e) = nvs_config.set_sd_slow(None) {
                 log::error!("clearing the slow-clock record in NVS failed ({e:#})");
@@ -1182,6 +1185,14 @@ fn main() -> Result<()> {
             reboot_to_apply();
         }
 
+        // A clock change lost the card's SPI device (`cardspeed`): no
+        // transfer can reach it again, so restart (at 20 MHz in `fast`:
+        // the record is in RTC memory).
+        if cardspeed::dead() {
+            log::error!("microSD: SPI device lost; restarting");
+            restart_for_card();
+        }
+
         // The panel-timing test: its pictures and live timing instead of
         // the engine or the status card (neither is ticked, so nothing goes
         // into Recently played), until it is stopped or its time is up.
@@ -1259,6 +1270,10 @@ fn main() -> Result<()> {
             #[cfg(feature = "psi-probe")]
             psi_probe::save(config::SD_MOUNT);
             CARD_READY.store(true, Ordering::Relaxed);
+            // A card at full speed in `fast` with no record: read it for a
+            // while soon (`cardspeed`), on a task of its own. Here, where
+            // the card becomes the player's (the probe checks that).
+            cardspeed::probe_soon(config::SD_PROBE_DELAY);
             // The saved playlist would not open: forget it (NVS is ours).
             if healed_set.is_some_and(|set| set == settings.set) {
                 settings.set.clear();
@@ -2708,15 +2723,15 @@ fn log_mounted(card: &SdCard, attempt: u32, khz: u32) {
 }
 
 /// A card just mounted: if it was mounted slow for a card that failed at
-/// full speed and it is a different card, forget that record and restart
-/// at full speed (a clean boot rather than a remount on a live bus);
+/// full speed and it is a different card, forget that record and raise the
+/// clock to full speed in place (`cardspeed`; nothing else uses the card
+/// yet) — or, if that cannot be done, restart at full speed as before;
 /// otherwise note its clock for status.
 fn check_card(card: &SdCard, health: &sdhealth::Boot, nvs: &EspDefaultNvsPartition) {
-    let full = card.real_freq_khz as u32 >= config::SD_SPEED_KHZ;
     match health.slow_serial {
         Some(slow) if slow != card.serial => {
             log::warn!(
-                "microSD: card {:#010x} is not the card that failed ({slow:#010x}); forgetting the slow clock and restarting at {} kHz",
+                "microSD: card {:#010x} is not the card that failed ({slow:#010x}); forgetting the slow clock and going to {} kHz",
                 card.serial,
                 config::SD_SPEED_KHZ
             );
@@ -2724,8 +2739,13 @@ fn check_card(card: &SdCard, health: &sdhealth::Boot, nvs: &EspDefaultNvsPartiti
                 Ok(()) => {}
                 Err(e) => log::error!("clearing the slow-clock record in NVS failed ({e:#})"),
             }
-            sdhealth::forget_for_new_card();
-            restart_for_card();
+            // The record forgotten first, so `settle` asks for full speed.
+            sdhealth::forget_for_new_card(false);
+            if health.capped || cardspeed::settle(false) != cardspeed::Applied::Now {
+                sdhealth::forget_for_new_card(true);
+                restart_for_card();
+            }
+            return;
         }
         Some(slow) => {
             // The same card. NVS may not have it (a failed write at the
@@ -2740,7 +2760,7 @@ fn check_card(card: &SdCard, health: &sdhealth::Boot, nvs: &EspDefaultNvsPartiti
         }
         None => {}
     }
-    sdhealth::mounted(card.real_freq_khz as u32, !full);
+    sdhealth::mounted(card.real_freq_khz as u32, health.fallback);
 }
 
 /// The card has failed (`sdhealth`): the error line (with the counts),
@@ -2748,7 +2768,8 @@ fn check_card(card: &SdCard, health: &sdhealth::Boot, nvs: &EspDefaultNvsPartiti
 /// a restart once the log has reached the console. Returns only when the
 /// restart budget is spent.
 fn card_failed(card: &SdCard, nvs: &mut Config, status: &Mutex<Status>) {
-    let trip = sdhealth::trip(card.serial, card.real_freq_khz as u32);
+    // The clock now: `fast` may have changed it since the mount.
+    let trip = sdhealth::trip(card.serial, cardspeed::khz(), cardspeed::mode());
     log::error!("microSD: {}", trip.summary);
     if trip.slow_down {
         if let Err(e) = nvs.set_sd_slow(Some(card.serial)) {

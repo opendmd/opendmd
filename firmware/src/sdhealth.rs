@@ -34,7 +34,12 @@
 //! The slow-clock record itself is in NVS too (`nvs_config::sd_slow_*`,
 //! the card's CID serial), so it outlives a power cycle: a card that failed
 //! at 40 MHz stays at 20 MHz until a different card is seen. Nothing clears
-//! it by time; `POST /api/reboot?sd_fallback=clear` is the bench's way.
+//! it by time; "try full speed again" (`POST /api/card/full-speed`,
+//! [`full_again`]) does, and `POST /api/reboot?sd_fallback=clear` is the
+//! bench's way. In `fast` (`card_speed`) the record is usually
+//! made without a restart: the first error at full speed slows the card
+//! down in place (`cardspeed.rs`, [`slowed`]), and the network worker
+//! copies the record to NVS ([`take_nvs_sync`]), off the display task.
 //!
 //! Only plain word loads and stores touch RTC slow memory (the ESP32's
 //! `S32C1I`, behind `fetch_add` and compare-and-swap, does not work
@@ -43,6 +48,8 @@
 
 use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use std::io;
+
+use opendmd_core::card_speed::{self, CardSpeed};
 
 use crate::config::{
     SD_FAIL_TRIP, SD_FAIL_WINDOW, SD_REBOOT_CAP, SD_REBOOT_WINDOW, SD_REMOUNT_INTERVAL,
@@ -110,7 +117,13 @@ struct Live {
     clock_khz: u32,
     fallback: u32,
     note: u32,
+    /// The slow-clock record changed this boot and NVS has not been told:
+    /// `NVS_SET` / `NVS_CLEAR` ([`take_nvs_sync`]).
+    nvs: u32,
 }
+
+const NVS_SET: u32 = 1;
+const NVS_CLEAR: u32 = 2;
 
 #[link_section = ".rtc_noinit"]
 static mut RTC: Rtc = Rtc {
@@ -143,6 +156,7 @@ static mut LIVE: Live = Live {
     clock_khz: 0,
     fallback: 0,
     note: 0,
+    nvs: 0,
 };
 
 /// A word of [`RTC`] or [`LIVE`] as an atomic, for plain `Relaxed` loads and
@@ -184,7 +198,11 @@ const REBOOT_WINDOW_MS: u32 = SD_REBOOT_WINDOW.as_millis() as u32;
 pub struct Boot {
     /// The clock to mount at.
     pub speed_khz: u32,
-    /// The card that must be seen for [`Boot::speed_khz`] to stay slow.
+    /// [`Boot::speed_khz`] is below full speed for safety (the record, or
+    /// the spent budget), not by choice (`card_speed` safe).
+    pub fallback: bool,
+    /// The card that must be seen for [`Boot::speed_khz`] to stay slow
+    /// (`fast` only: `safe` and `full` leave the record alone).
     pub slow_serial: Option<u32>,
     /// The restart budget is spent: no mount at boot, a remount every
     /// [`SD_REMOUNT_INTERVAL`] instead, and no restart on another trip.
@@ -195,8 +213,8 @@ pub struct Boot {
 
 /// Read and settle the records, once, before the first mount. `nvs_slow`
 /// is NVS's slow-clock record (a CID serial); `poweron` says RTC slow
-/// memory is garbage.
-pub fn boot(poweron: bool, nvs_slow: Option<u32>) -> Boot {
+/// memory is garbage; `mode` is the `card_speed` setting.
+pub fn boot(poweron: bool, nvs_slow: Option<u32>, mode: CardSpeed) -> Boot {
     // SAFETY: before any other task exists; nothing else touches LIVE yet.
     unsafe {
         (&raw mut LIVE).write_bytes(0, 1);
@@ -256,19 +274,21 @@ pub fn boot(poweron: bool, nvs_slow: Option<u32>) -> Boot {
     }
     let capped = get(w!(RTC.reboots)) >= SD_REBOOT_CAP;
 
-    let slow_serial = if clear_nvs {
+    let record = if clear_nvs {
         None
     } else {
         nvs_slow.or((get(w!(RTC.slow)) == 1).then(|| get(w!(RTC.serial))))
     };
-    let speed_khz = if slow_serial.is_some() || capped {
-        SD_SPEED_FALLBACK_KHZ
-    } else {
-        SD_SPEED_KHZ
-    };
+    // The RTC copy is what the run consults (`is_slow`).
+    if let Some(serial) = record {
+        set(w!(RTC.slow), 1);
+        set(w!(RTC.serial), serial);
+    }
+    let slow_serial = record.filter(|_| mode == CardSpeed::Fast);
+    let clock = card_speed::clock_for(mode, slow_serial.is_some(), capped);
     if let Some(serial) = slow_serial {
         log::warn!(
-            "microSD: card {serial:#010x} failed at {SD_SPEED_KHZ} kHz before; mounting at {SD_SPEED_FALLBACK_KHZ} kHz (a different card goes back to {SD_SPEED_KHZ} kHz)"
+            "microSD: card {serial:#010x} failed at {SD_SPEED_KHZ} kHz before: {SD_SPEED_FALLBACK_KHZ} kHz"
         );
     }
     if capped {
@@ -293,7 +313,8 @@ pub fn boot(poweron: bool, nvs_slow: Option<u32>) -> Boot {
         );
     }
     Boot {
-        speed_khz,
+        speed_khz: clock.khz,
+        fallback: clock.fallback,
         slow_serial,
         capped,
         clear_nvs,
@@ -308,8 +329,9 @@ pub fn mounted(real_khz: u32, fallback: bool) {
 }
 
 /// Forget the slow-clock record's RTC copy and the restart budget (a
-/// different card), leaving a note for the next boot.
-pub fn forget_for_new_card() {
+/// different card). `restarting`: leave a note for the next boot (the
+/// clock could not be raised in place).
+pub fn forget_for_new_card(restarting: bool) {
     for f in [
         w!(RTC.slow),
         w!(RTC.serial),
@@ -318,7 +340,46 @@ pub fn forget_for_new_card() {
     ] {
         set(f, 0);
     }
-    set(w!(RTC.note), NOTE_NEW_CARD);
+    if restarting {
+        set(w!(RTC.note), NOTE_NEW_CARD);
+    }
+}
+
+/// The card `serial` has a slow-clock record (this run's view: RTC).
+pub fn is_slow(serial: u32) -> bool {
+    get(w!(RTC.slow)) == 1 && get(w!(RTC.serial)) == serial
+}
+
+/// `fast` slowed card `serial` down in place (`cardspeed`): the
+/// record, at once in RTC memory, and in NVS by the main task. Plain word
+/// stores only: called with the card's I/O lock held, on any task.
+pub fn slowed(serial: u32) {
+    set(w!(RTC.slow), 1);
+    set(w!(RTC.serial), serial);
+    set(w!(LIVE.nvs), NVS_SET);
+}
+
+/// "Try full speed again": forget the record (RTC now, NVS by the main
+/// task) and the restart budget.
+pub fn full_again() {
+    for f in [w!(RTC.slow), w!(RTC.serial), w!(RTC.reboots), w!(RTC.window_ms)] {
+        set(f, 0);
+    }
+    set(w!(LIVE.nvs), NVS_CLEAR);
+}
+
+/// For the network worker (`net_worker.rs`): the record NVS should now
+/// hold (`Some(None)`: none), once per change.
+pub fn take_nvs_sync() -> Option<Option<u32>> {
+    let n = get(w!(LIVE.nvs));
+    if n == 0 {
+        return None;
+    }
+    set(w!(LIVE.nvs), 0);
+    Some(match n {
+        NVS_SET if get(w!(RTC.slow)) == 1 => Some(get(w!(RTC.serial))),
+        _ => None,
+    })
 }
 
 /// Ask the next boot to forget the slow-clock record and the restart
@@ -492,11 +553,12 @@ pub struct Trip {
 }
 
 /// Act on a trip: counts, the restart budget, the slow-clock record's RTC
-/// copy, the note for the next boot. `serial`/`khz`: the mounted card.
-pub fn trip(serial: u32, khz: u32) -> Trip {
+/// copy, the note for the next boot. `serial`/`khz`: the mounted card;
+/// `mode`: `card_speed` (`full` never records the card as slow).
+pub fn trip(serial: u32, khz: u32, mode: CardSpeed) -> Trip {
     set(w!(LIVE.tripped), 0);
     let failures = failures() as u32;
-    let slow_down = khz > SD_SPEED_FALLBACK_KHZ;
+    let slow_down = card_speed::record_on_trip(mode, khz);
     if slow_down {
         set(w!(RTC.slow), 1);
         set(w!(RTC.serial), serial);
