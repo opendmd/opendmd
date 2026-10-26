@@ -69,6 +69,8 @@ const KEY_LOOK_MIX: &str = "look_mix";
 pub const LOOK_BLENDS: [&str; 6] = ["over", "screen", "add", "multiply", "max", "min"];
 const KEY_ATTRACT: &str = "attract";
 const KEY_BOOT_SHOW: &str = "boot_show";
+/// Refresh-synchronised blits (`Panel::set_sync`), 0/1.
+const KEY_PANEL_SYNC: &str = "panel_sync";
 /// The card's clock policy (`opendmd_core::card_speed::CardSpeed`).
 const KEY_CARD_SPEED: &str = "card_speed";
 /// The longest `attract` value (`text:` and the message).
@@ -206,6 +208,10 @@ pub struct Settings {
     /// The start-up show: `off`, `short` (the default) or `full`
     /// (`opendmd_core::boot`, `show.rs`).
     pub boot_show: ShowLength,
+    /// Refresh-synchronised blits (`panel.rs`, `opendmd_core::scan`): wait
+    /// for a scan position from which a frame shows no seam. Off by
+    /// default while it is measured.
+    pub panel_sync: bool,
     /// The API key every API and card request must carry when set
     /// (`httpd::gate`, docs/api.md "Security"); empty = none. Never
     /// returned by the API (only `api_key_set`).
@@ -288,6 +294,7 @@ impl Default for Settings {
             look_blend: LOOK_BLENDS[0],
             look_amount: 100,
             boot_show: ShowLength::Short,
+            panel_sync: false,
             api_key: String::new(),
             card_speed: CardSpeed::Safe,
         }
@@ -456,6 +463,13 @@ impl Config {
                 .get_string(KEY_BOOT_SHOW)
                 .and_then(|s| ShowLength::from_name(&s))
                 .unwrap_or(d.boot_show),
+            panel_sync: self
+                .nvs
+                .get_u8(KEY_PANEL_SYNC)
+                .ok()
+                .flatten()
+                .map(|v| v != 0)
+                .unwrap_or(d.panel_sync),
             api_key: self
                 .get_string(KEY_API_KEY)
                 .filter(|k| opendmd_core::access::valid_key(k))
@@ -500,6 +514,7 @@ impl Config {
         self.nvs
             .set_str(KEY_LOOK_MIX, &format!("{}:{}", s.look_blend, s.look_amount))?;
         self.nvs.set_str(KEY_BOOT_SHOW, s.boot_show.name())?;
+        self.nvs.set_u8(KEY_PANEL_SYNC, u8::from(s.panel_sync))?;
         self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
         self.nvs.set_str(KEY_CARD_SPEED, s.card_speed.as_str())?;
         Ok(())
