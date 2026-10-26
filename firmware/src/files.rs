@@ -1,7 +1,8 @@
 //! Serving and receiving files on the shared card.
 //!
 //! The card is shared between the player (main task, CPU1) and the HTTP server
-//! (httpd task, CPU0). FATFS itself is reentrant, so that is allowed, but the
+//! (the stream task, CPU0, which sends files and listings and receives
+//! uploads; the httpd task, CPU0, for the rest). FATFS itself is reentrant, so that is allowed, but the
 //! rules that keep the display honest live here:
 //!
 //! - Everything moves in [`config::IO_CHUNK`] pieces with a `yield_now()`

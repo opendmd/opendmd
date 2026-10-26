@@ -1203,6 +1203,65 @@ def load_checks(page: Page, base: str) -> None:
           f"load: hovering while scrolling: {m['gets']} requests, {m['bytes']:,} B, {m['r503']} 503s, none kept as failed")
 
 
+def listing_queue_checks(browser, base: str, errors: list[str]) -> None:
+    """Listings go out from the stream task (firmware http.rs `listing`, the
+    mock likewise): with a file streaming and two waiting (the mock paced at
+    5 KB/s), GET /api/files is a 503 with Retry-After: 1 at once (a listing
+    does not wait for a place, as a file does), while /api/status answers;
+    the web app asks again (source.js `queued`, every 2-4 s for ~45 s) and
+    the folder opens once the queue drains, within that budget."""
+    big = sorted((p for p in (CARD / "cache" / "Arcade").rglob("*.gif") if 40_000 < p.stat().st_size < 60_000))[:3]
+    urls = [base + urllib.parse.quote("/" + p.relative_to(CARD).as_posix()) for p in big]
+    expected.append("/api/files")
+    page = new_page(browser, "laptop", errors)
+    # No folder open, no thumbnails: only the listings meet the full queue.
+    page.context.add_init_script("try { localStorage.setItem('odmd.lib.open', '[]'); localStorage.setItem('odmd.thumbs', 'false') } catch {}")
+    page.goto(base + "/#library")  # the Library's modules in before the queue fills
+    page.wait_for_function(f"{TREE}?.folders.length > 2", timeout=60000)
+    page.evaluate("location.hash = '#sets'")
+    page.wait_for_selector("#sets-list [data-path]", timeout=60000)
+    page.wait_for_timeout(1000)
+    get_json(base + "/mock/io?reset=1&kbps=5")
+
+    def fetch(u):
+        try:
+            urllib.request.urlopen(u, timeout=60).read()
+        except urllib.error.HTTPError:
+            pass
+    hold = [threading.Thread(target=fetch, args=(u,)) for u in urls]
+    for t in hold:
+        t.start()
+        time.sleep(0.2)
+    t0 = time.time()
+    try:
+        urllib.request.urlopen(base + "/api/files?dir=/gifs/Arcade", timeout=30).read()
+        code, after = 200, None
+    except urllib.error.HTTPError as e:
+        code, after = e.code, e.headers.get("Retry-After")
+    waited = time.time() - t0
+    t1 = time.time()
+    get_json(base + "/api/status")
+    st_ms = (time.time() - t1) * 1000
+    check(code == 503 and after == "1" and waited < 0.5 and st_ms < 300,
+          f"listing queue: a full stream queue makes /api/files a 503 + Retry-After {after} at once ({waited:.2f} s); /api/status meanwhile {st_ms:.0f} ms")
+    seen: dict[str, list[int]] = {}
+    page.on("response", lambda r: "/api/files?dir=" in r.url and seen.setdefault(r.url, []).append(r.status))
+    t0 = time.time()
+    page.evaluate("location.hash = '#library/Pixel_Art'")
+    page.wait_for_function(f"(t => t && t.rows.some(r => r.path?.startsWith('/gifs/Pixel_Art/')))({TREE})", timeout=60000)
+    took = time.time() - t0
+    worst = max((v.count(503) for v in seen.values()), default=0)
+    # queued's budget: 45 s at 2 s or more a try.
+    pix = next((v for u, v in seen.items() if "Pixel_Art" in u), [])
+    check(worst >= 1 and worst <= 23 and pix[-1:] == [200] and took < 45,
+          f"listing queue: the web app asks again and opens the folder in {took:.1f} s, at most {worst} 503s a listing (budget 23; {len(seen)} listings)")
+    for t in hold:
+        t.join()
+    get_json(base + "/mock/io?kbps=0")
+    expected.remove("/api/files")
+    page.context.close()
+
+
 def tree_checks(browser, base: str, errors: list[str]) -> None:
     """The Library's folder tree in a fresh browser: the folders (Live and
     Effects after the card's, system ones last), ⊟, the keys (↓ → → ↓ Enter
@@ -3094,6 +3153,7 @@ def mock_pass(browser) -> None:
         no_leaks(page, "library")
         shot(page, "library", "laptop")
         tree_checks(browser, base, errors)
+        listing_queue_checks(browser, base, errors)
         thumbs_checks(browser, base, errors)
         editor_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
