@@ -5,7 +5,7 @@
 //! **What it does, in order** (each as the main task did it before):
 //! 1. The card: `SD_BOOT_ATTEMPTS` mount attempts 1 s apart (none when the
 //!    card-failure restart budget is spent), `check_card` (the slow-clock
-//!    record, a different card's restart), the boot's card checks (a saved
+//!    record, a different card back to full speed), the boot's card checks (a saved
 //!    playlist that no longer opens, the retired files), and the playlist
 //!    index opened or built (`open_catalog`, on a fresh heap: the in-RAM
 //!    fallback's 64 KB block still exists, `HEAP_FRESH`).
@@ -201,7 +201,7 @@ fn mount(
     quiet_for: Option<u32>,
 ) -> Mount {
     let khz = health.speed_khz;
-    let card = match bus.mount(khz) {
+    let card = match bus.mount(khz, health.capped) {
         Ok(c) => c,
         Err(e) => {
             let e = format!("{e:#}");

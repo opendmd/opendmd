@@ -253,6 +253,17 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   (`{"confirm":true}`) formats an unreadable card: 202, `sd.formatting`
   true for 3 s, then the card reads (`--sd ok` from then on); a readable
   card, no card or a format already running is a 409, as on the device.
+- **Card speed** (`card_speed`: `safe` (the default), `fast`, `full` (API
+  only), else a 400 `card_speed must be safe, fast or full`; the PUT reply
+  adds `card_speed_applied` `now`, or `at_mount` with `--sd none`). Status
+  `sd` has `clock_khz` (null with no card), `fallback`, `probe`,
+  `slowdowns`, `recoveries`: safe is 20000 and no fallback, full 40000,
+  fast 40000, or 20000 + fallback while the card is recorded slow.
+  `--sd slowed` starts a readable card set to `fast` that has already been
+  slowed (fallback, 20000, `slowdowns` 1, `probe` "slowed");
+  `POST /api/card/full-speed` forgets the record (409 when `card_speed` is
+  safe) and answers `{ok, applied, clock_khz}`; `POST /api/reboot?sd_io_fail=3`
+  records the card slow too, `?sd_fallback=clear` forgets it.
 - **Security** (docs/api.md "Security"), checked in `route` before any
   handler: a `POST`/`PUT`/`DELETE` whose `Origin` names another host[:port]
   than `Host` (scheme dropped, `:80` dropped, case ignored) is a 403
@@ -598,6 +609,7 @@ DEFAULT_SETTINGS = {
     "transition": "dissolve",   # config::TRANSITION (opendmd_core::compositor)
     "transition_ms": 400,
     "auto_prepare": "idle",     # config::AUTO_PREPARE: idle / always / off
+    "card_speed": "safe",       # config::CARD_SPEED: safe / fast / full
     "follow": False,            # Follow RePlayOS
     "follow_host": "",
     "follow_code": "",          # the NET CONTROL code -- never echoed back
@@ -641,6 +653,7 @@ FIELD_TYPES = {
     "transition": "str",
     "transition_ms": "u64",
     "auto_prepare": "str",
+    "card_speed": "str",
     "follow": "bool",
     "follow_host": "str",
     "follow_code": "str",
@@ -655,6 +668,7 @@ FIELD_TYPES = {
     # alongside "set" (see h_config_put).
 }
 AUTO_PREPARE = ("idle", "always", "off")
+CARD_SPEED = ("safe", "fast", "full")
 # The simulated builder's pace (seconds per file) and its known failures.
 AUTO_FULL_S, AUTO_DRIP_S, AUTO_FAIL_EVERY = 2.0, 6.0, 25
 
@@ -1981,7 +1995,14 @@ class Player:
             self.pos = -1
             self.last_advance = time.monotonic()
             return
-        self.pos = (self.pos + 1) % len(self.order)
+        # As the engine does when a file will not open: on to the next. A
+        # card copy can list a GIF it does not hold, and the Now preview's
+        # GET of it would be a 404.
+        for _ in range(len(self.order)):
+            self.pos = (self.pos + 1) % len(self.order)
+            path = self.playlist[self.order[self.pos]]
+            if not path.startswith("/") or self.ctx.fs.read_path(path.lstrip("/")) is not None:
+                break
         self.ordinal += 1
         self.gifs_started += 1
         self.last_advance = self.file_t0 = time.monotonic()
@@ -2492,7 +2513,11 @@ class Context:
         # test hooks as the device: POST /api/reboot?sd_io_fail=3 plays a
         # card-failure restart (the next "boot" is at 20 MHz, reset_note
         # "card failure"); ?sd_fallback=clear forgets it.
-        self.sd = {"clock_khz": 40000, "fallback": False, "failures": 0, "reboots": 0}
+        self.sd = {"clock_khz": 40000, "fallback": False, "failures": 0, "reboots": 0,
+                   "probe": None, "slowdowns": 0, "recoveries": 0}
+        # Whether this card is recorded slow (what `card_speed: fast` reads;
+        # `--sd slowed` and a card-failure restart set it).
+        self.sd_slow_record = False
         self.reset_note = None
         self.schedule.evaluate()  # picks up the playlist rebuilt just above
         # Firmware update: the running version, the updater's last line, the
@@ -2533,6 +2558,14 @@ class Context:
         return out
 
 
+def apply_card_speed(ctx: "Context") -> None:
+    """The clock and fallback `card_speed` gives the card: safe 20 MHz, full
+    40 MHz, fast 20 MHz when this card is recorded slow, else 40 MHz."""
+    mode = ctx.settings["card_speed"]
+    slow = mode == "safe" or (mode == "fast" and ctx.sd_slow_record)
+    ctx.sd.update(clock_khz=20000 if slow else 40000, fallback=(mode == "fast" and ctx.sd_slow_record))
+
+
 SD_UNREADABLE = "card not readable: it needs FAT32; format it from the web app"
 
 
@@ -2550,7 +2583,10 @@ def sd_fields(ctx: "Context") -> dict:
     elif ctx.sd_state == "none":
         base.update(mounted=False, readable=False, capacity_bytes=0, attempts=2,
                     error="no card, or card init failed: ESP_ERR_TIMEOUT")
-    return {**base, **ctx.sd}
+    out = {**base, **ctx.sd}
+    if ctx.sd_state == "none":
+        out["clock_khz"] = None
+    return out
 
 
 def ticker_loop(ctx: Context, stop: threading.Event):
@@ -2736,6 +2772,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/schedule"), {"GET": self.h_schedule_get, "PUT": self.h_schedule_put}),
                 (m_exact("/api/wake"), {"POST": self.h_wake}),
                 (m_exact("/api/card/format"), {"POST": self.h_card_format}),
+                (m_exact("/api/card/full-speed"), {"POST": self.h_card_full_speed}),
                 (m_exact("/api/follow/test"), {"POST": self.h_follow_test}),
                 (m_exact("/api/play"), {"POST": self.h_play}),
                 (m_exact("/api/panel/test"), {"POST": self.h_panel_test}),
@@ -2987,6 +3024,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "transition": s["transition"],
                     "transition_ms": s["transition_ms"],
                     "auto_prepare": s["auto_prepare"],
+                    "card_speed": s["card_speed"],
                     "follow": s["follow"],
                     "follow_host": s["follow_host"],
                     "follow_code_set": bool(s["follow_code"]),
@@ -3141,6 +3179,9 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "auto_prepare" and v not in AUTO_PREPARE:
                         self.send_error_json(400, "auto_prepare must be idle, always or off")
                         return
+                    if field == "card_speed" and v not in CARD_SPEED:
+                        self.send_error_json(400, "card_speed must be safe, fast or full")
+                        return
                     if field == "follow_host":
                         v = v.strip()
                         if len(v) > 64 or any(c in v for c in "/ \0?#@"):
@@ -3274,6 +3315,10 @@ def make_handler(ctx: Context, quiet: bool):
                 # before the rebuild.
                 ctx.settings.clear()
                 ctx.settings.update(next_settings)
+                card_speed_applied = None
+                if "card_speed" in patch:
+                    apply_card_speed(ctx)
+                    card_speed_applied = "now" if ctx.sd_state != "none" else "at_mount"
 
                 if needs_reindex:
                     manifest_rel = ctx.player.resolve(ctx.settings["set"])
@@ -3314,7 +3359,8 @@ def make_handler(ctx: Context, quiet: bool):
                 if restart_now:
                     self.panel_restart()
 
-            self.send_json(200, {"ok": True, **fields,
+            extra = {"card_speed_applied": card_speed_applied} if card_speed_applied else {}
+            self.send_json(200, {"ok": True, **fields, **extra,
                                  "brightness": ctx.settings["brightness"],
                                  "max_brightness": ctx.settings["max_brightness"],
                                  "reboot_required": reboot_required, **panel_fields})
@@ -3846,6 +3892,21 @@ def make_handler(ctx: Context, quiet: bool):
             else:
                 self.send_json(202, {"ok": True, "formatting": True})
 
+        def h_card_full_speed(self, path):
+            """http.rs: forget the slow record and run the card at 40 MHz
+            again (409 when `card_speed` is safe). ?test_errors=N is
+            accepted and ignored: the mock's probe always comes back clean."""
+            with ctx.lock:
+                if ctx.settings["card_speed"] == "safe":
+                    self.send_error_json(409, "card_speed is safe: the card always runs at the safe speed")
+                    return
+                ctx.sd_slow_record = False
+                ctx.sd.update(probe="clean" if ctx.settings["card_speed"] == "fast" else ctx.sd["probe"])
+                apply_card_speed(ctx)
+                mounted = ctx.sd_state != "none"
+            self.send_json(200, {"ok": True, "applied": "now" if mounted else "at_mount",
+                                 "clock_khz": 40000 if mounted else None})
+
         def h_reboot(self, path):
             query = self.path.partition("?")[2] or None
             with ctx.lock:
@@ -3853,12 +3914,16 @@ def make_handler(ctx: Context, quiet: bool):
                 ctx.panel.boot()
                 ctx.reset_note = None
                 if query_param(query, "sd_fallback") == "clear":
-                    ctx.sd.update(clock_khz=40000, fallback=False, reboots=0)
+                    ctx.sd_slow_record = False
+                    ctx.sd.update(reboots=0, probe=None)
+                    apply_card_speed(ctx)
                 io = query_param(query, "sd_io_fail")
                 if io and io.isdigit() and int(io) >= 3:
                     # The chain in one step: the failing boot, then the
                     # restart it causes.
-                    ctx.sd.update(clock_khz=20000, fallback=True, reboots=min(ctx.sd["reboots"] + 1, 3))
+                    ctx.sd_slow_record = True
+                    ctx.sd.update(reboots=min(ctx.sd["reboots"] + 1, 3))
+                    apply_card_speed(ctx)
                     ctx.reset_note = "card failure"
             self.send_json(200, {"ok": True, "rebooting": True})
 
@@ -4296,8 +4361,9 @@ def parse_args():
     ap.add_argument("--panel-trial", type=float, default=60.0,
                     help="seconds a panel-timing trial runs before it reverts (the firmware's 60)")
     ap.add_argument("--proxy", help="forward everything but --www to a real device at this URL")
-    ap.add_argument("--sd", choices=["ok", "unreadable", "none"], default="ok",
-                    help="the card: ok, unreadable (mounts, exFAT: nothing plays) or none")
+    ap.add_argument("--sd", choices=["ok", "unreadable", "none", "slowed"], default="ok",
+                    help="the card: ok, unreadable (mounts, exFAT: nothing plays), none, or slowed "
+                         "(readable, set to fast, and already slowed to 20 MHz after errors)")
     ap.add_argument("--taken", default="other-display=192.168.1.42",
                     help="NAME=IP,... : display names other devices answer to (<name>.local); "
                          "GET /api/name-check and PUT /api/config's 409 use them. '' for none")
@@ -4340,7 +4406,12 @@ def main():
         fs = CardFS(root_dir, overlay_dir)
         ctx = Context(fs, www_root, args.dwell, args.strict)
         ctx.panel.trial_secs = args.panel_trial
-        ctx.sd_state = args.sd
+        ctx.sd_state = "ok" if args.sd == "slowed" else args.sd
+        if args.sd == "slowed":
+            ctx.settings["card_speed"] = "fast"
+            ctx.sd_slow_record = True
+            ctx.sd.update(slowdowns=1, recoveries=1, probe="slowed")
+        apply_card_speed(ctx)
         ctx.taken = dict(
             (p.partition("=")[0].strip().lower(), p.partition("=")[2].strip() or "192.168.1.42")
             for p in args.taken.split(",") if p.strip()

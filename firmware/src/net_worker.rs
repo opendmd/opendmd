@@ -251,6 +251,8 @@ fn run(worker: NetWorker) {
 
     info!("[net] worker started on CPU0");
 
+    // For the slow-clock record (below): the WiFi driver takes `nvs`.
+    let sd_nvs = nvs.clone();
     let mut wifi = match WifiManager::new(modem, sysloop, nvs, &hostname) {
         Ok(w) => w,
         Err(e) => {
@@ -353,6 +355,7 @@ fn run(worker: NetWorker) {
         // interval, so a scan is never left waiting for a sleep to finish.
         let got = rx.recv_timeout(follow.wait().min(config::WIFI_POLL_INTERVAL));
         crate::improv::log_events();
+        sync_sd_slow(&sd_nvs);
         if matches!(got, Ok(NetCommand::Improv(_))) {
             crate::improv::taken();
         }
@@ -660,5 +663,18 @@ fn publish_mdns(status: &Arc<Mutex<Status>>) {
             }
             s.mdns = name;
         }
+    }
+}
+
+/// The card's slow-clock record changed this run (`cardspeed` slowed the
+/// card down in place, or "try full speed again"): NVS follows, here on
+/// CPU0 rather than on the display task (polled at least once a second).
+/// RTC memory holds it meanwhile, and until a power cycle if this fails.
+fn sync_sd_slow(nvs: &EspNvsPartition<NvsDefault>) {
+    let Some(record) = crate::sdhealth::take_nvs_sync() else {
+        return;
+    };
+    if let Err(e) = crate::nvs_config::Config::new(nvs.clone()).and_then(|mut c| c.set_sd_slow(record)) {
+        error!("[net] sd_slow: {e:#}");
     }
 }

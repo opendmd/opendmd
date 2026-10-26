@@ -23,6 +23,7 @@
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
 use log::warn;
 use opendmd_core::boot::ShowLength;
+use opendmd_core::card_speed::CardSpeed;
 use opendmd_core::compositor::Transition;
 use opendmd_core::look::{GlowLevel, Look};
 use opendmd_core::panel_timing::PanelTiming;
@@ -62,6 +63,8 @@ const KEY_LOOK_FORMULA_NAME: &str = "look_fx_name";
 pub const LOOK_NAME_MAX: usize = 60;
 const KEY_ATTRACT: &str = "attract";
 const KEY_BOOT_SHOW: &str = "boot_show";
+/// The card's clock policy (`opendmd_core::card_speed::CardSpeed`).
+const KEY_CARD_SPEED: &str = "card_speed";
 /// The longest `attract` value (`text:` and the message).
 pub const ATTRACT_MAX: usize = 205;
 /// The panel timing (`opendmd_core::panel_timing`): the saved settings and
@@ -196,6 +199,10 @@ pub struct Settings {
     /// (`httpd::gate`, docs/api.md "Security"); empty = none. Never
     /// returned by the API (only `api_key_set`).
     pub api_key: String,
+    /// The card's SPI clock: `safe` (the default: always 20 MHz), `fast`
+    /// (40 MHz, slowed down in place after an error) or `full` (always
+    /// 40 MHz, never slowed: API and bench only). See `cardspeed.rs`.
+    pub card_speed: CardSpeed,
 }
 
 /// Is `v` an `attract` value `PUT /api/config` may store?
@@ -258,6 +265,7 @@ impl Default for Settings {
             look_formula_name: String::new(),
             boot_show: ShowLength::Short,
             api_key: String::new(),
+            card_speed: CardSpeed::Safe,
         }
     }
 }
@@ -422,6 +430,7 @@ impl Config {
                 .get_string(KEY_API_KEY)
                 .filter(|k| opendmd_core::access::valid_key(k))
                 .unwrap_or(d.api_key),
+            card_speed: self.card_speed(),
         }
     }
 
@@ -460,6 +469,7 @@ impl Config {
             .set_str(KEY_LOOK_FORMULA_NAME, &s.look_formula_name)?;
         self.nvs.set_str(KEY_BOOT_SHOW, s.boot_show.name())?;
         self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
+        self.nvs.set_str(KEY_CARD_SPEED, s.card_speed.as_str())?;
         Ok(())
     }
 
@@ -503,6 +513,13 @@ impl Config {
                 false
             }
         }
+    }
+
+    /// `card_speed` alone, for the boot's card records (`sdhealth::boot`),
+    /// which come before the rest of the settings.
+    pub fn card_speed(&self) -> CardSpeed {
+        // Older firmware's `auto` (and no key) reads as `safe`.
+        CardSpeed::from_nvs(self.get_string(KEY_CARD_SPEED).as_deref())
     }
 
     /// The slow-clock record: the CID serial of the card that failed at

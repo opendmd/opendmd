@@ -421,7 +421,7 @@ clean:
 # (fw-build, fw-flash) always add `dev-credentials`, which compiles the
 # firmware/.env WiFi seed in; fw-release never does.
 FW_FEATURES ?=
-FW_DEV_FEATURES = dev-credentials$(if $(FW_FEATURES),$(comma)$(FW_FEATURES))
+FW_DEV_FEATURES = dev-credentials,bench$(if $(FW_FEATURES),$(comma)$(FW_FEATURES))
 comma := ,
 FW_CARGO_FEATURES = --features $(FW_DEV_FEATURES)
 

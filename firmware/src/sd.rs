@@ -71,6 +71,13 @@ pub struct SdCard {
     pub serial: u32,
 }
 
+impl Drop for SdCard {
+    fn drop(&mut self) {
+        // Before the fields go: no clock change or raw read from here on.
+        crate::cardspeed::detach();
+    }
+}
+
 // SAFETY: the card is mounted on the boot task and handed to the main task
 // once (`boot::Handover`), which only keeps it (dropping it unmounts). What
 // it holds is C state for the driver and the FATFS volume — raw pointers
@@ -112,7 +119,12 @@ impl SdBus {
     /// Only a clock the driver refuses fails *at* the clock switch, and that
     /// failure's teardown crashes (CLAUDE.md, "When the card will not
     /// mount"); 40 MHz on `SPI3` and the 20 MHz fallback are both allowed.
-    pub fn mount(&mut self, speed_khz: u32) -> Result<SdCard> {
+    ///
+    /// The mounted card's disk I/O goes through `cardspeed` (registered
+    /// before the first access), which can change the clock in place;
+    /// `capped` (the card-failure restart budget is spent) keeps it at the
+    /// safe clock whatever the setting.
+    pub fn mount(&mut self, speed_khz: u32, capped: bool) -> Result<SdCard> {
         self.attempts += 1;
         if take_simulated_failure() {
             anyhow::bail!("simulated failure (POST /api/reboot?sd_fail=N)");
@@ -125,10 +137,23 @@ impl SdBus {
         // SAFETY: `cid` is the union's decoded view, which the SD init
         // fills (`raw_cid` is MMC's).
         let serial = unsafe { raw.__bindgen_anon_1.cid.serial } as u32;
+        let sectors = raw.csd.capacity as u32;
+        // The driver keeps the card boxed: this address lives as long as
+        // the mount (`cardspeed::detach` in our drop, before it goes).
+        let raw_ptr = raw as *const esp_idf_sys::sdmmc_card_t as *mut esp_idf_sys::sdmmc_card_t;
 
         let fatfs = Fatfs::new_sdcard(0, card).context("FAT driver registration failed")?;
-        let mounted = MountedFatfs::mount(fatfs, config::SD_MOUNT, config::SD_MAX_FILES)
-            .context("FAT mount failed")?;
+        // Ours in place of the IDF's disk I/O before the VFS can reach the
+        // drive (FatFs mounts lazily: nothing has been read yet).
+        crate::cardspeed::attach(0, raw_ptr, real_freq_khz as u32, serial, sectors, capped);
+        let mounted = match MountedFatfs::mount(fatfs, config::SD_MOUNT, config::SD_MAX_FILES) {
+            Ok(m) => m,
+            Err(e) => {
+                // `fatfs` (and the drive's registration) went with it.
+                crate::cardspeed::detach();
+                return Err(e).context("FAT mount failed");
+            }
+        };
 
         Ok(SdCard {
             _fs: mounted,

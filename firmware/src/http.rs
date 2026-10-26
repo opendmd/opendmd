@@ -252,6 +252,9 @@ struct ConfigPatch {
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
     api_key: Option<String>,
+    /// `safe`, `fast` or `full` (`opendmd_core::card_speed`): in effect at
+    /// once when a card is mounted (`cardspeed::set_mode`).
+    card_speed: Option<String>,
     /// Panel timing: an object is tried (reverts unless confirmed), `null`
     /// saves the defaults (`PanelOp`).
     #[serde(default, deserialize_with = "double_option_panel")]
@@ -292,10 +295,10 @@ struct WakeRequest {
 /// always registered and read the live WiFi state out of [`Status`] when a
 /// request arrives.
 pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
-    // URI handler slots: one per `route`/`route_json` below (48 now, the
-    // captive-portal loop counting six; 49 leaves one spare). Registration
+    // URI handler slots: one per `route`/`route_json` below (49 now, the
+    // captive-portal loop counting six; 50 leaves one spare). Registration
     // past the limit fails the whole server, so count when adding a route.
-    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 49)?;
+    let mut server = Server::start(0, config::HTTP_STACK, config::HTTP_MAX_SOCKETS, 50)?;
     // The API key, if one is set (`api_key`; `httpd::gate` checks it).
     crate::httpd::set_api_key(&ctx.settings.lock().unwrap().api_key);
 
@@ -569,6 +572,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             }
             next.api_key = v.clone();
         }
+        if let Some(v) = &patch.card_speed {
+            let Some(mode) = opendmd_core::card_speed::CardSpeed::parse(v) else {
+                return req.bad_request(opendmd_core::card_speed::INVALID);
+            };
+            next.card_speed = mode;
+        }
         if next.dwell_max < next.dwell_min {
             return req.bad_request("dwell_max must be >= dwell_min");
         }
@@ -620,6 +629,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             }
         }
         let (saved_brightness, saved_max) = (next.brightness, next.max_brightness);
+        let card_speed = next.card_speed;
 
         let (tx, rx) = mpsc::channel();
         if c.cmd
@@ -644,6 +654,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     crate::httpd::set_api_key(k);
                     info!("API key {}", if k.is_empty() { "cleared" } else { "set" });
                 }
+                // Saved: now the clock (here, on CPU0, under the card's
+                // I/O lock), and when it took effect; `restart`: it could
+                // not be changed in place, so the device restarts (after
+                // the reply) and the saved setting applies at that boot.
+                let speed_applied = patch.card_speed.map(|_| crate::cardspeed::set_mode(card_speed));
+                let speed = match speed_applied {
+                    Some(a) => format!(r#","card_speed_applied":"{}""#, a.name()),
+                    None => String::new(),
+                };
                 let (panel, restart) = {
                     let st = c.status.lock().unwrap();
                     (panel_json(&st), st.panel.restart_needed())
@@ -652,9 +671,13 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 // pending from before: the WiFi banner keys off this).
                 let reboot_required = reboot_required || (panel_op.is_some() && restart);
                 req.json(&format!(
-                    r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{reboot_required},{panel}}}"#,
+                    r#"{{"ok":true,{},"brightness":{saved_brightness},"max_brightness":{saved_max},"reboot_required":{reboot_required},{panel}{speed}}}"#,
                     applied_json(&applied)
-                ))
+                ))?;
+                if speed_applied == Some(crate::cardspeed::Applied::Restart) {
+                    reboot_after_response();
+                }
+                Ok(())
             }
             Ok(Err(e)) if e == panel_timing::NO_TRIAL => req.error(409, "409 Conflict", &e),
             // Checked by the main task before anything was saved: the
@@ -1183,6 +1206,38 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         info!("card format requested over HTTP");
         crate::boot::request_format();
         req.respond_json("202 Accepted", r#"{"ok":true,"formatting":true}"#)
+    })?;
+
+    // "Try full speed again": forget this card's slow-clock record and go
+    // back to full speed, in place when a card is mounted (`cardspeed`),
+    // else at the next mount; a restart only if the clock cannot be
+    // changed. `?test_errors=N` (test hook): the next N card transfers at
+    // full speed fail on purpose, so the in-place slow-down can be watched
+    // on a good card.
+    server.route("/api/card/full-speed", Method::Post, |req| {
+        // `?test_errors=N`: `bench` builds only (ignored in a release).
+        #[cfg(feature = "bench")]
+        let test = query_param(req.query(), "test_errors")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        #[cfg(not(feature = "bench"))]
+        let test = 0;
+        info!("try full speed again, asked over HTTP{}", if test > 0 { " (test hook armed)" } else { "" });
+        match crate::cardspeed::full_speed_again(test) {
+            Err(e) => req.error(409, "409 Conflict", e),
+            Ok(crate::cardspeed::Applied::Restart) => {
+                req.json(r#"{"ok":true,"applied":"restart","rebooting":true}"#)?;
+                reboot_after_response()
+            }
+            Ok(a) => req.json(&format!(
+                r#"{{"ok":true,"applied":"{}","clock_khz":{}}}"#,
+                a.name(),
+                match crate::cardspeed::khz() {
+                    0 => "null".to_string(),
+                    k => k.to_string(),
+                }
+            )),
+        }
     })?;
 
     server.route("/api/reboot", Method::Post, |req| {
@@ -1940,7 +1995,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
             r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"#,
-            r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"error":{},"attempts":{},"formatting":{},"format_error":{},{}}},"reset_reason":{},"reset_note":{},"#,
+            r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"error":{},"attempts":{},"formatting":{},"format_error":{},{},{}}},"reset_reason":{},"reset_note":{},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
             r#""schedule":{{"rule":{},"set":{},"until":{}}},"cache":{},"context":{},"#,
@@ -1989,6 +2044,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.sd_formatting,
         opt_json(s.sd_format_error.as_deref()),
         crate::sdhealth::status_json(),
+        crate::cardspeed::Status,
         json_string(s.reset_reason),
         opt_json(crate::sdhealth::reset_note()),
         s.overrides,
@@ -2128,7 +2184,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"look_formula_name":{},"#,
-            r#""boot_show":"{}","api_key_set":{}}}"#
+            r#""boot_show":"{}","api_key_set":{},"card_speed":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2156,6 +2212,7 @@ fn settings_json(s: &Settings) -> String {
         json_string(&s.look_formula_name),
         s.boot_show.name(),
         !s.api_key.is_empty(),
+        s.card_speed.as_str(),
     )
 }
 

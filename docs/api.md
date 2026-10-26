@@ -126,7 +126,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `deadline_misses`, `worst_lateness_ms` | all late frames; the latest, ms |
 | `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: frames ≥ `threshold_ms` late in play (`steady`) or at a GIF change (`switch`: first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`) |
 | `gifs_started`, `streams_aborted`, `log_drops` | files opened; responses cut short; log lines dropped |
-| `sd` | `{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `fallback` slowed after failing at full speed; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min |
+| `sd` | `{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `clock_khz` its SPI clock (20000 safe, 40000 fast; null unmounted); `fallback` a `fast` card slowed to 20 MHz after errors; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min; `probe` the check of a card at full speed soon after it mounts: null, `waiting`, `running`, `clean`, `slowed`, `skipped`; `slowdowns` times `fast` slowed the card in place this boot; `recoveries` failed transfers the card was stopped after (CMD12) |
 | `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `task watchdog`, `brownout`, …; `"card failure"`, `"different card"` or null |
 | `overrides`, `hidden` | as in "Fields that recur" |
 | `mode`, `mode_until` | `normal`, `dim` or `off` (night mode); until `"HH:MM"` |
@@ -162,7 +162,8 @@ curl -s "$DMD/api/stat?path=/filelist.txt"
 Replies `{"ok":true,"rebooting":true}`, stops any card write, restarts.
 Bench test hooks: `?sd_fail=N` (next N card mounts fail),
 `?sd_io_fail=N&sd_io_boots=B` (N card reads fail on each of B boots),
-`?sd_fallback=clear` (forget the card's slow clock).
+`?sd_fallback=clear` (forget the card's slow clock at the next boot; see
+`POST /api/card/full-speed` for the live way).
 
 ```sh
 curl -s -X POST $DMD/api/reboot
@@ -178,6 +179,21 @@ format running.
 
 ```sh
 curl -s $DMD/api/card/format --json '{"confirm":true}'
+```
+
+### POST /api/card/full-speed
+
+"Try full speed again": forgets this card's slow clock (`sd.fallback`) and
+returns it to 40 MHz, in place (no restart) when a card is in; with
+`card_speed` `fast` it is then checked again, and slowed again at the first
+error. `{"ok":true,"applied":"now","clock_khz":40000}`; `"applied":
+"at_mount"` with no card; `"restart"` (with `"rebooting":true`) only if the
+clock could not be changed in place. `409` when `card_speed` is `safe`. Test
+hook (bench builds; a release ignores it): `?test_errors=N` fails the next N card transfers at full speed (the
+check is skipped), to watch `fast` slow a good card down.
+
+```sh
+curl -s -X POST $DMD/api/card/full-speed
 ```
 
 ## Settings
@@ -211,6 +227,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""` or its `@fx:psi?src=…` path (≤ 2,048 B, else `413`; one that does not compile or is too heavy to draw over GIFs is a `400` with the reason, nothing saved) |
 | `look_formula_name` | `""` | its name, for display (≤ 60 characters, one line) |
 | `boot_show` | `short` | start-up show: `off`, `short`, `full` (from the next boot) |
+| `card_speed` | `safe` | the card's SPI clock: `safe` (20 MHz), `fast` (40 MHz; at a card error, 20 MHz from then on for that card, changed in place with the transfer retried, so nothing restarts), `full` (API and bench only: always 40 MHz, never slowed; errors restart the player as a failing card does). 20 MHz is the default because the SD spec only promises SPI up to 25 MHz, and a marginal card at 40 MHz was measured returning wrong data with no error; at 20 MHz the card still reads several times faster than playback (tens of KB/s) or WiFi downloads (~300 KB/s) use it. Older firmware's `auto` reads as `safe` |
 | `panel` | object | panel timing: `clk_phase` true (rising edge) or false, `latch_blanking` 1..=4 (1), `driver` `shiftreg`, `fm6126a`, `fm6124`, `icn2038s`, `mbi5124`, `dp3246`, `i2s_speed` 8, 16, 20 MHz (8), `min_refresh` 30..=240 Hz (60) |
 | `panel_now`, `panel_next`, `panel_trial_s` | | what runs; what a restart would run, else null; seconds until the trial reverts, else null |
 
@@ -236,7 +253,9 @@ others at a restart, and revert with one. `"panel":null` saves the defaults.
 Reply: `{"ok":true, entries, index, index_ms, overrides, hidden,
 "brightness", "max_brightness", "reboot_required", "panel", …}` (the
 playlist fields as in "Fields that recur", the panel ones as above;
-`reboot_required`: a WiFi or panel change waits for a reboot).
+`reboot_required`: a WiFi or panel change waits for a reboot). With
+`card_speed`, `card_speed_applied`: `now` (the clock changed in place),
+`at_mount` (no card in), `restart` (the clock could not be changed in place: saved, and the device restarts after the reply).
 
 Errors (nothing saved): `400` a value out of range or not one of the names
 (the message says which), e.g. `brightness N is above the maximum M; raise
