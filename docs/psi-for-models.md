@@ -33,8 +33,12 @@ and (optionally) the picture under it.
 
 Coordinates: `x` is 0 at the left column to 1 at the right (`x = px/127`);
 `y` is 0 at the **bottom** row to 1 at the top (`y = py/31`). The panel is
-4 times wider than tall: a circle needs `len((x - 0.5)*4, y - 0.5)`, or work
-in pixels (`len(px - 63.5, py - 15.5)`).
+4 times wider than tall, so the built-ins about the middle measure in panel
+heights: `cx` is −2 at the left edge to 2 at the right, `cy` −0.5 at the
+bottom to 0.5 at the top, and `r` (the distance from the middle) and
+`angle` are round: `r < 0.4` is a disc, not an ellipse. Or work in pixels
+(`len(px - 63.5, py - 15.5)`). `ty` is the row counted from the top (0 to
+31), as the fonts count.
 
 Angles and waves are in **turns**: `sin(0.25)` is 1; `sin(v)` repeats every 1.
 Time `t` is seconds into the loop, always a whole number of 20 ms frames.
@@ -49,11 +53,15 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "layer" [BLEND] "{" { assign | frameblock } colourline "}"
           | "part" NAME "{" formula-body "}"  -- another formula inside this one
 colourline= "rgb" "(" e "," e "," e [ "," cover ] ")"
+          | "rgb" "(" ce [ "," cover ] ")"       -- a colour, maybe covering less
           | "hsv" "(" e "," e "," e [ "," cover ] ")"
           | "pal" "(" PALETTE "," e [ "," cover ] ")"
           | "gray" "(" e [ "," cover ] ")"
           | PART [ "(" e "," e [ "," cover ] ")" ]   -- a part's colour, maybe elsewhere
+          | ce                                 -- a colour expression (see 6)
           | e                                  -- a bare value: gray(e)
+ce        = an expr with a COLOUR or an "rgb(" e "," e "," e ")" in it, read
+            once a channel
 expr      = or [ "?" expr ":" expr ]           -- both arms are always evaluated
 or        = and { ("or" | "||") and }
 and       = not { ("and" | "&&") not }
@@ -62,12 +70,14 @@ cmp       = sum { ("<" | "<=" | ">" | ">=" | "==" | "!=") sum }
 sum       = term { ("+" | "-") term }
 term      = unary { ("*" | "/" | "%") unary }
 unary     = ("-" | "+") unary | atom
-atom      = NUMBER | CHAR | NAME | FUNC "(" args ")" | PART "." NAME
+atom      = NUMBER | CHAR | COLOUR | NAME | FUNC "(" args ")" | PART "." NAME
           | PART "(" e "," e ")" "." NAME | "(" expr ")"
 args      = e { "," e }                        -- digit/glyph: e "," e "," e [ "," FONT ]
+                                               -- pick: e "," e { "," e }
 sep       = newline | ";"                      -- newlines inside ( ) are spaces
 NUMBER    = digits [ "." digits ] | "." digits -- no sign, no exponent
 CHAR      = "'" one printable ASCII character "'"   -- its code: 'A' is 65
+COLOUR    = "#" 6 hex digits | "#" 3 hex digits   -- #ff8800, #f80 (each digit twice); colour lines only
 FONT      = "normal" | "small" | "bold"      -- bold: digit only
 NAME      = [A-Za-z_][A-Za-z0-9_]*
 comment   = "--" or "//" to the end of the line
@@ -106,11 +116,19 @@ computer.
 | `w`, `h` | 128 and 32 (constants) | — |
 | `ur`, `ug`, `ub` | red, green, blue of the picture under the formula, 0..1 | pixel |
 | `ul` | its brightness (Rec. 601: `(77R + 150G + 29B + 128)/256`), 0..1 | pixel |
+| `cx` | across from the middle in panel heights, −2..2: `(x − 0.5)·4` | pixel |
+| `cy` | up from the middle, −0.5..0.5: `y − 0.5` | row |
+| `r` | the distance from the middle, in panel heights: `len(cx, cy)` (0.5 touches the top and bottom) | pixel |
+| `angle` | the angle about the middle in turns, −½..½, 0 to the right, ¼ up: `atan2(cy, cx)` | pixel |
+| `ty` | the row from the **top**, 0..31 (whole numbers): `31 − py` | row |
 
-Alone (not over a GIF), `ur ug ub ul` are 0. Built-in names, function
-names, palette names and keywords (`loop frame layer part use`) cannot be
-set (except `digit`, `glyph` and `bit`, added later, so formulas saved
-with those names still work; don't use them as names in new ones).
+`cx cy r angle ty` are exactly the formulas after their colons: the same
+steps, the same cost, the same bytes. Alone (not over a GIF), `ur ug ub ul`
+are 0. Built-in names, function names, palette names and keywords (`loop
+frame layer part use`) cannot be set (except `digit`, `glyph`, `bit`,
+`pick`, `cx`, `cy`, `r`, `angle` and `ty`, added later, so formulas saved
+with those names still work: a name a formula sets is that name; don't use
+them as names in new ones).
 
 ## 5. Functions
 
@@ -136,6 +154,14 @@ with those names still work; don't use them as names in new ones).
 | `digit(…, small)`, `glyph(…, small)` | the same in the small font |
 | `digit(…, bold)` | the same in the bold 3 × 5 digits (no `glyph`: digits only) |
 | `bit(n, i)` | bit i of floor(n), 1 or 0 (two's complement); i floored, i < 0 gives 0 |
+| `pick(k, a, b, …)` | `a` when floor(k) is 0, `b` when 1, …; **0** when it is below 0 or past the last (any number of values) |
+
+**Picking.** `pick(k, a, b, c)` is the chain `k < 0 ? 0 : k < 1 ? a : k <
+2 ? b : k < 3 ? c : 0`, byte for byte, but one step a pixel when `k` varies
+per pixel and the values it picks from don't (numbers, characters,
+`frame { }` values, anything per row): a digit's value from the clock, a
+letter of a word (`pick(cell, 'H', 'I')`), a colour (section 6). When the
+values vary per pixel it is that chain of compares and selects.
 
 **Digits and text.** `digit` and `glyph` read the panel's own bitmap fonts
 (OpenDMD's `@clock` and title cards; X11 misc-fixed, printable ASCII), and
@@ -169,6 +195,30 @@ The last line is the colour:
 | `hsv(h, s, v)` | hue in turns (wraps: `frac`), saturation and value clamped 0..1 |
 | `pal(P, k)` | palette P at k (clamped 0..1), **32 steps** (bands on slow ramps) |
 | `gray(v)` | black to white; a bare value `v` means `gray(v)` |
+| `#ff8800`, `#f80` | a colour: red, green, blue as two hex digits each (or one, doubled) |
+| a colour expression | arithmetic on colours, read once a channel (below) |
+| `rgb(c, k)` | colour expression `c` covering `k` of the pixel |
+
+**Colours.** `#rrggbb` names a colour by its bytes: the channel `cc` is
+exactly `cc/255`, so `#ff8000` is drawn as 255, 128, 0. A colour goes only
+in a colour line, never in a name (`v = #f80` is an error: colours are not
+values). A colour line with a colour in it (a `#…`, or an `rgb(r, g, b)`
+inside it) is a **colour expression**: it is read three times, once for
+red, once for green, once for blue, with each `#…` that channel's value and
+each `rgb(r, g, b)` inside it that channel's value, and the rest as usual.
+So
+
+- `#f80 * k` is `rgb(k, k*0.533, 0)`: the colour at brightness `k`;
+- `mix(#102040, #ff8800, k)` goes from one colour to the other as `k`
+  goes from 0 to 1 (not clamped);
+- `pick(n, #f00, #0f0, #00f)` and `c ? #fff : #888` choose a colour;
+- `mix(rgb(ur, ug, ub), #b08040, a)` mixes the picture under with a colour;
+- `#f80*0.5 + #008*k` adds two colours, each channel clamped at the end.
+
+Each step runs once per channel: a colour expression costs what the
+three channels written out as `rgb(…)` cost (`#f80 * k` is one multiply:
+a channel of 1 is free, of 0 folds away). `hsv`, `pal` and `gray` take
+values only.
 
 Palettes: `fire` (black, red, orange, yellow, near white), `ice` = `ocean`
 (black, navy, blue, cyan, near white), `amber` (black to warm amber),
@@ -178,7 +228,8 @@ purple, blue, white at ~0.75, purple, dark), `gray`.
 
 Every colour takes one more, optional value: **coverage**, how much of the
 pixel it covers, 0..1 (clamped): `rgb(r, g, b, k)`, `hsv(h, s, v, k)`,
-`pal(P, v, k)`, `gray(v, k)`. Where it covers less than all, what is below
+`pal(P, v, k)`, `gray(v, k)`, and for a colour expression `rgb(c, k)`
+(`rgb(#ff3333, k)`). Where it covers less than all, what is below
 shows through: `result = below + (colour − below)·k`, in 8-bit channels.
 
 ## 7. Layers
@@ -286,6 +337,7 @@ change — constants once, `t`/clock/slider-only values once a frame,
 | colour `rgb` | 120 | | colour `hsv` | 195 |
 | `ur` `ug` `ub` | 35 | | `ul` | 125 |
 | `digit` `glyph` | ~100 (estimated) | | `bit` | 55 |
+| `pick` (values the same for every pixel) | 60 (estimated) | | `pick` of per-pixel values | its compares and selects |
 | each extra layer | 150 (multiply 210, screen 290; +75 with coverage) | | showing the picture under | 50 |
 
 Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs, but
@@ -297,8 +349,10 @@ arithmetic costs the same as `x` arithmetic.
 
 - **Seamless loops**: with `loop N`, move things by `t/N` (or `t*k/N`, k
   whole) inside periodic functions (`sin`, `frac`, `tri`, hue).
-- **Circles**: `d = len((x - 0.5)*4, y - 0.5)` or in pixels; soft edge:
-  `smoothstep(r + 0.5, r - 0.5, d)` (in pixels).
+- **Circles**: `r` (or `len(px - 63.5, py - 15.5)` in pixels); a disc
+  `step(r, 0.3)`; soft edge in pixels: `smoothstep(rad + 0.5, rad - 0.5, d)`.
+  A circle about another point: `len(cx - 1, cy)`. Spokes and sweeps:
+  `angle` (`frac(angle - t/4)` turns once a loop).
 - **Bands and cells**: `floor(px/8)`, `px % 8`, `frac(x*4)`; checker:
   `(floor(px/8) + floor(py/8)) % 2`.
 - **Random per column/row/pixel**: `hash(px, 7)`, `hash(py, 3)`,
@@ -313,23 +367,27 @@ arithmetic costs the same as `x` arithmetic.
   `layer { B(x, y, k) }`.
 - **Mirror / tile / zoom a part**: `p(abs(x - 0.5)*2, y)`, `p(frac(x*4), y)`,
   `p((x - 0.5)/2 + 0.5, (y - 0.5)/2 + 0.5)`.
-- **Digits and text**: work out, from `px` and `py`, which cell the pixel
-  is in, which character goes there (a chain of `?:`, character codes in
-  quotes), and the column and row inside the cell; `digit`/`glyph` is the
-  pixel, 0 or 1, ready for `hsv`'s value or a coverage. Scale by dividing
+- **Digits and text**: work out, from `px` and `ty`, which cell the pixel
+  is in, which character goes there (`pick`, character codes in quotes),
+  and the column and row inside the cell; `digit`/`glyph` is the pixel, 0
+  or 1, ready for `hsv`'s value, a coverage or `#…*`. Scale by dividing
   the offsets. The next block writes HELLO at twice the size in the
   middle; examples 26 and 27 put it to work.
 
 ```psi
 -- 5 letters x 10 px (the 5-px cell, doubled) = 50 px, from column 39
-u = px - 39; v = 22 - py             -- offsets from the text's top left
-cell = floor(u/10)                   -- which letter
-ch = cell < 0 ? 0 : cell < 1 ? 'H' : cell < 2 ? 'E' : cell < 4 ? 'L' : cell < 5 ? 'O' : 0
+u = px - 39; v = ty - 9              -- offsets from the text's top left
+ch = pick(floor(u/10), 'H', 'E', 'L', 'L', 'O')   -- which letter (0 outside)
 gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
 ```
 
-  (Character 0 draws nothing, so the ends of the chain are blank; `%` is
-  floored, so `floor(u/2) % 5` is the column even left of the text.)
+  (`pick` gives 0 outside the word and character 0 draws nothing, so
+  either side is blank; `%` is floored, so `floor(u/2) % 5` is the column
+  even left of the text.)
+- **Colours**: name them by their bytes and do the arithmetic on the
+  colour: `#80b3ff * glow` (light blue at brightness `glow`),
+  `mix(#1a1033, #ff8020, k)` (a two-colour gradient), `pick(k, #f00, #0f0)`.
+  `rgb(#ff3333, k)` covers `k` of the pixel.
 - **Your own patterns**: pack rows of pixels into a whole number and read
   them back with `bit(row_bits, column)`, e.g. an 8-pixel row pattern
   `bit(165, px % 8)`.
@@ -401,7 +459,7 @@ gray(digit(3, px % 5, 31 - py, 2))
 
 ```psi error
 -- error: a character goes in quotes, one at a time
-gray(glyph('AB', px % 5, 31 - py))
+gray(glyph('AB', px % 5, ty))
 ```
 
 There are no strings: one `glyph` per character cell (the idiom above).
@@ -409,6 +467,32 @@ There are no strings: one `glyph` per character cell (the idiom above).
 ```psi error
 -- error: unknown palette `blue`
 pal(blue, x)
+```
+
+```psi error
+-- error: a colour can't be a value
+glow = #ffcc00
+glow * x
+```
+
+A colour has no name: write it where it is used, in the colour line
+(`#ffcc00 * x`).
+
+```psi error
+-- error: a colour can't be a value
+hsv(#ff8800)
+```
+
+`hsv`, `pal` and `gray` take values; a colour goes on its own or in `rgb(#ff8800, k)`.
+
+```psi error
+-- error: a colour is # and 3 or 6 hex digits
+#ff880
+```
+
+```psi error
+-- error: `pick` takes a number, then the values to pick from
+gray(pick(x))
 ```
 
 ```psi error
@@ -445,7 +529,11 @@ layer add { p }
 Mistakes that compile but look wrong (the contact sheet shows them):
 
 - `y` is **up**: `y = 0` is the bottom row.
-- Forgetting the 4:1 aspect: `len(x - 0.5, y - 0.5)` makes ellipses.
+- Forgetting the 4:1 aspect: `len(x - 0.5, y - 0.5)` makes ellipses
+  (`r` doesn't).
+- `cx` and `cy` are in panel heights: `cx` reaches ±2, `cy` only ±0.5.
+- `pick` counts from **0**: `pick(k, a, b)` is `a` for `0 <= k < 1`; and
+  it is 0 past the end, not the last value.
 - `step(v, edge)` instead of `step(edge, v)`: the comparison is reversed.
 - A loop that jumps: something moved by `t/3` under `loop 4`.
 - `pal(rainbow, frac(…))` shows a black band where it wraps; use `hsv`.
@@ -495,7 +583,7 @@ Cells from whole pixels: `floor` and `%`.
 ```psi example=checkerboard
 -- 8x8-pixel squares; floor makes whole cells, % 2 alternates them
 cell = (floor(px/8) + floor(py/8)) % 2
-rgb(cell*0.9, cell*0.2 + 0.1, 0.3)
+mix(#001a4d, #e54d4d, cell)          -- navy where cell is 0, red where 1
 ```
 
 ### 5. Plasma
@@ -510,13 +598,12 @@ hsv(wave/6 + t/8, 0.9, 1)
 
 ### 6. Rings
 
-Distance from the middle with the 4:1 aspect corrected.
+`r`, the distance from the middle, is round on the 4:1 panel.
 
 ```psi example=rings
 loop 4
--- x counts 4 times: the panel is 4 times wider than tall
-d = len((x - 0.5)*4, y - 0.5)
-pal(rainbow, frac(d*1.5 - t/2))
+-- r: the distance from the middle, in panel heights
+pal(rainbow, frac(r*1.5 - t/2))
 ```
 
 ### 7. Noise fire
@@ -577,7 +664,7 @@ A soft light on a path; values kept in range with `clamp`.
 ```psi example=spotlight
 loop 8
 -- a soft disc moving along a figure of eight, over a dim floor
-dx = (x - 0.5 - 0.35*sin(t/8))*4; dy = y - 0.5 - 0.3*sin(t/4)
+dx = cx - 0.35*sin(t/8)*4; dy = cy - 0.3*sin(t/4)
 light = clamp(1.3 - (dx*dx + dy*dy)*4, 0.12, 1)
 rgb(light, light*0.9, light*0.7)
 ```
@@ -639,13 +726,13 @@ A picture, scanlines multiplied on, a glow added with coverage.
 ```psi example=layered-glow
 loop 4
 -- a plasma, scanlines multiplied on, then a warm glow added in the middle
-dx = x - 0.5; dy = y - 0.5
+dx = x - 0.5
 layer {
   wave = sin(x*2 + t/4) + sin(y*1.5 - t/2)
   hsv(wave/4 + t/4, 0.9, 1)
 }
 layer multiply { gray(py % 2 ? 1 : 0.6) }
-layer add { rgb(1, 0.8, 0.4, 0.35 - (dx*dx*4 + dy*dy)*1.2) }
+layer add { rgb(#ffcc66, 0.35 - (dx*dx*4 + cy*cy)*1.2) }
 ```
 
 ### 17. Scanlines over a GIF
@@ -659,12 +746,12 @@ layer multiply { gray(py % 2 ? 1 : 0.55) }
 
 ### 18. Old photo over a GIF
 
-Reading the picture under: its colour and brightness, mixed by slider `a`.
+Reading the picture under: its colour and brightness, mixed by slider `a`
+(a colour expression: `mix` of two colours, each `rgb(…)` of values).
 
 ```psi example=sepia-look
 -- over a GIF: its brightness, tinted; a: how much (0: the GIF as it is)
-l = ul
-rgb(mix(ur, l*1.1 + 0.08, a), mix(ug, l*0.92 + 0.04, a), mix(ub, l*0.65, a))
+mix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), a)
 ```
 
 ### 19. Glitter over a GIF
@@ -688,7 +775,7 @@ loop 2
 -- over a GIF: a pulsing dot in the top-right corner; elsewhere the GIF shows
 d = len(px - 121, py - 25)
 k = smoothstep(3.5, 2.5, d)
-layer { rgb(1, 0.2, 0.2, k*(0.7 + 0.3*sin(t/2))) }
+layer { rgb(#ff3333, k*(0.7 + 0.3*sin(t/2))) }
 ```
 
 ### 21. Kaleidoscope (a part drawn elsewhere)
@@ -738,7 +825,7 @@ part plasma {
   hsv(wave/4 + t/8, 0.9, 1)
 }
 -- the plasma shows where the stripes are white, dark blue elsewhere
-layer { rgb(0, 0, 0.2) }
+layer { #000033 }
 layer { plasma(x, y, stripes.s) }
 ```
 
@@ -750,13 +837,12 @@ A second layer whose coverage moves with `t`.
 loop 16
 part bars {
   loop 4
-  bar = max(0, 1 - abs(y - 0.5 - 0.35*sin(t/4))*5)
-  rgb(bar, bar*0.6, bar*0.2)
+  bar = max(0, 1 - abs(cy - 0.35*sin(t/4))*5)
+  bar * #ff9933
 }
 part rings {
   loop 4
-  d = len((x - 0.5)*4, y - 0.5)
-  pal(rainbow, frac(d*1.5 - t/2))
+  pal(rainbow, frac(r*1.5 - t/2))
 }
 -- 0 to 1 and back over the loop, resting at each end
 k = smoothstep(0.25, 0.75, sin(t/16)*0.5 + 0.5)
@@ -779,23 +865,22 @@ part candy {
 }
 -- a dark blue background, and the candy stripes in a window on the right
 inside = step(88, px) * step(px, 123) * step(4, py) * step(py, 27)
-layer { rgb(0.05, 0.08, 0.2) }
+layer { #0d1433 }
 layer { candy((px - 88)/35, (py - 4)/23, inside) }
 ```
 
 ### 26. A name in lights
 
-Text: which letter from `px` (a chain of character codes), its column and
-row from the offsets, `glyph` for the pixel, here at twice the size. Each
-letter costs a comparison and a select per pixel: about seven fit in 8 ms.
+Text: which letter from `px` (`pick` of character codes), its column and
+row from the offsets, `glyph` for the pixel, here at twice the size. The
+pick is one step a pixel however long the word (as a chain of `?:` each
+letter cost a comparison and a select).
 
 ```psi example=name-sign
 loop 4
 -- "OpenDMD" in the panel's font at twice the size, centred: 7 letters of 10 px
-u = px - 30; v = 22 - py              -- the pixel from the text's top left
-cell = floor(u/10)                    -- which letter
-ch = cell < 0 ? 0 : cell < 1 ? 'O' : cell < 2 ? 'p' : cell < 3 ? 'e' : cell < 4 ? 'n'
-   : cell < 5 ? 'D' : cell < 6 ? 'M' : cell < 7 ? 'D' : 0
+u = px - 30; v = ty - 9               -- the pixel from the text's top left
+ch = pick(floor(u/10), 'O', 'p', 'e', 'n', 'D', 'M', 'D')   -- which letter
 ink = glyph(ch, floor(u/2) % 5, floor(v/2))   -- each font pixel 2 x 2
 hsv(x - t/4, 0.8, ink)                -- a rainbow sliding through, once a loop
 ```
@@ -805,10 +890,10 @@ hsv(x - t/4, 0.8, ink)                -- a rainbow sliding through, once a loop
 What only a formula can do, readable in two seconds: the real time, in
 digits that fill the panel, with a seconds bar that crosses the bottom
 row once a minute. The digits are named once a frame (`h1 h2 m1 m2`);
-per pixel, which digit and its value come from `px`, the font's column
-and row from the pixel's offset in the digit (each font pixel 8 × 6 px:
-the bold font's 3 × 5 digits make 24 × 30), and `digit` is the pixel. In
-row 0 the seconds bar replaces the digits.
+per pixel, which digit comes from `px` and its value from `pick`, the
+font's column and row from the pixel's offset in the digit (each font
+pixel 8 × 6 px: the bold font's 3 × 5 digits make 24 × 30), and `digit`
+is the pixel. In row 0 the seconds bar replaces the digits.
 
 ```psi example=big-clock
 loop 60
@@ -821,14 +906,49 @@ frame {
 -- a digit: the bold font's 3 x 5 pixels, each 8 px wide, 6 tall (24 x 30)
 q = px >= 64 ? px - 8 : px     -- the minutes sit 8 px further right
 k = floor(q/32)                -- which digit: one every 32 px (0 1, then 2 3)
-n = k < 1 ? h1 : k < 2 ? h2 : k < 3 ? m1 : m2   -- and its value
+n = pick(k, h1, h2, m1, m2)    -- and its value
 col = floor(q % 32 / 8)        -- the font's column, 0 to 2 (then the gap)
-row = floor((31 - py)/6)       -- its row from the top, 0 to 4 (5: below)
+row = floor(ty/6)              -- its row from the top, 0 to 4 (5: below)
 bar = py < 1                   -- the bottom row is the seconds bar
 lit = bar ? px < end : digit(n, col, row, bold)
 -- a rainbow drifting through the digits, tilted by row; the bar is white
 hue = py/64 + hour/24 + t/10
 hsv(x + hue, bar ? 0 : 1, lit)
+```
+
+### 28. Dusk (a gradient between two colours)
+
+Two colours named by their bytes, mixed by a value: a colour expression.
+
+```psi example=dusk
+-- orange at the horizon to deep blue at the top, a little brighter in the middle
+glow = 1 - r*0.3
+mix(#ff8030, #101850, y) * glow
+```
+
+### 29. Radar (the angle about the middle)
+
+`angle` sweeps round the middle once a turn. The disc is `cx*cx + cy*cy <
+0.2` (r² < 0.2): `r` alone would cost a `len` on top of the `atan2`.
+
+```psi example=radar
+loop 4
+-- a beam sweeping round once a loop, fading behind it, in a disc
+behind = frac(t/4 - angle)             -- 0 at the beam, growing behind it
+glow = max(0, 1 - behind*3) * (cx*cx + cy*cy < 0.2)
+#33ff66 * glow
+```
+
+### 30. A word in colours (pick of colours)
+
+`pick` chooses the letter and, in the colour line, its colour.
+
+```psi example=rgb-word
+-- "RGB" at twice the size, each letter its own colour
+u = px - 49; v = ty - 9
+cell = floor(u/10)
+ink = glyph(pick(cell, 'R', 'G', 'B'), floor(u/2) % 5, floor(v/2))
+pick(cell, #ff3333, #33ff55, #3377ff) * ink
 ```
 
 ## 15. In the product (not built)

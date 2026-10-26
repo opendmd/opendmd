@@ -152,8 +152,12 @@ FONT = {"fonts/silkscreen.woff2"}
 # B gz) and their steps, +1.5 KB gz; a small raise the owner pre-approved.
 PSI_WASM_GZ_BUDGET = 44 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
-# examples): approved by the owner 2026-10-25.
-FORMULAS_GZ_BUDGET = 21 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts
+# examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
+# stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
+# colours and the values about the middle, the editor's colour swatches;
+# +192 B gz, the rewritten examples 292 B shorter but only 22 B gz): a small
+# raise, to be approved.
+FORMULAS_GZ_BUDGET = 22 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}

@@ -131,7 +131,7 @@ fn the_reference_matches_the_language() {
 fn the_reference_names_every_built_in() {
     let values = [
         "x", "y", "px", "py", "i", "t", "hour", "minute", "second", "a", "b", "c", "w", "h", "ur",
-        "ug", "ub", "ul",
+        "ug", "ub", "ul", "cx", "cy", "r", "angle", "ty",
     ];
     let funcs = [
         ("sin", 1),
@@ -155,6 +155,7 @@ fn the_reference_names_every_built_in() {
         ("noise", 3),
         ("hash", 2),
         ("select", 3),
+        ("pick", 3),
     ];
     for v in values {
         assert!(
@@ -221,6 +222,12 @@ fn the_cost_table_is_the_estimates() {
             "gray(tri(x))",
         ),
         ("| `mix` | 130 |", 130, "gray(x)", "gray(mix(x, px, x))"),
+        (
+            "| `pick` (values the same for every pixel) | 60 (estimated) |",
+            60,
+            "gray(px)",
+            "gray(pick(px, 0.25, 0.5))",
+        ),
         (
             "| `smoothstep` | 214 ",
             214,
