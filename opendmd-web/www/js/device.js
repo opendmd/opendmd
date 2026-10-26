@@ -185,9 +185,12 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     clear(nets, h('span.muted', 'Scanning…'));
     try {
       const aps = await app.src.wifiScan();
-      clear(nets, aps.sort((a, b) => b.rssi - a.rssi).map((ap) => h('button.chip', {
-        onclick: () => { f.wifi_ssid.value = ap.ssid; f.wifi_pass.focus(); },
-      }, ap.ssid || '(hidden)', h('small', `${ap.rssi} dBm${ap.secure ? ' · secure' : ' · open'}`))));
+      // "Enterprise" networks (a username as well as a password): no 802.1X in the firmware.
+      const ent = (ap) => /-Ent$/.test(ap.auth);
+      clear(nets, aps.sort((a, b) => b.rssi - a.rssi).map((ap) => h('button.chip', ent(ap)
+        ? { disabled: true, title: 'Needs a work or school login: not supported' }
+        : { onclick: () => { f.wifi_ssid.value = ap.ssid; f.wifi_pass.focus(); } },
+      ap.ssid || '(hidden)', h('small', ent(ap) ? 'not supported' : `${ap.rssi} dBm${ap.secure ? ' · secure' : ' · open'}`))));
     } catch (e) { clear(nets, h('span.bad', e.message)); }
   }
 

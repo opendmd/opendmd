@@ -163,7 +163,9 @@ Replies `{"ok":true,"rebooting":true}`, stops any card write, restarts.
 Bench test hooks: `?sd_fail=N` (next N card mounts fail),
 `?sd_io_fail=N&sd_io_boots=B` (N card reads fail on each of B boots),
 `?sd_fallback=clear` (forget the card's slow clock at the next boot; see
-`POST /api/card/full-speed` for the live way).
+`POST /api/card/full-speed` for the live way), and in `bench` builds only
+`?panic=1` (replies `{"ok":true,"panicking":true}`, then panics on purpose;
+`reset_reason` in `/api/status` reads `panic` after the restart).
 
 ```sh
 curl -s -X POST $DMD/api/reboot
@@ -218,7 +220,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `transition_ms` | 20..=2000, 400 | transition length |
 | `auto_prepare` | `idle` | prepare copies by itself: `idle` (when the panel is idle), `always` (also while playing, slower), `off` |
 | `follow` | bool, false | Follow RePlayOS |
-| `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64) |
+| `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400) |
 | `follow_code_set` | bool | its code is saved (write it as `follow_code`, ≤ 64, one line) |
 | `attract_set` | string or null | the playlist shown in RePlayOS's menus; null = the current one |
 | `attract` | string, `""` | shown in the menus instead of a playlist: `""`, `"clock"`, `"text:<message>"` (≤ 200 characters, one line), `"fx:<effect>[?options]"` |

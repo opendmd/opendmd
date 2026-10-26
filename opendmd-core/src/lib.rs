@@ -25,6 +25,7 @@ pub mod fx_psi;
 pub mod gifslim;
 pub mod history;
 pub mod hostname;
+pub mod http_client;
 pub mod improv;
 pub mod index;
 pub mod layout;

@@ -51,7 +51,8 @@ card…" for a card the panel can't read, the POST and the wait for it;
 imported when first opened), <= 2 KB, and so does Settings' Device tab
 (`js/device.js`: the status, the playback cache, network and the live
 rename, reload and reboot, About; imported when the tab is first open),
-<= 7 KB, and so does the
+<= 7.5 KB (7 KB until enterprise WiFi networks were greyed out in its scan
+list, 2026-10-26), and so does the
 headings' pixel font (`fonts/silkscreen.woff2`, Silkscreen subset to ASCII
 and a few marks by tools/font-subset.py; preloaded by index.html, so it is
 part of every page load, but it is not JS or CSS), <= 4 KB; its licence
@@ -143,7 +144,7 @@ PANEL_GZ_BUDGET = 2 * 1024
 PANEL = {"js/panel.js"}
 PANEL_TEST_GZ_BUDGET = 2 * 1024
 PANEL_TEST = {"js/paneltest.js"}
-DEVICE_GZ_BUDGET = 7 * 1024
+DEVICE_GZ_BUDGET = 7 * 1024 + 512  # +512 2026-10-26: enterprise networks shown as not joinable
 DEVICE = {"js/device.js"}
 FONT_GZ_BUDGET = 4 * 1024
 FONT = {"fonts/silkscreen.woff2"}

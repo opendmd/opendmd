@@ -30,6 +30,7 @@ p.hint{margin:0 0 10px;color:var(--dim);font-size:14px}
 .nets{display:grid;gap:6px;margin-bottom:6px}
 .nets button{margin:0;display:flex;justify-content:space-between;text-align:left;background:#161a21;color:var(--fg);border:1px solid var(--line);font-weight:400}
 .nets button.on{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.nets button:disabled{opacity:.45;cursor:not-allowed}
 .nets small{color:var(--dim)}
 button.link{width:auto;margin:0;padding:0;background:none;color:var(--accent);font-weight:400;text-decoration:underline}
 a{color:var(--accent)}
@@ -186,6 +187,14 @@ async function scan() {
       name.textContent = a.ssid;
       info.textContent = (a.secure ? '🔒 ' : '') + (a.rssi > -60 ? '▂▄▆█' : a.rssi > -70 ? '▂▄▆' : a.rssi > -80 ? '▂▄' : '▂');
       b.append(name, info);
+      // "Enterprise" networks (a username as well as a password) cannot be
+      // joined: the firmware has no 802.1X support.
+      if (/-Ent$/.test(a.auth)) {
+        b.disabled = true;
+        b.title = 'Needs a work or school login: not supported';
+        info.textContent = 'not supported';
+        return b;
+      }
       b.onclick = () => {
         $('ssid').value = a.ssid;
         for (const o of box.children) o.classList.toggle('on', o === b);
