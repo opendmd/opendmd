@@ -1447,19 +1447,22 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let Some(path) = files::card_path(config::SD_MOUNT, name) else {
             return req.bad_request("path escapes the card");
         };
-        stream_file(req, path, rel)
+        stream_file(req, path, rel, stream::QUEUE_WAIT)
     })?;
 
+    // GIFs and their copies: a full stream queue is a 503 at once (the web
+    // app's thumbnails back off, its other reads retry: `queued`), so they
+    // never hold the httpd task; a playlist waits for a place as a module does.
     server.route("/gifs/*", Method::Get, |req| {
-        serve_under(req, config::SD_MOUNT)
+        serve_under(req, config::SD_MOUNT, Duration::ZERO)
     })?;
     server.route("/sets/*", Method::Get, |req| {
-        serve_under(req, config::SD_MOUNT)
+        serve_under(req, config::SD_MOUNT, stream::QUEUE_WAIT)
     })?;
     // The playback cache: prepared copies, `cache/<Category>/<xx>/<name>.gif`
     // (the device's own builder, `opendmd-pack convert`, or the web app).
     server.route("/cache/*", Method::Get, |req| {
-        serve_under(req, config::SD_MOUNT)
+        serve_under(req, config::SD_MOUNT, Duration::ZERO)
     })?;
 
     // The web app under `/www/` too (both spellings, as when it was on the
@@ -1642,19 +1645,20 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
     }
 }
 
-/// Serve a card-absolute path below `root`, 404ing if it is not a file.
-fn serve_under(req: &mut Req, root: &str) -> Result<()> {
+/// Serve a card-absolute path below `root`, 404ing if it is not a file;
+/// `wait`: for a place in a full stream queue (`stream::hand_off_within`).
+fn serve_under(req: &mut Req, root: &str, wait: Duration) -> Result<()> {
     let rel = crate::httpd::percent_decode(req.path());
     let Some(path) = files::card_path(root, &rel) else {
         return req.bad_request("path escapes the card");
     };
-    stream_file(req, path, rel)
+    stream_file(req, path, rel, wait)
 }
 
 /// Send the card file at `path` from the streaming task, or a 404 naming
 /// `rel` if there is none.
-fn stream_file(req: &mut Req, path: String, rel: String) -> Result<()> {
-    stream::hand_off(req, move |req| {
+fn stream_file(req: &mut Req, path: String, rel: String, wait: Duration) -> Result<()> {
+    stream::hand_off_within(req, wait, move |req| {
         if files::serve(req, &path)? {
             Ok(())
         } else {

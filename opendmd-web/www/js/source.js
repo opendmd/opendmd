@@ -23,9 +23,10 @@ async function check(res) {
   throw Object.assign(new HttpError(res.status, `${res.status}: ${msg}`), { after: +res.headers.get('Retry-After') || 0 });
 }
 
-// The device's stream task sends listings as it sends files, one at a
+// The device's stream task sends listings, GIFs and copies one at a
 // time: a full queue is a 503 at once (Retry-After: 1). This is the one
-// retry layer for them: a 503, or a request the busy device dropped, is
+// retry layer for them (thumbs.js has its own back-off, cancelling as it
+// goes): a 503, or a request the busy device dropped, is
 // asked again after 2-4 s (jittered, so two tabs drift apart; never sooner
 // than Retry-After), for about 45 s in all, then the error stands.
 const RETRY_FOR = 45000;
@@ -111,13 +112,15 @@ export class DeviceSource {
     const r = await queued(() => this.json('GET', '/api/files?dir=' + encodeURIComponent(dir)));
     return r.entries;
   }
+  // Card files: a GIF or copy meets a full stream queue as a 503 at once
+  // (a playlist after 2 s), asked again by `queued`.
   async readText(path) {
-    try { return await (await this.req('GET', enc(path))).text(); } catch (e) {
+    try { return await queued(async () => (await this.req('GET', enc(path))).text()); } catch (e) {
       if (e.status === 404) return null;
       throw e;
     }
   }
-  async readBytes(path) { return new Uint8Array(await (await this.req('GET', enc(path))).arrayBuffer()); }
+  async readBytes(path) { return queued(async () => new Uint8Array(await (await this.req('GET', enc(path))).arrayBuffer())); }
   // A manifest path (`/filelist.*`, `/sets/*`) is installed by the device's
   // main task (the `.idx` goes first, then a reindex if it is active).
   writeFile(path, data) { return this.json('PUT', '/api/files' + enc(path), data); }
