@@ -491,10 +491,15 @@ pub fn tick() {
     let now = uptime_ms();
     let touched = TOUCHED_MS.load(Relaxed);
     let quiet = touched == 0 || since(now, touched) >= config::FATIDX_QUIET_S * 1000;
-    // A missing index is built at once; a stale one waits its turn (a card
-    // whose names cannot all be indexed must not rebuild in a loop).
+    // A missing index, or one the API changed since the last build, is
+    // built once things are quiet; one gone stale by misses, or after a
+    // failed build, waits the gap (a card whose names cannot all be indexed,
+    // or a failing card, must not be walked in a loop).
     let built = BUILT_MS.load(Relaxed);
-    let spaced = (missing && !FAILED.load(Relaxed)) || built == 0 || since(now, built) >= config::FATIDX_MIN_GAP_S * 1000;
+    let changed = touched != 0 && (built == 0 || since(touched, built) as i32 > 0);
+    let spaced = ((missing || changed) && !FAILED.load(Relaxed))
+        || built == 0
+        || since(now, built) >= config::FATIDX_MIN_GAP_S * 1000;
     if !quiet
         || !spaced
         || now < config::FATIDX_BOOT_DELAY_S * 1000
