@@ -327,7 +327,7 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
     ("gray(loop)", "`loop` can only start a line", 1, 6),
     (
         "gray(digit(1, 2))",
-        "`digit` takes 3 values (the digit, a column and a row; and a font, normal or small, if you like), but got 2",
+        "`digit` takes 3 values (the digit, a column and a row; and a font, normal, small or bold, if you like), but got 2",
         1,
         6,
     ),
@@ -339,7 +339,7 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
     ),
     (
         "gray(digit(1, 2, 3, big))",
-        "the last value of `digit` is a font: normal (the default) or small, found `big`",
+        "the last value of `digit` is a font: normal (the default), small or bold, found `big`",
         1,
         21,
     ),
@@ -348,6 +348,12 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
         "the last value of `digit` is a font",
         1,
         21,
+    ),
+    (
+        "gray(glyph(48, 0, 0, bold))",
+        "the bold font has digits only: use `digit(n, x, y, bold)`",
+        1,
+        22,
     ),
     ("gray(bit(5))", "`bit` takes 2 values, but got 1", 1, 6),
     ("gray(small)", "`small` is a font: use it as `digit(n, x, y, small)`", 1, 6),

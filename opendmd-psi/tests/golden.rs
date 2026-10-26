@@ -5,8 +5,8 @@
 
 use opendmd_psi::golden::{fnv, inputs, picture, FRAMES as GOLDEN, OVER};
 use opendmd_psi::{
-    compile, render_rows, render_with, sketches, Program, Scratch, FONT_4X6, FONT_5X7, H, MAX_OPS,
-    OWN, W,
+    compile, render_rows, render_with, sketches, Program, Scratch, FONT_4X6, FONT_5X7, FONT_BOLD,
+    H, MAX_OPS, OWN, W,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -168,6 +168,31 @@ fn digits_and_glyphs_are_the_fonts() {
             let src = format!("gray(glyph({k}, {x}, {y}{font}))");
             let want = font_pixel(rows, w, h, k - 32, x, y);
             assert!(lit(&src).iter().flatten().all(|&l| l == want), "{src}");
+        }
+    }
+    // The bold digits (digits only, a 4 × 6 cell, the table's 5 rows):
+    // every pixel and around each cell, per pixel and once a row.
+    let bold = FONT_BOLD.as_flattened();
+    let src = "n = floor(px/6) % 12 - 1.75 + 1\n\
+               gray(digit(n, px % 6 - 1, (31 - py) % 8 - 1, bold))";
+    for (r, row) in lit(src).iter().enumerate() {
+        for (c, &l) in row.iter().enumerate() {
+            let (c, r) = (c as i32, r as i32);
+            let n = c / 6 % 12 - 1;
+            let (x, y) = (c % 6 - 1, r % 8 - 1);
+            let want = (0..10).contains(&n) && x < 4 && font_pixel(bold, 4, 5, n, x, y);
+            assert_eq!(l, want, "bold digit {n} at {c}, {r}");
+        }
+    }
+    for n in [-1, 0, 4, 9, 10] {
+        for x in -1..=4 {
+            let src = format!("gray(digit({n}, {x}, 31 - py, bold))")
+                .replace("digit(-1", "digit(0 - 1")
+                .replace(", -1,", ", 0 - 1,");
+            for (r, row) in lit(&src).iter().enumerate() {
+                let want = (0..10).contains(&n) && font_pixel(bold, 4, 5, n, x, r as i32);
+                assert!(row.iter().all(|&l| l == want), "{src}: row {r}");
+            }
         }
     }
     // A character in quotes is its code.

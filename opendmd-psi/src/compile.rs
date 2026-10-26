@@ -13,6 +13,7 @@
 
 use crate::fixed::{self, ONE};
 use crate::program::{code, *};
+use crate::tables;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -484,9 +485,13 @@ const FUNCS: [(&str, usize, F); 24] = [
 const LATER_FUNCS: [&str; 3] = ["bit", "digit", "glyph"];
 
 /// The fonts `digit` and `glyph` take as a last value: core's 5x7 (the
-/// panel's text and clock; 4 × 6 digits; the default) and 4x6 (3 × 5
-/// digits). Whether it is the small one.
-const FONTS: [(&str, bool); 2] = [("normal", false), ("small", true)];
+/// panel's text and clock; 4 × 6 digits; the default), 4x6 (3 × 5 digits)
+/// and the bold 3 × 5 digits (digits only). As `Tables::glyphs` takes them.
+const FONTS: [(&str, u8); 3] = [
+    ("normal", tables::NORMAL),
+    ("small", tables::SMALL),
+    ("bold", tables::BOLD),
+];
 
 const COLOURS: [(&str, usize, u8); 4] = [
     ("rgb", 3, code::OUT_RGB),
@@ -1182,8 +1187,12 @@ impl<'s> Parser<'s> {
         if self.peek().tok == Tok::LParen {
             if let Some(&(_, ar, f)) = FUNCS.iter().find(|e| e.0 == name) {
                 if let F::Glyph(c) = f {
-                    let (args, small) = self.glyph_args(t, name)?;
-                    let c = if small { c + 2 } else { c };
+                    let (args, font) = self.glyph_args(t, name)?;
+                    let c = match font {
+                        tables::NORMAL => c,
+                        tables::SMALL => c + 2,
+                        _ => code::DIGIT_B,
+                    };
                     return self.dag.op(c, args, at);
                 }
                 let args = self.args(t, name, ar)?;
@@ -1231,7 +1240,7 @@ impl<'s> Parser<'s> {
         } else if PALETTES.iter().any(|e| e.0 == name) {
             format!("`{name}` is a palette: use it as `pal({name}, k)` on the last line")
         } else if FONTS.iter().any(|e| e.0 == name) {
-            format!("`{name}` is a font: use it as `digit(n, x, y, {name})` or `glyph(c, x, y, {name})`")
+            format!("`{name}` is a font: use it as `digit(n, x, y, {name})`")
         } else {
             let s = suggest(name, self.value_names());
             format!("unknown name `{name}`{}", did_you_mean(s))
@@ -1338,12 +1347,12 @@ impl<'s> Parser<'s> {
         Ok((out, k))
     }
 
-    /// `digit(n, x, y)` / `glyph(c, x, y)`, with `, small` or `, normal`
-    /// last if you like: the three values and whether the font is small.
-    fn glyph_args(&mut self, f: Token, name: &str) -> Result<([Id; 3], bool), Error> {
+    /// `digit(n, x, y)` / `glyph(c, x, y)`, with a font (`, small`, …)
+    /// last if you like: the three values and the font.
+    fn glyph_args(&mut self, f: Token, name: &str) -> Result<([Id; 3], u8), Error> {
         let open = self.expect(Tok::LParen, "`(`")?;
         let mut out = [0 as Id; 3];
-        let (mut k, mut small) = (0, false);
+        let (mut k, mut font_of) = (0, tables::NORMAL);
         if self.peek().tok != Tok::RParen {
             loop {
                 if k == 3 {
@@ -1354,8 +1363,14 @@ impl<'s> Parser<'s> {
                     let Some(&(_, n)) = font else {
                         return Err(self.no_font(p, name));
                     };
+                    if n == tables::BOLD && name != "digit" {
+                        return self.err(
+                            p,
+                            "the bold font has digits only: use `digit(n, x, y, bold)`",
+                        );
+                    }
                     self.next();
-                    small = n;
+                    font_of = n;
                 } else {
                     let e = self.expr(0)?;
                     if let Some(o) = out.get_mut(k) {
@@ -1378,7 +1393,7 @@ impl<'s> Parser<'s> {
         if k != 3 && k != 4 {
             return Err(self.glyph_arity(f, close, name, k));
         }
-        Ok((out, small))
+        Ok((out, font_of))
     }
 
     #[cold]
@@ -1393,7 +1408,7 @@ impl<'s> Parser<'s> {
             f.start,
             close.end,
             format!(
-                "`{name}` takes 3 values ({what}, a column and a row; and a font, normal or small, if you like), but got {k}"
+                "`{name}` takes 3 values ({what}, a column and a row; and a font, normal, small or bold, if you like), but got {k}"
             ),
         )
     }
@@ -1404,7 +1419,7 @@ impl<'s> Parser<'s> {
         self.fail_at(
             t,
             format!(
-                "the last value of `{name}` is a font: normal (the default) or small, found {}",
+                "the last value of `{name}` is a font: normal (the default), small or bold, found {}",
                 self.found(t)
             ),
         )

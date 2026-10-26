@@ -240,6 +240,7 @@ pub fn tables() -> psi::Tables<'static> {
         palettes: [pal(0), pal(1), pal(2), pal(3), pal(4)],
         small: &crate::text::FONT_4X6,
         normal: &crate::text::FONT_5X7,
+        bold: &crate::fonts::FONT_BOLD,
     }
 }
 
@@ -973,6 +974,7 @@ mod tests {
         assert!(std::ptr::eq(t.normal, &crate::text::FONT_5X7));
         assert_eq!(t.small, &psi::FONT_4X6);
         assert_eq!(t.normal, &psi::FONT_5X7);
+        assert_eq!(t.bold, &psi::FONT_BOLD);
     }
 
     #[test]

@@ -68,7 +68,7 @@ args      = e { "," e }                        -- digit/glyph: e "," e "," e [ "
 sep       = newline | ";"                      -- newlines inside ( ) are spaces
 NUMBER    = digits [ "." digits ] | "." digits -- no sign, no exponent
 CHAR      = "'" one printable ASCII character "'"   -- its code: 'A' is 65
-FONT      = "normal" | "small"
+FONT      = "normal" | "small" | "bold"      -- bold: digit only
 NAME      = [A-Za-z_][A-Za-z0-9_]*
 comment   = "--" or "//" to the end of the line
 ```
@@ -134,15 +134,18 @@ with those names still work; don't use them as names in new ones).
 | `digit(n, col, row)` | 1 if pixel (col, row) of digit n is lit in the panel's font, else 0 (see below) |
 | `glyph(ch, col, row)` | the same for a character code, 32..126: `glyph('A', col, row)` |
 | `digit(…, small)`, `glyph(…, small)` | the same in the small font |
+| `digit(…, bold)` | the same in the bold 3 × 5 digits (no `glyph`: digits only) |
 | `bit(n, i)` | bit i of floor(n), 1 or 0 (two's complement); i floored, i < 0 gives 0 |
 
 **Digits and text.** `digit` and `glyph` read the panel's own bitmap fonts
-(OpenDMD's `@clock` and title cards; X11 misc-fixed, printable ASCII):
+(OpenDMD's `@clock` and title cards; X11 misc-fixed, printable ASCII), and
+`digit` also a bold set of digits:
 
 | font | cell (col × row) | a digit's pixels | |
 |---|---|---|---|
 | `normal` (the default) | 5 × 7: col 0..4, row 0..6 | cols 0..3, rows 0..5 | the clock's digits |
 | `small` | 4 × 6: col 0..3, row 0..5 | cols 0..2, rows 0..4 | 3 × 5 digits |
+| `bold` (`digit` only) | 4 × 6: col 0..3, row 0..5 | cols 0..2, rows 0..4 | chunky 3 × 5 digits, square 0 |
 
 - **Coordinates** are whole columns and rows of the cell from its **top
   left** (row 0 is the top: the opposite of `py`), floored, so a glyph
@@ -150,7 +153,7 @@ with those names still work; don't use them as names in new ones).
   `u`, `v` the pixel's offset from the cell's top left. Outside the cell
   the result is 0, so neighbouring cells, gaps and margins need no test.
   The cell includes the gap to the next character: cells tile at 5 px
-  (`small`: 4).
+  (`small`, `bold`: 4).
 - **The character** is floored: `digit` takes 0..9, `glyph` 32..126; any
   other (negative, 10, 127, …) draws nothing.
 - Each is **one step** per pixel (a table read, ~100 ns), and once a frame
@@ -392,7 +395,7 @@ gray(y)
 ```
 
 ```psi error
--- error: the last value of `digit` is a font: normal (the default) or small
+-- error: the last value of `digit` is a font: normal (the default), small or bold
 gray(digit(3, px % 5, 31 - py, 2))
 ```
 
@@ -803,8 +806,8 @@ What only a formula can do, readable in two seconds: the real time, in
 digits that fill the panel, with a seconds bar that crosses the bottom
 row once a minute. The digits are named once a frame (`h1 h2 m1 m2`);
 per pixel, which digit and its value come from `px`, the font's column
-and row from the pixel's offset in the digit (each font pixel 6 × 5 px:
-the clock font's 4 × 6 digits make 24 × 30), and `digit` is the pixel. In
+and row from the pixel's offset in the digit (each font pixel 8 × 6 px:
+the bold font's 3 × 5 digits make 24 × 30), and `digit` is the pixel. In
 row 0 the seconds bar replaces the digits.
 
 ```psi example=big-clock
@@ -815,14 +818,14 @@ frame {
   m1 = floor(minute/10); m2 = minute % 10   -- the minutes' two digits
   end = (second + 1)*128/60                 -- where the seconds bar ends
 }
--- a digit: the clock font's 4 x 6 pixels, each 6 px wide, 5 tall (24 x 30)
+-- a digit: the bold font's 3 x 5 pixels, each 8 px wide, 6 tall (24 x 30)
 q = px >= 64 ? px - 8 : px     -- the minutes sit 8 px further right
 k = floor(q/32)                -- which digit: one every 32 px (0 1, then 2 3)
 n = k < 1 ? h1 : k < 2 ? h2 : k < 3 ? m1 : m2   -- and its value
-col = floor(q % 32 / 6)        -- the font's column, 0 to 3 (then the gap)
-row = floor((31 - py)/5)       -- its row from the top, 0 to 5 (6: below)
+col = floor(q % 32 / 8)        -- the font's column, 0 to 2 (then the gap)
+row = floor((31 - py)/6)       -- its row from the top, 0 to 4 (5: below)
 bar = py < 1                   -- the bottom row is the seconds bar
-lit = bar ? px < end : digit(n, col, row)
+lit = bar ? px < end : digit(n, col, row, bold)
 -- a rainbow drifting through the digits, tilted by row; the bar is white
 hue = py/64 + hour/24 + t/10
 hsv(x + hue, bar ? 0 : 1, lit)
