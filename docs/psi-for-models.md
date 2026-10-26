@@ -82,7 +82,11 @@ Q16.16 fixed point: −32,768 to 32,767.99998, steps of 1/65,536. Arithmetic
 **saturates** (no wrap-around). `a / 0` is the largest number of `a`'s sign
 (0 for 0/0); `a % 0` is 0; `%` is floored (`-1 % 3` is 2; `v % 1` is
 `frac(v)`). Comparisons and logic give 1 or 0; any non-zero is true.
-The same formula gives the same bytes on the panel, in the browser and on a
+Division by a constant is exact once a frame or a row (`floor(minute/10)`
+is 5 from 50 to 59); per pixel it is a multiply by 1/k, which `floor`
+takes rounded up, so `floor(n/k)` is exact for whole numbers with
+n·k < 65,536 (`floor(px/10)`, `floor(i/12)`); elsewhere `px/3` may be off
+by a step or two of 1/65,536. The same formula gives the same bytes on the panel, in the browser and on a
 computer.
 
 ## 4. Values
