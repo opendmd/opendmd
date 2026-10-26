@@ -37,6 +37,7 @@ pub mod overrides;
 pub mod panel_test;
 pub mod panel_timing;
 pub mod player;
+pub mod restarts;
 pub mod schedule;
 pub mod scheduler;
 pub mod synth;

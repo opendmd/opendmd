@@ -334,7 +334,7 @@ pub fn receive(up: &mut Upload, card_mounted: bool, net: &mpsc::Sender<NetComman
         r#"{{"ok":true,"version":{},"rebooting":true}}"#,
         json_string(&meta.version)
     ))?;
-    crate::http::reboot_after_response()
+    crate::http::reboot_after_response(opendmd_core::restarts::Reason::Ota)
 }
 
 /// The end of `/update/log.txt`: at most [`LOG_TAIL`] bytes, from the
@@ -443,6 +443,7 @@ pub fn after_boot() {
         }
     }
     if !done.is_empty() {
+        crate::restarts::booted_after_update();
         let _ = fs::remove_file(PENDING);
     }
     if fs::metadata(BUNDLE).is_ok() {

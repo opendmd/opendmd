@@ -65,6 +65,7 @@ mod probe;
 mod psi_probe;
 #[cfg(feature = "psi")]
 mod psi_stack;
+mod restarts;
 mod sched;
 mod sd;
 mod sdhealth;
@@ -89,7 +90,7 @@ use opendmd_core::schedule::{self, Decision, Schedule};
 use opendmd_core::scheduler::{Mode, Scheduler};
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -100,6 +101,7 @@ use crate::panel::{Panel, PanelConfig};
 use opendmd_core::look::{GlowLevel, Look};
 use opendmd_core::panel_test::{self, PanelTest};
 use opendmd_core::panel_timing::{self, Effects, PanelOp, PanelTiming, Tuner};
+use opendmd_core::restarts::Reason;
 use crate::sd::{SdBus, SdCard, SdSource};
 use crate::show::{Screen, CARD_FAILING};
 use crate::state::{
@@ -113,8 +115,19 @@ static HEAP_FRESH: AtomicBool = AtomicBool::new(true);
 /// Set by [`rebuild`] when the only way to get a playlist is a reboot (see
 /// [`NeedsFreshHeap`]), and by [`panel_effects`] to undo a panel-timing boot
 /// trial; acted on by the main loop *after* it has answered the command that
-/// caused it, so the HTTP caller gets its reply first.
-static REBOOT_PENDING: AtomicBool = AtomicBool::new(false);
+/// caused it, so the HTTP caller gets its reply first. Holds the restart's
+/// [`Reason`] (its `u8`), 0 for none.
+static REBOOT_PENDING: AtomicU8 = AtomicU8::new(0);
+
+/// Ask for a restart after the pending replies, for `why`.
+fn reboot_later(why: Reason) {
+    REBOOT_PENDING.store(why as u8, Ordering::Relaxed);
+}
+
+/// The restart [`reboot_later`] asked for, if any.
+fn reboot_pending() -> Option<Reason> {
+    Reason::from_u8(REBOOT_PENDING.load(Ordering::Relaxed))
+}
 /// A frame has been blitted since boot: an engine built from now on (a
 /// playlist change) transitions in from the picture on the panel rather than
 /// cutting in. The first engine at boot has nothing to transition from.
@@ -227,6 +240,10 @@ fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     // Synchronous until `logring::start` below, like EspLogger before it.
     logring::init();
+    // Why the last run ended (`restarts`), before anything can fail an
+    // allocation and overwrite its record; installs the panic hook.
+    let reset = restarts::reset_now();
+    restarts::boot(reset);
     // Formulas compile on a stack of their own (`psi_stack::compile`): the
     // compiler's worst case is more than the main task or httpd can spare.
     #[cfg(feature = "psi")]
@@ -302,8 +319,7 @@ fn main() -> Result<()> {
     let miso = expect_pin(AnyIOPin::from(pins.gpio19), config::SD_MISO, "SD MISO");
     let cs = expect_pin(AnyOutputPin::from(pins.gpio5), config::SD_CS, "SD CS");
     let bus = SdBus::new(peripherals.spi3, sck, mosi, miso, cs);
-    let reset_reason = reset_reason();
-    log::info!("reset reason: {reset_reason}");
+    let reset_reason = reset.name();
 
     // The card's records first (`sdhealth`, before any other task exists):
     // a card that failed at full speed mounts at the fallback clock, and a
@@ -740,7 +756,7 @@ fn main() -> Result<()> {
                         let tried =
                             replay(&mut engine, &next, &sched, &mut runner, false, &status, &mut canvas);
                         if let Err(e) = &tried {
-                            let restart = REBOOT_PENDING.load(Ordering::Relaxed);
+                            let restart = reboot_pending().is_some();
                             let back = if restart {
                                 Ok(Applied::unchanged(0))
                             } else {
@@ -1181,8 +1197,8 @@ fn main() -> Result<()> {
         }
 
         // Only after every reply above has been sent.
-        if REBOOT_PENDING.load(Ordering::Relaxed) {
-            reboot_to_apply();
+        if let Some(why) = reboot_pending() {
+            reboot_to_apply(why);
         }
 
         // A clock change lost the card's SPI device (`cardspeed`): no
@@ -1190,7 +1206,7 @@ fn main() -> Result<()> {
         // the record is in RTC memory).
         if cardspeed::dead() {
             log::error!("microSD: SPI device lost; restarting");
-            restart_for_card();
+            restart_for_card(Reason::CardLost);
         }
 
         // The panel-timing test: its pictures and live timing instead of
@@ -1327,7 +1343,7 @@ fn main() -> Result<()> {
             if card_dead && sdhealth::window_left_ms() == 0 {
                 log::error!("microSD: the card-failure window has run out; restarting to try the card again");
                 sdhealth::restart_after_window();
-                restart_for_card();
+                restart_for_card(Reason::CardRetry);
             }
             // The card, and nothing playing from it: the playlist again
             // every `RETRY_INTERVAL` (the status card says why meanwhile).
@@ -2675,7 +2691,7 @@ fn finish_build(
         Err(e) => {
             if e.downcast_ref::<NeedsFreshHeap>().is_some() {
                 log::error!("{path}: {e:#}");
-                REBOOT_PENDING.store(true, Ordering::Relaxed);
+                reboot_later(Reason::FreshHeap);
             } else {
                 log::error!("{path} unreadable ({e:#})");
             }
@@ -2744,7 +2760,7 @@ fn check_card(card: &SdCard, health: &sdhealth::Boot, nvs: &EspDefaultNvsPartiti
             sdhealth::forget_for_new_card(false);
             if health.capped || cardspeed::settle(false) != cardspeed::Applied::Now {
                 sdhealth::forget_for_new_card(true);
-                restart_for_card();
+                restart_for_card(Reason::NewCard);
             }
             return;
         }
@@ -2781,7 +2797,7 @@ fn card_failed(card: &SdCard, nvs: &mut Config, status: &Mutex<Status>) {
     }
     status.lock().unwrap().sd_error = Some(trip.summary);
     if trip.restart {
-        restart_for_card();
+        restart_for_card(Reason::CardFailure);
     }
     // Nothing plays from here on.
     let mut s = status.lock().unwrap();
@@ -2791,13 +2807,14 @@ fn card_failed(card: &SdCard, nvs: &mut Config, status: &Mutex<Status>) {
 
 /// A restart for the card's sake: the cache builder out of its card
 /// write, then [`restart`].
-fn restart_for_card() -> ! {
+fn restart_for_card(why: Reason) -> ! {
     cache_builder::quiesce(Duration::from_secs(3));
-    restart()
+    restart(why)
 }
 
-/// Every planned restart ends here: the panel off, the log ring out to the
-/// console, then `esp_restart`.
+/// Every planned restart ends here: `why` into the restart ring
+/// (`restarts`, for the next boot's status), the panel off, the log ring
+/// out to the console, then `esp_restart`.
 ///
 /// The panel first because `esp_restart` on the ESP32 resets only the CPUs
 /// (`esp_restart_noos`: WiFi, timers, SPI and UART are reset, I2S and the
@@ -2808,9 +2825,10 @@ fn restart_for_card() -> ! {
 /// a brownout reset right after the next app's `cpu_start` (where the
 /// brownout detector is armed). `panel::blank` drives OE high as a GPIO,
 /// which survives that reset, and stops the DMA. Callable from any task.
-pub fn restart() -> ! {
+pub fn restart(why: Reason) -> ! {
+    restarts::record(why);
     panel::blank();
-    log::info!("restarting (panel off)");
+    log::info!("restarting (panel off): {}", why.name());
     if !logring::flush(config::RESTART_LOG_FLUSH) {
         log::warn!("log ring not drained before the restart");
     }
@@ -2845,26 +2863,6 @@ fn retired_files_checks() {
              DELETE /api/files/odm?recursive=1 removes it",
             config::LEGACY_ROOT.trim_start_matches(config::SD_MOUNT)
         );
-    }
-}
-
-/// `esp_reset_reason`, as a word.
-fn reset_reason() -> &'static str {
-    use esp_idf_sys as sys;
-    // SAFETY: an argument-free query of the reset cause.
-    #[allow(non_upper_case_globals)]
-    match unsafe { sys::esp_reset_reason() } {
-        sys::esp_reset_reason_t_ESP_RST_POWERON => "poweron",
-        sys::esp_reset_reason_t_ESP_RST_EXT => "external",
-        sys::esp_reset_reason_t_ESP_RST_SW => "software",
-        sys::esp_reset_reason_t_ESP_RST_PANIC => "panic",
-        sys::esp_reset_reason_t_ESP_RST_INT_WDT => "interrupt watchdog",
-        sys::esp_reset_reason_t_ESP_RST_TASK_WDT => "task watchdog",
-        sys::esp_reset_reason_t_ESP_RST_WDT => "watchdog",
-        sys::esp_reset_reason_t_ESP_RST_DEEPSLEEP => "deep sleep",
-        sys::esp_reset_reason_t_ESP_RST_BROWNOUT => "brownout",
-        sys::esp_reset_reason_t_ESP_RST_SDIO => "sdio",
-        _ => "unknown",
     }
 }
 
@@ -2926,7 +2924,7 @@ fn panel_effects(
     status.lock().unwrap().panel = *tuner;
     if fx.restart {
         log::info!("panel timing: restarting on the saved settings {}", tuner.saved.to_nvs());
-        REBOOT_PENDING.store(true, Ordering::Relaxed);
+        reboot_later(Reason::PanelTrial);
     }
 }
 
@@ -2975,11 +2973,11 @@ fn end_panel_test(
 /// file, and through a panel-timing boot trial undone (`panel_effects`).
 /// The reply has already been queued; the sleep is for the
 /// handler on the other core, which is still writing it.
-fn reboot_to_apply() -> ! {
+fn reboot_to_apply(why: Reason) -> ! {
     sdhealth::note_restart();
     cache_builder::quiesce(Duration::from_secs(3));
     thread::sleep(Duration::from_secs(2));
-    restart()
+    restart(why)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2994,6 +2992,7 @@ fn heartbeat(
     schedule: &str,
 ) {
     diag::check("heartbeat");
+    restarts::alive();
     #[cfg(feature = "probe")]
     state::MAIN_STACK_UNUSED.store(frametime::stack_unused(), Ordering::Relaxed);
     let sampled_min = floor.min;
