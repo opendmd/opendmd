@@ -14,28 +14,13 @@ from the Software section of [dmdos.net](https://dmdos.net/).
 
 <!-- site:install-button -->
 
-## Which button?
-
-There is one install button per board, because each has its own firmware:
-
-- **DevKit (4 MB)**: the ESP32 DevKit V1, the small board with the USB
-  socket that plugs into the DMDoS Board. Most displays have this one.
-- **8 MB build**: an 8 MB board in development, with the ESP32
-  module soldered onto it. Its firmware uses the bigger flash for more
-  room.
-
-Not sure? Choose the DevKit: its firmware also runs on an 8 MB board in development,
-with less room. A DevKit given the 8 MB build's firmware won't start
-it; installing again with the DevKit button and **Erase device** ticked
-recovers it.
-
 ## Before you start
 
 - **A computer with one of those browsers.**
 - **A USB data cable.** Some cables only carry power; if the installer
   can't find the board, try another cable.
 - **The display's ESP32 board**: the ESP32 DevKit V1 (the small board
-  with the USB socket that sits on the DMDoS Board), or an 8 MB board in development.
+  with the USB socket that sits on the DMDoS Board).
   It can stay in the display. Don't have a display yet? See
   [What you need](hardware.md).
 
@@ -45,7 +30,7 @@ recovers it.
 
 1. **Plug in the board.** Connect the ESP32 to your computer with the USB
    cable.
-2. **Click the Install button for your board** above and pick its port
+2. **Click the Install button** above and pick its port
    from the list. It is often called "USB Serial", "CH340", "CH343" or
    "CP210x".
 3. **Choose whether to erase.** On a first install (the board still runs
@@ -77,10 +62,8 @@ recovers it.
 
 ## A board that already runs OpenDMD
 
-Plug it in and click its board's **Install** button: the installer
-recognises it and shows its name and the version it runs. (If it offers
-**Install** rather than **Update** for a board that runs OpenDMD, you
-clicked the other board's button.) From there:
+Plug it in and click the **Install** button: the installer
+recognises it and shows its name and the version it runs. From there:
 
 - **Update OpenDMD** puts this page's version on it. Your WiFi and
   settings stay. It only shows up when the versions differ.
@@ -131,8 +114,7 @@ up a new one.
 
 Once you're set up, **Check for updates** in the web app keeps the player
 current over WiFi ([Updating](updating.md)). If you'd rather install the
-firmware from a file, here it is (the one for your board: the player
-refuses the other):
+firmware from a file, here it is:
 
 <!-- site:firmware-bundle -->
 
