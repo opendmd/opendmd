@@ -504,16 +504,58 @@ pub fn push_minimal(store: &mut dyn Store, reason: Reason, f: Figures, parts: &[
     store.put(slot, 0, MAGIC);
 }
 
-/// Every valid entry, newest first.
-pub fn newest_first(store: &dyn Store) -> impl Iterator<Item = Entry> {
-    let mut all: [Option<Entry>; SLOTS] = [None; SLOTS];
-    for (i, slot) in all.iter_mut().enumerate() {
-        *slot = decode(&read(store, i));
+/// Every valid entry, newest first: decoded one at a time as it is
+/// iterated (the order is a few bytes), so a caller on a small stack (the
+/// HTTP server's) never holds all eight.
+pub fn newest_first(store: &dyn Store) -> NewestFirst<'_> {
+    let mut seqs = [(0u32, 0u8); SLOTS];
+    let mut n = 0;
+    let mut top = None;
+    for i in 0..SLOTS {
+        if let Some(e) = decode(&read(store, i)) {
+            seqs[n] = (e.seq, i as u8);
+            n += 1;
+            if top.is_none_or(|t| newer(e.seq, t)) {
+                top = Some(e.seq);
+            }
+        }
     }
-    let top = newest(store).map_or(0, |e| e.seq);
+    let top = top.unwrap_or(0);
     // Distance back from the newest, which wraps with the seq.
-    all.sort_unstable_by_key(|e| e.map_or(u32::MAX, |e| top.wrapping_sub(e.seq)));
-    all.into_iter().flatten()
+    seqs[..n].sort_unstable_by_key(|(seq, _)| top.wrapping_sub(*seq));
+    let mut order = [0u8; SLOTS];
+    for (o, (_, i)) in order.iter_mut().zip(seqs) {
+        *o = i;
+    }
+    NewestFirst {
+        store,
+        order,
+        n: n as u8,
+        at: 0,
+    }
+}
+
+/// [`newest_first`]'s iterator.
+pub struct NewestFirst<'a> {
+    store: &'a dyn Store,
+    order: [u8; SLOTS],
+    n: u8,
+    at: u8,
+}
+
+impl Iterator for NewestFirst<'_> {
+    type Item = Entry;
+    fn next(&mut self) -> Option<Entry> {
+        while self.at < self.n {
+            let i = self.order[self.at as usize] as usize;
+            self.at += 1;
+            // Still valid unless rewritten meanwhile (then skipped).
+            if let Some(e) = decode(&read(self.store, i)) {
+                return Some(e);
+            }
+        }
+        None
+    }
 }
 
 /// Empty every slot.
