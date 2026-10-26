@@ -38,8 +38,9 @@ function favButton() {
 // Create Art, a Formula in its editor (the saved or example one, else the
 // panel's one-line text); [where, go], or null for what the panel draws.
 function editFor(p) {
-  if (p?.startsWith('@fx:psi?')) return ['Formulas', async () => {
-    const q = new URLSearchParams(p.slice(8)), { fpath } = await import('./psishow.js');
+  const q = p?.startsWith('@fx:psi') && new URLSearchParams(p.slice(8));
+  if (q) return q.get('src') && ['Formulas', async () => {
+    const { fpath } = await import('./psishow.js');
     const f = [...[store.get('psi.mine', [])].flat(), ...await fetch('formulas.json').then((r) => r.json(), () => [])].find((x) => typeof x?.src == 'string' && fpath({ src: x.src }) == p.split('&')[0]);
     const l = new URLSearchParams({ formula: f?.src ?? q.get('src'), name: f?.name || 'Formula' });
     for (const k of 'abc') if (q.has(k)) l.set(k, q.get(k));
@@ -49,7 +50,7 @@ function editFor(p) {
   return (fx || p?.[0] == '/') && ['Create Art', () => { app.artFrom = fx ? { fx: p, title: label(e) } : { path: p, e }; app.go('create'); }];
 }
 function editLine() {
-  const b = h('button.sm', { id: 'now-edit' }), why = h('span.muted', { id: 'now-live' }), el = h('div', { style: 'margin-top:8px' }, b, why);
+  const b = h('button.sm', { id: 'now-edit', hidden: true }), why = h('span.muted', { id: 'now-live' }), el = h('div', { style: 'margin-top:8px' }, b, why);
   el.set = (p, t) => {
     const x = editFor(p);
     b.hidden = !x;
