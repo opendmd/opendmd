@@ -278,7 +278,7 @@ impl Panel {
             repaint: false,
             glow_stats: GlowStats::default(),
             sync: ScanSync {
-                on: false,
+                on: true,
                 split: true,
                 // SAFETY: the shim's set-up and a value it set; after init.
                 row_us: unsafe {
