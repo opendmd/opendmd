@@ -42,8 +42,10 @@ restart, and the API key switch; imported when Advanced is first open),
 <= 4 KB, and so does its "Check for updates" (`js/update.js`: the
 release check, the downloads and the installs, imported on the first
 click), <= 4 KB, and so does Settings' Panel timing (`js/panel.js`: the
-HUB75 timing selects, the trial's Keep/Undo and Reset to defaults;
-imported when Advanced is first open, with js/firmware.js), <= 2 KB, and
+HUB75 timing selects, the trial's Keep/Undo and Reset to defaults, and the
+Moving pictures card: panel_sync and panel_split; imported with Settings ›
+Device, with js/firmware.js), <= 3 KB (2 KB until Moving pictures, 2,353 B
+gz with it), and
 so does its guided "Test panel timing" (`js/paneltest.js`: the A/B
 questions and the save; imported on the first click), <= 2 KB, and
 so does Now's card format dialog (`js/card.js`: "Format
@@ -150,7 +152,7 @@ FIRMWARE_GZ_BUDGET = 4 * 1024
 FIRMWARE = {"js/firmware.js"}
 UPDATE_GZ_BUDGET = 4 * 1024
 UPDATE = {"js/update.js"}
-PANEL_GZ_BUDGET = 2 * 1024
+PANEL_GZ_BUDGET = 3 * 1024
 PANEL = {"js/panel.js"}
 PANEL_TEST_GZ_BUDGET = 2 * 1024
 PANEL_TEST = {"js/paneltest.js"}

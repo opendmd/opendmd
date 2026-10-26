@@ -252,6 +252,10 @@ struct ConfigPatch {
     look_blend: Option<String>,
     look_amount: Option<u8>,
     boot_show: Option<String>,
+    /// Refresh-synchronised blits, applied at once.
+    panel_sync: Option<bool>,
+    /// With it, the bottom half a refresh after the top; applied at once.
+    panel_split: Option<bool>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
     api_key: Option<String>,
@@ -588,6 +592,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 return req.bad_request("boot_show must be off, short or full");
             };
             next.boot_show = len;
+        }
+        if let Some(v) = patch.panel_sync {
+            next.panel_sync = v;
+        }
+        if let Some(v) = patch.panel_split {
+            next.panel_split = v;
         }
         if let Some(v) = &patch.api_key {
             if !v.is_empty() && !opendmd_core::access::valid_key(v) {
@@ -2187,7 +2197,7 @@ fn formula_look_json() -> String {
 }
 
 /// The end of the status object: `"look","glow","glow_held","formula_look","attract_live",
-/// "max_brightness","brightness_safe_max","safe_start_until"`
+/// "max_brightness","brightness_safe_max","safe_start_until","scan"`
 /// (see the API table), from the settings and the main loop's flags.
 fn looks_json(set: &Settings) -> String {
     use std::sync::atomic::Ordering::Relaxed;
@@ -2196,7 +2206,7 @@ fn looks_json(set: &Settings) -> String {
         .then(|| crate::nvs_config::attract_path(&set.attract))
         .flatten();
     format!(
-        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"attract_live":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{}"#,
+        r#""look":"{}","glow":"{}","glow_held":{},"formula_look":{},"attract_live":{},"max_brightness":{},"brightness_safe_max":{},"safe_start_until":{},"scan":{}"#,
         set.look.name(),
         set.glow.name(),
         if crate::state::GLOW_HELD.load(Relaxed) {
@@ -2212,6 +2222,7 @@ fn looks_json(set: &Settings) -> String {
             0 => "null".to_string(),
             n => n.to_string(),
         },
+        crate::panel::scan_json(),
     )
 }
 
@@ -2244,7 +2255,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"look_formula_name":{},"look_blend":"{}","look_amount":{},"#,
-            r#""boot_show":"{}","api_key_set":{},"card_speed":"{}"}}"#
+            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"api_key_set":{},"card_speed":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2273,6 +2284,8 @@ fn settings_json(s: &Settings) -> String {
         s.look_blend,
         s.look_amount,
         s.boot_show.name(),
+        s.panel_sync,
+        s.panel_split,
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
     )
