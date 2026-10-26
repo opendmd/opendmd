@@ -13,16 +13,16 @@ Open **Formulas** (Ψ) in the app's menu. Formulas work in the
 
 ## The gallery
 
-Formulas opens on the examples (Day and night, plasma, fire, rain, a clock,
-and more) and the formulas you've saved. Pick one
+Formulas opens on the examples (Big clock, plasma, fire, rain, a clock
+face, and more) and the formulas you've saved. Pick one
 to see it playing in the panel look, with its sliders if it has any.
 
-**Day and night**, the first example, shows what a GIF can't do: its sun
-and moon cross a lake at the real time of day, with stars at night and red
-skies at dawn and dusk, and its clouds drift on a wind that takes an hour
-to come round. A GIF of that one hour alone would be hundreds of
-megabytes, and still couldn't tell the time; the formula is about a
-kilobyte. Slider **a** sets the clouds, from a clear sky to overcast.
+**Big clock**, the first example, shows what a GIF can't do: it draws
+the real time in big rainbow digits, with a bar along the bottom that
+fills once a minute, a step a second. Check it against your watch. A GIF
+can't know the time; one that only showed each minute of a day would
+already be 2.7 MB, and with the seconds and the moving colours it would
+be gigabytes. The formula is 1.5 KB.
 
 From there:
 
