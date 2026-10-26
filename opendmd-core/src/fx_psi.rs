@@ -240,7 +240,7 @@ pub fn tables() -> psi::Tables<'static> {
         palettes: [pal(0), pal(1), pal(2), pal(3), pal(4)],
         small: &crate::text::FONT_4X6,
         normal: &crate::text::FONT_5X7,
-        bold: &crate::fonts::FONT_BOLD,
+        bold: &crate::text::FONT_BOLD,
     }
 }
 

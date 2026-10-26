@@ -25,7 +25,7 @@
 //! short and alone) over a smaller second line (the console's name).
 
 use crate::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
-pub use crate::fonts::{FONT_4X6, FONT_5X7};
+pub use crate::fonts::{FONT_4X6, FONT_5X7, FONT_BOLD};
 
 /// Title text on a card: an amber-ish white.
 pub const TITLE_COLOUR: Rgb = Rgb::new(255, 214, 150);
