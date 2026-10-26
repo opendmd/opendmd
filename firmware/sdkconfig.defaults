@@ -45,9 +45,8 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # --- Radio and network -------------------------------------------------
 # WiFi is on from phase 3a. Copied from ~/projects/stripe-dashboard except for
-# the TLS section, which is deliberately absent: this firmware speaks plain
-# HTTP on the LAN only, so there is no mbedtls certificate bundle to carry
-# (~50 KB of flash and a chunk of heap per session that we do not spend).
+# the TLS section: this firmware speaks plain HTTP on the LAN only, so there
+# is no mbedtls certificate bundle to carry, and no TLS at all (below).
 CONFIG_ESP_WIFI_ENABLED=y
 
 # The radio's memory is on a strict diet, and these numbers are not cosmetic.
@@ -89,6 +88,29 @@ CONFIG_LWIP_TCP_WND_DEFAULT=1440
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=6
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=6
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
+
+# No TLS, and no WPA-Enterprise. Nothing on the device speaks HTTPS: the one
+# outbound request, Follow RePlayOS's poll, is plain HTTP on the LAN over a
+# std TcpStream (opendmd_core::http_client, not esp_http_client), update
+# checks are the browser's, and the device serves no HTTPS (docs/research/
+# https-serving.md). So esp_http_client is built without its HTTPS path,
+# 802.1X/EAP (enterprise) WiFi is off (WPA2/WPA3 Personal and open networks
+# only), mbedtls has no TLS at all (mbedcrypto stays: WPA2/WPA3 use it), and
+# only the curves WPA3-SAE/OWE can use stay (P-256, P-384, P-521). Measured
+# in docs/research/size-budget.md 1.5; any future on-device HTTPS has to undo
+# this block.
+CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=n
+CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
+CONFIG_MBEDTLS_TLS_DISABLED=y
+CONFIG_MBEDTLS_ECP_DP_SECP192R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_SECP224R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_SECP192K1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_SECP224K1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_SECP256K1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_BP256R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_BP384R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_BP512R1_ENABLED=n
+CONFIG_MBEDTLS_ECP_DP_CURVE25519_ENABLED=n
 
 # HTTP server. Desktop browsers send headers longer than the 512 B default,
 # and the card's paths are long enough to need the bigger URI buffer

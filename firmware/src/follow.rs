@@ -8,7 +8,8 @@
 //! - **[`Poller`], on the network worker (CPU0).** Polls
 //!   `GET http://<host>:55356/api/v1/get_status` (header `X-RePlay-Token`)
 //!   every 2 s while enabled — 15 s while the Pi does not answer — each
-//!   through an `esp_http_client` of its own (3 s timeout), feeds the answers to the
+//!   on a TCP connection of its own (`opendmd_core::http_client`, 3 s
+//!   timeouts), feeds the answers to the
 //!   pure state machine in `opendmd_core::follow`, and does the slow work the
 //!   display task must never do: it builds the game's **context index** (the
 //!   playlist's entries for that console, weighted by
@@ -32,17 +33,17 @@
 //! sequence — when it lights again).
 
 use crate::chan as mpsc;
-use esp_idf_svc::http::client::{Configuration, EspHttpConnection};
-use esp_idf_svc::http::Method;
 use opendmd_core::engine::Engine;
 use opendmd_core::filter::Filter;
 use opendmd_core::follow::{self as rules, Action, Follow, Game, Observed, State, StatusScan};
+use opendmd_core::http_client;
 use opendmd_core::index::{write_index_resolving_then, IndexHeader};
 use opendmd_core::manifest::{self, Entry};
 use opendmd_core::overrides::Override;
 use opendmd_core::synth;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -209,13 +210,19 @@ impl Cfg {
     }
 }
 
-/// `host` with RePlayOS's port unless it names one.
-fn base_url(host: &str) -> String {
-    if host.contains(':') {
-        format!("http://{host}/api/v1/")
-    } else {
-        format!("http://{host}:{}/api/v1/", config::FOLLOW_PORT)
+/// The saved host (`name` or `name:port`) as a name and a port, RePlayOS's
+/// unless it names one.
+fn host_port(host: &str) -> (&str, u16) {
+    match host.rsplit_once(':') {
+        Some((name, port)) => (name, port.parse().unwrap_or(config::FOLLOW_PORT)),
+        None => (host, config::FOLLOW_PORT),
     }
+}
+
+/// For the log: what is polled.
+fn base_url(host: &str) -> String {
+    let (name, port) = host_port(host);
+    format!("http://{name}:{port}/api/v1/")
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -224,14 +231,27 @@ struct VersionReply {
     version: String,
 }
 
-/// A poll that did not produce a status.
-fn describe(e: &esp_idf_svc::sys::EspError) -> String {
-    match e.code() {
-        esp_idf_svc::sys::ESP_ERR_HTTP_CONNECT => "no answer".into(),
-        esp_idf_svc::sys::ESP_ERR_HTTP_EAGAIN => "timed out".into(),
-        esp_idf_svc::sys::ESP_ERR_HTTP_FETCH_HEADER => "no reply".into(),
-        esp_idf_svc::sys::ESP_FAIL => "connection dropped".into(),
-        _ => format!("error {e}"),
+/// Why a poll did not produce a status, in the words the status shows
+/// (the same as with `esp_http_client` before: `no answer`, `timed out`,
+/// `no reply`, `connection dropped`).
+enum PollError {
+    /// The name did not resolve, or the connection was refused or timed out.
+    Connect,
+    Http(http_client::Error),
+}
+
+impl From<http_client::Error> for PollError {
+    fn from(e: http_client::Error) -> Self {
+        PollError::Http(e)
+    }
+}
+
+impl std::fmt::Display for PollError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PollError::Connect => f.write_str("no answer"),
+            PollError::Http(e) => e.fmt(f),
+        }
     }
 }
 
@@ -511,8 +531,10 @@ impl Poller {
 
     /// One GET on a connection of its own, closed after: the HTTP status;
     /// the body goes to `body` as it is read, 256 B at a time (nothing is
-    /// buffered here). Nothing is kept between polls — a kept-alive
-    /// `esp_http_client` held 3.35 KB of heap for a request every 2 s.
+    /// buffered here). Nothing is kept between polls (a kept-alive
+    /// `esp_http_client` held 3.35 KB of heap for a request every 2 s; this
+    /// is a plain socket now, `opendmd_core::http_client`). Connecting,
+    /// each write and each read time out after `FOLLOW_TIMEOUT`.
     fn get(
         &mut self,
         host: &str,
@@ -525,39 +547,44 @@ impl Poller {
         let builder_before = crate::cache_builder::task_up();
         let before = free_heap();
         let mut low = before;
-        let url = format!("{}{path}", base_url(host));
+        let (name, port) = host_port(host);
+        let host_header = format!("{name}:{port}");
+        let path = format!("/api/v1/{path}");
         let headers: &[(&str, &str)] = match token {
-            Some(t) => &[("X-RePlay-Token", t), ("Connection", "close")],
-            None => &[("Connection", "close")],
+            Some(t) => &[("X-RePlay-Token", t)],
+            None => &[],
         };
         crate::diag::check("follow: before a poll");
         let result = (|| {
-            let mut conn = EspHttpConnection::new(&Configuration {
-                timeout: Some(config::FOLLOW_TIMEOUT),
-                buffer_size: Some(512),
-                buffer_size_tx: Some(256),
-                ..Default::default()
-            })?;
+            let addr = (name, port)
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut a| a.next())
+                .ok_or(PollError::Connect)?;
+            let mut sock = TcpStream::connect_timeout(&addr, config::FOLLOW_TIMEOUT)
+                .map_err(|_| PollError::Connect)?;
             low = low.min(free_heap());
-            conn.initiate_request(Method::Get, &url, headers)?;
-            low = low.min(free_heap());
-            conn.initiate_response()?;
-            low = low.min(free_heap());
-            let status = conn.status();
+            sock.set_read_timeout(Some(config::FOLLOW_TIMEOUT))
+                .and_then(|()| sock.set_write_timeout(Some(config::FOLLOW_TIMEOUT)))
+                .map_err(|e| PollError::Http(e.into()))?;
             let mut buf = [0u8; 256];
-            let mut read = 0usize;
-            loop {
-                let n = conn.read(&mut buf)?;
-                low = low.min(free_heap());
+            let req = http_client::Get {
+                host: &host_header,
+                path: &path,
+                headers,
                 // A status reply is ~300 B; a body this long is not one,
                 // and would only keep the worker (and the socket) busy.
-                if n == 0 || read >= config::FOLLOW_MAX_BODY {
-                    break;
-                }
-                read += n;
-                body(&buf[..n]);
-            }
-            Ok::<_, esp_idf_svc::sys::EspError>(status)
+                max_body: config::FOLLOW_MAX_BODY,
+            };
+            let status = http_client::get(&mut sock, &req, &mut buf, body, &mut || {
+                low = low.min(free_heap())
+            })?;
+            // `Connection: close`: give the server a moment to close first,
+            // so the TIME_WAIT (2 x lwip's TCP_MSL) is its pcb, not one of
+            // ours per poll. What this read returns does not matter.
+            let _ = sock.set_read_timeout(Some(Duration::from_millis(100)));
+            let _ = sock.read(&mut buf);
+            Ok::<_, PollError>(status)
         })();
         crate::diag::check("follow: after a poll");
         let ms = started.elapsed().as_millis() as u32;
@@ -576,7 +603,7 @@ impl Poller {
         } else {
             self.poll_dip_max = self.poll_dip_max.max(dip);
         }
-        result.map_err(|e| describe(&e))
+        result.map_err(|e| e.to_string())
     }
 
     /// `get_status`, read through [`StatusScan`]: the reply is never held
