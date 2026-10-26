@@ -212,17 +212,51 @@ impl Cfg {
 
 /// The saved host (`name` or `name:port`) as a name and a port, RePlayOS's
 /// unless it names one.
-fn host_port(host: &str) -> (&str, u16) {
-    match host.rsplit_once(':') {
-        Some((name, port)) => (name, port.parse().unwrap_or(config::FOLLOW_PORT)),
-        None => (host, config::FOLLOW_PORT),
-    }
+/// `None` for a host `PUT /api/config` would refuse (an empty name, a port
+/// that is not a number).
+fn host_port(host: &str) -> Option<(&str, u16)> {
+    http_client::split_host_port(host)
+        .map(|(name, port)| (name, port.unwrap_or(config::FOLLOW_PORT)))
 }
 
 /// For the log: what is polled.
 fn base_url(host: &str) -> String {
-    let (name, port) = host_port(host);
-    format!("http://{name}:{port}/api/v1/")
+    match host_port(host) {
+        Some((name, port)) => format!("http://{name}:{port}/api/v1/"),
+        None => format!("{host:?} (not a host)"),
+    }
+}
+
+/// The poll's socket, read with a whole-exchange deadline: each read's
+/// timeout is the time left (at most `FOLLOW_TIMEOUT`), so a server that
+/// trickles a byte at a time cannot hold the network worker past it.
+struct Deadlined {
+    sock: TcpStream,
+    deadline: Instant,
+}
+
+impl Read for Deadlined {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        // A zero timeout would mean none at all: at least 1 ms.
+        let t = left
+            .min(config::FOLLOW_TIMEOUT)
+            .max(Duration::from_millis(1));
+        self.sock.set_read_timeout(Some(t))?;
+        self.sock.read(buf)
+    }
+}
+
+impl Write for Deadlined {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.sock.write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.sock.flush()
+    }
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -235,6 +269,8 @@ struct VersionReply {
 /// (the same as with `esp_http_client` before: `no answer`, `timed out`,
 /// `no reply`, `connection dropped`).
 enum PollError {
+    /// The saved host is not `name[:port]` (cannot be saved any more).
+    BadHost,
     /// The name did not resolve, or the connection was refused or timed out.
     Connect,
     Http(http_client::Error),
@@ -249,6 +285,7 @@ impl From<http_client::Error> for PollError {
 impl std::fmt::Display for PollError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            PollError::BadHost => f.write_str("not a host name or address"),
             PollError::Connect => f.write_str("no answer"),
             PollError::Http(e) => e.fmt(f),
         }
@@ -547,7 +584,7 @@ impl Poller {
         let builder_before = crate::cache_builder::task_up();
         let before = free_heap();
         let mut low = before;
-        let (name, port) = host_port(host);
+        let (name, port) = host_port(host).unwrap_or(("", 0));
         let host_header = format!("{name}:{port}");
         let path = format!("/api/v1/{path}");
         let headers: &[(&str, &str)] = match token {
@@ -556,17 +593,21 @@ impl Poller {
         };
         crate::diag::check("follow: before a poll");
         let result = (|| {
+            if name.is_empty() {
+                return Err(PollError::BadHost);
+            }
             let addr = (name, port)
                 .to_socket_addrs()
                 .ok()
                 .and_then(|mut a| a.next())
                 .ok_or(PollError::Connect)?;
-            let mut sock = TcpStream::connect_timeout(&addr, config::FOLLOW_TIMEOUT)
+            let sock = TcpStream::connect_timeout(&addr, config::FOLLOW_TIMEOUT)
                 .map_err(|_| PollError::Connect)?;
             low = low.min(free_heap());
-            sock.set_read_timeout(Some(config::FOLLOW_TIMEOUT))
-                .and_then(|()| sock.set_write_timeout(Some(config::FOLLOW_TIMEOUT)))
+            sock.set_write_timeout(Some(config::FOLLOW_TIMEOUT))
                 .map_err(|e| PollError::Http(e.into()))?;
+            let deadline = Instant::now() + config::FOLLOW_DEADLINE;
+            let mut sock = Deadlined { sock, deadline };
             let mut buf = [0u8; 256];
             let req = http_client::Get {
                 host: &host_header,
@@ -575,6 +616,7 @@ impl Poller {
                 // A status reply is ~300 B; a body this long is not one,
                 // and would only keep the worker (and the socket) busy.
                 max_body: config::FOLLOW_MAX_BODY,
+                deadline: Some(deadline),
             };
             let status = http_client::get(&mut sock, &req, &mut buf, body, &mut || {
                 low = low.min(free_heap())
@@ -582,8 +624,8 @@ impl Poller {
             // `Connection: close`: give the server a moment to close first,
             // so the TIME_WAIT (2 x lwip's TCP_MSL) is its pcb, not one of
             // ours per poll. What this read returns does not matter.
-            let _ = sock.set_read_timeout(Some(Duration::from_millis(100)));
-            let _ = sock.read(&mut buf);
+            let _ = sock.sock.set_read_timeout(Some(Duration::from_millis(100)));
+            let _ = sock.sock.read(&mut buf);
             Ok::<_, PollError>(status)
         })();
         crate::diag::check("follow: after a poll");

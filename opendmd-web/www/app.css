@@ -64,7 +64,7 @@ p.cap{margin:0 0 12px}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{border:1px solid var(--line);background:none;border-radius:99px;padding:4px 12px;font-size:13px;cursor:pointer;color:var(--fg)}
 .chip.on,.chip.on:hover{background:var(--acc);border-color:var(--acc);color:#111}
-.chip small{font:inherit;color:var(--mut);margin-left:4px}.chip.on small{color:inherit}
+.chip small{font:inherit;color:var(--mut);margin-left:4px}.chip.on small{color:inherit}.chip:disabled{opacity:.45;cursor:not-allowed}
 .sys{color:var(--mut)}.tab.sys,.chip.sys{font-style:italic}
 .tag{display:inline-block;border-radius:4px;padding:0 8px;font-size:13px;background:#2b3138;color:#b8c2cc;margin-left:8px;white-space:nowrap}
 .tag.act{background:var(--acc);color:#111}

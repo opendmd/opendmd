@@ -14,11 +14,13 @@
 //! TLS, no compression.
 
 use std::io::{self, Read, Write};
+use std::time::Instant;
 
 /// A header line longer than this is cut (only its start, the name and a
 /// short value, is ever looked at).
 pub const MAX_LINE: usize = 256;
-/// The status line and headers together may not be longer than this.
+/// The status line and headers together may not be longer than this, nor
+/// may a chunked body's trailers.
 pub const MAX_HEAD: usize = 8 * 1024;
 
 /// Why a `GET` did not produce a status.
@@ -41,7 +43,10 @@ impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         match e.kind() {
             io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => Error::Timeout,
-            io::ErrorKind::UnexpectedEof => Error::Dropped,
+            io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::BrokenPipe => Error::Dropped,
             k => Error::Io(k),
         }
     }
@@ -112,6 +117,8 @@ pub struct ResponseReader {
     line: Vec<u8>,
     /// Bytes of status line and headers so far (capped at [`MAX_HEAD`]).
     head_bytes: usize,
+    /// Bytes of chunked trailers so far (capped at [`MAX_HEAD`]).
+    trailer_bytes: usize,
     status: u16,
     content_length: Option<u64>,
     chunked: bool,
@@ -129,6 +136,7 @@ impl ResponseReader {
             state: State::Status,
             line: Vec::new(),
             head_bytes: 0,
+            trailer_bytes: 0,
             status: 0,
             content_length: None,
             chunked: false,
@@ -179,11 +187,26 @@ impl ResponseReader {
                         None => (input, &[][..], false),
                     };
                     input = rest;
-                    if !self.head_done() {
-                        self.head_bytes += part.len() + usize::from(ended);
-                        if self.head_bytes > MAX_HEAD {
-                            return Err(Error::Malformed("headers too long"));
+                    let len = part.len() + usize::from(ended);
+                    match self.state {
+                        State::Status | State::Headers => {
+                            self.head_bytes += len;
+                            if self.head_bytes > MAX_HEAD {
+                                return Err(Error::Malformed("headers too long"));
+                            }
                         }
+                        State::Trailers => {
+                            self.trailer_bytes += len;
+                            if self.trailer_bytes > MAX_HEAD {
+                                return Err(Error::Malformed("trailers too long"));
+                            }
+                        }
+                        // A chunk-size line (or a chunk's CRLF) is short:
+                        // one that runs on is not one.
+                        _ if self.line.len() + part.len() > MAX_LINE => {
+                            return Err(Error::Malformed("chunk line too long"));
+                        }
+                        _ => {}
                     }
                     // A longer line keeps its first MAX_LINE bytes.
                     let room = MAX_LINE.saturating_sub(self.line.len());
@@ -263,8 +286,10 @@ impl ResponseReader {
         let name = trim(&line[..colon]);
         let value = trim(&line[colon + 1..]);
         if name.eq_ignore_ascii_case(b"content-length") {
-            let n = std::str::from_utf8(value)
-                .ok()
+            // Digits only: `u64::from_str` would take a leading `+`.
+            let n = Some(value)
+                .filter(|v| !v.is_empty() && v.iter().all(u8::is_ascii_digit))
+                .and_then(|v| std::str::from_utf8(v).ok())
                 .and_then(|v| v.parse::<u64>().ok())
                 .ok_or(Error::Malformed("content-length"))?;
             if self.content_length.is_some_and(|c| c != n) {
@@ -345,13 +370,42 @@ fn parse_status_line(line: &[u8]) -> Result<u16, Error> {
 
 /// What to ask for: `GET <path>` from `host` (the `Host` header:
 /// `name[:port]`) with `headers`; at most `max_body` bytes of the body are
-/// read (a reply that long is not the one wanted).
+/// read (a reply that long is not the one wanted). The whole exchange must
+/// be over by `deadline` ([`Error::Timeout`] after it), and the reply, all
+/// bytes counted, may not exceed [`Get::max_total`], so a server that
+/// trickles, or sends framing without end, cannot hold the caller.
 #[derive(Debug, Clone, Copy)]
 pub struct Get<'a> {
     pub host: &'a str,
     pub path: &'a str,
     pub headers: &'a [(&'a str, &'a str)],
     pub max_body: usize,
+    pub deadline: Option<Instant>,
+}
+
+impl Get<'_> {
+    /// The most bytes read in all: headers and trailers at their caps,
+    /// the body, and room for chunk framing as dense as one 8-byte chunk
+    /// line per 8 bytes of data.
+    pub fn max_total(&self) -> usize {
+        2 * MAX_HEAD + 2 * self.max_body
+    }
+}
+
+/// `host` as a name and a port: `name` alone (the port is `None`) or
+/// `name:port` with a port of 1-65535 in digits. `None` when it is neither
+/// (an empty name, or a port that is not a number).
+pub fn split_host_port(host: &str) -> Option<(&str, Option<u16>)> {
+    let (name, port) = match host.rsplit_once(':') {
+        None => (host, None),
+        Some((name, port)) => {
+            let ok =
+                !port.is_empty() && port.len() <= 5 && port.bytes().all(|b| b.is_ascii_digit());
+            let port = port.parse::<u16>().ok().filter(|&p| ok && p != 0)?;
+            (name, Some(port))
+        }
+    };
+    (!name.is_empty()).then_some((name, port))
 }
 
 /// One `GET` over `stream`: writes the request, reads the reply and hands
@@ -372,7 +426,12 @@ pub fn get<S: Read + Write>(
     after_io();
     let mut reader = ResponseReader::new();
     let mut read = 0usize;
+    let mut total = 0usize;
+    let late = || req.deadline.is_some_and(|d| Instant::now() >= d);
     loop {
+        if late() {
+            return Err(Error::Timeout);
+        }
         let n = match stream.read(buf) {
             Ok(n) => n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -381,6 +440,10 @@ pub fn get<S: Read + Write>(
         after_io();
         if n == 0 {
             return reader.finish();
+        }
+        total += n;
+        if total > req.max_total() {
+            return Err(Error::Malformed("reply too long"));
         }
         reader.feed(&buf[..n], &mut |b| {
             read += b.len();
@@ -452,6 +515,7 @@ mod tests {
             path: "/api/v1/get_status",
             headers: &[("X-RePlay-Token", "1234")],
             max_body: 16 * 1024,
+            deadline: None,
         };
         let r = get(
             s,
@@ -611,10 +675,10 @@ mod tests {
         let mut s = Script::new(vec![Err(io::ErrorKind::Interrupted), Ok(REAL_VERSION)]);
         assert_eq!(run(&mut s, 256).0, Ok(200));
         // Other errors are named.
-        let mut s = Script::new(vec![Err(io::ErrorKind::ConnectionReset)]);
+        let mut s = Script::new(vec![Err(io::ErrorKind::PermissionDenied)]);
         assert_eq!(
             run(&mut s, 256).0,
-            Err(Error::Io(io::ErrorKind::ConnectionReset))
+            Err(Error::Io(io::ErrorKind::PermissionDenied))
         );
     }
 
@@ -639,6 +703,16 @@ mod tests {
             run(&mut Script::chunks(b"HTTP/1.1 204\r\n\r\n", 100), 256).0,
             Ok(204)
         );
+        for bad in [
+            &b"HTTP/1.1 200 OK\r\nContent-Length: +5\r\n\r\nabcde"[..],
+            b"HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length:\r\n\r\n",
+        ] {
+            assert_eq!(
+                run(&mut Script::chunks(bad, 100), 256).0,
+                Err(Error::Malformed("content-length"))
+            );
+        }
         let bad = b"HTTP/1.1 200 OK\r\nContent-Length: x\r\n\r\n";
         assert_eq!(
             run(&mut Script::chunks(bad, 100), 256).0,
@@ -696,6 +770,160 @@ mod tests {
             body.len()
         );
         assert!(!s.reads.is_empty(), "the rest was not read");
+    }
+
+    /// A stream whose reads each take `delay` and return `bytes` forever.
+    struct Trickle {
+        delay: std::time::Duration,
+        bytes: &'static [u8],
+        first: Option<&'static [u8]>,
+        reads: usize,
+    }
+
+    impl Read for Trickle {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            std::thread::sleep(self.delay);
+            self.reads += 1;
+            let b = self.first.take().unwrap_or(self.bytes);
+            let n = b.len().min(buf.len());
+            buf[..n].copy_from_slice(&b[..n]);
+            Ok(n)
+        }
+    }
+
+    impl Write for Trickle {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn get_from(s: &mut impl ReadWrite, deadline: Option<Instant>) -> Result<u16, Error> {
+        let req = Get {
+            host: "h",
+            path: "/",
+            headers: &[],
+            max_body: 16 * 1024,
+            deadline,
+        };
+        get(s, &req, &mut [0u8; 256], &mut |_| {}, &mut || {})
+    }
+
+    trait ReadWrite: Read + Write {}
+    impl<T: Read + Write> ReadWrite for T {}
+
+    #[test]
+    fn a_trickling_server_meets_the_deadline() {
+        use std::time::Duration;
+        // One byte of header every 5 ms, never ending: each read is quick
+        // (no socket timeout would fire), the deadline ends it.
+        let mut s = Trickle {
+            delay: Duration::from_millis(5),
+            bytes: b"x",
+            first: Some(b"HTTP/1.1 200 OK\r\nX: "),
+            reads: 0,
+        };
+        let t = Instant::now();
+        let r = get_from(&mut s, Some(Instant::now() + Duration::from_millis(60)));
+        assert_eq!(r, Err(Error::Timeout));
+        assert!(
+            t.elapsed() < Duration::from_millis(200),
+            "{:?}",
+            t.elapsed()
+        );
+        assert!(s.reads > 3);
+        // A deadline already past: no read at all.
+        let mut s = Trickle {
+            delay: Duration::ZERO,
+            bytes: b"x",
+            first: None,
+            reads: 0,
+        };
+        assert_eq!(get_from(&mut s, Some(Instant::now())), Err(Error::Timeout));
+        assert_eq!(s.reads, 0);
+    }
+
+    #[test]
+    fn endless_framing_is_cut_off() {
+        use std::time::Duration;
+        let z = Duration::ZERO;
+        // A chunk-size line without end.
+        let mut s = Trickle {
+            delay: z,
+            bytes: b"0000000000000000",
+            first: Some(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"),
+            reads: 0,
+        };
+        assert_eq!(
+            get_from(&mut s, None),
+            Err(Error::Malformed("chunk line too long"))
+        );
+        // Trailer lines without end (each one short).
+        let mut s = Trickle {
+            delay: z,
+            bytes: b"X-T: y\r\n",
+            first: Some(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n"),
+            reads: 0,
+        };
+        assert_eq!(
+            get_from(&mut s, None),
+            Err(Error::Malformed("trailers too long"))
+        );
+        // Empty chunks never count as body: the total cap ends them.
+        let mut s = Trickle {
+            delay: z,
+            bytes: b"1\r\nx\r\n",
+            first: Some(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"),
+            reads: 0,
+        };
+        // (1-byte chunks: 6 bytes read per body byte, past 2 x the body cap
+        // before the body cap.)
+        assert_eq!(
+            get_from(&mut s, None),
+            Err(Error::Malformed("reply too long"))
+        );
+        // Headers without end.
+        let mut s = Trickle {
+            delay: z,
+            bytes: b"X: y\r\n",
+            first: Some(b"HTTP/1.1 200 OK\r\n"),
+            reads: 0,
+        };
+        assert_eq!(
+            get_from(&mut s, None),
+            Err(Error::Malformed("headers too long"))
+        );
+    }
+
+    #[test]
+    fn resets_read_as_dropped() {
+        for k in [
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::BrokenPipe,
+        ] {
+            let mut s = Script::new(vec![Ok(b"HTTP/1.1 200 OK\r\n"), Err(k)]);
+            assert_eq!(run(&mut s, 256).0, Err(Error::Dropped), "{k:?}");
+        }
+    }
+
+    #[test]
+    fn host_and_port() {
+        assert_eq!(
+            split_host_port("192.168.1.112"),
+            Some(("192.168.1.112", None))
+        );
+        assert_eq!(
+            split_host_port("replay.local:8080"),
+            Some(("replay.local", Some(8080)))
+        );
+        for bad in [
+            "", ":55356", "h:", "h:x", "h:+80", "h:0", "h:65536", "h:123456", "h: 80",
+        ] {
+            assert_eq!(split_host_port(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

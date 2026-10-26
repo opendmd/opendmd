@@ -220,7 +220,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `transition_ms` | 20..=2000, 400 | transition length |
 | `auto_prepare` | `idle` | prepare copies by itself: `idle` (when the panel is idle), `always` (also while playing, slower), `off` |
 | `follow` | bool, false | Follow RePlayOS |
-| `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64) |
+| `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400) |
 | `follow_code_set` | bool | its code is saved (write it as `follow_code`, ≤ 64, one line) |
 | `attract_set` | string or null | the playlist shown in RePlayOS's menus; null = the current one |
 | `attract` | string, `""` | shown in the menus instead of a playlist: `""`, `"clock"`, `"text:<message>"` (≤ 200 characters, one line), `"fx:<effect>[?options]"` |

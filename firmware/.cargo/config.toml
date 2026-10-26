@@ -14,12 +14,13 @@ rustflags = ["--cfg", 'sha2_backend_soft="compact"']
 build-std = ["std", "panic_abort"]
 # None of std's default features: `backtrace` linked a whole DWARF
 # symbolizer (gimli, addr2line, object, miniz_oxide and the generics they
-# drag in: 142,096 B of the 2,290,976 B release image) that nothing calls, since no code uses `std::backtrace` and a panic's
-# backtrace is ESP-IDF's, printed from the registers by its panic handler
-# (decoded on the host against the ELF, which keeps its debug info).
-# `panic-unwind` goes too (the target aborts on a panic anyway). Not
-# `compiler-builtins-mem` either: memcpy and friends stay the ROM's
-# (newlib's, at 0x4000c2c8 and so on), as before.
+# drag in: 142,096 B of the 2,290,976 B release image) that nothing calls:
+# no code uses `std::backtrace`, and a panic's backtrace is ESP-IDF's,
+# printed from the registers by its panic handler (decoded on the host
+# against the ELF, which keeps its debug info). `panic-unwind` goes too
+# (the target aborts on a panic anyway). Not `compiler-builtins-mem`
+# either: memcpy and friends stay the ROM's (newlib's, at 0x4000c2c8 and
+# so on), as before.
 build-std-features = []
 
 [env]
