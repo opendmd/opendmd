@@ -712,6 +712,9 @@ pub const BUILDER_MAX_FAILED: usize = 1024;
 pub const FOLLOW_PORT: u16 = 55356;
 /// Connect and read timeout for one poll.
 pub const FOLLOW_TIMEOUT: Duration = Duration::from_secs(3);
+/// The whole of one poll after the connect (request, headers, body) must
+/// be over by then, however the server trickles (`follow::Deadlined`).
+pub const FOLLOW_DEADLINE: Duration = Duration::from_secs(6);
 /// A `get_status` reply is read (and scanned, `follow::StatusScan`) up to
 /// this many bytes; a real one is ~300 B. The scan needs no buffer, so this
 /// only bounds the time a strange reply can keep the worker reading.

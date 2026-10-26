@@ -490,7 +490,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         if let Some(v) = patch.follow_host {
             let v = v.trim().to_string();
-            if v.len() > 64 || v.contains(['/', ' ', '\0', '?', '#', '@']) {
+            // Empty (no host), or `name[:port]` with a port in digits: a
+            // bad port is refused here, never quietly replaced at poll time.
+            if v.len() > 64
+                || v.contains(['/', ' ', '\0', '?', '#', '@'])
+                || (!v.is_empty() && opendmd_core::http_client::split_host_port(&v).is_none())
+            {
                 return req.bad_request("follow_host must be a host name or address, optionally :port");
             }
             next.follow_host = v;
