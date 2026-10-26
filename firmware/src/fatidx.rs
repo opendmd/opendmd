@@ -292,7 +292,11 @@ pub fn indexed(full: &str) -> Option<io::Result<File>> {
     let mut cands = [0u32; 8];
     let mut nc = 0;
     {
-        let mut g = LOADED.lock().unwrap();
+        // Never wait for the index (a build swapping it in, or another
+        // task's lookup): this may be the display task. Busy means a path open.
+        let Ok(mut g) = LOADED.try_lock() else {
+            return None;
+        };
         if g.is_none() {
             *g = Some(load().ok());
         }
@@ -433,8 +437,10 @@ fn load() -> io::Result<Loaded> {
 
 /// The card is being unmounted (`SdCard`'s drop, before the volume goes):
 /// forget the volume and the index file, so nothing reads a freed `FATFS`.
-/// (Files the index opened must be closed by then, as any VFS file: the
-/// card is dropped before the handover, or at a restart.)
+/// This relies on there being no unmount after `CARD_READY`: before the
+/// handover nothing has an index file open and no build runs (both wait for
+/// `CARD_READY`); after it the card is only ever dropped by a restart. Open
+/// `/fidx` FILs and a build in flight are not closed here.
 pub fn unmounted() {
     FS.store(std::ptr::null_mut(), Relaxed);
     *LOADED.lock().unwrap() = None;
@@ -496,7 +502,7 @@ pub fn tick() {
     // failed build, waits the gap (a card whose names cannot all be indexed,
     // or a failing card, must not be walked in a loop).
     let built = BUILT_MS.load(Relaxed);
-    let changed = touched != 0 && (built == 0 || since(touched, built) as i32 > 0);
+    let changed = touched != 0 && (built == 0 || since(touched, built) as i32 >= 0);
     let spaced = ((missing || changed) && !FAILED.load(Relaxed))
         || built == 0
         || since(now, built) >= config::FATIDX_MIN_GAP_S * 1000;
@@ -534,6 +540,9 @@ pub fn tick() {
         }),
     );
     if spawned.is_err() {
+        // No task (no heap for its stack): wait out the gap, not a retry
+        // every turn.
+        FAILED.store(true, Relaxed);
         BUILDING.store(false, Relaxed);
     }
 }
@@ -591,11 +600,15 @@ fn build() -> io::Result<()> {
     fatdir::build_index(&mut |b| out.write_all(b), &geo, &mut walk_all, &listed, &mut group)?;
     out.flush()?;
     drop(out);
-    // Nothing reopens the old index between its removal and the rename.
+    // Nothing reopens the old index between its removal and the rename,
+    // and the new one is loaded here, on the build's task, not by the next
+    // open (which may be the display task's).
     let mut g = LOADED.lock().unwrap();
     *g = None;
     let _ = fs::remove_file(INDEX);
-    fs::rename(NEW, INDEX)
+    fs::rename(NEW, INDEX)?;
+    *g = Some(load().ok());
+    Ok(())
 }
 
 /// `/api/status`'s `"sd"` part: `,"fat_index":{...}`.

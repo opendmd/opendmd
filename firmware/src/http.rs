@@ -1781,6 +1781,7 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
         }
     }
     crate::fatidx::touched(&from);
+    crate::fatidx::touched(&to);
     if let Err(e) = std::fs::rename(&from, &to) {
         return up.error(
             500,
