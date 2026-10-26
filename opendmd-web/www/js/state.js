@@ -96,14 +96,15 @@ export const app = {
     ];
   },
 
+  // (A device, or the demo's player: js/demo.js.)
   async refreshStatus(recent) {
-    if (!this.device) return null;
+    if (!this.src?.config) return null;
     this.status = await this.src.status(recent);
     emit('status', this.status);
     return this.status;
   },
   async refreshConfig() {
-    if (!this.device) return null;
+    if (!this.src?.config) return null;
     this.config = await this.src.config();
     emit('config', this.config);
     return this.config;

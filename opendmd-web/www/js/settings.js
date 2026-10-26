@@ -23,7 +23,8 @@ let exQ = null, psiOver = null;
 const examples = () => (exQ ??= fetch('formulas.json').then((r) => r.json()).catch(() => { exQ = null; return []; }));
 
 export async function mount(el) {
-  if (!app.device) {
+  // (The demo's player answers too: js/demo.js.)
+  if (!app.src.config) {
     el.append(h('h1.ptitle', 'Settings'), h('div.card', h('p.muted', 'Device settings, WiFi and reboot live on the player. This page is in local mode: open it from the player (http://opendmd.local/) to use them'), thumbs()));
     return {};
   }

@@ -288,6 +288,35 @@ fn show_rgb_replaces_the_file() {
 }
 
 #[test]
+fn over_draws_on_every_tick_before_the_look() {
+    // The Formula look (the web demo's, drawn with Psi): the frame handed
+    // over as RGB888 and drawn as changed, on every tick (a still picture
+    // too); the canvas itself is left alone; off again, the file as it is.
+    let mut player = Player::new(1, Look { flat: true, ..LOOK });
+    player.load("/gifs/X/A.gif", white_pixel_gif(1), ms(0));
+    player.tick(ms(0)).unwrap();
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let n = calls.clone();
+    player.set_over(Some(Box::new(move |px: &mut [u8]| {
+        assert_eq!(px.len(), WIDTH * HEIGHT * 3);
+        px[3..6].copy_from_slice(&[1, 2, 3]);
+        n.set(n.get() + 1);
+    })));
+    assert_eq!(&player.rgba()[4..8], &[1, 2, 3, 255]);
+    assert_eq!(
+        player.tick(ms(5000)),
+        Ok(Tick::Frame),
+        "drawn though the file is still"
+    );
+    assert_eq!(calls.get(), 2);
+    assert_ne!(player.canvas().get(1, 0), Rgb::new(1, 2, 3));
+    player.set_over(None);
+    assert_ne!(&player.rgba()[4..8], &[1, 2, 3, 255]);
+    player.tick(ms(6000)).unwrap();
+    assert_eq!(calls.get(), 2, "not drawn with once off");
+}
+
+#[test]
 fn pause_holds_the_frame_across_a_load() {
     let mut player = Player::new(2, LOOK);
     player.set_paused(true, ms(0));

@@ -82,6 +82,10 @@ its own, <= 2 KB.
 The API reference is not packed (until 2026-10-23 it was `api.html`, its
 own line, <= 15 KB, ~14.5 KB gz): Settings -> About links the HTTP API on
 the project site, docs/api.md as each release published it.
+The web demo's player (`js/demo.js`: the device's settings API answered in
+the page for the site's demo, and what the settings do to its panel;
+imported by app.js only when the page is the demo, never from a player) has
+a line of its own, <= 8 KB.
 The third-party licence notices (`licenses.txt`, the firmware's and the web
 app's from licenses/, opened from Settings -> Device -> About in a tab of
 its own, never part of a page load) have a line of their own, <= 40 KB:
@@ -165,6 +169,11 @@ CARD_GZ_BUDGET = 18 * 1024
 SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
+# The web demo's player (js/demo.js: the settings API answered in the page,
+# the schedule, what settings do to the demo's panel): imported by app.js
+# only for the site's demo, never from a device, so outside the 60 KB line.
+DEMO_GZ_BUDGET = 8 * 1024
+DEMO = {"js/demo.js"}
 
 
 def main() -> int:
@@ -229,6 +238,8 @@ def main() -> int:
             kind = "font"
         elif rel in LICENCES:
             kind = "licences"
+        elif rel in DEMO:
+            kind = "demo"
         else:
             kind = {".js": "js+css", ".css": "js+css"}.get(p.suffix, "other")
         t = totals.setdefault(kind, [0, 0])
@@ -267,7 +278,7 @@ def main() -> int:
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET),
-                         ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET),
+                         ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

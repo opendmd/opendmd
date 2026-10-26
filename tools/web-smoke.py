@@ -2536,8 +2536,9 @@ def mock_pass(browser) -> None:
         check(order[:2] == ["now-skip", "now-pause"] and "pri" in page.get_attribute("#now-skip", "class"),
               f"now: the transport starts with Skip, the primary ({order})")
         lines = page.eval_on_selector_all("#view-now .nowt > div:not([hidden])", "els => els.map(e => e.textContent.trim())")
-        check(len(lines) == 3 and re.match(r"^\d+ of [\d,]+$", lines[2]) and page.locator("#now-more, #now-stats, #now-follow").count() == 0,
-              f"now: title, tags and position on lines of their own; no device stats or Follow switch here ({lines})")
+        check(len(lines) == 4 and re.match(r"^\d+ of [\d,]+$", lines[2]) and lines[3] == "✎ Edit in Create Art"
+              and page.locator("#now-more, #now-stats, #now-follow").count() == 0,
+              f"now: title, tags, position and Edit on lines of their own; no device stats or Follow switch here ({lines})")
         # The device's figures are Settings › Device's Status. Late frames in
         # plain words (5 ms or more, during play / at GIF changes), every late
         # frame of any size on a line of its own.
@@ -2599,6 +2600,7 @@ def mock_pass(browser) -> None:
         page.click("#now-pause")
         page.wait_for_function("document.querySelector('#now-pause').textContent.startsWith('Pause')")
         recent_checks(page, base)
+        now_edit_checks(page, base)
         # Send to panel (the Library's button calls app.play; Now has no
         # path box): a real GIF, then a miss (404) and a manifest (415).
         check(page.locator("#now-play-path, #now-play").count() == 0 and page.is_hidden("#now-path"),
@@ -3749,6 +3751,86 @@ def recent_checks(page: Page, base: str) -> None:
 RECENT_MAX = 16
 
 
+def now_edit_checks(page: Page, base: str) -> None:
+    """Now's Edit, for the file on screen and for each recent entry: a GIF
+    opens in Create Art from its original (the GIF, never its prepared
+    copy), every frame, with its title; an effect's loop in Create Art; a
+    Formula in the Formulas editor as it was saved (here an example: its
+    name and comments); the clock says it is drawn by the panel, with no
+    button."""
+    gifs = card_gifs()
+    a, b = gifs[6], gifs[7]
+    asked: list[str] = []
+    log = lambda r: r.method == "GET" and asked.append(urllib.parse.unquote(urllib.parse.urlsplit(r.url).path))
+    page.on("request", log)
+
+    def on_screen(p):
+        post_json(base + "/api/play", {"path": p})
+        goto_view(page, "now")
+        # (A live item's path is not in #now-path: the recent list marks it.)
+        page.wait_for_function(f"document.querySelector('#now-recent > div.cur')?.dataset.path === {json.dumps(p)}", timeout=10000)
+
+    def studio_has(p):
+        page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
+        page.wait_for_function("(d => d.dataset.srcFrames && +d.dataset.srcFrames > 0)(document.querySelector('#studio'))", timeout=30000)
+        return studio_data(page)
+
+    on_screen(b)
+    on_screen(a)
+    check(page.inner_text("#now-edit") == "✎ Edit in Create Art" and page.inner_text("#now-live") == "",
+          f"now edit: the GIF on screen offers '{page.inner_text('#now-edit')}'")
+    asked.clear()
+    page.click("#now-edit")
+    d = studio_has(a)
+    title = page.input_value("#st-title")
+    copy = cache_path(a)
+    check(a in asked and copy not in asked and title and page.is_visible("#st-mode [data-v=replace].on"),
+          f"now edit: Create Art opens {a.rsplit('/', 1)[-1]} from the GIF, not its copy ({d.get('srcFrames')} frames, '{title}', Replace the original chosen)")
+    goto_view(page, "now")
+    page.wait_for_selector(f"#now-recent > div[data-path={json.dumps(b)}] button[aria-label='Edit in Create Art']", timeout=10000)
+    asked.clear()
+    page.click(f"#now-recent > div[data-path={json.dumps(b)}] button[aria-label='Edit in Create Art']")
+    studio_has(b)
+    s = get_json(base + "/api/status")
+    check(b in asked and cache_path(b) not in asked and s["now_playing"]["path"] == a,
+          f"now edit: a recent entry's ✎ opens {b.rsplit('/', 1)[-1]} in Create Art, without playing it")
+    # An effect: its loop in Create Art.
+    on_screen("@fx:tunnel?palette=fire")
+    page.click("#now-edit")
+    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
+    page.wait_for_function("(d => d.dataset.animated && +d.dataset.srcFrames > 1)(document.querySelector('#studio'))", timeout=30000)
+    check(page.input_value("#st-plat") == "FX", f"now edit: an effect's loop opens in Create Art ({studio_data(page).get('srcFrames')} frames)")
+    # A Formula: the example it is, in the editor.
+    ex = json.loads((REPO / "opendmd-web/www/formulas.json").read_text())
+    e = next(x for x in ex if x["name"] == "Plasma")
+    path = page.evaluate("src => import('./js/psishow.js').then(m => m.fpath({ src }))", e["src"])
+    on_screen(path)
+    check(page.inner_text("#now-edit") == "✎ Edit in Formulas", f"now edit: a Formula offers '{page.inner_text('#now-edit')}'")
+    page.click("#now-edit")
+    page.wait_for_selector("#view-formulas.on #psi-ed #psi-src", timeout=20000)
+    if page.locator("button:has-text('Open it')").count():
+        page.click("button:has-text('Open it')")
+    page.wait_for_function(f"document.querySelector('#psi-src').value === {json.dumps(e['src'])}", timeout=10000)
+    check(page.input_value("#psi-name") == "Plasma" and location_hash(page) == "#formulas/edit",
+          "now edit: the Formula opens in the editor as the example it is, comments and all")
+    goto_view(page, "now")
+    page.wait_for_selector("#now-recent > div button[aria-label='Edit in Formulas']", timeout=10000)
+    check(True, "now edit: a recent Formula has ✎ Edit in Formulas")
+    # The clock: said, not offered.
+    on_screen("@clock")
+    page.wait_for_function("document.querySelector('#now-live').textContent !== ''", timeout=10000)
+    clock_row = page.locator("#now-recent > div[data-path='@clock'] button[aria-label^='Edit']").count()
+    check(page.is_hidden("#now-edit") and page.inner_text("#now-live") == "Clock: drawn by the panel itself, not a GIF" and clock_row == 0,
+          f"now edit: the clock says '{page.inner_text('#now-live')}', no button")
+    shot(page, "now-edit", "laptop")
+    page.remove_listener("request", log)
+    on_screen(a)
+
+
+def location_hash(page: Page) -> str:
+    return page.evaluate("location.hash")
+
+
 def recent_demo_pass(browser, base: str, errors: list[str]) -> None:
     """Recently played in the web demo (local mode): a playlist of three
     live items, Next twice, Previous twice back to the first, a tap on an
@@ -4563,10 +4645,14 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
     check(page.inner_text("#lib-d-title") == "Smoke Renamed 01" and page.inner_text("#lib-d-category") == "Other",
           f"edit: the Details show the new fields ({page.inner_text('#lib-d-title')}, {page.inner_text('#lib-d-category')})")
     # Edit in Create Art: the GIF — every frame — is the Studio's source.
-    page.click("#lib-d-art")
-    page.wait_for_function("(d => d && d.dataset.animated && d.dataset.srcFrames)(document.querySelector('#studio'))", timeout=30000)
     from PIL import Image
     want = Image.open(small).n_frames
+    page.click("#lib-d-art")
+    # (Waits for this GIF's frames: the Studio may still hold what Now's Edit opened.)
+    try:
+        page.wait_for_function(f"(d => d && d.dataset.animated && d.dataset.srcFrames === '{want}')(document.querySelector('#studio'))", timeout=30000)
+    except Exception:
+        pass
     got = int(studio_data(page)["srcFrames"])
     check(got == want and f"{want} frames" in page.inner_text("#st-msg"),
           f"edit in make art: the whole animation loads ({got} frames, the file has {want}; '{page.inner_text('#st-msg')}')")

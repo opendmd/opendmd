@@ -70,7 +70,14 @@ button lands on them.
   file on screen, and Previous is `POST /api/skip?back=1`, which walks back
   one entry a press (twice is two back, not a flip between the last two).
   The simulator keeps the same list in the page by the same rules; firmware
-  without it hides Previous and the list. A ☆ beside the title makes the
+  without it hides Previous and the list. **✎ Edit in Create Art** under the
+  title, and a ✎ on each Recently played row, open that item where it can be
+  changed, as the Library's Edit does: a GIF in Create Art from the GIF
+  itself (every frame, never the player's prepared copy), an effect's loop
+  in Create Art, a Formula in the Formulas editor (*Edit in Formulas*: the
+  saved or example formula it is, name and comments included, else the
+  panel's one-line text of it). The clock, scrolling text and title cards
+  are drawn by the panel itself; Now says so, with no button. A ☆ beside the title makes the
   GIF on screen a favourite in the playlist in play (★ when it is; not for
   live items); each Recently played row has the "…" overrides menu for
   that playlist.
@@ -384,6 +391,18 @@ player behind it. When nothing answers `GET /api/status` but a
 offering the folder picker: its files are fetched as they are read, writes
 stay in the page, and Now starts playing All files by itself (live items
 included). **Use your own card…** in the header swaps in a card folder.
+
+The demo has a player of its own in the page (`js/demo.js`, loaded only
+there): it answers the device's settings API (config, schedule, status) for
+the browser session, so **Settings** is the device's, every tab and control.
+What the settings change shows on the demo's panel on Now: brightness (the
+schedule's and night mode's too), colour, glow, the transition, the Formula
+look drawn over every frame, how long each GIF stays, the playlist,
+platforms and shuffle, and the schedule banner with Wake and Resume. Panel
+timing is tried and kept as on a player, with nothing to see. Firmware
+updates, WiFi and restarting keep their controls and say in a line that the
+demo can't do them. A new browser session starts from a new player's
+settings.
 
 The demo card is the panel's own effects, recorded by the simulator, the
 CC0 Kenney Pixel Platformer sprites and a playlist of live items

@@ -483,6 +483,23 @@ impl Preview {
         let _ = self.blit();
     }
 
+    /// Draw over every frame, before the tint and glow (the panel's Formula
+    /// look; the web demo draws it with Psi): `f(rgb)` gets the 128 × 32
+    /// RGB888 frame as a `Uint8Array` and changes it in place, every tick
+    /// while it is set. `undefined` stops.
+    #[wasm_bindgen(js_name = setOver)]
+    pub fn set_over(&mut self, f: Option<js_sys::Function>) {
+        self.player.set_over(f.map(|f| -> player::Over {
+            Box::new(move |px: &mut [u8]| {
+                let a = js_sys::Uint8Array::from(&*px);
+                if f.call1(&JsValue::NULL, &a).is_ok() {
+                    a.copy_to(px);
+                }
+            })
+        }));
+        let _ = self.blit();
+    }
+
     #[wasm_bindgen(getter)]
     pub fn path(&self) -> String {
         self.player.path().to_string()
