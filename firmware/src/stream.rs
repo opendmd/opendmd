@@ -44,7 +44,15 @@
 //! The web app (`/`, `/www/…` and the `/*` catch-all) is sent from here too,
 //! out of the www pack in flash (`www.rs`), and a new pack (`PUT /api/www`)
 //! is received here: one job at a time, so a pack is never rewritten while
-//! one of its files is going out. The JSON listings stay on the httpd task.
+//! one of its files is going out.
+//!
+//! **The listings go out from here too** (`GET /api/files`,
+//! `/api/cache/list`, `/api/cache/failed`): each reads card directories or
+//! files under the FAT lock for as long as it streams — `gifs/Consoles` took
+//! 2.3 s on a 20 MHz card — and on the httpd task that held `/api/status`
+//! (and every other API call) for the whole time (the spare, 2026-10-26).
+//! They queue like a file: a full queue is a 503 + `Retry-After: 1`, which
+//! the web app retries. The other JSON routes stay on the httpd task.
 
 use anyhow::Result;
 use esp_idf_hal::cpu::Core;

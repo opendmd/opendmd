@@ -2535,7 +2535,7 @@ class Context:
         self.io = {"kbps": 0, "inflight": 0, "max": 0, "gets": 0, "bytes": 0, "cut": 0,
                    "r503": 0, "fail503": 0, "fail500": 0, "drop": 0}
         # The device's stream task (firmware/src/stream.rs): card and web app
-        # files go out one at a time with QUEUE_DEPTH (2) waiting; a request
+        # files, and the listings (/api/files, /api/cache/list, /failed), go out one at a time with QUEUE_DEPTH (2) waiting; a request
         # that finds the queue full waits up to QUEUE_WAIT (2 s) for a place,
         # then gets 503 + Retry-After: 1.
         self.streamq = {"cond": threading.Condition(), "busy": False, "waiting": 0}
@@ -2833,11 +2833,12 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/panel/test"), {"POST": self.h_panel_test}),
                 (m_exact("/api/stat"), {"GET": self.h_stat}),
                 (m_exact("/api/cache"), {"GET": self.h_cache}),
-                (m_exact("/api/cache/list"), {"GET": self.h_cache_list}),
+                (m_exact("/api/cache/list"), {"GET": lambda p: self.streamed(lambda: self.h_cache_list(p))}),
                 (m_exact("/api/cache/forget"), {"POST": self.h_cache_forget}),
-                (m_exact("/api/cache/failed"), {"GET": self.h_cache_failed_get, "POST": self.h_cache_failed_post,
+                (m_exact("/api/cache/failed"), {"GET": lambda p: self.streamed(lambda: self.h_cache_failed_get(p)), "POST": self.h_cache_failed_post,
                                                 "DELETE": self.h_cache_failed_delete}),
-                (m_exact("/api/files"), {"GET": self.h_files_list}),
+                # Listings go out from the stream task too (firmware http.rs).
+                (m_exact("/api/files"), {"GET": lambda p: self.streamed(lambda: self.h_files_list(p))}),
                 (m_exact("/api/wifi/scan"), {"GET": self.h_wifi_scan}),
                 (m_exact("/api/name-check"), {"GET": self.h_name_check}),
                 (m_exact("/api/www"), {"GET": self.h_www_get, "PUT": self.h_www_put}),
