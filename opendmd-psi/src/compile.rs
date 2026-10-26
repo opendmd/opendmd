@@ -34,6 +34,7 @@ pub struct Error {
 }
 
 impl Error {
+#[inline(never)]
     fn new(start: usize, end: usize, msg: impl Into<String>) -> Error {
         Error {
             start,
@@ -76,6 +77,7 @@ impl core::fmt::Display for Error {
 
 /// `s[a..b]`, or "" (never a panic: a slice of a `str` that could panic
 /// brings ~3 KB of panic formatting into the wasm).
+#[inline(never)]
 fn sub(s: &str, a: usize, b: usize) -> &str {
     s.get(a..b).unwrap_or("")
 }
@@ -173,6 +175,7 @@ pub fn number(s: &str) -> Option<i32> {
     (r <= i32::MAX as i64).then_some(r as i32)
 }
 
+#[inline(never)]
 fn lex(src: &str) -> Result<Vec<Token>, Error> {
     let b = src.as_bytes();
     let mut out: Vec<Token> = Vec::new();
@@ -711,6 +714,7 @@ impl Dag {
         self.nodes[id as usize].level
     }
 
+#[inline(never)]
     fn konst(&self, id: Id) -> Option<i32> {
         let n = &self.nodes[id as usize];
         (n.code == K_CONST).then_some(n.val)
@@ -1069,10 +1073,12 @@ fn infix_bp(t: Tok) -> Option<(u8, u8, u8)> {
 }
 
 impl<'s> Parser<'s> {
+#[inline(never)]
     fn peek(&self) -> Token {
         self.toks[self.pos]
     }
 
+#[inline(never)]
     fn next(&mut self) -> Token {
         let t = self.toks[self.pos];
         if self.pos + 1 < self.toks.len() {
@@ -1085,6 +1091,7 @@ impl<'s> Parser<'s> {
         sub(self.src, t.start, t.end)
     }
 
+#[inline(never)]
     fn line_of(&self, at: usize) -> usize {
         sub(self.src, 0, at).matches('\n').count() + 1
     }
@@ -1111,6 +1118,7 @@ impl<'s> Parser<'s> {
         Error::new(t.start, t.end, msg)
     }
 
+    #[inline(never)]
     fn expect(&mut self, want: Tok, what: &str) -> Result<Token, Error> {
         let t = self.peek();
         if t.tok == want {
@@ -1154,6 +1162,7 @@ impl<'s> Parser<'s> {
 
     /// A `(` whose `)` was expected at `found` on a later line: the
     /// newline was swallowed, so say which bracket is open.
+#[inline(never)]
     fn unclosed(&self, open: Token, found: Token) -> Result<(), Error> {
         if found.tok == Tok::Eof || self.line_of(found.start) > self.line_of(open.start) {
             return self.err(open, "this `(` is never closed — add `)`");
@@ -1161,6 +1170,7 @@ impl<'s> Parser<'s> {
         Ok(())
     }
 
+    #[inline(never)]
     fn skip_newlines(&mut self) {
         while self.peek().tok == Tok::Newline {
             self.next();
@@ -1168,6 +1178,7 @@ impl<'s> Parser<'s> {
     }
 
     /// An expression (Pratt): operators binding tighter than `min_bp`.
+#[inline(never)]
     fn expr(&mut self, min_bp: u8) -> Result<Id, Error> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
@@ -1274,7 +1285,7 @@ impl<'s> Parser<'s> {
 
     /// Whether names set in `scope` can be seen here: this scope's and its
     /// parents', up to the part it is in (a part sees nothing outside it).
-    fn visible(&self, scope: u16) -> bool {
+        fn visible(&self, scope: u16) -> bool {
         let mut s = self.scope;
         loop {
             if s == scope {
@@ -1288,6 +1299,7 @@ impl<'s> Parser<'s> {
         }
     }
 
+    #[inline(never)]
     fn part_named(&self, name: &str) -> Option<usize> {
         self.parts
             .iter()
@@ -1529,6 +1541,7 @@ impl<'s> Parser<'s> {
 
     /// `digit(n, x, y)` / `glyph(c, x, y)`, with a font (`, small`, …)
     /// last if you like: the three values and the font.
+    #[inline(never)]
     fn glyph_args(&mut self, f: Token, name: &str) -> Result<([Id; 3], u8), Error> {
         let open = self.expect(Tok::LParen, "`(`")?;
         let mut out = [0 as Id; 3];
@@ -1630,6 +1643,7 @@ impl<'s> Parser<'s> {
 
     /// The colour call at `t` (its name): `rgb(r, g, b)`, `hsv(h, s, v)`,
     /// `pal(name, k)`, `gray(v)`.
+    #[inline(never)]
     fn colour(&mut self, t: Token) -> Result<Colour, Error> {
         let name = self.text(t);
         let &(_, ar, c) = COLOURS.iter().find(|e| e.0 == name).unwrap_or(&COLOURS[0]);
@@ -1874,6 +1888,7 @@ impl<'s> Parser<'s> {
         self.end_of_statement()
     }
 
+    #[inline(never)]
     fn is_assignment(&self) -> bool {
         self.peek().tok == Tok::Name && self.toks[self.pos + 1].tok == Tok::Assign
     }
@@ -1894,6 +1909,7 @@ impl<'s> Parser<'s> {
     }
 
     /// Inside a `layer { }` (not a formula's or a part's own lines).
+    #[inline(never)]
     fn in_layer(&self) -> bool {
         self.scope != 0 && !self.scopes[self.scope as usize].1
     }
@@ -2027,6 +2043,7 @@ impl<'s> Parser<'s> {
 
     /// `layer [blend] { … }` at `kw`: its own values (and `frame { }`),
     /// ending in its colour (several: a part with layers drawn whole).
+    #[inline(never)]
     fn layer(&mut self, kw: Token) -> Result<(Vec<Colour>, Token), Error> {
         self.next();
         let mut blend = None;
@@ -2151,6 +2168,7 @@ impl<'s> Parser<'s> {
 
     /// `part name { … }` at `kw`: read where it is written (its errors show
     /// there, and `name` / `name.v` drawn where the pixel is are ready).
+    #[inline(never)]
     fn part(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.peek();
@@ -2548,6 +2566,7 @@ impl Step {
 /// use, and a step never writes a register it reads). The per-pixel values
 /// go in the order the layers need them: each layer's colour step right
 /// after the values it is the first to read.
+#[inline(never)]
 fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result<(), Error> {
     let nodes = &dag.nodes;
     let n = nodes.len();
