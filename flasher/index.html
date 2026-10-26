@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenDMD installer</title>
-<meta name="description" content="Install or update the OpenDMD firmware and web app over USB, from the browser: on an ESP32 DevKit V1 (4 MB) or the 8 MB build.">
+<meta name="description" content="Install or update the OpenDMD firmware and web app over USB, from the browser: on an ESP32 DevKit V1.">
 <!-- ESP Web Tools, pinned. The flashing itself is esptool-js over Web Serial. -->
 <script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
 <style>
@@ -53,17 +53,18 @@
   <div class="card">
     <div class="boards">
       <div class="board" id="board-4mb">
-        <h2>DevKit (4 MB)</h2>
+        <h2>ESP32 DevKit V1</h2>
         <p>The ESP32 DevKit V1: the small board with a USB socket that plugs into the DMDoS board. Most displays have this one.</p>
         <div class="install">
           <esp-web-install-button id="install-4mb" manifest="firmware/manifest-4mb.json">
-            <button slot="activate" id="install-activate-4mb">Install on a DevKit</button>
+            <button slot="activate" id="install-activate-4mb">Install</button>
             <span slot="unsupported">This browser cannot talk to a USB serial port. Use Chrome, Edge, Opera or Firefox 151+ on a desktop.</span>
             <span slot="not-allowed">This page must be opened over https or from localhost.</span>
           </esp-web-install-button>
           <span id="version-4mb" class="mono" style="color: var(--muted)"></span>
         </div>
       </div>
+      <!-- 8MB-HIDDEN (see CLAUDE.md, "Bringing the 8 MB option back"): the 8 MB build's button, hidden for now. Uncomment, and add '8mb' to INSTALL_BOARDS in the script below.
       <div class="board" id="board-8mb">
         <h2>8 MB build</h2>
         <p>For an 8 MB board in development. Its firmware has more room.</p>
@@ -76,26 +77,23 @@
           <span id="version-8mb" class="mono" style="color: var(--muted)"></span>
         </div>
       </div>
+      -->
     </div>
-    <p class="note"><b>Not sure which you have?</b> Choose the DevKit: its firmware also runs on an 8 MB board in development, with
-      less room. A DevKit given the 8 MB build's firmware will <b>not</b> start it; installing again with the
-      DevKit button and <b>Erase device</b> ticked recovers it.</p>
     <p class="note">A board that already runs OpenDMD is recognised: the installer shows its version and offers <b>Update</b>
-      (settings kept), <b>Change Wi-Fi</b>, <b>Visit device</b> and its logs. If it offers <b>Install</b> instead of
-      <b>Update</b> for a board that runs OpenDMD, you chose the other board's button. On a first install it asks whether to
+      (settings kept), <b>Change Wi-Fi</b>, <b>Visit device</b> and its logs. On a first install it asks whether to
       <b>Erase device</b>: <b>tick it</b> (it erases everything on the board), and when it is done it asks for your WiFi.</p>
   </div>
 
   <h2>Before you start</h2>
   <ol>
     <li><b>Chrome, Edge, Opera or Firefox 151+ on a desktop computer</b> (Windows, macOS, Linux, ChromeOS). Safari has no Web Serial.</li>
-    <li>Plug the board (the <b>ESP32 DevKit V1</b>, or the <b>8 MB build</b>) into the computer with a USB <i>data</i> cable. On Windows and older macOS the board's USB chip (CH340 on the DevKit, CH343 on an 8 MB board in development) may need its driver.</li>
+    <li>Plug the <b>ESP32 DevKit V1</b> into the computer with a USB <i>data</i> cable. On Windows and older macOS the board's USB chip (CH340) may need its driver.</li>
     <li>Leave the microSD card in or out; the installer never touches it.</li>
   </ol>
 
   <h2>Install</h2>
   <ol>
-    <li>Click the <b>Install</b> button for your board and choose its serial port (often "USB Serial", "CH340" or <code>ttyUSB0</code>).</li>
+    <li>Click the <b>Install</b> button and choose its serial port (often "USB Serial", "CH340" or <code>ttyUSB0</code>).</li>
     <li>A board running OpenDMD introduces itself (Improv Serial over USB): its hostname, <code>OpenDMD &lt;version&gt;</code>, and
       <b>Update OpenDMD</b> when the versions differ (it writes the six parts below, the settings stay), <b>Change Wi-Fi</b>,
       <b>Visit device</b> (its address), <b>Logs &amp; Console</b> and <b>Erase User Data</b> (a full install with erase). Anything
@@ -117,23 +115,24 @@
   <p>If the installer cannot connect, hold the board's <b>BOOT</b> button while it says "connecting", or unplug and try again.</p>
 
   <h2>What gets written</h2>
-  <p>DevKit (4 MB), <a href="firmware/manifest-4mb.json">its manifest</a>:</p>
+  <p>ESP32 DevKit V1, <a href="firmware/manifest-4mb.json">its manifest</a>:</p>
   <table>
     <thead><tr><th>part</th><th>offset</th></tr></thead>
     <tbody id="parts-4mb"><tr><td colspan="2" style="color: var(--muted)">reading the manifest…</td></tr></tbody>
   </table>
+  <!-- 8MB-HIDDEN
   <p>8 MB build, <a href="firmware/manifest-8mb.json">its manifest</a> (the parts that reach past 4 MB
     first):</p>
   <table>
     <thead><tr><th>part</th><th>offset</th></tr></thead>
     <tbody id="parts-8mb"><tr><td colspan="2" style="color: var(--muted)">reading the manifest…</td></tr></tbody>
   </table>
-  <p>Each board's six parts: the bootloader, the partition table, <code>otadata</code> erased (so the board boots the
-    firmware), the firmware, the small updater that installs later firmware updates sent over WiFi, and the web app (the
-    same web app and updater for both). The same six merged into one image the size of the flash,
-    <code>opendmd-&lt;version&gt;-4mb-full.bin</code> or <code>-8mb-full.bin</code>, sits beside them for tools that flash
+  -->
+  <p>The six parts: the bootloader, the partition table, <code>otadata</code> erased (so the board boots the
+    firmware), the firmware, the small updater that installs later firmware updates sent over WiFi, and the web app. The same six merged into one image the size of the flash,
+    <code>opendmd-&lt;version&gt;-4mb-full.bin</code>, sits beside them for tools that flash
     one file at offset 0 (<code>esptool write-flash 0 …</code>): that rewrites the whole flash, settings included. Without
-    a browser, from a checkout: <code>make fw-release-flash</code> (<code>VARIANT=8mb</code> for an 8 MB board in development).</p>
+    a browser, from a checkout: <code>make fw-release-flash</code>.</p>
 
   <h2>Updating only the web app</h2>
   <p>The web app lives in the board's flash and can be updated over WiFi without this page: <code>make www-push HOST=opendmd.local</code>,
@@ -147,7 +146,10 @@
 </footer>
 <script type="module">
   const hex = (n) => '0x' + n.toString(16).toUpperCase();
-  for (const v of ['4mb', '8mb']) {
+  // The boards offered. An 8 MB board in development ('8mb') is hidden for now: see the
+  // 8MB-HIDDEN blocks above and CLAUDE.md.
+  const INSTALL_BOARDS = ['4mb'];
+  for (const v of INSTALL_BOARDS) {
     const tb = document.getElementById(`parts-${v}`);
     try {
       const m = await (await fetch(`firmware/manifest-${v}.json`)).json();

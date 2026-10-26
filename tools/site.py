@@ -9,11 +9,13 @@
 
 - /            the README, as the landing page
 - /install/    the browser installer (docs/guide/install.md with ESP Web
-               Tools' buttons, one per board: DevKit 4 MB, 8 MB build
-               8 MB) and, under install/firmware/, the release in dist/: the
-               parts dist/manifest-{4mb,8mb}.json name, the merged images
-               and the signed update bundles, plus install/release.json
-               (what the web app's update check reads)
+               Tools' button for the DevKit; the 8 MB build's (8 MB) is
+               hidden for now, see INSTALL_BOARDS) and, under
+               install/firmware/, the release in dist/: the parts
+               dist/manifest-4mb.json names, the merged image, the signed
+               update bundles (every layout's: release.json points at them),
+               plus install/release.json (what the web app's update check
+               reads)
 - /guide/      the user guide (docs/guide/)
 - /card/       "Set up a card": docs/guide/card-setup.md with the page's app
                (opendmd-web/share/cardprep/: app.html at the page's
@@ -140,14 +142,19 @@ MENU = [
 INSTALL_PAGE = "install/index.html"
 INSTALL_HEAD = ('<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/'
                 'install-button.js?module"></script>')
-# One button per flash layout (the firmware's `variant`): the board, the
-# words on its button, and what it says about the board.
+# Every flash layout (the firmware's `variant`): the board, the words on its
+# button, and what it says about the board.
 BOARDS = {
-    "4mb": ("DevKit (4 MB)", "Install on a DevKit",
+    "4mb": ("ESP32 DevKit V1", "Install",
             "The ESP32 DevKit V1: the small board with a USB socket that plugs into the DMDoS board. Most displays have this one."),
     "8mb": ("8 MB build", "Install the 8 MB build",
             "For an 8 MB board in development. Its firmware has more room."),
 }
+# The layouts the install page offers (a button, a manifest and its parts on
+# the site). The 8 MB build's "8mb" is built and released but hidden here
+# for now: add "8mb" back to bring its button back (CLAUDE.md,
+# "Bringing the 8 MB option back"; flasher/index.html has the same switch).
+INSTALL_BOARDS = ("4mb",)
 INSTALL_ONE = """<div class="board" id="board-{v}">
 <h3>{board}</h3>
 <p>{about}</p>
@@ -158,10 +165,8 @@ INSTALL_ONE = """<div class="board" id="board-{v}">
 </esp-web-install-button>
 </div>"""
 INSTALL_BUTTON = ('<div class="install"><div class="boards">'
-                  + "".join(INSTALL_ONE.format(v=v, board=b, label=lab, about=about) for v, (b, lab, about) in BOARDS.items())
-                  + '</div><p class="ver">OpenDMD {version}. Not sure which board you have? Choose the DevKit: its firmware '
-                    "also runs on an 8 MB board in development, with less room. A DevKit given the 8 MB build's firmware won't start it: "
-                    "install again with the DevKit button and Erase device ticked.</p></div>")
+                  + "".join(INSTALL_ONE.format(v=v, board=b, label=lab, about=about) for v, (b, lab, about) in ((v, BOARDS[v]) for v in INSTALL_BOARDS))
+                  + '</div><p class="ver">OpenDMD {version}.</p></div>')
 # "Set up a card": the page's app (markup at its marker, scripts beside it),
 # which runs on the demo's wasm (../demo/pkg/, ../demo/pkg-art/).
 CARD_PAGE = "card/index.html"
@@ -511,11 +516,12 @@ def decorate(body: str) -> str:
 
 def release(dist: Path, out: Path) -> dict:
     """The current release in dist/ (fw-release keeps older versions there
-    too), both flash layouts: the parts each manifest names, the merged
+    too), both flash layouts: the parts the offered layouts' manifests name, the merged
     images and the signed bundles of that version only, under
     install/firmware/; and install/release.json for the web app's update
     check: `firmware` (the 4mb bundle: what web apps from before the 8 MB
-    layout read) and `variants`, each layout's bundle."""
+    layout read) and `variants`, each layout's bundle. (Only INSTALL_BOARDS
+    get a manifest, parts and image on the site; all get their bundle.)"""
     ms = {}
     for v in BOARDS:
         manifest = dist / f"manifest-{v}.json"
@@ -527,9 +533,15 @@ def release(dist: Path, out: Path) -> dict:
         raise SystemExit(f"the manifests are for different versions: {[m['version'] for m in ms.values()]}")
     fw = out / "install/firmware"
     fw.mkdir(parents=True)
-    names = [f"manifest-{v}.json" for v in ms]
-    names += sorted({p["path"] for m in ms.values() for b in m["builds"] for p in b["parts"]})
-    names += [f"opendmd-{ver}-{v}{suffix}" for v in ms for suffix in ("-full.bin", ".odfw")]
+    # Only the layouts the install page offers get their manifest, parts and
+    # merged image on the site; every layout's signed bundle is published,
+    # because release.json's `variants` point at them (the web app's update
+    # check). The 8mb files otherwise stay in the GitHub release.
+    shown = [v for v in ms if v in INSTALL_BOARDS]
+    names = [f"manifest-{v}.json" for v in shown]
+    names += sorted({p["path"] for v in shown for b in ms[v]["builds"] for p in b["parts"]})
+    names += [f"opendmd-{ver}-{v}-full.bin" for v in shown]
+    names += [f"opendmd-{ver}-{v}.odfw" for v in ms]
     for name in names:
         if not (dist / name).is_file():
             raise SystemExit(f"no {dist / name}: run make fw-release")
@@ -559,7 +571,8 @@ def markers(page: str, text: str, rel_info: dict) -> str:
     if "<!-- site:card-prep -->" in text:
         text = text.replace("<!-- site:card-prep -->", (CARD_SRC / "app.html").read_text().strip())
     links = []
-    for v, (board, _, _) in BOARDS.items():
+    for v in INSTALL_BOARDS:
+        board = BOARDS[v][0]
         f = rel_info.get("variants", {}).get(v, {}).get("firmware")
         if f:
             links.append(f'<li><a href="{rel(page, "install/" + f)}" download>{board}</a>: '

@@ -611,6 +611,17 @@ def card_links(site: Path) -> None:
     page = (site / "card/index.html").read_text()
     licences = (site / "licenses/index.html").read_text()
     check('href="../card/index.html">Set up a card</a> from the' in install, "card: the install page's last step links it")
+    # One board: the DevKit's button. An 8 MB board in development (8mb) is hidden for now, but its
+    # update bundle stays published for release.json's variants (the web app's update check).
+    check(install.count("<esp-web-install-button") == 1 and 'manifest="firmware/manifest-4mb.json"' in install
+          and "8mb" not in install and "8 MB build" not in install and "Not sure which" not in install,
+          "install: one Install button, the DevKit's, and nothing about the hidden 8 MB board")
+    fw = site / "install/firmware"
+    rel_info = json.loads((site / "install/release.json").read_text())
+    check((fw / "manifest-4mb.json").is_file() and (fw / "manifest.json").is_file() and not (fw / "manifest-8mb.json").exists(),
+          "install: the 4mb manifest is published, the 8mb one is not")
+    check(all((site / "install" / v["firmware"]).is_file() for v in rel_info["variants"].values()) and "8mb" in rel_info["variants"],
+          "install: every release.json variant's bundle (8mb too) is published")
     check('href="../card/index.html">Set up a card</a> write it' in guide, "card: the SD card guide links it")
     check('href="https://dmdos.net/">dmdos.net</a>' in page and "download.php" not in page and ".zip\"" not in page,
           "card: the pack is linked at dmdos.net's site, not the file")
