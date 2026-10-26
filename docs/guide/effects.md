@@ -3,7 +3,7 @@
 ![A tunnel effect and its options](../images/effects.png)
 
 Besides your GIFs, the panel can draw a few things by itself. Find them in
-the Library under the **Live** and **Effects** tabs. Preview them, send them
+the Library in the **Live** and **Effects** folders. Preview them, send them
 to the panel, or add them to any playlist, just like a GIF.
 
 ## Live
@@ -37,7 +37,7 @@ it, change the speed, then save it to your card. The GIF lands in the
 Library (under **Demoscene**, unless you pick another category) and plays
 like the rest of your GIFs.
 
-The effect stays in the Effects tab too, so you can keep adding the live
+The effect stays in the Effects folder too, so you can keep adding the live
 version to playlists. A long, slow effect becomes the first ten seconds or
 so of its loop; pick a faster speed first if you want the whole loop.
 

@@ -39,7 +39,7 @@ import { app } from './state.js';
 import { PanelPreview, fitScale } from './preview.js';
 import { h, clear, toast, debounce, label, base, emit, niceName, byNice, note, store } from './util.js';
 import { art as artModule } from './artmod.js';
-import { addOne, offerPlaylist } from './library.js';
+import { addOne, offerPlaylist } from './gifs.js';
 import { listings, pickName, renameGif } from './details.js';
 import { prepareBytes } from './prepare.js';
 import { PLATFORMS, sources, mountResults, style } from './find.js';

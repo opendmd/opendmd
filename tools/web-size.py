@@ -88,6 +88,12 @@ the page for the site's demo, and what the settings do to its panel;
 imported by app.js only when the page is the demo; `opendmd-pack www`
 leaves it out of the pack, so a player never carries it) has a line of its
 own, <= 8 KB.
+The Library's folder tree and the row thumbnails (`js/tree.js`,
+`js/thumbs.js` and `tree.css`, which holds the playlist editor's panes too;
+imported with the Library or the editor, never by the first page) have a
+line of their own, <= 13 KB (12 until the review's fixes), and so does the playlist editor
+(`js/pledit.js`, imported the first time a playlist opens), <= 6 KB; both
+left the js+css line (2026-10-26: 59,646 -> 53,659 B gz).
 The third-party licence notices (`licenses.txt`, the firmware's and the web
 app's from licenses/, opened from Settings -> Device -> About in a tab of
 its own, never part of a page load) have a line of their own, <= 40 KB:
@@ -181,6 +187,17 @@ LICENCES = {"licenses.txt"}
 # DEMO_ONLY), so outside the 60 KB line.
 DEMO_GZ_BUDGET = 8 * 1024
 DEMO = {"js/demo.js"}
+# The Library's folder tree and the thumbnails (2026-10-26, branch
+# library-playlists): imported with the Library (and the playlist editor),
+# never by the first page; the tree's and the editor's stylesheet with them.
+# 13 KB since the review (2026-10-26): the failures that pass kept apart
+# from those that do not, Retry-After, a stalled body's timeout, a folder's
+# Try again row, ARIA positions; ~1 KB gz, the first page unchanged.
+TREE_GZ_BUDGET = 13 * 1024
+TREE = {"js/tree.js", "js/thumbs.js", "tree.css"}
+# The playlist editor (#sets/edit), imported the first time a playlist opens.
+EDITOR_GZ_BUDGET = 6 * 1024
+EDITOR = {"js/pledit.js"}
 
 
 def main() -> int:
@@ -247,6 +264,10 @@ def main() -> int:
             kind = "licences"
         elif rel in DEMO:
             kind = "demo"
+        elif rel in TREE:
+            kind = "tree"
+        elif rel in EDITOR:
+            kind = "editor"
         else:
             kind = {".js": "js+css", ".css": "js+css"}.get(p.suffix, "other")
         t = totals.setdefault(kind, [0, 0])
@@ -286,6 +307,7 @@ def main() -> int:
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
+                         ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET),
                          ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")

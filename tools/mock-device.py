@@ -115,6 +115,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   FAT order) and sizes are opt-in (`?sizes=1`), matching the firmware's
   quadratic-`stat`-avoidance note in `files.rs`.
 - `GET /api/config` never echoes `wifi_pass`, only `wifi_pass_set`.
+- **`GET /mock/io`** (mock only, no firmware route): card-file requests
+  (`/gifs/`, `/cache/`) in flight now and at most, how many, the bytes
+  actually sent and how many were cut off by the client; `?reset=1` zeroes
+  them, `&kbps=N` sends card files in 2 KB pieces at that rate (as the
+  firmware's `IO_CHUNK` streaming), so a reader that hangs up early is
+  measured as a device would see it. web-smoke's thumbnail checks use it.
 - **`transition` / `transition_ms`** in the config (`"dissolve"`, 400 by
   default): a name `opendmd_core::compositor::Kind::from_name` accepts
   (stored normalised) and 20..=2000 ms, else a 400. The mock plays nothing,
@@ -388,6 +394,7 @@ import math
 import os
 import random
 import re
+import socket
 import shutil
 import sys
 import threading
@@ -2519,6 +2526,19 @@ class Context:
         # `--sd slowed` and a card-failure restart set it).
         self.sd_slow_record = False
         self.reset_note = None
+        # Card file serving as the tests see it (`GET /mock/io`, mock only):
+        # requests for card files (/gifs/, /cache/) in flight and at most,
+        # bytes actually sent (a client that hangs up stops the count), and
+        # an optional pace, `kbps`, which sends in the firmware's 2 KB
+        # pieces (`config::IO_CHUNK`) at that rate, so a reader that stops
+        # early (the web app's thumbnails) is measured as on a device.
+        self.io = {"kbps": 0, "inflight": 0, "max": 0, "gets": 0, "bytes": 0, "cut": 0,
+                   "r503": 0, "fail503": 0, "fail500": 0, "drop": 0}
+        # The device's stream task (firmware/src/stream.rs): card and web app
+        # files go out one at a time with QUEUE_DEPTH (2) waiting; a request
+        # that finds the queue full waits up to QUEUE_WAIT (2 s) for a place,
+        # then gets 503 + Retry-After: 1.
+        self.streamq = {"cond": threading.Condition(), "busy": False, "waiting": 0}
         self.schedule.evaluate()  # picks up the playlist rebuilt just above
         # Firmware update: the running version, the updater's last line, the
         # simulated restart's end (monotonic), the Ed25519 key (VerifyKey).
@@ -2669,6 +2689,32 @@ def make_handler(ctx: Context, quiet: bool):
         def send_error_json(self, code: int, message: str, headers: dict | None = None) -> None:
             self.send_json(code, {"error": message}, headers)
 
+        def streamed(self, serve) -> None:
+            """Run `serve` as the stream task would: alone, behind at most two
+            waiting; a full queue for 2 s is a 503 with Retry-After: 1."""
+            q = ctx.streamq
+            with q["cond"]:
+                deadline = time.monotonic() + 2.0
+                while q["waiting"] >= 2:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        with ctx.lock:
+                            ctx.io["r503"] += 1
+                        self.send_error_json(503, "the stream queue is full; retry shortly", {"Retry-After": "1"})
+                        return
+                    q["cond"].wait(left)
+                q["waiting"] += 1
+                while q["busy"]:
+                    q["cond"].wait()
+                q["waiting"] -= 1
+                q["busy"] = True
+            try:
+                serve()
+            finally:
+                with q["cond"]:
+                    q["busy"] = False
+                    q["cond"].notify_all()
+
         def drain(self) -> None:
             """Read and drop the request body, so the connection stays usable."""
             remaining = int(self.headers.get("Content-Length") or 0)
@@ -2727,6 +2773,15 @@ def make_handler(ctx: Context, quiet: bool):
             self._resp_bytes = size
 
         def serve_www_rel(self, rel: str) -> bool:
+            out = []
+            base = ctx.www_root / rel if rel else ctx.www_root
+            gz = base.with_name(base.name + ".gz") if rel else None
+            if base.is_dir() or not (base.is_file() or (gz is not None and gz.is_file())):
+                return False
+            self.streamed(lambda: out.append(self.serve_www_now(rel)))
+            return True
+
+        def serve_www_now(self, rel: str) -> bool:
             """Serve `rel` (root-relative, no leading slash) out of --www,
             preferring `<rel>.gz` unconditionally. Returns False on a miss
             (nothing sent yet)."""
@@ -2797,6 +2852,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_prefix("/sets/"), {"GET": self.h_serve_under}),
                 (m_prefix("/cache/"), {"GET": self.h_serve_under}),
                 (m_prefix("/www/"), {"GET": self.h_www}),
+                (m_exact("/mock/io"), {"GET": self.h_mock_io}),
                 (lambda cur: True, {"GET": self.h_catchall}),
             ]
 
@@ -2874,11 +2930,56 @@ def make_handler(ctx: Context, quiet: bool):
             if rel is None:
                 self.send_error_json(400, "path escapes the card")
                 return
-            fpath = ctx.fs.read_path(rel)
-            if fpath is None:
-                self.send_error_json(404, rel_full)
-                return
-            self.stream_file(fpath, rel, gzipped=False)
+
+            def serve():
+                fpath = ctx.fs.read_path(rel)
+                if fpath is None:
+                    self.send_error_json(404, rel_full)
+                    return
+                self.stream_file(fpath, rel, gzipped=False)
+            self.streamed(serve)
+
+        def stream_paced(self, fpath: Path, rel: str, io: dict) -> None:
+            data = fpath.read_bytes()
+            self.send_response(200, "OK")
+            self.send_header("Content-Type", mime_for(rel))
+            self.send_header("Cache-Control", cache_for(rel))
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            sent = 0
+            try:
+                while sent < len(data):
+                    piece = data[sent:sent + 2048]
+                    self.wfile.write(piece)
+                    self.wfile.flush()
+                    sent += len(piece)
+                    with ctx.lock:
+                        io["bytes"] += len(piece)
+                    time.sleep(len(piece) / (io["kbps"] * 1024))
+            except (BrokenPipeError, ConnectionResetError):
+                with ctx.lock:
+                    io["cut"] += 1
+                self.close_connection = True
+            self._resp_status = 200
+            self._resp_bytes = sent
+
+        # GET /mock/io (mock only, not a firmware route): the card-file
+        # counters above; `?reset=1` zeroes them, `&kbps=N` sets the pace
+        # (0: as fast as the machine goes); `&fail503=N` answers the next N
+        # card-file GETs 503, `&fail500=N` 500, `&drop=N` closes them
+        # unanswered (a browser may retry those by itself).
+        def h_mock_io(self, path):
+            _, _, query = self.path.partition("?")
+            io = ctx.io
+            with ctx.lock:
+                out = dict(io)
+                if query_param(query, "reset") == "1":
+                    io.update(max=io["inflight"], gets=0, bytes=0, cut=0, r503=0)
+                for key in ("kbps", "fail503", "fail500", "drop"):
+                    k = query_param(query, key)
+                    if k is not None:
+                        io[key] = max(0, int(k))
+            self.send_json(200, out)
 
         def h_serve_under(self, path):
             rel_full = percent_decode(path)
@@ -2889,11 +2990,46 @@ def make_handler(ctx: Context, quiet: bool):
             if rel.startswith("@") or "/@" in f"/{rel}":
                 self.send_error_json(404, rel_full)
                 return
-            fpath = ctx.fs.read_path(rel)
-            if fpath is None:
-                self.send_error_json(404, rel_full)
+            io = ctx.io
+            with ctx.lock:
+                card = rel_full.startswith(("/gifs/", "/cache/"))
+                fail = card and next((k for k in ("fail503", "fail500", "drop") if io[k]), None)
+                if fail:
+                    io[fail] -= 1
+            if fail == "fail503":  # injected (GET /mock/io?fail503=N)
+                with ctx.lock:
+                    io["r503"] += 1
+                self.send_error_json(503, "busy (injected)", {"Retry-After": "1"})
                 return
-            self.stream_file(fpath, rel, gzipped=False)
+            if fail == "fail500":  # injected: a card error, say
+                self.send_error_json(500, "card read failed (injected)")
+                return
+            if fail == "drop":  # injected: the connection closes, no answer
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            self.streamed(lambda: self.serve_card(fpath_rel=rel, rel_full=rel_full))
+
+        def serve_card(self, fpath_rel: str, rel_full: str) -> None:
+            rel, io = fpath_rel, ctx.io
+            with ctx.lock:
+                io["gets"] += 1
+                io["inflight"] += 1
+                io["max"] = max(io["max"], io["inflight"])
+            try:
+                fpath = ctx.fs.read_path(rel)
+                if fpath is None:
+                    self.send_error_json(404, rel_full)
+                    return
+                if not io["kbps"]:
+                    self.stream_file(fpath, rel, gzipped=False)
+                    with ctx.lock:
+                        io["bytes"] += self._resp_bytes
+                    return
+                self.stream_paced(fpath, rel, io)
+            finally:
+                with ctx.lock:
+                    io["inflight"] -= 1
 
         # -- JSON API handlers -----------------------------------------------
 
@@ -4324,18 +4460,33 @@ def make_proxy_handler(www_root: Path, target: str, quiet: bool):
             try:
                 conn.request(method, self.path, body=body, headers=headers)
                 resp = conn.getresponse()
-                data = resp.read()
+                sized = resp.getheader("Content-Length")
+                # A sized answer (a card file) goes on as it comes, so a
+                # browser that stops reading (a thumbnail's cut) closes the
+                # device's connection too, as it would without the proxy.
+                data = b"" if sized is not None and self.command != "HEAD" else resp.read()
                 self.send_response(resp.status, resp.reason or STATUS_TEXT.get(resp.status, ""))
                 for hk in ("Content-Type", "Content-Encoding", "Cache-Control", "WWW-Authenticate", "Retry-After"):
                     v = resp.getheader(hk)
                     if v is not None:
                         self.send_header(hk, v)
-                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Content-Length", sized if sized is not None else str(len(data)))
                 self.end_headers()
+                sent = 0
                 if self.command != "HEAD":
-                    self.wfile.write(data)
+                    if sized is None:
+                        self.wfile.write(data)
+                        sent = len(data)
+                    else:
+                        try:
+                            while piece := resp.read(2048):
+                                self.wfile.write(piece)
+                                self.wfile.flush()
+                                sent += len(piece)
+                        except (BrokenPipeError, ConnectionResetError):
+                            self.close_connection = True
                 self._resp_status = resp.status
-                self._resp_bytes = len(data)
+                self._resp_bytes = sent
             finally:
                 conn.close()
 
