@@ -553,6 +553,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                     ),
                 );
             }
+            // A new look sent without how it was composed is drawn as it
+            // is: Settings must not show the last one's blend for it.
+            if patch.look_blend.is_none() && patch.look_amount.is_none() {
+                next.look_blend = crate::nvs_config::LOOK_BLENDS[0];
+                next.look_amount = 100;
+            }
             next.look_formula = v;
         }
         if let Some(v) = patch.look_formula_name {

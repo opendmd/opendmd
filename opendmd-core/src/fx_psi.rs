@@ -464,7 +464,7 @@ impl Effect for PsiFx {
 /// is not drawn over GIFs: it runs at the GIF's own frame rate whenever the
 /// GIF changes (a governor can only slow its own animation), next to the
 /// GIF's decoding (p90 ~4 ms) and the blit. 8 ms until any-look
-/// (2026-10-27), on an estimate that read full-panel looks ~1.5× low; with
+/// (2026-10-26), on an estimate that read full-panel looks ~1.5× low; with
 /// the estimate calibrated on the device, 12 ms: on the spare, looks of
 /// 8.6 and 12.3 ms measured left the GIFs at 0 steady misses (the animated
 /// one at 25 fps: over 8 ms its governor holds 40 ms frames).

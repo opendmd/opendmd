@@ -86,24 +86,26 @@ export async function mount(el) {
   const lfErr = h('p.cap.bad', { id: 'st-look-formula-err', hidden: true });
   let lfs = [], L = null, M = null, lc = null;
   const lcBox = h('div', { id: 'st-look-mix', hidden: true, style: 'margin:12px 0' });
-  async function lookFormulas() {
+  // (`force`: after a refusal, even while the controls have the focus.)
+  async function lookFormulas(force) {
     let ex;
     try { [ex, L] = await Promise.all([examples(), import('./looks.js')]); M = await L.psi(); } catch (e) { lfErr.hidden = false; lfErr.textContent = 'Formulas could not be loaded: ' + (e.message || e); return; }
     lc ??= L.controls('st-look', (b, k, done) => { const x = L.as(M, lfs[lf.value], b, k); lc.say(x); if (done && !x.why) saveLook(b, k); });
     lcBox.replaceChildren(lc.el, lc.why);
-    const mine = store.get('psi.mine', []), cf = app.config || {}, grp = (label, list) => list.length && h('optgroup', { label }, list.map((x) => h('option', { value: x.k, disabled: x.off }, x.name + (x.off ? ' (too heavy)' : ''))));
-    lfs = [...(Array.isArray(mine) ? mine : []).map((x) => ({ ...x, mine: 1 })), ...(Array.isArray(ex) ? ex : [])].filter((x) => typeof x?.src == 'string' && x.name);
+    const mine = store.get('psi.mine', []), cf = app.config || {}, grp = (label, list) => list.length && h('optgroup', { label }, list.map((x) => h('option', { value: x.k, disabled: !!x.off }, x.name + (!x.off ? '' : /too heavy/.test(x.off) ? ' (too heavy)' : /too long/.test(x.off) ? ' (too long)' : ' (can’t be a look)'))));
+    lfs = [...(Array.isArray(mine) ? mine : []).map((x) => ({ ...x, mine: 1 })), ...(Array.isArray(ex) ? ex : []).map((x) => ({ ...x }))].filter((x) => typeof x?.src == 'string' && x.name);
     let cur = -1;
     if (cf.look_formula) {
       const [name, b, k] = L.named(cf), same = (x, y = L.as(M, x, b, k)) => !y.why && L.fpath({ ...x, src: y.src }) === cf.look_formula;
-      cur = lfs.findIndex((x) => x.name === name && same(x));
+      cur = lfs.findIndex((x) => Array.from(x.name).slice(0, 60).join('') === name && same(x));
       if (cur < 0) { lfs.unshift(L.saved(cf)); cur = 0; }
     }
-    lfs.forEach((x, k) => { x.k = k; x.off = k !== cur && !!L.as(M, x, ...L.choice(M, x)).why; });
+    lfs.forEach((x, k) => { x.k = k; x.off = k !== cur && L.as(M, x, ...L.choice(M, x)).why; });
     clear(lf, h('option', { value: '' }, 'None'), lfs.filter((x) => x.saved).map((x) => h('option', { value: x.k }, x.name)),
       grp('Your Formulas', lfs.filter((x) => x.mine)), grp('Examples', lfs.filter((x) => !x.mine && !x.saved)));
     lf.value = cur < 0 ? '' : String(cur);
-    showMix(...L.named(cf).slice(1));
+    // A config event mid-drag must not snap the slider back.
+    if (force || !lcBox.contains(document.activeElement)) showMix(...L.named(cf).slice(1));
   }
   function showMix(b, k) {
     const x = lfs[lf.value];
@@ -112,8 +114,15 @@ export async function mount(el) {
   }
   const saveLook = (b, k) => looks(async () => {
     const x = lfs[lf.value];
-    if (!x) { await app.src.putConfig({ look_formula: '', look_formula_name: '', look_blend: 'over', look_amount: 100 }); await app.refreshConfig(); return; }
-    await L.use(x, b, k);
+    try {
+      if (!x) { await app.src.putConfig({ look_formula: '', look_formula_name: '', look_blend: 'over', look_amount: 100 }); await app.refreshConfig(); return; }
+      await L.use(x, b, k);
+    } catch (e) {
+      // Refused (400/413): the controls go back to what the panel has.
+      await app.refreshConfig().catch(() => {});
+      await lookFormulas(true);
+      throw e;
+    }
   });
   // A new pick starts at its own choice (as it is over the GIF, or Screen 40%).
   lf.onchange = () => { const x = lfs[lf.value], [b, k] = x ? L.choice(M, x) : ['over', 100]; showMix(b, k); if (!x || !L.as(M, x, b, k).why) saveLook(b, k); };

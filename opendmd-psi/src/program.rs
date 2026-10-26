@@ -379,7 +379,7 @@ impl Program {
 
     /// An estimate of a frame's time on the ESP32 in µs, as an effect or a
     /// look draws it, from the per-step costs `psi-probe` measured on the
-    /// device (ns a pixel at 128 lanes; recalibrated 2026-10-27 for layers,
+    /// device (ns a pixel at 128 lanes; recalibrated 2026-10-26 for layers,
     /// blends and coverage, tests/estimate.rs: within ~12 % of the VM's
     /// frame for layers and looks, then +15 % for the real paths): the
     /// per-pixel steps are nearly all of it; a per-row step is counted at
@@ -411,7 +411,7 @@ impl Program {
                 U_R | U_G | U_B => 70,
                 U_L => 140,
                 c if is_colour(c) => {
-                    // Measured on the device (psi-probe, 2026-10-27): a
+                    // Measured on the device (psi-probe, 2026-10-26): a
                     // colour's write — a lane's `chan` per pixel, ~5 for one
                     // value filled along the row — plus its kind, and for a
                     // layer the blend loop: one per blend when it covers all,

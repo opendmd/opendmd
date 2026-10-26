@@ -19,10 +19,12 @@ let mod = null;
 export const psi = () => (mod ??= import('../pkg-psi/opendmd_psi_web.js?look').then(async (m) => { await m.default(); return m; }).catch((e) => { mod = null; throw e; }));
 
 // `f` as a look: {src, i} (the text and what it is), or {why} — the
-// panel's own refusals (fx_psi: it hides the GIF; over its 12 ms).
+// panel's own refusals (its 2,048 B path, a 413; fx_psi: it hides the GIF;
+// over its 12 ms).
 export function as(m, f, blend, amt) {
   const src = f?.src && m.look(f.src, blend, amt), i = src && m.info();
   return !src ? { why: f?.src ? m.error() : 'pick a Formula' }
+    : fpath({ ...f, src }).length > 2048 ? { why: 'this Formula is too long for the panel as a look' }
     : !(i[5] & 32) ? { why: 'this Formula covers the GIF entirely: choose a lower amount or another blend' }
       : i[6] > 12000 ? { why: `this Formula is too heavy to draw over every GIF (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 12 ms)` }
         : { src, i };

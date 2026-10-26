@@ -94,7 +94,7 @@ fn formulas() {
 
 /// The examples gallery: every one compiles, is short, and is light or
 /// medium for the panel (the ESP32 estimate within 10 ms: since the
-/// estimate was calibrated on the device, 2026-10-27, the heaviest five read
+/// estimate was calibrated on the device, 2026-10-26, the heaviest five read
 /// 8.3-9.7 ms, which is how they always ran: at 25 frames a second).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
