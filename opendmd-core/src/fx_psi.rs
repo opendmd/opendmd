@@ -175,7 +175,7 @@ static COMPILER: std::sync::OnceLock<Compiler> = std::sync::OnceLock::new();
 
 /// Install how formulas are compiled (once). The firmware runs the compiler
 /// on a stack of its own: it recurses up to [`psi::MAX_DEPTH`] levels
-/// (~10 KB at the worst on the ESP32), more than the main task (16 KB, much
+/// (~9 KB at the worst on the ESP32), more than the main task (16 KB, much
 /// of it used where a path opens) or the HTTP server (6.5 KB, which checks
 /// an attract effect) can spare.
 pub fn set_compiler(f: Compiler) {

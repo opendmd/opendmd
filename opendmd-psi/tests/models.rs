@@ -223,8 +223,8 @@ fn the_cost_table_is_the_estimates() {
         ),
         ("| `mix` | 130 |", 130, "gray(x)", "gray(mix(x, px, x))"),
         (
-            "| `pick` (values the same for every pixel) | 60 (estimated) |",
-            60,
+            "| `pick` (values the same for every pixel) | 100 |",
+            100,
             "gray(px)",
             "gray(pick(px, 0.25, 0.5))",
         ),

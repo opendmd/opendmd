@@ -424,12 +424,14 @@ pub const BOOT_STACK: usize = 10 * 1024;
 pub const HTTP_STACK: usize = 6 * 1024 + 512;
 
 /// The stack a formula is compiled on (`psi_stack.rs`): Psi's compiler
-/// recurses to `psi::MAX_DEPTH` levels, ~390 B each on the ESP32, and used
-/// 9,664 B at its worst measured inside a thread (`psi-probe`'s `worst
-/// nested`, 2026-10-25). On this stack itself, with the thread's entry
-/// frames and whatever interrupts pushed, the worst left **1,820 B never
-/// touched** (`worst nested on psi_stack`): the real headroom. Under 1 KB
-/// would mean 14 KB. Taken from the heap for the compile only.
+/// recurses to `psi::MAX_DEPTH` levels, ~430 B each on the ESP32. At the
+/// old cap of 24 its worst used 11,808 B inside a thread (`psi-probe` on
+/// the spare, 2026-10-26; 9,664 B on 2026-10-25, before the text
+/// built-ins), more than this stack less its ~800 B of entry frames and
+/// interrupts: a deep enough formula could restart the player. With the
+/// cap at 18, ~9.2 KB (opendmd-psi's `tests/stack.rs` holds the host's
+/// figure to a budget calibrated on that probe). Taken from the heap for
+/// the compile only.
 #[cfg(feature = "psi")]
 pub const PSI_COMPILE_STACK: usize = 12 * 1024;
 /// The file-streaming task's stack (`stream.rs`): `files::serve` and, since

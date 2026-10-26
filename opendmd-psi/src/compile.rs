@@ -23,7 +23,11 @@ pub const MAX_SOURCE: usize = 4096;
 /// Expression nodes (before dead ones are dropped): bounds compile time.
 pub const MAX_NODES: usize = 1024;
 /// Brackets and operators nested this deep: bounds the parser's stack.
-pub const MAX_DEPTH: usize = 24;
+/// 18 since 2026-10-26: at 24 the deepest formula used 11,808 B of the
+/// ESP32's 12 KB compile stack (`psi-probe` on the spare; beta.10's
+/// compiler, by its frame sizes, more), ~430 B a level; at 18 ~9.2 KB.
+/// Every known formula needs at most 12 (the examples' parts 3 a level).
+pub const MAX_DEPTH: usize = 18;
 
 /// A compile error: a byte range of the source and a sentence.
 #[derive(Clone, Debug, PartialEq, Eq)]

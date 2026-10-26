@@ -367,7 +367,7 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
         "gray(((((((((((((((((((((((((((x)))))))))))))))))))))))))))",
         "nested too deeply",
         1,
-        30,
+        24,
     ),
 ];
 
@@ -961,11 +961,11 @@ fn parts_stay_within_the_limits() {
     assert!(e.msg.contains("parts go too deep"), "{}", e.msg);
     // Not as deep, but read again and again: bounded too.
     let mut s = String::from("part p0 { v = x\ngray(v) }\n");
-    for k in 1..5 {
+    for k in 1..4 {
         let j = k - 1;
-        s = alloc::format!("part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v\ngray(v)\n}}\n");
+        s = alloc::format!("part p{k} {{\n{s}v = p{j}(x*0.5, y).v + p{j}(y, x).v + p{j}(x + 0.1, y).v + p{j}(x, y*2).v + p{j}(1 - x, y).v + p{j}(y, 1 - x).v + p{j}(x*2, y).v + p{j}(y*2, x).v\ngray(v)\n}}\n");
     }
-    s += "p4";
+    s += "p3";
     let e = compile(&s).unwrap_err();
     assert!(e.msg.contains("too many places"), "{}", e.msg);
 }
