@@ -1488,7 +1488,9 @@ fn main() -> Result<()> {
                 let budget_us = us(next_frame_at.saturating_sub(tick_now))
                     .saturating_sub(us(tick_start.elapsed()) + SYNC_SLACK_US);
                 let blit_px = panel.blit_within(pic, budget_us);
-                let blit_us = us(blit_start.elapsed());
+                // The blit's own time: a wait for the scan (`panel_sync`,
+                // inside the frame's slack) is not part of it.
+                let blit_us = us(blit_start.elapsed()).saturating_sub(panel.last_wait_us());
                 let free = free_heap();
                 floor.note(free);
                 FRAME_SHOWN.store(true, Ordering::Relaxed);

@@ -168,8 +168,16 @@ ESP_SYSTEM_INIT_FN(hub75_early_blank, CORE, BIT(0), 2) {
 /*
  * The DMA's current descriptor, as an index into the block (UINT32_MAX
  * outside it). The ESP32's OUTLINK_DSCR register holds the address of the
- * descriptor the DMA is on; with burst prefetch it may already be the next
- * one, 16 us later at most here, which the callers' margins cover.
+ * descriptor the DMA is on, and hub75_scan_pos reports that descriptor's
+ * start, so a reading is coarse: it lags by up to one descriptor's time —
+ * ~102 us inside a pair's first descriptor (2,048 B, every colour plane;
+ * on the rig's measured clock), ~13 us inside the others — and with burst
+ * prefetch it may already show the next descriptor, leading by as much.
+ * The pacer absorbs this in its per-pair write allowance (300 us, 450 us
+ * tinted, against ~74 us measured for a full pair), not in its 30 us
+ * margin. The seam count (Judge) shares the error: a pair written within
+ * ~0.1 ms of its slot's edges can be counted in_pair/torn when it was not,
+ * or the other way, so in_pair and torn are good to about that resolution.
  */
 static inline uint32_t scan_desc_index(void) {
     const uint32_t addr = getDev()->out_link_dscr;
@@ -233,12 +241,15 @@ extern "C" void hub75_scan_init(void) {
     s_scan_rest = rest;
     s_scan_row_bytes = first + (per_row - 1) * rest;
     s_scan_desc = reinterpret_cast<uint32_t>(desc);
-    // Time two wraps (the index going back down) of the running DMA.
-    int64_t wraps[2] = {0, 0};
+    // Time four wraps (the index going back down) of the running DMA and
+    // take the shortest of the three intervals (a preempted read only
+    // makes one longer). Implausible against the library's own computed
+    // rate (outside 0.5-1.5x): the scan is unknown.
+    int64_t wraps[4] = {0, 0, 0, 0};
     int seen = 0;
     uint32_t last = scan_desc_index();
-    const int64_t give_up = esp_timer_get_time() + 100000;
-    while (seen < 2 && esp_timer_get_time() < give_up) {
+    const int64_t give_up = esp_timer_get_time() + 150000;
+    while (seen < 4 && esp_timer_get_time() < give_up) {
         const uint32_t idx = scan_desc_index();
         if (idx != UINT32_MAX && last != UINT32_MAX && idx + count / 2 < last) {
             wraps[seen++] = esp_timer_get_time();
@@ -247,12 +258,24 @@ extern "C" void hub75_scan_init(void) {
             last = idx;
         }
     }
-    if (seen < 2) {
-        ESP_LOGW(TAG, "scan: no refresh in 100 ms");
+    if (seen < 4) {
+        ESP_LOGW(TAG, "scan: no refresh in 150 ms");
         s_scan_desc = 0;
         return;
     }
-    const uint32_t period = static_cast<uint32_t>(wraps[1] - wraps[0]);
+    uint32_t period = UINT32_MAX;
+    for (int i = 1; i < 4; i++) {
+        const uint32_t d = static_cast<uint32_t>(wraps[i] - wraps[i - 1]);
+        period = d < period ? d : period;
+    }
+    const int calc = s_panel->calculated_refresh_rate;
+    const uint32_t expect = calc > 0 ? 1000000u / static_cast<uint32_t>(calc) : 0;
+    if (expect == 0 || period * 3 < expect * 2 || period > expect * 2) {
+        ESP_LOGW(TAG, "scan: refresh %u us measured, %u us expected: implausible, not used",
+                 (unsigned)period, (unsigned)expect);
+        s_scan_desc = 0;
+        return;
+    }
     s_scan_row_us = period / rows;
     ESP_LOGI(TAG, "scan: %u descriptors, %u per row pair, refresh %u us", (unsigned)count,
              (unsigned)per_row, (unsigned)period);

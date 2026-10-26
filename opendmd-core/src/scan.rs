@@ -27,6 +27,11 @@
 /// Row pairs in a refresh (rows `y` and `y + HEIGHT / 2` go out together).
 pub const PAIRS: usize = crate::canvas::HEIGHT / 2;
 
+/// A split frame's bottom pass sleeps until this long (µs) before its last
+/// pair may be written — the pairs before it are free by then, and their
+/// deadlines are most of a refresh away — then paces the rest.
+pub const SPLIT_LEAD_US: u32 = 3_000;
+
 /// One scan reading: the position in the refresh (µs of scan) and the
 /// clock (µs, wrapping) when it was read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -416,7 +421,7 @@ mod tests {
             }
             // A sleep until shortly before the last pair frees, as the
             // firmware does, then the paced bottom writes.
-            t = t.max(bottom.free_at(PAIRS - 1).saturating_sub(2000));
+            t = t.max(bottom.free_at(PAIRS - 1).saturating_sub(SPLIT_LEAD_US));
             for k in 0..PAIRS {
                 t += bottom.wait(k, read(t));
                 let b = read(t);
