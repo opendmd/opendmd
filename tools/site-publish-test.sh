@@ -51,7 +51,7 @@ look
 cmp -s "$tmp/look/gallery/README.md" site/public-repo/gallery/README.md || fail "gallery/README.md is not ours"
 cmp -s "$tmp/look/.github/workflows/gallery-check.yml" site/public-repo/.github/workflows/gallery-check.yml || fail "the workflow is not ours"
 cmp -s "$tmp/look/.github/workflows/pages.yml" site/public-repo/.github/workflows/pages.yml || fail "the Pages workflow is not ours"
-for f in opendmd-psi/src/lib.rs opendmd-gallery/src/main.rs opendmd-gallery/Cargo.lock tools/gallery_page.py; do
+for f in opendmd-psi/src/lib.rs opendmd-core/src/fonts.rs opendmd-gallery/src/main.rs opendmd-gallery/Cargo.lock tools/gallery_page.py; do
   cmp -s "$tmp/look/.github/gallery-check/$f" "$f" || fail "the checker's source lacks $f"
 done
 [ ! -e "$tmp/look/.github/gallery-check/opendmd-psi/target" ] || fail "a build folder was vendored"

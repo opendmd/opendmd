@@ -338,7 +338,7 @@ pub fn run() {
 
     // What one step costs: each formula is the baseline plus one or two
     // per-pixel steps (t is a frame value, so nothing folds away).
-    const STEPS: [(&str, &str); 14] = [
+    const STEPS: [(&str, &str); 16] = [
         ("base gray(x)", "gray(x)"),
         ("add", "gray(x + t)"),
         ("mul", "gray(x * t)"),
@@ -351,6 +351,8 @@ pub fn run() {
         ("smoothstep (+add)", "gray(smoothstep(0.2, 0.8, x + t))"),
         ("noise (+mul)", "gray(noise(x * 8, y, t))"),
         ("select (+lt)", "gray(x < t ? x : 0.5)"),
+        ("digit (+2 mask)", "gray(digit(px % 8, px % 4, y * 6))"),
+        ("bit", "gray(bit(px, t))"),
         ("out hsv", "hsv(x, 1, 1)"),
         ("out pal", "pal(fire, x)"),
     ];

@@ -107,7 +107,10 @@ fn the_examples_are_light_enough_for_the_panel() {
                 !inside && !l.trim_start().starts_with("--")
             })
             .count();
-        assert!(own <= 7, "{}: too long for an example", e.name);
+        // The showcase, Big clock, reads as a commented step a line
+        // (owner, 2026-10-26: legible over short); the rest stay short.
+        let most = if e.name == "Big clock" { 16 } else { 7 };
+        assert!(own <= most, "{}: too long for an example", e.name);
         assert!(
             p.esp32_us() <= 8000,
             "{}: ~{} µs a frame on the panel",

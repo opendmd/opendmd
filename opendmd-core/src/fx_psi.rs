@@ -225,7 +225,8 @@ pub fn stats() -> (u32, u32, u32, u32) {
     )
 }
 
-/// The tables Psi reads, lent from `fx`.
+/// The tables Psi reads, lent from `fx` (the sine, the palettes) and
+/// `text` (the fonts, for `digit` and `glyph`).
 pub fn tables() -> psi::Tables<'static> {
     // `Rgb` is `#[repr(C)]` with three `u8` fields (asserted in `canvas`),
     // so a `[Rgb; 32]` is a `[[u8; 3]; 32]`.
@@ -237,6 +238,8 @@ pub fn tables() -> psi::Tables<'static> {
     psi::Tables {
         sin: &SIN,
         palettes: [pal(0), pal(1), pal(2), pal(3), pal(4)],
+        small: &crate::text::FONT_4X6,
+        normal: &crate::text::FONT_5X7,
     }
 }
 
@@ -529,8 +532,9 @@ pub fn look_stats() -> (u32, u32, u32) {
 impl FormulaLook {
     /// The heap [`take`](Self::take) asks for: the working memory and the
     /// picture.
-    pub const BUFFER_BYTES: usize =
-        std::mem::size_of::<psi::Scratch<LANES>>() + PIXELS * 3 + std::mem::size_of::<LookBuffers>();
+    pub const BUFFER_BYTES: usize = std::mem::size_of::<psi::Scratch<LANES>>()
+        + PIXELS * 3
+        + std::mem::size_of::<LookBuffers>();
 
     /// The look for a formula's `@fx:psi?src=…` path (sliders and `fps=`
     /// as for the effect), or why not: it does not compile, or it is too
@@ -806,7 +810,11 @@ impl FormulaLook {
             }
             // The next frame of its own: on its grid, held as the governor
             // says, never in the past.
-            let held = u64::from(if governed { self.gov.delay_ms(grid) } else { grid });
+            let held = u64::from(if governed {
+                self.gov.delay_ms(grid)
+            } else {
+                grid
+            });
             let k = el.as_millis() as u64 / held + 1;
             self.next = Some(t0 + Duration::from_millis(k * held));
         }
@@ -959,6 +967,12 @@ mod tests {
         for i in 0..5 {
             assert_eq!(t.palettes[i], &psi::PALETTES[i], "palette {i}");
         }
+        // The very tables `text` draws with (Psi's own copy is the same
+        // file, `include!`d).
+        assert!(std::ptr::eq(t.small, &crate::text::FONT_4X6));
+        assert!(std::ptr::eq(t.normal, &crate::text::FONT_5X7));
+        assert_eq!(t.small, &psi::FONT_4X6);
+        assert_eq!(t.normal, &psi::FONT_5X7);
     }
 
     #[test]
@@ -1015,6 +1029,12 @@ mod tests {
             path("v = x % 2 + 1 & 3 # é"),
             "@fx:psi?src=v+=+x+%25+2+%2B+1+%26+3+%23+%C3%A9"
         );
+        // Characters in quotes, the URL's own among them, come back as they
+        // went.
+        let src = "k = ' ' + '+' + '%' + '#' + '&' + '?' + ';' + '=' -- c\ngray(glyph(k, px % 5, 31 - py))";
+        let q = query(path(src).strip_prefix("@fx:psi?").unwrap());
+        assert_eq!(q.src, psi::compact(src));
+        assert_eq!(psi::compile(&q.src).unwrap(), psi::compile(src).unwrap());
     }
 
     #[test]
@@ -1401,7 +1421,11 @@ mod tests {
         // One that hides the GIF is no look.
         let e = FormulaLook::from_path(&super::path("hsv(x, 1, 1)", "")).unwrap_err();
         assert_eq!(e.msg, COVERS);
-        assert!(FormulaLook::from_path(&super::path("layer { hsv(x, 1, 1) }\nlayer add { gray(0.1) }", "")).is_err());
+        assert!(FormulaLook::from_path(&super::path(
+            "layer { hsv(x, 1, 1) }\nlayer add { gray(0.1) }",
+            ""
+        ))
+        .is_err());
         let e = FormulaLook::from_path(&super::path("layer multiply { gray(noise(x*8, y, t) + noise(x, y*8, t) + len(x, y) + len(y, x) + atan2(x, y) + sqrt(x) + noise(y, x, t)) }", "")).unwrap_err();
         assert!(
             e.msg
@@ -1420,7 +1444,10 @@ mod tests {
                 .msg,
             "unknown name `tme` — did you mean `t`?"
         );
-        assert_eq!(FormulaLook::BUFFER_BYTES, 8192 + 12288 + std::mem::size_of::<LookBuffers>());
+        assert_eq!(
+            FormulaLook::BUFFER_BYTES,
+            8192 + 12288 + std::mem::size_of::<LookBuffers>()
+        );
     }
 
     #[test]
@@ -1456,11 +1483,18 @@ mod tests {
         .unwrap();
         assert!(look.is_animated() && look.take());
         look.apply(ms(500), &mut under, 0);
-        assert_eq!(look.due(), Some(ms(1500)), "the clock alone: a frame a second");
+        assert_eq!(
+            look.due(),
+            Some(ms(1500)),
+            "the clock alone: a frame a second"
+        );
         // 7.5 ms a render (the fake clock) at 100 fps (5 ms): 20 ms frames.
         set_clock(Some(fake_clock));
-        let mut look =
-            FormulaLook::from_path(&super::path("loop 4\nlayer add { gray(t/4, 0.2) }", "fps=100")).unwrap();
+        let mut look = FormulaLook::from_path(&super::path(
+            "loop 4\nlayer add { gray(t/4, 0.2) }",
+            "fps=100",
+        ))
+        .unwrap();
         assert!(look.take());
         let mut t = ms(0);
         for _ in 0..20 {
@@ -1478,7 +1512,8 @@ mod tests {
         // Pixel (0, 0) after a look blit, a darker GIF frame on its row (so
         // the row fades) and one glow step towards `to_look`'s target.
         let run = |to_look: bool| {
-            let mut look = FormulaLook::from_path(&super::path("layer add { gray(0.25) }", "")).unwrap();
+            let mut look =
+                FormulaLook::from_path(&super::path("layer add { gray(0.25) }", "")).unwrap();
             assert!(look.take());
             let mut under = Canvas::new();
             under.set(0, 0, Rgb::new(40, 40, 40));
@@ -1504,14 +1539,19 @@ mod tests {
         assert_eq!(lit, Rgb::new(104, 104, 104), "the look brightened it");
         assert_eq!(kept, lit, "towards the look's picture it stays");
         let (_, faded) = run(false);
-        assert!(faded.r < lit.r, "towards the GIF alone it fades: the step ran");
+        assert!(
+            faded.r < lit.r,
+            "towards the GIF alone it fades: the step ran"
+        );
     }
 
     #[test]
     fn a_new_files_open_does_not_steer_the_look() {
         let ms = Duration::from_millis;
         set_clock(Some(fake_clock));
-        let mut look = FormulaLook::from_path(&super::path("loop 4\nlayer add { gray(t/4, 0.2) }", "")).unwrap();
+        let mut look =
+            FormulaLook::from_path(&super::path("loop 4\nlayer add { gray(t/4, 0.2) }", ""))
+                .unwrap();
         assert!(look.take());
         let mut under = picture();
         let mut t = ms(0);
@@ -1547,7 +1587,11 @@ mod tests {
         assert!(look.take());
         let mut canvas = picture();
         look.apply(ms(990), &mut canvas, 0).dirty_mut().clear();
-        assert_eq!(look.due_between(false), Some(ms(1010)), "its own frames between the file's");
+        assert_eq!(
+            look.due_between(false),
+            Some(ms(1010)),
+            "its own frames between the file's"
+        );
         assert_eq!(look.due_between(true), None);
         let mut c = Compositor::new(Transition::new(Kind::Dissolve, ms(400)));
         c.begin(&canvas, 0);
@@ -1586,7 +1630,11 @@ mod tests {
         }
         assert_eq!(between, 0, "nothing drawn between the steps");
         assert!(steps >= 19, "{steps} steps");
-        assert_eq!(own, steps - 1, "every step but the first (t = 0) is a frame of its own");
+        assert_eq!(
+            own,
+            steps - 1,
+            "every step but the first (t = 0) is a frame of its own"
+        );
         // After it, its own frames between the file's again.
         assert!(look.due_between(c.is_active()).is_some());
     }

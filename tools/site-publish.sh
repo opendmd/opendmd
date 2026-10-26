@@ -58,7 +58,9 @@ trap 'rm -rf "$stage"' EXIT
 cp -a site/public-repo/. "$stage"/
 mkdir -p "$stage/.github/gallery-check"
 # Only what git tracks (as committed: the tree is clean), and nothing new beside it.
-vendored=(opendmd-psi opendmd-gallery tools/gallery_page.py)
+# opendmd-core/src/fonts.rs: the panel's fonts, which opendmd-psi include!s
+# (its `digit` and `glyph`).
+vendored=(opendmd-psi opendmd-core/src/fonts.rs opendmd-gallery tools/gallery_page.py)
 untracked=$(git ls-files --others --exclude-standard -- "${vendored[@]}")
 [ -z "$untracked" ] || { echo "refusing: untracked files in the checker's source: $untracked" >&2; exit 1; }
 git ls-files -z --cached -- "${vendored[@]}" |
