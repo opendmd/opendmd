@@ -1693,9 +1693,10 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
           "settings: #st-glow options off/short/long")
     cfg0 = get_json(base + "/api/config")
     st0 = get_json(base + "/api/status")
-    check(list(cfg0)[-11:] == ["attract", "look", "glow", "look_formula", "look_formula_name", "boot_show", "api_key_set",
-                              "panel", "panel_now", "panel_next", "panel_trial_s"],
-          f"config: attract/look/glow/look_formula/look_formula_name/boot_show/api_key_set, then the panel keys, end the object ({list(cfg0)[-12:]})")
+    check(list(cfg0)[-13:] == ["attract", "look", "glow", "look_formula", "look_formula_name", "look_blend", "look_amount", "boot_show",
+                              "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"],
+          f"config: attract/look/glow/look_formula/look_formula_name/look_blend/look_amount/boot_show/api_key_set, then the panel keys,"
+          f" end the object ({list(cfg0)[-14:]})")
     check(list(st0)[-8:] == ["look", "glow", "glow_held", "formula_look", "attract_live", "max_brightness",
                              "brightness_safe_max", "safe_start_until"],
           f"status: look/glow/glow_held/formula_look/attract_live/max_brightness/brightness_safe_max/safe_start_until"
@@ -3885,15 +3886,17 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     opts = page.eval_on_selector_all("#st-look-formula option", "els => els.map(e => [e.textContent, e.disabled])")
     names = [o[0] for o in opts]
     heavy = [o[0] for o in opts if o[1]]
-    check(all(n in names for n in ("Plasma", "Big clock", "Scanlines", "Old photo", "Starfield")) and "Matrix (too heavy)" in heavy,
+    check(all(n in names for n in ("Plasma", "Big clock", "Scanlines", "Old photo", "Starfield", "Matrix")) and not heavy,
           f"looks: Settings › Look lists every example ({len(opts)}; too heavy: {heavy})")
     page.select_option("#st-look-formula", label="Plasma")
     page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
     c = get_json(base + "/api/config")
     ui = (page.input_value("#st-look-blend"), page.input_value("#st-look-amt"), page.is_visible("#st-look-mix"))
-    check(c["look_formula_name"] == "Plasma · Screen 40%" and ui == ("screen", "40", True)
+    fps = page.inner_text("#st-look-why")
+    check((c["look_formula_name"], c["look_blend"], c["look_amount"]) == ("Plasma", "screen", 40) and ui == ("screen", "40", True)
+          and "moves about 25 times a second" in fps
           and "part+look+{" in c["look_formula"] and c["look_formula"].endswith("layer+screen+{+look(x,+y,+0.4)+}"),
-          f"looks: Plasma starts at Screen 40% ({ui}; {c['look_formula_name']!r}; ...{c['look_formula'][-40:]!r})")
+          f"looks: Plasma starts at Screen 40%, '{fps}' ({ui}; {c['look_formula_name']!r}; ...{c['look_formula'][-40:]!r})")
     shot(page, "looks-settings", "laptop")
     # Saved, reloaded, shown again, re-edited.
     page.reload()
@@ -3905,31 +3908,31 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.select_option("#st-look-blend", "multiply")
     page.wait_for_timeout(600)
     c2 = get_json(base + "/api/config")
-    check(ui == ("screen", "40") and c1["look_formula_name"] == "Plasma · Screen 60%" and c1["look_formula"].endswith("look(x,+y,+0.6)+}")
-          and c2["look_formula_name"] == "Plasma · Multiply 60%" and c2["look_formula"].endswith("layer+multiply+{+look(x,+y,+0.6)+}"),
+    check(ui == ("screen", "40") and (c1["look_formula_name"], c1["look_blend"], c1["look_amount"]) == ("Plasma", "screen", 60) and c1["look_formula"].endswith("look(x,+y,+0.6)+}")
+          and (c2["look_formula_name"], c2["look_blend"], c2["look_amount"]) == ("Plasma", "multiply", 60) and c2["look_formula"].endswith("layer+multiply+{+look(x,+y,+0.6)+}"),
           f"looks: after a reload Settings shows Screen 40% ({ui}) and re-edits it: ({c1['look_formula_name']!r}, then {c2['look_formula_name']!r})")
     # Over at 100 % would hide the GIF: said, not saved.
     page.select_option("#st-look-blend", "over")
-    page.wait_for_function("fetch('/api/config').then(r => r.json()).then(c => c.look_formula_name.includes(' · Over '))", timeout=10000)
+    page.wait_for_function("fetch('/api/config').then(r => r.json()).then(c => c.look_blend == 'over')", timeout=10000)
     page.wait_for_timeout(600)
     c2 = get_json(base + "/api/config")
     page.eval_on_selector("#st-look-amt", "r => { r.value = 100; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }")
     page.wait_for_timeout(600)
     why = page.inner_text("#st-look-why") if page.is_visible("#st-look-why") else ""
     c3 = get_json(base + "/api/config")
-    check("covers the GIF entirely" in why and c3["look_formula"] == c2["look_formula"] and c3["look_formula_name"] == "Plasma · Over 60%",
+    check("covers the GIF entirely" in why and c3["look_formula"] == c2["look_formula"] and (c3["look_formula_name"], c3["look_blend"], c3["look_amount"]) == ("Plasma", "over", 60),
           f"looks: Over 100% of Plasma is refused in a sentence ('{why}'), nothing saved ({c3['look_formula_name']!r})")
     # A look saved in another browser: its formula taken apart from the path.
     gone = page.evaluate("""async () => { const L = await import('./js/looks.js'), m = await L.psi();
         return L.fpath({ name: 'Gone', src: m.look('loop 4\\nhsv(x + t/4, 1, 1)', 'add', 25) }); }""")
-    put_json(base + "/api/config", {"look_formula": gone, "look_formula_name": "Gone · Add 25%"})
+    put_json(base + "/api/config", {"look_formula": gone, "look_formula_name": "Gone", "look_blend": "add", "look_amount": 25})
     page.reload()
     page.wait_for_function("document.querySelector('#st-look-formula')?.selectedOptions[0]?.textContent == 'Gone'", timeout=20000)
     ui = (page.input_value("#st-look-blend"), page.input_value("#st-look-amt"))
     page.eval_on_selector("#st-look-amt", "r => { r.value = 35; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }")
     page.wait_for_timeout(600)
     c4 = get_json(base + "/api/config")
-    check(ui == ("add", "25") and c4["look_formula"] == gone.replace("0.25", "0.35") and c4["look_formula_name"] == "Gone · Add 35%",
+    check(ui == ("add", "25") and c4["look_formula"] == gone.replace("0.25", "0.35") and (c4["look_formula_name"], c4["look_blend"], c4["look_amount"]) == ("Gone", "add", 35),
           f"looks: a look saved elsewhere is listed and re-edited ({ui}; {c4['look_formula'][-50:]!r})")
     # The editor's Use as the look, with a blend: the preview shows it meanwhile.
     open_formulas(page)
@@ -3949,10 +3952,18 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-look-go")
     t = last_toast(page, "ok")
     c5 = get_json(base + "/api/config")
-    check(mix == ("screen", "40") and c5["look_formula_name"] == "Plasma remix · Add 50%"
+    check(mix == ("screen", "40") and (c5["look_formula_name"], c5["look_blend"], c5["look_amount"]) == ("Plasma remix", "add", 50)
           and c5["look_formula"].endswith("layer+add+{+look(x,+y,+0.5)+}") and t.startswith("“Plasma remix” is the panel’s look now"),
           f"looks: the editor's Use as the look, Add 50% (started at {mix}; '{t}'; {c5['look_formula_name']!r}; picture row {over})")
-    put_json(base + "/api/config", {"look_formula": "", "look_formula_name": ""})
+    # Bad values are a 400.
+    for bad in ({"look_blend": "lighten"}, {"look_amount": 101}):
+        try:
+            put_json(base + "/api/config", bad)
+            code = 200
+        except urllib.error.HTTPError as e:
+            code = e.code
+        check(code == 400, f"looks: {bad} is a 400 ({code})")
+    put_json(base + "/api/config", {"look_formula": "", "look_formula_name": "", "look_blend": "over", "look_amount": 100})
     page.context.close()
 
 

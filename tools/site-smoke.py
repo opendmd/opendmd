@@ -352,11 +352,11 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page.select_option("#st-look-formula", label="Plasma")
     saved("#st-look-formula")
     mix = (page.input_value("#st-look-blend"), page.input_value("#st-look-amt"))
-    cfg = page.evaluate("import('./js/state.js').then(m => [m.app.config.look_formula_name, m.app.status.formula_look?.error ?? null])")
+    cfg = page.evaluate("import('./js/state.js').then(m => [m.app.config.look_formula_name, m.app.config.look_blend, m.app.config.look_amount, m.app.status.formula_look?.error ?? null])")
     now()
     page.wait_for_timeout(800)
     l1, ratio = lum(), rows_ratio(page)
-    check(mix == ("screen", "40") and cfg == ["Plasma · Screen 40%", None] and l1 > 1.2 * l0 and abs(ratio - 1) < 0.15,
+    check(mix == ("screen", "40") and cfg == ["Plasma", "screen", 40, None] and l1 > 1.2 * l0 and abs(ratio - 1) < 0.15,
           f"demo settings: Plasma screened at 40% over the panel ({mix}, {cfg}; brightness {l0:,} -> {l1:,}, even/odd rows {ratio:.2f})")
     page.screenshot(path=str(shots / "demo-look-plasma-laptop.png"))
     tab("look")

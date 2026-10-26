@@ -4,9 +4,9 @@
 // `?look`) writes the text the panel is sent — opendmd_psi::look: the
 // formula pasted in as a part, a layer with the blend; over at 100 % is
 // the formula itself — and says what it costs. The config keeps that path
-// with the formula's name, blend and amount — look_formula_name `Plasma ·
-// Screen 40%` (the name alone for Over 100%, as before) — so Settings
-// shows them again; the player stores the name as display text.
+// with the formula's name, blend and amount (look_formula_name,
+// look_blend, look_amount; a player without them: Over 100 %), so
+// Settings shows them again.
 
 import { app } from './state.js';
 import { h } from './util.js';
@@ -19,12 +19,12 @@ let mod = null;
 export const psi = () => (mod ??= import('../pkg-psi/opendmd_psi_web.js?look').then(async (m) => { await m.default(); return m; }).catch((e) => { mod = null; throw e; }));
 
 // `f` as a look: {src, i} (the text and what it is), or {why} — the
-// panel's own refusals (fx_psi: it hides the GIF; over its 8 ms).
+// panel's own refusals (fx_psi: it hides the GIF; over its 12 ms).
 export function as(m, f, blend, amt) {
   const src = f?.src && m.look(f.src, blend, amt), i = src && m.info();
   return !src ? { why: f?.src ? m.error() : 'pick a Formula' }
     : !(i[5] & 32) ? { why: 'this Formula covers the GIF entirely: choose a lower amount or another blend' }
-      : i[6] > 8000 ? { why: `this Formula is too heavy to draw over every GIF (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 8 ms)` }
+      : i[6] > 12000 ? { why: `this Formula is too heavy to draw over every GIF (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 12 ms)` }
         : { src, i };
 }
 // One with layers of its own goes over only.
@@ -37,23 +37,14 @@ export function choice(m, f) {
   return as(m, f, 'screen', 40).why ? ['over', 30] : ['screen', 40];
 }
 
-// The saved name, blend and amount, from look_formula_name.
-const SUFFIX = / · (\w+) (\d{1,3})%$/;
-export function named(cf) {
-  const n = cf.look_formula_name || '', m = SUFFIX.exec(n), b = m && BLENDS.find((x) => x[1] == m[1]);
-  return b && m[2] <= 100 ? [n.slice(0, m.index), b[0], +m[2]] : [n, 'over', 100];
-}
-// …and back: the name, cut to fit 60 characters with its blend and amount.
-const label = (name, blend, amt) => {
-  const s = ` · ${BLENDS.find((x) => x[0] == blend)[1]} ${amt}%`, n = Array.from(name || 'Formula');
-  return blend == 'over' && amt == 100 && !SUFFIX.test(name) ? n.slice(0, 60).join('') : n.slice(0, 60 - s.length).join('') + s;
-};
+// The saved name, blend and amount.
+export const named = (cf) => [cf.look_formula_name || '', cf.look_blend || 'over', cf.look_amount ?? 100];
 
 // Kept as the panel's look: the config, then read again.
 export async function use(f, blend, amt) {
   const x = as(await psi(), f, blend, amt);
   if (x.why) throw new Error(x.why);
-  await app.src.putConfig({ look_formula: fpath({ ...f, src: x.src }), look_formula_name: label(f.name, blend, amt) });
+  await app.src.putConfig({ look_formula: fpath({ ...f, src: x.src }), look_formula_name: Array.from(f.name || 'Formula').slice(0, 60).join(''), look_blend: blend, look_amount: amt });
   await app.refreshConfig();
 }
 
@@ -69,7 +60,7 @@ export function saved(cf) {
 }
 
 // The two controls, `id`-blend and `id`-amt; `change(blend, amount, settled)`
-// (settled: not mid-drag). set(blend, amount, overOnly).
+// (settled: not mid-drag). set(blend, amount, overOnly); say(as(…)).
 export function controls(id, change) {
   const sel = h('select', { id: id + '-blend' }, BLENDS.map(([v, l]) => h('option', { value: v }, l)));
   const r = h('input', { type: 'range', min: 0, max: 100, step: 5, id: id + '-amt', 'aria-label': 'Amount' }), out = h('output.mono');
@@ -83,6 +74,11 @@ export function controls(id, change) {
       for (const o of sel.options) o.disabled = only && o.value != 'over';
       sel.title = only ? 'This Formula has layers of its own: it goes over the GIF' : '';
     },
-    say(t) { why.hidden = !t; why.textContent = t || ''; },
+    // `as`'s answer: the refusal, or how fast the look moves on the panel
+    // (over 8 ms its frames are held twice as long: fx_psi's governor).
+    say(x) {
+      const t = x?.why || (x?.i?.[5] & 8 ? `On the panel it moves about ${x.i[6] > 8000 ? '25 times a second (a heavy look: lighter ones move at 50)' : '50 times a second'}` : '');
+      why.hidden = !t; why.textContent = t; why.classList.toggle('bad', !!x?.why);
+    },
   };
 }

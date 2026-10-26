@@ -40,7 +40,7 @@ function zone() {
 const fresh = () => ({
   c: { wifi_ssid: 'HomeWiFi', wifi_pass_set: true, brightness: 96, max_brightness: SAFE, dwell_min: 3, dwell_max: 30, shuffle: false, platforms: '', set: '',
     hostname: 'opendmd', ...zone(), transition: 'dissolve', transition_ms: 400, auto_prepare: 'idle', card_speed: 'safe', follow: false, follow_host: '',
-    follow_code_set: false, attract_set: null, attract: '', look: 'colour', glow: 'off', look_formula: '', look_formula_name: '', boot_show: 'short', api_key_set: false },
+    follow_code_set: false, attract_set: null, attract: '', look: 'colour', glow: 'off', look_formula: '', look_formula_name: '', look_blend: 'over', look_amount: 100, boot_show: 'short', api_key_set: false },
   sched: { rules: [], night: null },
   wake: 0,
   // Panel timing (opendmd_core::panel_timing's Tuner, as tools/mock-device.py
@@ -50,6 +50,8 @@ const fresh = () => ({
 let S;
 try { S = JSON.parse(sessionStorage.getItem(KEY)); } catch { /* none */ }
 if (!S?.c) S = fresh();
+// (A session kept from before a setting existed gets its default.)
+S.c = { ...fresh().c, ...S.c };
 const keep = () => { try { sessionStorage.setItem(KEY, JSON.stringify(S)); } catch { /* private mode */ } };
 
 // The player's clock in its zone: the list's name for it (Intl knows those),
@@ -158,6 +160,8 @@ function putConfig(patch) {
     else if (k == 'follow_code') c.follow_code_set = c.follow_code_set || !!v;
     else if (k == 'dwell_min' || k == 'dwell_max') c[k] = Math.max(1, +v || 1);
     else if (k == 'set' && v && !has(setPath(v))) throw new HttpError(404, 'set not found');
+    else if (k == 'look_blend' && !['over', 'screen', 'add', 'multiply', 'max', 'min'].includes(v)) bad('look_blend must be over, screen, add, multiply, max or min');
+    else if (k == 'look_amount' && !(Number.isInteger(v) && v >= 0 && v <= 100)) bad('look_amount must be 0..=100');
     else if (k in c && k != 'brightness' && k != 'max_brightness') c[k] = v;
     else if (!/^(brightness|max_brightness|panel|panel_confirm)$/.test(k)) bad(`unknown field ${k}`);
   }
@@ -257,12 +261,12 @@ async function look(path) {
 }
 
 // The player's checks of a Formula look before it is saved (fx_psi's
-// FormulaLook::compile): it compiles, lets the GIF show through, ≤ 8 ms.
+// FormulaLook::compile): it compiles, lets the GIF show through, ≤ 12 ms.
 async function lookCheck(path) {
   const P = await pkg(), src = (p) => new URLSearchParams(p.slice(8)).get('src') || '';
   const i = P.compile(src(path)) && P.info();
   const why = !i ? P.error() : !(i[5] & 32) ? 'this Formula covers the GIF entirely: choose a lower amount or another blend'
-    : i[6] > 8000 ? `this formula is too heavy to draw over GIFs (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 8 ms) — simplify it` : '';
+    : i[6] > 12000 ? `this formula is too heavy to draw over GIFs (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 12 ms) — simplify it` : '';
   // (One instance: the look on the panel goes back to its own formula.)
   if (lookOn) P.compile(src(lookOn));
   if (why) bad('look_formula: ' + why);

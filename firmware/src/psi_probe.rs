@@ -43,6 +43,16 @@ use opendmd_core::psi;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// Examples (formulas.json) timed as looks.
+const PLASMA_EX: &str = "loop 8\n-- three waves added together\nwave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)\nhsv(wave/6 + t/8, 0.9, 1)";
+const FIRE_EX: &str = "loop 4\n-- curl bends the flames, more and more as they rise\ncurl = sin(y*1.5 - t)*0.25 + sin(y*3 - t*2 + x*4)*0.15\nflames = sin(x*6 + curl)*0.5 + sin(x*11 - curl)*0.5\nheat = (1 - y)*(1.6 + flames*0.7) - 0.5\npal(fire, clamp(heat, 0, 0.95))";
+const RINGS_EX: &str =
+    "loop 4\n-- r: the distance from the middle\npal(rainbow, frac(r*1.5 - t/2))";
+const STRIPES_EX: &str = "loop 4\n-- a: stripe width\nsize = 8 + a*24\nband = sin((px + py)/size - t/2)\ns = clamp(band*1.5 + 0.5, 0, 1)\nrgb(1, s, s)";
+const COPPER_EX: &str = "loop 4\n-- each bar is brightest in its middle, in steps like the old chips\nred = floor(max(0, 1 - abs(cy - 0.35*sin(t/4))*5)*6)/6\ngold = floor(max(0, 1 - abs(cy - 0.35*sin(t/4 - 0.12))*5)*6)/6\nblue = floor(max(0, 1 - abs(cy - 0.35*sin(t/4 - 0.24))*5)*6)/6\nrgb(max(red, gold), max(gold*0.8, blue*0.6), blue)";
+const OLD_PHOTO_EX: &str = "-- a: how much (0: the GIF as it is)\nmix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), a)";
+const OLD_TV_EX: &str = "loop 4\ndx = (x - 0.5)*1.6; dy = (y - 0.5)*1.2\nlines = py % 2 ? 1 : 0.6\nroll = 0.85 + 0.15*max(0, tri(y/2 + t/4))\ncorners = clamp(1.5 - (dx*dx + dy*dy)*1.6, 0, 1)\nlayer multiply { gray(lines * roll * corners) }";
+
 /// The report's file name at the card's root.
 pub const REPORT_NAME: &str = "filelist-psi-probe.txt";
 
@@ -422,7 +432,7 @@ pub fn run(root: &str) {
     ];
     // Layers and what is under (drawn over the golden picture): the
     // formula look's costs, for `Program::esp32_us`.
-    const LAYER_STEPS: [(&str, &str); 10] = [
+    const LAYER_STEPS: [(&str, &str); 20] = [
         ("ur", "gray(ur)"),
         ("ul", "gray(ul)"),
         ("shows through", "gray(x, 0.5)"),
@@ -433,6 +443,17 @@ pub fn run(root: &str) {
         ("+layer max", "layer { gray(x) }\nlayer max { gray(x + t) }"),
         ("look scanlines", "layer multiply { gray(py % 2 ? 1 : 0.55) }"),
         ("look 4 layers", "layer multiply { gray(y) }\nlayer add { gray(x) }\nlayer screen { gray(x + t) }\nlayer max { gray(py / 32) }"),
+        // Covered blends (a look's amount) and a row colour (`fill`).
+        ("+layer add 0.4", "layer { gray(x) }\nlayer add { gray(x + t, 0.4) }"),
+        ("+layer multiply 0.4", "layer { gray(x) }\nlayer multiply { gray(x + t, 0.4) }"),
+        ("+layer screen 0.4", "layer { gray(x) }\nlayer screen { gray(x + t, 0.4) }"),
+        ("+layer max 0.4", "layer { gray(x) }\nlayer max { gray(x + t, 0.4) }"),
+        ("+layer min 0.4", "layer { gray(x) }\nlayer min { gray(x + t, 0.4) }"),
+        ("+layer screen row", "layer { gray(x) }\nlayer screen { gray(y + t) }"),
+        ("+layer screen hsv", "layer { gray(x) }\nlayer screen { hsv(x + t, 1, 1) }"),
+        ("screen 0.4 on picture", "layer screen { gray(x + t, 0.4) }"),
+        ("hsv 0.3 on picture", "hsv(x + t, 1, 1, 0.3)"),
+        ("screen hsv 0.4 on picture", "layer screen { hsv(x + t, 1, 1, 0.4) }"),
     ];
     let steps = STEPS
         .iter()
@@ -447,8 +468,48 @@ pub fn run(root: &str) {
         let (p50, p90, _) = lanes_over::<128>(&prog, 8000, u, &mut out);
         let (_, row, px) = prog.counts();
         say!(info,
-            "psi-probe: step {what:<18} pixel steps {px} (+{row} row): p50 {p50} p90 {p90} us a frame = {} ns a pixel",
-            p50 as u64 * 1000 / 4096
+            "psi-probe: step {what:<18} pixel steps {px} (+{row} row): p50 {p50} p90 {p90} us a frame = {} ns a pixel, est {} us",
+            p50 as u64 * 1000 / 4096,
+            prog.esp32_us()
+        );
+    }
+
+    // Formulas as looks (`psi::look`, as the web app composes them): the
+    // VM's frame over a picture against the estimate the looks' limit reads.
+    const AS_LOOKS: [(&str, &str, &str, u8); 12] = [
+        ("Plasma", PLASMA_EX, "screen", 40),
+        ("Plasma", PLASMA_EX, "over", 30),
+        ("Plasma", PLASMA_EX, "add", 40),
+        ("Plasma", PLASMA_EX, "multiply", 100),
+        ("Plasma", PLASMA_EX, "max", 50),
+        ("Fire", FIRE_EX, "screen", 40),
+        ("Fire", FIRE_EX, "over", 30),
+        ("Rings", RINGS_EX, "screen", 40),
+        ("Stripes", STRIPES_EX, "screen", 40),
+        ("Copper bars", COPPER_EX, "screen", 40),
+        ("Old photo", OLD_PHOTO_EX, "screen", 50),
+        ("Old TV", OLD_TV_EX, "over", 100),
+    ];
+    for (name, src, blend, k) in AS_LOOKS {
+        let Ok(look) = psi::look::compose(src, blend, k) else {
+            say!(
+                error,
+                "psi-probe: as look {name} {blend} {k}: does not compose"
+            );
+            continue;
+        };
+        if psi::compile_into(&look, &mut prog).is_err() {
+            say!(
+                error,
+                "psi-probe: as look {name} {blend} {k}: does not compile"
+            );
+            continue;
+        }
+        let (p50, p90, max) =
+            lanes_over::<128>(&prog, prog.loop_ms(), Some(under.as_slice()), &mut out);
+        say!(info,
+            "psi-probe: as look {name} {blend} {k}%: p50 {p50} p90 {p90} max {max} us a frame, est {} us",
+            prog.esp32_us()
         );
     }
 

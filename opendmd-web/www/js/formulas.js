@@ -137,7 +137,7 @@ async function useLook(f, btn, v, orig = f) {
   const c = L.controls('psi-look', (b, k) => { mix = [b, k]; show(); });
   function show() {
     const x = L.as(M, f, ...mix);
-    c.say(x.why);
+    c.say(x);
     go.disabled = !!x.why;
     if (x.src) play(v, { ...f, src: x.src }, info(x.src));
   }

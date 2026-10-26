@@ -337,8 +337,10 @@ blends).
 Settings lists all your formulas and all the examples. Over at 100 % of a
 formula that covers the whole panel would hide the GIF, so it is refused
 with a sentence saying so (choose a lower amount or another blend), and a
-formula too heavy to draw over every GIF (more than about 8 ms a frame on
-the panel, the blend included) is listed as too heavy. Shared looks stand
+formula too heavy to draw over every GIF (more than about 12 ms a frame on
+the panel, the blend included) is listed as too heavy. Under the controls,
+Settings says how fast the look moves: about 50 times a second, or 25 for
+a heavy one (over 8 ms); the GIFs play at their own speed either way. Shared looks stand
 alone: the player is sent the formula with the blend written around it, so
 a look keeps working even after the formula is edited or deleted here.
 When the player is
@@ -405,7 +407,7 @@ with the file ready and makes the pull request for you (you need a free
 GitHub account). A check says if anything needs fixing, a maintainer looks
 at it, and once it's merged it appears in the gallery within a few
 minutes. The gallery takes formulas that are light enough for the panel
-(at most 8 ms a frame: "light" or "medium" in the editor) and at most 4 KB.
+(at most 10 ms a frame as the editor estimates it) and at most 4 KB.
 The details are in the gallery's
 [README](https://github.com/opendmd/opendmd.github.io/tree/main/gallery).
 
