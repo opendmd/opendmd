@@ -62,8 +62,6 @@ use core::sync::atomic::{
 };
 use std::sync::{Mutex, MutexGuard};
 
-use esp_idf_hal::cpu::Core;
-use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
 use esp_idf_sys::{
     ff_diskio_impl_t, sdmmc_card_t, DRESULT, DRESULT_RES_ERROR, DRESULT_RES_OK, DSTATUS,
 };
@@ -496,33 +494,17 @@ pub fn probe_soon(delay: std::time::Duration) {
         return;
     }
     PROBE.store(WAITING, Relaxed);
-    let previous = ThreadSpawnConfiguration::get();
-    let set = ThreadSpawnConfiguration {
-        name: Some(b"sd-probe\0"),
-        stack_size: config::SD_PROBE_STACK,
-        priority: 1,
-        pin_to_core: Some(Core::Core0),
-        ..Default::default()
-    }
-    .set();
-    let spawned = set.is_ok()
-        && std::thread::Builder::new()
-            .name("sd-probe".into())
-            .stack_size(config::SD_PROBE_STACK)
-            .spawn(move || {
-                std::thread::sleep(delay);
-                probe();
-                PROBE_TASK.store(false, Release);
-            })
-            .is_ok();
-    match previous {
-        Some(p) => {
-            let _ = p.set();
-        }
-        None => {
-            let _ = ThreadSpawnConfiguration::default().set();
-        }
-    }
+    let spawned = crate::task::spawn_core0(
+        b"sd-probe\0",
+        config::SD_PROBE_STACK,
+        1,
+        Box::new(move || {
+            std::thread::sleep(delay);
+            probe();
+            PROBE_TASK.store(false, Release);
+        }),
+    )
+    .is_ok();
     if !spawned {
         PROBE.store(SKIPPED, Relaxed);
         PROBE_TASK.store(false, Release);

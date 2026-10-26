@@ -25,8 +25,6 @@ pub const VERSION: u16 = 3;
 pub const HEADER: usize = 32;
 pub const FANOUT: usize = 257;
 pub const RECORDS_AT: u64 = (HEADER + FANOUT * 4) as u64;
-/// Most extra ("previous sector") records an index carries.
-pub const MAX_EXTRAS: usize = 256;
 
 /// The volume's layout, from FatFs's `FATFS` (or a boot sector).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,8 +153,9 @@ pub fn next_cluster(
 }
 
 /// One file found by [`walk`]: its name, location word, and the sector
-/// before its own when the long name starts in the previous cluster (the
-/// index cannot compute that one: an extra record).
+/// before its own when the long name starts in the previous cluster, which
+/// a record could not locate (the device leaves those out: they open by
+/// path, ~0.3% of a stock card).
 pub struct Found<'a> {
     pub name: &'a [u8],
     pub loc: u32,
@@ -259,11 +258,10 @@ pub fn walk(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
     pub count: u32,
-    pub extras: u32,
     pub n_fatent: u32,
     pub database: u32,
     /// Directories indexed: `(hash of the card path, first cluster)`
-    /// pairs after the extras.
+    /// pairs after the records.
     pub dirs: u32,
 }
 
@@ -272,7 +270,7 @@ impl Header {
         let mut h = [0u8; HEADER];
         h[..4].copy_from_slice(MAGIC);
         h[4..6].copy_from_slice(&VERSION.to_le_bytes());
-        for (i, v) in [self.count, self.extras, self.n_fatent, self.database, self.dirs].iter().enumerate() {
+        for (i, v) in [self.count, self.n_fatent, self.database, self.dirs].iter().enumerate() {
             h[8 + i * 4..12 + i * 4].copy_from_slice(&v.to_le_bytes());
         }
         h
@@ -283,15 +281,15 @@ impl Header {
             return None;
         }
         let w = |i: usize| u32::from_le_bytes(h[8 + i * 4..12 + i * 4].try_into().unwrap());
-        Some(Header { count: w(0), extras: w(1), n_fatent: w(2), database: w(3), dirs: w(4) })
+        Some(Header { count: w(0), n_fatent: w(1), database: w(2), dirs: w(3) })
     }
 }
 
-/// Walks every indexed directory, calling `emit(hash, loc, prev_rel)` per file.
-pub type WalkAll<'a> = dyn FnMut(&mut dyn FnMut(u32, u32, Option<u32>)) -> io::Result<()> + 'a;
+/// Walks every indexed directory, calling `emit(hash, loc)` per file.
+pub type WalkAll<'a> = dyn FnMut(&mut dyn FnMut(u32, u32)) -> io::Result<()> + 'a;
 
 /// Write the index: `walk_all(emit)` walks every indexed directory, calling
-/// `emit(hash, loc, prev_rel)` per file. The first walk counts; then each
+/// `emit(hash, loc)` per file. The first walk counts; then each
 /// walk gathers the buckets that fit `group` (8 bytes a record) and writes
 /// them, so no temporary file and no sort. Returns (records, walks).
 pub fn build_index(
@@ -302,19 +300,12 @@ pub fn build_index(
     group: &mut [u8],
 ) -> io::Result<(u32, u32)> {
     let mut fanout = [0u32; FANOUT];
-    let mut extras: Vec<(u32, u32)> = Vec::new();
-    walk_all(&mut |h, l, p| {
-        fanout[(h >> 24) as usize + 1] += 1;
-        if let Some(p) = p.filter(|_| extras.len() < MAX_EXTRAS) {
-            extras.push((l, p));
-        }
-    })?;
+    walk_all(&mut |h, _| fanout[(h >> 24) as usize + 1] += 1)?;
     for b in 0..256 {
         fanout[b + 1] += fanout[b];
     }
     let h = Header {
         count: fanout[256],
-        extras: extras.len() as u32,
         n_fatent: geo.n_fatent,
         database: geo.database,
         dirs: dirs.len() as u32,
@@ -336,7 +327,7 @@ pub fn build_index(
         if fanout[b1] > fanout[b0] {
             let mut fill = [0u32; 256];
             walks += 1;
-            walk_all(&mut |h, l, _| {
+            walk_all(&mut |h, l| {
                 let b = (h >> 24) as usize;
                 if (b0..b1).contains(&b) && fill[b] < fanout[b + 1] - fanout[b] {
                     let at = (fanout[b] - fanout[b0] + fill[b]) as usize * 8;
@@ -349,7 +340,7 @@ pub fn build_index(
         }
         b0 = b1;
     }
-    for &(a, b) in extras.iter().chain(dirs) {
+    for &(a, b) in dirs {
         out(&a.to_le_bytes())?;
         out(&b.to_le_bytes())?;
     }
@@ -447,9 +438,9 @@ mod tests {
         let geo = Geometry { csize: 64, fatbase: 32, database: 1000, n_fatent: 9999 };
         let mut out = Vec::new();
         let mut group = vec![0u8; 512 * 8];
-        let mut walk = |emit: &mut dyn FnMut(u32, u32, Option<u32>)| -> io::Result<()> {
+        let mut walk = |emit: &mut dyn FnMut(u32, u32)| -> io::Result<()> {
             for i in 0..3000u32 {
-                emit(key(i), i, (i == 7).then_some(6));
+                emit(key(i), i);
             }
             Ok(())
         };
@@ -461,7 +452,7 @@ mod tests {
         assert_eq!(count, 3000);
         assert!(walks >= 7, "{walks}");
         let h = Header::decode(&out).unwrap();
-        assert_eq!((h.count, h.extras, h.database, h.dirs), (3000, 1, 1000, 1));
+        assert_eq!((h.count, h.database, h.dirs), (3000, 1000, 1));
         let fan = |b: usize| u32::from_le_bytes(out[HEADER + b * 4..][..4].try_into().unwrap());
         for i in 0..3000u32 {
             let k = key(i);
@@ -472,8 +463,7 @@ mod tests {
             });
             assert!(found, "{i}");
         }
-        assert_eq!(out.len(), RECORDS_AT as usize + 3000 * 8 + 16);
-        assert_eq!(out[out.len() - 16..out.len() - 8], [7, 0, 0, 0, 6, 0, 0, 0]);
+        assert_eq!(out.len(), RECORDS_AT as usize + 3000 * 8 + 8);
         assert_eq!(out[out.len() - 8..], [9, 0, 0, 0, 10, 0, 0, 0]);
     }
 
@@ -503,9 +493,9 @@ mod tests {
     #[test]
     fn a_bucket_larger_than_the_group_is_an_error() {
         let geo = Geometry { csize: 1, fatbase: 1, database: 2, n_fatent: 100 };
-        let mut walk = |emit: &mut dyn FnMut(u32, u32, Option<u32>)| -> io::Result<()> {
+        let mut walk = |emit: &mut dyn FnMut(u32, u32)| -> io::Result<()> {
             for i in 0..10u32 {
-                emit(0x0700_0000 | i, i, None); // one bucket, 10 records
+                emit(0x0700_0000 | i, i); // one bucket, 10 records
             }
             Ok(())
         };
@@ -516,7 +506,7 @@ mod tests {
 
     #[test]
     fn another_version_or_magic_is_refused() {
-        let h = Header { count: 1, extras: 0, n_fatent: 5, database: 6, dirs: 2 };
+        let h = Header { count: 1, n_fatent: 5, database: 6, dirs: 2 };
         let mut b = h.encode();
         assert_eq!(Header::decode(&b), Some(h));
         b[4..6].copy_from_slice(&2u16.to_le_bytes());

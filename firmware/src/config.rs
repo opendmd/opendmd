@@ -743,7 +743,9 @@ pub const FATIDX_BOOT_DELAY_S: u32 = 20;
 /// network side's transients.
 pub const FATIDX_BUILD_HEAP: usize = 48 * 1024;
 /// The build's task stack (it exists only while it builds): the walk goes
-/// through FatFs and the SD SPI driver under two closures.
-pub const FATIDX_STACK: usize = 8 * 1024;
+/// through FatFs, card-speed's transfer and error path (`cardspeed`:
+/// a failed read is recovered and the clock slowed on the caller's task)
+/// and the SD SPI driver, under two closures.
+pub const FATIDX_STACK: usize = 10 * 1024;
 /// The most records a build gathers per walk, in bytes (8 a record).
 pub const FATIDX_GROUP: usize = 16 * 1024;

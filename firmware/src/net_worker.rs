@@ -25,9 +25,7 @@
 //! network comes back, or the worker's reconnect goes back to the old one.
 
 use crate::chan as mpsc;
-use esp_idf_hal::cpu::Core;
 use esp_idf_hal::modem::Modem;
-use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::nvs::{EspNvsPartition, NvsDefault};
@@ -59,35 +57,10 @@ pub struct NetWorker {
     pub cmd: mpsc::Sender<Command>,
 }
 
-/// Spawn the worker on CPU0 and return immediately.
-///
-/// `ThreadSpawnConfiguration` (`esp_pthread_set_cfg`) is consulted by the
-/// next `thread::spawn` from the same thread (ESP-IDF keeps it per thread),
-/// so it is set, used, and put back. Called by the boot task (`boot.rs`).
+/// Spawn the worker on CPU0 (`task::spawn_core0`) and return immediately.
+/// Called by the boot task (`boot.rs`).
 pub fn spawn(worker: NetWorker) -> anyhow::Result<()> {
-    let previous = ThreadSpawnConfiguration::get();
-    ThreadSpawnConfiguration {
-        name: Some(b"net-worker\0"),
-        stack_size: config::NET_WORKER_STACK,
-        priority: 5,
-        pin_to_core: Some(Core::Core0),
-        ..Default::default()
-    }
-    .set()?;
-
-    let handle = std::thread::Builder::new()
-        .name("net-worker".into())
-        .stack_size(config::NET_WORKER_STACK)
-        .spawn(move || run(worker));
-
-    // Restore the inherited configuration whatever happened, so nothing else
-    // accidentally lands on CPU0 with these settings.
-    if let Some(previous) = previous {
-        let _ = previous.set();
-    } else {
-        let _ = ThreadSpawnConfiguration::default().set();
-    }
-    handle?;
+    crate::task::spawn_core0(b"net-worker\0", config::NET_WORKER_STACK, 5, Box::new(move || run(worker)))?;
     Ok(())
 }
 
