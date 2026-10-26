@@ -1130,10 +1130,13 @@ fn centred_values_are_what_they_stand_for() {
     same("gray(ty/31)", "gray((31 - py)/31)");
     same("gray(r)", "gray(len((x - 0.5)*4, y - 0.5))");
     same("gray(angle)", "gray(atan2(y - 0.5, (x - 0.5)*4))");
-    same(
+    // Several: the same steps (maybe in another order), the same bytes.
+    let (a, b) = (
         "part p { hsv(angle, 1, r + ty/31) }\np(1 - x, y*0.5)",
         "part p { hsv(atan2(y - 0.5, (x - 0.5)*4), 1, len((x - 0.5)*4, y - 0.5) + (31 - py)/31) }\np(1 - x, y*0.5)",
     );
+    assert_eq!(compile(a).unwrap().counts(), compile(b).unwrap().counts());
+    assert!(over(a, None, 0) == over(b, None, 0));
     same(
         "r = x\ncx = y\nty = 0.5\nangle = 1\ncy = 0\npick = 0.25\nrgb(r, cx, ty + angle + cy + pick)",
         "rgb(x, y, 0.5 + 1 + 0 + 0.25)",
@@ -1193,8 +1196,9 @@ fn pick_is_the_chain_it_replaces() {
     assert_eq!(p("gray(pick(px/64, a, c))").sliders(), 0b101);
 }
 
-/// Colour literals and colour mixes are the channels they stand for: a
-/// byte `b` is `b/255` (exactly: `rgb` gives the byte back).
+/// A colour expression is read once a channel: `#f80` is that channel's
+/// value (a byte `b` is `b/255` exactly: `rgb` gives the byte back),
+/// `rgb(r, g, b)` that value, the rest is arithmetic as usual.
 #[test]
 fn colours_are_their_channels() {
     let px = over("rgb(#ff8001)", None, 0);
@@ -1202,7 +1206,7 @@ fn colours_are_their_channels() {
     let p = |s: &str| compile(s).unwrap_or_else(|e| panic!("{s}: {}", e.render(s)));
     assert_eq!(p("#f80"), p("rgb(#ff8800)"));
     assert_eq!(p("#F80"), p("#ff8800"));
-    assert_eq!(p("mix(#000, #ff9933, x)"), p("rgb(x, x*0.6, x*0.2)"));
+    assert_eq!(p("#ff9933 * x"), p("rgb(1 * x, 0.6 * x, 0.2 * x)"));
     for (a, b) in [
         (
             "mix(#336699, #fff, x)",
@@ -1210,7 +1214,11 @@ fn colours_are_their_channels() {
         ),
         (
             "mix(rgb(x, y, 0), mix(#000, #fff, y), 0.5)",
-            "rgb(mix(x, y, 0.5), mix(y, y, 0.5), mix(0, y, 0.5))",
+            "rgb(mix(x, mix(0, 1, y), 0.5), mix(y, mix(0, 1, y), 0.5), mix(0, mix(0, 1, y), 0.5))",
+        ),
+        (
+            "pick(px/32, #f00, #0f0, #00f) * (y > 0.5 ? #fff : #888)",
+            "k = px/32\nm = y > 0.5 ? 1 : 0.533333\nrgb(pick(k, 1, 0, 0)*m, pick(k, 0, 1, 0)*m, pick(k, 0, 0, 1)*m)",
         ),
     ] {
         assert!(over(a, None, 0) == over(b, None, 0), "{a} vs {b}");
@@ -1249,17 +1257,13 @@ fn colour_and_pick_errors() {
             1,
             9,
         ),
+        ("mix(#000, #fff)", "`mix` takes 3 values, but got 2", 1, 1),
+        ("rgb(1, #fff, 0)", "a colour can't be a value", 1, 8),
         (
-            "mix(#000, 0.5, x)",
-            "expected a colour here (#f80, rgb(r, g, b) or mix(…) of two), found `0.5`",
+            "x + 1\ngray(#fff)",
+            "only the last line can be a bare value",
             1,
-            11,
-        ),
-        (
-            "mix(#000, #fff)",
-            "expected `,` (as in `mix(#000, #f80, k)`) here, found `)`",
             1,
-            15,
         ),
         (
             "rgb(#f00, 1, 2)",
