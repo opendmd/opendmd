@@ -186,8 +186,8 @@ impl Reset {
     pub fn from_u8(v: u8) -> Reset {
         use Reset::*;
         [
-            Pending, PowerOn, External, Software, Panic, IntWdt, TaskWdt, Wdt, DeepSleep,
-            Brownout, Sdio,
+            Pending, PowerOn, External, Software, Panic, IntWdt, TaskWdt, Wdt, DeepSleep, Brownout,
+            Sdio,
         ]
         .get(v as usize)
         .copied()
@@ -213,7 +213,10 @@ impl Reset {
     }
 
     fn is_crash(self) -> bool {
-        matches!(self, Reset::Panic | Reset::IntWdt | Reset::TaskWdt | Reset::Wdt)
+        matches!(
+            self,
+            Reset::Panic | Reset::IntWdt | Reset::TaskWdt | Reset::Wdt
+        )
     }
 }
 
@@ -349,7 +352,7 @@ pub fn encode(e: &Entry) -> Slot {
     s[3] = f.uptime_ms;
     s[4] = f.heap_free;
     s[5] = f.largest;
-    for (i, c) in e.text.chunks_exact(4).enumerate() {
+    for (i, c) in e.text.as_chunks::<4>().0.iter().enumerate() {
         s[7 + i] = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
     }
     s[6] = checksum_of(&s);
@@ -407,7 +410,7 @@ impl Store for [Slot; SLOTS] {
 }
 
 /// The newest valid entry.
-pub fn newest(store: &impl Store) -> Option<Entry> {
+pub fn newest(store: &dyn Store) -> Option<Entry> {
     (0..SLOTS)
         .filter_map(|i| decode(&store.read(i)))
         .max_by_key(|e| e.seq)
@@ -415,14 +418,14 @@ pub fn newest(store: &impl Store) -> Option<Entry> {
 
 /// Write `e` as the newest entry (its `seq` is the newest's + 1) over the
 /// oldest. Returns the entry as written. No allocation.
-pub fn push(store: &mut impl Store, mut e: Entry) -> Entry {
+pub fn push(store: &mut dyn Store, mut e: Entry) -> Entry {
     e.seq = newest(store).map_or(1, |n| n.seq.wrapping_add(1));
     store.write(e.seq as usize % SLOTS, &encode(&e));
     e
 }
 
 /// Every valid entry, newest first.
-pub fn newest_first(store: &impl Store) -> impl Iterator<Item = Entry> {
+pub fn newest_first(store: &dyn Store) -> impl Iterator<Item = Entry> {
     let mut all: [Option<Entry>; SLOTS] = [None; SLOTS];
     for (i, slot) in all.iter_mut().enumerate() {
         *slot = decode(&store.read(i));
@@ -432,7 +435,7 @@ pub fn newest_first(store: &impl Store) -> impl Iterator<Item = Entry> {
 }
 
 /// Empty every slot.
-pub fn clear(store: &mut impl Store) {
+pub fn clear(store: &mut dyn Store) {
     for i in 0..SLOTS {
         store.write(i, &[0; WORDS]);
     }
@@ -497,7 +500,7 @@ const ALLOC_RECENT_MS: u32 = 35_000;
 /// `alloc`: its last failed allocation). A power-on clears the ring first.
 /// Returns this boot's entry (already in the ring).
 pub fn boot(
-    store: &mut impl Store,
+    store: &mut dyn Store,
     reset: Reset,
     alive: Option<Figures>,
     alloc: Option<AllocFail>,
@@ -539,7 +542,7 @@ pub fn boot(
 /// Rewrite this boot's entry as a firmware update (`ota::after_boot` found
 /// the updater's mark) when it recorded nothing: the restart out of the
 /// updater, after an update from a firmware that kept no ring.
-pub fn mark_update(store: &mut impl Store) -> bool {
+pub fn mark_update(store: &mut dyn Store) -> bool {
     match newest(store) {
         Some(mut e) if e.reason == Reason::Unrecorded && e.reset == Reset::Software => {
             e.reason = Reason::Ota;
@@ -628,7 +631,11 @@ mod tests {
     #[test]
     fn panic_text_is_cut() {
         let mut e = Entry::new(Reason::Panic, fig(1));
-        e.set_panic("/home/x/.cargo/src/http.rs", 1270, "test panic\nsecond line");
+        e.set_panic(
+            "/home/x/.cargo/src/http.rs",
+            1270,
+            "test panic\nsecond line",
+        );
         assert_eq!(e.text(), "http.rs:1270 test panic second line");
         let long = "é".repeat(100);
         e.set_panic("src\\main.rs", 9, &long);
@@ -659,7 +666,10 @@ mod tests {
         assert_eq!((e.reason, e.reset), (Reason::Unrecorded, Reset::Software));
         assert_eq!(e.figures.unwrap().uptime_ms, 30_000);
         let all: Vec<_> = newest_first(&r).map(|e| e.reason).collect();
-        assert_eq!(all, [Reason::Unrecorded, Reason::CardClock, Reason::PowerOn]);
+        assert_eq!(
+            all,
+            [Reason::Unrecorded, Reason::CardClock, Reason::PowerOn]
+        );
     }
 
     #[test]
@@ -670,13 +680,23 @@ mod tests {
         p.set_panic("main.rs", 10, "boom");
         push(&mut r, p);
         let e = boot(&mut r, Reset::Panic, fig(1), None);
-        assert_eq!((e.reason, e.reset, e.text()), (Reason::Panic, Reset::Panic, "main.rs:10 boom"));
+        assert_eq!(
+            (e.reason, e.reset, e.text()),
+            (Reason::Panic, Reset::Panic, "main.rs:10 boom")
+        );
         // A watchdog with no entry: an unrecorded crash; a failed
         // allocation just before it is named.
-        let a = AllocFail { size: 4096, at: fig(100_000).unwrap() };
+        let a = AllocFail {
+            size: 4096,
+            at: fig(100_000).unwrap(),
+        };
         let e = boot(&mut r, Reset::IntWdt, fig(90_000), Some(a));
         assert_eq!(e.reason, Reason::Crash);
-        assert!(e.text().contains("failed allocation of 4096 B at 100 s"), "{}", e.text());
+        assert!(
+            e.text().contains("failed allocation of 4096 B at 100 s"),
+            "{}",
+            e.text()
+        );
         // An old one is not.
         let e = boot(&mut r, Reset::Panic, fig(900_000), Some(a));
         assert_eq!((e.reason, e.text()), (Reason::Crash, ""));
