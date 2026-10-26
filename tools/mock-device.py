@@ -2536,9 +2536,10 @@ class Context:
                    "r503": 0, "fail503": 0, "fail500": 0, "drop": 0}
         # The device's stream task (firmware/src/stream.rs): card and web app
         # files, and the listings (/api/files, /api/cache/list, /failed), go
-        # out one at a time with QUEUE_DEPTH (2) waiting; a file that finds
-        # the queue full waits up to QUEUE_WAIT (2 s) for a place, a listing
-        # not at all, then gets 503 + Retry-After: 1.
+        # out one at a time with QUEUE_DEPTH (2) waiting; a web app file or
+        # a playlist that finds the queue full waits up to QUEUE_WAIT (2 s)
+        # for a place, a listing, GIF or copy not at all, then gets 503 +
+        # Retry-After: 1.
         self.streamq = {"cond": threading.Condition(), "busy": False, "waiting": 0}
         self.schedule.evaluate()  # picks up the playlist rebuilt just above
         # Firmware update: the running version, the updater's last line, the
@@ -3011,7 +3012,8 @@ def make_handler(ctx: Context, quiet: bool):
                 self.close_connection = True
                 self.connection.shutdown(socket.SHUT_RDWR)
                 return
-            self.streamed(lambda: self.serve_card(fpath_rel=rel, rel_full=rel_full))
+            # GIFs and copies do not wait for a place (http.rs serve_under); playlists 2 s.
+            self.streamed(lambda: self.serve_card(fpath_rel=rel, rel_full=rel_full), 0 if card else 2.0)
 
         def serve_card(self, fpath_rel: str, rel_full: str) -> None:
             rel, io = fpath_rel, ctx.io

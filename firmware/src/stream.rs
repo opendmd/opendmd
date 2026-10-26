@@ -87,7 +87,7 @@ use crate::state::free_heap;
 pub const QUEUE_DEPTH: usize = 2;
 /// How long a request that finds the queue full waits (on the httpd task)
 /// for a place before it is answered 503.
-const QUEUE_WAIT: Duration = Duration::from_secs(2);
+pub const QUEUE_WAIT: Duration = Duration::from_secs(2);
 /// Below the httpd task (5) and the network worker (5), above idle: the
 /// stream only runs when nothing on CPU0 that answers a client is ready to.
 const PRIORITY: u8 = 2;
@@ -197,10 +197,12 @@ where
 }
 
 /// [`hand_off`], waiting at most `wait` for a place in a full queue before
-/// the 503. Files and the web app's modules wait [`QUEUE_WAIT`] (a browser
-/// does not retry a module); the listings wait `Duration::ZERO`: the web
-/// app retries them, and each 2 s wait would be 2 s of the httpd task —
-/// and `/api/status` — spent waiting for the stream task.
+/// the 503. The web app's own files (and the playlists) wait [`QUEUE_WAIT`]
+/// (a browser does not retry a module); the listings and the card's GIFs
+/// and copies (`/gifs/`, `/cache/`) wait `Duration::ZERO`: the web app
+/// retries those, and each 2 s wait would be 2 s of the httpd task — and
+/// `/api/status` — spent waiting for the stream task (five folders opened
+/// at once with thumbnails held status 1.1-2.0 s on the spare, listing-c).
 pub fn hand_off_within<F>(req: &mut Req, wait: Duration, work: F) -> Result<()>
 where
     F: FnOnce(&mut Req) -> Result<()> + Send + 'static,
