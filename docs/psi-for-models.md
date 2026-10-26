@@ -718,29 +718,30 @@ layer { rgb(0.05, 0.08, 0.2) }
 layer { candy((px - 88)/35, (py - 4)/23, inside) }
 ```
 
-### 26. Day and night (the showcase)
+### 26. Big clock (the showcase)
 
-What only a formula can do: it follows the real clock, never shows a seam,
-and every pixel is its own 24-bit colour. The tricks that keep it at
-~7 ms: everything that depends only on the row is nearly free, so the
-lake is the sky's rows read again (`ry`), squashed and darker, its ripple
-a per-row shift (`wob`); the sun, the moon, the glitter on the water and
-**one star a row** are a single `g - abs(px - cx)` with a per-row width
-`g` and centre `cx`; the clouds' wind goes round a circle in the noise
-(`40*sin(t/3600)`, `16*cos(t/3600)`), so the hour-long loop has no seam;
-`gray` on an `add` layer clamps below 0 for free.
+What only a formula can do, readable in two seconds: the real time, in
+digits that fill the panel, with a seconds bar that crosses the bottom
+row once a minute. A 3x5 font is 15 bits a digit: each digit's bits are
+looked up once a frame (a units digit from five numbers holding two
+digits each, d in the whole part and d + 5 in the fraction, so the
+lookups fit the ~119 values), a per-row power of 8 picks the band's 3
+bits, and per pixel one 4-way select picks the digit, another the column,
+and `frac(m*(p*F)) >= 0.5` is the bit (all exact powers of two). The bar
+is the same lookup: in row 0 the first digit's bits are all ones and its
+right edge follows `second`.
 
-```psi example=day-and-night
-loop 3600
--- a: clouds (left: clear sky, right: overcast)
--- follows the clock: the sun crosses from 6:00 to 18:00, the moon from 18:00 to 6:00
-frame { d = (hour + minute/60)/24; e = -cos(d); lit = clamp(e*2 + 0.25, 0, 1); dusk = clamp(1 - abs(e)*4, 0, 1); ph = frac(d*2 - 0.5); sx = 4 + ph*120; sy = 10 + 20*sin(ph/2); r = e > 0 ? 14 : 7; m = 0.7 - a*0.4 - lit*0.15; ox = 40*sin(t/3600); oz = 16*cos(t/3600) }
--- below row 10, water: the sky again, squashed, darker, rippling; above, one star a row
-wet = py < 10; ry = max(py, 30 - py*2); dim = wet ? 0.5 : 1; wob = wet*sin(py/2 + t)*2; dy = r - (ry - sy)*(ry - sy); g = wet ? sin(py*1.9 + t*2) + 1 : dy > 0 ? sqrt(dy) : 0.75 - (lit + dusk)*2 + sin(t/3 + py*0.37)*0.25; cx = wet + (dy > 0) ? sx - wob : py*53 % 128
--- the sky: night, blue day, red and violet at dawn and dusk
-layer { rgb(dim*mix(lit*0.5 + dusk, dusk*0.25, ry/20 - 0.5), dim*mix(lit*0.75 + dusk*0.25, lit*0.25, ry/20 - 0.5), dim*mix(lit + 0.1, lit*0.75 + dusk*0.25, ry/20 - 0.5)) }
--- clouds (noise on a slow wind, an hour before it comes round), sun, moon and stars, added on
-layer add { gray(max(noise(px/20 + (ox + wob/20), ry/8, oz) - m, g - abs(px - cx))) }
+```psi example=big-clock
+loop 60
+-- the time, drawn live: a 3x5 font, each digit's 15 bits looked up by value (the units: digit d in the whole part, d + 5 in the fraction)
+frame { g = floor(hour/10); k = hour % 10; n = floor(minute/10); j = minute % 10; m0 = g < 1 ? 31599 : g < 2 ? 11415 : 29671; a1 = k % 5; c1 = a1 < 1 ? 31599.951629638672 : a1 < 2 ? 11415.952606201172 : a1 < 3 ? 29671.892852783203 : a1 < 4 ? 29647.968231201172 : 23497.967254638672; m1 = k < 5 ? floor(c1) : frac(c1)*16384*2; m2 = n < 1 ? 31599 : n < 2 ? 11415 : n < 3 ? 29671 : n < 4 ? 29647 : n < 5 ? 23497 : 31183; a3 = j % 5; c3 = a3 < 1 ? 31599.951629638672 : a3 < 2 ? 11415.952606201172 : a3 < 3 ? 29671.892852783203 : a3 < 4 ? 29647.968231201172 : 23497.967254638672; m3 = j < 5 ? floor(c3) : frac(c3)*16384*2 }
+-- rows 2 to 31: five bands, a power of 8 picks the band's 3 bits; row 0: the seconds bar, across in a minute
+bar = py < 1; p = bar ? 2 : py < 2 ? 0 : py < 8 ? 1 : py < 14 ? 0.125 : py < 20 ? 0.015625 : py < 26 ? 0.001953125 : 0.000244140625; t1 = bar ? (second + 1)*128/60 : 32; t2 = bar ? 0 : 64; t3 = bar ? 0 : 104; z0 = bar ? 32767.99998 : m0; z3 = bar ? 0 : m3
+-- each digit: 3 columns of 8 pixels, then a gap; the minutes sit 8 pixels further right
+u = (px - (px < 64 ? 0 : 8)) % 32; m = px < t1 ? z0 : px < t2 ? m1 : px < t3 ? m2 : z3
+lit = frac(m*(p*(u < 8 ? 0.125 : u < 16 ? 0.25 : u < 24 ? 0.5 : 0.0000152587890625))) >= 0.5
+-- a rainbow drifting through the digits
+hsv(x + (py/64 + hour/24 + t/10), bar ? 0 : 1, lit)
 ```
 
 ## 15. In the product (not built)
