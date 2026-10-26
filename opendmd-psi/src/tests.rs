@@ -1187,6 +1187,13 @@ fn pick_is_the_chain_it_replaces() {
     let px = |s: &str| compile(s).unwrap().counts().2;
     assert_eq!(px(cases[0].0) + 9, px(cases[0].1));
     assert_eq!(px(cases[5].0) + 9, px(cases[5].1));
+    // In a colour expression (read three times) a pick is one step.
+    assert_eq!(
+        px("#f80 * pick(px/32, 0.5, 1)"),
+        4,
+        "{}",
+        compile("#f80 * pick(px/32, 0.5, 1)").unwrap().listing()
+    );
     // A constant k is its choice; outside, 0.
     let p = |s: &str| compile(s).unwrap();
     assert_eq!(p("gray(pick(2.5, x, y, 0.5))"), p("gray(0.5)"));
