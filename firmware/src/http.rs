@@ -1013,22 +1013,15 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // Every prepared copy's card path, streamed: what a browser intersects
     // with a playlist to find the files left to prepare.
-    server.route("/api/cache/list", Method::Get, |req| {
-        if !files::affordable(req)? {
-            return Ok(());
-        }
-        let _busy = crate::cache_builder::busy();
-        crate::cache::stream_list(req)
-    })?;
+    // On the stream task, like a card file: its bucket walk must not hold
+    // the httpd task (and `/api/status`) for the seconds it takes
+    // (`listing`: no wait for a place, a 503 + Retry-After: 1 the web app
+    // retries; the task holds `cache_builder::busy()` for every job).
+    server.route("/api/cache/list", Method::Get, |req| listing(req, crate::cache::stream_list))?;
 
     // The GIFs the cache builder could not prepare (`/cache/.failed`), and
     // forgetting them so they are tried again.
-    server.route("/api/cache/failed", Method::Get, |req| {
-        if !files::affordable(req)? {
-            return Ok(());
-        }
-        crate::cache_builder::stream_failed(req)
-    })?;
+    server.route("/api/cache/failed", Method::Get, |req| listing(req, crate::cache_builder::stream_failed))?;
     // A GIF the browser could not prepare either (`{"path","reason"}`):
     // recorded once per path, so the device's builder skips it too.
     server.route_json("/api/cache/failed", Method::Post, |req| {
@@ -1091,10 +1084,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
     })?;
 
+    // A directory listing reads the directory under the FAT lock, ~0.5 s
+    // for gifs/Consoles at 40 MHz and 2.3 s on a 20 MHz card, streamed: on
+    // the httpd task it held `/api/status` that long (measured on the spare,
+    // 2026-10-26). So it goes out from the stream task, queued like a file
+    // (a full queue for 2 s: 503 + Retry-After: 1, retried by the web app).
     server.route("/api/files", Method::Get, |req| {
-        if !files::affordable(req)? {
-            return Ok(());
-        }
         let dir = query_param(req.query(), "dir").unwrap_or_else(|| "/".to_string());
         let Some(fs_dir) = files::card_path(config::SD_MOUNT, &dir) else {
             return req.bad_request("path escapes the card");
@@ -1102,8 +1097,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // Sizes cost a `stat` each, which FAT makes quadratic — see
         // `files::stream_dir_json`. Opt in with `?sizes=1`.
         let sizes = query_param(req.query(), "sizes").is_some_and(|v| v == "1" || v == "true");
-        let _busy = crate::cache_builder::busy();
-        files::stream_dir_json(req, &dir, &fs_dir, sizes)
+        listing(req, move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
     })?;
 
     // Would a new display name clash? (`opendmd_core::hostname::Check`.)
@@ -1475,19 +1469,22 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         let Some(path) = files::card_path(config::SD_MOUNT, name) else {
             return req.bad_request("path escapes the card");
         };
-        stream_file(req, path, rel)
+        stream_file(req, path, rel, stream::QUEUE_WAIT)
     })?;
 
+    // GIFs and their copies: a full stream queue is a 503 at once (the web
+    // app's thumbnails back off, its other reads retry: `queued`), so they
+    // never hold the httpd task; a playlist waits for a place as a module does.
     server.route("/gifs/*", Method::Get, |req| {
-        serve_under(req, config::SD_MOUNT)
+        serve_under(req, config::SD_MOUNT, Duration::ZERO)
     })?;
     server.route("/sets/*", Method::Get, |req| {
-        serve_under(req, config::SD_MOUNT)
+        serve_under(req, config::SD_MOUNT, stream::QUEUE_WAIT)
     })?;
     // The playback cache: prepared copies, `cache/<Category>/<xx>/<name>.gif`
     // (the device's own builder, `opendmd-pack convert`, or the web app).
     server.route("/cache/*", Method::Get, |req| {
-        serve_under(req, config::SD_MOUNT)
+        serve_under(req, config::SD_MOUNT, Duration::ZERO)
     })?;
 
     // The web app under `/www/` too (both spellings, as when it was on the
@@ -1541,6 +1538,24 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     Ok(server)
+}
+
+/// A JSON listing (`/api/files`, `/api/cache/list`, `/api/cache/failed`)
+/// on the stream task: no wait for a place in a full queue (a 503 +
+/// `Retry-After: 1` at once, which the web app retries), and the heap
+/// checked again when it starts, as `files::serve` does for a file: the
+/// queue may have held it while the heap dipped, and a chunked answer
+/// started is one the player's reserve must afford to finish.
+fn listing<F>(req: &mut Req, work: F) -> Result<()>
+where
+    F: FnOnce(&mut Req) -> Result<()> + Send + 'static,
+{
+    stream::hand_off_within(req, Duration::ZERO, move |req| {
+        if !files::affordable(req)? {
+            return Ok(());
+        }
+        work(req)
+    })
 }
 
 /// `Some(url)` while the device is running the setup AP: where a captive-portal
@@ -1652,19 +1667,20 @@ fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
     }
 }
 
-/// Serve a card-absolute path below `root`, 404ing if it is not a file.
-fn serve_under(req: &mut Req, root: &str) -> Result<()> {
+/// Serve a card-absolute path below `root`, 404ing if it is not a file;
+/// `wait`: for a place in a full stream queue (`stream::hand_off_within`).
+fn serve_under(req: &mut Req, root: &str, wait: Duration) -> Result<()> {
     let rel = crate::httpd::percent_decode(req.path());
     let Some(path) = files::card_path(root, &rel) else {
         return req.bad_request("path escapes the card");
     };
-    stream_file(req, path, rel)
+    stream_file(req, path, rel, wait)
 }
 
 /// Send the card file at `path` from the streaming task, or a 404 naming
 /// `rel` if there is none.
-fn stream_file(req: &mut Req, path: String, rel: String) -> Result<()> {
-    stream::hand_off(req, move |req| {
+fn stream_file(req: &mut Req, path: String, rel: String, wait: Duration) -> Result<()> {
+    stream::hand_off_within(req, wait, move |req| {
         if files::serve(req, &path)? {
             Ok(())
         } else {
@@ -2037,7 +2053,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
             r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}}},"paused":{},{}"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
-            r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"#,
+            r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"stream_stack":{},"#,
             r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"error":{},"attempts":{},"formatting":{},"format_error":{},{},{}}},"reset_reason":{},"reset_note":{},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
@@ -2079,6 +2095,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.gifs_started,
         crate::httpd::streams_aborted(),
         crate::logring::drops(),
+        stream::stack_low().map_or_else(|| "null".to_string(), |v| v.to_string()),
         s.sd_mounted,
         s.sd_usable(),
         s.sd_capacity_bytes,

@@ -2541,9 +2541,11 @@ class Context:
         self.io = {"kbps": 0, "inflight": 0, "max": 0, "gets": 0, "bytes": 0, "cut": 0,
                    "r503": 0, "fail503": 0, "fail500": 0, "drop": 0}
         # The device's stream task (firmware/src/stream.rs): card and web app
-        # files go out one at a time with QUEUE_DEPTH (2) waiting; a request
-        # that finds the queue full waits up to QUEUE_WAIT (2 s) for a place,
-        # then gets 503 + Retry-After: 1.
+        # files, and the listings (/api/files, /api/cache/list, /failed), go
+        # out one at a time with QUEUE_DEPTH (2) waiting; a web app file or
+        # a playlist that finds the queue full waits up to QUEUE_WAIT (2 s)
+        # for a place, a listing, GIF or copy not at all, then gets 503 +
+        # Retry-After: 1.
         self.streamq = {"cond": threading.Condition(), "busy": False, "waiting": 0}
         self.schedule.evaluate()  # picks up the playlist rebuilt just above
         # Firmware update: the running version, the updater's last line, the
@@ -2695,12 +2697,13 @@ def make_handler(ctx: Context, quiet: bool):
         def send_error_json(self, code: int, message: str, headers: dict | None = None) -> None:
             self.send_json(code, {"error": message}, headers)
 
-        def streamed(self, serve) -> None:
+        def streamed(self, serve, wait: float = 2.0) -> None:
             """Run `serve` as the stream task would: alone, behind at most two
-            waiting; a full queue for 2 s is a 503 with Retry-After: 1."""
+            waiting; a queue full for `wait` s (2 for a file, 0 for a
+            listing: stream::hand_off_within) is a 503 with Retry-After: 1."""
             q = ctx.streamq
             with q["cond"]:
-                deadline = time.monotonic() + 2.0
+                deadline = time.monotonic() + wait
                 while q["waiting"] >= 2:
                     left = deadline - time.monotonic()
                     if left <= 0:
@@ -2839,11 +2842,12 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_exact("/api/panel/test"), {"POST": self.h_panel_test}),
                 (m_exact("/api/stat"), {"GET": self.h_stat}),
                 (m_exact("/api/cache"), {"GET": self.h_cache}),
-                (m_exact("/api/cache/list"), {"GET": self.h_cache_list}),
+                (m_exact("/api/cache/list"), {"GET": lambda p: self.streamed(lambda: self.h_cache_list(p), 0)}),
                 (m_exact("/api/cache/forget"), {"POST": self.h_cache_forget}),
-                (m_exact("/api/cache/failed"), {"GET": self.h_cache_failed_get, "POST": self.h_cache_failed_post,
+                (m_exact("/api/cache/failed"), {"GET": lambda p: self.streamed(lambda: self.h_cache_failed_get(p), 0), "POST": self.h_cache_failed_post,
                                                 "DELETE": self.h_cache_failed_delete}),
-                (m_exact("/api/files"), {"GET": self.h_files_list}),
+                # Listings go out from the stream task too (firmware http.rs).
+                (m_exact("/api/files"), {"GET": lambda p: self.streamed(lambda: self.h_files_list(p), 0)}),
                 (m_exact("/api/wifi/scan"), {"GET": self.h_wifi_scan}),
                 (m_exact("/api/name-check"), {"GET": self.h_name_check}),
                 (m_exact("/api/www"), {"GET": self.h_www_get, "PUT": self.h_www_put}),
@@ -3014,7 +3018,8 @@ def make_handler(ctx: Context, quiet: bool):
                 self.close_connection = True
                 self.connection.shutdown(socket.SHUT_RDWR)
                 return
-            self.streamed(lambda: self.serve_card(fpath_rel=rel, rel_full=rel_full))
+            # GIFs and copies do not wait for a place (http.rs serve_under); playlists 2 s.
+            self.streamed(lambda: self.serve_card(fpath_rel=rel, rel_full=rel_full), 0 if card else 2.0)
 
         def serve_card(self, fpath_rel: str, rel_full: str) -> None:
             rel, io = fpath_rel, ctx.io

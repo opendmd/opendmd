@@ -441,8 +441,12 @@ pub const PSI_COMPILE_STACK: usize = 12 * 1024;
 /// 2.9 KB used at most by downloads alone (stalled client, 4 MB GIF,
 /// api-load, web-smoke, page-load bursts); 3.95 KB with uploads (656 B left
 /// of 4.5 KB after card-syncs and a trickle abort, whose warn line is the
-/// deepest path), so 6 KB, for ~2 KB spare.
-pub const STREAM_STACK: usize = 6 * 1024;
+/// deepest path), so 6 KB, for ~2 KB spare — until the listings moved here
+/// (2026-10-26): `/api/cache/list`'s bucket walk left **784 B** of 6 KB
+/// (`stream_stack` in `/api/status`, the spare, its populated 11k-copy card,
+/// 3 runs; a `gifs/Consoles` listing and `/api/cache/failed` went no
+/// deeper), so 7 KB, for ~1.8 KB spare.
+pub const STREAM_STACK: usize = 7 * 1024;
 /// An upload (`PUT /api/files/…`, `/api/manifest`, `/api/sets/…`) is received
 /// on the stream task, and gives up when one read waits this long for data.
 /// A trickle does not get round it: [`UPLOAD_MAX_TIME`] caps the whole body.

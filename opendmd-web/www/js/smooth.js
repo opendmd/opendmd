@@ -18,7 +18,7 @@
 import { app } from './state.js';
 import { art } from './artmod.js';
 import { prepareBytes, playsAsIs, madeCopy } from './prepare.js';
-import { dfetch } from './source.js';
+import { dfetch, queued } from './source.js';
 import { h, clear, enc, toast } from './util.js';
 
 // A copy rewritten: its thumbnail (js/thumbs.js, if loaded or kept) is made again.
@@ -74,7 +74,12 @@ const writeList = (list) => app.src.writeFile(LIST, list.map((p) => p + '\n').jo
 // is in (the device ignores Range; asking costs nothing).
 async function isSmooth(path) {
   const m = await art();
-  const res = await dfetch(enc(app.wasm.cachePathFor(path)), { headers: { Range: 'bytes=0-1023' } });
+  // (A full stream queue is a 503 at once: asked again, `queued`.)
+  const res = await queued(async () => {
+    const r = await dfetch(enc(app.wasm.cachePathFor(path)), { headers: { Range: 'bytes=0-1023' } });
+    if (r.status === 503) throw { status: 503, after: +r.headers.get('Retry-After') || 1 };
+    return r;
+  });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const r = res.body.getReader();
