@@ -1194,6 +1194,18 @@ fn pick_is_the_chain_it_replaces() {
         "{}",
         compile("#f80 * pick(px/32, 0.5, 1)").unwrap().listing()
     );
+    // Picks of the same choices share their table, and the listing shows it.
+    let q =
+        compile("u = px/32\nrgb(pick(u, 0.1, 0.2), pick(u + 1, 0.1, 0.2), pick(u + 2, 0.1, 0.2))")
+            .unwrap();
+    assert_eq!(
+        q.values(),
+        compile("u = px/32\nrgb(pick(u, 0.1, 0.2), 1, 2)")
+            .unwrap()
+            .values()
+    );
+    assert!(q.listing().contains("= pick(L"), "{}", q.listing());
+    assert!(q.listing().contains("; 0.1"), "{}", q.listing());
     // A constant k is its choice; outside, 0.
     let p = |s: &str| compile(s).unwrap();
     assert_eq!(p("gray(pick(2.5, x, y, 0.5))"), p("gray(0.5)"));
@@ -1247,6 +1259,14 @@ fn colours_are_their_channels() {
         p(s);
     }
     assert!(p("mix(rgb(ur, ug, ub), #b08040, a)").over());
+    // rgb(r, g, b) in a sum is a colour; rgb(colour) inside is that colour.
+    assert!(over("rgb(x, y, 0.5) * 0.5", None, 0) == over("rgb(x*0.5, y*0.5, 0.25)", None, 0));
+    assert!(over("mix(rgb(#f80), #000, x)", None, 0) == over("mix(#f80, #000, x)", None, 0));
+    // Old photo's form keeps its registers: each channel reads only its value.
+    assert_eq!(
+        p("mix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), a)").regs(),
+        p("rgb(mix(ur, ul*1.1 + 0.08, a), mix(ug, ul*0.92 + 0.04, a), mix(ub, ul*0.65, a))").regs()
+    );
 }
 
 /// The new forms' mistakes, in plain words, where they are.
@@ -1265,7 +1285,38 @@ fn colour_and_pick_errors() {
             9,
         ),
         ("mix(#000, #fff)", "`mix` takes 3 values, but got 2", 1, 1),
-        ("rgb(1, #fff, 0)", "a colour can't be a value", 1, 8),
+        (
+            "rgb(1, #fff, 0)",
+            "inside `rgb(r, g, b)` the three are values",
+            1,
+            8,
+        ),
+        (
+            "mix(rgb(1, #fff, 0), #000, x)",
+            "inside `rgb(r, g, b)` the three are values",
+            1,
+            12,
+        ),
+        (
+            "mix(rgb(#f80, 0.5), #000, x)",
+            "how much a colour covers goes on the whole line",
+            1,
+            13,
+        ),
+        (
+            "mix(hsv(x, 1, 1), #000, x)",
+            "in a sum with colours only `#…` and `rgb(r, g, b)` are colours",
+            1,
+            5,
+        ),
+        ("pal(fire, x) * #fff", "`pal(…)` can't go into a sum", 1, 14),
+        ("gray(x) * #fff", "`gray(…)` can't go into a sum", 1, 9),
+        (
+            "x + 1 * rgb(1, 2)",
+            "`,` (`rgb(r, g, b)` takes three values)",
+            1,
+            17,
+        ),
         (
             "x + 1\ngray(#fff)",
             "only the last line can be a bare value",

@@ -486,6 +486,15 @@ impl Program {
                 .map(|&v| opnd(v))
                 .collect::<alloc::vec::Vec<_>>()
                 .join(", ");
+            // A pick's table: the slots it picks from.
+            let args = if op.code == code::PICK {
+                let t: alloc::vec::Vec<_> = (0..op.c as usize)
+                    .map(|j| opnd(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8))
+                    .collect();
+                alloc::format!("{args}; {}", t.join(", "))
+            } else {
+                args
+            };
             let d = if code::is_colour(op.code) {
                 "out".into()
             } else {
