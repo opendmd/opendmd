@@ -73,8 +73,6 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use esp_idf_hal::cpu::Core;
-use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
 
 use crate::cache;
 use crate::config;
@@ -512,25 +510,7 @@ pub fn heartbeat(total: usize, prepared: Option<usize>) -> String {
 /// before WiFi, while the heap still has a contiguous block for the stack.
 fn spawn() -> anyhow::Result<()> {
     let before = free_heap();
-    let previous = ThreadSpawnConfiguration::get();
-    ThreadSpawnConfiguration {
-        name: Some(b"cache-builder\0"),
-        stack_size: config::BUILDER_STACK,
-        priority: config::BUILDER_PRIORITY,
-        pin_to_core: Some(Core::Core0),
-        ..Default::default()
-    }
-    .set()?;
-    let handle = thread::Builder::new()
-        .name("cache-builder".into())
-        .stack_size(config::BUILDER_STACK)
-        .spawn(run);
-    if let Some(previous) = previous {
-        let _ = previous.set();
-    } else {
-        let _ = ThreadSpawnConfiguration::default().set();
-    }
-    handle?;
+    crate::task::spawn_core0(b"cache-builder\0", config::BUILDER_STACK, config::BUILDER_PRIORITY, Box::new(run))?;
     // Logged by the task itself: this runs inside the main task's frame.
     SPAWN_COST.store(before.saturating_sub(free_heap()), SeqCst);
     Ok(())

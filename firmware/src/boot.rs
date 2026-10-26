@@ -44,8 +44,6 @@
 
 use crate::chan as mpsc;
 use anyhow::Result;
-use esp_idf_hal::cpu::Core;
-use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use opendmd_core::engine::Catalog;
 use opendmd_core::overrides::Overrides;
@@ -101,28 +99,10 @@ pub struct BootTask {
 
 /// Start the task on CPU0 and return at once.
 pub fn spawn(task: BootTask) -> Result<()> {
-    let previous = ThreadSpawnConfiguration::get();
-    ThreadSpawnConfiguration {
-        name: Some(b"boot\0"),
-        stack_size: config::BOOT_STACK,
-        // As the main task: it shares CPU0 round-robin with the timer
-        // service task (the log drain) rather than starving it, and the
-        // network and the httpd (5) come first once they exist.
-        priority: 1,
-        pin_to_core: Some(Core::Core0),
-        ..Default::default()
-    }
-    .set()?;
-    let handle = thread::Builder::new()
-        .name("boot".into())
-        .stack_size(config::BOOT_STACK)
-        .spawn(move || run(task));
-    if let Some(previous) = previous {
-        let _ = previous.set();
-    } else {
-        let _ = ThreadSpawnConfiguration::default().set();
-    }
-    handle?;
+    // Priority 1, as the main task: it shares CPU0 round-robin with the
+    // timer service task (the log drain) rather than starving it, and the
+    // network and the httpd (5) come first once they exist.
+    crate::task::spawn_core0(b"boot\0", config::BOOT_STACK, 1, Box::new(move || run(task)))?;
     Ok(())
 }
 

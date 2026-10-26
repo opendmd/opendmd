@@ -47,6 +47,8 @@ static HITS: AtomicU32 = AtomicU32::new(0);
 static MISSES: AtomicU32 = AtomicU32::new(0);
 static RECORDS: AtomicU32 = AtomicU32::new(0);
 static BUILDS: AtomicU32 = AtomicU32::new(0);
+/// Look for the card's index again on the next turn (the handover).
+static RELOAD: AtomicBool = AtomicBool::new(false);
 /// A build's task is up (one at a time).
 static BUILDING: AtomicBool = AtomicBool::new(false);
 /// The last build failed: the next waits `FATIDX_MIN_GAP_S` even for a
@@ -56,7 +58,6 @@ static FAILED: AtomicBool = AtomicBool::new(false);
 struct Loaded {
     file: File,
     fanout: Box<[u32; fatdir::FANOUT]>,
-    extras: Vec<(u32, u32)>,
 }
 
 /// `Some(None)`: looked, no usable index.
@@ -276,15 +277,19 @@ pub fn open(full: &str) -> io::Result<File> {
 /// Through the index only: `None` when it cannot (not indexed, stale, no
 /// index), never a directory scan. For opening an original ahead.
 pub fn indexed(full: &str) -> Option<io::Result<File>> {
+    // Not before the handover: the card may still be remounted (`unmounted`).
+    if !crate::CARD_READY.load(Relaxed) {
+        return None;
+    }
     let card = full.strip_prefix(config::SD_MOUNT).filter(|c| c.starts_with("/gifs/"))?;
     let name = card.rsplit('/').next()?;
     if !VFS_UP.load(Relaxed) || !name.is_ascii() || name.len() > 255 {
         return None;
     }
     let h = fatdir::hash(card.as_bytes());
-    // Candidates (loc, the extra "sector before" if any), copied out so the
-    // index lock is not held across the card reads below.
-    let mut cands = [(0u32, u32::MAX); 8];
+    // Candidates, copied out so the index lock is not held across the card
+    // reads below.
+    let mut cands = [0u32; 8];
     let mut nc = 0;
     {
         let mut g = LOADED.lock().unwrap();
@@ -308,14 +313,12 @@ pub fn indexed(full: &str) -> Option<io::Result<File>> {
             return None;
         }
         for r in recs.chunks_exact(8).filter(|r| r[..4] == h.to_le_bytes()).take(cands.len()) {
-            let loc = u32::from_le_bytes(r[4..].try_into().unwrap());
-            let prev = l.extras.iter().find(|e| e.0 == loc).map_or(u32::MAX, |e| e.1);
-            cands[nc] = (loc, prev);
+            cands[nc] = u32::from_le_bytes(r[4..].try_into().unwrap());
             nc += 1;
         }
     }
-    for &(loc, prev) in &cands[..nc] {
-        match open_at(loc, prev, name.as_bytes()) {
+    for &loc in &cands[..nc] {
+        match open_at(loc, name.as_bytes()) {
             Ok(Some(f)) => {
                 HITS.fetch_add(1, Relaxed);
                 return Some(Ok(f));
@@ -334,7 +337,7 @@ pub fn indexed(full: &str) -> Option<io::Result<File>> {
 }
 
 /// Verify the entry at `loc` and open it (`Ok(None)`: not this file).
-fn open_at(loc: u32, prev: u32, name: &[u8]) -> io::Result<Option<File>> {
+fn open_at(loc: u32, name: &[u8]) -> io::Result<Option<File>> {
     let (fs, geo) = volume()?;
     let (rel, slot) = (loc >> 4, (loc & 15) as usize);
     if rel as u64 >= (geo.n_fatent as u64 - 2) * geo.csize as u64 {
@@ -345,12 +348,10 @@ fn open_at(loc: u32, prev: u32, name: &[u8]) -> io::Result<Option<File>> {
     let lock = VolLock::take(fs)?;
     read_locked(fs, geo.database + rel, cur)?;
     let mut v = fatdir::verify(cur, None, slot, name);
-    if v == Verify::NeedPrev {
-        let p = if !rel.is_multiple_of(geo.csize) { rel - 1 } else { prev };
-        if p == u32::MAX {
-            return Ok(None);
-        }
-        read_locked(fs, geo.database + p, pbuf)?;
+    // Indexed names never start in the previous cluster: the sector before
+    // is in this one.
+    if v == Verify::NeedPrev && !rel.is_multiple_of(geo.csize) {
+        read_locked(fs, geo.database + rel - 1, pbuf)?;
         v = fatdir::verify(cur, Some(pbuf), slot, name);
     }
     let Verify::Ok { cluster, size, attr } = v else {
@@ -402,14 +403,9 @@ fn load() -> io::Result<Loaded> {
     for (i, c) in raw[fatdir::HEADER..].chunks_exact(4).enumerate() {
         fanout[i] = u32::from_le_bytes(c.try_into().unwrap());
     }
-    let mut extras = Vec::with_capacity(h.extras as usize);
     file.seek(SeekFrom::Start(fatdir::RECORDS_AT + h.count as u64 * 8))?;
     let mut e = [0u8; 8];
     let pair = |e: &[u8; 8]| (u32::from_le_bytes(e[..4].try_into().unwrap()), u32::from_le_bytes(e[4..].try_into().unwrap()));
-    for _ in 0..h.extras.min(fatdir::MAX_EXTRAS as u32) {
-        file.read_exact(&mut e)?;
-        extras.push(pair(&e));
-    }
     // The directories it was built over must be the ones there now: a
     // directory renamed or replaced on a PC leaves its entries where they
     // were, and a record would then name a file in another directory.
@@ -430,10 +426,29 @@ fn load() -> io::Result<Loaded> {
     if t == 0 || (b != 0 && since(b, t) as i32 > 0) {
         DIRTY.store(false, Relaxed);
     }
-    Ok(Loaded { file, fanout, extras })
+    Ok(Loaded { file, fanout })
 }
 
 // ---- keeping it current ------------------------------------------------------
+
+/// The card is being unmounted (`SdCard`'s drop, before the volume goes):
+/// forget the volume and the index file, so nothing reads a freed `FATFS`.
+/// (Files the index opened must be closed by then, as any VFS file: the
+/// card is dropped before the handover, or at a restart.)
+pub fn unmounted() {
+    FS.store(std::ptr::null_mut(), Relaxed);
+    *LOADED.lock().unwrap() = None;
+    FAILED.store(false, Relaxed);
+    BUILT_MS.store(0, Relaxed);
+    RECORDS.store(0, Relaxed);
+    DIRTY.store(true, Relaxed);
+}
+
+/// The card is the player's now (the handover): look for its index on the
+/// next turn, also when it mounted late after a boot with no card.
+pub fn mounted() {
+    RELOAD.store(true, Relaxed);
+}
 
 /// The API changed `path` (an upload, move or delete): rebuild once things
 /// are quiet. Only `/gifs` is indexed.
@@ -455,12 +470,16 @@ pub fn dir_changed() {
 
 /// The network worker's turn: rebuild when wanted, quiet and affordable.
 pub fn tick() {
-    if !register_vfs() {
+    if !crate::CARD_READY.load(Relaxed) || !register_vfs() {
         return;
     }
     // The first look at the card decides whether there is an index at all.
     let missing = {
         let mut g = LOADED.lock().unwrap();
+        if RELOAD.swap(false, Relaxed) {
+            *g = None;
+            DIRTY.store(true, Relaxed);
+        }
         if g.is_none() {
             *g = Some(load().ok());
         }
@@ -493,28 +512,22 @@ pub fn tick() {
     // Its own short-lived task (CPU0, the cache builder's priority): the
     // walk's FatFs/SD calls are deep, and the network worker's stack is
     // sized for its own work; and the worker keeps polling meanwhile.
-    use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
-    let previous = ThreadSpawnConfiguration::get();
-    let _ = ThreadSpawnConfiguration {
-        name: Some(b"fat-index\0"),
-        stack_size: config::FATIDX_STACK,
-        priority: config::BUILDER_PRIORITY,
-        pin_to_core: Some(esp_idf_hal::cpu::Core::Core0),
-        ..Default::default()
-    }
-    .set();
-    let spawned = std::thread::Builder::new().stack_size(config::FATIDX_STACK).spawn(|| {
-        let r = build();
-        FAILED.store(r.is_err(), Relaxed);
-        if let Err(e) = r {
-            log::warn!("fat index: {e}");
-            // Walked again only after the gap.
-            DIRTY.store(true, Relaxed);
-        }
-        BUILDS.fetch_add(1, Relaxed);
-        BUILDING.store(false, Relaxed);
-    });
-    let _ = previous.unwrap_or_default().set();
+    let spawned = crate::task::spawn_core0(
+        b"fat-index\0",
+        config::FATIDX_STACK,
+        config::BUILDER_PRIORITY,
+        Box::new(|| {
+            let r = build();
+            FAILED.store(r.is_err(), Relaxed);
+            if let Err(e) = r {
+                log::warn!("fat index: {e}");
+                // Walked again only after the gap.
+                DIRTY.store(true, Relaxed);
+            }
+            BUILDS.fetch_add(1, Relaxed);
+            BUILDING.store(false, Relaxed);
+        }),
+    );
     if spawned.is_err() {
         BUILDING.store(false, Relaxed);
     }
@@ -551,12 +564,14 @@ fn build() -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(1));
         Ok(())
     };
-    let mut walk_all = |emit: &mut dyn FnMut(u32, u32, Option<u32>)| -> io::Result<()> {
+    let mut walk_all = |emit: &mut dyn FnMut(u32, u32)| -> io::Result<()> {
         for (dir, first) in &dirs {
             let first = *first;
             let seed = fatdir::hash_more(fatdir::hash(dir.as_bytes()), b"/");
             fatdir::walk(&geo, first, &mut read, &mut scratch, &mut |f| {
-                emit(fatdir::hash_more(seed, f.name), f.loc, f.prev_rel);
+                if f.prev_rel.is_none() {
+                    emit(fatdir::hash_more(seed, f.name), f.loc);
+                }
                 Ok(())
             })?;
         }

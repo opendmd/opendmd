@@ -74,6 +74,7 @@ impl Drop for SdCard {
     fn drop(&mut self) {
         // Before the fields go: no clock change or raw read from here on.
         crate::cardspeed::detach();
+        crate::fatidx::unmounted();
     }
 }
 
