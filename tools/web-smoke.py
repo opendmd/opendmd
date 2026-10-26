@@ -673,7 +673,7 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
             and errors.append(f"[{size}] console: {m.text}"))
     page.on("pageerror", lambda e: errors.append(f"[{size}] pageerror: {e}"))
     # Chromium's console line for a failed load has no URL; this does.
-    page.on("response", lambda r: r.status >= 400 and unexpected(r.url)
+    page.on("response", lambda r: r.status >= 400 and unexpected(r.url) and not (r.status == 503 and "/gifs/" in r.url)
             and errors.append(f"[{size}] HTTP {r.status} {r.request.method} {r.url}"))
     # And which load a connection closed with no response was (Chromium's
     # ERR_EMPTY_RESPONSE console line has no URL either).
@@ -937,7 +937,9 @@ def search_checks(page: Page, exact: bool) -> None:
     first = cats[0][0]
     page.click(f"#lib-list .vdir[data-cat={json.dumps(first)}]")
     page.wait_for_function(f"{TREE}.rows.some(r => r.cat === {json.dumps(first)} && !r.path && !r.open)", timeout=5000)
-    check(lib_count(page)[0] == snes, f"library search: closing {first} keeps the count ({page.inner_text('#lib-count')})")
+    left = snes - cats[0][1]
+    check(lib_count(page)[0] == left and page.evaluate(f"{TREE}.res.every(it => !it.path.startsWith('/gifs/' + {json.dumps(first)} + '/'))"),
+          f"library search: closing {first} takes its matches out of what is shown (and Select all shown) ({page.inner_text('#lib-count')})")
     page.fill("#lib-search", "")
     wait_counted(page)
     check(lib_count(page) == (tab_n, tab_n) and page.locator("#lib-chips .chip.on").count() == 0,
@@ -1103,12 +1105,102 @@ def thumbs_checks(browser, base: str, errors: list[str]) -> None:
     page.hover(f"{row} .t")
     page.wait_for_selector(f"{row} img.th", timeout=10000)
     check(get_json(base + "/mock/io")["gets"] == 0, "thumbnails: the clip again after a reload, from the store")
+    load_checks(page, base)
     get_json(base + "/mock/io?kbps=0")
     goto_view(page, "settings/device")
     page.uncheck("#st-thumbs")
     goto_view(page, "library")
     check(page.locator("#lib-list .vrow:not([hidden]) canvas.th").count() == 0, "thumbnails: off -> no canvases")
     page.context.close()
+
+
+STORED = """async (paths) => {
+    const d = (await indexedDB.databases()).find((x) => x.name.startsWith('odmd-thumbs-'));
+    const db = await new Promise((r) => { const q = indexedDB.open(d.name); q.onsuccess = () => r(q.result); });
+    const out = {};
+    for (const p of paths) out[p] = await new Promise((r) => { const q = db.transaction('t').objectStore('t').get(p); q.onsuccess = () => r(q.result ? (q.result.still ? 'still' : 'none') : null); });
+    db.close();
+    return out; }"""
+
+
+def drawn(page: Page, timeout: int = 30000) -> list[str]:
+    page.wait_for_function(f"{IN_VIEW}.length >= 10 && {IN_VIEW}.every(r => r.querySelector('canvas.th[data-done]'))", timeout=timeout)
+    return page.evaluate(f"{IN_VIEW}.map(r => r.dataset.path)")
+
+
+def load_checks(page: Page, base: str) -> None:
+    """The thumbnails under a device's stream task (the mock serves card
+    files one at a time, two waiting, 503 + Retry-After 1 after 2 s, paced
+    at 400 KB/s): a dropped request is not kept as a failure and is asked
+    for again on a later visit; injected 503s back off and still draw; a
+    screen load with Details open (the preview's whole file in the same
+    queue), and a hover while scrolling, measured."""
+    # Failures that pass (here 500s): blank for now, not kept, drawn on the next visit.
+    expected.append("/gifs/Arcade/")
+    get_json(base + "/mock/io?reset=1&fail500=3")
+    pick_cat(page, "Arcade")
+    rows = drawn(page)
+    deadline = time.time() + 20
+    while thumbs_stats(page)["failed"] < 1 and time.time() < deadline:
+        page.wait_for_timeout(200)
+    kept = page.evaluate(STORED, rows)
+    blank = [p for p in rows if kept[p] is None]
+    check(len(blank) >= 1 and not any(v == "none" for v in kept.values()),
+          f"load: {len(blank)} rows whose request failed (500) are not kept as failures ({thumbs_stats(page)['failed']} failed)")
+    page.reload()
+    pick_cat(page, "Arcade")
+    drawn(page)
+    page.wait_for_timeout(800)
+    kept = page.evaluate(STORED, blank)
+    check(all(kept[p] == "still" for p in blank), f"load: a later visit asks for them again and draws them ({kept})")
+    expected.remove("/gifs/Arcade/")
+    # 503s: everything waits Retry-After (1 s), then the rows draw.
+    get_json(base + "/mock/io?reset=1&fail503=2")
+    t0 = time.time()
+    pick_cat(page, "Computers")
+    rows = drawn(page)
+    page.wait_for_function(f"{IN_VIEW}.every(r => r.querySelector('canvas.th[data-done=\"1\"]'))", timeout=20000)
+    st = thumbs_stats(page)
+    check(st["r503"] >= 2 and time.time() - t0 >= 1, f"load: two 503s back off (r503 {st['r503']}) and the screen still draws ({time.time() - t0:.1f} s)")
+    # A screen load with Details open: the preview's file in the same queue.
+    get_json(base + "/mock/io?reset=1")
+    lat: list[float] = []
+    stop = threading.Event()
+
+    def poll():
+        while not stop.is_set():
+            t = time.time()
+            get_json(base + "/api/status")
+            lat.append((time.time() - t) * 1000)
+            stop.wait(0.5)
+    th = threading.Thread(target=poll)
+    th.start()
+    r0 = thumbs_stats(page)["r503"]
+    pick_cat(page, "Pinball_Short")
+    page.click("#lib-list .vrow:not([hidden]) >> nth=0")
+    t0 = time.time()
+    drawn(page, 60000)
+    page.wait_for_function("document.querySelector('#lib-cap').dataset.shown", timeout=60000)
+    took = time.time() - t0
+    stop.set()
+    th.join()
+    m, st = get_json(base + "/mock/io"), thumbs_stats(page)
+    lat.sort()
+    check(m["max"] <= 2, f"load: Pinball_Short with Details open: {m['gets']} card requests, {m['bytes']:,} B, {m['r503']} 503s (page r503 +{st['r503'] - r0}),"
+          f" {took:.1f} s; /api/status p50 {lat[len(lat) // 2]:.0f} ms, max {lat[-1]:.0f} ms")
+    # Hovering while scrolling: clips only where the pointer rests.
+    get_json(base + "/mock/io?reset=1")
+    box = page.locator("#lib-list").bounding_box()
+    page.mouse.move(box["x"] + 200, box["y"] + 100)
+    for _ in range(12):
+        page.mouse.wheel(0, 120)
+        page.wait_for_timeout(120)
+    page.wait_for_timeout(1500)
+    m = get_json(base + "/mock/io")
+    rows = drawn(page)
+    kept = page.evaluate(STORED, rows)
+    check(not any(v == "none" for v in kept.values()) and m["max"] <= 2,
+          f"load: hovering while scrolling: {m['gets']} requests, {m['bytes']:,} B, {m['r503']} 503s, none kept as failed")
 
 
 def tree_checks(browser, base: str, errors: list[str]) -> None:
@@ -1232,6 +1324,13 @@ def editor_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
     want = sorted(f"/gifs/{p.parent.name}/{p.name}" for p in (CARD / "gifs").glob("*/*.gif")
                   if "mario" in p.name.lower() and re.match(r"^(?:(?:HALLOWEEN|XMAS)_)?SNES_", p.name, re.I))
     check(n == len(want), f"editor: 'mario' + SNES -> Add all {n} shown (the card has {len(want)})")
+    folder = page.evaluate("document.querySelector('#set-add-list')._tree.rows.find(r => !r.path).cat")
+    in_it = page.evaluate(f"document.querySelector('#set-add-list')._tree.rows.find(r => r.cat === {json.dumps(folder)} && !r.path).hits.length")
+    page.click(f"#set-add-list .vdir[data-cat={json.dumps(folder)}]")
+    page.wait_for_function(f"document.querySelector('#set-add-all').textContent === 'Add all {n - in_it} shown'", timeout=5000)
+    check(True, f"editor: closing {folder} in the search leaves its {in_it} out of Add all ({n - in_it})")
+    page.click(f"#set-add-list .vdir[data-cat={json.dumps(folder)}]")
+    page.wait_for_function(f"document.querySelector('#set-add-all').textContent === 'Add all {n} shown'", timeout=5000)
     page.click("#set-add-all")
     before = len(got)
     got = entries(page)

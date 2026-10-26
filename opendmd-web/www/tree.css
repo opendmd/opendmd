@@ -26,3 +26,4 @@ canvas.th,img.th{width:64px;height:16px;flex:none;background:#000;border-radius:
 @media (min-width:1001px){#view-sets.adding .cols{grid-template-columns:minmax(0,1fr)}#view-sets.adding .sl,#view-sets.adding .sehint{display:none}}
 @media (max-width:1000px){.adding .edpanes{grid-template-columns:minmax(0,1fr)}.adding #set-ent-pane{display:none}#set-add-list{height:calc(100dvh - 400px)}}
 @media (max-width:760px){#set-add-list{height:calc(100dvh - 470px)}}
+.vdir.err button{margin-left:auto}
