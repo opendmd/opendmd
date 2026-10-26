@@ -182,6 +182,9 @@ fn engine_for(path: &str, bytes: &Bytes, dwell: DwellPolicy, transition: Transit
     engine
 }
 
+/// What [`Player::set_over`] draws with: the frame's RGB888 bytes, in place.
+pub type Over = Box<dyn FnMut(&mut [u8])>;
+
 /// One file, the engine over it, the canvas, the renderer and the
 /// `0x00RRGGBB` framebuffer plus the RGBA copy the browser wants.
 pub struct Player {
@@ -211,6 +214,10 @@ pub struct Player {
     model: PanelModel,
     /// The clock of the last tick: what the glow steps by.
     now: Duration,
+    /// Drawn over every frame before the tint and glow (the device's
+    /// Formula look, which the web demo draws with Psi): the 128 × 32
+    /// RGB888 picture, changed in place, on a copy of what is shown.
+    over: Option<(Over, Canvas)>,
     buffer: Vec<u32>,
     rgba: Vec<u8>,
 }
@@ -237,6 +244,7 @@ impl Player {
             look,
             model: PanelModel::new(Tint::Colour, GlowLevel::Off),
             now: Duration::ZERO,
+            over: None,
             buffer: vec![0; WIDTH * scale * HEIGHT * scale],
             rgba: vec![255; WIDTH * scale * HEIGHT * scale * 4],
         };
@@ -342,6 +350,14 @@ impl Player {
         // Effects run at the panel's rate for this glow (`fx::set_frame_floor`).
         opendmd_core::fx::set_frame_floor(opendmd_core::fx::glow_floor(glow));
         self.model.set(look, glow);
+        self.draw();
+    }
+
+    /// Draw `f` over every frame from now on (before the tint and glow, as
+    /// the device draws its Formula look), every tick while it is set, so
+    /// it moves over a still picture too; `None` stops. Redrawn at once.
+    pub fn set_over(&mut self, f: Option<Over>) {
+        self.over = f.map(|f| (f, Canvas::new()));
         self.draw();
     }
 
@@ -481,7 +497,7 @@ impl Player {
     /// Nothing new from the engine, but a dot is still fading: draw the
     /// glow's next step.
     fn fade(&mut self) -> Tick {
-        if self.model.is_animating() {
+        if self.model.is_animating() || self.over.is_some() {
             self.draw();
             Tick::Frame
         } else {
@@ -573,10 +589,17 @@ impl Player {
     /// Render the current canvas again without advancing the engine — what a
     /// slider move needs so the change is visible while paused.
     pub fn draw(&mut self) {
-        let shown = match self.engine.as_ref() {
+        let mut shown = match self.engine.as_ref() {
             Some(e) => e.display(&self.canvas),
             None => &self.canvas,
         };
+        if let Some((f, c)) = self.over.as_mut() {
+            let (px, dirty) = c.bytes_and_dirty_mut();
+            px.copy_from_slice(shown.as_bytes());
+            f(px);
+            dirty.mark_all();
+            shown = c;
+        }
         let shown = self.model.present(shown, self.now);
         match (self.mode, self.renderer.as_mut()) {
             (RenderMode::Led, Some(r)) => r.render(shown, &mut self.buffer),

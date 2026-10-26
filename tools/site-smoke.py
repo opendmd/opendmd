@@ -48,6 +48,14 @@ site (make site):
   a card, is refused; it asks nothing of any other site; the menu and the
   links to it.
 
+- the demo's Settings, against its player in the page (js/demo.js): every
+  tab; brightness, the colour, the Formula look, each GIF's stay, the
+  playlist, night mode and a rule shown on its panel and in Now's banner;
+  panel timing tried and kept, a new name, a key; firmware, WiFi and
+  restarting shown with a line saying the demo can't; kept across a reload,
+  not into a new session; every tab at laptop and phone sizes (in --shots,
+  else target/site-smoke/).
+
 Screenshots of /f/, the gallery and /card/ at laptop and phone sizes with --shots.
 Needs, once, `uv run --with playwright playwright install chromium`.
 """
@@ -260,6 +268,182 @@ def demo_share(browser, base: str, errors: list[str]) -> None:
     first = json.loads((ROOT / "opendmd-web/www/formulas.json").read_text())[0]
     check(page.inner_text("#f-name") == first["name"], f"demo: the link opens {first['name']} on its page")
     page.context.close()
+
+
+def rows_ratio(page: Page) -> float:
+    """The demo panel's even LED rows' brightness over its odd rows' (about
+    1 for a picture; the Scanlines formula dims every other row)."""
+    return page.evaluate("""() => { const c = document.querySelector('#now-panel'), r = c.width / 128;
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, row = [0, 0];
+        for (let y = 0; y < 32; y++) for (let x = 0; x < 128; x++) { const i = (((y * r + r / 2) | 0) * c.width + ((x * r + r / 2) | 0)) * 4; row[y % 2] += d[i] + d[i+1] + d[i+2]; }
+        return row[1] ? row[0] / row[1] : 1; }""")
+
+
+def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
+    """The demo's Settings run the device's code against its player in the
+    page (js/demo.js): every tab and control there; brightness, colour, the
+    Formula look, how long each GIF stays, the playlist and the schedule
+    shown on the demo's panel (Now); panel timing tried and kept; what only
+    a player can do (firmware, WiFi, restarting) shown with a line saying
+    so; kept for the session (a reload), not beyond (a new one). Every tab
+    at laptop and phone sizes in `shots`."""
+    js = lambda e: page.evaluate(e)
+    filt = lambda: js("getComputedStyle(document.querySelector('#now-panel')).filter")
+
+    def tab(t):
+        page.evaluate(f"location.hash = '#settings/{t}'")
+        page.wait_for_selector(f"#st-tab-{t}", timeout=20000)
+        page.wait_for_timeout(400)
+
+    def now():
+        page.evaluate("location.hash = '#now'")
+        page.wait_for_selector("#view-now.on #now-panel")
+        page.wait_for_timeout(700)
+
+    def saved(sel):
+        page.wait_for_function(f"document.querySelector({json.dumps(sel)}).closest('.card,.grp').querySelector('.tick')?.textContent.includes('Saved')", timeout=10000)
+
+    page = new_page(browser, "laptop", errors)
+    page.goto(f"{base}/demo/#now")
+    page.wait_for_function("document.querySelector('#now-title')?.textContent !== 'Local simulator'", timeout=30000)
+    tab("play")
+    check(page.locator("text=Device settings, WiFi and reboot live on the player").count() == 0
+          and all(page.locator(s).count() == 1 for s in ("#st-brightness", "#st-maxbright", "#st-set", "#st-plat-btn", "#st-dwell-min", "#st-dwell-max", "#st-shuffle")),
+          "demo settings: Playback has the player's controls, not the local-mode sentence")
+    page.evaluate("(e => { e.value = 30; e.dispatchEvent(new Event('input')); })(document.querySelector('#st-brightness'))")
+    saved("#st-brightness")
+    page.fill("#st-dwell-min", "2")
+    page.fill("#st-dwell-max", "5")
+    page.press("#st-dwell-max", "Tab")
+    saved("#st-dwell-min")
+    sets = page.eval_on_selector_all("#st-set option", "os => os.map(o => o.value)")
+    page.select_option("#st-set", "Demoscene")
+    saved("#st-set")
+    now()
+    cap = page.inner_text("#view-now .capl .cap")
+    check("brightness(0.5" in filt() and "2–5 s" in cap and page.input_value("#sim-list") == "/sets/Demoscene.txt",
+          f"demo settings: brightness 30 dims the panel ({filt()}), each GIF 2–5 s ('{cap}'), the playlist Demoscene plays (of {sets})")
+    tab("look")
+    page.select_option("#st-look", "amber")
+    saved("#st-look")
+    page.select_option("#st-glow", "long")
+    page.select_option("#st-trans", "wipe_left")
+    saved("#st-trans")
+    now()
+    rgb = page.evaluate("""() => { const c = document.querySelector('#now-panel'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let r = 0, b = 0; for (let i = 0; i < d.length; i += 4) { r += d[i]; b += d[i+2]; } return [r, b]; }""")
+    check(rgb[0] > 2 * rgb[1], f"demo settings: Amber tints the panel (red {rgb[0]:,}, blue {rgb[1]:,})")
+    before = rows_ratio(page)
+    tab("look")
+    page.wait_for_function("[...document.querySelectorAll('#st-look-formula option')].some(o => o.textContent === 'Scanlines')", timeout=20000)
+    page.select_option("#st-look-formula", label="Scanlines")
+    saved("#st-look-formula")
+    now()
+    page.wait_for_timeout(800)
+    after = rows_ratio(page)
+    check(abs(after / before - 1) > 0.2 and page.evaluate("import('./js/state.js').then(m => m.app.status.formula_look?.error ?? null)") is None,
+          f"demo settings: the Scanlines look is drawn over the panel (even/odd rows {before:.2f} -> {after:.2f})")
+    tab("look")
+    page.click("#st-trans-preview")
+    page.wait_for_timeout(1500)
+    check(lit(page, "#st-trans-panel") > 500, "demo settings: the transition preview plays")
+    # The schedule: night mode from a minute ago for an hour, Panel off.
+    tab("time")
+    page.wait_for_function("/^\\d\\d:\\d\\d/.test(document.querySelector('#tm-now').textContent)", timeout=10000)
+    hh, mm = map(int, page.inner_text("#tm-now")[:5].split(":"))
+    t = hh * 60 + mm
+    fmt = lambda m: f"{(m // 60) % 24:02d}:{m % 60:02d}"
+    page.fill("#sc-night-from", fmt(t - 1 + 1440))
+    page.fill("#sc-night-to", fmt(t + 60))
+    page.select_option("#sc-night-mode", "off")
+    page.check("#sc-night-on")
+    page.wait_for_timeout(500)
+    now()
+    page.wait_for_selector("#now-banner:not([hidden])", timeout=10000)
+    night = page.inner_text("#now-banner")
+    check(night.startswith(f"Night mode until {fmt(t + 60)}") and filt() == "brightness(0)",
+          f"demo settings: night mode turns the panel off, with Now's banner ('{night}', {filt()})")
+    page.click("#now-wake")
+    page.wait_for_function("document.querySelector('#now-banner').textContent.startsWith('Schedule paused')", timeout=10000)
+    check("brightness(0.5" in filt(), f"demo settings: Wake for an hour lights it again ({page.inner_text('#now-banner')}, {filt()})")
+    page.click("#now-resume")
+    page.wait_for_function("document.querySelector('#now-banner').textContent.startsWith('Night mode')", timeout=10000)
+    tab("time")
+    page.uncheck("#sc-night-on")
+    page.click("#sc-add")
+    page.select_option("#sc-set", "Sprites and Clock")
+    for d in page.query_selector_all("#sc-days .chip:not(.on)"):
+        d.click()
+    page.fill("#sc-from", "00:00")
+    page.fill("#sc-to", "00:00")
+    page.click("#sc-rule-save")
+    page.wait_for_selector("#sc-rules [data-rule='0']", timeout=10000)
+    now()
+    rule = page.inner_text("#now-banner") if page.is_visible("#now-banner") else ""
+    check(rule.startswith("Schedule: Sprites and Clock") and page.input_value("#sim-list") == "/sets/Sprites and Clock.txt",
+          f"demo settings: a rule's playlist plays, with Now's banner ('{rule}')")
+    tab("time")
+    page.click("#sc-rules [data-rule='0'] button:has-text('Delete')")
+    page.check("#fo-on")
+    page.fill("#fo-host", "192.168.1.20")
+    page.wait_for_timeout(700)
+    page.click("#fo button:has-text('Test')")
+    page.wait_for_function("document.querySelector('#fo-result').textContent.includes('demo')", timeout=10000)
+    check("can’t reach your network" in page.inner_text("#fo-result"), f"demo settings: Follow RePlayOS says the demo can't reach it ('{page.inner_text('#fo-result')}')")
+    page.uncheck("#fo-on")
+    # Device: status, card speed, panel timing tried and kept, the name; the rest said.
+    tab("device")
+    page.wait_for_selector("#st-fw .demo-cant", timeout=20000)
+    lines = {g: page.inner_text(f"{g} .demo-cant") for g in ("#st-status", "#st-net", "#st-panel", "#st-fw")}
+    check(all("demo" in v for v in lines.values()) and "Playlist" in page.inner_text("#st-facts"),
+          f"demo settings: the status, and a line where the demo can't ({' | '.join(lines.values())})")
+    for b in ("#st-reboot-btn", "#fw-go", "#fw-check", "#st-scan", "#pt-test"):
+        page.click(b)
+    toasts = page.eval_on_selector_all("#toasts .toast", "ts => ts.map(t => t.textContent)")
+    check(sum("The demo can’t" in t or "The demo has no panel" in t for t in toasts) >= 5,
+          f"demo settings: Reboot, Update, Check for updates, Scan and Test panel timing say so ({len(toasts)} toasts)")
+    page.select_option("#st-card-speed", "fast")
+    saved("#st-card-speed")
+    page.select_option("#pt-latch_blanking", "2")
+    page.wait_for_selector("#pt-keep:not([hidden])", timeout=10000)
+    page.click("#pt-keep")
+    page.wait_for_selector("#pt-bar[hidden]", state="attached", timeout=10000)
+    kept = page.evaluate("import('./js/state.js').then(m => m.app.config.panel.latch_blanking)")
+    check(kept == 2, f"demo settings: panel timing tried, then kept (latch blanking {kept})")
+    page.fill("#st-hostname", "kitchen")
+    page.click("#st-save-net")
+    page.wait_for_function("document.querySelector('#st-moved').textContent.includes('kitchen.local')", timeout=15000)
+    page.fill("#st-ssid", "Elsewhere")
+    page.click("#st-save-net")
+    page.wait_for_function("document.querySelector('#st-net .tick').textContent.includes('demo')", timeout=10000)
+    check(True, f"demo settings: a new name is taken, a WiFi network refused ('{page.inner_text('#st-net .tick')}')")
+    page.check("#sec-key")
+    page.wait_for_selector("#sec-key-val", timeout=10000)
+    check(len(page.input_value("#sec-key-val")) == 24, "demo settings: Require a key shows one")
+    page.uncheck("#sec-key")
+    page.wait_for_timeout(300)
+    # Kept for the session.
+    page.reload()
+    page.wait_for_selector("#st-tab-device", timeout=30000)
+    tab("look")
+    check(page.input_value("#st-look") == "amber" and page.input_value("#st-trans") == "wipe_left", "demo settings: kept across a reload")
+    for t in ("play", "look", "time", "device"):
+        tab(t)
+        page.wait_for_timeout(600)
+        page.screenshot(path=str(shots / f"demo-settings-{t}-laptop.png"), full_page=True)
+    page.context.close()
+    # A new session starts afresh; every tab on a phone.
+    page = new_page(browser, "phone", errors)
+    page.goto(f"{base}/demo/#settings/look")
+    page.wait_for_selector("#st-tab-look", timeout=30000)
+    check(page.input_value("#st-look") == "colour", "demo settings: a new session starts with a new player's settings")
+    for t in ("play", "look", "time", "device"):
+        tab(t)
+        page.wait_for_timeout(600)
+        check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"demo settings (phone): {t}, no sideways scroll")
+        page.screenshot(path=str(shots / f"demo-settings-{t}-phone.png"), full_page=True)
+    page.context.close()
+    print(f"  shots in {shots}")
 
 
 ART_PLATFORMS = ("MD", "SNES", "GB", "GBC", "GBA", "SATURN", "NDS", "NES", "SMS", "PCE", "PS1", "N64", "ARCADE")
@@ -690,8 +874,7 @@ def main() -> int:
     ap.add_argument("--pack", type=Path, default=ROOT / "opendmd-pack/target/release/opendmd-pack",
                     help="opendmd-pack, built (the reference for /card/'s lighter versions)")
     a = ap.parse_args()
-    if a.shots:
-        a.shots.mkdir(parents=True, exist_ok=True)
+    (a.shots or ROOT / "target/site-smoke").mkdir(parents=True, exist_ok=True)
     base = serve(a.site)
     errors: list[str] = []
     tool = a.gallery_tool if a.gallery_tool.is_file() else None
@@ -699,6 +882,8 @@ def main() -> int:
         browser = p.chromium.launch(headless=True)
         print("formula page (/f/)")
         f_page(browser, base, errors, tool, a.shots)
+        print("the demo's Settings")
+        demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
         print("the demo's share link")
         demo_share(browser, base, errors)
         print("the art index (/art-index/)")
