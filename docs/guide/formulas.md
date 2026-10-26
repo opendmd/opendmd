@@ -134,6 +134,9 @@ words (a single character in quotes, `'A'`, is a number too: its code).
 | `hour`, `minute`, `second` | the time of day |
 | `a`, `b`, `c` | the sliders, 0 to 1 |
 | `w`, `h` | 128 and 32 |
+| `cx`, `cy` | where the pixel is from the middle, in panel heights: `cx` from −2 at the left edge to 2 at the right, `cy` from −0.5 at the bottom to 0.5 at the top |
+| `r`, `angle` | how far the pixel is from the middle (round, though the panel is 4 times wider than tall: `r < 0.4` is a disc), and its angle round the middle, in turns |
+| `ty` | the pixel's row counted from the top, 0–31 |
 
 **Functions.** Waves and angles are in *turns*, not degrees or radians:
 `sin(0.25)` is 1, and `sin` repeats every 1.
@@ -155,6 +158,7 @@ words (a single character in quotes, `'A'`, is a number too: its code).
 | `digit(n, col, row)` | 1 where digit `n` (0 to 9) has a pixel in the panel's font, else 0 |
 | `glyph(ch, col, row)` | the same for a character: `glyph('A', col, row)` |
 | `bit(n, i)` | bit `i` of the whole number `n`, 1 or 0, for patterns of your own |
+| `pick(k, a, b, …)` | `a` when `k` is 0 (up to 1), `b` when it is 1, and so on; 0 below 0 or past the last |
 
 **Digits and letters.** `digit` and `glyph` read the panel's own font, the
 one the clock and the title cards use: a character is 5 columns by 7 rows
@@ -162,9 +166,11 @@ one the clock and the title cards use: a character is 5 columns by 7 rows
 columns 0 to 3 and rows 0 to 5, the rest is the gap to the next one).
 Anything outside that, or a character the font hasn't, is 0, so a
 character drawn big is just its column and row worked out from the pixel:
-`digit(7, floor(px/4), floor((31 - py)/4))` draws a 7 four times the size
-in the top-left corner (rows count down from the top here, though `py`
-counts up). Add `small` for the smaller font, 4 by 6 (digits 3 by 5):
+`digit(7, floor(px/4), floor(ty/4))` draws a 7 four times the size in the
+top-left corner (rows count down from the top here, as `ty` does; `py`
+counts up). `pick` chooses which character goes where:
+`glyph(pick(floor(px/5), 'H', 'I'), px % 5, ty)` writes HI in the top
+left, and nothing after it. Add `small` for the smaller font, 4 by 6 (digits 3 by 5):
 `digit(n, col, row, small)`, or `bold` for chunky 3 by 5 digits (digits
 only): `digit(n, col, row, bold)`. **Big clock** is made this way, in
 `bold`.
@@ -180,8 +186,18 @@ false), and `and`, `or`, `not`. There is no power operator: write `x * x`.
 | `rgb(r, g, b)` | red, green and blue, 0 to 1 each |
 | `pal(name, v)` | a palette, `v` from 0 to 1: `fire`, `ice` (or `ocean`), `chrono`, `amber`, `rainbow`, `gray` |
 | `gray(v)` | black to white |
+| `#ff8800` | a colour by its red, green and blue, two hex digits each (`#f80` for short) |
 
 A last line that is just a number is `gray` of it.
+
+**Colours by name.** `#ff8800` is a colour, the way web pages write them.
+It can be the whole last line, and you can do sums with colours there:
+`#ff8800 * k` is that orange at brightness `k`, `mix(#102040, #ff8800, y)`
+goes from dark blue at the bottom to orange at the top, and
+`pick(k, #ff0000, #00ff00)` picks one. `rgb(#ff8800, k)` covers only `k`
+of the pixel. A colour can't be given a name of its own (`c = #ff8800` is
+an error): write it in the last line, where it is used. In the editor a
+colour is underlined in its own colour.
 
 **The loop and the frame.** `loop N` on a line of its own sets how long
 the loop is, in seconds (8 if you leave it out). For a seamless loop,
@@ -221,12 +237,12 @@ than all, what is below shows through.
 loop 16
 part bars {
   loop 4
-  bar = max(0, 1 - abs(y - 0.5 - 0.35*sin(t/4))*5)
-  rgb(bar, bar*0.6, bar*0.2)
+  bar = max(0, 1 - abs(cy - 0.35*sin(t/4))*5)
+  bar * #ff9933
 }
 part rings {
   loop 4
-  d = len((x - 0.5)*4, y - 0.5)
+  d = r
   pal(rainbow, frac(d*1.5 - t/2))
 }
 k = smoothstep(0.25, 0.75, sin(t/16)*0.5 + 0.5)
@@ -235,9 +251,9 @@ layer { rings(x, y, k) }
 ```
 
 You don't have to type a part out: in the editor, write
-`use Rings as r` on a line of its own, with the name of one of your
+`use Rings as ring` on a line of its own, with the name of one of your
 formulas or an example, and when you move to another line the editor puts
-that formula in as `part r { … }`, ready to change. Everything you save or
+that formula in as `part ring { … }`, ready to change. Everything you save or
 share then has the whole of it, so it works anywhere: if a `use` line names
 a formula there isn't (or the formula you're editing), the editor says so
 and won't save or share until it's fixed.
@@ -280,8 +296,7 @@ The bottom layer, and any colour that covers less than all of a pixel,
 let it show through. For example, a sepia tone:
 
 ```
-l = ul
-rgb(l*1.1 + 0.08, l*0.92 + 0.04, l*0.65)
+rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65)
 ```
 
 or scanlines, which keep the GIF and darken every other row:
@@ -323,11 +338,15 @@ milliseconds); all the examples are light or medium.
 
 - Cheap: `+ - *`, the waves (`sin`, `cos`, `tri`, `saw`, `sqr`), `abs`,
   `frac`, `min`, `max`, `clamp`, `step`, comparisons, `pal`, `digit`,
-  `glyph` and `bit`.
+  `glyph`, `bit`, and `pick` of numbers, letters or values from
+  `frame { }` (one step, however many it picks from).
 - Dividing by a fixed number (`x/8`) is free: it becomes a multiply.
 - Dear: `noise`, `len`, `sqrt`, `atan2`, `smoothstep`, `hash`, and dividing
-  by something that changes from pixel to pixel. One of them is fine;
-  several add up.
+  by something that changes from pixel to pixel (`r` is a `len`, `angle`
+  an `atan2`). One of them is fine; several add up.
+- A sum with colours is worked out once for red, once for green, once
+  for blue: `#ff8800 * k` costs one multiply (a channel of `ff` is
+  free, of `00` nothing).
 - Anything that doesn't depend on the pixel (`hour/12`, `sin(t/8)`) is
   worked out once a frame, whatever line it's on.
 - Each layer costs about as much as a `smoothstep`; `screen` and colours
