@@ -43,6 +43,8 @@ from the Software section of [dmdos.net](https://dmdos.net/).
    click **Next**. The installer lists the WiFi networks the board can
    see: pick yours, type its password and click **Connect**. Once the
    board is on, **Visit device** opens the web app. That's it.
+   (OpenDMD joins 2.4 GHz networks that are open or take one password,
+   WPA2 or WPA3; not "enterprise" networks that ask for a username too.)
 
     No GIFs on your card yet? [Set up a card](card-setup.md) from the
     DMDoS GIF pack, in your browser.

@@ -13,7 +13,7 @@
 //! corruption it was written for (CLAUDE.md, Gotchas: "No `std::sync::mpsc`
 //! at all" — which turned out to be register corruption, not the heap's):
 //! the start and end of every HTTP handler, of every streamed download and
-//! upload, around every Follow RePlayOS poll (the `esp_http_client`'s whole
+//! upload, around every Follow RePlayOS poll (the connection's whole
 //! life), once a second on the network worker, and in the heartbeat. A
 //! corrupt heap prints IDF's own report (the block and what is wrong with
 //! it), then one line naming the site, then aborts — so the backtrace is
