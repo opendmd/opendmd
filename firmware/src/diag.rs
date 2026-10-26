@@ -50,6 +50,7 @@ mod on {
                     c"\nDIAG: heap corrupt, found at %s\n".as_ptr(),
                     name.as_ptr(),
                 );
+                crate::restarts::diag(site);
                 esp_idf_sys::abort();
             }
         }
