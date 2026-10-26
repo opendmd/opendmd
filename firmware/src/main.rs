@@ -337,7 +337,7 @@ fn main() -> Result<()> {
     panel.set_max_brightness(safe.ceiling(settings.max_brightness));
     panel.set_brightness(settings.brightness);
     panel.set_display(settings.look, settings.glow);
-    panel.set_sync(settings.panel_sync);
+    panel.set_sync(settings.panel_sync, settings.panel_split);
     clock::set_timezone(&settings.tz, &settings.tz_name);
     // The live clock (`@clock`) reads local time from here.
     opendmd_core::synth::set_wall_clock(Some(clock::wall_now));
@@ -829,7 +829,7 @@ fn main() -> Result<()> {
                             // The tint and the glow: the panel repainted
                             // at once if what it shows no longer matches
                             // (a dark panel is repainted when it lights).
-                            panel.set_sync(settings.panel_sync);
+                            panel.set_sync(settings.panel_sync, settings.panel_split);
                             if panel.set_display(settings.look, settings.glow) && !sched.off() {
                                 repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
                             }
@@ -860,7 +860,7 @@ fn main() -> Result<()> {
                                 );
                             }
                             log::info!(
-                                "config applied (reindex={needs_reindex}): brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}', panel_sync={}",
+                                "config applied (reindex={needs_reindex}): brightness={}, look={}, glow={}, dwell={}..{}s, shuffle={}, platforms='{}', set='{}', transition={}, attract='{}', panel_sync={} (split {})",
                                 settings.brightness,
                                 settings.look.name(),
                                 settings.glow.name(),
@@ -871,7 +871,8 @@ fn main() -> Result<()> {
                                 settings.set,
                                 settings.transition,
                                 settings.attract,
-                                settings.panel_sync
+                                settings.panel_sync,
+                                settings.panel_split
                             );
                             let outcome = if let Some(built) = prebuilt {
                                 // Built above, before the save.

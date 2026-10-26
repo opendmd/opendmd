@@ -62,6 +62,11 @@ impl Clock {
         n * c + r.pos
     }
 
+    /// The clock (µs, wrapping) at running scan time `u`.
+    pub fn at(&self, u: u32) -> u32 {
+        self.first.at.wrapping_add(u.wrapping_sub(self.first.pos))
+    }
+
     /// Where pair `k`'s slot in refresh `n` starts.
     fn slot(&self, n: u32, k: u32) -> u32 {
         n * self.cycle() + k * self.row_us
@@ -169,6 +174,32 @@ impl Pacer {
         self.target
     }
 
+    /// The same blit's next refresh: for the bottom half of a frame whose
+    /// top half this pacer placed (the panel lights rows `r` and `r + 16`
+    /// together, so a frame shown whole changes the time each row is lit
+    /// by a jump of most of a refresh at row 16; the bottom a refresh
+    /// later makes it rise smoothly down all 32 rows).
+    pub fn next(&self) -> Pacer {
+        Pacer {
+            target: self.target + 1,
+            ..*self
+        }
+    }
+
+    /// The clock (µs, wrapping) when pair `k` may be written: the scan
+    /// leaving its slot in the refresh before the target.
+    pub fn free_at(&self, k: usize) -> u32 {
+        let u = match self.target {
+            0 => self.clock.first.pos,
+            t => self.clock.slot(t - 1, k as u32) + self.clock.row_us + self.margin,
+        };
+        self.clock.at(u)
+    }
+
+    pub fn clock(&self) -> Clock {
+        self.clock
+    }
+
     /// The longest one pair's write may take.
     pub fn write_us(&self) -> u32 {
         self.write_us
@@ -199,6 +230,24 @@ impl Judge {
             straddled: false,
             in_pair: false,
         }
+    }
+
+    /// A judge counting refreshes on `clock` (a pacer's), so two passes of
+    /// one frame can be compared.
+    pub fn with_clock(clock: Clock) -> Self {
+        Judge {
+            clock: Some(clock),
+            row_us: clock.row_us,
+            refresh: None,
+            straddled: false,
+            in_pair: false,
+        }
+    }
+
+    /// The refresh that first showed every pair judged, counted on the
+    /// clock (`None`: nothing judged yet).
+    pub fn refresh(&self) -> Option<u32> {
+        self.refresh
     }
 
     /// Pair `pair` was written between readings `before` and `after`.
@@ -343,6 +392,41 @@ mod tests {
         };
         let (p, _) = Pacer::plan(ROW, late, 0xFFFF, 150, 30, u32::MAX).unwrap();
         assert_eq!(p.target(), 2);
+    }
+
+    #[test]
+    fn the_bottom_pass_lands_exactly_one_refresh_after_the_top() {
+        for p0 in (0..CYCLE).step_by(41) {
+            let read = |t: u32| Reading {
+                pos: (p0 + t) % CYCLE,
+                at: t,
+            };
+            let (top, _) = Pacer::plan(ROW, read(0), 0xFFFF, 150, 30, u32::MAX).unwrap();
+            let bottom = top.next();
+            let (mut jt, mut jb) = (
+                Judge::with_clock(top.clock()),
+                Judge::with_clock(top.clock()),
+            );
+            let mut t = 0;
+            for k in 0..PAIRS {
+                t += top.wait(k, read(t));
+                let b = read(t);
+                t += 74;
+                jt.pair(k, b, read(t));
+            }
+            // A sleep until shortly before the last pair frees, as the
+            // firmware does, then the paced bottom writes.
+            t = t.max(bottom.free_at(PAIRS - 1).saturating_sub(2000));
+            for k in 0..PAIRS {
+                t += bottom.wait(k, read(t));
+                let b = read(t);
+                t += 74;
+                jb.pair(k, b, read(t));
+            }
+            assert!(!jt.straddled && !jb.straddled, "from {p0}");
+            assert_eq!(jb.refresh(), jt.refresh().map(|r| r + 1), "from {p0}");
+            assert_eq!(jt.refresh(), Some(top.target()));
+        }
     }
 
     #[test]

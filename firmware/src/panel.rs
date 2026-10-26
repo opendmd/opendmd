@@ -123,6 +123,9 @@ pub struct Panel {
 #[derive(Default, Clone, Copy, Debug)]
 struct ScanSync {
     on: bool,
+    /// The bottom half a refresh after the top (`panel_split`; only with
+    /// `on`): see [`Pacer::next`].
+    split: bool,
     row_us: u32,
 }
 
@@ -143,13 +146,18 @@ mod counters {
     pub static WAIT_US: AtomicU32 = AtomicU32::new(0);
     pub static WAIT_MAX_US: AtomicU32 = AtomicU32::new(0);
     pub static GAVE_UP: AtomicU32 = AtomicU32::new(0);
+    pub static SPLIT: AtomicU32 = AtomicU32::new(0);
+    pub static SPLIT_OK: AtomicU32 = AtomicU32::new(0);
+    pub static UNSPLIT: AtomicU32 = AtomicU32::new(0);
+    pub static SPLIT_ON: AtomicU32 = AtomicU32::new(0);
     pub static ROW_US: AtomicU32 = AtomicU32::new(0);
     pub static SYNC_ON: AtomicU32 = AtomicU32::new(0);
 }
 
 /// `/api/status` `scan`: `null` when the scan position cannot be read,
 /// else `{"row_us","sync","blits","torn","in_pair","waited","wait_us",
-/// "wait_max_us","gave_up"}` (counts since boot).
+/// "wait_max_us","gave_up","split_on","split","split_ok","unsplit"}`
+/// (counts since boot).
 pub fn scan_json() -> String {
     use counters::*;
     use std::sync::atomic::Ordering::Relaxed;
@@ -158,7 +166,7 @@ pub fn scan_json() -> String {
         return "null".into();
     }
     format!(
-        r#"{{"row_us":{row_us},"sync":{},"blits":{},"torn":{},"in_pair":{},"waited":{},"wait_us":{},"wait_max_us":{},"gave_up":{}}}"#,
+        r#"{{"row_us":{row_us},"sync":{},"blits":{},"torn":{},"in_pair":{},"waited":{},"wait_us":{},"wait_max_us":{},"gave_up":{},"split_on":{},"split":{},"split_ok":{},"unsplit":{}}}"#,
         SYNC_ON.load(Relaxed) != 0,
         BLITS.load(Relaxed),
         TORN.load(Relaxed),
@@ -167,6 +175,10 @@ pub fn scan_json() -> String {
         WAIT_US.load(Relaxed),
         WAIT_MAX_US.load(Relaxed),
         GAVE_UP.load(Relaxed),
+        SPLIT_ON.load(Relaxed) != 0,
+        SPLIT.load(Relaxed),
+        SPLIT_OK.load(Relaxed),
+        UNSPLIT.load(Relaxed),
     )
 }
 
@@ -186,6 +198,10 @@ const SYNC_SPIN_US: u32 = 1_500;
 /// No pair waits longer than this (two refreshes and then some: only if
 /// the scan reading went wrong).
 const SYNC_GIVE_UP_US: u32 = 25_000;
+/// A split frame's bottom pass sleeps until this long before its last
+/// pair may be written (the pairs before it are free by then; their
+/// deadlines are most of a refresh away), then paces the rest.
+const SPLIT_LEAD_US: u32 = 3_000;
 
 /// What the glow cost since the last heartbeat (`Panel::glow_summary`).
 #[derive(Default, Clone, Copy, Debug)]
@@ -263,6 +279,7 @@ impl Panel {
             glow_stats: GlowStats::default(),
             sync: ScanSync {
                 on: false,
+                split: true,
                 // SAFETY: the shim's set-up and a value it set; after init.
                 row_us: unsafe {
                     hub75::hub75_scan_init();
@@ -505,8 +522,10 @@ impl Panel {
     }
 
     /// Refresh-synchronised blits on or off (`/api/config` `panel_sync`).
-    pub fn set_sync(&mut self, on: bool) {
+    pub fn set_sync(&mut self, on: bool, split: bool) {
         self.sync.on = on;
+        self.sync.split = split;
+        counters::SPLIT_ON.store(u32::from(on && split), Relaxed);
         counters::SYNC_ON.store(u32::from(on), std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -681,70 +700,87 @@ fn push(bytes: &[u8], map: &DirtyMap, look: Look, sync: &mut ScanSync, budget_us
         return 0;
     }
     const HALF: usize = HEIGHT / 2;
-    let pairs = (rows & 0xFFFF) | (rows >> HALF);
-    let row_of = |y: usize| &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
+    let (top_rows, bottom_rows) = (rows & 0xFFFF, rows >> HALF);
+    let pairs = top_rows | bottom_rows;
     let tinted = look != Look::Colour;
-    let full_row = |y: usize| rows & (1 << y) != 0 && map.row_spans(y).eq([(0, WIDTH)]);
     let scan = sync.row_us > 0;
     let pacer = if scan && sync.on && budget_us > 0 {
         pace_plan(pairs, tinted, sync.row_us, budget_us)
     } else {
         None
     };
+    // Split: the top half now (for refresh T), the bottom half paced to
+    // T + 1 — if that still ends inside the budget.
+    let bottom = pacer
+        .filter(|_| sync.split && bottom_rows != 0)
+        .and_then(|top| {
+            let next = top.next();
+            let last = 31 - bottom_rows.leading_zeros() as usize;
+            let ends = next.free_at(last).wrapping_sub(now_us());
+            let fits = ends < budget_us.saturating_sub(PAIR_WRITE_US);
+            if !fits {
+                counters::UNSPLIT.fetch_add(1, Relaxed);
+            }
+            fits.then_some(next)
+        });
+    let mut judge = pacer.map_or(Judge::new(sync.row_us), |p| Judge::with_clock(p.clock()));
     let mut waited = 0;
-    let mut judge = Judge::new(sync.row_us);
-    let (mut a, mut b): (Row, Row) = ([0; WIDTH * 3], [0; WIDTH * 3]);
     let mut pushed = 0;
-    for p in 0..HALF {
-        if pairs & (1 << p) == 0 {
-            continue;
-        }
+    // The first pass: every dirty pair, or only the top rows when split.
+    let first = if bottom.is_some() { top_rows } else { pairs };
+    for p in (0..HALF).filter(|p| first & (1 << p) != 0) {
         if let Some(pacer) = &pacer {
             waited += pace(pacer, p);
         }
         let before = if scan { read_scan() } else { None };
-        let (top, bottom) = (p, p + HALF);
-        if full_row(top) && full_row(bottom) {
-            let (t, b) = if tinted {
-                tint_into(&mut a, row_of(top), 0, WIDTH, look);
-                tint_into(&mut b, row_of(bottom), 0, WIDTH, look);
-                (a.as_slice(), b.as_slice())
-            } else {
-                (row_of(top), row_of(bottom))
-            };
-            // SAFETY: two full rows (WIDTH * 3 bytes each), p < HEIGHT / 2;
-            // read only.
-            unsafe { hub75::hub75_draw_row_pair(t.as_ptr(), b.as_ptr(), p as u16) };
-            pushed += 2 * WIDTH as u32;
+        pushed += if bottom.is_some() {
+            write_row(bytes, map, p, look)
         } else {
-            for y in [top, bottom] {
-                if rows & (1 << y) == 0 {
-                    continue;
-                }
-                let row = row_of(y);
-                for (x0, x1) in map.row_spans(y) {
-                    let src = if tinted {
-                        tint_into(&mut a, row, x0, x1, look);
-                        a.as_slice()
-                    } else {
-                        row
-                    };
-                    // SAFETY: `src` is one full row (WIDTH * 3 bytes) and
-                    // x0 < x1 <= WIDTH, so the shim reads only inside it;
-                    // it only reads. y < HEIGHT.
-                    unsafe { hub75::hub75_draw_span(src.as_ptr(), y as u16, x0 as u16, x1 as u16) };
-                    pushed += (x1 - x0) as u32;
-                }
-            }
-        }
+            write_pair(bytes, map, p, look)
+        };
         if let (Some(before), Some(after)) = (before, scan.then(read_scan).flatten()) {
             judge.pair(p, before, after);
         }
     }
+    let mut torn = judge.straddled;
+    let mut in_pair = judge.in_pair;
+    // The second pass: the bottom rows, a refresh after the top's.
+    if let Some(next) = bottom {
+        let t = now_us();
+        let first_bottom = bottom_rows.trailing_zeros() as usize;
+        let last = 31 - bottom_rows.leading_zeros() as usize;
+        let lead = next.free_at(last).wrapping_sub(SPLIT_LEAD_US);
+        let from = if lead.wrapping_sub(next.free_at(first_bottom)) < u32::MAX / 2 {
+            lead
+        } else {
+            next.free_at(first_bottom)
+        };
+        let asleep = from.wrapping_sub(now_us());
+        if (1000..u32::MAX / 2).contains(&asleep) {
+            // SAFETY: a FreeRTOS delay of the calling task (1 ms ticks).
+            unsafe { esp_idf_sys::vTaskDelay(asleep / 1000) };
+        }
+        let mut second = Judge::with_clock(next.clock());
+        for p in (0..HALF).filter(|p| bottom_rows & (1 << p) != 0) {
+            pace(&next, p);
+            let before = read_scan();
+            pushed += write_row(bytes, map, p + HALF, look);
+            if let (Some(before), Some(after)) = (before, read_scan()) {
+                second.pair(p, before, after);
+            }
+        }
+        waited += now_us().wrapping_sub(t);
+        let top_refresh = judge.refresh().unwrap_or(next.target() - 1);
+        let ok = !second.straddled && second.refresh() == Some(top_refresh + 1);
+        torn |= second.straddled;
+        in_pair |= second.in_pair;
+        counters::SPLIT.fetch_add(1, Relaxed);
+        counters::SPLIT_OK.fetch_add(u32::from(ok && !torn), Relaxed);
+    }
     if scan {
         counters::BLITS.fetch_add(1, Relaxed);
-        counters::TORN.fetch_add(u32::from(judge.straddled), Relaxed);
-        counters::IN_PAIR.fetch_add(u32::from(judge.in_pair), Relaxed);
+        counters::TORN.fetch_add(u32::from(torn), Relaxed);
+        counters::IN_PAIR.fetch_add(u32::from(in_pair), Relaxed);
         if waited > 0 {
             counters::WAITED.fetch_add(1, Relaxed);
             counters::WAIT_US.fetch_add(waited, Relaxed);
@@ -756,6 +792,55 @@ fn push(bytes: &[u8], map: &DirtyMap, look: Look, sync: &mut ScanSync, budget_us
     #[cfg(feature = "probe")]
     crate::state::PIXELS_PUSHED.fetch_add(pushed, std::sync::atomic::Ordering::Relaxed);
     pushed
+}
+
+/// The dirty pixels of row `y` alone (its half of the pair's DMA words),
+/// as spans, tinted. Returns the pixels pushed.
+fn write_row(bytes: &[u8], map: &DirtyMap, y: usize, look: Look) -> u32 {
+    if map.row_mask() & (1 << y) == 0 {
+        return 0;
+    }
+    let row = &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
+    let mut a: Row = [0; WIDTH * 3];
+    let mut pushed = 0;
+    for (x0, x1) in map.row_spans(y) {
+        let src = if look != Look::Colour {
+            tint_into(&mut a, row, x0, x1, look);
+            a.as_slice()
+        } else {
+            row
+        };
+        // SAFETY: `src` is one full row (WIDTH * 3 bytes) and x0 < x1 <=
+        // WIDTH, so the shim reads only inside it; it only reads. y < HEIGHT.
+        unsafe { hub75::hub75_draw_span(src.as_ptr(), y as u16, x0 as u16, x1 as u16) };
+        pushed += (x1 - x0) as u32;
+    }
+    pushed
+}
+
+/// Row pair `p` (rows p and p + 16): through `hub75_draw_row_pair` when
+/// both are dirty end to end (one pass over the shared words), else each
+/// row's spans. Returns the pixels pushed.
+fn write_pair(bytes: &[u8], map: &DirtyMap, p: usize, look: Look) -> u32 {
+    const HALF: usize = HEIGHT / 2;
+    let rows = map.row_mask();
+    let full = |y: usize| rows & (1 << y) != 0 && map.row_spans(y).eq([(0, WIDTH)]);
+    if !(full(p) && full(p + HALF)) {
+        return write_row(bytes, map, p, look) + write_row(bytes, map, p + HALF, look);
+    }
+    let row_of = |y: usize| &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
+    let (mut a, mut b): (Row, Row) = ([0; WIDTH * 3], [0; WIDTH * 3]);
+    let (t, b) = if look != Look::Colour {
+        tint_into(&mut a, row_of(p), 0, WIDTH, look);
+        tint_into(&mut b, row_of(p + HALF), 0, WIDTH, look);
+        (a.as_slice(), b.as_slice())
+    } else {
+        (row_of(p), row_of(p + HALF))
+    };
+    // SAFETY: two full rows (WIDTH * 3 bytes each), p < HEIGHT / 2; read
+    // only.
+    unsafe { hub75::hub75_draw_row_pair(t.as_ptr(), b.as_ptr(), p as u16) };
+    2 * WIDTH as u32
 }
 
 /// The scan position (µs of scan time into the refresh) and the clock, if
