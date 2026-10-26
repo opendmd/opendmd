@@ -39,17 +39,16 @@ static FILES: [AtomicPtr<sys::FIL>; SLOTS] = [const { AtomicPtr::new(std::ptr::n
 static VFS_UP: AtomicBool = AtomicBool::new(false);
 /// A rebuild is wanted (no index, the API changed `/gifs`, too many misses).
 static DIRTY: AtomicBool = AtomicBool::new(true);
-/// Uptime (s) of the last change through the API, and of the last build.
-static TOUCHED_S: AtomicU32 = AtomicU32::new(0);
-static BUILT_S: AtomicU32 = AtomicU32::new(0);
+/// Uptime (ms, wrapping) of the last change through the API, and of the
+/// last build's start; 0 = never.
+static TOUCHED_MS: AtomicU32 = AtomicU32::new(0);
+static BUILT_MS: AtomicU32 = AtomicU32::new(0);
 static HITS: AtomicU32 = AtomicU32::new(0);
 static MISSES: AtomicU32 = AtomicU32::new(0);
 static RECORDS: AtomicU32 = AtomicU32::new(0);
 static BUILDS: AtomicU32 = AtomicU32::new(0);
-static BUILD_MS: AtomicU32 = AtomicU32::new(0);
-/// A build's thread is up (one at a time); its stack never used, last build.
+/// A build's task is up (one at a time).
 static BUILDING: AtomicBool = AtomicBool::new(false);
-static BUILD_STACK_FREE: AtomicU32 = AtomicU32::new(0);
 /// The last build failed: the next waits `FATIDX_MIN_GAP_S` even for a
 /// missing index (a failing card must not be walked in a loop).
 static FAILED: AtomicBool = AtomicBool::new(false);
@@ -64,10 +63,23 @@ struct Loaded {
 static LOADED: Mutex<Option<Option<Loaded>>> = Mutex::new(None);
 static FS: AtomicPtr<sys::FATFS> = AtomicPtr::new(std::ptr::null_mut());
 
-fn uptime_s() -> u32 {
+fn uptime_ms() -> u32 {
     // SAFETY: a plain IDF call.
-    (unsafe { sys::esp_timer_get_time() } / 1_000_000) as u32
+    ((unsafe { sys::esp_timer_get_time() } / 1000) as u32).max(1)
 }
+
+/// Milliseconds from `then` to `now` (wrapping uptime).
+fn since(now: u32, then: u32) -> u32 {
+    now.wrapping_sub(then)
+}
+
+// The FIL this module fills, and the window it reads, must be FatFs's own
+// arrays of 512 B (`CONFIG_WL_SECTOR_SIZE_512`, no dynamic buffers). With
+// `CONFIG_FATFS_USE_DYN_BUFFERS` (an option on IDF 6) `buf` and `win` are
+// pointers f_open/f_mount allocate: a zeroed FIL would have none. That
+// build must fail here, not read through a null buffer.
+const _: fn(&sys::FIL) -> &[u8; SS] = |f| &f.buf;
+const _: fn(&sys::FATFS) -> &[u8; SS] = |f| &f.win;
 
 fn errno(code: u32) -> io::Error {
     io::Error::from_raw_os_error(code as i32)
@@ -281,10 +293,19 @@ pub fn indexed(full: &str) -> Option<io::Result<File>> {
         }
         let l = g.as_mut().unwrap().as_mut()?;
         let b = (h >> 24) as usize;
-        let (lo, hi) = (l.fanout[b], l.fanout[b + 1].min(l.fanout[b] + 128));
+        // A bucket holds ~1/256 of the records (~40 on a stock card); past
+        // 256 (2 KB) the rest of it is not looked at, and those names open
+        // by path.
+        let (lo, hi) = (l.fanout[b], l.fanout[b + 1].min(l.fanout[b] + 256));
         let mut recs = vec![0u8; (hi - lo) as usize * 8];
         if let Err(e) = l.file.seek(SeekFrom::Start(fatdir::RECORDS_AT + lo as u64 * 8)).and_then(|_| l.file.read_exact(&mut recs)) {
-            return Some(Err(e));
+            if crate::sdhealth::is_card_error(&e) {
+                return Some(Err(e));
+            }
+            // Anything else (a short or damaged index): drop it, open by path.
+            *g = Some(None);
+            DIRTY.store(true, Relaxed);
+            return None;
         }
         for r in recs.chunks_exact(8).filter(|r| r[..4] == h.to_le_bytes()).take(cands.len()) {
             let loc = u32::from_le_bytes(r[4..].try_into().unwrap());
@@ -303,7 +324,10 @@ pub fn indexed(full: &str) -> Option<io::Result<File>> {
             Err(e) => return Some(Err(e)),
         }
     }
-    if MISSES.fetch_add(1, Relaxed) + 1 >= config::FATIDX_STALE_REBUILD {
+    // Only a record that no longer verifies says the index is stale: a name
+    // it never had (an 8.3-only or non-ASCII name, a file added since) is
+    // just opened by path, and must not rebuild it every 10 min.
+    if nc > 0 && MISSES.fetch_add(1, Relaxed) + 1 >= config::FATIDX_STALE_REBUILD {
         DIRTY.store(true, Relaxed);
     }
     None
@@ -313,7 +337,7 @@ pub fn indexed(full: &str) -> Option<io::Result<File>> {
 fn open_at(loc: u32, prev: u32, name: &[u8]) -> io::Result<Option<File>> {
     let (fs, geo) = volume()?;
     let (rel, slot) = (loc >> 4, (loc & 15) as usize);
-    if rel >= (geo.n_fatent - 2) * geo.csize {
+    if rel as u64 >= (geo.n_fatent as u64 - 2) * geo.csize as u64 {
         return Ok(None);
     }
     let mut buf = vec![0u8; 2 * SS];
@@ -381,13 +405,29 @@ fn load() -> io::Result<Loaded> {
     let mut extras = Vec::with_capacity(h.extras as usize);
     file.seek(SeekFrom::Start(fatdir::RECORDS_AT + h.count as u64 * 8))?;
     let mut e = [0u8; 8];
+    let pair = |e: &[u8; 8]| (u32::from_le_bytes(e[..4].try_into().unwrap()), u32::from_le_bytes(e[4..].try_into().unwrap()));
     for _ in 0..h.extras.min(fatdir::MAX_EXTRAS as u32) {
         file.read_exact(&mut e)?;
-        extras.push((u32::from_le_bytes(e[..4].try_into().unwrap()), u32::from_le_bytes(e[4..].try_into().unwrap())));
+        extras.push(pair(&e));
+    }
+    // The directories it was built over must be the ones there now: a
+    // directory renamed or replaced on a PC leaves its entries where they
+    // were, and a record would then name a file in another directory.
+    let mut dirs = Vec::with_capacity(h.dirs as usize);
+    for _ in 0..h.dirs.min(1024) {
+        file.read_exact(&mut e)?;
+        dirs.push(pair(&e));
+    }
+    let now: Vec<(u32, u32)> = gif_dirs()?.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
+    if !fatdir::dirs_match(&dirs, &now) {
+        DIRTY.store(true, Relaxed);
+        return Err(errno(sys::ESTALE));
     }
     RECORDS.store(h.count, Relaxed);
     MISSES.store(0, Relaxed);
-    if TOUCHED_S.load(Relaxed) <= BUILT_S.load(Relaxed) {
+    let (t, b) = (TOUCHED_MS.load(Relaxed), BUILT_MS.load(Relaxed));
+    // Current unless the API changed something after the build started.
+    if t == 0 || (b != 0 && since(b, t) as i32 > 0) {
         DIRTY.store(false, Relaxed);
     }
     Ok(Loaded { file, fanout, extras })
@@ -399,9 +439,18 @@ fn load() -> io::Result<Loaded> {
 /// are quiet. Only `/gifs` is indexed.
 pub fn touched(path: &str) {
     if path.strip_prefix(config::SD_MOUNT).unwrap_or(path).starts_with("/gifs/") {
-        TOUCHED_S.store(uptime_s().max(1), Relaxed);
+        TOUCHED_MS.store(uptime_ms(), Relaxed);
         DIRTY.store(true, Relaxed);
     }
+}
+
+/// A directory under `/gifs` is going or coming: stop using the index at
+/// once (its records may now point into another directory) and rebuild
+/// when things are quiet.
+pub fn dir_changed() {
+    TOUCHED_MS.store(uptime_ms(), Relaxed);
+    DIRTY.store(true, Relaxed);
+    *LOADED.lock().unwrap() = Some(None);
 }
 
 /// The network worker's turn: rebuild when wanted, quiet and affordable.
@@ -420,14 +469,16 @@ pub fn tick() {
     if !DIRTY.load(Relaxed) {
         return;
     }
-    let now = uptime_s();
-    let quiet = now.saturating_sub(TOUCHED_S.load(Relaxed)) >= config::FATIDX_QUIET_S;
+    let now = uptime_ms();
+    let touched = TOUCHED_MS.load(Relaxed);
+    let quiet = touched == 0 || since(now, touched) >= config::FATIDX_QUIET_S * 1000;
     // A missing index is built at once; a stale one waits its turn (a card
     // whose names cannot all be indexed must not rebuild in a loop).
-    let spaced = (missing && !FAILED.load(Relaxed)) || now.saturating_sub(BUILT_S.load(Relaxed)) >= config::FATIDX_MIN_GAP_S;
+    let built = BUILT_MS.load(Relaxed);
+    let spaced = (missing && !FAILED.load(Relaxed)) || built == 0 || since(now, built) >= config::FATIDX_MIN_GAP_S * 1000;
     if !quiet
         || !spaced
-        || now < config::FATIDX_BOOT_DELAY_S
+        || now < config::FATIDX_BOOT_DELAY_S * 1000
         || crate::cache_builder::task_up()
         || crate::cache_builder::transfer_in_flight()
         || (crate::state::free_heap() as usize) < config::FATIDX_BUILD_HEAP
@@ -438,7 +489,7 @@ pub fn tick() {
     if BUILDING.swap(true, Relaxed) {
         return;
     }
-    BUILT_S.store(now, Relaxed);
+    BUILT_MS.store(now, Relaxed);
     // Its own short-lived task (CPU0, the cache builder's priority): the
     // walk's FatFs/SD calls are deep, and the network worker's stack is
     // sized for its own work; and the worker keeps polling meanwhile.
@@ -453,7 +504,6 @@ pub fn tick() {
     }
     .set();
     let spawned = std::thread::Builder::new().stack_size(config::FATIDX_STACK).spawn(|| {
-        let t = std::time::Instant::now();
         let r = build();
         FAILED.store(r.is_err(), Relaxed);
         if let Err(e) = r {
@@ -461,10 +511,7 @@ pub fn tick() {
             // Walked again only after the gap.
             DIRTY.store(true, Relaxed);
         }
-        BUILD_MS.store(t.elapsed().as_millis() as u32, Relaxed);
         BUILDS.fetch_add(1, Relaxed);
-        // SAFETY: the calling task's own high-water mark.
-        BUILD_STACK_FREE.store(unsafe { sys::uxTaskGetStackHighWaterMark(std::ptr::null_mut()) }, Relaxed);
         BUILDING.store(false, Relaxed);
     });
     let _ = previous.unwrap_or_default().set();
@@ -473,17 +520,26 @@ pub fn tick() {
     }
 }
 
-fn build() -> io::Result<()> {
-    let (fs, geo) = volume()?;
-    // Cleared first: a change during the walks marks it again.
-    DIRTY.store(false, Relaxed);
+/// Every `/gifs/<dir>`: its card path and first cluster.
+fn gif_dirs() -> io::Result<Vec<(String, u32)>> {
     let mut dirs = Vec::new();
     for e in fs::read_dir(format!("{}/gifs", config::SD_MOUNT))? {
         let e = e?;
         if e.file_type()?.is_dir() {
-            dirs.push(format!("/gifs/{}", e.file_name().to_string_lossy()));
+            let dir = format!("/gifs/{}", e.file_name().to_string_lossy());
+            let first = open_dir(&dir)?.1;
+            dirs.push((dir, first));
         }
     }
+    Ok(dirs)
+}
+
+fn build() -> io::Result<()> {
+    let (fs, geo) = volume()?;
+    // Cleared first: a change during the walks marks it again.
+    DIRTY.store(false, Relaxed);
+    let dirs = gif_dirs()?;
+    let listed: Vec<(u32, u32)> = dirs.iter().map(|(d, c)| (fatdir::hash(d.as_bytes()), *c)).collect();
     let _ = fs::create_dir(config::CACHE_ROOT);
     let mut scratch = vec![0u8; 8 * SS];
     let mut read = |lba: u32, buf: &mut [u8]| -> io::Result<()> {
@@ -496,8 +552,8 @@ fn build() -> io::Result<()> {
         Ok(())
     };
     let mut walk_all = |emit: &mut dyn FnMut(u32, u32, Option<u32>)| -> io::Result<()> {
-        for dir in &dirs {
-            let (_, first) = open_dir(dir)?;
+        for (dir, first) in &dirs {
+            let first = *first;
             let seed = fatdir::hash_more(fatdir::hash(dir.as_bytes()), b"/");
             fatdir::walk(&geo, first, &mut read, &mut scratch, &mut |f| {
                 emit(fatdir::hash_more(seed, f.name), f.loc, f.prev_rel);
@@ -512,7 +568,7 @@ fn build() -> io::Result<()> {
     let n = crate::state::largest_free_block().saturating_sub(16 * 1024).clamp(4 * 1024, config::FATIDX_GROUP);
     let mut group = vec![0u8; n];
     let mut out = BufWriter::with_capacity(1024, File::create(NEW)?);
-    fatdir::build_index(&mut |b| out.write_all(b), &geo, &mut walk_all, &mut group)?;
+    fatdir::build_index(&mut |b| out.write_all(b), &geo, &mut walk_all, &listed, &mut group)?;
     out.flush()?;
     drop(out);
     // Nothing reopens the old index between its removal and the rename.
@@ -525,13 +581,11 @@ fn build() -> io::Result<()> {
 /// `/api/status`'s `"sd"` part: `,"fat_index":{...}`.
 pub fn status_json() -> String {
     format!(
-        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"build_ms":{},"stack_free":{},"stale":{}}}"#,
+        r#","fat_index":{{"files":{},"hits":{},"misses":{},"builds":{},"stale":{}}}"#,
         RECORDS.load(Relaxed),
         HITS.load(Relaxed),
         MISSES.load(Relaxed),
         BUILDS.load(Relaxed),
-        BUILD_MS.load(Relaxed),
-        BUILD_STACK_FREE.load(Relaxed),
         DIRTY.load(Relaxed),
     )
 }

@@ -20,7 +20,7 @@ use std::io;
 pub const SS: usize = 512;
 /// The index file's magic and version.
 pub const MAGIC: &[u8; 4] = b"FIDX";
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 /// Header bytes, then a `u32` fanout of [`FANOUT`] entries.
 pub const HEADER: usize = 32;
 pub const FANOUT: usize = 257;
@@ -47,14 +47,17 @@ impl Geometry {
     }
 }
 
-/// FNV-1a over a card path: the index key.
+/// FNV-1a over a card path, ASCII-lowercased (FatFs matches names without
+/// regard to ASCII case, so the index does too): the index key.
 pub fn hash(path: &[u8]) -> u32 {
     hash_more(0x811c_9dc5, path)
 }
 
 /// [`hash`] continued over more bytes (a directory, then a name).
 pub fn hash_more(h: u32, bytes: &[u8]) -> u32 {
-    bytes.iter().fold(h, |h, &b| (h ^ b as u32).wrapping_mul(0x0100_0193))
+    bytes
+        .iter()
+        .fold(h, |h, &b| (h ^ b.to_ascii_lowercase() as u32).wrapping_mul(0x0100_0193))
 }
 
 /// A record's location word: the sector relative to the data region, and
@@ -85,9 +88,12 @@ pub enum Verify {
     NeedPrev,
 }
 
-/// Is slot `slot` of `cur` the live entry of a file called `name`? `prev`
-/// is the directory sector before `cur` (needed only when the long name
-/// starts there: [`Verify::NeedPrev`]).
+/// Is slot `slot` of `cur` the live entry of a file called `name` (ASCII
+/// case ignored, as FatFs's own lookup does)? `prev` is the directory
+/// sector before `cur` (needed only when the long name starts there:
+/// [`Verify::NeedPrev`]). This proves the name at that slot, not which
+/// directory the slot belongs to: the index's directory list
+/// ([`dirs_match`]) covers that.
 pub fn verify(cur: &[u8], prev: Option<&[u8]>, slot: usize, name: &[u8]) -> Verify {
     let e = &cur[slot * 32..][..32];
     if !is_file(e) {
@@ -121,11 +127,13 @@ pub fn verify(cur: &[u8], prev: Option<&[u8]>, slot: usize, name: &[u8]) -> Veri
         for (j, &o) in LFN_OFS.iter().enumerate() {
             let pos = (k - 1) * 13 + j;
             let want = match pos.cmp(&name.len()) {
-                std::cmp::Ordering::Less => name[pos] as u16,
+                std::cmp::Ordering::Less => name[pos].to_ascii_lowercase() as u16,
                 std::cmp::Ordering::Equal => 0,
                 std::cmp::Ordering::Greater => 0xFFFF,
             };
-            if u16::from_le_bytes([l[o], l[o + 1]]) != want {
+            let got = u16::from_le_bytes([l[o], l[o + 1]]);
+            let got = if got < 0x80 { (got as u8).to_ascii_lowercase() as u16 } else { got };
+            if got != want {
                 return Verify::Mismatch;
             }
         }
@@ -254,6 +262,9 @@ pub struct Header {
     pub extras: u32,
     pub n_fatent: u32,
     pub database: u32,
+    /// Directories indexed: `(hash of the card path, first cluster)`
+    /// pairs after the extras.
+    pub dirs: u32,
 }
 
 impl Header {
@@ -261,7 +272,7 @@ impl Header {
         let mut h = [0u8; HEADER];
         h[..4].copy_from_slice(MAGIC);
         h[4..6].copy_from_slice(&VERSION.to_le_bytes());
-        for (i, v) in [self.count, self.extras, self.n_fatent, self.database].iter().enumerate() {
+        for (i, v) in [self.count, self.extras, self.n_fatent, self.database, self.dirs].iter().enumerate() {
             h[8 + i * 4..12 + i * 4].copy_from_slice(&v.to_le_bytes());
         }
         h
@@ -272,7 +283,7 @@ impl Header {
             return None;
         }
         let w = |i: usize| u32::from_le_bytes(h[8 + i * 4..12 + i * 4].try_into().unwrap());
-        Some(Header { count: w(0), extras: w(1), n_fatent: w(2), database: w(3) })
+        Some(Header { count: w(0), extras: w(1), n_fatent: w(2), database: w(3), dirs: w(4) })
     }
 }
 
@@ -287,6 +298,7 @@ pub fn build_index(
     out: &mut dyn FnMut(&[u8]) -> io::Result<()>,
     geo: &Geometry,
     walk_all: &mut WalkAll,
+    dirs: &[(u32, u32)],
     group: &mut [u8],
 ) -> io::Result<(u32, u32)> {
     let mut fanout = [0u32; FANOUT];
@@ -300,7 +312,13 @@ pub fn build_index(
     for b in 0..256 {
         fanout[b + 1] += fanout[b];
     }
-    let h = Header { count: fanout[256], extras: extras.len() as u32, n_fatent: geo.n_fatent, database: geo.database };
+    let h = Header {
+        count: fanout[256],
+        extras: extras.len() as u32,
+        n_fatent: geo.n_fatent,
+        database: geo.database,
+        dirs: dirs.len() as u32,
+    };
     out(&h.encode())?;
     for v in fanout {
         out(&v.to_le_bytes())?;
@@ -331,11 +349,19 @@ pub fn build_index(
         }
         b0 = b1;
     }
-    for &(l, p) in &extras {
-        out(&l.to_le_bytes())?;
-        out(&p.to_le_bytes())?;
+    for &(a, b) in extras.iter().chain(dirs) {
+        out(&a.to_le_bytes())?;
+        out(&b.to_le_bytes())?;
     }
     Ok((h.count, walks))
+}
+
+/// Are the directories indexed (`(hash of the card path, first cluster)`)
+/// the ones on the card now? A directory renamed, replaced or added on a PC
+/// keeps its entries where they were, so [`verify`] alone would accept a
+/// record that now names a file in another directory.
+pub fn dirs_match(indexed: &[(u32, u32)], now: &[(u32, u32)]) -> bool {
+    indexed.len() == now.len() && now.iter().all(|d| indexed.contains(d))
 }
 
 #[cfg(test)]
@@ -392,7 +418,7 @@ mod tests {
         let name = "NES_Super_Mario_Bros_3_Title.gif";
         let (p, c) = place(name, b"NES_SU~1GIF", 5);
         assert_eq!(verify(&c, None, 5, name.as_bytes()), Verify::Ok { cluster: 7, size: 100, attr: 0x20 });
-        assert_eq!(verify(&c, None, 5, b"NES_Super_Mario_Bros_3_Title.GIF"), Verify::Mismatch);
+        assert_eq!(verify(&c, None, 5, b"NES_Super_Mario_Bros_4_Title.gif"), Verify::Mismatch);
         assert_eq!(verify(&c, None, 5, b"NES_Super_Mario_Bros_3_Titl.gif"), Verify::Mismatch);
         let (p2, c2) = place(name, b"NES_SU~1GIF", 1);
         assert_eq!(verify(&c2, None, 1, name.as_bytes()), Verify::NeedPrev);
@@ -431,11 +457,11 @@ mod tests {
             out.extend_from_slice(b);
             Ok(())
         };
-        let (count, walks) = build_index(&mut put, &geo, &mut walk, &mut group).unwrap();
+        let (count, walks) = build_index(&mut put, &geo, &mut walk, &[(9, 10)], &mut group).unwrap();
         assert_eq!(count, 3000);
         assert!(walks >= 7, "{walks}");
         let h = Header::decode(&out).unwrap();
-        assert_eq!((h.count, h.extras, h.database), (3000, 1, 1000));
+        assert_eq!((h.count, h.extras, h.database, h.dirs), (3000, 1, 1000, 1));
         let fan = |b: usize| u32::from_le_bytes(out[HEADER + b * 4..][..4].try_into().unwrap());
         for i in 0..3000u32 {
             let k = key(i);
@@ -446,7 +472,67 @@ mod tests {
             });
             assert!(found, "{i}");
         }
-        assert_eq!(out.len(), RECORDS_AT as usize + 3000 * 8 + 8);
-        assert_eq!(out[out.len() - 8..], [7, 0, 0, 0, 6, 0, 0, 0]);
+        assert_eq!(out.len(), RECORDS_AT as usize + 3000 * 8 + 16);
+        assert_eq!(out[out.len() - 16..out.len() - 8], [7, 0, 0, 0, 6, 0, 0, 0]);
+        assert_eq!(out[out.len() - 8..], [9, 0, 0, 0, 10, 0, 0, 0]);
+    }
+
+    #[test]
+    fn names_compare_without_regard_to_ascii_case_as_fatfs_does() {
+        let name = "NES_Super_Mario_Bros_3_Title.gif";
+        let (_, c) = place(name, b"NES_SU~1GIF", 5);
+        assert!(matches!(verify(&c, None, 5, b"nes_super_mario_bros_3_title.GIF"), Verify::Ok { .. }));
+        assert_eq!(hash(b"/gifs/A/X.gif"), hash(b"/GIFS/a/x.GIF"));
+        assert_eq!(hash_more(hash(b"/gifs/A/"), b"X.gif"), hash(b"/gifs/a/x.gif"));
+    }
+
+    #[test]
+    fn a_255_character_name_needs_twenty_entries() {
+        let name: String = std::iter::repeat_n('n', 251).chain(".gif".chars()).collect();
+        assert_eq!(name.len(), 255);
+        // 20 entries before the 8.3 one: slot 15 of the sector, 15 entries
+        // in it and 5 in the sector before.
+        let (p, c) = place(&name, b"NNNNNN~1GIF", 15);
+        assert_eq!(verify(&c, None, 15, name.as_bytes()), Verify::NeedPrev);
+        assert!(matches!(verify(&c, Some(&p), 15, name.as_bytes()), Verify::Ok { .. }));
+        // A 21st entry is never a FAT long name.
+        let long: String = std::iter::repeat_n('n', 256).collect();
+        assert_eq!(verify(&c, Some(&p), 15, long.as_bytes()), Verify::Mismatch);
+    }
+
+    #[test]
+    fn a_bucket_larger_than_the_group_is_an_error() {
+        let geo = Geometry { csize: 1, fatbase: 1, database: 2, n_fatent: 100 };
+        let mut walk = |emit: &mut dyn FnMut(u32, u32, Option<u32>)| -> io::Result<()> {
+            for i in 0..10u32 {
+                emit(0x0700_0000 | i, i, None); // one bucket, 10 records
+            }
+            Ok(())
+        };
+        let mut put = |_: &[u8]| -> io::Result<()> { Ok(()) };
+        let mut group = vec![0u8; 8 * 4];
+        assert!(build_index(&mut put, &geo, &mut walk, &[], &mut group).is_err());
+    }
+
+    #[test]
+    fn another_version_or_magic_is_refused() {
+        let h = Header { count: 1, extras: 0, n_fatent: 5, database: 6, dirs: 2 };
+        let mut b = h.encode();
+        assert_eq!(Header::decode(&b), Some(h));
+        b[4..6].copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(Header::decode(&b), None);
+        let mut b = h.encode();
+        b[0] = b'X';
+        assert_eq!(Header::decode(&b), None);
+        assert_eq!(Header::decode(&h.encode()[..HEADER - 1]), None);
+    }
+
+    #[test]
+    fn the_directory_list_must_match_exactly() {
+        let a = [(1, 10), (2, 20)];
+        assert!(dirs_match(&a, &[(2, 20), (1, 10)]));
+        assert!(!dirs_match(&a, &[(1, 10), (2, 21)])); // a directory replaced
+        assert!(!dirs_match(&a, &[(1, 10)])); // one gone
+        assert!(!dirs_match(&a, &[(1, 10), (2, 20), (3, 30)])); // one added
     }
 }

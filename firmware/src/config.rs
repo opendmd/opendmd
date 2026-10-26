@@ -103,8 +103,9 @@ pub const SD_MOUNT: &str = "/sdcard";
 /// FATFS file descriptors. Three are live in the player's steady state (the
 /// catalog's handles on `filelist.txt` and `filelist.txt.idx`, and the GIF the
 /// engine is playing); the httpd task needs a few more for the file it is
-/// serving or the upload it is streaming to the card.
-pub const SD_MAX_FILES: usize = 8;
+/// serving or the upload it is streaming to the card; the FAT index keeps
+/// its own file open (`fatidx.rs`), hence 10 (552 B each with 512 B sectors).
+pub const SD_MAX_FILES: usize = 10;
 /// The SD bus clock. The SPI master divides 80 MHz by a whole number, so
 /// the only clocks are 40, 26.7, 20, 16 … MHz (the nearest is taken: 26 and
 /// 32 MHz both give 26.7). 40 MHz needs the IO_MUX pins, i.e. `SPI3` (see

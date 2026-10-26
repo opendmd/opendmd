@@ -1208,7 +1208,8 @@ enum Fail {
 /// Encode `gif` into `tmp` and rename it to `copy`: `(GIF bytes, copy
 /// bytes, bytes written)`. The temp file is removed on every failure.
 fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64, u64, u64), Fail> {
-    let src = match File::open(format!("{}{gif}", config::SD_MOUNT)) {
+    // Through the FAT index when it has the original: no directory scan.
+    let src = match crate::fatidx::open(&format!("{}{gif}", config::SD_MOUNT)) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(Fail::Bad("not found".into())),
         Err(e) => return Err(Fail::Card(e.to_string())),
