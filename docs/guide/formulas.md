@@ -319,13 +319,29 @@ On your player:
   Press it again to take it off.
 - **Use as the look** keeps it over every GIF the panel plays, before the
   colour and the phosphor glow. Settings › Look shows which formula it is
-  (**Formula over every GIF**) and turns it off (**None**).
+  (**Formula over every GIF**), changes it and turns it off (**None**).
 
-A formula that would hide the GIF entirely (it reads none of `ur`, `ug`,
-`ub`, `ul` and nothing shows through it), or that is too heavy to draw over
-GIFs (more than about 8 ms a frame on the panel), is refused with a
-sentence saying so; Settings only lists formulas that let the GIF show
-through. When the player is
+**Any formula can be the look**, not only the ones that draw over a GIF:
+Use as the look and Settings › Look both have a **Blend** and an
+**Amount**. The blend says how the formula goes onto the GIF — **Over**
+(it covers it), **Screen** (it lightens: the GIF's bright parts stay and
+the formula shows in its dark ones), **Add**, **Multiply** (it darkens and
+tints), **Lighten** or **Darken** (the brighter or darker of the two) — and
+the amount how much of it shows, 0 to 100 %. A formula that draws over a
+GIF already starts at Over, 100 %: exactly as before. One that covers the
+whole panel, like Plasma, starts at Screen, 40 % (or Over, 30 % when that
+is lighter for the panel), and the preview shows the choice as you move it.
+A formula with layers of its own goes Over only (its layers keep their own
+blends).
+
+Settings lists all your formulas and all the examples. Over at 100 % of a
+formula that covers the whole panel would hide the GIF, so it is refused
+with a sentence saying so (choose a lower amount or another blend), and a
+formula too heavy to draw over every GIF (more than about 8 ms a frame on
+the panel, the blend included) is listed as too heavy. Shared looks stand
+alone: the player is sent the formula with the blend written around it, so
+a look keeps working even after the formula is edited or deleted here.
+When the player is
 short of memory (several downloads at once, say) it shows the GIFs without
 the formula for a while.
 
