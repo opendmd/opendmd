@@ -76,10 +76,11 @@ export class Tree {
     this.rows = [];
     this.res = [];
     this.liveGot = new Map();
+    this.failed = new Set(); // folders whose listing failed: a row to retry
     this.cur = '';
     this.vl = new VList({
       rowHeight: o.rowHeight || 44,
-      render: (r, it) => this.render(r, it),
+      render: (r, it, i) => this.render(r, it, i),
       onClick: (it, i, e) => this.click(it, i, e),
       onMenu: o.onMenu && ((it, _i, x, y) => it.path && o.onMenu(it, x, y)),
       onHold: o.onHold && ((it) => it.path && o.onHold(it)),
@@ -112,7 +113,8 @@ export class Tree {
   fill(cat) {
     if (this.items(cat)) return Promise.resolve(this.items(cat));
     if (LIVE[cat]) return Promise.resolve(this.o.live?.(cat)).then((l) => { this.liveGot.set(cat, l || []); this.update(); return l; });
-    return listCat(cat).then((l) => { this.update(); return l; });
+    this.failed.delete(cat);
+    return listCat(cat).then((l) => { if (!l) this.failed.add(cat); this.update(); return l; });
   }
 
   // The search (title words) and the platforms on; update() after.
@@ -129,7 +131,7 @@ export class Tree {
     if (this.gathering) return;
     this.gathering = true;
     let bad = 0;
-    for (const c of this.real()) if (!got.has(c)) { if (!await listCat(c)) bad++; this.update(); }
+    for (const c of this.real()) if (!got.has(c)) { if (!await listCat(c)) { bad++; this.failed.add(c); } this.update(); }
     this.gathering = false;
     this.bad = bad;
     this.update();
@@ -157,7 +159,8 @@ export class Tree {
           if (p) pc.set(p, (pc.get(p) || 0) + 1);
           if (okP(it)) hits.push(it);
         }
-        res.push(...hits);
+        // What is shown: a folder closed during a search is not.
+        if (open) res.push(...hits);
       }
       if (text && !hits?.length) continue;
       f.open = open;
@@ -165,25 +168,44 @@ export class Tree {
       f.old = !items;
       f.hits = hits;
       rows.push(f);
-      if (open) rows.push(...(hits || (items ? [] : [{ ld: true, cat: f.cat }])));
+      if (open) rows.push(...(hits || (items ? [] : [{ ld: !this.failed.has(f.cat), err: this.failed.has(f.cat), cat: f.cat }])));
     }
-    const a = document.activeElement, fi = this.el.contains(a) && a._i;
+    // ARIA position in each level; the focus kept on the same row.
+    this.pos = [];
+    let fp = 0, nf = rows.filter((r) => !r.path && !r.ld && !r.err).length, k = 0, nk = 0;
+    for (const r of rows) {
+      if (r.path) this.pos.push([++k, nk]);
+      else if (r.ld || r.err) this.pos.push([1, 1]);
+      else { k = 0; nk = r.open && r.hits ? r.hits.length : 0; this.pos.push([++fp, nf]); }
+    }
+    const a = document.activeElement, key = this.el.contains(a) && a._i != null && (a.dataset.path || 'd' + a.dataset.cat);
     this.rows = rows;
     this.res = res;
     this.vl.set(rows);
-    if (fi != null && fi !== false) this.focusRow(Math.min(fi, rows.length - 1));
+    if (key) {
+      const i = rows.findIndex((r) => (r.path || 'd' + r.cat) === key);
+      this.focusRow(i >= 0 ? i : Math.min(a._i, rows.length - 1));
+    }
     this.o.onUpdate?.({ shown: res.length, pool, matched, plats: pc, busy: (text && this.gathering) || rows.some((r) => r.ld), bad: this.bad, text });
   }
 
-  render(r, it) {
-    const tick = this.ticking(), picked = this.o.picked;
+  render(r, it, i) {
+    const tick = this.ticking(), picked = this.o.picked, [pos, size] = this.pos[i] || [1, 1];
+    this.el.setAttribute('aria-multiselectable', String(tick));
     r.setAttribute('role', 'treeitem');
     r.setAttribute('aria-level', it.path ? 2 : 1);
+    r.setAttribute('aria-posinset', pos);
+    r.setAttribute('aria-setsize', size);
     if (!it.path) {
-      r.className = 'vdir' + (it.open ? ' open' : '') + (isSys(it.cat) ? ' sys' : '');
+      r.className = 'vdir' + (it.open ? ' open' : '') + (isSys(it.cat) ? ' sys' : '') + (it.err ? ' err' : '');
       r.dataset.cat = it.cat;
       delete r.dataset.path;
       if (it.ld) { r.removeAttribute('aria-expanded'); clear(r, h('span.t.muted', 'Loading…')); return; }
+      if (it.err) {
+        r.removeAttribute('aria-expanded');
+        clear(r, h('span.t.muted', 'Couldn’t read this folder'), h('button.sm', { onclick: (e) => { e.stopPropagation(); this.fill(it.cat); this.update(); } }, 'Try again'));
+        return;
+      }
       r.setAttribute('aria-expanded', String(it.open));
       const fl = tick && !it.live && (it.hits || this.items(it.cat)), all = fl && fl.length && fl.every((x) => picked.has(x.path));
       const box = tick && !it.live && h('input', { type: 'checkbox', checked: !!all, indeterminate: !all && fl && fl.some((x) => picked.has(x.path)), 'aria-label': 'Tick every GIF in ' + it.name, onclick: (e) => { e.stopPropagation(); this.tickFolder(it); } });
@@ -195,7 +217,7 @@ export class Tree {
     delete r.dataset.cat;
     r.removeAttribute('aria-expanded');
     if (tick) r.setAttribute('aria-selected', String(picked.has(it.path))); else r.removeAttribute('aria-selected');
-    const box = tick && h('input', { type: 'checkbox', checked: picked.has(it.path), 'aria-label': 'tick', onclick: (e) => { e.stopPropagation(); this.tick(it, e.target.checked); } });
+    const box = tick && h('input', { type: 'checkbox', checked: picked.has(it.path), 'aria-label': label(it.e), onclick: (e) => { e.stopPropagation(); this.tick(it, e.target.checked); } });
     const cv = thumbsOn() && it.path[0] != '@' && h('canvas.th', { width: 128, height: 32 });
     clear(r, box, cv, h('span.t', label(it.e)), this.o.mark?.(it) && h('i.inpl', { title: 'In this playlist' }, '✓'), this.o.extra?.(it, r));
     if (cv) attach(cv, it.path);
@@ -204,7 +226,7 @@ export class Tree {
 
   click(it, i, e) {
     if (e.target.closest('input,button')) return;
-    if (!it.path) { if (!it.ld) this.toggle(it.cat); return; }
+    if (!it.path) { if (!it.ld && !it.err) this.toggle(it.cat); return; }
     if (this.ticking()) this.tick(it, !this.o.picked.has(it.path));
     else this.o.onPick?.(it);
   }
@@ -264,11 +286,11 @@ export class Tree {
       case 'PageUp': t = i - page; break;
       case 'Home': t = 0; break;
       case 'End': t = this.rows.length - 1; break;
-      case 'ArrowRight': if (!it.path && !it.ld) { if (!it.open) this.toggle(it.cat); else t = i + 1; } break;
+      case 'ArrowRight': if (!it.path && !it.ld && !it.err) { if (!it.open) this.toggle(it.cat); else t = i + 1; } break;
       case 'ArrowLeft':
         if (!it.path) { if (it.open) this.toggle(it.cat); } else { t = i; while (t > 0 && this.rows[t].path) t--; }
         break;
-      case ' ': if (!this.ticking() || it.ld) return; if (it.path) this.tick(it, !this.o.picked.has(it.path)); else this.tickFolder(it); break;
+      case ' ': if (!this.ticking() || it.ld || it.err) return; if (it.path) this.tick(it, !this.o.picked.has(it.path)); else this.tickFolder(it); break;
       default: return;
     }
     e.preventDefault();

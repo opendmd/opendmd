@@ -412,9 +412,9 @@ glue at most 116 KB, the hand-written JS and CSS at most 56 KB; the Studio's
 own wasm at most 150 KB and its JS and CSS at most 24 KB, loaded only when it
 opens; the Add GIFs / Edit details dialogs at most 8 KB, loaded when first
 used; the Library's folder tree with the thumbnails (`js/tree.js`,
-`js/thumbs.js`, `tree.css`) at most 12 KB and the playlist editor
+`js/thumbs.js`, `tree.css`) at most 13 KB and the playlist editor
 (`js/pledit.js`) at most 6 KB, loaded with the Library and when a playlist
-first opens (11.1 KB and 5.9 KB on 2026-10-26, which took the JS and CSS
+first opens (12.1 KB of 13 and 5.9 KB of 6 on 2026-10-26, which took the JS and CSS
 line from 59.6 to 53.7 KB). Today that is 115.8 KB, 51.3 KB, 110.0 KB, 9.3 KB and 6.3 KB. The game name
 lists (2.4 MB, 527 KB gzipped, one platform fetched at a time) are printed
 without a budget. `make web` writes a `<file>.gz` beside each file, and the
@@ -483,4 +483,12 @@ everything but the app to a real device. `GET /mock/io` (mock only, no
 firmware route) counts the card-file requests in flight and at most and the
 bytes actually sent (a reader that hangs up stops the count); `?reset=1`
 zeroes it, `&kbps=N` paces card files in the firmware's 2 KB pieces, so the
-smoke measures the thumbnails' early cut-off as a device would see it.
+smoke measures the thumbnails' early cut-off as a device would see it;
+`&fail503=N`, `&fail500=N`, `&drop=N` fail the next N card-file GETs. Card
+and app files go out as the device's stream task sends them: one at a
+time, two waiting, a full queue for 2 s a `503` with `Retry-After: 1`.
+`--proxy` passes a sized answer on as it comes, so a reader that hangs up
+closes the device's connection too. `tools/library-load.py --device URL`
+drives the Library, the thumbnails and the editor through it against a
+real player and reports requests, bytes, connections, 503s, `/api/status`
+latency, the heap floor, misses and `streams_aborted` per scenario.

@@ -11,15 +11,20 @@
 // The browser's own GIF decoder draws them (createImageBitmap, an <img>).
 
 import { app } from './state.js';
+import { dfetch } from './source.js';
 import { enc, store } from './util.js';
 
 export const thumbsOn = () => store.get('thumbs', true);
 // What the page has asked for, for the tests and the design note's numbers.
-export const stats = { net: 0, bytes: 0, max: 0, idb: 0, mem: 0, busy: 0 };
+export const stats = { net: 0, bytes: 0, max: 0, idb: 0, mem: 0, busy: 0, r503: 0, failed: 0 };
 
 const CAP = 24 << 20, CLIP_BYTES = 32 << 10, CLIP_FRAMES = 24;
 const mem = new Map(); // path -> bitmap, the 200 last drawn
 const inflight = new Set();
+// Failures that may pass (a timeout, a dropped connection, a restart, a
+// 500) are not kept: the row is asked for again when drawn again, at least
+// 10 s later, three times a session; a reload starts over.
+const tries = new Map(); // path -> [failures, when]
 let queue = [], pausedTo = 0, timer = 0;
 
 // The end of the `want`-th image in a GIF's first bytes: [end, images, done].
@@ -62,16 +67,19 @@ async function fetchCut(path, want, cap, extend) {
   }
   const copy = app.wasm.cachePathFor(path);
   for (const p of copy ? [copy, path] : [path]) {
-    let r;
     stats.net++;
-    try { r = await app.src.req('GET', enc(p), undefined, 20000); } catch (e) {
-      if (e.status === 404 && p !== path) continue;
-      throw e;
-    }
+    let r;
+    try { r = await dfetch(enc(p), {}, 20000); } catch { throw { status: 0 }; }
+    if (r.status === 404 && p !== path) continue;
+    // Busy (the stream queue full, the heap low): 503 + Retry-After.
+    if (r.status === 503) { stats.r503++; throw { status: 503, after: +r.headers.get('Retry-After') || 1 }; }
+    if (!r.ok) throw { status: r.status };
     const size = +r.headers.get('Content-Length') || 0, rd = r.body.getReader();
-    let buf = new Uint8Array(size && size < cap ? size : 8192), got = 0, more = false;
+    let buf = new Uint8Array(size && size < cap ? size : 8192), got = 0, more = false, t = 0;
     for (;;) {
-      const { done, value } = await rd.read();
+      // A body that stalls for 8 s gives its slot up.
+      const { done, value } = await Promise.race([rd.read(), new Promise((_, no) => { t = setTimeout(no, 8000, { status: 0 }); })])
+        .catch((e) => { rd.cancel().catch(() => {}); throw e; }).finally(() => clearTimeout(t));
       if (value) {
         if (got + value.length > buf.length) { const nb = new Uint8Array(Math.max(buf.length * 2, got + value.length)); nb.set(buf.subarray(0, got)); buf = nb; }
         buf.set(value, got);
@@ -93,13 +101,17 @@ async function fetchCut(path, want, cap, extend) {
       }
     }
   }
+  throw { status: 404 }; // neither the copy nor the GIF
 }
 
 // IndexedDB: one database per card, records {k: path, size, still, clip, n, at}
 // and {k: '#', total}. Any failure (a private window) just means no store.
 let dbq, dbns;
 function db() {
-  const s = app.status?.sd, ns = app.device ? 'c' + (s?.capacity_bytes ?? 0) : 'l' + (app.src?.label || '');
+  // (Per card by its size until the status names the card itself: two cards
+  // of one size share a store, kept right by the size check.)
+  const c = app.status?.sd?.capacity_bytes, ns = app.device ? c && 'c' + c : 'l' + (app.src?.label || '');
+  if (!ns) return Promise.resolve(null); // the card not known yet: no store
   if (ns !== dbns) {
     dbns = ns;
     dbq = new Promise((res) => {
@@ -195,6 +207,8 @@ export function attach(cv, path) {
     if (cv._p !== path) return;
     if (rec) { stats.idb++; show(path, await bitmap(rec.still)); return; }
     if (inflight.has(path)) return; // drawn when it comes
+    const [n, at] = tries.get(path) || [0, 0];
+    if (n >= 3 || Date.now() - at < 10000) { paint(cv, null); return; }
     queue.push({ cv, path });
     pump();
   });
@@ -219,9 +233,14 @@ function pump() {
     stats.busy++;
     stats.max = Math.max(stats.max, stats.busy);
     (q.run ? q.run() : stillOf(q)).catch((e) => {
-      // A busy device (503, Retry-After 2): this row again, later.
-      if (e?.status === 503) { pausedTo = performance.now() + 2000; if (!q.run) queue.unshift(q); return; }
-      if (!q.run) { show(q.path, null); put({ k: q.path, size: -1, still: null }); }
+      // Busy: everything waits Retry-After, this row first again after.
+      if (e?.status === 503) { pausedTo = performance.now() + e.after * 1000; if (!q.run) queue.unshift(q); return; }
+      if (q.run) return;
+      // Neither file there: kept as nothing. Anything else may pass.
+      if (e?.status === 404) { show(q.path, null); put({ k: q.path, size: 0, still: null }); return; }
+      stats.failed++;
+      tries.set(q.path, [(tries.get(q.path)?.[0] || 0) + 1, Date.now()]);
+      for (const c of document.querySelectorAll('canvas.th')) if (c._p === q.path) paint(c, null);
     }).finally(() => { stats.busy--; pump(); });
   }
 }
@@ -258,9 +277,10 @@ async function stillOf({ path }) {
     // A GIF that starts dark is read on to its clip (≤ 32 KB, kept for the
     // hover too) and shows its first lit frame where the browser can say.
     const r = await fetchCut(path, 1, 64 << 10, typeof ImageDecoder == 'function' && dark);
-    const gif = r.more && await litFrame(r.gif) || r.gif;
-    await put({ k: path, size: r.size, still: gif, ...(r.more ? { clip: r.gif } : {}) });
-    show(path, await bitmap(gif));
+    const gif = r.more && await litFrame(r.gif) || r.gif, bm = await bitmap(gif);
+    // Bytes came and nothing decoded: kept as nothing (not asked again).
+    await put({ k: path, size: r.size, still: bm ? gif : null, ...(r.more ? { clip: r.gif } : {}) });
+    show(path, bm);
   } finally { inflight.delete(path); }
 }
 
@@ -301,7 +321,8 @@ export function watch(el) {
       c.after(q.img);
       c.hidden = true;
     };
-    hold = setTimeout(() => { queue.unshift(q); pump(); }, 350);
+    // Still on the row (or focused) when the time is up.
+    hold = setTimeout(() => { if (on === q && (row.matches(':hover') || row.contains(document.activeElement))) { queue.unshift(q); pump(); } }, 350);
   };
   el.addEventListener('pointerover', (e) => e.pointerType === 'mouse' && start(e));
   el.addEventListener('focusin', start);

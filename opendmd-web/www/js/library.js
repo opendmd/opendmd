@@ -5,48 +5,10 @@
 import { app, playlistLabel } from './state.js';
 import { Overrides, glyphs, menu, moreButton, actions, fav } from './overrides.js';
 import { PanelPreview } from './preview.js';
-import { prepareBytes } from './prepare.js';
 import { Tree, chipRow, forget as forgetDir } from './tree.js';
 import { forget as forgetThumb, check as checkThumb } from './thumbs.js';
-import { h, clear, emit, on, store, toast, label, lines, niceName, flagName, isFlag } from './util.js';
-
-export const authorOf = (e) => e.flags.find((f) => !isFlag(f)) || '';
-
-export async function addOne(category, name, bytes, warn, prep = prepareBytes) {
-  const path = `/gifs/${category}/${name}`;
-  await app.src.writeFile(path, bytes);
-  forgetThumb(path);
-  try { await prep(path, bytes); } catch (e) {
-    warn?.(`${name}: added, but it could not be prepared (${e.message || e}); it will play as it is`);
-    try { await app.src.forget(path); } catch { /* nothing to forget */ }
-  }
-  emit('gifs', category);
-  return path;
-}
-
-export async function savePlaylist(path, text) {
-  if (path.startsWith('/sets/')) await app.src.saveSet(path.slice(6).replace(/\.txt$/, ''), text);
-  else await app.src.writeFile(path, text);
-  app.texts.set(path, text);
-  if (path === app.activePath) await app.refreshStatus().catch(() => {});
-}
-
-export async function appendTo(path, paths) {
-  const name = playlistLabel(path);
-  try {
-    const text = await app.text(path, true);
-    const have = new Set(lines(text || ''));
-    const add = paths.filter((p) => !have.has(p));
-    if (!add.length) { toast(`already in “${name}”`); return; }
-    await savePlaylist(path, (text && !text.endsWith('\n') ? text + '\n' : text || '') + add.join('\n') + '\n');
-    toast(`${add.length} added to “${name}”`, 'ok');
-  } catch (e) { toast(`adding to “${name}”: ${e.message}`, 'bad'); }
-}
-
-export async function offerPlaylist(paths) {
-  const n = paths.length;
-  if (confirm(`Add ${n} new GIF${n > 1 ? 's' : ''} to the playlist “${playlistLabel(app.activePath)}”?`)) await appendTo(app.activePath, paths);
-}
+import { authorOf, addOne, appendTo, offerPlaylist } from './gifs.js';
+import { h, clear, emit, store, toast, label, niceName, flagName, isFlag } from './util.js';
 
 export async function mount(el) {
   let current = null, selecting = false;

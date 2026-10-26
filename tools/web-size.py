@@ -91,7 +91,7 @@ own, <= 8 KB.
 The Library's folder tree and the row thumbnails (`js/tree.js`,
 `js/thumbs.js` and `tree.css`, which holds the playlist editor's panes too;
 imported with the Library or the editor, never by the first page) have a
-line of their own, <= 12 KB, and so does the playlist editor
+line of their own, <= 13 KB (12 until the review's fixes), and so does the playlist editor
 (`js/pledit.js`, imported the first time a playlist opens), <= 6 KB; both
 left the js+css line (2026-10-26: 59,646 -> 53,659 B gz).
 The third-party licence notices (`licenses.txt`, the firmware's and the web
@@ -190,7 +190,10 @@ DEMO = {"js/demo.js"}
 # The Library's folder tree and the thumbnails (2026-10-26, branch
 # library-playlists): imported with the Library (and the playlist editor),
 # never by the first page; the tree's and the editor's stylesheet with them.
-TREE_GZ_BUDGET = 12 * 1024
+# 13 KB since the review (2026-10-26): the failures that pass kept apart
+# from those that do not, Retry-After, a stalled body's timeout, a folder's
+# Try again row, ARIA positions; ~1 KB gz, the first page unchanged.
+TREE_GZ_BUDGET = 13 * 1024
 TREE = {"js/tree.js", "js/thumbs.js", "tree.css"}
 # The playlist editor (#sets/edit), imported the first time a playlist opens.
 EDITOR_GZ_BUDGET = 6 * 1024
