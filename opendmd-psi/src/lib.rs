@@ -291,6 +291,26 @@ pub mod worst {
         format!("gray({s})")
     }
 
+    /// [`nested`] through `digit(…, 0, 0)` (a three-value call with its own
+    /// parser, `glyph_args`) instead of `sin(…)`, to the depth cap.
+    pub fn nested_digit() -> String {
+        let mut s = String::from("tme");
+        let mut k = 0;
+        while crate::compile(&format!("gray({s})"))
+            .is_err_and(|e| e.msg.starts_with("unknown name"))
+        {
+            s = format!("digit({s}, 0, 0)");
+            k += 1;
+            if k > 64 {
+                break;
+            }
+        }
+        // One less: the deepest that still reaches the name.
+        s = s.replacen("digit(", "", 1);
+        s.truncate(s.len() - ", 0, 0)".len());
+        format!("gray({s})")
+    }
+
     /// Parts inside parts, each drawn in a layer at another place, as deep
     /// as the cap allows, with a misspelt name at the bottom.
     pub fn parts_in_layers() -> String {
@@ -313,12 +333,13 @@ pub mod worst {
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 6] = [
+    pub const ALL: [Case; 7] = [
         ("many locals", many_locals),
         ("chain", chain),
         ("distinct terms", distinct),
         ("parts", parts),
         ("nested", nested),
+        ("nested digit", nested_digit),
         ("parts in layers", parts_in_layers),
     ];
 }
