@@ -217,8 +217,12 @@ So
 
 Each step runs once per channel: a colour expression costs what the
 three channels written out as `rgb(…)` cost (`#f80 * k` is one multiply:
-a channel of 1 is free, of 0 folds away). `hsv`, `pal` and `gray` take
-values only.
+a channel of 1 is free, of 0 folds away), and it holds the same values
+at once (an `rgb(r, g, b)` inside reads only its channel's value in each
+reading). `hsv`, `pal` and `gray` take values only: they can't go inside a
+colour expression or be multiplied (`pal(fire, k) * #fff` is an error);
+`rgb(r, g, b) * k` can. Coverage goes on the outer `rgb` only:
+`rgb(mix(#000, #f80, k), 0.5)`, not `mix(rgb(#f80, 0.5), …)`.
 
 Palettes: `fire` (black, red, orange, yellow, near white), `ice` = `ocean`
 (black, navy, blue, cyan, near white), `amber` (black to warm amber),
