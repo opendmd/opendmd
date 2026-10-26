@@ -1635,7 +1635,13 @@ fn main() -> Result<()> {
                     panel.blit(pic);
                     look_us += us(t.elapsed());
                 }
-                glow_us += panel.glow_tick(looks.shown(eng.display(&canvas)));
+                // (Synchronised, it may wait for the scan as long as that
+                // leaves the next frame its slack.)
+                let budget_us = eng
+                    .frame_due()
+                    .map_or(0, |d| us(d.saturating_sub(epoch.elapsed())))
+                    .saturating_sub(SYNC_SLACK_US);
+                glow_us += panel.glow_tick(looks.shown(eng.display(&canvas)), budget_us);
                 // A wake before the file's frame (a glow step's) sleeps no
                 // further than the frame: a flat 5 ms made it up to 5 ms
                 // late, which nothing counted.
