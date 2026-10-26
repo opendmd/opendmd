@@ -1275,6 +1275,16 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             std::thread::sleep(Duration::from_millis(500));
             panic!("test panic asked for over HTTP (POST /api/reboot?panic=1)");
         }
+        // `?overflow=1` (`bench` only): the stack-overflow hook's path, end
+        // to end (`restarts::overflow_on_purpose`) — after the restart
+        // `restarts[0]` is `stack_overflow`, `task httpd`.
+        #[cfg(feature = "bench")]
+        if query_param(req.query(), "overflow").is_some() {
+            log::warn!("overflowing the stack on purpose (POST /api/reboot?overflow=1, a bench test hook)");
+            req.json(r#"{"ok":true,"overflowing":true}"#)?;
+            std::thread::sleep(Duration::from_millis(500));
+            crate::restarts::overflow_on_purpose();
+        }
         info!("reboot requested over HTTP");
         // Test hook: `?sd_fail=N` makes the next boot's first N card mounts
         // fail, to exercise the no-card boot without touching the card.

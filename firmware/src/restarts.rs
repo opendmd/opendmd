@@ -7,15 +7,17 @@
 //!
 //! - [`crate::restart`] writes the planned restart's [`Reason`] (every
 //!   caller names one) with the uptime and heap, just before the reset.
-//! - The Rust panic hook ([`install`]) writes a `panic` entry with the
-//!   panic's `file:line` and the start of its message: no heap (std has
-//!   already formatted the message), fixed buffers, word stores.
+//! - The Rust panic hook ([`install_panic_hook`], before the log ring's
+//!   flush) writes a `panic` entry with the panic's `file:line` and the
+//!   start of its message: no allocation (std has already formatted the
+//!   message), no heap walk, fixed buffers, word stores.
 //! - FreeRTOS's stack-overflow hook ([`vApplicationStackOverflowHook`],
 //!   replacing IDF's weak one) writes a `stack_overflow` entry with the
-//!   task's name, then aborts as IDF's does.
+//!   task's name through `ring::push_minimal`, then aborts as IDF's does.
+//! - The `diag-heap` build's corruption aborts write `diag_abort` first.
 //! - The heap's failed-allocation callback keeps the last failure (size,
 //!   uptime, free heap): Rust's out-of-memory abort passes no hook of ours,
-//!   so a crash just after one names it as the likely cause.
+//!   so a crash soon after one names it (perhaps a deliberate probe).
 //! - The heartbeat ([`alive`]) keeps its uptime and heap: the figures for a
 //!   crash that wrote nothing.
 //!
@@ -26,9 +28,9 @@
 //! `sdhealth.rs`); two writers at the same instant (a panic on each core)
 //! can spoil a slot, which the checksum then drops.
 
-use core::ffi::{c_char, CStr};
+use core::ffi::c_char;
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
 use esp_idf_sys as sys;
 use opendmd_core::restarts::{
@@ -48,6 +50,9 @@ static mut ALLOC: [u32; 6] = [0; 6];
 
 /// This boot's entry's sequence number (0 before [`boot`]).
 static BOOT_SEQ: AtomicU32 = AtomicU32::new(0);
+/// The panic's entry is written (the hook is installed twice, see
+/// [`install_panic_hook`]).
+static PANIC_RECORDED: AtomicBool = AtomicBool::new(false);
 
 /// A word of RTC memory as an atomic, for plain loads and stores only.
 fn word(p: *mut u32) -> &'static AtomicU32 {
@@ -77,14 +82,15 @@ struct Rtc;
 
 impl Store for Rtc {
     #[inline(never)]
-    fn read(&self, i: usize) -> Slot {
-        // SAFETY: `i < SLOTS` (the core's loops); a raw pointer, no reference.
-        load(unsafe { &raw mut RING[i] })
+    fn get(&self, slot: usize, w: usize) -> u32 {
+        // SAFETY: `slot < SLOTS`, `w < WORDS` (the core's loops); a raw
+        // pointer, no reference.
+        word(unsafe { &raw mut RING[slot][w] }).load(Relaxed)
     }
     #[inline(never)]
-    fn write(&mut self, i: usize, s: &Slot) {
+    fn put(&mut self, slot: usize, w: usize, v: u32) {
         // SAFETY: as above.
-        store(unsafe { &raw mut RING[i] }, s)
+        word(unsafe { &raw mut RING[slot][w] }).store(v, Relaxed)
     }
 }
 
@@ -131,16 +137,17 @@ pub fn reset_now() -> Reset {
     }
 }
 
-/// Pair the last entry with this boot's reset, log it, then install the
-/// hooks. Once, first thing in `main` (before anything can fail an
-/// allocation: the previous run's record is read first).
+/// Pair the last entry with this boot's reset, log it, seed the heartbeat's
+/// record, then install the hooks. Once, first thing in `main` (before
+/// anything can fail an allocation: the previous run's record is read
+/// first).
 #[inline(never)]
 pub fn boot(reset: Reset) {
-    let alive = ring::decode_alive(&load(&raw mut ALIVE));
+    let last = ring::decode_alive(&load(&raw mut ALIVE));
     let alloc = ring::decode_alloc(&load(&raw mut ALLOC));
     store(&raw mut ALIVE, &[0; 5]);
     store(&raw mut ALLOC, &[0; 6]);
-    let e = ring::boot(&mut Rtc, reset, alive, alloc);
+    let e = ring::boot(&mut Rtc, reset, last, alloc);
     BOOT_SEQ.store(e.seq, Relaxed);
     let up = e.figures.map_or(String::new(), |f| {
         format!(
@@ -160,25 +167,31 @@ pub fn boot(reset: Reset) {
         reset.name(),
         e.reason.name()
     );
-    install();
-}
-
-/// The panic hook and the failed-allocation callback.
-fn install() {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        panicked(info);
-        previous(info);
-    }));
+    // A crash before the first heartbeat still has figures.
+    alive();
+    install_panic_hook();
     // SAFETY: registers a static function with the callback's signature.
     unsafe { sys::heap_caps_register_failed_alloc_callback(Some(alloc_failed)) };
 }
 
-/// The panic's entry: no allocation (the heap queries take its lock only
-/// briefly, and no Rust code panics holding it).
+/// The panic hook: here at boot, and again after `logring::start` has
+/// wrapped the first (its hook prints the log ring first), so the entry is
+/// written before the flush. Whichever runs first writes it.
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if !PANIC_RECORDED.swap(true, Relaxed) {
+            panicked(info);
+        }
+        previous(info);
+    }));
+}
+
+/// The panic's entry: no allocation, and no heap walk (the heap may be what
+/// is broken).
 #[inline(never)]
 fn panicked(info: &std::panic::PanicHookInfo) {
-    let mut e = Entry::new(Reason::Panic, Some(figures()));
+    let mut e = Entry::new(Reason::Panic, Some(figures_light()));
     let (file, line) = info.location().map_or(("?", 0), |l| (l.file(), l.line()));
     e.set_panic(file, line, info.payload_as_str().unwrap_or(""));
     ring::push(&mut Rtc, e);
@@ -195,7 +208,9 @@ unsafe extern "C" fn alloc_failed(size: usize, _caps: u32, _function: *const c_c
 }
 
 /// FreeRTOS's stack-overflow hook (IDF's is weak): the entry, then IDF's
-/// own message and abort.
+/// own message and abort. Minimal on purpose (it runs in a context switch,
+/// on a task whose stack has just overrun): `ring::push_minimal`, word
+/// stores, byte copies — no slot on the stack, no `core::fmt`.
 ///
 /// # Safety
 /// Called by FreeRTOS with the task's NUL-terminated name.
@@ -204,36 +219,58 @@ pub unsafe extern "C" fn vApplicationStackOverflowHook(
     _task: sys::TaskHandle_t,
     name: *mut c_char,
 ) {
-    let name = if name.is_null() {
-        "?"
+    const NAME_MAX: usize = sys::configMAX_TASK_NAME_LEN as usize;
+    let mut n = 0;
+    while !name.is_null() && n < NAME_MAX && unsafe { *name.add(n) } != 0 {
+        n += 1;
+    }
+    let name: &[u8] = if n == 0 {
+        b"?"
     } else {
-        // SAFETY: FreeRTOS's NUL-terminated task name.
-        unsafe { CStr::from_ptr(name) }.to_str().unwrap_or("?")
+        // SAFETY: `n` bytes of the task's name, all before its NUL.
+        unsafe { core::slice::from_raw_parts(name as *const u8, n) }
     };
-    let mut e = Entry::new(Reason::StackOverflow, Some(figures_light()));
-    e.set_text(format_args!("task {name}"));
-    ring::push(&mut Rtc, e);
-    let mut msg = Msg([0; 80], 0);
-    let _ = write!(
-        msg,
-        "***ERROR*** A stack overflow in task {name} has been detected."
+    ring::push_minimal(
+        &mut Rtc,
+        Reason::StackOverflow,
+        figures_light(),
+        &[b"task ", name],
     );
-    let end = msg.1.min(msg.0.len() - 1);
-    msg.0[end] = 0;
+    const HEAD: &[u8] = b"***ERROR*** A stack overflow in task ";
+    const TAIL: &[u8] = b" has been detected.\0";
+    let mut msg = [0u8; HEAD.len() + NAME_MAX + TAIL.len()];
+    msg[..HEAD.len()].copy_from_slice(HEAD);
+    msg[HEAD.len()..HEAD.len() + name.len()].copy_from_slice(name);
+    msg[HEAD.len() + name.len()..HEAD.len() + name.len() + TAIL.len()].copy_from_slice(TAIL);
     // SAFETY: a NUL-terminated buffer; does not return.
-    unsafe { sys::esp_system_abort(msg.0.as_ptr() as *const c_char) }
+    unsafe { sys::esp_system_abort(msg.as_ptr() as *const c_char) }
 }
 
-/// A fixed buffer for the abort message (room left for the NUL).
-struct Msg([u8; 80], usize);
-
-impl core::fmt::Write for Msg {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let n = s.len().min(self.0.len() - 1 - self.1);
-        self.0[self.1..self.1 + n].copy_from_slice(&s.as_bytes()[..n]);
-        self.1 += n;
-        Ok(())
+/// The bench's `?overflow=1` (`POST /api/reboot`): this task's stack canary
+/// overwritten, as a real overrun would, then a yield, at which FreeRTOS
+/// checks it and calls the hook above. No memory past the stack is touched.
+#[cfg(feature = "bench")]
+pub fn overflow_on_purpose() -> ! {
+    // SAFETY: the calling task's own stack start; its lowest 16 bytes are
+    // FreeRTOS's canary (configCHECK_FOR_STACK_OVERFLOW 2), unused by
+    // anything else while the task runs well clear of them.
+    unsafe {
+        let start = sys::pxTaskGetStackStart(core::ptr::null_mut());
+        core::ptr::write_bytes(start, 0, 16);
+        for _ in 0..10 {
+            sys::vTaskDelay(1);
+        }
     }
+    panic!("the stack-overflow check did not fire");
+}
+
+/// A `diag-heap` build's corruption abort: the entry (no heap walk), then
+/// the caller aborts.
+#[cfg(feature = "diag-heap")]
+pub fn diag(site: &str) {
+    let mut e = Entry::new(Reason::Diag, Some(figures_light()));
+    e.set_text(format_args!("{site}"));
+    ring::push(&mut Rtc, e);
 }
 
 /// A planned restart's entry ([`crate::restart`]).

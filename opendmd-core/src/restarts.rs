@@ -8,9 +8,9 @@
 //! where it happened ([`Entry::text`]). The entry is *pending* until the
 //! next boot pairs it with the chip's own reset cause ([`Reset`]), in
 //! [`boot`]: a pending entry gets that reset; with none, the boot writes one
-//! from the reset alone — the reset button, a brownout, a software restart
+//! from the reset alone — a brownout, a software restart
 //! nobody recorded, or a crash nobody recorded (with the last heartbeat's
-//! figures, [`Alive`], and the last failed allocation, [`AllocFail`], when
+//! figures, [`encode_alive`], and the last failed allocation, [`AllocFail`], when
 //! there are any). A power-on clears the ring: RTC memory is garbage then.
 //!
 //! **Encoding.** A slot is [`WORDS`] `u32`s — the firmware touches RTC slow
@@ -74,10 +74,10 @@ pub enum Reason {
     Panic = 12,
     /// A task's stack overflowed.
     StackOverflow = 13,
+    /// A `diag-heap` build's check found the heap or a handler corrupt.
+    Diag = 14,
     /// Powered on (the ring starts here).
     PowerOn = 20,
-    /// The reset button (EN).
-    ResetButton = 21,
     /// The supply dipped (brownout detector).
     Brownout = 22,
     /// A software restart that recorded nothing (another firmware's, the
@@ -89,6 +89,7 @@ pub enum Reason {
 
 impl Reason {
     const ALL: [Reason; 18] = [
+        Reason::Diag,
         Reason::ApiReboot,
         Reason::Ota,
         Reason::ApTimeout,
@@ -103,7 +104,6 @@ impl Reason {
         Reason::Panic,
         Reason::StackOverflow,
         Reason::PowerOn,
-        Reason::ResetButton,
         Reason::Brownout,
         Reason::Unrecorded,
         Reason::Crash,
@@ -130,7 +130,7 @@ impl Reason {
             Reason::Panic => "panic",
             Reason::StackOverflow => "stack_overflow",
             Reason::PowerOn => "power_on",
-            Reason::ResetButton => "reset_button",
+            Reason::Diag => "diag_abort",
             Reason::Brownout => "brownout",
             Reason::Unrecorded => "unrecorded",
             Reason::Crash => "unrecorded_crash",
@@ -154,7 +154,7 @@ impl Reason {
             Reason::Panic => "crashed (panic)",
             Reason::StackOverflow => "crashed (stack overflow)",
             Reason::PowerOn => "powered on",
-            Reason::ResetButton => "the reset button was pressed",
+            Reason::Diag => "stopped by a heap check (diagnostic build)",
             Reason::Brownout => "the power supply dipped",
             Reason::Unrecorded => "restarted without a recorded reason",
             Reason::Crash => "crashed without a recorded cause",
@@ -327,16 +327,19 @@ impl fmt::Write for Text<'_> {
     }
 }
 
-fn checksum(words: &[u32]) -> u32 {
-    // FNV-1a over the words' bytes.
-    let mut h: u32 = 0x811c_9dc5;
-    for w in words {
-        for b in w.to_le_bytes() {
-            h ^= b as u32;
-            h = h.wrapping_mul(0x0100_0193);
-        }
+const FNV_SEED: u32 = 0x811c_9dc5;
+
+/// FNV-1a, one word's bytes further.
+fn fnv(mut h: u32, w: u32) -> u32 {
+    for b in w.to_le_bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
     }
     h
+}
+
+fn checksum(words: &[u32]) -> u32 {
+    words.iter().fold(FNV_SEED, |h, w| fnv(h, *w))
 }
 
 /// An entry as a slot.
@@ -360,9 +363,12 @@ pub fn encode(e: &Entry) -> Slot {
 }
 
 fn checksum_of(s: &Slot) -> u32 {
-    let mut h = checksum(&s[1..6]);
-    h ^= checksum(&s[7..]).rotate_left(7);
-    h
+    combine(checksum(&s[1..6]), checksum(&s[7..]))
+}
+
+/// The slot's checksum from its header's (words 1-5) and its text's.
+fn combine(header: u32, text: u32) -> u32 {
+    header ^ text.rotate_left(7)
 }
 
 /// A slot as an entry: `None` if it is empty, garbage or another layout's.
@@ -395,49 +401,125 @@ pub fn decode(s: &Slot) -> Option<Entry> {
 }
 
 /// Where the slots live: RTC memory on the device, an array in the tests.
+/// Word by word, so the stack-overflow hook's [`push_minimal`] never holds
+/// a whole slot.
 pub trait Store {
-    fn read(&self, i: usize) -> Slot;
-    fn write(&mut self, i: usize, s: &Slot);
+    fn get(&self, slot: usize, word: usize) -> u32;
+    fn put(&mut self, slot: usize, word: usize, v: u32);
 }
 
 impl Store for [Slot; SLOTS] {
-    fn read(&self, i: usize) -> Slot {
-        self[i]
+    fn get(&self, slot: usize, word: usize) -> u32 {
+        self[slot][word]
     }
-    fn write(&mut self, i: usize, s: &Slot) {
-        self[i] = *s;
+    fn put(&mut self, slot: usize, word: usize, v: u32) {
+        self[slot][word] = v;
     }
+}
+
+fn read(store: &dyn Store, i: usize) -> Slot {
+    let mut s = [0; WORDS];
+    for (k, w) in s.iter_mut().enumerate() {
+        *w = store.get(i, k);
+    }
+    s
+}
+
+fn write(store: &mut dyn Store, i: usize, s: &Slot) {
+    for (k, w) in s.iter().enumerate() {
+        store.put(i, k, *w);
+    }
+}
+
+/// `a` is newer than `b` (sequence numbers wrap at 2^32).
+fn newer(a: u32, b: u32) -> bool {
+    (a.wrapping_sub(b) as i32) > 0
 }
 
 /// The newest valid entry.
 pub fn newest(store: &dyn Store) -> Option<Entry> {
     (0..SLOTS)
-        .filter_map(|i| decode(&store.read(i)))
-        .max_by_key(|e| e.seq)
+        .filter_map(|i| decode(&read(store, i)))
+        .fold(None, |best: Option<Entry>, e| match best {
+            Some(b) if !newer(e.seq, b.seq) => Some(b),
+            _ => Some(e),
+        })
 }
 
 /// Write `e` as the newest entry (its `seq` is the newest's + 1) over the
 /// oldest. Returns the entry as written. No allocation.
 pub fn push(store: &mut dyn Store, mut e: Entry) -> Entry {
     e.seq = newest(store).map_or(1, |n| n.seq.wrapping_add(1));
-    store.write(e.seq as usize % SLOTS, &encode(&e));
+    write(store, e.seq as usize % SLOTS, &encode(&e));
     e
+}
+
+/// [`push`] for the stack-overflow hook: reads only each slot's magic and
+/// seq words (an unchecked slot can only push the seq further on), builds
+/// the words one at a time — no slot on the stack, no `core::fmt` — from
+/// `parts` concatenated (cut at [`TEXT`]; bytes past ASCII become `?`).
+pub fn push_minimal(store: &mut dyn Store, reason: Reason, f: Figures, parts: &[&[u8]]) {
+    let mut seq = None;
+    for i in 0..SLOTS {
+        if store.get(i, 0) == MAGIC {
+            let s = store.get(i, 1);
+            if seq.is_none_or(|b| newer(s, b)) {
+                seq = Some(s);
+            }
+        }
+    }
+    let seq = seq.map_or(1, |s: u32| s.wrapping_add(1));
+    let len = parts.iter().map(|p| p.len()).sum::<usize>().min(TEXT);
+    let byte = |n: usize| -> u8 {
+        let mut n = n;
+        for p in parts {
+            if n < p.len() {
+                return if p[n].is_ascii() { p[n] } else { b'?' };
+            }
+            n -= p.len();
+        }
+        0
+    };
+    let text_word = |k: usize| -> u32 {
+        let at = |j: usize| if k * 4 + j < len { byte(k * 4 + j) } else { 0 };
+        u32::from_le_bytes([at(0), at(1), at(2), at(3)])
+    };
+    let header = [
+        seq,
+        reason as u32 | (len as u32) << 16 | KNOWN,
+        f.uptime_ms,
+        f.heap_free,
+        f.largest,
+    ];
+    let text = (0..TEXT / 4).fold(FNV_SEED, |h, k| fnv(h, text_word(k)));
+    let slot = seq as usize % SLOTS;
+    store.put(slot, 0, 0);
+    for (k, w) in header.iter().enumerate() {
+        store.put(slot, 1 + k, *w);
+    }
+    store.put(slot, 6, combine(checksum(&header), text));
+    for k in 0..TEXT / 4 {
+        store.put(slot, 7 + k, text_word(k));
+    }
+    store.put(slot, 0, MAGIC);
 }
 
 /// Every valid entry, newest first.
 pub fn newest_first(store: &dyn Store) -> impl Iterator<Item = Entry> {
     let mut all: [Option<Entry>; SLOTS] = [None; SLOTS];
     for (i, slot) in all.iter_mut().enumerate() {
-        *slot = decode(&store.read(i));
+        *slot = decode(&read(store, i));
     }
-    all.sort_unstable_by_key(|e| core::cmp::Reverse(e.map(|e| e.seq)));
+    let top = newest(store).map_or(0, |e| e.seq);
+    // Distance back from the newest, which wraps with the seq.
+    all.sort_unstable_by_key(|e| e.map_or(u32::MAX, |e| top.wrapping_sub(e.seq)));
     all.into_iter().flatten()
 }
 
 /// Empty every slot.
 pub fn clear(store: &mut dyn Store) {
     for i in 0..SLOTS {
-        store.write(i, &[0; WORDS]);
+        write(store, i, &[0; WORDS]);
     }
 }
 
@@ -491,8 +573,9 @@ pub fn decode_alloc(s: &[u32; 6]) -> Option<AllocFail> {
     })
 }
 
-/// A failed allocation this long before the last heartbeat (or later) is
-/// named as a crash's likely cause. The heartbeat is every 30 s.
+/// A failed allocation at most this long before the last heartbeat, or
+/// after it, is named beside a crash. The heartbeat is every 30 s, so that
+/// is up to ~65 s before the crash.
 const ALLOC_RECENT_MS: u32 = 35_000;
 
 /// The boot's pairing: the pending entry gets `reset`; with none, an entry
@@ -513,11 +596,12 @@ pub fn boot(
     }
     if let Some(mut e) = newest(store).filter(|e| e.reset == Reset::Pending) {
         e.reset = reset;
-        store.write(e.seq as usize % SLOTS, &encode(&e));
+        write(store, e.seq as usize % SLOTS, &encode(&e));
         return e;
     }
     let reason = match reset {
-        Reset::External => Reason::ResetButton,
+        // The ESP32 reports its EN button as a power-on (the ring is
+        // cleared then); `External` is for chips that tell them apart.
         Reset::Brownout => Reason::Brownout,
         r if r.is_crash() => Reason::Crash,
         _ => Reason::Unrecorded,
@@ -529,7 +613,7 @@ pub fn boot(
             alive.is_none_or(|f| a.at.uptime_ms.saturating_add(ALLOC_RECENT_MS) >= f.uptime_ms)
         }) {
             e.set_text(format_args!(
-                "after a failed allocation of {} B at {} s ({} B free)",
+                "last failed alloc: {} B at {} s, {} B free (maybe a probe)",
                 a.size,
                 a.at.uptime_ms / 1000,
                 a.at.heap_free
@@ -546,7 +630,7 @@ pub fn mark_update(store: &mut dyn Store) -> bool {
     match newest(store) {
         Some(mut e) if e.reason == Reason::Unrecorded && e.reset == Reset::Software => {
             e.reason = Reason::Ota;
-            store.write(e.seq as usize % SLOTS, &encode(&e));
+            write(store, e.seq as usize % SLOTS, &encode(&e));
             true
         }
         _ => false,
@@ -693,7 +777,7 @@ mod tests {
         let e = boot(&mut r, Reset::IntWdt, fig(90_000), Some(a));
         assert_eq!(e.reason, Reason::Crash);
         assert!(
-            e.text().contains("failed allocation of 4096 B at 100 s"),
+            e.text().contains("failed alloc: 4096 B at 100 s"),
             "{}",
             e.text()
         );
@@ -703,7 +787,7 @@ mod tests {
         let e = boot(&mut r, Reset::Brownout, None, None);
         assert_eq!(e.reason, Reason::Brownout);
         let e = boot(&mut r, Reset::External, None, None);
-        assert_eq!(e.reason, Reason::ResetButton);
+        assert_eq!(e.reason, Reason::Unrecorded);
     }
 
     #[test]
@@ -741,5 +825,48 @@ mod tests {
         let a = AllocFail { size: 12, at: f };
         assert_eq!(decode_alloc(&encode_alloc(&a)), Some(a));
         assert_eq!(decode_alloc(&[0; 6]), None);
+    }
+
+    #[test]
+    fn minimal_push_matches_push() {
+        let mut r = ring();
+        boot(&mut r, Reset::PowerOn, None, None);
+        let f = fig(4242).unwrap();
+        push_minimal(&mut r, Reason::StackOverflow, f, &[b"task ", b"httpd"]);
+        let e = newest(&r).unwrap();
+        assert_eq!(
+            (e.seq, e.reason, e.reset, e.text()),
+            (2, Reason::StackOverflow, Reset::Pending, "task httpd")
+        );
+        assert_eq!(e.figures, Some(f));
+        let mut want = Entry::new(Reason::StackOverflow, Some(f));
+        want.seq = 2;
+        want.set_text(format_args!("task httpd"));
+        assert_eq!(read(&r, 2), encode(&want));
+        // Non-ASCII and overlong text.
+        let long = [b'x'; 100];
+        push_minimal(&mut r, Reason::StackOverflow, f, &[b"\xff", &long]);
+        let e = newest(&r).unwrap();
+        assert_eq!(e.text().len(), TEXT);
+        assert!(e.text().starts_with("?x"));
+        // Into an empty (garbage) ring.
+        let mut g = [[0x5a5a_5a5au32; WORDS]; SLOTS];
+        push_minimal(&mut g, Reason::StackOverflow, f, &[b"task a"]);
+        assert_eq!(newest(&g).unwrap().seq, 1);
+    }
+
+    #[test]
+    fn seq_wraps() {
+        let mut r = ring();
+        let mut e = Entry::new(Reason::ApiReboot, fig(1));
+        e.seq = u32::MAX - 2;
+        r[e.seq as usize % SLOTS] = encode(&e);
+        for _ in 0..5 {
+            push(&mut r, Entry::new(Reason::Ota, fig(2)));
+        }
+        let seqs: Vec<u32> = newest_first(&r).map(|e| e.seq).collect();
+        assert_eq!(seqs, [2, 1, 0, u32::MAX, u32::MAX - 1, u32::MAX - 2]);
+        push_minimal(&mut r, Reason::Panic, fig(3).unwrap(), &[]);
+        assert_eq!(newest(&r).unwrap().seq, 3);
     }
 }

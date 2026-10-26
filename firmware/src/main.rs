@@ -460,6 +460,8 @@ fn main() -> Result<()> {
     // `logring`): from here on no task waits for the UART — the show's
     // frames included.
     logring::start();
+    // Again, outside logring's hook: the panic's entry before its flush.
+    restarts::install_panic_hook();
     // lwip has to exist before anything can bind a socket. Normally the WiFi
     // driver's construction does this on the worker thread, but the server is
     // started before that (by the boot task), and `httpd_start` on a stack
