@@ -84,8 +84,9 @@ own line, <= 15 KB, ~14.5 KB gz): Settings -> About links the HTTP API on
 the project site, docs/api.md as each release published it.
 The web demo's player (`js/demo.js`: the device's settings API answered in
 the page for the site's demo, and what the settings do to its panel;
-imported by app.js only when the page is the demo, never from a player) has
-a line of its own, <= 8 KB.
+imported by app.js only when the page is the demo; `opendmd-pack www`
+leaves it out of the pack, so a player never carries it) has a line of its
+own, <= 8 KB.
 The third-party licence notices (`licenses.txt`, the firmware's and the web
 app's from licenses/, opened from Settings -> Device -> About in a tab of
 its own, never part of a page load) have a line of their own, <= 40 KB:
@@ -171,7 +172,8 @@ LICENCES_GZ_BUDGET = 40 * 1024
 LICENCES = {"licenses.txt"}
 # The web demo's player (js/demo.js: the settings API answered in the page,
 # the schedule, what settings do to the demo's panel): imported by app.js
-# only for the site's demo, never from a device, so outside the 60 KB line.
+# only for the site's demo and left out of the pack (opendmd-pack www.rs
+# DEMO_ONLY), so outside the 60 KB line.
 DEMO_GZ_BUDGET = 8 * 1024
 DEMO = {"js/demo.js"}
 

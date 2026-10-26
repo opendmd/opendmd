@@ -15,7 +15,7 @@
 import { app, setPath } from './state.js';
 import { HttpError } from './source.js';
 import { bannerFor, ZONES } from './schedule.js';
-import { h, emit, label, toast } from './util.js';
+import { h, emit, on, label, toast } from './util.js';
 
 const KEY = 'odmd.demo', SAFE = 144, DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const PANEL = { clk_phase: true, latch_blanking: 1, driver: 'shiftreg', i2s_speed: 8, min_refresh: 60 }, BOOT = ['driver', 'i2s_speed', 'min_refresh'];
@@ -149,7 +149,11 @@ function putConfig(patch) {
       const n = String(v).trim().toLowerCase();
       if (!/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(n)) bad('hostname must be 1-32 lowercase letters, digits and hyphens, not starting or ending with a hyphen');
       c.hostname = n;
-    } else if (k == 'api_key') c.api_key_set = !!v;
+    } else if (k == 'api_key') {
+      // (firmware.js keeps a new key for this site's requests: the demo has none to send.)
+      c.api_key_set = !!v;
+      setTimeout(dropKey);
+    }
     else if (k == 'follow_code') c.follow_code_set = c.follow_code_set || !!v;
     else if (k == 'dwell_min' || k == 'dwell_max') c[k] = Math.max(1, +v || 1);
     else if (k == 'set' && v && !has(setPath(v))) throw new HttpError(404, 'set not found');
@@ -197,7 +201,10 @@ function json(method, url, body) {
 const style = h('style', '#view-now #now-panel{filter:brightness(var(--demo-b,1))}');
 document.head.append(style);
 let driven = '', lookOn = '', lookErr = '', psi = null;
+const dropKey = () => { try { localStorage.removeItem('odmd.apiKey'); } catch { /* none */ } };
+let live = true;
 function apply() {
+  if (!live) return;
   const r = evaluate(), c = S.c, b = Math.min(r.b ?? c.brightness, c.max_brightness);
   // Brightness 96 (a new player's) draws the preview as it is.
   document.documentElement.style.setProperty('--demo-b', b ? ((b / 96) ** 0.45).toFixed(3) : 0);
@@ -229,7 +236,7 @@ async function look(path) {
   if (!path) { sim.preview.p.setOver(undefined); return; }
   try {
     const P = await (psi ??= import('../pkg-psi/opendmd_psi_web.js?demo').then(async (m) => ({ ...m, mem: (await m.default()).memory })));
-    if (lookOn != path) return;
+    if (lookOn != path || !sim) return;
     const q = new URLSearchParams(path.slice(8)), Q = (k) => Math.round(+(q.get(k) || 0) * 65536);
     if (!P.compile(q.get('src') || '')) throw new Error(P.error());
     const loop = P.info()[4] || 0;
@@ -307,6 +314,21 @@ export async function simulate(src) {
   app.config = await src.config();
   app.status = status();
   count().then((n) => { entries = n; }, () => {});
-  new MutationObserver(() => lines(document.getElementById('view-settings'))).observe(document.getElementById('view-settings'), { childList: true, subtree: true });
-  setInterval(apply, 20000);
+  const mo = new MutationObserver(() => lines(document.getElementById('view-settings')));
+  mo.observe(document.getElementById('view-settings'), { childList: true, subtree: true });
+  const tick = setInterval(apply, 20000);
+  // "Use your own card…": the folder is local mode, with no player; this one stops.
+  on('source', (s) => {
+    if (s === src || !live) return;
+    live = false;
+    clearInterval(tick);
+    mo.disconnect();
+    sim?.preview.p.setOver(undefined);
+    sim = null;
+    style.remove();
+    document.documentElement.style.removeProperty('--demo-b');
+    document.getElementById('now-banner')?.remove();
+    app.config = app.status = null;
+    dropKey();
+  });
 }

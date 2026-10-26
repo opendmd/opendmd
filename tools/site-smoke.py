@@ -305,7 +305,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
 
     page = new_page(browser, "laptop", errors)
     page.goto(f"{base}/demo/#now")
-    page.wait_for_function("document.querySelector('#now-title')?.textContent !== 'Local simulator'", timeout=30000)
+    page.wait_for_function("(t => t && t !== 'Local simulator')(document.querySelector('#now-title')?.textContent)", timeout=30000)
     tab("play")
     check(page.locator("text=Device settings, WiFi and reboot live on the player").count() == 0
           and all(page.locator(s).count() == 1 for s in ("#st-brightness", "#st-maxbright", "#st-set", "#st-plat-btn", "#st-dwell-min", "#st-dwell-max", "#st-shuffle")),
@@ -422,6 +422,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     check(len(page.input_value("#sec-key-val")) == 24, "demo settings: Require a key shows one")
     page.uncheck("#sec-key")
     page.wait_for_timeout(300)
+    check(page.evaluate("localStorage.getItem('odmd.apiKey')") is None, "demo settings: the key is not kept for the site's requests")
     # Kept for the session.
     page.reload()
     page.wait_for_selector("#st-tab-device", timeout=30000)
@@ -444,6 +445,43 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
         page.screenshot(path=str(shots / f"demo-settings-{t}-phone.png"), full_page=True)
     page.context.close()
     print(f"  shots in {shots}")
+
+
+def demo_own_card(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Use your own card… in the demo: its player stops (no banner, no
+    brightness filter, no settings of its own), and the folder plays in
+    local mode with no errors."""
+    page = new_page(browser, "laptop", errors)
+    page.goto(f"{base}/demo/#now")
+    page.wait_for_function("(t => t && t !== 'Local simulator')(document.querySelector('#now-title')?.textContent)", timeout=30000)
+    # Night mode now, so the demo's banner is up before the swap.
+    page.evaluate("""() => import('./js/state.js').then(async ({ app }) => {
+        await app.src.putSchedule({ rules: [], night: { from: '00:00', to: '00:00', mode: 'dim', brightness: 8 } }); })""")
+    page.wait_for_selector("#now-banner:not([hidden])", timeout=10000)
+    with tempfile.TemporaryDirectory() as d:
+        card = Path(d) / "mycard"
+        (card / "gifs/Kenney").mkdir(parents=True)
+        gif = next((site / "demo/demo/gifs/Kenney").glob("*.gif"))
+        shutil.copy(gif, card / "gifs/Kenney" / gif.name)
+        (card / "filelist.txt").write_text(f"/gifs/Kenney/{gif.name}\n")
+        page.set_input_files(".demo-own input", str(card))
+        page.wait_for_function("!document.querySelector('#where').textContent.startsWith('Demo')", timeout=10000)
+        page.evaluate("location.hash = '#settings'")
+        page.wait_for_selector("#view-settings.on .card", timeout=10000)
+        page.evaluate("location.hash = '#now'")
+        page.wait_for_selector("#view-now.on #sim-play", timeout=10000)
+        page.select_option("#sim-list", "/filelist.txt")
+        page.click("#sim-play")
+        page.wait_for_function(f"document.querySelector('#now-title').textContent !== 'Local simulator'", timeout=10000)
+        page.wait_for_timeout(1500)
+        state = page.evaluate("""() => import('./js/state.js').then(({ app }) => ({
+            banner: !!document.querySelector('#now-banner'), filter: getComputedStyle(document.querySelector('#now-panel')).filter,
+            config: app.config, status: app.status, demo: !!app.demo, key: localStorage.getItem('odmd.apiKey') }))""")
+        local = page.locator("#view-settings").inner_text()
+    check(not state["banner"] and state["filter"] == "none" and state["config"] is None and state["status"] is None and not state["demo"]
+          and "local mode" in local and lit(page, "#now-panel") > 50,
+          f"demo: Use your own card… stops the demo's player (banner, filter, config: {state}) and plays the folder in local mode")
+    page.context.close()
 
 
 ART_PLATFORMS = ("MD", "SNES", "GB", "GBC", "GBA", "SATURN", "NDS", "NES", "SMS", "PCE", "PS1", "N64", "ARCADE")
@@ -884,6 +922,7 @@ def main() -> int:
         f_page(browser, base, errors, tool, a.shots)
         print("the demo's Settings")
         demo_settings(browser, base, errors, a.shots or ROOT / "target/site-smoke")
+        demo_own_card(browser, base, a.site, errors)
         print("the demo's share link")
         demo_share(browser, base, errors)
         print("the art index (/art-index/)")

@@ -43,14 +43,18 @@ fn walk(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
 
 /// The files of a built web app as the device serves them: `<file>.gz` in
 /// place of `<file>` wherever `make web` wrote one (the firmware sends it
-/// with `Content-Encoding: gzip`, as it did from the card), `skip` left out.
-pub fn collect(dir: &Path, skip: Option<&Path>) -> Result<Vec<PackFile>> {
+/// with `Content-Encoding: gzip`, as it did from the card), the files
+/// `skip` names (and their `.gz`) left out.
+pub fn collect(dir: &Path, skip: &[&Path]) -> Result<Vec<PackFile>> {
     let all = walk(dir)?;
     let names: std::collections::HashSet<&str> = all.iter().map(|(r, _)| r.as_str()).collect();
-    let skip = skip.and_then(|s| fs::canonicalize(s).ok());
+    // (By their folder's real path and their name: a skipped file need not exist.)
+    let real = |p: &Path| Some(fs::canonicalize(p.parent()?).ok()?.join(p.file_name()?));
+    let skip: Vec<PathBuf> = skip.iter().filter_map(|s| real(s)).collect();
     let mut files = Vec::new();
     for (rel, path) in &all {
-        if skip.is_some() && fs::canonicalize(path).ok() == skip {
+        let base = rel.strip_suffix(".gz").unwrap_or(rel);
+        if real(&dir.join(base)).is_some_and(|r| skip.contains(&r)) {
             continue;
         }
         let (logical, gzip) = match rel.strip_suffix(".gz") {
@@ -79,6 +83,9 @@ pub fn collect(dir: &Path, skip: Option<&Path>) -> Result<Vec<PackFile>> {
     Ok(files)
 }
 
+/// The web demo's player: published with the site's demo, never packed.
+pub const DEMO_ONLY: &str = "js/demo.js";
+
 pub fn pack(
     dir: &Path,
     out: &Path,
@@ -97,7 +104,12 @@ pub fn pack(
             .to_string(),
         (None, None) => bail!("--version or --version-file is required"),
     };
-    let files = collect(dir, version_file.as_deref())?;
+    // The version file is the header's, and the web demo's player (js/demo.js)
+    // is only ever loaded from the site: neither goes on the device.
+    let demo = dir.join(DEMO_ONLY);
+    let mut skip = vec![demo.as_path()];
+    skip.extend(version_file.as_deref());
+    let files = collect(dir, &skip)?;
     if !files.iter().any(|f| f.path == "index.html") {
         bail!("{} has no index.html: run `make web` first", dir.display());
     }
@@ -180,6 +192,9 @@ mod tests {
         fs::write(dir.join("js/a.js"), "raw js").unwrap();
         fs::write(dir.join("js/a.js.gz"), "gz js").unwrap();
         fs::write(dir.join("pkg/x.png"), "png").unwrap();
+        // The web demo's player, and a lone .gz of it: the site's only.
+        fs::write(dir.join("js/demo.js"), "demo").unwrap();
+        fs::write(dir.join("js/demo.js.gz"), "gz demo").unwrap();
         fs::write(dir.join("version.txt"), "v9-test\n").unwrap();
         fs::write(dir.join(".hidden"), "no").unwrap();
         let out = dir.join("out.pack");
@@ -206,6 +221,12 @@ mod tests {
                 ("js/a.js", "gz js", true),
                 ("pkg/x.png", "png", false),
             ]
+        );
+        fs::remove_file(dir.join("js/demo.js")).unwrap();
+        let only_gz = collect(&dir, &[&dir.join("js/demo.js")]).unwrap();
+        assert!(
+            only_gz.iter().all(|f| f.path != "js/demo.js"),
+            "a lone demo.js.gz is left out too"
         );
         // Over the limit: refused, nothing written.
         let small = dir.join("small.pack");
