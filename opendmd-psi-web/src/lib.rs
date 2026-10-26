@@ -97,6 +97,12 @@ fn utf16_at(s: &str, byte: usize) -> u32 {
 /// compiled is still the one drawn.
 #[wasm_bindgen]
 pub fn compile(src: &str) -> bool {
+    build(src)
+}
+
+/// [`compile`], once in the module ([`look`] calls it twice).
+#[inline(never)]
+fn build(src: &str) -> bool {
     let s = state();
     match compile_into(src, &mut s.next) {
         Ok(_) => {
@@ -107,13 +113,41 @@ pub fn compile(src: &str) -> bool {
         }
         Err(e) => {
             s.at = [utf16_at(src, e.start), utf16_at(src, e.end)];
-            let mut n = e.msg.len().min(s.err.len());
-            while !e.msg.is_char_boundary(n) {
-                n -= 1;
-            }
-            s.err[..n].copy_from_slice(&e.msg.as_bytes()[..n]);
-            s.err_len = n;
+            fail(&e.msg);
             false
+        }
+    }
+}
+
+/// Keep `msg` as the error's sentence (cut at a char boundary).
+fn fail(msg: &str) {
+    let s = state();
+    let mut n = msg.len().min(s.err.len());
+    while !msg.is_char_boundary(n) {
+        n -= 1;
+    }
+    s.err[..n].copy_from_slice(&msg.as_bytes()[..n]);
+    s.err_len = n;
+}
+
+/// Any formula as a look (Settings › Look, the editor's "Use as the
+/// look"): `src` drawn over the GIF with `blend` (`over screen add
+/// multiply max min`) at `amount` percent, as the text the player is sent
+/// (`opendmd_psi::look`), compiled — [`info`] and [`error`] then describe
+/// the look. Empty when the formula or the look does not compile.
+#[wasm_bindgen]
+pub fn look(src: &str, blend: &str, amount: u8) -> String {
+    if !build(src) {
+        return String::new();
+    }
+    let ms = state().prog.loop_ms();
+    match opendmd_psi::look::wrap(src, ms, blend, amount) {
+        Ok(s) if build(&s) => s,
+        Ok(_) => String::new(),
+        Err(e) => {
+            state().at = [0; 2];
+            fail(&e.msg);
+            String::new()
         }
     }
 }

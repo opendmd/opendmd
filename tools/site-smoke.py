@@ -343,6 +343,22 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     after = rows_ratio(page)
     check(abs(after / before - 1) > 0.2 and page.evaluate("import('./js/state.js').then(m => m.app.status.formula_look?.error ?? null)") is None,
           f"demo settings: the Scanlines look is drawn over the panel (even/odd rows {before:.2f} -> {after:.2f})")
+    # Any Formula as the look: Plasma covers the GIF, so it starts at Screen 40%.
+    lum = lambda: page.evaluate("""() => { const c = document.querySelector('#now-panel'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let n = 0; for (let i = 0; i < d.length; i += 4) n += d[i] + d[i+1] + d[i+2]; return n; }""")
+    l0 = lum()
+    tab("look")
+    page.evaluate("document.querySelectorAll('#st-tab-look .tick').forEach(t => t.textContent = '')")
+    page.select_option("#st-look-formula", label="Plasma")
+    saved("#st-look-formula")
+    mix = (page.input_value("#st-look-blend"), page.input_value("#st-look-amt"))
+    cfg = page.evaluate("import('./js/state.js').then(m => [m.app.config.look_formula_name, m.app.config.look_blend, m.app.config.look_amount, m.app.status.formula_look?.error ?? null])")
+    now()
+    page.wait_for_timeout(800)
+    l1, ratio = lum(), rows_ratio(page)
+    check(mix == ("screen", "40") and cfg == ["Plasma", "screen", 40, None] and l1 > 1.2 * l0 and abs(ratio - 1) < 0.15,
+          f"demo settings: Plasma screened at 40% over the panel ({mix}, {cfg}; brightness {l0:,} -> {l1:,}, even/odd rows {ratio:.2f})")
+    page.screenshot(path=str(shots / "demo-look-plasma-laptop.png"))
     tab("look")
     page.click("#st-trans-preview")
     page.wait_for_timeout(1500)

@@ -223,7 +223,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   firmware's Formula look from the editor): `{"ok":true,"path":..,"over":true}`,
   until the ordinal changes; `""` takes it off; `live` with none on is a
   409. Config `look_formula` (`""` or a formula's path; not compiled here)
-  and `look_formula_name` (at most 60 characters); status `formula_look`
+  and `look_formula_name` (at most 60 characters), `look_blend` (over,
+  screen, add, multiply, max, min) and `look_amount` (0..=100); status `formula_look`
   (null, or `{"source":"setting"|"over_gif","held":20480,...}`).
 - **`GET /api/stat?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
@@ -626,10 +627,13 @@ DEFAULT_SETTINGS = {
     "glow": "off",              # off / short / long
     "look_formula": "",         # the Formula look: "" or a formula's @fx:psi?src=.. path
     "look_formula_name": "",    # its name in the web app (display only)
+    "look_blend": "over",       # how the web app composed it (display only): over/screen/add/multiply/max/min
+    "look_amount": 100,         # and at what amount, 0..=100 (display only)
     "boot_show": "short",       # the start-up show: off / short / full
     "api_key": "",              # "" = no key asked; never echoed back
 }
 LOOKS = ("colour", "amber", "red", "green", "blue", "white")
+LOOK_BLENDS = ("over", "screen", "add", "multiply", "max", "min")
 GLOWS = ("off", "short", "long")
 BOOT_SHOWS = ("off", "short", "full")
 # The start-up show as a live item (`@boot[?len=short|full|card&..]`,
@@ -669,6 +673,8 @@ FIELD_TYPES = {
     "glow": "str",
     "look_formula": "str",
     "look_formula_name": "str",
+    "look_blend": "str",
+    "look_amount": "u8",
     "boot_show": "str",
     "api_key": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
@@ -3170,6 +3176,8 @@ def make_handler(ctx: Context, quiet: bool):
                     "glow": s["glow"],
                     "look_formula": s["look_formula"],
                     "look_formula_name": s["look_formula_name"],
+                    "look_blend": s["look_blend"],
+                    "look_amount": s["look_amount"],
                     "boot_show": s["boot_show"],
                     "api_key_set": bool(s["api_key"]),
                 }
@@ -3297,6 +3305,12 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "look_formula_name" and (len(v) > 60 or any(ord(c) < 32 for c in v)):
                         self.send_error_json(400, "look_formula_name must be one line of at most 60 characters")
                         return
+                    if field == "look_blend" and v not in LOOK_BLENDS:
+                        self.send_error_json(400, "look_blend must be over, screen, add, multiply, max or min")
+                        return
+                    if field == "look_amount" and not 0 <= v <= 100:
+                        self.send_error_json(400, "look_amount must be 0..=100")
+                        return
                     if field == "api_key" and v != "" and not API_KEY_RE.fullmatch(v):
                         self.send_error_json(400, "api_key must be 8..64 of A-Z a-z 0-9 . _ ~ - (or \"\" for none)")
                         return
@@ -3339,6 +3353,9 @@ def make_handler(ctx: Context, quiet: bool):
                         next_settings[field] = max(1, v)
                     else:
                         next_settings[field] = v
+                # A new look sent without how it was composed is drawn as it is.
+                if "look_formula" in patch and "look_blend" not in patch and "look_amount" not in patch:
+                    next_settings["look_blend"], next_settings["look_amount"] = "over", 100
 
                 # "attract_set" is null-or-string, so it is not in
                 # FIELD_TYPES; validated the same way as "set" below.

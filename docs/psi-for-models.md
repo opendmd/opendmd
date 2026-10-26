@@ -259,7 +259,12 @@ A formula can draw over the GIF playing. The bottom of the stack is the
 picture under the formula: the bottom layer, a blend other than `over`, or a
 coverage below 1, let it show through, and `ur ug ub ul` read it at the
 pixel. A formula that does neither replaces the GIF (and is refused as a
-GIF look). Alone, the picture under it is black. Looks are capped at 8 ms.
+GIF look as it is). Alone, the picture under it is black. Looks are capped
+at 12 ms (a look over 8 ms moves at 25 frames a second). The web app makes **any** formula a look by pasting it in as a
+part and drawing that with a blend and a coverage —
+`part look { … }` then `layer screen { look(x, y, 0.4) }` (or
+`look(x, y, 0.3)` for over; `opendmd_psi::look`) — so a model never needs
+to write that wrapper itself.
 
 ## 9. Parts: one formula inside another
 
@@ -323,7 +328,11 @@ a multiply).
 ## 11. The cost model
 
 The panel's processor runs each step for 4,096 pixels; the estimate is
-`(160 + Σ per-pixel step costs) ns × 4096` (+ ~10 µs per per-row step).
+`(45 + Σ per-pixel step costs) ns × 4096` (+ ~10 µs per per-row step),
+then × 1.15 for what playing it adds (the copy to the panel, the picture
+under a look), where every colour costs 120 to write when it varies per
+pixel (about 5 when it is one value along a row), so `gray(x)` is 165.
+It is calibrated on the device (within ~12 % for layers and looks).
 **Hoisting is automatic**: a value is computed as rarely as its inputs
 change — constants once, `t`/clock/slider-only values once a frame,
 `y`/`py`-only values once per row (32 times), the rest per pixel. So
@@ -339,13 +348,14 @@ change — constants once, `t`/clock/slider-only values once a frame,
 | `sqrt` | 539 | | `atan2` | 529 |
 | `len` | 642 | | `noise` | 855 |
 | colour `rgb` | 120 | | colour `hsv` | 195 |
-| `ur` `ug` `ub` | 35 | | `ul` | 125 |
-| `digit` `glyph` | ~100 (estimated) | | `bit` | 55 |
+| `ur` `ug` `ub` | 70 | | `ul` | 140 |
+| `digit` `glyph` | 240 | | `bit` | 55 |
 | `pick` (values the same for every pixel) | 100 | | `pick` of per-pixel values | its compares and selects |
-| each extra layer | 150 (multiply 210, screen 290; +75 with coverage) | | showing the picture under | 50 |
+| each extra layer | its colour + 190 (multiply 245, screen 300, max/min 180; with coverage add 575, multiply 630, screen 600, max/min 450, over 390) | | showing the picture under | free |
 
-Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs, but
-the gallery and GIF looks take ≤ 8 ms). Division by a constant is a
+Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs at
+25 frames a second or fewer; GIF looks take ≤ 12 ms, and the worked
+examples here ≤ 10). Division by a constant is a
 multiply. One `noise` or `len` is fine; four are heavy. Per-pixel `px`
 arithmetic costs the same as `x` arithmetic.
 

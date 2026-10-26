@@ -25,6 +25,7 @@ extern crate alloc;
 
 mod compile;
 pub mod fixed;
+pub mod look;
 mod program;
 mod tables;
 mod vm;

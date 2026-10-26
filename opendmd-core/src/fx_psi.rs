@@ -463,14 +463,20 @@ impl Effect for PsiFx {
 /// A formula estimated to take longer than this a frame (µs on the ESP32)
 /// is not drawn over GIFs: it runs at the GIF's own frame rate whenever the
 /// GIF changes (a governor can only slow its own animation), next to the
-/// GIF's decoding (p90 ~4 ms) and the blit — 8 ms is the effect budget at
-/// 50 fps.
-pub const LOOK_MAX_EST_US: u32 = 8_000;
+/// GIF's decoding (p90 ~4 ms) and the blit. 8 ms until any-look
+/// (2026-10-26), on an estimate that read full-panel looks ~1.5× low; with
+/// the estimate calibrated on the device, 12 ms: on the spare, looks of
+/// 8.6 and 12.3 ms measured left the GIFs at 0 steady misses (the animated
+/// one at 25 fps: over 8 ms its governor holds 40 ms frames).
+pub const LOOK_MAX_EST_US: u32 = 12_000;
 
 /// Why a formula that never lets the picture under it show through (it
 /// reads none of `ur ug ub ul`, and its bottom layer covers every pixel) is
-/// not drawn over GIFs: the GIF would be hidden.
-pub const COVERS: &str = "this Formula covers the GIF entirely: let it show through with a layer, ur ug ub ul, or a coverage";
+/// not drawn over GIFs: the GIF would be hidden. Any Formula is a look once
+/// the web app composes it with a blend or an amount under 100 %
+/// (`psi::look`); this is the one choice left that hides the GIF.
+pub const COVERS: &str =
+    "this Formula covers the GIF entirely: choose a lower amount or another blend";
 
 /// A formula drawn over whatever the player shows — a GIF, a transition, a
 /// live item: the Look setting's formula, or the editor's "over the GIF".
@@ -1428,6 +1434,20 @@ mod tests {
             ""
         ))
         .is_err());
+        // Composed with a blend or a lower amount (Settings' choices), it is.
+        let under = picture();
+        for (b, k) in [("screen", 40), ("over", 30), ("multiply", 100), ("max", 50)] {
+            let src = psi::look::compose("hsv(x, 1, 1)", b, k).unwrap();
+            let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
+            assert!(look.take());
+            let mut c = picture();
+            let out = look.apply(Duration::ZERO, &mut c, 0);
+            assert!(
+                out.as_bytes() == over(&src, 0, &under).as_slice(),
+                "{b} {k}"
+            );
+            assert!(out.as_bytes() != under.as_bytes(), "{b} {k}: drawn");
+        }
         let e = FormulaLook::from_path(&super::path("layer multiply { gray(noise(x*8, y, t) + noise(x, y*8, t) + len(x, y) + len(y, x) + atan2(x, y) + sqrt(x) + noise(y, x, t)) }", "")).unwrap_err();
         assert!(
             e.msg
@@ -1436,7 +1456,7 @@ mod tests {
             e.msg
         );
         assert!(
-            e.msg.ends_with("the limit is 8 ms) — simplify it"),
+            e.msg.ends_with("the limit is 12 ms) — simplify it"),
             "{}",
             e.msg
         );
