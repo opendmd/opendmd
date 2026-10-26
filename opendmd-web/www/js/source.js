@@ -20,7 +20,18 @@ async function check(res) {
   if (res.ok) return res;
   let msg = res.statusText;
   try { msg = (await res.json()).error || msg; } catch { /* not JSON */ }
-  throw new HttpError(res.status, `${res.status}: ${msg}`);
+  throw Object.assign(new HttpError(res.status, `${res.status}: ${msg}`), { after: +res.headers.get('Retry-After') || 0 });
+}
+
+// The device's stream task sends listings as it sends files, one at a time:
+// a full queue is a 503 with Retry-After. Asked again, up to five times.
+async function queued(fn) {
+  for (let i = 1; ; i++) {
+    try { return await fn(); } catch (e) {
+      if (e?.status !== 503 || i >= 5) throw e;
+      await new Promise((r) => setTimeout(r, (e.after || 1) * 1000));
+    }
+  }
 }
 
 // The API key (Settings › Device › Security) goes with every request; a
@@ -73,14 +84,14 @@ export class DeviceSource {
   // The playback cache: {total, prepared, state: "ready"|"counting"}; the
   // card paths of every prepared copy; and forgetting a GIF's copy.
   cache() { return this.json('GET', '/api/cache', undefined, 15000); }
-  async cacheList() { return (await this.json('GET', '/api/cache/list', undefined, 180000)).paths; }
+  async cacheList() { return (await queued(() => this.json('GET', '/api/cache/list', undefined, 180000))).paths; }
   forget(path) { return this.json('POST', '/api/cache/forget', { path }); }
   // Rename a GIF: its prepared copy, Smooth motion line and failure line
   // follow on the device; playlists and overrides are the caller's.
   move(from, to) { return this.json('POST', '/api/files/move', { from, to }); }
   // GIFs that can never be prepared ([{path, reason}], the device's
   // /cache/.failed), and recording one. Not in every firmware yet.
-  cacheFailed() { return this.json('GET', '/api/cache/failed'); }
+  cacheFailed() { return queued(() => this.json('GET', '/api/cache/failed')); }
   cacheFail(path, reason) { return this.json('POST', '/api/cache/failed', { path, reason }); }
   // A playlist's per-GIF overrides, parsed: {set, playlist, overrides: [...]}.
   overrides(set) { return this.json('GET', '/api/overrides?set=' + encodeURIComponent(set)); }
@@ -90,7 +101,7 @@ export class DeviceSource {
   wake(minutes) { return this.json('POST', '/api/wake', { minutes }); }
 
   async list(dir) {
-    const r = await this.json('GET', '/api/files?dir=' + encodeURIComponent(dir));
+    const r = await queued(() => this.json('GET', '/api/files?dir=' + encodeURIComponent(dir)));
     return r.entries;
   }
   async readText(path) {

@@ -22,8 +22,9 @@ curl -s $DMD/api/status
   a web app pack ≤ 1,310,720 B. Uploads are streamed, any size, but no data
   for 5 s, or 120 s in all, is a `408`. A body needs a `Content-Length`.
 - **One thing at a time.** One server task, at most 7 open connections
-  (`HTTP_MAX_SOCKETS`). Transfers run one at a time, two more waiting; a
-  third gets `503` + `Retry-After: 1` after 2 s. Short of memory, a listing
+  (`HTTP_MAX_SOCKETS`). Transfers and the listings (`/api/files`,
+  `/api/cache/list`, `/api/cache/failed`) run one at a time, two more
+  waiting; a third gets `503` + `Retry-After: 1` after 2 s. Short of memory, a listing
   or transfer is refused up front: `503` + `Retry-After: 2`. Retry after the
   delay; do not fire requests in parallel.
 - **Slow commands.** A playlist change waits up to 60 s for the index

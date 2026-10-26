@@ -991,21 +991,18 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
 
     // Every prepared copy's card path, streamed: what a browser intersects
     // with a playlist to find the files left to prepare.
+    // On the stream task, like a card file: its bucket walk must not hold
+    // the httpd task (and `/api/status`) for the seconds it takes. A full
+    // queue for 2 s is a 503 + Retry-After: 1, which the web app retries.
+    // (The task holds `cache_builder::busy()` for every job.)
     server.route("/api/cache/list", Method::Get, |req| {
-        if !files::affordable(req)? {
-            return Ok(());
-        }
-        let _busy = crate::cache_builder::busy();
-        crate::cache::stream_list(req)
+        stream::hand_off(req, crate::cache::stream_list)
     })?;
 
     // The GIFs the cache builder could not prepare (`/cache/.failed`), and
     // forgetting them so they are tried again.
     server.route("/api/cache/failed", Method::Get, |req| {
-        if !files::affordable(req)? {
-            return Ok(());
-        }
-        crate::cache_builder::stream_failed(req)
+        stream::hand_off(req, crate::cache_builder::stream_failed)
     })?;
     // A GIF the browser could not prepare either (`{"path","reason"}`):
     // recorded once per path, so the device's builder skips it too.
@@ -1069,10 +1066,12 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
     })?;
 
+    // A directory listing reads the directory under the FAT lock, ~0.5 s
+    // for gifs/Consoles at 40 MHz and 2.3 s on a 20 MHz card, streamed: on
+    // the httpd task it held `/api/status` that long (measured on the spare,
+    // 2026-10-26). So it goes out from the stream task, queued like a file
+    // (a full queue for 2 s: 503 + Retry-After: 1, retried by the web app).
     server.route("/api/files", Method::Get, |req| {
-        if !files::affordable(req)? {
-            return Ok(());
-        }
         let dir = query_param(req.query(), "dir").unwrap_or_else(|| "/".to_string());
         let Some(fs_dir) = files::card_path(config::SD_MOUNT, &dir) else {
             return req.bad_request("path escapes the card");
@@ -1080,8 +1079,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // Sizes cost a `stat` each, which FAT makes quadratic — see
         // `files::stream_dir_json`. Opt in with `?sizes=1`.
         let sizes = query_param(req.query(), "sizes").is_some_and(|v| v == "1" || v == "true");
-        let _busy = crate::cache_builder::busy();
-        files::stream_dir_json(req, &dir, &fs_dir, sizes)
+        stream::hand_off(req, move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
     })?;
 
     // Would a new display name clash? (`opendmd_core::hostname::Check`.)
