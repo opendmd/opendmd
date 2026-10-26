@@ -504,7 +504,7 @@ fn run(worker: NetWorker) {
         if let Some(started) = ap_started_at {
             if started.elapsed() >= config::AP_TIMEOUT {
                 info!("[net] AP timeout reached; rebooting");
-                crate::http::reboot_after_response();
+                crate::http::reboot_after_response(opendmd_core::restarts::Reason::ApTimeout);
             }
         }
 
