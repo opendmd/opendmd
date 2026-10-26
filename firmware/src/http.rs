@@ -1241,6 +1241,18 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     server.route("/api/reboot", Method::Post, |req| {
+        // Test hook, `bench` builds only (a release has no such code):
+        // `?panic=1` panics on purpose, on this (the httpd) task, to check
+        // what a crash leaves: the panic message and IDF's backtrace on the
+        // console, the log ring flushed first, and `reset_reason: "panic"`
+        // after the restart.
+        #[cfg(feature = "bench")]
+        if query_param(req.query(), "panic").is_some() {
+            log::warn!("panicking on purpose (POST /api/reboot?panic=1, a bench test hook)");
+            req.json(r#"{"ok":true,"panicking":true}"#)?;
+            std::thread::sleep(Duration::from_millis(500));
+            panic!("test panic asked for over HTTP (POST /api/reboot?panic=1)");
+        }
         info!("reboot requested over HTTP");
         // Test hook: `?sd_fail=N` makes the next boot's first N card mounts
         // fail, to exercise the no-card boot without touching the card.

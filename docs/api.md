@@ -163,7 +163,9 @@ Replies `{"ok":true,"rebooting":true}`, stops any card write, restarts.
 Bench test hooks: `?sd_fail=N` (next N card mounts fail),
 `?sd_io_fail=N&sd_io_boots=B` (N card reads fail on each of B boots),
 `?sd_fallback=clear` (forget the card's slow clock at the next boot; see
-`POST /api/card/full-speed` for the live way).
+`POST /api/card/full-speed` for the live way), and in `bench` builds only
+`?panic=1` (replies `{"ok":true,"panicking":true}`, then panics on purpose;
+`reset_reason` in `/api/status` reads `panic` after the restart).
 
 ```sh
 curl -s -X POST $DMD/api/reboot
