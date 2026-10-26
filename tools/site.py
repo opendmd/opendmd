@@ -39,6 +39,15 @@
                The page's body and thumbnails are tools/gallery_page.py's,
                which the public repo's Pages workflow also runs (vendored)
                on every push to its main, so a merge is live without a release
+- /art-index/v1/<PLATFORM>.json
+               the name index of Create Art's "Find art for a game"
+               (opendmd-web/art-index/, tools/art-index.py): not in the www
+               pack; the web app on a player fetches it from here (GitHub
+               Pages sends `Access-Control-Allow-Origin: *` and compresses
+               JSON), the demo same-origin. `v1` is the format
+               (ART_INDEX_FORMAT): each file is checked to be exactly that
+               shape, so a changed format cannot be published under the old
+               version an older web app asks for
 - /art/        the landing page's tiles and the wordmark (tools/site-art.py: recordings of the
                panel's own effects and live items, and CC0 sprites), drawn
                as LEDs by CSS
@@ -185,6 +194,13 @@ FILES = {
 }
 # The licences page (licenses/index.html), linked from every page's footer.
 LICENCES_PAGE = "licenses/index.html"
+# Create Art's game name index (tools/art-index.py): published at
+# art-index/v<ART_INDEX_FORMAT>/<PLATFORM>.json. The web app's find.js asks
+# for that version (`ART_INDEX`); bump both together when the shape changes,
+# and keep publishing the old version for the web apps already on players.
+ART_INDEX_SRC = ROOT / "opendmd-web/art-index"
+ART_INDEX_FORMAT = 1
+ART_INDEX_PLATFORMS = ("MD", "SNES", "GB", "GBC", "GBA", "SATURN", "NDS", "NES", "SMS", "PCE", "PS1", "N64", "ARCADE")
 LICENCES = """# Licences
 
 OpenDMD is open source: [MIT](../LICENSE-MIT.txt) or [Apache 2.0](../LICENSE-APACHE.txt), at your option.
@@ -204,6 +220,11 @@ with each licence's full text:
 
 The player carries the firmware's and the web app's notices too: in the web app, **Settings ›
 Device › About › Open-source licences**.
+
+**Find art for a game** searches a list of game names taken from the file names of the
+[libretro-thumbnails](https://github.com/libretro-thumbnails) collections (published here
+as `art-index/`); the pictures come from those collections when you search, and are never
+stored on this site.
 
 The demo's and this site's animations are recordings of OpenDMD's own effects, and the
 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
@@ -700,6 +721,29 @@ def api_pages(out: Path, info: dict, art: dict, archive: Path | None, freeze: st
     return sorted(frozen, key=semver_key, reverse=True)
 
 
+def write_art_index(out: Path) -> None:
+    """Create Art's game name index: art-index/v<format>/<PLATFORM>.json,
+    copied byte for byte (compact JSON; Pages gzips it on the way), each
+    checked to be format 1's shape: {"repo", "names", "kinds"}, one hex
+    digit of kinds per name."""
+    dst = out / f"art-index/v{ART_INDEX_FORMAT}"
+    dst.mkdir(parents=True)
+    have = sorted(p.stem for p in ART_INDEX_SRC.glob("*.json"))
+    if have != sorted(ART_INDEX_PLATFORMS):
+        raise SystemExit(f"{ART_INDEX_SRC}: expected {sorted(ART_INDEX_PLATFORMS)}, found {have}")
+    for plat in ART_INDEX_PLATFORMS:
+        src = ART_INDEX_SRC / f"{plat}.json"
+        d = json.loads(src.read_text(encoding="utf-8"))
+        ok = (isinstance(d, dict) and set(d) == {"repo", "names", "kinds"} and isinstance(d["repo"], str)
+              and isinstance(d["names"], list) and all(isinstance(n, str) for n in d["names"])
+              and isinstance(d["kinds"], str) and len(d["kinds"]) == len(d["names"])
+              and re.fullmatch(r"[0-9a-f]*", d["kinds"]) is not None)
+        if not ok:
+            raise SystemExit(f"{src}: not art index format {ART_INDEX_FORMAT} (a new shape is a new version: "
+                             "ART_INDEX_FORMAT here and ART_INDEX in find.js)")
+        shutil.copyfile(src, dst / src.name)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("out", type=Path)
@@ -745,6 +789,7 @@ def main() -> None:
     for js in sorted(CARD_SRC.glob("*.js")):
         shutil.copyfile(js, out / posixpath.dirname(CARD_PAGE) / js.name)
     info = release(a.dist, out)
+    write_art_index(out)
     art = json.loads((a.art / "art.json").read_text())
     (out / "art/strip").mkdir(parents=True)
     for i in art["items"]:

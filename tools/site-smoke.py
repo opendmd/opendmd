@@ -16,6 +16,12 @@ site (make site):
   the gallery's own checker accepts; a too-long one falls back to copying),
   and a link with no formula;
 - the demo's Copy share link gives a /f/ link that opens there;
+- /art-index/v1/ (Create Art's game name index, not in the www pack): every
+  platform's file published, the committed file byte for byte, served as
+  JSON (the CORS header a player's web app needs is GitHub Pages' own,
+  which this test's server cannot show); none left under demo/; the demo's
+  Game art searches it same-origin (nothing asked of opendmd.github.io; the
+  pictures' requests answered locally);
 - /formulas/ (the gallery): every example listed with its thumbnail, Open
   and Remix leading to the formula;
 - the HTTP API: dev/api.html in the site, linking every frozen copy it
@@ -59,6 +65,7 @@ import sys
 import tempfile
 import threading
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import zxingcpp
@@ -252,6 +259,50 @@ def demo_share(browser, base: str, errors: list[str]) -> None:
     page.wait_for_selector("#f-name:not(:empty)", timeout=20000)
     first = json.loads((ROOT / "opendmd-web/www/formulas.json").read_text())[0]
     check(page.inner_text("#f-name") == first["name"], f"demo: the link opens {first['name']} on its page")
+    page.context.close()
+
+
+ART_PLATFORMS = ("MD", "SNES", "GB", "GBC", "GBA", "SATURN", "NDS", "NES", "SMS", "PCE", "PS1", "N64", "ARCADE")
+
+
+def art_index(browser, base: str, site: Path, errors: list[str]) -> None:
+    """The game name index at art-index/v1/, and the demo using it same-origin."""
+    bad = []
+    for plat in ART_PLATFORMS:
+        f = site / "art-index/v1" / f"{plat}.json"
+        src = ROOT / "opendmd-web/art-index" / f"{plat}.json"
+        if not f.is_file() or f.read_bytes() != src.read_bytes():
+            bad.append(plat)
+            continue
+        req = urllib.request.Request(f"{base}/art-index/v1/{plat}.json", headers={"Origin": "http://192.168.1.50"})
+        with urllib.request.urlopen(req) as r:
+            body, ctype, cors = r.read(), r.headers.get("content-type", ""), r.headers.get("access-control-allow-origin")
+        d = json.loads(body)
+        if r.status != 200 or "json" not in ctype or len(d["names"]) != len(d["kinds"]) or not d["names"]:
+            bad.append(plat)
+    check(not bad, f"art index: art-index/v1/<platform>.json for all {len(ART_PLATFORMS)} platforms, fetchable as JSON "
+                   f"(CORS header here: {cors or 'none, the test server; Pages sends *'}){' — bad: ' + ', '.join(bad) if bad else ''}")
+    check(not any(p.is_file() for p in (site / "demo/art").rglob("*")), "art index: not under demo/ (the www pack does not carry it)")
+    png = io.BytesIO()
+    Image.new("RGB", (32, 24), (200, 40, 40)).save(png, "PNG")
+    page = new_page(browser, "laptop", errors)
+    asked: list[str] = []
+    site_asked: list[str] = []
+    page.route("https://raw.githubusercontent.com/**", lambda r: r.fulfill(
+        status=200, body=png.getvalue(), headers={"access-control-allow-origin": "*", "content-type": "image/png"}))
+    page.route("https://opendmd.github.io/**", lambda r: (site_asked.append(r.request.url), r.abort()))
+    page.on("request", lambda r: "/art-index/" in r.url and asked.append(r.url))
+    page.goto(f"{base}/demo/#create")
+    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=30000)
+    page.click("#st-src [data-v=gameart]")
+    page.select_option("#find-platform", "GB")
+    page.fill("#st-q", "tetris")
+    page.click("#st-go")
+    page.wait_for_selector("#find-grid .find-hit", timeout=30000)
+    names = page.eval_on_selector_all("#find-grid .find-hit .find-t", "els => els.map(e => e.textContent)")
+    check(asked == [f"{base}/art-index/v1/GB.json"] and not site_asked and names and all("tetris" in n.lower() for n in names),
+          f"art index: the demo's Game art searches it same-origin ({asked}, {len(names)} tiles, e.g. {names[:1]}; "
+          f"asked of opendmd.github.io: {site_asked})")
     page.context.close()
 
 
@@ -649,6 +700,8 @@ def main() -> int:
         f_page(browser, base, errors, tool, a.shots)
         print("the demo's share link")
         demo_share(browser, base, errors)
+        print("the art index (/art-index/)")
+        art_index(browser, base, a.site, errors)
         print("the gallery (/formulas/)")
         gallery(browser, base, errors, a.shots)
         print("the HTTP API (dev/api.html, dev/api/)")

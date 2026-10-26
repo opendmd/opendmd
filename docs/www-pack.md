@@ -84,6 +84,13 @@ site (`dev/api.html`, and `dev/api/v<version>.html` for each release), which
 Settings → Device → About links (14.5 KB of flash, gzipped, until 2026-10-23,
 when it was `api.html` with a size line of its own).
 
+Nor is Create Art's game name index ("Find art for a game"): the site
+publishes it (`art-index/v1/<PLATFORM>.json`, from `opendmd-web/art-index/`)
+and the web app fetches it from there, since the feature needs the internet
+for the pictures anyway. Until 2026-10-26 it was `art/*.json` in the pack,
+527 KB gzipped, more than half of it; `tools/web-size.py` refuses a
+`www/art/` now.
+
 The firmware sends a gzip entry with `Content-Encoding: gzip`, without
 looking at `Accept-Encoding` (every browser accepts it), and a `Content-Length` of the stored bytes.
 

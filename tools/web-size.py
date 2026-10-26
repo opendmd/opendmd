@@ -87,8 +87,9 @@ app's from licenses/, opened from Settings -> Device -> About in a tab of
 its own, never part of a page load) have a line of their own, <= 40 KB:
 they cost flash, not load time, and grow with the dependencies.
 The name index for "Find art
-for a game" (`art/*.json`, one file
-fetched per search) is printed, with no budget. Raw sizes are printed for
+for a game" is not packed (until 2026-10-26 it was `art/*.json`, ~527 KB
+gz, half the pack): the site publishes it (tools/site.py, `art-index/`)
+and find.js fetches it from there. Raw sizes are printed for
 information. A file with no `.gz` beside it counts at its raw size. Exits 1
 when over budget.
 
@@ -176,6 +177,11 @@ def main() -> int:
     root = Path(args.root)
     files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix != ".gz"
                    and not p.name.startswith("."))
+    stray = [p for p in files if p.relative_to(root).parts[0] == "art"]
+    if stray:
+        print(f"{root}/art/ is the art index, which the site publishes (opendmd-web/art-index/, "
+              f"tools/art-index.py --out): it must not be packed ({len(stray)} files)")
+        return 1
     totals: dict[str, list[int]] = {}
     print(f"{'file':<40} {'raw':>9} {'gz':>9}")
     for p in files:
@@ -223,12 +229,6 @@ def main() -> int:
             kind = "font"
         elif rel in LICENCES:
             kind = "licences"
-        elif rel.startswith("art/"):
-            kind = "art index"
-            t = totals.setdefault(kind, [0, 0])
-            t[0] += raw
-            t[1] += gz
-            continue
         else:
             kind = {".js": "js+css", ".css": "js+css"}.get(p.suffix, "other")
         t = totals.setdefault(kind, [0, 0])
@@ -268,7 +268,7 @@ def main() -> int:
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET),
-                         ("art index", None), ("other", None)):
+                         ("other", None)):
         raw, gz = totals.get(kind, [0, 0])
         verdict = "" if budget is None else ("ok" if gz <= budget else "OVER BUDGET")
         limit = "" if budget is None else f"/ {budget // 1024} KB"

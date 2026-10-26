@@ -23,7 +23,10 @@ Pick a source:
 - **Your own:** choose a file, or paste a web address. You can also drop a
   picture onto the page, or paste one you've copied.
 
-Click a result to load it. Searching for art needs an internet connection.
+Click a result to load it. Searching for art needs an internet connection
+(the computer or phone you're using needs it, not the display): the list of
+games comes from the OpenDMD website, the pictures from where they're kept.
+If it can't be reached, Find says so; **Try again** when you're back online.
 
 ## 2. Frame
 

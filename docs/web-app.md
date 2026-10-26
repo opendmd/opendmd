@@ -244,11 +244,17 @@ card's recordings are named the same way), to save as new.
    playlist in play; in local mode it downloads.
 
 The pixel work and the GIF writer are Rust (`opendmd-art-web`), in a second
-wasm module loaded only when the Studio opens. The game name lists are on
-the card (`www/art/<PLATFORM>.json`, one fetched per search), built by
-`uv run tools/art-index.py` from the repositories' file lists; re-run it to
-pick up new games. The pictures themselves come from GitHub when you pick
-a game, so that part needs the internet. The investigation behind all this
+wasm module loaded only when the Studio opens. The game name lists are
+published on the project site (`https://opendmd.github.io/art-index/v1/<PLATFORM>.json`,
+one fetched per platform the first time it is searched, then kept for the
+session; the site's demo fetches its own copy), built by
+`uv run tools/art-index.py` from the repositories' file lists into
+`opendmd-web/art-index/` (committed; not in the www pack); re-run it and
+publish the site to pick up new games. The pictures themselves come from
+GitHub when you pick a game, so the whole search needs the internet; without
+it, Find says so and offers Try again. `v1` is the lists' format: a new
+format gets a new path, so an older web app never reads one it doesn't
+know. The investigation behind all this
 is `docs/art-pipeline.md`.
 
 ## Smooth motion
