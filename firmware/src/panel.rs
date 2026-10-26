@@ -12,7 +12,7 @@ use esp_idf_sys::hub75;
 use opendmd_core::canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
 use opendmd_core::look::{tint, Glow, GlowLevel, Look, GLOW_STEP};
 use opendmd_core::panel_timing::PanelTiming;
-use opendmd_core::scan::{self, Judge, Plan, PAIRS};
+use opendmd_core::scan::{Judge, Pacer, Reading};
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 
@@ -174,23 +174,22 @@ pub fn scan_json() -> String {
     )
 }
 
-/// Cost bounds for writing a row pair (µs, 240 MHz): the least a pair
-/// dirty end to end takes (`hub75_draw_row_pair`: 74 µs measured), and the
-/// most any pair takes, untinted and through the tint's staging rows
-/// (spans ~0.68 µs a pixel measured). Wide on purpose: `Judge` counts
-/// what really happened.
-const PAIR_MIN_US: u32 = 50;
-const PAIR_MAX_US: u32 = 270;
-const PAIR_MAX_US_TINTED: u32 = 450;
-/// Keep this far (µs of scan) from a pair while writing it: the
-/// descriptor register may already show the next one (16 µs), and
+/// The longest one row pair's write may take (µs, 240 MHz), untinted and
+/// through the tint's staging rows: what the pacer allows each pair
+/// before the scan reaches it (`hub75_draw_row_pair` 74 µs measured for a
+/// full pair; spans ~0.68 µs a pixel). `Judge` counts what really happened.
+const PAIR_WRITE_US: u32 = 300;
+const PAIR_WRITE_US_TINTED: u32 = 450;
+/// Keep this far (µs of scan) from a pair's slot while writing it: the
+/// descriptor register may already show the next descriptor (16 µs), and
 /// reading it is not instant.
-const SYNC_MARGIN_US: u32 = 40;
-/// Where a clear start is searched, every this many µs of scan.
-const SYNC_STEP_US: u32 = 16;
-/// Sleep (1 ms ticks) through a wait only down to this much before the
-/// clear start; spin the rest on the scan position.
-const SYNC_SPIN_US: u32 = 2_200;
+const SYNC_MARGIN_US: u32 = 30;
+/// Sleep (1 ms ticks) through a wait only down to this much before its
+/// end; spin the rest on the scan position.
+const SYNC_SPIN_US: u32 = 1_500;
+/// No pair waits longer than this (two refreshes and then some: only if
+/// the scan reading went wrong).
+const SYNC_GIVE_UP_US: u32 = 25_000;
 
 /// What the glow cost since the last heartbeat (`Panel::glow_summary`).
 #[derive(Default, Clone, Copy, Debug)]
@@ -310,9 +309,12 @@ impl Panel {
         self.blit_within(canvas, 0)
     }
 
-    /// [`Panel::blit`], but with `panel_sync` on it may first wait up to
-    /// `budget_us` for a scan position from which the write shows no seam
-    /// (`opendmd_core::scan`); with none in reach it writes at once.
+    /// [`Panel::blit`], but with `panel_sync` on the writes are paced to
+    /// the scan so that one refresh shows all of them (`opendmd_core::scan`
+    /// [`Pacer`]): pairs the scan has passed at once, the others as it
+    /// passes them — waits of up to a refresh (~8 ms, ~3.4 ms on average),
+    /// asleep while long. If they would run past `budget_us` it writes at
+    /// once, as unsynchronised.
     #[inline(never)]
     pub fn blit_within(&mut self, canvas: &mut Canvas, budget_us: u32) -> u32 {
         // Pushing only what changed relies on the buffer being written still
@@ -420,7 +422,9 @@ impl Panel {
     /// Between frames: step the glow if a step is due and push what it
     /// changed (`canvas` is the picture on display, unchanged since the
     /// last blit). Returns the µs it took (0 if nothing was due).
-    pub fn glow_tick(&mut self, canvas: &Canvas) -> u32 {
+    /// With `panel_sync` the push may wait up to `budget_us` for the scan
+    /// ([`Panel::blit_within`]).
+    pub fn glow_tick(&mut self, canvas: &Canvas, budget_us: u32) -> u32 {
         if !self.glow.is_decaying() {
             return 0;
         }
@@ -432,7 +436,13 @@ impl Panel {
         let mut changed = DirtyMap::default();
         self.glow.step(canvas, &mut changed);
         let px = match self.glow.shown() {
-            Some(shown) => push(rgb_bytes(shown), &changed, self.look, &mut self.sync, 0),
+            Some(shown) => push(
+                rgb_bytes(shown),
+                &changed,
+                self.look,
+                &mut self.sync,
+                budget_us,
+            ),
             None => 0,
         };
         let us = t.elapsed().as_micros() as u32;
@@ -669,8 +679,9 @@ impl Panel {
 ///
 /// With the scan readable, the position before and after each pair is
 /// read and the blit judged (`counters`: did it leave a seam). With
-/// `sync.on` and a `budget_us`, it first waits, up to the budget, for a
-/// start from which it leaves none (`opendmd_core::scan`).
+/// `sync.on` and a `budget_us`, each pair waits for the [`Pacer`] (the
+/// scan to leave its slot before the target refresh), unless the waits
+/// would run past the budget.
 fn push(bytes: &[u8], map: &DirtyMap, look: Look, sync: &mut ScanSync, budget_us: u32) -> u32 {
     debug_assert_eq!(bytes.len(), WIDTH * HEIGHT * 3);
     let rows = map.row_mask();
@@ -682,13 +693,13 @@ fn push(bytes: &[u8], map: &DirtyMap, look: Look, sync: &mut ScanSync, budget_us
     let row_of = |y: usize| &bytes[y * WIDTH * 3..(y + 1) * WIDTH * 3];
     let tinted = look != Look::Colour;
     let full_row = |y: usize| rows & (1 << y) != 0 && map.row_spans(y).eq([(0, WIDTH)]);
-    if SCAN && sync.on && budget_us > 0 && sync.row_us > 0 {
-        let full = (0..HALF)
-            .filter(|&p| full_row(p) && full_row(p + HALF))
-            .fold(0, |m, p| m | 1 << p);
-        wait_for_scan(full, pairs, tinted, sync.row_us, budget_us);
-    }
     let scan = SCAN && sync.row_us > 0;
+    let pacer = if scan && sync.on && budget_us > 0 {
+        pace_plan(pairs, tinted, sync.row_us, budget_us)
+    } else {
+        None
+    };
+    let mut waited = 0;
     let mut judge = Judge::new(sync.row_us);
     let (mut a, mut b): (Row, Row) = ([0; WIDTH * 3], [0; WIDTH * 3]);
     let mut pushed = 0;
@@ -696,7 +707,10 @@ fn push(bytes: &[u8], map: &DirtyMap, look: Look, sync: &mut ScanSync, budget_us
         if pairs & (1 << p) == 0 {
             continue;
         }
-        let before = if scan { scan_pos() } else { None };
+        if let Some(pacer) = &pacer {
+            waited += pace(pacer, p);
+        }
+        let before = if scan { read_scan() } else { None };
         let (top, bottom) = (p, p + HALF);
         if full_row(top) && full_row(bottom) {
             let (t, b) = if tinted {
@@ -731,7 +745,7 @@ fn push(bytes: &[u8], map: &DirtyMap, look: Look, sync: &mut ScanSync, budget_us
                 }
             }
         }
-        if let (Some(before), Some(after)) = (before, scan.then(scan_pos).flatten()) {
+        if let (Some(before), Some(after)) = (before, scan.then(read_scan).flatten()) {
             judge.pair(p, before, after);
         }
     }
@@ -739,6 +753,11 @@ fn push(bytes: &[u8], map: &DirtyMap, look: Look, sync: &mut ScanSync, budget_us
         counters::BLITS.fetch_add(1, Relaxed);
         counters::TORN.fetch_add(u32::from(judge.straddled), Relaxed);
         counters::IN_PAIR.fetch_add(u32::from(judge.in_pair), Relaxed);
+        if waited > 0 {
+            counters::WAITED.fetch_add(1, Relaxed);
+            counters::WAIT_US.fetch_add(waited, Relaxed);
+            counters::WAIT_MAX_US.fetch_max(waited, Relaxed);
+        }
     }
     // SAFETY: no arguments; a no-op when single-buffered.
     unsafe { hub75::hub75_flip() };
@@ -747,64 +766,55 @@ fn push(bytes: &[u8], map: &DirtyMap, look: Look, sync: &mut ScanSync, budget_us
     pushed
 }
 
-/// The scan position, µs of scan time into the refresh, if the shim can
-/// read it.
-fn scan_pos() -> Option<u32> {
+/// The scan position (µs of scan time into the refresh) and the clock, if
+/// the shim can read the position.
+fn read_scan() -> Option<Reading> {
     // SAFETY: one register read in the shim; no arguments.
-    let p = unsafe { hub75::hub75_scan_pos() };
-    (p != u32::MAX).then_some(p)
+    let pos = unsafe { hub75::hub75_scan_pos() };
+    (pos != u32::MAX).then(|| Reading { pos, at: now_us() })
 }
 
-/// Before a synchronised push: plan its writes (cost bounds per pair: a
-/// pair dirty end to end at least [`PAIR_MIN_US`], anything else at least
-/// nothing; any pair at most [`PAIR_MAX_US`], more tinted), and if the scan
-/// is where they would leave a seam, wait for a clear start — asleep in
-/// 1 ms ticks while it is far, then spinning on the scan position —
-/// unless it is further than `budget_us`.
+/// The microsecond clock, wrapping.
+fn now_us() -> u32 {
+    // SAFETY: no arguments; the timer is up long before the panel.
+    unsafe { esp_idf_sys::esp_timer_get_time() as u32 }
+}
+
+/// A synchronised push's pacer ([`Pacer::plan`]), or `None` (counted as
+/// not in budget) when its waits would run past `budget_us`.
 #[inline(never)]
-fn wait_for_scan(full: u32, pairs: u32, tinted: bool, row_us: u32, budget_us: u32) {
-    let max = if tinted {
-        PAIR_MAX_US_TINTED
+fn pace_plan(pairs: u32, tinted: bool, row_us: u32, budget_us: u32) -> Option<Pacer> {
+    let now = read_scan()?;
+    let write_us = if tinted {
+        PAIR_WRITE_US_TINTED
     } else {
-        PAIR_MAX_US
+        PAIR_WRITE_US
     };
-    let mut plan = Plan::new();
-    for p in (0..PAIRS).filter(|p| pairs & (1 << p) != 0) {
-        let min = if full & (1 << p) != 0 { PAIR_MIN_US } else { 0 };
-        plan.push(p, min, max);
+    let plan = Pacer::plan(row_us, now, pairs, write_us, SYNC_MARGIN_US, budget_us);
+    if plan.is_none() {
+        counters::GAVE_UP.fetch_add(1, Relaxed);
     }
-    let Some(pos) = scan_pos() else { return };
-    let wait = match scan::wait_us(pos, &plan, row_us, SYNC_MARGIN_US, SYNC_STEP_US) {
-        Some(0) => return,
-        Some(w) if w <= budget_us => w,
-        _ => {
-            counters::GAVE_UP.fetch_add(1, Relaxed);
-            return;
+    plan.map(|(p, _)| p)
+}
+
+/// Wait until the pacer lets pair `pair` be written: asleep in 1 ms ticks
+/// while the wait is long, then spinning on the scan position. Returns
+/// the µs waited.
+#[inline(never)]
+fn pace(pacer: &Pacer, pair: usize) -> u32 {
+    let t = now_us();
+    while let Some(now) = read_scan() {
+        let wait = pacer.wait(pair, now);
+        // (Past two refreshes something is off: write.)
+        if wait == 0 || now.at.wrapping_sub(t) > SYNC_GIVE_UP_US {
+            break;
         }
-    };
-    // SAFETY (both): no arguments; the timer is up long before the panel.
-    let now = || unsafe { esp_idf_sys::esp_timer_get_time() } as u32;
-    let t = now();
-    let asleep_ms = wait.saturating_sub(SYNC_SPIN_US) / 1000;
-    if asleep_ms > 0 {
-        // SAFETY: a FreeRTOS delay of the calling task (1 ms ticks).
-        unsafe { esp_idf_sys::vTaskDelay(asleep_ms) };
-    }
-    // Spin until the scan reaches a clear start; past the wait plus a
-    // refresh (it cannot be read any more, or a sleep overran), give up.
-    let limit = wait + row_us * PAIRS as u32;
-    loop {
-        match scan_pos() {
-            Some(p) if scan::clear_at(p, &plan, row_us, SYNC_MARGIN_US) => break,
-            Some(_) if now().wrapping_sub(t) < limit => core::hint::spin_loop(),
-            _ => {
-                counters::GAVE_UP.fetch_add(1, Relaxed);
-                break;
-            }
+        if wait > SYNC_SPIN_US + 1000 {
+            // SAFETY: a FreeRTOS delay of the calling task (1 ms ticks).
+            unsafe { esp_idf_sys::vTaskDelay((wait - SYNC_SPIN_US) / 1000) };
+        } else {
+            core::hint::spin_loop();
         }
     }
-    let us = now().wrapping_sub(t);
-    counters::WAITED.fetch_add(1, Relaxed);
-    counters::WAIT_US.fetch_add(us, Relaxed);
-    counters::WAIT_MAX_US.fetch_max(us, Relaxed);
+    now_us().wrapping_sub(t)
 }
