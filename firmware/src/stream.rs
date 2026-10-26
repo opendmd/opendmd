@@ -51,8 +51,23 @@
 //! files under the FAT lock for as long as it streams — `gifs/Consoles` took
 //! 2.3 s on a 20 MHz card — and on the httpd task that held `/api/status`
 //! (and every other API call) for the whole time (the spare, 2026-10-26).
+//! Here a listing takes ~0.3 s longer (the same spare, its marginal 64 GB
+//! card at 20 MHz: `gifs/Consoles` 2.6-2.7 s against 2.2-2.3 s on the httpd
+//! task, this task being below httpd), and `/api/status` stayed under 80 ms
+//! throughout (it was 2-2.4 s).
 //! They queue like a file: a full queue is a 503 + `Retry-After: 1`, which
-//! the web app retries. The other JSON routes stay on the httpd task.
+//! the web app retries; they do not wait for a place (`hand_off_within`
+//! with `Duration::ZERO`), so a burst of them never holds the httpd task.
+//! The heap is checked again when one starts (`files::affordable`), as for a
+//! file, since the queue may have held it while the heap dipped.
+//! **They interleave with other tasks' card work, by design.** A listing
+//! reads its directory between the httpd task's `DELETE` (a file, or
+//! `remove_tree` under `cache/`) and the builder's writes, and
+//! `/api/cache/failed` reads `/cache/.failed` while `files::rename_line` may
+//! swap it (a move): each read is FatFs's own, under its volume lock, so a
+//! listing can be stale (a name just deleted, or one just made missing) or
+//! end early at a swapped file, never show a corrupt entry. A client wanting
+//! the truth lists again. The other JSON routes stay on the httpd task.
 
 use anyhow::Result;
 use esp_idf_hal::cpu::Core;
@@ -122,6 +137,14 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 /// The least stack this task has had left, in bytes.
 static STACK_LOW: AtomicU32 = AtomicU32::new(u32::MAX);
 
+/// The least stack the task has had left after a job, bytes (`None` before
+/// its first): `stream_stack` in `/api/status`, to measure the margin of
+/// [`config::STREAM_STACK`] on a device without a console.
+pub fn stack_low() -> Option<u32> {
+    let v = STACK_LOW.load(Ordering::Relaxed);
+    (v != u32::MAX).then_some(v)
+}
+
 /// Start the task, pinned to CPU0. Called by `http::start`, i.e. from the main
 /// task before WiFi, while the heap still has a contiguous block for the
 /// stack. If it cannot start, [`hand_off`] serves on the httpd task instead.
@@ -170,6 +193,18 @@ pub fn hand_off<F>(req: &mut Req, work: F) -> Result<()>
 where
     F: FnOnce(&mut Req) -> Result<()> + Send + 'static,
 {
+    hand_off_within(req, QUEUE_WAIT, work)
+}
+
+/// [`hand_off`], waiting at most `wait` for a place in a full queue before
+/// the 503. Files and the web app's modules wait [`QUEUE_WAIT`] (a browser
+/// does not retry a module); the listings wait `Duration::ZERO`: the web
+/// app retries them, and each 2 s wait would be 2 s of the httpd task —
+/// and `/api/status` — spent waiting for the stream task.
+pub fn hand_off_within<F>(req: &mut Req, wait: Duration, work: F) -> Result<()>
+where
+    F: FnOnce(&mut Req) -> Result<()> + Send + 'static,
+{
     if !files::affordable(req)? {
         return Ok(());
     }
@@ -178,7 +213,7 @@ where
         // No task: the old way, on the httpd task.
         _ => return work(req),
     };
-    let deadline = Instant::now() + QUEUE_WAIT;
+    let deadline = Instant::now() + wait;
     // Wait for a place *before* detaching, so no more than 1 + QUEUE_DEPTH
     // sockets are ever marked in use.
     loop {

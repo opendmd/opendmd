@@ -361,7 +361,7 @@ fn discover_all() -> io::Result<(Vec<Parent>, u32)> {
 /// bucket `b` of every parent. Returns the number of directories read.
 /// `pace`: slept after each directory (the count, see
 /// [`config::CACHE_PACE_BYTES`]); zero yields instead (the listing, which
-/// is on the httpd task and has a client waiting).
+/// is on the stream task and has a client waiting).
 fn walk_bucket(
     parents: &[Parent],
     b: u8,
@@ -545,7 +545,7 @@ fn count(manifest: &str, platforms: &str, gen: u32) -> Result<Option<(CacheCount
 /// `GET /api/cache/list`: every prepared copy on the card, streamed as
 /// `{"paths":[...],"count":N}` in bucket order. Nothing is held but the
 /// category list and a 2 KB output buffer; the walk is the same one the count
-/// makes, on the httpd task.
+/// makes, on the stream task (`http.rs` `listing`).
 pub fn stream_list(req: &mut Req) -> Result<()> {
     let (parents, _) = discover_all()?;
     req.header("Cache-Control", "no-cache")?;
