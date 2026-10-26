@@ -89,7 +89,7 @@ fn utf16_at(s: &str, byte: usize) -> u32 {
     while !s.is_char_boundary(b) {
         b -= 1;
     }
-    s[..b].encode_utf16().count() as u32
+    s.get(..b).unwrap_or("").encode_utf16().count() as u32
 }
 
 /// Compile `src`. True: it is the formula drawn from now on. False:
