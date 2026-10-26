@@ -23,13 +23,20 @@ async function check(res) {
   throw Object.assign(new HttpError(res.status, `${res.status}: ${msg}`), { after: +res.headers.get('Retry-After') || 0 });
 }
 
-// The device's stream task sends listings as it sends files, one at a time:
-// a full queue is a 503 with Retry-After. Asked again, up to five times.
-async function queued(fn) {
-  for (let i = 1; ; i++) {
+// The device's stream task sends listings as it sends files, one at a
+// time: a full queue is a 503 at once (Retry-After: 1). This is the one
+// retry layer for them: a 503, or a request the busy device dropped, is
+// asked again after 2-4 s (jittered, so two tabs drift apart; never sooner
+// than Retry-After), for about 45 s in all, then the error stands.
+const RETRY_FOR = 45000;
+export async function queued(fn) {
+  const t0 = Date.now();
+  for (;;) {
     try { return await fn(); } catch (e) {
-      if (e?.status !== 503 || i >= 5) throw e;
-      await new Promise((r) => setTimeout(r, (e.after || 1) * 1000));
+      const busy = e?.status === 503 || e?.status === 0 || e instanceof TypeError;
+      const wait = Math.max((e?.after || 0) * 1000, 2000 + Math.random() * 2000);
+      if (!busy || Date.now() - t0 + wait > RETRY_FOR) throw e;
+      await new Promise((r) => setTimeout(r, wait));
     }
   }
 }

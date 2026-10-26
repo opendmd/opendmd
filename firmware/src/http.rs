@@ -992,18 +992,14 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     // Every prepared copy's card path, streamed: what a browser intersects
     // with a playlist to find the files left to prepare.
     // On the stream task, like a card file: its bucket walk must not hold
-    // the httpd task (and `/api/status`) for the seconds it takes. A full
-    // queue for 2 s is a 503 + Retry-After: 1, which the web app retries.
-    // (The task holds `cache_builder::busy()` for every job.)
-    server.route("/api/cache/list", Method::Get, |req| {
-        stream::hand_off(req, crate::cache::stream_list)
-    })?;
+    // the httpd task (and `/api/status`) for the seconds it takes
+    // (`listing`: no wait for a place, a 503 + Retry-After: 1 the web app
+    // retries; the task holds `cache_builder::busy()` for every job).
+    server.route("/api/cache/list", Method::Get, |req| listing(req, crate::cache::stream_list))?;
 
     // The GIFs the cache builder could not prepare (`/cache/.failed`), and
     // forgetting them so they are tried again.
-    server.route("/api/cache/failed", Method::Get, |req| {
-        stream::hand_off(req, crate::cache_builder::stream_failed)
-    })?;
+    server.route("/api/cache/failed", Method::Get, |req| listing(req, crate::cache_builder::stream_failed))?;
     // A GIF the browser could not prepare either (`{"path","reason"}`):
     // recorded once per path, so the device's builder skips it too.
     server.route_json("/api/cache/failed", Method::Post, |req| {
@@ -1079,7 +1075,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         // Sizes cost a `stat` each, which FAT makes quadratic — see
         // `files::stream_dir_json`. Opt in with `?sizes=1`.
         let sizes = query_param(req.query(), "sizes").is_some_and(|v| v == "1" || v == "true");
-        stream::hand_off(req, move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
+        listing(req, move |req| files::stream_dir_json(req, &dir, &fs_dir, sizes))
     })?;
 
     // Would a new display name clash? (`opendmd_core::hostname::Check`.)
@@ -1517,6 +1513,24 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     })?;
 
     Ok(server)
+}
+
+/// A JSON listing (`/api/files`, `/api/cache/list`, `/api/cache/failed`)
+/// on the stream task: no wait for a place in a full queue (a 503 +
+/// `Retry-After: 1` at once, which the web app retries), and the heap
+/// checked again when it starts, as `files::serve` does for a file: the
+/// queue may have held it while the heap dipped, and a chunked answer
+/// started is one the player's reserve must afford to finish.
+fn listing<F>(req: &mut Req, work: F) -> Result<()>
+where
+    F: FnOnce(&mut Req) -> Result<()> + Send + 'static,
+{
+    stream::hand_off_within(req, Duration::ZERO, move |req| {
+        if !files::affordable(req)? {
+            return Ok(());
+        }
+        work(req)
+    })
 }
 
 /// `Some(url)` while the device is running the setup AP: where a captive-portal
@@ -2013,7 +2027,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
             r#""now_playing":{{"ordinal":{},"path":{},"title":{},"elapsed_ms":{},"frame":{}{}}},"paused":{},{}"#,
             r#""entries":{},"manifest":{},"index_state":{},"www_version":{},"www":{},"#,
             r#""heap":{{"free":{},"floor":{},"idf_min":{}{}}},"heap_floor_at":{},"#,
-            r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"#,
+            r#""refresh_hz":{},"deadline_misses":{},"worst_lateness_ms":{},"misses":{},"gifs_started":{},"streams_aborted":{},"log_drops":{},"stream_stack":{},"#,
             r#""sd":{{"mounted":{},"readable":{},"capacity_bytes":{},"error":{},"attempts":{},"formatting":{},"format_error":{},{},{}}},"reset_reason":{},"reset_note":{},"#,
             r#""overrides":{},"hidden":{},"#,
             r#""mode":{},"mode_until":{},"time":{},"tz":{},"time_synced_s":{},"wake_until":{},"#,
@@ -2055,6 +2069,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.gifs_started,
         crate::httpd::streams_aborted(),
         crate::logring::drops(),
+        stream::stack_low().map_or_else(|| "null".to_string(), |v| v.to_string()),
         s.sd_mounted,
         s.sd_usable(),
         s.sd_capacity_bytes,

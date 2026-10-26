@@ -1204,20 +1204,30 @@ def load_checks(page: Page, base: str) -> None:
 
 
 def listing_queue_checks(browser, base: str, errors: list[str]) -> None:
-    """Listings go out from the stream task (firmware http.rs, the mock
-    likewise): with a file streaming and two waiting (the mock paced at
-    5 KB/s), GET /api/files waits 2 s and is a 503 with Retry-After: 1, as
-    a file would be, while /api/status answers at once; the web app asks
-    again (source.js `queued`) and the folder opens once the queue drains."""
+    """Listings go out from the stream task (firmware http.rs `listing`, the
+    mock likewise): with a file streaming and two waiting (the mock paced at
+    5 KB/s), GET /api/files is a 503 with Retry-After: 1 at once (a listing
+    does not wait for a place, as a file does), while /api/status answers;
+    the web app asks again (source.js `queued`, every 2-4 s for ~45 s) and
+    the folder opens once the queue drains, within that budget."""
     big = sorted((p for p in (CARD / "cache" / "Arcade").rglob("*.gif") if 40_000 < p.stat().st_size < 60_000))[:3]
     urls = [base + urllib.parse.quote("/" + p.relative_to(CARD).as_posix()) for p in big]
+    expected.append("/api/files")
+    page = new_page(browser, "laptop", errors)
+    # No folder open, no thumbnails: only the listings meet the full queue.
+    page.context.add_init_script("try { localStorage.setItem('odmd.lib.open', '[]'); localStorage.setItem('odmd.thumbs', 'false') } catch {}")
+    page.goto(base + "/#library")  # the Library's modules in before the queue fills
+    page.wait_for_function(f"{TREE}?.folders.length > 2", timeout=60000)
+    page.evaluate("location.hash = '#sets'")
+    page.wait_for_selector("#sets-list [data-path]", timeout=60000)
+    page.wait_for_timeout(1000)
     get_json(base + "/mock/io?reset=1&kbps=5")
 
     def fetch(u):
         try:
             urllib.request.urlopen(u, timeout=60).read()
         except urllib.error.HTTPError:
-            pass  # (a 503 if the page's own requests took the place)
+            pass
     hold = [threading.Thread(target=fetch, args=(u,)) for u in urls]
     for t in hold:
         t.start()
@@ -1232,30 +1242,19 @@ def listing_queue_checks(browser, base: str, errors: list[str]) -> None:
     t1 = time.time()
     get_json(base + "/api/status")
     st_ms = (time.time() - t1) * 1000
-    check(code == 503 and after == "1" and waited >= 1.9 and st_ms < 300,
-          f"listing queue: a full stream queue makes /api/files a 503 + Retry-After {after} after {waited:.1f} s; /api/status meanwhile {st_ms:.0f} ms")
-    # The web app asks again until the queue has room.
-    expected.append("/api/files")
-    for t in hold:  # (the page's own files go through the same queue)
-        t.join()
-    page = new_page(browser, "laptop", errors)
-    # No folder open, no thumbnails: only the listings meet the full queue.
-    page.context.add_init_script("try { localStorage.setItem('odmd.lib.open', '[]'); localStorage.setItem('odmd.thumbs', 'false') } catch {}")
-    page.goto(base + "/#library")  # the Library's modules in before the queue fills
-    page.wait_for_function(f"{TREE}?.folders.length > 2", timeout=60000)
-    page.evaluate("location.hash = '#sets'")
-    page.wait_for_selector("#sets-list [data-path]", timeout=60000)
-    page.wait_for_timeout(1000)
-    # A full queue again for the folder's listing.
-    hold = [threading.Thread(target=fetch, args=(u,)) for u in urls]
-    for t in hold:
-        t.start()
-        time.sleep(0.2)
-    seen: list[int] = []
-    page.on("response", lambda r: "/api/files?dir=" in r.url and seen.append(r.status))
+    check(code == 503 and after == "1" and waited < 0.5 and st_ms < 300,
+          f"listing queue: a full stream queue makes /api/files a 503 + Retry-After {after} at once ({waited:.2f} s); /api/status meanwhile {st_ms:.0f} ms")
+    seen: dict[str, list[int]] = {}
+    page.on("response", lambda r: "/api/files?dir=" in r.url and seen.setdefault(r.url, []).append(r.status))
+    t0 = time.time()
     page.evaluate("location.hash = '#library/Pixel_Art'")
-    page.wait_for_function(f"(t => t && t.rows.some(r => r.path?.startsWith('/gifs/Pixel_Art/')))({TREE})", timeout=90000)
-    check(503 in seen and seen[-1] == 200, f"listing queue: the web app asks again after a listing's 503s and opens the folder ({seen})")
+    page.wait_for_function(f"(t => t && t.rows.some(r => r.path?.startsWith('/gifs/Pixel_Art/')))({TREE})", timeout=60000)
+    took = time.time() - t0
+    worst = max((v.count(503) for v in seen.values()), default=0)
+    # queued's budget: 45 s at 2 s or more a try.
+    pix = next((v for u, v in seen.items() if "Pixel_Art" in u), [])
+    check(worst >= 1 and worst <= 23 and pix[-1:] == [200] and took < 45,
+          f"listing queue: the web app asks again and opens the folder in {took:.1f} s, at most {worst} 503s a listing (budget 23; {len(seen)} listings)")
     for t in hold:
         t.join()
     get_json(base + "/mock/io?kbps=0")

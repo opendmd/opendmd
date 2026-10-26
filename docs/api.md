@@ -24,7 +24,8 @@ curl -s $DMD/api/status
 - **One thing at a time.** One server task, at most 7 open connections
   (`HTTP_MAX_SOCKETS`). Transfers and the listings (`/api/files`,
   `/api/cache/list`, `/api/cache/failed`) run one at a time, two more
-  waiting; a third gets `503` + `Retry-After: 1` after 2 s. Short of memory, a listing
+  waiting; a third transfer gets `503` + `Retry-After: 1` after 2 s, a
+  listing at once. Short of memory, a listing
   or transfer is refused up front: `503` + `Retry-After: 2`. Retry after the
   delay; do not fire requests in parallel.
 - **Slow commands.** A playlist change waits up to 60 s for the index
@@ -126,7 +127,7 @@ A cheap snapshot (the web app polls it twice a second); counts since boot.
 | `refresh_hz` | panel refresh rate |
 | `deadline_misses`, `worst_lateness_ms` | all late frames; the latest, ms |
 | `misses` | `{steady, switch, threshold_ms, window_ms, worst_steady_ms, by_cause, late_ms}`: frames ≥ `threshold_ms` late in play (`steady`) or at a GIF change (`switch`: first frame, transition, first `window_ms`); all late frames by cause (`open`, `read`, `decode`, `transition`, `blit`, `log`, `other`, `wake`) and ms late (`"<5"` … `">=500"`) |
-| `gifs_started`, `streams_aborted`, `log_drops` | files opened; responses cut short; log lines dropped |
+| `gifs_started`, `streams_aborted`, `log_drops`, `stream_stack` | files opened; responses cut short; log lines dropped; the file task's least unused stack after a job, bytes (null before one) |
 | `sd` | `{mounted, readable, capacity_bytes, error, attempts, formatting, format_error, clock_khz, fallback, failures, reboots, probe, slowdowns, recoveries, fat_index}`: the card; `readable` false if it mounts but its filesystem cannot be read (exFAT: nothing plays); `formatting`, `format_error`: `POST /api/card/format`; `error` why it is unmounted, unreadable or failing; `clock_khz` its SPI clock (20000 safe, 40000 fast; null unmounted); `fallback` a `fast` card slowed to 20 MHz after errors; `failures` errors in 60 s; `reboots` card-failure restarts in 15 min; `probe` the check of a card at full speed soon after it mounts: null, `waiting`, `running`, `clean`, `slowed`, `skipped`; `slowdowns` times `fast` slowed the card in place this boot; `recoveries` failed transfers the card was stopped after (CMD12); `fat_index` `{files, hits, misses, builds, stale}` diagnostics of the index that opens GIFs without a directory scan |
 | `reset_reason`, `reset_note` | `poweron`, `software`, `panic`, `task watchdog`, `brownout`, …; `"card failure"`, `"different card"` or null |
 | `overrides`, `hidden` | as in "Fields that recur" |
