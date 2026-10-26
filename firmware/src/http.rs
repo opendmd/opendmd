@@ -252,8 +252,7 @@ struct ConfigPatch {
     look_blend: Option<String>,
     look_amount: Option<u8>,
     boot_show: Option<String>,
-    /// Refresh-synchronised blits, applied at once (`panel-sync` builds;
-    /// elsewhere a 400, and GET shows null).
+    /// Refresh-synchronised blits, applied at once.
     panel_sync: Option<bool>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
@@ -593,9 +592,6 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             next.boot_show = len;
         }
         if let Some(v) = patch.panel_sync {
-            if !cfg!(feature = "panel-sync") {
-                return req.bad_request("panel_sync needs a build with the panel-sync feature");
-            }
             next.panel_sync = v;
         }
         if let Some(v) = &patch.api_key {
@@ -2283,11 +2279,7 @@ fn settings_json(s: &Settings) -> String {
         s.look_blend,
         s.look_amount,
         s.boot_show.name(),
-        if cfg!(feature = "panel-sync") {
-            if s.panel_sync { "true" } else { "false" }
-        } else {
-            "null"
-        },
+        s.panel_sync,
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
     )
