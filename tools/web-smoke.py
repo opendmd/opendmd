@@ -114,7 +114,9 @@ every view like a person would:
             prepared" after preparing; the option ticked -> "always",
             unticked -> "idle"; a bad value is a 400; a shot of the card
   Smooth    Library's Smooth motion control: hidden for a GIF with
-            nothing to smooth (OTHER_DBZ01), shown for a candidate
+            nothing to smooth (OTHER_DBZ01), a sentence and no switch for
+            a 1 px scroll (OTHER_SCROLL_The_Oluk: "already moves one pixel
+            at a time"), shown for a candidate
             (OTHER_SCROLL_Xmen01) with the analysis `opendmd-pack smooth
             analyse` prints ("N% ... adds M frames"); Preview plays the
             smooth version in the Library preview and back; on -> the line
@@ -4210,7 +4212,7 @@ def studio_smooth_checks(page: Page, base: str, overlay: Path) -> None:
     page.check("#st-smooth")
     page.wait_for_function(settled, timeout=60000)
     st, cap = page.evaluate(smooth_state), page.inner_text("#st-smooth-cap")
-    check(st == "none" and page.is_checked("#st-smooth") and cap == "Nothing here moves in steps it can smooth",
+    check(st == "none" and page.is_checked("#st-smooth") and cap == "Nothing here slides across the screen in steps it can smooth",
           f"studio smooth: nothing to smooth -> on, but says so: '{cap}' ({st})")
     # A scroll: on -> analysed, the preview plays the smoothed frames.
     fx = OUT / "scroll-fixture.gif"
@@ -4769,6 +4771,9 @@ def compare_with_pack(overlay: Path, made: dict[str, Path]) -> None:
 
 SMOOTH_ON = "/gifs/Other/OTHER_SCROLL_Xmen01.gif"
 SMOOTH_NONE = "/gifs/Other/OTHER_DBZ01.gif"
+# A 1 px-a-frame credits scroll at 50 ms: it moves, but no whole-pixel
+# position lies between its frames, so there is nothing to add.
+SMOOTH_STEADY = "/gifs/Other/OTHER_SCROLL_The_Oluk_Squid_Game.gif"
 SMOOTH_WORST = "/gifs/Consoles/MD_Demons_Of_Asteborg_01_sephirot68.gif"
 
 
@@ -4830,6 +4835,13 @@ def smooth_checks(page: Page, base: str, overlay: Path) -> None:
     # Nothing to smooth: no control at all.
     state = preview_in_library(page, SMOOTH_NONE)
     check(state == "none" and page.locator("#lib-smooth").is_hidden(), f"smooth: hidden for {SMOOTH_NONE} ({state})")
+    # A 1 px scroll: no switch, but it says why.
+    state = preview_in_library(page, SMOOTH_STEADY)
+    text = page.inner_text("#lib-smooth-text") if page.locator("#lib-smooth").is_visible() else ""
+    check(state == "none" and page.get_attribute("#lib-smooth", "data-hint") == "steady"
+          and page.locator("#lib-smooth-on").count() == 0
+          and text == "This already moves one pixel at a time, as smooth as the panel can show",
+          f"smooth: a 1 px scroll ({SMOOTH_STEADY}) says it is already smooth: '{text}' ({state})")
     # A candidate: the sentence with the CLI's numbers.
     state = preview_in_library(page, SMOOTH_ON)
     text = page.inner_text("#lib-smooth-text") if state in ("on", "off") else ""

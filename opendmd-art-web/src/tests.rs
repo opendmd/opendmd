@@ -567,6 +567,30 @@ fn smoothing_is_deterministic_and_stepwise_equals_one_call() {
 
 const SMOOTH_FINGERPRINT: u64 = 0x232e_36c6_5c2b_7b7d;
 
+/// The wording's hint: the same scroll at 1 px a frame (50 ms) has nothing
+/// to tween and says it is already smooth ("steady"); at 2 px it is offered.
+#[test]
+fn a_one_px_scroll_is_steady_and_a_two_px_one_offered() {
+    let stage = flatten_pad(&pixel_art(128, 80, 3));
+    let mut anim = render(
+        &stage,
+        &Plan {
+            motion: Motion::Scroll,
+            ..Plan::default()
+        },
+    );
+    anim.delays_ms = vec![50; anim.frames.len()];
+    let analysed = |gif: &[u8]| {
+        let mut s = crate::Smoother::new(gif).map_err(|_| ()).unwrap();
+        while !s.analyse(5).map_err(|_| ()).unwrap() {}
+        s
+    };
+    let s = analysed(&encode(&anim));
+    assert_eq!((s.tweened(), s.added(), s.offered()), (0, 0, false));
+    assert_eq!(s.hint(), "steady");
+    assert_eq!(analysed(&two_px_scroll()).hint(), "offered");
+}
+
 /// The browser's `nameFields` / `buildName` are the core's
 /// `NameFields::from_path` / `path`: over real card names (and a few
 /// refusals), the JS objects go through and come back as the core's paths

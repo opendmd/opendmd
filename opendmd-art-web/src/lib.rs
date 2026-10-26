@@ -492,7 +492,7 @@ pub fn prepare_gif(gif: &[u8]) -> Result<JsValue, JsError> {
 /// the page can yield between them: `new Smoother(gifBytes)`, then
 /// `analyse(n)` until it returns true (`n` frames a call; `decoded` counts
 /// them), then the analysis (`frames`, `pairs`, `tweened`, `added`,
-/// `percent`, `offered`); `tween(n)` until true, then `gif()` — the tweened
+/// `percent`, `offered`, `hint`); `tween(n)` until true, then `gif()` — the tweened
 /// frames as a plain GIF, what the preview plays — and `prepare()`, the
 /// smoothed prepared copy (marked). Throws on a GIF that does not decode.
 #[wasm_bindgen]
@@ -557,6 +557,15 @@ impl Smoother {
     #[wasm_bindgen(getter)]
     pub fn offered(&self) -> bool {
         self.s.summary().offered()
+    }
+
+    /// Why there is little or nothing to smooth, for the wording:
+    /// `"offered"`, `"steady"` (it moves 1 px at a time: already as smooth
+    /// as whole pixels allow), `"fast"` (big steps in frames too short to
+    /// split) or `"nothing"` (nothing slides).
+    #[wasm_bindgen(getter)]
+    pub fn hint(&self) -> String {
+        self.s.summary().hint().name().into()
     }
 
     /// At most 256 colours, so a smoothed copy can be made at all (past

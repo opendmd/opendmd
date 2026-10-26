@@ -799,6 +799,36 @@ pub struct Summary {
     pub added: u32,
     /// Total duration, ms (the player's rules; unchanged by tweening).
     pub duration_ms: u64,
+    /// Pairs that move rigidly (the tweener's fit) by exactly 1 px: already
+    /// as smooth as whole pixels allow, so nothing can go between them.
+    pub steady: u32,
+    /// Pairs that move rigidly by 2 px or more in a frame too short to
+    /// split into ≥ 20 ms parts.
+    pub fast: u32,
+}
+
+/// Why a file has little or nothing to smooth, for the UI's wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hint {
+    /// Enough of it is tweened: Smooth motion is offered.
+    Offered,
+    /// Its motion is mostly 1-px steps (a slow scroll): already smooth.
+    Steady,
+    /// Its motion is mostly big steps in frames too short to split.
+    Fast,
+    /// Little of it slides rigidly at all (animation, cuts, stills).
+    Nothing,
+}
+
+impl Hint {
+    pub fn name(self) -> &'static str {
+        match self {
+            Hint::Offered => "offered",
+            Hint::Steady => "steady",
+            Hint::Fast => "fast",
+            Hint::Nothing => "nothing",
+        }
+    }
 }
 
 impl Summary {
@@ -816,6 +846,22 @@ impl Summary {
     /// steps of 2 px or more that the tweener takes.
     pub fn offered(&self) -> bool {
         self.pairs > 0 && 100 * self.tweened as u64 >= OFFER_PERCENT as u64 * self.pairs as u64
+    }
+
+    /// Why it is (not) offered: when it is not, the larger of the steady
+    /// and the fast moves, if that is at least [`OFFER_PERCENT`] of the
+    /// pairs; else nothing slides.
+    pub fn hint(&self) -> Hint {
+        let enough = |n: u32| 100 * n as u64 >= OFFER_PERCENT as u64 * self.pairs as u64;
+        if self.offered() {
+            Hint::Offered
+        } else if self.pairs > 0 && self.steady >= self.fast && enough(self.steady) {
+            Hint::Steady
+        } else if self.pairs > 0 && enough(self.fast) {
+            Hint::Fast
+        } else {
+            Hint::Nothing
+        }
     }
 }
 
@@ -999,6 +1045,24 @@ impl Smooth {
     pub fn summary(&self) -> Summary {
         let tweened = self.pairs.iter().filter(|p| p.k > 0).count() as u32;
         let added = self.pairs.iter().map(|p| p.k).sum();
+        // Rigid moves the tweener leaves alone, for the wording (`hint`).
+        let rigid = |p: &&Pair| {
+            p.k == 0
+                && matches!(p.class, Class::Translation | Class::Regional)
+                && p.fit >= TWEEN_FIT
+        };
+        let steady = self
+            .pairs
+            .iter()
+            .filter(rigid)
+            .filter(|p| magnitude(p.shift) == 1)
+            .count() as u32;
+        let fast = self
+            .pairs
+            .iter()
+            .filter(rigid)
+            .filter(|p| magnitude(p.shift) >= 2 && n_inbetweens(p.shift, p.delay_ms, u32::MAX) == 0)
+            .count() as u32;
         Summary {
             width: self.width as u32,
             height: self.height as u32,
@@ -1007,6 +1071,8 @@ impl Smooth {
             tweened,
             added,
             duration_ms: self.raw.iter().map(|&r| player_delay_ms(r) as u64).sum(),
+            steady,
+            fast,
         }
     }
 
@@ -1434,6 +1500,21 @@ mod tests {
         gif_of(&frames, &vec![delay; nframes], &palette16())
     }
 
+    /// A vertical pan up a picture taller than the screen, `step` px a frame
+    /// (the pack's `*_SCROLL_*` credits pattern), the last frame held.
+    fn vscroll(nframes: usize, step: i64, delay: u16, hold: u16) -> Vec<u8> {
+        let frames: Vec<Vec<u8>> = (0..nframes as i64)
+            .map(|f| {
+                (0..H as i64)
+                    .flat_map(|y| (0..W as i64).map(move |x| texture(x, y + f * step)))
+                    .collect()
+            })
+            .collect();
+        let mut delays = vec![delay; nframes];
+        delays[nframes - 1] = hold;
+        gif_of(&frames, &delays, &palette16())
+    }
+
     /// Every frame and delay (as the player plays them) of a GIF.
     fn play(gif: &[u8]) -> Vec<(Vec<u8>, Duration)> {
         let mut g = GifSource::new(gif).unwrap();
@@ -1472,6 +1553,58 @@ mod tests {
         want.sort_by_key(|&(dx, dy)| (dx.abs().max(dy.abs()), dx.abs() + dy.abs()));
         assert_eq!(SHIFTS.to_vec(), want);
         assert_eq!(&SHIFTS[..4], &[(0, -1), (-1, 0), (1, 0), (0, 1)]);
+    }
+
+    #[test]
+    fn a_one_px_vertical_pan_is_steady_not_missed() {
+        // A 1 px a frame pan at 50 ms (the "SCROLL" credits pattern): every
+        // moving pair is found, on the right axis, with a perfect fit, and
+        // none is tweened because no whole-pixel position lies between two
+        // frames 1 px apart. The wording says it is already smooth.
+        let n = 40;
+        let s = analysed(&vscroll(n, 1, 5, 120));
+        let pairs = s.pairs();
+        assert_eq!(pairs.len(), n);
+        for p in &pairs[..n - 1] {
+            assert_eq!(p.class, Class::Translation, "{p:?}");
+            assert_eq!(p.shift, (0, -1), "the picture moves up: B[y] = A[y + 1]");
+            assert_eq!(p.fit, 1.0);
+            assert_eq!(p.k, 0);
+        }
+        let sum = s.summary();
+        assert_eq!((sum.tweened, sum.added), (0, 0));
+        assert_eq!(sum.steady, n as u32 - 1);
+        assert_eq!(sum.fast, 0);
+        assert!(!sum.offered());
+        assert_eq!(sum.hint(), Hint::Steady);
+    }
+
+    #[test]
+    fn a_two_px_vertical_pan_is_tweened_and_a_fast_one_is_too_short() {
+        // The same pan at 2 px: every pair but the wrap (a jump back to the
+        // top, after the held last frame) gets its in-between.
+        let n = 40;
+        let s = analysed(&vscroll(n, 2, 5, 120));
+        for p in &s.pairs()[..n - 1] {
+            assert_eq!(
+                (p.class, p.shift, p.k),
+                (Class::Translation, (0, -2), 1),
+                "{p:?}"
+            );
+        }
+        let sum = s.summary();
+        assert_eq!((sum.tweened, sum.added), (n as u32 - 1, n as u32 - 1));
+        assert_eq!(sum.hint(), Hint::Offered);
+        // At 30 ms a frame the 2 px steps cannot be split into 20 ms parts.
+        let sum = analysed(&vscroll(n, 2, 3, 120)).summary();
+        assert_eq!((sum.tweened, sum.steady), (0, 0));
+        assert_eq!(sum.fast, n as u32 - 1, "{sum:?}");
+        assert_eq!(sum.hint(), Hint::Fast);
+        // Flat colours that change but never slide: nothing.
+        let flat: Vec<Vec<u8>> = (0..6u8).map(|i| vec![i % 3; W * H]).collect();
+        let sum = analysed(&gif_of(&flat, &[10; 6], &palette16())).summary();
+        assert_eq!((sum.tweened, sum.steady, sum.fast), (0, 0, 0));
+        assert_eq!(sum.hint(), Hint::Nothing);
     }
 
     #[test]
