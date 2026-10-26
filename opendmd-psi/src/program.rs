@@ -92,7 +92,11 @@ pub(crate) mod code {
     pub const SQR: u8 = 41;
     pub const SQRT: u8 = 42;
     pub const RECIP: u8 = 43;
-    pub const LAST_UN: u8 = 43;
+    // `pick(k, …)` per pixel: `d = k`'s choice: `b` is the first of `c`
+    // constant slots holding the slots of the choices (all per frame or per
+    // row); 0 where floor(k) is outside 0..c ([`super::pick`]). One operand.
+    pub const PICK: u8 = 44;
+    pub const LAST_UN: u8 = 44;
     // ternary
     pub const SELECT: u8 = 64;
     pub const CLAMP: u8 = 65;
@@ -188,9 +192,9 @@ pub(crate) mod code {
             "add", "sub", "mul", "div", "mod", "mask", "lt", "le", "gt", "ge", "eq", "ne", "and",
             "or", "min", "max", "step", "atan2", "hash", "len", "bit",
         ];
-        const U: [&str; 12] = [
+        const U: [&str; 13] = [
             "neg", "not", "abs", "floor", "frac", "sin", "cos", "tri", "saw", "sqr", "sqrt",
-            "recip",
+            "recip", "pick",
         ];
         const T: [&str; 10] = [
             "select",
@@ -350,7 +354,13 @@ impl Program {
         let mut m = if self.over() { 32 } else { 0 };
         for op in &self.ops[..self.len()] {
             let (v, n) = code::operands(op);
-            for &v in &v[..n] {
+            // A pick's choices are read through its table of slots.
+            let table = if op.code == code::PICK {
+                &self.init[op.b as usize..][..op.c as usize]
+            } else {
+                &[]
+            };
+            for v in v[..n].iter().copied().chain(table.iter().map(|&s| s as u8)) {
                 m |= match v {
                     S_A..=S_C => 1 << (v - S_A),
                     S_T => 8,
@@ -390,7 +400,7 @@ impl Program {
                 SIN | COS => 110,
                 TRI | SAW | SQR => 60,
                 SQRT => 539,
-                SELECT | CLAMP => 60,
+                SELECT | CLAMP | PICK => 60,
                 MIX => 130,
                 SMOOTH => 214,
                 NOISE => 855,
@@ -501,6 +511,19 @@ impl Program {
             .iter()
             .any(|op| !code::is_colour(op.code) && op.d == v)
     }
+}
+
+/// `pick`'s choice for `k` from the `n` slots whose numbers are in the
+/// slots from `base` (0 where floor(k) is outside 0..n). Indices are masked
+/// into the slots, whatever the program.
+#[inline(always)]
+pub(crate) fn pick(sc: &[i32; MAX_SCALARS], base: u8, n: u8, k: i32) -> i32 {
+    let i = k >> 16;
+    if i < 0 || i >= n as i32 {
+        return 0;
+    }
+    let m = MAX_SCALARS - 1;
+    sc[sc[(base as usize + i as usize) & m] as usize & m]
 }
 
 /// The scalar evaluation of one arithmetic op: the per-frame and per-row

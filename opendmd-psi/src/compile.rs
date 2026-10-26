@@ -44,7 +44,7 @@ impl Error {
 
     /// 1-based line and column of the start.
     pub fn line_col(&self, src: &str) -> (usize, usize) {
-        let upto = &src[..self.start.min(src.len())];
+        let upto = sub(src, 0, self.start.min(src.len()));
         let line = upto.matches('\n').count() + 1;
         let col = upto.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
         (line, col)
@@ -54,7 +54,7 @@ impl Error {
     pub fn render(&self, src: &str) -> String {
         let (line, col) = self.line_col(src);
         let text = src.lines().nth(line - 1).unwrap_or("");
-        let width = src[self.start.min(src.len())..self.end.min(src.len())]
+        let width = sub(src, self.start, self.end.min(src.len()))
             .chars()
             .take_while(|&c| c != '\n')
             .count()
@@ -74,11 +74,19 @@ impl core::fmt::Display for Error {
     }
 }
 
+/// `s[a..b]`, or "" (never a panic: a slice of a `str` that could panic
+/// brings ~3 KB of panic formatting into the wasm).
+fn sub(s: &str, a: usize, b: usize) -> &str {
+    s.get(a..b).unwrap_or("")
+}
+
 // --- the lexer ----------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tok {
     Num(i32),
+    /// `#rrggbb` (`#rgb` widened): a colour, 0xRRGGBB.
+    Hex(u32),
     Name,
     Plus,
     Minus,
@@ -117,6 +125,7 @@ struct Token {
 fn describe(t: Tok) -> &'static str {
     match t {
         Tok::Num(_) => "a number",
+        Tok::Hex(_) => "a colour",
         Tok::Name => "a name",
         Tok::Newline => "the end of the line",
         Tok::Eof => "the end",
@@ -206,6 +215,37 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             i += 1;
             continue;
         }
+        // `#ff8800`, `#f80`: a colour.
+        if c == b'#' {
+            i += 1;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            let h = sub(src, start + 1, i);
+            let mut v = Some(0u32);
+            for c in h.chars() {
+                v = v.zip(c.to_digit(16)).map(|(v, d)| v << 4 | d);
+            }
+            let (Some(v), 3 | 6) = (v, h.len()) else {
+                return Err(Error::new(
+                    start,
+                    i,
+                    "a colour is # and 3 or 6 hex digits (0-9, a-f), as #f80 or #ff8800",
+                ));
+            };
+            // #rgb: each digit twice.
+            let v = if h.len() == 3 {
+                (v >> 8) * 0x11_0000 + (v >> 4 & 15) * 0x1100 + (v & 15) * 0x11
+            } else {
+                v
+            };
+            out.push(Token {
+                tok: Tok::Hex(v),
+                start,
+                end: i,
+            });
+            continue;
+        }
         // `'A'`: a character's code (65), for `glyph`.
         if c == b'\'' {
             if let (Some(&ch @ 32..=126), Some(b'\'')) = (b.get(i + 1), b.get(i + 2)) {
@@ -217,7 +257,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
                 });
                 continue;
             }
-            let end = i + src[i + 1..]
+            let end = i + sub(src, i + 1, b.len())
                 .chars()
                 .next()
                 .map_or(1, |ch| ch.len_utf8() + 1);
@@ -231,7 +271,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.') {
                 i += 1;
             }
-            let s = &src[start..i];
+            let s = sub(src, start, i);
             if s.matches('.').count() > 1 {
                 return Err(Error::new(start, i, format!("`{s}` is not a number")));
             }
@@ -245,9 +285,9 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
                     j,
                     format!(
                         "`{}` is not a number or a name (to multiply, write `{} * {}`)",
-                        &src[start..j],
+                        sub(src, start, j),
                         s,
-                        &src[i..j]
+                        sub(src, i, j)
                     ),
                 ));
             }
@@ -277,7 +317,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                 i += 1;
             }
-            let tok = match &src[start..i] {
+            let tok = match sub(src, start, i) {
                 "and" => Tok::And,
                 "or" => Tok::Or,
                 "not" => Tok::Not,
@@ -311,7 +351,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             (b',', _) => (Tok::Comma, 1),
             (b'=', _) => (Tok::Assign, 1),
             _ => {
-                let ch = src[i..].chars().next().unwrap_or('?');
+                let ch = sub(src, i, b.len()).chars().next().unwrap_or('?');
                 let end = i + ch.len_utf8();
                 let hint = match ch {
                     '^' => " (there is no power operator: multiply, e.g. `x * x`)",
@@ -361,7 +401,7 @@ pub fn compact(src: &str) -> String {
             }
         }
         let mut code = String::new();
-        for w in line[..end].split_whitespace() {
+        for w in sub(line, 0, end).split_whitespace() {
             if !code.is_empty() {
                 code.push(' ');
             }
@@ -440,6 +480,20 @@ const INPUTS: [(&str, Input, &str); 16] = [
     ),
 ];
 
+/// Values added once people had saved formulas (2026-10-26), about the
+/// middle and from the top, and what each stands for: it is read as if
+/// that were written in its place ([`Parser::inline`]), so the same steps
+/// and the same bytes. A name set with one of these is that name
+/// ([`Parser::lookup_value`] finds the formula's names first), so a saved
+/// `r = …` means what it meant.
+const LATER: [(&str, &str); 5] = [
+    ("cx", "(x - 0.5)*4"),
+    ("cy", "y - 0.5"),
+    ("ty", "31 - py"),
+    ("r", "len((x - 0.5)*4, y - 0.5)"),
+    ("angle", "atan2(y - 0.5, (x - 0.5)*4)"),
+];
+
 /// `w` and `h`: constants.
 const CONSTS: [(&str, i32); 2] = [("w", (W as i32) << 16), ("h", (H as i32) << 16)];
 
@@ -450,10 +504,12 @@ enum F {
     Fract,
     /// `digit`/`glyph`: three values and an optional font word.
     Glyph(u8),
+    /// `pick(k, a, b, …)`.
+    Pick,
 }
 
 /// Functions: name, arity, what, the op.
-const FUNCS: [(&str, usize, F); 24] = [
+const FUNCS: [(&str, usize, F); 25] = [
     ("sin", 1, F::Op(code::SIN)),
     ("cos", 1, F::Op(code::COS)),
     ("tri", 1, F::Op(code::TRI)),
@@ -478,11 +534,12 @@ const FUNCS: [(&str, usize, F); 24] = [
     ("bit", 2, F::Op(code::BIT)),
     ("digit", 3, F::Glyph(code::DIGIT)),
     ("glyph", 3, F::Glyph(code::GLYPH)),
+    ("pick", 0, F::Pick),
 ];
 
 /// Functions added once people had saved formulas (2026-10-26): a name
 /// set with one of these still works as a value (`glyph = …; gray(glyph)`).
-const LATER_FUNCS: [&str; 3] = ["bit", "digit", "glyph"];
+const LATER_FUNCS: [&str; 4] = ["bit", "digit", "glyph", "pick"];
 
 /// The fonts `digit` and `glyph` take as a last value: core's 5x7 (the
 /// panel's text and clock; 4 × 6 digits; the default), 4x6 (3 × 5 digits)
@@ -618,6 +675,8 @@ struct Dag {
     /// (the multiply, the dividend, the divisor): a `floor` of one is
     /// rebuilt with 1/k rounded up ([`fixed::recip_up`]).
     divs: Vec<(Id, Id, i32)>,
+    /// Each `pick`'s choices (a `PICK` node's `b` is its index here).
+    picks: Vec<Vec<Id>>,
 }
 
 /// Index slots: a power of two, twice [`MAX_NODES`] (4 KB, freed with the
@@ -837,6 +896,69 @@ impl Dag {
     }
 }
 
+impl Dag {
+    /// `pick(k, choices…)`: the choice floor(k) counts to from 0, or 0. A
+    /// constant `k` is that choice; a per-pixel `k` of choices that are the
+    /// same for every pixel, one `PICK` step; otherwise compares and
+    /// selects, `k < 0 ? 0 : k < 1 ? a : … : k < n ? z : 0`.
+    #[inline(never)]
+    fn pick(&mut self, k: Id, opts: Vec<Id>, at: (usize, usize)) -> Result<Id, Error> {
+        let zero = self.constant(0, at)?;
+        let n = opts.len() as i32;
+        if let Some(v) = self.konst(k) {
+            let i = v >> 16;
+            return Ok(if (0..n).contains(&i) {
+                opts[i as usize]
+            } else {
+                zero
+            });
+        }
+        if self.level(k) < LV_PIXEL || opts.iter().any(|&o| self.level(o) == LV_PIXEL) {
+            let mut acc = zero;
+            for i in (-1..n).rev() {
+                let o = if i < 0 { zero } else { opts[i as usize] };
+                let c = self.constant((i + 1) << 16, at)?;
+                let c = self.op(code::LT, [k, c, 0], at)?;
+                acc = self.op(code::SELECT, [c, o, acc], at)?;
+            }
+            return Ok(acc);
+        }
+        self.picks.push(opts);
+        let why = self.nodes[k as usize].why;
+        self.push(
+            Node {
+                code: code::PICK,
+                a: k,
+                b: (self.picks.len() - 1) as Id,
+                c: 0,
+                val: 0,
+                level: LV_PIXEL,
+                why,
+            },
+            at,
+        )
+    }
+
+    /// A colour mixed: per channel `a + (b − a)·k`, `b·k` from black.
+    fn mix3(
+        &mut self,
+        a: [Id; 3],
+        b: [Id; 3],
+        k: Id,
+        at: (usize, usize),
+    ) -> Result<[Id; 3], Error> {
+        let mut out = [0; 3];
+        for i in 0..3 {
+            out[i] = if self.konst(a[i]) == Some(0) {
+                self.op(code::MUL, [k, b[i], 0], at)?
+            } else {
+                self.op(code::MIX, [a[i], b[i], k], at)?
+            };
+        }
+        Ok(out)
+    }
+}
+
 // --- the parser -------------------------------------------------------------------
 
 /// Tokens read again for parts drawn at other places (`p(x', y')`, each
@@ -968,11 +1090,11 @@ impl<'s> Parser<'s> {
     }
 
     fn text(&self, t: Token) -> &'s str {
-        &self.src[t.start..t.end]
+        sub(self.src, t.start, t.end)
     }
 
     fn line_of(&self, at: usize) -> usize {
-        self.src[..at].matches('\n').count() + 1
+        sub(self.src, 0, at).matches('\n').count() + 1
     }
 
     #[cold]
@@ -1112,7 +1234,23 @@ impl<'s> Parser<'s> {
                 self.next();
                 e
             }
+            // `pick(…)` here, not in `name`: there it made every level of
+            // nesting's frame bigger (a part called `pick` is still the part).
+            Tok::Name
+                if self.peek().tok == Tok::LParen
+                    && self.text(t) == "pick"
+                    && self.part_named("pick").is_none() =>
+            {
+                self.pick(t)?
+            }
             Tok::Name => self.name(t)?,
+            Tok::Hex(_) => {
+                return self.err(
+                    t,
+                    "a colour can't be a value: use it in the colour itself (the last line), \
+                     as `#f80`, `rgb(#f80, k)` or `mix(#000, #f80, k)`",
+                )
+            }
             _ => return Err(self.no_value(t)),
         };
         loop {
@@ -1170,6 +1308,7 @@ impl<'s> Parser<'s> {
             .iter()
             .map(|e| e.0)
             .chain(CONSTS.iter().map(|e| e.0))
+            .chain(LATER.iter().map(|e| e.0))
             .chain(
                 self.locals
                     .iter()
@@ -1198,7 +1337,8 @@ impl<'s> Parser<'s> {
                 let args = self.args(t, name, ar)?;
                 return match f {
                     F::Op(c) | F::Glyph(c) => self.dag.op(c, args, at),
-                    F::Fract => self.dag.op(code::FRAC, args, at),
+                    // (`pick` is read in `expr_inner`.)
+                    F::Fract | F::Pick => self.dag.op(code::FRAC, args, at),
                     F::Smoothstep => {
                         // smoothstep(e0, e1, x) = smooth(x, e0, 1/(e1-e0))
                         let span = self.dag.op(code::SUB, [args[1], args[0], 0], at)?;
@@ -1263,7 +1403,21 @@ impl<'s> Parser<'s> {
         if let Some(&(_, v)) = CONSTS.iter().find(|e| e.0 == name) {
             return Some(self.dag.constant(v, (0, 0)));
         }
-        None
+        let &(_, code) = LATER.iter().find(|e| e.0 == name)?;
+        Some(self.inline(code))
+    }
+
+    /// `code` read as an expression where the name just read is (errors,
+    /// only the limits, point at that name).
+    #[inline(never)]
+    fn inline(&mut self, code: &'static str) -> Result<Id, Error> {
+        let at = self.toks[self.pos - 1];
+        let toks = lex(code)?;
+        let saved = (core::mem::replace(&mut self.toks, toks), self.pos, self.src);
+        (self.pos, self.src) = (0, code);
+        let r = self.expr(0);
+        (self.toks, self.pos, self.src) = saved;
+        r.map_err(|e| Error::new(at.start, at.end, e.msg))
     }
 
     /// A built-in value here: inside a part, its own `t`, and where it is
@@ -1345,6 +1499,31 @@ impl<'s> Parser<'s> {
             return Err(self.arity(f, close, name, n, k, cover));
         }
         Ok((out, k))
+    }
+
+    /// `pick(k, a, b, …)` at `t` (out of line: the recursive parser's
+    /// frames stay small).
+    #[inline(never)]
+    fn pick(&mut self, t: Token) -> Result<Id, Error> {
+        let open = self.next();
+        let k = self.expr(0)?;
+        let mut v = Vec::new();
+        while self.peek().tok == Tok::Comma {
+            self.next();
+            v.push(self.expr(0)?);
+        }
+        let close = self.peek();
+        if close.tok != Tok::RParen {
+            return Err(self.not_closed(open, close, "pick"));
+        }
+        self.next();
+        if v.is_empty() {
+            return self.err(
+                t,
+                "`pick` takes a number, then the values to pick from: `pick(k, a, b, …)`",
+            );
+        }
+        self.dag.pick(k, v, (t.start, t.end))
     }
 
     /// `digit(n, x, y)` / `glyph(c, x, y)`, with a font (`, small`, …)
@@ -1453,6 +1632,25 @@ impl<'s> Parser<'s> {
     fn colour(&mut self, t: Token) -> Result<Colour, Error> {
         let name = self.text(t);
         let &(_, ar, c) = COLOURS.iter().find(|e| e.0 == name).unwrap_or(&COLOURS[0]);
+        // `rgb(#f80)`, `rgb(mix(…), k)`: a colour, and maybe its coverage.
+        if c == code::OUT_RGB && self.colour_ahead(self.pos + 1) {
+            let open = self.next();
+            let mut col = self.colour_line()?;
+            if self.peek().tok == Tok::Comma {
+                self.next();
+                col.alpha = Some(self.expr(0)?);
+            }
+            let close = self.peek();
+            if close.tok != Tok::RParen {
+                self.unclosed(open, close)?;
+                return self.err(
+                    close,
+                    "`rgb` of a colour takes the colour and, if you like, how much of the pixel it covers (0 to 1)",
+                );
+            }
+            self.next();
+            return Ok(col);
+        }
         if c != code::OUT_PAL {
             let (a, k) = self.args_or_cover(t, name, ar, true)?;
             return Ok(Colour {
@@ -1513,6 +1711,87 @@ impl<'s> Parser<'s> {
             alpha,
             blend: fixed::BLEND_OVER,
         })
+    }
+
+    /// Whether a colour starts at token `k`: `#f80`, `rgb(`, or `mix(` of
+    /// one.
+    fn colour_ahead(&self, mut k: usize) -> bool {
+        loop {
+            let t = self.toks[k];
+            match t.tok {
+                Tok::Hex(_) => return true,
+                Tok::Name if self.toks[k + 1].tok == Tok::LParen => match self.text(t) {
+                    "mix" => k += 2,
+                    "rgb" => return true,
+                    _ => return false,
+                },
+                _ => return false,
+            }
+        }
+    }
+
+    /// A colour expression as a colour line's `rgb`.
+    fn colour_line(&mut self) -> Result<Colour, Error> {
+        Ok(Colour {
+            code: code::OUT_RGB,
+            args: self.colour_expr()?,
+            pal: 0,
+            alpha: None,
+            blend: fixed::BLEND_OVER,
+        })
+    }
+
+    /// A colour where one is expected: `#rrggbb`, `#rgb`, `rgb(r, g, b)`,
+    /// or `mix(c1, c2, k)` of two colours. Its red, green and blue.
+    fn colour_expr(&mut self) -> Result<[Id; 3], Error> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(self.too_deep());
+        }
+        let r = self.colour_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn colour_inner(&mut self) -> Result<[Id; 3], Error> {
+        let t = self.next();
+        let at = (t.start, t.end);
+        if let Tok::Hex(v) = t.tok {
+            let mut out = [0; 3];
+            for (i, o) in out.iter_mut().enumerate() {
+                *o = self
+                    .dag
+                    .constant(fixed::byte((v >> (16 - 8 * i)) as u8), at)?;
+            }
+            return Ok(out);
+        }
+        let name = if t.tok == Tok::Name { self.text(t) } else { "" };
+        if self.peek().tok == Tok::LParen {
+            if name == "rgb" {
+                return self.args(t, name, 3);
+            }
+            if name == "mix" {
+                let open = self.next();
+                let a = self.colour_expr()?;
+                self.expect(Tok::Comma, "`,` (as in `mix(#000, #f80, k)`)")?;
+                let b = self.colour_expr()?;
+                self.expect(Tok::Comma, "`,` (as in `mix(#000, #f80, k)`)")?;
+                let k = self.expr(0)?;
+                let close = self.peek();
+                if close.tok != Tok::RParen {
+                    return Err(self.not_closed(open, close, name));
+                }
+                self.next();
+                return self.dag.mix3(a, b, k, at);
+            }
+        }
+        self.err(
+            t,
+            format!(
+                "expected a colour here (#f80, rgb(r, g, b) or mix(…) of two), found {}",
+                self.found(t)
+            ),
+        )
     }
 
     fn end_of_statement(&mut self) -> Result<(), Error> {
@@ -1732,6 +2011,12 @@ impl<'s> Parser<'s> {
         {
             self.next();
             let c = self.colour(t)?;
+            self.end_of_statement()?;
+            return Ok((alloc::vec![c], false));
+        }
+        // A colour on its own: `#102040`, `mix(#000, #f80, k)`.
+        if self.colour_ahead(self.pos) {
+            let c = self.colour_line()?;
             self.end_of_statement()?;
             return Ok((alloc::vec![c], false));
         }
@@ -2181,6 +2466,7 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
             nodes: Vec::with_capacity(64),
             index: alloc::vec![NO; SLOTS],
             divs: Vec::new(),
+            picks: Vec::new(),
         },
         locals: Vec::new(),
         depth: 0,
@@ -2307,7 +2593,12 @@ fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result
         if need[i] == NONE || m.code >= K_CONST {
             continue;
         }
-        for &x in [m.a, m.b, m.c][..code::arity(m.code)].iter() {
+        let picks: &[Id] = if m.code == code::PICK {
+            &dag.picks[m.b as usize]
+        } else {
+            &[]
+        };
+        for &x in [m.a, m.b, m.c][..code::arity(m.code)].iter().chain(picks) {
             need[x as usize] = need[x as usize].min(need[i]);
         }
     }
@@ -2320,8 +2611,8 @@ fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result
     // Where each node's value lives.
     let mut loc = alloc::vec![0u8; n];
     let mut next_slot = S_FIRST_FREE as usize;
-    let mut new_slot = |v: Option<i32>, prog: &mut Program| -> Result<u8, Error> {
-        if next_slot >= MAX_SCALARS {
+    fn new_slot(next_slot: &mut usize, v: Option<i32>, prog: &mut Program) -> Result<u8, Error> {
+        if *next_slot >= MAX_SCALARS {
             return Err(Error::new(
                 0,
                 0,
@@ -2330,13 +2621,13 @@ fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result
                 ),
             ));
         }
-        prog.init[next_slot] = v.unwrap_or(0);
-        next_slot += 1;
-        Ok((next_slot - 1) as u8)
-    };
+        prog.init[*next_slot] = v.unwrap_or(0);
+        *next_slot += 1;
+        Ok((*next_slot - 1) as u8)
+    }
     for i in 0..n {
         if live(i) && nodes[i].code == K_CONST {
-            loc[i] = new_slot(Some(nodes[i].val), prog)?;
+            loc[i] = new_slot(&mut next_slot, Some(nodes[i].val), prog)?;
         } else if live(i) && nodes[i].code == K_INPUT {
             loc[i] = nodes[i].val as u8;
             if nodes[i].val as u8 == LANE | L_I {
@@ -2350,32 +2641,36 @@ fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result
         prog.uses |= BACKDROP;
     }
     let mut ops: Vec<Op> = Vec::new();
-    let mk = |m: &Node, d: u8, loc: &[u8]| Op {
-        code: m.code,
-        d,
-        a: if code::arity(m.code) > 0 {
-            loc[m.a as usize]
-        } else {
-            0
-        },
-        b: if code::arity(m.code) > 1 {
-            loc[m.b as usize]
-        } else {
-            0
-        },
-        c: if code::arity(m.code) > 2 {
-            loc[m.c as usize]
-        } else {
-            0
-        },
-    };
+    // A step for node `m` into `d`; a pick's table of its choices' slots
+    // goes in constant slots of its own (its choices all have a slot by
+    // then: they come before it and run once a frame or a row).
+    let mk =
+        |m: &Node, d: u8, loc: &[u8], ns: &mut usize, prog: &mut Program| -> Result<Op, Error> {
+            let n = code::arity(m.code);
+            let l = |k: usize, x: Id| if n > k { loc[x as usize] } else { 0 };
+            let (mut b, mut c) = (l(1, m.b), l(2, m.c));
+            if m.code == code::PICK {
+                let opts = &dag.picks[m.b as usize];
+                (b, c) = (*ns as u8, opts.len() as u8);
+                for &o in opts {
+                    new_slot(ns, Some(loc[o as usize] as i32), prog)?;
+                }
+            }
+            Ok(Op {
+                code: m.code,
+                d,
+                a: l(0, m.a),
+                b,
+                c,
+            })
+        };
     for level in [LV_FRAME, LV_ROW] {
         for i in 0..n {
             let m = &nodes[i];
             if is_op(i) && m.level == level {
-                let d = new_slot(None, prog)?;
+                let d = new_slot(&mut next_slot, None, prog)?;
                 loc[i] = d;
-                ops.push(mk(m, d, &loc));
+                ops.push(mk(m, d, &loc, &mut next_slot, prog)?);
             }
         }
         if level == LV_FRAME {
@@ -2434,7 +2729,7 @@ fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result
                 used = used.max(REGS - free.len());
                 let d = LANE | (L_REG0 + r);
                 loc[i] = d;
-                ops.push(mk(&nodes[i], d, &loc));
+                ops.push(mk(&nodes[i], d, &loc, &mut next_slot, prog)?);
                 holder[r as usize] = Some(i);
                 Some(i)
             }

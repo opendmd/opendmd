@@ -471,6 +471,10 @@ fn lane_op<const N: usize>(
         SQR => un!(fast1, d, a, fixed::sqr),
         SQRT => un!(run1, d, a, fixed::sqrt),
         RECIP => un!(run1, d, a, fixed::recip),
+        PICK => {
+            let sc = &s.sc;
+            un!(run1, d, a, |k| pick(sc, op.b, op.c, k))
+        }
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
         MIX => tern!(fast3, d, a, b, c, fixed::mix),
