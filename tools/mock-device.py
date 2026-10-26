@@ -115,6 +115,12 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   FAT order) and sizes are opt-in (`?sizes=1`), matching the firmware's
   quadratic-`stat`-avoidance note in `files.rs`.
 - `GET /api/config` never echoes `wifi_pass`, only `wifi_pass_set`.
+- **`GET /mock/io`** (mock only, no firmware route): card-file requests
+  (`/gifs/`, `/cache/`) in flight now and at most, how many, the bytes
+  actually sent and how many were cut off by the client; `?reset=1` zeroes
+  them, `&kbps=N` sends card files in 2 KB pieces at that rate (as the
+  firmware's `IO_CHUNK` streaming), so a reader that hangs up early is
+  measured as a device would see it. web-smoke's thumbnail checks use it.
 - **`transition` / `transition_ms`** in the config (`"dissolve"`, 400 by
   default): a name `opendmd_core::compositor::Kind::from_name` accepts
   (stored normalised) and 20..=2000 ms, else a 400. The mock plays nothing,
@@ -2519,6 +2525,13 @@ class Context:
         # `--sd slowed` and a card-failure restart set it).
         self.sd_slow_record = False
         self.reset_note = None
+        # Card file serving as the tests see it (`GET /mock/io`, mock only):
+        # requests for card files (/gifs/, /cache/) in flight and at most,
+        # bytes actually sent (a client that hangs up stops the count), and
+        # an optional pace, `kbps`, which sends in the firmware's 2 KB
+        # pieces (`config::IO_CHUNK`) at that rate, so a reader that stops
+        # early (the web app's thumbnails) is measured as on a device.
+        self.io = {"kbps": 0, "inflight": 0, "max": 0, "gets": 0, "bytes": 0, "cut": 0}
         self.schedule.evaluate()  # picks up the playlist rebuilt just above
         # Firmware update: the running version, the updater's last line, the
         # simulated restart's end (monotonic), the Ed25519 key (VerifyKey).
@@ -2797,6 +2810,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_prefix("/sets/"), {"GET": self.h_serve_under}),
                 (m_prefix("/cache/"), {"GET": self.h_serve_under}),
                 (m_prefix("/www/"), {"GET": self.h_www}),
+                (m_exact("/mock/io"), {"GET": self.h_mock_io}),
                 (lambda cur: True, {"GET": self.h_catchall}),
             ]
 
@@ -2880,6 +2894,45 @@ def make_handler(ctx: Context, quiet: bool):
                 return
             self.stream_file(fpath, rel, gzipped=False)
 
+        def stream_paced(self, fpath: Path, rel: str, io: dict) -> None:
+            data = fpath.read_bytes()
+            self.send_response(200, "OK")
+            self.send_header("Content-Type", mime_for(rel))
+            self.send_header("Cache-Control", cache_for(rel))
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            sent = 0
+            try:
+                while sent < len(data):
+                    piece = data[sent:sent + 2048]
+                    self.wfile.write(piece)
+                    self.wfile.flush()
+                    sent += len(piece)
+                    with ctx.lock:
+                        io["bytes"] += len(piece)
+                    time.sleep(len(piece) / (io["kbps"] * 1024))
+            except (BrokenPipeError, ConnectionResetError):
+                with ctx.lock:
+                    io["cut"] += 1
+                self.close_connection = True
+            self._resp_status = 200
+            self._resp_bytes = sent
+
+        # GET /mock/io (mock only, not a firmware route): the card-file
+        # counters above; `?reset=1` zeroes them, `&kbps=N` sets the pace
+        # (0: as fast as the machine goes).
+        def h_mock_io(self, path):
+            _, _, query = self.path.partition("?")
+            io = ctx.io
+            with ctx.lock:
+                out = dict(io)
+                if query_param(query, "reset") == "1":
+                    io.update(max=io["inflight"], gets=0, bytes=0, cut=0)
+                k = query_param(query, "kbps")
+                if k is not None:
+                    io["kbps"] = max(0, int(k))
+            self.send_json(200, out)
+
         def h_serve_under(self, path):
             rel_full = percent_decode(path)
             rel = card_path(rel_full)
@@ -2889,11 +2942,25 @@ def make_handler(ctx: Context, quiet: bool):
             if rel.startswith("@") or "/@" in f"/{rel}":
                 self.send_error_json(404, rel_full)
                 return
-            fpath = ctx.fs.read_path(rel)
-            if fpath is None:
-                self.send_error_json(404, rel_full)
-                return
-            self.stream_file(fpath, rel, gzipped=False)
+            io = ctx.io
+            with ctx.lock:
+                io["gets"] += 1
+                io["inflight"] += 1
+                io["max"] = max(io["max"], io["inflight"])
+            try:
+                fpath = ctx.fs.read_path(rel)
+                if fpath is None:
+                    self.send_error_json(404, rel_full)
+                    return
+                if not io["kbps"]:
+                    self.stream_file(fpath, rel, gzipped=False)
+                    with ctx.lock:
+                        io["bytes"] += self._resp_bytes
+                    return
+                self.stream_paced(fpath, rel, io)
+            finally:
+                with ctx.lock:
+                    io["inflight"] -= 1
 
         # -- JSON API handlers -----------------------------------------------
 
