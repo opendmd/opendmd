@@ -135,6 +135,7 @@ fn names(n: usize) -> Vec<String> {
         "Abcdefgh1.gif".to_string(), // 13 characters: one LFN entry, no terminator
         format!("{}.gif", "Y".repeat(22)), // 26: two full entries
         format!("Long_{}.gif", "x".repeat(150)),
+        "Caf\u{e9}_Non_ASCII_Name.gif".to_string(), // not indexed: opens by path
     ];
     let mut i = 0;
     while v.len() < n {
@@ -191,6 +192,7 @@ mod tempdir {
 fn mcopy(img: &Path, src: &Path, names: &[String], to: &str) {
     for chunk in names.chunks(200) {
         let mut c = Command::new("mcopy");
+        c.env("LC_ALL", "C.UTF-8");
         c.arg("-i").arg(img).arg("-n").arg("-o");
         for n in chunk {
             c.arg(src.join(n));
@@ -229,10 +231,11 @@ fn exercise(cluster_sectors: u32, kb: u32, count: usize) {
     let found = im.walk(big);
     // Names that fit 8.3 exactly have no long name and are not indexed
     // (they open by path).
-    let short = |n: &str| n == "FI0000.GIF" || n == "fi0001.gif";
+    let short = |n: &str| n == "FI0000.GIF" || n == "fi0001.gif" || !n.is_ascii();
     let live: Vec<&String> = all.iter().filter(|n| !gone.contains(n) && !short(n)).collect();
     assert_eq!(found.len(), live.len(), "every live long-named file indexed once");
     assert!(!found.contains_key("FI0000.GIF") && !found.contains_key("fi0001.gif"));
+    assert!(found.keys().all(|k| k.is_ascii()), "a non-ASCII long name is not indexed");
     let mut extras = 0;
     for n in &live {
         let &(loc, prev) = found.get(n.as_str()).unwrap_or_else(|| panic!("{n} not found"));
@@ -245,6 +248,8 @@ fn exercise(cluster_sectors: u32, kb: u32, count: usize) {
             }
             v => panic!("{n}: {v:?}"),
         }
+        // The same name in another ASCII case is the same file to FatFs.
+        assert!(matches!(im.verify(loc, prev, &n.to_ascii_uppercase()), Verify::Ok { .. }), "{n}");
         // Another name at the same place is never accepted.
         assert!(!matches!(im.verify(loc, prev, &format!("{n}x")), Verify::Ok { .. }));
     }
@@ -264,6 +269,35 @@ fn exercise(cluster_sectors: u32, kb: u32, count: usize) {
     }
     let again = im.walk(big);
     assert!(again.contains_key("Renamed_File_Name.gif") && !again.contains_key(ren.as_str()));
+
+    // The same name written again (an upload replacing a GIF): the index's
+    // record, wherever the entry now is, must give the new contents or none.
+    let over = live[17].clone();
+    fs::write(src.join(&over), b"GIF89a replaced contents").unwrap();
+    mcopy(&img, &src, std::slice::from_ref(&over), "::/gifs/Big/");
+    let mut im = Img::open(&img);
+    let &(loc, prev) = found.get(over.as_str()).unwrap();
+    if let Verify::Ok { cluster, size, .. } = im.verify(loc, prev, &over) {
+        assert_eq!(im.content(cluster, size), b"GIF89a replaced contents");
+    }
+    let fresh = im.walk(big);
+    let &(loc, prev) = fresh.get(over.as_str()).unwrap();
+    let Verify::Ok { cluster, size, .. } = im.verify(loc, prev, &over) else { panic!("{over}") };
+    assert_eq!(im.content(cluster, size), b"GIF89a replaced contents");
+
+    // A directory renamed on a PC and a new one made under the old name:
+    // the old records still verify (the entries did not move), so only the
+    // index's directory list can tell. It does: the cluster changed.
+    let indexed = vec![(fatdir::hash(b"/gifs/Big"), big)];
+    run(Command::new("mren").arg("-i").arg(&img).args(["::/gifs/Big", "::/gifs/Old"]));
+    run(Command::new("mmd").arg("-i").arg(&img).arg("::/gifs/Big"));
+    mcopy(&img, &src, std::slice::from_ref(&keep), "::/gifs/Big/");
+    let mut im = Img::open(&img);
+    let &(loc, prev) = found.get(keep.as_str()).unwrap();
+    assert!(matches!(im.verify(loc, prev, &keep), Verify::Ok { .. }), "the stale record still verifies");
+    let new_big = im.subdir(gifs, "BIG");
+    assert_ne!(new_big, big);
+    assert!(!fatdir::dirs_match(&indexed, &[(fatdir::hash(b"/gifs/Big"), new_big)]));
     eprintln!("{} files, {} extra records, {} sectors per cluster", live.len(), extras, cluster_sectors);
 }
 

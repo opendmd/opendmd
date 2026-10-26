@@ -1412,6 +1412,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 if std::fs::metadata(&path).is_ok_and(|m| m.is_dir())
                     && files::under(&path, &format!("{}/gifs", config::SD_MOUNT)) =>
             {
+                crate::fatidx::dir_changed();
                 match std::fs::remove_dir(&path) {
                     Ok(()) => req.json(r#"{"ok":true}"#),
                     Err(e) => req.error(409, "409 Conflict", &format!("{rel}: not empty ({e})")),
