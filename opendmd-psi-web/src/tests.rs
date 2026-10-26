@@ -93,7 +93,9 @@ fn formulas() {
 }
 
 /// The examples gallery: every one compiles, is short, and is light or
-/// medium for the panel (the ESP32 estimate within the effects' 8 ms).
+/// medium for the panel (the ESP32 estimate within 10 ms: since the
+/// estimate was calibrated on the device, 2026-10-27, the heaviest five read
+/// 8.3-9.7 ms, which is how they always ran: at 25 frames a second).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn the_examples_are_light_enough_for_the_panel() {
@@ -124,7 +126,7 @@ fn the_examples_are_light_enough_for_the_panel() {
         let most = if e.name == "Big clock" { 16 } else { 7 };
         assert!(own <= most, "{}: too long for an example", e.name);
         assert!(
-            p.esp32_us() <= 8000,
+            p.esp32_us() <= 10_000,
             "{}: ~{} µs a frame on the panel",
             e.name,
             p.esp32_us()
@@ -187,17 +189,11 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
 /// `choice`): one that draws over the GIF as it is (over, 100 %); one that
 /// covers it, screened at 40 %, or over at 30 % when that is too heavy (or
 /// it has layers of its own, which go over only) —
-/// within the looks' 8 ms (`fx_psi::LOOK_MAX_EST_US`), except the ones
+/// within the looks' 12 ms (`fx_psi::LOOK_MAX_EST_US`), except the ones
 /// listed: too heavy to draw over every GIF at all.
 #[cfg(not(target_arch = "wasm32"))]
 fn every_example_as_a_look() {
-    const TOO_HEAVY: &[&str] = &[
-        "Matrix",
-        "Lava lamp",
-        "Clock",
-        "Spotlight",
-        "Rings through stripes",
-    ];
+    const TOO_HEAVY: &[&str] = &[];
     let json = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../opendmd-web/www/formulas.json"
@@ -235,7 +231,7 @@ fn every_example_as_a_look() {
                     e.name
                 );
             }
-            i[6] <= 8000
+            i[6] <= 12_000
         });
         match fit {
             Some((b, k)) => chosen.push(format!("{} {b} {k}", e.name)),

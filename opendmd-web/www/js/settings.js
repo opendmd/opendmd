@@ -89,7 +89,7 @@ export async function mount(el) {
   async function lookFormulas() {
     let ex;
     try { [ex, L] = await Promise.all([examples(), import('./looks.js')]); M = await L.psi(); } catch (e) { lfErr.hidden = false; lfErr.textContent = 'Formulas could not be loaded: ' + (e.message || e); return; }
-    lc ??= L.controls('st-look', (b, k, done) => { const why = L.as(M, lfs[lf.value], b, k).why; lc.say(why); if (done && !why) saveLook(b, k); });
+    lc ??= L.controls('st-look', (b, k, done) => { const x = L.as(M, lfs[lf.value], b, k); lc.say(x); if (done && !x.why) saveLook(b, k); });
     lcBox.replaceChildren(lc.el, lc.why);
     const mine = store.get('psi.mine', []), cf = app.config || {}, grp = (label, list) => list.length && h('optgroup', { label }, list.map((x) => h('option', { value: x.k, disabled: x.off }, x.name + (x.off ? ' (too heavy)' : ''))));
     lfs = [...(Array.isArray(mine) ? mine : []).map((x) => ({ ...x, mine: 1 })), ...(Array.isArray(ex) ? ex : [])].filter((x) => typeof x?.src == 'string' && x.name);
@@ -108,11 +108,11 @@ export async function mount(el) {
   function showMix(b, k) {
     const x = lfs[lf.value];
     lcBox.hidden = !x;
-    if (x) { lc.set(b, k, L.overOnly(M, x)); lc.say(L.as(M, x, b, k).why); }
+    if (x) { lc.set(b, k, L.overOnly(M, x)); lc.say(L.as(M, x, b, k)); }
   }
   const saveLook = (b, k) => looks(async () => {
     const x = lfs[lf.value];
-    if (!x) { await app.src.putConfig({ look_formula: '', look_formula_name: '' }); await app.refreshConfig(); return; }
+    if (!x) { await app.src.putConfig({ look_formula: '', look_formula_name: '', look_blend: 'over', look_amount: 100 }); await app.refreshConfig(); return; }
     await L.use(x, b, k);
   });
   // A new pick starts at its own choice (as it is over the GIF, or Screen 40%).

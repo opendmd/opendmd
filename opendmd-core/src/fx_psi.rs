@@ -463,9 +463,12 @@ impl Effect for PsiFx {
 /// A formula estimated to take longer than this a frame (µs on the ESP32)
 /// is not drawn over GIFs: it runs at the GIF's own frame rate whenever the
 /// GIF changes (a governor can only slow its own animation), next to the
-/// GIF's decoding (p90 ~4 ms) and the blit — 8 ms is the effect budget at
-/// 50 fps.
-pub const LOOK_MAX_EST_US: u32 = 8_000;
+/// GIF's decoding (p90 ~4 ms) and the blit. 8 ms until any-look
+/// (2026-10-27), on an estimate that read full-panel looks ~1.5× low; with
+/// the estimate calibrated on the device, 12 ms: on the spare, looks of
+/// 8.6 and 12.3 ms measured left the GIFs at 0 steady misses (the animated
+/// one at 25 fps: over 8 ms its governor holds 40 ms frames).
+pub const LOOK_MAX_EST_US: u32 = 12_000;
 
 /// Why a formula that never lets the picture under it show through (it
 /// reads none of `ur ug ub ul`, and its bottom layer covers every pixel) is
@@ -1453,7 +1456,7 @@ mod tests {
             e.msg
         );
         assert!(
-            e.msg.ends_with("the limit is 8 ms) — simplify it"),
+            e.msg.ends_with("the limit is 12 ms) — simplify it"),
             "{}",
             e.msg
         );
