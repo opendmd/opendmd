@@ -146,7 +146,10 @@ FONT = {"fonts/silkscreen.woff2"}
 # 43 KB for parts (2026-10-25): approved by the owner 2026-10-25. Built at
 # opt-level "z" since then (42.6 KB; "s" was 44.2): the browser preview's
 # frame is ~0.07 ms mean, 0.14 ms worst under node (0.06 / 0.10 at "s").
-PSI_WASM_GZ_BUDGET = 43 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another)
+# 44 KB for the text built-ins (2026-10-26, branch psi-glyph: `digit`,
+# `glyph`, `bit`, 'A' character codes): the panel's two fonts (1,235 B, ~570
+# B gz) and their steps, +1.5 KB gz; a small raise the owner pre-approved.
+PSI_WASM_GZ_BUDGET = 44 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25.
 FORMULAS_GZ_BUDGET = 21 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts

@@ -22,7 +22,7 @@ the real time in big rainbow digits, with a bar along the bottom that
 fills once a minute, a step a second. Check it against your watch. A GIF
 can't know the time; one that only showed each minute of a day would
 already be 2.7 MB, and with the seconds and the moving colours it would
-be gigabytes. The formula is 1.5 KB.
+be gigabytes. The formula is under 1 KB, most of it comments.
 
 From there:
 
@@ -121,7 +121,7 @@ Now drag the `2` in `x*2`, or the `0.9`, and see what happens.
 A formula is a few lines: names you set (`wave = …`, each name once), and a
 colour on the last line. It is worked out for every pixel, every frame.
 `--` starts a comment. Everything is a number; there are no loops, lists or
-words.
+words (a single character in quotes, `'A'`, is a number too: its code).
 
 **Values**
 
@@ -152,6 +152,20 @@ words.
 | `noise(x, y, z)` | smooth random hills, 0 to 1 |
 | `hash(a, b)` | a random number, 0 to 1 |
 | `c ? a : b`, `select(c, a, b)` | `a` when `c` is true (not 0), else `b` |
+| `digit(n, col, row)` | 1 where digit `n` (0 to 9) has a pixel in the panel's font, else 0 |
+| `glyph(ch, col, row)` | the same for a character: `glyph('A', col, row)` |
+| `bit(n, i)` | bit `i` of the whole number `n`, 1 or 0, for patterns of your own |
+
+**Digits and letters.** `digit` and `glyph` read the panel's own font, the
+one the clock and the title cards use: a character is 5 columns by 7 rows
+(`col` 0 to 4 from the left, `row` 0 to 6 from the top; a digit uses
+columns 0 to 3 and rows 0 to 5, the rest is the gap to the next one).
+Anything outside that, or a character the font hasn't, is 0, so a
+character drawn big is just its column and row worked out from the pixel:
+`digit(7, floor(px/4), floor((31 - py)/4))` draws a 7 four times the size
+in the top-left corner (rows count down from the top here, though `py`
+counts up). Add `small` for the smaller font, 4 by 6 (digits 3 by 5):
+`digit(n, col, row, small)`. **Big clock** is made this way.
 
 Operators: `+ - * / %`, comparisons `< <= > >= == !=` (1 for true, 0 for
 false), and `and`, `or`, `not`. There is no power operator: write `x * x`.
@@ -306,7 +320,8 @@ draws every pixel 50 times a second. The editor rates each one **light**,
 milliseconds); all the examples are light or medium.
 
 - Cheap: `+ - *`, the waves (`sin`, `cos`, `tri`, `saw`, `sqr`), `abs`,
-  `frac`, `min`, `max`, `clamp`, `step`, comparisons, `pal`.
+  `frac`, `min`, `max`, `clamp`, `step`, comparisons, `pal`, `digit`,
+  `glyph` and `bit`.
 - Dividing by a fixed number (`x/8`) is free: it becomes a multiply.
 - Dear: `noise`, `len`, `sqrt`, `atan2`, `smoothstep`, `hash`, and dividing
   by something that changes from pixel to pixel. One of them is fine;

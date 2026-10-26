@@ -13,7 +13,7 @@ Users see the words *Formula* and *GIF*; Psi is the language's name.
 make psi-check F=candidate.psi [ARGS="--out sheet.png --frames 8 --a 0.5"]
 ```
 
-It prints `ok: …` (steps, layers, registers), the loop and what it reads,
+It prints `ok: …` (steps, layers, registers, values), the loop and what it reads,
 and `panel: ~N ms a frame: light|medium|heavy`, and writes a PNG contact
 sheet of frames across one loop (over a sample picture — sky, sun, hills —
 when the formula draws over what is under it). On a compile error it prints
@@ -62,10 +62,13 @@ cmp       = sum { ("<" | "<=" | ">" | ">=" | "==" | "!=") sum }
 sum       = term { ("+" | "-") term }
 term      = unary { ("*" | "/" | "%") unary }
 unary     = ("-" | "+") unary | atom
-atom      = NUMBER | NAME | FUNC "(" args ")" | PART "." NAME
+atom      = NUMBER | CHAR | NAME | FUNC "(" args ")" | PART "." NAME
           | PART "(" e "," e ")" "." NAME | "(" expr ")"
+args      = e { "," e }                        -- digit/glyph: e "," e "," e [ "," FONT ]
 sep       = newline | ";"                      -- newlines inside ( ) are spaces
 NUMBER    = digits [ "." digits ] | "." digits -- no sign, no exponent
+CHAR      = "'" one printable ASCII character "'"   -- its code: 'A' is 65
+FONT      = "normal" | "small"
 NAME      = [A-Za-z_][A-Za-z0-9_]*
 comment   = "--" or "//" to the end of the line
 ```
@@ -80,7 +83,8 @@ colour goes inside a layer.
 
 Q16.16 fixed point: −32,768 to 32,767.99998, steps of 1/65,536. Arithmetic
 **saturates** (no wrap-around). `a / 0` is the largest number of `a`'s sign
-(0 for 0/0); `a % 0` is 0; `%` is floored (`-1 % 3` is 2; `v % 1` is
+(0 for 0/0); `a % 0` is 0; a character in single quotes is its ASCII code
+(`'A'` is 65, `'0'` 48, `' '` 32; one character, no strings); `%` is floored (`-1 % 3` is 2; `v % 1` is
 `frac(v)`). Comparisons and logic give 1 or 0; any non-zero is true.
 Division by a constant is exact once a frame or a row (`floor(minute/10)`
 is 5 from 50 to 59); per pixel it is a multiply by 1/k, which `floor`
@@ -105,7 +109,8 @@ computer.
 
 Alone (not over a GIF), `ur ug ub ul` are 0. Built-in names, function
 names, palette names and keywords (`loop frame layer part use`) cannot be
-set.
+set (except `digit`, `glyph` and `bit`, added later, so formulas saved
+with those names still work; don't use them as names in new ones).
 
 ## 5. Functions
 
@@ -126,6 +131,30 @@ set.
 | `noise(x, y, z)` | smooth value noise 0..1, one hill per unit: scale inputs (`x*8`) |
 | `hash(a, b)` | a pseudo-random 0..1 from the exact bits of a and b (`hash(px, py)`: per pixel) |
 | `select(c, a, b)`, `c ? a : b` | `a` when c ≠ 0, else `b` (both are computed) |
+| `digit(n, col, row)` | 1 if pixel (col, row) of digit n is lit in the panel's font, else 0 (see below) |
+| `glyph(ch, col, row)` | the same for a character code, 32..126: `glyph('A', col, row)` |
+| `digit(…, small)`, `glyph(…, small)` | the same in the small font |
+| `bit(n, i)` | bit i of floor(n), 1 or 0 (two's complement); i floored, i < 0 gives 0 |
+
+**Digits and text.** `digit` and `glyph` read the panel's own bitmap fonts
+(OpenDMD's `@clock` and title cards; X11 misc-fixed, printable ASCII):
+
+| font | cell (col × row) | a digit's pixels | |
+|---|---|---|---|
+| `normal` (the default) | 5 × 7: col 0..4, row 0..6 | cols 0..3, rows 0..5 | the clock's digits |
+| `small` | 4 × 6: col 0..3, row 0..5 | cols 0..2, rows 0..4 | 3 × 5 digits |
+
+- **Coordinates** are whole columns and rows of the cell from its **top
+  left** (row 0 is the top: the opposite of `py`), floored, so a glyph
+  drawn `k` times the size is `glyph(ch, floor(u/k), floor(v/k))` with
+  `u`, `v` the pixel's offset from the cell's top left. Outside the cell
+  the result is 0, so neighbouring cells, gaps and margins need no test.
+  The cell includes the gap to the next character: cells tile at 5 px
+  (`small`: 4).
+- **The character** is floored: `digit` takes 0..9, `glyph` 32..126; any
+  other (negative, 10, 127, …) draws nothing.
+- Each is **one step** per pixel (a table read, ~100 ns), and once a frame
+  or a row when its values are.
 
 ## 6. Colours and coverage
 
@@ -253,6 +282,7 @@ change — constants once, `t`/clock/slider-only values once a frame,
 | `len` | 642 | | `noise` | 855 |
 | colour `rgb` | 120 | | colour `hsv` | 195 |
 | `ur` `ug` `ub` | 35 | | `ul` | 125 |
+| `digit` `glyph` | ~100 (estimated) | | `bit` | 55 |
 | each extra layer | 150 (multiply 210, screen 290; +75 with coverage) | | showing the picture under | 50 |
 
 Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs, but
@@ -280,6 +310,26 @@ arithmetic costs the same as `x` arithmetic.
   `layer { B(x, y, k) }`.
 - **Mirror / tile / zoom a part**: `p(abs(x - 0.5)*2, y)`, `p(frac(x*4), y)`,
   `p((x - 0.5)/2 + 0.5, (y - 0.5)/2 + 0.5)`.
+- **Digits and text**: work out, from `px` and `py`, which cell the pixel
+  is in, which character goes there (a chain of `?:`, character codes in
+  quotes), and the column and row inside the cell; `digit`/`glyph` is the
+  pixel, 0 or 1, ready for `hsv`'s value or a coverage. Scale by dividing
+  the offsets. The next block writes HELLO at twice the size in the
+  middle; examples 26 and 27 put it to work.
+
+```psi
+-- 5 letters x 10 px (the 5-px cell, doubled) = 50 px, from column 39
+u = px - 39; v = 22 - py             -- offsets from the text's top left
+cell = floor(u/10)                   -- which letter
+ch = cell < 0 ? 0 : cell < 1 ? 'H' : cell < 2 ? 'E' : cell < 4 ? 'L' : cell < 5 ? 'O' : 0
+gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
+```
+
+  (Character 0 draws nothing, so the ends of the chain are blank; `%` is
+  floored, so `floor(u/2) % 5` is the column even left of the text.)
+- **Your own patterns**: pack rows of pixels into a whole number and read
+  them back with `bit(row_bits, column)`, e.g. an 8-pixel row pattern
+  `bit(165, px % 8)`.
 - **Ranges**: keep `hsv`'s value and `rgb`'s channels in 0..1 by design
   (`*0.5 + 0.5` maps −1..1 to 0..1); out-of-range is clamped, so overshoot
   just flattens.
@@ -340,6 +390,18 @@ v = 1
 layer { gray(x) }
 gray(y)
 ```
+
+```psi error
+-- error: the last value of `digit` is a font: normal (the default) or small
+gray(digit(3, px % 5, 31 - py, 2))
+```
+
+```psi error
+-- error: a character goes in quotes, one at a time
+gray(glyph('AB', px % 5, 31 - py))
+```
+
+There are no strings: one `glyph` per character cell (the idiom above).
 
 ```psi error
 -- error: unknown palette `blue`
@@ -718,30 +780,52 @@ layer { rgb(0.05, 0.08, 0.2) }
 layer { candy((px - 88)/35, (py - 4)/23, inside) }
 ```
 
-### 26. Big clock (the showcase)
+### 26. A name in lights
+
+Text: which letter from `px` (a chain of character codes), its column and
+row from the offsets, `glyph` for the pixel, here at twice the size. Each
+letter costs a comparison and a select per pixel: about seven fit in 8 ms.
+
+```psi example=name-sign
+loop 4
+-- "OpenDMD" in the panel's font at twice the size, centred: 7 letters of 10 px
+u = px - 30; v = 22 - py              -- the pixel from the text's top left
+cell = floor(u/10)                    -- which letter
+ch = cell < 0 ? 0 : cell < 1 ? 'O' : cell < 2 ? 'p' : cell < 3 ? 'e' : cell < 4 ? 'n'
+   : cell < 5 ? 'D' : cell < 6 ? 'M' : cell < 7 ? 'D' : 0
+ink = glyph(ch, floor(u/2) % 5, floor(v/2))   -- each font pixel 2 x 2
+hsv(x - t/4, 0.8, ink)                -- a rainbow sliding through, once a loop
+```
+
+### 27. Big clock (the showcase)
 
 What only a formula can do, readable in two seconds: the real time, in
 digits that fill the panel, with a seconds bar that crosses the bottom
-row once a minute. A 3x5 font is 15 bits a digit: each digit's bits are
-looked up once a frame (a units digit from five numbers holding two
-digits each, d in the whole part and d + 5 in the fraction, so the
-lookups fit the ~119 values), a per-row power of 8 picks the band's 3
-bits, and per pixel one 4-way select picks the digit, another the column,
-and `frac(m*(p*F)) >= 0.5` is the bit (all exact powers of two). The bar
-is the same lookup: in row 0 the first digit's bits are all ones and its
-right edge follows `second`.
+row once a minute. The digits are named once a frame (`h1 h2 m1 m2`);
+per pixel, which digit and its value come from `px`, the font's column
+and row from the pixel's offset in the digit (each font pixel 6 × 5 px:
+the clock font's 4 × 6 digits make 24 × 30), and `digit` is the pixel. In
+row 0 the seconds bar replaces the digits.
 
 ```psi example=big-clock
 loop 60
--- the time, drawn live: a 3x5 font, each digit's 15 bits looked up by value (the units: digit d in the whole part, d + 5 in the fraction)
-frame { g = floor(hour/10); k = hour % 10; n = floor(minute/10); j = minute % 10; m0 = g < 1 ? 31599 : g < 2 ? 11415 : 29671; a1 = k % 5; c1 = a1 < 1 ? 31599.951629638672 : a1 < 2 ? 11415.952606201172 : a1 < 3 ? 29671.892852783203 : a1 < 4 ? 29647.968231201172 : 23497.967254638672; m1 = k < 5 ? floor(c1) : frac(c1)*16384*2; m2 = n < 1 ? 31599 : n < 2 ? 11415 : n < 3 ? 29671 : n < 4 ? 29647 : n < 5 ? 23497 : 31183; a3 = j % 5; c3 = a3 < 1 ? 31599.951629638672 : a3 < 2 ? 11415.952606201172 : a3 < 3 ? 29671.892852783203 : a3 < 4 ? 29647.968231201172 : 23497.967254638672; m3 = j < 5 ? floor(c3) : frac(c3)*16384*2 }
--- rows 2 to 31: five bands, a power of 8 picks the band's 3 bits; row 0: the seconds bar, across in a minute
-bar = py < 1; p = bar ? 2 : py < 2 ? 0 : py < 8 ? 1 : py < 14 ? 0.125 : py < 20 ? 0.015625 : py < 26 ? 0.001953125 : 0.000244140625; t1 = bar ? (second + 1)*128/60 : 32; t2 = bar ? 0 : 64; t3 = bar ? 0 : 104; z0 = bar ? 32767.99998 : m0; z3 = bar ? 0 : m3
--- each digit: 3 columns of 8 pixels, then a gap; the minutes sit 8 pixels further right
-u = (px - (px < 64 ? 0 : 8)) % 32; m = px < t1 ? z0 : px < t2 ? m1 : px < t3 ? m2 : z3
-lit = frac(m*(p*(u < 8 ? 0.125 : u < 16 ? 0.25 : u < 24 ? 0.5 : 0.0000152587890625))) >= 0.5
--- a rainbow drifting through the digits
-hsv(x + (py/64 + hour/24 + t/10), bar ? 0 : 1, lit)
+-- Big clock: the time in four big digits, and a seconds bar along the bottom
+frame {
+  h1 = floor(hour/10); h2 = hour % 10       -- the hours' two digits
+  m1 = floor(minute/10); m2 = minute % 10   -- the minutes' two digits
+  end = (second + 1)*128/60                 -- where the seconds bar ends
+}
+-- a digit: the clock font's 4 x 6 pixels, each 6 px wide, 5 tall (24 x 30)
+q = px >= 64 ? px - 8 : px     -- the minutes sit 8 px further right
+k = floor(q/32)                -- which digit: one every 32 px (0 1, then 2 3)
+n = k < 1 ? h1 : k < 2 ? h2 : k < 3 ? m1 : m2   -- and its value
+col = floor(q % 32 / 6)        -- the font's column, 0 to 3 (then the gap)
+row = floor((31 - py)/5)       -- its row from the top, 0 to 5 (6: below)
+bar = py < 1                   -- the bottom row is the seconds bar
+lit = bar ? px < end : digit(n, col, row)
+-- a rainbow drifting through the digits, tilted by row; the bar is white
+hue = py/64 + hour/24 + t/10
+hsv(x + hue, bar ? 0 : 1, lit)
 ```
 
 ## 15. In the product (not built)

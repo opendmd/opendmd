@@ -205,6 +205,27 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             i += 1;
             continue;
         }
+        // `'A'`: a character's code (65), for `glyph`.
+        if c == b'\'' {
+            if let (Some(&ch @ 32..=126), Some(b'\'')) = (b.get(i + 1), b.get(i + 2)) {
+                i += 3;
+                out.push(Token {
+                    tok: Tok::Num((ch as i32) << 16),
+                    start,
+                    end: i,
+                });
+                continue;
+            }
+            let end = i + src[i + 1..]
+                .chars()
+                .next()
+                .map_or(1, |ch| ch.len_utf8() + 1);
+            return Err(Error::new(
+                start,
+                end.min(b.len()),
+                "a character goes in quotes, one at a time: 'A', '7' or ':' (there are no strings)",
+            ));
+        }
         if c.is_ascii_digit() || (c == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
             while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.') {
                 i += 1;
@@ -294,7 +315,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
                 let hint = match ch {
                     '^' => " (there is no power operator: multiply, e.g. `x * x`)",
                     '&' | '|' => " (write `and` / `or`)",
-                    '"' | '\'' => " (there are no strings)",
+                    '"' => " (there are no strings: for a character's code write it in single quotes, 'A')",
                     '[' | ']' => " (use `(` and `)`)",
                     _ => "",
                 };
@@ -426,10 +447,12 @@ enum F {
     Op(u8),
     Smoothstep,
     Fract,
+    /// `digit`/`glyph`: three values and an optional font word.
+    Glyph(u8),
 }
 
 /// Functions: name, arity, what, the op.
-const FUNCS: [(&str, usize, F); 21] = [
+const FUNCS: [(&str, usize, F); 24] = [
     ("sin", 1, F::Op(code::SIN)),
     ("cos", 1, F::Op(code::COS)),
     ("tri", 1, F::Op(code::TRI)),
@@ -451,7 +474,19 @@ const FUNCS: [(&str, usize, F); 21] = [
     ("smoothstep", 3, F::Smoothstep),
     ("noise", 3, F::Op(code::NOISE)),
     ("select", 3, F::Op(code::SELECT)),
+    ("bit", 2, F::Op(code::BIT)),
+    ("digit", 3, F::Glyph(code::DIGIT)),
+    ("glyph", 3, F::Glyph(code::GLYPH)),
 ];
+
+/// Functions added once people had saved formulas (2026-10-26): a name
+/// set with one of these still works as a value (`glyph = …; gray(glyph)`).
+const LATER_FUNCS: [&str; 3] = ["bit", "digit", "glyph"];
+
+/// The fonts `digit` and `glyph` take as a last value: core's 5x7 (the
+/// panel's text and clock; 4 × 6 digits; the default) and 4x6 (3 × 5
+/// digits). Whether it is the small one.
+const FONTS: [(&str, bool); 2] = [("normal", false), ("small", true)];
 
 const COLOURS: [(&str, usize, u8); 4] = [
     ("rgb", 3, code::OUT_RGB),
@@ -713,13 +748,13 @@ impl Dag {
         let ks: [Option<i32>; 3] =
             core::array::from_fn(|i| if i < n { self.konst(args[i]) } else { Some(0) });
         // Fold (all but the table functions, which run once a frame).
-        if ks.iter().all(Option::is_some) && c != code::SIN && c != code::COS {
+        if ks.iter().all(Option::is_some) && !code::is_table(c) {
             let v = eval(
                 c,
                 ks[0].unwrap_or(0),
                 ks[1].unwrap_or(0),
                 ks[2].unwrap_or(0),
-                |_| 0,
+                None,
             );
             return self.constant(v, at);
         }
@@ -775,7 +810,7 @@ impl Dag {
             }
         }
         if level == LV_CONST {
-            // sin/cos of a constant: once a frame.
+            // A table (sin, a font) read at a constant: once a frame.
             level = LV_FRAME;
         }
         let mut args = args;
@@ -1146,9 +1181,14 @@ impl<'s> Parser<'s> {
         }
         if self.peek().tok == Tok::LParen {
             if let Some(&(_, ar, f)) = FUNCS.iter().find(|e| e.0 == name) {
+                if let F::Glyph(c) = f {
+                    let (args, small) = self.glyph_args(t, name)?;
+                    let c = if small { c + 2 } else { c };
+                    return self.dag.op(c, args, at);
+                }
                 let args = self.args(t, name, ar)?;
                 return match f {
-                    F::Op(c) => self.dag.op(c, args, at),
+                    F::Op(c) | F::Glyph(c) => self.dag.op(c, args, at),
                     F::Fract => self.dag.op(code::FRAC, args, at),
                     F::Smoothstep => {
                         // smoothstep(e0, e1, x) = smooth(x, e0, 1/(e1-e0))
@@ -1190,6 +1230,8 @@ impl<'s> Parser<'s> {
             format!("`{name}` can only start a line")
         } else if PALETTES.iter().any(|e| e.0 == name) {
             format!("`{name}` is a palette: use it as `pal({name}, k)` on the last line")
+        } else if FONTS.iter().any(|e| e.0 == name) {
+            format!("`{name}` is a font: use it as `digit(n, x, y, {name})` or `glyph(c, x, y, {name})`")
         } else {
             let s = suggest(name, self.value_names());
             format!("unknown name `{name}`{}", did_you_mean(s))
@@ -1294,6 +1336,78 @@ impl<'s> Parser<'s> {
             return Err(self.arity(f, close, name, n, k, cover));
         }
         Ok((out, k))
+    }
+
+    /// `digit(n, x, y)` / `glyph(c, x, y)`, with `, small` or `, normal`
+    /// last if you like: the three values and whether the font is small.
+    fn glyph_args(&mut self, f: Token, name: &str) -> Result<([Id; 3], bool), Error> {
+        let open = self.expect(Tok::LParen, "`(`")?;
+        let mut out = [0 as Id; 3];
+        let (mut k, mut small) = (0, false);
+        if self.peek().tok != Tok::RParen {
+            loop {
+                if k == 3 {
+                    let p = self.peek();
+                    let font = FONTS
+                        .iter()
+                        .find(|e| p.tok == Tok::Name && e.0 == self.text(p));
+                    let Some(&(_, n)) = font else {
+                        return Err(self.no_font(p, name));
+                    };
+                    self.next();
+                    small = n;
+                } else {
+                    let e = self.expr(0)?;
+                    if let Some(o) = out.get_mut(k) {
+                        *o = e;
+                    }
+                }
+                k += 1;
+                if self.peek().tok == Tok::Comma {
+                    self.next();
+                    continue;
+                }
+                break;
+            }
+        }
+        let close = self.peek();
+        if close.tok != Tok::RParen {
+            return Err(self.not_closed(open, close, name));
+        }
+        self.next();
+        if k != 3 && k != 4 {
+            return Err(self.glyph_arity(f, close, name, k));
+        }
+        Ok((out, small))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn glyph_arity(&self, f: Token, close: Token, name: &str, k: usize) -> Error {
+        let what = if name == "digit" {
+            "the digit"
+        } else {
+            "the character"
+        };
+        Error::new(
+            f.start,
+            close.end,
+            format!(
+                "`{name}` takes 3 values ({what}, a column and a row; and a font, normal or small, if you like), but got {k}"
+            ),
+        )
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn no_font(&self, t: Token, name: &str) -> Error {
+        self.fail_at(
+            t,
+            format!(
+                "the last value of `{name}` is a font: normal (the default) or small, found {}",
+                self.found(t)
+            ),
+        )
     }
 
     /// `name(…)` from `f` to `close` given `k` values for `n` (`cover`: or
@@ -1419,8 +1533,10 @@ impl<'s> Parser<'s> {
                 format!("`{name}` is built in ({}); pick another name", e.2),
             );
         }
+        // Functions added after formulas were saved stay settable names
+        // (a call is still the function): a saved `glyph = …` compiles.
         if CONSTS.iter().any(|e| e.0 == name)
-            || FUNCS.iter().any(|e| e.0 == name)
+            || FUNCS.iter().any(|e| e.0 == name && !LATER_FUNCS.contains(&name))
             || COLOURS.iter().any(|e| e.0 == name)
             || KEYWORDS.contains(&name)
         {

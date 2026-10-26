@@ -17,6 +17,7 @@ pub mod engine;
 pub mod fatdir;
 pub mod filter;
 pub mod follow;
+mod fonts;
 pub mod frametime;
 pub mod fx;
 #[cfg(feature = "psi")]
