@@ -469,8 +469,11 @@ pub const LOOK_MAX_EST_US: u32 = 8_000;
 
 /// Why a formula that never lets the picture under it show through (it
 /// reads none of `ur ug ub ul`, and its bottom layer covers every pixel) is
-/// not drawn over GIFs: the GIF would be hidden.
-pub const COVERS: &str = "this Formula covers the GIF entirely: let it show through with a layer, ur ug ub ul, or a coverage";
+/// not drawn over GIFs: the GIF would be hidden. Any Formula is a look once
+/// the web app composes it with a blend or an amount under 100 %
+/// (`psi::look`); this is the one choice left that hides the GIF.
+pub const COVERS: &str =
+    "this Formula covers the GIF entirely: choose a lower amount or another blend";
 
 /// A formula drawn over whatever the player shows — a GIF, a transition, a
 /// live item: the Look setting's formula, or the editor's "over the GIF".
@@ -1428,6 +1431,20 @@ mod tests {
             ""
         ))
         .is_err());
+        // Composed with a blend or a lower amount (Settings' choices), it is.
+        let under = picture();
+        for (b, k) in [("screen", 40), ("over", 30), ("multiply", 100), ("max", 50)] {
+            let src = psi::look::compose("hsv(x, 1, 1)", b, k).unwrap();
+            let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
+            assert!(look.take());
+            let mut c = picture();
+            let out = look.apply(Duration::ZERO, &mut c, 0);
+            assert!(
+                out.as_bytes() == over(&src, 0, &under).as_slice(),
+                "{b} {k}"
+            );
+            assert!(out.as_bytes() != under.as_bytes(), "{b} {k}: drawn");
+        }
         let e = FormulaLook::from_path(&super::path("layer multiply { gray(noise(x*8, y, t) + noise(x, y*8, t) + len(x, y) + len(y, x) + atan2(x, y) + sqrt(x) + noise(y, x, t)) }", "")).unwrap_err();
         assert!(
             e.msg

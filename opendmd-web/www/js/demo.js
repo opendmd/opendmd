@@ -8,7 +8,8 @@
 // schedule's and night mode's too), colour, glow and transition (preview.js
 // applies the config to every preview), the Formula look (drawn with Psi
 // over every frame, `Preview.setOver`), how long each GIF stays, the
-// playlist, platforms and shuffle, and Now's schedule banner. What only a
+// playlist, platforms and shuffle, and Now's schedule banner (a Formula
+// look is checked before it is saved, as the player checks it). What only a
 // player can do (firmware, WiFi, restarting, testing the panel) keeps its
 // controls and says in a line that the demo can't.
 
@@ -203,6 +204,7 @@ document.head.append(style);
 let driven = '', lookOn = '', lookErr = '', psi = null;
 const dropKey = () => { try { localStorage.removeItem('odmd.apiKey'); } catch { /* none */ } };
 let live = true;
+const pkg = () => (psi ??= import('../pkg-psi/opendmd_psi_web.js?demo').then(async (m) => ({ ...m, mem: (await m.default()).memory })));
 function apply() {
   if (!live) return;
   const r = evaluate(), c = S.c, b = Math.min(r.b ?? c.brightness, c.max_brightness);
@@ -235,7 +237,7 @@ async function look(path) {
   lookErr = '';
   if (!path) { sim.preview.p.setOver(undefined); return; }
   try {
-    const P = await (psi ??= import('../pkg-psi/opendmd_psi_web.js?demo').then(async (m) => ({ ...m, mem: (await m.default()).memory })));
+    const P = await pkg();
     if (lookOn != path || !sim) return;
     const q = new URLSearchParams(path.slice(8)), Q = (k) => Math.round(+(q.get(k) || 0) * 65536);
     if (!P.compile(q.get('src') || '')) throw new Error(P.error());
@@ -252,6 +254,18 @@ async function look(path) {
   }
   app.status = status();
   emit('status', app.status);
+}
+
+// The player's checks of a Formula look before it is saved (fx_psi's
+// FormulaLook::compile): it compiles, lets the GIF show through, ≤ 8 ms.
+async function lookCheck(path) {
+  const P = await pkg(), src = (p) => new URLSearchParams(p.slice(8)).get('src') || '';
+  const i = P.compile(src(path)) && P.info();
+  const why = !i ? P.error() : !(i[5] & 32) ? 'this Formula covers the GIF entirely: choose a lower amount or another blend'
+    : i[6] > 8000 ? `this formula is too heavy to draw over GIFs (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 8 ms) — simplify it` : '';
+  // (One instance: the look on the panel goes back to its own formula.)
+  if (lookOn) P.compile(src(lookOn));
+  if (why) bad('look_formula: ' + why);
 }
 
 // Now's banner while the schedule has the panel (schedule.js' bannerFor).
@@ -290,7 +304,7 @@ export async function simulate(src) {
   try { version = (await (await fetch('version.txt')).text()).trim().split('\n')[0]; } catch { /* unknown */ }
   Object.assign(src, {
     config: async () => ({ ...S.c, ...panelFields() }),
-    putConfig: async (p) => putConfig(p),
+    putConfig: async (p) => { if (p.look_formula && p.look_formula != S.c.look_formula) await lookCheck(p.look_formula); return putConfig(p); },
     status: async (recent) => status(recent),
     schedule: async () => structuredClone(S.sched),
     putSchedule: async (s) => putSchedule(s),

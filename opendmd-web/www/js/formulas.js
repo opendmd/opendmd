@@ -6,7 +6,8 @@
 // A formula that reads what is under it (`ur ug ub ul`, layers that let it
 // show through) is drawn over a GIF: one picked from the Library or a file
 // (decoded by pkg-art), else a sample picture; on a device it can be shown
-// over the panel's GIF or kept as the panel's look.
+// over the panel's GIF. Any formula can be kept as the panel's look, with a
+// blend and an amount (js/looks.js).
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
@@ -123,18 +124,43 @@ function overRow(id) {
   return el;
 }
 
-// On a device: kept as the panel's look (Settings › Look), over every GIF.
-async function useLook(f) {
-  try {
-    await app.src.putConfig({ look_formula: (await import('./psishow.js')).fpath(f), look_formula_name: Array.from(f.name || 'Formula').slice(0, 60).join('') });
-    await app.refreshConfig();
-    toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Look turns it off)`, 'ok');
-  } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Use as the look: ' + e.message, 'bad'); }
+// On a device (or the demo's player): kept as the panel's look (Settings ›
+// Look), over every GIF, with a blend and an amount (js/looks.js); while
+// the sheet is open the preview `v` shows the look over its picture, then
+// `orig` again.
+async function useLook(f, btn, v, orig = f) {
+  let L, M;
+  try { L = await import('./looks.js'); M = await L.psi(); } catch (e) { toast('Use as the look: ' + (e.message || e), 'bad'); return; }
+  const back = () => { if (info(orig.src).length) play(v, orig, info(orig.src)); };
+  let mix = L.choice(M, f);
+  const go = h('button.pri', { id: 'psi-look-go' }, 'Use as the look');
+  const c = L.controls('psi-look', (b, k) => { mix = [b, k]; show(); });
+  function show() {
+    const x = L.as(M, f, ...mix);
+    c.say(x.why);
+    go.disabled = !!x.why;
+    if (x.src) play(v, { ...f, src: x.src }, info(x.src));
+  }
+  c.set(...mix, L.overOnly(M, f));
+  go.onclick = async () => {
+    closeMenu();
+    try {
+      await L.use(f, ...mix);
+      toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Look changes it)`, 'ok');
+    } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Use as the look: ' + e.message, 'bad'); }
+  };
+  const r = btn.getBoundingClientRect(), el = h('div.menu.wide', { id: 'psi-look-sheet', role: 'dialog', 'aria-label': 'Use as the look' },
+    h('div.mh', 'Over every GIF the panel plays'), c.el, c.why, h('p.cap', 'Blend: how it goes over the GIF. Amount: how much of it shows.'), go);
+  el.onclose = back;
+  popup(el, r.left, r.bottom + 4);
+  show();
 }
 
 const NOTE = () => (app.device ? 'Show on panel plays it there until the playlist moves on (one that draws over a GIF, over the panel’s GIF); save it as a GIF to keep it.' : 'Formulas play here in the browser. Save one as a GIF to play it on an OpenDMD panel.');
 
 let PS = null;
+// Use as the look: a player's, or the demo's (js/demo.js).
+const LOOK = () => app.device || !!app.demo;
 const shows = [], showBtn = (id, f) => app.device && shows[shows.push([h('button', { id, onclick: () => PS?.show(f()) }, 'Show on panel'), f]) - 1][0];
 
 // A preview: the LED canvas, the formula it plays and its own clock.
@@ -274,7 +300,7 @@ function build(root) {
   const shareBtn = h('button', { id: 'psi-share-btn' }, 'Copy share link'), del = h('button.danger', { id: 'psi-del' }, 'Delete…');
   let cur = null;
   const show = showBtn('psi-show', () => cur);
-  const look = app.device && h('button', { id: 'psi-look', onclick: () => useLook(cur) }, 'Use as the look');
+  const look = LOOK() && h('button', { id: 'psi-look', onclick: (e) => useLook(cur, e.currentTarget, pv) }, 'Use as the look');
   const under = overRow('psi-under');
   const side = h('div.side', { id: 'psi-side' }, h('div.card', { id: 'psi-detail' },
     h('button.sm.close', { 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
@@ -295,7 +321,7 @@ function build(root) {
     sliders(sl, f, i[5] || 0, () => { pv.dirty = true; PS?.follow(f); });
     if (show) show.disabled = !i.length;
     under.hidden = !(i[5] & 32);
-    if (look) look.hidden = under.hidden;
+    if (look) look.hidden = !i.length;
     PS?.mark();
     main.textContent = mineToo ? 'Edit' : 'Remix';
     main.onclick = (e) => go(mineToo ? { ...f } : { name: f.name + ' remix', src: f.src, a: f.a, b: f.b, c: f.c }, e.currentTarget);
@@ -381,7 +407,7 @@ function editor() {
     'Heavy for the panel: noise, len, sqrt, atan2 and dividing by a changing value cost the most');
   const sl = h('div.psi-sls', { id: 'psi-ed-sl' });
   const under = overRow('psi-ed-under');
-  const look = app.device && h('button', { id: 'psi-ed-look', hidden: true, onclick: () => useLook({ ...live }) }, 'Use as the look');
+  const look = LOOK() && h('button', { id: 'psi-ed-look', hidden: true, onclick: (e) => useLook({ ...live }, e.currentTarget, pv, live) }, 'Use as the look');
   const touch = matchMedia('(pointer:coarse)').matches;
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
@@ -449,7 +475,7 @@ function editor() {
       cap.title = TIP(i);
       heavy.hidden = i[6] <= 8000;
       under.hidden = !(i[5] & 32);
-      if (look) look.hidden = under.hidden;
+      if (look) look.hidden = false;
       el.dataset.steps = i[0];
       delete el.dataset.err;
       good = f.src;

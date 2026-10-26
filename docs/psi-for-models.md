@@ -259,7 +259,12 @@ A formula can draw over the GIF playing. The bottom of the stack is the
 picture under the formula: the bottom layer, a blend other than `over`, or a
 coverage below 1, let it show through, and `ur ug ub ul` read it at the
 pixel. A formula that does neither replaces the GIF (and is refused as a
-GIF look). Alone, the picture under it is black. Looks are capped at 8 ms.
+GIF look as it is). Alone, the picture under it is black. Looks are capped
+at 8 ms. The web app makes **any** formula a look by pasting it in as a
+part and drawing that with a blend and a coverage —
+`part look { … }` then `layer screen { look(x, y, 0.4) }` (or
+`look(x, y, 0.3)` for over; `opendmd_psi::look`) — so a model never needs
+to write that wrapper itself.
 
 ## 9. Parts: one formula inside another
 

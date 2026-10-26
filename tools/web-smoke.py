@@ -3295,6 +3295,7 @@ def mock_pass(browser) -> None:
         formulas_checks(browser, base, errors)
         formulas_panel_checks(browser, base, errors)
         formulas_over_checks(browser, base, errors)
+        looks_checks(browser, base, errors)
         find_checks(page)
         # Back to All files; the test playlist goes.
         goto_view(page, "sets")
@@ -3838,11 +3839,18 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     # Kept as the look; Settings › Look lists it; None clears it.
     clear_toasts(page)
     page.click("#psi-look")
+    page.wait_for_selector("#psi-look-sheet #psi-look-go", timeout=10000)
+    mix = (page.input_value("#psi-look-blend"), page.input_value("#psi-look-amt"))
+    page.click("#psi-look-go")
     t = last_toast(page, "ok")
     c = get_json(base + "/api/config")
     fl = get_json(base + "/api/status")["formula_look"]
-    check(c["look_formula"].startswith("@fx:psi?src=") and c["look_formula_name"] == "Old photo" and (fl or {}).get("source") == "setting"
-          and t.startswith("“Old photo” is the panel’s look now"), f"formulas over: Use as the look ('{t}', {c['look_formula_name']!r}, {fl})")
+    # Over at 100 %: the formula as it always was, its path unchanged.
+    same = page.evaluate("""async () => { const ex = await (await fetch('formulas.json')).json(), f = ex.find((x) => x.name == 'Old photo');
+        return (await import('./js/psishow.js')).fpath(f); }""")
+    check(mix == ("over", "100") and c["look_formula"] == same and c["look_formula_name"] == "Old photo"
+          and (fl or {}).get("source") == "setting" and t.startswith("“Old photo” is the panel’s look now"),
+          f"formulas over: Use as the look, Over 100% as before ('{t}', {mix}, {c['look_formula_name']!r}, {fl})")
     goto_view(page, "settings")
     page.evaluate("location.replace('#settings/look')")
     page.wait_for_function("document.querySelector('#st-look-formula').selectedOptions[0]?.textContent == 'Old photo'", timeout=10000)
@@ -3861,6 +3869,90 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     d = studio_data(page)
     check(d.get("name", "").startswith("FX_Old_photo_over_"), f"formulas over: Save as GIF over the GIF ({d.get('name')}, {d.get('srcFrames')} frames)")
     shot(page, "formulas-over", "laptop")
+    page.context.close()
+
+
+def looks_checks(browser, base: str, errors: list[str]) -> None:
+    """Any Formula as the panel's look: Settings › Look lists every
+    Formula and example; Plasma (it covers the GIF) starts at Screen 40%,
+    saved as a composed path with its name, blend and amount; after a
+    reload Settings shows it again and re-edits it; Over at 100% is refused
+    in a sentence; a look saved elsewhere is listed, taken apart from its
+    path; the editor's Use as the look with a blend, the preview showing it."""
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#settings/look")
+    page.wait_for_function("[...document.querySelectorAll('#st-look-formula option')].some(o => o.textContent == 'Plasma')", timeout=20000)
+    opts = page.eval_on_selector_all("#st-look-formula option", "els => els.map(e => [e.textContent, e.disabled])")
+    names = [o[0] for o in opts]
+    heavy = [o[0] for o in opts if o[1]]
+    check(all(n in names for n in ("Plasma", "Big clock", "Scanlines", "Old photo", "Starfield")) and "Matrix (too heavy)" in heavy,
+          f"looks: Settings › Look lists every example ({len(opts)}; too heavy: {heavy})")
+    page.select_option("#st-look-formula", label="Plasma")
+    page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
+    c = get_json(base + "/api/config")
+    ui = (page.input_value("#st-look-blend"), page.input_value("#st-look-amt"), page.is_visible("#st-look-mix"))
+    check(c["look_formula_name"] == "Plasma · Screen 40%" and ui == ("screen", "40", True)
+          and "part+look+{" in c["look_formula"] and c["look_formula"].endswith("layer+screen+{+look(x,+y,+0.4)+}"),
+          f"looks: Plasma starts at Screen 40% ({ui}; {c['look_formula_name']!r}; ...{c['look_formula'][-40:]!r})")
+    shot(page, "looks-settings", "laptop")
+    # Saved, reloaded, shown again, re-edited.
+    page.reload()
+    page.wait_for_function("document.querySelector('#st-look-formula')?.selectedOptions[0]?.textContent == 'Plasma'", timeout=20000)
+    ui = (page.input_value("#st-look-blend"), page.input_value("#st-look-amt"))
+    page.eval_on_selector("#st-look-amt", "r => { r.value = 60; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }")
+    page.wait_for_timeout(600)
+    c1 = get_json(base + "/api/config")
+    page.select_option("#st-look-blend", "multiply")
+    page.wait_for_timeout(600)
+    c2 = get_json(base + "/api/config")
+    check(ui == ("screen", "40") and c1["look_formula_name"] == "Plasma · Screen 60%" and c1["look_formula"].endswith("look(x,+y,+0.6)+}")
+          and c2["look_formula_name"] == "Plasma · Multiply 60%" and c2["look_formula"].endswith("layer+multiply+{+look(x,+y,+0.6)+}"),
+          f"looks: after a reload Settings shows Screen 40% ({ui}) and re-edits it: ({c1['look_formula_name']!r}, then {c2['look_formula_name']!r})")
+    # Over at 100 % would hide the GIF: said, not saved.
+    page.select_option("#st-look-blend", "over")
+    page.wait_for_function("fetch('/api/config').then(r => r.json()).then(c => c.look_formula_name.includes(' · Over '))", timeout=10000)
+    page.wait_for_timeout(600)
+    c2 = get_json(base + "/api/config")
+    page.eval_on_selector("#st-look-amt", "r => { r.value = 100; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }")
+    page.wait_for_timeout(600)
+    why = page.inner_text("#st-look-why") if page.is_visible("#st-look-why") else ""
+    c3 = get_json(base + "/api/config")
+    check("covers the GIF entirely" in why and c3["look_formula"] == c2["look_formula"] and c3["look_formula_name"] == "Plasma · Over 60%",
+          f"looks: Over 100% of Plasma is refused in a sentence ('{why}'), nothing saved ({c3['look_formula_name']!r})")
+    # A look saved in another browser: its formula taken apart from the path.
+    gone = page.evaluate("""async () => { const L = await import('./js/looks.js'), m = await L.psi();
+        return L.fpath({ name: 'Gone', src: m.look('loop 4\\nhsv(x + t/4, 1, 1)', 'add', 25) }); }""")
+    put_json(base + "/api/config", {"look_formula": gone, "look_formula_name": "Gone · Add 25%"})
+    page.reload()
+    page.wait_for_function("document.querySelector('#st-look-formula')?.selectedOptions[0]?.textContent == 'Gone'", timeout=20000)
+    ui = (page.input_value("#st-look-blend"), page.input_value("#st-look-amt"))
+    page.eval_on_selector("#st-look-amt", "r => { r.value = 35; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }")
+    page.wait_for_timeout(600)
+    c4 = get_json(base + "/api/config")
+    check(ui == ("add", "25") and c4["look_formula"] == gone.replace("0.25", "0.35") and c4["look_formula_name"] == "Gone · Add 35%",
+          f"looks: a look saved elsewhere is listed and re-edited ({ui}; {c4['look_formula'][-50:]!r})")
+    # The editor's Use as the look, with a blend: the preview shows it meanwhile.
+    open_formulas(page)
+    page.click("#psi-ex .psi-tile[data-name='Plasma']")
+    page.click("#psi-edit")
+    page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
+    wait_lit(page, "#psi-ed-panel", "looks: the editor's preview")
+    page.click("#psi-ed-look")
+    page.wait_for_selector("#psi-look-sheet #psi-look-go", timeout=10000)
+    mix = (page.input_value("#psi-look-blend"), page.input_value("#psi-look-amt"))
+    page.select_option("#psi-look-blend", "add")
+    page.eval_on_selector("#psi-look-amt", "r => { r.value = 50; r.dispatchEvent(new Event('input')); }")
+    page.wait_for_timeout(500)
+    over = page.is_visible("#psi-ed-under")
+    shot(page, "looks-editor", "laptop")
+    clear_toasts(page)
+    page.click("#psi-look-go")
+    t = last_toast(page, "ok")
+    c5 = get_json(base + "/api/config")
+    check(mix == ("screen", "40") and c5["look_formula_name"] == "Plasma remix · Add 50%"
+          and c5["look_formula"].endswith("layer+add+{+look(x,+y,+0.5)+}") and t.startswith("“Plasma remix” is the panel’s look now"),
+          f"looks: the editor's Use as the look, Add 50% (started at {mix}; '{t}'; {c5['look_formula_name']!r}; picture row {over})")
+    put_json(base + "/api/config", {"look_formula": "", "look_formula_name": ""})
     page.context.close()
 
 

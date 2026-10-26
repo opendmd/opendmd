@@ -26,6 +26,10 @@ name = "golden"
 required-features = ["tables"]
 
 [[test]]
+name = "look"
+required-features = ["tables"]
+
+[[test]]
 name = "models"
 required-features = ["tables"]
 
