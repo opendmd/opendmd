@@ -1392,6 +1392,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if !skip_if_playing(&c, &path) {
             return req.error(503, "503 Service Unavailable", NOT_RELEASED);
         }
+        crate::fatidx::touched(&path);
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 // A GIF takes its prepared copy with it; a copy removed
@@ -1411,6 +1412,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 if std::fs::metadata(&path).is_ok_and(|m| m.is_dir())
                     && files::under(&path, &format!("{}/gifs", config::SD_MOUNT)) =>
             {
+                crate::fatidx::dir_changed();
                 match std::fs::remove_dir(&path) {
                     Ok(()) => req.json(r#"{"ok":true}"#),
                     Err(e) => req.error(409, "409 Conflict", &format!("{rel}: not empty ({e})")),
@@ -1778,6 +1780,8 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
             );
         }
     }
+    crate::fatidx::touched(&from);
+    crate::fatidx::touched(&to);
     if let Err(e) = std::fs::rename(&from, &to) {
         return up.error(
             500,
@@ -2043,7 +2047,7 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
         s.sd_attempts,
         s.sd_formatting,
         opt_json(s.sd_format_error.as_deref()),
-        crate::sdhealth::status_json(),
+        crate::sdhealth::status_json() + &crate::fatidx::status_json(),
         crate::cardspeed::Status,
         json_string(s.reset_reason),
         opt_json(crate::sdhealth::reset_note()),

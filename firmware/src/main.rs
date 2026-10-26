@@ -46,6 +46,8 @@ mod clock;
 mod config;
 mod diag;
 mod dns_server;
+mod fatidx;
+mod task;
 mod files;
 mod follow;
 mod formula_look;
@@ -1270,6 +1272,7 @@ fn main() -> Result<()> {
             #[cfg(feature = "psi-probe")]
             psi_probe::save(config::SD_MOUNT);
             CARD_READY.store(true, Ordering::Relaxed);
+            fatidx::mounted();
             // A card at full speed in `fast` with no record: read it for a
             // while soon (`cardspeed`), on a task of its own. Here, where
             // the card becomes the player's (the probe checks that).

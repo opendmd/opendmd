@@ -73,8 +73,6 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use esp_idf_hal::cpu::Core;
-use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
 
 use crate::cache;
 use crate::config;
@@ -512,25 +510,7 @@ pub fn heartbeat(total: usize, prepared: Option<usize>) -> String {
 /// before WiFi, while the heap still has a contiguous block for the stack.
 fn spawn() -> anyhow::Result<()> {
     let before = free_heap();
-    let previous = ThreadSpawnConfiguration::get();
-    ThreadSpawnConfiguration {
-        name: Some(b"cache-builder\0"),
-        stack_size: config::BUILDER_STACK,
-        priority: config::BUILDER_PRIORITY,
-        pin_to_core: Some(Core::Core0),
-        ..Default::default()
-    }
-    .set()?;
-    let handle = thread::Builder::new()
-        .name("cache-builder".into())
-        .stack_size(config::BUILDER_STACK)
-        .spawn(run);
-    if let Some(previous) = previous {
-        let _ = previous.set();
-    } else {
-        let _ = ThreadSpawnConfiguration::default().set();
-    }
-    handle?;
+    crate::task::spawn_core0(b"cache-builder\0", config::BUILDER_STACK, config::BUILDER_PRIORITY, Box::new(run))?;
     // Logged by the task itself: this runs inside the main task's frame.
     SPAWN_COST.store(before.saturating_sub(free_heap()), SeqCst);
     Ok(())
@@ -1208,7 +1188,8 @@ enum Fail {
 /// Encode `gif` into `tmp` and rename it to `copy`: `(GIF bytes, copy
 /// bytes, bytes written)`. The temp file is removed on every failure.
 fn encode_one(gif: &str, copy: &str, tmp: &str, frames: &mut u32) -> Result<(u64, u64, u64), Fail> {
-    let src = match File::open(format!("{}{gif}", config::SD_MOUNT)) {
+    // Through the FAT index when it has the original: no directory scan.
+    let src = match crate::fatidx::open(&format!("{}{gif}", config::SD_MOUNT)) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(Fail::Bad("not found".into())),
         Err(e) => return Err(Fail::Card(e.to_string())),

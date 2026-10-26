@@ -179,7 +179,7 @@ pub fn cache_for(path: &str) -> &'static str {
 pub fn serve(req: &mut Req, path: &str) -> Result<bool> {
     let t_all = probe::http_stamp();
     let t = probe::http_stamp();
-    let (mut file, actual) = match fs::File::open(path) {
+    let (mut file, actual) = match crate::fatidx::open(path) {
         Ok(f) => (f, path),
         Err(e) => {
             // A card error counts towards the card's health (`sdhealth`);
@@ -579,6 +579,7 @@ pub fn stream_body_after(up: &mut Upload, temp: &str, prefix: &[u8]) -> Result<(
 /// Move `temp` over `dest`. FAT's `rename` refuses an existing destination, so
 /// the old file goes first; there is no atomic replace to be had here.
 pub fn replace(temp: &str, dest: &str) -> Result<()> {
+    crate::fatidx::touched(dest);
     if fs::metadata(dest).is_ok() {
         fs::remove_file(dest)?;
     }

@@ -469,6 +469,9 @@ struct Ahead {
     /// Nothing more ahead until the next file starts: a step failed, or the
     /// file held was let go (the heap or the card wanted it).
     blocked: bool,
+    /// The next file's decoder may be an original's (cap 12, no hint):
+    /// [`Engine::set_ahead_wide`].
+    wide: bool,
 }
 
 impl Ahead {
@@ -502,17 +505,18 @@ impl Ahead {
 
 /// Whether a decoder may be held ahead: gifslim at a prepared copy's cap,
 /// drawing straight onto the canvas (no 12 KB screen of its own).
-fn holdable(gif: &Stream) -> bool {
+fn holdable(gif: &Stream, cap: u8) -> bool {
     gif.kind() == "slim"
-        && gif.cap().is_some_and(|c| c <= AHEAD_MAX_CAP)
+        && gif.cap().is_some_and(|c| c <= cap)
         && gif.logical_size() == (crate::canvas::WIDTH, crate::canvas::HEIGHT)
 }
 
 /// [`holdable`] as far as the file's first bytes tell, before gifslim
 /// allocates its tables at whatever cap they name (12 for a file with no
 /// hint: a `/cache/` line played as it is, a copy some tool rewrote).
-fn may_hold(p: &crate::gifslim::Probe) -> bool {
-    p.hint.is_some_and(|h| h.cap <= AHEAD_MAX_CAP)
+fn may_hold(p: &crate::gifslim::Probe, cap: u8) -> bool {
+    // No hint: gifslim decodes at cap 12.
+    p.hint.map_or(12, |h| h.cap) <= cap
         && (p.width, p.height) == (crate::canvas::WIDTH, crate::canvas::HEIGHT)
 }
 
@@ -1043,6 +1047,7 @@ impl Engine {
     /// here; a lookup or open that fails skips that entry as it would have
     /// there. `None` if nothing was left to do.
     pub fn ahead_step(&mut self) -> Option<AheadOutcome> {
+        let cap = if self.ahead.wide { 12 } else { AHEAD_MAX_CAP };
         let Some(next) = self.ahead.next.as_mut() else {
             let Some(index) = self.scheduler.next_index() else {
                 self.ahead.blocked = true;
@@ -1096,9 +1101,9 @@ impl Engine {
             // hint names or 12, so a file that could not be held is never
             // opened beside the playing decoder, even for a moment.
             AheadFile::Opened(mut reader) => match crate::gifslim::probe(&mut reader)
-                .and_then(|p| if may_hold(&p) { Stream::open(reader).map(Some) } else { Ok(None) })
+                .and_then(|p| if may_hold(&p, cap) { Stream::open(reader).map(Some) } else { Ok(None) })
             {
-                Ok(Some(gif)) if holdable(&gif) => {
+                Ok(Some(gif)) if holdable(&gif, cap) => {
                     next.file = AheadFile::Ready(gif);
                     self.ahead.stats.ready += 1;
                     Some(AheadOutcome::Ready)
@@ -1119,6 +1124,14 @@ impl Engine {
                 None
             }
         }
+    }
+
+    /// Whether the next file's decoder may be held ahead at cap 12 (an
+    /// original's: ~11 KB more than a copy's) rather than only at a
+    /// prepared copy's [`AHEAD_MAX_CAP`]. The caller decides by its heap,
+    /// before the step that reads the header.
+    pub fn set_ahead_wide(&mut self, wide: bool) {
+        self.ahead.wide = wide;
     }
 
     /// Something changed what should come next (the weights, the order):
@@ -3320,6 +3333,43 @@ mod tests {
         assert_eq!(r.e.ahead_path(), Some((B, false)));
         assert_eq!(started(&mut r.e, ms(3000), &mut canvas).path, B);
         assert!(!r.e.started_ahead());
+    }
+
+    #[test]
+    fn an_original_is_held_ahead_when_the_caller_allows_cap_12() {
+        // As above, but the caller has the heap for an original's decoder
+        // (the firmware opened it through the FAT index).
+        let ms = Duration::from_millis;
+        let mut r = ahead_rig(&[], &[]);
+        let mut canvas = Canvas::new();
+        let gif = solid_gif(0, 255, 0);
+        let mut copies = HashMap::new();
+        copies.insert(B.to_string(), gif.clone());
+        let mut gifs = HashMap::new();
+        gifs.insert(A.to_string(), solid_gif(255, 0, 0));
+        gifs.insert(B.to_string(), gif);
+        let manifest = format!("{A}\n{B}\n");
+        let cat = catalog(&manifest, &Filter::new());
+        r.e = Engine::new(
+            Box::new(cat),
+            Scheduler::new(2, Mode::Sequential, 0),
+            DwellPolicy::default(),
+            Box::new(CopySource {
+                gifs,
+                copies,
+                opens: r.opens.clone(),
+                adopted: r.adopted.clone(),
+            }),
+        );
+        r.e.set_ahead_wide(true);
+        started(&mut r.e, ms(0), &mut canvas);
+        assert_eq!(
+            run_ahead(&mut r.e, ms(1000)),
+            vec![AheadOutcome::Picked, AheadOutcome::Opened, AheadOutcome::Ready]
+        );
+        assert_eq!(r.e.ahead_path(), Some((B, true)));
+        assert_eq!(started(&mut r.e, ms(3000), &mut canvas).path, B);
+        assert!(r.e.started_ahead());
     }
 
     #[test]
