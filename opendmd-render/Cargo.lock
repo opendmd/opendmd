@@ -24,7 +24,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "opendmd-core"
-version = "1.0.0-beta.10"
+version = "1.0.0-beta.11"
 dependencies = [
  "gif",
  "log",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "opendmd-render"
-version = "1.0.0-beta.10"
+version = "1.0.0-beta.11"
 dependencies = [
  "opendmd-core",
 ]
