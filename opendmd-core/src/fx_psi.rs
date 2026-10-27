@@ -604,6 +604,17 @@ impl Effect for PsiFx {
     }
 
     fn frame(&mut self, t: Duration, canvas: &mut Canvas) -> Duration {
+        #[cfg(feature = "psi-stats")]
+        psi::stats::stamp(0);
+        let d = self.frame_inner(t, canvas);
+        #[cfg(feature = "psi-stats")]
+        psi::stats::stamp(4);
+        d
+    }
+}
+
+impl PsiFx {
+    fn frame_inner(&mut self, t: Duration, canvas: &mut Canvas) -> Duration {
         let n = self.loop_frames();
         let grid = self.ms();
         let ms = (t.as_secs() as u32)

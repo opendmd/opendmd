@@ -520,6 +520,8 @@ fn frame<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
+    #[cfg(feature = "stats")]
+    stats::stamp(1);
     assert_eq!(out.len(), W * H * 3);
     if let Some(u) = under {
         assert_eq!(u.len(), W * H * 3);
@@ -577,6 +579,8 @@ fn frame<const N: usize>(
     // The column run: on the first row drawn, then its values are kept in
     // their registers (one lane is the whole row only at N = W).
     let mut columns_kept = false;
+    #[cfg(feature = "stats")]
+    stats::stamp(2);
     for row in 0..H {
         if rows & (1 << row) == 0 {
             continue;
@@ -658,6 +662,8 @@ fn frame<const N: usize>(
         }
         columns_kept = N == W;
     }
+    #[cfg(feature = "stats")]
+    stats::stamp(3);
     if let Cache::Keep(st, _) = cache {
         st.kept = crate::still::fingerprint(prog);
     }
@@ -1039,6 +1045,25 @@ pub const Q16_ONE: i32 = ONE;
 pub mod stats {
     use super::*;
     use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed};
+
+    /// A cycle counter the firmware installs (`fn() -> u32`, as a usize;
+    /// 0: none), and the last frame's stamps on it: 0 the player's frame
+    /// begun, 1 the VM begun, 2 its rows begun (the frame's steps, the
+    /// draw stage and the still cache's choice done), 3 its rows done, 4
+    /// the player's frame done.
+    pub static CLOCK: AtomicUsize = AtomicUsize::new(0);
+    pub static STAMPS: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
+
+    /// Stamp `k` with the clock now.
+    #[inline]
+    pub fn stamp(k: usize) {
+        let f = CLOCK.load(Relaxed);
+        if f != 0 && k < 5 {
+            // SAFETY: stored by the firmware from a `fn() -> u32`.
+            let f = unsafe { core::mem::transmute::<usize, fn() -> u32>(f) };
+            STAMPS[k].store(f(), Relaxed);
+        }
+    }
 
     pub static NARROWED: AtomicU32 = AtomicU32::new(0);
     pub static CHECKED: AtomicU32 = AtomicU32::new(0);
