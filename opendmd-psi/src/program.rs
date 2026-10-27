@@ -661,8 +661,10 @@ impl Program {
                 args
             };
             let d = if code::is_colour(op.code)
-                || matches!(op.code, code::END | code::LINE_FROM | code::LINE_TO | code::DOT)
-            {
+                || matches!(
+                    op.code,
+                    code::END | code::LINE_FROM | code::LINE_TO | code::DOT
+                ) {
                 "out".into()
             } else {
                 opnd(op.d)

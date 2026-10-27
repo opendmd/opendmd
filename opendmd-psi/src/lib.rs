@@ -200,6 +200,25 @@ pub mod golden {
         ("cover-colour", "layer multiply { mix(#fff, #400000, r*0.7) }\nlayer { rgb(#ffbf4d, step(abs(cy), 0.1)) }\nlayer screen { mix(rgb(ur, ug, ub), #304050, x) }", 0, true, 0x7679d76ab8dfdd68),
         ("scoped", "frame { s = sin(t) }\nk = x*4\nlayer { v = frac(k + s)\nrgb(v, ub, 0) }\nlayer screen { v = frac(k*2 - y)\nframe { q = cos(t) }\npal(fire, v*q, 0.75) }", 2500, true, 0xe01c5295366f8613),
     ];
+
+    /// Frames of formulas that draw (`draw { }`, `for`, `table`, `line`,
+    /// `dot`, `ink`), rendered with a canvas ([`crate::render_rows_ink`]),
+    /// `over`: over [`picture`]. Lines in all eight octants and both
+    /// directions, ties at ½, clipping on every edge, the step caps, the max
+    /// rule, dots, tables at every level, loops of 1 and 1,024 turns, loops
+    /// nested, `ink` through a part and through a look.
+    pub const DRAWN: &[(&str, &str, u32, bool, u64)] = &[
+    ("octants", "draw {\n  for k < 16 {\n    an = k/16 + 1/64\n    ex = 64 + cos(an)*60; ey = 16 + sin(an)*15\n    rev = k % 2\n    line(mix(64, ex, rev), mix(16, ey, rev), mix(ex, 64, rev), mix(ey, 16, rev), 1, k/16)\n  }\n}\npal(rainbow, ink)", 0, false, 0x75ab1043ab15722a),
+    ("ties", "draw {\n  dot(10.5, 3.5); dot(20.49, 3.5, 0.5); dot(-0.5, 0); dot(127.5, 31.5); dot(127.49, 31.49, 0.25)\n  line(0.5, 10.5, 20.5, 17.5); line(30.5, 20.5, 30.5, 20.5, 0.5); line(40, 5, 52, 5.5, 0, 1)\n}\ngray(ink)", 0, false, 0xdd474907fb393651),
+    ("clipping", "draw {\n  line(-20, 16, 140, 20); line(64, -10, 70, 40, 0.5)\n  line(-30000, -30000, 30000, 30000, 0.75); line(-5, -5, -1, 40); line(130, 0, 200, 31)\n  line(0, 31.6, 127, 31.4); line(10, -0.6, 120, -0.4)\n}\ngray(ink)", 0, false, 0xfcc5dd4b13859523),
+    ("caps", "draw {\n  for k < 64 { line(-512, 10 - k, 639, 52 - k, 1 - k/64, 0.5) }\n  for j < 4 { dot(j*10, 30) }\n}\nrgb(ink, ink*0.5, 0.1)", 0, false, 0x7bf1c544177ae246),
+    ("max-rule", "loop 2\ndraw {\n  line(0, 0, 127, 31, 0.3); line(0, 31, 127, 0, 0.8); line(64, 0, 64, 31, 0, 1)\n  for k < 8 { dot(64, k*4, k/8) }\n}\ngray(ink)", 0, false, 0x9da79f25fe888543),
+    ("tables", "table T = 0, 0.25, 0.5, 1, -1\ntable P = 3, 9, 27\nframe { f = T[floor(t*2)] }\ndraw {\n  for k < 5 { dot(P[k % 3]*4 + k, T[k]*20 + 5, T[k] + 0.5) }\n  dot(100, 10, f + 0.5)\n}\nrgb(T[px % 6] + ink, T[py % 4], f + T[-1] + T[2.9])", 1000, false, 0xd9e70fec96826bc7),
+    ("loops", "loop 4\ndraw {\n  for k < 1 { line(0, 0, 127, 0) }\n  for j < 1024 { dot(j % 128, floor(j/128)*4 + 2, hash(j, floor(t))) }\n}\npal(fire, ink)", 2000, false, 0xe0b34a62ddc5a9cd),
+    ("nested", "loop 4.8\ndraw {\n  for s < 12 {\n    th = s/12 + t/4.8\n    for r < 6 {\n      ph = r/6\n      rad = 30 + 10*cos(ph)\n      x0 = 64 + rad*cos(th); y0 = 16 + 10*sin(ph) + rad*sin(th)*0.2\n      x1 = 64 + rad*cos(th + 1/12); y1 = 16 + 10*sin(ph) + rad*sin(th + 1/12)*0.2\n      line(x0, y0, x1, y1, 0.3 + r/9, 1 - r/9)\n    }\n  }\n}\nhsv(x + t/4.8, 0.7, ink)", 1200, false, 0x7f399d8d5bf3b553),
+    ("ink-part", "part p {\n  loop 2\n  draw { for k < 24 { dot(k*5 + t*2, 16 + sin(k/24 + t/2)*12) } }\n  gray(ink)\n}\nlayer { p(x*0.5, y) }\nlayer add { p(1 - x, y, 0.5) }", 500, false, 0x20b3d33cb32de631),
+    ("ink-look", "part look {\n  loop 4.8\n  draw { for e < 6 { line(64 + 30*cos(e/6 + t/4.8), 16 + 12*sin(e/6 + t/4.8), 64 + 30*cos(e/6 + 1/6 + t/4.8), 16 + 12*sin(e/6 + 1/6 + t/4.8)) } }\n  #40c0ff * ink\n}\nloop 4.8\nlayer screen { look(x, y, 0.4) }", 600, true, 0x6c519b2a47772c08),
+    ];
 }
 
 /// Formulas that make the compiler work hardest within what the panel
@@ -372,10 +391,27 @@ pub mod worst {
         best
     }
 
+    /// [`nested`] inside two loops of the draw stage (each a level of the
+    /// parser's recursion), as the line's x: the draw stage's deepest.
+    pub fn draw() -> String {
+        let mut best = String::new();
+        let mut s = String::from("tme");
+        for _ in 0..64 {
+            let src =
+                format!("draw {{\nfor k < 2 {{\nfor j < 2 {{\ndot({s}, j)\n}}\n}}\n}}\ngray(ink)");
+            if !crate::compile(&src).is_err_and(|e| e.msg.starts_with("unknown name")) {
+                break;
+            }
+            best = src;
+            s = format!("sin({s})");
+        }
+        best
+    }
+
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 9] = [
+    pub const ALL: [Case; 10] = [
         ("many locals", many_locals),
         ("chain", chain),
         ("distinct terms", distinct),
@@ -385,6 +421,7 @@ pub mod worst {
         ("nested mix", nested_mix),
         ("nested pick", nested_pick),
         ("parts in layers", parts_in_layers),
+        ("draw", draw),
     ];
 }
 
