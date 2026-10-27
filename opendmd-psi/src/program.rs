@@ -55,6 +55,8 @@ pub(crate) const L_REG0: u8 = 3;
 /// on scalars, or per pixel on lanes (each operand a lane or a scalar
 /// broadcast); `U_*` load what is under the formula into a lane; the
 /// colour steps (`OUT_*`, one per layer) write the pixels.
+pub(crate) use code::PAL_SCALED;
+
 pub(crate) mod code {
     // binary
     pub const ADD: u8 = 0;
@@ -196,11 +198,30 @@ pub(crate) mod code {
         }
     }
 
+    /// A palette colour's flag (on its `d`, the palette): times its `c`
+    /// (`pal(P, v) * k`).
+    pub const PAL_SCALED: u8 = 0x80;
+
+    /// Value operands a step reads: [`arity`], and for a scaled palette
+    /// colour its scale too (the coverage not counted).
+    pub fn values(op: &super::Op) -> usize {
+        let n = arity(op.code);
+        if is_colour(op.code) && colour_parts(op.code).0 == OUT_PAL && op.d & PAL_SCALED != 0 {
+            n + 1
+        } else {
+            n
+        }
+    }
+
     /// Every operand a step reads (its value operands, then a layer's
     /// coverage) and how many.
     pub fn operands(op: &super::Op) -> ([u8; 4], usize) {
-        let n = arity(op.code);
+        let n = values(op);
         let mut v = [op.a, op.b, op.c, 0];
+        if n == 2 && is_colour(op.code) {
+            // A scaled palette: its index, then its scale.
+            v[1] = op.c;
+        }
         match colour_parts(op.code) {
             (k, Some(_)) if is_colour(op.code) => {
                 v[n] = if k == OUT_RGB || k == OUT_HSV {
@@ -549,13 +570,16 @@ impl Program {
                 // per channel) when it covers less.
                 let (kind, blend) = colour_parts(c);
                 let (v, n) = operands(op);
-                let vals = arity(c);
+                let vals = values(op);
                 let lane = v[..vals.min(n)].iter().any(|&o| o & LANE != 0);
                 let write = if lane { 120 } else { 5 };
                 // (Of one value: worked out once, filled along the row.)
                 let base = match kind {
                     OUT_HSV if lane => 195,
                     OUT_RGB if lane => 120,
+                    // `pal(P, v) * k`: three channels scaled (a guess until
+                    // psi-probe measures it).
+                    OUT_PAL if lane && vals > 1 => 90,
                     _ => 0,
                 };
                 // Covered unless the coverage is a constant slot of 1 or
@@ -578,6 +602,9 @@ impl Program {
                 };
                 write + base + mix
             }
+            // A whole constant `z`: four corners, not eight (a guess until
+            // psi-probe measures it).
+            NOISE if self.const_value(op.c).is_some_and(|z| z & 0xffff == 0) => NOISE_FLAT_NS,
             c => value_ns(c),
         }
     }
@@ -765,6 +792,11 @@ impl Program {
 /// What copying one cached lane into its register costs a pixel, ns (a
 /// guess until `psi-probe` measures it: a 512 B `memcpy` a lane).
 pub(crate) const STILL_COPY_NS: u32 = 15;
+
+/// `noise(x, y, z)` with a whole constant `z`, ns a pixel: the plane's
+/// four corners ([`crate::fixed::noise_flat`]; a guess until `psi-probe`
+/// measures it, about half the 855 of eight).
+pub(crate) const NOISE_FLAT_NS: u32 = 470;
 
 /// A value step's cost, ns a pixel at 128 lanes on the ESP32, from
 /// `psi-probe` (2026-10-26): what [`Program::esp32_us`] adds up, and what the

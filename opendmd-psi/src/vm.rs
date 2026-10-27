@@ -251,6 +251,15 @@ fn out3<A: Src, B: Src, C: Src>(
 }
 
 #[inline(never)]
+fn out2<A: Src, B: Src>(px: &mut [[u8; 3]], mut a: A, mut b: B, f: impl Fn(i32, i32) -> [u8; 3]) {
+    for o in px.iter_mut() {
+        *o = f(a.at(0), b.at(0));
+        a.step(1);
+        b.step(1);
+    }
+}
+
+#[inline(never)]
 fn out1<A: Src>(px: &mut [[u8; 3]], mut a: A, f: impl Fn(i32) -> [u8; 3]) {
     for o in px.iter_mut() {
         *o = f(a.at(0));
@@ -631,7 +640,12 @@ fn lane_op<const N: usize>(
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
         MIX => tern!(fast3, d, a, b, c, fixed::mix),
         SMOOTH => tern!(run3, d, a, b, c, fixed::smooth),
-        NOISE => tern!(run3, d, a, b, c, fixed::noise),
+        // A whole `z` (`noise(x, y, 0)`): the plane's four corners only —
+        // the other four are weighed 0 there, so the bytes are the same.
+        NOISE => match c {
+            Arg::Sc(z) if z & 0xffff == 0 => bin!(run2, d, a, b, |x, y| fixed::noise_flat(x, y, z)),
+            _ => tern!(run3, d, a, b, c, fixed::noise),
+        },
         // One loop for the four, its operands read with a stride (0: a
         // value for the whole lane): the lookup dwarfs the loop, and seven
         // monomorphised copies would be ~1 KB more of wasm.
@@ -790,6 +804,16 @@ fn colour<const N: usize>(s: &Scratch<N>, op: &Op, base: usize, t: &Tables, px: 
             fixed::chan(b)
         ]),
         OUT_HSV => outt!(px, a, b, c, fixed::hsv),
+        OUT_PAL if op.d & PAL_SCALED != 0 => {
+            let p = t.palettes[((op.d & !PAL_SCALED) as usize).min(4)];
+            let f = |k, s| fixed::pal_lit(p, k, s);
+            match (a, c) {
+                (Arg::Lane(q), Arg::Lane(r)) => out2(px, L(q), L(r), f),
+                (Arg::Lane(q), Arg::Sc(w)) => out2(px, L(q), S(w), f),
+                (Arg::Sc(v), Arg::Lane(r)) => out2(px, S(v), L(r), f),
+                (Arg::Sc(v), Arg::Sc(w)) => px.fill(f(v, w)),
+            }
+        }
         OUT_PAL => {
             let p = t.palettes[(op.d as usize).min(4)];
             match a {
