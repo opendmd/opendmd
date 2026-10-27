@@ -123,7 +123,7 @@ computer.
 | `i` | pixel number 0..4095 from the top left: `(31 − py)·128 + px` | pixel |
 | `t` | seconds into the loop (whole frames: 20 ms, 10 with `fps 100`) | frame |
 | `hour`, `minute`, `second` | the clock: 0..23, 0..59, 0..59 (whole) | frame |
-| `a`, `b`, `c` | sliders, 0..1; a comment `-- a: speed` names one | frame |
+| `a`, `b`, `c` | sliders, 0..1; a comment `-- a: speed` names one; `-- a: shape = cube, ball` (≤ 6 words) makes buttons: choice j of n sets j/(n−1) (n = 1: 0), read with `pick(floor(a*(n-1) + 0.5), …)` | frame |
 | `w`, `h` | 128 and 32 (constants) | — |
 | `ur`, `ug`, `ub` | red, green, blue of the picture under the formula, 0..1 | pixel |
 | `ul` | its brightness (Rec. 601: `(77R + 150G + 29B + 128)/256`), 0..1 | pixel |
@@ -206,6 +206,7 @@ The last line is the colour:
 | `rgb(r, g, b)` | each 0..1, clamped, rounded to 0..255 |
 | `hsv(h, s, v)` | hue in turns (wraps: `frac`), saturation and value clamped 0..1 |
 | `pal(P, k)` | palette P at k (clamped 0..1), **32 steps** (bands on slow ramps) |
+| `pal(P, k) * v` | the palette's colour with each channel times v (a light, a fog): one step |
 | `gray(v)` | black to white; a bare value `v` means `gray(v)` |
 | `#ff8800`, `#f80` | a colour: red, green, blue as two hex digits each (or one, doubled) |
 | a colour expression | arithmetic on colours, read once a channel (below) |
@@ -232,8 +233,11 @@ three channels written out as `rgb(…)` cost (`#f80 * k` is one multiply:
 a channel of 1 is free, of 0 folds away), and it holds the same values
 at once (an `rgb(r, g, b)` inside reads only its channel's value in each
 reading). `hsv`, `pal` and `gray` take values only: they can't go inside a
-colour expression or be multiplied (`pal(fire, k) * #fff` is an error);
-`rgb(r, g, b) * k` can. Coverage goes on the outer `rgb` only:
+colour expression (`pal(fire, k) * #fff` is an error); `rgb(r, g, b) * k`
+can. The one exception is a palette **times values** as the whole colour:
+`pal(fire, k) * light` (or `* a * b`) is the palette's colour with each
+channel scaled, exactly `rgb` of its channels times `light`, in one step
+(not a `multiply` layer); `pal(fire, k) * light + 0.1` is still an error. Coverage goes on the outer `rgb` only:
 `rgb(mix(#000, #f80, k), 0.5)`, not `mix(rgb(#f80, 0.5), …)`.
 
 Palettes: `fire` (black, red, orange, yellow, near white), `ice` = `ocean`
@@ -436,6 +440,30 @@ change — constants once, `t`/clock/slider-only values once a frame,
 least 12 pixels otherwise), a dot ~400, and 10 µs to clear the canvas; per
 pixel `ink` is 70 and `T[k]` 100 (measured on the device). So 192 streaks
 of ~15 steps each are ~2.5 ms, then ~1 ms for `pal(ice, ink)`.
+
+**Two things are worked out less often than per pixel, by themselves**
+(the same pictures either way):
+
+- **The column run.** A value of `x`/`px` and per-frame values only (`sin(x*3
+  + t/8)`, `px*k + s`, a rotozoom's column wobble) is the same down a
+  column: the panel works such values out on the first row of a frame and
+  keeps them, so they cost a 32nd of the table's figure. Write a value that
+  is a column's part plus a row's part with the brackets that say so:
+  `u = (cu + cs*sc*dx) + (wob - sn*sc*dy)` is one add a pixel, not four
+  steps. (It holds a register each for the whole row.)
+- **The still cache.** A value of the pixel's position alone (`x y px py
+  i` and constants: `len(cx, cy)`, `atan2(…)`, `1/len(…)`, `r`, `angle`) is
+  the same every frame. The compiler picks the **two** such values that save
+  the most (each at least ~0.4 µs a pixel), and the panel works them out
+  once and keeps them (16 KB of its memory each) while it can spare the
+  memory; then they and the steps only they need cost nothing a frame. It is
+  an effect's only (not a look's: a look is estimated without it), and the
+  panel may let it go at any time (then every step runs, slower, the same
+  bytes). `psi-check` prints both estimates. So a tunnel's depth and angle
+  are free, but `depth*a` is not still (a slider moves): keep the sliders
+  out of the values you want kept (`twist = 1 -- try 0 to 3`).
+- **noise at a whole z** (`noise(x, y, 0)`, any whole constant third
+  value) is ~470 ns, half the 855 of a moving one.
 
 Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs at
 25 frames a second or fewer; `fps 100` needs ≤ 5 ms, else it plays at 50; GIF looks take ≤ 12 ms, and the worked
@@ -1106,10 +1134,11 @@ pick(cell, #ff3333, #33ff55, #3377ff) * lit
 to where it is, flying at the viewer through a field 4,096 deep once a
 loop, at 100 frames a second; the ink fades from the dark tail to the head
 and in from the distance (squared, so far stars stay dark); a star whose
-head has left the panel is skipped. ~6 ms estimated (over the 5 ms that
-100 fps needs, so the panel starts it at 50 and moves up once it measures
-under; the version before the eye test measured 4.4 ms, about 3 of it
-drawing).
+head has left the panel is drawn far below it, where a line is skipped
+without walking a step. Written for few steps a star (every step runs 192
+times): the perspective is one division each end, the off-panel test picks
+one row for both ends. ~5.0 ms estimated: 100 fps (the first version with
+these streaks estimated 6.0; the one before the eye test measured 4.4 ms).
 
 ```psi example=starfield-drawn
 loop 2.4
@@ -1117,17 +1146,17 @@ fps 100
 -- Starfield: 192 stars flying at you, a pass through the field a loop,
 -- each a streak from where it was a moment ago
 -- a: streak length
-frame { back = 144 + a*240 }
+frame { back = 1 + 1/64 + (144 + a*240)/4096 }
 draw {
   for k < 192 {
-    sx = (hash(k, 7) - 0.5)*4096; sy = (hash(k, 3) - 0.5)*1024  -- where it is, across and up
-    z = frac(hash(k, 11) - t/2.4)*4096        -- how far: 0 near, 4096 far
-    s = 2/(z/16 + 4); st = 2/(min(z + back, 4095)/16 + 4)  -- perspective, now and before
-    hx = 64 + sx*s; hy = 16 + sy*s            -- the head
-    -- the head off the panel: both ends at x -999, and a line wholly off it is skipped
-    gone = max(abs(hx - 64) - 64, abs(hy - 16) - 16) > 0
-    near = 1 - z/4096; lit = near*near        -- squared: far stars stay dark longer
-    line(gone ? -999 : 64 + sx*st, 16 + sy*st, gone ? -999 : hx, hy, lit*0.2, lit)
+    sx = hash(k, 7)*32 - 16; sy = hash(k, 3)*8 - 4  -- where it is, across and up
+    near = frac(t/2.4 - hash(k, 11))          -- 0 far, 1 at you
+    s = 1/(65/64 - near); st = 1/(back - near)  -- perspective, now and a moment ago
+    hx = sx*s; hy = sy*s                      -- the head, from the middle
+    -- a head off the panel: the line moved far below it, where it is skipped
+    row = abs(hx) > 64 or abs(hy) > 16 ? -999 : 16
+    lit = near*near                           -- squared: far stars stay dark longer
+    line(64 + sx*st, row + sy*st, 64 + hx, row + hy, lit*0.2, lit)
   }
 }
 pal(ice, ink)
@@ -1165,6 +1194,82 @@ draw {
   }
 }
 #40c0ff * ink
+```
+
+### 33. Tunnel (the still cache)
+
+The built-in tunnel's look: per pixel a depth (`128/len`, the tunnel twice
+as tall as wide) and a place round the walls (`atan2`), a checker turning
+and travelling, the palette cycling, lit by depth in eight steps with a
+light going round. `near` and `round` depend on the pixel alone, so they
+are the still cache's: ~6.9 ms a frame with it (50 fps; the spare measured
+7.7 for a version a few steps longer), ~17.5 without (a look, or the panel
+short of memory). The twist is a number in the source, not a slider, so
+that `round` stays still; `near` (16 − depth, 0 in the black middle) makes
+the fade one `min` and the black middle a comparison.
+
+```psi example=tunnel
+loop 4.8
+-- Tunnel: the time warp. Each loop the walls turn once, travel two
+-- checker lengths, and the palette goes round once.
+-- From the vanishing point, the tunnel twice as tall as wide:
+dx = px - 63.5; dy = (15.5 - py)*2
+-- how far each pixel is from the black middle: 0 there (where the
+-- tunnel is deeper than 16), ~15 at the edges
+-- (this and `round` depend on the pixel alone: worked out once, kept)
+near = 16 - min(128/len(dx, dy), 16)
+-- round the walls: 16 checker cells a turn, twisting with depth
+twist = 1                              -- try 0 to 3
+round = atan2(dy, dx)*16 + (16 - near)*twist/8
+-- the checker, turning and travelling
+u = round + t/0.3; v = 16 + t/0.6 - near
+cell = (floor(u) + floor(v)) % 2
+-- lit by depth (full near, fading as a square, black in the middle) and
+-- by a light going round with the walls, in eight steps
+fade = min(near, 10)                    -- 10 near, to 0 where it turns black
+side = 0.0635 + 0.0159*cos(u/16)
+light = floor(fade*fade*side + (near > 0))/8
+pal(chrono, cell ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * light
+```
+
+### 34. Rotozoom (the column run, a picker)
+
+Mode 7: each pixel's place on a turning, breathing checker is a column's
+part (`cs*sc*dx`, the column wobble) plus a row's (the row wobble, the
+rest), so a pixel adds, floors and looks up; the noise under it is
+`noise(u, v, 0)` (a whole z: the cheaper noise). Slider `a` is a picker
+(`-- a: wobble = gentle, strong, off`: the editor shows three buttons, 0,
+½ and 1; the formula reads `pick(floor(a*2 + 0.5), …)`). ~6.0 ms (50 fps).
+The floor (the native's `floor=1`) is its own example, **Rotozoom floor**:
+each row's scale by its distance (a per-row value, so the column parts are
+gone), one layer, `pal(fire, …) * fog`, ~4.3 ms at `fps 100`.
+
+```psi example=rotozoom
+loop 9.6
+-- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing
+-- twice, gliding two checkers across and one down; under it a noise
+-- texture turning the other way twice as fast; rows and columns wobble.
+-- a: wobble = gentle, strong, off
+frame {
+  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn
+  s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice
+  zoom = 2                                         -- try 1 to 4
+  sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel
+  sc2 = sc*0.75
+  cu = t/0.6; cv = t/1.2                           -- the glide, in cells
+  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels
+}
+dx = px - 64; dy = 15 - py
+-- the wobble: rows slide sideways, columns up and down, on travelling waves
+wob = sin((31 - py)/32 + t/3.2)*amp
+col = sin(px*0.0234375 - t/4.8)*amp
+-- where each pixel is on the checker: its column's part plus its row's
+u = (cu + cs*sc*dx) + (wob - sn*sc*dy)
+v = (cv + sn*sc*dx + col) + cs*sc*dy
+cell = (floor(u) + floor(v)) % 2
+u2 = (cv + c2*sc2*dx) + (wob - s2*sc2*dy)
+v2 = (cu + s2*sc2*dx + col) + c2*sc2*dy
+pal(fire, (cell ? 0.44 : 0.19) + noise(u2, v2, 0)*0.6)
 ```
 
 ## 16. In the product (not built)

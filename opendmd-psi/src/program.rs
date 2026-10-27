@@ -55,6 +55,8 @@ pub(crate) const L_REG0: u8 = 3;
 /// on scalars, or per pixel on lanes (each operand a lane or a scalar
 /// broadcast); `U_*` load what is under the formula into a lane; the
 /// colour steps (`OUT_*`, one per layer) write the pixels.
+pub(crate) use code::{PAL_SCALED, PAL_SHIFT};
+
 pub(crate) mod code {
     // binary
     pub const ADD: u8 = 0;
@@ -136,6 +138,19 @@ pub(crate) mod code {
     pub const LINE_FROM: u8 = 90;
     pub const LINE_TO: u8 = 91;
     pub const DOT: u8 = 92;
+    // The still cache's marker, first of the pixel steps that only work out
+    // values the cache holds (position-only values: the same every frame):
+    // `STILL d, a, b, c`: `d` values cached (1 or 2), in registers `b` and
+    // `c` (lane operands) after the `a` steps that follow it. With a filled
+    // [`crate::Still`] the VM skips those `a` steps and copies the cached
+    // lanes into `b` and `c` instead; without one it is a no-op.
+    pub const STILL: u8 = 93;
+    // The column run's marker, first of the pixel steps: `COLUMN a`: the
+    // `a` steps after it work out values of `x`, `px` and per-frame values
+    // only (the same down a column). With lanes of a whole row the VM runs
+    // them on a frame's first row and skips them on the others, their
+    // values kept in their registers (the compiler never reuses those).
+    pub const COLUMN: u8 = 94;
     // the colour of the bottom layer when nothing shows through it: written
     // over the pixels, as v0's last line
     pub const OUT_RGB: u8 = 96;
@@ -181,6 +196,7 @@ pub(crate) mod code {
             FOR => 1,
             END => 2,
             LINE_FROM..=DOT => 3,
+            STILL | COLUMN => 0,
             _ => match colour_parts(c).0 {
                 OUT_RGB | OUT_HSV => 3,
                 _ => 1,
@@ -188,11 +204,36 @@ pub(crate) mod code {
         }
     }
 
+    /// A palette colour's flag (on its `d`, the palette): times its `c`
+    /// (`pal(P, v) * k`).
+    pub const PAL_SCALED: u8 = 0x80;
+    /// With [`PAL_SCALED`]: bits 3-6 of `d` are a shift, the scale being
+    /// `c / 2^shift` (`pal(P, v) * floor(q)/8`: the `/8` folded into the
+    /// colour step, exactly `fixed::mul(c, 2^-shift)`, an arithmetic shift).
+    pub const PAL_SHIFT: u8 = 3;
+    /// The palette's bits of a palette colour's `d`.
+    pub const PAL_MASK: u8 = 7;
+
+    /// Value operands a step reads: [`arity`], and for a scaled palette
+    /// colour its scale too (the coverage not counted).
+    pub fn values(op: &super::Op) -> usize {
+        let n = arity(op.code);
+        if is_colour(op.code) && colour_parts(op.code).0 == OUT_PAL && op.d & PAL_SCALED != 0 {
+            n + 1
+        } else {
+            n
+        }
+    }
+
     /// Every operand a step reads (its value operands, then a layer's
     /// coverage) and how many.
     pub fn operands(op: &super::Op) -> ([u8; 4], usize) {
-        let n = arity(op.code);
+        let n = values(op);
         let mut v = [op.a, op.b, op.c, 0];
+        if n == 2 && is_colour(op.code) {
+            // A scaled palette: its index, then its scale.
+            v[1] = op.c;
+        }
         match colour_parts(op.code) {
             (k, Some(_)) if is_colour(op.code) => {
                 v[n] = if k == OUT_RGB || k == OUT_HSV {
@@ -233,7 +274,15 @@ pub(crate) mod code {
             32..=LAST_UN => U[(c - 32) as usize],
             64..=LAST_TERN => T[(c - 64) as usize],
             U_R..=INK => ["ur", "ug", "ub", "ul", "ink"][(c - U_R) as usize],
-            FOR..=DOT => ["for", "end", "line_from", "line_to", "dot"][(c - FOR) as usize],
+            FOR..=COLUMN => [
+                "for",
+                "end",
+                "line_from",
+                "line_to",
+                "dot",
+                "still",
+                "column",
+            ][(c - FOR) as usize],
             _ => ["rgb", "hsv", "pal", "gray"][((colour_parts(c).0 - OUT_RGB) & 3) as usize],
         }
     }
@@ -485,71 +534,48 @@ impl Program {
     /// 32 runs of ~0.3 µs. The web app's editor shows it as light / medium /
     /// heavy.
     pub fn esp32_us(&self) -> u32 {
-        use code::*;
+        self.estimate(None)
+    }
+
+    /// [`esp32_us`](Self::esp32_us) as the player draws it with a filled
+    /// still cache ([`crate::Still`]): the steps that only work out the
+    /// cached values are skipped and each cached value is a copy into its
+    /// register instead (~15 ns a pixel). The same as `esp32_us` for a
+    /// formula without cached values ([`still_lanes`](Self::still_lanes)
+    /// 0). A look never has one (it draws as `esp32_us` says).
+    pub fn esp32_us_still(&self) -> u32 {
+        self.estimate(self.still_marker())
+    }
+
+    fn estimate(&self, still: Option<usize>) -> u32 {
+        let (skip, copy) = match still {
+            Some(k) => {
+                let op = &self.ops[k];
+                (
+                    k + 1..k + 1 + op.a as usize,
+                    STILL_COPY_NS * u32::from(op.d.min(2)),
+                )
+            }
+            None => (0..0, 0),
+        };
+        // The column run's steps once a frame for each column: a 32nd of a
+        // pixel's.
+        let col = self.column_run();
         let px: u32 = self.ops[self.row_end as usize..self.len()]
             .iter()
-            .map(|op| match op.code {
-                ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
-                BIT => 55,
-                MUL => 86,
-                MOD => 113,
-                DIV | RECIP => 685,
-                ATAN2 => 529,
-                LEN => 642,
-                HASH => 220,
-                NEG | NOT | ABS | FLOOR | FRAC => 40,
-                SIN | COS => 110,
-                TRI | SAW | SQR => 60,
-                SQRT => 539,
-                SELECT | CLAMP => 60,
-                PICK | TAB => 100,
-                MIX => 130,
-                SMOOTH => 214,
-                NOISE => 855,
-                DIGIT..=DIGIT_B => 240,
-                U_R | U_G | U_B | INK => 70,
-                U_L => 140,
-                c if is_colour(c) => {
-                    // Measured on the device (psi-probe, 2026-10-26): a
-                    // colour's write — a lane's `chan` per pixel, ~5 for one
-                    // value filled along the row — plus its kind, and for a
-                    // layer the blend loop: one per blend when it covers all,
-                    // a shared loop with the coverage (and the blend chosen
-                    // per channel) when it covers less.
-                    let (kind, blend) = colour_parts(c);
-                    let (v, n) = operands(op);
-                    let vals = arity(c);
-                    let lane = v[..vals.min(n)].iter().any(|&o| o & LANE != 0);
-                    let write = if lane { 120 } else { 5 };
-                    // (Of one value: worked out once, filled along the row.)
-                    let base = match kind {
-                        OUT_HSV if lane => 195,
-                        OUT_RGB if lane => 120,
-                        _ => 0,
-                    };
-                    // Covered unless the coverage is a constant slot of 1 or
-                    // more (a lane or an input never is one).
-                    let k = v[n.saturating_sub(1)];
-                    let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k);
-                    let covered = n > vals && !(konst && self.init[k as usize] >= ONE);
-                    let mix = match (blend, covered) {
-                        (None, _) => 0,
-                        (Some(crate::fixed::BLEND_ADD), false) => 190,
-                        (Some(crate::fixed::BLEND_MULTIPLY), false) => 245,
-                        (Some(crate::fixed::BLEND_SCREEN), false) => 300,
-                        (Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN), false) => 180,
-                        (Some(_), false) => 20,
-                        (Some(crate::fixed::BLEND_ADD), true) => 575,
-                        (Some(crate::fixed::BLEND_MULTIPLY), true) => 630,
-                        (Some(crate::fixed::BLEND_SCREEN), true) => 600,
-                        (Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN), true) => 450,
-                        (Some(_), true) => 390,
-                    };
-                    write + base + mix
+            .enumerate()
+            .map(|(k, op)| (k + self.row_end as usize, op))
+            .filter(|(k, _)| !skip.contains(k))
+            .map(|(k, op)| {
+                let ns = self.step_ns(op);
+                if col.contains(&k) {
+                    ns.div_ceil(H as u32)
+                } else {
+                    ns
                 }
-                _ => 0,
             })
-            .sum();
+            .sum::<u32>()
+            + copy;
         let row = self.counts().1 as u32;
         // The loop itself (a pixel's colour is counted above: `gray(x)` is
         // 45 + 120, as measured); then what the real paths add to the VM's
@@ -558,6 +584,91 @@ impl Program {
         // on the device (plasma as an effect 8,217 against 7,254 µs; Plasma
         // screened at 40 % as a look 8,552 against 7,474).
         (((45 + px) * (W * H) as u32) / 1000 + row * 10 + self.draw_us()) * 115 / 100
+    }
+
+    /// A pixel step's cost, ns a pixel at 128 lanes (see `esp32_us`).
+    fn step_ns(&self, op: &Op) -> u32 {
+        use code::*;
+        match op.code {
+            c if is_colour(c) => {
+                // Measured on the device (psi-probe, 2026-10-26): a
+                // colour's write — a lane's `chan` per pixel, ~5 for one
+                // value filled along the row — plus its kind, and for a
+                // layer the blend loop: one per blend when it covers all,
+                // a shared loop with the coverage (and the blend chosen
+                // per channel) when it covers less.
+                let (kind, blend) = colour_parts(c);
+                let (v, n) = operands(op);
+                let vals = values(op);
+                let lane = v[..vals.min(n)].iter().any(|&o| o & LANE != 0);
+                let write = if lane { 120 } else { 5 };
+                // (Of one value: worked out once, filled along the row.)
+                let base = match kind {
+                    OUT_HSV if lane => 195,
+                    OUT_RGB if lane => 120,
+                    // `pal(P, v) * k`: three channels scaled. psi-probe on
+                    // the spare (p2probe-b): 346 ns a pixel in all for a
+                    // k that varies (226 + the write), 166 for k = 1 (the
+                    // palette's bytes: 46 + the write).
+                    OUT_PAL if lane && vals > 1 => {
+                        if self.const_value(op.c) == Some(ONE) {
+                            46
+                        } else {
+                            226
+                        }
+                    }
+                    _ => 0,
+                };
+                // Covered unless the coverage is a constant slot of 1 or
+                // more (a lane or an input never is one).
+                let k = v[n.saturating_sub(1)];
+                let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k);
+                let covered = n > vals && !(konst && self.init[k as usize] >= ONE);
+                let mix = match (blend, covered) {
+                    (None, _) => 0,
+                    (Some(crate::fixed::BLEND_ADD), false) => 190,
+                    (Some(crate::fixed::BLEND_MULTIPLY), false) => 245,
+                    (Some(crate::fixed::BLEND_SCREEN), false) => 300,
+                    (Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN), false) => 180,
+                    (Some(_), false) => 20,
+                    (Some(crate::fixed::BLEND_ADD), true) => 575,
+                    (Some(crate::fixed::BLEND_MULTIPLY), true) => 630,
+                    (Some(crate::fixed::BLEND_SCREEN), true) => 600,
+                    (Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN), true) => 450,
+                    (Some(_), true) => 390,
+                };
+                write + base + mix
+            }
+            // A whole constant `z`: four corners, not eight (a guess until
+            // psi-probe measures it).
+            NOISE if self.const_value(op.c).is_some_and(|z| z & 0xffff == 0) => NOISE_FLAT_NS,
+            c => value_ns(c),
+        }
+    }
+
+    /// Where the still cache's marker is (`code::STILL`), if the formula
+    /// has values for it.
+    pub(crate) fn still_marker(&self) -> Option<usize> {
+        let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
+        (re.min(pe)..pe).find(|&k| self.ops[k].code == code::STILL)
+    }
+
+    /// The column run's steps (`code::COLUMN`), if the formula has one.
+    pub(crate) fn column_run(&self) -> core::ops::Range<usize> {
+        let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
+        match (re.min(pe)..pe).find(|&k| self.ops[k].code == code::COLUMN) {
+            Some(k) => k + 1..(k + 1 + self.ops[k].a as usize).min(pe),
+            None => 0..0,
+        }
+    }
+
+    /// Values the still cache holds for this formula (0, 1 or 2): each a
+    /// lane of 4,096 values ([`crate::StillLane`], 16 KB) worked out once
+    /// instead of every frame. See [`crate::Still`].
+    pub fn still_lanes(&self) -> usize {
+        self.still_marker().map_or(0, |k| {
+            (self.ops[k].d as usize).min(crate::still::STILL_LANES)
+        })
     }
 
     /// The draw stage's part of [`esp32_us`](Self::esp32_us), from
@@ -585,7 +696,9 @@ impl Program {
                     // are constants; with a side unknown, at least 12.
                     let k = |v: u8| self.const_value(v);
                     let d = |a: Option<i32>, b: Option<i32>| {
-                        a.zip(b).map(|(a, b)| ((a >> 16) - (b >> 16)).unsigned_abs().min(1023) as u64 + 1)
+                        a.zip(b).map(|(a, b)| {
+                            ((a >> 16) - (b >> 16)).unsigned_abs().min(1023) as u64 + 1
+                        })
                     };
                     let (dx, dy) = (d(k(from[0]), k(op.a)), d(k(from[1]), k(op.b)));
                     let len = match (dx, dy) {
@@ -669,6 +782,16 @@ impl Program {
                 alloc::format!("{args}; end {}", op.b)
             } else if op.code == code::END {
                 alloc::format!("{args}; back to {}", op.c)
+            } else if op.code == code::COLUMN {
+                alloc::format!("skip {} after the first row", op.a)
+            } else if op.code == code::STILL {
+                let r = |v: u8| opnd(v);
+                let regs = [r(op.b), r(op.c)];
+                alloc::format!(
+                    "skip {}; cache {}",
+                    op.a,
+                    regs[..(op.d as usize).min(2)].join(", ")
+                )
             } else if op.code == code::PICK {
                 let t: alloc::vec::Vec<_> = (0..op.c as usize)
                     .map(|j| opnd(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8))
@@ -680,7 +803,12 @@ impl Program {
             let d = if code::is_colour(op.code)
                 || matches!(
                     op.code,
-                    code::END | code::LINE_FROM | code::LINE_TO | code::DOT
+                    code::END
+                        | code::LINE_FROM
+                        | code::LINE_TO
+                        | code::DOT
+                        | code::STILL
+                        | code::COLUMN
                 ) {
                 "out".into()
             } else {
@@ -707,10 +835,49 @@ impl Program {
                 // The draw stage's steps that write no value; END counts
                 // its loop's counter (which the FOR writes too).
                 code::END => op.a == v,
-                code::LINE_FROM | code::LINE_TO | code::DOT => false,
+                code::LINE_FROM | code::LINE_TO | code::DOT | code::STILL | code::COLUMN => false,
                 c => !code::is_colour(c) && op.d == v,
             }
         })
+    }
+}
+
+/// What copying one cached lane into its register costs a pixel, ns (a
+/// guess until `psi-probe` measures it: a 512 B `memcpy` a lane).
+pub(crate) const STILL_COPY_NS: u32 = 15;
+
+/// `noise(x, y, z)` with a whole constant `z`, ns a pixel: the plane's
+/// four corners ([`crate::fixed::noise_flat`]), measured on the spare
+/// (p2probe-b: 816 ns a pixel for the step row against 1,103 with eight).
+pub(crate) const NOISE_FLAT_NS: u32 = 565;
+
+/// A value step's cost, ns a pixel at 128 lanes on the ESP32, from
+/// `psi-probe` (2026-10-26): what [`Program::esp32_us`] adds up, and what the
+/// compiler weighs when it chooses values for the still cache.
+pub(crate) fn value_ns(c: u8) -> u32 {
+    use code::*;
+    match c {
+        ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
+        BIT => 55,
+        MUL => 86,
+        MOD => 113,
+        DIV | RECIP => 685,
+        ATAN2 => 529,
+        LEN => 642,
+        HASH => 220,
+        NEG | NOT | ABS | FLOOR | FRAC => 40,
+        SIN | COS => 110,
+        TRI | SAW | SQR => 60,
+        SQRT => 539,
+        SELECT | CLAMP => 60,
+        PICK | TAB => 100,
+        MIX => 130,
+        SMOOTH => 214,
+        NOISE => 855,
+        DIGIT..=DIGIT_B => 240,
+        U_R | U_G | U_B | INK => 70,
+        U_L => 140,
+        _ => 0,
     }
 }
 

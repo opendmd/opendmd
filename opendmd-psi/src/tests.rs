@@ -122,6 +122,117 @@ fn noise_and_hash_stay_in_range() {
 }
 
 #[test]
+fn flat_noise_is_noise_at_a_whole_z() {
+    let mut h: u32 = 12345;
+    let mut r = || {
+        h ^= h << 13;
+        h ^= h >> 17;
+        h ^= h << 5;
+        h as i32
+    };
+    for _ in 0..20000 {
+        let (x, y) = (r() >> 8, r() >> 8);
+        let z = (r() >> 16) << 16;
+        assert_eq!(
+            fixed::noise_flat(x, y, z),
+            fixed::noise(x, y, z),
+            "{x} {y} {z}"
+        );
+    }
+    // The VM takes it for a whole scalar z, the eight corners otherwise.
+    let flat = compile("gray(noise(x*8, y*4, 3) + noise(px, py, -1)*0.25)").unwrap();
+    let full = compile("frame { z = 3 + t*0 + floor(a*0.1) }\ngray(noise(x*8, y*4, z) + noise(px, py, -1 + z*0)*0.25)").unwrap();
+    let mut s = Scratch::<128>::new();
+    let (mut o1, mut o2) = (vec![0u8; W * H * 3], vec![0u8; W * H * 3]);
+    render(&flat, &mut s, &Inputs::default(), &OWN, &mut o1);
+    render(&full, &mut s, &Inputs::default(), &OWN, &mut o2);
+    assert_eq!(o1, o2);
+    assert!(flat.esp32_us() < full.esp32_us());
+}
+
+#[test]
+fn a_scaled_palette_is_exactly_its_channels_times_k() {
+    // Every entry of every palette at scales across the range, the edges
+    // included: the fast paths agree with chan(mul(byte(b), s)).
+    let mut scales: Vec<i32> = vec![
+        i32::MIN,
+        -ONE,
+        -1,
+        0,
+        1,
+        2,
+        255,
+        256,
+        ONE - 1,
+        ONE,
+        ONE + 1,
+        2 * ONE,
+        300 * ONE,
+        i32::MAX,
+    ];
+    scales.extend((0..=4096).map(|k| k * 17));
+    for p in &PALETTES {
+        for i in 0..32 {
+            let k = (i << 11) + 5;
+            let c = fixed::pal(p, k);
+            for &s in &scales {
+                let want: Vec<u8> = c
+                    .iter()
+                    .map(|&b| fixed::chan(fixed::mul(fixed::byte(b), s)))
+                    .collect();
+                assert_eq!(&fixed::pal_lit(p, k, s)[..], &want[..], "entry {i} at {s}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_scaled_palette_is_its_channels_scaled() {
+    // `pal(P, v) * k` against the same colour written as rgb of its
+    // channels (the palette entries' bytes over 255, times k).
+    let p = compile("pal(fire, x) * y").unwrap();
+    assert_eq!(p.layers(), 1);
+    assert_eq!(p.inputs() & 7, 0);
+    let mut s = Scratch::<128>::new();
+    let mut out = vec![0u8; W * H * 3];
+    render(&p, &mut s, &Inputs::default(), &OWN, &mut out);
+    for (i, px) in out.chunks(3).enumerate() {
+        let (x, row) = (i % W, i / W);
+        let xv = fixed::div((x as i32) << 16, ((W - 1) as i32) << 16);
+        let yv = fixed::div(((H - 1 - row) as i32) << 16, ((H - 1) as i32) << 16);
+        let c = fixed::pal(&PALETTES[0], xv);
+        let want: Vec<u8> = c
+            .iter()
+            .map(|&b| fixed::chan(fixed::mul(fixed::byte(b), yv)))
+            .collect();
+        assert_eq!(px, &want[..], "pixel {i}");
+    }
+    // A scale over 2^n is the value and a shift in the step: the same bytes
+    // as the multiply (and one step fewer).
+    let p = compile("pal(chrono, x) * (floor(y*8 + px % 3 - 1)/8)").unwrap();
+    let q = compile("pal(chrono, x) * (floor(y*8 + px % 3 - 1)/8*(1 + a))").unwrap();
+    assert!(p.len() < q.len(), "{}", p.listing());
+    let (mut o1, mut o2) = (vec![0u8; W * H * 3], vec![0u8; W * H * 3]);
+    render(&p, &mut s, &Inputs::default(), &OWN, &mut o1);
+    render(&q, &mut s, &Inputs::default(), &OWN, &mut o2);
+    assert_eq!(o1, o2);
+    // Times a slider, chained, in a layer with coverage; gray is gray(v*k).
+    let p = compile("layer { hsv(x, 1, 1) }\nlayer screen { pal(ice, y, 0.5) * a * 2 }").unwrap();
+    assert_eq!(p.sliders(), 1);
+    assert!(compile("pal(gray, x) * 0.5")
+        .unwrap()
+        .listing()
+        .contains("gray"));
+    assert_eq!(
+        compile("pal(gray, x) * y").unwrap().esp32_us(),
+        compile("gray(x * y)").unwrap().esp32_us()
+    );
+    // Not into sums.
+    let e = compile("pal(fire, x) * y + 0.1").unwrap_err();
+    assert!(e.msg.contains("can only be scaled"), "{}", e.msg);
+}
+
+#[test]
 fn colours() {
     assert_eq!(fixed::hsv(0, ONE, ONE), [255, 0, 0]);
     assert_eq!(fixed::hsv(q(1.0 / 3.0), ONE, ONE), [0, 255, 0]);
@@ -165,7 +276,12 @@ fn levels_run_as_rarely_as_they_can() {
     let p = compile("gray(x / (y + 1))").unwrap();
     assert_eq!(p.counts(), (0, 2, 2), "{}", p.listing());
     let plasma = compile(sketches::PLASMA).unwrap();
-    assert_eq!(plasma.counts(), (2, 5, 13));
+    // (its `len(x-0.5, y-0.5)*6` is worked out once: the still cache's
+    // marker is one step more)
+    // and its `sin(x*3 + t/8)` once a column: a column run, one more)
+    assert_eq!(plasma.counts(), (2, 5, 15));
+    assert_eq!(plasma.still_lanes(), 1);
+    assert_eq!(plasma.column_run().len(), 4, "{}", plasma.listing());
     let ring = compile(sketches::RING_CLOCK).unwrap();
     assert_eq!(ring.counts().0, 8);
 }
@@ -239,7 +355,8 @@ fn fps_line() {
 #[test]
 fn registers_are_reused() {
     let p = compile(sketches::RING_CLOCK).unwrap();
-    assert!(p.regs() <= 4, "{}", p.listing());
+    // (One of them holds `cx`, kept down the columns.)
+    assert!(p.regs() <= 5, "{}", p.listing());
     // A step never writes a register it reads.
     for op in &p.ops[p.row_end as usize..p.pixel_end as usize] {
         let ar = code::arity(op.code);
@@ -1253,10 +1370,11 @@ fn pick_is_the_chain_it_replaces() {
     let px = |s: &str| compile(s).unwrap().counts().2;
     assert_eq!(px(cases[0].0) + 9, px(cases[0].1));
     assert_eq!(px(cases[5].0) + 9, px(cases[5].1));
-    // In a colour expression (read three times) a pick is one step.
+    // In a colour expression (read three times) a pick is one step (and
+    // all of it once a column: the column run's marker is one more).
     assert_eq!(
         px("#f80 * pick(px/32, 0.5, 1)"),
-        4,
+        5,
         "{}",
         compile("#f80 * pick(px/32, 0.5, 1)").unwrap().listing()
     );
@@ -1705,20 +1823,50 @@ fn only_a_full_render_draws() {
     let mut s = Scratch::<128>::new();
     let mut full = [0u8; W * H * 3];
     let i = Inputs::default();
-    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, u32::MAX, &mut full);
+    render_rows_ink::<128>(
+        &p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        u32::MAX,
+        &mut full,
+    );
     let drawn = ink.0;
     assert!(drawn.iter().any(|&b| b > 0));
     // Rows 3 and 7 alone: the same bytes, the canvas untouched.
     let mut part = [0u8; W * H * 3];
-    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, (1 << 3) | (1 << 7), &mut part);
+    render_rows_ink::<128>(
+        &p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        (1 << 3) | (1 << 7),
+        &mut part,
+    );
     assert_eq!(ink.0, drawn);
     for r in [3, 7] {
-        assert_eq!(part[r * W * 3..(r + 1) * W * 3], full[r * W * 3..(r + 1) * W * 3]);
+        assert_eq!(
+            part[r * W * 3..(r + 1) * W * 3],
+            full[r * W * 3..(r + 1) * W * 3]
+        );
     }
     // Proof it isn't drawn again: a canvas changed by hand is what shows.
     ink.0.fill(200);
     render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, 1, &mut part);
     assert!(part[..W * 3].iter().all(|&b| b == 200));
-    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, u32::MAX, &mut part);
+    render_rows_ink::<128>(
+        &p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        u32::MAX,
+        &mut part,
+    );
     assert_eq!(ink.0, drawn);
 }

@@ -183,7 +183,15 @@ FONT = {"fonts/silkscreen.woff2"}
 # Loaded only when Formulas opens; raised under the owner's standing OK for
 # budget lines while the firmware stays comfortable (it does: see
 # docs/research/size-budget.md).
-PSI_WASM_GZ_BUDGET = 52 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage
+# 58 KB for Psi phase 2 (2026-10-27, branch psi-p2, docs/psi-drawing-design.md
+# "As built (phase 2)"): the still cache (the compiler choosing position-only
+# values and laying out their run, the VM keeping and copying them, the
+# fingerprint), the column run, `pal(P, v) * k` and noise at a whole z, and
+# the estimate with the cache: +5.4 KB gz of the module's wasm (49.2 -> 54.6
+# KB measured alone; a ~3 KB stable sort and two monomorphised loops were
+# taken out to get there). What lets Tunnel and Rotozoom be Formulas at
+# 50 fps; raised under the owner's standing OK for budget lines.
+PSI_WASM_GZ_BUDGET = 58 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
@@ -194,7 +202,16 @@ PSI_WASM_GZ_BUDGET = 52 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing
 # Drawing section, the highlighter's words, "Draws N lines and dots a frame",
 # and two drawing examples (Starfield, now drawn, and Wireframe cube):
 # 22,076 -> ~23.1 KB gz; raised under the same standing OK.
-FORMULAS_GZ_BUDGET = 24 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage
+# 25 KB for pickers and Add to playlist (2026-10-27, branch psi-p2-web): a
+# slider with choices (`-- a: shape = cube, ball`) as a row of buttons, in
+# js/psikit.js (shared with the site's /f/ page), and Add to playlist on every
+# formula (what lets the Library's Effects tab go): 23,614 -> ~24.8 KB gz.
+# Raised under the same standing OK.
+# 27 KB for Psi phase 2 (2026-10-27, branch psi-p2): two more examples
+# (Tunnel, Rotozoom: the built-in effects' looks, ~1 KB gz of formulas.json),
+# the estimate with the still cache in the ratings, the cheat sheet's
+# `pal(fire, v) * k`: 24,811 -> ~26.0 KB gz. Same standing OK.
+FORMULAS_GZ_BUDGET = 27 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}

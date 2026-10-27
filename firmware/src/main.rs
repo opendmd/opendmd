@@ -237,6 +237,38 @@ fn transition_gate(need: usize) -> bool {
     ok
 }
 
+/// Whether a formula's still cache may take `take` more bytes of the heap
+/// (`take` > 0) or keep what it holds (0): see [`config::STILL_KEEP_HEAP`].
+/// A refusal to take says why in the log (at most once every 10 s).
+#[cfg(feature = "psi")]
+pub fn still_gate(take: usize) -> bool {
+    static SAID: AtomicU32 = AtomicU32::new(0);
+    let look = formula_look::SOURCE.load(Ordering::Relaxed);
+    // The card builder mid-file has the heap first (its encoder's peak was
+    // sized without the cache): never taken then, and given back when it
+    // starts one, as the glow and the copy ahead give way to it.
+    let building = cache_builder::holding();
+    let free = free_heap() as usize;
+    if take == 0 {
+        return look == 0 && !building && free >= config::STILL_SHED_HEAP;
+    }
+    let block = largest_free_block();
+    let ok = look == 0 && !building && free >= take + config::STILL_KEEP_HEAP && block >= 16 * 1024;
+    if !ok {
+        let now = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32;
+        let last = SAID.load(Ordering::Relaxed);
+        if last == 0 || now.wrapping_sub(last) >= 10 {
+            SAID.store(now | 1, Ordering::Relaxed);
+            log::info!(
+                "formula: still cache ({take} B) not taken: heap {free} B free (needs {} B), largest block {block} B, look {look}, card builder {}",
+                take + config::STILL_KEEP_HEAP,
+                if building { "mid-file" } else { "idle" }
+            );
+        }
+    }
+    ok
+}
+
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     // Synchronous until `logring::start` below, like EspLogger before it.
@@ -361,6 +393,9 @@ fn main() -> Result<()> {
     // Formulas time their frames (the governor: `fx_psi::Governor`).
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_clock(Some(|| unsafe { esp_idf_sys::esp_timer_get_time() } as u32));
+    // And keep their still caches to what the heap can spare.
+    #[cfg(feature = "psi")]
+    opendmd_core::fx_psi::set_still_gate(Some(still_gate));
     let mut sched = Scheduling::new(&settings.schedule);
     // Follow RePlayOS: the overlay and the sequence (`follow.rs`).
     let mut runner = follow::Runner::default();

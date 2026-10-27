@@ -1149,6 +1149,8 @@ struct Colour {
     pal: u8,
     alpha: Option<Id>,
     blend: u8,
+    /// `pal(P, v) * k`: the palette's colour times k (each channel).
+    scale: Option<Id>,
 }
 
 /// What a formula's or a part's lines come to: its colours, bottom to top
@@ -1193,7 +1195,10 @@ impl<'s> Parser<'s> {
     /// off the input never panics).
     #[inline(never)]
     fn tok(&self, k: usize) -> Token {
-        self.toks.get(k).copied().unwrap_or(self.toks[self.toks.len() - 1])
+        self.toks
+            .get(k)
+            .copied()
+            .unwrap_or(self.toks[self.toks.len() - 1])
     }
 
     #[inline(never)]
@@ -1818,6 +1823,7 @@ impl<'s> Parser<'s> {
                 pal: 0,
                 alpha: (k > ar).then_some(a[ar]),
                 blend: fixed::BLEND_OVER,
+                scale: None,
             });
         }
         self.expect(Tok::LParen, "`(`")?;
@@ -1869,6 +1875,7 @@ impl<'s> Parser<'s> {
             pal,
             alpha,
             blend: fixed::BLEND_OVER,
+            scale: None,
         })
     }
 
@@ -1974,6 +1981,7 @@ impl<'s> Parser<'s> {
             pal: 0,
             alpha: None,
             blend: fixed::BLEND_OVER,
+            scale: None,
         })
     }
 
@@ -2244,15 +2252,44 @@ impl<'s> Parser<'s> {
             && (word != "rgb" || self.whole_line(true))
         {
             self.next();
-            let c = self.colour(t)?;
-            let e = self.peek();
+            let mut c = self.colour(t)?;
+            let mut e = self.peek();
+            // `pal(P, v) * k`: the palette's colour, each channel times k
+            // (a light on a palette, in one step); `* k * m` too.
+            if word == "pal" && e.tok == Tok::Star && !self.has_colour(self.pos + 1, false) {
+                let at = (e.start, e.end);
+                let mut k = None;
+                while self.peek().tok == Tok::Star {
+                    self.next();
+                    let v = self.expr(10)?;
+                    k = Some(match k {
+                        Some(k) => self.dag.op(code::MUL, [k, v, 0], at)?,
+                        None => v,
+                    });
+                }
+                if let Some(k) = k {
+                    if c.code == code::OUT_GRAY {
+                        c.args[0] = self.dag.op(code::MUL, [c.args[0], k, 0], at)?;
+                    } else {
+                        c.scale = Some(k);
+                    }
+                }
+                e = self.peek();
+            }
             if infix_bp(e.tok).is_some() && word != "rgb" {
                 return self.err(
                     e,
-                    format!(
-                        "`{word}(…)` can't go into a sum: only `#…` and `rgb(r, g, b)` colours can \
-                         (`#fff * k`, `rgb(r, g, b) * k`)"
-                    ),
+                        if word == "pal" {
+                        String::from(
+                            "`pal(…)` can't go into a sum: it can only be scaled, `pal(fire, v) * k` \
+                             (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
+                        )
+                    } else {
+                        format!(
+                            "`{word}(…)` can't go into a sum: only `#…` and `rgb(r, g, b)` colours can \
+                             (`#fff * k`, `rgb(r, g, b) * k`)"
+                        )
+                    },
                 );
             }
             self.end_of_statement()?;
@@ -2285,6 +2322,7 @@ impl<'s> Parser<'s> {
                 pal: 0,
                 alpha: None,
                 blend: fixed::BLEND_OVER,
+                scale: None,
             }],
             false,
         ))
@@ -3107,15 +3145,29 @@ pub struct Info {
 /// Compile `src` into `prog` (which is cleared first). On an error `prog`
 /// is left empty.
 pub fn compile_into(src: &str, prog: &mut Program) -> Result<Info, Error> {
+    compile_layout(src, prog, true)
+}
+
+/// [`compile_into`] with (`runs`) or without the column run and the still
+/// cache's run: without, every pixel step runs on every pixel of every
+/// frame, as before they existed (the same bytes). For measuring a step's
+/// cost on the device (`psi-probe`) and the estimate's tests.
+#[doc(hidden)]
+pub fn compile_layout(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Error> {
     prog.clear();
-    let r = compile_inner(src, prog);
+    let mut r = compile_inner(src, prog, runs);
+    if runs && r.as_ref().is_err_and(|e| e.msg == LAYOUT_BUG) {
+        debug_assert!(false, "{LAYOUT_BUG}: {src:?}");
+        prog.clear();
+        r = compile_inner(src, prog, false);
+    }
     if r.is_err() {
         prog.clear();
     }
     r
 }
 
-fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
+fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Error> {
     if src.len() > MAX_SOURCE {
         return Err(Error::new(
             MAX_SOURCE,
@@ -3204,6 +3256,24 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
     let mut steps = Vec::with_capacity(layers.len());
     for (k, c) in layers.iter().enumerate() {
         let plain = k == 0 && !backdrop;
+        // A scale that is a value over 2, 4, … 2^15 (`floor(q)/8`, a
+        // multiply by 1/8): the value, and the division as a shift in the
+        // colour step (one step fewer a pixel; the same bytes).
+        let (mut scale, mut shift) = (c.scale, 0u8);
+        if let Some(sid) = c.scale {
+            let m = p.dag.nodes[sid as usize];
+            if m.code == code::MUL && m.level == LV_PIXEL {
+                for (x, kk) in [(m.a, m.b), (m.b, m.a)] {
+                    if let Some(v) = p.dag.konst(kk) {
+                        if v > 0 && v < ONE && (v as u32).is_power_of_two() {
+                            scale = Some(x);
+                            shift = (ONE as u32 / v as u32).trailing_zeros() as u8;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         let alpha = match (plain, c.alpha) {
             (true, _) => None,
             (false, Some(a)) => Some(a),
@@ -3218,11 +3288,13 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
             args: c.args,
             pal: c.pal,
             alpha,
+            scale,
+            shift,
         });
     }
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
-    emit(&p.dag, &steps, &p.draw, backdrop, prog).map_err(|e| Error {
+    emit(&p.dag, &steps, &p.draw, backdrop, runs, prog).map_err(|e| Error {
         start: ct.start,
         end: ct.end,
         ..e
@@ -3240,14 +3312,20 @@ struct Step {
     args: [Id; 3],
     pal: u8,
     alpha: Option<Id>,
+    /// `pal(P, v) * k`'s k, and a shift its value is divided by (`k = x/8`:
+    /// x, 3).
+    scale: Option<Id>,
+    shift: u8,
 }
 
 impl Step {
-    /// What it reads, in operand order (the coverage last).
+    /// What it reads, in operand order (a palette's scale, then the
+    /// coverage last).
     fn reads(&self) -> impl Iterator<Item = Id> + '_ {
         self.args[..code::arity(self.code)]
             .iter()
             .copied()
+            .chain(self.scale)
             .chain(self.alpha)
     }
 }
@@ -3267,6 +3345,7 @@ fn emit(
     steps: &[Step],
     draw: &[DItem],
     backdrop: bool,
+    runs: bool,
     prog: &mut Program,
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
@@ -3339,6 +3418,9 @@ fn emit(
     }
     // Where each node's value lives.
     let mut loc = alloc::vec![0u8; n];
+    // Which nodes have a place yet: a step may read only those (an operand
+    // without one would read slot 0, `t`, silently).
+    let mut set = alloc::vec![false; n];
     let mut next_slot = S_FIRST_FREE as usize;
     fn new_slot(next_slot: &mut usize, v: Option<i32>, prog: &mut Program) -> Result<u8, Error> {
         if *next_slot >= MAX_SCALARS {
@@ -3357,8 +3439,10 @@ fn emit(
     for i in 0..n {
         if live(i) && nodes[i].code == K_CONST {
             loc[i] = new_slot(&mut next_slot, Some(nodes[i].val), prog)?;
+            set[i] = true;
         } else if live(i) && nodes[i].code == K_INPUT {
             loc[i] = nodes[i].val as u8;
+            set[i] = true;
             if nodes[i].val as u8 == LANE | L_I {
                 prog.uses |= USES_I;
             }
@@ -3379,11 +3463,17 @@ fn emit(
     let mk = |m: &Node,
               d: u8,
               loc: &[u8],
+              set: &[bool],
               ns: &mut usize,
               tabs: &mut [u8],
               prog: &mut Program|
      -> Result<Op, Error> {
         let n = code::arity(m.code);
+        let unset = [m.a, m.b, m.c][..n].iter().any(|&x| !set[x as usize])
+            || (m.code == code::PICK && dag.picks[m.b as usize].iter().any(|&x| !set[x as usize]));
+        if unset {
+            return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+        }
         let l = |k: usize, x: Id| if n > k { loc[x as usize] } else { 0 };
         let (mut b, mut c) = (l(1, m.b), l(2, m.c));
         if m.code == code::TAB {
@@ -3430,7 +3520,8 @@ fn emit(
             if is_op(i) && m.level == level {
                 let d = new_slot(&mut next_slot, None, prog)?;
                 loc[i] = d;
-                ops.push(mk(m, d, &loc, &mut next_slot, &mut tabs, prog)?);
+                set[i] = true;
+                ops.push(mk(m, d, &loc, &set, &mut next_slot, &mut tabs, prog)?);
             }
         }
         if level == LV_FRAME {
@@ -3445,6 +3536,7 @@ fn emit(
                         let cs = new_slot(&mut next_slot, Some((count as i32) << 16), prog)?;
                         let ks = new_slot(&mut next_slot, None, prog)?;
                         loc[ctr as usize] = ks;
+                        set[ctr as usize] = true;
                         open.push((ops.len(), ks, cs));
                         ops.push(Op {
                             code: code::FOR,
@@ -3458,7 +3550,16 @@ fn emit(
                             if is_op(i) && owner[i] == lp {
                                 let d = new_slot(&mut next_slot, None, prog)?;
                                 loc[i] = d;
-                                ops.push(mk(&nodes[i], d, &loc, &mut next_slot, &mut tabs, prog)?);
+                                set[i] = true;
+                                ops.push(mk(
+                                    &nodes[i],
+                                    d,
+                                    &loc,
+                                    &set,
+                                    &mut next_slot,
+                                    &mut tabs,
+                                    prog,
+                                )?);
                             }
                         }
                     }
@@ -3507,21 +3608,176 @@ fn emit(
         }
     }
     // Per pixel: the order (a value, or colour step k), each value's last
-    // reader in it, then registers by linear scan.
-    #[derive(Clone, Copy)]
-    enum Item {
-        Value(usize),
-        Colour(usize),
+    // reader in it, then registers by linear scan. With values for the
+    // still cache (`still::choose`), first the per-frame values the cached
+    // run reads, the marker, the run (skipped once the cache holds its
+    // values), then the rest as usual.
+    let px_op = |i: usize| is_op(i) && nodes[i].level == LV_PIXEL;
+    // The per-column run: values of `x`/`px` and per-frame values only,
+    // worked out on a frame's first row and kept (`Item::Column`), when
+    // they are worth a step; then the still cache's values. Each tried
+    // with the registers, dropped when they don't fit.
+    let col = column_nodes(dag);
+    let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i]).collect();
+    let col_ns: u32 = (0..n)
+        .filter(|&i| in_col[i])
+        .map(|i| value_ns(nodes[i].code))
+        .sum();
+    let none = alloc::vec![false; n];
+    let mut layout = None;
+    for (use_col, use_still) in [(true, true), (true, false), (false, true), (false, false)] {
+        let (use_col, use_still) = (use_col && runs, use_still && runs);
+        let use_col = use_col && col_ns >= COLUMN_GAIN_NS;
+        let excl = if use_col { &in_col } else { &none };
+        let markers = usize::from(use_col);
+        let cached = if use_still && total + markers < MAX_OPS {
+            choose_still(dag, steps, &px_op, excl)
+        } else {
+            Vec::new()
+        };
+        if (use_col && col_ns < COLUMN_GAIN_NS) || (use_still && cached.is_empty() && !use_col) {
+            continue;
+        }
+        // The markers are steps too: at the step limit, the plain layout.
+        if total + markers + usize::from(!cached.is_empty()) > MAX_OPS {
+            continue;
+        }
+        let lay = pixel_seq(dag, steps, &px_op, &need, &cached, excl, use_col);
+        if let Some(r) = registers(nodes, steps, &lay.seq, &lay.pinned) {
+            layout = Some((lay, cached, r));
+            break;
+        }
     }
-    let mut seq: Vec<Item> = Vec::new();
-    for k in 0..steps.len() {
-        for i in 0..n {
-            if is_op(i) && nodes[i].level == LV_PIXEL && need[i] == k {
-                seq.push(Item::Value(i));
+    let Some((lay, cached, (regs, used))) = layout else {
+        return Err(Error::new(
+            0,
+            0,
+            format!("this formula keeps too many values at once (more than {REGS}) — simplify it"),
+        ));
+    };
+    let (seq, run_len, col_len) = (lay.seq, lay.run_len, lay.col_len);
+    let mut marker = None;
+    for (at, item) in seq.iter().enumerate() {
+        match *item {
+            Item::Column => ops.push(Op {
+                code: code::COLUMN,
+                d: 0,
+                a: col_len as u8,
+                b: 0,
+                c: 0,
+            }),
+            Item::Still => {
+                marker = Some(ops.len());
+                ops.push(Op {
+                    code: code::STILL,
+                    d: cached.len() as u8,
+                    a: run_len as u8,
+                    b: 0,
+                    c: 0,
+                });
+            }
+            Item::Value(i) => {
+                let d = LANE | (L_REG0 + regs[at]);
+                loc[i] = d;
+                set[i] = true;
+                ops.push(mk(
+                    &nodes[i],
+                    d,
+                    &loc,
+                    &set,
+                    &mut next_slot,
+                    &mut tabs,
+                    prog,
+                )?);
+            }
+            Item::Colour(k) => {
+                let st = &steps[k];
+                if st.reads().any(|x| !set[x as usize]) {
+                    return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+                }
+                let l = |x: Id| loc[x as usize];
+                let (kind, _) = code::colour_parts(st.code);
+                let cover = st.alpha.map_or(0, l);
+                let rgb = kind == code::OUT_RGB || kind == code::OUT_HSV;
+                // A scaled palette: the flag on its palette, the scale in c.
+                let (pal, scale) = match st.scale {
+                    Some(k) if kind == code::OUT_PAL => {
+                        (st.pal | PAL_SCALED | (st.shift << PAL_SHIFT), l(k))
+                    }
+                    _ => (st.pal, 0),
+                };
+                ops.push(Op {
+                    code: st.code,
+                    d: if rgb { cover } else { pal },
+                    a: l(st.args[0]),
+                    b: if rgb { l(st.args[1]) } else { cover },
+                    c: if rgb { l(st.args[2]) } else { scale },
+                });
             }
         }
-        seq.push(Item::Colour(k));
+        if ops.len() > MAX_OPS {
+            return Err(too_long(ops.len()));
+        }
     }
+    // The marker's skip: the run is every value after it up to the first
+    // that isn't in it (`still_seq` puts them together); its registers.
+    if let Some(m) = marker {
+        debug_assert!(m + run_len < ops.len());
+        ops[m].b = loc[cached[0]];
+        ops[m].c = cached.get(1).map_or(0, |&c| loc[c]);
+    }
+    prog.pixel_end = ops.len() as u16;
+    prog.ops[..ops.len()].copy_from_slice(&ops);
+    prog.n_scalars = next_slot as u8;
+    prog.regs = used as u8;
+    Ok(())
+}
+
+/// What a step reading a value with no place yet says (never seen: a bug in
+/// the layout; `compile_layout` then lays the formula out without its
+/// runs).
+const LAYOUT_BUG: &str = "this formula could not be laid out (a bug in Psi) — please report it";
+
+/// A pixel step to lay out: a value, colour step k, or the still cache's
+/// marker.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Item {
+    Value(usize),
+    Colour(usize),
+    Still,
+    Column,
+}
+
+/// A value's operands that are nodes (a pick's choices included).
+fn reads(dag: &Dag, i: usize) -> impl Iterator<Item = Id> + '_ {
+    let m = &dag.nodes[i];
+    let k = if m.code < K_CONST {
+        code::arity(m.code)
+    } else {
+        0
+    };
+    let picks: &[Id] = if m.code == code::PICK {
+        &dag.picks[m.b as usize]
+    } else {
+        &[]
+    };
+    [m.a, m.b, m.c]
+        .into_iter()
+        .take(k)
+        .chain(picks.iter().copied())
+}
+
+/// Registers for the values of `seq` by linear scan (a register is free
+/// again after its value's last use, and a step never writes a register it
+/// reads): the register of each item (0 for the others) and how many were
+/// used, `None` when more than [`REGS`] are live at once.
+fn registers(
+    nodes: &[Node],
+    steps: &[Step],
+    seq: &[Item],
+    pinned: &[bool],
+) -> Option<(Vec<u8>, usize)> {
+    let n = nodes.len();
     let mut last_use = alloc::vec![0usize; n];
     for (at, item) in seq.iter().enumerate() {
         match *item {
@@ -3536,45 +3792,30 @@ fn emit(
                     last_use[x as usize] = at;
                 }
             }
+            Item::Still | Item::Column => {}
         }
     }
+    // A kept column value is never given up: the rows after the first
+    // read it without working it out again.
+    for (i, l) in last_use.iter_mut().enumerate() {
+        if pinned[i] {
+            *l = usize::MAX;
+        }
+    }
+    let mut regs = alloc::vec![0u8; seq.len()];
     let mut free: Vec<u8> = (0..REGS as u8).rev().collect();
     let mut holder: [Option<usize>; REGS] = [None; REGS];
     let mut used = 0usize;
     for (at, item) in seq.iter().enumerate() {
         let wrote = match *item {
             Item::Value(i) => {
-                let Some(r) = free.pop() else {
-                    return Err(Error::new(
-                        0,
-                        0,
-                        format!(
-                            "this formula keeps too many values at once (more than {REGS}) — simplify it"
-                        ),
-                    ));
-                };
+                let r = free.pop()?;
                 used = used.max(REGS - free.len());
-                let d = LANE | (L_REG0 + r);
-                loc[i] = d;
-                ops.push(mk(&nodes[i], d, &loc, &mut next_slot, &mut tabs, prog)?);
+                regs[at] = r;
                 holder[r as usize] = Some(i);
                 Some(i)
             }
-            Item::Colour(k) => {
-                let st = &steps[k];
-                let l = |x: Id| loc[x as usize];
-                let (kind, _) = code::colour_parts(st.code);
-                let cover = st.alpha.map_or(0, l);
-                let rgb = kind == code::OUT_RGB || kind == code::OUT_HSV;
-                ops.push(Op {
-                    code: st.code,
-                    d: if rgb { cover } else { st.pal },
-                    a: l(st.args[0]),
-                    b: if rgb { l(st.args[1]) } else { cover },
-                    c: if rgb { l(st.args[2]) } else { 0 },
-                });
-                None
-            }
+            _ => None,
         };
         // Free the registers whose values this step read for the last time
         // (after picking the destination, so it is never one of them).
@@ -3586,13 +3827,286 @@ fn emit(
                 }
             }
         }
-        if ops.len() > MAX_OPS {
-            return Err(too_long(ops.len()));
+    }
+    Some((regs, used))
+}
+
+/// A cached value must save at least this much a pixel (ns on the ESP32,
+/// `program::value_ns`): ~1.6 ms a frame for 16 KB of heap.
+const STILL_GAIN_NS: u32 = 400;
+
+/// Still values weighed for the cache, the heaviest by an upper bound
+/// (bounds the compile time: each is a walk of the formula per lane).
+const STILL_CANDIDATES: usize = 24;
+
+/// Whether each node is *still*: worked out from the pixel's position
+/// (`x y px py i`) and constants only, the same every frame.
+fn still_nodes(dag: &Dag) -> Vec<bool> {
+    let nodes = &dag.nodes;
+    let mut still = alloc::vec![false; nodes.len()];
+    for i in 0..nodes.len() {
+        let m = &nodes[i];
+        still[i] = match m.code {
+            K_CONST => true,
+            K_INPUT => {
+                let v = m.val as u8;
+                v == LANE | L_X || v == LANE | L_PX || v == LANE | L_I || v == S_Y || v == S_PY
+            }
+            K_COUNTER => false,
+            c if (code::U_R..=code::INK).contains(&c) => false,
+            _ => reads(dag, i).all(|x| still[x as usize]),
+        };
+    }
+    still
+}
+
+/// The per-pixel values worked out every frame when the values in
+/// `cached` come from the still cache: everything a colour step reads,
+/// through anything but a cached value.
+fn per_frame(dag: &Dag, steps: &[Step], cached: &[usize]) -> Vec<bool> {
+    let n = dag.nodes.len();
+    let mut f = alloc::vec![false; n];
+    for st in steps {
+        for a in st.reads() {
+            f[a as usize] = true;
         }
     }
-    prog.pixel_end = ops.len() as u16;
-    prog.ops[..ops.len()].copy_from_slice(&ops);
-    prog.n_scalars = next_slot as u8;
-    prog.regs = used as u8;
-    Ok(())
+    for i in (0..n).rev() {
+        if !f[i] || cached.contains(&i) || dag.nodes[i].code >= K_CONST {
+            continue;
+        }
+        for x in reads(dag, i) {
+            f[x as usize] = true;
+        }
+    }
+    f
+}
+
+/// The values for the still cache, best first (at most
+/// [`crate::still::STILL_LANES`]): still per-pixel values chosen greedily
+/// by what they save a pixel per frame, each at least [`STILL_GAIN_NS`].
+fn choose_still(
+    dag: &Dag,
+    steps: &[Step],
+    px_op: &dyn Fn(usize) -> bool,
+    col: &[bool],
+) -> Vec<usize> {
+    let nodes = &dag.nodes;
+    let n = nodes.len();
+    let still = still_nodes(dag);
+    // (A value of the column run is worked out once a frame a column
+    // anyway: never cached, and nothing to save.)
+    let px_op = |i: usize| px_op(i) && !col[i];
+    // What each still value's own steps cost at most (shared steps counted
+    // in every reader: an upper bound, to leave out the cheap ones early).
+    let mut sub = alloc::vec![0u32; n];
+    for i in 0..n {
+        if px_op(i) && still[i] {
+            sub[i] = value_ns(nodes[i].code)
+                + reads(dag, i)
+                    .map(|x| sub[x as usize])
+                    .fold(0u32, u32::saturating_add);
+        }
+    }
+    // Any still value may be the one kept (often one inside: `q` read by
+    // `q/64` and `frac(q)`, both still too); the heaviest few are weighed.
+    // (The heaviest by a scan, not a sort: a sort's code is ~3 KB of wasm.)
+    let mut cands: Vec<usize> = Vec::new();
+    for i in (0..n).filter(|&i| px_op(i) && still[i] && sub[i] >= STILL_GAIN_NS) {
+        if cands.len() < STILL_CANDIDATES {
+            cands.push(i);
+        } else if let Some(m) = (0..cands.len()).min_by_key(|&k| sub[cands[k]]) {
+            if sub[cands[m]] < sub[i] {
+                cands[m] = i;
+            }
+        }
+    }
+    if cands.is_empty() {
+        return Vec::new();
+    }
+    let cost = |cached: &[usize]| -> u32 {
+        let f = per_frame(dag, steps, cached);
+        (0..n)
+            .filter(|&i| f[i] && px_op(i) && !cached.contains(&i))
+            .map(|i| value_ns(nodes[i].code))
+            .sum()
+    };
+    let mut cached: Vec<usize> = Vec::new();
+    let mut now = cost(&cached);
+    for _ in 0..crate::still::STILL_LANES {
+        let mut best: Option<(usize, u32)> = None;
+        for &c in &cands {
+            if cached.contains(&c) {
+                continue;
+            }
+            cached.push(c);
+            let ok = still_run(dag, steps, &px_op, &cached).is_some();
+            let v = cost(&cached);
+            cached.pop();
+            if !ok {
+                continue;
+            }
+            if best.is_none_or(|(_, b)| v < b) {
+                best = Some((c, v));
+            }
+        }
+        match best {
+            Some((c, v)) if now.saturating_sub(v) >= STILL_GAIN_NS => {
+                cached.push(c);
+                now = v;
+            }
+            _ => break,
+        }
+    }
+    cached
+}
+
+/// The still cache's run for `cached` (the cached values and the steps only
+/// they need) and the per-frame values the run reads (laid out before its
+/// marker), or `None` when those can't go before it: one of them reads a
+/// cached value (`ab = abs(ang)` read by the frame and by a cached
+/// `sqrt(ab*2)`, with `ang` cached too) — skipping the run would leave it
+/// reading a register nothing wrote.
+fn still_run(
+    dag: &Dag,
+    steps: &[Step],
+    px: &dyn Fn(usize) -> bool,
+    cached: &[usize],
+) -> Option<(Vec<bool>, Vec<bool>)> {
+    let n = dag.nodes.len();
+    let f = per_frame(dag, steps, cached);
+    let mut run = alloc::vec![false; n];
+    let mut first = alloc::vec![false; n];
+    for &c in cached {
+        run[c] = true;
+    }
+    for i in (0..n).rev() {
+        if run[i] {
+            for x in reads(dag, i) {
+                if px(x as usize) && !f[x as usize] {
+                    run[x as usize] = true;
+                }
+            }
+        }
+    }
+    for i in (0..n).rev() {
+        if run[i] || first[i] {
+            for x in reads(dag, i) {
+                let x = x as usize;
+                if px(x) && !run[x] {
+                    first[x] = true;
+                }
+            }
+        }
+    }
+    // A value before the marker reads only values before it (or rows,
+    // columns, constants): never one in the run.
+    let ok = (0..n).all(|i| !first[i] || reads(dag, i).all(|x| !run[x as usize]));
+    ok.then_some((run, first))
+}
+
+/// A laid-out pixel section: the order, the cached run's and the column
+/// run's lengths, and the values kept in their registers for the frame.
+struct PixelSeq {
+    seq: Vec<Item>,
+    run_len: usize,
+    col_len: usize,
+    pinned: Vec<bool>,
+}
+
+/// The pixel order: the column run (with `col`: its marker and every
+/// value of `x`, `px` and per-frame values, in node order), then with the
+/// still cache the per-frame values the cached run reads, the marker and
+/// the run (the cached values and the steps only they need), then the other
+/// values before the colour step that first needs them, as without either.
+fn pixel_seq(
+    dag: &Dag,
+    steps: &[Step],
+    px_op: &dyn Fn(usize) -> bool,
+    need: &[usize],
+    cached: &[usize],
+    in_col: &[bool],
+    col: bool,
+) -> PixelSeq {
+    let n = dag.nodes.len();
+    let mut seq: Vec<Item> = Vec::new();
+    let mut pinned = alloc::vec![false; n];
+    let mut col_len = 0;
+    if col {
+        seq.push(Item::Column);
+        seq.extend((0..n).filter(|&i| in_col[i]).map(Item::Value));
+        col_len = seq.len() - 1;
+        // Kept: the column values something after the run reads.
+        for i in 0..n {
+            if px_op(i) && !in_col[i] {
+                for x in reads(dag, i) {
+                    pinned[x as usize] |= in_col[x as usize];
+                }
+            }
+        }
+        for st in steps {
+            for x in st.reads() {
+                pinned[x as usize] |= in_col[x as usize];
+            }
+        }
+    }
+    let px = |i: usize| px_op(i) && !(col && in_col[i]);
+    let mut run = alloc::vec![false; n];
+    let mut first = alloc::vec![false; n];
+    let mut run_len = 0;
+    if !cached.is_empty() {
+        // (`choose_still` took only sets this lays out: see `still_run`.)
+        if let Some((r, f)) = still_run(dag, steps, &px, cached) {
+            (run, first) = (r, f);
+            seq.extend((0..n).filter(|&i| first[i]).map(Item::Value));
+            seq.push(Item::Still);
+            let before = seq.len();
+            seq.extend((0..n).filter(|&i| run[i]).map(Item::Value));
+            run_len = seq.len() - before;
+        }
+    }
+    for k in 0..steps.len() {
+        for i in 0..n {
+            if px(i) && need[i] == k && !run[i] && !first[i] {
+                seq.push(Item::Value(i));
+            }
+        }
+        seq.push(Item::Colour(k));
+    }
+    PixelSeq {
+        seq,
+        run_len,
+        col_len,
+        pinned,
+    }
+}
+
+/// The column run is laid out only when its values cost at least this a
+/// pixel (ns: its marker is a step of the 256, and its kept values hold
+/// registers for the whole row).
+const COLUMN_GAIN_NS: u32 = 130;
+
+/// Whether each node is the same down a column: worked out from `x`, `px`,
+/// constants and per-frame values only.
+fn column_nodes(dag: &Dag) -> Vec<bool> {
+    let nodes = &dag.nodes;
+    let mut col = alloc::vec![false; nodes.len()];
+    for i in 0..nodes.len() {
+        let m = &nodes[i];
+        col[i] = match m.level {
+            LV_CONST | LV_FRAME => true,
+            LV_PIXEL => match m.code {
+                K_INPUT => {
+                    let v = m.val as u8;
+                    v == LANE | L_X || v == LANE | L_PX
+                }
+                K_CONST => true,
+                K_COUNTER => false,
+                c if (code::U_R..=code::INK).contains(&c) => false,
+                _ => reads(dag, i).all(|x| col[x as usize]),
+            },
+            _ => false,
+        };
+    }
+    col
 }

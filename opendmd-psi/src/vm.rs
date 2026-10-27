@@ -19,6 +19,7 @@
 use crate::draw::Ink;
 use crate::fixed::{self, ONE};
 use crate::program::*;
+use crate::still::Still;
 use crate::tables::Tables;
 
 /// What a frame depends on besides the program.
@@ -249,6 +250,66 @@ fn out3<A: Src, B: Src, C: Src>(
     }
 }
 
+/// `noise(x, y, z)` at a whole `z` along the lane ([`fixed::noise_flat`]),
+/// `x` and `y` read with a stride (0: a value for the lane): one loop for
+/// every kind of operand.
+#[inline(never)]
+fn noise_flat_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 2], z: i32) {
+    let mut one = [0i32; 2];
+    let mut ptr = [core::ptr::null::<i32>(); 2];
+    let mut stride = [0usize; 2];
+    for k in 0..2 {
+        match args[k] {
+            Arg::Lane(q) => (ptr[k], stride[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..2 {
+        if stride[k] == 0 {
+            ptr[k] = &one[k];
+        }
+    }
+    for o in d.iter_mut() {
+        // SAFETY: as `pal_lit_lane`'s.
+        let (x, y) = unsafe { (*ptr[0], *ptr[1]) };
+        *o = fixed::noise_flat(x, y, z);
+        for j in 0..2 {
+            ptr[j] = ptr[j].wrapping_add(stride[j]);
+        }
+    }
+}
+
+/// `pal(P, k) * s` along the lane, its two operands read with a stride (0:
+/// a value for the lane): one loop for the four kinds of operand.
+#[inline(never)]
+fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32], shift: u8) {
+    let mut one = [0i32; 2];
+    let mut ptr = [core::ptr::null::<i32>(); 2];
+    let mut stride = [0usize; 2];
+    for k in 0..2 {
+        match args[k] {
+            Arg::Lane(q) => (ptr[k], stride[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..2 {
+        if stride[k] == 0 {
+            ptr[k] = &one[k];
+        }
+    }
+    for o in px.iter_mut() {
+        // SAFETY: each pointer is a lane of at least `px.len()` values read
+        // once per element (stride 1), or one value (stride 0), alive for
+        // the call.
+        let (k, s) = unsafe { (*ptr[0], *ptr[1]) };
+        // (`>> shift` is exactly `fixed::mul(s, 2^-shift)`.)
+        *o = fixed::pal_lit(p, k, s >> shift);
+        for j in 0..2 {
+            ptr[j] = ptr[j].wrapping_add(stride[j]);
+        }
+    }
+}
+
 #[inline(never)]
 fn out1<A: Src>(px: &mut [[u8; 3]], mut a: A, f: impl Fn(i32) -> [u8; 3]) {
     for o in px.iter_mut() {
@@ -360,6 +421,36 @@ pub fn render_rows_ink<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
+    render_rows_still::<N>(prog, scratch, ink, None, inputs, tables, under, rows, out)
+}
+
+/// What the still cache does this frame.
+enum Cache<'a> {
+    Off,
+    /// Skip the cached run (at the marker `at`), copy the kept lanes in.
+    Use(&'a Still),
+    /// Run everything and keep the cached values after the run.
+    Keep(&'a mut Still, usize),
+}
+
+/// [`render_rows_ink`] with the still cache ([`Still`]): a program with
+/// cached values ([`Program::still_lanes`]) given a `still` that holds
+/// lanes for them keeps them on a full call (`rows == u32::MAX`) and, once
+/// kept, skips the steps that work them out on every call after. The bytes
+/// are the same with or without it, kept or not; `None`, too few lanes, or
+/// a program without cached values: every step runs.
+#[allow(clippy::too_many_arguments)]
+pub fn render_rows_still<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    ink: Option<&mut Ink>,
+    still: Option<&mut Still>,
+    inputs: &Inputs,
+    tables: &Tables,
+    under: Option<&[u8]>,
+    rows: u32,
+    out: &mut [u8],
+) {
     assert_eq!(out.len(), W * H * 3);
     if let Some(u) = under {
         assert_eq!(u.len(), W * H * 3);
@@ -392,8 +483,24 @@ pub fn render_rows_ink<const N: usize>(
         }
         _ => None,
     };
+    let mut cache = match (still, prog.still_marker()) {
+        (Some(st), Some(at)) if st.lanes_for(prog) => {
+            if st.holds(prog) {
+                Cache::Use(st)
+            } else if rows == u32::MAX {
+                st.kept = 0;
+                Cache::Keep(st, at)
+            } else {
+                Cache::Off
+            }
+        }
+        _ => Cache::Off,
+    };
     let uses_i = prog.uses & USES_I != 0;
     let backdrop = prog.uses & BACKDROP != 0;
+    // The column run: on the first row drawn, then its values are kept in
+    // their registers (one lane is the whole row only at N = W).
+    let mut columns_kept = false;
     for row in 0..H {
         if rows & (1 << row) == 0 {
             continue;
@@ -424,13 +531,73 @@ pub fn render_rows_ink<const N: usize>(
                     None => px.fill([0; 3]),
                 }
             }
-            for op in &prog.ops[re..pe] {
+            let mut k = re;
+            let mut keep_at = usize::MAX;
+            while k < pe {
+                let op = &prog.ops[k];
+                if k == keep_at {
+                    if let Cache::Keep(st, at) = &mut cache {
+                        let m = &prog.ops[*at];
+                        keep(scratch, st, [m.b, m.c], m.d, row * W + base);
+                    }
+                }
+                if op.code == code::COLUMN {
+                    k += 1 + if columns_kept { op.a as usize } else { 0 };
+                    continue;
+                }
+                if op.code == code::STILL {
+                    match &cache {
+                        Cache::Use(st) => {
+                            fetch(scratch, st, [op.b, op.c], op.d, row * W + base);
+                            k += 1 + op.a as usize;
+                        }
+                        Cache::Keep(..) => {
+                            keep_at = k + 1 + op.a as usize;
+                            k += 1;
+                        }
+                        Cache::Off => k += 1,
+                    }
+                    continue;
+                }
                 if code::is_colour(op.code) {
                     colour_step(scratch, op, base, tables, px);
                 } else {
                     lane_op(scratch, op, base, tables, &prog.tables, ul, il);
                 }
+                k += 1;
             }
+        }
+        columns_kept = N == W;
+    }
+    if let Cache::Keep(st, _) = cache {
+        st.kept = crate::still::fingerprint(prog);
+    }
+}
+
+/// The lane register a register operand names (as `lane_op`'s
+/// destination).
+#[inline(always)]
+fn reg_index(v: u8) -> usize {
+    ((v & !LANE).saturating_sub(L_I) as usize).clamp(1, REGS)
+}
+
+/// Copy the cached registers' lanes (`n` of `regs`) into the kept lanes at
+/// pixel `at`.
+#[inline(never)]
+fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at: usize) {
+    for (j, &r) in regs.iter().enumerate().take(n as usize) {
+        if let Some(l) = st.lanes[j].as_deref_mut() {
+            l.0[at..at + N].copy_from_slice(&s.lanes[reg_index(r)]);
+        }
+    }
+}
+
+/// Copy the kept lanes at pixel `at` into the cached registers.
+#[inline(never)]
+fn fetch<const N: usize>(s: &mut Scratch<N>, st: &Still, regs: [u8; 2], n: u8, at: usize) {
+    for (j, &r) in regs.iter().enumerate().take(n as usize) {
+        if let Some(l) = st.lanes[j].as_deref() {
+            s.lanes[reg_index(r)].copy_from_slice(&l.0[at..at + N]);
         }
     }
 }
@@ -476,7 +643,7 @@ fn lane_op<const N: usize>(
     // The destination is a register the compiler never also reads in the
     // same step (`compile` allocates it that way), so the `&mut` lane does
     // not alias the source pointers.
-    let di = ((op.d & !LANE).saturating_sub(L_I) as usize).clamp(1, REGS);
+    let di = reg_index(op.d);
     debug_assert!(op.d & LANE != 0 && op.d & !LANE >= L_REG0);
     let d: &mut [i32; N] = &mut s.lanes[di];
     match op.code {
@@ -532,7 +699,12 @@ fn lane_op<const N: usize>(
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
         MIX => tern!(fast3, d, a, b, c, fixed::mix),
         SMOOTH => tern!(run3, d, a, b, c, fixed::smooth),
-        NOISE => tern!(run3, d, a, b, c, fixed::noise),
+        // A whole `z` (`noise(x, y, 0)`): the plane's four corners only —
+        // the other four are weighed 0 there, so the bytes are the same.
+        NOISE => match c {
+            Arg::Sc(z) if z & 0xffff == 0 => noise_flat_lane(d, [a, b], z),
+            _ => tern!(run3, d, a, b, c, fixed::noise),
+        },
         // One loop for the four, its operands read with a stride (0: a
         // value for the whole lane): the lookup dwarfs the loop, and seven
         // monomorphised copies would be ~1 KB more of wasm.
@@ -691,6 +863,12 @@ fn colour<const N: usize>(s: &Scratch<N>, op: &Op, base: usize, t: &Tables, px: 
             fixed::chan(b)
         ]),
         OUT_HSV => outt!(px, a, b, c, fixed::hsv),
+        OUT_PAL if op.d & PAL_SCALED != 0 => pal_lit_lane(
+            px,
+            [a, c],
+            t.palettes[((op.d & PAL_MASK) as usize).min(4)],
+            (op.d & !PAL_SCALED) >> PAL_SHIFT,
+        ),
         OUT_PAL => {
             let p = t.palettes[(op.d as usize).min(4)];
             match a {

@@ -393,6 +393,24 @@ pub fn noise(x: i32, y: i32, z: i32) -> i32 {
     lerp15(lerp15(a, b, fy), lerp15(c, d, fy), fz)
 }
 
+/// [`noise`] at a whole `z` (its fraction 0): the same value from the
+/// four corners of that plane (the other four are weighed by
+/// `fade15(0)` = 0, and `lerp15(a, b, 0)` is `a`).
+#[inline(always)]
+pub fn noise_flat(x: i32, y: i32, z: i32) -> i32 {
+    debug_assert!(z & 0xffff == 0);
+    let (x0, y0, z0) = (
+        ((x >> 16) as u32).wrapping_mul(P1),
+        ((y >> 16) as u32).wrapping_mul(P2),
+        ((z >> 16) as u32).wrapping_mul(P3),
+    );
+    let (x1, y1) = (x0.wrapping_add(P1), y0.wrapping_add(P2));
+    let (fx, fy) = (fade15(x & 0xffff), fade15(y & 0xffff));
+    let a = lerp15(corner(x0, y0, z0), corner(x1, y0, z0), fx);
+    let b = lerp15(corner(x0, y1, z0), corner(x1, y1, z0), fx);
+    lerp15(a, b, fy)
+}
+
 #[inline(always)]
 pub fn select(c: i32, a: i32, b: i32) -> i32 {
     if c != 0 {
@@ -490,6 +508,36 @@ pub fn hsv(h: i32, s: i32, v: i32) -> [u8; 3] {
 pub fn pal(p: &[[u8; 3]; 32], k: i32) -> [u8; 3] {
     let i = (clamp(k, 0, ONE) >> 11).min(31) as usize;
     p[i]
+}
+
+/// `pal(p, k) * s`: the palette's colour with each channel times `s`, as
+/// `rgb(r·s, g·s, b·s)` of its channels read as 0..1 would be.
+#[inline(always)]
+pub fn pal_lit(p: &[[u8; 3]; 32], k: i32, s: i32) -> [u8; 3] {
+    let c = pal(p, k);
+    // Exactly `chan(mul(byte(b), s))` for each channel b, without the
+    // 64-bit multiply where it isn't needed (the ESP32 has no 64-bit one):
+    // s ≤ 0 is 0 (the product is never positive); s = 1 is the byte again
+    // (`chan` round-trips `byte`); 0 < s < 1 fits a u32 (byte ≤ 65,536,
+    // s < 65,536), and the product is under 1, so `chan`'s clamp is idle.
+    if s <= 0 {
+        return [0; 3];
+    }
+    if s == ONE {
+        return c;
+    }
+    if s < ONE {
+        let f = |b: u8| {
+            let v = (byte(b) as u32 * s as u32) >> 16;
+            ((v * 255 + 0x8000) >> 16) as u8
+        };
+        return [f(c[0]), f(c[1]), f(c[2])];
+    }
+    [
+        chan(mul(byte(c[0]), s)),
+        chan(mul(byte(c[1]), s)),
+        chan(mul(byte(c[2]), s)),
+    ]
 }
 
 // --- Layers: what is under, and blending ------------------------------------

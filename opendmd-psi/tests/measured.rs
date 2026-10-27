@@ -59,13 +59,41 @@ pub const LOOKS: &[(&str, &str, &str, u8, u32)] = &[
 // The draw stage (psi-probe 2026-10-27, 1.0.0-beta.11-drawprobe-a): VM p50
 // µs a frame, as STEPS.
 pub const DRAW: &[(&str, &str, u32)] = &[
-    ("draw base (1 dot off)", "draw { dot(-1, -1, t) }\ngray(ink)", 931),
-    ("draw loop step: 1024 dots off", "draw { for k < 1024 { dot(-1, -1, t) } }\ngray(ink)", 1694),
-    ("draw loop step: +add", "draw { for k < 1024 { dot(-1, -1, k + t) } }\ngray(ink)", 2124),
-    ("draw loop step: +hash", "draw { for k < 1024 { dot(-1, -1, hash(k, t)) } }\ngray(ink)", 2235),
-    ("draw dot on panel x1024", "draw { for k < 1024 { dot(k % 128, 5 + t) } }\ngray(ink)", 2295),
-    ("draw line 12 x256", "draw { for k < 256 { line(10, 5, 21, 5 + t) } }\ngray(ink)", 2257),
-    ("draw line 100 x64", "draw { for k < 64 { line(10, 5, 109, 5 + t) } }\ngray(ink)", 3041),
+    (
+        "draw base (1 dot off)",
+        "draw { dot(-1, -1, t) }\ngray(ink)",
+        931,
+    ),
+    (
+        "draw loop step: 1024 dots off",
+        "draw { for k < 1024 { dot(-1, -1, t) } }\ngray(ink)",
+        1694,
+    ),
+    (
+        "draw loop step: +add",
+        "draw { for k < 1024 { dot(-1, -1, k + t) } }\ngray(ink)",
+        2124,
+    ),
+    (
+        "draw loop step: +hash",
+        "draw { for k < 1024 { dot(-1, -1, hash(k, t)) } }\ngray(ink)",
+        2235,
+    ),
+    (
+        "draw dot on panel x1024",
+        "draw { for k < 1024 { dot(k % 128, 5 + t) } }\ngray(ink)",
+        2295,
+    ),
+    (
+        "draw line 12 x256",
+        "draw { for k < 256 { line(10, 5, 21, 5 + t) } }\ngray(ink)",
+        2257,
+    ),
+    (
+        "draw line 100 x64",
+        "draw { for k < 64 { line(10, 5, 109, 5 + t) } }\ngray(ink)",
+        3041,
+    ),
 ];
 // Formulas that draw played as effects (the real path, `Fx::frame`, slider
 // a = 0.5): p50 µs a frame, compared with the estimate as it is (it includes

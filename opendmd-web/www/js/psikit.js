@@ -2,7 +2,7 @@
 // (js/formulas.js) and the site's share page (/f/, which imports this file
 // from the demo): the share link's encoder and decoder, the sliders' names,
 // what a formula is in a sentence, the code's highlighting and the sample
-// picture. No imports and no DOM: plain functions.
+// picture. No imports; the DOM only in `picker`.
 
 export const MAX_SRC = 4096, MAX_NAME = 60;
 
@@ -24,12 +24,42 @@ export function parse(s) {
   return { f, cut: f.src !== src, has: q.has('formula') };
 }
 
-// A formula's own slider names: `-- a: speed`.
-export const sliderName = (src, k) => (src.match(new RegExp(`^\\s*(?:--|//)\\s*${k}\\s*[:=]\\s*(.+)$`, 'm')) || [])[1]?.trim() || k;
+// A formula's own slider names: `-- a: speed`; a picker's choices after an `=`:
+// `-- a: shape = cube, ball` (up to 6 words, else it is a slider).
+const said = (src, k) => (src.match(new RegExp(`^\\s*(?:--|//)\\s*${k}\\s*[:=]\\s*(.+)$`, 'm')) || [])[1] || '';
+export const sliderName = (src, k) => said(src, k).split('=')[0].trim() || k;
+export function choices(src, k) {
+  const c = said(src, k).split('=')[1]?.split(',').map((w) => w.trim()).filter(Boolean);
+  return c?.length && c.length < 7 ? c : null;
+}
+// A picker: a button for each choice (a radio group: arrows, Home, End). Choice
+// j of n sets the slider to j/(n−1) (one alone: 0); the one shown is round(v·(n−1)).
+export function picker(names, label, v, set) {
+  const n = names.length - 1, g = document.createElement('div');
+  g.className = 'psi-pick';
+  g.role = 'radiogroup';
+  g.ariaLabel = label;
+  const bs = names.map((t, j) => Object.assign(document.createElement('button'), { type: 'button', role: 'radio', textContent: t, onclick: () => to(j) }));
+  const mark = (k) => bs.forEach((b, j) => { b.ariaChecked = j == k; b.tabIndex = j == k ? 0 : -1; });
+  const to = (j) => { mark(j); bs[j].focus(); set(n && j / n); };
+  g.onkeydown = (e) => {
+    const k = bs.indexOf(document.activeElement), d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    const j = d ? k + d : e.key == 'Home' ? 0 : e.key == 'End' ? n : -1;
+    if (j >= 0 && j <= n && k >= 0) { e.preventDefault(); to(j); }
+  };
+  // A value between choices (a link, an older slider) snaps to the one shown.
+  const k0 = Math.round(Math.min(1, Math.max(0, v || 0)) * n);
+  mark(k0);
+  if ((v || 0) !== (n && k0 / n)) set(n && k0 / n);
+  g.append(...bs);
+  return g;
+}
 // What it is, from info(): its loop, the clock, its cost on the panel.
 const cost = (us) => (us <= 5000 ? 'light' : us <= 8000 ? 'medium' : 'heavy');
-export const about = (i) => i.length ? [i[5] & 8 && `Loops every ${i[4] / 1000} s`, i[5] & 8 && !(i[5] & 32) && i[10] && i[10] != 20 && `${1000 / i[10]} frames a second`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${cost(i[6])} for the panel`].filter(Boolean).join(' · ') : '';
-export const TIP = (i) => `${i[0]} steps, about ${(i[6] / 1000).toFixed(1)} ms a frame on the panel (light: under 5 ms; medium: under 8)`;
+// Its µs a frame on the panel: with its still cache (i[11]) unless it draws over a GIF (a look has none).
+export const est = (i) => (i[5] & 32 || i[11] == null ? i[6] : i[11]);
+export const about = (i) => i.length ? [i[5] & 8 && `Loops every ${i[4] / 1000} s`, i[5] & 8 && !(i[5] & 32) && i[10] && i[10] != 20 && `${1000 / i[10]} frames a second`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${cost(est(i))} for the panel`].filter(Boolean).join(' · ') : '';
+export const TIP = (i) => `${i[0]} steps, about ${(est(i) / 1000).toFixed(1)} ms a frame on the panel (light: under 5 ms; medium: under 8)`;
 
 // The code as highlighted HTML (numbers `.n` — a unary minus included —,
 // comments `.c`, colours `.k` with `--k` their colour, for a swatch, the
@@ -83,3 +113,4 @@ export function sample() {
   }
   return SAMPLE;
 }
+
