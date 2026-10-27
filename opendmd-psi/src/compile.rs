@@ -3256,6 +3256,24 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Erro
     let mut steps = Vec::with_capacity(layers.len());
     for (k, c) in layers.iter().enumerate() {
         let plain = k == 0 && !backdrop;
+        // A scale that is a value over 2, 4, … 2^15 (`floor(q)/8`, a
+        // multiply by 1/8): the value, and the division as a shift in the
+        // colour step (one step fewer a pixel; the same bytes).
+        let (mut scale, mut shift) = (c.scale, 0u8);
+        if let Some(sid) = c.scale {
+            let m = p.dag.nodes[sid as usize];
+            if m.code == code::MUL && m.level == LV_PIXEL {
+                for (x, kk) in [(m.a, m.b), (m.b, m.a)] {
+                    if let Some(v) = p.dag.konst(kk) {
+                        if v > 0 && v < ONE && (v as u32).is_power_of_two() {
+                            scale = Some(x);
+                            shift = (ONE as u32 / v as u32).trailing_zeros() as u8;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         let alpha = match (plain, c.alpha) {
             (true, _) => None,
             (false, Some(a)) => Some(a),
@@ -3270,7 +3288,8 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Erro
             args: c.args,
             pal: c.pal,
             alpha,
-            scale: c.scale,
+            scale,
+            shift,
         });
     }
     // A limit hit while laying out the steps is the formula's as a whole:
@@ -3293,8 +3312,10 @@ struct Step {
     args: [Id; 3],
     pal: u8,
     alpha: Option<Id>,
-    /// `pal(P, v) * k`'s k.
+    /// `pal(P, v) * k`'s k, and a shift its value is divided by (`k = x/8`:
+    /// x, 3).
     scale: Option<Id>,
+    shift: u8,
 }
 
 impl Step {
@@ -3680,7 +3701,9 @@ fn emit(
                 let rgb = kind == code::OUT_RGB || kind == code::OUT_HSV;
                 // A scaled palette: the flag on its palette, the scale in c.
                 let (pal, scale) = match st.scale {
-                    Some(k) if kind == code::OUT_PAL => (st.pal | PAL_SCALED, l(k)),
+                    Some(k) if kind == code::OUT_PAL => {
+                        (st.pal | PAL_SCALED | (st.shift << PAL_SHIFT), l(k))
+                    }
                     _ => (st.pal, 0),
                 };
                 ops.push(Op {
