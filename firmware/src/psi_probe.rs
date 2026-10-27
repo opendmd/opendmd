@@ -305,10 +305,9 @@ fn effects(list: &[(&str, &str, &str)], again: &str, canvas: &mut Canvas) {
 /// A probe row's compile on the formula stack, as the player compiles
 /// (`psi_stack`): the probe's own rows never deepen the main task's stack.
 fn compile(src: &str, prog: &mut psi::Program, runs: bool, narrow: bool) -> Result<psi::Info, psi::Error> {
-    let r = crate::psi_stack::run(|| psi::compile_with(src, prog, runs, narrow)).unwrap_or_else(|| {
+    crate::psi_stack::run(|| psi::compile_with(src, prog, runs, narrow)).unwrap_or_else(|| {
         Err(psi::Error { start: 0, end: 0, msg: String::from("no formula stack") })
-    });
-    r
+    })
 }
 
 /// Whether the heap is too low to go on with `section` (under 40 KB):
@@ -326,7 +325,7 @@ fn heap_low(section: &str) -> bool {
 
 /// The heap every `n` steps of a section: its slope.
 fn heap_every(section: &str, k: u32, n: u32) {
-    if k % n == 0 {
+    if k.is_multiple_of(n) {
         say!(info, "psi-probe: {section} {k}: heap {} B free, largest block {} B", heap(), crate::state::largest_free_block());
     }
 }
@@ -656,13 +655,11 @@ pub fn run(root: &str) {
     s.reset();
     let mut prog = zeroed::<psi::Program>();
     let (mut ok, mut bad) = (0, 0);
-    let mut gk = 0u32;
-    for &(name, src, ms, want) in psi::golden::FRAMES {
+    for (gk, &(name, src, ms, want)) in psi::golden::FRAMES.iter().enumerate() {
         if heap_low("golden frames") {
             break;
         }
-        heap_every("golden frames", gk, 10);
-        gk += 1;
+        heap_every("golden frames", gk as u32, 10);
         if compile(src, &mut prog, true, true).is_err() {
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile");
