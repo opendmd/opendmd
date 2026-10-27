@@ -194,8 +194,10 @@ fn the_reference_names_every_built_in() {
 /// row's nanoseconds, a pixel, are what one more such step adds to it.
 #[test]
 fn the_cost_table_is_the_estimates() {
+    // (Per step, as the table is: without the column run and the still
+    // cache, which the reference describes after it.)
     let us = |src: &str| {
-        compile(src)
+        opendmd_psi::compile_plain(src)
             .unwrap_or_else(|e| panic!("{src}: {}", e.msg))
             .esp32_us() as i64
     };

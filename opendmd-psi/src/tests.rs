@@ -233,8 +233,10 @@ fn levels_run_as_rarely_as_they_can() {
     let plasma = compile(sketches::PLASMA).unwrap();
     // (its `len(x-0.5, y-0.5)*6` is worked out once: the still cache's
     // marker is one step more)
-    assert_eq!(plasma.counts(), (2, 5, 14));
+    // and its `sin(x*3 + t/8)` once a column: a column run, one more)
+    assert_eq!(plasma.counts(), (2, 5, 15));
     assert_eq!(plasma.still_lanes(), 1);
+    assert_eq!(plasma.column_run().len(), 4, "{}", plasma.listing());
     let ring = compile(sketches::RING_CLOCK).unwrap();
     assert_eq!(ring.counts().0, 8);
 }
@@ -308,7 +310,8 @@ fn fps_line() {
 #[test]
 fn registers_are_reused() {
     let p = compile(sketches::RING_CLOCK).unwrap();
-    assert!(p.regs() <= 4, "{}", p.listing());
+    // (One of them holds `cx`, kept down the columns.)
+    assert!(p.regs() <= 5, "{}", p.listing());
     // A step never writes a register it reads.
     for op in &p.ops[p.row_end as usize..p.pixel_end as usize] {
         let ar = code::arity(op.code);
@@ -1322,10 +1325,11 @@ fn pick_is_the_chain_it_replaces() {
     let px = |s: &str| compile(s).unwrap().counts().2;
     assert_eq!(px(cases[0].0) + 9, px(cases[0].1));
     assert_eq!(px(cases[5].0) + 9, px(cases[5].1));
-    // In a colour expression (read three times) a pick is one step.
+    // In a colour expression (read three times) a pick is one step (and
+    // all of it once a column: the column run's marker is one more).
     assert_eq!(
         px("#f80 * pick(px/32, 0.5, 1)"),
-        4,
+        5,
         "{}",
         compile("#f80 * pick(px/32, 0.5, 1)").unwrap().listing()
     );
