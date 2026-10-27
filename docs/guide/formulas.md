@@ -206,6 +206,14 @@ everything that moves should come back to where it started: use `t/N`,
 are worked out once a frame rather than for every pixel; they can't use
 the pixel's position.
 
+**Frames a second.** A formula plays at 50 frames a second. `fps 100` on a
+line of its own (like `loop`) asks for 100, for things that move fast —
+the Starfield and Wireframe cube examples use it — and `fps 25` for 25.
+100 only happens for a formula light enough (about 5 ms a frame on the
+panel); a heavier one plays at 50. A link to the panel that says `fps=`
+wins over the line. Drawn over a GIF, a formula follows the GIF's frames
+and its `fps` line is not used.
+
 **Layers.** A formula can be a stack of layers, bottom to top, each with
 its own names and its own colour on its last line:
 
@@ -223,8 +231,8 @@ The word after `layer` says how it goes onto what is below it: `over`
 leaves it as it was), `screen` (lighter, softly), `max` or `min`. Names
 set outside the layers can be used in all of them; names set inside a
 layer are its own, so two layers can each have a `v`, and you can paste a
-whole formula into a `layer { … }` to combine it with another. `loop` goes
-on its own line outside the layers.
+whole formula into a `layer { … }` to combine it with another. `loop` and
+`fps` go on their own lines outside the layers.
 
 **How much it covers.** Every colour takes one more value, if you like:
 how much of the pixel it covers, from 0 to 1 — `rgb(r, g, b, k)`,
@@ -384,7 +392,8 @@ the formula for a while.
 ## Keeping them fast
 
 Formulas are made to run on the panel's own small processor too, which
-draws every pixel 50 times a second. The editor rates each one **light**,
+draws every pixel 50 times a second (100 with `fps 100`, for a formula
+that is light: about 5 ms a frame or less). The editor rates each one **light**,
 **medium** or **heavy** for the panel (hover for an estimate in
 milliseconds); all the examples are light or medium.
 
@@ -450,7 +459,8 @@ The details are in the gallery's
 ## Saving as a GIF
 
 **Save as GIF…** draws one loop of the formula, at 50 frames a second (25
-for loops longer than about 5 seconds, and at most 240 frames), and opens
+for loops longer than about 5 seconds or with `fps 25`, and at most 240
+frames; GIFs can't play 100 a second, so `fps 100` saves at 50), and opens
 it in [Create Art](create-art.md), titled with its name. Add text, trim it
 or change its speed there, then save it to your card: it plays on the panel
 like any other GIF and goes in playlists. A formula with a long loop, or one that follows the

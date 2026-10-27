@@ -179,7 +179,8 @@ pub fn error_at() -> Vec<u32> {
 /// ms, inputs (bits 0-2 the sliders a b c, 3 t, 4 the clock, 5 the picture
 /// under it: drawn over a GIF it changes the GIF), estimated µs a frame on
 /// the panel, layers, steps in `draw { }` (0: it draws nothing), lines and
-/// dots it draws a frame]`; empty before anything compiled.
+/// dots it draws a frame, the frame time its `fps N` asks for in ms (10, 20
+/// or 40; 0: none, so 20)]`; empty before anything compiled.
 #[wasm_bindgen]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -199,6 +200,7 @@ pub fn info() -> Vec<u32> {
         p.layers() as u32,
         p.draw_steps() as u32,
         p.primitives(),
+        p.frame_ms().unwrap_or(0),
     ]
 }
 

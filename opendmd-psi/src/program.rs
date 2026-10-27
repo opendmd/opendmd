@@ -284,7 +284,9 @@ pub struct Program {
     pub(crate) n_scalars: u8,
     pub(crate) regs: u8,
     pub(crate) uses: u8,
-    pub(crate) _pad: u8,
+    /// The frame time `fps N` asks for, ms (10, 20 or 40); 0: none (the
+    /// player's, 20 ms unless the path says).
+    pub(crate) frame_ms: u8,
     /// The loop, ms (`loop N`, default 8 s).
     pub(crate) loop_ms: u32,
     /// The `table` constants (Q16.16), each table's entries in a row.
@@ -299,10 +301,11 @@ impl core::fmt::Debug for Program {
         let dr = self.draw_steps();
         write!(
             f,
-            "Program {{ steps: {} ({fr}/{dr}/{row}/{px}), regs: {}, loop_ms: {} }}",
+            "Program {{ steps: {} ({fr}/{dr}/{row}/{px}), regs: {}, loop_ms: {}, frame_ms: {} }}",
             self.len(),
             self.regs,
-            self.loop_ms
+            self.loop_ms,
+            self.frame_ms
         )
     }
 }
@@ -319,7 +322,7 @@ impl Default for Program {
             n_scalars: S_FIRST_FREE,
             regs: 0,
             uses: 0,
-            _pad: 0,
+            frame_ms: 0,
             loop_ms: 8000,
             tables: [0; MAX_TABLE],
         }
@@ -433,6 +436,13 @@ impl Program {
     /// The loop's length in ms.
     pub fn loop_ms(&self) -> u32 {
         self.loop_ms
+    }
+
+    /// The frame time its `fps N` line asks for, ms: 10 (`fps 100`), 20
+    /// or 40 (`fps 25`); `None` without one. A path's `&fps=` wins over
+    /// it; a look (a formula over the GIF) follows its path only.
+    pub fn frame_ms(&self) -> Option<u32> {
+        (self.frame_ms != 0).then_some(u32::from(self.frame_ms))
     }
 
     /// Which inputs the steps read: bits 0-2 the sliders `a`, `b`, `c`
@@ -610,6 +620,7 @@ impl Program {
         self.n_scalars = S_FIRST_FREE;
         self.regs = 0;
         self.uses = 0;
+        self.frame_ms = 0;
         self.loop_ms = 8000;
         self.tables.fill(0);
     }

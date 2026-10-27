@@ -1160,6 +1160,8 @@ struct Body {
     layered: bool,
     blocks: usize,
     loop_v: Option<i32>,
+    /// `fps N`: the frame time it asks for, ms (10, 20 or 40).
+    fps: Option<u8>,
 }
 
 const BP_TERNARY: u8 = 1;
@@ -2092,6 +2094,42 @@ impl<'s> Parser<'s> {
         self.peek().tok == Tok::Name && self.toks[self.pos + 1].tok == Tok::Assign
     }
 
+    /// `fps N` at the cursor: the word `fps` with a number (or nothing)
+    /// after it. Not a keyword: `fps = 3` still sets a name, as formulas
+    /// written before it may.
+    fn is_fps(&self) -> bool {
+        let t = self.peek();
+        t.tok == Tok::Name
+            && self.text(t) == "fps"
+            && matches!(
+                self.toks[self.pos + 1].tok,
+                Tok::Num(_) | Tok::Newline | Tok::RBrace | Tok::Eof
+            )
+    }
+
+    /// `fps N` (E801): the frame time it asks for, ms. The panel's frame
+    /// grids are 10, 20 and 40 ms.
+    #[inline(never)]
+    fn fps_line(&mut self) -> Result<u8, Error> {
+        let kw = self.next();
+        let n = self.peek();
+        let ms = match n.tok {
+            Tok::Num(v) if v == 25 * ONE => 40,
+            Tok::Num(v) if v == 50 * ONE => 20,
+            Tok::Num(v) if v == 100 * ONE => 10,
+            Tok::Num(_) => return self.err(n, "`fps` is 25, 50 or 100 frames a second"),
+            _ => {
+                return self.err(
+                    kw,
+                    "`fps` takes 25, 50 or 100 frames a second, e.g. `fps 100`",
+                )
+            }
+        };
+        self.next();
+        self.end_of_statement()?;
+        Ok(ms)
+    }
+
     /// The word starting the statement at the cursor, if it is a keyword
     /// used as one (`loop = 3` is an assignment, and refused as such).
     fn keyword(&self) -> &'s str {
@@ -2322,6 +2360,12 @@ impl<'s> Parser<'s> {
                     return self.err(
                         t,
                         "a part goes outside the layers (draw it in one with `layer { p }`)",
+                    )
+                }
+                _ if self.is_fps() => {
+                    return self.err(
+                        t,
+                        "`fps` is the whole formula's: put it on a line of its own, outside the layers",
                     )
                 }
                 "frame" => self.frame_block(t, &mut seen_frame)?,
@@ -2966,6 +3010,7 @@ impl<'s> Parser<'s> {
             layered: false,
             blocks: 0,
             loop_v: None,
+            fps: None,
         };
         let mut last: Option<Token> = None;
         let mut seen_frame = false;
@@ -3001,6 +3046,12 @@ impl<'s> Parser<'s> {
                     }
                     b.loop_v = Some(v);
                     self.end_of_statement()?;
+                }
+                _ if self.is_fps() => {
+                    let ms = self.fps_line()?;
+                    if b.fps.replace(ms).is_some() {
+                        return self.err(t, "`fps` is already set");
+                    }
                 }
                 "frame" => self.frame_block(t, &mut seen_frame)?,
                 "layer" => {
@@ -3110,6 +3161,8 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
     if let Some(v) = body.loop_v {
         prog.loop_ms = ((v as i64 * 1000 + ONE as i64 / 2) >> 16) as u32;
     }
+    // A part's `fps` (a whole formula pasted in) is left to the formula's.
+    prog.frame_ms = body.fps.unwrap_or(0);
     let mut layers = body.colours;
     let (Some(ct), false) = (body.top, layers.is_empty()) else {
         let at = src.len();
