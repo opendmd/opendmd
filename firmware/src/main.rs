@@ -1513,8 +1513,11 @@ fn main() -> Result<()> {
                 let blit_start = Instant::now();
                 let left_us = us(next_frame_at.saturating_sub(tick_now))
                     .saturating_sub(us(tick_start.elapsed()));
+                // (Only an effect's: the engine keeps its schedule through
+                // a late tick; a GIF's would slow down.)
+                let fx = playing.path.starts_with(opendmd_core::fx::PREFIX);
                 let delay_us = due_before
-                    .filter(|_| decoded && !transitioning && !is_new)
+                    .filter(|_| fx && decoded && !transitioning && !is_new)
                     .map(|d| us(next_frame_at.saturating_sub(d)));
                 let blit_px = panel.blit_within(pic, Budget::frame(left_us, delay_us));
                 // The blit's own time: a wait for the scan (`panel_sync`,
@@ -1617,9 +1620,10 @@ fn main() -> Result<()> {
                     None if now <= deadline => config::CATCHUP_SLEEP,
                     // Late only because the blit stretched its wait for
                     // the scan on purpose (`scan::Budget`): not a miss
-                    // (`scan` `late`), and no catch-up sleep — the blit
-                    // slept through its wait, and the next frame has
-                    // most of a refresh to land on the next boundary.
+                    // (`scan` `late`), and no catch-up sleep: the blit
+                    // usually slept through most of its wait (a tick at
+                    // a time, spinning only the last stretch), and the
+                    // next frame starts late enough already.
                     None if panel.last_stretched()
                         && now.saturating_sub(Duration::from_micros(u64::from(
                             panel.last_wait_us(),

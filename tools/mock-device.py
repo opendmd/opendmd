@@ -3135,7 +3135,7 @@ def make_handler(ctx: Context, quiet: bool):
                              "in_pair": 0, "waited": 0, "wait_us": 0, "wait_max_us": 0, "gave_up": 0,
                              "split_on": ctx.settings["panel_sync"] and ctx.settings["panel_split"],
                              "split": 0, "split_ok": 0, "unsplit": 0, "spin_us": 0,
-                             "stretched": 0, "late": 0},
+                             "stretched": 0, "late": 0, "retimed": 0},
                 }
                 if ctx.settings["follow"] and ctx.follow.state == "attract":
                     obj["attract_live"] = attract_live_path(ctx.settings["attract"])
