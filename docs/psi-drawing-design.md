@@ -67,6 +67,48 @@ step run 420 ns, a dot 400, a line 1,100 + 320 a pixel (§3.7's 300 /
 §3.8's +5-7 KB and +3-4 KB. The sketches below use `x`, `y`, `h` and `i`
 as names, which are built-ins: the shipped examples rename them.
 
+**As built (phase 2, branch `psi-p2`, 2026-10-27; everything for
+replacing the natives, the removal itself left for after the owner's eye
+test).** Where it differs from §3.6, §4 and §7.3:
+
+1. **The still cache** is as §3.6 (a lane of 4,096 i32 per value, up to
+   two, chosen greedily by ns saved, each ≥ 400 ns a pixel; identical bytes
+   with or without it), laid out as one run after a `STILL` marker that the
+   VM skips once the values are kept. It is **filled by the first full
+   frame** (that frame runs every step and copies the values out), not at
+   open, and taken in the effect's `frame`, not at open: the HTTP server's
+   open check never allocates it. A fingerprint of the steps it was filled
+   for guards against a live edit drawing from another formula's values.
+   Firmware gate: none while a formula look is set; taken only if 48 KB stay
+   free (a transition's 24 KB + its 12 KB reserve + 12 KB) and a 16 KB block
+   exists; given back under 32 KB. Looks never have one.
+2. **Added beyond the design** (needed to get within the frame budgets): a
+   **column run** (values of `x`/`px` and per-frame values, worked out on a
+   frame's first row and kept in pinned registers: the rotozoom's column
+   wobble, `sin(x*3 + t/8)`); **`pal(P, v) * k`** as one colour step (§3.4's
+   "pal() in colour expressions", only this form: the tunnel's light and the
+   floor's fog without a multiply layer); **`noise` at a whole z** from four
+   corners (same bytes). `compile_plain` lays out without either run (the
+   step table is measured and tested that way).
+3. **Tunnel** (§4.1): the two still values are the depth and the place
+   round the walls *with the twist folded in* (so the twist is a number in
+   the source, `twist = 1`, not a slider: a slider would make it move); one
+   layer (the native's noise second layer is left out, its average folded
+   into the checker's two palette positions, so the colours match frame for
+   frame); no bevel; the light is the native's eight steps with the light
+   going round. 7.5 ms estimated with the cache (50 fps), 17.6 without.
+4. **Rotozoom** (§4.2): a picker `-- a: view = flat, floor` (the floor as a
+   per-row scale and fog, both modes in one formula at 7.7 ms, 50 fps);
+   two layers (checker + `noise(u, v, 0)`, its levels raised to the
+   native's mean brightness: Psi's noise is smoother than the baked table);
+   no bevel; zoom and wobble are numbers in the source.
+5. **Starfield** rewritten for fewer steps a star (6.0 → 5.0 ms, 100 fps
+   by the estimate), the same picture (0.06 % of pixels differ by a
+   rounding).
+6. **Pickers** (§7.3) are built (web only) and **Add to playlist** for
+   Formulas (playlist lines up to 2 KB, `&name=` on the path for the
+   name): the branch `psi-p2-web`, merged.
+
 ## 1. Options compared
 
 The cost figures use the device's measured per-step costs (`psi-probe`,
