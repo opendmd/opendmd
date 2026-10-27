@@ -12,7 +12,7 @@ use esp_idf_sys::hub75;
 use opendmd_core::canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
 use opendmd_core::look::{tint, Glow, GlowLevel, Look, GLOW_STEP};
 use opendmd_core::panel_timing::PanelTiming;
-use opendmd_core::scan::{Judge, Pacer, Reading, SPLIT_LEAD_US};
+use opendmd_core::scan::{Budget, Judge, Pacer, Reading, SPLIT_LEAD_US};
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 
@@ -116,6 +116,9 @@ pub struct Panel {
     sync: ScanSync,
     /// What the last blit waited for the scan, µs.
     last_wait_us: u32,
+    /// The last blit's waits ran past its budget's `fit_us` on purpose
+    /// ([`Budget`]: a fast source's frame kept on a refresh boundary).
+    last_stretched: bool,
 }
 
 /// The scan, for refresh-synchronised blits ([`opendmd_core::scan`]):
@@ -136,7 +139,9 @@ struct ScanSync {
 /// seam (a row pair first shown complete a refresh after another) and the
 /// ones that wrote a pair while it was being scanned; with `panel_sync`
 /// on, how many waited, for how long in all (µs, wrapping) and at most,
-/// and how many could not (no clear start within the frame's budget).
+/// and how many could not (no clear start within the frame's budget);
+/// how many stretched past the next frame's time on purpose ([`Budget`])
+/// and how many frames were late only for that (not deadline misses).
 /// Relaxed atomics: the main
 /// task writes them, `GET /api/status` reads them.
 mod counters {
@@ -152,6 +157,8 @@ mod counters {
     pub static SPLIT_OK: AtomicU32 = AtomicU32::new(0);
     pub static UNSPLIT: AtomicU32 = AtomicU32::new(0);
     pub static SPIN_US: AtomicU32 = AtomicU32::new(0);
+    pub static STRETCHED: AtomicU32 = AtomicU32::new(0);
+    pub static LATE: AtomicU32 = AtomicU32::new(0);
     pub static SPLIT_ON: AtomicU32 = AtomicU32::new(0);
     pub static ROW_US: AtomicU32 = AtomicU32::new(0);
     pub static SYNC_ON: AtomicU32 = AtomicU32::new(0);
@@ -160,7 +167,7 @@ mod counters {
 /// `/api/status` `scan`: `null` when the scan position cannot be read,
 /// else `{"row_us","sync","blits","torn","in_pair","waited","wait_us",
 /// "wait_max_us","gave_up","split_on","split","split_ok","unsplit",
-/// "spin_us"}`
+/// "spin_us","stretched","late"}`
 /// (counts since boot).
 pub fn scan_json() -> String {
     use counters::*;
@@ -169,7 +176,7 @@ pub fn scan_json() -> String {
         return "null".into();
     }
     format!(
-        r#"{{"row_us":{row_us},"sync":{},"blits":{},"torn":{},"in_pair":{},"waited":{},"wait_us":{},"wait_max_us":{},"gave_up":{},"split_on":{},"split":{},"split_ok":{},"unsplit":{},"spin_us":{}}}"#,
+        r#"{{"row_us":{row_us},"sync":{},"blits":{},"torn":{},"in_pair":{},"waited":{},"wait_us":{},"wait_max_us":{},"gave_up":{},"split_on":{},"split":{},"split_ok":{},"unsplit":{},"spin_us":{},"stretched":{},"late":{}}}"#,
         SYNC_ON.load(Relaxed) != 0,
         BLITS.load(Relaxed),
         TORN.load(Relaxed),
@@ -183,6 +190,8 @@ pub fn scan_json() -> String {
         SPLIT_OK.load(Relaxed),
         UNSPLIT.load(Relaxed),
         SPIN_US.load(Relaxed),
+        STRETCHED.load(Relaxed),
+        LATE.load(Relaxed),
     )
 }
 
@@ -280,6 +289,7 @@ impl Panel {
             repaint: false,
             glow_stats: GlowStats::default(),
             last_wait_us: 0,
+            last_stretched: false,
             sync: ScanSync {
                 on: true,
                 split: true,
@@ -318,7 +328,7 @@ impl Panel {
     /// Returns the number of pixels pushed. Never waits for the scan; see
     /// [`Panel::blit_within`].
     pub fn blit(&mut self, canvas: &mut Canvas) -> u32 {
-        self.blit_within(canvas, 0)
+        self.blit_within(canvas, Budget::NONE)
     }
 
     /// [`Panel::blit`], but with `panel_sync` on the writes are paced to
@@ -327,11 +337,15 @@ impl Panel {
     /// passes them — waits of up to a refresh (~8 ms, ~3.4 ms on average),
     /// a tick's sleep at a time and spinning only the last 200 µs (1.5 ms
     /// for the last pair). With `panel_split` the bottom rows follow a
-    /// refresh later (up to ~16 ms in all). If the waits would run past
-    /// `budget_us` it writes at once, as unsynchronised; the wait is
-    /// [`Panel::last_wait_us`].
+    /// refresh later (up to ~16 ms in all), when that fits `budget`'s
+    /// `fit_us`. If the waits would run past the budget (with a fast
+    /// source's stretch, [`Budget::limit_us`]) it writes at once, as
+    /// unsynchronised; the wait is [`Panel::last_wait_us`], a stretch
+    /// [`Panel::last_stretched`]. The budget counts from the call (a glow
+    /// step's work inside it comes out of it).
     #[inline(never)]
-    pub fn blit_within(&mut self, canvas: &mut Canvas, budget_us: u32) -> u32 {
+    pub fn blit_within(&mut self, canvas: &mut Canvas, budget: Budget) -> u32 {
+        let start = now_us();
         // Pushing only what changed relies on the buffer being written still
         // holding the previous frame, which is only true single-buffered: a
         // double-buffered back buffer is two frames old.
@@ -353,7 +367,8 @@ impl Panel {
                 canvas.dirty(),
                 self.look,
                 &mut self.sync,
-                budget_us,
+                budget,
+                start,
             )
         } else {
             // Glow: a step if one is due, then the new picture over what
@@ -379,7 +394,8 @@ impl Panel {
                     &changed,
                     self.look,
                     &mut self.sync,
-                    budget_us,
+                    budget,
+                    start,
                 )
             } else {
                 // No room for the copy: the picture as it is.
@@ -388,12 +404,14 @@ impl Panel {
                     canvas.dirty(),
                     self.look,
                     &mut self.sync,
-                    budget_us,
+                    budget,
+                    start,
                 )
             }
         };
         canvas.dirty_mut().clear();
-        self.last_wait_us = waited;
+        self.last_wait_us = waited.us;
+        self.last_stretched = waited.stretched;
         pushed
     }
 
@@ -401,6 +419,20 @@ impl Panel {
     /// (part of its time; the rest is writing).
     pub fn last_wait_us(&self) -> u32 {
         self.last_wait_us
+    }
+
+    /// The last [`Panel::blit_within`] waited past its budget's `fit_us`
+    /// on purpose (a fast source's frame kept on a refresh boundary,
+    /// [`Budget`]).
+    pub fn last_stretched(&self) -> bool {
+        self.last_stretched
+    }
+
+    /// A frame was late only because its blit stretched (the main loop's
+    /// judgement: on time but for the wait): counted as `scan` `late`,
+    /// not as a deadline miss.
+    pub fn note_late(&self) {
+        counters::LATE.fetch_add(1, Relaxed);
     }
 
     /// The tint and the glow (`/api/config` `look`, `glow`). True when what
@@ -445,9 +477,9 @@ impl Panel {
     /// changed (`canvas` is the picture on display, unchanged since the
     /// last blit). Returns the µs it took, any wait for the scan included
     /// (0 if nothing was due); its `glow_stats` leave the wait out.
-    /// With `panel_sync` the push may wait up to `budget_us` for the scan
+    /// With `panel_sync` the push may wait within `budget` for the scan
     /// ([`Panel::blit_within`]).
-    pub fn glow_tick(&mut self, canvas: &Canvas, budget_us: u32) -> u32 {
+    pub fn glow_tick(&mut self, canvas: &Canvas, budget: Budget) -> u32 {
         if !self.glow.is_decaying() {
             return 0;
         }
@@ -456,6 +488,7 @@ impl Panel {
             return 0;
         }
         self.stepped = t;
+        let start = now_us();
         let mut changed = DirtyMap::default();
         self.glow.step(canvas, &mut changed);
         let (px, waited) = match self.glow.shown() {
@@ -464,10 +497,12 @@ impl Panel {
                 &changed,
                 self.look,
                 &mut self.sync,
-                budget_us,
+                budget,
+                start,
             ),
-            None => (0, 0),
+            None => (0, Waited::default()),
         };
+        let waited = waited.us;
         // The step's own cost: without the wait for the scan.
         let us = (t.elapsed().as_micros() as u32).saturating_sub(waited);
         let g = &mut self.glow_stats;
@@ -504,7 +539,14 @@ impl Panel {
                 map.mark_span(y, 0, WIDTH);
             }
         }
-        push(canvas.as_bytes(), &map, self.look, &mut self.sync, 0);
+        push(
+            canvas.as_bytes(),
+            &map,
+            self.look,
+            &mut self.sync,
+            Budget::NONE,
+            0,
+        );
         self.glow_stats.releases += 1;
         self.glow_stats.yields += 1;
         true
@@ -706,40 +748,54 @@ impl Panel {
 ///
 /// With the scan readable, the position before and after each pair is
 /// read and the blit judged (`counters`: did it leave a seam). With
-/// `sync.on` and a `budget_us`, each pair waits for the [`Pacer`] (the
-/// scan to leave its slot before the target refresh), unless the waits
-/// would run past the budget.
+/// `sync.on` and a `budget` (counted from `start`, the clock when the
+/// blit began), each pair waits for the [`Pacer`] (the scan to leave its
+/// slot before the target refresh), unless the waits would run past the
+/// budget's limit (its `fit_us`, or for a fast source its stretch too).
 fn push(
     bytes: &[u8],
     map: &DirtyMap,
     look: Look,
     sync: &mut ScanSync,
-    budget_us: u32,
-) -> (u32, u32) {
+    budget: Budget,
+    start: u32,
+) -> (u32, Waited) {
     debug_assert_eq!(bytes.len(), WIDTH * HEIGHT * 3);
     let rows = map.row_mask();
     if rows == 0 {
-        return (0, 0);
+        return (0, Waited::default());
     }
     const HALF: usize = HEIGHT / 2;
     let (top_rows, bottom_rows) = (rows & 0xFFFF, rows >> HALF);
     let pairs = top_rows | bottom_rows;
     let tinted = look != Look::Colour;
     let scan = sync.row_us > 0;
-    let pacer = if scan && sync.on && budget_us > 0 {
-        pace_plan(pairs, tinted, sync.row_us, budget_us)
+    // What is left of the budget now (a glow step may have spent some).
+    let spent = now_us().wrapping_sub(start);
+    let cycle = sync.row_us * opendmd_core::scan::PAIRS as u32;
+    let fit_us = budget.fit_us.saturating_sub(spent);
+    let limit_us = budget.limit_us(cycle).saturating_sub(spent);
+    let plan = if scan && sync.on && limit_us > 0 {
+        pace_plan(pairs, tinted, sync.row_us, limit_us)
     } else {
         None
     };
+    // Past `fit_us`: a fast source's frame kept on a refresh boundary,
+    // the next frame late on purpose ([`Budget`]).
+    let stretched = plan.is_some_and(|(_, took)| took > fit_us);
+    if stretched {
+        counters::STRETCHED.fetch_add(1, Relaxed);
+    }
+    let pacer = plan.map(|(p, _)| p);
     // Split: the top half now (for refresh T), the bottom half paced to
-    // T + 1 — if that still ends inside the budget.
+    // T + 1 — if that still ends inside the budget (never stretched).
     let bottom = pacer
         .filter(|_| sync.split && bottom_rows != 0)
         .and_then(|top| {
             let next = top.next();
             let last = 31 - bottom_rows.leading_zeros() as usize;
             let ends = next.free_at(last).wrapping_sub(now_us());
-            let fits = ends < budget_us.saturating_sub(PAIR_WRITE_US);
+            let fits = ends < fit_us.saturating_sub(PAIR_WRITE_US);
             if !fits {
                 counters::UNSPLIT.fetch_add(1, Relaxed);
             }
@@ -815,7 +871,21 @@ fn push(
     unsafe { hub75::hub75_flip() };
     #[cfg(feature = "probe")]
     crate::state::PIXELS_PUSHED.fetch_add(pushed, Relaxed);
-    (pushed, waited)
+    (
+        pushed,
+        Waited {
+            us: waited,
+            stretched,
+        },
+    )
+}
+
+/// What a [`push`] spent waiting for the scan (µs), and whether that ran
+/// past its budget's `fit_us` on purpose.
+#[derive(Default, Clone, Copy, Debug)]
+struct Waited {
+    us: u32,
+    stretched: bool,
 }
 
 /// The dirty pixels of row `y` alone (its half of the pair's DMA words),
@@ -881,10 +951,11 @@ fn now_us() -> u32 {
     unsafe { esp_idf_sys::esp_timer_get_time() as u32 }
 }
 
-/// A synchronised push's pacer ([`Pacer::plan`]), or `None` (counted as
-/// not in budget) when its waits would run past `budget_us`.
+/// A synchronised push's pacer and how long its waits run
+/// ([`Pacer::plan`]), or `None` (counted as not in budget) when they would
+/// run past `budget_us`.
 #[inline(never)]
-fn pace_plan(pairs: u32, tinted: bool, row_us: u32, budget_us: u32) -> Option<Pacer> {
+fn pace_plan(pairs: u32, tinted: bool, row_us: u32, budget_us: u32) -> Option<(Pacer, u32)> {
     let now = read_scan()?;
     let write_us = if tinted {
         PAIR_WRITE_US_TINTED
@@ -895,7 +966,7 @@ fn pace_plan(pairs: u32, tinted: bool, row_us: u32, budget_us: u32) -> Option<Pa
     if plan.is_none() {
         counters::GAVE_UP.fetch_add(1, Relaxed);
     }
-    plan.map(|(p, _)| p)
+    plan
 }
 
 /// Wait until the pacer lets pair `pair` be written: a tick's sleep at a
