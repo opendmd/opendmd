@@ -907,6 +907,9 @@ impl Engine {
         let p = self.current.as_mut()?;
         let r = p.gif.synth_mut()?.retune(path)?;
         if r.is_ok() {
+            // The new formula's own name (`&name=`), as `play_now` would
+            // report it: `now_playing.title` follows what is on the panel.
+            p.title = synth::title(path).unwrap_or_else(|| Entry::from_path(path).title);
             p.path = path.to_string();
             p.started_at = at;
             p.loops = 0;
@@ -1665,6 +1668,46 @@ mod tests {
         }
         assert_eq!(e.now_playing().unwrap().path, b);
         assert_eq!(c.get(0, 0).r, 255, "the new sliders");
+    }
+
+    /// A formula played over a formula is retuned in place, and the title
+    /// follows it: each one's `&name=` (the bug: the first one's name
+    /// stayed through every later switch); no name is "Formula"; a refused
+    /// one keeps the name on screen.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn fx_psi_retune_reports_the_new_formulas_name() {
+        let mut e = engine_with(
+            &[("/gifs/Consoles/NES_A_01.gif", one_pixel_gif(255, 0, 0))],
+            "/gifs/Consoles/NES_A_01.gif",
+            DwellPolicy {
+                min: Duration::from_secs(10),
+                max: Duration::from_secs(10),
+                min_loops: 0,
+            },
+        );
+        let mut c = Canvas::new();
+        e.tick(Duration::ZERO, &mut c).unwrap();
+        let cube = crate::fx_psi::path("rgb(x, y, 0)", "name=Wireframe+cube");
+        let tunnel = crate::fx_psi::path("rgb(y, x, 0)", "name=Tunnel");
+        let star = crate::fx_psi::path("gray(x)", "a=0.5&name=Starfield");
+        let plain = crate::fx_psi::path("gray(y)", "");
+        e.play_now(&cube, Duration::from_millis(100)).unwrap();
+        e.tick(Duration::from_millis(120), &mut c).unwrap();
+        assert_eq!(e.now_playing().unwrap().title, "Wireframe cube");
+        let ordinal = e.now_playing().unwrap().ordinal;
+        let mut t = 140;
+        for (path, name) in [(&tunnel, "Tunnel"), (&star, "Starfield"), (&plain, "Formula"), (&tunnel, "Tunnel")] {
+            e.retune(path, Duration::from_millis(t)).unwrap().unwrap();
+            e.tick(Duration::from_millis(t + 20), &mut c).unwrap();
+            let np = e.now_playing().unwrap();
+            assert_eq!((np.path.as_str(), np.title.as_str()), (path.as_str(), name));
+            assert_eq!(np.ordinal, ordinal, "in place: no new start");
+            t += 40;
+        }
+        let bad = crate::fx_psi::path("gray(nope)", "name=Broken");
+        assert!(e.retune(&bad, Duration::from_millis(t)).unwrap().is_err());
+        assert_eq!(e.now_playing().unwrap().title, "Tunnel");
     }
 
     #[test]
