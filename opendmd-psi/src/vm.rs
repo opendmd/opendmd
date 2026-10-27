@@ -342,9 +342,13 @@ pub fn render_rows<const N: usize>(
 }
 
 /// [`render_rows`] with the draw stage's canvas: a program that draws
-/// ([`Program::draws`]) draws its frame's lines into `ink` first (cleared;
-/// once each call, whichever rows it renders), and its `ink` reads them
-/// back. `None`, or a program that does not draw: `ink` reads 0.
+/// ([`Program::draws`]) draws its frame's lines into `ink` first (cleared)
+/// on a **full call** (`rows == u32::MAX`), and its `ink` reads them back.
+/// A call for some rows only does not draw: it reads the canvas the last
+/// full call left — the caller's job to make that the same program and
+/// inputs (a look redraws only the rows its picture changed, with the same
+/// `t`; anything new for it is drawn with every row first). `None`, or a
+/// program that does not draw: `ink` reads 0.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_ink<const N: usize>(
     prog: &Program,
@@ -380,8 +384,10 @@ pub fn render_rows_ink<const N: usize>(
         scalar(sc, op, tables, &prog.tables);
     }
     let ink: Option<&Ink> = match ink {
-        Some(k) if prog.draws() && rows != 0 => {
-            crate::draw::run(prog, sc, tables, k);
+        Some(k) if prog.draws() => {
+            if rows == u32::MAX {
+                crate::draw::run(prog, sc, tables, k);
+            }
             Some(k)
         }
         _ => None,
