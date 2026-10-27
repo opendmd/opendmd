@@ -188,6 +188,10 @@ const fn atan2_q(y: f64, x: f64) -> f64 {
 }
 
 /// `sin(2π i / 256)` in Q14 (±16384): the one sine every effect shares.
+/// In DRAM on the ESP32 (512 B), with the palettes: Formulas read them per
+/// pixel, and read through the flash cache their time moved with the
+/// build's layout (docs/research/psi-speed.md).
+#[cfg_attr(target_os = "espidf", link_section = ".dram1.psi")]
 pub static SIN: [i16; 256] = {
     let mut t = [0i16; 256];
     let mut i = 0;
@@ -285,6 +289,7 @@ const fn expand(k: [[u8; 3]; 9]) -> [Rgb; PAL_LEN] {
     out
 }
 
+#[cfg_attr(target_os = "espidf", link_section = ".dram1.psi")]
 pub(crate) static PALETTES: [[Rgb; PAL_LEN]; 5] = [
     // fire
     expand([

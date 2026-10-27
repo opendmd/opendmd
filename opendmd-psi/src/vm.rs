@@ -141,6 +141,13 @@ enum Arg {
     Sc(i32),
 }
 
+// On the ESP32 the hottest loops (`fast1`, `fast2`, the colour write
+// `out1` and `pal(P, v) * k`'s) run from IRAM, ~8 KB: not for speed (speed-a
+// measured IRAM against flash at 0-2.5 %) but so their timing does not
+// swing with the flash cache's layout from build to build (speed-b to
+// speed-c: Tunnel as an effect 4,043 -> 4,319 µs, Rotozoom's checked steps
+// 5,242 -> 6,983, the same code).
+//
 // The loops. `run*` are one element a turn, for the steps whose work
 // dwarfs the loop's (`len`, `noise`, ...); `fast*` four a turn, for the
 // cheap ones, where the ESP32 would otherwise spend as long on the loop
@@ -148,53 +155,6 @@ enum Arg {
 // add. Each is its own function, not inlined into the dispatch: with the
 // whole VM in one function the ESP32's compiler ran out of registers and
 // reloaded constants from flash and spilled to the stack every element.
-
-#[inline(never)]
-fn fast1<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
-    for o in d.as_chunks_mut::<4>().0 {
-        o[0] = f(a.at(0));
-        o[1] = f(a.at(1));
-        o[2] = f(a.at(2));
-        o[3] = f(a.at(3));
-        a.step(4);
-    }
-}
-
-#[inline(never)]
-fn fast2<const N: usize, A: Src, B: Src>(
-    d: &mut [i32; N],
-    mut a: A,
-    mut b: B,
-    f: impl Fn(i32, i32) -> i32,
-) {
-    for o in d.as_chunks_mut::<4>().0 {
-        o[0] = f(a.at(0), b.at(0));
-        o[1] = f(a.at(1), b.at(1));
-        o[2] = f(a.at(2), b.at(2));
-        o[3] = f(a.at(3), b.at(3));
-        a.step(4);
-        b.step(4);
-    }
-}
-
-#[inline(never)]
-fn fast3<const N: usize, A: Src, B: Src, C: Src>(
-    d: &mut [i32; N],
-    mut a: A,
-    mut b: B,
-    mut c: C,
-    f: impl Fn(i32, i32, i32) -> i32,
-) {
-    for o in d.as_chunks_mut::<4>().0 {
-        o[0] = f(a.at(0), b.at(0), c.at(0));
-        o[1] = f(a.at(1), b.at(1), c.at(1));
-        o[2] = f(a.at(2), b.at(2), c.at(2));
-        o[3] = f(a.at(3), b.at(3), c.at(3));
-        a.step(4);
-        b.step(4);
-        c.step(4);
-    }
-}
 
 #[inline(never)]
 fn run1<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
@@ -234,22 +194,6 @@ fn run3<const N: usize, A: Src, B: Src, C: Src>(
     }
 }
 
-#[inline(never)]
-fn out3<A: Src, B: Src, C: Src>(
-    px: &mut [[u8; 3]],
-    mut a: A,
-    mut b: B,
-    mut c: C,
-    f: impl Fn(i32, i32, i32) -> [u8; 3],
-) {
-    for o in px.iter_mut() {
-        *o = f(a.at(0), b.at(0), c.at(0));
-        a.step(1);
-        b.step(1);
-        c.step(1);
-    }
-}
-
 /// `noise(x, y, z)` at a whole `z` along the lane ([`fixed::noise_flat`]),
 /// `x` and `y` read with a stride (0: a value for the lane): one loop for
 /// every kind of operand.
@@ -279,10 +223,88 @@ fn noise_flat_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 2], z: i32) {
     }
 }
 
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn fast1<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
+    for o in d.as_chunks_mut::<4>().0 {
+        // Every load before any store: `d` may be an operand's lane as far
+        // as the compiler knows, so loads written after a store stay after
+        // it, each stalling on its own (the ESP32's load-use delay).
+        let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
+        *o = [f(x[0]), f(x[1]), f(x[2]), f(x[3])];
+        a.step(4);
+    }
+}
+
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn fast2<const N: usize, A: Src, B: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    f: impl Fn(i32, i32) -> i32,
+) {
+    for o in d.as_chunks_mut::<4>().0 {
+        let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
+        let y = [b.at(0), b.at(1), b.at(2), b.at(3)];
+        *o = [f(x[0], y[0]), f(x[1], y[1]), f(x[2], y[2]), f(x[3], y[3])];
+        a.step(4);
+        b.step(4);
+    }
+}
+
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+fn fast3<const N: usize, A: Src, B: Src, C: Src>(
+    d: &mut [i32; N],
+    mut a: A,
+    mut b: B,
+    mut c: C,
+    f: impl Fn(i32, i32, i32) -> i32,
+) {
+    for o in d.as_chunks_mut::<4>().0 {
+        let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
+        let y = [b.at(0), b.at(1), b.at(2), b.at(3)];
+        let z = [c.at(0), c.at(1), c.at(2), c.at(3)];
+        *o = [
+            f(x[0], y[0], z[0]),
+            f(x[1], y[1], z[1]),
+            f(x[2], y[2], z[2]),
+            f(x[3], y[3], z[3]),
+        ];
+        a.step(4);
+        b.step(4);
+        c.step(4);
+    }
+}
+
+#[inline(never)]
+fn out3<A: Src, B: Src, C: Src>(
+    px: &mut [[u8; 3]],
+    mut a: A,
+    mut b: B,
+    mut c: C,
+    f: impl Fn(i32, i32, i32) -> [u8; 3],
+) {
+    for o in px.iter_mut() {
+        *o = f(a.at(0), b.at(0), c.at(0));
+        a.step(1);
+        b.step(1);
+        c.step(1);
+    }
+}
+
 /// `pal(P, k) * s` along the lane, its two operands read with a stride (0:
 /// a value for the lane): one loop for the four kinds of operand.
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 #[inline(never)]
 fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32], shift: u8) {
+    // Both lanes (the usual: Tunnel's, Rotozoom floor's): plain
+    // pointers (not in wasm: the same bytes, a smaller download).
+    #[cfg(not(target_arch = "wasm32"))]
+    if let [Arg::Lane(k), Arg::Lane(s)] = args {
+        return pal_lit_lanes(px, k, s, p, shift);
+    }
     let mut one = [0i32; 2];
     let mut ptr = [core::ptr::null::<i32>(); 2];
     let mut stride = [0usize; 2];
@@ -297,19 +319,50 @@ fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32], shift: u8
             ptr[k] = &one[k];
         }
     }
+    // The last entry and scale and their colour: neighbours mostly share
+    // both (Tunnel ~80 %, Rotozoom floor ~90 % of pixels), and the scaling
+    // is three multiplies a channel.
+    let (mut last_i, mut last_s) = (usize::MAX, 0);
+    let mut rgb = [0u8; 3];
     for o in px.iter_mut() {
         // SAFETY: each pointer is a lane of at least `px.len()` values read
         // once per element (stride 1), or one value (stride 0), alive for
         // the call.
         let (k, s) = unsafe { (*ptr[0], *ptr[1]) };
         // (`>> shift` is exactly `fixed::mul(s, 2^-shift)`.)
-        *o = fixed::pal_lit(p, k, s >> shift);
+        let (i, s) = (fixed::pal_index(k), s >> shift);
+        if i != last_i || s != last_s {
+            (last_i, last_s) = (i, s);
+            rgb = fixed::scale_rgb(p[i], s);
+        }
+        *o = rgb;
         for j in 0..2 {
             ptr[j] = ptr[j].wrapping_add(stride[j]);
         }
     }
 }
 
+/// [`pal_lit_lane`] of two lanes.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn pal_lit_lanes(px: &mut [[u8; 3]], k: *const i32, s: *const i32, p: &[[u8; 3]; 32], shift: u8) {
+    let (mut last_i, mut last_s) = (usize::MAX, 0);
+    let mut rgb = [0u8; 3];
+    for (j, o) in px.iter_mut().enumerate() {
+        // SAFETY: `k` and `s` are lanes of at least `px.len()` values,
+        // alive for the call.
+        let (k, s) = unsafe { (*k.add(j), *s.add(j)) };
+        let (i, s) = (fixed::pal_index(k), s >> shift);
+        if i != last_i || s != last_s {
+            (last_i, last_s) = (i, s);
+            rgb = fixed::scale_rgb(p[i], s);
+        }
+        *o = rgb;
+    }
+}
+
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 #[inline(never)]
 fn out1<A: Src>(px: &mut [[u8; 3]], mut a: A, f: impl Fn(i32) -> [u8; 3]) {
     for o in px.iter_mut() {
@@ -451,6 +504,30 @@ pub fn render_rows_still<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
+    frame::<N>(prog, scratch, ink, still, inputs, tables, under, rows, out)
+}
+
+/// [`render_rows_still`]'s body: one copy whoever calls it, and on the
+/// ESP32 in IRAM with the cheap loops, so the frame loop and its dispatch
+/// are never evicted from the flash cache between steps (speed-a..f: the
+/// same rows 3.65 or 4.3-4.9 ms by which copy of this loop ran and where
+/// the build put it).
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+fn frame<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    ink: Option<&mut Ink>,
+    still: Option<&mut Still>,
+    inputs: &Inputs,
+    tables: &Tables,
+    under: Option<&[u8]>,
+    rows: u32,
+    out: &mut [u8],
+) {
+    #[cfg(feature = "stats")]
+    stats::stamp(1);
     assert_eq!(out.len(), W * H * 3);
     if let Some(u) = under {
         assert_eq!(u.len(), W * H * 3);
@@ -496,11 +573,20 @@ pub fn render_rows_still<const N: usize>(
         }
         _ => Cache::Off,
     };
+    #[cfg(feature = "stats")]
+    stats::note(prog, scratch, &cache, out, inputs);
+    // The narrowed steps as they are only for inputs in the ranges they
+    // were narrowed for (else their checked forms: the same bytes). In wasm
+    // (the web app's previews) always their checked forms: the same bytes
+    // without their loops in the download.
+    let narrow = !cfg!(target_arch = "wasm32") && crate::range::inputs_in_range(prog, inputs);
     let uses_i = prog.uses & USES_I != 0;
     let backdrop = prog.uses & BACKDROP != 0;
     // The column run: on the first row drawn, then its values are kept in
     // their registers (one lane is the whole row only at N = W).
     let mut columns_kept = false;
+    #[cfg(feature = "stats")]
+    stats::stamp(2);
     for row in 0..H {
         if rows & (1 << row) == 0 {
             continue;
@@ -531,6 +617,9 @@ pub fn render_rows_still<const N: usize>(
                     None => px.fill([0; 3]),
                 }
             }
+            // (A still cache's lanes are pointed at again by its marker
+            // below, at this lane's pixels.)
+            let mut alias: Alias = [core::ptr::null(); REGS + 1];
             let mut k = re;
             let mut keep_at = usize::MAX;
             while k < pe {
@@ -548,7 +637,7 @@ pub fn render_rows_still<const N: usize>(
                 if op.code == code::STILL {
                     match &cache {
                         Cache::Use(st) => {
-                            fetch(scratch, st, [op.b, op.c], op.d, row * W + base);
+                            fetch::<N>(&mut alias, st, [op.b, op.c], op.d, row * W + base);
                             k += 1 + op.a as usize;
                         }
                         Cache::Keep(..) => {
@@ -560,19 +649,36 @@ pub fn render_rows_still<const N: usize>(
                     continue;
                 }
                 if code::is_colour(op.code) {
-                    colour_step(scratch, op, base, tables, px);
+                    colour_step(scratch, &alias, op, base, tables, px);
                 } else {
-                    lane_op(scratch, op, base, tables, &prog.tables, ul, il);
+                    lane_op(
+                        scratch,
+                        &mut alias,
+                        op,
+                        narrow,
+                        base,
+                        tables,
+                        &prog.tables,
+                        ul,
+                        il,
+                    );
                 }
                 k += 1;
             }
         }
         columns_kept = N == W;
     }
+    #[cfg(feature = "stats")]
+    stats::stamp(3);
     if let Cache::Keep(st, _) = cache {
         st.kept = crate::still::fingerprint(prog);
     }
 }
+
+/// Where each register's lane is read from instead of its own, null for
+/// its own: a still cache's lane at the pixels (`fetch`), until the
+/// register is written. One lane pass long.
+type Alias = [*const i32; REGS + 1];
 
 /// The lane register a register operand names (as `lane_op`'s
 /// destination).
@@ -592,12 +698,14 @@ fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at
     }
 }
 
-/// Copy the kept lanes at pixel `at` into the cached registers.
+/// Point the cached registers at the kept lanes at pixel `at` (read there
+/// in place until written: no copy).
 #[inline(never)]
-fn fetch<const N: usize>(s: &mut Scratch<N>, st: &Still, regs: [u8; 2], n: u8, at: usize) {
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n: u8, at: usize) {
     for (j, &r) in regs.iter().enumerate().take(n as usize) {
         if let Some(l) = st.lanes[j].as_deref() {
-            s.lanes[reg_index(r)].copy_from_slice(&l.0[at..at + N]);
+            al[reg_index(r)] = l.0[at..at + N].as_ptr();
         }
     }
 }
@@ -617,21 +725,31 @@ pub(crate) fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables, tabs: &[i
 impl<const N: usize> Scratch<N> {
     /// The operand `v` for the lane at column `base`.
     #[inline(always)]
-    fn arg(&self, v: u8, base: usize) -> Arg {
+    fn arg(&self, al: &Alias, v: u8, base: usize) -> Arg {
         if v & LANE == 0 {
             return Arg::Sc(self.sc[(v & 0x7f) as usize]);
         }
         Arg::Lane(match v & !LANE {
             L_X => self.xs[base..base + N].as_ptr(),
             L_PX => self.pxs[base..base + N].as_ptr(),
-            l => self.lanes[((l - L_I) as usize).min(REGS)].as_ptr(),
+            l => {
+                let r = ((l - L_I) as usize).min(REGS);
+                if al[r].is_null() {
+                    self.lanes[r].as_ptr()
+                } else {
+                    al[r]
+                }
+            }
         })
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lane_op<const N: usize>(
     s: &mut Scratch<N>,
+    al: &mut Alias,
     op: &Op,
+    narrow: bool,
     base: usize,
     t: &Tables,
     tabs: &[i32; MAX_TABLE],
@@ -639,15 +757,37 @@ fn lane_op<const N: usize>(
     ink: Option<&[u8]>,
 ) {
     use code::*;
-    let (a, b, c) = (s.arg(op.a, base), s.arg(op.b, base), s.arg(op.c, base));
+    let (a, b, c) = (
+        s.arg(al, op.a, base),
+        s.arg(al, op.b, base),
+        s.arg(al, op.c, base),
+    );
     // The destination is a register the compiler never also reads in the
     // same step (`compile` allocates it that way), so the `&mut` lane does
     // not alias the source pointers.
     let di = reg_index(op.d);
     debug_assert!(op.d & LANE != 0 && op.d & !LANE >= L_REG0);
+    al[di] = core::ptr::null();
     let d: &mut [i32; N] = &mut s.lanes[di];
-    match op.code {
+    let code = if narrow {
+        op.code
+    } else {
+        crate::range::checked(op.code)
+    };
+    match code {
         ADD => bin!(fast2, d, a, b, fixed::add),
+        #[cfg(not(target_arch = "wasm32"))]
+        ADD_W => bin!(fast2, d, a, b, fixed::add_w),
+        #[cfg(not(target_arch = "wasm32"))]
+        SUB_W => bin!(fast2, d, a, b, fixed::sub_w),
+        #[cfg(not(target_arch = "wasm32"))]
+        MUL_W => bin!(fast2, d, a, b, fixed::mul_w),
+        #[cfg(not(target_arch = "wasm32"))]
+        MUL_N => bin!(fast2, d, a, b, fixed::mul_n),
+        SHR => {
+            let n = op.c & 31;
+            un!(fast1, d, a, |v| v >> n)
+        }
         SUB => bin!(fast2, d, a, b, fixed::sub),
         MUL => bin!(fast2, d, a, b, fixed::mul),
         DIV => bin!(run2, d, a, b, fixed::div),
@@ -784,6 +924,7 @@ fn load_ink<const N: usize>(d: &mut [i32; N], ink: Option<&[u8]>) {
 /// layer's colour (into a row on the stack) blended onto it.
 fn colour_step<const N: usize>(
     s: &Scratch<N>,
+    al: &Alias,
     op: &Op,
     base: usize,
     t: &Tables,
@@ -791,7 +932,7 @@ fn colour_step<const N: usize>(
 ) {
     let (kind, blend) = code::colour_parts(op.code);
     let Some(mode) = blend else {
-        colour(s, op, base, t, px);
+        colour(s, al, op, base, t, px);
         return;
     };
     let (v, n) = code::operands(op);
@@ -802,13 +943,13 @@ fn colour_step<const N: usize>(
     };
     let mut row = [[0u8; 3]; W];
     let src = &mut row[..px.len()];
-    colour(s, &plain, base, t, src);
+    colour(s, al, &plain, base, t, src);
     // A layer that covers everything (the usual: no coverage given) is one
     // loop per blend, so the blend is not a branch per channel (an indirect
     // jump on the ESP32); one with a coverage, a lane or a value read with
     // a stride of 0, shares one loop.
     let one;
-    let (k, stride) = match s.arg(v[n - 1], base) {
+    let (k, stride) = match s.arg(al, v[n - 1], base) {
         Arg::Sc(v) if v >= ONE => {
             match mode {
                 fixed::BLEND_ADD => blend_all::<{ fixed::BLEND_ADD }>(px, src),
@@ -853,9 +994,20 @@ fn blend_cover(px: &mut [[u8; 3]], src: &[[u8; 3]], mut k: *const i32, stride: u
     }
 }
 
-fn colour<const N: usize>(s: &Scratch<N>, op: &Op, base: usize, t: &Tables, px: &mut [[u8; 3]]) {
+fn colour<const N: usize>(
+    s: &Scratch<N>,
+    al: &Alias,
+    op: &Op,
+    base: usize,
+    t: &Tables,
+    px: &mut [[u8; 3]],
+) {
     use code::*;
-    let (a, b, c) = (s.arg(op.a, base), s.arg(op.b, base), s.arg(op.c, base));
+    let (a, b, c) = (
+        s.arg(al, op.a, base),
+        s.arg(al, op.b, base),
+        s.arg(al, op.c, base),
+    );
     match op.code {
         OUT_RGB => outt!(px, a, b, c, |r, g, b| [
             fixed::chan(r),
@@ -891,3 +1043,66 @@ fn colour<const N: usize>(s: &Scratch<N>, op: &Op, base: usize, t: &Tables, px: 
 
 /// `ONE` for callers that build inputs by hand.
 pub const Q16_ONE: i32 = ONE;
+
+/// psi-probe's view of the frames drawn (the `stats` feature): how many
+/// ran the narrowed steps and how many their checked forms, and where the
+/// last one's memory was (the working memory, the picture, a still cache's
+/// first lane), to tell placement from code on the device.
+#[cfg(feature = "stats")]
+#[doc(hidden)]
+pub mod stats {
+    use super::*;
+    use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed};
+
+    /// A cycle counter the firmware installs (`fn() -> u32`, as a usize;
+    /// 0: none), and the last frame's stamps on it: 0 the player's frame
+    /// begun, 1 the VM begun, 2 its rows begun (the frame's steps, the
+    /// draw stage and the still cache's choice done), 3 its rows done, 4
+    /// the player's frame done.
+    pub static CLOCK: AtomicUsize = AtomicUsize::new(0);
+    pub static STAMPS: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
+
+    /// Stamp `k` with the clock now.
+    #[inline]
+    pub fn stamp(k: usize) {
+        let f = CLOCK.load(Relaxed);
+        if f != 0 && k < 5 {
+            // SAFETY: stored by the firmware from a `fn() -> u32`.
+            let f = unsafe { core::mem::transmute::<usize, fn() -> u32>(f) };
+            STAMPS[k].store(f(), Relaxed);
+        }
+    }
+
+    pub static NARROWED: AtomicU32 = AtomicU32::new(0);
+    pub static CHECKED: AtomicU32 = AtomicU32::new(0);
+    pub static SCRATCH: AtomicUsize = AtomicUsize::new(0);
+    pub static OUT: AtomicUsize = AtomicUsize::new(0);
+    pub static STILL: AtomicUsize = AtomicUsize::new(0);
+    pub static STILL1: AtomicUsize = AtomicUsize::new(0);
+
+    pub(super) fn note<const N: usize>(
+        prog: &Program,
+        s: &Scratch<N>,
+        cache: &Cache,
+        out: &[u8],
+        inputs: &Inputs,
+    ) {
+        if crate::range::inputs_in_range(prog, inputs) {
+            NARROWED.fetch_add(1, Relaxed);
+        } else {
+            CHECKED.fetch_add(1, Relaxed);
+        }
+        SCRATCH.store(s as *const _ as usize, Relaxed);
+        OUT.store(out.as_ptr() as usize, Relaxed);
+        let still = match cache {
+            Cache::Use(st) => st.lanes[0].as_deref().map_or(0, |l| l.0.as_ptr() as usize),
+            _ => 0,
+        };
+        STILL.store(still, Relaxed);
+        let still1 = match cache {
+            Cache::Use(st) => st.lanes[1].as_deref().map_or(0, |l| l.0.as_ptr() as usize),
+            _ => 0,
+        };
+        STILL1.store(still1, Relaxed);
+    }
+}

@@ -30,6 +30,12 @@ pub struct StillLane(pub(crate) [i32; W * H]);
 impl StillLane {
     const LAYOUT: core::alloc::Layout = core::alloc::Layout::new::<StillLane>();
 
+    /// A zeroed lane (psi-probe's placement test), `None` without 16 KB.
+    #[doc(hidden)]
+    pub fn try_new() -> Option<Box<StillLane>> {
+        Self::try_boxed()
+    }
+
     /// A lane on the heap made zeroed in place, or `None` when the heap
     /// hasn't 16 KB.
     fn try_boxed() -> Option<Box<StillLane>> {
@@ -56,6 +62,24 @@ pub struct Still {
 }
 
 impl Still {
+    /// psi-probe's placement test: put `lane` in place of lane `k` (which
+    /// is handed back), and forget what was kept (the next full frame keeps
+    /// it again).
+    #[doc(hidden)]
+    pub fn swap_lane(&mut self, k: usize, lane: Box<StillLane>) -> Option<Box<StillLane>> {
+        self.kept = 0;
+        self.lanes.get_mut(k)?.replace(lane)
+    }
+
+    /// Lane `k`'s address, 0 for none.
+    #[doc(hidden)]
+    pub fn lane_addr(&self, k: usize) -> usize {
+        self.lanes
+            .get(k)
+            .and_then(|l| l.as_deref())
+            .map_or(0, |l| l.0.as_ptr() as usize)
+    }
+
     pub const fn new() -> Still {
         Still {
             lanes: [None, None],

@@ -164,6 +164,14 @@ uint8_t hub75_refresh_rate(void);
 uint32_t hub75_scan_pos(void);
 
 /*
+ * psi-probe: the address range the DMA reads the picture from — the lowest
+ * and highest byte of the frame buffer's row-pair buffers (*lo, *hi), their
+ * bytes in all (*bytes) and their count (*n) — and the descriptor block's
+ * range (*dlo, *dhi). All 0 before hub75_init.
+ */
+void hub75_dma_span(uint32_t *lo, uint32_t *hi, uint32_t *bytes, uint32_t *n, uint32_t *dlo, uint32_t *dhi);
+
+/*
  * Set up hub75_scan_pos (after hub75_init, before the first read): check
  * the descriptor layout and time the refresh (spins ~2-3 refreshes). Until
  * it has, and if it cannot, hub75_scan_pos is unknown.

@@ -276,7 +276,7 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
 /// listed: too heavy to draw over every GIF at all.
 #[cfg(not(target_arch = "wasm32"))]
 fn every_example_as_a_look() {
-    // (Tunnel: ~7.5 ms as an effect with its still cache, ~17.6 without
+    // (Tunnel: ~4.6 ms as an effect with its still cache, ~14.4 without
     // one, and a look never has one.)
     const TOO_HEAVY: &[&str] = &["Tunnel"];
     let json = std::fs::read_to_string(concat!(
