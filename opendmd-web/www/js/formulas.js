@@ -383,6 +383,11 @@ const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], 
   ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
   ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'], ['p.v', 'a value part p sets'],
   ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']];
+const DRAW = [['draw { … }', 'once a frame, before the pixels: values, loops, lines and dots into ink', 'draw {\n  \n}\n'],
+  ['for k < 12 { … }', 'inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame', 'for k < 12 {\n  \n}'],
+  ['line(x0, y0, x1, y1, v0, v1)', 'a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1)'],
+  ['dot(x, y, v)', 'one pixel of ink v'], ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
+  ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '], ['T[k]', 'number k of table T, from 0 (0 outside it)']];
 const COLS = [['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'], ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
   ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'], ['gray(v)', 'white, 0 to 1'],
   ['#ff8800', 'a colour: alone, or #f80 * v, mix(#000, #f80, v)'],
@@ -624,7 +629,7 @@ function editor() {
     const ins = (t) => () => { closeMenu(); const s = ta.selectionStart; ta.focus(); ta.setSelectionRange(s, ta.selectionEnd); document.execCommand('insertText', false, t); };
     const rows = (title, list) => [h('h3', title), h('dl.psi-dl', list.map(([k, v, x]) => [h('dt', h('button.txt.mono', { onclick: ins(x || k.split(/[ ,(]/)[0]) }, k)), h('dd', v)]))];
     popup(h('div.menu.wide', { id: 'psi-cheat', role: 'dialog', 'aria-label': 'Cheat sheet' }, h('div.mh', 'Cheat sheet'),
-      rows('Values', VARS), rows('Functions', FUNCS), rows('Colour (the last line, of the formula or a layer)', COLS),
+      rows('Values', VARS), rows('Functions', FUNCS), rows('Drawing', DRAW), rows('Colour (the last line, of the formula or a layer)', COLS),
       h('p.cap', 'Phases are in turns: sin(0.25) is 1. Tap a name to put it in. -- starts a comment.')), r.left, r.bottom + 4);
   }
 

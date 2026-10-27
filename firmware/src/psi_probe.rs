@@ -53,6 +53,10 @@ const COPPER_EX: &str = "loop 4\n-- each bar is brightest in its middle, in step
 const OLD_PHOTO_EX: &str = "-- a: how much (0: the GIF as it is)\nmix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), a)";
 const OLD_TV_EX: &str = "loop 4\ndx = (x - 0.5)*1.6; dy = (y - 0.5)*1.2\nlines = py % 2 ? 1 : 0.6\nroll = 0.85 + 0.15*max(0, tri(y/2 + t/4))\ncorners = clamp(1.5 - (dx*dx + dy*dy)*1.6, 0, 1)\nlayer multiply { gray(lines * roll * corners) }";
 
+/// The drawing examples (formulas.json), timed as effects.
+const STARFIELD_EX: &str = "loop 2.4\n-- Starfield: 192 stars flying at you, a pass through the field a loop,\n-- each a streak from where it was a moment ago. a: streak length\nframe { back = 8 + a*240 }\ndraw {\n  for k < 192 {\n    sx = (hash(k, 7) - 0.5)*4096; sy = (hash(k, 3) - 0.5)*1024  -- where it is, across and up\n    z = frac(hash(k, 11) - t/2.4)*4096        -- how far: 0 near, 4096 far\n    s = 2/(z/16 + 4); st = 2/(min(z + back, 4095)/16 + 4)  -- perspective, now and before\n    lit = 1 - z/4096                          -- fading in from the dark\n    line(64 + sx*st, 16 + sy*st, 64 + sx*s, 16 + sy*s, lit*0.2, lit)\n  }\n}\npal(ice, ink)";
+const CUBE_EX: &str = "loop 4.8\n-- Wireframe cube: turning about two axes and swinging across; the near\n-- edges brighter. a: size. The colour is the last line's #40c0ff\ntable V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1\ntable E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7\nframe {\n  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)\n  size = 20 + a*28; mid = 64 + sa*40\n}\ndraw {\n  for e < 12 {\n    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners\n    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size\n    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size\n    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned\n    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb\n    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),\n         clamp(0.6 - zb/90, 0.16, 1), clamp(0.6 - zd/90, 0.16, 1))\n  }\n}\n#40c0ff * ink";
+
 /// The report's file name at the card's root.
 pub const REPORT_NAME: &str = "filelist-psi-probe.txt";
 
@@ -169,10 +173,11 @@ fn lanes_over<const N: usize>(
 ) -> (u32, u32, u32) {
     let mut s = zeroed::<psi::Scratch<N>>();
     s.reset();
+    let mut ink = psi::Ink::boxed();
     let t = fx_psi::tables();
     timed(|k| {
         let inputs = psi::golden::inputs(k * 20 % loop_ms);
-        psi::render_rows::<N>(prog, &mut s, &inputs, &t, under, u32::MAX, out);
+        psi::render_rows_ink::<N>(prog, &mut s, Some(&mut ink), &inputs, &t, under, u32::MAX, out);
     })
 }
 
@@ -299,11 +304,12 @@ pub fn run(root: &str) {
     let start = Instant::now();
     let stack0 = stack_unused();
     say!(info,
-        "psi-probe: start: main stack {stack0} B unused, heap {} B free, Program {} B, Scratch<128> {} B, Scratch<64> {} B",
+        "psi-probe: start: main stack {stack0} B unused, heap {} B free, Program {} B, Scratch<128> {} B, Scratch<64> {} B, Ink {} B",
         heap(),
         std::mem::size_of::<psi::Program>(),
         std::mem::size_of::<psi::Scratch<128>>(),
-        std::mem::size_of::<psi::Scratch<64>>()
+        std::mem::size_of::<psi::Scratch<64>>(),
+        std::mem::size_of::<psi::Ink>()
     );
     // What the probe is for first: the compiler's stack.
     worst_stack();
@@ -399,6 +405,27 @@ pub fn run(root: &str) {
             );
         }
     }
+    // Formulas that draw (the draw stage's canvas, lines, loops, tables).
+    let mut ink = psi::Ink::boxed();
+    for &(name, src, ms, over, want) in psi::golden::DRAWN {
+        if psi::compile_into(src, &mut prog).is_err() {
+            bad += 1;
+            say!(error, "psi-probe: golden {name}: does not compile");
+            continue;
+        }
+        let u = over.then_some(under.as_slice());
+        psi::render_rows_ink::<128>(&prog, &mut s, Some(&mut ink), &psi::golden::inputs(ms), &t, u, u32::MAX, &mut out);
+        let got = psi::golden::fnv(&out);
+        if got == want {
+            ok += 1;
+        } else {
+            bad += 1;
+            say!(
+                error,
+                "psi-probe: golden {name} (drawn) at {ms} ms: {got:#018x}, host/wasm {want:#018x}"
+            );
+        }
+    }
     say!(
         info,
         "psi-probe: golden frames: {ok} match the host/wasm hashes, {bad} differ{}",
@@ -407,7 +434,7 @@ pub fn run(root: &str) {
 
     // What one step costs: each formula is the baseline plus one or two
     // per-pixel steps (t is a frame value, so nothing folds away).
-    const STEPS: [(&str, &str); 21] = [
+    const STEPS: [(&str, &str); 23] = [
         ("base gray(x)", "gray(x)"),
         ("add", "gray(x + t)"),
         ("mul", "gray(x * t)"),
@@ -427,6 +454,8 @@ pub fn run(root: &str) {
         ("chain 4 (+mul)", "k = x * 4\ngray(k < 0 ? 0 : k < 1 ? t : k < 2 ? 0.5 : k < 3 ? 0.75 : k < 4 ? 1 : 0)"),
         ("big clock", "loop 60\n-- Big clock: the time in four big digits, and a seconds bar along the bottom\nframe {\n  h1 = floor(hour/10); h2 = hour % 10       -- the hours' two digits\n  m1 = floor(minute/10); m2 = minute % 10   -- the minutes' two digits\n  end = (second + 1)*128/60                 -- where the seconds bar ends\n}\n-- a digit: the bold font's 3 x 5 pixels, each 8 px wide, 6 tall (24 x 30)\nq = px >= 64 ? px - 8 : px     -- the minutes sit 8 px further right\nk = floor(q/32)                -- which digit: one every 32 px (0 1, then 2 3)\nn = pick(k, h1, h2, m1, m2)    -- and its value\ncol = floor(q % 32 / 8)        -- the font's column, 0 to 2 (then the gap)\nrow = floor(ty/6)              -- its row from the top, 0 to 4 (5: below)\nbar = py < 1                   -- the bottom row is the seconds bar\nlit = bar ? px < end : digit(n, col, row, bold)\n-- a rainbow drifting through the digits, tilted by row; the bar is white\nhue = py/64 + hour/24 + t/10\nhsv(x + hue, bar ? 0 : 1, lit)"),
         ("big clock (beta.10)", "loop 60\n-- Big clock: the time in four big digits, and a seconds bar along the bottom\nframe {\n  h1 = floor(hour/10); h2 = hour % 10       -- the hours' two digits\n  m1 = floor(minute/10); m2 = minute % 10   -- the minutes' two digits\n  end = (second + 1)*128/60                 -- where the seconds bar ends\n}\n-- a digit: the bold font's 3 x 5 pixels, each 8 px wide, 6 tall (24 x 30)\nq = px >= 64 ? px - 8 : px     -- the minutes sit 8 px further right\nk = floor(q/32)                -- which digit: one every 32 px (0 1, then 2 3)\nn = k < 1 ? h1 : k < 2 ? h2 : k < 3 ? m1 : m2   -- and its value\ncol = floor(q % 32 / 8)        -- the font's column, 0 to 2 (then the gap)\nrow = floor((31 - py)/6)       -- its row from the top, 0 to 4 (5: below)\nbar = py < 1                   -- the bottom row is the seconds bar\nlit = bar ? px < end : digit(n, col, row, bold)\n-- a rainbow drifting through the digits, tilted by row; the bar is white\nhue = py/64 + hour/24 + t/10\nhsv(x + hue, bar ? 0 : 1, lit)"),
+        ("tab (+mul +add)", "table T = 0.1, 0.5, 0.9, 0.3\ngray(T[x * 4] + t)"),
+        ("ink (+1 dot)", "draw { dot(-1, -1, t) }\ngray(ink)"),
         ("out hsv", "hsv(x, 1, 1)"),
         ("out pal", "pal(fire, x)"),
     ];
@@ -471,6 +500,57 @@ pub fn run(root: &str) {
             "psi-probe: step {what:<18} pixel steps {px} (+{row} row): p50 {p50} p90 {p90} us a frame = {} ns a pixel, est {} us",
             p50 as u64 * 1000 / 4096,
             prog.esp32_us()
+        );
+    }
+
+    // The draw stage: frames against the one-dot baseline, per turn (or per
+    // line), for `Program::draw_us`'s constants (the design's guesses: a
+    // scalar step 300 ns, a line 1,500 + 200 a pixel, a dot 400).
+    const DRAW_STEPS: [(&str, &str, u32); 7] = [
+        ("draw base (1 dot off)", "draw { dot(-1, -1, t) }\ngray(ink)", 1),
+        ("draw loop step: 1024 dots off", "draw { for k < 1024 { dot(-1, -1, t) } }\ngray(ink)", 1024),
+        ("draw loop step: +add", "draw { for k < 1024 { dot(-1, -1, k + t) } }\ngray(ink)", 1024),
+        ("draw loop step: +hash", "draw { for k < 1024 { dot(-1, -1, hash(k, t)) } }\ngray(ink)", 1024),
+        ("draw dot on panel x1024", "draw { for k < 1024 { dot(k % 128, 5 + t) } }\ngray(ink)", 1024),
+        ("draw line 12 x256", "draw { for k < 256 { line(10, 5, 21, 5 + t) } }\ngray(ink)", 256),
+        ("draw line 100 x64", "draw { for k < 64 { line(10, 5, 109, 5 + t) } }\ngray(ink)", 64),
+    ];
+    let mut base = 0u32;
+    for (what, src, n) in DRAW_STEPS {
+        if psi::compile_into(src, &mut prog).is_err() {
+            say!(error, "psi-probe: step {what}: does not compile");
+            continue;
+        }
+        let (p50, p90, _) = lanes_over::<128>(&prog, 8000, None, &mut out);
+        if n == 1 {
+            base = p50;
+        }
+        say!(info,
+            "psi-probe: step {what:<30} p50 {p50} p90 {p90} us a frame = {} ns a turn over the base, est {} us (draw {} us)",
+            u64::from(p50.saturating_sub(base)) * 1000 / u64::from(n),
+            prog.esp32_us(),
+            prog.draw_us()
+        );
+    }
+    // The drawing examples as effects (the real path: `Fx::parse`, its
+    // canvas taken at open, `Fx::frame`).
+    for (name, src) in [("Starfield", STARFIELD_EX), ("Wireframe cube", CUBE_EX)] {
+        let est = psi::compile(src).map(|p| p.esp32_us()).unwrap_or(0);
+        let h0 = heap();
+        let Some(mut fx) = Fx::parse(&fx_psi::path(src, "a=0.5")) else {
+            say!(error, "psi-probe: example {name}: did not open");
+            continue;
+        };
+        let h1 = heap();
+        let delay = fx.delay();
+        let n = fx.loop_frames();
+        let (e50, e90, emax) = timed(|k| {
+            fx.frame(delay * (k % n), &mut canvas);
+        });
+        drop(fx);
+        say!(info,
+            "psi-probe: example {name} as an effect: p50 {e50} p90 {e90} max {emax} us a frame, est {est} us, heap {h0} -> {h1} B ({} B for the effect and its canvas)",
+            h0.saturating_sub(h1)
         );
     }
 
