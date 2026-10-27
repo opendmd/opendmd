@@ -40,10 +40,18 @@ pub struct PsiFx {
     /// The draw stage's canvas (4 KB), held only while the formula draws
     /// (`draw { }`); `None` is all-zero, so the zeroed box is valid.
     ink: Option<Box<psi::Ink>>,
+    /// When the canvas was last asked for and refused (the installed
+    /// clock's µs; 0: not refused): asked again a second later (a clone
+    /// made without one; see `frame`).
+    ink_tried: u32,
     delay_ms: u8,
     inputs: psi::Inputs,
     gov: Governor,
 }
+
+/// How long a formula that draws waits to ask for its canvas again after
+/// the heap refused it (the look's `refused` convention).
+const CANVAS_RETRY_US: u32 = 1_000_000;
 
 /// A formula estimated to render slower than this (µs a frame on the
 /// ESP32) is refused: ~3.5 × the ring clock sketch, ~5 × the heaviest
@@ -465,6 +473,18 @@ impl Effect for PsiFx {
         }
         let clock = clock();
         let t0 = clock.map_or(0, |c| c());
+        // A formula that draws but has no canvas (a clone made when the heap
+        // hadn't 4 KB) draws without it, `ink` 0, and asks again once a
+        // second (every frame without a clock: the simulator, the tests).
+        if self.prog.draws() && self.ink.is_none() {
+            let due = clock.is_none()
+                || self.ink_tried == 0
+                || t0.wrapping_sub(self.ink_tried) >= CANVAS_RETRY_US;
+            if due {
+                self.ink = psi::Ink::try_boxed();
+                self.ink_tried = if self.ink.is_some() { 0 } else { t0 | 1 };
+            }
+        }
         let (bytes, dirty) = canvas.bytes_and_dirty_mut();
         psi::render_rows_ink::<LANES>(
             &self.prog,
@@ -545,6 +565,9 @@ pub struct FormulaLook {
     next: Option<Duration>,
     /// Draw every row at the next `apply` (just taken, or a new formula).
     fresh: bool,
+    /// When the heap last refused the look's canvas (its `apply` time):
+    /// asked again a second later, not every frame.
+    ink_tried: Option<Duration>,
     /// Frames of its own still left out of the governor: the first after a
     /// take, a new formula or a new file (a cold flash cache, the file's
     /// open in the same tick).
@@ -609,6 +632,7 @@ impl FormulaLook {
             t0: None,
             next: None,
             fresh: true,
+            ink_tried: None,
             cold: Governor::SKIP,
         };
         look.set(&q, est);
@@ -699,8 +723,9 @@ impl FormulaLook {
         let est = Self::compile(&q, &mut prog)?;
         self.prog = prog;
         // Held: a look that starts drawing takes its canvas now (if the heap
-        // hasn't it, `apply` asks again each frame and `ink` reads 0 till
-        // then); one that stops gives it back.
+        // hasn't it, `apply` asks again a second later and `ink` reads 0
+        // till then); one that stops gives it back.
+        self.ink_tried = None;
         if let Some(b) = self.held.as_mut() {
             b.ink = canvas_for(&self.prog, b.ink.take()).unwrap_or(None);
             let ink = b
@@ -857,8 +882,22 @@ impl FormulaLook {
         let Some(b) = self.held.as_mut() else {
             return under;
         };
-        if self.prog.draws() && b.ink.is_none() {
+        // No canvas yet (refused at a retune or a moment ago): asked again
+        // once a second; when it comes, every row is drawn (the draw stage
+        // runs only on a full render).
+        if self.prog.draws()
+            && b.ink.is_none()
+            && self
+                .ink_tried
+                .is_none_or(|t| now >= t + Duration::from_micros(u64::from(CANVAS_RETRY_US)))
+        {
             b.ink = psi::Ink::try_boxed();
+            if b.ink.is_some() {
+                self.ink_tried = None;
+                self.fresh = true;
+            } else {
+                self.ink_tried = Some(now);
+            }
         }
         let own = self.fresh || (animated && self.next.is_none_or(|n| now >= n));
         let rows = if own {
@@ -1831,5 +1870,59 @@ mod tests {
                 assert_eq!(a[0] > 0, b[0] > 0, "{x0},{y0} -> {x1},{y1}: pixel {k}");
             }
         }
+    }
+
+    /// A formula that draws but lost its canvas (a clone made when the heap
+    /// hadn't 4 KB) asks for it again in `frame` and then draws as it
+    /// should; with a clock, once a second, not every frame.
+    #[test]
+    fn a_formula_without_its_canvas_asks_again() {
+        let mut fx = Fx::parse(&path(STARS)).unwrap();
+        let Fx::Psi(p) = &mut fx else { panic!() };
+        p.ink = None;
+        let mut c = Canvas::new();
+        fx.frame(Duration::from_millis(140), &mut c);
+        assert_eq!(c.as_bytes(), drawn(STARS, 140).as_slice());
+        // With a clock: refused just now (a fake: a time 0.5 s after it),
+        // not asked again until a second has passed.
+        fn half() -> u32 {
+            1_500_000
+        }
+        set_clock(Some(half));
+        let Fx::Psi(p) = &mut fx else { panic!() };
+        p.ink = None;
+        p.ink_tried = 1_000_001;
+        fx.frame(Duration::from_millis(140), &mut c);
+        let Fx::Psi(p) = &mut fx else { panic!() };
+        assert!(p.ink.is_none(), "asked again within the second");
+        p.ink_tried = 400_001;
+        fx.frame(Duration::from_millis(140), &mut c);
+        set_clock(None);
+        let Fx::Psi(p) = &fx else { panic!() };
+        assert!(p.ink.is_some(), "asked again after it");
+    }
+
+    /// A look's partial redraws (the rows its GIF changed) don't run the
+    /// draw stage: its time is the rows', not the lines'.
+    #[test]
+    fn a_looks_partial_redraw_does_not_draw_again() {
+        let src = psi::look::compose(STARS, "screen", 60).unwrap();
+        let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
+        assert!(look.take());
+        let mut c = picture();
+        look.apply(Duration::ZERO, &mut c, 0);
+        let before = look.held.as_ref().unwrap().ink.as_ref().unwrap().0;
+        // Poison the canvas: a partial redraw shows the poison (not drawn
+        // again), the next frame of its own draws it fresh.
+        look.held.as_mut().unwrap().ink.as_mut().unwrap().0.fill(0);
+        let mut c = picture();
+        c.dirty_mut().clear();
+        c.dirty_mut().mark_span(5, 0, crate::canvas::WIDTH);
+        let _ = look.apply(Duration::from_millis(1), &mut c, 0);
+        assert!(look.held.as_ref().unwrap().ink.as_ref().unwrap().0.iter().all(|&b| b == 0));
+        look.redraw();
+        let mut c = picture();
+        let _ = look.apply(Duration::from_millis(2), &mut c, 0);
+        assert_eq!(look.held.as_ref().unwrap().ink.as_ref().unwrap().0, before);
     }
 }
