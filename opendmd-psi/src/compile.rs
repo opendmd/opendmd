@@ -114,6 +114,8 @@ enum Tok {
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Comma,
     Dot,
     Assign,
@@ -139,6 +141,8 @@ fn describe(t: Tok) -> &'static str {
         Tok::LParen => "`(`",
         Tok::RBrace => "`}`",
         Tok::LBrace => "`{`",
+        Tok::RBracket => "`]`",
+        Tok::LBracket => "`[`",
         Tok::Comma => "`,`",
         Tok::Dot => "`.`",
         Tok::Assign => "`=`",
@@ -355,6 +359,8 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             (b')', _) => (Tok::RParen, 1),
             (b'{', _) => (Tok::LBrace, 1),
             (b'}', _) => (Tok::RBrace, 1),
+            (b'[', _) => (Tok::LBracket, 1),
+            (b']', _) => (Tok::RBracket, 1),
             (b',', _) => (Tok::Comma, 1),
             (b'=', _) => (Tok::Assign, 1),
             _ => {
@@ -364,7 +370,6 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
                     '^' => " (there is no power operator: multiply, e.g. `x * x`)",
                     '&' | '|' => " (write `and` / `or`)",
                     '"' => " (there are no strings: for a character's code write it in single quotes, 'A')",
-                    '[' | ']' => " (use `(` and `)`)",
                     _ => "",
                 };
                 return Err(Error::new(
@@ -375,8 +380,8 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             }
         };
         match tok {
-            Tok::LParen => depth += 1,
-            Tok::RParen => depth = depth.saturating_sub(1),
+            Tok::LParen | Tok::LBracket => depth += 1,
+            Tok::RParen | Tok::RBracket => depth = depth.saturating_sub(1),
             _ => {}
         }
         i += n;
@@ -446,9 +451,10 @@ enum Input {
     Ug,
     Ub,
     Ul,
+    Ink,
 }
 
-const INPUTS: [(&str, Input, &str); 16] = [
+const INPUTS: [(&str, Input, &str); 17] = [
     ("x", Input::X, "the pixel's position across, 0 to 1"),
     (
         "y",
@@ -485,6 +491,7 @@ const INPUTS: [(&str, Input, &str); 16] = [
         Input::Ul,
         "the brightness of the picture under the formula, 0 to 1",
     ),
+    ("ink", Input::Ink, "what `draw { }` put at the pixel, 0 to 1"),
 ];
 
 /// Values added once people had saved formulas (2026-10-26), about the
@@ -581,7 +588,11 @@ const PALETTES: [(&str, u8); 7] = [
     ("gray", 255),
 ];
 
-const KEYWORDS: [&str; 5] = ["loop", "frame", "layer", "part", "use"];
+const KEYWORDS: [&str; 8] = ["loop", "frame", "layer", "part", "use", "draw", "for", "table"];
+
+/// The draw stage's primitives: statements inside `draw { }`, and names a
+/// formula may still set (`line = …`), as `ink` is a value it may.
+const PRIMITIVES: [&str; 2] = ["line", "dot"];
 
 /// How a layer goes onto what is below it (`layer add { … }`; `over` when
 /// none is named).
@@ -656,11 +667,18 @@ type Id = u16;
 
 const LV_CONST: u8 = 0;
 const LV_FRAME: u8 = 1;
-const LV_ROW: u8 = 2;
-const LV_PIXEL: u8 = 3;
+/// Inside a `for` of the draw stage (`LV_LOOP2`: one inside another): a
+/// value that depends on its counter, worked out each turn.
+const LV_LOOP1: u8 = 2;
+const LV_LOOP2: u8 = 3;
+const LV_ROW: u8 = 4;
+const LV_PIXEL: u8 = 5;
 
 const K_CONST: u8 = 200;
 const K_INPUT: u8 = 201;
+/// A `for` loop's counter (`val`: the loop's number), given a scalar slot
+/// when the loop is laid out.
+const K_COUNTER: u8 = 202;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Node {
@@ -772,6 +790,7 @@ impl Dag {
             Input::Ug => Some(code::U_G),
             Input::Ub => Some(code::U_B),
             Input::Ul => Some(code::U_L),
+            Input::Ink => Some(code::INK),
             _ => None,
         };
         if let Some(c) = under {
@@ -801,7 +820,7 @@ impl Dag {
             Input::A => (S_A as i32, LV_FRAME),
             Input::B => (S_B as i32, LV_FRAME),
             Input::C => (S_C as i32, LV_FRAME),
-            Input::Ur | Input::Ug | Input::Ub | Input::Ul => (0, LV_PIXEL),
+            Input::Ur | Input::Ug | Input::Ub | Input::Ul | Input::Ink => (0, LV_PIXEL),
         };
         self.push(
             Node {
@@ -910,6 +929,42 @@ impl Dag {
 }
 
 impl Dag {
+    /// `NAME[k]`, the table of `len` entries at `start` of `tables`: a
+    /// constant `k` is its entry (or 0), any other a `TAB` step at `k`'s
+    /// level.
+    #[inline(never)]
+    fn tab(
+        &mut self,
+        k: Id,
+        start: usize,
+        len: usize,
+        tables: &[i32],
+        at: (usize, usize),
+    ) -> Result<Id, Error> {
+        if let Some(v) = self.konst(k) {
+            let i = v >> 16;
+            let e = if (0..len as i32).contains(&i) {
+                tables.get(start + i as usize).copied().unwrap_or(0)
+            } else {
+                0
+            };
+            return self.constant(e, at);
+        }
+        let m = self.nodes[k as usize];
+        self.push(
+            Node {
+                code: code::TAB,
+                a: k,
+                b: start as Id,
+                c: (len - 1) as Id,
+                val: 0,
+                level: m.level,
+                why: m.why,
+            },
+            at,
+        )
+    }
+
     /// `pick(k, choices…)`: the choice floor(k) counts to from 0, or 0. A
     /// constant `k` is that choice; a per-pixel `k` of choices that are the
     /// same for every pixel, one `PICK` step; otherwise compares and
@@ -978,8 +1033,30 @@ struct Local<'s> {
     /// local it made a long formula quadratic).
     at: usize,
     in_frame: bool,
+    /// A `for` loop's counter (it can't be set).
+    counter: bool,
     /// The scope it was set in ([`Parser::scopes`]).
     scope: u16,
+}
+
+/// `table NAME = …`: its entries are `Parser::tables[start..start + len]`.
+struct Table<'s> {
+    name: &'s str,
+    at: usize,
+    scope: u16,
+    start: usize,
+    len: usize,
+}
+
+/// The draw stage as written, in order: loops (their counter node and
+/// count) around lines and dots (their values: x0, y0, x1, y1, v0, v1; x,
+/// y, v).
+#[derive(Clone, Copy)]
+enum DItem {
+    For(Id, u16),
+    End,
+    Line([Id; 6]),
+    Dot([Id; 3]),
 }
 
 /// `part name { … }`: another formula inside this one, pasted in, with
@@ -1038,6 +1115,23 @@ struct Parser<'s> {
     parts: Vec<Part<'s>>,
     env: Env,
     work: usize,
+    /// `table` entries (Q16.16; the same run of numbers is stored once) and
+    /// the tables' names.
+    tables: Vec<i32>,
+    table_names: Vec<Table<'s>>,
+    /// The draw stage: its items, the `draw` that wrote them, whether the
+    /// lines being read are recorded (not for a part read again at another
+    /// place: its draw stage is the one read where it is written), how deep
+    /// inside `draw { }` the parser is (0 outside, 1 its own lines, 2 and 3
+    /// in loops), the loops' counts around it, loops numbered so far, and
+    /// loop turns a frame.
+    draw: Vec<DItem>,
+    drawn: Option<Token>,
+    record: bool,
+    in_draw: u8,
+    counts: [u32; 2],
+    loops: u16,
+    turns: u32,
 }
 
 /// A colour: an `OUT_*` code, its arguments, the palette, how much of the
@@ -1345,6 +1439,11 @@ impl<'s> Parser<'s> {
         if let Some(k) = self.part_named(name) {
             return self.part_value(t, k);
         }
+        if self.peek().tok == Tok::LBracket
+            || (!self.table_names.is_empty() && self.table_named(name).is_some())
+        {
+            return self.table_read(t);
+        }
         if self.peek().tok == Tok::LParen {
             if name == "rgb" && self.env.ch < NO_CH {
                 return self.rgb_channel();
@@ -1394,6 +1493,8 @@ impl<'s> Parser<'s> {
                     "`{name}(…)` makes the colour, so it can only be the whole last line \
                      (of the formula, or of a layer)"
                 )
+            } else if PRIMITIVES.contains(&name) {
+                format!("`{name}(…)` draws: it goes on a line of its own inside `draw {{ }}`")
             } else if self.lookup_value(name).is_some() {
                 format!("`{name}` is a value, not a function")
             } else {
@@ -1888,7 +1989,9 @@ impl<'s> Parser<'s> {
     /// and not one already set here.
     fn new_name(&self, t: Token) -> Result<&'s str, Error> {
         let name = self.text(t);
-        if let Some(e) = INPUTS.iter().find(|e| e.0 == name) {
+        // (`ink` came after formulas were saved: a name set with it is that
+        // name, as `cx` and the rest.)
+        if let Some(e) = INPUTS.iter().find(|e| e.0 == name && e.0 != "ink") {
             return self.err(
                 t,
                 format!("`{name}` is built in ({}); pick another name", e.2),
@@ -1911,12 +2014,17 @@ impl<'s> Parser<'s> {
                 format!("`{name}` is a palette's name; pick another name"),
             );
         }
-        let prev = self
+        let local = self
             .locals
             .iter()
-            .find(|l| l.name == name && self.visible(l.scope))
+            .find(|l| l.name == name && self.visible(l.scope));
+        if local.is_some_and(|l| l.counter) {
+            return self.err(t, format!("`{name}` is a loop counter: it can't be set"));
+        }
+        let prev = local
             .map(|l| l.at)
-            .or(self.part_named(name).map(|k| self.parts[k].at));
+            .or(self.part_named(name).map(|k| self.parts[k].at))
+            .or(self.table_named(name).map(|k| self.table_names[k].at));
         if let Some(at) = prev {
             return self.err(
                 t,
@@ -1952,11 +2060,15 @@ impl<'s> Parser<'s> {
                 ),
             ));
         }
+        if self.in_draw > 0 {
+            self.drawable(id, start, end)?;
+        }
         self.locals.push(Local {
             name,
             id,
             at: t.start,
             in_frame,
+            counter: false,
             scope: self.scope,
         });
         self.end_of_statement()
@@ -2200,6 +2312,7 @@ impl<'s> Parser<'s> {
                     )
                 }
                 "frame" => self.frame_block(t, &mut seen_frame)?,
+                "draw" | "table" | "for" => return Err(self.misplaced(t)),
                 _ if self.is_assignment() => self.assignment(false)?,
                 _ => colour = Some((self.colour_or_value(t, Tok::RBrace)?, t)),
             }
@@ -2328,8 +2441,12 @@ impl<'s> Parser<'s> {
         if self.depth > MAX_DEPTH {
             return self.err(by, "parts go too deep here — take one out of another");
         }
-        // (What it sets stays, in a scope nothing else sees: `p.v` reads it.)
-        let saved = (self.pos, self.scope, self.env);
+        // (What it sets stays, in a scope nothing else sees: `p.v` reads it.
+        // Its draw stage is recorded where it is written, not again for
+        // each other place.)
+        let saved = (self.pos, self.scope, self.env, self.record, self.in_draw);
+        self.record &= at.is_none();
+        self.in_draw = 0;
         // Its own time: `t` modulo its loop, unless the time here is shorter.
         let t = if self.env.loop_v <= loop_v {
             self.env.t
@@ -2350,7 +2467,7 @@ impl<'s> Parser<'s> {
         self.pos = body;
         let b = self.body(Tok::RBrace)?;
         let scope = self.scope;
-        (self.pos, self.scope, self.env) = saved;
+        (self.pos, self.scope, self.env, self.record, self.in_draw) = saved;
         self.depth -= PART_DEPTH;
         let p = &mut self.parts[k];
         p.insts.push(Inst {
@@ -2428,6 +2545,370 @@ impl<'s> Parser<'s> {
         )
     }
 
+    /// `draw`, `table` or `for` at `t` where it can't go (inside a layer;
+    /// `for` outside `draw { }`).
+    #[cold]
+    #[inline(never)]
+    fn misplaced(&self, t: Token) -> Error {
+        self.fail(
+            t,
+            match self.text(t) {
+                "draw" => "`draw { }` goes at the top of the formula (or a part), not inside a layer",
+                "table" => "a table goes at the top of the formula (or a part), not inside a layer",
+                _ => "`for` goes inside `draw { }`: `draw { for k < 12 { … } }`",
+            },
+        )
+    }
+
+    /// The table called `name` that can be seen here.
+    #[inline(never)]
+    fn table_named(&self, name: &str) -> Option<usize> {
+        self.table_names
+            .iter()
+            .rposition(|tb| tb.name == name && self.visible(tb.scope))
+    }
+
+    /// `NAME[k]` at `t` (its name), or why not: a table not read with
+    /// `[ ]`, or `[ ]` after something that is not a table.
+    #[inline(never)]
+    fn table_read(&mut self, t: Token) -> Result<Id, Error> {
+        let name = self.text(t);
+        let Some(k) = self.table_named(name) else {
+            return self.err(
+                t,
+                format!("`[ ]` reads a table: `NAME[k]` — `{name}` is not a table"),
+            );
+        };
+        let open = self.peek();
+        if open.tok != Tok::LBracket {
+            return self.err(
+                t,
+                format!("`{name}` is a table: read one of its numbers with `{name}[k]` (k from 0)"),
+            );
+        }
+        self.next();
+        let i = self.expr(0)?;
+        let close = self.peek();
+        if close.tok != Tok::RBracket {
+            if close.tok == Tok::Eof || self.line_of(close.start) > self.line_of(open.start) {
+                return self.err(open, "this `[` is never closed — add `]`");
+            }
+            return Err(self.expected(close, "`]`"));
+        }
+        self.next();
+        let (start, len) = (self.table_names[k].start, self.table_names[k].len);
+        self.dag.tab(i, start, len, &self.tables, (t.start, close.end))
+    }
+
+    /// `table NAME = n, n, …` at `kw`: numbers only (a `,` may end a line
+    /// and the numbers go on), 256 in all.
+    #[inline(never)]
+    fn table(&mut self, kw: Token) -> Result<(), Error> {
+        self.next();
+        let n = self.peek();
+        if n.tok != Tok::Name {
+            return self.err(n, "a table needs a name, as in `table T = 1, 2, 3`");
+        }
+        let name = self.new_name(n)?;
+        self.next();
+        self.expect(Tok::Assign, "`=` (as in `table T = 1, 2, 3`)")?;
+        let mut vals: Vec<i32> = Vec::new();
+        loop {
+            let neg = self.peek().tok == Tok::Minus;
+            if neg {
+                self.next();
+            }
+            let v = self.peek();
+            let Tok::Num(x) = v.tok else {
+                return self.err(
+                    v,
+                    "a table holds numbers only, up to 256 in all, as in `table T = 1, -2, 0.5`",
+                );
+            };
+            self.next();
+            vals.push(if neg { -x } else { x });
+            if self.peek().tok != Tok::Comma {
+                break;
+            }
+            self.next();
+            self.skip_newlines();
+        }
+        // The same numbers already held (a part read again, or two tables
+        // alike): stored once.
+        let start = match self.tables.windows(vals.len()).position(|w| w == vals.as_slice()) {
+            Some(k) => k,
+            None => {
+                if self.tables.len() + vals.len() > MAX_TABLE {
+                    return self.err(
+                        kw,
+                        format!(
+                            "a table holds numbers only, up to {MAX_TABLE} in all — this would make {}",
+                            self.tables.len() + vals.len()
+                        ),
+                    );
+                }
+                self.tables.extend_from_slice(&vals);
+                self.tables.len() - vals.len()
+            }
+        };
+        self.table_names.push(Table {
+            name,
+            at: n.start,
+            scope: self.scope,
+            start,
+            len: vals.len(),
+        });
+        self.end_of_statement()
+    }
+
+    /// Whether `id` (a value from `start` to `end`) can be used inside
+    /// `draw { }`: the same for every pixel.
+    #[inline(never)]
+    fn drawable(&self, id: Id, start: usize, end: usize) -> Result<(), Error> {
+        if self.dag.level(id) < LV_ROW {
+            return Ok(());
+        }
+        let why = INPUTS[self.dag.nodes[id as usize].why as usize];
+        Err(Error::new(
+            start,
+            end.max(start),
+            format!(
+                "inside draw {{ }} only values that are the same for every pixel can be used \
+                 (no x, y, px, py, i, ur, ug, ub, ul or ink), but this uses `{}` ({})",
+                why.0, why.2
+            ),
+        ))
+    }
+
+    /// `draw { … }` at `kw`: once a frame, before the rows — values, `for`
+    /// loops, `line(…)` and `dot(…)` into the canvas `ink` reads.
+    #[inline(never)]
+    fn draw_block(&mut self, kw: Token) -> Result<(), Error> {
+        self.next();
+        if self.in_layer() {
+            return Err(self.misplaced(kw));
+        }
+        if self.record && self.drawn.is_some() {
+            return self.err(
+                kw,
+                "there can be one `draw { }` block (the formula's or one part's: they share one canvas)",
+            );
+        }
+        let open = self.peek();
+        if open.tok != Tok::LBrace {
+            return Err(self.expected(open, "`{` (as in `draw { … }`)"));
+        }
+        self.next();
+        if self.record {
+            self.drawn = Some(kw);
+        }
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(self.too_deep());
+        }
+        self.in_draw = 1;
+        let r = self.draw_lines(kw);
+        self.in_draw = 0;
+        self.depth -= 1;
+        r?;
+        self.next();
+        self.end_of_statement()
+    }
+
+    /// The lines of a `draw { }` or a `for` (at `kw`) up to its `}`.
+    fn draw_lines(&mut self, kw: Token) -> Result<(), Error> {
+        self.skip_newlines();
+        loop {
+            let t = self.peek();
+            match t.tok {
+                Tok::RBrace => return Ok(()),
+                Tok::Eof => {
+                    return self.err(
+                        kw,
+                        if self.text(kw) == "for" {
+                            "this `for {` is never closed — add `}`"
+                        } else {
+                            "this `draw {` is never closed — add `}`"
+                        },
+                    )
+                }
+                _ => {}
+            }
+            let word = if t.tok == Tok::Name { self.text(t) } else { "" };
+            let next = self.toks[self.pos + 1].tok;
+            if next == Tok::Assign {
+                self.assignment(false)?;
+            } else if word == "for" {
+                self.for_loop(t)?;
+            } else if PRIMITIVES.contains(&word) && next == Tok::LParen {
+                self.primitive(t)?;
+            } else {
+                return self.err(
+                    t,
+                    "inside draw { } go `name = value`, `for k < N { … }`, `line(…)` and `dot(…)` lines only",
+                );
+            }
+            self.skip_newlines();
+        }
+    }
+
+    /// `for k < N { … }` at `kw`: `k` = 0, 1, … N − 1, N a whole number
+    /// from 1 to 1024; two deep at most; 2048 turns a frame in all.
+    #[inline(never)]
+    fn for_loop(&mut self, kw: Token) -> Result<(), Error> {
+        self.next();
+        if self.in_draw > 2 {
+            return self.err(kw, "`for` loops go two deep at most");
+        }
+        let (n, lt, num) = (self.peek(), self.toks[self.pos + 1], self.toks[self.pos + 2]);
+        let count = match (n.tok, lt.tok, num.tok) {
+            (Tok::Name, Tok::Lt, Tok::Num(v)) if v & 0xffff == 0 && (ONE..=1024 * ONE).contains(&v) => {
+                (v >> 16) as u32
+            }
+            _ => {
+                return self.err(
+                    kw,
+                    "`for` takes a name and a count, e.g. `for k < 12 { … }` (a whole number from 1 to 1024)",
+                )
+            }
+        };
+        let name = self.text(n);
+        if self
+            .locals
+            .iter()
+            .any(|l| l.counter && l.name == name && self.visible(l.scope))
+        {
+            return self.err(n, format!("`{name}` is already a loop counter here"));
+        }
+        let name = self.new_name(n)?;
+        self.pos += 3;
+        let open = self.peek();
+        if open.tok != Tok::LBrace {
+            return Err(self.expected(open, "`{` (as in `for k < 12 { … }`)"));
+        }
+        self.next();
+        let depth = (self.in_draw - 1) as usize;
+        let turns = if depth == 0 { count } else { count * self.counts[0] };
+        if self.record {
+            self.turns += turns;
+            if self.turns > crate::draw::TURNS {
+                return self.err(
+                    kw,
+                    format!(
+                        "this formula draws too much a frame ({} loop turns in all; the limit is {}) — fewer or shorter loops",
+                        self.turns,
+                        crate::draw::TURNS
+                    ),
+                );
+            }
+        }
+        self.counts[depth] = count;
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(self.too_deep());
+        }
+        let outer = self.scope;
+        self.scopes.push((outer, false));
+        self.scope = (self.scopes.len() - 1) as u16;
+        let ctr = self.dag.push(
+            Node {
+                code: K_COUNTER,
+                a: 0,
+                b: 0,
+                c: 0,
+                val: self.loops as i32,
+                level: if depth == 0 { LV_LOOP1 } else { LV_LOOP2 },
+                why: 0,
+            },
+            (n.start, n.end),
+        )?;
+        self.loops += 1;
+        self.locals.push(Local {
+            name,
+            id: ctr,
+            at: n.start,
+            in_frame: false,
+            counter: true,
+            scope: self.scope,
+        });
+        if self.record {
+            self.draw.push(DItem::For(ctr, count as u16));
+        }
+        self.in_draw += 1;
+        let r = self.draw_lines(kw);
+        self.in_draw -= 1;
+        self.scope = outer;
+        self.depth -= 1;
+        r?;
+        self.next();
+        if self.record {
+            self.draw.push(DItem::End);
+        }
+        self.end_of_statement()
+    }
+
+    /// `line(x0, y0, x1, y1[, v0[, v1]])` or `dot(x, y[, v])` at `t`.
+    #[inline(never)]
+    fn primitive(&mut self, t: Token) -> Result<(), Error> {
+        let line = self.text(t) == "line";
+        let (need, most) = if line { (4, 6) } else { (2, 3) };
+        self.next();
+        let open = self.next();
+        let mut v = [0 as Id; 6];
+        let mut k = 0;
+        if self.peek().tok != Tok::RParen {
+            loop {
+                let start = self.peek().start;
+                let e = self.expr(0)?;
+                let end = self.toks[self.pos.saturating_sub(1)].end;
+                self.drawable(e, start, end)?;
+                if k < 6 {
+                    v[k] = e;
+                }
+                k += 1;
+                if self.peek().tok == Tok::Comma {
+                    self.next();
+                    continue;
+                }
+                break;
+            }
+        }
+        let close = self.peek();
+        if close.tok != Tok::RParen {
+            return Err(self.not_closed(open, close, self.text(t)));
+        }
+        self.next();
+        if k < need || k > most {
+            return self.err(
+                t,
+                if line {
+                    format!("`line` takes 4 values (x0, y0, x1, y1: pixels, y up from the bottom) and, if you like, the ink at each end (0 to 1), but got {k}")
+                } else {
+                    format!("`dot` takes 2 values (x, y: pixels, y up from the bottom) and, if you like, its ink (0 to 1), but got {k}")
+                },
+            );
+        }
+        let at = (t.start, close.end);
+        if line {
+            if k < 5 {
+                v[4] = self.dag.constant(ONE, at)?;
+            }
+            if k < 6 {
+                v[5] = v[4];
+            }
+        } else if k < 3 {
+            v[2] = self.dag.constant(ONE, at)?;
+        }
+        if self.record {
+            self.draw.push(if line {
+                DItem::Line(v)
+            } else {
+                DItem::Dot([v[0], v[1], v[2]])
+            });
+        }
+        self.end_of_statement()
+    }
+
     /// The lines of a formula (`end` Eof) or a part (`end` RBrace, the
     /// cursor after its `{`): names, `frame { }`, `loop`, parts, layers and
     /// the colour.
@@ -2483,6 +2964,9 @@ impl<'s> Parser<'s> {
                     b.blocks += 1;
                 }
                 "part" => self.part(t)?,
+                "draw" => self.draw_block(t)?,
+                "table" => self.table(t)?,
+                "for" => return Err(self.misplaced(t)),
                 "use" => {
                     return self.err(
                         t,
@@ -2564,6 +3048,15 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
             ch: NO_CH,
         },
         work: 0,
+        tables: Vec::new(),
+        table_names: Vec::new(),
+        draw: Vec::new(),
+        drawn: None,
+        record: true,
+        in_draw: 0,
+        counts: [0; 2],
+        loops: 0,
+        turns: 0,
     };
     p.env.loop_v = p.loop_ahead(0).unwrap_or(8 * ONE);
     let body = p.body(Tok::Eof)?;
@@ -2581,6 +3074,19 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
         return Err(Error::new(at, at, msg));
     };
     let frame_values = p.locals.iter().filter(|l| l.in_frame).count();
+    // `ink` with nothing drawn: always a mistake (unlike `ur` alone).
+    if p.drawn.is_none() && p.dag.nodes.iter().any(|m| m.code == code::INK) {
+        let t = (0..p.toks.len())
+            .map(|k| p.toks[k])
+            .find(|&t| t.tok == Tok::Name && p.text(t) == "ink")
+            .unwrap_or(ct);
+        return Err(Error::new(
+            t.start,
+            t.end,
+            "`ink` needs a `draw { }` block to read from",
+        ));
+    }
+    prog.tables[..p.tables.len()].copy_from_slice(&p.tables);
     // A layer under one that covers everything (`over`, coverage 1) is never
     // seen: from the topmost such layer up. If it is the bottom one it is
     // written straight over the pixels (as v0's last line); otherwise the
@@ -2616,7 +3122,7 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
     }
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
-    emit(&p.dag, &steps, backdrop, prog).map_err(|e| Error {
+    emit(&p.dag, &steps, &p.draw, backdrop, prog).map_err(|e| Error {
         start: ct.start,
         end: ct.end,
         ..e
@@ -2651,9 +3157,18 @@ impl Step {
 /// ones (linear scan: a register is free again after its value's last
 /// use, and a step never writes a register it reads). The per-pixel values
 /// go in the order the layers need them: each layer's colour step right
-/// after the values it is the first to read.
+/// after the values it is the first to read. The draw stage, if something
+/// reads `ink`, goes between the per-frame and the per-row steps in the
+/// order it is written: each loop's values (those that depend on its
+/// counter) at the top of its body.
 #[inline(never)]
-fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result<(), Error> {
+fn emit(
+    dag: &Dag,
+    steps: &[Step],
+    draw: &[DItem],
+    backdrop: bool,
+    prog: &mut Program,
+) -> Result<(), Error> {
     let nodes = &dag.nodes;
     let n = nodes.len();
     let too_long = |steps: usize| {
@@ -2674,23 +3189,51 @@ fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result
             need[a as usize] = need[a as usize].min(k);
         }
     }
-    for i in (0..n).rev() {
-        let m = &nodes[i];
-        if need[i] == NONE || m.code >= K_CONST {
-            continue;
-        }
-        for &x in [m.a, m.b, m.c][..code::arity(m.code)].iter() {
-            need[x as usize] = need[x as usize].min(need[i]);
-        }
-        if m.code == code::PICK {
-            for &x in &dag.picks[m.b as usize] {
+    let close = |need: &mut [usize]| {
+        for i in (0..n).rev() {
+            let m = &nodes[i];
+            if need[i] == NONE || m.code >= K_CONST {
+                continue;
+            }
+            for &x in [m.a, m.b, m.c][..code::arity(m.code)].iter() {
                 need[x as usize] = need[x as usize].min(need[i]);
             }
+            if m.code == code::PICK {
+                for &x in &dag.picks[m.b as usize] {
+                    need[x as usize] = need[x as usize].min(need[i]);
+                }
+            }
         }
+    };
+    close(&mut need);
+    // The draw stage only when something shown reads `ink` (else, like a
+    // value nothing uses, it is left out).
+    let inked = (0..n).any(|i| need[i] != NONE && nodes[i].code == code::INK);
+    let draw = if inked { draw } else { &[] };
+    for item in draw {
+        let ids: &[Id] = match item {
+            DItem::Line(v) => v,
+            DItem::Dot(v) => v,
+            _ => &[],
+        };
+        for &x in ids {
+            need[x as usize] = 0;
+        }
+    }
+    close(&mut need);
+    if inked {
+        prog.uses |= INKED;
     }
     let live = |i: usize| need[i] != NONE;
     let is_op = |i: usize| live(i) && nodes[i].code < K_CONST;
-    let total = (0..n).filter(|&i| is_op(i)).count() + steps.len();
+    let control: usize = draw
+        .iter()
+        .map(|d| match d {
+            DItem::Line(_) => 2,
+            _ => 1,
+        })
+        .sum();
+    let total = (0..n).filter(|&i| is_op(i)).count() + steps.len() + control;
     if total > MAX_OPS {
         return Err(too_long(total));
     }
@@ -2743,6 +3286,9 @@ fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result
         let n = code::arity(m.code);
         let l = |k: usize, x: Id| if n > k { loc[x as usize] } else { 0 };
         let (mut b, mut c) = (l(1, m.b), l(2, m.c));
+        if m.code == code::TAB {
+            (b, c) = (m.b as u8, m.c as u8);
+        }
         if m.code == code::PICK {
             let opts = &dag.picks[m.b as usize];
             let tab = &mut tabs[m.b as usize];
@@ -2762,6 +3308,22 @@ fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result
             c,
         })
     };
+    // Each loop's own values: those whose deepest counter is its (a value
+    // at a loop's level takes the loop of its operand at that level).
+    let mut owner = alloc::vec![u16::MAX; n];
+    for i in 0..n {
+        let m = &nodes[i];
+        if m.code == K_COUNTER {
+            owner[i] = m.val as u16;
+        } else if m.code < K_CONST && (m.level == LV_LOOP1 || m.level == LV_LOOP2) {
+            for &x in [m.a, m.b, m.c][..code::arity(m.code)].iter() {
+                if nodes[x as usize].level == m.level {
+                    owner[i] = owner[x as usize];
+                    break;
+                }
+            }
+        }
+    }
     for level in [LV_FRAME, LV_ROW] {
         for i in 0..n {
             let m = &nodes[i];
@@ -2773,6 +3335,73 @@ fn emit(dag: &Dag, steps: &[Step], backdrop: bool, prog: &mut Program) -> Result
         }
         if level == LV_FRAME {
             prog.frame_end = ops.len().min(MAX_OPS) as u16;
+            // The draw stage: FOR (its END patched in when it comes), the
+            // loop's values, its lines and inner loops; END back to just
+            // after the FOR.
+            let mut open: Vec<(usize, u8, u8)> = Vec::new();
+            for item in draw {
+                match *item {
+                    DItem::For(ctr, count) => {
+                        let cs = new_slot(&mut next_slot, Some((count as i32) << 16), prog)?;
+                        let ks = new_slot(&mut next_slot, None, prog)?;
+                        loc[ctr as usize] = ks;
+                        open.push((ops.len(), ks, cs));
+                        ops.push(Op {
+                            code: code::FOR,
+                            d: ks,
+                            a: cs,
+                            b: 0,
+                            c: 0,
+                        });
+                        let lp = nodes[ctr as usize].val as u16;
+                        for i in 0..n {
+                            if is_op(i) && owner[i] == lp {
+                                let d = new_slot(&mut next_slot, None, prog)?;
+                                loc[i] = d;
+                                ops.push(mk(&nodes[i], d, &loc, &mut next_slot, &mut tabs, prog)?);
+                            }
+                        }
+                    }
+                    DItem::End => {
+                        let Some((at, ks, cs)) = open.pop() else {
+                            continue;
+                        };
+                        ops[at].b = ops.len().min(255) as u8;
+                        ops.push(Op {
+                            code: code::END,
+                            d: 0,
+                            a: ks,
+                            b: cs,
+                            c: (at + 1).min(255) as u8,
+                        });
+                    }
+                    DItem::Line(v) => {
+                        let l = |k: usize| loc[v[k] as usize];
+                        ops.push(Op {
+                            code: code::LINE_FROM,
+                            d: 0,
+                            a: l(0),
+                            b: l(1),
+                            c: l(4),
+                        });
+                        ops.push(Op {
+                            code: code::LINE_TO,
+                            d: 0,
+                            a: l(2),
+                            b: l(3),
+                            c: l(5),
+                        });
+                    }
+                    DItem::Dot(v) => ops.push(Op {
+                        code: code::DOT,
+                        d: 0,
+                        a: loc[v[0] as usize],
+                        b: loc[v[1] as usize],
+                        c: loc[v[2] as usize],
+                    }),
+                }
+            }
+            prog.draw_end = ops.len().min(MAX_OPS) as u16;
         } else {
             prog.row_end = ops.len().min(MAX_OPS) as u16;
         }

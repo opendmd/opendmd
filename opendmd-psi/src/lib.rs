@@ -24,6 +24,7 @@
 extern crate alloc;
 
 mod compile;
+mod draw;
 pub mod fixed;
 pub mod look;
 mod program;
@@ -31,11 +32,12 @@ mod tables;
 mod vm;
 
 pub use compile::{compact, compile_into, number, Error, Info, MAX_DEPTH, MAX_NODES, MAX_SOURCE};
-pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, REGS, W};
+pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
+pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
 pub use tables::{Glyphs, Tables, ATAN};
 #[cfg(feature = "tables")]
 pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
-pub use vm::{q16, render_rows, render_with, Inputs, Scratch, Q16_ONE};
+pub use vm::{q16, render_rows, render_rows_ink, render_with, Inputs, Scratch, Q16_ONE};
 
 /// The lane width the effect uses: one panel row.
 pub const LANES: usize = 128;
