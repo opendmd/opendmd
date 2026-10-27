@@ -3839,14 +3839,20 @@ fn choose_still(
     }
     // Any still value may be the one kept (often one inside: `q` read by
     // `q/64` and `frac(q)`, both still too); the heaviest few are weighed.
-    let mut cands: Vec<usize> = (0..n)
-        .filter(|&i| px_op(i) && still[i] && sub[i] >= STILL_GAIN_NS)
-        .collect();
+    // (The heaviest by a scan, not a sort: a sort's code is ~3 KB of wasm.)
+    let mut cands: Vec<usize> = Vec::new();
+    for i in (0..n).filter(|&i| px_op(i) && still[i] && sub[i] >= STILL_GAIN_NS) {
+        if cands.len() < STILL_CANDIDATES {
+            cands.push(i);
+        } else if let Some(m) = (0..cands.len()).min_by_key(|&k| sub[cands[k]]) {
+            if sub[cands[m]] < sub[i] {
+                cands[m] = i;
+            }
+        }
+    }
     if cands.is_empty() {
         return Vec::new();
     }
-    cands.sort_by_key(|&i| core::cmp::Reverse(sub[i]));
-    cands.truncate(STILL_CANDIDATES);
     let cost = |cached: &[usize]| -> u32 {
         let f = per_frame(dag, steps, cached);
         (0..n)

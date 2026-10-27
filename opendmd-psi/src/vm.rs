@@ -250,12 +250,33 @@ fn out3<A: Src, B: Src, C: Src>(
     }
 }
 
+/// `pal(P, k) * s` along the lane, its two operands read with a stride (0:
+/// a value for the lane): one loop for the four kinds of operand.
 #[inline(never)]
-fn out2<A: Src, B: Src>(px: &mut [[u8; 3]], mut a: A, mut b: B, f: impl Fn(i32, i32) -> [u8; 3]) {
+fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32]) {
+    let mut one = [0i32; 2];
+    let mut ptr = [core::ptr::null::<i32>(); 2];
+    let mut stride = [0usize; 2];
+    for k in 0..2 {
+        match args[k] {
+            Arg::Lane(q) => (ptr[k], stride[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..2 {
+        if stride[k] == 0 {
+            ptr[k] = &one[k];
+        }
+    }
     for o in px.iter_mut() {
-        *o = f(a.at(0), b.at(0));
-        a.step(1);
-        b.step(1);
+        // SAFETY: each pointer is a lane of at least `px.len()` values read
+        // once per element (stride 1), or one value (stride 0), alive for
+        // the call.
+        let (k, s) = unsafe { (*ptr[0], *ptr[1]) };
+        *o = fixed::pal_lit(p, k, s);
+        for j in 0..2 {
+            ptr[j] = ptr[j].wrapping_add(stride[j]);
+        }
     }
 }
 
@@ -650,8 +671,10 @@ fn lane_op<const N: usize>(
         SMOOTH => tern!(run3, d, a, b, c, fixed::smooth),
         // A whole `z` (`noise(x, y, 0)`): the plane's four corners only —
         // the other four are weighed 0 there, so the bytes are the same.
-        NOISE => match c {
-            Arg::Sc(z) if z & 0xffff == 0 => bin!(run2, d, a, b, |x, y| fixed::noise_flat(x, y, z)),
+        NOISE => match (a, b, c) {
+            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(z)) if z & 0xffff == 0 => {
+                run2(d, L(p), L(q), |x, y| fixed::noise_flat(x, y, z))
+            }
             _ => tern!(run3, d, a, b, c, fixed::noise),
         },
         // One loop for the four, its operands read with a stride (0: a
@@ -813,14 +836,7 @@ fn colour<const N: usize>(s: &Scratch<N>, op: &Op, base: usize, t: &Tables, px: 
         ]),
         OUT_HSV => outt!(px, a, b, c, fixed::hsv),
         OUT_PAL if op.d & PAL_SCALED != 0 => {
-            let p = t.palettes[((op.d & !PAL_SCALED) as usize).min(4)];
-            let f = |k, s| fixed::pal_lit(p, k, s);
-            match (a, c) {
-                (Arg::Lane(q), Arg::Lane(r)) => out2(px, L(q), L(r), f),
-                (Arg::Lane(q), Arg::Sc(w)) => out2(px, L(q), S(w), f),
-                (Arg::Sc(v), Arg::Lane(r)) => out2(px, S(v), L(r), f),
-                (Arg::Sc(v), Arg::Sc(w)) => px.fill(f(v, w)),
-            }
+            pal_lit_lane(px, [a, c], t.palettes[((op.d & !PAL_SCALED) as usize).min(4)])
         }
         OUT_PAL => {
             let p = t.palettes[(op.d as usize).min(4)];
