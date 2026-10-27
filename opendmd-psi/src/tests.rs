@@ -207,6 +207,15 @@ fn a_scaled_palette_is_its_channels_scaled() {
             .collect();
         assert_eq!(px, &want[..], "pixel {i}");
     }
+    // A scale over 2^n is the value and a shift in the step: the same bytes
+    // as the multiply (and one step fewer).
+    let p = compile("pal(chrono, x) * (floor(y*8 + px % 3 - 1)/8)").unwrap();
+    let q = compile("pal(chrono, x) * (floor(y*8 + px % 3 - 1)/8*(1 + a))").unwrap();
+    assert!(p.len() < q.len(), "{}", p.listing());
+    let (mut o1, mut o2) = (vec![0u8; W * H * 3], vec![0u8; W * H * 3]);
+    render(&p, &mut s, &Inputs::default(), &OWN, &mut o1);
+    render(&q, &mut s, &Inputs::default(), &OWN, &mut o2);
+    assert_eq!(o1, o2);
     // Times a slider, chained, in a layer with coverage; gray is gray(v*k).
     let p = compile("layer { hsv(x, 1, 1) }\nlayer screen { pal(ice, y, 0.5) * a * 2 }").unwrap();
     assert_eq!(p.sliders(), 1);
