@@ -276,6 +276,40 @@ and won't save or share until it's fixed.
 The examples **Bars to stars**, **Rings through stripes** and
 **Kaleidoscope** are made this way.
 
+**Drawing.** Some pictures aren't "each pixel decides for itself": a field
+of stars, a turning wireframe, sparks. For those a formula can **draw**:
+once a frame, before the pixels, a `draw { }` block draws lines and dots,
+and the pixels then read what was drawn where they are as `ink`, from 0 to 1.
+
+```
+loop 4
+draw {
+  for k < 12 {
+    an = k/12 + t/4
+    line(64, 16, 64 + cos(an)*40, 16 + sin(an)*14, 0.2, 1)
+  }
+}
+hsv(x, 0.6, ink)
+```
+
+- `line(x0, y0, x1, y1)` and `dot(x, y)` work in pixels: across from the
+  left, **up from the bottom** (as `px` and `py`). One more value or two is
+  the ink: `dot(x, y, 0.5)`, or `line(…, 1, 0.2)` fading from one end to
+  the other. Where lines cross, the brighter one wins.
+- `for k < 12 { … }` runs its lines with `k` = 0, 1, … 11 (up to 1,024;
+  one loop inside another at most, and 2,048 turns a frame in all). Names
+  set inside a loop are its own.
+- Inside `draw { }` only things that are the same for every pixel: `t`,
+  the clock, the sliders, the loop's `k`. Not `x`, `px` or `ink`.
+- `table T = 1, -2, 0.5` holds numbers (256 in all) and `T[k]` reads number
+  `k`, counting from 0: the corners of a shape, the edges between them, a
+  little picture of your own. It works anywhere, not only in `draw`.
+- The colour comes from the last line, as always: `pal(ice, ink)`,
+  `#40c0ff * ink`, or over a GIF `layer screen { gray(ink) }`.
+- Every frame starts empty: nothing is left over from the frame before.
+
+The examples **Starfield** and **Wireframe cube** are made this way.
+
 **Limits.** A formula can be 4,096 characters and 256 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop
 at the end instead of wrapping round, and dividing by zero gives the
@@ -371,6 +405,8 @@ milliseconds); all the examples are light or medium.
   that cover only part of a pixel a little more.
 - A part costs what its formula costs, once for each place it is drawn
   at: two formulas in one cost about as much as both.
+- Drawing costs by the line, not by the pixel: a few hundred lines a frame
+  is light. A loop's lines count as often as it turns.
 
 ## Sharing
 

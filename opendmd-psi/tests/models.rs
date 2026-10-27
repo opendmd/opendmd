@@ -99,7 +99,7 @@ fn the_reference_matches_the_language() {
         }
     }
     assert!(
-        (20..=30).contains(&examples.len()),
+        (20..=34).contains(&examples.len()),
         "{} worked examples",
         examples.len()
     );
