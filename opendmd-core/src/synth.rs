@@ -67,6 +67,8 @@ const MAX_READ: usize = if cfg!(feature = "psi") {
 } else {
     MAX_PATH
 };
+/// A Formula's name on its path (`&name=`) is cut to this many characters.
+pub const MAX_FORMULA_NAME: usize = 60;
 /// A formula's path starts with this.
 pub const FORMULA: &str = "@fx:psi";
 
@@ -371,13 +373,26 @@ pub fn card_path(title: &str, subtitle: &str) -> String {
 }
 
 /// What a virtual path shows, for `now_playing.title` and the Library: a
-/// card's title, "Power on", "Clock", or a text's message. `None` for
-/// anything else.
+/// card's title, "Power on", "Clock", a text's message, or a Formula's name
+/// (`&name=` on its path, as a playlist entry has it; else "Formula").
+/// `None` for anything else.
 pub fn title(path: &str) -> Option<String> {
     // Without compiling it (2-3 ms and 10 KB on the device), and in builds
-    // without Psi (the web app's Recently played).
+    // without Psi (the web app's Recently played). The player ignores `name`.
     if is_formula(path) {
-        return Some("Formula".to_string());
+        let name = path[FORMULA.len()..]
+            .trim_start_matches('?')
+            .split('&')
+            .find_map(|kv| kv.strip_prefix("name="))
+            .map(|v| url_decode(v.as_bytes()))
+            .map(|n| {
+                n.chars()
+                    .filter(|c| !c.is_control())
+                    .take(MAX_FORMULA_NAME)
+                    .collect::<String>()
+            })
+            .filter(|n| !n.trim().is_empty());
+        return Some(name.unwrap_or_else(|| "Formula".to_string()));
     }
     match parse(path)? {
         Spec::PowerOn => Some("Power on".to_string()),
@@ -1336,6 +1351,21 @@ mod tests {
         assert_eq!(title("@fx:nope"), None);
         // A formula is "Formula", compiled or not, in any build.
         assert_eq!(title("@fx:psi?src=gray(x)&a=0.5").as_deref(), Some("Formula"));
+        // A playlist entry carries its name: decoded, cut to 60, no controls.
+        assert_eq!(
+            title("@fx:psi?src=gray(x)&a=0.5&name=Star+field%21").as_deref(),
+            Some("Star field!")
+        );
+        assert_eq!(
+            title("@fx:psi?src=name%3Dx&name=").as_deref(),
+            Some("Formula")
+        );
+        assert_eq!(
+            title("@fx:psi?src=gray(x)&name=%0A+").as_deref(),
+            Some("Formula")
+        );
+        let long = format!("@fx:psi?src=gray(x)&name={}", "é".repeat(80));
+        assert_eq!(title(&long).unwrap(), "é".repeat(MAX_FORMULA_NAME));
         assert!(is_formula("@fx:psi") && !is_formula("@fx:psix?src=1") && !is_formula("@fx:tunnel"));
         let m = "@fx:starfield?fps=50\n@fx:wire?speed=4\n".to_string();
         let cat = FileCatalog::build(Cursor::new(m.into_bytes()), &Filter::new()).unwrap();
@@ -1427,5 +1457,26 @@ mod tests {
         r.seek(SeekFrom::Start(0)).unwrap();
         let mut again = FrameSource::open(r).unwrap();
         assert!(again.next_frame(&mut canvas).unwrap().is_some());
+    }
+
+    /// A playlist entry's `&name=` is for the playlist and the Now card: the
+    /// player ignores it (the same frames as the path without it).
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_formula_name_on_the_path_plays_the_same() {
+        let src = "loop 1\nhsv(x + t, 1, a)";
+        let frames = |p: &str| {
+            let mut s = SynthSource::new(open(p).unwrap()).unwrap();
+            let mut c = Canvas::new();
+            let mut all = Vec::new();
+            while s.next_frame(&mut c).unwrap().is_some() {
+                all.extend((0..WIDTH * HEIGHT).map(|i| c.get(i % WIDTH, i / WIDTH)));
+            }
+            all
+        };
+        let plain = crate::fx_psi::path(src, "a=0.5");
+        let named = crate::fx_psi::path(src, "a=0.5&name=Rainbow+%26+co");
+        assert_eq!(title(&named).as_deref(), Some("Rainbow & co"));
+        assert_eq!(frames(&plain), frames(&named));
     }
 }
