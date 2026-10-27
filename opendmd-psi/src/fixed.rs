@@ -61,13 +61,44 @@ pub fn mul(a: i32, b: i32) -> i32 {
     // sat(a·b >> 16): the product's high word says whether it fits (it
     // does iff hi is in −32,768..32,767), one test instead of two 64-bit
     // compares.
+    // (As `hi >> 15 == hi >> 31`, hi in −32,768..32,767: two shifts, where
+    // the ESP32's compiler loaded the constants of an add-and-compare from
+    // flash for every element of a lane.)
     let p = a as i64 * b as i64;
     let hi = (p >> 32) as i32;
-    if (hi as u32).wrapping_add(0x8000) >> 16 != 0 {
+    if hi >> 15 != hi >> 31 {
         ends(hi)
     } else {
         (p >> 16) as i32
     }
+}
+
+// The narrowed steps (`crate::range`): what `add`, `sub` and `mul` give
+// when their result is known to fit — no saturation test.
+
+/// `add` of values whose sum fits an i32.
+#[inline(always)]
+pub fn add_w(a: i32, b: i32) -> i32 {
+    a.wrapping_add(b)
+}
+
+/// `sub` of values whose difference fits an i32.
+#[inline(always)]
+pub fn sub_w(a: i32, b: i32) -> i32 {
+    a.wrapping_sub(b)
+}
+
+/// `mul` of values whose product, shifted, fits an i32.
+#[inline(always)]
+pub fn mul_w(a: i32, b: i32) -> i32 {
+    ((a as i64 * b as i64) >> 16) as i32
+}
+
+/// `mul` of values whose product fits an i32 before the shift: one 32-bit
+/// multiply.
+#[inline(always)]
+pub fn mul_n(a: i32, b: i32) -> i32 {
+    a.wrapping_mul(b) >> 16
 }
 
 #[inline(always)]
@@ -506,15 +537,27 @@ pub fn hsv(h: i32, s: i32, v: i32) -> [u8; 3] {
 /// A palette entry for k in 0..1 (clamped): 32 stepped entries.
 #[inline(always)]
 pub fn pal(p: &[[u8; 3]; 32], k: i32) -> [u8; 3] {
-    let i = (clamp(k, 0, ONE) >> 11).min(31) as usize;
-    p[i]
+    p[pal_index(k)]
+}
+
+/// The entry `pal` reads for `k`: 0..=31.
+#[inline(always)]
+pub fn pal_index(k: i32) -> usize {
+    // (`clamp(k, 0, ONE) >> 11`, at most 31: the same without a constant
+    // the ESP32 loads from flash.)
+    ((k.max(0) >> 11) as u32).min(31) as usize
 }
 
 /// `pal(p, k) * s`: the palette's colour with each channel times `s`, as
 /// `rgb(r·s, g·s, b·s)` of its channels read as 0..1 would be.
 #[inline(always)]
 pub fn pal_lit(p: &[[u8; 3]; 32], k: i32, s: i32) -> [u8; 3] {
-    let c = pal(p, k);
+    scale_rgb(pal(p, k), s)
+}
+
+/// A colour's channels each times `s` (`pal_lit` of its entry).
+#[inline(always)]
+pub fn scale_rgb(c: [u8; 3], s: i32) -> [u8; 3] {
     // Exactly `chan(mul(byte(b), s))` for each channel b, without the
     // 64-bit multiply where it isn't needed (the ESP32 has no 64-bit one):
     // s ≤ 0 is 0 (the product is never positive); s = 1 is the byte again

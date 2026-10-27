@@ -40,6 +40,7 @@ use opendmd_core::canvas::Canvas;
 use opendmd_core::fx::Fx;
 use opendmd_core::fx_psi;
 use opendmd_core::psi;
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -55,7 +56,7 @@ const OLD_TV_EX: &str = "loop 4\ndx = (x - 0.5)*1.6; dy = (y - 0.5)*1.2\nlines =
 
 /// The drawing examples (formulas.json), timed as effects.
 const STARFIELD_EX: &str = "loop 2.4\nfps 100\n-- Starfield: 192 stars flying at you, a pass through the field a loop,\n-- each a streak from where it was a moment ago\n-- a: streak length\nframe { back = 1 + 1/64 + (144 + a*240)/4096 }\ndraw {\n  for k < 192 {\n    sx = hash(k, 7)*32 - 16; sy = hash(k, 3)*8 - 4  -- where it is, across and up\n    near = frac(t/2.4 - hash(k, 11))          -- 0 far, 1 at you\n    s = 1/(65/64 - near); st = 1/(back - near)  -- perspective, now and a moment ago\n    hx = sx*s; hy = sy*s                      -- the head, from the middle\n    -- a head off the panel: the line moved far below it, where it is skipped\n    row = abs(hx) > 64 or abs(hy) > 16 ? -999 : 16\n    lit = near*near                           -- squared: far stars stay dark longer\n    line(64 + sx*st, row + sy*st, 64 + hx, row + hy, lit*0.2, lit)\n  }\n}\npal(ice, ink)";
-const TUNNEL_EX: &str = "loop 4.8\n-- Tunnel: the time warp. Each loop the walls turn once, travel two\n-- checker lengths, and the palette goes round once.\n-- From the vanishing point, the tunnel twice as tall as wide:\ndx = px - 63.5; dy = (15.5 - py)*2\n-- how far each pixel is from the black middle: 0 there (where the\n-- tunnel is deeper than 16), ~15 at the edges\n-- (this and `round` depend on the pixel alone: worked out once, kept)\nnear = 16 - min(128/len(dx, dy), 16)\n-- round the walls: 16 checker cells a turn, twisting with depth\ntwist = 1                              -- try 0 to 3\nround = atan2(dy, dx)*16 + (16 - near)*twist/8\n-- the checker, turning and travelling\nu = round + t/0.3; v = 16 + t/0.6 - near\ncell = (floor(u) + floor(v)) % 2\n-- lit by depth (full near, fading as a square, black in the middle) and\n-- by a light going round with the walls, in eight steps\nfade = min(near, 10)                    -- 10 near, to 0 where it turns black\nside = 0.0635 + 0.0159*cos(u/16)\nlight = floor(fade*fade*side + (near > 0))/8\npal(chrono, cell ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * light";
+const TUNNEL_EX: &str = "loop 4.8\nfps 100\n-- Tunnel: the time warp. Each loop the walls turn once, travel two\n-- checker lengths, and the palette goes round once.\n-- From the vanishing point, the tunnel twice as tall as wide:\ndx = px - 63.5; dy = (15.5 - py)*2\n-- how far each pixel is from the black middle: 0 there (where the\n-- tunnel is deeper than 16), ~15 at the edges\n-- (this and `round` depend on the pixel alone: worked out once, kept)\nnear = 16 - min(128/len(dx, dy), 16)\n-- round the walls: 16 checker cells a turn, twisting with depth\ntwist = 1                              -- try 0 to 3\nround = atan2(dy, dx)*16 + (16 - near)*twist/8\n-- the checker, turning and travelling\nu = round + t/0.3; v = 16 + t/0.6 - near\ncell = (floor(u) + floor(v)) % 2\n-- lit by depth (full near, fading as a square, black in the middle) and\n-- by a light going round with the walls, in eight steps\nfade = min(near, 10)                    -- 10 near, to 0 where it turns black\nside = 0.0635 + 0.0159*cos(u/16)\nlight = floor(fade*fade*side + (near > 0))/8\npal(chrono, cell ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * light";
 const ROTOZOOM_EX: &str = "loop 9.6\n-- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing\n-- twice, gliding two checkers across and one down; under it a noise\n-- texture turning the other way twice as fast; rows and columns wobble.\n-- a: wobble = gentle, strong, off\nframe {\n  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn\n  s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice\n  zoom = 2                                         -- try 1 to 4\n  sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel\n  sc2 = sc*0.75\n  cu = t/0.6; cv = t/1.2                           -- the glide, in cells\n  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels\n}\ndx = px - 64; dy = 15 - py\n-- the wobble: rows slide sideways, columns up and down, on travelling waves\nwob = sin((31 - py)/32 + t/3.2)*amp\ncol = sin(px*0.0234375 - t/4.8)*amp\n-- where each pixel is on the checker: its column's part plus its row's\nu = (cu + cs*sc*dx) + (wob - sn*sc*dy)\nv = (cv + sn*sc*dx + col) + cs*sc*dy\ncell = (floor(u) + floor(v)) % 2\nu2 = (cv + c2*sc2*dx) + (wob - s2*sc2*dy)\nv2 = (cu + s2*sc2*dx + col) + c2*sc2*dy\npal(fire, (cell ? 0.44 : 0.19) + noise(u2, v2, 0)*0.6)";
 const ROTOZOOM_FLOOR_EX: &str = "loop 9.6\nfps 100\n-- Rotozoom floor: Mode 7 as a floor. A checker running away to a horizon\n-- at the top, turning once a loop and gliding, each row scaled by its\n-- distance and the far rows fogged; rows and columns wobble.\n-- a: wobble = gentle, strong, off\nframe {\n  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn\n  zoom = 2                                         -- try 1 to 4\n  cu = t/0.6; cv = t/1.2                           -- the glide, in cells\n  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels\n}\ndx = px - 64; ty = 31 - py\n-- a row's distance: checker cells a pixel, smaller further down\nrs = 1/((ty + 2)*zoom)\nwob = sin(ty/32 + t/3.2)*amp\ncol = sin(px*0.0234375 - t/4.8)*amp\n-- ahead by the row's distance, across by the pixel's\nu = cs*rs*dx + (cu + wob + sn*rs*64)\nv = sn*rs*dx + col + (cv - cs*rs*64)\ncell = (floor(u) + floor(v)) % 2\n-- the far rows fade into the fog (black at the horizon)\nfog = ty < 3 ? 0 : ty < 6 ? 0.375 : ty < 10 ? 0.625 : 1\npal(fire, cell ? 0.78 : 0.28) * fog";
 const CUBE_EX: &str = "loop 4.8\nfps 100\n-- Wireframe cube: turning about two axes and swinging across; the near\n-- edges brighter. The colour is the last line's #40c0ff\n-- a: size\ntable V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1\ntable E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7\nframe {\n  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)\n  size = 34 + a*28; mid = 64 + sa*40\n}\ndraw {\n  for e < 12 {\n    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners\n    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size\n    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size\n    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned\n    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb\n    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),\n         clamp(0.594 - zb/148, 0.156, 1), clamp(0.594 - zd/148, 0.156, 1))\n  }\n}\n#40c0ff * ink";
@@ -200,7 +201,7 @@ fn variants(
     let t = fx_psi::tables();
     let (mut ok, mut bad) = (0, 0);
     let mut plain = zeroed::<psi::Program>();
-    if psi::compile_layout(src, &mut plain, false).is_ok() {
+    if compile(src, &mut plain, false, true).is_ok() {
         psi::render_with::<128>(&plain, s, &psi::golden::inputs(ms), &t, out);
         let got = psi::golden::fnv(out);
         if got == want {
@@ -210,7 +211,7 @@ fn variants(
             say!(error, "psi-probe: golden {name} (plain) at {ms} ms: {got:#018x}, host/wasm {want:#018x}");
         }
     }
-    let _ = psi::compile_into(src, prog);
+    let _ = compile(src, prog, true, true);
     if prog.still_lanes() > 0 {
         let mut st = psi::Still::new();
         if !st.take(prog) {
@@ -247,6 +248,475 @@ fn lanes_still(prog: &psi::Program, loop_ms: u32, out: &mut [u8]) -> Option<(u32
         let inputs = psi::golden::inputs(k * 20 % loop_ms);
         psi::render_rows_still::<128>(prog, &mut s, None, Some(&mut st), &inputs, &t, None, u32::MAX, out);
     }))
+}
+
+/// The examples as effects on the real path (`Fx::parse`, the canvas taken
+/// at open, `Fx::frame`, the still cache taken on the first frame): with
+/// the cache, then with the gate refusing it. `again` names a second run.
+fn effects(list: &[(&str, &str, &str)], again: &str, canvas: &mut Canvas) {
+    for &(name, src, opts) in list {
+        // (Into a zeroed box: a `Program` by value is 2.8 KB of the main
+        // task's stack.)
+        let mut prog = zeroed::<psi::Program>();
+        let (est, est_still) = if compile(src, &mut prog, true, true).is_ok() {
+            (prog.esp32_us(), prog.esp32_us_still())
+        } else {
+            (0, 0)
+        };
+        // ("cache": the firmware's gate bypassed, so the cache is taken
+        // whatever the heap; the player's gate keeps 32 KB free after it.)
+        for gate in ["cache", "no cache"] {
+            fx_psi::set_still_gate(if gate == "cache" { None } else { Some(|_| false) });
+            let h0 = heap();
+            let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
+                say!(error, "psi-probe: example {name}: did not open");
+                continue;
+            };
+            let h1 = heap();
+            let delay = fx.delay();
+            let n = fx.loop_frames();
+            // The first frame (it takes and keeps the cache), untimed.
+            fx.frame(Duration::ZERO, canvas);
+            let h2 = heap();
+            let held = fx_psi::still_held();
+            let (n0, c0) = (psi::stats::NARROWED.load(Ordering::Relaxed), psi::stats::CHECKED.load(Ordering::Relaxed));
+            let (e50, e90, emax) = timed(|k| {
+                fx.frame(delay * (k % n), canvas);
+            });
+            drop(fx);
+            let (n1, c1) = (psi::stats::NARROWED.load(Ordering::Relaxed), psi::stats::CHECKED.load(Ordering::Relaxed));
+            say!(info,
+                "psi-probe: example {name}{again} ({gate}): frames narrowed {} checked {}, scratch {:#x} picture {:#x} still lane {:#x}",
+                n1 - n0,
+                c1 - c0,
+                psi::stats::SCRATCH.load(Ordering::Relaxed),
+                psi::stats::OUT.load(Ordering::Relaxed),
+                psi::stats::STILL.load(Ordering::Relaxed)
+            );
+            say!(info,
+                "psi-probe: example {name}{again} as an effect ({gate}): p50 {e50} p90 {e90} max {emax} us a frame, est {est} us ({est_still} with the cache), heap {h0} -> {h1} B at open ({} B for the effect and its canvas), {h2} B after its first frame (still cache {held} B), {} B back after",
+                h0.saturating_sub(h1),
+                heap()
+            );
+        }
+    }
+}
+
+/// Cycles a 32-bit load (and a load plus a store) over `w`, best of three
+/// passes: the memory's own latency where `w` lies.
+fn latency(w: &mut [u32]) -> (f64, f64) {
+    let n = w.len() as f64;
+    let (mut ld, mut ls) = (u32::MAX, u32::MAX);
+    for _ in 0..3 {
+        let t0 = ccount();
+        let mut acc = 0u32;
+        for v in w.iter() {
+            // SAFETY: a read of our own buffer.
+            acc = acc.wrapping_add(unsafe { core::ptr::read_volatile(v) });
+        }
+        let t1 = ccount();
+        core::hint::black_box(acc);
+        for v in w.iter_mut() {
+            // SAFETY: our own buffer.
+            unsafe { core::ptr::write_volatile(v, core::ptr::read_volatile(v).wrapping_add(1)) };
+        }
+        let t2 = ccount();
+        ld = ld.min(t1.wrapping_sub(t0));
+        ls = ls.min(t2.wrapping_sub(t1));
+    }
+    (f64::from(ld) / n, f64::from(ls) / n)
+}
+
+/// The data memory's latency by address: as many 2 KB blocks as the heap
+/// gives (down to ~24 KB free), each timed, bucketed by 8 KB; then the
+/// same with CPU0 kept busy loading and storing over a buffer of its own.
+fn latency_map() {
+    struct Spin {
+        buf: Vec<u32>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+    let mut blocks: Vec<Vec<u32>> = Vec::new();
+    while heap() > 24 * 1024 + 2048 && blocks.len() < 64 {
+        let mut v: Vec<u32> = Vec::new();
+        if v.try_reserve_exact(512).is_err() {
+            break;
+        }
+        v.resize(512, 0);
+        blocks.push(v);
+    }
+    // (Unstable: the stable sort keeps a 4 KB buffer on the stack, and
+    // this runs on the main task, whose high-water mark the probe reports.)
+    blocks.sort_unstable_by_key(|b| b.as_ptr() as usize);
+    let map = |blocks: &mut Vec<Vec<u32>>, what: &str| {
+        let mut line = String::new();
+        let mut bucket = usize::MAX;
+        let mut acc: Vec<(f64, f64)> = Vec::new();
+        let flush = |line: &mut String, bucket: usize, acc: &mut Vec<(f64, f64)>| {
+            if !acc.is_empty() {
+                let n = acc.len() as f64;
+                let (l, s) = acc.iter().fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+                line.push_str(&format!(" {:#x}:{:.2}/{:.2}", bucket << 13, l / n, s / n));
+                acc.clear();
+            }
+        };
+        for b in blocks.iter_mut() {
+            let k = b.as_ptr() as usize >> 13;
+            if k != bucket {
+                flush(&mut line, bucket, &mut acc);
+                bucket = k;
+            }
+            acc.push(latency(b));
+        }
+        flush(&mut line, bucket, &mut acc);
+        say!(info, "psi-probe: memory {what}, cycles a load/a load+store by 8 KB from:{line}");
+    };
+    say!(info, "psi-probe: memory: {} blocks of 2 KB from {:#x} to {:#x}, heap {} B free",
+        blocks.len(),
+        blocks.first().map_or(0, |b| b.as_ptr() as usize),
+        blocks.last().map_or(0, |b| b.as_ptr() as usize),
+        heap());
+    map(&mut blocks, "(CPU0 as it is)");
+    // CPU0 busy over a 2 KB buffer of its own (the network's side).
+    if let Some(spare) = blocks.pop() {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut spin = Spin { buf: spare, stop: stop.clone() };
+        let at = spin.buf.as_ptr() as usize;
+        let cfg = esp_idf_hal::task::thread::ThreadSpawnConfiguration {
+            name: Some(b"psi-spin\0"),
+            stack_size: 3072,
+            priority: 1,
+            pin_to_core: Some(esp_idf_hal::cpu::Core::Core0),
+            ..Default::default()
+        };
+        let _ = cfg.set();
+        let h = std::thread::Builder::new().stack_size(3072).spawn(move || {
+            let mut i = 0usize;
+            while !spin.stop.load(Ordering::Relaxed) {
+                let n = spin.buf.len();
+                let v = unsafe { core::ptr::read_volatile(&spin.buf[i % n]) };
+                unsafe { core::ptr::write_volatile(&mut spin.buf[(i + 7) % n], v.wrapping_add(1)) };
+                i = i.wrapping_add(1);
+                if i.is_multiple_of(100_000) {
+                    std::thread::yield_now();
+                }
+            }
+        });
+        let _ = esp_idf_hal::task::thread::ThreadSpawnConfiguration::default().set();
+        std::thread::sleep(Duration::from_millis(20));
+        map(&mut blocks, &format!("(CPU0 spinning over {at:#x})"));
+        stop.store(true, Ordering::Relaxed);
+        if let Ok(h) = h {
+            let _ = h.join();
+        }
+    }
+    drop(blocks);
+}
+
+/// The CPU's cycle counter (240 per µs), for psi's frame stamps.
+fn ccount() -> u32 {
+    // SAFETY: reads the CCOUNT special register.
+    unsafe { esp_idf_sys::xthal_get_ccount() }
+}
+
+/// p50 / p90 of cycles, in µs (one decimal).
+fn us50_90(v: &mut [u32]) -> String {
+    v.sort_unstable();
+    let n = v.len().max(1);
+    let f = |c: u32| format!("{:.1}", f64::from(c) / 240.0);
+    format!("{}/{}", f(v[n / 2]), f(v[(n * 9 / 10).min(n - 1)]))
+}
+
+/// One effect's frames split by the stamps (CCOUNT): before the VM (the
+/// player's frame: the gate, the still cache's step, the time), the VM's
+/// setup (frame steps, the cache's choice), its rows, after it (the
+/// governor, the status), and outside the player's frame (the engine's
+/// call), p50/p90 µs each; with the firmware's gate (`gate`) or none.
+fn split(name: &str, src: &str, gate: bool, canvas: &mut Canvas) {
+    fx_psi::set_still_gate(if gate { Some(crate::still_gate) } else { None });
+    let Some(mut fx) = Fx::parse(&fx_psi::path(src, "")) else {
+        say!(error, "psi-probe: split {name}: did not open");
+        return;
+    };
+    let delay = fx.delay();
+    let n = fx.loop_frames();
+    fx.frame(Duration::ZERO, canvas);
+    let held = fx_psi::still_held();
+    let mut parts: [Vec<u32>; 6] = Default::default();
+    for k in 0..FRAMES {
+        let t0 = ccount();
+        fx.frame(delay * (k % n), canvas);
+        let t1 = ccount();
+        let st: [u32; 5] = core::array::from_fn(|i| psi::stats::STAMPS[i].load(Ordering::Relaxed));
+        let inside = st[4].wrapping_sub(st[0]);
+        parts[0].push(st[1].wrapping_sub(st[0]));
+        parts[1].push(st[2].wrapping_sub(st[1]));
+        parts[2].push(st[3].wrapping_sub(st[2]));
+        parts[3].push(st[4].wrapping_sub(st[3]));
+        parts[4].push(t1.wrapping_sub(t0).wrapping_sub(inside));
+        parts[5].push(t1.wrapping_sub(t0));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    drop(fx);
+    let [a, b, c, d, e, t] = &mut parts;
+    say!(info,
+        "psi-probe: split {name} (gate {}, still cache {held} B), p50/p90 us: before the VM {} | VM setup {} | VM rows {} | after the VM {} | outside {} | in all {} ({})",
+        if gate { "on" } else { "off" },
+        us50_90(a), us50_90(b), us50_90(c), us50_90(d), us50_90(e), us50_90(t),
+        addrs()
+    );
+}
+
+/// The last frame's memory: scratch, picture, still lanes.
+fn addrs() -> String {
+    let l = |a: &std::sync::atomic::AtomicUsize| a.load(Ordering::Relaxed);
+    format!(
+        "scratch {:#x} picture {:#x} still lanes {:#x} {:#x}",
+        l(&psi::stats::SCRATCH),
+        l(&psi::stats::OUT),
+        l(&psi::stats::STILL),
+        l(&psi::stats::STILL1)
+    )
+}
+
+/// Tunnel's VM rows with its still lanes at one placement after another,
+/// in one boot: the panel's DMA ranges first, then every ordered pair of a
+/// pool of 16 KB lanes taken from wherever the heap gives them (as many as
+/// leave ~40 KB free), then a second scratch. p50/p90 of the rows' cycles.
+fn placement(out: &mut [u8]) {
+    let (mut lo, mut hi, mut bytes, mut n, mut dlo, mut dhi) = (0, 0, 0, 0, 0, 0);
+    // SAFETY: plain out-parameters; the panel is up.
+    unsafe { esp_idf_sys::hub75::hub75_dma_span(&mut lo, &mut hi, &mut bytes, &mut n, &mut dlo, &mut dhi) };
+    say!(info, "psi-probe: placement: the panel's DMA reads {n} buffers, {bytes} B in {lo:#x}..{hi:#x}; descriptors {dlo:#x}..{dhi:#x}");
+    let mut prog = zeroed::<psi::Program>();
+    if compile(TUNNEL_EX, &mut prog, true, true).is_err() {
+        return;
+    }
+    let t = fx_psi::tables();
+    let lp = prog.loop_ms();
+    let mut st = psi::Still::new();
+    if !st.take(&prog) {
+        say!(error, "psi-probe: placement: no heap for the cache");
+        return;
+    }
+    let mut pool: Vec<Box<psi::StillLane>> = Vec::new();
+    while pool.len() < 4 && heap() > 40 * 1024 + 16 * 1024 {
+        match psi::StillLane::try_new() {
+            Some(l) => pool.push(l),
+            None => break,
+        }
+    }
+    let mut cands = pool;
+    let own = [st.lane_addr(0), st.lane_addr(1)];
+    say!(info, "psi-probe: placement: lanes at {:#x} {:#x} (the cache's own), others {:?}, heap {} B free",
+        own[0], own[1], cands.iter().map(|l| format!("{:#x}", &**l as *const psi::StillLane as usize)).collect::<Vec<_>>(), heap());
+    let mut s = zeroed::<psi::Scratch<128>>();
+    s.reset();
+    let rows = |st: &mut psi::Still, s: &mut psi::Scratch<128>, out: &mut [u8]| -> String {
+        // The first frame keeps the values, the rest are drawn from them.
+        psi::render_rows_still::<128>(&prog, s, None, Some(&mut *st), &psi::golden::inputs(0), &t, None, u32::MAX, out);
+        let mut v = Vec::with_capacity(60);
+        for k in 0..60u32 {
+            psi::render_rows_still::<128>(&prog, s, None, Some(&mut *st), &psi::golden::inputs(k * 10 % lp), &t, None, u32::MAX, out);
+            let a: [u32; 4] = core::array::from_fn(|i| psi::stats::STAMPS[i].load(Ordering::Relaxed));
+            v.push(a[3].wrapping_sub(a[2]));
+        }
+        us50_90(&mut v)
+    };
+    let sa = &*s as *const psi::Scratch<128> as usize;
+    let r = rows(&mut st, &mut s, out);
+    say!(info, "psi-probe: placement: lanes {:#x} {:#x} (own), scratch {sa:#x}: rows {r}", own[0], own[1]);
+    // Each candidate as lane 0, then as lane 1, the other lane the cache's own.
+    for i in 0..cands.len() {
+        for k in 0..2 {
+            let c = cands.remove(i);
+            let back = st.swap_lane(k, c).expect("a lane");
+            let r = rows(&mut st, &mut s, out);
+            say!(info, "psi-probe: placement: lanes {:#x} {:#x}, scratch {sa:#x}: rows {r}", st.lane_addr(0), st.lane_addr(1));
+            let c = st.swap_lane(k, back).expect("a lane");
+            cands.insert(i, c);
+        }
+    }
+    // A second scratch, wherever the heap puts it now, with the own lanes.
+    drop(cands);
+    let mut s2 = zeroed::<psi::Scratch<128>>();
+    s2.reset();
+    let sa2 = &*s2 as *const psi::Scratch<128> as usize;
+    let r = rows(&mut st, &mut s2, out);
+    say!(info, "psi-probe: placement: lanes {:#x} {:#x} (own), scratch {sa2:#x}: rows {r}", own[0], own[1]);
+}
+
+/// Tunnel VM-direct with the same stamps (setup, rows): against `split`.
+fn split_direct(out: &mut [u8]) {
+    let mut prog = zeroed::<psi::Program>();
+    if compile(TUNNEL_EX, &mut prog, true, true).is_err() {
+        return;
+    }
+    let mut s = zeroed::<psi::Scratch<128>>();
+    s.reset();
+    let mut st = psi::Still::new();
+    if !st.take(&prog) {
+        say!(error, "psi-probe: split Tunnel direct: no heap for the cache");
+        return;
+    }
+    let t = fx_psi::tables();
+    let lp = prog.loop_ms();
+    psi::render_rows_still::<128>(&prog, &mut s, None, Some(&mut st), &psi::golden::inputs(0), &t, None, u32::MAX, out);
+    let mut parts: [Vec<u32>; 3] = Default::default();
+    for k in 0..FRAMES {
+        let t0 = ccount();
+        psi::render_rows_still::<128>(&prog, &mut s, None, Some(&mut st), &psi::golden::inputs(k * 10 % lp), &t, None, u32::MAX, out);
+        let t1 = ccount();
+        let a: [u32; 4] = core::array::from_fn(|i| psi::stats::STAMPS[i].load(Ordering::Relaxed));
+        parts[0].push(a[2].wrapping_sub(a[1]));
+        parts[1].push(a[3].wrapping_sub(a[2]));
+        parts[2].push(t1.wrapping_sub(t0));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let [b, c, t] = &mut parts;
+    say!(info,
+        "psi-probe: split Tunnel VM-direct, p50/p90 us: VM setup {} | VM rows {} | in all {} ({})",
+        us50_90(b), us50_90(c), us50_90(t),
+        addrs()
+    );
+}
+
+/// A probe row's compile on the formula stack, as the player compiles
+/// (`psi_stack`): the probe's own rows never deepen the main task's stack.
+fn compile(src: &str, prog: &mut psi::Program, runs: bool, narrow: bool) -> Result<psi::Info, psi::Error> {
+    crate::psi_stack::run(|| psi::compile_with(src, prog, runs, narrow)).unwrap_or_else(|| {
+        Err(psi::Error { start: 0, end: 0, msg: String::from("no formula stack") })
+    })
+}
+
+/// Whether the heap is too low to go on with `section` (under 40 KB):
+/// said, and the caller stops it, rather than the probe failing an
+/// allocation.
+fn heap_low(section: &str) -> bool {
+    let h = heap();
+    if h < 40 * 1024 {
+        say!(error, "psi-probe: {section}: stopped, heap {h} B free (under 40 KB), largest block {} B", crate::state::largest_free_block());
+        true
+    } else {
+        false
+    }
+}
+
+/// The heap every `n` steps of a section: its slope.
+fn heap_every(section: &str, k: u32, n: u32) {
+    if k.is_multiple_of(n) {
+        say!(info, "psi-probe: {section} {k}: heap {} B free, largest block {} B", heap(), crate::state::largest_free_block());
+    }
+}
+
+/// What compiling leaves behind: one formula compiled on the player's
+/// formula stack (`psi_stack::compile`, a FreeRTOS task since speed-d) 200
+/// times at a builder's pace (20 ms apart), then on the old std thread 50
+/// times, the heap before and after each.
+fn compile_leak() {
+    let mut prog = zeroed::<psi::Program>();
+    let src = TUNNEL_EX;
+    for (how, n) in [("formula stack (task)", 200u32), ("old std thread", 50)] {
+        std::thread::sleep(Duration::from_millis(50));
+        let (h0, b0) = (heap(), crate::state::largest_free_block());
+        let mut done = 0;
+        for k in 0..n {
+            if heap_low(&format!("compile leak, {how}")) {
+                break;
+            }
+            let ok = if k == 0 || how.starts_with("formula") {
+                crate::psi_stack::compile(src, &mut prog).is_ok()
+            } else {
+                crate::psi_stack::run_std_thread(|| psi::compile_into(src, &mut prog))
+                    .is_some_and(|r| r.is_ok())
+            };
+            if !ok {
+                say!(error, "psi-probe: compile leak, {how}: compile {k} failed");
+                break;
+            }
+            done += 1;
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        let (h1, b1) = (heap(), crate::state::largest_free_block());
+        say!(info,
+            "psi-probe: compile leak, {how}: {done} compiles, heap {h0} -> {h1} B ({} B a compile), largest block {b0} -> {b1} B",
+            (i64::from(h0) - i64::from(h1)) / i64::from(done.max(1))
+        );
+    }
+}
+
+/// A VM frame's p50 / p90 for `prog`: with a still cache when it has
+/// values for one (and the heap a block for it), else every step (with the
+/// draw stage's canvas).
+fn vm_frame(prog: &psi::Program, out: &mut [u8]) -> (u32, u32, &'static str) {
+    let lp = prog.loop_ms();
+    if prog.still_lanes() > 0 {
+        if let Some((a, b, _)) = lanes_still(prog, lp, out) {
+            return (a, b, "cached");
+        }
+    }
+    let (a, b, _) = lanes::<128>(prog, lp, out);
+    (a, b, "plain")
+}
+
+/// psi-speed's before and after, in one boot: the five examples' VM frames
+/// with the narrowed steps (`add_w`, `mul_n`, `shr`, …) and without, and
+/// with the cheap loops in IRAM (the release) and in flash; and every
+/// frame of each the same bytes either way.
+fn speed(out: &mut [u8]) {
+    let t = fx_psi::tables();
+    let (mut same, mut differ) = (0u32, 0u32);
+    for (name, src) in [
+        ("Starfield", STARFIELD_EX),
+        ("Wireframe cube", CUBE_EX),
+        ("Tunnel", TUNNEL_EX),
+        ("Rotozoom", ROTOZOOM_EX),
+        ("Rotozoom floor", ROTOZOOM_FLOOR_EX),
+        ("Plasma", PLASMA_EX),
+        ("Fire", FIRE_EX),
+    ] {
+        let mut fast = zeroed::<psi::Program>();
+        let mut checked = zeroed::<psi::Program>();
+        if compile(src, &mut fast, true, true).is_err() || compile(src, &mut checked, true, false).is_err() {
+            say!(error, "psi-probe: speed {name}: does not compile");
+            continue;
+        }
+        let lp = fast.loop_ms();
+        // (Its own scratch and canvas, given back before the timed frames:
+        // the still cache wants a 16 KB block.)
+        let mut s = zeroed::<psi::Scratch<128>>();
+        s.reset();
+        let mut ink = psi::Ink::boxed();
+        let mut frame_hash = |p: &psi::Program, ms: u32, out: &mut [u8]| {
+            psi::render_rows_ink::<128>(p, &mut s, Some(&mut ink), &psi::golden::inputs(ms), &t, None, u32::MAX, out);
+            psi::golden::fnv(out)
+        };
+        for ms in [0, lp / 3, lp * 2 / 3, lp.saturating_sub(20)] {
+            let a = frame_hash(&fast, ms, out);
+            let b = frame_hash(&checked, ms, out);
+            if a == b {
+                same += 1;
+            } else {
+                differ += 1;
+                say!(error, "psi-probe: speed {name} at {ms} ms: {b:#018x} checked against {a:#018x} narrowed");
+            }
+        }
+        drop(s);
+        drop(ink);
+        let (f50, f90, how) = vm_frame(&fast, out);
+        let (sc, still) = (psi::stats::SCRATCH.load(Ordering::Relaxed), psi::stats::STILL.load(Ordering::Relaxed));
+        let (c50, c90, _) = vm_frame(&checked, out);
+        say!(info,
+            "psi-probe: speed {name:<15} ({how}): narrowed p50 {f50} p90 {f90} | checked p50 {c50} p90 {c90} us a frame; est {} us ({} checked); scratch {sc:#x} picture {:#x} still lane {still:#x}",
+            fast.esp32_us_still(),
+            checked.esp32_us_still(),
+            out.as_ptr() as usize
+        );
+    }
+    say!(info,
+        "psi-probe: speed frames: {same} the same narrowed or checked, {differ} differ{}",
+        if differ == 0 { " (bit-identical)" } else { "" }
+    );
 }
 
 /// The compiler's own stack on the worst inputs (`psi::worst`, the deepest
@@ -389,47 +859,37 @@ pub fn run(root: &str) {
     // 16 KB block was left for it). The real path: `Fx::parse`, the canvas taken
     // at open, `Fx::frame`, the still cache taken on the first frame): with
     // the cache, then with the gate refusing it (every step every frame).
-    for (name, src, opts) in [
-        ("Starfield", STARFIELD_EX, "a=0.5"),
-        ("Wireframe cube", CUBE_EX, "a=0.5"),
-        ("Tunnel", TUNNEL_EX, ""),
-        ("Rotozoom", ROTOZOOM_EX, ""),
-        ("Rotozoom floor", ROTOZOOM_FLOOR_EX, ""),
-    ] {
-        // (Into a zeroed box: a `Program` by value is 2.8 KB of the main
-        // task's stack.)
-        let mut prog = zeroed::<psi::Program>();
-        let (est, est_still) = if psi::compile_into(src, &mut prog).is_ok() {
-            (prog.esp32_us(), prog.esp32_us_still())
-        } else {
-            (0, 0)
-        };
-        for gate in ["cache", "no cache"] {
-            fx_psi::set_still_gate(if gate == "cache" { None } else { Some(|_| false) });
-            let h0 = heap();
-            let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
-                say!(error, "psi-probe: example {name}: did not open");
-                continue;
-            };
-            let h1 = heap();
-            let delay = fx.delay();
-            let n = fx.loop_frames();
-            // The first frame (it takes and keeps the cache), untimed.
-            fx.frame(Duration::ZERO, &mut canvas);
-            let h2 = heap();
-            let held = fx_psi::still_held();
-            let (e50, e90, emax) = timed(|k| {
-                fx.frame(delay * (k % n), &mut canvas);
-            });
-            drop(fx);
-            say!(info,
-                "psi-probe: example {name} as an effect ({gate}): p50 {e50} p90 {e90} max {emax} us a frame, est {est} us ({est_still} with the cache), heap {h0} -> {h1} B at open ({} B for the effect and its canvas), {h2} B after its first frame (still cache {held} B), {} B back after",
-                h0.saturating_sub(h1),
-                heap()
-            );
-        }
+    // Where the effect path's time goes (speed-d: Tunnel 4,932 us as an
+    // effect against 3,651 VM-direct; the others ~200-250 us over).
+    psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
+    latency_map();
+    for gate in [true, false] {
+        split("Tunnel", TUNNEL_EX, gate, &mut canvas);
+        split("Rotozoom floor", ROTOZOOM_FLOOR_EX, gate, &mut canvas);
     }
+    split_direct(&mut out);
+    placement(&mut out);
+    fx_psi::set_still_gate(Some(crate::still_gate));
+    effects(
+        &[
+            ("Starfield", STARFIELD_EX, "a=0.5"),
+            ("Wireframe cube", CUBE_EX, "a=0.5"),
+            ("Tunnel", TUNNEL_EX, ""),
+            ("Rotozoom", ROTOZOOM_EX, ""),
+            ("Rotozoom floor", ROTOZOOM_FLOOR_EX, ""),
+        ],
+        "",
+        &mut canvas,
+    );
+    say!(info, "psi-probe: main stack {} B unused after the examples as effects (the play path; compiles on the formula stack)", stack_unused());
     // The firmware's own gate again.
+    fx_psi::set_still_gate(Some(crate::still_gate));
+
+    speed(&mut out);
+    say!(info, "psi-probe: main stack {} B unused after the speed rows", stack_unused());
+    // Tunnel's effect again, now the heap has moved on: placement against
+    // code (speed-a: 4,860 us as an effect, 3,709 VM-direct).
+    effects(&[("Tunnel", TUNNEL_EX, "")], " again", &mut canvas);
     fx_psi::set_still_gate(Some(crate::still_gate));
 
 
@@ -437,7 +897,7 @@ pub fn run(root: &str) {
         // Compile (into a zeroed program, as the effect does).
         let mut prog = zeroed::<psi::Program>();
         let t0 = Instant::now();
-        let r = psi::compile_into(src, &mut prog);
+        let r = compile(src, &mut prog, true, true);
         let compile_us = t0.elapsed().as_micros();
         if let Err(e) = r {
             say!(error, "psi-probe: {name}: {}", e.msg);
@@ -476,14 +936,20 @@ pub fn run(root: &str) {
         );
     }
 
+    compile_leak();
     // Golden frames: the host's and wasm's hashes, here.
+    say!(info, "psi-probe: golden frames from {} B free", heap());
     let t = fx_psi::tables();
     let mut s = zeroed::<psi::Scratch<128>>();
     s.reset();
     let mut prog = zeroed::<psi::Program>();
     let (mut ok, mut bad) = (0, 0);
-    for &(name, src, ms, want) in psi::golden::FRAMES {
-        if psi::compile_into(src, &mut prog).is_err() {
+    for (gk, &(name, src, ms, want)) in psi::golden::FRAMES.iter().enumerate() {
+        if heap_low("golden frames") {
+            break;
+        }
+        heap_every("golden frames", gk as u32, 10);
+        if compile(src, &mut prog, true, true).is_err() {
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile");
             continue;
@@ -509,7 +975,10 @@ pub fn run(root: &str) {
     let mut under = vec![0u8; psi::W * psi::H * 3];
     psi::golden::picture(&mut under);
     for &(name, src, ms, over, want) in psi::golden::OVER {
-        if psi::compile_into(src, &mut prog).is_err() {
+        if heap_low("golden over") {
+            break;
+        }
+        if compile(src, &mut prog, true, true).is_err() {
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile");
             continue;
@@ -530,7 +999,10 @@ pub fn run(root: &str) {
     // Formulas that draw (the draw stage's canvas, lines, loops, tables).
     let mut ink = psi::Ink::boxed();
     for &(name, src, ms, over, want) in psi::golden::DRAWN {
-        if psi::compile_into(src, &mut prog).is_err() {
+        if heap_low("golden drawn") {
+            break;
+        }
+        if compile(src, &mut prog, true, true).is_err() {
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile");
             continue;
@@ -610,14 +1082,29 @@ pub fn run(root: &str) {
         ("hsv 0.3 on picture", "hsv(x + t, 1, 1, 0.3)"),
         ("screen hsv 0.4 on picture", "layer screen { hsv(x + t, 1, 1, 0.4) }"),
     ];
+    // psi-speed's narrowed steps (`range`: the ranges say they never
+    // saturate), each over a baseline row above: add_w over `add`'s row,
+    // and so on.
+    const NARROW_STEPS: [(&str, &str); 8] = [
+        ("add_w", "gray(x + t)"),
+        ("sub_w", "gray(x - t)"),
+        ("mul_w", "gray(px * t)"),
+        ("mul_n", "gray(x * (t * 0.01))"),
+        ("shr (+add_w)", "gray((x + t) / 4)"),
+        ("select (+lt) n", "gray(x < t ? x : 0.5)"),
+        ("pal * k few (+3)", "pal(fire, floor(x * 4) / 4) * (floor(x * 8 + t) / 8)"),
+        ("pal * k=x (+mul_n)", "pal(fire, x) * (x * 0.9)"),
+    ];
     let steps = STEPS
         .iter()
-        .map(|&(w, s)| (w, s, false))
-        .chain(LAYER_STEPS.iter().map(|&(w, s)| (w, s, true)));
-    for (what, src, over) in steps {
+        .map(|&(w, s)| (w, s, false, false))
+        .chain(LAYER_STEPS.iter().map(|&(w, s)| (w, s, true, false)))
+        .chain(NARROW_STEPS.iter().map(|&(w, s)| (w, s, false, true)));
+    for (what, src, over, narrow) in steps {
         // (Laid out without the column and still runs: a step's cost on
-        // every pixel, as the table was measured.)
-        if psi::compile_layout(src, &mut prog, false).is_err() {
+        // every pixel, as the table was measured; the checked steps as
+        // then, but for psi-speed's rows.)
+        if compile(src, &mut prog, false, narrow).is_err() {
             say!(error, "psi-probe: step {what}: does not compile");
             continue;
         }
@@ -646,7 +1133,7 @@ pub fn run(root: &str) {
     ];
     let mut base = 0u32;
     for (what, src, n) in DRAW_STEPS {
-        if psi::compile_layout(src, &mut prog, false).is_err() {
+        if compile(src, &mut prog, false, true).is_err() {
             say!(error, "psi-probe: step {what}: does not compile");
             continue;
         }
@@ -672,7 +1159,7 @@ pub fn run(root: &str) {
     ];
     for (what, src) in RUNS {
         let mut plain = zeroed::<psi::Program>();
-        if psi::compile_layout(src, &mut plain, false).is_err() || psi::compile_into(src, &mut prog).is_err() {
+        if compile(src, &mut plain, false, true).is_err() || compile(src, &mut prog, true, true).is_err() {
             say!(error, "psi-probe: run {what}: does not compile");
             continue;
         }
@@ -722,7 +1209,7 @@ pub fn run(root: &str) {
             );
             continue;
         };
-        if psi::compile_into(&look, &mut prog).is_err() {
+        if compile(&look, &mut prog, true, true).is_err() {
             say!(
                 error,
                 "psi-probe: as look {name} {blend} {k}: does not compile"

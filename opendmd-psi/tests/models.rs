@@ -197,11 +197,53 @@ fn the_reference_names_every_built_in() {
 fn the_cost_table_is_the_estimates() {
     // (Per step, as the table is: without the column run and the still
     // cache, which the reference describes after it.)
-    let us = |src: &str| {
-        opendmd_psi::compile_plain(src)
-            .unwrap_or_else(|e| panic!("{src}: {}", e.msg))
-            .esp32_us() as i64
+    // The checked steps' rows without the narrowed steps (`+` of values
+    // whose sum can't overflow is the cheaper row); those rows with them.
+    let plain = |src: &str, narrow: bool| {
+        let mut p = opendmd_psi::Program::default();
+        opendmd_psi::compile_with(src, &mut p, false, narrow)
+            .unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+        p.esp32_us() as i64
     };
+    let us = |src: &str| plain(src, false);
+    let narrowed: &[(&str, i64, &str, &str)] = &[
+        (
+            "| + − that can't overflow | 25 |",
+            25,
+            "gray(x*px)",
+            "gray(x*px + x)",
+        ),
+        (
+            "| `*` that can't overflow | 55 ",
+            55,
+            "gray(x*px)",
+            "gray(x*px*px)",
+        ),
+        (
+            "(33 when the product is small)",
+            33,
+            "gray(x)",
+            "gray(x*0.3)",
+        ),
+        (
+            "| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 28 |",
+            28,
+            "gray(x*px)",
+            "gray(x*px/8)",
+        ),
+    ];
+    for &(row, ns, base, more) in narrowed {
+        assert!(
+            DOC.contains(row),
+            "the reference's cost table has no {row:?}"
+        );
+        let got = plain(more, true) - plain(base, true);
+        let want = ns * 4096 * 115 / 100_000;
+        assert!(
+            (got - want).abs() <= 2,
+            "{row}: one more step adds {got} µs, the table says {ns} ns a pixel ({want} µs)"
+        );
+    }
     // (the row as the table prints it, ns, a formula, the same with one more step)
     let rows: &[(&str, i64, &str, &str)] = &[
         (

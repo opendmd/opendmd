@@ -1,7 +1,8 @@
 //! `Program::esp32_us` against what the device measured (`psi-probe` on
 //! the spare, the VM's frame p50 over a picture: tests/measured.rs). Every
 //! row here is compiled without the column run and the still cache's run
-//! (`compile_plain`), as it was when measured.
+//! (`compile_plain`) and without the narrowed steps, as it was when
+//! measured.
 //!
 //! - `STEPS` are the fit set: the per-step and blend costs were read off
 //!   them, so they sit near 0 % by construction; this keeps a later change
@@ -19,7 +20,14 @@
 //!   look 8,552 vs 7,474), in `Program::esp32_us`'s comments.
 
 mod measured;
-use opendmd_psi::compile_plain as compile;
+
+/// Compiled as measured: no runs, and the checked steps only (the
+/// measurements predate the narrowed ones, `range`).
+fn compile(src: &str) -> Result<opendmd_psi::Program, opendmd_psi::Error> {
+    let mut p = opendmd_psi::Program::default();
+    opendmd_psi::compile_with(src, &mut p, false, false)?;
+    Ok(p)
+}
 use opendmd_psi::look::compose;
 
 #[test]

@@ -39,6 +39,8 @@ ota = ["dep:ed25519-dalek", "dep:sha2"]
 # Psi formulas as a live effect, `@fx:psi?src=…` (src/fx_psi.rs): a spike,
 # off everywhere by default (the simulator, the firmware's psi/psi-probe).
 psi = ["dep:opendmd-psi"]
+# psi-probe's counters (`psi::stats`).
+psi-stats = ["psi", "opendmd-psi/stats"]
 
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
 [patch.crates-io]
