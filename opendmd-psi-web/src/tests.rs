@@ -175,6 +175,7 @@ fn the_examples_are_light_enough_for_the_panel() {
 /// comments out, spaces collapsed, lines joined with `; `, lightly encoded)
 /// with the `&name=` Add to playlist puts on it, and the sliders at their
 /// most: within the panel's 2,048 B (`synth::MAX_FORMULA_PATH`).
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn every_example_fits_the_panels_path_as_sent() {
     let json = std::fs::read_to_string(concat!(
