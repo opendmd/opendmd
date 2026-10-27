@@ -4047,7 +4047,9 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     opts = page.eval_on_selector_all("#st-look-formula option", "els => els.map(e => [e.textContent, e.disabled])")
     names = [o[0] for o in opts]
     heavy = [o[0] for o in opts if o[1]]
-    check(all(n in names for n in ("Plasma", "Big clock", "Scanlines", "Old photo", "Starfield", "Matrix")) and not heavy,
+    # (Tunnel is the one too heavy as a look: its still cache is an effect's
+    # only, ~17.6 ms a frame without it.)
+    check(all(n in names for n in ("Plasma", "Big clock", "Scanlines", "Old photo", "Starfield", "Matrix", "Rotozoom")) and heavy == ["Tunnel (too heavy)"],
           f"looks: Settings › Look lists every example ({len(opts)}; too heavy: {heavy})")
     page.select_option("#st-look-formula", label="Plasma")
     page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
@@ -4055,7 +4057,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     ui = (page.input_value("#st-look-blend"), page.input_value("#st-look-amt"), page.is_visible("#st-look-mix"))
     fps = page.inner_text("#st-look-why")
     check((c["look_formula_name"], c["look_blend"], c["look_amount"]) == ("Plasma", "screen", 40) and ui == ("screen", "40", True)
-          and "moves about 25 times a second" in fps
+          and "moves about 50 times a second" in fps  # (6.7 ms with its column run; 8.2 before)
           and "part+look+{" in c["look_formula"] and c["look_formula"].endswith("layer+screen+{+look(x,+y,+0.4)+}"),
           f"looks: Plasma starts at Screen 40%, '{fps}' ({ui}; {c['look_formula_name']!r}; ...{c['look_formula'][-40:]!r})")
     shot(page, "looks-settings", "laptop")
