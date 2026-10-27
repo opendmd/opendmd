@@ -119,8 +119,8 @@ impl Still {
 }
 
 /// What the kept values depend on: the steps up to the end of the cached
-/// run (the per-row ones included: `y`-based values the cached ones read)
-/// and the constants. Never 0. A program changed in place (a live edit)
+/// run (the per-row ones included: `y`-based values the cached ones read),
+/// the entries of the tables they read, and the constants. Never 0. A program changed in place (a live edit)
 /// that the player forgot to tell the cache about is noticed here, so a
 /// frame is never drawn from another formula's values.
 pub(crate) fn fingerprint(prog: &Program) -> u32 {
@@ -138,6 +138,16 @@ pub(crate) fn fingerprint(prog: &Program) -> u32 {
     for op in &prog.ops[prog.draw_end as usize..end] {
         for b in [op.code, op.d, op.a, op.b, op.c] {
             eat(b);
+        }
+        // A table the steps read: its entries (a live edit may change only
+        // them).
+        if op.code == code::TAB {
+            let (a, n) = (op.b as usize, op.c as usize + 1);
+            for v in &prog.tables[a.min(MAX_TABLE)..(a + n).min(MAX_TABLE)] {
+                for b in v.to_le_bytes() {
+                    eat(b);
+                }
+            }
         }
     }
     for v in &prog.init[..(prog.n_scalars as usize).min(MAX_SCALARS)] {

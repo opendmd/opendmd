@@ -47,7 +47,10 @@ export function picker(names, label, v, set) {
     const j = d ? k + d : e.key == 'Home' ? 0 : e.key == 'End' ? n : -1;
     if (j >= 0 && j <= n && k >= 0) { e.preventDefault(); to(j); }
   };
-  mark(Math.round(Math.min(1, Math.max(0, v || 0)) * n));
+  // A value between choices (a link, an older slider) snaps to the one shown.
+  const k0 = Math.round(Math.min(1, Math.max(0, v || 0)) * n);
+  mark(k0);
+  if ((v || 0) !== (n && k0 / n)) set(n && k0 / n);
   g.append(...bs);
   return g;
 }

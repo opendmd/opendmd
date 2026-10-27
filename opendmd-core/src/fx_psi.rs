@@ -52,6 +52,11 @@ pub struct PsiFx {
     still: psi::Still,
     /// When the still cache was last refused (as `ink_tried`).
     still_tried: u32,
+    /// The still cache has been held since the formula opened: until it
+    /// has, it is asked for every frame (after a GIF -> Formula switch the
+    /// transition's buffers hold the heap for a moment), then once a second
+    /// after a refusal.
+    still_once: bool,
     delay_ms: u8,
     inputs: psi::Inputs,
     gov: Governor,
@@ -562,6 +567,7 @@ impl PsiFx {
             return;
         }
         let due = !clocked
+            || !self.still_once
             || self.still_tried == 0
             || now.wrapping_sub(self.still_tried) >= CANVAS_RETRY_US;
         if !due {
@@ -569,6 +575,7 @@ impl PsiFx {
         }
         if still_allowed(need) && self.still.take(&self.prog) {
             self.still_tried = 0;
+            self.still_once = true;
             set_still_held(need as u32);
             // This frame keeps the values (every step runs): left out.
             self.gov.edited();
@@ -2173,6 +2180,23 @@ mod tests {
             &mut out,
         );
         assert!(c.as_bytes() == out.as_slice());
+        // A live edit of a table's entries only (the same steps): the
+        // lanes stay, the values are kept again, never drawn stale.
+        let ta = "loop 4\ntable T = 0.1, 0.5, 0.9, 0.3\nk = T[floor(len(px - 63.5, (15.5 - py)*2)/8)]\ngray(frac(k + t/4))";
+        let tb = "loop 4\ntable T = 0.9, 0.2, 0.1, 0.6\nk = T[floor(len(px - 63.5, (15.5 - py)*2)/8)]\ngray(frac(k + t/4))";
+        fx.retune_from(&path(ta)[8..]).unwrap();
+        fx.frame(Duration::from_millis(120), &mut c);
+        fx.frame(Duration::from_millis(140), &mut c);
+        assert!(fx.still.is_held());
+        fx.retune_from(&path(tb)[8..]).unwrap();
+        assert!(fx.still.is_held());
+        fx.frame(Duration::from_millis(160), &mut c);
+        let inputs = psi::Inputs {
+            t: psi::Inputs::at_ms(160),
+            ..Default::default()
+        };
+        psi::render(&psi::compile_plain(tb).unwrap(), &mut psi::Scratch::<128>::new(), &inputs, &psi::OWN, &mut out);
+        assert!(c.as_bytes() == out.as_slice(), "a table-only edit drew stale values");
         // One without values lets them go.
         fx.retune_from(&path("gray(x)")[8..]).unwrap();
         assert!(!fx.still.is_held());
