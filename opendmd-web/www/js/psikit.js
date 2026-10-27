@@ -28,17 +28,19 @@ export function parse(s) {
 export const sliderName = (src, k) => (src.match(new RegExp(`^\\s*(?:--|//)\\s*${k}\\s*[:=]\\s*(.+)$`, 'm')) || [])[1]?.trim() || k;
 // What it is, from info(): its loop, the clock, its cost on the panel.
 const cost = (us) => (us <= 5000 ? 'light' : us <= 8000 ? 'medium' : 'heavy');
-export const about = (i) => i.length ? [i[5] & 8 && `Loops every ${i[4] / 1000} s`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', `${cost(i[6])} for the panel`].filter(Boolean).join(' · ') : '';
+export const about = (i) => i.length ? [i[5] & 8 && `Loops every ${i[4] / 1000} s`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${cost(i[6])} for the panel`].filter(Boolean).join(' · ') : '';
 export const TIP = (i) => `${i[0]} steps, about ${(i[6] / 1000).toFixed(1)} ms a frame on the panel (light: under 5 ms; medium: under 8)`;
 
 // The code as highlighted HTML (numbers `.n` — a unary minus included —,
-// comments `.c`, colours `.k` with `--k` their colour, for a swatch; the
+// comments `.c`, colours `.k` with `--k` their colour, for a swatch, the
+// block words and the draw stage's `.w`; the
 // error `bad` = [start, end] `.e`; everything else escaped text) and where
 // its numbers are.
+const WORDS = /^(loop|frame|layer|part|draw|for|table|line|dot|ink)$/;
 export function marks(s, bad) {
   const toks = [], cls = new Array(s.length).fill('');
   for (const m of s.matchAll(/(--|\/\/).*|'[ -~]'|#[\da-f]{3}([\da-f]{3})?\b|[a-z_]\w*|\d+\.?\d*|\.\d+/gi)) {
-    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : '';
+    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : WORDS.test(m[0]) ? 'w' : '';
     let a = m.index;
     // A character in quotes ('A') is a number, but not one to drag.
     if (k === 'n' && m[0][0] !== "'") {
