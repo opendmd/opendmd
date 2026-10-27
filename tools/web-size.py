@@ -191,7 +191,14 @@ FONT = {"fonts/silkscreen.woff2"}
 # KB measured alone; a ~3 KB stable sort and two monomorphised loops were
 # taken out to get there). What lets Tunnel and Rotozoom be Formulas at
 # 50 fps; raised under the owner's standing OK for budget lines.
-PSI_WASM_GZ_BUDGET = 58 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 62 KB for psi-speed (2026-10-27, docs/research/psi-speed.md): the ranges
+# pass (`range`: every value's interval, the narrowed steps chosen at
+# compile time, so the editor's estimate is the panel's) and the
+# palette-scale reuse: +2.8 KB gz (59.1 -> 61.9 KB measured with today's
+# toolchain; the narrowed steps' own loops are left out of wasm, which runs
+# their checked forms: the same bytes). What takes Tunnel towards 100 fps on
+# the panel; raised under the owner's standing OK for budget lines.
+PSI_WASM_GZ_BUDGET = 62 * 1024  # 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,

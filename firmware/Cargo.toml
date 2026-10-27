@@ -57,7 +57,7 @@ bench = []
 # The Psi spike's measurement (src/psi_probe.rs): frame times, the golden
 # frames, per-step costs and the stack, logged once at boot (`psi-probe:`
 # lines). `make fw-release FW_RELEASE_FEATURES=probe,psi-probe` for the rig.
-psi-probe = ["psi"]
+psi-probe = ["psi", "opendmd-core/psi-ab"]
 
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }
