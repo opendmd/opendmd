@@ -250,6 +250,35 @@ fn out3<A: Src, B: Src, C: Src>(
     }
 }
 
+/// `noise(x, y, z)` at a whole `z` along the lane ([`fixed::noise_flat`]),
+/// `x` and `y` read with a stride (0: a value for the lane): one loop for
+/// every kind of operand.
+#[inline(never)]
+fn noise_flat_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 2], z: i32) {
+    let mut one = [0i32; 2];
+    let mut ptr = [core::ptr::null::<i32>(); 2];
+    let mut stride = [0usize; 2];
+    for k in 0..2 {
+        match args[k] {
+            Arg::Lane(q) => (ptr[k], stride[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..2 {
+        if stride[k] == 0 {
+            ptr[k] = &one[k];
+        }
+    }
+    for o in d.iter_mut() {
+        // SAFETY: as `pal_lit_lane`'s.
+        let (x, y) = unsafe { (*ptr[0], *ptr[1]) };
+        *o = fixed::noise_flat(x, y, z);
+        for j in 0..2 {
+            ptr[j] = ptr[j].wrapping_add(stride[j]);
+        }
+    }
+}
+
 /// `pal(P, k) * s` along the lane, its two operands read with a stride (0:
 /// a value for the lane): one loop for the four kinds of operand.
 #[inline(never)]
@@ -671,10 +700,8 @@ fn lane_op<const N: usize>(
         SMOOTH => tern!(run3, d, a, b, c, fixed::smooth),
         // A whole `z` (`noise(x, y, 0)`): the plane's four corners only —
         // the other four are weighed 0 there, so the bytes are the same.
-        NOISE => match (a, b, c) {
-            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(z)) if z & 0xffff == 0 => {
-                run2(d, L(p), L(q), |x, y| fixed::noise_flat(x, y, z))
-            }
+        NOISE => match c {
+            Arg::Sc(z) if z & 0xffff == 0 => noise_flat_lane(d, [a, b], z),
             _ => tern!(run3, d, a, b, c, fixed::noise),
         },
         // One loop for the four, its operands read with a stride (0: a
@@ -835,9 +862,11 @@ fn colour<const N: usize>(s: &Scratch<N>, op: &Op, base: usize, t: &Tables, px: 
             fixed::chan(b)
         ]),
         OUT_HSV => outt!(px, a, b, c, fixed::hsv),
-        OUT_PAL if op.d & PAL_SCALED != 0 => {
-            pal_lit_lane(px, [a, c], t.palettes[((op.d & !PAL_SCALED) as usize).min(4)])
-        }
+        OUT_PAL if op.d & PAL_SCALED != 0 => pal_lit_lane(
+            px,
+            [a, c],
+            t.palettes[((op.d & !PAL_SCALED) as usize).min(4)],
+        ),
         OUT_PAL => {
             let p = t.palettes[(op.d as usize).min(4)];
             match a {

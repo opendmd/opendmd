@@ -151,6 +151,42 @@ fn flat_noise_is_noise_at_a_whole_z() {
 }
 
 #[test]
+fn a_scaled_palette_is_exactly_its_channels_times_k() {
+    // Every entry of every palette at scales across the range, the edges
+    // included: the fast paths agree with chan(mul(byte(b), s)).
+    let mut scales: Vec<i32> = vec![
+        i32::MIN,
+        -ONE,
+        -1,
+        0,
+        1,
+        2,
+        255,
+        256,
+        ONE - 1,
+        ONE,
+        ONE + 1,
+        2 * ONE,
+        300 * ONE,
+        i32::MAX,
+    ];
+    scales.extend((0..=4096).map(|k| k * 17));
+    for p in &PALETTES {
+        for i in 0..32 {
+            let k = (i << 11) + 5;
+            let c = fixed::pal(p, k);
+            for &s in &scales {
+                let want: Vec<u8> = c
+                    .iter()
+                    .map(|&b| fixed::chan(fixed::mul(fixed::byte(b), s)))
+                    .collect();
+                assert_eq!(&fixed::pal_lit(p, k, s)[..], &want[..], "entry {i} at {s}");
+            }
+        }
+    }
+}
+
+#[test]
 fn a_scaled_palette_is_its_channels_scaled() {
     // `pal(P, v) * k` against the same colour written as rgb of its
     // channels (the palette entries' bytes over 255, times k).

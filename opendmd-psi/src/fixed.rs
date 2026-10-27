@@ -515,6 +515,24 @@ pub fn pal(p: &[[u8; 3]; 32], k: i32) -> [u8; 3] {
 #[inline(always)]
 pub fn pal_lit(p: &[[u8; 3]; 32], k: i32, s: i32) -> [u8; 3] {
     let c = pal(p, k);
+    // Exactly `chan(mul(byte(b), s))` for each channel b, without the
+    // 64-bit multiply where it isn't needed (the ESP32 has no 64-bit one):
+    // s ≤ 0 is 0 (the product is never positive); s = 1 is the byte again
+    // (`chan` round-trips `byte`); 0 < s < 1 fits a u32 (byte ≤ 65,536,
+    // s < 65,536), and the product is under 1, so `chan`'s clamp is idle.
+    if s <= 0 {
+        return [0; 3];
+    }
+    if s == ONE {
+        return c;
+    }
+    if s < ONE {
+        let f = |b: u8| {
+            let v = (byte(b) as u32 * s as u32) >> 16;
+            ((v * 255 + 0x8000) >> 16) as u8
+        };
+        return [f(c[0]), f(c[1]), f(c[2])];
+    }
     [
         chan(mul(byte(c[0]), s)),
         chan(mul(byte(c[1]), s)),

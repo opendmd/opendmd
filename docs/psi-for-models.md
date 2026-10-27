@@ -1232,44 +1232,41 @@ pal(chrono, frac(cell ? 0.711 + t/4.8 : 0.336 + t/4.8)) * light
 ### 34. Rotozoom (the column run, a picker)
 
 Mode 7: each pixel's place on a turning, breathing checker is a column's
-part (`cs*rs*dx`, the column wobble) plus a row's (the row wobble, the
-rest), so a pixel adds, floors and looks up. Slider `a` is a picker
-(`-- a: view = flat, floor`: the editor shows two buttons; flat is 0,
-floor 1): as a floor each row's scale is its distance and the far rows are
-fogged (`pal(…) * fog`). ~7.7 ms either way (50 fps).
+part (`cs*sc*dx`, the column wobble) plus a row's (the row wobble, the
+rest), so a pixel adds, floors and looks up; the noise under it is
+`noise(u, v, 0)` (a whole z: the cheaper noise). Slider `a` is a picker
+(`-- a: wobble = gentle, strong, off`: the editor shows three buttons, 0,
+½ and 1; the formula reads `pick(floor(a*2 + 0.5), …)`). ~6.0 ms (50 fps).
+The floor (the native's `floor=1`) is its own example, **Rotozoom floor**:
+each row's scale by its distance (a per-row value, so the column parts are
+gone), one layer, `pal(fire, …) * fog`, ~4.3 ms at `fps 100`.
 
 ```psi example=rotozoom
 loop 9.6
 -- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing
 -- twice, gliding two checkers across and one down; under it a noise
 -- texture turning the other way twice as fast; rows and columns wobble.
--- As a floor: the checker running away to a horizon, fogged far off.
--- a: view = flat, floor
+-- a: wobble = gentle, strong, off
 frame {
-  ground = a > 0.5
   sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn
   s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice
   zoom = 2                                         -- try 1 to 4
   sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel
   sc2 = sc*0.75
   cu = t/0.6; cv = t/1.2                           -- the glide, in cells
-  amp = 3/8                                        -- the wobble: 3 texels
-  hi = ground ? 0.78 : 0.44; lo = ground ? 0.28 : 0.19; mixn = ground ? 0 : 0.6
+  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels
 }
-dx = px - 64; dy = 15 - py; ty = 31 - py
--- each row's scale: the same when flat; on the floor, by its distance
-rs = ground ? 1/((ty + 2)*zoom) : sc
+dx = px - 64; dy = 15 - py
 -- the wobble: rows slide sideways, columns up and down, on travelling waves
-wob = sin(ty/32 + t/3.2)*amp
+wob = sin((31 - py)/32 + t/3.2)*amp
 col = sin(px*0.0234375 - t/4.8)*amp
 -- where each pixel is on the checker: its column's part plus its row's
-u = cs*rs*dx + (cu + wob + (ground ? sn*rs*64 : -sn*sc*dy))
-v = sn*rs*dx + col + (cv + (ground ? -cs*rs*64 : cs*sc*dy))
+u = (cu + cs*sc*dx) + (wob - sn*sc*dy)
+v = (cv + sn*sc*dx + col) + cs*sc*dy
 cell = (floor(u) + floor(v)) % 2
 u2 = (cv + c2*sc2*dx) + (wob - s2*sc2*dy)
 v2 = (cu + s2*sc2*dx + col) + c2*sc2*dy
-fog = ground ? (ty < 3 ? 0 : ty < 6 ? 0.375 : ty < 10 ? 0.625 : 1) : 1
-pal(fire, (cell ? hi : lo) + noise(u2, v2, 0)*mixn) * fog
+pal(fire, (cell ? 0.44 : 0.19) + noise(u2, v2, 0)*0.6)
 ```
 
 ## 16. In the product (not built)
