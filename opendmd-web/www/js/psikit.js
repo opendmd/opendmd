@@ -36,11 +36,14 @@ export const TIP = (i) => `${i[0]} steps, about ${(i[6] / 1000).toFixed(1)} ms a
 // block words and the draw stage's `.w`; the
 // error `bad` = [start, end] `.e`; everything else escaped text) and where
 // its numbers are.
-const WORDS = /^(loop|frame|layer|part|draw|for|table|line|dot|ink)$/;
+// (`line`, `dot` and `ink` only in a formula with a draw block: before it
+// they were names a formula could set, and may still be.)
+const WORDS = /^(loop|frame|layer|part|draw|for|table|line|dot|ink)$/, DRAWS = /^(line|dot|ink)$/;
 export function marks(s, bad) {
+  const draws = /^\s*draw\s*\{/m.test(s.replace(/(--|\/\/).*/g, ''));
   const toks = [], cls = new Array(s.length).fill('');
   for (const m of s.matchAll(/(--|\/\/).*|'[ -~]'|#[\da-f]{3}([\da-f]{3})?\b|[a-z_]\w*|\d+\.?\d*|\.\d+/gi)) {
-    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : WORDS.test(m[0]) ? 'w' : '';
+    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : WORDS.test(m[0]) && (draws || !DRAWS.test(m[0])) ? 'w' : '';
     let a = m.index;
     // A character in quotes ('A') is a number, but not one to drag.
     if (k === 'n' && m[0][0] !== "'") {

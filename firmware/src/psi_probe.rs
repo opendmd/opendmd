@@ -504,8 +504,9 @@ pub fn run(root: &str) {
     }
 
     // The draw stage: frames against the one-dot baseline, per turn (or per
-    // line), for `Program::draw_us`'s constants (the design's guesses: a
-    // scalar step 300 ns, a line 1,500 + 200 a pixel, a dot 400).
+    // line), for `Program::draw_us`'s constants (calibrated from these on
+    // 2026-10-27: a step run 420 ns, a dot 400, a line 1,100 + 320 a pixel;
+    // tests/measured.rs `DRAW`).
     const DRAW_STEPS: [(&str, &str, u32); 7] = [
         ("draw base (1 dot off)", "draw { dot(-1, -1, t) }\ngray(ink)", 1),
         ("draw loop step: 1024 dots off", "draw { for k < 1024 { dot(-1, -1, t) } }\ngray(ink)", 1024),

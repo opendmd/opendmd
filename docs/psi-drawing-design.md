@@ -49,6 +49,24 @@ deleted.
   stay native (§7.5); the natives' knobs become each example's lines and
   sliders — no new parameter mechanism, a slider "picker" comment at most.
 
+**As built (phase 1, branch `psi-draw`, 2026-10-27).** Where the build
+differs from this design: (1) the canvas is passed to the VM
+(`render_rows_ink(…, Some(&mut ink), …)`) and is its own 4 KB allocation,
+not a bigger `PsiBox`/`Scratch` (the web module's bump allocator can't hold
+a long-lived box: it uses a static); (2) one `draw { }` in the whole
+formula (the formula's or one part's), since there is one canvas; (3)
+**loop turns count every run of a loop's body, outer loops included** (a
+12 × 6 grid is 84 turns, not 72; 32 × 64 is 2,080 and refused): the same
+count the VM caps at run time; (4) the 16,384 frame cap counts line steps
+walked, not pixels lit, and a line wholly off one side costs nothing; (5)
+the draw stage runs on full renders only (a look's partial redraws reuse
+the last canvas); (6) E7xx are sentences only (`Error.code` waits for the
+tooling plan's P0); (7) the cost constants were measured on the spare: a
+step run 420 ns, a dot 400, a line 1,100 + 320 a pixel (§3.7's 300 /
+400 / 1,500 + 200); (8) firmware +15 KB and pkg-psi +6.3 KB gz, against
+§3.8's +5-7 KB and +3-4 KB. The sketches below use `x`, `y`, `h` and `i`
+as names, which are built-ins: the shipped examples rename them.
+
 ## 1. Options compared
 
 The cost figures use the device's measured per-step costs (`psi-probe`,

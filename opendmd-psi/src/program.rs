@@ -550,11 +550,14 @@ impl Program {
         (((45 + px) * (W * H) as u32) / 1000 + row * 10 + self.draw_us()) * 115 / 100
     }
 
-    /// The draw stage's part of [`esp32_us`](Self::esp32_us): per step run
-    /// (each loop's body as often as it runs) ~300 ns, a line 1,500 ns +
-    /// 200 a pixel (12 pixels guessed unless its ends are constants), a dot
-    /// 400, and the canvas cleared, 10 µs. Design estimates
-    /// (docs/psi-drawing-design.md §3.7) until `psi-probe` measures them.
+    /// The draw stage's part of [`esp32_us`](Self::esp32_us), from
+    /// `psi-probe` on the spare (2026-10-27, 1.0.0-beta.11-drawprobe-a,
+    /// tests/measured.rs `DRAW`): a step run ~420 ns (a loop's END and its
+    /// body's values, each as often as it runs), a dot 400, a line 1,100 +
+    /// 320 a pixel walked (its longer side when a side's ends are
+    /// constants, at least 12 with a side unknown), and
+    /// 10 µs to clear the canvas. (The design guessed 300, 400 and 1,500 +
+    /// 200.)
     pub fn draw_us(&self) -> u32 {
         if !self.draws() {
             return 0;
@@ -568,18 +571,21 @@ impl Program {
                     0
                 }
                 code::LINE_TO => {
+                    // Its pixels: the longer side + 1 where both ends of a side
+                    // are constants; with a side unknown, at least 12.
                     let k = |v: u8| self.const_value(v);
-                    let len = match (k(from[0]), k(from[1]), k(op.a), k(op.b)) {
-                        (Some(x0), Some(y0), Some(x1), Some(y1)) => {
-                            let d = |a: i32, b: i32| ((a >> 16) - (b >> 16)).unsigned_abs();
-                            d(x1, x0).max(d(y1, y0)).min(1024) as u64 + 1
-                        }
-                        _ => 12,
+                    let d = |a: Option<i32>, b: Option<i32>| {
+                        a.zip(b).map(|(a, b)| ((a >> 16) - (b >> 16)).unsigned_abs().min(1023) as u64 + 1)
                     };
-                    1_500 + 200 * len
+                    let (dx, dy) = (d(k(from[0]), k(op.a)), d(k(from[1]), k(op.b)));
+                    let len = match (dx, dy) {
+                        (Some(a), Some(b)) => a.max(b),
+                        (a, b) => a.or(b).unwrap_or(0).max(12),
+                    };
+                    1_100 + 320 * len
                 }
                 code::DOT => 400,
-                _ => 300,
+                _ => 420,
             };
             ns = ns.saturating_add(cost * mult as u64);
         });
