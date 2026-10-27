@@ -4,7 +4,7 @@
 //! test: the formula is a static.
 
 use super::*;
-use opendmd_psi::golden::{fnv, inputs, picture, FRAMES, OVER};
+use opendmd_psi::golden::{fnv, inputs, picture, DRAWN, FRAMES, OVER};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -68,6 +68,19 @@ fn formulas() {
         }
         let got = fnv(unsafe { core::slice::from_raw_parts(pixels(), W * H * 3) });
         assert_eq!(got, want, "{name} at {ms} ms");
+    }
+    // Formulas that draw, with the module's canvas.
+    for &(name, src, ms, over, want) in DRAWN {
+        assert!(compile(src), "{name}: {}", error());
+        assert!(info()[8] > 0 && info()[9] > 0, "{name}: draws");
+        let i = inputs(ms);
+        if over {
+            frame_over(ms, i.hour, i.minute, i.second, i.a, i.b, i.c);
+        } else {
+            frame(ms, i.hour, i.minute, i.second, i.a, i.b, i.c);
+        }
+        let got = fnv(unsafe { core::slice::from_raw_parts(pixels(), W * H * 3) });
+        assert_eq!(got, want, "{name} (drawn) at {ms} ms");
     }
     assert!(compile(
         "layer multiply { gray(ul) }\nlayer add { gray(x, 0.5) }"
@@ -193,7 +206,6 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
 /// within the looks' 12 ms (`fx_psi::LOOK_MAX_EST_US`), except the ones
 /// listed: too heavy to draw over every GIF at all.
 #[cfg(not(target_arch = "wasm32"))]
-#[test]
 fn every_example_as_a_look() {
     const TOO_HEAVY: &[&str] = &[];
     let json = std::fs::read_to_string(concat!(
