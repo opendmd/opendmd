@@ -109,6 +109,7 @@ fn mul_iv(a: Iv, b: Iv) -> Iv {
 }
 
 /// What a step's value can be, from its operands'. `tabs` for `tab`.
+#[inline(never)]
 fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
     use code::*;
     match op.code {
@@ -202,9 +203,14 @@ fn div_iv(a: Iv, b: Iv) -> Iv {
 }
 
 /// Narrow `prog`'s pixel steps where the ranges allow (see the module).
+///
+/// Out of line, its intervals on the heap (like the rest of the compiler's
+/// working memory): the compiler runs on a 12 KB stack of its own on the
+/// ESP32.
+#[inline(never)]
 pub(crate) fn narrow(prog: &mut Program) {
     use code::*;
-    let mut sc = [FULL; MAX_SCALARS];
+    let mut sc = alloc::vec![FULL; MAX_SCALARS];
     for (k, v) in sc.iter_mut().enumerate().skip(S_FIRST_FREE as usize) {
         *v = Iv::point(prog.init[k]);
     }
@@ -222,26 +228,24 @@ pub(crate) fn narrow(prog: &mut Program) {
         (prog.row_end as usize).min(MAX_OPS),
         prog.len().min(MAX_OPS),
     );
-    let tabs = prog.tables;
-    let g = |sc: &[Iv; MAX_SCALARS], v: u8| sc[(v & 0x7f) as usize];
+    let (ops, tabs) = (&mut prog.ops, &prog.tables);
+    let g = |sc: &[Iv], v: u8| sc[(v & 0x7f) as usize];
     // Per frame, the draw stage, then per row (over every row: y and py
     // are ranges). Every slot is written by one step, before any step
     // reads it (`emit`), so one walk in order is exact.
-    for k in 0..fe {
-        let op = prog.ops[k];
-        sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), &tabs);
+    for &op in &ops[..fe] {
+        sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
     }
     // The draw stage's slots (its counters and values): anything.
-    for op in &prog.ops[fe.min(de)..de] {
+    for op in &ops[fe.min(de)..de] {
         sc[(op.d & 0x7f) as usize] = FULL;
         sc[(op.a & 0x7f) as usize] = FULL;
     }
-    for k in de.min(re)..re {
-        let op = prog.ops[k];
-        sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), &tabs);
+    for &op in &ops[de.min(re)..re] {
+        sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
     }
     let mut regs = [FULL; REGS + 1];
-    let lane = |regs: &[Iv; REGS + 1], sc: &[Iv; MAX_SCALARS], v: u8| -> Iv {
+    let lane = |regs: &[Iv; REGS + 1], sc: &[Iv], v: u8| -> Iv {
         if v & LANE == 0 {
             return sc[(v & 0x7f) as usize];
         }
@@ -252,8 +256,8 @@ pub(crate) fn narrow(prog: &mut Program) {
             l => regs[((l - L_I) as usize).min(REGS)],
         }
     };
-    for k in re.min(pe)..pe {
-        let mut op = prog.ops[k];
+    for slot in &mut ops[re.min(pe)..pe] {
+        let mut op = *slot;
         if code::is_colour(op.code) || matches!(op.code, STILL | COLUMN) {
             continue;
         }
@@ -298,10 +302,10 @@ pub(crate) fn narrow(prog: &mut Program) {
             lane(&regs, &sc, op.a),
             lane(&regs, &sc, op.b),
             lane(&regs, &sc, op.c),
-            &tabs,
+            tabs,
         );
         let di = ((op.d & !LANE) - L_I) as usize;
         regs[di.min(REGS)] = r;
-        prog.ops[k] = op;
+        *slot = op;
     }
 }
