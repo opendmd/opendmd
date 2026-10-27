@@ -1149,6 +1149,8 @@ struct Colour {
     pal: u8,
     alpha: Option<Id>,
     blend: u8,
+    /// `pal(P, v) * k`: the palette's colour times k (each channel).
+    scale: Option<Id>,
 }
 
 /// What a formula's or a part's lines come to: its colours, bottom to top
@@ -1821,6 +1823,7 @@ impl<'s> Parser<'s> {
                 pal: 0,
                 alpha: (k > ar).then_some(a[ar]),
                 blend: fixed::BLEND_OVER,
+                scale: None,
             });
         }
         self.expect(Tok::LParen, "`(`")?;
@@ -1872,6 +1875,7 @@ impl<'s> Parser<'s> {
             pal,
             alpha,
             blend: fixed::BLEND_OVER,
+            scale: None,
         })
     }
 
@@ -1977,6 +1981,7 @@ impl<'s> Parser<'s> {
             pal: 0,
             alpha: None,
             blend: fixed::BLEND_OVER,
+            scale: None,
         })
     }
 
@@ -2247,15 +2252,44 @@ impl<'s> Parser<'s> {
             && (word != "rgb" || self.whole_line(true))
         {
             self.next();
-            let c = self.colour(t)?;
-            let e = self.peek();
+            let mut c = self.colour(t)?;
+            let mut e = self.peek();
+            // `pal(P, v) * k`: the palette's colour, each channel times k
+            // (a light on a palette, in one step); `* k * m` too.
+            if word == "pal" && e.tok == Tok::Star && !self.has_colour(self.pos + 1, false) {
+                let at = (e.start, e.end);
+                let mut k = None;
+                while self.peek().tok == Tok::Star {
+                    self.next();
+                    let v = self.expr(10)?;
+                    k = Some(match k {
+                        Some(k) => self.dag.op(code::MUL, [k, v, 0], at)?,
+                        None => v,
+                    });
+                }
+                if let Some(k) = k {
+                    if c.code == code::OUT_GRAY {
+                        c.args[0] = self.dag.op(code::MUL, [c.args[0], k, 0], at)?;
+                    } else {
+                        c.scale = Some(k);
+                    }
+                }
+                e = self.peek();
+            }
             if infix_bp(e.tok).is_some() && word != "rgb" {
                 return self.err(
                     e,
-                    format!(
-                        "`{word}(…)` can't go into a sum: only `#…` and `rgb(r, g, b)` colours can \
-                         (`#fff * k`, `rgb(r, g, b) * k`)"
-                    ),
+                        if word == "pal" {
+                        format!(
+                            "`pal(…)` can't go into a sum: it can only be scaled, `pal(fire, v) * k` \
+                             (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
+                        )
+                    } else {
+                        format!(
+                            "`{word}(…)` can't go into a sum: only `#…` and `rgb(r, g, b)` colours can \
+                             (`#fff * k`, `rgb(r, g, b) * k`)"
+                        )
+                    },
                 );
             }
             self.end_of_statement()?;
@@ -2288,6 +2322,7 @@ impl<'s> Parser<'s> {
                 pal: 0,
                 alpha: None,
                 blend: fixed::BLEND_OVER,
+                scale: None,
             }],
             false,
         ))
@@ -3221,6 +3256,7 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
             args: c.args,
             pal: c.pal,
             alpha,
+            scale: c.scale,
         });
     }
     // A limit hit while laying out the steps is the formula's as a whole:
@@ -3243,14 +3279,18 @@ struct Step {
     args: [Id; 3],
     pal: u8,
     alpha: Option<Id>,
+    /// `pal(P, v) * k`'s k.
+    scale: Option<Id>,
 }
 
 impl Step {
-    /// What it reads, in operand order (the coverage last).
+    /// What it reads, in operand order (a palette's scale, then the
+    /// coverage last).
     fn reads(&self) -> impl Iterator<Item = Id> + '_ {
         self.args[..code::arity(self.code)]
             .iter()
             .copied()
+            .chain(self.scale)
             .chain(self.alpha)
     }
 }
@@ -3573,12 +3613,17 @@ fn emit(
                 let (kind, _) = code::colour_parts(st.code);
                 let cover = st.alpha.map_or(0, l);
                 let rgb = kind == code::OUT_RGB || kind == code::OUT_HSV;
+                // A scaled palette: the flag on its palette, the scale in c.
+                let (pal, scale) = match st.scale {
+                    Some(k) if kind == code::OUT_PAL => (st.pal | PAL_SCALED, l(k)),
+                    _ => (st.pal, 0),
+                };
                 ops.push(Op {
                     code: st.code,
-                    d: if rgb { cover } else { st.pal },
+                    d: if rgb { cover } else { pal },
                     a: l(st.args[0]),
                     b: if rgb { l(st.args[1]) } else { cover },
-                    c: if rgb { l(st.args[2]) } else { 0 },
+                    c: if rgb { l(st.args[2]) } else { scale },
                 });
             }
         }

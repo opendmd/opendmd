@@ -122,6 +122,72 @@ fn noise_and_hash_stay_in_range() {
 }
 
 #[test]
+fn flat_noise_is_noise_at_a_whole_z() {
+    let mut h: u32 = 12345;
+    let mut r = || {
+        h ^= h << 13;
+        h ^= h >> 17;
+        h ^= h << 5;
+        h as i32
+    };
+    for _ in 0..20000 {
+        let (x, y) = (r() >> 8, r() >> 8);
+        let z = (r() >> 16) << 16;
+        assert_eq!(
+            fixed::noise_flat(x, y, z),
+            fixed::noise(x, y, z),
+            "{x} {y} {z}"
+        );
+    }
+    // The VM takes it for a whole scalar z, the eight corners otherwise.
+    let flat = compile("gray(noise(x*8, y*4, 3) + noise(px, py, -1)*0.25)").unwrap();
+    let full = compile("frame { z = 3 + t*0 + floor(a*0.1) }\ngray(noise(x*8, y*4, z) + noise(px, py, -1 + z*0)*0.25)").unwrap();
+    let mut s = Scratch::<128>::new();
+    let (mut o1, mut o2) = (vec![0u8; W * H * 3], vec![0u8; W * H * 3]);
+    render(&flat, &mut s, &Inputs::default(), &OWN, &mut o1);
+    render(&full, &mut s, &Inputs::default(), &OWN, &mut o2);
+    assert_eq!(o1, o2);
+    assert!(flat.esp32_us() < full.esp32_us());
+}
+
+#[test]
+fn a_scaled_palette_is_its_channels_scaled() {
+    // `pal(P, v) * k` against the same colour written as rgb of its
+    // channels (the palette entries' bytes over 255, times k).
+    let p = compile("pal(fire, x) * y").unwrap();
+    assert_eq!(p.layers(), 1);
+    assert_eq!(p.inputs() & 7, 0);
+    let mut s = Scratch::<128>::new();
+    let mut out = vec![0u8; W * H * 3];
+    render(&p, &mut s, &Inputs::default(), &OWN, &mut out);
+    for (i, px) in out.chunks(3).enumerate() {
+        let (x, row) = (i % W, i / W);
+        let xv = fixed::div((x as i32) << 16, ((W - 1) as i32) << 16);
+        let yv = fixed::div(((H - 1 - row) as i32) << 16, ((H - 1) as i32) << 16);
+        let c = fixed::pal(&PALETTES[0], xv);
+        let want: Vec<u8> = c
+            .iter()
+            .map(|&b| fixed::chan(fixed::mul(fixed::byte(b), yv)))
+            .collect();
+        assert_eq!(px, &want[..], "pixel {i}");
+    }
+    // Times a slider, chained, in a layer with coverage; gray is gray(v*k).
+    let p = compile("layer { hsv(x, 1, 1) }\nlayer screen { pal(ice, y, 0.5) * a * 2 }").unwrap();
+    assert_eq!(p.sliders(), 1);
+    assert!(compile("pal(gray, x) * 0.5")
+        .unwrap()
+        .listing()
+        .contains("gray"));
+    assert_eq!(
+        compile("pal(gray, x) * y").unwrap().esp32_us(),
+        compile("gray(x * y)").unwrap().esp32_us()
+    );
+    // Not into sums.
+    let e = compile("pal(fire, x) * y + 0.1").unwrap_err();
+    assert!(e.msg.contains("can only be scaled"), "{}", e.msg);
+}
+
+#[test]
 fn colours() {
     assert_eq!(fixed::hsv(0, ONE, ONE), [255, 0, 0]);
     assert_eq!(fixed::hsv(q(1.0 / 3.0), ONE, ONE), [0, 255, 0]);
