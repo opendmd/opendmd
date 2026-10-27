@@ -243,20 +243,25 @@ fn transition_gate(need: usize) -> bool {
 pub fn still_gate(take: usize) -> bool {
     static SAID: AtomicU32 = AtomicU32::new(0);
     let look = formula_look::SOURCE.load(Ordering::Relaxed);
+    // The card builder mid-file has the heap first (its encoder's peak was
+    // sized without the cache): never taken then, and given back when it
+    // starts one, as the glow and the copy ahead give way to it.
+    let building = cache_builder::holding();
     let free = free_heap() as usize;
     if take == 0 {
-        return look == 0 && free >= config::STILL_SHED_HEAP;
+        return look == 0 && !building && free >= config::STILL_SHED_HEAP;
     }
     let block = largest_free_block();
-    let ok = look == 0 && free >= take + config::STILL_KEEP_HEAP && block >= 16 * 1024;
+    let ok = look == 0 && !building && free >= take + config::STILL_KEEP_HEAP && block >= 16 * 1024;
     if !ok {
         let now = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32;
         let last = SAID.load(Ordering::Relaxed);
         if last == 0 || now.wrapping_sub(last) >= 10 {
             SAID.store(now | 1, Ordering::Relaxed);
             log::info!(
-                "formula: still cache ({take} B) not taken: heap {free} B free (needs {} B), largest block {block} B, look {look}",
-                take + config::STILL_KEEP_HEAP
+                "formula: still cache ({take} B) not taken: heap {free} B free (needs {} B), largest block {block} B, look {look}, card builder {}",
+                take + config::STILL_KEEP_HEAP,
+                if building { "mid-file" } else { "idle" }
             );
         }
     }

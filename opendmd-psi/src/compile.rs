@@ -3155,7 +3155,12 @@ pub fn compile_into(src: &str, prog: &mut Program) -> Result<Info, Error> {
 #[doc(hidden)]
 pub fn compile_layout(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Error> {
     prog.clear();
-    let r = compile_inner(src, prog, runs);
+    let mut r = compile_inner(src, prog, runs);
+    if runs && r.as_ref().is_err_and(|e| e.msg == LAYOUT_BUG) {
+        debug_assert!(false, "{LAYOUT_BUG}: {src:?}");
+        prog.clear();
+        r = compile_inner(src, prog, false);
+    }
     if r.is_err() {
         prog.clear();
     }
@@ -3392,6 +3397,9 @@ fn emit(
     }
     // Where each node's value lives.
     let mut loc = alloc::vec![0u8; n];
+    // Which nodes have a place yet: a step may read only those (an operand
+    // without one would read slot 0, `t`, silently).
+    let mut set = alloc::vec![false; n];
     let mut next_slot = S_FIRST_FREE as usize;
     fn new_slot(next_slot: &mut usize, v: Option<i32>, prog: &mut Program) -> Result<u8, Error> {
         if *next_slot >= MAX_SCALARS {
@@ -3410,8 +3418,10 @@ fn emit(
     for i in 0..n {
         if live(i) && nodes[i].code == K_CONST {
             loc[i] = new_slot(&mut next_slot, Some(nodes[i].val), prog)?;
+            set[i] = true;
         } else if live(i) && nodes[i].code == K_INPUT {
             loc[i] = nodes[i].val as u8;
+            set[i] = true;
             if nodes[i].val as u8 == LANE | L_I {
                 prog.uses |= USES_I;
             }
@@ -3432,11 +3442,17 @@ fn emit(
     let mk = |m: &Node,
               d: u8,
               loc: &[u8],
+              set: &[bool],
               ns: &mut usize,
               tabs: &mut [u8],
               prog: &mut Program|
      -> Result<Op, Error> {
         let n = code::arity(m.code);
+        let unset = [m.a, m.b, m.c][..n].iter().any(|&x| !set[x as usize])
+            || (m.code == code::PICK && dag.picks[m.b as usize].iter().any(|&x| !set[x as usize]));
+        if unset {
+            return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+        }
         let l = |k: usize, x: Id| if n > k { loc[x as usize] } else { 0 };
         let (mut b, mut c) = (l(1, m.b), l(2, m.c));
         if m.code == code::TAB {
@@ -3483,7 +3499,8 @@ fn emit(
             if is_op(i) && m.level == level {
                 let d = new_slot(&mut next_slot, None, prog)?;
                 loc[i] = d;
-                ops.push(mk(m, d, &loc, &mut next_slot, &mut tabs, prog)?);
+                set[i] = true;
+                ops.push(mk(m, d, &loc, &set, &mut next_slot, &mut tabs, prog)?);
             }
         }
         if level == LV_FRAME {
@@ -3498,6 +3515,7 @@ fn emit(
                         let cs = new_slot(&mut next_slot, Some((count as i32) << 16), prog)?;
                         let ks = new_slot(&mut next_slot, None, prog)?;
                         loc[ctr as usize] = ks;
+                        set[ctr as usize] = true;
                         open.push((ops.len(), ks, cs));
                         ops.push(Op {
                             code: code::FOR,
@@ -3511,7 +3529,16 @@ fn emit(
                             if is_op(i) && owner[i] == lp {
                                 let d = new_slot(&mut next_slot, None, prog)?;
                                 loc[i] = d;
-                                ops.push(mk(&nodes[i], d, &loc, &mut next_slot, &mut tabs, prog)?);
+                                set[i] = true;
+                                ops.push(mk(
+                                    &nodes[i],
+                                    d,
+                                    &loc,
+                                    &set,
+                                    &mut next_slot,
+                                    &mut tabs,
+                                    prog,
+                                )?);
                             }
                         }
                     }
@@ -3590,6 +3617,10 @@ fn emit(
         if (use_col && col_ns < COLUMN_GAIN_NS) || (use_still && cached.is_empty() && !use_col) {
             continue;
         }
+        // The markers are steps too: at the step limit, the plain layout.
+        if total + markers + usize::from(!cached.is_empty()) > MAX_OPS {
+            continue;
+        }
         let lay = pixel_seq(dag, steps, &px_op, &need, &cached, excl, use_col);
         if let Some(r) = registers(nodes, steps, &lay.seq, &lay.pinned) {
             layout = Some((lay, cached, r));
@@ -3627,10 +3658,22 @@ fn emit(
             Item::Value(i) => {
                 let d = LANE | (L_REG0 + regs[at]);
                 loc[i] = d;
-                ops.push(mk(&nodes[i], d, &loc, &mut next_slot, &mut tabs, prog)?);
+                set[i] = true;
+                ops.push(mk(
+                    &nodes[i],
+                    d,
+                    &loc,
+                    &set,
+                    &mut next_slot,
+                    &mut tabs,
+                    prog,
+                )?);
             }
             Item::Colour(k) => {
                 let st = &steps[k];
+                if st.reads().any(|x| !set[x as usize]) {
+                    return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+                }
                 let l = |x: Id| loc[x as usize];
                 let (kind, _) = code::colour_parts(st.code);
                 let cover = st.alpha.map_or(0, l);
@@ -3666,6 +3709,11 @@ fn emit(
     prog.regs = used as u8;
     Ok(())
 }
+
+/// What a step reading a value with no place yet says (never seen: a bug in
+/// the layout; `compile_layout` then lays the formula out without its
+/// runs).
+const LAYOUT_BUG: &str = "this formula could not be laid out (a bug in Psi) — please report it";
 
 /// A pixel step to lay out: a value, colour step k, or the still cache's
 /// marker.
@@ -3869,8 +3917,12 @@ fn choose_still(
                 continue;
             }
             cached.push(c);
+            let ok = still_run(dag, steps, &px_op, &cached).is_some();
             let v = cost(&cached);
             cached.pop();
+            if !ok {
+                continue;
+            }
             if best.is_none_or(|(_, b)| v < b) {
                 best = Some((c, v));
             }
@@ -3884,6 +3936,50 @@ fn choose_still(
         }
     }
     cached
+}
+
+/// The still cache's run for `cached` (the cached values and the steps only
+/// they need) and the per-frame values the run reads (laid out before its
+/// marker), or `None` when those can't go before it: one of them reads a
+/// cached value (`ab = abs(ang)` read by the frame and by a cached
+/// `sqrt(ab*2)`, with `ang` cached too) — skipping the run would leave it
+/// reading a register nothing wrote.
+fn still_run(
+    dag: &Dag,
+    steps: &[Step],
+    px: &dyn Fn(usize) -> bool,
+    cached: &[usize],
+) -> Option<(Vec<bool>, Vec<bool>)> {
+    let n = dag.nodes.len();
+    let f = per_frame(dag, steps, cached);
+    let mut run = alloc::vec![false; n];
+    let mut first = alloc::vec![false; n];
+    for &c in cached {
+        run[c] = true;
+    }
+    for i in (0..n).rev() {
+        if run[i] {
+            for x in reads(dag, i) {
+                if px(x as usize) && !f[x as usize] {
+                    run[x as usize] = true;
+                }
+            }
+        }
+    }
+    for i in (0..n).rev() {
+        if run[i] || first[i] {
+            for x in reads(dag, i) {
+                let x = x as usize;
+                if px(x) && !run[x] {
+                    first[x] = true;
+                }
+            }
+        }
+    }
+    // A value before the marker reads only values before it (or rows,
+    // columns, constants): never one in the run.
+    let ok = (0..n).all(|i| !first[i] || reads(dag, i).all(|x| !run[x as usize]));
+    ok.then_some((run, first))
 }
 
 /// A laid-out pixel section: the order, the cached run's and the column
@@ -3936,34 +4032,15 @@ fn pixel_seq(
     let mut first = alloc::vec![false; n];
     let mut run_len = 0;
     if !cached.is_empty() {
-        let f = per_frame(dag, steps, cached);
-        for &c in cached {
-            run[c] = true;
+        // (`choose_still` took only sets this lays out: see `still_run`.)
+        if let Some((r, f)) = still_run(dag, steps, &px, cached) {
+            (run, first) = (r, f);
+            seq.extend((0..n).filter(|&i| first[i]).map(Item::Value));
+            seq.push(Item::Still);
+            let before = seq.len();
+            seq.extend((0..n).filter(|&i| run[i]).map(Item::Value));
+            run_len = seq.len() - before;
         }
-        for i in (0..n).rev() {
-            if run[i] {
-                for x in reads(dag, i) {
-                    if px(x as usize) && !f[x as usize] {
-                        run[x as usize] = true;
-                    }
-                }
-            }
-        }
-        for i in (0..n).rev() {
-            if run[i] || first[i] {
-                for x in reads(dag, i) {
-                    let x = x as usize;
-                    if px(x) && !run[x] {
-                        first[x] = true;
-                    }
-                }
-            }
-        }
-        seq.extend((0..n).filter(|&i| first[i]).map(Item::Value));
-        seq.push(Item::Still);
-        let before = seq.len();
-        seq.extend((0..n).filter(|&i| run[i]).map(Item::Value));
-        run_len = seq.len() - before;
     }
     for k in 0..steps.len() {
         for i in 0..n {

@@ -255,9 +255,10 @@ fn formula_path(file: &Path, opts: Option<&str>) -> Result<String> {
         prog.loop_ms() as f64 / 1000.0
     );
     let path = opendmd_core::fx_psi::path(&src, opts.unwrap_or(""));
-    if path.len() > 512 {
+    let most = opendmd_core::synth::MAX_FORMULA_PATH;
+    if path.len() > most {
         bail!(
-            "{}: too long to play as a path ({} bytes encoded, 512 at most): shorten it",
+            "{}: too long to play as a path ({} bytes encoded, {most} at most): shorten it",
             file.display(),
             path.len()
         );

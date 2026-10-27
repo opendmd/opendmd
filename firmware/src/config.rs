@@ -331,7 +331,8 @@ pub const GLOW_YIELD_HEAP: usize = 20 * 1024;
 /// (refused then, it is asked again a second later). It is given back as
 /// soon as the main loop's next frame sees the free heap under
 /// [`STILL_SHED_HEAP`], and never held while a formula look is set (the look
-/// has the heap first). Was 48 KB in p2probe-a: with ~80-90 KB free while a
+/// has the heap first) or the card builder is mid-file (its encoder's peak
+/// is sized without it: given back when the builder starts a file). Was 48 KB in p2probe-a: with ~80-90 KB free while a
 /// formula played, Tunnel's 32 KB never got in.
 #[cfg(feature = "psi")]
 pub const STILL_KEEP_HEAP: usize = 32 * 1024;

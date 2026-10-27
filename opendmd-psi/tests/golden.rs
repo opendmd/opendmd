@@ -164,6 +164,26 @@ fn the_still_cache_draws_the_same_bytes() {
     );
 }
 
+/// Layouts the review found broken (a value before the still marker read a
+/// cached one, so it read slot 0, `t`): the same frames as the plain layout,
+/// without a cache and with one kept and drawn from.
+#[test]
+fn a_value_before_the_marker_never_reads_the_run() {
+    for src in [
+        "loop 4\ncx = px - 63.5\ncy = (15.5 - py)*2\nang = atan2(cy, cx)\nab = abs(ang)\nzz = sqrt(ab*2)\ngray(frac(ang + t/4) * frac(ab + t/4) * frac(zz + t/4))",
+        "loop 4\ncx = px - 63.5\ncy = (15.5 - py)*2\nang = atan2(cy, cx)\nab = abs(ang) + 0.5\nzz = len(ab*2, cx)\ngray(frac(ang + t/4) * frac(ab + t/4) * frac(zz + t/4))",
+    ] {
+        let p = compile(src).unwrap();
+        let plain = opendmd_psi::compile_plain(src).unwrap();
+        for ms in [0, 700, 2100] {
+            assert!(frame_ink::<128>(&p, ms, None) == frame_ink::<128>(&plain, ms, None), "{src:?} at {ms}");
+        }
+        if p.still_lanes() > 0 {
+            still_same::<128>(src, &p, &[0, 700, 2100], None);
+        }
+    }
+}
+
 /// A program changed in place under a cache that kept another's values is
 /// drawn as it is, never from the other's values.
 #[test]
@@ -201,6 +221,36 @@ fn the_still_cache_never_draws_another_programs_values() {
         &mut out,
     );
     assert_eq!(out, frame_ink::<128>(&b, 500, None));
+    // Only a table's entries changed: not the kept values.
+    let ta = compile("loop 4\ntable T = 0.1, 0.5, 0.9, 0.3\nk = T[floor(len(px - 63.5, (15.5 - py)*2)/8)]\ngray(frac(k + t/4))").unwrap();
+    let tb = compile("loop 4\ntable T = 0.9, 0.2, 0.1, 0.6\nk = T[floor(len(px - 63.5, (15.5 - py)*2)/8)]\ngray(frac(k + t/4))").unwrap();
+    assert!(ta.still_lanes() > 0);
+    let mut st2 = Still::new();
+    assert!(st2.take(&ta));
+    render_rows_still::<128>(
+        &ta,
+        &mut s,
+        Some(&mut ink),
+        Some(&mut st2),
+        &inputs(500),
+        &OWN,
+        None,
+        u32::MAX,
+        &mut out,
+    );
+    assert!(st2.holds(&ta) && !st2.holds(&tb));
+    render_rows_still::<128>(
+        &tb,
+        &mut s,
+        Some(&mut ink),
+        Some(&mut st2),
+        &inputs(500),
+        &OWN,
+        None,
+        u32::MAX,
+        &mut out,
+    );
+    assert_eq!(out, frame_ink::<128>(&tb, 500, None));
     // A partial redraw of a program the cache doesn't hold runs every step.
     assert!(st.holds(&b));
     render_rows_still::<128>(
@@ -701,6 +751,77 @@ fn check(src: &str) {
                 "{src:?}: span {e:?}"
             );
             let _ = e.render(src);
+        }
+    }
+}
+
+/// Random formulas built from named values the cache would keep (`len`,
+/// `atan2`, `sqrt`, `1/…` of the position) shared with moving ones and
+/// with each other: every layout draws the plain layout's frames, without a
+/// cache and with one.
+#[test]
+fn random_still_layouts_are_the_plain_frames() {
+    let mut r = Rng(0x57111_c4c4e);
+    let still = [
+        "len(px - 63.5, (15.5 - py)*2)",
+        "atan2(15.5 - py, px - 63.5)",
+        "sqrt(px*py + 1)",
+        "1/(len(cx, cy) + 0.1)",
+        "abs(cx*cy)",
+        "x*y",
+    ];
+    let moving = ["t/4", "a", "sin(t)", "x + t"];
+    let ops = ["+", "-", "*"];
+    let funs = ["abs", "sqrt", "frac", "sin", "floor"];
+    for case in 0..400 {
+        let mut src = String::from("loop 4\n");
+        let n = 3 + r.below(5);
+        for k in 0..n {
+            let pick = |r: &mut Rng, k: usize| -> String {
+                match r.below(4) {
+                    0 if k > 0 => format!("v{}", r.below(k)),
+                    1 => moving[r.below(moving.len())].to_string(),
+                    2 => format!("{}.{}", r.below(4), r.below(10)),
+                    _ => still[r.below(still.len())].to_string(),
+                }
+            };
+            let (x, y) = (pick(&mut r, k), pick(&mut r, k));
+            let e = if r.below(2) == 0 {
+                format!(
+                    "{}({} {} {})",
+                    funs[r.below(funs.len())],
+                    x,
+                    ops[r.below(3)],
+                    y
+                )
+            } else {
+                format!("({}) {} ({})", x, ops[r.below(3)], y)
+            };
+            src += &format!("v{k} = {e}\n");
+        }
+        let used: Vec<String> = (0..n)
+            .filter(|_| r.below(3) > 0)
+            .map(|k| format!("frac(v{k} + t/4)"))
+            .collect();
+        src += &format!(
+            "gray({} * 0.5)",
+            if used.is_empty() {
+                "v0".to_string()
+            } else {
+                used.join(" + ")
+            }
+        );
+        let Ok(p) = compile(&src) else { continue };
+        let plain = opendmd_psi::compile_plain(&src).expect("plain compiles");
+        for ms in [0, 1300] {
+            assert!(
+                frame_ink::<128>(&p, ms, None) == frame_ink::<128>(&plain, ms, None),
+                "case {case}: {src:?} at {ms} ms\n{}",
+                p.listing()
+            );
+        }
+        if p.still_lanes() > 0 {
+            still_same::<128>(&src, &p, &[0, 1300], None);
         }
     }
 }
