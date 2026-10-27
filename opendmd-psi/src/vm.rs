@@ -1070,6 +1070,7 @@ pub mod stats {
     pub static SCRATCH: AtomicUsize = AtomicUsize::new(0);
     pub static OUT: AtomicUsize = AtomicUsize::new(0);
     pub static STILL: AtomicUsize = AtomicUsize::new(0);
+    pub static STILL1: AtomicUsize = AtomicUsize::new(0);
 
     pub(super) fn note<const N: usize>(
         prog: &Program,
@@ -1090,5 +1091,10 @@ pub mod stats {
             _ => 0,
         };
         STILL.store(still, Relaxed);
+        let still1 = match cache {
+            Cache::Use(st) => st.lanes[1].as_deref().map_or(0, |l| l.0.as_ptr() as usize),
+            _ => 0,
+        };
+        STILL1.store(still1, Relaxed);
     }
 }
