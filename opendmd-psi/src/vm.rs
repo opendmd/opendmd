@@ -619,7 +619,7 @@ fn frame<const N: usize>(
             }
             // (A still cache's lanes are pointed at again by its marker
             // below, at this lane's pixels.)
-            let mut alias: Alias = [0; REGS + 1];
+            let mut alias: Alias = [core::ptr::null(); REGS + 1];
             let mut k = re;
             let mut keep_at = usize::MAX;
             while k < pe {
@@ -675,10 +675,10 @@ fn frame<const N: usize>(
     }
 }
 
-/// Where each register's lane is read from instead of its own, 0 for its
-/// own: a still cache's lane at the pixels (`fetch`), until the register
-/// is written. Addresses, one lane pass long.
-type Alias = [usize; REGS + 1];
+/// Where each register's lane is read from instead of its own, null for
+/// its own: a still cache's lane at the pixels (`fetch`), until the
+/// register is written. One lane pass long.
+type Alias = [*const i32; REGS + 1];
 
 /// The lane register a register operand names (as `lane_op`'s
 /// destination).
@@ -705,7 +705,7 @@ fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at
 fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n: u8, at: usize) {
     for (j, &r) in regs.iter().enumerate().take(n as usize) {
         if let Some(l) = st.lanes[j].as_deref() {
-            al[reg_index(r)] = l.0[at..at + N].as_ptr() as usize;
+            al[reg_index(r)] = l.0[at..at + N].as_ptr();
         }
     }
 }
@@ -734,9 +734,10 @@ impl<const N: usize> Scratch<N> {
             L_PX => self.pxs[base..base + N].as_ptr(),
             l => {
                 let r = ((l - L_I) as usize).min(REGS);
-                match al[r] {
-                    0 => self.lanes[r].as_ptr(),
-                    p => p as *const i32,
+                if al[r].is_null() {
+                    self.lanes[r].as_ptr()
+                } else {
+                    al[r]
                 }
             }
         })
@@ -766,7 +767,7 @@ fn lane_op<const N: usize>(
     // not alias the source pointers.
     let di = reg_index(op.d);
     debug_assert!(op.d & LANE != 0 && op.d & !LANE >= L_REG0);
-    al[di] = 0;
+    al[di] = core::ptr::null();
     let d: &mut [i32; N] = &mut s.lanes[di];
     let code = if narrow {
         op.code

@@ -111,8 +111,9 @@ pub(crate) mod code {
     // is 0..=c (the table's length less one), else 0 ([`super::tab`]). Any
     // level; one operand.
     pub const TAB: u8 = 45;
-    // `mul(a, 2^-n)` (n = `c`, 0..=16, an immediate): exactly `a >> n`, an
-    // arithmetic shift (`range::narrow`, per pixel only).
+    // `mul(a, b)` where `b` is 2^-n for inputs in range (n = `c`, 0..=16, an
+    // immediate): exactly `a >> n`, an arithmetic shift; its checked form
+    // (`range::checked`) is `mul(a, b)` (`range::narrow`, per pixel only).
     pub const SHR: u8 = 46;
     pub const LAST_UN: u8 = 46;
     // ternary
@@ -580,7 +581,7 @@ impl Program {
             .map(|(k, op)| (k + self.row_end as usize, op))
             .filter(|(k, _)| !skip.contains(k))
             .map(|(k, op)| {
-                let ns = self.step_ns(op);
+                let ns = self.step_ns(k, op);
                 if col.contains(&k) {
                     ns.div_ceil(H as u32)
                 } else {
@@ -600,7 +601,7 @@ impl Program {
     }
 
     /// A pixel step's cost, ns a pixel at 128 lanes (see `esp32_us`).
-    fn step_ns(&self, op: &Op) -> u32 {
+    fn step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
         match op.code {
             c if is_colour(c) => {
@@ -624,14 +625,19 @@ impl Program {
                     // k that varies (226 + the write), 166 for k = 1 (the
                     // palette's bytes: 46 + the write). Since psi-speed a
                     // pixel with its neighbour's entry and scale reuses its
-                    // colour (Tunnel ~80 % of pixels, Rotozoom floor ~90 %):
-                    // ~21 instructions against ~55, so 60 (a guess from the
-                    // instructions until psi-probe measures it).
+                    // colour: cheap when both take few values along a row
+                    // (stepped: a floor, a choice, a comparison, or one
+                    // value for the row; Tunnel ~80 %, Rotozoom floor ~90 %
+                    // reused: 60, ~21 instructions against ~55), dearer
+                    // than before when they vary smoothly (speed-g: 427 ns
+                    // in all for `pal(fire, x) * (x*0.9)`: 307 + the write).
                     OUT_PAL if lane && vals > 1 => {
                         if self.const_value(op.c) == Some(ONE) {
                             46
-                        } else {
+                        } else if self.stepped(at, op.a) && self.stepped(at, op.c) {
                             60
+                        } else {
+                            307
                         }
                     }
                     _ => 0,
@@ -661,6 +667,26 @@ impl Program {
             NOISE if self.const_value(op.c).is_some_and(|z| z & 0xffff == 0) => NOISE_FLAT_NS,
             c => value_ns(c),
         }
+    }
+
+    /// Whether operand `v` of step `at` takes few values along a row: a
+    /// scalar, or a lane last written by a floor, a choice or a comparison.
+    fn stepped(&self, at: usize, v: u8) -> bool {
+        use code::*;
+        if v & LANE == 0 {
+            return true;
+        }
+        let re = self.row_end as usize;
+        self.ops[re.min(at)..at]
+            .iter()
+            .rev()
+            .find(|o| !is_colour(o.code) && !matches!(o.code, STILL | COLUMN) && o.d == v)
+            .is_some_and(|o| {
+                matches!(
+                    o.code,
+                    FLOOR | SELECT | LT | LE | GT | GE | EQ | NE | AND | OR | NOT | STEP | BIT
+                )
+            })
     }
 
     /// Where the still cache's marker is (`code::STILL`), if the formula
