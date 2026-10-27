@@ -324,12 +324,13 @@ function mountLocal(el) {
   }
 
   // Skip entries the folder does not have (a manifest can name files that
-  // were not extracted), but give up after a full lap.
+  // were not extracted) and Formulas (the player draws them; this preview
+  // can't), but give up after a full lap.
   async function next(tries = 0) {
     if (!list.length || tries > list.length) return;
     i = (i + 1) % list.length;
     const path = list[i];
-    if (path[0] !== '@' && !src.files.has(path)) return next(tries + 1);
+    if (path[0] !== '@' ? !src.files.has(path) : path.startsWith('@fx:psi')) return next(tries + 1);
     line.textContent = `· ${i + 1} of ${list.length}`;
     await show(path, 1);
   }

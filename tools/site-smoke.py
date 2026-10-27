@@ -225,6 +225,17 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
             check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "/f/ (phone): no sideways scroll")
         page.context.close()
 
+    # A picker (`-- a: name = word, …`): buttons, choice j of n is j/(n-1), in the link.
+    page = new_page(browser, "laptop", errors)
+    page.goto(share_link(base, "-- a: shape = dot, ring, bar\ngray(a)", "Picker", a=1))
+    page.wait_for_selector("#f-sl-a[role=radiogroup]", timeout=20000)
+    was = page.eval_on_selector_all("#f-sl-a [aria-checked=true]", "els => els.map(e => e.textContent)")
+    page.click("#f-sl-a [role=radio] >> text=ring")
+    page.click("#f-copy-link")
+    check(was == ["bar"] and page.inner_text("#f-sl > div > span") == "shape" and page.evaluate("navigator.clipboard.readText()").endswith("&a=0.5"),
+          f"/f/: a picker's buttons ({was} at a=1), ring -> a=0.5 in the link")
+    page.context.close()
+
     # A long formula: GitHub can't take it in an address, so the file is copied.
     page = new_page(browser, "laptop", errors)
     long_src = "loop 4\n" + "".join(f"-- {',' * 60}\n" for k in range(50)) + "gray(x)"

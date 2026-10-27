@@ -194,7 +194,12 @@ PSI_WASM_GZ_BUDGET = 52 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing
 # Drawing section, the highlighter's words, "Draws N lines and dots a frame",
 # and two drawing examples (Starfield, now drawn, and Wireframe cube):
 # 22,076 -> ~23.1 KB gz; raised under the same standing OK.
-FORMULAS_GZ_BUDGET = 24 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage
+# 25 KB for pickers and Add to playlist (2026-10-27, branch psi-p2-web): a
+# slider with choices (`-- a: shape = cube, ball`) as a row of buttons, in
+# js/psikit.js (shared with the site's /f/ page), and Add to playlist on every
+# formula (what lets the Library's Effects tab go): 23,614 -> ~24.8 KB gz.
+# Raised under the same standing OK.
+FORMULAS_GZ_BUDGET = 25 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}

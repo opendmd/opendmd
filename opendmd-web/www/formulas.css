@@ -17,6 +17,7 @@
 .psi-sl{display:flex;align-items:center;gap:12px;min-height:36px}
 .psi-sl>span{min-width:56px;color:var(--mut);font-size:13px}
 .psi-sl input{flex:1;width:auto}
+.psi-pick{display:flex;flex-wrap:wrap;gap:4px}.psi-pick button{color:var(--mut)}.psi-pick [aria-checked=true]{border-color:var(--acc);color:var(--fg)}
 .psi-edhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .psi-edhead input{flex:1;min-width:120px}
 .psi-edb{display:grid;grid-template-columns:minmax(0,512px) minmax(0,1fr);grid-template-areas:"top sl" "top acts" "err err" "code code";gap:8px 16px;align-items:start}

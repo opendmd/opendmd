@@ -193,6 +193,10 @@ pub fn render_manifest(entries: &[Entry]) -> String {
 /// component at 255. 512 covers both with room to spare, and keeping it a
 /// stack array is what makes `entry_at` allocation-free on the firmware.
 const MAX_LINE: usize = 512;
+/// Longest line read at all: a Formula's path (`@fx:psi?src=…`, up to
+/// [`MAX_FORMULA_PATH`](crate::synth::MAX_FORMULA_PATH)) with some trailing
+/// whitespace. Only a line past [`MAX_LINE`] goes to the heap for the rest.
+const MAX_LONG_LINE: usize = crate::synth::MAX_FORMULA_PATH + 64;
 
 /// Strip a leading BOM and any trailing CR / space / tab from one raw line.
 ///
@@ -253,7 +257,9 @@ pub fn index_matching<R: BufRead>(reader: R, filter: &Filter) -> io::Result<Vec<
 /// [`index_matching`].
 ///
 /// Seeks, reads at most one line into a stack buffer and parses it; no
-/// allocation beyond the returned [`Entry`]'s own strings.
+/// allocation beyond the returned [`Entry`]'s own strings — but for a line
+/// longer than [`MAX_LINE`] (a Formula's path), whose rest is read onto the
+/// heap, up to [`MAX_LONG_LINE`] in all.
 pub fn entry_at<R: Read + Seek>(reader: &mut R, offset: u32) -> io::Result<Entry> {
     reader.seek(SeekFrom::Start(offset as u64))?;
 
@@ -269,12 +275,24 @@ pub fn entry_at<R: Read + Seek>(reader: &mut R, offset: u32) -> io::Result<Entry
         }
     }
 
-    let end = buf[..filled]
-        .iter()
-        .position(|b| *b == b'\n')
-        .unwrap_or(filled);
-    let raw = std::str::from_utf8(&buf[..end])
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let long;
+    let bytes = match buf[..filled].iter().position(|b| *b == b'\n') {
+        Some(end) => &buf[..end],
+        None if filled < MAX_LINE => &buf[..filled],
+        None => {
+            let mut v = Vec::with_capacity(MAX_LONG_LINE);
+            v.extend_from_slice(&buf);
+            reader
+                .by_ref()
+                .take((MAX_LONG_LINE - MAX_LINE) as u64)
+                .read_to_end(&mut v)?;
+            v.truncate(v.iter().position(|b| *b == b'\n').unwrap_or(v.len()));
+            long = v;
+            &long[..]
+        }
+    };
+    let raw =
+        std::str::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let line = trim_line(raw);
     if line.is_empty() {
         return Err(io::Error::new(
@@ -1403,6 +1421,42 @@ mod tests {
                 assert_eq!(&entry_at(&mut r, *off).unwrap(), expected);
             }
         }
+    }
+
+    /// A Formula in a playlist: its path may be up to 2,048 B (past the
+    /// stack buffer); it reads back whole, and the lines around it too.
+    #[test]
+    fn a_formula_line_reads_back_whole() {
+        let mut src = String::from("@fx:psi?src=loop+8");
+        while src.len() < crate::synth::MAX_FORMULA_PATH - 40 {
+            src.push_str("%3B+v+%3D+x+%2A+2+%23f80");
+        }
+        src.push_str("&a=0.5&name=Star+field");
+        assert!(src.len() > MAX_LINE && src.len() <= crate::synth::MAX_FORMULA_PATH);
+        let text = format!(
+            "/gifs/Consoles/SNES_Plok_08.gif\n{src}\r\n/gifs/Arcade/ARCADE_Pac-Man_01.gif\n"
+        );
+        let offsets = index_matching(cursor(&text), &Filter::new()).unwrap();
+        assert_eq!(offsets.len(), 3);
+        let mut r = cursor(&text);
+        let e = entry_at(&mut r, offsets[1]).unwrap();
+        assert_eq!(e.path, src);
+        assert_eq!(e.title, "Star field");
+        assert_eq!(
+            entry_at(&mut r, offsets[2]).unwrap().path,
+            "/gifs/Arcade/ARCADE_Pac-Man_01.gif"
+        );
+        // The same as the whole file parsed at once; and as the last line,
+        // with no newline after it.
+        assert_eq!(parse_manifest(&text)[1], e);
+        let last = format!("/gifs/x.gif\n{src}");
+        assert_eq!(entry_at(&mut cursor(&last), 12).unwrap().path, src);
+        // A line past any path's limit is cut, never read on without end.
+        let huge = "/gifs/".to_string() + &"x".repeat(10_000);
+        assert_eq!(
+            entry_at(&mut cursor(&huge), 0).unwrap().path.len(),
+            MAX_LONG_LINE
+        );
     }
 
     #[test]
