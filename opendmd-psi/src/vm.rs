@@ -141,6 +141,13 @@ enum Arg {
     Sc(i32),
 }
 
+// On the ESP32 the hottest loops (`fast1`, `fast2`, the colour write
+// `out1` and `pal(P, v) * k`'s) run from IRAM, ~8 KB: not for speed (speed-a
+// measured IRAM against flash at 0-2.5 %) but so their timing does not
+// swing with the flash cache's layout from build to build (speed-b to
+// speed-c: Tunnel as an effect 4,043 -> 4,319 µs, Rotozoom's checked steps
+// 5,242 -> 6,983, the same code).
+//
 // The loops. `run*` are one element a turn, for the steps whose work
 // dwarfs the loop's (`len`, `noise`, ...); `fast*` four a turn, for the
 // cheap ones, where the ESP32 would otherwise spend as long on the loop
@@ -216,6 +223,7 @@ fn noise_flat_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 2], z: i32) {
     }
 }
 
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 #[inline(never)]
 fn fast1<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
     for o in d.as_chunks_mut::<4>().0 {
@@ -228,6 +236,7 @@ fn fast1<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> 
     }
 }
 
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 #[inline(never)]
 fn fast2<const N: usize, A: Src, B: Src>(
     d: &mut [i32; N],
@@ -286,6 +295,7 @@ fn out3<A: Src, B: Src, C: Src>(
 
 /// `pal(P, k) * s` along the lane, its two operands read with a stride (0:
 /// a value for the lane): one loop for the four kinds of operand.
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 #[inline(never)]
 fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32], shift: u8) {
     // Both lanes (the usual: Tunnel's, Rotozoom floor's): plain
@@ -333,6 +343,7 @@ fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32], shift: u8
 
 /// [`pal_lit_lane`] of two lanes.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 #[inline(never)]
 fn pal_lit_lanes(px: &mut [[u8; 3]], k: *const i32, s: *const i32, p: &[[u8; 3]; 32], shift: u8) {
     let (mut last_i, mut last_s) = (usize::MAX, 0);
@@ -350,6 +361,7 @@ fn pal_lit_lanes(px: &mut [[u8; 3]], k: *const i32, s: *const i32, p: &[[u8; 3];
     }
 }
 
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 #[inline(never)]
 fn out1<A: Src>(px: &mut [[u8; 3]], mut a: A, f: impl Fn(i32) -> [u8; 3]) {
     for o in px.iter_mut() {
