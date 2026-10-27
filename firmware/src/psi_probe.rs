@@ -344,7 +344,9 @@ fn latency_map() {
         v.resize(512, 0);
         blocks.push(v);
     }
-    blocks.sort_by_key(|b| b.as_ptr() as usize);
+    // (Unstable: the stable sort keeps a 4 KB buffer on the stack, and
+    // this runs on the main task, whose high-water mark the probe reports.)
+    blocks.sort_unstable_by_key(|b| b.as_ptr() as usize);
     let map = |blocks: &mut Vec<Vec<u32>>, what: &str| {
         let mut line = String::new();
         let mut bucket = usize::MAX;
