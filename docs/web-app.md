@@ -161,7 +161,9 @@ button lands on them.
   in their place, **Done** to go back): tick GIFs or whole folders and
   **Add N ticked**, or search (title words, platform chips) and **Add all N
   shown**; a GIF already in the playlist has a ✓ and is not added twice.
-  **Add by filter…** is a sheet over the editor that runs the core's
+  A Formula added from Formulas (**Add to playlist…**: the line is its
+  player path, `@fx:psi?src=…[&a=&b=&c=]&name=…`, ≤ 2,048 B) shows by its
+  name with a *Formula* tag, no thumbnail. **Add by filter…** is a sheet over the editor that runs the core's
   `Filter` (platforms, categories, title words, **Leave out** flags,
   shuffle with a seed, at most N) over any playlist; its last row is **Add
   N GIFs** / **Replace with N GIFs**. **Save** / **Save & play** (`PUT
@@ -451,7 +453,8 @@ serves it on :8081; `make site-publish` pushes it to the
 
 **A formula's page** (`/f/#formula=…&name=…&a=…`, from
 `opendmd-web/share/f/`) is what the app's **Copy share link** gives: the
-formula in the app's LED preview, its code, sliders, Open on my display
+formula in the app's LED preview, its code, sliders (a slider with
+choices, `-- a: shape = cube, ball`, as buttons), Open on my display
 (`http://<address>/#formula=…`, which the player's app opens in its
 editor), Try it in the demo, Copy code / Copy link, a QR code, and Submit
 to the gallery. It runs on the demo's own files (`js/psikit.js`, the share
