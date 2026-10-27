@@ -9,7 +9,7 @@
 //! the network could overflow either and restart the player. Installed
 //! with `fx_psi::set_compiler` at the top of `main`: every compile
 //! `opendmd_core::fx_psi` makes (opening `@fx:psi`, the Formula look, the
-//! checks before saving) runs here, on a scoped thread with
+//! checks before saving) runs here, on a FreeRTOS task with
 //! [`config::PSI_COMPILE_STACK`] (12 KB) of stack taken from the heap for
 //! the compile only: the worst case leaves 1,820 B of it never touched on
 //! the rig (the thread's entry frames, ~0.8 KB with interrupt frames, come
@@ -24,21 +24,99 @@
 //! transition gate may cut a dissolve. Rare (a settings change) and brief.
 
 use crate::config;
-use esp_idf_hal::cpu::Core;
-use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
 use opendmd_core::psi;
 
-/// Run `f` on a thread with [`config::PSI_COMPILE_STACK`] of stack, pinned
+/// Run `f` on a task with [`config::PSI_COMPILE_STACK`] of stack, pinned
 /// to the caller's core at the caller's priority, and wait for it. `None`:
-/// no thread (the heap can't spare the stack right now).
+/// no task (the heap can't spare the stack right now).
 ///
 /// The caller's core: the main task's compiles stay on CPU1 with the
 /// display (CPU0 is the network's), the HTTP server's on CPU0. The caller's
-/// priority: the caller only waits in `join`, so the compile runs exactly
-/// when the caller would have — neither ahead of the tasks the caller
-/// yields to nor behind them.
-pub fn run<T: Send>(f: impl FnOnce() -> T + Send) -> Option<T> {
-    let core: Core = esp_idf_hal::cpu::core();
+/// priority: the caller only waits, so the compile runs exactly when the
+/// caller would have — neither ahead of the tasks the caller yields to nor
+/// behind them.
+///
+/// **A FreeRTOS task, not a `std::thread`.** Until speed-d this spawned a
+/// scoped std thread, and every compile left ~200 B of the heap behind
+/// (psi-probe speed-c: 71 KB gone over the golden frames' ~320 compiles,
+/// and the ~200-350 B "drift" per formula opened since the formula stack
+/// came in: per-thread state the std thread's exit never gave back). A
+/// task the caller deletes itself has nothing of the sort: its control
+/// block and stack are freed by `vTaskDelete` at once (it is pinned to the
+/// caller's core, so it is never running while the caller is), not later
+/// by an idle task.
+pub fn run<T: Send, F: FnOnce() -> T + Send>(f: F) -> Option<T> {
+    use esp_idf_sys as sys;
+    struct Job<F, T> {
+        f: Option<F>,
+        out: Option<T>,
+        done: sys::QueueHandle_t,
+    }
+    unsafe extern "C" fn entry<F: FnOnce() -> T, T>(arg: *mut core::ffi::c_void) {
+        // SAFETY: `arg` is the caller's `Job`, alive until it has taken
+        // `done`, which is given only after the last use of `job` here.
+        let job = unsafe { &mut *(arg as *mut Job<F, T>) };
+        if let Some(f) = job.f.take() {
+            job.out = Some(f());
+        }
+        let done = job.done;
+        // (xSemaphoreGive: a send of no item to the back.)
+        unsafe { sys::xQueueGenericSend(done, core::ptr::null(), 0, 0) };
+        // Wait to be deleted by the caller (never returns: a FreeRTOS task
+        // must not).
+        loop {
+            unsafe { sys::vTaskSuspend(core::ptr::null_mut()) };
+        }
+    }
+    let core = esp_idf_hal::cpu::core() as i32;
+    // SAFETY: a query about the calling task.
+    let prio = unsafe { sys::uxTaskPriorityGet(core::ptr::null_mut()) }.clamp(1, 24);
+    // (xSemaphoreCreateBinary: a queue of one empty item, type 3.)
+    let done = unsafe { sys::xQueueGenericCreate(1, 0, 3) };
+    if done.is_null() {
+        return None;
+    }
+    let mut job = Job {
+        f: Some(f),
+        out: None,
+        done,
+    };
+    let mut task: sys::TaskHandle_t = core::ptr::null_mut();
+    // SAFETY: `entry::<F, T>` matches `job`'s type; the task is deleted
+    // before `job` goes out of scope.
+    let made = unsafe {
+        sys::xTaskCreatePinnedToCore(
+            Some(entry::<F, T>),
+            c"psi-compile".as_ptr(),
+            config::PSI_COMPILE_STACK as u32,
+            &mut job as *mut Job<F, T> as *mut core::ffi::c_void,
+            prio,
+            &mut task,
+            core,
+        )
+    };
+    if made != 1 {
+        unsafe { sys::vQueueDelete(done) };
+        log::warn!(
+            "formula: no task to compile on; heap {} B free",
+            unsafe { sys::esp_get_free_heap_size() }
+        );
+        return None;
+    }
+    unsafe {
+        sys::xQueueSemaphoreTake(done, u32::MAX);
+        sys::vTaskDelete(task);
+        sys::vQueueDelete(done);
+    }
+    job.out
+}
+
+/// The formula stack as it was until speed-d (a scoped `std::thread`), for
+/// psi-probe's comparison of the two: what each compile leaves behind.
+#[cfg(feature = "psi-probe")]
+pub fn run_std_thread<T: Send>(f: impl FnOnce() -> T + Send) -> Option<T> {
+    use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
+    let core: esp_idf_hal::cpu::Core = esp_idf_hal::cpu::core();
     // SAFETY: a query about the calling task.
     let prio = unsafe { esp_idf_sys::uxTaskPriorityGet(std::ptr::null_mut()) };
     let previous = ThreadSpawnConfiguration::get();
@@ -52,23 +130,12 @@ pub fn run<T: Send>(f: impl FnOnce() -> T + Send) -> Option<T> {
     .set()
     .is_ok();
     let r = std::thread::scope(|s| {
-        match std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("psi-compile".into())
             .stack_size(config::PSI_COMPILE_STACK)
             .spawn_scoped(s, f)
-        {
-            // `join` fails only if the thread panicked, and the firmware is
-            // built with panic = "abort": a panic restarts the player, so
-            // this `.ok()` never sees an `Err`.
-            Ok(h) => h.join().ok(),
-            Err(e) => {
-                log::warn!(
-                    "formula: no thread to compile on ({e}); heap {} B free",
-                    unsafe { esp_idf_sys::esp_get_free_heap_size() }
-                );
-                None
-            }
-        }
+            .ok()
+            .and_then(|h| h.join().ok())
     });
     if pinned {
         match previous {

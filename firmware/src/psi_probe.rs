@@ -308,11 +308,64 @@ fn compile(src: &str, prog: &mut psi::Program, runs: bool, narrow: bool) -> Resu
     let r = crate::psi_stack::run(|| psi::compile_with(src, prog, runs, narrow)).unwrap_or_else(|| {
         Err(psi::Error { start: 0, end: 0, msg: String::from("no formula stack") })
     });
-    // The compile thread's 12 KB stack is freed by the idle task of this
-    // core, which never runs while the probe compiles back to back (the
-    // golden frames: speed-b ran out of heap there). Let it.
-    std::thread::sleep(Duration::from_millis(2));
     r
+}
+
+/// Whether the heap is too low to go on with `section` (under 40 KB):
+/// said, and the caller stops it, rather than the probe failing an
+/// allocation.
+fn heap_low(section: &str) -> bool {
+    let h = heap();
+    if h < 40 * 1024 {
+        say!(error, "psi-probe: {section}: stopped, heap {h} B free (under 40 KB), largest block {} B", crate::state::largest_free_block());
+        true
+    } else {
+        false
+    }
+}
+
+/// The heap every `n` steps of a section: its slope.
+fn heap_every(section: &str, k: u32, n: u32) {
+    if k % n == 0 {
+        say!(info, "psi-probe: {section} {k}: heap {} B free, largest block {} B", heap(), crate::state::largest_free_block());
+    }
+}
+
+/// What compiling leaves behind: one formula compiled on the player's
+/// formula stack (`psi_stack::compile`, a FreeRTOS task since speed-d) 200
+/// times at a builder's pace (20 ms apart), then on the old std thread 50
+/// times, the heap before and after each.
+fn compile_leak() {
+    let mut prog = zeroed::<psi::Program>();
+    let src = TUNNEL_EX;
+    for (how, n) in [("formula stack (task)", 200u32), ("old std thread", 50)] {
+        std::thread::sleep(Duration::from_millis(50));
+        let (h0, b0) = (heap(), crate::state::largest_free_block());
+        let mut done = 0;
+        for k in 0..n {
+            if heap_low(&format!("compile leak, {how}")) {
+                break;
+            }
+            let ok = if k == 0 || how.starts_with("formula") {
+                crate::psi_stack::compile(src, &mut prog).is_ok()
+            } else {
+                crate::psi_stack::run_std_thread(|| psi::compile_into(src, &mut prog))
+                    .is_some_and(|r| r.is_ok())
+            };
+            if !ok {
+                say!(error, "psi-probe: compile leak, {how}: compile {k} failed");
+                break;
+            }
+            done += 1;
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        let (h1, b1) = (heap(), crate::state::largest_free_block());
+        say!(info,
+            "psi-probe: compile leak, {how}: {done} compiles, heap {h0} -> {h1} B ({} B a compile), largest block {b0} -> {b1} B",
+            (i64::from(h0) - i64::from(h1)) / i64::from(done.max(1))
+        );
+    }
 }
 
 /// A VM frame's p50 / p90 for `prog`: with a still cache when it has
@@ -595,6 +648,7 @@ pub fn run(root: &str) {
         );
     }
 
+    compile_leak();
     // Golden frames: the host's and wasm's hashes, here.
     say!(info, "psi-probe: golden frames from {} B free", heap());
     let t = fx_psi::tables();
@@ -602,7 +656,13 @@ pub fn run(root: &str) {
     s.reset();
     let mut prog = zeroed::<psi::Program>();
     let (mut ok, mut bad) = (0, 0);
+    let mut gk = 0u32;
     for &(name, src, ms, want) in psi::golden::FRAMES {
+        if heap_low("golden frames") {
+            break;
+        }
+        heap_every("golden frames", gk, 10);
+        gk += 1;
         if compile(src, &mut prog, true, true).is_err() {
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile");
@@ -629,6 +689,9 @@ pub fn run(root: &str) {
     let mut under = vec![0u8; psi::W * psi::H * 3];
     psi::golden::picture(&mut under);
     for &(name, src, ms, over, want) in psi::golden::OVER {
+        if heap_low("golden over") {
+            break;
+        }
         if compile(src, &mut prog, true, true).is_err() {
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile");
@@ -650,6 +713,9 @@ pub fn run(root: &str) {
     // Formulas that draw (the draw stage's canvas, lines, loops, tables).
     let mut ink = psi::Ink::boxed();
     for &(name, src, ms, over, want) in psi::golden::DRAWN {
+        if heap_low("golden drawn") {
+            break;
+        }
         if compile(src, &mut prog, true, true).is_err() {
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile");
