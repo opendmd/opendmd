@@ -380,6 +380,13 @@ pub const SEEK_MAX_CONTENT: Duration = Duration::from_secs(60);
 /// with skips every 2.5 s, none after).
 pub const WAKE_SLACK: Duration = Duration::from_millis(1);
 
+/// Effect frames whose tick came half a frame or more late, so the effect's
+/// schedule was re-timed from the tick (since boot; not its first frame).
+/// The firmware reports it as `/api/status` `scan` `retimed`: a
+/// synchronised blit's stretch (`scan::Budget`) is meant never to cause
+/// one.
+pub static FX_RETIMED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// The next file is chosen and opened ahead ([`Engine::ahead_due`]) from
 /// this long before the file on screen could end its turn (its dwell's
 /// `min`): long enough for the few steps to find room between frames, short
@@ -1255,11 +1262,13 @@ impl Engine {
                     // A tick inside `WAKE_SLACK` before the frame times
                     // the next one from when this one was due.
                     let due = playing.next_frame_at;
-                    playing.next_frame_at = if playing.path.starts_with(crate::fx::PREFIX)
-                        && now.saturating_sub(due) < delay / 2
-                    {
+                    let fx = playing.path.starts_with(crate::fx::PREFIX);
+                    playing.next_frame_at = if fx && now.saturating_sub(due) < delay / 2 {
                         due + delay
                     } else {
+                        if fx && !started {
+                            FX_RETIMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         now.max(due) + delay
                     };
                     playing.advance(delay);

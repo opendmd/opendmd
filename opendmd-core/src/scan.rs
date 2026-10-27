@@ -37,70 +37,84 @@ pub const SPLIT_LEAD_US: u32 = 3_000;
 /// own work after the blit (a log line, the status), µs.
 pub const POST_US: u32 = 1_000;
 
-/// A stretch never takes the next frame this close (µs) to half its delay
-/// late: an effect tick later than half a frame re-times its schedule
+/// A stretch stops this far (µs) short of half the frame's delay (with
+/// `POST_US` that keeps the next tick over 1 ms clear of it): an effect tick later than half a frame re-times its schedule
 /// (`Engine::advance`).
-const STRETCH_GUARD_US: u32 = 1_000;
+const STRETCH_GUARD_US: u32 = 500;
 
 /// How long a synchronised frame blit may wait for the scan, from when it
 /// starts.
 ///
-/// `fit_us` keeps the next frame on time. A frame of a fast source (its
-/// delay under two refreshes: the 10 ms effects on a ~8 ms refresh) may
-/// also *stretch* past it: a paced blit can need up to a refresh of
-/// waiting, which a 10 ms frame's own render leaves no room for, and
-/// written at once instead it tears. Stretched, the blit lands on the
-/// next refresh boundary and the next frame starts that much late (at
-/// most a refresh / 2, and short of half its delay, so an effect keeps its
-/// schedule); the next frame, starting just after a boundary, then has
-/// most of a refresh to land on the one after, so the lateness does not
-/// carry on. Every frame is shown, each from a refresh boundary: what a
-/// 100 fps source on a 125 Hz panel can get. Such lateness is the sync's
-/// choice, not a deadline miss (the firmware counts it as `scan`
-/// `stretched` / `late`).
+/// [`fit_us`](Self::fit_us) keeps the next frame on time. A frame of a
+/// fast *live effect* (an `@fx:` file, whose schedule the engine keeps
+/// through a tick up to half a frame late, `Engine::advance`; its delay
+/// under two refreshes: the 10 ms effects on a ~8 ms refresh) may also
+/// *stretch* past it: a paced blit can need up to a refresh of waiting,
+/// which a 10 ms frame's own render leaves no room for, and written at
+/// once instead it tears. Stretched, the blit lands on the next refresh
+/// boundary and the next frame starts that much late (at most a
+/// refresh, and short of half its delay, so the effect keeps its
+/// schedule);
+/// the next frame, starting just after a boundary, then has most of a
+/// refresh to land on the one after, so the lateness does not carry on.
+/// Every frame is shown, each from a refresh boundary: what a 100 fps
+/// source on a 125 Hz panel can get. Such lateness is the sync's choice,
+/// not a deadline miss (the firmware counts it as `scan` `stretched` /
+/// `late`). GIFs never stretch, at any refresh: the engine times a GIF's
+/// next frame from a late tick, so a stretch would slow it down. The
+/// caller decides by passing `delay_us` only for an effect's frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Budget {
-    /// Waiting this long still leaves the next frame on time.
-    pub fit_us: u32,
-    /// The source's frame delay when this blit is one of its frames on its
-    /// schedule (`None`: a transition step, a file's first frame, a glow
-    /// step — no stretch).
+    /// Wait at all (`false`: written at once, nothing counted).
+    pub sync: bool,
+    /// Until the next frame is due, µs.
+    pub left_us: u32,
+    /// The effect's frame delay when this blit is one of its frames on its
+    /// schedule (`None`: a GIF, a transition step, a file's first frame, a
+    /// glow step — no stretch).
     pub delay_us: Option<u32>,
 }
 
 impl Budget {
     /// No waiting at all: written at once.
     pub const NONE: Budget = Budget {
-        fit_us: 0,
+        sync: false,
+        left_us: 0,
         delay_us: None,
     };
 
     /// A blit whose next frame is due in `left_us`.
     pub fn frame(left_us: u32, delay_us: Option<u32>) -> Budget {
         Budget {
-            fit_us: left_us.saturating_sub(POST_US),
+            sync: true,
+            left_us,
             delay_us,
         }
     }
 
-    /// How far past `fit_us` the waits may run, for a refresh of
-    /// `cycle_us`: 0 unless the source's frames are shorter than two
-    /// refreshes.
+    /// Waiting this long still leaves the next frame on time.
+    pub fn fit_us(&self) -> u32 {
+        self.left_us.saturating_sub(POST_US)
+    }
+
+    /// How far past the next frame's time the waits may run, for a
+    /// refresh of `cycle_us`: 0 unless this is an effect's frame shorter
+    /// than two refreshes.
     pub fn stretch_us(&self, cycle_us: u32) -> u32 {
         match self.delay_us {
-            Some(d) if d < 2 * cycle_us => {
-                (cycle_us / 2).min((d / 2).saturating_sub(STRETCH_GUARD_US))
-            }
+            Some(d) if d < 2 * cycle_us => cycle_us.min((d / 2).saturating_sub(STRETCH_GUARD_US)),
             _ => 0,
         }
     }
 
-    /// The longest the waits may run, stretch included.
+    /// The longest the waits may run, stretch included (0: written at
+    /// once). A frame that starts already late (`left_us` 0, after a
+    /// stretched one) still has its stretch.
     pub fn limit_us(&self, cycle_us: u32) -> u32 {
-        if self.fit_us == 0 {
+        if !self.sync {
             return 0;
         }
-        self.fit_us.saturating_add(self.stretch_us(cycle_us))
+        (self.left_us.saturating_add(self.stretch_us(cycle_us))).saturating_sub(POST_US)
     }
 }
 
@@ -510,7 +524,8 @@ mod tests {
     /// `delay` µs, each rendered in `render` µs (from `lo..hi`, a fixed
     /// pseudo-random sequence), woken up to 1 ms late, blitted full frame
     /// (74 µs a pair) with the waits honoured exactly, and the engine's
-    /// effect schedule (kept unless a tick is half a frame late).
+    /// schedule: an effect's (`fx`) kept unless a tick is half a frame
+    /// late, a GIF's timed from a late tick.
     #[derive(Default, Debug)]
     struct LoopStats {
         blits: u32,
@@ -536,7 +551,15 @@ mod tests {
         Stretch,
     }
 
-    fn run_loop(policy: Policy, row: u32, delay: u32, lo: u32, hi: u32, frames: u32) -> LoopStats {
+    fn run_loop(
+        policy: Policy,
+        row: u32,
+        fx: bool,
+        delay: u32,
+        lo: u32,
+        hi: u32,
+        frames: u32,
+    ) -> LoopStats {
         let cycle = row * PAIRS as u32;
         let mut seed = 0x2545_F491u32;
         let mut rnd = |n: u32| {
@@ -555,21 +578,16 @@ mod tests {
         let mut free = 0u32; // when the loop may start the next tick
         for _ in 0..frames {
             let start = free.max(due + rnd(1000));
-            if start.saturating_sub(due) >= delay / 2 {
-                st.retimed += 1;
-            }
-            let next = if start.saturating_sub(due) < delay / 2 {
-                due + delay
-            } else {
-                start + delay
-            };
+            let keep = fx && start.saturating_sub(due) < delay / 2;
+            st.retimed += u32::from(fx && !keep);
+            let next = if keep { due + delay } else { start + delay };
             let mut t = start + lo + rnd(hi - lo);
             let left = next.saturating_sub(t);
             let (fit, limit) = match policy {
                 Policy::Slack3 => (left.saturating_sub(3_000), left.saturating_sub(3_000)),
                 Policy::Stretch => {
-                    let b = Budget::frame(left, Some(delay));
-                    (b.fit_us, b.limit_us(cycle))
+                    let b = Budget::frame(left, fx.then_some(delay));
+                    (b.fit_us(), b.limit_us(cycle))
                 }
             };
             // What the pacer would need, unbounded.
@@ -633,8 +651,8 @@ mod tests {
     fn sync_at_100fps_stretches_instead_of_tearing() {
         // The measured refresh: 499 µs a pair (7.98 ms).
         for (lo, hi) in [(500, 1500), (1000, 3500), (3000, 5000)] {
-            let old = run_loop(Policy::Slack3, 499, 10_000, lo, hi, 2000);
-            let new = run_loop(Policy::Stretch, 499, 10_000, lo, hi, 2000);
+            let old = run_loop(Policy::Slack3, 499, true, 10_000, lo, hi, 2000);
+            let new = run_loop(Policy::Stretch, 499, true, 10_000, lo, hi, 2000);
             let mean = |v: &[(u32, u32)], f: fn(&(u32, u32)) -> u32| {
                 v.iter().map(f).sum::<u32>() / (v.len() as u32).max(1)
             };
@@ -661,7 +679,10 @@ mod tests {
                 assert_eq!((new.gave_up, new.torn, new.misses), (0, 0, 0), "{new:?}");
                 assert_eq!(new.retimed, 0);
             } else {
-                assert!(new.torn * 4 < old.torn, "{new:?} vs {old:?}");
+                // Heavier renders: a frame after a stretched one starts
+                // late but keeps its stretch, so it still lands.
+                assert!(new.torn * 100 < old.torn, "{new:?} vs {old:?}");
+                assert_eq!((new.misses, new.retimed), (0, 0), "{new:?}");
             }
         }
     }
@@ -672,20 +693,72 @@ mod tests {
         // smaller slack only makes more frames fit.
         for delay in [20_000, 40_000, 100_000] {
             assert_eq!(Budget::frame(delay, Some(delay)).stretch_us(7_984), 0);
-            let old = run_loop(Policy::Slack3, 499, delay, 2_000, 12_000, 500);
-            let new = run_loop(Policy::Stretch, 499, delay, 2_000, 12_000, 500);
+            let old = run_loop(Policy::Slack3, 499, false, delay, 2_000, 12_000, 500);
+            let new = run_loop(Policy::Stretch, 499, false, delay, 2_000, 12_000, 500);
             assert_eq!(new.stretched, 0);
             assert!(new.gave_up <= old.gave_up && new.torn <= old.torn);
             assert_eq!(new.misses, old.misses, "{delay}");
         }
         // A transition step or a glow step (no delay given): no stretch.
         assert_eq!(Budget::frame(5_000, None).limit_us(7_984), 4_000);
-        // 10 ms frames: half a refresh, short of half the delay.
-        assert_eq!(Budget::frame(5_000, Some(10_000)).stretch_us(7_984), 3_992);
-        assert_eq!(Budget::frame(5_000, Some(10_000)).stretch_us(16_000), 4_000);
-        // Nothing left: written at once.
-        assert_eq!(Budget::frame(900, Some(10_000)).limit_us(7_984), 0);
+        // 10 ms frames: short of half the delay (the effect's re-timing),
+        // at most a refresh; none once the frame is two refreshes long.
+        assert_eq!(Budget::frame(5_000, Some(10_000)).stretch_us(7_984), 4_500);
+        assert_eq!(Budget::frame(5_000, Some(10_000)).stretch_us(16_000), 4_500);
+        assert_eq!(Budget::frame(5_000, Some(10_000)).stretch_us(5_500), 4_500);
+        assert_eq!(Budget::frame(5_000, Some(10_000)).stretch_us(5_000), 0);
+        assert_eq!(Budget::frame(5_000, Some(8_000)).stretch_us(4_100), 3_500);
+        // Nothing left: written at once, unless an effect's frame (late
+        // after a stretched one) still has its stretch.
+        assert_eq!(Budget::frame(900, None).limit_us(7_984), 0);
+        assert_eq!(Budget::frame(0, Some(10_000)).limit_us(7_984), 3_500);
         assert_eq!(Budget::NONE.limit_us(7_984), 0);
+    }
+
+    /// A slow scan (`min_refresh` low: a 16-33 ms refresh): a 20 ms GIF
+    /// never stretches (it would slow down); a 10 ms effect, with a
+    /// refresh longer than its frame, stretches until the lateness reaches
+    /// the cap, then a frame is written at once (and may tear) and the
+    /// next starts on time again — never worse than the 3 ms slack.
+    #[test]
+    fn slow_refresh_gifs_never_stretch_and_effects_degrade_gracefully() {
+        for row in [1_000, 1_500, 2_062] {
+            let old = run_loop(Policy::Slack3, row, false, 20_000, 2_000, 8_000, 1000);
+            let new = run_loop(Policy::Stretch, row, false, 20_000, 2_000, 8_000, 1000);
+            println!(
+                "{} us refresh, 20 ms GIF: slack 3 ms {} gave up, {} torn, {} misses; \
+                 now {} gave up, {} torn, {} misses",
+                row * 16,
+                old.gave_up,
+                old.torn,
+                old.misses,
+                new.gave_up,
+                new.torn,
+                new.misses
+            );
+            assert_eq!((new.stretched, new.late), (0, 0));
+            assert!(new.gave_up <= old.gave_up && new.torn <= old.torn);
+            assert!(new.misses <= old.misses);
+            let old = run_loop(Policy::Slack3, row, true, 10_000, 1_000, 3_500, 1000);
+            let new = run_loop(Policy::Stretch, row, true, 10_000, 1_000, 3_500, 1000);
+            println!(
+                "{} us refresh, 10 ms effect: slack 3 ms {} gave up, {} torn, {} misses; \
+                 now {} gave up, {} torn, {} stretched, {} late, {} misses, {} re-timed",
+                row * 16,
+                old.gave_up,
+                old.torn,
+                old.misses,
+                new.gave_up,
+                new.torn,
+                new.stretched,
+                new.late,
+                new.misses,
+                new.retimed
+            );
+            assert!(new.torn <= old.torn);
+            assert!(new.misses <= old.misses + new.blits / 100);
+            assert_eq!(new.retimed, 0);
+        }
     }
 
     #[test]

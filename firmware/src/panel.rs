@@ -167,7 +167,7 @@ mod counters {
 /// `/api/status` `scan`: `null` when the scan position cannot be read,
 /// else `{"row_us","sync","blits","torn","in_pair","waited","wait_us",
 /// "wait_max_us","gave_up","split_on","split","split_ok","unsplit",
-/// "spin_us","stretched","late"}`
+/// "spin_us","stretched","late","retimed"}`
 /// (counts since boot).
 pub fn scan_json() -> String {
     use counters::*;
@@ -176,7 +176,7 @@ pub fn scan_json() -> String {
         return "null".into();
     }
     format!(
-        r#"{{"row_us":{row_us},"sync":{},"blits":{},"torn":{},"in_pair":{},"waited":{},"wait_us":{},"wait_max_us":{},"gave_up":{},"split_on":{},"split":{},"split_ok":{},"unsplit":{},"spin_us":{},"stretched":{},"late":{}}}"#,
+        r#"{{"row_us":{row_us},"sync":{},"blits":{},"torn":{},"in_pair":{},"waited":{},"wait_us":{},"wait_max_us":{},"gave_up":{},"split_on":{},"split":{},"split_ok":{},"unsplit":{},"spin_us":{},"stretched":{},"late":{},"retimed":{}}}"#,
         SYNC_ON.load(Relaxed) != 0,
         BLITS.load(Relaxed),
         TORN.load(Relaxed),
@@ -192,6 +192,7 @@ pub fn scan_json() -> String {
         SPIN_US.load(Relaxed),
         STRETCHED.load(Relaxed),
         LATE.load(Relaxed),
+        opendmd_core::engine::FX_RETIMED.load(Relaxed),
     )
 }
 
@@ -773,11 +774,15 @@ fn push(
     // What is left of the budget now (a glow step may have spent some).
     let spent = now_us().wrapping_sub(start);
     let cycle = sync.row_us * opendmd_core::scan::PAIRS as u32;
-    let fit_us = budget.fit_us.saturating_sub(spent);
+    let fit_us = budget.fit_us().saturating_sub(spent);
     let limit_us = budget.limit_us(cycle).saturating_sub(spent);
-    let plan = if scan && sync.on && limit_us > 0 {
+    let plan = if !(scan && sync.on && budget.sync) {
+        None
+    } else if limit_us > 0 {
         pace_plan(pairs, tinted, sync.row_us, limit_us)
     } else {
+        // A frame with no time left at all: not in budget either.
+        counters::GAVE_UP.fetch_add(1, Relaxed);
         None
     };
     // Past `fit_us`: a fast source's frame kept on a refresh boundary,
