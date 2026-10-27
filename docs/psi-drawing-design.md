@@ -79,9 +79,9 @@ test).** Where it differs from §3.6, §4 and §7.3:
    open, and taken in the effect's `frame`, not at open: the HTTP server's
    open check never allocates it. A fingerprint of the steps it was filled
    for guards against a live edit drawing from another formula's values.
-   Firmware gate: none while a formula look is set; taken only if 48 KB stay
-   free (a transition's 24 KB + its 12 KB reserve + 12 KB) and a 16 KB block
-   exists; given back under 32 KB. Looks never have one.
+   Firmware gate: none while a formula look is set; taken only if 32 KB stay
+   free (48 in p2probe-a, which kept Tunnel's 32 KB out with ~80-90 KB free)
+   and a 16 KB block exists; given back under 24 KB. Looks never have one.
 2. **Added beyond the design** (needed to get within the frame budgets): a
    **column run** (values of `x`/`px` and per-frame values, worked out on a
    frame's first row and kept in pinned registers: the rotozoom's column
@@ -97,11 +97,12 @@ test).** Where it differs from §3.6, §4 and §7.3:
    into the checker's two palette positions, so the colours match frame for
    frame); no bevel; the light is the native's eight steps with the light
    going round. 7.5 ms estimated with the cache (50 fps), 17.6 without.
-4. **Rotozoom** (§4.2): a picker `-- a: view = flat, floor` (the floor as a
-   per-row scale and fog, both modes in one formula at 7.7 ms, 50 fps);
-   two layers (checker + `noise(u, v, 0)`, its levels raised to the
-   native's mean brightness: Psi's noise is smoother than the baked table);
-   no bevel; zoom and wobble are numbers in the source.
+4. **Rotozoom** (§4.2): flat, two layers (checker + `noise(u, v, 0)`, its
+   levels raised to the native's mean brightness: Psi's noise is smoother
+   than the baked table), a picker `-- a: wobble = gentle, strong, off`,
+   6.0 ms (50 fps); the floor is its own example, **Rotozoom floor** (4.3 ms,
+   `fps 100`): one formula with a `view = flat, floor` picker measured 10.6 ms
+   on the spare (the picker made every column part per row). No bevel.
 5. **Starfield** rewritten for fewer steps a star (6.0 → 5.0 ms, 100 fps
    by the estimate), the same picture (0.06 % of pixels differ by a
    rounding).

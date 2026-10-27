@@ -56,7 +56,8 @@ const OLD_TV_EX: &str = "loop 4\ndx = (x - 0.5)*1.6; dy = (y - 0.5)*1.2\nlines =
 /// The drawing examples (formulas.json), timed as effects.
 const STARFIELD_EX: &str = "loop 2.4\nfps 100\n-- Starfield: 192 stars flying at you, a pass through the field a loop,\n-- each a streak from where it was a moment ago\n-- a: streak length\nframe { back = 1 + 1/64 + (144 + a*240)/4096 }\ndraw {\n  for k < 192 {\n    sx = hash(k, 7)*32 - 16; sy = hash(k, 3)*8 - 4  -- where it is, across and up\n    near = frac(t/2.4 - hash(k, 11))          -- 0 far, 1 at you\n    s = 1/(65/64 - near); st = 1/(back - near)  -- perspective, now and a moment ago\n    hx = sx*s; hy = sy*s                      -- the head, from the middle\n    -- a head off the panel: the line moved far below it, where it is skipped\n    row = abs(hx) > 64 or abs(hy) > 16 ? -999 : 16\n    lit = near*near                           -- squared: far stars stay dark longer\n    line(64 + sx*st, row + sy*st, 64 + hx, row + hy, lit*0.2, lit)\n  }\n}\npal(ice, ink)";
 const TUNNEL_EX: &str = "loop 4.8\n-- Tunnel: the time warp. Each loop the walls turn once, travel two\n-- checker lengths, and the palette goes round once.\n-- From the vanishing point, the tunnel twice as tall as wide:\ndx = px - 63.5; dy = (15.5 - py)*2\n-- how deep each pixel looks: ~1 at the edges, 16 where it turns black\n-- (this and `round` depend on the pixel alone: worked out once, kept)\ndeep = min(128/len(dx, dy), 31.99)\n-- round the walls: 16 checker cells a turn, twisting with depth\ntwist = 1                              -- try 0 to 3\nround = atan2(dy, dx)*16 + deep*twist/8\n-- the checker, turning and travelling\nu = round + t/0.3; v = deep + t/0.6\ncell = (floor(u) + floor(v)) % 2\n-- lit by depth (full near, fading as a square, black in the middle) and\n-- by a light going round with the walls, in eight steps\nfade = clamp(1.6 - deep/10, 0, 1)\nside = 6.35 + 1.59*cos(u/16)\nlight = floor(fade*fade*side + (deep < 16))/8\npal(chrono, frac(cell ? 0.711 + t/4.8 : 0.336 + t/4.8)) * light";
-const ROTOZOOM_EX: &str = "loop 9.6\n-- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing\n-- twice, gliding two checkers across and one down; under it a noise\n-- texture turning the other way twice as fast; rows and columns wobble.\n-- As a floor: the checker running away to a horizon, fogged far off.\n-- a: view = flat, floor\nframe {\n  ground = a > 0.5\n  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn\n  s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice\n  zoom = 2                                         -- try 1 to 4\n  sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel\n  sc2 = sc*0.75\n  cu = t/0.6; cv = t/1.2                           -- the glide, in cells\n  amp = 3/8                                        -- the wobble: 3 texels\n  hi = ground ? 0.78 : 0.44; lo = ground ? 0.28 : 0.19; mixn = ground ? 0 : 0.6\n}\ndx = px - 64; dy = 15 - py; ty = 31 - py\n-- each row's scale: the same when flat; on the floor, by its distance\nrs = ground ? 1/((ty + 2)*zoom) : sc\n-- the wobble: rows slide sideways, columns up and down, on travelling waves\nwob = sin(ty/32 + t/3.2)*amp\ncol = sin(px*0.0234375 - t/4.8)*amp\n-- where each pixel is on the checker: its column's part plus its row's\nu = cs*rs*dx + (cu + wob + (ground ? sn*rs*64 : -sn*sc*dy))\nv = sn*rs*dx + col + (cv + (ground ? -cs*rs*64 : cs*sc*dy))\ncell = (floor(u) + floor(v)) % 2\nu2 = (cv + c2*sc2*dx) + (wob - s2*sc2*dy)\nv2 = (cu + s2*sc2*dx + col) + c2*sc2*dy\nfog = ground ? (ty < 3 ? 0 : ty < 6 ? 0.375 : ty < 10 ? 0.625 : 1) : 1\npal(fire, (cell ? hi : lo) + noise(u2, v2, 0)*mixn) * fog";
+const ROTOZOOM_EX: &str = "loop 9.6\n-- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing\n-- twice, gliding two checkers across and one down; under it a noise\n-- texture turning the other way twice as fast; rows and columns wobble.\n-- a: wobble = gentle, strong, off\nframe {\n  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn\n  s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice\n  zoom = 2                                         -- try 1 to 4\n  sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel\n  sc2 = sc*0.75\n  cu = t/0.6; cv = t/1.2                           -- the glide, in cells\n  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels\n}\ndx = px - 64; dy = 15 - py\n-- the wobble: rows slide sideways, columns up and down, on travelling waves\nwob = sin((31 - py)/32 + t/3.2)*amp\ncol = sin(px*0.0234375 - t/4.8)*amp\n-- where each pixel is on the checker: its column's part plus its row's\nu = (cu + cs*sc*dx) + (wob - sn*sc*dy)\nv = (cv + sn*sc*dx + col) + cs*sc*dy\ncell = (floor(u) + floor(v)) % 2\nu2 = (cv + c2*sc2*dx) + (wob - s2*sc2*dy)\nv2 = (cu + s2*sc2*dx + col) + c2*sc2*dy\npal(fire, (cell ? 0.44 : 0.19) + noise(u2, v2, 0)*0.6)";
+const ROTOZOOM_FLOOR_EX: &str = "loop 9.6\nfps 100\n-- Rotozoom floor: Mode 7 as a floor. A checker running away to a horizon\n-- at the top, turning once a loop and gliding, each row scaled by its\n-- distance and the far rows fogged; rows and columns wobble.\n-- a: wobble = gentle, strong, off\nframe {\n  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn\n  zoom = 2                                         -- try 1 to 4\n  cu = t/0.6; cv = t/1.2                           -- the glide, in cells\n  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels\n}\ndx = px - 64; ty = 31 - py\n-- a row's distance: checker cells a pixel, smaller further down\nrs = 1/((ty + 2)*zoom)\nwob = sin(ty/32 + t/3.2)*amp\ncol = sin(px*0.0234375 - t/4.8)*amp\n-- ahead by the row's distance, across by the pixel's\nu = cs*rs*dx + (cu + wob + sn*rs*64)\nv = sn*rs*dx + col + (cv - cs*rs*64)\ncell = (floor(u) + floor(v)) % 2\n-- the far rows fade into the fog (black at the horizon)\nfog = ty < 3 ? 0 : ty < 6 ? 0.375 : ty < 10 ? 0.625 : 1\npal(fire, cell ? 0.78 : 0.28) * fog";
 const CUBE_EX: &str = "loop 4.8\nfps 100\n-- Wireframe cube: turning about two axes and swinging across; the near\n-- edges brighter. The colour is the last line's #40c0ff\n-- a: size\ntable V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1\ntable E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7\nframe {\n  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)\n  size = 34 + a*28; mid = 64 + sa*40\n}\ndraw {\n  for e < 12 {\n    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners\n    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size\n    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size\n    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned\n    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb\n    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),\n         clamp(0.594 - zb/148, 0.156, 1), clamp(0.594 - zd/148, 0.156, 1))\n  }\n}\n#40c0ff * ink";
 
 /// The report's file name at the card's root.
@@ -383,6 +384,55 @@ pub fn run(root: &str) {
     let mut out = vec![0u8; psi::W * psi::H * 3];
     let mut canvas = Canvas::new();
 
+    // The examples as effects, first while the heap is at its fullest (the
+    // still cache is 16-32 KB; p2probe-a ran these last, ~38 KB free, and no
+    // 16 KB block was left for it). The real path: `Fx::parse`, the canvas taken
+    // at open, `Fx::frame`, the still cache taken on the first frame): with
+    // the cache, then with the gate refusing it (every step every frame).
+    for (name, src, opts) in [
+        ("Starfield", STARFIELD_EX, "a=0.5"),
+        ("Wireframe cube", CUBE_EX, "a=0.5"),
+        ("Tunnel", TUNNEL_EX, ""),
+        ("Rotozoom", ROTOZOOM_EX, ""),
+        ("Rotozoom floor", ROTOZOOM_FLOOR_EX, ""),
+    ] {
+        // (Into a zeroed box: a `Program` by value is 2.8 KB of the main
+        // task's stack.)
+        let mut prog = zeroed::<psi::Program>();
+        let (est, est_still) = if psi::compile_into(src, &mut prog).is_ok() {
+            (prog.esp32_us(), prog.esp32_us_still())
+        } else {
+            (0, 0)
+        };
+        for gate in ["cache", "no cache"] {
+            fx_psi::set_still_gate(if gate == "cache" { None } else { Some(|_| false) });
+            let h0 = heap();
+            let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
+                say!(error, "psi-probe: example {name}: did not open");
+                continue;
+            };
+            let h1 = heap();
+            let delay = fx.delay();
+            let n = fx.loop_frames();
+            // The first frame (it takes and keeps the cache), untimed.
+            fx.frame(Duration::ZERO, &mut canvas);
+            let h2 = heap();
+            let held = fx_psi::still_held();
+            let (e50, e90, emax) = timed(|k| {
+                fx.frame(delay * (k % n), &mut canvas);
+            });
+            drop(fx);
+            say!(info,
+                "psi-probe: example {name} as an effect ({gate}): p50 {e50} p90 {e90} max {emax} us a frame, est {est} us ({est_still} with the cache), heap {h0} -> {h1} B at open ({} B for the effect and its canvas), {h2} B after its first frame (still cache {held} B), {} B back after",
+                h0.saturating_sub(h1),
+                heap()
+            );
+        }
+    }
+    // The firmware's own gate again.
+    fx_psi::set_still_gate(Some(crate::still_gate));
+
+
     for (name, src) in psi::sketches::ALL {
         // Compile (into a zeroed program, as the effect does).
         let mut prog = zeroed::<psi::Program>();
@@ -506,7 +556,7 @@ pub fn run(root: &str) {
 
     // What one step costs: each formula is the baseline plus one or two
     // per-pixel steps (t is a frame value, so nothing folds away).
-    const STEPS: [(&str, &str); 25] = [
+    const STEPS: [(&str, &str); 26] = [
         ("base gray(x)", "gray(x)"),
         ("add", "gray(x + t)"),
         ("mul", "gray(x * t)"),
@@ -532,7 +582,8 @@ pub fn run(root: &str) {
         ("out pal", "pal(fire, x)"),
         // Phase 2: noise at a whole z (four corners), a scaled palette.
         ("noise flat (+mul)", "gray(noise(x * 8, y, 3))"),
-        ("out pal * k (+add)", "pal(fire, x) * (x + t)"),
+        ("out pal * k (+mul)", "pal(fire, x) * (x * 0.9)"),
+        ("out pal * k=1", "pal(fire, x) * (t * 0 + 1)"),
     ];
     // Layers and what is under (drawn over the golden picture): the
     // formula look's costs, for `Program::esp32_us`.
@@ -646,50 +697,6 @@ pub fn run(root: &str) {
         );
     }
 
-    // The examples as effects (the real path: `Fx::parse`, the canvas taken
-    // at open, `Fx::frame`, the still cache taken on the first frame): with
-    // the cache, then with the gate refusing it (every step every frame).
-    for (name, src, opts) in [
-        ("Starfield", STARFIELD_EX, "a=0.5"),
-        ("Wireframe cube", CUBE_EX, "a=0.5"),
-        ("Tunnel", TUNNEL_EX, ""),
-        ("Rotozoom", ROTOZOOM_EX, ""),
-        ("Rotozoom floor", ROTOZOOM_EX, "a=1"),
-    ] {
-        // (Into a zeroed box: a `Program` by value is 2.8 KB of the main
-        // task's stack.)
-        let (est, est_still) = if psi::compile_into(src, &mut prog).is_ok() {
-            (prog.esp32_us(), prog.esp32_us_still())
-        } else {
-            (0, 0)
-        };
-        for gate in ["cache", "no cache"] {
-            fx_psi::set_still_gate(if gate == "cache" { None } else { Some(|_| false) });
-            let h0 = heap();
-            let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
-                say!(error, "psi-probe: example {name}: did not open");
-                continue;
-            };
-            let h1 = heap();
-            let delay = fx.delay();
-            let n = fx.loop_frames();
-            // The first frame (it takes and keeps the cache), untimed.
-            fx.frame(Duration::ZERO, &mut canvas);
-            let h2 = heap();
-            let held = fx_psi::still_held();
-            let (e50, e90, emax) = timed(|k| {
-                fx.frame(delay * (k % n), &mut canvas);
-            });
-            drop(fx);
-            say!(info,
-                "psi-probe: example {name} as an effect ({gate}): p50 {e50} p90 {e90} max {emax} us a frame, est {est} us ({est_still} with the cache), heap {h0} -> {h1} B at open ({} B for the effect and its canvas), {h2} B after its first frame (still cache {held} B), {} B back after",
-                h0.saturating_sub(h1),
-                heap()
-            );
-        }
-    }
-    // The firmware's own gate again.
-    fx_psi::set_still_gate(Some(crate::still_gate));
 
     // Formulas as looks (`psi::look`, as the web app composes them): the
     // VM's frame over a picture against the estimate the looks' limit reads.

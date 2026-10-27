@@ -322,18 +322,21 @@ pub const GLOW_YIELD_HEAP: usize = 20 * 1024;
 
 /// A formula's still cache (16 KB a value it works out from the pixel's
 /// position alone, `opendmd_psi::Still`: the same picture either way,
-/// faster with it) is taken only if this much stays free after it: a
-/// transition's 24 KB and its [`TRANSITION_HEAP_RESERVE`], and 12 KB for
-/// the network side's transients. It is given back as soon as the main
-/// loop's next frame sees the free heap under [`STILL_SHED_HEAP`], and never
-/// held while a formula look is set (the look has the heap first: a look
-/// held is ~25 KB, and one waiting to be taken asks for 48 KB free). The
-/// formula on screen is dropped before the next file opens, so a switch
-/// away from it never pays for the cache.
+/// faster with it) is taken only if this much stays free after it: the
+/// network side's transients (~20 KB, as the glow's and the copy ahead's
+/// yields assume) and a margin. A transition never meets it: the engine
+/// drops the formula on screen before the next file opens (so a switch away
+/// pays nothing for the cache), and a switch to a formula takes the
+/// transition's buffers before its first frame, where the cache is taken
+/// (refused then, it is asked again a second later). It is given back as
+/// soon as the main loop's next frame sees the free heap under
+/// [`STILL_SHED_HEAP`], and never held while a formula look is set (the look
+/// has the heap first). Was 48 KB in p2probe-a: with ~80-90 KB free while a
+/// formula played, Tunnel's 32 KB never got in.
 #[cfg(feature = "psi")]
-pub const STILL_KEEP_HEAP: usize = 24 * 1024 + TRANSITION_HEAP_RESERVE + 12 * 1024;
+pub const STILL_KEEP_HEAP: usize = 32 * 1024;
 #[cfg(feature = "psi")]
-pub const STILL_SHED_HEAP: usize = 32 * 1024;
+pub const STILL_SHED_HEAP: usize = 24 * 1024;
 
 // ---------------------------------------------------------------------------
 // Loop timing

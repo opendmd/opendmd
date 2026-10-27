@@ -145,11 +145,12 @@ fn the_examples_are_light_enough_for_the_panel() {
         // (owner, 2026-10-26: legible over short); the rest stay short.
         // So do the built-in effects' Formulas (Tunnel, Rotozoom): a native
         // effect's knobs, written out.
-        let most = if ["Big clock", "Tunnel", "Rotozoom"].contains(&e.name.as_str()) {
-            16
-        } else {
-            7
-        };
+        let most =
+            if ["Big clock", "Tunnel", "Rotozoom", "Rotozoom floor"].contains(&e.name.as_str()) {
+                16
+            } else {
+                7
+            };
         assert!(own <= most, "{}: too long for an example", e.name);
         // (As the player draws it: with its still cache, when it has one.)
         assert!(
@@ -167,6 +168,55 @@ fn the_examples_are_light_enough_for_the_panel() {
                 e.name
             );
         }
+    }
+}
+
+/// The path the web app sends for an example (js/psishow.js `fpath`:
+/// comments out, spaces collapsed, lines joined with `; `, lightly encoded)
+/// with the `&name=` Add to playlist puts on it, and the sliders at their
+/// most: within the panel's 2,048 B (`synth::MAX_FORMULA_PATH`).
+#[test]
+fn every_example_fits_the_panels_path_as_sent() {
+    let json = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../opendmd-web/www/formulas.json"
+    ))
+    .unwrap();
+    for e in crate::examples(&json) {
+        let mut s = String::new();
+        for l in e.src.lines() {
+            let l = match (l.find("--"), l.find("//")) {
+                (Some(a), Some(b)) => &l[..a.min(b)],
+                (Some(a), None) | (None, Some(a)) => &l[..a],
+                (None, None) => l,
+            };
+            let c = l.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !c.is_empty() {
+                if !s.is_empty() {
+                    s.push_str("; ");
+                }
+                s.push_str(&c);
+            }
+        }
+        let mut p = String::from("@fx:psi?src=");
+        for b in s.bytes() {
+            match b {
+                b' ' => p.push('+'),
+                b'%' | b'&' | b'+' | b'#' | b'?' => p.push_str(&format!("%{b:02X}")),
+                0x21..=0x7e => p.push(b as char),
+                _ => p.push_str(&format!("%{b:02X}")),
+            }
+        }
+        // The compacted text still compiles to the same program.
+        assert_eq!(
+            opendmd_psi::compile(&s).map(|p| p.len()).ok(),
+            opendmd_psi::compile(&e.src).map(|p| p.len()).ok(),
+            "{}",
+            e.name
+        );
+        p.push_str("&a=0.3333&b=0.3333&c=0.3333&name=");
+        p.push_str(&e.name.replace(' ', "+"));
+        assert!(p.len() <= 2048, "{}: {} B as sent", e.name, p.len());
     }
 }
 

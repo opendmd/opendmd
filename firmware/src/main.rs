@@ -238,17 +238,29 @@ fn transition_gate(need: usize) -> bool {
 
 /// Whether a formula's still cache may take `take` more bytes of the heap
 /// (`take` > 0) or keep what it holds (0): see [`config::STILL_KEEP_HEAP`].
+/// A refusal to take says why in the log (at most once every 10 s).
 #[cfg(feature = "psi")]
 pub fn still_gate(take: usize) -> bool {
-    if formula_look::SOURCE.load(Ordering::Relaxed) != 0 {
-        return false;
-    }
+    static SAID: AtomicU32 = AtomicU32::new(0);
+    let look = formula_look::SOURCE.load(Ordering::Relaxed);
     let free = free_heap() as usize;
     if take == 0 {
-        free >= config::STILL_SHED_HEAP
-    } else {
-        free >= take + config::STILL_KEEP_HEAP && largest_free_block() >= 16 * 1024
+        return look == 0 && free >= config::STILL_SHED_HEAP;
     }
+    let block = largest_free_block();
+    let ok = look == 0 && free >= take + config::STILL_KEEP_HEAP && block >= 16 * 1024;
+    if !ok {
+        let now = (unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000) as u32;
+        let last = SAID.load(Ordering::Relaxed);
+        if last == 0 || now.wrapping_sub(last) >= 10 {
+            SAID.store(now | 1, Ordering::Relaxed);
+            log::info!(
+                "formula: still cache ({take} B) not taken: heap {free} B free (needs {} B), largest block {block} B, look {look}",
+                take + config::STILL_KEEP_HEAP
+            );
+        }
+    }
+    ok
 }
 
 fn main() -> Result<()> {

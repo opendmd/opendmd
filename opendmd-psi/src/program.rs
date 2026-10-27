@@ -600,9 +600,12 @@ impl Program {
                 let base = match kind {
                     OUT_HSV if lane => 195,
                     OUT_RGB if lane => 120,
-                    // `pal(P, v) * k`: three channels scaled (a guess until
-                    // psi-probe measures it).
-                    OUT_PAL if lane && vals > 1 => 90,
+                    // `pal(P, v) * k`: three channels scaled. psi-probe
+                    // (p2probe-a) measured 458 ns a pixel in all with the
+                    // 64-bit multiplies; since then k = 1 is the palette's
+                    // bytes and 0 < k < 1 one 32-bit multiply a channel (a
+                    // guess: ~250 in all, to be measured again).
+                    OUT_PAL if lane && vals > 1 => 130,
                     _ => 0,
                 };
                 // Covered unless the coverage is a constant slot of 1 or
