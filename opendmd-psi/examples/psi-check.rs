@@ -132,9 +132,11 @@ fn main() {
             prog.primitives()
         );
     }
+    let grid = prog.frame_ms().unwrap_or(20);
     println!(
-        "loop {} s; reads {}",
+        "loop {} s at {} fps; reads {}",
         prog.loop_ms() as f64 / 1000.0,
+        1000 / grid,
         if reads.is_empty() {
             "nothing (a still picture)".into()
         } else {
@@ -145,6 +147,9 @@ fn main() {
         "panel: ~{:.1} ms a frame: {rating} (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)",
         us as f64 / 1000.0
     );
+    if grid == 10 && us > 5000 {
+        println!("fps 100: over its 5 ms budget, so the panel plays it at 50 fps or fewer");
+    }
     if listing {
         print!("{}", prog.listing());
     }
@@ -156,8 +161,8 @@ fn main() {
         Some(v) => v.into_iter().map(|ms| (ms, clock)).collect(),
         None if moves => (0..frames)
             .map(|k| {
-                // Whole 20 ms frames, as the panel plays them.
-                let ms = (prog.loop_ms() as u64 * k as u64 / frames as u64) as u32 / 20 * 20;
+                // Whole frames of its grid, as the panel plays them.
+                let ms = (prog.loop_ms() as u64 * k as u64 / frames as u64) as u32 / grid * grid;
                 (ms, clock)
             })
             .collect(),
