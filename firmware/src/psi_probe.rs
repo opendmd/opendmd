@@ -302,6 +302,114 @@ fn effects(list: &[(&str, &str, &str)], again: &str, canvas: &mut Canvas) {
     }
 }
 
+/// Cycles a 32-bit load (and a load plus a store) over `w`, best of three
+/// passes: the memory's own latency where `w` lies.
+fn latency(w: &mut [u32]) -> (f64, f64) {
+    let n = w.len() as f64;
+    let (mut ld, mut ls) = (u32::MAX, u32::MAX);
+    for _ in 0..3 {
+        let t0 = ccount();
+        let mut acc = 0u32;
+        for v in w.iter() {
+            // SAFETY: a read of our own buffer.
+            acc = acc.wrapping_add(unsafe { core::ptr::read_volatile(v) });
+        }
+        let t1 = ccount();
+        core::hint::black_box(acc);
+        for v in w.iter_mut() {
+            // SAFETY: our own buffer.
+            unsafe { core::ptr::write_volatile(v, core::ptr::read_volatile(v).wrapping_add(1)) };
+        }
+        let t2 = ccount();
+        ld = ld.min(t1.wrapping_sub(t0));
+        ls = ls.min(t2.wrapping_sub(t1));
+    }
+    (f64::from(ld) / n, f64::from(ls) / n)
+}
+
+/// The data memory's latency by address: as many 2 KB blocks as the heap
+/// gives (down to ~24 KB free), each timed, bucketed by 8 KB; then the
+/// same with CPU0 kept busy loading and storing over a buffer of its own.
+fn latency_map() {
+    struct Spin {
+        buf: Vec<u32>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+    let mut blocks: Vec<Vec<u32>> = Vec::new();
+    while heap() > 24 * 1024 + 2048 && blocks.len() < 64 {
+        let mut v: Vec<u32> = Vec::new();
+        if v.try_reserve_exact(512).is_err() {
+            break;
+        }
+        v.resize(512, 0);
+        blocks.push(v);
+    }
+    blocks.sort_by_key(|b| b.as_ptr() as usize);
+    let map = |blocks: &mut Vec<Vec<u32>>, what: &str| {
+        let mut line = String::new();
+        let mut bucket = usize::MAX;
+        let mut acc: Vec<(f64, f64)> = Vec::new();
+        let flush = |line: &mut String, bucket: usize, acc: &mut Vec<(f64, f64)>| {
+            if !acc.is_empty() {
+                let n = acc.len() as f64;
+                let (l, s) = acc.iter().fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+                line.push_str(&format!(" {:#x}:{:.2}/{:.2}", bucket << 13, l / n, s / n));
+                acc.clear();
+            }
+        };
+        for b in blocks.iter_mut() {
+            let k = b.as_ptr() as usize >> 13;
+            if k != bucket {
+                flush(&mut line, bucket, &mut acc);
+                bucket = k;
+            }
+            acc.push(latency(b));
+        }
+        flush(&mut line, bucket, &mut acc);
+        say!(info, "psi-probe: memory {what}, cycles a load/a load+store by 8 KB from:{line}");
+    };
+    say!(info, "psi-probe: memory: {} blocks of 2 KB from {:#x} to {:#x}, heap {} B free",
+        blocks.len(),
+        blocks.first().map_or(0, |b| b.as_ptr() as usize),
+        blocks.last().map_or(0, |b| b.as_ptr() as usize),
+        heap());
+    map(&mut blocks, "(CPU0 as it is)");
+    // CPU0 busy over a 2 KB buffer of its own (the network's side).
+    if let Some(spare) = blocks.pop() {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut spin = Spin { buf: spare, stop: stop.clone() };
+        let at = spin.buf.as_ptr() as usize;
+        let cfg = esp_idf_hal::task::thread::ThreadSpawnConfiguration {
+            name: Some(b"psi-spin\0"),
+            stack_size: 3072,
+            priority: 1,
+            pin_to_core: Some(esp_idf_hal::cpu::Core::Core0),
+            ..Default::default()
+        };
+        let _ = cfg.set();
+        let h = std::thread::Builder::new().stack_size(3072).spawn(move || {
+            let mut i = 0usize;
+            while !spin.stop.load(Ordering::Relaxed) {
+                let n = spin.buf.len();
+                let v = unsafe { core::ptr::read_volatile(&spin.buf[i % n]) };
+                unsafe { core::ptr::write_volatile(&mut spin.buf[(i + 7) % n], v.wrapping_add(1)) };
+                i = i.wrapping_add(1);
+                if i % 100_000 == 0 {
+                    std::thread::yield_now();
+                }
+            }
+        });
+        let _ = esp_idf_hal::task::thread::ThreadSpawnConfiguration::default().set();
+        std::thread::sleep(Duration::from_millis(20));
+        map(&mut blocks, &format!("(CPU0 spinning over {at:#x})"));
+        stop.store(true, Ordering::Relaxed);
+        if let Ok(h) = h {
+            let _ = h.join();
+        }
+    }
+    drop(blocks);
+}
+
 /// The CPU's cycle counter (240 per µs), for psi's frame stamps.
 fn ccount() -> u32 {
     // SAFETY: reads the CCOUNT special register.
@@ -752,6 +860,7 @@ pub fn run(root: &str) {
     // Where the effect path's time goes (speed-d: Tunnel 4,932 us as an
     // effect against 3,651 VM-direct; the others ~200-250 us over).
     psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
+    latency_map();
     for gate in [true, false] {
         split("Tunnel", TUNNEL_EX, gate, &mut canvas);
         split("Rotozoom floor", ROTOZOOM_FLOOR_EX, gate, &mut canvas);

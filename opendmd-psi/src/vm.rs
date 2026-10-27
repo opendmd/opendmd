@@ -254,6 +254,7 @@ fn fast2<const N: usize, A: Src, B: Src>(
 }
 
 #[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn fast3<const N: usize, A: Src, B: Src, C: Src>(
     d: &mut [i32; N],
     mut a: A,
@@ -506,9 +507,14 @@ pub fn render_rows_still<const N: usize>(
     frame::<N>(prog, scratch, ink, still, inputs, tables, under, rows, out)
 }
 
-/// [`render_rows_still`]'s body.
+/// [`render_rows_still`]'s body: one copy whoever calls it, and on the
+/// ESP32 in IRAM with the cheap loops, so the frame loop and its dispatch
+/// are never evicted from the flash cache between steps (speed-a..f: the
+/// same rows 3.65 or 4.3-4.9 ms by which copy of this loop ran and where
+/// the build put it).
 #[allow(clippy::too_many_arguments)]
-#[inline(always)]
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn frame<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
@@ -695,6 +701,7 @@ fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at
 /// Point the cached registers at the kept lanes at pixel `at` (read there
 /// in place until written: no copy).
 #[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n: u8, at: usize) {
     for (j, &r) in regs.iter().enumerate().take(n as usize) {
         if let Some(l) = st.lanes[j].as_deref() {
