@@ -394,7 +394,7 @@ fn latency_map() {
                 let v = unsafe { core::ptr::read_volatile(&spin.buf[i % n]) };
                 unsafe { core::ptr::write_volatile(&mut spin.buf[(i + 7) % n], v.wrapping_add(1)) };
                 i = i.wrapping_add(1);
-                if i % 100_000 == 0 {
+                if i.is_multiple_of(100_000) {
                     std::thread::yield_now();
                 }
             }
