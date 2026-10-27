@@ -581,6 +581,9 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                   "gallery: Remix opens it in the demo")
             page.locator("#examples ~ ul .ftile").nth(5).locator(".facts a:not(.alt)").click()
             page.wait_for_selector("#f-name:not(:empty)", timeout=20000)
+            # (The name is set before the code: wait for both, or a busy
+            # machine reads the code half-filled.)
+            page.wait_for_function("document.querySelector('#f-code').textContent.trim().length > 0", timeout=20000)
             e = examples[5]
             check(page.inner_text("#f-name") == e["name"] and page.locator("#f-code").inner_text().rstrip("\n") == e["src"],
                   f"gallery: Open leads to {e['name']}'s page")
