@@ -136,6 +136,13 @@ pub(crate) mod code {
     pub const LINE_FROM: u8 = 90;
     pub const LINE_TO: u8 = 91;
     pub const DOT: u8 = 92;
+    // The still cache's marker, first of the pixel steps that only work out
+    // values the cache holds (position-only values: the same every frame):
+    // `STILL d, a, b, c`: `d` values cached (1 or 2), in registers `b` and
+    // `c` (lane operands) after the `a` steps that follow it. With a filled
+    // [`crate::Still`] the VM skips those `a` steps and copies the cached
+    // lanes into `b` and `c` instead; without one it is a no-op.
+    pub const STILL: u8 = 93;
     // the colour of the bottom layer when nothing shows through it: written
     // over the pixels, as v0's last line
     pub const OUT_RGB: u8 = 96;
@@ -181,6 +188,7 @@ pub(crate) mod code {
             FOR => 1,
             END => 2,
             LINE_FROM..=DOT => 3,
+            STILL => 0,
             _ => match colour_parts(c).0 {
                 OUT_RGB | OUT_HSV => 3,
                 _ => 1,
@@ -233,7 +241,9 @@ pub(crate) mod code {
             32..=LAST_UN => U[(c - 32) as usize],
             64..=LAST_TERN => T[(c - 64) as usize],
             U_R..=INK => ["ur", "ug", "ub", "ul", "ink"][(c - U_R) as usize],
-            FOR..=DOT => ["for", "end", "line_from", "line_to", "dot"][(c - FOR) as usize],
+            FOR..=STILL => {
+                ["for", "end", "line_from", "line_to", "dot", "still"][(c - FOR) as usize]
+            }
             _ => ["rgb", "hsv", "pal", "gray"][((colour_parts(c).0 - OUT_RGB) & 3) as usize],
         }
     }
@@ -485,71 +495,37 @@ impl Program {
     /// 32 runs of ~0.3 µs. The web app's editor shows it as light / medium /
     /// heavy.
     pub fn esp32_us(&self) -> u32 {
-        use code::*;
+        self.estimate(None)
+    }
+
+    /// [`esp32_us`](Self::esp32_us) as the player draws it with a filled
+    /// still cache ([`crate::Still`]): the steps that only work out the
+    /// cached values are skipped and each cached value is a copy into its
+    /// register instead (~15 ns a pixel). The same as `esp32_us` for a
+    /// formula without cached values ([`still_lanes`](Self::still_lanes)
+    /// 0). A look never has one (it draws as `esp32_us` says).
+    pub fn esp32_us_still(&self) -> u32 {
+        self.estimate(self.still_marker())
+    }
+
+    fn estimate(&self, still: Option<usize>) -> u32 {
+        let (skip, copy) = match still {
+            Some(k) => {
+                let op = &self.ops[k];
+                (
+                    k + 1..k + 1 + op.a as usize,
+                    STILL_COPY_NS * u32::from(op.d.min(2)),
+                )
+            }
+            None => (0..0, 0),
+        };
         let px: u32 = self.ops[self.row_end as usize..self.len()]
             .iter()
-            .map(|op| match op.code {
-                ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
-                BIT => 55,
-                MUL => 86,
-                MOD => 113,
-                DIV | RECIP => 685,
-                ATAN2 => 529,
-                LEN => 642,
-                HASH => 220,
-                NEG | NOT | ABS | FLOOR | FRAC => 40,
-                SIN | COS => 110,
-                TRI | SAW | SQR => 60,
-                SQRT => 539,
-                SELECT | CLAMP => 60,
-                PICK | TAB => 100,
-                MIX => 130,
-                SMOOTH => 214,
-                NOISE => 855,
-                DIGIT..=DIGIT_B => 240,
-                U_R | U_G | U_B | INK => 70,
-                U_L => 140,
-                c if is_colour(c) => {
-                    // Measured on the device (psi-probe, 2026-10-26): a
-                    // colour's write — a lane's `chan` per pixel, ~5 for one
-                    // value filled along the row — plus its kind, and for a
-                    // layer the blend loop: one per blend when it covers all,
-                    // a shared loop with the coverage (and the blend chosen
-                    // per channel) when it covers less.
-                    let (kind, blend) = colour_parts(c);
-                    let (v, n) = operands(op);
-                    let vals = arity(c);
-                    let lane = v[..vals.min(n)].iter().any(|&o| o & LANE != 0);
-                    let write = if lane { 120 } else { 5 };
-                    // (Of one value: worked out once, filled along the row.)
-                    let base = match kind {
-                        OUT_HSV if lane => 195,
-                        OUT_RGB if lane => 120,
-                        _ => 0,
-                    };
-                    // Covered unless the coverage is a constant slot of 1 or
-                    // more (a lane or an input never is one).
-                    let k = v[n.saturating_sub(1)];
-                    let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k);
-                    let covered = n > vals && !(konst && self.init[k as usize] >= ONE);
-                    let mix = match (blend, covered) {
-                        (None, _) => 0,
-                        (Some(crate::fixed::BLEND_ADD), false) => 190,
-                        (Some(crate::fixed::BLEND_MULTIPLY), false) => 245,
-                        (Some(crate::fixed::BLEND_SCREEN), false) => 300,
-                        (Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN), false) => 180,
-                        (Some(_), false) => 20,
-                        (Some(crate::fixed::BLEND_ADD), true) => 575,
-                        (Some(crate::fixed::BLEND_MULTIPLY), true) => 630,
-                        (Some(crate::fixed::BLEND_SCREEN), true) => 600,
-                        (Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN), true) => 450,
-                        (Some(_), true) => 390,
-                    };
-                    write + base + mix
-                }
-                _ => 0,
-            })
-            .sum();
+            .enumerate()
+            .filter(|(k, _)| !skip.contains(&(k + self.row_end as usize)))
+            .map(|(_, op)| self.step_ns(op))
+            .sum::<u32>()
+            + copy;
         let row = self.counts().1 as u32;
         // The loop itself (a pixel's colour is counted above: `gray(x)` is
         // 45 + 120, as measured); then what the real paths add to the VM's
@@ -558,6 +534,68 @@ impl Program {
         // on the device (plasma as an effect 8,217 against 7,254 µs; Plasma
         // screened at 40 % as a look 8,552 against 7,474).
         (((45 + px) * (W * H) as u32) / 1000 + row * 10 + self.draw_us()) * 115 / 100
+    }
+
+    /// A pixel step's cost, ns a pixel at 128 lanes (see `esp32_us`).
+    fn step_ns(&self, op: &Op) -> u32 {
+        use code::*;
+        match op.code {
+            c if is_colour(c) => {
+                // Measured on the device (psi-probe, 2026-10-26): a
+                // colour's write — a lane's `chan` per pixel, ~5 for one
+                // value filled along the row — plus its kind, and for a
+                // layer the blend loop: one per blend when it covers all,
+                // a shared loop with the coverage (and the blend chosen
+                // per channel) when it covers less.
+                let (kind, blend) = colour_parts(c);
+                let (v, n) = operands(op);
+                let vals = arity(c);
+                let lane = v[..vals.min(n)].iter().any(|&o| o & LANE != 0);
+                let write = if lane { 120 } else { 5 };
+                // (Of one value: worked out once, filled along the row.)
+                let base = match kind {
+                    OUT_HSV if lane => 195,
+                    OUT_RGB if lane => 120,
+                    _ => 0,
+                };
+                // Covered unless the coverage is a constant slot of 1 or
+                // more (a lane or an input never is one).
+                let k = v[n.saturating_sub(1)];
+                let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k);
+                let covered = n > vals && !(konst && self.init[k as usize] >= ONE);
+                let mix = match (blend, covered) {
+                    (None, _) => 0,
+                    (Some(crate::fixed::BLEND_ADD), false) => 190,
+                    (Some(crate::fixed::BLEND_MULTIPLY), false) => 245,
+                    (Some(crate::fixed::BLEND_SCREEN), false) => 300,
+                    (Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN), false) => 180,
+                    (Some(_), false) => 20,
+                    (Some(crate::fixed::BLEND_ADD), true) => 575,
+                    (Some(crate::fixed::BLEND_MULTIPLY), true) => 630,
+                    (Some(crate::fixed::BLEND_SCREEN), true) => 600,
+                    (Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN), true) => 450,
+                    (Some(_), true) => 390,
+                };
+                write + base + mix
+            }
+            c => value_ns(c),
+        }
+    }
+
+    /// Where the still cache's marker is (`code::STILL`), if the formula
+    /// has values for it.
+    pub(crate) fn still_marker(&self) -> Option<usize> {
+        let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
+        (re.min(pe)..pe).find(|&k| self.ops[k].code == code::STILL)
+    }
+
+    /// Values the still cache holds for this formula (0, 1 or 2): each a
+    /// lane of 4,096 values ([`crate::StillLane`], 16 KB) worked out once
+    /// instead of every frame. See [`crate::Still`].
+    pub fn still_lanes(&self) -> usize {
+        self.still_marker().map_or(0, |k| {
+            (self.ops[k].d as usize).min(crate::still::STILL_LANES)
+        })
     }
 
     /// The draw stage's part of [`esp32_us`](Self::esp32_us), from
@@ -585,7 +623,9 @@ impl Program {
                     // are constants; with a side unknown, at least 12.
                     let k = |v: u8| self.const_value(v);
                     let d = |a: Option<i32>, b: Option<i32>| {
-                        a.zip(b).map(|(a, b)| ((a >> 16) - (b >> 16)).unsigned_abs().min(1023) as u64 + 1)
+                        a.zip(b).map(|(a, b)| {
+                            ((a >> 16) - (b >> 16)).unsigned_abs().min(1023) as u64 + 1
+                        })
                     };
                     let (dx, dy) = (d(k(from[0]), k(op.a)), d(k(from[1]), k(op.b)));
                     let len = match (dx, dy) {
@@ -669,6 +709,14 @@ impl Program {
                 alloc::format!("{args}; end {}", op.b)
             } else if op.code == code::END {
                 alloc::format!("{args}; back to {}", op.c)
+            } else if op.code == code::STILL {
+                let r = |v: u8| opnd(v);
+                let regs = [r(op.b), r(op.c)];
+                alloc::format!(
+                    "skip {}; cache {}",
+                    op.a,
+                    regs[..(op.d as usize).min(2)].join(", ")
+                )
             } else if op.code == code::PICK {
                 let t: alloc::vec::Vec<_> = (0..op.c as usize)
                     .map(|j| opnd(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8))
@@ -680,7 +728,7 @@ impl Program {
             let d = if code::is_colour(op.code)
                 || matches!(
                     op.code,
-                    code::END | code::LINE_FROM | code::LINE_TO | code::DOT
+                    code::END | code::LINE_FROM | code::LINE_TO | code::DOT | code::STILL
                 ) {
                 "out".into()
             } else {
@@ -707,10 +755,44 @@ impl Program {
                 // The draw stage's steps that write no value; END counts
                 // its loop's counter (which the FOR writes too).
                 code::END => op.a == v,
-                code::LINE_FROM | code::LINE_TO | code::DOT => false,
+                code::LINE_FROM | code::LINE_TO | code::DOT | code::STILL => false,
                 c => !code::is_colour(c) && op.d == v,
             }
         })
+    }
+}
+
+/// What copying one cached lane into its register costs a pixel, ns (a
+/// guess until `psi-probe` measures it: a 512 B `memcpy` a lane).
+pub(crate) const STILL_COPY_NS: u32 = 15;
+
+/// A value step's cost, ns a pixel at 128 lanes on the ESP32, from
+/// `psi-probe` (2026-10-26): what [`Program::esp32_us`] adds up, and what the
+/// compiler weighs when it chooses values for the still cache.
+pub(crate) fn value_ns(c: u8) -> u32 {
+    use code::*;
+    match c {
+        ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
+        BIT => 55,
+        MUL => 86,
+        MOD => 113,
+        DIV | RECIP => 685,
+        ATAN2 => 529,
+        LEN => 642,
+        HASH => 220,
+        NEG | NOT | ABS | FLOOR | FRAC => 40,
+        SIN | COS => 110,
+        TRI | SAW | SQR => 60,
+        SQRT => 539,
+        SELECT | CLAMP => 60,
+        PICK | TAB => 100,
+        MIX => 130,
+        SMOOTH => 214,
+        NOISE => 855,
+        DIGIT..=DIGIT_B => 240,
+        U_R | U_G | U_B | INK => 70,
+        U_L => 140,
+        _ => 0,
     }
 }
 

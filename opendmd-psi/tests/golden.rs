@@ -5,8 +5,8 @@
 
 use opendmd_psi::golden::{fnv, inputs, picture, DRAWN, FRAMES as GOLDEN, OVER};
 use opendmd_psi::{
-    compile, render_rows, render_rows_ink, render_with, sketches, Ink, Program, Scratch, FONT_4X6,
-    FONT_5X7, FONT_BOLD, H, MAX_OPS, OWN, W,
+    compile, render_rows, render_rows_ink, render_rows_still, render_with, sketches, Ink, Program,
+    Scratch, Still, FONT_4X6, FONT_5X7, FONT_BOLD, H, MAX_OPS, OWN, W,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -71,6 +71,168 @@ fn frame_ink<const N: usize>(p: &Program, ms: u32, under: Option<&[u8]>) -> Vec<
         &mut out,
     );
     out
+}
+
+/// Frames at each of `ms` with a still cache (kept on the first, drawn
+/// from after: the second frame and on skip the cached steps), checked
+/// against [`frame_ink`] without one; also a partial redraw (some rows) from
+/// the kept values.
+fn still_same<const N: usize>(src: &str, p: &Program, ms: &[u32], under: Option<&[u8]>) {
+    let mut s = Scratch::<N>::new();
+    let mut ink = Ink::boxed();
+    let mut st = Still::new();
+    assert!(st.take(p), "{src:?}: no still lanes");
+    for (k, &m) in ms.iter().enumerate() {
+        let mut out = vec![0x5a; W * H * 3];
+        render_rows_still::<N>(
+            p,
+            &mut s,
+            Some(&mut ink),
+            Some(&mut st),
+            &inputs(m),
+            &OWN,
+            under,
+            u32::MAX,
+            &mut out,
+        );
+        assert!(st.holds(p), "{src:?}: the cache kept nothing");
+        let want = frame_ink::<N>(p, m, under);
+        assert!(
+            out == want,
+            "{src:?} at {m} ms (frame {k}, {N} lanes): the still cache drew other bytes"
+        );
+        // Some rows again, from the kept values (the canvas as left).
+        let mut part = out.clone();
+        render_rows_still::<N>(
+            p,
+            &mut s,
+            Some(&mut ink),
+            Some(&mut st),
+            &inputs(m),
+            &OWN,
+            under,
+            0x8000_0101,
+            &mut part,
+        );
+        assert!(part == want, "{src:?} at {m} ms: a partial redraw differs");
+    }
+}
+
+/// Formulas with values for the still cache (a tunnel, rings, the plasma
+/// sketch), and every golden formula that has any: the same bytes with the
+/// cache as without, kept and drawn from, at both lane widths.
+#[test]
+fn the_still_cache_draws_the_same_bytes() {
+    const STILL: &[&str] = &[
+        "loop 4.8\nd = len(cx, cy*2)\ndepth = 1/d\nu = frac(angle*2 + t/4.8 + depth*a/32)\nv = frac(depth/4 + t/4.8)\ncell = (floor(u*8) + floor(v*4)) % 2\nramp = clamp((d - 0.25)*2.4, 0, 1)\nlayer { pal(chrono, frac(mix(0.28, 0.78, cell) + t/4.8)) }\nlayer multiply { gray(floor(ramp*ramp*(0.8 + 0.2*cos(angle + t/4.8))*8)/8) }",
+        "loop 4\npal(rainbow, frac(r*1.5 - t/4))",
+        "q = sqrt(px*py) + noise(x*8, y*4, 0)\nhsv(q/64 + t/8, 1, step(0.3, frac(q)))",
+        "k = pick(px/32, len(x, y), atan2(y, x), 1/(x + 1), hash(px, py))\ngray(frac(k*3 + t))",
+        "loop 2\nd = 1/(len(px - 63.5, (py - 15.5)*2) + 1)\nlayer { gray(frac(d*8 + t/2)) }\nlayer screen { rgb(ur, ug*d, 0, 0.5) }",
+        sketches::PLASMA,
+        sketches::RING_CLOCK,
+    ];
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let mut cases: Vec<(String, bool)> = STILL.iter().map(|s| (s.to_string(), true)).collect();
+    for &(_, src, _, _) in GOLDEN {
+        cases.push((src.to_string(), false));
+    }
+    for &(_, src, _, _, _) in OVER.iter().chain(DRAWN) {
+        cases.push((src.to_string(), false));
+    }
+    let mut cached = 0;
+    for (src, must) in &cases {
+        let p = compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
+        if p.still_lanes() == 0 {
+            assert!(
+                !must,
+                "{src:?}: expected values for the still cache\n{}",
+                p.listing()
+            );
+            continue;
+        }
+        cached += 1;
+        assert!(p.esp32_us_still() < p.esp32_us(), "{src:?}");
+        let u = p.over().then_some(&under[..]);
+        still_same::<128>(src, &p, &[0, 1234, 2500, 777], u);
+        still_same::<64>(src, &p, &[0, 1234], u);
+    }
+    assert!(
+        cached >= STILL.len(),
+        "{cached} formulas with a still cache"
+    );
+}
+
+/// A program changed in place under a cache that kept another's values is
+/// drawn as it is, never from the other's values.
+#[test]
+fn the_still_cache_never_draws_another_programs_values() {
+    let a = compile("loop 2\ngray(frac(1/len(cx, cy*2)/4 + t/2))").unwrap();
+    let b = compile("loop 2\ngray(frac(1/len(cx, cy*3)/4 + t/2))").unwrap();
+    assert_eq!(a.still_lanes(), 1);
+    assert_eq!(a.listing().lines().count(), b.listing().lines().count());
+    let mut s = Scratch::<128>::new();
+    let mut ink = Ink::boxed();
+    let mut st = Still::new();
+    assert!(st.take(&a));
+    let mut out = vec![0u8; W * H * 3];
+    render_rows_still::<128>(
+        &a,
+        &mut s,
+        Some(&mut ink),
+        Some(&mut st),
+        &inputs(500),
+        &OWN,
+        None,
+        u32::MAX,
+        &mut out,
+    );
+    assert!(st.holds(&a) && !st.holds(&b));
+    render_rows_still::<128>(
+        &b,
+        &mut s,
+        Some(&mut ink),
+        Some(&mut st),
+        &inputs(500),
+        &OWN,
+        None,
+        u32::MAX,
+        &mut out,
+    );
+    assert_eq!(out, frame_ink::<128>(&b, 500, None));
+    // A partial redraw of a program the cache doesn't hold runs every step.
+    assert!(st.holds(&b));
+    render_rows_still::<128>(
+        &a,
+        &mut s,
+        Some(&mut ink),
+        Some(&mut st),
+        &inputs(500),
+        &OWN,
+        None,
+        0xff,
+        &mut out,
+    );
+    assert_eq!(
+        &out[..W * 8 * 3],
+        &frame_ink::<128>(&a, 500, None)[..W * 8 * 3]
+    );
+    // Let go: drawn as without.
+    st.release();
+    assert!(!st.is_held() && st.held_bytes() == 0);
+    render_rows_still::<128>(
+        &a,
+        &mut s,
+        Some(&mut ink),
+        Some(&mut st),
+        &inputs(9),
+        &OWN,
+        None,
+        u32::MAX,
+        &mut out,
+    );
+    assert_eq!(out, frame_ink::<128>(&a, 9, None));
 }
 
 /// Formulas that draw: the same hashes at both lane widths, here and in
@@ -497,6 +659,9 @@ fn check(src: &str) {
             picture(&mut under);
             let _ = frame_over::<128>(&p, 1234, Some(&under));
             let _ = frame_ink::<64>(&p, 1234, Some(&under));
+            if p.still_lanes() > 0 {
+                still_same::<128>(src, &p, &[1234, 99], Some(&under));
+            }
         }
         Err(e) => {
             assert!(

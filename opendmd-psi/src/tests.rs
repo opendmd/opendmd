@@ -165,7 +165,10 @@ fn levels_run_as_rarely_as_they_can() {
     let p = compile("gray(x / (y + 1))").unwrap();
     assert_eq!(p.counts(), (0, 2, 2), "{}", p.listing());
     let plasma = compile(sketches::PLASMA).unwrap();
-    assert_eq!(plasma.counts(), (2, 5, 13));
+    // (its `len(x-0.5, y-0.5)*6` is worked out once: the still cache's
+    // marker is one step more)
+    assert_eq!(plasma.counts(), (2, 5, 14));
+    assert_eq!(plasma.still_lanes(), 1);
     let ring = compile(sketches::RING_CLOCK).unwrap();
     assert_eq!(ring.counts().0, 8);
 }
@@ -1705,20 +1708,50 @@ fn only_a_full_render_draws() {
     let mut s = Scratch::<128>::new();
     let mut full = [0u8; W * H * 3];
     let i = Inputs::default();
-    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, u32::MAX, &mut full);
+    render_rows_ink::<128>(
+        &p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        u32::MAX,
+        &mut full,
+    );
     let drawn = ink.0;
     assert!(drawn.iter().any(|&b| b > 0));
     // Rows 3 and 7 alone: the same bytes, the canvas untouched.
     let mut part = [0u8; W * H * 3];
-    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, (1 << 3) | (1 << 7), &mut part);
+    render_rows_ink::<128>(
+        &p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        (1 << 3) | (1 << 7),
+        &mut part,
+    );
     assert_eq!(ink.0, drawn);
     for r in [3, 7] {
-        assert_eq!(part[r * W * 3..(r + 1) * W * 3], full[r * W * 3..(r + 1) * W * 3]);
+        assert_eq!(
+            part[r * W * 3..(r + 1) * W * 3],
+            full[r * W * 3..(r + 1) * W * 3]
+        );
     }
     // Proof it isn't drawn again: a canvas changed by hand is what shows.
     ink.0.fill(200);
     render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, 1, &mut part);
     assert!(part[..W * 3].iter().all(|&b| b == 200));
-    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, u32::MAX, &mut part);
+    render_rows_ink::<128>(
+        &p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        None,
+        u32::MAX,
+        &mut part,
+    );
     assert_eq!(ink.0, drawn);
 }
