@@ -86,6 +86,7 @@ use opendmd_core::engine::{Catalog, DwellPolicy, Engine, FileCatalog, TickOutcom
 use opendmd_core::filter::Filter;
 use opendmd_core::index::{write_index_with_overrides, IndexHeader, IndexedCatalog};
 use opendmd_core::overrides::{self, OverrideSet, Overrides, NO_META};
+use opendmd_core::scan::Budget;
 use opendmd_core::schedule::{self, Decision, Schedule};
 use opendmd_core::scheduler::{Mode, Scheduler};
 use std::fs::File;
@@ -1448,6 +1449,9 @@ fn main() -> Result<()> {
             None
         };
         probe::tick_due(due_in_us);
+        // The file's frame this tick is for (its successor's due time less
+        // this gives a fast source's frame delay, for `scan::Budget`).
+        let due_before = eng.frame_due();
         // Night mode "off": the panel is dark and nothing is decoded.
         let off = sched.off();
         let outcome = if off {
@@ -1501,18 +1505,24 @@ fn main() -> Result<()> {
                 let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), decode_us);
                 tick_us += us(look_start.elapsed()) + std::mem::take(&mut look_us);
                 // With `panel_sync` the blit may wait for the scan, as
-                // long as that leaves the next frame its slack.
+                // long as that leaves the next frame on time — or, for one
+                // of a fast source's frames on its schedule (an effect's
+                // 10 ms), a little past it (`scan::Budget`: landed on a
+                // refresh boundary, not torn).
+                let decoded = (playing.ordinal, playing.frame) != published;
                 let blit_start = Instant::now();
-                let budget_us = us(next_frame_at.saturating_sub(tick_now))
-                    .saturating_sub(us(tick_start.elapsed()) + SYNC_SLACK_US);
-                let blit_px = panel.blit_within(pic, budget_us);
+                let left_us = us(next_frame_at.saturating_sub(tick_now))
+                    .saturating_sub(us(tick_start.elapsed()));
+                let delay_us = due_before
+                    .filter(|_| decoded && !transitioning && !is_new)
+                    .map(|d| us(next_frame_at.saturating_sub(d)));
+                let blit_px = panel.blit_within(pic, Budget::frame(left_us, delay_us));
                 // The blit's own time: a wait for the scan (`panel_sync`,
                 // inside the frame's slack) is not part of it.
                 let blit_us = us(blit_start.elapsed()).saturating_sub(panel.last_wait_us());
                 let free = free_heap();
                 floor.note(free);
                 FRAME_SHOWN.store(true, Ordering::Relaxed);
-                let decoded = (playing.ordinal, playing.frame) != published;
                 // The loop's own lines (a GIF started, a heap low-water
                 // mark) are logged here: formatted into the log ring, not
                 // written to the UART (`logring`).
@@ -1605,6 +1615,19 @@ fn main() -> Result<()> {
                 match next_frame_at.checked_sub(now) {
                     Some(remaining) => glow_wait.map_or(remaining, |w| remaining.min(w)),
                     None if now <= deadline => config::CATCHUP_SLEEP,
+                    // Late only because the blit stretched its wait for
+                    // the scan on purpose (`scan::Budget`): not a miss
+                    // (`scan` `late`), and no catch-up sleep — the blit
+                    // slept through its wait, and the next frame has
+                    // most of a refresh to land on the next boundary.
+                    None if panel.last_stretched()
+                        && now.saturating_sub(Duration::from_micros(u64::from(
+                            panel.last_wait_us(),
+                        ))) <= deadline =>
+                    {
+                        panel.note_late();
+                        Duration::ZERO
+                    }
                     None => {
                         // Already late. This is the acceptance metric: count it
                         // and remember the worst, then yield a tick so the
@@ -1657,12 +1680,11 @@ fn main() -> Result<()> {
                     look_us += us(t.elapsed());
                 }
                 // (Synchronised, it may wait for the scan as long as that
-                // leaves the next frame its slack.)
-                let budget_us = eng
-                    .frame_due()
-                    .map_or(0, |d| us(d.saturating_sub(epoch.elapsed())))
-                    .saturating_sub(SYNC_SLACK_US);
-                glow_us += panel.glow_tick(looks.shown(eng.display(&canvas)), budget_us);
+                // leaves the next frame on time; never stretched.)
+                let budget = eng.frame_due().map_or(Budget::NONE, |d| {
+                    Budget::frame(us(d.saturating_sub(epoch.elapsed())), None)
+                });
+                glow_us += panel.glow_tick(looks.shown(eng.display(&canvas)), budget);
                 // A wake before the file's frame (a glow step's) sleeps no
                 // further than the frame: a flat 5 ms made it up to 5 ms
                 // late, which nothing counted.
@@ -2298,11 +2320,6 @@ fn retune(_: Option<&mut Engine>, _: &str, _: Duration) -> Option<Result<(), Pla
 /// A full push's time, roughly (µs): what an Idle frame of the formula
 /// look adds beside its render (a GIF frame due sooner draws it instead).
 const LOOK_BLIT_US: u64 = 2_000;
-
-/// What a refresh-synchronised blit leaves of the time to the next frame
-/// (`Panel::blit_within`): the blit itself (a full frame ~1.2-1.8 ms) and
-/// the loop's own work after it.
-const SYNC_SLACK_US: u32 = 3_000;
 
 /// Draw the formula look (or, with none, the plain picture) over what is on
 /// screen now, every pixel: after a new look, one taken off or a new tint,
