@@ -7,7 +7,7 @@
 // the app's. Everything a link brings is shown as text, never as HTML.
 
 import init from '../demo/pkg/opendmd_web.js';
-import { link, parse, sliderName, choices, picker, about, TIP, marks, sample } from '../demo/js/psikit.js';
+import { link, parse, sliderName, choices, picker, about, TIP, est, marks, sample } from '../demo/js/psikit.js';
 import { qr } from './qr.js';
 
 const $ = (id) => document.getElementById(id);
@@ -201,7 +201,7 @@ async function start() {
     }
     if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test($('s-file').value) || ['readme', 'index'].includes($('s-file').value)) out.push('The file name can be lower-case letters, digits and single hyphens.');
     if (!ok) out.push('The formula has to work first.');
-    else if (i[6] > 8000) out.push('This formula is too heavy for the panel: the gallery takes ones under 8 ms a frame.');
+    else if (est(i) > 8000) out.push('This formula is too heavy for the panel: the gallery takes ones under 8 ms a frame.');
     if (f.src.replace(/\r\n?/g, '\n').split('\n').some((l) => BAD.test(l.replace(/\t/g, '')))) out.push('The formula has an invisible or special character in it.');
     if (new TextEncoder().encode(file()).length > 4096) out.push('The file would be over 4 KB: the gallery takes shorter formulas.');
     return out;
