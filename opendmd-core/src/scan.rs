@@ -32,6 +32,93 @@ pub const PAIRS: usize = crate::canvas::HEIGHT / 2;
 /// deadlines are most of a refresh away — then paces the rest.
 pub const SPLIT_LEAD_US: u32 = 3_000;
 
+/// Kept from a frame's deadline for what follows a synchronised blit's
+/// last wait: the last pair's write (up to 450 µs tinted) and the loop's
+/// own work after the blit (a log line, the status), µs.
+pub const POST_US: u32 = 1_000;
+
+/// A stretch stops this far (µs) short of half the frame's delay: an
+/// effect tick later than half a frame re-times its schedule
+/// (`Engine::advance`).
+const STRETCH_GUARD_US: u32 = 1_000;
+
+/// How long a synchronised frame blit may wait for the scan, from when it
+/// starts.
+///
+/// [`fit_us`](Self::fit_us) keeps the next frame on time. A frame of a
+/// fast *live effect* (an `@fx:` file, whose schedule the engine keeps
+/// through a tick up to half a frame late, `Engine::advance`; its delay
+/// under two refreshes: the 10 ms effects on a ~8 ms refresh) may also
+/// *stretch* past it: a paced blit can need up to a refresh of waiting,
+/// which a 10 ms frame's own render leaves no room for, and written at
+/// once instead it tears. Stretched, the blit lands on the next refresh
+/// boundary and the next frame starts that much late (at most half a
+/// refresh, and 1 ms short of half its delay, so the effect keeps its
+/// schedule); the next frame, starting just after a boundary, then has most of a
+/// refresh to land on the one after, so the lateness does not carry on.
+/// Every frame is shown, each from a refresh boundary: what a 100 fps
+/// source on a 125 Hz panel can get. Such lateness is the sync's choice,
+/// not a deadline miss (the firmware counts it as `scan` `stretched` /
+/// `late`). GIFs never stretch, at any refresh: the engine times a GIF's
+/// next frame from a late tick, so a stretch would slow it down. The
+/// caller decides by passing `delay_us` only for an effect's frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Budget {
+    /// Wait at all (`false`: written at once, nothing counted).
+    pub sync: bool,
+    /// Until the next frame is due, µs.
+    pub left_us: u32,
+    /// The effect's frame delay when this blit is one of its frames on its
+    /// schedule (`None`: a GIF, a transition step, a file's first frame, a
+    /// glow step — no stretch).
+    pub delay_us: Option<u32>,
+}
+
+impl Budget {
+    /// No waiting at all: written at once.
+    pub const NONE: Budget = Budget {
+        sync: false,
+        left_us: 0,
+        delay_us: None,
+    };
+
+    /// A blit whose next frame is due in `left_us`.
+    pub fn frame(left_us: u32, delay_us: Option<u32>) -> Budget {
+        Budget {
+            sync: true,
+            left_us,
+            delay_us,
+        }
+    }
+
+    /// Waiting this long still leaves the next frame on time.
+    pub fn fit_us(&self) -> u32 {
+        self.left_us.saturating_sub(POST_US)
+    }
+
+    /// How far past the next frame's time the waits may run, for a
+    /// refresh of `cycle_us`: 0 unless this is an effect's frame shorter
+    /// than two refreshes.
+    pub fn stretch_us(&self, cycle_us: u32) -> u32 {
+        match self.delay_us {
+            Some(d) if d < 2 * cycle_us => {
+                (cycle_us / 2).min((d / 2).saturating_sub(STRETCH_GUARD_US))
+            }
+            _ => 0,
+        }
+    }
+
+    /// The longest the waits may run, stretch included (0: written at
+    /// once). A frame that starts already late (`left_us` 0, after a
+    /// stretched one) still has its stretch.
+    pub fn limit_us(&self, cycle_us: u32) -> u32 {
+        if !self.sync {
+            return 0;
+        }
+        (self.left_us.saturating_add(self.stretch_us(cycle_us))).saturating_sub(POST_US)
+    }
+}
+
 /// One scan reading: the position in the refresh (µs of scan) and the
 /// clock (µs, wrapping) when it was read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -431,6 +518,378 @@ mod tests {
             assert!(!jt.straddled && !jb.straddled, "from {p0}");
             assert_eq!(jb.refresh(), jt.refresh().map(|r| r + 1), "from {p0}");
             assert_eq!(jt.refresh(), Some(top.target()));
+        }
+    }
+
+    /// The main loop's frame path, simulated: a source with frames every
+    /// `delay` µs, each rendered in `render` µs (from `lo..hi`, a fixed
+    /// pseudo-random sequence), woken up to 1 ms late, blitted full frame
+    /// (74 µs a pair) with the waits honoured exactly, and the engine's
+    /// schedule: an effect's (`fx`) kept unless a tick is half a frame
+    /// late, a GIF's timed from a late tick.
+    #[derive(Default, Debug)]
+    struct LoopStats {
+        blits: u32,
+        torn: u32,
+        gave_up: u32,
+        stretched: u32,
+        /// Frames late only because the blit stretched (not misses).
+        late: u32,
+        misses: u32,
+        /// Needed wait vs what the budget allowed, for the old policy's
+        /// gave-up analysis: (needed, allowed) in µs.
+        short: Vec<(u32, u32)>,
+        /// Effect schedule re-timed (a tick over half a frame late).
+        retimed: u32,
+        /// Misses of frames that started late (after a late one).
+        inherited: u32,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Policy {
+        /// beta.11: next frame - now - 3 ms, never past it.
+        Slack3,
+        /// [`Budget`]: next frame - now - `POST_US`, stretched for fast
+        /// sources.
+        Stretch,
+        /// sync100-a: stretch `min(refresh / 2, delay / 2 - 1 ms)`, none
+        /// for a frame with no time left.
+        A,
+        /// sync100-b: stretch `min(refresh, delay / 2 - 0.5 ms)`, kept for
+        /// a frame with no time left.
+        B,
+        /// Exploration: limit fix, stretch `min(refresh / 2, delay / 2 -
+        /// 1 ms, delay - work - n)` (n = 0: no work term).
+        W(u32),
+    }
+
+    /// The device-like extras: post-blit work `200..post_hi` µs, and one
+    /// frame in ten rendering up to `tail` µs longer.
+    #[derive(Clone, Copy)]
+    struct Extra {
+        post_hi: u32,
+        tail: u32,
+    }
+    const PLAIN: Extra = Extra {
+        post_hi: 201,
+        tail: 0,
+    };
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_loop(
+        policy: Policy,
+        extra: Extra,
+        row: u32,
+        fx: bool,
+        delay: u32,
+        lo: u32,
+        hi: u32,
+        frames: u32,
+    ) -> LoopStats {
+        let cycle = row * PAIRS as u32;
+        let mut seed = 0x2545_F491u32;
+        let mut rnd = |n: u32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed % n.max(1)
+        };
+        let p0 = 1234;
+        let read = |t: u32| Reading {
+            pos: (p0 + t) % cycle,
+            at: t,
+        };
+        let mut st = LoopStats::default();
+        let mut due = 10_000u32;
+        let mut free = 0u32; // when the loop may start the next tick
+        for _ in 0..frames {
+            let start = free.max(due + rnd(1000));
+            let keep = fx && start.saturating_sub(due) < delay / 2;
+            st.retimed += u32::from(fx && !keep);
+            let next = if keep { due + delay } else { start + delay };
+            let tail = if rnd(10) == 0 { rnd(extra.tail) } else { 0 };
+            let mut t = start + lo + rnd(hi - lo) + tail;
+            let left = next.saturating_sub(t);
+            let (fit, limit) = match policy {
+                Policy::Slack3 => (left.saturating_sub(3_000), left.saturating_sub(3_000)),
+                Policy::Stretch => {
+                    let b = Budget::frame(left, fx.then_some(delay));
+                    (b.fit_us(), b.limit_us(cycle))
+                }
+                Policy::W(n) => {
+                    let work = t - start;
+                    let mut stretch = if fx && delay < 2 * cycle {
+                        (cycle / 2).min(delay / 2 - 1_000)
+                    } else {
+                        0
+                    };
+                    if n > 0 {
+                        stretch = stretch.min(delay.saturating_sub(work + n));
+                    }
+                    (
+                        left.saturating_sub(POST_US),
+                        (left + stretch).saturating_sub(POST_US),
+                    )
+                }
+                Policy::A | Policy::B => {
+                    let fit = left.saturating_sub(POST_US);
+                    let stretch = match fx && delay < 2 * cycle {
+                        false => 0,
+                        true if policy == Policy::A => (cycle / 2).min(delay / 2 - 1_000),
+                        true => cycle.min(delay / 2 - 500),
+                    };
+                    let limit = match policy {
+                        Policy::A if fit == 0 => 0,
+                        Policy::A => fit + stretch,
+                        _ => (left + stretch).saturating_sub(POST_US),
+                    };
+                    (fit, limit)
+                }
+            };
+            // What the pacer would need, unbounded.
+            let need = Pacer::plan(row, read(t), 0xFFFF, 300, 30, u32::MAX)
+                .map(|(_, took)| took)
+                .unwrap();
+            let plan = if limit > 0 {
+                Pacer::plan(row, read(t), 0xFFFF, 300, 30, limit)
+            } else {
+                None
+            };
+            let blit_start = t;
+            let mut judge = Judge::new(row);
+            let mut stretched = false;
+            match plan {
+                Some((pacer, took)) => {
+                    stretched = took > fit;
+                    for k in 0..PAIRS {
+                        t += pacer.wait(k, read(t));
+                        let b = read(t);
+                        t += 74;
+                        judge.pair(k, b, read(t));
+                    }
+                }
+                None => {
+                    st.gave_up += 1;
+                    st.short.push((need, limit));
+                    for k in 0..PAIRS {
+                        let b = read(t);
+                        t += 74;
+                        judge.pair(k, b, read(t));
+                    }
+                }
+            }
+            let waited = t - blit_start - 16 * 74;
+            // The loop's work after the blit: usually short, one in
+            // twenty up to `post_hi`.
+            t += if rnd(20) == 0 {
+                200 + rnd(extra.post_hi - 200)
+            } else {
+                200 + rnd(500)
+            };
+            st.blits += 1;
+            st.torn += u32::from(judge.straddled);
+            st.stretched += u32::from(stretched);
+            if t > next {
+                if stretched && t - waited <= next {
+                    // The blit slept through most of its wait: no
+                    // CATCHUP_SLEEP for it.
+                    st.late += 1;
+                    free = t;
+                } else {
+                    st.misses += 1;
+                    st.inherited += u32::from(start > due + 1_000);
+                    free = t + 1_000; // CATCHUP_SLEEP
+                }
+            } else {
+                free = t;
+            }
+            due = next;
+        }
+        st
+    }
+
+    /// Prints the 10 ms frame analysis (`cargo test -p opendmd-core
+    /// sync_at_100fps -- --nocapture`) and holds the new policy to it.
+    #[test]
+    fn sync_at_100fps_stretches_instead_of_tearing() {
+        // The measured refresh: 499 µs a pair (7.98 ms).
+        for (lo, hi) in [(500, 1500), (1000, 3500), (3000, 5000)] {
+            let old = run_loop(Policy::Slack3, PLAIN, 499, true, 10_000, lo, hi, 2000);
+            let new = run_loop(Policy::Stretch, PLAIN, 499, true, 10_000, lo, hi, 2000);
+            let mean = |v: &[(u32, u32)], f: fn(&(u32, u32)) -> u32| {
+                v.iter().map(f).sum::<u32>() / (v.len() as u32).max(1)
+            };
+            println!(
+                "render {lo}-{hi} us, 10 ms frames: slack 3 ms: {} gave up, {} torn, {} misses \
+                 (gave up: needed {} us on average, allowed {}); \
+                 stretch: {} gave up, {} torn, {} stretched, {} late by the stretch, {} misses, {} re-timed",
+                old.gave_up,
+                old.torn,
+                old.misses,
+                mean(&old.short, |s| s.0),
+                mean(&old.short, |s| s.1),
+                new.gave_up,
+                new.torn,
+                new.stretched,
+                new.late,
+                new.misses,
+                new.retimed,
+            );
+            assert!(old.gave_up > old.blits / 5, "the old policy gives up often");
+            if hi <= 3500 {
+                // The rig's effects (<= 3.5 ms p90): every frame on a
+                // refresh boundary, none a deadline miss.
+                assert_eq!((new.gave_up, new.torn, new.misses), (0, 0, 0), "{new:?}");
+                assert_eq!(new.retimed, 0);
+            } else {
+                // Heavier renders: a few frames that cannot land within
+                // the stretch are written at once.
+                assert!(new.torn * 20 < old.torn, "{new:?} vs {old:?}");
+                assert_eq!((new.misses, new.retimed), (0, 0), "{new:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn slow_sources_never_stretch() {
+        // GIF frames (>= 20 ms) and a 50 fps Formula: no stretch, and the
+        // smaller slack only makes more frames fit.
+        for delay in [20_000, 40_000, 100_000] {
+            assert_eq!(Budget::frame(delay, Some(delay)).stretch_us(7_984), 0);
+            let old = run_loop(Policy::Slack3, PLAIN, 499, false, delay, 2_000, 12_000, 500);
+            let new = run_loop(
+                Policy::Stretch,
+                PLAIN,
+                499,
+                false,
+                delay,
+                2_000,
+                12_000,
+                500,
+            );
+            assert_eq!(new.stretched, 0);
+            assert!(new.gave_up <= old.gave_up && new.torn <= old.torn);
+            assert_eq!(new.misses, old.misses, "{delay}");
+        }
+        // A transition step or a glow step (no delay given): no stretch.
+        assert_eq!(Budget::frame(5_000, None).limit_us(7_984), 4_000);
+        // 10 ms frames: short of half the delay (the effect's re-timing),
+        // at most half a refresh; none once the frame is two refreshes long.
+        assert_eq!(Budget::frame(5_000, Some(10_000)).stretch_us(7_984), 3_992);
+        assert_eq!(Budget::frame(5_000, Some(10_000)).stretch_us(16_000), 4_000);
+        assert_eq!(Budget::frame(5_000, Some(10_000)).stretch_us(5_500), 2_750);
+        assert_eq!(Budget::frame(5_000, Some(10_000)).stretch_us(5_000), 0);
+        // Nothing left: written at once, unless an effect's frame (late
+        // after a stretched one) still has its stretch.
+        assert_eq!(Budget::frame(900, None).limit_us(7_984), 0);
+        assert_eq!(Budget::frame(0, Some(10_000)).limit_us(7_984), 2_992);
+        assert_eq!(Budget::NONE.limit_us(7_984), 0);
+    }
+
+    /// A slow scan (`min_refresh` low: a 16-33 ms refresh): a 20 ms GIF
+    /// never stretches (it would slow down); a 10 ms effect, with a
+    /// refresh longer than its frame, stretches until the lateness reaches
+    /// the cap, then a frame is written at once (and may tear) and the
+    /// next starts on time again — never worse than the 3 ms slack.
+    #[test]
+    fn slow_refresh_gifs_never_stretch_and_effects_degrade_gracefully() {
+        for row in [1_000, 1_500, 2_062] {
+            let old = run_loop(
+                Policy::Slack3,
+                PLAIN,
+                row,
+                false,
+                20_000,
+                2_000,
+                8_000,
+                1000,
+            );
+            let new = run_loop(
+                Policy::Stretch,
+                PLAIN,
+                row,
+                false,
+                20_000,
+                2_000,
+                8_000,
+                1000,
+            );
+            println!(
+                "{} us refresh, 20 ms GIF: slack 3 ms {} gave up, {} torn, {} misses; \
+                 now {} gave up, {} torn, {} misses",
+                row * 16,
+                old.gave_up,
+                old.torn,
+                old.misses,
+                new.gave_up,
+                new.torn,
+                new.misses
+            );
+            assert_eq!((new.stretched, new.late), (0, 0));
+            assert!(new.gave_up <= old.gave_up && new.torn <= old.torn);
+            assert!(new.misses <= old.misses);
+            let old = run_loop(Policy::Slack3, PLAIN, row, true, 10_000, 1_000, 3_500, 1000);
+            let new = run_loop(
+                Policy::Stretch,
+                PLAIN,
+                row,
+                true,
+                10_000,
+                1_000,
+                3_500,
+                1000,
+            );
+            println!(
+                "{} us refresh, 10 ms effect: slack 3 ms {} gave up, {} torn, {} misses; \
+                 now {} gave up, {} torn, {} stretched, {} late, {} misses, {} re-timed",
+                row * 16,
+                old.gave_up,
+                old.torn,
+                old.misses,
+                new.gave_up,
+                new.torn,
+                new.stretched,
+                new.late,
+                new.misses,
+                new.retimed
+            );
+            assert!(new.torn <= old.torn);
+            assert!(new.misses <= old.misses + new.blits / 100);
+            assert_eq!(new.retimed, 0);
+        }
+    }
+
+    /// The policies side by side on a device-like heavy effect (`cargo
+    /// test -p opendmd-core policy_table -- --nocapture`): 10 ms frames,
+    /// renders `lo..hi` with a tail, post-blit work up to 1.5 ms.
+    #[test]
+    fn policy_table_heavy_effects() {
+        let device = Extra {
+            post_hi: 1_500,
+            tail: 2_000,
+        };
+        for (lo, hi) in [(1_000, 3_500), (3_500, 5_000), (4_000, 6_000)] {
+            for (name, policy) in [
+                ("old", Policy::Slack3),
+                ("a", Policy::A),
+                ("b", Policy::B),
+                ("c", Policy::Stretch),
+                ("w0", Policy::W(0)),
+                ("w2000", Policy::W(2_000)),
+                ("w2500", Policy::W(2_500)),
+                ("w3500", Policy::W(3_500)),
+                ("w4000", Policy::W(4_000)),
+            ] {
+                let st = run_loop(policy, device, 499, true, 10_000, lo, hi, 2000);
+                println!(
+                    "render {lo}-{hi} +tail, post <=1.5 ms, {name}: torn {}, gave up {}, \
+                     stretched {}, late {}, misses {} ({} after a late frame), re-timed {}",
+                    st.torn, st.gave_up, st.stretched, st.late, st.misses, st.inherited, st.retimed
+                );
+                if policy == Policy::Stretch {
+                    assert_eq!(st.retimed, 0, "{lo}-{hi}");
+                }
+            }
         }
     }
 
