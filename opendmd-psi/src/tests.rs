@@ -419,7 +419,7 @@ fn program_is_plain_data() {
     let mut p = Program::default();
     assert!(compile_into("gray(nope)", &mut p).is_err());
     assert_eq!(p, Program::default());
-    assert!(core::mem::size_of::<Program>() <= 1824);
+    assert!(core::mem::size_of::<Program>() <= 2832);
 }
 
 /// Names that became functions later stay usable as values in saved
@@ -452,8 +452,10 @@ fn compact_compiles_the_same() {
 
 #[test]
 fn sizes() {
-    // What the docs say (Program, the scratch at 128 and 64 lanes).
-    assert_eq!(core::mem::size_of::<Program>(), 1808);
+    // What the docs say (Program, the scratch at 128 and 64 lanes, the
+    // draw stage's canvas).
+    assert_eq!(core::mem::size_of::<Program>(), 2832);
+    assert_eq!(core::mem::size_of::<crate::Ink>(), 4096);
     assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192);
     assert_eq!(core::mem::size_of::<Scratch<64>>(), 4864);
 }

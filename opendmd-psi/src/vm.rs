@@ -16,6 +16,7 @@
 //! wherever it runs. Nothing here allocates; the working memory is the
 //! caller's [`Scratch`].
 
+use crate::draw::Ink;
 use crate::fixed::{self, ONE};
 use crate::program::*;
 use crate::tables::Tables;
@@ -325,10 +326,30 @@ pub fn render_with<const N: usize>(
 /// top), over `under` (the picture under the formula, the same layout: what
 /// `ur ug ub ul` read and what shows through its layers; `None`: black).
 /// The rest of `out` is left as it was. A row's bytes are the same whichever
-/// other rows are drawn with it.
+/// other rows are drawn with it. A program that draws
+/// ([`Program::draws`]) draws nothing here (`ink` reads 0): give it a
+/// canvas with [`render_rows_ink`].
 pub fn render_rows<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
+    inputs: &Inputs,
+    tables: &Tables,
+    under: Option<&[u8]>,
+    rows: u32,
+    out: &mut [u8],
+) {
+    render_rows_ink::<N>(prog, scratch, None, inputs, tables, under, rows, out)
+}
+
+/// [`render_rows`] with the draw stage's canvas: a program that draws
+/// ([`Program::draws`]) draws its frame's lines into `ink` first (cleared;
+/// once each call, whichever rows it renders), and its `ink` reads them
+/// back. `None`, or a program that does not draw: `ink` reads 0.
+#[allow(clippy::too_many_arguments)]
+pub fn render_rows_ink<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    ink: Option<&mut Ink>,
     inputs: &Inputs,
     tables: &Tables,
     under: Option<&[u8]>,
@@ -349,14 +370,22 @@ pub fn render_rows<const N: usize>(
     sc[S_A as usize] = inputs.a;
     sc[S_B as usize] = inputs.b;
     sc[S_C as usize] = inputs.c;
-    let (fe, re, pe) = (
+    let (fe, de, re, pe) = (
         prog.frame_end as usize,
+        prog.draw_end as usize,
         prog.row_end as usize,
         prog.pixel_end as usize,
     );
     for op in &prog.ops[..fe] {
-        scalar(sc, op, tables);
+        scalar(sc, op, tables, &prog.tables);
     }
+    let ink: Option<&Ink> = match ink {
+        Some(k) if prog.draws() && rows != 0 => {
+            crate::draw::run(prog, sc, tables, k);
+            Some(k)
+        }
+        _ => None,
+    };
     let uses_i = prog.uses & USES_I != 0;
     let backdrop = prog.uses & BACKDROP != 0;
     for row in 0..H {
@@ -367,8 +396,8 @@ pub fn render_rows<const N: usize>(
         let py = ((H - 1 - row) as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
-        for op in &prog.ops[fe..re] {
-            scalar(&mut scratch.sc, op, tables);
+        for op in &prog.ops[de..re] {
+            scalar(&mut scratch.sc, op, tables, &prog.tables);
         }
         let span = row * W * 3..(row + 1) * W * 3;
         let row_bytes = &mut out[span.clone()];
@@ -381,6 +410,7 @@ pub fn render_rows<const N: usize>(
             }
             let lane = base * 3..(base + N) * 3;
             let ul = under_row.map(|u| &u[lane.clone()]);
+            let il = ink.map(|k| &k.0[row * W + base..row * W + base + N]);
             let px = row_bytes[lane].as_chunks_mut::<3>().0;
             if backdrop {
                 match ul {
@@ -392,7 +422,7 @@ pub fn render_rows<const N: usize>(
                 if code::is_colour(op.code) {
                     colour_step(scratch, op, base, tables, px);
                 } else {
-                    lane_op(scratch, op, base, tables, ul);
+                    lane_op(scratch, op, base, tables, &prog.tables, ul, il);
                 }
             }
         }
@@ -400,10 +430,14 @@ pub fn render_rows<const N: usize>(
 }
 
 #[inline(always)]
-fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables) {
+pub(crate) fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) {
     // Operands of scalar steps are always scalar slots (< 128).
     let g = |v: u8| sc[(v & 0x7f) as usize];
-    let v = eval(op.code, g(op.a), g(op.b), g(op.c), Some(t));
+    let v = if op.code == code::TAB {
+        tab(tabs, op.b, op.c, g(op.a))
+    } else {
+        eval(op.code, g(op.a), g(op.b), g(op.c), Some(t))
+    };
     sc[(op.d & 0x7f) as usize] = v;
 }
 
@@ -427,7 +461,9 @@ fn lane_op<const N: usize>(
     op: &Op,
     base: usize,
     t: &Tables,
+    tabs: &[i32; MAX_TABLE],
     under: Option<&[u8]>,
+    ink: Option<&[u8]>,
 ) {
     use code::*;
     let (a, b, c) = (s.arg(op.a, base), s.arg(op.b, base), s.arg(op.c, base));
@@ -479,6 +515,13 @@ fn lane_op<const N: usize>(
                 run1(d, L(p), |k| pick(sc, op.b, op.c, k))
             }
         }
+        // (k is always a lane here: a table read of a scalar is a scalar
+        // step.)
+        TAB => {
+            if let Arg::Lane(p) = a {
+                run1(d, L(p), |k| tab(tabs, op.b, op.c, k))
+            }
+        }
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
         MIX => tern!(fast3, d, a, b, c, fixed::mix),
@@ -489,6 +532,7 @@ fn lane_op<const N: usize>(
         // monomorphised copies would be ~1 KB more of wasm.
         DIGIT..=DIGIT_B => glyph_lane(d, [a, b, c], &glyphs(t, op.code)),
         U_R..=U_L => load_under(d, under, op.code - U_R),
+        INK => load_ink(d, ink),
         _ => {}
     }
 }
@@ -542,6 +586,19 @@ fn load_under<const N: usize>(d: &mut [i32; N], under: Option<&[u8]>, ch: u8) {
                 *o = fixed::byte(fixed::luma(p[0], p[1], p[2]));
             }
         }
+    }
+}
+
+/// The draw stage's canvas under the lane, 0..1; 0 without one.
+#[inline(never)]
+fn load_ink<const N: usize>(d: &mut [i32; N], ink: Option<&[u8]>) {
+    match ink {
+        Some(k) => {
+            for (o, &b) in d.iter_mut().zip(k) {
+                *o = fixed::byte(b);
+            }
+        }
+        None => d.fill(0),
     }
 }
 

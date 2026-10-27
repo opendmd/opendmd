@@ -19,7 +19,7 @@
 
 use opendmd_psi::golden::fnv;
 use opendmd_psi::{
-    compile, q16, render_rows, Inputs, Scratch, H, MAX_OPS, MAX_SCALARS, OWN, REGS, W,
+    compile, q16, render_rows_ink, Ink, Inputs, Scratch, H, MAX_OPS, MAX_SCALARS, OWN, REGS, W,
 };
 use std::io::Read;
 
@@ -125,6 +125,13 @@ fn main() {
         prog.regs(),
         prog.values()
     );
+    if prog.draws() {
+        println!(
+            "draws: {} steps in draw {{ }}, {} lines and dots a frame",
+            prog.draw_steps(),
+            prog.primitives()
+        );
+    }
     println!(
         "loop {} s; reads {}",
         prog.loop_ms() as f64 / 1000.0,
@@ -165,6 +172,7 @@ fn main() {
     };
     let under = (over || prog.over()).then(sample);
     let mut scratch = Scratch::<128>::new();
+    let mut ink = Ink::boxed();
     let mut shots = Vec::new();
     for &(ms, (hh, mm, ss)) in &times {
         let inp = Inputs {
@@ -177,9 +185,10 @@ fn main() {
             c: q(sl[2]),
         };
         let mut frame = vec![0u8; W * H * 3];
-        render_rows(
+        render_rows_ink(
             &prog,
             &mut scratch,
+            Some(&mut ink),
             &inp,
             &OWN,
             under.as_deref(),
