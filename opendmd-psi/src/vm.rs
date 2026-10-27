@@ -150,7 +150,7 @@ enum Arg {
 // reloaded constants from flash and spilled to the stack every element.
 
 #[inline(never)]
-fn run1_any<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
+fn run1<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
     for o in d.iter_mut() {
         *o = f(a.at(0));
         a.step(1);
@@ -158,7 +158,7 @@ fn run1_any<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) 
 }
 
 #[inline(never)]
-fn run2_any<const N: usize, A: Src, B: Src>(
+fn run2<const N: usize, A: Src, B: Src>(
     d: &mut [i32; N],
     mut a: A,
     mut b: B,
@@ -172,7 +172,7 @@ fn run2_any<const N: usize, A: Src, B: Src>(
 }
 
 #[inline(never)]
-fn run3_any<const N: usize, A: Src, B: Src, C: Src>(
+fn run3<const N: usize, A: Src, B: Src, C: Src>(
     d: &mut [i32; N],
     mut a: A,
     mut b: B,
@@ -216,282 +216,152 @@ fn noise_flat_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 2], z: i32) {
     }
 }
 
-// The cheap loops (and the colour writes) in two places on the ESP32: in
-// IRAM, where the hot ones run (no flash cache to miss in or to share with
-// the other core and the decoder), and in flash, for psi-probe's before
-// and after (the `ab` feature). Elsewhere one copy.
-macro_rules! leaves {
-    ($($attr:meta),*) => {
-        #[inline(never)]
-        $(#[$attr])*
-        pub(super) fn fast1<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
-            for o in d.as_chunks_mut::<4>().0 {
-                // Every load before any store: `d` may be an operand's lane as far
-                // as the compiler knows, so loads written after a store stay after
-                // it, each stalling on its own (the ESP32's load-use delay).
-                let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
-                *o = [f(x[0]), f(x[1]), f(x[2]), f(x[3])];
-                a.step(4);
-            }
-        }
-
-        #[inline(never)]
-        $(#[$attr])*
-        pub(super) fn fast2<const N: usize, A: Src, B: Src>(
-            d: &mut [i32; N],
-            mut a: A,
-            mut b: B,
-            f: impl Fn(i32, i32) -> i32,
-        ) {
-            for o in d.as_chunks_mut::<4>().0 {
-                let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
-                let y = [b.at(0), b.at(1), b.at(2), b.at(3)];
-                *o = [f(x[0], y[0]), f(x[1], y[1]), f(x[2], y[2]), f(x[3], y[3])];
-                a.step(4);
-                b.step(4);
-            }
-        }
-
-        #[inline(never)]
-        $(#[$attr])*
-        pub(super) fn fast3<const N: usize, A: Src, B: Src, C: Src>(
-            d: &mut [i32; N],
-            mut a: A,
-            mut b: B,
-            mut c: C,
-            f: impl Fn(i32, i32, i32) -> i32,
-        ) {
-            for o in d.as_chunks_mut::<4>().0 {
-                let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
-                let y = [b.at(0), b.at(1), b.at(2), b.at(3)];
-                let z = [c.at(0), c.at(1), c.at(2), c.at(3)];
-                *o = [
-                    f(x[0], y[0], z[0]),
-                    f(x[1], y[1], z[1]),
-                    f(x[2], y[2], z[2]),
-                    f(x[3], y[3], z[3]),
-                ];
-                a.step(4);
-                b.step(4);
-                c.step(4);
-            }
-        }
-
-        #[inline(never)]
-        $(#[$attr])*
-        pub(super) fn out3<A: Src, B: Src, C: Src>(
-            px: &mut [[u8; 3]],
-            mut a: A,
-            mut b: B,
-            mut c: C,
-            f: impl Fn(i32, i32, i32) -> [u8; 3],
-        ) {
-            for o in px.iter_mut() {
-                *o = f(a.at(0), b.at(0), c.at(0));
-                a.step(1);
-                b.step(1);
-                c.step(1);
-            }
-        }
-
-        /// `pal(P, k) * s` along the lane, its two operands read with a stride (0:
-        /// a value for the lane): one loop for the four kinds of operand.
-        #[inline(never)]
-        $(#[$attr])*
-        pub(super) fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32], shift: u8) {
-            // Both lanes (the usual: Tunnel's, Rotozoom floor's): plain
-            // pointers (not in wasm: the same bytes, a smaller download).
-            #[cfg(not(target_arch = "wasm32"))]
-            if let [Arg::Lane(k), Arg::Lane(s)] = args {
-                return pal_lit_lanes(px, k, s, p, shift);
-            }
-            let mut one = [0i32; 2];
-            let mut ptr = [core::ptr::null::<i32>(); 2];
-            let mut stride = [0usize; 2];
-            for k in 0..2 {
-                match args[k] {
-                    Arg::Lane(q) => (ptr[k], stride[k]) = (q, 1),
-                    Arg::Sc(v) => one[k] = v,
-                }
-            }
-            for k in 0..2 {
-                if stride[k] == 0 {
-                    ptr[k] = &one[k];
-                }
-            }
-            // The last entry and scale and their colour: neighbours mostly share
-            // both (Tunnel ~80 %, Rotozoom floor ~90 % of pixels), and the scaling
-            // is three multiplies a channel.
-            let (mut last_i, mut last_s) = (usize::MAX, 0);
-            let mut rgb = [0u8; 3];
-            for o in px.iter_mut() {
-                // SAFETY: each pointer is a lane of at least `px.len()` values read
-                // once per element (stride 1), or one value (stride 0), alive for
-                // the call.
-                let (k, s) = unsafe { (*ptr[0], *ptr[1]) };
-                // (`>> shift` is exactly `fixed::mul(s, 2^-shift)`.)
-                let (i, s) = (fixed::pal_index(k), s >> shift);
-                if i != last_i || s != last_s {
-                    (last_i, last_s) = (i, s);
-                    rgb = fixed::scale_rgb(p[i], s);
-                }
-                *o = rgb;
-                for j in 0..2 {
-                    ptr[j] = ptr[j].wrapping_add(stride[j]);
-                }
-            }
-        }
-
-        /// [`pal_lit_lane`] of two lanes.
-        #[cfg(not(target_arch = "wasm32"))]
-        #[inline(never)]
-        $(#[$attr])*
-        pub(super) fn pal_lit_lanes(px: &mut [[u8; 3]], k: *const i32, s: *const i32, p: &[[u8; 3]; 32], shift: u8) {
-            let (mut last_i, mut last_s) = (usize::MAX, 0);
-            let mut rgb = [0u8; 3];
-            for (j, o) in px.iter_mut().enumerate() {
-                // SAFETY: `k` and `s` are lanes of at least `px.len()` values,
-                // alive for the call.
-                let (k, s) = unsafe { (*k.add(j), *s.add(j)) };
-                let (i, s) = (fixed::pal_index(k), s >> shift);
-                if i != last_i || s != last_s {
-                    (last_i, last_s) = (i, s);
-                    rgb = fixed::scale_rgb(p[i], s);
-                }
-                *o = rgb;
-            }
-        }
-
-        #[inline(never)]
-        $(#[$attr])*
-        pub(super) fn out1<A: Src>(px: &mut [[u8; 3]], mut a: A, f: impl Fn(i32) -> [u8; 3]) {
-            for o in px.iter_mut() {
-                *o = f(a.at(0));
-                a.step(1);
-            }
-        }
-
-    };
-}
-
-mod flash {
-    use super::*;
-    leaves!();
-}
-
-#[cfg(target_os = "espidf")]
-mod iram {
-    use super::*;
-    leaves!(link_section = ".iram1.psi");
-}
-
-#[cfg(not(target_os = "espidf"))]
-use flash as iram;
-
-// Each loop from IRAM (`I`) or from flash; `run*` (whose work dwarfs a
-// cache miss on entry) from flash either way.
-
-#[inline(always)]
-fn fast1<const I: bool, const N: usize, A: Src, F: Fn(i32) -> i32>(d: &mut [i32; N], a: A, f: F) {
-    if I {
-        iram::fast1(d, a, f)
-    } else {
-        flash::fast1(d, a, f)
+#[inline(never)]
+fn fast1<const N: usize, A: Src>(d: &mut [i32; N], mut a: A, f: impl Fn(i32) -> i32) {
+    for o in d.as_chunks_mut::<4>().0 {
+        // Every load before any store: `d` may be an operand's lane as far
+        // as the compiler knows, so loads written after a store stay after
+        // it, each stalling on its own (the ESP32's load-use delay).
+        let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
+        *o = [f(x[0]), f(x[1]), f(x[2]), f(x[3])];
+        a.step(4);
     }
 }
 
-#[inline(always)]
-fn fast2<const I: bool, const N: usize, A: Src, B: Src, F: Fn(i32, i32) -> i32>(
+#[inline(never)]
+fn fast2<const N: usize, A: Src, B: Src>(
     d: &mut [i32; N],
-    a: A,
-    b: B,
-    f: F,
+    mut a: A,
+    mut b: B,
+    f: impl Fn(i32, i32) -> i32,
 ) {
-    if I {
-        iram::fast2(d, a, b, f)
-    } else {
-        flash::fast2(d, a, b, f)
+    for o in d.as_chunks_mut::<4>().0 {
+        let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
+        let y = [b.at(0), b.at(1), b.at(2), b.at(3)];
+        *o = [f(x[0], y[0]), f(x[1], y[1]), f(x[2], y[2]), f(x[3], y[3])];
+        a.step(4);
+        b.step(4);
     }
 }
 
-#[inline(always)]
-fn fast3<const I: bool, const N: usize, A: Src, B: Src, C: Src, F: Fn(i32, i32, i32) -> i32>(
+#[inline(never)]
+fn fast3<const N: usize, A: Src, B: Src, C: Src>(
     d: &mut [i32; N],
-    a: A,
-    b: B,
-    c: C,
-    f: F,
+    mut a: A,
+    mut b: B,
+    mut c: C,
+    f: impl Fn(i32, i32, i32) -> i32,
 ) {
-    if I {
-        iram::fast3(d, a, b, c, f)
-    } else {
-        flash::fast3(d, a, b, c, f)
+    for o in d.as_chunks_mut::<4>().0 {
+        let x = [a.at(0), a.at(1), a.at(2), a.at(3)];
+        let y = [b.at(0), b.at(1), b.at(2), b.at(3)];
+        let z = [c.at(0), c.at(1), c.at(2), c.at(3)];
+        *o = [
+            f(x[0], y[0], z[0]),
+            f(x[1], y[1], z[1]),
+            f(x[2], y[2], z[2]),
+            f(x[3], y[3], z[3]),
+        ];
+        a.step(4);
+        b.step(4);
+        c.step(4);
     }
 }
 
-#[inline(always)]
-fn out1<const I: bool, A: Src, F: Fn(i32) -> [u8; 3]>(px: &mut [[u8; 3]], a: A, f: F) {
-    if I {
-        iram::out1(px, a, f)
-    } else {
-        flash::out1(px, a, f)
-    }
-}
-
-#[inline(always)]
-fn out3<const I: bool, A: Src, B: Src, C: Src, F: Fn(i32, i32, i32) -> [u8; 3]>(
+#[inline(never)]
+fn out3<A: Src, B: Src, C: Src>(
     px: &mut [[u8; 3]],
-    a: A,
-    b: B,
-    c: C,
-    f: F,
+    mut a: A,
+    mut b: B,
+    mut c: C,
+    f: impl Fn(i32, i32, i32) -> [u8; 3],
 ) {
-    if I {
-        iram::out3(px, a, b, c, f)
-    } else {
-        flash::out3(px, a, b, c, f)
+    for o in px.iter_mut() {
+        *o = f(a.at(0), b.at(0), c.at(0));
+        a.step(1);
+        b.step(1);
+        c.step(1);
     }
 }
 
-#[inline(always)]
-fn pal_lit_lane<const I: bool>(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32], shift: u8) {
-    if I {
-        iram::pal_lit_lane(px, args, p, shift)
-    } else {
-        flash::pal_lit_lane(px, args, p, shift)
+/// `pal(P, k) * s` along the lane, its two operands read with a stride (0:
+/// a value for the lane): one loop for the four kinds of operand.
+#[inline(never)]
+fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32], shift: u8) {
+    // Both lanes (the usual: Tunnel's, Rotozoom floor's): plain
+    // pointers (not in wasm: the same bytes, a smaller download).
+    #[cfg(not(target_arch = "wasm32"))]
+    if let [Arg::Lane(k), Arg::Lane(s)] = args {
+        return pal_lit_lanes(px, k, s, p, shift);
+    }
+    let mut one = [0i32; 2];
+    let mut ptr = [core::ptr::null::<i32>(); 2];
+    let mut stride = [0usize; 2];
+    for k in 0..2 {
+        match args[k] {
+            Arg::Lane(q) => (ptr[k], stride[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..2 {
+        if stride[k] == 0 {
+            ptr[k] = &one[k];
+        }
+    }
+    // The last entry and scale and their colour: neighbours mostly share
+    // both (Tunnel ~80 %, Rotozoom floor ~90 % of pixels), and the scaling
+    // is three multiplies a channel.
+    let (mut last_i, mut last_s) = (usize::MAX, 0);
+    let mut rgb = [0u8; 3];
+    for o in px.iter_mut() {
+        // SAFETY: each pointer is a lane of at least `px.len()` values read
+        // once per element (stride 1), or one value (stride 0), alive for
+        // the call.
+        let (k, s) = unsafe { (*ptr[0], *ptr[1]) };
+        // (`>> shift` is exactly `fixed::mul(s, 2^-shift)`.)
+        let (i, s) = (fixed::pal_index(k), s >> shift);
+        if i != last_i || s != last_s {
+            (last_i, last_s) = (i, s);
+            rgb = fixed::scale_rgb(p[i], s);
+        }
+        *o = rgb;
+        for j in 0..2 {
+            ptr[j] = ptr[j].wrapping_add(stride[j]);
+        }
     }
 }
 
-#[inline(always)]
-fn run1<const I: bool, const N: usize, A: Src, F: Fn(i32) -> i32>(d: &mut [i32; N], a: A, f: F) {
-    run1_any(d, a, f)
+/// [`pal_lit_lane`] of two lanes.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+fn pal_lit_lanes(px: &mut [[u8; 3]], k: *const i32, s: *const i32, p: &[[u8; 3]; 32], shift: u8) {
+    let (mut last_i, mut last_s) = (usize::MAX, 0);
+    let mut rgb = [0u8; 3];
+    for (j, o) in px.iter_mut().enumerate() {
+        // SAFETY: `k` and `s` are lanes of at least `px.len()` values,
+        // alive for the call.
+        let (k, s) = unsafe { (*k.add(j), *s.add(j)) };
+        let (i, s) = (fixed::pal_index(k), s >> shift);
+        if i != last_i || s != last_s {
+            (last_i, last_s) = (i, s);
+            rgb = fixed::scale_rgb(p[i], s);
+        }
+        *o = rgb;
+    }
 }
 
-#[inline(always)]
-fn run2<const I: bool, const N: usize, A: Src, B: Src, F: Fn(i32, i32) -> i32>(
-    d: &mut [i32; N],
-    a: A,
-    b: B,
-    f: F,
-) {
-    run2_any(d, a, b, f)
-}
-
-#[inline(always)]
-fn run3<const I: bool, const N: usize, A: Src, B: Src, C: Src, F: Fn(i32, i32, i32) -> i32>(
-    d: &mut [i32; N],
-    a: A,
-    b: B,
-    c: C,
-    f: F,
-) {
-    run3_any(d, a, b, c, f)
+#[inline(never)]
+fn out1<A: Src>(px: &mut [[u8; 3]], mut a: A, f: impl Fn(i32) -> [u8; 3]) {
+    for o in px.iter_mut() {
+        *o = f(a.at(0));
+        a.step(1);
+    }
 }
 
 macro_rules! un {
     ($run:ident, $d:expr, $a:expr, $f:expr) => {
         match $a {
-            Arg::Lane(p) => $run::<I, N, _, _>($d, L(p), $f),
+            Arg::Lane(p) => $run($d, L(p), $f),
             Arg::Sc(v) => $d.fill(($f)(v)),
         }
     };
@@ -500,9 +370,9 @@ macro_rules! un {
 macro_rules! bin {
     ($run:ident, $d:expr, $a:expr, $b:expr, $f:expr) => {
         match ($a, $b) {
-            (Arg::Lane(p), Arg::Lane(q)) => $run::<I, N, _, _, _>($d, L(p), L(q), $f),
-            (Arg::Lane(p), Arg::Sc(v)) => $run::<I, N, _, _, _>($d, L(p), S(v), $f),
-            (Arg::Sc(u), Arg::Lane(q)) => $run::<I, N, _, _, _>($d, S(u), L(q), $f),
+            (Arg::Lane(p), Arg::Lane(q)) => $run($d, L(p), L(q), $f),
+            (Arg::Lane(p), Arg::Sc(v)) => $run($d, L(p), S(v), $f),
+            (Arg::Sc(u), Arg::Lane(q)) => $run($d, S(u), L(q), $f),
             (Arg::Sc(u), Arg::Sc(v)) => $d.fill(($f)(u, v)),
         }
     };
@@ -511,27 +381,13 @@ macro_rules! bin {
 macro_rules! tern {
     ($run:ident, $d:expr, $a:expr, $b:expr, $c:expr, $f:expr) => {
         match ($a, $b, $c) {
-            (Arg::Lane(p), Arg::Lane(q), Arg::Lane(r)) => {
-                $run::<I, N, _, _, _, _>($d, L(p), L(q), L(r), $f)
-            }
-            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(w)) => {
-                $run::<I, N, _, _, _, _>($d, L(p), L(q), S(w), $f)
-            }
-            (Arg::Lane(p), Arg::Sc(v), Arg::Lane(r)) => {
-                $run::<I, N, _, _, _, _>($d, L(p), S(v), L(r), $f)
-            }
-            (Arg::Lane(p), Arg::Sc(v), Arg::Sc(w)) => {
-                $run::<I, N, _, _, _, _>($d, L(p), S(v), S(w), $f)
-            }
-            (Arg::Sc(u), Arg::Lane(q), Arg::Lane(r)) => {
-                $run::<I, N, _, _, _, _>($d, S(u), L(q), L(r), $f)
-            }
-            (Arg::Sc(u), Arg::Lane(q), Arg::Sc(w)) => {
-                $run::<I, N, _, _, _, _>($d, S(u), L(q), S(w), $f)
-            }
-            (Arg::Sc(u), Arg::Sc(v), Arg::Lane(r)) => {
-                $run::<I, N, _, _, _, _>($d, S(u), S(v), L(r), $f)
-            }
+            (Arg::Lane(p), Arg::Lane(q), Arg::Lane(r)) => $run($d, L(p), L(q), L(r), $f),
+            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(w)) => $run($d, L(p), L(q), S(w), $f),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Lane(r)) => $run($d, L(p), S(v), L(r), $f),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Sc(w)) => $run($d, L(p), S(v), S(w), $f),
+            (Arg::Sc(u), Arg::Lane(q), Arg::Lane(r)) => $run($d, S(u), L(q), L(r), $f),
+            (Arg::Sc(u), Arg::Lane(q), Arg::Sc(w)) => $run($d, S(u), L(q), S(w), $f),
+            (Arg::Sc(u), Arg::Sc(v), Arg::Lane(r)) => $run($d, S(u), S(v), L(r), $f),
             (Arg::Sc(u), Arg::Sc(v), Arg::Sc(w)) => $d.fill(($f)(u, v, w)),
         }
     };
@@ -540,27 +396,13 @@ macro_rules! tern {
 macro_rules! outt {
     ($px:expr, $a:expr, $b:expr, $c:expr, $f:expr) => {
         match ($a, $b, $c) {
-            (Arg::Lane(p), Arg::Lane(q), Arg::Lane(r)) => {
-                out3::<I, _, _, _, _>($px, L(p), L(q), L(r), $f)
-            }
-            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(w)) => {
-                out3::<I, _, _, _, _>($px, L(p), L(q), S(w), $f)
-            }
-            (Arg::Lane(p), Arg::Sc(v), Arg::Lane(r)) => {
-                out3::<I, _, _, _, _>($px, L(p), S(v), L(r), $f)
-            }
-            (Arg::Lane(p), Arg::Sc(v), Arg::Sc(w)) => {
-                out3::<I, _, _, _, _>($px, L(p), S(v), S(w), $f)
-            }
-            (Arg::Sc(u), Arg::Lane(q), Arg::Lane(r)) => {
-                out3::<I, _, _, _, _>($px, S(u), L(q), L(r), $f)
-            }
-            (Arg::Sc(u), Arg::Lane(q), Arg::Sc(w)) => {
-                out3::<I, _, _, _, _>($px, S(u), L(q), S(w), $f)
-            }
-            (Arg::Sc(u), Arg::Sc(v), Arg::Lane(r)) => {
-                out3::<I, _, _, _, _>($px, S(u), S(v), L(r), $f)
-            }
+            (Arg::Lane(p), Arg::Lane(q), Arg::Lane(r)) => out3($px, L(p), L(q), L(r), $f),
+            (Arg::Lane(p), Arg::Lane(q), Arg::Sc(w)) => out3($px, L(p), L(q), S(w), $f),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Lane(r)) => out3($px, L(p), S(v), L(r), $f),
+            (Arg::Lane(p), Arg::Sc(v), Arg::Sc(w)) => out3($px, L(p), S(v), S(w), $f),
+            (Arg::Sc(u), Arg::Lane(q), Arg::Lane(r)) => out3($px, S(u), L(q), L(r), $f),
+            (Arg::Sc(u), Arg::Lane(q), Arg::Sc(w)) => out3($px, S(u), L(q), S(w), $f),
+            (Arg::Sc(u), Arg::Sc(v), Arg::Lane(r)) => out3($px, S(u), S(v), L(r), $f),
             (Arg::Sc(u), Arg::Sc(v), Arg::Sc(w)) => $px.fill(($f)(u, v, w)),
         }
     };
@@ -649,25 +491,13 @@ pub fn render_rows_still<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
-    #[cfg(all(target_os = "espidf", feature = "ab"))]
-    if LOOPS_IN_FLASH.load(core::sync::atomic::Ordering::Relaxed) {
-        return frame::<N, false>(prog, scratch, ink, still, inputs, tables, under, rows, out);
-    }
-    frame::<N, { cfg!(target_os = "espidf") }>(
-        prog, scratch, ink, still, inputs, tables, under, rows, out,
-    )
+    frame::<N>(prog, scratch, ink, still, inputs, tables, under, rows, out)
 }
 
-/// psi-probe's before and after (the `ab` feature, on the ESP32): the
-/// cheap loops run from flash instead of IRAM while this is set.
-#[cfg(all(target_os = "espidf", feature = "ab"))]
-#[doc(hidden)]
-pub static LOOPS_IN_FLASH: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
-/// [`render_rows_still`] with its loops from IRAM (`I`) or flash.
+/// [`render_rows_still`]'s body.
 #[allow(clippy::too_many_arguments)]
-fn frame<const N: usize, const I: bool>(
+#[inline(always)]
+fn frame<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
@@ -723,6 +553,8 @@ fn frame<const N: usize, const I: bool>(
         }
         _ => Cache::Off,
     };
+    #[cfg(feature = "stats")]
+    stats::note(prog, scratch, &cache, out, inputs);
     // The narrowed steps as they are only for inputs in the ranges they
     // were narrowed for (else their checked forms: the same bytes). In wasm
     // (the web app's previews) always their checked forms: the same bytes
@@ -795,9 +627,9 @@ fn frame<const N: usize, const I: bool>(
                     continue;
                 }
                 if code::is_colour(op.code) {
-                    colour_step::<N, I>(scratch, &alias, op, base, tables, px);
+                    colour_step(scratch, &alias, op, base, tables, px);
                 } else {
-                    lane_op::<N, I>(
+                    lane_op(
                         scratch,
                         &mut alias,
                         op,
@@ -887,7 +719,7 @@ impl<const N: usize> Scratch<N> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn lane_op<const N: usize, const I: bool>(
+fn lane_op<const N: usize>(
     s: &mut Scratch<N>,
     al: &mut Alias,
     op: &Op,
@@ -967,14 +799,14 @@ fn lane_op<const N: usize, const I: bool>(
         PICK => {
             if let Arg::Lane(p) = a {
                 let sc = &s.sc;
-                run1::<I, N, _, _>(d, L(p), |k| pick(sc, op.b, op.c, k))
+                run1(d, L(p), |k| pick(sc, op.b, op.c, k))
             }
         }
         // (k is always a lane here: a table read of a scalar is a scalar
         // step.)
         TAB => {
             if let Arg::Lane(p) = a {
-                run1::<I, N, _, _>(d, L(p), |k| tab(tabs, op.b, op.c, k))
+                run1(d, L(p), |k| tab(tabs, op.b, op.c, k))
             }
         }
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
@@ -1064,7 +896,7 @@ fn load_ink<const N: usize>(d: &mut [i32; N], ink: Option<&[u8]>) {
 
 /// A colour step: the bottom layer's colour written over the lane, or a
 /// layer's colour (into a row on the stack) blended onto it.
-fn colour_step<const N: usize, const I: bool>(
+fn colour_step<const N: usize>(
     s: &Scratch<N>,
     al: &Alias,
     op: &Op,
@@ -1074,7 +906,7 @@ fn colour_step<const N: usize, const I: bool>(
 ) {
     let (kind, blend) = code::colour_parts(op.code);
     let Some(mode) = blend else {
-        colour::<N, I>(s, al, op, base, t, px);
+        colour(s, al, op, base, t, px);
         return;
     };
     let (v, n) = code::operands(op);
@@ -1085,7 +917,7 @@ fn colour_step<const N: usize, const I: bool>(
     };
     let mut row = [[0u8; 3]; W];
     let src = &mut row[..px.len()];
-    colour::<N, I>(s, al, &plain, base, t, src);
+    colour(s, al, &plain, base, t, src);
     // A layer that covers everything (the usual: no coverage given) is one
     // loop per blend, so the blend is not a branch per channel (an indirect
     // jump on the ESP32); one with a coverage, a lane or a value read with
@@ -1136,7 +968,7 @@ fn blend_cover(px: &mut [[u8; 3]], src: &[[u8; 3]], mut k: *const i32, stride: u
     }
 }
 
-fn colour<const N: usize, const I: bool>(
+fn colour<const N: usize>(
     s: &Scratch<N>,
     al: &Alias,
     op: &Op,
@@ -1157,7 +989,7 @@ fn colour<const N: usize, const I: bool>(
             fixed::chan(b)
         ]),
         OUT_HSV => outt!(px, a, b, c, fixed::hsv),
-        OUT_PAL if op.d & PAL_SCALED != 0 => pal_lit_lane::<I>(
+        OUT_PAL if op.d & PAL_SCALED != 0 => pal_lit_lane(
             px,
             [a, c],
             t.palettes[((op.d & PAL_MASK) as usize).min(4)],
@@ -1166,12 +998,12 @@ fn colour<const N: usize, const I: bool>(
         OUT_PAL => {
             let p = t.palettes[(op.d as usize).min(4)];
             match a {
-                Arg::Lane(q) => out1::<I, _, _>(px, L(q), |k| fixed::pal(p, k)),
+                Arg::Lane(q) => out1(px, L(q), |k| fixed::pal(p, k)),
                 Arg::Sc(v) => px.fill(fixed::pal(p, v)),
             }
         }
         _ => match a {
-            Arg::Lane(q) => out1::<I, _, _>(px, L(q), |k| {
+            Arg::Lane(q) => out1(px, L(q), |k| {
                 let v = fixed::chan(k);
                 [v, v, v]
             }),
@@ -1185,3 +1017,41 @@ fn colour<const N: usize, const I: bool>(
 
 /// `ONE` for callers that build inputs by hand.
 pub const Q16_ONE: i32 = ONE;
+
+/// psi-probe's view of the frames drawn (the `stats` feature): how many
+/// ran the narrowed steps and how many their checked forms, and where the
+/// last one's memory was (the working memory, the picture, a still cache's
+/// first lane), to tell placement from code on the device.
+#[cfg(feature = "stats")]
+#[doc(hidden)]
+pub mod stats {
+    use super::*;
+    use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed};
+
+    pub static NARROWED: AtomicU32 = AtomicU32::new(0);
+    pub static CHECKED: AtomicU32 = AtomicU32::new(0);
+    pub static SCRATCH: AtomicUsize = AtomicUsize::new(0);
+    pub static OUT: AtomicUsize = AtomicUsize::new(0);
+    pub static STILL: AtomicUsize = AtomicUsize::new(0);
+
+    pub(super) fn note<const N: usize>(
+        prog: &Program,
+        s: &Scratch<N>,
+        cache: &Cache,
+        out: &[u8],
+        inputs: &Inputs,
+    ) {
+        if crate::range::inputs_in_range(prog, inputs) {
+            NARROWED.fetch_add(1, Relaxed);
+        } else {
+            CHECKED.fetch_add(1, Relaxed);
+        }
+        SCRATCH.store(s as *const _ as usize, Relaxed);
+        OUT.store(out.as_ptr() as usize, Relaxed);
+        let still = match cache {
+            Cache::Use(st) => st.lanes[0].as_deref().map_or(0, |l| l.0.as_ptr() as usize),
+            _ => 0,
+        };
+        STILL.store(still, Relaxed);
+    }
+}

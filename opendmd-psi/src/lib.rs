@@ -43,8 +43,8 @@ pub use still::{Still, StillLane, STILL_LANES};
 pub use tables::{Glyphs, Tables, ATAN};
 #[cfg(feature = "tables")]
 pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
-#[cfg(all(target_os = "espidf", feature = "ab"))]
-pub use vm::LOOPS_IN_FLASH;
+#[cfg(feature = "stats")]
+pub use vm::stats;
 pub use vm::{
     q16, render_rows, render_rows_ink, render_rows_still, render_with, Inputs, Scratch, Q16_ONE,
 };

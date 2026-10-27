@@ -201,7 +201,7 @@ fn variants(
     let t = fx_psi::tables();
     let (mut ok, mut bad) = (0, 0);
     let mut plain = zeroed::<psi::Program>();
-    if psi::compile_layout(src, &mut plain, false).is_ok() {
+    if compile(src, &mut plain, false, true).is_ok() {
         psi::render_with::<128>(&plain, s, &psi::golden::inputs(ms), &t, out);
         let got = psi::golden::fnv(out);
         if got == want {
@@ -211,7 +211,7 @@ fn variants(
             say!(error, "psi-probe: golden {name} (plain) at {ms} ms: {got:#018x}, host/wasm {want:#018x}");
         }
     }
-    let _ = psi::compile_into(src, prog);
+    let _ = compile(src, prog, true, true);
     if prog.still_lanes() > 0 {
         let mut st = psi::Still::new();
         if !st.take(prog) {
@@ -250,6 +250,64 @@ fn lanes_still(prog: &psi::Program, loop_ms: u32, out: &mut [u8]) -> Option<(u32
     }))
 }
 
+/// The examples as effects on the real path (`Fx::parse`, the canvas taken
+/// at open, `Fx::frame`, the still cache taken on the first frame): with
+/// the cache, then with the gate refusing it. `again` names a second run.
+fn effects(list: &[(&str, &str, &str)], again: &str, canvas: &mut Canvas) {
+    for &(name, src, opts) in list {
+        // (Into a zeroed box: a `Program` by value is 2.8 KB of the main
+        // task's stack.)
+        let mut prog = zeroed::<psi::Program>();
+        let (est, est_still) = if compile(src, &mut prog, true, true).is_ok() {
+            (prog.esp32_us(), prog.esp32_us_still())
+        } else {
+            (0, 0)
+        };
+        for gate in ["cache", "no cache"] {
+            fx_psi::set_still_gate(if gate == "cache" { None } else { Some(|_| false) });
+            let h0 = heap();
+            let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
+                say!(error, "psi-probe: example {name}: did not open");
+                continue;
+            };
+            let h1 = heap();
+            let delay = fx.delay();
+            let n = fx.loop_frames();
+            // The first frame (it takes and keeps the cache), untimed.
+            fx.frame(Duration::ZERO, canvas);
+            let h2 = heap();
+            let held = fx_psi::still_held();
+            let (n0, c0) = (psi::stats::NARROWED.load(Ordering::Relaxed), psi::stats::CHECKED.load(Ordering::Relaxed));
+            let (e50, e90, emax) = timed(|k| {
+                fx.frame(delay * (k % n), canvas);
+            });
+            drop(fx);
+            let (n1, c1) = (psi::stats::NARROWED.load(Ordering::Relaxed), psi::stats::CHECKED.load(Ordering::Relaxed));
+            say!(info,
+                "psi-probe: example {name}{again} ({gate}): frames narrowed {} checked {}, scratch {:#x} picture {:#x} still lane {:#x}",
+                n1 - n0,
+                c1 - c0,
+                psi::stats::SCRATCH.load(Ordering::Relaxed),
+                psi::stats::OUT.load(Ordering::Relaxed),
+                psi::stats::STILL.load(Ordering::Relaxed)
+            );
+            say!(info,
+                "psi-probe: example {name}{again} as an effect ({gate}): p50 {e50} p90 {e90} max {emax} us a frame, est {est} us ({est_still} with the cache), heap {h0} -> {h1} B at open ({} B for the effect and its canvas), {h2} B after its first frame (still cache {held} B), {} B back after",
+                h0.saturating_sub(h1),
+                heap()
+            );
+        }
+    }
+}
+
+/// A probe row's compile on the formula stack, as the player compiles
+/// (`psi_stack`): the probe's own rows never deepen the main task's stack.
+fn compile(src: &str, prog: &mut psi::Program, runs: bool, narrow: bool) -> Result<psi::Info, psi::Error> {
+    crate::psi_stack::run(|| psi::compile_with(src, prog, runs, narrow)).unwrap_or_else(|| {
+        Err(psi::Error { start: 0, end: 0, msg: String::from("no formula stack") })
+    })
+}
+
 /// A VM frame's p50 / p90 for `prog`: with a still cache when it has
 /// values for one (and the heap a block for it), else every step (with the
 /// draw stage's canvas).
@@ -282,9 +340,7 @@ fn speed(out: &mut [u8]) {
     ] {
         let mut fast = zeroed::<psi::Program>();
         let mut checked = zeroed::<psi::Program>();
-        if psi::compile_with(src, &mut fast, true, true).is_err()
-            || psi::compile_with(src, &mut checked, true, false).is_err()
-        {
+        if compile(src, &mut fast, true, true).is_err() || compile(src, &mut checked, true, false).is_err() {
             say!(error, "psi-probe: speed {name}: does not compile");
             continue;
         }
@@ -294,40 +350,34 @@ fn speed(out: &mut [u8]) {
         let mut s = zeroed::<psi::Scratch<128>>();
         s.reset();
         let mut ink = psi::Ink::boxed();
-        let mut frame_hash = |p: &psi::Program, ms: u32, flash: bool, out: &mut [u8]| {
-            psi::LOOPS_IN_FLASH.store(flash, Ordering::Relaxed);
+        let mut frame_hash = |p: &psi::Program, ms: u32, out: &mut [u8]| {
             psi::render_rows_ink::<128>(p, &mut s, Some(&mut ink), &psi::golden::inputs(ms), &t, None, u32::MAX, out);
-            psi::LOOPS_IN_FLASH.store(false, Ordering::Relaxed);
             psi::golden::fnv(out)
         };
         for ms in [0, lp / 3, lp * 2 / 3, lp.saturating_sub(20)] {
-            let a = frame_hash(&fast, ms, false, out);
-            let b = frame_hash(&checked, ms, false, out);
-            let c = frame_hash(&fast, ms, true, out);
-            for h in [b, c] {
-                if h == a {
-                    same += 1;
-                } else {
-                    differ += 1;
-                    say!(error, "psi-probe: speed {name} at {ms} ms: {h:#018x} against {a:#018x} (narrowed, IRAM)");
-                }
+            let a = frame_hash(&fast, ms, out);
+            let b = frame_hash(&checked, ms, out);
+            if a == b {
+                same += 1;
+            } else {
+                differ += 1;
+                say!(error, "psi-probe: speed {name} at {ms} ms: {b:#018x} checked against {a:#018x} narrowed");
             }
         }
         drop(s);
         drop(ink);
         let (f50, f90, how) = vm_frame(&fast, out);
+        let (sc, still) = (psi::stats::SCRATCH.load(Ordering::Relaxed), psi::stats::STILL.load(Ordering::Relaxed));
         let (c50, c90, _) = vm_frame(&checked, out);
-        psi::LOOPS_IN_FLASH.store(true, Ordering::Relaxed);
-        let (l50, l90, _) = vm_frame(&fast, out);
-        psi::LOOPS_IN_FLASH.store(false, Ordering::Relaxed);
         say!(info,
-            "psi-probe: speed {name:<15} ({how}): narrowed+IRAM p50 {f50} p90 {f90} | checked+IRAM p50 {c50} p90 {c90} | narrowed+flash p50 {l50} p90 {l90} us a frame; est {} us ({} checked)",
+            "psi-probe: speed {name:<15} ({how}): narrowed p50 {f50} p90 {f90} | checked p50 {c50} p90 {c90} us a frame; est {} us ({} checked); scratch {sc:#x} picture {:#x} still lane {still:#x}",
             fast.esp32_us_still(),
-            checked.esp32_us_still()
+            checked.esp32_us_still(),
+            out.as_ptr() as usize
         );
     }
     say!(info,
-        "psi-probe: speed frames: {same} the same narrowed or checked, IRAM or flash, {differ} differ{}",
+        "psi-probe: speed frames: {same} the same narrowed or checked, {differ} differ{}",
         if differ == 0 { " (bit-identical)" } else { "" }
     );
 }
@@ -472,57 +522,34 @@ pub fn run(root: &str) {
     // 16 KB block was left for it). The real path: `Fx::parse`, the canvas taken
     // at open, `Fx::frame`, the still cache taken on the first frame): with
     // the cache, then with the gate refusing it (every step every frame).
-    for (name, src, opts) in [
-        ("Starfield", STARFIELD_EX, "a=0.5"),
-        ("Wireframe cube", CUBE_EX, "a=0.5"),
-        ("Tunnel", TUNNEL_EX, ""),
-        ("Rotozoom", ROTOZOOM_EX, ""),
-        ("Rotozoom floor", ROTOZOOM_FLOOR_EX, ""),
-    ] {
-        // (Into a zeroed box: a `Program` by value is 2.8 KB of the main
-        // task's stack.)
-        let mut prog = zeroed::<psi::Program>();
-        let (est, est_still) = if psi::compile_into(src, &mut prog).is_ok() {
-            (prog.esp32_us(), prog.esp32_us_still())
-        } else {
-            (0, 0)
-        };
-        for gate in ["cache", "no cache"] {
-            fx_psi::set_still_gate(if gate == "cache" { None } else { Some(|_| false) });
-            let h0 = heap();
-            let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
-                say!(error, "psi-probe: example {name}: did not open");
-                continue;
-            };
-            let h1 = heap();
-            let delay = fx.delay();
-            let n = fx.loop_frames();
-            // The first frame (it takes and keeps the cache), untimed.
-            fx.frame(Duration::ZERO, &mut canvas);
-            let h2 = heap();
-            let held = fx_psi::still_held();
-            let (e50, e90, emax) = timed(|k| {
-                fx.frame(delay * (k % n), &mut canvas);
-            });
-            drop(fx);
-            say!(info,
-                "psi-probe: example {name} as an effect ({gate}): p50 {e50} p90 {e90} max {emax} us a frame, est {est} us ({est_still} with the cache), heap {h0} -> {h1} B at open ({} B for the effect and its canvas), {h2} B after its first frame (still cache {held} B), {} B back after",
-                h0.saturating_sub(h1),
-                heap()
-            );
-        }
-    }
+    effects(
+        &[
+            ("Starfield", STARFIELD_EX, "a=0.5"),
+            ("Wireframe cube", CUBE_EX, "a=0.5"),
+            ("Tunnel", TUNNEL_EX, ""),
+            ("Rotozoom", ROTOZOOM_EX, ""),
+            ("Rotozoom floor", ROTOZOOM_FLOOR_EX, ""),
+        ],
+        "",
+        &mut canvas,
+    );
+    say!(info, "psi-probe: main stack {} B unused after the examples as effects (the play path; compiles on the formula stack)", stack_unused());
     // The firmware's own gate again.
     fx_psi::set_still_gate(Some(crate::still_gate));
 
     speed(&mut out);
+    say!(info, "psi-probe: main stack {} B unused after the speed rows", stack_unused());
+    // Tunnel's effect again, now the heap has moved on: placement against
+    // code (speed-a: 4,860 us as an effect, 3,709 VM-direct).
+    effects(&[("Tunnel", TUNNEL_EX, "")], " again", &mut canvas);
+    fx_psi::set_still_gate(Some(crate::still_gate));
 
 
     for (name, src) in psi::sketches::ALL {
         // Compile (into a zeroed program, as the effect does).
         let mut prog = zeroed::<psi::Program>();
         let t0 = Instant::now();
-        let r = psi::compile_into(src, &mut prog);
+        let r = compile(src, &mut prog, true, true);
         let compile_us = t0.elapsed().as_micros();
         if let Err(e) = r {
             say!(error, "psi-probe: {name}: {}", e.msg);
@@ -568,7 +595,7 @@ pub fn run(root: &str) {
     let mut prog = zeroed::<psi::Program>();
     let (mut ok, mut bad) = (0, 0);
     for &(name, src, ms, want) in psi::golden::FRAMES {
-        if psi::compile_into(src, &mut prog).is_err() {
+        if compile(src, &mut prog, true, true).is_err() {
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile");
             continue;
@@ -594,7 +621,7 @@ pub fn run(root: &str) {
     let mut under = vec![0u8; psi::W * psi::H * 3];
     psi::golden::picture(&mut under);
     for &(name, src, ms, over, want) in psi::golden::OVER {
-        if psi::compile_into(src, &mut prog).is_err() {
+        if compile(src, &mut prog, true, true).is_err() {
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile");
             continue;
@@ -615,7 +642,7 @@ pub fn run(root: &str) {
     // Formulas that draw (the draw stage's canvas, lines, loops, tables).
     let mut ink = psi::Ink::boxed();
     for &(name, src, ms, over, want) in psi::golden::DRAWN {
-        if psi::compile_into(src, &mut prog).is_err() {
+        if compile(src, &mut prog, true, true).is_err() {
             bad += 1;
             say!(error, "psi-probe: golden {name}: does not compile");
             continue;
@@ -717,7 +744,7 @@ pub fn run(root: &str) {
         // (Laid out without the column and still runs: a step's cost on
         // every pixel, as the table was measured; the checked steps as
         // then, but for psi-speed's rows.)
-        if psi::compile_with(src, &mut prog, false, narrow).is_err() {
+        if compile(src, &mut prog, false, narrow).is_err() {
             say!(error, "psi-probe: step {what}: does not compile");
             continue;
         }
@@ -746,7 +773,7 @@ pub fn run(root: &str) {
     ];
     let mut base = 0u32;
     for (what, src, n) in DRAW_STEPS {
-        if psi::compile_layout(src, &mut prog, false).is_err() {
+        if compile(src, &mut prog, false, true).is_err() {
             say!(error, "psi-probe: step {what}: does not compile");
             continue;
         }
@@ -772,7 +799,7 @@ pub fn run(root: &str) {
     ];
     for (what, src) in RUNS {
         let mut plain = zeroed::<psi::Program>();
-        if psi::compile_layout(src, &mut plain, false).is_err() || psi::compile_into(src, &mut prog).is_err() {
+        if compile(src, &mut plain, false, true).is_err() || compile(src, &mut prog, true, true).is_err() {
             say!(error, "psi-probe: run {what}: does not compile");
             continue;
         }
@@ -822,7 +849,7 @@ pub fn run(root: &str) {
             );
             continue;
         };
-        if psi::compile_into(&look, &mut prog).is_err() {
+        if compile(&look, &mut prog, true, true).is_err() {
             say!(
                 error,
                 "psi-probe: as look {name} {blend} {k}: does not compile"
