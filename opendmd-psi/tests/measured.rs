@@ -56,3 +56,23 @@ pub const LOOKS: &[(&str, &str, &str, u8, u32)] = &[
     ("Old photo", "-- a: how much (0: the GIF as it is)\nmix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), a)", "screen", 50, 9122),
     ("Old TV", "loop 4\ndx = (x - 0.5)*1.6; dy = (y - 0.5)*1.2\nlines = py % 2 ? 1 : 0.6\nroll = 0.85 + 0.15*max(0, tri(y/2 + t/4))\ncorners = clamp(1.5 - (dx*dx + dy*dy)*1.6, 0, 1)\nlayer multiply { gray(lines * roll * corners) }", "over", 100, 3958),
 ];
+// The draw stage (psi-probe 2026-10-27, 1.0.0-beta.11-drawprobe-a): VM p50
+// µs a frame, as STEPS.
+pub const DRAW: &[(&str, &str, u32)] = &[
+    ("draw base (1 dot off)", "draw { dot(-1, -1, t) }\ngray(ink)", 931),
+    ("draw loop step: 1024 dots off", "draw { for k < 1024 { dot(-1, -1, t) } }\ngray(ink)", 1694),
+    ("draw loop step: +add", "draw { for k < 1024 { dot(-1, -1, k + t) } }\ngray(ink)", 2124),
+    ("draw loop step: +hash", "draw { for k < 1024 { dot(-1, -1, hash(k, t)) } }\ngray(ink)", 2235),
+    ("draw dot on panel x1024", "draw { for k < 1024 { dot(k % 128, 5 + t) } }\ngray(ink)", 2295),
+    ("draw line 12 x256", "draw { for k < 256 { line(10, 5, 21, 5 + t) } }\ngray(ink)", 2257),
+    ("draw line 100 x64", "draw { for k < 64 { line(10, 5, 109, 5 + t) } }\ngray(ink)", 3041),
+];
+// Formulas that draw played as effects (the real path, `Fx::frame`, slider
+// a = 0.5): p50 µs a frame, compared with the estimate as it is (it includes
+// the real paths' ×1.15).
+pub const EFFECTS: &[(&str, &str, u32)] = &[
+    ("Starfield", STARFIELD, 4410),
+    ("Wireframe cube", CUBE, 2678),
+];
+pub const STARFIELD: &str = "loop 2.4\n-- Starfield: 192 stars flying at you, a pass through the field a loop,\n-- each a streak from where it was a moment ago. a: streak length\nframe { back = 8 + a*240 }\ndraw {\n  for k < 192 {\n    sx = (hash(k, 7) - 0.5)*4096; sy = (hash(k, 3) - 0.5)*1024  -- where it is, across and up\n    z = frac(hash(k, 11) - t/2.4)*4096        -- how far: 0 near, 4096 far\n    s = 2/(z/16 + 4); st = 2/(min(z + back, 4095)/16 + 4)  -- perspective, now and before\n    lit = 1 - z/4096                          -- fading in from the dark\n    line(64 + sx*st, 16 + sy*st, 64 + sx*s, 16 + sy*s, lit*0.2, lit)\n  }\n}\npal(ice, ink)";
+pub const CUBE: &str = "loop 4.8\n-- Wireframe cube: turning about two axes and swinging across; the near\n-- edges brighter. a: size. The colour is the last line's #40c0ff\ntable V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1\ntable E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7\nframe {\n  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)\n  size = 20 + a*28; mid = 64 + sa*40\n}\ndraw {\n  for e < 12 {\n    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners\n    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size\n    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size\n    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned\n    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb\n    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),\n         clamp(0.6 - zb/90, 0.16, 1), clamp(0.6 - zd/90, 0.16, 1))\n  }\n}\n#40c0ff * ink";

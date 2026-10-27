@@ -4,7 +4,7 @@
 //! test: the formula is a static.
 
 use super::*;
-use opendmd_psi::golden::{fnv, inputs, picture, FRAMES, OVER};
+use opendmd_psi::golden::{fnv, inputs, picture, DRAWN, FRAMES, OVER};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -68,6 +68,19 @@ fn formulas() {
         }
         let got = fnv(unsafe { core::slice::from_raw_parts(pixels(), W * H * 3) });
         assert_eq!(got, want, "{name} at {ms} ms");
+    }
+    // Formulas that draw, with the module's canvas.
+    for &(name, src, ms, over, want) in DRAWN {
+        assert!(compile(src), "{name}: {}", error());
+        assert!(info()[8] > 0 && info()[9] > 0, "{name}: draws");
+        let i = inputs(ms);
+        if over {
+            frame_over(ms, i.hour, i.minute, i.second, i.a, i.b, i.c);
+        } else {
+            frame(ms, i.hour, i.minute, i.second, i.a, i.b, i.c);
+        }
+        let got = fnv(unsafe { core::slice::from_raw_parts(pixels(), W * H * 3) });
+        assert_eq!(got, want, "{name} (drawn) at {ms} ms");
     }
     assert!(compile(
         "layer multiply { gray(ul) }\nlayer add { gray(x, 0.5) }"
@@ -149,7 +162,7 @@ fn the_examples_are_light_enough_for_the_panel() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn every_example_pasted_in_as_a_part_draws_the_same() {
-    use opendmd_psi::{golden, render_rows, Scratch};
+    use opendmd_psi::{golden, render_rows_ink, Scratch};
     let json = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../opendmd-web/www/formulas.json"
@@ -160,9 +173,10 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
     let draw = |src: &str, ms: u32| {
         let p = opendmd_psi::compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
         let mut out = vec![0u8; W * H * 3];
-        render_rows::<128>(
+        render_rows_ink::<128>(
             &p,
             &mut Scratch::new(),
+            Some(&mut opendmd_psi::Ink::boxed()),
             &golden::inputs(ms),
             &OWN,
             Some(&under),

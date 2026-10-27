@@ -173,14 +173,28 @@ FONT = {"fonts/silkscreen.woff2"}
 # (opendmd_psi::look: one implementation, tested with golden frames, not a
 # second copy in JS), +1.4 KB gz; a small raise under the owner's standing
 # OK for budget lines while the firmware stays comfortable.
-PSI_WASM_GZ_BUDGET = 45 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look
+# 52 KB for the draw stage (2026-10-27, branch psi-draw, docs/psi-drawing-design.md
+# phase 1: `draw { }`, `for`, `table`, `line`, `dot`, `ink`): 45,589 ->
+# 51,892 B gz, +6.3 KB (the design guessed +3-4): the parser's new
+# statements and their sentences (~2.5 KB raw of text), the emitter's fourth
+# section, the draw-stage interpreter and its integer rasteriser, the cost
+# model's draw part; +2 KB raw of zero `.data` (two Programs in the module's
+# static state, each 1 KB of tables bigger) that gzips to almost nothing.
+# Loaded only when Formulas opens; raised under the owner's standing OK for
+# budget lines while the firmware stays comfortable (it does: see
+# docs/research/size-budget.md).
+PSI_WASM_GZ_BUDGET = 52 * 1024  # 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
 # colours and the values about the middle, the editor's colour swatches;
 # +192 B gz, the rewritten examples 292 B shorter but only 22 B gz): a small
 # raise, approved (the owner lets budget lines move with the firmware still comfortable).
-FORMULAS_GZ_BUDGET = 22 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo
+# 24 KB for the draw stage (2026-10-27, branch psi-draw): the cheat sheet's
+# Drawing section, the highlighter's words, "Draws N lines and dots a frame",
+# and two drawing examples (Starfield, now drawn, and Wireframe cube):
+# 22,076 -> ~23.1 KB gz; raised under the same standing OK.
+FORMULAS_GZ_BUDGET = 24 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}

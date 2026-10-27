@@ -16,7 +16,7 @@
 //! After the transition, so a look stays put while one file dissolves into
 //! the next.
 //!
-//! **Heap.** The program (1.8 KB) is held while a formula is set; its
+//! **Heap.** The program (2.8 KB) is held while a formula is set; its
 //! buffers (the VM's 8 KB and its 12 KB picture) only while the main loop
 //! sees `TAKE_HEAP` free when it draws (asked again a second after a
 //! refusal, at each file, and between frames once the heap is back), and
@@ -272,7 +272,8 @@ mod with_psi {
                     self.refused = Some(Instant::now());
                     log::info!(
                         "formula look: no room for its {} B ({} B free); the picture goes up as it is",
-                        FormulaLook::BUFFER_BYTES,
+                        self.active_ref()
+                            .map_or(FormulaLook::BUFFER_BYTES, FormulaLook::buffer_bytes),
                         free_heap()
                     );
                 }

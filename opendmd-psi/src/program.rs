@@ -96,7 +96,11 @@ pub(crate) mod code {
     // constant slots holding the slots of the choices (all per frame or per
     // row); 0 where floor(k) is outside 0..c ([`super::pick`]). One operand.
     pub const PICK: u8 = 44;
-    pub const LAST_UN: u8 = 44;
+    // `NAME[k]`, a table's entry: `d = tables[b + floor(k)]` where floor(k)
+    // is 0..=c (the table's length less one), else 0 ([`super::tab`]). Any
+    // level; one operand.
+    pub const TAB: u8 = 45;
+    pub const LAST_UN: u8 = 45;
     // ternary
     pub const SELECT: u8 = 64;
     pub const CLAMP: u8 = 65;
@@ -119,6 +123,19 @@ pub(crate) mod code {
     pub const U_G: u8 = 81;
     pub const U_B: u8 = 82;
     pub const U_L: u8 = 83;
+    // nullary, per pixel: what the draw stage put at the pixel, 0..1
+    pub const INK: u8 = 84;
+    // The draw stage (`ops[frame_end..draw_end]`, scalar slots only):
+    // `FOR d, a, b`: counter `d` = 0, the count in slot `a`, its END at
+    // index `b`; `END a, b, c`: counter `a` += 1 and, while it is under the
+    // count in `b`, on at index `c` (the FOR's next); `LINE_FROM a, b, c`:
+    // the next line's start (x, y) and ink; `LINE_TO a, b, c`: its end and
+    // ink, drawn; `DOT a, b, c`: a point (x, y) of ink c.
+    pub const FOR: u8 = 88;
+    pub const END: u8 = 89;
+    pub const LINE_FROM: u8 = 90;
+    pub const LINE_TO: u8 = 91;
+    pub const DOT: u8 = 92;
     // the colour of the bottom layer when nothing shows through it: written
     // over the pixels, as v0's last line
     pub const OUT_RGB: u8 = 96;
@@ -160,7 +177,10 @@ pub(crate) mod code {
             0..=LAST_BIN => 2,
             32..=LAST_UN => 1,
             64..=LAST_TERN => 3,
-            U_R..=U_L => 0,
+            U_R..=INK => 0,
+            FOR => 1,
+            END => 2,
+            LINE_FROM..=DOT => 3,
             _ => match colour_parts(c).0 {
                 OUT_RGB | OUT_HSV => 3,
                 _ => 1,
@@ -192,9 +212,9 @@ pub(crate) mod code {
             "add", "sub", "mul", "div", "mod", "mask", "lt", "le", "gt", "ge", "eq", "ne", "and",
             "or", "min", "max", "step", "atan2", "hash", "len", "bit",
         ];
-        const U: [&str; 13] = [
+        const U: [&str; 14] = [
             "neg", "not", "abs", "floor", "frac", "sin", "cos", "tri", "saw", "sqr", "sqrt",
-            "recip", "pick",
+            "recip", "pick", "tab",
         ];
         const T: [&str; 10] = [
             "select",
@@ -212,7 +232,8 @@ pub(crate) mod code {
             0..=LAST_BIN => N[c as usize],
             32..=LAST_UN => U[(c - 32) as usize],
             64..=LAST_TERN => T[(c - 64) as usize],
-            U_R..=U_L => ["ur", "ug", "ub", "ul"][(c - U_R) as usize],
+            U_R..=INK => ["ur", "ug", "ub", "ul", "ink"][(c - U_R) as usize],
+            FOR..=DOT => ["for", "end", "line_from", "line_to", "dot"][(c - FOR) as usize],
             _ => ["rgb", "hsv", "pal", "gray"][((colour_parts(c).0 - OUT_RGB) & 3) as usize],
         }
     }
@@ -236,6 +257,11 @@ pub(crate) const USES_I: u8 = 1;
 pub(crate) const BACKDROP: u8 = 2;
 /// The program reads what is under it (`ur ug ub ul`).
 pub(crate) const UNDER: u8 = 4;
+/// The program reads the draw stage's canvas (`ink`).
+pub(crate) const INKED: u8 = 8;
+
+/// `table` entries a formula may hold in all.
+pub const MAX_TABLE: usize = 256;
 
 /// A compiled formula. Plain data (every field an integer or an array of
 /// them), so an all-zero value is valid (an empty program) and
@@ -246,28 +272,34 @@ pub struct Program {
     pub(crate) ops: [Op; MAX_OPS],
     /// The scalar slots' values at the start of a frame: the constants.
     pub(crate) init: [i32; MAX_SCALARS],
-    /// `ops[..frame_end]` run once a frame, `..row_end` once a row,
-    /// `..pixel_end` per pixel: values, and a colour step per layer
-    /// (bottom to top; the last step is always one).
+    /// `ops[..frame_end]` run once a frame, `..draw_end` once a frame
+    /// after them (the draw stage: loops and lines into the canvas, the
+    /// one section with jumps), `..row_end` once a row, `..pixel_end` per
+    /// pixel: values, and a colour step per layer (bottom to top; the last
+    /// step is always one).
     pub(crate) frame_end: u16,
+    pub(crate) draw_end: u16,
     pub(crate) row_end: u16,
     pub(crate) pixel_end: u16,
     pub(crate) n_scalars: u8,
     pub(crate) regs: u8,
     pub(crate) uses: u8,
-    pub(crate) _pad: [u8; 3],
+    pub(crate) _pad: u8,
     /// The loop, ms (`loop N`, default 8 s).
     pub(crate) loop_ms: u32,
+    /// The `table` constants (Q16.16), each table's entries in a row.
+    pub(crate) tables: [i32; MAX_TABLE],
 }
 
-const _: () = assert!(core::mem::size_of::<Program>() <= 1824);
+const _: () = assert!(core::mem::size_of::<Program>() <= 2832);
 
 impl core::fmt::Debug for Program {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let (fr, row, px) = self.counts();
+        let dr = self.draw_steps();
         write!(
             f,
-            "Program {{ steps: {} ({fr}/{row}/{px}), regs: {}, loop_ms: {} }}",
+            "Program {{ steps: {} ({fr}/{dr}/{row}/{px}), regs: {}, loop_ms: {} }}",
             self.len(),
             self.regs,
             self.loop_ms
@@ -281,13 +313,15 @@ impl Default for Program {
             ops: [Op::default(); MAX_OPS],
             init: [0; MAX_SCALARS],
             frame_end: 0,
+            draw_end: 0,
             row_end: 0,
             pixel_end: 0,
             n_scalars: S_FIRST_FREE,
             regs: 0,
             uses: 0,
-            _pad: [0; 3],
+            _pad: 0,
             loop_ms: 8000,
+            tables: [0; MAX_TABLE],
         }
     }
 }
@@ -304,13 +338,68 @@ impl Program {
     }
 
     /// Steps run once a frame, once a row, and per pixel (the colours
-    /// counted with the pixel steps).
+    /// counted with the pixel steps); the draw stage's are
+    /// [`draw_steps`](Self::draw_steps).
     pub fn counts(&self) -> (usize, usize, usize) {
         (
             self.frame_end as usize,
-            (self.row_end - self.frame_end) as usize,
-            (self.pixel_end - self.row_end) as usize,
+            self.row_end.saturating_sub(self.draw_end) as usize,
+            self.pixel_end.saturating_sub(self.row_end) as usize,
         )
+    }
+
+    /// Steps in the draw stage (`draw { }`: its loops' values, the loops
+    /// and the primitives), each written once however often it runs.
+    pub fn draw_steps(&self) -> usize {
+        self.draw_end.saturating_sub(self.frame_end) as usize
+    }
+
+    /// Whether a frame has a draw stage: the canvas ([`crate::Ink`]) it
+    /// needs, 4 KB, and draws into before the rows.
+    pub fn draws(&self) -> bool {
+        self.draw_end > self.frame_end
+    }
+
+    /// The lines and dots the draw stage draws a frame: every primitive
+    /// counted as often as its loops run it.
+    pub fn primitives(&self) -> u32 {
+        let mut n = 0;
+        self.draw_walk(|op, mult| {
+            if matches!(op.code, code::LINE_TO | code::DOT) {
+                n += mult;
+            }
+        });
+        n
+    }
+
+    /// Each step of the draw stage with how many times a frame it runs
+    /// (the product of its loops' counts).
+    fn draw_walk(&self, mut f: impl FnMut(&Op, u32)) {
+        let mut stack = [1u32; 4];
+        let mut depth = 0;
+        let mut mult = 1u32;
+        let end = (self.draw_end as usize).min(MAX_OPS);
+        for op in &self.ops[(self.frame_end as usize).min(end)..end] {
+            match op.code {
+                code::FOR => {
+                    f(op, mult);
+                    if depth < stack.len() {
+                        stack[depth] = mult;
+                        depth += 1;
+                    }
+                    let n = (self.init[(op.a & 0x7f) as usize] >> 16).max(1) as u32;
+                    mult = mult.saturating_mul(n);
+                }
+                code::END => {
+                    f(op, mult);
+                    if depth > 0 {
+                        depth -= 1;
+                        mult = stack[depth];
+                    }
+                }
+                _ => f(op, mult),
+            }
+        }
     }
 
     /// Colour steps: the layers drawn (a formula without `layer` blocks
@@ -403,12 +492,12 @@ impl Program {
                 TRI | SAW | SQR => 60,
                 SQRT => 539,
                 SELECT | CLAMP => 60,
-                PICK => 100,
+                PICK | TAB => 100,
                 MIX => 130,
                 SMOOTH => 214,
                 NOISE => 855,
                 DIGIT..=DIGIT_B => 240,
-                U_R | U_G | U_B => 70,
+                U_R | U_G | U_B | INK => 70,
                 U_L => 140,
                 c if is_colour(c) => {
                     // Measured on the device (psi-probe, 2026-10-26): a
@@ -451,14 +540,62 @@ impl Program {
                 _ => 0,
             })
             .sum();
-        let row = (self.row_end - self.frame_end) as u32;
+        let row = self.counts().1 as u32;
         // The loop itself (a pixel's colour is counted above: `gray(x)` is
         // 45 + 120, as measured); then what the real paths add to the VM's
         // own frame — the effect's copy into the canvas, the look's rows
         // over the picture, a flash cache shared with the decoder: +13-14 %
         // on the device (plasma as an effect 8,217 against 7,254 µs; Plasma
         // screened at 40 % as a look 8,552 against 7,474).
-        (((45 + px) * (W * H) as u32) / 1000 + row * 10) * 115 / 100
+        (((45 + px) * (W * H) as u32) / 1000 + row * 10 + self.draw_us()) * 115 / 100
+    }
+
+    /// The draw stage's part of [`esp32_us`](Self::esp32_us), from
+    /// `psi-probe` on the spare (2026-10-27, 1.0.0-beta.11-drawprobe-a,
+    /// tests/measured.rs `DRAW`): a step run ~420 ns (a loop's END and its
+    /// body's values, each as often as it runs), a dot 400, a line 1,100 +
+    /// 320 a pixel walked (its longer side when a side's ends are
+    /// constants, at least 12 with a side unknown), and
+    /// 10 µs to clear the canvas. (The design guessed 300, 400 and 1,500 +
+    /// 200.)
+    pub fn draw_us(&self) -> u32 {
+        if !self.draws() {
+            return 0;
+        }
+        let mut ns: u64 = 10_000;
+        let mut from = [0u8; 2];
+        self.draw_walk(|op, mult| {
+            let cost: u64 = match op.code {
+                code::LINE_FROM => {
+                    from = [op.a, op.b];
+                    0
+                }
+                code::LINE_TO => {
+                    // Its pixels: the longer side + 1 where both ends of a side
+                    // are constants; with a side unknown, at least 12.
+                    let k = |v: u8| self.const_value(v);
+                    let d = |a: Option<i32>, b: Option<i32>| {
+                        a.zip(b).map(|(a, b)| ((a >> 16) - (b >> 16)).unsigned_abs().min(1023) as u64 + 1)
+                    };
+                    let (dx, dy) = (d(k(from[0]), k(op.a)), d(k(from[1]), k(op.b)));
+                    let len = match (dx, dy) {
+                        (Some(a), Some(b)) => a.max(b),
+                        (a, b) => a.or(b).unwrap_or(0).max(12),
+                    };
+                    1_100 + 320 * len
+                }
+                code::DOT => 400,
+                _ => 420,
+            };
+            ns = ns.saturating_add(cost * mult as u64);
+        });
+        (ns / 1000).min(u32::MAX as u64) as u32
+    }
+
+    /// The value of a constant slot, `None` for anything else.
+    fn const_value(&self, v: u8) -> Option<i32> {
+        (v & LANE == 0 && v >= S_FIRST_FREE && (v as usize) < MAX_SCALARS && self.is_const_slot(v))
+            .then(|| self.init[v as usize])
     }
 
     /// Reset a program in place to the empty one (all fields zero but the
@@ -467,12 +604,14 @@ impl Program {
         self.ops.fill(Op::default());
         self.init.fill(0);
         self.frame_end = 0;
+        self.draw_end = 0;
         self.row_end = 0;
         self.pixel_end = 0;
         self.n_scalars = S_FIRST_FREE;
         self.regs = 0;
         self.uses = 0;
         self.loop_ms = 8000;
+        self.tables.fill(0);
     }
 
     /// A readable listing of the steps (tests, the bench, debugging).
@@ -498,6 +637,8 @@ impl Program {
         for (n, op) in self.ops[..self.len()].iter().enumerate() {
             let sect = if n < self.frame_end as usize {
                 "frame"
+            } else if n < self.draw_end as usize {
+                "draw "
             } else if n < self.row_end as usize {
                 "row  "
             } else {
@@ -509,8 +650,15 @@ impl Program {
                 .map(|&v| opnd(v))
                 .collect::<alloc::vec::Vec<_>>()
                 .join(", ");
-            // A pick's table: the slots it picks from.
-            let args = if op.code == code::PICK {
+            // A table read: where its entries are; a loop: its counter and
+            // where it ends or goes back to.
+            let args = if op.code == code::TAB {
+                alloc::format!("{args}; table {}..={}", op.b, op.b as usize + op.c as usize)
+            } else if op.code == code::FOR {
+                alloc::format!("{args}; end {}", op.b)
+            } else if op.code == code::END {
+                alloc::format!("{args}; back to {}", op.c)
+            } else if op.code == code::PICK {
                 let t: alloc::vec::Vec<_> = (0..op.c as usize)
                     .map(|j| opnd(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8))
                     .collect();
@@ -518,7 +666,11 @@ impl Program {
             } else {
                 args
             };
-            let d = if code::is_colour(op.code) {
+            let d = if code::is_colour(op.code)
+                || matches!(
+                    op.code,
+                    code::END | code::LINE_FROM | code::LINE_TO | code::DOT
+                ) {
                 "out".into()
             } else {
                 opnd(op.d)
@@ -539,10 +691,28 @@ impl Program {
     }
 
     fn is_const_slot(&self, v: u8) -> bool {
-        !self.ops[..self.len()]
-            .iter()
-            .any(|op| !code::is_colour(op.code) && op.d == v)
+        !self.ops[..self.len()].iter().any(|op| {
+            match op.code {
+                // The draw stage's steps that write no value; END counts
+                // its loop's counter (which the FOR writes too).
+                code::END => op.a == v,
+                code::LINE_FROM | code::LINE_TO | code::DOT => false,
+                c => !code::is_colour(c) && op.d == v,
+            }
+        })
     }
+}
+
+/// `NAME[k]`: entry floor(k) of the table at `start` of `last` + 1
+/// entries, 0 outside it. Indices are masked into the tables, whatever the
+/// program.
+#[inline(always)]
+pub(crate) fn tab(tables: &[i32; MAX_TABLE], start: u8, last: u8, k: i32) -> i32 {
+    let i = k >> 16;
+    if i < 0 || i > last as i32 {
+        return 0;
+    }
+    tables[(start as usize + i as usize) & (MAX_TABLE - 1)]
 }
 
 /// `pick`'s choice for `k` from the `n` slots whose numbers are in the
