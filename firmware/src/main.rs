@@ -658,10 +658,13 @@ fn main() -> Result<()> {
                         match retune(engine.as_mut(), &path, epoch.elapsed()) {
                             Some(r) => {
                                 // No new start (the ordinal stays), but
-                                // status names the formula now on the panel.
+                                // status names the formula now on the panel:
+                                // its path and its title (`&name=`).
                                 if r.is_ok() {
-                                    if let Ok(mut s) = status.lock() {
-                                        s.path.clone_from(&path);
+                                    let np = engine.as_ref().and_then(|e| e.now_playing());
+                                    if let (Ok(mut s), Some(np)) = (status.lock(), np) {
+                                        s.path = np.path;
+                                        s.title = np.title;
                                     }
                                 }
                                 r
