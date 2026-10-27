@@ -447,6 +447,9 @@ pub fn render_rows_still<const N: usize>(
     };
     let uses_i = prog.uses & USES_I != 0;
     let backdrop = prog.uses & BACKDROP != 0;
+    // The column run: on the first row drawn, then its values are kept in
+    // their registers (one lane is the whole row only at N = W).
+    let mut columns_kept = false;
     for row in 0..H {
         if rows & (1 << row) == 0 {
             continue;
@@ -487,6 +490,10 @@ pub fn render_rows_still<const N: usize>(
                         keep(scratch, st, [m.b, m.c], m.d, row * W + base);
                     }
                 }
+                if op.code == code::COLUMN {
+                    k += 1 + if columns_kept { op.a as usize } else { 0 };
+                    continue;
+                }
                 if op.code == code::STILL {
                     match &cache {
                         Cache::Use(st) => {
@@ -509,6 +516,7 @@ pub fn render_rows_still<const N: usize>(
                 k += 1;
             }
         }
+        columns_kept = N == W;
     }
     if let Cache::Keep(st, _) = cache {
         st.kept = crate::still::fingerprint(prog);

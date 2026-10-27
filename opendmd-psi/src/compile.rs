@@ -2280,7 +2280,7 @@ impl<'s> Parser<'s> {
                 return self.err(
                     e,
                         if word == "pal" {
-                        format!(
+                        String::from(
                             "`pal(…)` can't go into a sum: it can only be scaled, `pal(fire, v) * k` \
                              (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
                         )
@@ -3145,15 +3145,24 @@ pub struct Info {
 /// Compile `src` into `prog` (which is cleared first). On an error `prog`
 /// is left empty.
 pub fn compile_into(src: &str, prog: &mut Program) -> Result<Info, Error> {
+    compile_layout(src, prog, true)
+}
+
+/// [`compile_into`] with (`runs`) or without the column run and the still
+/// cache's run: without, every pixel step runs on every pixel of every
+/// frame, as before they existed (the same bytes). For measuring a step's
+/// cost on the device (`psi-probe`) and the estimate's tests.
+#[doc(hidden)]
+pub fn compile_layout(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Error> {
     prog.clear();
-    let r = compile_inner(src, prog);
+    let r = compile_inner(src, prog, runs);
     if r.is_err() {
         prog.clear();
     }
     r
 }
 
-fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
+fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Error> {
     if src.len() > MAX_SOURCE {
         return Err(Error::new(
             MAX_SOURCE,
@@ -3261,7 +3270,7 @@ fn compile_inner(src: &str, prog: &mut Program) -> Result<Info, Error> {
     }
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
-    emit(&p.dag, &steps, &p.draw, backdrop, prog).map_err(|e| Error {
+    emit(&p.dag, &steps, &p.draw, backdrop, runs, prog).map_err(|e| Error {
         start: ct.start,
         end: ct.end,
         ..e
@@ -3310,6 +3319,7 @@ fn emit(
     steps: &[Step],
     draw: &[DItem],
     backdrop: bool,
+    runs: bool,
     prog: &mut Program,
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
@@ -3555,43 +3565,55 @@ fn emit(
     // run reads, the marker, the run (skipped once the cache holds its
     // values), then the rest as usual.
     let px_op = |i: usize| is_op(i) && nodes[i].level == LV_PIXEL;
-    let plain_seq = || {
-        let mut seq: Vec<Item> = Vec::new();
-        for k in 0..steps.len() {
-            for i in 0..n {
-                if px_op(i) && need[i] == k {
-                    seq.push(Item::Value(i));
-                }
-            }
-            seq.push(Item::Colour(k));
+    // The per-column run: values of `x`/`px` and per-frame values only,
+    // worked out on a frame's first row and kept (`Item::Column`), when
+    // they are worth a step; then the still cache's values. Each tried
+    // with the registers, dropped when they don't fit.
+    let col = column_nodes(dag);
+    let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i]).collect();
+    let col_ns: u32 = (0..n)
+        .filter(|&i| in_col[i])
+        .map(|i| value_ns(nodes[i].code))
+        .sum();
+    let none = alloc::vec![false; n];
+    let mut layout = None;
+    for (use_col, use_still) in [(true, true), (true, false), (false, true), (false, false)] {
+        let (use_col, use_still) = (use_col && runs, use_still && runs);
+        let use_col = use_col && col_ns >= COLUMN_GAIN_NS;
+        let excl = if use_col { &in_col } else { &none };
+        let markers = usize::from(use_col);
+        let cached = if use_still && total + markers < MAX_OPS {
+            choose_still(dag, steps, &px_op, excl)
+        } else {
+            Vec::new()
+        };
+        if (use_col && col_ns < COLUMN_GAIN_NS) || (use_still && cached.is_empty() && !use_col) {
+            continue;
         }
-        seq
-    };
-    let mut seq = plain_seq();
-    let mut cached: Vec<usize> = Vec::new();
-    let mut run_len = 0;
-    if total < MAX_OPS {
-        cached = choose_still(dag, steps, &px_op);
-        if !cached.is_empty() {
-            let (s, r) = still_seq(dag, steps, &px_op, &need, &cached);
-            if registers(nodes, steps, &s).is_some() {
-                seq = s;
-                run_len = r;
-            } else {
-                cached.clear();
-            }
+        let lay = pixel_seq(dag, steps, &px_op, &need, &cached, excl, use_col);
+        if let Some(r) = registers(nodes, steps, &lay.seq, &lay.pinned) {
+            layout = Some((lay, cached, r));
+            break;
         }
     }
-    let Some((regs, used)) = registers(nodes, steps, &seq) else {
+    let Some((lay, cached, (regs, used))) = layout else {
         return Err(Error::new(
             0,
             0,
             format!("this formula keeps too many values at once (more than {REGS}) — simplify it"),
         ));
     };
+    let (seq, run_len, col_len) = (lay.seq, lay.run_len, lay.col_len);
     let mut marker = None;
     for (at, item) in seq.iter().enumerate() {
         match *item {
+            Item::Column => ops.push(Op {
+                code: code::COLUMN,
+                d: 0,
+                a: col_len as u8,
+                b: 0,
+                c: 0,
+            }),
             Item::Still => {
                 marker = Some(ops.len());
                 ops.push(Op {
@@ -3652,6 +3674,7 @@ enum Item {
     Value(usize),
     Colour(usize),
     Still,
+    Column,
 }
 
 /// A value's operands that are nodes (a pick's choices included).
@@ -3677,7 +3700,12 @@ fn reads(dag: &Dag, i: usize) -> impl Iterator<Item = Id> + '_ {
 /// again after its value's last use, and a step never writes a register it
 /// reads): the register of each item (0 for the others) and how many were
 /// used, `None` when more than [`REGS`] are live at once.
-fn registers(nodes: &[Node], steps: &[Step], seq: &[Item]) -> Option<(Vec<u8>, usize)> {
+fn registers(
+    nodes: &[Node],
+    steps: &[Step],
+    seq: &[Item],
+    pinned: &[bool],
+) -> Option<(Vec<u8>, usize)> {
     let n = nodes.len();
     let mut last_use = alloc::vec![0usize; n];
     for (at, item) in seq.iter().enumerate() {
@@ -3693,7 +3721,14 @@ fn registers(nodes: &[Node], steps: &[Step], seq: &[Item]) -> Option<(Vec<u8>, u
                     last_use[x as usize] = at;
                 }
             }
-            Item::Still => {}
+            Item::Still | Item::Column => {}
+        }
+    }
+    // A kept column value is never given up: the rows after the first
+    // read it without working it out again.
+    for (i, l) in last_use.iter_mut().enumerate() {
+        if pinned[i] {
+            *l = usize::MAX;
         }
     }
     let mut regs = alloc::vec![0u8; seq.len()];
@@ -3779,10 +3814,18 @@ fn per_frame(dag: &Dag, steps: &[Step], cached: &[usize]) -> Vec<bool> {
 /// The values for the still cache, best first (at most
 /// [`crate::still::STILL_LANES`]): still per-pixel values chosen greedily
 /// by what they save a pixel per frame, each at least [`STILL_GAIN_NS`].
-fn choose_still(dag: &Dag, steps: &[Step], px_op: &dyn Fn(usize) -> bool) -> Vec<usize> {
+fn choose_still(
+    dag: &Dag,
+    steps: &[Step],
+    px_op: &dyn Fn(usize) -> bool,
+    col: &[bool],
+) -> Vec<usize> {
     let nodes = &dag.nodes;
     let n = nodes.len();
     let still = still_nodes(dag);
+    // (A value of the column run is worked out once a frame a column
+    // anyway: never cached, and nothing to save.)
+    let px_op = |i: usize| px_op(i) && !col[i];
     // What each still value's own steps cost at most (shared steps counted
     // in every reader: an upper bound, to leave out the cheap ones early).
     let mut sub = alloc::vec![0u32; n];
@@ -3837,55 +3880,127 @@ fn choose_still(dag: &Dag, steps: &[Step], px_op: &dyn Fn(usize) -> bool) -> Vec
     cached
 }
 
-/// The pixel order with the still cache: the per-frame values the cached
-/// run reads (in node order), the marker, the run (the cached values and
-/// the steps only they need, in node order), then the other values before
-/// the colour step that first needs them, as without it.
-fn still_seq(
+/// A laid-out pixel section: the order, the cached run's and the column
+/// run's lengths, and the values kept in their registers for the frame.
+struct PixelSeq {
+    seq: Vec<Item>,
+    run_len: usize,
+    col_len: usize,
+    pinned: Vec<bool>,
+}
+
+/// The pixel order: the column run (with `col`: its marker and every
+/// value of `x`, `px` and per-frame values, in node order), then with the
+/// still cache the per-frame values the cached run reads, the marker and
+/// the run (the cached values and the steps only they need), then the other
+/// values before the colour step that first needs them, as without either.
+fn pixel_seq(
     dag: &Dag,
     steps: &[Step],
     px_op: &dyn Fn(usize) -> bool,
     need: &[usize],
     cached: &[usize],
-) -> (Vec<Item>, usize) {
+    in_col: &[bool],
+    col: bool,
+) -> PixelSeq {
     let n = dag.nodes.len();
-    let f = per_frame(dag, steps, cached);
+    let mut seq: Vec<Item> = Vec::new();
+    let mut pinned = alloc::vec![false; n];
+    let mut col_len = 0;
+    if col {
+        seq.push(Item::Column);
+        seq.extend((0..n).filter(|&i| in_col[i]).map(Item::Value));
+        col_len = seq.len() - 1;
+        // Kept: the column values something after the run reads.
+        for i in 0..n {
+            if px_op(i) && !in_col[i] {
+                for x in reads(dag, i) {
+                    pinned[x as usize] |= in_col[x as usize];
+                }
+            }
+        }
+        for st in steps {
+            for x in st.reads() {
+                pinned[x as usize] |= in_col[x as usize];
+            }
+        }
+    }
+    let px = |i: usize| px_op(i) && !(col && in_col[i]);
     let mut run = alloc::vec![false; n];
-    for &c in cached {
-        run[c] = true;
-    }
-    for i in (0..n).rev() {
-        if run[i] {
-            for x in reads(dag, i) {
-                if px_op(x as usize) && !f[x as usize] {
-                    run[x as usize] = true;
-                }
-            }
-        }
-    }
     let mut first = alloc::vec![false; n];
-    for i in (0..n).rev() {
-        if run[i] || first[i] {
-            for x in reads(dag, i) {
-                let x = x as usize;
-                if px_op(x) && !run[x] {
-                    first[x] = true;
+    let mut run_len = 0;
+    if !cached.is_empty() {
+        let f = per_frame(dag, steps, cached);
+        for &c in cached {
+            run[c] = true;
+        }
+        for i in (0..n).rev() {
+            if run[i] {
+                for x in reads(dag, i) {
+                    if px(x as usize) && !f[x as usize] {
+                        run[x as usize] = true;
+                    }
                 }
             }
         }
+        for i in (0..n).rev() {
+            if run[i] || first[i] {
+                for x in reads(dag, i) {
+                    let x = x as usize;
+                    if px(x) && !run[x] {
+                        first[x] = true;
+                    }
+                }
+            }
+        }
+        seq.extend((0..n).filter(|&i| first[i]).map(Item::Value));
+        seq.push(Item::Still);
+        let before = seq.len();
+        seq.extend((0..n).filter(|&i| run[i]).map(Item::Value));
+        run_len = seq.len() - before;
     }
-    let mut seq: Vec<Item> = (0..n).filter(|&i| first[i]).map(Item::Value).collect();
-    seq.push(Item::Still);
-    let before = seq.len();
-    seq.extend((0..n).filter(|&i| run[i]).map(Item::Value));
-    let run_len = seq.len() - before;
     for k in 0..steps.len() {
         for i in 0..n {
-            if px_op(i) && need[i] == k && !run[i] && !first[i] {
+            if px(i) && need[i] == k && !run[i] && !first[i] {
                 seq.push(Item::Value(i));
             }
         }
         seq.push(Item::Colour(k));
     }
-    (seq, run_len)
+    PixelSeq {
+        seq,
+        run_len,
+        col_len,
+        pinned,
+    }
+}
+
+/// The column run is laid out only when its values cost at least this a
+/// pixel (ns: its marker is a step of the 256, and its kept values hold
+/// registers for the whole row).
+const COLUMN_GAIN_NS: u32 = 130;
+
+/// Whether each node is the same down a column: worked out from `x`, `px`,
+/// constants and per-frame values only.
+fn column_nodes(dag: &Dag) -> Vec<bool> {
+    let nodes = &dag.nodes;
+    let mut col = alloc::vec![false; nodes.len()];
+    for i in 0..nodes.len() {
+        let m = &nodes[i];
+        col[i] = match m.level {
+            LV_CONST | LV_FRAME => true,
+            LV_PIXEL => match m.code {
+                K_INPUT => {
+                    let v = m.val as u8;
+                    v == LANE | L_X || v == LANE | L_PX
+                }
+                K_CONST => true,
+                K_COUNTER => false,
+                c if (code::U_R..=code::INK).contains(&c) => false,
+                _ => reads(dag, i).all(|x| col[x as usize]),
+            },
+            _ => false,
+        };
+    }
+    col
 }

@@ -658,7 +658,35 @@ fn check(src: &str) {
             let mut under = vec![0u8; W * H * 3];
             picture(&mut under);
             let _ = frame_over::<128>(&p, 1234, Some(&under));
-            let _ = frame_ink::<64>(&p, 1234, Some(&under));
+            let with = frame_ink::<64>(&p, 1234, Some(&under));
+            // The column and still runs change no byte: against the formula
+            // laid out without them, at the other lane width (where the
+            // column run is worked out on every lane).
+            let plain = opendmd_psi::compile_plain(src).expect("compiles plain too");
+            assert!(
+                frame_ink::<128>(&plain, 1234, Some(&under)) == with,
+                "{src:?}: the runs changed the frame"
+            );
+            let mut rows = vec![0u8; W * H * 3];
+            render_rows::<128>(
+                &p,
+                &mut Scratch::new(),
+                &inputs(1234),
+                &OWN,
+                Some(&under),
+                0x0f0f_0f0f,
+                &mut rows,
+            );
+            if !p.draws() {
+                // Some rows alone (the column run on the first drawn one).
+                for r in (0..H).filter(|r| 0x0f0f_0f0fu32 & (1 << r) != 0) {
+                    let span = r * W * 3..(r + 1) * W * 3;
+                    assert!(
+                        rows[span.clone()] == with[span],
+                        "{src:?}: row {r} alone differs"
+                    );
+                }
+            }
             if p.still_lanes() > 0 {
                 still_same::<128>(src, &p, &[1234, 99], Some(&under));
             }

@@ -32,7 +32,9 @@ mod still;
 mod tables;
 mod vm;
 
-pub use compile::{compact, compile_into, number, Error, Info, MAX_DEPTH, MAX_NODES, MAX_SOURCE};
+pub use compile::{
+    compact, compile_into, compile_layout, number, Error, Info, MAX_DEPTH, MAX_NODES, MAX_SOURCE,
+};
 pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
 pub use still::{Still, StillLane, STILL_LANES};
@@ -51,6 +53,16 @@ pub const LANES: usize = 128;
 pub fn compile(src: &str) -> Result<Program, Error> {
     let mut p = Program::default();
     compile_into(src, &mut p)?;
+    Ok(p)
+}
+
+/// [`compile`] without the column run and the still cache's run (every
+/// pixel step on every pixel, the same bytes): `psi-probe`'s step costs
+/// and the estimate's tests.
+#[doc(hidden)]
+pub fn compile_plain(src: &str) -> Result<Program, Error> {
+    let mut p = Program::default();
+    compile_layout(src, &mut p, false)?;
     Ok(p)
 }
 

@@ -145,6 +145,12 @@ pub(crate) mod code {
     // [`crate::Still`] the VM skips those `a` steps and copies the cached
     // lanes into `b` and `c` instead; without one it is a no-op.
     pub const STILL: u8 = 93;
+    // The column run's marker, first of the pixel steps: `COLUMN a`: the
+    // `a` steps after it work out values of `x`, `px` and per-frame values
+    // only (the same down a column). With lanes of a whole row the VM runs
+    // them on a frame's first row and skips them on the others, their
+    // values kept in their registers (the compiler never reuses those).
+    pub const COLUMN: u8 = 94;
     // the colour of the bottom layer when nothing shows through it: written
     // over the pixels, as v0's last line
     pub const OUT_RGB: u8 = 96;
@@ -190,7 +196,7 @@ pub(crate) mod code {
             FOR => 1,
             END => 2,
             LINE_FROM..=DOT => 3,
-            STILL => 0,
+            STILL | COLUMN => 0,
             _ => match colour_parts(c).0 {
                 OUT_RGB | OUT_HSV => 3,
                 _ => 1,
@@ -262,9 +268,15 @@ pub(crate) mod code {
             32..=LAST_UN => U[(c - 32) as usize],
             64..=LAST_TERN => T[(c - 64) as usize],
             U_R..=INK => ["ur", "ug", "ub", "ul", "ink"][(c - U_R) as usize],
-            FOR..=STILL => {
-                ["for", "end", "line_from", "line_to", "dot", "still"][(c - FOR) as usize]
-            }
+            FOR..=COLUMN => [
+                "for",
+                "end",
+                "line_from",
+                "line_to",
+                "dot",
+                "still",
+                "column",
+            ][(c - FOR) as usize],
             _ => ["rgb", "hsv", "pal", "gray"][((colour_parts(c).0 - OUT_RGB) & 3) as usize],
         }
     }
@@ -540,11 +552,22 @@ impl Program {
             }
             None => (0..0, 0),
         };
+        // The column run's steps once a frame for each column: a 32nd of a
+        // pixel's.
+        let col = self.column_run();
         let px: u32 = self.ops[self.row_end as usize..self.len()]
             .iter()
             .enumerate()
-            .filter(|(k, _)| !skip.contains(&(k + self.row_end as usize)))
-            .map(|(_, op)| self.step_ns(op))
+            .map(|(k, op)| (k + self.row_end as usize, op))
+            .filter(|(k, _)| !skip.contains(k))
+            .map(|(k, op)| {
+                let ns = self.step_ns(op);
+                if col.contains(&k) {
+                    ns.div_ceil(H as u32)
+                } else {
+                    ns
+                }
+            })
             .sum::<u32>()
             + copy;
         let row = self.counts().1 as u32;
@@ -614,6 +637,15 @@ impl Program {
     pub(crate) fn still_marker(&self) -> Option<usize> {
         let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
         (re.min(pe)..pe).find(|&k| self.ops[k].code == code::STILL)
+    }
+
+    /// The column run's steps (`code::COLUMN`), if the formula has one.
+    pub(crate) fn column_run(&self) -> core::ops::Range<usize> {
+        let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
+        match (re.min(pe)..pe).find(|&k| self.ops[k].code == code::COLUMN) {
+            Some(k) => k + 1..(k + 1 + self.ops[k].a as usize).min(pe),
+            None => 0..0,
+        }
     }
 
     /// Values the still cache holds for this formula (0, 1 or 2): each a
@@ -736,6 +768,8 @@ impl Program {
                 alloc::format!("{args}; end {}", op.b)
             } else if op.code == code::END {
                 alloc::format!("{args}; back to {}", op.c)
+            } else if op.code == code::COLUMN {
+                alloc::format!("skip {} after the first row", op.a)
             } else if op.code == code::STILL {
                 let r = |v: u8| opnd(v);
                 let regs = [r(op.b), r(op.c)];
@@ -755,7 +789,12 @@ impl Program {
             let d = if code::is_colour(op.code)
                 || matches!(
                     op.code,
-                    code::END | code::LINE_FROM | code::LINE_TO | code::DOT | code::STILL
+                    code::END
+                        | code::LINE_FROM
+                        | code::LINE_TO
+                        | code::DOT
+                        | code::STILL
+                        | code::COLUMN
                 ) {
                 "out".into()
             } else {
@@ -782,7 +821,7 @@ impl Program {
                 // The draw stage's steps that write no value; END counts
                 // its loop's counter (which the FOR writes too).
                 code::END => op.a == v,
-                code::LINE_FROM | code::LINE_TO | code::DOT | code::STILL => false,
+                code::LINE_FROM | code::LINE_TO | code::DOT | code::STILL | code::COLUMN => false,
                 c => !code::is_colour(c) && op.d == v,
             }
         })
