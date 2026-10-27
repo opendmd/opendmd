@@ -61,9 +61,9 @@ pub struct PsiFx {
 /// the heap refused it (the look's `refused` convention).
 const CANVAS_RETRY_US: u32 = 1_000_000;
 
-/// May a formula's still cache take `bytes` more of the heap now (`bytes`
-/// > 0), or keep what it holds (0)? The firmware's keeps room for a
-/// transition and gives way to a look ([`set_still_gate`]).
+/// May a formula's still cache take `bytes` more of the heap now (any
+/// `bytes` above 0), or keep what it holds (0)? The firmware's keeps room
+/// for a transition and gives way to a look ([`set_still_gate`]).
 pub type StillGate = fn(usize) -> bool;
 
 #[cfg(not(test))]
