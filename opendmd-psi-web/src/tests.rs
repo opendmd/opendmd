@@ -193,6 +193,7 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
 /// within the looks' 12 ms (`fx_psi::LOOK_MAX_EST_US`), except the ones
 /// listed: too heavy to draw over every GIF at all.
 #[cfg(not(target_arch = "wasm32"))]
+#[test]
 fn every_example_as_a_look() {
     const TOO_HEAVY: &[&str] = &[];
     let json = std::fs::read_to_string(concat!(
