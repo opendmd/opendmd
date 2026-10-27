@@ -491,7 +491,11 @@ const INPUTS: [(&str, Input, &str); 17] = [
         Input::Ul,
         "the brightness of the picture under the formula, 0 to 1",
     ),
-    ("ink", Input::Ink, "what `draw { }` put at the pixel, 0 to 1"),
+    (
+        "ink",
+        Input::Ink,
+        "what `draw { }` put at the pixel, 0 to 1",
+    ),
 ];
 
 /// Values added once people had saved formulas (2026-10-26), about the
@@ -588,7 +592,9 @@ const PALETTES: [(&str, u8); 7] = [
     ("gray", 255),
 ];
 
-const KEYWORDS: [&str; 8] = ["loop", "frame", "layer", "part", "use", "draw", "for", "table"];
+const KEYWORDS: [&str; 8] = [
+    "loop", "frame", "layer", "part", "use", "draw", "for", "table",
+];
 
 /// The draw stage's primitives: statements inside `draw { }`, and names a
 /// formula may still set (`line = …`), as `ink` is a value it may.
@@ -2553,7 +2559,9 @@ impl<'s> Parser<'s> {
         self.fail(
             t,
             match self.text(t) {
-                "draw" => "`draw { }` goes at the top of the formula (or a part), not inside a layer",
+                "draw" => {
+                    "`draw { }` goes at the top of the formula (or a part), not inside a layer"
+                }
                 "table" => "a table goes at the top of the formula (or a part), not inside a layer",
                 _ => "`for` goes inside `draw { }`: `draw { for k < 12 { … } }`",
             },
@@ -2597,7 +2605,8 @@ impl<'s> Parser<'s> {
         }
         self.next();
         let (start, len) = (self.table_names[k].start, self.table_names[k].len);
-        self.dag.tab(i, start, len, &self.tables, (t.start, close.end))
+        self.dag
+            .tab(i, start, len, &self.tables, (t.start, close.end))
     }
 
     /// `table NAME = n, n, …` at `kw`: numbers only (a `,` may end a line
@@ -2635,7 +2644,11 @@ impl<'s> Parser<'s> {
         }
         // The same numbers already held (a part read again, or two tables
         // alike): stored once.
-        let start = match self.tables.windows(vals.len()).position(|w| w == vals.as_slice()) {
+        let start = match self
+            .tables
+            .windows(vals.len())
+            .position(|w| w == vals.as_slice())
+        {
             Some(k) => k,
             None => {
                 if self.tables.len() + vals.len() > MAX_TABLE {
@@ -2742,6 +2755,15 @@ impl<'s> Parser<'s> {
                 self.for_loop(t)?;
             } else if PRIMITIVES.contains(&word) && next == Tok::LParen {
                 self.primitive(t)?;
+            } else if !self.closed() {
+                return self.err(
+                    kw,
+                    if self.text(kw) == "for" {
+                        "this `for {` is never closed — add `}`"
+                    } else {
+                        "this `draw {` is never closed — add `}`"
+                    },
+                );
             } else {
                 return self.err(
                     t,
@@ -2752,6 +2774,20 @@ impl<'s> Parser<'s> {
         }
     }
 
+    /// Whether the block the cursor is in has its `}` ahead.
+    fn closed(&self) -> bool {
+        let mut depth = 0;
+        for t in &self.toks[self.pos..] {
+            match t.tok {
+                Tok::LBrace => depth += 1,
+                Tok::RBrace if depth == 0 => return true,
+                Tok::RBrace => depth -= 1,
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// `for k < N { … }` at `kw`: `k` = 0, 1, … N − 1, N a whole number
     /// from 1 to 1024; two deep at most; 2048 turns a frame in all.
     #[inline(never)]
@@ -2760,7 +2796,11 @@ impl<'s> Parser<'s> {
         if self.in_draw > 2 {
             return self.err(kw, "`for` loops go two deep at most");
         }
-        let (n, lt, num) = (self.peek(), self.toks[self.pos + 1], self.toks[self.pos + 2]);
+        let (n, lt, num) = (
+            self.peek(),
+            self.toks[self.pos + 1],
+            self.toks[self.pos + 2],
+        );
         let count = match (n.tok, lt.tok, num.tok) {
             (Tok::Name, Tok::Lt, Tok::Num(v)) if v & 0xffff == 0 && (ONE..=1024 * ONE).contains(&v) => {
                 (v >> 16) as u32
@@ -2788,7 +2828,11 @@ impl<'s> Parser<'s> {
         }
         self.next();
         let depth = (self.in_draw - 1) as usize;
-        let turns = if depth == 0 { count } else { count * self.counts[0] };
+        let turns = if depth == 0 {
+            count
+        } else {
+            count * self.counts[0]
+        };
         if self.record {
             self.turns += turns;
             if self.turns > crate::draw::TURNS {

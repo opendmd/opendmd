@@ -3,10 +3,10 @@
 //! (`wasm-pack test --node`, `make test-wasm`) with the same expected
 //! hashes, so a pass on both is bit-identical output.
 
-use opendmd_psi::golden::{fnv, inputs, picture, FRAMES as GOLDEN, OVER};
+use opendmd_psi::golden::{fnv, inputs, picture, DRAWN, FRAMES as GOLDEN, OVER};
 use opendmd_psi::{
-    compile, render_rows, render_with, sketches, Program, Scratch, FONT_4X6, FONT_5X7, FONT_BOLD,
-    H, MAX_OPS, OWN, W,
+    compile, render_rows, render_rows_ink, render_with, sketches, Ink, Program, Scratch, FONT_4X6,
+    FONT_5X7, FONT_BOLD, H, MAX_OPS, OWN, W,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -52,6 +52,53 @@ fn frame_over<const N: usize>(p: &Program, ms: u32, under: Option<&[u8]>) -> Vec
     let mut out = vec![0x5a; W * H * 3];
     render_rows::<N>(p, &mut s, &inputs(ms), &OWN, under, u32::MAX, &mut out);
     out
+}
+
+/// A frame with the draw stage's canvas (what every player gives a
+/// formula that draws).
+fn frame_ink<const N: usize>(p: &Program, ms: u32, under: Option<&[u8]>) -> Vec<u8> {
+    let mut s = Scratch::<N>::new();
+    let mut ink = Ink::boxed();
+    let mut out = vec![0x5a; W * H * 3];
+    render_rows_ink::<N>(
+        p,
+        &mut s,
+        Some(&mut ink),
+        &inputs(ms),
+        &OWN,
+        under,
+        u32::MAX,
+        &mut out,
+    );
+    out
+}
+
+/// Formulas that draw: the same hashes at both lane widths, here and in
+/// wasm (and on the ESP32, through `psi-probe`).
+#[test]
+fn golden_frames_drawn() {
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let mut bad = Vec::new();
+    for &(name, src, ms, over, want) in DRAWN {
+        let p = compile(src).unwrap_or_else(|e| panic!("{name}: {}", e.render(src)));
+        assert!(p.draws(), "{name} draws nothing");
+        let u = over.then_some(under.as_slice());
+        let a = frame_ink::<128>(&p, ms, u);
+        assert!(
+            a == frame_ink::<64>(&p, ms, u),
+            "{name}: lane widths differ"
+        );
+        let got = fnv(&a);
+        if got != want {
+            bad.push(format!("    (\"{name}\", …, {ms}, {over}, {got:#x}),"));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "drawn golden frames differ (got):\n{}",
+        bad.join("\n")
+    );
 }
 
 /// Layers, and formulas over a picture: the same hashes at both lane
@@ -418,6 +465,23 @@ const PIECES: &[&str] = &[
     "angle",
     "ty",
     "r =",
+    "draw {",
+    "draw",
+    "for k < 12 {",
+    "for j < 3 {",
+    "for",
+    "k",
+    "<",
+    "line(",
+    "dot(",
+    "ink",
+    "table T = 1, 2, -3",
+    "table",
+    "T[",
+    "T",
+    "[",
+    "]",
+    "1024",
 ];
 
 fn check(src: &str) {
@@ -428,6 +492,7 @@ fn check(src: &str) {
             let mut under = vec![0u8; W * H * 3];
             picture(&mut under);
             let _ = frame_over::<128>(&p, 1234, Some(&under));
+            let _ = frame_ink::<64>(&p, 1234, Some(&under));
         }
         Err(e) => {
             assert!(
@@ -627,6 +692,111 @@ fn random_picks_and_colours_render_or_refuse() {
         }
     }
     assert!(ok > 350, "only {ok} of 400 compiled");
+}
+
+/// Random draw blocks: loops (one or two deep), tables, values from the
+/// loop counters and the frame, lines and dots anywhere (far off the panel
+/// too): they render the same at both lane widths, alone and over a
+/// picture, within the caps, or are refused only for their size.
+#[test]
+fn random_draw_blocks_render_or_refuse() {
+    let mut r = Rng(0xd2a3_5eed_0f1a_7e5u64);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    // A value inside a loop: the counters, the tables, the time.
+    fn val(r: &mut Rng, ks: &[&str], d: u32) -> String {
+        let leaf = |r: &mut Rng| -> String {
+            match r.below(6) {
+                0 | 1 if !ks.is_empty() => ks[r.below(ks.len())].to_string(),
+                2 => format!("T[{}]", ks.first().copied().unwrap_or("t")),
+                3 => ["t", "a", "second", "f"][r.below(4)].to_string(),
+                _ => format!("{}", r.below(2000) as i32 - 900),
+            }
+        };
+        if d == 0 || r.below(3) == 0 {
+            return leaf(r);
+        }
+        match r.below(6) {
+            0 => format!("({} + {})", val(r, ks, d - 1), val(r, ks, d - 1)),
+            1 => format!("({} * {})", val(r, ks, d - 1), val(r, ks, d - 1)),
+            2 => format!("({} / {})", val(r, ks, d - 1), val(r, ks, d - 1)),
+            3 => format!("sin({})", val(r, ks, d - 1)),
+            4 => format!("hash({}, 3)*{}", val(r, ks, d - 1), r.below(200)),
+            _ => format!("({} % 37)", val(r, ks, d - 1)),
+        }
+    }
+    let prim = |r: &mut Rng, ks: &[&str]| -> String {
+        if r.below(3) == 0 {
+            format!(
+                "dot({}, {}, {})",
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 1)
+            )
+        } else {
+            format!(
+                "line({}, {}, {}, {}, {}, {})",
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 1),
+                val(r, ks, 1)
+            )
+        }
+    };
+    let mut ok = 0;
+    for k in 0..300 {
+        let n1 = [1, 3, 12, 100, 1024][r.below(5)];
+        let mut body = format!(
+            "v = {}\n{}\n",
+            val(&mut r, &["k"], 3),
+            prim(&mut r, &["k", "v"])
+        );
+        if r.below(2) == 0 {
+            let n2 = 1 + r.below(8);
+            body += &format!("for j < {n2} {{\n{}\n}}\n", prim(&mut r, &["k", "j", "v"]));
+        }
+        let colour = [
+            "gray(ink)",
+            "pal(fire, ink)",
+            "#40c0ff * ink",
+            "layer screen { rgb(ink, ur, 0.5) }",
+            "rgb(ink, T[px % 4], x)",
+        ][k % 5];
+        let src = format!(
+            "loop {}\ntable T = 0.5, -2, 30, 100\nframe {{ f = t*{} }}\ndraw {{\n{}\nfor k < {n1} {{\n{body}}}\n}}\n{colour}",
+            1 + k % 7,
+            r.below(50),
+            prim(&mut r, &[]),
+        );
+        match compile(&src) {
+            Ok(p) => {
+                ok += 1;
+                assert!(p.draws(), "{src}");
+                assert!(p.len() <= MAX_OPS);
+                for ms in [0, 777] {
+                    assert!(
+                        frame_ink::<128>(&p, ms, None) == frame_ink::<64>(&p, ms, None),
+                        "{src}"
+                    );
+                    assert!(
+                        frame_ink::<128>(&p, ms, Some(&under))
+                            == frame_ink::<64>(&p, ms, Some(&under)),
+                        "{src}"
+                    );
+                }
+            }
+            Err(e) => assert!(
+                e.msg.contains("too long")
+                    || e.msg.contains("too many")
+                    || e.msg.contains("too much"),
+                "{src}\n{}",
+                e.render(&src)
+            ),
+        }
+    }
+    assert!(ok > 250, "only {ok} of 300 compiled");
 }
 
 #[test]
