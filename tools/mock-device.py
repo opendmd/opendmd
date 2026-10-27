@@ -212,7 +212,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   divided by `speed` (1..4, default 2): 10 ms frames and twice as many by
   default (`fps=100`), 40 ms and half as many at `fps=25`). A playlist line may be one too; `/api/cache` never counts them as
   needing a copy.
-  **Formulas** (`@fx:psi?src=..[&a=&b=&c=&fps=]`, a non-empty `src`): 20 ms
+  **Formulas** (`@fx:psi?src=..[&a=&b=&c=&fps=&name=]`, a non-empty `src`;
+  `name`, a playlist entry's, is its title): 20 ms
   frames (10 at `fps=100`, 40 at 25) over the source's `loop N` seconds
   (default 8); not compiled here (any `src` plays). A formula over the
   formula on screen replaces it in place (no new ordinal, a fresh dwell);
@@ -1010,7 +1011,7 @@ def live_parse(path: str):
     params: dict[str, str] = {}
     for part in query.split("&") if query else []:
         k, _, v = part.partition("=")
-        params[k] = urllib.parse.unquote(v)
+        params[k] = (urllib.parse.unquote_plus if k == "name" else urllib.parse.unquote)(v)
     if head == "@text" and not params.get("msg"):
         return None
     if head == "@fx:psi" and not params.get("src", "").strip():
@@ -1083,7 +1084,9 @@ def virtual_title(path: str) -> str | None:
     live = live_parse(path)
     if live is not None:
         if live[0] == "fx:psi":
-            return "Formula"
+            # A playlist entry carries its name (synth::title: 60 characters).
+            name = "".join(c for c in live[1].get("name", "") if c.isprintable())[:60]
+            return name if name.strip() else "Formula"
         if live[0].startswith("fx:"):
             return FX[live[0][3:]][0]
         if live[0] == "boot":

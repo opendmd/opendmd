@@ -12,8 +12,8 @@
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, store, toast, debounce, saver, base, SITE } from './util.js';
-import { popup, closeMenu } from './overrides.js';
-import { link as mklink, parse, sliderName, about, TIP, marks, sample } from './psikit.js';
+import { popup, closeMenu, actions } from './overrides.js';
+import { link as mklink, parse, sliderName, choices, picker, about, TIP, marks, sample, MAX_NAME } from './psikit.js';
 
 let P = null, mod = null, gen = 0;
 const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
@@ -159,6 +159,21 @@ async function useLook(f, btn, v, orig = f) {
   show();
 }
 
+// Add to playlist: a line in one of the card's playlists (a player's, the
+// demo's, a card folder's): the path Show on panel sends (js/psishow.js) and
+// `&name=` (the player ignores it; the playlist and Now show it), all in the
+// player's 2,048 B, else without the name.
+async function toList(f, btn) {
+  if (!info(f.src).length) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
+  const p = (await import('./psishow.js')).fpath(f), q = f.name ? p + '&' + new URLSearchParams({ name: f.name.slice(0, MAX_NAME) }) : p;
+  if (p.length > 2048) { toast('This formula is too long for a playlist', 'bad'); return; }
+  const lists = await app.playlists().catch(() => []);
+  if (!lists.length) lists.push({ path: '/filelist.txt', label: 'All files' });
+  const { appendTo } = await import('./gifs.js');
+  actions(btn, 'psi-pl-menu', lists.map((l) => [{ 'data-path': l.path }, l.label, () => appendTo(l.path, [q.length > 2048 ? p : q])]), 'Add to');
+}
+const plBtn = (id, f) => app.src && h('button', { id, onclick: (e) => toList(f(), e.currentTarget) }, 'Add to playlist…');
+
 const NOTE = () => (app.device ? 'Show on panel plays it there until the playlist moves on (one that draws over a GIF, over the panel’s GIF); save it as a GIF to keep it.' : 'Formulas play here in the browser. Save one as a GIF to play it on an OpenDMD panel.');
 
 let PS = null;
@@ -198,14 +213,17 @@ function play(v, f, i) {
   kick();
 }
 
-// Sliders for the a, b, c a formula reads, in `box`; `set` on a change.
+// Sliders for the a, b, c a formula reads, in `box`; `set` on a change. A
+// slider with choices (`-- a: shape = cube, ball`) is a row of buttons.
 function sliders(box, f, mask, set) {
   clear(box, ['a', 'b', 'c'].map((k, j) => {
     if (!(mask & (1 << j))) return null;
+    const ch = choices(f.src, k), name = sliderName(f.src, k);
+    if (ch) return h('div.psi-sl', h('span', name), Object.assign(picker(ch, name, f[k], (v) => { f[k] = v; set(); }), { id: `${box.id}-${k}` }));
     const out = h('output.mono', (f[k] || 0).toFixed(2));
     const r = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: f[k] || 0, id: `${box.id}-${k}`,
       oninput: () => { f[k] = +r.value; out.textContent = f[k].toFixed(2); set(); } });
-    return h('label.psi-sl', h('span', sliderName(f.src, k)), r, out);
+    return h('label.psi-sl', h('span', name), r, out);
   }));
 }
 
@@ -305,11 +323,12 @@ function build(root) {
   let cur = null;
   const show = showBtn('psi-show', () => cur);
   const look = LOOK() && h('button', { id: 'psi-look', onclick: (e) => useLook(cur, e.currentTarget, pv) }, 'Use as the look');
+  const pl = plBtn('psi-pl', () => cur);
   const under = overRow('psi-under');
   const side = h('div.side', { id: 'psi-side' }, h('div.card', { id: 'psi-detail' },
     h('button.sm.close', { 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
     canvas, cap, under, h('div.dhead', h('div.grow', title, desc)), sl,
-    h('div.row.acts', show, main, gifBtn), h('div.row.acts', look, shareBtn, del), h('p.cap', NOTE())));
+    h('div.row.acts', show, main, gifBtn), h('div.row.acts', pl, look, shareBtn, del), h('p.cap', NOTE())));
   const ed = editor();
   root.append(h('h1.ptitle', 'Formulas'), h('div.libgrid', gal, side), ed.el);
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && side.classList.contains('open') && !document.querySelector('.menu')) side.classList.remove('open'); });
@@ -326,6 +345,7 @@ function build(root) {
     if (show) show.disabled = !i.length;
     under.hidden = !(i[5] & 32);
     if (look) look.hidden = !i.length;
+    if (pl) pl.hidden = !i.length;
     PS?.mark();
     main.textContent = mineToo ? 'Edit' : 'Remix';
     main.onclick = (e) => go(mineToo ? { ...f } : { name: f.name + ' remix', src: f.src, a: f.a, b: f.b, c: f.c }, e.currentTarget);
@@ -372,7 +392,7 @@ function build(root) {
 
 // --- The editor (`#formulas/edit`)
 const VARS = [['x, y', 'where the pixel is: 0 to 1 across, and up from the bottom'], ['px, py', 'the pixel’s column 0–127 and row 0–31 from the bottom'],
-  ['t', 'seconds into the loop'], ['hour, minute, second', 'the time of day'], ['a, b, c', 'sliders, 0 to 1 (name one with -- a: speed)'],
+  ['t', 'seconds into the loop'], ['hour, minute, second', 'the time of day'], ['a, b, c', 'sliders, 0 to 1 (name one with -- a: speed; buttons with -- a: shape = cube, ball)'],
   ['w, h', '128 and 32'], ['i', 'the pixel’s number, 0–4095'], ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 up'],
   ['r, angle', 'distance and angle (turns) from the middle'], ['ty', 'row 0–31 from the top'], ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'], ['ul', 'how bright that is']];
 const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], ['tri(v) saw(v) sqr(v)', 'triangle, sawtooth and square waves'],
@@ -424,7 +444,7 @@ function editor() {
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta)), strip,
       h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values' : 'Drag a number (or Alt + ↑ ↓) to try other values'))),
-    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
+    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live })), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
       h('button', { id: 'psi-ed-share', onclick: (e) => { if (ready()) share(e.currentTarget, B.draft); } }, 'Copy share link')), h('p.cap', NOTE()))));
   let pv = null, toks = [], bad = null, num = null, good = null;
   // What the preview plays: the last text that compiled, with the sliders as they are.

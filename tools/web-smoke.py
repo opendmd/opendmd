@@ -3374,6 +3374,7 @@ def mock_pass(browser) -> None:
         fx_gif_checks(page, base, overlay)
         formulas_checks(browser, base, errors)
         formulas_panel_checks(browser, base, errors)
+        formulas_playlist_checks(browser, base, overlay, errors)
         formulas_over_checks(browser, base, errors)
         looks_checks(browser, base, errors)
         find_checks(page)
@@ -3744,6 +3745,28 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.keyboard.press("Alt+ArrowUp")
     page.wait_for_timeout(200)
     check(page.input_value("#psi-src") == "gray(x*0.6)", f"formulas: Alt+↑ nudges the number ({page.input_value('#psi-src')!r})")
+    # A picker: `-- a: name = word, word, …` is a row of buttons (a radio
+    # group); choice j of n sets a to j/(n-1), and the arrows move it.
+    page.fill("#psi-src", "-- a: level = off, half, full\ngray(a)")
+    page.wait_for_timeout(400)
+    grp = page.locator("#psi-ed-sl-a")
+    radios = page.eval_on_selector_all("#psi-ed-sl-a [role=radio]", "els => els.map(e => [e.textContent, e.getAttribute('aria-checked')])")
+    named = page.inner_text("#psi-ed-sl .psi-sl > span")
+    page.click("#psi-ed-sl-a [role=radio] >> text=half")
+    page.wait_for_timeout(400)
+    draft_a = "import('./js/util.js').then(m => m.store.get('psi.draft').a)"
+    mid, a_mid = canvas_sum(page, "#psi-ed-panel"), page.evaluate(draft_a)
+    page.keyboard.press("ArrowRight")
+    page.wait_for_timeout(400)
+    full, a_full = canvas_sum(page, "#psi-ed-panel"), page.evaluate(draft_a)
+    focused = page.evaluate("[document.activeElement.textContent, document.activeElement.getAttribute('aria-checked')]")
+    page.keyboard.press("Home")
+    page.wait_for_timeout(400)
+    off, a_off = canvas_sum(page, "#psi-ed-panel"), page.evaluate(draft_a)
+    check(grp.get_attribute("role") == "radiogroup" and grp.get_attribute("aria-label") == "level" and named == "level"
+          and [r[0] for r in radios] == ["off", "half", "full"] and (a_mid, a_full, a_off) == (0.5, 1, 0)
+          and focused == ["full", "true"] and off < mid < full,
+          f"formulas: a picker's buttons ({radios}) set a to 0.5, 1 (→), 0 (Home) and the preview follows ({off}, {mid}, {full})")
     # A slider for `a`, named by its comment.
     page.fill("#psi-src", "-- a: brightness\ngray(a)")
     page.wait_for_timeout(400)
@@ -3796,6 +3819,65 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.context.close()
     formulas_more(browser, base, errors)
     formulas_combine_checks(browser, base, errors)
+
+
+def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Add to playlist: an example Formula goes into a playlist as its
+    player path with its name (the path Show on panel sends + `&name=`),
+    once; the playlist editor shows it by name, as a Formula; the (mock)
+    player plays it and says its name."""
+    gif = card_gifs()[0]
+    put_text(base + "/api/sets/psitest", gif + "\n")
+    page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#formulas")
+    open_formulas(page)
+    page.click("#psi-ex .psi-tile[data-name='Wireframe cube']")
+    clear_toasts(page)
+    page.click("#psi-pl")
+    page.wait_for_selector("#psi-pl-menu", timeout=5000)
+    lists = page.eval_on_selector_all("#psi-pl-menu [data-path]", "els => els.map(e => e.dataset.path)")
+    page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
+    t = last_toast(page, "ok")
+    lines = (overlay / "sets" / "psitest.txt").read_text().split("\n")
+    src = next(e["src"] for e in json.loads(FORMULAS_JSON.read_text()) if e["name"] == "Wireframe cube")
+    want = page.evaluate("s => import('./js/psishow.js').then(m => m.fpath({src: s}))", src) + "&name=Wireframe+cube"
+    check(lists[0] == "/filelist.txt" and "/sets/psitest.txt" in lists and t == "1 added to “psitest”"
+          and lines == [gif, want, ""] and len(want) <= 2048 and "\t" not in want and " " not in want,
+          f"formulas playlist: Wireframe cube added to psitest ('{t}'; {len(want)} B: {want[:60]}…{want[-30:]})")
+    clear_toasts(page)
+    page.click("#psi-pl")
+    page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
+    page.wait_for_selector("#toasts .toast", timeout=10000)
+    t = page.eval_on_selector_all("#toasts .toast", "els => els.at(-1).textContent")
+    check(t == "already in “psitest”" and (overlay / "sets" / "psitest.txt").read_text().count("@fx:psi") == 1,
+          f"formulas playlist: added again, it is there once ('{t}')")
+    # The editor: a button too, with what it plays (a Formula of one's own, its name).
+    formula_editor(page, "-- a: level\nloop 4\ngray(a * x + saw(t / 4) * 0.1)")
+    page.fill("#psi-name", "Smoke & ramp")
+    page.click("#psi-ed-pl")
+    page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
+    last_toast(page, "ok")
+    mine = (overlay / "sets" / "psitest.txt").read_text().split("\n")[2]
+    check(mine == "@fx:psi?src=loop+4;+gray(a+*+x+%2B+saw(t+/+4)+*+0.1)&name=Smoke+%26+ramp",
+          f"formulas playlist: from the editor, the formula as compiled with its name ({mine})")
+    # The playlist editor: by name, as a Formula, not a 2 KB line.
+    goto_view(page, "sets")
+    page.click("#sets-list [data-path='/sets/psitest.txt'] button.pl")
+    page.wait_for_selector("#set-editor", state="visible", timeout=10000)
+    page.wait_for_function("document.querySelectorAll('#set-entries .vrow:not([hidden])').length >= 3", timeout=10000)
+    rows = page.eval_on_selector_all("#set-entries .vrow:not([hidden])",
+                                     "els => els.map(r => [r.querySelector('.t').textContent, r.querySelector('.tag')?.textContent || ''])")
+    check(entries(page) == lines[:2] + [mine] and rows[1:] == [["Wireframe cube", "Formula"], ["Smoke & ramp", "Formula"]],
+          f"formulas playlist: the playlist editor shows them by name ({rows})")
+    shot(page, "formulas-playlist", "laptop")
+    page.context.close()
+    # The player plays it, by its name.
+    put_json(base + "/api/config", {"set": "psitest"})
+    cur = wait_playing(base, want, 20)
+    st = get_json(base + "/api/status")["now_playing"]
+    check(cur == want and st["title"] == "Wireframe cube", f"formulas playlist: the player plays it as “{st['title']}”")
+    put_json(base + "/api/config", {"set": ""})
+    urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/psitest.txt", method="DELETE"), timeout=30)
 
 
 def clear_toasts(page: Page) -> None:

@@ -17,7 +17,8 @@ main{max-width:880px;margin:0 auto;padding:20px 16px 40px}
 .cap{color:var(--mut);font-size:13px;margin:8px 0 0}
 .bad{color:var(--bad)}
 .sls{margin-top:6px}
-.sls label{display:flex;align-items:center;gap:12px;min-height:36px}
+.sls>*{display:flex;align-items:center;gap:12px;min-height:36px}
+.psi-pick{display:flex;flex-wrap:wrap;gap:4px}.psi-pick button{min-height:36px;padding:4px 12px;color:var(--mut)}.psi-pick [aria-checked=true]{border-color:var(--acc);color:var(--fg)}
 .sls span{min-width:56px;color:var(--mut);font-size:13px}
 .sls input{flex:1;accent-color:var(--acc)}
 .sls output{font:13px ui-monospace,Menlo,monospace;min-width:3em;text-align:right}
