@@ -180,7 +180,11 @@ pub fn error_at() -> Vec<u32> {
 /// under it: drawn over a GIF it changes the GIF), estimated µs a frame on
 /// the panel, layers, steps in `draw { }` (0: it draws nothing), lines and
 /// dots it draws a frame, the frame time its `fps N` asks for in ms (10, 20
-/// or 40; 0: none, so 20)]`; empty before anything compiled.
+/// or 40; 0: none, so 20), estimated µs a frame as an effect with its still
+/// cache (the panel keeps the values it works out from the pixel's position
+/// alone; the same as the estimate without values for one, and a look never
+/// has one), the still cache's values (0-2, 16 KB each)]`; empty before
+/// anything compiled.
 #[wasm_bindgen]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -201,6 +205,8 @@ pub fn info() -> Vec<u32> {
         p.draw_steps() as u32,
         p.primitives(),
         p.frame_ms().unwrap_or(0),
+        p.esp32_us_still(),
+        p.still_lanes() as u32,
     ]
 }
 
