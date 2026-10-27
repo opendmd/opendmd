@@ -4463,6 +4463,8 @@ def now_edit_checks(page: Page, base: str) -> None:
     goto_view(page, "now")
     page.wait_for_selector(f"#now-recent > div[data-path={json.dumps(b)}] button[aria-label='Edit in Create Art']", timeout=10000)
     asked.clear()
+    # The studio still holds a's frames: clear the mark so studio_has waits for b's.
+    page.evaluate("delete document.querySelector('#studio').dataset.srcFrames")
     page.click(f"#now-recent > div[data-path={json.dumps(b)}] button[aria-label='Edit in Create Art']")
     studio_has(b)
     s = get_json(base + "/api/status")
