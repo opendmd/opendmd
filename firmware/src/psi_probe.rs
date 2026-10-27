@@ -349,10 +349,90 @@ fn split(name: &str, src: &str, gate: bool, canvas: &mut Canvas) {
     drop(fx);
     let [a, b, c, d, e, t] = &mut parts;
     say!(info,
-        "psi-probe: split {name} (gate {}, still cache {held} B), p50/p90 us: before the VM {} | VM setup {} | VM rows {} | after the VM {} | outside {} | in all {}",
+        "psi-probe: split {name} (gate {}, still cache {held} B), p50/p90 us: before the VM {} | VM setup {} | VM rows {} | after the VM {} | outside {} | in all {} ({})",
         if gate { "on" } else { "off" },
-        us50_90(a), us50_90(b), us50_90(c), us50_90(d), us50_90(e), us50_90(t)
+        us50_90(a), us50_90(b), us50_90(c), us50_90(d), us50_90(e), us50_90(t),
+        addrs()
     );
+}
+
+/// The last frame's memory: scratch, picture, still lanes.
+fn addrs() -> String {
+    let l = |a: &std::sync::atomic::AtomicUsize| a.load(Ordering::Relaxed);
+    format!(
+        "scratch {:#x} picture {:#x} still lanes {:#x} {:#x}",
+        l(&psi::stats::SCRATCH),
+        l(&psi::stats::OUT),
+        l(&psi::stats::STILL),
+        l(&psi::stats::STILL1)
+    )
+}
+
+/// Tunnel's VM rows with its still lanes at one placement after another,
+/// in one boot: the panel's DMA ranges first, then every ordered pair of a
+/// pool of 16 KB lanes taken from wherever the heap gives them (as many as
+/// leave ~40 KB free), then a second scratch. p50/p90 of the rows' cycles.
+fn placement(out: &mut [u8]) {
+    let (mut lo, mut hi, mut bytes, mut n, mut dlo, mut dhi) = (0, 0, 0, 0, 0, 0);
+    // SAFETY: plain out-parameters; the panel is up.
+    unsafe { esp_idf_sys::hub75::hub75_dma_span(&mut lo, &mut hi, &mut bytes, &mut n, &mut dlo, &mut dhi) };
+    say!(info, "psi-probe: placement: the panel's DMA reads {n} buffers, {bytes} B in {lo:#x}..{hi:#x}; descriptors {dlo:#x}..{dhi:#x}");
+    let mut prog = zeroed::<psi::Program>();
+    if compile(TUNNEL_EX, &mut prog, true, true).is_err() {
+        return;
+    }
+    let t = fx_psi::tables();
+    let lp = prog.loop_ms();
+    let mut st = psi::Still::new();
+    if !st.take(&prog) {
+        say!(error, "psi-probe: placement: no heap for the cache");
+        return;
+    }
+    let mut pool: Vec<Box<psi::StillLane>> = Vec::new();
+    while pool.len() < 4 && heap() > 40 * 1024 + 16 * 1024 {
+        match psi::StillLane::try_new() {
+            Some(l) => pool.push(l),
+            None => break,
+        }
+    }
+    let mut cands = pool;
+    let own = [st.lane_addr(0), st.lane_addr(1)];
+    say!(info, "psi-probe: placement: lanes at {:#x} {:#x} (the cache's own), others {:?}, heap {} B free",
+        own[0], own[1], cands.iter().map(|l| format!("{:#x}", &**l as *const psi::StillLane as usize)).collect::<Vec<_>>(), heap());
+    let mut s = zeroed::<psi::Scratch<128>>();
+    s.reset();
+    let rows = |st: &mut psi::Still, s: &mut psi::Scratch<128>, out: &mut [u8]| -> String {
+        // The first frame keeps the values, the rest are drawn from them.
+        psi::render_rows_still::<128>(&prog, s, None, Some(&mut *st), &psi::golden::inputs(0), &t, None, u32::MAX, out);
+        let mut v = Vec::with_capacity(60);
+        for k in 0..60u32 {
+            psi::render_rows_still::<128>(&prog, s, None, Some(&mut *st), &psi::golden::inputs(k * 10 % lp), &t, None, u32::MAX, out);
+            let a: [u32; 4] = core::array::from_fn(|i| psi::stats::STAMPS[i].load(Ordering::Relaxed));
+            v.push(a[3].wrapping_sub(a[2]));
+        }
+        us50_90(&mut v)
+    };
+    let sa = &*s as *const psi::Scratch<128> as usize;
+    let r = rows(&mut st, &mut s, out);
+    say!(info, "psi-probe: placement: lanes {:#x} {:#x} (own), scratch {sa:#x}: rows {r}", own[0], own[1]);
+    // Each candidate as lane 0, then as lane 1, the other lane the cache's own.
+    for i in 0..cands.len() {
+        for k in 0..2 {
+            let c = cands.remove(i);
+            let back = st.swap_lane(k, c).expect("a lane");
+            let r = rows(&mut st, &mut s, out);
+            say!(info, "psi-probe: placement: lanes {:#x} {:#x}, scratch {sa:#x}: rows {r}", st.lane_addr(0), st.lane_addr(1));
+            let c = st.swap_lane(k, back).expect("a lane");
+            cands.insert(i, c);
+        }
+    }
+    // A second scratch, wherever the heap puts it now, with the own lanes.
+    drop(cands);
+    let mut s2 = zeroed::<psi::Scratch<128>>();
+    s2.reset();
+    let sa2 = &*s2 as *const psi::Scratch<128> as usize;
+    let r = rows(&mut st, &mut s2, out);
+    say!(info, "psi-probe: placement: lanes {:#x} {:#x} (own), scratch {sa2:#x}: rows {r}", own[0], own[1]);
 }
 
 /// Tunnel VM-direct with the same stamps (setup, rows): against `split`.
@@ -384,9 +464,9 @@ fn split_direct(out: &mut [u8]) {
     }
     let [b, c, t] = &mut parts;
     say!(info,
-        "psi-probe: split Tunnel VM-direct, p50/p90 us: VM setup {} | VM rows {} | in all {} (scratch {:#x} picture {:#x} still lane {:#x})",
+        "psi-probe: split Tunnel VM-direct, p50/p90 us: VM setup {} | VM rows {} | in all {} ({})",
         us50_90(b), us50_90(c), us50_90(t),
-        psi::stats::SCRATCH.load(Ordering::Relaxed), psi::stats::OUT.load(Ordering::Relaxed), psi::stats::STILL.load(Ordering::Relaxed)
+        addrs()
     );
 }
 
@@ -677,6 +757,7 @@ pub fn run(root: &str) {
         split("Rotozoom floor", ROTOZOOM_FLOOR_EX, gate, &mut canvas);
     }
     split_direct(&mut out);
+    placement(&mut out);
     fx_psi::set_still_gate(Some(crate::still_gate));
     effects(
         &[

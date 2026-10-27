@@ -555,3 +555,37 @@ extern "C" uint8_t hub75_refresh_rate(void) {
     }
     return static_cast<uint8_t>(rate);
 }
+
+void hub75_dma_span(uint32_t *lo, uint32_t *hi, uint32_t *bytes, uint32_t *n, uint32_t *dlo, uint32_t *dhi)
+{
+    *lo = *hi = *bytes = *n = *dlo = *dhi = 0;
+    if (s_panel == nullptr) {
+        return;
+    }
+    frameStruct *fb = s_panel->*get(FbTag());
+    if (fb != nullptr) {
+        uint32_t l = UINT32_MAX, h = 0;
+        for (auto &r : fb->rowBits) {
+            if (!r || r->data == nullptr) {
+                continue;
+            }
+            const uint32_t a = (uint32_t)(uintptr_t)r->data;
+            const uint32_t sz = (uint32_t)r->getColorDepthSize(false);
+            if (a < l) l = a;
+            if (a + sz > h) h = a + sz;
+            *bytes += sz;
+            *n += 1;
+        }
+        if (*n) {
+            *lo = l;
+            *hi = h;
+        }
+    }
+    Bus_Parallel16 &bus = s_panel->*get(BusTag());
+    HUB75_DMA_DESCRIPTOR_T *desc = bus.*get(DescTag());
+    const uint32_t count = bus.*get(DescCountTag());
+    if (desc != nullptr && count) {
+        *dlo = (uint32_t)(uintptr_t)desc;
+        *dhi = *dlo + count * sizeof(HUB75_DMA_DESCRIPTOR_T);
+    }
+}
