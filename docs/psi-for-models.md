@@ -26,7 +26,7 @@ right. Aim for **≤ 8 ms** (light or medium).
 ## 1. The model
 
 A formula is evaluated **for every pixel, every frame** (50 frames a
-second). It is a few lines of arithmetic ending in a colour. Per pixel there
+second, or what its `fps` line asks). It is a few lines of arithmetic ending in a colour. Per pixel there
 are no loops, arrays, strings, recursion or state between frames: each frame
 is a pure function of the pixel's position, the time, the clock, three
 sliders, and (optionally) the picture under it. For things that are not "each
@@ -44,13 +44,15 @@ bottom to 0.5 at the top, and `r` (the distance from the middle) and
 31), as the fonts count.
 
 Angles and waves are in **turns**: `sin(0.25)` is 1; `sin(v)` repeats every 1.
-Time `t` is seconds into the loop, always a whole number of 20 ms frames.
+Time `t` is seconds into the loop, always a whole number of frames: 20 ms
+ones, or 10 ms with `fps 100` (40 ms with `fps 25`).
 
 ## 2. Grammar
 
 ```text
 formula   = { sep } { stmt sep } colourline { sep }      -- or layers instead of colourline
 stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
+          | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
           | "frame" "{" { assign sep } "}"    -- values once a frame (no x, y, px, py, i, ur…)
           | NAME "=" expr                     -- each name set once in its scope
           | "layer" [BLEND] "{" { assign | frameblock } colourline "}"
@@ -119,7 +121,7 @@ computer.
 | `x`, `y` | 0..1 across (left→right) and up (bottom→top) | pixel / row |
 | `px`, `py` | column 0..127, row 0..31 from the bottom (whole numbers) | pixel / row |
 | `i` | pixel number 0..4095 from the top left: `(31 − py)·128 + px` | pixel |
-| `t` | seconds into the loop (whole 20 ms frames) | frame |
+| `t` | seconds into the loop (whole frames: 20 ms, 10 with `fps 100`) | frame |
 | `hour`, `minute`, `second` | the clock: 0..23, 0..59, 0..59 (whole) | frame |
 | `a`, `b`, `c` | sliders, 0..1; a comment `-- a: speed` names one | frame |
 | `w`, `h` | 128 and 32 (constants) | — |
@@ -260,7 +262,7 @@ over `s`; add `min(255, d + s)`; multiply `d·s/255`; screen `d + s − d·s/255
 max; min. Then coverage moves `d` towards that result. A layer has its own
 names (two layers may both set `v`) and may have its own `frame { }`; it
 sees names set before it outside the layers, but may not set them again.
-`loop` and `part` go outside layers. Layers do not nest. A layer under an
+`loop`, `fps` and `part` go outside layers. Layers do not nest. A layer under an
 opaque `over` layer (no coverage, or a constant ≥ 1) is dropped (free).
 
 ## 8. Over a GIF
@@ -274,7 +276,8 @@ at 12 ms (a look over 8 ms moves at 25 frames a second). The web app makes **any
 part and drawing that with a blend and a coverage —
 `part look { … }` then `layer screen { look(x, y, 0.4) }` (or
 `look(x, y, 0.3)` for over; `opendmd_psi::look`) — so a model never needs
-to write that wrapper itself.
+to write that wrapper itself. A look's frames follow the GIF's: a formula's
+`fps` line is not used over a GIF.
 
 ## 9. Parts: one formula inside another
 
@@ -292,7 +295,8 @@ layer add { p(1 - x, y, 0.5) }
   layers, parts, and (optionally) a colour line. It draws nothing until
   used. It sees **only its own names** and the built-ins: outer names are
   invisible inside, and its names are invisible outside except as `p.v`.
-  So any formula can be pasted in unchanged.
+  So any formula can be pasted in unchanged. A part's `fps` line is
+  allowed and has no effect: the frame rate is the whole formula's.
 - **As a colour** (a whole last line of the formula or of a layer): `p`;
   `p(x', y')` draws it as if this pixel were at (x', y') — inside, `x`, `y`
   are those, `px = floor(x'·127 + ½)`, `py = floor(y'·31 + ½)`, `i` from
@@ -386,13 +390,14 @@ hsv(x, 0.6, ink)
 | constants + per-frame/per-row values | ~119 | too many numbers and steps |
 | nesting | 18 levels of brackets and operators (a part level counts 3) | nested too deeply / parts go too deep |
 | `loop` | 0.1..3600 s | between 0.1 and 3600 seconds |
+| `fps` | 25, 50 or 100 | `fps` is 25, 50 or 100 frames a second |
 | re-reading parts drawn at other places | bounded | draws its parts in too many places |
 | `for` count | a whole number 1..1024, written out | `for` takes a name and a count |
 | loop turns a frame (every run of a loop's body) | 2,048 | draws too much a frame |
 | loops inside loops | two deep | two deep at most |
 | `table` numbers | 256 in all | a table holds numbers only, up to 256 in all |
 | `draw { }` blocks | one (the formula's or one part's) | there can be one `draw { }` block |
-| lines and dots drawn a frame | 2,048; and 16,384 line steps (pixels walked, on the panel or off): past either the rest are skipped, the same on every device | — |
+| lines and dots drawn a frame | 2,048; and 16,384 line steps (pixels walked, on the panel or off; a line wholly off one side walks none): past either the rest are skipped, the same on every device | — |
 
 Unused names and parts cost nothing; constants fold (`2*3` is 6; `x/8` is
 a multiply).
@@ -433,13 +438,17 @@ pixel `ink` is 70 and `T[k]` 100 (measured on the device). So 192 streaks
 of ~15 steps each are ~2.5 ms, then ~1 ms for `pal(ice, ink)`.
 
 Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs at
-25 frames a second or fewer; GIF looks take ≤ 12 ms, and the worked
+25 frames a second or fewer; `fps 100` needs ≤ 5 ms, else it plays at 50; GIF looks take ≤ 12 ms, and the worked
 examples here ≤ 10). Division by a constant is a
 multiply. One `noise` or `len` is fine; four are heavy. Per-pixel `px`
 arithmetic costs the same as `x` arithmetic.
 
 ## 13. Idioms
 
+- **Fast motion**: `fps 100` (a line of its own, like `loop`) draws 100
+  frames a second, for things that move several pixels a frame (streaks,
+  wireframes): smoother, if the formula is light (≤ 5 ms; heavier ones play
+  at 50). Most formulas need no `fps` line.
 - **Seamless loops**: with `loop N`, move things by `t/N` (or `t*k/N`, k
   whole) inside periodic functions (`sin`, `frac`, `tri`, hue).
 - **Circles**: `r` (or `len(px - 63.5, py - 15.5)` in pixels); a disc
@@ -488,7 +497,10 @@ gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
   particle's start from `hash(k, …)` and its place from `t`: `frac(hash(k,
   1) + t/L)` cycles it once a loop. A streak is a `line` from where it was
   a moment ago to where it is, its ink fading towards the tail; a point is
-  a `dot`. Example 31.
+  a `dot`. Skip a particle that has left the panel by moving both ends of
+  its line to x = −999: a line wholly off one side of the panel walks no
+  steps, but one partly on it walks all of them, off the panel too, and
+  they count against the 16,384 a frame. Example 31.
 - **A wireframe**: the corners in one `table` (x, y, z after each other),
   the edges in another (pairs of corner numbers); `for e < EDGES`, read the
   two corners (`V[E[e*2]*3 + 1]` is the first corner's y), turn them with
@@ -1092,22 +1104,30 @@ pick(cell, #ff3333, #33ff55, #3377ff) * lit
 
 192 stars from `hash(k, …)`, each a streak from where it was a moment ago
 to where it is, flying at the viewer through a field 4,096 deep once a
-loop; the ink fades from the dark tail to the head and in from the
-distance. ~5 ms estimated (4.4 measured on the device; about 3 of it
+loop, at 100 frames a second; the ink fades from the dark tail to the head
+and in from the distance (squared, so far stars stay dark); a star whose
+head has left the panel is skipped. ~6 ms estimated (over the 5 ms that
+100 fps needs, so the panel starts it at 50 and moves up once it measures
+under; the version before the eye test measured 4.4 ms, about 3 of it
 drawing).
 
 ```psi example=starfield-drawn
 loop 2.4
+fps 100
 -- Starfield: 192 stars flying at you, a pass through the field a loop,
--- each a streak from where it was a moment ago. a: streak length
-frame { back = 8 + a*240 }
+-- each a streak from where it was a moment ago
+-- a: streak length
+frame { back = 144 + a*240 }
 draw {
   for k < 192 {
     sx = (hash(k, 7) - 0.5)*4096; sy = (hash(k, 3) - 0.5)*1024  -- where it is, across and up
     z = frac(hash(k, 11) - t/2.4)*4096        -- how far: 0 near, 4096 far
     s = 2/(z/16 + 4); st = 2/(min(z + back, 4095)/16 + 4)  -- perspective, now and before
-    lit = 1 - z/4096                          -- fading in from the dark
-    line(64 + sx*st, 16 + sy*st, 64 + sx*s, 16 + sy*s, lit*0.2, lit)
+    hx = 64 + sx*s; hy = 16 + sy*s            -- the head
+    -- the head off the panel: both ends at x -999, and a line wholly off it is skipped
+    gone = max(abs(hx - 64) - 64, abs(hy - 16) - 16) > 0
+    near = 1 - z/4096; lit = near*near        -- squared: far stars stay dark longer
+    line(gone ? -999 : 64 + sx*st, 16 + sy*st, gone ? -999 : hx, hy, lit*0.2, lit)
   }
 }
 pal(ice, ink)
@@ -1118,17 +1138,20 @@ pal(ice, ink)
 The corners in one table, the edges in another; each edge reads its two
 corners, turns them about y then x by per-frame angles, projects them and
 draws the line, its ink from the depth (near edges brighter, crossing
-handled by the max rule). The colour is the last line's: one edit.
+handled by the max rule), at 100 frames a second (~2.9 ms). The colour is
+the last line's: one edit.
 
 ```psi example=wire-cube
 loop 4.8
+fps 100
 -- Wireframe cube: turning about two axes and swinging across; the near
--- edges brighter. a: size. The colour is the last line's #40c0ff
+-- edges brighter. The colour is the last line's #40c0ff
+-- a: size
 table V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1
 table E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7
 frame {
   sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)
-  size = 20 + a*28; mid = 64 + sa*40
+  size = 34 + a*28; mid = 64 + sa*40
 }
 draw {
   for e < 12 {
@@ -1138,7 +1161,7 @@ draw {
     xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned
     xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb
     line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),
-         clamp(0.6 - zb/90, 0.16, 1), clamp(0.6 - zd/90, 0.16, 1))
+         clamp(0.594 - zb/148, 0.156, 1), clamp(0.594 - zd/148, 0.156, 1))
   }
 }
 #40c0ff * ink

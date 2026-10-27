@@ -180,6 +180,62 @@ fn loop_header() {
     );
 }
 
+/// `fps N` (E801-E802): the frame time it asks for; `fps` stays a name a
+/// formula may set; a part's (a whole formula pasted in) is the host's.
+#[test]
+fn fps_line() {
+    assert_eq!(compile("gray(x)").unwrap().frame_ms(), None);
+    assert_eq!(compile("fps 100\ngray(x)").unwrap().frame_ms(), Some(10));
+    assert_eq!(
+        compile("loop 4; fps 50\ngray(x)").unwrap().frame_ms(),
+        Some(20)
+    );
+    assert_eq!(compile("fps 25\ngray(x)").unwrap().frame_ms(), Some(40));
+    // The same picture: only the player's frame grid changes.
+    let (a, b) = (
+        compile("gray(x + t)").unwrap(),
+        compile("fps 100\ngray(x + t)").unwrap(),
+    );
+    assert_eq!(a.ops[..a.len()], b.ops[..b.len()]);
+    assert_eq!(compile("fps = 3\ngray(x*fps)").unwrap().frame_ms(), None);
+    let p = compile("part p {\n  fps 100\n  gray(x)\n}\np").unwrap();
+    assert_eq!(p.frame_ms(), None, "a part's fps is left to the formula's");
+    let p = compile("fps 25\npart p { fps 100; gray(x) }\np").unwrap();
+    assert_eq!(p.frame_ms(), Some(40));
+    for (src, want, line, col) in [
+        (
+            "fps 60\ngray(x)",
+            "`fps` is 25, 50 or 100 frames a second",
+            1,
+            5,
+        ),
+        ("fps 100.5\ngray(x)", "`fps` is 25, 50 or 100", 1, 5),
+        (
+            "fps\ngray(x)",
+            "`fps` takes 25, 50 or 100 frames a second, e.g. `fps 100`",
+            1,
+            1,
+        ),
+        ("fps 100\nfps 50\ngray(x)", "`fps` is already set", 2, 1),
+        (
+            "fps 100 fast\ngray(x)",
+            "expected the end of the line",
+            1,
+            9,
+        ),
+        (
+            "layer { fps 100\ngray(x) }",
+            "`fps` is the whole formula's",
+            1,
+            9,
+        ),
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains(want), "{src:?}: {}", e.msg);
+        assert_eq!(e.line_col(src), (line, col), "{src:?}: {}", e.msg);
+    }
+}
+
 #[test]
 fn registers_are_reused() {
     let p = compile(sketches::RING_CLOCK).unwrap();
