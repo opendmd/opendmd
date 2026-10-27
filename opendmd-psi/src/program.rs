@@ -55,7 +55,7 @@ pub(crate) const L_REG0: u8 = 3;
 /// on scalars, or per pixel on lanes (each operand a lane or a scalar
 /// broadcast); `U_*` load what is under the formula into a lane; the
 /// colour steps (`OUT_*`, one per layer) write the pixels.
-pub(crate) use code::PAL_SCALED;
+pub(crate) use code::{PAL_SCALED, PAL_SHIFT};
 
 pub(crate) mod code {
     // binary
@@ -207,6 +207,12 @@ pub(crate) mod code {
     /// A palette colour's flag (on its `d`, the palette): times its `c`
     /// (`pal(P, v) * k`).
     pub const PAL_SCALED: u8 = 0x80;
+    /// With [`PAL_SCALED`]: bits 3-6 of `d` are a shift, the scale being
+    /// `c / 2^shift` (`pal(P, v) * floor(q)/8`: the `/8` folded into the
+    /// colour step, exactly `fixed::mul(c, 2^-shift)`, an arithmetic shift).
+    pub const PAL_SHIFT: u8 = 3;
+    /// The palette's bits of a palette colour's `d`.
+    pub const PAL_MASK: u8 = 7;
 
     /// Value operands a step reads: [`arity`], and for a scaled palette
     /// colour its scale too (the coverage not counted).
@@ -600,12 +606,17 @@ impl Program {
                 let base = match kind {
                     OUT_HSV if lane => 195,
                     OUT_RGB if lane => 120,
-                    // `pal(P, v) * k`: three channels scaled. psi-probe
-                    // (p2probe-a) measured 458 ns a pixel in all with the
-                    // 64-bit multiplies; since then k = 1 is the palette's
-                    // bytes and 0 < k < 1 one 32-bit multiply a channel (a
-                    // guess: ~250 in all, to be measured again).
-                    OUT_PAL if lane && vals > 1 => 130,
+                    // `pal(P, v) * k`: three channels scaled. psi-probe on
+                    // the spare (p2probe-b): 346 ns a pixel in all for a
+                    // k that varies (226 + the write), 166 for k = 1 (the
+                    // palette's bytes: 46 + the write).
+                    OUT_PAL if lane && vals > 1 => {
+                        if self.const_value(op.c) == Some(ONE) {
+                            46
+                        } else {
+                            226
+                        }
+                    }
                     _ => 0,
                 };
                 // Covered unless the coverage is a constant slot of 1 or
@@ -836,9 +847,9 @@ impl Program {
 pub(crate) const STILL_COPY_NS: u32 = 15;
 
 /// `noise(x, y, z)` with a whole constant `z`, ns a pixel: the plane's
-/// four corners ([`crate::fixed::noise_flat`]; a guess until `psi-probe`
-/// measures it, about half the 855 of eight).
-pub(crate) const NOISE_FLAT_NS: u32 = 470;
+/// four corners ([`crate::fixed::noise_flat`]), measured on the spare
+/// (p2probe-b: 816 ns a pixel for the step row against 1,103 with eight).
+pub(crate) const NOISE_FLAT_NS: u32 = 565;
 
 /// A value step's cost, ns a pixel at 128 lanes on the ESP32, from
 /// `psi-probe` (2026-10-26): what [`Program::esp32_us`] adds up, and what the

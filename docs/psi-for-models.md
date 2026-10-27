@@ -1201,10 +1201,12 @@ draw {
 The built-in tunnel's look: per pixel a depth (`128/len`, the tunnel twice
 as tall as wide) and a place round the walls (`atan2`), a checker turning
 and travelling, the palette cycling, lit by depth in eight steps with a
-light going round. `deep` and `round` depend on the pixel alone, so they
-are the still cache's: ~7.5 ms a frame with it (50 fps), ~17.6 without
-(a look, or the panel short of memory). The twist is a number in the
-source, not a slider, so that `round` stays still.
+light going round. `near` and `round` depend on the pixel alone, so they
+are the still cache's: ~6.9 ms a frame with it (50 fps; the spare measured
+7.7 for a version a few steps longer), ~17.5 without (a look, or the panel
+short of memory). The twist is a number in the source, not a slider, so
+that `round` stays still; `near` (16 − depth, 0 in the black middle) makes
+the fade one `min` and the black middle a comparison.
 
 ```psi example=tunnel
 loop 4.8
@@ -1212,21 +1214,22 @@ loop 4.8
 -- checker lengths, and the palette goes round once.
 -- From the vanishing point, the tunnel twice as tall as wide:
 dx = px - 63.5; dy = (15.5 - py)*2
--- how deep each pixel looks: ~1 at the edges, 16 where it turns black
+-- how far each pixel is from the black middle: 0 there (where the
+-- tunnel is deeper than 16), ~15 at the edges
 -- (this and `round` depend on the pixel alone: worked out once, kept)
-deep = min(128/len(dx, dy), 31.99)
+near = 16 - min(128/len(dx, dy), 16)
 -- round the walls: 16 checker cells a turn, twisting with depth
 twist = 1                              -- try 0 to 3
-round = atan2(dy, dx)*16 + deep*twist/8
+round = atan2(dy, dx)*16 + (16 - near)*twist/8
 -- the checker, turning and travelling
-u = round + t/0.3; v = deep + t/0.6
+u = round + t/0.3; v = 16 + t/0.6 - near
 cell = (floor(u) + floor(v)) % 2
 -- lit by depth (full near, fading as a square, black in the middle) and
 -- by a light going round with the walls, in eight steps
-fade = clamp(1.6 - deep/10, 0, 1)
-side = 6.35 + 1.59*cos(u/16)
-light = floor(fade*fade*side + (deep < 16))/8
-pal(chrono, frac(cell ? 0.711 + t/4.8 : 0.336 + t/4.8)) * light
+fade = min(near, 10)                    -- 10 near, to 0 where it turns black
+side = 0.0635 + 0.0159*cos(u/16)
+light = floor(fade*fade*side + (near > 0))/8
+pal(chrono, cell ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * light
 ```
 
 ### 34. Rotozoom (the column run, a picker)

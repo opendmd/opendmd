@@ -282,7 +282,7 @@ fn noise_flat_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 2], z: i32) {
 /// `pal(P, k) * s` along the lane, its two operands read with a stride (0:
 /// a value for the lane): one loop for the four kinds of operand.
 #[inline(never)]
-fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32]) {
+fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32], shift: u8) {
     let mut one = [0i32; 2];
     let mut ptr = [core::ptr::null::<i32>(); 2];
     let mut stride = [0usize; 2];
@@ -302,7 +302,8 @@ fn pal_lit_lane(px: &mut [[u8; 3]], args: [Arg; 2], p: &[[u8; 3]; 32]) {
         // once per element (stride 1), or one value (stride 0), alive for
         // the call.
         let (k, s) = unsafe { (*ptr[0], *ptr[1]) };
-        *o = fixed::pal_lit(p, k, s);
+        // (`>> shift` is exactly `fixed::mul(s, 2^-shift)`.)
+        *o = fixed::pal_lit(p, k, s >> shift);
         for j in 0..2 {
             ptr[j] = ptr[j].wrapping_add(stride[j]);
         }
@@ -865,7 +866,8 @@ fn colour<const N: usize>(s: &Scratch<N>, op: &Op, base: usize, t: &Tables, px: 
         OUT_PAL if op.d & PAL_SCALED != 0 => pal_lit_lane(
             px,
             [a, c],
-            t.palettes[((op.d & !PAL_SCALED) as usize).min(4)],
+            t.palettes[((op.d & PAL_MASK) as usize).min(4)],
+            (op.d & !PAL_SCALED) >> PAL_SHIFT,
         ),
         OUT_PAL => {
             let p = t.palettes[(op.d as usize).min(4)];
