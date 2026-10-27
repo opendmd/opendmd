@@ -1344,17 +1344,18 @@ mod tests {
             .ends_with("the limit is 32 ms) — simplify it"));
         assert!(PsiFx::from_query(&super::path(&mid, "fps=50")[8..]).is_ok());
         // Over its 5 ms budget, `fps 100` starts from the estimate: two
-        // moving noises (~9.1 ms) at 40 ms frames before its first; the
-        // ring clock from its estimate with the still cache (~5.7 ms, 11.5
-        // without) at 20, and at 40 when the gate would refuse the cache.
+        // moving noises (~9.1 ms) at 40 ms frames before its first; a
+        // tunnel of noise from its estimate with the still cache (~6.8 ms,
+        // 15.9 without) at 20, and at 40 when the gate would refuse the
+        // cache. (The ring clock was this one until psi-speed: 4.x ms now.)
         let heavy = "fps 100\nloop 4\ngray(noise(x*8, y*4, t) + noise(x*3, y*9, t*2))";
         let fx = PsiFx::from_query(&super::path(heavy, "")[8..]).unwrap();
         assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (10, 40));
-        let ring = format!("fps 100\n{}", psi::sketches::RING_CLOCK);
-        let fx = PsiFx::from_query(&super::path(&ring, "")[8..]).unwrap();
+        let ring = "fps 100\nloop 4\nd = 1/len(px - 63.5, (15.5 - py)*2)\nr = atan2(15.5 - py, px - 63.5)\ngray(noise(d*8 + t, r*4, t) + sin(d*3 - t)*0.2)";
+        let fx = PsiFx::from_query(&super::path(ring, "")[8..]).unwrap();
         assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (10, 20));
         set_still_gate(Some(|_| false));
-        let fx = PsiFx::from_query(&super::path(&ring, "")[8..]).unwrap();
+        let fx = PsiFx::from_query(&super::path(ring, "")[8..]).unwrap();
         assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (10, 40));
         set_still_gate(None);
         // Over a GIF, a look follows its path's `fps=` (else 50), never the
