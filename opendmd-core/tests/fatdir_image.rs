@@ -170,12 +170,18 @@ fn image(cluster_sectors: u32, kb: u32) -> Option<(PathBuf, tempdir::Dir)> {
 }
 
 mod tempdir {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Process-wide counter: tests run in parallel threads, and pid + nanos can collide.
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
     pub struct Dir(pub std::path::PathBuf);
     impl Dir {
         pub fn new() -> Dir {
             let p = std::env::temp_dir().join(format!(
-                "fatdir-test-{}-{}",
+                "fatdir-test-{}-{}-{}",
                 std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
                 std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
             ));
             std::fs::create_dir_all(&p).unwrap();
