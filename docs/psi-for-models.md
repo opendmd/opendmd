@@ -1210,14 +1210,15 @@ The built-in tunnel's look: per pixel a depth (`128/len`, the tunnel twice
 as tall as wide) and a place round the walls (`atan2`), a checker turning
 and travelling, the palette cycling, lit by depth in eight steps with a
 light going round. `near` and `round` depend on the pixel alone, so they
-are the still cache's: ~6.9 ms a frame with it (50 fps; the spare measured
-7.7 for a version a few steps longer), ~17.5 without (a look, or the panel
-short of memory). The twist is a number in the source, not a slider, so
+are the still cache's: ~4.6 ms a frame with it (`fps 100`; the spare
+measured 4.0 ms as an effect, p90 4.1), ~14.4 without (a look, or the panel
+short of memory: then the panel holds it at a slower rate). The twist is a number in the source, not a slider, so
 that `round` stays still; `near` (16 − depth, 0 in the black middle) makes
 the fade one `min` and the black middle a comparison.
 
 ```psi example=tunnel
 loop 4.8
+fps 100
 -- Tunnel: the time warp. Each loop the walls turn once, travel two
 -- checker lengths, and the palette goes round once.
 -- From the vanishing point, the tunnel twice as tall as wide:
