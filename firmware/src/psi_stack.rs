@@ -42,9 +42,10 @@ use opendmd_core::psi;
 /// and the ~200-350 B "drift" per formula opened since the formula stack
 /// came in: per-thread state the std thread's exit never gave back). A
 /// task the caller deletes itself has nothing of the sort: its control
-/// block and stack are freed by `vTaskDelete` at once (it is pinned to the
-/// caller's core, so it is never running while the caller is), not later
-/// by an idle task.
+/// block and stack are freed by `vTaskDelete` at once, not later by an idle
+/// task, because it is deleted only once suspended (pinned to the caller's
+/// core it is never running while a pinned caller is; an unpinned caller
+/// waits for it to suspend).
 pub fn run<T: Send, F: FnOnce() -> T + Send>(f: F) -> Option<T> {
     use esp_idf_sys as sys;
     struct Job<F, T> {
@@ -105,6 +106,16 @@ pub fn run<T: Send, F: FnOnce() -> T + Send>(f: F) -> Option<T> {
     }
     unsafe {
         sys::xQueueSemaphoreTake(done, u32::MAX);
+        // Delete it only once it has suspended itself. Pinned to the
+        // caller's core it always has by now when the caller is pinned (the
+        // main task); a caller free to run on the other core (the HTTP
+        // server's handlers) can wake while the task is still between its
+        // give and its suspend: wait the moment out, so `vTaskDelete` never
+        // meets a running task (which it would only queue for the idle
+        // task to free).
+        while sys::eTaskGetState(task) != sys::eTaskState_eSuspended {
+            sys::vTaskDelay(1);
+        }
         sys::vTaskDelete(task);
         sys::vQueueDelete(done);
     }

@@ -1209,9 +1209,11 @@ fn frame_at(p: &Program, inputs: &opendmd_psi::Inputs, under: &[u8]) -> Vec<u8> 
 
 /// The narrowed steps (`add_w`, `mul_n`, `shr`, …: the ranges say they
 /// never saturate) draw what the checked ones draw: random formulas with
-/// values near the ends of the range, at times across the loop and its
-/// end, with the sliders in range and out (where the VM runs the checked
-/// steps).
+/// values near the ends of the range, divisions by values whose range
+/// holds 0, values that are constant only for inputs in range, at times
+/// across the loop and past it, with the sliders and the clock in range
+/// and out (where the VM runs the checked steps). `PSI_FUZZ_N` sets the
+/// number of formulas (1,500 by default).
 #[test]
 fn narrowed_steps_are_the_checked_frames() {
     let mut r = Rng(0x0a77_0e5d_57e9_5000);
@@ -1234,9 +1236,30 @@ fn narrowed_steps_are_the_checked_frames() {
         "atan2(py, px)",
         "floor(t*7)",
         "frac(t*3)",
+        // Divisions by a value whose range holds 0; values constant only
+        // while the inputs are in range (a power of two then: a shift).
+        "1/(floor(a) - 1)",
+        "1/(a - 0.5)",
+        "1/(t - 2)",
+        "1/(floor(b) - 1)",
+        "min(a + 1, 0.5)",
+        "max(0.25, a - 3)",
+        "floor(b) - 1",
+        "min(5 - t, 0.5)",
+        "min(c + 1, 0.25)",
+        // Small products (one 32-bit multiply).
+        "x * 0.3",
+        "y * 0.45",
+        "sin(x) * 0.6",
     ];
-    let mut narrowed = 0;
-    for k in 0..1500 {
+    // Slider values: in range (0, 1, ½, ⅓) and out (-1, 3).
+    const SLIDE: [i32; 6] = [0, 1 << 16, 1 << 15, 21845, -(1 << 16), 3 << 16];
+    let n: usize = std::env::var("PSI_FUZZ_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1500);
+    let (mut narrowed, mut shr, mut mul_n, mut frames) = (0, 0, 0, 0);
+    for k in 0..n {
         let leaf = |r: &mut Rng| -> String {
             if r.below(2) == 0 {
                 BIG[r.below(BIG.len())].to_string()
@@ -1246,12 +1269,13 @@ fn narrowed_steps_are_the_checked_frames() {
         };
         let e = |r: &mut Rng| -> String {
             let (a, b, c) = (leaf(r), leaf(r), leaf(r));
-            match r.below(6) {
+            match r.below(7) {
                 0 => format!("{a} * {b} + {c}"),
                 1 => format!("({a} - {b}) * {c}"),
                 2 => format!("{a} * {b} * {c}"),
                 3 => format!("({a} + {b}) / 8 - {c}"),
                 4 => format!("min({a}, 10) * min({b}, 10) * {c}"),
+                5 => format!("x * {a} + {b}"),
                 _ => format!("{a} + {b} - {c} * 0.25"),
             }
         };
@@ -1274,23 +1298,77 @@ fn narrowed_steps_are_the_checked_frames() {
         if p != q {
             narrowed += 1;
         }
+        let listing = p.listing();
+        shr += listing.matches("shr(").count();
+        mul_n += listing.matches("mul_n(").count();
         let end = lp as u32 * 1000;
-        for (ms, a) in [
-            (0, 1 << 15),
-            (end / 2, 0),
-            (end - 1, 1 << 16),
-            (end, 1 << 15),
-            (end + 5000, 1 << 15),
-            (end / 3, 3 << 16),
-            (end / 3, -1),
-        ] {
-            let inputs = opendmd_psi::Inputs { a, ..inputs(ms) };
+        let times = [0, end / 3, end / 2, end - 1, end, end + 5000];
+        for j in 0..8 {
+            let ms = times[r.below(times.len())];
+            let (a, b, c) = (
+                SLIDE[r.below(SLIDE.len())],
+                SLIDE[r.below(SLIDE.len())],
+                SLIDE[r.below(SLIDE.len())],
+            );
+            let (hour, second) = if j % 2 == 0 { (23, 59) } else { (10, 30) };
+            let inputs = opendmd_psi::Inputs {
+                a,
+                b,
+                c,
+                hour,
+                second,
+                ..inputs(ms)
+            };
+            frames += 1;
             assert!(
                 frame_at(&p, &inputs, &under) == frame_at(&q, &inputs, &under),
-                "case {k}: {src:?} at {ms} ms, a {a}\n{}",
-                p.listing()
+                "case {k}: {src:?} at {ms} ms, a {a} b {b} c {c}\n{listing}"
             );
         }
     }
-    assert!(narrowed > 1000, "only {narrowed} narrowed");
+    // The generator must keep reaching the rewrites.
+    assert!(narrowed * 3 > n * 2, "only {narrowed} of {n} narrowed");
+    assert!(shr * 10 > n, "only {shr} shr in {n} formulas");
+    assert!(mul_n * 10 > n, "only {mul_n} mul_n in {n} formulas");
+    eprintln!(
+        "{n} formulas, {narrowed} narrowed, {shr} shr, {mul_n} mul_n, {frames} frames compared"
+    );
+}
+
+/// The review's two cases (psi-speed): a division whose divisor's range
+/// holds 0 (`1/(floor(a) - 1)` at a = 1: a division by 0 is the
+/// numerator's end, the top one here), and a shift by a value that is a
+/// power of two only for inputs in range (`min(a + 1, 0.5)` at a = -1, and
+/// `min(5 - t, 0.5)` past the loop).
+#[test]
+fn the_reviews_narrowing_cases() {
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    for (src, ms, a) in [
+        (
+            "loop 4\nk = 1/(floor(a) - 1)\nrgb(x + k + 1, 0, 0)",
+            1000,
+            1 << 16,
+        ),
+        (
+            "loop 4\nk = min(a + 1, 0.5)\nrgb(x * k, 0, 0)",
+            1000,
+            -(1 << 16),
+        ),
+        (
+            "loop 4\nk = min(5 - t, 0.5)\nrgb(x * k, 0, 0)",
+            9000,
+            1 << 15,
+        ),
+    ] {
+        let (mut p, mut q) = (Program::default(), Program::default());
+        opendmd_psi::compile_with(src, &mut p, true, true).unwrap();
+        opendmd_psi::compile_with(src, &mut q, true, false).unwrap();
+        let inputs = opendmd_psi::Inputs { a, ..inputs(ms) };
+        assert!(
+            frame_at(&p, &inputs, &under) == frame_at(&q, &inputs, &under),
+            "{src:?} at {ms} ms, a {a}\n{}",
+            p.listing()
+        );
+    }
 }

@@ -7,8 +7,9 @@
 //! [`inputs_in_range`] checks (`t` within the loop, the sliders 0..1, the
 //! clock's whole hours, minutes and seconds), and rewrites:
 //!
-//! - `mul(v, 2^-n)` (either order, the power of two a constant, n 0..=16)
-//!   as `shr(v, n)`: exactly `v >> n` for every `v` (no range needed);
+//! - `mul(v, 2^-n)` (either order, the power of two a scalar whose range
+//!   is that one value, n 0..=16) as `shr(v, n)`: exactly `v >> n`, the
+//!   scalar kept in `b` so out of range it is `mul(v, b)` again;
 //! - `add`/`sub`/`mul` whose exact result always fits an i32 as `add_w`,
 //!   `sub_w`, `mul_w` (no saturation test), and a `mul` whose 64-bit
 //!   product always fits an i32 as `mul_n` (one 32-bit multiply).
@@ -83,7 +84,9 @@ pub(crate) fn checked(c: u8) -> u8 {
     match c {
         code::ADD_W => code::ADD,
         code::SUB_W => code::SUB,
-        code::MUL_W | code::MUL_N => code::MUL,
+        // (A shift keeps the scalar it stands for in `b`: its constant may
+        // be one only for inputs in range.)
+        code::MUL_W | code::MUL_N | code::SHR => code::MUL,
         c => c,
     }
 }
@@ -189,12 +192,15 @@ fn div_iv(a: Iv, b: Iv) -> Iv {
     if b.0 <= 0 && b.1 >= 0 {
         // Over a `b` of one sign and 0 (a division by 0 is the end of the
         // numerator's sign, 0/0 is 0), the quotient's sign is still known.
-        let pos = (a.0 >= 0 && b.0 >= 0) || (a.1 <= 0 && b.1 <= 0);
-        let neg = (a.0 >= 0 && b.1 <= 0) || (a.1 <= 0 && b.0 >= 0);
-        return match (pos, neg) {
-            (true, false) => Iv(0, HI),
-            (false, true) => Iv(LO, 0),
-            _ => FULL,
+        // Only over a `b` of 0 and up: a division by 0 is the end of
+        // the *numerator's* sign, so with `b` 0 and down a positive
+        // numerator still gives the top end (review, psi-speed).
+        return if a.0 >= 0 && b.0 >= 0 {
+            Iv(0, HI)
+        } else if a.1 <= 0 && b.0 >= 0 {
+            Iv(LO, 0)
+        } else {
+            FULL
         };
     }
     let q = |x: i64, y: i64| (x << 16) / y;
@@ -238,8 +244,13 @@ pub(crate) fn narrow(prog: &mut Program) {
     }
     // The draw stage's slots (its counters and values): anything.
     for op in &ops[fe.min(de)..de] {
-        sc[(op.d & 0x7f) as usize] = FULL;
-        sc[(op.a & 0x7f) as usize] = FULL;
+        match op.code {
+            // A loop's counter (END counts in `a`); the primitives write
+            // nothing (their `d` is 0: `t`'s slot, not theirs).
+            END => sc[(op.a & 0x7f) as usize] = FULL,
+            LINE_FROM | LINE_TO | DOT => {}
+            _ => sc[(op.d & 0x7f) as usize] = FULL,
+        }
     }
     for &op in &ops[de.min(re)..re] {
         sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
@@ -282,11 +293,14 @@ pub(crate) fn narrow(prog: &mut Program) {
                     _ => None,
                 };
                 if let Some((v, n)) = shift {
+                    // The scalar stays in `b`: out of range the step is
+                    // `mul(a, b)` again (`checked`).
+                    let k = if v == op.a { op.b } else { op.a };
                     op = Op {
                         code: SHR,
                         d: op.d,
                         a: v,
-                        b: 0,
+                        b: k,
                         c: n,
                     };
                 } else if mul_corners(a, b).fits() {
