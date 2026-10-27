@@ -45,6 +45,18 @@ pub struct PsiFx {
     /// clock's µs; 0: not refused): asked again a second later (a clone
     /// made without one; see `frame`).
     ink_tried: u32,
+    /// The still cache ([`psi::Still`]: 16 KB a value the formula works out
+    /// from the pixel's position alone), taken in `frame` when the
+    /// [`set_still_gate`] gate allows and let go when it says to: the same
+    /// pictures either way, only faster. All-zero is none held.
+    still: psi::Still,
+    /// When the still cache was last refused (as `ink_tried`).
+    still_tried: u32,
+    /// The still cache has been held since the formula opened: until it
+    /// has, it is asked for every frame (after a GIF -> Formula switch the
+    /// transition's buffers hold the heap for a moment), then once a second
+    /// after a refusal.
+    still_once: bool,
     delay_ms: u8,
     inputs: psi::Inputs,
     gov: Governor,
@@ -53,6 +65,70 @@ pub struct PsiFx {
 /// How long a formula that draws waits to ask for its canvas again after
 /// the heap refused it (the look's `refused` convention).
 const CANVAS_RETRY_US: u32 = 1_000_000;
+
+/// May a formula's still cache take `bytes` more of the heap now (any
+/// `bytes` above 0), or keep what it holds (0)? The firmware's keeps room
+/// for a transition and gives way to a look ([`set_still_gate`]).
+pub type StillGate = fn(usize) -> bool;
+
+#[cfg(not(test))]
+static STILL_GATE: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+thread_local! {
+    static STILL_GATE: AtomicUsize = const { AtomicUsize::new(0) };
+}
+
+/// The heap the playing formula's still cache holds (B), for status.
+#[cfg(not(test))]
+static STILL_HELD: AtomicU32 = AtomicU32::new(0);
+// Tests run in parallel: each thread its own.
+#[cfg(test)]
+thread_local! {
+    static STILL_HELD_T: AtomicU32 = const { AtomicU32::new(0) };
+}
+
+fn set_still_held(b: u32) {
+    #[cfg(not(test))]
+    STILL_HELD.store(b, Ordering::Relaxed);
+    #[cfg(test)]
+    STILL_HELD_T.with(|h| h.store(b, Ordering::Relaxed));
+}
+
+/// Install the gate a formula's still cache asks before it takes the heap
+/// and every frame while it holds it (`None`: no gate — taken whenever
+/// the allocation succeeds: the simulator, the browser, the tests).
+pub fn set_still_gate(gate: Option<StillGate>) {
+    let a = gate.map_or(0, |f| f as usize);
+    #[cfg(not(test))]
+    STILL_GATE.store(a, Ordering::Relaxed);
+    #[cfg(test)]
+    STILL_GATE.with(|g| g.store(a, Ordering::Relaxed));
+}
+
+fn still_allowed(bytes: usize) -> bool {
+    #[cfg(not(test))]
+    let a = STILL_GATE.load(Ordering::Relaxed);
+    #[cfg(test)]
+    let a = STILL_GATE.with(|g| g.load(Ordering::Relaxed));
+    match a {
+        0 => true,
+        // SAFETY: stored by `set_still_gate` from a `StillGate` (a fn
+        // pointer, never null, the size of a `usize`).
+        a => {
+            let gate = unsafe { std::mem::transmute::<usize, StillGate>(a) };
+            gate(bytes)
+        }
+    }
+}
+
+/// The heap the playing formula's still cache holds now, bytes (0: none,
+/// or the formula has no values for one).
+pub fn still_held() -> u32 {
+    #[cfg(not(test))]
+    return STILL_HELD.load(Ordering::Relaxed);
+    #[cfg(test)]
+    STILL_HELD_T.with(|h| h.load(Ordering::Relaxed))
+}
 
 /// A formula estimated to render slower than this (µs a frame on the
 /// ESP32) is refused: ~3.5 × the ring clock sketch, ~5 × the heaviest
@@ -345,6 +421,19 @@ fn compile(q: &Query, prog: &mut psi::Program) -> Result<(u32, u8), psi::Error> 
     Ok((est, delay))
 }
 
+/// What the governor starts from: the estimate with the still cache when
+/// the formula has values for one and the gate would let it take it now
+/// (it is taken on the first frame, which the governor leaves out), else
+/// `est` (every step every frame). The refusal limit is always held to
+/// `est`: the cache may be refused or let go at any time.
+fn start_estimate(prog: &psi::Program, est: u32) -> u32 {
+    if prog.still_lanes() > 0 && still_allowed(psi::Still::bytes_for(prog)) {
+        prog.esp32_us_still()
+    } else {
+        est
+    }
+}
+
 /// The frame grid for a frame time asked (ms), floored like [`PsiFx::ms`].
 fn grid(delay_ms: u8) -> u32 {
     u32::from(delay_ms.max(crate::fx::floor()))
@@ -399,7 +488,7 @@ impl PsiFx {
         fx.ink = canvas_for(&fx.prog, None)?;
         fx.delay_ms = delay;
         fx.set_sliders(q.sliders);
-        fx.gov = Governor::new(est, fx.ms());
+        fx.gov = Governor::new(start_estimate(&fx.prog, est), fx.ms());
         Ok(fx)
     }
 
@@ -423,10 +512,17 @@ impl PsiFx {
         // A formula that starts drawing takes its canvas here, between
         // frames (as an open does); one that stops gives it back.
         self.ink = canvas_for(&prog, self.ink.take())?;
+        // The still cache keeps its lanes for a formula with as many values
+        // (the next full frame keeps the new formula's: it checks), else
+        // lets them go and the next frame asks again.
+        if self.still.held_bytes() != psi::Still::bytes_for(&prog) {
+            self.still.release();
+            set_still_held(0);
+        }
         self.prog = *prog;
         self.delay_ms = delay;
         self.set_sliders(q.sliders);
-        let g = Governor::new(est, self.ms());
+        let g = Governor::new(start_estimate(&self.prog, est), self.ms());
         if g.level > self.gov.level {
             self.gov = g;
         }
@@ -450,6 +546,51 @@ impl PsiFx {
 
     pub fn program(&self) -> &psi::Program {
         &self.prog
+    }
+}
+
+impl PsiFx {
+    /// Before a frame: let the still cache go when the gate says (a
+    /// transition or a look needs the heap), or take it when it allows (at
+    /// most once a second after a refusal; every frame without a clock).
+    fn still_step(&mut self, clocked: bool, now: u32) {
+        let need = psi::Still::bytes_for(&self.prog);
+        if need == 0 {
+            return;
+        }
+        if self.still.is_held() {
+            if !still_allowed(0) {
+                self.still.release();
+                set_still_held(0);
+                log::info!("formula: still cache ({need} B) given back to the heap");
+            }
+            return;
+        }
+        let due = !clocked
+            || !self.still_once
+            || self.still_tried == 0
+            || now.wrapping_sub(self.still_tried) >= CANVAS_RETRY_US;
+        if !due {
+            return;
+        }
+        if still_allowed(need) && self.still.take(&self.prog) {
+            self.still_tried = 0;
+            self.still_once = true;
+            set_still_held(need as u32);
+            // This frame keeps the values (every step runs): left out.
+            self.gov.edited();
+            log::info!("formula: still cache taken ({need} B)");
+        } else {
+            self.still_tried = now | 1;
+        }
+    }
+}
+
+impl Drop for PsiFx {
+    fn drop(&mut self) {
+        if self.still.is_held() {
+            set_still_held(0);
+        }
     }
 }
 
@@ -491,11 +632,13 @@ impl Effect for PsiFx {
                 self.ink_tried = if self.ink.is_some() { 0 } else { t0 | 1 };
             }
         }
+        self.still_step(clock.is_some(), t0);
         let (bytes, dirty) = canvas.bytes_and_dirty_mut();
-        psi::render_rows_ink::<LANES>(
+        psi::render_rows_still::<LANES>(
             &self.prog,
             &mut self.scratch,
             self.ink.as_deref_mut(),
+            Some(&mut self.still),
             &self.inputs,
             &tables(),
             None,
@@ -1200,11 +1343,20 @@ mod tests {
             .msg
             .ends_with("the limit is 32 ms) — simplify it"));
         assert!(PsiFx::from_query(&super::path(&mid, "fps=50")[8..]).is_ok());
-        // Over its 5 ms budget, `fps 100` starts from the estimate: the
-        // ring clock (~11.4 ms) at 40 ms frames before its first.
+        // Over its 5 ms budget, `fps 100` starts from the estimate: two
+        // moving noises (~9.1 ms) at 40 ms frames before its first; the
+        // ring clock from its estimate with the still cache (~5.7 ms, 11.5
+        // without) at 20, and at 40 when the gate would refuse the cache.
+        let heavy = "fps 100\nloop 4\ngray(noise(x*8, y*4, t) + noise(x*3, y*9, t*2))";
+        let fx = PsiFx::from_query(&super::path(heavy, "")[8..]).unwrap();
+        assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (10, 40));
         let ring = format!("fps 100\n{}", psi::sketches::RING_CLOCK);
         let fx = PsiFx::from_query(&super::path(&ring, "")[8..]).unwrap();
+        assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (10, 20));
+        set_still_gate(Some(|_| false));
+        let fx = PsiFx::from_query(&super::path(&ring, "")[8..]).unwrap();
         assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (10, 40));
+        set_still_gate(None);
         // Over a GIF, a look follows its path's `fps=` (else 50), never the
         // formula's line: it is drawn at the GIF's frames.
         let look = "fps 100\nloop 4\nlayer screen { gray(x + t/4, 0.4) }";
@@ -1967,6 +2119,92 @@ mod tests {
     /// A formula that draws but lost its canvas (a clone made when the heap
     /// hadn't 4 KB) asks for it again in `frame` and then draws as it
     /// should; with a clock, once a second, not every frame.
+    /// The still cache through the effect: taken on the first frame, the
+    /// same frames as without it, let go when the gate says, asked again
+    /// once a second when refused (every frame without a clock).
+    #[test]
+    fn a_formulas_still_cache_changes_no_frame_and_gives_way() {
+        let src =
+            "loop 2\nd = 1/len(px - 63.5, (15.5 - py)*2)\ngray(frac(d*8 + t/2) * step(0.02, d))";
+        let mut fx = PsiFx::from_query(&path(src)[8..]).unwrap();
+        assert_eq!(fx.prog.still_lanes(), 1);
+        assert!(!fx.still.is_held(), "nothing taken at open");
+        let mut c = Canvas::new();
+        let want = |ms: u32| {
+            let mut out = vec![0u8; PIXELS * 3];
+            let p = psi::compile_plain(src).unwrap();
+            let inputs = psi::Inputs {
+                t: psi::Inputs::at_ms(ms),
+                ..Default::default()
+            };
+            psi::render(
+                &p,
+                &mut psi::Scratch::<128>::new(),
+                &inputs,
+                &psi::OWN,
+                &mut out,
+            );
+            out
+        };
+        for (k, ms) in [0u32, 20, 40, 1000, 1980].into_iter().enumerate() {
+            fx.frame(Duration::from_millis(ms.into()), &mut c);
+            assert!(fx.still.is_held() && still_held() == 16384, "frame {k}");
+            assert!(c.as_bytes() == want(ms).as_slice(), "frame {k} at {ms} ms");
+        }
+        // The gate says no: given back at the next frame, drawn the same.
+        set_still_gate(Some(|_| false));
+        fx.frame(Duration::from_millis(60), &mut c);
+        assert!(!fx.still.is_held() && still_held() == 0);
+        assert!(c.as_bytes() == want(60).as_slice());
+        // Yes again: taken (no clock here, so at once).
+        set_still_gate(Some(|_| true));
+        fx.frame(Duration::from_millis(80), &mut c);
+        assert!(fx.still.is_held());
+        assert!(c.as_bytes() == want(80).as_slice());
+        // A live edit to another formula with one value keeps the lanes and
+        // draws the new one (the cache checks whose values it holds).
+        let other = "loop 2\nd = 1/len(px - 60, (15.5 - py)*3)\ngray(frac(d*8 - t/2))";
+        fx.retune_from(&path(other)[8..]).unwrap();
+        assert!(fx.still.is_held());
+        fx.frame(Duration::from_millis(100), &mut c);
+        let mut out = vec![0u8; PIXELS * 3];
+        let inputs = psi::Inputs {
+            t: psi::Inputs::at_ms(100),
+            ..Default::default()
+        };
+        psi::render(
+            &psi::compile_plain(other).unwrap(),
+            &mut psi::Scratch::<128>::new(),
+            &inputs,
+            &psi::OWN,
+            &mut out,
+        );
+        assert!(c.as_bytes() == out.as_slice());
+        // A live edit of a table's entries only (the same steps): the
+        // lanes stay, the values are kept again, never drawn stale.
+        let ta = "loop 4\ntable T = 0.1, 0.5, 0.9, 0.3\nk = T[floor(len(px - 63.5, (15.5 - py)*2)/8)]\ngray(frac(k + t/4))";
+        let tb = "loop 4\ntable T = 0.9, 0.2, 0.1, 0.6\nk = T[floor(len(px - 63.5, (15.5 - py)*2)/8)]\ngray(frac(k + t/4))";
+        fx.retune_from(&path(ta)[8..]).unwrap();
+        fx.frame(Duration::from_millis(120), &mut c);
+        fx.frame(Duration::from_millis(140), &mut c);
+        assert!(fx.still.is_held());
+        fx.retune_from(&path(tb)[8..]).unwrap();
+        assert!(fx.still.is_held());
+        fx.frame(Duration::from_millis(160), &mut c);
+        let inputs = psi::Inputs {
+            t: psi::Inputs::at_ms(160),
+            ..Default::default()
+        };
+        psi::render(&psi::compile_plain(tb).unwrap(), &mut psi::Scratch::<128>::new(), &inputs, &psi::OWN, &mut out);
+        assert!(c.as_bytes() == out.as_slice(), "a table-only edit drew stale values");
+        // One without values lets them go.
+        fx.retune_from(&path("gray(x)")[8..]).unwrap();
+        assert!(!fx.still.is_held());
+        set_still_gate(None);
+        drop(fx);
+        assert_eq!(still_held(), 0);
+    }
+
     #[test]
     fn a_formula_without_its_canvas_asks_again() {
         let mut fx = Fx::parse(&path(STARS)).unwrap();
@@ -2011,7 +2249,16 @@ mod tests {
         c.dirty_mut().clear();
         c.dirty_mut().mark_span(5, 0, crate::canvas::WIDTH);
         let _ = look.apply(Duration::from_millis(1), &mut c, 0);
-        assert!(look.held.as_ref().unwrap().ink.as_ref().unwrap().0.iter().all(|&b| b == 0));
+        assert!(look
+            .held
+            .as_ref()
+            .unwrap()
+            .ink
+            .as_ref()
+            .unwrap()
+            .0
+            .iter()
+            .all(|&b| b == 0));
         look.redraw();
         let mut c = picture();
         let _ = look.apply(Duration::from_millis(2), &mut c, 0);

@@ -19,7 +19,8 @@
 
 use opendmd_psi::golden::fnv;
 use opendmd_psi::{
-    compile, q16, render_rows_ink, Ink, Inputs, Scratch, H, MAX_OPS, MAX_SCALARS, OWN, REGS, W,
+    compile, q16, render_rows_ink, render_rows_still, Ink, Inputs, Scratch, Still, H, MAX_OPS,
+    MAX_SCALARS, OWN, REGS, W,
 };
 use std::io::Read;
 
@@ -99,7 +100,9 @@ fn main() {
     // What it is.
     let (f, r, x) = prog.counts();
     let inputs = prog.inputs();
-    let us = prog.esp32_us();
+    let plain_us = prog.esp32_us();
+    // As the player draws it: with its still cache when it has values for one.
+    let us = prog.esp32_us_still();
     let rating = match us {
         0..=5000 => "light",
         5001..=8000 => "medium",
@@ -147,6 +150,15 @@ fn main() {
         "panel: ~{:.1} ms a frame: {rating} (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)",
         us as f64 / 1000.0
     );
+    if prog.still_lanes() > 0 {
+        println!(
+            "still cache: {} value{} worked out once ({} KB of the player's heap); ~{:.1} ms a frame without it",
+            prog.still_lanes(),
+            if prog.still_lanes() == 1 { "" } else { "s" },
+            Still::bytes_for(&prog) / 1024,
+            plain_us as f64 / 1000.0
+        );
+    }
     if grid == 10 && us > 5000 {
         println!("fps 100: over its 5 ms budget, so the panel plays it at 50 fps or fewer");
     }
@@ -178,6 +190,8 @@ fn main() {
     let under = (over || prog.over()).then(sample);
     let mut scratch = Scratch::<128>::new();
     let mut ink = Ink::boxed();
+    let mut still = Still::new();
+    still.take(&prog);
     let mut shots = Vec::new();
     for &(ms, (hh, mm, ss)) in &times {
         let inp = Inputs {
@@ -200,6 +214,27 @@ fn main() {
             u32::MAX,
             &mut frame,
         );
+        if still.is_held() {
+            // The still cache keeps its values on the first frame and draws
+            // from them after: the same bytes either way.
+            let mut cached = vec![0u8; W * H * 3];
+            for _ in 0..2 {
+                render_rows_still(
+                    &prog,
+                    &mut scratch,
+                    Some(&mut ink),
+                    Some(&mut still),
+                    &inp,
+                    &OWN,
+                    under.as_deref(),
+                    u32::MAX,
+                    &mut cached,
+                );
+                if cached != frame {
+                    die("the still cache drew different bytes (a bug in Psi)");
+                }
+            }
+        }
         shots.push(frame);
     }
     let label: Vec<String> = times

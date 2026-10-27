@@ -2148,17 +2148,19 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
 }
 
 /// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms",
-/// "compile_us"}` while a formula plays: its mean render time, the frame
-/// time its governor holds it to (`fx_psi::Governor`), the one it asked
-/// for, and the last formula compile's time; empty otherwise.
+/// "compile_us","still"}` while a formula plays: its mean render time, the
+/// frame time its governor holds it to (`fx_psi::Governor`), the one it
+/// asked for, the last formula compile's time, and the heap its still cache
+/// holds (B, 0 none); empty otherwise.
 #[cfg(feature = "psi")]
 fn formula_json(path: &str) -> String {
     let (us, ms, asked, compile_us) = opendmd_core::fx_psi::stats();
     if !opendmd_core::synth::is_formula(path) || ms == 0 {
         return String::new();
     }
+    let still = opendmd_core::fx_psi::still_held();
     format!(
-        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"compile_us":{compile_us}}}"#
+        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"compile_us":{compile_us},"still":{still}}}"#
     )
 }
 

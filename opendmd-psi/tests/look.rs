@@ -124,9 +124,10 @@ fn every_composition_compiles_to_a_look() {
     // Plasma, screened at 40 %: what the panel is asked to draw.
     let p = compile(&compose(PLASMA, "screen", 40).unwrap()).unwrap();
     assert_eq!(p.layers(), 1);
-    // (~8.2 ms: the spare measured it at 8.55 ms as a look, a 12 ms limit.)
+    // (~8.2 ms: the spare measured it at 8.55 ms as a look, a 12 ms limit;
+    // ~6.7 ms once its waves of x are worked out once a column.)
     assert!(
-        (7_500..12_000).contains(&p.esp32_us()),
+        (6_000..12_000).contains(&p.esp32_us()),
         "{} µs",
         p.esp32_us()
     );

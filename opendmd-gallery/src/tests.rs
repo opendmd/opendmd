@@ -242,7 +242,7 @@ fn the_examples_pass() {
         over += usize::from(prog.over());
         n += 1;
     }
-    assert_eq!(n, 28);
+    assert_eq!(n, 31);
     assert!(over >= 6, "the examples that draw over a GIF: {over}");
 }
 
