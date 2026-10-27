@@ -123,7 +123,7 @@ computer.
 | `i` | pixel number 0..4095 from the top left: `(31 − py)·128 + px` | pixel |
 | `t` | seconds into the loop (whole frames: 20 ms, 10 with `fps 100`) | frame |
 | `hour`, `minute`, `second` | the clock: 0..23, 0..59, 0..59 (whole) | frame |
-| `a`, `b`, `c` | sliders, 0..1; a comment `-- a: speed` names one | frame |
+| `a`, `b`, `c` | sliders, 0..1; a comment `-- a: speed` names one; `-- a: shape = cube, ball` (≤ 6 words) makes buttons: choice j of n sets j/(n−1) (n = 1: 0), read with `pick(floor(a*(n-1) + 0.5), …)` | frame |
 | `w`, `h` | 128 and 32 (constants) | — |
 | `ur`, `ug`, `ub` | red, green, blue of the picture under the formula, 0..1 | pixel |
 | `ul` | its brightness (Rec. 601: `(77R + 150G + 29B + 128)/256`), 0..1 | pixel |

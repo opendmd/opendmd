@@ -36,8 +36,15 @@ If you leave the editor without saving, the gallery offers **Continue
 editing** at the top, and the app asks before anything replaces it.
 
 On your player, **Show on panel** plays a formula there until the
-playlist moves on; save it as a GIF to keep it. Formulas that draw over a
-GIF have their own section, [Over a GIF](#over-a-gif).
+playlist moves on. **Add to playlist…** puts it in one of your playlists
+(the same list of playlists the Library offers), where the player draws it
+itself: it follows the clock, loops for as long as it plays and takes a
+line of the playlist, not the space of a GIF. The playlist shows it by its
+name, marked *Formula*, and so does Now while it plays. It goes in as it is
+at that moment, sliders included; change it later and add it again. (In
+the online demo, Now's preview skips Formulas in a playlist: only a player
+draws them there.) Formulas that draw over a GIF have their own section,
+[Over a GIF](#over-a-gif).
 
 ## The editor
 
@@ -55,6 +62,12 @@ last version that worked, dimmed.
   below zero. Ctrl+Z (⌘Z) undoes a whole drag at once.
 - **Sliders:** a formula that uses `a`, `b` or `c` gets a slider for each,
   0 to 1. A comment like `-- a: speed` gives the slider a name.
+- **Pickers:** a comment that lists words after an `=`, like
+  `-- a: shape = cube, octahedron, icosahedron`, makes the slider a row of
+  buttons, one for each word (up to six). The buttons set the slider to
+  evenly spaced values from 0 to 1: with three, 0, 0.5 and 1. Read which
+  one is chosen with `pick(floor(a*2 + 0.5), …)`, or for any number of
+  choices *n*, `floor(a*(n − 1) + 0.5)`.
 - **Cheat sheet** lists everything the language has, with a line on each.
   Tap a name to put it in.
 - **Save** keeps the formula in this browser, under its name.
@@ -469,8 +482,3 @@ clock, keeps only those few seconds, as they look when you save.
 Formulas you save are kept in this browser. Another browser, or a cleared
 browser, won't have them: share a link to yourself to move one.
 
-## Coming next
-
-Formulas in playlists, next to the effects, are coming: a formula then
-runs on the player itself, follows the clock and loops forever without the
-size of a GIF.
