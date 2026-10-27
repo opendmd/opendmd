@@ -261,10 +261,15 @@ fn constants_fold_and_values_share() {
     let p = compile("u = x - 0.5\nv = (x - 0.5) * 1 + 0\nrgb(u, v, 0)").unwrap();
     assert_eq!(p.len(), 2, "{}", p.listing());
     // Division by a constant is a multiply; % by a power of two a mask.
-    let p = compile("gray(x / 4 + x % 0.5)").unwrap();
+    // (Before narrowing: then the multiply by 1/4 is a shift.)
+    let mut p = Program::default();
+    crate::compile_with("gray(x / 4 + x % 0.5)", &mut p, true, false).unwrap();
     let codes: Vec<u8> = p.ops[..p.len()].iter().map(|o| o.code).collect();
     assert!(codes.contains(&code::MUL) && codes.contains(&code::MASK));
     assert!(!codes.contains(&code::DIV) && !codes.contains(&code::MOD));
+    let p = compile("gray(x / 4 + x % 0.5)").unwrap();
+    let codes: Vec<u8> = p.ops[..p.len()].iter().map(|o| o.code).collect();
+    assert!(codes.contains(&code::SHR) && codes.contains(&code::ADD_W));
 }
 
 #[test]
@@ -1869,4 +1874,70 @@ fn only_a_full_render_draws() {
         &mut part,
     );
     assert_eq!(ink.0, drawn);
+}
+
+#[test]
+fn mul_and_the_narrowed_steps_are_exact() {
+    // `mul` is sat(a·b >> 16) (floor), and each narrowed step is its
+    // checked step wherever its range condition holds: random values and
+    // the edges.
+    let mut x = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let edges = [
+        0,
+        1,
+        -1,
+        ONE,
+        -ONE,
+        i32::MAX,
+        i32::MIN,
+        i32::MAX - 1,
+        i32::MIN + 1,
+        1 << 23,
+        -(1 << 23),
+        181 << 16,
+        -(181 << 16),
+        46_340,
+        -46_341,
+    ];
+    for k in 0..400_000 {
+        let (a, b) = if k < edges.len() * edges.len() {
+            (edges[k % edges.len()], edges[k / edges.len()])
+        } else {
+            let r = next();
+            let sh = (r >> 59) as u32; // spread the magnitudes
+            ((r as i32) >> sh, ((r >> 32) as i32) >> (sh / 2))
+        };
+        let p = a as i64 * b as i64;
+        assert_eq!(fixed::mul(a, b), fixed::sat(p >> 16), "{a} {b}");
+        if (p >> 16) == ((p >> 16) as i32) as i64 {
+            assert_eq!(fixed::mul_w(a, b), fixed::mul(a, b), "{a} {b}");
+        }
+        if p == (p as i32) as i64 {
+            assert_eq!(fixed::mul_n(a, b), fixed::mul(a, b), "{a} {b}");
+        }
+        if (a as i64 + b as i64) == (a.wrapping_add(b)) as i64 {
+            assert_eq!(fixed::add_w(a, b), fixed::add(a, b));
+        }
+        if (a as i64 - b as i64) == (a.wrapping_sub(b)) as i64 {
+            assert_eq!(fixed::sub_w(a, b), fixed::sub(a, b));
+        }
+        for n in [0, 1, 3, 4, 11, 16] {
+            assert_eq!(fixed::mul(a, ONE >> n), a >> n, "{a} >> {n}");
+        }
+    }
+}
+
+#[test]
+fn the_sine_table_is_within_one() {
+    // `range` takes sin and cos to be within ±1: the table's entries within
+    // ±16,384 (interpolated between two, then × 4).
+    assert!(crate::tables::SIN
+        .iter()
+        .all(|&v| (v as i32).abs() <= 16_384));
 }

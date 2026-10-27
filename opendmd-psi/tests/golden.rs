@@ -1187,3 +1187,110 @@ fn division_by_a_constant_floors_whole_numbers_right() {
         }
     }
 }
+
+/// A frame of `p` at `inputs` with the draw stage's canvas and a picture
+/// under it.
+fn frame_at(p: &Program, inputs: &opendmd_psi::Inputs, under: &[u8]) -> Vec<u8> {
+    let mut s = Scratch::<128>::new();
+    let mut ink = Ink::boxed();
+    let mut out = vec![0x5a; W * H * 3];
+    render_rows_ink::<128>(
+        p,
+        &mut s,
+        Some(&mut ink),
+        inputs,
+        &OWN,
+        Some(under),
+        u32::MAX,
+        &mut out,
+    );
+    out
+}
+
+/// The narrowed steps (`add_w`, `mul_n`, `shr`, …: the ranges say they
+/// never saturate) draw what the checked ones draw: random formulas with
+/// values near the ends of the range, at times across the loop and its
+/// end, with the sliders in range and out (where the VM runs the checked
+/// steps).
+#[test]
+fn narrowed_steps_are_the_checked_frames() {
+    let mut r = Rng(0x0a77_0e5d_57e9_5000);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    const BIG: &[&str] = &[
+        "181",
+        "30000",
+        "t*100",
+        "px*py*8",
+        "t*t",
+        "a*3000",
+        "1/8",
+        "0.0625",
+        "px*256",
+        "-px*256",
+        "4",
+        "x*x",
+        "len(px, py)",
+        "atan2(py, px)",
+        "floor(t*7)",
+        "frac(t*3)",
+    ];
+    let mut narrowed = 0;
+    for k in 0..1500 {
+        let leaf = |r: &mut Rng| -> String {
+            if r.below(2) == 0 {
+                BIG[r.below(BIG.len())].to_string()
+            } else {
+                expr(r, 1)
+            }
+        };
+        let e = |r: &mut Rng| -> String {
+            let (a, b, c) = (leaf(r), leaf(r), leaf(r));
+            match r.below(6) {
+                0 => format!("{a} * {b} + {c}"),
+                1 => format!("({a} - {b}) * {c}"),
+                2 => format!("{a} * {b} * {c}"),
+                3 => format!("({a} + {b}) / 8 - {c}"),
+                4 => format!("min({a}, 10) * min({b}, 10) * {c}"),
+                _ => format!("{a} + {b} - {c} * 0.25"),
+            }
+        };
+        let lp = 1 + k % 6;
+        let src = format!(
+            "loop {lp}\nv = {}\nu = {}\n{}",
+            e(&mut r),
+            e(&mut r),
+            if k % 3 == 0 {
+                "pal(fire, frac(v)) * (floor(u % 9)/8)".to_string()
+            } else {
+                "hsv(v, 1, frac(u))".to_string()
+            }
+        );
+        let (mut p, mut q) = (Program::default(), Program::default());
+        if opendmd_psi::compile_with(&src, &mut p, true, true).is_err() {
+            continue;
+        }
+        opendmd_psi::compile_with(&src, &mut q, true, false).expect("compiles unnarrowed too");
+        if p != q {
+            narrowed += 1;
+        }
+        let end = lp as u32 * 1000;
+        for (ms, a) in [
+            (0, 1 << 15),
+            (end / 2, 0),
+            (end - 1, 1 << 16),
+            (end, 1 << 15),
+            (end + 5000, 1 << 15),
+            (end / 3, 3 << 16),
+            (end / 3, -1),
+        ] {
+            let inputs = opendmd_psi::Inputs { a, ..inputs(ms) };
+            assert!(
+                frame_at(&p, &inputs, &under) == frame_at(&q, &inputs, &under),
+                "case {k}: {src:?} at {ms} ms, a {a}\n{}",
+                p.listing()
+            );
+        }
+    }
+    assert!(narrowed > 1000, "only {narrowed} narrowed");
+}

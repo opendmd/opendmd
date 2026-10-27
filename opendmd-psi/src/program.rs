@@ -80,7 +80,16 @@ pub(crate) mod code {
     pub const HASH: u8 = 18;
     pub const LEN: u8 = 19;
     pub const BIT: u8 = 20;
-    pub const LAST_BIN: u8 = 20;
+    // Per-pixel only, written by `range::narrow` over a laid-out program:
+    // `add`, `sub` and `mul` whose operands' ranges (the inputs within
+    // theirs: see `range`) say they never saturate — the same value
+    // without the overflow test (`ADD_W`, `SUB_W`, `MUL_W`), and a `mul`
+    // whose 64-bit product fits 32 bits with one multiply (`MUL_N`).
+    pub const ADD_W: u8 = 21;
+    pub const SUB_W: u8 = 22;
+    pub const MUL_W: u8 = 23;
+    pub const MUL_N: u8 = 24;
+    pub const LAST_BIN: u8 = 24;
     // unary
     pub const NEG: u8 = 32;
     pub const NOT: u8 = 33;
@@ -102,7 +111,10 @@ pub(crate) mod code {
     // is 0..=c (the table's length less one), else 0 ([`super::tab`]). Any
     // level; one operand.
     pub const TAB: u8 = 45;
-    pub const LAST_UN: u8 = 45;
+    // `mul(a, 2^-n)` (n = `c`, 0..=16, an immediate): exactly `a >> n`, an
+    // arithmetic shift (`range::narrow`, per pixel only).
+    pub const SHR: u8 = 46;
+    pub const LAST_UN: u8 = 46;
     // ternary
     pub const SELECT: u8 = 64;
     pub const CLAMP: u8 = 65;
@@ -249,13 +261,14 @@ pub(crate) mod code {
 
     /// The step's name, for listings.
     pub fn name(c: u8) -> &'static str {
-        const N: [&str; 21] = [
+        const N: [&str; 25] = [
             "add", "sub", "mul", "div", "mod", "mask", "lt", "le", "gt", "ge", "eq", "ne", "and",
-            "or", "min", "max", "step", "atan2", "hash", "len", "bit",
+            "or", "min", "max", "step", "atan2", "hash", "len", "bit", "add_w", "sub_w", "mul_w",
+            "mul_n",
         ];
-        const U: [&str; 14] = [
+        const U: [&str; 15] = [
             "neg", "not", "abs", "floor", "frac", "sin", "cos", "tri", "saw", "sqr", "sqrt",
-            "recip", "pick", "tab",
+            "recip", "pick", "tab", "shr",
         ];
         const T: [&str; 10] = [
             "select",
@@ -609,12 +622,16 @@ impl Program {
                     // `pal(P, v) * k`: three channels scaled. psi-probe on
                     // the spare (p2probe-b): 346 ns a pixel in all for a
                     // k that varies (226 + the write), 166 for k = 1 (the
-                    // palette's bytes: 46 + the write).
+                    // palette's bytes: 46 + the write). Since psi-speed a
+                    // pixel with its neighbour's entry and scale reuses its
+                    // colour (Tunnel ~80 % of pixels, Rotozoom floor ~90 %):
+                    // ~21 instructions against ~55, so 60 (a guess from the
+                    // instructions until psi-probe measures it).
                     OUT_PAL if lane && vals > 1 => {
                         if self.const_value(op.c) == Some(ONE) {
                             46
                         } else {
-                            226
+                            60
                         }
                     }
                     _ => 0,
@@ -842,9 +859,10 @@ impl Program {
     }
 }
 
-/// What copying one cached lane into its register costs a pixel, ns (a
-/// guess until `psi-probe` measures it: a 512 B `memcpy` a lane).
-pub(crate) const STILL_COPY_NS: u32 = 15;
+/// What a cached lane costs a pixel, ns: its register is pointed at it
+/// (read in place), once a lane of pixels — next to nothing. (It was a
+/// 512 B copy a lane, guessed at 15, until psi-speed.)
+pub(crate) const STILL_COPY_NS: u32 = 1;
 
 /// `noise(x, y, z)` with a whole constant `z`, ns a pixel: the plane's
 /// four corners ([`crate::fixed::noise_flat`]), measured on the spare
@@ -860,6 +878,13 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
         BIT => 55,
         MUL => 86,
+        // The narrowed steps (`range`): estimated from their loops'
+        // instructions against `add`'s and `mul`'s until psi-probe
+        // measures them.
+        ADD_W | SUB_W => 25,
+        MUL_W => 55,
+        MUL_N => 33,
+        SHR => 28,
         MOD => 113,
         DIV | RECIP => 685,
         ATAN2 => 529,
@@ -914,9 +939,11 @@ pub(crate) fn pick(sc: &[i32; MAX_SCALARS], base: u8, n: u8, k: i32) -> i32 {
 pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
     use code::*;
     match c {
-        ADD => fixed::add(a, b),
-        SUB => fixed::sub(a, b),
-        MUL => fixed::mul(a, b),
+        // (The narrowed steps are per pixel only; their checked forms here
+        // give the same values.)
+        ADD | ADD_W => fixed::add(a, b),
+        SUB | SUB_W => fixed::sub(a, b),
+        MUL | MUL_W | MUL_N => fixed::mul(a, b),
         DIV => fixed::div(a, b),
         MOD => fixed::modulo(a, b),
         MASK => fixed::mask(a, b),

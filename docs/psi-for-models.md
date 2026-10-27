@@ -418,11 +418,19 @@ It is calibrated on the device (within ~12 % for layers and looks).
 change — constants once, `t`/clock/slider-only values once a frame,
 `y`/`py`-only values once per row (32 times), the rest per pixel. So
 `sin(t/8)` is free and `sin(y*4)` nearly free; only per-pixel work counts.
+**Ranges are automatic too**: the panel knows each value's range from
+`x y px py i` (0..1, 0..127, …), `t` (0 to the loop's length), the sliders
+(0..1), the clock, `min`, `floor`, `sin`, `%`, comparisons and the
+constants, and a `+ − *` whose result can't leave the number range skips
+its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
+`min(near, 10)*min(near, 10)` is cheaper than an unbounded `near*near`.
 
 | per pixel | ns | | per pixel | ns |
 |---|---|---|---|---|
 | + − compare min max step and or `%`2ⁿ | 50 | | `sin` `cos` | 110 |
 | `*` | 86 | | `tri` `saw` `sqr` `select` `clamp` | 60 |
+| + − that can't overflow | 25 | | `*` that can't overflow | 55 (33 when the product is small) |
+| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 28 | | | |
 | `%` (other) | 113 | | `mix` | 130 |
 | neg abs floor frac not | 40 | | `smoothstep` | 214 + a division if its edges vary |
 | `/` by a varying value, `1/v` | 685 | | `hash` | 220 |

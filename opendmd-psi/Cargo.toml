@@ -20,6 +20,9 @@ default = ["tables"]
 # the device carries one copy; the standalone tests, the bench and the wasm
 # parity test use these.
 tables = []
+# psi-probe's before and after on the ESP32 (`vm::LOOPS_IN_FLASH`): a
+# second copy of the frame loop with the cheap loops in flash.
+ab = []
 
 [[test]]
 name = "golden"

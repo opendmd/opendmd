@@ -3154,6 +3154,19 @@ pub fn compile_into(src: &str, prog: &mut Program) -> Result<Info, Error> {
 /// cost on the device (`psi-probe`) and the estimate's tests.
 #[doc(hidden)]
 pub fn compile_layout(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Error> {
+    compile_with(src, prog, runs, true)
+}
+
+/// [`compile_layout`] with (`narrow`) or without the narrowed pixel steps
+/// (`crate::range`: `add_w`, `mul_n`, `shr`, …; the same bytes): without,
+/// the checked steps as before them, for `psi-probe`'s before and after.
+#[doc(hidden)]
+pub fn compile_with(
+    src: &str,
+    prog: &mut Program,
+    runs: bool,
+    narrow: bool,
+) -> Result<Info, Error> {
     prog.clear();
     let mut r = compile_inner(src, prog, runs);
     if runs && r.as_ref().is_err_and(|e| e.msg == LAYOUT_BUG) {
@@ -3163,6 +3176,8 @@ pub fn compile_layout(src: &str, prog: &mut Program, runs: bool) -> Result<Info,
     }
     if r.is_err() {
         prog.clear();
+    } else if narrow {
+        crate::range::narrow(prog);
     }
     r
 }

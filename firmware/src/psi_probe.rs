@@ -40,6 +40,7 @@ use opendmd_core::canvas::Canvas;
 use opendmd_core::fx::Fx;
 use opendmd_core::fx_psi;
 use opendmd_core::psi;
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -249,6 +250,88 @@ fn lanes_still(prog: &psi::Program, loop_ms: u32, out: &mut [u8]) -> Option<(u32
     }))
 }
 
+/// A VM frame's p50 / p90 for `prog`: with a still cache when it has
+/// values for one (and the heap a block for it), else every step (with the
+/// draw stage's canvas).
+fn vm_frame(prog: &psi::Program, out: &mut [u8]) -> (u32, u32, &'static str) {
+    let lp = prog.loop_ms();
+    if prog.still_lanes() > 0 {
+        if let Some((a, b, _)) = lanes_still(prog, lp, out) {
+            return (a, b, "cached");
+        }
+    }
+    let (a, b, _) = lanes::<128>(prog, lp, out);
+    (a, b, "plain")
+}
+
+/// psi-speed's before and after, in one boot: the five examples' VM frames
+/// with the narrowed steps (`add_w`, `mul_n`, `shr`, …) and without, and
+/// with the cheap loops in IRAM (the release) and in flash; and every
+/// frame of each the same bytes either way.
+fn speed(out: &mut [u8]) {
+    let t = fx_psi::tables();
+    let (mut same, mut differ) = (0u32, 0u32);
+    for (name, src) in [
+        ("Starfield", STARFIELD_EX),
+        ("Wireframe cube", CUBE_EX),
+        ("Tunnel", TUNNEL_EX),
+        ("Rotozoom", ROTOZOOM_EX),
+        ("Rotozoom floor", ROTOZOOM_FLOOR_EX),
+        ("Plasma", PLASMA_EX),
+        ("Fire", FIRE_EX),
+    ] {
+        let mut fast = zeroed::<psi::Program>();
+        let mut checked = zeroed::<psi::Program>();
+        if psi::compile_with(src, &mut fast, true, true).is_err()
+            || psi::compile_with(src, &mut checked, true, false).is_err()
+        {
+            say!(error, "psi-probe: speed {name}: does not compile");
+            continue;
+        }
+        let lp = fast.loop_ms();
+        // (Its own scratch and canvas, given back before the timed frames:
+        // the still cache wants a 16 KB block.)
+        let mut s = zeroed::<psi::Scratch<128>>();
+        s.reset();
+        let mut ink = psi::Ink::boxed();
+        let mut frame_hash = |p: &psi::Program, ms: u32, flash: bool, out: &mut [u8]| {
+            psi::LOOPS_IN_FLASH.store(flash, Ordering::Relaxed);
+            psi::render_rows_ink::<128>(p, &mut s, Some(&mut ink), &psi::golden::inputs(ms), &t, None, u32::MAX, out);
+            psi::LOOPS_IN_FLASH.store(false, Ordering::Relaxed);
+            psi::golden::fnv(out)
+        };
+        for ms in [0, lp / 3, lp * 2 / 3, lp.saturating_sub(20)] {
+            let a = frame_hash(&fast, ms, false, out);
+            let b = frame_hash(&checked, ms, false, out);
+            let c = frame_hash(&fast, ms, true, out);
+            for h in [b, c] {
+                if h == a {
+                    same += 1;
+                } else {
+                    differ += 1;
+                    say!(error, "psi-probe: speed {name} at {ms} ms: {h:#018x} against {a:#018x} (narrowed, IRAM)");
+                }
+            }
+        }
+        drop(s);
+        drop(ink);
+        let (f50, f90, how) = vm_frame(&fast, out);
+        let (c50, c90, _) = vm_frame(&checked, out);
+        psi::LOOPS_IN_FLASH.store(true, Ordering::Relaxed);
+        let (l50, l90, _) = vm_frame(&fast, out);
+        psi::LOOPS_IN_FLASH.store(false, Ordering::Relaxed);
+        say!(info,
+            "psi-probe: speed {name:<15} ({how}): narrowed+IRAM p50 {f50} p90 {f90} | checked+IRAM p50 {c50} p90 {c90} | narrowed+flash p50 {l50} p90 {l90} us a frame; est {} us ({} checked)",
+            fast.esp32_us_still(),
+            checked.esp32_us_still()
+        );
+    }
+    say!(info,
+        "psi-probe: speed frames: {same} the same narrowed or checked, IRAM or flash, {differ} differ{}",
+        if differ == 0 { " (bit-identical)" } else { "" }
+    );
+}
+
 /// The compiler's own stack on the worst inputs (`psi::worst`, the deepest
 /// last): each compiled on a thread of its own with a [`WORST_STACK`] stack,
 /// reporting the bytes it used; then on the player's compile stack and
@@ -432,6 +515,8 @@ pub fn run(root: &str) {
     // The firmware's own gate again.
     fx_psi::set_still_gate(Some(crate::still_gate));
 
+    speed(&mut out);
+
 
     for (name, src) in psi::sketches::ALL {
         // Compile (into a zeroed program, as the effect does).
@@ -610,14 +695,29 @@ pub fn run(root: &str) {
         ("hsv 0.3 on picture", "hsv(x + t, 1, 1, 0.3)"),
         ("screen hsv 0.4 on picture", "layer screen { hsv(x + t, 1, 1, 0.4) }"),
     ];
+    // psi-speed's narrowed steps (`range`: the ranges say they never
+    // saturate), each over a baseline row above: add_w over `add`'s row,
+    // and so on.
+    const NARROW_STEPS: [(&str, &str); 8] = [
+        ("add_w", "gray(x + t)"),
+        ("sub_w", "gray(x - t)"),
+        ("mul_w", "gray(px * t)"),
+        ("mul_n", "gray(x * (t * 0.01))"),
+        ("shr (+add_w)", "gray((x + t) / 4)"),
+        ("select (+lt) n", "gray(x < t ? x : 0.5)"),
+        ("pal * k few (+3)", "pal(fire, floor(x * 4) / 4) * (floor(x * 8 + t) / 8)"),
+        ("pal * k=x (+mul_n)", "pal(fire, x) * (x * 0.9)"),
+    ];
     let steps = STEPS
         .iter()
-        .map(|&(w, s)| (w, s, false))
-        .chain(LAYER_STEPS.iter().map(|&(w, s)| (w, s, true)));
-    for (what, src, over) in steps {
+        .map(|&(w, s)| (w, s, false, false))
+        .chain(LAYER_STEPS.iter().map(|&(w, s)| (w, s, true, false)))
+        .chain(NARROW_STEPS.iter().map(|&(w, s)| (w, s, false, true)));
+    for (what, src, over, narrow) in steps {
         // (Laid out without the column and still runs: a step's cost on
-        // every pixel, as the table was measured.)
-        if psi::compile_layout(src, &mut prog, false).is_err() {
+        // every pixel, as the table was measured; the checked steps as
+        // then, but for psi-speed's rows.)
+        if psi::compile_with(src, &mut prog, false, narrow).is_err() {
             say!(error, "psi-probe: step {what}: does not compile");
             continue;
         }
