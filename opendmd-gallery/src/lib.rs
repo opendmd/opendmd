@@ -32,7 +32,7 @@
 //! build (on the merged files, before anything is published), and the
 //! tests here. `main.rs` is the command line.
 
-use opendmd_psi::{compile, render_rows, Inputs, Program, Scratch, H, OWN, W};
+use opendmd_psi::{compile, render_rows_ink, Inputs, Program, Scratch, H, OWN, W};
 
 pub mod png;
 
@@ -489,9 +489,10 @@ pub fn frame(prog: &Program, values: &[Option<u8>; 3], ms: u32) -> Vec<u8> {
     let mut scratch: Box<Scratch<128>> = Box::new(Scratch::new());
     let mut out = vec![0u8; W * H * 3];
     let under = prog.over().then(sample);
-    render_rows(
+    render_rows_ink(
         prog,
         &mut scratch,
+        Some(&mut opendmd_psi::Ink::boxed()),
         &inputs,
         &OWN,
         under.as_deref(),

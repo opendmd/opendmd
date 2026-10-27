@@ -11,7 +11,7 @@ fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    use opendmd_psi::{compile, render, Inputs, Scratch, H, OWN, W};
+    use opendmd_psi::{compile, render_rows_ink, Ink, Inputs, Scratch, H, OWN, W};
     use opendmd_psi_web::examples;
     use std::io::Write;
 
@@ -48,7 +48,16 @@ fn main() {
                 b: ex.b,
                 c: ex.c,
             };
-            render(&p, &mut s, &i, &OWN, &mut frame);
+            render_rows_ink(
+                &p,
+                &mut s,
+                Some(&mut Ink::boxed()),
+                &i,
+                &OWN,
+                None,
+                u32::MAX,
+                &mut frame,
+            );
             let (ox, oy) = ((q % cols) * (W * S + 8), (q / cols) * (H * S + 8));
             for y in 0..H * S {
                 for x in 0..W * S {

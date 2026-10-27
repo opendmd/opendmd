@@ -149,7 +149,7 @@ fn the_examples_are_light_enough_for_the_panel() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn every_example_pasted_in_as_a_part_draws_the_same() {
-    use opendmd_psi::{golden, render_rows, Scratch};
+    use opendmd_psi::{golden, render_rows_ink, Scratch};
     let json = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../opendmd-web/www/formulas.json"
@@ -160,9 +160,10 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
     let draw = |src: &str, ms: u32| {
         let p = opendmd_psi::compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
         let mut out = vec![0u8; W * H * 3];
-        render_rows::<128>(
+        render_rows_ink::<128>(
             &p,
             &mut Scratch::new(),
+            Some(&mut opendmd_psi::Ink::boxed()),
             &golden::inputs(ms),
             &OWN,
             Some(&under),

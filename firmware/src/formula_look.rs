@@ -272,7 +272,8 @@ mod with_psi {
                     self.refused = Some(Instant::now());
                     log::info!(
                         "formula look: no room for its {} B ({} B free); the picture goes up as it is",
-                        FormulaLook::BUFFER_BYTES,
+                        self.active_ref()
+                            .map_or(FormulaLook::BUFFER_BYTES, FormulaLook::buffer_bytes),
                         free_heap()
                     );
                 }

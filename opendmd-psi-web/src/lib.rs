@@ -28,7 +28,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use opendmd_psi::{compile_into, render_rows, Inputs, Program, Scratch, H, OWN, W};
+use opendmd_psi::{compile_into, render_rows_ink, Ink, Inputs, Program, Scratch, H, OWN, W};
 use wasm_bindgen::prelude::*;
 
 #[cfg(all(target_arch = "wasm32", feature = "bump"))]
@@ -67,6 +67,13 @@ struct Under(UnsafeCell<[u8; W * H * 3]>);
 // SAFETY: as `Cell`.
 unsafe impl Sync for Under {}
 static UNDER: Under = Under(UnsafeCell::new([0; W * H * 3]));
+
+/// The draw stage's canvas (`draw { }`): a static of its own, all zero, as
+/// [`UNDER`].
+struct InkCell(UnsafeCell<Ink>);
+// SAFETY: as `Cell`.
+unsafe impl Sync for InkCell {}
+static INK: InkCell = InkCell(UnsafeCell::new(Ink::new()));
 
 fn state() -> &'static mut State {
     // SAFETY: see `Cell`; the exports below never hold two of these.
@@ -171,7 +178,8 @@ pub fn error_at() -> Vec<u32> {
 /// What the formula drawn is: `[steps, per frame, per row, per pixel, loop
 /// ms, inputs (bits 0-2 the sliders a b c, 3 t, 4 the clock, 5 the picture
 /// under it: drawn over a GIF it changes the GIF), estimated µs a frame on
-/// the panel, layers]`; empty before anything compiled.
+/// the panel, layers, steps in `draw { }` (0: it draws nothing), lines and
+/// dots it draws a frame]`; empty before anything compiled.
 #[wasm_bindgen]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -189,6 +197,8 @@ pub fn info() -> Vec<u32> {
         u32::from(p.inputs()),
         p.esp32_us(),
         p.layers() as u32,
+        p.draw_steps() as u32,
+        p.primitives(),
     ]
 }
 
@@ -223,9 +233,12 @@ fn draw(over: bool, ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c
         };
         // SAFETY: as `state()`: nothing else holds it during the call.
         let under = over.then(|| unsafe { &*UNDER.0.get() }.as_slice());
-        render_rows(
+        // SAFETY: as `state()`.
+        let ink = unsafe { &mut *INK.0.get() };
+        render_rows_ink(
             &s.prog,
             &mut s.scratch,
+            Some(ink),
             &inputs,
             &OWN,
             under,
