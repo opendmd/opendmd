@@ -1187,6 +1187,13 @@ fn infix_bp(t: Tok) -> Option<(u8, u8, u8)> {
 }
 
 impl<'s> Parser<'s> {
+    /// Token `k`, or the closing `Eof` past the end (a look ahead that runs
+    /// off the input never panics).
+    #[inline(never)]
+    fn tok(&self, k: usize) -> Token {
+        self.toks.get(k).copied().unwrap_or(self.toks[self.toks.len() - 1])
+    }
+
     #[inline(never)]
     fn peek(&self) -> Token {
         self.toks[self.pos]
@@ -2748,7 +2755,7 @@ impl<'s> Parser<'s> {
                 _ => {}
             }
             let word = if t.tok == Tok::Name { self.text(t) } else { "" };
-            let next = self.toks[self.pos + 1].tok;
+            let next = self.tok(self.pos + 1).tok;
             if next == Tok::Assign {
                 self.assignment(false)?;
             } else if word == "for" {
@@ -2796,11 +2803,7 @@ impl<'s> Parser<'s> {
         if self.in_draw > 2 {
             return self.err(kw, "`for` loops go two deep at most");
         }
-        let (n, lt, num) = (
-            self.peek(),
-            self.toks[self.pos + 1],
-            self.toks[self.pos + 2],
-        );
+        let (n, lt, num) = (self.peek(), self.tok(self.pos + 1), self.tok(self.pos + 2));
         let count = match (n.tok, lt.tok, num.tok) {
             (Tok::Name, Tok::Lt, Tok::Num(v)) if v & 0xffff == 0 && (ONE..=1024 * ONE).contains(&v) => {
                 (v >> 16) as u32

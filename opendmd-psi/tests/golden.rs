@@ -466,6 +466,10 @@ const PIECES: &[&str] = &[
     "ty",
     "r =",
     "draw {",
+    "draw { for",
+    "draw { for k <",
+    "draw { for k < 3 {",
+    "draw {\nfor k",
     "draw",
     "for k < 12 {",
     "for j < 3 {",
@@ -514,11 +518,13 @@ fn garbage_never_panics() {
     for _ in 0..3000 {
         // Token soup.
         let n = 1 + r.below(40);
-        let src: String = (0..n)
-            .map(|_| PIECES[r.below(PIECES.len())])
-            .collect::<Vec<_>>()
-            .join(" ");
-        check(&src);
+        let pieces: Vec<&str> = (0..n).map(|_| PIECES[r.below(PIECES.len())]).collect();
+        check(&pieces.join(" "));
+        // And cut off after every piece: a look ahead past the end of the
+        // input (`draw { for` at the end) must be an error, never a panic.
+        for k in 1..pieces.len() {
+            check(&pieces[..k].join(" "));
+        }
         // Raw bytes (as UTF-8, lossily).
         let raw: Vec<u8> = (0..r.below(64)).map(|_| r.next() as u8).collect();
         check(&String::from_utf8_lossy(&raw));
