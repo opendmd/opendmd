@@ -23,7 +23,7 @@
 //! pass: the path (one flat `gallery/<slug>.psi`), the size, the text (UTF-8
 //! without control, invisible or direction-changing characters; no `<` or
 //! `>` in the header), the header's fields and limits, the licence, that it
-//! compiles, and its cost on the panel (`Program::esp32_us`). The checker
+//! compiles, and its cost on the panel (`Program::esp32_us_still`). The checker
 //! never runs anything but the Psi VM, which has no I/O: a formula is
 //! arithmetic over the pixel and the time.
 //!
@@ -420,7 +420,10 @@ pub fn check_file_as(slug: &str, bytes: &[u8], trusted: bool) -> Result<Entry, V
             return Err(problems);
         }
     };
-    let us = prog.esp32_us();
+    // As the panel plays it: with its still cache when it has values for
+    // one (a gallery formula is played as itself; a look is checked by the
+    // player when it is chosen).
+    let us = prog.esp32_us_still();
     if us > MAX_US {
         problems.push(format!(
             "the formula is too heavy for the panel: about {:.1} ms a frame, {:.0} ms at most",
