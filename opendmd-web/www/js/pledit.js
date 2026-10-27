@@ -52,7 +52,7 @@ export function editor(se, ctx) {
       const e = app.wasm.parsePath(p);
       const o = ov.get(p), cv = thumbsOn() && p[0] != '@' && h('canvas.th', { width: 128, height: 32 });
       clear(row, h('button.grip', { title: 'Drag to move (or Alt+↑/↓)', 'aria-label': 'Move', onpointerdown: (ev) => drag(ev, row, i) }, '⠿'),
-        cv, h('span.t', label(e)), glyphs(o), e.platform && h('span.tag', e.platform),
+        cv, h('span.t', label(e)), glyphs(o), (e.platform || p.startsWith('@fx:psi') && 'Formula') && h('span.tag', e.platform || 'Formula'),
         h('button.sm.rm', { title: 'Remove', 'aria-label': 'Remove', onclick: (ev) => { ev.stopPropagation(); remove(i); } }, '✕'),
         moreButton(ov, p, ['Remove from playlist', () => remove(i)]));
       if (cv) attach(cv, p);
