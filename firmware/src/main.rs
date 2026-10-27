@@ -236,6 +236,21 @@ fn transition_gate(need: usize) -> bool {
     ok
 }
 
+/// Whether a formula's still cache may take `take` more bytes of the heap
+/// (`take` > 0) or keep what it holds (0): see [`config::STILL_KEEP_HEAP`].
+#[cfg(feature = "psi")]
+pub fn still_gate(take: usize) -> bool {
+    if formula_look::SOURCE.load(Ordering::Relaxed) != 0 {
+        return false;
+    }
+    let free = free_heap() as usize;
+    if take == 0 {
+        free >= config::STILL_SHED_HEAP
+    } else {
+        free >= take + config::STILL_KEEP_HEAP && largest_free_block() >= 16 * 1024
+    }
+}
+
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     // Synchronous until `logring::start` below, like EspLogger before it.
@@ -360,6 +375,9 @@ fn main() -> Result<()> {
     // Formulas time their frames (the governor: `fx_psi::Governor`).
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_clock(Some(|| unsafe { esp_idf_sys::esp_timer_get_time() } as u32));
+    // And keep their still caches to what the heap can spare.
+    #[cfg(feature = "psi")]
+    opendmd_core::fx_psi::set_still_gate(Some(still_gate));
     let mut sched = Scheduling::new(&settings.schedule);
     // Follow RePlayOS: the overlay and the sequence (`follow.rs`).
     let mut runner = follow::Runner::default();
