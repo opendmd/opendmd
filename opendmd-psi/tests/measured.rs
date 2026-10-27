@@ -69,7 +69,12 @@ pub const DRAW: &[(&str, &str, u32)] = &[
 ];
 // Formulas that draw played as effects (the real path, `Fx::frame`, slider
 // a = 0.5): p50 µs a frame, compared with the estimate as it is (it includes
-// the real paths' ×1.15).
+// the real paths' ×1.15). The sources are the examples as measured
+// (1.0.0-beta.11-drawprobe-a), before the eye test's changes of 2026-10-27
+// (formulas.json: longer streaks, heads off the panel skipped, squared
+// brightness, `fps 100`; a bigger cube): kept, because a measurement is of
+// its source. The new examples estimate 6.0 ms (Starfield) and 2.9 ms
+// (cube); psi-probe times them at its next run.
 pub const EFFECTS: &[(&str, &str, u32)] = &[
     ("Starfield", STARFIELD, 4410),
     ("Wireframe cube", CUBE, 2678),

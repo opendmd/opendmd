@@ -759,8 +759,9 @@ curl -s $DMD/api/play --json '{"path":"@fx:wire?shape=tesseract&speed=3"}'
 ```
 
 **`@fx:psi`** — a formula (the app's Formulas): `src=<url-encoded
-formula>`, `a=`, `b=`, `c=` (sliders, 0..1), `fps=50|100|25` (default 50).
-A heavy one is shown at fewer frames a second; status
+formula>`, `a=`, `b=`, `c=` (sliders, 0..1), `fps=50|100|25` (default:
+the formula's `fps` line, else 50; as a look over the GIF the line is not
+used). A heavy one is shown at fewer frames a second; status
 `now_playing.formula` has `frame_us`, `frame_ms`, `asked_ms` and
 `compile_us`.
 

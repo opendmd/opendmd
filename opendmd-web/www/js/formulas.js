@@ -33,8 +33,11 @@ function T(fn, d) {
   }
 }
 
-// The frame clock is the panel's: 50 frames a second, `t` a whole number of 20 ms frames.
+// The frame clock is the panel's: 50 frames a second, `t` a whole number of 20 ms frames,
+// or the formula's `fps` line (info()[10]: 10 or 40 ms). Over a GIF it is the GIF's: a look
+// doesn't follow its line.
 const D = 20;
+const grid = (i) => (i[5] & 32 ? 0 : i[10]) || D;
 // What the module holds: compiling is cheap (tens of µs), so whoever draws compiles first.
 // `over`: it draws over what is under it.
 let held = null, over = false;
@@ -171,12 +174,12 @@ function loop(now) {
   for (const v of views) {
     if (!v.f || v.canvas.offsetParent === null) continue;
     on = true;
-    const n = Math.max(1, Math.floor((v.loopMs || 8000) / D)), k = Math.floor((now - v.t0) / D), i = k % n;
+    const g = v.d || D, n = Math.max(1, Math.floor((v.loopMs || 8000) / g)), k = Math.floor((now - v.t0) / g), i = k % n;
     // Over a GIF the picture changes with the GIF too.
     const key = v.over && U ? k : i;
     if (key === v.i && !v.dirty) continue;
     v.i = key; v.dirty = false;
-    const rgb = draw(v.f, i * D, false, now - v.t0);
+    const rgb = draw(v.f, i * g, false, now - v.t0);
     if (rgb) { v.pv.p.showRgb(rgb); v.canvas.dataset.frames = -~v.canvas.dataset.frames; }
   }
   // Nothing on screen: stop (kick() starts it again).
@@ -191,7 +194,7 @@ function view(canvas) {
 }
 function play(v, f, i) {
   if (v.f?.src !== f.src) v.t0 = performance.now();
-  v.f = f; v.loopMs = i[4]; v.over = i[5] & 32; v.dirty = true;
+  v.f = f; v.loopMs = i[4]; v.over = i[5] & 32; v.d = grid(i); v.dirty = true;
   kick();
 }
 
@@ -247,13 +250,14 @@ function share(btn, f) {
     h('a.btn.mi', { id: 'psi-submit', href: url + '&submit', target: '_blank', rel: 'noopener', style: 'text-decoration:none', onclick: closeMenu }, 'Submit to the gallery…')), r.left, r.bottom + 4);
 }
 
-// "Save as GIF…": one loop into Create Art: 20 ms frames, 40 past 240, cut at 240.
+// "Save as GIF…": one loop into Create Art: 20 ms frames (a GIF can't do 10: `fps 100`
+// saves at 50), 40 with `fps 25` or past 240, cut at 240.
 // Over a GIF: the GIF's length, or the formula's loop if that is longer and it moves.
 function toGif(f) {
   const i = info(f.src), ms = i[4];
   if (!ms) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
   const o = i[5] & 32, len = !o ? ms : i[5] & 24 ? Math.max(ms, U?.total || 0) : U?.total || D;
-  let d = D;
+  let d = Math.max(D, grid(i));
   if (len / d > 240) d = 40;
   const all = Math.max(1, Math.floor(len / d)), n = Math.min(all, 240);
   app.artFrom = { title: (f.name || 'Formula') + (o && U ? ' over ' + U.name : ''), frames: { n, delay: d, cut: all > n, frame: (k) => draw(f, k * d % ms, false, k * d) } };
@@ -379,7 +383,7 @@ const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], 
   ['digit(n, col, row)', 'the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font'],
   ["glyph('A', col, row)", 'the same for a character'], ['bit(n, i)', 'bit i of a whole number: 1 or 0'],
   ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'], ['%', 'remainder: v % 1 is the fraction'], [';', 'a new line, on the same line'],
-  ['loop 8', 'the loop’s length in seconds (first line)'], ['frame { … }', 'values worked out once a frame'],
+  ['loop 8', 'the loop’s length in seconds (first line)'], ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'], ['frame { … }', 'values worked out once a frame'],
   ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
   ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'], ['p.v', 'a value part p sets'],
   ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']];

@@ -4,7 +4,8 @@
 //! `@fx:psi?src=<url-encoded source>[&a=0.5&b=..&c=..][&fps=50|100|25]`:
 //! the formula compiled when the path is opened (an error makes the path
 //! fail to open, as an unknown effect does); `a b c` are its sliders
-//! (decimal, default 0); 50 fps by default. A loop is the formula's `loop
+//! (decimal, default 0); the frame rate is `fps=`, else the formula's
+//! `fps N` line, else 50 (a look: `fps=`, else 50). A loop is the formula's `loop
 //! N` seconds; `t` is the frame's time into it, so the loop is seamless
 //! when everything the formula moves completes whole cycles in it.
 //!
@@ -277,17 +278,18 @@ pub fn path(src: &str, opts: &str) -> String {
     p
 }
 
-/// An `@fx:psi` query: the source, the frame time asked, the sliders.
+/// An `@fx:psi` query: the source, the frame time asked (`fps=`; `None`:
+/// the formula's `fps N`, else 20 ms), the sliders.
 struct Query {
     src: String,
-    delay_ms: u8,
+    delay_ms: Option<u8>,
     sliders: [i32; 3],
 }
 
 fn query(query: &str) -> Query {
     let mut q = Query {
         src: String::new(),
-        delay_ms: 20,
+        delay_ms: None,
         sliders: [0; 3],
     };
     for kv in query.split('&') {
@@ -296,9 +298,9 @@ fn query(query: &str) -> Query {
             "src" => q.src = crate::synth::url_decode(v.as_bytes()),
             "fps" => {
                 q.delay_ms = match v {
-                    "100" => 10,
-                    "50" => 20,
-                    "25" => 40,
+                    "100" => Some(10),
+                    "50" => Some(20),
+                    "25" => Some(40),
                     _ => q.delay_ms,
                 }
             }
@@ -313,18 +315,22 @@ fn query(query: &str) -> Query {
     q
 }
 
-/// Compile `q` into `prog` and hold it to [`MAX_EST_US`]; the estimate.
 /// Compile `q` into `prog` and hold it to what the [`Governor`] can keep in
 /// budget at its frame rate: [`MAX_EST_US`], and at 100 fps (grid 10 ms,
-/// slowest step 80 ms) 32 ms. The estimate.
-fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
+/// slowest step 80 ms) 32 ms. The estimate and the frame time asked (ms:
+/// the path's `fps=`, else the formula's `fps N`, else 20).
+fn compile(q: &Query, prog: &mut psi::Program) -> Result<(u32, u8), psi::Error> {
     let t0 = clock().map(|c| (c, c()));
     compile_into(&q.src, prog)?;
     if let Some((c, t0)) = t0 {
         STATS[2].store(c().wrapping_sub(t0), Ordering::Relaxed);
     }
     let est = prog.esp32_us();
-    let limit = MAX_EST_US.min(Governor::slowest_budget_us(grid(q)));
+    let delay = q
+        .delay_ms
+        .or(prog.frame_ms().map(|ms| ms as u8))
+        .unwrap_or(20);
+    let limit = MAX_EST_US.min(Governor::slowest_budget_us(grid(delay)));
     if est > limit {
         return Err(psi::Error {
             start: 0,
@@ -336,12 +342,12 @@ fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
             ),
         });
     }
-    Ok(est)
+    Ok((est, delay))
 }
 
-/// The frame grid a query asks for (ms), floored like [`PsiFx::ms`].
-fn grid(q: &Query) -> u32 {
-    u32::from(q.delay_ms.max(crate::fx::floor()))
+/// The frame grid for a frame time asked (ms), floored like [`PsiFx::ms`].
+fn grid(delay_ms: u8) -> u32 {
+    u32::from(delay_ms.max(crate::fx::floor()))
 }
 
 /// What a formula that draws gets when the heap hasn't its canvas (4 KB):
@@ -389,9 +395,9 @@ impl PsiFx {
     pub fn from_query(q: &str) -> Result<PsiBox, psi::Error> {
         let q = query(q);
         let mut fx = PsiBox::new();
-        let est = compile(&q, &mut fx.prog)?;
+        let (est, delay) = compile(&q, &mut fx.prog)?;
         fx.ink = canvas_for(&fx.prog, None)?;
-        fx.delay_ms = q.delay_ms;
+        fx.delay_ms = delay;
         fx.set_sliders(q.sliders);
         fx.gov = Governor::new(est, fx.ms());
         Ok(fx)
@@ -413,12 +419,12 @@ impl PsiFx {
         // SAFETY: `Program` is integers all the way down: zero is valid.
         let mut prog = unsafe { Box::<psi::Program>::new_zeroed().assume_init() };
         prog.clear();
-        let est = compile(&q, &mut prog)?;
+        let (est, delay) = compile(&q, &mut prog)?;
         // A formula that starts drawing takes its canvas here, between
         // frames (as an open does); one that stops gives it back.
         self.ink = canvas_for(&prog, self.ink.take())?;
         self.prog = *prog;
-        self.delay_ms = q.delay_ms;
+        self.delay_ms = delay;
         self.set_sliders(q.sliders);
         let g = Governor::new(est, self.ms());
         if g.level > self.gov.level {
@@ -627,7 +633,7 @@ impl FormulaLook {
             prog,
             held: None,
             inputs: psi::Inputs::default(),
-            delay_ms: q.delay_ms,
+            delay_ms: Self::delay(&q),
             gov: Governor::default(),
             t0: None,
             next: None,
@@ -671,8 +677,15 @@ impl FormulaLook {
         Ok(est)
     }
 
+    /// A look's frame time asked: its path's `fps=`, else 20 ms. A
+    /// formula's own `fps N` is not followed over a GIF: the look is drawn
+    /// at the GIF's frames, inside the GIF's budget ([`LOOK_MAX_EST_US`]).
+    fn delay(q: &Query) -> u8 {
+        q.delay_ms.unwrap_or(20)
+    }
+
     fn set(&mut self, q: &Query, est: u32) {
-        self.delay_ms = q.delay_ms;
+        self.delay_ms = Self::delay(q);
         self.inputs.a = q.sliders[0];
         self.inputs.b = q.sliders[1];
         self.inputs.c = q.sliders[2];
@@ -1134,7 +1147,77 @@ mod tests {
         );
         // A clone is equal and renders the same.
         let a = Fx::parse(&path(psi::sketches::PLASMA)).unwrap();
+        assert_eq!(a.delay(), Duration::from_millis(20), "50 fps by default");
         assert_eq!(a.clone(), a);
+    }
+
+    #[test]
+    fn the_formulas_fps_line_sets_its_grid_and_the_path_wins() {
+        let delay = |src: &str, opts: &str| {
+            let Some(Fx::Psi(fx)) = Fx::parse(&super::path(src, opts)) else {
+                panic!("{src}")
+            };
+            (fx.delay(), fx.loop_time())
+        };
+        const F: &str = "fps 100\nloop 2\nhsv(x + t/2, 1, 1)";
+        let ms = Duration::from_millis;
+        assert_eq!(delay(F, ""), (ms(10), ms(2000)), "`fps 100`: a 10 ms grid");
+        assert_eq!(delay(F, "a=0.5"), (ms(10), ms(2000)));
+        assert_eq!(delay(F, "fps=50").0, ms(20), "the path's `fps=` wins");
+        assert_eq!(delay(F, "fps=25").0, ms(40));
+        assert_eq!(delay("fps 25\ngray(x)", "").0, ms(40));
+        assert_eq!(delay("fps 50\ngray(x)", "fps=100").0, ms(10));
+        // A frame on the 10 ms grid is the VM's frame at that time.
+        let Some(Fx::Psi(mut fx)) = Fx::parse(&super::path(F, "")) else {
+            panic!()
+        };
+        assert_eq!(fx.loop_frames(), 200);
+        let mut c = Canvas::new();
+        fx.frame(Duration::from_millis(130), &mut c);
+        let prog = psi::compile(F).unwrap();
+        let mut want = vec![0u8; psi::W * psi::H * 3];
+        let inputs = psi::Inputs {
+            t: psi::Inputs::at_ms(130),
+            ..Default::default()
+        };
+        psi::render(
+            &prog,
+            &mut psi::Scratch::<128>::new(),
+            &inputs,
+            &psi::OWN,
+            &mut want,
+        );
+        assert!(c.as_bytes() == want.as_slice());
+        // Too heavy for the governor at 100 fps (over 32 ms): refused, as
+        // with `fps=100`, unless the path asks for 50.
+        let mid = (0..9)
+            .map(|k| format!("noise(x*{k}, y, t)"))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let mid = format!("fps 100\ngray({mid})");
+        assert!(PsiFx::from_query(&super::path(&mid, "")[8..])
+            .unwrap_err()
+            .msg
+            .ends_with("the limit is 32 ms) — simplify it"));
+        assert!(PsiFx::from_query(&super::path(&mid, "fps=50")[8..]).is_ok());
+        // Over its 5 ms budget, `fps 100` starts from the estimate: the
+        // ring clock (~11.4 ms) at 40 ms frames before its first.
+        let ring = format!("fps 100\n{}", psi::sketches::RING_CLOCK);
+        let fx = PsiFx::from_query(&super::path(&ring, "")[8..]).unwrap();
+        assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (10, 40));
+        // Over a GIF, a look follows its path's `fps=` (else 50), never the
+        // formula's line: it is drawn at the GIF's frames.
+        let look = "fps 100\nloop 4\nlayer screen { gray(x + t/4, 0.4) }";
+        assert_eq!(
+            FormulaLook::from_path(&super::path(look, "")).unwrap().ms(),
+            20
+        );
+        assert_eq!(
+            FormulaLook::from_path(&super::path(look, "fps=100"))
+                .unwrap()
+                .ms(),
+            10
+        );
     }
 
     #[test]
@@ -1247,11 +1330,20 @@ mod tests {
         // at 100 fps: the governor moves to 20 ms frames, and every frame
         // drawn is exactly the VM's frame at its time — the frames the
         // browser draws, some held.
+        // The same with the formula's own `fps 100` line.
+        for (f, opts) in [
+            ("loop 4\nhsv(x + t / 4, 1, y)", "fps=100"),
+            ("fps 100\nloop 4\nhsv(x + t / 4, 1, y)", ""),
+        ] {
+            governed(f, opts);
+        }
+    }
+
+    fn governed(f: &str, opts: &str) {
         set_clock(Some(fake_clock));
-        const F: &str = "loop 4\nhsv(x + t / 4, 1, y)";
-        let p = super::path(F, "fps=100");
+        let p = super::path(f, opts);
         let mut src = crate::synth::SynthSource::new(crate::synth::open(&p).unwrap()).unwrap();
-        let prog = psi::compile(F).unwrap();
+        let prog = psi::compile(f).unwrap();
         assert!(prog.esp32_us() < 5_000);
         let mut s = psi::Scratch::<128>::new();
         let mut want = vec![0u8; psi::W * psi::H * 3];
