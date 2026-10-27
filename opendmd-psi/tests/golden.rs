@@ -700,7 +700,7 @@ fn random_picks_and_colours_render_or_refuse() {
 /// picture, within the caps, or are refused only for their size.
 #[test]
 fn random_draw_blocks_render_or_refuse() {
-    let mut r = Rng(0xd2a3_5eed_0f1a_7e5u64);
+    let mut r = Rng(0x0d2a_35ee_d0f1_a7e5);
     let mut under = vec![0u8; W * H * 3];
     picture(&mut under);
     // A value inside a loop: the counters, the tables, the time.
