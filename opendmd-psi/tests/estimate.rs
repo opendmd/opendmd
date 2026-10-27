@@ -4,6 +4,9 @@
 //! - `STEPS` are the fit set: the per-step and blend costs were read off
 //!   them, so they sit near 0 % by construction; this keeps a later change
 //!   to the table from drifting off them. Every row is held to ±15 %.
+//! - `DRAW` are the draw stage's rows (the fit set for `Program::draw_us`);
+//!   `EFFECTS` the two drawing examples played as effects, a hold-out
+//!   measured on the real path (so compared without the ×1.15).
 //! - `LOOKS` are the hold-out: examples composed as looks, never fitted;
 //!   they are what says the model generalises (all within ±12 % when
 //!   written). Held to ±15 %.
@@ -43,6 +46,31 @@ fn the_estimate_is_within_15_percent_of_the_device() {
         ));
         if !(0.85..=1.15).contains(&r) {
             bad.push(format!("{name} {blend} {k}"));
+        }
+    }
+    for &(name, src, us) in measured::DRAW {
+        let p = compile(src).unwrap();
+        let est = p.esp32_us();
+        let r = est as f64 / (us as f64 * 1.15);
+        rows.push(format!(
+            "{name:<30} measured {us:>5} est {est:>5} ({:+.0} %)",
+            (r - 1.0) * 100.0
+        ));
+        if !(0.85..=1.15).contains(&r) {
+            bad.push(name.to_string());
+        }
+    }
+    // As effects: measured on the real path, so against the estimate as is.
+    for &(name, src, us) in measured::EFFECTS {
+        let p = compile(src).unwrap();
+        let est = p.esp32_us();
+        let r = est as f64 / us as f64;
+        rows.push(format!(
+            "effect {name:<23} measured {us:>5} est {est:>5} ({:+.0} %)",
+            (r - 1.0) * 100.0
+        ));
+        if !(0.85..=1.15).contains(&r) {
+            bad.push(format!("effect {name}"));
         }
     }
     println!("{}", rows.join("\n"));

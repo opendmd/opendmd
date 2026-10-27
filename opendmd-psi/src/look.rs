@@ -51,7 +51,7 @@ const PART: &str = "look";
 /// (a layered formula with a blend other than over is the compiler's
 /// error, as is a look too long for the panel).
 pub fn compose(src: &str, blend: &str, amount: u8) -> Result<String, Error> {
-    // Only its loop is wanted (boxed: ~1.8 KB).
+    // Only its loop is wanted (boxed: ~2.8 KB).
     let mut p = alloc::boxed::Box::<Program>::default();
     compile_into(src, &mut p)?;
     wrap(src, p.loop_ms(), blend, amount)

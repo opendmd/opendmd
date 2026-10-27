@@ -6,7 +6,7 @@
 //! change: `PSI_BLESS=1 cargo test --test models` rewrites the goldens.
 
 use opendmd_psi::golden::{fnv, inputs, picture};
-use opendmd_psi::{compile, render_rows, Scratch, H, OWN, W};
+use opendmd_psi::{compile, render_rows_ink, Scratch, H, OWN, W};
 
 const DOC: &str = include_str!("../../docs/psi-for-models.md");
 const GOLDEN: &str = "tests/models.golden";
@@ -54,7 +54,16 @@ fn frames(slug: &str, src: &str) -> Vec<(u32, u64)> {
         .map(|ms| {
             let mut out = vec![0u8; W * H * 3];
             let u = p.over().then_some(&under[..]);
-            render_rows(&p, &mut s, &inputs(ms), &OWN, u, u32::MAX, &mut out);
+            render_rows_ink(
+                &p,
+                &mut s,
+                Some(&mut opendmd_psi::Ink::boxed()),
+                &inputs(ms),
+                &OWN,
+                u,
+                u32::MAX,
+                &mut out,
+            );
             (ms, fnv(&out))
         })
         .collect()
@@ -90,7 +99,7 @@ fn the_reference_matches_the_language() {
         }
     }
     assert!(
-        (20..=30).contains(&examples.len()),
+        (20..=34).contains(&examples.len()),
         "{} worked examples",
         examples.len()
     );

@@ -419,7 +419,7 @@ fn program_is_plain_data() {
     let mut p = Program::default();
     assert!(compile_into("gray(nope)", &mut p).is_err());
     assert_eq!(p, Program::default());
-    assert!(core::mem::size_of::<Program>() <= 1824);
+    assert!(core::mem::size_of::<Program>() <= 2832);
 }
 
 /// Names that became functions later stay usable as values in saved
@@ -452,8 +452,10 @@ fn compact_compiles_the_same() {
 
 #[test]
 fn sizes() {
-    // What the docs say (Program, the scratch at 128 and 64 lanes).
-    assert_eq!(core::mem::size_of::<Program>(), 1808);
+    // What the docs say (Program, the scratch at 128 and 64 lanes, the
+    // draw stage's canvas).
+    assert_eq!(core::mem::size_of::<Program>(), 2832);
+    assert_eq!(core::mem::size_of::<crate::Ink>(), 4096);
     assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192);
     assert_eq!(core::mem::size_of::<Scratch<64>>(), 4864);
 }
@@ -500,6 +502,7 @@ fn worst_case_formulas() {
                     | "nested mix"
                     | "nested pick"
                     | "parts in layers"
+                    | "draw"
             ) || (1900..=2048).contains(&n),
             "{name}: {n} B"
         );
@@ -515,6 +518,13 @@ fn worst_case_formulas() {
         }
     }
     assert!(compile(&crate::worst::many_locals()).is_ok());
+    // Two loops and the draw block are three levels of the nesting cap.
+    let d = crate::worst::draw();
+    assert_eq!(
+        d.matches("sin(").count() + 3,
+        crate::worst::nested().matches("sin(").count(),
+        "{d}"
+    );
     // As deep as `sin(` nesting goes.
     let d = crate::worst::nested_digit();
     assert_eq!(
@@ -1364,4 +1374,295 @@ fn colour_and_pick_errors() {
             ),
         }
     }
+}
+
+// --- the draw stage -----------------------------------------------------------
+
+/// The draw stage's errors (E701-E710 of docs/psi-drawing-design.md §2.3;
+/// the codes are not yet a field of `Error`): (source, words in the
+/// sentence, line, column, the code).
+const DRAW_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
+    ("layer { draw { dot(1, 1) }\ngray(ink) }", "goes at the top of the formula", 1, 9, "E701"),
+    ("layer { table T = 1\ngray(1) }", "a table goes at the top", 1, 9, "E701"),
+    ("draw { dot(1, 1) }\ndraw { dot(2, 2) }\ngray(ink)", "there can be one `draw { }`", 2, 1, "E702"),
+    ("part p { draw { dot(1, 1) }\ngray(ink) }\ndraw { dot(2, 2) }\np", "there can be one `draw { }`", 3, 1, "E702"),
+    ("draw { for k 12 { dot(k, 1) } }\ngray(ink)", "`for` takes a name and a count", 1, 8, "E703"),
+    ("draw { for", "`for` takes a name and a count", 1, 8, "E703"),
+    ("draw { for k", "`for` takes a name and a count", 1, 8, "E703"),
+    ("draw { for k <", "`for` takes a name and a count", 1, 8, "E703"),
+    ("draw { for k < 0 { dot(k, 1) } }\ngray(ink)", "a whole number from 1 to 1024", 1, 8, "E703"),
+    ("draw { for k < 1025 { dot(k, 1) } }\ngray(ink)", "a whole number from 1 to 1024", 1, 8, "E703"),
+    ("draw { for k < 2.5 { dot(k, 1) } }\ngray(ink)", "a whole number from 1 to 1024", 1, 8, "E703"),
+    ("draw { for k < 1024 { dot(k, 1) }\nfor j < 1025 { dot(j, 2) } }\ngray(ink)", "a whole number", 2, 1, "E703"),
+    ("draw { for k < 1024 { dot(k, 1) }\nfor j < 1024 { dot(j, 2) }\nfor q < 1 { dot(q, 3) } }\ngray(ink)", "2049 loop turns in all; the limit is 2048", 3, 1, "E704"),
+    ("draw { for k < 32 { for j < 64 { dot(j, k) } } }\ngray(ink)", "2080 loop turns", 1, 21, "E704"),
+    ("draw { for a1 < 2 { for b1 < 2 { for c1 < 2 { dot(a1, b1, c1) } } } }\ngray(ink)", "two deep at most", 1, 34, "E705"),
+    ("line(0, 0, 9, 9)\ngray(1)", "`line(…)` draws: it goes on a line of its own inside `draw { }`", 1, 1, "E706"),
+    ("draw { v = dot(1, 2) }\ngray(ink)", "`dot(…)` draws", 1, 12, "E706"),
+    ("gray(ink)", "`ink` needs a `draw { }` block", 1, 6, "E706"),
+    ("table T = 1, x\ngray(T[0])", "a table holds numbers only", 1, 14, "E707"),
+    ("table T = 1, 2\ntable U = 3,\n4\ngray(T[0] + U[1] + V[0])", "`[ ]` reads a table", 4, 20, "E710"),
+    ("draw { dot(x, 1) }\ngray(ink)", "inside draw { } only values that are the same for every pixel", 1, 12, "E708"),
+    ("draw { v = py*2\ndot(v, 1) }\ngray(ink)", "but this uses `py`", 1, 12, "E708"),
+    ("draw { line(0, 0, 9, ink) }\ngray(ink)", "but this uses `ink`", 1, 22, "E708"),
+    ("draw { for k < 3 { k = 2\ndot(k, 1) } }\ngray(ink)", "`k` is a loop counter: it can't be set", 1, 20, "E709"),
+    ("draw { for k < 3 { for k < 2 { dot(k, 1) } } }\ngray(ink)", "`k` is already a loop counter here", 1, 24, "E709"),
+    ("v = 1\ngray(v[0])", "`[ ]` reads a table: `NAME[k]` — `v` is not a table", 2, 6, "E710"),
+    ("table T = 1, 2\ngray(T)", "`T` is a table: read one of its numbers with `T[k]`", 2, 6, "E710"),
+    ("table T = 1, 2\ngray(T[0)", "expected `]` here", 2, 9, "—"),
+    ("draw { frame { v = 1 } }\ngray(ink)", "inside draw { } go `name = value`", 1, 8, "—"),
+    ("draw { dot(1) }\ngray(ink)", "`dot` takes 2 values", 1, 8, "—"),
+    ("draw { line(1, 2, 3, 4, 5, 6, 7) }\ngray(ink)", "`line` takes 4 values", 1, 8, "—"),
+    ("for k < 3 { }\ngray(1)", "`for` goes inside `draw { }`", 1, 1, "—"),
+    ("draw { dot(1, 1)\ngray(ink)", "this `draw {` is never closed", 1, 1, "—"),
+    ("table T = 1\ntable T = 2\ngray(T[0])", "`T` is already set on line 1", 2, 7, "—"),
+];
+
+#[test]
+fn draw_error_messages() {
+    let mut bad = Vec::new();
+    for &(src, want, line, col, code) in DRAW_ERRORS {
+        match compile(src) {
+            Ok(_) => bad.push(format!("{code} {src:?}: compiled")),
+            Err(e) => {
+                let lc = e.line_col(src);
+                if !e.msg.contains(want) || lc != (line, col) {
+                    bad.push(format!(
+                        "{code} {src:?}: got {:?} at {lc:?}, want {want:?} at {:?}\n{}",
+                        e.msg,
+                        (line, col),
+                        e.render(src)
+                    ));
+                }
+            }
+        }
+    }
+    let big: alloc::vec::Vec<alloc::string::String> =
+        (0..257).map(|k| alloc::format!("{k}")).collect();
+    let e = compile(&alloc::format!("table T = {}\ngray(T[0])", big.join(", "))).unwrap_err();
+    if !e.msg.contains("up to 256 in all") {
+        bad.push(alloc::format!("E707 257 numbers: {}", e.msg));
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}
+
+/// Words that became part of the draw stage stay names a formula may set:
+/// `line`, `dot` and `ink` (a set name is that name).
+#[test]
+fn drawing_words_stay_names() {
+    let a = compile("line = x\ndot = y\nink = 0.5\nrgb(line, dot, ink)").unwrap();
+    assert_eq!(a, compile("rgb(x, y, 0.5)").unwrap());
+    let b = compile("line = 3\ndraw { line(0, 0, line, 9) }\ngray(ink)").unwrap();
+    assert!(b.draws());
+}
+
+/// A value inside a loop that doesn't depend on its counter runs once a
+/// frame; one that depends on the outer counter only, once a turn of the
+/// outer loop; the canvas isn't drawn when nothing reads `ink`.
+#[test]
+fn draw_values_run_as_rarely_as_they_can() {
+    let p = compile(
+        "loop 4\ndraw {\n  for s < 3 {\n    q = sin(t/4)*10\n    u = s*q\n    for r < 4 { dot(u + r, r*2 + q, s/3) }\n  }\n}\ngray(ink)",
+    )
+    .unwrap();
+    let l = p.listing();
+    // sin(t/4)·10 per frame; s·q in the outer body; r+u, r·2+q, in the inner.
+    assert_eq!(p.counts().0, 3, "{l}");
+    let draw: alloc::vec::Vec<&str> = l.lines().filter(|s| s.contains("draw")).collect();
+    let pos = |w: &str| draw.iter().position(|s| s.contains(w)).unwrap_or(99);
+    assert!(
+        pos("= for(") < pos("= mul(")
+            && pos("= mul(") < draw.iter().rposition(|s| s.contains("= for(")).unwrap(),
+        "{l}"
+    );
+    assert_eq!(p.primitives(), 12, "{l}");
+    assert!(p.inputs() & 8 != 0);
+    // A draw block nothing shows is left out.
+    let q = compile("draw { dot(1, 1) }\ngray(x)").unwrap();
+    assert!(!q.draws());
+    assert_eq!(q, compile("gray(x)").unwrap());
+    // Two sibling loops may use the same counter's name and values' names.
+    let r = compile("draw {\n for k < 2 { v = k*3\n dot(v, 1) }\n for k < 3 { v = k\n dot(v, 2) }\n}\ngray(ink)").unwrap();
+    assert_eq!(r.primitives(), 5);
+}
+
+/// Tables: a constant index is folded; per frame, per row, per pixel and
+/// in a loop, entry floor(k), 0 outside; the same numbers stored once.
+#[test]
+fn tables_read_floor_k() {
+    let c = compile("table T = 1, 0.5, 0.25\ngray(T[1.9] + T[3] + T[-0.5])").unwrap();
+    assert_eq!(c.listing(), compile("gray(0.5)").unwrap().listing());
+    let p = compile("table T = 0.1, 0.2, 0.3, 0.4\ntable U = 0.2, 0.3\nrgb(T[px % 5], U[py % 3], T[second % 5])").unwrap();
+    // Two tables, the second inside the first: 4 numbers held.
+    assert_eq!(&p.tables[..5], &[q(0.1), q(0.2), q(0.3), q(0.4), 0]);
+    let mut out = [0u8; W * H * 3];
+    let inputs = Inputs {
+        second: 3,
+        ..Default::default()
+    };
+    render(&p, &mut Scratch::new(), &inputs, &OWN, &mut out);
+    for (k, px) in out.chunks(3).enumerate() {
+        let (col, row) = (k % W, k / W);
+        let py = H - 1 - row;
+        let t = [0.1, 0.2, 0.3, 0.4, 0.0][col % 5];
+        let u = [0.2, 0.3, 0.0][py % 3];
+        assert_eq!(
+            px,
+            [fixed::chan(q(t)), fixed::chan(q(u)), fixed::chan(q(0.4))],
+            "{col}, {row}"
+        );
+    }
+}
+
+/// The canvas: lines' ends lit, as many pixels as the longer side (+1),
+/// each step one pixel on; ink from v0 to v1; max where they cross; dots
+/// at the nearest pixel; `y` up from the bottom.
+#[test]
+fn lines_and_dots_land_where_they_should() {
+    let ink_of = |src: &str| {
+        let p = compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
+        let mut ink = Ink::boxed();
+        let mut out = [0u8; W * H * 3];
+        render_rows_ink::<128>(
+            &p,
+            &mut Scratch::new(),
+            Some(&mut ink),
+            &Inputs::default(),
+            &OWN,
+            None,
+            u32::MAX,
+            &mut out,
+        );
+        // gray(ink) draws the byte back.
+        for (k, px) in out.chunks(3).enumerate() {
+            assert_eq!(px[0], ink.0[k]);
+        }
+        ink
+    };
+    let at = |ink: &Ink, x: i32, y: i32| ink.at(x as usize, H - 1 - y as usize);
+    let mut r = 0x1234_5678u32;
+    for _ in 0..300 {
+        let mut n = |m: u32| {
+            r ^= r << 13;
+            r ^= r >> 17;
+            r ^= r << 5;
+            (r % m) as i32
+        };
+        let (x0, y0, x1, y1) = (n(128), n(32), n(128), n(32));
+        let ink = ink_of(&alloc::format!(
+            "draw {{ line({x0}, {y0}, {x1}, {y1}, 1, 0.2) }}\ngray(ink)"
+        ));
+        assert_eq!(at(&ink, x0, y0), 255);
+        assert_eq!(at(&ink, x1, y1), 51, "{x0},{y0} {x1},{y1}");
+        let lit = ink.0.iter().filter(|&&b| b > 0).count() as i32;
+        assert_eq!(
+            lit,
+            (x1 - x0).abs().max((y1 - y0).abs()) + 1,
+            "{x0},{y0} {x1},{y1}"
+        );
+        // Every lit pixel touches another (8-connected), but for a dot.
+        if lit > 1 {
+            for y in 0..H as i32 {
+                for x in 0..W as i32 {
+                    if at(&ink, x, y) > 0 {
+                        let near = (-1..=1)
+                            .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                            .any(|(dx, dy)| {
+                                (dx, dy) != (0, 0)
+                                    && (0..W as i32).contains(&(x + dx))
+                                    && (0..H as i32).contains(&(y + dy))
+                                    && at(&ink, x + dx, y + dy) > 0
+                            });
+                        assert!(near, "{x0},{y0} {x1},{y1}: {x},{y} alone");
+                    }
+                }
+            }
+        }
+    }
+    let ink = ink_of("draw { line(0, 0, 127, 31, 0.3); line(0, 31, 127, 0, 0.8); dot(5.5, 2.49); dot(-0.5, 0, 0.5) }\ngray(ink)");
+    assert_eq!(at(&ink, 1, 0), fixed::chan(q(0.3)));
+    assert_eq!(at(&ink, 0, 31), fixed::chan(q(0.8)));
+    // y up: (6, 2) is row 29 from the top.
+    assert_eq!(ink.at(6, 29), 255);
+    // -0.5 rounds up to 0, onto (0, 0), lighter than the line there.
+    assert_eq!(at(&ink, 0, 0), fixed::chan(q(0.5)));
+}
+
+/// Over the caps the VM stops the same way everywhere, and a program that
+/// draws without a canvas draws nothing.
+#[test]
+fn draw_caps_and_no_canvas() {
+    // Each line passes the panel's corner by (812 steps, none shown).
+    let src = "draw { for k < 1024 { line(-512, 300, 300, -512); dot(k % 128, 0) }\nfor j < 1024 { dot(j % 128, 31) } }\ngray(ink)";
+    let p = compile(src).unwrap();
+    assert_eq!(p.primitives(), 3072);
+    let mut ink = Ink::boxed();
+    let mut out = [0u8; W * H * 3];
+    render_rows_ink::<128>(
+        &p,
+        &mut Scratch::new(),
+        Some(&mut ink),
+        &Inputs::default(),
+        &OWN,
+        None,
+        u32::MAX,
+        &mut out,
+    );
+    // 21 lines use the frame's 16,384 steps: the dots of turns 0..19
+    // along the bottom, none after, none at the top.
+    let bottom = (0..W).filter(|&x| ink.at(x, H - 1) > 0).count();
+    assert_eq!(bottom, 20);
+    assert!((0..W).all(|x| ink.at(x, 0) == 0));
+    let mut out2 = [1u8; W * H * 3];
+    render(&p, &mut Scratch::new(), &Inputs::default(), &OWN, &mut out2);
+    assert!(out2.iter().all(|&b| b == 0));
+}
+
+/// The estimate counts a loop's body as often as it runs.
+#[test]
+fn draw_estimate_scales_with_turns() {
+    let e = |n: u32| {
+        compile(&alloc::format!(
+            "draw {{ for k < {n} {{ dot(hash(k, 1)*128, hash(k, 2)*32) }} }}\ngray(ink)"
+        ))
+        .unwrap()
+        .draw_us()
+    };
+    let (a, b) = (e(100), e(1000));
+    assert!(a > 10 && b > 9 * (a - 10), "{a} {b}");
+    // A constant line's length is known: 100 px costs more than 12.
+    let l = |x1: u32| {
+        compile(&alloc::format!("draw {{ line(0, 0, {x1}, 0) }}\ngray(ink)"))
+            .unwrap()
+            .draw_us()
+    };
+    assert!(l(100) > l(11));
+}
+
+/// The draw stage runs on a full render only: a render of some rows reads
+/// the canvas the last full one left (a look redrawing the rows its GIF
+/// changed doesn't draw its lines again).
+#[test]
+fn only_a_full_render_draws() {
+    let p = compile("draw { for k < 8 { line(k*16, 0, k*16 + 8, 31) } }\ngray(ink)").unwrap();
+    let mut ink = Ink::boxed();
+    let mut s = Scratch::<128>::new();
+    let mut full = [0u8; W * H * 3];
+    let i = Inputs::default();
+    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, u32::MAX, &mut full);
+    let drawn = ink.0;
+    assert!(drawn.iter().any(|&b| b > 0));
+    // Rows 3 and 7 alone: the same bytes, the canvas untouched.
+    let mut part = [0u8; W * H * 3];
+    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, (1 << 3) | (1 << 7), &mut part);
+    assert_eq!(ink.0, drawn);
+    for r in [3, 7] {
+        assert_eq!(part[r * W * 3..(r + 1) * W * 3], full[r * W * 3..(r + 1) * W * 3]);
+    }
+    // Proof it isn't drawn again: a canvas changed by hand is what shows.
+    ink.0.fill(200);
+    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, 1, &mut part);
+    assert!(part[..W * 3].iter().all(|&b| b == 200));
+    render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &i, &OWN, None, u32::MAX, &mut part);
+    assert_eq!(ink.0, drawn);
 }

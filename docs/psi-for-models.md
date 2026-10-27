@@ -26,10 +26,13 @@ right. Aim for **≤ 8 ms** (light or medium).
 ## 1. The model
 
 A formula is evaluated **for every pixel, every frame** (50 frames a
-second). It is a few lines of arithmetic ending in a colour. There are no
-loops, arrays, strings, recursion or state between frames: each frame is a
-pure function of the pixel's position, the time, the clock, three sliders,
-and (optionally) the picture under it.
+second). It is a few lines of arithmetic ending in a colour. Per pixel there
+are no loops, arrays, strings, recursion or state between frames: each frame
+is a pure function of the pixel's position, the time, the clock, three
+sliders, and (optionally) the picture under it. For things that are not "each
+pixel decides for itself" — stars, wireframes, particles — a `draw { }` block
+runs **once a frame** before the pixels, loops over small `table`s and draws
+lines and dots into a canvas the pixels read back as `ink` (section 10).
 
 Coordinates: `x` is 0 at the left column to 1 at the right (`x = px/127`);
 `y` is 0 at the **bottom** row to 1 at the top (`y = py/31`). The panel is
@@ -52,6 +55,12 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | NAME "=" expr                     -- each name set once in its scope
           | "layer" [BLEND] "{" { assign | frameblock } colourline "}"
           | "part" NAME "{" formula-body "}"  -- another formula inside this one
+          | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
+          | "table" NAME "=" ["-"] NUMBER { "," ["-"] NUMBER }   -- constants; a "," may end a line
+dstmt     = NAME "=" expr                     -- the same for every pixel (no x, y, px, py, i, ur…, ink)
+          | "for" NAME "<" NUMBER "{" { dstmt sep } "}"   -- NAME = 0 … NUMBER−1; 1..1024, two deep
+          | "line" "(" e "," e "," e "," e [ "," e [ "," e ] ] ")"   -- x0, y0, x1, y1 [, v0 [, v1]]
+          | "dot" "(" e "," e [ "," e ] ")"                            -- x, y [, v]
 colourline= "rgb" "(" e "," e "," e [ "," cover ] ")"
           | "rgb" "(" ce [ "," cover ] ")"       -- a colour, maybe covering less
           | "hsv" "(" e "," e "," e [ "," cover ] ")"
@@ -71,10 +80,10 @@ sum       = term { ("+" | "-") term }
 term      = unary { ("*" | "/" | "%") unary }
 unary     = ("-" | "+") unary | atom
 atom      = NUMBER | CHAR | COLOUR | NAME | FUNC "(" args ")" | PART "." NAME
-          | PART "(" e "," e ")" "." NAME | "(" expr ")"
+          | PART "(" e "," e ")" "." NAME | TABLE "[" expr "]" | "(" expr ")"
 args      = e { "," e }                        -- digit/glyph: e "," e "," e [ "," FONT ]
                                                -- pick: e "," e { "," e }
-sep       = newline | ";"                      -- newlines inside ( ) are spaces
+sep       = newline | ";"                      -- newlines inside ( ) and [ ] are spaces
 NUMBER    = digits [ "." digits ] | "." digits -- no sign, no exponent
 CHAR      = "'" one printable ASCII character "'"   -- its code: 'A' is 65
 COLOUR    = "#" 6 hex digits | "#" 3 hex digits   -- #ff8800, #f80 (each digit twice); colour lines only
@@ -121,14 +130,15 @@ computer.
 | `r` | the distance from the middle, in panel heights: `len(cx, cy)` (0.5 touches the top and bottom) | pixel |
 | `angle` | the angle about the middle in turns, −½..½, 0 to the right, ¼ up: `atan2(cy, cx)` | pixel |
 | `ty` | the row from the **top**, 0..31 (whole numbers): `31 − py` | row |
+| `ink` | what the `draw { }` block put at this pixel, 0..1 (section 10) | pixel |
 
 `cx cy r angle ty` are exactly the formulas after their colons: the same
 steps, the same cost, the same bytes. Alone (not over a GIF), `ur ug ub ul`
 are 0. Built-in names, function names, palette names and keywords (`loop
-frame layer part use`) cannot be set (except `digit`, `glyph`, `bit`,
-`pick`, `cx`, `cy`, `r`, `angle` and `ty`, added later, so formulas saved
-with those names still work: a name a formula sets is that name; don't use
-them as names in new ones).
+frame layer part use draw for table`) cannot be set (except `digit`,
+`glyph`, `bit`, `pick`, `cx`, `cy`, `r`, `angle`, `ty`, `ink`, `line` and
+`dot`, added later, so formulas saved with those names still work: a name a
+formula sets is that name; don't use them as names in new ones).
 
 ## 5. Functions
 
@@ -310,7 +320,63 @@ Masks and crossfades need nothing more: a crossfade is a second layer whose
 coverage moves with `t`; a mask is a coverage taken from another part's
 value (examples 23 and 24).
 
-## 10. Limits
+## 10. Drawing: lines and dots, once a frame
+
+```text
+draw {                      -- once a frame, before the pixels; the canvas starts empty
+  for k < 192 {             -- k = 0, 1, … 191 (a whole number 1..1024, written out)
+    … values of k …         -- names set in a loop are its own
+    line(x0, y0, x1, y1, v0, v1)   -- or dot(x, y, v)
+  }
+}
+pal(ice, ink)               -- the pixels read the canvas as ink, 0..1
+```
+
+- **Coordinates are pixels**, x across from the left (0..127), y **up from
+  the bottom** (0..31), as `px` and `py`; fractions round to the nearest
+  pixel (½ goes up). Anything off the panel is clipped; ends are held to
+  −512..639 × −512..543.
+- **Ink** is 0..1 (default 1; `line` with one ink uses it at both ends): a
+  line's ink runs evenly from `v0` at its start to `v1` at its end in 1/255
+  steps. Where shapes overlap the brighter wins (`max`), so crossing lines
+  never darken and near edges beat far ones without sorting. No
+  antialiasing: one pixel wide, as the built-in effects draw.
+- **Inside `draw { }`** only values that are the same for every pixel: `t`,
+  the clock, the sliders, `frame { }` values, tables, loop counters. A loop
+  counts with a literal number; loops nest two deep; the loops' turns in a
+  frame (each run of a body counts one, an inner loop's every run) are at
+  most 2,048. A value inside a loop that doesn't use its counter is worked
+  out once a frame anyway (hoisting, as everywhere). Names set in `draw` but
+  outside its loops are seen after it, as `frame { }` values are.
+- **`ink`** is what was drawn at this pixel. `ink` with no `draw { }` is an
+  error; a `draw { }` that nothing shows (no `ink` in a colour that can be
+  seen) is left out. One `draw { }` per formula (the formula's, or one
+  part's: there is one canvas). Inside a part drawn elsewhere, `ink` is
+  still the real pixel's: the canvas is not moved.
+- **Tables**: `table V = -1, 1, 0.5` at the top of the formula (or a part),
+  numbers only, 256 in all; `V[k]` is number `floor(k)` counting from 0, and
+  0 outside the table. Any level: per pixel `V[px % 3]` is one step, like
+  `pick`. A comma may end a line and the numbers go on.
+- **Colour comes from the pixels**: `pal(ice, ink)`, `#40c0ff * ink`,
+  `hsv(x, 1, ink)`, `layer screen { gray(ink) }` over a GIF — the canvas
+  holds one number a pixel, the colour is the last line's.
+- **Every frame starts empty**: nothing carries over from one frame to the
+  next (trails are the panel's glow's job), so a frame is still a pure
+  function of `t`.
+
+```psi
+-- twelve spokes turning, brighter at the rim
+loop 4
+draw {
+  for k < 12 {
+    an = k/12 + t/4
+    line(64, 16, 64 + cos(an)*40, 16 + sin(an)*14, 0.2, 1)
+  }
+}
+hsv(x, 0.6, ink)
+```
+
+## 11. Limits
 
 | limit | value | error says |
 |---|---|---|
@@ -321,11 +387,17 @@ value (examples 23 and 24).
 | nesting | 18 levels of brackets and operators (a part level counts 3) | nested too deeply / parts go too deep |
 | `loop` | 0.1..3600 s | between 0.1 and 3600 seconds |
 | re-reading parts drawn at other places | bounded | draws its parts in too many places |
+| `for` count | a whole number 1..1024, written out | `for` takes a name and a count |
+| loop turns a frame (every run of a loop's body) | 2,048 | draws too much a frame |
+| loops inside loops | two deep | two deep at most |
+| `table` numbers | 256 in all | a table holds numbers only, up to 256 in all |
+| `draw { }` blocks | one (the formula's or one part's) | there can be one `draw { }` block |
+| lines and dots drawn a frame | 2,048; and 16,384 line steps (pixels walked, on the panel or off): past either the rest are skipped, the same on every device | — |
 
 Unused names and parts cost nothing; constants fold (`2*3` is 6; `x/8` is
 a multiply).
 
-## 11. The cost model
+## 12. The cost model
 
 The panel's processor runs each step for 4,096 pixels; the estimate is
 `(45 + Σ per-pixel step costs) ns × 4096` (+ ~10 µs per per-row step),
@@ -353,13 +425,20 @@ change — constants once, `t`/clock/slider-only values once a frame,
 | `pick` (values the same for every pixel) | 100 | | `pick` of per-pixel values | its compares and selects |
 | each extra layer | its colour + 190 (multiply 245, screen 300, max/min 180; with coverage add 575, multiply 630, screen 600, max/min 450, over 390) | | showing the picture under | free |
 
+**The draw stage** adds, a frame: ~420 ns for each step each time it runs
+(a loop's body counts as often as it turns, its end too), a line ~1,100 ns +
+320 a pixel walked (its longer side when that side's ends are constants, at
+least 12 pixels otherwise), a dot ~400, and 10 µs to clear the canvas; per
+pixel `ink` is 70 and `T[k]` 100 (measured on the device). So 192 streaks
+of ~15 steps each are ~2.5 ms, then ~1 ms for `pal(ice, ink)`.
+
 Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs at
 25 frames a second or fewer; GIF looks take ≤ 12 ms, and the worked
 examples here ≤ 10). Division by a constant is a
 multiply. One `noise` or `len` is fine; four are heavy. Per-pixel `px`
 arithmetic costs the same as `x` arithmetic.
 
-## 12. Idioms
+## 13. Idioms
 
 - **Seamless loops**: with `loop N`, move things by `t/N` (or `t*k/N`, k
   whole) inside periodic functions (`sin`, `frac`, `tri`, hue).
@@ -405,11 +484,21 @@ gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
 - **Your own patterns**: pack rows of pixels into a whole number and read
   them back with `bit(row_bits, column)`, e.g. an 8-pixel row pattern
   `bit(165, px % 8)`.
+- **Particles** (stars, sparks, snow): `draw { for k < N { … } }` with each
+  particle's start from `hash(k, …)` and its place from `t`: `frac(hash(k,
+  1) + t/L)` cycles it once a loop. A streak is a `line` from where it was
+  a moment ago to where it is, its ink fading towards the tail; a point is
+  a `dot`. Example 31.
+- **A wireframe**: the corners in one `table` (x, y, z after each other),
+  the edges in another (pairs of corner numbers); `for e < EDGES`, read the
+  two corners (`V[E[e*2]*3 + 1]` is the first corner's y), turn them with
+  per-frame `sin`/`cos` and project (`64 + x*36/(z + 128)`), then `line`
+  with ink from the depth. Example 32.
 - **Ranges**: keep `hsv`'s value and `rgb`'s channels in 0..1 by design
   (`*0.5 + 0.5` maps −1..1 to 0..1); out-of-range is clamped, so overshoot
   just flattens.
 
-## 13. Common mistakes
+## 14. Common mistakes
 
 Each block below fails to compile with the sentence in its first comment.
 
@@ -540,6 +629,36 @@ part p { layer { gray(x) }
 layer add { p }
 ```
 
+```psi error
+-- error: inside draw { } only values that are the same for every pixel
+draw { dot(px, 16) }
+gray(ink)
+```
+
+The draw block runs once a frame, not per pixel: draw at numbers worked out
+from `t`, the sliders, tables and loop counters.
+
+```psi error
+-- error: `ink` needs a `draw { }` block to read from
+gray(ink)
+```
+
+```psi error
+-- error: `for` takes a name and a count
+draw { for k < n { dot(k, 1) } }
+gray(ink)
+```
+
+A loop's count is a number written out (the cost must be known): loop to
+the most and leave some out (`dot(k, 1, k < n)`: ink 0 draws nothing).
+
+```psi error
+-- error: is a loop counter: it can't be set
+draw { for k < 4 { k = k*2
+  dot(k, 1) } }
+gray(ink)
+```
+
 Mistakes that compile but look wrong (the contact sheet shows them):
 
 - `y` is **up**: `y = 0` is the bottom row.
@@ -555,8 +674,12 @@ Mistakes that compile but look wrong (the contact sheet shows them):
 - `sin` is in turns: `sin(x*6.28)` is about six waves across, not one.
 - Slow `pal` ramps band (32 steps); `rgb`/`hsv` are smooth.
 - Bright everything: `add` and `screen` layers only lighten.
+- A `draw { }` that shows nothing: no `ink` in the colour (it is then left
+  out), or y counted from the top (`line` and `dot` count **up** from the
+  bottom, as `py`), or every line off the panel.
+- `x`, `y`, `i` and `r` are built in: name a star's place `sx`, `hy`, …
 
-## 14. Worked examples
+## 15. Worked examples
 
 Each: what it is for, then the formula. Frames are checked against golden
 hashes (at 10:09:30, sliders a = 0.5, b = 0.25, c = 0.75; those that read
@@ -895,8 +1018,8 @@ loop 4
 -- "OpenDMD" in the panel's font at twice the size, centred: 7 letters of 10 px
 u = px - 30; v = ty - 9               -- the pixel from the text's top left
 ch = pick(floor(u/10), 'O', 'p', 'e', 'n', 'D', 'M', 'D')   -- which letter
-ink = glyph(ch, floor(u/2) % 5, floor(v/2))   -- each font pixel 2 x 2
-hsv(x - t/4, 0.8, ink)                -- a rainbow sliding through, once a loop
+lit = glyph(ch, floor(u/2) % 5, floor(v/2))   -- each font pixel 2 x 2
+hsv(x - t/4, 0.8, lit)                -- a rainbow sliding through, once a loop
 ```
 
 ### 27. Big clock (the showcase)
@@ -961,11 +1084,67 @@ glow = max(0, 1 - behind*3) * (cx*cx + cy*cy < 0.2)
 -- "RGB" at twice the size, each letter its own colour
 u = px - 49; v = ty - 9
 cell = floor(u/10)
-ink = glyph(pick(cell, 'R', 'G', 'B'), floor(u/2) % 5, floor(v/2))
-pick(cell, #ff3333, #33ff55, #3377ff) * ink
+lit = glyph(pick(cell, 'R', 'G', 'B'), floor(u/2) % 5, floor(v/2))
+pick(cell, #ff3333, #33ff55, #3377ff) * lit
 ```
 
-## 15. In the product (not built)
+### 31. Starfield, drawn (particles)
+
+192 stars from `hash(k, …)`, each a streak from where it was a moment ago
+to where it is, flying at the viewer through a field 4,096 deep once a
+loop; the ink fades from the dark tail to the head and in from the
+distance. ~5 ms estimated (4.4 measured on the device; about 3 of it
+drawing).
+
+```psi example=starfield-drawn
+loop 2.4
+-- Starfield: 192 stars flying at you, a pass through the field a loop,
+-- each a streak from where it was a moment ago. a: streak length
+frame { back = 8 + a*240 }
+draw {
+  for k < 192 {
+    sx = (hash(k, 7) - 0.5)*4096; sy = (hash(k, 3) - 0.5)*1024  -- where it is, across and up
+    z = frac(hash(k, 11) - t/2.4)*4096        -- how far: 0 near, 4096 far
+    s = 2/(z/16 + 4); st = 2/(min(z + back, 4095)/16 + 4)  -- perspective, now and before
+    lit = 1 - z/4096                          -- fading in from the dark
+    line(64 + sx*st, 16 + sy*st, 64 + sx*s, 16 + sy*s, lit*0.2, lit)
+  }
+}
+pal(ice, ink)
+```
+
+### 32. Wireframe cube (tables and a projection)
+
+The corners in one table, the edges in another; each edge reads its two
+corners, turns them about y then x by per-frame angles, projects them and
+draws the line, its ink from the depth (near edges brighter, crossing
+handled by the max rule). The colour is the last line's: one edit.
+
+```psi example=wire-cube
+loop 4.8
+-- Wireframe cube: turning about two axes and swinging across; the near
+-- edges brighter. a: size. The colour is the last line's #40c0ff
+table V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1
+table E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7
+frame {
+  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)
+  size = 20 + a*28; mid = 64 + sa*40
+}
+draw {
+  for e < 12 {
+    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners
+    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size
+    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size
+    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned
+    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb
+    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),
+         clamp(0.6 - zb/90, 0.16, 1), clamp(0.6 - zd/90, 0.16, 1))
+  }
+}
+#40c0ff * ink
+```
+
+## 16. In the product (not built)
 
 This reference and `psi-check` are tooling only: nothing in OpenDMD calls a
 model. If the owner wants it later, the natural place is the Formulas
