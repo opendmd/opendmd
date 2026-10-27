@@ -19,6 +19,7 @@
 use crate::draw::Ink;
 use crate::fixed::{self, ONE};
 use crate::program::*;
+use crate::still::Still;
 use crate::tables::Tables;
 
 /// What a frame depends on besides the program.
@@ -360,6 +361,36 @@ pub fn render_rows_ink<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
+    render_rows_still::<N>(prog, scratch, ink, None, inputs, tables, under, rows, out)
+}
+
+/// What the still cache does this frame.
+enum Cache<'a> {
+    Off,
+    /// Skip the cached run (at the marker `at`), copy the kept lanes in.
+    Use(&'a Still),
+    /// Run everything and keep the cached values after the run.
+    Keep(&'a mut Still, usize),
+}
+
+/// [`render_rows_ink`] with the still cache ([`Still`]): a program with
+/// cached values ([`Program::still_lanes`]) given a `still` that holds
+/// lanes for them keeps them on a full call (`rows == u32::MAX`) and, once
+/// kept, skips the steps that work them out on every call after. The bytes
+/// are the same with or without it, kept or not; `None`, too few lanes, or
+/// a program without cached values: every step runs.
+#[allow(clippy::too_many_arguments)]
+pub fn render_rows_still<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    ink: Option<&mut Ink>,
+    still: Option<&mut Still>,
+    inputs: &Inputs,
+    tables: &Tables,
+    under: Option<&[u8]>,
+    rows: u32,
+    out: &mut [u8],
+) {
     assert_eq!(out.len(), W * H * 3);
     if let Some(u) = under {
         assert_eq!(u.len(), W * H * 3);
@@ -391,6 +422,19 @@ pub fn render_rows_ink<const N: usize>(
             Some(k)
         }
         _ => None,
+    };
+    let mut cache = match (still, prog.still_marker()) {
+        (Some(st), Some(at)) if st.lanes_for(prog) => {
+            if st.holds(prog) {
+                Cache::Use(st)
+            } else if rows == u32::MAX {
+                st.kept = 0;
+                Cache::Keep(st, at)
+            } else {
+                Cache::Off
+            }
+        }
+        _ => Cache::Off,
     };
     let uses_i = prog.uses & USES_I != 0;
     let backdrop = prog.uses & BACKDROP != 0;
@@ -424,13 +468,68 @@ pub fn render_rows_ink<const N: usize>(
                     None => px.fill([0; 3]),
                 }
             }
-            for op in &prog.ops[re..pe] {
+            let mut k = re;
+            let mut keep_at = usize::MAX;
+            while k < pe {
+                let op = &prog.ops[k];
+                if k == keep_at {
+                    if let Cache::Keep(st, at) = &mut cache {
+                        let m = &prog.ops[*at];
+                        keep(scratch, st, [m.b, m.c], m.d, row * W + base);
+                    }
+                }
+                if op.code == code::STILL {
+                    match &cache {
+                        Cache::Use(st) => {
+                            fetch(scratch, st, [op.b, op.c], op.d, row * W + base);
+                            k += 1 + op.a as usize;
+                        }
+                        Cache::Keep(..) => {
+                            keep_at = k + 1 + op.a as usize;
+                            k += 1;
+                        }
+                        Cache::Off => k += 1,
+                    }
+                    continue;
+                }
                 if code::is_colour(op.code) {
                     colour_step(scratch, op, base, tables, px);
                 } else {
                     lane_op(scratch, op, base, tables, &prog.tables, ul, il);
                 }
+                k += 1;
             }
+        }
+    }
+    if let Cache::Keep(st, _) = cache {
+        st.kept = crate::still::fingerprint(prog);
+    }
+}
+
+/// The lane register a register operand names (as `lane_op`'s
+/// destination).
+#[inline(always)]
+fn reg_index(v: u8) -> usize {
+    ((v & !LANE).saturating_sub(L_I) as usize).clamp(1, REGS)
+}
+
+/// Copy the cached registers' lanes (`n` of `regs`) into the kept lanes at
+/// pixel `at`.
+#[inline(never)]
+fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at: usize) {
+    for (j, &r) in regs.iter().enumerate().take(n as usize) {
+        if let Some(l) = st.lanes[j].as_deref_mut() {
+            l.0[at..at + N].copy_from_slice(&s.lanes[reg_index(r)]);
+        }
+    }
+}
+
+/// Copy the kept lanes at pixel `at` into the cached registers.
+#[inline(never)]
+fn fetch<const N: usize>(s: &mut Scratch<N>, st: &Still, regs: [u8; 2], n: u8, at: usize) {
+    for (j, &r) in regs.iter().enumerate().take(n as usize) {
+        if let Some(l) = st.lanes[j].as_deref() {
+            s.lanes[reg_index(r)].copy_from_slice(&l.0[at..at + N]);
         }
     }
 }
@@ -476,7 +575,7 @@ fn lane_op<const N: usize>(
     // The destination is a register the compiler never also reads in the
     // same step (`compile` allocates it that way), so the `&mut` lane does
     // not alias the source pointers.
-    let di = ((op.d & !LANE).saturating_sub(L_I) as usize).clamp(1, REGS);
+    let di = reg_index(op.d);
     debug_assert!(op.d & LANE != 0 && op.d & !LANE >= L_REG0);
     let d: &mut [i32; N] = &mut s.lanes[di];
     match op.code {
