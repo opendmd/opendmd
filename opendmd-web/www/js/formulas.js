@@ -13,7 +13,7 @@ import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, store, toast, debounce, saver, base, SITE } from './util.js';
 import { popup, closeMenu, actions } from './overrides.js';
-import { link as mklink, parse, sliderName, choices, picker, about, TIP, marks, sample, MAX_NAME } from './psikit.js';
+import { link as mklink, parse, sliderName, choices, picker, about, TIP, est, marks, sample, MAX_NAME } from './psikit.js';
 
 let P = null, mod = null, gen = 0;
 const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
@@ -413,7 +413,7 @@ const DRAW = [['draw { … }', 'once a frame, before the pixels: values, loops, 
   ['dot(x, y, v)', 'one pixel of ink v'], ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
   ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '], ['T[k]', 'number k of table T, from 0 (0 outside it)']];
 const COLS = [['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'], ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
-  ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'], ['gray(v)', 'white, 0 to 1'],
+  ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'], ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'], ['gray(v)', 'white, 0 to 1'],
   ['#ff8800', 'a colour: alone, or #f80 * v, mix(#000, #f80, v)'],
   ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)']];
 
@@ -502,7 +502,7 @@ function editor() {
       const i = info(f.src);
       cap.textContent = about(i);
       cap.title = TIP(i);
-      heavy.hidden = i[6] <= 8000;
+      heavy.hidden = est(i) <= 8000;
       under.hidden = !(i[5] & 32);
       if (look) look.hidden = false;
       el.dataset.steps = i[0];

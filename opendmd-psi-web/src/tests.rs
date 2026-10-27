@@ -143,13 +143,20 @@ fn the_examples_are_light_enough_for_the_panel() {
             .count();
         // The showcase, Big clock, reads as a commented step a line
         // (owner, 2026-10-26: legible over short); the rest stay short.
-        let most = if e.name == "Big clock" { 16 } else { 7 };
+        // So do the built-in effects' Formulas (Tunnel, Rotozoom): a native
+        // effect's knobs, written out.
+        let most = if ["Big clock", "Tunnel", "Rotozoom"].contains(&e.name.as_str()) {
+            16
+        } else {
+            7
+        };
         assert!(own <= most, "{}: too long for an example", e.name);
+        // (As the player draws it: with its still cache, when it has one.)
         assert!(
-            p.esp32_us() <= 10_000,
+            p.esp32_us_still() <= 10_000,
             "{}: ~{} µs a frame on the panel",
             e.name,
-            p.esp32_us()
+            p.esp32_us_still()
         );
         // A slider it reads has a starting value or a name.
         for (k, v) in [('a', e.a), ('b', e.b), ('c', e.c)] {
@@ -214,7 +221,9 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
 /// listed: too heavy to draw over every GIF at all.
 #[cfg(not(target_arch = "wasm32"))]
 fn every_example_as_a_look() {
-    const TOO_HEAVY: &[&str] = &[];
+    // (Tunnel: ~7.5 ms as an effect with its still cache, ~17.6 without
+    // one, and a look never has one.)
+    const TOO_HEAVY: &[&str] = &["Tunnel"];
     let json = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../opendmd-web/www/formulas.json"
