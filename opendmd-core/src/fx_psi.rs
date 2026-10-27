@@ -36,6 +36,9 @@ pub const LANES: usize = psi::LANES;
 pub struct PsiFx {
     prog: psi::Program,
     scratch: psi::Scratch<LANES>,
+    /// The draw stage's canvas (4 KB), held only while the formula draws
+    /// (`draw { }`); `None` is all-zero, so the zeroed box is valid.
+    ink: Option<Box<psi::Ink>>,
     delay_ms: u8,
     inputs: psi::Inputs,
     gov: Governor,
@@ -332,6 +335,29 @@ fn grid(q: &Query) -> u32 {
     u32::from(q.delay_ms.max(crate::fx::floor()))
 }
 
+/// What a formula that draws gets when the heap hasn't its canvas (4 KB):
+/// as the compiler's own thread does when it can't start.
+pub const NO_CANVAS: &str = "the player is short of memory just now: try again in a moment";
+
+/// A canvas for `prog` if it draws (taken from the heap only if it may
+/// fail: `None` for one that doesn't draw, `Err` when the heap hasn't 4 KB).
+fn canvas_for(
+    prog: &psi::Program,
+    held: Option<Box<psi::Ink>>,
+) -> Result<Option<Box<psi::Ink>>, psi::Error> {
+    if !prog.draws() {
+        return Ok(None);
+    }
+    match held.or_else(psi::Ink::try_boxed) {
+        Some(k) => Ok(Some(k)),
+        None => Err(psi::Error {
+            start: 0,
+            end: 0,
+            msg: NO_CANVAS.to_string(),
+        }),
+    }
+}
+
 /// A formula's compile error as an open error: `InvalidInput` with the
 /// compiler's sentence (the firmware's `/api/play` makes it a 400; an
 /// unknown `@` path is `InvalidData`, a 415).
@@ -355,6 +381,7 @@ impl PsiFx {
         let q = query(q);
         let mut fx = PsiBox::new();
         let est = compile(&q, &mut fx.prog)?;
+        fx.ink = canvas_for(&fx.prog, None)?;
         fx.delay_ms = q.delay_ms;
         fx.set_sliders(q.sliders);
         fx.gov = Governor::new(est, fx.ms());
@@ -378,6 +405,9 @@ impl PsiFx {
         let mut prog = unsafe { Box::<psi::Program>::new_zeroed().assume_init() };
         prog.clear();
         let est = compile(&q, &mut prog)?;
+        // A formula that starts drawing takes its canvas here, between
+        // frames (as an open does); one that stops gives it back.
+        self.ink = canvas_for(&prog, self.ink.take())?;
         self.prog = *prog;
         self.delay_ms = q.delay_ms;
         self.set_sliders(q.sliders);
@@ -435,11 +465,14 @@ impl Effect for PsiFx {
         let clock = clock();
         let t0 = clock.map_or(0, |c| c());
         let (bytes, dirty) = canvas.bytes_and_dirty_mut();
-        psi::render_with::<LANES>(
+        psi::render_rows_ink::<LANES>(
             &self.prog,
             &mut self.scratch,
+            self.ink.as_deref_mut(),
             &self.inputs,
             &tables(),
+            None,
+            u32::MAX,
             bytes,
         );
         dirty.mark_all();
@@ -520,6 +553,8 @@ pub struct FormulaLook {
 struct LookBuffers {
     scratch: Box<psi::Scratch<LANES>>,
     out: Canvas,
+    /// The draw stage's canvas, while the look draws.
+    ink: Option<Box<psi::Ink>>,
 }
 
 /// The formula drawn over the GIFs: its mean render (µs), its frame time
@@ -542,6 +577,19 @@ impl FormulaLook {
     pub const BUFFER_BYTES: usize = std::mem::size_of::<psi::Scratch<LANES>>()
         + PIXELS * 3
         + std::mem::size_of::<LookBuffers>();
+
+    /// What [`take`](Self::take) asks for this formula: [`BUFFER_BYTES`]
+    /// and, when it draws, its canvas (4 KB).
+    ///
+    /// [`BUFFER_BYTES`]: Self::BUFFER_BYTES
+    pub fn buffer_bytes(&self) -> usize {
+        Self::BUFFER_BYTES
+            + if self.prog.draws() {
+                std::mem::size_of::<psi::Ink>()
+            } else {
+                0
+            }
+    }
 
     /// The look for a formula's `@fx:psi?src=…` path (sliders and `fps=`
     /// as for the effect), or why not: it does not compile, or it is too
@@ -649,6 +697,17 @@ impl FormulaLook {
         let mut prog = unsafe { Box::<psi::Program>::new_zeroed().assume_init() };
         let est = Self::compile(&q, &mut prog)?;
         self.prog = prog;
+        // Held: a look that starts drawing takes its canvas now (if the heap
+        // hasn't it, `apply` asks again each frame and `ink` reads 0 till
+        // then); one that stops gives it back.
+        if let Some(b) = self.held.as_mut() {
+            b.ink = canvas_for(&self.prog, b.ink.take()).unwrap_or(None);
+            let ink = b
+                .ink
+                .as_ref()
+                .map_or(0, |_| std::mem::size_of::<psi::Ink>());
+            LOOK_STATS[2].store((Self::BUFFER_BYTES + ink) as u32, Ordering::Relaxed);
+        }
         self.set(&q, est);
         Ok(())
     }
@@ -688,6 +747,9 @@ impl FormulaLook {
             return false;
         }
         px.resize(PIXELS, Rgb::BLACK);
+        let Ok(ink) = canvas_for(&self.prog, None) else {
+            return false;
+        };
         let layout = std::alloc::Layout::new::<psi::Scratch<LANES>>();
         // SAFETY: a non-zero-sized layout; `Scratch` is integers all the way
         // down, so the zeroed memory is a valid value (and `reset` fills in
@@ -711,6 +773,7 @@ impl FormulaLook {
             p.write(LookBuffers {
                 scratch,
                 out: Canvas::from_parts(px, crate::canvas::DirtyMap::default()),
+                ink,
             });
             Box::from_raw(p)
         };
@@ -718,7 +781,7 @@ impl FormulaLook {
         self.held = Some(b);
         self.fresh = true;
         self.cold = Governor::SKIP;
-        LOOK_STATS[2].store(Self::BUFFER_BYTES as u32, Ordering::Relaxed);
+        LOOK_STATS[2].store(self.buffer_bytes() as u32, Ordering::Relaxed);
         true
     }
 
@@ -793,6 +856,9 @@ impl FormulaLook {
         let Some(b) = self.held.as_mut() else {
             return under;
         };
+        if self.prog.draws() && b.ink.is_none() {
+            b.ink = psi::Ink::try_boxed();
+        }
         let own = self.fresh || (animated && self.next.is_none_or(|n| now >= n));
         let rows = if own {
             u32::MAX
@@ -828,9 +894,10 @@ impl FormulaLook {
         let clock = clock();
         let t_start = clock.map_or(0, |c| c());
         let (bytes, dirty) = b.out.bytes_and_dirty_mut();
-        psi::render_rows::<LANES>(
+        psi::render_rows_ink::<LANES>(
             &self.prog,
             &mut b.scratch,
+            b.ink.as_deref_mut(),
             &self.inputs,
             &tables(),
             Some(under.as_bytes()),
@@ -900,8 +967,9 @@ mod alloc_box {
     impl PsiBox {
         pub fn new() -> PsiBox {
             // SAFETY: `PsiFx` is integers and arrays of integers all the
-            // way down (`Program`, `Scratch`, `Inputs`, `u8`): all-zero is
-            // a valid value of it.
+            // way down (`Program`, `Scratch`, `Inputs`, `u8`) but for its
+            // canvas, an `Option<Box<_>>`, whose all-zero value is `None`:
+            // all-zero is a valid value of it.
             let mut b = PsiBox(unsafe { Box::<PsiFx>::new_zeroed().assume_init() });
             b.0.prog.clear();
             b.0.scratch.reset();
@@ -934,6 +1002,8 @@ mod alloc_box {
         fn clone(&self) -> PsiBox {
             let mut b = PsiBox::new();
             b.0.prog = self.0.prog;
+            // (A clone that can't have its canvas draws nothing: `ink` 0.)
+            b.0.ink = super::canvas_for(&b.0.prog, None).unwrap_or(None);
             b.0.delay_ms = self.0.delay_ms;
             b.0.inputs = self.0.inputs;
             b.0.gov = self.0.gov;
@@ -1330,9 +1400,10 @@ mod tests {
             t: psi::Inputs::at_ms(ms),
             ..Default::default()
         };
-        psi::render_rows(
+        psi::render_rows_ink(
             &prog,
             &mut psi::Scratch::<128>::new(),
+            Some(&mut psi::Ink::boxed()),
             &inputs,
             &psi::OWN,
             Some(under.as_bytes()),
@@ -1659,5 +1730,105 @@ mod tests {
         );
         // After it, its own frames between the file's again.
         assert!(look.due_between(c.is_active()).is_some());
+    }
+
+    /// The VM's frame of a formula that draws, alone (the effect's case).
+    fn drawn(src: &str, ms: u32) -> Vec<u8> {
+        let prog = psi::compile(src).unwrap();
+        let mut want = vec![0u8; psi::W * psi::H * 3];
+        let inputs = psi::Inputs {
+            t: psi::Inputs::at_ms(ms),
+            ..Default::default()
+        };
+        psi::render_rows_ink(
+            &prog,
+            &mut psi::Scratch::<128>::new(),
+            Some(&mut psi::Ink::boxed()),
+            &inputs,
+            &psi::OWN,
+            None,
+            u32::MAX,
+            &mut want,
+        );
+        want
+    }
+
+    const STARS: &str = "loop 2\ndraw { for k < 64 { z = frac(hash(k, 1) - t/2)\nline(64 + (hash(k, 2) - 0.5)*200*z, 16 + (hash(k, 3) - 0.5)*60*z, 64 + (hash(k, 2) - 0.5)*220*z, 16 + (hash(k, 3) - 0.5)*66*z, 0.2, z) } }\npal(ice, ink)";
+
+    #[test]
+    fn a_formula_that_draws_plays_as_an_effect_and_retunes() {
+        let mut fx = Fx::parse(&path(STARS)).unwrap();
+        let mut c = Canvas::new();
+        fx.frame(Duration::from_millis(140), &mut c);
+        assert_eq!(c.as_bytes(), drawn(STARS, 140).as_slice());
+        assert!(c.as_bytes().iter().any(|&b| b > 0), "it draws");
+        let Fx::Psi(p) = &mut fx else { panic!() };
+        assert!(p.ink.is_some());
+        // To one that doesn't draw: the canvas goes; back: it comes again.
+        let q = |src: &str| super::path(src, "")["@fx:psi?".len()..].to_string();
+        p.retune_from(&q("gray(x)")).unwrap();
+        assert!(p.ink.is_none());
+        let src = "draw { dot(10, 10) }\ngray(ink)";
+        p.retune_from(&q(src)).unwrap();
+        assert!(p.ink.is_some());
+        fx.frame(Duration::from_millis(0), &mut c);
+        assert_eq!(c.as_bytes(), drawn(src, 0).as_slice());
+        // A clone draws the same.
+        let mut d = fx.clone();
+        let mut c2 = Canvas::new();
+        d.frame(Duration::from_millis(0), &mut c2);
+        assert_eq!(c.as_bytes(), c2.as_bytes());
+    }
+
+    #[test]
+    fn a_look_that_draws_takes_its_canvas() {
+        let under = picture();
+        let src = psi::look::compose(STARS, "screen", 60).unwrap();
+        let mut look = FormulaLook::from_path(&super::path(&src, "")).unwrap();
+        assert_eq!(look.buffer_bytes(), FormulaLook::BUFFER_BYTES + 4096);
+        assert!(look.take());
+        let mut c = picture();
+        let out = look.apply(Duration::ZERO, &mut c, 0);
+        assert_eq!(out.as_bytes(), over(&src, 0, &under).as_slice());
+        // Retuned to a look that doesn't draw: the canvas goes.
+        let plain = psi::look::compose("gray(x)", "screen", 40).unwrap();
+        look.retune(&super::path(&plain, "")).unwrap();
+        assert_eq!(look.buffer_bytes(), FormulaLook::BUFFER_BYTES);
+        assert!(look.held.as_ref().unwrap().ink.is_none());
+        look.retune(&super::path(&src, "")).unwrap();
+        assert!(look.held.as_ref().unwrap().ink.is_some());
+    }
+
+    /// Psi's `line` is the built-in effects' rasteriser: the same pixels
+    /// for any two ends (Psi counts y up from the bottom, `fx::line` rows
+    /// down from the top), off the panel too.
+    #[test]
+    fn psi_lines_are_the_effects_lines() {
+        let mut r = 0x9e37_79b9u32;
+        for _ in 0..400 {
+            let mut n = |lo: i32, hi: i32| {
+                r ^= r << 13;
+                r ^= r >> 17;
+                r ^= r << 5;
+                lo + (r % (hi - lo + 1) as u32) as i32
+            };
+            let (x0, y0, x1, y1) = (n(-40, 170), n(-20, 50), n(-40, 170), n(-20, 50));
+            let mut c = Canvas::new();
+            crate::fx::line(
+                &mut c,
+                (x0, y0, 255),
+                (x1, y1, 255),
+                Rgb::new(255, 255, 255),
+            );
+            let src = format!(
+                "draw {{ line({x0}, {}, {x1}, {}) }}\ngray(ink)",
+                31 - y0,
+                31 - y1
+            );
+            let want = drawn(&src, 0);
+            for (k, (a, b)) in c.as_bytes().chunks(3).zip(want.chunks(3)).enumerate() {
+                assert_eq!(a[0] > 0, b[0] > 0, "{x0},{y0} -> {x1},{y1}: pixel {k}");
+            }
+        }
     }
 }
