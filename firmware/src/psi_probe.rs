@@ -54,7 +54,9 @@ const OLD_PHOTO_EX: &str = "-- a: how much (0: the GIF as it is)\nmix(rgb(ur, ug
 const OLD_TV_EX: &str = "loop 4\ndx = (x - 0.5)*1.6; dy = (y - 0.5)*1.2\nlines = py % 2 ? 1 : 0.6\nroll = 0.85 + 0.15*max(0, tri(y/2 + t/4))\ncorners = clamp(1.5 - (dx*dx + dy*dy)*1.6, 0, 1)\nlayer multiply { gray(lines * roll * corners) }";
 
 /// The drawing examples (formulas.json), timed as effects.
-const STARFIELD_EX: &str = "loop 2.4\nfps 100\n-- Starfield: 192 stars flying at you, a pass through the field a loop,\n-- each a streak from where it was a moment ago\n-- a: streak length\nframe { back = 144 + a*240 }\ndraw {\n  for k < 192 {\n    sx = (hash(k, 7) - 0.5)*4096; sy = (hash(k, 3) - 0.5)*1024  -- where it is, across and up\n    z = frac(hash(k, 11) - t/2.4)*4096        -- how far: 0 near, 4096 far\n    s = 2/(z/16 + 4); st = 2/(min(z + back, 4095)/16 + 4)  -- perspective, now and before\n    hx = 64 + sx*s; hy = 16 + sy*s            -- the head\n    -- the head off the panel: both ends at x -999, and a line wholly off it is skipped\n    gone = max(abs(hx - 64) - 64, abs(hy - 16) - 16) > 0\n    near = 1 - z/4096; lit = near*near        -- squared: far stars stay dark longer\n    line(gone ? -999 : 64 + sx*st, 16 + sy*st, gone ? -999 : hx, hy, lit*0.2, lit)\n  }\n}\npal(ice, ink)";
+const STARFIELD_EX: &str = "loop 2.4\nfps 100\n-- Starfield: 192 stars flying at you, a pass through the field a loop,\n-- each a streak from where it was a moment ago\n-- a: streak length\nframe { back = 1 + 1/64 + (144 + a*240)/4096 }\ndraw {\n  for k < 192 {\n    sx = hash(k, 7)*32 - 16; sy = hash(k, 3)*8 - 4  -- where it is, across and up\n    near = frac(t/2.4 - hash(k, 11))          -- 0 far, 1 at you\n    s = 1/(65/64 - near); st = 1/(back - near)  -- perspective, now and a moment ago\n    hx = sx*s; hy = sy*s                      -- the head, from the middle\n    -- a head off the panel: the line moved far below it, where it is skipped\n    row = abs(hx) > 64 or abs(hy) > 16 ? -999 : 16\n    lit = near*near                           -- squared: far stars stay dark longer\n    line(64 + sx*st, row + sy*st, 64 + hx, row + hy, lit*0.2, lit)\n  }\n}\npal(ice, ink)";
+const TUNNEL_EX: &str = "loop 4.8\n-- Tunnel: the time warp. Each loop the walls turn once, travel two\n-- checker lengths, and the palette goes round once.\n-- From the vanishing point, the tunnel twice as tall as wide:\ndx = px - 63.5; dy = (15.5 - py)*2\n-- how deep each pixel looks: ~1 at the edges, 16 where it turns black\n-- (this and `round` depend on the pixel alone: worked out once, kept)\ndeep = min(128/len(dx, dy), 31.99)\n-- round the walls: 16 checker cells a turn, twisting with depth\ntwist = 1                              -- try 0 to 3\nround = atan2(dy, dx)*16 + deep*twist/8\n-- the checker, turning and travelling\nu = round + t/0.3; v = deep + t/0.6\ncell = (floor(u) + floor(v)) % 2\n-- lit by depth (full near, fading as a square, black in the middle) and\n-- by a light going round with the walls, in eight steps\nfade = clamp(1.6 - deep/10, 0, 1)\nside = 6.35 + 1.59*cos(u/16)\nlight = floor(fade*fade*side + (deep < 16))/8\npal(chrono, frac(cell ? 0.711 + t/4.8 : 0.336 + t/4.8)) * light";
+const ROTOZOOM_EX: &str = "loop 9.6\n-- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing\n-- twice, gliding two checkers across and one down; under it a noise\n-- texture turning the other way twice as fast; rows and columns wobble.\n-- As a floor: the checker running away to a horizon, fogged far off.\n-- a: view = flat, floor\nframe {\n  ground = a > 0.5\n  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn\n  s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice\n  zoom = 2                                         -- try 1 to 4\n  sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel\n  sc2 = sc*0.75\n  cu = t/0.6; cv = t/1.2                           -- the glide, in cells\n  amp = 3/8                                        -- the wobble: 3 texels\n  hi = ground ? 0.78 : 0.44; lo = ground ? 0.28 : 0.19; mixn = ground ? 0 : 0.6\n}\ndx = px - 64; dy = 15 - py; ty = 31 - py\n-- each row's scale: the same when flat; on the floor, by its distance\nrs = ground ? 1/((ty + 2)*zoom) : sc\n-- the wobble: rows slide sideways, columns up and down, on travelling waves\nwob = sin(ty/32 + t/3.2)*amp\ncol = sin(px*0.0234375 - t/4.8)*amp\n-- where each pixel is on the checker: its column's part plus its row's\nu = cs*rs*dx + (cu + wob + (ground ? sn*rs*64 : -sn*sc*dy))\nv = sn*rs*dx + col + (cv + (ground ? -cs*rs*64 : cs*sc*dy))\ncell = (floor(u) + floor(v)) % 2\nu2 = (cv + c2*sc2*dx) + (wob - s2*sc2*dy)\nv2 = (cu + s2*sc2*dx + col) + c2*sc2*dy\nfog = ground ? (ty < 3 ? 0 : ty < 6 ? 0.375 : ty < 10 ? 0.625 : 1) : 1\npal(fire, (cell ? hi : lo) + noise(u2, v2, 0)*mixn) * fog";
 const CUBE_EX: &str = "loop 4.8\nfps 100\n-- Wireframe cube: turning about two axes and swinging across; the near\n-- edges brighter. The colour is the last line's #40c0ff\n-- a: size\ntable V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1\ntable E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7\nframe {\n  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)\n  size = 34 + a*28; mid = 64 + sa*40\n}\ndraw {\n  for e < 12 {\n    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners\n    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size\n    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size\n    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned\n    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb\n    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),\n         clamp(0.594 - zb/148, 0.156, 1), clamp(0.594 - zd/148, 0.156, 1))\n  }\n}\n#40c0ff * ink";
 
 /// The report's file name at the card's root.
@@ -179,6 +181,71 @@ fn lanes_over<const N: usize>(
         let inputs = psi::golden::inputs(k * 20 % loop_ms);
         psi::render_rows_ink::<N>(prog, &mut s, Some(&mut ink), &inputs, &t, under, u32::MAX, out);
     })
+}
+
+/// A golden frame again laid out without the column and still runs, and
+/// (when it has values for one) drawn with a still cache, kept on one frame
+/// and drawn from on the next: (matches, differences). `prog` is left
+/// compiled as usual.
+fn variants(
+    name: &str,
+    src: &str,
+    ms: u32,
+    s: &mut psi::Scratch<128>,
+    prog: &mut psi::Program,
+    out: &mut [u8],
+    want: u64,
+) -> (u32, u32) {
+    let t = fx_psi::tables();
+    let (mut ok, mut bad) = (0, 0);
+    let mut plain = zeroed::<psi::Program>();
+    if psi::compile_layout(src, &mut plain, false).is_ok() {
+        psi::render_with::<128>(&plain, s, &psi::golden::inputs(ms), &t, out);
+        let got = psi::golden::fnv(out);
+        if got == want {
+            ok += 1;
+        } else {
+            bad += 1;
+            say!(error, "psi-probe: golden {name} (plain) at {ms} ms: {got:#018x}, host/wasm {want:#018x}");
+        }
+    }
+    let _ = psi::compile_into(src, prog);
+    if prog.still_lanes() > 0 {
+        let mut st = psi::Still::new();
+        if !st.take(prog) {
+            say!(error, "psi-probe: golden {name} (still): no heap for the cache ({} B free)", heap());
+            return (ok, bad + 1);
+        }
+        for pass in ["kept", "cached"] {
+            psi::render_rows_still::<128>(prog, s, None, Some(&mut st), &psi::golden::inputs(ms), &t, None, u32::MAX, out);
+            let got = psi::golden::fnv(out);
+            if got == want {
+                ok += 1;
+            } else {
+                bad += 1;
+                say!(error, "psi-probe: golden {name} (still, {pass}) at {ms} ms: {got:#018x}, host/wasm {want:#018x}");
+            }
+        }
+    }
+    (ok, bad)
+}
+
+/// Frames of `prog` with a still cache (kept on the first, untimed), as
+/// [`lanes`].
+fn lanes_still(prog: &psi::Program, loop_ms: u32, out: &mut [u8]) -> Option<(u32, u32, u32)> {
+    let mut s = zeroed::<psi::Scratch<128>>();
+    s.reset();
+    let mut st = psi::Still::new();
+    if !st.take(prog) {
+        return None;
+    }
+    let t = fx_psi::tables();
+    let inputs = psi::golden::inputs(0);
+    psi::render_rows_still::<128>(prog, &mut s, None, Some(&mut st), &inputs, &t, None, u32::MAX, out);
+    Some(timed(|k| {
+        let inputs = psi::golden::inputs(k * 20 % loop_ms);
+        psi::render_rows_still::<128>(prog, &mut s, None, Some(&mut st), &inputs, &t, None, u32::MAX, out);
+    }))
 }
 
 /// The compiler's own stack on the worst inputs (`psi::worst`, the deepest
@@ -382,6 +449,11 @@ pub fn run(root: &str) {
                 "psi-probe: golden {name} at {ms} ms: {got:#018x}, host/wasm {want:#018x}"
             );
         }
+        // The same frame without the column and still runs, and with the
+        // still cache kept and then drawn from (the second frame).
+        let (o, b) = variants(name, src, ms, &mut s, &mut prog, &mut out, want);
+        ok += o;
+        bad += b;
     }
     // Layers, and formulas over a picture (the formula look's path).
     let mut under = vec![0u8; psi::W * psi::H * 3];
@@ -434,7 +506,7 @@ pub fn run(root: &str) {
 
     // What one step costs: each formula is the baseline plus one or two
     // per-pixel steps (t is a frame value, so nothing folds away).
-    const STEPS: [(&str, &str); 23] = [
+    const STEPS: [(&str, &str); 25] = [
         ("base gray(x)", "gray(x)"),
         ("add", "gray(x + t)"),
         ("mul", "gray(x * t)"),
@@ -458,6 +530,9 @@ pub fn run(root: &str) {
         ("ink (+1 dot)", "draw { dot(-1, -1, t) }\ngray(ink)"),
         ("out hsv", "hsv(x, 1, 1)"),
         ("out pal", "pal(fire, x)"),
+        // Phase 2: noise at a whole z (four corners), a scaled palette.
+        ("noise flat (+mul)", "gray(noise(x * 8, y, 3))"),
+        ("out pal * k (+add)", "pal(fire, x) * (x + t)"),
     ];
     // Layers and what is under (drawn over the golden picture): the
     // formula look's costs, for `Program::esp32_us`.
@@ -489,7 +564,9 @@ pub fn run(root: &str) {
         .map(|&(w, s)| (w, s, false))
         .chain(LAYER_STEPS.iter().map(|&(w, s)| (w, s, true)));
     for (what, src, over) in steps {
-        if psi::compile_into(src, &mut prog).is_err() {
+        // (Laid out without the column and still runs: a step's cost on
+        // every pixel, as the table was measured.)
+        if psi::compile_layout(src, &mut prog, false).is_err() {
             say!(error, "psi-probe: step {what}: does not compile");
             continue;
         }
@@ -518,7 +595,7 @@ pub fn run(root: &str) {
     ];
     let mut base = 0u32;
     for (what, src, n) in DRAW_STEPS {
-        if psi::compile_into(src, &mut prog).is_err() {
+        if psi::compile_layout(src, &mut prog, false).is_err() {
             say!(error, "psi-probe: step {what}: does not compile");
             continue;
         }
@@ -533,33 +610,86 @@ pub fn run(root: &str) {
             prog.draw_us()
         );
     }
-    // The drawing examples as effects (the real path: `Fx::parse`, its
-    // canvas taken at open, `Fx::frame`).
-    for (name, src) in [("Starfield", STARFIELD_EX), ("Wireframe cube", CUBE_EX)] {
-        // (Into a zeroed box: a `Program` by value is 2.8 KB of the main
-        // task's stack.)
-        let est = if psi::compile_into(src, &mut prog).is_ok() {
-            prog.esp32_us()
-        } else {
-            0
-        };
-        let h0 = heap();
-        let Some(mut fx) = Fx::parse(&fx_psi::path(src, "a=0.5")) else {
-            say!(error, "psi-probe: example {name}: did not open");
+    // Phase 2's runs: the column run (once a frame a column) and the still
+    // cache (kept values copied in), against the same formula laid out
+    // plain, for `Program::esp32_us`'s column and STILL_COPY_NS figures.
+    const RUNS: [(&str, &str); 4] = [
+        ("column sin (+3)", "gray(sin(x * 3 + t) * 0.5 + 0.5)"),
+        ("column 8 steps", "v = sin(x * 3 + t) + cos(x * 5 - t) + tri(x + t) + saw(x * 2)\ngray(v * 0.25 + 0.5)"),
+        ("still 1: 1/len", "gray(frac(1 / len(px - 63.5, (15.5 - py) * 2) * 8 + t))"),
+        ("still 2: 1/len, atan2", "d = 1 / len(px - 63.5, (15.5 - py) * 2)\ngray(frac(d * 8 + t) * frac(atan2(15.5 - py, px - 63.5) * 4 + t))"),
+    ];
+    for (what, src) in RUNS {
+        let mut plain = zeroed::<psi::Program>();
+        if psi::compile_layout(src, &mut plain, false).is_err() || psi::compile_into(src, &mut prog).is_err() {
+            say!(error, "psi-probe: run {what}: does not compile");
             continue;
+        }
+        let (q50, _, _) = lanes::<128>(&plain, 8000, &mut out);
+        let (r50, r90, _) = lanes::<128>(&prog, 8000, &mut out);
+        let h0 = heap();
+        let still = lanes_still(&prog, 8000, &mut out);
+        let line = match still {
+            Some((s50, s90, _)) => format!(
+                "with the still cache ({} B, {h0} B free before) p50 {s50} p90 {s90} us, est {} us",
+                psi::Still::bytes_for(&prog),
+                prog.esp32_us_still()
+            ),
+            None if prog.still_lanes() > 0 => format!("still cache refused ({h0} B free)"),
+            None => String::from("no still values"),
         };
-        let h1 = heap();
-        let delay = fx.delay();
-        let n = fx.loop_frames();
-        let (e50, e90, emax) = timed(|k| {
-            fx.frame(delay * (k % n), &mut canvas);
-        });
-        drop(fx);
         say!(info,
-            "psi-probe: example {name} as an effect: p50 {e50} p90 {e90} max {emax} us a frame, est {est} us, heap {h0} -> {h1} B ({} B for the effect and its canvas)",
-            h0.saturating_sub(h1)
+            "psi-probe: run {what:<22} plain p50 {q50} us (est {}) | runs p50 {r50} p90 {r90} us (est {}, {} pixel steps) | {line}",
+            plain.esp32_us(),
+            prog.esp32_us(),
+            prog.counts().2
         );
     }
+
+    // The examples as effects (the real path: `Fx::parse`, the canvas taken
+    // at open, `Fx::frame`, the still cache taken on the first frame): with
+    // the cache, then with the gate refusing it (every step every frame).
+    for (name, src, opts) in [
+        ("Starfield", STARFIELD_EX, "a=0.5"),
+        ("Wireframe cube", CUBE_EX, "a=0.5"),
+        ("Tunnel", TUNNEL_EX, ""),
+        ("Rotozoom", ROTOZOOM_EX, ""),
+        ("Rotozoom floor", ROTOZOOM_EX, "a=1"),
+    ] {
+        // (Into a zeroed box: a `Program` by value is 2.8 KB of the main
+        // task's stack.)
+        let (est, est_still) = if psi::compile_into(src, &mut prog).is_ok() {
+            (prog.esp32_us(), prog.esp32_us_still())
+        } else {
+            (0, 0)
+        };
+        for gate in ["cache", "no cache"] {
+            fx_psi::set_still_gate(if gate == "cache" { None } else { Some(|_| false) });
+            let h0 = heap();
+            let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
+                say!(error, "psi-probe: example {name}: did not open");
+                continue;
+            };
+            let h1 = heap();
+            let delay = fx.delay();
+            let n = fx.loop_frames();
+            // The first frame (it takes and keeps the cache), untimed.
+            fx.frame(Duration::ZERO, &mut canvas);
+            let h2 = heap();
+            let held = fx_psi::still_held();
+            let (e50, e90, emax) = timed(|k| {
+                fx.frame(delay * (k % n), &mut canvas);
+            });
+            drop(fx);
+            say!(info,
+                "psi-probe: example {name} as an effect ({gate}): p50 {e50} p90 {e90} max {emax} us a frame, est {est} us ({est_still} with the cache), heap {h0} -> {h1} B at open ({} B for the effect and its canvas), {h2} B after its first frame (still cache {held} B), {} B back after",
+                h0.saturating_sub(h1),
+                heap()
+            );
+        }
+    }
+    // The firmware's own gate again.
+    fx_psi::set_still_gate(Some(crate::still_gate));
 
     // Formulas as looks (`psi::look`, as the web app composes them): the
     // VM's frame over a picture against the estimate the looks' limit reads.

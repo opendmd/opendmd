@@ -41,10 +41,11 @@ fn blocks() -> Vec<(String, String, usize)> {
 /// when it draws over what is under it.
 fn frames(slug: &str, src: &str) -> Vec<(u32, u64)> {
     let p = compile(src).unwrap_or_else(|e| panic!("example {slug}: {}", e.render(src)));
+    // (As an effect plays it: with its still cache, when it has one.)
     assert!(
-        p.esp32_us() <= 10_000,
+        p.esp32_us_still() <= 10_000,
         "example {slug}: ~{} µs a frame on the panel (keep examples ≤ 10 ms: heavier than 8 plays at 25 frames a second)",
-        p.esp32_us()
+        p.esp32_us_still()
     );
     let mut under = vec![0u8; W * H * 3];
     picture(&mut under);

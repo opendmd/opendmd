@@ -330,7 +330,9 @@ pub const GLOW_YIELD_HEAP: usize = 20 * 1024;
 /// held is ~25 KB, and one waiting to be taken asks for 48 KB free). The
 /// formula on screen is dropped before the next file opens, so a switch
 /// away from it never pays for the cache.
+#[cfg(feature = "psi")]
 pub const STILL_KEEP_HEAP: usize = 24 * 1024 + TRANSITION_HEAP_RESERVE + 12 * 1024;
+#[cfg(feature = "psi")]
 pub const STILL_SHED_HEAP: usize = 32 * 1024;
 
 // ---------------------------------------------------------------------------
