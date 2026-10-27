@@ -302,6 +302,94 @@ fn effects(list: &[(&str, &str, &str)], again: &str, canvas: &mut Canvas) {
     }
 }
 
+/// The CPU's cycle counter (240 per µs), for psi's frame stamps.
+fn ccount() -> u32 {
+    // SAFETY: reads the CCOUNT special register.
+    unsafe { esp_idf_sys::xthal_get_ccount() }
+}
+
+/// p50 / p90 of cycles, in µs (one decimal).
+fn us50_90(v: &mut [u32]) -> String {
+    v.sort_unstable();
+    let n = v.len().max(1);
+    let f = |c: u32| format!("{:.1}", f64::from(c) / 240.0);
+    format!("{}/{}", f(v[n / 2]), f(v[(n * 9 / 10).min(n - 1)]))
+}
+
+/// One effect's frames split by the stamps (CCOUNT): before the VM (the
+/// player's frame: the gate, the still cache's step, the time), the VM's
+/// setup (frame steps, the cache's choice), its rows, after it (the
+/// governor, the status), and outside the player's frame (the engine's
+/// call), p50/p90 µs each; with the firmware's gate (`gate`) or none.
+fn split(name: &str, src: &str, gate: bool, canvas: &mut Canvas) {
+    fx_psi::set_still_gate(if gate { Some(crate::still_gate) } else { None });
+    let Some(mut fx) = Fx::parse(&fx_psi::path(src, "")) else {
+        say!(error, "psi-probe: split {name}: did not open");
+        return;
+    };
+    let delay = fx.delay();
+    let n = fx.loop_frames();
+    fx.frame(Duration::ZERO, canvas);
+    let held = fx_psi::still_held();
+    let mut parts: [Vec<u32>; 6] = Default::default();
+    for k in 0..FRAMES {
+        let t0 = ccount();
+        fx.frame(delay * (k % n), canvas);
+        let t1 = ccount();
+        let st: [u32; 5] = core::array::from_fn(|i| psi::stats::STAMPS[i].load(Ordering::Relaxed));
+        let inside = st[4].wrapping_sub(st[0]);
+        parts[0].push(st[1].wrapping_sub(st[0]));
+        parts[1].push(st[2].wrapping_sub(st[1]));
+        parts[2].push(st[3].wrapping_sub(st[2]));
+        parts[3].push(st[4].wrapping_sub(st[3]));
+        parts[4].push(t1.wrapping_sub(t0).wrapping_sub(inside));
+        parts[5].push(t1.wrapping_sub(t0));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    drop(fx);
+    let [a, b, c, d, e, t] = &mut parts;
+    say!(info,
+        "psi-probe: split {name} (gate {}, still cache {held} B), p50/p90 us: before the VM {} | VM setup {} | VM rows {} | after the VM {} | outside {} | in all {}",
+        if gate { "on" } else { "off" },
+        us50_90(a), us50_90(b), us50_90(c), us50_90(d), us50_90(e), us50_90(t)
+    );
+}
+
+/// Tunnel VM-direct with the same stamps (setup, rows): against `split`.
+fn split_direct(out: &mut [u8]) {
+    let mut prog = zeroed::<psi::Program>();
+    if compile(TUNNEL_EX, &mut prog, true, true).is_err() {
+        return;
+    }
+    let mut s = zeroed::<psi::Scratch<128>>();
+    s.reset();
+    let mut st = psi::Still::new();
+    if !st.take(&prog) {
+        say!(error, "psi-probe: split Tunnel direct: no heap for the cache");
+        return;
+    }
+    let t = fx_psi::tables();
+    let lp = prog.loop_ms();
+    psi::render_rows_still::<128>(&prog, &mut s, None, Some(&mut st), &psi::golden::inputs(0), &t, None, u32::MAX, out);
+    let mut parts: [Vec<u32>; 3] = Default::default();
+    for k in 0..FRAMES {
+        let t0 = ccount();
+        psi::render_rows_still::<128>(&prog, &mut s, None, Some(&mut st), &psi::golden::inputs(k * 10 % lp), &t, None, u32::MAX, out);
+        let t1 = ccount();
+        let a: [u32; 4] = core::array::from_fn(|i| psi::stats::STAMPS[i].load(Ordering::Relaxed));
+        parts[0].push(a[2].wrapping_sub(a[1]));
+        parts[1].push(a[3].wrapping_sub(a[2]));
+        parts[2].push(t1.wrapping_sub(t0));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let [b, c, t] = &mut parts;
+    say!(info,
+        "psi-probe: split Tunnel VM-direct, p50/p90 us: VM setup {} | VM rows {} | in all {} (scratch {:#x} picture {:#x} still lane {:#x})",
+        us50_90(b), us50_90(c), us50_90(t),
+        psi::stats::SCRATCH.load(Ordering::Relaxed), psi::stats::OUT.load(Ordering::Relaxed), psi::stats::STILL.load(Ordering::Relaxed)
+    );
+}
+
 /// A probe row's compile on the formula stack, as the player compiles
 /// (`psi_stack`): the probe's own rows never deepen the main task's stack.
 fn compile(src: &str, prog: &mut psi::Program, runs: bool, narrow: bool) -> Result<psi::Info, psi::Error> {
@@ -581,6 +669,15 @@ pub fn run(root: &str) {
     // 16 KB block was left for it). The real path: `Fx::parse`, the canvas taken
     // at open, `Fx::frame`, the still cache taken on the first frame): with
     // the cache, then with the gate refusing it (every step every frame).
+    // Where the effect path's time goes (speed-d: Tunnel 4,932 us as an
+    // effect against 3,651 VM-direct; the others ~200-250 us over).
+    psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
+    for gate in [true, false] {
+        split("Tunnel", TUNNEL_EX, gate, &mut canvas);
+        split("Rotozoom floor", ROTOZOOM_FLOOR_EX, gate, &mut canvas);
+    }
+    split_direct(&mut out);
+    fx_psi::set_still_gate(Some(crate::still_gate));
     effects(
         &[
             ("Starfield", STARFIELD_EX, "a=0.5"),
