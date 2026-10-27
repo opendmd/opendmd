@@ -425,12 +425,12 @@ change — constants once, `t`/clock/slider-only values once a frame,
 | `pick` (values the same for every pixel) | 100 | | `pick` of per-pixel values | its compares and selects |
 | each extra layer | its colour + 190 (multiply 245, screen 300, max/min 180; with coverage add 575, multiply 630, screen 600, max/min 450, over 390) | | showing the picture under | free |
 
-**The draw stage** adds, a frame: ~300 ns for each step each time it runs
-(a loop's body counts as often as it turns), a line ~1,500 ns + 200 a pixel
-(12 pixels guessed, or its length when its ends are constants), a dot ~400,
-and 10 µs to clear the canvas; per pixel `ink` is 70 and `T[k]` 100. So 192
-streaks of ~10 steps each are ~1.5 ms, then ~1 ms for `pal(ice, ink)`. (The
-draw figures are the design's estimates until the device measures them.)
+**The draw stage** adds, a frame: ~420 ns for each step each time it runs
+(a loop's body counts as often as it turns, its end too), a line ~1,100 ns +
+320 a pixel walked (its longer side when that side's ends are constants, at
+least 12 pixels otherwise), a dot ~400, and 10 µs to clear the canvas; per
+pixel `ink` is 70 and `T[k]` 100 (measured on the device). So 192 streaks
+of ~15 steps each are ~2.5 ms, then ~1 ms for `pal(ice, ink)`.
 
 Ratings: **light ≤ 5 ms**, **medium ≤ 8 ms**, **heavy** beyond (runs at
 25 frames a second or fewer; GIF looks take ≤ 12 ms, and the worked
@@ -1018,8 +1018,8 @@ loop 4
 -- "OpenDMD" in the panel's font at twice the size, centred: 7 letters of 10 px
 u = px - 30; v = ty - 9               -- the pixel from the text's top left
 ch = pick(floor(u/10), 'O', 'p', 'e', 'n', 'D', 'M', 'D')   -- which letter
-ink = glyph(ch, floor(u/2) % 5, floor(v/2))   -- each font pixel 2 x 2
-hsv(x - t/4, 0.8, ink)                -- a rainbow sliding through, once a loop
+lit = glyph(ch, floor(u/2) % 5, floor(v/2))   -- each font pixel 2 x 2
+hsv(x - t/4, 0.8, lit)                -- a rainbow sliding through, once a loop
 ```
 
 ### 27. Big clock (the showcase)
@@ -1084,8 +1084,8 @@ glow = max(0, 1 - behind*3) * (cx*cx + cy*cy < 0.2)
 -- "RGB" at twice the size, each letter its own colour
 u = px - 49; v = ty - 9
 cell = floor(u/10)
-ink = glyph(pick(cell, 'R', 'G', 'B'), floor(u/2) % 5, floor(v/2))
-pick(cell, #ff3333, #33ff55, #3377ff) * ink
+lit = glyph(pick(cell, 'R', 'G', 'B'), floor(u/2) % 5, floor(v/2))
+pick(cell, #ff3333, #33ff55, #3377ff) * lit
 ```
 
 ### 31. Starfield, drawn (particles)
@@ -1093,7 +1093,8 @@ pick(cell, #ff3333, #33ff55, #3377ff) * ink
 192 stars from `hash(k, …)`, each a streak from where it was a moment ago
 to where it is, flying at the viewer through a field 4,096 deep once a
 loop; the ink fades from the dark tail to the head and in from the
-distance. ~4 ms (about 1.5 of it drawing).
+distance. ~5 ms estimated (4.4 measured on the device; about 3 of it
+drawing).
 
 ```psi example=starfield-drawn
 loop 2.4
