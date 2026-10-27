@@ -198,6 +198,7 @@ false), and `and`, `or`, `not`. There is no power operator: write `x * x`.
 | `hsv(hue, sat, val)` | hue in turns; saturation and brightness 0 to 1 |
 | `rgb(r, g, b)` | red, green and blue, 0 to 1 each |
 | `pal(name, v)` | a palette, `v` from 0 to 1: `fire`, `ice` (or `ocean`), `chrono`, `amber`, `rainbow`, `gray` |
+| `pal(name, v) * k` | the palette's colour, dimmed (or brightened) by `k`: a light or a fog on it |
 | `gray(v)` | black to white |
 | `#ff8800` | a colour by its red, green and blue, two hex digits each (`#f80` for short) |
 
@@ -429,6 +430,16 @@ milliseconds); all the examples are light or medium.
   at: two formulas in one cost about as much as both.
 - Drawing costs by the line, not by the pixel: a few hundred lines a frame
   is light. A loop's lines count as often as it turns.
+- Anything worked out from the pixel's column and the time only
+  (`sin(x*3 + t/8)`) is worked out once a frame for each column, not for
+  every pixel: almost free.
+- Anything worked out from the pixel's place alone, never the time or a
+  slider (a tunnel's depth `1/len(…)`, `atan2(…)`, `r`, `angle`), the panel
+  works out once and keeps, while it has the memory to spare (up to two
+  such values a formula): then even `len` and `atan2` cost nothing a frame.
+  The **Tunnel** example is made this way. Over a GIF (as the look) they
+  are worked out every frame, so the editor may rate such a formula heavier
+  as a look.
 
 ## Sharing
 
