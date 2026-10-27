@@ -122,6 +122,12 @@ def lit(page: Page, sel: str) -> int:
         for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 90) n++; return n; }""", sel)
 
 
+# /f/ is ready when #f is no longer aria-busy: the name is set before the wasm
+# loads, the highlighted code, preview and buttons only after, so waiting for
+# #f-name alone raced them (the gallery's "Open leads to" check, flaky under load).
+F_READY = "#f:not([hidden]):not([aria-busy])"
+
+
 def share_link(base: str, src: str, name: str, **sliders) -> str:
     q = {"formula": src, "name": name, **{k: str(v) for k, v in sliders.items()}}
     return f"{base}/f/#" + urllib.parse.urlencode(q)
@@ -138,7 +144,7 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
     for size in SIZES:
         page = new_page(browser, size, errors)
         page.goto(url)
-        page.wait_for_selector("#f-name:not(:empty)", timeout=20000)
+        page.wait_for_selector(F_READY, timeout=20000)
         page.wait_for_function("+(document.querySelector('#f-panel').dataset.frames || 0) > 5", timeout=20000)
         if size == "laptop":
             check(page.inner_text("#f-name") == name and page.evaluate("!window.pwned && !document.querySelector('#f-name img')"),
@@ -194,7 +200,7 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
                 page.click("#f-open")
             check(page.url.startswith("http://192.168.1.50/#formula="), "/f/: and used straight away the next time")
             page.go_back()
-            page.wait_for_selector("#f-name:not(:empty)", timeout=20000)
+            page.wait_for_selector(F_READY, timeout=20000)
             # Submit to the gallery: GitHub's new-file page with the file, which the checker accepts.
             page.click("#f-submit")
             check(page.is_visible("#f-sub") and page.input_value("#s-file") == "rings-img-src-x-onerror-window-pwned-1",
@@ -255,7 +261,7 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
     # Try it in the demo: the demo's editor has it.
     page.goto("about:blank")
     page.goto(url)
-    page.wait_for_selector("#f-name:not(:empty)", timeout=20000)
+    page.wait_for_selector(F_READY, timeout=20000)
     page.click("#f-demo")
     page.wait_for_selector("#psi-ed #psi-src", timeout=30000)
     page.wait_for_timeout(500)
@@ -275,7 +281,7 @@ def demo_share(browser, base: str, errors: list[str]) -> None:
     sub = page.get_attribute("#psi-submit", "href")
     check(link.startswith(f"{base}/f/#formula=") and sub == link + "&submit", f"demo: Copy share link -> {link[:60]}…")
     page.goto(link)
-    page.wait_for_selector("#f-name:not(:empty)", timeout=20000)
+    page.wait_for_selector(F_READY, timeout=20000)
     first = json.loads((ROOT / "opendmd-web/www/formulas.json").read_text())[0]
     check(page.inner_text("#f-name") == first["name"], f"demo: the link opens {first['name']} on its page")
     page.context.close()
@@ -580,10 +586,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
             check(remix.startswith("../demo/#formula=") and "remix" in urllib.parse.unquote_plus(remix),
                   "gallery: Remix opens it in the demo")
             page.locator("#examples ~ ul .ftile").nth(5).locator(".facts a:not(.alt)").click()
-            page.wait_for_selector("#f-name:not(:empty)", timeout=20000)
-            # (The name is set before the code: wait for both, or a busy
-            # machine reads the code half-filled.)
-            page.wait_for_function("document.querySelector('#f-code').textContent.trim().length > 0", timeout=20000)
+            page.wait_for_selector(F_READY, timeout=20000)
             e = examples[5]
             check(page.inner_text("#f-name") == e["name"] and page.locator("#f-code").inner_text().rstrip("\n") == e["src"],
                   f"gallery: Open leads to {e['name']}'s page")

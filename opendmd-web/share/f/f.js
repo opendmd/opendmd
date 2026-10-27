@@ -29,13 +29,19 @@ const here = () => new URL('./', location.href).href;
 if (!has || !f.src.trim()) {
   $('f-none').hidden = false;
 } else {
-  start().catch((e) => { $('f-cap').textContent = 'This page could not load: ' + (e.message || e); });
+  // #f is aria-busy until start() has wired everything (the preview, the
+  // buttons, the highlighted code): what a test waits for, not #f-name.
+  start().catch((e) => { $('f-cap').textContent = 'This page could not load: ' + (e.message || e); })
+    .finally(() => $('f').removeAttribute('aria-busy'));
 }
 
 async function start() {
   $('f').hidden = false;
   $('f-name').textContent = f.name;
   document.title = `${f.name} · OpenDMD`;
+  // The code as plain text at once, with the name: readable while the wasm
+  // loads (or if it never does); highlighted below once Psi is up.
+  $('f-code').textContent = f.src + '\n';
   if (cut) $('f-cap').textContent = 'This link was too long: only the first 4,096 characters of the formula are here.';
 
   await init();
