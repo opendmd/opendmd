@@ -8,11 +8,12 @@
 //! N` seconds; `t` is the frame's time into it, so the loop is seamless
 //! when everything the formula moves completes whole cycles in it.
 //!
-//! **Memory.** The program (1,808 B) and the VM's working memory
+//! **Memory.** The program (2,832 B) and the VM's working memory
 //! ([`opendmd_psi::Scratch`], 8,192 B at 128 lanes) are one allocation made
 //! when the path is opened, zeroed and filled in place (never built on the
-//! main task's stack); no heap per frame, and [`Fx`](crate::fx::Fx) itself
-//! holds only the pointer. The sine and the palettes are lent from
+//! main task's stack); a formula that draws (`draw { }`) also has its
+//! canvas ([`opendmd_psi::Ink`], 4 KB), a second allocation made then. No
+//! heap per frame, and [`Fx`](crate::fx::Fx) itself holds only the pointer. The sine and the palettes are lent from
 //! [`crate::fx`] (`SIN`, `PALETTES`), so the device carries one copy.
 //!
 //! **Cost.** A formula whose estimated render time
@@ -397,7 +398,7 @@ impl PsiFx {
     /// Take another query's formula, sliders and frame rate in place (a
     /// live edit on the panel): the clock, the working memory and the
     /// governor stay — a heavier formula starts at least as slow as its
-    /// estimate says. Only a program's worth (1.8 KB) is allocated, and
+    /// estimate says. Only a program's worth (2.8 KB) is allocated, and
     /// only while compiling.
     pub fn retune_from(&mut self, q: &str) -> Result<(), psi::Error> {
         let q = query(q);
@@ -517,7 +518,7 @@ pub const COVERS: &str =
 /// it; the panel then shows [`FormulaLook::apply`]'s picture instead (the
 /// tint and the glow still come after it, in `Panel::blit`).
 ///
-/// **Memory.** The program (1.8 KB) is held from [`FormulaLook::from_path`];
+/// **Memory.** The program (2.8 KB) is held from [`FormulaLook::from_path`];
 /// the VM's working memory and the picture it makes (8 + 12 KB) only
 /// between [`take`](FormulaLook::take) and [`release`](FormulaLook::release),
 /// both fallible, so the firmware can hold them only while the heap has

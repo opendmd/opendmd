@@ -42,7 +42,7 @@ pub use vm::{q16, render_rows, render_rows_ink, render_with, Inputs, Scratch, Q1
 /// The lane width the effect uses: one panel row.
 pub const LANES: usize = 128;
 
-/// Compile `src` (a new [`Program`] by value: ~1.8 KB; on a small stack use
+/// Compile `src` (a new [`Program`] by value: ~2.8 KB; on a small stack use
 /// [`compile_into`] on a zeroed allocation instead).
 pub fn compile(src: &str) -> Result<Program, Error> {
     let mut p = Program::default();

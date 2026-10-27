@@ -535,7 +535,13 @@ pub fn run(root: &str) {
     // The drawing examples as effects (the real path: `Fx::parse`, its
     // canvas taken at open, `Fx::frame`).
     for (name, src) in [("Starfield", STARFIELD_EX), ("Wireframe cube", CUBE_EX)] {
-        let est = psi::compile(src).map(|p| p.esp32_us()).unwrap_or(0);
+        // (Into a zeroed box: a `Program` by value is 2.8 KB of the main
+        // task's stack.)
+        let est = if psi::compile_into(src, &mut prog).is_ok() {
+            prog.esp32_us()
+        } else {
+            0
+        };
         let h0 = heap();
         let Some(mut fx) = Fx::parse(&fx_psi::path(src, "a=0.5")) else {
             say!(error, "psi-probe: example {name}: did not open");
