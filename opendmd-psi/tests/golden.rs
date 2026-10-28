@@ -1893,12 +1893,37 @@ fn draw_loops_as_lanes_are_a_turn_at_a_time() {
             };
         }
         let e = |r: &mut Rng| val(r, ks, d - 1);
-        match r.below(16) {
+        match r.below(19) {
             0..=3 => {
-                let op = ["+", "-", "*", "/", "%", "<", ">=", "and"][r.below(8)];
+                let op = [
+                    "+", "-", "*", "/", "%", "<", ">=", "and", "<=", "==", "!=", ">", "or",
+                ][r.below(13)];
                 format!("({} {op} {})", e(r), e(r))
             }
-            4 => format!("sin({})", e(r)),
+            4 => format!("{}({})", ["sin", "cos"][r.below(2)], e(r)),
+            // (Laned since psi-speed3: `%`, the comparisons, `not`, `-`,
+            // `cos`, `T[k]`; and steps still worked out turn by turn.)
+            16 => match r.below(4) {
+                0 => format!("not {}", e(r)),
+                1 => format!("-{}", e(r)),
+                2 => format!("T[{}]", e(r)),
+                _ => format!("({} % {})", e(r), ["0", "3", "-2.5", "f"][r.below(4)]),
+            },
+            17 => match r.below(5) {
+                0 => format!("sqrt({})", e(r)),
+                1 => format!("step({}, {})", e(r), e(r)),
+                2 => format!("mix({}, {}, {})", e(r), e(r), e(r)),
+                3 => format!("smoothstep({}, {}, {})", e(r), e(r), e(r)),
+                _ => format!("tri({})", e(r)),
+            },
+            18 => format!(
+                "noise({}, {}, {}) + digit({} % 10, 1, {} % 7)",
+                e(r),
+                e(r),
+                e(r),
+                e(r),
+                e(r)
+            ),
             5 => format!("hash({}, {})", e(r), r.below(20)),
             6 => format!("frac({})", e(r)),
             7 => format!("({} ? {} : {})", e(r), e(r), e(r)),
@@ -2154,10 +2179,20 @@ fn fused_runs_are_their_steps() {
         };
         let (u, v) = (uv(), uv());
         let m = [2, 2, 4, 8][r.below(4)];
+        // (A first term that is not a floor must not take the checker's
+        // kernel, which floors it again: `fuse::floored`.)
+        let sum = [
+            "floor(u) + floor(v)",
+            "floor(u) + floor(v)",
+            "u + floor(v)",
+            "frac(u)*4 + floor(v)",
+            "floor(v) + (u - 0.5)",
+            "floor(u/2) + floor(v)",
+        ][r.below(6)];
         let mut lines = vec![
             format!("u = {u}"),
             format!("v = {v}"),
-            format!("cell = (floor(u) + floor(v)) % {m}"),
+            format!("cell = ({sum}) % {m}"),
             format!(
                 "side = {} + {}*{}",
                 ["0.0635", "t", "py*0.01"][r.below(3)],
@@ -2165,22 +2200,34 @@ fn fused_runs_are_their_steps() {
                 ["cos(u/16)", "u", "px", "v*0.5"][r.below(4)]
             ),
             "lit = floor(min(v, 10)*side + (u > 0)) / 8".to_string(),
-            format!(
-                "m = floor(px/{}) % {}",
-                [8, 16, 3][r.below(3)],
-                [9, 4, 17, 20][r.below(4)]
-            ),
+            if r.below(3) == 0 {
+                // A sprite's value (its key's 0..8) as the pick's choice.
+                format!("m = S[px/{} - t, py % 5]", [2, 4, 1][r.below(3)])
+            } else {
+                format!(
+                    "m = floor(px/{}) % {}",
+                    [8, 16, 3][r.below(3)],
+                    [9, 4, 17, 20][r.below(4)]
+                )
+            },
         ];
+        // The formula's own palette (`P`) as often as a built-in one.
+        let own = r.below(2) == 0;
+        let (chrono, fire, rainbow, ice) = if own {
+            ("P", "P", "P", "P")
+        } else {
+            ("chrono", "fire", "rainbow", "ice")
+        };
         let reuse = r.below(3) == 0;
         let ca = ["frac(0.711 + t/4.8)", "0.78", "a", "t"][r.below(4)];
         let cb = ["frac(0.336 + t/4.8)", "0.28", "1 - a", "py/31"][r.below(4)];
         let colour = match r.below(6) {
-            0 => format!("pal(chrono, cell ? {ca} : {cb}) * lit"),
+            0 => format!("pal({chrono}, cell ? {ca} : {cb}) * lit"),
             1 => format!(
-                "pal(fire, cell ? {ca} : {cb}) * {}",
+                "pal({fire}, cell ? {ca} : {cb}) * {}",
                 ["(py/31)", "0.5", "fog"][r.below(3)]
             ),
-            2 => format!("pal(fire, cell ? {ca} : {cb})"),
+            2 => format!("pal({fire}, cell ? {ca} : {cb})"),
             3 => {
                 let c: Vec<String> = (0..[3, 9, 16, 18][r.below(4)])
                     .map(|j| {
@@ -2189,10 +2236,13 @@ fn fused_runs_are_their_steps() {
                     })
                     .collect();
                 format!(
-                    "pal(rainbow, pick(m, {})){}",
+                    "pal({rainbow}, pick(m, {})){}",
                     c.join(", "),
                     ["", " * (py/31)", " * lit"][r.below(3)]
                 )
+            }
+            4 if own && r.below(2) == 0 => {
+                [format!("pal({ice}, ink)"), format!("pal({ice}, ink) * fog")][r.below(2)].clone()
             }
             4 => [
                 "pal(ice, ink)",
@@ -2261,10 +2311,20 @@ fn fused_runs_are_their_steps() {
         } else {
             colour
         };
-        let src = format!("loop {}\n{}{}\n{body}", 1 + k % 5, draw, lines.join("\n"));
+        let decl = "palette P = #200010, #ff2000, #ffd040, #40c0ff, #ffffff, #0000ff\nsprite S {\nkey . 0, R 6, D 7, L 8, a 1, b 2, c 3\n.RRDDLLabc..\nRD.abc.LLRDa\n..cbaRRDDL.b\nLLabcRD....c\n}\n";
+        let src = format!(
+            "loop {}\n{decl}{}{}\n{body}",
+            1 + k % 5,
+            draw,
+            lines.join("\n")
+        );
         let mut p = Program::default();
         let mut q = Program::default();
         if opendmd_psi::compile_into(&src, &mut p).is_err() {
+            if k < 50 && std::env::var("PSI_SHOW").is_ok() {
+                let e = opendmd_psi::compile_into(&src, &mut p).unwrap_err();
+                eprintln!("{}", e.render(&src));
+            }
             continue;
         }
         opendmd_psi::compile_unfused(&src, &mut q).expect("compiles unfused");

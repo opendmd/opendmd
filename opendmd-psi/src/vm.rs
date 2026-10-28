@@ -970,9 +970,19 @@ pub(crate) fn lane_draw<const N: usize>(
         MIN => bin!(fast2, d, a, b, fixed::min),
         MAX => bin!(fast2, d, a, b, fixed::max),
         HASH => bin!(run2, d, a, b, fixed::hash),
+        MOD => bin!(run2, d, a, b, fixed::modulo),
+        LE => bin!(fast2, d, a, b, fixed::le),
+        GE => bin!(fast2, d, a, b, fixed::ge),
+        EQ => bin!(fast2, d, a, b, fixed::eq),
+        NE => bin!(fast2, d, a, b, fixed::ne),
+        NEG => un!(fast1, d, a, fixed::neg),
+        NOT => un!(fast1, d, a, fixed::not),
         ABS => un!(fast1, d, a, fixed::abs),
         FLOOR => un!(fast1, d, a, fixed::floor),
         FRAC => un!(fast1, d, a, fixed::frac),
+        SIN => sin_lane(d, a, t),
+        COS => cos_lane(d, a, t),
+        TAB => tab_lane(d, a, tabs, op),
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
         _ => {
@@ -1025,6 +1035,32 @@ fn value_of(
         SPR => spr(tabs, op.c, x, y),
         NOISE_O..=NOISE_O_LAST => noise_o(x, y, z, sc, op.code),
         c => eval(c, x, y, z, Some(t)),
+    }
+}
+
+// Steps whose lane loop is a closure, shared by the frame loop
+// (`lane_op`) and the draw lanes (`lane_draw`): one closure type, so one
+// instantiation of each loop for both (a closure written in each would be
+// a second copy, `fast1`'s in IRAM).
+
+/// `sin` along the lane (or of one value, filled).
+#[inline(always)]
+fn sin_lane<const N: usize>(d: &mut [i32; N], a: Arg, t: &Tables) {
+    un!(fast1, d, a, |v| fixed::sin(t, v))
+}
+
+/// `cos` along the lane (or of one value, filled).
+#[inline(always)]
+fn cos_lane<const N: usize>(d: &mut [i32; N], a: Arg, t: &Tables) {
+    un!(fast1, d, a, |v| fixed::cos(t, v))
+}
+
+/// `T[k]` along a lane of `k` (a table read of one value is a scalar step,
+/// worked out before: nothing here).
+#[inline(always)]
+fn tab_lane<const N: usize>(d: &mut [i32; N], a: Arg, tabs: &[i32; MAX_TABLE], op: &Op) {
+    if let Arg::Lane(p) = a {
+        run1(d, L(p), |k| tab(tabs, op.b, op.c, k))
     }
 }
 
@@ -1098,8 +1134,8 @@ fn lane_op<const N: usize>(
         ABS => un!(fast1, d, a, fixed::abs),
         FLOOR => un!(fast1, d, a, fixed::floor),
         FRAC => un!(fast1, d, a, fixed::frac),
-        SIN => un!(fast1, d, a, |v| fixed::sin(t, v)),
-        COS => un!(fast1, d, a, |v| fixed::cos(t, v)),
+        SIN => sin_lane(d, a, t),
+        COS => cos_lane(d, a, t),
         TRI => un!(fast1, d, a, fixed::tri),
         SAW => un!(fast1, d, a, fixed::saw),
         SQR => un!(fast1, d, a, fixed::sqr),
@@ -1116,11 +1152,7 @@ fn lane_op<const N: usize>(
         SPR => spr_lane(d, [a, b], tabs, op.c),
         // (k is always a lane here: a table read of a scalar is a scalar
         // step.)
-        TAB => {
-            if let Arg::Lane(p) = a {
-                run1(d, L(p), |k| tab(tabs, op.b, op.c, k))
-            }
-        }
+        TAB => tab_lane(d, a, tabs, op),
         SELECT => tern!(fast3, d, a, b, c, fixed::select),
         CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
         MIX => tern!(fast3, d, a, b, c, fixed::mix),
@@ -1148,6 +1180,13 @@ fn lane_op<const N: usize>(
 /// would leave it — the same `fixed` functions in the same order, in one
 /// loop. `false` when its operands are not of the kinds the kernel takes
 /// (then its steps run).
+///
+/// In IRAM, like the frame loop that calls it a lane per run. psi-speed3
+/// put it in flash (it was 2,344 B of IRAM) and s3probe-a measured
+/// Rotozoom floor's VM frame at 3,843 µs against 1,618 (its steps 2,542,
+/// the same runs fused): the flash cache's layout, not the work, so back
+/// here. Smaller instead: its operands are decoded by one out-of-line
+/// copy of `Scratch::arg` ([`arg_at`]) rather than a dozen inlined ones.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
@@ -1165,44 +1204,43 @@ fn fused<const N: usize>(
 ) -> bool {
     use crate::fuse::*;
     match (kind, ops) {
-        (F_CHECKER, [fx, fy, _, m]) => {
+        // The four-step checker and its last three: one kernel. For the
+        // three, `r` is the first floor's value, worked out earlier
+        // (`fuse` checks that a floor wrote it last), and floor is
+        // idempotent (`floor(r) == r` for such an `r`), so
+        // `mask(add_w(floor(r), floor(y)), m)` is the steps' value.
+        (F_CHECKER | F_CHECKER3, _) => {
+            let (x, y, m, dst) = match (kind, ops) {
+                (F_CHECKER, [fx, fy, _, m]) => (fx.a, fy.a, m.b, m.d),
+                (F_CHECKER3, [fy, add, m]) => {
+                    let r = if add.a == fy.d { add.b } else { add.a };
+                    (r, fy.a, m.b, m.d)
+                }
+                _ => return false,
+            };
             let (Arg::Lane(x), Arg::Lane(y), Arg::Sc(m)) = (
-                s.arg(al, fx.a, base),
-                s.arg(al, fy.a, base),
-                s.arg(al, m.b, base),
+                arg_at(s, al, x, base),
+                arg_at(s, al, y, base),
+                arg_at(s, al, m, base),
             ) else {
                 return false;
             };
-            let d = s.dest(al, ops[3].d);
+            let d = s.dest(al, dst);
             fast2(d, L(x), L(y), move |x, y| {
                 fixed::mask(fixed::add_w(fixed::floor(x), fixed::floor(y)), m)
             });
         }
-        (F_CHECKER3, [fy, add, m]) => {
-            let r = if add.a == fy.d { add.b } else { add.a };
-            let (Arg::Lane(y), Arg::Lane(r), Arg::Sc(m)) = (
-                s.arg(al, fy.a, base),
-                s.arg(al, r, base),
-                s.arg(al, m.b, base),
-            ) else {
-                return false;
-            };
-            let d = s.dest(al, ops[2].d);
-            fast2(d, L(r), L(y), move |r, y| {
-                fixed::mask(fixed::add_w(r, fixed::floor(y)), m)
-            });
-        }
         (F_SELPAL | F_SELPAL_K, [sel, col]) => {
             let (Arg::Lane(c), Arg::Sc(va), Arg::Sc(vb)) = (
-                s.arg(al, sel.a, base),
-                s.arg(al, sel.b, base),
-                s.arg(al, sel.c, base),
+                arg_at(s, al, sel.a, base),
+                arg_at(s, al, sel.b, base),
+                arg_at(s, al, sel.c, base),
             ) else {
                 return false;
             };
             let p = palette(t, own, col.d & code::PAL_MASK);
             let shift = (col.d & !code::PAL_SCALED) >> code::PAL_SHIFT;
-            let k = match (col.d & code::PAL_SCALED != 0, s.arg(al, col.c, base)) {
+            let k = match (col.d & code::PAL_SCALED != 0, arg_at(s, al, col.c, base)) {
                 (false, _) => ONE,
                 (true, Arg::Sc(k)) => k >> shift,
                 (true, Arg::Lane(k)) => {
@@ -1215,10 +1253,10 @@ fn fused<const N: usize>(
             out1(px, L(c), move |c| if c != 0 { ca } else { cb });
         }
         (F_PICKPAL, [pk, col]) => {
-            let Arg::Lane(m) = s.arg(al, pk.a, base) else {
+            let Arg::Lane(m) = arg_at(s, al, pk.a, base) else {
                 return false;
             };
-            let k = match (col.d & code::PAL_SCALED != 0, s.arg(al, col.c, base)) {
+            let k = match (col.d & code::PAL_SCALED != 0, arg_at(s, al, col.c, base)) {
                 (false, _) => ONE,
                 (true, Arg::Sc(k)) => k >> ((col.d & !code::PAL_SCALED) >> code::PAL_SHIFT),
                 (true, Arg::Lane(_)) => return false,
@@ -1246,35 +1284,43 @@ fn fused<const N: usize>(
             }),
             _ => return false,
         },
+        // `mul_w` for `mul_n` too: on a frame that runs the narrowed steps
+        // (the only frames a kernel runs on) `range::narrow` chose `mul_n`
+        // only where the product fits an i32 before the shift, and there
+        // the two are the same bits (`a.wrapping_mul(b) >> 16` is
+        // `(a*b as i64 >> 16) as i32` when a*b fits). One kernel each
+        // instead of two (psi-speed3: −134 B of IRAM, ~1 instruction a
+        // pixel more for a `mul_n`).
         (F_MADD, [mul, add]) => {
-            let (a, b) = match (s.arg(al, mul.a, base), s.arg(al, mul.b, base)) {
+            let (a, b) = match (arg_at(s, al, mul.a, base), arg_at(s, al, mul.b, base)) {
                 (Arg::Lane(a), Arg::Sc(b)) | (Arg::Sc(b), Arg::Lane(a)) => (a, b),
                 _ => return false,
             };
-            let c = s.arg(al, if add.a == mul.d { add.b } else { add.a }, base);
-            let w = mul.code == code::MUL_W;
+            let c = arg_at(s, al, if add.a == mul.d { add.b } else { add.a }, base);
             let own = core::ptr::eq(a, s.lanes[reg_index(add.d)].as_ptr());
             let d = s.dest(al, add.d);
-            match (w, c) {
+            match c {
                 // (Into the lane multiplied: read and written in place.)
-                (true, Arg::Sc(c)) if own => {
-                    fast1_self(d, move |a| fixed::add_w(fixed::mul_w(a, b), c))
-                }
-                (false, Arg::Sc(c)) if own => {
-                    fast1_self(d, move |a| fixed::add_w(fixed::mul_n(a, b), c))
-                }
+                Arg::Sc(c) if own => fast1_self(d, move |a| fixed::add_w(fixed::mul_w(a, b), c)),
                 _ if own => return false,
-                (true, Arg::Sc(c)) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_w(a, b), c)),
-                (true, Arg::Lane(c)) => fast2(d, L(a), L(c), move |a, c| {
+                Arg::Sc(c) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_w(a, b), c)),
+                Arg::Lane(c) => fast2(d, L(a), L(c), move |a, c| {
                     fixed::add_w(fixed::mul_w(a, b), c)
                 }),
-                (false, Arg::Sc(c)) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_n(a, b), c)),
-                (false, Arg::Lane(_)) => return false,
             }
         }
         _ => return false,
     }
     true
+}
+
+/// `Scratch::arg` out of line, in IRAM: the fused runs' operands (a few a
+/// lane each), one copy for all of [`fused`]'s arms.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+fn arg_at<const N: usize>(s: &Scratch<N>, al: &Alias, v: u8, base: usize) -> Arg {
+    s.arg(al, v, base)
 }
 
 /// The colours of palette entries `v` scaled by `k` (`pal_lit` of each;

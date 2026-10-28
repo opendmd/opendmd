@@ -4724,11 +4724,15 @@ fn compile_impl(
     }
     if r.is_err() {
         prog.clear();
-    } else if narrow {
-        crate::range::narrow(prog);
-        if fuse {
-            crate::fuse::fuse(prog);
+    } else {
+        if narrow {
+            crate::range::narrow(prog);
+            if fuse {
+                crate::fuse::fuse(prog);
+            }
         }
+        // The draw loops that run as lanes, decided once (`vector_loop`).
+        prog.mark_lane_loops();
     }
     r
 }
