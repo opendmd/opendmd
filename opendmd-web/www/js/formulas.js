@@ -13,7 +13,7 @@ import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, store, toast, debounce, saver, base, SITE } from './util.js';
 import { popup, closeMenu, actions } from './overrides.js';
-import { link as mklink, parse, sliderName, choices, picker, about, TIP, est, marks, sample, MAX_NAME } from './psikit.js';
+import { link as mklink, parse, controls, control, fit, Q, about, TIP, est, marks, sample, MAX_NAME } from './psikit.js';
 
 let P = null, mod = null, gen = 0;
 const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
@@ -43,7 +43,6 @@ const grid = (i) => (i[5] & 32 ? 0 : i[10]) || D;
 let held = null, over = false;
 const hold = (src) => { held = src; over = src != null && !!(P.info()[5] & 32); return true; };
 const take = (src) => T(() => src != null && (src === held || (P.compile(src.slice(0, 4096)) && hold(src))), false);
-const Q = (v) => Math.round((v || 0) * 65536);
 // `still`: a thumbnail, drawn at 10:09:30 like the site's gallery (opendmd-gallery's
 // preview clock), so one that follows the clock doesn't come out dark at night.
 // `gms`: where the GIF under it is (its own clock: ms since the preview started).
@@ -214,18 +213,11 @@ function play(v, f, i) {
   kick();
 }
 
-// Sliders for the a, b, c a formula reads, in `box`; `set` on a change. A
-// slider with choices (`-- a: shape = cube, ball`) is a row of buttons.
-function sliders(box, f, mask, set) {
-  clear(box, ['a', 'b', 'c'].map((k, j) => {
-    if (!(mask & (1 << j))) return null;
-    const ch = choices(f.src, k), name = sliderName(f.src, k);
-    if (ch) return h('div.psi-sl', h('span', name), Object.assign(picker(ch, name, f[k], (v) => { f[k] = v; set(); }), { id: `${box.id}-${k}` }));
-    const out = h('output.mono', (f[k] || 0).toFixed(2));
-    const r = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: f[k] || 0, id: `${box.id}-${k}`,
-      oninput: () => { f[k] = +r.value; out.textContent = f[k].toFixed(2); set(); } });
-    return h('label.psi-sl', h('span', name), r, out);
-  }));
+// The controls a formula declares (its `control` lines, and a 0..1 slider for
+// a, b or c read without one), in `box`; `set` on a change.
+function sliders(box, f, set) {
+  const ctl = T(() => controls(P, f.src), null);
+  clear(box, (ctl?.controls || []).map((c) => control(c, f, set, `${box.id}-${c.slot}`)));
 }
 
 // --- Saving and sharing
@@ -241,6 +233,7 @@ const link = (f, base = location.origin + location.pathname) => mklink(f, base, 
 // `#formula=…&name=…&a=…` (app.js keeps it in app.formula).
 function fromLink(s) {
   const { f, cut } = parse(s);
+  if (P) T(() => fit(controls(P, f.src), f), null);
   if (cut) toast('The shared formula was too long: only its first 4,096 characters are here', 'bad');
   f.base = sig(f);
   return f;
@@ -346,7 +339,7 @@ function build(root) {
     desc.textContent = f.desc || '';
     cap.textContent = i.length ? about(i) : `This formula doesn’t work any more: ${T(() => P.error(), '')}`;
     cap.title = i.length ? TIP(i) : '';
-    sliders(sl, f, i[5] || 0, () => { pv.dirty = true; PS?.follow(f); });
+    sliders(sl, f, () => { pv.dirty = true; PS?.follow(f); });
     if (show) show.disabled = !i.length;
     under.hidden = !(i[5] & 32);
     if (look) look.hidden = !i.length;
@@ -562,7 +555,7 @@ function editor() {
       delete el.dataset.err;
       good = f.src;
       top.classList.remove('stale');
-      sliders(sl, f, i[5], () => { stash(); pv.dirty = true; PS?.follow(live); });
+      sliders(sl, f, () => { stash(); pv.dirty = true; PS?.follow(live); });
       play(pv, live, i);
       PS?.follow(live);
     } else {
@@ -706,7 +699,7 @@ function editor() {
     const ins = (t) => () => { closeMenu(); const s = ta.selectionStart; ta.focus(); ta.setSelectionRange(s, ta.selectionEnd); document.execCommand('insertText', false, t); };
     const rows = (title, list) => [h('h3', title), h('dl.psi-dl', list.map(([k, v, x]) => [h('dt', h('button.txt.mono', { onclick: ins(x || k.split(/[ ,(]/)[0]) }, k)), h('dd', v)]))];
     popup(h('div.menu.wide', { id: 'psi-cheat', role: 'dialog', 'aria-label': 'Cheat sheet' }, h('div.mh', 'Cheat sheet'),
-      rows('Values', VARS), rows('Functions', FUNCS), rows('Drawing', DRAW), rows('Colour (the last line, of the formula or a layer)', COLS),
+      rows('At the top: what the formula is', DECLS), rows('Values', VARS), rows('Functions', FUNCS), rows('Drawing', DRAW), rows('Colour (the last line, of the formula or a layer)', COLS),
       h('p.cap', 'Phases are in turns: sin(0.25) is 1. Tap a name to put it in. -- starts a comment.')), r.left, r.bottom + 4);
   }
 

@@ -244,7 +244,7 @@ async function look(path) {
   try {
     const P = await pkg();
     if (lookOn != path || !sim) return;
-    const q = new URLSearchParams(path.slice(8)), Q = (k) => Math.round(+(q.get(k) || 0) * 65536);
+    const q = new URLSearchParams(path.slice(8)), Q = (k) => (q.has(k) ? Math.round(+q.get(k) * 65536) : -2147483648); // unset: the formula's default
     if (!P.compile(q.get('src') || '')) throw new Error(P.error());
     const loop = P.info()[4] || 0;
     sim.preview.p.setOver((px) => {
