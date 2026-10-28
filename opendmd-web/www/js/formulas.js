@@ -396,34 +396,79 @@ function build(root) {
 }
 
 // --- The editor (`#formulas/edit`)
-const VARS = [['x, y', 'where the pixel is: 0 to 1 across, and up from the bottom'], ['px, py', 'the pixel’s column 0–127 and row 0–31 from the bottom'],
-  ['t', 'seconds into the loop'], ['hour, minute, second', 'the time of day'], ['a, b, c', 'sliders, 0 to 1 (name one with -- a: speed; buttons with -- a: shape = cube, ball)'],
-  ['w, h', '128 and 32'], ['i', 'the pixel’s number, 0–4095'], ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 up'],
-  ['r, angle', 'distance and angle (turns) from the middle'], ['ty', 'row 0–31 from the top'], ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'], ['ul', 'how bright that is']];
-const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], ['tri(v) saw(v) sqr(v)', 'triangle, sawtooth and square waves'],
-  ['abs floor frac sqrt', 'size, whole part, fraction, square root'], ['min max clamp(v, lo, hi)', 'limits'], ['mix(a, b, k)', 'from a to b as k goes 0 to 1'],
-  ['step(edge, v)', '1 past the edge, else 0'], ['smoothstep(e0, e1, v)', 'a soft step'], ['len(dx, dy)', 'distance'], ['atan2(dy, dx)', 'angle, in turns'],
-  ['noise(x, y, z)', 'smooth random hills, 0 to 1'], ['hash(a, b)', 'random 0 to 1'], ['select(c, a, b)', 'a when c is true (not 0), else b; or c ? a : b'],
+// psi-builtins: cheat sheet (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins)
+const VARS = [
+  ['x, y', 'where the pixel is: 0 to 1 across, and up from the bottom'],
+  ['px, py', 'the pixel’s column 0–127 and row 0–31 from the bottom'],
+  ['t', 'seconds into the loop'],
+  ['hour, minute, second', 'the time of day'],
+  ['a, b, c', 'the controls, in the order the control lines declare them (0 to 1 when undeclared)'],
+  ['w, h', '128 and 32'],
+  ['i', 'the pixel’s number, 0–4095'],
+  ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 up'],
+  ['r, angle', 'distance and angle (turns) from the middle'],
+  ['ty', 'row 0–31 from the top'],
+  ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'],
+  ['ul', 'how bright that is']
+];
+const FUNCS = [
+  ['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'],
+  ['tri(v) saw(v) sqr(v)', 'triangle, sawtooth and square waves'],
+  ['abs floor frac sqrt', 'size, whole part, fraction, square root'],
+  ['min max clamp(v, lo, hi)', 'limits'],
+  ['mix(a, b, k)', 'from a to b as k goes 0 to 1'],
+  ['step(edge, v)', '1 past the edge, else 0'],
+  ['smoothstep(e0, e1, v)', 'a soft step'],
+  ['len(dx, dy)', 'distance'],
+  ['atan2(dy, dx)', 'angle, in turns'],
+  ['noise(x, y, z)', 'smooth random hills, 0 to 1'],
+  ['hash(a, b)', 'random 0 to 1'],
+  ['select(c, a, b)', 'a when c is true (not 0), else b; or c ? a : b'],
   ['pick(k, a, b, …)', 'a at k = 0, b at 1, …; else 0'],
   ['digit(n, col, row)', 'the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font'],
-  ["glyph('A', col, row)", 'the same for a character'], ['bit(n, i)', 'bit i of a whole number: 1 or 0'],
-  ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'], ['%', 'remainder: v % 1 is the fraction'], [';', 'a new line, on the same line'],
-  ['loop 8', 'the loop’s length in seconds (first line)'], ['loop forever', 'goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays'], ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'], ['frame { … }', 'values worked out once a frame'],
+  ['glyph(\'A\', col, row)', 'the same for a character'],
+  ['bit(n, i)', 'bit i of a whole number: 1 or 0'],
+  ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'],
+  ['%', 'remainder: v % 1 is the fraction'],
+  [';', 'a new line, on the same line'],
+  ['loop 8', 'the loop’s length in seconds (first line)'],
+  ['loop forever', 'goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays'],
+  ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'],
+  ['frame { … }', 'values worked out once a frame'],
   ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
-  ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'], ['p.v', 'a value part p sets'],
-  ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']];
-const DRAW = [['draw { … }', 'once a frame, before the pixels: values, loops, lines and dots into ink', 'draw {\n  \n}\n'],
+  ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'],
+  ['p.v', 'a value part p sets'],
+  ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']
+];
+const DRAW = [
+  ['draw { … }', 'once a frame, before the pixels: values, loops, lines and dots into ink', 'draw {\n  \n}\n'],
   ['for k < 12 { … }', 'inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame', 'for k < 12 {\n  \n}'],
   ['line(x0, y0, x1, y1, v0, v1)', 'a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1)'],
-  ['dot(x, y, v)', 'one pixel of ink v'], ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
-  ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '], ['T[k]', 'number k of table T, from 0 (0 outside it)'],
+  ['dot(x, y, v)', 'one pixel of ink v'],
+  ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
+  ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '],
+  ['T[k]', 'number k of table T, from 0 (0 outside it)'],
   ['sprite s { … }', 'a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall', 'sprite s {\n  key . 0, X 1\n  .X.\n}\n'],
-  ['s[u, v]', 'sprite s at column u, row v from its top left: its key’s number (0 outside)']];
-const COLS = [['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'], ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
+  ['s[u, v]', 'sprite s at column u, row v from its top left: its key’s number (0 outside)']
+];
+const COLS = [
+  ['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'],
+  ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
   ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'],
-  ['palette sea = #024, #08c, #fff', 'your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one', 'palette p = #000, #f80, #fff\n'], ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'], ['gray(v)', 'white, 0 to 1'],
+  ['palette sea = #024, #08c, #fff', 'your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one', 'palette p = #000, #f80, #fff\n'],
+  ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'],
+  ['gray(v)', 'white, 0 to 1'],
   ['#ff8800', 'a colour: alone, or #f80 * v, mix(#000, #f80, v)'],
-  ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)']];
+  ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)']
+];
+const DECLS = [
+  ['name "Sunrise"', 'the formula’s name (60 characters at most)', 'name ""\n'],
+  ['about "…"', 'one line about it (120 at most)', 'about ""\n'],
+  ['control speed 0..1 = 0.5 "Speed"', 'a slider: its name in the formula, range, default and label (three controls at most)', 'control speed 0..1 = 0.5 "Speed"\n'],
+  ['control mode = calm, wild', 'buttons: the value is the choice’s number, 0 for the first (pick(mode, …)); two words make a switch', 'control mode = calm, wild\n'],
+  ['look screen 40', 'it can be the panel’s look: drawn over the GIF with a blend and an amount (look alone: over, 100)', 'look\n']
+];
+// psi-builtins end
 
 function editor() {
   const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; stash(); } });

@@ -123,7 +123,7 @@ test:
 	@echo "==> Testing $(PACK)"
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(PSI) (Psi formulas; + core's and the simulator's psi feature)"
-	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test --features docs
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable CARGO_PROFILE_RELEASE_OPT_LEVEL=2 cargo test --release --test stack
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
@@ -383,6 +383,7 @@ clippy:
 	cd $(PACK) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 	@echo "==> Clippy $(PSI) (+ core's and the simulator's psi feature)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features docs -- -D warnings
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo clippy --lib --no-default-features -- -D warnings
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo clippy --lib --target $(WASM_TARGET) --no-default-features -- -D warnings
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets --features psi -- -D warnings

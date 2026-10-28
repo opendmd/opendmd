@@ -13,6 +13,7 @@
 
 use crate::fixed::{self, ONE};
 use crate::program::{code, *};
+use crate::builtins::*;
 use crate::tables;
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -553,83 +554,6 @@ pub fn compact(src: &str) -> String {
 
 // --- names ----------------------------------------------------------------------
 
-/// The built-in values, their level and what they mean (for errors).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Input {
-    X,
-    Y,
-    Px,
-    Py,
-    I,
-    T,
-    Hour,
-    Minute,
-    Second,
-    A,
-    B,
-    C,
-    Ur,
-    Ug,
-    Ub,
-    Ul,
-    Ink,
-    /// `seed` (a `loop forever` formula's: [`LATER`]-like, a name a formula
-    /// sets is that name).
-    Seed,
-}
-
-const INPUTS: [(&str, Input, &str); 17] = [
-    ("x", Input::X, "the pixel's position across, 0 to 1"),
-    (
-        "y",
-        Input::Y,
-        "the pixel's height, 0 at the bottom to 1 at the top",
-    ),
-    ("px", Input::Px, "the pixel's column, 0 to 127"),
-    ("py", Input::Py, "the pixel's row from the bottom, 0 to 31"),
-    ("i", Input::I, "the pixel's number, 0 to 4095"),
-    ("t", Input::T, "seconds into the loop"),
-    ("hour", Input::Hour, "the hour, 0 to 23"),
-    ("minute", Input::Minute, "the minute"),
-    ("second", Input::Second, "the second"),
-    ("a", Input::A, "slider a"),
-    ("b", Input::B, "slider b"),
-    ("c", Input::C, "slider c"),
-    (
-        "ur",
-        Input::Ur,
-        "the red of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ug",
-        Input::Ug,
-        "the green of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ub",
-        Input::Ub,
-        "the blue of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ul",
-        Input::Ul,
-        "the brightness of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ink",
-        Input::Ink,
-        "what `draw { }` put at the pixel, 0 to 1",
-    ),
-];
-
-/// Values added once people had saved formulas (2026-10-26), about the
-/// middle and from the top: `cx = (x − ½)·4`, `cy = y − ½`, `ty = 31 −
-/// py`, `r = len(cx, cy)`, `angle = atan2(cy, cx)`, the steps those take
-/// written out ([`Parser::centred`]). A name set with one of these is that
-/// name ([`Parser::lookup_value`] finds the formula's names first), so a
-/// saved `r = …` means what it meant.
-const LATER: [&str; 5] = ["cx", "cy", "ty", "r", "angle"];
-
 /// `loop forever`'s loop (Q16 seconds, as `loop N`'s): longer than any.
 const FOREVER: i32 = i32::MAX;
 
@@ -642,100 +566,6 @@ const CENTRED: [(u8, u8, u8); 6] = [
     (code::SUB, 5, 2),   // 9: ty
     (code::LEN, 7, 8),   // 10: r
     (code::ATAN2, 8, 7), // 11: angle
-];
-
-/// `w` and `h`: constants.
-const CONSTS: [(&str, i32); 2] = [("w", (W as i32) << 16), ("h", (H as i32) << 16)];
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum F {
-    Op(u8),
-    Smoothstep,
-    Fract,
-    /// `digit`/`glyph`: three values and an optional font word.
-    Glyph(u8),
-    /// `pick(k, a, b, …)`.
-    Pick,
-}
-
-/// Functions: name, arity, what, the op.
-const FUNCS: [(&str, usize, F); 25] = [
-    ("sin", 1, F::Op(code::SIN)),
-    ("cos", 1, F::Op(code::COS)),
-    ("tri", 1, F::Op(code::TRI)),
-    ("saw", 1, F::Op(code::SAW)),
-    ("sqr", 1, F::Op(code::SQR)),
-    ("abs", 1, F::Op(code::ABS)),
-    ("floor", 1, F::Op(code::FLOOR)),
-    ("frac", 1, F::Op(code::FRAC)),
-    ("fract", 1, F::Fract),
-    ("sqrt", 1, F::Op(code::SQRT)),
-    ("min", 2, F::Op(code::MIN)),
-    ("max", 2, F::Op(code::MAX)),
-    ("step", 2, F::Op(code::STEP)),
-    ("hash", 2, F::Op(code::HASH)),
-    ("len", 2, F::Op(code::LEN)),
-    ("atan2", 2, F::Op(code::ATAN2)),
-    ("clamp", 3, F::Op(code::CLAMP)),
-    ("mix", 3, F::Op(code::MIX)),
-    ("smoothstep", 3, F::Smoothstep),
-    ("noise", 3, F::Op(code::NOISE)),
-    ("select", 3, F::Op(code::SELECT)),
-    ("bit", 2, F::Op(code::BIT)),
-    ("digit", 3, F::Glyph(code::DIGIT)),
-    ("glyph", 3, F::Glyph(code::GLYPH)),
-    ("pick", 0, F::Pick),
-];
-
-/// Functions added once people had saved formulas (2026-10-26): a name
-/// set with one of these still works as a value (`glyph = …; gray(glyph)`).
-const LATER_FUNCS: [&str; 4] = ["bit", "digit", "glyph", "pick"];
-
-/// The fonts `digit` and `glyph` take as a last value: core's 5x7 (the
-/// panel's text and clock; 4 × 6 digits; the default), 4x6 (3 × 5 digits)
-/// and the bold 3 × 5 digits (digits only). As `Tables::glyphs` takes them.
-const FONTS: [(&str, u8); 3] = [
-    ("normal", tables::NORMAL),
-    ("small", tables::SMALL),
-    ("bold", tables::BOLD),
-];
-
-const COLOURS: [(&str, usize, u8); 4] = [
-    ("rgb", 3, code::OUT_RGB),
-    ("hsv", 3, code::OUT_HSV),
-    ("pal", 2, code::OUT_PAL),
-    ("gray", 1, code::OUT_GRAY),
-];
-
-/// Palette names: core's order (fire, ice, chrono, amber, rainbow); `gray`
-/// is not a table.
-const PALETTES: [(&str, u8); 7] = [
-    ("fire", 0),
-    ("ice", 1),
-    ("ocean", 1),
-    ("chrono", 2),
-    ("amber", 3),
-    ("rainbow", 4),
-    ("gray", 255),
-];
-
-const KEYWORDS: [&str; 8] = [
-    "loop", "frame", "layer", "part", "use", "draw", "for", "table",
-];
-
-/// The draw stage's primitives: statements inside `draw { }`, and names a
-/// formula may still set (`line = …`), as `ink` is a value it may.
-const PRIMITIVES: [&str; 2] = ["line", "dot"];
-
-/// How a layer goes onto what is below it (`layer add { … }`; `over` when
-/// none is named).
-const BLENDS: [(&str, u8); fixed::BLENDS] = [
-    ("over", fixed::BLEND_OVER),
-    ("add", fixed::BLEND_ADD),
-    ("multiply", fixed::BLEND_MULTIPLY),
-    ("screen", fixed::BLEND_SCREEN),
-    ("max", fixed::BLEND_MAX),
-    ("min", fixed::BLEND_MIN),
 ];
 
 /// Optimal string alignment distance (edits, adjacent swaps count one),
