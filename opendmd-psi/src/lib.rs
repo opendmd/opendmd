@@ -303,9 +303,9 @@ pub mod worst {
     use alloc::format;
     use alloc::string::String;
 
-    /// The path's length for `src` (`@fx:psi?src=` + compacted, `+` 3 B).
+    /// The path's length for `src` (`@formula?src=` + compacted, `+` 3 B).
     pub fn path_len(src: &str) -> usize {
-        12 + crate::compact(src)
+        13 + crate::compact(src)
             .bytes()
             .map(|b| if b == b'+' { 3 } else { 1 })
             .sum::<usize>()

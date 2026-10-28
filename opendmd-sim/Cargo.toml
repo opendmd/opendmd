@@ -21,8 +21,10 @@ png = "0.17"
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 [features]
-# Psi formulas (`--formula FILE.psi`, `--play '@fx:psi?src=…'`): a spike,
-# off by default. `make sim SIM_FEATURES=psi ARGS="--formula x.psi"`.
+# Psi formulas (`--formula FILE.psi`, `--play '@formula?src=…'`): on by
+# default (Formulas are the panel's only effects; the demo card and the
+# site's art are recorded from them). `--no-default-features` builds without.
+default = ["psi"]
 psi = ["opendmd-core/psi"]
 
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md

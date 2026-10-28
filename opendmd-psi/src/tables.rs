@@ -5,7 +5,7 @@
 //! eval), so on the device they are in DROM like `opendmd_core::fx`'s.
 
 /// What a frame reads besides the program: the Q14 sine (256 entries, a
-/// turn), the five 32-entry palettes, in `opendmd_core::fx::Palette`
+/// turn), the five 32-entry palettes, in `opendmd_core::fx::PALETTES`
 /// order (fire, ice, chrono, amber, rainbow), and the panel's fonts
 /// (`digit`, `glyph`): `opendmd_core::text`'s misc-fixed 4x6 (`small`) and
 /// 5x7 (`normal`), printable ASCII 32..=126, and the bold 3 × 5 digits

@@ -430,76 +430,27 @@ fn saving_writes_the_edited_frames_and_delays() {
     }
 }
 
-// --- A live effect as the source ("Save as GIF" in the Effects tab) --------
+// --- Panel frames saved (a formula's "Save as GIF") -------------------------
 
-fn effect_all(path: &str) -> Anim {
-    let mut a = Anim::effect(path).unwrap();
-    while !a.decode(7) {}
+/// 120 pushed panel frames at 20 ms, a dot running along the middle row
+/// (as a Formula's Save as GIF hands them over).
+fn panel_all() -> Anim {
+    let frame = |i: usize| {
+        let mut f = vec![0u8; W * H * 3];
+        let at = (16 * W + i % W) * 3;
+        f[at..at + 3].copy_from_slice(&[255, 176, 0]);
+        f
+    };
+    let mut a = Anim::frames(&frame(0), 120, 20, false).unwrap();
+    for i in 1..120 {
+        a.push(&frame(i));
+    }
     a
 }
 
 #[test]
-fn an_effect_becomes_one_loop_at_the_gif_floor() {
-    use crate::anim::effect_plan;
-    use opendmd_core::fx::Fx;
-    let plan = |p: &str| effect_plan(&mut Fx::parse(p).unwrap());
-    // 100 fps effects give every other frame at 20 ms; a loop too long for
-    // FX_MAX_FRAMES at 20 ms goes to 40; one too long even then is cut.
-    assert_eq!(plan("@fx:tunnel"), (240, 20, true));
-    assert_eq!(plan("@fx:tunnel?fps=50"), (240, 20, true));
-    assert_eq!(plan("@fx:tunnel?fps=25&speed=1"), (240, 40, true));
-    assert_eq!(plan("@fx:tunnel?speed=4"), (120, 20, true));
-    assert_eq!(plan("@fx:rotozoom"), (240, 40, true));
-    assert_eq!(plan("@fx:rotozoom?speed=1"), (240, 40, false));
-    assert_eq!(plan("@fx:starfield"), (120, 20, true));
-    assert_eq!(plan("@fx:wire?shape=cube"), (240, 20, true));
-    assert!(Anim::effect("@fx:nothing").is_none());
-    assert!(Anim::effect("@clock").is_none());
-
-    let a = Anim::effect("@fx:rotozoom?speed=1").unwrap();
-    assert_eq!((a.in_file, a.len(), a.cut), (240, 1, true));
-    let a = effect_all("@fx:starfield?palette=fire");
-    assert_eq!(
-        (a.len(), a.orig, a.w, a.h, a.loops, a.cut),
-        (120, (W, H), W, H, 0, false)
-    );
-    assert!(a.delays.iter().all(|&d| d == 20));
-}
-
-#[test]
-fn an_effects_frames_are_the_panels() {
-    use opendmd_core::canvas::Canvas;
-    use opendmd_core::fx::Fx;
-    use std::time::Duration;
-    // Every frame equals the effect drawn on its own at that time — the
-    // sparse ones too, though every other frame is skipped.
-    for path in [
-        "@fx:tunnel?palette=fire&texture=rings",
-        "@fx:wire?shape=torus",
-        "@fx:starfield?density=3",
-    ] {
-        let a = effect_all(path);
-        for i in [0, 1, 2, 57, a.len() - 1] {
-            let mut c = Canvas::new();
-            Fx::parse(path)
-                .unwrap()
-                .frame(Duration::from_millis(i as u64 * 20), &mut c);
-            let want = c.as_bytes();
-            let got: Vec<u8> = a
-                .image(i)
-                .px
-                .iter()
-                .flat_map(|p| [p[0], p[1], p[2]])
-                .collect();
-            assert_eq!(got, want, "{path} frame {i}");
-        }
-        assert_ne!(px(&a, 0, 64, 16), [1, 2, 3]); // (just touching every frame's picture)
-    }
-}
-
-#[test]
-fn an_effect_saves_as_a_gif_the_player_plays() {
-    let mut a = effect_all("@fx:starfield?palette=amber&warp=0");
+fn panel_frames_save_as_a_gif_the_player_plays() {
+    let mut a = panel_all();
     a.configure(Fit::Pixels, false, 0, 0, false, 100, Colours::Auto);
     let seq = a.sequence(&edit(a.len()));
     assert_eq!(seq.len(), 120);
@@ -543,47 +494,5 @@ fn pushed_frames_become_an_animation() {
     assert!(a.delays.iter().all(|&d| d == 40));
     for (i, v) in [10, 20, 30, 40].into_iter().enumerate() {
         assert_eq!(px(&a, i, 64, 16), [v, v, v]);
-    }
-}
-
-/// What an effect's GIF and its prepared copy weigh:
-/// `cargo test --release -- --ignored effect_gif_sizes --nocapture`.
-#[test]
-#[ignore]
-fn effect_gif_sizes() {
-    for path in [
-        "@fx:tunnel",
-        "@fx:tunnel?palette=fire&texture=rings&twist=2",
-        "@fx:tunnel?texture=noise&drift=1",
-        "@fx:rotozoom",
-        "@fx:rotozoom?palette=rainbow&texture=rings&wobble=3",
-        "@fx:rotozoom?floor=1",
-        "@fx:starfield",
-        "@fx:starfield?density=3&speed=4",
-        "@fx:wire",
-        "@fx:wire?shape=tesseract",
-    ] {
-        let mut a = effect_all(path);
-        a.configure(Fit::Pixels, false, 0, 0, false, 100, Colours::Auto);
-        let seq = a.sequence(&edit(a.len()));
-        a.save_begin(seq, 0);
-        while !a.save_step(16) {}
-        let bytes = a.saved();
-        let mut copy = Vec::new();
-        opendmd_core::gifslim::recode_gif(
-            bytes.as_slice(),
-            &mut copy,
-            &opendmd_core::gifslim::PREPARED,
-        )
-        .unwrap();
-        println!(
-            "{path}: {} frames x {} ms, {} colours, GIF {} B ({} B a frame), copy {} B",
-            a.len(),
-            a.delays[0],
-            a.colours,
-            bytes.len(),
-            bytes.len() / a.len(),
-            copy.len()
-        );
     }
 }
