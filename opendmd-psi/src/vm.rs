@@ -919,6 +919,7 @@ pub(crate) fn wide_step(sc: &mut [i32; MAX_SCALARS], w: &mut [i32], op: &Op) {
 impl<const N: usize> Scratch<N> {
     /// Register operand `v`'s own lane, to be written (no longer read from
     /// a still cache's lane).
+    #[cfg(not(target_arch = "wasm32"))]
     #[inline(always)]
     fn dest(&mut self, al: &mut Alias, v: u8) -> &mut [i32; N] {
         let di = reg_index(v);
