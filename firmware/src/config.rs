@@ -676,11 +676,13 @@ pub const BUILDER_PEAK_MARGIN: u32 = 20 * 1024;
 /// (`player_opening`), and every transfer stops it too.
 pub const BUILDER_MIN_HEAP_FULL: u32 = BUILDER_ENCODER_PEAK + BUILDER_PEAK_MARGIN;
 /// [`BUILDER_MIN_HEAP_FULL`] at the drip pace (`auto_prepare = "always"`,
-/// a prepared file playing): 1.5 KB more, as before, since the player's
-/// frames and transitions go on beside it (65,664 B; the task starts at
-/// 76,416 B). A prepared file on screen leaves ~74-78 KB free, so the drip
-/// starts less often than it did at 54 KB; with an original on screen the
-/// pace stops it anyway (`gif on screen`).
+/// opt-in, a prepared file playing): 1.5 KB more, as before, since the
+/// player's frames and transitions go on beside it (65,664 B; the task
+/// starts at 76,416 B). A prepared file on screen leaves ~74-79 KB free, so
+/// the drip starts only now and then; with an original on screen (56-79 KB
+/// on the spare with `filelist.txt`, builder-a) the pace stops it anyway
+/// (`gif on screen`): when the threshold let it start there, the floor went
+/// to 19.9 KB.
 pub const BUILDER_MIN_HEAP: u32 = BUILDER_MIN_HEAP_FULL + 1536;
 /// A GIF gifslim does not decode (interlaced frames, `Previous` disposal: 5
 /// of the stock card's 11,047) is decoded with the `gif` crate instead only
@@ -703,6 +705,10 @@ pub const BUILDER_DRIP_PAUSE: Duration = Duration::from_millis(5);
 /// (a browser fetching several files would otherwise have it start and
 /// abandon a file between each).
 pub const BUILDER_SETTLE: Duration = Duration::from_secs(2);
+/// A late frame within this long of the builder's last drip-paced step is
+/// blamed on the drip (`DripGuard`): the GIF change that stopped it — the
+/// open, a 400 ms transition, the new file's first 500 ms.
+pub const BUILDER_DRIP_BLAME: Duration = Duration::from_millis(1500);
 /// A file abandoned this many times in a row at the drip pace (it does not
 /// fit in one file's turn on screen) is skipped while dripping and left for
 /// the next full-speed pass.
