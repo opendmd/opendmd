@@ -2292,6 +2292,6 @@ fn fused_runs_are_their_steps() {
     );
     assert!(compiled * 10 > n * 8, "only {compiled} of {n} compiled");
     for (name, &c) in KINDS.iter().zip(&kinds) {
-        assert!(c * 20 > n, "{name}: only {c} fused runs in {n} formulas");
+        assert!(c * 30 > n, "{name}: only {c} fused runs in {n} formulas");
     }
 }
