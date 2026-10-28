@@ -280,18 +280,6 @@ fn fast2<const N: usize, A: Src, B: Src>(
     }
 }
 
-/// [`fast1`] of a lane into itself (a fused run whose result goes into the
-/// register it reads, `crate::fuse`).
-#[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
-#[inline(never)]
-fn fast1_self<const N: usize>(d: &mut [i32; N], f: impl Fn(i32) -> i32) {
-    for o in d.as_chunks_mut::<4>().0 {
-        let x = *o;
-        *o = [f(x[0]), f(x[1]), f(x[2]), f(x[3])];
-    }
-}
-
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn fast3<const N: usize, A: Src, B: Src, C: Src>(
@@ -1193,33 +1181,21 @@ fn fused<const N: usize>(
                 fixed::mask(fixed::add_w(fixed::floor(x), fixed::floor(y)), m)
             });
         }
-        (F_MADD, [mul, add]) => {
-            let (a, b) = match (s.arg(al, mul.a, base), s.arg(al, mul.b, base)) {
-                (Arg::Lane(a), Arg::Sc(b)) | (Arg::Sc(b), Arg::Lane(a)) => (a, b),
-                _ => return false,
+        (F_CHECKER3, [fy, add, m]) => {
+            let r = if add.a == fy.d { add.b } else { add.a };
+            let (Arg::Lane(y), Arg::Lane(r), Arg::Sc(m)) = (
+                s.arg(al, fy.a, base),
+                s.arg(al, r, base),
+                s.arg(al, m.b, base),
+            ) else {
+                return false;
             };
-            let c = s.arg(al, if add.a == mul.d { add.b } else { add.a }, base);
-            let w = mul.code == code::MUL_W;
-            let own = core::ptr::eq(a, s.lanes[reg_index(add.d)].as_ptr());
-            let d = s.dest(al, add.d);
-            match (w, c) {
-                // (Into the lane multiplied: read and written in place.)
-                (true, Arg::Sc(c)) if own => {
-                    fast1_self(d, move |a| fixed::add_w(fixed::mul_w(a, b), c))
-                }
-                (false, Arg::Sc(c)) if own => {
-                    fast1_self(d, move |a| fixed::add_w(fixed::mul_n(a, b), c))
-                }
-                _ if own => return false,
-                (true, Arg::Sc(c)) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_w(a, b), c)),
-                (true, Arg::Lane(c)) => fast2(d, L(a), L(c), move |a, c| {
-                    fixed::add_w(fixed::mul_w(a, b), c)
-                }),
-                (false, Arg::Sc(c)) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_n(a, b), c)),
-                (false, Arg::Lane(_)) => return false,
-            }
+            let d = s.dest(al, ops[2].d);
+            fast2(d, L(r), L(y), move |r, y| {
+                fixed::mask(fixed::add_w(r, fixed::floor(y)), m)
+            });
         }
-        (F_SELPAL, [sel, col]) => {
+        (F_SELPAL | F_SELPAL_K, [sel, col]) => {
             let (Arg::Lane(c), Arg::Sc(va), Arg::Sc(vb)) = (
                 s.arg(al, sel.a, base),
                 s.arg(al, sel.b, base),
@@ -1262,6 +1238,17 @@ fn fused<const N: usize>(
                 }]
             });
         }
+        (F_INK1, [_, col]) => match (col.code, ink) {
+            (code::OUT_PAL, Some(k)) => {
+                let p = palette(t, own, col.d & code::PAL_MASK);
+                ink_direct(px, k, |b| fixed::pal(p, fixed::byte(b)))
+            }
+            (_, Some(k)) => ink_direct(px, k, |b| {
+                let g = fixed::chan(fixed::byte(b));
+                [g, g, g]
+            }),
+            _ => return false,
+        },
         (F_INK, [..]) => {
             let sc = &s.sc;
             let f = |b: u8| ink_colour(ops, b, sc, t, tabs, own);
@@ -1336,6 +1323,17 @@ fn pal_select_lanes(
             rgb[w] = fixed::scale_rgb(p[idx[w]], s);
         }
         *o = rgb[w];
+    }
+}
+
+/// `f` of each byte of the canvas along the lane (`crate::fuse`'s
+/// `F_INK1`: `pal(P, ink)`, `gray(ink)`).
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn ink_direct(px: &mut [[u8; 3]], ink: &[u8], f: impl Fn(u8) -> [u8; 3]) {
+    for (o, &b) in px.iter_mut().zip(ink) {
+        *o = f(b);
     }
 }
 

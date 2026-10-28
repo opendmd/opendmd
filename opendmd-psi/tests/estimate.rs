@@ -72,6 +72,39 @@ fn the_estimate_is_within_15_percent_of_the_device() {
             bad.push(name.to_string());
         }
     }
+    // Draw loops as lanes: over the one-dot base (s2probe-a's base frame,
+    // 409 µs, drew `gray(ink)` kept per canvas byte: the colour is
+    // compiled otherwise now, so only what the loops add is compared).
+    let est_of = |src: &str| {
+        let mut p = opendmd_psi::Program::default();
+        opendmd_psi::compile_into(src, &mut p).unwrap();
+        p.esp32_us_still() as f64
+    };
+    let base = est_of("draw { dot(-1, -1, t) }\ngray(ink)");
+    for &(name, src, us) in measured::DRAW_LANES {
+        let est = est_of(src) - base;
+        let r = est / ((us - 409) as f64 * 1.15);
+        rows.push(format!(
+            "{name:<30} measured {:>5} est {est:>5} over the base ({:+.0} %)",
+            us - 409,
+            (r - 1.0) * 100.0
+        ));
+        if !(0.85..=1.15).contains(&r) {
+            bad.push(name.to_string());
+        }
+    }
+    // The examples as compiled now (VM frames, s2probe-a's speed2 rows).
+    for &(name, src, us) in measured::SPEED2 {
+        let est = est_of(src) as u32;
+        let r = est as f64 / (us as f64 * 1.15);
+        rows.push(format!(
+            "{name:<30} measured {us:>5} est {est:>5} ({:+.0} %)",
+            (r - 1.0) * 100.0
+        ));
+        if !(0.85..=1.15).contains(&r) {
+            bad.push(name.to_string());
+        }
+    }
     // As effects: measured on the real path, so against the estimate as is.
     for &(name, src, us) in measured::EFFECTS {
         let p = compile(src).unwrap();
