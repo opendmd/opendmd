@@ -40,7 +40,7 @@ function zone() {
 const fresh = () => ({
   c: { wifi_ssid: 'HomeWiFi', wifi_pass_set: true, brightness: 96, max_brightness: SAFE, dwell_min: 3, dwell_max: 30, shuffle: false, platforms: '', set: '',
     hostname: 'opendmd', ...zone(), transition: 'dissolve', transition_ms: 400, auto_prepare: 'idle', card_speed: 'safe', follow: false, follow_host: '',
-    follow_code_set: false, attract_set: null, attract: '', look: 'colour', glow: 'off', look_formula: '', look_formula_name: '', look_blend: 'over', look_amount: 100, boot_show: 'short', panel_sync: true, panel_split: true, api_key_set: false },
+    follow_code_set: false, attract_set: null, attract: '', look: 'colour', glow: 'off', look_formula: '', boot_show: 'short', panel_sync: true, panel_split: true, api_key_set: false },
   sched: { rules: [], night: null },
   wake: 0,
   // Panel timing (opendmd_core::panel_timing's Tuner, as tools/mock-device.py
@@ -50,8 +50,10 @@ const fresh = () => ({
 let S;
 try { S = JSON.parse(sessionStorage.getItem(KEY)); } catch { /* none */ }
 if (!S?.c) S = fresh();
-// (A session kept from before a setting existed gets its default.)
-S.c = { ...fresh().c, ...S.c };
+// (A session kept from before a setting existed gets its default; one that
+// has gone is dropped.)
+const F = fresh().c;
+S.c = Object.fromEntries(Object.entries({ ...F, ...S.c }).filter(([k]) => k in F));
 const keep = () => { try { sessionStorage.setItem(KEY, JSON.stringify(S)); } catch { /* private mode */ } };
 
 // The player's clock in its zone: the list's name for it (Intl knows those),
@@ -160,12 +162,9 @@ function putConfig(patch) {
     else if (k == 'follow_code') c.follow_code_set = c.follow_code_set || !!v;
     else if (k == 'dwell_min' || k == 'dwell_max') c[k] = Math.max(1, +v || 1);
     else if (k == 'set' && v && !has(setPath(v))) throw new HttpError(404, 'set not found');
-    else if (k == 'look_blend' && !['over', 'screen', 'add', 'multiply', 'max', 'min'].includes(v)) bad('look_blend must be over, screen, add, multiply, max or min');
-    else if (k == 'look_amount' && !(Number.isInteger(v) && v >= 0 && v <= 100)) bad('look_amount must be 0..=100');
     else if (k in c && k != 'brightness' && k != 'max_brightness') c[k] = v;
     else if (!/^(brightness|max_brightness|panel|panel_confirm)$/.test(k)) bad(`unknown field ${k}`);
   }
-  if ('look_formula' in patch && !('look_blend' in patch) && !('look_amount' in patch)) Object.assign(c, { look_blend: 'over', look_amount: 100 });
   if (c.dwell_max < c.dwell_min) bad('dwell_max must be >= dwell_min');
   if (mx != null) { if (!(mx >= 16 && mx <= 255)) bad(`max_brightness must be 16..=255, not ${mx}`); c.max_brightness = mx; }
   if (b != null) { if (b > c.max_brightness) bad(`brightness ${b} is above the maximum ${c.max_brightness}; raise Maximum brightness first`); c.brightness = b; }
@@ -235,7 +234,8 @@ function apply() {
 }
 
 // The Formula look on the demo's panel: Psi (an instance of its own) over
-// every frame, at the panel's clock and the formula's sliders.
+// every frame, at the panel's clock and the formula's sliders, as its `look`
+// line asks (pkg-psi asLook: the player's FormulaLook composition).
 async function look(path) {
   if (path == lookOn) return;
   lookOn = path;
@@ -245,7 +245,7 @@ async function look(path) {
     const P = await pkg();
     if (lookOn != path || !sim) return;
     const q = new URLSearchParams(path.slice(8)), Q = (k, v = q.get(k)) => (/^-?(\d+\.?\d*|\.\d+)$/.test(v || '') && Math.abs(+v) < 32768 ? Math.round(+v * 65536) : -2147483648); // unset (also empty, junk, out of range): the formula's default, as fx_psi's query
-    if (!P.compile(q.get('src') || '')) throw new Error(P.error());
+    if (!P.asLook(q.get('src') || '')) throw new Error(P.error());
     const loop = P.info()[4] || 0;
     sim.preview.p.setOver((px) => {
       const t = Math.floor(performance.now()), d = new Date();
@@ -265,11 +265,11 @@ async function look(path) {
 // FormulaLook::compile): it compiles, lets the GIF show through, ≤ 12 ms.
 async function lookCheck(path) {
   const P = await pkg(), src = (p) => new URLSearchParams(p.slice(8)).get('src') || '';
-  const i = P.compile(src(path)) && P.info();
+  const i = P.asLook(src(path)) && P.info();
   const why = !i ? P.error() : !(i[5] & 32) ? 'this Formula covers the GIF entirely: choose a lower amount or another blend'
     : i[6] > 12000 ? `this formula is too heavy to draw over GIFs (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 12 ms) — simplify it` : '';
   // (One instance: the look on the panel goes back to its own formula.)
-  if (lookOn) P.compile(src(lookOn));
+  if (lookOn) P.asLook(src(lookOn));
   if (why) bad('look_formula: ' + why);
 }
 

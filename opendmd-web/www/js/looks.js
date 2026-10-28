@@ -1,69 +1,83 @@
-// Any Formula as the panel's look (Settings › Look, and Formulas' "Use as
-// the look"; imported by both, its own size line): a formula drawn over
-// every GIF with a blend, at an amount. pkg-psi (an instance of its own,
-// `?look`) writes the text the panel is sent — opendmd_psi::look: the
-// formula pasted in as a part, a layer with the blend; over at 100 % is
-// the formula itself — and says what it costs. The config keeps that path
-// with the formula's name, blend and amount (look_formula_name,
-// look_blend, look_amount; a player without them: Over 100 %), so
-// Settings shows them again.
+// A Formula as the panel's look (Settings › Look; the Formula settings
+// sheet, js/fsheet.js; imported by both, its own size line): a Formula
+// that declares `look` (its `look [blend] [amount]` line: how it goes over
+// every GIF). The line is the one record of the blend and amount: the
+// sheet writes it (pkg-psi `look`, a text edit), Settings only picks which
+// Formula, and the config keeps the Formula's path (look_formula), which
+// the player draws as its line asks (fx_psi::FormulaLook). pkg-psi (an
+// instance of its own, `?look`) composes the look as the player does
+// (`asLook`) and says what it costs.
 
 import { app } from './state.js';
-import { h } from './util.js';
-import { fpath } from './psishow.js';
-import { num } from './psikit.js';
-
-export { fpath };
+import { h, toast } from './util.js';
+import { path as fpath, controls as ctlOf, num } from './psikit.js';
 
 export const BLENDS = [['over', 'Over'], ['screen', 'Screen'], ['add', 'Add'], ['multiply', 'Multiply'], ['max', 'Lighten'], ['min', 'Darken']];
 let mod = null;
 export const psi = () => (mod ??= import('../pkg-psi/opendmd_psi_web.js?look').then(async (m) => { await m.default(); return m; }).catch((e) => { mod = null; throw e; }));
 
-// `f` as a look: {src, i} (the text and what it is), or {why} — the
-// panel's own refusals (its 2,048 B path, a 413; fx_psi: it hides the GIF;
-// over its 12 ms).
-export function as(m, f, blend, amt) {
-  const src = f?.src && m.look(f.src, blend, amt), i = src && m.info();
+// What a formula declares (psikit `controls`).
+export { ctlOf as decl };
+// `f`'s path, as the panel is sent it (values at their defaults left out).
+export const path = (m, f) => fpath(f, ctlOf(m, f.src));
+// Whether `f` declares `look` (one Settings › Look lists).
+export const declares = (m, f) => !!ctlOf(m, f?.src)?.look;
+// Its name: its `name` line, else the one it was saved under.
+export const named = (m, f) => ctlOf(m, f.src)?.name || f.name || 'Formula';
+
+// `f` as the panel's look, as its `look` line says (none: as it is): {src,
+// i} (the text the panel draws and what it is), or {why} — the panel's
+// own refusals (its 2,048 B path, a 413; fx_psi: it hides the GIF; over
+// its 12 ms).
+export function as(m, f) {
+  const src = f?.src && m.asLook(f.src), i = src && m.info();
   return !src ? { why: f?.src ? m.error() : 'pick a Formula' }
-    : fpath({ ...f, src }).length > 2048 ? { why: 'this Formula is too long for the panel as a look' }
+    : path(m, f).length > 2048 ? { why: 'this Formula is too long for the panel as a look' }
     : !(i[5] & 32) ? { why: 'this Formula covers the GIF entirely: choose a lower amount or another blend' }
       : i[6] > 12000 ? { why: `this Formula is too heavy to draw over every GIF (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 12 ms)` }
         : { src, i };
 }
+// `f` with its look line set (blend '' takes it out).
+export const set = (m, f, blend, amt) => ({ ...f, src: m.look(f.src, blend, amt) || f.src });
 // One with layers of its own goes over only.
-export const overOnly = (m, f) => !m.look(f.src, 'screen', 40) && /only go over/.test(m.error());
-// Where a formula starts: as it is when it draws over the GIF already;
+export const overOnly = (m, f) => !m.asLook(m.look(f.src, 'screen', 40)) && /goes over the GIF as a look/.test(m.error());
+// Where a new look line starts: as it is when it draws over the GIF already;
 // else screened at 40 % (the GIF's bright parts stay, the formula shows in
 // the dark ones), or over at 30 % when that can't be (too heavy, layers).
 export function choice(m, f) {
   if (m.compile(f.src) && m.info()[5] & 32) return ['over', 100];
-  return as(m, f, 'screen', 40).why ? ['over', 30] : ['screen', 40];
+  return as(m, set(m, f, 'screen', 40)).why ? ['over', 30] : ['screen', 40];
 }
 
-// The saved name, blend and amount.
-export const named = (cf) => [cf.look_formula_name || '', cf.look_blend || 'over', cf.look_amount ?? 100];
-
 // Kept as the panel's look: the config, then read again.
-export async function use(f, blend, amt) {
-  const x = as(await psi(), f, blend, amt);
+export async function use(f) {
+  const m = await psi(), x = as(m, f);
   if (x.why) throw new Error(x.why);
-  await app.src.putConfig({ look_formula: fpath({ ...f, src: x.src }), look_formula_name: Array.from(f.name || 'Formula').slice(0, 60).join(''), look_blend: blend, look_amount: amt });
+  await app.src.putConfig({ look_formula: path(m, f) });
   await app.refreshConfig();
 }
 
-// The saved look's formula (its path's text — opendmd_psi::look's, lines
-// joined by `; ` — taken apart again) and sliders: for one not found among
-// this browser's Formulas.
-const inner = (s) => (/^(?:loop (?:[\d.]+|forever); )?part look \{; (.*); \}; (?:layer \w+ \{ )?look(?:\(x, y, [\d.]+\))?(?: \})?$/.exec(s) || [])[1];
-export function saved(cf) {
-  const q = new URLSearchParams(cf.look_formula.slice(8)), src = q.get('src') || '', [name, b, k] = named(cf), f = { name: name || 'A formula', saved: 1 };
-  f.src = b == 'over' && k == 100 ? src : inner(src) || src;
+// The same, said in a toast (the Formulas view's Set as the panel's look).
+export async function useSaid(f) {
+  try {
+    await use(f);
+    toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Look changes it)`, 'ok');
+  } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Set as the panel’s look: ' + e.message, 'bad'); }
+}
+
+// The look a path holds, as a formula (for one not found among this
+// browser's Formulas): its text and values.
+export function fromPath(m, p) {
+  const q = new URLSearchParams(p.slice(8)), f = { src: q.get('src') || '', saved: 1 };
   for (const k of 'abc') if (num(q.get(k)) != null) f[k] = num(q.get(k));
+  f.name = named(m, f);
   return f;
 }
 
 // The two controls, `id`-blend and `id`-amt; `change(blend, amount, settled)`
-// (settled: not mid-drag). set(blend, amount, overOnly); say(as(…)).
+// (settled: not mid-drag). set(blend, amount, overOnly); say(as(…)): the
+// refusal, or how fast the look moves on the panel (over 8 ms its frames
+// are held twice as long: fx_psi's governor).
 export function controls(id, change) {
   const sel = h('select', { id: id + '-blend' }, BLENDS.map(([v, l]) => h('option', { value: v }, l)));
   const r = h('input', { type: 'range', min: 0, max: 100, step: 5, id: id + '-amt', 'aria-label': 'Amount' }), out = h('output.mono');
@@ -77,8 +91,6 @@ export function controls(id, change) {
       for (const o of sel.options) o.disabled = only && o.value != 'over';
       sel.title = only ? 'This Formula has layers of its own: it goes over the GIF' : '';
     },
-    // `as`'s answer: the refusal, or how fast the look moves on the panel
-    // (over 8 ms its frames are held twice as long: fx_psi's governor).
     say(x) {
       const t = x?.why || (x?.i?.[5] & 8 ? `On the panel it moves about ${x.i[6] > 8000 ? '25 times a second (a heavy look: lighter ones move at 50)' : '50 times a second'}` : '');
       why.hidden = !t; why.textContent = t; why.classList.toggle('bad', !!x?.why);
