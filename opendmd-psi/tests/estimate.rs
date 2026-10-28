@@ -58,9 +58,11 @@ fn the_estimate_is_within_15_percent_of_the_device() {
             bad.push(format!("{name} {blend} {k}"));
         }
     }
+    // (Measured with every loop a turn at a time: against that estimate.
+    // Loops of 32 turns and more run as lanes since psi-speed2.)
     for &(name, src, us) in measured::DRAW {
         let p = compile(src).unwrap();
-        let est = p.esp32_us();
+        let est = p.esp32_us_turns();
         let r = est as f64 / (us as f64 * 1.15);
         rows.push(format!(
             "{name:<30} measured {us:>5} est {est:>5} ({:+.0} %)",
@@ -73,7 +75,7 @@ fn the_estimate_is_within_15_percent_of_the_device() {
     // As effects: measured on the real path, so against the estimate as is.
     for &(name, src, us) in measured::EFFECTS {
         let p = compile(src).unwrap();
-        let est = p.esp32_us();
+        let est = p.esp32_us_turns();
         let r = est as f64 / us as f64;
         rows.push(format!(
             "effect {name:<23} measured {us:>5} est {est:>5} ({:+.0} %)",

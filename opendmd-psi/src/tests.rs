@@ -1805,18 +1805,25 @@ fn draw_caps_and_no_canvas() {
     assert!(out2.iter().all(|&b| b == 0));
 }
 
-/// The estimate counts a loop's body as often as it runs.
+/// The estimate counts a loop's body as often as it runs (a turn at a
+/// time), or a loop run as lanes once a lane of 128 turns (its lines and
+/// dots each turn).
 #[test]
 fn draw_estimate_scales_with_turns() {
     let e = |n: u32| {
-        compile(&alloc::format!(
+        let p = compile(&alloc::format!(
             "draw {{ for k < {n} {{ dot(hash(k, 1)*128, hash(k, 2)*32) }} }}\ngray(ink)"
         ))
-        .unwrap()
-        .draw_us()
+        .unwrap();
+        (p.draw_us(), p.lane_loops())
     };
-    let (a, b) = (e(100), e(1000));
-    assert!(a > 10 && b > 9 * (a - 10), "{a} {b}");
+    let (a, b) = (e(3), e(30));
+    assert!(a.1 == 0 && b.1 == 0 && a.0 > 10 && b.0 > 9 * (a.0 - 10), "{a:?} {b:?}");
+    let (a, b) = (e(128), e(1024));
+    assert!(a.1 == 1 && b.1 == 1 && a.0 > 10 && b.0 > 7 * (a.0 - 10), "{a:?} {b:?}");
+    // As lanes, a big loop is cheaper than a turn at a time was (~1.2 µs
+    // a turn for these three steps and the dot).
+    assert!(b.0 < 1024 * 12 / 10, "{b:?}");
     // A constant line's length is known: 100 px costs more than 12.
     let l = |x1: u32| {
         compile(&alloc::format!("draw {{ line(0, 0, {x1}, 0) }}\ngray(ink)"))

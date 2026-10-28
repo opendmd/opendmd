@@ -1827,3 +1827,218 @@ fn slots_used_again_draw_the_same() {
     );
     eprintln!("{compared} formulas compared, {saved} with fewer slots");
 }
+
+/// A frame and its canvas, the draw loops run as lanes or (`turns`) a turn
+/// at a time.
+fn frame_and_ink<const N: usize>(
+    p: &Program,
+    i: &opendmd_psi::Inputs,
+    under: &[u8],
+    turns: bool,
+) -> (Vec<u8>, Vec<u8>) {
+    let mut s = Scratch::<N>::new();
+    let mut ink = Ink::boxed();
+    let mut out = vec![0x5a; W * H * 3];
+    if turns {
+        opendmd_psi::render_rows_ink_turns::<N>(
+            p,
+            &mut s,
+            Some(&mut ink),
+            i,
+            &OWN,
+            Some(under),
+            u32::MAX,
+            &mut out,
+        );
+    } else {
+        render_rows_ink::<N>(p, &mut s, Some(&mut ink), i, &OWN, Some(under), u32::MAX, &mut out);
+    }
+    (out, ink.0.to_vec())
+}
+
+/// Draw loops run as lanes (`Program::vector_loop`: each body step over
+/// every turn at once, then the lines and dots turn by turn) draw what a
+/// turn at a time draws: random loop bodies (chains of values of the
+/// counter, the frame's values, tables, picks, noise, divisions that can
+/// meet 0, hashes, glyphs), counts either side of the lane width and of
+/// `VEC_MIN`, loops in sequence up to the frame's 2,048 turns, loops in
+/// loops, values read after their loop, at both lane widths, with the
+/// sliders and `t` in range and out. `PSI_FUZZ_N` sets the number of
+/// formulas (800 by default).
+#[test]
+fn draw_loops_as_lanes_are_a_turn_at_a_time() {
+    let mut r = Rng(0x1a7e_5d4a_3b00_0c11);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let n: usize = std::env::var("PSI_FUZZ_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(800);
+    fn val(r: &mut Rng, ks: &[&str], d: u32) -> String {
+        if d == 0 || r.below(4) == 0 {
+            let leaves = ["0.5", "7", "-3.25", "f", "g", "a", "t", "100", "1/3"];
+            return if !ks.is_empty() && r.below(3) != 0 {
+                ks[r.below(ks.len())].to_string()
+            } else {
+                leaves[r.below(leaves.len())].to_string()
+            };
+        }
+        let e = |r: &mut Rng| val(r, ks, d - 1);
+        match r.below(16) {
+            0..=3 => {
+                let op = ["+", "-", "*", "/", "%", "<", ">=", "and"][r.below(8)];
+                format!("({} {op} {})", e(r), e(r))
+            }
+            4 => format!("sin({})", e(r)),
+            5 => format!("hash({}, {})", e(r), r.below(20)),
+            6 => format!("frac({})", e(r)),
+            7 => format!("({} ? {} : {})", e(r), e(r), e(r)),
+            8 => format!("T[{} % 6]", e(r)),
+            9 => format!("pick({} % 4, f, 0.25, g)", e(r)),
+            10 => format!("noise({}, {}, {})", e(r), e(r), ["0", "2", "f"][r.below(3)]),
+            11 => format!("1/({} - {})", e(r), e(r)),
+            12 => format!("clamp({}, -4, {})", e(r), e(r)),
+            13 => format!("digit({} % 10, {} % 5, {} % 7)", e(r), e(r), e(r)),
+            14 => format!("abs({}) > 64 or {} < 0", e(r), e(r)),
+            _ => format!("min({}, {})*{}", e(r), e(r), e(r)),
+        }
+    }
+    let prim = |r: &mut Rng, ks: &[&str]| -> String {
+        if r.below(3) == 0 {
+            format!("dot({}, {}, {})", val(r, ks, 2), val(r, ks, 2), val(r, ks, 1))
+        } else {
+            format!(
+                "line({}, {}, {}, {}, {}, {})",
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 1),
+                val(r, ks, 1)
+            )
+        }
+    };
+    const COUNTS: [u32; 12] = [1, 12, 31, 32, 33, 64, 127, 128, 129, 192, 300, 1024];
+    let (mut ok, mut lanes, mut frames) = (0, 0, 0);
+    for k in 0..n {
+        let mut body = String::new();
+        let mut ks = vec!["k"];
+        let names = ["v1", "v2", "v3", "v4", "v5", "v6", "v7"];
+        for name in names.iter().take(1 + r.below(names.len())) {
+            body += &format!("{name} = {}\n", val(&mut r, &ks, 3));
+            ks.push(name);
+        }
+        // (Up to 10 lines' and dots' steps: past `draw::PRIMS` too.)
+        for _ in 0..1 + r.below(5) {
+            body += &format!("{}\n", prim(&mut r, &ks));
+        }
+        if r.below(4) == 0 {
+            let n2 = COUNTS[r.below(COUNTS.len())];
+            let mut inner = ks.clone();
+            inner.push("j");
+            body += &format!(
+                "for j < {n2} {{\nhh = {}\n{}\n}}\n",
+                val(&mut r, &inner, 2),
+                prim(&mut r, &[&inner[..], &["hh"]].concat())
+            );
+        }
+        let n1 = COUNTS[r.below(COUNTS.len())];
+        let mut draw = format!("for k < {n1} {{\n{body}}}\n");
+        if r.below(3) == 0 {
+            let n3 = COUNTS[r.below(COUNTS.len())];
+            draw += &format!(
+                "for m < {n3} {{\nbb = {}\n{}\n}}\n",
+                val(&mut r, &["m"], 3),
+                prim(&mut r, &["m", "bb"])
+            );
+        }
+        let src = format!(
+            "loop {}\ntable T = 0.5, -2, 30, 100, 7, 0.125\nframe {{ f = t*{}; g = a*3 - 1 }}\ndraw {{\n{draw}}}\n{}",
+            1 + k % 5,
+            r.below(50),
+            ["gray(ink)", "pal(fire, ink)", "#40c0ff * ink", "rgb(ink, ur, x)"][k % 4],
+        );
+        let p = match compile(&src) {
+            Ok(p) => p,
+            Err(e) => {
+                if k < 400 && std::env::var("PSI_SHOW").is_ok() {
+                    eprintln!("{}", e.render(&src));
+                }
+                continue;
+            }
+        };
+        ok += 1;
+        lanes += p.lane_loops();
+        for j in 0..4 {
+            let ms = [0, 333, 2999, 9000][j];
+            let a = [0, 1 << 15, 1 << 16, -(3 << 16)][r.below(4)];
+            let i = opendmd_psi::Inputs { a, ..inputs(ms) };
+            frames += 1;
+            let want = frame_and_ink::<128>(&p, &i, &under, true);
+            assert!(
+                frame_and_ink::<128>(&p, &i, &under, false) == want,
+                "case {k} at {ms} ms, a {a}: {src}\n{}",
+                p.listing()
+            );
+            assert!(
+                frame_and_ink::<64>(&p, &i, &under, false) == want,
+                "case {k} (64 lanes) at {ms} ms: {src}"
+            );
+        }
+    }
+    assert!(ok * 10 > n * 7, "only {ok} of {n} compiled");
+    assert!(lanes * 3 > n, "only {lanes} loops ran as lanes in {n} formulas");
+    eprintln!("{n} formulas, {ok} compiled, {lanes} loops as lanes, {frames} frames compared");
+}
+
+/// An example's source from the web app's gallery (formulas.json: one flat
+/// object a line, `"src"` a JSON string).
+fn example(name: &str) -> String {
+    let json = include_str!("../../opendmd-web/www/formulas.json");
+    let line = json
+        .lines()
+        .find(|l| l.contains(&format!("\"name\": \"{name}\"")))
+        .unwrap_or_else(|| panic!("no example {name}"));
+    let s = &line[line.find("\"src\": \"").expect("src") + 8..];
+    let mut out = String::new();
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        match c {
+            '"' => return out,
+            '\\' => match it.next() {
+                Some('n') => out.push('\n'),
+                Some('u') => {
+                    let hex: String = it.by_ref().take(4).collect();
+                    out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+                }
+                Some(c) => out.push(c),
+                None => break,
+            },
+            c => out.push(c),
+        }
+    }
+    panic!("unterminated src for {name}")
+}
+
+/// The examples that draw run their big loops as lanes, and draw the same.
+#[test]
+fn the_drawing_examples_run_as_lanes() {
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    for (name, src, want) in [
+        ("Starfield", example("Starfield"), 1),
+        ("Wireframe cube", example("Wireframe cube"), 0),
+        ("Endless road", example("Endless road"), 0),
+    ] {
+        let p = compile(&src).unwrap();
+        assert_eq!(p.lane_loops(), want, "{name}\n{}", p.listing());
+        for ms in [0, 100, 1234, 2399] {
+            let i = inputs(ms);
+            assert!(
+                frame_and_ink::<128>(&p, &i, &under, false)
+                    == frame_and_ink::<128>(&p, &i, &under, true),
+                "{name} at {ms} ms"
+            );
+        }
+    }
+}

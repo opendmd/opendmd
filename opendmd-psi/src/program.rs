@@ -740,7 +740,19 @@ impl Program {
         self.estimate(self.still_marker())
     }
 
+    /// [`esp32_us`](Self::esp32_us) with every draw loop a turn at a time
+    /// (as before they ran as lanes): tests/estimate.rs, whose draw rows
+    /// were measured so.
+    #[doc(hidden)]
+    pub fn esp32_us_turns(&self) -> u32 {
+        self.estimate_with(None, false)
+    }
+
     fn estimate(&self, still: Option<usize>) -> u32 {
+        self.estimate_with(still, true)
+    }
+
+    fn estimate_with(&self, still: Option<usize>, lanes: bool) -> u32 {
         let (skip, copy) = match still {
             Some(k) => {
                 let op = &self.ops[k];
@@ -776,7 +788,7 @@ impl Program {
         // over the picture, a flash cache shared with the decoder: +13-14 %
         // on the device (plasma as an effect 8,217 against 7,254 µs; Plasma
         // screened at 40 % as a look 8,552 against 7,474).
-        (((45 + px) * (W * H) as u32) / 1000 + row * 10 + self.draw_us()) * 115 / 100
+        (((45 + px) * (W * H) as u32) / 1000 + row * 10 + self.draw_cost(lanes)) * 115 / 100
     }
 
     /// A pixel step's cost, ns a pixel at 128 lanes (see `esp32_us`).
@@ -915,12 +927,40 @@ impl Program {
     /// 10 µs to clear the canvas. (The design guessed 300, 400 and 1,500 +
     /// 200.)
     pub fn draw_us(&self) -> u32 {
+        self.draw_cost(true)
+    }
+
+    /// [`draw_us`](Self::draw_us), with (`lanes`) or without the loops run
+    /// as lanes.
+    fn draw_cost(&self, lanes: bool) -> u32 {
         if !self.draws() {
             return 0;
         }
         let mut ns: u64 = 10_000;
         let mut from = [0u8; 2];
+        // Loops run as lanes (`vector_loop`): their value steps once a
+        // lane of turns each (as a pixel step costs a pixel, over 128
+        // turns), their ENDs free; lines and dots as ever.
+        let lanes: alloc::vec::Vec<(usize, VecLoop)> = (self.frame_end as usize
+            ..(self.draw_end as usize).min(MAX_OPS))
+            .filter_map(|k| self.vector_loop(k).filter(|_| lanes).map(|v| (k, v)))
+            .collect();
+        let in_lanes = |at: usize| lanes.iter().any(|(k, v)| at > *k && at <= v.end);
         self.draw_walk(|at, op, mult| {
+            if let Some((_, v)) = lanes.iter().find(|(k, _)| *k == at) {
+                let chunks = u64::from(v.count.div_ceil(W as u32));
+                let steps: u64 = self.ops[at + 1..v.end]
+                    .iter()
+                    .filter(|o| code::writes_scalar(o.code))
+                    .map(|o| u64::from(value_ns(o.code)) * W as u64 + LANE_STEP_NS)
+                    .sum();
+                let turns = u64::from(v.count) * LANE_TURN_NS;
+                ns = ns.saturating_add((420 + chunks * (steps + LANE_CHUNK_NS) + turns) * mult as u64);
+                return;
+            }
+            if in_lanes(at) && !matches!(op.code, code::LINE_FROM | code::LINE_TO | code::DOT) {
+                return;
+            }
             let cost: u64 = match op.code {
                 code::LINE_FROM => {
                     from = [op.a, op.b];
@@ -1100,12 +1140,175 @@ impl Program {
         s
     }
 
-    fn is_const_slot(&self, v: u8, at: usize) -> bool {
+    /// Draw loops that run as lanes ([`vector_loop`](Self::vector_loop)):
+    /// psi-check's listing and the tests.
+    #[doc(hidden)]
+    pub fn lane_loops(&self) -> usize {
+        let (fe, de) = (self.frame_end as usize, (self.draw_end as usize).min(MAX_OPS));
+        (fe.min(de)..de)
+            .filter(|&k| self.vector_loop(k).is_some())
+            .count()
+    }
+
+    /// Whether the draw loop whose `FOR` is at `at` runs as lanes (a lane
+    /// a turn, `crate::draw::run`): `None` for one that runs a turn at a
+    /// time. Its body is run step by step over every turn at once, then
+    /// its lines and dots are drawn turn by turn, in order — the same
+    /// canvas, since no turn reads another's values (checked here, not
+    /// assumed):
+    ///
+    /// - at least [`VEC_MIN`] turns (its count a constant), no loop inside;
+    /// - every body step a value step (`writes_scalar`, not a wide one) or
+    ///   a line or a dot, its value written into a slot other than the
+    ///   counter;
+    /// - no step reads a slot the body writes before the body has written
+    ///   it in that turn (a value of the turn before);
+    /// - no line or dot reads a slot the body writes after it (it is drawn
+    ///   after every value step has run);
+    /// - the counter and the slots the body writes fit the lane
+    ///   registers ([`REGS`]), with one to spare for a step that writes a
+    ///   slot it reads.
+    pub(crate) fn vector_loop(&self, at: usize) -> Option<VecLoop> {
+        let de = (self.draw_end as usize).min(MAX_OPS);
+        let f = self.ops.get(at).filter(|o| o.code == code::FOR)?;
+        let end = f.b as usize;
+        if end <= at || end >= de {
+            return None;
+        }
+        let e = &self.ops[end];
+        let k = f.d & 0x7f;
+        if e.code != code::END || e.a & 0x7f != k || e.b != f.a || e.c as usize != at + 1 {
+            return None;
+        }
+        if !self.is_const_slot(f.a & 0x7f, at) {
+            return None;
+        }
+        let count = self.init[(f.a & 0x7f) as usize] >> 16;
+        if count < VEC_MIN as i32 {
+            return None;
+        }
+        let bit = |v: u8| 1u128 << (v & 0x7f);
+        let body = &self.ops[at + 1..end];
+        let prim = |c: u8| matches!(c, code::LINE_FROM | code::LINE_TO | code::DOT);
+        let value = |c: u8| {
+            matches!(c, 0..=code::LAST_BIN | 32..=code::LAST_UN | 64..=code::LAST_TERN)
+                && code::writes_scalar(c)
+        };
+        // The slots the body writes.
+        let mut all = 0u128;
+        for op in body {
+            if value(op.code) {
+                if op.d & 0x7f == k {
+                    return None;
+                }
+                all |= bit(op.d);
+            } else if !prim(op.code) {
+                return None;
+            }
+        }
+        // Each read after the turn's own write; one register to spare
+        // when a step writes a slot it reads.
+        let mut done = bit(k);
+        let mut spare = false;
+        for op in body {
+            let n = code::arity(op.code);
+            let v = [op.a, op.b, op.c];
+            for &v in &v[..n] {
+                if all & bit(v) != 0 && done & bit(v) == 0 {
+                    return None;
+                }
+            }
+            // A pick's choices are read through its table of slots, as
+            // scalars: none may be one the body writes.
+            if op.code == code::PICK
+                && (0..op.c as usize)
+                    .any(|j| all & bit(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8) != 0)
+            {
+                return None;
+            }
+            if value(op.code) {
+                spare |= v[..n].iter().any(|&v| v & 0x7f == op.d & 0x7f);
+                done |= bit(op.d);
+            }
+        }
+        // Lines and dots read nothing the body writes after them.
+        let mut later = 0u128;
+        for op in body.iter().rev() {
+            if prim(op.code) {
+                if [op.a, op.b, op.c].iter().any(|&v| later & bit(v) != 0) {
+                    return None;
+                }
+            } else {
+                later |= bit(op.d);
+            }
+        }
+        // Registers: the counter first, then each slot as it is first
+        // written.
+        let mut slot = [0u8; REGS + 1];
+        slot[1] = k;
+        let mut n = 1;
+        for op in body {
+            if value(op.code) && !slot[1..=n].contains(&(op.d & 0x7f)) {
+                if n == REGS {
+                    return None;
+                }
+                n += 1;
+                slot[n] = op.d & 0x7f;
+            }
+        }
+        if spare && n == REGS {
+            return None;
+        }
+        Some(VecLoop {
+            end,
+            count: count as u32,
+            regs: n as u8,
+            slot,
+        })
+    }
+
+    pub(crate) fn is_const_slot(&self, v: u8, at: usize) -> bool {
         (v != S_SEED || self.uses & SEEDED == 0)
             && !self.ops[..at.min(self.len())].iter().any(|op| {
                 // END counts its loop's counter (which the FOR writes too).
                 (op.code == code::END && op.a == v) || (code::writes_scalar(op.code) && op.d == v)
             })
+    }
+}
+
+/// Turns a draw loop needs to run as lanes ([`Program::vector_loop`]):
+/// below it a turn at a time is as quick (each lane step works out a whole
+/// lane, whatever the count).
+pub(crate) const VEC_MIN: u32 = 32;
+
+/// A draw loop run as lanes, ns: each value step's dispatch for a lane of
+/// turns (its work is `value_ns` a turn, as a pixel step's a pixel), the
+/// counter's lane and the loop round them, and each turn's look-up of its
+/// lines' and dots' operands (guesses until psi-probe measures them).
+pub(crate) const LANE_STEP_NS: u64 = 800;
+pub(crate) const LANE_CHUNK_NS: u64 = 1_000;
+pub(crate) const LANE_TURN_NS: u64 = 100;
+
+/// A draw loop that runs as lanes ([`Program::vector_loop`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VecLoop {
+    /// Its `END`'s index.
+    pub(crate) end: usize,
+    /// Its count (≥ [`VEC_MIN`]).
+    pub(crate) count: u32,
+    /// Registers used: 1 (the counter) ..= `regs`.
+    pub(crate) regs: u8,
+    /// The slot each register holds (`slot[1]` the counter's).
+    pub(crate) slot: [u8; REGS + 1],
+}
+
+impl VecLoop {
+    /// The register holding slot `v`, if the body writes it (or it is the
+    /// counter).
+    #[inline(always)]
+    pub(crate) fn reg(&self, v: u8) -> Option<usize> {
+        let v = v & 0x7f;
+        (1..=self.regs as usize).find(|&r| self.slot[r] == v)
     }
 }
 
