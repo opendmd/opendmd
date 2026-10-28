@@ -67,7 +67,8 @@ async function start() {
   const pv = new PanelPreview($('f-panel'));
   pv.p.setTransition('none', 0);
   const q = (v) => Math.round((v || 0) * 65536);
-  const n = Math.max(1, Math.floor((i[4] || 8000) / D));
+  // (A formula that goes on without repeating, loop 0: no wrap.)
+  const n = ok && i[4] === 0 ? Infinity : Math.max(1, Math.floor((i[4] || 8000) / D));
   let t0 = performance.now(), last = -1, dirty = true;
   const tick = (now) => {
     const k = Math.floor((now - t0) / D) % n;
