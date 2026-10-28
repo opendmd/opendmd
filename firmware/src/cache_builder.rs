@@ -1,5 +1,4 @@
-//! The playback cache, prepared by the device itself while it plays and
-//! while it is idle.
+//! The playback cache, prepared by the device itself while it is idle.
 //!
 //! A prepared copy (`docs/cache-format.md`: a GIF with its LZW capped at 9
 //! bits, delta frames and the `OPENDMD1LZW` hint) plays with ~16 KB of
@@ -17,15 +16,16 @@
 //! - **Full** — night mode has the panel dark, the player is paused, or there
 //!   is no playlist to play: nothing is animating, so work as fast as the
 //!   card allows (a 1 ms sleep every ~20 ms of work so IDLE0 still runs).
-//! - **Drip** — `auto_prepare = "always"` (the default) and a GIF plays,
-//!   a prepared one or an original (since the 512 B FatFs buffers an
-//!   original leaves ~92 KB free, more than the start threshold needs; the
-//!   heap gate below still decides each file), no transition running and no
-//!   hold after a late frame (`opendmd_core::auto_prepare::DripGuard`):
+//! - **Drip** — `auto_prepare = "always"` (the default) and a *prepared*
+//!   file is on screen (an original's decoder and the encoder do not both
+//!   fit: `opendmd_core::auto_prepare`, builder-a), no transition running,
+//!   not the new file's first 500 ms, and no hold after a late frame
+//!   (`opendmd_core::auto_prepare::DripGuard`):
 //!   [`config::BUILDER_DRIP_PAUSE`] of sleep before every 2 KB of card I/O
 //!   and every `stat`, so the player's reads rarely wait for the FAT lock.
 //! - **Stop(reason)** — anything else (`auto_prepare = "off"`, `idle` and
-//!   playing, a transition, a late-frame hold, a playlist rebuild, and —
+//!   playing, an original on screen, a GIF change, a late-frame hold, a
+//!   playlist rebuild, and —
 //!   set from [`crate::sd::SdSource::open`] — the player opening its next
 //!   file).
 //!
@@ -88,9 +88,8 @@ use crate::state::{free_heap, largest_free_block};
 pub enum Reason {
     Off = 1,
     Playing = 2,
-    /// A frame was late while dripping: held off for a while
-    /// (`opendmd_core::auto_prepare::DripGuard`).
-    LateFrame = 3,
+    /// An original on screen: its decoder and the encoder do not both fit.
+    GifOnScreen = 3,
     LowMemory = 4,
     Busy = 5,
     Transition = 6,
@@ -100,6 +99,9 @@ pub enum Reason {
     Opening = 9,
     /// Reading the playlist off the card failed; retried after a back-off.
     CardError = 10,
+    /// A frame was late while dripping (or at the GIF change that stopped
+    /// it): held off for a while (`opendmd_core::auto_prepare::DripGuard`).
+    LateFrame = 11,
 }
 
 impl Reason {
@@ -107,7 +109,7 @@ impl Reason {
         Some(match v {
             1 => Reason::Off,
             2 => Reason::Playing,
-            3 => Reason::LateFrame,
+            3 => Reason::GifOnScreen,
             4 => Reason::LowMemory,
             5 => Reason::Busy,
             6 => Reason::Transition,
@@ -115,6 +117,7 @@ impl Reason {
             8 => Reason::NoPlaylist,
             9 => Reason::Opening,
             10 => Reason::CardError,
+            11 => Reason::LateFrame,
             _ => return None,
         })
     }
@@ -124,6 +127,7 @@ impl Reason {
             Reason::Off => "off",
             // A file open is over in milliseconds; to a user it is playing.
             Reason::Playing | Reason::Opening => "playing",
+            Reason::GifOnScreen => "gif on screen",
             Reason::LateFrame => "late frame",
             Reason::LowMemory => "low memory",
             Reason::Busy => "busy",
@@ -312,10 +316,16 @@ impl Drop for Busy {
     }
 }
 
-/// The task is up at the drip pace: a late frame now may be its doing
-/// (`main`'s `DripGuard`).
-pub fn dripping() -> bool {
-    ALIVE.load(SeqCst) && PACE.load(SeqCst) == PACE_DRIP
+/// When the task last took a drip-paced step (ms since boot; 0 = never).
+static DRIP_AT: AtomicU32 = AtomicU32::new(0);
+
+/// A late frame now may be the drip's doing (`main`'s `DripGuard`): the
+/// task is up at the drip pace, or took a drip step within `window` — the
+/// GIF change that stopped it (the open waited for it to let go, and the
+/// next file was not opened ahead while it was up).
+pub fn dripped_within(window: Duration) -> bool {
+    (ALIVE.load(SeqCst) && PACE.load(SeqCst) == PACE_DRIP)
+        || (DRIP_AT.load(SeqCst) != 0 && ms_since(DRIP_AT.load(SeqCst)) < window.as_millis() as u32)
 }
 
 /// Drip holds after late frames since boot (the heartbeat's `late holds`).
@@ -894,6 +904,7 @@ fn pace() -> Result<(), Reason> {
             thread::sleep(Duration::from_millis(1));
         }
         LAST_SLEEP.store(now_ms(), SeqCst);
+        DRIP_AT.store(now_ms().max(1), SeqCst);
     }
     breathe();
     Ok(())

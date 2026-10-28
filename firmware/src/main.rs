@@ -457,6 +457,9 @@ fn main() -> Result<()> {
     // transition step that decoded nothing moves the picture but not the
     // file's position.
     let mut published: (u64, u64) = (0, 0);
+    // The file on screen is a prepared copy (the cache builder may borrow
+    // its headroom while it plays).
+    let mut current_prepared = false;
     // The cache builder's drip held off after a late frame it may have
     // caused (`opendmd_core::auto_prepare::DripGuard`).
     let mut drip_guard = opendmd_core::auto_prepare::DripGuard::new();
@@ -1577,6 +1580,15 @@ fn main() -> Result<()> {
                     } else {
                         sd::take_last()
                     };
+                    current_prepared = match served {
+                        Some(sd::Served::Prepared { .. } | sd::Served::Ahead { .. }) => true,
+                        // A playlist line naming a copy under `cache/`.
+                        Some(sd::Served::Direct) => matches!(
+                            opendmd_core::layout::classify(&playing.path),
+                            opendmd_core::layout::Prepared::Direct
+                        ),
+                        _ => false,
+                    };
                     log_started(playing.ordinal, &playing.path, served);
                     probe::switch_frame(tick_us, eng.started_ahead());
                 }
@@ -1686,9 +1698,10 @@ fn main() -> Result<()> {
                         );
                         misses.record(phases.cause(), late, when);
                         // A frame a person could see late while the builder
-                        // drips: hold the drip off for a while.
-                        if opendmd_core::auto_prepare::counts(late, when)
-                            && cache_builder::dripping()
+                        // drips, or at the GIF change that stopped it: hold
+                        // the drip off for a while.
+                        if opendmd_core::auto_prepare::counts(late)
+                            && cache_builder::dripped_within(config::BUILDER_DRIP_BLAME)
                         {
                             let hold = drip_guard.late_frame(now);
                             cache_builder::note_late_hold();
@@ -1798,7 +1811,7 @@ fn main() -> Result<()> {
 
         // The cache builder's pace for what the panel is doing now.
         cache_builder::publish(
-            builder_pace(&settings, off, eng, drip_guard.held(epoch.elapsed())),
+            builder_pace(&settings, off, eng, current_prepared, first_shown, drip_guard.held(epoch.elapsed()), epoch.elapsed()),
             settings.auto_prepare,
         );
 
@@ -2084,17 +2097,28 @@ fn rebuild_context(
 /// How fast the cache builder may work while the panel does what it is
 /// doing (`opendmd_core::auto_prepare::pace`): full speed while nothing
 /// animates (night mode "off", or paused); with `auto_prepare` = `always`,
-/// a slow drip while any GIF plays, bar a transition (its 24 KB and the
-/// builder's ~63 KB do not both fit) and a hold after a late frame
+/// a slow drip while a prepared file plays, bar a GIF change (a transition:
+/// its 24 KB and the builder's ~63 KB do not both fit; the new file's
+/// first `SWITCH_WINDOW` after `first_shown`) and a hold after a late frame
 /// (`late_hold`); otherwise not at all. The builder adds its own conditions
 /// (heap, transfers, the player opening a file).
-fn builder_pace(settings: &Settings, off: bool, eng: &Engine, late_hold: bool) -> cache_builder::Pace {
+fn builder_pace(
+    settings: &Settings,
+    off: bool,
+    eng: &Engine,
+    current_prepared: bool,
+    first_shown: Option<Duration>,
+    late_hold: bool,
+    now: Duration,
+) -> cache_builder::Pace {
     use cache_builder::{Pace, Reason};
     use opendmd_core::auto_prepare::{self as ap, Hold};
     let panel = ap::Panel {
         dark: off,
         paused: eng.is_paused(),
         transitioning: eng.is_transitioning(),
+        settling: first_shown.is_none_or(|t| now.saturating_sub(t) < ap::SWITCH_WINDOW),
+        prepared: current_prepared,
     };
     match ap::pace(settings.auto_prepare, panel, late_hold) {
         ap::Pace::Full => Pace::Full,
@@ -2102,6 +2126,7 @@ fn builder_pace(settings: &Settings, off: bool, eng: &Engine, late_hold: bool) -
         ap::Pace::Stop(Hold::Off) => Pace::Stop(Reason::Off),
         ap::Pace::Stop(Hold::Playing) => Pace::Stop(Reason::Playing),
         ap::Pace::Stop(Hold::Transition) => Pace::Stop(Reason::Transition),
+        ap::Pace::Stop(Hold::GifOnScreen) => Pace::Stop(Reason::GifOnScreen),
         ap::Pace::Stop(Hold::LateFrame) => Pace::Stop(Reason::LateFrame),
     }
 }
