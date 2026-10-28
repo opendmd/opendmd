@@ -299,7 +299,10 @@ PSI_WASM_GZ_BUDGET = 84 * 1024  # 83 until formula-apps F2; 82 until main's psi-
 # gz -> 4,685 / 2,094; the view's two example cards became one Bundled card
 # and a More Formulas link: 32,488 -> 26,584 B gz. Lowered back so the room
 # isn't spent by accident (1 KB of headroom, not the old 32).
-FORMULAS_GZ_BUDGET = 27 * 1024  # 32 until formula-apps F3; 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
+# 30 KB for the revised bundle (owner, 2026-10-28): Endless road and Time
+# gate in, Clock and Corner clock out; the two are the largest examples
+# (26,584 -> 28,806 B gz, all of it formulas.json).
+FORMULAS_GZ_BUDGET = 30 * 1024  # 27 until Endless road and Time gate were bundled; 32 until formula-apps F3; 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}
