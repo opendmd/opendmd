@@ -146,11 +146,15 @@ fn the_examples_are_light_enough_for_the_panel() {
         // (owner, 2026-10-26: legible over short); the rest stay short.
         // So do the built-in effects' Formulas (Tunnel, Rotozoom): a native
         // effect's knobs, written out.
+        // Time gate is a showcase too: the per-row tables are a line a
+        // quantity (19 lines of code, 6.1 ms with its still cache).
         // Endless road is a showcase too, and most of its lines are data:
         // 13 `table` lines (the car, the mountains and the sun as spans,
         // the road's rows) and three draw loops.
         let most = if e.name == "Endless road" {
             52
+        } else if e.name == "Time gate" {
+            19
         } else if ["Big clock", "Tunnel", "Rotozoom", "Rotozoom floor"].contains(&e.name.as_str()) {
             16
         } else {
@@ -282,8 +286,8 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
 #[cfg(not(target_arch = "wasm32"))]
 fn every_example_as_a_look() {
     // (Tunnel: ~4.6 ms as an effect with its still cache, ~14.4 without
-    // one, and a look never has one.)
-    const TOO_HEAVY: &[&str] = &["Tunnel"];
+    // one, and a look never has one. Time gate: ~6.1 ms and ~15.6.)
+    const TOO_HEAVY: &[&str] = &["Tunnel", "Time gate"];
     let json = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../opendmd-web/www/formulas.json"

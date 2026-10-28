@@ -4103,9 +4103,9 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     opts = page.eval_on_selector_all("#st-look-formula option", "els => els.map(e => [e.textContent, e.disabled])")
     names = [o[0] for o in opts]
     heavy = [o[0] for o in opts if o[1]]
-    # (Tunnel is the one too heavy as a look: its still cache is an effect's
-    # only, ~17.6 ms a frame without it.)
-    check(all(n in names for n in ("Plasma", "Big clock", "Scanlines", "Old photo", "Starfield", "Matrix", "Rotozoom")) and heavy == ["Tunnel (too heavy)"],
+    # (Tunnel and Time gate are too heavy as a look: their still cache is an
+    # effect's only, ~17.6 and ~15.6 ms a frame without it.)
+    check(all(n in names for n in ("Plasma", "Big clock", "Scanlines", "Old photo", "Starfield", "Matrix", "Rotozoom")) and heavy == ["Tunnel (too heavy)", "Time gate (too heavy)"],
           f"looks: Settings › Look lists every example ({len(opts)}; too heavy: {heavy})")
     page.select_option("#st-look-formula", label="Plasma")
     page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
