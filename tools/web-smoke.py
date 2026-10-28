@@ -3743,7 +3743,7 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     over = psi_over(page, [e["src"] for e in examples])
     over = [e["name"] for e, o in zip(examples, over) if o]
     badged = page.eval_on_selector_all("#psi-ex .psi-tile:has(.psi-badge)", "els => els.map(e => e.dataset.name)")
-    check(len(psi) == 1 and tiles == [e["name"] for e in examples] and len(tiles) == 10 and badged == over and len(over) == 6 and dark == 0
+    check(len(psi) == 1 and tiles == [e["name"] for e in examples] and len(tiles) == 10 and badged == over and len(over) == 5 and dark == 0
           and page.locator("#psi-ex-over").count() == 0 and more == "https://opendmd.dev/formulas/",
           f"formulas: opening the tab loads the module ({len(psi)}); {len(tiles)} bundled ({len(over)} looks), every thumbnail lit ({dark} dark); More Formulas -> {more}")
     wait_lit(page, "#psi-panel", "formulas: the first example in Details")
@@ -4256,10 +4256,10 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     page.fill("#psi-src", "\nr")
     page.focus("#psi-src")
     page.keyboard.press("Control+Home")
-    page.keyboard.type("use Clock as r", delay=30)
+    page.keyboard.type("use Big clock as r", delay=30)
     page.wait_for_timeout(400)
     typed, said = page.input_value("#psi-src"), page.inner_text("#psi-err")
-    typing = typed == "use Clock as r\nr" and "puts a formula in" in said
+    typing = typed == "use Big clock as r\nr" and "puts a formula in" in said
     page.keyboard.press("ArrowDown")
     page.wait_for_timeout(500)
     moved = "part r {" in page.input_value("#psi-src")
