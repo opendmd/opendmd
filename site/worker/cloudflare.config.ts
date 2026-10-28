@@ -18,8 +18,9 @@
 // What a deploy does with this file as it is: creates or updates the Worker
 // script "opendmd-site" with its assets, on opendmd-site.<account
 // subdomain>.workers.dev (workersDev) and per-version preview URLs
-// (previewUrls). No custom domain, route, DNS record, D1, R2 or Durable
-// Object: those come with the cutover (S3: `domains`) and short links (S5).
+// (previewUrls). No route, D1, R2 or Durable
+// Object: those come with short links (S5). Since the cutover (S3) it also
+// serves opendmd.dev and www.opendmd.dev (`domains`).
 import { defineConfig } from "cf/config";
 
 export default defineConfig({
@@ -39,10 +40,11 @@ export default defineConfig({
     workersDev: true,
     previewUrls: true,
     observability: { enabled: true },
-    // S3 (the cutover, not before): domains: ["opendmd.dev", "www.opendmd.dev"].
-    // Cloudflare then writes the proxied DNS records and the certificate.
-    // www → apex is the Worker's for /f/* and /api/*; for the rest, a zone
-    // redirect rule (www.opendmd.dev/* → https://opendmd.dev/$1, 301), since
-    // _redirects cannot match a host and every other path skips the Worker.
+    // Custom domains (S3, 2026-10-28): Cloudflare writes the proxied DNS
+    // records and the certificate. www → apex is the Worker's for /f/* and
+    // /api/*; for the rest, a zone redirect rule (www.opendmd.dev/* →
+    // https://opendmd.dev/$1, 301), since _redirects cannot match a host and
+    // every other path skips the Worker.
+    domains: ["opendmd.dev", "www.opendmd.dev"],
   },
 });
