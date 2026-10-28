@@ -60,6 +60,8 @@ export const app = {
   wasm,
   src: null,
   status: null,
+  stAsked: 0, // refreshStatus: requests made / the latest one applied
+  stApplied: 0,
   config: null,
   selection: new Set(),
   draft: { name: '', paths: [], path: '' },
@@ -109,8 +111,15 @@ export const app = {
   // (A device, or the demo's player: js/demo.js.)
   async refreshStatus(recent) {
     if (!this.src?.config) return null;
-    const was = this.cardKey;
-    this.status = await this.src.status(recent);
+    const was = this.cardKey, seq = ++this.stAsked;
+    const st = await this.src.status(recent);
+    // Replies can land out of order (the Now poll, a return to the tab and a
+    // view's own refresh are each a request): one asked before the latest
+    // applied is its caller's to read, not the app's current status. Taken
+    // as current it would bring the old card back after a swap.
+    if (seq < this.stApplied) return st;
+    this.stApplied = seq;
+    this.status = st;
     // Another card (swapped with the power off, or formatted): what was
     // read from the old one goes, and the views list the new one.
     const now = this.cardKey;

@@ -314,6 +314,7 @@ Screenshots of every view at 1280x800 and 390x844 go to target/web-smoke/.
 Any console error or page error fails the run.
 """
 import argparse
+import atexit
 import filecmp
 import gzip
 import http.server
@@ -388,8 +389,31 @@ def free_port() -> int:
     return p
 
 
+_www_snap: Path | None = None
+
+
+def www_snapshot() -> Path:
+    """The web app as it was when the run began, copied once: the mock serves
+    this, not opendmd-web/www. `make web` and `make site` rewrite that
+    directory (delete the .gz files, replace pkg/), and a page that loads
+    its modules in that moment gets a 404 and never draws: a build running
+    beside the smoke made a bare wait time out. (A reload would not do:
+    the page under test is the thing being measured.)"""
+    global _www_snap
+    if _www_snap is None:
+        OUT.mkdir(parents=True, exist_ok=True)
+        _www_snap = Path(tempfile.mkdtemp(prefix="www-snap-", dir=OUT)) / "www"
+        shutil.copytree(REPO / "opendmd-web" / "www", _www_snap)
+        if (REPO / "opendmd-web" / "www.pack").is_file():  # beside it, where the mock looks (www_info)
+            shutil.copy2(REPO / "opendmd-web" / "www.pack", _www_snap.parent / "www.pack")
+        atexit.register(shutil.rmtree, _www_snap.parent, True)
+    return _www_snap
+
+
 def start_mock(args: list[str]) -> tuple[subprocess.Popen, str]:
     port = free_port()
+    if "--www" not in args:
+        args = [*args, "--www", str(www_snapshot())]
     proc = subprocess.Popen(
         ["uv", "run", str(REPO / "tools" / "mock-device.py"), "--port", str(port), "--quiet", *args],
         stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
@@ -1158,6 +1182,22 @@ def card_swap_checks(browser, base: str, errors: list[str]) -> None:
         check(stores() == sorted([f"odmd-thumbs-i{first}", f"odmd-thumbs-i{other}"]), f"card swap: one store per card ({stores()})")
         keys = page.evaluate("Object.keys(localStorage).filter((k) => k.startsWith('odmd.lib.n')).sort()")
         check(keys == sorted([f"odmd.lib.n.i{first}", f"odmd.lib.n.i{other}"]), f"card swap: folder counts kept per card ({keys})")
+        # Replies out of order: a status asked before the swap and answered
+        # after it (the Now poll, a return to the tab, a view's refresh are
+        # each a request) carries the first card's id. It is its caller's;
+        # the app's status, and the card it is on, stay the newer one's.
+        flips = page.evaluate("""async (first) => {
+            const { app } = await import('./js/state.js'); const { on } = await import('./js/util.js');
+            let cards = 0; on('card', () => cards++);
+            const real = app.src.status.bind(app.src), late = JSON.parse(JSON.stringify(app.status));
+            late.sd.card_id = first;
+            let n = 0;
+            app.src.status = (r) => n++ ? real(r) : new Promise((res) => setTimeout(() => res(late), 600));
+            try { await Promise.all([app.refreshStatus(), app.refreshStatus()]); } finally { app.src.status = real; }
+            await new Promise((r) => setTimeout(r, 200));
+            return [cards, app.cardKey];
+        }""", first)
+        check(flips == [0, f"i{other}"], f"card swap: a status reply landing after a newer one does not bring the old card back ({flips})")
     finally:
         get_json(base + f"/mock/card?id={first}")
     # A store named by the card's size (firmware before `card_id`) goes.
@@ -1262,6 +1302,14 @@ def load_checks(page: Page, base: str) -> None:
           f"load: hovering while scrolling: {m['gets']} requests, {m['bytes']:,} B, {m['r503']} 503s, none kept as failed")
 
 
+def wait_mock_idle(base: str, timeout: float = 20.0) -> None:
+    """No card file in flight in the mock (a closed page's reads end at their
+    next write): the stream queue is free for what the next check expects."""
+    deadline = time.time() + timeout
+    while time.time() < deadline and get_json(base + "/mock/io")["inflight"] > 0:
+        time.sleep(0.1)
+
+
 def listing_queue_checks(browser, base: str, errors: list[str]) -> None:
     """Listings go out from the stream task (firmware http.rs `listing`, the
     mock likewise): with a file streaming and two waiting (the mock paced at
@@ -1275,8 +1323,24 @@ def listing_queue_checks(browser, base: str, errors: list[str]) -> None:
     page = new_page(browser, "laptop", errors)
     # No folder open, no thumbnails: only the listings meet the full queue.
     page.context.add_init_script("try { localStorage.setItem('odmd.lib.open', '[]'); localStorage.setItem('odmd.thumbs', 'false') } catch {}")
+    # Nothing of an earlier page may still hold the stream queue: a listing
+    # that met it would be a 503 here, asked again for ~45 s, then given up
+    # (the tree keeps no folders and does not ask a third time).
+    wait_mock_idle(base)
+    get_json(base + "/mock/io?reset=1&kbps=0")
+    seen503: list[str] = []
+    page.on("response", lambda r: r.status == 503 and seen503.append(r.url))
     page.goto(base + "/#library")  # the Library's modules in before the queue fills
-    page.wait_for_function(f"{TREE}?.folders.length > 2", timeout=60000)
+    try:
+        page.wait_for_function(f"{TREE}?.folders.length > 2", timeout=60000)
+    except PlaywrightTimeoutError:
+        # A failure of its own (not a traceback that ends the run), with what
+        # the page and the mock were doing.
+        state = page.evaluate(f"({{ tree: !!{TREE}, folders: {TREE}?.folders.length, toast: document.querySelector('.toast, #toasts')?.textContent || '', mod: typeof customElements }})")
+        check(False, f"listing queue: the Library lists the card's folders ({state}; {len(seen503)} 503s; mock {get_json(base + '/mock/io')})")
+        expected.remove("/api/files")
+        page.context.close()
+        return
     page.evaluate("location.hash = '#sets'")
     page.wait_for_selector("#sets-list [data-path]", timeout=60000)
     page.wait_for_timeout(1000)
