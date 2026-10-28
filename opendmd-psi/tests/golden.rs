@@ -251,6 +251,31 @@ fn the_still_cache_never_draws_another_programs_values() {
         &mut out,
     );
     assert_eq!(out, frame_ink::<128>(&tb, 500, None));
+    // Only a sprite's pixels changed: not the kept values either.
+    let spr = |rows: &str| {
+        compile(&format!("loop 4\nsprite S {{\nkey . 0, a 0.3, b 0.7, c 1\n{rows}\n}}\nd = len(px - 63.5, (15.5 - py)*2)\nk = S[d/8, atan2(15.5 - py, px - 63.5)*4 + 2]\ngray(frac(k + t/4 + 1/(d + 1)))")).unwrap()
+    };
+    let (sa, sb) = (
+        spr("abc.cab\n.cba.ab\nccaabb."),
+        spr("cba.bac\n.abc.ca\naabbcc."),
+    );
+    assert!(sa.still_lanes() > 0, "{}", sa.listing());
+    let mut st3 = Still::new();
+    assert!(st3.take(&sa));
+    for p in [&sa, &sb] {
+        render_rows_still::<128>(
+            p,
+            &mut s,
+            Some(&mut ink),
+            Some(&mut st3),
+            &inputs(500),
+            &OWN,
+            None,
+            u32::MAX,
+            &mut out,
+        );
+    }
+    assert_eq!(out, frame_ink::<128>(&sb, 500, None));
     // A partial redraw of a program the cache doesn't hold runs every step.
     assert!(st.holds(&b));
     render_rows_still::<128>(
@@ -702,6 +727,11 @@ const PIECES: &[&str] = &[
     "forever",
     "seed",
     "t*0.15 +",
+    "\nsprite S {\nkey . 0, X 1, # -2\n.X#.\nX..#\n}\n",
+    "sprite S {",
+    "key . 0",
+    "S[",
+    "S[px, ty]",
 ];
 
 fn check(src: &str) {
@@ -1594,4 +1624,70 @@ fn loop_forever_goes_on() {
         at(86_401_000, 3),
         "a pure function of t and seed"
     );
+}
+
+/// Sprites' values in the narrowed steps: random sprites with key numbers
+/// across the range (near its ends too), read at every level and used in
+/// sums and products, draw what the checked steps draw, with the sliders
+/// in range and out.
+#[test]
+fn sprites_narrow_soundly() {
+    let mut r = Rng(0x5b17_e5ee_d000_0001);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    const NUMS: &[&str] = &[
+        "0", "1", "-1", "0.5", "181", "-181", "30000", "-30000", "32767", "0.001",
+    ];
+    let mut n = 0;
+    for k in 0..300 {
+        let keys = 1 + r.below(6);
+        let chars = b".XYZW#";
+        let key: Vec<String> = (0..keys)
+            .map(|j| format!("{} {}", chars[j] as char, NUMS[r.below(NUMS.len())]))
+            .collect();
+        let (w, h) = (1 + r.below(20), 1 + r.below(8));
+        let rows: String = (0..h)
+            .map(|_| {
+                (0..w)
+                    .map(|_| chars[r.below(keys)] as char)
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        let u = ["px/4", "x*20", "a*8", "3", "px - 60"][r.below(5)];
+        let v = ["ty/4", "py", "b*5", "1", "t"][r.below(5)];
+        let e = [
+            "S[U, V]*x + a",
+            "S[U, V]*S[V, U] - 2",
+            "(S[U, V] + 181)*(x + 1)",
+            "frac(S[U, V]*0.01 + t)",
+            "S[U, V]*S[U, V]*0.5",
+        ][r.below(5)]
+        .replace('U', u)
+        .replace('V', v);
+        let src = format!(
+            "loop 3\nsprite S {{\nkey {}\n{rows}}}\nv = {e}\nhsv(v, 1, frac(v*0.37))",
+            key.join(", ")
+        );
+        let (mut p, mut q) = (Program::default(), Program::default());
+        if opendmd_psi::compile_with(&src, &mut p, true, true).is_err() {
+            continue;
+        }
+        opendmd_psi::compile_with(&src, &mut q, true, false).expect("compiles unnarrowed too");
+        n += 1;
+        for (ms, a) in [(0, 0), (1500, 1 << 16), (2999, -(1 << 16)), (9000, 3 << 16)] {
+            let i = opendmd_psi::Inputs {
+                a,
+                b: 1 << 15,
+                ..inputs(ms)
+            };
+            assert!(
+                frame_at(&p, &i, &under) == frame_at(&q, &i, &under),
+                "case {k}: {src:?} at {ms}, a {a}\n{}",
+                p.listing()
+            );
+        }
+        assert!(frame::<128>(&p, 777) == frame::<64>(&p, 777), "{src}");
+    }
+    assert!(n > 250, "only {n} compiled");
 }

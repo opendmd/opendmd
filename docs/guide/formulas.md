@@ -353,6 +353,30 @@ hsv(x, 0.6, ink)
 
 The examples **Starfield** and **Wireframe cube** are made this way.
 
+**Sprites.** A little picture can be written into the formula as it looks,
+one character a pixel, with a key saying what number each character
+stands for:
+
+```
+sprite ship {
+  key . 0, W 1, B 0.5
+  ...WW...
+  ..WBBW..
+  .WWWWWW.
+  W.W..W.W
+}
+s = ship[px - 60, ty - 12]
+mix(#000010, #80c0ff, s)
+```
+
+`ship[u, v]` is the number of the character at column `u` and row `v`,
+counted from the sprite's top left (and 0 outside it), so moving it is
+adding to `px` and `ty`, and making it bigger is dividing them. The key
+comes first; up to 16 characters (not spaces, or `; { } , - /`), rows up
+to 64 characters wide and 32 tall. Use the numbers for colours —
+`pick(k, #000, #f00, #ff0)` — or for brightness. The Endless road's car is
+one.
+
 **Limits.** A formula can be 4,096 characters and 256 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop
 at the end instead of wrapping round, and dividing by zero gives the

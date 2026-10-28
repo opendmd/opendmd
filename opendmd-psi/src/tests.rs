@@ -2141,3 +2141,281 @@ fn forever_error_messages() {
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
+
+// --- sprites ------------------------------------------------------------------
+
+/// A frame of `src` at the golden inputs (no canvas, nothing under).
+fn spr_frame(src: &str) -> alloc::vec::Vec<u8> {
+    let p = compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
+    let mut out = alloc::vec![0u8; W * H * 3];
+    render(&p, &mut Scratch::new(), &golden::inputs(0), &OWN, &mut out);
+    out
+}
+
+/// `NAME[u, v]` reads the key's number at column floor(u), row floor(v)
+/// from the top left, 0 outside; at 1, 2 and 4 bits a pixel, across word
+/// boundaries, once a frame, a row or a pixel.
+#[test]
+fn sprites_read_their_keys() {
+    // A random picture per key size and width: each pixel against the
+    // characters it was written with.
+    let mut r: u64 = 0x5b1e_c0de_1234_5678;
+    let mut next = |n: usize| {
+        r ^= r >> 12;
+        r ^= r << 25;
+        r ^= r >> 27;
+        (r.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 33) as usize % n
+    };
+    let alphabet = b".abcdefghijklmnopqrstuvwxyz0123456789#*";
+    for &(keys, w, h) in &[
+        (1, 7, 3),
+        (2, 33, 5),
+        (3, 17, 2),
+        (4, 64, 4),
+        (5, 9, 9),
+        (16, 31, 32),
+        (16, 64, 3),
+        (9, 1, 1),
+    ] {
+        let chars = &alphabet[..keys];
+        let vals: alloc::vec::Vec<i32> = (0..keys)
+            .map(|k| (k as i32 * 9_973 + 77) % 65_536)
+            .collect();
+        let key: alloc::vec::Vec<alloc::string::String> = (0..keys)
+            .map(|k| alloc::format!("{} {}", chars[k] as char, vals[k] as f64 / 65_536.0))
+            .collect();
+        let rows: alloc::vec::Vec<alloc::vec::Vec<u8>> = (0..h)
+            .map(|_| (0..w).map(|_| chars[next(keys)]).collect())
+            .collect();
+        let src = alloc::format!(
+            "sprite pic {{\n  key {}\n{}}}\ngray(pic[px - 3, ty - 2])",
+            key.join(", "),
+            rows.iter()
+                .map(|r| alloc::format!("  {}\n", core::str::from_utf8(r).unwrap()))
+                .collect::<alloc::string::String>()
+        );
+        let f = spr_frame(&src);
+        // The same values as a table read, pixel by pixel.
+        for py in 0..H {
+            let ty = py as i32;
+            for px in 0..W {
+                let (u, v) = (px as i32 - 3, ty - 2);
+                let want = if u < 0 || v < 0 || u >= w || v >= h {
+                    0
+                } else {
+                    let c = rows[v as usize][u as usize];
+                    vals[chars.iter().position(|&k| k == c).unwrap()]
+                };
+                let got = f[(py * W + px) * 3];
+                assert_eq!(got, fixed::chan(want), "{keys} keys, {w} x {h}: ({u}, {v})");
+            }
+        }
+    }
+    // Once a frame (constant), once a row, floors of fractions, negatives.
+    let src = "sprite s {\n  key . 0, a 0.25, b 0.5, c 1\n  abc.\n  .cba\n}\nframe { k = s[2, 0] }\nrgb(s[1.9, 1.99] + k*0, s[px - 1, ty*0], s[px*0.5 - 0.5, 1])";
+    let f = spr_frame(src);
+    let at = |px: usize, ty: usize, c: usize| f[(ty * W + px) * 3 + c];
+    assert_eq!(at(0, 0, 0), 255, "s[1, 1] is c");
+    assert_eq!(
+        (
+            at(1, 5, 1),
+            at(2, 5, 1),
+            at(3, 5, 1),
+            at(4, 5, 1),
+            at(0, 5, 1)
+        ),
+        (fixed::chan(q(0.25)), fixed::chan(q(0.5)), 255, 0, 0)
+    );
+    // px*0.5 - 0.5 at px 0 is -0.5: floored, -1: outside.
+    assert_eq!((at(0, 9, 2), at(1, 9, 2), at(3, 9, 2)), (0, 0, 255));
+    let p = compile(src).unwrap();
+    let l = p.listing();
+    assert!(l.contains("frame") && l.contains("spr("), "{l}");
+    assert!(l.contains("sprite 4 x 2 at 0"), "{l}");
+    // Two sprites alike are stored once (and the same read of them is
+    // one step).
+    let a = compile("sprite s {\nkey . 0, X 1\n.X.\n}\nsprite u {\nkey . 0, X 1\n.X.\n}\ngray(s[px, ty] + u[px, ty])").unwrap();
+    assert!(a.listing().matches("spr(").count() == 1, "{}", a.listing());
+}
+
+/// The source sent to the panel (`compact`: comments out, lines joined by
+/// `; `) is the same sprite.
+#[test]
+fn a_sprite_compacts() {
+    let src = "-- a car\nsprite car {   -- its key first\n  key . 0, R 0.5, # 1   -- R red, # dark\n  ..RR..\n  .R##R.   -- the glass\n\n  RRRRRR\n}\ngray(car[px - 61, ty - 12])";
+    let c = compact(src);
+    assert_eq!(
+        c,
+        "sprite car {; key . 0, R 0.5, # 1; ..RR..; .R##R.; RRRRRR; }; gray(car[px - 61, ty - 12])"
+    );
+    assert_eq!(compile(src).unwrap(), compile(&c).unwrap());
+    // `sprite` and its words stay names a formula may set.
+    compile("sprite = 3\nkey = 2\ngray(sprite*key)").unwrap();
+}
+
+/// The sprite's errors (E911-E919; `Error.code` is not a field yet).
+const SPRITE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
+    (
+        "layer {\nsprite s {\nkey . 0\n.\n}\ngray(1)\n}",
+        "a sprite goes at the top",
+        2,
+        1,
+        "E911",
+    ),
+    (
+        "sprite s {\n}\ngray(s[0, 0])",
+        "a sprite starts with its key",
+        1,
+        1,
+        "E912",
+    ),
+    (
+        "sprite s {\n.X.\n}\ngray(s[0, 0])",
+        "a sprite starts with its key",
+        2,
+        1,
+        "E912",
+    ),
+    (
+        "sprite s {\nkey .0, X 1\n.X.\n}\ngray(s[0, 0])",
+        "a key is a character and its number",
+        2,
+        5,
+        "E913",
+    ),
+    (
+        "sprite s {\nkey . 0, X one\n.X.\n}\ngray(s[0, 0])",
+        "a key is a character and its number",
+        2,
+        10,
+        "E913",
+    ),
+    (
+        "sprite s {\nkey . 0, - 1\n.X.\n}\ngray(s[0, 0])",
+        "a key is a character and its number",
+        2,
+        10,
+        "E913",
+    ),
+    (
+        "sprite s {\nkey . 0, . 1\n...\n}\ngray(s[0, 0])",
+        "`.` is in the key twice",
+        2,
+        10,
+        "E913",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.Y.\n}\ngray(s[0, 0])",
+        "`Y` is not in the sprite's key",
+        3,
+        2,
+        "E914",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.X.\n.X\n}\ngray(s[0, 0])",
+        "as wide as its first (3 characters)",
+        4,
+        1,
+        "E915",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.X.\n}\ngray(s[0])",
+        "a sprite is read at a column and a row",
+        5,
+        9,
+        "E918",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.X.\n}\ngray(s)",
+        "`s` is a sprite: read its pixels with `s[u, v]`",
+        5,
+        6,
+        "E918",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.X.\ngray(s[0, 0])",
+        "this `sprite {` is never closed",
+        1,
+        1,
+        "E919",
+    ),
+    (
+        "sprite s {\nkey . 0, X 1\n.X.\n}\nsprite s {\nkey . 0\n.\n}\ngray(1)",
+        "`s` is already set on line 1",
+        5,
+        8,
+        "—",
+    ),
+    (
+        "loop forever\nsprite s {\nkey . 0, X 1\n.X.\n}\ngray(s[t, 0])",
+        "grows without end",
+        6,
+        6,
+        "E901",
+    ),
+];
+
+#[test]
+fn sprite_error_messages() {
+    let mut bad = alloc::vec::Vec::new();
+    for &(src, want, line, col, code) in SPRITE_ERRORS {
+        match compile(src) {
+            Ok(_) => bad.push(alloc::format!("{code} {src:?}: compiled")),
+            Err(e) => {
+                let lc = e.line_col(src);
+                if !e.msg.contains(want) || lc != (line, col) {
+                    bad.push(alloc::format!(
+                        "{code} {src:?}: got {:?} at {lc:?}, want {want:?} at {:?}",
+                        e.msg,
+                        (line, col)
+                    ));
+                }
+            }
+        }
+    }
+    // 33 rows; 65 columns; more than the tables hold.
+    let tall: alloc::string::String = (0..33).map(|_| ".X\n").collect();
+    let e = compile(&alloc::format!(
+        "sprite s {{\nkey . 0, X 1\n{tall}}}\ngray(s[0, 0])"
+    ))
+    .unwrap_err();
+    if !e.msg.contains("1 to 32 rows") {
+        bad.push(alloc::format!("E916 33 rows: {}", e.msg));
+    }
+    let wide = ".".repeat(65);
+    let e = compile(&alloc::format!(
+        "sprite s {{\nkey . 0\n{wide}\n}}\ngray(s[0, 0])"
+    ))
+    .unwrap_err();
+    if !e.msg.contains("at most 64") {
+        bad.push(alloc::format!("E915 65 wide: {}", e.msg));
+    }
+    let big: alloc::string::String = (0..32)
+        .map(|k| {
+            alloc::format!(
+                "{}\n",
+                "abcdefghijklmnop"
+                    .repeat(4)
+                    .chars()
+                    .cycle()
+                    .skip(k)
+                    .take(64)
+                    .collect::<alloc::string::String>()
+            )
+        })
+        .collect();
+    let keys: alloc::vec::Vec<alloc::string::String> = "abcdefghijklmnop"
+        .chars()
+        .enumerate()
+        .map(|(k, c)| alloc::format!("{c} {k}"))
+        .collect();
+    let e = compile(&alloc::format!(
+        "table T = 1, 2\nsprite s {{\nkey {}\n{big}}}\ngray(s[0, 0] + T[0])",
+        keys.join(", ")
+    ))
+    .unwrap_err();
+    if !e.msg.contains("sprites and tables hold 256 numbers in all") {
+        bad.push(alloc::format!("E917: {}", e.msg));
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}

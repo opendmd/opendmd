@@ -68,14 +68,25 @@ export const TIP = (i) => `${i[0]} steps, about ${(est(i) / 1000).toFixed(1)} ms
 // its numbers are.
 // (`line`, `dot` and `ink` only in a formula with a draw block: before it
 // they were names a formula could set, and may still be; `fps` only before a
-// number, as `fps 100`; `forever` only after `loop`.)
+// number, as `fps 100`; `forever` only after `loop`. A sprite block's rows
+// are its picture, `.p`, never numbers to drag.)
 const WORDS = /^(loop|frame|layer|part|draw|for|table|line|dot|ink)$/, DRAWS = /^(line|dot|ink)$/;
 export function marks(s, bad) {
   const draws = /^\s*draw\s*\{/m.test(s.replace(/(--|\/\/).*/g, ''));
-  const toks = [], cls = new Array(s.length).fill('');
+  const toks = [], cls = new Array(s.length).fill(''), pic = [];
+  for (const b of s.matchAll(/^([ \t]*sprite[ \t]+\w+[ \t]*\{[^\n]*\n)([\s\S]*?)^[ \t]*\}/gm)) {
+    let at = b.index + b[1].length;
+    for (const line of b[2].split('\n')) {
+      const r = line.replace(/(--|\/\/).*/, '').trim();
+      if (r && !/^key\s/.test(r)) { const a = at + line.indexOf(r); pic.push([a, a + r.length]); }
+      at += line.length + 1;
+    }
+  }
+  const inPic = (i) => pic.some(([a, e]) => i >= a && i < e);
   for (const m of s.matchAll(/(--|\/\/).*|'[ -~]'|#[\da-f]{3}([\da-f]{3})?\b|[a-z_]\w*|\d+\.?\d*|\.\d+/gi)) {
-    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : (WORDS.test(m[0]) && (draws || !DRAWS.test(m[0])) || m[0] == 'fps' && /^[ \t]+\d/.test(s.slice(m.index + 3)) || m[0] == 'forever' && /\bloop[ \t]+$/.test(s.slice(0, m.index))) ? 'w' : '';
+    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : (WORDS.test(m[0]) && (draws || !DRAWS.test(m[0])) || m[0] == 'fps' && /^[ \t]+\d/.test(s.slice(m.index + 3)) || m[0] == 'forever' && /\bloop[ \t]+$/.test(s.slice(0, m.index)) || m[0] == 'sprite' && /^[ \t]+\w+[ \t]*\{/.test(s.slice(m.index + 6))) ? 'w' : '';
     let a = m.index;
+    if (inPic(a)) continue;
     // A character in quotes ('A') is a number, but not one to drag.
     if (k === 'n' && m[0][0] !== "'") {
       // `-2` after an operator, a bracket or the start of a line is one number.
@@ -84,6 +95,7 @@ export function marks(s, bad) {
     }
     if (k) cls.fill(k, a, m.index + m[0].length);
   }
+  for (const [a, e] of pic) cls.fill('p', a, e);
   if (bad) for (let i = bad[0]; i < Math.max(bad[1], bad[0] + 1) && i < s.length; i++) cls[i] = 'e ' + cls[i];
   const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
   let html = '', i = 0;

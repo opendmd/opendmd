@@ -1028,7 +1028,7 @@ pub fn run(root: &str) {
 
     // What one step costs: each formula is the baseline plus one or two
     // per-pixel steps (t is a frame value, so nothing folds away).
-    const STEPS: [(&str, &str); 27] = [
+    const STEPS: [(&str, &str); 28] = [
         ("base gray(x)", "gray(x)"),
         ("add", "gray(x + t)"),
         ("mul", "gray(x * t)"),
@@ -1059,6 +1059,8 @@ pub fn run(root: &str) {
         // psi-lang: a noise of a growing value per pixel (`NOISE_O`, its
         // offsets set once a frame), against `noise (+mul)`'s row.
         ("noise wide (+mul +add)", "loop forever\ngray(noise(x * 8 + t, y, t))"),
+        // A sprite's pixel (`SPR`), against `mul`'s row.
+        ("sprite (+mul)", "sprite s {\nkey . 0, X 1, Y 0.5\nXY.XY.XY.XY.XY.XY.\n.XYXY.XYXY.XYXY.XY\n}\ngray(s[x * 18, y + t])"),
     ];
     // Layers and what is under (drawn over the golden picture): the
     // formula look's costs, for `Program::esp32_us`.

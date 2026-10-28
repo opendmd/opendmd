@@ -205,7 +205,12 @@ FONT = {"fonts/silkscreen.woff2"}
 # wasm-opt), the wide steps themselves, the wide noise and its lane loop,
 # `seed`: +4.6 KB gz (61.9 -> ~66.5 KB with its glue). Raised under the
 # owner's OK to move the psi wasm line (this branch's brief).
-PSI_WASM_GZ_BUDGET = 67 * 1024  # 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 71 KB for sprites (2026-10-28, branch psi-lang, endless-road.md §5.2):
+# `sprite NAME { … }` blocks — the lexer's raw rows, the key and rows parsed
+# and packed (bytes, not `str`'s Unicode trims), their nine error sentences,
+# the sprite step's lane loop: +3.6 KB gz (~67.9 -> ~71.5 KB with its glue).
+# Raised under the brief's OK.
+PSI_WASM_GZ_BUDGET = 71 * 1024  # 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,

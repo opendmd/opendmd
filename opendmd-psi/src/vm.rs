@@ -755,6 +755,7 @@ pub(crate) fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables, tabs: &[i
     let g = |v: u8| sc[(v & 0x7f) as usize];
     let v = match op.code {
         code::TAB => tab(tabs, op.b, op.c, g(op.a)),
+        code::SPR => spr(tabs, op.c, g(op.a), g(op.b)),
         code::NOISE_O..=code::NOISE_O_LAST => noise_o(g(op.a), g(op.b), g(op.c), sc, op.code),
         _ => eval(op.code, g(op.a), g(op.b), g(op.c), Some(t)),
     };
@@ -766,6 +767,13 @@ pub(crate) fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables, tabs: &[i
 #[inline(never)]
 fn noise_o(x: i32, y: i32, z: i32, sc: &[i32; MAX_SCALARS], c: u8) -> i32 {
     fixed::noise_off(x, y, z, ctx(sc, c))
+}
+
+/// A sprite's pixel once a frame or a row (out of line: the frame loop is
+/// in IRAM).
+#[inline(never)]
+fn spr(tabs: &[i32; MAX_TABLE], at: u8, u: i32, v: i32) -> i32 {
+    SprHead::new(tabs, at).read(tabs, u, v)
 }
 
 /// Noise context `c - NOISE_O`'s three lattice offsets: its slots
@@ -936,6 +944,7 @@ fn lane_op<const N: usize>(
                 run1(d, L(p), |k| pick(sc, op.b, op.c, k))
             }
         }
+        SPR => spr_lane(d, [a, b], tabs, op.c),
         // (k is always a lane here: a table read of a scalar is a scalar
         // step.)
         TAB => {
@@ -961,6 +970,35 @@ fn lane_op<const N: usize>(
         U_R..=U_L => load_under(d, under, op.code - U_R),
         INK => load_ink(d, ink),
         _ => {}
+    }
+}
+
+/// A sprite's pixels along the lane (its header read once), the column
+/// and row read with a stride (0: a value for the lane).
+#[inline(never)]
+fn spr_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 2], tabs: &[i32; MAX_TABLE], at: u8) {
+    let hd = SprHead::new(tabs, at);
+    let mut one = [0i32; 2];
+    let mut p = [core::ptr::null::<i32>(); 2];
+    let mut stride = [0usize; 2];
+    for k in 0..2 {
+        match args[k] {
+            Arg::Lane(q) => (p[k], stride[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..2 {
+        if stride[k] == 0 {
+            p[k] = &one[k];
+        }
+    }
+    for o in d.iter_mut() {
+        // SAFETY: as `glyph_lane`'s.
+        let (u, v) = unsafe { (*p[0], *p[1]) };
+        *o = hd.read(tabs, u, v);
+        for k in 0..2 {
+            p[k] = p[k].wrapping_add(stride[k]);
+        }
     }
 }
 

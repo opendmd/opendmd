@@ -108,7 +108,12 @@ pub(crate) mod code {
     pub const SUB_W: u8 = 22;
     pub const MUL_W: u8 = 23;
     pub const MUL_N: u8 = 24;
-    pub const LAST_BIN: u8 = 24;
+    // `NAME[u, v]`, a sprite's pixel (`sprite NAME { … }`): `d = the key's
+    // number at column floor(u), row floor(v)` of the sprite whose header
+    // is `tables[c]` (`c` an immediate), 0 outside it ([`super::SprHead`]).
+    // Any level; never folded (a constant u, v: once a frame).
+    pub const SPR: u8 = 25;
+    pub const LAST_BIN: u8 = 25;
     // unary
     pub const NEG: u8 = 32;
     pub const NOT: u8 = 33;
@@ -232,7 +237,7 @@ pub(crate) mod code {
     /// A step that reads a table (the sine, a font): never folded, run once
     /// a frame when its operands are constants.
     pub fn is_table(c: u8) -> bool {
-        matches!(c, SIN | COS | DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST)
+        matches!(c, SIN | COS | SPR | DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST)
     }
 
     /// A wide step (`W_*`): once a frame, its operands wide or scalar
@@ -357,10 +362,10 @@ pub(crate) mod code {
 
     /// The step's name, for listings.
     pub fn name(c: u8) -> &'static str {
-        const N: [&str; 25] = [
+        const N: [&str; 26] = [
             "add", "sub", "mul", "div", "mod", "mask", "lt", "le", "gt", "ge", "eq", "ne", "and",
             "or", "min", "max", "step", "atan2", "hash", "len", "bit", "add_w", "sub_w", "mul_w",
-            "mul_n",
+            "mul_n", "spr",
         ];
         const U: [&str; 15] = [
             "neg", "not", "abs", "floor", "frac", "sin", "cos", "tri", "saw", "sqr", "sqrt",
@@ -805,7 +810,20 @@ impl Program {
             .is_some_and(|o| {
                 matches!(
                     o.code,
-                    FLOOR | SELECT | LT | LE | GT | GE | EQ | NE | AND | OR | NOT | STEP | BIT
+                    FLOOR
+                        | SELECT
+                        | LT
+                        | LE
+                        | GT
+                        | GE
+                        | EQ
+                        | NE
+                        | AND
+                        | OR
+                        | NOT
+                        | STEP
+                        | BIT
+                        | SPR
                 )
             })
     }
@@ -964,6 +982,9 @@ impl Program {
             // where it ends or goes back to.
             let args = if op.code == code::TAB {
                 alloc::format!("{args}; table {}..={}", op.b, op.b as usize + op.c as usize)
+            } else if op.code == code::SPR {
+                let h = SprHead::new(&self.tables, op.c);
+                alloc::format!("{args}; sprite {} x {} at {}", h.w, h.h, op.c)
             } else if op.code == code::FOR {
                 alloc::format!("{args}; end {}", op.b)
             } else if op.code == code::END {
@@ -1066,6 +1087,9 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         SQRT => 539,
         SELECT | CLAMP => 60,
         PICK | TAB => 100,
+        // A sprite's pixel: a table read, a shift and a mask (a guess until
+        // psi-probe measures it, as the design guessed).
+        SPR => 120,
         MIX => 130,
         SMOOTH => 214,
         NOISE => 855,
@@ -1089,6 +1113,63 @@ pub(crate) fn tab(tables: &[i32; MAX_TABLE], start: u8, last: u8, k: i32) -> i32
         return 0;
     }
     tables[(start as usize + i as usize) & (MAX_TABLE - 1)]
+}
+
+/// A sprite's shape (`sprite NAME { … }`), from its header word in the
+/// tables at `at`: `w | h << 8 | lb << 16 | keys << 20` (lb the log2 of
+/// its bits a pixel: 1, 2 or 4 bits), then its keys' numbers, then its
+/// rows, each `wpr` words of `32 >> lb` pixels, the first in the low bits.
+#[derive(Clone, Copy)]
+pub(crate) struct SprHead {
+    pub(crate) w: u32,
+    pub(crate) h: u32,
+    lb: u32,
+    lg: u32,
+    wpr: usize,
+    at: usize,
+    data: usize,
+}
+
+impl SprHead {
+    #[inline(always)]
+    pub(crate) fn new(tabs: &[i32; MAX_TABLE], at: u8) -> SprHead {
+        let at = at as usize;
+        let hd = tabs[at] as u32;
+        let (w, h, lb, keys) = (hd & 0xff, (hd >> 8) & 0xff, (hd >> 16) & 3, (hd >> 20) & 31);
+        // Pixels a word: 32, 16 or 8 (as its log2).
+        let lg = 5 - lb.min(2);
+        SprHead {
+            w,
+            h,
+            lb: lb.min(2),
+            lg,
+            wpr: ((w + (1 << lg) - 1) >> lg) as usize,
+            at,
+            data: at + 1 + keys as usize,
+        }
+    }
+
+    /// The pixel at column floor(u), row floor(v) from the top left: its
+    /// key's number, 0 outside. Indices are masked into the tables,
+    /// whatever the program.
+    #[inline(always)]
+    pub(crate) fn read(&self, tabs: &[i32; MAX_TABLE], u: i32, v: i32) -> i32 {
+        let (x, y) = ((u >> 16) as u32, (v >> 16) as u32);
+        // (Negative columns and rows are huge as u32: outside too.)
+        if x >= self.w || y >= self.h {
+            return 0;
+        }
+        let word = tabs
+            [(self.data + y as usize * self.wpr + (x >> self.lg) as usize) & (MAX_TABLE - 1)]
+            as u32;
+        let k = (word >> ((x & ((1 << self.lg) - 1)) << self.lb)) & ((1 << (1 << self.lb)) - 1);
+        tabs[(self.at + 1 + k as usize) & (MAX_TABLE - 1)]
+    }
+
+    /// The words it takes in the tables, its header first.
+    pub(crate) fn words(&self) -> usize {
+        self.data - self.at + self.h as usize * self.wpr
+    }
 }
 
 /// `pick`'s choice for `k` from the `n` slots whose numbers are in the
