@@ -1827,9 +1827,15 @@ fn draw_estimate_scales_with_turns() {
         a.1 == 1 && b.1 == 1 && a.0 > 10 && b.0 > 7 * (a.0 - 10),
         "{a:?} {b:?}"
     );
-    // As lanes, a big loop is cheaper than a turn at a time was (~1.2 µs
-    // a turn for these three steps and the dot).
-    assert!(b.0 < 1024 * 12 / 10, "{b:?}");
+    // As lanes, a big loop is cheaper than a turn at a time.
+    let p =
+        compile("draw { for k < 1024 { dot(hash(k, 1)*128, hash(k, 2)*32) } }\ngray(ink)").unwrap();
+    assert!(
+        p.esp32_us() < p.esp32_us_turns(),
+        "{} {}",
+        p.esp32_us(),
+        p.esp32_us_turns()
+    );
     // A constant line's length is known: 100 px costs more than 12.
     let l = |x1: u32| {
         compile(&alloc::format!("draw {{ line(0, 0, {x1}, 0) }}\ngray(ink)"))

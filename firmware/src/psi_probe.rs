@@ -1318,13 +1318,16 @@ pub fn run(root: &str) {
     }
     // psi-speed2's fused runs: each pattern alone, as compiled (fused) and
     // without the markers (its steps), for `fuse::saved`.
-    const FUSE_STEPS: [(&str, &str); 6] = [
-        ("checker", "gray((floor(px*0.37 + py*0.2 + t) + floor(py*0.5 - px*0.13)) % 2)"),
-        ("mul_add (lane, value)", "v = px*py*0.002\ngray(frac(v*0.7 + t))"),
-        ("mul_add (lane, lane)", "v = px*py*0.002\nw = sin(px*0.1 + py*0.3)\ngray(frac(v*0.7 + w))"),
-        ("pal_select * lane", "c = (px + py) % 2\npal(fire, c ? 0.3 : 0.7) * (floor(px*py*0.002 + t) % 8 / 8)"),
+    const FUSE_STEPS: [(&str, &str); 9] = [
+        ("checker", "u = px*py*0.01 + t\nv = py*0.7 - px*0.3 + t/2\ngray((floor(u) + floor(v)) % 2)"),
+        ("checker_3", "gray((floor(px*0.37 + py*0.2 + t) + floor(py*0.5 - px*0.13)) % 2)"),
+        ("pal_select (row scale)", "cc = (floor(px*py*0.01 + t) + floor(py*0.3 - px*0.2)) % 2\npal(fire, cc ? 0.3 : 0.7) * (py/31)"),
+        ("pal_select_k (lane)", "cc = (floor(px*py*0.01 + t) + floor(py*0.3 - px*0.2)) % 2\nlit = floor(px*py*0.002 + t) % 8 / 8\npal(chrono, cc ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * lit"),
         ("pal_pick", "pal(rainbow, pick(floor(px*0.07 + py*0.3) % 9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, t/8, 0.8, 0.9))"),
-        ("pal_ink", "draw { for k < 8 { line(k*16, 0, k*16 + 8, 31) } }\npal(ice, ink)"),
+        ("ink_1 pal, lines", "draw { for k < 8 { line(k*16, 0, k*16 + 8, 31) } }\npal(ice, ink)"),
+        ("ink_1 gray, blank", "draw { dot(-1, -1, t) }\ngray(ink)"),
+        ("ink rgb, lines", "draw { for k < 8 { line(k*16, 0, k*16 + 8, 31) } }\n#40c0ff * ink"),
+        ("ink rgb, streaks", "draw { for k < 64 { line(k*2, 0, k*2 + 30, 31, 0, 1) } }\n#40c0ff * ink"),
     ];
     for (what, src) in FUSE_STEPS {
         let mut steps = zeroed::<psi::Program>();

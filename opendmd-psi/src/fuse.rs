@@ -27,13 +27,18 @@ use alloc::vec::Vec;
 /// `mask(add_w(floor(x), floor(y)), m)`: a checker's `(floor(u) +
 /// floor(v)) % 2^k`, x and y lanes, m a value for the lane.
 pub(crate) const F_CHECKER: u8 = 1;
-/// `add_w(mul_w(a, b), c)` (or `mul_n`), a a lane, b a value for the
-/// lane, c either (a value for the lane with `mul_n`, or when the result
-/// goes into a's register).
-pub(crate) const F_MADD: u8 = 2;
-/// The bottom layer's `pal(P, select(c, A, B))` (`* k`, k a lane or a
-/// value for the lane), A and B values for the lane.
+/// A checker's last three steps, `mask(add_w(r, floor(y)), m)`, where the
+/// first floor (`r`, a lane) was worked out earlier (not next to the
+/// second: Psi lays steps out as their values are needed).
+pub(crate) const F_CHECKER3: u8 = 2;
+/// The bottom layer's `pal(P, select(c, A, B))` (`* k`, k a value for the
+/// lane), A and B values for the lane: two colours once a lane.
 pub(crate) const F_SELPAL: u8 = 3;
+/// [`F_SELPAL`] with k a lane: each choice's last scale and colour kept.
+pub(crate) const F_SELPAL_K: u8 = 6;
+/// The bottom layer's `pal(P, ink)` or `gray(ink)`: the canvas's bytes to
+/// colours in one pass (no lane of `ink` written and read back).
+pub(crate) const F_INK1: u8 = 7;
 /// The bottom layer's `pal(P, pick(m, …))` (`* k`, k a value for the
 /// lane): the choices' colours worked out once a lane, then looked up.
 pub(crate) const F_PICKPAL: u8 = 4;
@@ -44,10 +49,11 @@ pub(crate) const F_PICKPAL: u8 = 4;
 /// is the same (mostly 0: nothing drawn).
 pub(crate) const F_INK: u8 = 5;
 
-/// An `F_INK` run's cost, ns a pixel (a guess until psi-probe measures
-/// it): a byte read, a compare and the colour's three bytes written, the
-/// colour worked out again only where the byte changes.
-pub(crate) const INK_NS: u32 = 40;
+/// An `F_INK` run's cost, ns a pixel: a byte read, a compare and the
+/// colour's three bytes written, the colour worked out again where the
+/// byte changes (s2probe-a: Wireframe cube's run ~150 ns VM against ~270
+/// for its steps; set so the cube's estimate is its frame).
+pub(crate) const INK_NS: u32 = 260;
 
 /// Steps an `F_INK` run may hold between its `ink` and its colour.
 pub(crate) const INK_STEPS: usize = 6;
@@ -59,8 +65,10 @@ pub(crate) const PICK_MAX: usize = 16;
 pub(crate) fn name(kind: u8) -> &'static str {
     match kind {
         F_CHECKER => "checker",
-        F_MADD => "mul_add",
+        F_CHECKER3 => "checker_3",
         F_SELPAL => "pal_select",
+        F_SELPAL_K => "pal_select_k",
+        F_INK1 => "colour_of_ink_1",
         F_PICKPAL => "pal_pick",
         F_INK => "colour_of_ink",
         _ => "?",
@@ -119,34 +127,29 @@ fn pattern(ops: &[Op]) -> Option<(u8, usize, [u8; 3], u8)> {
                 && !is_lane(d.b)
                 && d.d != x
                 && d.d != y;
-            ok.then_some((F_CHECKER, 4, [r1, r2, c.d], d.d))
-        }
-        MUL_W | MUL_N => {
-            let b = op(1)?;
-            let (l, s) = match (is_lane(a.a), is_lane(a.b)) {
-                (true, false) => (a.a, a.b),
-                (false, true) => (a.b, a.a),
-                _ => return None,
-            };
-            let _ = s;
-            let r = a.d;
-            let c = if b.a == r { b.b } else { b.a };
-            // (The destination may be the lane multiplied when the added
-            // value is one for the lane: a kernel that reads and writes
-            // its own lane.)
-            let ok = b.code == ADD_W
-                && (b.a == r || b.b == r)
-                && c != r
-                // (mul_n's kernel takes a value for the lane only.)
-                && (a.code == MUL_W || !is_lane(c))
-                && (b.d != l || !is_lane(c))
-                && b.d != c;
-            ok.then_some((F_MADD, 2, [r, r, r], b.d))
+            if ok {
+                return Some((F_CHECKER, 4, [r1, r2, c.d], d.d));
+            }
+            // The second floor alone, the first's value an operand.
+            let (y, r2, c, d) = (a.a, a.d, b, c);
+            let r1 = if c.a == r2 { c.b } else { c.a };
+            let ok = is_lane(y)
+                && c.code == ADD_W
+                && (c.a == r2 || c.b == r2)
+                && r1 != r2
+                && is_lane(r1)
+                && d.code == MASK
+                && d.a == c.d
+                && !is_lane(d.b)
+                && d.d != y
+                && d.d != r1;
+            ok.then_some((F_CHECKER3, 3, [r2, c.d, c.d], d.d))
         }
         SELECT => {
             let b = op(1)?;
             let ok = is_lane(a.a) && !is_lane(a.b) && !is_lane(a.c) && pal_of(b, a.d, false);
-            ok.then_some((F_SELPAL, 2, [a.d; 3], 0))
+            let lane_k = b.d & PAL_SCALED != 0 && is_lane(b.c);
+            ok.then_some((if lane_k { F_SELPAL_K } else { F_SELPAL }, 2, [a.d; 3], 0))
         }
         PICK => {
             let b = op(1)?;
@@ -168,7 +171,14 @@ fn pattern(ops: &[Op]) -> Option<(u8, usize, [u8; 3], u8)> {
                     return None;
                 }
                 if code::is_colour(o.code) {
-                    return (o.code < OUT_LAYER).then_some((F_INK, j + 1, [0; 3], 0));
+                    // (A palette's or a grey's colour of `ink` itself is one
+                    // read already: s2probe-a measured `pal(ice, ink)`
+                    // 72 ns a pixel slower kept per byte, the streaks'
+                    // bytes changing at nearly every pixel.)
+                    let plain = j == 1
+                        && (o.code == OUT_GRAY || (o.code == OUT_PAL && o.d & PAL_SCALED == 0));
+                    let kind = if plain { F_INK1 } else { F_INK };
+                    return (o.code < OUT_LAYER).then_some((kind, j + 1, [0; 3], 0));
                 }
                 let ok = matches!(o.code, 0..=LAST_BIN | 32..=LAST_UN | 64..=LAST_TERN | INK)
                     && !code::is_wide(o.code)
@@ -224,7 +234,7 @@ pub(crate) fn fuse(prog: &mut Program) {
             continue;
         }
         let ok = |kind: u8, n: usize, mid: [u8; 3], dst: u8| {
-            if kind == F_INK {
+            if kind == F_INK || kind == F_INK1 {
                 // Every register the run writes is dead after it.
                 ink_regs(ops, n).all(|r| dead(&ops[n..], r))
             } else {
@@ -265,17 +275,21 @@ pub(crate) fn fuse(prog: &mut Program) {
 }
 
 /// What a fused run of kind `kind` saves, ns a pixel, against its steps'
-/// costs (guesses until psi-probe measures them): the steps it folds in,
-/// each a loop's load, store and turn: a checker's two floors, add and mask
-/// in one loop (40 + 40 + 25 + 50 against ~45), a multiply-add's add (25,
-/// ~5 of it kept), a colour's choice (60), pick (100) or canvas load (70),
-/// less a little for the lookup in the colour's loop.
+/// costs, from s2probe-a on the spare (2026-10-28): Rotozoom floor 225 ns a
+/// pixel in all (checker, two multiply-adds at 18, `pal_select` of a row
+/// scale), Tunnel 108 (checker, a multiply-add, `pal_select_k`), the
+/// pick 73. The split between the checker and the colours is a reading
+/// of those two (s2probe-b's `fuse` rows measure each alone).
 pub(crate) fn saved(kind: u8) -> u32 {
     match kind {
-        F_CHECKER => 110,
-        F_MADD => 20,
-        F_SELPAL => 50,
-        F_PICKPAL => 85,
+        F_CHECKER => 70,
+        F_CHECKER3 => 40,
+        F_SELPAL => 120,
+        F_SELPAL_K => 20,
+        F_PICKPAL => 73,
+        // The ink lane's write and read (`ink` 70 a pixel) and the colour's
+        // own load.
+        F_INK1 => 80,
         // (An `F_INK` run is costed whole by the estimate: `INK_NS`.)
         F_INK => 0,
         _ => 0,

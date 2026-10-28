@@ -2129,7 +2129,16 @@ fn fused_runs_are_their_steps() {
             LEAF[r.below(LEAF.len())].to_string()
         }
     };
-    let mut kinds = [0usize; 6];
+    const KINDS: [&str; 7] = [
+        "checker",
+        "checker_3",
+        "pal_select",
+        "pal_select_k",
+        "pal_pick",
+        "colour_of_ink",
+        "colour_of_ink_1",
+    ];
+    let mut kinds = [0usize; 7];
     let (mut compiled, mut frames) = (0, 0);
     for k in 0..n {
         // (Mostly values of the pixel, not of its column or row alone: those
@@ -2196,7 +2205,10 @@ fn fused_runs_are_their_steps() {
                 "rgb(ink, ur, 0.5)",
                 "pal(ice, ink) * fog",
                 "gray(sin(ink*3 + t)*0.5 + 0.5)",
-            ][r.below(10)]
+                "gray(ink)",
+                "pal(fire, ink)",
+                "pal(rainbow, ink)",
+            ][r.below(13)]
             .to_string(),
             5 if r.below(2) == 0 => {
                 // A random chain of the canvas: each step's function as the
@@ -2255,18 +2267,7 @@ fn fused_runs_are_their_steps() {
         opendmd_psi::compile_unfused(&src, &mut q).expect("compiles unfused");
         compiled += 1;
         let listing = p.listing();
-        for (j, name) in [
-            "",
-            "checker",
-            "mul_add",
-            "pal_select",
-            "pal_pick",
-            "colour_of_ink",
-        ]
-        .iter()
-        .enumerate()
-        .skip(1)
-        {
+        for (j, name) in KINDS.iter().enumerate() {
             kinds[j] += listing.matches(&format!("fuse({name};")).count();
         }
         for j in 0..6 {
@@ -2286,11 +2287,11 @@ fn fused_runs_are_their_steps() {
         }
     }
     eprintln!(
-        "{n} formulas, {compiled} compiled, {frames} frames; fused: checker {}, mul_add {}, pal_select {}, pal_pick {}, colour_of_ink {}",
-        kinds[1], kinds[2], kinds[3], kinds[4], kinds[5]
+        "{n} formulas, {compiled} compiled, {frames} frames; fused {:?}",
+        KINDS.iter().zip(kinds).collect::<Vec<_>>()
     );
     assert!(compiled * 10 > n * 8, "only {compiled} of {n} compiled");
-    for (j, &c) in kinds.iter().enumerate().skip(1) {
-        assert!(c * 20 > n, "kind {j}: only {c} fused runs in {n} formulas");
+    for (name, &c) in KINDS.iter().zip(&kinds) {
+        assert!(c * 20 > n, "{name}: only {c} fused runs in {n} formulas");
     }
 }

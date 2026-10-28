@@ -970,8 +970,10 @@ impl Program {
         // turns) at the FOR, then their ENDs and values free (up to
         // `lane_end`); lines and dots as ever.
         let mut lane_end = 0;
+        let mut lane: Option<VecLoop> = None;
         self.draw_walk(|at, op, mult| {
             if let Some(v) = self.vector_loop(at).filter(|_| lanes) {
+                lane = Some(v);
                 let chunks = u64::from(v.count.div_ceil(W as u32));
                 let mut steps = 0u64;
                 for o in &self.ops[at + 1..v.end] {
@@ -990,6 +992,14 @@ impl Program {
             if at <= lane_end && !matches!(op.code, code::LINE_FROM | code::LINE_TO | code::DOT) {
                 return;
             }
+            // A line's or a dot's operands read from the lanes, each turn.
+            if let Some(v) = lane.filter(|_| at <= lane_end) {
+                let reads = [op.a, op.b, op.c]
+                    .iter()
+                    .filter(|&&o| v.reg(o).is_some())
+                    .count();
+                ns = ns.saturating_add(reads as u64 * LANE_READ_NS * mult as u64);
+            }
             let cost: u64 = match op.code {
                 code::LINE_FROM => {
                     from = [op.a, op.b];
@@ -1007,11 +1017,11 @@ impl Program {
                     let (dx, dy) = (d(k(from[0]), k(op.a)), d(k(from[1]), k(op.b)));
                     let len = match (dx, dy) {
                         (Some(a), Some(b)) => a.max(b),
-                        (a, b) => a.or(b).unwrap_or(0).max(12),
+                        (a, b) => a.or(b).unwrap_or(0).max(6),
                     };
-                    1_100 + 320 * len
+                    1_100 + 270 * len
                 }
-                code::DOT => 400,
+                code::DOT => 450,
                 _ => 420,
             };
             ns = ns.saturating_add(cost * mult as u64);
@@ -1314,11 +1324,15 @@ pub(crate) const VEC_MIN: u32 = 32;
 /// lines' and dots' operands (guesses until psi-probe measures them).
 pub(crate) const LANE_STEP_NS: u64 = 800;
 pub(crate) const LANE_CHUNK_NS: u64 = 1_000;
-pub(crate) const LANE_TURN_NS: u64 = 100;
+/// (s2probe-a, 2026-10-28: a loop of 1,024 off-panel dots 722 ns a turn
+/// over the base as lanes, the dot ~420 of it; +70 for a dot reading a
+/// lane: `LANE_READ_NS` a line's or dot's operand from a lane.)
+pub(crate) const LANE_TURN_NS: u64 = 300;
+pub(crate) const LANE_READ_NS: u64 = 70;
 /// A draw lane step without a lane loop of its own (`vm::lane_draw`'s
 /// other steps, worked out turn by turn by the scalar functions): the
 /// call and its dispatch a turn, ns (a guess).
-pub(crate) const LANE_EVAL_NS: u32 = 150;
+pub(crate) const LANE_EVAL_NS: u32 = 350;
 
 /// Whether `vm::lane_draw` runs step `c` with a lane loop (else turn by
 /// turn): its list, kept in step with it.
