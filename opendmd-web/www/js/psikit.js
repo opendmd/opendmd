@@ -84,7 +84,7 @@ export function marks(s, bad) {
   }
   const inPic = (i) => pic.some(([a, e]) => i >= a && i < e);
   for (const m of s.matchAll(/(--|\/\/).*|'[ -~]'|#[\da-f]{3}([\da-f]{3})?\b|[a-z_]\w*|\d+\.?\d*|\.\d+/gi)) {
-    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : (WORDS.test(m[0]) && (draws || !DRAWS.test(m[0])) || m[0] == 'fps' && /^[ \t]+\d/.test(s.slice(m.index + 3)) || m[0] == 'forever' && /\bloop[ \t]+$/.test(s.slice(0, m.index)) || m[0] == 'sprite' && /^[ \t]+\w+[ \t]*\{/.test(s.slice(m.index + 6))) ? 'w' : '';
+    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : (WORDS.test(m[0]) && (draws || !DRAWS.test(m[0])) || m[0] == 'fps' && /^[ \t]+\d/.test(s.slice(m.index + 3)) || m[0] == 'forever' && /\bloop[ \t]+$/.test(s.slice(0, m.index)) || m[0] == 'sprite' && /^[ \t]+\w+[ \t]*\{/.test(s.slice(m.index + 6)) || m[0] == 'palette' && /^[ \t]+\w+[ \t]*=/.test(s.slice(m.index + 7))) ? 'w' : '';
     let a = m.index;
     if (inPic(a)) continue;
     // A character in quotes ('A') is a number, but not one to drag.

@@ -420,7 +420,8 @@ const DRAW = [['draw { … }', 'once a frame, before the pixels: values, loops, 
   ['sprite s { … }', 'a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall', 'sprite s {\n  key . 0, X 1\n  .X.\n}\n'],
   ['s[u, v]', 'sprite s at column u, row v from its top left: its key’s number (0 outside)']];
 const COLS = [['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'], ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
-  ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'], ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'], ['gray(v)', 'white, 0 to 1'],
+  ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'],
+  ['palette sea = #024, #08c, #fff', 'your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one', 'palette p = #000, #f80, #fff\n'], ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'], ['gray(v)', 'white, 0 to 1'],
   ['#ff8800', 'a colour: alone, or #f80 * v, mix(#000, #f80, v)'],
   ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)']];
 

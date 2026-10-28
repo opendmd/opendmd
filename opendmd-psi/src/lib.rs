@@ -211,6 +211,9 @@ pub mod golden {
         // per row and once a frame, outside them, and the road's car.
         ("sprites", SPRITES, 1500, 0xb4426b7968cc9336),
         ("sprite-car", SPRITE_CAR, 0, 0x3cdaf547126eb095),
+        // Palettes of a formula's own: plain, scaled, covered, in a part,
+        // indexed by a sprite.
+        ("palettes", PALETTES_OWN, 700, 0x9b6bdb382e0435d6),
         ("still", "loop 4.8\nd = len(px - 63.5, (15.5 - py)*2)\nk = 64/(d + 0.5)\nu = frac(atan2(15.5 - py, px - 63.5)*2 + t/4.8 + k/64)\nv = frac(k/16 + t/2.4)\ncell = (floor(u*8) + floor(v*4)) % 2\npal(chrono, frac(mix(0.28, 0.78, cell) + t/4.8)) * clamp((d - 6)/12, 0, 1)", 1900, 0x79d9337fc1b74897),
     ];
 
@@ -225,6 +228,9 @@ pub mod golden {
 
     /// The road's car (`sprite`), its colours from a pick.
     pub const SPRITE_CAR: &str = "sprite car {\n  key . 0, R 1, D 2, L 3\n  ........RRRRRRRRRR........\n  .......RDDDDDDDDDDR.......\n  ......RDDDDDDDDDDDDR......\n  ...RRRRRRRRRRRRRRRRRRRR...\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  DDDDDDDDDDDDDDDDDDDDDDDDDD\n}\nk = car[px - 50.5, ty - 23]\npick(k, #203040, #e02020, #101010, #ffa020)";
+
+    /// A golden formula with palettes of its own.
+    pub const PALETTES_OWN: &str = "loop 2\npalette sea = #001020, #0060a0, #40c0e0, #ffffff\npalette ember = #200000, #c02000,\n  #ffa020\nsprite dot {\n  key . 0, o 1, O 0.5\n  .oOo.\n  oOOOo\n  .oOo.\n}\npart glow {\n  palette ember = #200000, #c02000, #ffa020\n  pal(ember, frac(x*4 - t/2))\n}\nlayer { pal(sea, y + sin(x*2 + t/2)*0.2) * (0.6 + x*0.4) }\nlayer screen { glow(x, y, 0.5) }\nlayer add { pal(ember, dot[px % 6, ty % 4]) }";
 
     /// The picture the [`OVER`] frames are drawn over: every byte value in
     /// every channel somewhere (a hash per pixel), with smooth ramps across

@@ -688,7 +688,7 @@ fn frame<const N: usize>(
                     continue;
                 }
                 if code::is_colour(op.code) {
-                    colour_step(scratch, &alias, op, base, tables, px);
+                    colour_step(scratch, &alias, op, base, tables, &prog.tables, px);
                 } else {
                     lane_op(
                         scratch,
@@ -1103,11 +1103,12 @@ fn colour_step<const N: usize>(
     op: &Op,
     base: usize,
     t: &Tables,
+    tabs: &[i32; MAX_TABLE],
     px: &mut [[u8; 3]],
 ) {
     let (kind, blend) = code::colour_parts(op.code);
     let Some(mode) = blend else {
-        colour(s, al, op, base, t, px);
+        colour(s, al, op, base, t, tabs, px);
         return;
     };
     let (v, n) = code::operands(op);
@@ -1118,7 +1119,7 @@ fn colour_step<const N: usize>(
     };
     let mut row = [[0u8; 3]; W];
     let src = &mut row[..px.len()];
-    colour(s, al, &plain, base, t, src);
+    colour(s, al, &plain, base, t, tabs, src);
     // A layer that covers everything (the usual: no coverage given) is one
     // loop per blend, so the blend is not a branch per channel (an indirect
     // jump on the ESP32); one with a coverage, a lane or a value read with
@@ -1175,8 +1176,10 @@ fn colour<const N: usize>(
     op: &Op,
     base: usize,
     t: &Tables,
+    tabs: &[i32; MAX_TABLE],
     px: &mut [[u8; 3]],
 ) {
+    let mut own = [[0u8; 3]; 32];
     use code::*;
     let (a, b, c) = (
         s.arg(al, op.a, base),
@@ -1193,11 +1196,11 @@ fn colour<const N: usize>(
         OUT_PAL if op.d & PAL_SCALED != 0 => pal_lit_lane(
             px,
             [a, c],
-            t.palettes[((op.d & PAL_MASK) as usize).min(4)],
+            palette(t, tabs, op.d & PAL_MASK, &mut own),
             (op.d & !PAL_SCALED) >> PAL_SHIFT,
         ),
         OUT_PAL => {
-            let p = t.palettes[(op.d as usize).min(4)];
+            let p = palette(t, tabs, op.d & PAL_MASK, &mut own);
             match a {
                 Arg::Lane(q) => out1(px, L(q), |k| fixed::pal(p, k)),
                 Arg::Sc(v) => px.fill(fixed::pal(p, v)),

@@ -732,6 +732,9 @@ const PIECES: &[&str] = &[
     "key . 0",
     "S[",
     "S[px, ty]",
+    "palette P = #f00, #0f0,\n#00f",
+    "palette",
+    "pal(P,",
 ];
 
 fn check(src: &str) {

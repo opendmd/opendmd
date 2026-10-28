@@ -2419,3 +2419,169 @@ fn sprite_error_messages() {
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
+
+// --- palettes of a formula's own -------------------------------------------------
+
+/// `palette NAME = #…, …`: `pal(NAME, i/(n − 1))` is colour i exactly, for
+/// every n from 1 to 32; scaled and covered like the built-ins.
+#[test]
+fn own_palettes_hit_their_colours() {
+    let mut r: u64 = 0x9a1e_77e5_0000_0001;
+    let mut next = || {
+        r ^= r >> 12;
+        r ^= r << 25;
+        r ^= r >> 27;
+        (r.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 40) as u32 & 0xff_ffff
+    };
+    for n in 1..=32usize {
+        let cols: alloc::vec::Vec<u32> = (0..n).map(|_| next()).collect();
+        let list: alloc::vec::Vec<alloc::string::String> =
+            cols.iter().map(|c| alloc::format!("#{c:06x}")).collect();
+        // Column i shows colour i at k = i/(n - 1) (0 for n = 1).
+        let k = if n == 1 {
+            "0".into()
+        } else {
+            alloc::format!("min(px, {})/{}", n - 1, n - 1)
+        };
+        let src = alloc::format!("palette mine = {}\npal(mine, {k})", list.join(",\n  "));
+        let f = spr_frame(&src);
+        for (i, &c) in cols.iter().enumerate() {
+            let p = &f[i * 3..i * 3 + 3];
+            assert_eq!(
+                p,
+                [(c >> 16) as u8, (c >> 8) as u8, c as u8],
+                "{n} colours: colour {i}\n{src}"
+            );
+        }
+        // The ends: below 0 the first, past 1 the last.
+        let g = spr_frame(&alloc::format!(
+            "palette mine = {}\npal(mine, x*3 - 1)",
+            list.join(", ")
+        ));
+        assert_eq!(
+            &g[..3],
+            &[(cols[0] >> 16) as u8, (cols[0] >> 8) as u8, cols[0] as u8]
+        );
+        let l = cols[n - 1];
+        assert_eq!(
+            &g[127 * 3..128 * 3],
+            &[(l >> 16) as u8, (l >> 8) as u8, l as u8]
+        );
+    }
+    // Scaled (`pal(P, v) * k`) and covered, as `rgb` of its bytes would be.
+    let a = spr_frame("palette sea = #003366, #3399cc, #ffffff\npal(sea, 0.5) * y");
+    let b = spr_frame("rgb(0.2*y, 0.6*y, 0.8*y)");
+    assert_eq!(a, b);
+    let c = spr_frame("palette sea = #003366, #3399cc, #ffffff\nlayer { gray(0.25) }\nlayer add { pal(sea, 1, x) }");
+    let d = spr_frame("layer { gray(0.25) }\nlayer add { rgb(1, 1, 1, x) }");
+    assert_eq!(c, d);
+    // Three of a formula's own, one stored once, in parts too; a name a
+    // formula sets is still that name.
+    let p = compile("palette a1 = #f00, #0f0\npalette a2 = #00f, #fff\npart q {\n  palette a3 = #f00, #0f0\n  palette a4 = #123, #456\n  pal(a4, x)\n}\nlayer { pal(a1, x) }\nlayer add { pal(a2, y, 0.5) }\nlayer add { q(x, y, 0.5) }").unwrap();
+    assert_eq!(p.layers(), 3);
+    compile("palette = 3\ngray(palette*x)").unwrap();
+    assert_eq!(
+        spr_frame("palette p1 = #ff0000\npal(p1, x)")[..3],
+        [255, 0, 0]
+    );
+}
+
+/// The palettes' errors (E921-E924).
+const PALETTE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
+    (
+        "layer {\npalette p = #fff\npal(p, x)\n}",
+        "a palette goes at the top",
+        2,
+        1,
+        "E921",
+    ),
+    (
+        "palette p = #fff, 3\npal(p, x)",
+        "a palette is 1 to 32 colours",
+        1,
+        19,
+        "E922",
+    ),
+    (
+        "palette p = red\npal(p, x)",
+        "a palette is 1 to 32 colours",
+        1,
+        13,
+        "E922",
+    ),
+    (
+        "palette p1 = #f00\npalette p2 = #0f0\npalette p3 = #00f\npalette p4 = #fff\npal(p4, x)",
+        "3 palettes of its own at most",
+        4,
+        1,
+        "E923",
+    ),
+    (
+        "palette fire = #f00\npal(fire, x)",
+        "a palette's name",
+        1,
+        9,
+        "—",
+    ),
+    (
+        "palette p = #f00\npalette p = #0f0\npal(p, x)",
+        "`p` is already set on line 1",
+        2,
+        9,
+        "—",
+    ),
+    ("palette p = #f00\npal(q, x)", "and yours: p", 2, 5, "—"),
+];
+
+#[test]
+fn palette_error_messages() {
+    let mut bad = alloc::vec::Vec::new();
+    for &(src, want, line, col, code) in PALETTE_ERRORS {
+        match compile(src) {
+            Ok(_) => bad.push(alloc::format!("{code} {src:?}: compiled")),
+            Err(e) => {
+                let lc = e.line_col(src);
+                if !e.msg.contains(want) || lc != (line, col) {
+                    bad.push(alloc::format!(
+                        "{code} {src:?}: got {:?} at {lc:?}, want {want:?} at {:?}",
+                        e.msg,
+                        (line, col)
+                    ));
+                }
+            }
+        }
+    }
+    let many: alloc::vec::Vec<alloc::string::String> =
+        (0..33).map(|k| alloc::format!("#{k:02x}0000")).collect();
+    let e = compile(&alloc::format!(
+        "palette p = {}\npal(p, x)",
+        many.join(", ")
+    ))
+    .unwrap_err();
+    if !e.msg.contains("1 to 32 colours") {
+        bad.push(alloc::format!("E922 33: {}", e.msg));
+    }
+    // 200 table numbers and two palettes: past 256.
+    let nums: alloc::vec::Vec<alloc::string::String> =
+        (0..200).map(|k| alloc::format!("{k}")).collect();
+    let e = compile(&alloc::format!(
+        "table T = {}\npalette p = #f00\npalette q = #0f0\npal(q, T[x])",
+        nums.join(", ")
+    ))
+    .unwrap_err();
+    if !e
+        .msg
+        .contains("tables, sprites and palettes hold 256 numbers")
+    {
+        bad.push(alloc::format!("E924: {}", e.msg));
+    }
+    let e = compile(&alloc::format!(
+        "palette p = #f00\npalette q = #0f0\ntable T = {}\npal(q, T[x])",
+        nums.join(", ")
+    ))
+    .unwrap_err();
+    if !e.msg.contains("256") {
+        bad.push(alloc::format!("E924 (table after): {}", e.msg));
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}

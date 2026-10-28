@@ -217,6 +217,20 @@ The last line is the colour:
 | a colour expression | arithmetic on colours, read once a channel (below) |
 | `rgb(c, k)` | colour expression `c` covering `k` of the pixel |
 
+**Palettes of your own.** `palette sea = #001020, #0060a0, #40c0e0, #fff`
+(a line at the top of the formula or a part; 1 to 32 colours, a `,` may
+end a line; up to 3 palettes) is used as the built-ins are: `pal(sea, k)`,
+`pal(sea, k) * v`, `pal(sea, k, cover)`. With n colours, `pal(sea,
+i/(n−1))` is colour i: the first at 0, the last at 1 (`pal(sea, 1/3)` the
+second of four), and k in between gives the nearest — bands, not a blend,
+so a smooth ramp needs its steps written out. One step a pixel, the cost of
+a built-in palette: a scene's colours by index without `pick`s.
+
+```psi
+palette dusk = #10082a, #4a1858, #c0306a, #ff8c40, #ffe0a0
+pal(dusk, floor(y*5)/4)      -- five bands, bottom to top
+```
+
 **Colours.** `#rrggbb` names a colour by its bytes: the channel `cc` is
 exactly `cc/255`, so `#ff8000` is drawn as 255, 128, 0. A colour goes only
 in a colour line, never in a name (`v = #f80` is an error: colours are not
@@ -453,6 +467,7 @@ the formula's `t`.
 | loop turns a frame (every run of a loop's body) | 2,048 | draws too much a frame |
 | loops inside loops | two deep | two deep at most |
 | `table` numbers | 256 in all (sprites share them) | a table holds numbers only, up to 256 in all |
+| `palette` (your own) | 1 to 32 colours, 3 palettes; each takes 32 of the 256 table numbers | a palette is 1 to 32 colours / 3 palettes of its own at most / tables, sprites and palettes hold 256 numbers |
 | `sprite` | key: 16 characters; rows: 64 wide, 32 tall; stored in the 256 table numbers (a 26 × 9 picture with 4 key characters takes 23) | `X` is not in the sprite's key / as wide as its first / 1 to 32 rows / sprites and tables hold 256 numbers in all |
 | `draw { }` blocks | one (the formula's or one part's) | there can be one `draw { }` block |
 | lines and dots drawn a frame | 2,048; and 16,384 line steps (pixels walked, on the panel or off; a line wholly off one side walks none): past either the rest are skipped, the same on every device | — |
@@ -634,6 +649,14 @@ gray(s[px, ty])
 ```
 
 Every character of a sprite's rows needs its number in the key line.
+
+```psi error
+-- error: a palette is 1 to 32 colours
+palette sea = #003, 0.5, #fff
+pal(sea, y)
+```
+
+A palette holds colours only (`#…`).
 
 ```psi error
 -- error: there is no power operator
@@ -1416,6 +1439,29 @@ frame {
 u = px - 2 - sway
 k = inv[u % 14, ty - 10 + f*8] * (u >= 0) * (u < 123)   -- nine, 14 px apart
 hsv(0.33 - ty/100, 0.7, k)
+```
+
+### 37. Night city (a palette of its own, a sprite for its index)
+
+Windows lit at random in a skyline: the colours are a palette of the
+formula's own (sky, building, three window colours), each pixel picks its
+place in it — a sprite of a building's pattern, a hash per window and a
+per-row sky — with one `pal` step instead of three `pick`s.
+
+```psi example=night-city
+loop 8
+palette city = #050812, #141a2c, #2a2f44, #ffd070, #fff4c0
+sprite block {
+  key . 2, w 3
+  .w.w.w.
+  .......
+}
+frame { blink = floor(t*2) }
+col = floor(px/7); top = 10 + hash(col, 3)*16      -- each building's height
+on = hash(col*31 + floor(ty/2), blink) > 0.6       -- this window lit just now
+inside = ty > 31 - top
+k = inside ? block[px % 7, ty % 2]*on + (1 - on)*2 : (py > 24 ? 0 : 1)
+pal(city, k/4)
 ```
 
 ## 17. In the product (not built)
