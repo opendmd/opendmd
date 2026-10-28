@@ -2129,7 +2129,8 @@ fn fused_runs_are_their_steps() {
             LEAF[r.below(LEAF.len())].to_string()
         }
     };
-    const KINDS: [&str; 7] = [
+    const KINDS: [&str; 8] = [
+        "mul_add",
         "checker",
         "checker_3",
         "pal_select",
@@ -2138,7 +2139,7 @@ fn fused_runs_are_their_steps() {
         "colour_of_ink",
         "colour_of_ink_1",
     ];
-    let mut kinds = [0usize; 7];
+    let mut kinds = [0usize; 8];
     let (mut compiled, mut frames) = (0, 0);
     for k in 0..n {
         // (Mostly values of the pixel, not of its column or row alone: those
@@ -2242,10 +2243,13 @@ fn fused_runs_are_their_steps() {
             _ => "rgb(cell, side, lit)".to_string(),
         };
         lines.insert(0, "fog = py < 3 ? 0 : py < 10 ? 0.625 : 1".into());
-        let draw = if colour.contains("ink") {
-            "table T = 0.1, 0.5, 0.9, 0.3\ndraw { for k < 40 { dot(hash(k, 3)*128, hash(k, 5)*32 + t*3, frac(k/7)) }\nline(0, 3, 127, 20 + t, 0.2, 1) }\n"
-        } else {
-            ""
+        // (Sparse dots and a line, or streaks whose bytes change at nearly
+        // every pixel: a colour of ink is kept per byte on the first and
+        // drawn by its steps on the second, `fuse::INK_CHANGES`.)
+        let draw = match (colour.contains("ink"), r.below(2)) {
+            (false, _) => "",
+            (true, 0) => "table T = 0.1, 0.5, 0.9, 0.3\ndraw { for k < 40 { dot(hash(k, 3)*128, hash(k, 5)*32 + t*3, frac(k/7)) }\nline(0, 3, 127, 20 + t, 0.2, 1) }\n",
+            _ => "table T = 0.1, 0.5, 0.9, 0.3\ndraw { for k < 64 { line(k*2, 0, k*2 + 30 + t, 31, 0, 1) } }\n",
         };
         let body = if reuse {
             // The values on the way read again in another layer.

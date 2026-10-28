@@ -39,6 +39,20 @@ pub(crate) const F_SELPAL_K: u8 = 6;
 /// The bottom layer's `pal(P, ink)` or `gray(ink)`: the canvas's bytes to
 /// colours in one pass (no lane of `ink` written and read back).
 pub(crate) const F_INK1: u8 = 7;
+/// `add_w(mul_w(a, b), c)` (or `mul_n`), a a lane, b a value for the
+/// lane, c either (a value for the lane with `mul_n`, or when the result
+/// goes into a's register). (Dropped after s2probe-a's 18 ns a pixel,
+/// back after s2probe-b: Rotozoom floor 1,766 -> 1,965 µs and Tunnel
+/// 3,399 -> 3,479 without it, ~24 ns a pixel each.)
+pub(crate) const F_MADD: u8 = 8;
+/// An `F_INK` lane whose canvas bytes change more often than this is
+/// drawn by its steps (each change works the colour out again out of
+/// line, ~1.9 µs on the ESP32: s2probe-b's streaks drew 10.2 ms kept per
+/// byte against 2.3 by the steps). The count is one pass over the lane's
+/// bytes; below it the run costs less than its steps (cube ~270 ns a
+/// pixel against ~1.9 µs a change: 128 pixels pay for ~16 changes).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const INK_CHANGES: usize = 8;
 /// The bottom layer's `pal(P, pick(m, …))` (`* k`, k a value for the
 /// lane): the choices' colours worked out once a lane, then looked up.
 pub(crate) const F_PICKPAL: u8 = 4;
@@ -69,6 +83,7 @@ pub(crate) fn name(kind: u8) -> &'static str {
         F_SELPAL => "pal_select",
         F_SELPAL_K => "pal_select_k",
         F_INK1 => "colour_of_ink_1",
+        F_MADD => "mul_add",
         F_PICKPAL => "pal_pick",
         F_INK => "colour_of_ink",
         _ => "?",
@@ -144,6 +159,27 @@ fn pattern(ops: &[Op]) -> Option<(u8, usize, [u8; 3], u8)> {
                 && d.d != y
                 && d.d != r1;
             ok.then_some((F_CHECKER3, 3, [r2, c.d, c.d], d.d))
+        }
+        MUL_W | MUL_N => {
+            let b = op(1)?;
+            let l = match (is_lane(a.a), is_lane(a.b)) {
+                (true, false) => a.a,
+                (false, true) => a.b,
+                _ => return None,
+            };
+            let r = a.d;
+            let c = if b.a == r { b.b } else { b.a };
+            // (The destination may be the lane multiplied when the added
+            // value is one for the lane: a kernel that reads and writes
+            // its own lane.)
+            let ok = b.code == ADD_W
+                && (b.a == r || b.b == r)
+                && c != r
+                // (mul_n's kernel takes a value for the lane only.)
+                && (a.code == MUL_W || !is_lane(c))
+                && (b.d != l || !is_lane(c))
+                && b.d != c;
+            ok.then_some((F_MADD, 2, [r, r, r], b.d))
         }
         SELECT => {
             let b = op(1)?;
@@ -275,21 +311,20 @@ pub(crate) fn fuse(prog: &mut Program) {
 }
 
 /// What a fused run of kind `kind` saves, ns a pixel, against its steps'
-/// costs, from s2probe-a on the spare (2026-10-28): Rotozoom floor 225 ns a
-/// pixel in all (checker, two multiply-adds at 18, `pal_select` of a row
-/// scale), Tunnel 108 (checker, a multiply-add, `pal_select_k`), the
-/// pick 73. The split between the checker and the colours is a reading
-/// of those two (s2probe-b's `fuse` rows measure each alone).
+/// costs: s2probe-b's `fuse` rows on the spare (2026-10-28), each pattern
+/// alone (the multiply-add from s2probe-a and the two Rotozooms' change
+/// between the probes).
 pub(crate) fn saved(kind: u8) -> u32 {
     match kind {
-        F_CHECKER => 70,
-        F_CHECKER3 => 40,
-        F_SELPAL => 120,
-        F_SELPAL_K => 20,
-        F_PICKPAL => 73,
+        F_CHECKER => 74,
+        F_CHECKER3 => 50,
+        F_SELPAL => 188,
+        F_SELPAL_K => 134,
+        F_PICKPAL => 50,
         // The ink lane's write and read (`ink` 70 a pixel) and the colour's
         // own load.
-        F_INK1 => 80,
+        F_INK1 => 70,
+        F_MADD => 22,
         // (An `F_INK` run is costed whole by the estimate: `INK_NS`.)
         F_INK => 0,
         _ => 0,

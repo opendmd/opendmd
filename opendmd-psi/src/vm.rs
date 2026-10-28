@@ -1249,10 +1249,39 @@ fn fused<const N: usize>(
             }),
             _ => return false,
         },
+        (F_MADD, [mul, add]) => {
+            let (a, b) = match (s.arg(al, mul.a, base), s.arg(al, mul.b, base)) {
+                (Arg::Lane(a), Arg::Sc(b)) | (Arg::Sc(b), Arg::Lane(a)) => (a, b),
+                _ => return false,
+            };
+            let c = s.arg(al, if add.a == mul.d { add.b } else { add.a }, base);
+            let w = mul.code == code::MUL_W;
+            let own = core::ptr::eq(a, s.lanes[reg_index(add.d)].as_ptr());
+            let d = s.dest(al, add.d);
+            match (w, c) {
+                // (Into the lane multiplied: read and written in place.)
+                (true, Arg::Sc(c)) if own => {
+                    fast1_self(d, move |a| fixed::add_w(fixed::mul_w(a, b), c))
+                }
+                (false, Arg::Sc(c)) if own => {
+                    fast1_self(d, move |a| fixed::add_w(fixed::mul_n(a, b), c))
+                }
+                _ if own => return false,
+                (true, Arg::Sc(c)) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_w(a, b), c)),
+                (true, Arg::Lane(c)) => fast2(d, L(a), L(c), move |a, c| {
+                    fixed::add_w(fixed::mul_w(a, b), c)
+                }),
+                (false, Arg::Sc(c)) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_n(a, b), c)),
+                (false, Arg::Lane(_)) => return false,
+            }
+        }
         (F_INK, [..]) => {
             let sc = &s.sc;
             let f = |b: u8| ink_colour(ops, b, sc, t, tabs, own);
             match ink {
+                // (A lane whose bytes change often: its steps, which cost
+                // the same whatever the canvas.)
+                Some(k) if ink_changes(k) > INK_CHANGES => return false,
                 Some(k) => ink_memo(px, k, f),
                 None => px.fill(f(0)),
             }
@@ -1323,6 +1352,27 @@ fn pal_select_lanes(
             rgb[w] = fixed::scale_rgb(p[idx[w]], s);
         }
         *o = rgb[w];
+    }
+}
+
+/// How often the canvas's byte changes along the lane (`crate::fuse`'s
+/// `F_INK` gate).
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn ink_changes(ink: &[u8]) -> usize {
+    ink.windows(2).filter(|w| w[0] != w[1]).count()
+}
+
+/// [`fast1`] of a lane into itself (a fused run whose result goes into the
+/// register it reads, `crate::fuse`).
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn fast1_self<const N: usize>(d: &mut [i32; N], f: impl Fn(i32) -> i32) {
+    for o in d.as_chunks_mut::<4>().0 {
+        let x = *o;
+        *o = [f(x[0]), f(x[1]), f(x[2]), f(x[3])];
     }
 }
 
