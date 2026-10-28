@@ -198,7 +198,7 @@ pub fn info() -> Vec<u32> {
     let p = &s.prog;
     let (f, r, x) = p.counts();
     alloc::vec![
-        p.len() as u32,
+        p.steps() as u32,
         f as u32,
         r as u32,
         x as u32,

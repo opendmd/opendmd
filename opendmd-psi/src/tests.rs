@@ -1818,9 +1818,15 @@ fn draw_estimate_scales_with_turns() {
         (p.draw_us(), p.lane_loops())
     };
     let (a, b) = (e(3), e(30));
-    assert!(a.1 == 0 && b.1 == 0 && a.0 > 10 && b.0 > 9 * (a.0 - 10), "{a:?} {b:?}");
+    assert!(
+        a.1 == 0 && b.1 == 0 && a.0 > 10 && b.0 > 9 * (a.0 - 10),
+        "{a:?} {b:?}"
+    );
     let (a, b) = (e(128), e(1024));
-    assert!(a.1 == 1 && b.1 == 1 && a.0 > 10 && b.0 > 7 * (a.0 - 10), "{a:?} {b:?}");
+    assert!(
+        a.1 == 1 && b.1 == 1 && a.0 > 10 && b.0 > 7 * (a.0 - 10),
+        "{a:?} {b:?}"
+    );
     // As lanes, a big loop is cheaper than a turn at a time was (~1.2 µs
     // a turn for these three steps and the dot).
     assert!(b.0 < 1024 * 12 / 10, "{b:?}");

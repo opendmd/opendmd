@@ -111,14 +111,17 @@ pub(crate) fn run<const N: usize>(
                 // Out of turns: past the loop (its END), not into it.
                 if turns >= TURNS {
                     pc = (op.b as usize + 1).max(pc);
-                } else if let Some(vl) = lanes.then(|| prog.vector_loop(pc - 1)).flatten() {
+                } else if lanes {
                     // Its turns (as many as a turn at a time would run:
                     // each END counts one, and the last is the one that
                     // reaches the count or the frame's turns).
-                    let n = vl.count.min(TURNS - turns);
-                    run_lanes(prog, s, t, ink, &mut pen, pc - 1, &vl, n);
-                    turns += n;
-                    pc = vl.end + 1;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(vl) = prog.vector_loop(pc - 1) {
+                        let n = vl.count.min(TURNS - turns);
+                        run_lanes(prog, s, t, ink, &mut pen, pc - 1, &vl, n);
+                        turns += n;
+                        pc = vl.end + 1;
+                    }
                 }
             }
             code::END => {
@@ -143,6 +146,7 @@ pub(crate) fn run<const N: usize>(
 
 /// Lines and dots of a lane loop's body whose operands are looked up once
 /// a lane of turns (more are looked up each turn).
+#[cfg(not(target_arch = "wasm32"))]
 const PRIMS: usize = 6;
 
 /// `n` turns of the loop whose `FOR` is at `at` ([`Program::vector_loop`]
@@ -150,6 +154,11 @@ const PRIMS: usize = 6;
 /// turns (lane `j` turn `j`: the counter's lane holds j), then each turn's
 /// lines and dots in order. Then the slots as a turn at a time leaves
 /// them: the last turn's values, the counter at `n`.
+///
+/// Not in wasm: the web app's previews draw the same bytes a turn at a
+/// time, without a second copy of the lane steps' dispatch in the
+/// download.
+#[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn run_lanes<const N: usize>(

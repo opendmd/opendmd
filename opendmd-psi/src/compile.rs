@@ -4266,7 +4266,15 @@ pub fn compile_with(
     runs: bool,
     narrow: bool,
 ) -> Result<Info, Error> {
-    compile_impl(src, prog, runs, narrow, true)
+    compile_impl(src, prog, runs, narrow, true, true)
+}
+
+/// [`compile_into`] without the fused runs' markers (`crate::fuse`; the
+/// same bytes): for the tests that compare, and psi-probe's before and
+/// after.
+#[doc(hidden)]
+pub fn compile_unfused(src: &str, prog: &mut Program) -> Result<Info, Error> {
+    compile_impl(src, prog, true, true, true, false)
 }
 
 /// [`compile_with`] with (`reuse`) or without scalar slots used again once
@@ -4280,7 +4288,7 @@ pub fn compile_opts(
     narrow: bool,
     reuse: bool,
 ) -> Result<Info, Error> {
-    compile_impl(src, prog, runs, narrow, reuse)
+    compile_impl(src, prog, runs, narrow, reuse, true)
 }
 
 /// [`compile_opts`]'s body, in each of its callers (one frame fewer under
@@ -4292,6 +4300,7 @@ fn compile_impl(
     runs: bool,
     narrow: bool,
     reuse: bool,
+    fuse: bool,
 ) -> Result<Info, Error> {
     prog.clear();
     let mut r = compile_inner(src, prog, runs, reuse);
@@ -4304,6 +4313,9 @@ fn compile_impl(
         prog.clear();
     } else if narrow {
         crate::range::narrow(prog);
+        if fuse {
+            crate::fuse::fuse(prog);
+        }
     }
     r
 }
