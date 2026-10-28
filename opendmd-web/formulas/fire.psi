@@ -1,0 +1,10 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Fire"
+about "Flames licking up from the bottom"
+loop 4
+-- curl bends the flames, more and more as they rise
+curl = sin(y*1.5 - t)*0.25 + sin(y*3 - t*2 + x*4)*0.15
+flames = sin(x*6 + curl)*0.5 + sin(x*11 - curl)*0.5
+heat = (1 - y)*(1.6 + flames*0.7) - 0.5
+pal(fire, clamp(heat, 0, 0.95))

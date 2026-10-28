@@ -1,9 +1,9 @@
-//! The examples gallery's contact sheet, for tuning them: every formula in
-//! `opendmd-web/www/formulas.json` at four times in its loop (sliders at
-//! their saved values, 10:09:30), each 128x32 frame scaled 3x, one PPM per
+//! The examples' contact sheet, for tuning them: every formula in
+//! `opendmd-web/formulas/` (or DIR) at four times in its loop (controls at
+//! their defaults, 10:09:30), each 128x32 frame scaled 3x, one PPM per
 //! example, plus its steps and the ESP32 estimate on stdout.
 //!
-//!     cargo run --release --example sheet -- ../opendmd-web/www/formulas.json OUT_DIR
+//!     cargo run --release --example sheet -- ../opendmd-web/formulas OUT_DIR
 
 // (Host only: `wasm-pack test` builds the examples for wasm32 too.)
 #[cfg(target_arch = "wasm32")]
@@ -12,16 +12,15 @@ fn main() {}
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     use opendmd_psi::{compile, render_rows_ink, Ink, Inputs, Scratch, H, OWN, W};
-    use opendmd_psi_web::examples;
+    use opendmd_psi_web::examples_in;
     use std::io::Write;
 
     let mut args = std::env::args().skip(1);
-    let json = args.next().expect("formulas.json");
+    let dir = std::path::PathBuf::from(args.next().expect("the examples' folder"));
     let out = std::path::PathBuf::from(args.next().expect("output directory"));
     std::fs::create_dir_all(&out).unwrap();
-    let text = std::fs::read_to_string(json).unwrap();
     const S: usize = 3;
-    for (k, ex) in examples(&text).iter().enumerate() {
+    for (k, ex) in examples_in(&dir).iter().enumerate() {
         let p = compile(&ex.src).unwrap_or_else(|e| panic!("{}: {}", ex.name, e.render(&ex.src)));
         let (f, r, x) = p.counts();
         println!(
@@ -45,11 +44,9 @@ fn main() {
                 hour: 10,
                 minute: 9,
                 second: 30,
-                a: ex.a,
-                b: ex.b,
-                c: ex.c,
                 ..Inputs::default()
             };
+            [i.a, i.b, i.c] = p.meta().values([None; 3]);
             i.set_ms(&p, u64::from(ms));
             render_rows_ink(
                 &p,

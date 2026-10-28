@@ -3,13 +3,20 @@ the part of formulas/index.html between the gallery markers.
 
 tools/site.py imports it (`build`, `marked`) and writes the page around
 it. It also runs by hand over a built site, rewriting its gallery in place
-from the site's demo/formulas.json (the examples) and DIR/*.psi (the
+from the site's formulas/src/*.psi (the examples) and DIR/*.psi (the
 contributions, a checkout of the public gallery repo's gallery/):
 
     python3 -I gallery_page.py SITE --tool opendmd-gallery [--gallery DIR]
 
 The Python standard library only (tools/gallery-pages-test.py checks the
 page it writes).
+
+Every entry's name, line about it, controls and look come from the checker
+(`opendmd-gallery check --json`), which reads them from the formula's own
+`name "…"`, `about "…"`, `control` and `look` lines with the compiler; the
+file's header holds only `-- author:` and `-- licence:` (and `-- bundle` on
+OpenDMD's examples, opendmd-web/formulas/, which the site build copies to
+SITE/formulas/src/).
 """
 
 from __future__ import annotations
@@ -22,8 +29,6 @@ import shutil
 import struct
 import subprocess
 import sys
-import tempfile
-import unicodedata
 import zlib
 from pathlib import Path
 
@@ -52,19 +57,18 @@ def urlencoded(pairs: list[tuple[str, str]]) -> str:
     return "&".join(f"{enc(k)}={enc(v)}" for k, v in pairs)
 
 
+# A formula's own `name "…"` line (the declarations come first, unindented).
+NAME_LINE = re.compile(r'^name "[^"\n]*"', re.M)
+
+
 def share_hash(e: dict, name: str | None = None) -> str:
-    """`#formula=…&name=…&a=…`: only the sliders the formula reads that are
-    not 0, as `+v.toFixed(2)` writes them."""
-    pairs = [("formula", e["src"]), ("name", name if name is not None else e["name"])]
-    for j, k in enumerate("abc"):
-        if e["inputs"] & (1 << j) and e.get(k):
-            pairs.append((k, f"{e[k]:.2f}".rstrip("0").rstrip(".")))
-    return "#" + urlencoded(pairs)
-
-
-def slugify(name: str) -> str:
-    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
-    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:48].strip("-")
+    """`#formula=…&name=…`, as the web app's `link` writes it for a formula
+    with its controls at their defaults (which it leaves out). With `name`
+    (a remix), the formula's `name` line says it too."""
+    src = e["src"]
+    if name is not None:
+        src = NAME_LINE.sub(lambda _: f'name "{name}"', src, count=1)
+    return "#" + urlencoded([("formula", src), ("name", name if name is not None else e["name"])])
 
 
 def recompress_png(data: bytes) -> bytes:
@@ -123,27 +127,19 @@ def check_gallery(tool: Path, files: list[Path], thumbs: Path, trusted: bool = F
     return good, bad
 
 
-def build(formulas: Path, examples: list[dict], contrib: Path | None, tool: Path) -> str:
+def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path) -> str:
     """Writes the thumbnails under `formulas` (formulas/examples/ and
     formulas/thumbs/, emptied first) and returns the page's body: the
     contributions in `contrib` (checked again here, so a file that should
-    not have been merged is left out, not published) and the examples (the
-    web app's formulas.json), with thumbnails drawn by the checker."""
+    not have been merged is left out, not published) and OpenDMD's examples
+    (the `.psi` files in `examples`), with thumbnails drawn by the checker."""
     for d in ("examples", "thumbs"):
         shutil.rmtree(formulas / d, ignore_errors=True)
-    with tempfile.TemporaryDirectory() as tmp:
-        files = []
-        for x in examples:
-            vals = " ".join(f"{k}={x[k]:.2f}".rstrip("0").rstrip(".") for k in "abc" if x.get(k))
-            head = [f"-- name: {x['name']}", f"-- description: {x['desc']}", "-- author: OpenDMD", "-- licence: CC0-1.0"]
-            if vals:
-                head.append(f"-- values: {vals}")
-            p = Path(tmp) / f"{slugify(x['name'])}.psi"
-            p.write_text("\n".join(head) + "\n" + x["src"].rstrip("\n") + "\n", encoding="utf-8")
-            files.append(p)
-        seeds, bad = check_gallery(tool, files, formulas / "examples", trusted=True)
-        if bad or len(seeds) != len(examples):
-            raise SystemExit(f"an example fails the gallery's checks: {bad}")
+    files = sorted(p for p in examples.glob("*.psi") if not p.is_symlink() and p.is_file())
+    seeds, bad = check_gallery(tool, files, formulas / "examples", trusted=True)
+    if bad or not files or len(seeds) != len(files):
+        raise SystemExit(f"an example fails the gallery's checks: {bad}")
+    seeds = sorted(seeds, key=lambda e: (e["name"].casefold(), e["slug"]))
     entries: list[dict] = []
     if contrib is not None:
         if not contrib.is_dir():
@@ -167,10 +163,17 @@ def build(formulas: Path, examples: list[dict], contrib: Path | None, tool: Path
         t = html.escape
         lic, url = LICENCE_LINKS[e["licence"]]
         name = e["name"]
+        # What the formula says of itself: whether it can be the panel's look
+        # (its `look` line), whether the panel comes with it, its controls.
+        badges = "".join(f'<span class="fbadge" title="{t(why)}">{t(b)}</span>' for b, why, on in (
+            ("look", "It can be the panel's look: drawn over every GIF (Settings › Look)", e.get("look")),
+            ("on the panel", "The web app comes with it: in Formulas, under Bundled", e.get("bundle"))) if on)
+        ctl = e.get("controls") or []
         return (f'<li class="ftile"><a class="fpic" href="../f/{t(share_hash(e))}" tabindex="-1" aria-hidden="true">'
                 f'<picture class="led"><img src="{t(pic)}" alt="" width="128" height="32" loading="lazy" decoding="async"></picture></a>'
-                f'<h3>{t(name)}</h3><p class="fdesc">{t(e["description"])}</p>'
-                f'<p class="fby">by {t(e["author"])} · <a href="{url}" rel="license">{lic}</a></p>'
+                f'<h3>{t(name)}{badges}</h3><p class="fdesc">{t(e["about"])}</p>'
+                + (f'<p class="fctl">Controls: {t(", ".join(ctl))}</p>' if ctl else "")
+                + f'<p class="fby">by {t(e["author"])} · <a href="{url}" rel="license">{lic}</a></p>'
                 f'<p class="facts"><a class="cta" href="../f/{t(share_hash(e))}">Open</a>'
                 f'<a class="cta alt" href="../demo/{t(share_hash(e, (name + " remix")[:60]))}">Remix</a></p></li>')
     community = "".join(tile(e, f"thumbs/{e['slug']}.png") for e in entries)
@@ -183,7 +186,8 @@ def build(formulas: Path, examples: list[dict], contrib: Path | None, tool: Path
             + (f'<ul class="ftiles">{community}</ul>\n' if community else
                '<p class="tiles-note">Nothing here yet: be the first. Make a formula in the <a href="../demo/#formulas">demo</a>, '
                'then Copy share link, and on its page, Submit to the gallery.</p>\n')
-            + f'<h2 id="examples">Examples</h2>\n<p class="tiles-note">By OpenDMD, the ones the web app comes with (CC0).</p>\n'
+            + f'<h2 id="examples">Examples</h2>\n<p class="tiles-note">By OpenDMD (CC0). The ones marked <em>on the panel</em> come with '
+            f'the web app; Open any of the others and send it to your display from its page.</p>\n'
             f'<ul class="ftiles">{ex}</ul>\n')
 
 
@@ -203,17 +207,16 @@ def splice(page: str, body: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Rewrite a built site's formula gallery (formulas/) in place.")
-    ap.add_argument("site", type=Path, help="the built site (its demo/formulas.json and formulas/index.html)")
+    ap.add_argument("site", type=Path, help="the built site (its formulas/src/*.psi and formulas/index.html)")
     ap.add_argument("--tool", type=Path, required=True, help="opendmd-gallery, built")
     ap.add_argument("--gallery", type=Path, help="the contributions (the public gallery repo's gallery/)")
     a = ap.parse_args()
     page = a.site / PAGE
     if page.is_symlink() or not page.is_file():
         raise SystemExit(f"no {page}")
-    examples = json.loads((a.site / "demo/formulas.json").read_text(encoding="utf-8"))
     text = page.read_text(encoding="utf-8")
     splice(text, "")  # the markers are there, before anything is rewritten
-    body = build(page.parent, examples, a.gallery, a.tool)
+    body = build(page.parent, page.parent / "src", a.gallery, a.tool)
     page.write_text(splice(text, body), encoding="utf-8")
     n, ex = body.count('src="thumbs/'), body.count('src="examples/')
     print(f"{PAGE}: {n} contribution{'s' * (n != 1)}, {ex} examples")

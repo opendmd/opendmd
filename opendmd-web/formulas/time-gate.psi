@@ -1,0 +1,47 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Time gate"
+about "The Chrono Trigger time gate: star rings rushing out over streaks warping on Mode 7 zoom tables"
+control breathing = 0.5 "Breathing"
+loop 4.8
+fps 50
+-- Time gate (Chrono Trigger), built the way the game does it:
+-- * the lines: one Mode 7 tile of ">" streaks shown twice, split at
+--   the middle, both halves through the same per-row zoom tables; the
+--   tile scrolls down in the top half and up in the bottom half
+-- * the tile's palette swaps between purple and teal
+-- * the blue rings: sprites, colour-averaged with the lines in the
+--   middle (lines at half strength there), opaque further out
+-- Inspired by the SNES game's effect; our own code, no assets.
+dx = px - 63.5; dy = py - 15.5
+-- the rings: depth plus a zig-zag round the walls (kept by the panel)
+star = sqrt(len(dx, dy))*1.5 + abs(tri(atan2(dy, dx)*9))*0.45
+bg = tri(star - t/0.15) + 0.3
+-- line strength, by ring: half (sprites averaged over it) inside
+-- ~25 px, full (opaque sprites, the line seen between them) past ~38 px
+k = clamp(star*0.28 - 1.6, 0.5, 1)
+frame {
+  -- palette: purple for 2.4 s, teal for 2.4 s, ~0.4 s crossfades
+  mp = clamp(sin(t/4.8)*4, -1, 1)*0.5 + 0.5
+  cr = 0.17 + mp*0.88; cg = 1.07 - mp*1.01      -- line red, green (blue 1)
+  zb = 1 + breathing*0.3*sin(t/4.8)             -- the tables breathing
+  -- each half: start row in the tile (top down, bottom up, one band
+  -- per 1.2 s), sideways offset, row-offset slant
+  tv0 = t/1.2 - 1.24; tu0 = 0.271; tsl = 5.1    -- top
+  bv0 = -t/1.2 - 1.28; bu0 = 1.259; bsl = -5.1  -- bottom
+}
+-- the tables, per row: z falls from the split (row 16 of 32) outward
+up = dy > 0
+z = 1/(abs(dy) + 10.33)
+sx = z*1.0417*zb                        -- s(y): tile columns a pixel
+v = (up ? tv0 : bv0) + z*12.8*zb        -- f(y): which tile row
+u0 = (up ? tu0 : bu0) + (up ? tsl : bsl)*z - 63.5*sx
+off = u0 + 0.32*tri(v) + 0.25           -- the tile: streaks at u = 0.32*tri(v) + n
+-- each streak a tent 2 px either side (anti-aliased, never clipped),
+-- thinner and dimmer where streaks crowd towards the split
+per = 1/sx
+inv = 1/max(abs(dx), 1)
+g = min(per*0.125, (per*per*0.13)*inv)
+s = max(0, (tri(px*sx + off) - 1)*g + min(1, g))
+sw = s*k
+rgb(cr*sw, cg*sw, max(bg, sw))

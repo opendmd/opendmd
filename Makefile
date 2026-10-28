@@ -242,6 +242,8 @@ web:
 	rm -f $(WEB_WWW)/pkg/package.json $(WEB_WWW)/pkg/*.d.ts $(WEB_WWW)/pkg/README.md
 	rm -f $(WEB_WWW)/pkg-art/package.json $(WEB_WWW)/pkg-art/*.d.ts $(WEB_WWW)/pkg-art/README.md $(WEB_WWW)/pkg-art/.gitignore
 	rm -f $(WEB_WWW)/pkg-psi/package.json $(WEB_WWW)/pkg-psi/*.d.ts $(WEB_WWW)/pkg-psi/README.md $(WEB_WWW)/pkg-psi/.gitignore
+	@# The bundled Formulas (the -- bundle files in $(WEB)/formulas/; the site's gallery shows them all).
+	uv run tools/formulas-json.py $(WEB)/formulas $(WEB_WWW)/formulas.json
 	git describe --always --dirty --tags --match 'v*' > $(WEB_WWW)/version.txt
 	uv run tools/api-doc-check.py
 	rm -f $(WEB_WWW)/api.html $(WEB_WWW)/api.html.gz

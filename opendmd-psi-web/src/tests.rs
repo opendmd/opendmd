@@ -171,17 +171,46 @@ fn formulas() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn the_examples_are_light_enough_for_the_panel() {
-    let json = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../opendmd-web/www/formulas.json"
-    ))
-    .unwrap();
-    let all = crate::examples(&json);
-    assert!(all.len() >= 15, "{} examples", all.len());
+    let all = crate::examples();
+    assert!(all.len() >= 33, "{} examples", all.len());
+    // The ten the web app (and so the panel) ships: the owner's (formula-apps
+    // §3.1): six overlays, two clocks, two screensavers. The rest are the
+    // site gallery's.
+    let bundled: Vec<&str> = all.iter().filter(|e| e.bundled).map(|e| e.name.as_str()).collect();
+    assert_eq!(
+        bundled,
+        [
+            "Big clock", "Clock", "Corner clock", "Glitter", "Matrix", "Old photo", "Old TV",
+            "Scanlines", "Starfield", "Vignette"
+        ]
+    );
     for e in &all {
         let p = opendmd_psi::compile(&e.src)
             .unwrap_or_else(|err| panic!("{}: {}", e.name, err.render(&e.src)));
-        assert!(!e.name.is_empty() && !e.desc.is_empty(), "{e:?}");
+        // Each says what it is: its name (within the gallery's 40) and a line
+        // about it, in its own declarations; the file is named after it.
+        assert!(!e.name.is_empty() && e.name.chars().count() <= 40 && !e.about.is_empty(), "{e:?}");
+        let slug: String = e
+            .name
+            .to_lowercase()
+            .replace('é', "e")
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        assert_eq!(e.slug, slug, "{}: the file's name", e.name);
+        // One that draws over the GIF says it can be the look (Settings ›
+        // Look lists only those that declare it).
+        assert!(
+            !p.over() || p.meta().look().is_some(),
+            "{}: draws over the GIF without a `look` line",
+            e.name
+        );
+        assert!(
+            p.meta().look().is_none() || p.over(),
+            "{}: a `look` line on a formula that covers the GIF",
+            e.name
+        );
         // Short: seven lines, not counting comments or the parts pasted in.
         let mut depth = 0;
         let own = e
@@ -242,36 +271,17 @@ fn the_examples_are_light_enough_for_the_panel() {
     }
 }
 
-/// The path the web app sends for an example (js/psishow.js `fpath`:
-/// comments out, spaces collapsed, lines joined with `; `, lightly encoded)
-/// with the `&name=` Add to playlist puts on it, and the sliders at their
-/// most: within the panel's 2,048 B (`synth::MAX_FORMULA_PATH`).
+/// The path the web app sends for an example (js/psikit.js `path`: the
+/// compiler's `compact`, lightly encoded, its `about` line left out when
+/// that would pass 2,048 B), with the sliders at their most: within the
+/// panel's 2,048 B (`synth::MAX_FORMULA_PATH`). (Every example has a `name`
+/// line, so Add to playlist adds no `&name=`.)
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn every_example_fits_the_panels_path_as_sent() {
-    let json = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../opendmd-web/www/formulas.json"
-    ))
-    .unwrap();
-    for e in crate::examples(&json) {
-        let mut s = String::new();
-        for l in e.src.lines() {
-            let l = match (l.find("--"), l.find("//")) {
-                (Some(a), Some(b)) => &l[..a.min(b)],
-                (Some(a), None) | (None, Some(a)) => &l[..a],
-                (None, None) => l,
-            };
-            let c = l.split_whitespace().collect::<Vec<_>>().join(" ");
-            if !c.is_empty() {
-                if !s.is_empty() {
-                    s.push_str("; ");
-                }
-                s.push_str(&c);
-            }
-        }
+    let enc = |c: &str| {
         let mut p = String::from("@formula?src=");
-        for b in s.bytes() {
+        for b in c.bytes() {
             match b {
                 b' ' => p.push('+'),
                 b'%' | b'&' | b'+' | b'#' | b'?' => p.push_str(&format!("%{b:02X}")),
@@ -279,6 +289,10 @@ fn every_example_fits_the_panels_path_as_sent() {
                 _ => p.push_str(&format!("%{b:02X}")),
             }
         }
+        p
+    };
+    for e in crate::examples() {
+        let s = opendmd_psi::compact(&e.src);
         // The compacted text still compiles to the same program.
         assert_eq!(
             opendmd_psi::compile(&s).map(|p| p.len()).ok(),
@@ -286,9 +300,14 @@ fn every_example_fits_the_panels_path_as_sent() {
             "{}",
             e.name
         );
-        p.push_str("&a=0.3333&b=0.3333&c=0.3333&name=");
-        p.push_str(&e.name.replace(' ', "+"));
+        let mut p = enc(&s);
+        if p.len() + 33 > 2048 {
+            p = enc(&opendmd_psi::compact(&opendmd_psi::look::declare(&e.src, "about", 0, "")));
+        }
+        p.push_str("&a=0.3333&b=0.3333&c=0.3333");
         assert!(p.len() <= 2048, "{}: {} B as sent", e.name, p.len());
+        // The bundled ones keep their `about` (the ten are short).
+        assert!(!e.bundled || p.contains("about+"), "{}: {} B", e.name, p.len());
     }
 }
 
@@ -299,11 +318,6 @@ fn every_example_fits_the_panels_path_as_sent() {
 #[test]
 fn every_example_pasted_in_as_a_part_draws_the_same() {
     use opendmd_psi::{golden, render_rows_ink, Scratch};
-    let json = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../opendmd-web/www/formulas.json"
-    ))
-    .unwrap();
     let mut under = vec![0u8; W * H * 3];
     golden::picture(&mut under);
     let draw = |src: &str, ms: u32| {
@@ -321,7 +335,7 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
         );
         (out, p.loop_ms())
     };
-    for e in crate::examples(&json) {
+    for e in crate::examples() {
         let inner: String = e.src.lines().map(|l| format!("  {l}\n")).collect();
         for ms in [0, 1730, 6420] {
             let (want, lp) = draw(&e.src, ms);
@@ -349,15 +363,10 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
 fn every_example_as_a_look() {
     // (Tunnel: ~4.6 ms as an effect with its still cache, ~14.4 without
     // one, and a look never has one. Time gate: ~6.1 ms and ~15.6.)
-    const TOO_HEAVY: &[&str] = &["Tunnel", "Time gate"];
-    let json = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../opendmd-web/www/formulas.json"
-    ))
-    .unwrap();
+    const TOO_HEAVY: &[&str] = &["Time gate", "Tunnel"];
     let mut heavy = Vec::new();
     let mut chosen = Vec::new();
-    for e in crate::examples(&json) {
+    for e in crate::examples() {
         assert!(compile(&e.src), "{}: {}", e.name, error());
         let over = info()[5] & 32 != 0;
         let tries: &[(&str, u8)] = if over {
@@ -513,22 +522,19 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
 #[test]
 fn every_example_draws_as_before_at_its_defaults() {
     use opendmd_psi::{golden, render_rows_ink, Scratch};
-    let json = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../opendmd-web/www/formulas.json"
-    ))
-    .unwrap();
     let mut under = vec![0u8; W * H * 3];
     golden::picture(&mut under);
-    let all = crate::examples(&json);
+    let all = crate::examples();
+    // (Pinned by name: the files are read in file-name order, the table is
+    // in formulas.json's old order.)
     assert_eq!(all.len() * 3, EXAMPLE_FRAMES.len());
-    for (e, want) in all.iter().zip(EXAMPLE_FRAMES.chunks(3)) {
+    for e in &all {
         let p = opendmd_psi::compile(&e.src).unwrap();
-        for &(name, ms, hash) in want {
-            assert_eq!(name, e.name);
+        let want: Vec<_> = EXAMPLE_FRAMES.iter().filter(|w| w.0 == e.name).collect();
+        assert_eq!(want.len(), 3, "{}: not pinned", e.name);
+        for &&(name, ms, hash) in &want {
             let mut i = golden::inputs(ms);
-            let given = |v: i32| (v != 0).then_some(v);
-            [i.a, i.b, i.c] = p.meta().values([given(e.a), given(e.b), given(e.c)]);
+            [i.a, i.b, i.c] = p.meta().values([None; 3]);
             i.set_ms(&p, u64::from(ms));
             let mut out = vec![0u8; W * H * 3];
             render_rows_ink::<128>(
@@ -553,12 +559,7 @@ fn every_example_draws_as_before_at_its_defaults() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn the_web_apps_compact_is_the_compilers() {
-    let json = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../opendmd-web/www/formulas.json"
-    ))
-    .unwrap();
-    let mut srcs: Vec<String> = crate::examples(&json).into_iter().map(|e| e.src).collect();
+    let mut srcs: Vec<String> = crate::examples().into_iter().map(|e| e.src).collect();
     for s in [
         "name = '\"' -- a quote\ngray(name/100)",
         "name \"a  b\"\ngray(x)",
@@ -651,7 +652,8 @@ fn the_web_apps_compact_is_the_compilers() {
         assert_eq!(g[1], want, "path of {src:?}");
         assert!(want.len() <= 2048 || !src.starts_with("name"), "{}", want.len());
     }
-    assert_eq!(dropped, 3);
+    // (The three long cases, and Endless road: its `about` line goes.)
+    assert_eq!(dropped, 4);
     for (src, g) in srcs.iter().zip(got.into_iter().step_by(2)) {
         let want = opendmd_psi::compact(src);
         let mut w = String::from("\"");

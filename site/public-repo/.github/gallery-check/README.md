@@ -25,11 +25,12 @@ fails unless every change:
   (a tab only in the formula), no invisible, joining or direction-changing
   characters (the "Trojan Source" ones: U+202A–202E, U+2066–2069, …), no
   private-use ones, no more than two accents stacked on a letter;
-- starts with the header: `-- name:` (≤ 40 characters), `-- description:`
-  (≤ 120), `-- author:` (≤ 40), `-- licence:` (CC0-1.0 or CC-BY-4.0), and
-  optionally `-- values:` (`a=0.3 b=1`), with no `<` or `>` in them, and a
+- starts with the header: `-- author:` (≤ 40 characters, no `<` or `>`)
+  and `-- licence:` (CC0-1.0 or CC-BY-4.0), then the formula, whose own
+  `name "…"` (≤ 40) and `about "…"` (≤ 120) lines are required (read with
+  the compiler, which refuses `" < > \` and hidden characters in quotes), a
   name and author that don't pass for OpenDMD or a maintainer (lookalike
-  letters included);
+  letters included); `-- bundle` (OpenDMD's examples only) is refused;
 - compiles with OpenDMD's Psi compiler (the same crate the display runs) and
   costs at most 10 ms a frame on the display (`Program::esp32_us`).
 

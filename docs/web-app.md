@@ -357,9 +357,10 @@ Follow RePlayOS can show the clock in the menus instead of its attract
 playlist (Settings → Schedule → Follow RePlayOS → *attract playlist*: The clock).
 
 The built-in effects (tunnel, rotozoom, starfield, wireframe) are gone from
-the firmware and the core: they are Formulas now, bundled as examples in
-Formulas (`opendmd-web/www/formulas.json`), where they can be read and
-changed. A Formula plays, sends to the panel and goes in a playlist like any
+the firmware and the core: they are Formulas now, in the site's gallery
+(`opendmd-web/formulas/*.psi`, one file each; the web app bundles ten of
+them, the ones marked `-- bundle`, as `www/formulas.json`, written by
+`make web`), where they can be read and changed. A Formula plays, sends to the panel and goes in a playlist like any
 GIF (**Show on panel**, **Add to playlist…**), as a line
 `@formula?src=…` (see [the HTTP API](api.md)). A retired `@fx:` line in a
 playlist is skipped with a log line. Follow RePlayOS can show the clock or a

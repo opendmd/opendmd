@@ -25,7 +25,7 @@ printf 'name: old\n' > "$tmp/seed/.github/workflows/gallery-check.yml"
 mkdir -p "$tmp/seed/art-index/v0" "$tmp/seed/art-index/v1"
 printf '{"old":0}\n' > "$tmp/seed/art-index/v0/GB.json"
 printf '{"names":"old"}\n' > "$tmp/seed/art-index/v1/GB.json"
-printf -- '-- name: Theirs\n-- description: A contribution\n-- author: @someone\n-- licence: CC0-1.0\ngray(x)\n' > "$tmp/seed/gallery/theirs.psi"
+printf -- '-- author: @someone\n-- licence: CC0-1.0\nname "Theirs"\nabout "A contribution"\ngray(x)\n' > "$tmp/seed/gallery/theirs.psi"
 g -C "$tmp/seed" add -A && g -C "$tmp/seed" commit -qm seed && g -C "$tmp/seed" push -q origin HEAD:main
 
 site() { # a site build: its version, a page, and the public repo's API pages (as release.yml fetches them)
@@ -67,7 +67,7 @@ done
 
 # A contribution merged in the public repo between two publishes.
 g -C "$tmp/look" checkout -q main
-printf -- '-- name: Merged\n-- description: Merged by a maintainer\n-- author: @other\n-- licence: CC-BY-4.0\ngray(y)\n' > "$tmp/look/gallery/merged.psi"
+printf -- '-- author: @other\n-- licence: CC-BY-4.0\nname "Merged"\nabout "Merged by a maintainer"\ngray(y)\n' > "$tmp/look/gallery/merged.psi"
 g -C "$tmp/look" add -A && g -C "$tmp/look" commit -qm "Add merged.psi" && g -C "$tmp/look" push -q origin HEAD:main
 
 site v2

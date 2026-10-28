@@ -26,8 +26,9 @@
                links the web app's Formulas make): opendmd-web/share/f/, which
                runs on the demo's files (the link's decoder, the LED preview,
                Psi)
-- /formulas/   the formula gallery: the web app's examples (formulas.json,
-               by OpenDMD, CC0) and the contributions merged into the public
+- /formulas/   the formula gallery: OpenDMD's examples (opendmd-web/formulas/
+               *.psi, CC0, copied to formulas/src/; the ten marked
+               `-- bundle` are also the web app's formulas.json) and the contributions merged into the public
                gallery repo's gallery/ (`--gallery`, fetched by release.yml),
                each checked again by opendmd-gallery (`--gallery-tool`)
                before it is published; thumbnails drawn by it at build time.
@@ -330,6 +331,8 @@ ul.ftiles{list-style:none;padding:0;display:grid;grid-template-columns:repeat(au
 .ftile p{margin:0;font-size:14px;overflow-wrap:anywhere}
 .ftile .fdesc{flex:1}
 .ftile .fby{color:var(--mut);font-size:13px;margin:6px 0 4px}
+.ftile .fctl{color:var(--mut);font-size:13px;margin-top:4px}
+.ftile .fbadge{display:inline-block;vertical-align:middle;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:6px;font-size:12px;font-weight:normal;color:var(--mut)}
 .ftile .facts .cta{padding:6px 14px;font-size:14px}
 
 /* Cards: feature lists, the hardware page */
@@ -733,12 +736,23 @@ def after_h1(body: str, extra: str) -> str:
 GALLERY_PAGE = gallery_page.PAGE
 
 
-def write_gallery(out: Path, www: Path, contrib: Path | None, tool: Path, wm: dict) -> None:
-    """formulas/index.html: the site's page around the gallery's markers."""
+# OpenDMD's examples: every one in the gallery (the bundled ones too).
+EXAMPLES = ROOT / "opendmd-web/formulas"
+
+
+def write_gallery(out: Path, examples: Path, contrib: Path | None, tool: Path, wm: dict) -> None:
+    """formulas/index.html: the site's page around the gallery's markers,
+    and formulas/src/: the examples' files (`examples`), which the public
+    repo's Pages workflow reads them from."""
     up = "../" * GALLERY_PAGE.count("/")
-    (out / GALLERY_PAGE).parent.mkdir(parents=True, exist_ok=True)
-    examples = json.loads((www / "formulas.json").read_text(encoding="utf-8"))
-    body = gallery_page.build((out / GALLERY_PAGE).parent, examples, contrib, tool)
+    page_dir = (out / GALLERY_PAGE).parent
+    page_dir.mkdir(parents=True, exist_ok=True)
+    if examples.resolve() != (page_dir / "src").resolve():
+        shutil.rmtree(page_dir / "src", ignore_errors=True)
+        (page_dir / "src").mkdir()
+        for p in sorted(examples.glob("*.psi")):
+            shutil.copyfile(p, page_dir / "src" / p.name)
+    body = gallery_page.build(page_dir, page_dir / "src", contrib, tool)
     (out / GALLERY_PAGE).write_text(PAGE.format(
         title="Formula gallery · OpenDMD", description=html.escape("Formulas for the OpenDMD LED display: open one, "
                                                                      "try it, send it to your display."),
@@ -872,7 +886,7 @@ def main() -> None:
         extra = api_versions_line(page, versions) if src == API_PAGE else ""
         bodies.append(write_doc(out, src, page, info, art, assets, extra))
     # The formula gallery: generated, in the menu.
-    write_gallery(out, a.www, a.gallery, a.gallery_tool, art["wordmark"])
+    write_gallery(out, EXAMPLES, a.gallery, a.gallery_tool, art["wordmark"])
     # The licences page: not a doc, so not in the menu; the footer links it.
     body = markdown.Markdown(extensions=["sane_lists"]).convert(LICENCES)
     up = "../" * LICENCES_PAGE.count("/")

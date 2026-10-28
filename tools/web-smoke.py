@@ -3656,6 +3656,14 @@ STUB_INDEX = {"repo": "Stub_-_Repo", "names": ["Other Game (Europe)", "Studio Te
 # --- Formulas (Library → Formulas, js/formulas.js + pkg-psi) -------------------
 
 FORMULAS_JSON = REPO / "opendmd-web" / "www" / "formulas.json"
+
+
+def bundled() -> list[dict]:
+    """The bundled Formulas (formulas.json, written by make web from the
+    `-- bundle` files: `[{src}]`), each with the name its `name "…"` line gives."""
+    return [{**e, "name": re.search(r'^name "([^"]*)"', e["src"], re.M).group(1)} for e in json.loads(FORMULAS_JSON.read_text())]
+
+
 # An example that draws over a GIF: it reads what is under it, or has layers.
 def psi_over(page: Page, srcs: list[str]) -> list[bool]:
     """Which formulas draw over what is under them: info()'s bit 5, asked of
@@ -3725,15 +3733,19 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_function("location.hash == '#formulas/edit'", timeout=20000)
     open_formulas(page)
     psi = [u for u in asked if "pkg-psi/" in u and u.endswith(".wasm")]
-    examples = json.loads(FORMULAS_JSON.read_text())
-    tiles = page.eval_on_selector_all("#psi-ex .psi-tile, #psi-ex-over .psi-tile", "els => els.map(e => e.dataset.name)")
-    dark = page.evaluate("""() => [...document.querySelectorAll('#psi-ex .psi-tile canvas, #psi-ex-over .psi-tile canvas')].filter(c => {
+    examples = bundled()
+    tiles = page.eval_on_selector_all("#psi-ex .psi-tile", "els => els.map(e => e.dataset.name)")
+    more = page.get_attribute("#psi-more", "href")
+    dark = page.evaluate("""() => [...document.querySelectorAll('#psi-ex .psi-tile canvas')].filter(c => {
         const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i+1] + d[i+2] > 90) return false; return true; }).length""")
-    # Those that draw over a GIF (they read what is under them) in a section of their own.
+    # One card, Bundled: the ten the panel comes with (those that draw over a
+    # GIF have the look badge), and More Formulas: the online gallery.
     over = psi_over(page, [e["src"] for e in examples])
     over = [e["name"] for e, o in zip(examples, over) if o]
-    check(len(psi) == 1 and tiles == [e["name"] for e in examples if e["name"] not in over] + over and len(over) >= 4 and dark == 0,
-          f"formulas: opening the tab loads the module ({len(psi)}); {len(tiles)} examples ({len(over)} over a GIF), every thumbnail lit ({dark} dark)")
+    badged = page.eval_on_selector_all("#psi-ex .psi-tile:has(.psi-badge)", "els => els.map(e => e.dataset.name)")
+    check(len(psi) == 1 and tiles == [e["name"] for e in examples] and len(tiles) == 10 and badged == over and len(over) == 6 and dark == 0
+          and page.locator("#psi-ex-over").count() == 0 and more == "https://opendmd.dev/formulas/",
+          f"formulas: opening the tab loads the module ({len(psi)}); {len(tiles)} bundled ({len(over)} looks), every thumbnail lit ({dark} dark); More Formulas -> {more}")
     wait_lit(page, "#psi-panel", "formulas: the first example in Details")
     a = canvas_sum(page, "#psi-panel")
     page.wait_for_timeout(300)
@@ -3860,8 +3872,8 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
 
 
 def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
-    """Add to playlist: an example Formula goes into a playlist as its
-    player path with its name (the path Show on panel sends + `&name=`),
+    """Add to playlist: a bundled Formula goes into a playlist as its
+    player path (the path Show on panel sends: its `name` line names it),
     once; the playlist editor shows it by name, as a Formula; the (mock)
     player plays it and says its name."""
     gif = card_gifs()[0]
@@ -3869,7 +3881,7 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#formulas")
     open_formulas(page)
-    page.click("#psi-ex .psi-tile[data-name='Wireframe cube']")
+    page.click("#psi-ex .psi-tile[data-name='Starfield']")
     clear_toasts(page)
     page.click("#psi-pl")
     page.wait_for_selector("#psi-pl-menu", timeout=5000)
@@ -3877,11 +3889,12 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
     t = last_toast(page, "ok")
     lines = (overlay / "sets" / "psitest.txt").read_text().split("\n")
-    src = next(e["src"] for e in json.loads(FORMULAS_JSON.read_text()) if e["name"] == "Wireframe cube")
-    want = page.evaluate("s => import('./js/psishow.js').then(m => m.fpath({src: s}))", src) + "&name=Wireframe+cube"
+    src = next(e["src"] for e in bundled() if e["name"] == "Starfield")
+    want = page.evaluate("s => import('./js/psishow.js').then(m => m.fpath({src: s}))", src)
     check(lists[0] == "/filelist.txt" and "/sets/psitest.txt" in lists and t == "1 added to “psitest”"
-          and lines == [gif, want, ""] and len(want) <= 2048 and "\t" not in want and " " not in want,
-          f"formulas playlist: Wireframe cube added to psitest ('{t}'; {len(want)} B: {want[:60]}…{want[-30:]})")
+          and lines == [gif, want, ""] and len(want) <= 2048 and "\t" not in want and " " not in want
+          and want.startswith('@formula?src=name+"Starfield"') and "&name=" not in want,
+          f"formulas playlist: Starfield added to psitest ('{t}'; {len(want)} B: {want[:60]}…{want[-30:]})")
     clear_toasts(page)
     page.click("#psi-pl")
     page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
@@ -3909,7 +3922,7 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.wait_for_function("document.querySelectorAll('#set-entries .vrow:not([hidden])').length >= 3", timeout=10000)
     rows = page.eval_on_selector_all("#set-entries .vrow:not([hidden])",
                                      "els => els.map(r => [r.querySelector('.t').textContent, r.querySelector('.tag')?.textContent || ''])")
-    check(entries(page) == lines[:2] + [mine] and rows[1:] == [["Wireframe cube", "Formula"], ["Smoke & ramp", "Formula"]],
+    check(entries(page) == lines[:2] + [mine] and rows[1:] == [["Starfield", "Formula"], ["Smoke & ramp", "Formula"]],
           f"formulas playlist: the playlist editor shows them by name ({rows})")
     shot(page, "formulas-playlist", "laptop")
     page.context.close()
@@ -3917,7 +3930,7 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     put_json(base + "/api/config", {"set": "psitest"})
     cur = wait_playing(base, want, 20)
     st = get_json(base + "/api/status")["now_playing"]
-    check(cur == want and st["title"] == "Wireframe cube", f"formulas playlist: the player plays it as “{st['title']}”")
+    check(cur == want and st["title"] == "Starfield", f"formulas playlist: the player plays it as “{st['title']}”")
     put_json(base + "/api/config", {"set": ""})
     urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/psitest.txt", method="DELETE"), timeout=30)
 
@@ -3948,7 +3961,7 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-show")
     t = last_toast(page, "ok")
     st = get_json(base + "/api/status")["now_playing"]
-    check(t == f"On the panel: {name}" and st["path"].startswith("@formula?src=") and st["title"] == "Formula"
+    check(t == f"On the panel: {name}" and st["path"].startswith("@formula?src=name+") and st["title"] == name
           and page.inner_text("#psi-show") == "On the panel ✓" and plays[-1][1].get("live") is False,
           f"formulas panel: {name} on the panel ('{t}', {st['path'][:40]}…, {st['title']})")
     shot(page, "formulas-panel-on", "laptop")
@@ -4011,11 +4024,11 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     page.on("request", lambda r: plays.append(json.loads(r.post_data)) if r.url.endswith("/api/play") else None)
     page.goto(base + "/#formulas")
     open_formulas(page)
-    page.click("#psi-ex-over .psi-tile[data-name='Old photo']")
+    page.click("#psi-ex .psi-tile[data-name='Old photo']")
     wait_lit(page, "#psi-panel", "formulas over: Old photo in Details")
     check(page.is_visible("#psi-under") and page.inner_text("#psi-under-name") == "a sample picture"
           and page.inner_text("#psi-show") == "Show over the panel’s GIF" and page.inner_text("#psi-look") == "Set as the panel’s look"
-          and page.is_visible("#psi-ex-over .psi-tile[data-name='Old photo'] .psi-badge"),
+          and page.is_visible("#psi-ex .psi-tile[data-name='Old photo'] .psi-badge"),
           f"formulas over: drawn over the sample, Show over the panel’s GIF, Set as the panel’s look (it declares `look`) ({page.inner_text('#psi-show')!r})")
     s0 = canvas_sum(page, "#psi-panel")
     page.click("#psi-under-pick")
@@ -4050,13 +4063,13 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     c = get_json(base + "/api/config")
     fl = get_json(base + "/api/status")["formula_look"]
     # The Formula's path, as Show on panel sends it.
-    same = page.evaluate("""async () => { const ex = await (await fetch('formulas.json')).json(), f = ex.find((x) => x.name == 'Old photo');
+    same = page.evaluate("""async () => { const ex = await (await fetch('formulas.json')).json(), f = ex.find((x) => /^name "Old photo"/m.test(x.src));
         return (await import('./js/psishow.js')).fpath(f); }""")
-    page.click("#psi-ex .psi-tile[data-name='Plasma']")
+    page.click("#psi-ex .psi-tile[data-name='Matrix']")
     plain = page.is_visible("#psi-look")
-    check(c["look_formula"] == same and same.startswith("@formula?src=control+amount+=+0.8+") and "look;" in same and not plain
+    check(c["look_formula"] == same and same.startswith('@formula?src=name+"Old+photo";+about+"The+GIF+in+warm+sepia+tones";+control+amount+=+0.8+') and "look;" in same and not plain
           and (fl or {}).get("source") == "setting" and t.startswith("“Old photo” is the panel’s look now"),
-          f"formulas over: Set as the panel’s look ('{t}', {fl}; Plasma has the button: {plain})")
+          f"formulas over: Set as the panel’s look ('{t}', {fl}; Matrix has the button: {plain})")
     goto_view(page, "settings")
     page.evaluate("location.replace('#settings/look')")
     page.wait_for_function("document.querySelector('#st-look-formula').selectedOptions[0]?.textContent == 'Old photo'", timeout=10000)
@@ -4068,7 +4081,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
           f"formulas over: Settings › Look lists the looks ({len(opts)}) and None turns it off")
     # Save as GIF over the picked GIF: Create Art, titled with both.
     goto_view(page, "formulas")
-    page.click("#psi-ex-over .psi-tile[data-name='Old photo']")
+    page.click("#psi-ex .psi-tile[data-name='Old photo']")
     page.click("#psi-gif")
     page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
     page.wait_for_function("(d => d.dataset.animated && d.dataset.name)(document.querySelector('#studio'))", timeout=30000)
@@ -4101,7 +4114,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
     c = get_json(base + "/api/config")
     want = page.evaluate("""async () => { const ex = await (await fetch('formulas.json')).json();
-        return (await import('./js/psishow.js')).fpath(ex.find((x) => x.name == 'Vignette')); }""")
+        return (await import('./js/psishow.js')).fpath(ex.find((x) => /^name "Vignette"/m.test(x.src))); }""")
     why = page.inner_text("#st-look-why")
     check(c["look_formula"] == want and "look;" in want and why.startswith("Over at 100%") and page.is_visible("#st-look-change")
           and not {"look_formula_name", "look_blend", "look_amount"} & set(c),
@@ -4145,17 +4158,17 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
           and edited == 'name "Gone"; about "Kept"; look add 25; loop 4; hsv(x + t/4, 1, 1)' and page.get_attribute("#psi-ed", "data-err") is None,
           f"looks: Change… opens its settings ({got}), edited in place ({edited!r})")
     page.keyboard.press("Escape")
-    # The sheet over Plasma (a remix): every change a line of the text.
+    # The sheet over Matrix (a remix): every change a line of the text.
     open_formulas(page)
-    page.click("#psi-ex .psi-tile[data-name='Plasma']")
+    page.click("#psi-ex .psi-tile[data-name='Matrix']")
     page.click("#psi-settings")
     # (Gone, edited above and not saved: replaced on the question.)
     page.wait_for_selector("#psi-ask", timeout=5000)
     page.click("#psi-ask button:has-text('Replace it')")
     page.wait_for_selector("#psi-set #psi-set-name", timeout=10000)
     src0 = page.input_value("#psi-src")
-    page.fill("#psi-set-name", "Plasma glow")
-    page.fill("#psi-set-about", "Plasma, screened over the GIF")
+    page.fill("#psi-set-name", "Matrix glow")
+    page.fill("#psi-set-about", "Matrix, screened over the GIF")
     page.check("#psi-set-look")
     page.wait_for_timeout(300)
     mix = (page.input_value("#psi-set-lk-blend"), page.input_value("#psi-set-lk-amt"))
@@ -4167,8 +4180,8 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(300)
     src = page.input_value("#psi-src")
     head = src.split("\n")[:4]
-    check(not src0.startswith("name") and head == ['name "Plasma glow"', 'about "Plasma, screened over the GIF"', 'control k1 0..1 = 0.5 "Glow"', "look add 50"]
-          and mix == ("screen", "40") and page.input_value("#psi-name") == "Plasma glow" and page.is_visible("#psi-set-c0 .psi-sl"),
+    check(src0.startswith('name "Matrix remix"\nabout "Green code') and head == ['name "Matrix glow"', 'about "Matrix, screened over the GIF"', 'control k1 0..1 = 0.5 "Glow"', "look add 50"]
+          and mix == ("screen", "40") and page.input_value("#psi-name") == "Matrix glow" and page.is_visible("#psi-set-c0 .psi-sl"),
           f"looks: the sheet writes the lines ({head}; the look started at {mix})")
     shot(page, "formula-settings", "laptop")
     # A choice, then gone again.
@@ -4187,7 +4200,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     why = page.inner_text("#psi-set-lk-why")
     off = page.is_disabled("#psi-set-use")
     line = [l for l in page.input_value("#psi-src").split("\n") if l.startswith("look")]
-    check("covers the GIF entirely" in why and off and line == ["look"], f"looks: Over 100% of Plasma is refused in a sentence ('{why}', {line})")
+    check("covers the GIF entirely" in why and off and line == ["look"], f"looks: Over 100% of Matrix is refused in a sentence ('{why}', {line})")
     page.select_option("#psi-set-lk-blend", "screen")
     page.eval_on_selector("#psi-set-lk-amt", "r => { r.value = 40; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }")
     page.wait_for_timeout(300)
@@ -4196,8 +4209,8 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     t = last_toast(page, "ok")
     c5 = get_json(base + "/api/config")
     st = get_json(base + "/api/status")
-    check(c5["look_formula"].startswith('@formula?src=name+"Plasma+glow";+about+"Plasma,+screened+over+the+GIF";+look+screen+40;')
-          and t.startswith("“Plasma glow” is the panel’s look now") and (st.get("formula_look") or {}).get("source") == "setting",
+    check(c5["look_formula"].startswith('@formula?src=name+"Matrix+glow";+about+"Matrix,+screened+over+the+GIF";+look+screen+40;')
+          and t.startswith("“Matrix glow” is the panel’s look now") and (st.get("formula_look") or {}).get("source") == "setting",
           f"looks: Set as the panel’s look sends the Formula's path ('{t}'; {c5['look_formula'][:70]!r}…)")
     # Off: the line goes.
     page.click("#psi-set-btn")
@@ -4236,17 +4249,17 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     no formula by that name, and the combined formula plays."""
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#formulas")
-    formula_editor(page, "loop 8\nuse plasma as p\nlayer { p(1 - x, y) }")
+    formula_editor(page, "loop 8\nuse matrix as p\nlayer { p(1 - x, y) }")
     src = page.input_value("#psi-src")
-    check("part p {\n  -- Plasma\n  loop 8\n" in src and "use " not in src and page.get_attribute("#psi-ed", "data-err") is None
+    check("part p {\n  -- Matrix\n  name \"Matrix\"\n  about \"" in src and "\n  loop 8\n" in src and "use " not in src and page.get_attribute("#psi-ed", "data-err") is None
           and page.get_attribute("#psi-ed", "data-steps") is not None, f"formulas: use … as p pastes the example in as a part ({src[:60]!r})")
     page.fill("#psi-src", "\nr")
     page.focus("#psi-src")
     page.keyboard.press("Control+Home")
-    page.keyboard.type("use Rings as r", delay=30)
+    page.keyboard.type("use Clock as r", delay=30)
     page.wait_for_timeout(400)
     typed, said = page.input_value("#psi-src"), page.inner_text("#psi-err")
-    typing = typed == "use Rings as r\nr" and "puts a formula in" in said
+    typing = typed == "use Clock as r\nr" and "puts a formula in" in said
     page.keyboard.press("ArrowDown")
     page.wait_for_timeout(500)
     moved = "part r {" in page.input_value("#psi-src")
@@ -4548,8 +4561,8 @@ def now_edit_checks(page: Page, base: str) -> None:
     check(b in asked and cache_path(b) not in asked and s["now_playing"]["path"] == a,
           f"now edit: a recent entry's ✎ opens {b.rsplit('/', 1)[-1]} in Create Art, without playing it")
     # A Formula: the example it is, in the editor.
-    ex = json.loads((REPO / "opendmd-web/www/formulas.json").read_text())
-    e = next(x for x in ex if x["name"] == "Plasma")
+    # (Old photo: a path within the history's 200 B an entry, so it is listed.)
+    e = next(x for x in bundled() if x["name"] == "Old photo")
     path = page.evaluate("src => import('./js/psishow.js').then(m => m.fpath({ src }))", e["src"])
     on_screen(path)
     check(page.inner_text("#now-edit") == "✎ Edit in Formulas", f"now edit: a Formula offers '{page.inner_text('#now-edit')}'")
@@ -4558,7 +4571,7 @@ def now_edit_checks(page: Page, base: str) -> None:
     if page.locator("button:has-text('Open it')").count():
         page.click("button:has-text('Open it')")
     page.wait_for_function(f"document.querySelector('#psi-src').value === {json.dumps(e['src'])}", timeout=10000)
-    check(page.input_value("#psi-name") == "Plasma" and location_hash(page) == "#formulas/edit",
+    check(page.input_value("#psi-name") == "Old photo" and location_hash(page) == "#formulas/edit",
           "now edit: the Formula opens in the editor as the example it is, comments and all")
     goto_view(page, "now")
     page.wait_for_selector("#now-recent > div button[aria-label='Edit in Formulas']", timeout=10000)

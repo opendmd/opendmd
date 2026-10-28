@@ -1,0 +1,7 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Rings"
+about "Colourful rings rippling out from the middle"
+loop 4
+-- r: the distance from the middle
+pal(rainbow, frac(r*1.5 - t/2))

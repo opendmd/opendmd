@@ -1,7 +1,7 @@
 //! What a Formula is to the player: an [`Effect`] (a loop of frames drawn
 //! into the canvas), played as a virtual file. The built-in effects
 //! (Tunnel, Rotozoom, Starfield, Wireframe) were native code here until
-//! 1.0.0-beta.11; they are Formulas now (`opendmd-web/www/formulas.json`),
+//! 1.0.0-beta.11; they are Formulas now (`opendmd-web/formulas/`: the gallery's),
 //! and the one effect left is [`Fx::Psi`], a formula's
 //! `@formula?src=…` path ([`crate::synth::FORMULA`], [`crate::fx_psi`]).
 //! A retired `@fx:<name>` path names nothing: a playlist line is skipped

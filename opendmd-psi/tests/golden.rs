@@ -2033,33 +2033,14 @@ fn draw_loops_as_lanes_are_a_turn_at_a_time() {
     eprintln!("{n} formulas, {ok} compiled, {lanes} loops as lanes, {frames} frames compared");
 }
 
-/// An example's source from the web app's gallery (formulas.json: one flat
-/// object a line, `"src"` a JSON string).
-fn example(name: &str) -> String {
-    let json = include_str!("../../opendmd-web/www/formulas.json");
-    let line = json
-        .lines()
-        .find(|l| l.contains(&format!("\"name\": \"{name}\"")))
-        .unwrap_or_else(|| panic!("no example {name}"));
-    let s = &line[line.find("\"src\": \"").expect("src") + 8..];
-    let mut out = String::new();
-    let mut it = s.chars();
-    while let Some(c) = it.next() {
-        match c {
-            '"' => return out,
-            '\\' => match it.next() {
-                Some('n') => out.push('\n'),
-                Some('u') => {
-                    let hex: String = it.by_ref().take(4).collect();
-                    out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
-                }
-                Some(c) => out.push(c),
-                None => break,
-            },
-            c => out.push(c),
-        }
-    }
-    panic!("unterminated src for {name}")
+/// An example's source (`opendmd-web/formulas/<slug>.psi`, the file
+/// without its `-- author:`/`-- licence:`/`-- bundle` header).
+fn example(slug: &str) -> String {
+    let path = format!("{}/../opendmd-web/formulas/{slug}.psi", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    text.split_inclusive('\n')
+        .skip_while(|l| ["-- author:", "-- licence:", "-- license:", "-- bundle"].iter().any(|h| l.starts_with(h)))
+        .collect()
 }
 
 /// The examples that draw run their big loops as lanes, and draw the same.
@@ -2068,9 +2049,9 @@ fn the_drawing_examples_run_as_lanes() {
     let mut under = vec![0u8; W * H * 3];
     picture(&mut under);
     for (name, src, want) in [
-        ("Starfield", example("Starfield"), 1),
-        ("Wireframe cube", example("Wireframe cube"), 0),
-        ("Endless road", example("Endless road"), 0),
+        ("Starfield", example("starfield"), 1),
+        ("Wireframe cube", example("wireframe-cube"), 0),
+        ("Endless road", example("endless-road"), 0),
     ] {
         let p = compile(&src).unwrap();
         assert_eq!(p.lane_loops(), want, "{name}\n{}", p.listing());

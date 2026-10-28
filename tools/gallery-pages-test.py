@@ -32,12 +32,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 GALLERY = ROOT / "opendmd-gallery"
-SPIRAL = ("-- name: Spiral sweep\n-- description: A rainbow spiral turning around the middle\n-- author: @contributor\n"
-          "-- licence: CC0-1.0\nloop 8\na2 = atan2(y - 0.5, (x - 0.5)*4)\nd = len((x - 0.5)*4, y - 0.5)\n"
+SPIRAL = ("-- author: @contributor\n-- licence: CC0-1.0\nname \"Spiral sweep\"\n"
+          "about \"A rainbow spiral turning around the middle\"\nloop 8\na2 = atan2(y - 0.5, (x - 0.5)*4)\nd = len((x - 0.5)*4, y - 0.5)\n"
           "hsv(frac(a2 + d*0.6 - t/8), 1, 1)\n")
-RINGS = ("-- name: Rainbow rings\n-- description: Rings rippling out from the middle\n-- author: @someone\n"
-         "-- licence: CC-BY-4.0\n-- values: a=0.3\nloop 4\nd = len((x - 0.5)*4, y - 0.5)\npal(rainbow, frac(d*1.5*(a + 0.5) - t/2))\n")
-EVIL = SPIRAL.replace("Spiral sweep", "<script>alert(1)</script>")
+RINGS = ("-- author: @someone\n-- licence: CC-BY-4.0\nname \"Rainbow rings\"\nabout \"Rings rippling out from the middle\"\n"
+         "control width 0..1 = 0.3 \"Width\"\nloop 4\nd = len((x - 0.5)*4, y - 0.5)\npal(rainbow, frac(d*1.5*(width + 0.5) - t/2))\n")
+# (Markup can't be a name: the language refuses `<` in quotes. In a comment it
+# is only the formula's text, escaped on the page; as the author, refused.)
+EVIL = SPIRAL.replace("@contributor", "<script>alert(1)</script>")
 
 
 def sh(*args, cwd=None, env=None, check=True) -> subprocess.CompletedProcess:
@@ -113,15 +115,30 @@ def main() -> int:
         sh("cargo", "build", "-q", "--release", "--locked", "--manifest-path", GALLERY / "Cargo.toml",
            "--target-dir", tmp / "release-target", env={"RUSTUP_TOOLCHAIN": os.environ.get("RUSTUP_TOOLCHAIN", "stable")})
         tool = tmp / "release-target/release/opendmd-gallery"
-        www = ROOT / "opendmd-web/www"
         wm = {"w": 64, "h": 8, "src": "wordmark.png"}
 
         def build(name: str, contrib: Path) -> tuple[Path, str]:
             out = tmp / name
+<<<<<<< HEAD
             log = io.StringIO()
             with contextlib.redirect_stderr(log):
                 site_py.write_gallery(out, www, contrib, tool, wm)
             return out, log.getvalue()
+=======
+            if a.site:
+                shutil.copytree(a.site, out, symlinks=True)
+                shutil.rmtree(out / "formulas")
+                # The wordmark as the page has it (art.json is not published).
+                m = re.search(r'--cols:(\d+);--rows:(\d+)"><img src="\.\./art/([^"]+)"', (a.site / "formulas/index.html").read_text())
+                site_py.write_gallery(out, a.site / "formulas/src", contrib, tool, {"w": m[1], "h": m[2], "src": m[3]})
+            else:
+                (out / "install").mkdir(parents=True)
+                (out / "install/release.json").write_text('{"version": "9.9.9"}\n')
+                (out / "index.html").write_text("<p>the site</p>\n")
+                (out / ".nojekyll").write_text("")
+                site_py.write_gallery(out, site_py.EXAMPLES, contrib, tool, wm)
+            return out
+>>>>>>> 11680b8 (formula-apps F3: the split — one .psi per example, the bundled ten, the gallery reads Meta)
 
         # 1. Two good contributions.
         g1 = tmp / "gallery-1"

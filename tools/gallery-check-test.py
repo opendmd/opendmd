@@ -31,7 +31,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-HDR = "-- name: Spiral sweep\n-- description: A rainbow spiral turning around the middle\n-- author: @contributor\n-- licence: CC0-1.0\n"
+HDR = "-- author: @contributor\n-- licence: CC0-1.0\nname \"Spiral sweep\"\nabout \"A rainbow spiral turning around the middle\"\n"
 FORMULA = "loop 8\na2 = atan2(y - 0.5, (x - 0.5)*4)\nd = len((x - 0.5)*4, y - 0.5)\nhsv(frac(a2 + d*0.6 - t/8), 1, 1)\n"
 GOOD = HDR + FORMULA
 BROKEN = HDR + "loop 8\ngray(tme)\n"
@@ -66,7 +66,7 @@ def cases():
         lib = f / ".github/gallery-check/opendmd-gallery/src/lib.rs"
         text = lib.read_text().replace("pub fn check_file(slug: &str, bytes: &[u8]) -> Result<Entry, Vec<String>> {",
                                        "pub fn check_file(slug: &str, bytes: &[u8]) -> Result<Entry, Vec<String>> {\n"
-                                       "    if true { return check_file_as(slug, b\"-- name: x\\n-- description: x\\n-- author: x\\n-- licence: CC0-1.0\\ngray(x)\\n\", true); }")
+                                       "    if true { return check_file_as(slug, b\"-- author: x\\n-- licence: CC0-1.0\\nname \\\"x\\\"\\nabout \\\"x\\\"\\ngray(x)\\n\", true); }")
         lib.write_text(text)
         write(f, "gallery/broken.psi", BROKEN)
 
@@ -75,7 +75,10 @@ def cases():
         ("outside gallery/: path traversal, a folder, a dotted name", lambda f: (write(f, "x/evil.psi", GOOD), write(f, "gallery/sub/nested.psi", GOOD),
                                                                                write(f, "gallery/..psi", GOOD)), False, "only files in gallery/"),
         ("a huge file", lambda f: write(f, "gallery/huge.psi", GOOD + "-" * 6000), False, "4096 at most"),
-        ("HTML in the name", lambda f: write(f, "gallery/html.psi", GOOD.replace("Spiral sweep", "<img src=x onerror=alert(1)>")), False, "may not contain < or >"),
+        ("HTML in the author", lambda f: write(f, "gallery/html.psi", GOOD.replace("@contributor", "<img src=x onerror=alert(1)>")), False, "may not contain < or >"),
+        ("HTML in the name", lambda f: write(f, "gallery/html2.psi", GOOD.replace("Spiral sweep", "<img src=x onerror=alert(1)>")), False, "doesn't compile"),
+        ("the old header", lambda f: write(f, "gallery/old.psi", "-- name: Spiral sweep\n-- description: A spiral\n-- author: @contributor\n-- licence: CC0-1.0\n" + FORMULA), False, "the header is two lines now"),
+        ("-- bundle in a contribution", lambda f: write(f, "gallery/bundle.psi", HDR.replace("CC0-1.0\n", "CC0-1.0\n-- bundle\n", 1) + FORMULA), False, "-- bundle"),
         ("bidi characters", lambda f: write(f, "gallery/bidi.psi", GOOD.replace("Spiral sweep", "Spiral " + chr(0x202E) + "teews")), False, "direction"),
         ("does not compile", lambda f: write(f, "gallery/broken.psi", BROKEN), False, "doesn't compile"),
         ("too heavy", lambda f: write(f, "gallery/heavy.psi", HDR + "loop 8\nn = noise(x*8, y*4, t) + noise(x*4, y*8, t) + noise(x*2, y*2, t)\n"

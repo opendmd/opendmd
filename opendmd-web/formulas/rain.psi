@@ -1,0 +1,10 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Rain"
+about "Blue streaks falling at different speeds"
+loop 4
+-- a made-up random number for each column: about half the columns get a drop
+r = frac(sin(px*0.37)*97.3)
+drop = frac(y + t*(floor(r*6) + 1)/2 + r*2)
+glow = max(0, 1 - drop*5) * step(r, 0.5)
+glow * #80b3ff

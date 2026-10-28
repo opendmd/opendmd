@@ -60,7 +60,8 @@ and a few marks by tools/font-subset.py; preloaded by index.html, so it is
 part of every page load, but it is not JS or CSS), <= 4 KB; its licence
 (`fonts/OFL.txt`, packed beside it, never fetched by the page) is "other".
 The Library's Formulas (the editor, the examples and the gallery:
-`js/formulas.js`, `formulas.css` and the examples, `formulas.json`;
+`js/formulas.js`, `formulas.css` and the bundled ones, `formulas.json`,
+which make web writes from opendmd-web/formulas/'s `-- bundle` files;
 imported when the Formulas tab is first chosen or a `#formula=` link
 opens) have a line of their own, <= 21 KB (16 until Psi phase 2, 17 until
 layers and drawing over a GIF, 20 until parts), and so does their wasm module
@@ -291,7 +292,14 @@ PSI_WASM_GZ_BUDGET = 84 * 1024  # 83 until formula-apps F2; 82 until main's psi-
 # 30,985 -> 32,488 B gz (the sheet itself is its own line, js/fsheet.js).
 # Under the brief's OK; F3 (most examples out of formulas.json) gives
 # ~2.5 KB back and should lower it again.
-FORMULAS_GZ_BUDGET = 32 * 1024  # 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
+# 27 KB for formula-apps F3 (2026-10-28, branch formula-f3): the split.
+# formulas.json is written by make web from the ten `-- bundle` files in
+# opendmd-web/formulas/ (the rest are the site gallery's), as `[{src}]`
+# alone (name and about are the sources' own lines): 21,179 B raw / 8,270
+# gz -> 4,685 / 2,094; the view's two example cards became one Bundled card
+# and a More Formulas link: 32,488 -> 26,584 B gz. Lowered back so the room
+# isn't spent by accident (1 KB of headroom, not the old 32).
+FORMULAS_GZ_BUDGET = 27 * 1024  # 32 until formula-apps F3; 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}

@@ -7,7 +7,7 @@
 // the app's. Everything a link brings is shown as text, never as HTML.
 
 import init from '../demo/pkg/opendmd_web.js';
-import { link, parse, controls, control, fit, Q, about, TIP, est, marks, sample } from '../demo/js/psikit.js';
+import { link, parse, controls, control, fit, Q, about, TIP, est, marks, sample, declText } from '../demo/js/psikit.js';
 import { qr } from './qr.js';
 
 const $ = (id) => document.getElementById(id);
@@ -53,6 +53,15 @@ async function start() {
   $('f-code').innerHTML = marks(f.src, bad).html + '\n'; // marks() escapes the text
   const ctl = ok ? controls(P, f.src) : null;
   fit(ctl, f);
+  // What it says of itself (its `name` and `about` lines, read by the
+  // compiler): its title and the line under it.
+  if (ctl?.name) {
+    f.name = ctl.name;
+    $('f-name').textContent = f.name;
+    document.title = `${f.name} · OpenDMD`;
+  }
+  $('f-about').textContent = ctl?.about || '';
+  $('f-about').hidden = !ctl?.about;
   // The slots it declares or reads: the link's values.
   const mask = (i[5] || 0) | (ctl?.controls || []).reduce((m, c) => m | (1 << 'abc'.indexOf(c.slot)), 0);
   // One that draws over a GIF is shown over the sample picture, as in the app.
@@ -161,25 +170,32 @@ async function start() {
     box.append(svg);
   }
 
-  // Submit to the gallery: the file (the gallery's header, then the
-  // formula), checked here as the gallery's checker will, then GitHub's
-  // "new file" page with it filled in.
+  // Submit to the gallery: the file (the gallery's header, `-- author:` and
+  // `-- licence:`, then the formula with its `name` and `about` lines set
+  // from the fields: pkg-psi's `declare`, the editor's own edit), checked
+  // here as the gallery's checker will, then GitHub's "new file" page with
+  // it filled in. Its sliders start where its `control` lines say.
   const slug = (s) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48).replace(/-+$/, '');
   // The characters the checker refuses (controls, invisible, direction-changing, private use).
   const BAD = /[\0-\x08\x0a-\x1f\x7f-\xa0\xad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\uffff\ue000-\uf8ff\udb40-\udb43\udb80-\udbff]/;
   let touched = false;
   $('s-name').value = f.name.slice(0, 40);
+  $('s-desc').value = ctl?.about || '';
   $('s-author').value = store.get('author') || '';
   $('s-file').value = slug(f.name);
   for (const id of ['s-name', 's-desc', 's-author', 's-lic', 's-file']) $(id).addEventListener('input', () => { if (id === 's-file') touched = true; sub(); });
   $('s-name').addEventListener('input', () => { if (!touched) $('s-file').value = slug($('s-name').value); sub(); });
   $('s-author').addEventListener('change', () => store.set('author', $('s-author').value.trim()));
+  const v = (id) => $(id).value.trim().replace(/\s+/g, ' ');
   function file() {
-    const vals = ['a', 'b', 'c'].filter((k, j) => mask & (1 << j) && f[k] != null).map((k) => `${k}=${+f[k].toFixed(2)}`).join(' ');
-    const src = f.src.replace(/\r\n?/g, '\n').replace(/\n*$/, '\n');
-    const v = (id) => $(id).value.trim().replace(/\s+/g, ' ');
-    return [`-- name: ${v('s-name')}`, `-- description: ${v('s-desc')}`, `-- author: ${v('s-author')}`,
-      `-- licence: ${$('s-lic').value}`, vals && `-- values: ${vals}`].filter(Boolean).join('\n') + '\n' + src;
+    let src = f.src.replace(/\r\n?/g, '\n').replace(/\n*$/, '\n');
+    if (ok) {
+      for (const [w, id, n] of [['name', 's-name', 40], ['about', 's-desc', 120]]) {
+        const t = declText(v(id), n);
+        src = P.declare(src, w, 0, t ? `${w} "${t}"` : '');
+      }
+    }
+    return `-- author: ${v('s-author')}\n-- licence: ${$('s-lic').value}\n` + src;
   }
   function problems() {
     const out = [], fields = [['name', 's-name', 40], ['description', 's-desc', 120], ['author', 's-author', 40]];
@@ -188,6 +204,7 @@ async function start() {
       if (!v) out.push(`Give it a ${what === 'author' ? 'name or handle for you' : what}.`);
       else if ([...v].length > max) out.push(`The ${what} can be ${max} characters at most.`);
       if (/[<>]/.test(v)) out.push(`The ${what} can’t contain < or >.`);
+      else if (id !== 's-author' && /["\\]/.test(v)) out.push(`The ${what} can’t contain " or \\.`);
       if (BAD.test(v)) out.push(`The ${what} has an invisible or special character in it.`);
     }
     if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test($('s-file').value) || ['readme', 'index'].includes($('s-file').value)) out.push('The file name can be lower-case letters, digits and single hyphens.');

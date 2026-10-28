@@ -11,36 +11,43 @@ Anyone can add one with a pull request.
 1. Make a formula in the web app's **Formulas** (on your display, or in the
    [demo](https://opendmd.dev/demo/#formulas)).
 2. **Copy share link**, open the link, and press **Submit to the gallery**.
-3. Fill in a description and your name, pick a licence, and press **Open on
-   GitHub**: GitHub opens with the file ready. Press **Propose changes**,
+3. Fill in its name, a line about it and your name, pick a licence, and
+   press **Open on GitHub**: GitHub opens with the file ready. Press **Propose changes**,
    then **Create pull request**. (GitHub makes a copy of this repository in
    your account for it; you need a free GitHub account.)
 
 ## By hand
 
-Add one file, `gallery/<name>.psi`, with this header and then your formula:
+Add one file, `gallery/<name>.psi`: two header lines, then your formula,
+which starts by saying its name and what it is:
 
 ```text
--- name: Rainbow rings
--- description: Rings rippling out from the middle
 -- author: @your-github-name
 -- licence: CC0-1.0
+name "Rainbow rings"
+about "Rings rippling out from the middle"
+control width 0..1 = 0.3 "Ring width"
 loop 4
 d = len((x - 0.5)*4, y - 0.5)
-pal(rainbow, frac(d*1.5 - t/2))
+pal(rainbow, frac(d*(1 + width*2) - t/2))
 ```
 
 - **The file name**: lower-case letters, digits and single hyphens, then
   `.psi` (`rainbow-rings.psi`), at most 48 characters before `.psi`.
-- **name**: at most 40 characters. **description**: one line, at most 120.
-  **author**: your GitHub handle or your name, at most 40. Plain text: no
+- **author**: your GitHub handle or your name, at most 40. Plain text: no
   `<` or `>`.
+- **`name "…"`**: at most 40 characters. **`about "…"`**: one line, at most
+  120. They are the formula's own first lines (so the web app, the panel
+  and the gallery all read the same thing); no `"`, `<`, `>` or `\` in
+  them.
 - **licence**: `CC0-1.0` (anyone may use it for anything, no credit
   needed: the default) or `CC-BY-4.0` (anyone may use it, crediting you).
   By submitting you confirm you made the formula, or may share it under
   that licence.
-- An optional fifth line sets where the sliders start:
-  `-- values: a=0.3 b=1` (each 0 to 1).
+- Its sliders are its `control` lines (up to three), and they start at
+  the defaults written there (`= 0.3`). A `look` line says it can be a
+  panel's look, drawn over every GIF (see
+  [how formulas work](https://opendmd.dev/guide/formulas.html)).
 - The formula must work, and be light enough for the display: at most 10 ms
   a frame as the editor estimates it.
 - The whole file at most 4 KB.

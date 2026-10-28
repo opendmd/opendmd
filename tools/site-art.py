@@ -7,7 +7,7 @@
     uv run tools/site-art.py OUT_DIR [--sim PATH]
 
 - strip/*.gif: the animations for the strip across the top of every page
-  and the landing page's tiles: Formulas (opendmd-web/www/formulas.json), the clock and
+  and the landing page's tiles: Formulas (opendmd-web/formulas/*.psi), the clock and
   scrolling text, recorded from the simulator's raw canvas
   (--screenshot-canvas) a frame at a time, one whole loop each; and the
   Kenney "Pixel Platformer" (CC0) sprites the demo card has too, re-encoded
@@ -33,10 +33,12 @@ from PIL import Image, ImageChops, ImageSequence
 ROOT = Path(__file__).resolve().parent.parent
 KENNEY = ROOT / "opendmd-web/experiments/art/process/out"
 
-FORMULAS = ROOT / "opendmd-web/www/formulas.json"
+# OpenDMD's Formulas, one file each: a header of comments (author, licence,
+# `-- bundle`), then the formula, whose `name "…"` line names it.
+FORMULAS = ROOT / "opendmd-web/formulas"
 
 # name, source (a live item, formula:NAME[?--formula-opts] -- an example in
-# formulas.json --, or kenney:FILE), ms a frame, colours, where it shows
+# opendmd-web/formulas/ --, or kenney:FILE), ms a frame, colours, where it shows
 # (strip, tiles), alt text, caption.
 ART = [
     ("press-start", "@text?msg=PRESS%20START&speed=20&color=ff3366", 40, 16, "strip tiles",
@@ -70,10 +72,14 @@ RECIPE = 2  # bump to redo every recording after changing how they are made
 
 
 def formula_src(name: str) -> str:
-    """The source of the example Formula called `name`; fails if there is none."""
-    for e in json.loads(FORMULAS.read_text()):
-        if e["name"] == name:
-            return e["src"]
+    """The source of the example Formula called `name` (without the file's
+    header); fails if there is none."""
+    for p in sorted(FORMULAS.glob("*.psi")):
+        lines = p.read_text(encoding="utf-8").split("\n")
+        while lines and lines[0].startswith(("-- author:", "-- licence:", "-- license:", "-- bundle")):
+            lines.pop(0)
+        if f'name "{name}"' in lines:
+            return "\n".join(lines)
     raise SystemExit(f"site-art: no Formula named {name!r} in {FORMULAS}")
 
 

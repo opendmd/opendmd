@@ -1,5 +1,7 @@
 // The Formulas view (`#formulas`, `#formula=` links): maths that draws on
-// the panel, in Psi (Ψ). The examples (formulas.json), the ones saved here,
+// the panel, in Psi (Ψ). The bundled ones (formulas.json: `[{src}]`, written
+// by make web from opendmd-web/formulas/'s `-- bundle` files; each says its
+// own name and about), a link to the site's gallery for the rest, the ones saved here,
 // details, and the editor (`#formulas/edit`). Drawn by pkg-psi (the
 // firmware's crate: the panel's frames byte for byte) through the LED
 // preview (`Preview.showRgb`); on a device, Show on panel (js/psishow.js).
@@ -228,6 +230,9 @@ async function copy(text) {
 // The formula's own page on the site (/f/: a preview, its code, Open on my
 // display, Try it in the demo); the demo's links stay on its own site.
 const SHARE = () => (app.demo ? new URL('../f/', location.href).href : SITE + 'f/');
+// The online gallery: every Formula OpenDMD has made (the panel bundles ten)
+// and the ones people share. The demo's is its own site's.
+const GALLERY = () => (app.demo ? new URL('../formulas/', location.href).href : SITE + 'formulas/');
 function share(btn, f) {
   const r = btn.getBoundingClientRect(), url = link(f, SHARE()), here = app.device && link(f);
   const field = h('input', { type: 'text', id: 'psi-link', readOnly: true, value: url, onfocus: (e) => e.target.select() });
@@ -359,15 +364,18 @@ function build(root) {
         h('div.row', h('button.pri', { id: 'psi-new', onclick: (e) => go({ name: '', src: STARTER }, e.currentTarget) }, '+ New formula'),
           h('span.cap', 'Written in Psi ', h('span.psi-mark', { title: 'Psi, the language formulas are written in' }, 'Ψ')))),
       ms.length > 0 && h('div.card', h('h3', 'Your formulas'), h('div.psi-tiles', { id: 'psi-mine' }, ms.map((f) => tile(f, true)))),
-      h('div.card', h('h3', 'Examples'), h('div.psi-tiles', { id: 'psi-ex' }, EX.filter((f) => !isOver(f)).map((f) => tile(f, false)))),
-      h('div.card', h('h3', 'Over a GIF'), h('p.cap', 'These draw over what plays: scanlines, colours, a clock in the corner. Pick a GIF to try them on.'),
-        h('div.psi-tiles', { id: 'psi-ex-over' }, EX.filter(isOver).map((f) => tile(f, false)))));
+      h('div.card', h('h3', 'Bundled'), h('p.cap', 'These come with the panel: clocks, screensavers, and looks that draw over what plays (pick a GIF to try them on).'),
+        h('div.psi-tiles', { id: 'psi-ex' }, EX.map((f) => tile(f, false))),
+        h('div.row', { style: 'margin-top:12px' }, h('a.btn', { id: 'psi-more', href: GALLERY(), target: app.demo ? null : '_blank', rel: 'noopener' }, 'More Formulas'),
+          h('span.cap', 'In the online gallery: tunnels, plasma, fire and more. Open one there and send it to your panel.'))));
     if (cur) for (const t of gal.querySelectorAll('.psi-tile')) t.classList.toggle('cur', t._f.src === cur.src && t._f.name === cur.name);
     // Two columns: the details are never empty (a sheet on a phone waits for a pick).
     else if (EX[0] && matchMedia('(min-width:1001px)').matches) pick(EX[0], false);
   }
   B = { root, ed, tiles, editing: false, draft: null };
-  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x : []; })]).then(tiles)
+  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; })])
+    // (Each says its own name: `[{src}]`.)
+    .then(() => { EX = EX.map((f) => ({ ...f, name: nameOf(f) })); tiles(); })
     .catch((e) => { clear(gal, h('div.card', h('p.bad', 'Formulas could not be loaded: ' + (e.message || e)))); });
 }
 
@@ -505,7 +513,7 @@ function editor() {
       if (!m) return;
       const n = m[2].trim(), at = { s: m.index, e: m.index + m[0].length }, i = m[1];
       const f = [...mine(), ...EX].find((x) => x.name.toLowerCase() === n.toLowerCase() && (x.id == null || x.id !== B.draft.id) && x.name.toLowerCase() !== me);
-      if (!f || k > 15) return { ...at, why: k > 15 ? 'too many formulas put in at once' : n.toLowerCase() === me ? 'a formula can’t be put inside itself' : `there’s no formula called “${n}” in yours or the examples` };
+      if (!f || k > 15) return { ...at, why: k > 15 ? 'too many formulas put in at once' : n.toLowerCase() === me ? 'a formula can’t be put inside itself' : `there’s no formula called “${n}” in yours or the bundled ones` };
       const t = `${i}part ${m[3]} {\n${i}  -- ${f.name}\n${f.src.trim().replace(/^(\s*)(use\s)/gm, '$1-- $2').replace(/^/gm, i + '  ')}\n${i}}`, c = ta.selectionStart;
       // Before saving or sharing: focused, so one undo takes it back. Not on
       // opening a draft or a link (no phone keyboard, the name keeps focus).

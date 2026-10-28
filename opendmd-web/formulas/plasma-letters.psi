@@ -1,0 +1,10 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Plasma letters"
+about "Plasma fills the bright parts of the GIF: try it on text"
+look
+loop 8
+wave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)
+-- as bright as the GIF is there: dark stays dark
+layer { hsv(wave/6 + t/8, 0.8, ul*1.2) }
+layer add { gray(ul, 0.2) }

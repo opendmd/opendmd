@@ -138,6 +138,24 @@ def lit(page: Page, sel: str) -> int:
 F_READY = "#f:not([hidden]):not([aria-busy])"
 
 
+def examples(bundled_only: bool = False) -> list[dict]:
+    """OpenDMD's examples (opendmd-web/formulas/*.psi): each file's formula
+    (without its header), its name (its `name "…"` line), whether it is
+    bundled, in the gallery's order (by name)."""
+    out = []
+    for p in sorted((ROOT / "opendmd-web/formulas").glob("*.psi")):
+        lines = p.read_text(encoding="utf-8").split("\n")
+        head = []
+        while lines and lines[0].startswith(("-- author:", "-- licence:", "-- license:", "-- bundle")):
+            head.append(lines.pop(0))
+        src = "\n".join(lines)
+        out.append({"slug": p.stem, "src": src, "bundle": "-- bundle" in head,
+                    "name": re.search(r'^name "([^"]*)"', src, re.M).group(1)})
+    if bundled_only:  # as formulas.json has them: in file-name order
+        return [e for e in out if e["bundle"]]
+    return sorted(out, key=lambda e: (e["name"].casefold(), e["slug"]))
+
+
 def share_link(base: str, src: str, name: str, **sliders) -> str:
     q = {"formula": src, "name": name, **{k: str(v) for k, v in sliders.items()}}
     return f"{base}/f/#" + urllib.parse.urlencode(q)
@@ -226,8 +244,10 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
             check(href.startswith("https://github.com/opendmd/opendmd.github.io/new/main/gallery?filename=smoke-rings.psi&value=")
                   and page.inner_text("#s-err") == "" and page.is_hidden("#s-long"), "/f/: Open on GitHub, file name and text in the address")
             shown = page.evaluate("document.querySelector('#s-text').textContent")
-            check(text.startswith("-- name: Smoke rings\n-- description: Rings that ripple out\n-- author: @smoke\n-- licence: CC-BY-4.0\n-- values: a=0.25\n")
-                  and text.endswith(src + "\n") and shown == text, f"/f/: the file has the gallery's header {text!r}")
+            # The header is the author and the licence; the name and the line
+            # about it are the formula's own first lines (pkg-psi declare).
+            check(text == "-- author: @smoke\n-- licence: CC-BY-4.0\nname \"Smoke rings\"\nabout \"Rings that ripple out\"\n" + src + "\n"
+                  and shown == text, f"/f/: the file has the gallery's header and its own name and about lines {text!r}")
             if tool:
                 with tempfile.TemporaryDirectory() as d:
                     p = Path(d) / "smoke-rings.psi"
@@ -292,7 +312,7 @@ def demo_share(browser, base: str, errors: list[str]) -> None:
     check(link.startswith(f"{base}/f/#formula=") and sub == link + "&submit", f"demo: Copy share link -> {link[:60]}…")
     page.goto(link)
     page.wait_for_selector(F_READY, timeout=20000)
-    first = json.loads((ROOT / "opendmd-web/www/formulas.json").read_text())[0]
+    first = examples(bundled_only=True)[0]
     check(page.inner_text("#f-name") == first["name"], f"demo: the link opens {first['name']} on its page")
     page.context.close()
 
@@ -370,16 +390,18 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     after = rows_ratio(page)
     check(abs(after / before - 1) > 0.2 and page.evaluate("import('./js/state.js').then(m => m.app.status.formula_look?.error ?? null)") is None,
           f"demo settings: the Scanlines look is drawn over the panel (even/odd rows {before:.2f} -> {after:.2f})")
-    # A Formula's own `look` line on the demo's panel: Plasma with `look
-    # screen 40` (as the Formula settings sheet writes it), its path sent as
-    # the look; the demo composes it as the player does (pkg-psi asLook).
+    # A Formula's own `look` line on the demo's panel: Plasma (a gallery
+    # Formula: the demo bundles the panel's ten) with `look screen 40` (as
+    # the Formula settings sheet writes it), its path sent as the look; the
+    # demo composes it as the player does (pkg-psi asLook).
+    plasma = next(e["src"] for e in examples() if e["name"] == "Plasma")
     lum = lambda: page.evaluate("""() => { const c = document.querySelector('#now-panel'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
         let n = 0; for (let i = 0; i < d.length; i += 4) n += d[i] + d[i+1] + d[i+2]; return n; }""")
     l0 = lum()
-    cfg = page.evaluate("""async () => { const { app } = await import('./js/state.js'), L = await import('./js/looks.js'), m = await L.psi();
-        const ex = await (await fetch('formulas.json')).json(), f = L.set(m, ex.find((x) => x.name == 'Plasma'), 'screen', 40);
+    cfg = page.evaluate("""async (src) => { const { app } = await import('./js/state.js'), L = await import('./js/looks.js'), m = await L.psi();
+        const f = L.set(m, { src }, 'screen', 40);
         await app.src.putConfig({ look_formula: L.path(m, f) }); const c = await app.refreshConfig();
-        return [c.look_formula.includes('look+screen+40;'), 'look_blend' in c || 'look_formula_name' in c]; }""")
+        return [c.look_formula.includes('look+screen+40;'), 'look_blend' in c || 'look_formula_name' in c]; }""", plasma)
     now()
     page.wait_for_timeout(800)
     l1, ratio = lum(), rows_ratio(page)
@@ -581,16 +603,21 @@ def art_index(browser, base: str, site: Path, errors: list[str], cors_expected: 
 
 
 def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
-    examples = json.loads((ROOT / "opendmd-web/www/formulas.json").read_text())
+    every = examples()
     for size in SIZES:
         page = new_page(browser, size, errors)
         page.goto(f"{base}/formulas/")
         page.wait_for_selector(".ftile", timeout=20000)
         wait_js(page, "[...document.querySelectorAll('.ftile img')].slice(0, 4).every(i => i.complete && i.naturalWidth == 128)",
                                timeout=20000)
-        names = page.eval_on_selector_all("#examples ~ ul .ftile h3", "els => els.map(e => e.textContent)")
+        names = page.eval_on_selector_all("#examples ~ ul .ftile h3", "els => els.map(e => e.firstChild.textContent)")
         if size == "laptop":
-            check(names == [e["name"] for e in examples], f"gallery: the {len(names)} examples, in order")
+            check(names == [e["name"] for e in every] and len(names) == 33, f"gallery: the {len(names)} examples, in order")
+            # What each says of itself: the bundled ten marked, the looks badged.
+            marked = page.eval_on_selector_all("#examples ~ ul .ftile h3:has(.fbadge[title^='The web app'])", "els => els.map(e => e.firstChild.textContent)")
+            looks = page.locator("#examples ~ ul .ftile h3 .fbadge", has_text="look").count()
+            check(marked == [e["name"] for e in every if e["bundle"]] and looks >= 8,
+                  f"gallery: the bundled ten marked ({marked}), {looks} looks badged")
             check(page.locator("nav a.on").inner_text() == "Formula gallery", "gallery: in the menu")
             community = page.eval_on_selector_all("#community + ul .ftile h3", "els => els.map(e => e.textContent)")
             print(f"  ..   gallery: {len(community)} from the community {community[:5]}")
@@ -605,11 +632,13 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                   "gallery: Remix opens it in the demo")
             page.locator("#examples ~ ul .ftile").nth(5).locator(".facts a:not(.alt)").click()
             page.wait_for_selector(F_READY, timeout=20000)
-            e = examples[5]
-            check(page.inner_text("#f-name") == e["name"] and page.locator("#f-code").inner_text().rstrip("\n") == e["src"],
-                  f"gallery: Open leads to {e['name']}'s page")
+            e = every[5]
+            about = re.search(r'^about "([^"]*)"', e["src"], re.M).group(1)
+            check(page.inner_text("#f-name") == e["name"] and page.inner_text("#f-about") == about
+                  and page.locator("#f-code").inner_text().rstrip("\n") == e["src"].rstrip("\n"),
+                  f"gallery: Open leads to {e['name']}'s page, its name and about lines shown")
             # A Formula that draws over a GIF: /f/ shows it over the sample picture, not black.
-            e = next(x for x in examples if x["name"] == "Scanlines")
+            e = next(x for x in every if x["name"] == "Scanlines")
             # From /f/ to /f/#…: only the hash changes, and f.js reloads on
             # hashchange, so the old page would answer the wait and vanish
             # under the next evaluate. Start from a blank page instead.
@@ -626,7 +655,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
 def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
     """/f/ (an example, as the gallery's Open gives it) and the gallery, at
     both sizes: the viewport and the whole page."""
-    e = next(x for x in json.loads((ROOT / "opendmd-web/www/formulas.json").read_text()) if x["name"] == "Stripes")  # a slider
+    e = next(x for x in examples() if x["name"] == "Stripes")  # a slider
     for size in SIZES:
         page = new_page(browser, size, errors)
         page.goto(share_link(base, e["src"], e["name"]))
