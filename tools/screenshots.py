@@ -8,9 +8,9 @@ headless Chromium against tools/mock-device.py over the demo card.
     uv run tools/screenshots.py [--card target/demo-card] [--out docs/images]
 
 (`make screenshots` builds the app and the demo card first.) Writes
-library.png, effects.png, formulas.png, now.png, playlists.png (1280x800),
+library.png, formulas.png, now.png, playlists.png (1280x800),
 create-art.png (1280 wide, the whole page) and phone-library.png (390x844
-at 2x). The card must be tools/demo-card.py's: the panel's own effects and
+at 2x). The card must be tools/demo-card.py's: Formulas recorded as GIFs and
 live items and the CC0 Kenney sprites, nothing from the DMDoS pack and no
 game art — these images are published. Writes go to a throwaway overlay;
 the card is left as it was. Needs `make web` and, once,
@@ -126,7 +126,7 @@ def main() -> int:
             browser = pw.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             # Now: a Kenney sprite on the panel, a few things before it in Recently played.
-            for p in ("@fx:tunnel?palette=fire&texture=rings&twist=2", "@fx:wire?shape=tesseract&color=ff66cc", KENNEY_WALK):
+            for p in ("/gifs/Demoscene/Formula_Tunnel_01.gif", "/gifs/Demoscene/Formula_Wireframe_Cube_01.gif", KENNEY_WALK):
                 call(base, "POST", "/api/play", {"path": p})
                 time.sleep(0.6)
             page.goto(base + "/#now")
@@ -135,20 +135,12 @@ def main() -> int:
             page.wait_for_selector("#now-recent > div", timeout=10000)
             page.wait_for_timeout(1500)
             shot(page, a.out, "now.png")
-            # Library: Demoscene, a tunnel in Details.
+            # Library: Demoscene, a Formula's GIF in Details.
             go(page, "library")
             folder(page, "Demoscene")
-            row(page, "/gifs/Demoscene/FX_Tunnel_Fire_Rings_01.gif")
+            row(page, "/gifs/Demoscene/Formula_Tunnel_01.gif")
             wait_lit(page, "#lib-panel")
             shot(page, a.out, "library.png")
-            # Effects: the tunnel and its options.
-            folder(page, "@fx")
-            page.wait_for_selector("#lib-list .vrow:not([hidden])[data-path^='@fx:tunnel']", timeout=20000)
-            page.click("#lib-list .vrow:not([hidden])[data-path^='@fx:tunnel']")
-            page.select_option("#fx-tunnel select[data-key=palette]", "fire")
-            wait_lit(page, "#lib-panel")
-            page.wait_for_timeout(800)
-            shot(page, a.out, "effects.png")
             # Formulas: the gallery, the first example (Plasma) in Details.
             go(page, "formulas")
             page.wait_for_selector("#psi-ex .psi-tile", timeout=20000)
@@ -192,7 +184,7 @@ def main() -> int:
             phone.goto(base + "/#library")
             phone.wait_for_selector("#lib-list", timeout=20000)
             folder(phone, "Demoscene")
-            row(phone, "/gifs/Demoscene/FX_Tunnel_Chrono_01.gif")
+            row(phone, "/gifs/Demoscene/Formula_Time_Gate_01.gif")
             phone.wait_for_selector("#lib-side.open", timeout=10000)
             wait_lit(phone, "#lib-panel")
             shot(phone, a.out, "phone-library.png")
