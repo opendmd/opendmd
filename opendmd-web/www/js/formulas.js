@@ -189,7 +189,8 @@ function loop(now) {
   for (const v of views) {
     if (!v.f || v.canvas.offsetParent === null) continue;
     on = true;
-    const g = v.d || D, n = Math.max(1, Math.floor((v.loopMs || 8000) / g)), k = Math.floor((now - v.t0) / g), i = k % n;
+    // (A formula that never repeats, loop 0: its time since the preview began.)
+    const g = v.d || D, n = v.loopMs === 0 ? Infinity : Math.max(1, Math.floor((v.loopMs || 8000) / g)), k = Math.floor((now - v.t0) / g), i = k % n;
     // Over a GIF the picture changes with the GIF too.
     const key = v.over && U ? k : i;
     if (key === v.i && !v.dirty) continue;
@@ -271,14 +272,18 @@ function share(btn, f) {
 // "Save as GIF…": one loop into Create Art: 20 ms frames (a GIF can't do 10: `fps 100`
 // saves at 50), 40 with `fps 25` or past 240, cut at 240.
 // Over a GIF: the GIF's length, or the formula's loop if that is longer and it moves.
+// One that never repeats (loop 0): its first FOREVER ms, and a toast says so.
+const FOREVER = 10000;
 function toGif(f) {
-  const i = info(f.src), ms = i[4];
-  if (!ms) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
+  const i = info(f.src), lp = i[4];
+  if (!i.length) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
+  const ms = lp || FOREVER;
+  if (!lp) toast(`This formula goes on without repeating: saved as its first ${FOREVER / 1000} s`);
   const o = i[5] & 32, len = !o ? ms : i[5] & 24 ? Math.max(ms, U?.total || 0) : U?.total || D;
   let d = Math.max(D, grid(i));
   if (len / d > 240) d = 40;
   const all = Math.max(1, Math.floor(len / d)), n = Math.min(all, 240);
-  app.artFrom = { title: (f.name || 'Formula') + (o && U ? ' over ' + U.name : ''), frames: { n, delay: d, cut: all > n, frame: (k) => draw(f, k * d % ms, false, k * d) } };
+  app.artFrom = { title: (f.name || 'Formula') + (o && U ? ' over ' + U.name : ''), frames: { n, delay: d, cut: all > n, frame: (k) => draw(f, lp ? k * d % lp : k * d, false, k * d) } };
   app.go('create');
 }
 
@@ -403,7 +408,7 @@ const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], 
   ['digit(n, col, row)', 'the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font'],
   ["glyph('A', col, row)", 'the same for a character'], ['bit(n, i)', 'bit i of a whole number: 1 or 0'],
   ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'], ['%', 'remainder: v % 1 is the fraction'], [';', 'a new line, on the same line'],
-  ['loop 8', 'the loop’s length in seconds (first line)'], ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'], ['frame { … }', 'values worked out once a frame'],
+  ['loop 8', 'the loop’s length in seconds (first line)'], ['loop forever', 'goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays'], ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'], ['frame { … }', 'values worked out once a frame'],
   ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
   ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'], ['p.v', 'a value part p sets'],
   ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']];
@@ -411,9 +416,12 @@ const DRAW = [['draw { … }', 'once a frame, before the pixels: values, loops, 
   ['for k < 12 { … }', 'inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame', 'for k < 12 {\n  \n}'],
   ['line(x0, y0, x1, y1, v0, v1)', 'a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1)'],
   ['dot(x, y, v)', 'one pixel of ink v'], ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
-  ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '], ['T[k]', 'number k of table T, from 0 (0 outside it)']];
+  ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '], ['T[k]', 'number k of table T, from 0 (0 outside it)'],
+  ['sprite s { … }', 'a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall', 'sprite s {\n  key . 0, X 1\n  .X.\n}\n'],
+  ['s[u, v]', 'sprite s at column u, row v from its top left: its key’s number (0 outside)']];
 const COLS = [['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'], ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
-  ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'], ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'], ['gray(v)', 'white, 0 to 1'],
+  ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'],
+  ['palette sea = #024, #08c, #fff', 'your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one', 'palette p = #000, #f80, #fff\n'], ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'], ['gray(v)', 'white, 0 to 1'],
   ['#ff8800', 'a colour: alone, or #f80 * v, mix(#000, #f80, v)'],
   ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)']];
 

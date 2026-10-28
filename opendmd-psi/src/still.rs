@@ -165,8 +165,16 @@ pub(crate) fn fingerprint(prog: &Program) -> u32 {
         }
         // A table the steps read: its entries (a live edit may change only
         // them).
-        if op.code == code::TAB {
-            let (a, n) = (op.b as usize, op.c as usize + 1);
+        // (A sprite's words, its header first.)
+        let (a, n) = match op.code {
+            code::TAB => (op.b as usize, op.c as usize + 1),
+            code::SPR => {
+                let h = crate::program::SprHead::new(&prog.tables, op.c);
+                (op.c as usize, h.words())
+            }
+            _ => (0, 0),
+        };
+        if n > 0 {
             for v in &prog.tables[a.min(MAX_TABLE)..(a + n).min(MAX_TABLE)] {
                 for b in v.to_le_bytes() {
                     eat(b);

@@ -53,7 +53,7 @@ export async function use(f, blend, amt) {
 // The saved look's formula (its path's text — opendmd_psi::look's, lines
 // joined by `; ` — taken apart again) and sliders: for one not found among
 // this browser's Formulas.
-const inner = (s) => (/^(?:loop [\d.]+; )?part look \{; (.*); \}; (?:layer \w+ \{ )?look(?:\(x, y, [\d.]+\))?(?: \})?$/.exec(s) || [])[1];
+const inner = (s) => (/^(?:loop (?:[\d.]+|forever); )?part look \{; (.*); \}; (?:layer \w+ \{ )?look(?:\(x, y, [\d.]+\))?(?: \})?$/.exec(s) || [])[1];
 export function saved(cf) {
   const q = new URLSearchParams(cf.look_formula.slice(8)), src = q.get('src') || '', [name, b, k] = named(cf), f = { name: name || 'A formula', saved: 1 };
   f.src = b == 'over' && k == 100 ? src : inner(src) || src;

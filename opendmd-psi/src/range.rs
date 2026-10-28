@@ -68,7 +68,11 @@ fn t_max(loop_ms: u32) -> i32 {
 #[inline]
 pub(crate) fn inputs_in_range(prog: &Program, i: &Inputs) -> bool {
     let unit = |v: i32| (0..=ONE).contains(&v);
-    (0..=t_max(prog.loop_ms)).contains(&i.t)
+    // (A `loop forever` formula reads `tw`, never `t`; its wide values
+    // come back to Q16.16 only through steps whose ranges hold for any
+    // `tw`, and `seed` is 0..1.)
+    (prog.forever() || (0..=t_max(prog.loop_ms)).contains(&i.t))
+        && (prog.uses & SEEDED == 0 || unit(i.seed))
         && unit(i.a)
         && unit(i.b)
         && unit(i.c)
@@ -122,15 +126,7 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
         SHR => Iv(a.0 >> (op.c & 31), a.1 >> (op.c & 31)),
         DIV => div_iv(a, b),
         RECIP => div_iv(Iv::point(ONE), a),
-        MOD => {
-            if b.0 > 0 {
-                Iv(0, b.1 - 1)
-            } else if b.1 < 0 {
-                Iv(b.0 + 1, 0)
-            } else {
-                Iv((b.0 + 1).min(0), (b.1 - 1).max(0))
-            }
-        }
+        MOD => mod_iv(b),
         MASK => {
             if b.0 >= 0 {
                 Iv(0, b.1)
@@ -145,7 +141,19 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
         MIN => Iv(a.0.min(b.0), a.1.min(b.1)),
         MAX => Iv(a.0.max(b.0), a.1.max(b.1)),
         ATAN2 => Iv(-(ONE as i64) / 2, ONE as i64 / 2),
-        HASH | NOISE => Iv(0, 0xffff),
+        HASH | NOISE | NOISE_O..=NOISE_O_LAST => Iv(0, 0xffff),
+        // Wide steps back to a Q16.16 (their `a` is a wide slot, whatever
+        // its value): a fraction, a remainder within `b`, 1 or 0, at most
+        // or at least `b`, any 32 bits.
+        W_FRAC | W_NOISEX | W_REM => Iv(0, 0xffff),
+        MULR => {
+            let p = mul_corners(a, b);
+            Iv((p.0 + c.0) >> 16, (p.1 + c.1) >> 16).sat()
+        }
+        W_MOD => mod_iv(b),
+        W_CMP => UNIT,
+        W_MINMAX if op.c == MIN => Iv(LO, b.1),
+        W_MINMAX => Iv(b.0, HI),
         LEN | SQRT => Iv(0, HI),
         NEG => Iv(-a.1, -a.0).sat(),
         ABS => {
@@ -168,6 +176,16 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
         // The sine table's entries are within ±16,384 (a test checks):
         // interpolated and shifted, ±1.
         SIN | COS | TRI | SAW | SQR => SIGNED,
+        SPR => {
+            // 0 outside, else one of its keys' numbers.
+            let at = op.c as usize;
+            let keys = (tabs[at] as u32 >> 20) & 31;
+            let mut r = Iv::point(0);
+            for k in 0..keys as usize {
+                r = r.union(Iv::point(tabs[(at + 1 + k) & (MAX_TABLE - 1)]));
+            }
+            r
+        }
         TAB => {
             let mut r = Iv::point(0);
             for k in 0..=op.c as usize {
@@ -182,6 +200,18 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
         }
         MIX => add_iv(a, mul_iv(sub_iv(b, a).sat(), c).sat()).sat(),
         _ => FULL,
+    }
+}
+
+/// A floored remainder by a divisor in `b`: the divisor's sign, within it
+/// (0 by 0).
+fn mod_iv(b: Iv) -> Iv {
+    if b.0 > 0 {
+        Iv(0, b.1 - 1)
+    } else if b.1 < 0 {
+        Iv(b.0 + 1, 0)
+    } else {
+        Iv((b.0 + 1).min(0), (b.1 - 1).max(0))
     }
 }
 
@@ -228,6 +258,9 @@ pub(crate) fn narrow(prog: &mut Program) {
         sc[s as usize] = UNIT;
     }
     sc[S_PY as usize] = Iv(0, ((H - 1) * ONE as usize) as i64);
+    if prog.uses & SEEDED != 0 {
+        sc[S_SEED as usize] = UNIT;
+    }
     let (fe, de, re, pe) = (
         (prog.frame_end as usize).min(MAX_OPS),
         (prog.draw_end as usize).min(MAX_OPS),
@@ -240,7 +273,11 @@ pub(crate) fn narrow(prog: &mut Program) {
     // are ranges). Every slot is written by one step, before any step
     // reads it (`emit`), so one walk in order is exact.
     for &op in &ops[..fe] {
-        sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
+        // (A wide step's own slots are not scalar ones: only those that come
+        // back to a Q16.16 write one.)
+        if code::writes_scalar(op.code) {
+            sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
+        }
     }
     // The draw stage's slots (its counters and values): anything.
     for op in &ops[fe.min(de)..de] {
