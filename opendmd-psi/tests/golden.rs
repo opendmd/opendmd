@@ -1691,3 +1691,130 @@ fn sprites_narrow_soundly() {
     }
     assert!(n > 250, "only {n} compiled");
 }
+
+/// A program compiled with scalar slots used again (the default) draws what
+/// the same formula with a slot for every value draws: the golden formulas,
+/// and random ones with values once a frame (some only read there), draw
+/// loops two deep reading values from before them, rows, pixels, picks,
+/// layers and `loop forever`, at times in and out of the ranges, both lane
+/// widths. Reuse never needs more slots, and does save some.
+#[test]
+fn slots_used_again_draw_the_same() {
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let mut r = Rng(0x0005_1075_bacc_0001);
+    let mut srcs: Vec<String> = GOLDEN.iter().map(|g| g.1.to_string()).collect();
+    srcs.extend(DRAWN.iter().map(|g| g.1.to_string()));
+    srcs.extend(OVER.iter().map(|g| g.1.to_string()));
+    let n: usize = std::env::var("PSI_FUZZ_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+    for k in 0..n {
+        let e = |r: &mut Rng| expr(r, 2);
+        let mut s = format!("loop {}\n", 1 + k % 5);
+        if k % 7 == 0 {
+            s = "loop forever\n".into();
+        }
+        s += &format!(
+            "frame {{ f1 = {}; f2 = f1*{} + a; f3 = sin(f2 + t) }}\n",
+            ["t*0.5", "a + b", "hour/24", "t % 3"][r.below(4)],
+            r.below(9)
+        );
+        if r.below(2) == 0 {
+            s += &format!(
+                "draw {{\n  g = f1*3 + 2\n  for q < {} {{\n    u = q*f3*7 + g\n    for j < {} {{ dot(u + j*4, j*3 + f2, hash(q, j)) }}\n    line(u, 0, g, 31, f3)\n  }}\n}}\n",
+                1 + r.below(12),
+                1 + r.below(5)
+            );
+        }
+        s += &format!("rw = py*{} + f3\nv = {}\n", r.below(5), e(&mut r));
+        s += match r.below(4) {
+            0 => "layer { hsv(v + rw*0.1, 1, frac(v)) }\nlayer add { gray(f1*0.1 + x, 0.5) }"
+                .to_string(),
+            1 => format!("rgb(pick(px/40, f1, f2, rw), frac(v), {})", e(&mut r)),
+            2 => "pal(fire, frac(v + rw)) * (f3*0.5 + 0.5)".to_string(),
+            _ => format!("gray(frac(v*{} + rw + f2))", r.below(4)),
+        }
+        .as_str();
+        srcs.push(s);
+    }
+    let (mut saved, mut compared) = (0, 0);
+    for src in &srcs {
+        let (mut p, mut q) = (Program::default(), Program::default());
+        if opendmd_psi::compile_opts(src, &mut p, true, true, true).is_err() {
+            continue;
+        }
+        if opendmd_psi::compile_opts(src, &mut q, true, true, false).is_err() {
+            // Only for its size: with every value its own slot it may not fit.
+            continue;
+        }
+        compared += 1;
+        assert!(p.values() <= q.values(), "{src}");
+        saved += usize::from(p.values() < q.values());
+        for (ms, a, seed) in [
+            (0u32, 1 << 15, 0),
+            (1234, 0, 9000),
+            (2999, 3 << 16, 60_000),
+            (40_000_000, -(1 << 16), -5),
+        ] {
+            let mut i = opendmd_psi::Inputs {
+                a,
+                seed,
+                ..inputs(ms)
+            };
+            i.set_ms(&p, ms as u64);
+            {
+                let (x, y) = (&p, &q);
+                let fx = {
+                    let mut s = Scratch::<128>::new();
+                    let mut ink = Ink::boxed();
+                    let mut out = vec![0x5a; W * H * 3];
+                    render_rows_ink::<128>(
+                        x,
+                        &mut s,
+                        Some(&mut ink),
+                        &i,
+                        &OWN,
+                        Some(&under),
+                        u32::MAX,
+                        &mut out,
+                    );
+                    out
+                };
+                let fy = {
+                    let mut s = Scratch::<64>::new();
+                    let mut ink = Ink::boxed();
+                    let mut out = vec![0x5a; W * H * 3];
+                    render_rows_ink::<64>(
+                        y,
+                        &mut s,
+                        Some(&mut ink),
+                        &i,
+                        &OWN,
+                        Some(&under),
+                        u32::MAX,
+                        &mut out,
+                    );
+                    out
+                };
+                assert!(
+                    fx == fy,
+                    "{src:?} at {ms} ms\n{}\nwithout reuse:\n{}",
+                    x.listing(),
+                    y.listing()
+                );
+            }
+        }
+    }
+    assert!(
+        compared * 10 > srcs.len() * 8,
+        "only {compared} of {} compared",
+        srcs.len()
+    );
+    assert!(
+        saved * 2 > compared,
+        "only {saved} of {compared} saved slots"
+    );
+    eprintln!("{compared} formulas compared, {saved} with fewer slots");
+}

@@ -210,7 +210,12 @@ FONT = {"fonts/silkscreen.woff2"}
 # and packed (bytes, not `str`'s Unicode trims), their nine error sentences,
 # the sprite step's lane loop: +3.6 KB gz (~67.9 -> ~71.5 KB with its glue).
 # Raised under the brief's OK.
-PSI_WASM_GZ_BUDGET = 71 * 1024  # 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 73 KB for slot reuse (2026-10-28, branch psi-lang, endless-road.md §5.3):
+# the compiler lays steps out on virtual slots and gives each a scalar slot
+# by a linear scan of live intervals (`assign_slots`, ~3.5 KB of wasm):
+# +1.7 KB gz (~71.5 -> ~73.2 KB). Instead of 256 slots, which would have
+# grown every formula's memory on the device. Raised under the brief's OK.
+PSI_WASM_GZ_BUDGET = 73 * 1024  # 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
