@@ -89,44 +89,9 @@ const KEY_SD_SLOW: &str = "sd_slow";
 /// never be a set's name: FAT refuses it in a file name).
 const CURRENT_PLAYLIST: &str = "*";
 
-/// When the device prepares its own playback cache (`cache_builder.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[repr(u8)]
-pub enum AutoPrepare {
-    /// While the panel is dark (night mode) or nothing plays. The default.
-    #[default]
-    Idle = 0,
-    /// Also slowly while a prepared file plays.
-    Always = 1,
-    Off = 2,
-}
-
-impl AutoPrepare {
-    pub fn parse(s: &str) -> Option<AutoPrepare> {
-        match s {
-            "idle" => Some(AutoPrepare::Idle),
-            "always" => Some(AutoPrepare::Always),
-            "off" => Some(AutoPrepare::Off),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AutoPrepare::Idle => "idle",
-            AutoPrepare::Always => "always",
-            AutoPrepare::Off => "off",
-        }
-    }
-
-    pub fn from_u8(v: u8) -> AutoPrepare {
-        match v {
-            1 => AutoPrepare::Always,
-            2 => AutoPrepare::Off,
-            _ => AutoPrepare::Idle,
-        }
-    }
-}
+/// When the device prepares its own playback cache (`cache_builder.rs`):
+/// `opendmd_core::auto_prepare`, where the pace and the guard are tested.
+pub use opendmd_core::auto_prepare::AutoPrepare;
 
 /// The largest schedule JSON NVS will hold for us (`PUT /api/schedule`).
 pub const SCHEDULE_MAX: usize = 2048;
@@ -287,7 +252,7 @@ impl Default for Settings {
             tz_name: config::TZ_NAME.to_string(),
             schedule: String::new(),
             transition: config::TRANSITION,
-            auto_prepare: AutoPrepare::Idle,
+            auto_prepare: AutoPrepare::default(),
             follow: false,
             follow_host: String::new(),
             follow_code: String::new(),

@@ -631,7 +631,7 @@ DEFAULT_SETTINGS = {
     "tz_name": "UTC",
     "transition": "dissolve",   # config::TRANSITION (opendmd_core::compositor)
     "transition_ms": 400,
-    "auto_prepare": "idle",     # config::AUTO_PREPARE: idle / always / off
+    "auto_prepare": "idle",     # opendmd_core::auto_prepare: idle (default) / always / off
     "card_speed": "safe",       # config::CARD_SPEED: safe / fast / full
     "follow": False,            # Follow RePlayOS
     "follow_host": "",

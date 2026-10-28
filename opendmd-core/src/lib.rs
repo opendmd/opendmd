@@ -6,6 +6,7 @@
 //! tests read back) and `log`.
 
 pub mod access;
+pub mod auto_prepare;
 pub mod boot;
 pub mod brightness;
 pub mod canvas;
