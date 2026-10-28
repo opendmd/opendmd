@@ -1,4 +1,5 @@
-//! The playback cache, prepared by the device itself while it is idle.
+//! The playback cache, prepared by the device itself while it plays and
+//! while it is idle.
 //!
 //! A prepared copy (`docs/cache-format.md`: a GIF with its LZW capped at 9
 //! bits, delta frames and the `OPENDMD1LZW` hint) plays with ~16 KB of
@@ -16,14 +17,17 @@
 //! - **Full** — night mode has the panel dark, the player is paused, or there
 //!   is no playlist to play: nothing is animating, so work as fast as the
 //!   card allows (a 1 ms sleep every ~20 ms of work so IDLE0 still runs).
-//! - **Drip** — `auto_prepare = "always"` and a *prepared* file is on screen
-//!   (its ~30 KB of headroom is what the encoder borrows), no transition
-//!   running: [`config::BUILDER_DRIP_PAUSE`] of sleep after every 2 KB of
-//!   card I/O and every frame, so the player's reads rarely wait for the FAT
-//!   lock.
-//! - **Stop(reason)** — anything else (`auto_prepare = "off"`, a GIF on
-//!   screen, a transition, a playlist rebuild, and — set from
-//!   [`crate::sd::SdSource::open`] — the player opening its next file).
+//! - **Drip** — `auto_prepare = "always"` (the default) and a GIF plays,
+//!   a prepared one or an original (since the 512 B FatFs buffers an
+//!   original leaves ~92 KB free, more than the start threshold needs; the
+//!   heap gate below still decides each file), no transition running and no
+//!   hold after a late frame (`opendmd_core::auto_prepare::DripGuard`):
+//!   [`config::BUILDER_DRIP_PAUSE`] of sleep before every 2 KB of card I/O
+//!   and every `stat`, so the player's reads rarely wait for the FAT lock.
+//! - **Stop(reason)** — anything else (`auto_prepare = "off"`, `idle` and
+//!   playing, a transition, a late-frame hold, a playlist rebuild, and —
+//!   set from [`crate::sd::SdSource::open`] — the player opening its next
+//!   file).
 //!
 //! On top of the pace, a transfer in flight ([`busy`]: a stream-task file
 //! GET, an upload, a listing) stops it, and so does free heap under
@@ -84,7 +88,9 @@ use crate::state::{free_heap, largest_free_block};
 pub enum Reason {
     Off = 1,
     Playing = 2,
-    GifOnScreen = 3,
+    /// A frame was late while dripping: held off for a while
+    /// (`opendmd_core::auto_prepare::DripGuard`).
+    LateFrame = 3,
     LowMemory = 4,
     Busy = 5,
     Transition = 6,
@@ -101,7 +107,7 @@ impl Reason {
         Some(match v {
             1 => Reason::Off,
             2 => Reason::Playing,
-            3 => Reason::GifOnScreen,
+            3 => Reason::LateFrame,
             4 => Reason::LowMemory,
             5 => Reason::Busy,
             6 => Reason::Transition,
@@ -118,7 +124,7 @@ impl Reason {
             Reason::Off => "off",
             // A file open is over in milliseconds; to a user it is playing.
             Reason::Playing | Reason::Opening => "playing",
-            Reason::GifOnScreen => "gif on screen",
+            Reason::LateFrame => "late frame",
             Reason::LowMemory => "low memory",
             Reason::Busy => "busy",
             Reason::Transition => "transition",
@@ -306,6 +312,19 @@ impl Drop for Busy {
     }
 }
 
+/// The task is up at the drip pace: a late frame now may be its doing
+/// (`main`'s `DripGuard`).
+pub fn dripping() -> bool {
+    ALIVE.load(SeqCst) && PACE.load(SeqCst) == PACE_DRIP
+}
+
+/// Drip holds after late frames since boot (the heartbeat's `late holds`).
+static LATE_HOLDS: AtomicU32 = AtomicU32::new(0);
+
+pub fn note_late_hold() {
+    LATE_HOLDS.fetch_add(1, SeqCst);
+}
+
 /// A transfer that shares the card is in flight (a [`Busy`] is held): the
 /// player does not open the next file ahead meanwhile (`main.rs`), as its
 /// directory scans would queue behind the transfer's.
@@ -481,7 +500,7 @@ pub fn heartbeat(total: usize, prepared: Option<usize>) -> String {
     let waits = RELEASE_WAITS.load(SeqCst);
     format!(
         ", builder: {} {pace} {}/{total} {per} (session {}, failed {}, abandoned {}, {:.0} KB written at {rate:.0} KB/s, \
-         release waits {waits} max {:.1} ms timeouts {}, stack {} B unused, task {})",
+         release waits {waits} max {:.1} ms timeouts {}, late holds {}, stack {} B unused, task {})",
         state.as_str(),
         prepared.map_or_else(|| "?".to_string(), |p| p.to_string()),
         r.session,
@@ -490,6 +509,7 @@ pub fn heartbeat(total: usize, prepared: Option<usize>) -> String {
         r.written as f32 / 1024.0,
         RELEASE_MAX_US.swap(0, SeqCst) as f32 / 1000.0,
         RELEASE_TIMEOUTS.load(SeqCst),
+        LATE_HOLDS.load(SeqCst),
         match STACK_LOW.load(SeqCst) {
             u32::MAX => "-".to_string(),
             n => n.to_string(),

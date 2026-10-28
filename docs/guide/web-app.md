@@ -181,9 +181,11 @@ Settings has four tabs, and everything saves as you change it (a green
     the player has been running, its memory, and late frames (frames the
     panel showed late enough to see). **Reload playlist** reads the card
     again if you changed it in a computer; **Reboot** restarts the player.
-  - **Playback cache** shows how many GIFs have a lighter copy ready. The
-    player makes these by itself while the panel is idle; **Prepare
-    remaining files** does the rest now from your browser.
+  - **Playback cache** shows how many GIFs are ready to play at their
+    smoothest. The player gets them ready by itself, slowly while it plays
+    and at full speed while the panel is dark at night or the player is
+    paused; untick **Also while playing** to keep it to those times.
+    **Prepare remaining files** does the rest now from your browser.
   - **Network** changes the WiFi network or the **Display name** (`opendmd`
     in `opendmd.local`). Give each display its own name if you have more
     than one; a name another display on your network already answers to is

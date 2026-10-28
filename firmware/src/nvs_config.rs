@@ -46,7 +46,10 @@ const KEY_TZ: &str = "tz";
 const KEY_TZ_NAME: &str = "tz_name";
 const KEY_SCHEDULE: &str = "schedule";
 const KEY_TRANSITION: &str = "transition";
-const KEY_AUTO_PREPARE: &str = "auto_prepare";
+/// `auto_prepare` since the default became `always`
+/// ([`AutoPrepare::from_nvs`]); the old key is only read.
+const KEY_AUTO_PREPARE: &str = "auto_prep";
+const KEY_AUTO_PREPARE_OLD: &str = "auto_prepare";
 const KEY_FOLLOW: &str = "follow";
 const KEY_FOLLOW_HOST: &str = "follow_host";
 const KEY_FOLLOW_CODE: &str = "follow_code";
@@ -89,44 +92,10 @@ const KEY_SD_SLOW: &str = "sd_slow";
 /// never be a set's name: FAT refuses it in a file name).
 const CURRENT_PLAYLIST: &str = "*";
 
-/// When the device prepares its own playback cache (`cache_builder.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[repr(u8)]
-pub enum AutoPrepare {
-    /// While the panel is dark (night mode) or nothing plays. The default.
-    #[default]
-    Idle = 0,
-    /// Also slowly while a prepared file plays.
-    Always = 1,
-    Off = 2,
-}
-
-impl AutoPrepare {
-    pub fn parse(s: &str) -> Option<AutoPrepare> {
-        match s {
-            "idle" => Some(AutoPrepare::Idle),
-            "always" => Some(AutoPrepare::Always),
-            "off" => Some(AutoPrepare::Off),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AutoPrepare::Idle => "idle",
-            AutoPrepare::Always => "always",
-            AutoPrepare::Off => "off",
-        }
-    }
-
-    pub fn from_u8(v: u8) -> AutoPrepare {
-        match v {
-            1 => AutoPrepare::Always,
-            2 => AutoPrepare::Off,
-            _ => AutoPrepare::Idle,
-        }
-    }
-}
+/// When the device prepares its own playback cache (`cache_builder.rs`):
+/// `opendmd_core::auto_prepare`, where the pace and the NVS migration are
+/// tested.
+pub use opendmd_core::auto_prepare::AutoPrepare;
 
 /// The largest schedule JSON NVS will hold for us (`PUT /api/schedule`).
 pub const SCHEDULE_MAX: usize = 2048;
@@ -176,7 +145,7 @@ pub struct Settings {
     /// form `Transition::parse` reads; `/api/config` has it as `transition`
     /// + `transition_ms`.
     pub transition: Transition,
-    /// `"idle"` (default), `"always"` or `"off"`: see [`AutoPrepare`].
+    /// `"always"` (default), `"idle"` or `"off"`: see [`AutoPrepare`].
     pub auto_prepare: AutoPrepare,
     /// Follow RePlayOS (`follow.rs`): on/off, the Pi's host (`192.168.1.20`
     /// or `host:port`), and its NET CONTROL code — stored like the WiFi
@@ -287,7 +256,7 @@ impl Default for Settings {
             tz_name: config::TZ_NAME.to_string(),
             schedule: String::new(),
             transition: config::TRANSITION,
-            auto_prepare: AutoPrepare::Idle,
+            auto_prepare: AutoPrepare::default(),
             follow: false,
             follow_host: String::new(),
             follow_code: String::new(),
@@ -428,10 +397,10 @@ impl Config {
                 .get_string(KEY_TRANSITION)
                 .and_then(|s| Transition::parse(&s))
                 .unwrap_or(d.transition),
-            auto_prepare: self
-                .get_string(KEY_AUTO_PREPARE)
-                .and_then(|s| AutoPrepare::parse(&s))
-                .unwrap_or(d.auto_prepare),
+            auto_prepare: AutoPrepare::from_nvs(
+                self.get_string(KEY_AUTO_PREPARE).as_deref(),
+                self.get_string(KEY_AUTO_PREPARE_OLD).as_deref(),
+            ),
             follow: self
                 .nvs
                 .get_u8(KEY_FOLLOW)

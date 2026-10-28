@@ -226,7 +226,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `tz`, `tz_name` | strings, `"UTC0"`, `"UTC"` | POSIX time zone (`GMT0IST,M3.5.0/1,M10.5.0`, ≤ 64 characters); its display name (≤ 64) |
 | `transition` | `dissolve` | `dissolve`, `wipe_left`, `wipe_right`, `wipe_down`, `wipe_up`, `blinds`, `push`, `fade`, `none` |
 | `transition_ms` | 20..=2000, 400 | transition length |
-| `auto_prepare` | `idle` | prepare copies by itself: `idle` (when the panel is idle), `always` (also while playing, slower), `off` |
+| `auto_prepare` | `always` | prepare copies by itself: `always` (also while playing, slower), `idle` (only while the panel is dark or paused), `off` |
 | `follow` | bool, false | Follow RePlayOS |
 | `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400) |
 | `follow_code_set` | bool | its code is saved (write it as `follow_code`, ≤ 64, one line) |
@@ -512,7 +512,8 @@ curl -s $DMD/api/wake --json '{"minutes":60}'
 ## Prepared copies
 
 A prepared copy is a smaller GIF the player plays in place of the original.
-The player makes them when idle (`auto_prepare`); the web app makes them
+The player makes them itself (`auto_prepare`: slowly while it plays, at
+full speed while the panel is dark or paused); the web app makes them
 faster and uploads them to `/cache/<Category>/<xx>/<name>.gif`
 (`docs/cache-format.md`).
 
@@ -525,8 +526,9 @@ how many have a copy or play as they are (null until counted); `"counting"` or `
 until ready); the last count's ms. `auto`, the player's own preparing:
 `{"mode","state","reason","policy","session","failed","avg_full_s","avg_drip_s","eta_s","current"}`:
 `mode` = `auto_prepare`; `state` `idle`, `running`, `paused`, `done`;
-`reason` it is not running (`off`, `playing`, `gif on screen`, `low
-memory`, `busy`, `transition`, `reindex`, `no playlist`, `card error`);
+`reason` it is not running (`off`, `playing`, `late frame` (held off a
+while after a visibly late frame), `low memory`, `busy`, `transition`,
+`reindex`, `no playlist`, `card error`);
 `policy` `full` or `drip` (pace); `session` copies since boot; `failed`
 GIFs it cannot prepare; `avg_*_s` s per file per pace; `eta_s` s left at
 the full pace; `current` the GIF in hand.

@@ -88,8 +88,8 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   const cacheMsg = h('div.muted', { id: 'pc-progress' });
   const cacheErr = h('div.log.bad', { id: 'pc-errors' });
   const cacheSum = h('div', { id: 'pc-summary' });
-  // The device prepares files by itself when idle (auto_prepare): one
-  // sentence, and whether it may also do so, slowly, while playing.
+  // The device prepares files by itself (auto_prepare): one sentence, and
+  // whether it may also do so, slowly, while playing (the default).
   const autoLine = h('span', { id: 'pc-auto' });
   const pcH = h('h3', 'Playback cache'), pcRun = saver(pcH);
   const always = h('input', { type: 'checkbox', id: 'pc-always', onchange: () => pcRun(async () => {
@@ -236,7 +236,10 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
     if (a.mode === 'off') return 'Automatic preparing is off';
     if (a.state === 'done') return a.failed ? `Automatic preparing is done · ${n(a.failed)} could not be prepared` : 'All files are prepared';
     const m = (t) => +t.slice(0, 2) * 60 + +t.slice(3), len = nt?.mode == 'off' && ((m(nt.to) - m(nt.from) + 1440) % 1440 || 1440) * 60;
-    return (a.state !== 'running' ? (a.reason && a.reason !== 'playing' ? `Automatic preparing is waiting (${a.reason})` : 'Files are prepared automatically when the panel is idle')
+    // Waiting for its turn (a GIF change, a transition, a late frame) is the normal sentence.
+    const waits = !a.reason || ['playing', 'transition', 'late frame'].includes(a.reason);
+    return (a.state !== 'running' ? (!waits ? `Automatic preparing is waiting (${a.reason})`
+      : a.mode === 'always' ? 'Files are prepared automatically, slowly while playing' : 'Files are prepared automatically when the panel is idle')
       : a.policy === 'drip' ? 'Preparing files slowly while playing' : 'Preparing files automatically while the panel is idle')
       + (r.prepared != null ? ` · ${n(r.prepared)} of ${n(r.total)}` : '')
       + (e == null ? '' : len ? ` · about ${Math.ceil(e / len)} night${e > len ? 's' : ''} left` : ` · about ${e < 5400 ? mins(e) : Math.round(e / 3600) + ' hours'} of idle time left`);
