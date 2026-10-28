@@ -215,7 +215,11 @@ FONT = {"fonts/silkscreen.woff2"}
 # by a linear scan of live intervals (`assign_slots`, ~3.5 KB of wasm):
 # +1.7 KB gz (~71.5 -> ~73.2 KB). Instead of 256 slots, which would have
 # grown every formula's memory on the device. Raised under the brief's OK.
-PSI_WASM_GZ_BUDGET = 73 * 1024  # 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 74 KB for palettes of a formula's own (2026-10-28, branch psi-lang,
+# endless-road.md §5.4): `palette NAME = #…, …`, its spread over 32
+# entries, its sentences and the unpacking in the colour step: +1.5 KB gz
+# (~73.2 -> ~74.7 KB). Raised under the brief's OK.
+PSI_WASM_GZ_BUDGET = 74 * 1024  # 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,

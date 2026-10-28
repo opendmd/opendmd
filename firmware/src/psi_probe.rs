@@ -1028,7 +1028,7 @@ pub fn run(root: &str) {
 
     // What one step costs: each formula is the baseline plus one or two
     // per-pixel steps (t is a frame value, so nothing folds away).
-    const STEPS: [(&str, &str); 28] = [
+    const STEPS: [(&str, &str); 29] = [
         ("base gray(x)", "gray(x)"),
         ("add", "gray(x + t)"),
         ("mul", "gray(x * t)"),
@@ -1060,6 +1060,9 @@ pub fn run(root: &str) {
         // offsets set once a frame), against `noise (+mul)`'s row.
         ("noise wide (+mul +add)", "loop forever\ngray(noise(x * 8 + t, y, t))"),
         // A sprite's pixel (`SPR`), against `mul`'s row.
+        // A palette of the formula's own (unpacked from its tables), against
+        // `out pal`'s row.
+        ("out own pal", "palette p = #102030, #f08000, #ffffff\npal(p, x)"),
         ("sprite (+mul)", "sprite s {\nkey . 0, X 1, Y 0.5\nXY.XY.XY.XY.XY.XY.\n.XYXY.XYXY.XYXY.XY\n}\ngray(s[x * 18, y + t])"),
     ];
     // Layers and what is under (drawn over the golden picture): the

@@ -437,6 +437,44 @@ pub(crate) const SEEDED: u8 = 16;
 /// `table` entries a formula may hold in all.
 pub const MAX_TABLE: usize = 256;
 
+/// A formula's own palettes (`palette NAME = #…, …`): up to three, `pal`'s
+/// palettes 5, 6 and 7 after the five built-ins, each 32 entries
+/// (0x00RRGGBB) at the top of the tables ([`user_palette_at`]).
+pub const USER_PALETTES: usize = 3;
+
+/// Where user palette `j` (0..3) starts in the tables: the top 32 entries
+/// for the first, the 32 below for the second, …
+#[inline(always)]
+pub const fn user_palette_at(j: usize) -> usize {
+    MAX_TABLE - 32 * (j + 1)
+}
+
+/// Palette `i` as `pal` reads it: a built-in (0..=4) from the tables lent,
+/// or a formula's own (5..=7) unpacked from its tables into `own`.
+#[inline(always)]
+pub(crate) fn palette<'a>(
+    t: &crate::tables::Tables<'a>,
+    tabs: &[i32; MAX_TABLE],
+    i: u8,
+    own: &'a mut [[u8; 3]; 32],
+) -> &'a [[u8; 3]; 32] {
+    if (i as usize) < t.palettes.len() {
+        return t.palettes[i as usize];
+    }
+    unpack_palette(tabs, i, own);
+    own
+}
+
+/// A formula's own palette `i` (5..=7) from its tables.
+#[inline(never)]
+fn unpack_palette(tabs: &[i32; MAX_TABLE], i: u8, own: &mut [[u8; 3]; 32]) {
+    let at = user_palette_at((i as usize).saturating_sub(5) % USER_PALETTES);
+    for (k, c) in own.iter_mut().enumerate() {
+        let v = tabs[at + k] as u32;
+        *c = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+    }
+}
+
 /// A compiled formula. Plain data (every field an integer or an array of
 /// them), so an all-zero value is valid (an empty program) and
 /// [`crate::compile_into`] can fill one in place.

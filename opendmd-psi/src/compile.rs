@@ -1652,6 +1652,14 @@ struct Table<'s> {
     len: usize,
 }
 
+/// `palette NAME = #…, …`: the formula's own palette `j` (`pal`'s 5 + j).
+struct Palette<'s> {
+    name: &'s str,
+    at: usize,
+    scope: u16,
+    j: usize,
+}
+
 /// `sprite NAME { … }`: its header is `Parser::tables[start]`.
 struct Sprite<'s> {
     name: &'s str,
@@ -1738,6 +1746,10 @@ struct Parser<'s> {
     tables: Vec<i32>,
     table_names: Vec<Table<'s>>,
     sprites: Vec<Sprite<'s>>,
+    /// The formula's own palettes (32 entries each, 0x00RRGGBB; the same
+    /// stored once) and their names.
+    palettes: Vec<[i32; 32]>,
+    palette_names: Vec<Palette<'s>>,
     /// The draw stage: its items, the `draw` that wrote them, whether the
     /// lines being read are recorded (not for a part read again at another
     /// place: its draw stage is the one read where it is written), how deep
@@ -2462,15 +2474,11 @@ impl<'s> Parser<'s> {
         }
         self.next();
         let pname = self.text(p);
-        let Some(&(_, pal)) = PALETTES.iter().find(|e| e.0 == pname) else {
-            let s = suggest(pname, PALETTES.iter().map(|e| e.0));
-            return self.err(
-                p,
-                format!(
-                    "unknown palette `{pname}`{} (there are fire, ocean, ice, chrono, amber, rainbow and gray)",
-                    did_you_mean(s)
-                ),
-            );
+        let own = self
+            .palette_named(pname)
+            .map(|k| 5 + self.palette_names[k].j as u8);
+        let Some(pal) = PALETTES.iter().find(|e| e.0 == pname).map(|e| e.1).or(own) else {
+            return Err(self.unknown_palette(p));
         };
         self.expect(Tok::Comma, "`,` (as in `pal(fire, k)`)")?;
         let k = self.expr(0)?;
@@ -2674,7 +2682,8 @@ impl<'s> Parser<'s> {
             .map(|l| l.at)
             .or(self.part_named(name).map(|k| self.parts[k].at))
             .or(self.table_named(name).map(|k| self.table_names[k].at))
-            .or(self.sprite_named(name).map(|k| self.sprites[k].at));
+            .or(self.sprite_named(name).map(|k| self.sprites[k].at))
+            .or(self.palette_named(name).map(|k| self.palette_names[k].at));
         if let Some(at) = prev {
             return self.err(
                 t,
@@ -3035,7 +3044,7 @@ impl<'s> Parser<'s> {
                 }
                 "frame" => self.frame_block(t, &mut seen_frame)?,
                 "draw" | "table" | "for" => return Err(self.misplaced(t)),
-                _ if self.is_sprite() => return Err(self.misplaced(t)),
+                _ if self.is_sprite() || self.is_palette() => return Err(self.misplaced(t)),
                 _ if self.is_assignment() => self.assignment(false)?,
                 _ => colour = Some((self.colour_or_value(t, Tok::RBrace)?, t)),
             }
@@ -3287,6 +3296,10 @@ impl<'s> Parser<'s> {
                 "sprite" => {
                     "a sprite goes at the top of the formula (or a part), not inside a layer"
                 }
+                // E921.
+                "palette" => {
+                    "a palette goes at the top of the formula (or a part), not inside a layer"
+                }
                 "table" => "a table goes at the top of the formula (or a part), not inside a layer",
                 _ => "`for` goes inside `draw { }`: `draw { for k < 12 { … } }`",
             },
@@ -3335,6 +3348,128 @@ impl<'s> Parser<'s> {
         let (start, len) = (self.table_names[k].start, self.table_names[k].len);
         self.dag
             .tab(i, start, len, &self.tables, (t.start, close.end))
+    }
+
+    /// The palette of the formula's own called `name` that can be seen
+    /// here.
+    #[inline(never)]
+    fn palette_named(&self, name: &str) -> Option<usize> {
+        self.palette_names
+            .iter()
+            .rposition(|pl| pl.name == name && self.visible(pl.scope))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn unknown_palette(&self, p: Token) -> Error {
+        let pname = self.text(p);
+        let own: Vec<&str> = self
+            .palette_names
+            .iter()
+            .filter(|pl| self.visible(pl.scope))
+            .map(|pl| pl.name)
+            .collect();
+        let s = suggest(
+            pname,
+            PALETTES.iter().map(|e| e.0).chain(own.iter().copied()),
+        );
+        let yours = if own.is_empty() {
+            String::new()
+        } else {
+            format!(", and yours: {}", own.join(", "))
+        };
+        self.fail_at(
+            p,
+            format!(
+                "unknown palette `{pname}`{} (there are fire, ocean, ice, chrono, amber, rainbow and gray{yours})",
+                did_you_mean(s)
+            ),
+        )
+    }
+
+    /// Whether the statement at the cursor is `palette NAME = …`.
+    fn is_palette(&self) -> bool {
+        let t = self.peek();
+        t.tok == Tok::Name
+            && self.text(t) == "palette"
+            && self.tok(self.pos + 1).tok == Tok::Name
+            && self.tok(self.pos + 2).tok == Tok::Assign
+    }
+
+    /// `palette NAME = #…, #…, …` at `kw`: 1 to 32 colours (a `,` may end a
+    /// line), spread over the palette's 32 entries so that `pal(NAME, i/(n −
+    /// 1))` is colour `i` (the first at 0, the last at 1, the others in
+    /// steps between), as the tables' last 32 numbers (the next palette's
+    /// the 32 below).
+    #[inline(never)]
+    fn palette(&mut self, kw: Token) -> Result<(), Error> {
+        self.next();
+        let n = self.next();
+        let name = self.new_name(n)?;
+        self.next(); // `=`
+        let mut cols: Vec<u32> = Vec::new();
+        loop {
+            let c = self.peek();
+            let Tok::Hex(v) = c.tok else {
+                // E922.
+                return self.err(c, PALETTE_COLOURS);
+            };
+            self.next();
+            cols.push(v);
+            if self.peek().tok != Tok::Comma {
+                break;
+            }
+            self.next();
+            self.skip_newlines();
+        }
+        if cols.len() > 32 {
+            return self.err(kw, PALETTE_COLOURS);
+        }
+        // Entry e (where `pal` reads k in e/32..(e + 1)/32) is the colour
+        // nearest its middle, (e + ½)/32·(n − 1): so k = i/(n − 1), exact
+        // or a hair below (a division per pixel is a multiply), is colour i.
+        let last = cols.len() - 1;
+        let mut entries = [0i32; 32];
+        for (e, v) in entries.iter_mut().enumerate() {
+            *v = cols[((2 * e + 1) * last + 32) / 64] as i32;
+        }
+        let j = match self.palettes.iter().position(|p| *p == entries) {
+            Some(j) => j,
+            None => {
+                if self.palettes.len() >= USER_PALETTES {
+                    // E923.
+                    return self.err(
+                        kw,
+                        format!("a formula can have {USER_PALETTES} palettes of its own at most"),
+                    );
+                }
+                if self.tables.len() + 32 * (self.palettes.len() + 1) > MAX_TABLE {
+                    return Err(self.too_full(kw));
+                }
+                self.palettes.push(entries);
+                self.palettes.len() - 1
+            }
+        };
+        self.palette_names.push(Palette {
+            name,
+            at: n.start,
+            scope: self.scope,
+            j,
+        });
+        self.end_of_statement()
+    }
+
+    /// E924: the tables, sprites and palettes would pass the 256 numbers.
+    #[cold]
+    #[inline(never)]
+    fn too_full(&self, kw: Token) -> Error {
+        self.fail_at(
+            kw,
+            format!(
+                "tables, sprites and palettes hold {MAX_TABLE} numbers in all (a palette takes 32) — this would make {}",
+                self.tables.len() + 32 * (self.palettes.len() + 1)
+            ),
+        )
     }
 
     /// Whether `name` at the cursor reads a table or a sprite (`[` after
@@ -3566,7 +3701,7 @@ impl<'s> Parser<'s> {
         {
             Some(k) => k,
             None => {
-                if self.tables.len() + words.len() > MAX_TABLE {
+                if self.tables.len() + words.len() + 32 * self.palettes.len() > MAX_TABLE {
                     // E917.
                     return self.err(
                         kw,
@@ -3634,7 +3769,7 @@ impl<'s> Parser<'s> {
         {
             Some(k) => k,
             None => {
-                if self.tables.len() + vals.len() > MAX_TABLE {
+                if self.tables.len() + vals.len() + 32 * self.palettes.len() > MAX_TABLE {
                     return self.err(
                         kw,
                         format!(
@@ -4013,6 +4148,7 @@ impl<'s> Parser<'s> {
                 "draw" => self.draw_block(t)?,
                 "table" => self.table(t)?,
                 _ if self.is_sprite() => self.sprite(t)?,
+                _ if self.is_palette() => self.palette(t)?,
                 "for" => return Err(self.misplaced(t)),
                 "use" => {
                     return self.err(
@@ -4157,6 +4293,8 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool, reuse: bool) -> Resu
         tables: Vec::new(),
         table_names: Vec::new(),
         sprites: Vec::new(),
+        palettes: Vec::new(),
+        palette_names: Vec::new(),
         draw: Vec::new(),
         drawn: None,
         record: true,
@@ -4201,6 +4339,9 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool, reuse: bool) -> Resu
         ));
     }
     prog.tables[..p.tables.len()].copy_from_slice(&p.tables);
+    for (j, entries) in p.palettes.iter().enumerate() {
+        prog.tables[user_palette_at(j)..][..32].copy_from_slice(entries);
+    }
     if p.dag.forever {
         for c in &mut layers {
             grown_colour(&mut p.dag, c, (ct.start, ct.end))?;
@@ -4307,6 +4448,10 @@ fn grown_colour(dag: &mut Dag, c: &mut Colour, at: (usize, usize)) -> Result<(),
     }
     Ok(())
 }
+
+/// E922: a palette's colours.
+const PALETTE_COLOURS: &str =
+    "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff` (pal(sea, 0) is the first, pal(sea, 1) the last)";
 
 /// E912/E913: a sprite's key.
 const SPRITE_KEY: &str =

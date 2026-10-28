@@ -205,6 +205,14 @@ false), and `and`, `or`, `not`. There is no power operator: write `x * x`.
 
 A last line that is just a number is `gray` of it.
 
+**Your own palettes.** `palette sea = #001020, #0060a0, #40c0e0, #ffffff`
+on a line near the top makes a palette of your own colours (up to 32 of
+them, and up to three palettes in a formula), used like the others:
+`pal(sea, v)`. `pal(sea, 0)` is the first colour and `pal(sea, 1)` the
+last; with four colours, `pal(sea, 1/3)` is the second and `pal(sea, 2/3)`
+the third. In between you get the nearest colour, in bands — handy with a
+sprite or `floor(…)` choosing which colour each pixel is.
+
 **Colours by name.** `#ff8800` is a colour, the way web pages write them.
 It can be the whole last line, and you can do sums with colours there:
 `#ff8800 * k` is that orange at brightness `k`, `mix(#102040, #ff8800, y)`
