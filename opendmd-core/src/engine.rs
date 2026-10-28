@@ -1265,7 +1265,7 @@ impl Engine {
                     // A tick inside `WAKE_SLACK` before the frame times
                     // the next one from when this one was due.
                     let due = playing.next_frame_at;
-                    let fx = playing.path.starts_with(crate::fx::PREFIX);
+                    let fx = crate::synth::is_formula(&playing.path);
                     playing.next_frame_at = if fx && now.saturating_sub(due) < delay / 2 {
                         due + delay
                     } else {
@@ -2837,18 +2837,22 @@ mod tests {
             assert!(e.is_transitioning());
             tick_through_a_dissolve(&mut e, &mut canvas, t0, delay);
         }
-        // A live effect at 100 fps.
-        let mut e = two_solids(dissolve);
-        let mut canvas = Canvas::new();
-        e.tick(ms(0), &mut canvas).unwrap();
-        e.tick(ms(50), &mut canvas).unwrap();
-        e.play_now("@fx:starfield?fps=100", ms(60)).unwrap();
-        let TickOutcome::Frame { started, .. } = e.tick(ms(60), &mut canvas).unwrap() else {
-            panic!("the effect");
-        };
-        assert!(started && e.is_transitioning());
-        assert_eq!(e.frame_due(), Some(ms(70)), "10 ms frames");
-        tick_through_a_dissolve(&mut e, &mut canvas, ms(60), 10);
+        // A formula at 100 fps.
+        #[cfg(feature = "psi")]
+        {
+            let mut e = two_solids(dissolve);
+            let mut canvas = Canvas::new();
+            e.tick(ms(0), &mut canvas).unwrap();
+            e.tick(ms(50), &mut canvas).unwrap();
+            let f = crate::fx_psi::path("loop 2.4\nfps 100\ngray(frac(x + t/2.4))", "");
+            e.play_now(&f, ms(60)).unwrap();
+            let TickOutcome::Frame { started, .. } = e.tick(ms(60), &mut canvas).unwrap() else {
+                panic!("the formula");
+            };
+            assert!(started && e.is_transitioning());
+            assert_eq!(e.frame_due(), Some(ms(70)), "10 ms frames");
+            tick_through_a_dissolve(&mut e, &mut canvas, ms(60), 10);
+        }
     }
 
     /// The firmware's pause: paused, then the file let go of (its decoder's
