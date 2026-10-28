@@ -1121,6 +1121,57 @@ def thumbs_checks(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
+def card_swap_checks(browser, base: str, errors: list[str]) -> None:
+    """Card identity (`sd.card_id`): what the browser keeps is per card.
+    With Consoles' thumbnails drawn, the mock swaps the card (`GET
+    /mock/card?id=`: a power cycle with another card in, the same paths);
+    the page notices on its next status (here a return to the tab), lists
+    the folders again and fetches the thumbnails afresh into the new card's
+    own store instead of showing the first card's; the folder counts are
+    kept per card too. Swapped back, a reload draws them all from the first
+    card's store."""
+    page = new_page(browser, "laptop", errors)
+    first = get_json(base + "/mock/card")["card_id"]
+    other = "00000000000000b2" if first != "00000000000000b2" else "00000000000000c3"
+    check(get_json(base + "/api/status")["sd"]["card_id"] == first, f"card id: in /api/status sd ({first})")
+    get_json(base + "/mock/io?reset=1&kbps=0")
+    page.goto(base + "/#library")
+    pick_cat(page, "Consoles")
+    rows = drawn(page)
+    page.wait_for_timeout(500)
+    stores = lambda: page.evaluate("indexedDB.databases().then((l) => l.map((d) => d.name).filter((n) => n.startsWith('odmd-thumbs-')).sort())")
+    check(stores() == [f"odmd-thumbs-i{first}"], f"card swap: the thumbnails stored under the card's id ({stores()})")
+    try:
+        get_json(base + f"/mock/card?id={other}")
+        get_json(base + "/mock/io?reset=1")
+        idb0 = thumbs_stats(page)["idb"]
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        deadline = time.time() + 20
+        while time.time() < deadline and get_json(base + "/mock/io")["gets"] < len(rows) - 2:
+            page.wait_for_timeout(200)
+        now = drawn(page)
+        page.wait_for_timeout(500)
+        m, st = get_json(base + "/mock/io"), thumbs_stats(page)
+        check(m["gets"] >= len(now) - 2 and st["idb"] == idb0,
+              f"card swap: another card's thumbnails fetched afresh, none of the first card's shown ({m['gets']} requests for {len(now)} rows, {st['idb'] - idb0} from a store)")
+        check(stores() == sorted([f"odmd-thumbs-i{first}", f"odmd-thumbs-i{other}"]), f"card swap: one store per card ({stores()})")
+        keys = page.evaluate("Object.keys(localStorage).filter((k) => k.startsWith('odmd.lib.n')).sort()")
+        check(keys == sorted([f"odmd.lib.n.i{first}", f"odmd.lib.n.i{other}"]), f"card swap: folder counts kept per card ({keys})")
+    finally:
+        get_json(base + f"/mock/card?id={first}")
+    # A store named by the card's size (firmware before `card_id`) goes.
+    page.evaluate("new Promise((r) => { const q = indexedDB.open('odmd-thumbs-c31266439168', 1); q.onsuccess = () => { q.result.close(); r(); }; })")
+    page.reload()
+    get_json(base + "/mock/io?reset=1")
+    pick_cat(page, "Consoles")
+    drawn(page)
+    page.wait_for_timeout(500)
+    m = get_json(base + "/mock/io")
+    check(m["gets"] == 0, f"card swap: the first card back, its thumbnails all from its store ({m['gets']} requests)")
+    check("odmd-thumbs-c31266439168" not in stores(), f"card swap: the store named by the card's size alone removed ({stores()})")
+    page.context.close()
+
+
 STORED = """async (paths) => {
     const d = (await indexedDB.databases()).find((x) => x.name.startsWith('odmd-thumbs-'));
     const db = await new Promise((r) => { const q = indexedDB.open(d.name); q.onsuccess = () => r(q.result); });
@@ -3174,6 +3225,7 @@ def mock_pass(browser) -> None:
         tree_checks(browser, base, errors)
         listing_queue_checks(browser, base, errors)
         thumbs_checks(browser, base, errors)
+        card_swap_checks(browser, base, errors)
         editor_checks(browser, base, overlay, errors)
         # Sets: opening the view reads no root playlist (nor /gifs) until
         # "Build from filters" is opened.

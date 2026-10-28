@@ -5,14 +5,15 @@
 //    skipped; at most two requests in flight; none while a list is flung;
 //  - the prepared copy first (`cachePathFor`), the GIF on a 404, read as a
 //    stream and cut off once the first image is in (~1 KB of a ~87 KB copy);
-//  - kept in IndexedDB per card, keyed by path, with the file's size as
-//    the validator, so a GIF is asked for once, across visits; capped and
-//    evicted least recently used.
+//  - kept in IndexedDB per card (`app.cardKey`: the status's `sd.card_id`),
+//    keyed by path, with the file's size as the validator, so a GIF is
+//    asked for once, across visits; capped and evicted least recently used;
+//    the stores of the four cards seen last are kept.
 // The browser's own GIF decoder draws them (createImageBitmap, an <img>).
 
 import { app } from './state.js';
 import { dfetch } from './source.js';
-import { enc, store } from './util.js';
+import { enc, store, on } from './util.js';
 
 export const thumbsOn = () => store.get('thumbs', true);
 // What the page has asked for, for the tests and the design note's numbers.
@@ -26,6 +27,16 @@ const inflight = new Set();
 // 10 s later, three times a session; a reload starts over.
 const tries = new Map(); // path -> [failures, when]
 let queue = [], pausedTo = 0, timer = 0;
+// Bumped when the card changes: what was being read from the old one is
+// neither stored nor drawn.
+let epoch = 0;
+on('card', () => {
+  epoch++;
+  for (const bm of mem.values()) bm?.close();
+  mem.clear();
+  tries.clear();
+  queue = [];
+});
 
 // The end of the `want`-th image in a GIF's first bytes: [end, images, done].
 function walk(b, want) {
@@ -107,13 +118,14 @@ async function fetchCut(path, want, cap, extend) {
 // IndexedDB: one database per card, records {k: path, size, still, clip, n, at}
 // and {k: '#', total}. Any failure (a private window) just means no store.
 let dbq, dbns;
+const CARDS = 4;
 function db() {
-  // (Per card by its size until the status names the card itself: two cards
-  // of one size share a store, kept right by the size check.)
-  const c = app.status?.sd?.capacity_bytes, ns = app.device ? c && 'c' + c : 'l' + (app.src?.label || '');
+  const ns = app.cardKey;
   if (!ns) return Promise.resolve(null); // the card not known yet: no store
   if (ns !== dbns) {
     dbns = ns;
+    dbq?.then((d) => d?.close());
+    tidy(ns);
     dbq = new Promise((res) => {
       try {
         const r = indexedDB.open('odmd-thumbs-' + ns, 1);
@@ -124,6 +136,19 @@ function db() {
     });
   }
   return dbq;
+}
+// The stores of the cards seen last stay (a card swapped back finds its
+// thumbnails); older ones go, and so do those named by the card's size
+// alone (firmware before `sd.card_id`) once the device names its card.
+function tidy(ns) {
+  const seen = [ns, ...store.get('thumbs.cards', []).filter((x) => x !== ns)];
+  store.set('thumbs.cards', seen.slice(0, CARDS));
+  const keep = new Set(seen.slice(0, CARDS).map((x) => 'odmd-thumbs-' + x));
+  indexedDB.databases?.().then((all) => {
+    for (const { name } of all) {
+      if (name?.startsWith('odmd-thumbs-') && !keep.has(name) && (seen.includes(name.slice(12)) || ns[0] === 'i' && /^odmd-thumbs-c\d+$/.test(name))) indexedDB.deleteDatabase(name);
+    }
+  }).catch(() => {});
 }
 const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
 async function get(path) {
@@ -232,7 +257,9 @@ function pump() {
     if (!q.run && mem.has(q.path)) { paint(q.cv, mem.get(q.path)); continue; }
     stats.busy++;
     stats.max = Math.max(stats.max, stats.busy);
+    const was = epoch;
     (q.run ? q.run() : stillOf(q)).catch((e) => {
+      if (was !== epoch) return; // the old card's
       // Busy: everything waits Retry-After, this row first again after.
       if (e?.status === 503) { pausedTo = performance.now() + e.after * 1000; if (!q.run) queue.unshift(q); return; }
       if (q.run) return;
@@ -273,11 +300,13 @@ async function litFrame(clip) {
 }
 async function stillOf({ path }) {
   inflight.add(path);
+  const e = epoch;
   try {
     // A GIF that starts dark is read on to its clip (≤ 32 KB, kept for the
     // hover too) and shows its first lit frame where the browser can say.
     const r = await fetchCut(path, 1, 64 << 10, typeof ImageDecoder == 'function' && dark);
     const gif = r.more && await litFrame(r.gif) || r.gif, bm = await bitmap(gif);
+    if (e !== epoch) return; // another card now
     // Bytes came and nothing decoded: kept as nothing (not asked again).
     await put({ k: path, size: r.size, still: bm ? gif : null, ...(r.more ? { clip: r.gif } : {}) });
     show(path, bm);
@@ -310,7 +339,8 @@ export function watch(el) {
       let rec = await get(q.path);
       if (rec && !rec.still && !rec.clip) return; // it could not be read
       if (!rec?.clip) {
-        const { gif, size } = await fetchCut(q.path, CLIP_FRAMES, CLIP_BYTES);
+        const e = epoch, { gif, size } = await fetchCut(q.path, CLIP_FRAMES, CLIP_BYTES);
+        if (e !== epoch) return;
         await put(rec = { ...(rec || {}), k: q.path, size, clip: gif || null });
       }
       // (The row may have been drawn again meanwhile: its canvas now.)
