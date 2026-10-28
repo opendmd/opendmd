@@ -1,0 +1,10 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Stripes"
+about "Candy stripes sliding sideways"
+control width = 0.3 "Stripe width"
+loop 4
+size = 8 + width*24
+band = sin((px + py)/size - t/2)
+s = clamp(band*1.5 + 0.5, 0, 1)
+rgb(1, s, s)

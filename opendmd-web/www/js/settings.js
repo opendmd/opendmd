@@ -18,7 +18,7 @@ import { h, clear, on, note, store, debounce, saver, brightSlider } from './util
 
 const thumbs = () => h('label', { style: 'margin-top:12px' }, h('input', { type: 'checkbox', id: 'st-thumbs', checked: store.get('thumbs', true), onchange: (e) => store.set('thumbs', e.target.checked) }), 'Thumbnails in the Library and playlists');
 const TABS = [['play', 'Playback'], ['look', 'Look'], ['time', 'Schedule'], ['device', 'Device']];
-// The examples (formulas.json), fetched once a session.
+// The bundled Formulas (formulas.json: their sources), fetched once a session.
 let exQ = null;
 const examples = () => (exQ ??= fetch('formulas.json').then((r) => r.json()).catch(() => { exQ = null; return []; }));
 

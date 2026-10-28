@@ -1,0 +1,29 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Rotozoom"
+about "Mode 7: a checker turning and zooming over a noise texture, rows and columns wobbling"
+control wobble = gentle, strong, off "Wobble"
+loop 9.6
+-- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing
+-- twice, gliding two checkers across and one down; under it a noise
+-- texture turning the other way twice as fast; rows and columns wobble.
+frame {
+  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn
+  s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice
+  zoom = 2                                         -- try 1 to 4
+  sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel
+  sc2 = sc*0.75
+  cu = t/0.6; cv = t/1.2                           -- the glide, in cells
+  amp = pick(wobble, 3, 4.5, 0)/8                  -- the wobble, in texels
+}
+dx = px - 64; dy = 15 - py
+-- the wobble: rows slide sideways, columns up and down, on travelling waves
+wob = sin((31 - py)/32 + t/3.2)*amp
+col = sin(px*0.0234375 - t/4.8)*amp
+-- where each pixel is on the checker: its column's part plus its row's
+u = (cu + cs*sc*dx) + (wob - sn*sc*dy)
+v = (cv + sn*sc*dx + col) + cs*sc*dy
+cell = (floor(u) + floor(v)) % 2
+u2 = (cv + c2*sc2*dx) + (wob - s2*sc2*dy)
+v2 = (cu + s2*sc2*dx + col) + c2*sc2*dy
+pal(fire, (cell ? 0.44 : 0.19) + noise(u2, v2, 0)*0.6)

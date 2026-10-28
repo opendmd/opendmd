@@ -6,7 +6,7 @@
 
     uv run tools/demo-card.py OUT_DIR [--sim PATH]
 
-- gifs/Demoscene/: recordings of Formulas (opendmd-web/www/formulas.json),
+- gifs/Demoscene/: recordings of Formulas (opendmd-web/formulas/*.psi),
   drawn by the simulator's raw canvas (--screenshot-canvas) a frame at a time.
 - gifs/Kenney/: the Kenney "Pixel Platformer" (CC0) animations made by the
   art pipeline prototypes (opendmd-web/experiments/art/process/out/).
@@ -31,9 +31,11 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 KENNEY = ROOT / "opendmd-web/experiments/art/process/out"
 
-FORMULAS = ROOT / "opendmd-web/www/formulas.json"
+# OpenDMD's Formulas, one file each: a header of comments (author, licence,
+# `-- bundle`), then the formula, whose `name "…"` line names it.
+FORMULAS = ROOT / "opendmd-web/formulas"
 
-# (file title, Formula name in formulas.json, --formula-opts, frames at 40 ms).
+# (file title, Formula name (its name line in opendmd-web/formulas/), --formula-opts, frames at 40 ms).
 # Only whole-picture Formulas: none of the looks meant to sit over a GIF.
 RECORD = [
     # The full-screen ones first: the Demoscene playlist opens on them (and
@@ -67,10 +69,14 @@ LIVE = [
 
 
 def formula_src(name: str) -> str:
-    """The source of the example Formula called `name`; fails if there is none."""
-    for e in json.loads(FORMULAS.read_text()):
-        if e["name"] == name:
-            return e["src"]
+    """The source of the example Formula called `name` (without the file's
+    header); fails if there is none."""
+    for p in sorted(FORMULAS.glob("*.psi")):
+        lines = p.read_text(encoding="utf-8").split("\n")
+        while lines and lines[0].startswith(("-- author:", "-- licence:", "-- license:", "-- bundle")):
+            lines.pop(0)
+        if f'name "{name}"' in lines:
+            return "\n".join(lines)
     raise SystemExit(f"demo-card: no Formula named {name!r} in {FORMULAS}")
 
 

@@ -1,0 +1,8 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Plasma"
+about "The demoscene classic: three waves, every colour"
+loop 8
+-- three waves added together
+wave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)
+hsv(wave/6 + t/8, 0.9, 1)

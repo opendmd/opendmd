@@ -454,7 +454,7 @@ pub fn pixels() -> *const u8 {
 #[cfg(not(target_arch = "wasm32"))]
 mod examples;
 #[cfg(not(target_arch = "wasm32"))]
-pub use examples::{examples, Example};
+pub use examples::{examples, examples_in, folder, split, Example};
 
 #[cfg(test)]
 mod tests;

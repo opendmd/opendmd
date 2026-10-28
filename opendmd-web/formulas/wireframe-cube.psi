@@ -1,0 +1,27 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Wireframe cube"
+about "A turning cube of twelve lines, the near edges brighter"
+control scale = 0 "Size"
+loop 4.8
+fps 100
+-- Wireframe cube: turning about two axes and swinging across; the near
+-- edges brighter. The colour is the last line's #40c0ff
+table V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1
+table E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7
+frame {
+  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)
+  size = 34 + scale*28; mid = 64 + sa*40
+}
+draw {
+  for e < 12 {
+    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners
+    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size
+    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size
+    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned
+    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb
+    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),
+         clamp(0.594 - zb/148, 0.156, 1), clamp(0.594 - zd/148, 0.156, 1))
+  }
+}
+#40c0ff * ink

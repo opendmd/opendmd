@@ -1,0 +1,26 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Tunnel"
+about "The time warp: a checker tunnel turning, travelling and cycling its colours"
+loop 4.8
+fps 100
+-- Tunnel: the time warp. Each loop the walls turn once, travel two
+-- checker lengths, and the palette goes round once.
+-- From the vanishing point, the tunnel twice as tall as wide:
+dx = px - 63.5; dy = (15.5 - py)*2
+-- how far each pixel is from the black middle: 0 there (where the
+-- tunnel is deeper than 16), ~15 at the edges
+-- (this and `round` depend on the pixel alone: worked out once, kept)
+near = 16 - min(128/len(dx, dy), 16)
+-- round the walls: 16 checker cells a turn, twisting with depth
+twist = 1                              -- try 0 to 3
+round = atan2(dy, dx)*16 + (16 - near)*twist/8
+-- the checker, turning and travelling
+u = round + t/0.3; v = 16 + t/0.6 - near
+cell = (floor(u) + floor(v)) % 2
+-- lit by depth (full near, fading as a square, black in the middle) and
+-- by a light going round with the walls, in eight steps
+fade = min(near, 10)                    -- 10 near, to 0 where it turns black
+side = 0.0635 + 0.0159*cos(u/16)
+light = floor(fade*fade*side + (near > 0))/8
+pal(chrono, cell ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * light

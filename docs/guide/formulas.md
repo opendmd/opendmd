@@ -1,23 +1,36 @@
 # Formulas
 
-![Formulas: the examples, and Plasma playing in its details](../images/formulas.png)
+![Formulas: the bundled ones, and one playing in its details](../images/formulas.png)
 
 A formula is a few lines of maths that draw on the panel, every pixel at
 once. Change a number and the picture changes as you type. Formulas are
 written in **Psi** (Ψ), OpenDMD's small language for the panel's pixels,
-but you don't need to know it to start: open an example, drag a number,
-and watch.
+but you don't need to know it to start: open one, drag a number, and
+watch.
 
 Open **Formulas** (Ψ) in the app's menu. Formulas work in the
 [online demo](https://opendmd.dev/demo/) too, with no player at all.
 
-## The gallery
+## The Formulas view
 
-Formulas opens on the examples (Big clock, plasma, fire, rain, a clock
-face, and more) and the formulas you've saved. Pick one
-to see it playing in the panel look, with its sliders if it has any.
+Formulas opens on the **Bundled** ones, the ten the panel comes with, and
+the formulas you've saved. Pick one to see it playing in the panel look,
+with its sliders if it has any. The bundled ten:
 
-**Big clock**, the first example, shows what a GIF can't do: it draws
+- two clocks: **Big clock** and **Clock** (a dial with hands);
+- two screensavers: **Matrix** and **Starfield**;
+- six looks, which draw over whatever GIF plays (marked *look*; see
+  [Over a GIF](#over-a-gif)): **Scanlines**, **Old TV**, **Vignette**,
+  **Old photo**, **Glitter** and **Corner clock**.
+
+**More Formulas** opens the online [formula gallery](#the-formula-gallery):
+every Formula OpenDMD has made (tunnels, rotozooms, plasma, fire, rain, an
+endless road and more) and the ones people have shared. Open one there and
+press **Open on my display**: it opens in your panel's editor, where you
+can play it, add it to a playlist or save it (it is then under *Your
+formulas* in that browser).
+
+**Big clock** shows what a GIF can't do: it draws
 the real time in big rainbow digits, with a bar along the bottom that
 fills once a minute, a step a second. Check it against your watch. A GIF
 can't know the time; one that only showed each minute of a day would
@@ -26,7 +39,7 @@ be gigabytes. The formula is under 1 KB, most of it comments.
 
 From there:
 
-- **Remix** (an example) or **Edit** (one of yours) opens it in the editor.
+- **Remix** (a bundled one) or **Edit** (one of yours) opens it in the editor.
 - **Save as GIF…** makes a GIF of it in [Create Art](create-art.md).
 - **Copy share link** gives you a link to its own page, for anyone (see
   [Sharing](#sharing)).
@@ -49,7 +62,9 @@ draws them there.) Formulas that draw over a GIF have their own section,
 ## The built-in Formulas
 
 The demo-scene animations the panel used to draw by itself are Formulas
-now, bundled as examples. Open one to see how it is written and change it.
+now, in the online [formula gallery](https://opendmd.dev/formulas/)
+(Starfield is also one of the bundled ten). Open one to see how it is
+written and change it.
 
 - **Tunnel:** the time warp: a checker tunnel turning, travelling and
   cycling its colours. It has a `twist` number to try (0 to 3) in its text,
@@ -335,8 +350,8 @@ layer { rings(x, y, k) }
 ```
 
 You don't have to type a part out: in the editor, write
-`use Rings as ring` on a line of its own, with the name of one of your
-formulas or an example, and when you move to another line the editor puts
+`use Clock as ring` on a line of its own, with the name of one of your
+formulas or a bundled one (open a gallery one and save it to use it), and when you move to another line the editor puts
 that formula in as `part ring { … }`, ready to change. Everything you save or
 share then has the whole of it, so it works anywhere: if a `use` line names
 a formula there isn't (or the formula you're editing), the editor says so
@@ -357,7 +372,7 @@ and won't save or share until it's fixed.
   rest of the formula uses. Inside a part, `t` follows the part's own
   `loop`; make the whole formula's loop a multiple of it.
 
-The examples **Bars to stars**, **Rings through stripes** and
+The gallery's **Bars to stars**, **Rings through stripes** and
 **Kaleidoscope** are made this way.
 
 **Drawing.** Some pictures aren't "each pixel decides for itself": a field
@@ -392,7 +407,7 @@ hsv(x, 0.6, ink)
   `#40c0ff * ink`, or over a GIF `layer screen { gray(ink) }`.
 - Every frame starts empty: nothing is left over from the frame before.
 
-The examples **Starfield** and **Wireframe cube** are made this way.
+**Starfield** (bundled) and the gallery's **Wireframe cube** are made this way.
 
 **Sprites.** A little picture can be written into the formula as it looks,
 one character a pixel, with a key saying what number each character
@@ -447,7 +462,8 @@ or scanlines, which keep the GIF and darken every other row:
 layer multiply { gray(py % 2 ? 1 : 0.55) }
 ```
 
-The examples' **Over a GIF** section has more. In the editor and in a
+The bundled looks (marked *look*) are made this way; the gallery has more.
+In the editor and in a
 formula's details, such a formula is drawn over a sample picture; **Pick a
 GIF…** draws it over one of your GIFs (from the playlist) or a GIF file
 from your computer instead, moving as the GIF does. **Save as GIF…** then
@@ -559,12 +575,18 @@ gets long enough that some apps cut it, and the share box says so.
 ## The formula gallery
 
 The [formula gallery](https://opendmd.dev/formulas/) on the OpenDMD
-site has formulas people have made, and the examples. **Open** shows one on
-its own page; **Remix** opens it in the demo's editor.
+site has every Formula OpenDMD has made (the ones marked *on the panel* are
+the bundled ten) and the ones people have shared. Each tile shows what the
+formula says of itself: its name, its line about it, its controls and
+whether it can be a look. **Open** shows one on its own page, where **Open
+on my display** sends it to your panel's editor; **Remix** opens it in the
+demo's editor.
 
 To add yours, open its share link and press **Submit to the gallery**: give
-it a description, your name or GitHub handle and a licence (CC0, anyone may
-use it; or CC BY 4.0, with credit), then **Open on GitHub**. GitHub opens
+it a name and a line about it (they become the formula's own `name` and
+`about` lines), your name or GitHub handle and a licence (CC0, anyone may
+use it; or CC BY 4.0, with credit), then **Open on GitHub**. Its sliders
+start where its `control` lines say. GitHub opens
 with the file ready and makes the pull request for you (you need a free
 GitHub account). A check says if anything needs fixing, a maintainer looks
 at it, and once it's merged it appears in the gallery within a few
