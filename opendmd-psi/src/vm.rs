@@ -280,6 +280,18 @@ fn fast2<const N: usize, A: Src, B: Src>(
     }
 }
 
+/// [`fast1`] of a lane into itself (a fused run whose result goes into the
+/// register it reads, `crate::fuse`).
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn fast1_self<const N: usize>(d: &mut [i32; N], f: impl Fn(i32) -> i32) {
+    for o in d.as_chunks_mut::<4>().0 {
+        let x = *o;
+        *o = [f(x[0]), f(x[1]), f(x[2]), f(x[3])];
+    }
+}
+
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn fast3<const N: usize, A: Src, B: Src, C: Src>(
@@ -531,7 +543,9 @@ pub fn render_rows_still<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
-    frame::<N>(prog, scratch, ink, still, inputs, tables, under, rows, out, true)
+    frame::<N>(
+        prog, scratch, ink, still, inputs, tables, under, rows, out, true,
+    )
 }
 
 /// [`render_rows_ink`] with every draw loop run a turn at a time (as before
@@ -549,7 +563,9 @@ pub fn render_rows_ink_turns<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
-    frame::<N>(prog, scratch, ink, None, inputs, tables, under, rows, out, false)
+    frame::<N>(
+        prog, scratch, ink, None, inputs, tables, under, rows, out, false,
+    )
 }
 
 /// [`render_rows_still`]'s body: one copy whoever calls it, and on the
@@ -709,6 +725,31 @@ fn frame<const N: usize>(
                         }
                         Cache::Off => k += 1,
                     }
+                    continue;
+                }
+                if op.code == code::FUSE {
+                    // A fused run (`crate::fuse`): its kernel on a frame
+                    // that runs the narrowed steps, else its steps.
+                    let n = op.a as usize;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if narrow
+                        && fused(
+                            scratch,
+                            &mut alias,
+                            op.d,
+                            &prog.ops[(k + 1).min(pe)..(k + 1 + n).min(pe)],
+                            base,
+                            tables,
+                            &own,
+                            px,
+                            il,
+                        )
+                    {
+                        k += 1 + n;
+                        continue;
+                    }
+                    let _ = n;
+                    k += 1;
                     continue;
                 }
                 if code::is_colour(op.code) {
@@ -875,6 +916,15 @@ pub(crate) fn wide_step(sc: &mut [i32; MAX_SCALARS], w: &mut [i32], op: &Op) {
 }
 
 impl<const N: usize> Scratch<N> {
+    /// Register operand `v`'s own lane, to be written (no longer read from
+    /// a still cache's lane).
+    #[inline(always)]
+    fn dest(&mut self, al: &mut Alias, v: u8) -> &mut [i32; N] {
+        let di = reg_index(v);
+        al[di] = core::ptr::null();
+        &mut self.lanes[di]
+    }
+
     /// The operand `v` for the lane at column `base`.
     #[inline(always)]
     fn arg(&self, al: &Alias, v: u8, base: usize) -> Arg {
@@ -899,6 +949,7 @@ impl<const N: usize> Scratch<N> {
 /// One step of a draw loop's body run as lanes (`draw::run`: a lane a
 /// turn): [`lane_op`]'s dispatch, a copy of its own in flash, so the frame
 /// loop's in IRAM is the same code as before the draw stage used it.
+#[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
 pub(crate) fn lane_draw<const N: usize>(
     s: &mut Scratch<N>,
@@ -1022,6 +1073,181 @@ fn lane_op<const N: usize>(
         U_R..=U_L => load_under(d, under, op.code - U_R),
         INK => load_ink(d, ink),
         _ => {}
+    }
+}
+
+/// A fused run's kernel (`crate::fuse`) for the lane at `base`: the value
+/// its last step writes (or the pixels its colour writes) as its steps
+/// would leave it — the same `fixed` functions in the same order, in one
+/// loop. `false` when its operands are not of the kinds the kernel takes
+/// (then its steps run).
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+fn fused<const N: usize>(
+    s: &mut Scratch<N>,
+    al: &mut Alias,
+    kind: u8,
+    ops: &[Op],
+    base: usize,
+    t: &Tables,
+    own: &Pals,
+    px: &mut [[u8; 3]],
+    ink: Option<&[u8]>,
+) -> bool {
+    use crate::fuse::*;
+    match (kind, ops) {
+        (F_CHECKER, [fx, fy, _, m]) => {
+            let (Arg::Lane(x), Arg::Lane(y), Arg::Sc(m)) = (
+                s.arg(al, fx.a, base),
+                s.arg(al, fy.a, base),
+                s.arg(al, m.b, base),
+            ) else {
+                return false;
+            };
+            let d = s.dest(al, ops[3].d);
+            fast2(d, L(x), L(y), move |x, y| {
+                fixed::mask(fixed::add_w(fixed::floor(x), fixed::floor(y)), m)
+            });
+        }
+        (F_MADD, [mul, add]) => {
+            let (a, b) = match (s.arg(al, mul.a, base), s.arg(al, mul.b, base)) {
+                (Arg::Lane(a), Arg::Sc(b)) | (Arg::Sc(b), Arg::Lane(a)) => (a, b),
+                _ => return false,
+            };
+            let c = s.arg(al, if add.a == mul.d { add.b } else { add.a }, base);
+            let w = mul.code == code::MUL_W;
+            let own = core::ptr::eq(a, s.lanes[reg_index(add.d)].as_ptr());
+            let d = s.dest(al, add.d);
+            match (w, c) {
+                // (Into the lane multiplied: read and written in place.)
+                (true, Arg::Sc(c)) if own => {
+                    fast1_self(d, move |a| fixed::add_w(fixed::mul_w(a, b), c))
+                }
+                (false, Arg::Sc(c)) if own => {
+                    fast1_self(d, move |a| fixed::add_w(fixed::mul_n(a, b), c))
+                }
+                _ if own => return false,
+                (true, Arg::Sc(c)) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_w(a, b), c)),
+                (true, Arg::Lane(c)) => fast2(d, L(a), L(c), move |a, c| {
+                    fixed::add_w(fixed::mul_w(a, b), c)
+                }),
+                (false, Arg::Sc(c)) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_n(a, b), c)),
+                (false, Arg::Lane(_)) => return false,
+            }
+        }
+        (F_SELPAL, [sel, col]) => {
+            let (Arg::Lane(c), Arg::Sc(va), Arg::Sc(vb)) = (
+                s.arg(al, sel.a, base),
+                s.arg(al, sel.b, base),
+                s.arg(al, sel.c, base),
+            ) else {
+                return false;
+            };
+            let p = palette(t, own, col.d & code::PAL_MASK);
+            let (ia, ib) = (fixed::pal_index(va), fixed::pal_index(vb));
+            let (ca, cb) = if col.d & PAL_SCALED == 0 {
+                (p[ia], p[ib])
+            } else {
+                let shift = (col.d & !PAL_SCALED) >> PAL_SHIFT;
+                match s.arg(al, col.c, base) {
+                    Arg::Sc(k) => (
+                        fixed::scale_rgb(p[ia], k >> shift),
+                        fixed::scale_rgb(p[ib], k >> shift),
+                    ),
+                    Arg::Lane(k) => {
+                        pal_select_lanes(px, c, k, p, [ia, ib], shift);
+                        return true;
+                    }
+                }
+            };
+            out1(px, L(c), move |c| if c != 0 { ca } else { cb });
+        }
+        (F_PICKPAL, [pk, col]) => {
+            let Arg::Lane(m) = s.arg(al, pk.a, base) else {
+                return false;
+            };
+            let p = palette(t, own, col.d & code::PAL_MASK);
+            let k = if col.d & PAL_SCALED == 0 {
+                None
+            } else {
+                let Arg::Sc(k) = s.arg(al, col.c, base) else {
+                    return false;
+                };
+                Some(k >> ((col.d & !PAL_SCALED) >> PAL_SHIFT))
+            };
+            let colour = |v: i32| match k {
+                None => fixed::pal(p, v),
+                Some(k) => fixed::scale_rgb(p[fixed::pal_index(v)], k),
+            };
+            let n = (pk.c as usize).min(PICK_MAX);
+            let mut tbl = [[0u8; 3]; PICK_MAX];
+            for (i, c) in tbl.iter_mut().enumerate().take(n) {
+                *c = colour(pick(&s.sc, pk.b, pk.c, (i as i32) << 16));
+            }
+            // (Outside the choices a pick is 0.)
+            let none = colour(0);
+            out1(px, L(m), move |m| {
+                let i = m >> 16;
+                if (i as u32) < n as u32 {
+                    tbl[i as usize]
+                } else {
+                    none
+                }
+            });
+        }
+        (F_INKPAL, [_, col]) => {
+            let p = palette(t, own, col.d & code::PAL_MASK);
+            match ink {
+                Some(k) => pal_ink(px, k, p),
+                None => px.fill(fixed::pal(p, 0)),
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// `pal(P, select(c, A, B)) * k` along the lane (`crate::fuse`'s
+/// `F_SELPAL`, k a lane): entry `idx[0]` where c is not 0, else `idx[1]`,
+/// each choice's last scale and colour kept (`pal_lit_lanes`' reuse, one
+/// for each).
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn pal_select_lanes(
+    px: &mut [[u8; 3]],
+    c: *const i32,
+    k: *const i32,
+    p: &[[u8; 3]; 32],
+    idx: [usize; 2],
+    shift: u8,
+) {
+    // (A scale of i32::MIN is ≤ 0: black, the colour kept to start with.)
+    let mut last = [i32::MIN; 2];
+    let mut rgb = [[0u8; 3]; 2];
+    for (j, o) in px.iter_mut().enumerate() {
+        // SAFETY: `c` and `k` are lanes of at least `px.len()` values,
+        // alive for the call.
+        let (c, k) = unsafe { (*c.add(j), *k.add(j)) };
+        let w = usize::from(c == 0);
+        let s = k >> shift;
+        if s != last[w] {
+            last[w] = s;
+            rgb[w] = fixed::scale_rgb(p[idx[w]], s);
+        }
+        *o = rgb[w];
+    }
+}
+
+/// `pal(P, ink)` along the lane (`crate::fuse`'s `F_INKPAL`).
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn pal_ink(px: &mut [[u8; 3]], ink: &[u8], p: &[[u8; 3]; 32]) {
+    for (o, &b) in px.iter_mut().zip(ink) {
+        *o = fixed::pal(p, fixed::byte(b));
     }
 }
 
