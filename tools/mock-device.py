@@ -121,6 +121,11 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   them, `&kbps=N` sends card files in 2 KB pieces at that rate (as the
   firmware's `IO_CHUNK` streaming), so a reader that hangs up early is
   measured as a device would see it. web-smoke's thumbnail checks use it.
+- **`GET /mock/card?id=<16 hex>`** (mock only): a power cycle with another
+  card in — `sd.card_id` becomes `id`, uptime starts again; the files stay
+  `--root`'s (same paths, as a card copied twice would be). `sd.card_id`
+  is otherwise a hash of `--root`, and a `POST /api/card/format` gives a new
+  one. web-smoke's card-swap check uses it.
 - **`transition` / `transition_ms`** in the config (`"dissolve"`, 400 by
   default): a name `opendmd_core::compositor::Kind::from_name` accepts
   (stored normalised) and 20..=2000 ms, else a 400. The mock plays nothing,
@@ -2587,6 +2592,10 @@ class Context:
         # 0: none running), and why the last one failed.
         self.format_until = 0.0
         self.format_error = None
+        # `sd.card_id` (firmware `opendmd_core::card::identity`): one per
+        # --root; a format gives another; GET /mock/card?id=… swaps "cards"
+        # (a power cycle with another card in: the same files here).
+        self.card_id = hashlib.sha1(str(fs.root_dir.resolve()).encode()).hexdigest()[:16]
         # PUT /api/www's last `staged` (None: no PUT yet).
         self.www_staged = None
         # The header version of the last pack PUT (None: version.txt's).
@@ -2631,12 +2640,14 @@ def sd_fields(ctx: "Context") -> dict:
         # device; the mock keeps serving --root).
         ctx.format_until = 0.0
         ctx.sd_state = "ok"
-    base = {"mounted": True, "readable": True, "capacity_bytes": SD_CAPACITY_BYTES, "error": None, "attempts": 1,
+        ctx.card_id = f"{random.getrandbits(64):016x}"  # a new volume serial
+    base = {"mounted": True, "readable": True, "capacity_bytes": SD_CAPACITY_BYTES,
+            "card_id": ctx.card_id, "error": None, "attempts": 1,
             "formatting": bool(ctx.format_until), "format_error": ctx.format_error}
     if ctx.sd_state == "unreadable":
-        base.update(readable=False, capacity_bytes=63_864_569_856, error=SD_UNREADABLE)
+        base.update(readable=False, capacity_bytes=63_864_569_856, card_id=None, error=SD_UNREADABLE)
     elif ctx.sd_state == "none":
-        base.update(mounted=False, readable=False, capacity_bytes=0, attempts=2,
+        base.update(mounted=False, readable=False, capacity_bytes=0, card_id=None, attempts=2,
                     error="no card, or card init failed: ESP_ERR_TIMEOUT")
     out = {**base, **ctx.sd}
     if ctx.sd_state == "none":
@@ -2890,6 +2901,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_prefix("/cache/"), {"GET": self.h_serve_under}),
                 (m_prefix("/www/"), {"GET": self.h_www}),
                 (m_exact("/mock/io"), {"GET": self.h_mock_io}),
+                (m_exact("/mock/card"), {"GET": self.h_mock_card}),
                 (lambda cur: True, {"GET": self.h_catchall}),
             ]
 
@@ -3016,6 +3028,21 @@ def make_handler(ctx: Context, quiet: bool):
                     k = query_param(query, key)
                     if k is not None:
                         io[key] = max(0, int(k))
+            self.send_json(200, out)
+
+        def h_mock_card(self, path):
+            """`?id=<hex>`: a power cycle with another card in (its
+            `sd.card_id`; the files stay --root's). No id: the current one."""
+            _, _, query = self.path.partition("?")
+            new = query_param(query, "id")
+            with ctx.lock:
+                if new:
+                    if not re.fullmatch(r"[0-9a-f]{16}", new):
+                        self.send_error_json(400, "id: 16 hex digits")
+                        return
+                    ctx.card_id = new
+                    ctx.player.reset_boot()
+                out = {"card_id": ctx.card_id}
             self.send_json(200, out)
 
         def h_serve_under(self, path):

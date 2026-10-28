@@ -8,7 +8,7 @@ import { PanelPreview } from './preview.js';
 import { Tree, chipRow, forget as forgetDir } from './tree.js';
 import { forget as forgetThumb, check as checkThumb } from './thumbs.js';
 import { authorOf, addOne, appendTo, offerPlaylist } from './gifs.js';
-import { h, clear, emit, store, toast, label, niceName, flagName, isFlag } from './util.js';
+import { h, clear, emit, on, store, toast, label, niceName, flagName, isFlag } from './util.js';
 
 export async function mount(el) {
   let current = null, selecting = false;
@@ -278,12 +278,19 @@ export async function mount(el) {
   await tree.load();
   await playlists();
   sync();
+  const again = () => {
+    if (tree.dirty) tree.load().then(() => { const it = current && tree.rows.find((x) => x.path === current.path); if (it) preview(it); });
+    else tree.refresh(); // the thumbnails switch may have changed
+  };
+  // Another card (swapped while the page was open): its folders, if shown.
+  on('card', () => { if (el.classList.contains('on')) { playlists(); again(); } });
   return {
     show() {
       sync();
       playlists();
-      if (tree.dirty) tree.load().then(() => { const it = current && tree.rows.find((x) => x.path === current.path); if (it) preview(it); });
-      else tree.refresh(); // the thumbnails switch may have changed
+      again();
+      // A card swapped since the last look shows in the status: one request.
+      if (app.device) app.refreshStatus().catch(() => {});
     },
     // #library/<Category>: that folder open at the top, the others closed.
     async sub(sub) {

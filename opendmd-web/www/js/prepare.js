@@ -72,8 +72,9 @@ export async function missing() {
 }
 
 // --- the damaged list -----------------------------------------------------
-const localKey = () => 'damaged.' + location.host;
-const asIsKey = () => 'asis.' + location.host;
+// Remembered per card (`app.cardKey`): another card's paths say nothing here.
+const localKey = () => 'damaged.' + (app.cardKey || location.host);
+const asIsKey = () => 'asis.' + (app.cardKey || location.host);
 let shared = false; // the device has /api/cache/failed
 
 // Lowercased path -> reason, for every GIF known to be damaged; and the set

@@ -202,6 +202,11 @@ pub struct Status {
     /// 64 GB card as sold), which is never handed to the player.
     pub sd_readable: bool,
     pub sd_capacity_bytes: u64,
+    /// Which card this is (`opendmd_core::card::identity`: CID serial,
+    /// volume serial and label, size), for off-card stores (the web app's
+    /// thumbnails) to keep one card's things from another's. `None` with no
+    /// readable card.
+    pub sd_card_id: Option<String>,
     /// Why the card is not mounted (the last attempt's error), why a
     /// mounted one cannot be read, or why it stopped (a card failure).
     pub sd_error: Option<String>,
@@ -277,6 +282,7 @@ impl Status {
             sd_mounted: false,
             sd_readable: false,
             sd_capacity_bytes: 0,
+            sd_card_id: None,
             sd_error: None,
             sd_attempts: 0,
             sd_formatting: false,
