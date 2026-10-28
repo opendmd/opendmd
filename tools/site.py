@@ -742,8 +742,8 @@ EXAMPLES = ROOT / "opendmd-web/formulas"
 
 def write_gallery(out: Path, examples: Path, contrib: Path | None, tool: Path, wm: dict) -> None:
     """formulas/index.html: the site's page around the gallery's markers,
-    and formulas/src/: the examples' files (`examples`), which the public
-    repo's Pages workflow reads them from."""
+    and formulas/src/: the examples' files (`examples`), which
+    gallery_page.py's command line reads them from."""
     up = "../" * GALLERY_PAGE.count("/")
     page_dir = (out / GALLERY_PAGE).parent
     page_dir.mkdir(parents=True, exist_ok=True)

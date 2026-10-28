@@ -3,7 +3,8 @@
 # dependencies = ["markdown>=3.6"]
 # ///
 """The formula gallery's page (/formulas/) as `make site` writes it:
-tools/site.py's `write_gallery` over the web app's examples and a stand-in
+tools/site.py's `write_gallery` over OpenDMD's examples (opendmd-web/formulas/)
+and a stand-in
 for the public gallery repo's gallery/:
 
     uv run tools/gallery-pages-test.py [--site DIR] [--keep DIR] [-v]
@@ -49,14 +50,6 @@ def sh(*args, cwd=None, env=None, check=True) -> subprocess.CompletedProcess:
     if check and r.returncode:
         raise SystemExit(f"{' '.join(map(str, args))}: exit {r.returncode}\n{r.stdout}{r.stderr}")
     return r
-
-
-def load_site_py():
-    sys.path.insert(0, str(ROOT / "tools"))
-    spec = importlib.util.spec_from_file_location("site_build", ROOT / "tools/site.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def load_site_py():
@@ -119,26 +112,10 @@ def main() -> int:
 
         def build(name: str, contrib: Path) -> tuple[Path, str]:
             out = tmp / name
-<<<<<<< HEAD
             log = io.StringIO()
             with contextlib.redirect_stderr(log):
-                site_py.write_gallery(out, www, contrib, tool, wm)
-            return out, log.getvalue()
-=======
-            if a.site:
-                shutil.copytree(a.site, out, symlinks=True)
-                shutil.rmtree(out / "formulas")
-                # The wordmark as the page has it (art.json is not published).
-                m = re.search(r'--cols:(\d+);--rows:(\d+)"><img src="\.\./art/([^"]+)"', (a.site / "formulas/index.html").read_text())
-                site_py.write_gallery(out, a.site / "formulas/src", contrib, tool, {"w": m[1], "h": m[2], "src": m[3]})
-            else:
-                (out / "install").mkdir(parents=True)
-                (out / "install/release.json").write_text('{"version": "9.9.9"}\n')
-                (out / "index.html").write_text("<p>the site</p>\n")
-                (out / ".nojekyll").write_text("")
                 site_py.write_gallery(out, site_py.EXAMPLES, contrib, tool, wm)
-            return out
->>>>>>> 11680b8 (formula-apps F3: the split — one .psi per example, the bundled ten, the gallery reads Meta)
+            return out, log.getvalue()
 
         # 1. Two good contributions.
         g1 = tmp / "gallery-1"
