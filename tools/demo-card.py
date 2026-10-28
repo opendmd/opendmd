@@ -36,17 +36,19 @@ FORMULAS = ROOT / "opendmd-web/www/formulas.json"
 # (file title, Formula name in formulas.json, --formula-opts, frames at 40 ms).
 # Only whole-picture Formulas: none of the looks meant to sit over a GIF.
 RECORD = [
-    ("Starfield", "Starfield", "", 75),
-    ("Rotozoom_Floor", "Rotozoom floor", "", 75),
-    ("Wireframe_Cube", "Wireframe cube", "", 75),
-    ("Rotozoom", "Rotozoom", "", 75),
-    ("Plasma", "Plasma", "", 75),
-    ("Copper_Bars", "Copper bars", "", 75),
+    # The full-screen ones first: the Demoscene playlist opens on them (and
+    # site-smoke's demo checks read the panel's colour while they play).
     ("Tunnel", "Tunnel", "", 75),
-    ("Rings", "Rings", "", 75),
+    ("Plasma", "Plasma", "", 75),
+    ("Rotozoom", "Rotozoom", "", 75),
     ("Kaleidoscope", "Kaleidoscope", "", 75),
+    ("Rotozoom_Floor", "Rotozoom floor", "", 75),
     ("Time_Gate", "Time gate", "", 75),
+    ("Copper_Bars", "Copper bars", "", 75),
     ("Endless_Road", "Endless road", "", 75),
+    ("Rings", "Rings", "", 75),
+    ("Starfield", "Starfield", "", 75),
+    ("Wireframe_Cube", "Wireframe cube", "", 75),
 ]
 KENNEY_GIFS = {
     "b_walk.gif": "OTHER_Pixel_Platformer_Walk_01_kenney.gif",
