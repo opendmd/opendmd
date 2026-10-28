@@ -13,7 +13,7 @@ import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, store, toast, debounce, saver, base, SITE } from './util.js';
 import { popup, closeMenu, actions } from './overrides.js';
-import { link as mklink, parse, sliderName, choices, picker, about, TIP, est, marks, sample, MAX_NAME } from './psikit.js';
+import { link as mklink, parse, controls, control, fit, Q, about, TIP, est, marks, sample, MAX_NAME } from './psikit.js';
 
 let P = null, mod = null, gen = 0;
 const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
@@ -43,7 +43,6 @@ const grid = (i) => (i[5] & 32 ? 0 : i[10]) || D;
 let held = null, over = false;
 const hold = (src) => { held = src; over = src != null && !!(P.info()[5] & 32); return true; };
 const take = (src) => T(() => src != null && (src === held || (P.compile(src.slice(0, 4096)) && hold(src))), false);
-const Q = (v) => Math.round((v || 0) * 65536);
 // `still`: a thumbnail, drawn at 10:09:30 like the site's gallery (opendmd-gallery's
 // preview clock), so one that follows the clock doesn't come out dark at night.
 // `gms`: where the GIF under it is (its own clock: ms since the preview started).
@@ -214,18 +213,11 @@ function play(v, f, i) {
   kick();
 }
 
-// Sliders for the a, b, c a formula reads, in `box`; `set` on a change. A
-// slider with choices (`-- a: shape = cube, ball`) is a row of buttons.
-function sliders(box, f, mask, set) {
-  clear(box, ['a', 'b', 'c'].map((k, j) => {
-    if (!(mask & (1 << j))) return null;
-    const ch = choices(f.src, k), name = sliderName(f.src, k);
-    if (ch) return h('div.psi-sl', h('span', name), Object.assign(picker(ch, name, f[k], (v) => { f[k] = v; set(); }), { id: `${box.id}-${k}` }));
-    const out = h('output.mono', (f[k] || 0).toFixed(2));
-    const r = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: f[k] || 0, id: `${box.id}-${k}`,
-      oninput: () => { f[k] = +r.value; out.textContent = f[k].toFixed(2); set(); } });
-    return h('label.psi-sl', h('span', name), r, out);
-  }));
+// The controls a formula declares (its `control` lines, and a 0..1 slider for
+// a, b or c read without one), in `box`; `set` on a change.
+function sliders(box, f, set) {
+  const ctl = T(() => controls(P, f.src), null);
+  clear(box, (ctl?.controls || []).map((c) => control(c, f, set, `${box.id}-${c.slot}`)));
 }
 
 // --- Saving and sharing
@@ -241,6 +233,7 @@ const link = (f, base = location.origin + location.pathname) => mklink(f, base, 
 // `#formula=…&name=…&a=…` (app.js keeps it in app.formula).
 function fromLink(s) {
   const { f, cut } = parse(s);
+  if (P) T(() => fit(controls(P, f.src), f), null);
   if (cut) toast('The shared formula was too long: only its first 4,096 characters are here', 'bad');
   f.base = sig(f);
   return f;
@@ -346,7 +339,7 @@ function build(root) {
     desc.textContent = f.desc || '';
     cap.textContent = i.length ? about(i) : `This formula doesn’t work any more: ${T(() => P.error(), '')}`;
     cap.title = i.length ? TIP(i) : '';
-    sliders(sl, f, i[5] || 0, () => { pv.dirty = true; PS?.follow(f); });
+    sliders(sl, f, () => { pv.dirty = true; PS?.follow(f); });
     if (show) show.disabled = !i.length;
     under.hidden = !(i[5] & 32);
     if (look) look.hidden = !i.length;
@@ -396,34 +389,79 @@ function build(root) {
 }
 
 // --- The editor (`#formulas/edit`)
-const VARS = [['x, y', 'where the pixel is: 0 to 1 across, and up from the bottom'], ['px, py', 'the pixel’s column 0–127 and row 0–31 from the bottom'],
-  ['t', 'seconds into the loop'], ['hour, minute, second', 'the time of day'], ['a, b, c', 'sliders, 0 to 1 (name one with -- a: speed; buttons with -- a: shape = cube, ball)'],
-  ['w, h', '128 and 32'], ['i', 'the pixel’s number, 0–4095'], ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 up'],
-  ['r, angle', 'distance and angle (turns) from the middle'], ['ty', 'row 0–31 from the top'], ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'], ['ul', 'how bright that is']];
-const FUNCS = [['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'], ['tri(v) saw(v) sqr(v)', 'triangle, sawtooth and square waves'],
-  ['abs floor frac sqrt', 'size, whole part, fraction, square root'], ['min max clamp(v, lo, hi)', 'limits'], ['mix(a, b, k)', 'from a to b as k goes 0 to 1'],
-  ['step(edge, v)', '1 past the edge, else 0'], ['smoothstep(e0, e1, v)', 'a soft step'], ['len(dx, dy)', 'distance'], ['atan2(dy, dx)', 'angle, in turns'],
-  ['noise(x, y, z)', 'smooth random hills, 0 to 1'], ['hash(a, b)', 'random 0 to 1'], ['select(c, a, b)', 'a when c is true (not 0), else b; or c ? a : b'],
+// psi-builtins: cheat sheet (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins)
+const VARS = [
+  ['x, y', 'where the pixel is: 0 to 1 across, and up from the bottom'],
+  ['px, py', 'the pixel’s column 0–127 and row 0–31 from the bottom'],
+  ['t', 'seconds into the loop'],
+  ['hour, minute, second', 'the time of day'],
+  ['a, b, c', 'the controls, in the order the control lines declare them (0 to 1 when undeclared)'],
+  ['w, h', '128 and 32'],
+  ['i', 'the pixel’s number, 0–4095'],
+  ['cx, cy', 'from the middle: −2 to 2 across, −0.5 to 0.5 up'],
+  ['r, angle', 'distance and angle (turns) from the middle'],
+  ['ty', 'row 0–31 from the top'],
+  ['ur, ug, ub', 'the colour under the formula: the GIF it is drawn over, 0 to 1'],
+  ['ul', 'how bright that is']
+];
+const FUNCS = [
+  ['sin(v) cos(v)', 'a wave: one turn per 1, between −1 and 1'],
+  ['tri(v) saw(v) sqr(v)', 'triangle, sawtooth and square waves'],
+  ['abs floor frac sqrt', 'size, whole part, fraction, square root'],
+  ['min max clamp(v, lo, hi)', 'limits'],
+  ['mix(a, b, k)', 'from a to b as k goes 0 to 1'],
+  ['step(edge, v)', '1 past the edge, else 0'],
+  ['smoothstep(e0, e1, v)', 'a soft step'],
+  ['len(dx, dy)', 'distance'],
+  ['atan2(dy, dx)', 'angle, in turns'],
+  ['noise(x, y, z)', 'smooth random hills, 0 to 1'],
+  ['hash(a, b)', 'random 0 to 1'],
+  ['select(c, a, b)', 'a when c is true (not 0), else b; or c ? a : b'],
   ['pick(k, a, b, …)', 'a at k = 0, b at 1, …; else 0'],
   ['digit(n, col, row)', 'the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font'],
-  ["glyph('A', col, row)", 'the same for a character'], ['bit(n, i)', 'bit i of a whole number: 1 or 0'],
-  ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'], ['%', 'remainder: v % 1 is the fraction'], [';', 'a new line, on the same line'],
-  ['loop 8', 'the loop’s length in seconds (first line)'], ['loop forever', 'goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays'], ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'], ['frame { … }', 'values worked out once a frame'],
+  ['glyph(\'A\', col, row)', 'the same for a character'],
+  ['bit(n, i)', 'bit i of a whole number: 1 or 0'],
+  ['< <= > >= == !=', 'compare: 1 or 0; and, or, not'],
+  ['%', 'remainder: v % 1 is the fraction'],
+  [';', 'a new line, on the same line'],
+  ['loop 8', 'the loop’s length in seconds (first line)'],
+  ['loop forever', 'goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays'],
+  ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'],
+  ['frame { … }', 'values worked out once a frame'],
   ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
-  ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'], ['p.v', 'a value part p sets'],
-  ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']];
-const DRAW = [['draw { … }', 'once a frame, before the pixels: values, loops, lines and dots into ink', 'draw {\n  \n}\n'],
+  ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'],
+  ['p.v', 'a value part p sets'],
+  ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']
+];
+const DRAW = [
+  ['draw { … }', 'once a frame, before the pixels: values, loops, lines and dots into ink', 'draw {\n  \n}\n'],
   ['for k < 12 { … }', 'inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame', 'for k < 12 {\n  \n}'],
   ['line(x0, y0, x1, y1, v0, v1)', 'a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1)'],
-  ['dot(x, y, v)', 'one pixel of ink v'], ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
-  ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '], ['T[k]', 'number k of table T, from 0 (0 outside it)'],
+  ['dot(x, y, v)', 'one pixel of ink v'],
+  ['ink', 'what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink'],
+  ['table T = 1, -2, 0.5', 'numbers, 256 in all', 'table T = '],
+  ['T[k]', 'number k of table T, from 0 (0 outside it)'],
   ['sprite s { … }', 'a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall', 'sprite s {\n  key . 0, X 1\n  .X.\n}\n'],
-  ['s[u, v]', 'sprite s at column u, row v from its top left: its key’s number (0 outside)']];
-const COLS = [['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'], ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
+  ['s[u, v]', 'sprite s at column u, row v from its top left: its key’s number (0 outside)']
+];
+const COLS = [
+  ['hsv(hue, sat, val)', 'colour: hue in turns, 0 to 1 each'],
+  ['rgb(r, g, b)', 'red, green, blue: 0 to 1'],
   ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'],
-  ['palette sea = #024, #08c, #fff', 'your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one', 'palette p = #000, #f80, #fff\n'], ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'], ['gray(v)', 'white, 0 to 1'],
+  ['palette sea = #024, #08c, #fff', 'your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one', 'palette p = #000, #f80, #fff\n'],
+  ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'],
+  ['gray(v)', 'white, 0 to 1'],
   ['#ff8800', 'a colour: alone, or #f80 * v, mix(#000, #f80, v)'],
-  ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)']];
+  ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)']
+];
+const DECLS = [
+  ['name "Sunrise"', 'the formula’s name (60 characters at most)', 'name ""\n'],
+  ['about "…"', 'one line about it (120 at most)', 'about ""\n'],
+  ['control speed 0..1 = 0.5 "Speed"', 'a slider: its name in the formula, range, default and label (three controls at most)', 'control speed 0..1 = 0.5 "Speed"\n'],
+  ['control mode = calm, wild', 'buttons: the value is the choice’s number, 0 for the first (pick(mode, …)); two words make a switch', 'control mode = calm, wild\n'],
+  ['look screen 40', 'it can be the panel’s look: drawn over the GIF with a blend and an amount (look alone: over, 100)', 'look\n']
+];
+// psi-builtins end
 
 function editor() {
   const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; stash(); } });
@@ -517,7 +555,7 @@ function editor() {
       delete el.dataset.err;
       good = f.src;
       top.classList.remove('stale');
-      sliders(sl, f, i[5], () => { stash(); pv.dirty = true; PS?.follow(live); });
+      sliders(sl, f, () => { stash(); pv.dirty = true; PS?.follow(live); });
       play(pv, live, i);
       PS?.follow(live);
     } else {
@@ -661,7 +699,7 @@ function editor() {
     const ins = (t) => () => { closeMenu(); const s = ta.selectionStart; ta.focus(); ta.setSelectionRange(s, ta.selectionEnd); document.execCommand('insertText', false, t); };
     const rows = (title, list) => [h('h3', title), h('dl.psi-dl', list.map(([k, v, x]) => [h('dt', h('button.txt.mono', { onclick: ins(x || k.split(/[ ,(]/)[0]) }, k)), h('dd', v)]))];
     popup(h('div.menu.wide', { id: 'psi-cheat', role: 'dialog', 'aria-label': 'Cheat sheet' }, h('div.mh', 'Cheat sheet'),
-      rows('Values', VARS), rows('Functions', FUNCS), rows('Drawing', DRAW), rows('Colour (the last line, of the formula or a layer)', COLS),
+      rows('At the top: what the formula is', DECLS), rows('Values', VARS), rows('Functions', FUNCS), rows('Drawing', DRAW), rows('Colour (the last line, of the formula or a layer)', COLS),
       h('p.cap', 'Phases are in turns: sin(0.25) is 1. Tap a name to put it in. -- starts a comment.')), r.left, r.bottom + 4);
   }
 

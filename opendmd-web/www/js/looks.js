@@ -11,6 +11,7 @@
 import { app } from './state.js';
 import { h } from './util.js';
 import { fpath } from './psishow.js';
+import { num } from './psikit.js';
 
 export { fpath };
 
@@ -57,7 +58,7 @@ const inner = (s) => (/^(?:loop (?:[\d.]+|forever); )?part look \{; (.*); \}; (?
 export function saved(cf) {
   const q = new URLSearchParams(cf.look_formula.slice(8)), src = q.get('src') || '', [name, b, k] = named(cf), f = { name: name || 'A formula', saved: 1 };
   f.src = b == 'over' && k == 100 ? src : inner(src) || src;
-  for (const k of 'abc') if (q.has(k)) f[k] = +q.get(k);
+  for (const k of 'abc') if (num(q.get(k)) != null) f[k] = num(q.get(k));
   return f;
 }
 

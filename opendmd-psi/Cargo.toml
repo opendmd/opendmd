@@ -23,6 +23,12 @@ tables = []
 # psi-probe's counters (`vm::stats`): frames narrowed or checked, and
 # where their memory was.
 stats = []
+# The editor's cheat-sheet rows in `builtins::cheat` (tests and tools; the
+# firmware never links them).
+docs = []
+# The language-service hook (`syntax`: the lexer's tokens and a `Sink` the
+# compiler tells what it saw). Off in the firmware: the calls are compiled out.
+syntax = []
 
 [[test]]
 name = "golden"
@@ -35,6 +41,14 @@ required-features = ["tables"]
 [[test]]
 name = "look"
 required-features = ["tables"]
+
+[[test]]
+name = "builtins"
+required-features = ["docs"]
+
+[[test]]
+name = "syntax"
+required-features = ["syntax"]
 
 [[test]]
 name = "models"

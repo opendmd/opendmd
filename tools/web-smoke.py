@@ -3876,9 +3876,9 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.keyboard.press("Alt+ArrowUp")
     page.wait_for_timeout(200)
     check(page.input_value("#psi-src") == "gray(x*0.6)", f"formulas: Alt+↑ nudges the number ({page.input_value('#psi-src')!r})")
-    # A picker: `-- a: name = word, word, …` is a row of buttons (a radio
-    # group); choice j of n sets a to j/(n-1), and the arrows move it.
-    page.fill("#psi-src", "-- a: level = off, half, full\ngray(a)")
+    # A choice: `control name = word, word, …` is a row of buttons (a radio
+    # group); the value is the choice's number, and the arrows move it.
+    page.fill("#psi-src", "control level = off, half, full\ngray(level/2)")
     page.wait_for_timeout(400)
     grp = page.locator("#psi-ed-sl-a")
     radios = page.eval_on_selector_all("#psi-ed-sl-a [role=radio]", "els => els.map(e => [e.textContent, e.getAttribute('aria-checked')])")
@@ -3895,18 +3895,18 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(400)
     off, a_off = canvas_sum(page, "#psi-ed-panel"), page.evaluate(draft_a)
     check(grp.get_attribute("role") == "radiogroup" and grp.get_attribute("aria-label") == "level" and named == "level"
-          and [r[0] for r in radios] == ["off", "half", "full"] and (a_mid, a_full, a_off) == (0.5, 1, 0)
+          and [r[0] for r in radios] == ["off", "half", "full"] and (a_mid, a_full, a_off) == (1, 2, 0)
           and focused == ["full", "true"] and off < mid < full,
-          f"formulas: a picker's buttons ({radios}) set a to 0.5, 1 (→), 0 (Home) and the preview follows ({off}, {mid}, {full})")
-    # A slider for `a`, named by its comment.
-    page.fill("#psi-src", "-- a: brightness\ngray(a)")
+          f"formulas: a choice's buttons ({radios}) set a to 1, 2 (→), 0 (Home) and the preview follows ({off}, {mid}, {full})")
+    # A slider, declared by a control line.
+    page.fill("#psi-src", "control brightness = 0\ngray(brightness)")
     page.wait_for_timeout(400)
     names = page.eval_on_selector_all("#psi-ed-sl .psi-sl span", "els => els.map(e => e.textContent)")
     page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = 0.75; r.dispatchEvent(new Event('input')); }")
     page.wait_for_timeout(300)
     px = page.evaluate("""() => { const c = document.querySelector('#psi-ed-panel'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
         let m = 0; for (let i = 0; i < d.length; i += 4) m = Math.max(m, d[i]); return m; }""")
-    check(names == ["brightness"] and px > 120, f"formulas: a slider for a, named '{names}', lights the panel ({px})")
+    check(names == ["brightness"] and px > 120, f"formulas: a control's slider, named '{names}', lights the panel ({px})")
     # Saved, then listed under Your formulas.
     page.fill("#psi-name", "Smoke brightness")
     page.click("#psi-save")
@@ -3928,7 +3928,7 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     other.wait_for_selector("#psi-ed #psi-src", timeout=20000)
     other.wait_for_timeout(500)
     got = (other.input_value("#psi-src"), other.input_value("#psi-name"), other.input_value("#psi-ed-sl-a"))
-    check(got == ("-- a: brightness\ngray(a)", "Smoke brightness", "0.75") and other.evaluate("location.hash") == "#formulas/edit",
+    check(got == ("control brightness = 0\ngray(brightness)", "Smoke brightness", "0.75") and other.evaluate("location.hash") == "#formulas/edit",
           f"formulas: the link opens the editor with it ({got})")
     other.context.close()
     page.click("#psi-back")
@@ -3982,7 +3982,8 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     t = page.eval_on_selector_all("#toasts .toast", "els => els.at(-1).textContent")
     check(t == "already in “psitest”" and (overlay / "sets" / "psitest.txt").read_text().count("@fx:psi") == 1,
           f"formulas playlist: added again, it is there once ('{t}')")
-    # The editor: a button too, with what it plays (a Formula of one's own, its name).
+    # The editor: a button too, with what it plays (a Formula of one's own, its
+    # name; its `-- a:` comment, retired, is a comment: `a` an undeclared slider).
     formula_editor(page, "-- a: level\nloop 4\ngray(a * x + saw(t / 4) * 0.1)")
     page.fill("#psi-name", "Smoke & ramp")
     page.click("#psi-ed-pl")

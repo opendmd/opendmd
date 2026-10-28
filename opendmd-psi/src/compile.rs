@@ -12,7 +12,9 @@
 //! are bounded for any input.
 
 use crate::fixed::{self, ONE};
+use crate::meta::Meta;
 use crate::program::{code, *};
+use crate::builtins::*;
 use crate::tables;
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -123,6 +125,11 @@ enum Tok {
     /// A row of a `sprite NAME { … }` block (its key line or a row of
     /// characters), as written: the lexer reads those lines raw.
     Raw,
+    /// `"…"`, its quotes included: only on a `name`, `about` or `control`
+    /// line ([`text_line`]); elsewhere a `"` is an error.
+    Str,
+    /// `..`, a control's range (`control zoom 1..4`).
+    DotDot,
     Eof,
 }
 
@@ -152,6 +159,8 @@ fn describe(t: Tok) -> &'static str {
         Tok::Colon => "`:`",
         Tok::Question => "`?`",
         Tok::Raw => "a sprite's row",
+        Tok::Str => "text in quotes",
+        Tok::DotDot => "`..`",
         _ => "an operator",
     }
 }
@@ -196,6 +205,8 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
                             // At the start of a line (nothing but spaces before, outside brackets):
                             // where `sprite NAME {` may start a sprite block.
     let mut line_start = true;
+    // On a `name`, `about` or `control` line: where text in quotes may be.
+    let mut text = false;
     let push_nl = |out: &mut Vec<Token>, at: usize| {
         if !matches!(
             out.last(),
@@ -227,7 +238,12 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
                 push_nl(&mut out, i);
                 line_start = true;
             }
+            text &= depth > 0;
             i += 1;
+            continue;
+        }
+        if c == b'"' && text {
+            i = quoted(src, i, &mut out)?;
             continue;
         }
         if c.is_ascii_whitespace() {
@@ -241,6 +257,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
                 continue;
             }
         }
+        let first = line_start && depth == 0;
         line_start = false;
         // `#ff8800`, `#f80`: a colour.
         if c == b'#' {
@@ -295,7 +312,10 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             ));
         }
         if c.is_ascii_digit() || (c == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
-            while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.') {
+            // (Not into `..`: `1..4` is a range.)
+            while i < b.len()
+                && (b[i].is_ascii_digit() || (b[i] == b'.' && b.get(i + 1) != Some(&b'.')))
+            {
                 i += 1;
             }
             let s = sub(src, start, i);
@@ -348,7 +368,10 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
                 "and" => Tok::And,
                 "or" => Tok::Or,
                 "not" => Tok::Not,
-                _ => Tok::Name,
+                w => {
+                    text |= first && text_line(w);
+                    Tok::Name
+                }
             };
             out.push(Token { tok, start, end: i });
             continue;
@@ -361,6 +384,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             (b'!', Some(b'=')) => (Tok::Ne, 2),
             (b'&', Some(b'&')) => (Tok::And, 2),
             (b'|', Some(b'|')) => (Tok::Or, 2),
+            (b'.', Some(b'.')) => (Tok::DotDot, 2),
             (b'+', _) => (Tok::Plus, 1),
             (b'-', _) => (Tok::Minus, 1),
             (b'*', _) => (Tok::Star, 1),
@@ -385,7 +409,8 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
                 let hint = match ch {
                     '^' => " (there is no power operator: multiply, e.g. `x * x`)",
                     '&' | '|' => " (write `and` / `or`)",
-                    '"' => " (there are no strings: for a character's code write it in single quotes, 'A')",
+                    // E001.
+                    '"' => " (there are no strings but on `name`, `about` and `control` lines: for a character's code write it in single quotes, 'A')",
                     _ => "",
                 };
                 return Err(Error::new(
@@ -410,6 +435,109 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
         end: b.len(),
     });
     Ok(out)
+}
+
+/// The lexer's tokens as the language service sees them ([`crate::syntax`]).
+#[cfg(feature = "syntax")]
+pub(crate) fn lex_tokens(src: &str) -> Result<Vec<(crate::syntax::Kind, usize, usize)>, Error> {
+    use crate::syntax::Kind;
+    Ok(lex(src)?
+        .iter()
+        .filter(|t| t.tok != Tok::Eof)
+        .map(|t| {
+            let k = match t.tok {
+                Tok::Num(_) => Kind::Number,
+                Tok::Hex(_) => Kind::Colour,
+                Tok::Name => Kind::Name,
+                Tok::Str => Kind::Text,
+                Tok::Raw => Kind::Row,
+                Tok::Newline => Kind::End,
+                Tok::LParen
+                | Tok::RParen
+                | Tok::LBrace
+                | Tok::RBrace
+                | Tok::LBracket
+                | Tok::RBracket
+                | Tok::Comma
+                | Tok::Dot
+                | Tok::DotDot
+                | Tok::Assign => Kind::Punctuation,
+                _ => Kind::Operator,
+            };
+            (k, t.start, t.end)
+        })
+        .collect())
+}
+
+/// The words that start a line where text in quotes may be.
+fn text_line(w: &str) -> bool {
+    matches!(w, "name" | "about" | "control")
+}
+
+/// The longest a text in quotes may be (characters): a `name`, an `about`,
+/// a control's label.
+pub const MAX_NAME_TEXT: usize = 60;
+pub const MAX_ABOUT_TEXT: usize = 120;
+pub const MAX_LABEL_TEXT: usize = 24;
+
+/// `"…"` at `i` (a `name`, `about` or `control` line): one token, quotes
+/// and all, to the next `"` on the line. No escapes; no `<`, `>`, `\` or
+/// control characters inside (the text goes into the web app's pages and
+/// JSON as it is). Where it ends.
+#[cold]
+#[inline(never)]
+fn quoted(src: &str, i: usize, out: &mut Vec<Token>) -> Result<usize, Error> {
+    let b = src.as_bytes();
+    let mut j = i + 1;
+    while j < b.len() && b[j] != b'"' {
+        let c = b[j];
+        if c == b'\n' {
+            break;
+        }
+        if c < 0x20 || c == 0x7f || matches!(c, b'<' | b'>' | b'\\') {
+            // E954.
+            return Err(Error::new(
+                j,
+                j + 1,
+                "text in quotes can't have `<`, `>`, `\\` or a control character (a tab too) in it",
+            ));
+        }
+        if c >= 0x80 {
+            // A character of more than a byte: C1 controls (E954), and the
+            // ones that reorder or hide text (E969: bidirectional controls,
+            // zero-width characters, line and paragraph separators).
+            let ch = sub(src, j, b.len()).chars().next().unwrap_or(' ');
+            let n = ch.len_utf8();
+            if matches!(ch, '\u{80}'..='\u{9f}') {
+                return Err(Error::new(j, j + n, "text in quotes can't have `<`, `>`, `\\` or a control character (a tab too) in it"));
+            }
+            if matches!(ch, '\u{200b}'..='\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}') {
+                // E969.
+                return Err(Error::new(
+                    j,
+                    j + n,
+                    "text in quotes can't have characters that hide or reorder text (zero-width, direction marks, line separators)",
+                ));
+            }
+            j += n;
+            continue;
+        }
+        j += 1;
+    }
+    if j >= b.len() || b[j] != b'"' {
+        // E953.
+        return Err(Error::new(
+            i,
+            j,
+            "text in quotes ends with `\"` on the same line",
+        ));
+    }
+    out.push(Token {
+        tok: Tok::Str,
+        start: i,
+        end: j + 1,
+    });
+    Ok(j + 1)
 }
 
 /// `sprite NAME {` and nothing else (but spaces and a comment) on the line
@@ -517,28 +645,73 @@ fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Vec<Token>) -> usize
     k.min(b.len())
 }
 
+/// Whether a line starts with a declaration (`name "…"`, `control …`; not
+/// `name = …`, an assignment): where text in quotes may be. The first word,
+/// past anything but letters and digits, then anything but `=`.
+fn declaration_line(line: &str) -> bool {
+    let b = line.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let Some(a) = b.iter().position(|&c| word(c)) else {
+        return false;
+    };
+    let e = a + b[a..].iter().take_while(|&&c| word(c)).count();
+    DECLARATIONS.contains(&sub(line, a, e))
+        && b[e..].iter().find(|c| !c.is_ascii_whitespace()) != Some(&b'=')
+}
+
 /// The same formula on one line, as short as it stays readable: comments
 /// dropped, runs of spaces made one, lines joined with `; ` (which the
 /// language reads as a line break, and ignores inside brackets, as it does
-/// a newline). For `@fx:psi?src=` paths, which are 512 B at most.
+/// a newline). For `@fx:psi?src=` paths, which are 2,048 B at most. Text
+/// in quotes on a `name`, `about` or `control` line is kept as written
+/// (spaces, `--` and `;` inside it too): on a line that starts with a
+/// declaration, the only lines text in quotes can be on.
 pub fn compact(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     for line in src.lines() {
-        // Cut a comment (`--` or `//`) off the line.
+        let text = declaration_line(line);
         let b = line.as_bytes();
-        let mut end = b.len();
-        for i in 0..b.len().saturating_sub(1) {
-            if (b[i] == b'-' && b[i + 1] == b'-') || (b[i] == b'/' && b[i + 1] == b'/') {
-                end = i;
+        let mut code = String::new();
+        let mut i = 0;
+        let mut space = false;
+        while i < b.len() {
+            let c = b[i];
+            // `'"'`, `'-'`: a character in quotes is one token, as the lexer
+            // reads it (before a comment or a quote).
+            if c == b'\'' && b.get(i + 2) == Some(&b'\'') && b.get(i + 1).is_some_and(|&x| (32..=126).contains(&x)) {
+                if space && !code.is_empty() {
+                    code.push(' ');
+                }
+                code.push_str(sub(line, i, i + 3));
+                (i, space) = (i + 3, false);
+                continue;
+            }
+            if c == b'"' && text {
+                // To the closing quote (or the line's end), as written.
+                let e = line[i + 1..].find('"').map_or(b.len(), |k| i + 2 + k);
+                if space && !code.is_empty() {
+                    code.push(' ');
+                }
+                code.push_str(sub(line, i, e));
+                (i, space) = (e, false);
+                continue;
+            }
+            if (c == b'-' || c == b'/') && b.get(i + 1) == Some(&c) {
                 break;
             }
-        }
-        let mut code = String::new();
-        for w in sub(line, 0, end).split_whitespace() {
-            if !code.is_empty() {
+            if c.is_ascii_whitespace() {
+                space = true;
+                i += 1;
+                continue;
+            }
+            if space && !code.is_empty() {
                 code.push(' ');
             }
-            code.push_str(w);
+            space = false;
+            // One character (whole, not a byte of one).
+            let n = line[i..].chars().next().map_or(1, char::len_utf8);
+            code.push_str(sub(line, i, i + n));
+            i += n;
         }
         if code.is_empty() {
             continue;
@@ -553,83 +726,6 @@ pub fn compact(src: &str) -> String {
 
 // --- names ----------------------------------------------------------------------
 
-/// The built-in values, their level and what they mean (for errors).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Input {
-    X,
-    Y,
-    Px,
-    Py,
-    I,
-    T,
-    Hour,
-    Minute,
-    Second,
-    A,
-    B,
-    C,
-    Ur,
-    Ug,
-    Ub,
-    Ul,
-    Ink,
-    /// `seed` (a `loop forever` formula's: [`LATER`]-like, a name a formula
-    /// sets is that name).
-    Seed,
-}
-
-const INPUTS: [(&str, Input, &str); 17] = [
-    ("x", Input::X, "the pixel's position across, 0 to 1"),
-    (
-        "y",
-        Input::Y,
-        "the pixel's height, 0 at the bottom to 1 at the top",
-    ),
-    ("px", Input::Px, "the pixel's column, 0 to 127"),
-    ("py", Input::Py, "the pixel's row from the bottom, 0 to 31"),
-    ("i", Input::I, "the pixel's number, 0 to 4095"),
-    ("t", Input::T, "seconds into the loop"),
-    ("hour", Input::Hour, "the hour, 0 to 23"),
-    ("minute", Input::Minute, "the minute"),
-    ("second", Input::Second, "the second"),
-    ("a", Input::A, "slider a"),
-    ("b", Input::B, "slider b"),
-    ("c", Input::C, "slider c"),
-    (
-        "ur",
-        Input::Ur,
-        "the red of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ug",
-        Input::Ug,
-        "the green of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ub",
-        Input::Ub,
-        "the blue of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ul",
-        Input::Ul,
-        "the brightness of the picture under the formula, 0 to 1",
-    ),
-    (
-        "ink",
-        Input::Ink,
-        "what `draw { }` put at the pixel, 0 to 1",
-    ),
-];
-
-/// Values added once people had saved formulas (2026-10-26), about the
-/// middle and from the top: `cx = (x − ½)·4`, `cy = y − ½`, `ty = 31 −
-/// py`, `r = len(cx, cy)`, `angle = atan2(cy, cx)`, the steps those take
-/// written out ([`Parser::centred`]). A name set with one of these is that
-/// name ([`Parser::lookup_value`] finds the formula's names first), so a
-/// saved `r = …` means what it meant.
-const LATER: [&str; 5] = ["cx", "cy", "ty", "r", "angle"];
-
 /// `loop forever`'s loop (Q16 seconds, as `loop N`'s): longer than any.
 const FOREVER: i32 = i32::MAX;
 
@@ -642,100 +738,6 @@ const CENTRED: [(u8, u8, u8); 6] = [
     (code::SUB, 5, 2),   // 9: ty
     (code::LEN, 7, 8),   // 10: r
     (code::ATAN2, 8, 7), // 11: angle
-];
-
-/// `w` and `h`: constants.
-const CONSTS: [(&str, i32); 2] = [("w", (W as i32) << 16), ("h", (H as i32) << 16)];
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum F {
-    Op(u8),
-    Smoothstep,
-    Fract,
-    /// `digit`/`glyph`: three values and an optional font word.
-    Glyph(u8),
-    /// `pick(k, a, b, …)`.
-    Pick,
-}
-
-/// Functions: name, arity, what, the op.
-const FUNCS: [(&str, usize, F); 25] = [
-    ("sin", 1, F::Op(code::SIN)),
-    ("cos", 1, F::Op(code::COS)),
-    ("tri", 1, F::Op(code::TRI)),
-    ("saw", 1, F::Op(code::SAW)),
-    ("sqr", 1, F::Op(code::SQR)),
-    ("abs", 1, F::Op(code::ABS)),
-    ("floor", 1, F::Op(code::FLOOR)),
-    ("frac", 1, F::Op(code::FRAC)),
-    ("fract", 1, F::Fract),
-    ("sqrt", 1, F::Op(code::SQRT)),
-    ("min", 2, F::Op(code::MIN)),
-    ("max", 2, F::Op(code::MAX)),
-    ("step", 2, F::Op(code::STEP)),
-    ("hash", 2, F::Op(code::HASH)),
-    ("len", 2, F::Op(code::LEN)),
-    ("atan2", 2, F::Op(code::ATAN2)),
-    ("clamp", 3, F::Op(code::CLAMP)),
-    ("mix", 3, F::Op(code::MIX)),
-    ("smoothstep", 3, F::Smoothstep),
-    ("noise", 3, F::Op(code::NOISE)),
-    ("select", 3, F::Op(code::SELECT)),
-    ("bit", 2, F::Op(code::BIT)),
-    ("digit", 3, F::Glyph(code::DIGIT)),
-    ("glyph", 3, F::Glyph(code::GLYPH)),
-    ("pick", 0, F::Pick),
-];
-
-/// Functions added once people had saved formulas (2026-10-26): a name
-/// set with one of these still works as a value (`glyph = …; gray(glyph)`).
-const LATER_FUNCS: [&str; 4] = ["bit", "digit", "glyph", "pick"];
-
-/// The fonts `digit` and `glyph` take as a last value: core's 5x7 (the
-/// panel's text and clock; 4 × 6 digits; the default), 4x6 (3 × 5 digits)
-/// and the bold 3 × 5 digits (digits only). As `Tables::glyphs` takes them.
-const FONTS: [(&str, u8); 3] = [
-    ("normal", tables::NORMAL),
-    ("small", tables::SMALL),
-    ("bold", tables::BOLD),
-];
-
-const COLOURS: [(&str, usize, u8); 4] = [
-    ("rgb", 3, code::OUT_RGB),
-    ("hsv", 3, code::OUT_HSV),
-    ("pal", 2, code::OUT_PAL),
-    ("gray", 1, code::OUT_GRAY),
-];
-
-/// Palette names: core's order (fire, ice, chrono, amber, rainbow); `gray`
-/// is not a table.
-const PALETTES: [(&str, u8); 7] = [
-    ("fire", 0),
-    ("ice", 1),
-    ("ocean", 1),
-    ("chrono", 2),
-    ("amber", 3),
-    ("rainbow", 4),
-    ("gray", 255),
-];
-
-const KEYWORDS: [&str; 8] = [
-    "loop", "frame", "layer", "part", "use", "draw", "for", "table",
-];
-
-/// The draw stage's primitives: statements inside `draw { }`, and names a
-/// formula may still set (`line = …`), as `ink` is a value it may.
-const PRIMITIVES: [&str; 2] = ["line", "dot"];
-
-/// How a layer goes onto what is below it (`layer add { … }`; `over` when
-/// none is named).
-const BLENDS: [(&str, u8); fixed::BLENDS] = [
-    ("over", fixed::BLEND_OVER),
-    ("add", fixed::BLEND_ADD),
-    ("multiply", fixed::BLEND_MULTIPLY),
-    ("screen", fixed::BLEND_SCREEN),
-    ("max", fixed::BLEND_MAX),
-    ("min", fixed::BLEND_MIN),
 ];
 
 /// Optimal string alignment distance (edits, adjacent swaps count one),
@@ -860,6 +862,10 @@ struct Dag {
     /// The steps a node needs before it that it doesn't read as a value: a
     /// `NOISE_O` node's (`val` the index here) `W_LAT`s.
     deps: Vec<Vec<Id>>,
+    /// Each node as it was made, and where in the source (`syntax`: the
+    /// language service's per-op costs).
+    #[cfg(feature = "syntax")]
+    made: Vec<(Id, usize, usize)>,
 }
 
 /// Index slots: a power of two, twice [`MAX_NODES`] (4 KB, freed with the
@@ -915,6 +921,8 @@ impl Dag {
         self.nodes.push(n);
         let id = (self.nodes.len() - 1) as Id;
         self.index[slot] = id;
+        #[cfg(feature = "syntax")]
+        self.made.push((id, at.0, at.1));
         Ok(id)
     }
 
@@ -1779,6 +1787,55 @@ struct Parser<'s> {
     counts: [u32; 2],
     loops: u16,
     turns: u32,
+    /// The declarations read so far: boxed (the parser's own frame is on
+    /// the compiler's deepest path, and the firmware holds that stack),
+    /// and only once there is one.
+    decl: Option<alloc::boxed::Box<Decls>>,
+    /// The language service's: the names read (where, and the definition's
+    /// place), the declarations (the word's place, the line's end), and
+    /// whom to tell ([`crate::syntax`]).
+    #[cfg(feature = "syntax")]
+    reads: Vec<(usize, usize, usize)>,
+    #[cfg(feature = "syntax")]
+    decls_seen: Vec<(usize, usize)>,
+    #[cfg(feature = "syntax")]
+    sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
+}
+
+/// What the declarations said, while compiling: the program's [`Meta`],
+/// the value each declared slot reads as (the input clamped to its range,
+/// `NO` for an undeclared slot), how many controls the formula's own lines
+/// declared, and where the text is ([`Declared`]).
+#[derive(Default)]
+struct Decls {
+    meta: Meta,
+    slots: [Id; 3],
+    own: u8,
+    text: Declared,
+}
+
+/// Where a formula's declarations are in its source (byte ranges), for
+/// the web module's `controls()`: the browser shows a name, a label and a
+/// choice's words as written, read back from the source rather than
+/// stored in the [`Program`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Declared {
+    /// `name "…"`'s and `about "…"`'s text (inside the quotes).
+    pub name: Option<(u32, u32)>,
+    pub about: Option<(u32, u32)>,
+    /// The `look` line (from `look` to the line's end, its comment out).
+    pub look: Option<(u32, u32)>,
+    /// Each slot's control: its name, its label (inside the quotes) and,
+    /// for a choice, the words (`gentle, strong, off`, as written).
+    pub controls: [Option<DeclaredControl>; 3],
+}
+
+/// A `control` line's pieces ([`Declared`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeclaredControl {
+    pub name: (u32, u32),
+    pub label: Option<(u32, u32)>,
+    pub words: Option<(u32, u32)>,
 }
 
 /// A colour: an `OUT_*` code, its arguments, the palette, how much of the
@@ -2080,7 +2137,7 @@ impl<'s> Parser<'s> {
     }
 
     /// The candidates for a misspelt value name.
-    fn value_names(&self) -> impl Iterator<Item = &str> + '_ {
+    fn value_names(&self) -> impl Iterator<Item = &str> + use<'_, 's> {
         INPUTS
             .iter()
             .map(|e| e.0)
@@ -2097,6 +2154,8 @@ impl<'s> Parser<'s> {
     fn name(&mut self, t: Token) -> Result<Id, Error> {
         let name = self.text(t);
         let at = (t.start, t.end);
+        #[cfg(feature = "syntax")]
+        self.note_read(t);
         if let Some(k) = self.part_named(name) {
             return self.part_value(t, k);
         }
@@ -2239,6 +2298,17 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn input(&mut self, inp: Input) -> Result<Id, Error> {
         let at = (0, 0);
+        // A declared control's slot reads as the value its line made (the
+        // input held to its range).
+        let k = match inp {
+            Input::A => 0,
+            Input::B => 1,
+            Input::C => 2,
+            _ => 3,
+        };
+        if let Some(d) = self.decl.as_ref().filter(|d| k < 3 && d.slots[k] != NO) {
+            return Ok(d.slots[k]);
+        }
         if let (Input::T, Some(t)) = (inp, self.env.t) {
             return Ok(t);
         }
@@ -4142,6 +4212,7 @@ impl<'s> Parser<'s> {
         let mut last: Option<Token> = None;
         let mut seen_frame = false;
         self.skip_newlines();
+        self.header(end == Tok::Eof)?;
         loop {
             let t = self.peek();
             if t.tok == end {
@@ -4209,6 +4280,7 @@ impl<'s> Parser<'s> {
                     )
                 }
                 _ if self.is_assignment() => self.assignment(false)?,
+                _ if self.is_declaration() => return Err(self.late(t)),
                 _ => {
                     let (cs, layered) = self.colour_or_value(t, end)?;
                     if b.blocks > 0 {
@@ -4227,6 +4299,413 @@ impl<'s> Parser<'s> {
             self.skip_newlines();
         }
         Ok(b)
+    }
+}
+
+// --- the declarations ---------------------------------------------------------
+//
+// `psi 1`, `name "…"`, `about "…"`, `control …`, `look …`: lines at the top
+// of a formula (or of a part, where only `control` does anything: it names
+// the part's value of that slot) that say what it is. Read here, out of the
+// recursive parser (`header` returns before any expression is read deeper
+// than a number), so the compiler's deepest stack is unchanged.
+// docs/research/formula-apps.md §2.1; the codes in psi-tooling-plan.md §4.
+
+/// The words a choice may have: 2 to 6.
+const CHOICE_WORDS: core::ops::RangeInclusive<usize> = 2..=6;
+
+impl<'s> Parser<'s> {
+    /// The word at the cursor starts a declaration (by its shape: `name`
+    /// and `about` before text in quotes, `control` before a name, `psi`
+    /// before anything but `=`, `look` alone or before a blend or a number
+    /// — and no value or part of the formula's called `look`).
+    #[inline(never)]
+    fn is_declaration(&self) -> bool {
+        let t = self.peek();
+        if t.tok != Tok::Name {
+            return false;
+        }
+        let n = self.tok(self.pos + 1);
+        let w = self.text(t);
+        // (The word alone, or before a number or a word: nothing else it
+        // could be, but a part or a value of the formula's of that name.)
+        let bare = matches!(
+            n.tok,
+            Tok::Newline | Tok::Eof | Tok::RBrace | Tok::Num(_) | Tok::Name
+        ) && self.part_named(w).is_none()
+            && !self.locals.iter().any(|l| l.name == w && self.visible(l.scope));
+        match w {
+            "name" | "about" => n.tok == Tok::Str || bare,
+            "control" => n.tok == Tok::Name,
+            "psi" => n.tok != Tok::Assign,
+            "look" => bare,
+            _ => false,
+        }
+    }
+
+    /// E951: a declaration below the formula's other lines.
+    #[cold]
+    #[inline(never)]
+    fn late(&self, t: Token) -> Error {
+        let w = self.text(t);
+        if w == "psi" {
+            // E604.
+            return self.fail(t, "`psi 1` goes on the formula's first line");
+        }
+        self.fail_at(
+            t,
+            format!("`{w}` goes at the top of the formula, before its other lines"),
+        )
+    }
+
+    /// The declarations at the top of a formula (`host`) or a part: read,
+    /// checked, and — for the formula's own — kept in [`Decls`].
+    #[inline(never)]
+    fn header(&mut self, host: bool) -> Result<(), Error> {
+        // Where each of `name`, `about` and `look` was set (0: not yet).
+        let mut seen = [0usize; 3];
+        let mut controls = 0usize;
+        let mut first = true;
+        while self.is_declaration() {
+            let t = self.next();
+            #[cfg(feature = "syntax")]
+            self.decls_seen.push((t.start, t.end));
+            match self.text(t) {
+                "psi" => {
+                    if !first {
+                        return Err(self.late(t));
+                    }
+                    self.version(t)?;
+                }
+                w @ ("name" | "about") => {
+                    let k = usize::from(w == "about");
+                    self.once(t, &mut seen[k])?;
+                    let q = self.next();
+                    let most = if k == 0 { MAX_NAME_TEXT } else { MAX_ABOUT_TEXT };
+                    let inner = self.text_in(q, most)?;
+                    if host {
+                        let d = &mut self.decls().text;
+                        *(if k == 0 { &mut d.name } else { &mut d.about }) = Some(inner);
+                    }
+                }
+                "look" => {
+                    self.once(t, &mut seen[2])?;
+                    let (blend, amount) = self.look_line()?;
+                    if host {
+                        let end = self.peek().start as u32;
+                        let d = self.decls();
+                        d.meta.set_look(blend, amount);
+                        d.text.look = Some((t.start as u32, end));
+                    }
+                }
+                _ => {
+                    if controls == 3 {
+                        // E958.
+                        return self.err(t, "a formula has three controls at most (a, b and c)");
+                    }
+                    self.control(t, controls, host)?;
+                    controls += 1;
+                }
+            }
+            first = false;
+            self.declaration_end(t)?;
+            self.skip_newlines();
+        }
+        if host && controls > 0 {
+            self.decls().own = controls as u8;
+        }
+        Ok(())
+    }
+
+    /// The declarations so far (made at the first).
+    #[inline(never)]
+    fn decls(&mut self) -> &mut Decls {
+        self.decl.get_or_insert_with(|| {
+            alloc::boxed::Box::new(Decls {
+                slots: [NO; 3],
+                ..Decls::default()
+            })
+        })
+    }
+
+    /// The end of a declaration's line (E967; a `control` line's own
+    /// shape is E957, checked in [`Self::control`]).
+    #[inline(never)]
+    fn declaration_end(&mut self, t: Token) -> Result<(), Error> {
+        let n = self.peek();
+        match n.tok {
+            Tok::Newline => {
+                self.next();
+                Ok(())
+            }
+            Tok::Eof | Tok::RBrace => Ok(()),
+            // E967.
+            _ => Err(self.fail_at(
+                n,
+                format!(
+                    "expected the end of the `{}` line, found {} (one declaration a line)",
+                    self.text(t),
+                    self.found(n)
+                ),
+            )),
+        }
+    }
+
+    /// E952: `name`, `about` or `look` a second time.
+    fn once(&self, t: Token, seen: &mut usize) -> Result<(), Error> {
+        if *seen != 0 {
+            return Err(self.fail_at(
+                t,
+                format!(
+                    "`{}` is already set on line {}",
+                    self.text(t),
+                    self.line_of(*seen - 1)
+                ),
+            ));
+        }
+        *seen = t.start + 1;
+        Ok(())
+    }
+
+    /// `psi N`: this compiler is version [`VERSION`]; a newer one is
+    /// E601, anything but a whole number from 1 E603.
+    #[inline(never)]
+    fn version(&mut self, t: Token) -> Result<(), Error> {
+        let n = self.peek();
+        let v = match n.tok {
+            // (Written as a plain whole number: not `01`, not `1.0`.)
+            Tok::Num(v)
+                if v >= ONE
+                    && v & 0xffff == 0
+                    && !self.text(n).starts_with('0')
+                    && !self.text(n).contains('.') =>
+            {
+                (v >> 16) as usize
+            }
+            // E603.
+            _ => return self.err(t, "`psi` takes the language's version, a whole number: `psi 1`"),
+        };
+        self.next();
+        if v > VERSION {
+            // E601.
+            return Err(self.fail_at(
+                n,
+                format!(
+                    "this formula needs a newer OpenDMD: it is written for Psi {v}, this one has Psi {VERSION}"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Text in quotes at `q` (E956 if there is none), at most `most`
+    /// characters (E955): its range inside the quotes.
+    #[inline(never)]
+    fn text_in(&self, q: Token, most: usize) -> Result<(u32, u32), Error> {
+        if q.tok != Tok::Str {
+            // E956.
+            return self.err(q, "this takes its text in quotes, e.g. `name \"Sunrise\"`");
+        }
+        let inner = sub(self.src, q.start + 1, q.end - 1);
+        // (Characters: UTF-8's lead bytes.)
+        if inner.bytes().filter(|&b| b & 0xc0 != 0x80).count() > most {
+            // E955.
+            return Err(self.fail_at(
+                q,
+                format!("too long: this text can be {most} characters at most"),
+            ));
+        }
+        Ok(((q.start + 1) as u32, (q.end - 1) as u32))
+    }
+
+    /// `look [blend] [amount]` after `look` (E964): the blend's
+    /// place in [`crate::look::BLENDS`] (over when none) and the amount
+    /// (100 when none).
+    #[inline(never)]
+    fn look_line(&mut self) -> Result<(usize, u8), Error> {
+        const HOW: &str = "`look` takes a blend (over, screen, add, multiply, max or min) and an amount from 0 to 100";
+        let mut blend = 0;
+        let n = self.peek();
+        if n.tok == Tok::Name {
+            blend = crate::look::BLENDS
+                .iter()
+                .position(|&b| b == self.text(n))
+                .ok_or_else(|| self.fail(n, HOW))?;
+            self.next();
+        }
+        let mut amount = 100;
+        let n = self.peek();
+        match n.tok {
+            Tok::Num(v) if v & 0xffff == 0 && v <= 100 * ONE => {
+                amount = (v >> 16) as u8;
+                self.next();
+            }
+            Tok::Newline | Tok::Eof | Tok::RBrace => {}
+            _ => return self.err(n, HOW),
+        }
+        Ok((blend, amount))
+    }
+
+    /// A signed number at the cursor (`-0.5`, `4`), or `None`.
+    fn signed(&mut self) -> Option<i32> {
+        let neg = self.peek().tok == Tok::Minus;
+        let k = self.pos + usize::from(neg);
+        let Tok::Num(v) = self.tok(k).tok else {
+            return None;
+        };
+        self.pos = k;
+        self.next();
+        Some(if neg { -v } else { v })
+    }
+
+    /// `control NAME [lo..hi] [= default] ["Label"]` or `control NAME =
+    /// w1, w2, … ["Label"]` after `control` at `kw`: the formula's
+    /// control `k` (slot a, b or c). Its name reads as the slot's value
+    /// held to the range (a choice's: its number, 0 to n − 1, whole), in
+    /// the formula or — `host` false — the part it is written in. A
+    /// part's controls describe the slots only when the formula's own
+    /// lines declare none (so a formula pasted in as `part look { … }`
+    /// keeps its controls).
+    #[inline(never)]
+    fn control(&mut self, kw: Token, k: usize, host: bool) -> Result<(), Error> {
+        const HOW: &str = "a control is `control NAME lo..hi = default \"Label\"` or `control NAME = word, word, …`";
+        let nt = self.next();
+        let name = self.text(nt);
+        let letter = ["a", "b", "c"].iter().position(|&l| l == name);
+        match letter {
+            Some(j) if j != k => {
+                // E963.
+                return Err(self.fail_at(
+                    nt,
+                    format!(
+                        "`{name}` is control {}'s letter: name this one something else (controls take a, b and c in order)",
+                        j + 1
+                    ),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                self.new_name(nt)?;
+            }
+        }
+        let (mut lo, mut hi, mut def) = (0, ONE, None);
+        let mut ranged = false;
+        if matches!(self.peek().tok, Tok::Num(_) | Tok::Minus) {
+            let start = self.peek();
+            let a = self.signed().ok_or_else(|| self.fail(start, HOW))?;
+            if self.next().tok != Tok::DotDot {
+                // E957.
+                return self.err(start, HOW);
+            }
+            let bt = self.peek();
+            let b = self.signed().ok_or_else(|| self.fail(bt, HOW))?;
+            if a >= b {
+                // E959.
+                return self.err(start, "a range goes from the lower number to the higher, e.g. `0..1`");
+            }
+            (lo, hi, ranged) = (a, b, true);
+        }
+        let mut words: Option<(Token, Token, usize)> = None;
+        if self.peek().tok == Tok::Assign {
+            self.next();
+            let v = self.peek();
+            if v.tok == Tok::Name && !ranged {
+                words = Some(self.words()?);
+            } else {
+                def = Some(self.signed().ok_or_else(|| self.fail(v, HOW))?);
+            }
+        }
+        let mut label = None;
+        let q = self.peek();
+        if q.tok == Tok::Str {
+            self.next();
+            label = Some(self.text_in(q, MAX_LABEL_TEXT)?);
+        }
+        // The label is the line's last (E957).
+        let e = self.peek();
+        if !matches!(e.tok, Tok::Newline | Tok::Eof | Tok::RBrace) {
+            return self.err(e, HOW);
+        }
+        let at = (kw.start, nt.end);
+        let input = self.dag.input([Input::A, Input::B, Input::C][k], at)?;
+        let (lo_k, hi_k) = match words {
+            Some((_, _, n)) => (0, ((n as i32) - 1) << 16),
+            None => (lo, hi),
+        };
+        let def = def.unwrap_or(lo_k);
+        if !(lo_k..=hi_k).contains(&def) {
+            // E960.
+            return self.err(nt, "the default is outside the control's range");
+        }
+        let a = self.dag.constant(lo_k, at)?;
+        let b = self.dag.constant(hi_k, at)?;
+        let mut v = self.dag.op(code::CLAMP, [input, a, b], at)?;
+        if words.is_some() {
+            v = self.dag.op(code::FLOOR, [v, 0, 0], at)?;
+        }
+        if letter.is_none() {
+            self.locals.push(Local {
+                name,
+                id: v,
+                at: nt.start,
+                in_frame: false,
+                counter: false,
+                scope: self.scope,
+            });
+        }
+        // The slots: the formula's own controls, or a part's for a slot the
+        // formula's own lines leave undeclared (the first part to declare it).
+        let d = self.decls();
+        if host || d.slots[k] == NO {
+            d.slots[k] = v;
+            match words {
+                Some((_, _, n)) => d.meta.set_choice(k, n),
+                None => d.meta.set_slider(k, lo, hi, def),
+            }
+            d.text.controls[k] = Some(DeclaredControl {
+                name: (nt.start as u32, nt.end as u32),
+                label,
+                words: words.map(|(a, b, _)| (a.start as u32, b.end as u32)),
+            });
+        }
+        Ok(())
+    }
+
+    /// A choice's words, `w1, w2, …` (E961: 2 to 6; E962: each once): the
+    /// first and last word and how many.
+    #[inline(never)]
+    fn words(&mut self) -> Result<(Token, Token, usize), Error> {
+        let first = self.peek();
+        let mut seen: [&str; 7] = [""; 7];
+        let mut n = 0;
+        loop {
+            let w = self.peek();
+            if w.tok != Tok::Name {
+                // E966.
+                return self.err(
+                    w,
+                    "a choice is words (names) between commas: `control NAME = word, word, …`",
+                );
+            }
+            self.next();
+            let text = self.text(w);
+            if seen[..n.min(7)].contains(&text) {
+                // E962.
+                return Err(self.fail_at(w, format!("`{text}` is a choice already")));
+            }
+            if n < 7 {
+                seen[n] = text;
+            }
+            n += 1;
+            if self.peek().tok != Tok::Comma {
+                if !CHOICE_WORDS.contains(&n) {
+                    // E961.
+                    return Err(Error::new(first.start, w.end, "a choice has 2 to 6 words"));
+                }
+                return Ok((first, w, n));
+            }
+            self.next();
+        }
     }
 }
 
@@ -4302,29 +4781,105 @@ fn compile_impl(
     reuse: bool,
     fuse: bool,
 ) -> Result<Info, Error> {
+    compile_full(
+        src,
+        prog,
+        (runs, narrow, reuse, fuse),
+        None,
+        #[cfg(feature = "syntax")]
+        None,
+    )
+}
+
+/// Every compile's one way through: read, lay out (again without the
+/// runs on a layout bug), then the program's finishing passes
+/// ([`finish_program`]); `declared` and the `syntax` sink for those who
+/// want them. (`runs, narrow, reuse, fuse` as [`compile_opts`] and
+/// [`compile_unfused`].)
+#[inline(always)]
+#[allow(clippy::needless_lifetimes)]
+fn compile_full<'s>(
+    src: &'s str,
+    prog: &mut Program,
+    (runs, narrow, reuse, fuse): (bool, bool, bool, bool),
+    mut declared: Option<&mut Declared>,
+    #[cfg(feature = "syntax")] sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
+) -> Result<Info, Error> {
     prog.clear();
-    let mut r = compile_inner(src, prog, runs, reuse);
+    let mut r = compile_inner(
+        src,
+        prog,
+        runs,
+        reuse,
+        declared.as_deref_mut(),
+        #[cfg(feature = "syntax")]
+        sink,
+    );
     if runs && r.as_ref().is_err_and(|e| e.msg == LAYOUT_BUG) {
         debug_assert!(false, "{LAYOUT_BUG}: {src:?}");
         prog.clear();
-        r = compile_inner(src, prog, false, reuse);
+        r = compile_inner(
+            src,
+            prog,
+            false,
+            reuse,
+            declared,
+            #[cfg(feature = "syntax")]
+            None,
+        );
     }
     if r.is_err() {
         prog.clear();
     } else {
-        if narrow {
-            crate::range::narrow(prog);
-            if fuse {
-                crate::fuse::fuse(prog);
-            }
-        }
-        // The draw loops that run as lanes, decided once (`vector_loop`).
-        prog.mark_lane_loops();
+        finish_program(prog, narrow, fuse);
     }
     r
 }
 
-fn compile_inner(src: &str, prog: &mut Program, runs: bool, reuse: bool) -> Result<Info, Error> {
+/// What every compiled program gets after it is laid out: the narrowed
+/// steps (`narrow`), the fused runs (`fuse`), and the draw loops that run
+/// as lanes, decided once. One place, so no way of compiling can miss one.
+#[inline(never)]
+fn finish_program(prog: &mut Program, narrow: bool, fuse: bool) {
+    if narrow {
+        crate::range::narrow(prog);
+        if fuse {
+            crate::fuse::fuse(prog);
+        }
+    }
+    // The draw loops that run as lanes, decided once (`vector_loop`).
+    prog.mark_lane_loops();
+}
+
+/// [`compile_into`], and where the formula's declarations are in `src`
+/// ([`Declared`]: the web module's `controls()` reads a name, a label or
+/// a choice's words from there; the program keeps what the player needs,
+/// [`Program::meta`]). The program is not narrowed or fused (the same
+/// pixels, the checked steps): it is for what the formula declares, not
+/// for drawing on the panel.
+pub fn compile_declared(src: &str, prog: &mut Program) -> Result<Declared, Error> {
+    let mut d = Declared::default();
+    compile_full(
+        src,
+        prog,
+        (true, false, true, false),
+        Some(&mut d),
+        #[cfg(feature = "syntax")]
+        None,
+    )?;
+    Ok(d)
+}
+
+// ('s: the sink's, with `syntax`.)
+#[allow(clippy::needless_lifetimes)]
+fn compile_inner<'s>(
+    src: &'s str,
+    prog: &mut Program,
+    runs: bool,
+    reuse: bool,
+    declared: Option<&mut Declared>,
+    #[cfg(feature = "syntax")] sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
+) -> Result<Info, Error> {
     if src.len() > MAX_SOURCE {
         return Err(Error::new(
             MAX_SOURCE,
@@ -4345,6 +4900,8 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool, reuse: bool) -> Resu
             forever: false,
             ctx: Vec::new(),
             deps: Vec::new(),
+            #[cfg(feature = "syntax")]
+            made: Vec::new(),
         },
         locals: Vec::new(),
         depth: 0,
@@ -4370,10 +4927,35 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool, reuse: bool) -> Resu
         counts: [0; 2],
         loops: 0,
         turns: 0,
+        decl: None,
+        #[cfg(feature = "syntax")]
+        reads: Vec::new(),
+        #[cfg(feature = "syntax")]
+        decls_seen: Vec::new(),
+        #[cfg(feature = "syntax")]
+        sink,
     };
     p.env.loop_v = p.loop_ahead(0).unwrap_or(8 * ONE);
     p.dag.forever = p.env.loop_v == FOREVER;
-    let body = p.body(Tok::Eof)?;
+    let body = p.body(Tok::Eof);
+    #[cfg(feature = "syntax")]
+    p.observe();
+    finish(src, &mut p, body?, prog, runs, reuse, declared)
+}
+
+/// The rest of [`compile_inner`], once the formula is read: the program
+/// laid out. Out of line, so its locals are not in the frame under the
+/// parser's deepest (the firmware's compile stack).
+#[inline(never)]
+fn finish(
+    src: &str,
+    p: &mut Parser<'_>,
+    body: Body,
+    prog: &mut Program,
+    runs: bool,
+    reuse: bool,
+    declared: Option<&mut Declared>,
+) -> Result<Info, Error> {
     if let Some(v) = body.loop_v {
         prog.loop_ms = if v == FOREVER {
             0
@@ -4383,6 +4965,9 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool, reuse: bool) -> Resu
     }
     // A part's `fps` (a whole formula pasted in) is left to the formula's.
     prog.frame_ms = body.fps.unwrap_or(0);
+    if let Some(d) = &p.decl {
+        declarations(d, body.layered, prog, declared)?;
+    }
     let mut layers = body.colours;
     let (Some(ct), false) = (body.top, layers.is_empty()) else {
         let at = src.len();
@@ -4479,6 +5064,115 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool, reuse: bool) -> Resu
         frame_values,
         layers: body.blocks,
     })
+}
+
+/// [`compile_into`], telling `sink` what the compiler saw (the language
+/// service's hook: [`crate::syntax`]). Also on an error, up to it.
+#[cfg(feature = "syntax")]
+pub fn compile_observed<'s>(
+    src: &'s str,
+    prog: &mut Program,
+    sink: &'s mut (dyn crate::syntax::Sink + 's),
+) -> Result<Info, Error> {
+    compile_full(src, prog, (true, true, true, true), None, Some(sink))
+}
+
+#[cfg(feature = "syntax")]
+impl<'s> Parser<'s> {
+    /// A name read at `t`: where it is defined, if the formula set it.
+    #[inline(never)]
+    fn note_read(&mut self, t: Token) {
+        let name = self.text(t);
+        let def = self
+            .locals
+            .iter()
+            .rev()
+            .find(|l| l.name == name && self.visible(l.scope))
+            .map(|l| l.at)
+            .or(self.part_named(name).map(|k| self.parts[k].at))
+            .or(self.table_named(name).map(|k| self.table_names[k].at))
+            .or(self.sprite_named(name).map(|k| self.sprites[k].at))
+            .or(self.palette_named(name).map(|k| self.palette_names[k].at));
+        self.reads.push((t.start, t.end, def.unwrap_or(usize::MAX)));
+    }
+
+    /// Tell the sink what was read (after the formula, or up to an error).
+    fn observe(&mut self) {
+        use crate::syntax::{Defined, Level};
+        let Some(sink) = self.sink.take() else {
+            return;
+        };
+        let level = |l: u8| match l {
+            LV_CONST => Level::Constant,
+            LV_FRAME => Level::Frame,
+            LV_LOOP1 | LV_LOOP2 => Level::Draw,
+            LV_ROW => Level::Row,
+            _ => Level::Pixel,
+        };
+        let word = |p: &Self, at: usize| {
+            let b = p.src.as_bytes();
+            let mut e = at;
+            while e < b.len() && (b[e].is_ascii_alphanumeric() || b[e] == b'_') {
+                e += 1;
+            }
+            (at, e)
+        };
+        for &(a, e) in &self.decls_seen {
+            sink.declaration(sub(self.src, a, e), (a, e));
+        }
+        for l in &self.locals {
+            let kind = if l.counter { Defined::Counter } else { Defined::Value };
+            sink.defined(l.name, word(self, l.at), kind, l.scope, level(self.dag.level(l.id)));
+        }
+        for p in &self.parts {
+            sink.defined(p.name, word(self, p.at), Defined::Part, p.scope, Level::Pixel);
+        }
+        for t in &self.table_names {
+            sink.defined(t.name, word(self, t.at), Defined::Table, t.scope, Level::Constant);
+        }
+        for t in &self.sprites {
+            sink.defined(t.name, word(self, t.at), Defined::Sprite, t.scope, Level::Constant);
+        }
+        for t in &self.palette_names {
+            sink.defined(t.name, word(self, t.at), Defined::Palette, t.scope, Level::Constant);
+        }
+        for &(a, e, d) in &self.reads {
+            sink.read((a, e), (d != usize::MAX).then(|| word(self, d)));
+        }
+        for &(id, a, e) in &self.dag.made {
+            let n = self.dag.nodes[id as usize];
+            if n.code < K_CONST {
+                sink.op((a, e), level(n.level), n.code, crate::program::value_ns(n.code));
+            }
+        }
+        self.sink = Some(sink);
+    }
+}
+
+/// The declarations' end: E965 (a part with layers can only go over, so a
+/// formula with layers can only be a look over the GIF), the program's
+/// [`Meta`], and where the text is for [`compile_declared`]. Out of line:
+/// `compile_inner`'s frame is under the parser's deepest.
+#[inline(never)]
+fn declarations(
+    decl: &Decls,
+    layered: bool,
+    prog: &mut Program,
+    declared: Option<&mut Declared>,
+) -> Result<(), Error> {
+    if layered && decl.meta.look().is_some_and(|(b, _)| b != "over") {
+        let at = decl.text.look.map_or(0, |l| l.0 as usize);
+        return Err(Error::new(
+            at,
+            at + 4,
+            "a formula with layers goes over the GIF as a look: write `look` or `look over N`",
+        ));
+    }
+    prog.meta = decl.meta;
+    if let Some(d) = declared {
+        *d = decl.text;
+    }
+    Ok(())
 }
 
 /// A colour's values that grow without end (a `loop forever` formula's

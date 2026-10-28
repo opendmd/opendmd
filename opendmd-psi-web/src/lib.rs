@@ -28,7 +28,10 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use opendmd_psi::{compile_into, render_rows_ink, Ink, Inputs, Program, Scratch, H, OWN, W};
+use opendmd_psi::{
+    compile_declared, compile_into, render_rows_ink, Control, Ink, Inputs, Program, Scratch, H, OWN,
+    W,
+};
 use wasm_bindgen::prelude::*;
 
 #[cfg(all(target_arch = "wasm32", feature = "bump"))]
@@ -150,8 +153,7 @@ pub fn look(src: &str, blend: &str, amount: u8) -> String {
     if !build(src) {
         return String::new();
     }
-    let ms = state().prog.loop_ms();
-    match opendmd_psi::look::wrap(src, ms, blend, amount) {
+    match opendmd_psi::look::wrap(src, &state().prog, blend, amount) {
         Ok(s) if build(&s) => s,
         Ok(_) => String::new(),
         Err(e) => {
@@ -222,11 +224,17 @@ pub fn set_seed(seed: i32) {
     state().seed = seed;
 }
 
+/// A slider's value that says "not set": the slot plays at the formula's
+/// declared default ([`opendmd_psi::Meta::values`]), as on the panel when
+/// a path has no `&a=`.
+pub const UNSET: i32 = i32::MIN;
+
 /// Draw the frame at `ms` into the loop (the page works it out as the
 /// panel does: a whole number of frame delays; for a formula that never
 /// repeats, `info()`'s loop 0, `ms` since its preview began) with the wall
-/// clock and the sliders (Q16.16: 65,536 is 1); [`pixels`] is where it is.
-/// Black before anything compiled.
+/// clock and the sliders (Q16.16: 65,536 is 1; [`UNSET`], -2³¹, for the
+/// formula's default); [`pixels`] is where it is. Black before anything
+/// compiled.
 #[wasm_bindgen]
 pub fn frame(ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: i32) {
     draw(false, ms, hour, minute, second, a, b, c);
@@ -243,6 +251,8 @@ pub fn frame_over(ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: 
 fn draw(over: bool, ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: i32) {
     let s = state();
     if s.ok {
+        let given = |v: i32| (v != UNSET).then_some(v);
+        let [a, b, c] = s.prog.meta().values([given(a), given(b), given(c)]);
         let mut inputs = Inputs {
             hour,
             minute,
@@ -269,6 +279,138 @@ fn draw(over: bool, ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c
             u32::MAX,
             &mut s.out,
         );
+    }
+}
+
+/// What `src` declares, as JSON (empty when it does not compile: [`compile`]
+/// says why): `{"name": "…" | null, "about": "…" | null, "look": [blend,
+/// amount] | null, "controls": [control…]}`, a control for each slot it
+/// declares or reads, in slot order: `{"slot": "a", "name", "label",
+/// "kind": "slider", "lo", "hi", "default", "declared": true}` or `{…,
+/// "kind": "choice", "words": […], "default": 0, …}`. A slot read without
+/// a `control` line is `{"slot": "a", "name": "a", "label": "a", "kind":
+/// "slider", "lo": 0, "hi": 1, "default": 0, "declared": false}`. Labels,
+/// names and words are the source's text (the lexer allows no `"`, `\` or
+/// control characters in it, so it is JSON as it is). Numbers to 4
+/// decimals. The formula drawn is not changed.
+#[wasm_bindgen]
+pub fn controls(src: &str) -> String {
+    let s = state();
+    let Ok(d) = compile_declared(src, &mut s.next) else {
+        return String::new();
+    };
+    let m = *s.next.meta();
+    let read = s.next.sliders();
+    let text = |r: (u32, u32)| src.get(r.0 as usize..r.1 as usize).unwrap_or("");
+    let mut j = String::with_capacity(256);
+    let quoted = |j: &mut String, t: &str| {
+        j.push('"');
+        j.push_str(t);
+        j.push('"');
+    };
+    let opt = |j: &mut String, r: Option<(u32, u32)>| match r {
+        Some(r) => quoted(j, text(r)),
+        None => j.push_str("null"),
+    };
+    j.push_str("{\"name\":");
+    opt(&mut j, d.name);
+    j.push_str(",\"about\":");
+    opt(&mut j, d.about);
+    j.push_str(",\"look\":");
+    match m.look() {
+        Some((b, k)) => {
+            j.push('[');
+            quoted(&mut j, b);
+            j.push(',');
+            number(&mut j, i32::from(k) << 16);
+            j.push(']');
+        }
+        None => j.push_str("null"),
+    }
+    j.push_str(",\"controls\":[");
+    let mut first = true;
+    for k in 0..3 {
+        let c = d.controls[k];
+        if c.is_none() && read & (1 << k) == 0 {
+            continue;
+        }
+        if !first {
+            j.push(',');
+        }
+        first = false;
+        let slot = ["a", "b", "c"][k];
+        j.push_str("{\"slot\":");
+        quoted(&mut j, slot);
+        let name = c.map_or(slot, |c| text(c.name));
+        j.push_str(",\"name\":");
+        quoted(&mut j, name);
+        j.push_str(",\"label\":");
+        quoted(&mut j, c.and_then(|c| c.label).map_or(name, text));
+        match m.control(k) {
+            Some(Control::Choice { .. }) => {
+                j.push_str(",\"kind\":\"choice\",\"words\":[");
+                let words = c.and_then(|c| c.words).map_or("", text);
+                for (i, w) in words.split(',').enumerate() {
+                    if i > 0 {
+                        j.push(',');
+                    }
+                    quoted(&mut j, w.trim_ascii());
+                }
+                j.push_str("],\"default\":0");
+            }
+            ctl => {
+                let (lo, hi, def) = match ctl {
+                    Some(Control::Slider { lo, hi, default }) => (lo, hi, default),
+                    _ => (0, 1 << 16, 0),
+                };
+                j.push_str(",\"kind\":\"slider\",\"lo\":");
+                number(&mut j, lo);
+                j.push_str(",\"hi\":");
+                number(&mut j, hi);
+                j.push_str(",\"default\":");
+                number(&mut j, def);
+            }
+        }
+        j.push_str(",\"declared\":");
+        j.push_str(if c.is_some() { "true}" } else { "false}" });
+    }
+    j.push_str("]}");
+    j
+}
+
+/// A Q16.16 as a decimal to 4 places, trailing zeros out (no `format!`:
+/// core::fmt is ~8 KB gz of the module).
+fn number(j: &mut String, v: i32) {
+    let neg = v < 0;
+    let m = (v as i64).unsigned_abs();
+    // Rounded to 1/10,000.
+    let t = (m * 10_000 + (1 << 15)) >> 16;
+    if neg && t != 0 {
+        j.push('-');
+    }
+    let (int, mut frac) = (t / 10_000, t % 10_000);
+    let mut b = [0u8; 24];
+    let mut n = b.len();
+    let mut w = int;
+    loop {
+        n -= 1;
+        b[n] = b'0' + (w % 10) as u8;
+        w /= 10;
+        if w == 0 {
+            break;
+        }
+    }
+    for &c in &b[n..] {
+        j.push(char::from(c));
+    }
+    if frac != 0 {
+        j.push('.');
+        let mut d = 1000;
+        while frac != 0 {
+            j.push(char::from(b'0' + (frac / d) as u8));
+            frac %= d;
+            d /= 10;
+        }
     }
 }
 
