@@ -58,6 +58,13 @@
                page's footer) and the third-party notices from licenses/
                (tools/notices.py), the same files the release and the
                player carry
+- /404.html    the page for an address with nothing there (Cloudflare and
+               GitHub Pages both serve it)
+- _headers, _redirects, .assetsignore
+               for the opendmd-site Worker on Cloudflare (site/worker/, which
+               serves this tree as its static assets): headers per path (CORS,
+               caching, CSP), MOVED as 301s, what not to upload. GitHub Pages
+               ignores them; tools/site-publish.sh leaves them out
 
 The docs mark site-only pieces with HTML comments, invisible on GitHub:
 `<!-- site:hero -->` ends the README's GitHub header (the site draws its
@@ -71,6 +78,7 @@ the link. `make site` runs this; `make site-publish` pushes it.
 """
 
 import argparse
+import functools
 import html
 import json
 import posixpath
@@ -408,6 +416,99 @@ API_PAGE = "docs/api.md"
 API_DIR = "dev/api"
 API_FROZEN = re.compile(r"v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\.html")
 LINK = re.compile(r'(\]\(|(?:src|href)=")([^)"\s]+)')
+
+# --- Cloudflare (site/worker/, the opendmd-site Worker's static assets) ---
+# The same tree is the GitHub Pages site until the cutover
+# (docs/research/site-cloudflare.md): Pages ignores these files and
+# tools/site-publish.sh leaves them out of the public repo.
+#
+# _headers (Cloudflare's format): every rule a path matches applies, in file
+# order; a header set by two rules would be joined with a comma, so a later
+# rule first drops it (`! Name`) and sets its own. One CSP per path. One
+# block per pattern: a second block for the same pattern replaces the first
+# (measured with wrangler dev), so headers_file merges them. No
+# COOP/COEP: no wasm here uses threads, and COEP would block ESP Web Tools
+# from jsDelivr and Create Art's picture fetches.
+CSP_BASE = ("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; "
+            "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+CSP = {
+    # The docs, the gallery, the licences, the 404 page.
+    "docs": CSP_BASE,
+    # The installer: ESP Web Tools (and the modules it imports) from jsDelivr.
+    "install": CSP_BASE.replace("script-src 'self'", "script-src 'self' https://cdn.jsdelivr.net")
+    + "; connect-src 'self' https://cdn.jsdelivr.net",
+    # A Formula's page: the demo's wasm; "Show on my panel" will talk to a
+    # display on the LAN (http:, which CSP cannot narrow to private ranges).
+    "f": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob:")
+    .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'") + "; connect-src 'self' http:",
+    # The demo: the web app's wasm, Create Art's sources (js/find.js) and the
+    # update check (util.js SITE: opendmd.github.io until the host flip).
+    "demo": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
+                             "https://raw.githubusercontent.com; media-src 'self' blob:")
+    .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
+    + "; connect-src 'self' https://gifcities.archive.org https://blob.gifcities.org https://raw.githubusercontent.com "
+    "https://opendmd.github.io https://opendmd.dev",
+}
+CACHE_DEFAULT = "public, max-age=600"   # what GitHub Pages sends (the art index's ETag behaviour)
+CACHE_SHORT = "public, max-age=60"      # install/release.json, beta.json: the update check
+CACHE_IMMUTABLE = "public, max-age=31536000, immutable"  # version-named release files
+CORS_PATHS = ("/install/*", "/art-index/*", "/f/*")       # fetched from a player's http:// web app
+
+
+def headers_file() -> str:
+    """target/site/_headers."""
+    rules: list[tuple[str, list[str]]] = [
+        ("/*", ["X-Content-Type-Options: nosniff", "Referrer-Policy: strict-origin-when-cross-origin",
+                "Permissions-Policy: serial=(self), usb=(self), camera=(), microphone=(), geolocation=(), payment=()",
+                f"Cache-Control: {CACHE_DEFAULT}", f"Content-Security-Policy: {CSP['docs']}"]),
+    ]
+    for p in CORS_PATHS:
+        rules.append((p, ["Access-Control-Allow-Origin: *"]))
+    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/demo/*", "demo")):
+        rules.append((path, ["! Content-Security-Policy", f"Content-Security-Policy: {CSP[which]}"]))
+    for name in ("release.json", "beta.json"):
+        rules.append((f"/install/{name}", ["! Cache-Control", f"Cache-Control: {CACHE_SHORT}"]))
+    # opendmd-<version>-…: named by the release (a published tag is never
+    # rebuilt). The manifests, bootloader, table, otadata and updater keep
+    # their names from release to release: the default.
+    rules.append(("/install/firmware/opendmd-*", ["! Cache-Control", f"Cache-Control: {CACHE_IMMUTABLE}"]))
+    # One block per path: a second block for the same path replaces the first.
+    merged: dict[str, list[str]] = {}
+    for path, hs in rules:
+        merged.setdefault(path, []).extend(hs)
+    return "".join(f"{path}\n" + "".join(f"  {h}\n" for h in hs) + "\n" for path, hs in merged.items())
+
+
+def served(page: str) -> str:
+    """How Cloudflare's assets serve a published page (html_handling
+    auto-trailing-slash): x/index.html at /x/, x.html at /x."""
+    if page == "index.html" or page.endswith("/index.html"):
+        return "/" + page[:-len("index.html")]
+    return "/" + page.removesuffix(".html")
+
+
+def redirects_file() -> str:
+    """target/site/_redirects: MOVED as real 301s (Pages keeps the
+    meta-refresh pages), each old address with and without .html, straight
+    to where its page is served (one hop). www.opendmd.dev is the Worker's
+    (site/worker/src/index.ts): _redirects cannot match a host."""
+    lines = []
+    for src, dst in MOVED.items():
+        for old in dict.fromkeys(("/" + src, "/" + src.removesuffix(".html"))):
+            lines.append(f"{old} {served(dst)} 301")
+    return "\n".join(lines) + "\n"
+
+
+# Files in the tree that only the Pages repo wants: not uploaded as assets.
+ASSETS_IGNORE = (".nojekyll", "README.md", ".assetsignore")
+# The 404 page (Cloudflare's not_found_handling "404-page"; GitHub Pages
+# serves a 404.html too): shown at any depth, so its links are absolute.
+NOT_FOUND_PAGE = "404.html"
+NOT_FOUND = """# Not found
+
+There's nothing at this address. It may have moved: start from the [overview](/), the
+[guide](/guide/hardware.html) or the [Formula gallery](/formulas/).
+"""
 
 
 def rel(from_page: str, to: str) -> str:
@@ -795,6 +896,17 @@ def main() -> None:
     for src, dst in FILES.items():
         (out / dst).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / src, out / dst)
+    # The 404 page: links absolute (it answers at any depth), nothing marked in the menu.
+    absolute = functools.partial(re.sub, r'((?:href|src)=")(?![a-z]+:|/|#)', r"\1/")
+    (out / NOT_FOUND_PAGE).write_text(PAGE.format(
+        title="Not found · OpenDMD", description=html.escape(DESCRIPTION), up="/", head="",
+        brand=absolute(f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="art/{wm["src"]}" '
+                       f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>'),
+        menu=absolute(menu(NOT_FOUND_PAGE)), body=markdown.Markdown().convert(NOT_FOUND),
+        banner=f'<div class="banner" role="note">{BANNER}</div>\n' if BANNER else ""))
+    (out / "_headers").write_text(headers_file())
+    (out / "_redirects").write_text(redirects_file())
+    (out / ".assetsignore").write_text("".join(f"{n}\n" for n in ASSETS_IGNORE))
     (out / "site.css").write_text(CSS.strip() + "\n")
     (out / ".nojekyll").write_text("")
     for src, dst in MOVED.items():

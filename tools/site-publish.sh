@@ -86,10 +86,12 @@ missing=$(for f in "$work"/dev/api/v*.html; do [ ! -f "$f" ] || [ -f "$site/dev/
 # Commit as whoever commits here (this repo's identity may be local to it).
 git -C "$work" config user.name "$(git config user.name)"
 git -C "$work" config user.email "$(git config user.email)"
-# (rsync never deletes what it excludes.)
+# (rsync never deletes what it excludes.) _headers, _redirects and
+# .assetsignore are the Cloudflare Worker's (tools/site.py): not for Pages.
 # --checksum: a file checked out and rewritten in the same second at the same size
 # would pass rsync's size+mtime test and keep its old content.
-rsync -a --checksum --delete --exclude /.git --exclude /gallery/ --exclude /.github/ --exclude /dev/api/ --exclude /art-index/ "$site"/ "$work"/
+rsync -a --checksum --delete --exclude /.git --exclude /gallery/ --exclude /.github/ --exclude /dev/api/ --exclude /art-index/ \
+  --exclude /_headers --exclude /_redirects --exclude /.assetsignore "$site"/ "$work"/
 # The art index: refreshed, never deleted (see art-index/ above).
 if [ -d "$site/art-index" ]; then
   mkdir -p "$work/art-index"

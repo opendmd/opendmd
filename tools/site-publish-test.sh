@@ -36,6 +36,9 @@ site() { # a site build: its version, a page, and the public repo's API pages (a
   printf '{"version": "9.9.9"}\n' > "$tmp/site/install/release.json"
   printf '<p>%s</p>\n' "$1" > "$tmp/site/index.html"
   printf '<p>share</p>\n' > "$tmp/site/f/index.html"
+  printf '/*\n  X-Test: 1\n' > "$tmp/site/_headers"   # the Cloudflare Worker's files: not for Pages
+  printf '/a /b 301\n' > "$tmp/site/_redirects"
+  printf 'README.md\n' > "$tmp/site/.assetsignore"
   mkdir -p "$tmp/site/art-index/v1"
   printf '{"names":"%s"}\n' "$1" > "$tmp/site/art-index/v1/GB.json"
 }
@@ -51,6 +54,7 @@ publish >/dev/null
 look
 [ "$(cat "$tmp/look/index.html")" = "<p>v1</p>" ] || fail "the site's page was not replaced"
 [ ! -e "$tmp/look/stale.html" ] || fail "a file the site no longer has was kept"
+for cf in _headers _redirects .assetsignore; do [ ! -e "$tmp/look/$cf" ] || fail "the Cloudflare file $cf was published to Pages"; done
 [ -f "$tmp/look/gallery/theirs.psi" ] || fail "the first publish removed a contribution"
 [ "$(cat "$tmp/look/dev/api/v0.9.0.html" 2>/dev/null)" = "<p>API of 0.9.0</p>" ] || fail "a publish removed an earlier release's API page"
 [ "$(cat "$tmp/look/art-index/v0/GB.json" 2>/dev/null)" = '{"old":0}' ] || fail "a publish removed an art index format the site no longer builds"
