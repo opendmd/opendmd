@@ -444,6 +444,9 @@ fn split(name: &str, src: &str, gate: bool, canvas: &mut Canvas) {
     fx.frame(Duration::ZERO, canvas);
     let held = fx_psi::still_held();
     let mut parts: [Vec<u32>; 6] = Default::default();
+    if !reserve(&mut parts, &format!("split {name}")) {
+        return;
+    }
     for k in 0..FRAMES {
         let t0 = ccount();
         fx.frame(delay * (k % n), canvas);
@@ -549,6 +552,9 @@ fn placement(out: &mut [u8]) {
 
 /// Tunnel VM-direct with the same stamps (setup, rows): against `split`.
 fn split_direct(out: &mut [u8]) {
+    if heap_low("split Tunnel VM-direct") {
+        return;
+    }
     let mut prog = zeroed::<psi::Program>();
     if compile(TUNNEL_EX, &mut prog, true, true).is_err() {
         return;
@@ -564,6 +570,9 @@ fn split_direct(out: &mut [u8]) {
     let lp = prog.loop_ms();
     psi::render_rows_still::<128>(&prog, &mut s, None, Some(&mut st), &psi::golden::inputs(0), &t, None, u32::MAX, out);
     let mut parts: [Vec<u32>; 3] = Default::default();
+    if !reserve(&mut parts, "split Tunnel VM-direct") {
+        return;
+    }
     for k in 0..FRAMES {
         let t0 = ccount();
         psi::render_rows_still::<128>(&prog, &mut s, None, Some(&mut st), &psi::golden::inputs(k * 10 % lp), &t, None, u32::MAX, out);
@@ -593,6 +602,18 @@ fn compile(src: &str, prog: &mut psi::Program, runs: bool, narrow: bool) -> Resu
 /// Whether the heap is too low to go on with `section` (under 40 KB):
 /// said, and the caller stops it, rather than the probe failing an
 /// allocation.
+/// Room for `FRAMES` timings in each of `parts`, taken fallibly (lang-probe-a
+/// panicked growing these with 5 KB free): false, said, when the heap hasn't it.
+fn reserve(parts: &mut [Vec<u32>], section: &str) -> bool {
+    for p in parts.iter_mut() {
+        if p.try_reserve_exact(FRAMES as usize).is_err() {
+            say!(error, "psi-probe: {section}: stopped, no heap for its timings ({} B free)", heap());
+            return false;
+        }
+    }
+    true
+}
+
 fn heap_low(section: &str) -> bool {
     let h = heap();
     if h < 40 * 1024 {

@@ -822,10 +822,8 @@ const K_SPLIT: u8 = 203;
 const WIDE_T: i32 = 0x100;
 
 /// E901: a value that grows without end where it can't go.
-const GROWS: &str =
-    "a value that grows without end (`t` in a `loop forever` formula) can't go in here: \
-use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min, max or smoothstep, \
-or add, multiply or divide it by values that are the same for every pixel";
+const GROWS: &str = "a value that grows without end (`t` in `loop forever`) can't go in here: \
+use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min, max or smoothstep";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Node {
@@ -1327,6 +1325,8 @@ impl Dag {
     fn wide_only(&self, id: Id, at: (usize, usize)) -> Result<Id, Error> {
         if self.is_wide(id) {
             Ok(id)
+        } else if self.nodes[id as usize].code == K_SPLIT {
+            Err(Error::new(at.0, at.1, GROWS_SPLIT))
         } else {
             Err(Error::new(at.0, at.1, GROWS))
         }
@@ -1343,7 +1343,17 @@ impl Dag {
         use code::*;
         let [a, b, k3] = args;
         let grows = |d: &Self, x: Id| d.grows(x);
-        let bad = || Err(Error::new(at.0, at.1, GROWS));
+        // (A growing value with a part per pixel or row: say where it can go.)
+        let split = args[..code::arity(c)]
+            .iter()
+            .any(|&x| self.nodes[x as usize].code == K_SPLIT);
+        let bad = || {
+            Err(Error::new(
+                at.0,
+                at.1,
+                if split { GROWS_SPLIT } else { GROWS },
+            ))
+        };
         match c {
             ADD | SUB => {
                 let ((wa, sa), (wb, sb)) = (self.parts(a), self.parts(b));
@@ -1393,18 +1403,24 @@ impl Dag {
                 if !self.per_frame(k) || (c == DIV && g != a) {
                     return bad();
                 }
+                if c == MUL && self.konst(k) == Some(0) {
+                    return self.constant(0, at);
+                }
                 let (w, s) = self.parts(g);
-                let w = match w {
-                    Some(w) => {
-                        Some(self.wnode(if c == MUL { W_MULS } else { W_DIVS }, w, k, 0, 0, at)?)
-                    }
-                    None => None,
+                let Some(w) = w else { return bad() };
+                let Some(s) = s else {
+                    return self.wnode(if c == MUL { W_MULS } else { W_DIVS }, w, k, 0, 0, at);
                 };
-                let s = match s {
-                    Some(s) => Some(self.op(c, [s, k, 0], at)?),
-                    None => None,
-                };
-                self.make(w, s, at)
+                // (w + s)·k exactly: w·k wide, and s·k with w·k's 16 bits
+                // below the point carried in (`MULR`), so the floor is the
+                // sum's. A split divided has no such cheap form: E901.
+                if c == DIV {
+                    return bad();
+                }
+                let wk = self.wnode(W_MULS, w, k, 0, 0, at)?;
+                let r = self.wnode(W_REM, w, k, 0, 0, at)?;
+                let sk = self.op(MULR, [s, k, r], at)?;
+                self.make(Some(wk), Some(sk), at)
             }
             MOD => {
                 if grows(self, b) || !self.per_frame(b) {
@@ -2114,22 +2130,27 @@ impl<'s> Parser<'s> {
                     }
                 };
             }
-        } else if name == "seed"
-            && !self.dag.forever
-            && !self
-                .locals
-                .iter()
-                .any(|l| l.name == name && self.visible(l.scope))
-        {
+        } else if name == "seed" && self.seed_refused() {
             // E903.
-            return self.err(
+            return Err(self.fail(
                 t,
                 "`seed` is for formulas that go on without repeating (`loop forever`): a new one each time it plays",
-            );
+            ));
         } else if let Some(id) = self.lookup_value(name) {
             return id;
         }
         Err(self.unknown(t))
+    }
+
+    /// E903: `seed` in a formula that loops, unless the formula set its
+    /// own (out of line: the recursive parser's frames stay small).
+    #[inline(never)]
+    fn seed_refused(&self) -> bool {
+        !self.dag.forever
+            && !self
+                .locals
+                .iter()
+                .any(|l| l.name == "seed" && self.visible(l.scope))
     }
 
     /// Why the name at `t` is not a value here (or, before `(`, a function).
@@ -3363,21 +3384,18 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn unknown_palette(&self, p: Token) -> Error {
         let pname = self.text(p);
-        let own: Vec<&str> = self
-            .palette_names
-            .iter()
-            .filter(|pl| self.visible(pl.scope))
-            .map(|pl| pl.name)
-            .collect();
-        let s = suggest(
-            pname,
-            PALETTES.iter().map(|e| e.0).chain(own.iter().copied()),
-        );
-        let yours = if own.is_empty() {
-            String::new()
-        } else {
-            format!(", and yours: {}", own.join(", "))
+        let own = || {
+            self.palette_names
+                .iter()
+                .filter(|pl| self.visible(pl.scope))
+                .map(|pl| pl.name)
         };
+        let s = suggest(pname, PALETTES.iter().map(|e| e.0).chain(own()));
+        let mut yours = String::new();
+        for (k, n) in own().enumerate() {
+            yours.push_str(if k == 0 { ", and yours: " } else { ", " });
+            yours.push_str(n);
+        }
         self.fail_at(
             p,
             format!(
@@ -3444,7 +3462,7 @@ impl<'s> Parser<'s> {
                     );
                 }
                 if self.tables.len() + 32 * (self.palettes.len() + 1) > MAX_TABLE {
-                    return Err(self.too_full(kw));
+                    return Err(self.too_full(kw, 32));
                 }
                 self.palettes.push(entries);
                 self.palettes.len() - 1
@@ -3462,12 +3480,12 @@ impl<'s> Parser<'s> {
     /// E924: the tables, sprites and palettes would pass the 256 numbers.
     #[cold]
     #[inline(never)]
-    fn too_full(&self, kw: Token) -> Error {
+    fn too_full(&self, kw: Token, more: usize) -> Error {
         self.fail_at(
             kw,
             format!(
-                "tables, sprites and palettes hold {MAX_TABLE} numbers in all (a palette takes 32) — this would make {}",
-                self.tables.len() + 32 * (self.palettes.len() + 1)
+                "tables, sprites and palettes hold {MAX_TABLE} numbers in all — this would make {}",
+                self.tables.len() + 32 * self.palettes.len() + more
             ),
         )
     }
@@ -3490,42 +3508,91 @@ impl<'s> Parser<'s> {
             .rposition(|sp| sp.name == name && self.visible(sp.scope))
     }
 
-    /// `NAME[u, v]` at `t`: sprite `k`'s pixel at column `u`, row `v`.
+    /// `NAME[u, v]` at `t`: sprite `k`'s pixel at column `u`, row `v`. Kept
+    /// small (its errors and its node out of line), and counted as two
+    /// levels of nesting: it holds a frame across two values.
     #[inline(never)]
     fn sprite_read(&mut self, t: Token, k: usize) -> Result<Id, Error> {
-        let name = self.text(t);
         let open = self.peek();
         if open.tok != Tok::LBracket {
-            // E918.
-            return self.err(
-                t,
-                format!("`{name}` is a sprite: read its pixels with `{name}[u, v]` (column, row from its top left)"),
-            );
+            return Err(self.sprite_misread(t, false));
         }
         self.next();
-        let u = self.expr(0)?;
-        if self.peek().tok != Tok::Comma {
-            let p = self.peek();
-            return self.err(
-                p,
+        self.depth += 1;
+        let u = self.expr(0);
+        let u = match u {
+            Ok(u) if self.peek().tok == Tok::Comma => u,
+            Ok(_) => {
+                self.depth -= 1;
+                return Err(self.sprite_misread(t, true));
+            }
+            Err(e) => {
+                self.depth -= 1;
+                return Err(e);
+            }
+        };
+        self.next();
+        let v = self.expr(0);
+        self.depth -= 1;
+        let v = v?;
+        let close = self.peek();
+        if close.tok != Tok::RBracket {
+            return Err(self.unclosed_bracket(open, close));
+        }
+        self.next();
+        self.sprite_node(u, v, self.sprites[k].start, (t.start, close.end))
+    }
+
+    /// E914: the character at `at` of a sprite's row is not in its key (the
+    /// whole character, however many bytes).
+    #[cold]
+    #[inline(never)]
+    fn not_in_key(&self, at: usize) -> Error {
+        let ch = sub(self.src, at, self.src.len())
+            .chars()
+            .next()
+            .unwrap_or('?');
+        Error::new(
+            at,
+            at + ch.len_utf8(),
+            format!("`{ch}` is not in the sprite's key"),
+        )
+    }
+
+    /// A sprite read without `[u, v]` (`two`: with one value in it).
+    #[cold]
+    #[inline(never)]
+    fn sprite_misread(&self, t: Token, two: bool) -> Error {
+        let name = self.text(t);
+        if two {
+            // E918.
+            return self.fail_at(
+                self.peek(),
                 format!("a sprite is read at a column and a row: `{name}[u, v]`"),
             );
         }
-        self.next();
-        let v = self.expr(0)?;
-        let close = self.peek();
-        if close.tok != Tok::RBracket {
-            if close.tok == Tok::Eof || self.line_of(close.start) > self.line_of(open.start) {
-                return self.err(open, "this `[` is never closed — add `]`");
-            }
-            return Err(self.expected(close, "`]`"));
+        self.fail_at(
+            t,
+            format!("`{name}` is a sprite: read its pixels with `{name}[u, v]`"),
+        )
+    }
+
+    /// A `[` whose `]` was expected at `close`.
+    #[cold]
+    #[inline(never)]
+    fn unclosed_bracket(&self, open: Token, close: Token) -> Error {
+        if close.tok == Tok::Eof || self.line_of(close.start) > self.line_of(open.start) {
+            return self.fail(open, "this `[` is never closed — add `]`");
         }
-        self.next();
-        let at = (t.start, close.end);
+        self.expected(close, "`]`")
+    }
+
+    /// The node of a sprite read at `u, v` of the sprite at `start`.
+    #[inline(never)]
+    fn sprite_node(&mut self, u: Id, v: Id, start: usize, at: (usize, usize)) -> Result<Id, Error> {
         if self.dag.grows(u) || self.dag.grows(v) {
             return Err(Error::new(at.0, at.1, GROWS));
         }
-        let start = self.sprites[k].start;
         let (mut level, mut why) = (LV_FRAME, 0);
         for x in [u, v] {
             let m = &self.dag.nodes[x as usize];
@@ -3682,13 +3749,7 @@ impl<'s> Parser<'s> {
             let mut row = alloc::vec![0u32; wpr];
             for (x, &c) in text.iter().enumerate() {
                 let Some(k) = chars.iter().position(|&kc| kc == c) else {
-                    // E914.
-                    let at = r.start + x;
-                    return Err(Error::new(
-                        at,
-                        at + 1,
-                        format!("`{}` is not in the sprite's key", c as char),
-                    ));
+                    return Err(self.not_in_key(r.start + x));
                 };
                 row[x / ppw] |= (k as u32) << ((x % ppw) << lb);
             }
@@ -3703,21 +3764,12 @@ impl<'s> Parser<'s> {
             None => {
                 if self.tables.len() + words.len() + 32 * self.palettes.len() > MAX_TABLE {
                     // E917.
-                    return self.err(
-                        kw,
-                        format!(
-                            "sprites and tables hold {MAX_TABLE} numbers in all — this would make {} (a sprite takes about one a 16 pixels, 8 with 5 or more key characters)",
-                            self.tables.len() + words.len()
-                        ),
-                    );
+                    return Err(self.too_full(kw, words.len()));
                 }
                 self.tables.extend_from_slice(&words);
                 self.tables.len() - words.len()
             }
         };
-        if start > 255 {
-            return self.err(kw, "sprites and tables hold 256 numbers in all");
-        }
         self.sprites.push(Sprite {
             name,
             at: n.start,
@@ -4458,6 +4510,10 @@ const SPRITE_KEY: &str =
     "a sprite starts with its key: `key . 0, R 1, D 2` (each character, then the number it reads as)";
 const SPRITE_KEY_ENTRY: &str = "a key is a character and its number, as `R 1` or `. -0.5`, separated by commas (not ; { } , - / or a space)";
 
+/// E901 for a growing value with a part per pixel or row.
+const GROWS_SPLIT: &str = "a value that grows without end plus a part per pixel or row only goes into frac, sin, cos, tri, saw, sqr, noise, % or a multiply: \
+add the pixel's part there, as frac(t*k) + x or sin(t*k + x)";
+
 /// E905.
 const GROWN_COLOUR: &str =
     "a colour can't take a value that grows without end and changes across the panel \
@@ -4580,6 +4636,8 @@ fn emit(
     // as it is (an input, a lane, a wide slot, a noise's offset).
     let mut loc = alloc::vec![0u16; n];
     let mut vs: Vec<VSlot> = Vec::new();
+    // The picks' tables' choices (`VSlot::Pick`'s index here).
+    let mut ch: Vec<Vec<u16>> = Vec::new();
     // Which nodes have a place yet: a step may read only those (an operand
     // without one would read slot 0, `t`, silently).
     let mut set = alloc::vec![false; n];
@@ -4628,7 +4686,7 @@ fn emit(
     if backdrop {
         prog.uses |= BACKDROP;
     }
-    let mut ops: Vec<WOp> = Vec::new();
+    let mut ops: Vec<WOp> = Vec::with_capacity(total + 2);
     // A step for node `m` into `d`; a pick's table of its choices' slots
     // goes in constant slots of its own, one for every pick of the same
     // choices (`tabs`: where each went, 0 for not yet; the choices all
@@ -4640,6 +4698,7 @@ fn emit(
               loc: &[u16],
               set: &[bool],
               vs: &mut Vec<VSlot>,
+              ch: &mut Vec<Vec<u16>>,
               tabs: &mut [u16]|
      -> Result<WOp, Error> {
         let n = code::arity(m.code);
@@ -4661,7 +4720,8 @@ fn emit(
             let opts = &dag.picks[m.b as usize];
             let tab = &mut tabs[m.b as usize];
             if *tab == 0 {
-                vs.push(VSlot::Pick(opts.iter().map(|&o| loc[o as usize]).collect()));
+                ch.push(opts.iter().map(|&o| loc[o as usize]).collect());
+                vs.push(VSlot::Pick((ch.len() - 1) as u16));
                 *tab = VS + (vs.len() - 1) as u16;
             }
             (b, c) = (*tab, opts.len() as u16);
@@ -4712,7 +4772,7 @@ fn emit(
                 };
                 loc[i] = d;
                 set[i] = true;
-                ops.push(mk(m, d, &loc, &set, &mut vs, &mut tabs)?);
+                ops.push(mk(m, d, &loc, &set, &mut vs, &mut ch, &mut tabs)?);
             }
         }
         if level == LV_FRAME {
@@ -4742,7 +4802,9 @@ fn emit(
                                 let d = new_slot(&mut vs, None);
                                 loc[i] = d;
                                 set[i] = true;
-                                ops.push(mk(&nodes[i], d, &loc, &set, &mut vs, &mut tabs)?);
+                                ops.push(mk(
+                                    &nodes[i], d, &loc, &set, &mut vs, &mut ch, &mut tabs,
+                                )?);
                             }
                         }
                     }
@@ -4863,7 +4925,7 @@ fn emit(
                 let d = (LANE | (L_REG0 + regs[at])) as u16;
                 loc[i] = d;
                 set[i] = true;
-                ops.push(mk(&nodes[i], d, &loc, &set, &mut vs, &mut tabs)?);
+                ops.push(mk(&nodes[i], d, &loc, &set, &mut vs, &mut ch, &mut tabs)?);
             }
             Item::Colour(k) => {
                 let st = &steps[k];
@@ -4875,6 +4937,9 @@ fn emit(
                 let cover = st.alpha.map_or(0, l);
                 let rgb = kind == code::OUT_RGB || kind == code::OUT_HSV;
                 // A scaled palette: the flag on its palette, the scale in c.
+                if kind == code::OUT_PAL && st.pal >= 5 {
+                    prog.uses |= OWNPAL;
+                }
                 let (pal, scale) = match st.scale {
                     Some(k) if kind == code::OUT_PAL => {
                         ((st.pal | PAL_SCALED | (st.shift << PAL_SHIFT)) as u16, l(k))
@@ -4903,7 +4968,7 @@ fn emit(
     }
     prog.pixel_end = ops.len() as u16;
     let (de, re) = (prog.draw_end as usize, prog.row_end as usize);
-    let n_scalars = assign_slots(&ops, &vs, next_slot, de, re, reuse, prog)?;
+    let n_scalars = assign_slots(&ops, &vs, &ch, next_slot, de, re, reuse, prog)?;
     prog.n_scalars = n_scalars as u8;
     prog.regs = used as u8;
     Ok(())
@@ -4915,7 +4980,7 @@ fn emit(
 enum VSlot {
     Const(i32),
     Value,
-    Pick(Vec<u16>),
+    Pick(u16),
 }
 
 /// A step while it is laid out: as [`Op`], but an operand of `VS` or more is
@@ -4948,9 +5013,11 @@ const VS: u16 = 0x100;
 /// the steps in the same order, so its intervals follow the slots too).
 /// A pick's table goes after all of them (its choices are read by the pick,
 /// per pixel).
+#[allow(clippy::too_many_arguments)]
 fn assign_slots(
     ops: &[WOp],
     vs: &[VSlot],
+    ch: &[Vec<u16>],
     base: usize,
     de: usize,
     re: usize,
@@ -4958,20 +5025,22 @@ fn assign_slots(
     prog: &mut Program,
 ) -> Result<usize, Error> {
     let n = vs.len();
-    const INF: usize = usize::MAX;
+    // (u16 throughout: positions are at most 258; the compile's heap peaks
+    // here, and on the ESP32.)
+    const INF: u16 = u16::MAX;
     // Positions: a step's index + 1 (0 is the frame's start, the constants').
-    let (mut start, mut end) = (alloc::vec![INF; n], alloc::vec![0usize; n]);
+    let (mut start, mut end) = (alloc::vec![INF; n], alloc::vec![0u16; n]);
     for (k, v) in vs.iter().enumerate() {
         if matches!(v, VSlot::Const(_)) {
             start[k] = 0;
         }
     }
-    let use_at = |end: &mut [usize], v: u16, p: usize| {
+    let use_at = |end: &mut [u16], v: u16, p: u16| {
         if v >= VS {
             let k = (v - VS) as usize;
             end[k] = end[k].max(p);
-            if let VSlot::Pick(ch) = &vs[k] {
-                for &c in ch {
+            if let VSlot::Pick(j) = vs[k] {
+                for &c in &ch[j as usize] {
                     if c >= VS {
                         let j = (c - VS) as usize;
                         end[j] = end[j].max(p);
@@ -4980,11 +5049,11 @@ fn assign_slots(
             }
         }
     };
-    let mut loops: Vec<(usize, usize)> = Vec::new();
+    let mut loops: Vec<(u16, u16)> = Vec::new();
     for (i, op) in ops.iter().enumerate() {
-        let p = i + 1;
+        let p = i as u16 + 1;
         if op.code == code::FOR {
-            loops.push((p, op.b as usize + 1));
+            loops.push((p, op.b + 1));
         }
         if (code::writes_scalar(op.code) || op.code == code::FOR) && op.d >= VS {
             let k = (op.d - VS) as usize;
@@ -4998,7 +5067,7 @@ fn assign_slots(
     }
     // Inner loops first (they start later), so an outer one sees their END.
     loops.reverse();
-    let (rows, pixels) = (de + 1, re + 1);
+    let (rows, pixels) = (de as u16 + 1, re as u16 + 1);
     for k in 0..n {
         if start[k] == INF {
             start[k] = end[k];
@@ -5016,18 +5085,18 @@ fn assign_slots(
     }
     // By where each starts (a counting sort: no sort's code in the wasm).
     let top = ops.len() + 2;
-    let mut count = alloc::vec![0usize; top + 1];
+    let mut count = alloc::vec![0u16; top + 1];
     let is_pick = |k: usize| matches!(vs[k], VSlot::Pick(_));
     for k in (0..n).filter(|&k| !is_pick(k)) {
-        count[start[k].min(top) + 1] += 1;
+        count[(start[k] as usize).min(top) + 1] += 1;
     }
     for p in 1..=top {
         count[p] += count[p - 1];
     }
-    let mut order = alloc::vec![0usize; count[top]];
+    let mut order = alloc::vec![0u16; count[top] as usize];
     for k in (0..n).filter(|&k| !is_pick(k)) {
-        let p = &mut count[start[k].min(top)];
-        order[*p] = k;
+        let p = &mut count[(start[k] as usize).min(top)];
+        order[*p as usize] = k as u16;
         *p += 1;
     }
     let too_many = || {
@@ -5038,15 +5107,16 @@ fn assign_slots(
         )
     };
     let mut phys = alloc::vec![0u8; n];
-    let mut active: Vec<usize> = Vec::new();
+    let mut active: Vec<u16> = Vec::new();
     let mut free: Vec<u8> = Vec::new();
     let mut next = base;
     for &k in &order {
+        let k = k as usize;
         let s = start[k];
         active.retain(|&a| {
-            let gone = reuse && end[a] < s;
+            let gone = reuse && end[a as usize] < s;
             if gone {
-                free.push(phys[a]);
+                free.push(phys[a as usize]);
             }
             !gone
         });
@@ -5058,7 +5128,7 @@ fn assign_slots(
             }
             None => return Err(too_many()),
         };
-        active.push(k);
+        active.push(k as u16);
         if let VSlot::Const(v) = vs[k] {
             prog.init[phys[k] as usize] = v;
         }
@@ -5072,7 +5142,8 @@ fn assign_slots(
         }
     };
     for k in 0..n {
-        if let VSlot::Pick(ch) = &vs[k] {
+        if let VSlot::Pick(j) = vs[k] {
+            let ch = &ch[j as usize];
             if next + ch.len() > MAX_SCALARS {
                 return Err(too_many());
             }

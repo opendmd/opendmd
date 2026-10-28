@@ -166,8 +166,11 @@ pub(crate) mod code {
     // `noise(w, y, z)` once a frame, w wide (a), y and z scalars (b, c): no
     // context needed (`d` a scalar slot).
     pub const W_NOISEX: u8 = 62;
+    // The 16 bits below the point of wide a · scalar b (0..65535, raw): what
+    // `MULR` carries into a split's part times b (`d` a scalar slot).
+    pub const W_REM: u8 = 63;
     pub const W_FIRST: u8 = W_ADD;
-    pub const W_LAST: u8 = W_NOISEX;
+    pub const W_LAST: u8 = W_REM;
     // ternary
     pub const SELECT: u8 = 64;
     pub const CLAMP: u8 = 65;
@@ -189,7 +192,10 @@ pub(crate) mod code {
     // steps once a frame. Any level; never folded.
     pub const NOISE_O: u8 = 74;
     pub const NOISE_O_LAST: u8 = 77;
-    pub const LAST_TERN: u8 = 77;
+    // `sat((a·b + c) >> 16)`, c raw (0..65535): a split's part times a
+    // value the same all frame, the wide part's remainder carried in.
+    pub const MULR: u8 = 78;
+    pub const LAST_TERN: u8 = 78;
     // nullary, per pixel: the picture under the formula (its red, green,
     // blue, luminance), 0..1
     pub const U_R: u8 = 80;
@@ -255,7 +261,7 @@ pub(crate) mod code {
             W_ADD | W_SUB => (true, 2, 3),
             W_ADDS | W_SUBS | W_MULS | W_DIVS => (true, 2, 1),
             W_NEG | W_FLOOR => (true, 1, 1),
-            W_MOD | W_CMP | W_MINMAX => (false, 2, 1),
+            W_MOD | W_CMP | W_MINMAX | W_REM => (false, 2, 1),
             W_NOISEX => (false, 3, 1),
             _ => (false, 1, 1),
         }
@@ -371,7 +377,7 @@ pub(crate) mod code {
             "neg", "not", "abs", "floor", "frac", "sin", "cos", "tri", "saw", "sqr", "sqrt",
             "recip", "pick", "tab", "shr",
         ];
-        const T: [&str; 14] = [
+        const T: [&str; 15] = [
             "select",
             "clamp",
             "mix",
@@ -386,10 +392,11 @@ pub(crate) mod code {
             "noise_o1",
             "noise_o2",
             "noise_o3",
+            "mulr",
         ];
-        const WN: [&str; 15] = [
+        const WN: [&str; 16] = [
             "w_add", "w_adds", "w_sub", "w_subs", "w_neg", "w_muls", "w_divs", "w_floor", "w_frac",
-            "w_mod", "w_cmp", "w_minmax", "w_red", "w_lat", "w_noisex",
+            "w_mod", "w_cmp", "w_minmax", "w_red", "w_lat", "w_noisex", "w_rem",
         ];
         match c {
             0..=LAST_BIN => N[c as usize],
@@ -433,6 +440,8 @@ pub(crate) const UNDER: u8 = 4;
 pub(crate) const INKED: u8 = 8;
 /// The program reads `seed` (slot [`S_SEED`]).
 pub(crate) const SEEDED: u8 = 16;
+/// A colour step reads a palette of the formula's own.
+pub(crate) const OWNPAL: u8 = 32;
 
 /// `table` entries a formula may hold in all.
 pub const MAX_TABLE: usize = 256;
@@ -449,29 +458,33 @@ pub const fn user_palette_at(j: usize) -> usize {
     MAX_TABLE - 32 * (j + 1)
 }
 
+/// A formula's own palettes as `pal` reads them, unpacked once a frame.
+pub(crate) type Pals = [[[u8; 3]; 32]; USER_PALETTES];
+
 /// Palette `i` as `pal` reads it: a built-in (0..=4) from the tables lent,
-/// or a formula's own (5..=7) unpacked from its tables into `own`.
+/// or a formula's own (5..=7) from those unpacked for the frame.
 #[inline(always)]
 pub(crate) fn palette<'a>(
     t: &crate::tables::Tables<'a>,
-    tabs: &[i32; MAX_TABLE],
+    own: &'a Pals,
     i: u8,
-    own: &'a mut [[u8; 3]; 32],
 ) -> &'a [[u8; 3]; 32] {
     if (i as usize) < t.palettes.len() {
         return t.palettes[i as usize];
     }
-    unpack_palette(tabs, i, own);
-    own
+    &own[(i as usize).saturating_sub(5) % USER_PALETTES]
 }
 
-/// A formula's own palette `i` (5..=7) from its tables.
+/// The formula's own palettes from its tables (out of line: once a frame,
+/// and only for a formula with some, `OWNPAL`).
 #[inline(never)]
-fn unpack_palette(tabs: &[i32; MAX_TABLE], i: u8, own: &mut [[u8; 3]; 32]) {
-    let at = user_palette_at((i as usize).saturating_sub(5) % USER_PALETTES);
-    for (k, c) in own.iter_mut().enumerate() {
-        let v = tabs[at + k] as u32;
-        *c = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+pub(crate) fn unpack_palettes(tabs: &[i32; MAX_TABLE], own: &mut Pals) {
+    for (j, p) in own.iter_mut().enumerate() {
+        let at = user_palette_at(j);
+        for (k, c) in p.iter_mut().enumerate() {
+            let v = tabs[at + k] as u32;
+            *c = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+        }
     }
 }
 
@@ -1000,8 +1013,8 @@ impl Program {
             let (v, ar) = code::operands(op);
             let args = if code::is_wide(op.code) {
                 // Wide slots `wN`, scalar ones as usual; a compare's kind.
-                let (_, n, w) = code::wide_ops(op.code);
-                let mut a: alloc::vec::Vec<alloc::string::String> = [op.a, op.b, op.c][..n]
+                let (_, nv, w) = code::wide_ops(op.code);
+                let mut a: alloc::vec::Vec<alloc::string::String> = [op.a, op.b, op.c][..nv]
                     .iter()
                     .enumerate()
                     .map(|(k, &x)| {
@@ -1069,7 +1082,8 @@ impl Program {
                 let k = (op.d as usize).saturating_sub(noise_slot(0, 0));
                 alloc::format!("noise{}.{}", k / 3, ["x", "y", "z"][k % 3])
             } else {
-                opnd(op.d, n)
+                // (What the step writes: after it.)
+                opnd(op.d, n + 1)
             };
             let blend = match code::colour_parts(op.code) {
                 (_, Some(b)) if code::is_colour(op.code) => {
@@ -1141,6 +1155,8 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         // A wide noise: `noise` and three adds of the offsets (a guess
         // until psi-probe measures it).
         NOISE_O..=NOISE_O_LAST => 870,
+        // A multiply with a carry in: `mul`'s and an add (a guess).
+        MULR => 110,
         DIGIT..=DIGIT_B => 240,
         U_R | U_G | U_B | INK => 70,
         U_L => 140,
@@ -1278,6 +1294,7 @@ pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
         MIX => fixed::mix(a, b, x),
         SMOOTH => fixed::smooth(a, b, x),
         NOISE => fixed::noise(a, b, x),
+        MULR => fixed::mulr(a, b, x),
         DIGIT..=DIGIT_B => t.map_or(0, |t| fixed::glyph(&glyphs(t, c), a, b, x)),
         _ => 0,
     }
