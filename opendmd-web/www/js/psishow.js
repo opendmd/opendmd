@@ -9,19 +9,22 @@
 import { app } from './state.js';
 import { toast } from './util.js';
 
-// The device's `fx_psi::path`: comments out, lines joined with `; `, lightly
-// encoded (a space is `+`; `% & + # ?`, controls and non-ASCII as %XX).
+// The device's `fx_psi::path` (opendmd_psi::compact): comments out, runs of
+// spaces made one, lines joined with `; `, text in quotes on a declaration
+// line kept as written; lightly encoded (a space is `+`; `% & + # ?`,
+// controls and non-ASCII as %XX). The values set follow (`&a=`; a slot
+// left unset plays at the formula's declared default).
 export function fpath(f) {
   let s = '', p = '@fx:psi?src=';
   for (const l of f.src.split('\n')) {
-    const c = l.replace(/(--|\/\/).*/, '').trim().split(/\s+/).join(' ');
+    const q = [], c = l.replace(/"[^"]*"/g, (m) => (q.push(m), '\0')).replace(/(--|\/\/).*/, '').trim().split(/\s+/).join(' ').replace(/\0/g, () => q.shift());
     if (c) s += (s ? '; ' : '') + c;
   }
   for (const b of new TextEncoder().encode(s)) {
     const c = String.fromCharCode(b);
     p += b == 32 ? '+' : b > 32 && b < 127 && !'%&+#?'.includes(c) ? c : '%' + (b < 16 ? '0' : '') + b.toString(16).toUpperCase();
   }
-  for (const k of 'abc') if (f[k]) p += `&${k}=${+f[k].toFixed(4)}`;
+  for (const k of 'abc') if (f[k] != null) p += `&${k}=${+(+f[k]).toFixed(4)}`;
   return p;
 }
 
