@@ -246,7 +246,7 @@ fn every_example_fits_the_panels_path_as_sent() {
                 s.push_str(&c);
             }
         }
-        let mut p = String::from("@fx:psi?src=");
+        let mut p = String::from("@formula?src=");
         for b in s.bytes() {
             match b {
                 b' ' => p.push('+'),

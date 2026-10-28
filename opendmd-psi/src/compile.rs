@@ -662,7 +662,7 @@ fn declaration_line(line: &str) -> bool {
 /// The same formula on one line, as short as it stays readable: comments
 /// dropped, runs of spaces made one, lines joined with `; ` (which the
 /// language reads as a line break, and ignores inside brackets, as it does
-/// a newline). For `@fx:psi?src=` paths, which are 2,048 B at most. Text
+/// a newline). For `@formula?src=` paths, which are 2,048 B at most. Text
 /// in quotes on a `name`, `about` or `control` line is kept as written
 /// (spaces, `--` and `;` inside it too): on a line that starts with a
 /// declaration, the only lines text in quotes can be on.

@@ -99,30 +99,6 @@ impl Studio {
         })
     }
 
-    /// A live effect's path (`@fx:tunnel?palette=fire…`) as an animation:
-    /// one loop of it, drawn by the core's effect ([`anim::effect_plan`]
-    /// says how many frames at what delay); `decode` draws the rest. Throws
-    /// if the path names no effect.
-    #[wasm_bindgen(js_name = fromEffect)]
-    pub fn from_effect(path: &str) -> Result<Studio, JsError> {
-        let a = Anim::effect(path).ok_or_else(|| JsError::new("not an effect"))?;
-        let raw = a.image(0);
-        let stage = pipeline::stage_frame(&raw, Fit::Pixels, false);
-        Ok(Studio {
-            raw,
-            scale: Scale { k: 1, x0: 0, y0: 0 },
-            stage,
-            frames: 0,
-            colours: 0,
-            duration_ms: 0.0,
-            anim: Some(a),
-            fit: Fit::Pixels,
-            lift: false,
-            text: None,
-            seq: Vec::new(),
-        })
-    }
-
     /// Frames drawn by the page — a formula's, by the Psi module: `n`
     /// frames of 128x32 RGB888 at `delayMs` each, `first` now and the rest
     /// by `push` (`cut`: they are not a whole loop). Throws on a frame of
@@ -176,7 +152,7 @@ impl Studio {
     }
 
     /// `[width, height, workWidth, workHeight, reduce, damaged, capped, plays,
-    /// cut]` of an animation (plays: 0 forever; cut: an effect longer than
+    /// cut]` of an animation (plays: 0 forever; cut: a Formula longer than
     /// the frames it was given); empty for a still.
     pub fn info(&self) -> Vec<u32> {
         self.anim.as_ref().map_or(Vec::new(), |a| {

@@ -347,7 +347,7 @@ impl Player {
     /// The panel's tint and phosphor glow, as the device's config has them
     /// (see `opendmd_core::look`); redrawn at once.
     pub fn set_display(&mut self, look: Tint, glow: GlowLevel) {
-        // Effects run at the panel's rate for this glow (`fx::set_frame_floor`).
+        // Formulas run at the panel's rate for this glow (`fx::set_frame_floor`).
         opendmd_core::fx::set_frame_floor(opendmd_core::fx::glow_floor(glow));
         self.model.set(look, glow);
         self.draw();
