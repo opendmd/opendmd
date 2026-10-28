@@ -52,7 +52,13 @@ without end (section 11).
 ## 2. Grammar
 
 ```text
-formula   = { sep } { stmt sep } colourline { sep }      -- or layers instead of colourline
+formula   = { sep } { decl sep } { stmt sep } colourline { sep }   -- or layers instead of colourline
+decl      = "psi" NUMBER                      -- the language version, first line only; never needed (unversioned is 1)
+          | "name" TEXT                       -- what the formula is called (60 characters)
+          | "about" TEXT                      -- one line about it (120 characters)
+          | "control" NAME [ NUM ".." NUM ] [ "=" NUM ] [ TEXT ]   -- a slider: range (0..1), default (the low end), label
+          | "control" NAME "=" WORD "," WORD { "," WORD } [ TEXT ] -- 2-6 words: buttons; the value is the word's number
+          | "look" [ BLEND ] [ NUMBER ]       -- it may be the panel's look: blend (over), amount 0..100 (100)
 stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
           | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
@@ -92,10 +98,16 @@ sep       = newline | ";"                      -- newlines inside ( ) and [ ] ar
 NUMBER    = digits [ "." digits ] | "." digits -- no sign, no exponent
 CHAR      = "'" one printable ASCII character "'"   -- its code: 'A' is 65
 COLOUR    = "#" 6 hex digits | "#" 3 hex digits   -- #ff8800, #f80 (each digit twice); colour lines only
+TEXT      = '"' characters '"'                -- on name/about/control lines only; no " < > \ or tabs inside; label 24 characters
+NUM       = [ "-" ] NUMBER
+WORD      = NAME
 FONT      = "normal" | "small" | "bold"      -- bold: digit only
 NAME      = [A-Za-z_][A-Za-z0-9_]*
 comment   = "--" or "//" to the end of the line
 ```
+
+The declarations (`decl`) come first, before every other line; each once
+(`control` up to three times). Section 4 says what they do.
 
 `and`/`or` bind looser than comparisons, `not` looser than comparisons too
 (`not x < 0.5` is `not (x < 0.5)`). An expression continues onto the next
@@ -127,7 +139,7 @@ computer.
 | `t` | seconds into the loop (whole frames: 20 ms, 10 with `fps 100`); with `loop forever`, since the formula started, growing without end (section 11) | frame |
 | `seed` | `loop forever` only: 0..1, the same for a whole play, a new one each time it plays (section 11) | frame |
 | `hour`, `minute`, `second` | the clock: 0..23, 0..59, 0..59 (whole) | frame |
-| `a`, `b`, `c` | sliders, 0..1; a comment `-- a: speed` names one; `-- a: shape = cube, ball` (≤ 6 words) makes buttons: choice j of n sets j/(n−1) (n = 1: 0), read with `pick(floor(a*(n-1) + 0.5), …)` | frame |
+| `a`, `b`, `c` | the controls, in the order the `control` lines declare them (`a` is the first one's value; see below); one read without a `control` line is a slider 0..1 named after it | frame |
 | `w`, `h` | 128 and 32 (constants) | — |
 | `ur`, `ug`, `ub` | red, green, blue of the picture under the formula, 0..1 | pixel |
 | `ul` | its brightness (Rec. 601: `(77R + 150G + 29B + 128)/256`), 0..1 | pixel |
@@ -146,6 +158,62 @@ frame layer part use draw for table`) cannot be set (except `digit`,
 `dot`, `seed` and `forever`, added later, so formulas saved with those names
 still work: a name a formula sets is that name; don't use them as names in
 new ones).
+
+### What a formula says it is: the declarations
+
+A formula may start with lines that say what it is. They are statements,
+not comments, so they travel with it everywhere (the panel, a playlist, a
+look, a share link), and the web app builds its controls from them.
+
+```psi
+name "Spin"
+about "A wheel turning; its speed and spokes are controls"
+control speed 0.5..4 = 1 "Speed"
+control spokes = four, six, eight
+look screen 40
+loop 8
+n = pick(spokes, 4, 6, 8)
+k = abs(sin(angle*n + t*speed))
+gray(smoothstep(0.8, 1, k) * (r < 0.45))
+```
+
+- **`control NAME lo..hi = default "Label"`** is a slider: `NAME` is a value
+  in the formula, from `lo` to `hi` (the range is 0..1 when left out), the
+  default the low end when left out, the label the name when left out (24
+  characters). Wherever the formula reads it, the value is **held to the
+  range** — whatever a link or a playlist line says — so the panel's cost
+  estimate and its fast paths know it.
+- **`control NAME = word, word, …`** (2 to 6 words) is a row of buttons:
+  the value is the chosen word's number, 0 for the first (the default), so
+  read it with `pick(NAME, …)`; two words make a switch (`NAME` is 0 or 1).
+- The controls are the slots `a`, `b`, `c` in the order they are declared,
+  three at most; the letters still read them (`a` is the first control's
+  value). A link or a playlist line keeps values as `&a=…`; a slot it
+  leaves out plays at the declared default.
+- **`name "…"`** (60 characters) and **`about "…"`** (120): what it is
+  called and one line about it. Text in quotes is allowed on these three
+  lines only (no `"`, `<`, `>`, `\` or tabs inside).
+- **`look [blend] [amount]`** says the formula may be the panel's look,
+  drawn over every GIF with that blend (over, screen, add, multiply, max,
+  min; over when none) and amount (0 to 100; 100 when none) — section 8.
+  Played on its own (on the panel, in a playlist) the line is ignored.
+- **`psi 1`**, on the first line, says the formula is written for version 1
+  of the language. Never needed: a formula without it is version 1.
+- A formula pasted into another as a part keeps its declarations; there only
+  its `control` lines do anything (its names read the same slots).
+
+```psi error
+-- error: `name` goes at the top of the formula, before its other lines
+loop 4
+name "Late"
+gray(x)
+```
+
+```psi error
+-- error: a range goes from the lower number to the higher
+control size 2..1 = 1
+gray(size)
+```
 
 ## 5. Functions
 
@@ -295,11 +363,12 @@ picture under the formula: the bottom layer, a blend other than `over`, or a
 coverage below 1, let it show through, and `ur ug ub ul` read it at the
 pixel. A formula that does neither replaces the GIF (and is refused as a
 GIF look as it is). Alone, the picture under it is black. Looks are capped
-at 12 ms (a look over 8 ms moves at 25 frames a second). The web app makes **any** formula a look by pasting it in as a
-part and drawing that with a blend and a coverage —
-`part look { … }` then `layer screen { look(x, y, 0.4) }` (or
-`look(x, y, 0.3)` for over; `opendmd_psi::look`) — so a model never needs
-to write that wrapper itself. A look's frames follow the GIF's: a formula's
+at 12 ms (a look over 8 ms moves at 25 frames a second). **Any** formula
+can be a look: a **`look screen 40`** line at its top (section 4) says how it
+goes on — the player pastes the formula in as a part and draws it with that
+blend and coverage, `part look { … }` then `layer screen { look(x, y, 0.4) }`
+(`opendmd_psi::look`) — so a model never writes that wrapper itself. A
+formula with layers of its own goes over only (`look` or `look over 60`). A look's frames follow the GIF's: a formula's
 `fps` line is not used over a GIF.
 
 ## 9. Parts: one formula inside another
@@ -977,14 +1046,14 @@ rgb(light, light*0.9, light*0.7)
 
 ### 12. Stripes with sliders
 
-Sliders `a` and `b`, named by comments, shaping the pattern.
+Two controls, declared by `control` lines, shaping the pattern.
 
 ```psi example=slider-stripes
+control width = 0.5 "Stripe width"
+control tilt = 0.25 "Tilt"
 loop 4
--- a: stripe width
--- b: tilt
-size = 6 + a*24
-band = sin((px + py*(b*4 - 2))/size - t/2)
+size = 6 + width*24
+band = sin((px + py*(tilt*4 - 2))/size - t/2)
 rgb(1, band*0.5 + 0.5, band*0.5 + 0.5)
 ```
 
@@ -1052,12 +1121,13 @@ layer multiply { gray(py % 2 ? 1 : 0.55) }
 
 ### 18. Old photo over a GIF
 
-Reading the picture under: its colour and brightness, mixed by slider `a`
+Reading the picture under: its colour and brightness, mixed by a control
 (a colour expression: `mix` of two colours, each `rgb(…)` of values).
 
 ```psi example=sepia-look
--- over a GIF: its brightness, tinted; a: how much (0: the GIF as it is)
-mix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), a)
+control amount = 0.5 "How much"   -- 0: the GIF as it is
+look
+mix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), amount)
 ```
 
 ### 19. Glitter over a GIF
