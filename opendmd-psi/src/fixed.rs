@@ -774,3 +774,17 @@ pub fn w_reduce(a: i64) -> i32 {
 pub fn w_lat(a: i64, axis: usize) -> u32 {
     ((a >> 16) as u32).wrapping_mul(PRIMES[axis % 3])
 }
+
+/// `(a·b + c) >> 16`, saturated, `c` raw: a split's part times k with the
+/// wide part's remainder below the point carried in (`w_rem`), so the two
+/// parts' floors add up to the whole product's.
+#[inline(always)]
+pub fn mulr(a: i32, b: i32, c: i32) -> i32 {
+    sat((a as i64 * b as i64 + c as i64) >> 16)
+}
+
+/// The 16 bits below the point of `a · k` (what `w_mul` floors away).
+#[inline]
+pub fn w_rem(a: i64, k: i32) -> i32 {
+    ((a as u32 as i64 * k as i64) & 0xffff) as i32
+}

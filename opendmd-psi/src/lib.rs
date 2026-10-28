@@ -472,10 +472,46 @@ pub mod worst {
         best
     }
 
+    /// The deepest `wrap` of `tme` inside `head` + `(…)` + `tail` that still
+    /// reaches the misspelt name.
+    fn deepest_in(head: &str, tail: &str, wrap: impl Fn(&str) -> String) -> String {
+        let mut s = String::from("tme");
+        let mut best = format!("{head}{s}{tail}");
+        for _ in 0..64 {
+            let next = wrap(&s);
+            let src = format!("{head}{next}{tail}");
+            if !crate::compile(&src).is_err_and(|e| e.msg.starts_with("unknown name")) {
+                break;
+            }
+            (s, best) = (next, src);
+        }
+        best
+    }
+
+    /// Sprite reads inside sprite reads (`s[s[…], y]`) to the depth cap.
+    pub fn nested_sprite() -> String {
+        deepest_in("sprite s {\n key . 0, X 1\n .X..\n}\ngray(", ")", |s| {
+            format!("s[{s}, y]")
+        })
+    }
+
+    /// A `loop forever` formula's growing values nested (`sin(t*0.1 + …)`):
+    /// the parser's and the wide rewriting's frames together.
+    pub fn nested_forever() -> String {
+        deepest_in("loop forever\ngray(", ")", |s| format!("sin(t*0.1 + {s})"))
+    }
+
+    /// Nesting inside a palette of the formula's own.
+    pub fn nested_palette() -> String {
+        deepest_in("palette p = #000, #f80, #fff\npal(p, ", ")", |s| {
+            format!("sin({s})")
+        })
+    }
+
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 10] = [
+    pub const ALL: [Case; 13] = [
         ("many locals", many_locals),
         ("chain", chain),
         ("distinct terms", distinct),
@@ -486,6 +522,9 @@ pub mod worst {
         ("nested pick", nested_pick),
         ("parts in layers", parts_in_layers),
         ("draw", draw),
+        ("nested sprite", nested_sprite),
+        ("nested forever", nested_forever),
+        ("nested palette", nested_palette),
     ];
 }
 

@@ -429,8 +429,9 @@ of it with values that are the same for every pixel — it may be:
 
 And it may have **a part per pixel or per row added to it** (`t*0.5 + x*8`,
 `u + ZH[py]`) when that goes straight into `frac`, `sin cos tri saw sqr`,
-`noise` or `% n` (the growing part's fraction is added to it there:
-exact). Anything else is an error: `t*x`, `sqrt(t)`, `t*t`, a table read at
+`noise` or `% n`, or is multiplied by a value the same all frame (`(t + x)*0.3`),
+on the way there (the growing part's fraction is added in: exact).
+Divided, it is an error (write `t/3 + x/3`); so is anything else: `t*x`, `sqrt(t)`, `t*t`, a table read at
 `t`, a growing value as a coordinate in `draw { }`. A colour line held to
 0..1 anyway takes it as it is (`gray(t/60)` is white from a minute on);
 `hsv`'s hue takes its fraction.
@@ -468,7 +469,7 @@ the formula's `t`.
 | loops inside loops | two deep | two deep at most |
 | `table` numbers | 256 in all (sprites share them) | a table holds numbers only, up to 256 in all |
 | `palette` (your own) | 1 to 32 colours, 3 palettes; each takes 32 of the 256 table numbers | a palette is 1 to 32 colours / 3 palettes of its own at most / tables, sprites and palettes hold 256 numbers |
-| `sprite` | key: 16 characters; rows: 64 wide, 32 tall; stored in the 256 table numbers (a 26 × 9 picture with 4 key characters takes 23) | `X` is not in the sprite's key / as wide as its first / 1 to 32 rows / sprites and tables hold 256 numbers in all |
+| `sprite` | key: 16 characters; rows: 64 wide, 32 tall; stored in the 256 table numbers (a 26 × 9 picture with 4 key characters takes 23) | `X` is not in the sprite's key / as wide as its first / 1 to 32 rows / tables, sprites and palettes hold 256 numbers in all |
 | `draw { }` blocks | one (the formula's or one part's) | there can be one `draw { }` block |
 | lines and dots drawn a frame | 2,048; and 16,384 line steps (pixels walked, on the panel or off; a line wholly off one side walks none): past either the rest are skipped, the same on every device | — |
 

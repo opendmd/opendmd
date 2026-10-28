@@ -145,7 +145,11 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
         // Wide steps back to a Q16.16 (their `a` is a wide slot, whatever
         // its value): a fraction, a remainder within `b`, 1 or 0, at most
         // or at least `b`, any 32 bits.
-        W_FRAC | W_NOISEX => Iv(0, 0xffff),
+        W_FRAC | W_NOISEX | W_REM => Iv(0, 0xffff),
+        MULR => {
+            let p = mul_corners(a, b);
+            Iv((p.0 + c.0) >> 16, (p.1 + c.1) >> 16).sat()
+        }
         W_MOD => mod_iv(b),
         W_CMP => UNIT,
         W_MINMAX if op.c == MIN => Iv(LO, b.1),

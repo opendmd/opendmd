@@ -56,7 +56,9 @@ psi = ["opendmd-core/psi"]
 bench = []
 # The Psi spike's measurement (src/psi_probe.rs): frame times, the golden
 # frames, per-step costs and the stack, logged once at boot (`psi-probe:`
-# lines). `make fw-release FW_RELEASE_FEATURES=probe,psi-probe` for the rig.
+# lines). `make fw-release FW_RELEASE_FEATURES=psi-probe` for the rig: alone,
+# not with `probe`, whose frame-timing histograms are ~12.5 KB of .bss (the
+# start heap lang-probe-a lacked, 2026-10-28).
 psi-probe = ["psi", "opendmd-core/psi-stats"]
 
 [build-dependencies]

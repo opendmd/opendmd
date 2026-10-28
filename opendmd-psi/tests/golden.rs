@@ -1479,7 +1479,7 @@ fn loop_forever_is_a_long_loop_where_it_fits() {
         let s = |r: &mut Rng| SMALL[r.below(SMALL.len())];
         let use_t = |r: &mut Rng| -> String {
             let (a, b, c) = (w(r), s(r), s(r));
-            match r.below(18) {
+            match r.below(19) {
                 0 => format!("frac({a})"),
                 1 => format!("sin({a} + {b})"),
                 2 => format!("cos({a})*{b}"),
@@ -1497,6 +1497,12 @@ fn loop_forever_is_a_long_loop_where_it_fits() {
                 14 => format!("({a}) > 100 ? {b} : {c}"),
                 15 => format!("frac({a} + {b} - {c})*{b}"),
                 16 => format!("noise({a}*0.5 + {b}, {c}, {a})"),
+                // A split times a value the same all frame (exact: the wide
+                // part's remainder carried in).
+                17 => format!(
+                    "frac(({a} + {b})*{k}) + frac(({a} - {c})*a*{k})",
+                    k = ["0.3", "0.37", "1.5", "-0.7", "3"][r.below(5)]
+                ),
                 _ => format!("not ({a} < 9) and {b} > 0.2"),
             }
         };

@@ -681,6 +681,9 @@ fn worst_case_formulas() {
                     | "nested pick"
                     | "parts in layers"
                     | "draw"
+                    | "nested sprite"
+                    | "nested forever"
+                    | "nested palette"
             ) || (1900..=2048).contains(&n),
             "{name}: {n} B"
         );
@@ -2102,6 +2105,8 @@ const FOREVER_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ("loop forever\ntable T = 1, 2\ngray(T[t])", "grows without end", 3, 6, "E901"),
     ("loop forever\ngray(pick(px/32, t, 1))", "grows without end", 2, 6, "E901"),
     ("loop forever\ngray(x / t)", "grows without end", 2, 8, "E901"),
+    ("loop forever\ngray(frac((t + x)/3))", "add the pixel's part there", 2, 18, "E901"),
+    ("loop forever\ngray((t + x) > 5)", "add the pixel's part there", 2, 14, "E901"),
     ("loop forever\nv = t + x\ngray(v)", "a colour can't take a value that grows", 3, 1, "E905"),
     ("loop forever\nrgb(1, 1, 1, t + x)", "a colour can't take a value that grows", 2, 1, "E905"),
     ("loop forever\npal(fire, x) * t", "a colour can't take a value that grows", 2, 1, "E905"),
@@ -2312,6 +2317,13 @@ const SPRITE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
         "E914",
     ),
     (
+        "sprite s {\nkey . 0, X 1\n.★\n}\ngray(s[0, 0])",
+        "`★` is not in the sprite's key",
+        3,
+        2,
+        "E914",
+    ),
+    (
         "sprite s {\nkey . 0, X 1\n.X.\n.X\n}\ngray(s[0, 0])",
         "as wide as its first (3 characters)",
         4,
@@ -2414,7 +2426,10 @@ fn sprite_error_messages() {
         keys.join(", ")
     ))
     .unwrap_err();
-    if !e.msg.contains("sprites and tables hold 256 numbers in all") {
+    if !e
+        .msg
+        .contains("tables, sprites and palettes hold 256 numbers in all")
+    {
         bad.push(alloc::format!("E917: {}", e.msg));
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));

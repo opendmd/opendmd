@@ -620,6 +620,11 @@ fn frame<const N: usize>(
     // without their loops in the download.
     let narrow = !cfg!(target_arch = "wasm32") && crate::range::inputs_in_range(prog, inputs);
     let uses_i = prog.uses & USES_I != 0;
+    // A formula's own palettes, unpacked once for the frame.
+    let mut own: Pals = [[[0; 3]; 32]; USER_PALETTES];
+    if prog.uses & OWNPAL != 0 {
+        unpack_palettes(&prog.tables, &mut own);
+    }
     let backdrop = prog.uses & BACKDROP != 0;
     // The column run: on the first row drawn, then its values are kept in
     // their registers (one lane is the whole row only at N = W).
@@ -688,7 +693,7 @@ fn frame<const N: usize>(
                     continue;
                 }
                 if code::is_colour(op.code) {
-                    colour_step(scratch, &alias, op, base, tables, &prog.tables, px);
+                    colour_step(scratch, &alias, op, base, tables, &own, px);
                 } else {
                     lane_op(
                         scratch,
@@ -821,6 +826,7 @@ pub(crate) fn wide_step(sc: &mut [i32; MAX_SCALARS], w: &mut [i32], op: &Op) {
                 W_MOD => fixed::w_mod(a, s(op.b)),
                 W_CMP => fixed::w_cmp(op.c, a, s(op.b)),
                 W_MINMAX => fixed::w_minmax(op.c, a, s(op.b)),
+                W_REM => fixed::w_rem(a, s(op.b)),
                 // (`d` one of a noise context's slots: its axis.)
                 W_LAT => fixed::w_lat(a, (d as usize).wrapping_sub(noise_slot(0, 0)) % 3) as i32,
                 W_NOISEX => fixed::noise_off(
@@ -963,6 +969,7 @@ fn lane_op<const N: usize>(
             _ => tern!(run3, d, a, b, c, fixed::noise),
         },
         NOISE_O..=NOISE_O_LAST => noise_o_lane(d, [a, b, c], ctx(&s.sc, op.code)),
+        MULR => mulr_lane(d, [a, b, c]),
         // One loop for the four, its operands read with a stride (0: a
         // value for the whole lane): the lookup dwarfs the loop, and seven
         // monomorphised copies would be ~1 KB more of wasm.
@@ -970,6 +977,34 @@ fn lane_op<const N: usize>(
         U_R..=U_L => load_under(d, under, op.code - U_R),
         INK => load_ink(d, ink),
         _ => {}
+    }
+}
+
+/// `mulr` along the lane, its operands read with a stride (0: a value for
+/// the lane): one loop in flash for every kind.
+#[inline(never)]
+fn mulr_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 3]) {
+    let mut one = [0i32; 3];
+    let mut p = [core::ptr::null::<i32>(); 3];
+    let mut stride = [0usize; 3];
+    for k in 0..3 {
+        match args[k] {
+            Arg::Lane(q) => (p[k], stride[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..3 {
+        if stride[k] == 0 {
+            p[k] = &one[k];
+        }
+    }
+    for o in d.iter_mut() {
+        // SAFETY: as `glyph_lane`'s.
+        let (a, b, c) = unsafe { (*p[0], *p[1], *p[2]) };
+        *o = fixed::mulr(a, b, c);
+        for k in 0..3 {
+            p[k] = p[k].wrapping_add(stride[k]);
+        }
     }
 }
 
@@ -1103,12 +1138,12 @@ fn colour_step<const N: usize>(
     op: &Op,
     base: usize,
     t: &Tables,
-    tabs: &[i32; MAX_TABLE],
+    own: &Pals,
     px: &mut [[u8; 3]],
 ) {
     let (kind, blend) = code::colour_parts(op.code);
     let Some(mode) = blend else {
-        colour(s, al, op, base, t, tabs, px);
+        colour(s, al, op, base, t, own, px);
         return;
     };
     let (v, n) = code::operands(op);
@@ -1119,7 +1154,7 @@ fn colour_step<const N: usize>(
     };
     let mut row = [[0u8; 3]; W];
     let src = &mut row[..px.len()];
-    colour(s, al, &plain, base, t, tabs, src);
+    colour(s, al, &plain, base, t, own, src);
     // A layer that covers everything (the usual: no coverage given) is one
     // loop per blend, so the blend is not a branch per channel (an indirect
     // jump on the ESP32); one with a coverage, a lane or a value read with
@@ -1176,10 +1211,9 @@ fn colour<const N: usize>(
     op: &Op,
     base: usize,
     t: &Tables,
-    tabs: &[i32; MAX_TABLE],
+    own: &Pals,
     px: &mut [[u8; 3]],
 ) {
-    let mut own = [[0u8; 3]; 32];
     use code::*;
     let (a, b, c) = (
         s.arg(al, op.a, base),
@@ -1196,11 +1230,11 @@ fn colour<const N: usize>(
         OUT_PAL if op.d & PAL_SCALED != 0 => pal_lit_lane(
             px,
             [a, c],
-            palette(t, tabs, op.d & PAL_MASK, &mut own),
+            palette(t, own, op.d & PAL_MASK),
             (op.d & !PAL_SCALED) >> PAL_SHIFT,
         ),
         OUT_PAL => {
-            let p = palette(t, tabs, op.d & PAL_MASK, &mut own);
+            let p = palette(t, own, op.d & PAL_MASK);
             match a {
                 Arg::Lane(q) => out1(px, L(q), |k| fixed::pal(p, k)),
                 Arg::Sc(v) => px.fill(fixed::pal(p, v)),
