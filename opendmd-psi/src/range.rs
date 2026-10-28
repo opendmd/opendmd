@@ -172,6 +172,16 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
         // The sine table's entries are within ±16,384 (a test checks):
         // interpolated and shifted, ±1.
         SIN | COS | TRI | SAW | SQR => SIGNED,
+        SPR => {
+            // 0 outside, else one of its keys' numbers.
+            let at = op.c as usize;
+            let keys = (tabs[at] as u32 >> 20) & 31;
+            let mut r = Iv::point(0);
+            for k in 0..keys as usize {
+                r = r.union(Iv::point(tabs[(at + 1 + k) & (MAX_TABLE - 1)]));
+            }
+            r
+        }
         TAB => {
             let mut r = Iv::point(0);
             for k in 0..=op.c as usize {

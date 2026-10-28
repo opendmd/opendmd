@@ -207,6 +207,10 @@ pub mod golden {
         ("forever", FOREVER, 125_000, 0x2ea22e7deac5650d),
         ("forever", FOREVER, 40_000_000, 0x34ff604690d2e7e1),
         ("forever", FOREVER, 4_000_000_000, 0xea02ad83dede366c),
+        // Sprites: 1, 2 and 4 bits a pixel, read per pixel (scaled, moving),
+        // per row and once a frame, outside them, and the road's car.
+        ("sprites", SPRITES, 1500, 0xb4426b7968cc9336),
+        ("sprite-car", SPRITE_CAR, 0, 0x3cdaf547126eb095),
         ("still", "loop 4.8\nd = len(px - 63.5, (15.5 - py)*2)\nk = 64/(d + 0.5)\nu = frac(atan2(15.5 - py, px - 63.5)*2 + t/4.8 + k/64)\nv = frac(k/16 + t/2.4)\ncell = (floor(u*8) + floor(v*4)) % 2\npal(chrono, frac(mix(0.28, 0.78, cell) + t/4.8)) * clamp((d - 6)/12, 0, 1)", 1900, 0x79d9337fc1b74897),
     ];
 
@@ -215,6 +219,12 @@ pub mod golden {
 
     /// Another: per row, a draw stage, hashes, compares, min and max.
     pub const FOREVER_ROWS: &str = "loop forever\ndraw { for k < 24 { dot(frac(t*0.1 + k/24)*128, noise(t*0.3 + k, 5, 0)*31, hash(floor(t*4), k)) } }\nq = noise(t*0.15 + y*2, 5, 0)\nrgb(q, ink + frac(t*10 + x)*0.25, (t > 60) * 0.5 + min(t/300, x)*0.5)";
+
+    /// A sprites golden formula: three sprites, every level.
+    pub const SPRITES: &str = "loop 3\nsprite one {\n  key . 0, # 1\n  .##..##.\n  #..##..#\n}\nsprite two {\n  key . 0, r 0.3, g 0.6, b 1\n  rgb.bgr.rgb.bgr.rgb.bgr.rgb.bgr.rgb.bgr.r\n  .r.g.b.r.g.b.r.g.b.r.g.b.r.g.b.r.g.b.r.g.\n  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n}\nsprite many {\n  key 0 0, 1 0.1, 2 0.2, 3 0.3, 4 0.4, 5 0.5, 6 0.6, 7 0.7, 8 0.8, 9 0.9, A 1, B -1, C 2, D 0.05, E 0.15, F 0.25\n  0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\n  FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210\n  02468ACE13579BDF02468ACE13579BDF02468ACE13579BDF02468ACE13579BDF\n}\nframe { f = many[floor(t*5), 1] }\nrw = two[ty, 1]\nrgb(one[px/8 - t, ty/16], many[px/2, ty/4 - 2] + f*0.25, two[px - 40, ty - 13] + rw*0.5)";
+
+    /// The road's car (`sprite`), its colours from a pick.
+    pub const SPRITE_CAR: &str = "sprite car {\n  key . 0, R 1, D 2, L 3\n  ........RRRRRRRRRR........\n  .......RDDDDDDDDDDR.......\n  ......RDDDDDDDDDDDDR......\n  ...RRRRRRRRRRRRRRRRRRRR...\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  DDDDDDDDDDDDDDDDDDDDDDDDDD\n}\nk = car[px - 50.5, ty - 23]\npick(k, #203040, #e02020, #101010, #ffa020)";
 
     /// The picture the [`OVER`] frames are drawn over: every byte value in
     /// every channel somewhere (a hash per pixel), with smooth ramps across

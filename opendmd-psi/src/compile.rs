@@ -120,6 +120,9 @@ enum Tok {
     Dot,
     Assign,
     Newline,
+    /// A row of a `sprite NAME { … }` block (its key line or a row of
+    /// characters), as written: the lexer reads those lines raw.
+    Raw,
     Eof,
 }
 
@@ -148,6 +151,7 @@ fn describe(t: Tok) -> &'static str {
         Tok::Assign => "`=`",
         Tok::Colon => "`:`",
         Tok::Question => "`?`",
+        Tok::Raw => "a sprite's row",
         _ => "an operator",
     }
 }
@@ -189,6 +193,9 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
     let mut out: Vec<Token> = Vec::new();
     let mut i = 0;
     let mut depth = 0usize; // ( ) nesting: newlines inside are spaces
+                            // At the start of a line (nothing but spaces before, outside brackets):
+                            // where `sprite NAME {` may start a sprite block.
+    let mut line_start = true;
     let push_nl = |out: &mut Vec<Token>, at: usize| {
         if !matches!(
             out.last(),
@@ -218,6 +225,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
         if c == b'\n' || c == b';' {
             if depth == 0 {
                 push_nl(&mut out, i);
+                line_start = true;
             }
             i += 1;
             continue;
@@ -226,6 +234,14 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             i += 1;
             continue;
         }
+        if line_start && depth == 0 {
+            if let Some(j) = sprite_head(b, i) {
+                i = sprite_rows(src, i, j, &mut out);
+                line_start = false;
+                continue;
+            }
+        }
+        line_start = false;
         // `#ff8800`, `#f80`: a colour.
         if c == b'#' {
             i += 1;
@@ -394,6 +410,111 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
         end: b.len(),
     });
     Ok(out)
+}
+
+/// `sprite NAME {` and nothing else (but spaces and a comment) on the line
+/// from `i`: where the `{` is.
+fn sprite_head(b: &[u8], i: usize) -> Option<usize> {
+    let word = |j: usize| j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_');
+    let space = |j: usize| j < b.len() && (b[j] == b' ' || b[j] == b'\t');
+    if b.get(i..i + 6) != Some(b"sprite".as_slice()) || !space(i + 6) {
+        return None;
+    }
+    let mut j = i + 6;
+    while space(j) {
+        j += 1;
+    }
+    if !(j < b.len() && (b[j].is_ascii_alphabetic() || b[j] == b'_')) {
+        return None;
+    }
+    while word(j) {
+        j += 1;
+    }
+    while space(j) {
+        j += 1;
+    }
+    if b.get(j) != Some(&b'{') {
+        return None;
+    }
+    let brace = j;
+    j += 1;
+    while space(j) {
+        j += 1;
+    }
+    let comment = matches!(b.get(j..j + 2), Some(b"--") | Some(b"//"));
+    (comment || j >= b.len() || b[j] == b'\n' || b[j] == b';').then_some(brace)
+}
+
+/// A sprite block from `i` (its `sprite`, the `{` at `brace`): `sprite`,
+/// its name and `{` as tokens, then each line (to a newline or `;`, a
+/// comment cut off, trimmed, blank ones left out) as a [`Tok::Raw`] up to a
+/// line that is `}` alone, its [`Tok::RBrace`]. Where lexing goes on.
+fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Vec<Token>) -> usize {
+    let b = src.as_bytes();
+    let mut name = i + 6;
+    while b[name] == b' ' || b[name] == b'\t' {
+        name += 1;
+    }
+    let mut e = name;
+    while e < b.len() && (b[e].is_ascii_alphanumeric() || b[e] == b'_') {
+        e += 1;
+    }
+    for (tok, s, e) in [
+        (Tok::Name, i, i + 6),
+        (Tok::Name, name, e),
+        (Tok::LBrace, brace, brace + 1),
+    ] {
+        out.push(Token {
+            tok,
+            start: s,
+            end: e,
+        });
+    }
+    // To the end of the `{`'s line (a comment, a newline or `;`).
+    let mut k = brace + 1;
+    while k < b.len() && b[k] != b'\n' && b[k] != b';' {
+        k += 1;
+    }
+    while k < b.len() {
+        k += 1; // past the newline or `;`
+        let start = k;
+        let mut end = k;
+        while k < b.len() && b[k] != b'\n' && b[k] != b';' {
+            if matches!(b.get(k..k + 2), Some(b"--") | Some(b"//")) {
+                // A comment, to the end of the line (as everywhere else).
+                while k < b.len() && b[k] != b'\n' {
+                    k += 1;
+                }
+                break;
+            }
+            k += 1;
+            end = k;
+        }
+        let (mut s, mut e) = (start, end);
+        while s < e && b[s].is_ascii_whitespace() {
+            s += 1;
+        }
+        while e > s && b[e - 1].is_ascii_whitespace() {
+            e -= 1;
+        }
+        if s == e {
+            continue;
+        }
+        if &b[s..e] == b"}" {
+            out.push(Token {
+                tok: Tok::RBrace,
+                start: s,
+                end: e,
+            });
+            return e;
+        }
+        out.push(Token {
+            tok: Tok::Raw,
+            start: s,
+            end: e,
+        });
+    }
+    k.min(b.len())
 }
 
 /// The same formula on one line, as short as it stays readable: comments
@@ -1531,6 +1652,20 @@ struct Table<'s> {
     len: usize,
 }
 
+/// `sprite NAME { … }`: its header is `Parser::tables[start]`.
+struct Sprite<'s> {
+    name: &'s str,
+    at: usize,
+    scope: u16,
+    start: usize,
+}
+
+/// The characters a sprite's key may use: printable, not a space, nor
+/// what would end its line or start a comment (`; { } , - /`).
+fn key_char(c: u8) -> bool {
+    c.is_ascii_graphic() && !matches!(c, b';' | b'{' | b'}' | b',' | b'-' | b'/')
+}
+
 /// The draw stage as written, in order: loops (their counter node and
 /// count) around lines and dots (their values: x0, y0, x1, y1, v0, v1; x,
 /// y, v).
@@ -1602,6 +1737,7 @@ struct Parser<'s> {
     /// the tables' names.
     tables: Vec<i32>,
     table_names: Vec<Table<'s>>,
+    sprites: Vec<Sprite<'s>>,
     /// The draw stage: its items, the `draw` that wrote them, whether the
     /// lines being read are recorded (not for a part read again at another
     /// place: its draw stage is the one read where it is written), how deep
@@ -1936,9 +2072,7 @@ impl<'s> Parser<'s> {
         if let Some(k) = self.part_named(name) {
             return self.part_value(t, k);
         }
-        if self.peek().tok == Tok::LBracket
-            || (!self.table_names.is_empty() && self.table_named(name).is_some())
-        {
+        if self.reads_table(name) {
             return self.table_read(t);
         }
         if self.peek().tok == Tok::LParen {
@@ -2539,7 +2673,8 @@ impl<'s> Parser<'s> {
         let prev = local
             .map(|l| l.at)
             .or(self.part_named(name).map(|k| self.parts[k].at))
-            .or(self.table_named(name).map(|k| self.table_names[k].at));
+            .or(self.table_named(name).map(|k| self.table_names[k].at))
+            .or(self.sprite_named(name).map(|k| self.sprites[k].at));
         if let Some(at) = prev {
             return self.err(
                 t,
@@ -2900,6 +3035,7 @@ impl<'s> Parser<'s> {
                 }
                 "frame" => self.frame_block(t, &mut seen_frame)?,
                 "draw" | "table" | "for" => return Err(self.misplaced(t)),
+                _ if self.is_sprite() => return Err(self.misplaced(t)),
                 _ if self.is_assignment() => self.assignment(false)?,
                 _ => colour = Some((self.colour_or_value(t, Tok::RBrace)?, t)),
             }
@@ -3147,6 +3283,10 @@ impl<'s> Parser<'s> {
                 "draw" => {
                     "`draw { }` goes at the top of the formula (or a part), not inside a layer"
                 }
+                // E911.
+                "sprite" => {
+                    "a sprite goes at the top of the formula (or a part), not inside a layer"
+                }
                 "table" => "a table goes at the top of the formula (or a part), not inside a layer",
                 _ => "`for` goes inside `draw { }`: `draw { for k < 12 { … } }`",
             },
@@ -3166,6 +3306,9 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn table_read(&mut self, t: Token) -> Result<Id, Error> {
         let name = self.text(t);
+        if let Some(k) = self.sprite_named(name) {
+            return self.sprite_read(t, k);
+        }
         let Some(k) = self.table_named(name) else {
             return self.err(
                 t,
@@ -3192,6 +3335,253 @@ impl<'s> Parser<'s> {
         let (start, len) = (self.table_names[k].start, self.table_names[k].len);
         self.dag
             .tab(i, start, len, &self.tables, (t.start, close.end))
+    }
+
+    /// Whether `name` at the cursor reads a table or a sprite (`[` after
+    /// it, or a table's or a sprite's name). Out of line: the recursive
+    /// parser's frames stay small.
+    #[inline(never)]
+    fn reads_table(&self, name: &str) -> bool {
+        self.peek().tok == Tok::LBracket
+            || (!self.table_names.is_empty() && self.table_named(name).is_some())
+            || (!self.sprites.is_empty() && self.sprite_named(name).is_some())
+    }
+
+    /// The sprite called `name` that can be seen here.
+    #[inline(never)]
+    fn sprite_named(&self, name: &str) -> Option<usize> {
+        self.sprites
+            .iter()
+            .rposition(|sp| sp.name == name && self.visible(sp.scope))
+    }
+
+    /// `NAME[u, v]` at `t`: sprite `k`'s pixel at column `u`, row `v`.
+    #[inline(never)]
+    fn sprite_read(&mut self, t: Token, k: usize) -> Result<Id, Error> {
+        let name = self.text(t);
+        let open = self.peek();
+        if open.tok != Tok::LBracket {
+            // E918.
+            return self.err(
+                t,
+                format!("`{name}` is a sprite: read its pixels with `{name}[u, v]` (column, row from its top left)"),
+            );
+        }
+        self.next();
+        let u = self.expr(0)?;
+        if self.peek().tok != Tok::Comma {
+            let p = self.peek();
+            return self.err(
+                p,
+                format!("a sprite is read at a column and a row: `{name}[u, v]`"),
+            );
+        }
+        self.next();
+        let v = self.expr(0)?;
+        let close = self.peek();
+        if close.tok != Tok::RBracket {
+            if close.tok == Tok::Eof || self.line_of(close.start) > self.line_of(open.start) {
+                return self.err(open, "this `[` is never closed — add `]`");
+            }
+            return Err(self.expected(close, "`]`"));
+        }
+        self.next();
+        let at = (t.start, close.end);
+        if self.dag.grows(u) || self.dag.grows(v) {
+            return Err(Error::new(at.0, at.1, GROWS));
+        }
+        let start = self.sprites[k].start;
+        let (mut level, mut why) = (LV_FRAME, 0);
+        for x in [u, v] {
+            let m = &self.dag.nodes[x as usize];
+            if m.level > level {
+                (level, why) = (m.level, m.why);
+            }
+        }
+        self.dag.push(
+            Node {
+                code: code::SPR,
+                a: u,
+                b: v,
+                c: start as Id,
+                val: 0,
+                level,
+                why,
+            },
+            at,
+        )
+    }
+
+    /// Whether the statement at the cursor is a sprite block (`sprite NAME
+    /// {` as the lexer reads one: its rows are raw).
+    fn is_sprite(&self) -> bool {
+        let t = self.peek();
+        t.tok == Tok::Name
+            && self.text(t) == "sprite"
+            && self.tok(self.pos + 1).tok == Tok::Name
+            && self.tok(self.pos + 2).tok == Tok::LBrace
+            && matches!(
+                self.tok(self.pos + 3).tok,
+                Tok::Raw | Tok::RBrace | Tok::Eof
+            )
+    }
+
+    /// `sprite NAME { key …; rows }` at `kw`: its key (characters and the
+    /// numbers they read as, up to 16) and its rows of characters (equal
+    /// widths up to 64, up to 32 rows), packed into the tables: a header
+    /// word, the keys' numbers, the rows at 1, 2 or 4 bits a pixel.
+    #[inline(never)]
+    fn sprite(&mut self, kw: Token) -> Result<(), Error> {
+        self.next();
+        let n = self.next();
+        let name = self.new_name(n)?;
+        self.next(); // `{`
+        let mut raws: Vec<Token> = Vec::new();
+        loop {
+            let t = self.peek();
+            match t.tok {
+                Tok::Raw => {
+                    raws.push(t);
+                    self.next();
+                }
+                Tok::RBrace => {
+                    self.next();
+                    break;
+                }
+                // E919.
+                _ => {
+                    return self.err(
+                        kw,
+                        "this `sprite {` is never closed — add `}` on a line of its own",
+                    )
+                }
+            }
+        }
+        let Some((&key, rows)) = raws.split_first() else {
+            // E912.
+            return self.err(kw, SPRITE_KEY);
+        };
+        // The key: `key C n, C n, …` (bytes: `str`'s trims are Unicode's).
+        let kb = self.text(key).as_bytes();
+        if kb.len() < 4 || &kb[..3] != b"key" || !matches!(kb[3], b' ' | b'\t') {
+            return self.err(key, SPRITE_KEY);
+        }
+        let mut chars: Vec<u8> = Vec::new();
+        let mut nums: Vec<i32> = Vec::new();
+        let mut i = 3;
+        while i < kb.len() {
+            let ws = |i: &mut usize| {
+                while *i < kb.len() && matches!(kb[*i], b' ' | b'\t') {
+                    *i += 1;
+                }
+            };
+            ws(&mut i);
+            let s = i;
+            let mut e = i;
+            while e < kb.len() && kb[e] != b',' {
+                e += 1;
+            }
+            let mut te = e;
+            while te > s && matches!(kb[te - 1], b' ' | b'\t') {
+                te -= 1;
+            }
+            let bad = Error::new(key.start + s, key.start + te.max(s + 1), SPRITE_KEY_ENTRY);
+            if te < s + 3 || !key_char(kb[s]) || !matches!(kb[s + 1], b' ' | b'\t') {
+                return Err(bad);
+            }
+            let mut ns = s + 1;
+            while matches!(kb[ns], b' ' | b'\t') {
+                ns += 1;
+            }
+            let neg = kb[ns] == b'-';
+            let Some(v) = number(sub(self.src, key.start + ns + usize::from(neg), key.start + te)) else {
+                return Err(bad);
+            };
+            if chars.contains(&kb[s]) {
+                return Err(Error::new(key.start + s, key.start + s + 1, format!("`{}` is in the key twice", kb[s] as char)));
+            }
+            chars.push(kb[s]);
+            nums.push(if neg { -v } else { v });
+            i = e + 1;
+        }
+        if chars.len() > 16 {
+            return self.err(key, "a sprite's key has 16 characters at most");
+        }
+        // Its rows.
+        let w = rows.first().map_or(0, |r| r.end - r.start);
+        if rows.is_empty() || rows.len() > 32 {
+            // E916.
+            return self.err(kw, "a sprite has 1 to 32 rows of characters, after its key");
+        }
+        let lb: u32 = match chars.len() {
+            0..=2 => 0,
+            3..=4 => 1,
+            _ => 2,
+        };
+        let ppw = 32 >> lb;
+        let wpr = w.div_ceil(ppw);
+        let mut words: Vec<i32> = Vec::with_capacity(1 + chars.len() + rows.len() * wpr);
+        words.push(
+            (w as u32 | (rows.len() as u32) << 8 | lb << 16 | (chars.len() as u32) << 20) as i32,
+        );
+        words.extend_from_slice(&nums);
+        for r in rows {
+            let text = self.text(*r).as_bytes();
+            if text.len() != w || w > 64 {
+                // E915.
+                return self.err(
+                    *r,
+                    format!(
+                        "a sprite's rows are as wide as its first ({w} characters), at most 64"
+                    ),
+                );
+            }
+            let mut row = alloc::vec![0u32; wpr];
+            for (x, &c) in text.iter().enumerate() {
+                let Some(k) = chars.iter().position(|&kc| kc == c) else {
+                    // E914.
+                    let at = r.start + x;
+                    return Err(Error::new(
+                        at,
+                        at + 1,
+                        format!("`{}` is not in the sprite's key", c as char),
+                    ));
+                };
+                row[x / ppw] |= (k as u32) << ((x % ppw) << lb);
+            }
+            words.extend(row.iter().map(|&v| v as i32));
+        }
+        let start = match self
+            .tables
+            .windows(words.len())
+            .position(|win| win == words.as_slice())
+        {
+            Some(k) => k,
+            None => {
+                if self.tables.len() + words.len() > MAX_TABLE {
+                    // E917.
+                    return self.err(
+                        kw,
+                        format!(
+                            "sprites and tables hold {MAX_TABLE} numbers in all — this would make {} (a sprite takes about one a 16 pixels, 8 with 5 or more key characters)",
+                            self.tables.len() + words.len()
+                        ),
+                    );
+                }
+                self.tables.extend_from_slice(&words);
+                self.tables.len() - words.len()
+            }
+        };
+        if start > 255 {
+            return self.err(kw, "sprites and tables hold 256 numbers in all");
+        }
+        self.sprites.push(Sprite {
+            name,
+            at: n.start,
+            scope: self.scope,
+            start,
+        });
+        self.end_of_statement()
     }
 
     /// `table NAME = n, n, …` at `kw`: numbers only (a `,` may end a line
@@ -3614,6 +4004,7 @@ impl<'s> Parser<'s> {
                 "part" => self.part(t)?,
                 "draw" => self.draw_block(t)?,
                 "table" => self.table(t)?,
+                _ if self.is_sprite() => self.sprite(t)?,
                 "for" => return Err(self.misplaced(t)),
                 "use" => {
                     return self.err(
@@ -3730,6 +4121,7 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Erro
         work: 0,
         tables: Vec::new(),
         table_names: Vec::new(),
+        sprites: Vec::new(),
         draw: Vec::new(),
         drawn: None,
         record: true,
@@ -3880,6 +4272,11 @@ fn grown_colour(dag: &mut Dag, c: &mut Colour, at: (usize, usize)) -> Result<(),
     }
     Ok(())
 }
+
+/// E912/E913: a sprite's key.
+const SPRITE_KEY: &str =
+    "a sprite starts with its key: `key . 0, R 1, D 2` (each character, then the number it reads as)";
+const SPRITE_KEY_ENTRY: &str = "a key is a character and its number, as `R 1` or `. -0.5`, separated by commas (not ; { } , - / or a space)";
 
 /// E905.
 const GROWN_COLOUR: &str =
@@ -4081,7 +4478,7 @@ fn emit(
         if m.code == code::TAB {
             (b, c) = (m.b as u8, m.c as u8);
         }
-        if matches!(m.code, code::W_CMP | code::W_MINMAX) {
+        if matches!(m.code, code::W_CMP | code::W_MINMAX | code::SPR) {
             c = m.c as u8;
         }
         if m.code == code::PICK {

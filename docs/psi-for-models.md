@@ -85,7 +85,7 @@ sum       = term { ("+" | "-") term }
 term      = unary { ("*" | "/" | "%") unary }
 unary     = ("-" | "+") unary | atom
 atom      = NUMBER | CHAR | COLOUR | NAME | FUNC "(" args ")" | PART "." NAME
-          | PART "(" e "," e ")" "." NAME | TABLE "[" expr "]" | "(" expr ")"
+          | PART "(" e "," e ")" "." NAME | TABLE "[" expr "]" | SPRITE "[" e "," e "]" | "(" expr ")"
 args      = e { "," e }                        -- digit/glyph: e "," e "," e [ "," FONT ]
                                                -- pick: e "," e { "," e }
 sep       = newline | ";"                      -- newlines inside ( ) and [ ] are spaces
@@ -452,7 +452,8 @@ the formula's `t`.
 | `for` count | a whole number 1..1024, written out | `for` takes a name and a count |
 | loop turns a frame (every run of a loop's body) | 2,048 | draws too much a frame |
 | loops inside loops | two deep | two deep at most |
-| `table` numbers | 256 in all | a table holds numbers only, up to 256 in all |
+| `table` numbers | 256 in all (sprites share them) | a table holds numbers only, up to 256 in all |
+| `sprite` | key: 16 characters; rows: 64 wide, 32 tall; stored in the 256 table numbers (a 26 × 9 picture with 4 key characters takes 23) | `X` is not in the sprite's key / as wide as its first / 1 to 32 rows / sprites and tables hold 256 numbers in all |
 | `draw { }` blocks | one (the formula's or one part's) | there can be one `draw { }` block |
 | lines and dots drawn a frame | 2,048; and 16,384 line steps (pixels walked, on the panel or off; a line wholly off one side walks none): past either the rest are skipped, the same on every device | — |
 
@@ -494,6 +495,7 @@ its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
 | `ur` `ug` `ub` | 70 | | `ul` | 140 |
 | `digit` `glyph` | 240 | | `bit` | 55 |
 | `pick` (values the same for every pixel) | 100 | | `pick` of per-pixel values | its compares and selects |
+| a sprite's pixel, `s[u, v]` | 120 | | | |
 | each extra layer | its colour + 190 (multiply 245, screen 300, max/min 180; with coverage add 575, multiply 630, screen 600, max/min 450, over 390) | | showing the picture under | free |
 
 **The draw stage** adds, a frame: ~420 ns for each step each time it runs
@@ -621,6 +623,17 @@ gray(seed*x)
 ```
 
 Only a `loop forever` formula has a `seed`.
+
+```psi error
+-- error: `Y` is not in the sprite's key
+sprite s {
+  key . 0, X 1
+  .XY.
+}
+gray(s[px, ty])
+```
+
+Every character of a sprite's rows needs its number in the key line.
 
 ```psi error
 -- error: there is no power operator
@@ -1367,6 +1380,42 @@ puff = noise(x*6 + u, y*3, u*0.3)        -- per pixel: the clouds
 haze = noise(u*2 + y, 9, 0)*0.3          -- per row: a band of haze
 k = smoothstep(0.45, 0.75, puff + haze*0.5)
 mix(#204080, #f0f0ff, k)
+```
+
+### 36. Invaders (a sprite sheet)
+
+Two frames of an invader in one sprite (the second 8 rows below the
+first), a row of nine across the panel marching side to side, the frame
+switching twice a second; the key's numbers are brightness.
+
+```psi example=invaders
+loop 4
+sprite inv {
+  key . 0, X 1, o 0.6
+  ..X.....X..
+  ...X...X...
+  ..XXXXXXX..
+  .XXoXXXoXX.
+  XXXXXXXXXXX
+  X.XXXXXXX.X
+  X.X.....X.X
+  ...XX.XX...
+  ..X.....X..
+  X..X...X..X
+  X.XXXXXXX.X
+  XXXoXXXoXXX
+  XXXXXXXXXXX
+  .XXXXXXXXX.
+  ..X.....X..
+  .X.......X.
+}
+frame {
+  sway = floor(tri(t/4)*6)               -- side to side, a pixel at a time
+  f = floor(t*2) % 2                     -- which frame
+}
+u = px - 2 - sway
+k = inv[u % 14, ty - 10 + f*8] * (u >= 0) * (u < 123)   -- nine, 14 px apart
+hsv(0.33 - ty/100, 0.7, k)
 ```
 
 ## 17. In the product (not built)

@@ -302,6 +302,12 @@ fn the_cost_table_is_the_estimates() {
             "loop forever\ngray(min(frac(x + t), noise(x + t, px, x)))",
         ),
         ("| colour `rgb` | 120 |", 120, "gray(x)", "rgb(x, x, x)"),
+        (
+            "| a sprite's pixel, `s[u, v]` | 120 |",
+            120,
+            "sprite s {\nkey . 0, X 1\n.X\n}\ngray(px*x)",
+            "sprite s {\nkey . 0, X 1\n.X\n}\ngray(px*s[x, px])",
+        ),
         ("| colour `hsv` | 195 |", 195, "gray(x)", "hsv(x, x, x)"),
         ("| `ur` `ug` `ub` | 70 |", 70, "gray(x)", "gray(ur)"),
         ("| `ul` | 140 |", 140, "gray(x)", "gray(ul)"),
