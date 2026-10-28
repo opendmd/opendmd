@@ -220,7 +220,7 @@ export async function mount(el) {
         h('div.card', lookH, h('p.cap', 'How the panel draws every GIF'),
           h('div.form.f2', h('label.stack', 'Colour', f.look), h('label.stack', 'Phosphor glow', f.glow)),
           (lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', h('div.row', lf, lfEdit))), lfWhy, lfErr,
-          h('p.cap', 'A Formula drawn over everything the panel plays, before the colour and glow: scanlines, a colour grade, a clock in the corner. Each says how it goes over the GIFs; in Formulas, any Formula’s settings can make it one.'),
+          h('p.cap', 'A Formula drawn over everything the panel plays, before the colour and glow: scanlines, an old TV, a colour grade. Each says how it goes over the GIFs; in Formulas, any Formula’s settings can make it one.'),
           h('label', { style: 'margin-top:12px' }, mirror, 'Mirror the panel on Now'), h('p.cap', 'Now shows what the panel is playing; off saves the player a download for each GIF (this browser only)')),
         h('div.card', { id: 'st-trans-card' }, transH, h('p.cap', 'How the panel moves from one GIF to the next'),
           h('div.form.f2', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),

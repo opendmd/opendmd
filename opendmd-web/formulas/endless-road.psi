@@ -1,5 +1,6 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
+-- bundle
 name "Endless road"
 about "OutRun into a synthwave sunset: bends and hills without end"
 loop forever
