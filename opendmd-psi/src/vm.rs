@@ -740,6 +740,7 @@ fn frame<const N: usize>(
                             &prog.ops[(k + 1).min(pe)..(k + 1 + n).min(pe)],
                             base,
                             tables,
+                            &prog.tables,
                             &own,
                             px,
                             il,
@@ -1093,6 +1094,7 @@ fn fused<const N: usize>(
     ops: &[Op],
     base: usize,
     t: &Tables,
+    tabs: &[i32; MAX_TABLE],
     own: &Pals,
     px: &mut [[u8; 3]],
     ink: Option<&[u8]>,
@@ -1181,11 +1183,12 @@ fn fused<const N: usize>(
                 }]
             });
         }
-        (F_INKPAL, [_, col]) => {
-            let p = palette(t, own, col.d & code::PAL_MASK);
+        (F_INK, [..]) => {
+            let sc = &s.sc;
+            let f = |b: u8| ink_colour(ops, b, sc, t, tabs, own);
             match ink {
-                Some(k) => pal_ink(px, k, p),
-                None => px.fill(fixed::pal(p, 0)),
+                Some(k) => ink_memo(px, k, f),
+                None => px.fill(f(0)),
             }
         }
         _ => return false,
@@ -1257,13 +1260,79 @@ fn pal_select_lanes(
     }
 }
 
-/// `pal(P, ink)` along the lane (`crate::fuse`'s `F_INKPAL`).
+/// A colour of the canvas alone along the lane (`crate::fuse`'s `F_INK`):
+/// `f` of each byte, worked out again only where the byte changes.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 #[inline(never)]
-fn pal_ink(px: &mut [[u8; 3]], ink: &[u8], p: &[[u8; 3]; 32]) {
+fn ink_memo(px: &mut [[u8; 3]], ink: &[u8], f: impl Fn(u8) -> [u8; 3]) {
+    let mut last = ink.first().copied().unwrap_or(0);
+    let mut rgb = f(last);
     for (o, &b) in px.iter_mut().zip(ink) {
-        *o = fixed::pal(p, fixed::byte(b));
+        if b != last {
+            last = b;
+            rgb = f(b);
+        }
+        *o = rgb;
+    }
+}
+
+/// An `F_INK` run's colour for canvas byte `b` (`ops`: its `ink`, its
+/// steps, its colour): each step as the VM works it out for one pixel —
+/// `eval`, the scalar steps' functions, for the arithmetic (in a frame
+/// that runs the narrowed steps their values are the checked ones'), the
+/// table steps as their lane loops read them — then the colour as
+/// `colour` writes it. In flash: once for each byte a lane meets.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+fn ink_colour(
+    ops: &[Op],
+    b: u8,
+    sc: &[i32; MAX_SCALARS],
+    t: &Tables,
+    tabs: &[i32; MAX_TABLE],
+    own: &Pals,
+) -> [u8; 3] {
+    use code::*;
+    let mut v = [0i32; REGS + 1];
+    let get = |v: &[i32; REGS + 1], x: u8| {
+        if x & LANE != 0 {
+            v[reg_index(x)]
+        } else {
+            sc[(x & 0x7f) as usize]
+        }
+    };
+    let Some((col, steps)) = ops.split_last() else {
+        return [0; 3];
+    };
+    for op in steps {
+        let (x, y, z) = (get(&v, op.a), get(&v, op.b), get(&v, op.c));
+        v[reg_index(op.d)] = match op.code {
+            INK => fixed::byte(b),
+            SHR => x >> (op.c & 31),
+            PICK => pick(sc, op.b, op.c, x),
+            TAB => tab(tabs, op.b, op.c, x),
+            SPR => spr(tabs, op.c, x, y),
+            NOISE_O..=NOISE_O_LAST => noise_o(x, y, z, sc, op.code),
+            c => eval(c, x, y, z, Some(t)),
+        };
+    }
+    let (x, y, z) = (get(&v, col.a), get(&v, col.b), get(&v, col.c));
+    match col.code {
+        OUT_RGB => [fixed::chan(x), fixed::chan(y), fixed::chan(z)],
+        OUT_HSV => fixed::hsv(x, y, z),
+        OUT_PAL if col.d & PAL_SCALED != 0 => {
+            let p = palette(t, own, col.d & PAL_MASK);
+            fixed::scale_rgb(
+                p[fixed::pal_index(x)],
+                z >> ((col.d & !PAL_SCALED) >> PAL_SHIFT),
+            )
+        }
+        OUT_PAL => fixed::pal(palette(t, own, col.d & PAL_MASK), x),
+        _ => {
+            let g = fixed::chan(x);
+            [g, g, g]
+        }
     }
 }
 
