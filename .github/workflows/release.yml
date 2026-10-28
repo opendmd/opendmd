@@ -35,6 +35,18 @@ name: Release
 #                     .odfw bundles (tools/fw-sign.py; the key whose public
 #                     half is firmware/keys/opendmd.pub):
 #                       base64 -w0 ~/.config/opendmd/opendmd.key | gh secret set OTA_SIGNING_KEY -R opendmd/opendmd
+# Optional, the site on Cloudflare (docs/research/site-cloudflare.md; until
+# it is set the steps below skip, and the site goes to GitHub Pages only):
+#   CLOUDFLARE_API_TOKEN  an API token scoped to the account's Workers
+#                     Scripts: Edit and Account Settings: Read (D1 and R2 Edit
+#                     come with short links), made in the dashboard (My
+#                     Profile > API Tokens), then
+#                       gh secret set CLOUDFLARE_API_TOKEN -R opendmd/opendmd
+#                     With it, a release also runs `make site-deploy-built`
+#                     (cf deploy of the opendmd-site Worker, the same
+#                     target/site), and a dry run `make site-deploy-check`.
+#                     The repository variable CLOUDFLARE_ACCOUNT_ID names
+#                     the account if the token can see more than one.
 #   SITE_DEPLOY_KEY   an SSH private key whose public half is a deploy key
 #                     with write access on opendmd/opendmd.github.io:
 #                       ssh-keygen -t ed25519 -N '' -C 'opendmd release' -f site_deploy
@@ -62,6 +74,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # "true" once the CLOUDFLARE_API_TOKEN secret exists (only the yes/no, not the token).
+  HAVE_CLOUDFLARE_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
 
 jobs:
   release:
@@ -369,3 +383,21 @@ jobs:
       - name: Remove the deploy key
         if: always()
         run: rm -f "$RUNNER_TEMP/site_deploy"
+
+      # The site on Cloudflare: the opendmd-site Worker (site/worker/) with
+      # target/site as its assets. Skipped until the CLOUDFLARE_API_TOKEN
+      # secret exists (see the header). cf and wrangler come pinned from
+      # site/worker/package-lock.json (npm ci).
+      - name: The site on Cloudflare (cf deploy)
+        if: env.HAVE_CLOUDFLARE_TOKEN == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          KIND: ${{ steps.plan.outputs.kind }}
+        run: |
+          set -euo pipefail
+          if [[ "$KIND" == dry ]]; then
+            make site-deploy-check
+          else
+            make site-deploy-built
+          fi
