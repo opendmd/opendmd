@@ -3477,9 +3477,12 @@ def mock_pass(browser) -> None:
         # Settings
         settings_tab_checks(page)
         goto_view(page, "settings/play")
+        # The heading's save count before this change (an earlier save may
+        # have shown, and cleared, its tick already).
+        n0 = page.evaluate("+(document.querySelector('#st-tab-play .card h2 .tick')?.dataset.n || 0)")
         page.eval_on_selector("#st-brightness", "e => { e.value = 120; e.dispatchEvent(new Event('input')); }")
         check(wait_config(base, lambda c: c["brightness"] == 120)["brightness"] == 120, "settings: brightness saved as it settles, read back")
-        page.wait_for_function("document.querySelector('#st-tab-play .card h2 .tick').dataset.n > 0", timeout=5000)
+        page.wait_for_function("n => +document.querySelector('#st-tab-play .card h2 .tick').dataset.n > n", arg=n0, timeout=5000)
         tick = page.text_content("#st-tab-play .card h2 .tick")
         anim = page.eval_on_selector("#st-tab-play .card h2 .tick", "e => getComputedStyle(e).animationName")
         check(tick == "Saved ✓" and anim == "out", f"settings: the Playback heading shows Saved ✓, fading ({tick!r}, {anim})")
