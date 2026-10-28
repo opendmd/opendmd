@@ -226,9 +226,6 @@ SHOW = {"js/psishow.js"}
 LOOKS_GZ_BUDGET = 3 * 1024
 LOOKS = {"js/looks.js"}
 SHARE_GZ_BUDGET = 12 * 1024
-# The site's "Set up a card" page (share/cardprep, published at /card/; its
-# tests/ aside): its own line since 2026-10-25, 16.9 KB at the time.
-CARD_PAGE_GZ_BUDGET = 18 * 1024
 # What the formula page loads from the demo (its own files aside).
 SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
@@ -333,26 +330,20 @@ def main() -> int:
     if args.share:
         import gzip
         share = Path(args.share)
-        sraw = sgz = craw = cgz = 0
+        sraw = sgz = 0
         for p in sorted(q for q in share.rglob("*") if q.is_file() and "tests" not in q.relative_to(share).parts):
             b = p.read_bytes()
             g = len(gzip.compress(b, 9, mtime=0))
-            if p.relative_to(share).parts[0] == "cardprep":
-                craw += len(b)
-                cgz += g
-            else:
-                sraw += len(b)
-                sgz += g
+            sraw += len(b)
+            sgz += g
             print(f"{'share/' + p.relative_to(share).as_posix():<40} {len(b):>9,} {g:>9,}")
         uses = sum((q.with_name(q.name + ".gz").stat().st_size if q.with_name(q.name + ".gz").exists() else q.stat().st_size)
                    for q in files if any(q.relative_to(root).as_posix().startswith(u) for u in SHARE_USES))
         verdict = "ok" if sgz <= SHARE_GZ_BUDGET else "OVER BUDGET"
         print(f"{'share':<10} raw {sraw:>9,}           gz {sgz:>9,} / {SHARE_GZ_BUDGET // 1024} KB {verdict:<10}"
               f"(first visit with the demo's files: {sgz + uses:,} B gz)")
-        cverdict = "ok" if cgz <= CARD_PAGE_GZ_BUDGET else "OVER BUDGET"
-        print(f"{'card page':<10} raw {craw:>9,}           gz {cgz:>9,} / {CARD_PAGE_GZ_BUDGET // 1024} KB {cverdict}")
         print()
-        ok &= sgz <= SHARE_GZ_BUDGET and cgz <= CARD_PAGE_GZ_BUDGET
+        ok &= sgz <= SHARE_GZ_BUDGET
     for kind, budget in (("wasm+glue", WASM_GZ_BUDGET), ("js+css", JS_CSS_GZ_BUDGET),
                          ("art wasm", ART_WASM_GZ_BUDGET), ("studio", STUDIO_GZ_BUDGET),
                          ("live", LIVE_GZ_BUDGET), ("boot", BOOT_GZ_BUDGET),
