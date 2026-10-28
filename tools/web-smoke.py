@@ -4106,7 +4106,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_function("[...document.querySelectorAll('#st-look-formula option')].some(o => o.textContent == 'Scanlines')", timeout=20000)
     opts = page.eval_on_selector_all("#st-look-formula option", "els => els.map(e => [e.textContent, e.disabled, e.parentElement.label || ''])")
     names = [o[0] for o in opts]
-    looks = {"Scanlines", "Old TV", "Vignette", "Old photo", "Glitter", "Corner clock"}
+    looks = {"Scanlines", "Old TV", "Vignette", "Old photo", "Glitter"}
     check(names[0] == "None" and set(names[1:]) == looks and all(o[2] == "Bundled Formulas" and not o[1] for o in opts[1:])
           and page.locator("#st-look-blend, #st-look-amt").count() == 0,
           f"looks: Settings › Look lists the bundled Formulas that declare `look`, no blend or amount ({names})")

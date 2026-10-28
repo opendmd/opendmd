@@ -1,6 +1,5 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
--- bundle
 name "Clock"
 about "A clock face with hour and minute hands"
 -- Hands on a round dial; dx, dy: pixels from the middle

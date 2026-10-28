@@ -17,15 +17,16 @@ Formulas opens on the **Bundled** ones, the ten the panel comes with, and
 the formulas you've saved. Pick one to see it playing in the panel look,
 with its sliders if it has any. The bundled ten:
 
-- two clocks: **Big clock** and **Clock** (a dial with hands);
-- two screensavers: **Matrix** and **Starfield**;
-- six looks, which draw over whatever GIF plays (marked *look*; see
+- **Big clock**;
+- four screensavers: **Matrix**, **Starfield**, **Endless road** (a
+  synthwave drive) and **Time gate** (a swirling portal);
+- five looks, which draw over whatever GIF plays (marked *look*; see
   [Over a GIF](#over-a-gif)): **Scanlines**, **Old TV**, **Vignette**,
-  **Old photo**, **Glitter** and **Corner clock**.
+  **Old photo** and **Glitter**.
 
 **More Formulas** opens the online [formula gallery](#the-formula-gallery):
-every Formula OpenDMD has made (tunnels, rotozooms, plasma, fire, rain, an
-endless road and more) and the ones people have shared. Open one there and
+every Formula OpenDMD has made (tunnels, rotozooms, plasma, fire, rain,
+clocks and more) and the ones people have shared. Open one there and
 press **Open on my display**: it opens in your panel's editor, where you
 can play it, add it to a playlist or save it (it is then under *Your
 formulas* in that browser).

@@ -174,14 +174,15 @@ fn the_examples_are_light_enough_for_the_panel() {
     let all = crate::examples();
     assert!(all.len() >= 33, "{} examples", all.len());
     // The ten the web app (and so the panel) ships: the owner's (formula-apps
-    // §3.1): six overlays, two clocks, two screensavers. The rest are the
-    // site gallery's.
+    // §3.1, then Endless road and Time gate in for Clock and Corner clock):
+    // five overlays, Big clock, four screensavers. The rest are the site
+    // gallery's.
     let bundled: Vec<&str> = all.iter().filter(|e| e.bundled).map(|e| e.name.as_str()).collect();
     assert_eq!(
         bundled,
         [
-            "Big clock", "Clock", "Corner clock", "Glitter", "Matrix", "Old photo", "Old TV",
-            "Scanlines", "Starfield", "Vignette"
+            "Big clock", "Endless road", "Glitter", "Matrix", "Old photo", "Old TV",
+            "Scanlines", "Starfield", "Time gate", "Vignette"
         ]
     );
     for e in &all {

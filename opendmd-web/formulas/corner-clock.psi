@@ -1,6 +1,5 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
--- bundle
 name "Corner clock"
 about "The hour and minute as bars in a corner, over the GIF"
 look

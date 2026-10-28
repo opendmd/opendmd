@@ -1,5 +1,6 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
+-- bundle
 name "Time gate"
 about "The Chrono Trigger time gate: star rings rushing out over streaks warping on Mode 7 zoom tables"
 control breathing = 0.5 "Breathing"
