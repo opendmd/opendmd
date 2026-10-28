@@ -63,6 +63,134 @@ const ROTOZOOM_FLOOR_EX: &str = "loop 9.6\nfps 100\n-- Rotozoom floor: Mode 7 as
 const ROAD_EX: &str = "loop forever\nfps 100\n-- Endless road: an OutRun drive into a synthwave sunset. Bends and hills\n-- come from noise along the distance driven, which grows without end, so\n-- the track doesn't repeat; each time it plays it starts somewhere else.\n-- The colours, 0 to 18: the mountains and the car's glass and tyres\n-- (0), the road's stripes (1, 2), the kerbs' (3, 4), the verge's (5, 6),\n-- the sun from the top down (7 to 9), the car's body and tail lights\n-- (10, 11), then the sky from the top down to the horizon (12 to 18)\npalette road = #000, #400032, #800064, #e4cf00, #f00, #3f0000, #7f0000,\n  #e4cf00, #ff7800, #ff2800, #bf0000, #ff5000,\n  #1478ff, #2850ff, #3c28ff, #5000ff, #7b00f2, #a700e4, #d300d6\n-- The car, from behind: body (4), glass and tyres (5), tail lights (6)\nsprite car {\n  key . 0, R 4, D 5, L 6\n  ........RRRRRRRRRR........\n  .......RDDDDDDDDDDR.......\n  ......RDDDDDDDDDDDDR......\n  ...RRRRRRRRRRRRRRRRRRRR...\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  DDDDDDDDDDDDDDDDDDDDDDDDDD\n}\n-- The mountains: 19 spans (row, from, to)\ntable MY = 19,19,19,20,20,20,21,21,21,22,22,22,23,23,23,24,24,25,26\ntable MA = -1,57,118,0,59,120,2,61,122,4,62,123,5,64,125,7,66,67,69\ntable MB = 17,83,134,16,81,132,14,79,130,12,78,129,11,76,127,9,74,73,71\n-- Road rows py 0 to 18: depth/2 in bends (ZH), depth in stripes (ZS),\n-- half width in pixels (HW); the sun's rows and half widths\ntable ZH = .0058,.0061,.0064,.0068,.0072,.0077,.0083,.009,.0098,.011,.012,.013,.015,.017,.02,.025,.032,.045,.075\ntable ZS = .77,.81,.86,.91,.97,1.03,1.11,1.2,1.3,1.43,1.58,1.76,2,2.31,2.73,3.33,4.29,6,10\ntable HW = 50.7,48.1,45.5,42.9,40.3,37.7,35.1,32.5,29.9,27.3,24.7,22.1,19.5,16.9,14.3,11.7,9.1,6.5,3.9\ntable UY = 20,21,23,24,25,26,27,28,29,30,31\ntable UC = 7.2,7.6,8,8,7.9,7.6,7.2,6.7,6,5,3.5\nframe {\n  u = t*0.15 + seed*1000                    -- distance driven, in bends\n  h0 = noise(u, 0, 0); h1 = noise(u + 0.03, 0, 0)    -- heading here, just ahead\n  v0 = noise(u, 5, 0)                       -- height here, and its slope\n  dv = (noise(u + 0.01, 5, 0) - v0)*100\n  cx = 50.5 + (h1 - h0)*80                  -- the car's left edge: it slides out in bends\n  mx = (0.5 - h0)*60; sunx = 64 + mx        -- the sky turns with the road\n}\ndraw {\n  for k < 19 {\n    my = MY[k]\n    line(MA[k] + mx, my, MB[k] + mx, my, .35)\n  }\n  for k < 11 {\n    uy = UY[k]; uc = UC[k]\n    line(sunx - uc, uy, sunx + uc, uy, .2)\n  }\n}\n-- each row looks ahead: how far the road bends there, and how far a hill\n-- lifts or hides it (a crest moves rows to where the road is out of sight)\nzp = ZH[py]\nun = u + zp\nq = py - clamp((noise(un, 5, 0) - v0 - zp*dv)*ZS[py]*200, -6, 2)\nhw = HW[q]\nalt = frac(t*10 + ZS[q]) < 0.5             -- light or dark stripe: 10 a second\nadx = abs(px - (64 + (noise(un, 0, 0) - h0)*2000))\n-- 0 road, 1 kerb, 2 verge or sky; drawn: 3 the sun, 5 the mountains,\n-- 4 to 6 the car\nm = max(max((adx >= hw) + (adx >= hw*1.2), ink*16), car[px - cx, ty - 23])\n-- its colour, i/18 for colour i: the stripes', the sky's and the sun's by row\npal(road, pick(m, (1 + alt)/18, (3 + alt)/18,\n                  (py < 19 ? 5 + alt : floor(28.44 - py*.515))/18,\n                  (py < 23 ? 9 : py < 27 ? 8 : 7)/18, 10/18, 0, 11/18))";
 const CUBE_EX: &str = "loop 4.8\nfps 100\n-- Wireframe cube: turning about two axes and swinging across; the near\n-- edges brighter. The colour is the last line's #40c0ff\n-- a: size\ntable V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1\ntable E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7\nframe {\n  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)\n  size = 34 + a*28; mid = 64 + sa*40\n}\ndraw {\n  for e < 12 {\n    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners\n    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size\n    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size\n    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned\n    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb\n    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),\n         clamp(0.594 - zb/148, 0.156, 1), clamp(0.594 - zd/148, 0.156, 1))\n  }\n}\n#40c0ff * ink";
 
+/// The bundled files as they ship (roadprobe: Endless road's cost on the
+/// panel, against Time gate's).
+const ROAD_FILE: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
+const TIME_GATE_FILE: &str = include_str!("../../opendmd-web/formulas/time-gate.psi");
+
+/// Endless road as bundled and with one suspect taken out at a time
+/// (roadprobe): the row noises, the car sprite, the palette and pick, the
+/// draw stage, and all four (the rows' floor).
+fn road_variants() -> Vec<(&'static str, String)> {
+    let src = ROAD_FILE;
+    let colour = src.find("pal(road, pick(m,").unwrap_or(src.len());
+    let rows = src.find("-- each row looks").unwrap_or(0);
+    let draw = src.find("draw {").unwrap_or(rows);
+    let no_noise = |s: &str| s.replace("noise(un, 5, 0)", "v0").replace("noise(un, 0, 0)", "h0");
+    let no_car = |s: &str| s.replace("car[px - cx, ty - 23]", "0");
+    let no_draw = |s: &str| format!("{}{}", &s[..draw], s[rows..].replace("ink*16", "0"));
+    let gray = |s: &str| match s.find("pal(road, pick(m,") {
+        Some(i) => format!("{}gray(m/6)\n", &s[..i]),
+        None => s.to_string(),
+    };
+    vec![
+        ("Endless road (bundled)", src.to_string()),
+        ("road: no row noise", no_noise(src)),
+        ("road: no car", no_car(src)),
+        ("road: gray(m/6), no pal or pick", format!("{}gray(m/6)\n", &src[..colour])),
+        ("road: gray(pick), no pal", src.replace("pal(road, pick(", "gray(pick(")),
+        ("road: no draw", no_draw(src)),
+        ("road: floor (none of the four)", gray(&no_car(&no_noise(&no_draw(src))))),
+    ]
+}
+
+/// The player's own frames of a Formula, as the main loop times them
+/// (roadprobe): where a 10 ms frame's time goes on the panel, which the
+/// boot-time rows cannot see (the pacer's waits, the loop's own work, the
+/// wake). The main loop calls [`play::note`] for each frame of a Formula on
+/// its schedule; a CPU0 task appends a line a [`play::EVERY`] to the report.
+pub mod play {
+    use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+    use std::time::Duration;
+
+    /// The report line's period.
+    pub const EVERY: Duration = Duration::from_secs(10);
+    /// How long the lines go on after the probe (then the task ends).
+    const FOR: Duration = Duration::from_secs(40 * 60);
+
+    /// Phases: wake (the sleep ending late), other (before the tick), start
+    /// (the tick's start past the frame's due time), tick (the engine: the
+    /// render), blit (less its wait), wait (the pacer), post (the blit's end
+    /// to the judgment).
+    pub const PHASES: [&str; 7] = ["wake", "other", "start", "tick", "blit", "wait", "post"];
+    /// Work (start + tick + blit + wait + post) at or over these µs.
+    const OVER: [u32; 5] = [8_000, 9_000, 10_000, 11_000, 12_000];
+
+    static N: AtomicU32 = AtomicU32::new(0);
+    static SUM: [AtomicU32; 7] = [const { AtomicU32::new(0) }; 7];
+    static MAX: [AtomicU32; 7] = [const { AtomicU32::new(0) }; 7];
+    static COUNTS: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
+    static OVERS: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
+
+    /// One Formula frame (main task only).
+    pub fn note(p: [u32; 7], missed: bool, excused: bool, stretched: bool) {
+        N.fetch_add(1, Relaxed);
+        for (i, v) in p.iter().enumerate() {
+            SUM[i].fetch_add(*v, Relaxed);
+            MAX[i].fetch_max(*v, Relaxed);
+        }
+        for (c, b) in COUNTS.iter().zip([missed, excused, stretched]) {
+            c.fetch_add(u32::from(b), Relaxed);
+        }
+        let work = p[2] + p[3] + p[4] + p[5] + p[6];
+        for (c, o) in OVERS.iter().zip(OVER) {
+            c.fetch_add(u32::from(work >= o), Relaxed);
+        }
+    }
+
+    fn line() -> Option<String> {
+        let n = N.swap(0, Relaxed);
+        let sums: [u32; 7] = core::array::from_fn(|i| SUM[i].swap(0, Relaxed));
+        let maxes: [u32; 7] = core::array::from_fn(|i| MAX[i].swap(0, Relaxed));
+        let c: [u32; 3] = core::array::from_fn(|i| COUNTS[i].swap(0, Relaxed));
+        let o: [u32; 5] = core::array::from_fn(|i| OVERS[i].swap(0, Relaxed));
+        if n == 0 {
+            return None;
+        }
+        let (us, ms, asked, _) = opendmd_core::fx_psi::stats();
+        let mut s = format!(
+            "psi-probe: play {} s: {n} formula frames, misses {}, late excused {}, stretched {}, governor {us} us mean -> {ms} ms frames (asked {asked}); mean/max us:",
+            // SAFETY: a clock read.
+            unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000,
+            c[0],
+            c[1],
+            c[2]
+        );
+        for (i, name) in PHASES.iter().enumerate() {
+            s.push_str(&format!(" {name} {}/{}", sums[i] / n, maxes[i]));
+        }
+        s.push_str(&format!(
+            "; work >=8 ms {} >=9 {} >=10 {} >=11 {} >=12 {}",
+            o[0], o[1], o[2], o[3], o[4]
+        ));
+        Some(s)
+    }
+
+    /// Append a line every [`EVERY`] for [`FOR`] (a CPU0 task).
+    pub fn start(path: String) {
+        let r = crate::task::spawn_core0(
+            b"psi_play\0",
+            6 * 1024,
+            1,
+            Box::new(move || {
+                let t0 = std::time::Instant::now();
+                while t0.elapsed() < FOR {
+                    std::thread::sleep(EVERY);
+                    let Some(l) = line() else { continue };
+                    log::info!("{l}");
+                    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&path) {
+                        use std::io::Write;
+                        let _ = writeln!(f, "{l}");
+                    }
+                }
+            }),
+        );
+        if let Err(e) = r {
+            log::error!("psi-probe: play lines: no task ({e})");
+        }
+    }
+}
+
 /// The report's file name at the card's root.
 pub const REPORT_NAME: &str = "filelist-psi-probe.txt";
 
@@ -1024,11 +1152,21 @@ pub fn run(root: &str) {
             ("Tunnel", TUNNEL_EX, ""),
             ("Rotozoom", ROTOZOOM_EX, ""),
             ("Rotozoom floor", ROTOZOOM_FLOOR_EX, ""),
-            ("Endless road", ROAD_EX, ""),
         ],
         "",
         &mut canvas,
     );
+    // roadprobe: the bundled Endless road, its suspects one at a time, and
+    // Time gate as bundled (the references are the rows above).
+    {
+        let mut list: Vec<(&str, String, &str)> =
+            road_variants().into_iter().map(|(n, s)| (n, s, "")).collect();
+        list.push(("Time gate (bundled)", TIME_GATE_FILE.to_string(), ""));
+        let refs: Vec<(&str, &str, &str)> = list.iter().map(|(n, s, o)| (*n, s.as_str(), *o)).collect();
+        effects(&refs, "", &mut canvas);
+        split("Endless road (bundled)", ROAD_FILE, true, &mut canvas);
+        split("Time gate (bundled)", TIME_GATE_FILE, true, &mut canvas);
+    }
     say!(info, "psi-probe: main stack {} B unused after the examples as effects (the play path; compiles on the formula stack)", stack_unused());
     // The firmware's own gate again.
     fx_psi::set_still_gate(Some(crate::still_gate));
@@ -1477,4 +1615,5 @@ pub fn run(root: &str) {
         start.elapsed().as_millis()
     );
     *REPORT.lock().unwrap() = None;
+    play::start(format!("{root}/{REPORT_NAME}"));
 }
