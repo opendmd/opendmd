@@ -383,24 +383,31 @@ pub fn card_path(title: &str, subtitle: &str) -> String {
 
 /// What a virtual path shows, for `now_playing.title` and the Library: a
 /// card's title, "Power on", "Clock", a text's message, or a Formula's name
-/// (`&name=` on its path, as a playlist entry has it; else "Formula").
-/// `None` for anything else.
+/// (its `name "…"` line; else `&name=` on its path, as an older playlist
+/// entry has it; else "Formula"). `None` for anything else.
 pub fn title(path: &str) -> Option<String> {
     // Without compiling it (2-3 ms and 10 KB on the device), and in builds
     // without Psi (the web app's Recently played). The player ignores `name`.
     if is_formula(path) {
-        let name = path[FORMULA.len()..]
-            .trim_start_matches('?')
-            .split('&')
-            .find_map(|kv| kv.strip_prefix("name="))
-            .map(|v| url_decode(v.as_bytes()))
-            .map(|n| {
+        let q = || path[FORMULA.len()..].trim_start_matches('?').split('&');
+        let clean = |n: String| {
+            Some(
                 n.chars()
                     .filter(|c| !c.is_control())
                     .take(MAX_FORMULA_NAME)
-                    .collect::<String>()
-            })
-            .filter(|n| !n.trim().is_empty());
+                    .collect::<String>(),
+            )
+            .filter(|n| !n.trim().is_empty())
+        };
+        let name = q()
+            .find_map(|kv| kv.strip_prefix("src="))
+            .and_then(|v| declared_name(&url_decode(v.as_bytes())))
+            .and_then(clean)
+            .or_else(|| {
+                q().find_map(|kv| kv.strip_prefix("name="))
+                    .map(|v| url_decode(v.as_bytes()))
+                    .and_then(clean)
+            });
         return Some(name.unwrap_or_else(|| "Formula".to_string()));
     }
     match parse(path)? {
@@ -410,6 +417,56 @@ pub fn title(path: &str) -> Option<String> {
         Spec::Text(t) => Some(t.msg.iter().map(|&b| b as char).collect()),
         Spec::Fx(f) => Some(f.title().to_string()),
         Spec::Boot(_) => Some("Startup".to_string()),
+    }
+}
+
+/// A formula's `name "…"` line, read from its text without compiling it:
+/// the statements at its top whose first word is a declaration (`psi`,
+/// `name`, `about`, `control`, `look`; the compiler allows them nowhere
+/// else), past blank lines, `;` and comments. Text in quotes may hold `;`
+/// and `--`.
+fn declared_name(src: &str) -> Option<String> {
+    let b = src.as_bytes();
+    let mut i = 0;
+    loop {
+        while i < b.len() {
+            match b[i] {
+                b' ' | b'\t' | b'\r' | b'\n' | b';' => i += 1,
+                b'-' | b'/' if b.get(i + 1) == Some(&b[i]) => {
+                    while i < b.len() && b[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let start = i;
+        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+            i += 1;
+        }
+        let word = &src[start..i];
+        if !matches!(word, "psi" | "name" | "about" | "control" | "look") {
+            return None;
+        }
+        while b.get(i) == Some(&b' ') || b.get(i) == Some(&b'\t') {
+            i += 1;
+        }
+        if word == "name" {
+            // `name = …` is a value of the formula's: no declarations follow.
+            let rest = src.get(i + 1..)?;
+            return (b.get(i) == Some(&b'"'))
+                .then(|| rest.split(['"', '\n']).next().map(str::to_string))
+                .flatten();
+        }
+        if b.get(i) == Some(&b'=') {
+            return None;
+        }
+        // To the statement's end, outside quotes.
+        let mut quote = false;
+        while i < b.len() && b[i] != b'\n' && (quote || b[i] != b';') {
+            quote ^= b[i] == b'"';
+            i += 1;
+        }
     }
 }
 
@@ -1507,5 +1564,31 @@ mod tests {
         let named = crate::fx_psi::path(src, "a=0.5&name=Rainbow+%26+co");
         assert_eq!(title(&named).as_deref(), Some("Rainbow & co"));
         assert_eq!(frames(&plain), frames(&named));
+    }
+
+    #[test]
+    fn a_formulas_title_is_its_name_line() {
+        let p = |src: &str, rest: &str| format!("{FORMULA}?src={src}{rest}");
+        assert_eq!(title(&p("name+%22Big+clock%22%3B+gray(x)", "")).as_deref(), Some("Big clock"));
+        // Before `&name=`, which older lines carry.
+        assert_eq!(title(&p("name+%22Mine%22%3B+gray(x)", "&name=Old")).as_deref(), Some("Mine"));
+        assert_eq!(title(&p("gray(x)", "&name=Old")).as_deref(), Some("Old"));
+        // Below other declarations, with `;` and `--` in their quotes.
+        let src = "psi 1; control k = 0.5 \"a; b -- c\"; about \"x;y\"; name \"Ring; road\"; gray(k)";
+        let enc: String = src.bytes().map(|c| match c {
+            b' ' => "+".to_string(),
+            b'"' | b';' | b'&' | b'+' | b'%' => format!("%{c:02X}"),
+            _ => (c as char).to_string(),
+        }).collect();
+        assert_eq!(title(&p(&enc, "")).as_deref(), Some("Ring; road"));
+        // Not a declaration: below the formula's lines, a value, a comment.
+        assert_eq!(title(&p("gray(x)%3B+name+%22No%22", "")).as_deref(), Some("Formula"));
+        assert_eq!(title(&p("name+%3D+3%3B+gray(name)", "")).as_deref(), Some("Formula"));
+        assert_eq!(title(&p("--+name+%22No%22%0Agray(x)", "")).as_deref(), Some("Formula"));
+        // Empty or only spaces: the next answer.
+        assert_eq!(title(&p("name+%22+%22%3B+gray(x)", "&name=Kept")).as_deref(), Some("Kept"));
+        // Cut to 60 characters.
+        let long = p(&format!("name+%22{}%22%3B+gray(x)", "é".repeat(80)), "");
+        assert_eq!(title(&long).unwrap(), "é".repeat(MAX_FORMULA_NAME));
     }
 }

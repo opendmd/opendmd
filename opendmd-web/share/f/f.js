@@ -91,7 +91,7 @@ async function start() {
 
   // The links: this page, the demo, the display (the device's own share
   // links open the formula in its editor: `#formula=…`).
-  const own = () => link(f, here(), mask);
+  const own = () => link(f, here(), ctl);
   const hash = () => own().slice(here().length);
   let qrFor = '';
   function links() {

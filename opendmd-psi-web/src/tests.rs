@@ -100,31 +100,55 @@ fn formulas() {
         "draws over what is under, two layers"
     );
 
-    // Any formula as a look: the text, and what it is.
+    // A look is the formula's own `look` line: set, changed and taken out
+    // as text, then drawn as the panel draws it (asLook).
     let s = look("hsv(x, 1, 1)", "screen", 40);
+    assert_eq!(s, "look screen 40\nhsv(x, 1, 1)");
     assert_eq!(
-        s,
+        as_look(&s),
         "part look {\n  hsv(x, 1, 1)\n}\nlayer screen { look(x, y, 0.4) }"
     );
     assert_eq!((info()[5] & 32, info()[7]), (32, 1));
-    assert_eq!(look("gray(ul)", "over", 100), "gray(ul)");
-    // A formula's own `look` line is left out of the part (the look is
-    // the blend and amount asked for here).
-    assert_eq!(
-        look("look multiply 20\nhsv(x, 1, 1)", "screen", 40),
-        "part look {\n  hsv(x, 1, 1)\n}\nlayer screen { look(x, y, 0.4) }"
-    );
+    assert_eq!(look("gray(ul)", "over", 100), "look\ngray(ul)");
+    assert_eq!(as_look("look\ngray(ul)"), "look\ngray(ul)");
+    assert_eq!(as_look("gray(ul)"), "gray(ul)");
+    assert_eq!(look("look multiply 20\nhsv(x, 1, 1)", "over", 30), "look over 30\nhsv(x, 1, 1)");
+    assert_eq!(look("look multiply 20\nhsv(x, 1, 1)", "", 0), "hsv(x, 1, 1)");
+    assert_eq!(look("gray(x)", "lighten", 40), "");
+    // The other lines, in their places among the declarations.
+    let d = declare("-- hi\nloop 4\ngray(x)", "name", 0, "name \"Grey\"");
+    assert_eq!(d, "name \"Grey\"\n-- hi\nloop 4\ngray(x)");
+    let d = declare(&look(&d, "add", 50), "control", 0, "control k = 0.5");
+    assert_eq!(d, "name \"Grey\"\ncontrol k = 0.5\nlook add 50\n-- hi\nloop 4\ngray(x)");
+    let d = declare(&d, "about", 0, "about \"A grey ramp\"");
+    assert_eq!(declare(&d, "control", 1, "control m = a, b"), "name \"Grey\"\nabout \"A grey ramp\"\ncontrol k = 0.5\ncontrol m = a, b\nlook add 50\n-- hi\nloop 4\ngray(x)");
+    assert_eq!(declare(&d, "control", 0, ""), "name \"Grey\"\nabout \"A grey ramp\"\nlook add 50\n-- hi\nloop 4\ngray(x)");
+    assert_eq!(declare(&d, "name", 0, "name \"G\""), d.replace("Grey\"", "G\""));
+    // `psi 1` stays first; `name = …` is a value, not a declaration.
+    assert_eq!(declare("psi 1\ngray(x)", "name", 0, "name \"P\""), "psi 1\nname \"P\"\ngray(x)");
+    assert_eq!(declare("name = 3\ngray(name)", "name", 0, ""), "name = 3\ngray(name)");
+    assert_eq!(declare("look", "about", 0, "about \"x\""), "about \"x\"\nlook");
+    // A path's text, its statements `; `-joined (a look read from a path).
+    let p = "name \"Go; ne\"; look add 25; loop 4; gray(x)";
+    assert_eq!(declare(p, "name", 0, "name \"G\""), "name \"G\"; look add 25; loop 4; gray(x)");
+    assert_eq!(declare(p, "name", 0, ""), "look add 25; loop 4; gray(x)");
+    assert_eq!(declare(p, "about", 0, "about \"x\""), "name \"Go; ne\"; about \"x\"; look add 25; loop 4; gray(x)");
+    assert_eq!(look(p, "screen", 40), "name \"Go; ne\"; look screen 40; loop 4; gray(x)");
+    assert_eq!(look(p, "", 0), "name \"Go; ne\"; loop 4; gray(x)");
+    assert_eq!(look("name \"x\"; gray(x)", "over", 100), "name \"x\"; look; gray(x)");
+    // A comment between declarations, one after a declaration.
+    assert_eq!(declare("name \"a\" -- n; o\n-- c\nlook\ngray(x)", "control", 0, "control k"), "name \"a\" -- n; o\ncontrol k\n-- c\nlook\ngray(x)");
 
     // What a formula declares, for the page's controls.
     assert_eq!(
         controls("name \"Zoom é\"\ncontrol zoom 1..4 = 2.5 \"Zoom\"\ncontrol wob = gentle, strong, off\nlook screen 40\ngray(zoom/4 + wob*0.1 + c)"),
-        r#"{"name":"Zoom é","about":null,"look":["screen",40],"controls":[{"slot":"a","name":"zoom","label":"Zoom","kind":"slider","lo":1,"hi":4,"default":2.5,"declared":true},{"slot":"b","name":"wob","label":"wob","kind":"choice","words":["gentle","strong","off"],"default":0,"declared":true},{"slot":"c","name":"c","label":"c","kind":"slider","lo":0,"hi":1,"default":0,"declared":false}]}"#
+        r#"{"name":"Zoom é","about":null,"look":["screen",40],"own":2,"controls":[{"slot":"a","name":"zoom","label":"Zoom","kind":"slider","lo":1,"hi":4,"default":2.5,"declared":true},{"slot":"b","name":"wob","label":"wob","kind":"choice","words":["gentle","strong","off"],"default":0,"declared":true},{"slot":"c","name":"c","label":"c","kind":"slider","lo":0,"hi":1,"default":0,"declared":false}]}"#
     );
     assert_eq!(
         controls("control k -0.5..0.3 = -0.25\ngray(x)"),
-        r#"{"name":null,"about":null,"look":null,"controls":[{"slot":"a","name":"k","label":"k","kind":"slider","lo":-0.5,"hi":0.3,"default":-0.25,"declared":true}]}"#
+        r#"{"name":null,"about":null,"look":null,"own":1,"controls":[{"slot":"a","name":"k","label":"k","kind":"slider","lo":-0.5,"hi":0.3,"default":-0.25,"declared":true}]}"#
     );
-    assert_eq!(controls("gray(x)"), r#"{"name":null,"about":null,"look":null,"controls":[]}"#);
+    assert_eq!(controls("gray(x)"), r#"{"name":null,"about":null,"look":null,"own":0,"controls":[]}"#);
     assert_eq!(controls("gray(nope)"), "");
     // (The formula drawn is unchanged by it.)
     assert!(compile("control k 0..1 = 0.25\ngray(k)"));
@@ -342,9 +366,10 @@ fn every_example_as_a_look() {
             &[("screen", 40), ("over", 30)]
         };
         let fit = tries.iter().find(|&&(b, k)| {
-            let s = look(&e.src, b, k);
+            // The line set, then the look the panel draws for it.
+            let s = as_look(&look(&e.src, b, k));
             // A formula with layers of its own goes over only.
-            if s.is_empty() && b == "screen" && error().contains("can only go over") {
+            if s.is_empty() && b == "screen" && error().contains("goes over the GIF as a look") {
                 return false;
             }
             assert!(!s.is_empty(), "{} {b} {k}: {}", e.name, error());
@@ -355,11 +380,12 @@ fn every_example_as_a_look() {
                 e.name
             );
             if over {
-                assert_eq!(s, e.src, "{}: today's look, unchanged", e.name);
+                assert_eq!(s, look(&e.src, b, k), "{}: the formula itself", e.name);
             } else {
-                assert!(
-                    s.starts_with("part look {") || s.starts_with("loop "),
-                    "{}",
+                assert_eq!(
+                    s,
+                    opendmd_psi::look::compose(&e.src, b, k).unwrap(),
+                    "{}: the line is the composition",
                     e.name
                 );
             }
@@ -372,14 +398,8 @@ fn every_example_as_a_look() {
     }
     assert_eq!(heavy, TOO_HEAVY, "chosen: {chosen:?}");
     // Another blend for a formula with layers is the compiler's error.
-    assert!(look("layer multiply { gray(0.5) }", "screen", 40).is_empty());
-    assert!(error().contains("can only go over"), "{}", error());
-    assert!(look("gray(x)", "lighten", 40).is_empty());
-    assert!(
-        error().starts_with("a look's blend is one of over"),
-        "{}",
-        error()
-    );
+    assert!(as_look(&look("layer multiply { gray(0.5) }", "screen", 40)).is_empty());
+    assert!(error().contains("goes over the GIF as a look"), "{}", error());
 }
 
 /// Every example's frames at its defaults, as they were before the
@@ -557,6 +577,14 @@ fn the_web_apps_compact_is_the_compilers() {
     ] {
         srcs.push(s.to_string());
     }
+    // Over the panel's 2,048 B with its `about` line, under it without:
+    // the path leaves the line out (`;` and `--` in another's quotes).
+    let body = format!("gray({}1)", "x*".repeat(970));
+    let about = format!("about \"{}\"", "A".repeat(110));
+    srcs.push(format!("name \"Long; -- one\"\n{about}\ncontrol k = 0.5 \"x; y\"\n{body}"));
+    srcs.push(format!("{about}\n{body}"));
+    // Over it either way: still without.
+    srcs.push(format!("{about}\n{body}{}", "+1".repeat(100)));
     let input: String = {
         let mut j = String::from("[");
         for (k, s) in srcs.iter().enumerate() {
@@ -580,8 +608,10 @@ fn the_web_apps_compact_is_the_compilers() {
         j
     };
     let kit = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/www/js/psikit.js");
+    // Each formula's compact text, then its path (psikit `path`, what
+    // psishow's fpath sends).
     let script = format!(
-        "import {{ compact }} from 'file://{kit}';\nlet s = ''; process.stdin.on('data', (d) => s += d); process.stdin.on('end', () => {{ for (const x of JSON.parse(s)) console.log(JSON.stringify(compact(x))); }});"
+        "import {{ compact, path }} from 'file://{kit}';\nlet s = ''; process.stdin.on('data', (d) => s += d); process.stdin.on('end', () => {{ for (const x of JSON.parse(s)) console.log(JSON.stringify(compact(x)) + '\\n' + path({{ src: x }})); }});"
     );
     let mut child = std::process::Command::new("node")
         .args(["--input-type=module", "-e", &script])
@@ -594,8 +624,35 @@ fn the_web_apps_compact_is_the_compilers() {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     let got: Vec<String> = String::from_utf8(out.stdout).unwrap().lines().map(String::from).collect();
-    assert_eq!(got.len(), srcs.len());
-    for (src, g) in srcs.iter().zip(got) {
+    assert_eq!(got.len(), srcs.len() * 2);
+    // fx_psi's path: the compact text, lightly encoded; over 2,048 B
+    // without its `about` line.
+    let enc = |c: &str| {
+        let mut p = String::from("@formula?src=");
+        for b in c.bytes() {
+            match b {
+                b' ' => p.push('+'),
+                b'%' | b'&' | b'+' | b'#' | b'?' => p.push_str(&format!("%{b:02X}")),
+                0x21..=0x7e => p.push(b as char),
+                _ => p.push_str(&format!("%{b:02X}")),
+            }
+        }
+        p
+    };
+    let mut dropped = 0;
+    for (src, g) in srcs.iter().zip(got.chunks(2)) {
+        let full = enc(&opendmd_psi::compact(src));
+        let want = if full.len() > 2048 {
+            dropped += 1;
+            enc(&opendmd_psi::compact(&opendmd_psi::look::declare(src, "about", 0, "")))
+        } else {
+            full
+        };
+        assert_eq!(g[1], want, "path of {src:?}");
+        assert!(want.len() <= 2048 || !src.starts_with("name"), "{}", want.len());
+    }
+    assert_eq!(dropped, 3);
+    for (src, g) in srcs.iter().zip(got.into_iter().step_by(2)) {
         let want = opendmd_psi::compact(src);
         let mut w = String::from("\"");
         for c in want.chars() {

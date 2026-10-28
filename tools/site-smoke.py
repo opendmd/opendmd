@@ -370,21 +370,22 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     after = rows_ratio(page)
     check(abs(after / before - 1) > 0.2 and page.evaluate("import('./js/state.js').then(m => m.app.status.formula_look?.error ?? null)") is None,
           f"demo settings: the Scanlines look is drawn over the panel (even/odd rows {before:.2f} -> {after:.2f})")
-    # Any Formula as the look: Plasma covers the GIF, so it starts at Screen 40%.
+    # A Formula's own `look` line on the demo's panel: Plasma with `look
+    # screen 40` (as the Formula settings sheet writes it), its path sent as
+    # the look; the demo composes it as the player does (pkg-psi asLook).
     lum = lambda: page.evaluate("""() => { const c = document.querySelector('#now-panel'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
         let n = 0; for (let i = 0; i < d.length; i += 4) n += d[i] + d[i+1] + d[i+2]; return n; }""")
     l0 = lum()
-    tab("look")
-    page.evaluate("document.querySelectorAll('#st-tab-look .tick').forEach(t => t.textContent = '')")
-    page.select_option("#st-look-formula", label="Plasma")
-    saved("#st-look-formula")
-    mix = (page.input_value("#st-look-blend"), page.input_value("#st-look-amt"))
-    cfg = page.evaluate("import('./js/state.js').then(m => [m.app.config.look_formula_name, m.app.config.look_blend, m.app.config.look_amount, m.app.status.formula_look?.error ?? null])")
+    cfg = page.evaluate("""async () => { const { app } = await import('./js/state.js'), L = await import('./js/looks.js'), m = await L.psi();
+        const ex = await (await fetch('formulas.json')).json(), f = L.set(m, ex.find((x) => x.name == 'Plasma'), 'screen', 40);
+        await app.src.putConfig({ look_formula: L.path(m, f) }); const c = await app.refreshConfig();
+        return [c.look_formula.includes('look+screen+40;'), 'look_blend' in c || 'look_formula_name' in c]; }""")
     now()
     page.wait_for_timeout(800)
     l1, ratio = lum(), rows_ratio(page)
-    check(mix == ("screen", "40") and cfg == ["Plasma", "screen", 40, None] and l1 > 1.2 * l0 and abs(ratio - 1) < 0.15,
-          f"demo settings: Plasma screened at 40% over the panel ({mix}, {cfg}; brightness {l0:,} -> {l1:,}, even/odd rows {ratio:.2f})")
+    err = page.evaluate("import('./js/state.js').then(m => m.app.status.formula_look?.error ?? null)")
+    check(cfg == [True, False] and err is None and l1 > 1.2 * l0 and abs(ratio - 1) < 0.15,
+          f"demo settings: Plasma's `look screen 40` line drawn over the panel ({cfg}, {err}; brightness {l0:,} -> {l1:,}, even/odd rows {ratio:.2f})")
     page.screenshot(path=str(shots / "demo-look-plasma-laptop.png"))
     tab("look")
     page.click("#st-trans-preview")

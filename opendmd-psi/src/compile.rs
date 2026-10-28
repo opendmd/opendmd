@@ -648,7 +648,7 @@ fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Vec<Token>) -> usize
 /// Whether a line starts with a declaration (`name "…"`, `control …`; not
 /// `name = …`, an assignment): where text in quotes may be. The first word,
 /// past anything but letters and digits, then anything but `=`.
-fn declaration_line(line: &str) -> bool {
+pub(crate) fn declaration_line(line: &str) -> bool {
     let b = line.as_bytes();
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let Some(a) = b.iter().position(|&c| word(c)) else {
@@ -1828,6 +1828,9 @@ pub struct Declared {
     /// Each slot's control: its name, its label (inside the quotes) and,
     /// for a choice, the words (`gentle, strong, off`, as written).
     pub controls: [Option<DeclaredControl>; 3],
+    /// How many of them are the formula's own `control` lines (slots a, b,
+    /// c in order); the rest are its parts'.
+    pub own: u8,
 }
 
 /// A `control` line's pieces ([`Declared`]).
@@ -5171,6 +5174,7 @@ fn declarations(
     prog.meta = decl.meta;
     if let Some(d) = declared {
         *d = decl.text;
+        d.own = decl.own;
     }
     Ok(())
 }
