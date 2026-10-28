@@ -287,15 +287,13 @@ function build(root) {
   }
 
   // An animated GIF: decoded in slices, then the timeline.
-  // (Or a live effect from the Library's Effects tab, `from.fx` its path:
-  // one loop of it drawn by the art module's copy of the core's effects; or
-  // a formula's frames, `from.frames` {n, delay, cut, frame(i)}, drawn by
-  // js/formulas.js.)
+  // (Or a formula's frames, `from.frames` {n, delay, cut, frame(i)}, drawn
+  // by js/formulas.js.)
   async function loadGif(bytes, from, tok) {
     const t0 = performance.now();
     let st;
-    const fr = from.frames, drawn = fr || from.fx;
-    try { st = fr ? art.Studio.fromFrames(fr.frame(0), fr.n, fr.delay, fr.cut) : from.fx ? art.Studio.fromEffect(from.fx) : art.Studio.fromGif(bytes); } catch (e) {
+    const fr = from.frames, drawn = fr;
+    try { st = fr ? art.Studio.fromFrames(fr.frame(0), fr.n, fr.delay, fr.cut) : art.Studio.fromGif(bytes); } catch (e) {
       msg.textContent = `That GIF could not be read (${e.message || e})`;
       return false;
     }
@@ -889,15 +887,15 @@ function build(root) {
         S.searched = null;
         fold(false);
       }
-      if (from?.fx || from?.frames) {
-        // "Save as GIF…" in the Effects tab: a new GIF, named as the demo
-        // card's recordings are (platform FX, category Demoscene).
+      if (from?.frames) {
+        // A Formula's "Save as GIF…": a new GIF, named as the demo card's
+        // recordings are (platform FX, category Demoscene).
         if (app.device && !cats.includes('Demoscene')) cat.append(h('option', { value: 'Demoscene' }, 'Demoscene'));
         cat.value = 'Demoscene';
         author.value = '';
         const tok = ++S.tok;
         msg.textContent = 'Drawing…';
-        await loadGif(null, { fx: from.fx, frames: from.frames, title: from.title, platform: 'FX', label: from.title }, tok);
+        await loadGif(null, { frames: from.frames, title: from.title, platform: 'FX', label: from.title }, tok);
       } else if (from) {
         const e = from.e, fields = art.nameFields(from.path);
         if (cats.includes(e.category)) cat.value = e.category;

@@ -34,11 +34,10 @@ function favButton() {
   return b;
 }
 
-// Edit, as the Library's: a GIF (its original) or an effect's loop in
-// Create Art, a Formula in its editor (the saved or example one, else the
+// Edit, as the Library's: a GIF (its original) in Create Art, a Formula in its editor (the saved or example one, else the
 // panel's one-line text); [where, go], or null for what the panel draws.
 function editFor(p) {
-  const q = p?.startsWith('@fx:psi') && new URLSearchParams(p.slice(8));
+  const q = p?.startsWith('@formula?') && new URLSearchParams(p.slice(9));
   if (q) return q.get('src') && ['Formulas', async () => {
     const { fpath } = await import('./psishow.js');
     const f = [...[store.get('psi.mine', [])].flat(), ...await fetch('formulas.json').then((r) => r.json(), () => [])].find((x) => typeof x?.src == 'string' && fpath({ src: x.src }) == p.split('&')[0]);
@@ -46,8 +45,8 @@ function editFor(p) {
     for (const k of 'abc') if (q.has(k)) l.set(k, q.get(k));
     location.hash = l;
   }];
-  const fx = p?.startsWith('@fx:'), e = p && app.wasm.parsePath(p);
-  return (fx || p?.[0] == '/') && ['Create Art', () => { app.artFrom = fx ? { fx: p, title: label(e) } : { path: p, e }; app.go('create'); }];
+  const e = p?.[0] == '/' && app.wasm.parsePath(p);
+  return e && ['Create Art', () => { app.artFrom = { path: p, e }; app.go('create'); }];
 }
 function editLine() {
   const b = h('button.sm', { id: 'now-edit', hidden: true }), why = h('span.muted', { id: 'now-live' }), el = h('div', { style: 'margin-top:8px' }, b, why);
@@ -330,7 +329,7 @@ function mountLocal(el) {
     if (!list.length || tries > list.length) return;
     i = (i + 1) % list.length;
     const path = list[i];
-    if (path[0] !== '@' ? !src.files.has(path) : path.startsWith('@fx:psi')) return next(tries + 1);
+    if (path[0] !== '@' ? !src.files.has(path) : path.startsWith('@formula?')) return next(tries + 1);
     line.textContent = `· ${i + 1} of ${list.length}`;
     await show(path, 1);
   }

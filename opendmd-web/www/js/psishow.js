@@ -1,5 +1,5 @@
 // Formulas' "Show on panel" (imported by js/formulas.js on a device): the
-// formula becomes the panel's live item, `@fx:psi?src=…` (POST /api/play),
+// formula becomes the panel's live item, `@formula?src=…` (POST /api/play),
 // until the playlist moves on; changes made meanwhile follow it there as
 // live edits (`"live":true`: the device swaps the formula in place, or says
 // 409 once it has moved on), ~200 ms apart, one request at a time, the
@@ -16,7 +16,7 @@ import { compact } from './psikit.js';
 // controls and non-ASCII as %XX). The values set follow (`&a=`; a slot
 // left unset plays at the formula's declared default).
 export function fpath(f) {
-  let p = '@fx:psi?src=';
+  let p = '@formula?src=';
   for (const b of new TextEncoder().encode(compact(f.src))) {
     const c = String.fromCharCode(b);
     p += b == 32 ? '+' : b > 32 && b < 127 && !'%&+#?'.includes(c) ? c : '%' + (b < 16 ? '0' : '') + b.toString(16).toUpperCase();

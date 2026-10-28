@@ -19,7 +19,7 @@ export function bootCard(card) {
     if (note) q.set('note', note);
     box.hidden = false;
     pv ??= new PanelPreview(canvas);
-    // Drawn every 10 ms: played by the page's clock, as the effects are.
+    // Drawn every 10 ms: played by the page's clock, as Formulas are.
     if (await pv.show('@boot?' + q, (p) => app.previewBytes(p))) pv.syncTo(0, performance.now());
   }
   const head = h('h2', 'Start-up'), run = saver(head);
