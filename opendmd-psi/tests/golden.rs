@@ -2034,10 +2034,15 @@ fn draw_loops_as_lanes_are_a_turn_at_a_time() {
 }
 
 /// An example's source (`opendmd-web/formulas/<slug>.psi`, the file
-/// without its `-- author:`/`-- licence:`/`-- bundle` header).
-fn example(slug: &str) -> String {
-    let path = format!("{}/../opendmd-web/formulas/{slug}.psi", env!("CARGO_MANIFEST_DIR"));
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+/// without its `-- author:`/`-- licence:`/`-- bundle` header). Built in
+/// (`include_str!`): the wasm run has no file system.
+macro_rules! example {
+    ($slug:literal) => {
+        strip_header(include_str!(concat!("../../opendmd-web/formulas/", $slug, ".psi")))
+    };
+}
+
+fn strip_header(text: &str) -> String {
     text.split_inclusive('\n')
         .skip_while(|l| ["-- author:", "-- licence:", "-- license:", "-- bundle"].iter().any(|h| l.starts_with(h)))
         .collect()
@@ -2049,9 +2054,9 @@ fn the_drawing_examples_run_as_lanes() {
     let mut under = vec![0u8; W * H * 3];
     picture(&mut under);
     for (name, src, want) in [
-        ("Starfield", example("starfield"), 1),
-        ("Wireframe cube", example("wireframe-cube"), 0),
-        ("Endless road", example("endless-road"), 0),
+        ("Starfield", example!("starfield"), 1),
+        ("Wireframe cube", example!("wireframe-cube"), 0),
+        ("Endless road", example!("endless-road"), 0),
     ] {
         let p = compile(&src).unwrap();
         assert_eq!(p.lane_loops(), want, "{name}\n{}", p.listing());
