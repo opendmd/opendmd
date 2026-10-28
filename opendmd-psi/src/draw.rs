@@ -14,6 +14,7 @@
 use crate::fixed::{self, ONE};
 use crate::program::*;
 use crate::tables::Tables;
+use crate::vm::Scratch;
 use alloc::boxed::Box;
 
 /// Loop turns a frame (each `for` body run counts one, nested ones too):
@@ -76,10 +77,19 @@ impl Default for Ink {
     }
 }
 
-/// Run `prog`'s draw stage into `ink` (cleared first), the scalar slots as
-/// the per-frame steps left them.
+/// Run `prog`'s draw stage into `ink` (cleared first), the scalar slots
+/// (`s.sc`) as the per-frame steps left them. With `lanes`, a loop that
+/// [`Program::vector_loop`] allows runs as lanes ([`run_lanes`]; the lane
+/// registers are free before the rows); without, every loop a turn at a
+/// time (the same canvas and slots: the tests compare).
 #[inline(never)]
-pub(crate) fn run(prog: &Program, sc: &mut [i32; MAX_SCALARS], t: &Tables, ink: &mut Ink) {
+pub(crate) fn run<const N: usize>(
+    prog: &Program,
+    s: &mut Scratch<N>,
+    t: &Tables,
+    ink: &mut Ink,
+    lanes: bool,
+) {
     ink.0.fill(0);
     let start = prog.frame_end as usize;
     let end = (prog.draw_end as usize).min(MAX_OPS);
@@ -94,12 +104,24 @@ pub(crate) fn run(prog: &Program, sc: &mut [i32; MAX_SCALARS], t: &Tables, ink: 
     while pc < end {
         let op = prog.ops[pc];
         pc += 1;
+        let sc = &mut s.sc;
         match op.code {
             code::FOR => {
                 sc[m(op.d)] = 0;
                 // Out of turns: past the loop (its END), not into it.
                 if turns >= TURNS {
                     pc = (op.b as usize + 1).max(pc);
+                } else if lanes {
+                    // Its turns (as many as a turn at a time would run:
+                    // each END counts one, and the last is the one that
+                    // reaches the count or the frame's turns).
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(vl) = prog.vector_loop(pc - 1) {
+                        let n = vl.count.min(TURNS - turns);
+                        run_lanes(prog, s, t, ink, &mut pen, pc - 1, &vl, n);
+                        turns += n;
+                        pc = vl.end + 1;
+                    }
                 }
             }
             code::END => {
@@ -120,6 +142,127 @@ pub(crate) fn run(prog: &Program, sc: &mut [i32; MAX_SCALARS], t: &Tables, ink: 
             _ => super::vm::scalar(sc, &op, t, &prog.tables),
         }
     }
+}
+
+/// Lines and dots of a lane loop's body whose operands are looked up once
+/// a lane of turns (more are looked up each turn).
+#[cfg(not(target_arch = "wasm32"))]
+const PRIMS: usize = 6;
+
+/// `n` turns of the loop whose `FOR` is at `at` ([`Program::vector_loop`]
+/// says it may), `N` turns at a time: each body step once over a lane of
+/// turns (lane `j` turn `j`: the counter's lane holds j), then each turn's
+/// lines and dots in order. Then the slots as a turn at a time leaves
+/// them: the last turn's values, the counter at `n`.
+///
+/// Not in wasm: the web app's previews draw the same bytes a turn at a
+/// time, without a second copy of the lane steps' dispatch in the
+/// download.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn run_lanes<const N: usize>(
+    prog: &Program,
+    s: &mut Scratch<N>,
+    t: &Tables,
+    ink: &mut Ink,
+    pen: &mut Pen,
+    at: usize,
+    vl: &VecLoop,
+    n: u32,
+) {
+    use crate::program::LANE;
+    let body = at + 1..vl.end;
+    // A register's operand: `L_I + r` with the lane bit (register `r`
+    // is `s.lanes[r]`).
+    let lane = |r: usize| LANE | (2 + r as u8);
+    let spare = vl.regs as usize + 1;
+    let mut j0 = 0u32;
+    while j0 < n {
+        let m = (n - j0).min(N as u32) as usize;
+        for (j, v) in s.lanes[1].iter_mut().enumerate() {
+            *v = ((j0 as usize + j) as i32) << 16;
+        }
+        for op in &prog.ops[body.clone()] {
+            if !code::writes_scalar(op.code) {
+                continue;
+            }
+            let ar = code::arity(op.code);
+            let mut o = *op;
+            let mut any = false;
+            for f in [&mut o.a, &mut o.b, &mut o.c].into_iter().take(ar) {
+                if let Some(r) = vl.reg(*f) {
+                    *f = lane(r);
+                    any = true;
+                }
+            }
+            let d = vl.reg(op.d).unwrap_or(spare).min(REGS);
+            if !any {
+                // Of values the same every turn: worked out once.
+                let v = super::vm::scalar_value(&s.sc, op, t, &prog.tables);
+                s.lanes[d].fill(v);
+                continue;
+            }
+            // A step that writes a register it reads: into the spare one,
+            // then copied (the lane loops write one register while
+            // reading others).
+            let reads_d = [o.a, o.b, o.c][..ar].contains(&lane(d));
+            let w = if reads_d { spare.min(REGS) } else { d };
+            o.d = lane(w);
+            super::vm::lane_draw(s, &o, t, &prog.tables);
+            if w != d {
+                let (lo, hi) = s.lanes.split_at_mut(w);
+                lo[d] = hi[0];
+            }
+        }
+        // The lines and dots, turn by turn: each operand a register's
+        // lane at the turn (`0x80 | r`) or a value the same every turn (its
+        // slot), looked up once a lane of turns.
+        let (sc, lanes) = (&s.sc, &s.lanes);
+        let src = |v: u8| vl.reg(v).map_or(v & 0x7f, |r| 0x80 | r as u8);
+        let at = |o: u8, j: usize| {
+            if o & 0x80 != 0 {
+                lanes[(o & 0x7f) as usize % (REGS + 1)][j]
+            } else {
+                sc[o as usize]
+            }
+        };
+        let prim = |op: &Op| matches!(op.code, code::LINE_FROM | code::LINE_TO | code::DOT);
+        let mut ps = [[0u8; 4]; PRIMS];
+        let mut np = 0;
+        for op in prog.ops[body.clone()].iter().filter(|op| prim(op)) {
+            if np < PRIMS {
+                ps[np] = [op.code, src(op.a), src(op.b), src(op.c)];
+            }
+            np += 1;
+        }
+        for j in 0..m {
+            let mut one = |p: [u8; 4]| {
+                let (a, b, c) = (at(p[1], j), at(p[2], j), at(p[3], j));
+                match p[0] {
+                    code::LINE_FROM => pen.from = (a, b, c),
+                    code::LINE_TO => pen.line(ink, (a, b, c)),
+                    _ => pen.dot(ink, a, b, c),
+                }
+            };
+            if np <= PRIMS {
+                for &p in &ps[..np] {
+                    one(p);
+                }
+            } else {
+                for op in prog.ops[body.clone()].iter().filter(|op| prim(op)) {
+                    one([op.code, src(op.a), src(op.b), src(op.c)]);
+                }
+            }
+        }
+        j0 += m as u32;
+    }
+    // The slots as the last turn left them, the counter at n.
+    let last = ((n - 1) % N as u32) as usize;
+    for r in 2..=vl.regs as usize {
+        s.sc[vl.slot[r] as usize] = s.lanes[r][last];
+    }
+    s.sc[vl.slot[1] as usize] = (n as i32) << 16;
 }
 
 /// What a frame has drawn so far, and a line's start.

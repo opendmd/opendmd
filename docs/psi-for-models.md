@@ -499,8 +499,8 @@ its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
 |---|---|---|---|---|
 | + − compare min max step and or `%`2ⁿ | 50 | | `sin` `cos` | 110 |
 | `*` | 86 | | `tri` `saw` `sqr` `select` `clamp` | 60 |
-| + − that can't overflow | 25 | | `*` that can't overflow | 55 (33 when the product is small) |
-| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 28 | | | |
+| + − that can't overflow | 28 | | `*` that can't overflow | 41 (37 when the product is small) |
+| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 33 | | | |
 | `%` (other) | 113 | | `mix` | 130 |
 | neg abs floor frac not | 40 | | `smoothstep` | 214 + a division if its edges vary |
 | `/` by a varying value, `1/v` | 685 | | `hash` | 220 |
@@ -518,8 +518,20 @@ its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
 (a loop's body counts as often as it turns, its end too), a line ~1,100 ns +
 320 a pixel walked (its longer side when that side's ends are constants, at
 least 12 pixels otherwise), a dot ~400, and 10 µs to clear the canvas; per
-pixel `ink` is 70 and `T[k]` 100 (measured on the device). So 192 streaks
-of ~15 steps each are ~2.5 ms, then ~1 ms for `pal(ice, ink)`.
+pixel `ink` is 70 and `T[k]` 100 (measured on the device). **A loop of 32
+turns or more runs as lanes**: each step of its body is worked out for
+128 turns at once, at about the table's per-pixel cost a turn (`hash` 220,
+`*` 86, `+` 50, `/` 685: the same functions, the same picture), then its
+lines and dots are drawn turn by turn as above; so 192 streaks of ~15
+steps each are ~1 ms of values (two lanes of 128) plus their lines, not
+~2.5 ms. A loop inside another, or one under 32 turns, runs a turn at a
+time.
+
+**Common pairs are one step** (the same picture, worked out in one pass):
+a checker `(floor(u) + floor(v)) % 2` (~75 ns saved), `a*k + c` (~20),
+and the colour `pal(P, c ? A : B)` (~190 saved with `* k` of a row value,
+~130 with a per-pixel `k`), `pal(P, pick(m, …))` (~50), `pal(P, ink)` and
+`gray(ink)` (~70). Nothing to write differently: the panel finds them.
 
 **Two things are worked out less often than per pixel, by themselves**
 (the same pictures either way):

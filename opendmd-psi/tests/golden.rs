@@ -1827,3 +1827,474 @@ fn slots_used_again_draw_the_same() {
     );
     eprintln!("{compared} formulas compared, {saved} with fewer slots");
 }
+
+/// A frame and its canvas, the draw loops run as lanes or (`turns`) a turn
+/// at a time.
+fn frame_and_ink<const N: usize>(
+    p: &Program,
+    i: &opendmd_psi::Inputs,
+    under: &[u8],
+    turns: bool,
+) -> (Vec<u8>, Vec<u8>) {
+    let mut s = Scratch::<N>::new();
+    let mut ink = Ink::boxed();
+    let mut out = vec![0x5a; W * H * 3];
+    if turns {
+        opendmd_psi::render_rows_ink_turns::<N>(
+            p,
+            &mut s,
+            Some(&mut ink),
+            i,
+            &OWN,
+            Some(under),
+            u32::MAX,
+            &mut out,
+        );
+    } else {
+        render_rows_ink::<N>(
+            p,
+            &mut s,
+            Some(&mut ink),
+            i,
+            &OWN,
+            Some(under),
+            u32::MAX,
+            &mut out,
+        );
+    }
+    (out, ink.0.to_vec())
+}
+
+/// Draw loops run as lanes (`Program::vector_loop`: each body step over
+/// every turn at once, then the lines and dots turn by turn) draw what a
+/// turn at a time draws: random loop bodies (chains of values of the
+/// counter, the frame's values, tables, picks, noise, divisions that can
+/// meet 0, hashes, glyphs), counts either side of the lane width and of
+/// `VEC_MIN`, loops in sequence up to the frame's 2,048 turns, loops in
+/// loops, values read after their loop, at both lane widths, with the
+/// sliders and `t` in range and out. `PSI_FUZZ_N` sets the number of
+/// formulas (800 by default).
+#[test]
+fn draw_loops_as_lanes_are_a_turn_at_a_time() {
+    let mut r = Rng(0x1a7e_5d4a_3b00_0c11);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let n: usize = std::env::var("PSI_FUZZ_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(800);
+    fn val(r: &mut Rng, ks: &[&str], d: u32) -> String {
+        if d == 0 || r.below(4) == 0 {
+            let leaves = ["0.5", "7", "-3.25", "f", "g", "a", "t", "100", "1/3"];
+            return if !ks.is_empty() && r.below(3) != 0 {
+                ks[r.below(ks.len())].to_string()
+            } else {
+                leaves[r.below(leaves.len())].to_string()
+            };
+        }
+        let e = |r: &mut Rng| val(r, ks, d - 1);
+        match r.below(16) {
+            0..=3 => {
+                let op = ["+", "-", "*", "/", "%", "<", ">=", "and"][r.below(8)];
+                format!("({} {op} {})", e(r), e(r))
+            }
+            4 => format!("sin({})", e(r)),
+            5 => format!("hash({}, {})", e(r), r.below(20)),
+            6 => format!("frac({})", e(r)),
+            7 => format!("({} ? {} : {})", e(r), e(r), e(r)),
+            8 => format!("T[{} % 6]", e(r)),
+            9 => format!("pick({} % 4, f, 0.25, g)", e(r)),
+            10 => format!("noise({}, {}, {})", e(r), e(r), ["0", "2", "f"][r.below(3)]),
+            11 => format!("1/({} - {})", e(r), e(r)),
+            12 => format!("clamp({}, -4, {})", e(r), e(r)),
+            13 => format!("digit({} % 10, {} % 5, {} % 7)", e(r), e(r), e(r)),
+            14 => format!("abs({}) > 64 or {} < 0", e(r), e(r)),
+            _ => format!("min({}, {})*{}", e(r), e(r), e(r)),
+        }
+    }
+    let prim = |r: &mut Rng, ks: &[&str]| -> String {
+        if r.below(3) == 0 {
+            format!(
+                "dot({}, {}, {})",
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 1)
+            )
+        } else {
+            format!(
+                "line({}, {}, {}, {}, {}, {})",
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 2),
+                val(r, ks, 1),
+                val(r, ks, 1)
+            )
+        }
+    };
+    const COUNTS: [u32; 12] = [1, 12, 31, 32, 33, 64, 127, 128, 129, 192, 300, 1024];
+    let (mut ok, mut lanes, mut frames) = (0, 0, 0);
+    for k in 0..n {
+        let mut body = String::new();
+        let mut ks = vec!["k"];
+        let names = ["v1", "v2", "v3", "v4", "v5", "v6", "v7"];
+        for name in names.iter().take(1 + r.below(names.len())) {
+            body += &format!("{name} = {}\n", val(&mut r, &ks, 3));
+            ks.push(name);
+        }
+        // (Up to 10 lines' and dots' steps: past `draw::PRIMS` too.)
+        for _ in 0..1 + r.below(5) {
+            body += &format!("{}\n", prim(&mut r, &ks));
+        }
+        if r.below(4) == 0 {
+            let n2 = COUNTS[r.below(COUNTS.len())];
+            let mut inner = ks.clone();
+            inner.push("j");
+            body += &format!(
+                "for j < {n2} {{\nhh = {}\n{}\n}}\n",
+                val(&mut r, &inner, 2),
+                prim(&mut r, &[&inner[..], &["hh"]].concat())
+            );
+        }
+        let n1 = COUNTS[r.below(COUNTS.len())];
+        let mut draw = format!("for k < {n1} {{\n{body}}}\n");
+        if r.below(3) == 0 {
+            let n3 = COUNTS[r.below(COUNTS.len())];
+            draw += &format!(
+                "for m < {n3} {{\nbb = {}\n{}\n}}\n",
+                val(&mut r, &["m"], 3),
+                prim(&mut r, &["m", "bb"])
+            );
+        }
+        let src = format!(
+            "loop {}\ntable T = 0.5, -2, 30, 100, 7, 0.125\nframe {{ f = t*{}; g = a*3 - 1 }}\ndraw {{\n{draw}}}\n{}",
+            1 + k % 5,
+            r.below(50),
+            ["gray(ink)", "pal(fire, ink)", "#40c0ff * ink", "rgb(ink, ur, x)"][k % 4],
+        );
+        let p = match compile(&src) {
+            Ok(p) => p,
+            Err(e) => {
+                if k < 400 && std::env::var("PSI_SHOW").is_ok() {
+                    eprintln!("{}", e.render(&src));
+                }
+                continue;
+            }
+        };
+        ok += 1;
+        lanes += p.lane_loops();
+        for j in 0..4 {
+            let ms = [0, 333, 2999, 9000][j];
+            let a = [0, 1 << 15, 1 << 16, -(3 << 16)][r.below(4)];
+            let i = opendmd_psi::Inputs { a, ..inputs(ms) };
+            frames += 1;
+            let want = frame_and_ink::<128>(&p, &i, &under, true);
+            assert!(
+                frame_and_ink::<128>(&p, &i, &under, false) == want,
+                "case {k} at {ms} ms, a {a}: {src}\n{}",
+                p.listing()
+            );
+            assert!(
+                frame_and_ink::<64>(&p, &i, &under, false) == want,
+                "case {k} (64 lanes) at {ms} ms: {src}"
+            );
+        }
+    }
+    assert!(ok * 10 > n * 7, "only {ok} of {n} compiled");
+    assert!(
+        lanes * 3 > n,
+        "only {lanes} loops ran as lanes in {n} formulas"
+    );
+    eprintln!("{n} formulas, {ok} compiled, {lanes} loops as lanes, {frames} frames compared");
+}
+
+/// An example's source from the web app's gallery (formulas.json: one flat
+/// object a line, `"src"` a JSON string).
+fn example(name: &str) -> String {
+    let json = include_str!("../../opendmd-web/www/formulas.json");
+    let line = json
+        .lines()
+        .find(|l| l.contains(&format!("\"name\": \"{name}\"")))
+        .unwrap_or_else(|| panic!("no example {name}"));
+    let s = &line[line.find("\"src\": \"").expect("src") + 8..];
+    let mut out = String::new();
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        match c {
+            '"' => return out,
+            '\\' => match it.next() {
+                Some('n') => out.push('\n'),
+                Some('u') => {
+                    let hex: String = it.by_ref().take(4).collect();
+                    out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+                }
+                Some(c) => out.push(c),
+                None => break,
+            },
+            c => out.push(c),
+        }
+    }
+    panic!("unterminated src for {name}")
+}
+
+/// The examples that draw run their big loops as lanes, and draw the same.
+#[test]
+fn the_drawing_examples_run_as_lanes() {
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    for (name, src, want) in [
+        ("Starfield", example("Starfield"), 1),
+        ("Wireframe cube", example("Wireframe cube"), 0),
+        ("Endless road", example("Endless road"), 0),
+    ] {
+        let p = compile(&src).unwrap();
+        assert_eq!(p.lane_loops(), want, "{name}\n{}", p.listing());
+        for ms in [0, 100, 1234, 2399] {
+            let i = inputs(ms);
+            assert!(
+                frame_and_ink::<128>(&p, &i, &under, false)
+                    == frame_and_ink::<128>(&p, &i, &under, true),
+                "{name} at {ms} ms"
+            );
+        }
+    }
+}
+
+/// A frame of `p` at `i` over `under` with the draw canvas and, when `p`
+/// has still values, a still cache kept on a first frame at `i` and then
+/// drawn from (so the fused runs read cached lanes too).
+fn frame_full<const N: usize>(p: &Program, i: &opendmd_psi::Inputs, under: &[u8]) -> Vec<u8> {
+    let mut s = Scratch::<N>::new();
+    let mut ink = Ink::boxed();
+    let mut st = Still::new();
+    let mut out = vec![0x5a; W * H * 3];
+    let cached = p.still_lanes() > 0 && st.take(p);
+    for _ in 0..1 + usize::from(cached) {
+        render_rows_still::<N>(
+            p,
+            &mut s,
+            Some(&mut ink),
+            cached.then_some(&mut st),
+            i,
+            &OWN,
+            Some(under),
+            u32::MAX,
+            &mut out,
+        );
+    }
+    out
+}
+
+/// Fused runs (`crate::fuse`: a checker's floors, add and mask; a multiply
+/// and an add; a palette colour of a choice, of a pick, of the canvas) draw
+/// what their steps draw: random formulas full of the patterns, with the
+/// values on the way sometimes read again later (then the run must not be
+/// fused), colours in layers, scales that are lanes or values for the
+/// lane, still and column runs, compared with the same formula compiled
+/// without the markers (`compile_unfused`) at times across the loop and
+/// past it, sliders in range and out (the checked frames run the steps),
+/// at both lane widths. `PSI_FUZZ_N` sets the number of formulas (1,000 by
+/// default).
+#[test]
+fn fused_runs_are_their_steps() {
+    let mut r = Rng(0x0f05_ed00_5ca1_ab1e);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let n: usize = std::env::var("PSI_FUZZ_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000);
+    const LEAF: &[&str] = &[
+        "px",
+        "py",
+        "x",
+        "y",
+        "t",
+        "a",
+        "px*0.37",
+        "py*1.5",
+        "t/0.3",
+        "len(px - 63.5, py - 15.5)",
+        "atan2(py - 15.5, px - 63.5)*16",
+        "sin(x*3 + t)",
+        "px*a",
+        "-px*2",
+        "1000*a",
+        "i",
+    ];
+    let leaf = |r: &mut Rng| -> String {
+        if r.below(3) == 0 {
+            expr(r, 1)
+        } else {
+            LEAF[r.below(LEAF.len())].to_string()
+        }
+    };
+    const KINDS: [&str; 7] = [
+        "mul_add",
+        "checker",
+        "checker_3",
+        "pal_select",
+        "pal_select_k",
+        "pal_pick",
+        "colour_of_ink_1",
+    ];
+    let mut kinds = [0usize; 7];
+    let (mut compiled, mut frames) = (0, 0);
+    for k in 0..n {
+        // (Mostly values of the pixel, not of its column or row alone: those
+        // go to the column run or the row steps.)
+        let mut uv = || {
+            let (p, q) = (leaf(&mut r), leaf(&mut r));
+            match r.below(4) {
+                0 => p,
+                1 => format!("{p} + {q}*0.5"),
+                2 => format!("{p}*0.25 - {q}"),
+                _ => format!("({p}) + px*py*0.01"),
+            }
+        };
+        let (u, v) = (uv(), uv());
+        let m = [2, 2, 4, 8][r.below(4)];
+        let mut lines = vec![
+            format!("u = {u}"),
+            format!("v = {v}"),
+            format!("cell = (floor(u) + floor(v)) % {m}"),
+            format!(
+                "side = {} + {}*{}",
+                ["0.0635", "t", "py*0.01"][r.below(3)],
+                ["0.0159", "a", "2"][r.below(3)],
+                ["cos(u/16)", "u", "px", "v*0.5"][r.below(4)]
+            ),
+            "lit = floor(min(v, 10)*side + (u > 0)) / 8".to_string(),
+            format!(
+                "m = floor(px/{}) % {}",
+                [8, 16, 3][r.below(3)],
+                [9, 4, 17, 20][r.below(4)]
+            ),
+        ];
+        let reuse = r.below(3) == 0;
+        let ca = ["frac(0.711 + t/4.8)", "0.78", "a", "t"][r.below(4)];
+        let cb = ["frac(0.336 + t/4.8)", "0.28", "1 - a", "py/31"][r.below(4)];
+        let colour = match r.below(6) {
+            0 => format!("pal(chrono, cell ? {ca} : {cb}) * lit"),
+            1 => format!(
+                "pal(fire, cell ? {ca} : {cb}) * {}",
+                ["(py/31)", "0.5", "fog"][r.below(3)]
+            ),
+            2 => format!("pal(fire, cell ? {ca} : {cb})"),
+            3 => {
+                let c: Vec<String> = (0..[3, 9, 16, 18][r.below(4)])
+                    .map(|j| {
+                        ["t/9", "py/40", "0.3", "a"][j % 4].to_string()
+                            + &format!(" + {}", j as f64 / 40.0)
+                    })
+                    .collect();
+                format!(
+                    "pal(rainbow, pick(m, {})){}",
+                    c.join(", "),
+                    ["", " * (py/31)", " * lit"][r.below(3)]
+                )
+            }
+            4 => [
+                "pal(ice, ink)",
+                "#40c0ff * ink",
+                "gray(ink)",
+                "rgb(ink, ink*ink, 1 - ink)",
+                "hsv(ink*0.5 + t/8, 1, ink)",
+                "pal(fire, ink*0.8 + 0.1) * (ink > 0.5 ? 1 : 0.5)",
+                "pal(fire, T[floor(ink*3)]) * (floor(ink*8)/8)",
+                "rgb(ink, ur, 0.5)",
+                "pal(ice, ink) * fog",
+                "gray(sin(ink*3 + t)*0.5 + 0.5)",
+                "gray(ink)",
+                "pal(fire, ink)",
+                "pal(rainbow, ink)",
+            ][r.below(13)]
+            .to_string(),
+            5 if r.below(2) == 0 => {
+                // A random chain of the canvas: each step's function as the
+                // VM works it out for one pixel (`eval`) and along a lane.
+                const INK: &[&str] = &[
+                    "ink",
+                    "ink*ink",
+                    "sin(ink*7 + t)",
+                    "floor(ink*5)/5",
+                    "hash(ink, 3)",
+                    "noise(ink*4, 2, 0)",
+                    "noise(ink*4, t, 1.5)",
+                    "T[floor(ink*4)]",
+                    "pick(floor(ink*3), 0.2, t/9, 0.8)",
+                    "abs(ink - 0.5)",
+                    "smoothstep(0.2, 0.8, ink)",
+                    "1/(ink + 0.1)",
+                    "ink % 0.3",
+                    "sqrt(ink)",
+                    "atan2(ink, 0.5)",
+                    "len(ink, a)",
+                    "mix(0.2, 0.9, ink)",
+                    "clamp(ink*2, a, 1)",
+                    "digit(floor(ink*9), 1, 2)",
+                    "tri(ink + t)",
+                    "ink*1000 + a*30000",
+                ];
+                let mut e = || INK[r.below(INK.len())];
+                format!("hsv({} + {}, {}, {})", e(), e(), e(), e())
+            }
+            _ => "rgb(cell, side, lit)".to_string(),
+        };
+        lines.insert(0, "fog = py < 3 ? 0 : py < 10 ? 0.625 : 1".into());
+        // (Sparse dots and a line, or streaks whose bytes change at nearly
+        // every pixel: a colour of ink is kept per byte on the first and
+        // drawn by its steps on the second, `fuse::INK_CHANGES`.)
+        let draw = match (colour.contains("ink"), r.below(2)) {
+            (false, _) => "",
+            (true, 0) => "table T = 0.1, 0.5, 0.9, 0.3\ndraw { for k < 40 { dot(hash(k, 3)*128, hash(k, 5)*32 + t*3, frac(k/7)) }\nline(0, 3, 127, 20 + t, 0.2, 1) }\n",
+            _ => "table T = 0.1, 0.5, 0.9, 0.3\ndraw { for k < 64 { line(k*2, 0, k*2 + 30 + t, 31, 0, 1) } }\n",
+        };
+        let body = if reuse {
+            // The values on the way read again in another layer.
+            format!(
+                "layer {{ {colour} }}\nlayer add {{ rgb(floor(u)*0.01, cell, side*0.1 + {}) }}",
+                ["floor(v)*0.02", "lit", "m/20", "0"][r.below(4)]
+            )
+        } else if r.below(4) == 0 {
+            format!("layer {{ gray(x) }}\nlayer screen {{ {colour} }}")
+        } else {
+            colour
+        };
+        let src = format!("loop {}\n{}{}\n{body}", 1 + k % 5, draw, lines.join("\n"));
+        let mut p = Program::default();
+        let mut q = Program::default();
+        if opendmd_psi::compile_into(&src, &mut p).is_err() {
+            continue;
+        }
+        opendmd_psi::compile_unfused(&src, &mut q).expect("compiles unfused");
+        compiled += 1;
+        let listing = p.listing();
+        for (j, name) in KINDS.iter().enumerate() {
+            kinds[j] += listing.matches(&format!("fuse({name};")).count();
+        }
+        for j in 0..6 {
+            let ms = [0, 777, 2500, 4999, 9000, 60_000][j];
+            let a = [0, 1 << 15, 1 << 16, -(1 << 16), 3 << 16, 21845][r.below(6)];
+            let i = opendmd_psi::Inputs { a, ..inputs(ms) };
+            frames += 1;
+            let want = frame_full::<128>(&q, &i, &under);
+            assert!(
+                frame_full::<128>(&p, &i, &under) == want,
+                "case {k} at {ms} ms, a {a}: {src}\n{listing}"
+            );
+            assert!(
+                frame_full::<64>(&p, &i, &under) == frame_full::<64>(&q, &i, &under),
+                "case {k} (64 lanes) at {ms} ms, a {a}: {src}"
+            );
+        }
+    }
+    eprintln!(
+        "{n} formulas, {compiled} compiled, {frames} frames; fused {:?}",
+        KINDS.iter().zip(kinds).collect::<Vec<_>>()
+    );
+    assert!(compiled * 10 > n * 8, "only {compiled} of {n} compiled");
+    for (name, &c) in KINDS.iter().zip(&kinds) {
+        assert!(c * 30 > n, "{name}: only {c} fused runs in {n} formulas");
+    }
+}

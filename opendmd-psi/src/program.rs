@@ -228,6 +228,11 @@ pub(crate) mod code {
     // them on a frame's first row and skips them on the others, their
     // values kept in their registers (the compiler never reuses those).
     pub const COLUMN: u8 = 94;
+    // A fused run's marker (`crate::fuse`): `FUSE d, a`: the `a` steps after
+    // it are one fused step of kind `d` (`fuse::F_*`). The VM runs them as
+    // one kernel when it runs the narrowed steps, the composition of the
+    // same functions (else, and in wasm, it is a no-op and they run).
+    pub const FUSE: u8 = 95;
     // the colour of the bottom layer when nothing shows through it: written
     // over the pixels, as v0's last line
     pub const OUT_RGB: u8 = 96;
@@ -273,7 +278,7 @@ pub(crate) mod code {
     pub fn writes_scalar(c: u8) -> bool {
         match c {
             W_FIRST..=W_LAST => !wide_ops(c).0,
-            LINE_FROM | LINE_TO | DOT | STILL | COLUMN | END => false,
+            LINE_FROM | LINE_TO | DOT | STILL | COLUMN | FUSE | END => false,
             c => !is_colour(c),
         }
     }
@@ -306,7 +311,7 @@ pub(crate) mod code {
             FOR => 1,
             END => 2,
             LINE_FROM..=DOT => 3,
-            STILL | COLUMN => 0,
+            STILL | COLUMN | FUSE => 0,
             _ => match colour_parts(c).0 {
                 OUT_RGB | OUT_HSV => 3,
                 _ => 1,
@@ -404,7 +409,7 @@ pub(crate) mod code {
             W_FIRST..=W_LAST => WN[(c - W_FIRST) as usize],
             64..=LAST_TERN => T[(c - 64) as usize],
             U_R..=INK => ["ur", "ug", "ub", "ul", "ink"][(c - U_R) as usize],
-            FOR..=COLUMN => [
+            FOR..=FUSE => [
                 "for",
                 "end",
                 "line_from",
@@ -412,6 +417,7 @@ pub(crate) mod code {
                 "dot",
                 "still",
                 "column",
+                "fuse",
             ][(c - FOR) as usize],
             _ => ["rgb", "hsv", "pal", "gray"][((colour_parts(c).0 - OUT_RGB) & 3) as usize],
         }
@@ -572,8 +578,23 @@ impl Program {
         (
             self.frame_end as usize,
             self.row_end.saturating_sub(self.draw_end) as usize,
-            self.pixel_end.saturating_sub(self.row_end) as usize,
+            self.pixel_end.saturating_sub(self.row_end) as usize - self.fused(),
         )
+    }
+
+    /// Steps in all, as the formula's limit counts them ([`MAX_OPS`]): the
+    /// fused runs' markers (`crate::fuse`) not counted.
+    pub fn steps(&self) -> usize {
+        self.len() - self.fused()
+    }
+
+    /// The fused runs' markers.
+    fn fused(&self) -> usize {
+        let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
+        self.ops[re.min(pe)..pe]
+            .iter()
+            .filter(|o| o.code == code::FUSE)
+            .count()
     }
 
     /// Steps in the draw stage (`draw { }`: its loops' values, the loops
@@ -740,7 +761,19 @@ impl Program {
         self.estimate(self.still_marker())
     }
 
+    /// [`esp32_us`](Self::esp32_us) with every draw loop a turn at a time
+    /// (as before they ran as lanes): tests/estimate.rs, whose draw rows
+    /// were measured so.
+    #[doc(hidden)]
+    pub fn esp32_us_turns(&self) -> u32 {
+        self.estimate_with(None, false)
+    }
+
     fn estimate(&self, still: Option<usize>) -> u32 {
+        self.estimate_with(still, true)
+    }
+
+    fn estimate_with(&self, still: Option<usize>, lanes: bool) -> u32 {
         let (skip, copy) = match still {
             Some(k) => {
                 let op = &self.ops[k];
@@ -754,12 +787,17 @@ impl Program {
         // The column run's steps once a frame for each column: a 32nd of a
         // pixel's.
         let col = self.column_run();
+        // A fused run's steps: as ever, less what its kernel saves.
+        let mut saved = 0;
         let px: u32 = self.ops[self.row_end as usize..self.len()]
             .iter()
             .enumerate()
             .map(|(k, op)| (k + self.row_end as usize, op))
             .filter(|(k, _)| !skip.contains(k))
             .map(|(k, op)| {
+                if op.code == code::FUSE {
+                    saved += crate::fuse::saved(op.d);
+                }
                 let ns = self.step_ns(k, op);
                 if col.contains(&k) {
                     ns.div_ceil(H as u32)
@@ -768,6 +806,7 @@ impl Program {
                 }
             })
             .sum::<u32>()
+            .saturating_sub(saved)
             + copy;
         let row = self.counts().1 as u32;
         // The loop itself (a pixel's colour is counted above: `gray(x)` is
@@ -776,7 +815,7 @@ impl Program {
         // over the picture, a flash cache shared with the decoder: +13-14 %
         // on the device (plasma as an effect 8,217 against 7,254 µs; Plasma
         // screened at 40 % as a look 8,552 against 7,474).
-        (((45 + px) * (W * H) as u32) / 1000 + row * 10 + self.draw_us()) * 115 / 100
+        (((45 + px) * (W * H) as u32) / 1000 + row * 10 + self.draw_cost(lanes)) * 115 / 100
     }
 
     /// A pixel step's cost, ns a pixel at 128 lanes (see `esp32_us`).
@@ -856,29 +895,20 @@ impl Program {
             return true;
         }
         let re = self.row_end as usize;
-        self.ops[re.min(at)..at]
-            .iter()
-            .rev()
-            .find(|o| !is_colour(o.code) && !matches!(o.code, STILL | COLUMN) && o.d == v)
-            .is_some_and(|o| {
-                matches!(
-                    o.code,
-                    FLOOR
-                        | SELECT
-                        | LT
-                        | LE
-                        | GT
-                        | GE
-                        | EQ
-                        | NE
-                        | AND
-                        | OR
-                        | NOT
-                        | STEP
-                        | BIT
-                        | SPR
-                )
-            })
+        let w = (re.min(at)..at).rev().find(|&k| {
+            let o = &self.ops[k];
+            !is_colour(o.code) && !matches!(o.code, STILL | COLUMN | FUSE) && o.d == v
+        });
+        // (A shift of a stepped value, `floor(q)/8`, is stepped.)
+        if let Some(k) = w.filter(|&k| self.ops[k].code == SHR) {
+            return self.stepped(k, self.ops[k].a);
+        }
+        w.map(|k| &self.ops[k]).is_some_and(|o| {
+            matches!(
+                o.code,
+                FLOOR | SELECT | LT | LE | GT | GE | EQ | NE | AND | OR | NOT | STEP | BIT | SPR
+            )
+        })
     }
 
     /// Where the still cache's marker is (`code::STILL`), if the formula
@@ -915,12 +945,52 @@ impl Program {
     /// 10 µs to clear the canvas. (The design guessed 300, 400 and 1,500 +
     /// 200.)
     pub fn draw_us(&self) -> u32 {
+        self.draw_cost(true)
+    }
+
+    /// [`draw_us`](Self::draw_us), with (`lanes`) or without the loops run
+    /// as lanes.
+    fn draw_cost(&self, lanes: bool) -> u32 {
         if !self.draws() {
             return 0;
         }
         let mut ns: u64 = 10_000;
         let mut from = [0u8; 2];
+        // Loops run as lanes (`vector_loop`): their value steps once a
+        // lane of turns each (as a pixel step costs a pixel, over 128
+        // turns) at the FOR, then their ENDs and values free (up to
+        // `lane_end`); lines and dots as ever.
+        let mut lane_end = 0;
+        let mut lane: Option<VecLoop> = None;
         self.draw_walk(|at, op, mult| {
+            if let Some(v) = self.vector_loop(at).filter(|_| lanes) {
+                lane = Some(v);
+                let chunks = u64::from(v.count.div_ceil(W as u32));
+                let mut steps = 0u64;
+                for o in &self.ops[at + 1..v.end] {
+                    if code::writes_scalar(o.code) {
+                        let each =
+                            value_ns(o.code) + if lane_loop(o.code) { 0 } else { LANE_EVAL_NS };
+                        steps += u64::from(each) * W as u64 + LANE_STEP_NS;
+                    }
+                }
+                let turns = u64::from(v.count) * LANE_TURN_NS;
+                ns = ns
+                    .saturating_add((420 + chunks * (steps + LANE_CHUNK_NS) + turns) * mult as u64);
+                lane_end = v.end;
+                return;
+            }
+            if at <= lane_end && !matches!(op.code, code::LINE_FROM | code::LINE_TO | code::DOT) {
+                return;
+            }
+            // A line's or a dot's operands read from the lanes, each turn.
+            if let Some(v) = lane.filter(|_| at <= lane_end) {
+                let reads = [op.a, op.b, op.c]
+                    .iter()
+                    .filter(|&&o| v.reg(o).is_some())
+                    .count();
+                ns = ns.saturating_add(reads as u64 * LANE_READ_NS * mult as u64);
+            }
             let cost: u64 = match op.code {
                 code::LINE_FROM => {
                     from = [op.a, op.b];
@@ -938,11 +1008,11 @@ impl Program {
                     let (dx, dy) = (d(k(from[0]), k(op.a)), d(k(from[1]), k(op.b)));
                     let len = match (dx, dy) {
                         (Some(a), Some(b)) => a.max(b),
-                        (a, b) => a.or(b).unwrap_or(0).max(12),
+                        (a, b) => a.or(b).unwrap_or(0).max(6),
                     };
-                    1_100 + 320 * len
+                    1_100 + 270 * len
                 }
-                code::DOT => 400,
+                code::DOT => 450,
                 _ => 420,
             };
             ns = ns.saturating_add(cost * mult as u64);
@@ -1047,6 +1117,8 @@ impl Program {
                 alloc::format!("{args}; end {}", op.b)
             } else if op.code == code::END {
                 alloc::format!("{args}; back to {}", op.c)
+            } else if op.code == code::FUSE {
+                alloc::format!("{}; {} steps", crate::fuse::name(op.d), op.a)
             } else if op.code == code::COLUMN {
                 alloc::format!("skip {} after the first row", op.a)
             } else if op.code == code::STILL {
@@ -1074,6 +1146,7 @@ impl Program {
                         | code::DOT
                         | code::STILL
                         | code::COLUMN
+                        | code::FUSE
                 ) {
                 "out".into()
             } else if code::is_wide(op.code) && code::wide_ops(op.code).0 {
@@ -1100,12 +1173,205 @@ impl Program {
         s
     }
 
-    fn is_const_slot(&self, v: u8, at: usize) -> bool {
+    /// Draw loops that run as lanes ([`vector_loop`](Self::vector_loop)):
+    /// psi-check's listing and the tests.
+    #[doc(hidden)]
+    pub fn lane_loops(&self) -> usize {
+        let (fe, de) = (
+            self.frame_end as usize,
+            (self.draw_end as usize).min(MAX_OPS),
+        );
+        (fe.min(de)..de)
+            .filter(|&k| self.vector_loop(k).is_some())
+            .count()
+    }
+
+    /// Whether the draw loop whose `FOR` is at `at` runs as lanes (a lane
+    /// a turn, `crate::draw::run`): `None` for one that runs a turn at a
+    /// time. Its body is run step by step over every turn at once, then
+    /// its lines and dots are drawn turn by turn, in order — the same
+    /// canvas, since no turn reads another's values (checked here, not
+    /// assumed):
+    ///
+    /// - at least [`VEC_MIN`] turns (its count a constant), no loop inside;
+    /// - every body step a value step (`writes_scalar`, not a wide one) or
+    ///   a line or a dot, its value written into a slot other than the
+    ///   counter;
+    /// - no step reads a slot the body writes before the body has written
+    ///   it in that turn (a value of the turn before);
+    /// - no line or dot reads a slot the body writes after it (it is drawn
+    ///   after every value step has run);
+    /// - the counter and the slots the body writes fit the lane
+    ///   registers ([`REGS`]), with one to spare for a step that writes a
+    ///   slot it reads.
+    pub(crate) fn vector_loop(&self, at: usize) -> Option<VecLoop> {
+        let de = (self.draw_end as usize).min(MAX_OPS);
+        let f = self.ops.get(at).filter(|o| o.code == code::FOR)?;
+        let end = f.b as usize;
+        if end <= at || end >= de {
+            return None;
+        }
+        let e = &self.ops[end];
+        let k = f.d & 0x7f;
+        if e.code != code::END || e.a & 0x7f != k || e.b != f.a || e.c as usize != at + 1 {
+            return None;
+        }
+        if !self.is_const_slot(f.a & 0x7f, at) {
+            return None;
+        }
+        let count = self.init[(f.a & 0x7f) as usize] >> 16;
+        if count < VEC_MIN as i32 {
+            return None;
+        }
+        let body = &self.ops[at + 1..end];
+        let prim = |c: u8| matches!(c, code::LINE_FROM | code::LINE_TO | code::DOT);
+        let value = |c: u8| {
+            matches!(c, 0..=code::LAST_BIN | 32..=code::LAST_UN | 64..=code::LAST_TERN)
+                && code::writes_scalar(c)
+        };
+        // Registers: the counter first, then each slot the body writes as
+        // it is first written.
+        let mut vl = VecLoop {
+            end,
+            count: count as u32,
+            regs: 1,
+            slot: [0; REGS + 1],
+        };
+        vl.slot[1] = k;
+        for op in body {
+            if value(op.code) {
+                if op.d & 0x7f == k {
+                    return None;
+                }
+                if vl.reg(op.d).is_none() {
+                    if vl.regs as usize == REGS {
+                        return None;
+                    }
+                    vl.regs += 1;
+                    vl.slot[vl.regs as usize] = op.d & 0x7f;
+                }
+            } else if !prim(op.code) {
+                return None;
+            }
+        }
+        let bit = |v: u8| vl.reg(v).map_or(0u16, |r| 1 << r);
+        // Each read after the turn's own write (the counter's is the
+        // FOR's); one register to spare when a step writes a slot it reads.
+        let mut done = 2u16;
+        let mut spare = false;
+        for op in body {
+            let n = code::arity(op.code);
+            let v = [op.a, op.b, op.c];
+            if v[..n].iter().any(|&v| bit(v) & !done != 0) {
+                return None;
+            }
+            // A pick's choices are read through its table of slots, as
+            // scalars: none may be one the loop writes.
+            if op.code == code::PICK
+                && (0..op.c as usize)
+                    .any(|j| bit(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8) != 0)
+            {
+                return None;
+            }
+            if value(op.code) {
+                spare |= v[..n].iter().any(|&v| v & 0x7f == op.d & 0x7f);
+                done |= bit(op.d);
+            }
+        }
+        // Lines and dots read nothing the body writes after them.
+        let mut later = 0u16;
+        for op in body.iter().rev() {
+            if prim(op.code) {
+                if [op.a, op.b, op.c].iter().any(|&v| bit(v) & later != 0) {
+                    return None;
+                }
+            } else {
+                later |= bit(op.d);
+            }
+        }
+        if spare && vl.regs as usize == REGS {
+            return None;
+        }
+        Some(vl)
+    }
+
+    pub(crate) fn is_const_slot(&self, v: u8, at: usize) -> bool {
         (v != S_SEED || self.uses & SEEDED == 0)
             && !self.ops[..at.min(self.len())].iter().any(|op| {
                 // END counts its loop's counter (which the FOR writes too).
                 (op.code == code::END && op.a == v) || (code::writes_scalar(op.code) && op.d == v)
             })
+    }
+}
+
+/// Turns a draw loop needs to run as lanes ([`Program::vector_loop`]):
+/// below it a turn at a time is as quick (each lane step works out a whole
+/// lane, whatever the count).
+pub(crate) const VEC_MIN: u32 = 32;
+
+/// A draw loop run as lanes, ns: each value step's dispatch for a lane of
+/// turns (its work is `value_ns` a turn, as a pixel step's a pixel), the
+/// counter's lane and the loop round them, and each turn's look-up of its
+/// lines' and dots' operands (guesses until psi-probe measures them).
+pub(crate) const LANE_STEP_NS: u64 = 800;
+pub(crate) const LANE_CHUNK_NS: u64 = 1_000;
+/// (s2probe-a, 2026-10-28: a loop of 1,024 off-panel dots 722 ns a turn
+/// over the base as lanes, the dot ~420 of it; +70 for a dot reading a
+/// lane: `LANE_READ_NS` a line's or dot's operand from a lane.)
+pub(crate) const LANE_TURN_NS: u64 = 300;
+pub(crate) const LANE_READ_NS: u64 = 70;
+/// A draw lane step without a lane loop of its own (`vm::lane_draw`'s
+/// other steps, worked out turn by turn by the scalar functions): the
+/// call and its dispatch a turn, ns (a guess).
+pub(crate) const LANE_EVAL_NS: u32 = 350;
+
+/// Whether `vm::lane_draw` runs step `c` with a lane loop (else turn by
+/// turn): its list, kept in step with it.
+pub(crate) fn lane_loop(c: u8) -> bool {
+    use code::*;
+    matches!(
+        c,
+        ADD | SUB
+            | MUL
+            | DIV
+            | LT
+            | GT
+            | AND
+            | OR
+            | MIN
+            | MAX
+            | HASH
+            | ABS
+            | FLOOR
+            | FRAC
+            | SELECT
+            | CLAMP
+    )
+}
+
+/// A draw loop that runs as lanes ([`Program::vector_loop`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VecLoop {
+    /// Its `END`'s index.
+    pub(crate) end: usize,
+    /// Its count (≥ [`VEC_MIN`]).
+    pub(crate) count: u32,
+    /// Registers used: 1 (the counter) ..= `regs`.
+    pub(crate) regs: u8,
+    /// The slot each register holds (`slot[1]` the counter's).
+    pub(crate) slot: [u8; REGS + 1],
+}
+
+impl VecLoop {
+    /// The register holding slot `v`, if the body writes it (or it is the
+    /// counter).
+    #[inline(always)]
+    pub(crate) fn reg(&self, v: u8) -> Option<usize> {
+        let mut r = self.regs as usize;
+        while r > 0 && self.slot[r] != v & 0x7f {
+            r -= 1;
+        }
+        (r > 0).then_some(r)
     }
 }
 
@@ -1128,13 +1394,13 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
         BIT => 55,
         MUL => 86,
-        // The narrowed steps (`range`): estimated from their loops'
-        // instructions against `add`'s and `mul`'s until psi-probe
-        // measures them.
-        ADD_W | SUB_W => 25,
-        MUL_W => 55,
-        MUL_N => 33,
-        SHR => 28,
+        // The narrowed steps (`range`), measured by psi-probe on the spare
+        // (lang-probe-b, 2026-10-28: each row against `gray(x)`'s 163 ns;
+        // they were instruction-count guesses of 25, 55, 33 and 28).
+        ADD_W | SUB_W => 28,
+        MUL_W => 41,
+        MUL_N => 37,
+        SHR => 33,
         MOD => 113,
         DIV | RECIP => 685,
         ATAN2 => 529,

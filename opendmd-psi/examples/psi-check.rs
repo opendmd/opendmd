@@ -127,7 +127,7 @@ fn main() {
     .collect();
     println!(
         "ok: {} of {MAX_OPS} steps (per frame {f}, per row {r}, per pixel {x}), {} layer{}, {} of {REGS} registers, {} of {MAX_SCALARS} values",
-        prog.len(),
+        prog.steps(),
         prog.layers(),
         if prog.layers() == 1 { "" } else { "s" },
         prog.regs(),
