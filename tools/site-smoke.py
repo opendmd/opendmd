@@ -541,7 +541,9 @@ def art_index(browser, base: str, site: Path, errors: list[str], cors_expected: 
         if not f.is_file() or f.read_bytes() != src.read_bytes():
             bad.append(plat)
             continue
-        req = urllib.request.Request(f"{base}/art-index/v1/{plat}.json", headers={"Origin": "http://192.168.1.50"})
+        req = urllib.request.Request(f"{base}/art-index/v1/{plat}.json", headers={"Origin": "http://192.168.1.50",
+                                     # Browser Integrity Check (error 1010) refuses urllib's default user agent
+                                     "User-Agent": "opendmd-site-test/1 (+https://opendmd.dev)"})
         with urllib.request.urlopen(req) as r:
             body, ctype, cors = r.read(), r.headers.get("content-type", ""), r.headers.get("access-control-allow-origin")
         d = json.loads(body)
@@ -605,6 +607,10 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                   f"gallery: Open leads to {e['name']}'s page")
             # A Formula that draws over a GIF: /f/ shows it over the sample picture, not black.
             e = next(x for x in examples if x["name"] == "Scanlines")
+            # From /f/ to /f/#…: only the hash changes, and f.js reloads on
+            # hashchange, so the old page would answer the wait and vanish
+            # under the next evaluate. Start from a blank page instead.
+            page.goto("about:blank")
             page.goto(share_link(base, e["src"], e["name"], a=e["a"]))
             wait_js(page, "+(document.querySelector('#f-panel').dataset.frames || 0) > 5", timeout=20000)
             n = lit(page, "#f-panel")

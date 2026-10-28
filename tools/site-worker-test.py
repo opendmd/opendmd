@@ -21,7 +21,11 @@ wrangler: make site-worker-deps) on a free port, and stops it after. With
 - _headers: one CSP on every response, the right one per path; nosniff;
   no COOP/COEP; CORS * on install/, art-index/, f/; release.json for 60 s,
   the version-named release files immutable, the rest 600 s;
-- www.opendmd.dev on a Worker path: 301 to https://opendmd.dev/…;
+- www.opendmd.dev on a Worker path: 301 to https://opendmd.dev/… (under
+  cf dev by a Host header, against opendmd.dev by name; skipped against a
+  workers.dev URL, which has no www);
+- every request names itself in User-Agent: Cloudflare's Browser Integrity
+  Check refuses urllib's default one (error 1010);
 - the Pages-only files (README.md, .nojekyll) and _headers, _redirects,
   .assetsignore not served;
 - in Chromium, no CSP violation on the docs, the install page (ESP Web
@@ -60,11 +64,14 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 OPENER = urllib.request.build_opener(NoRedirect)
+# Cloudflare's Browser Integrity Check (error 1010) refuses urllib's default
+# "Python-urllib/3.x" user agent with a 403; name the test instead.
+UA = "opendmd-site-test/1 (+https://opendmd.dev)"
 
 
 def get(base: str, path: str, method: str = "GET", headers: dict | None = None):
     """(status, headers, body) without following redirects."""
-    req = urllib.request.Request(base + path, method=method, headers=headers or {})
+    req = urllib.request.Request(base + path, method=method, headers={"User-Agent": UA, **(headers or {})})
     try:
         with OPENER.open(req, timeout=30) as r:
             return r.status, r.headers, r.read()
@@ -144,10 +151,41 @@ def formula(base: str) -> None:
           f"/f/<id>: the 404 page, never cached ({st}, {h.get('Cache-Control')})")
     st, h, body = get(base, "/f/no-such-file.js")
     check(st == 404 and h.get("Cache-Control") != "no-store", f"/f/<not an id>: a plain 404 ({st}, {h.get('Cache-Control')})")
-    st, h, _ = get(base, "/f/8m4kq2v9tz", headers={"Host": "www.opendmd.dev"})
-    check(st == 301 and h.get("Location") == "https://opendmd.dev/f/8m4kq2v9tz", f"www.opendmd.dev/f/…: 301 -> {h.get('Location')}")
-    st, h, _ = get(base, "/api/health?x=1", headers={"Host": "www.opendmd.dev"})
-    check(st == 301 and h.get("Location") == "https://opendmd.dev/api/health?x=1", f"www.opendmd.dev/api/…: 301 -> {h.get('Location')}")
+    www(base)
+
+
+def www(base: str) -> None:
+    """www.opendmd.dev -> the apex. Locally (cf dev routes everything to the
+    Worker, whatever the Host) by a Host header; on Cloudflare only once
+    www.opendmd.dev is attached (the cutover, S3): there it is asked for by
+    name. A workers.dev preview cannot be asked as www: skipped."""
+    host = urllib.parse.urlsplit(base).hostname or ""
+    if host in ("127.0.0.1", "localhost"):
+        cases = [(base, {"Host": "www.opendmd.dev"})]
+    elif host in ("opendmd.dev", "www.opendmd.dev"):
+        cases = [("https://www.opendmd.dev", {})]
+    else:
+        print(f"  skip www.opendmd.dev -> opendmd.dev: {host} is neither cf dev nor opendmd.dev (checked at the cutover, S3)")
+        return
+    for b, hdr in cases:
+        st, h, _ = get(b, "/f/8m4kq2v9tz", headers=hdr)
+        check(st == 301 and h.get("Location") == "https://opendmd.dev/f/8m4kq2v9tz", f"www.opendmd.dev/f/…: 301 -> {h.get('Location')}")
+        st, h, _ = get(b, "/api/health?x=1", headers=hdr)
+        check(st == 301 and h.get("Location") == "https://opendmd.dev/api/health?x=1", f"www.opendmd.dev/api/…: 301 -> {h.get('Location')}")
+
+
+def follow(base: str, path: str, limit: int = 5):
+    """GET, following same-site redirects: (status, headers, body, hops)."""
+    hops = 0
+    st, h, body = get(base, path)
+    while st in (301, 302, 307, 308) and hops < limit:
+        loc = urllib.parse.urljoin(base + path, h["Location"])
+        if not loc.startswith(base):
+            break
+        path = loc[len(base):] or "/"
+        st, h, body = get(base, path)
+        hops += 1
+    return st, h, body, hops
 
 
 def pages(base: str, site: Path) -> None:
@@ -156,11 +194,11 @@ def pages(base: str, site: Path) -> None:
         rel = "/" + p.relative_to(site).as_posix()
         if rel == "/404.html":
             continue
-        st, h, body = get(base, rel)
-        if st in (301, 307, 308):  # x.html -> /x, x/index.html -> x/ (or a MOVED 301)
-            st, h, body = get(base, urllib.parse.urlsplit(h["Location"]).path)
-        if st != 200 or not body:
-            bad.append(f"{rel} {st}")
+        st, h, body, hops = follow(base, rel)
+        # x.html 307s to /x and x/index.html to x/ (html_handling
+        # auto-trailing-slash), a MOVED page 301s: one hop at most.
+        if st != 200 or not body or hops > 1:
+            bad.append(f"{rel} {st} after {hops} redirects")
     n = sum(1 for _ in site.rglob("*.html")) - 1
     check(not bad, f"every page answers 200 ({n} pages){': ' + ', '.join(bad[:8]) if bad else ''}")
     st, h, body = get(base, "/no/such/page")
@@ -178,7 +216,7 @@ def redirects(base: str, site: Path) -> None:
         if st != int(code) or h.get("Location") != new and urllib.parse.urlsplit(h.get("Location", "")).path != new:
             bad.append(f"{old}: {st} {h.get('Location')}")
             continue
-        if get(base, new)[0] != 200:
+        if get(base, new)[0] != 200:  # straight to the served address: no second hop
             bad.append(f"{old} -> {new}: not 200")
     check(lines and not bad, f"_redirects: {len(lines)} old addresses, each a 301 to a page that answers 200"
                              f"{': ' + '; '.join(bad[:6]) if bad else ''}")
