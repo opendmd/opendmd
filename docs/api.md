@@ -226,7 +226,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `tz`, `tz_name` | strings, `"UTC0"`, `"UTC"` | POSIX time zone (`GMT0IST,M3.5.0/1,M10.5.0`, ≤ 64 characters); its display name (≤ 64) |
 | `transition` | `dissolve` | `dissolve`, `wipe_left`, `wipe_right`, `wipe_down`, `wipe_up`, `blinds`, `push`, `fade`, `none` |
 | `transition_ms` | 20..=2000, 400 | transition length |
-| `auto_prepare` | `always` | prepare copies by itself: `always` (also slowly while a prepared GIF plays), `idle` (only while the panel is dark or paused), `off` |
+| `auto_prepare` | `idle` | prepare copies by itself: `idle` (only while the panel is dark or paused), `always` (also slowly while a prepared GIF plays), `off` |
 | `follow` | bool, false | Follow RePlayOS |
 | `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400) |
 | `follow_code_set` | bool | its code is saved (write it as `follow_code`, ≤ 64, one line) |
@@ -512,8 +512,8 @@ curl -s $DMD/api/wake --json '{"minutes":60}'
 ## Prepared copies
 
 A prepared copy is a smaller GIF the player plays in place of the original.
-The player makes them itself (`auto_prepare`: at full speed while the
-panel is dark or paused, slowly while a prepared GIF plays); the web app makes them
+The player makes them itself while the panel is dark or paused
+(`auto_prepare`; `always` adds a slow drip while a prepared GIF plays); the web app makes them
 faster and uploads them to `/cache/<Category>/<xx>/<name>.gif`
 (`docs/cache-format.md`).
 

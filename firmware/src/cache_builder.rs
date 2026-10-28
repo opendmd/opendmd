@@ -16,7 +16,7 @@
 //! - **Full** — night mode has the panel dark, the player is paused, or there
 //!   is no playlist to play: nothing is animating, so work as fast as the
 //!   card allows (a 1 ms sleep every ~20 ms of work so IDLE0 still runs).
-//! - **Drip** — `auto_prepare = "always"` (the default) and a *prepared*
+//! - **Drip** — `auto_prepare = "always"` (opt-in) and a *prepared*
 //!   file is on screen (an original's decoder and the encoder do not both
 //!   fit: `opendmd_core::auto_prepare`, builder-a), no transition running,
 //!   not the new file's first 500 ms, and no hold after a late frame

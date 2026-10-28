@@ -3,34 +3,38 @@
 //!
 //! The `auto_prepare` setting:
 //!
-//! - **`always`** (the default since 1.0.0-beta.11): full speed while
-//!   nothing animates (night mode has the panel dark, or the player is
-//!   paused), and a slow **drip** while a *prepared* GIF plays — not during
-//!   a transition or the new GIF's first [`SWITCH_WINDOW`], and not for a
-//!   while after a late frame the drip may have caused ([`DripGuard`]).
-//! - **`idle`**: full speed while nothing animates, never while playing.
+//! - **`idle`** (the default): full speed while nothing animates (night
+//!   mode has the panel dark, or the player is paused), never while
+//!   playing. A fresh card plays fine as it is (originals: 0 steady misses)
+//!   and is ready after ~3.7 h of the panel dark or paused (~2,700 files/h).
+//! - **`always`** (opt-in): `idle`, plus a slow **drip** while a *prepared*
+//!   GIF plays — not during a transition or the new GIF's first
+//!   [`SWITCH_WINDOW`], and not for a while after a late frame the drip may
+//!   have caused, steady or at a switch ([`DripGuard`]).
 //! - **`off`**: never.
 //!
-//! **A fresh card gets ready while the panel is dark or paused; it plays
-//! fine as it is meanwhile.** The drip stays limited to prepared files:
-//! a drip over originals was tried (1.0.0-beta.11-builder-a, spare,
-//! 2026-10-28, `filelist.txt` with 2,714 of 10,162 prepared, 20 min against
-//! 20 min of `idle`). An original on that card leaves 56-79 KB free
-//! (median ~67 KB; the ~100 KB of the 512 B FatFs buffers' measurement was
-//! a 47-entry playlist of copies), against the drip's 76.4 KB start
-//! threshold; when it did start, the encoder took the heap to 23 KB free
-//! (floor 19.9 KB, against 45.9 KB without it), it made 135 files in the
-//! first 10 min and 9 in the next (`low memory`), and it cost +24 switch
-//! misses and 1 steady miss (`idle`: +0). The encoder (~48-53 KB on the
-//! device) plus its 20 KB margin plus the task does not fit beside an
-//! original's decoder; a threshold that would keep the playback floor
-//! would never let it start.
+//! **Why `idle` stays the default** (2026-10-28, spare, `filelist.txt` with
+//! 2,714 of 10,162 prepared, unpaused, no night schedule, 20 min A/B
+//! against `idle` each):
 //!
-//! **Older settings.** Every save writes every field, so a device that ever
-//! saved anything holds the old default `idle` without anyone having chosen
-//! it. The setting moved to a new NVS key ([`AutoPrepare::from_nvs`]): the
-//! old key's `off` and `always` (which only a person could have set) are
-//! kept, its `idle` reads as the new default.
+//! - *builder-a, drip over originals too, default `always`.* An original
+//!   on that card leaves 56-79 KB free (median ~67 KB; the ~100 KB of the
+//!   512 B FatFs buffers' measurement was a 47-entry playlist of copies),
+//!   against the drip's 76.4 KB start threshold; when it did start, the
+//!   encoder took the heap to 23 KB free (floor 19.9 KB; `idle` 45.9 KB),
+//!   it made 135 files in the first 10 min and 9 in the next (`low
+//!   memory`), and it cost +24 switch misses and +1 steady (`idle`: +0).
+//!   The encoder (~48-53 KB on the device) plus its 20 KB margin plus the
+//!   task does not fit beside an original's decoder; a threshold that kept
+//!   the playback floor would never let it start.
+//! - *builder-b, drip over prepared files only, this guard.* Safe for the
+//!   heap (min 59.2 KB; `idle` 60.1 KB), 0 steady misses, but +4 switch
+//!   misses in 20 min (`idle` +0) for ~7 files (~21 an hour, `avg_drip_s`
+//!   ~7.5; full speed ~2,700): reasons alternated `gif on screen` and `late
+//!   frame`. Not worth being the default.
+//!
+//! The setting is the NVS key `auto_prepare`, as before: an explicit
+//! choice carries over, the old default stays `idle`.
 
 use std::time::Duration;
 
@@ -41,10 +45,10 @@ pub use crate::frametime::SWITCH_WINDOW;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum AutoPrepare {
-    /// Only while nothing animates (night mode dark, paused).
-    Idle = 0,
-    /// Also slowly while a prepared GIF plays. The default.
+    /// Only while nothing animates (night mode dark, paused). The default.
     #[default]
+    Idle = 0,
+    /// Also slowly while a prepared GIF plays (opt-in).
     Always = 1,
     /// Never.
     Off = 2,
@@ -75,22 +79,9 @@ impl AutoPrepare {
     /// Back from `self as u8` (an atomic's copy).
     pub fn from_u8(v: u8) -> AutoPrepare {
         match v {
-            0 => AutoPrepare::Idle,
+            1 => AutoPrepare::Always,
             2 => AutoPrepare::Off,
-            _ => AutoPrepare::Always,
-        }
-    }
-
-    /// The setting from NVS: `saved`, the current key, wins; else the old
-    /// key's `legacy` value if a person chose it (`off`, `always`); else —
-    /// nothing saved, the old default `idle`, or garbage — the default.
-    pub fn from_nvs(saved: Option<&str>, legacy: Option<&str>) -> AutoPrepare {
-        if let Some(mode) = saved.and_then(AutoPrepare::parse) {
-            return mode;
-        }
-        match legacy.and_then(AutoPrepare::parse) {
-            Some(AutoPrepare::Idle) | None => AutoPrepare::default(),
-            Some(chosen) => chosen,
+            _ => AutoPrepare::Idle,
         }
     }
 }
@@ -227,8 +218,10 @@ mod tests {
     const S: fn(u64) -> Duration = Duration::from_secs;
 
     #[test]
-    fn default_is_always() {
-        assert_eq!(AutoPrepare::default(), AutoPrepare::Always);
+    fn default_is_idle() {
+        assert_eq!(AutoPrepare::default(), AutoPrepare::Idle);
+        // An unknown byte (the atomic before the first publish) too.
+        assert_eq!(AutoPrepare::from_u8(9), AutoPrepare::Idle);
     }
 
     #[test]
@@ -240,24 +233,6 @@ mod tests {
         assert_eq!(AutoPrepare::parse("sometimes"), None);
         assert_eq!(AutoPrepare::parse("Always"), None);
         assert!(INVALID.contains("idle, always or off"));
-    }
-
-    #[test]
-    fn nvs_migration() {
-        use AutoPrepare::*;
-        // Nothing saved: the default.
-        assert_eq!(AutoPrepare::from_nvs(None, None), Always);
-        // The new key wins, whatever the old one says.
-        assert_eq!(AutoPrepare::from_nvs(Some("idle"), Some("always")), Idle);
-        assert_eq!(AutoPrepare::from_nvs(Some("off"), None), Off);
-        assert_eq!(AutoPrepare::from_nvs(Some("always"), Some("off")), Always);
-        // The old key: a choice is kept, the old default is not.
-        assert_eq!(AutoPrepare::from_nvs(None, Some("off")), Off);
-        assert_eq!(AutoPrepare::from_nvs(None, Some("always")), Always);
-        assert_eq!(AutoPrepare::from_nvs(None, Some("idle")), Always);
-        // Garbage in either: as if absent.
-        assert_eq!(AutoPrepare::from_nvs(Some("x"), Some("off")), Off);
-        assert_eq!(AutoPrepare::from_nvs(Some("x"), Some("x")), Always);
     }
 
     fn panel(dark: bool, paused: bool, transitioning: bool) -> Panel {

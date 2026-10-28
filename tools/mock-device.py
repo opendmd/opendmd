@@ -153,9 +153,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   the firmware works at most ~4 s a request and says false: ask again);
   anywhere else a 400, a
   missing directory a 404.
-- **Auto prepare** (`auto_prepare` in the config: `"always"` by default,
-  as on the device since 1.0.0-beta.11, `"idle"`, `"off"`, anything else a
-  400). `/api/cache` ends with
+- **Auto prepare** (`auto_prepare` in the config: `"idle"` by default,
+  `"always"`, `"off"`, anything else a 400). `/api/cache` ends with
   `"auto":{mode,state,reason,policy,session,failed,avg_full_s,avg_drip_s,
   eta_s,current}` and status with `"cache":{state,prepared,total}`. The
   builder is simulated and **writes nothing**: its state follows the mock's
@@ -170,8 +169,8 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `avg_full_s`. Any recount (anything that invalidates the cache count)
   drops the simulated copies and failures (not `session`), so `prepared` is
   the real count of copies unless the simulation has run since the last
-  change -- web-smoke sets `idle` first thing, so its cache checks, taken
-  while the mock plays, see real numbers only.
+  change -- the web-smoke cache checks, taken while the mock plays with
+  `idle`, see real numbers only.
 - **`/filelist*`** serves every root manifest (`filelist.txt`, `.hall`,
   `.xmas`, an obsolete `.odm.txt`) as `text/plain`, `no-cache`; a `/` after
   the name is a 404.
@@ -627,7 +626,7 @@ DEFAULT_SETTINGS = {
     "tz_name": "UTC",
     "transition": "dissolve",   # config::TRANSITION (opendmd_core::compositor)
     "transition_ms": 400,
-    "auto_prepare": "always",   # opendmd_core::auto_prepare: always (default) / idle / off
+    "auto_prepare": "idle",     # opendmd_core::auto_prepare: idle (default) / always / off
     "card_speed": "safe",       # config::CARD_SPEED: safe / fast / full
     "follow": False,            # Follow RePlayOS
     "follow_host": "",
