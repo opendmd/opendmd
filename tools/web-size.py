@@ -228,7 +228,15 @@ FONT = {"fonts/silkscreen.woff2"}
 # estimate stays the panel's — the browser runs neither (the steps and a
 # turn at a time draw the same bytes): +2.2 KB gz (~74.9 -> ~77.2 KB).
 # Raised under the brief's OK (it may move a budget with a reason).
-PSI_WASM_GZ_BUDGET = 76 * 1024  # 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 82 KB for formula-apps F1 (2026-10-28, branch formula-f1,
+# docs/research/formula-apps.md): the declarations (`psi 1`, `name`,
+# `about`, `control`, `look`: the header reader, text in quotes, their
+# fifteen sentences), `Meta` and the declared-look composition, and the
+# `controls()` export (the JSON the page builds its sliders and buttons
+# from, so the browser never parses a declaration itself): ~77.2 ->
+# 83,063 B gz (+3.9 KB; formula-apps.md §4 guessed 1-1.5). Raised under the
+# brief's OK (it may move the psi wasm line with a reason).
+PSI_WASM_GZ_BUDGET = 82 * 1024  # 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,

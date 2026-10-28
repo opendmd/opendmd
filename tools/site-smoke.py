@@ -122,7 +122,7 @@ def params(u: str) -> dict:
 
 
 def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path | None) -> None:
-    src = "-- a: size\nloop 4\nd = len((x - 0.5)*4, y - 0.5)\npal(rainbow, frac(d*(1 + a) - t/2))"
+    src = "control size = 0 \"Size\"\nloop 4\nd = len((x - 0.5)*4, y - 0.5)\npal(rainbow, frac(d*(1 + size) - t/2))"
     name = 'Rings <img src=x onerror="window.pwned=1">'
     url = share_link(base, src, name, a=0.25)
     for size in SIZES:
@@ -134,14 +134,14 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
             check(page.inner_text("#f-name") == name and page.evaluate("!window.pwned && !document.querySelector('#f-name img')"),
                   "/f/: the name is shown as text")
             check(page.locator("#f-code").inner_text().rstrip("\n") == src and page.locator("#f-code .n").count() > 3
-                  and page.locator("#f-code .c").inner_text() == "-- a: size", "/f/: the code, highlighted")
+                  and page.locator("#f-code .s").inner_text() == '"Size"', "/f/: the code, highlighted")
             a0 = lit(page, "#f-panel")
             f0 = page.evaluate("+document.querySelector('#f-panel').dataset.frames")
             page.wait_for_timeout(400)
             check(a0 > 1000 and page.evaluate("+document.querySelector('#f-panel').dataset.frames") > f0,
                   f"/f/: the preview is lit ({a0} px) and moving")
-            check(page.inner_text("#f-sl span") == "size" and page.input_value("#f-sl-a") == "0.25"
-                  and "Loops every 4 s" in page.inner_text("#f-cap"), "/f/: a slider named by its comment, the caption")
+            check(page.inner_text("#f-sl span") == "Size" and page.input_value("#f-sl-a") == "0.25"
+                  and "Loops every 4 s" in page.inner_text("#f-cap"), "/f/: a slider labelled by its control line, the caption")
             page.wait_for_timeout(400)
             # The QR code decodes to the page's link.
             png = page.locator("#f-qr svg").screenshot()
@@ -215,15 +215,15 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
             check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "/f/ (phone): no sideways scroll")
         page.context.close()
 
-    # A picker (`-- a: name = word, …`): buttons, choice j of n is j/(n-1), in the link.
+    # A choice (`control shape = word, …`): buttons, the value is the choice's number, in the link.
     page = new_page(browser, "laptop", errors)
-    page.goto(share_link(base, "-- a: shape = dot, ring, bar\ngray(a)", "Picker", a=1))
+    page.goto(share_link(base, "control shape = dot, ring, bar\ngray(shape/2)", "Picker", a=2))
     page.wait_for_selector("#f-sl-a[role=radiogroup]", timeout=20000)
     was = page.eval_on_selector_all("#f-sl-a [aria-checked=true]", "els => els.map(e => e.textContent)")
     page.click("#f-sl-a [role=radio] >> text=ring")
     page.click("#f-copy-link")
-    check(was == ["bar"] and page.inner_text("#f-sl > div > span") == "shape" and page.evaluate("navigator.clipboard.readText()").endswith("&a=0.5"),
-          f"/f/: a picker's buttons ({was} at a=1), ring -> a=0.5 in the link")
+    check(was == ["bar"] and page.inner_text("#f-sl > div > span") == "shape" and page.evaluate("navigator.clipboard.readText()").endswith("&a=1"),
+          f"/f/: a choice's buttons ({was} at a=2), ring -> a=1 in the link")
     page.context.close()
 
     # A long formula: GitHub can't take it in an address, so the file is copied.
@@ -576,7 +576,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                   f"gallery: Open leads to {e['name']}'s page")
             # A Formula that draws over a GIF: /f/ shows it over the sample picture, not black.
             e = next(x for x in examples if x["name"] == "Scanlines")
-            page.goto(share_link(base, e["src"], e["name"], a=e["a"]))
+            page.goto(share_link(base, e["src"], e["name"]))
             page.wait_for_function("+(document.querySelector('#f-panel').dataset.frames || 0) > 5", timeout=20000)
             n = lit(page, "#f-panel")
             check(n > 1000, f"/f/: {e['name']} (over a GIF) is lit, over the sample picture ({n} px)")
@@ -591,7 +591,7 @@ def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
     e = next(x for x in json.loads((ROOT / "opendmd-web/www/formulas.json").read_text()) if x["name"] == "Stripes")  # a slider
     for size in SIZES:
         page = new_page(browser, size, errors)
-        page.goto(share_link(base, e["src"], e["name"], a=e.get("a", 0)))
+        page.goto(share_link(base, e["src"], e["name"]))
         page.wait_for_function("+(document.querySelector('#f-panel').dataset.frames || 0) > 20", timeout=20000)
         page.wait_for_timeout(600)
         page.screenshot(path=str(shots / f"f-{size}.png"))

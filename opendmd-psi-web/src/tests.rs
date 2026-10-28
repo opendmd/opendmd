@@ -108,6 +108,33 @@ fn formulas() {
     );
     assert_eq!((info()[5] & 32, info()[7]), (32, 1));
     assert_eq!(look("gray(ul)", "over", 100), "gray(ul)");
+    // A formula's own `look` line is left out of the part (the look is
+    // the blend and amount asked for here).
+    assert_eq!(
+        look("look multiply 20\nhsv(x, 1, 1)", "screen", 40),
+        "part look {\n  hsv(x, 1, 1)\n}\nlayer screen { look(x, y, 0.4) }"
+    );
+
+    // What a formula declares, for the page's controls.
+    assert_eq!(
+        controls("name \"Zoom é\"\ncontrol zoom 1..4 = 2.5 \"Zoom\"\ncontrol wob = gentle, strong, off\nlook screen 40\ngray(zoom/4 + wob*0.1 + c)"),
+        r#"{"name":"Zoom é","about":null,"look":["screen",40],"controls":[{"slot":"a","name":"zoom","label":"Zoom","kind":"slider","lo":1,"hi":4,"default":2.5,"declared":true},{"slot":"b","name":"wob","label":"wob","kind":"choice","words":["gentle","strong","off"],"default":0,"declared":true},{"slot":"c","name":"c","label":"c","kind":"slider","lo":0,"hi":1,"default":0,"declared":false}]}"#
+    );
+    assert_eq!(
+        controls("control k -0.5..0.3 = -0.25\ngray(x)"),
+        r#"{"name":null,"about":null,"look":null,"controls":[{"slot":"a","name":"k","label":"k","kind":"slider","lo":-0.5,"hi":0.3,"default":-0.25,"declared":true}]}"#
+    );
+    assert_eq!(controls("gray(x)"), r#"{"name":null,"about":null,"look":null,"controls":[]}"#);
+    assert_eq!(controls("gray(nope)"), "");
+    // (The formula drawn is unchanged by it.)
+    assert!(compile("control k 0..1 = 0.25\ngray(k)"));
+    let _ = controls("gray(1)");
+    // An unset slider plays at the declared default.
+    frame(0, 0, 0, 0, UNSET, UNSET, UNSET);
+    let unset = unsafe { core::slice::from_raw_parts(pixels(), W * H * 3) }.to_vec();
+    frame(0, 0, 0, 0, 1 << 14, 0, 0);
+    assert_eq!(unsafe { core::slice::from_raw_parts(pixels(), W * H * 3) }, &unset[..]);
+    assert_eq!(unset[0], 64);
     // (The module's state is a static: one test.)
     #[cfg(not(target_arch = "wasm32"))]
     every_example_as_a_look();
@@ -139,7 +166,11 @@ fn the_examples_are_light_enough_for_the_panel() {
             .filter(|l| {
                 let inside = depth > 0 || l.trim_start().starts_with("part ");
                 depth += l.matches('{').count() as i32 - l.matches('}').count() as i32;
-                !inside && !l.trim_start().starts_with("--")
+                // (Nor the declarations: what it is, not what it draws.)
+                let decl = ["name ", "about ", "control ", "look", "psi "]
+                    .iter()
+                    .any(|w| l.starts_with(w));
+                !inside && !decl && !l.trim_start().starts_with("--")
             })
             .count();
         // The showcase, Big clock, reads as a commented step a line
@@ -168,15 +199,22 @@ fn the_examples_are_light_enough_for_the_panel() {
             e.name,
             p.esp32_us_still()
         );
-        // A slider it reads has a starting value or a name.
-        for (k, v) in [('a', e.a), ('b', e.b), ('c', e.c)] {
-            let used = p.sliders() & (1 << (k as u8 - b'a')) != 0;
+        // A slider it reads is declared (a `control` line: its name,
+        // label and default), not named in a comment.
+        for k in 0..3 {
+            let used = p.sliders() & (1 << k) != 0;
             assert!(
-                !used || v != 0 || e.src.contains(&format!("-- {k}:")),
-                "{}: slider {k}",
-                e.name
+                !used || p.meta().declared() & (1 << k) != 0,
+                "{}: slider {} without a control line",
+                e.name,
+                ['a', 'b', 'c'][k]
             );
         }
+        assert!(
+            !e.src.lines().any(|l| l.trim_start().starts_with("-- a:")),
+            "{}: the `-- a:` comment is retired",
+            e.name
+        );
     }
 }
 
@@ -342,4 +380,148 @@ fn every_example_as_a_look() {
         "{}",
         error()
     );
+}
+
+/// Every example's frames at its defaults, as they were before the
+/// examples' `-- a:` comments became `control` lines (formula-apps F1,
+/// 2026-10-28: the JSON's `a` then, the declared default now, which the
+/// player and the page use when a slot is unset), over the golden picture.
+#[cfg(not(target_arch = "wasm32"))]
+const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
+    ("Big clock", 0, 0x5671a92327d0e76d),
+    ("Big clock", 1730, 0x70ef55ab888f0011),
+    ("Big clock", 6420, 0x2e757d511ef7ca23),
+    ("Starfield", 0, 0xd4e070cecf44fe93),
+    ("Starfield", 1730, 0xaf7d5b6be57277aa),
+    ("Starfield", 6420, 0x90e3758ef743ba71),
+    ("Wireframe cube", 0, 0x3c481b55b889f211),
+    ("Wireframe cube", 1730, 0x1db6636a007350c1),
+    ("Wireframe cube", 6420, 0xf31ba094a7ba7337),
+    ("Tunnel", 0, 0xe94602d1652e1129),
+    ("Tunnel", 1730, 0x5b78122dff79a963),
+    ("Tunnel", 6420, 0xea814a0f353fa2cf),
+    ("Rotozoom", 0, 0x6ad2db7bf82cddb6),
+    ("Rotozoom", 1730, 0xc16b9f2e65b5fdae),
+    ("Rotozoom", 6420, 0xe57a5bd42332c352),
+    ("Rotozoom floor", 0, 0xab6b6c0c1c05d139),
+    ("Rotozoom floor", 1730, 0x66b37879e7a17a09),
+    ("Rotozoom floor", 6420, 0x5af9feaa3a8b41f5),
+    ("Endless road", 0, 0x150f6df9763d2806),
+    ("Endless road", 1730, 0xfbe6b29e2e5c9bd1),
+    ("Endless road", 6420, 0x5ff2083213399702),
+    ("Time gate", 0, 0x24bd9942453ef2e8),
+    ("Time gate", 1730, 0x7787a7d7cc3f723e),
+    ("Time gate", 6420, 0x2a17edb7a1ade755),
+    ("Plasma", 0, 0xfb5c1cb21173b111),
+    ("Plasma", 1730, 0x9546a903ee9acb61),
+    ("Plasma", 6420, 0xbf90cf3c83bac96b),
+    ("Fire", 0, 0x960e59aeab7951c8),
+    ("Fire", 1730, 0xbea6b26c5d43c15d),
+    ("Fire", 6420, 0x847898880d31ee05),
+    ("Rain", 0, 0xbda039267e727a4e),
+    ("Rain", 1730, 0x8e61dd4784375452),
+    ("Rain", 6420, 0x77570f4a476294a7),
+    ("Matrix", 0, 0x7bdb4ff5caa79867),
+    ("Matrix", 1730, 0x498bebeaf2536936),
+    ("Matrix", 6420, 0x93001b452ba06964),
+    ("Lava lamp", 0, 0x1c70828a94fa5c82),
+    ("Lava lamp", 1730, 0x3912ecb2c5c51b43),
+    ("Lava lamp", 6420, 0xe2da3e4b13b05630),
+    ("Rings", 0, 0xf2cca724804083b5),
+    ("Rings", 1730, 0x4e985fe095de8d29),
+    ("Rings", 6420, 0xdcba9def1c26c04f),
+    ("Moiré", 0, 0x4157bdfdb00c81c3),
+    ("Moiré", 1730, 0xafa70d932caf84a0),
+    ("Moiré", 6420, 0x8681c1171c7953c7),
+    ("XOR pattern", 0, 0x3d89f2b7439e8625),
+    ("XOR pattern", 1730, 0xbd877aa5f66e5925),
+    ("XOR pattern", 6420, 0x49a1218e8c889d65),
+    ("Stripes", 0, 0x0a53a451bf3de0ed),
+    ("Stripes", 1730, 0x05a99347bbcaae41),
+    ("Stripes", 6420, 0xd4ba0313857c3a7f),
+    ("Clock", 0, 0x1c859c9432c78b42),
+    ("Clock", 1730, 0x1c859c9432c78b42),
+    ("Clock", 6420, 0x1c859c9432c78b42),
+    ("CRT", 0, 0xa370b6d938e6a211),
+    ("CRT", 1730, 0x624e33f3904fa52c),
+    ("CRT", 6420, 0x5754c9112c907b97),
+    ("Rainbow wave", 0, 0x6d6cd15d6293619f),
+    ("Rainbow wave", 1730, 0x7e1aa7ac7a23dded),
+    ("Rainbow wave", 6420, 0xd2645bea0a67abe2),
+    ("Spotlight", 0, 0x5a646f5a21333771),
+    ("Spotlight", 1730, 0x6ca3a96555f17be5),
+    ("Spotlight", 6420, 0xeecb16dc3e03b206),
+    ("Copper bars", 0, 0xd65a063a3b24a925),
+    ("Copper bars", 1730, 0xf229f95cbec2ed25),
+    ("Copper bars", 6420, 0xbd475933b7c45625),
+    ("Bars to stars", 0, 0xe121beaf81716ded),
+    ("Bars to stars", 1730, 0x4269f88db1e25dc1),
+    ("Bars to stars", 6420, 0x9806d62838473829),
+    ("Rings through stripes", 0, 0x0cce44831f18a402),
+    ("Rings through stripes", 1730, 0xbd9030d90c96e5c8),
+    ("Rings through stripes", 6420, 0x7bc9d15841cb6754),
+    ("Kaleidoscope", 0, 0x8acaa53c934ec265),
+    ("Kaleidoscope", 1730, 0xf7ac89f4ae0e1d0f),
+    ("Kaleidoscope", 6420, 0xfac1d28e1c0ad8a7),
+    ("Scanlines", 0, 0x2e1c992bbc8c9f5a),
+    ("Scanlines", 1730, 0x2e1c992bbc8c9f5a),
+    ("Scanlines", 6420, 0x2e1c992bbc8c9f5a),
+    ("Glitter", 0, 0x0ef799246d6d4252),
+    ("Glitter", 1730, 0x3cc2113373285791),
+    ("Glitter", 6420, 0x4325e334249f1715),
+    ("Old photo", 0, 0x8a96329730876e8a),
+    ("Old photo", 1730, 0x8a96329730876e8a),
+    ("Old photo", 6420, 0x8a96329730876e8a),
+    ("Vignette", 0, 0x33bf77d214dc3c9d),
+    ("Vignette", 1730, 0x33bf77d214dc3c9d),
+    ("Vignette", 6420, 0x33bf77d214dc3c9d),
+    ("Corner clock", 0, 0xf9ac5e7955b4a76c),
+    ("Corner clock", 1730, 0xf9ac5e7955b4a76c),
+    ("Corner clock", 6420, 0xf9ac5e7955b4a76c),
+    ("Old TV", 0, 0x858b99abf175d63d),
+    ("Old TV", 1730, 0x5b634bb1f03cce37),
+    ("Old TV", 6420, 0xf530faae1d47c446),
+    ("Plasma letters", 0, 0x25c29254edf5deb8),
+    ("Plasma letters", 1730, 0xc116670365b1c4b9),
+    ("Plasma letters", 6420, 0x129224eed97a6537),
+    ("Searchlight", 0, 0x6688521f0639056f),
+    ("Searchlight", 1730, 0x27134696e6b29b96),
+    ("Searchlight", 6420, 0xf3755c40b9cf4ce2),
+];
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn every_example_draws_as_before_at_its_defaults() {
+    use opendmd_psi::{golden, render_rows_ink, Scratch};
+    let json = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../opendmd-web/www/formulas.json"
+    ))
+    .unwrap();
+    let mut under = vec![0u8; W * H * 3];
+    golden::picture(&mut under);
+    let all = crate::examples(&json);
+    assert_eq!(all.len() * 3, EXAMPLE_FRAMES.len());
+    for (e, want) in all.iter().zip(EXAMPLE_FRAMES.chunks(3)) {
+        let p = opendmd_psi::compile(&e.src).unwrap();
+        for &(name, ms, hash) in want {
+            assert_eq!(name, e.name);
+            let mut i = golden::inputs(ms);
+            let given = |v: i32| (v != 0).then_some(v);
+            [i.a, i.b, i.c] = p.meta().values([given(e.a), given(e.b), given(e.c)]);
+            i.set_ms(&p, u64::from(ms));
+            let mut out = vec![0u8; W * H * 3];
+            render_rows_ink::<128>(
+                &p,
+                &mut Scratch::new(),
+                Some(&mut opendmd_psi::Ink::boxed()),
+                &i,
+                &OWN,
+                Some(&under),
+                u32::MAX,
+                &mut out,
+            );
+            assert_eq!(golden::fnv(&out), hash, "{name} at {ms} ms");
+        }
+    }
 }

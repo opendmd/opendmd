@@ -193,7 +193,7 @@ pub const DECLARATIONS: [&str; 5] = ["psi", "name", "about", "control", "look"];
 
 /// The language version this compiler is (`psi 1`; an unversioned formula
 /// is version 1).
-pub const VERSION: i32 = 1;
+pub const VERSION: usize = 1;
 
 /// Words that are keywords only in one place: `fps` before a number,
 /// `forever` after `loop`, `sprite NAME {`, `palette NAME =`, a sprite's

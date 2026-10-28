@@ -86,7 +86,11 @@ pub fn wrap(src: &str, prog: &Program, blend: &str, amount: u8) -> Result<String
     let owned;
     let src = match cut {
         Some((a, e)) => {
-            owned = [src.get(..a).unwrap_or(""), src.get(e..).unwrap_or("")].concat();
+            // (Not `concat`: its generic join is ~1 KB of the web module.)
+            let mut o = String::with_capacity(src.len());
+            o.push_str(src.get(..a).unwrap_or(""));
+            o.push_str(src.get(e..).unwrap_or(""));
+            owned = o;
             owned.as_str()
         }
         None => src,

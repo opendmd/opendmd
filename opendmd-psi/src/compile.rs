@@ -4410,7 +4410,7 @@ impl<'s> Parser<'s> {
     fn version(&mut self, t: Token) -> Result<(), Error> {
         let n = self.peek();
         let v = match n.tok {
-            Tok::Num(v) if v >= ONE && v & 0xffff == 0 => v >> 16,
+            Tok::Num(v) if v >= ONE && v & 0xffff == 0 => (v >> 16) as usize,
             // E603.
             _ => return self.err(t, "`psi` takes the language's version, a whole number: `psi 1`"),
         };
@@ -4436,7 +4436,8 @@ impl<'s> Parser<'s> {
             return self.err(q, "this takes its text in quotes, e.g. `name \"Sunrise\"`");
         }
         let inner = sub(self.src, q.start + 1, q.end - 1);
-        if inner.chars().count() > most {
+        // (Characters: UTF-8's lead bytes.)
+        if inner.bytes().filter(|&b| b & 0xc0 != 0x80).count() > most {
             // E955.
             return Err(self.fail_at(
                 q,
@@ -4451,7 +4452,7 @@ impl<'s> Parser<'s> {
     /// (100 when none).
     #[inline(never)]
     fn look_line(&mut self) -> Result<(usize, u8), Error> {
-        const HOW: &str = "`look` takes a blend (over, screen, add, multiply, max or min) and an amount from 0 to 100, e.g. `look screen 40`";
+        const HOW: &str = "`look` takes a blend (over, screen, add, multiply, max or min) and an amount from 0 to 100";
         let mut blend = 0;
         let n = self.peek();
         if n.tok == Tok::Name {
@@ -4496,7 +4497,7 @@ impl<'s> Parser<'s> {
     /// keeps its controls).
     #[inline(never)]
     fn control(&mut self, kw: Token, k: usize, host: bool) -> Result<(), Error> {
-        const HOW: &str = "a control is `control NAME lo..hi = default \"Label\"` (a slider) or `control NAME = word, word, …` (buttons), e.g. `control size 0..1 = 0.5 \"Size\"`";
+        const HOW: &str = "a control is `control NAME lo..hi = default \"Label\"` or `control NAME = word, word, …`";
         let nt = self.next();
         let name = self.text(nt);
         let letter = ["a", "b", "c"].iter().position(|&l| l == name);
