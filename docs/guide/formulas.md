@@ -60,14 +60,20 @@ last version that worked, dimmed.
   (Shift for bigger steps). On a phone, tap a number and drag the bar that
   appears under the formula, or use its − and + buttons. Numbers can go
   below zero. Ctrl+Z (⌘Z) undoes a whole drag at once.
-- **Sliders:** a formula that uses `a`, `b` or `c` gets a slider for each,
-  0 to 1. A comment like `-- a: speed` gives the slider a name.
-- **Pickers:** a comment that lists words after an `=`, like
-  `-- a: shape = cube, octahedron, icosahedron`, makes the slider a row of
-  buttons, one for each word (up to six). The buttons set the slider to
-  evenly spaced values from 0 to 1: with three, 0, 0.5 and 1. Read which
-  one is chosen with `pick(floor(a*2 + 0.5), …)`, or for any number of
-  choices *n*, `floor(a*(n − 1) + 0.5)`.
+- **Controls:** a line at the top like `control speed 0..4 = 1 "Speed"`
+  gives the formula a slider: `speed` is a value you use in it, from 0 to 4,
+  starting at 1, labelled "Speed" (the range is 0 to 1 when you leave it
+  out, the label the name). A line that lists words,
+  `control shape = cube, octahedron, icosahedron`, makes a row of buttons
+  (two to six words; two make a switch): `shape` is the chosen word's
+  number, 0 for the first, so read it with `pick(shape, …)`. Up to three
+  controls; they travel with the formula, so its name, controls and
+  defaults are the same in a share link, a playlist and on the panel. A
+  formula that uses `a`, `b` or `c` without a `control` line gets a plain
+  slider, 0 to 1, for each.
+- **Name and look:** `name "My sunrise"` and `about "…"` at the top say
+  what it is called and what it is; `look screen 40` says it can be the
+  panel's look, drawn over every GIF with that blend and amount.
 - **Cheat sheet** lists everything the language has, with a line on each.
   Tap a name to put it in.
 - **Save** keeps the formula in this browser, under its name.
@@ -146,7 +152,7 @@ words (a single character in quotes, `'A'`, is a number too: its code).
 | `t` | seconds into the loop (with `loop forever`, since the formula started) |
 | `seed` | with `loop forever`: 0 to 1, a new one each time it plays |
 | `hour`, `minute`, `second` | the time of day |
-| `a`, `b`, `c` | the sliders, 0 to 1 |
+| `a`, `b`, `c` | the controls, in the order the `control` lines declare them (0 to 1 when there is no `control` line) |
 | `w`, `h` | 128 and 32 |
 | `cx`, `cy` | where the pixel is from the middle, in panel heights: `cx` from −2 at the left edge to 2 at the right, `cy` from −0.5 at the bottom to 0.5 at the top |
 | `r`, `angle` | how far the pixel is from the middle (round, though the panel is 4 times wider than tall: `r < 0.4` is a disc), and its angle round the middle, in turns |
