@@ -6,6 +6,13 @@
 site (make site):
 
     uv run tools/site-smoke.py target/site [--shots DIR] [--gallery-tool PATH] [--dist dist --art target/site-art]
+        [--base URL]
+
+With --base the pages are fetched from URL (the opendmd-site Worker under
+`cf dev`, or a preview deploy) instead of a local server over the folder;
+the folder is still read for what the site should hold, so it must be the
+build URL serves. There the art index must also carry
+`Access-Control-Allow-Origin: *` (target/site/_headers).
 
 - /f/ (a formula's own page): the name and the code shown as text (a link's
   markup stays text), the preview lit and moving, a slider, the QR code
@@ -56,13 +63,14 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 import zxingcpp
 from PIL import Image
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Error as PlaywrightError, Page, TimeoutError as PlaywrightTimeout, sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 SIZES = {"laptop": (1280, 800), "phone": (390, 844)}
@@ -100,6 +108,24 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
     return page
 
 
+def wait_js(page: Page, expr: str, timeout: float = 30000) -> None:
+    """page.wait_for_function, but polled with page.evaluate: Playwright's
+    wait_for_function evaluates its predicate with eval() in the page, which
+    the site's CSP (no 'unsafe-eval', target/site/_headers) refuses under
+    --base."""
+    end = time.monotonic() + timeout / 1000
+    while True:
+        try:
+            if page.evaluate(expr):
+                return
+        except PlaywrightError:  # not there yet, or a navigation in between: try again
+            if time.monotonic() > end:
+                raise
+        if time.monotonic() > end:
+            raise PlaywrightTimeout(f"wait_js: {expr[:80]} not true after {timeout:.0f} ms")
+        page.wait_for_timeout(50)
+
+
 def lit(page: Page, sel: str) -> int:
     return page.evaluate("""(sel) => { const c = document.querySelector(sel); if (!c || !c.width) return 0;
         const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0;
@@ -129,7 +155,7 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
         page = new_page(browser, size, errors)
         page.goto(url)
         page.wait_for_selector(F_READY, timeout=20000)
-        page.wait_for_function("+(document.querySelector('#f-panel').dataset.frames || 0) > 5", timeout=20000)
+        wait_js(page, "+(document.querySelector('#f-panel').dataset.frames || 0) > 5", timeout=20000)
         if size == "laptop":
             check(page.inner_text("#f-name") == name and page.evaluate("!window.pwned && !document.querySelector('#f-name img')"),
                   "/f/: the name is shown as text")
@@ -302,11 +328,11 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
         page.wait_for_timeout(700)
 
     def saved(sel):
-        page.wait_for_function(f"document.querySelector({json.dumps(sel)}).closest('.card,.grp').querySelector('.tick')?.textContent.includes('Saved')", timeout=10000)
+        wait_js(page, f"document.querySelector({json.dumps(sel)}).closest('.card,.grp').querySelector('.tick')?.textContent.includes('Saved')", timeout=10000)
 
     page = new_page(browser, "laptop", errors)
     page.goto(f"{base}/demo/#now")
-    page.wait_for_function("(t => t && t !== 'Local simulator')(document.querySelector('#now-title')?.textContent)", timeout=30000)
+    wait_js(page, "(t => t && t !== 'Local simulator')(document.querySelector('#now-title')?.textContent)", timeout=30000)
     tab("play")
     check(page.locator("text=Device settings, WiFi and reboot live on the player").count() == 0
           and all(page.locator(s).count() == 1 for s in ("#st-brightness", "#st-maxbright", "#st-set", "#st-plat-btn", "#st-dwell-min", "#st-dwell-max", "#st-shuffle")),
@@ -336,7 +362,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     check(rgb[0] > 2 * rgb[1], f"demo settings: Amber tints the panel (red {rgb[0]:,}, blue {rgb[1]:,})")
     before = rows_ratio(page)
     tab("look")
-    page.wait_for_function("[...document.querySelectorAll('#st-look-formula option')].some(o => o.textContent === 'Scanlines')", timeout=20000)
+    wait_js(page, "[...document.querySelectorAll('#st-look-formula option')].some(o => o.textContent === 'Scanlines')", timeout=20000)
     page.select_option("#st-look-formula", label="Scanlines")
     saved("#st-look-formula")
     now()
@@ -366,7 +392,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     check(lit(page, "#st-trans-panel") > 500, "demo settings: the transition preview plays")
     # The schedule: night mode from a minute ago for an hour, Panel off.
     tab("time")
-    page.wait_for_function("/^\\d\\d:\\d\\d/.test(document.querySelector('#tm-now').textContent)", timeout=10000)
+    wait_js(page, "/^\\d\\d:\\d\\d/.test(document.querySelector('#tm-now').textContent)", timeout=10000)
     hh, mm = map(int, page.inner_text("#tm-now")[:5].split(":"))
     t = hh * 60 + mm
     fmt = lambda m: f"{(m // 60) % 24:02d}:{m % 60:02d}"
@@ -381,10 +407,10 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     check(night.startswith(f"Night mode until {fmt(t + 60)}") and filt() == "brightness(0)",
           f"demo settings: night mode turns the panel off, with Now's banner ('{night}', {filt()})")
     page.click("#now-wake")
-    page.wait_for_function("document.querySelector('#now-banner').textContent.startsWith('Schedule paused')", timeout=10000)
+    wait_js(page, "document.querySelector('#now-banner').textContent.startsWith('Schedule paused')", timeout=10000)
     check("brightness(0.5" in filt(), f"demo settings: Wake for an hour lights it again ({page.inner_text('#now-banner')}, {filt()})")
     page.click("#now-resume")
-    page.wait_for_function("document.querySelector('#now-banner').textContent.startsWith('Night mode')", timeout=10000)
+    wait_js(page, "document.querySelector('#now-banner').textContent.startsWith('Night mode')", timeout=10000)
     tab("time")
     page.uncheck("#sc-night-on")
     page.click("#sc-add")
@@ -405,7 +431,7 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     page.fill("#fo-host", "192.168.1.20")
     page.wait_for_timeout(700)
     page.click("#fo button:has-text('Test')")
-    page.wait_for_function("document.querySelector('#fo-result').textContent.includes('demo')", timeout=10000)
+    wait_js(page, "document.querySelector('#fo-result').textContent.includes('demo')", timeout=10000)
     check("can’t reach your network" in page.inner_text("#fo-result"), f"demo settings: Follow RePlayOS says the demo can't reach it ('{page.inner_text('#fo-result')}')")
     page.uncheck("#fo-on")
     # Device: status, card speed, panel timing tried and kept, the name; the rest said.
@@ -429,10 +455,10 @@ def demo_settings(browser, base: str, errors: list[str], shots: Path) -> None:
     check(kept == 2, f"demo settings: panel timing tried, then kept (latch blanking {kept})")
     page.fill("#st-hostname", "kitchen")
     page.click("#st-save-net")
-    page.wait_for_function("document.querySelector('#st-moved').textContent.includes('kitchen.local')", timeout=15000)
+    wait_js(page, "document.querySelector('#st-moved').textContent.includes('kitchen.local')", timeout=15000)
     page.fill("#st-ssid", "Elsewhere")
     page.click("#st-save-net")
-    page.wait_for_function("document.querySelector('#st-net .tick').textContent.includes('demo')", timeout=10000)
+    wait_js(page, "document.querySelector('#st-net .tick').textContent.includes('demo')", timeout=10000)
     check(True, f"demo settings: a new name is taken, a WiFi network refused ('{page.inner_text('#st-net .tick')}')")
     page.check("#sec-key")
     page.wait_for_selector("#sec-key-val", timeout=10000)
@@ -470,7 +496,7 @@ def demo_own_card(browser, base: str, site: Path, errors: list[str]) -> None:
     local mode with no errors."""
     page = new_page(browser, "laptop", errors)
     page.goto(f"{base}/demo/#now")
-    page.wait_for_function("(t => t && t !== 'Local simulator')(document.querySelector('#now-title')?.textContent)", timeout=30000)
+    wait_js(page, "(t => t && t !== 'Local simulator')(document.querySelector('#now-title')?.textContent)", timeout=30000)
     # Night mode now, so the demo's banner is up before the swap.
     page.evaluate("""() => import('./js/state.js').then(async ({ app }) => {
         await app.src.putSchedule({ rules: [], night: { from: '00:00', to: '00:00', mode: 'dim', brightness: 8 } }); })""")
@@ -482,14 +508,14 @@ def demo_own_card(browser, base: str, site: Path, errors: list[str]) -> None:
         shutil.copy(gif, card / "gifs/Kenney" / gif.name)
         (card / "filelist.txt").write_text(f"/gifs/Kenney/{gif.name}\n")
         page.set_input_files(".demo-own input", str(card))
-        page.wait_for_function("!document.querySelector('#where').textContent.startsWith('Demo')", timeout=10000)
+        wait_js(page, "!document.querySelector('#where').textContent.startsWith('Demo')", timeout=10000)
         page.evaluate("location.hash = '#settings'")
         page.wait_for_selector("#view-settings.on .card", timeout=10000)
         page.evaluate("location.hash = '#now'")
         page.wait_for_selector("#view-now.on #sim-play", timeout=10000)
         page.select_option("#sim-list", "/filelist.txt")
         page.click("#sim-play")
-        page.wait_for_function(f"document.querySelector('#now-title').textContent !== 'Local simulator'", timeout=10000)
+        wait_js(page, f"document.querySelector('#now-title').textContent !== 'Local simulator'", timeout=10000)
         page.wait_for_timeout(1500)
         state = page.evaluate("""() => import('./js/state.js').then(({ app }) => ({
             banner: !!document.querySelector('#now-banner'), filter: getComputedStyle(document.querySelector('#now-panel')).filter,
@@ -504,8 +530,9 @@ def demo_own_card(browser, base: str, site: Path, errors: list[str]) -> None:
 ART_PLATFORMS = ("MD", "SNES", "GB", "GBC", "GBA", "SATURN", "NDS", "NES", "SMS", "PCE", "PS1", "N64", "ARCADE")
 
 
-def art_index(browser, base: str, site: Path, errors: list[str]) -> None:
-    """The game name index at art-index/v1/, and the demo using it same-origin."""
+def art_index(browser, base: str, site: Path, errors: list[str], cors_expected: bool = False) -> None:
+    """The game name index at art-index/v1/, and the demo using it same-origin.
+    `cors_expected`: served with the site's _headers (--base), so CORS `*` is checked."""
     bad = []
     cors = None
     for plat in ART_PLATFORMS:
@@ -514,7 +541,9 @@ def art_index(browser, base: str, site: Path, errors: list[str]) -> None:
         if not f.is_file() or f.read_bytes() != src.read_bytes():
             bad.append(plat)
             continue
-        req = urllib.request.Request(f"{base}/art-index/v1/{plat}.json", headers={"Origin": "http://192.168.1.50"})
+        req = urllib.request.Request(f"{base}/art-index/v1/{plat}.json", headers={"Origin": "http://192.168.1.50",
+                                     # Browser Integrity Check (error 1010) refuses urllib's default user agent
+                                     "User-Agent": "opendmd-site-test/1 (+https://opendmd.dev)"})
         with urllib.request.urlopen(req) as r:
             body, ctype, cors = r.read(), r.headers.get("content-type", ""), r.headers.get("access-control-allow-origin")
         d = json.loads(body)
@@ -522,6 +551,8 @@ def art_index(browser, base: str, site: Path, errors: list[str]) -> None:
             bad.append(plat)
     check(not bad, f"art index: art-index/v1/<platform>.json for all {len(ART_PLATFORMS)} platforms, fetchable as JSON "
                    f"(CORS header here: {cors or 'none, the test server; Pages sends *'}){' — bad: ' + ', '.join(bad) if bad else ''}")
+    if cors_expected:
+        check(cors == "*", f"art index: Access-Control-Allow-Origin: * from {base} ({cors})")
     check(not any(p.is_file() for p in (site / "demo/art").rglob("*")), "art index: not under demo/ (the www pack does not carry it)")
     png = io.BytesIO()
     Image.new("RGB", (32, 24), (200, 40, 40)).save(png, "PNG")
@@ -552,7 +583,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
         page = new_page(browser, size, errors)
         page.goto(f"{base}/formulas/")
         page.wait_for_selector(".ftile", timeout=20000)
-        page.wait_for_function("[...document.querySelectorAll('.ftile img')].slice(0, 4).every(i => i.complete && i.naturalWidth == 128)",
+        wait_js(page, "[...document.querySelectorAll('.ftile img')].slice(0, 4).every(i => i.complete && i.naturalWidth == 128)",
                                timeout=20000)
         names = page.eval_on_selector_all("#examples ~ ul .ftile h3", "els => els.map(e => e.textContent)")
         if size == "laptop":
@@ -561,7 +592,7 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
             community = page.eval_on_selector_all("#community + ul .ftile h3", "els => els.map(e => e.textContent)")
             print(f"  ..   gallery: {len(community)} from the community {community[:5]}")
             page.evaluate("document.querySelectorAll('.ftile img').forEach(i => i.loading = 'eager')")
-            page.wait_for_function("[...document.querySelectorAll('.ftile img')].every(i => i.complete && i.naturalWidth == 128)", timeout=20000)
+            wait_js(page, "[...document.querySelectorAll('.ftile img')].every(i => i.complete && i.naturalWidth == 128)", timeout=20000)
             dark = page.evaluate("""() => [...document.querySelectorAll('.ftile img')].filter(i => {
                 const c = document.createElement('canvas'); c.width = 128; c.height = 32; const x = c.getContext('2d'); x.drawImage(i, 0, 0);
                 const d = x.getImageData(0, 0, 128, 32).data; for (let k = 0; k < d.length; k += 4) if (d[k] + d[k+1] + d[k+2] > 90) return false; return true; }).length""")
@@ -576,8 +607,12 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                   f"gallery: Open leads to {e['name']}'s page")
             # A Formula that draws over a GIF: /f/ shows it over the sample picture, not black.
             e = next(x for x in examples if x["name"] == "Scanlines")
+            # From /f/ to /f/#…: only the hash changes, and f.js reloads on
+            # hashchange, so the old page would answer the wait and vanish
+            # under the next evaluate. Start from a blank page instead.
+            page.goto("about:blank")
             page.goto(share_link(base, e["src"], e["name"], a=e["a"]))
-            page.wait_for_function("+(document.querySelector('#f-panel').dataset.frames || 0) > 5", timeout=20000)
+            wait_js(page, "+(document.querySelector('#f-panel').dataset.frames || 0) > 5", timeout=20000)
             n = lit(page, "#f-panel")
             check(n > 1000, f"/f/: {e['name']} (over a GIF) is lit, over the sample picture ({n} px)")
         else:
@@ -592,13 +627,13 @@ def screenshots(browser, base: str, errors: list[str], shots: Path) -> None:
     for size in SIZES:
         page = new_page(browser, size, errors)
         page.goto(share_link(base, e["src"], e["name"], a=e.get("a", 0)))
-        page.wait_for_function("+(document.querySelector('#f-panel').dataset.frames || 0) > 20", timeout=20000)
+        wait_js(page, "+(document.querySelector('#f-panel').dataset.frames || 0) > 20", timeout=20000)
         page.wait_for_timeout(600)
         page.screenshot(path=str(shots / f"f-{size}.png"))
         page.screenshot(path=str(shots / f"f-{size}-full.png"), full_page=True)
         page.goto(f"{base}/formulas/")
         page.evaluate("document.querySelectorAll('.ftile img').forEach(i => i.loading = 'eager')")
-        page.wait_for_function("[...document.querySelectorAll('.ftile img')].every(i => i.complete && i.naturalWidth == 128)", timeout=20000)
+        wait_js(page, "[...document.querySelectorAll('.ftile img')].every(i => i.complete && i.naturalWidth == 128)", timeout=20000)
         page.screenshot(path=str(shots / f"gallery-{size}.png"))
         page.screenshot(path=str(shots / f"gallery-{size}-full.png"), full_page=True)
         page.context.close()
@@ -684,9 +719,11 @@ def main() -> int:
     ap.add_argument("--gallery-tool", type=Path, default=ROOT / "opendmd-gallery/target/release/opendmd-gallery")
     ap.add_argument("--dist", type=Path, default=ROOT / "dist", help="the release make site published (its manifest's version)")
     ap.add_argument("--art", type=Path, default=ROOT / "target/site-art", help="tools/site-art.py's output")
+    ap.add_argument("--base", help="fetch the site from here (e.g. cf dev's http://127.0.0.1:8787) instead of serving SITE")
     a = ap.parse_args()
     (a.shots or ROOT / "target/site-smoke").mkdir(parents=True, exist_ok=True)
-    base = serve(a.site)
+    base = a.base.rstrip("/") if a.base else serve(a.site)
+    print(f"site: {base}{' (' + str(a.site) + ', served here)' if not a.base else ''}")
     errors: list[str] = []
     tool = a.gallery_tool if a.gallery_tool.is_file() else None
     with sync_playwright() as p:
@@ -699,7 +736,7 @@ def main() -> int:
         print("the demo's share link")
         demo_share(browser, base, errors)
         print("the art index (/art-index/)")
-        art_index(browser, base, a.site, errors)
+        art_index(browser, base, a.site, errors, cors_expected=bool(a.base))
         print("the gallery (/formulas/)")
         gallery(browser, base, errors, a.shots)
         print("the HTTP API (dev/api.html, dev/api/)")

@@ -107,7 +107,8 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 	notices notices-check notices-check-web \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
-	site site-serve site-publish site-smoke gallery-tool
+	site site-serve site-publish site-smoke gallery-tool \
+	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-stub site-stub-test
 
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
@@ -132,6 +133,7 @@ test:
 	@echo "==> Testing $(GAL) (the formula gallery's checker)"
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo test
 	tools/site-publish-test.sh
+	tools/site-stub-test.sh
 	uv run tools/gallery-check-test.py
 	uv run tools/gallery-pages-test.py
 
@@ -347,10 +349,72 @@ site: web sim-build gallery-tool
 # The site's pages in Chromium (the formula page, the gallery, the API pages and
 # the install page), after make site.
 site-smoke:
-	uv run tools/site-smoke.py $(SITE) --dist $(DIST) --art target/site-art
+	uv run tools/site-smoke.py $(SITE) --dist $(DIST) --art target/site-art $(if $(SITE_BASE),--base $(SITE_BASE))
 
 site-serve: site
 	uv run python -m http.server 8081 -d $(SITE)
+
+# The site on Cloudflare (docs/research/site-cloudflare.md): the opendmd-site
+# Worker in site/worker/ (cf's cloudflare.config.ts + wrangler.config.ts; cf
+# and wrangler pinned in its package.json/package-lock.json, installed by
+# site-worker-deps) serves $(SITE) as static assets plus /f/* and /api/*.
+# None of these rebuilds the site except site-deploy; make site first.
+#   site-dev           cf dev, the Worker and the assets on http://127.0.0.1:$(SITE_DEV_PORT)
+#   site-worker-test   tools/site-worker-test.py: starts cf dev itself (or SITE_BASE=<url>),
+#                      checks the Worker's routes, _headers, _redirects and the CSP in Chromium
+#   site-dev-smoke     site-worker-test, then site-smoke against the same cf dev
+#   site-deploy-check  cf deploy --dry-run: builds and checks, uploads nothing
+#   site-deploy        make site, then cf deploy: uploads a new version of the
+#                      opendmd-site Worker and makes it live on workers.dev (auth:
+#                      cf's OAuth profile, or CLOUDFLARE_API_TOKEN in the environment)
+#   site-deploy-built  the same without rebuilding $(SITE)
+#   site-stub          the GitHub Pages stub (tools/site-stub.py) of $(SITE) in $(SITE_STUB):
+#                      forwarding pages, release.json/beta.json with absolute URLs on
+#                      $(SITE_TO), art-index/; published at the cutover (phase M2) with
+#                      tools/site-publish.sh $(SITE_STUB) $(SITE_REPO), not before
+#   site-stub-test     tools/site-stub-test.sh with its headless check (make test runs the rest)
+# site-smoke takes SITE_BASE=<url> too (the files it reads are still $(SITE)).
+SITE_WORKER := site/worker
+SITE_DEV_PORT ?= 8787
+SITE_BASE ?=
+SITE_STUB ?= target/site-stub
+SITE_TO ?= https://opendmd.dev
+CF = cd $(SITE_WORKER) && SITE_DIR="$(abspath $(SITE))" SITE_DEV_PORT=$(SITE_DEV_PORT) \
+	SITE_VERSION="$$(git describe --always --dirty --tags --match 'v*')" npx --no-install cf
+$(SITE_WORKER)/node_modules/.package-lock.json: $(SITE_WORKER)/package-lock.json $(SITE_WORKER)/package.json
+	cd $(SITE_WORKER) && npm ci --no-audit --no-fund
+site-worker-deps: $(SITE_WORKER)/node_modules/.package-lock.json
+
+site-dev: site-worker-deps
+	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
+	$(CF) dev
+
+site-worker-test: site-worker-deps
+	uv run tools/site-worker-test.py $(SITE) $(if $(SITE_BASE),--base $(SITE_BASE))
+
+site-dev-smoke: site-worker-deps
+	uv run tools/site-worker-test.py $(SITE) $(if $(SITE_BASE),--base $(SITE_BASE)) --smoke
+
+site-deploy-check: site-worker-deps
+	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
+	$(CF) deploy --dry-run
+
+# Like site-publish: refuses a dirty tree (the version says what is live).
+# site-deploy-built deploys $(SITE) as it is (release.yml and site.yml, after
+# their own make site).
+site-deploy: site
+	$(MAKE) site-deploy-built
+site-deploy-built: site-worker-deps
+	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
+	@case "$$(git describe --always --dirty --tags --match 'v*')" in *-dirty) echo "refusing: the working tree is dirty; commit first"; exit 1;; esac
+	$(CF) deploy --message "site $$(git describe --always --tags --match 'v*')"
+
+site-stub:
+	uv run tools/site-stub.py $(SITE) $(SITE_STUB) --to $(SITE_TO)
+
+# tools/site-stub-test.sh with its headless half (make test runs the rest).
+site-stub-test:
+	SITE_STUB_BROWSER=1 tools/site-stub-test.sh
 
 site-publish: site
 	tools/site-publish.sh $(SITE) $(SITE_REPO)
