@@ -35,9 +35,9 @@
 //! allocation). Their state is a few words and the message's bytes inside
 //! the decoder; nothing is allocated per frame.
 //!
-//! **Effects.** `@fx:<name>[?options]` ([`crate::fx`]) is drawn every
-//! frame the same way: frame `n` of the effect's loop at `t = n × delay`,
-//! the loop's length what dwell counts, rewound in place.
+//! **Formulas.** `@formula?src=…` ([`crate::fx`], [`crate::fx_psi`]) is
+//! drawn every frame the same way: frame `n` of the formula's loop at
+//! `t = n × delay`, the loop's length what dwell counts, rewound in place.
 
 use crate::canvas::{Canvas, Rgb, HEIGHT, WIDTH};
 use crate::text::{self, Font};
@@ -59,7 +59,7 @@ pub const CARD_DWELL: Duration = Duration::from_millis(3000);
 /// A virtual path longer than this is refused (a formula's may be
 /// [`MAX_FORMULA_PATH`]).
 pub(crate) const MAX_PATH: usize = 512;
-/// A formula's path (`@fx:psi?src=…`) may be this long: ~2 KB of compacted
+/// A formula's path (`@formula?src=…`) may be this long: ~2 KB of compacted
 /// source. `POST /api/play` refuses a longer one with a 413.
 pub const MAX_FORMULA_PATH: usize = 2048;
 const MAX_READ: usize = if cfg!(feature = "psi") {
@@ -69,10 +69,19 @@ const MAX_READ: usize = if cfg!(feature = "psi") {
 };
 /// A Formula's name on its path (`&name=`) is cut to this many characters.
 pub const MAX_FORMULA_NAME: usize = 60;
-/// A formula's path starts with this.
-pub const FORMULA: &str = "@fx:psi";
+/// A formula's path starts with this: `@formula?src=<url-encoded
+/// source>[&a=&b=&c=][&fps=][&name=]` ([`crate::fx_psi`]).
+pub const FORMULA: &str = "@formula";
 
-/// Is `path` a formula (`@fx:psi?…`)?
+/// Is `path` a built-in effect's path from before they were Formulas
+/// (`@fx:tunnel?…`, and `@fx:psi?…`, the Formula path's old name)? It names
+/// nothing now: a playlist line is skipped with a log line
+/// ([`crate::manifest::scan`]), `POST /api/play` answers 415.
+pub fn is_retired_effect(path: &str) -> bool {
+    path.starts_with(crate::fx::RETIRED_PREFIX)
+}
+
+/// Is `path` a formula (`@formula?…`)?
 pub fn is_formula(path: &str) -> bool {
     path.strip_prefix(FORMULA)
         .is_some_and(|r| r.is_empty() || r.starts_with('?'))
@@ -486,7 +495,7 @@ fn parse(path: &str) -> Option<Spec> {
     if path == POWER_ON {
         return Some(Spec::PowerOn);
     }
-    if path.starts_with(crate::fx::PREFIX) {
+    if is_formula(path) {
         return crate::fx::Fx::parse(path).map(Spec::Fx);
     }
     let (base, query) = path.split_once('?').unwrap_or((path, ""));
@@ -1337,6 +1346,36 @@ mod tests {
     }
 
     #[test]
+    fn formula_titles_and_retired_effects() {
+        // A retired built-in effect names nothing.
+        assert_eq!(title("@fx:tunnel?cycle=1"), None);
+        assert_eq!(title("@fx:psi?src=gray(x)"), None);
+        assert!(is_retired_effect("@fx:psi?src=gray(x)") && !is_retired_effect("@formula?src=gray(x)"));
+        // A formula is "Formula", compiled or not, in any build.
+        assert_eq!(title("@formula?src=gray(x)&a=0.5").as_deref(), Some("Formula"));
+        // A playlist entry carries its name: decoded, cut to 60, no controls.
+        assert_eq!(
+            title("@formula?src=gray(x)&a=0.5&name=Star+field%21").as_deref(),
+            Some("Star field!")
+        );
+        assert_eq!(
+            title("@formula?src=name%3Dx&name=").as_deref(),
+            Some("Formula")
+        );
+        assert_eq!(
+            title("@formula?src=gray(x)&name=%0A+").as_deref(),
+            Some("Formula")
+        );
+        let long = format!("@formula?src=gray(x)&name={}", "é".repeat(80));
+        assert_eq!(title(&long).unwrap(), "é".repeat(MAX_FORMULA_NAME));
+        assert!(
+            is_formula("@formula") && !is_formula("@formulax?src=1") && !is_formula("@fx:psi?src=1")
+        );
+    }
+
+    /// A 2.4 s formula at 50 fps, then a 1.6 s one at 100.
+    #[cfg(feature = "psi")]
+    #[test]
     fn effects_play_by_the_loop_under_dwell() {
         use crate::engine::{DwellPolicy, Engine, FileCatalog, Source, TickOutcome};
         use crate::filter::Filter;
@@ -1347,27 +1386,9 @@ mod tests {
                 Err(io::Error::new(io::ErrorKind::NotFound, p.to_string()))
             }
         }
-        assert_eq!(title("@fx:tunnel?cycle=1").as_deref(), Some("Tunnel"));
-        assert_eq!(title("@fx:nope"), None);
-        // A formula is "Formula", compiled or not, in any build.
-        assert_eq!(title("@fx:psi?src=gray(x)&a=0.5").as_deref(), Some("Formula"));
-        // A playlist entry carries its name: decoded, cut to 60, no controls.
-        assert_eq!(
-            title("@fx:psi?src=gray(x)&a=0.5&name=Star+field%21").as_deref(),
-            Some("Star field!")
-        );
-        assert_eq!(
-            title("@fx:psi?src=name%3Dx&name=").as_deref(),
-            Some("Formula")
-        );
-        assert_eq!(
-            title("@fx:psi?src=gray(x)&name=%0A+").as_deref(),
-            Some("Formula")
-        );
-        let long = format!("@fx:psi?src=gray(x)&name={}", "é".repeat(80));
-        assert_eq!(title(&long).unwrap(), "é".repeat(MAX_FORMULA_NAME));
-        assert!(is_formula("@fx:psi") && !is_formula("@fx:psix?src=1") && !is_formula("@fx:tunnel"));
-        let m = "@fx:starfield?fps=50\n@fx:wire?speed=4\n".to_string();
+        let a = crate::fx_psi::path("loop 2.4\nfps 50\ngray(frac(x + t/2.4))", "");
+        let b = crate::fx_psi::path("loop 1.6\nfps 100\ngray(frac(y + t/1.6))", "");
+        let m = format!("{a}\n{b}\n");
         let cat = FileCatalog::build(Cursor::new(m.into_bytes()), &Filter::new()).unwrap();
         let dwell = DwellPolicy {
             min: Duration::from_secs(3),
@@ -1396,9 +1417,9 @@ mod tests {
             }
             t += Duration::from_millis(5);
         }
-        // The starfield's loop is 2.4 s: two loops cover the 3 s minimum.
-        assert_eq!(starts[0], (0, "@fx:starfield?fps=50".to_string()));
-        assert_eq!(starts[1], (4800, "@fx:wire?speed=4".to_string()));
+        // The first loop is 2.4 s: two loops cover the 3 s minimum.
+        assert_eq!(starts[0], (0, a));
+        assert_eq!(starts[1], (4800, b));
         // 4.8 s at 50 frames a second, then 3.2 s at the default 100.
         assert!((555..=565).contains(&frames), "{frames}");
     }
@@ -1416,7 +1437,15 @@ mod tests {
         }
         // Ticked every 3 ms, a 10 ms frame is seen 0-2 ms late: timed from
         // the tick it would come every 12 ms (83 fps); it keeps 100.
-        for (path, want) in [("@fx:starfield", 600), ("@text?msg=Hi&speed=20", 286)] {
+        #[cfg(feature = "psi")]
+        let formula = crate::fx_psi::path("loop 2.4\nfps 100\ngray(frac(x + t/2.4))", "");
+        #[cfg(not(feature = "psi"))]
+        let formula = String::new();
+        let mut cases = vec![("@text?msg=Hi&speed=20".to_string(), 286)];
+        if cfg!(feature = "psi") {
+            cases.push((formula, 600));
+        }
+        for (path, want) in cases {
             let cat = FileCatalog::build(
                 Cursor::new(format!("{path}\n").into_bytes()),
                 &Filter::new(),
