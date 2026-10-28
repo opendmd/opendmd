@@ -19,8 +19,14 @@ await new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', h
 
 const LIVE = { '@': 'Live', '@fx': 'Effects' };
 const lists = new Map(), got = new Map(), trees = new Set();
-// The last count seen per folder, shown (muted) until it is listed again.
-const counts = store.get('lib.n', {});
+// The last count seen per folder on this card, shown (muted) until it is
+// listed again.
+let countsFor = null, countsOf = {};
+const counts = () => {
+  const k = 'lib.n.' + (app.cardKey || '');
+  if (k !== countsFor) { countsFor = k; countsOf = store.get(k, {}); }
+  return countsOf;
+};
 const cmp = (a, b) => a.norm.localeCompare(b.norm) || (a.e.variant ?? 0) - (b.e.variant ?? 0);
 
 // A folder's GIFs, sorted ({path, e, name, lname, norm}); null if it could not be read.
@@ -32,8 +38,8 @@ export function listCat(c) {
       return { path, e, name, lname: name.toLowerCase(), norm: app.wasm.normalizeTitle(e.title) };
     }).sort(cmp);
     got.set(c, l);
-    counts[c] = l.length;
-    store.set('lib.n', counts);
+    counts()[c] = l.length;
+    store.set(countsFor, countsOf);
     return l;
   }, () => { lists.delete(c); return null; }));
   return lists.get(c);
@@ -43,6 +49,7 @@ export function forget(c) {
   for (const t of trees) t.dirty = true;
 }
 on('gifs', forget);
+on('card', () => forget());
 // A restart or a card out and in: list everything again.
 let up = 0, sd;
 on('status', (s) => {
@@ -164,7 +171,7 @@ export class Tree {
       }
       if (text && !hits?.length) continue;
       f.open = open;
-      f.n = hits && (text || this.plats.size) ? hits.length : items ? items.length : counts[f.cat];
+      f.n = hits && (text || this.plats.size) ? hits.length : items ? items.length : counts()[f.cat];
       f.old = !items;
       f.hits = hits;
       rows.push(f);
