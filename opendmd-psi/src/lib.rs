@@ -46,7 +46,8 @@ pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
 #[cfg(feature = "stats")]
 pub use vm::stats;
 pub use vm::{
-    q16, render_rows, render_rows_ink, render_rows_still, render_with, Inputs, Scratch, Q16_ONE,
+    q16, render_rows, render_rows_ink, render_rows_ink_turns, render_rows_still, render_with,
+    Inputs, Scratch, Q16_ONE,
 };
 
 /// The lane width the effect uses: one panel row.

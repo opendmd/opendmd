@@ -82,8 +82,8 @@ pub fn q16(num: i32, den: i32) -> i32 {
 /// valid one.
 pub struct Scratch<const N: usize> {
     /// `[0]` is the `i` lane, then the [`REGS`] registers.
-    lanes: [[i32; N]; REGS + 1],
-    sc: [i32; MAX_SCALARS],
+    pub(crate) lanes: [[i32; N]; REGS + 1],
+    pub(crate) sc: [i32; MAX_SCALARS],
     xs: [i32; W],
     pxs: [i32; W],
 }
@@ -531,7 +531,25 @@ pub fn render_rows_still<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
-    frame::<N>(prog, scratch, ink, still, inputs, tables, under, rows, out)
+    frame::<N>(prog, scratch, ink, still, inputs, tables, under, rows, out, true)
+}
+
+/// [`render_rows_ink`] with every draw loop run a turn at a time (as before
+/// draw loops ran as lanes, `draw::run`): the same bytes, for the tests
+/// that compare the two.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn render_rows_ink_turns<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    ink: Option<&mut Ink>,
+    inputs: &Inputs,
+    tables: &Tables,
+    under: Option<&[u8]>,
+    rows: u32,
+    out: &mut [u8],
+) {
+    frame::<N>(prog, scratch, ink, None, inputs, tables, under, rows, out, false)
 }
 
 /// [`render_rows_still`]'s body: one copy whoever calls it, and on the
@@ -552,6 +570,7 @@ fn frame<const N: usize>(
     under: Option<&[u8]>,
     rows: u32,
     out: &mut [u8],
+    lanes: bool,
 ) {
     #[cfg(feature = "stats")]
     stats::stamp(1);
@@ -593,7 +612,7 @@ fn frame<const N: usize>(
     let ink: Option<&Ink> = match ink {
         Some(k) if prog.draws() => {
             if rows == u32::MAX {
-                crate::draw::run(prog, &mut scratch.sc, tables, k);
+                crate::draw::run(prog, scratch, tables, k, lanes);
             }
             Some(k)
         }
@@ -756,15 +775,26 @@ fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n: u8, at: u
 
 #[inline(always)]
 pub(crate) fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) {
+    let v = scalar_value(sc, op, t, tabs);
+    sc[(op.d & 0x7f) as usize] = v;
+}
+
+/// What a scalar step works out (`scalar` stores it in its `d`).
+#[inline(always)]
+pub(crate) fn scalar_value(
+    sc: &[i32; MAX_SCALARS],
+    op: &Op,
+    t: &Tables,
+    tabs: &[i32; MAX_TABLE],
+) -> i32 {
     // Operands of scalar steps are always scalar slots (< 128).
     let g = |v: u8| sc[(v & 0x7f) as usize];
-    let v = match op.code {
+    match op.code {
         code::TAB => tab(tabs, op.b, op.c, g(op.a)),
         code::SPR => spr(tabs, op.c, g(op.a), g(op.b)),
         code::NOISE_O..=code::NOISE_O_LAST => noise_o(g(op.a), g(op.b), g(op.c), sc, op.code),
         _ => eval(op.code, g(op.a), g(op.b), g(op.c), Some(t)),
-    };
-    sc[(op.d & 0x7f) as usize] = v;
+    }
 }
 
 /// A wide noise of the small parts `x y z` with noise context `code -
@@ -866,7 +896,22 @@ impl<const N: usize> Scratch<N> {
     }
 }
 
+/// One step of a draw loop's body run as lanes (`draw::run`: a lane a
+/// turn): [`lane_op`]'s dispatch, a copy of its own in flash, so the frame
+/// loop's in IRAM is the same code as before the draw stage used it.
+#[inline(never)]
+pub(crate) fn lane_draw<const N: usize>(
+    s: &mut Scratch<N>,
+    op: &Op,
+    t: &Tables,
+    tabs: &[i32; MAX_TABLE],
+) {
+    let mut al: Alias = [core::ptr::null(); REGS + 1];
+    lane_op(s, &mut al, op, false, 0, t, tabs, None, None);
+}
+
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 fn lane_op<const N: usize>(
     s: &mut Scratch<N>,
     al: &mut Alias,
