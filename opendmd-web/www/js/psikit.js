@@ -70,7 +70,9 @@ export const TIP = (i) => `${i[0]} steps, about ${(est(i) / 1000).toFixed(1)} ms
 // they were names a formula could set, and may still be; `fps` only before a
 // number, as `fps 100`; `forever` only after `loop`. A sprite block's rows
 // are its picture, `.p`, never numbers to drag.)
-const WORDS = /^(loop|frame|layer|part|draw|for|table|line|dot|ink)$/, DRAWS = /^(line|dot|ink)$/;
+// psi-builtins: highlighter (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins)
+const WORDS = /^(loop|frame|layer|part|draw|for|table|line|dot|ink)$/, DRAWS = /^(line|dot|ink)$/, DECLS = /^(psi|name|about|control|look)$/;
+// psi-builtins end
 export function marks(s, bad) {
   const draws = /^\s*draw\s*\{/m.test(s.replace(/(--|\/\/).*/g, ''));
   const toks = [], cls = new Array(s.length).fill(''), pic = [];

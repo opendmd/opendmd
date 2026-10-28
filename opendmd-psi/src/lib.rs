@@ -23,6 +23,8 @@
 
 extern crate alloc;
 
+#[doc(hidden)]
+pub mod builtins;
 mod compile;
 mod draw;
 pub mod fixed;
