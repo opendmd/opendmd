@@ -84,8 +84,10 @@ for f in ("art-index/v0/GB.json", "art-index/v1/GB.json"):
     assert (o / f).read_bytes() == (s / f).read_bytes(), f
 EOF
 
-# A release.json from the real site, if one is built: still the update check's shape.
-if [ -f target/site/install/release.json ]; then
+# A release.json from the real site, if one is built by today's site.py (an
+# older target/site, e.g. `make test` before `make site` after a merge, lacks
+# pages the stub now forwards): still the update check's shape.
+if [ -f target/site/install/release.json ] && [ target/site/install/release.json -nt tools/site.py ]; then
   uv run --quiet tools/site-stub.py target/site "$tmp/real" >/dev/null
   uv run --quiet --no-project python - target/site "$tmp/real" <<'EOF' || fail "the real site's stub (above)"
 import json, sys
