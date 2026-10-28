@@ -50,6 +50,12 @@ export async function listOr(dir) {
   }
 }
 
+function cardKey(a) {
+  if (!a.device) return a.src ? 'l' + (a.src.label || '') : null;
+  const sd = a.status?.sd;
+  return sd?.card_id ? 'i' + sd.card_id : sd?.capacity_bytes ? 'c' + sd.capacity_bytes : null;
+}
+
 export const app = {
   wasm,
   src: null,
@@ -60,6 +66,13 @@ export const app = {
   texts: new Map(),
 
   get device() { return this.src?.kind === 'device'; },
+
+  // Which card the things kept in this browser belong to (thumbnails, the
+  // folder counts, files the prepare job could not do): the status's
+  // `sd.card_id` on a device (another card, or this one formatted again,
+  // is another key; firmware before it: the card's size), the folder's
+  // name locally. null until the status names a card.
+  get cardKey() { return cardKey(this); },
 
   // A manifest's text, fetched once per session (filelist.txt is 450 KB);
   // callers at the same moment share the one fetch.
@@ -96,7 +109,16 @@ export const app = {
   // (A device, or the demo's player: js/demo.js.)
   async refreshStatus(recent) {
     if (!this.src?.config) return null;
+    const was = this.cardKey;
     this.status = await this.src.status(recent);
+    // Another card (swapped with the power off, or formatted): what was
+    // read from the old one goes, and the views list the new one.
+    const now = this.cardKey;
+    if (was && now && was !== now) {
+      this.texts.clear();
+      this.selection.clear();
+      emit('card', now);
+    }
     emit('status', this.status);
     return this.status;
   },
@@ -146,3 +168,6 @@ export const app = {
 
   go(view) { location.hash = '#' + view; },
 };
+
+// Back to this tab (a card may have been swapped meanwhile): one status.
+document.addEventListener('visibilitychange', () => { if (!document.hidden && app.device) app.refreshStatus().catch(() => {}); });

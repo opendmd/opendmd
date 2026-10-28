@@ -161,6 +161,21 @@ fn read_locked(fs: *mut sys::FATFS, lba: u32, buf: &mut [u8]) -> io::Result<()> 
     Ok(())
 }
 
+/// The mounted volume's boot sector, read as it is (`card::volume`): its
+/// serial and label, for the card's identity (`sd.card_id`). One sector
+/// under the volume mutex; nothing is written (a card shared with DMDoS is
+/// left as it was). Works for FAT12/16 too, unlike the index.
+pub fn volume_id() -> io::Result<Option<opendmd_core::card::Volume>> {
+    let (fs, _) = open_dir("/")?;
+    let mut b = [0u8; SS];
+    {
+        let _l = VolLock::take(fs)?;
+        // SAFETY: the mounted volume's field, fixed while it is mounted.
+        read_locked(fs, unsafe { (*fs).volbase }, &mut b)?;
+    }
+    Ok(opendmd_core::card::volume(&b))
+}
+
 // ---- the VFS: a FIL we filled, as a file descriptor -------------------------
 
 fn fil(fd: i32) -> *mut sys::FIL {

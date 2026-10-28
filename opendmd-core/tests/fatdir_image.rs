@@ -316,3 +316,69 @@ fn small_clusters_long_names_across_cluster_boundaries() {
 fn larger_clusters_and_a_bigger_directory() {
     exercise(8, 300_000, 1200);
 }
+
+/// The card identity's volume half (`card::volume`, read from the boot
+/// sector on the device): what `mkfs.fat` wrote, for FAT32 and FAT16; files
+/// copied on leave it alone; a format makes another.
+#[test]
+fn card_identity_from_the_boot_sector() {
+    use opendmd_core::card;
+    if !tools() {
+        eprintln!("skipping: {MKFS} or mtools missing");
+        return;
+    }
+    let dir = tempdir::Dir::new();
+    let boot = |img: &Path| {
+        let mut b = [0u8; SS];
+        fs::File::open(img).unwrap().read_exact(&mut b).unwrap();
+        card::volume(&b)
+    };
+    let img = dir.0.join("card.img");
+    let mkfs = |fat: &str, serial: &str, label: Option<&str>, kb: &str| {
+        let _ = fs::remove_file(&img);
+        let mut c = Command::new(MKFS);
+        c.args(["-C", "-F", fat, "-S", "512", "-i", serial]);
+        if let Some(l) = label {
+            c.args(["-n", l]);
+        }
+        run(c.arg(&img).arg(kb));
+    };
+
+    mkfs("32", "DEADBEEF", Some("OPENDMD"), "40000");
+    let v = boot(&img).expect("a FAT32 boot sector");
+    assert_eq!((v.serial, v.label().as_str()), (0xDEAD_BEEF, "OPENDMD"));
+    let id = card::identity(0x1234, Some(&v), 40_000 * 1024);
+
+    // Files copied on (a computer, the API): the same card.
+    let src = dir.0.join("src");
+    fs::create_dir_all(&src).unwrap();
+    let names = names(20);
+    for n in &names {
+        fs::write(src.join(n), body(n)).unwrap();
+    }
+    run(Command::new("mmd")
+        .arg("-i")
+        .arg(&img)
+        .args(["::/gifs", "::/gifs/Consoles"]));
+    mcopy(&img, &src, &names, "::/gifs/Consoles/");
+    assert_eq!(
+        card::identity(0x1234, boot(&img).as_ref(), 40_000 * 1024),
+        id
+    );
+
+    // Formatted again (another serial, as any formatter picks): another card.
+    mkfs("32", "DEADBEF0", Some("OPENDMD"), "40000");
+    assert_ne!(
+        card::identity(0x1234, boot(&img).as_ref(), 40_000 * 1024),
+        id
+    );
+
+    // No label given: the boot sector's "NO NAME".
+    mkfs("32", "00000001", None, "40000");
+    assert_eq!(boot(&img).unwrap().label(), "");
+
+    // FAT16 (a small card): the record sits elsewhere.
+    mkfs("16", "CAFEF00D", Some("SMALL"), "20000");
+    let v = boot(&img).expect("a FAT16 boot sector");
+    assert_eq!((v.serial, v.label().as_str()), (0xCAFE_F00D, "SMALL"));
+}

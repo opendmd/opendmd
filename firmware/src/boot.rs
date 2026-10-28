@@ -151,10 +151,26 @@ fn publish(
     error: Option<String>,
     attempts: u32,
 ) {
+    // Which card this is (`sd.card_id`): its CID serial, its volume's
+    // serial and label (one sector), its size. Read here, once per mount,
+    // before the status lock.
+    let card_id = card.filter(|_| readable).map(|c| {
+        let vol = crate::fatidx::volume_id().unwrap_or_else(|e| {
+            log::warn!("microSD: reading the boot sector: {e}");
+            None
+        });
+        let id = opendmd_core::card::identity(c.serial, vol.as_ref(), c.capacity_bytes);
+        match vol {
+            Some(v) => log::info!("microSD: card id {id} (volume {:08X} '{}')", v.serial, v.label()),
+            None => log::info!("microSD: card id {id} (no volume serial)"),
+        }
+        id
+    });
     let mut s = status.lock().unwrap();
     s.sd_mounted = card.is_some();
     s.sd_readable = card.is_some() && readable;
     s.sd_capacity_bytes = card.map_or(0, |c| c.capacity_bytes);
+    s.sd_card_id = card_id;
     s.sd_error = error;
     s.sd_attempts = attempts;
 }
