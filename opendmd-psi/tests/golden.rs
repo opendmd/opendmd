@@ -2129,17 +2129,16 @@ fn fused_runs_are_their_steps() {
             LEAF[r.below(LEAF.len())].to_string()
         }
     };
-    const KINDS: [&str; 8] = [
+    const KINDS: [&str; 7] = [
         "mul_add",
         "checker",
         "checker_3",
         "pal_select",
         "pal_select_k",
         "pal_pick",
-        "colour_of_ink",
         "colour_of_ink_1",
     ];
-    let mut kinds = [0usize; 8];
+    let mut kinds = [0usize; 7];
     let (mut compiled, mut frames) = (0, 0);
     for k in 0..n {
         // (Mostly values of the pixel, not of its column or row alone: those

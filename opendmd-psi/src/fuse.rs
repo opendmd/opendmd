@@ -45,33 +45,9 @@ pub(crate) const F_INK1: u8 = 7;
 /// back after s2probe-b: Rotozoom floor 1,766 -> 1,965 µs and Tunnel
 /// 3,399 -> 3,479 without it, ~24 ns a pixel each.)
 pub(crate) const F_MADD: u8 = 8;
-/// An `F_INK` lane whose canvas bytes change more often than this is
-/// drawn by its steps (each change works the colour out again out of
-/// line, ~1.9 µs on the ESP32: s2probe-b's streaks drew 10.2 ms kept per
-/// byte against 2.3 by the steps). The count is one pass over the lane's
-/// bytes; below it the run costs less than its steps (cube ~270 ns a
-/// pixel against ~1.9 µs a change: 128 pixels pay for ~16 changes).
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) const INK_CHANGES: usize = 8;
 /// The bottom layer's `pal(P, pick(m, …))` (`* k`, k a value for the
 /// lane): the choices' colours worked out once a lane, then looked up.
 pub(crate) const F_PICKPAL: u8 = 4;
-/// The bottom layer's colour of the draw stage's canvas alone: `ink`, up
-/// to [`INK_STEPS`] steps of it and values for the lane, and a colour of
-/// those (`pal(P, ink)`, `#40c0ff * ink`, `gray(ink)`): worked out for
-/// each byte of the canvas a lane meets, kept while the next pixel's byte
-/// is the same (mostly 0: nothing drawn).
-pub(crate) const F_INK: u8 = 5;
-
-/// An `F_INK` run's cost, ns a pixel: a byte read, a compare and the
-/// colour's three bytes written, the colour worked out again where the
-/// byte changes (s2probe-a: Wireframe cube's run ~150 ns VM against ~270
-/// for its steps; set so the cube's estimate is its frame).
-pub(crate) const INK_NS: u32 = 260;
-
-/// Steps an `F_INK` run may hold between its `ink` and its colour.
-pub(crate) const INK_STEPS: usize = 6;
-
 /// A pick fused with its colour has at most this many choices.
 pub(crate) const PICK_MAX: usize = 16;
 
@@ -85,7 +61,6 @@ pub(crate) fn name(kind: u8) -> &'static str {
         F_INK1 => "colour_of_ink_1",
         F_MADD => "mul_add",
         F_PICKPAL => "pal_pick",
-        F_INK => "colour_of_ink",
         _ => "?",
     }
 }
@@ -193,47 +168,17 @@ fn pattern(ops: &[Op]) -> Option<(u8, usize, [u8; 3], u8)> {
             ok.then_some((F_PICKPAL, 2, [a.d; 3], 0))
         }
         INK => {
-            // Steps that read only the run's registers and values for the
-            // lane, then the bottom layer's plain colour (no coverage) of
-            // them. (Every register it writes must be dead after it:
-            // `fuse` checks them all, `ink_regs`.)
-            let mut regs = [a.d; INK_STEPS + 1];
-            for (j, o) in ops.iter().enumerate().skip(1).take(INK_STEPS + 1) {
-                let (v, n) = code::operands(o);
-                if !v[..n]
-                    .iter()
-                    .all(|&v| !is_lane(v) || regs[..j].contains(&v))
-                {
-                    return None;
-                }
-                if code::is_colour(o.code) {
-                    // (A palette's or a grey's colour of `ink` itself is one
-                    // read already: s2probe-a measured `pal(ice, ink)`
-                    // 72 ns a pixel slower kept per byte, the streaks'
-                    // bytes changing at nearly every pixel.)
-                    let plain = j == 1
-                        && (o.code == OUT_GRAY || (o.code == OUT_PAL && o.d & PAL_SCALED == 0));
-                    let kind = if plain { F_INK1 } else { F_INK };
-                    return (o.code < OUT_LAYER).then_some((kind, j + 1, [0; 3], 0));
-                }
-                let ok = matches!(o.code, 0..=LAST_BIN | 32..=LAST_UN | 64..=LAST_TERN | INK)
-                    && !code::is_wide(o.code)
-                    && is_reg(o.d)
-                    && j < INK_STEPS + 1;
-                if !ok {
-                    return None;
-                }
-                regs[j] = o.d;
-            }
-            None
+            // `pal(P, ink)` or `gray(ink)`, the bottom layer's plain colour.
+            // (A longer colour of the canvas kept per byte lost on the
+            // spare: s2probe-c's rgb rows −68 and −51 ns a pixel, the cube
+            // 2,353 against 2,183 µs for its steps.)
+            let b = op(1)?;
+            let ok =
+                b.a == a.d && (b.code == OUT_GRAY || (b.code == OUT_PAL && b.d & PAL_SCALED == 0));
+            ok.then_some((F_INK1, 2, [a.d; 3], 0))
         }
         _ => None,
     }
-}
-
-/// The registers an `F_INK` run of `n` steps writes.
-fn ink_regs(ops: &[Op], n: usize) -> impl Iterator<Item = u8> + '_ {
-    ops[..n.saturating_sub(1)].iter().filter_map(writes)
 }
 
 /// Whether register `r` is read by nothing in `ops` before something
@@ -269,16 +214,10 @@ pub(crate) fn fuse(prog: &mut Program) {
             k += 1;
             continue;
         }
-        let ok = |kind: u8, n: usize, mid: [u8; 3], dst: u8| {
-            if kind == F_INK || kind == F_INK1 {
-                // Every register the run writes is dead after it.
-                ink_regs(ops, n).all(|r| dead(&ops[n..], r))
-            } else {
-                mid.iter().all(|&r| r == dst || dead(&ops[n..], r))
-            }
-        };
+        let ok =
+            |n: usize, mid: [u8; 3], dst: u8| mid.iter().all(|&r| r == dst || dead(&ops[n..], r));
         match pattern(ops) {
-            Some((kind, n, mid, dst)) if ok(kind, n, mid, dst) => {
+            Some((kind, n, mid, dst)) if ok(n, mid, dst) => {
                 runs.push((k, kind, n));
                 k += n;
             }
@@ -325,8 +264,6 @@ pub(crate) fn saved(kind: u8) -> u32 {
         // own load.
         F_INK1 => 70,
         F_MADD => 22,
-        // (An `F_INK` run is costed whole by the estimate: `INK_NS`.)
-        F_INK => 0,
         _ => 0,
     }
 }

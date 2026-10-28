@@ -528,10 +528,10 @@ steps each are ~1 ms of values (two lanes of 128) plus their lines, not
 time.
 
 **Common pairs are one step** (the same picture, worked out in one pass):
-a checker `(floor(u) + floor(v)) % 2` (~45 ns, not ~155), `a*k + c` (the
-add nearly free), and the colour `pal(P, c ? A : B)` (`* k` too),
-`pal(P, pick(m, …))` and `pal(P, ink)` (the choice, pick or canvas read
-nearly free). Nothing to write differently: the panel finds them.
+a checker `(floor(u) + floor(v)) % 2` (~75 ns saved), `a*k + c` (~20),
+and the colour `pal(P, c ? A : B)` (~190 saved with `* k` of a row value,
+~130 with a per-pixel `k`), `pal(P, pick(m, …))` (~50), `pal(P, ink)` and
+`gray(ink)` (~70). Nothing to write differently: the panel finds them.
 
 **Two things are worked out less often than per pixel, by themselves**
 (the same pictures either way):
