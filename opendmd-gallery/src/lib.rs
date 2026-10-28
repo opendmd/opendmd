@@ -480,15 +480,17 @@ pub fn sample() -> Vec<u8> {
 pub fn frame(prog: &Program, values: &[Option<u8>; 3], ms: u32) -> Vec<u8> {
     // As the web app's Math.round(v * 65536) (never a tie for hundredths).
     let q = |v: Option<u8>| ((i32::from(v.unwrap_or(0)) << 16) + 50) / 100;
-    let inputs = Inputs {
-        t: Inputs::at_ms(ms),
+    let mut inputs = Inputs {
         hour: CLOCK.0,
         minute: CLOCK.1,
         second: CLOCK.2,
         a: q(values[0]),
         b: q(values[1]),
         c: q(values[2]),
+        ..Inputs::default()
     };
+    // (A formula that never repeats: `ms` since it started, seed 0.)
+    inputs.set_ms(prog, u64::from(ms));
     let mut scratch: Box<Scratch<128>> = Box::new(Scratch::new());
     let mut out = vec![0u8; W * H * 3];
     let under = prog.over().then(sample);
@@ -506,9 +508,23 @@ pub fn frame(prog: &Program, values: &[Option<u8>; 3], ms: u32) -> Vec<u8> {
 }
 
 /// The thumbnail's moment: 30% into the loop, on a frame (as the web app's
-/// tiles).
+/// tiles); for a formula that never repeats (`loop_ms` 0), of its first
+/// [`FOREVER_MS`].
 pub fn thumb_ms(loop_ms: u32) -> u32 {
-    (loop_ms * 3 / 10) / FRAME_MS * FRAME_MS
+    (shown(loop_ms) * 3 / 10) / FRAME_MS * FRAME_MS
+}
+
+/// What a formula that never repeats is shown over (its thumbnail and its
+/// sheet): its first minute.
+pub const FOREVER_MS: u32 = 60_000;
+
+/// The time a formula's frames are shown across: its loop, or a minute.
+fn shown(loop_ms: u32) -> u32 {
+    if loop_ms == 0 {
+        FOREVER_MS
+    } else {
+        loop_ms
+    }
 }
 
 /// The entry's thumbnail: one frame, 128 × 32, as a PNG.
@@ -532,7 +548,7 @@ pub fn sheet(e: &Entry) -> Vec<u8> {
     let h = N * fh + (N - 1) * GAP;
     let mut img = vec![0x16u8; w * h * 3];
     for k in 0..N {
-        let ms = (e.loop_ms * k as u32 / N as u32) / FRAME_MS * FRAME_MS;
+        let ms = (shown(e.loop_ms) * k as u32 / N as u32) / FRAME_MS * FRAME_MS;
         let f = frame(&prog, &e.values, ms);
         let top = k * (fh + GAP);
         for y in 0..fh {

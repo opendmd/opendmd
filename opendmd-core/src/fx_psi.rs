@@ -7,7 +7,11 @@
 //! (decimal, default 0); the frame rate is `fps=`, else the formula's
 //! `fps N` line, else 50 (a look: `fps=`, else 50). A loop is the formula's `loop
 //! N` seconds; `t` is the frame's time into it, so the loop is seamless
-//! when everything the formula moves completes whole cycles in it.
+//! when everything the formula moves completes whole cycles in it. A
+//! formula that never repeats (`loop forever`) is played in passes of
+//! [`PASS_MS`] (the engine's loop: the dwell is looked at after each), its
+//! `t` the time since it opened, going on across passes, and its `seed` a
+//! new one at each open.
 //!
 //! **Memory.** The program (2,832 B) and the VM's working memory
 //! ([`opendmd_psi::Scratch`], 8,192 B at 128 lanes) are one allocation made
@@ -60,6 +64,24 @@ pub struct PsiFx {
     delay_ms: u8,
     inputs: psi::Inputs,
     gov: Governor,
+    /// The formula's own time since it opened (the frame times it
+    /// returned): a `loop forever` formula's `t`, which a new pass (the
+    /// engine's rewind) leaves running and a live edit keeps.
+    played_ms: u64,
+}
+
+/// A pass of a formula that never repeats (`loop forever`): what the engine
+/// counts as its loop, so the dwell is looked at once a second (as a
+/// clock's); its `t` goes on across them.
+pub const PASS_MS: u32 = 1000;
+
+/// A `seed` for a formula that never repeats, at each open: a hash of the
+/// opens so far and the clock (the firmware's µs since boot), 0..1.
+fn next_seed() -> i32 {
+    static OPENS: AtomicU32 = AtomicU32::new(0);
+    let n = OPENS.fetch_add(1, Ordering::Relaxed);
+    let salt = clock().map_or(0, |c| c());
+    (psi::fixed::mix32(n.wrapping_mul(0x9e37_79b9) ^ salt) >> 16) as i32
 }
 
 /// How long a formula that draws waits to ask for its canvas again after
@@ -488,8 +510,15 @@ impl PsiFx {
         fx.ink = canvas_for(&fx.prog, None)?;
         fx.delay_ms = delay;
         fx.set_sliders(q.sliders);
+        fx.inputs.seed = next_seed();
         fx.gov = Governor::new(start_estimate(&fx.prog, est), fx.ms());
         Ok(fx)
+    }
+
+    /// The `seed` a formula that never repeats plays with (a new one at
+    /// each open): tests, and the simulator's `--seed`.
+    pub fn set_seed(&mut self, seed: i32) {
+        self.inputs.seed = seed;
     }
 
     fn set_sliders(&mut self, s: [i32; 3]) {
@@ -600,7 +629,12 @@ impl Effect for PsiFx {
     }
 
     fn loop_frames(&self) -> u32 {
-        (self.prog.loop_ms() / self.ms()).max(1)
+        let lp = if self.prog.forever() {
+            PASS_MS
+        } else {
+            self.prog.loop_ms()
+        };
+        (lp / self.ms()).max(1)
     }
 
     fn frame(&mut self, t: Duration, canvas: &mut Canvas) -> Duration {
@@ -624,11 +658,21 @@ impl PsiFx {
         // draw between them.
         let i = ms / grid % n;
         self.inputs.t = psi::Inputs::at_ms(i * grid);
+        // (One that never repeats: its own time since it opened.)
+        self.inputs.tw = psi::Inputs::wide_ms(self.played_ms);
         if let Some(now) = crate::synth::wall_now() {
             self.inputs.hour = now.hour;
             self.inputs.minute = now.minute;
             self.inputs.second = now.second;
         }
+        let d = self.render(canvas);
+        self.played_ms += d.as_millis() as u64;
+        d
+    }
+
+    /// Draw the frame of `self.inputs` and say how long it shows.
+    fn render(&mut self, canvas: &mut Canvas) -> Duration {
+        let grid = self.ms();
         let clock = clock();
         let t0 = clock.map_or(0, |c| c());
         // A formula that draws but has no canvas (a clone made when the heap
@@ -795,6 +839,7 @@ impl FormulaLook {
             ink_tried: None,
             cold: Governor::SKIP,
         };
+        look.inputs.seed = next_seed();
         look.set(&q, est);
         Ok(look)
     }
@@ -1083,6 +1128,9 @@ impl FormulaLook {
                 .wrapping_add(el.subsec_millis());
             let n = (self.prog.loop_ms() / grid).max(1);
             self.inputs.t = psi::Inputs::at_ms(el_ms / grid % n * grid);
+            // (One that never repeats: the time since it was taken on.)
+            self.inputs.tw =
+                psi::Inputs::wide_ms(el.as_millis() as u64 / u64::from(grid) * u64::from(grid));
             if let Some(w) = crate::synth::wall_now() {
                 self.inputs.hour = w.hour;
                 self.inputs.minute = w.minute;
@@ -1214,6 +1262,7 @@ mod alloc_box {
             b.0.delay_ms = self.0.delay_ms;
             b.0.inputs = self.0.inputs;
             b.0.gov = self.0.gov;
+            b.0.played_ms = self.0.played_ms;
             b
         }
     }
@@ -1258,6 +1307,64 @@ mod tests {
         assert_eq!(t.small, &psi::FONT_4X6);
         assert_eq!(t.normal, &psi::FONT_5X7);
         assert_eq!(t.bold, &psi::FONT_BOLD);
+    }
+
+    /// A formula that never repeats plays in passes of a second (the
+    /// engine looks at the dwell after each), its `t` going on across them
+    /// as the frame times it returned add up, the VM's frame at that `t`
+    /// and the open's `seed`; a live edit keeps the time.
+    #[test]
+    fn a_formula_that_never_repeats_goes_on_across_passes() {
+        let src = "loop forever\nframe { u = t*0.15 + seed*100 }\ngray(noise(u + x*4, y*2, 0) * frac(t*3))";
+        let mut fx = Fx::parse(&path(src)).unwrap();
+        let Fx::Psi(b) = &mut fx else { panic!() };
+        b.set_seed(12_345);
+        assert_eq!(fx.loop_frames(), PASS_MS / 20);
+        assert_eq!(fx.loop_time(), Duration::from_millis(u64::from(PASS_MS)));
+        let prog = psi::compile(src).unwrap();
+        let (mut c, mut want) = (Canvas::new(), vec![0u8; psi::W * psi::H * 3]);
+        let mut s = psi::Scratch::<128>::new();
+        let mut played = 0u64;
+        // Three and a half passes, as SynthSource plays them: each pass's
+        // time from 0 (its rewind), the formula's own going on.
+        for _pass in 0..3 {
+            let mut el = Duration::ZERO;
+            while el < fx.loop_time() {
+                let d = fx.frame(el, &mut c);
+                let inputs = psi::Inputs {
+                    tw: psi::Inputs::wide_ms(played),
+                    seed: 12_345,
+                    ..Default::default()
+                };
+                psi::render(&prog, &mut s, &inputs, &psi::OWN, &mut want);
+                assert!(c.as_bytes() == want.as_slice(), "at {played} ms");
+                el += d;
+                played += d.as_millis() as u64;
+            }
+        }
+        assert_eq!(played, 3000);
+        // A live edit: the time goes on.
+        let Fx::Psi(b) = &mut fx else { panic!() };
+        b.retune_from(&path("loop forever\ngray(frac(t/10))")[crate::synth::FORMULA.len() + 1..])
+            .unwrap();
+        fx.frame(Duration::ZERO, &mut c);
+        assert_eq!(
+            c.as_bytes()[0],
+            psi::fixed::chan(psi::fixed::w_frac(psi::fixed::w_div(
+                psi::Inputs::wide_ms(3000),
+                10 << 16
+            )))
+        );
+        // A new open is a new seed.
+        let mut seeds = std::collections::HashSet::new();
+        for _ in 0..8 {
+            let Some(Fx::Psi(b)) = Fx::parse(&path(src)) else {
+                panic!()
+            };
+            seeds.insert(b.inputs.seed);
+            assert!((0..psi::Q16_ONE).contains(&b.inputs.seed));
+        }
+        assert!(seeds.len() >= 7, "{seeds:?}");
     }
 
     #[test]
@@ -2207,8 +2314,17 @@ mod tests {
             t: psi::Inputs::at_ms(160),
             ..Default::default()
         };
-        psi::render(&psi::compile_plain(tb).unwrap(), &mut psi::Scratch::<128>::new(), &inputs, &psi::OWN, &mut out);
-        assert!(c.as_bytes() == out.as_slice(), "a table-only edit drew stale values");
+        psi::render(
+            &psi::compile_plain(tb).unwrap(),
+            &mut psi::Scratch::<128>::new(),
+            &inputs,
+            &psi::OWN,
+            &mut out,
+        );
+        assert!(
+            c.as_bytes() == out.as_slice(),
+            "a table-only edit drew stale values"
+        );
         // One without values lets them go.
         fx.retune_from(&path("gray(x)")[8..]).unwrap();
         assert!(!fx.still.is_held());

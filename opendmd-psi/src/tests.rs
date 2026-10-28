@@ -1016,7 +1016,12 @@ fn layer_error_messages() {
 fn pasted(src: &str) -> [String; 2] {
     let lp = compile(src).unwrap().loop_ms();
     let inner: String = src.lines().map(|l| alloc::format!("  {l}\n")).collect();
-    let head = alloc::format!("loop {}\npart p {{\n{inner}}}\n", lp as f64 / 1000.0);
+    let lp = if lp == 0 {
+        "forever".into()
+    } else {
+        alloc::format!("{}", lp as f64 / 1000.0)
+    };
+    let head = alloc::format!("loop {lp}\npart p {{\n{inner}}}\n");
     [
         alloc::format!("{head}p"),
         alloc::format!("{head}layer {{ p }}"),
@@ -1940,4 +1945,199 @@ fn the_sine_table_is_within_one() {
     assert!(crate::tables::SIN
         .iter()
         .all(|&v| (v as i32).abs() <= 16_384));
+}
+
+// --- loop forever: wide values ------------------------------------------------
+
+/// Each wide operation is its Q16.16 operation wherever the values fit one
+/// (and past that carries on, exactly, instead of saturating).
+#[test]
+fn wide_maths_is_the_q16_maths_where_it_fits() {
+    let mut r: u64 = 0x5eed_0ff0_e7e7;
+    let mut next = || {
+        r ^= r >> 12;
+        r ^= r << 25;
+        r ^= r >> 27;
+        r.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    };
+    let mut checked = 0;
+    for k in 0..200_000 {
+        // Values across the range, small ones and edges more often.
+        let pick = |v: u64| -> i32 {
+            match v % 5 {
+                0 => (v >> 8) as i32,
+                1 => ((v >> 8) as i32) >> 12,
+                2 => ((v >> 8) as i32) >> 20,
+                3 => [0, ONE, -ONE, i32::MAX, i32::MIN, 1, -1, ONE / 2][(v >> 8) as usize % 8],
+                _ => ((v >> 8) as i32) >> 4,
+            }
+        };
+        let (a, b) = (pick(next()), pick(next()));
+        let w = a as i64;
+        let m = fixed::mul(a, b);
+        if m != i32::MAX && m != i32::MIN {
+            assert_eq!(fixed::w_mul(w, b), m as i64, "mul {a} {b}");
+            checked += 1;
+        }
+        let d = fixed::div(a, b);
+        if d != i32::MAX && d != i32::MIN && b != 0 {
+            assert_eq!(fixed::w_div(w, b), d as i64, "div {a} {b}");
+        }
+        assert_eq!(fixed::w_mod(w, b), fixed::modulo(a, b), "mod {a} {b}");
+        assert_eq!(fixed::w_frac(w), fixed::frac(a));
+        assert_eq!(fixed::w_floor(w), fixed::floor(a) as i64);
+        assert_eq!(fixed::w_reduce(w), a, "a value that fits hashes as itself");
+        for c in [code::LT, code::LE, code::GT, code::GE, code::EQ, code::NE] {
+            let want = crate::program::eval(c, a, b, 0, None);
+            assert_eq!(fixed::w_cmp(c, w, b), want);
+        }
+        assert_eq!(fixed::w_minmax(code::MIN, w, b), fixed::min(a, b));
+        assert_eq!(fixed::w_minmax(code::MAX, w, b), fixed::max(a, b));
+        // noise of a wide value split into its whole part (the offset) and
+        // fraction + a small part: the noise of the sum.
+        if k % 8 == 0 {
+            let s = pick(next()) >> 8;
+            let y = pick(next()) >> 6;
+            if let Some(sum) = a.checked_add(s) {
+                let off = [fixed::w_lat(w, 0), 0, 0];
+                let small = fixed::frac(a) + s;
+                assert_eq!(
+                    fixed::noise_off(small, y, 0, off),
+                    fixed::noise(sum, y, 0),
+                    "noise of {a} + {s}"
+                );
+            }
+        }
+    }
+    assert!(checked > 50_000);
+    // Past the Q16.16 range: exact, not saturated.
+    let big = 3_000_000i64 << 16; // 3,000,000
+    assert_eq!(fixed::w_mul(big, 10 << 16), 30_000_000i64 << 16);
+    assert_eq!(fixed::w_div(big, 3 << 16), 1_000_000i64 << 16);
+    assert_eq!(
+        fixed::w_frac(fixed::w_mul(big + ONE as i64 / 4, 10 << 16)),
+        ONE / 2
+    );
+    assert_eq!(
+        fixed::w_mod(big + 5 * ONE as i64, 7 << 16),
+        (3_000_005 % 7) << 16
+    );
+    assert_eq!(
+        fixed::w_mod(-big, 7 << 16),
+        ((-3_000_000i64).rem_euclid(7) as i32) << 16
+    );
+    assert_eq!(fixed::w_minmax(code::MIN, big, ONE), ONE);
+    assert_eq!(fixed::w_minmax(code::MAX, big, ONE), i32::MAX);
+    assert_eq!(fixed::w_cmp(code::GT, big, i32::MAX), ONE);
+    // Hashes past 65,536 s don't come round again.
+    assert_ne!(
+        fixed::w_reduce(big),
+        fixed::w_reduce(big + (65_536i64 << 16))
+    );
+    assert_ne!(fixed::w_reduce(big), (big as u32) as i32);
+    // w_mul's whole part wraps at 2^47 (millions of years of `t`), its
+    // fraction exact whatever the size.
+    let huge = 1i64 << 60;
+    assert_eq!(fixed::w_frac(fixed::w_mul(huge + 3, 3 << 16)), 9);
+}
+
+/// `loop forever`: no loop, `t` wide (frame steps only), `seed` in its
+/// slot; the pixel steps those values reach are the usual ones.
+#[test]
+fn loop_forever_programs() {
+    let p = compile("loop forever\ngray(frac(t*0.15))").unwrap();
+    assert!(p.forever());
+    assert_eq!(p.loop_ms(), 0);
+    assert_eq!(p.inputs() & 8, 8, "it reads t");
+    let l = p.listing();
+    assert!(l.contains("w_muls(w0"), "{l}");
+    assert!(l.contains("w_frac("), "{l}");
+    // A still one (it never reads t).
+    let s = compile("loop forever\ngray(x)").unwrap();
+    assert!(s.forever());
+    assert_eq!(s.inputs() & 8, 0);
+    // seed: its slot, and the inputs' bit 6.
+    let p = compile("loop forever\ngray(frac(seed*100 + t))").unwrap();
+    assert_eq!(p.inputs() & 64, 64);
+    assert!(p.listing().contains("mul(seed, 100)"), "{}", p.listing());
+    // A formula that sets its own `seed` keeps it, looped or not.
+    let a = compile("seed = 0.5\ngray(seed*x)").unwrap();
+    assert_eq!(a, compile("gray(0.5*x)").unwrap());
+    // `forever` is still a name a formula may set.
+    compile("forever = 2\ngray(x*forever)").unwrap();
+    // noise of t once a frame: one step.
+    let p = compile("loop forever\ngray(noise(t*0.5, 5, 0) + x)").unwrap();
+    assert!(
+        p.listing().contains("w_noisex(w1, 5, 0)"),
+        "{}",
+        p.listing()
+    );
+    // noise of t: a wide noise per pixel and its offsets once a frame.
+    let p = compile("loop forever\ngray(noise(x*8 + t, y*4, t*0.3))").unwrap();
+    let l = p.listing();
+    assert!(
+        l.contains("noise_o0(") && l.contains("noise0.x = w_lat") && l.contains("noise0.z = w_lat"),
+        "{l}"
+    );
+    assert!(!l.contains("noise0.y"), "{l}");
+    // A part with its own loop inside one that never repeats: t % its loop.
+    let p = compile("loop forever\npart p {\n  loop 4\n  gray(t/4)\n}\np").unwrap();
+    assert!(p.listing().contains("w_mod(w0, 4)"), "{}", p.listing());
+    // One that never repeats inside a looped formula: the host's t.
+    let p = compile("loop 4\npart p {\n  loop forever\n  gray(frac(t))\n}\np").unwrap();
+    assert!(
+        !p.forever() && !p.listing().contains("w_"),
+        "{}",
+        p.listing()
+    );
+}
+
+/// The wide steps' errors (E901-E906; `Error.code` is not a field yet).
+const FOREVER_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
+    ("loop forever\ngray(t*x)", "grows without end", 2, 7, "E901"),
+    ("loop forever\ngray(sqrt(t))", "grows without end", 2, 6, "E901"),
+    ("loop forever\ngray(frac(t*t))", "grows without end", 2, 12, "E901"),
+    ("loop forever\ngray(floor(t + x))", "grows without end", 2, 6, "E901"),
+    ("loop forever\nv = t + px\ngray(v < 3)", "grows without end", 3, 8, "E901"),
+    ("loop forever\ntable T = 1, 2\ngray(T[t])", "grows without end", 3, 6, "E901"),
+    ("loop forever\ngray(pick(px/32, t, 1))", "grows without end", 2, 6, "E901"),
+    ("loop forever\ngray(x / t)", "grows without end", 2, 8, "E901"),
+    ("loop forever\nv = t + x\ngray(v)", "a colour can't take a value that grows", 3, 1, "E905"),
+    ("loop forever\nrgb(1, 1, 1, t + x)", "a colour can't take a value that grows", 2, 1, "E905"),
+    ("loop forever\npal(fire, x) * t", "a colour can't take a value that grows", 2, 1, "E905"),
+    ("loop forever\ngray(noise(t + x, 0, 0) + noise(t*2 + x, 0, 0) + noise(t*3 + x, 0, 0) + noise(t*4 + x, 0, 0) + noise(t*5 + x, 0, 0))", "four different ones at most", 2, 96, "E902"),
+    ("gray(seed)", "`seed` is for formulas that go on without repeating", 1, 6, "E903"),
+    ("loop forever\ndraw { dot(t, 3) }\ngray(ink)", "can't be drawn at", 2, 12, "E906"),
+    ("loop never\ngray(x)", "or `forever` for one that goes on without repeating", 1, 6, "—"),
+];
+
+#[test]
+fn forever_error_messages() {
+    let mut bad = Vec::new();
+    for &(src, want, line, col, code) in FOREVER_ERRORS {
+        match compile(src) {
+            Ok(_) => bad.push(format!("{code} {src:?}: compiled")),
+            Err(e) => {
+                let lc = e.line_col(src);
+                if !e.msg.contains(want) || lc != (line, col) {
+                    bad.push(format!(
+                        "{code} {src:?}: got {:?} at {lc:?}, want {want:?} at {:?}",
+                        e.msg,
+                        (line, col)
+                    ));
+                }
+            }
+        }
+    }
+    // Sixteen wide values: one more than the slots.
+    let many: String = (1..=16).map(|k| format!("w{k} = t*{k}.5\n")).collect();
+    let sum: String = (1..=16)
+        .map(|k| format!("frac(w{k})"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let e = compile(&format!("loop forever\n{many}gray({sum})")).unwrap_err();
+    if !e.msg.contains("too many values that grow without end") {
+        bad.push(format!("E904: {}", e.msg));
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }

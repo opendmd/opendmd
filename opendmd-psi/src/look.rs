@@ -8,6 +8,7 @@
 //!
 //! ```text
 //! loop 8                         -- the formula's loop, when it isn't 8 s
+//!                                -- (`loop forever` for one that never repeats)
 //! part look {
 //!   <the formula, indented 2>
 //! }
@@ -73,7 +74,10 @@ pub fn wrap(src: &str, loop_ms: u32, blend: &str, amount: u8) -> Result<String, 
         return Ok(String::from(src));
     }
     let mut s = String::with_capacity(src.len() + 64);
-    if loop_ms != 8000 {
+    if loop_ms == 0 {
+        // A formula that never repeats: so does its look.
+        s.push_str("loop forever\n");
+    } else if loop_ms != 8000 {
         s.push_str("loop ");
         decimal(&mut s, loop_ms / 1000, loop_ms % 1000, 3);
         s.push('\n');

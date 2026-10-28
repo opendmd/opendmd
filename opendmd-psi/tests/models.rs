@@ -50,7 +50,9 @@ fn frames(slug: &str, src: &str) -> Vec<(u32, u64)> {
     let mut under = vec![0u8; W * H * 3];
     picture(&mut under);
     let mut s = Scratch::<128>::new();
-    [0, p.loop_ms() * 37 / 100 / 20 * 20]
+    // (One that goes on without repeating: 37 % into its first minute.)
+    let lp = if p.forever() { 60_000 } else { p.loop_ms() };
+    [0, lp * 37 / 100 / 20 * 20]
         .into_iter()
         .map(|ms| {
             let mut out = vec![0u8; W * H * 3];
@@ -100,7 +102,7 @@ fn the_reference_matches_the_language() {
         }
     }
     assert!(
-        (20..=34).contains(&examples.len()),
+        (20..=40).contains(&examples.len()),
         "{} worked examples",
         examples.len()
     );
@@ -143,6 +145,8 @@ fn the_reference_names_every_built_in() {
         "x", "y", "px", "py", "i", "t", "hour", "minute", "second", "a", "b", "c", "w", "h", "ur",
         "ug", "ub", "ul", "cx", "cy", "r", "angle", "ty",
     ];
+    assert!(DOC.contains("`seed`") && DOC.contains("`loop forever`"));
+    compile("loop forever\ngray(frac(t + seed))").unwrap();
     let funcs = [
         ("sin", 1),
         ("cos", 1),
@@ -291,6 +295,12 @@ fn the_cost_table_is_the_estimates() {
         ("| `hash` | 220 |", 220, "gray(x)", "gray(hash(px, x))"),
         ("| `atan2` | 529 |", 529, "gray(x)", "gray(atan2(x, px))"),
         ("| `noise` | 855 |", 855, "gray(x)", "gray(noise(x, px, x))"),
+        (
+            "| `noise` of a growing value (section 11) | 870 |",
+            870,
+            "loop forever\ngray(min(frac(x + t), x))",
+            "loop forever\ngray(min(frac(x + t), noise(x + t, px, x)))",
+        ),
         ("| colour `rgb` | 120 |", 120, "gray(x)", "rgb(x, x, x)"),
         ("| colour `hsv` | 195 |", 195, "gray(x)", "hsv(x, x, x)"),
         ("| `ur` `ug` `ub` | 70 |", 70, "gray(x)", "gray(ur)"),

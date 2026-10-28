@@ -198,7 +198,14 @@ FONT = {"fonts/silkscreen.woff2"}
 # toolchain; the narrowed steps' own loops are left out of wasm, which runs
 # their checked forms: the same bytes). What takes Tunnel towards 100 fps on
 # the panel; raised under the owner's standing OK for budget lines.
-PSI_WASM_GZ_BUDGET = 62 * 1024  # 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 67 KB for `loop forever` (2026-10-27, branch psi-lang, docs/research/
+# endless-road.md §5.1): Formulas that go on without repeating — the
+# compiler's rewriting of a value that grows without end into once-a-frame
+# wide steps and the exact ways back (`Dag::wide_op`, ~6 KB of wasm before
+# wasm-opt), the wide steps themselves, the wide noise and its lane loop,
+# `seed`: +4.6 KB gz (61.9 -> ~66.5 KB with its glue). Raised under the
+# owner's OK to move the psi wasm line (this branch's brief).
+PSI_WASM_GZ_BUDGET = 67 * 1024  # 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
@@ -218,7 +225,11 @@ PSI_WASM_GZ_BUDGET = 62 * 1024  # 58 until psi-speed; 36 KB until 2026-10-24 (Ps
 # (Tunnel, Rotozoom: the built-in effects' looks, ~1 KB gz of formulas.json),
 # the estimate with the still cache in the ratings, the cheat sheet's
 # `pal(fire, v) * k`: 24,811 -> ~26.0 KB gz. Same standing OK.
-FORMULAS_GZ_BUDGET = 27 * 1024  # 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
+# 28 KB for `loop forever` (2026-10-27, branch psi-lang): its cheat-sheet
+# row, the highlighter's `forever`, "Goes on without repeating", Save as
+# GIF's first 10 s: 27,612 -> ~27.8 KB gz with Endless road rewritten for it.
+# Raised under the brief's OK.
+FORMULAS_GZ_BUDGET = 28 * 1024  # 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}

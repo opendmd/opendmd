@@ -125,7 +125,8 @@ pub mod golden {
     use crate::Inputs;
 
     /// The inputs a golden frame is rendered with (10:09:30, sliders ½,
-    /// ¼, ¾).
+    /// ¼, ¾; a `loop forever` formula's `t` the same `ms`, its `seed`
+    /// 0.3).
     pub fn inputs(ms: u32) -> Inputs {
         Inputs {
             t: Inputs::at_ms(ms),
@@ -135,8 +136,13 @@ pub mod golden {
             a: 1 << 15,
             b: 1 << 14,
             c: 3 << 14,
+            tw: Inputs::wide_ms(ms as u64),
+            seed: SEED,
         }
     }
+
+    /// The golden frames' `seed`: 0.3.
+    pub const SEED: i32 = 19_661;
 
     /// FNV-1a, 64-bit.
     pub fn fnv(bytes: &[u8]) -> u64 {
@@ -193,8 +199,22 @@ pub mod golden {
         // still cache (`psi-probe` draws these with it as well).
         ("pal-lit", "loop 2\nlayer { pal(chrono, frac(x + t/2)) * y }\nlayer screen { pal(fire, y, 0.5) * (1 - x) * 1.5 }", 700, 0x29dfb6dd6baeba44),
         ("noise-flat", "gray(noise(x*8, y*4, 0)*0.5 + noise(px/9, py/5, 3)*0.5 - noise(x, y, -2)*0.1)", 0, 0xfa6f54daaa8319d2),
+        // `loop forever`: `t` growing without end (past the Q16.16 range at
+        // 9.1 hours: frames at 11 hours and 46 days), its sums and
+        // products, fractions, waves, noises (per pixel, per row, in the
+        // draw stage), hashes, `%`, compares, smoothstep, `seed`.
+        ("forever", FOREVER, 0, 0x1104e195c98cef2a),
+        ("forever", FOREVER, 125_000, 0x2ea22e7deac5650d),
+        ("forever", FOREVER, 40_000_000, 0x34ff604690d2e7e1),
+        ("forever", FOREVER, 4_000_000_000, 0xea02ad83dede366c),
         ("still", "loop 4.8\nd = len(px - 63.5, (15.5 - py)*2)\nk = 64/(d + 0.5)\nu = frac(atan2(15.5 - py, px - 63.5)*2 + t/4.8 + k/64)\nv = frac(k/16 + t/2.4)\ncell = (floor(u*8) + floor(v*4)) % 2\npal(chrono, frac(mix(0.28, 0.78, cell) + t/4.8)) * clamp((d - 6)/12, 0, 1)", 1900, 0x79d9337fc1b74897),
     ];
+
+    /// A `loop forever` golden formula: per frame and per pixel.
+    pub const FOREVER: &str = "loop forever\nframe { u = t*0.15 + seed*1000 }\nv = noise(x*8 + t*0.5, y*4, t*0.2)*0.5 + sin(x*3 + t/8)*0.2\nhsv(u + v + noise(u, 5, 0)*0.25, 1 - (t % 7)/14, smoothstep(0, 20, t)*0.5 + 0.5)";
+
+    /// Another: per row, a draw stage, hashes, compares, min and max.
+    pub const FOREVER_ROWS: &str = "loop forever\ndraw { for k < 24 { dot(frac(t*0.1 + k/24)*128, noise(t*0.3 + k, 5, 0)*31, hash(floor(t*4), k)) } }\nq = noise(t*0.15 + y*2, 5, 0)\nrgb(q, ink + frac(t*10 + x)*0.25, (t > 60) * 0.5 + min(t/300, x)*0.5)";
 
     /// The picture the [`OVER`] frames are drawn over: every byte value in
     /// every channel somewhere (a hash per pixel), with smooth ramps across
@@ -243,6 +263,8 @@ pub mod golden {
     ("loops", "loop 4\ndraw {\n  for k < 1 { line(0, 0, 127, 0) }\n  for j < 1024 { dot(j % 128, floor(j/128)*4 + 2, hash(j, floor(t))) }\n}\npal(fire, ink)", 2000, false, 0xe0b34a62ddc5a9cd),
     ("nested", "loop 4.8\ndraw {\n  for s < 12 {\n    th = s/12 + t/4.8\n    for r < 6 {\n      ph = r/6\n      rad = 30 + 10*cos(ph)\n      x0 = 64 + rad*cos(th); y0 = 16 + 10*sin(ph) + rad*sin(th)*0.2\n      x1 = 64 + rad*cos(th + 1/12); y1 = 16 + 10*sin(ph) + rad*sin(th + 1/12)*0.2\n      line(x0, y0, x1, y1, 0.3 + r/9, 1 - r/9)\n    }\n  }\n}\nhsv(x + t/4.8, 0.7, ink)", 1200, false, 0x7f399d8d5bf3b553),
     ("ink-part", "part p {\n  loop 2\n  draw { for k < 24 { dot(k*5 + t*2, 16 + sin(k/24 + t/2)*12) } }\n  gray(ink)\n}\nlayer { p(x*0.5, y) }\nlayer add { p(1 - x, y, 0.5) }", 500, false, 0x20b3d33cb32de631),
+    ("forever-rows", super::golden::FOREVER_ROWS, 3_500, false, 0x847d8d42f450cf91),
+    ("forever-rows", super::golden::FOREVER_ROWS, 40_000_000, true, 0xf4f2f6627225ad38),
     ("ink-look", "part look {\n  loop 4.8\n  draw { for e < 6 { line(64 + 30*cos(e/6 + t/4.8), 16 + 12*sin(e/6 + t/4.8), 64 + 30*cos(e/6 + 1/6 + t/4.8), 16 + 12*sin(e/6 + 1/6 + t/4.8)) } }\n  #40c0ff * ink\n}\nloop 4.8\nlayer screen { look(x, y, 0.4) }", 600, true, 0x6c519b2a47772c08),
     ];
 }

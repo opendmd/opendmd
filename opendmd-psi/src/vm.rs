@@ -35,6 +35,13 @@ pub struct Inputs {
     pub a: i32,
     pub b: i32,
     pub c: i32,
+    /// A `loop forever` formula's `t` ([`Program::forever`]): the time
+    /// since it started in 1/65,536 s (Q48.16; see [`Inputs::wide_ms`]),
+    /// growing without end. Other formulas read `t` instead.
+    pub tw: i64,
+    /// A `loop forever` formula's `seed`, Q16.16 in 0..1: the same for a
+    /// whole play, a new one each time it plays.
+    pub seed: i32,
 }
 
 impl Inputs {
@@ -42,6 +49,24 @@ impl Inputs {
     /// down.
     pub fn at_ms(ms: u32) -> i32 {
         ((ms as u64 * 65536) / 1000).min(i32::MAX as u64) as i32
+    }
+
+    /// [`tw`](Self::tw) for `ms` since the formula started: `ms · 65536 /
+    /// 1000` rounded down, as [`at_ms`](Self::at_ms) (the same value
+    /// wherever both fit).
+    pub fn wide_ms(ms: u64) -> i64 {
+        // (No u128: its division is ~1 KB of the web module.) Exact to
+        // 2^47 ms, 4,000 years; held there.
+        let ms = ms.min(1 << 47);
+        (ms / 1000 * 65536 + ms % 1000 * 65536 / 1000) as i64
+    }
+
+    /// Both clocks for `ms` since `prog` started: `t` at `ms` into its loop
+    /// and, for a `loop forever` formula, `tw` at `ms`.
+    pub fn set_ms(&mut self, prog: &Program, ms: u64) {
+        let lp = u64::from(prog.loop_ms().max(1));
+        self.t = Self::at_ms((ms % lp) as u32);
+        self.tw = Self::wide_ms(ms);
     }
 }
 
@@ -64,7 +89,9 @@ pub struct Scratch<const N: usize> {
 }
 
 impl<const N: usize> Scratch<N> {
-    const _OK: () = assert!(N > 0 && W.is_multiple_of(N));
+    // (A lane holds the wide values while the frame's steps run: `WIDE`
+    // i64s.)
+    const _OK: () = assert!(N >= 2 * WIDE && W.is_multiple_of(N));
 
     pub fn new() -> Self {
         let mut s = Scratch {
@@ -542,19 +569,31 @@ fn frame<const N: usize>(
     sc[S_A as usize] = inputs.a;
     sc[S_B as usize] = inputs.b;
     sc[S_C as usize] = inputs.c;
+    if prog.uses & SEEDED != 0 {
+        sc[S_SEED as usize] = inputs.seed;
+    }
     let (fe, de, re, pe) = (
         prog.frame_end as usize,
         prog.draw_end as usize,
         prog.row_end as usize,
         prog.pixel_end as usize,
     );
+    // A `loop forever` formula's wide values (0: `t`) live in the last
+    // lane while the frame's steps run (no lane is in use before the rows).
+    if prog.forever() {
+        wset(&mut scratch.lanes[REGS], 0, inputs.tw);
+    }
     for op in &prog.ops[..fe] {
-        scalar(sc, op, tables, &prog.tables);
+        if code::is_wide(op.code) {
+            wide_step(&mut scratch.sc, &mut scratch.lanes[REGS], op);
+        } else {
+            scalar(&mut scratch.sc, op, tables, &prog.tables);
+        }
     }
     let ink: Option<&Ink> = match ink {
         Some(k) if prog.draws() => {
             if rows == u32::MAX {
-                crate::draw::run(prog, sc, tables, k);
+                crate::draw::run(prog, &mut scratch.sc, tables, k);
             }
             Some(k)
         }
@@ -714,12 +753,81 @@ fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n: u8, at: u
 pub(crate) fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) {
     // Operands of scalar steps are always scalar slots (< 128).
     let g = |v: u8| sc[(v & 0x7f) as usize];
-    let v = if op.code == code::TAB {
-        tab(tabs, op.b, op.c, g(op.a))
-    } else {
-        eval(op.code, g(op.a), g(op.b), g(op.c), Some(t))
+    let v = match op.code {
+        code::TAB => tab(tabs, op.b, op.c, g(op.a)),
+        code::NOISE_O..=code::NOISE_O_LAST => noise_o(g(op.a), g(op.b), g(op.c), sc, op.code),
+        _ => eval(op.code, g(op.a), g(op.b), g(op.c), Some(t)),
     };
     sc[(op.d & 0x7f) as usize] = v;
+}
+
+/// A wide noise of the small parts `x y z` with noise context `code -
+/// NOISE_O`'s lattice offsets (out of line: the frame loop is in IRAM).
+#[inline(never)]
+fn noise_o(x: i32, y: i32, z: i32, sc: &[i32; MAX_SCALARS], c: u8) -> i32 {
+    fixed::noise_off(x, y, z, ctx(sc, c))
+}
+
+/// Noise context `c - NOISE_O`'s three lattice offsets: its slots
+/// ([`noise_slot`]; 0 for an axis without one).
+#[inline(always)]
+fn ctx(sc: &[i32; MAX_SCALARS], c: u8) -> [u32; 3] {
+    let k = noise_slot(c.wrapping_sub(code::NOISE_O) as usize % NOISE_CTX, 0);
+    [sc[k] as u32, sc[k + 1] as u32, sc[k + 2] as u32]
+}
+
+/// Wide value `k` of the frame (`WIDE` of them in a lane, two halves each).
+#[inline(always)]
+fn wget(l: &[i32], k: usize) -> i64 {
+    let k = (k % WIDE) * 2;
+    (l[k] as u32 as i64) | ((l[k + 1] as i64) << 32)
+}
+
+#[inline(always)]
+fn wset(l: &mut [i32], k: usize, v: i64) {
+    let k = (k % WIDE) * 2;
+    l[k] = v as i32;
+    l[k + 1] = (v >> 32) as i32;
+}
+
+/// One wide step (`code::W_*`, once a frame: a `loop forever` formula's
+/// `t` and what is made from it; `w` the lane holding the wide values),
+/// out of line and in flash: the frame loop that calls it is in IRAM.
+#[inline(never)]
+pub(crate) fn wide_step(sc: &mut [i32; MAX_SCALARS], w: &mut [i32], op: &Op) {
+    use code::*;
+    let s = |v: u8| sc[(v & 0x7f) as usize];
+    let (a, d) = (wget(w, op.a as usize), op.d);
+    let out = match op.code {
+        W_ADD => a.wrapping_add(wget(w, op.b as usize)),
+        W_ADDS => a.wrapping_add(s(op.b) as i64),
+        W_SUB => a.wrapping_sub(wget(w, op.b as usize)),
+        W_SUBS => a.wrapping_sub(s(op.b) as i64),
+        W_NEG => a.wrapping_neg(),
+        W_MULS => fixed::w_mul(a, s(op.b)),
+        W_DIVS => fixed::w_div(a, s(op.b)),
+        W_FLOOR => fixed::w_floor(a),
+        c => {
+            let v = match c {
+                W_FRAC => fixed::w_frac(a),
+                W_MOD => fixed::w_mod(a, s(op.b)),
+                W_CMP => fixed::w_cmp(op.c, a, s(op.b)),
+                W_MINMAX => fixed::w_minmax(op.c, a, s(op.b)),
+                // (`d` one of a noise context's slots: its axis.)
+                W_LAT => fixed::w_lat(a, (d as usize).wrapping_sub(noise_slot(0, 0)) % 3) as i32,
+                W_NOISEX => fixed::noise_off(
+                    fixed::w_frac(a),
+                    s(op.b),
+                    s(op.c),
+                    [fixed::w_lat(a, 0), 0, 0],
+                ),
+                _ => fixed::w_reduce(a),
+            };
+            sc[(d & 0x7f) as usize] = v;
+            return;
+        }
+    };
+    wset(w, d as usize, out);
 }
 
 impl<const N: usize> Scratch<N> {
@@ -845,6 +953,7 @@ fn lane_op<const N: usize>(
             Arg::Sc(z) if z & 0xffff == 0 => noise_flat_lane(d, [a, b], z),
             _ => tern!(run3, d, a, b, c, fixed::noise),
         },
+        NOISE_O..=NOISE_O_LAST => noise_o_lane(d, [a, b, c], ctx(&s.sc, op.code)),
         // One loop for the four, its operands read with a stride (0: a
         // value for the whole lane): the lookup dwarfs the loop, and seven
         // monomorphised copies would be ~1 KB more of wasm.
@@ -852,6 +961,34 @@ fn lane_op<const N: usize>(
         U_R..=U_L => load_under(d, under, op.code - U_R),
         INK => load_ink(d, ink),
         _ => {}
+    }
+}
+
+/// A wide noise along the lane ([`fixed::noise_off`]), its operands read
+/// with a stride (0: a value for the lane): one loop for every kind.
+#[inline(never)]
+fn noise_o_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 3], off: [u32; 3]) {
+    let mut one = [0i32; 3];
+    let mut p = [core::ptr::null::<i32>(); 3];
+    let mut stride = [0usize; 3];
+    for k in 0..3 {
+        match args[k] {
+            Arg::Lane(q) => (p[k], stride[k]) = (q, 1),
+            Arg::Sc(v) => one[k] = v,
+        }
+    }
+    for k in 0..3 {
+        if stride[k] == 0 {
+            p[k] = &one[k];
+        }
+    }
+    for o in d.iter_mut() {
+        // SAFETY: as `glyph_lane`'s.
+        let (x, y, z) = unsafe { (*p[0], *p[1], *p[2]) };
+        *o = fixed::noise_off(x, y, z, off);
+        for k in 0..3 {
+            p[k] = p[k].wrapping_add(stride[k]);
+        }
     }
 }
 

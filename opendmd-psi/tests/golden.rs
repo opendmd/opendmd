@@ -698,6 +698,10 @@ const PIECES: &[&str] = &[
     "[",
     "]",
     "1024",
+    "loop forever",
+    "forever",
+    "seed",
+    "t*0.15 +",
 ];
 
 fn check(src: &str) {
@@ -1162,9 +1166,7 @@ fn division_by_a_constant_floors_whole_numbers_right() {
                 hour: (n / 3600) as u8,
                 minute: (n % 3600 / 60) as u8,
                 second: (n % 60) as u8,
-                a: 0,
-                b: 0,
-                c: 0,
+                ..Inputs::default()
             };
             render_with::<128>(&p, &mut s, &inp, &OWN, &mut out);
             assert_eq!(decode(&out, 0), n / k, "floor({n}/{k}) once a frame");
@@ -1371,4 +1373,225 @@ fn the_reviews_narrowing_cases() {
             p.listing()
         );
     }
+}
+
+/// A frame of `p` at `ms` (both clocks: `t` and a `loop forever`
+/// formula's), seed `seed`, over `under`, at lane width `N`.
+fn frame_wide<const N: usize>(p: &Program, ms: u32, seed: i32, under: &[u8]) -> Vec<u8> {
+    let mut s = Scratch::<N>::new();
+    let mut ink = Ink::boxed();
+    let mut out = vec![0x5a; W * H * 3];
+    let mut i = opendmd_psi::Inputs { seed, ..inputs(ms) };
+    i.set_ms(p, ms as u64);
+    render_rows_ink::<N>(
+        p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        Some(under),
+        u32::MAX,
+        &mut out,
+    );
+    out
+}
+
+/// `loop forever` is the same formula with a very long loop, wherever its
+/// values fit a Q16.16: random formulas that use `t` in every way a value
+/// that grows without end may be used (sums and products with values the
+/// same all frame, a part per pixel or per row, fractions, waves, `%`,
+/// noise and hashes of it, compares, min, max, clamp, smoothstep, mix,
+/// select, a part with its own loop, the draw stage), drawn as `loop
+/// forever` and as `loop 3600` up to 300 s in: the same bytes, at both lane
+/// widths, narrowed or not, with and without the column and still runs.
+/// `PSI_FUZZ_N` sets the number of formulas (600 by default).
+#[test]
+fn loop_forever_is_a_long_loop_where_it_fits() {
+    let mut r = Rng(0x00f0_7e7e_5eed_1e55);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    // Wide values: t scaled by values the same all frame (kept small, so
+    // the looped formula never saturates within 300 s).
+    const WIDE: &[&str] = &[
+        "t",
+        "t*0.15",
+        "t/8",
+        "t*2.5",
+        "t*10 + 3",
+        "t*0.5 - a*7",
+        "(t + 1.25)/3",
+        "t*0.01 + t*0.2",
+        "-t*0.3",
+        "t*a",
+    ];
+    const SMALL: &[&str] = &[
+        "x*3",
+        "px/16",
+        "y",
+        "py/9",
+        "sin(x*2)",
+        "noise(x*4, y, 0)",
+        "a",
+        "0.375",
+        "i/4096",
+        "x*x",
+    ];
+    let n: usize = std::env::var("PSI_FUZZ_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+    let mut compiled = 0;
+    for k in 0..n {
+        let w = |r: &mut Rng| format!("({})", WIDE[r.below(WIDE.len())]);
+        let s = |r: &mut Rng| SMALL[r.below(SMALL.len())];
+        let use_t = |r: &mut Rng| -> String {
+            let (a, b, c) = (w(r), s(r), s(r));
+            match r.below(18) {
+                0 => format!("frac({a})"),
+                1 => format!("sin({a} + {b})"),
+                2 => format!("cos({a})*{b}"),
+                3 => format!("tri({a} - {b}) + saw({a})*0.25 + sqr({a})*0.125"),
+                4 => format!("({a}) % 7 / 7"),
+                5 => format!("(({a}) + {b}) % 1.5"),
+                6 => format!("noise({a} + {b}, {c}*4, 0)"),
+                7 => format!("noise(x*8, {a}, {w2})", w2 = w(r)),
+                8 => format!("hash(floor({a}), {b})"),
+                9 => format!("({a} < 40) + ({a} >= 150)*0.5 + step(90, {a})*0.25"),
+                10 => format!("min({a}, 2)*0.25 + max({a}/300, {b})"),
+                11 => format!("clamp({a}/60, 0, 1)"),
+                12 => format!("smoothstep(0, 20, {a})"),
+                13 => format!("mix(0.2, 0.8, ({a})/300)"),
+                14 => format!("({a}) > 100 ? {b} : {c}"),
+                15 => format!("frac({a} + {b} - {c})*{b}"),
+                16 => format!("noise({a}*0.5 + {b}, {c}, {a})"),
+                _ => format!("not ({a} < 9) and {b} > 0.2"),
+            }
+        };
+        let body = match k % 5 {
+            // A colour of values made from t.
+            0 | 1 => format!(
+                "v = {}\nu = {}\nhsv(v + {}, 1, frac(u) * 0.5 + 0.5)",
+                use_t(&mut r),
+                use_t(&mut r),
+                w(&mut r)
+            ),
+            // Once a frame, and per row.
+            2 => format!(
+                "frame {{ f = {} }}\nq = noise({} + y*3, py, 0)\nrgb(f, q, {})",
+                use_t(&mut r),
+                w(&mut r),
+                use_t(&mut r)
+            ),
+            // A part with its own loop, and the draw stage.
+            3 => format!(
+                "part p {{\n  loop 4\n  gray(frac(t/4 + x))\n}}\ndraw {{ for k < 16 {{ dot(frac({} + k/16)*128, noise({} + k, 0, 0)*31) }} }}\nlayer {{ p }}\nlayer add {{ gray(ink, {}) }}",
+                w(&mut r),
+                w(&mut r),
+                use_t(&mut r)
+            ),
+            // A wide value straight into a colour (held to 0..1).
+            _ => format!("gray({} / 60)", w(&mut r)),
+        };
+        let (fsrc, lsrc) = (
+            format!("loop forever\n{body}"),
+            format!("loop 3600\n{body}"),
+        );
+        let lp = match compile(&lsrc) {
+            Ok(p) => p,
+            Err(e) => {
+                // (The generator puts pixel values in `frame { }` now and
+                // then.) Refused looped, refused never repeating.
+                assert!(
+                    compile(&fsrc).is_err(),
+                    "{fsrc:?} compiles, but looped: {}",
+                    e.msg
+                );
+                continue;
+            }
+        };
+        let fp = compile(&fsrc).unwrap_or_else(|e| panic!("{fsrc:?}\n{}", e.render(&fsrc)));
+        assert!(fp.forever() && !lp.forever());
+        compiled += 1;
+        let mut q = Program::default();
+        opendmd_psi::compile_with(&fsrc, &mut q, false, false).expect("plain, unnarrowed");
+        for ms in [0, 1234, 59_999, 123_460, 299_980] {
+            let want = frame_wide::<128>(&lp, ms, 0, &under);
+            let got = frame_wide::<128>(&fp, ms, 0, &under);
+            assert!(
+                got == want,
+                "case {k} at {ms} ms:\n{fsrc}\n{}\nlooped:\n{}",
+                fp.listing(),
+                lp.listing()
+            );
+            assert!(
+                frame_wide::<64>(&fp, ms, 0, &under) == want,
+                "case {k} at {ms} ms, 64 lanes:\n{fsrc}"
+            );
+            assert!(
+                frame_wide::<128>(&q, ms, 0, &under) == want,
+                "case {k} at {ms} ms, plain:\n{fsrc}"
+            );
+        }
+        // Far past the Q16.16 range, and with a seed and sliders out of
+        // theirs: both widths agree, and the narrowed steps draw what the
+        // checked ones draw.
+        for (ms, seed, a) in [
+            (40_000_000, 7, 1 << 15),
+            (4_000_000_000, -(3 << 16), 3 << 16),
+            (77_777, 5 << 16, -(1 << 16)),
+        ] {
+            let at = |p: &Program| {
+                let mut s = Scratch::<128>::new();
+                let mut ink = Ink::boxed();
+                let mut out = vec![0x5a; W * H * 3];
+                let mut i = opendmd_psi::Inputs {
+                    seed,
+                    a,
+                    ..inputs(ms)
+                };
+                i.set_ms(p, ms as u64);
+                render_rows_ink::<128>(
+                    p,
+                    &mut s,
+                    Some(&mut ink),
+                    &i,
+                    &OWN,
+                    Some(&under),
+                    u32::MAX,
+                    &mut out,
+                );
+                out
+            };
+            assert!(
+                at(&fp) == at(&q),
+                "case {k} at {ms} ms, seed {seed}, a {a}: narrowed\n{fsrc}"
+            );
+            assert!(
+                frame_wide::<128>(&fp, ms, seed, &under) == frame_wide::<64>(&fp, ms, seed, &under)
+            );
+        }
+    }
+    assert!(compiled * 10 > n * 7, "only {compiled} of {n} compiled");
+    eprintln!("{n} formulas, {compiled} compiled both ways and drew the same");
+}
+
+/// A formula that never repeats doesn't: frames an hour, a day and a
+/// month in differ from the start's, and a new `seed` is another drive.
+#[test]
+fn loop_forever_goes_on() {
+    let src = "loop forever\nfps 100\nframe { u = t*0.15 + seed*1000 }\nhz = noise(u + y, 0, 0)\nhsv(hz + x*0.1, 1, noise(x*8 + t, y*4, u))";
+    let p = compile(src).unwrap();
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let at = |ms: u32, seed: i32| fnv(&frame_wide::<128>(&p, ms, seed, &under));
+    let start = at(1000, 0);
+    for ms in [3_601_000, 86_401_000, 2_592_001_000] {
+        assert_ne!(at(ms, 0), start, "{ms} ms");
+    }
+    assert_ne!(at(1000, 1 << 15), start, "another seed, another drive");
+    assert_eq!(
+        at(86_401_000, 3),
+        at(86_401_000, 3),
+        "a pure function of t and seed"
+    );
 }

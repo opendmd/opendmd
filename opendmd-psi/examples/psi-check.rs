@@ -14,8 +14,10 @@
 //! default 0.5), `--clock HH:MM:SS` (10:09:30), `--over` (draw over the
 //! sample picture even if the formula doesn't read it; it is used anyway
 //! whenever it does), `--hash` (each frame's FNV-1a, as the golden tests
-//! print them), `--listing` (the compiled steps). Exit status 1 when it
-//! doesn't compile.
+//! print them), `--listing` (the compiled steps), `--seed V` (a `loop
+//! forever` formula's `seed`, 0 to 1; default 0). A formula that never
+//! repeats (`loop forever`) gets its frames over its first minute. Exit
+//! status 1 when it doesn't compile.
 
 use opendmd_psi::golden::fnv;
 use opendmd_psi::{
@@ -30,6 +32,7 @@ fn main() {
         (None::<String>, None::<String>, 8usize, 4usize);
     let (mut ms_list, mut over, mut hash, mut listing) = (None::<Vec<u32>>, false, false, false);
     let mut sl = [0.5f64; 3];
+    let mut seed = 0f64;
     let mut clock = (10u8, 9u8, 30u8);
     let num = |v: Option<String>, what: &str| -> f64 {
         v.and_then(|s| s.parse().ok())
@@ -43,6 +46,7 @@ fn main() {
             "--a" => sl[0] = num(args.next(), "--a"),
             "--b" => sl[1] = num(args.next(), "--b"),
             "--c" => sl[2] = num(args.next(), "--c"),
+            "--seed" => seed = num(args.next(), "--seed"),
             "--ms" => {
                 let v = args.next().unwrap_or_default();
                 ms_list = Some(
@@ -67,7 +71,7 @@ fn main() {
             "--hash" => hash = true,
             "--listing" => listing = true,
             "-h" | "--help" => {
-                println!("psi-check FILE.psi|- [--out FILE.png|-] [--frames N] [--ms 0,250,…] [--scale K] [--a V] [--b V] [--c V] [--clock HH:MM:SS] [--over] [--hash] [--listing]");
+                println!("psi-check FILE.psi|- [--out FILE.png|-] [--frames N] [--ms 0,250,…] [--scale K] [--a V] [--b V] [--c V] [--clock HH:MM:SS] [--over] [--hash] [--listing] [--seed V]");
                 return;
             }
             _ if path.is_none() => path = Some(a),
@@ -115,6 +119,7 @@ fn main() {
         (8, "t"),
         (16, "the clock"),
         (32, "the picture under it"),
+        (64, "seed"),
     ]
     .iter()
     .filter(|e| inputs & e.0 != 0)
@@ -136,9 +141,13 @@ fn main() {
         );
     }
     let grid = prog.frame_ms().unwrap_or(20);
+    let lp = if prog.forever() {
+        "never repeats (loop forever)".to_string()
+    } else {
+        format!("loop {} s", prog.loop_ms() as f64 / 1000.0)
+    };
     println!(
-        "loop {} s at {} fps; reads {}",
-        prog.loop_ms() as f64 / 1000.0,
+        "{lp} at {} fps; reads {}",
         1000 / grid,
         if reads.is_empty() {
             "nothing (a still picture)".into()
@@ -173,8 +182,14 @@ fn main() {
         Some(v) => v.into_iter().map(|ms| (ms, clock)).collect(),
         None if moves => (0..frames)
             .map(|k| {
-                // Whole frames of its grid, as the panel plays them.
-                let ms = (prog.loop_ms() as u64 * k as u64 / frames as u64) as u32 / grid * grid;
+                // Whole frames of its grid, as the panel plays them (one
+                // that never repeats: over its first minute).
+                let lp = if prog.forever() {
+                    60_000
+                } else {
+                    prog.loop_ms()
+                };
+                let ms = (lp as u64 * k as u64 / frames as u64) as u32 / grid * grid;
                 (ms, clock)
             })
             .collect(),
@@ -194,15 +209,17 @@ fn main() {
     still.take(&prog);
     let mut shots = Vec::new();
     for &(ms, (hh, mm, ss)) in &times {
-        let inp = Inputs {
-            t: Inputs::at_ms(ms),
+        let mut inp = Inputs {
             hour: hh,
             minute: mm,
             second: ss,
             a: q(sl[0]),
             b: q(sl[1]),
             c: q(sl[2]),
+            seed: q(seed),
+            ..Inputs::default()
         };
+        inp.set_ms(&prog, u64::from(ms));
         let mut frame = vec![0u8; W * H * 3];
         render_rows_ink(
             &prog,
