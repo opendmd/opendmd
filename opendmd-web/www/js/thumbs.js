@@ -228,9 +228,19 @@ export function attach(cv, path) {
   cv._p = path;
   delete cv.dataset.done;
   if (mem.has(path)) { stats.mem++; const bm = mem.get(path); mem.delete(path); mem.set(path, bm); paint(cv, bm); return; }
+  const e = epoch;
   get(path).then(async (rec) => {
     if (cv._p !== path) return;
-    if (rec) { stats.idb++; show(path, await bitmap(rec.still)); return; }
+    // Another card since the read began: the record is the old card's. The
+    // rows are drawn again by the views' own refresh; this one waits for it.
+    if (e !== epoch) { attach(cv, path); return; }
+    if (rec) {
+      const bm = await bitmap(rec.still);
+      if (e !== epoch) { bm?.close(); attach(cv, path); return; } // (decoding took a card swap)
+      stats.idb++;
+      show(path, bm);
+      return;
+    }
     if (inflight.has(path)) return; // drawn when it comes
     const [n, at] = tries.get(path) || [0, 0];
     if (n >= 3 || Date.now() - at < 10000) { paint(cv, null); return; }
