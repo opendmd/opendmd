@@ -976,7 +976,9 @@ impl Program {
                 let mut steps = 0u64;
                 for o in &self.ops[at + 1..v.end] {
                     if code::writes_scalar(o.code) {
-                        steps += u64::from(value_ns(o.code)) * W as u64 + LANE_STEP_NS;
+                        let each =
+                            value_ns(o.code) + if lane_loop(o.code) { 0 } else { LANE_EVAL_NS };
+                        steps += u64::from(each) * W as u64 + LANE_STEP_NS;
                     }
                 }
                 let turns = u64::from(v.count) * LANE_TURN_NS;
@@ -1313,6 +1315,34 @@ pub(crate) const VEC_MIN: u32 = 32;
 pub(crate) const LANE_STEP_NS: u64 = 800;
 pub(crate) const LANE_CHUNK_NS: u64 = 1_000;
 pub(crate) const LANE_TURN_NS: u64 = 100;
+/// A draw lane step without a lane loop of its own (`vm::lane_draw`'s
+/// other steps, worked out turn by turn by the scalar functions): the
+/// call and its dispatch a turn, ns (a guess).
+pub(crate) const LANE_EVAL_NS: u32 = 150;
+
+/// Whether `vm::lane_draw` runs step `c` with a lane loop (else turn by
+/// turn): its list, kept in step with it.
+pub(crate) fn lane_loop(c: u8) -> bool {
+    use code::*;
+    matches!(
+        c,
+        ADD | SUB
+            | MUL
+            | DIV
+            | LT
+            | GT
+            | AND
+            | OR
+            | MIN
+            | MAX
+            | HASH
+            | ABS
+            | FLOOR
+            | FRAC
+            | SELECT
+            | CLAMP
+    )
+}
 
 /// A draw loop that runs as lanes ([`Program::vector_loop`]).
 #[derive(Clone, Copy, Debug)]

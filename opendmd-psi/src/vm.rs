@@ -947,20 +947,98 @@ impl<const N: usize> Scratch<N> {
     }
 }
 
-/// One step of a draw loop's body run as lanes (`draw::run`: a lane a
-/// turn): [`lane_op`]'s dispatch, a copy of its own in flash (inlined into
-/// `draw::run_lanes`, one stack frame for both), so the frame loop's in
-/// IRAM is the same code as before the draw stage used it.
+/// One step of a draw loop's body run as lanes (`draw::run_lanes`: a lane
+/// a turn), in flash. The steps a drawing's values mostly are
+/// (`program::lane_loop`'s list, which must name these arms) go through
+/// the lane loops the frame loop already has (the same instantiations: no
+/// code added to IRAM); the rest are worked out turn by turn with the
+/// scalar steps' own functions ([`value_of`]: what a turn at a time runs).
 #[cfg(not(target_arch = "wasm32"))]
-#[inline(always)]
+#[inline(never)]
 pub(crate) fn lane_draw<const N: usize>(
     s: &mut Scratch<N>,
     op: &Op,
     t: &Tables,
     tabs: &[i32; MAX_TABLE],
 ) {
-    let mut al: Alias = [core::ptr::null(); REGS + 1];
-    lane_op(s, &mut al, op, false, 0, t, tabs, None, None);
+    use code::*;
+    let al: Alias = [core::ptr::null(); REGS + 1];
+    let (a, b, c) = (
+        s.arg(&al, op.a, 0),
+        s.arg(&al, op.b, 0),
+        s.arg(&al, op.c, 0),
+    );
+    let Scratch { lanes, sc, .. } = s;
+    let d: &mut [i32; N] = &mut lanes[reg_index(op.d)];
+    match op.code {
+        ADD => bin!(fast2, d, a, b, fixed::add),
+        SUB => bin!(fast2, d, a, b, fixed::sub),
+        MUL => bin!(fast2, d, a, b, fixed::mul),
+        DIV => bin!(run2, d, a, b, fixed::div),
+        LT => bin!(fast2, d, a, b, fixed::lt),
+        GT => bin!(fast2, d, a, b, fixed::gt),
+        AND => bin!(fast2, d, a, b, fixed::and),
+        OR => bin!(fast2, d, a, b, fixed::or),
+        MIN => bin!(fast2, d, a, b, fixed::min),
+        MAX => bin!(fast2, d, a, b, fixed::max),
+        HASH => bin!(run2, d, a, b, fixed::hash),
+        ABS => un!(fast1, d, a, fixed::abs),
+        FLOOR => un!(fast1, d, a, fixed::floor),
+        FRAC => un!(fast1, d, a, fixed::frac),
+        SELECT => tern!(fast3, d, a, b, c, fixed::select),
+        CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
+        _ => {
+            let mut one = [0i32; 3];
+            let mut p = [core::ptr::null::<i32>(); 3];
+            let mut stride = [0usize; 3];
+            for (k, x) in [a, b, c].into_iter().enumerate() {
+                match x {
+                    Arg::Lane(q) => (p[k], stride[k]) = (q, 1),
+                    Arg::Sc(v) => one[k] = v,
+                }
+            }
+            for k in 0..3 {
+                if stride[k] == 0 {
+                    p[k] = &one[k];
+                }
+            }
+            for o in d.iter_mut() {
+                // SAFETY: as `glyph_lane`'s (the destination is never one
+                // of the lanes read: `run_lanes` sees to it).
+                let (x, y, z) = unsafe { (*p[0], *p[1], *p[2]) };
+                *o = value_of(op, x, y, z, sc, t, tabs);
+                for k in 0..3 {
+                    p[k] = p[k].wrapping_add(stride[k]);
+                }
+            }
+        }
+    }
+}
+
+/// A step's value of the operand values `x y z` as the scalar steps work
+/// it out (`scalar_value`'s, the slots read already): a draw loop's step
+/// turn by turn ([`lane_draw`]), a colour of the canvas's steps
+/// ([`ink_colour`]; `SHR` there is a pixel step's, exact for any value).
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+fn value_of(
+    op: &Op,
+    x: i32,
+    y: i32,
+    z: i32,
+    sc: &[i32; MAX_SCALARS],
+    t: &Tables,
+    tabs: &[i32; MAX_TABLE],
+) -> i32 {
+    use code::*;
+    match op.code {
+        SHR => x >> (op.c & 31),
+        PICK => pick(sc, op.b, op.c, x),
+        TAB => tab(tabs, op.b, op.c, x),
+        SPR => spr(tabs, op.c, x, y),
+        NOISE_O..=NOISE_O_LAST => noise_o(x, y, z, sc, op.code),
+        c => eval(c, x, y, z, Some(t)),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1309,12 +1387,7 @@ fn ink_colour(
         let (x, y, z) = (get(&v, op.a), get(&v, op.b), get(&v, op.c));
         v[reg_index(op.d)] = match op.code {
             INK => fixed::byte(b),
-            SHR => x >> (op.c & 31),
-            PICK => pick(sc, op.b, op.c, x),
-            TAB => tab(tabs, op.b, op.c, x),
-            SPR => spr(tabs, op.c, x, y),
-            NOISE_O..=NOISE_O_LAST => noise_o(x, y, z, sc, op.code),
-            c => eval(c, x, y, z, Some(t)),
+            _ => value_of(op, x, y, z, sc, t, tabs),
         };
     }
     let (x, y, z) = (get(&v, col.a), get(&v, col.b), get(&v, col.c));
