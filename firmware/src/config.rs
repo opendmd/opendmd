@@ -676,11 +676,13 @@ pub const BUILDER_PEAK_MARGIN: u32 = 20 * 1024;
 /// (`player_opening`), and every transfer stops it too.
 pub const BUILDER_MIN_HEAP_FULL: u32 = BUILDER_ENCODER_PEAK + BUILDER_PEAK_MARGIN;
 /// [`BUILDER_MIN_HEAP_FULL`] at the drip pace (`auto_prepare = "always"`,
-/// a prepared file playing): 1.5 KB more, as before, since the player's
+/// the default, a GIF playing): 1.5 KB more, as before, since the player's
 /// frames and transitions go on beside it (65,664 B; the task starts at
-/// 76,416 B). A prepared file on screen leaves ~74-78 KB free, so the drip
-/// starts less often than it did at 54 KB; with an original on screen the
-/// pace stops it anyway (`gif on screen`).
+/// 76,416 B). Before the 512 B FatFs buffers a prepared file on screen left
+/// ~74-78 KB free and an original ~62-64 KB, so the drip only ran over
+/// prepared files; with them (+~30 KB) an original leaves ~92-94 KB, and
+/// the drip runs over any GIF — this threshold is still what decides (the
+/// glow's 12 KB or a Formula look's 21 KB can keep it from starting).
 pub const BUILDER_MIN_HEAP: u32 = BUILDER_MIN_HEAP_FULL + 1536;
 /// A GIF gifslim does not decode (interlaced frames, `Previous` disposal: 5
 /// of the stock card's 11,047) is decoded with the `gif` crate instead only
