@@ -8,6 +8,7 @@
 
 import { app } from './state.js';
 import { toast } from './util.js';
+import { compact } from './psikit.js';
 
 // The device's `fx_psi::path` (opendmd_psi::compact): comments out, runs of
 // spaces made one, lines joined with `; `, text in quotes on a declaration
@@ -15,12 +16,8 @@ import { toast } from './util.js';
 // controls and non-ASCII as %XX). The values set follow (`&a=`; a slot
 // left unset plays at the formula's declared default).
 export function fpath(f) {
-  let s = '', p = '@fx:psi?src=';
-  for (const l of f.src.split('\n')) {
-    const q = [], c = l.replace(/"[^"]*"/g, (m) => (q.push(m), '\0')).replace(/(--|\/\/).*/, '').trim().split(/\s+/).join(' ').replace(/\0/g, () => q.shift());
-    if (c) s += (s ? '; ' : '') + c;
-  }
-  for (const b of new TextEncoder().encode(s)) {
+  let p = '@fx:psi?src=';
+  for (const b of new TextEncoder().encode(compact(f.src))) {
     const c = String.fromCharCode(b);
     p += b == 32 ? '+' : b > 32 && b < 127 && !'%&+#?'.includes(c) ? c : '%' + (b < 16 ? '0' : '') + b.toString(16).toUpperCase();
   }

@@ -499,8 +499,28 @@ fn quoted(src: &str, i: usize, out: &mut Vec<Token>) -> Result<usize, Error> {
             return Err(Error::new(
                 j,
                 j + 1,
-                "text in quotes can't have `<`, `>`, `\\` or a tab in it",
+                "text in quotes can't have `<`, `>`, `\\` or a control character (a tab too) in it",
             ));
+        }
+        if c >= 0x80 {
+            // A character of more than a byte: C1 controls (E954), and the
+            // ones that reorder or hide text (E969: bidirectional controls,
+            // zero-width characters, line and paragraph separators).
+            let ch = sub(src, j, b.len()).chars().next().unwrap_or(' ');
+            let n = ch.len_utf8();
+            if matches!(ch, '\u{80}'..='\u{9f}') {
+                return Err(Error::new(j, j + n, "text in quotes can't have `<`, `>`, `\\` or a control character (a tab too) in it"));
+            }
+            if matches!(ch, '\u{200b}'..='\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}') {
+                // E969.
+                return Err(Error::new(
+                    j,
+                    j + n,
+                    "text in quotes can't have characters that hide or reorder text (zero-width, direction marks, line separators)",
+                ));
+            }
+            j += n;
+            continue;
         }
         j += 1;
     }
@@ -625,6 +645,20 @@ fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Vec<Token>) -> usize
     k.min(b.len())
 }
 
+/// Whether a line starts with a declaration (`name "…"`, `control …`; not
+/// `name = …`, an assignment): where text in quotes may be. The first word,
+/// past anything but letters and digits, then anything but `=`.
+fn declaration_line(line: &str) -> bool {
+    let b = line.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let Some(a) = b.iter().position(|&c| word(c)) else {
+        return false;
+    };
+    let e = a + b[a..].iter().take_while(|&&c| word(c)).count();
+    DECLARATIONS.contains(&sub(line, a, e))
+        && b[e..].iter().find(|c| !c.is_ascii_whitespace()) != Some(&b'=')
+}
+
 /// The same formula on one line, as short as it stays readable: comments
 /// dropped, runs of spaces made one, lines joined with `; ` (which the
 /// language reads as a line break, and ignores inside brackets, as it does
@@ -635,17 +669,23 @@ fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Vec<Token>) -> usize
 pub fn compact(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     for line in src.lines() {
-        // (A line of declarations: `psi 1; name "…"` may be one line.)
-        let text = line
-            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .find(|w| !w.is_empty())
-            .is_some_and(|w| DECLARATIONS.contains(&w));
+        let text = declaration_line(line);
         let b = line.as_bytes();
         let mut code = String::new();
         let mut i = 0;
         let mut space = false;
         while i < b.len() {
             let c = b[i];
+            // `'"'`, `'-'`: a character in quotes is one token, as the lexer
+            // reads it (before a comment or a quote).
+            if c == b'\'' && b.get(i + 2) == Some(&b'\'') && b.get(i + 1).is_some_and(|&x| (32..=126).contains(&x)) {
+                if space && !code.is_empty() {
+                    code.push(' ');
+                }
+                code.push_str(sub(line, i, i + 3));
+                (i, space) = (i + 3, false);
+                continue;
+            }
             if c == b'"' && text {
                 // To the closing quote (or the line's end), as written.
                 let e = line[i + 1..].find('"').map_or(b.len(), |k| i + 2 + k);
@@ -4368,7 +4408,7 @@ impl<'s> Parser<'s> {
                 }
             }
             first = false;
-            self.end_of_statement()?;
+            self.declaration_end(t)?;
             self.skip_newlines();
         }
         if host && controls > 0 {
@@ -4386,6 +4426,29 @@ impl<'s> Parser<'s> {
                 ..Decls::default()
             })
         })
+    }
+
+    /// The end of a declaration's line (E967; a `control` line's own
+    /// shape is E957, checked in [`Self::control`]).
+    #[inline(never)]
+    fn declaration_end(&mut self, t: Token) -> Result<(), Error> {
+        let n = self.peek();
+        match n.tok {
+            Tok::Newline => {
+                self.next();
+                Ok(())
+            }
+            Tok::Eof | Tok::RBrace => Ok(()),
+            // E967.
+            _ => Err(self.fail_at(
+                n,
+                format!(
+                    "expected the end of the `{}` line, found {} (one declaration a line)",
+                    self.text(t),
+                    self.found(n)
+                ),
+            )),
+        }
     }
 
     /// E952: `name`, `about` or `look` a second time.
@@ -4410,7 +4473,15 @@ impl<'s> Parser<'s> {
     fn version(&mut self, t: Token) -> Result<(), Error> {
         let n = self.peek();
         let v = match n.tok {
-            Tok::Num(v) if v >= ONE && v & 0xffff == 0 => (v >> 16) as usize,
+            // (Written as a plain whole number: not `01`, not `1.0`.)
+            Tok::Num(v)
+                if v >= ONE
+                    && v & 0xffff == 0
+                    && !self.text(n).starts_with('0')
+                    && !self.text(n).contains('.') =>
+            {
+                (v >> 16) as usize
+            }
             // E603.
             _ => return self.err(t, "`psi` takes the language's version, a whole number: `psi 1`"),
         };
@@ -4522,7 +4593,10 @@ impl<'s> Parser<'s> {
         if matches!(self.peek().tok, Tok::Num(_) | Tok::Minus) {
             let start = self.peek();
             let a = self.signed().ok_or_else(|| self.fail(start, HOW))?;
-            self.expect(Tok::DotDot, "`..` (a range is `lo..hi`, e.g. `1..4`)")?;
+            if self.next().tok != Tok::DotDot {
+                // E957.
+                return self.err(start, HOW);
+            }
             let bt = self.peek();
             let b = self.signed().ok_or_else(|| self.fail(bt, HOW))?;
             if a >= b {
@@ -4546,8 +4620,11 @@ impl<'s> Parser<'s> {
         if q.tok == Tok::Str {
             self.next();
             label = Some(self.text_in(q, MAX_LABEL_TEXT)?);
-        } else if !matches!(q.tok, Tok::Newline | Tok::Eof | Tok::RBrace) {
-            return self.err(q, HOW);
+        }
+        // The label is the line's last (E957).
+        let e = self.peek();
+        if !matches!(e.tok, Tok::Newline | Tok::Eof | Tok::RBrace) {
+            return self.err(e, HOW);
         }
         let at = (kw.start, nt.end);
         let input = self.dag.input([Input::A, Input::B, Input::C][k], at)?;
@@ -4576,9 +4653,10 @@ impl<'s> Parser<'s> {
                 scope: self.scope,
             });
         }
-        // The slots: the formula's own controls, or a part's when it has none.
+        // The slots: the formula's own controls, or a part's for a slot the
+        // formula's own lines leave undeclared (the first part to declare it).
         let d = self.decls();
-        if host || (d.own == 0 && d.slots[k] == NO) {
+        if host || d.slots[k] == NO {
             d.slots[k] = v;
             match words {
                 Some((_, _, n)) => d.meta.set_choice(k, n),
@@ -4603,7 +4681,11 @@ impl<'s> Parser<'s> {
         loop {
             let w = self.peek();
             if w.tok != Tok::Name {
-                return Err(self.expected(w, "a word (a choice is `control NAME = word, word, …`)"));
+                // E966.
+                return self.err(
+                    w,
+                    "a choice is words (names) between commas: `control NAME = word, word, …`",
+                );
             }
             self.next();
             let text = self.text(w);
@@ -4699,15 +4781,39 @@ fn compile_impl(
     reuse: bool,
     fuse: bool,
 ) -> Result<Info, Error> {
+    compile_full(
+        src,
+        prog,
+        (runs, narrow, reuse, fuse),
+        None,
+        #[cfg(feature = "syntax")]
+        None,
+    )
+}
+
+/// Every compile's one way through: read, lay out (again without the
+/// runs on a layout bug), then the program's finishing passes
+/// ([`finish_program`]); `declared` and the `syntax` sink for those who
+/// want them. (`runs, narrow, reuse, fuse` as [`compile_opts`] and
+/// [`compile_unfused`].)
+#[inline(always)]
+#[allow(clippy::needless_lifetimes)]
+fn compile_full<'s>(
+    src: &'s str,
+    prog: &mut Program,
+    (runs, narrow, reuse, fuse): (bool, bool, bool, bool),
+    mut declared: Option<&mut Declared>,
+    #[cfg(feature = "syntax")] sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
+) -> Result<Info, Error> {
     prog.clear();
     let mut r = compile_inner(
         src,
         prog,
         runs,
         reuse,
-        None,
+        declared.as_deref_mut(),
         #[cfg(feature = "syntax")]
-        None,
+        sink,
     );
     if runs && r.as_ref().is_err_and(|e| e.msg == LAYOUT_BUG) {
         debug_assert!(false, "{LAYOUT_BUG}: {src:?}");
@@ -4717,7 +4823,7 @@ fn compile_impl(
             prog,
             false,
             reuse,
-            None,
+            declared,
             #[cfg(feature = "syntax")]
             None,
         );
@@ -4725,41 +4831,43 @@ fn compile_impl(
     if r.is_err() {
         prog.clear();
     } else {
-        if narrow {
-            crate::range::narrow(prog);
-            if fuse {
-                crate::fuse::fuse(prog);
-            }
-        }
-        // The draw loops that run as lanes, decided once (`vector_loop`).
-        prog.mark_lane_loops();
+        finish_program(prog, narrow, fuse);
     }
     r
+}
+
+/// What every compiled program gets after it is laid out: the narrowed
+/// steps (`narrow`), the fused runs (`fuse`), and the draw loops that run
+/// as lanes, decided once. One place, so no way of compiling can miss one.
+#[inline(never)]
+fn finish_program(prog: &mut Program, narrow: bool, fuse: bool) {
+    if narrow {
+        crate::range::narrow(prog);
+        if fuse {
+            crate::fuse::fuse(prog);
+        }
+    }
+    // The draw loops that run as lanes, decided once (`vector_loop`).
+    prog.mark_lane_loops();
 }
 
 /// [`compile_into`], and where the formula's declarations are in `src`
 /// ([`Declared`]: the web module's `controls()` reads a name, a label or
 /// a choice's words from there; the program keeps what the player needs,
-/// [`Program::meta`]).
+/// [`Program::meta`]). The program is not narrowed or fused (the same
+/// pixels, the checked steps): it is for what the formula declares, not
+/// for drawing on the panel.
 pub fn compile_declared(src: &str, prog: &mut Program) -> Result<Declared, Error> {
-    prog.clear();
     let mut d = Declared::default();
-    let r = compile_inner(
+    compile_full(
         src,
         prog,
-        true,
-        true,
+        (true, false, true, false),
         Some(&mut d),
         #[cfg(feature = "syntax")]
         None,
-    );
-    if r.is_err() {
-        prog.clear();
-    } else {
-        crate::range::narrow(prog);
-        crate::fuse::fuse(prog);
-    }
-    r.map(|_| d)
+    )?;
+    Ok(d)
 }
 
 // ('s: the sink's, with `syntax`.)
@@ -4966,15 +5074,7 @@ pub fn compile_observed<'s>(
     prog: &mut Program,
     sink: &'s mut (dyn crate::syntax::Sink + 's),
 ) -> Result<Info, Error> {
-    prog.clear();
-    let r = compile_inner(src, prog, true, true, None, Some(sink));
-    if r.is_err() {
-        prog.clear();
-    } else {
-        crate::range::narrow(prog);
-        crate::fuse::fuse(prog);
-    }
-    r
+    compile_full(src, prog, (true, true, true, true), None, Some(sink))
 }
 
 #[cfg(feature = "syntax")]

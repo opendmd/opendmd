@@ -404,8 +404,13 @@ fn query(query: &str) -> Query {
                 }
             }
             "a" | "b" | "c" => {
-                if let Some(n) = psi::number(v) {
-                    q.sliders[usize::from(k.as_bytes()[0] - b'a')] = Some(n);
+                // A number, maybe below zero (a control's range may be);
+                // anything else — empty, junk, 32,768 or more — leaves the
+                // slot unset: the formula's default (js/psikit.js `num`
+                // reads a link the same way).
+                let (neg, digits) = v.strip_prefix('-').map_or((false, v), |d| (true, d));
+                if let Some(n) = psi::number(digits) {
+                    q.sliders[usize::from(k.as_bytes()[0] - b'a')] = Some(if neg { -n } else { n });
                 }
             }
             _ => {}
@@ -1919,6 +1924,15 @@ mod tests {
             panic!()
         };
         assert_eq!((fx.inputs.a, fx.inputs.b, fx.inputs.c), (9 << 16, 1 << 16, 1 << 15));
+        // Below zero is a value; empty, junk and out of range are unset.
+        let Some(Fx::Psi(fx)) = Fx::parse(&super::path(src, "a=-0.5&b=&c=40000")) else {
+            panic!()
+        };
+        assert_eq!((fx.inputs.a, fx.inputs.b, fx.inputs.c), (-(1 << 15), 0, 0));
+        let Some(Fx::Psi(fx)) = Fx::parse(&super::path(src, "a=x&a=32768")) else {
+            panic!()
+        };
+        assert_eq!(fx.inputs.a, 5 << 15);
         // A live edit takes the new formula's defaults.
         let Some(Fx::Psi(mut fx)) = Fx::parse(&path("gray(a)")) else {
             panic!()

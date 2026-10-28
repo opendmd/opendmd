@@ -525,3 +525,88 @@ fn every_example_draws_as_before_at_its_defaults() {
         }
     }
 }
+
+/// The web app's path text (`js/psikit.js` `compact`, which `fpath` sends)
+/// is the compiler's `compact()`, for every example and the edge cases:
+/// text in quotes on declaration lines only, `'"'` a character, comments,
+/// runs of spaces, `;`-joined lines. Run under node.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_web_apps_compact_is_the_compilers() {
+    let json = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../opendmd-web/www/formulas.json"
+    ))
+    .unwrap();
+    let mut srcs: Vec<String> = crate::examples(&json).into_iter().map(|e| e.src).collect();
+    for s in [
+        "name = '\"' -- a quote\ngray(name/100)",
+        "name \"a  b\"\ngray(x)",
+        "control k 0..1 = 0.5 \"a;b -- c\"\ngray(k)",
+        "name \"x\"  -- \"q\"\ngray(x)",
+        "name \"a\" ; control k = 0.5 ; gray(k)",
+        "psi 1\nlook screen 40 -- c\nloop 4\ngray(x)",
+        "psi 1; name \"a -- b; c\"; gray(x)",
+        "-- name \"x\"\n  v = 1   // c \"a  b\" \ngray( v )",
+        "k = ' ' + ';' + '-'-'/' -- c\ngray(glyph(k, px % 5, py))",
+        "about \"Moiré:\tx\" \r\nname \"unclosed -- x\ngray(x)",
+        "control  k   = 0  \"Ünï  cödé\"  // c\r\ngray(k)",
+        "v = x % 2 + 1 & 3 # é  // c",
+        "names \"x\" -- c\ngray(x)",
+        "sprite s {\n  key \" 1, . 0\n  .\"\".\n}\ngray(s[px, py])",
+    ] {
+        srcs.push(s.to_string());
+    }
+    let input: String = {
+        let mut j = String::from("[");
+        for (k, s) in srcs.iter().enumerate() {
+            if k > 0 {
+                j.push(',');
+            }
+            j.push('"');
+            for c in s.chars() {
+                match c {
+                    '"' => j.push_str("\\\""),
+                    '\\' => j.push_str("\\\\"),
+                    '\n' => j.push_str("\\n"),
+                    '\r' => j.push_str("\\r"),
+                    '\t' => j.push_str("\\t"),
+                    c => j.push(c),
+                }
+            }
+            j.push('"');
+        }
+        j.push(']');
+        j
+    };
+    let kit = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/www/js/psikit.js");
+    let script = format!(
+        "import {{ compact }} from 'file://{kit}';\nlet s = ''; process.stdin.on('data', (d) => s += d); process.stdin.on('end', () => {{ for (const x of JSON.parse(s)) console.log(JSON.stringify(compact(x))); }});"
+    );
+    let mut child = std::process::Command::new("node")
+        .args(["--input-type=module", "-e", &script])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("node (the web app's tests need it)");
+    use std::io::Write;
+    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let got: Vec<String> = String::from_utf8(out.stdout).unwrap().lines().map(String::from).collect();
+    assert_eq!(got.len(), srcs.len());
+    for (src, g) in srcs.iter().zip(got) {
+        let want = opendmd_psi::compact(src);
+        let mut w = String::from("\"");
+        for c in want.chars() {
+            match c {
+                '"' => w.push_str("\\\""),
+                '\\' => w.push_str("\\\\"),
+                '\t' => w.push_str("\\t"),
+                c => w.push(c),
+            }
+        }
+        w.push('"');
+        assert_eq!(g, w, "compact of {src:?}");
+    }
+}
