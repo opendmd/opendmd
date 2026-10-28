@@ -243,7 +243,12 @@ PSI_WASM_GZ_BUDGET = 74 * 1024  # 73 until palettes; 71 until slot reuse; 67 unt
 # row, the highlighter's `forever`, "Goes on without repeating", Save as
 # GIF's first 10 s: 27,612 -> ~27.8 KB gz with Endless road rewritten for it.
 # Raised under the brief's OK.
-FORMULAS_GZ_BUDGET = 28 * 1024  # 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
+# 30 KB for the Time gate example (2026-10-28, branch ct-gate): one more
+# example in formulas.json (the CT time gate, 19 lines of code and a dozen
+# of comments): 28,435 -> 29,419 B gz. Time gate example; the Formulas split
+# (docs/research/formula-apps.md, pending) will move most examples out of
+# the firmware bundle.
+FORMULAS_GZ_BUDGET = 30 * 1024  # 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}
