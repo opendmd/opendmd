@@ -9,7 +9,7 @@ along the bottom: **Now**, **Library**, **Playlists**, **Formulas**,
 **Create Art** and **Settings** (on a small phone, Create Art is just
 **Create**).
 
-Want to look around first? The [demo](https://opendmd.github.io/demo/) is
+Want to look around first? The [demo](https://opendmd.dev/demo/) is
 the same app running in your browser, with a few sample animations.
 
 ## Now

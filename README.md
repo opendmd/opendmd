@@ -3,15 +3,15 @@
 <p align="center">New open firmware and a web app for the DMDoS LED dot-matrix display.</p>
 
 <p align="center">
-  <a href="https://opendmd.github.io/guide/hardware.html"><img src="https://img.shields.io/badge/for_the-DMDoS_display-33d1ff?labelColor=15171b" alt="For the DMDoS display"></a>
+  <a href="https://opendmd.dev/guide/hardware"><img src="https://img.shields.io/badge/for_the-DMDoS_display-33d1ff?labelColor=15171b" alt="For the DMDoS display"></a>
   <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-MIT_%2F_Apache--2.0-5ef09a?labelColor=15171b" alt="License: MIT or Apache 2.0"></a>
 </p>
 
 <p align="center">
-  <a href="https://opendmd.github.io/demo/"><b>Try the demo in your browser →</b></a>
-  &nbsp;·&nbsp; <a href="https://opendmd.github.io/install/">Install on your display</a>
-  &nbsp;·&nbsp; <a href="https://opendmd.github.io/guide/hardware.html">What you need</a>
-  &nbsp;·&nbsp; <a href="https://opendmd.github.io/">Documentation</a>
+  <a href="https://opendmd.dev/demo/"><b>Try the demo in your browser →</b></a>
+  &nbsp;·&nbsp; <a href="https://opendmd.dev/install/">Install on your display</a>
+  &nbsp;·&nbsp; <a href="https://opendmd.dev/guide/hardware">What you need</a>
+  &nbsp;·&nbsp; <a href="https://opendmd.dev/">Documentation</a>
 </p>
 
 <!-- site:hero -->
@@ -29,7 +29,7 @@ it is, and adds a web app to manage it.
   Previews and GIF preparation run right in the browser, using the same engine as the player.
 - **The simulator** plays a card in a desktop window, drawn as LEDs rather than flat pixels
   (for developers: [build it from source](docs/simulator.md); everyone else can try the
-  [web demo](https://opendmd.github.io/demo/)).
+  [web demo](https://opendmd.dev/demo/)).
 
 <!-- site:tiles -->
 
@@ -57,7 +57,7 @@ original DMDoS firmware can be put back at any time from the Software section of
 
 ## Install
 
-Open the **[installer](https://opendmd.github.io/install/)** in Chrome, Edge, Opera or
+Open the **[installer](https://opendmd.dev/install/)** in Chrome, Edge, Opera or
 Firefox on a computer, plug the
 display's ESP32 board into your computer by USB, and click **Install**. When it's done, the
 installer asks for your WiFi and puts the board on it; the web app is then at
@@ -104,7 +104,7 @@ The demo card in these screenshots holds OpenDMD's own Formulas and the
 
 ## Documentation
 
-The documentation is also at **[opendmd.github.io](https://opendmd.github.io/)**.
+The documentation is also at **[opendmd.dev](https://opendmd.dev/)**.
 
 - [What you need](docs/guide/hardware.md), [Install](docs/guide/install.md) and
   [Updating](docs/guide/updating.md)

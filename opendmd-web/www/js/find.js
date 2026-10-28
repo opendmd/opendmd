@@ -48,7 +48,7 @@ export async function thumb(url, hops = 3) {
   return b;
 }
 
-// Where the index is: the site, from a player (GitHub Pages answers with
+// Where the index is: the site, from a player (it answers with
 // `Access-Control-Allow-Origin: *`); beside the demo, same-origin, when this
 // page is the site's demo.
 export const artIndexBase = () => (app.demo || location.origin === new URL(SITE).origin
@@ -56,7 +56,7 @@ export const artIndexBase = () => (app.demo || location.origin === new URL(SITE)
 
 // A platform's index, fetched once a session (a failure is forgotten, so
 // Try again fetches anew). The browser's HTTP cache keeps it between
-// visits as the site's headers allow (Pages: 10 minutes, then revalidated).
+// visits as the site's headers allow (10 minutes, then revalidated).
 const indexes = new Map();
 function index(p) {
   if (!indexes.has(p)) {

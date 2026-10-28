@@ -8,7 +8,7 @@ card without a board on the desk).
 
 **Most people want the web demo instead.** It runs in any browser, with
 nothing to install, and plays a demo card on the same engine:
-[opendmd.github.io/demo](https://opendmd.github.io/demo/).
+[opendmd.dev/demo](https://opendmd.dev/demo/).
 
 ![The simulator playing a tunnel Formula](images/sim-tunnel.png)
 

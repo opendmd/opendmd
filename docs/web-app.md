@@ -22,7 +22,7 @@ make www-push HOST=opendmd.local           # write the pack into the player's fl
 
 **The API.** Every route the player serves, with its parameters, replies,
 limits and a `curl` example, is in [`docs/api.md`](api.md), published on
-the project site: `https://opendmd.github.io/dev/api.html` (the latest
+the project site: `https://opendmd.dev/dev/api` (the latest
 docs) and, for each release, `dev/api/v<version>.html` as that release
 described it. The web app does not carry it: Settings → Device → About →
 API reference opens the page for the player's firmware in a new tab (a
@@ -285,7 +285,7 @@ runs, titled with its name, to save as new.
 
 The pixel work and the GIF writer are Rust (`opendmd-art-web`), in a second
 wasm module loaded only when the Studio opens. The game name lists are
-published on the project site (`https://opendmd.github.io/art-index/v1/<PLATFORM>.json`,
+published on the project site (`https://opendmd.dev/art-index/v1/<PLATFORM>.json`,
 one fetched per platform the first time it is searched, then kept for the
 session; the site's demo fetches its own copy), built by
 `uv run tools/art-index.py` from the repositories' file lists into
@@ -386,7 +386,7 @@ player sends those in preference.
 
 ## The demo
 
-[opendmd.github.io/demo](https://opendmd.github.io/demo/) is this app with no
+[opendmd.dev/demo](https://opendmd.dev/demo/) is this app with no
 player behind it. When nothing answers `GET /api/status` but a
 `demo/index.json` sits beside the page, the app loads that card instead of
 offering the folder picker: its files are fetched as they are read, writes
@@ -410,8 +410,9 @@ CC0 Kenney Pixel Platformer sprites and a playlist of live items
 (`tools/demo-card.py`). `make site` builds the whole public site into
 `target/site`: the README as the landing page, these docs as HTML, and the
 app with the demo card under `demo/` (`tools/site.py`). `make site-serve`
-serves it on :8081; `make site-publish` pushes it to the
-`opendmd/opendmd.github.io` repository, which GitHub Pages serves.
+serves it on :8081; `make site-deploy` puts it on
+[opendmd.dev](https://opendmd.dev/) (the `opendmd-site` Worker on
+Cloudflare, `site/worker/`; see [deploying.md](deploying.md)).
 
 **A formula's page** (`/f/#formula=…&name=…&a=…`, from
 `opendmd-web/share/f/`) is what the app's **Copy share link** gives: the
@@ -423,9 +424,10 @@ to the gallery. It runs on the demo's own files (`js/psikit.js`, the share
 link's one encoder and decoder; `js/preview.js` and the wasm; `pkg-psi`).
 
 **The formula gallery** (`/formulas/`) is the app's examples plus the
-files merged into the public repository's `gallery/` by pull request. A
-workflow there (`site/public-repo/.github/`, installed by `make
-site-publish`, which otherwise leaves `gallery/` alone) checks each
+files merged into the public gallery repository's `gallery/`
+(github.com/opendmd/opendmd.github.io) by pull request. A workflow there
+(`site/public-repo/.github/`, installed by `make gallery-repo-publish`,
+which otherwise leaves `gallery/` alone) checks each
 contribution with `opendmd-gallery` (`opendmd-gallery/`: the path, the
 text, the header, the licence, that it compiles and its cost on the panel;
 its threat model is in `site/public-repo/.github/gallery-check/README.md`).
