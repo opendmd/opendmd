@@ -9,11 +9,14 @@ name: Release
 # uses the web demo.) What gets published depends on the trigger:
 #
 #   tag v1.2.3          -> GitHub release on opendmd/opendmd (marked latest),
-#                          and the site pushed to opendmd/opendmd.github.io
+#                          the site deployed to https://opendmd.dev/ (once
+#                          the CLOUDFLARE_API_TOKEN secret exists, below),
+#                          and the public gallery repo
+#                          (opendmd/opendmd.github.io) updated: its gallery
+#                          check and this release's frozen API page
 #   tag v1.2.3-beta.1   -> GitHub pre-release (any tag with a "-" suffix),
-#                          and the site pushed too (until 1.0.0, betas are
-#                          what the site offers; see CLAUDE.md "CI and
-#                          releases")
+#                          and the same (until 1.0.0, betas are what the
+#                          site offers; see CLAUDE.md "CI and releases")
 #   manual dispatch     -> dry_run (the default): everything is built, signed
 #                          with a throwaway key made in the job (so the bundle
 #                          verifies against that key's public half, not the
@@ -35,8 +38,9 @@ name: Release
 #                     .odfw bundles (tools/fw-sign.py; the key whose public
 #                     half is firmware/keys/opendmd.pub):
 #                       base64 -w0 ~/.config/opendmd/opendmd.key | gh secret set OTA_SIGNING_KEY -R opendmd/opendmd
-# Optional, the site on Cloudflare (docs/research/site-cloudflare.md; until
-# it is set the steps below skip, and the site goes to GitHub Pages only):
+# Optional until CI deploys the site, the site on Cloudflare (docs/deploying.md
+# "The project site"; until it is set the deploy step skips, and the site is
+# deployed from the dev box with `make site-deploy`):
 #   CLOUDFLARE_API_TOKEN  an API token scoped to the account's Workers
 #                     Scripts: Edit and Account Settings: Read (D1 and R2 Edit
 #                     come with short links), made in the dashboard (My
@@ -48,7 +52,8 @@ name: Release
 #                     The repository variable CLOUDFLARE_ACCOUNT_ID names
 #                     the account if the token can see more than one.
 #   SITE_DEPLOY_KEY   an SSH private key whose public half is a deploy key
-#                     with write access on opendmd/opendmd.github.io:
+#                     with write access on the public gallery repo,
+#                     opendmd/opendmd.github.io (tools/gallery-repo-publish.sh):
 #                       ssh-keygen -t ed25519 -N '' -C 'opendmd release' -f site_deploy
 #                       gh repo deploy-key add site_deploy.pub -R opendmd/opendmd.github.io --allow-write -t 'opendmd release'
 #                       gh secret set SITE_DEPLOY_KEY -R opendmd/opendmd < site_deploy
@@ -259,14 +264,14 @@ jobs:
           uv run --quiet demos.py b d
           git checkout -- out
 
-      # The formula gallery's contributions: the public site repo's gallery/,
-      # read-only over https (a public repo: no token). tools/site.py checks
-      # every file again with this repo's opendmd-gallery before publishing
-      # it, never follows a link, and leaves out any that fail. And the
-      # earlier releases' API pages (dev/api/v<version>.html), which the site
-      # links from dev/api.html and carries as they are (site-publish.sh
-      # never removes or replaces them); this release's own is frozen by
-      # make site only when the tree is its tag.
+      # The formula gallery's contributions: the public gallery repo's
+      # gallery/, read-only over https (a public repo: no token). tools/site.py
+      # checks every file again with this repo's opendmd-gallery before
+      # publishing it, never follows a link, and leaves out any that fail.
+      # And the earlier releases' API pages (dev/api/v<version>.html), which
+      # the site links from dev/api.html and carries as they are
+      # (gallery-repo-publish.sh never removes or replaces them); this
+      # release's own is frozen by make site only when the tree is its tag.
       - name: Fetch the formula gallery and the earlier API pages
         run: |
           set -euo pipefail
@@ -338,7 +343,7 @@ jobs:
           cd "$RUNNER_TEMP/assets"
           V="${TAG#v}"
           WHICH="$(printf '%s\n' \
-            'Two builds, one per board (the browser installer at https://opendmd.github.io/install/ offers the DevKit; the 8 MB build is for a board in development):' '' \
+            'Two builds, one per board (the browser installer at https://opendmd.dev/install/ offers the DevKit; the 8 MB build is for a board in development):' '' \
             '| file | DevKit (4 MB): ESP32 DevKit V1 | 8 MB build: for a board in development |' \
             '|---|---|---|' \
             "| update over WiFi (Update from file…) | \`opendmd-$V-4mb.odfw\` | \`opendmd-$V-8mb.odfw\` |" \
@@ -353,19 +358,18 @@ jobs:
           fi
           gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber *
 
-      # The push to the public repo's main (a deploy key's push, so it
-      # triggers workflows there) runs its Pages workflow, which deploys the
-      # site with the gallery regenerated from main's gallery/ (the same
-      # tools/gallery_page.py as make site, vendored; see
-      # site/public-repo/.github/gallery-check/README.md "The deploy").
-      - name: Publish the site
+      # The public gallery repo (opendmd/opendmd.github.io; it serves
+      # nothing): its gallery check and vendored checker, its READMEs, and
+      # this release's frozen API page added to dev/api/, the archive the
+      # next site build fetches above. The site itself is deployed below.
+      - name: Update the public gallery repo
         if: steps.plan.outputs.kind != 'dry'
         env:
           SITE_DEPLOY_KEY: ${{ secrets.SITE_DEPLOY_KEY }}
           # The tag this run releases (checked against Cargo.toml by the
-          # plan; the tree checked clean after the build): site-publish.sh
-          # labels and freezes by it, not by git describe.
-          SITE_PUBLISH_DESCRIBE: ${{ steps.plan.outputs.tag }}
+          # plan; the tree checked clean after the build): the script
+          # labels and archives by it, not by git describe.
+          GALLERY_REPO_DESCRIBE: ${{ steps.plan.outputs.tag }}
         run: |
           set -euo pipefail
           test -n "$SITE_DEPLOY_KEY" || { echo "::error::the SITE_DEPLOY_KEY secret is not set (see the header of release.yml)"; exit 1; }
@@ -375,10 +379,10 @@ jobs:
           # GitHub's published host key (docs: "GitHub's SSH key fingerprints").
           echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >> ~/.ssh/known_hosts
           export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/site_deploy -o IdentitiesOnly=yes"
-          # site-publish.sh commits as this repo's identity.
+          # gallery-repo-publish.sh commits as this repo's identity.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          tools/site-publish.sh target/site git@github.com:opendmd/opendmd.github.io.git
+          tools/gallery-repo-publish.sh target/site git@github.com:opendmd/opendmd.github.io.git
 
       - name: Remove the deploy key
         if: always()

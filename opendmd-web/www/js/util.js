@@ -4,7 +4,7 @@
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 // The project site: releases, the HTTP API, formula links.
-export const SITE = 'https://opendmd.github.io/';
+export const SITE = 'https://opendmd.dev/';
 
 // h('button.pri', {onclick}, 'Save') — tag with optional .classes, then
 // attributes/properties, then children (strings, nodes, arrays, null).
