@@ -442,7 +442,7 @@ the formula's `t`.
 | source | 4,096 characters (a shared link past ~1,500 may be cut by apps) | too long |
 | steps | 256 in all: per frame + per row + per pixel + one per layer | too long for the panel (N steps) |
 | live per-pixel values at once | 12 | keeps too many values at once |
-| constants + per-frame/per-row values | ~119 | too many numbers and steps |
+| constants + per-frame/per-row values held at once | ~119 (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | too many numbers and steps |
 | nesting | 18 levels of brackets and operators (a part level counts 3) | nested too deeply / parts go too deep |
 | `loop` | 0.1..3600 s, or `forever` | between 0.1 and 3600 seconds |
 | values that grow without end (`loop forever`: `t` and what is made of it once a frame) | 15 at once | too many values that grow without end |

@@ -3494,11 +3494,19 @@ impl<'s> Parser<'s> {
                 ns += 1;
             }
             let neg = kb[ns] == b'-';
-            let Some(v) = number(sub(self.src, key.start + ns + usize::from(neg), key.start + te)) else {
+            let Some(v) = number(sub(
+                self.src,
+                key.start + ns + usize::from(neg),
+                key.start + te,
+            )) else {
                 return Err(bad);
             };
             if chars.contains(&kb[s]) {
-                return Err(Error::new(key.start + s, key.start + s + 1, format!("`{}` is in the key twice", kb[s] as char)));
+                return Err(Error::new(
+                    key.start + s,
+                    key.start + s + 1,
+                    format!("`{}` is in the key twice", kb[s] as char),
+                ));
             }
             chars.push(kb[s]);
             nums.push(if neg { -v } else { v });
@@ -4070,12 +4078,39 @@ pub fn compile_with(
     runs: bool,
     narrow: bool,
 ) -> Result<Info, Error> {
+    compile_impl(src, prog, runs, narrow, true)
+}
+
+/// [`compile_with`] with (`reuse`) or without scalar slots used again once
+/// a value's last use has passed (`assign_slots`): without, every value
+/// has a slot of its own, as before (the same bytes; the tests compare).
+#[doc(hidden)]
+pub fn compile_opts(
+    src: &str,
+    prog: &mut Program,
+    runs: bool,
+    narrow: bool,
+    reuse: bool,
+) -> Result<Info, Error> {
+    compile_impl(src, prog, runs, narrow, reuse)
+}
+
+/// [`compile_opts`]'s body, in each of its callers (one frame fewer under
+/// the compiler's recursion: its stack is the firmware's to hold).
+#[inline(always)]
+fn compile_impl(
+    src: &str,
+    prog: &mut Program,
+    runs: bool,
+    narrow: bool,
+    reuse: bool,
+) -> Result<Info, Error> {
     prog.clear();
-    let mut r = compile_inner(src, prog, runs);
+    let mut r = compile_inner(src, prog, runs, reuse);
     if runs && r.as_ref().is_err_and(|e| e.msg == LAYOUT_BUG) {
         debug_assert!(false, "{LAYOUT_BUG}: {src:?}");
         prog.clear();
-        r = compile_inner(src, prog, false);
+        r = compile_inner(src, prog, false, reuse);
     }
     if r.is_err() {
         prog.clear();
@@ -4085,7 +4120,7 @@ pub fn compile_with(
     r
 }
 
-fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Error> {
+fn compile_inner(src: &str, prog: &mut Program, runs: bool, reuse: bool) -> Result<Info, Error> {
     if src.len() > MAX_SOURCE {
         return Err(Error::new(
             MAX_SOURCE,
@@ -4226,7 +4261,7 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Erro
     }
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
-    emit(&p.dag, &steps, &p.draw, backdrop, runs, prog).map_err(|e| Error {
+    emit(&p.dag, &steps, &p.draw, backdrop, runs, reuse, prog).map_err(|e| Error {
         start: ct.start,
         end: ct.end,
         ..e
@@ -4324,6 +4359,7 @@ fn emit(
     draw: &[DItem],
     backdrop: bool,
     runs: bool,
+    reuse: bool,
     prog: &mut Program,
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
@@ -4394,8 +4430,11 @@ fn emit(
     if total > MAX_OPS {
         return Err(too_long(total));
     }
-    // Where each node's value lives.
-    let mut loc = alloc::vec![0u8; n];
+    // Where each node's value lives: a slot of `vs` (`VS` + its index,
+    // given a scalar slot once the steps are laid out: `assign_slots`), or
+    // as it is (an input, a lane, a wide slot, a noise's offset).
+    let mut loc = alloc::vec![0u16; n];
+    let mut vs: Vec<VSlot> = Vec::new();
     // Which nodes have a place yet: a step may read only those (an operand
     // without one would read slot 0, `t`, silently).
     let mut set = alloc::vec![false; n];
@@ -4416,29 +4455,22 @@ fn emit(
     }
     // Wide slots: 0 is `t`.
     let mut next_wide = 1usize;
-    fn new_slot(next_slot: &mut usize, v: Option<i32>, prog: &mut Program) -> Result<u8, Error> {
-        if *next_slot >= MAX_SCALARS {
-            return Err(Error::new(
-                0,
-                0,
-                format!(
-                    "this formula has too many numbers and steps (more than {MAX_SCALARS} values) — simplify it"
-                ),
-            ));
-        }
-        prog.init[*next_slot] = v.unwrap_or(0);
-        *next_slot += 1;
-        Ok((*next_slot - 1) as u8)
+    fn new_slot(vs: &mut Vec<VSlot>, v: Option<i32>) -> u16 {
+        vs.push(match v {
+            Some(v) => VSlot::Const(v),
+            None => VSlot::Value,
+        });
+        VS + (vs.len() - 1) as u16
     }
     for i in 0..n {
         if live(i) && nodes[i].code == K_CONST {
-            loc[i] = new_slot(&mut next_slot, Some(nodes[i].val), prog)?;
+            loc[i] = new_slot(&mut vs, Some(nodes[i].val));
             set[i] = true;
         } else if live(i) && nodes[i].code == K_INPUT {
             loc[i] = if nodes[i].val == WIDE_T {
                 0
             } else {
-                nodes[i].val as u8
+                nodes[i].val as u8 as u16
             };
             set[i] = true;
             if nodes[i].val as u8 == LANE | L_I {
@@ -4451,21 +4483,20 @@ fn emit(
     if backdrop {
         prog.uses |= BACKDROP;
     }
-    let mut ops: Vec<Op> = Vec::new();
+    let mut ops: Vec<WOp> = Vec::new();
     // A step for node `m` into `d`; a pick's table of its choices' slots
     // goes in constant slots of its own, one for every pick of the same
     // choices (`tabs`: where each went, 0 for not yet; the choices all
     // have a slot by then: they come before it and run once a frame or a
     // row).
-    let mut tabs = alloc::vec![0u8; dag.picks.len()];
+    let mut tabs = alloc::vec![0u16; dag.picks.len()];
     let mk = |m: &Node,
-              d: u8,
-              loc: &[u8],
+              d: u16,
+              loc: &[u16],
               set: &[bool],
-              ns: &mut usize,
-              tabs: &mut [u8],
-              prog: &mut Program|
-     -> Result<Op, Error> {
+              vs: &mut Vec<VSlot>,
+              tabs: &mut [u16]|
+     -> Result<WOp, Error> {
         let n = code::arity(m.code);
         let unset = [m.a, m.b, m.c][..n].iter().any(|&x| !set[x as usize])
             || (m.code == code::PICK && dag.picks[m.b as usize].iter().any(|&x| !set[x as usize]))
@@ -4476,23 +4507,21 @@ fn emit(
         let l = |k: usize, x: Id| if n > k { loc[x as usize] } else { 0 };
         let (mut b, mut c) = (l(1, m.b), l(2, m.c));
         if m.code == code::TAB {
-            (b, c) = (m.b as u8, m.c as u8);
+            (b, c) = (m.b, m.c);
         }
         if matches!(m.code, code::W_CMP | code::W_MINMAX | code::SPR) {
-            c = m.c as u8;
+            c = m.c;
         }
         if m.code == code::PICK {
             let opts = &dag.picks[m.b as usize];
             let tab = &mut tabs[m.b as usize];
             if *tab == 0 {
-                *tab = *ns as u8;
-                for &o in opts {
-                    new_slot(ns, Some(loc[o as usize] as i32), prog)?;
-                }
+                vs.push(VSlot::Pick(opts.iter().map(|&o| loc[o as usize]).collect()));
+                *tab = VS + (vs.len() - 1) as u16;
             }
-            (b, c) = (*tab, opts.len() as u8);
+            (b, c) = (*tab, opts.len() as u16);
         }
-        Ok(Op {
+        Ok(WOp {
             code: m.code,
             d,
             a: l(0, m.a),
@@ -4530,15 +4559,15 @@ fn emit(
                         ));
                     }
                     next_wide += 1;
-                    (next_wide - 1) as u8
+                    (next_wide - 1) as u16
                 } else if m.code == code::W_LAT {
-                    noise_slot(m.val as usize / 3, m.val as usize % 3) as u8
+                    noise_slot(m.val as usize / 3, m.val as usize % 3) as u16
                 } else {
-                    new_slot(&mut next_slot, None, prog)?
+                    new_slot(&mut vs, None)
                 };
                 loc[i] = d;
                 set[i] = true;
-                ops.push(mk(m, d, &loc, &set, &mut next_slot, &mut tabs, prog)?);
+                ops.push(mk(m, d, &loc, &set, &mut vs, &mut tabs)?);
             }
         }
         if level == LV_FRAME {
@@ -4546,16 +4575,16 @@ fn emit(
             // The draw stage: FOR (its END patched in when it comes), the
             // loop's values, its lines and inner loops; END back to just
             // after the FOR.
-            let mut open: Vec<(usize, u8, u8)> = Vec::new();
+            let mut open: Vec<(usize, u16, u16)> = Vec::new();
             for item in draw {
                 match *item {
                     DItem::For(ctr, count) => {
-                        let cs = new_slot(&mut next_slot, Some((count as i32) << 16), prog)?;
-                        let ks = new_slot(&mut next_slot, None, prog)?;
+                        let cs = new_slot(&mut vs, Some((count as i32) << 16));
+                        let ks = new_slot(&mut vs, None);
                         loc[ctr as usize] = ks;
                         set[ctr as usize] = true;
                         open.push((ops.len(), ks, cs));
-                        ops.push(Op {
+                        ops.push(WOp {
                             code: code::FOR,
                             d: ks,
                             a: cs,
@@ -4565,18 +4594,10 @@ fn emit(
                         let lp = nodes[ctr as usize].val as u16;
                         for i in 0..n {
                             if is_op(i) && owner[i] == lp {
-                                let d = new_slot(&mut next_slot, None, prog)?;
+                                let d = new_slot(&mut vs, None);
                                 loc[i] = d;
                                 set[i] = true;
-                                ops.push(mk(
-                                    &nodes[i],
-                                    d,
-                                    &loc,
-                                    &set,
-                                    &mut next_slot,
-                                    &mut tabs,
-                                    prog,
-                                )?);
+                                ops.push(mk(&nodes[i], d, &loc, &set, &mut vs, &mut tabs)?);
                             }
                         }
                     }
@@ -4584,25 +4605,25 @@ fn emit(
                         let Some((at, ks, cs)) = open.pop() else {
                             continue;
                         };
-                        ops[at].b = ops.len().min(255) as u8;
-                        ops.push(Op {
+                        ops[at].b = ops.len().min(255) as u16;
+                        ops.push(WOp {
                             code: code::END,
                             d: 0,
                             a: ks,
                             b: cs,
-                            c: (at + 1).min(255) as u8,
+                            c: (at + 1).min(255) as u16,
                         });
                     }
                     DItem::Line(v) => {
                         let l = |k: usize| loc[v[k] as usize];
-                        ops.push(Op {
+                        ops.push(WOp {
                             code: code::LINE_FROM,
                             d: 0,
                             a: l(0),
                             b: l(1),
                             c: l(4),
                         });
-                        ops.push(Op {
+                        ops.push(WOp {
                             code: code::LINE_TO,
                             d: 0,
                             a: l(2),
@@ -4610,7 +4631,7 @@ fn emit(
                             c: l(5),
                         });
                     }
-                    DItem::Dot(v) => ops.push(Op {
+                    DItem::Dot(v) => ops.push(WOp {
                         code: code::DOT,
                         d: 0,
                         a: loc[v[0] as usize],
@@ -4676,36 +4697,28 @@ fn emit(
     let mut marker = None;
     for (at, item) in seq.iter().enumerate() {
         match *item {
-            Item::Column => ops.push(Op {
+            Item::Column => ops.push(WOp {
                 code: code::COLUMN,
                 d: 0,
-                a: col_len as u8,
+                a: col_len as u16,
                 b: 0,
                 c: 0,
             }),
             Item::Still => {
                 marker = Some(ops.len());
-                ops.push(Op {
+                ops.push(WOp {
                     code: code::STILL,
-                    d: cached.len() as u8,
-                    a: run_len as u8,
+                    d: cached.len() as u16,
+                    a: run_len as u16,
                     b: 0,
                     c: 0,
                 });
             }
             Item::Value(i) => {
-                let d = LANE | (L_REG0 + regs[at]);
+                let d = (LANE | (L_REG0 + regs[at])) as u16;
                 loc[i] = d;
                 set[i] = true;
-                ops.push(mk(
-                    &nodes[i],
-                    d,
-                    &loc,
-                    &set,
-                    &mut next_slot,
-                    &mut tabs,
-                    prog,
-                )?);
+                ops.push(mk(&nodes[i], d, &loc, &set, &mut vs, &mut tabs)?);
             }
             Item::Colour(k) => {
                 let st = &steps[k];
@@ -4719,11 +4732,11 @@ fn emit(
                 // A scaled palette: the flag on its palette, the scale in c.
                 let (pal, scale) = match st.scale {
                     Some(k) if kind == code::OUT_PAL => {
-                        (st.pal | PAL_SCALED | (st.shift << PAL_SHIFT), l(k))
+                        ((st.pal | PAL_SCALED | (st.shift << PAL_SHIFT)) as u16, l(k))
                     }
-                    _ => (st.pal, 0),
+                    _ => (st.pal as u16, 0),
                 };
-                ops.push(Op {
+                ops.push(WOp {
                     code: st.code,
                     d: if rgb { cover } else { pal },
                     a: l(st.args[0]),
@@ -4744,10 +4757,197 @@ fn emit(
         ops[m].c = cached.get(1).map_or(0, |&c| loc[c]);
     }
     prog.pixel_end = ops.len() as u16;
-    prog.ops[..ops.len()].copy_from_slice(&ops);
-    prog.n_scalars = next_slot as u8;
+    let (de, re) = (prog.draw_end as usize, prog.row_end as usize);
+    let n_scalars = assign_slots(&ops, &vs, next_slot, de, re, reuse, prog)?;
+    prog.n_scalars = n_scalars as u8;
     prog.regs = used as u8;
     Ok(())
+}
+
+/// A slot while the steps are laid out: a constant (its value at the start
+/// of every frame), a value a step writes, or a pick's table of its
+/// choices' slots (consecutive constants).
+enum VSlot {
+    Const(i32),
+    Value,
+    Pick(Vec<u16>),
+}
+
+/// A step while it is laid out: as [`Op`], but an operand of `VS` or more is
+/// slot `n - VS` of the `VSlot`s, given a scalar slot by [`assign_slots`];
+/// anything below is as it will be (an input's slot, a lane, an immediate).
+#[derive(Clone, Copy)]
+struct WOp {
+    code: u8,
+    d: u16,
+    a: u16,
+    b: u16,
+    c: u16,
+}
+
+const VS: u16 = 0x100;
+
+/// Give every slot of `vs` a scalar slot from `base` up — one whose last
+/// value is no longer needed is used again — and write the steps into
+/// `prog` with them; how many scalar slots that takes (E404 past
+/// [`MAX_SCALARS`]).
+///
+/// A slot is needed from the step that writes it (from the frame's start
+/// for a constant) to the last step that reads it, and longer where the
+/// steps run again: a value from before the rows that the rows or pixels
+/// read, and every value the pixels read, to the end (rows and lanes run
+/// the same steps again); one from before a draw stage loop that the loop
+/// reads, to its END. Within those, two values may share a slot: the VM
+/// reads every operand before it writes, and nothing reads a value after
+/// its interval, so the frames are the same bytes (`range::narrow` walks
+/// the steps in the same order, so its intervals follow the slots too).
+/// A pick's table goes after all of them (its choices are read by the pick,
+/// per pixel).
+fn assign_slots(
+    ops: &[WOp],
+    vs: &[VSlot],
+    base: usize,
+    de: usize,
+    re: usize,
+    reuse: bool,
+    prog: &mut Program,
+) -> Result<usize, Error> {
+    let n = vs.len();
+    const INF: usize = usize::MAX;
+    // Positions: a step's index + 1 (0 is the frame's start, the constants').
+    let (mut start, mut end) = (alloc::vec![INF; n], alloc::vec![0usize; n]);
+    for (k, v) in vs.iter().enumerate() {
+        if matches!(v, VSlot::Const(_)) {
+            start[k] = 0;
+        }
+    }
+    let use_at = |end: &mut [usize], v: u16, p: usize| {
+        if v >= VS {
+            let k = (v - VS) as usize;
+            end[k] = end[k].max(p);
+            if let VSlot::Pick(ch) = &vs[k] {
+                for &c in ch {
+                    if c >= VS {
+                        let j = (c - VS) as usize;
+                        end[j] = end[j].max(p);
+                    }
+                }
+            }
+        }
+    };
+    let mut loops: Vec<(usize, usize)> = Vec::new();
+    for (i, op) in ops.iter().enumerate() {
+        let p = i + 1;
+        if op.code == code::FOR {
+            loops.push((p, op.b as usize + 1));
+        }
+        if (code::writes_scalar(op.code) || op.code == code::FOR) && op.d >= VS {
+            let k = (op.d - VS) as usize;
+            start[k] = start[k].min(p);
+        } else {
+            use_at(&mut end, op.d, p);
+        }
+        for v in [op.a, op.b, op.c] {
+            use_at(&mut end, v, p);
+        }
+    }
+    // Inner loops first (they start later), so an outer one sees their END.
+    loops.reverse();
+    let (rows, pixels) = (de + 1, re + 1);
+    for k in 0..n {
+        if start[k] == INF {
+            start[k] = end[k];
+        }
+        end[k] = end[k].max(start[k]);
+        if end[k] >= pixels || (start[k] < rows && end[k] >= rows) {
+            end[k] = INF;
+            continue;
+        }
+        for &(f, e) in &loops {
+            if start[k] < f && end[k] >= f {
+                end[k] = end[k].max(e);
+            }
+        }
+    }
+    // By where each starts (a counting sort: no sort's code in the wasm).
+    let top = ops.len() + 2;
+    let mut count = alloc::vec![0usize; top + 1];
+    let is_pick = |k: usize| matches!(vs[k], VSlot::Pick(_));
+    for k in (0..n).filter(|&k| !is_pick(k)) {
+        count[start[k].min(top) + 1] += 1;
+    }
+    for p in 1..=top {
+        count[p] += count[p - 1];
+    }
+    let mut order = alloc::vec![0usize; count[top]];
+    for k in (0..n).filter(|&k| !is_pick(k)) {
+        let p = &mut count[start[k].min(top)];
+        order[*p] = k;
+        *p += 1;
+    }
+    let too_many = || {
+        Error::new(
+            0,
+            0,
+            format!("this formula has too many numbers and steps (more than {MAX_SCALARS} values) — simplify it"),
+        )
+    };
+    let mut phys = alloc::vec![0u8; n];
+    let mut active: Vec<usize> = Vec::new();
+    let mut free: Vec<u8> = Vec::new();
+    let mut next = base;
+    for &k in &order {
+        let s = start[k];
+        active.retain(|&a| {
+            let gone = reuse && end[a] < s;
+            if gone {
+                free.push(phys[a]);
+            }
+            !gone
+        });
+        phys[k] = match free.pop() {
+            Some(p) => p,
+            None if next < MAX_SCALARS => {
+                next += 1;
+                (next - 1) as u8
+            }
+            None => return Err(too_many()),
+        };
+        active.push(k);
+        if let VSlot::Const(v) = vs[k] {
+            prog.init[phys[k] as usize] = v;
+        }
+    }
+    // The picks' tables, each its choices' slots in a row.
+    let map = |phys: &[u8], v: u16| {
+        if v >= VS {
+            phys[(v - VS) as usize]
+        } else {
+            v as u8
+        }
+    };
+    for k in 0..n {
+        if let VSlot::Pick(ch) = &vs[k] {
+            if next + ch.len() > MAX_SCALARS {
+                return Err(too_many());
+            }
+            phys[k] = next as u8;
+            for &c in ch {
+                prog.init[next] = map(&phys, c) as i32;
+                next += 1;
+            }
+        }
+    }
+    for (o, w) in prog.ops.iter_mut().zip(ops) {
+        *o = Op {
+            code: w.code,
+            d: map(&phys, w.d),
+            a: map(&phys, w.a),
+            b: map(&phys, w.b),
+            c: map(&phys, w.c),
+        };
+    }
+    Ok(next)
 }
 
 /// What a step reading a value with no place yet says (never seen: a bug in

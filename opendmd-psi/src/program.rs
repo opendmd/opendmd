@@ -541,7 +541,7 @@ impl Program {
     /// counted as often as its loops run it.
     pub fn primitives(&self) -> u32 {
         let mut n = 0;
-        self.draw_walk(|op, mult| {
+        self.draw_walk(|_, op, mult| {
             if matches!(op.code, code::LINE_TO | code::DOT) {
                 n += mult;
             }
@@ -551,15 +551,17 @@ impl Program {
 
     /// Each step of the draw stage with how many times a frame it runs
     /// (the product of its loops' counts).
-    fn draw_walk(&self, mut f: impl FnMut(&Op, u32)) {
+    fn draw_walk(&self, mut f: impl FnMut(usize, &Op, u32)) {
         let mut stack = [1u32; 4];
         let mut depth = 0;
         let mut mult = 1u32;
         let end = (self.draw_end as usize).min(MAX_OPS);
-        for op in &self.ops[(self.frame_end as usize).min(end)..end] {
+        let first = (self.frame_end as usize).min(end);
+        for (at, op) in self.ops[first..end].iter().enumerate() {
+            let at = at + first;
             match op.code {
                 code::FOR => {
-                    f(op, mult);
+                    f(at, op, mult);
                     if depth < stack.len() {
                         stack[depth] = mult;
                         depth += 1;
@@ -568,13 +570,13 @@ impl Program {
                     mult = mult.saturating_mul(n);
                 }
                 code::END => {
-                    f(op, mult);
+                    f(at, op, mult);
                     if depth > 0 {
                         depth -= 1;
                         mult = stack[depth];
                     }
                 }
-                _ => f(op, mult),
+                _ => f(at, op, mult),
             }
         }
     }
@@ -758,7 +760,7 @@ impl Program {
                     // than before when they vary smoothly (speed-g: 427 ns
                     // in all for `pal(fire, x) * (x*0.9)`: 307 + the write).
                     OUT_PAL if lane && vals > 1 => {
-                        if self.const_value(op.c) == Some(ONE) {
+                        if self.const_value(op.c, at) == Some(ONE) {
                             46
                         } else if self.stepped(at, op.a) && self.stepped(at, op.c) {
                             60
@@ -771,7 +773,7 @@ impl Program {
                 // Covered unless the coverage is a constant slot of 1 or
                 // more (a lane or an input never is one).
                 let k = v[n.saturating_sub(1)];
-                let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k);
+                let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k, at);
                 let covered = n > vals && !(konst && self.init[k as usize] >= ONE);
                 let mix = match (blend, covered) {
                     (None, _) => 0,
@@ -790,7 +792,7 @@ impl Program {
             }
             // A whole constant `z`: four corners, not eight (a guess until
             // psi-probe measures it).
-            NOISE if self.const_value(op.c).is_some_and(|z| z & 0xffff == 0) => NOISE_FLAT_NS,
+            NOISE if self.const_value(op.c, at).is_some_and(|z| z & 0xffff == 0) => NOISE_FLAT_NS,
             c => value_ns(c),
         }
     }
@@ -867,7 +869,7 @@ impl Program {
         }
         let mut ns: u64 = 10_000;
         let mut from = [0u8; 2];
-        self.draw_walk(|op, mult| {
+        self.draw_walk(|at, op, mult| {
             let cost: u64 = match op.code {
                 code::LINE_FROM => {
                     from = [op.a, op.b];
@@ -876,7 +878,7 @@ impl Program {
                 code::LINE_TO => {
                     // Its pixels: the longer side + 1 where both ends of a side
                     // are constants; with a side unknown, at least 12.
-                    let k = |v: u8| self.const_value(v);
+                    let k = |v: u8| self.const_value(v, at);
                     let d = |a: Option<i32>, b: Option<i32>| {
                         a.zip(b).map(|(a, b)| {
                             ((a >> 16) - (b >> 16)).unsigned_abs().min(1023) as u64 + 1
@@ -897,10 +899,15 @@ impl Program {
         (ns / 1000).min(u32::MAX as u64) as u32
     }
 
-    /// The value of a constant slot, `None` for anything else.
-    fn const_value(&self, v: u8) -> Option<i32> {
-        (v & LANE == 0 && v >= S_FIRST_FREE && (v as usize) < MAX_SCALARS && self.is_const_slot(v))
-            .then(|| self.init[v as usize])
+    /// The value of slot `v` as step `at` reads it if it holds a constant
+    /// there, `None` for anything else (a slot holds a constant until a step
+    /// writes another value into it: slots are used again).
+    fn const_value(&self, v: u8, at: usize) -> Option<i32> {
+        (v & LANE == 0
+            && v >= S_FIRST_FREE
+            && (v as usize) < MAX_SCALARS
+            && self.is_const_slot(v, at))
+        .then(|| self.init[v as usize])
     }
 
     /// Reset a program in place to the empty one (all fields zero but the
@@ -924,7 +931,7 @@ impl Program {
     pub fn listing(&self) -> alloc::string::String {
         use core::fmt::Write;
         let mut s = alloc::string::String::new();
-        let opnd = |v: u8| -> alloc::string::String {
+        let opnd = |v: u8, n: usize| -> alloc::string::String {
             if v & LANE != 0 {
                 match v & !LANE {
                     L_X => "x".into(),
@@ -936,7 +943,7 @@ impl Program {
                 ["t", "hour", "minute", "second", "a", "b", "c", "y", "py"][v as usize].into()
             } else if v == S_SEED && self.uses & SEEDED != 0 {
                 "seed".into()
-            } else if (v as usize) < MAX_SCALARS && self.is_const_slot(v) {
+            } else if (v as usize) < MAX_SCALARS && self.is_const_slot(v, n) {
                 alloc::format!("{}", self.init[v as usize] as f64 / ONE as f64)
             } else {
                 alloc::format!("s{v}")
@@ -963,7 +970,7 @@ impl Program {
                         if w & (1 << k) != 0 {
                             alloc::format!("w{x}")
                         } else {
-                            opnd(x)
+                            opnd(x, n)
                         }
                     })
                     .collect();
@@ -974,7 +981,7 @@ impl Program {
             } else {
                 v[..ar]
                     .iter()
-                    .map(|&v| opnd(v))
+                    .map(|&v| opnd(v, n))
                     .collect::<alloc::vec::Vec<_>>()
                     .join(", ")
             };
@@ -992,7 +999,7 @@ impl Program {
             } else if op.code == code::COLUMN {
                 alloc::format!("skip {} after the first row", op.a)
             } else if op.code == code::STILL {
-                let r = |v: u8| opnd(v);
+                let r = |v: u8| opnd(v, n);
                 let regs = [r(op.b), r(op.c)];
                 alloc::format!(
                     "skip {}; cache {}",
@@ -1001,7 +1008,7 @@ impl Program {
                 )
             } else if op.code == code::PICK {
                 let t: alloc::vec::Vec<_> = (0..op.c as usize)
-                    .map(|j| opnd(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8))
+                    .map(|j| opnd(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8, n))
                     .collect();
                 alloc::format!("{args}; {}", t.join(", "))
             } else {
@@ -1024,7 +1031,7 @@ impl Program {
                 let k = (op.d as usize).saturating_sub(noise_slot(0, 0));
                 alloc::format!("noise{}.{}", k / 3, ["x", "y", "z"][k % 3])
             } else {
-                opnd(op.d)
+                opnd(op.d, n)
             };
             let blend = match code::colour_parts(op.code) {
                 (_, Some(b)) if code::is_colour(op.code) => {
@@ -1041,9 +1048,9 @@ impl Program {
         s
     }
 
-    fn is_const_slot(&self, v: u8) -> bool {
+    fn is_const_slot(&self, v: u8, at: usize) -> bool {
         (v != S_SEED || self.uses & SEEDED == 0)
-            && !self.ops[..self.len()].iter().any(|op| {
+            && !self.ops[..at.min(self.len())].iter().any(|op| {
                 // END counts its loop's counter (which the FOR writes too).
                 (op.code == code::END && op.a == v) || (code::writes_scalar(op.code) && op.d == v)
             })
