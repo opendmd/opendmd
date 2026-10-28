@@ -1556,7 +1556,7 @@ fn main() -> Result<()> {
                     .saturating_sub(us(tick_start.elapsed()));
                 // (Only an effect's: the engine keeps its schedule through
                 // a late tick; a GIF's would slow down.)
-                let fx = playing.path.starts_with(opendmd_core::fx::PREFIX);
+                let fx = opendmd_core::synth::is_formula(&playing.path);
                 let delay_us = due_before
                     .filter(|_| fx && decoded && !transitioning && !is_new)
                     .map(|d| us(next_frame_at.saturating_sub(d)));
