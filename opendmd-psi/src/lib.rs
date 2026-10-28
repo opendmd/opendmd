@@ -34,6 +34,8 @@ mod meta;
 mod program;
 mod range;
 mod still;
+#[cfg(feature = "syntax")]
+pub mod syntax;
 mod tables;
 mod vm;
 

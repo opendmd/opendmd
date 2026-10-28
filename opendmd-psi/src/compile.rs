@@ -437,6 +437,38 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
     Ok(out)
 }
 
+/// The lexer's tokens as the language service sees them ([`crate::syntax`]).
+#[cfg(feature = "syntax")]
+pub(crate) fn lex_tokens(src: &str) -> Result<Vec<(crate::syntax::Kind, usize, usize)>, Error> {
+    use crate::syntax::Kind;
+    Ok(lex(src)?
+        .iter()
+        .filter(|t| t.tok != Tok::Eof)
+        .map(|t| {
+            let k = match t.tok {
+                Tok::Num(_) => Kind::Number,
+                Tok::Hex(_) => Kind::Colour,
+                Tok::Name => Kind::Name,
+                Tok::Str => Kind::Text,
+                Tok::Raw => Kind::Row,
+                Tok::Newline => Kind::End,
+                Tok::LParen
+                | Tok::RParen
+                | Tok::LBrace
+                | Tok::RBrace
+                | Tok::LBracket
+                | Tok::RBracket
+                | Tok::Comma
+                | Tok::Dot
+                | Tok::DotDot
+                | Tok::Assign => Kind::Punctuation,
+                _ => Kind::Operator,
+            };
+            (k, t.start, t.end)
+        })
+        .collect())
+}
+
 /// The words that start a line where text in quotes may be.
 fn text_line(w: &str) -> bool {
     matches!(w, "name" | "about" | "control")
@@ -790,6 +822,10 @@ struct Dag {
     /// The steps a node needs before it that it doesn't read as a value: a
     /// `NOISE_O` node's (`val` the index here) `W_LAT`s.
     deps: Vec<Vec<Id>>,
+    /// Each node as it was made, and where in the source (`syntax`: the
+    /// language service's per-op costs).
+    #[cfg(feature = "syntax")]
+    made: Vec<(Id, usize, usize)>,
 }
 
 /// Index slots: a power of two, twice [`MAX_NODES`] (4 KB, freed with the
@@ -845,6 +881,8 @@ impl Dag {
         self.nodes.push(n);
         let id = (self.nodes.len() - 1) as Id;
         self.index[slot] = id;
+        #[cfg(feature = "syntax")]
+        self.made.push((id, at.0, at.1));
         Ok(id)
     }
 
@@ -1713,6 +1751,15 @@ struct Parser<'s> {
     /// the compiler's deepest path, and the firmware holds that stack),
     /// and only once there is one.
     decl: Option<alloc::boxed::Box<Decls>>,
+    /// The language service's: the names read (where, and the definition's
+    /// place), the declarations (the word's place, the line's end), and
+    /// whom to tell ([`crate::syntax`]).
+    #[cfg(feature = "syntax")]
+    reads: Vec<(usize, usize, usize)>,
+    #[cfg(feature = "syntax")]
+    decls_seen: Vec<(usize, usize)>,
+    #[cfg(feature = "syntax")]
+    sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
 }
 
 /// What the declarations said, while compiling: the program's [`Meta`],
@@ -2050,7 +2097,7 @@ impl<'s> Parser<'s> {
     }
 
     /// The candidates for a misspelt value name.
-    fn value_names(&self) -> impl Iterator<Item = &str> + '_ {
+    fn value_names(&self) -> impl Iterator<Item = &str> + use<'_, 's> {
         INPUTS
             .iter()
             .map(|e| e.0)
@@ -2067,6 +2114,8 @@ impl<'s> Parser<'s> {
     fn name(&mut self, t: Token) -> Result<Id, Error> {
         let name = self.text(t);
         let at = (t.start, t.end);
+        #[cfg(feature = "syntax")]
+        self.note_read(t);
         if let Some(k) = self.part_named(name) {
             return self.part_value(t, k);
         }
@@ -4279,6 +4328,8 @@ impl<'s> Parser<'s> {
         let mut first = true;
         while self.is_declaration() {
             let t = self.next();
+            #[cfg(feature = "syntax")]
+            self.decls_seen.push((t.start, t.end));
             match self.text(t) {
                 "psi" => {
                     if !first {
@@ -4320,10 +4371,8 @@ impl<'s> Parser<'s> {
             self.end_of_statement()?;
             self.skip_newlines();
         }
-        if host {
-            if controls > 0 {
-                self.decls().own = controls as u8;
-            }
+        if host && controls > 0 {
+            self.decls().own = controls as u8;
         }
         Ok(())
     }
@@ -4650,11 +4699,27 @@ fn compile_impl(
     fuse: bool,
 ) -> Result<Info, Error> {
     prog.clear();
-    let mut r = compile_inner(src, prog, runs, reuse, None);
+    let mut r = compile_inner(
+        src,
+        prog,
+        runs,
+        reuse,
+        None,
+        #[cfg(feature = "syntax")]
+        None,
+    );
     if runs && r.as_ref().is_err_and(|e| e.msg == LAYOUT_BUG) {
         debug_assert!(false, "{LAYOUT_BUG}: {src:?}");
         prog.clear();
-        r = compile_inner(src, prog, false, reuse, None);
+        r = compile_inner(
+            src,
+            prog,
+            false,
+            reuse,
+            None,
+            #[cfg(feature = "syntax")]
+            None,
+        );
     }
     if r.is_err() {
         prog.clear();
@@ -4674,7 +4739,15 @@ fn compile_impl(
 pub fn compile_declared(src: &str, prog: &mut Program) -> Result<Declared, Error> {
     prog.clear();
     let mut d = Declared::default();
-    let r = compile_inner(src, prog, true, true, Some(&mut d));
+    let r = compile_inner(
+        src,
+        prog,
+        true,
+        true,
+        Some(&mut d),
+        #[cfg(feature = "syntax")]
+        None,
+    );
     if r.is_err() {
         prog.clear();
     } else {
@@ -4684,12 +4757,15 @@ pub fn compile_declared(src: &str, prog: &mut Program) -> Result<Declared, Error
     r.map(|_| d)
 }
 
-fn compile_inner(
-    src: &str,
+// ('s: the sink's, with `syntax`.)
+#[allow(clippy::needless_lifetimes)]
+fn compile_inner<'s>(
+    src: &'s str,
     prog: &mut Program,
     runs: bool,
     reuse: bool,
     declared: Option<&mut Declared>,
+    #[cfg(feature = "syntax")] sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
 ) -> Result<Info, Error> {
     if src.len() > MAX_SOURCE {
         return Err(Error::new(
@@ -4711,6 +4787,8 @@ fn compile_inner(
             forever: false,
             ctx: Vec::new(),
             deps: Vec::new(),
+            #[cfg(feature = "syntax")]
+            made: Vec::new(),
         },
         locals: Vec::new(),
         depth: 0,
@@ -4737,11 +4815,19 @@ fn compile_inner(
         loops: 0,
         turns: 0,
         decl: None,
+        #[cfg(feature = "syntax")]
+        reads: Vec::new(),
+        #[cfg(feature = "syntax")]
+        decls_seen: Vec::new(),
+        #[cfg(feature = "syntax")]
+        sink,
     };
     p.env.loop_v = p.loop_ahead(0).unwrap_or(8 * ONE);
     p.dag.forever = p.env.loop_v == FOREVER;
-    let body = p.body(Tok::Eof)?;
-    finish(src, &mut p, body, prog, runs, reuse, declared)
+    let body = p.body(Tok::Eof);
+    #[cfg(feature = "syntax")]
+    p.observe();
+    finish(src, &mut p, body?, prog, runs, reuse, declared)
 }
 
 /// The rest of [`compile_inner`], once the formula is read: the program
@@ -4865,6 +4951,97 @@ fn finish(
         frame_values,
         layers: body.blocks,
     })
+}
+
+/// [`compile_into`], telling `sink` what the compiler saw (the language
+/// service's hook: [`crate::syntax`]). Also on an error, up to it.
+#[cfg(feature = "syntax")]
+pub fn compile_observed<'s>(
+    src: &'s str,
+    prog: &mut Program,
+    sink: &'s mut (dyn crate::syntax::Sink + 's),
+) -> Result<Info, Error> {
+    prog.clear();
+    let r = compile_inner(src, prog, true, true, None, Some(sink));
+    if r.is_err() {
+        prog.clear();
+    } else {
+        crate::range::narrow(prog);
+        crate::fuse::fuse(prog);
+    }
+    r
+}
+
+#[cfg(feature = "syntax")]
+impl<'s> Parser<'s> {
+    /// A name read at `t`: where it is defined, if the formula set it.
+    #[inline(never)]
+    fn note_read(&mut self, t: Token) {
+        let name = self.text(t);
+        let def = self
+            .locals
+            .iter()
+            .rev()
+            .find(|l| l.name == name && self.visible(l.scope))
+            .map(|l| l.at)
+            .or(self.part_named(name).map(|k| self.parts[k].at))
+            .or(self.table_named(name).map(|k| self.table_names[k].at))
+            .or(self.sprite_named(name).map(|k| self.sprites[k].at))
+            .or(self.palette_named(name).map(|k| self.palette_names[k].at));
+        self.reads.push((t.start, t.end, def.unwrap_or(usize::MAX)));
+    }
+
+    /// Tell the sink what was read (after the formula, or up to an error).
+    fn observe(&mut self) {
+        use crate::syntax::{Defined, Level};
+        let Some(sink) = self.sink.take() else {
+            return;
+        };
+        let level = |l: u8| match l {
+            LV_CONST => Level::Constant,
+            LV_FRAME => Level::Frame,
+            LV_LOOP1 | LV_LOOP2 => Level::Draw,
+            LV_ROW => Level::Row,
+            _ => Level::Pixel,
+        };
+        let word = |p: &Self, at: usize| {
+            let b = p.src.as_bytes();
+            let mut e = at;
+            while e < b.len() && (b[e].is_ascii_alphanumeric() || b[e] == b'_') {
+                e += 1;
+            }
+            (at, e)
+        };
+        for &(a, e) in &self.decls_seen {
+            sink.declaration(sub(self.src, a, e), (a, e));
+        }
+        for l in &self.locals {
+            let kind = if l.counter { Defined::Counter } else { Defined::Value };
+            sink.defined(l.name, word(self, l.at), kind, l.scope, level(self.dag.level(l.id)));
+        }
+        for p in &self.parts {
+            sink.defined(p.name, word(self, p.at), Defined::Part, p.scope, Level::Pixel);
+        }
+        for t in &self.table_names {
+            sink.defined(t.name, word(self, t.at), Defined::Table, t.scope, Level::Constant);
+        }
+        for t in &self.sprites {
+            sink.defined(t.name, word(self, t.at), Defined::Sprite, t.scope, Level::Constant);
+        }
+        for t in &self.palette_names {
+            sink.defined(t.name, word(self, t.at), Defined::Palette, t.scope, Level::Constant);
+        }
+        for &(a, e, d) in &self.reads {
+            sink.read((a, e), (d != usize::MAX).then(|| word(self, d)));
+        }
+        for &(id, a, e) in &self.dag.made {
+            let n = self.dag.nodes[id as usize];
+            if n.code < K_CONST {
+                sink.op((a, e), level(n.level), n.code, crate::program::value_ns(n.code));
+            }
+        }
+        self.sink = Some(sink);
+    }
 }
 
 /// The declarations' end: E965 (a part with layers can only go over, so a

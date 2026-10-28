@@ -47,6 +47,10 @@ name = "builtins"
 required-features = ["docs"]
 
 [[test]]
+name = "syntax"
+required-features = ["syntax"]
+
+[[test]]
 name = "models"
 required-features = ["tables"]
 

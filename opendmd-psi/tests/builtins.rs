@@ -153,8 +153,7 @@ fn every_built_in_has_a_cheat_sheet_row() {
 fn every_call_in_the_cheat_sheet_is_a_built_in() {
     for rows in [cheat::FUNCS, cheat::DRAW, cheat::COLS] {
         for (label, _, _) in rows {
-            for (k, w) in label.match_indices(|c: char| c == '(') {
-                let _ = w;
+            for (k, _) in label.match_indices('(') {
                 let head: String = label[..k]
                     .chars()
                     .rev()
