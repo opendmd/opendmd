@@ -1,4 +1,4 @@
-// The GIF tree: the card's folders (gifs/<Category>, then Live and Effects,
+// The GIF tree: the card's folders (gifs/<Category>, then Live,
 // then the system `_x` ones) opening into their GIFs, for the Library and
 // the playlist editor's Add pane. One VList of folder rows (`.vdir`) and
 // the open folders' GIF rows (`.vrow`), so only what is in view exists
@@ -17,7 +17,7 @@ import { h, clear, on, store, label, niceName, isSys, byNice } from './util.js';
 
 await new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './tree.css', onload: res, onerror: res })));
 
-const LIVE = { '@': 'Live', '@fx': 'Effects' };
+const LIVE = { '@': 'Live' };
 const lists = new Map(), got = new Map(), trees = new Set();
 // The last count seen per folder on this card, shown (muted) until it is
 // listed again.
@@ -71,7 +71,7 @@ export function chipRow(el, n, on, key, apply, name = (v) => v) {
 export class Tree {
   // o: {picked: Set of paths, ticking() -> bool, onPick(it), onMenu(it, x, y),
   // onHold(it), extra(it, row) -> nodes, mark(it) -> bool (✓ in the playlist),
-  // live(cat) -> items (Live, Effects; none: no such folders), onUpdate(stats),
+  // live(cat) -> items (Live; none: no such folder), onUpdate(stats),
   // onOpen(open folders), open: [cats], rowHeight}
   constructor(o) {
     this.o = o;
@@ -109,7 +109,7 @@ export class Tree {
     let dirs = [];
     try { dirs = (await listOr('/gifs')).filter((d) => d.dir).map((d) => d.name).sort(byNice); } catch (e) { this.o.onError?.('listing the folders: ' + e.message); }
     const f = (cat) => this.folders.find((x) => x.cat === cat) || { dir: true, cat, name: LIVE[cat] || niceName(cat), live: !!LIVE[cat] };
-    this.folders = [...dirs.filter((d) => !isSys(d)), ...(this.o.live ? ['@', '@fx'] : []), ...dirs.filter(isSys)].map(f);
+    this.folders = [...dirs.filter((d) => !isSys(d)), ...(this.o.live ? ['@'] : []), ...dirs.filter(isSys)].map(f);
     for (const c of this.open) this.fill(c);
     this.update();
     return this.folders;

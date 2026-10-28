@@ -43,15 +43,15 @@ export async function mount(el) {
   const ov = new Overrides();
   ov.onChange = () => tree.refresh();
 
-  // Live and Effects: their items (and the text's form, an effect's options, in liveBox).
+  // Live: its items (and the text's form, in liveBox).
   const liveBox = h('div', { id: 'lib-live', hidden: true });
-  const liveOn = () => { liveBox.hidden = search.value.trim() ? true : !(current?.path[0] == '@' || tree.open.has('@') || tree.open.has('@fx')); };
+  const liveOn = () => { liveBox.hidden = search.value.trim() ? true : !(current?.path[0] == '@' || tree.open.has('@')); };
   const tree = new Tree({
     picked: app.selection,
     ticking: () => selecting,
     open: store.get('lib.open', null) ?? ['Consoles'],
     onOpen: (o) => { store.set('lib.open', o); liveOn(); },
-    live: async (cat) => (await import('./live.js'))[cat == '@' ? 'items' : 'effects'](liveBox, preview, () => tree.refresh()),
+    live: async () => (await import('./live.js')).items(liveBox, preview, () => tree.refresh()),
     onPick: (it) => preview(it),
     onMenu: (it, x, y) => menu(ov, it.path, x, y),
     onHold: (it) => { selMode(true); toggle(it.path, true); },
