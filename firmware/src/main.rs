@@ -1644,6 +1644,22 @@ fn main() -> Result<()> {
                 if decoded && !transitioning && now < deadline {
                     slot = Some(deadline);
                 }
+                // roadprobe: a Formula's frame on its schedule, phase by phase.
+                #[cfg(feature = "psi-probe")]
+                if fx && decoded && !transitioning && !is_new {
+                    let wait = panel.last_wait_us();
+                    let excused = now > deadline
+                        && panel.last_stretched()
+                        && now.saturating_sub(Duration::from_micros(u64::from(wait))) <= deadline;
+                    let start = due_before.map_or(0, |d| us(tick_now.saturating_sub(d)));
+                    let post = us(blit_start.elapsed()).saturating_sub(blit_us + wait);
+                    psi_probe::play::note(
+                        [wake_us, pre_us, start, tick_us, blit_us, wait, post],
+                        now > deadline && !excused,
+                        excused,
+                        panel.last_stretched(),
+                    );
+                }
                 let glow_between = std::mem::take(&mut glow_us);
                 // A dot fading (glow), or the formula look's own frame:
                 // wake for its next step. (Not the look's while a
