@@ -947,10 +947,11 @@ impl<const N: usize> Scratch<N> {
 }
 
 /// One step of a draw loop's body run as lanes (`draw::run`: a lane a
-/// turn): [`lane_op`]'s dispatch, a copy of its own in flash, so the frame
-/// loop's in IRAM is the same code as before the draw stage used it.
+/// turn): [`lane_op`]'s dispatch, a copy of its own in flash (inlined into
+/// `draw::run_lanes`, one stack frame for both), so the frame loop's in
+/// IRAM is the same code as before the draw stage used it.
 #[cfg(not(target_arch = "wasm32"))]
-#[inline(never)]
+#[inline(always)]
 pub(crate) fn lane_draw<const N: usize>(
     s: &mut Scratch<N>,
     op: &Op,
@@ -1146,55 +1147,38 @@ fn fused<const N: usize>(
                 return false;
             };
             let p = palette(t, own, col.d & code::PAL_MASK);
-            let (ia, ib) = (fixed::pal_index(va), fixed::pal_index(vb));
-            let (ca, cb) = if col.d & PAL_SCALED == 0 {
-                (p[ia], p[ib])
-            } else {
-                let shift = (col.d & !PAL_SCALED) >> PAL_SHIFT;
-                match s.arg(al, col.c, base) {
-                    Arg::Sc(k) => (
-                        fixed::scale_rgb(p[ia], k >> shift),
-                        fixed::scale_rgb(p[ib], k >> shift),
-                    ),
-                    Arg::Lane(k) => {
-                        pal_select_lanes(px, c, k, p, [ia, ib], shift);
-                        return true;
-                    }
+            let shift = (col.d & !code::PAL_SCALED) >> code::PAL_SHIFT;
+            let k = match (col.d & code::PAL_SCALED != 0, s.arg(al, col.c, base)) {
+                (false, _) => ONE,
+                (true, Arg::Sc(k)) => k >> shift,
+                (true, Arg::Lane(k)) => {
+                    let idx = [fixed::pal_index(va), fixed::pal_index(vb)];
+                    pal_select_lanes(px, c, k, p, idx, shift);
+                    return true;
                 }
             };
+            let [ca, cb] = colours(p, [va, vb], k);
             out1(px, L(c), move |c| if c != 0 { ca } else { cb });
         }
         (F_PICKPAL, [pk, col]) => {
             let Arg::Lane(m) = s.arg(al, pk.a, base) else {
                 return false;
             };
-            let p = palette(t, own, col.d & code::PAL_MASK);
-            let k = if col.d & PAL_SCALED == 0 {
-                None
-            } else {
-                let Arg::Sc(k) = s.arg(al, col.c, base) else {
-                    return false;
-                };
-                Some(k >> ((col.d & !PAL_SCALED) >> PAL_SHIFT))
-            };
-            let colour = |v: i32| match k {
-                None => fixed::pal(p, v),
-                Some(k) => fixed::scale_rgb(p[fixed::pal_index(v)], k),
+            let k = match (col.d & code::PAL_SCALED != 0, s.arg(al, col.c, base)) {
+                (false, _) => ONE,
+                (true, Arg::Sc(k)) => k >> ((col.d & !code::PAL_SCALED) >> code::PAL_SHIFT),
+                (true, Arg::Lane(_)) => return false,
             };
             let n = (pk.c as usize).min(PICK_MAX);
-            let mut tbl = [[0u8; 3]; PICK_MAX];
-            for (i, c) in tbl.iter_mut().enumerate().take(n) {
-                *c = colour(pick(&s.sc, pk.b, pk.c, (i as i32) << 16));
-            }
-            // (Outside the choices a pick is 0.)
-            let none = colour(0);
+            let tbl = pick_colours(&s.sc, pk, palette(t, own, col.d & code::PAL_MASK), k);
             out1(px, L(m), move |m| {
                 let i = m >> 16;
-                if (i as u32) < n as u32 {
-                    tbl[i as usize]
+                // (Outside the choices a pick is 0: its colour last.)
+                tbl[if (i as u32) < n as u32 {
+                    i as usize
                 } else {
-                    none
-                }
+                    PICK_MAX
+                }]
             });
         }
         (F_INKPAL, [_, col]) => {
@@ -1207,6 +1191,38 @@ fn fused<const N: usize>(
         _ => return false,
     }
     true
+}
+
+/// The colours of palette entries `v` scaled by `k` (`pal_lit` of each;
+/// `k` = 1: the entries' bytes, as `pal`), once a lane for a fused colour:
+/// in flash, out of the frame loop's IRAM.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+fn colours(p: &[[u8; 3]; 32], v: [i32; 2], k: i32) -> [[u8; 3]; 2] {
+    v.map(|v| fixed::scale_rgb(p[fixed::pal_index(v)], k))
+}
+
+/// A fused `pal(P, pick(m, …)) * k`'s colours (`colours`): each choice's,
+/// then (at `PICK_MAX`) the colour of 0, a pick's value outside them.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+fn pick_colours(
+    sc: &[i32; MAX_SCALARS],
+    pk: &Op,
+    p: &[[u8; 3]; 32],
+    k: i32,
+) -> [[u8; 3]; crate::fuse::PICK_MAX + 1] {
+    let n = (pk.c as usize).min(crate::fuse::PICK_MAX);
+    let mut tbl = [[0u8; 3]; crate::fuse::PICK_MAX + 1];
+    for (i, c) in tbl.iter_mut().enumerate() {
+        let v = if i < n {
+            pick(sc, pk.b, pk.c, (i as i32) << 16)
+        } else {
+            0
+        };
+        *c = fixed::scale_rgb(p[fixed::pal_index(v)], k);
+    }
+    tbl
 }
 
 /// `pal(P, select(c, A, B)) * k` along the lane (`crate::fuse`'s

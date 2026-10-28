@@ -895,29 +895,20 @@ impl Program {
             return true;
         }
         let re = self.row_end as usize;
-        self.ops[re.min(at)..at]
-            .iter()
-            .rev()
-            .find(|o| !is_colour(o.code) && !matches!(o.code, STILL | COLUMN | FUSE) && o.d == v)
-            .is_some_and(|o| {
-                matches!(
-                    o.code,
-                    FLOOR
-                        | SELECT
-                        | LT
-                        | LE
-                        | GT
-                        | GE
-                        | EQ
-                        | NE
-                        | AND
-                        | OR
-                        | NOT
-                        | STEP
-                        | BIT
-                        | SPR
-                )
-            })
+        let w = (re.min(at)..at).rev().find(|&k| {
+            let o = &self.ops[k];
+            !is_colour(o.code) && !matches!(o.code, STILL | COLUMN | FUSE) && o.d == v
+        });
+        // (A shift of a stepped value, `floor(q)/8`, is stepped.)
+        if let Some(k) = w.filter(|&k| self.ops[k].code == SHR) {
+            return self.stepped(k, self.ops[k].a);
+        }
+        w.map(|k| &self.ops[k]).is_some_and(|o| {
+            matches!(
+                o.code,
+                FLOOR | SELECT | LT | LE | GT | GE | EQ | NE | AND | OR | NOT | STEP | BIT | SPR
+            )
+        })
     }
 
     /// Where the still cache's marker is (`code::STILL`), if the formula
@@ -1359,13 +1350,13 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         ADD | SUB | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP | MASK => 50,
         BIT => 55,
         MUL => 86,
-        // The narrowed steps (`range`): estimated from their loops'
-        // instructions against `add`'s and `mul`'s until psi-probe
-        // measures them.
-        ADD_W | SUB_W => 25,
-        MUL_W => 55,
-        MUL_N => 33,
-        SHR => 28,
+        // The narrowed steps (`range`), measured by psi-probe on the spare
+        // (lang-probe-b, 2026-10-28: each row against `gray(x)`'s 163 ns;
+        // they were instruction-count guesses of 25, 55, 33 and 28).
+        ADD_W | SUB_W => 28,
+        MUL_W => 41,
+        MUL_N => 37,
+        SHR => 33,
         MOD => 113,
         DIV | RECIP => 685,
         ATAN2 => 529,
