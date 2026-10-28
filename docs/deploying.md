@@ -271,10 +271,37 @@ which starts unticked (`new_install_prompt_erase`):
 The page cannot be tested end to end without a person at a real board (Web
 Serial asks for a port by hand); `tools/web-smoke.py`-style checks cover
 that it loads, the button renders and the manifest parses. The public
-site hosts a version of it at <https://opendmd.github.io/install/>
+site hosts a version of it at <https://opendmd.dev/install/>
 (`docs/guide/install.md`, built by `tools/site.py --dist dist` with the
 current release's files under `install/firmware/`), so installing needs no
 toolchain at all.
+
+### The project site (opendmd.dev)
+
+The site, installer and update check included, is
+<https://opendmd.dev/>: the `opendmd-site` Worker on Cloudflare
+(`site/worker/`) serving `make site`'s `target/site` as static assets.
+There is no other host.
+
+- **A release** (`release.yml`, on a `v*` tag) builds the site and deploys
+  it with `make site-deploy-built` once the `CLOUDFLARE_API_TOKEN` secret
+  exists; until then the step skips and the site is deployed from the dev
+  box. The **Site** workflow (manual) redeploys the docs between releases
+  with an existing release's files.
+- **From the dev box**, with the owner: `make fw-release` (or a release's
+  files in `dist/`), then `make site-deploy` (refuses a dirty tree), or
+  `make site` and `make site-deploy-built`. `make site-deploy-check` is a
+  dry run. Build with `GALLERY=` and `API_ARCHIVE=` (a checkout of the
+  public gallery repo's `gallery/` and `dev/api/`, as release.yml fetches
+  them), or the deployed site lacks the contributions and the earlier
+  releases' API pages.
+- **The public gallery repo** (github.com/opendmd/opendmd.github.io,
+  serving nothing) takes Formula contributions by pull request in
+  `gallery/`, checked by its `gallery-check.yml`. A release updates its
+  own files with `tools/gallery-repo-publish.sh` (`make
+  gallery-repo-publish`): the check and its vendored checker, the READMEs,
+  and the release's frozen API page added to `dev/api/`. A merged
+  contribution appears on the site at the next deploy.
 
 ### Installing with espflash (USB)
 

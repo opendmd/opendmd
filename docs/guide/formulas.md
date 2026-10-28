@@ -9,7 +9,7 @@ but you don't need to know it to start: open an example, drag a number,
 and watch.
 
 Open **Formulas** (Ψ) in the app's menu. Formulas work in the
-[online demo](https://opendmd.github.io/demo/) too, with no player at all.
+[online demo](https://opendmd.dev/demo/) too, with no player at all.
 
 ## The gallery
 
@@ -545,7 +545,7 @@ shows its code and its sliders, and has
   suggests `opendmd.local`; the name or IP address your display shows) and
   opens the formula in your display's editor, where you can save it. Your
   phone or computer must be on the same network as the display.
-- **Try it in the demo**: opens it in the [online demo](https://opendmd.github.io/demo/)'s
+- **Try it in the demo**: opens it in the [online demo](https://opendmd.dev/demo/)'s
   editor.
 - **Copy code** and **Copy link**, and a QR code of the link to open it on
   a phone.
@@ -558,7 +558,7 @@ gets long enough that some apps cut it, and the share box says so.
 
 ## The formula gallery
 
-The [formula gallery](https://opendmd.github.io/formulas/) on the OpenDMD
+The [formula gallery](https://opendmd.dev/formulas/) on the OpenDMD
 site has formulas people have made, and the examples. **Open** shows one on
 its own page; **Remix** opens it in the demo's editor.
 

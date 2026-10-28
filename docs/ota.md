@@ -219,7 +219,7 @@ updates the firmware and the web app from the published release, with the
 browser doing the fetching: the player itself never goes to the internet.
 
 - **The release.** The project site publishes
-  `https://opendmd.github.io/install/release.json`:
+  `https://opendmd.dev/install/release.json`:
   `{"version": "1.0.0", "firmware": "firmware/opendmd-1.0.0-4mb.odfw",
   "variants": {"4mb": {"firmware": "firmware/opendmd-1.0.0-4mb.odfw"},
   "8mb": {"firmware": "firmware/opendmd-1.0.0-8mb.odfw"}}, "www":
@@ -228,7 +228,7 @@ browser doing the fetching: the player itself never goes to the internet.
   version (what `GET /api/www` reports for it). The page takes
   `variants.<the player's variant>.firmware`; `firmware` is the 4mb bundle,
   for the web apps from before there were two. The page is plain HTTP
-  from the player and fetches this over HTTPS; GitHub Pages sends
+  from the player and fetches this over HTTPS; the site sends
   `Access-Control-Allow-Origin: *`, and the request carries no credentials
   or custom headers, so there is no preflight. The player sends no
   Content-Security-Policy, so nothing stops the page connecting there.

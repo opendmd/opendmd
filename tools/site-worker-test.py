@@ -21,13 +21,11 @@ wrangler: make site-worker-deps) on a free port, and stops it after. With
 - _headers: one CSP on every response, the right one per path; nosniff;
   no COOP/COEP; CORS * on install/, art-index/, f/; release.json for 60 s,
   the version-named release files immutable, the rest 600 s;
-- www.opendmd.dev on a Worker path: 301 to https://opendmd.dev/… (under
-  cf dev by a Host header, against opendmd.dev by name; skipped against a
-  workers.dev URL, which has no www);
+- www.opendmd.dev on a Worker path: 301 to https://opendmd.dev/… (against
+  opendmd.dev only; skipped under cf dev and against a workers.dev URL);
 - every request names itself in User-Agent: Cloudflare's Browser Integrity
   Check refuses urllib's default one (error 1010);
-- the Pages-only files (README.md, .nojekyll) and _headers, _redirects,
-  .assetsignore not served;
+- _headers, _redirects and .assetsignore not served;
 - in Chromium, no CSP violation on the docs, the install page (ESP Web
   Tools from jsDelivr), the gallery, the licences, the 404 page, the demo
   and /f/ with a Formula.
@@ -155,17 +153,16 @@ def formula(base: str) -> None:
 
 
 def www(base: str) -> None:
-    """www.opendmd.dev -> the apex. Locally (cf dev routes everything to the
-    Worker, whatever the Host) by a Host header; on Cloudflare only once
-    www.opendmd.dev is attached (the cutover, S3): there it is asked for by
-    name. A workers.dev preview cannot be asked as www: skipped."""
+    """www.opendmd.dev -> the apex, on Cloudflare only: the zone's redirect
+    rule answers every www path, and the Worker the /f/* and /api/* ones.
+    cf dev cannot be asked as www (with `domains` set it serves every
+    request as the first domain, whatever the Host), nor can a workers.dev
+    preview: skipped there."""
     host = urllib.parse.urlsplit(base).hostname or ""
-    if host in ("127.0.0.1", "localhost"):
-        cases = [(base, {"Host": "www.opendmd.dev"})]
-    elif host in ("opendmd.dev", "www.opendmd.dev"):
+    if host in ("opendmd.dev", "www.opendmd.dev"):
         cases = [("https://www.opendmd.dev", {})]
     else:
-        print(f"  skip www.opendmd.dev -> opendmd.dev: {host} is neither cf dev nor opendmd.dev (checked at the cutover, S3)")
+        print(f"  skip www.opendmd.dev -> opendmd.dev: {host} is not opendmd.dev")
         return
     for b, hdr in cases:
         st, h, _ = get(b, "/f/8m4kq2v9tz", headers=hdr)
@@ -204,8 +201,8 @@ def pages(base: str, site: Path) -> None:
     st, h, body = get(base, "/no/such/page")
     check(st == 404 and b"<title>Not found" in body and b'href="/site.css"' in body,
           f"an address with nothing there: the 404 page with absolute links ({st})")
-    hidden = [f for f in ("/README.md", "/.nojekyll", "/_headers", "/_redirects", "/.assetsignore") if get(base, f)[0] != 404]
-    check(not hidden, f"the Pages-only and Cloudflare files are not served {hidden}")
+    hidden = [f for f in ("/_headers", "/_redirects", "/.assetsignore") if get(base, f)[0] != 404]
+    check(not hidden, f"the Cloudflare files are not served {hidden}")
 
 
 def redirects(base: str, site: Path) -> None:

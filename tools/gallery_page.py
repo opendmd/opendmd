@@ -1,26 +1,15 @@
 """The formula gallery's page (/formulas/ on the site): its thumbnails and
 the part of formulas/index.html between the gallery markers.
 
-One implementation, run in two places:
+tools/site.py imports it (`build`, `marked`) and writes the page around
+it. It also runs by hand over a built site, rewriting its gallery in place
+from the site's demo/formulas.json (the examples) and DIR/*.psi (the
+contributions, a checkout of the public gallery repo's gallery/):
 
-- the site build: tools/site.py imports it (`build`, `marked`) and writes
-  the page around it;
-- the public site repo's Pages workflow (.github/workflows/pages.yml there),
-  on every push to its main: tools/site-publish.sh vendors this file to
-  `.github/gallery-check/tools/gallery_page.py`, and the workflow runs it
-  over the published site with the gallery as merged, so a merged
-  contribution is live without a release:
+    python3 -I gallery_page.py SITE --tool opendmd-gallery [--gallery DIR]
 
-      python3 -I gallery_page.py SITE --tool opendmd-gallery [--gallery DIR]
-
-  rewrites SITE/formulas/ (the thumbnails, and the page between its
-  markers) from SITE/demo/formulas.json (the examples, as the site build
-  copied them) and DIR/*.psi (the contributions).
-
-Given the same examples, contributions and checker, both write the same
-bytes (tools/gallery-pages-test.py checks it). The Python standard library
-only, nothing else: the workflow runs it with the runner's python3, and it
-must not import anything from the site it rewrites (`-I`).
+The Python standard library only (tools/gallery-pages-test.py checks the
+page it writes).
 """
 
 from __future__ import annotations
@@ -216,7 +205,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Rewrite a built site's formula gallery (formulas/) in place.")
     ap.add_argument("site", type=Path, help="the built site (its demo/formulas.json and formulas/index.html)")
     ap.add_argument("--tool", type=Path, required=True, help="opendmd-gallery, built")
-    ap.add_argument("--gallery", type=Path, help="the contributions (the public site repo's gallery/)")
+    ap.add_argument("--gallery", type=Path, help="the contributions (the public gallery repo's gallery/)")
     a = ap.parse_args()
     page = a.site / PAGE
     if page.is_symlink() or not page.is_file():
