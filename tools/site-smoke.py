@@ -25,9 +25,9 @@ build URL serves. There the art index must also carry
 - the demo's Copy share link gives a /f/ link that opens there;
 - /art-index/v1/ (Create Art's game name index, not in the www pack): every
   platform's file published, the committed file byte for byte, served as
-  JSON (the CORS header a player's web app needs is GitHub Pages' own,
-  which this test's server cannot show); none left under demo/; the demo's
-  Game art searches it same-origin (nothing asked of opendmd.github.io; the
+  JSON (the CORS header a player's web app needs is the site's _headers',
+  which this test's own server cannot show; checked with --base); none left under demo/; the demo's
+  Game art searches it same-origin (nothing asked of opendmd.dev; the
   pictures' requests answered locally);
 - /formulas/ (the gallery): every example listed with its thumbnail, Open
   and Remix leading to the formula;
@@ -99,7 +99,7 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
                               is_mobile=phone, has_touch=phone)
     ctx.grant_permissions(["clipboard-read", "clipboard-write"])
     page = ctx.new_page()
-    # (The demo asks /api/status first: a static site answers 404, as on Pages.)
+    # (The demo asks /api/status first: a static site answers 404, as opendmd.dev does.)
     page.on("console", lambda m: m.type == "error" and "/api/status" not in m.location.get("url", "")
             and errors.append(f"[{size}] console: {m.text} ({m.location.get('url')})"))
     page.on("pageerror", lambda e: errors.append(f"[{size}] pageerror: {e}"))
@@ -551,7 +551,7 @@ def art_index(browser, base: str, site: Path, errors: list[str], cors_expected: 
         if r.status != 200 or "json" not in ctype or len(d["names"]) != len(d["kinds"]) or not d["names"]:
             bad.append(plat)
     check(not bad, f"art index: art-index/v1/<platform>.json for all {len(ART_PLATFORMS)} platforms, fetchable as JSON "
-                   f"(CORS header here: {cors or 'none, the test server; Pages sends *'}){' — bad: ' + ', '.join(bad) if bad else ''}")
+                   f"(CORS header here: {cors or 'none, the test server; the site sends *'}){' — bad: ' + ', '.join(bad) if bad else ''}")
     if cors_expected:
         check(cors == "*", f"art index: Access-Control-Allow-Origin: * from {base} ({cors})")
     check(not any(p.is_file() for p in (site / "demo/art").rglob("*")), "art index: not under demo/ (the www pack does not carry it)")
@@ -562,7 +562,9 @@ def art_index(browser, base: str, site: Path, errors: list[str], cors_expected: 
     site_asked: list[str] = []
     page.route("https://raw.githubusercontent.com/**", lambda r: r.fulfill(
         status=200, body=png.getvalue(), headers={"access-control-allow-origin": "*", "content-type": "image/png"}))
-    page.route("https://opendmd.github.io/**", lambda r: (site_asked.append(r.request.url), r.abort()))
+    # The site itself (util.js SITE), unless that is what is under test.
+    if not base.startswith("https://opendmd.dev"):
+        page.route("https://opendmd.dev/**", lambda r: (site_asked.append(r.request.url), r.abort()))
     page.on("request", lambda r: "/art-index/" in r.url and asked.append(r.url))
     page.goto(f"{base}/demo/#create")
     page.wait_for_selector("#view-create.on #studio .st-grid", timeout=30000)
@@ -574,7 +576,7 @@ def art_index(browser, base: str, site: Path, errors: list[str], cors_expected: 
     names = page.eval_on_selector_all("#find-grid .find-hit .find-t", "els => els.map(e => e.textContent)")
     check(asked == [f"{base}/art-index/v1/GB.json"] and not site_asked and names and all("tetris" in n.lower() for n in names),
           f"art index: the demo's Game art searches it same-origin ({asked}, {len(names)} tiles, e.g. {names[:1]}; "
-          f"asked of opendmd.github.io: {site_asked})")
+          f"asked of opendmd.dev: {site_asked})")
     page.context.close()
 
 

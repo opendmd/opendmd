@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["markdown>=3.6"]
 # ///
-"""Build the public site (opendmd.github.io) as static files.
+"""Build the public site (https://opendmd.dev/) as static files.
 
     uv run tools/site.py OUT_DIR --www opendmd-web/www --card target/demo-card \
         --art target/site-art --dist dist
@@ -28,21 +28,20 @@
                Psi)
 - /formulas/   the formula gallery: the web app's examples (formulas.json,
                by OpenDMD, CC0) and the contributions merged into the public
-               site repo's gallery/ (`--gallery`, fetched by release.yml),
+               gallery repo's gallery/ (`--gallery`, fetched by release.yml),
                each checked again by opendmd-gallery (`--gallery-tool`)
                before it is published; thumbnails drawn by it at build time.
-               The page's body and thumbnails are tools/gallery_page.py's,
-               which the public repo's Pages workflow also runs (vendored)
-               on every push to its main, so a merge is live without a release
+               The page's body and thumbnails are tools/gallery_page.py's;
+               a merged contribution appears at the next site build
 - /art-index/v1/<PLATFORM>.json
                the name index of Create Art's "Find art for a game"
                (opendmd-web/art-index/, tools/art-index.py): not in the www
-               pack; the web app on a player fetches it from here (GitHub
-               Pages sends `Access-Control-Allow-Origin: *` and compresses
+               pack; the web app on a player fetches it from here (_headers
+               sends `Access-Control-Allow-Origin: *`; Cloudflare compresses
                JSON), the demo same-origin. `v1` is the format
                (ART_INDEX_FORMATS: each format its own source folder and
                validator, every one published, so a new format cannot drop
-               an old one; site-publish.sh never deletes art-index/): each
+               an old one): each
                file is checked to be exactly its format's shape
 - /art/        the landing page's tiles and the wordmark (tools/site-art.py: recordings of the
                OpenDMD's own Formulas and live items, and CC0 sprites), drawn
@@ -50,21 +49,21 @@
 - /dev/api/    the HTTP API as each release described it: v<version>.html, a
                copy of dev/api.html frozen when the site is built from that
                release's tag (`--api-freeze`), beside the earlier releases'
-               copies from the public site repo's dev/api/ (`--api-archive`,
-               fetched by release.yml; site-publish.sh never removes them).
+               copies from the public gallery repo's dev/api/ (`--api-archive`,
+               fetched by release.yml; gallery-repo-publish.sh archives each
+               release's there and never removes one).
                dev/api.html (the latest) links them all; the web app's
                Settings -> About links its firmware's
 - /licenses/   the licences: a page (LICENCES below, linked from every
                page's footer) and the third-party notices from licenses/
                (tools/notices.py), the same files the release and the
                player carry
-- /404.html    the page for an address with nothing there (Cloudflare and
-               GitHub Pages both serve it)
+- /404.html    the page for an address with nothing there (Cloudflare's
+               not_found_handling serves it)
 - _headers, _redirects, .assetsignore
                for the opendmd-site Worker on Cloudflare (site/worker/, which
                serves this tree as its static assets): headers per path (CORS,
-               caching, CSP), MOVED as 301s, what not to upload. GitHub Pages
-               ignores them; tools/site-publish.sh leaves them out
+               caching, CSP), MOVED as 301s, what not to upload
 
 The docs mark site-only pieces with HTML comments, invisible on GitHub:
 `<!-- site:hero -->` ends the README's GitHub header (the site draws its
@@ -74,7 +73,7 @@ the list or the h3 sections after them as cards or numbered steps.
 
 Links between published pages are rewritten to the HTML pages; a link to
 anything not published (CLAUDE.md, source files) keeps its text and loses
-the link. `make site` runs this; `make site-publish` pushes it.
+the link. `make site` runs this; `make site-deploy` deploys it.
 """
 
 import argparse
@@ -197,7 +196,7 @@ LICENCES_PAGE = "licenses/index.html"
 # The web app's find.js asks for the one it reads (`ART_INDEX`). A new shape
 # is a new entry here (its own source folder and validator) and a new
 # `ART_INDEX` in find.js; the older entries stay, so the web apps already on
-# players keep their format (and site-publish.sh never deletes art-index/).
+# players keep their format.
 ART_INDEX_PLATFORMS = ("MD", "SNES", "GB", "GBC", "GBA", "SATURN", "NDS", "NES", "SMS", "PCE", "PS1", "N64", "ARCADE")
 
 
@@ -419,9 +418,6 @@ API_FROZEN = re.compile(r"v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\.html")
 LINK = re.compile(r'(\]\(|(?:src|href)=")([^)"\s]+)')
 
 # --- Cloudflare (site/worker/, the opendmd-site Worker's static assets) ---
-# The same tree is the GitHub Pages site until the cutover
-# (docs/research/site-cloudflare.md): Pages ignores these files and
-# tools/site-publish.sh leaves them out of the public repo.
 #
 # _headers (Cloudflare's format): every rule a path matches applies, in file
 # order; a header set by two rules would be joined with a comma, so a later
@@ -443,14 +439,14 @@ CSP = {
     "f": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob:")
     .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'") + "; connect-src 'self' http:",
     # The demo: the web app's wasm, Create Art's sources (js/find.js) and the
-    # update check (util.js SITE: opendmd.github.io until the host flip).
+    # update check (util.js SITE).
     "demo": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
                              "https://raw.githubusercontent.com; media-src 'self' blob:")
     .replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'")
     + "; connect-src 'self' https://gifcities.archive.org https://blob.gifcities.org https://raw.githubusercontent.com "
-    "https://opendmd.github.io https://opendmd.dev",
+    "https://opendmd.dev",
 }
-CACHE_DEFAULT = "public, max-age=600"   # what GitHub Pages sends (the art index's ETag behaviour)
+CACHE_DEFAULT = "public, max-age=600"   # what GitHub Pages sent (the art index's ETag behaviour)
 CACHE_SHORT = "public, max-age=60"      # install/release.json, beta.json: the update check
 CACHE_IMMUTABLE = "public, max-age=31536000, immutable"  # version-named release files
 CORS_PATHS = ("/install/*", "/art-index/*", "/f/*")       # fetched from a player's http:// web app
@@ -489,9 +485,9 @@ def served(page: str) -> str:
 
 
 def redirects_file() -> str:
-    """target/site/_redirects: MOVED as real 301s (Pages keeps the
-    meta-refresh pages), each old address with and without .html, straight
-    to where its page is served (one hop). www.opendmd.dev is the Worker's
+    """target/site/_redirects: MOVED as real 301s (the meta-refresh
+    pages stay for a plain static server), each old address with and
+    without .html, straight to where its page is served (one hop). www.opendmd.dev is the Worker's
     (site/worker/src/index.ts): _redirects cannot match a host."""
     lines = []
     for src, dst in MOVED.items():
@@ -500,10 +496,10 @@ def redirects_file() -> str:
     return "\n".join(lines) + "\n"
 
 
-# Files in the tree that only the Pages repo wants: not uploaded as assets.
-ASSETS_IGNORE = (".nojekyll", "README.md", ".assetsignore")
-# The 404 page (Cloudflare's not_found_handling "404-page"; GitHub Pages
-# serves a 404.html too): shown at any depth, so its links are absolute.
+# Files in the tree not uploaded as assets.
+ASSETS_IGNORE = (".assetsignore",)
+# The 404 page (Cloudflare's not_found_handling "404-page"): shown at any
+# depth, so its links are absolute.
 NOT_FOUND_PAGE = "404.html"
 NOT_FOUND = """# Not found
 
@@ -693,7 +689,7 @@ def semver_key(v: str) -> tuple:
 
 
 def describe() -> str:
-    """This tree's `git describe`, as tools/site-publish.sh reads it."""
+    """This tree's `git describe`, as tools/gallery-repo-publish.sh reads it."""
     try:
         return subprocess.run(["git", "describe", "--always", "--dirty", "--tags", "--match", "v*"], cwd=ROOT, check=True,
                               capture_output=True, text=True).stdout.strip()
@@ -733,8 +729,7 @@ def after_h1(body: str, extra: str) -> str:
 
 
 # The formula gallery (formulas/index.html): its body and thumbnails come
-# from tools/gallery_page.py, which the public site repo's Pages workflow
-# runs too (vendored), to regenerate them when a contribution is merged.
+# from tools/gallery_page.py.
 GALLERY_PAGE = gallery_page.PAGE
 
 
@@ -787,7 +782,7 @@ def api_pages(out: Path, info: dict, art: dict, archive: Path | None, freeze: st
     and, when `freeze` says so, this release's, rendered now (replacing an
     earlier publish of the same version). `freeze` "auto": only when this
     tree is the release's tag, clean (`git describe --match 'v*'` is exactly
-    v<version>, the test site-publish.sh makes); a site built from main
+    v<version>, the test gallery-repo-publish.sh makes); a site built from main
     between releases freezes nothing. Returns the versions, newest first."""
     ver = info["version"]
     frozen = api_archive(archive)
@@ -805,8 +800,8 @@ def api_pages(out: Path, info: dict, art: dict, archive: Path | None, freeze: st
 
 def write_art_index(out: Path) -> None:
     """Create Art's game name index: art-index/v<N>/<PLATFORM>.json for every
-    format in ART_INDEX_FORMATS, copied byte for byte (compact JSON; Pages
-    gzips it on the way), each file checked by its format's validator."""
+    format in ART_INDEX_FORMATS, copied byte for byte (compact JSON;
+    Cloudflare compresses it on the way), each file checked by its format's validator."""
     for fmt, (srcdir, valid) in ART_INDEX_FORMATS.items():
         dst = out / f"art-index/v{fmt}"
         dst.mkdir(parents=True)
@@ -829,8 +824,8 @@ def main() -> None:
     ap.add_argument("--art", type=Path, required=True, help="the artwork from tools/site-art.py")
     ap.add_argument("--dist", type=Path, required=True, help="the release from make fw-release")
     ap.add_argument("--gallery-tool", type=Path, help="opendmd-gallery, built (make gallery-tool)")
-    ap.add_argument("--gallery", type=Path, help="the public site repo's gallery/ (contributions), if fetched")
-    ap.add_argument("--api-archive", type=Path, help="the public site repo's dev/api/ (earlier releases' API pages), if fetched")
+    ap.add_argument("--gallery", type=Path, help="the public gallery repo's gallery/ (contributions), if fetched")
+    ap.add_argument("--api-archive", type=Path, help="the public gallery repo's dev/api/ (earlier releases' API pages), if fetched")
     ap.add_argument("--api-freeze", choices=("auto", "yes", "no"), default="auto",
                     help="freeze this release's API page as dev/api/v<version>.html (auto: when built from its tag)")
     ap.add_argument("--api-only", action="store_true",
@@ -856,7 +851,7 @@ def main() -> None:
         print(f"{out}: the API pages, frozen: {', '.join(versions) or 'none'}")
         return
 
-    # The demo: the app (the player sends the .gz copies; Pages compresses by itself) and its card.
+    # The demo: the app (the player sends the .gz copies; Cloudflare compresses by itself) and its card.
     shutil.copytree(a.www, out / "demo", ignore=shutil.ignore_patterns("*.gz", ".gitignore"))
     shutil.copytree(a.card, out / "demo/demo")
     # A formula's own page; it runs on the demo's files.
@@ -909,19 +904,12 @@ def main() -> None:
     (out / "_redirects").write_text(redirects_file())
     (out / ".assetsignore").write_text("".join(f"{n}\n" for n in ASSETS_IGNORE))
     (out / "site.css").write_text(CSS.strip() + "\n")
-    (out / ".nojekyll").write_text("")
     for src, dst in MOVED.items():
         to = html.escape(rel(src, dst))
         (out / src).parent.mkdir(parents=True, exist_ok=True)
         (out / src).write_text(f'<!doctype html><meta charset="utf-8"><title>Moved</title>'
                                f'<meta http-equiv="refresh" content="0; url={to}"><link rel="canonical" href="{to}">'
                                f'<p>This page moved: <a href="{to}">{to}</a></p>\n')
-    (out / "README.md").write_text("# opendmd.github.io\n\nThe OpenDMD site: documentation and a browser demo of the web app "
-                                   "(https://opendmd.github.io/). Built by `make site` in the OpenDMD repository; "
-                                   "changes made here are overwritten by the next publish, except in `gallery/`: the formula "
-                                   "gallery, which takes contributions by pull request (see gallery/README.md), and "
-                                   "`dev/api/`: the HTTP API page as each release described it, kept from one publish "
-                                   "to the next.\n")
     n = sum(1 for p in out.rglob("*") if p.is_file())
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
     print(f"{out}: {n} files, {size / 1e6:.1f} MB")

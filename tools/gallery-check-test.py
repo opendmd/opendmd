@@ -8,7 +8,7 @@
     uv run tools/gallery-check-test.py [--keep DIR] [-v]
 
 The bare repo gets this checkout's site/public-repo/ and the vendored
-checker (tools/site-publish.sh, against a stand-in site). Each case is a
+checker (tools/gallery-repo-publish.sh, against a stand-in site). Each case is a
 fork branch with GitHub's `refs/pull/<n>/merge` (main as the first parent)
 and `refs/pull/<n>/head`; the workflow taken from **main** (the base: what
 `pull_request_target` runs, whatever the pull request did to its own copy)
@@ -127,8 +127,8 @@ def main() -> int:
         site = tmp / "site"
         write(site, "install/release.json", '{"version": "9.9.9"}\n')
         write(site, "index.html", "<p>site</p>\n")
-        sh("tools/site-publish.sh", str(site), str(bare), cwd=ROOT,
-           env={"SITE_REPO_WORK": str(tmp / "work"), "SITE_PUBLISH_ALLOW_DIRTY": "1"})
+        sh("tools/gallery-repo-publish.sh", str(site), str(bare), cwd=ROOT,
+           env={"GALLERY_REPO_WORK": str(tmp / "work"), "GALLERY_REPO_ALLOW_DIRTY": "1"})
         fork = tmp / "fork"
         sh("git", "clone", "-q", str(bare), str(fork))
         target = tmp / "cargo-target"

@@ -26,8 +26,7 @@ wrangler: make site-worker-deps) on a free port, and stops it after. With
   workers.dev URL, which has no www);
 - every request names itself in User-Agent: Cloudflare's Browser Integrity
   Check refuses urllib's default one (error 1010);
-- the Pages-only files (README.md, .nojekyll) and _headers, _redirects,
-  .assetsignore not served;
+- _headers, _redirects and .assetsignore not served;
 - in Chromium, no CSP violation on the docs, the install page (ESP Web
   Tools from jsDelivr), the gallery, the licences, the 404 page, the demo
   and /f/ with a Formula.
@@ -204,8 +203,8 @@ def pages(base: str, site: Path) -> None:
     st, h, body = get(base, "/no/such/page")
     check(st == 404 and b"<title>Not found" in body and b'href="/site.css"' in body,
           f"an address with nothing there: the 404 page with absolute links ({st})")
-    hidden = [f for f in ("/README.md", "/.nojekyll", "/_headers", "/_redirects", "/.assetsignore") if get(base, f)[0] != 404]
-    check(not hidden, f"the Pages-only and Cloudflare files are not served {hidden}")
+    hidden = [f for f in ("/_headers", "/_redirects", "/.assetsignore") if get(base, f)[0] != 404]
+    check(not hidden, f"the Cloudflare files are not served {hidden}")
 
 
 def redirects(base: str, site: Path) -> None:

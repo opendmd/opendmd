@@ -27,8 +27,7 @@ change to the shape (a key added, renamed or reinterpreted) is a new
 version: a new entry in ART_INDEX_FORMATS in tools/site.py (its own
 source folder and validator; the old entry stays, so the web apps already
 on players keep their format) and `ART_INDEX` in find.js. tools/site.py
-refuses files that are not exactly their format's shape, and
-site-publish.sh never deletes a published format.
+refuses files that are not exactly their format's shape.
 
 Why a prepared index and not the GitHub API (which pages can read): one
 folder's tree is 1.3 MB of JSON (SNES titles alone; 175 KB gzipped), a

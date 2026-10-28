@@ -9,8 +9,8 @@ name: Site
 # by itself (release.yml); this is for the docs between releases.
 #
 # Manual only, and it fails at once until the CLOUDFLARE_API_TOKEN secret
-# exists (how to make it: the header of release.yml). It never touches the
-# GitHub Pages repo.
+# exists (how to make it: the header of release.yml). It never writes to
+# the public gallery repo.
 
 on:
   workflow_dispatch:
@@ -85,7 +85,7 @@ jobs:
           git checkout -- out
 
       # As in release.yml: the gallery's contributions and the earlier API
-      # pages, read-only from the public Pages repo.
+      # pages, read-only from the public gallery repo.
       - name: Fetch the formula gallery and the earlier API pages
         run: |
           set -euo pipefail

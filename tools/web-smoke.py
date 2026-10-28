@@ -96,7 +96,7 @@ every view like a person would:
             pipeline's (`cargo run --example render` in opendmd-art-web),
             parsePath of the name gives SNES / "Studio Test" / 1, and it is
             appended to `cachetest`; Find's Game art: the name index is
-            fetched from the project site (opendmd.github.io/art-index/v1/,
+            fetched from the project site (opendmd.dev/art-index/v1/,
             not the pack: /art/ is a 404), whose stand-in is a Playwright
             route serving opendmd-web/art-index/ with the CORS header (no
             network): unreachable -> the sentence and Try again, which then
@@ -346,7 +346,7 @@ OUT = Path(os.environ.get("WEB_SMOKE_OUT", REPO / "target" / "web-smoke"))
 # Create Art's game name index, published on the site (tools/site.py); every
 # page's context answers it from the committed files (site_art_index), so no
 # test reaches the network. Requests seen: [(url, Origin header)].
-SITE_ART = "https://opendmd.github.io/art-index/v1/"
+SITE_ART = "https://opendmd.dev/art-index/v1/"
 ART_INDEX = REPO / "opendmd-web" / "art-index"
 site_art_asked: list[tuple[str, str | None]] = []
 SIZES = {"laptop": (1280, 800), "phone": (390, 844)}
@@ -711,7 +711,7 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
 
 def site_art_index(ctx) -> None:
     """The site's art-index/v1/ for this context, from opendmd-web/art-index/,
-    with GitHub Pages' `Access-Control-Allow-Origin: *`."""
+    with the site's `Access-Control-Allow-Origin: *`."""
     def answer(route) -> None:
         site_art_asked.append((route.request.url, route.request.headers.get("origin")))
         f = ART_INDEX / urllib.parse.urlsplit(route.request.url).path.rsplit("/", 1)[-1]
@@ -2515,7 +2515,7 @@ def www_pack_paths(pack: bytes) -> list[str]:
 def api_page_checks(page: Page, base: str) -> None:
     """The API reference lives on the project site, not in the pack:
     Settings -> About links this firmware's own page there
-    (https://opendmd.github.io/dev/api/v<version>.html, frozen when that
+    (https://opendmd.dev/dev/api/v<version>.html, frozen when that
     release was published) when the player runs a release (its firmware a
     release number and its web app the same release, `v<version>`), else
     the latest (dev/api.html): this build's web app is a `git describe`
@@ -2526,7 +2526,7 @@ def api_page_checks(page: Page, base: str) -> None:
     docs/api.md's routes to http.rs.)
     And beside it, the third-party licences: licenses.txt, served as text.
     """
-    site = "https://opendmd.github.io/"
+    site = "https://opendmd.dev/"
     st = get_json(base + "/api/status")
     link = page.eval_on_selector("#st-api", "a => [a.getAttribute('href'), a.target, a.rel, a.textContent]")
     check(link == [site + "dev/api.html", "_blank", "noopener", "API reference"],
@@ -2765,7 +2765,7 @@ WVER_CASES = [("v1.0.0", ["1.0.0", False]), ("v1.0.0-3-gabc1234-dirty", ["1.0.0"
 
 def release_site(root: Path):
     """The project site's /install/, faked: static files with
-    `Access-Control-Allow-Origin: *` as GitHub Pages sends it, except under
+    `Access-Control-Allow-Origin: *` as the site sends it, except under
     /nocors/. Returns the server and the paths it was asked for."""
     asked: list[str] = []
 
@@ -3827,7 +3827,7 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_timeout(400)
     shot(page, "formulas-share", "laptop")
     page.keyboard.press("Escape")
-    check(demo.startswith("https://opendmd.github.io/f/#formula=") and url.startswith(base + "/#formula=") and "&a=0.75" in url
+    check(demo.startswith("https://opendmd.dev/f/#formula=") and url.startswith(base + "/#formula=") and "&a=0.75" in url
           and len(url) < 200 and demo[demo.index("#"):] == url[url.index("#"):] and sub == demo + "&submit",
           f"formulas: share links, the formula's page on the site first ({demo}, {url}), Submit to the gallery")
     other = new_page(browser, "laptop", errors)
