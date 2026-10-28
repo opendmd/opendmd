@@ -276,10 +276,6 @@ prepares. More than 256 colours is recorded as playing as it is (above).
   count as done. Stock card, 16 jobs, loaded host: 11,001 copies
   identical, 38 playing as they are (`done: 11039 of 11047`); 8 GIFs
   neither decoder can play get no copy.
-- The site's "Set up a card" page (`/card/`) writes the same copies from
-  the DMDoS pack's zip, but a browser can't set mtimes: its copies don't
-  carry their GIF's mtime, so a later `opendmd-pack convert` on that card
-  re-encodes every one (to the same bytes).
 - `cargo run --release --example encodeprobe -- [--heap] [--out <root>]
   <gifs-dir>` (in `opendmd-core`) — the in-memory and streaming encoders
   against each other over every file, and the streaming one's peak heap.

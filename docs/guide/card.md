@@ -6,11 +6,10 @@ also keeps working with DMDoS.
 
 OpenDMD doesn't come with any GIFs. A card you set up for DMDoS works as
 it is, and the DMDoS GIF pack (**DMDos GUI v1 + GIFs**) is in the Software
-section of [dmdos.net](https://dmdos.net/): copy it onto a FAT32 card as
-dmdos.net describes, or let [Set up a card](card-setup.md) write it to the
-card from your browser, every GIF ready to play from the first boot. You
-can also add your own GIFs from the [Library](web-app.md#library), or make
-some with [Create Art](create-art.md).
+section of [dmdos.net](https://dmdos.net/). To set up a card, format it
+FAT32 and copy your DMDoS card, or the DMDoS GIF pack, onto it as it is.
+You can also add your own GIFs from the [Library](web-app.md#library), or
+make some with [Create Art](create-art.md).
 
 ## What's on a card
 
@@ -85,9 +84,9 @@ format a card as FAT32 too, as dmdos.net suggests for its pack.
 To move a DMDoS collection to a new card, copy the `gifs` folder and the
 `filelist` files from the old card to the new one with a computer.
 
-Take your time when you first fill a card: the player makes a lighter copy
-of each GIF in the background, mostly while the panel is off at night, so
-a big collection plays at its smoothest after a night or two.
+Take your time when you first fill a card: the player gets each GIF ready
+by itself, mostly while the panel is off at night, so a big collection
+plays at its smoothest after a night or two.
 
 ## If a card starts failing
 

@@ -46,8 +46,8 @@ from the Software section of [dmdos.net](https://dmdos.net/).
    (OpenDMD joins 2.4 GHz networks that are open or take one password,
    WPA2 or WPA3; not "enterprise" networks that ask for a username too.)
 
-    No GIFs on your card yet? [Set up a card](card-setup.md) from the
-    DMDoS GIF pack, in your browser.
+    No GIFs on your card yet? Format it FAT32 and copy your DMDoS card, or
+    the DMDoS GIF pack, onto it as it is: see [The SD card](card.md).
 
 > **Connection problems?**
 >
