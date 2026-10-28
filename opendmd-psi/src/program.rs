@@ -1381,8 +1381,10 @@ pub(crate) const LANE_TURN_NS: u64 = 300;
 pub(crate) const LANE_READ_NS: u64 = 70;
 /// A draw lane step without a lane loop of its own (`vm::lane_draw`'s
 /// other steps, worked out turn by turn by the scalar functions): the
-/// call and its dispatch a turn, ns (a guess).
-pub(crate) const LANE_EVAL_NS: u32 = 350;
+/// calls and their dispatch a turn, ns (s3probe-a, 2026-10-28: `noise`,
+/// `digit`, `sqrt` and `step` in a loop of 1,024, 5,270 µs over the base;
+/// ~510 a step over their `value_ns`. It was a guess of 350.)
+pub(crate) const LANE_EVAL_NS: u32 = 500;
 
 /// Whether `vm::lane_draw` runs step `c` with a lane loop (else turn by
 /// turn): its list, kept in step with it.

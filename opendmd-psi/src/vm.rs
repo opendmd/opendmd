@@ -1181,13 +1181,16 @@ fn lane_op<const N: usize>(
 /// loop. `false` when its operands are not of the kinds the kernel takes
 /// (then its steps run).
 ///
-/// In flash since psi-speed3 (it was IRAM, 2,344 B): this is the planner,
-/// once a lane of pixels (its operands decoded, a colour's table worked
-/// out); the loops it calls, once a pixel, are IRAM functions of their own
-/// (`fast2`, `fast1_self`, `out1`, `pal_select_lanes`, `ink_direct`).
+/// In IRAM, like the frame loop that calls it a lane per run. psi-speed3
+/// put it in flash (it was 2,344 B of IRAM) and s3probe-a measured
+/// Rotozoom floor's VM frame at 3,843 µs against 1,618 (its steps 2,542,
+/// the same runs fused): the flash cache's layout, not the work, so back
+/// here. Smaller instead: its operands are decoded by one out-of-line
+/// copy of `Scratch::arg` ([`arg_at`]) rather than a dozen inlined ones.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn fused<const N: usize>(
     s: &mut Scratch<N>,
     al: &mut Alias,
@@ -1215,9 +1218,11 @@ fn fused<const N: usize>(
                 }
                 _ => return false,
             };
-            let (Arg::Lane(x), Arg::Lane(y), Arg::Sc(m)) =
-                (s.arg(al, x, base), s.arg(al, y, base), s.arg(al, m, base))
-            else {
+            let (Arg::Lane(x), Arg::Lane(y), Arg::Sc(m)) = (
+                arg_at(s, al, x, base),
+                arg_at(s, al, y, base),
+                arg_at(s, al, m, base),
+            ) else {
                 return false;
             };
             let d = s.dest(al, dst);
@@ -1227,15 +1232,15 @@ fn fused<const N: usize>(
         }
         (F_SELPAL | F_SELPAL_K, [sel, col]) => {
             let (Arg::Lane(c), Arg::Sc(va), Arg::Sc(vb)) = (
-                s.arg(al, sel.a, base),
-                s.arg(al, sel.b, base),
-                s.arg(al, sel.c, base),
+                arg_at(s, al, sel.a, base),
+                arg_at(s, al, sel.b, base),
+                arg_at(s, al, sel.c, base),
             ) else {
                 return false;
             };
             let p = palette(t, own, col.d & code::PAL_MASK);
             let shift = (col.d & !code::PAL_SCALED) >> code::PAL_SHIFT;
-            let k = match (col.d & code::PAL_SCALED != 0, s.arg(al, col.c, base)) {
+            let k = match (col.d & code::PAL_SCALED != 0, arg_at(s, al, col.c, base)) {
                 (false, _) => ONE,
                 (true, Arg::Sc(k)) => k >> shift,
                 (true, Arg::Lane(k)) => {
@@ -1248,10 +1253,10 @@ fn fused<const N: usize>(
             out1(px, L(c), move |c| if c != 0 { ca } else { cb });
         }
         (F_PICKPAL, [pk, col]) => {
-            let Arg::Lane(m) = s.arg(al, pk.a, base) else {
+            let Arg::Lane(m) = arg_at(s, al, pk.a, base) else {
                 return false;
             };
-            let k = match (col.d & code::PAL_SCALED != 0, s.arg(al, col.c, base)) {
+            let k = match (col.d & code::PAL_SCALED != 0, arg_at(s, al, col.c, base)) {
                 (false, _) => ONE,
                 (true, Arg::Sc(k)) => k >> ((col.d & !code::PAL_SCALED) >> code::PAL_SHIFT),
                 (true, Arg::Lane(_)) => return false,
@@ -1287,11 +1292,11 @@ fn fused<const N: usize>(
         // instead of two (psi-speed3: −134 B of IRAM, ~1 instruction a
         // pixel more for a `mul_n`).
         (F_MADD, [mul, add]) => {
-            let (a, b) = match (s.arg(al, mul.a, base), s.arg(al, mul.b, base)) {
+            let (a, b) = match (arg_at(s, al, mul.a, base), arg_at(s, al, mul.b, base)) {
                 (Arg::Lane(a), Arg::Sc(b)) | (Arg::Sc(b), Arg::Lane(a)) => (a, b),
                 _ => return false,
             };
-            let c = s.arg(al, if add.a == mul.d { add.b } else { add.a }, base);
+            let c = arg_at(s, al, if add.a == mul.d { add.b } else { add.a }, base);
             let own = core::ptr::eq(a, s.lanes[reg_index(add.d)].as_ptr());
             let d = s.dest(al, add.d);
             match c {
@@ -1307,6 +1312,15 @@ fn fused<const N: usize>(
         _ => return false,
     }
     true
+}
+
+/// `Scratch::arg` out of line, in IRAM: the fused runs' operands (a few a
+/// lane each), one copy for all of [`fused`]'s arms.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+fn arg_at<const N: usize>(s: &Scratch<N>, al: &Alias, v: u8, base: usize) -> Arg {
+    s.arg(al, v, base)
 }
 
 /// The colours of palette entries `v` scaled by `k` (`pal_lit` of each;
