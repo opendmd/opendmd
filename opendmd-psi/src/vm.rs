@@ -82,8 +82,8 @@ pub fn q16(num: i32, den: i32) -> i32 {
 /// valid one.
 pub struct Scratch<const N: usize> {
     /// `[0]` is the `i` lane, then the [`REGS`] registers.
-    lanes: [[i32; N]; REGS + 1],
-    sc: [i32; MAX_SCALARS],
+    pub(crate) lanes: [[i32; N]; REGS + 1],
+    pub(crate) sc: [i32; MAX_SCALARS],
     xs: [i32; W],
     pxs: [i32; W],
 }
@@ -531,7 +531,29 @@ pub fn render_rows_still<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
-    frame::<N>(prog, scratch, ink, still, inputs, tables, under, rows, out)
+    frame::<N>(
+        prog, scratch, ink, still, inputs, tables, under, rows, out, true,
+    )
+}
+
+/// [`render_rows_ink`] with every draw loop run a turn at a time (as before
+/// draw loops ran as lanes, `draw::run`): the same bytes, for the tests
+/// that compare the two.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn render_rows_ink_turns<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    ink: Option<&mut Ink>,
+    inputs: &Inputs,
+    tables: &Tables,
+    under: Option<&[u8]>,
+    rows: u32,
+    out: &mut [u8],
+) {
+    frame::<N>(
+        prog, scratch, ink, None, inputs, tables, under, rows, out, false,
+    )
 }
 
 /// [`render_rows_still`]'s body: one copy whoever calls it, and on the
@@ -552,6 +574,7 @@ fn frame<const N: usize>(
     under: Option<&[u8]>,
     rows: u32,
     out: &mut [u8],
+    lanes: bool,
 ) {
     #[cfg(feature = "stats")]
     stats::stamp(1);
@@ -593,7 +616,7 @@ fn frame<const N: usize>(
     let ink: Option<&Ink> = match ink {
         Some(k) if prog.draws() => {
             if rows == u32::MAX {
-                crate::draw::run(prog, &mut scratch.sc, tables, k);
+                crate::draw::run(prog, scratch, tables, k, lanes);
             }
             Some(k)
         }
@@ -692,6 +715,31 @@ fn frame<const N: usize>(
                     }
                     continue;
                 }
+                if op.code == code::FUSE {
+                    // A fused run (`crate::fuse`): its kernel on a frame
+                    // that runs the narrowed steps, else its steps.
+                    let n = op.a as usize;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if narrow
+                        && fused(
+                            scratch,
+                            &mut alias,
+                            op.d,
+                            &prog.ops[(k + 1).min(pe)..(k + 1 + n).min(pe)],
+                            base,
+                            tables,
+                            &own,
+                            px,
+                            il,
+                        )
+                    {
+                        k += 1 + n;
+                        continue;
+                    }
+                    let _ = n;
+                    k += 1;
+                    continue;
+                }
                 if code::is_colour(op.code) {
                     colour_step(scratch, &alias, op, base, tables, &own, px);
                 } else {
@@ -756,15 +804,26 @@ fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n: u8, at: u
 
 #[inline(always)]
 pub(crate) fn scalar(sc: &mut [i32; MAX_SCALARS], op: &Op, t: &Tables, tabs: &[i32; MAX_TABLE]) {
+    let v = scalar_value(sc, op, t, tabs);
+    sc[(op.d & 0x7f) as usize] = v;
+}
+
+/// What a scalar step works out (`scalar` stores it in its `d`).
+#[inline(always)]
+pub(crate) fn scalar_value(
+    sc: &[i32; MAX_SCALARS],
+    op: &Op,
+    t: &Tables,
+    tabs: &[i32; MAX_TABLE],
+) -> i32 {
     // Operands of scalar steps are always scalar slots (< 128).
     let g = |v: u8| sc[(v & 0x7f) as usize];
-    let v = match op.code {
+    match op.code {
         code::TAB => tab(tabs, op.b, op.c, g(op.a)),
         code::SPR => spr(tabs, op.c, g(op.a), g(op.b)),
         code::NOISE_O..=code::NOISE_O_LAST => noise_o(g(op.a), g(op.b), g(op.c), sc, op.code),
         _ => eval(op.code, g(op.a), g(op.b), g(op.c), Some(t)),
-    };
-    sc[(op.d & 0x7f) as usize] = v;
+    }
 }
 
 /// A wide noise of the small parts `x y z` with noise context `code -
@@ -845,6 +904,16 @@ pub(crate) fn wide_step(sc: &mut [i32; MAX_SCALARS], w: &mut [i32], op: &Op) {
 }
 
 impl<const N: usize> Scratch<N> {
+    /// Register operand `v`'s own lane, to be written (no longer read from
+    /// a still cache's lane).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[inline(always)]
+    fn dest(&mut self, al: &mut Alias, v: u8) -> &mut [i32; N] {
+        let di = reg_index(v);
+        al[di] = core::ptr::null();
+        &mut self.lanes[di]
+    }
+
     /// The operand `v` for the lane at column `base`.
     #[inline(always)]
     fn arg(&self, al: &Alias, v: u8, base: usize) -> Arg {
@@ -866,7 +935,101 @@ impl<const N: usize> Scratch<N> {
     }
 }
 
+/// One step of a draw loop's body run as lanes (`draw::run_lanes`: a lane
+/// a turn), in flash. The steps a drawing's values mostly are
+/// (`program::lane_loop`'s list, which must name these arms) go through
+/// the lane loops the frame loop already has (the same instantiations: no
+/// code added to IRAM); the rest are worked out turn by turn with the
+/// scalar steps' own functions ([`value_of`]: what a turn at a time runs).
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+pub(crate) fn lane_draw<const N: usize>(
+    s: &mut Scratch<N>,
+    op: &Op,
+    t: &Tables,
+    tabs: &[i32; MAX_TABLE],
+) {
+    use code::*;
+    let al: Alias = [core::ptr::null(); REGS + 1];
+    let (a, b, c) = (
+        s.arg(&al, op.a, 0),
+        s.arg(&al, op.b, 0),
+        s.arg(&al, op.c, 0),
+    );
+    let Scratch { lanes, sc, .. } = s;
+    let d: &mut [i32; N] = &mut lanes[reg_index(op.d)];
+    match op.code {
+        ADD => bin!(fast2, d, a, b, fixed::add),
+        SUB => bin!(fast2, d, a, b, fixed::sub),
+        MUL => bin!(fast2, d, a, b, fixed::mul),
+        DIV => bin!(run2, d, a, b, fixed::div),
+        LT => bin!(fast2, d, a, b, fixed::lt),
+        GT => bin!(fast2, d, a, b, fixed::gt),
+        AND => bin!(fast2, d, a, b, fixed::and),
+        OR => bin!(fast2, d, a, b, fixed::or),
+        MIN => bin!(fast2, d, a, b, fixed::min),
+        MAX => bin!(fast2, d, a, b, fixed::max),
+        HASH => bin!(run2, d, a, b, fixed::hash),
+        ABS => un!(fast1, d, a, fixed::abs),
+        FLOOR => un!(fast1, d, a, fixed::floor),
+        FRAC => un!(fast1, d, a, fixed::frac),
+        SELECT => tern!(fast3, d, a, b, c, fixed::select),
+        CLAMP => tern!(fast3, d, a, b, c, fixed::clamp),
+        _ => {
+            let mut one = [0i32; 3];
+            let mut p = [core::ptr::null::<i32>(); 3];
+            let mut stride = [0usize; 3];
+            for (k, x) in [a, b, c].into_iter().enumerate() {
+                match x {
+                    Arg::Lane(q) => (p[k], stride[k]) = (q, 1),
+                    Arg::Sc(v) => one[k] = v,
+                }
+            }
+            for k in 0..3 {
+                if stride[k] == 0 {
+                    p[k] = &one[k];
+                }
+            }
+            for o in d.iter_mut() {
+                // SAFETY: as `glyph_lane`'s (the destination is never one
+                // of the lanes read: `run_lanes` sees to it).
+                let (x, y, z) = unsafe { (*p[0], *p[1], *p[2]) };
+                *o = value_of(op, x, y, z, sc, t, tabs);
+                for k in 0..3 {
+                    p[k] = p[k].wrapping_add(stride[k]);
+                }
+            }
+        }
+    }
+}
+
+/// A step's value of the operand values `x y z` as the scalar steps work
+/// it out (`scalar_value`'s, the slots read already): a draw loop's step
+/// turn by turn ([`lane_draw`]).
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+fn value_of(
+    op: &Op,
+    x: i32,
+    y: i32,
+    z: i32,
+    sc: &[i32; MAX_SCALARS],
+    t: &Tables,
+    tabs: &[i32; MAX_TABLE],
+) -> i32 {
+    use code::*;
+    match op.code {
+        SHR => x >> (op.c & 31),
+        PICK => pick(sc, op.b, op.c, x),
+        TAB => tab(tabs, op.b, op.c, x),
+        SPR => spr(tabs, op.c, x, y),
+        NOISE_O..=NOISE_O_LAST => noise_o(x, y, z, sc, op.code),
+        c => eval(c, x, y, z, Some(t)),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 fn lane_op<const N: usize>(
     s: &mut Scratch<N>,
     al: &mut Alias,
@@ -977,6 +1140,227 @@ fn lane_op<const N: usize>(
         U_R..=U_L => load_under(d, under, op.code - U_R),
         INK => load_ink(d, ink),
         _ => {}
+    }
+}
+
+/// A fused run's kernel (`crate::fuse`) for the lane at `base`: the value
+/// its last step writes (or the pixels its colour writes) as its steps
+/// would leave it — the same `fixed` functions in the same order, in one
+/// loop. `false` when its operands are not of the kinds the kernel takes
+/// (then its steps run).
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+fn fused<const N: usize>(
+    s: &mut Scratch<N>,
+    al: &mut Alias,
+    kind: u8,
+    ops: &[Op],
+    base: usize,
+    t: &Tables,
+    own: &Pals,
+    px: &mut [[u8; 3]],
+    ink: Option<&[u8]>,
+) -> bool {
+    use crate::fuse::*;
+    match (kind, ops) {
+        (F_CHECKER, [fx, fy, _, m]) => {
+            let (Arg::Lane(x), Arg::Lane(y), Arg::Sc(m)) = (
+                s.arg(al, fx.a, base),
+                s.arg(al, fy.a, base),
+                s.arg(al, m.b, base),
+            ) else {
+                return false;
+            };
+            let d = s.dest(al, ops[3].d);
+            fast2(d, L(x), L(y), move |x, y| {
+                fixed::mask(fixed::add_w(fixed::floor(x), fixed::floor(y)), m)
+            });
+        }
+        (F_CHECKER3, [fy, add, m]) => {
+            let r = if add.a == fy.d { add.b } else { add.a };
+            let (Arg::Lane(y), Arg::Lane(r), Arg::Sc(m)) = (
+                s.arg(al, fy.a, base),
+                s.arg(al, r, base),
+                s.arg(al, m.b, base),
+            ) else {
+                return false;
+            };
+            let d = s.dest(al, ops[2].d);
+            fast2(d, L(r), L(y), move |r, y| {
+                fixed::mask(fixed::add_w(r, fixed::floor(y)), m)
+            });
+        }
+        (F_SELPAL | F_SELPAL_K, [sel, col]) => {
+            let (Arg::Lane(c), Arg::Sc(va), Arg::Sc(vb)) = (
+                s.arg(al, sel.a, base),
+                s.arg(al, sel.b, base),
+                s.arg(al, sel.c, base),
+            ) else {
+                return false;
+            };
+            let p = palette(t, own, col.d & code::PAL_MASK);
+            let shift = (col.d & !code::PAL_SCALED) >> code::PAL_SHIFT;
+            let k = match (col.d & code::PAL_SCALED != 0, s.arg(al, col.c, base)) {
+                (false, _) => ONE,
+                (true, Arg::Sc(k)) => k >> shift,
+                (true, Arg::Lane(k)) => {
+                    let idx = [fixed::pal_index(va), fixed::pal_index(vb)];
+                    pal_select_lanes(px, c, k, p, idx, shift);
+                    return true;
+                }
+            };
+            let [ca, cb] = colours(p, [va, vb], k);
+            out1(px, L(c), move |c| if c != 0 { ca } else { cb });
+        }
+        (F_PICKPAL, [pk, col]) => {
+            let Arg::Lane(m) = s.arg(al, pk.a, base) else {
+                return false;
+            };
+            let k = match (col.d & code::PAL_SCALED != 0, s.arg(al, col.c, base)) {
+                (false, _) => ONE,
+                (true, Arg::Sc(k)) => k >> ((col.d & !code::PAL_SCALED) >> code::PAL_SHIFT),
+                (true, Arg::Lane(_)) => return false,
+            };
+            let n = (pk.c as usize).min(PICK_MAX);
+            let tbl = pick_colours(&s.sc, pk, palette(t, own, col.d & code::PAL_MASK), k);
+            out1(px, L(m), move |m| {
+                let i = m >> 16;
+                // (Outside the choices a pick is 0: its colour last.)
+                tbl[if (i as u32) < n as u32 {
+                    i as usize
+                } else {
+                    PICK_MAX
+                }]
+            });
+        }
+        (F_INK1, [_, col]) => match (col.code, ink) {
+            (code::OUT_PAL, Some(k)) => {
+                let p = palette(t, own, col.d & code::PAL_MASK);
+                ink_direct(px, k, |b| fixed::pal(p, fixed::byte(b)))
+            }
+            (_, Some(k)) => ink_direct(px, k, |b| {
+                let g = fixed::chan(fixed::byte(b));
+                [g, g, g]
+            }),
+            _ => return false,
+        },
+        (F_MADD, [mul, add]) => {
+            let (a, b) = match (s.arg(al, mul.a, base), s.arg(al, mul.b, base)) {
+                (Arg::Lane(a), Arg::Sc(b)) | (Arg::Sc(b), Arg::Lane(a)) => (a, b),
+                _ => return false,
+            };
+            let c = s.arg(al, if add.a == mul.d { add.b } else { add.a }, base);
+            let w = mul.code == code::MUL_W;
+            let own = core::ptr::eq(a, s.lanes[reg_index(add.d)].as_ptr());
+            let d = s.dest(al, add.d);
+            match (w, c) {
+                // (Into the lane multiplied: read and written in place.)
+                (true, Arg::Sc(c)) if own => {
+                    fast1_self(d, move |a| fixed::add_w(fixed::mul_w(a, b), c))
+                }
+                (false, Arg::Sc(c)) if own => {
+                    fast1_self(d, move |a| fixed::add_w(fixed::mul_n(a, b), c))
+                }
+                _ if own => return false,
+                (true, Arg::Sc(c)) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_w(a, b), c)),
+                (true, Arg::Lane(c)) => fast2(d, L(a), L(c), move |a, c| {
+                    fixed::add_w(fixed::mul_w(a, b), c)
+                }),
+                (false, Arg::Sc(c)) => fast1(d, L(a), move |a| fixed::add_w(fixed::mul_n(a, b), c)),
+                (false, Arg::Lane(_)) => return false,
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// The colours of palette entries `v` scaled by `k` (`pal_lit` of each;
+/// `k` = 1: the entries' bytes, as `pal`), once a lane for a fused colour:
+/// in flash, out of the frame loop's IRAM.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+fn colours(p: &[[u8; 3]; 32], v: [i32; 2], k: i32) -> [[u8; 3]; 2] {
+    v.map(|v| fixed::scale_rgb(p[fixed::pal_index(v)], k))
+}
+
+/// A fused `pal(P, pick(m, …)) * k`'s colours (`colours`): each choice's,
+/// then (at `PICK_MAX`) the colour of 0, a pick's value outside them.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline(never)]
+fn pick_colours(
+    sc: &[i32; MAX_SCALARS],
+    pk: &Op,
+    p: &[[u8; 3]; 32],
+    k: i32,
+) -> [[u8; 3]; crate::fuse::PICK_MAX + 1] {
+    let n = (pk.c as usize).min(crate::fuse::PICK_MAX);
+    let mut tbl = [[0u8; 3]; crate::fuse::PICK_MAX + 1];
+    for (i, c) in tbl.iter_mut().enumerate() {
+        let v = if i < n {
+            pick(sc, pk.b, pk.c, (i as i32) << 16)
+        } else {
+            0
+        };
+        *c = fixed::scale_rgb(p[fixed::pal_index(v)], k);
+    }
+    tbl
+}
+
+/// `pal(P, select(c, A, B)) * k` along the lane (`crate::fuse`'s
+/// `F_SELPAL`, k a lane): entry `idx[0]` where c is not 0, else `idx[1]`,
+/// each choice's last scale and colour kept (`pal_lit_lanes`' reuse, one
+/// for each).
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn pal_select_lanes(
+    px: &mut [[u8; 3]],
+    c: *const i32,
+    k: *const i32,
+    p: &[[u8; 3]; 32],
+    idx: [usize; 2],
+    shift: u8,
+) {
+    // (A scale of i32::MIN is ≤ 0: black, the colour kept to start with.)
+    let mut last = [i32::MIN; 2];
+    let mut rgb = [[0u8; 3]; 2];
+    for (j, o) in px.iter_mut().enumerate() {
+        // SAFETY: `c` and `k` are lanes of at least `px.len()` values,
+        // alive for the call.
+        let (c, k) = unsafe { (*c.add(j), *k.add(j)) };
+        let w = usize::from(c == 0);
+        let s = k >> shift;
+        if s != last[w] {
+            last[w] = s;
+            rgb[w] = fixed::scale_rgb(p[idx[w]], s);
+        }
+        *o = rgb[w];
+    }
+}
+
+/// [`fast1`] of a lane into itself (a fused run whose result goes into the
+/// register it reads, `crate::fuse`).
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn fast1_self<const N: usize>(d: &mut [i32; N], f: impl Fn(i32) -> i32) {
+    for o in d.as_chunks_mut::<4>().0 {
+        let x = *o;
+        *o = [f(x[0]), f(x[1]), f(x[2]), f(x[3])];
+    }
+}
+
+/// `f` of each byte of the canvas along the lane (`crate::fuse`'s
+/// `F_INK1`: `pal(P, ink)`, `gray(ink)`).
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+#[inline(never)]
+fn ink_direct(px: &mut [[u8; 3]], ink: &[u8], f: impl Fn(u8) -> [u8; 3]) {
+    for (o, &b) in px.iter_mut().zip(ink) {
+        *o = f(b);
     }
 }
 

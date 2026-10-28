@@ -26,6 +26,7 @@ extern crate alloc;
 mod compile;
 mod draw;
 pub mod fixed;
+mod fuse;
 pub mod look;
 mod program;
 mod range;
@@ -34,8 +35,8 @@ mod tables;
 mod vm;
 
 pub use compile::{
-    compact, compile_into, compile_layout, compile_opts, compile_with, number, Error, Info,
-    MAX_DEPTH, MAX_NODES, MAX_SOURCE,
+    compact, compile_into, compile_layout, compile_opts, compile_unfused, compile_with, number,
+    Error, Info, MAX_DEPTH, MAX_NODES, MAX_SOURCE,
 };
 pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
@@ -46,7 +47,8 @@ pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
 #[cfg(feature = "stats")]
 pub use vm::stats;
 pub use vm::{
-    q16, render_rows, render_rows_ink, render_rows_still, render_with, Inputs, Scratch, Q16_ONE,
+    q16, render_rows, render_rows_ink, render_rows_ink_turns, render_rows_still, render_with,
+    Inputs, Scratch, Q16_ONE,
 };
 
 /// The lane width the effect uses: one panel row.

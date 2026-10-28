@@ -306,7 +306,7 @@ pub(crate) fn narrow(prog: &mut Program) {
     };
     for slot in &mut ops[re.min(pe)..pe] {
         let mut op = *slot;
-        if code::is_colour(op.code) || matches!(op.code, STILL | COLUMN) {
+        if code::is_colour(op.code) || matches!(op.code, STILL | COLUMN | FUSE) {
             continue;
         }
         if op.d & LANE == 0 || op.d & !LANE < L_REG0 {
