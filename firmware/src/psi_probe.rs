@@ -1318,7 +1318,9 @@ pub fn run(root: &str) {
     }
     // psi-speed2's fused runs: each pattern alone, as compiled (fused) and
     // without the markers (its steps), for `fuse::saved`.
-    const FUSE_STEPS: [(&str, &str); 9] = [
+    const FUSE_STEPS: [(&str, &str); 11] = [
+        ("mul_add (lane, value)", "v = px*py*0.002\ngray(frac(v*0.7 + t))"),
+        ("mul_add (lane, lane)", "v = px*py*0.002\nww = sin(px*0.1 + py*0.3)\ngray(frac(v*0.7 + ww))"),
         ("checker", "u = px*py*0.01 + t\nv = py*0.7 - px*0.3 + t/2\ngray((floor(u) + floor(v)) % 2)"),
         ("checker_3", "gray((floor(px*0.37 + py*0.2 + t) + floor(py*0.5 - px*0.13)) % 2)"),
         ("pal_select (row scale)", "cc = (floor(px*py*0.01 + t) + floor(py*0.3 - px*0.2)) % 2\npal(fire, cc ? 0.3 : 0.7) * (py/31)"),
