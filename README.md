@@ -78,9 +78,9 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
   picture. Frame it, recolour it, add text, trim frames, and save it as a GIF ready for the panel.
 - **Smooth motion:** adds the in-between frames to GIFs that move in jerky steps, without
   changing the file.
-- **Live items and effects:** a clock, scrolling text, a tunnel, Mode 7 rotozoom, a starfield
-  and wireframe shapes, all drawn on the panel and usable in any playlist.
-- **Formulas:** a few lines of maths that draw the panel's pixels: plasma, fire, rain, a clock.
+- **Live items:** a clock and scrolling text, drawn on the panel and usable in any playlist.
+- **Formulas:** a few lines of maths that draw the panel's pixels: plasma, fire, rain, a clock, and the
+  demo-scene classics (a tunnel, Mode 7 rotozoom, a starfield, a wireframe cube).
   Remix an example, drag a number and watch, share it as a link, or save it as a GIF.
 - **Looks:** full colour or a single amber, red, green, blue or white, with optional phosphor glow.
 - **Schedules:** a playlist or brightness for parts of the week, and a night mode that turns the
@@ -93,12 +93,12 @@ From source: `make fw-release && make flasher` (see [For developers](docs/develo
 | Library | Create Art |
 | --- | --- |
 | ![The Library, with a GIF's details playing](docs/images/library.png) | ![Create Art with a picture loaded: Frame, Look, Text, Preview and Save](docs/images/create-art.png) |
-| **Now playing** | **Effects** |
-| ![The Now view, previewing what the panel plays](docs/images/now.png) | ![A tunnel effect and its options](docs/images/effects.png) |
+| **Now playing** | **Formulas** |
+| ![The Now view, previewing what the panel plays](docs/images/now.png) | ![Formulas: the examples, and Plasma playing in its details](docs/images/formulas.png) |
 | **Playlists** | **On a phone** |
 | ![A playlist open in the editor](docs/images/playlists.png) | <img src="docs/images/phone-library.png" width="300" alt="The Library on a phone"> |
 
-The demo card in these screenshots holds the panel's own effects and the
+The demo card in these screenshots holds OpenDMD's own Formulas and the
 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0);
 `make screenshots` takes them again (`tools/screenshots.py`).
 
@@ -108,8 +108,8 @@ The documentation is also at **[opendmd.github.io](https://opendmd.github.io/)**
 
 - [What you need](docs/guide/hardware.md), [Install](docs/guide/install.md) and
   [Updating](docs/guide/updating.md)
-- [The web app](docs/guide/web-app.md), [Create Art](docs/guide/create-art.md),
-  [Effects and live items](docs/guide/effects.md) and [Formulas](docs/guide/formulas.md)
+- [The web app](docs/guide/web-app.md), [Create Art](docs/guide/create-art.md)
+  and [Formulas](docs/guide/formulas.md)
 - [The SD card](docs/guide/card.md): where GIFs go and how their names are read
 - [Troubleshooting](docs/guide/troubleshooting.md)
 - [For developers](docs/developers.md): building from source, the crates, the
@@ -139,5 +139,5 @@ the player itself carry them (Settings › Device › About › Open-source lice
 OpenDMD comes with no GIFs. The animations on a DMDoS card are third-party content that this
 project can't relicense or redistribute: get the DMDoS GIF pack from
 [dmdos.net](https://dmdos.net/), or make your own with Create Art. The animations on the
-OpenDMD site are the panel's own effects and live items, recorded from the simulator, and the
+OpenDMD site are OpenDMD's own Formulas and live items, recorded from the simulator, and the
 CC0 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites.

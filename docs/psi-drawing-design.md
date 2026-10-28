@@ -110,6 +110,20 @@ test).** Where it differs from §3.6, §4 and §7.3:
    Formulas (playlist lines up to 2 KB, `&name=` on the path for the
    name): the branch `psi-p2-web`, merged.
 
+**As built (removal, branch `no-fx`, 2026-10-28).** The removal of §7 was done
+in one cut, not by the staged gates of §7.6: the owner decided, and nothing
+was formally released, so there is no compatibility layer. The four natives
+(`@fx:tunnel`, `rotozoom`, `starfield`, `wire`) are gone from the core, the
+firmware, the web app, the tools and the docs; they live only as Formulas.
+**`@fx:psi` was renamed `@formula`** (`@formula?src=…[&a=&b=&c=][&fps=][&name=]`,
+the same query, ≤ 2,048 B). Any other `@fx:` path is retired: skipped with a
+log line in a playlist, `415` from `POST /api/play`. **`attract` has no
+Formula form** (§7.3's recommendation taken): `fx:` is a `400`, a stored one
+reads as `""` with a log line at boot, and a playlist of one Formula chosen as
+`attract_set` does the same. The psi probe never compared a Formula against
+the natives on the device, so there was no probe code to remove. Flash, IRAM
+and DRAM figures: see CLAUDE.md.
+
 ## 1. Options compared
 
 The cost figures use the device's measured per-step costs (`psi-probe`,
@@ -945,6 +959,11 @@ is the comparison tool.
 | 3 | Rotozoom example (one and two layers); `pal()` × value in colour expressions | **Rotozoom:** the same, accepting 25 fps for two layers unless the still cache ships first |
 | 4 | the still cache; Tunnel example | **Tunnel:** the same; the owner decides whether 50 fps against 100 passes |
 | 5 | §7.1's deletions, the devices' playlists cleaned (§7.2), the flash measured in `size-budget.md`; a release note: "The built-in effects are Formulas now: open any of them in Formulas to see how it is written and change it. `@fx:tunnel` and the others are gone." | — |
+
+**As built (2026-10-28, branch `no-fx`):** step 5 was done in one cut with all
+of §7.1: `@fx:psi` is now `@formula`, `attract` has no Formula form, the
+probe had nothing to remove; flash, IRAM and DRAM figures: see CLAUDE.md. The
+staged gates above were not used.
 
 "Close enough" is the owner's eye on the panel, not a pixel diff (the
 hashes and textures differ by design: §4). The comparison fixture — the
