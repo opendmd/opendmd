@@ -84,14 +84,13 @@ format a card as FAT32 too, as dmdos.net suggests for its pack.
 To move a DMDoS collection to a new card, copy the `gifs` folder and the
 `filelist` files from the old card to the new one with a computer.
 
-You don't have to do anything after filling a card: it plays as it is,
-and the player gets each GIF ready by itself so it starts a little faster.
-It does that while the panel is dark at night or the player is paused,
-and only a little while it plays. The whole DMDoS pack is ready after
-about four hours of the panel dark or paused: turn on **Night mode**
-(off, not dimmed) under **Schedule**, or pause the player for a while.
-**Settings** shows how far it has got, and **Prepare remaining files**
-there does the rest from your browser.
+You don't have to do anything after filling a card: it plays fine as it
+is. The player also gets each GIF ready by itself, so it starts a little
+faster, while the panel is dark at night or the player is paused. The
+whole DMDoS pack is ready after about four hours of that: turn on **Night
+mode** (off, not dimmed) under **Schedule** and it happens overnight, or
+pause the player for a while. **Settings** shows how far it has got, and
+**Prepare remaining files** there does the rest from your browser.
 
 ## If a card starts failing
 

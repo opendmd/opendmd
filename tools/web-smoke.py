@@ -121,8 +121,8 @@ every view like a person would:
             folded), Change picture, a failed query's sentence; the
             Library has no web sources, and a search that finds nothing
             there hands its words to Create Art
-  Auto      preparing by the device (auto_prepare, default "always"; the
-            run sets "idle" first): /api/cache `auto` and
+  Auto      preparing by the device (auto_prepare, default "idle"):
+            /api/cache `auto` and
             /api/status `cache` keys; the card's sentence while playing
             ("…when the panel is idle · 0 of 3", plus the ETA if an
             earlier pause let it measure its pace), with the mock paused (its
@@ -2995,11 +2995,9 @@ def mock_pass(browser) -> None:
     errors: list[str] = []
     try:
         print(f"\n== mock device at {base} (overlay {overlay})")
-        # Preparing while playing is the default (as on the device); the
-        # mock's simulated builder would then change the counts the cache
-        # checks expect, so the run plays with "idle" from here on.
-        check(get_json(base + "/api/config")["auto_prepare"] == "always", "auto: auto_prepare defaults to always")
-        put_json(base + "/api/config", {"auto_prepare": "idle"})
+        # Preparing only while the panel is dark or paused is the default
+        # (as on the device); the cache checks rely on it.
+        check(get_json(base + "/api/config")["auto_prepare"] == "idle", "auto: auto_prepare defaults to idle")
         page = new_page(browser, "laptop", errors)
         page.goto(base + "/")
         # Now

@@ -676,7 +676,7 @@ pub const BUILDER_PEAK_MARGIN: u32 = 20 * 1024;
 /// (`player_opening`), and every transfer stops it too.
 pub const BUILDER_MIN_HEAP_FULL: u32 = BUILDER_ENCODER_PEAK + BUILDER_PEAK_MARGIN;
 /// [`BUILDER_MIN_HEAP_FULL`] at the drip pace (`auto_prepare = "always"`,
-/// the default, a prepared file playing): 1.5 KB more, as before, since the
+/// opt-in, a prepared file playing): 1.5 KB more, as before, since the
 /// player's frames and transitions go on beside it (65,664 B; the task
 /// starts at 76,416 B). A prepared file on screen leaves ~74-79 KB free, so
 /// the drip starts only now and then; with an original on screen (56-79 KB

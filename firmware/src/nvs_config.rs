@@ -46,10 +46,7 @@ const KEY_TZ: &str = "tz";
 const KEY_TZ_NAME: &str = "tz_name";
 const KEY_SCHEDULE: &str = "schedule";
 const KEY_TRANSITION: &str = "transition";
-/// `auto_prepare` since the default became `always`
-/// ([`AutoPrepare::from_nvs`]); the old key is only read.
-const KEY_AUTO_PREPARE: &str = "auto_prep";
-const KEY_AUTO_PREPARE_OLD: &str = "auto_prepare";
+const KEY_AUTO_PREPARE: &str = "auto_prepare";
 const KEY_FOLLOW: &str = "follow";
 const KEY_FOLLOW_HOST: &str = "follow_host";
 const KEY_FOLLOW_CODE: &str = "follow_code";
@@ -93,8 +90,7 @@ const KEY_SD_SLOW: &str = "sd_slow";
 const CURRENT_PLAYLIST: &str = "*";
 
 /// When the device prepares its own playback cache (`cache_builder.rs`):
-/// `opendmd_core::auto_prepare`, where the pace and the NVS migration are
-/// tested.
+/// `opendmd_core::auto_prepare`, where the pace and the guard are tested.
 pub use opendmd_core::auto_prepare::AutoPrepare;
 
 /// The largest schedule JSON NVS will hold for us (`PUT /api/schedule`).
@@ -145,7 +141,7 @@ pub struct Settings {
     /// form `Transition::parse` reads; `/api/config` has it as `transition`
     /// + `transition_ms`.
     pub transition: Transition,
-    /// `"always"` (default), `"idle"` or `"off"`: see [`AutoPrepare`].
+    /// `"idle"` (default), `"always"` or `"off"`: see [`AutoPrepare`].
     pub auto_prepare: AutoPrepare,
     /// Follow RePlayOS (`follow.rs`): on/off, the Pi's host (`192.168.1.20`
     /// or `host:port`), and its NET CONTROL code — stored like the WiFi
@@ -397,10 +393,10 @@ impl Config {
                 .get_string(KEY_TRANSITION)
                 .and_then(|s| Transition::parse(&s))
                 .unwrap_or(d.transition),
-            auto_prepare: AutoPrepare::from_nvs(
-                self.get_string(KEY_AUTO_PREPARE).as_deref(),
-                self.get_string(KEY_AUTO_PREPARE_OLD).as_deref(),
-            ),
+            auto_prepare: self
+                .get_string(KEY_AUTO_PREPARE)
+                .and_then(|s| AutoPrepare::parse(&s))
+                .unwrap_or(d.auto_prepare),
             follow: self
                 .nvs
                 .get_u8(KEY_FOLLOW)

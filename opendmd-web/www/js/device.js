@@ -88,9 +88,9 @@ export function deviceTab(el, { f, save, banner, sched, thumbs, live }) {
   const cacheMsg = h('div.muted', { id: 'pc-progress' });
   const cacheErr = h('div.log.bad', { id: 'pc-errors' });
   const cacheSum = h('div', { id: 'pc-summary' });
-  // The device prepares files by itself when idle (auto_prepare): one
-  // sentence, and whether it may also do so, a little, while playing (the
-  // default: only while a prepared file plays).
+  // The device prepares files by itself when idle (auto_prepare, default
+  // "idle"): one sentence, and whether it may also do so, a little, while
+  // playing ("always": only while a prepared file plays).
   const autoLine = h('span', { id: 'pc-auto' });
   const pcH = h('h3', 'Playback cache'), pcRun = saver(pcH);
   const always = h('input', { type: 'checkbox', id: 'pc-always', onchange: () => pcRun(async () => {
