@@ -45,7 +45,7 @@
                an old one; site-publish.sh never deletes art-index/): each
                file is checked to be exactly its format's shape
 - /art/        the landing page's tiles and the wordmark (tools/site-art.py: recordings of the
-               panel's own effects and live items, and CC0 sprites), drawn
+               OpenDMD's own Formulas and live items, and CC0 sprites), drawn
                as LEDs by CSS
 - /dev/api/    the HTTP API as each release described it: v<version>.html, a
                copy of dev/api.html frozen when the site is built from that
@@ -100,7 +100,6 @@ PAGES = {
     "docs/guide/install.md": "install/index.html",
     "docs/guide/web-app.md": "guide/web-app.html",
     "docs/guide/create-art.md": "guide/create-art.html",
-    "docs/guide/effects.md": "guide/effects.html",
     "docs/guide/formulas.md": "guide/formulas.html",
     "docs/guide/card.md": "guide/card.html",
     "docs/guide/updating.md": "guide/updating.html",
@@ -108,7 +107,6 @@ PAGES = {
     "docs/developers.md": "dev/index.html",
     "docs/api.md": "dev/api.html",
     "docs/simulator.md": "dev/simulator.html",
-    "docs/writing-effects.md": "dev/effects.html",
     "hardware/PINOUT.md": "dev/pinout.html",
 }
 # Pages that moved: old published path -> new one, kept as redirects.
@@ -126,6 +124,11 @@ MOVED = {
     "docs/gifslim-experiment.html": "index.html",
     "docs/tweening-experiment.html": "index.html",
     "docs/art-pipeline.html": "index.html",
+    # Retired pages (the built-in effects became Formulas). These were PAGES
+    # targets once; they are not any more, so the redirect pages written for
+    # MOVED are the only files at these paths.
+    "guide/effects.html": "guide/formulas.html",
+    "dev/effects.html": "guide/formulas.html",
 }
 MENU = [
     ("Overview", "index.html"),
@@ -136,7 +139,6 @@ MENU = [
     ("Install", "install/index.html"),
     ("The web app", "guide/web-app.html"),
     ("Create Art", "guide/create-art.html"),
-    ("Effects and live items", "guide/effects.html"),
     ("Formulas", "guide/formulas.html"),
     ("The SD card", "guide/card.html"),
     ("Updating", "guide/updating.html"),
@@ -145,7 +147,6 @@ MENU = [
     ("Building from source", "dev/index.html"),
     ("HTTP API", "dev/api.html"),
     ("The simulator", "dev/simulator.html"),
-    ("Writing an effect", "dev/effects.html"),
     ("Hardware pinout", "dev/pinout.html"),
 ]
 # The installer page: ESP Web Tools, pinned (the flashing itself is
@@ -236,7 +237,7 @@ Device › About › Open-source licences**.
 as `art-index/`); the pictures come from those collections when you search, and are never
 stored on this site.
 
-The demo's and this site's animations are recordings of OpenDMD's own effects, and the
+The demo's and this site's animations are recordings of OpenDMD's own Formulas, and the
 [Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
 """
 
@@ -400,7 +401,7 @@ PAGE = """<!doctype html>
 <footer><p>OpenDMD is an independent, open-source project. It is not made by or affiliated with
 <a href="https://dmdos.net/">DMDoS</a>: the display, its board (by <a href="https://mortaca.com">MORTACA</a>),
 the build guide and the GIF pack all come from dmdos.net. The animations on this site are recordings of
-OpenDMD's own effects and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
+OpenDMD's own Formulas and the CC0 <a href="https://kenney.nl/assets/pixel-platformer">Kenney</a> sprites.
 Code under <a href="{up}LICENSE-MIT.txt">MIT</a> or <a href="{up}LICENSE-APACHE.txt">Apache 2.0</a>;
 <a href="{up}licenses/">third-party licences</a>.</p></footer>
 </div>
@@ -574,8 +575,8 @@ def led(up: str, item: dict, alt: str | None = None, lazy: bool = False, size: t
 def tiles(art: dict) -> str:
     figs = "".join(f'<figure>{led("", i, lazy=True)}<figcaption>{html.escape(i["caption"])}</figcaption></figure>'
                    for i in art["items"] if "tiles" in i["where"])
-    return (f'<div class="tiles">{figs}</div>\n<p class="tiles-note">Recorded from the simulator: the panel\'s own '
-            f'effects and live items, and the CC0 Kenney Pixel Platformer sprites. Bring your own GIFs, or make them '
+    return (f'<div class="tiles">{figs}</div>\n<p class="tiles-note">Recorded from the simulator: OpenDMD\'s own '
+            f'Formulas and live items, and the CC0 Kenney Pixel Platformer sprites. Bring your own GIFs, or make them '
             f'with Create Art.</p>')
 
 

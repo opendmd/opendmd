@@ -142,7 +142,7 @@ card uses as a platform (53 with the multi-token ones: the original 27 plus
 `COLECOVISION`, `INTELLIVISION`, `DREAMCAST`, `XBOX`, `GAMECUBE`, `MAC`,
 `IOS` and `MOBILE`, five of them on a single file, which is why a minimum
 count would not do), `FX` (Create Art's
-recordings of the effects), and a few common systems the card lacks
+recordings of Formulas), and a few common systems the card lacks
 (`3DS`, `SG1000`, `32X`, `PS3`, `PS4`, `VITA`, `NEOGEO`, `JAGUAR`, `3DO`,
 `VECTREX`, `DOS`). A new platform is one line in that list; the web app's
 Platform menus offer exactly the list.
