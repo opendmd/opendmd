@@ -7,6 +7,11 @@
 //! [`inputs_in_range`] checks (`t` within the loop, the sliders 0..1, the
 //! clock's whole hours, minutes and seconds), and rewrites:
 //!
+//! (A slot a `control` line declares is read only through the clamp to its
+//! range that the line made: its raw value is taken as anything, so the
+//! clamp's interval is the range whatever the path says, and the frame
+//! needs no check of it.)
+//!
 //! - `mul(v, 2^-n)` (either order, the power of two a scalar whose range
 //!   is that one value, n 0..=16) as `shr(v, n)`: exactly `v >> n`, the
 //!   scalar kept in `b` so out of range it is `mul(v, b)` again;
@@ -71,11 +76,12 @@ pub(crate) fn inputs_in_range(prog: &Program, i: &Inputs) -> bool {
     // (A `loop forever` formula reads `tw`, never `t`; its wide values
     // come back to Q16.16 only through steps whose ranges hold for any
     // `tw`, and `seed` is 0..1.)
+    let free = prog.meta.declared();
     (prog.forever() || (0..=t_max(prog.loop_ms)).contains(&i.t))
         && (prog.uses & SEEDED == 0 || unit(i.seed))
-        && unit(i.a)
-        && unit(i.b)
-        && unit(i.c)
+        && (free & 1 != 0 || unit(i.a))
+        && (free & 2 != 0 || unit(i.b))
+        && (free & 4 != 0 || unit(i.c))
         && i.hour < 24
         && i.minute < 60
         && i.second < 60
@@ -256,6 +262,12 @@ pub(crate) fn narrow(prog: &mut Program) {
     sc[S_SECOND as usize] = Iv(0, 59 * ONE as i64);
     for s in [S_A, S_B, S_C, S_Y] {
         sc[s as usize] = UNIT;
+    }
+    // A declared slot: anything (only its line's clamp reads it).
+    for k in 0..3 {
+        if prog.meta.declared() & (1 << k) != 0 {
+            sc[(S_A + k as u8) as usize] = FULL;
+        }
     }
     sc[S_PY as usize] = Iv(0, ((H - 1) * ONE as usize) as i64);
     if prog.uses & SEEDED != 0 {

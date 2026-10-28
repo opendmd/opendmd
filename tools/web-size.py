@@ -228,7 +228,18 @@ FONT = {"fonts/silkscreen.woff2"}
 # estimate stays the panel's — the browser runs neither (the steps and a
 # turn at a time draw the same bytes): +2.2 KB gz (~74.9 -> ~77.2 KB).
 # Raised under the brief's OK (it may move a budget with a reason).
-PSI_WASM_GZ_BUDGET = 76 * 1024  # 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 82 KB for formula-apps F1 (2026-10-28, branch formula-f1,
+# docs/research/formula-apps.md): the declarations (`psi 1`, `name`,
+# `about`, `control`, `look`: the header reader, text in quotes, their
+# fifteen sentences), `Meta` and the declared-look composition, and the
+# `controls()` export (the JSON the page builds its sliders and buttons
+# from, so the browser never parses a declaration itself): ~77.2 ->
+# 83,063 B gz (+3.9 KB; formula-apps.md §4 guessed 1-1.5). Raised under the
+# brief's OK (it may move the psi wasm line with a reason).
+# 83 KB after merging main's psi-speed3 follow-ups into formula-f1 (the
+# review's fixes: one finishing pass, codes, E969's character check):
+# 83,842 B gz, 126 B under 82 KB; raised for room, same OK.
+PSI_WASM_GZ_BUDGET = 83 * 1024  # 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
@@ -257,7 +268,14 @@ PSI_WASM_GZ_BUDGET = 76 * 1024  # 74 until psi-speed2; 73 until palettes; 71 unt
 # of comments): 28,435 -> 29,419 B gz. Time gate example; the Formulas split
 # (docs/research/formula-apps.md, pending) will move most examples out of
 # the firmware bundle.
-FORMULAS_GZ_BUDGET = 30 * 1024  # 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
+# 31 KB for formula-apps F1 (2026-10-28, branch formula-f1): psikit.js
+# builds every control from pkg-psi's controls() (control, fit, num) and
+# now holds the path's compact() that psishow's fpath sends (moved from
+# psishow, made to match opendmd_psi::compact exactly: quotes on declaration
+# lines, '"' as a character; a psi-web test runs it under node), the
+# cheat sheet's declaration rows: 29,419 -> 30,985 B gz. formula-apps F3
+# (most examples out of the firmware's formulas.json) gives ~2.5 KB back.
+FORMULAS_GZ_BUDGET = 31 * 1024  # 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}

@@ -10,8 +10,8 @@
 //! Options: `--out FILE.png` (default: the formula's name with .png, or
 //! `formula.png` from stdin; `--out -` for none), `--frames N` (8, spread
 //! over one loop; a still formula gets 1), `--ms 0,250,…` (exact times
-//! instead), `--scale K` (4), `--a`/`--b`/`--c V` (the sliders, 0 to 1;
-//! default 0.5), `--clock HH:MM:SS` (10:09:30), `--over` (draw over the
+//! instead), `--scale K` (4), `--a`/`--b`/`--c V` (the sliders; default a
+//! `control` line's default, 0.5 for one read without), `--clock HH:MM:SS` (10:09:30), `--over` (draw over the
 //! sample picture even if the formula doesn't read it; it is used anyway
 //! whenever it does), `--hash` (each frame's FNV-1a, as the golden tests
 //! print them), `--listing` (the compiled steps), `--seed V` (a `loop
@@ -31,7 +31,7 @@ fn main() {
     let (mut path, mut out, mut frames, mut scale) =
         (None::<String>, None::<String>, 8usize, 4usize);
     let (mut ms_list, mut over, mut hash, mut listing) = (None::<Vec<u32>>, false, false, false);
-    let mut sl = [0.5f64; 3];
+    let mut sl: [Option<f64>; 3] = [None; 3];
     let mut seed = 0f64;
     let mut clock = (10u8, 9u8, 30u8);
     let num = |v: Option<String>, what: &str| -> f64 {
@@ -43,9 +43,9 @@ fn main() {
             "--out" => out = args.next(),
             "--frames" => frames = num(args.next(), "--frames").max(1.0) as usize,
             "--scale" => scale = num(args.next(), "--scale").clamp(1.0, 16.0) as usize,
-            "--a" => sl[0] = num(args.next(), "--a"),
-            "--b" => sl[1] = num(args.next(), "--b"),
-            "--c" => sl[2] = num(args.next(), "--c"),
+            "--a" => sl[0] = Some(num(args.next(), "--a")),
+            "--b" => sl[1] = Some(num(args.next(), "--b")),
+            "--c" => sl[2] = Some(num(args.next(), "--c")),
             "--seed" => seed = num(args.next(), "--seed"),
             "--ms" => {
                 let v = args.next().unwrap_or_default();
@@ -133,6 +133,44 @@ fn main() {
         prog.regs(),
         prog.values()
     );
+    // What it declares (`name`, `control`, `look`).
+    let mut p2 = Box::<opendmd_psi::Program>::default();
+    if let Ok(d) = opendmd_psi::compile_declared(&src, &mut p2) {
+        let text = |r: (u32, u32)| &src[r.0 as usize..r.1 as usize];
+        let mut parts = Vec::new();
+        if let Some(n) = d.name {
+            parts.push(format!("name: {}", text(n)));
+        }
+        let ctl: Vec<String> = (0..3)
+            .filter_map(|k| {
+                let c = d.controls[k]?;
+                let label = c.label.map(|l| format!(" \"{}\"", text(l))).unwrap_or_default();
+                Some(match prog.meta().control(k)? {
+                    opendmd_psi::Control::Choice { .. } => format!(
+                        "{} ({}){label}",
+                        text(c.name),
+                        text(c.words?).split(',').map(str::trim).collect::<Vec<_>>().join("|")
+                    ),
+                    opendmd_psi::Control::Slider { lo, hi, default } => format!(
+                        "{} {}..{} = {}{label}",
+                        text(c.name),
+                        f64::from(lo) / 65536.0,
+                        f64::from(hi) / 65536.0,
+                        f64::from(default) / 65536.0
+                    ),
+                })
+            })
+            .collect();
+        if !ctl.is_empty() {
+            parts.push(format!("controls: {}", ctl.join(", ")));
+        }
+        if let Some((b, k)) = prog.meta().look() {
+            parts.push(format!("look: {b} {k}"));
+        }
+        if !parts.is_empty() {
+            println!("{}", parts.join(" · "));
+        }
+    }
     if prog.draws() {
         println!(
             "draws: {} steps in draw {{ }}, {} lines and dots a frame",
@@ -208,14 +246,20 @@ fn main() {
     let mut still = Still::new();
     still.take(&prog);
     let mut shots = Vec::new();
+    // A slider not given: its control's default, else ½.
+    let slider = |k: usize| match sl[k] {
+        Some(v) => q(v),
+        None if prog.meta().declared() & (1 << k) != 0 => prog.meta().default_value(k),
+        None => q(0.5),
+    };
     for &(ms, (hh, mm, ss)) in &times {
         let mut inp = Inputs {
             hour: hh,
             minute: mm,
             second: ss,
-            a: q(sl[0]),
-            b: q(sl[1]),
-            c: q(sl[2]),
+            a: slider(0),
+            b: slider(1),
+            c: slider(2),
             seed: q(seed),
             ..Inputs::default()
         };

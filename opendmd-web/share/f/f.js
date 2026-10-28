@@ -7,7 +7,7 @@
 // the app's. Everything a link brings is shown as text, never as HTML.
 
 import init from '../demo/pkg/opendmd_web.js';
-import { link, parse, sliderName, choices, picker, about, TIP, est, marks, sample } from '../demo/js/psikit.js';
+import { link, parse, controls, control, fit, Q, about, TIP, est, marks, sample } from '../demo/js/psikit.js';
 import { qr } from './qr.js';
 
 const $ = (id) => document.getElementById(id);
@@ -51,7 +51,10 @@ async function start() {
   const i = ok ? P.info() : [];
   const bad = ok ? null : P.errorAt();
   $('f-code').innerHTML = marks(f.src, bad).html + '\n'; // marks() escapes the text
-  const mask = i[5] || 0;
+  const ctl = ok ? controls(P, f.src) : null;
+  fit(ctl, f);
+  // The slots it declares or reads: the link's values.
+  const mask = (i[5] || 0) | (ctl?.controls || []).reduce((m, c) => m | (1 << 'abc'.indexOf(c.slot)), 0);
   // One that draws over a GIF is shown over the sample picture, as in the app.
   const over = !!(mask & 32);
   if (ok) {
@@ -66,7 +69,6 @@ async function start() {
   // The preview: the frame at a whole number of 20 ms frames into the loop.
   const pv = new PanelPreview($('f-panel'));
   pv.p.setTransition('none', 0);
-  const q = (v) => Math.round((v || 0) * 65536);
   // (A formula that goes on without repeating, loop 0: no wrap.)
   const n = ok && i[4] === 0 ? Infinity : Math.max(1, Math.floor((i[4] || 8000) / D));
   let t0 = performance.now(), last = -1, dirty = true;
@@ -76,7 +78,7 @@ async function start() {
       last = k; dirty = false;
       const d = new Date();
       if (over) new Uint8Array(mem.buffer, P.under(), 12288).set(sample());
-      P[over ? 'frameOver' : 'frame'](k * D, d.getHours(), d.getMinutes(), d.getSeconds(), q(f.a), q(f.b), q(f.c));
+      P[over ? 'frameOver' : 'frame'](k * D, d.getHours(), d.getMinutes(), d.getSeconds(), Q(f.a), Q(f.b), Q(f.c));
       pv.p.showRgb(new Uint8Array(mem.buffer, P.pixels(), 12288));
       $('f-panel').dataset.frames = -~$('f-panel').dataset.frames;
     }
@@ -84,26 +86,8 @@ async function start() {
   };
   requestAnimationFrame(tick);
 
-  // Sliders for the a, b, c it reads; one with choices (`-- a: shape = cube, ball`) is buttons.
-  for (const [j, k] of ['a', 'b', 'c'].entries()) {
-    if (!(mask & (1 << j))) continue;
-    const ch = choices(f.src, k), nm = sliderName(f.src, k);
-    if (ch) {
-      const row = document.createElement('div'), name = document.createElement('span');
-      name.textContent = nm;
-      row.append(name, Object.assign(picker(ch, nm, f[k], (v) => { f[k] = v; dirty = true; links(); }), { id: 'f-sl-' + k }));
-      $('f-sl').append(row);
-      continue;
-    }
-    const out = document.createElement('output');
-    const r = Object.assign(document.createElement('input'), { type: 'range', min: 0, max: 1, step: 0.01, value: f[k] || 0, id: 'f-sl-' + k });
-    out.textContent = (+r.value).toFixed(2);
-    r.oninput = () => { f[k] = +r.value; out.textContent = f[k].toFixed(2); dirty = true; links(); };
-    const lab = document.createElement('label'), name = document.createElement('span');
-    name.textContent = nm;
-    lab.append(name, r, out);
-    $('f-sl').append(lab);
-  }
+  // Its controls (its `control` lines; a 0..1 slider for a, b or c read without one).
+  for (const c of ctl?.controls || []) $('f-sl').append(control(c, f, () => { dirty = true; links(); }, 'f-sl-' + c.slot));
 
   // The links: this page, the demo, the display (the device's own share
   // links open the formula in its editor: `#formula=…`).
@@ -191,7 +175,7 @@ async function start() {
   $('s-name').addEventListener('input', () => { if (!touched) $('s-file').value = slug($('s-name').value); sub(); });
   $('s-author').addEventListener('change', () => store.set('author', $('s-author').value.trim()));
   function file() {
-    const vals = ['a', 'b', 'c'].filter((k, j) => mask & (1 << j) && f[k]).map((k) => `${k}=${+f[k].toFixed(2)}`).join(' ');
+    const vals = ['a', 'b', 'c'].filter((k, j) => mask & (1 << j) && f[k] != null).map((k) => `${k}=${+f[k].toFixed(2)}`).join(' ');
     const src = f.src.replace(/\r\n?/g, '\n').replace(/\n*$/, '\n');
     const v = (id) => $(id).value.trim().replace(/\s+/g, ' ');
     return [`-- name: ${v('s-name')}`, `-- description: ${v('s-desc')}`, `-- author: ${v('s-author')}`,
