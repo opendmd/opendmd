@@ -26,8 +26,8 @@ every view like a person would:
             folders with matches, open, counted), platform chip SNES,
             preview one, send it to the panel; no checkboxes until Select,
             then select three (a row tap picks in Select mode)
-  Tree      a fresh browser, laptop and phone: the folders (Live, Effects,
-            then system ones), ⊟, the keys (↓ → → ↓ Enter ← ←), Consoles'
+  Tree      a fresh browser, laptop and phone: the folders (Live, then
+            system ones; no Effects), ⊟, the keys (↓ → → ↓ Enter ← ←), Consoles'
             3,781 GIFs in a few dozen rows with End reaching the last,
             #library/NEW%202021, Select's folder tick
   Thumbs    a fresh browser, the mock pacing card files (GET /mock/io
@@ -150,16 +150,10 @@ every view like a person would:
             playing), the Now preview wears amber (every bright pixel r > g
             > b; now-amber-laptop.png), back to Full colour / Off; the bad
             look/glow/attract values are 400s
-  Effects   Library -> Effects: the four effects preview and move, each with
-            its options form, an option changes the row's path
-            (library-effects-laptop.png); on the mock: Send to panel, POST
-            /api/play of each (415 for an unknown one), attract "fx:..."
-            validated, an @fx: playlist line survives a save and a reload
-  Save as GIF  Effects -> Save as GIF… opens Create Art with one loop (240
-            frames), titled "Tunnel Fire Rings", FX in Demoscene; trimmed and
-            saved, its frames equal the simulator's and its copy
-            opendmd-pack's, listed in the Library; in the demo (local mode)
-            Download GIF gives the 240 frames
+  No effects  the built-in effects are gone: the Library has the Live folder and
+            no Effects folder, tab or fx- form; on the mock POST /api/play of
+            an @fx: path is a 415 ("Formulas replace them"), attract "fx:.." is
+            a 400, an @fx: line in a playlist is skipped and the rest plays
   Live      Library -> Live: five rows (four clocks and a scrolling text),
             the text form, a preview, the text row following #live-msg;
             Send to panel of the clock and the text (title, frame advancing;
@@ -732,8 +726,7 @@ TREE = "document.querySelector('#lib-list')?._tree"
 
 
 def pick_cat(page: Page, value: str) -> None:
-    """Library: the folder `value` (a directory under gifs/, `@` Live, `@fx`
-    Effects) open at the top, the others closed: `#library/<folder>`, what a
+    """Library: the folder `value` (a directory under gifs/, `@` Live) open at the top, the others closed: `#library/<folder>`, what a
     link to a folder does. A search or a platform chip would filter it: they
     are cleared first."""
     page.evaluate("location.hash = '#library'")
@@ -1397,8 +1390,8 @@ def listing_queue_checks(browser, base: str, errors: list[str]) -> None:
 
 
 def tree_checks(browser, base: str, errors: list[str]) -> None:
-    """The Library's folder tree in a fresh browser: the folders (Live and
-    Effects after the card's, system ones last), ⊟, the keys (↓ → → ↓ Enter
+    """The Library's folder tree in a fresh browser: the folders (Live
+    after the card's, system ones last), ⊟, the keys (↓ → → ↓ Enter
     ← ←), Consoles virtualised (3,781 GIFs, a few dozen rows in the page,
     the last GIF reached by End), a link to a folder, Select's folder tick;
     shots at laptop and phone widths."""
@@ -1410,8 +1403,9 @@ def tree_checks(browser, base: str, errors: list[str]) -> None:
         page.wait_for_function(f"{TREE}.rows.every(r => !r.path)", timeout=5000)
         folders = page.evaluate(f"{TREE}.folders.map(f => [f.cat, f.name])")
         real = [f for f in folders if not f[0].startswith("_")]
-        check(real[-2:] == [["@", "Live"], ["@fx", "Effects"]] and len(real) > 2 and page.locator("#lib-cats, #lib-csel").count() == 0,
-              f"tree [{size}]: the card's folders, then Live and Effects, system ones last; no tabs, no select ({folders[-3:]})")
+        check(real[-1:] == [["@", "Live"]] and len(real) > 2 and not any(f[0] == "@fx" or f[1] == "Effects" for f in folders)
+              and page.locator("#lib-cats, #lib-csel").count() == 0,
+              f"tree [{size}]: the card's folders, then Live, system ones last; no Effects, no tabs, no select ({folders[-3:]})")
         if size == "phone":
             pick_cat(page, "Consoles")
             shot(page, "library-tree", "phone")
@@ -2337,10 +2331,10 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
     goto_view(page, "library")
     page.wait_for_function(f"{TREE}?.folders.some(f => f.cat === '@')", timeout=30000)
     opts = page.evaluate(f"{TREE}.folders.map(f => [f.cat, f.name])")
-    # System lists (a leading "_", e.g. a card's _bench) sort after Live and Effects.
+    # System lists (a leading "_", e.g. a card's _bench) sort after Live.
     real = [o for o in opts if not o[0].startswith("_")]
-    check(real[-2:] == [["@", "Live"], ["@fx", "Effects"]] and len(real) > 2,
-          f"library: the folders end with Live, Effects (system lists after) ({opts[-3:]})")
+    check(real[-1:] == [["@", "Live"]] and len(real) > 2 and not any(o[0] == "@fx" or o[1] == "Effects" for o in opts),
+          f"library: the folders end with Live, no Effects folder (system lists after) ({opts[-3:]})")
     open_live(page)
     rows = live_rows(page)
     want = ["@clock", "@clock?seconds=1", "@clock?date=1", "@clock?style=small&seconds=1&date=1", "@text?msg=OpenDMD"]
@@ -2398,94 +2392,60 @@ def live_checks(page: Page, base: str, mock: bool) -> None:
     expected.remove("/api/play")
 
 
-FX_ROWS = ["@fx:tunnel", "@fx:rotozoom", "@fx:starfield", "@fx:wire"]
-
-
-def effects_checks(page: Page, base: str, mock: bool) -> None:
-    """Library -> Effects: the four effects, each previewing (lit, frames
-    moving) with its options form; an option changes the row's path; on the
-    mock, Send to panel, POST /api/play of each, and an effect's playlist
-    line surviving a save and a reload."""
+def no_effects_checks(page: Page, base: str, mock: bool) -> None:
+    """The built-in effects are gone: the Library has the Live folder and no
+    Effects folder, tab or fx- form (nor has the playlist editor's picker);
+    on the mock, POST /api/play of an @fx: path is a 415 naming Formulas,
+    attract "fx:.." a 400, and a playlist with an old @fx: line still plays
+    its other entries."""
     goto_view(page, "library")
-    pick_cat(page, "@fx")
-    page.fill("#lib-search", "")
-    page.wait_for_function("document.querySelectorAll('#lib-list .vrow:not([hidden])').length == 4", timeout=10000)
-    rows = live_rows(page)
-    check(rows == FX_ROWS, f"library: Effects lists the four effects ({rows})")
-    titles = page.eval_on_selector_all("#lib-list .vrow:not([hidden]) .t", "els => els.map(e => e.textContent)")
-    check(titles == ["Tunnel", "Rotozoom", "Starfield", "Wireframe"], f"library: effect titles {titles}")
-    for i, path in enumerate(FX_ROWS):
-        page.click(f"#lib-list .vrow:not([hidden]) >> nth={i}")
-        name = path[4:]
-        page.wait_for_selector(f"#lib-live #fx-{name}", timeout=5000)
-        wait_lit(page, "#lib-panel", f"library effect {name}")
-        a = canvas_sum(page, "#lib-panel")
-        page.wait_for_timeout(400)
-        b = canvas_sum(page, "#lib-panel")
-        keys = page.eval_on_selector_all(f"#fx-{name} select", "els => els.map(e => e.dataset.key)")
-        check(a != b and len(keys) >= 4, f"library: {name} previews and moves ({a} -> {b}); options {keys}")
-    page.click("#lib-list .vrow:not([hidden]) >> nth=0")
-    gap = page.eval_on_selector("#fx-tunnel + .row", "e => getComputedStyle(e).marginTop")
-    btn = page.inner_text("#fx-tunnel + .row #fx-gif")
-    check(gap == "12px" and btn == "Save as GIF…", f"library: a gap between an effect's options and its '{btn}' button ({gap})")
+    page.wait_for_function(f"{TREE}?.folders.length > 2", timeout=30000)
+    pick_cat(page, "@")
+    folders = page.evaluate(f"{TREE}.folders.map(f => [f.cat, f.name])")
+    labels = page.eval_on_selector_all("#lib-list .vrow.dir, #lib-list [role=treeitem], #lib-list .folder", "els => els.map(e => e.textContent.trim())")
+    fx_ids = page.eval_on_selector_all("[id^='fx-']", "els => els.map(e => e.id)")
+    check(any(f[0] == "@" and f[1] == "Live" for f in folders) and not any(f[0] == "@fx" or f[1] == "Effects" for f in folders),
+          f"library: the Live folder and no Effects folder ({folders[-3:]})")
+    check(not any("Effects" in t for t in labels) and fx_ids == [] and "Effects" not in page.inner_text("#view-library"),
+          f"library: no tree folder labelled Effects, no fx- element, no Effects tab ({fx_ids})")
+    # The playlist editor's picker has only Live (no Effects).
+    goto_view(page, "sets")
+    picker = page.eval_on_selector_all("#set-cat option, #set-cats button, #set-cats a", "els => els.map(e => e.textContent.trim())")
+    check("Effects" not in picker and "Effects" not in page.inner_text("#view-sets"), f"playlists: no Effects in the editor's picker ({picker})")
     pl = page.evaluate("import('./js/state.js').then(m => ['/sets/Sprites_and_Clock.txt', '/sets/_x.txt', '/filelist.hall'].map(m.playlistLabel))")
     check(pl == ["Sprites and Clock", "_x", "Halloween"], f"playlists: names on the card read as words ({pl})")
-    page.select_option("#fx-tunnel select[data-key='palette']", "fire")
-    page.select_option("#fx-tunnel select[data-key='cycle']", "0")
-    want = "@fx:tunnel?palette=fire&cycle=0"
-    page.wait_for_function(f"[...document.querySelectorAll('#lib-list .vrow')].some(e => e.dataset.path === {json.dumps(want)})", timeout=5000)
-    check(live_rows(page)[0] == want, f"library: the tunnel row follows its options ({live_rows(page)[0]})")
-    wait_lit(page, "#lib-panel", "library effect tunnel (fire)")
-    no_leaks(page, "library (effects)")
-    page.evaluate("window.scrollTo(0, 0)")
-    shot(page, "library-effects", "laptop")
+    no_leaks(page, "library (no effects)")
     if not mock:
         return
     expected.append("/api/play")
-    page.wait_for_function(f"document.querySelector('#lib-play').dataset.path === {json.dumps(want)}", timeout=10000)
-    page.click("#lib-play")
-    cur = wait_playing(base, want)
-    np_ = get_json(base + "/api/status")["now_playing"]
-    check(cur == want and np_["title"] == "Tunnel", f"library: Send to panel -> now_playing {cur} '{np_['title']}'")
-    f0 = np_["frame"]
-    time.sleep(0.5)
-    f1 = get_json(base + "/api/status")["now_playing"]["frame"]
-    check(f1 > f0 + 25, f"status: {want} frame advances at 100 fps ({f0} -> {f1})")
-    for path in FX_ROWS + ["@fx:starfield?warp=0&density=3&fps=25", "@fx:wire?shape=tesseract&color=ff8800&fps=50"]:
+    for path in ("@fx:tunnel", "@fx:starfield?warp=0&fps=25", "@fx:psi?src=gray(x)"):
         try:
-            r = post_json(base + "/api/play", {"path": path})
-            check(r.get("ok") is True and r.get("path") == path, f"api: POST /api/play {path} -> 200")
+            post_json(base + "/api/play", {"path": path})
+            check(False, f"api: POST /api/play {path} refused")
         except urllib.error.HTTPError as e:
-            check(False, f"api: POST /api/play {path} -> {e.code}")
-    try:
-        post_json(base + "/api/play", {"path": "@fx:nonsense"})
-        check(False, "api: POST /api/play @fx:nonsense refused")
-    except urllib.error.HTTPError as e:
-        check(e.code == 415, f"api: POST /api/play @fx:nonsense -> {e.code} (415)")
+            msg = json.loads(e.read().decode()).get("error", "")
+            check(e.code == 415 and "Formulas replace them" in msg, f"api: POST /api/play {path} -> {e.code} '{msg}' (415, Formulas replace them)")
     expected.remove("/api/play")
-    for bad, code in (({"attract": "fx:nonsense"}, 400), ({"attract": "fx:tunnel?palette=fire"}, 200)):
-        check(put_status(base, bad) == code, f"settings: {bad} -> {code}")
-    put_json(base + "/api/config", {"attract": ""})
-    # A playlist with the effect's line: saved, read back, reloaded.
-    page.click("#lib-select")
-    page.click(f"#lib-list .vrow:not([hidden])[data-path='{want}'] input[type=checkbox]")
-    page.click("#lib-to-set")
-    page.wait_for_selector("#view-sets.on")
-    page.evaluate(f"async () => {{ const {{ app }} = await import('./js/state.js'); const {{ emit }} = await import('./js/util.js'); app.draft = {{ paths: [{json.dumps(want)}], name: '', path: '' }}; emit('draft'); }}")
-    page.fill("#set-name", "fxsmoke")
-    page.click("#set-save")
-    page.wait_for_selector("#sets-list [data-path='/sets/fxsmoke.txt']", timeout=30000)
-    with urllib.request.urlopen(base + "/sets/fxsmoke.txt", timeout=30) as resp:
-        text = resp.read().decode()
-    check(text.splitlines() == [want], f"playlists: sets/fxsmoke.txt holds the effect's line ({text!r})")
-    page.evaluate("async () => { const { app } = await import('./js/state.js'); app.selection.clear(); }")
-    page.reload()
-    goto_view(page, "sets")
-    page.click("#sets-list [data-path='/sets/fxsmoke.txt'] button.pl")
-    page.wait_for_selector(f"#set-entries .vrow[data-path='{want}']", timeout=20000)
-    t = page.inner_text(f"#set-entries .vrow[data-path='{want}'] .t")
-    check(t.startswith("Tunnel"), f"playlists: after a reload the playlist lists the effect as '{t}'")
-    no_leaks(page, "playlists (effects)")
+    for bad in ({"attract": "fx:nonsense"}, {"attract": "fx:tunnel?palette=fire"}):
+        check(put_status(base, bad) == 400, f"settings: {bad} -> 400")
+    # A playlist with an old @fx: line between a GIF and a clock: the line is
+    # skipped, the others stay (2 entries) and play.
+    gif = next(f"/gifs/Consoles/{f['name']}" for f in get_json(base + "/api/files?dir=/gifs/Consoles")["entries"]
+               if f["name"].lower().endswith(".gif"))
+    before = get_json(base + "/api/config").get("set", "")
+    put_text(base + "/api/files/sets/fxold.txt", f"{gif}\n@fx:tunnel\n@clock\n")
+    try:
+        put_json(base + "/api/config", {"set": "fxold"})
+        st = get_json(base + "/api/status")
+        check(st.get("entries") == 2, f"playlists: an @fx: line is skipped, the other two entries stay ({st.get('entries')})")
+        expected.append("/api/play")
+        post_json(base + "/api/play", {"path": "@clock"})
+        cur = wait_playing(base, "@clock")
+        expected.remove("/api/play")
+        check(cur == "@clock", f"playlists: the playlist with the retired line still plays its clock ({cur})")
+    finally:
+        put_json(base + "/api/config", {"set": before})
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/fxold.txt", method="DELETE"), timeout=30).read()
 
 
 def sim_png(root: Path, look: str, out: Path, path: str = "@text?msg=OpenDMD&scroll=0", at_ms: int | None = None) -> bytes:
@@ -3182,7 +3142,7 @@ def mock_pass(browser) -> None:
         power_checks(page, base)
         panel_checks(page, base)
         live_checks(page, base, True)
-        effects_checks(page, base, True)
+        no_effects_checks(page, base, True)
         sim_checks(page)
         post_json(base + "/api/skip", {})
         before = page.inner_text("#now-path")
@@ -3502,7 +3462,6 @@ def mock_pass(browser) -> None:
         studio_checks(page, base, overlay)
         studio_anim_checks(page, base, overlay)
         studio_smooth_checks(page, base, overlay)
-        fx_gif_checks(page, base, overlay)
         formulas_checks(browser, base, errors)
         formulas_panel_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
@@ -3661,7 +3620,6 @@ def mock_pass(browser) -> None:
         follow_checks(page, base, errors)
         font_checks(page, base, "laptop")
         phone_pass(browser, base, errors)
-        fx_gif_demo_pass(browser, base, errors)
         recent_demo_pass(browser, base, errors)
         formulas_phone_pass(browser, base, errors)
         formulas_demo_pass(browser, base, errors)
@@ -3681,69 +3639,6 @@ def mock_pass(browser) -> None:
 ART = REPO / "opendmd-art-web"
 STUB_INDEX = {"repo": "Stub_-_Repo", "names": ["Other Game (Europe)", "Studio Test (Japan)", "Studio Test (USA)"],
               "kinds": "123"}
-
-
-FX_GIF = "@fx:tunnel?palette=fire&texture=rings"
-
-
-def fx_to_studio(page: Page) -> None:
-    """Library -> Effects: the tunnel set to fire and rings, then Save as
-    GIF…, which opens Create Art with one loop of it drawn."""
-    goto_view(page, "library")
-    pick_cat(page, "@fx")
-    page.fill("#lib-search", "")
-    page.wait_for_function("document.querySelectorAll('#lib-list .vrow:not([hidden])').length == 4", timeout=10000)
-    page.click("#lib-list .vrow:not([hidden]) >> nth=0")
-    page.wait_for_selector("#lib-live #fx-tunnel", timeout=5000)
-    page.select_option("#fx-tunnel select[data-key='palette']", "fire")
-    page.select_option("#fx-tunnel select[data-key='texture']", "rings")
-    page.wait_for_function(f"[...document.querySelectorAll('#lib-list .vrow')].some(e => e.dataset.path === {json.dumps(FX_GIF)})", timeout=5000)
-    page.click("#fx-gif")
-    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
-    page.wait_for_function("(d => d.dataset.animated && d.dataset.srcFrames === '240' && d.dataset.name)(document.querySelector('#studio'))", timeout=30000)
-
-
-def fx_gif_checks(page: Page, base: str, overlay: Path) -> None:
-    """Save as GIF from the Effects tab: Create Art opens with one loop of the
-    effect (240 frames at 20 ms), titled from its options, platform FX in
-    Demoscene; trimmed and saved, the GIF lands in the Library with its
-    prepared copy, its frames the simulator's pixel for pixel."""
-    fx_to_studio(page)
-    d = studio_data(page)
-    msg = page.inner_text("#st-msg")
-    name = "FX_Tunnel_Fire_Rings_01.gif"
-    check(page.input_value("#st-title") == "Tunnel Fire Rings" and page.input_value("#st-plat") == "FX"
-          and page.input_value("#st-cat") == "Demoscene" and d.get("name") == name,
-          f"fx gif: Create Art titles it '{page.input_value('#st-title')}', {page.input_value('#st-plat')} in {page.input_value('#st-cat')} -> {d.get('name')}")
-    check("240 frames" in msg and "one loop" in msg and page.inner_text("#st-stats").startswith("240 frames · 4.8 s"),
-          f"fx gif: one loop, 240 frames, 4.8 s ('{msg}', '{page.inner_text('#st-stats')}')")
-    # Trimmed to its first 100 frames, then saved.
-    page.eval_on_selector("#st-strip", "s => { s.scrollLeft = 99 * 136 - 200; s.dispatchEvent(new Event('scroll')); }")
-    page.wait_for_selector("#st-strip .st-cell[data-i='99']:not([hidden])", timeout=5000)
-    page.click("#st-strip .st-cell[data-i='99']:not([hidden])")
-    page.click("#st-set-out")
-    check(studio_data(page).get("frames") == "100", f"fx gif: trimmed to 100 frames ({studio_data(page).get('frames')})")
-    page.evaluate("delete document.querySelector('#studio').dataset.saved")
-    page.click("#st-save")
-    page.wait_for_function("document.querySelector('#studio').dataset.saved", timeout=120000)
-    path = f"/gifs/Demoscene/{name}"
-    got = overlay / path.lstrip("/")
-    check(got.exists() and (overlay / cache_path(path).lstrip("/")).exists(), f"fx gif: {path} and its prepared copy landed")
-    frames, delays = gif_frames(got)
-    tmp = OUT / "sim-fx"
-    shutil.rmtree(tmp, ignore_errors=True)
-    tmp.mkdir(parents=True)
-    diffs = []
-    for i in (0, 37, 99):
-        want = sim_png(tmp / "root", "colour", tmp / f"fx-{i}.png", FX_GIF, i * 20)
-        want_rgb = b"".join(want[k:k + 3] for k in range(0, len(want), 4))
-        diffs.append(sum(1 for k in range(0, len(want_rgb), 3) if frames[i][k:k + 3] != want_rgb[k:k + 3]))
-    check(len(frames) == 100 and delays == [20] * 100 and diffs == [0, 0, 0],
-          f"fx gif: {len(frames)} frames at {set(delays)} ms, frames 1/38/100 equal the simulator's ({diffs} px differ)")
-    compare_with_pack(overlay, {cache_path(path): got})
-    lib_row(page, path)
-    check(page.inner_text("#lib-d-title") == "Tunnel Fire Rings 01", f"fx gif: listed in the Library ({page.inner_text('#lib-d-title')})")
-    no_leaks(page, "library (fx gif)")
 
 
 # --- Formulas (Library → Formulas, js/formulas.js + pkg-psi) -------------------
@@ -3980,7 +3875,7 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
     page.wait_for_selector("#toasts .toast", timeout=10000)
     t = page.eval_on_selector_all("#toasts .toast", "els => els.at(-1).textContent")
-    check(t == "already in “psitest”" and (overlay / "sets" / "psitest.txt").read_text().count("@fx:psi") == 1,
+    check(t == "already in “psitest”" and (overlay / "sets" / "psitest.txt").read_text().count("@formula") == 1,
           f"formulas playlist: added again, it is there once ('{t}')")
     # The editor: a button too, with what it plays (a Formula of one's own, its
     # name; its `-- a:` comment, retired, is a comment: `a` an undeclared slider).
@@ -3990,7 +3885,7 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
     last_toast(page, "ok")
     mine = (overlay / "sets" / "psitest.txt").read_text().split("\n")[2]
-    check(mine == "@fx:psi?src=loop+4;+gray(a+*+x+%2B+saw(t+/+4)+*+0.1)&name=Smoke+%26+ramp",
+    check(mine == "@formula?src=loop+4;+gray(a+*+x+%2B+saw(t+/+4)+*+0.1)&name=Smoke+%26+ramp",
           f"formulas playlist: from the editor, the formula as compiled with its name ({mine})")
     # The playlist editor: by name, as a Formula, not a 2 KB line.
     goto_view(page, "sets")
@@ -4017,7 +3912,7 @@ def clear_toasts(page: Page) -> None:
 
 
 def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
-    """Show on panel: a formula plays on the (mock) panel as `@fx:psi?src=…`;
+    """Show on panel: a formula plays on the (mock) panel as `@formula?src=…`;
     slider changes follow it there, ~200 ms apart and one at a time, as live
     edits (the same ordinal); once the playlist moves on a change stops
     following (409, no toast); an older firmware (415), a formula it refuses
@@ -4033,12 +3928,12 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     check(page.inner_text("#psi-show") == "Show on panel", "formulas panel: Show on panel in Details")
     # The path is the device's own (`fx_psi::path`, its test has the same string).
     enc = page.evaluate("import('./js/psishow.js').then(m => m.fpath({src: '-- a: x\\nv = x % 2 + 1 & 3 # é  // c', a: 0.5}))")
-    check(enc == "@fx:psi?src=v+=+x+%25+2+%2B+1+%26+3+%23+%C3%A9&a=0.5", f"formulas panel: the formula's path as the device writes it ({enc})")
+    check(enc == "@formula?src=v+=+x+%25+2+%2B+1+%26+3+%23+%C3%A9&a=0.5", f"formulas panel: the formula's path as the device writes it ({enc})")
     clear_toasts(page)
     page.click("#psi-show")
     t = last_toast(page, "ok")
     st = get_json(base + "/api/status")["now_playing"]
-    check(t == f"On the panel: {name}" and st["path"].startswith("@fx:psi?src=") and st["title"] == "Formula"
+    check(t == f"On the panel: {name}" and st["path"].startswith("@formula?src=") and st["title"] == "Formula"
           and page.inner_text("#psi-show") == "On the panel ✓" and plays[-1][1].get("live") is False,
           f"formulas panel: {name} on the panel ('{t}', {st['path'][:40]}…, {st['title']})")
     shot(page, "formulas-panel-on", "laptop")
@@ -4059,7 +3954,7 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
           f"formulas panel: 60 slider moves in {time.time() - t0:.1f} s -> {len(sent)} live edits, gaps {[round(g, 2) for g in gaps]}, the last a=1 on the panel (ordinal {st['ordinal']})")
     # The playlist moves on (the mock's 4 s dwell): a change stops following, quietly.
     deadline = time.time() + 10
-    while time.time() < deadline and get_json(base + "/api/status")["now_playing"]["path"].startswith("@fx:psi"):
+    while time.time() < deadline and get_json(base + "/api/status")["now_playing"]["path"].startswith("@formula"):
         time.sleep(0.3)
     clear_toasts(page)
     n0 = len(plays)
@@ -4067,10 +3962,10 @@ def formulas_panel_checks(browser, base: str, errors: list[str]) -> None:
     page.wait_for_function("document.querySelector('#psi-ed-show').textContent == 'Show on panel'", timeout=5000)
     bad = page.eval_on_selector_all("#toasts .toast.bad", "els => els.length")
     check(len(plays) == n0 + 1 and plays[-1][1].get("live") is True and bad == 0
-          and not get_json(base + "/api/status")["now_playing"]["path"].startswith("@fx:psi"),
+          and not get_json(base + "/api/status")["now_playing"]["path"].startswith("@formula"),
           "formulas panel: after the playlist moved on, a change does not bring it back (409, no error shown)")
     # What goes wrong, said plainly.
-    for status, body, want in ((415, "@fx:psi: not a playable file", "Update OpenDMD to show formulas on the panel"),
+    for status, body, want in ((415, "@formula: not a playable file", "Update OpenDMD to show formulas on the panel"),
                                (400, "unknown name `q`", "The panel can’t show"),
                                (0, "", "Couldn’t reach the panel")):
         def answer(route, _req, status=status, body=body):
@@ -4121,7 +4016,7 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-show")
     t = last_toast(page, "ok")
     fl = get_json(base + "/api/status")["formula_look"]
-    check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1]["path"].startswith("@fx:psi?src=")
+    check(t == "Over the panel’s GIF: Old photo" and plays[-1].get("over") is True and plays[-1]["path"].startswith("@formula?src=")
           and (fl or {}).get("source") == "over_gif" and page.inner_text("#psi-show") == "Over the panel’s GIF ✓",
           f"formulas over: shown over the panel's GIF ('{t}', {fl})")
     clear_toasts(page)
@@ -4245,7 +4140,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     expected.remove("/api/config")
     check("refused for the test" in tick, f"looks: a refusal puts the controls back (35%, '{tick}')")
     # A look set over the API alone is drawn as it is: over, 100 %.
-    put_json(base + "/api/config", {"look_formula": "@fx:psi?src=gray(ul)", "look_formula_name": "API"})
+    put_json(base + "/api/config", {"look_formula": "@formula?src=gray(ul)", "look_formula_name": "API"})
     c6 = get_json(base + "/api/config")
     check((c6["look_blend"], c6["look_amount"]) == ("over", 100), f"looks: a look_formula alone resets the blend and amount ({c6['look_blend']} {c6['look_amount']})")
     # The editor's Use as the look, with a blend: the preview shows it meanwhile.
@@ -4602,12 +4497,6 @@ def now_edit_checks(page: Page, base: str) -> None:
     s = get_json(base + "/api/status")
     check(b in asked and cache_path(b) not in asked and s["now_playing"]["path"] == a,
           f"now edit: a recent entry's ✎ opens {b.rsplit('/', 1)[-1]} in Create Art, without playing it")
-    # An effect: its loop in Create Art.
-    on_screen("@fx:tunnel?palette=fire")
-    page.click("#now-edit")
-    page.wait_for_selector("#view-create.on #studio .st-grid", timeout=20000)
-    page.wait_for_function("(d => d.dataset.animated && +d.dataset.srcFrames > 1)(document.querySelector('#studio'))", timeout=30000)
-    check(page.input_value("#st-plat") == "FX", f"now edit: an effect's loop opens in Create Art ({studio_data(page).get('srcFrames')} frames)")
     # A Formula: the example it is, in the editor.
     ex = json.loads((REPO / "opendmd-web/www/formulas.json").read_text())
     e = next(x for x in ex if x["name"] == "Plasma")
@@ -4644,7 +4533,7 @@ def recent_demo_pass(browser, base: str, errors: list[str]) -> None:
     live items, Next twice, Previous twice back to the first, a tap on an
     entry plays it."""
     page = new_page(browser, "laptop", errors)
-    text = "@clock\n@fx:tunnel\n@text?msg=Hi\n"
+    text = "@clock\n@text?msg=Mid\n@text?msg=Hi\n"
     page.route("**/api/status", lambda r: r.fulfill(status=200, body="{}", headers={"content-type": "application/json"}))
     page.route("**/demo/index.json", lambda r: r.fulfill(status=200, body=json.dumps([{"path": "/filelist.txt", "size": len(text)}]),
                                                      headers={"content-type": "application/json"}))
@@ -4660,35 +4549,12 @@ def recent_demo_pass(browser, base: str, errors: list[str]) -> None:
     page.click("#now-prev")
     page.wait_for_function("document.querySelector('#now-title').textContent === 'Clock'", timeout=10000)
     t2 = titles()
-    check(t1 == ["*Hi", "Tunnel", "Clock"] and t2 == ["Hi", "Tunnel", "*Clock"] and page.is_disabled("#now-prev"),
+    check(t1 == ["*Hi", "Mid", "Clock"] and t2 == ["Hi", "Mid", "*Clock"] and page.is_disabled("#now-prev"),
           f"recent (demo): Next twice {t1}, Previous twice {t2}, Previous disabled at the oldest")
     page.click("#now-recent > div:nth-child(2)")
-    page.wait_for_function("document.querySelector('#now-title').textContent === 'Tunnel'", timeout=10000)
+    page.wait_for_function("document.querySelector('#now-title').textContent === 'Mid'", timeout=10000)
     t3 = titles()
-    check(t3 == ["*Tunnel", "Clock", "Hi"], f"recent (demo): a tap plays the entry, the one on screen before it next ({t3})")
-    page.context.close()
-
-
-def fx_gif_demo_pass(browser, base: str, errors: list[str]) -> None:
-    """The same from the web demo (local mode, its card in memory: here an
-    empty one): Save as GIF opens Create Art with 240 frames, and Download
-    GIF hands over a GIF of them."""
-    page = new_page(browser, "laptop", errors)
-    page.route("**/api/status", lambda r: r.fulfill(status=200, body="{}", headers={"content-type": "application/json"}))
-    page.route("**/demo/index.json", lambda r: r.fulfill(status=200, body="[]", headers={"content-type": "application/json"}))
-    page.goto(base + "/")
-    page.wait_for_function("document.querySelector('#where').textContent.startsWith('Demo')", timeout=20000)
-    fx_to_studio(page)
-    check(page.input_value("#st-title") == "Tunnel Fire Rings" and page.inner_text("#st-save") == "Download GIF",
-          f"fx gif (demo): Create Art has the 240 frames, '{page.input_value('#st-title')}', '{page.inner_text('#st-save')}'")
-    with page.expect_download(timeout=120000) as dl:
-        page.click("#st-save")
-    out = OUT / "fx-demo.gif"
-    dl.value.save_as(out)
-    frames, delays = gif_frames(out)
-    check(dl.value.suggested_filename == "FX_Tunnel_Fire_Rings_01.gif" and len(frames) == 240 and set(delays) == {20},
-          f"fx gif (demo): downloaded {dl.value.suggested_filename}, {len(frames)} frames at {set(delays)} ms")
-    no_leaks(page, "create art (fx gif, demo)")
+    check(t3 == ["*Mid", "Clock", "Hi"], f"recent (demo): a tap plays the entry, the one on screen before it next ({t3})")
     page.context.close()
 
 
@@ -6789,7 +6655,7 @@ def device_pass(browser, device: str) -> None:
         look_checks(page, base, False)
         boot_checks(page, base, False)
         live_checks(page, base, False)
-        effects_checks(page, base, False)
+        no_effects_checks(page, base, False)
         studio_device(page)
         # The one write: save and delete a set named smoke (never activated).
         n = build_smoke_set(page)

@@ -6,16 +6,17 @@
 
     uv run tools/demo-card.py OUT_DIR [--sim PATH]
 
-- gifs/Demoscene/: recordings of the panel's own effects, drawn by the
-  simulator's raw canvas (--screenshot-canvas) a frame at a time.
+- gifs/Demoscene/: recordings of Formulas (opendmd-web/www/formulas.json),
+  drawn by the simulator's raw canvas (--screenshot-canvas) a frame at a time.
 - gifs/Kenney/: the Kenney "Pixel Platformer" (CC0) animations made by the
   art pipeline prototypes (opendmd-web/experiments/art/process/out/).
-- filelist.txt: the demo's "All files", live items (effects, the clock,
+- filelist.txt: the demo's "All files", live items (the clock,
   scrolling text) between the GIFs; sets/: two more playlists.
 - index.json: every file and its size, which the demo reads instead of a
   directory listing.
 
-Recordings already in OUT_DIR are kept: delete the directory to redo them.
+Recordings already in OUT_DIR are kept: delete the directory to redo them
+(the old FX_* ones from the built-in effects are removed).
 """
 
 import argparse
@@ -30,19 +31,22 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 KENNEY = ROOT / "opendmd-web/experiments/art/process/out"
 
-# (file title, live item, frames at 40 ms)
+FORMULAS = ROOT / "opendmd-web/www/formulas.json"
+
+# (file title, Formula name in formulas.json, --formula-opts, frames at 40 ms).
+# Only whole-picture Formulas: none of the looks meant to sit over a GIF.
 RECORD = [
-    ("Starfield_Warp", "@fx:starfield?palette=chrono&density=3&speed=3", 75),
-    ("Rotozoom_Floor_Fire", "@fx:rotozoom?floor=1&palette=fire", 75),
-    ("Wire_Tesseract", "@fx:wire?shape=tesseract&color=ff66cc", 75),
-    ("Rotozoom_Chrono", "@fx:rotozoom?palette=chrono&cycle=1", 75),
-    ("Starfield_Dots_Amber", "@fx:starfield?palette=amber&warp=0", 75),
-    ("Wire_Morph", "@fx:wire?shape=morph", 75),
-    ("Tunnel_Fire_Rings", "@fx:tunnel?palette=fire&texture=rings&twist=2", 75),
-    ("Rotozoom_Rings_Rainbow", "@fx:rotozoom?palette=rainbow&texture=rings&wobble=2", 75),
-    ("Wire_Icosahedron", "@fx:wire?shape=icosahedron&color=66ff66", 75),
-    ("Tunnel_Chrono", "@fx:tunnel?palette=chrono&cycle=1", 75),
-    ("Tunnel_Ice", "@fx:tunnel?palette=ice&texture=checker&layers=2", 75),
+    ("Starfield", "Starfield", "", 75),
+    ("Rotozoom_Floor", "Rotozoom floor", "", 75),
+    ("Wireframe_Cube", "Wireframe cube", "", 75),
+    ("Rotozoom", "Rotozoom", "", 75),
+    ("Plasma", "Plasma", "", 75),
+    ("Copper_Bars", "Copper bars", "", 75),
+    ("Tunnel", "Tunnel", "", 75),
+    ("Rings", "Rings", "", 75),
+    ("Kaleidoscope", "Kaleidoscope", "", 75),
+    ("Time_Gate", "Time gate", "", 75),
+    ("Endless_Road", "Endless road", "", 75),
 ]
 KENNEY_GIFS = {
     "b_walk.gif": "OTHER_Pixel_Platformer_Walk_01_kenney.gif",
@@ -50,28 +54,33 @@ KENNEY_GIFS = {
     "d_scroll.gif": "OTHER_Pixel_Platformer_Scroll_01_kenney.gif",
 }
 # The demo's All files: live items, drawn by the panel, between the GIFs.
-# It opens on the starfield and the Mode 7 floor (the strongest first
-# impressions), with a GIF third: the panel is a GIF player first.
+# (No Formula paths: the demo's in-browser preview cannot draw them and skips
+# them; the Formulas are the Demoscene GIFs, recorded here.)
 LIVE = [
-    "@fx:starfield?palette=chrono&density=3&speed=3",
     "@text?msg=OpenDMD%20-%20open%20firmware%20for%20LED%20dot-matrix%20displays&speed=30&color=ffaa00",
-    "@fx:rotozoom?floor=1&palette=chrono&cycle=1",
-    "@fx:wire?shape=tesseract&color=ff66cc",
     "@clock?style=big&date=1",
-    "@fx:tunnel?palette=fire&texture=rings&twist=2",
-    "@fx:starfield?palette=ice&density=3",
     "@text?msg=Made%20in%20the%20browser&speed=30&color=00ccff",
-    "@fx:rotozoom?palette=rainbow&texture=rings&wobble=2",
-    "@fx:wire?shape=morph",
+    "@clock?style=small&seconds=1",
 ]
 
 
-def record(sim: Path, card: Path, play: str, frames: int, out: Path) -> None:
+def formula_src(name: str) -> str:
+    """The source of the example Formula called `name`; fails if there is none."""
+    for e in json.loads(FORMULAS.read_text()):
+        if e["name"] == name:
+            return e["src"]
+    raise SystemExit(f"demo-card: no Formula named {name!r} in {FORMULAS}")
+
+
+def record(sim: Path, card: Path, name: str, opts: str, frames: int, out: Path) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         png = Path(tmp) / "f.png"
+        psi = Path(tmp) / "f.psi"
+        psi.write_text(formula_src(name))
+        play = ["--formula", psi] + (["--formula-opts", opts] if opts else [])
         shots = []
         for i in range(frames):
-            subprocess.run([sim, "--root", card, "--play", play, "--screenshot-canvas", png, "--screenshot-at", str(i * 40)],
+            subprocess.run([sim, "--root", card, *play, "--screenshot-canvas", png, "--screenshot-at", str(i * 40)],
                            check=True, capture_output=True)
             shots.append(Image.open(png).convert("RGB").quantize(64, dither=Image.Dither.NONE))
     shots[0].save(out, save_all=True, append_images=shots[1:], duration=40, loop=0)
@@ -86,16 +95,19 @@ def main() -> None:
     (card / "gifs/Demoscene").mkdir(parents=True, exist_ok=True)
     (card / "gifs/Kenney").mkdir(parents=True, exist_ok=True)
     (card / "sets").mkdir(exist_ok=True)
-    # The simulator wants a card root with a filelist, even to --play.
+    # The simulator wants a card root with a filelist, even to play one thing.
     if not (card / "filelist.txt").exists():
         (card / "filelist.txt").write_text("")
 
     fx = []
-    for title, play, n in RECORD:
-        out = card / f"gifs/Demoscene/FX_{title}_01.gif"
+    for old in (card / "gifs/Demoscene").glob("FX_*.gif"):
+        old.unlink()
+    for title, name, opts, n in RECORD:
+        formula_src(name)  # fail loudly on a missing name, even for a kept recording
+        out = card / f"gifs/Demoscene/Formula_{title}_01.gif"
         if not out.exists():
             print(f"recording {out.name} ({n} frames)")
-            record(a.sim, card, play, n, out)
+            record(a.sim, card, name, opts, n, out)
         fx.append(f"/gifs/Demoscene/{out.name}")
     kenney = []
     for src, name in KENNEY_GIFS.items():

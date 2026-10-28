@@ -7,7 +7,7 @@
     uv run tools/site-art.py OUT_DIR [--sim PATH]
 
 - strip/*.gif: the animations for the strip across the top of every page
-  and the landing page's tiles: the panel's own effects, the clock and
+  and the landing page's tiles: Formulas (opendmd-web/www/formulas.json), the clock and
   scrolling text, recorded from the simulator's raw canvas
   (--screenshot-canvas) a frame at a time, one whole loop each; and the
   Kenney "Pixel Platformer" (CC0) sprites the demo card has too, re-encoded
@@ -33,41 +33,63 @@ from PIL import Image, ImageChops, ImageSequence
 ROOT = Path(__file__).resolve().parent.parent
 KENNEY = ROOT / "opendmd-web/experiments/art/process/out"
 
-# name, source (a live item, or kenney:FILE), ms a frame, colours,
-# where it shows (strip, tiles), alt text, caption.
+FORMULAS = ROOT / "opendmd-web/www/formulas.json"
+
+# name, source (a live item, formula:NAME[?--formula-opts] -- an example in
+# formulas.json --, or kenney:FILE), ms a frame, colours, where it shows
+# (strip, tiles), alt text, caption.
 ART = [
     ("press-start", "@text?msg=PRESS%20START&speed=20&color=ff3366", 40, 16, "strip tiles",
      "PRESS START scrolling across the panel in pink", "Scrolling text"),
-    ("tunnel-fire", "@fx:tunnel?palette=fire&texture=rings&twist=2&speed=2", 80, 32, "strip tiles",
-     "A twisting tunnel of fiery rings", "Tunnel, fire palette"),
+    ("tunnel", "formula:Tunnel", 80, 32, "strip tiles",
+     "A checkered tunnel turning and cycling colour", "Tunnel (a Formula)"),
     ("kenney-walk", "kenney:b_walk.gif", 0, 32, "strip tiles",
      "Pixel-art characters walking across the panel", "Kenney Pixel Platformer sprites (CC0)"),
-    ("wire-torus", "@fx:wire?shape=torus&color=00ccff&speed=3", 40, 24, "strip tiles",
-     "A spinning wireframe torus in cyan", "Wireframe torus"),
+    ("wire-cube", "formula:Wireframe cube", 40, 24, "strip tiles",
+     "A turning wireframe cube", "Wireframe cube (a Formula)"),
     ("insert-coin", "@text?msg=INSERT%20COIN&speed=20&color=ffaa00", 40, 16, "strip",
      "INSERT COIN scrolling across the panel in amber", "Scrolling text"),
-    ("starfield", "@fx:starfield?palette=chrono&density=3&speed=3", 40, 32, "strip tiles",
-     "Stars flying towards the viewer", "Starfield"),
+    ("starfield", "formula:Starfield", 40, 32, "strip tiles",
+     "Stars flying towards the viewer", "Starfield (a Formula)"),
     ("clock", "@clock?style=big&date=1&color=66ff99", 0, 8, "strip tiles",
      "The panel's big clock with the date underneath", "The clock"),
-    ("wire-tesseract", "@fx:wire?shape=tesseract&color=ff66cc&speed=3", 40, 24, "strip",
-     "A rotating wireframe tesseract in pink", "Wireframe tesseract"),
+    ("time-gate", "formula:Time gate", 80, 32, "strip",
+     "Star rings rushing out of a time gate", "Time gate (a Formula)"),
     ("game-over", "@card:GAME OVER|thanks for playing", 0, 8, "strip",
      "A title card reading GAME OVER, thanks for playing", "Title card"),
-    ("rotozoom-floor", "@fx:rotozoom?floor=1&palette=chrono&cycle=1&speed=2", 80, 32, "tiles",
-     "A Mode 7 floor sweeping past under a colour-cycling sky", "Mode 7 rotozoom"),
-    ("tunnel-ice", "@fx:tunnel?palette=ice&texture=checker&layers=2&speed=2", 80, 32, "tiles",
-     "A checkered tunnel in icy blues", "Tunnel, ice palette"),
-    ("wire-morph", "@fx:wire?shape=morph&speed=3", 40, 24, "tiles",
-     "A wireframe shape morphing between solids", "Wireframe morph"),
+    ("rotozoom-floor", "formula:Rotozoom floor", 80, 32, "tiles",
+     "A Mode 7 floor running away to a foggy horizon", "Mode 7 rotozoom floor (a Formula)"),
+    ("kaleidoscope", "formula:Kaleidoscope", 80, 32, "tiles",
+     "Plasma folded into a mirror pattern", "Kaleidoscope (a Formula)"),
+    ("plasma", "formula:Plasma", 40, 24, "tiles",
+     "Three waves making every colour of a plasma", "Plasma (a Formula)"),
 ]
 WORDMARK = "@text?msg=OpenDMD&scroll=0&color=ffaa00"
 MAX_FRAMES = 240  # a recording stops here if it has not looped
-RECIPE = 1  # bump to redo every recording after changing how they are made
+RECIPE = 2  # bump to redo every recording after changing how they are made
+
+
+def formula_src(name: str) -> str:
+    """The source of the example Formula called `name`; fails if there is none."""
+    for e in json.loads(FORMULAS.read_text()):
+        if e["name"] == name:
+            return e["src"]
+    raise SystemExit(f"site-art: no Formula named {name!r} in {FORMULAS}")
+
+
+def play_args(play: str, tmp: Path) -> list:
+    """The simulator's arguments for a source: --play for a live item, or
+    --formula (the example's source in a temp .psi file) for formula:NAME[?opts]."""
+    if not play.startswith("formula:"):
+        return ["--play", play]
+    name, _, opts = play.removeprefix("formula:").partition("?")
+    psi = tmp / "f.psi"
+    psi.write_text(formula_src(name))
+    return ["--formula", psi] + (["--formula-opts", opts] if opts else [])
 
 
 def shot(sim: Path, card: Path, play: str, ms: int, png: Path) -> Image.Image:
-    subprocess.run([sim, "--root", card, "--play", play, "--screenshot-canvas", png, "--screenshot-at", str(ms)],
+    subprocess.run([sim, "--root", card, *play_args(play, png.parent), "--screenshot-canvas", png, "--screenshot-at", str(ms)],
                    check=True, capture_output=True)
     return Image.open(png).convert("RGB")
 
@@ -117,14 +139,16 @@ def main() -> None:
     a = ap.parse_args()
     out: Path = a.out
     (out / "strip").mkdir(parents=True, exist_ok=True)
-    # The simulator wants a card root with a filelist, even to --play.
+    # The simulator wants a card root with a filelist, even to play one thing.
     card = out / "card"
     card.mkdir(exist_ok=True)
     (card / "filelist.txt").write_text("")
 
     items, keep = [], set()
     for name, src, step, colours, where, alt, caption in ART:
-        tag = hashlib.sha1(f"{RECIPE}|{src}|{step}|{colours}".encode()).hexdigest()[:8]
+        # A Formula's tag covers its source, so editing the example re-records.
+        body = formula_src(src.removeprefix("formula:").partition("?")[0]) if src.startswith("formula:") else ""
+        tag = hashlib.sha1(f"{RECIPE}|{src}|{body}|{step}|{colours}".encode()).hexdigest()[:8]
         gif, still = out / f"strip/{name}-{tag}.gif", out / f"strip/{name}-{tag}.png"
         if not gif.exists():
             if src.startswith("kenney:"):

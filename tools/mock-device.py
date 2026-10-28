@@ -199,25 +199,30 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
 - **Looks and live items.** `look` (`colour`, `amber`, `red`, `green`, `blue`,
   `white`; `color` is stored as `colour`), `glow` (`off`, `short`, `long`) and
   `attract` (`""`, `"clock"`, `"text:<message>"`, at most 205 characters, no
-  control characters, or `"fx:<effect>[?options]"`) are config fields, validated as the firmware does (a
-  400, nothing saved) and applied live, no reindex. Status ends with `look`,
+  control characters) are config fields, validated as the firmware does (a
+  400, nothing saved; a value starting `fx:` is a 400 too, the built-in effects
+  are gone: a Formula as attract is a playlist of one, chosen as `attract_set`)
+  and applied live, no reindex. Status ends with `look`,
   `glow`, `glow_held` (12288 while glow is not `off` and the simulated player
   is playing, else 0) and `attract_live` (null, or `@clock` / `@text?msg=..`
-  / `@fx:..` while following RePlayOS in its attract state with `attract`
+  while following RePlayOS in its attract state with `attract`
   set).
   `POST /api/play` also takes live items: `@clock[?style=..&seconds=1&date=1&
   h12=1&color=RRGGBB]` and `@text?msg=..[&speed=ms&font=..&color=..&scroll=0]`
-  and the effects `@fx:tunnel|rotozoom|starfield|wire[?..]` and the start-up
+  and the start-up
   show `@boot[?len=short|full|card&v=&ip=&ap=&note=]` (10 ms frames over
   1300 / 5600 ms, or the status card's 16384 ms loop; titled "Startup") (plus
   `@power-on`, `@card:`); any other `@...` is a 415. They read no file:
   a clock is 1000 ms frames, a text is frames of `speed` ms looping over
   (text width + 129) frames (one 1000 ms frame for a `scroll=0` text that
-  fits; an effect's loop is 480/960/240/480 frames of 20 ms at speed 1,
-  divided by `speed` (1..4, default 2): 10 ms frames and twice as many by
-  default (`fps=100`), 40 ms and half as many at `fps=25`). A playlist line may be one too; `/api/cache` never counts them as
+  fits). A playlist line may be one too; `/api/cache` never counts them as
   needing a copy.
-  **Formulas** (`@fx:psi?src=..[&a=&b=&c=&fps=&name=]`, a non-empty `src`;
+  **Retired effects**: any `@fx:..` path (the old native `@fx:tunnel`,
+  `@fx:starfield`, ... and the old `@fx:psi`) is a 415 from `POST /api/play`
+  ("the built-in effects are gone: Formulas replace them (play one as
+  @formula?src=...)"); a playlist line starting `@fx:` is skipped, with a stderr
+  line each time the playlist is read.
+  **Formulas** (`@formula?src=..[&a=&b=&c=&fps=&name=]`, a non-empty `src`;
   `name`, a playlist entry's, is its title): 20 ms
   frames (10 at `fps=100`, 40 at 25) over the source's `loop N` seconds
   (default 8); not compiled here (any `src` plays). A formula over the
@@ -640,7 +645,7 @@ DEFAULT_SETTINGS = {
     "attract": "",              # "" (the playlist), "clock" or "text:<message>"
     "look": "colour",           # colour / amber / red / green / blue / white
     "glow": "off",              # off / short / long
-    "look_formula": "",         # the Formula look: "" or a formula's @fx:psi?src=.. path
+    "look_formula": "",         # the Formula look: "" or a formula's @formula?src=.. path
     "look_formula_name": "",    # its name in the web app (display only)
     "look_blend": "over",       # how the web app composed it (display only): over/screen/add/multiply/max/min
     "look_amount": 100,         # and at what amount, 0..=100 (display only)
@@ -995,21 +1000,17 @@ def compute_matches(ctx: "Context", platform: str | None, game_clean: str) -> in
 VIRTUAL_POWER_ON = "@power-on"
 
 
-# Live effects (`@fx:<name>[?..]`): name -> (title, loop frames at speed 1
-# and 50 fps), as opendmd_core::fx; every one plays at 100 fps by default.
-FX = {"tunnel": ("Tunnel", 480), "rotozoom": ("Rotozoom", 960),
-      "starfield": ("Starfield", 240), "wire": ("Wireframe", 480)}
+ATTRACT_MESSAGE = 'attract must be "" (the playlist), "clock" or "text:<message>" (at most 200 characters, one line)'
+RETIRED_FX_MESSAGE = "the built-in effects are gone: Formulas replace them (play one as @formula?src=…)"
 
 
 def live_parse(path: str):
-    """A live item (`@clock[?..]`, `@text?msg=..[&..]`, `@fx:<name>[?..]`)
-    -> ("clock"|"text"|"fx:<name>", {param: value}) with the values
+    """A live item (`@clock[?..]`, `@text?msg=..[&..]`, `@formula?src=..`)
+    -> ("clock"|"text"|"formula", {param: value}) with the values
     percent-decoded, or None for anything else (a text needs a non-empty
-    `msg`, an effect a known name)."""
+    `msg`, a formula a non-empty `src`)."""
     head, _, query = path.partition("?")
-    if head == "@fx:psi" and "src=" in query:
-        pass
-    elif head.startswith("@fx:") and head[4:] in FX:
+    if head == "@formula" and "src=" in query:
         pass
     elif head not in ("@clock", "@text", "@boot"):
         return None
@@ -1019,7 +1020,7 @@ def live_parse(path: str):
         params[k] = (urllib.parse.unquote_plus if k == "name" else urllib.parse.unquote)(v)
     if head == "@text" and not params.get("msg"):
         return None
-    if head == "@fx:psi" and not params.get("src", "").strip():
+    if head == "@formula" and not params.get("src", "").strip():
         return None
     return head[1:], params
 
@@ -1039,18 +1040,12 @@ def live_delays(kind: str, params: dict[str, str]) -> list[int]:
     if kind == "boot":
         length = params.get("len", "short")
         return [10] * (BOOT_MS.get(length, BOOT_MS["short"]) // 10)
-    if kind == "fx:psi":
+    if kind == "formula":
         # A formula: its `loop N` seconds of 20 ms frames (fps=100: 10, 25: 40).
         delay = {"100": 10, "25": 40}.get(params.get("fps", ""), 20)
         m = re.search(r"(?:^|;|\n)\s*loop\s+([0-9.]+)", params.get("src", ""))
         secs = min(3600.0, max(0.1, float(m.group(1)))) if m else 8.0
         return [delay] * max(1, int(secs * 1000) // delay)
-    if kind.startswith("fx:"):
-        # A loop: the base frames x 20 / delay / speed (1..4, default 2);
-        # 10 ms frames (fps=100, the default), 20 (50) or 40 (25).
-        speed = int(params["speed"]) if params.get("speed") in ("1", "2", "3", "4") else 2
-        delay = {"50": 20, "25": 40}.get(params.get("fps", ""), 10)
-        return [delay] * (FX[kind[3:]][1] * 20 // delay // speed)
     msg = params.get("msg", "")
     font = params.get("font", "big")
     width = (len(msg) * 4 - 1) if font == "small" else (len(msg) * 5 - 1)
@@ -1088,12 +1083,10 @@ def virtual_title(path: str) -> str | None:
         return path[len("@card:"):].split("|", 1)[0]
     live = live_parse(path)
     if live is not None:
-        if live[0] == "fx:psi":
+        if live[0] == "formula":
             # A playlist entry carries its name (synth::title: 60 characters).
             name = "".join(c for c in live[1].get("name", "") if c.isprintable())[:60]
             return name if name.strip() else "Formula"
-        if live[0].startswith("fx:"):
-            return FX[live[0][3:]][0]
         if live[0] == "boot":
             return "Startup"
         return "Clock" if live[0] == "clock" else live[1]["msg"]
@@ -1107,8 +1100,6 @@ def attract_live_path(attract: str) -> str | None:
         return "@clock"
     if attract.startswith("text:"):
         return "@text?msg=" + urllib.parse.quote(attract[5:].encode(), safe="-_.~")
-    if attract.startswith("fx:"):
-        return "@" + attract
     return None
 
 
@@ -1935,6 +1926,10 @@ class Player:
             for raw in lines:
                 line = raw.strip()
                 if not line:
+                    continue
+                if line.startswith("@fx:"):
+                    print(f'playlist: skipping "{line[:48]}…": the built-in effects are gone (Formulas replace them)',
+                          file=sys.stderr, flush=True)
                     continue
                 if platforms and not matches_platforms(line, platforms):
                     continue
@@ -3365,8 +3360,8 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "glow" and v not in GLOWS:
                         self.send_error_json(400, "glow must be off, short or long")
                         return
-                    if field == "look_formula" and v and not v.startswith("@fx:psi?"):
-                        self.send_error_json(400, "look_formula must be \"\" or a formula (@fx:psi?src=…)")
+                    if field == "look_formula" and v and not v.startswith("@formula?"):
+                        self.send_error_json(400, "look_formula must be \"\" or a formula (@formula?src=…)")
                         return
                     if field == "look_formula" and len(v.encode()) > 2048:
                         self.send_error_json(413, f"this formula is too long for the panel ({len(v.encode())} B as sent; the limit is 2048 B)")
@@ -3386,14 +3381,15 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "boot_show" and v not in BOOT_SHOWS:
                         self.send_error_json(400, "boot_show must be off, short or full")
                         return
+                    if field == "attract" and v.startswith("fx:"):
+                        self.send_error_json(400, ATTRACT_MESSAGE + "; the built-in effects are gone: for a Formula, make a playlist of it and choose it as attract_set")
+                        return
                     if field == "attract" and not (
                         v in ("", "clock")
-                        or (v.startswith("fx:") and len(v.encode()) <= ATTRACT_MAX and live_parse("@" + v))
                         or (v.startswith("text:") and v[5:].strip() and len(v.encode()) <= ATTRACT_MAX
                             and not any(ord(c) < 32 or 0x7F <= ord(c) < 0xA0 for c in v))
                     ):
-                        self.send_error_json(
-                            400, 'attract must be "" (the playlist), "clock", "text:<message>" (at most 200 characters, one line) or "fx:<effect>[?options]"')
+                        self.send_error_json(400, ATTRACT_MESSAGE)
                         return
                     if field == "auto_prepare" and v not in AUTO_PREPARE:
                         self.send_error_json(400, "auto_prepare must be idle, always or off")
@@ -3788,14 +3784,14 @@ def make_handler(ctx: Context, quiet: bool):
             if not isinstance(p, str):
                 self.send_error_json(400, "invalid JSON: missing field `path`")
                 return
-            if req.get("live") is True and not p.startswith("@fx:psi?"):
-                self.send_error_json(400, "\"live\" is only for a formula (@fx:psi?src=…)")
+            if req.get("live") is True and not p.startswith("@formula?"):
+                self.send_error_json(400, "\"live\" is only for a formula (@formula?src=…)")
                 return
             if req.get("over") is True:
                 # The editor's formula over the file on screen, until the
                 # playlist moves on ("" takes it off).
-                if p and not p.startswith("@fx:psi?"):
-                    self.send_error_json(400, "\"over\" is only for a formula (@fx:psi?src=…), or \"\" to take it off")
+                if p and not p.startswith("@formula?"):
+                    self.send_error_json(400, "\"over\" is only for a formula (@formula?src=…), or \"\" to take it off")
                     return
                 if len(p.encode()) > 2048:
                     self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is 2048 B)")
@@ -3813,9 +3809,12 @@ def make_handler(ctx: Context, quiet: bool):
                         ctx.player.over = (p, ctx.player.ordinal)
                 self.send_json(200, {"ok": True, "path": p, "over": True})
                 return
+            if p.startswith("@fx:"):
+                self.send_error_json(415, RETIRED_FX_MESSAGE)
+                return
             if p.startswith("@"):
                 # A live item: drawn by the player, no file lookup.
-                formula = p.startswith("@fx:psi?")
+                formula = p.startswith("@formula?")
                 if formula and len(p.encode()) > 2048:
                     self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is 2048 B)")
                     return
@@ -3826,7 +3825,7 @@ def make_handler(ctx: Context, quiet: bool):
                     if not ctx.player.playlist:
                         self.send_error_json(503, "no playlist is running")
                         return
-                    if formula and (ctx.player.current() or "").startswith("@fx:psi?"):
+                    if formula and (ctx.player.current() or "").startswith("@formula?"):
                         ctx.player.retune(p)
                     elif req.get("live") is True:
                         self.send_error_json(409, "no formula is on the panel now")
