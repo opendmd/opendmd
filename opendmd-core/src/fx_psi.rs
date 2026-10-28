@@ -13,7 +13,7 @@
 //! `t` the time since it opened, going on across passes, and its `seed` a
 //! new one at each open.
 //!
-//! **Memory.** The program (2,832 B) and the VM's working memory
+//! **Memory.** The program (2,876 B) and the VM's working memory
 //! ([`opendmd_psi::Scratch`], 8,192 B at 128 lanes) are one allocation made
 //! when the path is opened, zeroed and filled in place (never built on the
 //! main task's stack); a formula that draws (`draw { }`) also has its
@@ -377,18 +377,19 @@ pub fn path(src: &str, opts: &str) -> String {
 }
 
 /// An `@fx:psi` query: the source, the frame time asked (`fps=`; `None`:
-/// the formula's `fps N`, else 20 ms), the sliders.
+/// the formula's `fps N`, else 20 ms), the sliders (`None`: not on the
+/// path, so the formula's declared default: `psi::Meta::values`).
 struct Query {
     src: String,
     delay_ms: Option<u8>,
-    sliders: [i32; 3],
+    sliders: [Option<i32>; 3],
 }
 
 fn query(query: &str) -> Query {
     let mut q = Query {
         src: String::new(),
         delay_ms: None,
-        sliders: [0; 3],
+        sliders: [None; 3],
     };
     for kv in query.split('&') {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
@@ -404,7 +405,7 @@ fn query(query: &str) -> Query {
             }
             "a" | "b" | "c" => {
                 if let Some(n) = psi::number(v) {
-                    q.sliders[usize::from(k.as_bytes()[0] - b'a')] = n;
+                    q.sliders[usize::from(k.as_bytes()[0] - b'a')] = Some(n);
                 }
             }
             _ => {}
@@ -509,7 +510,8 @@ impl PsiFx {
         let (est, delay) = compile(&q, &mut fx.prog)?;
         fx.ink = canvas_for(&fx.prog, None)?;
         fx.delay_ms = delay;
-        fx.set_sliders(q.sliders);
+        let s = fx.prog.meta().values(q.sliders);
+        fx.set_sliders(s);
         fx.inputs.seed = next_seed();
         fx.gov = Governor::new(start_estimate(&fx.prog, est), fx.ms());
         Ok(fx)
@@ -550,7 +552,8 @@ impl PsiFx {
         }
         self.prog = *prog;
         self.delay_ms = delay;
-        self.set_sliders(q.sliders);
+        let s = self.prog.meta().values(q.sliders);
+        self.set_sliders(s);
         let g = Governor::new(start_estimate(&self.prog, est), self.ms());
         if g.level > self.gov.level {
             self.gov = g;
@@ -852,6 +855,12 @@ impl FormulaLook {
 
     fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
         crate::fx_psi::compile_into(&q.src, prog)?;
+        // Its own `look screen 40` line: the look is that composition (the
+        // controls' defaults stay the formula's: the compiler takes the
+        // part's when the composed text declares none).
+        if let Some(text) = psi::look::declared(&q.src, prog) {
+            crate::fx_psi::compile_into(&text?, prog)?;
+        }
         if !prog.over() {
             prog.clear();
             return Err(psi::Error {
@@ -885,9 +894,7 @@ impl FormulaLook {
 
     fn set(&mut self, q: &Query, est: u32) {
         self.delay_ms = Self::delay(q);
-        self.inputs.a = q.sliders[0];
-        self.inputs.b = q.sliders[1];
-        self.inputs.c = q.sliders[2];
+        [self.inputs.a, self.inputs.b, self.inputs.c] = self.prog.meta().values(q.sliders);
         let g = Governor::new(est, self.ms());
         if g.level > self.gov.level || self.t0.is_none() {
             self.gov = g;
@@ -1896,6 +1903,55 @@ mod tests {
         // A bad edit changes nothing.
         assert!(look.retune(&super::path("gray(tme)", "")).is_err());
         assert!(look.is_animated());
+    }
+
+    /// A slot the path leaves unset plays at the formula's declared
+    /// default (formula-apps F1); a value on the path wins, even outside
+    /// the range (the formula holds it to its range itself).
+    #[test]
+    fn an_unset_control_plays_at_its_default() {
+        let src = "control zoom 1..4 = 2.5\ncontrol mode = calm, wild\ngray(zoom/4 + mode*0.1 + c)";
+        let Some(Fx::Psi(fx)) = Fx::parse(&path(src)) else {
+            panic!()
+        };
+        assert_eq!((fx.inputs.a, fx.inputs.b, fx.inputs.c), (5 << 15, 0, 0));
+        let Some(Fx::Psi(fx)) = Fx::parse(&super::path(src, "a=9&b=1&c=0.5")) else {
+            panic!()
+        };
+        assert_eq!((fx.inputs.a, fx.inputs.b, fx.inputs.c), (9 << 16, 1 << 16, 1 << 15));
+        // A live edit takes the new formula's defaults.
+        let Some(Fx::Psi(mut fx)) = Fx::parse(&path("gray(a)")) else {
+            panic!()
+        };
+        assert_eq!(fx.inputs.a, 0);
+        fx.retune_from(&super::path(src, "")["@fx:psi?".len()..]).unwrap();
+        assert_eq!(fx.inputs.a, 5 << 15);
+        // And a look.
+        let look = FormulaLook::from_path(&super::path("control k 0..1 = 0.75\nlayer multiply { gray(k) }", "")).unwrap();
+        assert_eq!(look.inputs.a, 3 << 14);
+    }
+
+    /// A formula's own `look screen 40` line: the player draws the
+    /// composition it asks for, the program `look::compose` gives.
+    #[test]
+    fn a_formulas_look_line_is_its_look() {
+        let body = "control k 0..1 = 0.5\nhsv(x, 1, k)";
+        let mine = FormulaLook::from_path(&super::path(&format!("look screen 40\n{body}"), "")).unwrap();
+        let composed = psi::look::compose(body, "screen", 40).unwrap();
+        let theirs = FormulaLook::from_path(&super::path(&composed, "")).unwrap();
+        assert!(*mine.prog == *theirs.prog);
+        assert_eq!(mine.inputs.a, 1 << 15);
+        // `look` alone is the formula itself: one that covers the GIF is
+        // still no look.
+        assert_eq!(
+            FormulaLook::from_path(&super::path(&format!("look\n{body}"), "")).unwrap_err().msg,
+            COVERS
+        );
+        // Played on its own the line is ignored.
+        let Some(Fx::Psi(fx)) = Fx::parse(&path(&format!("look screen 40\n{body}"))) else {
+            panic!()
+        };
+        assert!(!fx.prog.over());
     }
 
     #[test]
