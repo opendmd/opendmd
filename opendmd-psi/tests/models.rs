@@ -212,26 +212,26 @@ fn the_cost_table_is_the_estimates() {
     let us = |src: &str| plain(src, false);
     let narrowed: &[(&str, i64, &str, &str)] = &[
         (
-            "| + − that can't overflow | 25 |",
-            25,
+            "| + − that can't overflow | 28 |",
+            28,
             "gray(x*px)",
             "gray(x*px + x)",
         ),
         (
-            "| `*` that can't overflow | 55 ",
-            55,
+            "| `*` that can't overflow | 41 ",
+            41,
             "gray(x*px)",
             "gray(x*px*px)",
         ),
         (
-            "(33 when the product is small)",
-            33,
+            "(37 when the product is small)",
+            37,
             "gray(x)",
             "gray(x*0.3)",
         ),
         (
-            "| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 28 |",
-            28,
+            "| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 33 |",
+            33,
             "gray(x*px)",
             "gray(x*px/8)",
         ),

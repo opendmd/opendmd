@@ -742,6 +742,130 @@ fn speed(out: &mut [u8]) {
     );
 }
 
+/// How a psi-speed2 row draws: the program as compiled (fused runs, draw
+/// loops as lanes), compiled without the fused runs' markers, or that
+/// with every draw loop a turn at a time (before psi-speed2).
+#[derive(Clone, Copy, PartialEq)]
+enum Way {
+    Fused,
+    Steps,
+    Turns,
+}
+
+/// A frame's inputs at `ms` into the row (a `loop forever` formula's
+/// `tw` from `ms` as it is, the others' `t` within the loop).
+fn inputs_at(prog: &psi::Program, ms: u32) -> psi::Inputs {
+    let lp = prog.loop_ms();
+    psi::golden::inputs(if lp == 0 { ms } else { ms % lp })
+}
+
+/// One frame of `prog` drawn `way` (with `st`, a still cache, if given).
+fn draw_way(
+    prog: &psi::Program,
+    way: Way,
+    s: &mut psi::Scratch<128>,
+    ink: &mut psi::Ink,
+    st: Option<&mut psi::Still>,
+    ms: u32,
+    out: &mut [u8],
+) {
+    let t = fx_psi::tables();
+    let i = inputs_at(prog, ms);
+    if way == Way::Turns {
+        psi::render_rows_ink_turns::<128>(prog, s, Some(ink), &i, &t, None, u32::MAX, out);
+    } else {
+        psi::render_rows_still::<128>(prog, s, Some(ink), st, &i, &t, None, u32::MAX, out);
+    }
+}
+
+/// [`FRAMES`] VM frames of `prog` drawn `way`, 20 ms apart, with a still
+/// cache when it has values for one (kept on an untimed first frame).
+fn time_way(prog: &psi::Program, way: Way, out: &mut [u8]) -> (u32, u32, &'static str) {
+    let mut s = zeroed::<psi::Scratch<128>>();
+    s.reset();
+    let mut ink = psi::Ink::boxed();
+    let mut st = psi::Still::new();
+    let cached = way != Way::Turns && prog.still_lanes() > 0 && st.take(prog);
+    draw_way(prog, way, &mut s, &mut ink, cached.then_some(&mut st), 0, out);
+    let (a, b, _) = timed(|k| draw_way(prog, way, &mut s, &mut ink, cached.then_some(&mut st), k * 20, out));
+    (a, b, if cached { "cached" } else { "plain" })
+}
+
+/// psi-speed2's before and after, in one boot: each example's VM frame as
+/// compiled (fused runs; draw loops of 32 turns and more as lanes), without
+/// the fused runs (`compile_unfused`), and that with every draw loop a turn
+/// at a time (`render_rows_ink_turns`, for the examples that have a lane
+/// loop); every frame of each the same bytes all three ways.
+fn speed2(out: &mut [u8]) {
+    let (mut same, mut differ) = (0u32, 0u32);
+    for (name, src) in [
+        ("Starfield", STARFIELD_EX),
+        ("Wireframe cube", CUBE_EX),
+        ("Tunnel", TUNNEL_EX),
+        ("Rotozoom", ROTOZOOM_EX),
+        ("Rotozoom floor", ROTOZOOM_FLOOR_EX),
+        ("Endless road", ROAD_EX),
+        ("Plasma", PLASMA_EX),
+        ("Fire", FIRE_EX),
+    ] {
+        if heap_low("speed2") {
+            break;
+        }
+        let mut fused = zeroed::<psi::Program>();
+        let mut steps = zeroed::<psi::Program>();
+        let ok = crate::psi_stack::run(|| psi::compile_into(src, &mut fused)).is_some_and(|r| r.is_ok())
+            && crate::psi_stack::run(|| psi::compile_unfused(src, &mut steps)).is_some_and(|r| r.is_ok());
+        if !ok {
+            say!(error, "psi-probe: speed2 {name}: does not compile");
+            continue;
+        }
+        let lanes = fused.lane_loops();
+        {
+            let mut s = zeroed::<psi::Scratch<128>>();
+            s.reset();
+            let mut ink = psi::Ink::boxed();
+            let span = if fused.loop_ms() == 0 { 60_000 } else { fused.loop_ms() };
+            for ms in [0, span / 3, span * 2 / 3, span.saturating_sub(20)] {
+                let mut h = [0u64; 3];
+                for (j, (p, way)) in [(&*fused, Way::Fused), (&*steps, Way::Steps), (&*steps, Way::Turns)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    draw_way(p, way, &mut s, &mut ink, None, ms, out);
+                    h[j] = psi::golden::fnv(out);
+                }
+                if h[0] == h[1] && h[1] == h[2] {
+                    same += 1;
+                } else {
+                    differ += 1;
+                    say!(error,
+                        "psi-probe: speed2 {name} at {ms} ms: fused {:#018x}, steps {:#018x}, turns {:#018x}",
+                        h[0], h[1], h[2]
+                    );
+                }
+            }
+        }
+        let (f50, f90, how) = time_way(&fused, Way::Fused, out);
+        let (s50, s90, _) = time_way(&steps, Way::Steps, out);
+        let (t50, t90) = if lanes > 0 {
+            let (a, b, _) = time_way(&steps, Way::Turns, out);
+            (a, b)
+        } else {
+            (0, 0)
+        };
+        say!(info,
+            "psi-probe: speed2 {name:<15} ({how}): fused p50 {f50} p90 {f90} | steps p50 {s50} p90 {s90} | turns p50 {t50} p90 {t90} us a frame ({lanes} lane loops); est {} us ({} steps, {} turns)",
+            fused.esp32_us_still(),
+            steps.esp32_us_still(),
+            steps.esp32_us_turns()
+        );
+    }
+    say!(info,
+        "psi-probe: speed2 frames: {same} the same fused, as steps and a turn at a time, {differ} differ{}",
+        if differ == 0 { " (bit-identical)" } else { "" }
+    );
+}
+
 /// The compiler's own stack on the worst inputs (`psi::worst`, the deepest
 /// last): each compiled on a thread of its own with a [`WORST_STACK`] stack,
 /// reporting the bytes it used; then on the player's compile stack and
@@ -911,6 +1035,8 @@ pub fn run(root: &str) {
 
     speed(&mut out);
     say!(info, "psi-probe: main stack {} B unused after the speed rows", stack_unused());
+    speed2(&mut out);
+    say!(info, "psi-probe: main stack {} B unused after the speed2 rows", stack_unused());
     // Tunnel's effect again, now the heap has moved on: placement against
     // code (speed-a: 4,860 us as an effect, 3,709 VM-direct).
     effects(&[("Tunnel", TUNNEL_EX, "")], " again", &mut canvas);
@@ -1178,6 +1304,44 @@ pub fn run(root: &str) {
             u64::from(p50.saturating_sub(base)) * 1000 / u64::from(n),
             prog.esp32_us(),
             prog.draw_us()
+        );
+        // psi-speed2: a loop of 32 turns or more runs as lanes; the same
+        // row a turn at a time (as these were measured before).
+        if prog.lane_loops() > 0 {
+            let (q50, q90, _) = time_way(&prog, Way::Turns, &mut out);
+            say!(info,
+                "psi-probe: step {what:<30} (turns) p50 {q50} p90 {q90} us a frame = {} ns a turn over the base, est {} us",
+                u64::from(q50.saturating_sub(base)) * 1000 / u64::from(n),
+                prog.esp32_us_turns()
+            );
+        }
+    }
+    // psi-speed2's fused runs: each pattern alone, as compiled (fused) and
+    // without the markers (its steps), for `fuse::saved`.
+    const FUSE_STEPS: [(&str, &str); 6] = [
+        ("checker", "gray((floor(px*0.37 + py*0.2 + t) + floor(py*0.5 - px*0.13)) % 2)"),
+        ("mul_add (lane, value)", "v = px*py*0.002\ngray(frac(v*0.7 + t))"),
+        ("mul_add (lane, lane)", "v = px*py*0.002\nw = sin(px*0.1 + py*0.3)\ngray(frac(v*0.7 + w))"),
+        ("pal_select * lane", "c = (px + py) % 2\npal(fire, c ? 0.3 : 0.7) * (floor(px*py*0.002 + t) % 8 / 8)"),
+        ("pal_pick", "pal(rainbow, pick(floor(px*0.07 + py*0.3) % 9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, t/8, 0.8, 0.9))"),
+        ("pal_ink", "draw { for k < 8 { line(k*16, 0, k*16 + 8, 31) } }\npal(ice, ink)"),
+    ];
+    for (what, src) in FUSE_STEPS {
+        let mut steps = zeroed::<psi::Program>();
+        let ok = crate::psi_stack::run(|| psi::compile_into(src, &mut prog)).is_some_and(|r| r.is_ok())
+            && crate::psi_stack::run(|| psi::compile_unfused(src, &mut steps)).is_some_and(|r| r.is_ok());
+        if !ok {
+            say!(error, "psi-probe: fuse {what}: does not compile");
+            continue;
+        }
+        let fused = prog.steps() < prog.len();
+        let (f50, f90, _) = lanes::<128>(&prog, 8000, &mut out);
+        let (s50, s90, _) = lanes::<128>(&steps, 8000, &mut out);
+        say!(info,
+            "psi-probe: fuse {what:<22} fused {fused}: p50 {f50} p90 {f90} | steps p50 {s50} p90 {s90} us a frame = {} ns a pixel saved, est {} us ({} steps)",
+            (i64::from(s50) - i64::from(f50)) * 1000 / 4096,
+            prog.esp32_us(),
+            steps.esp32_us()
         );
     }
     // Phase 2's runs: the column run (once a frame a column) and the still

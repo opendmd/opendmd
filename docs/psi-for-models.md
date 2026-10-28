@@ -499,8 +499,8 @@ its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
 |---|---|---|---|---|
 | + − compare min max step and or `%`2ⁿ | 50 | | `sin` `cos` | 110 |
 | `*` | 86 | | `tri` `saw` `sqr` `select` `clamp` | 60 |
-| + − that can't overflow | 25 | | `*` that can't overflow | 55 (33 when the product is small) |
-| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 28 | | | |
+| + − that can't overflow | 28 | | `*` that can't overflow | 41 (37 when the product is small) |
+| `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 33 | | | |
 | `%` (other) | 113 | | `mix` | 130 |
 | neg abs floor frac not | 40 | | `smoothstep` | 214 + a division if its edges vary |
 | `/` by a varying value, `1/v` | 685 | | `hash` | 220 |

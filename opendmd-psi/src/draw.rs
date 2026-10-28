@@ -216,48 +216,42 @@ fn run_lanes<const N: usize>(
             }
         }
         // The lines and dots, turn by turn: each operand a register's
-        // lane at the turn or a value the same every turn (looked up once
-        // a lane of turns).
+        // lane at the turn (`0x80 | r`) or a value the same every turn (its
+        // slot), looked up once a lane of turns.
         let (sc, lanes) = (&s.sc, &s.lanes);
-        let src = |v: u8| match vl.reg(v) {
-            Some(r) => (r, 1usize),
-            None => ((v & 0x7f) as usize, 0),
-        };
-        let at = |(k, lane): (usize, usize), j: usize| {
-            if lane != 0 {
-                lanes[k][j]
+        let src = |v: u8| vl.reg(v).map_or(v & 0x7f, |r| 0x80 | r as u8);
+        let at = |o: u8, j: usize| {
+            if o & 0x80 != 0 {
+                lanes[(o & 0x7f) as usize % (REGS + 1)][j]
             } else {
-                sc[k]
+                sc[o as usize]
             }
         };
-        let prims = prog.ops[body.clone()]
-            .iter()
-            .filter(|op| matches!(op.code, code::LINE_FROM | code::LINE_TO | code::DOT));
-        let mut ps = [(0u8, [(0usize, 0usize); 3]); PRIMS];
+        let prim = |op: &Op| matches!(op.code, code::LINE_FROM | code::LINE_TO | code::DOT);
+        let mut ps = [[0u8; 4]; PRIMS];
         let mut np = 0;
-        for op in prims.clone().take(PRIMS) {
-            ps[np] = (op.code, [src(op.a), src(op.b), src(op.c)]);
+        for op in prog.ops[body.clone()].iter().filter(|op| prim(op)) {
+            if np < PRIMS {
+                ps[np] = [op.code, src(op.a), src(op.b), src(op.c)];
+            }
             np += 1;
         }
-        let few = prims.count() <= PRIMS;
         for j in 0..m {
-            let mut one = |code: u8, o: [(usize, usize); 3]| {
-                let (a, b, c) = (at(o[0], j), at(o[1], j), at(o[2], j));
-                match code {
+            let mut one = |p: [u8; 4]| {
+                let (a, b, c) = (at(p[1], j), at(p[2], j), at(p[3], j));
+                match p[0] {
                     code::LINE_FROM => pen.from = (a, b, c),
                     code::LINE_TO => pen.line(ink, (a, b, c)),
                     _ => pen.dot(ink, a, b, c),
                 }
             };
-            if few {
-                for &(code, o) in &ps[..np] {
-                    one(code, o);
+            if np <= PRIMS {
+                for &p in &ps[..np] {
+                    one(p);
                 }
             } else {
-                for op in &prog.ops[body.clone()] {
-                    if matches!(op.code, code::LINE_FROM | code::LINE_TO | code::DOT) {
-                        one(op.code, [src(op.a), src(op.b), src(op.c)]);
-                    }
+                for op in prog.ops[body.clone()].iter().filter(|op| prim(op)) {
+                    one([op.code, src(op.a), src(op.b), src(op.c)]);
                 }
             }
         }
