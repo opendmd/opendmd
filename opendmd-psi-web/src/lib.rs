@@ -150,8 +150,7 @@ pub fn look(src: &str, blend: &str, amount: u8) -> String {
     if !build(src) {
         return String::new();
     }
-    let ms = state().prog.loop_ms();
-    match opendmd_psi::look::wrap(src, ms, blend, amount) {
+    match opendmd_psi::look::wrap(src, &state().prog, blend, amount) {
         Ok(s) if build(&s) => s,
         Ok(_) => String::new(),
         Err(e) => {

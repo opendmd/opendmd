@@ -35,6 +35,16 @@
 //! The web app takes a saved look apart again by this shape (js/looks.js
 //! `saved`, a regex over the path's `; `-joined text, for a look whose
 //! formula that browser doesn't have): change both together.
+//!
+//! **A formula's own `look` line** (`look screen 40`,
+//! docs/research/formula-apps.md §2.1) is this composition written in the
+//! formula: [`declared`] gives the composed text the line asks for (the
+//! player draws that as the look; played on its own the line is ignored).
+//! The line itself is left out of the part ([`wrap`] cuts it), so a look
+//! composed from a formula with one is the same text as from the formula
+//! without it, and the formula's `control` lines inside the part still
+//! describe the slots (the compiler takes a part's controls when the
+//! formula's own lines declare none).
 
 use crate::{compile_into, Error, Program};
 use alloc::string::String;
@@ -52,15 +62,35 @@ const PART: &str = "look";
 /// (a layered formula with a blend other than over is the compiler's
 /// error, as is a look too long for the panel).
 pub fn compose(src: &str, blend: &str, amount: u8) -> Result<String, Error> {
-    // Only its loop is wanted (boxed: ~2.8 KB).
+    // Only its loop and declarations are wanted (boxed: ~2.9 KB).
     let mut p = alloc::boxed::Box::<Program>::default();
     compile_into(src, &mut p)?;
-    wrap(src, p.loop_ms(), blend, amount)
+    wrap(src, &p, blend, amount)
 }
 
-/// [`compose`] for a formula already compiled: `loop_ms` its loop
-/// (`Program::loop_ms`). The web module compiles once and calls this.
-pub fn wrap(src: &str, loop_ms: u32, blend: &str, amount: u8) -> Result<String, Error> {
+/// The look a formula's own `look` line asks for, composed as [`compose`]
+/// would: `None` when it has none, or it is `look` (over, 100: the formula
+/// itself). `prog` is `src` compiled.
+pub fn declared(src: &str, prog: &Program) -> Option<Result<String, Error>> {
+    let (blend, amount) = prog.meta().look()?;
+    (blend != "over" || amount < 100).then(|| wrap(src, prog, blend, amount))
+}
+
+/// [`compose`] for a formula already compiled into `prog` (its loop, and
+/// where a `look` line is, which is left out). The web module compiles
+/// once and calls this.
+pub fn wrap(src: &str, prog: &Program, blend: &str, amount: u8) -> Result<String, Error> {
+    let loop_ms = prog.loop_ms();
+    // Its `look` line, left out.
+    let cut = prog.meta().look().and_then(|_| look_statement(src));
+    let owned;
+    let src = match cut {
+        Some((a, e)) => {
+            owned = [src.get(..a).unwrap_or(""), src.get(e..).unwrap_or("")].concat();
+            owned.as_str()
+        }
+        None => src,
+    };
     // (No `format!`: core::fmt is ~8 KB gz of the web module.)
     if !BLENDS.contains(&blend) {
         return Err(Error {
@@ -108,6 +138,55 @@ pub fn wrap(src: &str, loop_ms: u32, blend: &str, amount: u8) -> Result<String, 
         s.push_str(" }");
     }
     Ok(s)
+}
+
+/// Where a formula's `look` line is (from `look` to its `;` or its line's
+/// end, a comment after it included): the formula compiled, so its
+/// declarations are the statements at its top whose first word is one
+/// (`name`, `about` and `control` lines may have text in quotes, with
+/// `;` or `--` inside).
+fn look_statement(src: &str) -> Option<(usize, usize)> {
+    let b = src.as_bytes();
+    let mut i = 0;
+    loop {
+        // The next statement: past spaces, line ends, `;` and comments.
+        while i < b.len() {
+            match b[i] {
+                b' ' | b'\t' | b'\r' | b'\n' | b';' => i += 1,
+                b'-' | b'/' if b.get(i + 1) == Some(&b[i]) => {
+                    while i < b.len() && b[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let start = i;
+        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+            i += 1;
+        }
+        let word = src.get(start..i)?;
+        if !crate::builtins::DECLARATIONS.contains(&word) {
+            return None;
+        }
+        // To the statement's end: `;` or the line's end outside quotes.
+        let mut quote = false;
+        while i < b.len() && b[i] != b'\n' && (quote || b[i] != b';') {
+            if b[i] == b'"' {
+                quote = !quote;
+            }
+            if !quote && (b[i] == b'-' || b[i] == b'/') && b.get(i + 1) == Some(&b[i]) {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                break;
+            }
+            i += 1;
+        }
+        if word == "look" {
+            return Some((start, (i + usize::from(b.get(i) == Some(&b';'))).min(b.len())));
+        }
+    }
 }
 
 /// `whole.frac` with `frac` in `places` decimal places, trailing zeros

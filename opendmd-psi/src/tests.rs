@@ -597,7 +597,7 @@ fn program_is_plain_data() {
     let mut p = Program::default();
     assert!(compile_into("gray(nope)", &mut p).is_err());
     assert_eq!(p, Program::default());
-    assert!(core::mem::size_of::<Program>() <= 2832);
+    assert!(core::mem::size_of::<Program>() <= 2876);
 }
 
 /// Names that became functions later stay usable as values in saved
@@ -632,7 +632,7 @@ fn compact_compiles_the_same() {
 fn sizes() {
     // What the docs say (Program, the scratch at 128 and 64 lanes, the
     // draw stage's canvas).
-    assert_eq!(core::mem::size_of::<Program>(), 2832);
+    assert_eq!(core::mem::size_of::<Program>(), 2876);
     assert_eq!(core::mem::size_of::<crate::Ink>(), 4096);
     assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192);
     assert_eq!(core::mem::size_of::<Scratch<64>>(), 4864);
@@ -684,7 +684,10 @@ fn worst_case_formulas() {
                     | "nested sprite"
                     | "nested forever"
                     | "nested palette"
-            ) || (1900..=2048).contains(&n),
+                    | "declared"
+                    | "declared part"
+            ) && n <= 2048
+                || (1900..=2048).contains(&n),
             "{name}: {n} B"
         );
         match compile(&src) {
@@ -2619,3 +2622,4 @@ fn palette_error_messages() {
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
+

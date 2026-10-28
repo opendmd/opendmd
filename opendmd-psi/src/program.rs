@@ -522,9 +522,11 @@ pub struct Program {
     pub(crate) loop_ms: u32,
     /// The `table` constants (Q16.16), each table's entries in a row.
     pub(crate) tables: [i32; MAX_TABLE],
+    /// What the formula declares (its controls, whether it is a look).
+    pub(crate) meta: crate::meta::Meta,
 }
 
-const _: () = assert!(core::mem::size_of::<Program>() <= 2832);
+const _: () = assert!(core::mem::size_of::<Program>() <= 2876);
 
 impl core::fmt::Debug for Program {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -556,6 +558,7 @@ impl Default for Program {
             frame_ms: 0,
             loop_ms: 8000,
             tables: [0; MAX_TABLE],
+            meta: crate::meta::Meta::default(),
         }
     }
 }
@@ -1046,6 +1049,13 @@ impl Program {
         self.frame_ms = 0;
         self.loop_ms = 8000;
         self.tables.fill(0);
+        self.meta = crate::meta::Meta::default();
+    }
+
+    /// What the formula declares: its controls (defaults for the slots a
+    /// path leaves unset), and whether it may be a look.
+    pub fn meta(&self) -> &crate::meta::Meta {
+        &self.meta
     }
 
     /// A readable listing of the steps (tests, the bench, debugging).

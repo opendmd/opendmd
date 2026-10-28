@@ -30,6 +30,7 @@ mod draw;
 pub mod fixed;
 mod fuse;
 pub mod look;
+mod meta;
 mod program;
 mod range;
 mod still;
@@ -37,9 +38,11 @@ mod tables;
 mod vm;
 
 pub use compile::{
-    compact, compile_into, compile_layout, compile_opts, compile_unfused, compile_with, number,
-    Error, Info, MAX_DEPTH, MAX_NODES, MAX_SOURCE,
+    compact, compile_declared, compile_into, compile_layout, compile_opts, compile_unfused, compile_with, number,
+    Declared, DeclaredControl, Error, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT,
+    MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE,
 };
+pub use meta::{Control, Meta};
 pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
 pub use still::{Still, StillLane, STILL_LANES};
@@ -512,10 +515,36 @@ pub mod worst {
         })
     }
 
+    /// Every declaration a formula may have (formula-apps F1), the longest
+    /// text each may hold, then [`nested_digit`]'s nesting with the
+    /// controls' names at the bottom: the header's reading before the
+    /// deepest parse.
+    pub fn declared() -> String {
+        let head = format!(
+            "psi 1\nname \"{}\"\nabout \"{}\"\ncontrol zoom 1..4 = 2 \"{}\"\ncontrol mode = calm, wild, odd, four, five, six \"{}\"\ncontrol c -1..1 = 0.5 \"{}\"\nlook screen 40\ngray(",
+            "N".repeat(crate::MAX_NAME_TEXT),
+            "A".repeat(crate::MAX_ABOUT_TEXT),
+            "L".repeat(crate::MAX_LABEL_TEXT),
+            "L".repeat(crate::MAX_LABEL_TEXT),
+            "L".repeat(crate::MAX_LABEL_TEXT),
+        );
+        deepest_in(&head, ")", |s| format!("digit({s}, zoom, mode)"))
+    }
+
+    /// A part whose own lines declare three controls (a formula pasted in),
+    /// inside a part, nested as deep as it goes inside.
+    pub fn declared_part() -> String {
+        deepest_in(
+            "part q {\npart p {\nname \"P\"\ncontrol k 0..2 = 1\ncontrol m = on, off\ncontrol n = 0.5\nlook\ngray(",
+            ")\n}\np\n}\nq",
+            |s| format!("sin({s} + k*m*n)"),
+        )
+    }
+
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 13] = [
+    pub const ALL: [Case; 15] = [
         ("many locals", many_locals),
         ("chain", chain),
         ("distinct terms", distinct),
@@ -529,6 +558,8 @@ pub mod worst {
         ("nested sprite", nested_sprite),
         ("nested forever", nested_forever),
         ("nested palette", nested_palette),
+        ("declared", declared),
+        ("declared part", declared_part),
     ];
 }
 
