@@ -3,14 +3,14 @@
 `opendmd-sim` plays a card, or any folder of GIFs, in a desktop window drawn
 as the panel's LEDs: the same `opendmd-core` engine the firmware runs, with
 a renderer that models the real P4 panel's dots and glow instead of flat
-squares. It is a tool for developers (checking an effect, a transition or a
+squares. It is a tool for developers (checking a Formula, a transition or a
 card without a board on the desk).
 
 **Most people want the web demo instead.** It runs in any browser, with
 nothing to install, and plays a demo card on the same engine:
 [opendmd.github.io/demo](https://opendmd.github.io/demo/).
 
-![The simulator playing a fire tunnel effect](images/sim-tunnel.png)
+![The simulator playing a tunnel Formula](images/sim-tunnel.png)
 
 ## Run it from source
 
@@ -31,7 +31,10 @@ folder or GIF dropped onto the program counts as the argument.
 `opendmd-sim --help` lists every option: filters for a card (`--platforms`,
 `--title`, `--category`), `--shuffle`, `--scale` (pixels per LED, default
 10), `--transition`, `--look` (the panel's tints), `--glow`, and
-`--play '@clock?date=1'` for a single live item or effect.
+`--play '@clock?date=1'` for a single live item, `--formula FILE.psi` (with
+`--formula-opts a=0.5&fps=100`) or `--play '@formula?src=…'` for a Formula
+(the `psi` feature is on by default; `opendmd-psi/formulas/` has `plasma.psi`,
+`fire.psi` and others).
 
 | Key | |
 |---|---|
@@ -42,7 +45,7 @@ folder or GIF dropped onto the program counts as the argument.
 
 ![The clock live item](images/sim-clock.png)
 
-The demo and the web demo's card use only OpenDMD's own effects and
+The demo and the web demo's card use only OpenDMD's own Formulas and
 [Kenney](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
 
 ## Screenshots without a window

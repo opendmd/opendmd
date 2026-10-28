@@ -436,7 +436,7 @@ pal(ice, ink)               -- the pixels read the canvas as ink, 0..1
   line's ink runs evenly from `v0` at its start to `v1` at its end in 1/255
   steps. Where shapes overlap the brighter wins (`max`), so crossing lines
   never darken and near edges beat far ones without sorting. No
-  antialiasing: one pixel wide, as the built-in effects draw.
+  antialiasing: one pixel wide, as the Starfield and Wireframe cube examples draw.
 - **Inside `draw { }`** only values that are the same for every pixel: `t`,
   the clock, the sliders, `frame { }` values, tables, loop counters. A loop
   counts with a literal number; loops nest two deep; the loops' turns in a

@@ -74,6 +74,15 @@ layout, recovery and the update flow in detail.
 
 The crates are deliberately not a Cargo workspace.
 
+**Live items.** Paths that begin with `@` are drawn by the core, not read
+from the card (`opendmd-core/src/synth.rs` parses them): `@clock`, `@text`,
+`@boot`, `@card:` and `@formula?src=…`, a [Psi](psi-for-models.md) Formula
+that `opendmd-psi` compiles and the player runs on the same code in the
+firmware, the simulator and the browser. The built-in effects (`@fx:tunnel`
+and the others) are gone: they are Formulas now. Options and limits are in
+the [HTTP API](api.md#live-items); to see a live item without a board,
+`make sim ARGS="--play '@clock?date=1'"`.
+
 ## Reference
 
 - [HTTP API](api.md): every route the player answers, with `curl`
@@ -83,7 +92,5 @@ The crates are deliberately not a Cargo workspace.
   the one for the player's firmware.
 - [The simulator](simulator.md): running it from source, its keys and screenshots,
   and where the LED model lives.
-- [Writing an effect](writing-effects.md): how the panel's effects work,
-  their limits on the ESP32, and adding a new one, with a worked example.
 - [Hardware pinout](../hardware/PINOUT.md): the DMDoS carrier board's
   wiring.

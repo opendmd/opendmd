@@ -68,7 +68,7 @@ export async function useSaid(f) {
 // The look a path holds, as a formula (for one not found among this
 // browser's Formulas): its text and values.
 export function fromPath(m, p) {
-  const q = new URLSearchParams(p.slice(8)), f = { src: q.get('src') || '', saved: 1 };
+  const q = new URLSearchParams(p.slice(9)), f = { src: q.get('src') || '', saved: 1 };
   for (const k of 'abc') if (num(q.get(k)) != null) f[k] = num(q.get(k));
   f.name = named(m, f);
   return f;

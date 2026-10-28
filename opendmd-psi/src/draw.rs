@@ -3,7 +3,8 @@
 //! canvas ([`Ink`]) that the pixel steps read back as `ink`.
 //!
 //! Integer arithmetic throughout (the scalar steps are `eval`'s, the
-//! rasteriser is integer Bresenham as `opendmd-core`'s `fx::line`), so a
+//! rasteriser is integer Bresenham as the built-in effects' was: `opendmd-core`'s
+//! `fx_psi` tests keep it as `reference_line`), so a
 //! frame's canvas is the same bytes on the ESP32, the host and in wasm. A
 //! frame is still a pure function of its inputs: the canvas is cleared
 //! first. Bounded whatever the program: [`TURNS`] loop turns, [`PRIMITIVES`]
@@ -298,7 +299,7 @@ impl Pen {
     }
 
     /// The line from `self.from` to `to`: integer Bresenham as
-    /// `opendmd_core::fx::line` (its two tests in its order), the ink from
+    /// `opendmd-core`'s `reference_line` (its two tests in its order), the ink from
     /// the start's byte to the end's in equal integer steps.
     fn line(&mut self, ink: &mut Ink, to: (i32, i32, i32)) {
         if !self.may() {

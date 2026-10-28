@@ -55,7 +55,7 @@ const KEY_API_KEY: &str = "api_key";
 const KEY_ATTRACT_SET: &str = "attract_set";
 const KEY_LOOK: &str = "look";
 const KEY_GLOW: &str = "glow";
-/// The Formula look: a formula's `@fx:psi?src=…` path (`""`: none). Its
+/// The Formula look: a formula's `@formula?src=…` path (`""`: none). Its
 /// name, blend and amount are the formula's own `name` and `look` lines.
 const KEY_LOOK_FORMULA: &str = "look_fx";
 /// Keys earlier test builds kept beside it (the look's name, its
@@ -148,15 +148,15 @@ pub struct Settings {
     pub attract_set: Option<String>,
     /// What attract mode shows instead of a playlist: `""` (the playlist,
     /// as before), `"clock"` (the live clock), `"text:<message>"` (the
-    /// scrolling text) or `"fx:<name>[?options]"` (a live effect). See
-    /// [`attract_path`].
+    /// scrolling text). See [`attract_path`]; a stored `"fx:…"` (a built-in
+    /// effect, gone) reads as `""`, with a log line.
     pub attract: String,
     /// The DMD tint (`opendmd_core::look`), applied at the blit.
     pub look: Look,
     /// Phosphor glow; off by default (it holds 12 KB while lit).
     pub glow: GlowLevel,
     /// The Formula look (`formula_look.rs`): a formula drawn over
-    /// everything that plays, as its `@fx:psi?src=…` path (at most
+    /// everything that plays, as its `@formula?src=…` path (at most
     /// `synth::MAX_FORMULA_PATH`); `""` = none.
     pub look_formula: String,
     /// The start-up show: `off`, `short` (the default) or `full`
@@ -182,11 +182,6 @@ pub struct Settings {
 
 /// Is `v` an `attract` value `PUT /api/config` may store?
 pub fn valid_attract(v: &str) -> bool {
-    if let Some(spec) = v.strip_prefix("fx:") {
-        return v.len() <= ATTRACT_MAX
-            && opendmd_core::fx::Fx::parse(&format!("{}{spec}", opendmd_core::fx::PREFIX))
-                .is_some();
-    }
     match v.strip_prefix("text:") {
         _ if v.is_empty() || v == "clock" => true,
         Some(msg) => {
@@ -196,13 +191,10 @@ pub fn valid_attract(v: &str) -> bool {
     }
 }
 
-/// The virtual file an `attract` value plays (`@clock`, `@text?msg=…`,
-/// `@fx:…`), `None` for the playlist.
+/// The virtual file an `attract` value plays (`@clock`, `@text?msg=…`),
+/// `None` for the playlist.
 pub fn attract_path(v: &str) -> Option<String> {
     use opendmd_core::synth;
-    if let Some(spec) = v.strip_prefix("fx:") {
-        return Some(format!("{}{spec}", opendmd_core::fx::PREFIX));
-    }
     match v.strip_prefix("text:") {
         _ if v == "clock" => Some(synth::CLOCK.to_string()),
         Some(msg) if !msg.trim().is_empty() => Some(synth::text_path(msg)),
@@ -382,7 +374,16 @@ impl Config {
             },
             attract: self
                 .get_string(KEY_ATTRACT)
-                .filter(|s| valid_attract(s))
+                .filter(|s| {
+                    // The built-in effects' form (`fx:tunnel…`) is gone.
+                    if s.starts_with("fx:") {
+                        log::warn!(
+                            "attract: {:?} is no longer a live item (the built-in effects are gone); showing the playlist",
+                            s.chars().take(48).collect::<String>()
+                        );
+                    }
+                    valid_attract(s)
+                })
                 .unwrap_or(d.attract),
             look: self
                 .get_string(KEY_LOOK)

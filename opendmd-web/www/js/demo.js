@@ -244,7 +244,7 @@ async function look(path) {
   try {
     const P = await pkg();
     if (lookOn != path || !sim) return;
-    const q = new URLSearchParams(path.slice(8)), Q = (k, v = q.get(k)) => (/^-?(\d+\.?\d*|\.\d+)$/.test(v || '') && Math.abs(+v) < 32768 ? Math.round(+v * 65536) : -2147483648); // unset (also empty, junk, out of range): the formula's default, as fx_psi's query
+    const q = new URLSearchParams(path.slice(9)), Q = (k, v = q.get(k)) => (/^-?(\d+\.?\d*|\.\d+)$/.test(v || '') && Math.abs(+v) < 32768 ? Math.round(+v * 65536) : -2147483648); // unset (also empty, junk, out of range): the formula's default, as fx_psi's query
     if (!P.asLook(q.get('src') || '')) throw new Error(P.error());
     const loop = P.info()[4] || 0;
     sim.preview.p.setOver((px) => {
@@ -264,7 +264,7 @@ async function look(path) {
 // The player's checks of a Formula look before it is saved (fx_psi's
 // FormulaLook::compile): it compiles, lets the GIF show through, ≤ 12 ms.
 async function lookCheck(path) {
-  const P = await pkg(), src = (p) => new URLSearchParams(p.slice(8)).get('src') || '';
+  const P = await pkg(), src = (p) => new URLSearchParams(p.slice(9)).get('src') || '';
   const i = P.asLook(src(path)) && P.info();
   const why = !i ? P.error() : !(i[5] & 32) ? 'this Formula covers the GIF entirely: choose a lower amount or another blend'
     : i[6] > 12000 ? `this formula is too heavy to draw over GIFs (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 12 ms) — simplify it` : '';

@@ -14,7 +14,7 @@ Several client threads at once, each with random short delays:
   RePlayOS on or off, with `follow_host` the dead address (no ARP answer:
   the poll's connect times out), the Pi (`--pi`: refused while RePlayOS is
   down, answering when it is up) — interleaved with `POST /api/play` of
-  `@fx:tunnel`, `@clock` and a GIF, `GET /api/status`, and now and then a
+  a small Formula (`@formula?src=..`), `@clock` and a GIF, `GET /api/status`, and now and then a
   `POST /api/follow/test`;
 - **download**: `GET` of a large GIF (> 1 MB), read whole, or dropped part
   way (the detached request's close path);
@@ -175,13 +175,19 @@ def conn_failure(dev, thread, what, exc, tolerate):
 def pause(lo, hi):
     STOP.wait(random.uniform(lo, hi))
 
+# A small Formula as the device writes its path: the source compacted, space
+# as "+", and "% & + # ?" (and non-printable ASCII) as %XX.
+FORMULA_SRC = "loop 4; gray(frac(x + t/4))"
+FORMULA_PATH = "@formula?src=" + "".join(
+    "+" if c == " " else f"%{ord(c):02X}" if c in "%&+#?" or not 32 < ord(c) < 127 else c for c in FORMULA_SRC)
+
 
 def control(dev, args, gifs):
     hosts = [args.dead, args.pi]
     follow = True
     while not STOP.is_set():
         op = random.choices(
-            ["config", "tunnel", "clock", "gif", "status", "test"],
+            ["config", "formula", "clock", "gif", "status", "test"],
             weights=[4, 3, 2, 2, 4, 1],
         )[0]
         try:
@@ -195,9 +201,9 @@ def control(dev, args, gifs):
                 # The crash came 0.2 s after one of these: play right away.
                 if random.random() < 0.6:
                     STOP.wait(random.uniform(0.05, 0.4))
-                    op = random.choice(["tunnel", "gif", "clock"])
-            if op in ("tunnel", "clock", "gif"):
-                path = {"tunnel": "@fx:tunnel", "clock": "@clock"}.get(op) or random.choice(gifs)
+                    op = random.choice(["formula", "gif", "clock"])
+            if op in ("formula", "clock", "gif"):
+                path = {"formula": FORMULA_PATH, "clock": "@clock"}.get(op) or random.choice(gifs)
                 st, _, ms, _ = request(dev, "POST", "/api/play", body=json.dumps({"path": path}),
                                        headers={"Content-Type": "application/json"})
                 record("control", "POST /api/play", st, ms, path)

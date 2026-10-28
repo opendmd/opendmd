@@ -170,9 +170,25 @@ pub fn parse_manifest(text: &str) -> Vec<Entry> {
         .unwrap_or(text)
         .split('\n')
         .map(|line| line.trim_end_matches(['\r', ' ', '\t']))
-        .filter(|line| !line.is_empty())
+        .filter(|line| !line.is_empty() && !retired(line))
         .map(Entry::from_path)
         .collect()
+}
+
+/// Is `line` a built-in effect's (`@fx:tunnel?…`, `@fx:psi?…`), from before
+/// they were Formulas? It names nothing now: [`scan`] and
+/// [`parse_manifest`] skip it with one log line each time they read it, so a
+/// stale playlist plays the rest (`@formula?src=…` is a Formula's line).
+fn retired(line: &str) -> bool {
+    if !crate::synth::is_retired_effect(line) {
+        return false;
+    }
+    let cut = line.char_indices().nth(48).map_or(line, |(i, _)| &line[..i]);
+    log::warn!(
+        "playlist: skipping {cut:?}{}: the built-in effects are gone (Formulas replace them)",
+        if cut.len() < line.len() { "…" } else { "" }
+    );
+    true
 }
 
 /// Render entries back to card format: one path per line, each terminated
@@ -193,7 +209,7 @@ pub fn render_manifest(entries: &[Entry]) -> String {
 /// component at 255. 512 covers both with room to spare, and keeping it a
 /// stack array is what makes `entry_at` allocation-free on the firmware.
 const MAX_LINE: usize = 512;
-/// Longest line read at all: a Formula's path (`@fx:psi?src=…`, up to
+/// Longest line read at all: a Formula's path (`@formula?src=…`, up to
 /// [`MAX_FORMULA_PATH`](crate::synth::MAX_FORMULA_PATH)) with some trailing
 /// whitespace. Only a line past [`MAX_LINE`] goes to the heap for the rest.
 const MAX_LONG_LINE: usize = crate::synth::MAX_FORMULA_PATH + 64;
@@ -216,7 +232,8 @@ fn trim_line(raw: &str) -> &str {
 /// line and one [`Entry`] are alive at a time, and the entry is dropped as
 /// soon as `visit` returns. Tolerance matches `parse_manifest` exactly — a
 /// leading BOM (skipped, but offsets stay absolute file offsets), CRLF, blank
-/// lines and trailing whitespace.
+/// lines and trailing whitespace — and so does skipping a retired effect's
+/// line (`@fx:…`, logged).
 pub fn scan<R: BufRead>(mut reader: R, mut visit: impl FnMut(u32, &Entry)) -> io::Result<()> {
     let mut raw = String::new();
     let mut offset: u64 = 0;
@@ -229,7 +246,7 @@ pub fn scan<R: BufRead>(mut reader: R, mut visit: impl FnMut(u32, &Entry)) -> io
         let start = offset;
         offset += read as u64;
         let line = trim_line(&raw);
-        if line.is_empty() {
+        if line.is_empty() || retired(line) {
             continue;
         }
         visit(start as u32, &Entry::from_path(line));
@@ -1423,11 +1440,59 @@ mod tests {
         }
     }
 
+    /// A playlist from before the built-in effects were Formulas: its
+    /// `@fx:` lines (the natives', and the Formula path's old `@fx:psi`
+    /// name) are skipped, each with one log line, and the rest plays.
+    #[test]
+    fn retired_effect_lines_are_skipped_and_logged() {
+        use std::sync::Mutex;
+        static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        struct Capture;
+        impl log::Log for Capture {
+            fn enabled(&self, _: &log::Metadata) -> bool {
+                true
+            }
+            fn log(&self, r: &log::Record) {
+                let m = r.args().to_string();
+                // Other tests log too, on other threads: only ours.
+                if m.contains("retired-test") {
+                    SEEN.lock().unwrap().push(format!("{} {m}", r.level()));
+                }
+            }
+            fn flush(&self) {}
+        }
+        if log::set_logger(&Capture).is_ok() {
+            log::set_max_level(log::LevelFilter::Warn);
+        }
+        let text = "/gifs/Consoles/SNES_Plok_08.gif\n\
+                    @fx:tunnel?palette=fire&retired-test=1\n\
+                    @clock\n\
+                    @fx:psi?src=gray(x)&name=retired-test\r\n\
+                    @formula?src=gray(x)&name=Kept\n";
+        let want = [
+            "/gifs/Consoles/SNES_Plok_08.gif",
+            "@clock",
+            "@formula?src=gray(x)&name=Kept",
+        ];
+        let paths = |v: Vec<Entry>| v.into_iter().map(|e| e.path).collect::<Vec<_>>();
+        assert_eq!(paths(parse_manifest(text)), want);
+        let offsets = index_matching(cursor(text), &Filter::new()).unwrap();
+        let mut r = cursor(text);
+        let read: Vec<_> = offsets.iter().map(|&o| entry_at(&mut r, o).unwrap()).collect();
+        assert_eq!(paths(read), want);
+        // One line for each, each time the playlist is read (twice here).
+        let seen = SEEN.lock().unwrap().clone();
+        assert_eq!(seen.len(), 4, "{seen:#?}");
+        assert!(seen.iter().all(|m| m.starts_with("WARN playlist: skipping \"@fx:")), "{seen:#?}");
+        assert!(seen[0].contains("@fx:tunnel?palette=fire&retired-test=1"));
+        assert!(seen[0].ends_with("the built-in effects are gone (Formulas replace them)"));
+    }
+
     /// A Formula in a playlist: its path may be up to 2,048 B (past the
     /// stack buffer); it reads back whole, and the lines around it too.
     #[test]
     fn a_formula_line_reads_back_whole() {
-        let mut src = String::from("@fx:psi?src=loop+8");
+        let mut src = String::from("@formula?src=loop+8");
         while src.len() < crate::synth::MAX_FORMULA_PATH - 40 {
             src.push_str("%3B+v+%3D+x+%2A+2+%23f80");
         }

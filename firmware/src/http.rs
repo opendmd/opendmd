@@ -241,11 +241,11 @@ struct ConfigPatch {
     /// `null` = the current playlist, else a `set` value.
     #[serde(default, deserialize_with = "double_option")]
     attract_set: Option<Option<String>>,
-    /// `""`, `"clock"`, `"text:<message>"` or `"fx:<effect>[?options]"`.
+    /// `""`, `"clock"` or `"text:<message>"`.
     attract: Option<String>,
     look: Option<String>,
     glow: Option<String>,
-    /// The Formula look: a formula's `@fx:psi?src=…` path, `""` = none
+    /// The Formula look: a formula's `@formula?src=…` path, `""` = none
     /// (checked by the main task before anything is saved).
     /// Its name, blend and amount are the formula's own `name` and `look`
     /// lines (no fields of their own: unknown fields are ignored).
@@ -523,7 +523,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if let Some(v) = patch.attract {
             if !crate::nvs_config::valid_attract(&v) {
                 return req.bad_request(&format!(
-                    "attract must be \"\" (the playlist), \"clock\", \"text:<message>\" (at most {} characters, one line) or \"fx:<effect>[?options]\"",
+                    "attract must be \"\" (the playlist), \"clock\" or \"text:<message>\" (at most {} characters, one line); the built-in effects are gone: for a Formula, make a playlist of it and choose it as attract_set",
                     crate::nvs_config::ATTRACT_MAX - 5
                 ));
             }
@@ -543,7 +543,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         if let Some(v) = patch.look_formula {
             if !v.is_empty() && !opendmd_core::synth::is_formula(&v) {
-                return req.bad_request("look_formula must be \"\" or a formula (@fx:psi?src=…)");
+                return req.bad_request("look_formula must be \"\" or a formula (@formula?src=…)");
             }
             if v.len() > opendmd_core::synth::MAX_FORMULA_PATH {
                 return req.error(
@@ -836,7 +836,7 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
-        // A formula (`@fx:psi?src=…`) may be up to 2 KB; it is compiled on
+        // A formula (`@formula?src=…`) may be up to 2 KB; it is compiled on
         // the main task as it opens (a compile error or one too heavy for
         // the panel is a 400 with the compiler's sentence).
         if opendmd_core::synth::is_formula(&play.path)
@@ -852,14 +852,23 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
                 ),
             );
         }
+        // A built-in effect's path from before they were Formulas: a 415
+        // that says so.
+        if opendmd_core::synth::is_retired_effect(&play.path) {
+            return req.error(
+                415,
+                "415 Unsupported Media Type",
+                "the built-in effects are gone: Formulas replace them (play one as @formula?src=…)",
+            );
+        }
         // A virtual file (`@clock`, `@text?msg=…`) is drawn, not read; one
         // this build does not know is a 415 from the engine.
         if play.live && !opendmd_core::synth::is_formula(&play.path) {
-            return req.bad_request("\"live\" is only for a formula (@fx:psi?src=…)");
+            return req.bad_request("\"live\" is only for a formula (@formula?src=…)");
         }
         if play.over && !play.path.is_empty() && !opendmd_core::synth::is_formula(&play.path) {
             return req.bad_request(
-                "\"over\" is only for a formula (@fx:psi?src=…), or \"\" to take it off",
+                "\"over\" is only for a formula (@formula?src=…), or \"\" to take it off",
             );
         }
         let virtual_file = opendmd_core::synth::is_virtual(&play.path);

@@ -18,7 +18,6 @@
 use crate::encode;
 use crate::pipeline::{self, Colours, Edit, Fit, Image, Mapper, Overlay, Scale, H, W};
 use opendmd_core::canvas::Canvas;
-use opendmd_core::fx::Fx;
 use opendmd_core::player::GifSource;
 use std::collections::HashMap;
 use std::io::{self, Cursor};
@@ -29,26 +28,6 @@ pub const BUDGET: usize = 64 << 20;
 pub const MAX_FRAMES: usize = 5_000;
 /// A preview frame's delay: long, so the one-frame GIF never loops by itself.
 const HOLD_MS: u32 = 60_000;
-/// The most frames an effect becomes ([`effect_plan`]).
-pub const FX_MAX_FRAMES: u32 = 240;
-
-/// How a live effect becomes a GIF: `(frames, delay_ms, whole)`. One loop
-/// of it at its own frame rate, held to the GIF players' 20 ms floor (a
-/// 100 fps effect gives every other frame: the same motion, half the
-/// frames); a loop that would take more than [`FX_MAX_FRAMES`] frames is
-/// drawn at 25 fps (40 ms) instead, and one still too long is cut to
-/// [`FX_MAX_FRAMES`] (`whole` false: the GIF does not loop seamlessly).
-pub fn effect_plan(fx: &mut Fx) -> (u32, u32, bool) {
-    let ms = fx.delay().subsec_millis().max(1);
-    let loop_ms = fx.loop_frames() * ms;
-    let mut d = ms.max(pipeline::MIN_DELAY_MS);
-    if loop_ms / d > FX_MAX_FRAMES {
-        d = d.max(40);
-    }
-    let n = (loop_ms / d).max(1);
-    (n.min(FX_MAX_FRAMES), d, n <= FX_MAX_FRAMES)
-}
-
 /// Image descriptors in a GIF, by walking its blocks without decoding any
 /// (cheap: the import sizes its memory by it before decoding). A truncated
 /// frame is not counted.
@@ -112,18 +91,12 @@ impl Rendered {
     }
 }
 
-// One per animation, while it is read: the size difference is nothing.
-#[allow(clippy::large_enum_variant)]
+/// The GIF being read, one per animation.
 enum Decoding {
     Gif {
         src: GifSource<Cursor<Vec<u8>>>,
         canvas: Canvas,
     },
-    /// A live effect ([`Anim::effect`]): frame `i` is the effect at `i *
-    /// step` ms, drawn by a fresh copy of `fx` on a cleared canvas (the
-    /// sparse effects erase the frame before theirs, which is not the one
-    /// on the canvas when frames are skipped).
-    Fx { fx: Fx, step: u32, canvas: Canvas },
 }
 
 /// Everything the Frame and Look steps decide (compared, so a call that
@@ -170,7 +143,7 @@ pub struct Anim {
     pub loops: u32,
     /// Decoding stopped at a frame that would not decode.
     pub damaged: bool,
-    /// An effect cut short of a whole loop ([`effect_plan`]).
+    /// A Formula's frames cut short of a whole loop ([`frames`](Self::frames)).
     pub cut: bool,
     look: Look,
     look_set: bool,
@@ -246,27 +219,9 @@ impl Anim {
         Ok(a)
     }
 
-    /// A live effect (`@fx:…`, as the Library's Effects tab writes it) as
-    /// an animation: [`effect_plan`]'s frames, drawn by the core's effect —
-    /// the pictures the panel and the previews show — at 128x32, the first
-    /// now and the rest by [`decode`](Self::decode). `None` if the path
-    /// names no effect.
-    pub fn effect(path: &str) -> Option<Anim> {
-        let mut fx = Fx::parse(path)?;
-        let (n, step, whole) = effect_plan(&mut fx);
-        let mut a = Anim::panel(n as usize, !whole);
-        a.dec = Some(Decoding::Fx {
-            fx,
-            step,
-            canvas: Canvas::new(),
-        });
-        a.decode(1);
-        Some(a)
-    }
-
     /// Frames the page draws (a formula, by the Psi module): `n` panel
     /// frames of 128x32 RGB888 at `delay_ms` each, `first` now and the rest
-    /// by [`push`](Self::push); `cut` as for an effect (not a whole loop).
+    /// by [`push`](Self::push); `cut`: not a whole loop.
     pub fn frames(first: &[u8], n: usize, delay_ms: u32, cut: bool) -> Option<Anim> {
         if first.len() != W * H * 3 {
             return None;
@@ -346,24 +301,7 @@ impl Anim {
                 self.dec = None;
                 return true;
             }
-            let (src, canvas) = match d {
-                Decoding::Gif { src, canvas } => (src, canvas),
-                Decoding::Fx { fx, step, canvas } => {
-                    let (i, step, mut fx) = (self.frames.len() as u32, *step, *fx);
-                    if i as usize >= self.in_file {
-                        self.dec = None;
-                        continue;
-                    }
-                    canvas.clear();
-                    fx.frame(
-                        std::time::Duration::from_millis(u64::from(i * step)),
-                        canvas,
-                    );
-                    let img = rgb_image(canvas.as_bytes(), W, H);
-                    self.keep(&img, step);
-                    continue;
-                }
-            };
+            let Decoding::Gif { src, canvas } = d;
             match src.next_frame(canvas) {
                 Ok(Some(_)) => {
                     let (w, h) = src.logical_size();
