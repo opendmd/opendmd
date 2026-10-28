@@ -258,8 +258,13 @@ fn formula_path(file: &Path, opts: Option<&str>) -> Result<String> {
         prog.len(),
         prog.regs()
     );
-    let path = opendmd_core::fx_psi::path(&src, opts.unwrap_or(""));
+    let mut path = opendmd_core::fx_psi::path(&src, opts.unwrap_or(""));
     let most = opendmd_core::synth::MAX_FORMULA_PATH;
+    // Over the limit: without its `about` line, as the web app's path does
+    // (js/psikit.js `path`).
+    if path.len() > most {
+        path = opendmd_core::fx_psi::path(&psi::look::declare(&src, "about", 0, ""), opts.unwrap_or(""));
+    }
     if path.len() > most {
         bail!(
             "{}: too long to play as a path ({} bytes encoded, {most} at most): shorten it",
