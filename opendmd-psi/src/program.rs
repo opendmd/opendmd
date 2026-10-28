@@ -787,15 +787,24 @@ impl Program {
         // The column run's steps once a frame for each column: a 32nd of a
         // pixel's.
         let col = self.column_run();
-        // A fused run's steps: as ever, less what its kernel saves.
+        // A fused run's steps: as ever, less what its kernel saves; a
+        // colour of the canvas alone, `INK_NS` in all.
         let mut saved = 0;
+        let mut ink = 0..0;
         let px: u32 = self.ops[self.row_end as usize..self.len()]
             .iter()
             .enumerate()
             .map(|(k, op)| (k + self.row_end as usize, op))
             .filter(|(k, _)| !skip.contains(k))
             .map(|(k, op)| {
+                if ink.contains(&k) {
+                    return 0;
+                }
                 if op.code == code::FUSE {
+                    if op.d == crate::fuse::F_INK {
+                        ink = k + 1..k + 1 + op.a as usize;
+                        return crate::fuse::INK_NS;
+                    }
                     saved += crate::fuse::saved(op.d);
                 }
                 let ns = self.step_ns(k, op);

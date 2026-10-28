@@ -221,11 +221,12 @@ FONT = {"fonts/silkscreen.woff2"}
 # (~73.2 -> ~74.7 KB). Raised under the brief's OK.
 # 76 KB for psi-speed2 (2026-10-28, docs/research/psi-speed2.md): the
 # compiler's fused runs (`fuse.rs`: a checker's floors, add and mask, a
-# multiply-add, a palette colour of a choice, a pick or the canvas, each a
+# multiply-add, a palette colour of a choice or a pick, a colour of the
+# canvas alone, each a
 # marker before the steps) and the draw loops' lane analysis
 # (`Program::vector_loop`), both in the download only so the editor's
 # estimate stays the panel's — the browser runs neither (the steps and a
-# turn at a time draw the same bytes): +1.9 KB gz (~74.9 -> ~76.8 KB).
+# turn at a time draw the same bytes): +2.2 KB gz (~74.9 -> ~77.2 KB).
 # Raised under the brief's OK (it may move a budget with a reason).
 PSI_WASM_GZ_BUDGET = 76 * 1024  # 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three

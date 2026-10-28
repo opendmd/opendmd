@@ -2185,12 +2185,53 @@ fn fused_runs_are_their_steps() {
                     ["", " * (py/31)", " * lit"][r.below(3)]
                 )
             }
-            4 => "pal(ice, ink)".to_string(),
+            4 => [
+                "pal(ice, ink)",
+                "#40c0ff * ink",
+                "gray(ink)",
+                "rgb(ink, ink*ink, 1 - ink)",
+                "hsv(ink*0.5 + t/8, 1, ink)",
+                "pal(fire, ink*0.8 + 0.1) * (ink > 0.5 ? 1 : 0.5)",
+                "pal(fire, T[floor(ink*3)]) * (floor(ink*8)/8)",
+                "rgb(ink, ur, 0.5)",
+                "pal(ice, ink) * fog",
+                "gray(sin(ink*3 + t)*0.5 + 0.5)",
+            ][r.below(10)]
+            .to_string(),
+            5 if r.below(2) == 0 => {
+                // A random chain of the canvas: each step's function as the
+                // VM works it out for one pixel (`eval`) and along a lane.
+                const INK: &[&str] = &[
+                    "ink",
+                    "ink*ink",
+                    "sin(ink*7 + t)",
+                    "floor(ink*5)/5",
+                    "hash(ink, 3)",
+                    "noise(ink*4, 2, 0)",
+                    "noise(ink*4, t, 1.5)",
+                    "T[floor(ink*4)]",
+                    "pick(floor(ink*3), 0.2, t/9, 0.8)",
+                    "abs(ink - 0.5)",
+                    "smoothstep(0.2, 0.8, ink)",
+                    "1/(ink + 0.1)",
+                    "ink % 0.3",
+                    "sqrt(ink)",
+                    "atan2(ink, 0.5)",
+                    "len(ink, a)",
+                    "mix(0.2, 0.9, ink)",
+                    "clamp(ink*2, a, 1)",
+                    "digit(floor(ink*9), 1, 2)",
+                    "tri(ink + t)",
+                    "ink*1000 + a*30000",
+                ];
+                let mut e = || INK[r.below(INK.len())];
+                format!("hsv({} + {}, {}, {})", e(), e(), e(), e())
+            }
             _ => "rgb(cell, side, lit)".to_string(),
         };
         lines.insert(0, "fog = py < 3 ? 0 : py < 10 ? 0.625 : 1".into());
         let draw = if colour.contains("ink") {
-            "draw { for k < 40 { dot(hash(k, 3)*128, hash(k, 5)*32 + t*3, frac(k/7)) } }\n"
+            "table T = 0.1, 0.5, 0.9, 0.3\ndraw { for k < 40 { dot(hash(k, 3)*128, hash(k, 5)*32 + t*3, frac(k/7)) }\nline(0, 3, 127, 20 + t, 0.2, 1) }\n"
         } else {
             ""
         };
@@ -2220,7 +2261,7 @@ fn fused_runs_are_their_steps() {
             "mul_add",
             "pal_select",
             "pal_pick",
-            "pal_ink",
+            "colour_of_ink",
         ]
         .iter()
         .enumerate()
@@ -2245,7 +2286,7 @@ fn fused_runs_are_their_steps() {
         }
     }
     eprintln!(
-        "{n} formulas, {compiled} compiled, {frames} frames; fused: checker {}, mul_add {}, pal_select {}, pal_pick {}, pal_ink {}",
+        "{n} formulas, {compiled} compiled, {frames} frames; fused: checker {}, mul_add {}, pal_select {}, pal_pick {}, colour_of_ink {}",
         kinds[1], kinds[2], kinds[3], kinds[4], kinds[5]
     );
     assert!(compiled * 10 > n * 8, "only {compiled} of {n} compiled");

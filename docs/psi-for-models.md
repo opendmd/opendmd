@@ -518,8 +518,20 @@ its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
 (a loop's body counts as often as it turns, its end too), a line ~1,100 ns +
 320 a pixel walked (its longer side when that side's ends are constants, at
 least 12 pixels otherwise), a dot ~400, and 10 µs to clear the canvas; per
-pixel `ink` is 70 and `T[k]` 100 (measured on the device). So 192 streaks
-of ~15 steps each are ~2.5 ms, then ~1 ms for `pal(ice, ink)`.
+pixel `ink` is 70 and `T[k]` 100 (measured on the device). **A loop of 32
+turns or more runs as lanes**: each step of its body is worked out for
+128 turns at once, at about the table's per-pixel cost a turn (`hash` 220,
+`*` 86, `+` 50, `/` 685: the same functions, the same picture), then its
+lines and dots are drawn turn by turn as above; so 192 streaks of ~15
+steps each are ~1 ms of values (two lanes of 128) plus their lines, not
+~2.5 ms. A loop inside another, or one under 32 turns, runs a turn at a
+time.
+
+**Common pairs are one step** (the same picture, worked out in one pass):
+a checker `(floor(u) + floor(v)) % 2` (~45 ns, not ~155), `a*k + c` (the
+add nearly free), and the colour `pal(P, c ? A : B)` (`* k` too),
+`pal(P, pick(m, …))` and `pal(P, ink)` (the choice, pick or canvas read
+nearly free). Nothing to write differently: the panel finds them.
 
 **Two things are worked out less often than per pixel, by themselves**
 (the same pictures either way):

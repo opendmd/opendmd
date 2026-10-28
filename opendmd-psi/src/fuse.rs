@@ -37,8 +37,20 @@ pub(crate) const F_SELPAL: u8 = 3;
 /// The bottom layer's `pal(P, pick(m, …))` (`* k`, k a value for the
 /// lane): the choices' colours worked out once a lane, then looked up.
 pub(crate) const F_PICKPAL: u8 = 4;
-/// The bottom layer's `pal(P, ink)`.
-pub(crate) const F_INKPAL: u8 = 5;
+/// The bottom layer's colour of the draw stage's canvas alone: `ink`, up
+/// to [`INK_STEPS`] steps of it and values for the lane, and a colour of
+/// those (`pal(P, ink)`, `#40c0ff * ink`, `gray(ink)`): worked out for
+/// each byte of the canvas a lane meets, kept while the next pixel's byte
+/// is the same (mostly 0: nothing drawn).
+pub(crate) const F_INK: u8 = 5;
+
+/// An `F_INK` run's cost, ns a pixel (a guess until psi-probe measures
+/// it): a byte read, a compare and the colour's three bytes written, the
+/// colour worked out again only where the byte changes.
+pub(crate) const INK_NS: u32 = 40;
+
+/// Steps an `F_INK` run may hold between its `ink` and its colour.
+pub(crate) const INK_STEPS: usize = 6;
 
 /// A pick fused with its colour has at most this many choices.
 pub(crate) const PICK_MAX: usize = 16;
@@ -50,7 +62,7 @@ pub(crate) fn name(kind: u8) -> &'static str {
         F_MADD => "mul_add",
         F_SELPAL => "pal_select",
         F_PICKPAL => "pal_pick",
-        F_INKPAL => "pal_ink",
+        F_INK => "colour_of_ink",
         _ => "?",
     }
 }
@@ -142,12 +154,40 @@ fn pattern(ops: &[Op]) -> Option<(u8, usize, [u8; 3], u8)> {
             ok.then_some((F_PICKPAL, 2, [a.d; 3], 0))
         }
         INK => {
-            let b = op(1)?;
-            let ok = b.code == OUT_PAL && b.a == a.d && b.d & PAL_SCALED == 0;
-            ok.then_some((F_INKPAL, 2, [a.d; 3], 0))
+            // Steps that read only the run's registers and values for the
+            // lane, then the bottom layer's plain colour (no coverage) of
+            // them. (Every register it writes must be dead after it:
+            // `fuse` checks them all, `ink_regs`.)
+            let mut regs = [a.d; INK_STEPS + 1];
+            for (j, o) in ops.iter().enumerate().skip(1).take(INK_STEPS + 1) {
+                let (v, n) = code::operands(o);
+                if !v[..n]
+                    .iter()
+                    .all(|&v| !is_lane(v) || regs[..j].contains(&v))
+                {
+                    return None;
+                }
+                if code::is_colour(o.code) {
+                    return (o.code < OUT_LAYER).then_some((F_INK, j + 1, [0; 3], 0));
+                }
+                let ok = matches!(o.code, 0..=LAST_BIN | 32..=LAST_UN | 64..=LAST_TERN | INK)
+                    && !code::is_wide(o.code)
+                    && is_reg(o.d)
+                    && j < INK_STEPS + 1;
+                if !ok {
+                    return None;
+                }
+                regs[j] = o.d;
+            }
+            None
         }
         _ => None,
     }
+}
+
+/// The registers an `F_INK` run of `n` steps writes.
+fn ink_regs(ops: &[Op], n: usize) -> impl Iterator<Item = u8> + '_ {
+    ops[..n.saturating_sub(1)].iter().filter_map(writes)
 }
 
 /// Whether register `r` is read by nothing in `ops` before something
@@ -183,8 +223,16 @@ pub(crate) fn fuse(prog: &mut Program) {
             k += 1;
             continue;
         }
+        let ok = |kind: u8, n: usize, mid: [u8; 3], dst: u8| {
+            if kind == F_INK {
+                // Every register the run writes is dead after it.
+                ink_regs(ops, n).all(|r| dead(&ops[n..], r))
+            } else {
+                mid.iter().all(|&r| r == dst || dead(&ops[n..], r))
+            }
+        };
         match pattern(ops) {
-            Some((kind, n, mid, dst)) if mid.iter().all(|&r| r == dst || dead(&ops[n..], r)) => {
+            Some((kind, n, mid, dst)) if ok(kind, n, mid, dst) => {
                 runs.push((k, kind, n));
                 k += n;
             }
@@ -228,7 +276,8 @@ pub(crate) fn saved(kind: u8) -> u32 {
         F_MADD => 20,
         F_SELPAL => 50,
         F_PICKPAL => 85,
-        F_INKPAL => 50,
+        // (An `F_INK` run is costed whole by the estimate: `INK_NS`.)
+        F_INK => 0,
         _ => 0,
     }
 }
