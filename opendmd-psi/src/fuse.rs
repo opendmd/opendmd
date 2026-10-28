@@ -28,8 +28,10 @@ use alloc::vec::Vec;
 /// floor(v)) % 2^k`, x and y lanes, m a value for the lane.
 pub(crate) const F_CHECKER: u8 = 1;
 /// A checker's last three steps, `mask(add_w(r, floor(y)), m)`, where the
-/// first floor (`r`, a lane) was worked out earlier (not next to the
-/// second: Psi lays steps out as their values are needed).
+/// first floor (`r`, a register) was worked out earlier (not next to the
+/// second: Psi lays steps out as their values are needed). [`fuse`] checks
+/// that the step that last wrote `r` is a floor, so the kernel is
+/// [`F_CHECKER`]'s (`floor(r) == r`): one loop for both.
 pub(crate) const F_CHECKER3: u8 = 2;
 /// The bottom layer's `pal(P, select(c, A, B))` (`* k`, k a value for the
 /// lane), A and B values for the lane: two colours once a lane.
@@ -39,11 +41,11 @@ pub(crate) const F_SELPAL_K: u8 = 6;
 /// The bottom layer's `pal(P, ink)` or `gray(ink)`: the canvas's bytes to
 /// colours in one pass (no lane of `ink` written and read back).
 pub(crate) const F_INK1: u8 = 7;
-/// `add_w(mul_w(a, b), c)` (or `mul_n`), a a lane, b a value for the
-/// lane, c either (a value for the lane with `mul_n`, or when the result
-/// goes into a's register). (Dropped after s2probe-a's 18 ns a pixel,
-/// back after s2probe-b: Rotozoom floor 1,766 -> 1,965 µs and Tunnel
-/// 3,399 -> 3,479 without it, ~24 ns a pixel each.)
+/// `add_w(mul_w(a, b), c)` (or `mul_n`, run as `mul_w`: the same bits on
+/// a narrowed frame), a a lane, b a value for the lane, c either (a value
+/// for the lane when the result goes into a's register). (Dropped after
+/// s2probe-a's 18 ns a pixel, back after s2probe-b: Rotozoom floor 1,766
+/// -> 1,965 µs and Tunnel 3,399 -> 3,479 without it, ~24 ns a pixel each.)
 pub(crate) const F_MADD: u8 = 8;
 /// The bottom layer's `pal(P, pick(m, …))` (`* k`, k a value for the
 /// lane): the choices' colours worked out once a lane, then looked up.
@@ -103,37 +105,43 @@ fn pattern(ops: &[Op]) -> Option<(u8, usize, [u8; 3], u8)> {
     let a = op(0)?;
     match a.code {
         FLOOR => {
-            let (b, c, d) = (op(1)?, op(2)?, op(3)?);
-            let (x, r1, y, r2) = (a.a, a.d, b.a, b.d);
-            let sum = c.code == ADD_W && ((c.a == r1 && c.b == r2) || (c.a == r2 && c.b == r1));
-            let ok = b.code == FLOOR
-                && is_lane(x)
-                && is_lane(y)
-                && y != r1
-                && r1 != r2
-                && sum
-                && d.code == MASK
-                && d.a == c.d
-                && !is_lane(d.b)
-                && d.d != x
-                && d.d != y;
-            if ok {
-                return Some((F_CHECKER, 4, [r1, r2, c.d], d.d));
+            let (b, c) = (op(1)?, op(2)?);
+            // `floor(x), floor(y), add_w, mask`: the four steps.
+            if let Some(d) = op(3) {
+                let (x, r1, y, r2) = (a.a, a.d, b.a, b.d);
+                let sum = c.code == ADD_W && ((c.a == r1 && c.b == r2) || (c.a == r2 && c.b == r1));
+                let ok = b.code == FLOOR
+                    && is_lane(x)
+                    && is_lane(y)
+                    && y != r1
+                    && r1 != r2
+                    && sum
+                    && d.code == MASK
+                    && d.a == c.d
+                    && !is_lane(d.b)
+                    && d.d != x
+                    && d.d != y;
+                if ok {
+                    return Some((F_CHECKER, 4, [r1, r2, c.d], d.d));
+                }
             }
-            // The second floor alone, the first's value an operand.
-            let (y, r2, c, d) = (a.a, a.d, b, c);
-            let r1 = if c.a == r2 { c.b } else { c.a };
+            // `floor(y), add_w(r, ·), mask`: the second floor alone, the
+            // first's value `r` an operand (`fuse` checks that a floor
+            // wrote it: the kernel floors it again).
+            let (fy, add, m) = (a, b, c);
+            let (y, ry) = (fy.a, fy.d);
+            let r = if add.a == ry { add.b } else { add.a };
             let ok = is_lane(y)
-                && c.code == ADD_W
-                && (c.a == r2 || c.b == r2)
-                && r1 != r2
-                && is_lane(r1)
-                && d.code == MASK
-                && d.a == c.d
-                && !is_lane(d.b)
-                && d.d != y
-                && d.d != r1;
-            ok.then_some((F_CHECKER3, 3, [r2, c.d, c.d], d.d))
+                && add.code == ADD_W
+                && (add.a == ry || add.b == ry)
+                && r != ry
+                && is_reg(r)
+                && m.code == MASK
+                && m.a == add.d
+                && !is_lane(m.b)
+                && m.d != y
+                && m.d != r;
+            ok.then_some((F_CHECKER3, 3, [ry, add.d, add.d], m.d))
         }
         MUL_W | MUL_N => {
             let b = op(1)?;
@@ -147,11 +155,11 @@ fn pattern(ops: &[Op]) -> Option<(u8, usize, [u8; 3], u8)> {
             // (The destination may be the lane multiplied when the added
             // value is one for the lane: a kernel that reads and writes
             // its own lane.)
+            // (`mul_n` runs as `mul_w`, the same bits on the frames a
+            // kernel runs on: see `vm::fused`.)
             let ok = b.code == ADD_W
                 && (b.a == r || b.b == r)
                 && c != r
-                // (mul_n's kernel takes a value for the lane only.)
-                && (a.code == MUL_W || !is_lane(c))
                 && (b.d != l || !is_lane(c))
                 && b.d != c;
             ok.then_some((F_MADD, 2, [r, r, r], b.d))
@@ -197,6 +205,22 @@ fn dead(ops: &[Op], r: u8) -> bool {
     true
 }
 
+/// Whether the first floor's value that the [`F_CHECKER3`] run at `k`
+/// adds (`r`) is a floor's: the last step before the run that writes `r`
+/// (from the pixel steps' start, `re`: the column run's and the still
+/// run's steps included, whose values are the same when kept or cached) is
+/// a `floor`. A fused run before it writes only its last step's register
+/// (its others are dead after it, so `r` is none of them).
+fn floored(prog: &Program, re: usize, k: usize) -> bool {
+    let (fy, add) = (&prog.ops[k], &prog.ops[k + 1]);
+    let r = if add.a == fy.d { add.b } else { add.a };
+    prog.ops[re..k]
+        .iter()
+        .rev()
+        .find(|op| writes(op) == Some(r))
+        .is_some_and(|op| op.code == code::FLOOR)
+}
+
 /// Put a marker before each run the VM may fuse (see the module).
 #[inline(never)]
 pub(crate) fn fuse(prog: &mut Program) {
@@ -217,7 +241,9 @@ pub(crate) fn fuse(prog: &mut Program) {
         let ok =
             |n: usize, mid: [u8; 3], dst: u8| mid.iter().all(|&r| r == dst || dead(&ops[n..], r));
         match pattern(ops) {
-            Some((kind, n, mid, dst)) if ok(n, mid, dst) => {
+            Some((kind, n, mid, dst))
+                if ok(n, mid, dst) && (kind != F_CHECKER3 || floored(prog, re, k)) =>
+            {
                 runs.push((k, kind, n));
                 k += n;
             }
@@ -261,8 +287,8 @@ pub(crate) fn saved(kind: u8) -> u32 {
         F_SELPAL_K => 134,
         F_PICKPAL => 50,
         // The ink lane's write and read (`ink` 70 a pixel) and the colour's
-        // own load.
-        F_INK1 => 70,
+        // own load: s2probe-c's rows 64 (lines) and 81 (blank), the lower.
+        F_INK1 => 64,
         F_MADD => 22,
         _ => 0,
     }

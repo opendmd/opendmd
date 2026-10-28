@@ -1280,7 +1280,11 @@ pub fn run(root: &str) {
     // line), for `Program::draw_us`'s constants (calibrated from these on
     // 2026-10-27: a step run 420 ns, a dot 400, a line 1,100 + 320 a pixel;
     // tests/measured.rs `DRAW`).
-    const DRAW_STEPS: [(&str, &str, u32); 7] = [
+    // psi-speed3: the last two, steps laned since (`%`, the comparisons,
+    // `sin`) and steps still worked out turn by turn (`noise`, `digit`,
+    // `sqrt`, `step`: `vm::lane_draw` -> `value_of` -> `eval`, the deepest
+    // draw path), for `LANE_EVAL_NS`.
+    const DRAW_STEPS: [(&str, &str, u32); 9] = [
         ("draw base (1 dot off)", "draw { dot(-1, -1, t) }\ngray(ink)", 1),
         ("draw loop step: 1024 dots off", "draw { for k < 1024 { dot(-1, -1, t) } }\ngray(ink)", 1024),
         ("draw loop step: +add", "draw { for k < 1024 { dot(-1, -1, k + t) } }\ngray(ink)", 1024),
@@ -1288,7 +1292,10 @@ pub fn run(root: &str) {
         ("draw dot on panel x1024", "draw { for k < 1024 { dot(k % 128, 5 + t) } }\ngray(ink)", 1024),
         ("draw line 12 x256", "draw { for k < 256 { line(10, 5, 21, 5 + t) } }\ngray(ink)", 256),
         ("draw line 100 x64", "draw { for k < 64 { line(10, 5, 109, 5 + t) } }\ngray(ink)", 64),
+        ("draw laned: mod cmp sin", "draw { for k < 1024 { dot(-1, -1, sin(k*0.01 + t) + (k % 7 >= 3) + (k % 5 != 1)) } }\ngray(ink)", 1024),
+        ("draw eval: noise digit sqrt step", "draw { for k < 1024 { dot(-1, -1, noise(k*0.1, t, 0.5) + digit(k % 10, 1, 2) + sqrt(k + t) + step(0.5, frac(k*0.3))) } }\ngray(ink)", 1024),
     ];
+    say!(info, "psi-probe: main stack {} B unused before the draw rows", stack_unused());
     let mut base = 0u32;
     for (what, src, n) in DRAW_STEPS {
         if compile(src, &mut prog, false, true).is_err() {
@@ -1316,10 +1323,13 @@ pub fn run(root: &str) {
             );
         }
     }
+    say!(info, "psi-probe: main stack {} B unused after the draw rows (lane steps through value_of: noise, glyph)", stack_unused());
     // psi-speed2's fused runs: each pattern alone, as compiled (fused) and
-    // without the markers (its steps), for `fuse::saved`.
-    const FUSE_STEPS: [(&str, &str); 11] = [
+    // without the markers (its steps), for `fuse::saved`. (psi-speed3: the
+    // dispatch in flash, a `mul_n` multiply-add run as `mul_w`.)
+    const FUSE_STEPS: [(&str, &str); 12] = [
         ("mul_add (lane, value)", "v = px*py*0.002\ngray(frac(v*0.7 + t))"),
+        ("mul_add (mul_n)", "gray(frac((x + y)*0.2 + t))"),
         ("mul_add (lane, lane)", "v = px*py*0.002\nww = sin(px*0.1 + py*0.3)\ngray(frac(v*0.7 + ww))"),
         ("checker", "u = px*py*0.01 + t\nv = py*0.7 - px*0.3 + t/2\ngray((floor(u) + floor(v)) % 2)"),
         ("checker_3", "gray((floor(px*0.37 + py*0.2 + t) + floor(py*0.5 - px*0.13)) % 2)"),
