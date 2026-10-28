@@ -113,7 +113,7 @@ pub fn compile(src: &str) -> bool {
     build(src)
 }
 
-/// [`compile`], once in the module ([`look`] calls it twice).
+/// [`compile`], once in the module ([`as_look`] calls it twice).
 #[inline(never)]
 fn build(src: &str) -> bool {
     let s = state();
@@ -143,20 +143,39 @@ fn fail(msg: &str) {
     s.err_len = n;
 }
 
-/// Any formula as a look (Settings › Look, the editor's "Use as the
-/// look"): `src` drawn over the GIF with `blend` (`over screen add
-/// multiply max min`) at `amount` percent, as the text the player is sent
-/// (`opendmd_psi::look`), compiled — [`info`] and [`error`] then describe
-/// the look. Empty when the formula or the look does not compile.
+/// A formula's `look` line set (`blend` one of `over screen add multiply
+/// max min`, at `amount` percent: `look`, `look screen 40`), or taken out
+/// (`blend` empty): the Formula settings sheet's switch, a text edit
+/// (`opendmd_psi::look::set`); nothing is compiled. Empty for another blend.
 #[wasm_bindgen]
 pub fn look(src: &str, blend: &str, amount: u8) -> String {
+    opendmd_psi::look::set(src, blend, amount).unwrap_or_default()
+}
+
+/// `src` with its `nth` `word` declaration line (`name`, `about`,
+/// `control`: `nth` counts control lines) replaced by `line`, taken out
+/// when `line` is empty, or put in at the top when there is none
+/// (`opendmd_psi::look::declare`): the settings sheet's edits. Nothing is
+/// compiled.
+#[wasm_bindgen]
+pub fn declare(src: &str, word: &str, nth: usize, line: &str) -> String {
+    opendmd_psi::look::declare(src, word, nth, line)
+}
+
+/// What the panel draws over every GIF for a formula kept as its look
+/// (`fx_psi::FormulaLook`): the composition its `look` line asks for, or
+/// the formula itself (no line, or `look` alone), compiled — [`info`] and
+/// [`error`] then describe the look. Empty when it does not compile.
+#[wasm_bindgen(js_name = asLook)]
+pub fn as_look(src: &str) -> String {
     if !build(src) {
         return String::new();
     }
-    match opendmd_psi::look::wrap(src, &state().prog, blend, amount) {
-        Ok(s) if build(&s) => s,
-        Ok(_) => String::new(),
-        Err(e) => {
+    match opendmd_psi::look::declared(src, &state().prog) {
+        None => String::from(src),
+        Some(Ok(s)) if build(&s) => s,
+        Some(Ok(_)) => String::new(),
+        Some(Err(e)) => {
             state().at = [0; 2];
             fail(&e.msg);
             String::new()
@@ -284,7 +303,9 @@ fn draw(over: bool, ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c
 
 /// What `src` declares, as JSON (empty when it does not compile: [`compile`]
 /// says why): `{"name": "…" | null, "about": "…" | null, "look": [blend,
-/// amount] | null, "controls": [control…]}`, a control for each slot it
+/// amount] | null, "own": n, "controls": [control…]}` (`own`: how many of
+/// the controls are the formula's own `control` lines, the first n; the
+/// rest its parts' or read without one), a control for each slot it
 /// declares or reads, in slot order: `{"slot": "a", "name", "label",
 /// "kind": "slider", "lo", "hi", "default", "declared": true}` or `{…,
 /// "kind": "choice", "words": […], "default": 0, …}`. A slot read without
@@ -327,6 +348,8 @@ pub fn controls(src: &str) -> String {
         }
         None => j.push_str("null"),
     }
+    j.push_str(",\"own\":");
+    j.push(char::from(b'0' + d.own));
     j.push_str(",\"controls\":[");
     let mut first = true;
     for k in 0..3 {

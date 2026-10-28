@@ -76,56 +76,56 @@ export async function mount(el) {
   f.brightness.addEventListener('input', () => { held = 1; later(); });
   for (const k of ['shuffle', 'set']) f[k].onchange = () => save([k], play);
   for (const k of ['look', 'glow']) f[k].onchange = () => save([k], looks);
-  // A Formula over every GIF (js/looks.js, imported with the tab): any
-  // one saved in Formulas (this browser) or an example, with a blend and an
-  // amount; one that can't be drawn over GIFs is listed, not offered. The
-  // one set elsewhere (another browser, an edit since) stays listed, taken
-  // apart from its path, with the panel's word if it can't draw it any more.
-  // Applied as it changes (the amount once it settles).
+  // A Formula over every GIF (js/looks.js, imported with the tab): one of
+  // this browser's or a bundled one that declares `look` (its own line says
+  // how it goes over the GIFs: the Formula's settings, in Formulas); one
+  // that can't be drawn over GIFs is listed, not offered. The one set
+  // elsewhere (another browser, an edit since) stays listed, read from its
+  // path, with the panel's word if it can't draw it any more. Change… opens
+  // its settings. Applied as it changes.
   const lf = h('select', { id: 'st-look-formula' });
   const lfErr = h('p.cap.bad', { id: 'st-look-formula-err', hidden: true });
-  let lfs = [], L = null, M = null, lc = null;
-  const lcBox = h('div', { id: 'st-look-mix', hidden: true, style: 'margin:12px 0' });
-  // (`force`: after a refusal, even while the controls have the focus.)
-  async function lookFormulas(force) {
+  const lfWhy = h('p.cap', { id: 'st-look-why', hidden: true });
+  const lfEdit = h('button.sm', { id: 'st-look-change', hidden: true, onclick: () => { app.psiEdit = { f: { ...lfs[lf.value] }, settings: 1 }; app.go('formulas/edit'); } }, 'Change…');
+  let lfs = [], L = null, M = null;
+  async function lookFormulas() {
     let ex;
     try { [ex, L] = await Promise.all([examples(), import('./looks.js')]); M = await L.psi(); } catch (e) { lfErr.hidden = false; lfErr.textContent = 'Formulas could not be loaded: ' + (e.message || e); return; }
-    lc ??= L.controls('st-look', (b, k, done) => { const x = L.as(M, lfs[lf.value], b, k); lc.say(x); if (done && !x.why) saveLook(b, k); });
-    lcBox.replaceChildren(lc.el, lc.why);
-    const mine = store.get('psi.mine', []), cf = app.config || {}, grp = (label, list) => list.length && h('optgroup', { label }, list.map((x) => h('option', { value: x.k, disabled: !!x.off }, x.name + (!x.off ? '' : /too heavy/.test(x.off) ? ' (too heavy)' : /too long/.test(x.off) ? ' (too long)' : ' (can’t be a look)'))));
-    lfs = [...(Array.isArray(mine) ? mine : []).map((x) => ({ ...x, mine: 1 })), ...(Array.isArray(ex) ? ex : []).map((x) => ({ ...x }))].filter((x) => typeof x?.src == 'string' && x.name);
+    const mine = store.get('psi.mine', []), cf = app.config || {}, grp = (label, list) => list.length && h('optgroup', { label }, list.map(opt));
+    const opt = (x) => h('option', { value: x.k, disabled: !!x.off }, x.name + (!x.off ? '' : /too heavy/.test(x.off) ? ' (too heavy)' : /too long/.test(x.off) ? ' (too long)' : ' (can’t be a look)'));
+    lfs = [...(Array.isArray(mine) ? mine : []).map((x) => ({ ...x, mine: 1 })), ...(Array.isArray(ex) ? ex : []).map((x) => ({ ...x }))]
+      .filter((x) => typeof x?.src == 'string' && L.declares(M, x)).map((x) => ({ ...x, name: L.named(M, x) }));
     let cur = -1;
     if (cf.look_formula) {
-      const [name, b, k] = L.named(cf), same = (x, y = L.as(M, x, b, k)) => !y.why && L.fpath({ ...x, src: y.src }) === cf.look_formula;
-      cur = lfs.findIndex((x) => Array.from(x.name).slice(0, 60).join('') === name && same(x));
-      if (cur < 0) { lfs.unshift(L.saved(cf)); cur = 0; }
+      cur = lfs.findIndex((x) => L.path(M, x) === cf.look_formula);
+      if (cur < 0) { lfs.unshift(L.fromPath(M, cf.look_formula)); cur = 0; }
     }
-    lfs.forEach((x, k) => { x.k = k; x.off = k !== cur && L.as(M, x, ...L.choice(M, x)).why; });
-    clear(lf, h('option', { value: '' }, 'None'), lfs.filter((x) => x.saved).map((x) => h('option', { value: x.k }, x.name)),
-      grp('Your Formulas', lfs.filter((x) => x.mine)), grp('Examples', lfs.filter((x) => !x.mine && !x.saved)));
+    lfs.forEach((x, k) => { x.k = k; x.off = k !== cur && L.as(M, x).why; });
+    clear(lf, h('option', { value: '' }, 'None'), lfs.filter((x) => x.saved).map(opt),
+      grp('Your Formulas', lfs.filter((x) => x.mine)), grp('Bundled Formulas', lfs.filter((x) => !x.mine && !x.saved)));
     lf.value = cur < 0 ? '' : String(cur);
-    // A config event mid-drag must not snap the slider back.
-    if (force || !lcBox.contains(document.activeElement)) showMix(...L.named(cf).slice(1));
+    say();
   }
-  function showMix(b, k) {
-    const x = lfs[lf.value];
-    lcBox.hidden = !x;
-    if (x) { lc.set(b, k, L.overOnly(M, x)); lc.say(L.as(M, x, b, k)); }
+  // How the chosen one goes on (its look line), or why the panel can't.
+  function say() {
+    const x = lfs[lf.value], a = x && L.as(M, x), l = x && L.decl(M, x.src);
+    lfEdit.hidden = !x;
+    const t = !x ? '' : a.why || [`${L.BLENDS.find(([v]) => v == l?.look?.[0])?.[1] || 'Over'} at ${l?.look?.[1] ?? 100}%`, a.i[5] & 8 && (a.i[6] > 8000 ? 'moves about 25 times a second (a heavy look)' : '')].filter(Boolean).join(' · ');
+    lfWhy.hidden = !t; lfWhy.textContent = t; lfWhy.classList.toggle('bad', !!a?.why);
   }
-  const saveLook = (b, k) => looks(async () => {
+  const saveLook = () => looks(async () => {
     const x = lfs[lf.value];
     try {
-      if (!x) { await app.src.putConfig({ look_formula: '', look_formula_name: '', look_blend: 'over', look_amount: 100 }); await app.refreshConfig(); return; }
-      await L.use(x, b, k);
+      if (!x) { await app.src.putConfig({ look_formula: '' }); await app.refreshConfig(); return; }
+      await L.use(x);
     } catch (e) {
-      // Refused (400/413): the controls go back to what the panel has.
+      // Refused (400/413): the picker goes back to what the panel has.
       await app.refreshConfig().catch(() => {});
-      await lookFormulas(true);
+      await lookFormulas();
       throw e;
     }
   });
-  // A new pick starts at its own choice (as it is over the GIF, or Screen 40%).
-  lf.onchange = () => { const x = lfs[lf.value], [b, k] = x ? L.choice(M, x) : ['over', 100]; showMix(b, k); if (!x || !L.as(M, x, b, k).why) saveLook(b, k); };
+  lf.onchange = () => { say(); if (!lfs[lf.value] || !L.as(M, lfs[lf.value]).why) saveLook(); };
   on('config', lookFormulas);
   const lookErr = (st) => { const e = st?.formula_look?.error; lfErr.hidden = !e; lfErr.textContent = e ? `The panel can’t draw this formula any more: ${e}` : ''; };
   on('status', lookErr);
@@ -219,8 +219,8 @@ export async function mount(el) {
       return tab('look',
         h('div.card', lookH, h('p.cap', 'How the panel draws every GIF'),
           h('div.form.f2', h('label.stack', 'Colour', f.look), h('label.stack', 'Phosphor glow', f.glow)),
-          (lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', lf)), lcBox, lfErr,
-          h('p.cap', 'Any Formula, drawn over everything the panel plays before the colour and glow: scanlines, a colour grade, a clock in the corner, or plasma screened over the GIFs. Blend and Amount say how it goes over them. Make or pick one in Formulas.'),
+          (lookFormulas(), h('label.stack', { style: 'margin-top:12px' }, 'Formula over every GIF', h('div.row', lf, lfEdit))), lfWhy, lfErr,
+          h('p.cap', 'A Formula drawn over everything the panel plays, before the colour and glow: scanlines, a colour grade, a clock in the corner. Each says how it goes over the GIFs; in Formulas, any Formula’s settings can make it one.'),
           h('label', { style: 'margin-top:12px' }, mirror, 'Mirror the panel on Now'), h('p.cap', 'Now shows what the panel is playing; off saves the player a download for each GIF (this browser only)')),
         h('div.card', { id: 'st-trans-card' }, transH, h('p.cap', 'How the panel moves from one GIF to the next'),
           h('div.form.f2', h('label.stack', 'Style', f.transition), h('label.stack', 'Speed', f.transition_ms)),

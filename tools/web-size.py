@@ -239,7 +239,15 @@ FONT = {"fonts/silkscreen.woff2"}
 # 83 KB after merging main's psi-speed3 follow-ups into formula-f1 (the
 # review's fixes: one finishing pass, codes, E969's character check):
 # 83,842 B gz, 126 B under 82 KB; raised for room, same OK.
-PSI_WASM_GZ_BUDGET = 83 * 1024  # 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 84 KB for formula-apps F2 (2026-10-28, branch formula-f2): the Formula
+# settings sheet's text edits (`declare`: a declaration line set, put in
+# among the others or taken out; `look` now that edit of the `look` line)
+# and `asLook` (the look the panel draws for a formula's own line, for
+# Settings' and the sheet's checks and the demo): 83,842 -> 85,225 B gz
+# (+1.4 KB; the edit is bytes and `get` only — a str slice's panic alone
+# was +5 KB of core::fmt). Raised under the brief's OK (budgets may move
+# with written reasons).
+PSI_WASM_GZ_BUDGET = 84 * 1024  # 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
@@ -275,13 +283,28 @@ PSI_WASM_GZ_BUDGET = 83 * 1024  # 82 until main's psi-speed3 merge; 76 until for
 # lines, '"' as a character; a psi-web test runs it under node), the
 # cheat sheet's declaration rows: 29,419 -> 30,985 B gz. formula-apps F3
 # (most examples out of the firmware's formulas.json) gives ~2.5 KB back.
-FORMULAS_GZ_BUDGET = 31 * 1024  # 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
+# 32 KB for formula-apps F2 (2026-10-28, branch formula-f2): the path's
+# encoder moved here from psishow.js (psikit `path`, now with the values at
+# their declared defaults left out and `about` dropped over 2,048 B, held
+# to the compiler by psi-web's node test), the editor's name as the `name`
+# line and its Settings button, tiles with `about` and a look badge:
+# 30,985 -> 32,488 B gz (the sheet itself is its own line, js/fsheet.js).
+# Under the brief's OK; F3 (most examples out of formulas.json) gives
+# ~2.5 KB back and should lower it again.
+FORMULAS_GZ_BUDGET = 32 * 1024  # 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}
 # Any Formula as a look (branch any-look, 2026-10-26): a new line, ~2.0 KB at the time.
 LOOKS_GZ_BUDGET = 3 * 1024
 LOOKS = {"js/looks.js"}
+# The Formula settings sheet (formula-apps F2, 2026-10-28, branch
+# formula-f2): name, about, controls and look as edits of the Formula's
+# declaration lines; imported when the editor's Settings first opens, so a
+# line of its own rather than the Formulas line (which every visit to the
+# view loads).
+FSHEET_GZ_BUDGET = 3 * 1024
+FSHEET = {"js/fsheet.js"}
 SHARE_GZ_BUDGET = 12 * 1024
 # What the formula page loads from the demo (its own files aside).
 SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "fonts/silkscreen.woff2")
@@ -340,6 +363,8 @@ def main() -> int:
             kind = "show"
         elif rel in LOOKS:
             kind = "looks"
+        elif rel in FSHEET:
+            kind = "fsheet"
         elif rel in STUDIO:
             kind = "studio"
         elif rel in LIVE:
@@ -408,6 +433,7 @@ def main() -> int:
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),
+                         ("fsheet", FSHEET_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET),
                          ("other", None)):
