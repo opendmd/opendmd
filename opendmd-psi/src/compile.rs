@@ -452,6 +452,9 @@ enum Input {
     Ub,
     Ul,
     Ink,
+    /// `seed` (a `loop forever` formula's: [`LATER`]-like, a name a formula
+    /// sets is that name).
+    Seed,
 }
 
 const INPUTS: [(&str, Input, &str); 17] = [
@@ -505,6 +508,9 @@ const INPUTS: [(&str, Input, &str); 17] = [
 /// name ([`Parser::lookup_value`] finds the formula's names first), so a
 /// saved `r = …` means what it meant.
 const LATER: [&str; 5] = ["cx", "cy", "ty", "r", "angle"];
+
+/// `loop forever`'s loop (Q16 seconds, as `loop N`'s): longer than any.
+const FOREVER: i32 = i32::MAX;
 
 /// [`Parser::centred`]'s steps: (op, a, b) over 0 `x`, 1 `y`, 2 `py`, 3
 /// ½, 4 four, 5 31 and, from 6, the steps before.
@@ -685,6 +691,20 @@ const K_INPUT: u8 = 201;
 /// A `for` loop's counter (`val`: the loop's number), given a scalar slot
 /// when the loop is laid out.
 const K_COUNTER: u8 = 202;
+/// A value that grows without end plus a small one that varies more than
+/// once a frame (`t*0.15 + x`: `a` the wide part, `b` the small one), at
+/// the small one's level. Never laid out: whatever takes it is rewritten
+/// ([`Dag::wide_op`]) into the wide part's way back to a Q16.16 and the
+/// small one (`noise(w + s)` is a `NOISE_O` of `frac(w) + s`).
+const K_SPLIT: u8 = 203;
+/// A `K_INPUT`'s `val` for `t` in a `loop forever` formula: wide slot 0.
+const WIDE_T: i32 = 0x100;
+
+/// E901: a value that grows without end where it can't go.
+const GROWS: &str =
+    "a value that grows without end (`t` in a `loop forever` formula) can't go in here: \
+use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min, max or smoothstep, \
+or add, multiply or divide it by values that are the same for every pixel";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Node {
@@ -713,6 +733,14 @@ struct Dag {
     divs: Vec<(Id, Id, i32)>,
     /// Each `pick`'s choices (a `PICK` node's `b` is its index here).
     picks: Vec<Vec<Id>>,
+    /// A `loop forever` formula: `t` is wide ([`WIDE_T`]).
+    forever: bool,
+    /// The wide noises' contexts: each axis's wide part (`NO`: none), the
+    /// context `NOISE_O + k` of a `NOISE_O` node.
+    ctx: Vec<[Id; 3]>,
+    /// The steps a node needs before it that it doesn't read as a value: a
+    /// `NOISE_O` node's (`val` the index here) `W_LAT`s.
+    deps: Vec<Vec<Id>>,
 }
 
 /// Index slots: a power of two, twice [`MAX_NODES`] (4 KB, freed with the
@@ -814,6 +842,8 @@ impl Dag {
             );
         }
         let (val, level) = match inp {
+            Input::T if self.forever => (WIDE_T, LV_FRAME),
+            Input::Seed => (S_SEED as i32, LV_FRAME),
             Input::X => ((LANE | L_X) as i32, LV_PIXEL),
             Input::Px => ((LANE | L_PX) as i32, LV_PIXEL),
             Input::I => ((LANE | L_I) as i32, LV_PIXEL),
@@ -847,6 +877,9 @@ impl Dag {
     #[inline(never)]
     fn op(&mut self, c: u8, args: [Id; 3], at: (usize, usize)) -> Result<Id, Error> {
         let n = code::arity(c);
+        if self.forever && args[..n].iter().any(|&x| self.grows(x)) {
+            return self.wide_op(c, args, at);
+        }
         let ks: [Option<i32>; 3] =
             core::array::from_fn(|i| if i < n { self.konst(args[i]) } else { Some(0) });
         // Fold (all but the table functions, which run once a frame).
@@ -947,6 +980,9 @@ impl Dag {
         tables: &[i32],
         at: (usize, usize),
     ) -> Result<Id, Error> {
+        if self.grows(k) {
+            return Err(Error::new(at.0, at.1, GROWS));
+        }
         if let Some(v) = self.konst(k) {
             let i = v >> 16;
             let e = if (0..len as i32).contains(&i) {
@@ -977,6 +1013,9 @@ impl Dag {
     /// selects, `k < 0 ? 0 : k < 1 ? a : … : k < n ? z : 0`.
     #[inline(never)]
     fn pick(&mut self, k: Id, opts: Vec<Id>, at: (usize, usize)) -> Result<Id, Error> {
+        if opts.iter().any(|&o| self.grows(o)) || (self.grows(k) && !self.is_wide(k)) {
+            return Err(Error::new(at.0, at.1, GROWS));
+        }
         let zero = self.constant(0, at)?;
         let n = opts.len() as i32;
         if let Some(v) = self.konst(k) {
@@ -1015,6 +1054,444 @@ impl Dag {
                 c: 0,
                 val: 0,
                 level: LV_PIXEL,
+                why,
+            },
+            at,
+        )
+    }
+}
+
+/// The compares the other way round (`a < b` is `b > a`).
+fn flip(c: u8) -> u8 {
+    match c {
+        code::LT => code::GT,
+        code::GT => code::LT,
+        code::LE => code::GE,
+        code::GE => code::LE,
+        c => c,
+    }
+}
+
+impl Dag {
+    /// A value that grows without end, worked out once a frame: `t` in a
+    /// `loop forever` formula and what `W_*` steps make of it.
+    #[inline(never)]
+    fn is_wide(&self, id: Id) -> bool {
+        let n = &self.nodes[id as usize];
+        (n.code == K_INPUT && n.val == WIDE_T)
+            || (code::is_wide(n.code) && code::wide_ops(n.code).0)
+    }
+
+    /// A wide value or one with a wide part ([`K_SPLIT`]).
+    #[inline(never)]
+    fn grows(&self, id: Id) -> bool {
+        self.is_wide(id) || self.nodes[id as usize].code == K_SPLIT
+    }
+
+    /// A value the same all frame that doesn't grow: what a wide step may
+    /// take as its scalar operand.
+    #[inline(never)]
+    fn per_frame(&self, id: Id) -> bool {
+        !self.grows(id) && self.level(id) <= LV_FRAME
+    }
+
+    /// A value's wide part and its small part (either may be missing).
+    #[inline(never)]
+    fn parts(&self, id: Id) -> (Option<Id>, Option<Id>) {
+        let n = &self.nodes[id as usize];
+        if n.code == K_SPLIT {
+            (Some(n.a), Some(n.b))
+        } else if self.is_wide(id) {
+            (Some(id), None)
+        } else {
+            (None, Some(id))
+        }
+    }
+
+    /// A wide step's node (`imm`: a compare's or min/max's kind in `c`;
+    /// `val`: a `W_LAT`'s offset).
+    #[inline(never)]
+    fn wnode(
+        &mut self,
+        c: u8,
+        a: Id,
+        b: Id,
+        imm: u8,
+        val: i32,
+        at: (usize, usize),
+    ) -> Result<Id, Error> {
+        let n = code::wide_ops(c).1;
+        // w ± 0, w · 1, w / 1: w (exactly).
+        match (c, self.konst(b)) {
+            (code::W_ADDS | code::W_SUBS, Some(0)) | (code::W_MULS | code::W_DIVS, Some(ONE)) => {
+                return Ok(a)
+            }
+            _ => {}
+        }
+        let (mut level, mut why) = (LV_FRAME, 0);
+        for &x in &[a, b][..n] {
+            let m = &self.nodes[x as usize];
+            if m.level > level {
+                (level, why) = (m.level, m.why);
+            } else if m.level == level && why == 0 {
+                why = m.why;
+            }
+        }
+        self.push(
+            Node {
+                code: c,
+                a,
+                b: if n > 1 { b } else { 0 },
+                c: imm as Id,
+                val,
+                level,
+                why,
+            },
+            at,
+        )
+    }
+
+    /// A wide part plus a small one: a wide value when the small one is the
+    /// same all frame, else a [`K_SPLIT`].
+    #[inline(never)]
+    fn make(&mut self, w: Option<Id>, s: Option<Id>, at: (usize, usize)) -> Result<Id, Error> {
+        match (w, s) {
+            (Some(w), None) => Ok(w),
+            (None, Some(s)) => Ok(s),
+            (None, None) => self.constant(0, at),
+            (Some(w), Some(s)) if self.per_frame(s) => self.wnode(code::W_ADDS, w, s, 0, 0, at),
+            (Some(w), Some(s)) => {
+                let m = self.nodes[s as usize];
+                self.push(
+                    Node {
+                        code: K_SPLIT,
+                        a: w,
+                        b: s,
+                        c: 0,
+                        val: 0,
+                        level: m.level,
+                        why: m.why,
+                    },
+                    at,
+                )
+            }
+        }
+    }
+
+    /// The value's fraction-preserving small form: frac(w) for a wide value,
+    /// frac(w) + s for a split (`sin`, `frac`, `noise` read only that much
+    /// of the wide part: exactly, as long as the sum fits).
+    #[inline(never)]
+    fn small(&mut self, id: Id, at: (usize, usize)) -> Result<Id, Error> {
+        match self.parts(id) {
+            (Some(w), None) => self.wnode(code::W_FRAC, w, 0, 0, 0, at),
+            (Some(w), Some(s)) => {
+                let f = self.wnode(code::W_FRAC, w, 0, 0, 0, at)?;
+                self.op(code::ADD, [f, s, 0], at)
+            }
+            (None, Some(s)) => Ok(s),
+            (None, None) => self.constant(0, at),
+        }
+    }
+
+    /// A wide value held to a Q16.16 (saturated).
+    #[inline(never)]
+    fn held(&mut self, w: Id, at: (usize, usize)) -> Result<Id, Error> {
+        let lo = self.constant(i32::MIN, at)?;
+        self.wnode(code::W_MINMAX, w, lo, code::MAX, 0, at)
+    }
+
+    /// A wide value (never a split) or E901.
+    #[inline(never)]
+    fn wide_only(&self, id: Id, at: (usize, usize)) -> Result<Id, Error> {
+        if self.is_wide(id) {
+            Ok(id)
+        } else {
+            Err(Error::new(at.0, at.1, GROWS))
+        }
+    }
+
+    /// Op `c` of operands at least one of which grows without end (`t` in a
+    /// `loop forever` formula): rewritten into wide steps once a frame and
+    /// the ways back to a Q16.16, each exactly what the Q16.16 operation
+    /// gives wherever the values fit one (`crate::fixed`'s `w_*`); E901
+    /// where there is no such way (a growing value per pixel, `t*t`,
+    /// `sqrt(t)`, …).
+    #[inline(never)]
+    fn wide_op(&mut self, c: u8, args: [Id; 3], at: (usize, usize)) -> Result<Id, Error> {
+        use code::*;
+        let [a, b, k3] = args;
+        let grows = |d: &Self, x: Id| d.grows(x);
+        let bad = || Err(Error::new(at.0, at.1, GROWS));
+        match c {
+            ADD | SUB => {
+                let ((wa, sa), (wb, sb)) = (self.parts(a), self.parts(b));
+                // w - s and s - w as they are (no negation that saturates).
+                if c == SUB {
+                    if let (Some(w), None, None, Some(s)) = (wa, sa, wb, sb) {
+                        return if self.per_frame(s) {
+                            self.wnode(W_SUBS, w, s, 0, 0, at)
+                        } else {
+                            let n = self.op(NEG, [s, 0, 0], at)?;
+                            self.make(Some(w), Some(n), at)
+                        };
+                    }
+                }
+                let w = match (wa, wb) {
+                    (Some(x), Some(y)) => {
+                        Some(self.wnode(if c == ADD { W_ADD } else { W_SUB }, x, y, 0, 0, at)?)
+                    }
+                    (Some(x), None) => Some(x),
+                    (None, Some(y)) if c == ADD => Some(y),
+                    (None, Some(y)) => Some(self.wnode(W_NEG, y, 0, 0, 0, at)?),
+                    (None, None) => None,
+                };
+                let s = match (sa, sb) {
+                    (Some(x), Some(y)) => Some(self.op(c, [x, y, 0], at)?),
+                    (Some(x), None) => Some(x),
+                    (None, Some(y)) if c == ADD => Some(y),
+                    (None, Some(y)) => Some(self.op(NEG, [y, 0, 0], at)?),
+                    (None, None) => None,
+                };
+                self.make(w, s, at)
+            }
+            NEG => {
+                let (w, s) = self.parts(a);
+                let w = match w {
+                    Some(w) => Some(self.wnode(W_NEG, w, 0, 0, 0, at)?),
+                    None => None,
+                };
+                let s = match s {
+                    Some(s) => Some(self.op(NEG, [s, 0, 0], at)?),
+                    None => None,
+                };
+                self.make(w, s, at)
+            }
+            MUL | DIV => {
+                let (g, k) = if grows(self, a) { (a, b) } else { (b, a) };
+                if !self.per_frame(k) || (c == DIV && g != a) {
+                    return bad();
+                }
+                let (w, s) = self.parts(g);
+                let w = match w {
+                    Some(w) => {
+                        Some(self.wnode(if c == MUL { W_MULS } else { W_DIVS }, w, k, 0, 0, at)?)
+                    }
+                    None => None,
+                };
+                let s = match s {
+                    Some(s) => Some(self.op(c, [s, k, 0], at)?),
+                    None => None,
+                };
+                self.make(w, s, at)
+            }
+            MOD => {
+                if grows(self, b) || !self.per_frame(b) {
+                    return bad();
+                }
+                match self.parts(a) {
+                    (Some(w), None) => self.wnode(W_MOD, w, b, 0, 0, at),
+                    // (w + s) % n = (w % n + s) % n.
+                    (Some(w), Some(s)) => {
+                        let m = self.wnode(W_MOD, w, b, 0, 0, at)?;
+                        let x = self.op(ADD, [m, s, 0], at)?;
+                        self.op(MOD, [x, b, 0], at)
+                    }
+                    _ => bad(),
+                }
+            }
+            FRAC | SIN | COS | TRI | SAW | SQR => {
+                let x = self.small(a, at)?;
+                if c == FRAC && self.parts(a).1.is_none() {
+                    return Ok(x);
+                }
+                self.op(c, [x, 0, 0], at)
+            }
+            FLOOR => {
+                let w = self.wide_only(a, at)?;
+                self.wnode(W_FLOOR, w, 0, 0, 0, at)
+            }
+            LT..=NE => {
+                let (x, y, cc) = if grows(self, a) {
+                    (a, b, c)
+                } else {
+                    (b, a, flip(c))
+                };
+                let x = self.wide_only(x, at)?;
+                if self.is_wide(y) {
+                    let d = self.wnode(W_SUB, x, y, 0, 0, at)?;
+                    let z = self.constant(0, at)?;
+                    return self.wnode(W_CMP, d, z, cc, 0, at);
+                }
+                if !self.per_frame(y) {
+                    return bad();
+                }
+                self.wnode(W_CMP, x, y, cc, 0, at)
+            }
+            // step(e, x) is x >= e.
+            STEP => self.op(GE, [b, a, 0], at),
+            NOT => {
+                let z = self.constant(0, at)?;
+                self.op(EQ, [a, z, 0], at)
+            }
+            AND | OR => {
+                let z = self.constant(0, at)?;
+                let mut v = [a, b];
+                for x in &mut v {
+                    if grows(self, *x) {
+                        let w = self.wide_only(*x, at)?;
+                        *x = self.wnode(W_CMP, w, z, NE, 0, at)?;
+                    }
+                }
+                self.op(c, [v[0], v[1], 0], at)
+            }
+            // min, max and clamp of a wide value and any other: of it held
+            // to a Q16.16 (the same: the result is held so anyway), or in
+            // one step with a value the same all frame.
+            MIN | MAX => {
+                let (x, y) = if grows(self, a) { (a, b) } else { (b, a) };
+                let x = self.wide_only(x, at)?;
+                if grows(self, y) {
+                    return bad();
+                }
+                if self.per_frame(y) {
+                    return self.wnode(W_MINMAX, x, y, c, 0, at);
+                }
+                let h = self.held(x, at)?;
+                self.op(c, [h, y, 0], at)
+            }
+            CLAMP => {
+                let x = self.wide_only(a, at)?;
+                if grows(self, b) || grows(self, k3) {
+                    return bad();
+                }
+                let m = if self.per_frame(b) {
+                    self.wnode(W_MINMAX, x, b, MAX, 0, at)?
+                } else {
+                    let h = self.held(x, at)?;
+                    self.op(MAX, [h, b, 0], at)?
+                };
+                self.op(MIN, [m, k3, 0], at)
+            }
+            // mix(a, b, t) = a + (b - a)·t, a and b the same all frame.
+            MIX => {
+                let t = self.wide_only(k3, at)?;
+                if !self.per_frame(a) || !self.per_frame(b) {
+                    return bad();
+                }
+                let d = self.op(SUB, [b, a, 0], at)?;
+                let m = self.wnode(W_MULS, t, d, 0, 0, at)?;
+                self.wnode(W_ADDS, m, a, 0, 0, at)
+            }
+            // smoothstep's smooth(x, e0, 1/(e1 - e0)): its clamped ramp
+            // worked out wide, then the curve of that.
+            SMOOTH => {
+                let x = self.wide_only(a, at)?;
+                if !self.per_frame(b) || !self.per_frame(k3) {
+                    return bad();
+                }
+                let d = self.wnode(W_SUBS, x, b, 0, 0, at)?;
+                let m = self.wnode(W_MULS, d, k3, 0, 0, at)?;
+                let (z, one) = (self.constant(0, at)?, self.constant(ONE, at)?);
+                let lo = self.wnode(W_MINMAX, m, z, MAX, 0, at)?;
+                let r = self.op(MIN, [lo, one, 0], at)?;
+                self.op(SMOOTH, [r, z, one], at)
+            }
+            SELECT => {
+                if grows(self, b) || grows(self, k3) {
+                    return bad();
+                }
+                let w = self.wide_only(a, at)?;
+                let z = self.constant(0, at)?;
+                let cnd = self.wnode(W_CMP, w, z, NE, 0, at)?;
+                self.op(SELECT, [cnd, b, k3], at)
+            }
+            HASH => {
+                let mut v = [a, b];
+                for x in &mut v {
+                    if grows(self, *x) {
+                        let w = self.wide_only(*x, at)?;
+                        *x = self.wnode(W_RED, w, 0, 0, 0, at)?;
+                    }
+                }
+                self.op(HASH, [v[0], v[1], 0], at)
+            }
+            NOISE => self.noise_o(args, at),
+            _ => bad(),
+        }
+    }
+
+    /// `noise(x, y, z)` with an axis that grows without end: a `NOISE_O`
+    /// of the axes' small forms ([`Dag::small`]) in a context whose
+    /// lattice offsets `W_LAT` steps set from the wide parts once a frame.
+    #[inline(never)]
+    fn noise_o(&mut self, args: [Id; 3], at: (usize, usize)) -> Result<Id, Error> {
+        // Once a frame, only x wide (`noise(u, 5, 0)`): one step, no
+        // context.
+        let [x, y, z] = args;
+        if self.is_wide(x) && self.per_frame(y) && self.per_frame(z) {
+            let m = self.nodes[x as usize];
+            return self.push(
+                Node {
+                    code: code::W_NOISEX,
+                    a: x,
+                    b: y,
+                    c: z,
+                    val: 0,
+                    level: LV_FRAME,
+                    why: m.why,
+                },
+                at,
+            );
+        }
+        let mut key = [NO; 3];
+        let mut small = [0 as Id; 3];
+        for k in 0..3 {
+            key[k] = self.parts(args[k]).0.unwrap_or(NO);
+            small[k] = self.small(args[k], at)?;
+        }
+        let ctx = match self.ctx.iter().position(|c| *c == key) {
+            Some(j) => j,
+            None if self.ctx.len() < NOISE_CTX => {
+                self.ctx.push(key);
+                self.ctx.len() - 1
+            }
+            None => {
+                return Err(Error::new(
+                    at.0,
+                    at.1,
+                    "noise of values that grow without end: four different ones at most — share one, as noise(u + k, …)",
+                ))
+            }
+        };
+        let mut lats = Vec::new();
+        for (axis, &w) in key.iter().enumerate() {
+            if w != NO {
+                lats.push(self.wnode(code::W_LAT, w, 0, 0, (ctx * 3 + axis) as i32, at)?);
+            }
+        }
+        let di = match self.deps.iter().position(|d| *d == lats) {
+            Some(j) => j,
+            None => {
+                self.deps.push(lats);
+                self.deps.len() - 1
+            }
+        };
+        let (mut level, mut why) = (LV_FRAME, 0);
+        for &x in &small {
+            let m = &self.nodes[x as usize];
+            if m.level > level {
+                (level, why) = (m.level, m.why);
+            }
+        }
+        self.push(
+            Node {
+                code: code::NOISE_O + ctx as u8,
+                a: small[0],
+                b: small[1],
+                c: small[2],
+                val: di as i32,
+                level,
                 why,
             },
             at,
@@ -1491,6 +1968,18 @@ impl<'s> Parser<'s> {
                     }
                 };
             }
+        } else if name == "seed"
+            && !self.dag.forever
+            && !self
+                .locals
+                .iter()
+                .any(|l| l.name == name && self.visible(l.scope))
+        {
+            // E903.
+            return self.err(
+                t,
+                "`seed` is for formulas that go on without repeating (`loop forever`): a new one each time it plays",
+            );
         } else if let Some(id) = self.lookup_value(name) {
             return id;
         }
@@ -1553,6 +2042,9 @@ impl<'s> Parser<'s> {
         }
         if let Some(&(_, v)) = CONSTS.iter().find(|e| e.0 == name) {
             return Some(self.dag.constant(v, (0, 0)));
+        }
+        if name == "seed" {
+            return Some(self.input(Input::Seed));
         }
         let k = LATER.iter().position(|&e| e == name)?;
         Some(self.centred(k))
@@ -2449,8 +2941,12 @@ impl<'s> Parser<'s> {
                 Tok::RBrace => depth -= 1,
                 Tok::Eof => return None,
                 Tok::Name if depth == 0 && start && self.text(t) == "loop" => {
-                    if let Tok::Num(v) = self.toks[k + 1].tok {
-                        return Some(v);
+                    match self.toks[k + 1].tok {
+                        Tok::Num(v) => return Some(v),
+                        Tok::Name if self.text(self.toks[k + 1]) == "forever" => {
+                            return Some(FOREVER)
+                        }
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -2991,6 +3487,14 @@ impl<'s> Parser<'s> {
                 let e = self.expr(0)?;
                 let end = self.toks[self.pos.saturating_sub(1)].end;
                 self.drawable(e, start, end)?;
+                if self.dag.grows(e) {
+                    // E906.
+                    return Err(Error::new(
+                        start,
+                        end.max(start),
+                        "a value that grows without end can't be drawn at: use frac(t*k)*128, t % n or min(t, k)",
+                    ));
+                }
                 if k < 6 {
                     v[k] = e;
                 }
@@ -3076,10 +3580,18 @@ impl<'s> Parser<'s> {
                         return self.err(t, "`loop` is already set");
                     }
                     let n = self.next();
-                    let Tok::Num(v) = n.tok else {
-                        return self.err(n, "`loop` takes a number of seconds, e.g. `loop 8`");
+                    let v = match n.tok {
+                        Tok::Num(v) => v,
+                        // E907 (none: it is the line's own).
+                        Tok::Name if self.text(n) == "forever" => FOREVER,
+                        _ => {
+                            return self.err(
+                                n,
+                                "`loop` takes a number of seconds, e.g. `loop 8`, or `forever` for one that goes on without repeating",
+                            )
+                        }
                     };
-                    if !(ONE / 10..=3600 * ONE).contains(&v) {
+                    if v != FOREVER && !(ONE / 10..=3600 * ONE).contains(&v) {
                         return self.err(n, "the loop must be between 0.1 and 3600 seconds");
                     }
                     b.loop_v = Some(v);
@@ -3200,6 +3712,9 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Erro
             index: alloc::vec![NO; SLOTS],
             divs: Vec::new(),
             picks: Vec::new(),
+            forever: false,
+            ctx: Vec::new(),
+            deps: Vec::new(),
         },
         locals: Vec::new(),
         depth: 0,
@@ -3224,9 +3739,14 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Erro
         turns: 0,
     };
     p.env.loop_v = p.loop_ahead(0).unwrap_or(8 * ONE);
+    p.dag.forever = p.env.loop_v == FOREVER;
     let body = p.body(Tok::Eof)?;
     if let Some(v) = body.loop_v {
-        prog.loop_ms = ((v as i64 * 1000 + ONE as i64 / 2) >> 16) as u32;
+        prog.loop_ms = if v == FOREVER {
+            0
+        } else {
+            ((v as i64 * 1000 + ONE as i64 / 2) >> 16) as u32
+        };
     }
     // A part's `fps` (a whole formula pasted in) is left to the formula's.
     prog.frame_ms = body.fps.unwrap_or(0);
@@ -3254,6 +3774,11 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Erro
         ));
     }
     prog.tables[..p.tables.len()].copy_from_slice(&p.tables);
+    if p.dag.forever {
+        for c in &mut layers {
+            grown_colour(&mut p.dag, c, (ct.start, ct.end))?;
+        }
+    }
     // A layer under one that covers everything (`over`, coverage 1) is never
     // seen: from the topmost such layer up. If it is the bottom one it is
     // written straight over the pixels (as v0's last line); otherwise the
@@ -3319,6 +3844,47 @@ fn compile_inner(src: &str, prog: &mut Program, runs: bool) -> Result<Info, Erro
         layers: body.blocks,
     })
 }
+
+/// A colour's values that grow without end (a `loop forever` formula's
+/// `t`, `gray(t/60)`): an hsv's hue by its fraction (the hue is a turn),
+/// the others held to 0..1 (the colour step clamps them so anyway); a
+/// coverage, a palette's scale or a value with a part per pixel can't
+/// (E905).
+fn grown_colour(dag: &mut Dag, c: &mut Colour, at: (usize, usize)) -> Result<(), Error> {
+    // Held to 0..1, as the colour step and the coverage hold it anyway.
+    let unit = |dag: &mut Dag, v: Id| -> Result<Id, Error> {
+        if !dag.is_wide(v) {
+            return Err(Error::new(at.0, at.1, GROWN_COLOUR));
+        }
+        let (z, one) = (dag.constant(0, at)?, dag.constant(ONE, at)?);
+        let lo = dag.op(code::MAX, [v, z, 0], at)?;
+        dag.op(code::MIN, [lo, one, 0], at)
+    };
+    let n = code::arity(c.code);
+    for k in 0..n {
+        let v = c.args[k];
+        if !dag.grows(v) {
+            continue;
+        }
+        c.args[k] = if c.code == code::OUT_HSV && k == 0 {
+            dag.op(code::FRAC, [v, 0, 0], at)?
+        } else {
+            unit(dag, v)?
+        };
+    }
+    if let Some(a) = c.alpha.filter(|&a| dag.grows(a)) {
+        c.alpha = Some(unit(dag, a)?);
+    }
+    if c.scale.is_some_and(|k| dag.grows(k)) {
+        return Err(Error::new(at.0, at.1, GROWN_COLOUR));
+    }
+    Ok(())
+}
+
+/// E905.
+const GROWN_COLOUR: &str =
+    "a colour can't take a value that grows without end and changes across the panel \
+(`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1)";
 
 /// A colour step to lay out: its code (plain or a layer's), its values,
 /// the palette and the coverage (a layer's).
@@ -3389,13 +3955,8 @@ fn emit(
             if need[i] == NONE || m.code >= K_CONST {
                 continue;
             }
-            for &x in [m.a, m.b, m.c][..code::arity(m.code)].iter() {
+            for x in reads(dag, i) {
                 need[x as usize] = need[x as usize].min(need[i]);
-            }
-            if m.code == code::PICK {
-                for &x in &dag.picks[m.b as usize] {
-                    need[x as usize] = need[x as usize].min(need[i]);
-                }
             }
         }
     };
@@ -3419,6 +3980,11 @@ fn emit(
         prog.uses |= INKED;
     }
     let live = |i: usize| need[i] != NONE;
+    // A value that grows without end with a part per pixel, where nothing
+    // took it apart (E901).
+    if (0..n).any(|i| live(i) && nodes[i].code == K_SPLIT) {
+        return Err(Error::new(0, 0, GROWS));
+    }
     let is_op = |i: usize| live(i) && nodes[i].code < K_CONST;
     let control: usize = draw
         .iter()
@@ -3437,6 +4003,22 @@ fn emit(
     // without one would read slot 0, `t`, silently).
     let mut set = alloc::vec![false; n];
     let mut next_slot = S_FIRST_FREE as usize;
+    // `seed` has the first free slot; the wide noises' offsets the slots
+    // after it (`noise_slot`; `seed`'s kept for it then).
+    if (0..n).any(|i| live(i) && nodes[i].code == K_INPUT && nodes[i].val == S_SEED as i32) {
+        prog.uses |= SEEDED;
+        next_slot += 1;
+    }
+    let nctx = (0..n)
+        .filter(|&i| is_op(i) && is_noise_o(nodes[i].code))
+        .map(|i| (nodes[i].code - code::NOISE_O) as usize + 1)
+        .max()
+        .unwrap_or(0);
+    if nctx > 0 {
+        next_slot = noise_slot(nctx, 0);
+    }
+    // Wide slots: 0 is `t`.
+    let mut next_wide = 1usize;
     fn new_slot(next_slot: &mut usize, v: Option<i32>, prog: &mut Program) -> Result<u8, Error> {
         if *next_slot >= MAX_SCALARS {
             return Err(Error::new(
@@ -3456,7 +4038,11 @@ fn emit(
             loc[i] = new_slot(&mut next_slot, Some(nodes[i].val), prog)?;
             set[i] = true;
         } else if live(i) && nodes[i].code == K_INPUT {
-            loc[i] = nodes[i].val as u8;
+            loc[i] = if nodes[i].val == WIDE_T {
+                0
+            } else {
+                nodes[i].val as u8
+            };
             set[i] = true;
             if nodes[i].val as u8 == LANE | L_I {
                 prog.uses |= USES_I;
@@ -3485,7 +4071,8 @@ fn emit(
      -> Result<Op, Error> {
         let n = code::arity(m.code);
         let unset = [m.a, m.b, m.c][..n].iter().any(|&x| !set[x as usize])
-            || (m.code == code::PICK && dag.picks[m.b as usize].iter().any(|&x| !set[x as usize]));
+            || (m.code == code::PICK && dag.picks[m.b as usize].iter().any(|&x| !set[x as usize]))
+            || (is_noise_o(m.code) && dag.deps[m.val as usize].iter().any(|&x| !set[x as usize]));
         if unset {
             return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
         }
@@ -3493,6 +4080,9 @@ fn emit(
         let (mut b, mut c) = (l(1, m.b), l(2, m.c));
         if m.code == code::TAB {
             (b, c) = (m.b as u8, m.c as u8);
+        }
+        if matches!(m.code, code::W_CMP | code::W_MINMAX) {
+            c = m.c as u8;
         }
         if m.code == code::PICK {
             let opts = &dag.picks[m.b as usize];
@@ -3533,7 +4123,22 @@ fn emit(
         for i in 0..n {
             let m = &nodes[i];
             if is_op(i) && m.level == level {
-                let d = new_slot(&mut next_slot, None, prog)?;
+                // A wide value has a wide slot; a noise's offset its place.
+                let d = if code::is_wide(m.code) && code::wide_ops(m.code).0 {
+                    if next_wide >= WIDE {
+                        return Err(Error::new(
+                            0,
+                            0,
+                            format!("this formula has too many values that grow without end (more than {}) — simplify it", WIDE - 1),
+                        ));
+                    }
+                    next_wide += 1;
+                    (next_wide - 1) as u8
+                } else if m.code == code::W_LAT {
+                    noise_slot(m.val as usize / 3, m.val as usize % 3) as u8
+                } else {
+                    new_slot(&mut next_slot, None, prog)?
+                };
                 loc[i] = d;
                 set[i] = true;
                 ops.push(mk(m, d, &loc, &set, &mut next_slot, &mut tabs, prog)?);
@@ -3763,7 +4368,13 @@ enum Item {
     Column,
 }
 
-/// A value's operands that are nodes (a pick's choices included).
+/// A wide noise's code.
+fn is_noise_o(c: u8) -> bool {
+    (code::NOISE_O..=code::NOISE_O_LAST).contains(&c)
+}
+
+/// A value's operands that are nodes (a pick's choices included, and the
+/// steps a wide noise needs before it).
 fn reads(dag: &Dag, i: usize) -> impl Iterator<Item = Id> + '_ {
     let m = &dag.nodes[i];
     let k = if m.code < K_CONST {
@@ -3773,6 +4384,8 @@ fn reads(dag: &Dag, i: usize) -> impl Iterator<Item = Id> + '_ {
     };
     let picks: &[Id] = if m.code == code::PICK {
         &dag.picks[m.b as usize]
+    } else if is_noise_o(m.code) {
+        &dag.deps[m.val as usize]
     } else {
         &[]
     };
@@ -3867,8 +4480,9 @@ fn still_nodes(dag: &Dag) -> Vec<bool> {
                 let v = m.val as u8;
                 v == LANE | L_X || v == LANE | L_PX || v == LANE | L_I || v == S_Y || v == S_PY
             }
-            K_COUNTER => false,
-            c if (code::U_R..=code::INK).contains(&c) => false,
+            K_COUNTER | K_SPLIT => false,
+            // (A wide noise's offsets move every frame.)
+            c if (code::U_R..=code::INK).contains(&c) || is_noise_o(c) => false,
             _ => reads(dag, i).all(|x| still[x as usize]),
         };
     }

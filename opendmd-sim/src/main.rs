@@ -247,12 +247,16 @@ fn formula_path(file: &Path, opts: Option<&str>) -> Result<String> {
     let prog = psi::compile(&src)
         .map_err(|e| anyhow::anyhow!("{}: {}", file.display(), e.render(&src)))?;
     let (f, r, p) = prog.counts();
+    let lp = if prog.forever() {
+        "never repeats".to_string()
+    } else {
+        format!("a {:.1} s loop", prog.loop_ms() as f64 / 1000.0)
+    };
     println!(
-        "{}: {} steps ({f} per frame, {r} per row, {p} per pixel), {} registers, a {:.1} s loop",
+        "{}: {} steps ({f} per frame, {r} per row, {p} per pixel), {} registers, {lp}",
         file.display(),
         prog.len(),
-        prog.regs(),
-        prog.loop_ms() as f64 / 1000.0
+        prog.regs()
     );
     let path = opendmd_core::fx_psi::path(&src, opts.unwrap_or(""));
     let most = opendmd_core::synth::MAX_FORMULA_PATH;

@@ -52,6 +52,8 @@ struct State {
     err: [u8; 512],
     err_len: usize,
     at: [u32; 2],
+    /// A `loop forever` formula's `seed` ([`set_seed`]).
+    seed: i32,
 }
 
 struct Cell(UnsafeCell<Option<State>>);
@@ -87,6 +89,7 @@ fn state() -> &'static mut State {
         err: [0; 512],
         err_len: 0,
         at: [0; 2],
+        seed: 0,
     })
 }
 
@@ -176,8 +179,9 @@ pub fn error_at() -> Vec<u32> {
 }
 
 /// What the formula drawn is: `[steps, per frame, per row, per pixel, loop
-/// ms, inputs (bits 0-2 the sliders a b c, 3 t, 4 the clock, 5 the picture
-/// under it: drawn over a GIF it changes the GIF), estimated µs a frame on
+/// ms (0: it never repeats, `loop forever`), inputs (bits 0-2 the sliders a
+/// b c, 3 t, 4 the clock, 5 the picture under it: drawn over a GIF it
+/// changes the GIF, 6 `seed`), estimated µs a frame on
 /// the panel, layers, steps in `draw { }` (0: it draws nothing), lines and
 /// dots it draws a frame, the frame time its `fps N` asks for in ms (10, 20
 /// or 40; 0: none, so 20), estimated µs a frame as an effect with its still
@@ -210,10 +214,19 @@ pub fn info() -> Vec<u32> {
     ]
 }
 
+/// The `seed` a formula that goes on without repeating (`loop forever`) is
+/// drawn with from now on, Q16.16 0..1 (65,536 is 1); 0 until set (the
+/// panel picks a new one each time it plays).
+#[wasm_bindgen(js_name = setSeed)]
+pub fn set_seed(seed: i32) {
+    state().seed = seed;
+}
+
 /// Draw the frame at `ms` into the loop (the page works it out as the
-/// panel does: a whole number of frame delays) with the wall clock and the
-/// sliders (Q16.16: 65,536 is 1); [`pixels`] is where it is. Black before
-/// anything compiled.
+/// panel does: a whole number of frame delays; for a formula that never
+/// repeats, `info()`'s loop 0, `ms` since its preview began) with the wall
+/// clock and the sliders (Q16.16: 65,536 is 1); [`pixels`] is where it is.
+/// Black before anything compiled.
 #[wasm_bindgen]
 pub fn frame(ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: i32) {
     draw(false, ms, hour, minute, second, a, b, c);
@@ -230,15 +243,18 @@ pub fn frame_over(ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: 
 fn draw(over: bool, ms: u32, hour: u8, minute: u8, second: u8, a: i32, b: i32, c: i32) {
     let s = state();
     if s.ok {
-        let inputs = Inputs {
-            t: Inputs::at_ms(ms),
+        let mut inputs = Inputs {
             hour,
             minute,
             second,
             a,
             b,
             c,
+            seed: s.seed,
+            ..Inputs::default()
         };
+        // A formula that never repeats: `ms` since its preview began.
+        inputs.set_ms(&s.prog, u64::from(ms));
         // SAFETY: as `state()`: nothing else holds it during the call.
         let under = over.then(|| unsafe { &*UNDER.0.get() }.as_slice());
         // SAFETY: as `state()`.

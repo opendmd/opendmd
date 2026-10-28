@@ -411,6 +411,29 @@ pub fn noise(x: i32, y: i32, z: i32) -> i32 {
         ((y >> 16) as u32).wrapping_mul(P2),
         ((z >> 16) as u32).wrapping_mul(P3),
     );
+    noise_cell(x0, y0, z0, x, y, z)
+}
+
+/// [`noise`] with each axis's lattice term moved by `off` (the whole part
+/// of a value that grows without end, times the axis's prime: [`w_lat`]):
+/// `noise_off(frac(w) + s, …, [w_lat(w, 0), …])` is `noise(w + s, …)`
+/// exactly, wherever `w + s` fits a Q16.16, and goes on past it without
+/// repeating (the hash sees only the low 32 bits of the lattice index, as
+/// `noise`'s does).
+#[inline(always)]
+pub fn noise_off(x: i32, y: i32, z: i32, off: [u32; 3]) -> i32 {
+    let (x0, y0, z0) = (
+        ((x >> 16) as u32).wrapping_mul(P1).wrapping_add(off[0]),
+        ((y >> 16) as u32).wrapping_mul(P2).wrapping_add(off[1]),
+        ((z >> 16) as u32).wrapping_mul(P3).wrapping_add(off[2]),
+    );
+    noise_cell(x0, y0, z0, x, y, z)
+}
+
+/// The noise of the cell whose low corner's lattice terms are `x0 y0 z0`,
+/// at the fractions of `x y z`.
+#[inline(always)]
+fn noise_cell(x0: u32, y0: u32, z0: u32, x: i32, y: i32, z: i32) -> i32 {
     let (x1, y1, z1) = (
         x0.wrapping_add(P1),
         y0.wrapping_add(P2),
@@ -635,4 +658,119 @@ pub fn blend(mode: u8, d: u8, s: u8) -> u8 {
 pub fn cover(d: u8, r: u8, a: i32) -> u8 {
     let a = clamp(a, 0, ONE);
     (d as i32 + (((r as i32 - d as i32) * a + 0x8000) >> 16)) as u8
+}
+
+// --- Wide values: `t` in a `loop forever` formula -----------------------------
+//
+// Q48.16 in an i64: the same scale as every other value, so wherever a wide
+// value fits a Q16.16 each `w_*` gives exactly the bits its Q16.16 operation
+// gives (`w_mul` is `mul`, `w_div` is `div`, `w_mod` is `modulo`, …), and
+// past it carries on instead of saturating. Sums and products wrap at 2^64
+// (the whole part at 2^47 s, 4 million years of `t`); the ways back to a
+// Q16.16 (`w_frac`, `w_mod`, compares, `w_minmax`, `w_reduce`, `w_lat`) are
+// exact for any value.
+
+/// The axes' primes of [`noise`]'s lattice, for [`w_lat`].
+pub const PRIMES: [u32; 3] = [P1, P2, P3];
+
+/// `a · k` (k a Q16.16), floored, wrapping: `mul` without the saturation.
+#[inline]
+pub fn w_mul(a: i64, k: i32) -> i64 {
+    // a = hi·2^32 + lo: (hi·k)·2^16 + floor(lo·k / 2^16), each part within
+    // an i64 (|hi·k| < 2^62, |lo·k| < 2^63); the first is whole, so the
+    // floor is the whole product's.
+    let (hi, lo) = (a >> 32, a as u32 as i64);
+    (hi * k as i64)
+        .wrapping_shl(16)
+        .wrapping_add((lo * k as i64) >> 16)
+}
+
+/// `a / k` (k a Q16.16), truncated as `div` is; by 0 the end of `a`'s sign
+/// (0 for 0 / 0).
+#[inline]
+pub fn w_div(a: i64, k: i32) -> i64 {
+    if k == 0 {
+        return match a {
+            0 => 0,
+            a if a > 0 => i64::MAX,
+            _ => i64::MIN,
+        };
+    }
+    // (a·2^16) / k without the 2^16 overflowing: a = q·k + r, r with a's
+    // sign and |r| < |k|, so both parts truncate the same way.
+    let k = k as i64;
+    let (q, r) = (a.wrapping_div(k), a.wrapping_rem(k));
+    q.wrapping_shl(16).wrapping_add((r << 16) / k)
+}
+
+/// Floored `a % b` (`modulo`'s rule: the divisor's sign; by 0, 0): within
+/// b, so a Q16.16.
+#[inline]
+pub fn w_mod(a: i64, b: i32) -> i32 {
+    if b == 0 {
+        return 0;
+    }
+    let r = a.wrapping_rem(b as i64);
+    (if r != 0 && ((r < 0) != (b < 0)) {
+        r + b as i64
+    } else {
+        r
+    }) as i32
+}
+
+/// The fraction, as `frac`.
+#[inline]
+pub fn w_frac(a: i64) -> i32 {
+    (a & 0xffff) as i32
+}
+
+/// `floor`.
+#[inline]
+pub fn w_floor(a: i64) -> i64 {
+    a & !0xffff
+}
+
+/// A compare (`c` one of the compare steps, `LT`..`NE` of
+/// `program::code`) of `a` with the Q16.16 `b`: 1 or 0.
+#[inline]
+pub fn w_cmp(c: u8, a: i64, b: i32) -> i32 {
+    use crate::program::code::*;
+    let b = b as i64;
+    b2f(match c {
+        LT => a < b,
+        LE => a <= b,
+        GT => a > b,
+        GE => a >= b,
+        EQ => a == b,
+        _ => a != b,
+    })
+}
+
+/// `min` (`c` = `MIN`) or `max` of `a` and the Q16.16 `b`, saturated to a
+/// Q16.16 (exactly `min`/`max` wherever `a` fits).
+#[inline]
+pub fn w_minmax(c: u8, a: i64, b: i32) -> i32 {
+    let b = b as i64;
+    sat(if c == crate::program::code::MIN {
+        a.min(b)
+    } else {
+        a.max(b)
+    })
+}
+
+/// `a` as 32 bits for `hash`: its own Q16.16 bits wherever it fits one (so
+/// `hash` of it is what it always was), and past that its high bits mixed
+/// in, so hashes don't repeat every 65,536 s.
+#[inline]
+pub fn w_reduce(a: i64) -> i32 {
+    // 0 exactly when `a` fits an i32 (bits 31-63 all its sign).
+    let e = (a >> 31) ^ (a >> 63);
+    (a as u32 ^ mix32(e as u32 ^ (e >> 32) as u32)) as i32
+}
+
+/// The lattice offset of `a`'s whole part on `axis` (0 x, 1 y, 2 z): the
+/// low 32 bits of floor(a), times the axis's prime ([`noise_off`]).
+#[inline]
+pub fn w_lat(a: i64, axis: usize) -> u32 {
+    ((a >> 16) as u32).wrapping_mul(PRIMES[axis % 3])
 }

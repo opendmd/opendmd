@@ -38,16 +38,19 @@ fn main() {
         let (iw, ih) = (W * S * cols + 8, (H * S + 8) * rows);
         let mut img = vec![40u8; iw * ih * 3];
         for q in 0..4 {
-            let ms = p.loop_ms() * q as u32 / 4;
-            let i = Inputs {
-                t: Inputs::at_ms(ms),
+            // (One that never repeats: over its first minute.)
+            let lp = if p.forever() { 60_000 } else { p.loop_ms() };
+            let ms = lp * q as u32 / 4;
+            let mut i = Inputs {
                 hour: 10,
                 minute: 9,
                 second: 30,
                 a: ex.a,
                 b: ex.b,
                 c: ex.c,
+                ..Inputs::default()
             };
+            i.set_ms(&p, u64::from(ms));
             render_rows_ink(
                 &p,
                 &mut s,

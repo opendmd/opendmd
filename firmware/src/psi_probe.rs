@@ -180,7 +180,7 @@ fn lanes_over<const N: usize>(
     let mut ink = psi::Ink::boxed();
     let t = fx_psi::tables();
     timed(|k| {
-        let inputs = psi::golden::inputs(k * 20 % loop_ms);
+        let inputs = psi::golden::inputs(k * 20 % loop_ms.max(1));
         psi::render_rows_ink::<N>(prog, &mut s, Some(&mut ink), &inputs, &t, under, u32::MAX, out);
     })
 }
@@ -245,7 +245,7 @@ fn lanes_still(prog: &psi::Program, loop_ms: u32, out: &mut [u8]) -> Option<(u32
     let inputs = psi::golden::inputs(0);
     psi::render_rows_still::<128>(prog, &mut s, None, Some(&mut st), &inputs, &t, None, u32::MAX, out);
     Some(timed(|k| {
-        let inputs = psi::golden::inputs(k * 20 % loop_ms);
+        let inputs = psi::golden::inputs(k * 20 % loop_ms.max(1));
         psi::render_rows_still::<128>(prog, &mut s, None, Some(&mut st), &inputs, &t, None, u32::MAX, out);
     }))
 }
@@ -1028,7 +1028,7 @@ pub fn run(root: &str) {
 
     // What one step costs: each formula is the baseline plus one or two
     // per-pixel steps (t is a frame value, so nothing folds away).
-    const STEPS: [(&str, &str); 26] = [
+    const STEPS: [(&str, &str); 27] = [
         ("base gray(x)", "gray(x)"),
         ("add", "gray(x + t)"),
         ("mul", "gray(x * t)"),
@@ -1056,6 +1056,9 @@ pub fn run(root: &str) {
         ("noise flat (+mul)", "gray(noise(x * 8, y, 3))"),
         ("out pal * k (+mul)", "pal(fire, x) * (x * 0.9)"),
         ("out pal * k=1", "pal(fire, x) * (t * 0 + 1)"),
+        // psi-lang: a noise of a growing value per pixel (`NOISE_O`, its
+        // offsets set once a frame), against `noise (+mul)`'s row.
+        ("noise wide (+mul +add)", "loop forever\ngray(noise(x * 8 + t, y, t))"),
     ];
     // Layers and what is under (drawn over the golden picture): the
     // formula look's costs, for `Program::esp32_us`.
