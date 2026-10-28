@@ -23,8 +23,39 @@ export function link(f, base, mask = 7) {
 export function parse(s) {
   const q = new URLSearchParams(s.replace(/^#/, '')), src = q.get('formula') || '', name = q.get('name') || 'Shared formula';
   const f = { name: name.slice(0, MAX_NAME), src: src.slice(0, MAX_SRC) };
-  for (const k of 'abc') if (q.has(k)) f[k] = Math.min(32767, Math.max(-32767, +q.get(k) || 0));
+  for (const k of 'abc') if (num(q.get(k)) != null) f[k] = num(q.get(k));
   return { f, cut: f.src !== src, has: q.has('formula') };
+}
+// A slider's value from a link or a path (`a=-0.5`), as the panel reads one
+// (fx_psi `query`): a decimal number, maybe below zero, under 32,768; else
+// undefined — unset, so the formula's default.
+export const num = (v) => (/^-?(\d+\.?\d*|\.\d+)$/.test(v || '') && Math.abs(+v) < 32768 ? +v : undefined);
+
+// The device's path text (opendmd_psi::compact, which psi-web's tests hold this
+// to): comments out, runs of spaces made one, lines joined with `; `; a
+// character in quotes ('"') one token; text in quotes on a declaration line
+// (`name "…"`, not `name = …`) kept as written.
+export function compact(src) {
+  let out = '';
+  for (const l of src.split('\n')) {
+    const text = /^[^\w]*(psi|name|about|control|look)\b(?![ \t\f\r\v]*=)/.test(l);
+    let code = '', sp = false;
+    for (let i = 0; i < l.length;) {
+      const c = l[i];
+      let t = c;
+      if (c == "'" && l[i + 2] == "'" && l[i + 1] >= ' ' && l[i + 1] <= '~') t = l.slice(i, i + 3);
+      else if (c == '"' && text) { const e = l.indexOf('"', i + 1); t = l.slice(i, e < 0 ? l.length : e + 1); }
+      else if ((c == '-' || c == '/') && l[i + 1] == c) break;
+      else if (' \t\f\r\v'.includes(c)) { sp = true; i++; continue; }
+      else t = String.fromCodePoint(l.codePointAt(i));
+      if (sp && code) code += ' ';
+      sp = false;
+      code += t;
+      i += t.length;
+    }
+    if (code) out += (out ? '; ' : '') + code;
+  }
+  return out;
 }
 
 // A slider's value for pkg-psi's frame(): Q16.16, or UNSET (the slot plays at
@@ -44,7 +75,7 @@ export function fit(ctl, f) {
   for (const c of ctl?.controls || []) {
     const v = f[c.slot];
     if (v == null) continue;
-    f[c.slot] = c.kind == 'choice' ? Math.min(c.words.length - 1, Math.max(0, Math.round(v))) : Math.min(c.hi, Math.max(c.lo, v));
+    f[c.slot] = c.kind == 'choice' ? Math.floor(Math.min(c.words.length - 1, Math.max(0, v))) : Math.min(c.hi, Math.max(c.lo, v));
   }
   return f;
 }
@@ -85,8 +116,8 @@ export function picker(names, label, v, set) {
     const j = d ? k + d : e.key == 'Home' ? 0 : e.key == 'End' ? n : -1;
     if (j >= 0 && j <= n && k >= 0) { e.preventDefault(); to(j); }
   };
-  // A value between choices (a link) snaps to the one shown.
-  const k0 = Math.round(Math.min(n, Math.max(0, v || 0)));
+  // A value between choices (a link) snaps to the one the formula reads: floor.
+  const k0 = Math.floor(Math.min(n, Math.max(0, v || 0)));
   mark(k0);
   if (v != null && v !== k0) set(k0);
   g.append(...bs);

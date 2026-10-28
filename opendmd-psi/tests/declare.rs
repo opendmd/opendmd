@@ -41,14 +41,28 @@ const ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ("name \"a\"\nname \"b\"\ngray(x)", "`name` is already set on line 1", 2, 1, "E952"),
     ("look\nlook over\ngray(x)", "`look` is already set on line 1", 2, 1, "E952"),
     ("name \"Unclosed\ngray(x)", "text in quotes ends with `\"` on the same line", 1, 6, "E953"),
-    ("name \"a<b>\"\ngray(x)", "text in quotes can't have `<`, `>`, `\\` or a tab in it", 1, 8, "E954"),
+    ("name \"a<b>\"\ngray(x)", "text in quotes can't have `<`, `>`, `\\` or a control character (a tab too) in it", 1, 8, "E954"),
     ("name \"a\\b\"\ngray(x)", "can't have", 1, 8, "E954"),
     ("name \"a\tb\"\ngray(x)", "can't have", 1, 8, "E954"),
     ("control k = 1 \"0123456789012345678901234\"\ngray(k)", "this text can be 24 characters at most", 1, 15, "E955"),
     ("name \"0123456789012345678901234567890123456789012345678901234567890\"\ngray(x)", "60 characters at most", 1, 6, "E955"),
     ("name\ngray(x)", "this takes its text in quotes", 1, 5, "E956"),
     ("about 3\ngray(x)", "this takes its text in quotes", 1, 7, "E956"),
-    ("control k 1 = 2\ngray(k)", "expected `..`", 1, 13, "E957"),
+    ("control k 1 = 2\ngray(k)", "a control is `control NAME lo..hi = default", 1, 11, "E957"),
+    ("control k 0..1 \"L\" = 0.5\ngray(k)", "a control is", 1, 20, "E957"),
+    ("control k 0..1 = 0.5 \"L\" \"M\"\ngray(k)", "a control is", 1, 26, "E957"),
+    ("control k = calm, 3\ngray(k)", "a choice is words (names) between commas", 1, 19, "E966"),
+    ("control k = calm,\ngray(k)", "a choice is words", 1, 18, "E966"),
+    ("name \"x\" \"y\"\ngray(x)", "expected the end of the `name` line, found `\"y\"` (one declaration a line)", 1, 10, "E967"),
+    ("psi 1 2\ngray(x)", "expected the end of the `psi` line", 1, 7, "E967"),
+    ("look screen 40 x\ngray(x)", "expected the end of the `look` line, found `x`", 1, 16, "E967"),
+    ("name \"a\u{202e}b\"\ngray(x)", "characters that hide or reorder text", 1, 8, "E969"),
+    ("name \"a\u{200b}b\"\ngray(x)", "characters that hide or reorder text", 1, 8, "E969"),
+    ("about \"a\u{2028}b\"\ngray(x)", "characters that hide or reorder text", 1, 9, "E969"),
+    ("name \"a\u{2066}b\"\ngray(x)", "characters that hide or reorder text", 1, 8, "E969"),
+    ("name \"a\u{85}b\"\ngray(x)", "or a control character", 1, 8, "E954"),
+    ("psi 01\ngray(x)", "a whole number", 1, 1, "E603"),
+    ("psi 1.0\ngray(x)", "a whole number", 1, 1, "E603"),
     ("control k 0..1 = calm, wild\ngray(k)", "a control is `control NAME lo..hi = default", 1, 18, "E957"),
     ("control k = 0.5 x\ngray(k)", "a control is", 1, 17, "E957"),
     ("control k = \ngray(k)", "a control is", 1, 13, "E957"),
@@ -169,6 +183,11 @@ fn compact_keeps_the_declarations_as_written() {
     let text = |s: &str, r: Option<(u32, u32)>| r.map(|r| s[r.0 as usize..r.1 as usize].to_string());
     assert_eq!(text(FULL, da.name), text(&c, db.name));
     assert_eq!(text(FULL, da.about), text(&c, db.about));
+    // `'"'` is a character, on a line that starts with `name` but sets it
+    // (review, formula-f1): the comment after it goes.
+    let src = "name = '\"' -- a quote\ngray(name/100)";
+    assert_eq!(compact(src), "name = '\"'; gray(name/100)");
+    assert_eq!(compile(&compact(src)).unwrap(), compile(src).unwrap());
     // A declaration line written on one line with others.
     assert!(compile("name \"x; y\"; control k = 1; gray(k)").is_ok());
 }
@@ -210,6 +229,12 @@ fn a_parts_controls() {
     // The formula's own control wins; the part's names still read.
     let own = compile(&format!("control k = 0.9\npart q {{\n{inner}\n}}\nlayer {{ gray(k) }}\nlayer {{ q(x, y, 0.5) }}")).unwrap();
     assert_eq!(own.meta().default_value(0), compile("control k = 0.9\ngray(k)").unwrap().meta().default_value(0));
+    // A part describes a slot the formula's own lines leave undeclared, even
+    // when they declare others: its range and default reach `Meta`.
+    let mixed = compile("control q 0.5..1 = 0.75\npart p {\n  control r 2..8 = 4\n  control s 0..100 = 50\n  gray(frac(s*x + r))\n}\nlayer { gray(q) }\nlayer add { p(x, y, 0.5) }").unwrap();
+    assert_eq!(mixed.meta().declared(), 3);
+    assert_eq!(mixed.meta().control(0), Some(Control::Slider { lo: ONE / 2, hi: ONE, default: 3 * ONE / 4 }));
+    assert_eq!(mixed.meta().control(1), Some(Control::Slider { lo: 0, hi: 100 * ONE, default: 50 * ONE }));
     // A part's declarations other than control do nothing.
     let q = compile("part p {\n  psi 1\n  name \"P\"\n  look screen 40\n  gray(x)\n}\np").unwrap();
     assert_eq!(q.meta().look(), None);
@@ -226,6 +251,14 @@ fn control_ranges_are_sound_for_any_value() {
         "control z -2..2 = 0\ncontrol s 0..100 = 50\nloop 4\nrgb(frac(z*px*s*3.5), frac((s*s*s)/7 + py*z), sin(z*x*s))",
         "control m = a1, b1, c1, d1\ncontrol wd 0..0.01 = 0.005\nloop 4\ngray(frac(pick(m, x, y, px*wd*1000, py) + m*px*py*wd*65.5))",
         "control big 0..30000 = 1000\nloop 4\nk = big*big\nrgb(frac(k*x/1000), frac(big*px*py/3), frac(big*7.5 + x))",
+        // (The review's, formula-f1: loop forever; sprites and palettes; the
+        // formula reading `a` before a part declares it, both orders; a
+        // formula with fewer controls than its part.)
+        "control z 1..4 = 2\ncontrol s 0..100 = 50\nloop forever\nv = frac(t*z/7 + seed)\ngray(frac(v*s*px + noise(x*z, y*s, t)))",
+        "control m = red, green, blue\ncontrol k 0..10 = 3\npalette p = #f00, #0f0, #00f\nsprite s {\n  key . 0, X 1\n  .X.\n  X.X\n}\nloop 4\nv = s[floor(x*3*k), floor(y*2)]\nlayer { pal(p, frac(m/2 + v*k)) }\nlayer add { gray(frac(k*x*37 + m*px)) }",
+        "loop 4\nk = a*a*900\npart p {\n  control r 2..8 = 4\n  gray(frac(r*x*py*a))\n}\nlayer { gray(frac(k*x)) }\nlayer add { p(x, y, 0.5) }",
+        "loop 4\npart p {\n  control r 2..8 = 4\n  gray(frac(r*x*py))\n}\nk = a*a*900\nlayer { gray(frac(k*x)) }\nlayer add { p(x, y, 0.5) }",
+        "control q 0.5..1 = 0.75\nloop 4\npart p {\n  control r 2..8 = 4\n  control s 0..100 = 50\n  gray(frac(s*x*py*31 + r))\n}\nlayer { gray(frac(q*px*py*31 + b*c)) }\nlayer add { p(x, y, 0.5) }",
         "control q 0.5..1 = 0.75\ncontrol k = on, off\npart p {\n  control r 2..8 = 4\n  gray(frac(r*x*py*a))\n}\nlayer { gray(frac(q*px*py*31 + k)) }\nlayer add { p(x, y, 0.5) }",
     ];
     let vals = [
@@ -261,7 +294,7 @@ fn control_ranges_are_sound_for_any_value() {
                     (r >> 1) as i32 - (1 << 30)
                 }
             });
-            let ms = rnd() % 4000;
+            let ms = rnd() % 20000;
             assert_eq!(
                 frame(&narrowed, ms, abc),
                 frame(&checked, ms, abc),
