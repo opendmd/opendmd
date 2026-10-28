@@ -6,14 +6,15 @@
 // A formula that reads what is under it (`ur ug ub ul`, layers that let it
 // show through) is drawn over a GIF: one picked from the Library or a file
 // (decoded by pkg-art), else a sample picture; on a device it can be shown
-// over the panel's GIF. Any formula can be kept as the panel's look, with a
-// blend and an amount (js/looks.js).
+// over the panel's GIF. A Formula's settings (js/fsheet.js: its name, about,
+// controls and look, as edits of its declaration lines) make it one that
+// can be the panel's look (js/looks.js).
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
 import { h, clear, store, toast, debounce, saver, base, SITE } from './util.js';
 import { popup, closeMenu, actions } from './overrides.js';
-import { link as mklink, parse, controls, control, fit, Q, about, TIP, est, marks, sample, MAX_NAME } from './psikit.js';
+import { link as mklink, parse, controls, control, fit, Q, about, TIP, est, marks, sample, declText, MAX_NAME } from './psikit.js';
 
 let P = null, mod = null, gen = 0;
 const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
@@ -57,6 +58,10 @@ function draw(f, ms, still, gms = ms) {
   }, null);
 }
 const info = (src) => (take(src) && T(() => P.info(), null)) || [];
+// What it declares (pkg-psi controls(): its name, about, look, controls).
+const ctlOf = (f) => T(() => controls(P, f.src), null);
+// Its name and line about it: its own lines, else the record's.
+const nameOf = (f) => ctlOf(f)?.name || f.name || '';
 const isOver = (f) => !!(info(f.src)[5] & 32);
 
 // --- What is under: the GIF picked (`U`: its name, RGB frames and when each
@@ -126,45 +131,17 @@ function overRow(id) {
   return el;
 }
 
-// On a device (or the demo's player): kept as the panel's look (Settings ›
-// Look), over every GIF, with a blend and an amount (js/looks.js); while
-// the sheet is open the preview `v` shows the look over its picture, then
-// `orig` again.
-async function useLook(f, btn, v, orig = f) {
-  let L, M;
-  try { L = await import('./looks.js'); M = await L.psi(); } catch (e) { toast('Use as the look: ' + (e.message || e), 'bad'); return; }
-  const back = () => { if (info(orig.src).length) play(v, orig, info(orig.src)); };
-  let mix = L.choice(M, f);
-  const go = h('button.pri', { id: 'psi-look-go' }, 'Use as the look');
-  const c = L.controls('psi-look', (b, k) => { mix = [b, k]; show(); });
-  function show() {
-    const x = L.as(M, f, ...mix);
-    c.say(x);
-    go.disabled = !!x.why;
-    if (x.src) play(v, { ...f, src: x.src }, info(x.src));
-  }
-  c.set(...mix, L.overOnly(M, f));
-  go.onclick = async () => {
-    closeMenu();
-    try {
-      await L.use(f, ...mix);
-      toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Look changes it)`, 'ok');
-    } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Use as the look: ' + e.message, 'bad'); }
-  };
-  const r = btn.getBoundingClientRect(), el = h('div.menu.wide', { id: 'psi-look-sheet', role: 'dialog', 'aria-label': 'Use as the look' },
-    h('div.mh', 'Over every GIF the panel plays'), c.el, c.why, h('p.cap', 'Blend: how it goes over the GIF. Amount: how much of it shows.'), go);
-  el.onclose = back;
-  popup(el, r.left, r.bottom + 4);
-  show();
-}
+// On a device (or the demo's player): a Formula that declares `look` kept
+// as the panel's look (Settings › Look), over every GIF (js/looks.js).
+const setLook = (f) => import('./looks.js').then((L) => L.useSaid(f));
 
 // Add to playlist: a line in one of the card's playlists (a player's, the
-// demo's, a card folder's): the path Show on panel sends (js/psishow.js) and
-// `&name=` (the player ignores it; the playlist and Now show it), all in the
-// player's 2,048 B, else without the name.
+// demo's, a card folder's): the path Show on panel sends (js/psishow.js),
+// and `&name=` for one without a `name` line (the player ignores it; the
+// playlist and Now show it), all in the player's 2,048 B, else without it.
 async function toList(f, btn) {
   if (!info(f.src).length) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
-  const p = (await import('./psishow.js')).fpath(f), q = f.name ? p + '&' + new URLSearchParams({ name: f.name.slice(0, MAX_NAME) }) : p;
+  const c = ctlOf(f), p = (await import('./psishow.js')).fpath(f, c), q = f.name && !c?.name ? p + '&' + new URLSearchParams({ name: f.name.slice(0, MAX_NAME) }) : p;
   if (p.length > 2048) { toast('This formula is too long for a playlist', 'bad'); return; }
   const lists = await app.playlists().catch(() => []);
   if (!lists.length) lists.push({ path: '/filelist.txt', label: 'All files' });
@@ -216,7 +193,7 @@ function play(v, f, i) {
 // The controls a formula declares (its `control` lines, and a 0..1 slider for
 // a, b or c read without one), in `box`; `set` on a change.
 function sliders(box, f, set) {
-  const ctl = T(() => controls(P, f.src), null);
+  const ctl = ctlOf(f);
   clear(box, (ctl?.controls || []).map((c) => control(c, f, set, `${box.id}-${c.slot}`)));
 }
 
@@ -229,11 +206,12 @@ const sig = (f) => f.src + '\n\0' + (f.name || '');
 const dirty = (d) => d?.base != null && sig(d) !== d.base;
 
 // Share links (js/psikit.js: one encoder and decoder for here and the site's share page).
-const link = (f, base = location.origin + location.pathname) => mklink(f, base, info(f.src)[5] || 0);
+const link = (f, base = location.origin + location.pathname) => mklink(f, base, ctlOf(f));
 // `#formula=…&name=…&a=…` (app.js keeps it in app.formula).
 function fromLink(s) {
-  const { f, cut } = parse(s);
-  if (P) T(() => fit(controls(P, f.src), f), null);
+  const { f, cut } = parse(s), c = P && ctlOf(f);
+  fit(c, f);
+  if (c?.name) f.name = c.name;
   if (cut) toast('The shared formula was too long: only its first 4,096 characters are here', 'bad');
   f.base = sig(f);
   return f;
@@ -296,7 +274,7 @@ export async function mount(el) {
   return {
     show() { if (!B.editing) B.tiles(); kick(); },
     sub(s) {
-      if (s !== 'edit') { if (B.editing) close(false); } else if (!B.editing || app.formula) edit();
+      if (s !== 'edit') { if (B.editing) close(false); } else if (!B.editing || app.formula || app.psiEdit) edit();
       kick();
     },
   };
@@ -320,13 +298,14 @@ function build(root) {
   const shareBtn = h('button', { id: 'psi-share-btn' }, 'Copy share link'), del = h('button.danger', { id: 'psi-del' }, 'Delete…');
   let cur = null;
   const show = showBtn('psi-show', () => cur);
-  const look = LOOK() && h('button', { id: 'psi-look', onclick: (e) => useLook(cur, e.currentTarget, pv) }, 'Use as the look');
+  const look = LOOK() && h('button', { id: 'psi-look', onclick: () => setLook({ ...cur, name: nameOf(cur) }) }, 'Set as the panel’s look');
+  const sets = h('button', { id: 'psi-settings' }, 'Settings…');
   const pl = plBtn('psi-pl', () => cur);
   const under = overRow('psi-under');
   const side = h('div.side', { id: 'psi-side' }, h('div.card', { id: 'psi-detail' },
     h('button.sm.close', { 'aria-label': 'Close', onclick: () => side.classList.remove('open') }, '✕'),
     canvas, cap, under, h('div.dhead', h('div.grow', title, desc)), sl,
-    h('div.row.acts', show, main, gifBtn), h('div.row.acts', pl, look, shareBtn, del), h('p.cap', NOTE())));
+    h('div.row.acts', show, main, gifBtn), h('div.row.acts', pl, look, sets, shareBtn, del), h('p.cap', NOTE())));
   const ed = editor();
   root.append(h('h1.ptitle', 'Formulas'), h('div.libgrid', gal, side), ed.el);
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && side.classList.contains('open') && !document.querySelector('.menu')) side.classList.remove('open'); });
@@ -334,19 +313,23 @@ function build(root) {
   function pick(f, mineToo) {
     cur = f;
     side.classList.add('open');
-    const i = info(f.src);
-    title.textContent = f.name;
-    desc.textContent = f.desc || '';
+    const i = info(f.src), c = ctlOf(f);
+    title.textContent = nameOf(f);
+    desc.textContent = c?.about || f.desc || '';
     cap.textContent = i.length ? about(i) : `This formula doesn’t work any more: ${T(() => P.error(), '')}`;
     cap.title = i.length ? TIP(i) : '';
     sliders(sl, f, () => { pv.dirty = true; PS?.follow(f); });
     if (show) show.disabled = !i.length;
     under.hidden = !(i[5] & 32);
-    if (look) look.hidden = !i.length;
+    if (look) look.hidden = !i.length || !c?.look;
     if (pl) pl.hidden = !i.length;
     PS?.mark();
     main.textContent = mineToo ? 'Edit' : 'Remix';
-    main.onclick = (e) => go(mineToo ? { ...f } : { name: f.name + ' remix', src: f.src, a: f.a, b: f.b, c: f.c }, e.currentTarget);
+    const mk = () => (mineToo ? { ...f } : { name: nameOf(f) + ' remix', src: c?.name ? P.declare(f.src, 'name', 0, `name "${Array.from(c.name + ' remix').slice(0, MAX_NAME).join('')}"`) : f.src, a: f.a, b: f.b, c: f.c });
+    main.onclick = (e) => go(mk(), e.currentTarget);
+    // Its settings: in the editor (an example's on a remix).
+    sets.onclick = (e) => go(mk(), e.currentTarget, 1);
+    sets.hidden = !i.length;
     gifBtn.onclick = () => toGif(f);
     shareBtn.onclick = (e) => share(e.currentTarget, f);
     del.hidden = !mineToo;
@@ -356,7 +339,7 @@ function build(root) {
   }
   function tile(f, m) {
     const c = h('canvas', { width: 128, height: 32 });
-    const t = h('button.psi-tile', { 'data-name': f.name, onclick: () => pick(f, m) }, c, h('b', f.name), f.desc && h('span.cap', f.desc));
+    const d = ctlOf(f), t = h('button.psi-tile', { 'data-name': nameOf(f), onclick: () => pick(f, m) }, c, h('b', nameOf(f)), (d?.about || f.desc) && h('span.cap', d?.about || f.desc), d?.look && h('span.psi-badge', 'look'));
     t._f = f;
     const rgb = draw(f, Math.floor((info(f.src)[4] || 8000) * 0.3 / D) * D, true);
     if (rgb) {
@@ -384,7 +367,7 @@ function build(root) {
     else if (EX[0] && matchMedia('(min-width:1001px)').matches) pick(EX[0], false);
   }
   B = { root, ed, tiles, editing: false, draft: null };
-  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x : []; })]).then(tiles)
+  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x : []; })]).then(tiles)
     .catch((e) => { clear(gal, h('div.card', h('p.bad', 'Formulas could not be loaded: ' + (e.message || e)))); });
 }
 
@@ -464,8 +447,10 @@ const DECLS = [
 // psi-builtins end
 
 function editor() {
-  const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; stash(); } });
-  const head = h('div.card.psi-edhead', h('button', { id: 'psi-back', onclick: () => close(true) }, '‹ Formulas'), name,
+  // The name is the formula's `name` line (typed here, written there).
+  const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; named(name.value); stash(); } });
+  const setBtn = h('button', { id: 'psi-set-btn', 'aria-haspopup': 'dialog', title: 'Formula settings: name, about, controls, look', onclick: (e) => settings(e.currentTarget) }, '⚙ Settings');
+  const head = h('div.card.psi-edhead', h('button', { id: 'psi-back', onclick: () => close(true) }, '‹ Formulas'), name, setBtn,
     h('button.pri', { id: 'psi-save', onclick: save }, 'Save'));
   const said = saver(head);
   const ta = h('textarea', { id: 'psi-src', spellcheck: false, autocapitalize: 'off', autocomplete: 'off', wrap: 'off', 'aria-label': 'Formula', 'aria-describedby': 'psi-err' });
@@ -482,7 +467,7 @@ function editor() {
     'Heavy for the panel: noise, len, sqrt, atan2 and dividing by a changing value cost the most');
   const sl = h('div.psi-sls', { id: 'psi-ed-sl' });
   const under = overRow('psi-ed-under');
-  const look = LOOK() && h('button', { id: 'psi-ed-look', hidden: true, onclick: (e) => useLook({ ...live }, e.currentTarget, pv, live) }, 'Use as the look');
+  const look = LOOK() && h('button', { id: 'psi-ed-look', hidden: true, onclick: () => { if (ready()) setLook({ ...live }); } }, 'Set as the panel’s look');
   const touch = matchMedia('(pointer:coarse)').matches;
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
@@ -550,7 +535,11 @@ function editor() {
       cap.title = TIP(i);
       heavy.hidden = est(i) <= 8000;
       under.hidden = !(i[5] & 32);
-      if (look) look.hidden = false;
+      const c = ctlOf(f);
+      if (look) look.hidden = !c?.look;
+      // Its `name` line, typed in the text: the name.
+      if (c?.name != null) f.name = c.name;
+      if (document.activeElement !== name) name.value = f.name || '';
       el.dataset.steps = i[0];
       delete el.dataset.err;
       good = f.src;
@@ -703,14 +692,44 @@ function editor() {
       h('p.cap', 'Phases are in turns: sin(0.25) is 1. Tap a name to put it in. -- starts a comment.')), r.left, r.bottom + 4);
   }
 
+  // The text replaced by `t` (only the part that changed, so the caret
+  // and scroll stay), then compiled at once.
+  function edit(t) {
+    const s = ta.value;
+    let a = 0, e = 0;
+    while (a < s.length && a < t.length && s[a] === t[a]) a++;
+    while (e < s.length - a && e < t.length - a && s[s.length - 1 - e] === t[t.length - 1 - e]) e++;
+    ta.setRangeText(t.slice(a, t.length - e), a, s.length - e, 'preserve');
+    paint();
+    compile();
+  }
+  // The `name` line set to `v` (taken out when empty).
+  function named(v) {
+    const t = declText(v, MAX_NAME);
+    if (P) edit(P.declare(ta.value, 'name', 0, t ? `name "${t}"` : ''));
+  }
+  // The settings sheet (js/fsheet.js), over this text: edits go in as typed.
+  async function settings(btn) {
+    if (!good) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
+    const back = () => { if (good) play(pv, live, info(good)); };
+    (await import('./fsheet.js')).sheet({
+      P, f: B.draft, look: LOOK(), get: () => ta.value, put: edit,
+      moved: () => { stash(); pv.dirty = true; sliders(sl, B.draft, () => { stash(); pv.dirty = true; PS?.follow(live); }); PS?.follow(live); },
+      preview: (src) => (src ? play(pv, { ...live, src }, info(src)) : back()),
+    }, btn);
+  }
+
   function save() {
     if (!ready()) return;
     const f = B.draft, list = mine();
     f.name = name.value.trim() || `My formula ${list.length + 1}`;
     name.value = f.name;
+    // The name is its `name` line.
+    if (!ctlOf(f)?.name) named(f.name);
     f.id ??= Date.now();
     const k = list.findIndex((x) => x.id === f.id);
     const rec = { id: f.id, name: f.name, src: ta.value, a: f.a, b: f.b, c: f.c };
+    f.src = ta.value;
     if (k < 0) list.unshift(rec); else list[k] = rec;
     said(() => {
       if (!keep(list)) { const m = 'this browser’s storage is full or blocked'; toast('Couldn’t save: ' + m, 'bad'); throw new Error(m); }
@@ -737,13 +756,15 @@ function editor() {
     },
     // After a restart: the module is new, compile the text again.
     again() { if (B.editing) compile(); },
+    // Its settings sheet (Settings › Look's Change…).
+    settings: () => settings(setBtn),
   };
 }
 
 // Into the editor from the gallery (the way back is the browser's); a
 // draft not saved yet is only replaced when the user says so.
-function go(f, at) {
-  const d = unsaved(), to = (x) => () => { B.draft = x; B.pushed = true; app.go('formulas/edit'); };
+function go(f, at, sheet) {
+  const d = unsaved(), to = (x) => () => { B.draft = x; B.pushed = true; B.sheet = sheet && x === f; app.go('formulas/edit'); };
   f.base = sig(f);
   if (d) ask(`Replace “${d.name || 'Untitled formula'}”? It isn’t saved yet.`, ['Replace it', to(f)], ['Keep editing it', to(d)], at);
   else to(f)();
@@ -752,19 +773,26 @@ function edit() {
   if (!P) return; // the module didn't load: the gallery says so; a link waits for a reload
   B.draft ??= stored() || { name: '', src: STARTER };
   let later;
-  if (app.formula) {
-    const f = fromLink(app.formula), d = unsaved();
+  // From Settings › Look's Change…: that Formula (yours as saved), its settings open.
+  const pe = app.psiEdit, m = pe?.f.mine && mine().find((x) => x.id === pe.f.id);
+  app.psiEdit = null;
+  if (pe) B.sheet = 1;
+  if (app.formula || pe) {
+    const f = m ? { ...m } : fromLink(app.formula || link(pe.f, '')), d = unsaved();
+    f.base ??= sig(f);
     app.formula = null;
-    B.pushed = false;
+    B.pushed = !!pe;
     if (location.hash.startsWith('#formula=')) location.replace('#formulas/edit');
-    if (d && sig(d) !== sig(f)) later = () => ask(`Open the shared formula? “${d.name || 'Untitled formula'}” isn’t saved yet and will be replaced.`, ['Open it', () => B.ed.open(f)], ['Keep mine', () => {}]);
+    if (d && sig(d) !== sig(f)) later = () => ask(`Open ${pe ? `“${f.name}”` : 'the shared formula'}? “${d.name || 'Untitled formula'}” isn’t saved yet and will be replaced.`, ['Open it', () => { B.ed.open(f); if (pe) B.ed.settings(); }], ['Keep mine', () => {}]);
     else B.draft = f;
+    if (later) B.sheet = 0;
   }
   B.editing = true;
   B.root.classList.add('psied');
   B.ed.open(B.draft);
   scrollTo(0, 0);
   later?.();
+  if (B.sheet) { B.sheet = 0; setTimeout(() => B.ed.settings(), 0); }
 }
 function close(nav) {
   B.editing = false;

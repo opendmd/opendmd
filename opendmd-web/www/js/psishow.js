@@ -8,25 +8,16 @@
 
 import { app } from './state.js';
 import { toast } from './util.js';
-import { compact } from './psikit.js';
+import { path } from './psikit.js';
 
-// The device's `fx_psi::path` (opendmd_psi::compact): comments out, runs of
-// spaces made one, lines joined with `; `, text in quotes on a declaration
-// line kept as written; lightly encoded (a space is `+`; `% & + # ?`,
-// controls and non-ASCII as %XX). The values set follow (`&a=`; a slot
-// left unset plays at the formula's declared default).
-export function fpath(f) {
-  let p = '@fx:psi?src=';
-  for (const b of new TextEncoder().encode(compact(f.src))) {
-    const c = String.fromCharCode(b);
-    p += b == 32 ? '+' : b > 32 && b < 127 && !'%&+#?'.includes(c) ? c : '%' + (b < 16 ? '0' : '') + b.toString(16).toUpperCase();
-  }
-  for (const k of 'abc') if (f[k] != null) p += `&${k}=${+(+f[k]).toFixed(4)}`;
-  return p;
-}
+// The device's `fx_psi::path`: psikit's `path` (compact text, lightly
+// encoded, the values that differ from their declared defaults: `ctl` is
+// pkg-psi's controls(); without it every value set).
+export const fpath = (f, ctl) => path(f, ctl);
 
-let shown = null, next = null, busy = false, last = 0, btns = [], isOver = () => false, ov = false;
-export function init(b, o) { btns = b; isOver = o; mark(); }
+let shown = null, next = null, busy = false, last = 0, btns = [], isOver = () => false, ctlOf = () => null, ov = false;
+// `o(f)`: it draws over the GIF; `c(f)`: its controls (for the path's values).
+export function init(b, o, c) { btns = b; isOver = o; ctlOf = c; mark(); }
 // Each button says whether its formula is the one on the panel.
 export function mark() {
   for (const [b, f] of btns) {
@@ -53,7 +44,7 @@ async function pump() {
   const [f, live] = next, name = f.name || 'Formula', o = f.over || (f === shown && ov);
   next = null; busy = true; last = Date.now();
   try {
-    await app.src.json('POST', '/api/play', { path: f.src ? fpath(f) : '', live, ...(o && { over: true }) }, 8000);
+    await app.src.json('POST', '/api/play', { path: f.src ? fpath(f, ctlOf(f)) : '', live, ...(o && { over: true }) }, 8000);
     if (!live) toast(!f.src ? 'Taken off the panel' : o ? `Over the panel’s GIF: ${name}` : `On the panel: ${name}`, 'ok');
     // Over the GIF, it needs the player's memory: say so if it is waiting for it.
     if (o && f.src && !live) setTimeout(() => app.refreshStatus?.().then((st) => { if (shown === f && st?.formula_look?.held === 0) toast('The panel is short of memory just now: it draws this over the GIF as soon as there is room', 'bad'); }).catch(() => {}), 1500);

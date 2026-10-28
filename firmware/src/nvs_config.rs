@@ -55,18 +55,12 @@ const KEY_API_KEY: &str = "api_key";
 const KEY_ATTRACT_SET: &str = "attract_set";
 const KEY_LOOK: &str = "look";
 const KEY_GLOW: &str = "glow";
-/// The Formula look: a formula's `@fx:psi?src=…` path (`""`: none) and the
-/// name the web app showed it under.
+/// The Formula look: a formula's `@fx:psi?src=…` path (`""`: none). Its
+/// name, blend and amount are the formula's own `name` and `look` lines.
 const KEY_LOOK_FORMULA: &str = "look_fx";
-const KEY_LOOK_FORMULA_NAME: &str = "look_fx_name";
-/// The longest `look_formula_name`, characters.
-pub const LOOK_NAME_MAX: usize = 60;
-/// How the web app composed the Formula look (`look_blend`, `look_amount`:
-/// display only, the path is what plays), as `blend:amount` (`screen:40`);
-/// absent = `over:100`, how every look saved before them is drawn.
-const KEY_LOOK_MIX: &str = "look_mix";
-/// The blends a look may be composed with (`opendmd_psi::look::BLENDS`).
-pub const LOOK_BLENDS: [&str; 6] = ["over", "screen", "add", "multiply", "max", "min"];
+/// Keys earlier test builds kept beside it (the look's name, its
+/// `blend:amount`): never read, removed at the next save.
+const STALE_KEYS: [&str; 2] = ["look_fx_name", "look_mix"];
 const KEY_ATTRACT: &str = "attract";
 const KEY_BOOT_SHOW: &str = "boot_show";
 /// Refresh-synchronised blits (`Panel::set_sync`), 0/1.
@@ -165,13 +159,6 @@ pub struct Settings {
     /// everything that plays, as its `@fx:psi?src=…` path (at most
     /// `synth::MAX_FORMULA_PATH`); `""` = none.
     pub look_formula: String,
-    /// The formula's name in the web app (display only).
-    pub look_formula_name: String,
-    /// The blend (one of [`LOOK_BLENDS`]) and amount (0..=100 %) the web
-    /// app composed `look_formula` with, so Settings can show them again
-    /// (display only; `over`, 100 for a look saved before them).
-    pub look_blend: &'static str,
-    pub look_amount: u8,
     /// The start-up show: `off`, `short` (the default) or `full`
     /// (`opendmd_core::boot`, `show.rs`).
     pub boot_show: ShowLength,
@@ -191,17 +178,6 @@ pub struct Settings {
     /// (40 MHz, slowed down in place after an error) or `full` (always
     /// 40 MHz, never slowed: API and bench only). See `cardspeed.rs`.
     pub card_speed: CardSpeed,
-}
-
-/// `look_blend` as stored ([`LOOK_BLENDS`]' own `&'static str`), if it is one.
-pub fn look_blend(v: &str) -> Option<&'static str> {
-    LOOK_BLENDS.iter().copied().find(|&b| b == v)
-}
-
-/// [`KEY_LOOK_MIX`]'s `blend:amount`, if well formed.
-fn look_mix(v: &str) -> Option<(&'static str, u8)> {
-    let (b, k) = v.split_once(':')?;
-    Some((look_blend(b)?, k.parse().ok().filter(|&k| k <= 100)?))
 }
 
 /// Is `v` an `attract` value `PUT /api/config` may store?
@@ -261,9 +237,6 @@ impl Default for Settings {
             look: Look::Colour,
             glow: GlowLevel::Off,
             look_formula: String::new(),
-            look_formula_name: String::new(),
-            look_blend: LOOK_BLENDS[0],
-            look_amount: 100,
             boot_show: ShowLength::Short,
             panel_sync: true,
             panel_split: true,
@@ -351,10 +324,6 @@ impl Config {
                 .unwrap_or(d.brightness),
             max_brightness,
         );
-        let mix = self
-            .get_string(KEY_LOOK_MIX)
-            .and_then(|m| look_mix(&m))
-            .unwrap_or((d.look_blend, d.look_amount));
         Settings {
             wifi_ssid: self.get_string(KEY_WIFI_SSID).unwrap_or(d.wifi_ssid),
             wifi_pass: self.get_string(KEY_WIFI_PASS).unwrap_or(d.wifi_pass),
@@ -426,11 +395,6 @@ impl Config {
             look_formula: self
                 .get_long_string(KEY_LOOK_FORMULA, opendmd_core::synth::MAX_FORMULA_PATH)
                 .unwrap_or(d.look_formula),
-            look_formula_name: self
-                .get_string(KEY_LOOK_FORMULA_NAME)
-                .unwrap_or(d.look_formula_name),
-            look_blend: mix.0,
-            look_amount: mix.1,
             boot_show: self
                 .get_string(KEY_BOOT_SHOW)
                 .and_then(|s| ShowLength::from_name(&s))
@@ -488,10 +452,10 @@ impl Config {
         self.nvs.set_str(KEY_LOOK, s.look.name())?;
         self.nvs.set_str(KEY_GLOW, s.glow.name())?;
         self.nvs.set_str(KEY_LOOK_FORMULA, &s.look_formula)?;
-        self.nvs
-            .set_str(KEY_LOOK_FORMULA_NAME, &s.look_formula_name)?;
-        self.nvs
-            .set_str(KEY_LOOK_MIX, &format!("{}:{}", s.look_blend, s.look_amount))?;
+        for k in STALE_KEYS {
+            // (Absent is the usual answer; a failure only leaves it unread.)
+            let _ = self.nvs.remove(k);
+        }
         self.nvs.set_str(KEY_BOOT_SHOW, s.boot_show.name())?;
         self.nvs.set_u8(KEY_PANEL_SYNC, u8::from(s.panel_sync))?;
         self.nvs.set_u8(KEY_PANEL_SPLIT, u8::from(s.panel_split))?;

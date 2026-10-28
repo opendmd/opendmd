@@ -61,3 +61,5 @@
 .psi-top.stale canvas{opacity:.55}
 .psi-top.stale #psi-ed-cap::before{content:"Still playing the last version that worked · "}
 .psi-sls:empty{display:none}
+.psi-badge{align-self:flex-start;font-size:11px;color:var(--acc);border:1px solid;border-radius:4px;padding:0 4px}
+.psi-set-c{border-top:1px solid var(--line);padding:4px 0}.psi-set-c .row{flex-wrap:wrap;gap:4px}
