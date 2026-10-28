@@ -45,13 +45,16 @@ bottom to 0.5 at the top, and `r` (the distance from the middle) and
 
 Angles and waves are in **turns**: `sin(0.25)` is 1; `sin(v)` repeats every 1.
 Time `t` is seconds into the loop, always a whole number of frames: 20 ms
-ones, or 10 ms with `fps 100` (40 ms with `fps 25`).
+ones, or 10 ms with `fps 100` (40 ms with `fps 25`). With `loop forever`
+there is no loop: `t` is the seconds since the formula started, growing
+without end (section 11).
 
 ## 2. Grammar
 
 ```text
 formula   = { sep } { stmt sep } colourline { sep }      -- or layers instead of colourline
 stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
+          | "loop" "forever"                  -- no loop: t grows without end (section 11)
           | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
           | "frame" "{" { assign sep } "}"    -- values once a frame (no x, y, px, py, i, ur…)
           | NAME "=" expr                     -- each name set once in its scope
@@ -82,7 +85,7 @@ sum       = term { ("+" | "-") term }
 term      = unary { ("*" | "/" | "%") unary }
 unary     = ("-" | "+") unary | atom
 atom      = NUMBER | CHAR | COLOUR | NAME | FUNC "(" args ")" | PART "." NAME
-          | PART "(" e "," e ")" "." NAME | TABLE "[" expr "]" | "(" expr ")"
+          | PART "(" e "," e ")" "." NAME | TABLE "[" expr "]" | SPRITE "[" e "," e "]" | "(" expr ")"
 args      = e { "," e }                        -- digit/glyph: e "," e "," e [ "," FONT ]
                                                -- pick: e "," e { "," e }
 sep       = newline | ";"                      -- newlines inside ( ) and [ ] are spaces
@@ -121,7 +124,8 @@ computer.
 | `x`, `y` | 0..1 across (left→right) and up (bottom→top) | pixel / row |
 | `px`, `py` | column 0..127, row 0..31 from the bottom (whole numbers) | pixel / row |
 | `i` | pixel number 0..4095 from the top left: `(31 − py)·128 + px` | pixel |
-| `t` | seconds into the loop (whole frames: 20 ms, 10 with `fps 100`) | frame |
+| `t` | seconds into the loop (whole frames: 20 ms, 10 with `fps 100`); with `loop forever`, since the formula started, growing without end (section 11) | frame |
+| `seed` | `loop forever` only: 0..1, the same for a whole play, a new one each time it plays (section 11) | frame |
 | `hour`, `minute`, `second` | the clock: 0..23, 0..59, 0..59 (whole) | frame |
 | `a`, `b`, `c` | sliders, 0..1; a comment `-- a: speed` names one; `-- a: shape = cube, ball` (≤ 6 words) makes buttons: choice j of n sets j/(n−1) (n = 1: 0), read with `pick(floor(a*(n-1) + 0.5), …)` | frame |
 | `w`, `h` | 128 and 32 (constants) | — |
@@ -138,9 +142,10 @@ computer.
 steps, the same cost, the same bytes. Alone (not over a GIF), `ur ug ub ul`
 are 0. Built-in names, function names, palette names and keywords (`loop
 frame layer part use draw for table`) cannot be set (except `digit`,
-`glyph`, `bit`, `pick`, `cx`, `cy`, `r`, `angle`, `ty`, `ink`, `line` and
-`dot`, added later, so formulas saved with those names still work: a name a
-formula sets is that name; don't use them as names in new ones).
+`glyph`, `bit`, `pick`, `cx`, `cy`, `r`, `angle`, `ty`, `ink`, `line`,
+`dot`, `seed` and `forever`, added later, so formulas saved with those names
+still work: a name a formula sets is that name; don't use them as names in
+new ones).
 
 ## 5. Functions
 
@@ -211,6 +216,20 @@ The last line is the colour:
 | `#ff8800`, `#f80` | a colour: red, green, blue as two hex digits each (or one, doubled) |
 | a colour expression | arithmetic on colours, read once a channel (below) |
 | `rgb(c, k)` | colour expression `c` covering `k` of the pixel |
+
+**Palettes of your own.** `palette sea = #001020, #0060a0, #40c0e0, #fff`
+(a line at the top of the formula or a part; 1 to 32 colours, a `,` may
+end a line; up to 3 palettes) is used as the built-ins are: `pal(sea, k)`,
+`pal(sea, k) * v`, `pal(sea, k, cover)`. With n colours, `pal(sea,
+i/(n−1))` is colour i: the first at 0, the last at 1 (`pal(sea, 1/3)` the
+second of four), and k in between gives the nearest — bands, not a blend,
+so a smooth ramp needs its steps written out. One step a pixel, the cost of
+a built-in palette: a scene's colours by index without `pick`s.
+
+```psi
+palette dusk = #10082a, #4a1858, #c0306a, #ff8c40, #ffe0a0
+pal(dusk, floor(y*5)/4)      -- five bands, bottom to top
+```
 
 **Colours.** `#rrggbb` names a colour by its bytes: the channel `cc` is
 exactly `cc/255`, so `#ff8000` is drawn as 255, 128, 0. A colour goes only
@@ -384,29 +403,80 @@ draw {
 hsv(x, 0.6, ink)
 ```
 
-## 11. Limits
+## 11. Going on without repeating: `loop forever`
+
+`loop forever` (instead of `loop N`) is a formula with no loop: `t` is the
+seconds since it started and grows without end, so a drive, a sky or a
+cloud field never comes back to where it was. Each time it plays it
+starts at `t = 0`, with a new `seed` (0..1, the same for the whole play):
+add `seed*1000` to a distance to start somewhere else each time.
+
+`t` here is kept exactly, however long it plays (to 1/65,536 s, for
+millions of years), but a value that grows without end can only go where it
+can come back to an ordinary number. Once a frame — `t`, and what you make
+of it with values that are the same for every pixel — it may be:
+
+- added to, taken from, multiplied or divided by values the same all frame
+  (`t*0.15 + seed*1000`, `t/8`, `t*a`): still growing;
+- taken back to an ordinary number by `frac(…)`, `% n`, `sin cos tri saw
+  sqr`, `noise(…)`, `hash(…)`, a comparison (`t > 20`, `step(30, t)`),
+  `min`/`max`/`clamp`, `smoothstep(0, 20, t)` (a fade-in) or `floor(…)` then
+  one of those. Each gives exactly what it gives for a short `t` (a `loop
+  forever` formula draws the same frames as with `loop 3600` while its
+  values fit a number), and carries on past it without stopping or
+  jumping: `frac(t*10)` keeps ticking ten times a second after 55 minutes,
+  where `loop 3600`'s `t*10` stops at 32,767.
+
+And it may have **a part per pixel or per row added to it** (`t*0.5 + x*8`,
+`u + ZH[py]`) when that goes straight into `frac`, `sin cos tri saw sqr`,
+`noise` or `% n`, or is multiplied by a value the same all frame (`(t + x)*0.3`),
+on the way there (the growing part's fraction is added in: exact).
+Divided, it is an error (write `t/3 + x/3`); so is anything else: `t*x`, `sqrt(t)`, `t*t`, a table read at
+`t`, a growing value as a coordinate in `draw { }`. A colour line held to
+0..1 anyway takes it as it is (`gray(t/60)` is white from a minute on);
+`hsv`'s hue takes its fraction.
+
+```psi
+loop forever
+fps 100
+frame { u = t*0.15 + seed*1000 }   -- a distance, in noise cells: grows without end
+ahead = noise(u + y*0.5, 0, 0)     -- per row: the track a little further on
+glow = smoothstep(0, 5, t)         -- a fade-in over the first five seconds
+hsv(ahead + x*0.2, 0.8, glow*noise(x*8 + t, y*4, u))
+```
+
+Without an envelope or a blend at a loop's seam, a drive here has none. A
+part pasted in with a `loop N` of its own still repeats every N seconds
+(its `t` is `t % N`); a `loop forever` part inside a looped formula reads
+the formula's `t`.
+
+## 12. Limits
 
 | limit | value | error says |
 |---|---|---|
 | source | 4,096 characters (a shared link past ~1,500 may be cut by apps) | too long |
 | steps | 256 in all: per frame + per row + per pixel + one per layer | too long for the panel (N steps) |
 | live per-pixel values at once | 12 | keeps too many values at once |
-| constants + per-frame/per-row values | ~119 | too many numbers and steps |
+| constants + per-frame/per-row values held at once | ~119 (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | too many numbers and steps |
 | nesting | 18 levels of brackets and operators (a part level counts 3) | nested too deeply / parts go too deep |
-| `loop` | 0.1..3600 s | between 0.1 and 3600 seconds |
+| `loop` | 0.1..3600 s, or `forever` | between 0.1 and 3600 seconds |
+| values that grow without end (`loop forever`: `t` and what is made of it once a frame) | 15 at once | too many values that grow without end |
+| `noise` of a growing value with a part per pixel or per row | 4 different growing values | four different ones at most |
 | `fps` | 25, 50 or 100 | `fps` is 25, 50 or 100 frames a second |
 | re-reading parts drawn at other places | bounded | draws its parts in too many places |
 | `for` count | a whole number 1..1024, written out | `for` takes a name and a count |
 | loop turns a frame (every run of a loop's body) | 2,048 | draws too much a frame |
 | loops inside loops | two deep | two deep at most |
-| `table` numbers | 256 in all | a table holds numbers only, up to 256 in all |
+| `table` numbers | 256 in all (sprites share them) | a table holds numbers only, up to 256 in all |
+| `palette` (your own) | 1 to 32 colours, 3 palettes; each takes 32 of the 256 table numbers | a palette is 1 to 32 colours / 3 palettes of its own at most / tables, sprites and palettes hold 256 numbers |
+| `sprite` | key: 16 characters; rows: 64 wide, 32 tall; stored in the 256 table numbers (a 26 × 9 picture with 4 key characters takes 23) | `X` is not in the sprite's key / as wide as its first / 1 to 32 rows / tables, sprites and palettes hold 256 numbers in all |
 | `draw { }` blocks | one (the formula's or one part's) | there can be one `draw { }` block |
 | lines and dots drawn a frame | 2,048; and 16,384 line steps (pixels walked, on the panel or off; a line wholly off one side walks none): past either the rest are skipped, the same on every device | — |
 
 Unused names and parts cost nothing; constants fold (`2*3` is 6; `x/8` is
 a multiply).
 
-## 12. The cost model
+## 13. The cost model
 
 The panel's processor runs each step for 4,096 pixels; the estimate is
 `(45 + Σ per-pixel step costs) ns × 4096` (+ ~10 µs per per-row step),
@@ -436,10 +506,12 @@ its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
 | `/` by a varying value, `1/v` | 685 | | `hash` | 220 |
 | `sqrt` | 539 | | `atan2` | 529 |
 | `len` | 642 | | `noise` | 855 |
+| `noise` of a growing value (section 11) | 870 | | | |
 | colour `rgb` | 120 | | colour `hsv` | 195 |
 | `ur` `ug` `ub` | 70 | | `ul` | 140 |
 | `digit` `glyph` | 240 | | `bit` | 55 |
 | `pick` (values the same for every pixel) | 100 | | `pick` of per-pixel values | its compares and selects |
+| a sprite's pixel, `s[u, v]` | 120 | | | |
 | each extra layer | its colour + 190 (multiply 245, screen 300, max/min 180; with coverage add 575, multiply 630, screen 600, max/min 450, over 390) | | showing the picture under | free |
 
 **The draw stage** adds, a frame: ~420 ns for each step each time it runs
@@ -479,8 +551,10 @@ examples here ≤ 10). Division by a constant is a
 multiply. One `noise` or `len` is fine; four are heavy. Per-pixel `px`
 arithmetic costs the same as `x` arithmetic.
 
-## 13. Idioms
+## 14. Idioms
 
+- **Without end**: `loop forever`; move by `t*k` inside `frac`, `sin`,
+  `noise`; start somewhere else each play with `+ seed*1000` (section 11).
 - **Fast motion**: `fps 100` (a line of its own, like `loop`) draws 100
   frames a second, for things that move several pixels a frame (streaks,
   wireframes): smoother, if the formula is light (≤ 5 ms; heavier ones play
@@ -546,9 +620,44 @@ gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
   (`*0.5 + 0.5` maps −1..1 to 0..1); out-of-range is clamped, so overshoot
   just flattens.
 
-## 14. Common mistakes
+## 15. Common mistakes
 
 Each block below fails to compile with the sentence in its first comment.
+
+```psi error
+-- error: a value that grows without end
+loop forever
+gray(frac(t*x))
+```
+
+`t*x` would be a value per pixel that grows without end. Make the growing
+part a frame's and add the pixel's: `frac(t + x)`, `sin(x*3 + t/8)`.
+
+```psi error
+-- error: `seed` is for formulas that go on without repeating
+gray(seed*x)
+```
+
+Only a `loop forever` formula has a `seed`.
+
+```psi error
+-- error: `Y` is not in the sprite's key
+sprite s {
+  key . 0, X 1
+  .XY.
+}
+gray(s[px, ty])
+```
+
+Every character of a sprite's rows needs its number in the key line.
+
+```psi error
+-- error: a palette is 1 to 32 colours
+palette sea = #003, 0.5, #fff
+pal(sea, y)
+```
+
+A palette holds colours only (`#…`).
 
 ```psi error
 -- error: there is no power operator
@@ -727,7 +836,7 @@ Mistakes that compile but look wrong (the contact sheet shows them):
   bottom, as `py`), or every line off the panel.
 - `x`, `y`, `i` and `r` are built in: name a star's place `sx`, `hy`, …
 
-## 15. Worked examples
+## 16. Worked examples
 
 Each: what it is for, then the formula. Frames are checked against golden
 hashes (at 10:09:30, sliders a = 0.5, b = 0.25, c = 0.75; those that read
@@ -1281,7 +1390,82 @@ v2 = (cu + s2*sc2*dx + col) + c2*sc2*dy
 pal(fire, (cell ? 0.44 : 0.19) + noise(u2, v2, 0)*0.6)
 ```
 
-## 16. In the product (not built)
+### 35. Clouds without end (`loop forever`)
+
+A sky that drifts for ever and is a different sky each time it plays:
+two noises of a distance that grows without end, one per pixel (the clouds)
+and one per row (a haze band), and `seed` to start somewhere else.
+
+```psi example=clouds-forever
+loop forever
+-- clouds drifting for ever, a new sky each time it plays
+frame { u = t*0.05 + seed*1000 }        -- grows without end
+puff = noise(x*6 + u, y*3, u*0.3)        -- per pixel: the clouds
+haze = noise(u*2 + y, 9, 0)*0.3          -- per row: a band of haze
+k = smoothstep(0.45, 0.75, puff + haze*0.5)
+mix(#204080, #f0f0ff, k)
+```
+
+### 36. Invaders (a sprite sheet)
+
+Two frames of an invader in one sprite (the second 8 rows below the
+first), a row of nine across the panel marching side to side, the frame
+switching twice a second; the key's numbers are brightness.
+
+```psi example=invaders
+loop 4
+sprite inv {
+  key . 0, X 1, o 0.6
+  ..X.....X..
+  ...X...X...
+  ..XXXXXXX..
+  .XXoXXXoXX.
+  XXXXXXXXXXX
+  X.XXXXXXX.X
+  X.X.....X.X
+  ...XX.XX...
+  ..X.....X..
+  X..X...X..X
+  X.XXXXXXX.X
+  XXXoXXXoXXX
+  XXXXXXXXXXX
+  .XXXXXXXXX.
+  ..X.....X..
+  .X.......X.
+}
+frame {
+  sway = floor(tri(t/4)*6)               -- side to side, a pixel at a time
+  f = floor(t*2) % 2                     -- which frame
+}
+u = px - 2 - sway
+k = inv[u % 14, ty - 10 + f*8] * (u >= 0) * (u < 123)   -- nine, 14 px apart
+hsv(0.33 - ty/100, 0.7, k)
+```
+
+### 37. Night city (a palette of its own, a sprite for its index)
+
+Windows lit at random in a skyline: the colours are a palette of the
+formula's own (sky, building, three window colours), each pixel picks its
+place in it — a sprite of a building's pattern, a hash per window and a
+per-row sky — with one `pal` step instead of three `pick`s.
+
+```psi example=night-city
+loop 8
+palette city = #050812, #141a2c, #2a2f44, #ffd070, #fff4c0
+sprite block {
+  key . 2, w 3
+  .w.w.w.
+  .......
+}
+frame { blink = floor(t*2) }
+col = floor(px/7); top = 10 + hash(col, 3)*16      -- each building's height
+on = hash(col*31 + floor(ty/2), blink) > 0.6       -- this window lit just now
+inside = ty > 31 - top
+k = inside ? block[px % 7, ty % 2]*on + (1 - on)*2 : (py > 24 ? 0 : 1)
+pal(city, k/4)
+```
+
+## 17. In the product (not built)
 
 This reference and `psi-check` are tooling only: nothing in OpenDMD calls a
 model. If the owner wants it later, the natural place is the Formulas

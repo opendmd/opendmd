@@ -59,6 +59,8 @@ const STARFIELD_EX: &str = "loop 2.4\nfps 100\n-- Starfield: 192 stars flying at
 const TUNNEL_EX: &str = "loop 4.8\nfps 100\n-- Tunnel: the time warp. Each loop the walls turn once, travel two\n-- checker lengths, and the palette goes round once.\n-- From the vanishing point, the tunnel twice as tall as wide:\ndx = px - 63.5; dy = (15.5 - py)*2\n-- how far each pixel is from the black middle: 0 there (where the\n-- tunnel is deeper than 16), ~15 at the edges\n-- (this and `round` depend on the pixel alone: worked out once, kept)\nnear = 16 - min(128/len(dx, dy), 16)\n-- round the walls: 16 checker cells a turn, twisting with depth\ntwist = 1                              -- try 0 to 3\nround = atan2(dy, dx)*16 + (16 - near)*twist/8\n-- the checker, turning and travelling\nu = round + t/0.3; v = 16 + t/0.6 - near\ncell = (floor(u) + floor(v)) % 2\n-- lit by depth (full near, fading as a square, black in the middle) and\n-- by a light going round with the walls, in eight steps\nfade = min(near, 10)                    -- 10 near, to 0 where it turns black\nside = 0.0635 + 0.0159*cos(u/16)\nlight = floor(fade*fade*side + (near > 0))/8\npal(chrono, cell ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * light";
 const ROTOZOOM_EX: &str = "loop 9.6\n-- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing\n-- twice, gliding two checkers across and one down; under it a noise\n-- texture turning the other way twice as fast; rows and columns wobble.\n-- a: wobble = gentle, strong, off\nframe {\n  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn\n  s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice\n  zoom = 2                                         -- try 1 to 4\n  sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel\n  sc2 = sc*0.75\n  cu = t/0.6; cv = t/1.2                           -- the glide, in cells\n  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels\n}\ndx = px - 64; dy = 15 - py\n-- the wobble: rows slide sideways, columns up and down, on travelling waves\nwob = sin((31 - py)/32 + t/3.2)*amp\ncol = sin(px*0.0234375 - t/4.8)*amp\n-- where each pixel is on the checker: its column's part plus its row's\nu = (cu + cs*sc*dx) + (wob - sn*sc*dy)\nv = (cv + sn*sc*dx + col) + cs*sc*dy\ncell = (floor(u) + floor(v)) % 2\nu2 = (cv + c2*sc2*dx) + (wob - s2*sc2*dy)\nv2 = (cu + s2*sc2*dx + col) + c2*sc2*dy\npal(fire, (cell ? 0.44 : 0.19) + noise(u2, v2, 0)*0.6)";
 const ROTOZOOM_FLOOR_EX: &str = "loop 9.6\nfps 100\n-- Rotozoom floor: Mode 7 as a floor. A checker running away to a horizon\n-- at the top, turning once a loop and gliding, each row scaled by its\n-- distance and the far rows fogged; rows and columns wobble.\n-- a: wobble = gentle, strong, off\nframe {\n  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn\n  zoom = 2                                         -- try 1 to 4\n  cu = t/0.6; cv = t/1.2                           -- the glide, in cells\n  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels\n}\ndx = px - 64; ty = 31 - py\n-- a row's distance: checker cells a pixel, smaller further down\nrs = 1/((ty + 2)*zoom)\nwob = sin(ty/32 + t/3.2)*amp\ncol = sin(px*0.0234375 - t/4.8)*amp\n-- ahead by the row's distance, across by the pixel's\nu = cs*rs*dx + (cu + wob + sn*rs*64)\nv = sn*rs*dx + col + (cv - cs*rs*64)\ncell = (floor(u) + floor(v)) % 2\n-- the far rows fade into the fog (black at the horizon)\nfog = ty < 3 ? 0 : ty < 6 ? 0.375 : ty < 10 ? 0.625 : 1\npal(fire, cell ? 0.78 : 0.28) * fog";
+// psi-lang: `loop forever`, a sprite, slot reuse (formulas.json).
+const ROAD_EX: &str = "loop forever\nfps 100\n-- Endless road: an OutRun drive into a synthwave sunset. Bends and hills\n-- come from noise along the distance driven, which grows without end, so\n-- the track doesn't repeat; each time it plays it starts somewhere else.\n-- The car, from behind: red body (6), black glass and tyres (7), orange\n-- tail lights (8): the colours' places in the pick at the end\nsprite car {\n  key . 0, R 6, D 7, L 8\n  ........RRRRRRRRRR........\n  .......RDDDDDDDDDDR.......\n  ......RDDDDDDDDDDDDR......\n  ...RRRRRRRRRRRRRRRRRRRR...\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  DDDDDDDDDDDDDDDDDDDDDDDDDD\n}\n-- The mountains: 19 spans (row, from, to)\ntable MY = 19,19,19,20,20,20,21,21,21,22,22,22,23,23,23,24,24,25,26\ntable MA = -1,57,118,0,59,120,2,61,122,4,62,123,5,64,125,7,66,67,69\ntable MB = 17,83,134,16,81,132,14,79,130,12,78,129,11,76,127,9,74,73,71\n-- Road rows py 0 to 18: depth/2 in bends (ZH), depth in stripes (ZS),\n-- half width in pixels (HW); the sun's rows, half widths and colours\ntable ZH = .0058,.0061,.0064,.0068,.0072,.0077,.0083,.009,.0098,.011,.012,.013,.015,.017,.02,.025,.032,.045,.075\ntable ZS = .77,.81,.86,.91,.97,1.03,1.11,1.2,1.3,1.43,1.58,1.76,2,2.31,2.73,3.33,4.29,6,10\ntable HW = 50.7,48.1,45.5,42.9,40.3,37.7,35.1,32.5,29.9,27.3,24.7,22.1,19.5,16.9,14.3,11.7,9.1,6.5,3.9\ntable UY = 20,21,23,24,25,26,27,28,29,30,31\ntable UC = 7.2,7.6,8,8,7.9,7.6,7.2,6.7,6,5,3.5\ntable UI = .344,.344,.281,.281,.281,.281,.219,.219,.219,.219,.219\nframe {\n  u = t*0.15 + seed*1000                    -- distance driven, in bends\n  h0 = noise(u, 0, 0); h1 = noise(u + 0.03, 0, 0)    -- heading here, just ahead\n  v0 = noise(u, 5, 0)                       -- height here, and its slope\n  dv = (noise(u + 0.01, 5, 0) - v0)*100\n  cx = 50.5 + (h1 - h0)*80                  -- the car's left edge: it slides out in bends\n  mx = (0.5 - h0)*60; sunx = 64 + mx        -- the sky turns with the road\n}\ndraw {\n  for k < 19 {\n    my = MY[k]\n    line(MA[k] + mx, my, MB[k] + mx, my, 0.46875)\n  }\n  for k < 11 {\n    uy = UY[k]; uc = UC[k]\n    line(sunx - uc, uy, sunx + uc, uy, UI[k])\n  }\n}\n-- each row looks ahead: how far the road bends there, and how far a hill\n-- lifts or hides it (a crest moves rows to where the road is out of sight)\nzp = ZH[py]\nun = u + zp\nq = py - clamp((noise(un, 5, 0) - v0 - zp*dv)*ZS[py]*200, -6, 2)\nhw = HW[q]\nalt = frac(t*10 + ZS[q]) < 0.5             -- light or dark stripe: 10 a second\nadx = abs(px - (64 + (noise(un, 0, 0) - h0)*2000))\n-- 0 road, 1 kerb, 2 verge or sky; drawn: 3-5 sun, 7 mountains; 6-8 the car\nm = max(max((adx >= hw) + (adx >= hw*1.2), ink*16), car[px - cx, ty - 23])\nlow = py < 19\n-- colours: entries of the rainbow palette (entry k is k/31)\npal(rainbow, pick(m, alt ? 30/31 : 1,\n                     alt ? 4/31 : 10/31,\n                     low ? (alt ? 2/31 : 1/31) : 1.17 - py*0.0161,\n                     10/31, 7/31, 5/31, 3/31, 0, 6/31))";
 const CUBE_EX: &str = "loop 4.8\nfps 100\n-- Wireframe cube: turning about two axes and swinging across; the near\n-- edges brighter. The colour is the last line's #40c0ff\n-- a: size\ntable V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1\ntable E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7\nframe {\n  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)\n  size = 34 + a*28; mid = 64 + sa*40\n}\ndraw {\n  for e < 12 {\n    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners\n    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size\n    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size\n    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned\n    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb\n    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),\n         clamp(0.594 - zb/148, 0.156, 1), clamp(0.594 - zd/148, 0.156, 1))\n  }\n}\n#40c0ff * ink";
 
 /// The report's file name at the card's root.
@@ -180,7 +182,7 @@ fn lanes_over<const N: usize>(
     let mut ink = psi::Ink::boxed();
     let t = fx_psi::tables();
     timed(|k| {
-        let inputs = psi::golden::inputs(k * 20 % loop_ms);
+        let inputs = psi::golden::inputs(k * 20 % loop_ms.max(1));
         psi::render_rows_ink::<N>(prog, &mut s, Some(&mut ink), &inputs, &t, under, u32::MAX, out);
     })
 }
@@ -245,7 +247,7 @@ fn lanes_still(prog: &psi::Program, loop_ms: u32, out: &mut [u8]) -> Option<(u32
     let inputs = psi::golden::inputs(0);
     psi::render_rows_still::<128>(prog, &mut s, None, Some(&mut st), &inputs, &t, None, u32::MAX, out);
     Some(timed(|k| {
-        let inputs = psi::golden::inputs(k * 20 % loop_ms);
+        let inputs = psi::golden::inputs(k * 20 % loop_ms.max(1));
         psi::render_rows_still::<128>(prog, &mut s, None, Some(&mut st), &inputs, &t, None, u32::MAX, out);
     }))
 }
@@ -442,6 +444,9 @@ fn split(name: &str, src: &str, gate: bool, canvas: &mut Canvas) {
     fx.frame(Duration::ZERO, canvas);
     let held = fx_psi::still_held();
     let mut parts: [Vec<u32>; 6] = Default::default();
+    if !reserve(&mut parts, &format!("split {name}")) {
+        return;
+    }
     for k in 0..FRAMES {
         let t0 = ccount();
         fx.frame(delay * (k % n), canvas);
@@ -547,6 +552,9 @@ fn placement(out: &mut [u8]) {
 
 /// Tunnel VM-direct with the same stamps (setup, rows): against `split`.
 fn split_direct(out: &mut [u8]) {
+    if heap_low("split Tunnel VM-direct") {
+        return;
+    }
     let mut prog = zeroed::<psi::Program>();
     if compile(TUNNEL_EX, &mut prog, true, true).is_err() {
         return;
@@ -562,6 +570,9 @@ fn split_direct(out: &mut [u8]) {
     let lp = prog.loop_ms();
     psi::render_rows_still::<128>(&prog, &mut s, None, Some(&mut st), &psi::golden::inputs(0), &t, None, u32::MAX, out);
     let mut parts: [Vec<u32>; 3] = Default::default();
+    if !reserve(&mut parts, "split Tunnel VM-direct") {
+        return;
+    }
     for k in 0..FRAMES {
         let t0 = ccount();
         psi::render_rows_still::<128>(&prog, &mut s, None, Some(&mut st), &psi::golden::inputs(k * 10 % lp), &t, None, u32::MAX, out);
@@ -591,6 +602,18 @@ fn compile(src: &str, prog: &mut psi::Program, runs: bool, narrow: bool) -> Resu
 /// Whether the heap is too low to go on with `section` (under 40 KB):
 /// said, and the caller stops it, rather than the probe failing an
 /// allocation.
+/// Room for `FRAMES` timings in each of `parts`, taken fallibly (lang-probe-a
+/// panicked growing these with 5 KB free): false, said, when the heap hasn't it.
+fn reserve(parts: &mut [Vec<u32>], section: &str) -> bool {
+    for p in parts.iter_mut() {
+        if p.try_reserve_exact(FRAMES as usize).is_err() {
+            say!(error, "psi-probe: {section}: stopped, no heap for its timings ({} B free)", heap());
+            return false;
+        }
+    }
+    true
+}
+
 fn heap_low(section: &str) -> bool {
     let h = heap();
     if h < 40 * 1024 {
@@ -877,6 +900,7 @@ pub fn run(root: &str) {
             ("Tunnel", TUNNEL_EX, ""),
             ("Rotozoom", ROTOZOOM_EX, ""),
             ("Rotozoom floor", ROTOZOOM_FLOOR_EX, ""),
+            ("Endless road", ROAD_EX, ""),
         ],
         "",
         &mut canvas,
@@ -1028,7 +1052,7 @@ pub fn run(root: &str) {
 
     // What one step costs: each formula is the baseline plus one or two
     // per-pixel steps (t is a frame value, so nothing folds away).
-    const STEPS: [(&str, &str); 26] = [
+    const STEPS: [(&str, &str); 29] = [
         ("base gray(x)", "gray(x)"),
         ("add", "gray(x + t)"),
         ("mul", "gray(x * t)"),
@@ -1056,6 +1080,14 @@ pub fn run(root: &str) {
         ("noise flat (+mul)", "gray(noise(x * 8, y, 3))"),
         ("out pal * k (+mul)", "pal(fire, x) * (x * 0.9)"),
         ("out pal * k=1", "pal(fire, x) * (t * 0 + 1)"),
+        // psi-lang: a noise of a growing value per pixel (`NOISE_O`, its
+        // offsets set once a frame), against `noise (+mul)`'s row.
+        ("noise wide (+mul +add)", "loop forever\ngray(noise(x * 8 + t, y, t))"),
+        // A sprite's pixel (`SPR`), against `mul`'s row.
+        // A palette of the formula's own (unpacked from its tables), against
+        // `out pal`'s row.
+        ("out own pal", "palette p = #102030, #f08000, #ffffff\npal(p, x)"),
+        ("sprite (+mul)", "sprite s {\nkey . 0, X 1, Y 0.5\nXY.XY.XY.XY.XY.XY.\n.XYXY.XYXY.XYXY.XY\n}\ngray(s[x * 18, y + t])"),
     ];
     // Layers and what is under (drawn over the golden picture): the
     // formula look's costs, for `Program::esp32_us`.

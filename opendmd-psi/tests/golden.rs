@@ -251,6 +251,31 @@ fn the_still_cache_never_draws_another_programs_values() {
         &mut out,
     );
     assert_eq!(out, frame_ink::<128>(&tb, 500, None));
+    // Only a sprite's pixels changed: not the kept values either.
+    let spr = |rows: &str| {
+        compile(&format!("loop 4\nsprite S {{\nkey . 0, a 0.3, b 0.7, c 1\n{rows}\n}}\nd = len(px - 63.5, (15.5 - py)*2)\nk = S[d/8, atan2(15.5 - py, px - 63.5)*4 + 2]\ngray(frac(k + t/4 + 1/(d + 1)))")).unwrap()
+    };
+    let (sa, sb) = (
+        spr("abc.cab\n.cba.ab\nccaabb."),
+        spr("cba.bac\n.abc.ca\naabbcc."),
+    );
+    assert!(sa.still_lanes() > 0, "{}", sa.listing());
+    let mut st3 = Still::new();
+    assert!(st3.take(&sa));
+    for p in [&sa, &sb] {
+        render_rows_still::<128>(
+            p,
+            &mut s,
+            Some(&mut ink),
+            Some(&mut st3),
+            &inputs(500),
+            &OWN,
+            None,
+            u32::MAX,
+            &mut out,
+        );
+    }
+    assert_eq!(out, frame_ink::<128>(&sb, 500, None));
     // A partial redraw of a program the cache doesn't hold runs every step.
     assert!(st.holds(&b));
     render_rows_still::<128>(
@@ -698,6 +723,18 @@ const PIECES: &[&str] = &[
     "[",
     "]",
     "1024",
+    "loop forever",
+    "forever",
+    "seed",
+    "t*0.15 +",
+    "\nsprite S {\nkey . 0, X 1, # -2\n.X#.\nX..#\n}\n",
+    "sprite S {",
+    "key . 0",
+    "S[",
+    "S[px, ty]",
+    "palette P = #f00, #0f0,\n#00f",
+    "palette",
+    "pal(P,",
 ];
 
 fn check(src: &str) {
@@ -1162,9 +1199,7 @@ fn division_by_a_constant_floors_whole_numbers_right() {
                 hour: (n / 3600) as u8,
                 minute: (n % 3600 / 60) as u8,
                 second: (n % 60) as u8,
-                a: 0,
-                b: 0,
-                c: 0,
+                ..Inputs::default()
             };
             render_with::<128>(&p, &mut s, &inp, &OWN, &mut out);
             assert_eq!(decode(&out, 0), n / k, "floor({n}/{k}) once a frame");
@@ -1371,4 +1406,424 @@ fn the_reviews_narrowing_cases() {
             p.listing()
         );
     }
+}
+
+/// A frame of `p` at `ms` (both clocks: `t` and a `loop forever`
+/// formula's), seed `seed`, over `under`, at lane width `N`.
+fn frame_wide<const N: usize>(p: &Program, ms: u32, seed: i32, under: &[u8]) -> Vec<u8> {
+    let mut s = Scratch::<N>::new();
+    let mut ink = Ink::boxed();
+    let mut out = vec![0x5a; W * H * 3];
+    let mut i = opendmd_psi::Inputs { seed, ..inputs(ms) };
+    i.set_ms(p, ms as u64);
+    render_rows_ink::<N>(
+        p,
+        &mut s,
+        Some(&mut ink),
+        &i,
+        &OWN,
+        Some(under),
+        u32::MAX,
+        &mut out,
+    );
+    out
+}
+
+/// `loop forever` is the same formula with a very long loop, wherever its
+/// values fit a Q16.16: random formulas that use `t` in every way a value
+/// that grows without end may be used (sums and products with values the
+/// same all frame, a part per pixel or per row, fractions, waves, `%`,
+/// noise and hashes of it, compares, min, max, clamp, smoothstep, mix,
+/// select, a part with its own loop, the draw stage), drawn as `loop
+/// forever` and as `loop 3600` up to 300 s in: the same bytes, at both lane
+/// widths, narrowed or not, with and without the column and still runs.
+/// `PSI_FUZZ_N` sets the number of formulas (600 by default).
+#[test]
+fn loop_forever_is_a_long_loop_where_it_fits() {
+    let mut r = Rng(0x00f0_7e7e_5eed_1e55);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    // Wide values: t scaled by values the same all frame (kept small, so
+    // the looped formula never saturates within 300 s).
+    const WIDE: &[&str] = &[
+        "t",
+        "t*0.15",
+        "t/8",
+        "t*2.5",
+        "t*10 + 3",
+        "t*0.5 - a*7",
+        "(t + 1.25)/3",
+        "t*0.01 + t*0.2",
+        "-t*0.3",
+        "t*a",
+    ];
+    const SMALL: &[&str] = &[
+        "x*3",
+        "px/16",
+        "y",
+        "py/9",
+        "sin(x*2)",
+        "noise(x*4, y, 0)",
+        "a",
+        "0.375",
+        "i/4096",
+        "x*x",
+    ];
+    let n: usize = std::env::var("PSI_FUZZ_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+    let mut compiled = 0;
+    for k in 0..n {
+        let w = |r: &mut Rng| format!("({})", WIDE[r.below(WIDE.len())]);
+        let s = |r: &mut Rng| SMALL[r.below(SMALL.len())];
+        let use_t = |r: &mut Rng| -> String {
+            let (a, b, c) = (w(r), s(r), s(r));
+            match r.below(19) {
+                0 => format!("frac({a})"),
+                1 => format!("sin({a} + {b})"),
+                2 => format!("cos({a})*{b}"),
+                3 => format!("tri({a} - {b}) + saw({a})*0.25 + sqr({a})*0.125"),
+                4 => format!("({a}) % 7 / 7"),
+                5 => format!("(({a}) + {b}) % 1.5"),
+                6 => format!("noise({a} + {b}, {c}*4, 0)"),
+                7 => format!("noise(x*8, {a}, {w2})", w2 = w(r)),
+                8 => format!("hash(floor({a}), {b})"),
+                9 => format!("({a} < 40) + ({a} >= 150)*0.5 + step(90, {a})*0.25"),
+                10 => format!("min({a}, 2)*0.25 + max({a}/300, {b})"),
+                11 => format!("clamp({a}/60, 0, 1)"),
+                12 => format!("smoothstep(0, 20, {a})"),
+                13 => format!("mix(0.2, 0.8, ({a})/300)"),
+                14 => format!("({a}) > 100 ? {b} : {c}"),
+                15 => format!("frac({a} + {b} - {c})*{b}"),
+                16 => format!("noise({a}*0.5 + {b}, {c}, {a})"),
+                // A split times a value the same all frame (exact: the wide
+                // part's remainder carried in).
+                17 => format!(
+                    "frac(({a} + {b})*{k}) + frac(({a} - {c})*a*{k})",
+                    k = ["0.3", "0.37", "1.5", "-0.7", "3"][r.below(5)]
+                ),
+                _ => format!("not ({a} < 9) and {b} > 0.2"),
+            }
+        };
+        let body = match k % 5 {
+            // A colour of values made from t.
+            0 | 1 => format!(
+                "v = {}\nu = {}\nhsv(v + {}, 1, frac(u) * 0.5 + 0.5)",
+                use_t(&mut r),
+                use_t(&mut r),
+                w(&mut r)
+            ),
+            // Once a frame, and per row.
+            2 => format!(
+                "frame {{ f = {} }}\nq = noise({} + y*3, py, 0)\nrgb(f, q, {})",
+                use_t(&mut r),
+                w(&mut r),
+                use_t(&mut r)
+            ),
+            // A part with its own loop, and the draw stage.
+            3 => format!(
+                "part p {{\n  loop 4\n  gray(frac(t/4 + x))\n}}\ndraw {{ for k < 16 {{ dot(frac({} + k/16)*128, noise({} + k, 0, 0)*31) }} }}\nlayer {{ p }}\nlayer add {{ gray(ink, {}) }}",
+                w(&mut r),
+                w(&mut r),
+                use_t(&mut r)
+            ),
+            // A wide value straight into a colour (held to 0..1).
+            _ => format!("gray({} / 60)", w(&mut r)),
+        };
+        let (fsrc, lsrc) = (
+            format!("loop forever\n{body}"),
+            format!("loop 3600\n{body}"),
+        );
+        let lp = match compile(&lsrc) {
+            Ok(p) => p,
+            Err(e) => {
+                // (The generator puts pixel values in `frame { }` now and
+                // then.) Refused looped, refused never repeating.
+                assert!(
+                    compile(&fsrc).is_err(),
+                    "{fsrc:?} compiles, but looped: {}",
+                    e.msg
+                );
+                continue;
+            }
+        };
+        let fp = compile(&fsrc).unwrap_or_else(|e| panic!("{fsrc:?}\n{}", e.render(&fsrc)));
+        assert!(fp.forever() && !lp.forever());
+        compiled += 1;
+        let mut q = Program::default();
+        opendmd_psi::compile_with(&fsrc, &mut q, false, false).expect("plain, unnarrowed");
+        for ms in [0, 1234, 59_999, 123_460, 299_980] {
+            let want = frame_wide::<128>(&lp, ms, 0, &under);
+            let got = frame_wide::<128>(&fp, ms, 0, &under);
+            assert!(
+                got == want,
+                "case {k} at {ms} ms:\n{fsrc}\n{}\nlooped:\n{}",
+                fp.listing(),
+                lp.listing()
+            );
+            assert!(
+                frame_wide::<64>(&fp, ms, 0, &under) == want,
+                "case {k} at {ms} ms, 64 lanes:\n{fsrc}"
+            );
+            assert!(
+                frame_wide::<128>(&q, ms, 0, &under) == want,
+                "case {k} at {ms} ms, plain:\n{fsrc}"
+            );
+        }
+        // Far past the Q16.16 range, and with a seed and sliders out of
+        // theirs: both widths agree, and the narrowed steps draw what the
+        // checked ones draw.
+        for (ms, seed, a) in [
+            (40_000_000, 7, 1 << 15),
+            (4_000_000_000, -(3 << 16), 3 << 16),
+            (77_777, 5 << 16, -(1 << 16)),
+        ] {
+            let at = |p: &Program| {
+                let mut s = Scratch::<128>::new();
+                let mut ink = Ink::boxed();
+                let mut out = vec![0x5a; W * H * 3];
+                let mut i = opendmd_psi::Inputs {
+                    seed,
+                    a,
+                    ..inputs(ms)
+                };
+                i.set_ms(p, ms as u64);
+                render_rows_ink::<128>(
+                    p,
+                    &mut s,
+                    Some(&mut ink),
+                    &i,
+                    &OWN,
+                    Some(&under),
+                    u32::MAX,
+                    &mut out,
+                );
+                out
+            };
+            assert!(
+                at(&fp) == at(&q),
+                "case {k} at {ms} ms, seed {seed}, a {a}: narrowed\n{fsrc}"
+            );
+            assert!(
+                frame_wide::<128>(&fp, ms, seed, &under) == frame_wide::<64>(&fp, ms, seed, &under)
+            );
+        }
+    }
+    assert!(compiled * 10 > n * 7, "only {compiled} of {n} compiled");
+    eprintln!("{n} formulas, {compiled} compiled both ways and drew the same");
+}
+
+/// A formula that never repeats doesn't: frames an hour, a day and a
+/// month in differ from the start's, and a new `seed` is another drive.
+#[test]
+fn loop_forever_goes_on() {
+    let src = "loop forever\nfps 100\nframe { u = t*0.15 + seed*1000 }\nhz = noise(u + y, 0, 0)\nhsv(hz + x*0.1, 1, noise(x*8 + t, y*4, u))";
+    let p = compile(src).unwrap();
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let at = |ms: u32, seed: i32| fnv(&frame_wide::<128>(&p, ms, seed, &under));
+    let start = at(1000, 0);
+    for ms in [3_601_000, 86_401_000, 2_592_001_000] {
+        assert_ne!(at(ms, 0), start, "{ms} ms");
+    }
+    assert_ne!(at(1000, 1 << 15), start, "another seed, another drive");
+    assert_eq!(
+        at(86_401_000, 3),
+        at(86_401_000, 3),
+        "a pure function of t and seed"
+    );
+}
+
+/// Sprites' values in the narrowed steps: random sprites with key numbers
+/// across the range (near its ends too), read at every level and used in
+/// sums and products, draw what the checked steps draw, with the sliders
+/// in range and out.
+#[test]
+fn sprites_narrow_soundly() {
+    let mut r = Rng(0x5b17_e5ee_d000_0001);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    const NUMS: &[&str] = &[
+        "0", "1", "-1", "0.5", "181", "-181", "30000", "-30000", "32767", "0.001",
+    ];
+    let mut n = 0;
+    for k in 0..300 {
+        let keys = 1 + r.below(6);
+        let chars = b".XYZW#";
+        let key: Vec<String> = (0..keys)
+            .map(|j| format!("{} {}", chars[j] as char, NUMS[r.below(NUMS.len())]))
+            .collect();
+        let (w, h) = (1 + r.below(20), 1 + r.below(8));
+        let rows: String = (0..h)
+            .map(|_| {
+                (0..w)
+                    .map(|_| chars[r.below(keys)] as char)
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        let u = ["px/4", "x*20", "a*8", "3", "px - 60"][r.below(5)];
+        let v = ["ty/4", "py", "b*5", "1", "t"][r.below(5)];
+        let e = [
+            "S[U, V]*x + a",
+            "S[U, V]*S[V, U] - 2",
+            "(S[U, V] + 181)*(x + 1)",
+            "frac(S[U, V]*0.01 + t)",
+            "S[U, V]*S[U, V]*0.5",
+        ][r.below(5)]
+        .replace('U', u)
+        .replace('V', v);
+        let src = format!(
+            "loop 3\nsprite S {{\nkey {}\n{rows}}}\nv = {e}\nhsv(v, 1, frac(v*0.37))",
+            key.join(", ")
+        );
+        let (mut p, mut q) = (Program::default(), Program::default());
+        if opendmd_psi::compile_with(&src, &mut p, true, true).is_err() {
+            continue;
+        }
+        opendmd_psi::compile_with(&src, &mut q, true, false).expect("compiles unnarrowed too");
+        n += 1;
+        for (ms, a) in [(0, 0), (1500, 1 << 16), (2999, -(1 << 16)), (9000, 3 << 16)] {
+            let i = opendmd_psi::Inputs {
+                a,
+                b: 1 << 15,
+                ..inputs(ms)
+            };
+            assert!(
+                frame_at(&p, &i, &under) == frame_at(&q, &i, &under),
+                "case {k}: {src:?} at {ms}, a {a}\n{}",
+                p.listing()
+            );
+        }
+        assert!(frame::<128>(&p, 777) == frame::<64>(&p, 777), "{src}");
+    }
+    assert!(n > 250, "only {n} compiled");
+}
+
+/// A program compiled with scalar slots used again (the default) draws what
+/// the same formula with a slot for every value draws: the golden formulas,
+/// and random ones with values once a frame (some only read there), draw
+/// loops two deep reading values from before them, rows, pixels, picks,
+/// layers and `loop forever`, at times in and out of the ranges, both lane
+/// widths. Reuse never needs more slots, and does save some.
+#[test]
+fn slots_used_again_draw_the_same() {
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let mut r = Rng(0x0005_1075_bacc_0001);
+    let mut srcs: Vec<String> = GOLDEN.iter().map(|g| g.1.to_string()).collect();
+    srcs.extend(DRAWN.iter().map(|g| g.1.to_string()));
+    srcs.extend(OVER.iter().map(|g| g.1.to_string()));
+    let n: usize = std::env::var("PSI_FUZZ_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+    for k in 0..n {
+        let e = |r: &mut Rng| expr(r, 2);
+        let mut s = format!("loop {}\n", 1 + k % 5);
+        if k % 7 == 0 {
+            s = "loop forever\n".into();
+        }
+        s += &format!(
+            "frame {{ f1 = {}; f2 = f1*{} + a; f3 = sin(f2 + t) }}\n",
+            ["t*0.5", "a + b", "hour/24", "t % 3"][r.below(4)],
+            r.below(9)
+        );
+        if r.below(2) == 0 {
+            s += &format!(
+                "draw {{\n  g = f1*3 + 2\n  for q < {} {{\n    u = q*f3*7 + g\n    for j < {} {{ dot(u + j*4, j*3 + f2, hash(q, j)) }}\n    line(u, 0, g, 31, f3)\n  }}\n}}\n",
+                1 + r.below(12),
+                1 + r.below(5)
+            );
+        }
+        s += &format!("rw = py*{} + f3\nv = {}\n", r.below(5), e(&mut r));
+        s += match r.below(4) {
+            0 => "layer { hsv(v + rw*0.1, 1, frac(v)) }\nlayer add { gray(f1*0.1 + x, 0.5) }"
+                .to_string(),
+            1 => format!("rgb(pick(px/40, f1, f2, rw), frac(v), {})", e(&mut r)),
+            2 => "pal(fire, frac(v + rw)) * (f3*0.5 + 0.5)".to_string(),
+            _ => format!("gray(frac(v*{} + rw + f2))", r.below(4)),
+        }
+        .as_str();
+        srcs.push(s);
+    }
+    let (mut saved, mut compared) = (0, 0);
+    for src in &srcs {
+        let (mut p, mut q) = (Program::default(), Program::default());
+        if opendmd_psi::compile_opts(src, &mut p, true, true, true).is_err() {
+            continue;
+        }
+        if opendmd_psi::compile_opts(src, &mut q, true, true, false).is_err() {
+            // Only for its size: with every value its own slot it may not fit.
+            continue;
+        }
+        compared += 1;
+        assert!(p.values() <= q.values(), "{src}");
+        saved += usize::from(p.values() < q.values());
+        for (ms, a, seed) in [
+            (0u32, 1 << 15, 0),
+            (1234, 0, 9000),
+            (2999, 3 << 16, 60_000),
+            (40_000_000, -(1 << 16), -5),
+        ] {
+            let mut i = opendmd_psi::Inputs {
+                a,
+                seed,
+                ..inputs(ms)
+            };
+            i.set_ms(&p, ms as u64);
+            {
+                let (x, y) = (&p, &q);
+                let fx = {
+                    let mut s = Scratch::<128>::new();
+                    let mut ink = Ink::boxed();
+                    let mut out = vec![0x5a; W * H * 3];
+                    render_rows_ink::<128>(
+                        x,
+                        &mut s,
+                        Some(&mut ink),
+                        &i,
+                        &OWN,
+                        Some(&under),
+                        u32::MAX,
+                        &mut out,
+                    );
+                    out
+                };
+                let fy = {
+                    let mut s = Scratch::<64>::new();
+                    let mut ink = Ink::boxed();
+                    let mut out = vec![0x5a; W * H * 3];
+                    render_rows_ink::<64>(
+                        y,
+                        &mut s,
+                        Some(&mut ink),
+                        &i,
+                        &OWN,
+                        Some(&under),
+                        u32::MAX,
+                        &mut out,
+                    );
+                    out
+                };
+                assert!(
+                    fx == fy,
+                    "{src:?} at {ms} ms\n{}\nwithout reuse:\n{}",
+                    x.listing(),
+                    y.listing()
+                );
+            }
+        }
+    }
+    assert!(
+        compared * 10 > srcs.len() * 8,
+        "only {compared} of {} compared",
+        srcs.len()
+    );
+    assert!(
+        saved * 2 > compared,
+        "only {saved} of {compared} saved slots"
+    );
+    eprintln!("{compared} formulas compared, {saved} with fewer slots");
 }

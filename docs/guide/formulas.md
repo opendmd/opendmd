@@ -143,7 +143,8 @@ words (a single character in quotes, `'A'`, is a number too: its code).
 | `x`, `y` | where the pixel is: 0 to 1 across (left to right) and up (bottom to top) |
 | `px`, `py` | the pixel's column, 0–127, and row from the bottom, 0–31 |
 | `i` | the pixel's number, 0–4095, from the top left |
-| `t` | seconds into the loop |
+| `t` | seconds into the loop (with `loop forever`, since the formula started) |
+| `seed` | with `loop forever`: 0 to 1, a new one each time it plays |
 | `hour`, `minute`, `second` | the time of day |
 | `a`, `b`, `c` | the sliders, 0 to 1 |
 | `w`, `h` | 128 and 32 |
@@ -204,6 +205,14 @@ false), and `and`, `or`, `not`. There is no power operator: write `x * x`.
 
 A last line that is just a number is `gray` of it.
 
+**Your own palettes.** `palette sea = #001020, #0060a0, #40c0e0, #ffffff`
+on a line near the top makes a palette of your own colours (up to 32 of
+them, and up to three palettes in a formula), used like the others:
+`pal(sea, v)`. `pal(sea, 0)` is the first colour and `pal(sea, 1)` the
+last; with four colours, `pal(sea, 1/3)` is the second and `pal(sea, 2/3)`
+the third. In between you get the nearest colour, in bands — handy with a
+sprite or `floor(…)` choosing which colour each pixel is.
+
 **Colours by name.** `#ff8800` is a colour, the way web pages write them.
 It can be the whole last line, and you can do sums with colours there:
 `#ff8800 * k` is that orange at brightness `k`, `mix(#102040, #ff8800, y)`
@@ -219,6 +228,26 @@ everything that moves should come back to where it started: use `t/N`,
 `t*2/N` and so on with the loop's own `N`. Values inside `frame { … }`
 are worked out once a frame rather than for every pixel; they can't use
 the pixel's position.
+
+**Going on without repeating.** `loop forever` instead of `loop N` is a
+formula with no loop at all: `t` counts the seconds since it started, for
+as long as it plays, so a road, a sky or clouds never come round to where
+they began (the Endless road example drives on like this). Each time it
+plays it starts again from `t = 0`, but with a new `seed`, a number from 0
+to 1: add `seed*1000` to a distance and it starts somewhere else every
+time. Such a `t` can't go everywhere a number can: use it inside `frac`,
+`sin`, `cos`, `noise`, `hash`, `%`, a comparison, `min`, `max` or
+`smoothstep` (after adding or multiplying it by numbers that are the same
+for every pixel, and adding the pixel's own part last: `noise(x*8 + t, y*4,
+0)`), and the editor says so where it can't. In the editor's preview it
+starts when the preview does; **Save as GIF…** keeps its first 10 seconds.
+
+```
+loop forever
+frame { u = t*0.05 + seed*1000 }
+k = smoothstep(0.45, 0.75, noise(x*6 + u, y*3, u*0.3))
+mix(#204080, #f0f0ff, k)
+```
 
 **Frames a second.** A formula plays at 50 frames a second. `fps 100` on a
 line of its own (like `loop`) asks for 100, for things that move fast —
@@ -331,6 +360,30 @@ hsv(x, 0.6, ink)
 - Every frame starts empty: nothing is left over from the frame before.
 
 The examples **Starfield** and **Wireframe cube** are made this way.
+
+**Sprites.** A little picture can be written into the formula as it looks,
+one character a pixel, with a key saying what number each character
+stands for:
+
+```
+sprite ship {
+  key . 0, W 1, B 0.5
+  ...WW...
+  ..WBBW..
+  .WWWWWW.
+  W.W..W.W
+}
+s = ship[px - 60, ty - 12]
+mix(#000010, #80c0ff, s)
+```
+
+`ship[u, v]` is the number of the character at column `u` and row `v`,
+counted from the sprite's top left (and 0 outside it), so moving it is
+adding to `px` and `ty`, and making it bigger is dividing them. The key
+comes first; up to 16 characters (not spaces, or `; { } , - /`), rows up
+to 64 characters wide and 32 tall. Use the numbers for colours —
+`pick(k, #000, #f00, #ff0)` — or for brightness. The Endless road's car is
+one.
 
 **Limits.** A formula can be 4,096 characters and 256 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop
@@ -488,7 +541,8 @@ frames; GIFs can't play 100 a second, so `fps 100` saves at 50), and opens
 it in [Create Art](create-art.md), titled with its name. Add text, trim it
 or change its speed there, then save it to your card: it plays on the panel
 like any other GIF and goes in playlists. A formula with a long loop, or one that follows the
-clock, keeps only those few seconds, as they look when you save.
+clock, keeps only those few seconds, as they look when you save; one that
+goes on without repeating (`loop forever`), its first 10 seconds.
 
 Formulas you save are kept in this browser. Another browser, or a cleared
 browser, won't have them: share a link to yourself to move one.

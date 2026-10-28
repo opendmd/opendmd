@@ -86,6 +86,12 @@ fn composes_as_written() {
     assert!(compose("loop 0.5\ngray(t)", "screen", 60)
         .unwrap()
         .starts_with("loop 0.5\npart look {"));
+    // One that never repeats: so does its look, the same picture.
+    let src = "loop forever\ngray(frac(t*0.15 + x))";
+    let look = compose(src, "screen", 40).unwrap();
+    assert!(look.starts_with("loop forever\npart look {"), "{look}");
+    let p = opendmd_psi::compile(&look).unwrap();
+    assert!(p.forever());
     assert!(compose(PLASMA, "lighten", 40).is_err(), "not a blend");
     assert!(compose("gray(", "screen", 40).is_err(), "does not compile");
 }

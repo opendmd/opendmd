@@ -21,7 +21,8 @@ fn formulas() {
     assert!(info().is_empty());
     assert!(drawn(0).iter().all(|&b| b == 0));
 
-    // The golden frames.
+    // The golden frames (`seed` theirs).
+    set_seed(opendmd_psi::golden::SEED);
     for &(name, src, ms, want) in FRAMES {
         assert!(compile(src), "{name}: {}", error());
         let i = inputs(ms);
@@ -258,9 +259,13 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
         let inner: String = e.src.lines().map(|l| format!("  {l}\n")).collect();
         for ms in [0, 1730, 6420] {
             let (want, lp) = draw(&e.src, ms);
+            let lp = if lp == 0 {
+                "forever".to_string()
+            } else {
+                format!("{}", lp as f64 / 1000.0)
+            };
             let src = format!(
-                "loop {}\npart p {{\n  -- {}\n{inner}}}\nlayer {{ p }}",
-                lp as f64 / 1000.0,
+                "loop {lp}\npart p {{\n  -- {}\n{inner}}}\nlayer {{ p }}",
                 e.name
             );
             assert!(draw(&src, ms).0 == want, "{} at {ms} ms", e.name);

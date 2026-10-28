@@ -34,8 +34,8 @@ mod tables;
 mod vm;
 
 pub use compile::{
-    compact, compile_into, compile_layout, compile_with, number, Error, Info, MAX_DEPTH, MAX_NODES,
-    MAX_SOURCE,
+    compact, compile_into, compile_layout, compile_opts, compile_with, number, Error, Info,
+    MAX_DEPTH, MAX_NODES, MAX_SOURCE,
 };
 pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
@@ -125,7 +125,8 @@ pub mod golden {
     use crate::Inputs;
 
     /// The inputs a golden frame is rendered with (10:09:30, sliders ½,
-    /// ¼, ¾).
+    /// ¼, ¾; a `loop forever` formula's `t` the same `ms`, its `seed`
+    /// 0.3).
     pub fn inputs(ms: u32) -> Inputs {
         Inputs {
             t: Inputs::at_ms(ms),
@@ -135,8 +136,13 @@ pub mod golden {
             a: 1 << 15,
             b: 1 << 14,
             c: 3 << 14,
+            tw: Inputs::wide_ms(ms as u64),
+            seed: SEED,
         }
     }
+
+    /// The golden frames' `seed`: 0.3.
+    pub const SEED: i32 = 19_661;
 
     /// FNV-1a, 64-bit.
     pub fn fnv(bytes: &[u8]) -> u64 {
@@ -193,8 +199,38 @@ pub mod golden {
         // still cache (`psi-probe` draws these with it as well).
         ("pal-lit", "loop 2\nlayer { pal(chrono, frac(x + t/2)) * y }\nlayer screen { pal(fire, y, 0.5) * (1 - x) * 1.5 }", 700, 0x29dfb6dd6baeba44),
         ("noise-flat", "gray(noise(x*8, y*4, 0)*0.5 + noise(px/9, py/5, 3)*0.5 - noise(x, y, -2)*0.1)", 0, 0xfa6f54daaa8319d2),
+        // `loop forever`: `t` growing without end (past the Q16.16 range at
+        // 9.1 hours: frames at 11 hours and 46 days), its sums and
+        // products, fractions, waves, noises (per pixel, per row, in the
+        // draw stage), hashes, `%`, compares, smoothstep, `seed`.
+        ("forever", FOREVER, 0, 0x1104e195c98cef2a),
+        ("forever", FOREVER, 125_000, 0x2ea22e7deac5650d),
+        ("forever", FOREVER, 40_000_000, 0x34ff604690d2e7e1),
+        ("forever", FOREVER, 4_000_000_000, 0xea02ad83dede366c),
+        // Sprites: 1, 2 and 4 bits a pixel, read per pixel (scaled, moving),
+        // per row and once a frame, outside them, and the road's car.
+        ("sprites", SPRITES, 1500, 0xb4426b7968cc9336),
+        ("sprite-car", SPRITE_CAR, 0, 0x3cdaf547126eb095),
+        // Palettes of a formula's own: plain, scaled, covered, in a part,
+        // indexed by a sprite.
+        ("palettes", PALETTES_OWN, 700, 0x9b6bdb382e0435d6),
         ("still", "loop 4.8\nd = len(px - 63.5, (15.5 - py)*2)\nk = 64/(d + 0.5)\nu = frac(atan2(15.5 - py, px - 63.5)*2 + t/4.8 + k/64)\nv = frac(k/16 + t/2.4)\ncell = (floor(u*8) + floor(v*4)) % 2\npal(chrono, frac(mix(0.28, 0.78, cell) + t/4.8)) * clamp((d - 6)/12, 0, 1)", 1900, 0x79d9337fc1b74897),
     ];
+
+    /// A `loop forever` golden formula: per frame and per pixel.
+    pub const FOREVER: &str = "loop forever\nframe { u = t*0.15 + seed*1000 }\nv = noise(x*8 + t*0.5, y*4, t*0.2)*0.5 + sin(x*3 + t/8)*0.2\nhsv(u + v + noise(u, 5, 0)*0.25, 1 - (t % 7)/14, smoothstep(0, 20, t)*0.5 + 0.5)";
+
+    /// Another: per row, a draw stage, hashes, compares, min and max.
+    pub const FOREVER_ROWS: &str = "loop forever\ndraw { for k < 24 { dot(frac(t*0.1 + k/24)*128, noise(t*0.3 + k, 5, 0)*31, hash(floor(t*4), k)) } }\nq = noise(t*0.15 + y*2, 5, 0)\nrgb(q, ink + frac(t*10 + x)*0.25, (t > 60) * 0.5 + min(t/300, x)*0.5)";
+
+    /// A sprites golden formula: three sprites, every level.
+    pub const SPRITES: &str = "loop 3\nsprite one {\n  key . 0, # 1\n  .##..##.\n  #..##..#\n}\nsprite two {\n  key . 0, r 0.3, g 0.6, b 1\n  rgb.bgr.rgb.bgr.rgb.bgr.rgb.bgr.rgb.bgr.r\n  .r.g.b.r.g.b.r.g.b.r.g.b.r.g.b.r.g.b.r.g.\n  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n}\nsprite many {\n  key 0 0, 1 0.1, 2 0.2, 3 0.3, 4 0.4, 5 0.5, 6 0.6, 7 0.7, 8 0.8, 9 0.9, A 1, B -1, C 2, D 0.05, E 0.15, F 0.25\n  0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\n  FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210\n  02468ACE13579BDF02468ACE13579BDF02468ACE13579BDF02468ACE13579BDF\n}\nframe { f = many[floor(t*5), 1] }\nrw = two[ty, 1]\nrgb(one[px/8 - t, ty/16], many[px/2, ty/4 - 2] + f*0.25, two[px - 40, ty - 13] + rw*0.5)";
+
+    /// The road's car (`sprite`), its colours from a pick.
+    pub const SPRITE_CAR: &str = "sprite car {\n  key . 0, R 1, D 2, L 3\n  ........RRRRRRRRRR........\n  .......RDDDDDDDDDDR.......\n  ......RDDDDDDDDDDDDR......\n  ...RRRRRRRRRRRRRRRRRRRR...\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  DDDDDDDDDDDDDDDDDDDDDDDDDD\n}\nk = car[px - 50.5, ty - 23]\npick(k, #203040, #e02020, #101010, #ffa020)";
+
+    /// A golden formula with palettes of its own.
+    pub const PALETTES_OWN: &str = "loop 2\npalette sea = #001020, #0060a0, #40c0e0, #ffffff\npalette ember = #200000, #c02000,\n  #ffa020\nsprite dot {\n  key . 0, o 1, O 0.5\n  .oOo.\n  oOOOo\n  .oOo.\n}\npart glow {\n  palette ember = #200000, #c02000, #ffa020\n  pal(ember, frac(x*4 - t/2))\n}\nlayer { pal(sea, y + sin(x*2 + t/2)*0.2) * (0.6 + x*0.4) }\nlayer screen { glow(x, y, 0.5) }\nlayer add { pal(ember, dot[px % 6, ty % 4]) }";
 
     /// The picture the [`OVER`] frames are drawn over: every byte value in
     /// every channel somewhere (a hash per pixel), with smooth ramps across
@@ -243,6 +279,8 @@ pub mod golden {
     ("loops", "loop 4\ndraw {\n  for k < 1 { line(0, 0, 127, 0) }\n  for j < 1024 { dot(j % 128, floor(j/128)*4 + 2, hash(j, floor(t))) }\n}\npal(fire, ink)", 2000, false, 0xe0b34a62ddc5a9cd),
     ("nested", "loop 4.8\ndraw {\n  for s < 12 {\n    th = s/12 + t/4.8\n    for r < 6 {\n      ph = r/6\n      rad = 30 + 10*cos(ph)\n      x0 = 64 + rad*cos(th); y0 = 16 + 10*sin(ph) + rad*sin(th)*0.2\n      x1 = 64 + rad*cos(th + 1/12); y1 = 16 + 10*sin(ph) + rad*sin(th + 1/12)*0.2\n      line(x0, y0, x1, y1, 0.3 + r/9, 1 - r/9)\n    }\n  }\n}\nhsv(x + t/4.8, 0.7, ink)", 1200, false, 0x7f399d8d5bf3b553),
     ("ink-part", "part p {\n  loop 2\n  draw { for k < 24 { dot(k*5 + t*2, 16 + sin(k/24 + t/2)*12) } }\n  gray(ink)\n}\nlayer { p(x*0.5, y) }\nlayer add { p(1 - x, y, 0.5) }", 500, false, 0x20b3d33cb32de631),
+    ("forever-rows", super::golden::FOREVER_ROWS, 3_500, false, 0x847d8d42f450cf91),
+    ("forever-rows", super::golden::FOREVER_ROWS, 40_000_000, true, 0xf4f2f6627225ad38),
     ("ink-look", "part look {\n  loop 4.8\n  draw { for e < 6 { line(64 + 30*cos(e/6 + t/4.8), 16 + 12*sin(e/6 + t/4.8), 64 + 30*cos(e/6 + 1/6 + t/4.8), 16 + 12*sin(e/6 + 1/6 + t/4.8)) } }\n  #40c0ff * ink\n}\nloop 4.8\nlayer screen { look(x, y, 0.4) }", 600, true, 0x6c519b2a47772c08),
     ];
 }
@@ -434,10 +472,46 @@ pub mod worst {
         best
     }
 
+    /// The deepest `wrap` of `tme` inside `head` + `(…)` + `tail` that still
+    /// reaches the misspelt name.
+    fn deepest_in(head: &str, tail: &str, wrap: impl Fn(&str) -> String) -> String {
+        let mut s = String::from("tme");
+        let mut best = format!("{head}{s}{tail}");
+        for _ in 0..64 {
+            let next = wrap(&s);
+            let src = format!("{head}{next}{tail}");
+            if !crate::compile(&src).is_err_and(|e| e.msg.starts_with("unknown name")) {
+                break;
+            }
+            (s, best) = (next, src);
+        }
+        best
+    }
+
+    /// Sprite reads inside sprite reads (`s[s[…], y]`) to the depth cap.
+    pub fn nested_sprite() -> String {
+        deepest_in("sprite s {\n key . 0, X 1\n .X..\n}\ngray(", ")", |s| {
+            format!("s[{s}, y]")
+        })
+    }
+
+    /// A `loop forever` formula's growing values nested (`sin(t*0.1 + …)`):
+    /// the parser's and the wide rewriting's frames together.
+    pub fn nested_forever() -> String {
+        deepest_in("loop forever\ngray(", ")", |s| format!("sin(t*0.1 + {s})"))
+    }
+
+    /// Nesting inside a palette of the formula's own.
+    pub fn nested_palette() -> String {
+        deepest_in("palette p = #000, #f80, #fff\npal(p, ", ")", |s| {
+            format!("sin({s})")
+        })
+    }
+
     /// A named generator.
     pub type Case = (&'static str, fn() -> String);
 
-    pub const ALL: [Case; 10] = [
+    pub const ALL: [Case; 13] = [
         ("many locals", many_locals),
         ("chain", chain),
         ("distinct terms", distinct),
@@ -448,6 +522,9 @@ pub mod worst {
         ("nested pick", nested_pick),
         ("parts in layers", parts_in_layers),
         ("draw", draw),
+        ("nested sprite", nested_sprite),
+        ("nested forever", nested_forever),
+        ("nested palette", nested_palette),
     ];
 }
 

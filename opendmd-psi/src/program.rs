@@ -42,6 +42,25 @@ pub(crate) const S_C: u8 = 6;
 pub(crate) const S_Y: u8 = 7;
 pub(crate) const S_PY: u8 = 8;
 pub(crate) const S_FIRST_FREE: u8 = 9;
+/// `seed` (a `loop forever` formula's, 0..1, new each time it plays): the
+/// first free slot, taken only by a formula that reads it ([`SEEDED`]).
+pub(crate) const S_SEED: u8 = S_FIRST_FREE;
+
+/// Wide slots (Q48.16 values once a frame: `t` in a `loop forever` formula
+/// and what is made from it), in [`crate::Scratch`]; slot 0 is `t`.
+pub const WIDE: usize = 16;
+/// Noise contexts (`code::NOISE_O`..): the lattice offsets of up to four
+/// different noises of values that grow without end, three axes each, in
+/// scalar slots of their own ([`noise_slot`]).
+pub const NOISE_CTX: usize = 4;
+
+/// The scalar slot of noise context `k`'s offset on `axis`: just after
+/// `seed`'s ([`S_SEED`], kept for it in a formula with wide noises), three
+/// a context, 0 where an axis has no wide part (its constant 0).
+#[inline(always)]
+pub(crate) const fn noise_slot(k: usize, axis: usize) -> usize {
+    S_SEED as usize + 1 + 3 * k + axis
+}
 
 /// An operand is a scalar slot (0..127) or, with this bit, a lane: 0 = `x`,
 /// 1 = `px`, 2 = `i`, 3.. = the registers.
@@ -89,7 +108,12 @@ pub(crate) mod code {
     pub const SUB_W: u8 = 22;
     pub const MUL_W: u8 = 23;
     pub const MUL_N: u8 = 24;
-    pub const LAST_BIN: u8 = 24;
+    // `NAME[u, v]`, a sprite's pixel (`sprite NAME { … }`): `d = the key's
+    // number at column floor(u), row floor(v)` of the sprite whose header
+    // is `tables[c]` (`c` an immediate), 0 outside it ([`super::SprHead`]).
+    // Any level; never folded (a constant u, v: once a frame).
+    pub const SPR: u8 = 25;
+    pub const LAST_BIN: u8 = 25;
     // unary
     pub const NEG: u8 = 32;
     pub const NOT: u8 = 33;
@@ -116,6 +140,37 @@ pub(crate) mod code {
     // (`range::checked`) is `mul(a, b)` (`range::narrow`, per pixel only).
     pub const SHR: u8 = 46;
     pub const LAST_UN: u8 = 46;
+    // Wide values: `t` in a `loop forever` formula grows without end, so it
+    // and the values made from it once a frame are Q48.16 in an i64
+    // (`crate::fixed`'s `w_*`), in [`crate::Scratch`]'s wide slots, never
+    // a lane. Once a frame only; their operands are wide slots or scalar
+    // slots as each says ([`wide_ops`]). Wide out (`d` a wide slot):
+    pub const W_ADD: u8 = 48; // wide a + wide b
+    pub const W_ADDS: u8 = 49; // wide a + scalar b
+    pub const W_SUB: u8 = 50; // wide a - wide b
+    pub const W_SUBS: u8 = 51; // wide a - scalar b
+    pub const W_NEG: u8 = 52; // -wide a
+    pub const W_MULS: u8 = 53; // wide a * scalar b
+    pub const W_DIVS: u8 = 54; // wide a / scalar b
+    pub const W_FLOOR: u8 = 55; // floor(wide a)
+                                // Back to Q16.16 (`d` a scalar slot):
+    pub const W_FRAC: u8 = 56; // frac(wide a)
+    pub const W_MOD: u8 = 57; // wide a % scalar b
+    pub const W_CMP: u8 = 58; // wide a <op> scalar b, `c` the compare (LT..NE)
+    pub const W_MINMAX: u8 = 59; // min/max(wide a, scalar b), `c` MIN or MAX
+    pub const W_RED: u8 = 60; // wide a as 32 bits for `hash` (its own bits when it fits)
+                              // A noise's lattice offset (`d` its slot, `noise_slot`'s for its
+                              // context and axis): the wide a's whole part times the axis's prime,
+                              // as 32 bits, for the `NOISE_O*` steps.
+    pub const W_LAT: u8 = 61;
+    // `noise(w, y, z)` once a frame, w wide (a), y and z scalars (b, c): no
+    // context needed (`d` a scalar slot).
+    pub const W_NOISEX: u8 = 62;
+    // The 16 bits below the point of wide a · scalar b (0..65535, raw): what
+    // `MULR` carries into a split's part times b (`d` a scalar slot).
+    pub const W_REM: u8 = 63;
+    pub const W_FIRST: u8 = W_ADD;
+    pub const W_LAST: u8 = W_REM;
     // ternary
     pub const SELECT: u8 = 64;
     pub const CLAMP: u8 = 65;
@@ -131,7 +186,16 @@ pub(crate) mod code {
     pub const GLYPH_S: u8 = 72;
     // the bold digits (`digit(n, x, y, bold)`; no glyph of them)
     pub const DIGIT_B: u8 = 73;
-    pub const LAST_TERN: u8 = 73;
+    // `noise(x, y, z)` of values that grow without end (`loop forever`):
+    // the operands their small parts, the lattice offsets of noise context
+    // k (`NOISE_O + k`, 0..=3) in its slots (`noise_slot`), set by `W_LAT`
+    // steps once a frame. Any level; never folded.
+    pub const NOISE_O: u8 = 74;
+    pub const NOISE_O_LAST: u8 = 77;
+    // `sat((a·b + c) >> 16)`, c raw (0..65535): a split's part times a
+    // value the same all frame, the wide part's remainder carried in.
+    pub const MULR: u8 = 78;
+    pub const LAST_TERN: u8 = 78;
     // nullary, per pixel: the picture under the formula (its red, green,
     // blue, luminance), 0..1
     pub const U_R: u8 = 80;
@@ -179,7 +243,39 @@ pub(crate) mod code {
     /// A step that reads a table (the sine, a font): never folded, run once
     /// a frame when its operands are constants.
     pub fn is_table(c: u8) -> bool {
-        matches!(c, SIN | COS | DIGIT..=DIGIT_B)
+        matches!(c, SIN | COS | SPR | DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST)
+    }
+
+    /// A wide step (`W_*`): once a frame, its operands wide or scalar
+    /// slots as [`wide_ops`] says.
+    #[inline(always)]
+    pub fn is_wide(c: u8) -> bool {
+        (W_FIRST..=W_LAST).contains(&c)
+    }
+
+    /// For a wide step: whether `d` is a wide slot (else a scalar slot, or
+    /// for `W_LAT` an offset), and how many of `a`, `b` are value operands
+    /// and which of them are wide slots (bit 0 `a`, bit 1 `b`).
+    pub fn wide_ops(c: u8) -> (bool, usize, u8) {
+        match c {
+            W_ADD | W_SUB => (true, 2, 3),
+            W_ADDS | W_SUBS | W_MULS | W_DIVS => (true, 2, 1),
+            W_NEG | W_FLOOR => (true, 1, 1),
+            W_MOD | W_CMP | W_MINMAX | W_REM => (false, 2, 1),
+            W_NOISEX => (false, 3, 1),
+            _ => (false, 1, 1),
+        }
+    }
+
+    /// Whether a step writes the scalar slot in its `d` (the per-frame,
+    /// per-row and draw stage values; not a wide step that writes a wide
+    /// slot or an offset, nor a step that writes pixels or nothing).
+    pub fn writes_scalar(c: u8) -> bool {
+        match c {
+            W_FIRST..=W_LAST => !wide_ops(c).0,
+            LINE_FROM | LINE_TO | DOT | STILL | COLUMN | END => false,
+            c => !is_colour(c),
+        }
     }
 
     /// A step that writes pixels rather than a value.
@@ -204,6 +300,7 @@ pub(crate) mod code {
         match c {
             0..=LAST_BIN => 2,
             32..=LAST_UN => 1,
+            W_FIRST..=W_LAST => wide_ops(c).1,
             64..=LAST_TERN => 3,
             U_R..=INK => 0,
             FOR => 1,
@@ -241,6 +338,15 @@ pub(crate) mod code {
     /// Every operand a step reads (its value operands, then a layer's
     /// coverage) and how many.
     pub fn operands(op: &super::Op) -> ([u8; 4], usize) {
+        if is_wide(op.code) {
+            // Only its scalar operand (wide slots are not scalar slots).
+            let (_, n, w) = wide_ops(op.code);
+            return match n {
+                3 => ([op.b, op.c, 0, 0], 2),
+                2 if w & 2 == 0 => ([op.b, 0, 0, 0], 1),
+                _ => ([0; 4], 0),
+            };
+        }
         let n = values(op);
         let mut v = [op.a, op.b, op.c, 0];
         if n == 2 && is_colour(op.code) {
@@ -262,16 +368,16 @@ pub(crate) mod code {
 
     /// The step's name, for listings.
     pub fn name(c: u8) -> &'static str {
-        const N: [&str; 25] = [
+        const N: [&str; 26] = [
             "add", "sub", "mul", "div", "mod", "mask", "lt", "le", "gt", "ge", "eq", "ne", "and",
             "or", "min", "max", "step", "atan2", "hash", "len", "bit", "add_w", "sub_w", "mul_w",
-            "mul_n",
+            "mul_n", "spr",
         ];
         const U: [&str; 15] = [
             "neg", "not", "abs", "floor", "frac", "sin", "cos", "tri", "saw", "sqr", "sqrt",
             "recip", "pick", "tab", "shr",
         ];
-        const T: [&str; 10] = [
+        const T: [&str; 15] = [
             "select",
             "clamp",
             "mix",
@@ -282,10 +388,20 @@ pub(crate) mod code {
             "digit_small",
             "glyph_small",
             "digit_bold",
+            "noise_o0",
+            "noise_o1",
+            "noise_o2",
+            "noise_o3",
+            "mulr",
+        ];
+        const WN: [&str; 16] = [
+            "w_add", "w_adds", "w_sub", "w_subs", "w_neg", "w_muls", "w_divs", "w_floor", "w_frac",
+            "w_mod", "w_cmp", "w_minmax", "w_red", "w_lat", "w_noisex", "w_rem",
         ];
         match c {
             0..=LAST_BIN => N[c as usize],
             32..=LAST_UN => U[(c - 32) as usize],
+            W_FIRST..=W_LAST => WN[(c - W_FIRST) as usize],
             64..=LAST_TERN => T[(c - 64) as usize],
             U_R..=INK => ["ur", "ug", "ub", "ul", "ink"][(c - U_R) as usize],
             FOR..=COLUMN => [
@@ -322,9 +438,55 @@ pub(crate) const BACKDROP: u8 = 2;
 pub(crate) const UNDER: u8 = 4;
 /// The program reads the draw stage's canvas (`ink`).
 pub(crate) const INKED: u8 = 8;
+/// The program reads `seed` (slot [`S_SEED`]).
+pub(crate) const SEEDED: u8 = 16;
+/// A colour step reads a palette of the formula's own.
+pub(crate) const OWNPAL: u8 = 32;
 
 /// `table` entries a formula may hold in all.
 pub const MAX_TABLE: usize = 256;
+
+/// A formula's own palettes (`palette NAME = #…, …`): up to three, `pal`'s
+/// palettes 5, 6 and 7 after the five built-ins, each 32 entries
+/// (0x00RRGGBB) at the top of the tables ([`user_palette_at`]).
+pub const USER_PALETTES: usize = 3;
+
+/// Where user palette `j` (0..3) starts in the tables: the top 32 entries
+/// for the first, the 32 below for the second, …
+#[inline(always)]
+pub const fn user_palette_at(j: usize) -> usize {
+    MAX_TABLE - 32 * (j + 1)
+}
+
+/// A formula's own palettes as `pal` reads them, unpacked once a frame.
+pub(crate) type Pals = [[[u8; 3]; 32]; USER_PALETTES];
+
+/// Palette `i` as `pal` reads it: a built-in (0..=4) from the tables lent,
+/// or a formula's own (5..=7) from those unpacked for the frame.
+#[inline(always)]
+pub(crate) fn palette<'a>(
+    t: &crate::tables::Tables<'a>,
+    own: &'a Pals,
+    i: u8,
+) -> &'a [[u8; 3]; 32] {
+    if (i as usize) < t.palettes.len() {
+        return t.palettes[i as usize];
+    }
+    &own[(i as usize).saturating_sub(5) % USER_PALETTES]
+}
+
+/// The formula's own palettes from its tables (out of line: once a frame,
+/// and only for a formula with some, `OWNPAL`).
+#[inline(never)]
+pub(crate) fn unpack_palettes(tabs: &[i32; MAX_TABLE], own: &mut Pals) {
+    for (j, p) in own.iter_mut().enumerate() {
+        let at = user_palette_at(j);
+        for (k, c) in p.iter_mut().enumerate() {
+            let v = tabs[at + k] as u32;
+            *c = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+        }
+    }
+}
 
 /// A compiled formula. Plain data (every field an integer or an array of
 /// them), so an all-zero value is valid (an empty program) and
@@ -350,7 +512,7 @@ pub struct Program {
     /// The frame time `fps N` asks for, ms (10, 20 or 40); 0: none (the
     /// player's, 20 ms unless the path says).
     pub(crate) frame_ms: u8,
-    /// The loop, ms (`loop N`, default 8 s).
+    /// The loop, ms (`loop N`, default 8 s); 0 for `loop forever`.
     pub(crate) loop_ms: u32,
     /// The `table` constants (Q16.16), each table's entries in a row.
     pub(crate) tables: [i32; MAX_TABLE],
@@ -430,7 +592,7 @@ impl Program {
     /// counted as often as its loops run it.
     pub fn primitives(&self) -> u32 {
         let mut n = 0;
-        self.draw_walk(|op, mult| {
+        self.draw_walk(|_, op, mult| {
             if matches!(op.code, code::LINE_TO | code::DOT) {
                 n += mult;
             }
@@ -440,15 +602,17 @@ impl Program {
 
     /// Each step of the draw stage with how many times a frame it runs
     /// (the product of its loops' counts).
-    fn draw_walk(&self, mut f: impl FnMut(&Op, u32)) {
+    fn draw_walk(&self, mut f: impl FnMut(usize, &Op, u32)) {
         let mut stack = [1u32; 4];
         let mut depth = 0;
         let mut mult = 1u32;
         let end = (self.draw_end as usize).min(MAX_OPS);
-        for op in &self.ops[(self.frame_end as usize).min(end)..end] {
+        let first = (self.frame_end as usize).min(end);
+        for (at, op) in self.ops[first..end].iter().enumerate() {
+            let at = at + first;
             match op.code {
                 code::FOR => {
-                    f(op, mult);
+                    f(at, op, mult);
                     if depth < stack.len() {
                         stack[depth] = mult;
                         depth += 1;
@@ -457,13 +621,13 @@ impl Program {
                     mult = mult.saturating_mul(n);
                 }
                 code::END => {
-                    f(op, mult);
+                    f(at, op, mult);
                     if depth > 0 {
                         depth -= 1;
                         mult = stack[depth];
                     }
                 }
-                _ => f(op, mult),
+                _ => f(at, op, mult),
             }
         }
     }
@@ -496,9 +660,17 @@ impl Program {
         self.regs as usize
     }
 
-    /// The loop's length in ms.
+    /// The loop's length in ms; **0 for a formula that never repeats**
+    /// (`loop forever`: see [`forever`](Self::forever)).
     pub fn loop_ms(&self) -> u32 {
         self.loop_ms
+    }
+
+    /// A `loop forever` formula: its `t` is the time since it started,
+    /// growing without end ([`crate::Inputs::tw`]), and it may read `seed`
+    /// ([`crate::Inputs::seed`]); [`loop_ms`](Self::loop_ms) is 0.
+    pub fn forever(&self) -> bool {
+        self.loop_ms == 0
     }
 
     /// The frame time its `fps N` line asks for, ms: 10 (`fps 100`), 20
@@ -511,10 +683,17 @@ impl Program {
     /// Which inputs the steps read: bits 0-2 the sliders `a`, `b`, `c`
     /// (the web app's editor shows a slider for each), bit 3 `t`, bit 4
     /// the wall clock (`hour`, `minute` or `second`), bit 5 the picture
-    /// under the formula ([`Program::over`]).
+    /// under the formula ([`Program::over`]), bit 6 `seed`.
     pub fn inputs(&self) -> u8 {
         let mut m = if self.over() { 32 } else { 0 };
+        if self.uses & SEEDED != 0 {
+            m |= 64;
+        }
         for op in &self.ops[..self.len()] {
+            // A wide step reads `t` (every wide value is made from it).
+            if code::is_wide(op.code) {
+                m |= 8;
+            }
             let (v, n) = code::operands(op);
             // A pick's choices are read through its table of slots.
             let table = if op.code == code::PICK {
@@ -525,7 +704,7 @@ impl Program {
             for v in v[..n].iter().copied().chain(table.iter().map(|&s| s as u8)) {
                 m |= match v {
                     S_A..=S_C => 1 << (v - S_A),
-                    S_T => 8,
+                    S_T if !self.forever() => 8,
                     S_HOUR..=S_SECOND => 16,
                     _ => 0,
                 };
@@ -632,7 +811,7 @@ impl Program {
                     // than before when they vary smoothly (speed-g: 427 ns
                     // in all for `pal(fire, x) * (x*0.9)`: 307 + the write).
                     OUT_PAL if lane && vals > 1 => {
-                        if self.const_value(op.c) == Some(ONE) {
+                        if self.const_value(op.c, at) == Some(ONE) {
                             46
                         } else if self.stepped(at, op.a) && self.stepped(at, op.c) {
                             60
@@ -645,7 +824,7 @@ impl Program {
                 // Covered unless the coverage is a constant slot of 1 or
                 // more (a lane or an input never is one).
                 let k = v[n.saturating_sub(1)];
-                let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k);
+                let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k, at);
                 let covered = n > vals && !(konst && self.init[k as usize] >= ONE);
                 let mix = match (blend, covered) {
                     (None, _) => 0,
@@ -664,7 +843,7 @@ impl Program {
             }
             // A whole constant `z`: four corners, not eight (a guess until
             // psi-probe measures it).
-            NOISE if self.const_value(op.c).is_some_and(|z| z & 0xffff == 0) => NOISE_FLAT_NS,
+            NOISE if self.const_value(op.c, at).is_some_and(|z| z & 0xffff == 0) => NOISE_FLAT_NS,
             c => value_ns(c),
         }
     }
@@ -684,7 +863,20 @@ impl Program {
             .is_some_and(|o| {
                 matches!(
                     o.code,
-                    FLOOR | SELECT | LT | LE | GT | GE | EQ | NE | AND | OR | NOT | STEP | BIT
+                    FLOOR
+                        | SELECT
+                        | LT
+                        | LE
+                        | GT
+                        | GE
+                        | EQ
+                        | NE
+                        | AND
+                        | OR
+                        | NOT
+                        | STEP
+                        | BIT
+                        | SPR
                 )
             })
     }
@@ -728,7 +920,7 @@ impl Program {
         }
         let mut ns: u64 = 10_000;
         let mut from = [0u8; 2];
-        self.draw_walk(|op, mult| {
+        self.draw_walk(|at, op, mult| {
             let cost: u64 = match op.code {
                 code::LINE_FROM => {
                     from = [op.a, op.b];
@@ -737,7 +929,7 @@ impl Program {
                 code::LINE_TO => {
                     // Its pixels: the longer side + 1 where both ends of a side
                     // are constants; with a side unknown, at least 12.
-                    let k = |v: u8| self.const_value(v);
+                    let k = |v: u8| self.const_value(v, at);
                     let d = |a: Option<i32>, b: Option<i32>| {
                         a.zip(b).map(|(a, b)| {
                             ((a >> 16) - (b >> 16)).unsigned_abs().min(1023) as u64 + 1
@@ -758,10 +950,15 @@ impl Program {
         (ns / 1000).min(u32::MAX as u64) as u32
     }
 
-    /// The value of a constant slot, `None` for anything else.
-    fn const_value(&self, v: u8) -> Option<i32> {
-        (v & LANE == 0 && v >= S_FIRST_FREE && (v as usize) < MAX_SCALARS && self.is_const_slot(v))
-            .then(|| self.init[v as usize])
+    /// The value of slot `v` as step `at` reads it if it holds a constant
+    /// there, `None` for anything else (a slot holds a constant until a step
+    /// writes another value into it: slots are used again).
+    fn const_value(&self, v: u8, at: usize) -> Option<i32> {
+        (v & LANE == 0
+            && v >= S_FIRST_FREE
+            && (v as usize) < MAX_SCALARS
+            && self.is_const_slot(v, at))
+        .then(|| self.init[v as usize])
     }
 
     /// Reset a program in place to the empty one (all fields zero but the
@@ -785,7 +982,7 @@ impl Program {
     pub fn listing(&self) -> alloc::string::String {
         use core::fmt::Write;
         let mut s = alloc::string::String::new();
-        let opnd = |v: u8| -> alloc::string::String {
+        let opnd = |v: u8, n: usize| -> alloc::string::String {
             if v & LANE != 0 {
                 match v & !LANE {
                     L_X => "x".into(),
@@ -795,7 +992,9 @@ impl Program {
                 }
             } else if v < S_FIRST_FREE {
                 ["t", "hour", "minute", "second", "a", "b", "c", "y", "py"][v as usize].into()
-            } else if (v as usize) < MAX_SCALARS && self.is_const_slot(v) {
+            } else if v == S_SEED && self.uses & SEEDED != 0 {
+                "seed".into()
+            } else if (v as usize) < MAX_SCALARS && self.is_const_slot(v, n) {
                 alloc::format!("{}", self.init[v as usize] as f64 / ONE as f64)
             } else {
                 alloc::format!("s{v}")
@@ -812,15 +1011,38 @@ impl Program {
                 "pixel"
             };
             let (v, ar) = code::operands(op);
-            let args = v[..ar]
-                .iter()
-                .map(|&v| opnd(v))
-                .collect::<alloc::vec::Vec<_>>()
-                .join(", ");
+            let args = if code::is_wide(op.code) {
+                // Wide slots `wN`, scalar ones as usual; a compare's kind.
+                let (_, nv, w) = code::wide_ops(op.code);
+                let mut a: alloc::vec::Vec<alloc::string::String> = [op.a, op.b, op.c][..nv]
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &x)| {
+                        if w & (1 << k) != 0 {
+                            alloc::format!("w{x}")
+                        } else {
+                            opnd(x, n)
+                        }
+                    })
+                    .collect();
+                if matches!(op.code, code::W_CMP | code::W_MINMAX) {
+                    a.push(code::name(op.c).into());
+                }
+                a.join(", ")
+            } else {
+                v[..ar]
+                    .iter()
+                    .map(|&v| opnd(v, n))
+                    .collect::<alloc::vec::Vec<_>>()
+                    .join(", ")
+            };
             // A table read: where its entries are; a loop: its counter and
             // where it ends or goes back to.
             let args = if op.code == code::TAB {
                 alloc::format!("{args}; table {}..={}", op.b, op.b as usize + op.c as usize)
+            } else if op.code == code::SPR {
+                let h = SprHead::new(&self.tables, op.c);
+                alloc::format!("{args}; sprite {} x {} at {}", h.w, h.h, op.c)
             } else if op.code == code::FOR {
                 alloc::format!("{args}; end {}", op.b)
             } else if op.code == code::END {
@@ -828,7 +1050,7 @@ impl Program {
             } else if op.code == code::COLUMN {
                 alloc::format!("skip {} after the first row", op.a)
             } else if op.code == code::STILL {
-                let r = |v: u8| opnd(v);
+                let r = |v: u8| opnd(v, n);
                 let regs = [r(op.b), r(op.c)];
                 alloc::format!(
                     "skip {}; cache {}",
@@ -837,7 +1059,7 @@ impl Program {
                 )
             } else if op.code == code::PICK {
                 let t: alloc::vec::Vec<_> = (0..op.c as usize)
-                    .map(|j| opnd(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8))
+                    .map(|j| opnd(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8, n))
                     .collect();
                 alloc::format!("{args}; {}", t.join(", "))
             } else {
@@ -854,8 +1076,14 @@ impl Program {
                         | code::COLUMN
                 ) {
                 "out".into()
+            } else if code::is_wide(op.code) && code::wide_ops(op.code).0 {
+                alloc::format!("w{}", op.d)
+            } else if op.code == code::W_LAT {
+                let k = (op.d as usize).saturating_sub(noise_slot(0, 0));
+                alloc::format!("noise{}.{}", k / 3, ["x", "y", "z"][k % 3])
             } else {
-                opnd(op.d)
+                // (What the step writes: after it.)
+                opnd(op.d, n + 1)
             };
             let blend = match code::colour_parts(op.code) {
                 (_, Some(b)) if code::is_colour(op.code) => {
@@ -872,16 +1100,12 @@ impl Program {
         s
     }
 
-    fn is_const_slot(&self, v: u8) -> bool {
-        !self.ops[..self.len()].iter().any(|op| {
-            match op.code {
-                // The draw stage's steps that write no value; END counts
-                // its loop's counter (which the FOR writes too).
-                code::END => op.a == v,
-                code::LINE_FROM | code::LINE_TO | code::DOT | code::STILL | code::COLUMN => false,
-                c => !code::is_colour(c) && op.d == v,
-            }
-        })
+    fn is_const_slot(&self, v: u8, at: usize) -> bool {
+        (v != S_SEED || self.uses & SEEDED == 0)
+            && !self.ops[..at.min(self.len())].iter().any(|op| {
+                // END counts its loop's counter (which the FOR writes too).
+                (op.code == code::END && op.a == v) || (code::writes_scalar(op.code) && op.d == v)
+            })
     }
 }
 
@@ -922,9 +1146,17 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         SQRT => 539,
         SELECT | CLAMP => 60,
         PICK | TAB => 100,
+        // A sprite's pixel: a table read, a shift and a mask (a guess until
+        // psi-probe measures it, as the design guessed).
+        SPR => 120,
         MIX => 130,
         SMOOTH => 214,
         NOISE => 855,
+        // A wide noise: `noise` and three adds of the offsets (a guess
+        // until psi-probe measures it).
+        NOISE_O..=NOISE_O_LAST => 870,
+        // A multiply with a carry in: `mul`'s and an add (a guess).
+        MULR => 110,
         DIGIT..=DIGIT_B => 240,
         U_R | U_G | U_B | INK => 70,
         U_L => 140,
@@ -942,6 +1174,63 @@ pub(crate) fn tab(tables: &[i32; MAX_TABLE], start: u8, last: u8, k: i32) -> i32
         return 0;
     }
     tables[(start as usize + i as usize) & (MAX_TABLE - 1)]
+}
+
+/// A sprite's shape (`sprite NAME { … }`), from its header word in the
+/// tables at `at`: `w | h << 8 | lb << 16 | keys << 20` (lb the log2 of
+/// its bits a pixel: 1, 2 or 4 bits), then its keys' numbers, then its
+/// rows, each `wpr` words of `32 >> lb` pixels, the first in the low bits.
+#[derive(Clone, Copy)]
+pub(crate) struct SprHead {
+    pub(crate) w: u32,
+    pub(crate) h: u32,
+    lb: u32,
+    lg: u32,
+    wpr: usize,
+    at: usize,
+    data: usize,
+}
+
+impl SprHead {
+    #[inline(always)]
+    pub(crate) fn new(tabs: &[i32; MAX_TABLE], at: u8) -> SprHead {
+        let at = at as usize;
+        let hd = tabs[at] as u32;
+        let (w, h, lb, keys) = (hd & 0xff, (hd >> 8) & 0xff, (hd >> 16) & 3, (hd >> 20) & 31);
+        // Pixels a word: 32, 16 or 8 (as its log2).
+        let lg = 5 - lb.min(2);
+        SprHead {
+            w,
+            h,
+            lb: lb.min(2),
+            lg,
+            wpr: ((w + (1 << lg) - 1) >> lg) as usize,
+            at,
+            data: at + 1 + keys as usize,
+        }
+    }
+
+    /// The pixel at column floor(u), row floor(v) from the top left: its
+    /// key's number, 0 outside. Indices are masked into the tables,
+    /// whatever the program.
+    #[inline(always)]
+    pub(crate) fn read(&self, tabs: &[i32; MAX_TABLE], u: i32, v: i32) -> i32 {
+        let (x, y) = ((u >> 16) as u32, (v >> 16) as u32);
+        // (Negative columns and rows are huge as u32: outside too.)
+        if x >= self.w || y >= self.h {
+            return 0;
+        }
+        let word = tabs
+            [(self.data + y as usize * self.wpr + (x >> self.lg) as usize) & (MAX_TABLE - 1)]
+            as u32;
+        let k = (word >> ((x & ((1 << self.lg) - 1)) << self.lb)) & ((1 << (1 << self.lb)) - 1);
+        tabs[(self.at + 1 + k as usize) & (MAX_TABLE - 1)]
+    }
+
+    /// The words it takes in the tables, its header first.
+    pub(crate) fn words(&self) -> usize {
+        self.data - self.at + self.h as usize * self.wpr
+    }
 }
 
 /// `pick`'s choice for `k` from the `n` slots whose numbers are in the
@@ -1005,6 +1294,7 @@ pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
         MIX => fixed::mix(a, b, x),
         SMOOTH => fixed::smooth(a, b, x),
         NOISE => fixed::noise(a, b, x),
+        MULR => fixed::mulr(a, b, x),
         DIGIT..=DIGIT_B => t.map_or(0, |t| fixed::glyph(&glyphs(t, c), a, b, x)),
         _ => 0,
     }

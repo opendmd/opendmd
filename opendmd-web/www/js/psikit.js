@@ -58,7 +58,7 @@ export function picker(names, label, v, set) {
 const cost = (us) => (us <= 5000 ? 'light' : us <= 8000 ? 'medium' : 'heavy');
 // Its µs a frame on the panel: with its still cache (i[11]) unless it draws over a GIF (a look has none).
 export const est = (i) => (i[5] & 32 || i[11] == null ? i[6] : i[11]);
-export const about = (i) => i.length ? [i[5] & 8 && `Loops every ${i[4] / 1000} s`, i[5] & 8 && !(i[5] & 32) && i[10] && i[10] != 20 && `${1000 / i[10]} frames a second`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${cost(est(i))} for the panel`].filter(Boolean).join(' · ') : '';
+export const about = (i) => i.length ? [i[5] & 8 && (i[4] ? `Loops every ${i[4] / 1000} s` : 'Goes on without repeating'), i[5] & 8 && !(i[5] & 32) && i[10] && i[10] != 20 && `${1000 / i[10]} frames a second`, i[5] & 16 && 'Follows the clock', !(i[5] & 24) && 'Still', i[8] && `Draws ${i[9]} lines and dots a frame`, `${cost(est(i))} for the panel`].filter(Boolean).join(' · ') : '';
 export const TIP = (i) => `${i[0]} steps, about ${(est(i) / 1000).toFixed(1)} ms a frame on the panel (light: under 5 ms; medium: under 8)`;
 
 // The code as highlighted HTML (numbers `.n` — a unary minus included —,
@@ -68,14 +68,25 @@ export const TIP = (i) => `${i[0]} steps, about ${(est(i) / 1000).toFixed(1)} ms
 // its numbers are.
 // (`line`, `dot` and `ink` only in a formula with a draw block: before it
 // they were names a formula could set, and may still be; `fps` only before a
-// number, as `fps 100`.)
+// number, as `fps 100`; `forever` only after `loop`. A sprite block's rows
+// are its picture, `.p`, never numbers to drag.)
 const WORDS = /^(loop|frame|layer|part|draw|for|table|line|dot|ink)$/, DRAWS = /^(line|dot|ink)$/;
 export function marks(s, bad) {
   const draws = /^\s*draw\s*\{/m.test(s.replace(/(--|\/\/).*/g, ''));
-  const toks = [], cls = new Array(s.length).fill('');
+  const toks = [], cls = new Array(s.length).fill(''), pic = [];
+  for (const b of s.matchAll(/^([ \t]*sprite[ \t]+\w+[ \t]*\{[^\n]*\n)([\s\S]*?)^[ \t]*\}/gm)) {
+    let at = b.index + b[1].length;
+    for (const line of b[2].split('\n')) {
+      const r = line.replace(/(--|\/\/).*/, '').trim();
+      if (r && !/^key\s/.test(r)) { const a = at + line.indexOf(r); pic.push([a, a + r.length]); }
+      at += line.length + 1;
+    }
+  }
+  const inPic = (i) => pic.some(([a, e]) => i >= a && i < e);
   for (const m of s.matchAll(/(--|\/\/).*|'[ -~]'|#[\da-f]{3}([\da-f]{3})?\b|[a-z_]\w*|\d+\.?\d*|\.\d+/gi)) {
-    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : (WORDS.test(m[0]) && (draws || !DRAWS.test(m[0])) || m[0] == 'fps' && /^[ \t]+\d/.test(s.slice(m.index + 3))) ? 'w' : '';
+    const k = m[1] ? 'c' : m[0][0] == '#' ? `k" style="--k:${m[0]}` : /[\d.']/.test(m[0][0]) ? 'n' : (WORDS.test(m[0]) && (draws || !DRAWS.test(m[0])) || m[0] == 'fps' && /^[ \t]+\d/.test(s.slice(m.index + 3)) || m[0] == 'forever' && /\bloop[ \t]+$/.test(s.slice(0, m.index)) || m[0] == 'sprite' && /^[ \t]+\w+[ \t]*\{/.test(s.slice(m.index + 6)) || m[0] == 'palette' && /^[ \t]+\w+[ \t]*=/.test(s.slice(m.index + 7))) ? 'w' : '';
     let a = m.index;
+    if (inPic(a)) continue;
     // A character in quotes ('A') is a number, but not one to drag.
     if (k === 'n' && m[0][0] !== "'") {
       // `-2` after an operator, a bracket or the start of a line is one number.
@@ -84,6 +95,7 @@ export function marks(s, bad) {
     }
     if (k) cls.fill(k, a, m.index + m[0].length);
   }
+  for (const [a, e] of pic) cls.fill('p', a, e);
   if (bad) for (let i = bad[0]; i < Math.max(bad[1], bad[0] + 1) && i < s.length; i++) cls[i] = 'e ' + cls[i];
   const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
   let html = '', i = 0;
