@@ -31,7 +31,7 @@ Like what's on? Tap **☆** next to the title to make it a favourite in the
 playlist that's playing (it turns to **★**; tap again to undo). The
 message that pops up names the playlist. The **…** on a Recently played
 GIF has the rest: play less often, hide, play longer. Clocks, text and
-effects have no ☆.
+Formulas have no ☆.
 
 When a schedule or night mode is in charge, Now says so, and **Wake for an
 hour** brings the panel back for a while.
@@ -45,8 +45,8 @@ playlist, or a platform filter that matches none of the playlist's GIFs
 ![The Library, with a GIF's details playing](../images/library.png)
 
 Every GIF on your card, by folder: the folders on your card (Arcade,
-Consoles, and so on), then **Live** and **Effects**, each with how many
-GIFs it holds. Click a folder to open it, again to close it; **⊟** closes
+Consoles, and so on), then **Live**, with how many
+items it holds. Click a folder to open it, again to close it; **⊟** closes
 them all. Big folders scroll smoothly however many GIFs they hold. Each GIF
 has a small picture of its first frame; rest the pointer on one (or move
 to it with the keyboard) and it plays a moment of it. The chips at the top
@@ -90,9 +90,22 @@ preview. Turn it on and the panel fills in the in-between steps so it glides
 instead. Your GIF file isn't changed, and you can switch it off again any
 time.
 
-**Live and Effects** are two extra folders with things the panel draws by
-itself: a clock, scrolling text, and animated effects. See
-[Effects and live items](effects.md).
+**Live** is an extra folder with two things the panel draws by itself.
+Preview them, send them to the panel, or add them to any playlist, just like
+a GIF:
+
+- **Clock:** the time, in one of four layouts, with the date and seconds if
+  you want them. The player keeps its own time over the internet; set your
+  time zone in **Settings → Schedule → Time**.
+- **Scrolling text:** type a message ("Game over", "Insert coin") and choose
+  its font, colour and speed.
+
+Follow RePlayOS can show the clock or a text in the menus instead of a
+playlist (**Settings → Schedule → Follow RePlayOS → attract playlist**). To
+show a Formula there, make a playlist of it and choose that playlist.
+
+The classic demo-scene animations (a tunnel, Mode 7 rotozoom, a starfield,
+a spinning cube) are [Formulas](formulas.md) now, in their own view.
 
 ## Playlists
 

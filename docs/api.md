@@ -70,7 +70,9 @@ Reply: `{"ok":true,"path":"…"}` (with `"over":true` when drawn over).
 
 Errors: `400` neither card-absolute nor a live item, or a bad formula;
 `404` the file does not open (what was playing carries on); `415` not a
-GIF, or a live item this firmware does not know (`@fx:nonsense`); `503` no
+GIF, a live item this firmware does not know (`@nonsense`), or a retired
+`@fx:` path: the built-in effects are gone (`the built-in effects are gone:
+Formulas replace them (play one as @formula?src=…)`); `503` no
 playlist running; `413` body over 8 KB, or a formula over 2,048 B.
 
 ```sh
@@ -231,10 +233,10 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `follow_host` | string | the RePlayOS box, `host` or `host:port` (≤ 64; the port 1-65535 in digits, else 400) |
 | `follow_code_set` | bool | its code is saved (write it as `follow_code`, ≤ 64, one line) |
 | `attract_set` | string or null | the playlist shown in RePlayOS's menus; null = the current one |
-| `attract` | string, `""` | shown in the menus instead of a playlist: `""`, `"clock"`, `"text:<message>"` (≤ 200 characters, one line), `"fx:<effect>[?options]"` |
+| `attract` | string, `""` | shown in the menus instead of a playlist: `""`, `"clock"`, `"text:<message>"` (≤ 200 characters, one line); anything else, `fx:` included, is `400` (the built-in effects are gone: for a Formula, make a playlist of it and choose it as `attract_set`). An `fx:` value stored by an earlier firmware reads as `""` (the playlist), with one log line at boot |
 | `look` | `colour` | tint: `colour` (`color`), `amber`, `red`, `green`, `blue`, `white` |
 | `glow` | `off` | phosphor glow: `off`, `short`, `long` |
-| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""` or its `@fx:psi?src=…` path (≤ 2,048 B, else `413`; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: the formula drawn as a part under `layer screen { look(x, y, 0.4) }`; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
+| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""` or its `@formula?src=…` path (≤ 2,048 B, else `413`; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: the formula drawn as a part under `layer screen { look(x, y, 0.4) }`; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
 | `boot_show` | `short` | start-up show: `off`, `short`, `full` (from the next boot) |
 | `panel_sync` | `true` | refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. `/api/status` `scan` counts seams either way |
 | `panel_split` | `true` | with `panel_sync`: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once |
@@ -745,25 +747,25 @@ centred, if it fits). A loop is one pass across the panel.
 curl -s $DMD/api/play --json '{"path":"@text?msg=Game%20over&speed=30&color=00ff00"}'
 ```
 
-**`@fx:<effect>`** — a live effect: `tunnel`, `rotozoom`, `starfield` or
-`wire`. For all: `speed=1..4` (default 2), `fps=100|50|25` (default 100),
-`palette=fire|ice|chrono|amber|rainbow`, `cycle=1` (cycle the palette).
-`tunnel`: `twist=0..3`, `drift=1`, `texture=checker|rings|noise`,
-`layers=1|2`. `rotozoom`: `zoom=1..4`, `floor=1` (a perspective floor),
-`wobble=0..3`, `texture=…`, `layers=1|2`. `starfield`: `density=1..3`,
-`warp=0`. `wire`: `shape=cube|octahedron|icosahedron|torus|tesseract|morph`,
-`color=RRGGBB`, `shade=0`. An unknown effect is a `415`.
-
-```sh
-curl -s $DMD/api/play --json '{"path":"@fx:wire?shape=tesseract&speed=3"}'
-```
-
-**`@fx:psi`** — a formula (the app's Formulas): `src=<url-encoded
+**`@formula`** — a formula (the app's Formulas): `src=<url-encoded
 formula>`, `a=`, `b=`, `c=` (sliders, 0..1), `fps=50|100|25` (default:
 the formula's `fps` line, else 50; as a look over the GIF the line is not
 used). A heavy one is shown at fewer frames a second; status
 `now_playing.formula` has `frame_us`, `frame_ms`, `asked_ms` and
-`compile_us`.
+`compile_us`. The whole path is at most 2,048 B; `name=<url-encoded>`
+(≤ 60 characters) is its name for display.
+
+```sh
+curl -s $DMD/api/play --json '{"path":"@formula?src=gray(x)"}'
+```
+
+**Retired: `@fx:`.** The built-in effects (`@fx:tunnel`, `@fx:rotozoom`,
+`@fx:starfield`, `@fx:wire`) and the old Formula path `@fx:psi?src=…` are
+gone: they are Formulas now. `POST /api/play` answers `415` for any `@fx:`
+path. In a playlist (`/filelist.txt`, `/sets/*.txt`) such a line is skipped,
+with one log line each time the playlist is read (`playlist: skipping
+"<line cut to 48 chars>…": the built-in effects are gone (Formulas replace
+them)`); the rest of the playlist plays.
 
 **`@boot`** — the start-up show. `len=short|full|card` (`card`: the status
 card), and for it `v=<version>`, `ip=<address>`, `ap=<network>`,

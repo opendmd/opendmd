@@ -270,7 +270,7 @@ fn every_example_fits_the_panels_path_as_sent() {
                 s.push_str(&c);
             }
         }
-        let mut p = String::from("@fx:psi?src=");
+        let mut p = String::from("@formula?src=");
         for b in s.bytes() {
             match b {
                 b' ' => p.push('+'),
@@ -628,7 +628,7 @@ fn the_web_apps_compact_is_the_compilers() {
     // fx_psi's path: the compact text, lightly encoded; over 2,048 B
     // without its `about` line.
     let enc = |c: &str| {
-        let mut p = String::from("@fx:psi?src=");
+        let mut p = String::from("@formula?src=");
         for b in c.bytes() {
             match b {
                 b' ' => p.push('+'),

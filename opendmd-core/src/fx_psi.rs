@@ -1,7 +1,7 @@
-//! `@fx:psi?src=<formula>`: a Psi formula ([`opendmd_psi`]) as a live
+//! `@formula?src=<formula>`: a Psi formula ([`opendmd_psi`]) as a live
 //! effect. Behind the `psi` feature (spike; nothing user-facing yet).
 //!
-//! `@fx:psi?src=<url-encoded source>[&a=0.5&b=..&c=..][&fps=50|100|25]`:
+//! `@formula?src=<url-encoded source>[&a=0.5&b=..&c=..][&fps=50|100|25]`:
 //! the formula compiled when the path is opened (an error makes the path
 //! fail to open, as an unknown effect does); `a b c` are its sliders
 //! (decimal, default 0); the frame rate is `fps=`, else the formula's
@@ -355,12 +355,12 @@ pub fn tables() -> psi::Tables<'static> {
     }
 }
 
-/// The `@fx:psi?src=…` path for a formula: [`psi::compact`]ed, then
+/// The `@formula?src=…` path for a formula: [`psi::compact`]ed, then
 /// URL-encoded lightly (a space is `+`; `% & + # ?` and anything outside
 /// printable ASCII are `%XX`), with `opts` (`a=0.5&fps=100`) after it.
 /// May be longer than a virtual path may be (512 B): check.
 pub fn path(src: &str, opts: &str) -> String {
-    let mut p = String::from("@fx:psi?src=");
+    let mut p = format!("{}?src=", crate::synth::FORMULA);
     for b in psi::compact(src).bytes() {
         match b {
             b' ' => p.push('+'),
@@ -376,7 +376,7 @@ pub fn path(src: &str, opts: &str) -> String {
     p
 }
 
-/// An `@fx:psi` query: the source, the frame time asked (`fps=`; `None`:
+/// An `@formula` query: the source, the frame time asked (`fps=`; `None`:
 /// the formula's `fps N`, else 20 ms), the sliders (`None`: not on the
 /// path, so the formula's declared default: `psi::Meta::values`).
 struct Query {
@@ -508,7 +508,7 @@ pub fn open_error(path: &str) -> Option<std::io::Error> {
 }
 
 impl PsiFx {
-    /// The effect for an `@fx:psi` query, or why not.
+    /// The effect for an `@formula` query, or why not.
     pub fn from_query(q: &str) -> Result<PsiBox, psi::Error> {
         let q = query(q);
         let mut fx = PsiBox::new();
@@ -827,7 +827,7 @@ impl FormulaLook {
             }
     }
 
-    /// The look for a formula's `@fx:psi?src=…` path (sliders and `fps=`
+    /// The look for a formula's `@formula?src=…` path (sliders and `fps=`
     /// as for the effect), or why not: it does not compile, or it is too
     /// heavy to draw over GIFs ([`LOOK_MAX_EST_US`]).
     pub fn from_path(path: &str) -> Result<FormulaLook, psi::Error> {
@@ -1301,6 +1301,9 @@ mod tests {
     use super::*;
     use crate::fx::Fx;
 
+    /// Where a formula path's query starts (after `@formula?`).
+    const Q: usize = crate::synth::FORMULA.len() + 1;
+
     fn path(src: &str) -> String {
         super::path(src, "")
     }
@@ -1329,7 +1332,7 @@ mod tests {
     fn a_formula_that_never_repeats_goes_on_across_passes() {
         let src = "loop forever\nframe { u = t*0.15 + seed*100 }\ngray(noise(u + x*4, y*2, 0) * frac(t*3))";
         let mut fx = Fx::parse(&path(src)).unwrap();
-        let Fx::Psi(b) = &mut fx else { panic!() };
+        let Fx::Psi(b) = &mut fx;
         b.set_seed(12_345);
         assert_eq!(fx.loop_frames(), PASS_MS / 20);
         assert_eq!(fx.loop_time(), Duration::from_millis(u64::from(PASS_MS)));
@@ -1356,7 +1359,7 @@ mod tests {
         }
         assert_eq!(played, 3000);
         // A live edit: the time goes on.
-        let Fx::Psi(b) = &mut fx else { panic!() };
+        let Fx::Psi(b) = &mut fx;
         b.retune_from(&path("loop forever\ngray(frac(t/10))")[crate::synth::FORMULA.len() + 1..])
             .unwrap();
         fx.frame(Duration::ZERO, &mut c);
@@ -1412,7 +1415,8 @@ mod tests {
         assert_eq!(fx.inputs.c, 1 << 14);
         assert_eq!(fx.delay(), Duration::from_millis(10));
         assert!(Fx::parse(&path("gray(tme)")).is_none());
-        assert!(Fx::parse("@fx:psi").is_none());
+        assert!(Fx::parse("@formula").is_none());
+        assert!(Fx::parse("@fx:psi?src=gray(x)").is_none());
         assert!(Fx::parse(&path("loop 2\ngray(x)")).is_some());
         assert_eq!(
             PsiFx::from_query("src=gray(tme)").unwrap_err().msg,
@@ -1468,24 +1472,24 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" + ");
         let mid = format!("fps 100\ngray({mid})");
-        assert!(PsiFx::from_query(&super::path(&mid, "")[8..])
+        assert!(PsiFx::from_query(&super::path(&mid, "")[Q..])
             .unwrap_err()
             .msg
             .ends_with("the limit is 32 ms) — simplify it"));
-        assert!(PsiFx::from_query(&super::path(&mid, "fps=50")[8..]).is_ok());
+        assert!(PsiFx::from_query(&super::path(&mid, "fps=50")[Q..]).is_ok());
         // Over its 5 ms budget, `fps 100` starts from the estimate: two
         // moving noises (~9.1 ms) at 40 ms frames before its first; a
         // tunnel of noise from its estimate with the still cache (~6.8 ms,
         // 15.9 without) at 20, and at 40 when the gate would refuse the
         // cache. (The ring clock was this one until psi-speed: 4.x ms now.)
         let heavy = "fps 100\nloop 4\ngray(noise(x*8, y*4, t) + noise(x*3, y*9, t*2))";
-        let fx = PsiFx::from_query(&super::path(heavy, "")[8..]).unwrap();
+        let fx = PsiFx::from_query(&super::path(heavy, "")[Q..]).unwrap();
         assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (10, 40));
         let ring = "fps 100\nloop 4\nd = 1/len(px - 63.5, (15.5 - py)*2)\nr = atan2(15.5 - py, px - 63.5)\ngray(noise(d*8 + t, r*4, t) + sin(d*3 - t)*0.2)";
-        let fx = PsiFx::from_query(&super::path(ring, "")[8..]).unwrap();
+        let fx = PsiFx::from_query(&super::path(ring, "")[Q..]).unwrap();
         assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (10, 20));
         set_still_gate(Some(|_| false));
-        let fx = PsiFx::from_query(&super::path(ring, "")[8..]).unwrap();
+        let fx = PsiFx::from_query(&super::path(ring, "")[Q..]).unwrap();
         assert_eq!((fx.ms(), fx.gov.delay_ms(fx.ms())), (10, 40));
         set_still_gate(None);
         // Over a GIF, a look follows its path's `fps=` (else 50), never the
@@ -1511,12 +1515,12 @@ mod tests {
         }
         assert_eq!(
             path("v = x % 2 + 1 & 3 # é"),
-            "@fx:psi?src=v+=+x+%25+2+%2B+1+%26+3+%23+%C3%A9"
+            "@formula?src=v+=+x+%25+2+%2B+1+%26+3+%23+%C3%A9"
         );
         // Characters in quotes, the URL's own among them, come back as they
         // went.
         let src = "k = ' ' + '+' + '%' + '#' + '&' + '?' + ';' + '=' -- c\ngray(glyph(k, px % 5, 31 - py))";
-        let q = query(path(src).strip_prefix("@fx:psi?").unwrap());
+        let q = query(path(src).strip_prefix("@formula?").unwrap());
         assert_eq!(q.src, psi::compact(src));
         assert_eq!(psi::compile(&q.src).unwrap(), psi::compile(src).unwrap());
     }
@@ -1688,7 +1692,7 @@ mod tests {
         assert_eq!(e.kind(), ErrorKind::InvalidInput);
         assert_eq!(e.to_string(), "unknown name `tme` — did you mean `t`?");
         assert!(src.retune("@clock").is_none());
-        assert!(src.retune("@fx:psimple").is_none());
+        assert!(src.retune("@formulas").is_none());
         let mut clock =
             crate::synth::SynthSource::new(crate::synth::open("@clock").unwrap()).unwrap();
         assert!(
@@ -1738,11 +1742,10 @@ mod tests {
             e.to_string().ends_with("the limit is 32 ms) — simplify it"),
             "{e}"
         );
-        // An unknown effect stays what it was: InvalidData (a 415).
-        assert_eq!(
-            open("@fx:nonsense").unwrap_err().kind(),
-            ErrorKind::InvalidData
-        );
+        // An unknown live item, or a retired effect: InvalidData (a 415).
+        for p in ["@fx:nonsense", "@fx:tunnel", "@fx:psi?src=gray(x)"] {
+            assert_eq!(open(p).unwrap_err().kind(), ErrorKind::InvalidData);
+        }
         // A formula may be longer than other virtual paths, up to its limit.
         let mut src = String::from("loop 8\n");
         for k in 0..60 {
@@ -1786,7 +1789,7 @@ mod tests {
         assert!(p.len() < crate::synth::MAX_PATH);
         assert_eq!(crate::synth::title(&p).as_deref(), Some("Formula"));
         assert_eq!(
-            crate::synth::title("@fx:psi?src=gray(nope)").as_deref(),
+            crate::synth::title("@formula?src=gray(nope)").as_deref(),
             Some("Formula")
         );
         let mut src = crate::synth::SynthSource::new(crate::synth::open(&p).unwrap()).unwrap();
@@ -1938,7 +1941,7 @@ mod tests {
             panic!()
         };
         assert_eq!(fx.inputs.a, 0);
-        fx.retune_from(&super::path(src, "")["@fx:psi?".len()..]).unwrap();
+        fx.retune_from(&super::path(src, "")[Q..]).unwrap();
         assert_eq!(fx.inputs.a, 5 << 15);
         // And a look.
         let look = FormulaLook::from_path(&super::path("control k 0..1 = 0.75\nlayer multiply { gray(k) }", "")).unwrap();
@@ -2005,7 +2008,7 @@ mod tests {
             e.msg
         );
         assert_eq!(
-            FormulaLook::from_path("@fx:psi?src=gray(tme)")
+            FormulaLook::from_path("@formula?src=gray(tme)")
                 .unwrap_err()
                 .msg,
             "unknown name `tme` — did you mean `t`?"
@@ -2025,7 +2028,7 @@ mod tests {
         let mut look = FormulaLook::from_path(&super::path(F, "")).unwrap();
         assert!(look.take());
         let mut src =
-            crate::synth::SynthSource::new(crate::synth::open("@fx:starfield").unwrap()).unwrap();
+            crate::synth::SynthSource::new(crate::synth::open(&super::path(STARS, "")).unwrap()).unwrap();
         let mut c = Canvas::new();
         let mut t = Duration::ZERO;
         for _ in 0..30 {
@@ -2235,10 +2238,10 @@ mod tests {
         fx.frame(Duration::from_millis(140), &mut c);
         assert_eq!(c.as_bytes(), drawn(STARS, 140).as_slice());
         assert!(c.as_bytes().iter().any(|&b| b > 0), "it draws");
-        let Fx::Psi(p) = &mut fx else { panic!() };
+        let Fx::Psi(p) = &mut fx;
         assert!(p.ink.is_some());
         // To one that doesn't draw: the canvas goes; back: it comes again.
-        let q = |src: &str| super::path(src, "")["@fx:psi?".len()..].to_string();
+        let q = |src: &str| super::path(src, "")[Q..].to_string();
         p.retune_from(&q("gray(x)")).unwrap();
         assert!(p.ink.is_none());
         let src = "draw { dot(10, 10) }\ngray(ink)";
@@ -2272,9 +2275,49 @@ mod tests {
         assert!(look.held.as_ref().unwrap().ink.is_some());
     }
 
+    /// The built-in effects' rasteriser, from before they were Formulas
+    /// (`fx::line`, 2026-10-27): Bresenham, the brightness in 16.16 and
+    /// eight steps, clipped, writing only pixels that differ.
+    fn reference_line(canvas: &mut Canvas, a: (i32, i32, i32), b: (i32, i32, i32), c: Rgb) {
+        use crate::canvas::{HEIGHT, WIDTH};
+        let (x1, y1) = (b.0, b.1);
+        let (dx, dy) = ((x1 - a.0).abs(), -(y1 - a.1).abs());
+        let (sx, sy) = (if a.0 < x1 { 1 } else { -1 }, if a.1 < y1 { 1 } else { -1 });
+        let steps = dx.max(-dy).max(1);
+        let (mut x, mut y, mut err) = (a.0, a.1, dx + dy);
+        let mut shades = [Rgb::BLACK; 8];
+        for (i, s) in shades.iter_mut().enumerate() {
+            *s = crate::fx::scale(c, 32 * i as u32 + 32);
+        }
+        let mut k = a.2.clamp(0, 255) << 16;
+        let dk = ((b.2.clamp(0, 255) << 16) - k) / steps;
+        for _ in 0..1024 {
+            if (0..WIDTH as i32).contains(&x) && (0..HEIGHT as i32).contains(&y) {
+                let (ux, uy) = (x as usize, y as usize);
+                let col = shades[(k >> 21) as usize & 7];
+                if canvas.get(ux, uy) != col {
+                    canvas.set(ux, uy, col);
+                }
+            }
+            if x == x1 && y == y1 {
+                break;
+            }
+            k += dk;
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y += sy;
+            }
+        }
+    }
+
     /// Psi's `line` is the built-in effects' rasteriser: the same pixels
-    /// for any two ends (Psi counts y up from the bottom, `fx::line` rows
-    /// down from the top), off the panel too.
+    /// for any two ends (Psi counts y up from the bottom, the reference
+    /// rows down from the top), off the panel too.
     #[test]
     fn psi_lines_are_the_effects_lines() {
         let mut r = 0x9e37_79b9u32;
@@ -2287,7 +2330,7 @@ mod tests {
             };
             let (x0, y0, x1, y1) = (n(-40, 170), n(-20, 50), n(-40, 170), n(-20, 50));
             let mut c = Canvas::new();
-            crate::fx::line(
+            reference_line(
                 &mut c,
                 (x0, y0, 255),
                 (x1, y1, 255),
@@ -2315,7 +2358,7 @@ mod tests {
     fn a_formulas_still_cache_changes_no_frame_and_gives_way() {
         let src =
             "loop 2\nd = 1/len(px - 63.5, (15.5 - py)*2)\ngray(frac(d*8 + t/2) * step(0.02, d))";
-        let mut fx = PsiFx::from_query(&path(src)[8..]).unwrap();
+        let mut fx = PsiFx::from_query(&path(src)[Q..]).unwrap();
         assert_eq!(fx.prog.still_lanes(), 1);
         assert!(!fx.still.is_held(), "nothing taken at open");
         let mut c = Canvas::new();
@@ -2353,7 +2396,7 @@ mod tests {
         // A live edit to another formula with one value keeps the lanes and
         // draws the new one (the cache checks whose values it holds).
         let other = "loop 2\nd = 1/len(px - 60, (15.5 - py)*3)\ngray(frac(d*8 - t/2))";
-        fx.retune_from(&path(other)[8..]).unwrap();
+        fx.retune_from(&path(other)[Q..]).unwrap();
         assert!(fx.still.is_held());
         fx.frame(Duration::from_millis(100), &mut c);
         let mut out = vec![0u8; PIXELS * 3];
@@ -2373,11 +2416,11 @@ mod tests {
         // lanes stay, the values are kept again, never drawn stale.
         let ta = "loop 4\ntable T = 0.1, 0.5, 0.9, 0.3\nk = T[floor(len(px - 63.5, (15.5 - py)*2)/8)]\ngray(frac(k + t/4))";
         let tb = "loop 4\ntable T = 0.9, 0.2, 0.1, 0.6\nk = T[floor(len(px - 63.5, (15.5 - py)*2)/8)]\ngray(frac(k + t/4))";
-        fx.retune_from(&path(ta)[8..]).unwrap();
+        fx.retune_from(&path(ta)[Q..]).unwrap();
         fx.frame(Duration::from_millis(120), &mut c);
         fx.frame(Duration::from_millis(140), &mut c);
         assert!(fx.still.is_held());
-        fx.retune_from(&path(tb)[8..]).unwrap();
+        fx.retune_from(&path(tb)[Q..]).unwrap();
         assert!(fx.still.is_held());
         fx.frame(Duration::from_millis(160), &mut c);
         let inputs = psi::Inputs {
@@ -2396,7 +2439,7 @@ mod tests {
             "a table-only edit drew stale values"
         );
         // One without values lets them go.
-        fx.retune_from(&path("gray(x)")[8..]).unwrap();
+        fx.retune_from(&path("gray(x)")[Q..]).unwrap();
         assert!(!fx.still.is_held());
         set_still_gate(None);
         drop(fx);
@@ -2406,7 +2449,7 @@ mod tests {
     #[test]
     fn a_formula_without_its_canvas_asks_again() {
         let mut fx = Fx::parse(&path(STARS)).unwrap();
-        let Fx::Psi(p) = &mut fx else { panic!() };
+        let Fx::Psi(p) = &mut fx;
         p.ink = None;
         let mut c = Canvas::new();
         fx.frame(Duration::from_millis(140), &mut c);
@@ -2417,16 +2460,16 @@ mod tests {
             1_500_000
         }
         set_clock(Some(half));
-        let Fx::Psi(p) = &mut fx else { panic!() };
+        let Fx::Psi(p) = &mut fx;
         p.ink = None;
         p.ink_tried = 1_000_001;
         fx.frame(Duration::from_millis(140), &mut c);
-        let Fx::Psi(p) = &mut fx else { panic!() };
+        let Fx::Psi(p) = &mut fx;
         assert!(p.ink.is_none(), "asked again within the second");
         p.ink_tried = 400_001;
         fx.frame(Duration::from_millis(140), &mut c);
         set_clock(None);
-        let Fx::Psi(p) = &fx else { panic!() };
+        let Fx::Psi(p) = &fx;
         assert!(p.ink.is_some(), "asked again after it");
     }
 

@@ -34,7 +34,7 @@ const POLL: Duration = Duration::from_millis(5);
     version,
     about = "Play a DMDoS card's GIFs in a 128x32 desktop window",
     after_help = "With no card, a folder picker opens; cancel it (or pass --demo) for the built-in demo \
-                  of effects and live items."
+                  of Formulas and live items."
 )]
 struct Args {
     /// A card (a folder holding filelist.txt), any folder of GIFs, or one
@@ -46,7 +46,7 @@ struct Args {
     #[arg(long)]
     root: Option<PathBuf>,
 
-    /// Play the built-in demo: the panel's effects, the clock and scrolling
+    /// Play the built-in demo: Formulas, the clock and scrolling
     /// text, no card needed (also what plays when the folder picker is
     /// cancelled).
     #[arg(long, conflicts_with_all = ["card", "root", "manifest", "play"])]
@@ -115,7 +115,7 @@ struct Args {
     screenshot_canvas: Option<PathBuf>,
 
     /// Take the screenshot this far into the file (ms of its own timeline)
-    /// instead of at its first frame: a live effect mid-loop.
+    /// instead of at its first frame: a Formula mid-loop.
     #[arg(long = "screenshot-at", default_value_t = 0)]
     screenshot_at: u64,
 
@@ -148,13 +148,13 @@ struct Args {
 
     /// Play just this path instead of the manifest: a card path, or a
     /// virtual file (`@clock?style=small&date=1`, `@text?msg=Hello`,
-    /// `@fx:tunnel?palette=chrono&cycle=1`).
+    /// `@formula?src=…`).
     #[arg(long)]
     play: Option<String>,
 
     /// Play a Psi formula (a `.psi` text file; the `psi` feature): compiled
     /// here first, so an error shows its line, then played as
-    /// `@fx:psi?src=…` (which `--play` also takes). `--formula-opts
+    /// `@formula?src=…` (which `--play` also takes). `--formula-opts
     /// 'a=0.5&fps=100'` adds options.
     #[cfg(feature = "psi")]
     #[arg(long, conflicts_with_all = ["play", "demo"])]
@@ -237,7 +237,7 @@ impl Over {
     }
 }
 
-/// `--formula FILE`: the `@fx:psi` path for it, after a compile that
+/// `--formula FILE`: the `@formula` path for it, after a compile that
 /// reports errors with their line.
 #[cfg(feature = "psi")]
 fn formula_path(file: &Path, opts: Option<&str>) -> Result<String> {
@@ -477,20 +477,44 @@ fn first_frame(engine: &mut Engine, canvas: &mut Canvas) -> Result<String> {
 }
 
 /// The built-in demo: live items only, drawn by the engine, so nothing is
-/// read from disk and nothing third-party is shown. The web demo's "All
-/// files" (tools/demo-card.py `LIVE`) without its GIFs.
+/// read from disk and nothing third-party is shown: the clock, scrolling
+/// text and (with `psi`) a Formula after each ([`DEMO_FORMULAS`]).
 const DEMO: &[&str] = &[
-    "@fx:tunnel?palette=fire&texture=rings&twist=2",
     "@text?msg=OpenDMD%20-%20open%20firmware%20for%20LED%20dot-matrix%20displays&speed=30&color=ffaa00",
-    "@fx:rotozoom?floor=1&palette=chrono&cycle=1",
-    "@fx:wire?shape=tesseract&color=ff66cc",
     "@clock?style=big&date=1",
-    "@fx:starfield?palette=ice&density=3",
-    "@fx:tunnel?palette=chrono&cycle=1&drift=1",
     "@text?msg=Open%20a%20folder%20of%20GIFs%20to%20play%20your%20own&speed=30&color=00ccff",
-    "@fx:rotozoom?palette=rainbow&texture=rings&wobble=2",
-    "@fx:wire?shape=morph",
+    "@clock?style=small&seconds=1&date=1",
 ];
+
+/// The demo's Formulas (`opendmd-psi/formulas/`), played as their paths.
+#[cfg(feature = "psi")]
+const DEMO_FORMULAS: &[&str] = &[
+    include_str!("../../opendmd-psi/formulas/plasma.psi"),
+    include_str!("../../opendmd-psi/formulas/fire.psi"),
+    include_str!("../../opendmd-psi/formulas/rings.psi"),
+    include_str!("../../opendmd-psi/formulas/xor.psi"),
+];
+
+/// The demo's playlist: [`DEMO`], each item followed by a Formula.
+fn demo_lines() -> String {
+    #[cfg(feature = "psi")]
+    let formulas: Vec<String> = DEMO_FORMULAS
+        .iter()
+        .map(|src| opendmd_core::fx_psi::path(src, ""))
+        .collect();
+    #[cfg(not(feature = "psi"))]
+    let formulas: Vec<String> = Vec::new();
+    let mut out = String::new();
+    for (i, item) in DEMO.iter().enumerate() {
+        out.push_str(item);
+        out.push('\n');
+        if let Some(f) = formulas.get(i) {
+            out.push_str(f);
+            out.push('\n');
+        }
+    }
+    out
+}
 
 /// Most GIFs a folder without a filelist.txt is scanned for.
 const MAX_SCAN: usize = 100_000;
@@ -514,7 +538,7 @@ impl Card {
     fn demo() -> Card {
         Card {
             root: PathBuf::from("."),
-            playlist: Playlist::Lines(DEMO.join("\n") + "\n"),
+            playlist: Playlist::Lines(demo_lines()),
             label: "the built-in demo".into(),
         }
     }
@@ -700,7 +724,7 @@ fn choose_card(args: &Args) -> Result<Card> {
     match pick_folder() {
         Some(dir) => Card::open(args, &dir),
         None => {
-            println!("No folder chosen: playing the built-in demo (effects and live items)\n");
+            println!("No folder chosen: playing the built-in demo (Formulas and live items)\n");
             Ok(Card::demo())
         }
     }
@@ -1017,7 +1041,9 @@ mod tests {
         assert!(matches!(&card.playlist, Playlist::Lines(t) if t == "@clock\n"));
         // Headless with no card: the demo, never a dialog.
         let card = choose_card(&args(&["--screenshot", "x.png"])).unwrap();
-        assert!(matches!(&card.playlist, Playlist::Lines(t) if t.lines().count() == DEMO.len()));
+        assert!(matches!(&card.playlist, Playlist::Lines(t) if *t == demo_lines()));
+        #[cfg(feature = "psi")]
+        assert_eq!(demo_lines().lines().count(), DEMO.len() + DEMO_FORMULAS.len());
         assert!(Args::try_parse_from(["opendmd-sim", "card", "--root", "card"]).is_err());
     }
 }

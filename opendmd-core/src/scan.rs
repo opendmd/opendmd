@@ -46,7 +46,7 @@ const STRETCH_GUARD_US: u32 = 1_000;
 /// starts.
 ///
 /// [`fit_us`](Self::fit_us) keeps the next frame on time. A frame of a
-/// fast *live effect* (an `@fx:` file, whose schedule the engine keeps
+/// fast *live effect* (a Formula, `@formula?…`, whose schedule the engine keeps
 /// through a tick up to half a frame late, `Engine::advance`; its delay
 /// under two refreshes: the 10 ms effects on a ~8 ms refresh) may also
 /// *stretch* past it: a paced blit can need up to a refresh of waiting,

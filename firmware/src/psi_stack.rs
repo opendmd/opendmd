@@ -8,7 +8,7 @@
 //! an attract effect is checked there), so a deep formula sent by anyone on
 //! the network could overflow either and restart the player. Installed
 //! with `fx_psi::set_compiler` at the top of `main`: every compile
-//! `opendmd_core::fx_psi` makes (opening `@fx:psi`, the Formula look, the
+//! `opendmd_core::fx_psi` makes (opening `@formula`, the Formula look, the
 //! checks before saving) runs here, on a FreeRTOS task with
 //! [`config::PSI_COMPILE_STACK`] (12 KB) of stack taken from the heap for
 //! the compile only: the worst case leaves 1,820 B of it never touched on

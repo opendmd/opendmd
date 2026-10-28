@@ -70,7 +70,7 @@ export function compact(src) {
   return out;
 }
 
-// The panel's path for a formula (fx_psi's `@fx:psi?src=…`; what Show on
+// The panel's path for a formula (fx_psi's `@formula?src=…`; what Show on
 // panel, a playlist line and the look send): compact(src) lightly encoded
 // (a space is `+`; `% & + # ?`, controls and non-ASCII as %XX), then the
 // values worth sending (`moved`). Over the panel's 2,048 B its `about` line
@@ -82,7 +82,7 @@ export function path(f, ctl) {
   return p;
 }
 function enc(c) {
-  let p = '@fx:psi?src=';
+  let p = '@formula?src=';
   for (const b of new TextEncoder().encode(c)) {
     const ch = String.fromCharCode(b);
     p += b == 32 ? '+' : b > 32 && b < 127 && !'%&+#?'.includes(ch) ? ch : '%' + (b < 16 ? '0' : '') + b.toString(16).toUpperCase();

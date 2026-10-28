@@ -73,8 +73,7 @@ button lands on them.
   without it hides Previous and the list. **✎ Edit in Create Art** under the
   title, and a ✎ on each Recently played row, open that item where it can be
   changed, as the Library's Edit does: a GIF in Create Art from the GIF
-  itself (every frame, never the player's prepared copy), an effect's loop
-  in Create Art, a Formula in the Formulas editor (*Edit in Formulas*: the
+  itself (every frame, never the player's prepared copy), a Formula in the Formulas editor (*Edit in Formulas*: the
   saved or example formula it is, name and comments included, else the
   panel's one-line text of it). The clock, scrolling text and title cards
   are drawn by the panel itself; Now says so, with no button. A ☆ beside the title makes the
@@ -87,7 +86,7 @@ button lands on them.
   web for the same words in Create Art), the count, **⊟** (close every
   folder), **Select** and **Add GIFs**; under it the platform chips. The
   list is a **tree of folders** (`js/tree.js`): the card's folders under
-  `gifs/` by human name, then *Live* and *Effects*, then the system `_x`
+  `gifs/` by human name, then *Live*, then the system `_x`
   ones, each with its count (the last one seen, remembered by the browser,
   until the folder is listed again); a folder opens into its GIFs (each
   folder is listed once a session, when first opened, and shared with the
@@ -162,7 +161,7 @@ button lands on them.
   **Add N ticked**, or search (title words, platform chips) and **Add all N
   shown**; a GIF already in the playlist has a ✓ and is not added twice.
   A Formula added from Formulas (**Add to playlist…**: the line is its
-  player path, `@fx:psi?src=…[&a=&b=&c=]&name=…`, ≤ 2,048 B) shows by its
+  player path, `@formula?src=…[&a=&b=&c=]&name=…`, ≤ 2,048 B) shows by its
   name with a *Formula* tag, no thumbnail. **Add by filter…** is a sheet over the editor that runs the core's
   `Filter` (platforms, categories, title words, **Leave out** flags,
   shuffle with a seed, at most N) over any playlist; its last row is **Add
@@ -225,11 +224,9 @@ and the other steps appear. **Edit in Create Art** on a Library GIF
 opens it here, every frame of it, with its title, platform, category and
 author filled in, to **Replace the original** (the same file, so every
 playlist keeps it; a changed title renames it, and playlists follow) or
-**Save as new**. **Save as GIF…** under an effect's options in the
-Library's Effects tab opens it here too: one loop of the effect, drawn as
-an animation by the same code the panel runs, titled from the options
-("Tunnel Fire Rings"), platform FX in the Demoscene category (the demo
-card's recordings are named the same way), to save as new.
+**Save as new**. **Save as GIF…** in Formulas opens a Formula
+here too: one loop of it, drawn as an animation by the same code the panel
+runs, titled with its name, to save as new.
 
 1. **Find** — three sources. **Game art**: pick a platform (MD, SNES, GB,
    GBC, GBA, Saturn, DS, NES, SMS, PC Engine, PS1, N64, Arcade), type a
@@ -335,7 +332,7 @@ and a night mode that turns the panel off or dims it; Now shows when either
 is in force and can wake the panel for an hour. The saved playlist and
 brightness come back when a rule ends.
 
-## Colour, glow, live items and effects
+## Colour, glow and live items
 
 **Colour, glow and the live items.** The player can show everything in one
 colour like a classic dot-matrix display — Settings → Look → *colour*:
@@ -359,52 +356,17 @@ like any GIF — in a playlist they are lines such as `@clock?date=1` or
 Follow RePlayOS can show the clock in the menus instead of its attract
 playlist (Settings → Schedule → Follow RePlayOS → *attract playlist*: The clock).
 
-**Effects.** Library → *Effects* lists four pictures the panel computes
-every frame, at 100 frames a second (the panel's refresh rate): a
-**tunnel** (the Chrono Trigger time warp: two textures turning in opposite
-directions, flying forward, lit by depth and by a light going round, the
-palette cycling through it), **rotozoom** (Mode 7: two textures turning
-against each other, breathing in and out, with the warp's sine wobble on
-rows and columns — or laid out as a floor running to the horizon), a
-**starfield** (192 stars as warp streaks, or dots) and a **wireframe** (a
-sphere opening into a torus and a flower and back, or a cube, octahedron,
-icosahedron, torus or a 4D tesseract, turning and sweeping across the
-panel, every line lit by its depth). Each has a few options — palette
-(chrono, fire, ice, amber, rainbow), texture, layers, speed, frame rate
-and so on — shown beside the preview, and plays, sends to the panel and
-goes in a playlist like any GIF, as a line such as
-`@fx:tunnel?palette=fire&drift=1` (the options, all optional: `speed=1..4`,
-`fps=100|50|25`, `palette=`, `cycle=0|1`; tunnel `texture=checker|rings|
-noise&layers=1|2&twist=0..3&drift=1`; rotozoom `texture=…&layers=1|2&
-wobble=0..3&zoom=1..4&floor=1`; starfield `density=1..3&warp=0`; wire
-`shape=morph|cube|octahedron|icosahedron|torus|tesseract&color=RRGGBB&
-shade=0`). An effect's loop — one turn of the tunnel, one pass through the
-stars — is what the dwell counts. They cost the player no memory (their
-tables are in flash) and 1-3.5 ms a frame. The palettes are stepped and
-have a black band on purpose: the panel shows smooth, dim gradients as
-bands anyway. Follow RePlayOS can show one in the menus too (`PUT
-/api/config {"attract":"fx:tunnel"}`).
-
-**Save as GIF.** Under an effect's options, **Save as GIF…** hands the
-row's path (`app.artFrom = {fx, title}`) to Create Art, which draws it with
-the art module's `Studio.fromEffect(path)`: the core's `fx` compiled into
-the second wasm module, in ~12 ms slices like a GIF's import ("Drawing
-frames… N of M"), then the usual timeline, text and save. The length is
-`anim::effect_plan`: one loop at the effect's frame rate held to the GIF
-players' 20 ms floor (a 100 fps effect gives every other frame: the same
-motion), at 40 ms if that would be more than 240 frames, and cut to 240
-frames if even that is too long (the import line then says "the first
-9.6 s of it" instead of "one loop"). Every frame is drawn by a fresh copy
-of the effect on a cleared canvas, so the sparse effects (which erase the
-previous frame rather than clear) leave nothing behind when frames are
-skipped. The default tunnel is 240 frames at 20 ms, ~550 KB as a GIF
-(its prepared copy about the same); the rotozoom 240 at 40 ms, ~370 KB;
-the starfield and the wireframe under 100 KB. The suggested title is the
-effect's name plus the options that are words (palette, texture, shape,
-colour, the floor view, dots) when they differ from the defaults. The
-platform is FX and the category Demoscene (added to the list if the card
-has none yet), as the demo card names its recordings. Local mode and the
-demo download the GIF, as Create Art always does there.
+The built-in effects (tunnel, rotozoom, starfield, wireframe) are gone from
+the firmware and the core: they are Formulas now, bundled as examples in
+Formulas (`opendmd-web/www/formulas.json`), where they can be read and
+changed. A Formula plays, sends to the panel and goes in a playlist like any
+GIF (**Show on panel**, **Add to playlist…**), as a line
+`@formula?src=…` (see [the HTTP API](api.md)). A retired `@fx:` line in a
+playlist is skipped with a log line. Follow RePlayOS can show the clock or a
+text in the menus instead of its attract playlist, and a playlist of one
+Formula, chosen as the attract playlist, does the same for a Formula
+(`attract` has no Formula form: its limit is 205 bytes, a Formula path is up
+to 2 KB). **Save as GIF…** is in Formulas: see [Formulas](guide/formulas.md).
 
 ## Size budget
 
@@ -443,7 +405,7 @@ updates, WiFi and restarting keep their controls and say in a line that the
 demo can't do them. A new browser session starts from a new player's
 settings.
 
-The demo card is the panel's own effects, recorded by the simulator, the
+The demo card is OpenDMD's own Formulas, recorded by the simulator, the
 CC0 Kenney Pixel Platformer sprites and a playlist of live items
 (`tools/demo-card.py`). `make site` builds the whole public site into
 `target/site`: the README as the landing page, these docs as HTML, and the

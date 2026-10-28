@@ -46,6 +46,33 @@ the online demo, Now's preview skips Formulas in a playlist: only a player
 draws them there.) Formulas that draw over a GIF have their own section,
 [Over a GIF](#over-a-gif).
 
+## The built-in Formulas
+
+The demo-scene animations the panel used to draw by itself are Formulas
+now, bundled as examples. Open one to see how it is written and change it.
+
+- **Tunnel:** the time warp: a checker tunnel turning, travelling and
+  cycling its colours. It has a `twist` number to try (0 to 3) in its text,
+  and no sliders. Its depth and angle are worked out once and kept, so it
+  stays light.
+- **Rotozoom:** Mode 7: a checker turning and zooming over a noise texture,
+  with rows and columns wobbling. A **Wobble** switch (gentle, strong, off);
+  `zoom` in its text (1 to 4).
+- **Rotozoom floor:** the same, as a floor running away to a foggy horizon.
+  Also a **Wobble** switch.
+- **Starfield:** 192 stars streaking at you, drawn as lines once a frame. A
+  **Streak length** slider.
+- **Wireframe cube:** a turning cube of twelve lines, the near edges
+  brighter. A **Size** slider.
+
+Starfield, Wireframe cube, Tunnel and the Rotozoom floor ask for 100 frames
+a second (`fps 100`). The older `@fx:tunnel` and the other built-in effect
+paths are gone: a playlist line that has one is skipped, and a Formula is
+played or put in a playlist as `@formula?src=…`.
+
+For Tunnel and the others to be on the panel's Follow RePlayOS menus, make
+a playlist of the Formula and choose it as the attract playlist.
+
 ## The editor
 
 The preview is on top (on a phone it stays in view while you scroll) and

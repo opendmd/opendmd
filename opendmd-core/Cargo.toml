@@ -36,8 +36,8 @@ names = []
 # The signed firmware bundle (src/ota.rs): the firmware and the tests only,
 # so the wasm modules never see the crypto crates.
 ota = ["dep:ed25519-dalek", "dep:sha2"]
-# Psi formulas as a live effect, `@fx:psi?src=…` (src/fx_psi.rs): a spike,
-# off everywhere by default (the simulator, the firmware's psi/psi-probe).
+# Psi formulas, the panel's only effects, `@formula?src=…` (src/fx_psi.rs):
+# off by default here; the firmware and the simulator turn it on.
 psi = ["dep:opendmd-psi"]
 # psi-probe's counters (`psi::stats`).
 psi-stats = ["psi", "opendmd-psi/stats"]
