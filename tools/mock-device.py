@@ -233,9 +233,9 @@ firmware does: a set you install lands under `<SD_MOUNT>/sets/`).
   `"over":true` draws the formula over the file on screen instead (the
   firmware's Formula look from the editor): `{"ok":true,"path":..,"over":true}`,
   until the ordinal changes; `""` takes it off; `live` with none on is a
-  409. Config `look_formula` (`""` or a formula's path; not compiled here)
-  and `look_formula_name` (at most 60 characters), `look_blend` (over,
-  screen, add, multiply, max, min) and `look_amount` (0..=100); status `formula_look`
+  409. Config `look_formula` (`""` or a formula's path; not compiled here:
+  its name, blend and amount are the formula's own `name` and `look`
+  lines, as on the firmware); status `formula_look`
   (null, or `{"source":"setting"|"over_gif","held":20480,...}`).
 - **`GET /api/stat?path=`** is `{path, exists, size, is_dir}`, `size` null for
   a directory or a miss, `/` a directory.
@@ -646,16 +646,12 @@ DEFAULT_SETTINGS = {
     "look": "colour",           # colour / amber / red / green / blue / white
     "glow": "off",              # off / short / long
     "look_formula": "",         # the Formula look: "" or a formula's @formula?src=.. path
-    "look_formula_name": "",    # its name in the web app (display only)
-    "look_blend": "over",       # how the web app composed it (display only): over/screen/add/multiply/max/min
-    "look_amount": 100,         # and at what amount, 0..=100 (display only)
     "boot_show": "short",       # the start-up show: off / short / full
     "panel_sync": True,         # writes paced to the panel's refresh (no tearing)
     "panel_split": True,        # with it, each frame's bottom half a refresh after the top
     "api_key": "",              # "" = no key asked; never echoed back
 }
 LOOKS = ("colour", "amber", "red", "green", "blue", "white")
-LOOK_BLENDS = ("over", "screen", "add", "multiply", "max", "min")
 GLOWS = ("off", "short", "long")
 BOOT_SHOWS = ("off", "short", "full")
 # The start-up show as a live item (`@boot[?len=short|full|card&..]`,
@@ -694,9 +690,6 @@ FIELD_TYPES = {
     "look": "str",
     "glow": "str",
     "look_formula": "str",
-    "look_formula_name": "str",
-    "look_blend": "str",
-    "look_amount": "u8",
     "boot_show": "str",
     "panel_sync": "bool",
     "panel_split": "bool",
@@ -1075,6 +1068,38 @@ def virtual_delays(path: str) -> list[int] | None:
     return None
 
 
+def declared_name(src: str) -> str | None:
+    """A formula's `name "…"` line without compiling it (synth::declared_name):
+    the declarations at its top, past blank lines, `;` and comments."""
+    i, n = 0, len(src)
+    while True:
+        while i < n:
+            if src[i] in " \t\r\n;":
+                i += 1
+            elif src[i] in "-/" and src[i + 1:i + 2] == src[i]:
+                while i < n and src[i] != "\n":
+                    i += 1
+            else:
+                break
+        m = re.match(r"[A-Za-z0-9_]*", src[i:])
+        word = m.group(0)
+        i += len(word)
+        if word not in ("psi", "name", "about", "control", "look"):
+            return None
+        while src[i:i + 1] in (" ", "\t") and i < n:
+            i += 1
+        if word == "name":
+            if src[i:i + 1] != '"':
+                return None
+            return re.split(r'["\n]', src[i + 1:], maxsplit=1)[0]
+        if src[i:i + 1] == "=":
+            return None
+        quote = False
+        while i < n and src[i] != "\n" and (quote or src[i] != ";"):
+            quote ^= src[i] == '"'
+            i += 1
+
+
 def virtual_title(path: str) -> str | None:
     """now_playing.title for a virtual path, or None for a real one."""
     if path == VIRTUAL_POWER_ON:
@@ -1084,9 +1109,14 @@ def virtual_title(path: str) -> str | None:
     live = live_parse(path)
     if live is not None:
         if live[0] == "formula":
-            # A playlist entry carries its name (synth::title: 60 characters).
-            name = "".join(c for c in live[1].get("name", "") if c.isprintable())[:60]
-            return name if name.strip() else "Formula"
+            # synth::title: its `name "…"` line, else `&name=` (an older
+            # playlist entry's), 60 characters.
+            raw = next((v for k, _, v in (kv.partition("=") for kv in path.partition("?")[2].split("&")) if k == "src"), "")
+            for n in (declared_name(urllib.parse.unquote_plus(raw)), live[1].get("name", "")):
+                n = "".join(c for c in n or "" if c.isprintable())[:60]
+                if n.strip():
+                    return n
+            return "Formula"
         if live[0] == "boot":
             return "Startup"
         return "Clock" if live[0] == "clock" else live[1]["msg"]
@@ -3236,9 +3266,6 @@ def make_handler(ctx: Context, quiet: bool):
                     "look": s["look"],
                     "glow": s["glow"],
                     "look_formula": s["look_formula"],
-                    "look_formula_name": s["look_formula_name"],
-                    "look_blend": s["look_blend"],
-                    "look_amount": s["look_amount"],
                     "boot_show": s["boot_show"],
                     "panel_sync": s["panel_sync"],
                     "panel_split": s["panel_split"],
@@ -3366,15 +3393,6 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "look_formula" and len(v.encode()) > 2048:
                         self.send_error_json(413, f"this formula is too long for the panel ({len(v.encode())} B as sent; the limit is 2048 B)")
                         return
-                    if field == "look_formula_name" and (len(v) > 60 or any(ord(c) < 32 for c in v)):
-                        self.send_error_json(400, "look_formula_name must be one line of at most 60 characters")
-                        return
-                    if field == "look_blend" and v not in LOOK_BLENDS:
-                        self.send_error_json(400, "look_blend must be over, screen, add, multiply, max or min")
-                        return
-                    if field == "look_amount" and not 0 <= v <= 100:
-                        self.send_error_json(400, "look_amount must be 0..=100")
-                        return
                     if field == "api_key" and v != "" and not API_KEY_RE.fullmatch(v):
                         self.send_error_json(400, "api_key must be 8..64 of A-Z a-z 0-9 . _ ~ - (or \"\" for none)")
                         return
@@ -3418,9 +3436,6 @@ def make_handler(ctx: Context, quiet: bool):
                         next_settings[field] = max(1, v)
                     else:
                         next_settings[field] = v
-                # A new look sent without how it was composed is drawn as it is.
-                if "look_formula" in patch and "look_blend" not in patch and "look_amount" not in patch:
-                    next_settings["look_blend"], next_settings["look_amount"] = "over", 100
 
                 # "attract_set" is null-or-string, so it is not in
                 # FIELD_TYPES; validated the same way as "set" below.

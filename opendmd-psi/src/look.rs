@@ -1,10 +1,11 @@
 //! Any Formula as a look: drawn over every GIF with a blend, at an amount.
 //!
-//! The web app composes the look's source here (Settings › Look and the
-//! Formulas editor's "Use as the look", through `opendmd-psi-web`'s
-//! `look()`), and the player draws it as any other formula: nothing in the
-//! language or the firmware is new. The text stands alone, as shared
-//! Formulas do — the formula pasted in as a part:
+//! A formula says it can be a look with its own `look [blend] [amount]`
+//! line ([`declared`]; the web app's Formula settings sheet writes the line
+//! with [`set`], a text edit), and the player draws the composition that
+//! line asks for as any other formula: nothing in the firmware's drawing
+//! is new. The text stands alone, as shared Formulas do — the formula
+//! pasted in as a part:
 //!
 //! ```text
 //! loop 8                         -- the formula's loop, when it isn't 8 s
@@ -31,10 +32,6 @@
 //! - **`ur ug ub ul`** inside the part read the real pixel's picture, the
 //!   GIF: a formula that reads them grades the GIF, then the blend puts
 //!   that onto the GIF again.
-//!
-//! The web app takes a saved look apart again by this shape (js/looks.js
-//! `saved`, a regex over the path's `; `-joined text, for a look whose
-//! formula that browser doesn't have): change both together.
 //!
 //! **A formula's own `look` line** (`look screen 40`,
 //! docs/research/formula-apps.md §2.1) is this composition written in the
@@ -191,6 +188,143 @@ fn look_statement(src: &str) -> Option<(usize, usize)> {
             return Some((start, (i + usize::from(b.get(i) == Some(&b';'))).min(b.len())));
         }
     }
+}
+
+/// A formula's `look` line set to `blend` at `amount` percent (`look`
+/// alone for over at 100, `look screen`, `look screen 40`, `look over
+/// 30`), or taken out when `blend` is empty: a text edit ([`declare`]),
+/// the one way the web app writes a look (its settings sheet). `None`
+/// for a blend that is not one of [`BLENDS`].
+pub fn set(src: &str, blend: &str, amount: u8) -> Option<String> {
+    if blend.is_empty() {
+        return Some(declare(src, "look", 0, ""));
+    }
+    if !BLENDS.contains(&blend) {
+        return None;
+    }
+    let amount = amount.min(100);
+    let mut l = String::from("look");
+    if blend != "over" || amount < 100 {
+        l.push(' ');
+        l.push_str(blend);
+    }
+    if amount < 100 {
+        l.push(' ');
+        decimal(&mut l, u32::from(amount), 0, 0);
+    }
+    Some(declare(src, "look", 0, &l))
+}
+
+/// `src` with its `nth` declaration whose first word is `word` (`name`,
+/// `about`, `control`, `look`; `nth` counts `control`s) replaced by
+/// `line`, taken out when `line` is empty, or — when there is none —
+/// `line` put in among the declarations at the top, in their usual order
+/// (`psi`, `name`, `about`, `control`, `look`). Text only: the result is
+/// not compiled (the caller does), and `line` is written as given. The
+/// declarations are the statements at the formula's top whose first word
+/// is one (blank lines and comments between them skipped), as the
+/// compiler requires them to be: each ends at its line's end or at a `;`
+/// outside quotes (a path's text has them all on one line, `; `-joined).
+#[inline(never)]
+pub fn declare(src: &str, word: &str, nth: usize, line: &str) -> String {
+    const ORDER: [&str; 5] = ["psi", "name", "about", "control", "look"];
+    let rank = |w: &str| ORDER.iter().position(|&o| o == w).unwrap_or(5);
+    let me = rank(word);
+    // (Bytes and `get`, never `[a..b]` of a str: a slice's panic brings
+    // core::fmt, ~8 KB gz of the web module.)
+    let b = src.as_bytes();
+    let part = |a: usize, e: usize| src.get(a..e).unwrap_or("");
+    // A statement: (start, end before its `;` or line break, past that).
+    // The match, and where a new one goes: after the last declaration
+    // ranked at or before `word` (and how it ended), else before the first.
+    let (mut found, mut after, mut first, mut seen, mut at) = (None, None, None, 0, 0);
+    while at < b.len() {
+        while at < b.len() && matches!(b[at], b' ' | b'\t' | b'\r' | b'\n' | b';') {
+            at += 1;
+        }
+        let i = at;
+        let mut e = i;
+        while e < b.len() && (b[e].is_ascii_alphanumeric() || b[e] == b'_') {
+            e += 1;
+        }
+        let w = part(i, e);
+        let mut k = e;
+        while k < b.len() && matches!(b[k], b' ' | b'\t') {
+            k += 1;
+        }
+        // Its end: `;` or the line's, outside quotes; a comment runs to
+        // the line's end.
+        let (mut end, mut quote) = (i, false);
+        while end < b.len() && b[end] != b'\n' && (quote || b[end] != b';') {
+            if !quote && matches!(b[end], b'-' | b'/') && b.get(end + 1) == Some(&b[end]) {
+                while end < b.len() && b[end] != b'\n' {
+                    end += 1;
+                }
+                break;
+            }
+            quote ^= b[end] == b'"';
+            end += 1;
+        }
+        let next = (end + 1).min(b.len());
+        if e == i && end > i && matches!(b[i], b'-' | b'/') && b.get(i + 1) == Some(&b[i]) {
+            // A comment alone.
+            at = next;
+            continue;
+        }
+        if i >= b.len() || rank(w) == 5 || b.get(k) == Some(&b'=') {
+            break;
+        }
+        first.get_or_insert(i);
+        if rank(w) <= me {
+            after = Some((next, b.get(end) == Some(&b';')));
+        }
+        if w == word {
+            if seen == nth {
+                found = Some((i, end, next));
+            }
+            seen += 1;
+        }
+        at = next;
+    }
+    let mut o = String::with_capacity(src.len() + line.len() + 2);
+    match found {
+        Some((a, e, next)) => {
+            o.push_str(part(0, a));
+            if line.is_empty() {
+                // The statement, its `;` or line break, the spaces after.
+                let mut n = next;
+                while b.get(e) == Some(&b';') && b.get(n) == Some(&b' ') {
+                    n += 1;
+                }
+                o.push_str(part(n, b.len()));
+            } else {
+                o.push_str(line);
+                o.push_str(part(e, b.len()));
+            }
+        }
+        None if line.is_empty() => o.push_str(src),
+        None => {
+            let (p, semi) = match after {
+                Some(x) => x,
+                None => (first.unwrap_or(0), false),
+            };
+            o.push_str(part(0, p));
+            if semi {
+                // On a `; `-joined line: one more statement there.
+                o.push(' ');
+                o.push_str(line);
+                o.push(';');
+            } else {
+                if p > 0 && b.get(p - 1) != Some(&b'\n') {
+                    o.push('\n');
+                }
+                o.push_str(line);
+                o.push('\n');
+            }
+            o.push_str(part(p, b.len()));
+        }
+    }
+    o
 }
 
 /// `whole.frac` with `frac` in `places` decimal places, trailing zeros

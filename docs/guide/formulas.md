@@ -459,35 +459,42 @@ On your player:
 - **Show over the panel’s GIF** draws it over whatever the panel is
   playing, until the playlist moves on (changes you make follow it there).
   Press it again to take it off.
-- **Use as the look** keeps it over every GIF the panel plays, before the
-  colour and the phosphor glow. Settings › Look shows which formula it is
-  (**Formula over every GIF**), changes it and turns it off (**None**).
+- **Set as the panel’s look** keeps it over every GIF the panel plays,
+  before the colour and the phosphor glow, for a formula that says it can
+  be a look (below). Settings › Look shows which formula it is (**Formula
+  over every GIF**), changes it and turns it off (**None**).
 
-**Any formula can be the look**, not only the ones that draw over a GIF:
-Use as the look and Settings › Look both have a **Blend** and an
-**Amount**. The blend says how the formula goes onto the GIF — **Over**
-(it covers it), **Screen** (it lightens: the GIF's bright parts stay and
-the formula shows in its dark ones), **Add**, **Multiply** (it darkens and
-tints), **Lighten** or **Darken** (the brighter or darker of the two) — and
-the amount how much of it shows, 0 to 100 %. A formula that draws over a
-GIF already starts at Over, 100 %: exactly as before. One that covers the
-whole panel, like Plasma, starts at Screen, 40 % (or Over, 30 % when that
-is lighter for the panel), and the preview shows the choice as you move it.
-A formula with layers of its own goes Over only (its layers keep their own
-blends).
+**Any formula can be the look** once its settings say so. In the editor,
+**⚙ Settings** (or **Settings…** in a formula's details) is one sheet for
+what the formula says about itself: its **Name**, a line **About** it, its
+**Controls** (a slider with its range, default and label, or a choice of
+words; three at most) and **Can be the panel’s look**. Every change there
+is a line at the top of the formula — `name "…"`, `about "…"`,
+`control …`, `look …` — so the text and the sheet always agree, and the
+formula carries them wherever it goes (a share link, a playlist, the
+panel). Turned on, the look has a **Blend** and an **Amount**. The blend
+says how the formula goes onto the GIF — **Over** (it covers it),
+**Screen** (it lightens: the GIF's bright parts stay and the formula shows
+in its dark ones), **Add**, **Multiply** (it darkens and tints),
+**Lighten** or **Darken** (the brighter or darker of the two) — and the
+amount how much of it shows, 0 to 100 %. A formula that draws over a GIF
+already starts at Over, 100 %. One that covers the whole panel, like
+Plasma, starts at Screen, 40 % (or Over, 30 % when that is lighter for the
+panel), and the preview shows the choice as you move it. A formula with
+layers of its own goes Over only (its layers keep their own blends).
 
-Settings lists all your formulas and all the examples. Over at 100 % of a
-formula that covers the whole panel would hide the GIF, so it is refused
-with a sentence saying so (choose a lower amount or another blend), and a
+Settings › Look lists your formulas and the bundled ones that can be a
+look, and says how the chosen one goes on; **Change…** opens its settings.
+Over at 100 % of a formula that covers the whole panel would hide the GIF,
+so the sheet says so (choose a lower amount or another blend), and a
 formula too heavy to draw over every GIF (more than about 12 ms a frame on
-the panel, the blend included) is listed as too heavy. Under the controls,
-Settings says how fast the look moves: about 50 times a second, or 25 for
-a heavy one (over 8 ms); the GIFs play at their own speed either way. Shared looks stand
-alone: the player is sent the formula with the blend written around it, so
-a look keeps working even after the formula is edited or deleted here.
-When the player is
-short of memory (several downloads at once, say) it shows the GIFs without
-the formula for a while.
+the panel, the blend included) is listed as too heavy. The sheet says how
+fast the look moves: about 50 times a second, or 25 for a heavy one (over
+8 ms); the GIFs play at their own speed either way. Looks stand alone: the
+player is sent the whole formula, so a look keeps working even after the
+formula is edited or deleted here. When the player is short of memory
+(several downloads at once, say) it shows the GIFs without the formula for
+a while.
 
 ## Keeping them fast
 

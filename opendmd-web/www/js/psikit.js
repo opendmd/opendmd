@@ -8,14 +8,22 @@
 export const MAX_SRC = 4096, MAX_NAME = 60;
 
 // A share link: `<base>#formula=<src>&name=<name>&a=…` (URLSearchParams),
-// with the values set (a slot left unset plays at the formula's default) of
-// the sliders the formula reads (`mask`: info()[5], bits 0-2).
-export function link(f, base, mask = 7) {
+// with the values set that differ from their control's default (`ctl`:
+// controls(); a slot left out plays at the default) of the controls the
+// formula declares or reads (without `ctl`: every value set).
+export function link(f, base, ctl) {
   const q = new URLSearchParams({ formula: f.src });
   if (f.name) q.set('name', f.name);
-  for (const [j, k] of ['a', 'b', 'c'].entries()) if (mask & (1 << j) && f[k] != null) q.set(k, +(+f[k]).toFixed(2));
+  for (const k of 'abc') if (f[k] != null && moved(ctl, f, k)) q.set(k, +(+f[k]).toFixed(2));
   return base + '#' + q;
 }
+// Whether `f[k]` is worth sending: its slot is read and the value isn't the
+// declared default (to 4 places, as a path writes it). Without `ctl`, yes.
+const moved = (ctl, f, k) => {
+  if (!ctl) return true;
+  const c = ctl.controls.find((c) => c.slot == k);
+  return !!c && +(+f[k]).toFixed(4) !== +(+c.default).toFixed(4);
+};
 // And back: `{f, cut, has}` — the source and the name cut to what a
 // formula can have (`cut` says the source was), the values as numbers
 // (`fit` holds them to the formula's ranges), `has` whether there was a
@@ -26,6 +34,10 @@ export function parse(s) {
   for (const k of 'abc') if (num(q.get(k)) != null) f[k] = num(q.get(k));
   return { f, cut: f.src !== src, has: q.has('formula') };
 }
+// Text for a declaration's quotes (`name`, `about`, a label): without `" <
+// > \`, control characters or ones that hide or reorder text (the compiler
+// refuses them), cut to `n` characters.
+export const declText = (v, n) => Array.from(v.replace(/["<>\\\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, '')).slice(0, n).join('').trim();
 // A slider's value from a link or a path (`a=-0.5`), as the panel reads one
 // (fx_psi `query`): a decimal number, maybe below zero, under 32,768; else
 // undefined — unset, so the formula's default.
@@ -56,6 +68,39 @@ export function compact(src) {
     if (code) out += (out ? '; ' : '') + code;
   }
   return out;
+}
+
+// The panel's path for a formula (fx_psi's `@formula?src=…`; what Show on
+// panel, a playlist line and the look send): compact(src) lightly encoded
+// (a space is `+`; `% & + # ?`, controls and non-ASCII as %XX), then the
+// values worth sending (`moved`). Over the panel's 2,048 B its `about` line
+// is left out first (psi-web's tests hold this to the compiler's compact).
+export function path(f, ctl) {
+  let c = compact(f.src), p = enc(c);
+  if (p.length > 2048) p = enc(noAbout(c));
+  for (const k of 'abc') if (f[k] != null && moved(ctl, f, k)) p += `&${k}=${+(+f[k]).toFixed(4)}`;
+  return p;
+}
+function enc(c) {
+  let p = '@formula?src=';
+  for (const b of new TextEncoder().encode(c)) {
+    const ch = String.fromCharCode(b);
+    p += b == 32 ? '+' : b > 32 && b < 127 && !'%&+#?'.includes(ch) ? ch : '%' + (b < 16 ? '0' : '') + b.toString(16).toUpperCase();
+  }
+  return p;
+}
+// Compact text without its `about "…"` statement: the declarations come
+// first, one statement each, their text in quotes holding no `"`.
+function noAbout(c) {
+  for (let i = 0; i < c.length;) {
+    const w = /^\w*/.exec(c.slice(i))[0];
+    if (!/^(psi|name|about|control|look)$/.test(w) || /^ ?=/.test(c.slice(i + w.length))) break;
+    let j = i, q = false;
+    while (j < c.length && (q || c.slice(j, j + 2) != '; ')) q = c[j++] == '"' ? !q : q;
+    if (w == 'about') return c.slice(0, i) + c.slice(j + 2);
+    i = j + 2;
+  }
+  return c;
 }
 
 // A slider's value for pkg-psi's frame(): Q16.16, or UNSET (the slot plays at
