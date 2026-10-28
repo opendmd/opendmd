@@ -5,20 +5,26 @@
 //!
 //! - **`always`** (the default since 1.0.0-beta.11): full speed while
 //!   nothing animates (night mode has the panel dark, or the player is
-//!   paused), and a slow **drip** while any GIF plays — a prepared one or an
-//!   original — except during a transition, or for a while after a late
-//!   frame ([`DripGuard`]). A fresh card gets its copies without a night
-//!   schedule.
+//!   paused), and a slow **drip** while a *prepared* GIF plays — not during
+//!   a transition or the new GIF's first [`SWITCH_WINDOW`], and not for a
+//!   while after a late frame the drip may have caused ([`DripGuard`]).
 //! - **`idle`**: full speed while nothing animates, never while playing.
 //! - **`off`**: never.
 //!
-//! **Why drip now runs over originals too.** It used to need a *prepared*
-//! file on screen: before the 512 B FatFs buffers (2026-10-24, ~30 KB back
-//! everywhere) an original playing left ~62-64 KB free, under the drip
-//! start threshold (`BUILDER_MIN_HEAP` + the task, 76.4 KB), while a copy
-//! left 76-80 KB. With them an original leaves ~92-94 KB, more than a copy
-//! did when the drip was designed and measured; the builder's own heap gate
-//! (start threshold, abort floor) is unchanged and still decides each file.
+//! **A fresh card gets ready while the panel is dark or paused; it plays
+//! fine as it is meanwhile.** The drip stays limited to prepared files:
+//! a drip over originals was tried (1.0.0-beta.11-builder-a, spare,
+//! 2026-10-28, `filelist.txt` with 2,714 of 10,162 prepared, 20 min against
+//! 20 min of `idle`). An original on that card leaves 56-79 KB free
+//! (median ~67 KB; the ~100 KB of the 512 B FatFs buffers' measurement was
+//! a 47-entry playlist of copies), against the drip's 76.4 KB start
+//! threshold; when it did start, the encoder took the heap to 23 KB free
+//! (floor 19.9 KB, against 45.9 KB without it), it made 135 files in the
+//! first 10 min and 9 in the next (`low memory`), and it cost +24 switch
+//! misses and 1 steady miss (`idle`: +0). The encoder (~48-53 KB on the
+//! device) plus its 20 KB margin plus the task does not fit beside an
+//! original's decoder; a threshold that would keep the playback floor
+//! would never let it start.
 //!
 //! **Older settings.** Every save writes every field, so a device that ever
 //! saved anything holds the old default `idle` without anyone having chosen
@@ -28,7 +34,8 @@
 
 use std::time::Duration;
 
-use crate::frametime::{When, HEADLINE_MS};
+use crate::frametime::HEADLINE_MS;
+pub use crate::frametime::SWITCH_WINDOW;
 
 /// The `auto_prepare` setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -36,7 +43,7 @@ use crate::frametime::{When, HEADLINE_MS};
 pub enum AutoPrepare {
     /// Only while nothing animates (night mode dark, paused).
     Idle = 0,
-    /// Also slowly while playing. The default.
+    /// Also slowly while a prepared GIF plays. The default.
     #[default]
     Always = 1,
     /// Never.
@@ -93,7 +100,7 @@ impl AutoPrepare {
 pub enum Pace {
     /// Nothing animates: as fast as the card allows.
     Full,
-    /// A GIF plays: a pause before every 2 KB of card work.
+    /// A prepared GIF plays: a pause before every 2 KB of card work.
     Drip,
     Stop(Hold),
 }
@@ -105,8 +112,11 @@ pub enum Hold {
     Off,
     /// `idle`, and a GIF plays.
     Playing,
-    /// A transition runs: its 24 KB and the encoder do not both fit.
+    /// A GIF change: a transition (its 24 KB and the encoder do not both
+    /// fit), or the new GIF's first [`SWITCH_WINDOW`].
     Transition,
+    /// An original plays: its decoder and the encoder do not both fit.
+    GifOnScreen,
     /// A late frame while dripping: held off for a while ([`DripGuard`]).
     LateFrame,
 }
@@ -120,6 +130,11 @@ pub struct Panel {
     pub paused: bool,
     /// A transition runs.
     pub transitioning: bool,
+    /// The GIF on screen went up less than [`SWITCH_WINDOW`] ago (or
+    /// nothing has yet): its first frames are the switch's.
+    pub settling: bool,
+    /// The GIF on screen is a prepared copy.
+    pub prepared: bool,
 }
 
 /// The pace for `mode` while the panel does what `panel` says; `late_hold`
@@ -130,7 +145,10 @@ pub fn pace(mode: AutoPrepare, panel: Panel, late_hold: bool) -> Pace {
         AutoPrepare::Off => Pace::Stop(Hold::Off),
         _ if panel.dark || panel.paused => Pace::Full,
         AutoPrepare::Idle => Pace::Stop(Hold::Playing),
-        AutoPrepare::Always if panel.transitioning => Pace::Stop(Hold::Transition),
+        AutoPrepare::Always if panel.transitioning || panel.settling => {
+            Pace::Stop(Hold::Transition)
+        }
+        AutoPrepare::Always if !panel.prepared => Pace::Stop(Hold::GifOnScreen),
         AutoPrepare::Always if late_hold => Pace::Stop(Hold::LateFrame),
         AutoPrepare::Always => Pace::Drip,
     }
@@ -144,11 +162,14 @@ pub const GUARD_MAX: Duration = Duration::from_secs(32 * 60);
 /// [`GUARD_FIRST`].
 pub const GUARD_FORGIVE: Duration = Duration::from_secs(60 * 60);
 
-/// The drip's safeguard: a frame a person could see late
-/// ([`counts`]) while the builder drips holds the drip off — a minute at
-/// first, doubling with each further one up to [`GUARD_MAX`], back to a
-/// minute after an hour without one. Full speed (nothing animates) is not
-/// affected. Times are on any monotonic clock (the firmware's boot epoch).
+/// The drip's safeguard: a frame a person could see late ([`counts`])
+/// while the builder drips, or at a GIF change that stopped it, holds the
+/// drip off — a minute at first, doubling with each further one up to
+/// [`GUARD_MAX`], back to a minute after an hour without one. Full speed
+/// (nothing animates) is not affected. Times are on any monotonic clock
+/// (the firmware's boot epoch). A drip that misses at every switch costs at
+/// most ~7 late frames in its first hour and 2 an hour after
+/// (`guard_bounds_a_drip_that_misses_at_every_switch`).
 #[derive(Clone, Debug, Default)]
 pub struct DripGuard {
     trips: u32,
@@ -157,11 +178,14 @@ pub struct DripGuard {
 }
 
 /// A late frame the guard reacts to: one a person could see
-/// ([`HEADLINE_MS`] or more) in steady play. A GIF change's own misses (the
-/// new file's open and first frame) are the switch's, and the builder has
-/// already been stopped for the open by then.
-pub fn counts(late_ms: u64, when: When) -> bool {
-    when == When::Steady && late_ms >= HEADLINE_MS
+/// ([`HEADLINE_MS`] or more), in steady play or at a GIF change — builder-a
+/// showed the drip's cost is mostly at the switches (the player's open
+/// waits for the builder to let go, and the next file is not opened ahead
+/// while its task is up). Whether the drip is to blame is the caller's
+/// part (firmware: the task was dripping, or let go of a drip, moments
+/// before).
+pub fn counts(late_ms: u64) -> bool {
+    late_ms >= HEADLINE_MS
 }
 
 impl DripGuard {
@@ -241,6 +265,8 @@ mod tests {
             dark,
             paused,
             transitioning,
+            settling: false,
+            prepared: true,
         }
     }
 
@@ -261,21 +287,58 @@ mod tests {
                 assert_eq!(pace(m, panel(true, false, false), late), Pace::Full);
             }
         }
-        // Playing: idle waits, always drips — over any GIF.
+        // Playing a prepared GIF: idle waits, always drips.
         assert_eq!(pace(Idle, playing, false), Pace::Stop(Hold::Playing));
         assert_eq!(pace(Always, playing, false), Pace::Drip);
-        // Not through a transition, nor while a late frame holds it off.
+        // Never over an original (builder-a: its decoder and the encoder
+        // do not both fit), dark or paused excepted.
+        let original = Panel { prepared: false, ..playing };
+        assert_eq!(pace(Always, original, false), Pace::Stop(Hold::GifOnScreen));
+        assert_eq!(pace(Idle, original, false), Pace::Stop(Hold::Playing));
+        assert_eq!(pace(Always, Panel { paused: true, ..original }, false), Pace::Full);
+        // Not through a transition or the new GIF's first frames, nor while
+        // a late frame holds it off.
         assert_eq!(pace(Always, moving, false), Pace::Stop(Hold::Transition));
+        let settling = Panel { settling: true, ..playing };
+        assert_eq!(pace(Always, settling, false), Pace::Stop(Hold::Transition));
         assert_eq!(pace(Always, playing, true), Pace::Stop(Hold::LateFrame));
     }
 
     #[test]
-    fn only_visible_steady_misses_count() {
-        assert!(counts(HEADLINE_MS, When::Steady));
-        assert!(counts(400, When::Steady));
-        assert!(!counts(HEADLINE_MS - 1, When::Steady));
-        assert!(!counts(0, When::Steady));
-        assert!(!counts(400, When::Switch));
+    fn only_visible_misses_count() {
+        assert!(counts(HEADLINE_MS));
+        assert!(counts(400));
+        assert!(!counts(HEADLINE_MS - 1));
+        assert!(!counts(0));
+    }
+
+    /// Late frames a drip that causes one at every GIF change can cost,
+    /// over `minutes`: builder-a's rate, +24 switch misses in 20 min of
+    /// dripping (one every 50 s), each counted while the drip is not held.
+    fn misses_with_guard(minutes: u64, every: Duration) -> u32 {
+        let mut g = DripGuard::new();
+        let (mut t, mut n) = (Duration::ZERO, 0);
+        while t < S(minutes * 60) {
+            if !g.held(t) {
+                g.late_frame(t);
+                n += 1;
+            }
+            t += every;
+        }
+        n
+    }
+
+    #[test]
+    fn guard_bounds_a_drip_that_misses_at_every_switch() {
+        // Unguarded that is 72 an hour; guarded, 7 in the first hour (at
+        // 0, 1, 3, 7, 15, 31 and ~63 min less the steps) and then one per
+        // 32 min hold: the hour never forgives while it keeps missing.
+        let first = misses_with_guard(60, S(50));
+        assert!(first <= 7, "{first} in the first hour");
+        let day = misses_with_guard(24 * 60, S(50));
+        assert!(day <= first + 2 * 23 + 1, "{day} in a day");
+        // Even one at every frame-ish second: the same bound.
+        assert!(misses_with_guard(60, S(1)) <= 7);
     }
 
     #[test]
