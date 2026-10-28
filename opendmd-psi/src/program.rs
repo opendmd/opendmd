@@ -1204,7 +1204,57 @@ impl Program {
     /// - the counter and the slots the body writes fit the lane
     ///   registers ([`REGS`]), with one to spare for a step that writes a
     ///   slot it reads.
+    ///
+    /// Decided once a program, after the compiler (`mark_lane_loops`, kept
+    /// on the FOR as [`LANES`]); this reads that mark and lays the
+    /// registers out (one pass over the body), each time a frame runs the
+    /// loop. The estimate reads the same.
     pub(crate) fn vector_loop(&self, at: usize) -> Option<VecLoop> {
+        let f = self.ops.get(at).filter(|o| o.code == code::FOR)?;
+        if f.c != LANES {
+            return None;
+        }
+        let end = f.b as usize;
+        let mut vl = VecLoop {
+            end,
+            count: (self.init[(f.a & 0x7f) as usize] >> 16) as u32,
+            regs: 1,
+            slot: [0; REGS + 1],
+        };
+        vl.slot[1] = f.d & 0x7f;
+        for op in &self.ops[at + 1..end] {
+            if code::writes_scalar(op.code) && vl.reg(op.d).is_none() {
+                vl.regs += 1;
+                vl.slot[(vl.regs as usize).min(REGS)] = op.d & 0x7f;
+            }
+        }
+        debug_assert_eq!(
+            Some((vl.end, vl.count, vl.regs, vl.slot)),
+            self.check_vector_loop(at)
+                .map(|v| (v.end, v.count, v.regs, v.slot))
+        );
+        Some(vl)
+    }
+
+    /// Mark each draw loop that may run as lanes (its FOR's `c`,
+    /// [`LANES`]): [`check_vector_loop`](Self::check_vector_loop) once a
+    /// program, after the compiler has laid it out (and narrowed and fused
+    /// its pixel steps, which it does not read).
+    pub(crate) fn mark_lane_loops(&mut self) {
+        let (fe, de) = (
+            self.frame_end as usize,
+            (self.draw_end as usize).min(MAX_OPS),
+        );
+        for at in fe.min(de)..de {
+            if self.ops[at].code == code::FOR {
+                let lanes = self.check_vector_loop(at).is_some();
+                self.ops[at].c = if lanes { LANES } else { 0 };
+            }
+        }
+    }
+
+    /// [`vector_loop`](Self::vector_loop)'s rules, checked.
+    fn check_vector_loop(&self, at: usize) -> Option<VecLoop> {
         let de = (self.draw_end as usize).min(MAX_OPS);
         let f = self.ops.get(at).filter(|o| o.code == code::FOR)?;
         let end = f.b as usize;
@@ -1266,7 +1316,10 @@ impl Program {
                 return None;
             }
             // A pick's choices are read through its table of slots, as
-            // scalars: none may be one the loop writes.
+            // scalars: none may be one the loop writes. (Unreachable from
+            // the compiler, kept as a guard: a pick with a choice worked
+            // out per turn is compares and selects, `Dag::pick`, so a
+            // PICK step's choices are all once-a-frame values.)
             if op.code == code::PICK
                 && (0..op.c as usize)
                     .any(|j| bit(self.init[(op.b as usize + j) & (MAX_SCALARS - 1)] as u8) != 0)
@@ -1278,7 +1331,9 @@ impl Program {
                 done |= bit(op.d);
             }
         }
-        // Lines and dots read nothing the body writes after them.
+        // Lines and dots read nothing the body writes after them. (Also
+        // unreachable from the compiler, which emits a body's values before
+        // its lines: a guard, as the turn cap in `draw::run`.)
         let mut later = 0u16;
         for op in body.iter().rev() {
             if prim(op.code) {
@@ -1303,6 +1358,10 @@ impl Program {
             })
     }
 }
+
+/// A draw loop's FOR's `c` when it runs as lanes
+/// ([`Program::vector_loop`]; 0 when a turn at a time).
+pub(crate) const LANES: u8 = 1;
 
 /// Turns a draw loop needs to run as lanes ([`Program::vector_loop`]):
 /// below it a turn at a time is as quick (each lane step works out a whole
@@ -1334,16 +1393,26 @@ pub(crate) fn lane_loop(c: u8) -> bool {
         ADD | SUB
             | MUL
             | DIV
+            | MOD
             | LT
+            | LE
             | GT
+            | GE
+            | EQ
+            | NE
             | AND
             | OR
             | MIN
             | MAX
             | HASH
+            | NEG
+            | NOT
             | ABS
             | FLOOR
             | FRAC
+            | SIN
+            | COS
+            | TAB
             | SELECT
             | CLAMP
     )
