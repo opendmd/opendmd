@@ -303,8 +303,13 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
             Word::Entry { v, .. } => rs(v),
             // (A memo starts again each row, as the VM's each lane.)
             Word::Init(_) => true,
-            // (Its choices are slots the pick names: any may be a row's.)
-            Word::Pick { .. } => true,
+            // (Its choice's slot, from the pick's table of slots: a row's
+            // only if a row step writes it; outside the choices, 0.)
+            Word::Pick { b, n, i, k, .. } => {
+                let m = (n as usize).min(PICK_MAX);
+                let choice = (i as usize) < m && rs((prog.init[(b as usize + i as usize) & (MAX_SCALARS - 1)] & 0x7f) as u8);
+                choice || rs(k)
+            }
             _ => false,
         })
         .collect();
@@ -794,8 +799,11 @@ impl<'a> Emitter<'a> {
         for it in self.items {
             if let Item::Step(op) = it {
                 let (v, n) = reads(it);
-                for &x in &v[..n] {
+                let cover = code::is_colour(op.code) && code::colour_parts(op.code).1.is_some();
+                for (j, &x) in v[..n].iter().enumerate() {
                     match x & !LANE {
+                        // (A layer's scalar coverage is read as `Cover`.)
+                        _ if !is_lane(x) && cover && j + 1 == n => note(Word::Cover(x)),
                         _ if !is_lane(x) => note(Word::Scalar(x)),
                         L_X | L_I => note(Word::Lane(x & !LANE)),
                         _ => {}
@@ -2040,9 +2048,11 @@ impl<'a> Emitter<'a> {
         c.s32i(i, CTX, memo);
         c.s32i(s, CTX, memo + 4);
         let keep = self.keep_save(k, &[]);
+        // (The palette into a11 first: its hoist may be a10 itself — Fable's
+        // review: a hoist read after a10 was written made 6·i the entry.)
+        self.load_word(11, pal);
         self.c.addx2(10, i, i);
-        let p = self.word_in(12, pal);
-        self.c.add(10, 10, p);
+        self.c.add(10, 10, 11);
         self.scale_miss(s, x, &keep)?;
         self.c.s32i(x, CTX, memo + 8);
         self.c.bind(hit);

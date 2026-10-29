@@ -684,6 +684,10 @@ fn helpers_draw_the_same_through_kernels() {
         // ...and a table past 8 entries, a lane pick of 9 (two immediates).
         "table T = 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9\ngray(T[x*9 + y*3 + t] + y)",
         "gray(pick(floor(x * 9 + t) % 9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, y, 0.8, x) + y)",
+        // Fable's phase-2 review: a palette hoisted in a10 read after a
+        // memo miss wrote a10 (an unscaled and a scaled layer of one palette).
+        "u = x * 0.5\nv = u + y\nq = v * x + u\nlayer { pal(fire, q) }\nlayer max { gray(y, 0.3) }\nlayer multiply { pal(fire, x) * 0.7 }",
+        "layer { pal(ice, x + t) }\nlayer screen { pal(ice, y) * (x * 0.9) }\nlayer add { pal(ice, x * y) * y }",
     ];
     let mut lowered = 0;
     for src in cases {

@@ -1354,21 +1354,19 @@ impl FormulaLook {
         let trial = self.jit.trialing();
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         let drawn = match self.jit.kernel_for(1, &self.prog) {
-            Some(k) => {
-                k.render(
-                    &self.prog,
-                    &mut b.scratch,
-                    b.ink.as_deref_mut(),
-                    None,
-                    &self.inputs,
-                    &tables(),
-                    Some(under.as_bytes()),
-                    rows,
-                    bytes,
-                    Some(&mut changed),
-                );
-                true
-            }
+            // (False when the VM drew it: the inputs out of range.)
+            Some(k) => k.render(
+                &self.prog,
+                &mut b.scratch,
+                b.ink.as_deref_mut(),
+                None,
+                &self.inputs,
+                &tables(),
+                Some(under.as_bytes()),
+                rows,
+                bytes,
+                Some(&mut changed),
+            ),
             None => false,
         };
         #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
@@ -1450,6 +1448,13 @@ impl FormulaLook {
             LOOK_STATS[1].store(ms, Ordering::Relaxed);
         }
         &mut b.out
+    }
+}
+
+impl Drop for FormulaLook {
+    fn drop(&mut self) {
+        // (The look's JIT status is its own: none once it goes.)
+        set_jit_status(1, false, "no look", 0);
     }
 }
 
@@ -1648,6 +1653,8 @@ mod jit {
             let Some(k) = self.jit.kernel_for(0, &self.prog) else {
                 return false;
             };
+            // (False when the inputs were out of range and the VM drew it:
+            // a trial frame counted as the VM's — Fable's review.)
             k.render(
                 &self.prog,
                 &mut self.scratch,
@@ -1659,8 +1666,7 @@ mod jit {
                 u32::MAX,
                 bytes,
                 changed,
-            );
-            true
+            )
         }
 
         pub(super) fn jit_check(&mut self, bytes: &[u8]) {
