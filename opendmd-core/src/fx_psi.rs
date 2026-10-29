@@ -14,7 +14,7 @@
 //! new one at each open.
 //!
 //! **Memory.** The program (2,876 B) and the VM's working memory
-//! ([`opendmd_psi::Scratch`], 8,192 B at 128 lanes) are one allocation made
+//! ([`opendmd_psi::Scratch`], 8,204 B at 128 lanes) are one allocation made
 //! when the path is opened, zeroed and filled in place (never built on the
 //! main task's stack); a formula that draws (`draw { }`) also has its
 //! canvas ([`opendmd_psi::Ink`], 4 KB), a second allocation made then. No
@@ -3235,7 +3235,8 @@ mod tests {
         );
         assert_eq!(
             FormulaLook::BUFFER_BYTES,
-            8192 + 12288 + std::mem::size_of::<LookBuffers>()
+            // (The scratch: 8 KB and racing the beam's three words.)
+            8192 + 3 * std::mem::size_of::<usize>() + 12288 + std::mem::size_of::<LookBuffers>()
         );
     }
 
