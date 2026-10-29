@@ -22,6 +22,10 @@ build URL serves. There the art index must also carry
   remembered), Submit to the gallery (GitHub's new-file address, whose file
   the gallery's own checker accepts; a too-long one falls back to copying),
   and a link with no formula;
+- Add to my panel: /f/'s (the same hand-off with `&add=1`), every gallery
+  tile's (a bundled one by name; asked once, then one press to the
+  display; Back never hands on again) and a short link's page (its text
+  and `?a=`; `?add=1` hands on at once);
 - the demo's Copy share link gives a /f/ link that opens there;
 - /art-index/v1/ (Create Art's game name index, not in the www pack): every
   platform's file published, the committed file byte for byte, served as
@@ -239,6 +243,17 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
             check(page.url.startswith("http://192.168.1.50/#formula="), "/f/: and used straight away the next time")
             page.go_back()
             page.wait_for_selector(F_READY, timeout=20000)
+            # Add to my panel: the same hand-off, marked for the panel to save it.
+            check(page.get_attribute("#f-add", "class") == "pri" and page.get_attribute("#f-open", "class") is None
+                  and page.inner_text("#f-add") == "Add to my panel", "/f/: Add to my panel is the first button, Open on my display beside it")
+            with page.expect_navigation():
+                page.click("#f-add")
+            got = params(page.url)
+            check(page.url.startswith("http://192.168.1.50/#formula=") and got["add"] == ["1"]
+                  and (got["formula"], got["name"]) == (want["formula"], want["name"]),
+                  f"/f/: Add to my panel hands it to the display to be saved ({page.url[:60]}…&add=1)")
+            page.go_back()
+            page.wait_for_selector(F_READY, timeout=20000)
             # Submit to the gallery: GitHub's new-file page with the file, which the checker accepts.
             page.click("#f-submit")
             check(page.is_visible("#f-sub") and page.input_value("#s-file") == "rings-img-src-x-onerror-window-pwned-1",
@@ -308,6 +323,79 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
     page.wait_for_timeout(500)
     check(page.input_value("#psi-src") == src and page.input_value("#psi-name") == name[:60],
           "/f/ -> the demo: the editor opens the formula")
+    page.context.close()
+
+
+def add_to_panel(browser, base: str, site: Path, errors: list[str]) -> None:
+    """Add to my panel, one press: every gallery tile has it (a bundled
+    Formula by name, `#bundled=<stem>&add=1`; the rest with their text),
+    leading through the Formula's page, which asks for the display's
+    address the first time and afterwards hands straight on (a top-level
+    navigation, `http://<addr>/#…&add=1`); the way back is the page without
+    the mark. A short link's page (/f/<id>, its Formula in #f-data, as the
+    Worker writes it: here a route) hands over its text and sliders, and
+    `?add=1` on it hands on at once."""
+    every = examples()
+    page = new_page(browser, "laptop", errors)
+    seen: list[str] = []
+    page.context.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body="<p>display</p>", content_type="text/html")))
+    page.goto(f"{base}/formulas/")
+    page.wait_for_selector(".ftile", timeout=20000)
+    adds = page.eval_on_selector_all("#examples ~ ul .ftile .facts a.add", "els => els.map(e => [e.textContent, e.getAttribute('href')])")
+    good = len(adds) == len(every) and all(
+        t == "Add to my panel" and (h == f"../f/#bundled={e['slug']}&add=1" if e["bundle"]
+                                    else h.startswith("../f/#formula=") and h.endswith("&add=1"))
+        for (t, h), e in zip(adds, every))
+    community = page.eval_on_selector_all("#community + ul .ftile", "els => els.map(e => e.querySelector('.facts a.add')?.getAttribute('href') || '')")
+    check(good and all(h.endswith("&add=1") for h in community),
+          f"gallery: Add to my panel on every tile ({len(adds)} examples, {len(community)} from the community), a bundled one by name")
+    i = next(k for k, e in enumerate(every) if e["bundle"])
+    page.locator("#examples ~ ul .ftile").nth(i).locator("a.add").click()
+    page.wait_for_selector("#f-ask:not([hidden])", timeout=20000)
+    check(page.inner_text("#f-go") == "Add" and page.input_value("#f-addr") == "opendmd.local" and not seen
+          and "saved on your display" in page.inner_text("#f-ask"),
+          "gallery -> Add to my panel, no address yet: the Formula's page asks for it (opendmd.local)")
+    page.fill("#f-addr", "192.168.1.50")
+    with page.expect_navigation():
+        page.click("#f-go")
+    check(page.url == f"http://192.168.1.50/#bundled={every[i]['slug']}&add=1",
+          f"gallery -> Add to my panel: a bundled one goes to the display by name ({page.url})")
+    page.goto(f"{base}/formulas/")
+    page.wait_for_selector(".ftile", timeout=20000)
+    j = next(k for k, e in enumerate(every) if not e["bundle"])
+    with page.expect_navigation(url=re.compile(r"^http://192\.168\.1\.50/"), timeout=20000):
+        page.locator("#examples ~ ul .ftile").nth(j).locator("a.add").click()
+    q = params(page.url)
+    check(q.get("formula", [""])[0].strip() == every[j]["src"].strip() and q.get("name") == [every[j]["name"]] and q.get("add") == ["1"],
+          f"gallery -> Add to my panel, the address known: one press to the display, with the text ({every[j]['name']})")
+    # Back: the gallery (the hand-off replaced the Formula's page, a
+    # navigation before it had loaded) or that page without the mark; never
+    # handed on again.
+    n = len(seen)
+    page.go_back()
+    page.wait_for_load_state()
+    page.wait_for_timeout(1000)
+    check(page.url.startswith(base) and "add=1" not in page.url and len(seen) == n,
+          f"gallery -> Add to my panel: back is the site, not handed on again ({page.url[len(base):][:40]})")
+    # A short link's page.
+    sid, src = "abcdefghjk", 'name "Short ramp"\ncontrol level 0..1 = 0.3 "Level"\nloop 4\ngray(saw(x - t/4) * level)'
+    data = json.dumps({"id": sid, "src": src, "name": "Short ramp"}).replace("<", "\\u003c")
+    html_text = (site / "f/index.html").read_text().replace("</head>", f'<script type="application/json" id="f-data">{data}</script></head>')
+    page.route(re.compile(re.escape(f"{base}/f/{sid}") + r"(\?.*)?$"), lambda r: r.fulfill(body=html_text, content_type="text/html"))
+    page.goto(f"{base}/f/{sid}?a=0.5")
+    page.wait_for_selector(F_READY, timeout=20000)
+    with page.expect_navigation():
+        page.click("#f-add")
+    check(params(page.url) == {"formula": [src], "name": ["Short ramp"], "a": ["0.5"], "add": ["1"]},
+          f"short link: Add to my panel hands over its text and slider ({page.url[:70]}…)")
+    page.goto(f"{base}/f/{sid}")
+    page.wait_for_selector(F_READY, timeout=20000)
+    with page.expect_navigation(url=re.compile(r"^http://192\.168\.1\.50/"), timeout=20000):
+        page.goto(f"{base}/f/{sid}?add=1", wait_until="commit")
+    check(params(page.url) == {"formula": [src], "name": ["Short ramp"], "add": ["1"]}, "short link: ?add=1 hands on at once")
+    page.go_back()
+    page.wait_for_selector(F_READY, timeout=20000)
+    check(page.url == f"{base}/f/{sid}", f"short link: back is its page, without the mark ({page.url})")
     page.context.close()
 
 
@@ -642,10 +730,10 @@ def gallery(browser, base: str, errors: list[str], shots: Path | None) -> None:
                 const c = document.createElement('canvas'); c.width = 128; c.height = 32; const x = c.getContext('2d'); x.drawImage(i, 0, 0);
                 const d = x.getImageData(0, 0, 128, 32).data; for (let k = 0; k < d.length; k += 4) if (d[k] + d[k+1] + d[k+2] > 90) return false; return true; }).length""")
             check(dark == 0, f"gallery: every thumbnail lit ({dark} dark)")
-            remix = page.locator("#examples ~ ul .ftile").nth(0).locator(".facts a.alt").get_attribute("href")
+            remix = page.locator("#examples ~ ul .ftile").nth(0).locator(".facts a.alt", has_text="Remix").get_attribute("href")
             check(remix.startswith("../demo/#formula=") and "remix" in urllib.parse.unquote_plus(remix),
                   "gallery: Remix opens it in the demo")
-            page.locator("#examples ~ ul .ftile").nth(5).locator(".facts a:not(.alt)").click()
+            page.locator("#examples ~ ul .ftile").nth(5).locator(".facts a.alt", has_text="Open").click()
             page.wait_for_selector(F_READY, timeout=20000)
             e = every[5]
             about = re.search(r'^about "([^"]*)"', e["src"], re.M).group(1)
@@ -786,6 +874,8 @@ def main() -> int:
         art_index(browser, base, a.site, errors, cors_expected=bool(a.base))
         print("the gallery (/formulas/)")
         gallery(browser, base, errors, a.shots)
+        print("Add to my panel (the gallery, /f/, a short link)")
+        add_to_panel(browser, base, a.site, errors)
         print("the HTTP API (dev/api.html, dev/api/)")
         api_pages(browser, a.site, a.dist, a.art, errors)
         print("install page")

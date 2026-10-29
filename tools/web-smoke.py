@@ -3534,6 +3534,7 @@ def mock_pass(browser) -> None:
         formulas_checks(browser, base, errors)
         formulas_panel_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
+        formulas_add_checks(browser, base, overlay, errors)
         formulas_over_checks(browser, base, errors)
         looks_checks(browser, base, errors)
         find_checks(page)
@@ -4030,6 +4031,112 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
             got = e.code
         check(got == code, f"formulas playlist: {path} is a {got}")
     for name in ("sets/psitest.txt", "formulas/smoke-ramp.psi", "formulas/kept-here.psi"):
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files/" + name, method="DELETE"), timeout=30)
+
+
+def formulas_add_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Add to my panel: the site hands a Formula over as `#formula=…&add=1`
+    (or `#bundled=<stem>&add=1`). One from the gallery is saved on the panel
+    (/formulas/<stem>.psi, a `name` line from the link when it has none of
+    its own), not twice; a bundled one needs no saving. Then the sheet:
+    Play now (the mock plays it by its file or name), Add to a playlist (the
+    picker, a line naming it), Use as the look (only one that declares
+    `look`). A Formula that doesn't compile or is too long says so in plain
+    words, saves nothing, and offers the editor."""
+    src = (REPO / "opendmd-web/formulas/searchlight.psi").read_text().split("\n", 2)[2]
+    gif = card_gifs()[0]
+    put_text(base + "/api/sets/addtest", gif + "\n")
+    expected.append("/api/play")
+    f = overlay / "formulas" / "searchlight.psi"
+    if f.exists():
+        f.unlink()
+    page = new_page(browser, "laptop", errors)
+
+    def arrive(q: dict) -> None:
+        page.goto("about:blank")
+        page.goto(base + "/#" + urllib.parse.urlencode({**q, "add": "1"}))
+        page.wait_for_selector("#psi-added", timeout=20000)
+
+    # A gallery Formula (it declares `look` and a control), a slider moved on the site.
+    arrive({"formula": src, "name": "Searchlight", "a": "0.6"})
+    head = page.inner_text("#psi-added .mh")
+    check(head == "Added to your panel" and page.inner_text("#psi-added-name") == "Searchlight"
+          and f.exists() and f.read_text() == src and page.evaluate("location.hash") == "#formulas",
+          f"add to panel: a gallery Formula is saved on the panel as /formulas/searchlight.psi ('{head}')")
+    page.wait_for_function("document.querySelector('#psi-d-title')?.textContent == 'Searchlight'", timeout=10000)
+    check(page.locator("#psi-mine .psi-tile[data-name='Searchlight']").count() == 1,
+          "add to panel: its details behind the sheet, under Your formulas")
+    check(page.is_visible("#psi-added-play") and page.is_visible("#psi-added-pl") and page.is_visible("#psi-added-look"),
+          "add to panel: the sheet offers Play now, Add to a playlist, Use as the look")
+    shot(page, "formulas-added", "laptop")
+    clear_toasts(page)
+    page.click("#psi-added-play")
+    t = last_toast(page, "ok")
+    want = "/formulas/searchlight.psi?a=0.6"
+    cur = wait_playing(base, want)
+    check(t == "On the panel: Searchlight" and cur == want and page.locator("#psi-added").count() == 0,
+          f"add to panel: Play now plays it by its file, with the slider ({cur}, '{t}')")
+    # Again: the same text is not saved twice.
+    arrive({"formula": src, "name": "Searchlight", "a": "0.6"})
+    head = page.inner_text("#psi-added .mh")
+    check(head == "Already on your panel" and sorted(p.name for p in (overlay / "formulas").glob("searchlight*")) == ["searchlight.psi"],
+          f"add to panel: the same Formula again is not saved twice ('{head}')")
+    clear_toasts(page)
+    page.click("#psi-added-pl")
+    page.wait_for_selector("#psi-pl-menu", timeout=5000)
+    page.click("#psi-pl-menu [data-path='/sets/addtest.txt']")
+    t = last_toast(page, "ok")
+    lines = (overlay / "sets" / "addtest.txt").read_text().split("\n")
+    check(t == "1 added to “addtest”" and lines == [gif, want, ""], f"add to panel: Add to a playlist names it by its file ({lines[1:]}, '{t}')")
+    arrive({"formula": src, "name": "Searchlight", "a": "0.6"})
+    clear_toasts(page)
+    page.click("#psi-added-look")
+    t = last_toast(page, "ok")
+    c = get_json(base + "/api/config")
+    check(c["look_formula"] == want and t.startswith("“Searchlight” is the panel’s look now"),
+          f"add to panel: Use as the look sets it by its file ({c['look_formula']!r})")
+    put_json(base + "/api/config", {"look_formula": ""})
+    # One with no `name` line: the link's name is written in as one.
+    arrive({"formula": "loop 4\ngray(saw(x - t/4))", "name": "Smoke ramp add"})
+    g = overlay / "formulas" / "smoke-ramp-add.psi"
+    check(g.exists() and g.read_text() == 'name "Smoke ramp add"\nloop 4\ngray(saw(x - t/4))' and page.locator("#psi-added-look").count() == 0,
+          f"add to panel: the link's name becomes its name line; no look offered ({g.exists() and g.read_text()[:30]!r})")
+    # A bundled one: nothing saved, by its name.
+    n0 = len(list((overlay / "formulas").glob("*.psi")))
+    arrive({"bundled": "starfield"})
+    head = page.inner_text("#psi-added .mh")
+    check(head == "It comes with your panel" and page.inner_text("#psi-added-name") == "Starfield"
+          and len(list((overlay / "formulas").glob("*.psi"))) == n0 and page.locator("#psi-added-look").count() == 0,
+          f"add to panel: a bundled Formula needs no saving ('{head}')")
+    page.wait_for_function("document.querySelector('#psi-d-title')?.textContent == 'Starfield'", timeout=10000)
+    clear_toasts(page)
+    page.click("#psi-added-play")
+    last_toast(page, "ok")
+    cur = wait_playing(base, "@formula:starfield")
+    check(cur == "@formula:starfield", f"add to panel: Play now plays a bundled one by name ({cur})")
+    arrive({"bundled": "vignette"})
+    clear_toasts(page)
+    page.click("#psi-added-look")
+    last_toast(page, "ok")
+    c = get_json(base + "/api/config")
+    check(c["look_formula"] == "@formula:vignette", f"add to panel: a bundled look by name ({c['look_formula']!r})")
+    put_json(base + "/api/config", {"look_formula": ""})
+    # What can go wrong, said plainly; nothing saved.
+    n0 = len(list((overlay / "formulas").glob("*.psi")))
+    arrive({"formula": "loop 4\ngray(x +)", "name": "Broken add"})
+    why = page.inner_text("#psi-added-why")
+    check(page.inner_text("#psi-added .mh") == "Couldn’t add it to your panel" and "doesn’t work" in why and "line 2" in why
+          and len(list((overlay / "formulas").glob("*.psi"))) == n0, f"add to panel: one that doesn't compile says so ('{why}')")
+    page.click("#psi-added-edit")
+    page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
+    check(page.input_value("#psi-src") == "loop 4\ngray(x +)", "add to panel: and opens in the editor on request")
+    arrive({"formula": "gray(x)\n" + "v = x\n" * 1500, "name": "Huge add"})
+    why = page.inner_text("#psi-added-why")
+    check("too long for the panel" in why and "8 KB" in why and len(list((overlay / "formulas").glob("*.psi"))) == n0,
+          f"add to panel: one too long for the panel says so ('{why}')")
+    page.click("#psi-added-done")
+    page.context.close()
+    for name in ("sets/addtest.txt", "formulas/searchlight.psi", "formulas/smoke-ramp-add.psi"):
         urllib.request.urlopen(urllib.request.Request(base + "/api/files/" + name, method="DELETE"), timeout=30)
 
 
@@ -6550,6 +6657,13 @@ def sd_unreadable_pass(browser) -> None:
         check(card == ["Not readable: needs FAT32", True], f"unreadable card: Settings › Device's Card line says so, in red ({card})")
         goto_view(page, "now")
         shot(page, "now-sd-unreadable", "laptop")
+        # Add to my panel with a card it can't read: said, nothing saved.
+        page.goto(base + "/#" + urllib.parse.urlencode({"formula": "gray(x)", "name": "No card add", "add": "1"}))
+        page.wait_for_selector("#psi-added-why", timeout=20000)
+        why = page.inner_text("#psi-added-why")
+        check("can’t read its card" in why, f"unreadable card: Add to my panel says the card can't be read ('{why}')")
+        page.click("#psi-added-done")
+        goto_view(page, "now")
         code, reply = put_www(base, (REPO / "opendmd-web" / "www.pack").read_bytes())
         check(code == 200 and reply is not None and reply.get("staged") is False,
               f"unreadable card: PUT /api/www is not staged ({code}, staged {reply and reply.get('staged')})")
