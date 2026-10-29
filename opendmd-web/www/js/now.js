@@ -11,7 +11,7 @@ import { PanelPreview, lookControls } from './preview.js';
 import { bannerFor } from './schedule.js';
 import { followLine } from './follow.js';
 import { Overrides, moreButton, fav } from './overrides.js';
-import { h, clear, on, store, debounce, toast, label, niceName, flagName, brightSlider } from './util.js';
+import { h, clear, on, store, debounce, toast, label, niceName, flagName, brightSlider, drawn } from './util.js';
 
 const POLL_MS = 500;
 
@@ -23,7 +23,7 @@ function favButton() {
   const ov = new Overrides(), b = h('button.more', { id: 'now-fav', hidden: true, onclick: () => ov.set(b.p, fav) });
   b.ov = ov;
   b.set = (p, list) => {
-    b.hidden = !(b.p = p) || p[0] == '@' || !list;
+    b.hidden = !(b.p = p) || drawn(p) || !list;
     if (list && list != ov.path) ov.load(list);
     const on = ov.get(p)?.w > 1;
     b.textContent = on ? '★' : '☆';
@@ -71,7 +71,7 @@ function recentCard(prev, pick, fb) {
       const x = editFor(p);
       return h('div' + (k === at ? '.cur' : ''), { onclick: () => pick(p), 'data-path': p }, h('span.grow', label(e)), h('span.muted', tags(e)),
         x && h('button.more', { title: 'Edit in ' + x[0], 'aria-label': 'Edit in ' + x[0], onclick: (ev) => { ev.stopPropagation(); x[1](); } }, '✎'),
-        fb.ov.path && p[0] != '@' && moreButton(fb.ov, p));
+        fb.ov.path && !drawn(p) && moreButton(fb.ov, p));
     }));
   };
   return card;
@@ -199,7 +199,7 @@ function mountDevice(el) {
     if (!s) return;
     const np = s.now_playing;
     // A virtual file (`@…`: Follow RePlayOS's cards) shows its title only.
-    const virt = np.path?.startsWith('@');
+    const virt = !!np.path && drawn(np.path);
     const e = app.wasm.parsePath(virt ? '' : np.path || '');
     // Why the playlist is empty; "No card" once a mount has failed.
     const sd = s.sd, unreadable = sd.mounted && sd.readable === false;
@@ -329,7 +329,7 @@ function mountLocal(el) {
     if (!list.length || tries > list.length) return;
     i = (i + 1) % list.length;
     const path = list[i];
-    if (path[0] !== '@' ? !src.files.has(path) : path.startsWith('@formula?')) return next(tries + 1);
+    if (path[0] !== '@' ? !src.files.has(path) || drawn(path) : path.startsWith('@formula')) return next(tries + 1);
     line.textContent = `· ${i + 1} of ${list.length}`;
     await show(path, 1);
   }

@@ -1506,6 +1506,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
     server.route("/sets/*", Method::Get, |req| {
         serve_under(req, config::SD_MOUNT, stream::QUEUE_WAIT)
     })?;
+    // The user's Formulas (`/formulas/<stem>.psi`: the web app lists and
+    // reads them, and writes them through `PUT /api/files/formulas/…`).
+    server.route("/formulas/*", Method::Get, |req| {
+        serve_under(req, config::SD_MOUNT, stream::QUEUE_WAIT)
+    })?;
     // The playback cache: prepared copies, `cache/<Category>/<xx>/<name>.gif`
     // (the device's own builder, `opendmd-pack convert`, or the web app).
     server.route("/cache/*", Method::Get, |req| {
