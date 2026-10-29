@@ -232,10 +232,9 @@ const ROAD_ONLY: bool = false;
 /// in the looks, 225 s in, and the spike's own rows were done long before).
 const JIT_ONLY: bool = false;
 
-/// Only the JIT's phase-1 rows (`jit1_probe`: the goldens through kernels,
-/// the per-step costs, the examples as effects JIT against VM), then the
-/// play lines. The full probe runs out of heap; these run first and alone.
-const JIT1_ONLY: bool = false;
+/// Only the JIT's rows (`jit2::probe`: the goldens through kernels, the
+/// examples as effects and the looks JIT against VM), then the play lines. The full probe runs out of heap; these run first and alone.
+const JIT2_ONLY: bool = false;
 
 /// Endless road and its variants one at a time (each source made, run and
 /// dropped before the next), splits, then Starfield and Time gate as
@@ -1927,8 +1926,8 @@ pub fn run(root: &str) {
         return;
     }
     #[cfg(feature = "jit")]
-    if JIT1_ONLY {
-        jit1::probe(root, start, stack0);
+    if JIT2_ONLY {
+        jit2::probe(root, start, stack0);
         return;
     }
     if JIT_ONLY {
@@ -2123,6 +2122,15 @@ pub fn run(root: &str) {
                 "psi-probe: golden {name} (drawn) at {ms} ms: {got:#018x}, host/wasm {want:#018x}"
             );
         }
+    }
+    drop(ink);
+    // The same goldens through the JIT's kernels (the emulator lane's
+    // check of the generated code; their own line, counted here too).
+    #[cfg(feature = "jit")]
+    {
+        let (o, b) = jit2::goldens(&mut out);
+        ok += o;
+        bad += b;
     }
     say!(
         info,
@@ -2434,40 +2442,52 @@ pub fn run(root: &str) {
     play::start(format!("{root}/{REPORT_NAME}"));
 }
 
-/// The JIT's phase-1 rows (docs/research/psi-jit-esp32.md, "Phase 1 as
-/// built"): one source at a time, each made, run and dropped before the
-/// next.
+/// The JIT's rows (docs/research/psi-jit-esp32.md, "Phase 2 as built"):
+/// the goldens through kernels (also in the full probe, for the emulator
+/// lane), then one source at a time, each made, run and dropped before the
+/// next: the examples as effects JIT against VM with their frame splits,
+/// the looks over a changing picture JIT against VM.
 #[cfg(feature = "jit")]
-mod jit1 {
+pub(crate) mod jit2 {
     use super::*;
 
     const TUNNEL: &str = include_str!("../../opendmd-web/formulas/tunnel.psi");
     const FLOOR: &str = include_str!("../../opendmd-web/formulas/rotozoom-floor.psi");
     const ROTOZOOM: &str = include_str!("../../opendmd-web/formulas/rotozoom.psi");
     const STARFIELD: &str = include_str!("../../opendmd-web/formulas/starfield.psi");
+    const CUBE: &str = include_str!("../../opendmd-web/formulas/wireframe-cube.psi");
     const PLASMA_LETTERS: &str = include_str!("../../opendmd-web/formulas/plasma-letters.psi");
+    const OLD_TV: &str = include_str!("../../opendmd-web/formulas/old-tv.psi");
     const PLASMA: &str = include_str!("../../opendmd-web/formulas/plasma.psi");
     const FIRE: &str = include_str!("../../opendmd-web/formulas/fire.psi");
-    const MATRIX: &str = include_str!("../../opendmd-web/formulas/matrix.psi");
+    const ROAD_FULL: &str = include_str!("../../opendmd-web/experiments/road-life/road-full.psi");
 
     fn exec_line(what: &str) {
         let (free, big) = exec_heap();
-        say!(info, "psi-probe: jit1: {what}: exec heap {free} B free, largest block {big} B; data heap {} B free", heap());
+        say!(info, "psi-probe: jit2: {what}: exec heap {free} B free, largest block {big} B; data heap {} B free", heap());
     }
 
-    /// The golden frames through kernels (the host's hashes), plain and
-    /// with the still cache kept and then drawn from; refusals counted.
-    fn goldens(out: &mut [u8]) {
+    /// The golden frames through kernels against the host's hashes: plain
+    /// (and with the still cache kept, then drawn from), over the picture,
+    /// drawn (with a canvas); each kernel also self-checked against the
+    /// VM's frame. (matched, differing).
+    pub(crate) fn goldens(out: &mut [u8]) -> (u32, u32) {
         let t = fx_psi::tables();
         let mut s = zeroed::<psi::Scratch<128>>();
         s.reset();
         let mut prog = zeroed::<psi::Program>();
-        let (mut ok, mut bad, mut vm) = (0, 0, 0);
+        let mut under = vec![0u8; psi::W * psi::H * 3];
+        psi::golden::picture(&mut under);
+        let mut ink = psi::Ink::boxed();
+        let (mut ok, mut bad, mut vm) = (0u32, 0u32, 0u32);
         let mut why: Vec<(&str, u32)> = Vec::new();
         let mut code = 0usize;
-        for &(name, src, ms, want) in psi::golden::FRAMES {
+        let plain = psi::golden::FRAMES.iter().map(|&(n, src, ms, want)| (n, src, ms, false, want, false));
+        let over = psi::golden::OVER.iter().map(|&(n, src, ms, o, want)| (n, src, ms, o, want, false));
+        let drawn = psi::golden::DRAWN.iter().map(|&(n, src, ms, o, want)| (n, src, ms, o, want, true));
+        for (name, src, ms, o, want, draws) in plain.chain(over).chain(drawn) {
             if compile(src, &mut prog, true, true).is_err() {
-                say!(error, "psi-probe: jit1: golden {name}: does not compile");
+                say!(error, "psi-probe: jit2: golden {name}: does not compile");
                 bad += 1;
                 continue;
             }
@@ -2484,14 +2504,15 @@ mod jit1 {
             };
             code += k.code_bytes();
             let inputs = psi::golden::inputs(ms);
+            let u = o.then_some(under.as_slice());
             let mut passes: Vec<(&str, u64, bool)> = Vec::new();
-            let drew = k.render(&prog, &mut s, None, &inputs, &t, out);
+            let drew = k.render(&prog, &mut s, draws.then_some(&mut *ink), None, &inputs, &t, u, u32::MAX, out, None);
             passes.push(("kernel", psi::golden::fnv(out), drew));
             if prog.still_lanes() > 0 {
                 let mut st = psi::Still::new();
                 if st.take(&prog) {
                     for pass in ["kernel, still kept", "kernel, still cached"] {
-                        let drew = k.render(&prog, &mut s, Some(&mut st), &inputs, &t, out);
+                        let drew = k.render(&prog, &mut s, None, Some(&mut st), &inputs, &t, u, u32::MAX, out, None);
                         passes.push((pass, psi::golden::fnv(out), drew));
                     }
                 }
@@ -2501,150 +2522,101 @@ mod jit1 {
                     ok += 1;
                 } else {
                     bad += 1;
-                    say!(error, "psi-probe: jit1: golden {name} ({pass}{}) at {ms} ms: {got:#018x}, host/wasm {want:#018x}",
+                    say!(error, "psi-probe: jit2: golden {name} ({pass}{}) at {ms} ms: {got:#018x}, host/wasm {want:#018x}",
                         if drew { "" } else { ", the VM drew it: a checked frame" });
                 }
             }
             // The player's self-check against the VM's frame.
-            psi::render_with::<128>(&prog, &mut s, &inputs, &t, out);
-            if let Err((row, x)) = k.check(&prog, &mut s, &inputs, &t, out) {
+            psi::render_rows_ink::<128>(&prog, &mut s, draws.then_some(&mut *ink), &inputs, &t, u, u32::MAX, out);
+            if let Err((row, x)) = k.check(&prog, &mut s, draws.then_some(&mut *ink), &inputs, &t, u, out) {
                 bad += 1;
-                say!(error, "psi-probe: jit1: golden {name}: the self-check found row {row} differing at x = {x}");
+                say!(error, "psi-probe: jit2: golden {name}: the self-check found row {row} differing at x = {x}");
             }
         }
         say!(info,
-            "psi-probe: jit1: golden frames through kernels: {ok} match the host/wasm hashes, {bad} differ{}; {vm} on the VM {why:?}; {code} B of code in all",
+            "psi-probe: jit2: golden frames through kernels: {ok} match the host/wasm hashes, {bad} differ{}; {vm} on the VM {why:?}; {code} B of code in all",
             if bad == 0 { " (bit-identical)" } else { "" }
         );
+        (ok, bad)
     }
 
-    /// Per-step costs, kernel against VM (each formula laid out plain and
-    /// narrowed, as the estimate's step table): ns a pixel each.
-    fn steps(out: &mut [u8]) {
-        const STEPS: [(&str, &str); 34] = [
-            ("base gray(x)", "gray(x)"),
-            ("add_w", "gray(x + t)"),
-            ("sub_w", "gray(x - t)"),
-            ("mul_w", "gray(px * t)"),
-            ("mul_n", "gray(x * (t * 0.01))"),
-            ("shr (+add_w)", "gray((x + t) / 4)"),
-            ("add (checked)", "gray(x*t*300 + t*1000)"),
-            ("mul (checked)", "gray(px * px * t)"),
-            ("floor (+mul)", "gray(floor(x * 8 + t) / 8)"),
-            ("frac (+mul)", "gray(frac(x * 4 + t))"),
-            ("mask", "gray(x % 0.25 + t)"),
-            ("abs (+sub)", "gray(abs(x - t))"),
-            ("min (+add)", "gray(min(x, y + t))"),
-            ("lt (+select)", "gray(x < t ? x : 0.5)"),
-            ("and (+2 cmp)", "gray(x < t and y > 0.5)"),
-            ("clamp (+add)", "gray(clamp(x + t, 0.2, 0.8))"),
-            ("sin (+add)", "gray(sin(x + t))"),
-            ("cos (+add)", "gray(cos(x + t))"),
-            ("tri (+add)", "gray(tri(x + t))"),
-            ("saw (+add)", "gray(saw(x + t))"),
-            ("div (+add)", "gray(x / (x + t))"),
-            ("mod 0.3", "gray(x % 0.3)"),
-            ("sqrt (+add)", "gray(sqrt(x + t))"),
-            ("len (+add)", "gray(len(x, x + t))"),
-            ("atan2 (+sub)", "gray(atan2(y - 0.5, x - t))"),
-            ("noise (+mul)", "gray(noise(x * 8, y, t))"),
-            ("noise flat (+mul)", "gray(noise(x * 8, y, 3))"),
-            ("mix (+add)", "gray(mix(x, y, t))"),
-            ("out rgb", "rgb(x, y, t)"),
-            ("out hsv", "hsv(x, 1, 1)"),
-            ("out pal", "pal(fire, x)"),
-            ("out pal * k (+mul)", "pal(fire, x) * (x * 0.9)"),
-            ("pal_select (row scale)", "cc = (floor(px*py*0.01 + t) + floor(py*0.3 - px*0.2)) % 2\npal(fire, cc ? 0.3 : 0.7) * (py/31)"),
-            ("pal_pick", "pal(rainbow, pick(floor(px*0.07 + py*0.3) % 9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, t/8, 0.8, 0.9))"),
-        ];
+    /// The golden frames through the VM (plain, over the picture, drawn).
+    fn vm_goldens(out: &mut [u8]) -> (u32, u32) {
         let t = fx_psi::tables();
         let mut s = zeroed::<psi::Scratch<128>>();
         s.reset();
         let mut prog = zeroed::<psi::Program>();
-        for (what, src) in STEPS {
-            if compile(src, &mut prog, false, true).is_err() {
-                say!(error, "psi-probe: jit1: step {what}: does not compile");
+        let mut under = vec![0u8; psi::W * psi::H * 3];
+        psi::golden::picture(&mut under);
+        let mut ink = psi::Ink::boxed();
+        let (mut ok, mut bad) = (0u32, 0u32);
+        let plain = psi::golden::FRAMES.iter().map(|&(n, src, ms, want)| (n, src, ms, false, want));
+        for (name, src, ms, o, want) in plain.chain(psi::golden::OVER.iter().copied()).chain(psi::golden::DRAWN.iter().copied()) {
+            if compile(src, &mut prog, true, true).is_err() {
+                bad += 1;
                 continue;
             }
-            let (v50, v90, _) = lanes::<128>(&prog, 8000, out);
-            let (_, row, px) = prog.counts();
-            match psi::jit::emit(&prog) {
-                Ok(mut k) => {
-                    let (k50, k90, _) = timed(|n| {
-                        let inputs = psi::golden::inputs(n * 20 % 8000);
-                        k.render(&prog, &mut s, None, &inputs, &t, out);
-                    });
-                    say!(info,
-                        "psi-probe: jit1: step {what:<22} pixel steps {px} (+{row} row): vm p50 {v50} p90 {v90} us = {} ns a pixel | kernel ({} B) p50 {k50} p90 {k90} us = {} ns a pixel ({}.{}x)",
-                        v50 as u64 * 1000 / 4096, k.code_bytes(), k50 as u64 * 1000 / 4096,
-                        v50 / k50.max(1), (v50 * 10 / k50.max(1)) % 10
-                    );
-                }
-                Err(w) => say!(info,
-                    "psi-probe: jit1: step {what:<22} pixel steps {px} (+{row} row): vm p50 {v50} p90 {v90} us = {} ns a pixel | on the VM ({w})",
-                    v50 as u64 * 1000 / 4096),
+            let u = o.then_some(under.as_slice());
+            psi::render_rows_ink::<128>(&prog, &mut s, Some(&mut ink), &psi::golden::inputs(ms), &t, u, u32::MAX, out);
+            let got = psi::golden::fnv(out);
+            if got == want {
+                ok += 1;
+            } else {
+                bad += 1;
+                say!(error, "psi-probe: golden {name} at {ms} ms: {got:#018x}, host/wasm {want:#018x}");
             }
         }
+        (ok, bad)
     }
 
-    /// The examples as effects on the real path (`Fx::parse`, the first
-    /// frame untimed: it takes the still cache, makes the kernel and checks
-    /// it), the JIT on and then off.
-    fn effects(canvas: &mut Canvas) {
-        let list: [(&str, &str, &str); 9] = [
-            ("Rotozoom floor", FLOOR, ""),
-            ("Tunnel", TUNNEL, ""),
-            ("Time gate", TIME_GATE_FILE, ""),
-            ("Endless road", ROAD_FILE, ""),
-            ("Starfield", STARFIELD, ""),
-            ("Rotozoom", ROTOZOOM, ""),
-            ("Plasma letters", PLASMA_LETTERS, ""),
-            ("Plasma", PLASMA, ""),
-            ("Fire", FIRE, ""),
-        ];
-        for (name, src, opts) in list {
-            let mut row = Vec::new();
-            for jit in [true, false] {
-                fx_psi::set_jit(jit);
-                fx_psi::set_still_gate(None);
-                let h0 = heap();
-                let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
-                    say!(error, "psi-probe: jit1: example {name}: did not open");
-                    break;
-                };
-                let delay = fx.delay();
-                let n = fx.loop_frames();
-                let t0 = Instant::now();
-                fx.frame(Duration::ZERO, canvas);
-                let first = t0.elapsed().as_micros();
-                let (on, why, bytes) = fx_psi::jit_status();
-                let held = fx_psi::still_held();
-                let h1 = heap();
-                let (e50, e90, emax) = timed(|k| {
-                    fx.frame(delay * (k % n), canvas);
-                });
-                drop(fx);
-                let what = if !jit { "vm".to_string() } else if on { format!("kernel {bytes} B") } else { format!("vm: {why}") };
-                say!(info,
-                    "psi-probe: jit1: example {name} as an effect ({what}): p50 {e50} p90 {e90} max {emax} us a frame, first frame {first} us, still {held} B, heap {h0} -> {h1} B -> {} B after",
-                    heap()
-                );
-                row.push(e50);
+    /// One example as an effect on the real path (`Fx::parse`; the first
+    /// 12 frames untimed: the still cache, the kernel made, checked and
+    /// trialed), the JIT on and then off: frame p50/p90/max, the pixels
+    /// marked for the blit.
+    fn effect(name: &str, src: &str, opts: &str, canvas: &mut Canvas) {
+        let mut row = Vec::new();
+        for jit in [true, false] {
+            fx_psi::set_jit(jit);
+            fx_psi::set_still_gate(None);
+            let h0 = heap();
+            let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
+                say!(error, "psi-probe: jit2: example {name}: did not open");
+                break;
+            };
+            let delay = fx.delay();
+            let n = fx.loop_frames();
+            for k in 0..12 {
+                fx.frame(delay * (k % n), canvas);
+                canvas.dirty_mut().clear();
             }
-            if let [j, v] = row[..] {
-                say!(info, "psi-probe: jit1: example {name}: JIT {j} us against VM {v} us = {}.{:02}x", v / j.max(1), (v * 100 / j.max(1)) % 100);
-            }
-            split(name, src);
+            let (on, why, bytes) = fx_psi::jit_status();
+            let held = fx_psi::still_held();
+            let h1 = heap();
+            let mut marked = 0u64;
+            let (e50, e90, emax) = timed(|k| {
+                fx.frame(delay * ((k + 12) % n), canvas);
+                marked += u64::from(canvas.dirty().count());
+                canvas.dirty_mut().clear();
+            });
+            drop(fx);
+            let what = if !jit { "vm".to_string() } else if on { format!("kernel {bytes} B") } else { format!("vm: {why}") };
+            say!(info,
+                "psi-probe: jit2: example {name} as an effect ({what}): p50 {e50} p90 {e90} max {emax} us a frame, {} px marked a frame, still {held} B, heap {h0} -> {h1} B -> {} B after",
+                marked / u64::from(FRAMES), heap()
+            );
+            row.push(e50);
+        }
+        if let [j, v] = row[..] {
+            say!(info, "psi-probe: jit2: example {name}: JIT {j} us against VM {v} us = {}.{:02}x", v / j.max(1), (v * 100 / j.max(1)) % 100);
         }
         fx_psi::set_jit(true);
         fx_psi::set_still_gate(Some(crate::still_gate));
-        let _ = MATRIX;
     }
 
     /// Where a kernel's frame goes: the example drawn directly through its
-    /// kernel (still cache taken when it has values for one), the frame
-    /// split by `psi::jit::stats` (µs a frame, from cycles at 240 MHz),
-    /// against the VM's direct frame.
+    /// kernel (its canvas if it draws; the still cache when it has values
+    /// for one), split by `psi::jit::stats` (µs a frame), against the VM's
+    /// direct frame; and the estimates.
     fn split(name: &str, src: &str) {
         let mut prog = zeroed::<psi::Program>();
         if compile(src, &mut prog, true, true).is_err() {
@@ -2655,6 +2627,7 @@ mod jit1 {
         let mut s = zeroed::<psi::Scratch<128>>();
         s.reset();
         let mut out = vec![0u8; psi::W * psi::H * 3];
+        let mut ink = prog.draws().then(psi::Ink::boxed);
         let mut st = psi::Still::new();
         let still = prog.still_lanes() > 0 && st.take(&prog);
         let lp = prog.loop_ms().max(1);
@@ -2663,15 +2636,14 @@ mod jit1 {
             i.set_ms(&prog, u64::from(n * 20 % lp));
             i
         };
-        // (Keeps the still cache on its first frame.)
-        k.render(&prog, &mut s, if still { Some(&mut st) } else { None }, &inputs(0), &t, &mut out);
+        k.render(&prog, &mut s, ink.as_deref_mut(), if still { Some(&mut st) } else { None }, &inputs(0), &t, None, u32::MAX, &mut out, None);
         let _ = psi::jit::stats::take();
         let (k50, _, _) = timed(|n| {
-            k.render(&prog, &mut s, if still { Some(&mut st) } else { None }, &inputs(n), &t, &mut out);
+            k.render(&prog, &mut s, ink.as_deref_mut(), if still { Some(&mut st) } else { None }, &inputs(n), &t, None, u32::MAX, &mut out, None);
         });
         let (cyc, frames) = psi::jit::stats::take();
         let (v50, _, _) = timed(|n| {
-            psi::render_rows_still::<128>(&prog, &mut s, None, if still { Some(&mut st) } else { None }, &inputs(n), &t, None, u32::MAX, &mut out);
+            psi::render_rows_still::<128>(&prog, &mut s, ink.as_deref_mut(), if still { Some(&mut st) } else { None }, &inputs(n), &t, None, u32::MAX, &mut out);
         });
         let parts: Vec<String> = psi::jit::stats::NAMES
             .iter()
@@ -2679,25 +2651,122 @@ mod jit1 {
             .map(|(n, c)| format!("{n} {}", c / 240 / frames.max(1)))
             .collect();
         say!(info,
-            "psi-probe: jit1: split {name} (direct, still {}): kernel frame p50 {k50} us = {} us a frame; VM frame p50 {v50} us; kernel at {:#x}, {} B",
-            still, parts.join(", "), k.addr(), k.code_bytes()
+            "psi-probe: jit2: split {name} (direct, still {still}): kernel frame p50 {k50} us = {}; VM frame p50 {v50} us; est vm {} jit {} (still: vm {} jit {}); kernel {} B at {:#x}",
+            parts.join(", "), prog.esp32_us(), prog.esp32_us_jit(), prog.esp32_us_still(), prog.esp32_us_jit_still(), k.code_bytes(), k.addr()
         );
     }
 
+    /// A look over a changing picture (~700 pixels in 6 rows a frame, as a
+    /// GIF frame changes them; its own frames every 40 ms when it moves),
+    /// the JIT on and then off: apply p50/p90/max (the first 12 untimed:
+    /// the kernel made, checked and trialed), pixels marked.
+    fn look(name: &str, path: &str, canvas: &mut Canvas) {
+        let mut row = Vec::new();
+        for jit in [true, false] {
+            fx_psi::set_jit(jit);
+            let Ok(mut look) = fx_psi::FormulaLook::from_path(path) else {
+                say!(error, "psi-probe: jit2: look {name}: did not open");
+                return;
+            };
+            if !look.take() {
+                say!(error, "psi-probe: jit2: look {name}: no room for its buffers ({} B free)", heap());
+                return;
+            }
+            let mut u = vec![0u8; psi::W * psi::H * 3];
+            psi::golden::picture(&mut u);
+            for y in 0..psi::H {
+                for x in 0..psi::W {
+                    let p = (y * psi::W + x) * 3;
+                    canvas.set(x, y, opendmd_core::canvas::Rgb::new(u[p], u[p + 1], u[p + 2]));
+                }
+            }
+            let mut seed = 0x2545_f491u32;
+            let mut frame = |k: u32, look: &mut fx_psi::FormulaLook, canvas: &mut Canvas| -> (u32, u32) {
+                for _ in 0..700 {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 17;
+                    seed ^= seed << 5;
+                    let y = (seed as usize >> 8) % 6 + (k as usize * 5) % 26;
+                    let x = (seed as usize >> 16) % psi::W;
+                    canvas.set(x, y, opendmd_core::canvas::Rgb::new(seed as u8, (seed >> 8) as u8, k as u8));
+                }
+                let t = Instant::now();
+                let out = look.apply(Duration::from_millis(u64::from(k) * 40), canvas, 0);
+                let us = t.elapsed().as_micros() as u32;
+                let m = out.dirty().count();
+                out.dirty_mut().clear();
+                (us, m)
+            };
+            for k in 0..12 {
+                frame(k, &mut look, canvas);
+            }
+            let (on, why, bytes) = fx_psi::look_jit_status();
+            let mut us = Vec::with_capacity(FRAMES as usize);
+            let mut marked = 0u64;
+            for k in 12..12 + FRAMES {
+                let (t, m) = frame(k, &mut look, canvas);
+                us.push(t);
+                marked += u64::from(m);
+            }
+            let (p50, p90, max) = pct(&mut us);
+            let what = if !jit { "vm".to_string() } else if on { format!("kernel {bytes} B") } else { format!("vm: {why}") };
+            say!(info,
+                "psi-probe: jit2: look {name} over a changing picture ({what}): p50 {p50} p90 {p90} max {max} us a frame, {} px marked a frame, est vm {} jit {}",
+                marked / u64::from(FRAMES), look.program().esp32_us(), look.program().esp32_us_jit()
+            );
+            row.push(p50);
+        }
+        if let [j, v] = row[..] {
+            say!(info, "psi-probe: jit2: look {name}: JIT {j} us against VM {v} us = {}.{:02}x", v / j.max(1), (v * 100 / j.max(1)) % 100);
+        }
+        fx_psi::set_jit(true);
+    }
+
     pub fn probe(root: &str, start: Instant, stack0: u32) {
-        say!(info, "psi-probe: start: main stack {stack0} B unused, heap {} B free (the JIT's phase-1 rows only)", heap());
+        say!(info, "psi-probe: start: main stack {stack0} B unused, heap {} B free (the JIT's phase-2 rows only)", heap());
         psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
         exec_line("start");
         let mut out = vec![0u8; psi::W * psi::H * 3];
-        goldens(&mut out);
+        let (vo, vb) = vm_goldens(&mut out);
+        let (ko, kb) = goldens(&mut out);
+        // (The emulator lane's line: the VM's goldens and the kernels'.)
+        say!(info,
+            "psi-probe: golden frames: {} match the host/wasm hashes, {} differ{}",
+            vo + ko, vb + kb, if vb + kb == 0 { " (bit-identical)" } else { "" }
+        );
+        drop(out);
         exec_line("after the goldens");
         let mut canvas = Canvas::new();
-        effects(&mut canvas);
-        say!(info, "psi-probe: jit1: main stack {} B unused after the examples", stack_unused());
-        steps(&mut out);
-        exec_line("after the steps");
+        let list: [(&str, &str, &str); 11] = [
+            ("Endless road", ROAD_FILE, ""),
+            ("Endless road Full", ROAD_FULL, ""),
+            ("Starfield", STARFIELD, ""),
+            ("Wireframe cube", CUBE, ""),
+            ("Rotozoom", ROTOZOOM, ""),
+            ("Plasma letters", PLASMA_LETTERS, ""),
+            ("Rotozoom floor", FLOOR, ""),
+            ("Tunnel", TUNNEL, ""),
+            ("Time gate", TIME_GATE_FILE, ""),
+            ("Fire", FIRE, ""),
+            ("Plasma", PLASMA, ""),
+        ];
+        for (name, src, opts) in list {
+            effect(name, src, opts, &mut canvas);
+            split(name, src);
+        }
+        say!(info, "psi-probe: jit2: main stack {} B unused after the examples", stack_unused());
+        exec_line("after the examples");
+        let looks = [
+            ("Old TV", fx_psi::path(OLD_TV, "")),
+            ("Plasma letters", fx_psi::path(PLASMA_LETTERS, "")),
+            ("Plasma (screen 40)", fx_psi::path(&psi::look::compose(PLASMA, "screen", 40).unwrap_or_default(), "")),
+        ];
+        for (name, path) in &looks {
+            look(name, path, &mut canvas);
+        }
+        exec_line("after the looks");
         say!(info,
-            "{DONE}: jit1, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
+            "{DONE}: jit2, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
             stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
         );
         *REPORT.lock().unwrap() = None;
