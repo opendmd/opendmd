@@ -546,7 +546,53 @@ pub fn render_rows_still<const N: usize>(
     out: &mut [u8],
 ) {
     frame::<N>(
-        prog, scratch, ink, still, inputs, tables, under, rows, out, true,
+        prog,
+        scratch,
+        ink,
+        still,
+        inputs,
+        tables,
+        under,
+        rows,
+        out,
+        true,
+        // (Opaque: a constant here had LLVM make a second, specialised
+        // copy of the frame loop, 9 KB of IRAM.)
+        core::hint::black_box(None),
+    )
+}
+
+/// What changed: [`render_rows_still`], and `changed[row]` (row from the
+/// top) has bit `g` set when any byte of pixels `4g..4g + 4` of that row
+/// differs from what `out` held before the call (all bits when `out` is
+/// not word-aligned; a row not drawn is left as it was: give zeros).
+/// The bytes written are the same as without it; the player marks only
+/// what changed, so the blit pushes nothing else (console-lessons 2.5).
+#[allow(clippy::too_many_arguments)]
+pub fn render_rows_changed<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    ink: Option<&mut Ink>,
+    still: Option<&mut Still>,
+    inputs: &Inputs,
+    tables: &Tables,
+    under: Option<&[u8]>,
+    rows: u32,
+    out: &mut [u8],
+    changed: &mut [u32; H],
+) {
+    frame::<N>(
+        prog,
+        scratch,
+        ink,
+        still,
+        inputs,
+        tables,
+        under,
+        rows,
+        out,
+        true,
+        core::hint::black_box(Some(changed)),
     )
 }
 
@@ -566,7 +612,17 @@ pub fn render_rows_ink_turns<const N: usize>(
     out: &mut [u8],
 ) {
     frame::<N>(
-        prog, scratch, ink, None, inputs, tables, under, rows, out, false,
+        prog,
+        scratch,
+        ink,
+        None,
+        inputs,
+        tables,
+        under,
+        rows,
+        out,
+        core::hint::black_box(false),
+        core::hint::black_box(None),
     )
 }
 
@@ -589,6 +645,7 @@ fn frame<const N: usize>(
     rows: u32,
     out: &mut [u8],
     lanes: bool,
+    changed: Option<&mut [u32; H]>,
 ) {
     #[cfg(feature = "stats")]
     stats::stamp(1);
@@ -609,9 +666,8 @@ fn frame<const N: usize>(
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = inputs.seed;
     }
-    let (fe, de, re, pe) = (
+    let (fe, re, pe) = (
         prog.frame_end as usize,
-        prog.draw_end as usize,
         prog.row_end as usize,
         prog.pixel_end as usize,
     );
@@ -663,6 +719,9 @@ fn frame<const N: usize>(
         unpack_palettes(&prog.tables, &mut own);
     }
     let backdrop = prog.uses & BACKDROP != 0;
+    // Each row's values and what it changed (`Rows`): the row as it was
+    // kept when `changed` asks.
+    let mut per_row = Rows::new(changed, out);
     // The column run: on the first row drawn, then its values are kept in
     // their registers (one lane is the whole row only at N = W).
     let mut columns_kept = false;
@@ -672,13 +731,7 @@ fn frame<const N: usize>(
         if rows & (1 << row) == 0 {
             continue;
         }
-        // y and py count from the bottom (y = 0 is the bottom row).
-        let py = ((H - 1 - row) as i32) << 16;
-        scratch.sc[S_PY as usize] = py;
-        scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
-        for op in &prog.ops[de..re] {
-            scalar(&mut scratch.sc, op, tables, &prog.tables);
-        }
+        per_row.begin(prog, scratch, tables, out, row);
         let span = row * W * 3..(row + 1) * W * 3;
         let row_bytes = &mut out[span.clone()];
         let under_row = under.map(|u| &u[span.clone()]);
@@ -734,7 +787,11 @@ fn frame<const N: usize>(
                     // that runs the narrowed steps, else its steps.
                     let n = op.a as usize;
                     #[cfg(not(target_arch = "wasm32"))]
-                    if narrow
+                    // (Read where it is used: a flag the loop could test
+                    // once had LLVM copy the whole lane loop for each way
+                    // it goes, ~0.5-0.7 KB of IRAM, as soon as the loop
+                    // was small enough.)
+                    if core::hint::black_box(narrow)
                         && fused(
                             scratch,
                             &mut alias,
@@ -761,7 +818,7 @@ fn frame<const N: usize>(
                         scratch,
                         &mut alias,
                         op,
-                        narrow,
+                        core::hint::black_box(narrow),
                         base,
                         tables,
                         &prog.tables,
@@ -774,6 +831,7 @@ fn frame<const N: usize>(
         }
         columns_kept = N == W;
     }
+    per_row.finish(out);
     #[cfg(feature = "stats")]
     stats::stamp(3);
     if let Cache::Keep(st, _) = cache {
@@ -812,6 +870,110 @@ fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n: u8, at: u
     for (j, &r) in regs.iter().enumerate().take(n as usize) {
         if let Some(l) = st.lanes[j].as_deref() {
             al[reg_index(r)] = l.0[at..at + N].as_ptr();
+        }
+    }
+}
+
+/// The row steps for one row. In flash (consolea-a: as quick as in IRAM,
+/// the road 3,347 µs against main's 3,393; `noise_o` and the other row
+/// helpers they call stay in IRAM), and IRAM is short.
+#[inline(never)]
+fn row_steps<const N: usize>(prog: &Program, scratch: &mut Scratch<N>, tables: &Tables) {
+    for op in &prog.ops[prog.draw_end as usize..prog.row_end as usize] {
+        scalar(&mut scratch.sc, op, tables, &prog.tables);
+    }
+}
+
+/// What the frame loop does for each row besides its pixels: its values
+/// in the slots (the row steps run) and, when the caller asked what
+/// changed, the row as it was kept before and compared after. One small
+/// state and one call a row (in IRAM beside the frame loop), so the loop
+/// itself carries little more than before.
+struct Rows<'a> {
+    changed: Option<&'a mut [u32; H]>,
+    /// The row `before` holds, until it is compared (`H`: none).
+    kept: usize,
+    /// Kept only when the picture is word-aligned (a heap canvas always
+    /// is), else every row drawn counts as changed.
+    track: bool,
+    before: [u32; W * 3 / 4],
+}
+
+impl<'a> Rows<'a> {
+    #[inline(never)]
+    fn new(changed: Option<&'a mut [u32; H]>, out: &[u8]) -> Self {
+        Rows {
+            track: changed.is_some() && (out.as_ptr() as usize).is_multiple_of(4),
+            changed,
+            kept: H,
+            before: [0; W * 3 / 4],
+        }
+    }
+
+    /// Row `row`'s values in the slots the pixel steps read (`py` and `y`,
+    /// then the row steps), and its bytes kept (the row drawn before it
+    /// compared first).
+    /// One call a row: a second in the frame loop had LLVM copy the loop's
+    /// whole lane dispatch, 1 KB of IRAM.
+    #[inline(never)]
+    #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+    fn begin<const N: usize>(
+        &mut self,
+        prog: &Program,
+        scratch: &mut Scratch<N>,
+        tables: &Tables,
+        out: &[u8],
+        row: usize,
+    ) {
+        self.finish(out);
+        // y and py count from the bottom (y = 0 is the bottom row).
+        let py = ((H - 1 - row) as i32) << 16;
+        scratch.sc[S_PY as usize] = py;
+        scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
+        row_steps(prog, scratch, tables);
+        if self.track && row < H {
+            self.kept = row;
+            // SAFETY: row `row`'s W × 3 bytes of the W × H × 3 picture,
+            // word-aligned (`track`): `before`'s W × 3 / 4 words.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    out.as_ptr().add(row * W * 3).cast::<u32>(),
+                    self.before.as_mut_ptr(),
+                    W * 3 / 4,
+                )
+            };
+        } else if let Some(c) = self.changed.as_deref_mut().and_then(|ch| ch.get_mut(row)) {
+            *c = u32::MAX;
+        }
+    }
+
+    /// Which 4-pixel groups of the row `begin` kept differ from its bytes
+    /// now (bit `g`: pixels `4g..4g + 4`, three words), into `changed`: a
+    /// word at a time, ~1-2 µs a row. (Without the copy, every row drawn
+    /// counts as changed: `begin` marks it so.)
+    #[inline(never)]
+    #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
+    fn finish(&mut self, out: &[u8]) {
+        let Some(ch) = self.changed.as_deref_mut() else {
+            return;
+        };
+        let row = core::mem::replace(&mut self.kept, H);
+        if row < H {
+            let mut m = 0;
+            // SAFETY: as `begin`'s: the row's W × 3 / 4 words, and
+            // `before`'s as many; a group is three of each, read in step
+            // (consolea-a: ~6 µs a row with a slice of `before` a group).
+            unsafe {
+                let mut now = out.as_ptr().add(row * W * 3).cast::<u32>();
+                let mut was = self.before.as_ptr();
+                for g in 0..W / 4 {
+                    let d = (*was ^ *now) | (*was.add(1) ^ *now.add(1)) | (*was.add(2) ^ *now.add(2));
+                    m |= u32::from(d != 0) << g;
+                    now = now.add(3);
+                    was = was.add(3);
+                }
+            }
+            ch[row] = m;
         }
     }
 }

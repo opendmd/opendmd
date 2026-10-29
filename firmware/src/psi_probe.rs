@@ -105,19 +105,19 @@ pub mod play {
     /// Phases: wake (the sleep ending late), other (before the tick), start
     /// (the tick's start past the frame's due time), tick (the engine: the
     /// render), blit (less its wait), wait (the pacer), post (the blit's end
-    /// to the judgment).
-    pub const PHASES: [&str; 7] = ["wake", "other", "start", "tick", "blit", "wait", "post"];
+    /// to the judgment); and px, the pixels the blit pushed (consolea).
+    pub const PHASES: [&str; 8] = ["wake", "other", "start", "tick", "blit", "wait", "post", "px"];
     /// Work (start + tick + blit + wait + post) at or over these µs.
     const OVER: [u32; 5] = [8_000, 9_000, 10_000, 11_000, 12_000];
 
     static N: AtomicU32 = AtomicU32::new(0);
-    static SUM: [AtomicU32; 7] = [const { AtomicU32::new(0) }; 7];
-    static MAX: [AtomicU32; 7] = [const { AtomicU32::new(0) }; 7];
+    static SUM: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
+    static MAX: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
     static COUNTS: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
     static OVERS: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
 
-    /// One Formula frame (main task only).
-    pub fn note(p: [u32; 7], missed: bool, excused: bool, stretched: bool) {
+    /// One Formula frame (main task only), or a frame under a formula look.
+    pub fn note(p: [u32; 8], missed: bool, excused: bool, stretched: bool) {
         N.fetch_add(1, Relaxed);
         for (i, v) in p.iter().enumerate() {
             SUM[i].fetch_add(*v, Relaxed);
@@ -134,18 +134,22 @@ pub mod play {
 
     fn line() -> Option<String> {
         let n = N.swap(0, Relaxed);
-        let sums: [u32; 7] = core::array::from_fn(|i| SUM[i].swap(0, Relaxed));
-        let maxes: [u32; 7] = core::array::from_fn(|i| MAX[i].swap(0, Relaxed));
+        let sums: [u32; 8] = core::array::from_fn(|i| SUM[i].swap(0, Relaxed));
+        let maxes: [u32; 8] = core::array::from_fn(|i| MAX[i].swap(0, Relaxed));
         let c: [u32; 3] = core::array::from_fn(|i| COUNTS[i].swap(0, Relaxed));
         let o: [u32; 5] = core::array::from_fn(|i| OVERS[i].swap(0, Relaxed));
         if n == 0 {
             return None;
         }
         let (us, ms, asked, _) = opendmd_core::fx_psi::stats();
+        // (consolea: the window's frames ran as the switch was through
+        // it; it flips after each line.)
+        let all = opendmd_core::fx_psi::OLD.load(Relaxed);
         let mut s = format!(
-            "psi-probe: play {} s: {n} formula frames, misses {}, late excused {}, stretched {}, governor {us} us mean -> {ms} ms frames (asked {asked}); mean/max us:",
+            "psi-probe: play {} s [{}]: {n} formula frames, misses {}, late excused {}, stretched {}, governor {us} us mean -> {ms} ms frames (asked {asked}); mean/max us:",
             // SAFETY: a clock read.
             unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000,
+            if all { "as before" } else { "phase A" },
             c[0],
             c[1],
             c[2]
@@ -160,6 +164,9 @@ pub mod play {
         Some(s)
     }
 
+    /// Flip `fx_psi::OLD` after each line (consolea).
+    pub static AB: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
     /// Append a line every [`EVERY`] for [`FOR`] (a CPU0 task).
     pub fn start(path: String) {
         let r = crate::task::spawn_core0(
@@ -171,6 +178,12 @@ pub mod play {
                 while t0.elapsed() < FOR {
                     std::thread::sleep(EVERY);
                     let Some(l) = line() else { continue };
+                    // consolea's A/B: every other window runs a Formula's
+                    // frames as before Phase A (`fx_psi::OLD`).
+                    if AB.load(Relaxed) {
+                        let all = &opendmd_core::fx_psi::OLD;
+                        all.store(!all.load(Relaxed), Relaxed);
+                    }
                     log::info!("{l}");
                     if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&path) {
                         use std::io::Write;
@@ -239,6 +252,172 @@ fn road_probe(root: &str, start: Instant, stack0: u32) {
     fx_psi::set_still_gate(Some(crate::still_gate));
     say!(info,
         "{DONE}: roadprobe, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
+        stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
+    );
+    *REPORT.lock().unwrap() = None;
+}
+
+/// console-lessons Phase A (consolea): only its rows, first, one source at
+/// a time (the full probe has run out of heap), then the play lines.
+/// `false`: the full probe (or `ROAD_ONLY`).
+const CONSOLE_ONLY: bool = false;
+
+const STARFIELD_FILE: &str = include_str!("../../opendmd-web/formulas/starfield.psi");
+const BIG_CLOCK_FILE: &str = include_str!("../../opendmd-web/formulas/big-clock.psi");
+const GLITTER_FILE: &str = include_str!("../../opendmd-web/formulas/glitter.psi");
+const ROTOZOOM_FLOOR_FILE: &str = include_str!("../../opendmd-web/formulas/rotozoom-floor.psi");
+const SCANLINES_FILE: &str = include_str!("../../opendmd-web/formulas/scanlines.psi");
+
+/// One Formula as an effect on the real path, a way at a time (each made,
+/// run and dropped before the next): Phase A as shipped, then as before it
+/// (`fx_psi::OLD`: no compare, every pixel marked); each line the frame's
+/// p50/p90/max, the pixels marked for the blit (of 4,096), the still cache
+/// and the heap. A Formula with still values says what the firmware's
+/// still gate says first, and why.
+fn console_row(name: &str, src: &str, opts: &str, canvas: &mut Canvas) {
+    let mut prog = zeroed::<psi::Program>();
+    let (est, still) = match compile(src, &mut prog, true, true) {
+        Ok(_) => (prog.esp32_us_still(), psi::Still::bytes_for(&prog)),
+        Err(e) => {
+            say!(error, "psi-probe: consolea {name}: does not compile: {e:?}");
+            return;
+        }
+    };
+    drop(prog);
+    if still > 0 {
+        say!(info,
+            "psi-probe: consolea {name}: still gate for {still} B says {}: heap {} B free (needs {}), largest block {} B, look source {}, card builder {}",
+            crate::still_gate(still),
+            heap(),
+            still + crate::config::STILL_KEEP_HEAP,
+            crate::state::largest_free_block(),
+            crate::formula_look::SOURCE.load(Ordering::Relaxed),
+            if crate::cache_builder::holding() { "mid-file" } else { "idle" }
+        );
+    }
+    for (way, old) in [("phase A", false), ("as before", true)] {
+        fx_psi::OLD.store(old, Ordering::Relaxed);
+        let h0 = heap();
+        let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
+            say!(error, "psi-probe: consolea {name}: did not open");
+            continue;
+        };
+        let delay = fx.delay();
+        let n = fx.loop_frames();
+        fx.frame(Duration::ZERO, canvas);
+        let held = fx_psi::still_held();
+        let mut marked = 0u64;
+        let (p50, p90, max) = timed(|k| {
+            canvas.dirty_mut().clear();
+            fx.frame(delay * (1 + k % n), canvas);
+            marked += u64::from(canvas.dirty().count());
+        });
+        drop(fx);
+        say!(info,
+            "psi-probe: consolea {name} ({way}): p50 {p50} p90 {p90} max {max} us a frame (timed with the count), est {est} us, marked {} px a frame of 4096, still cache {held} B, heap {h0} B before, main stack {} B unused",
+            marked / u64::from(FRAMES),
+            stack_unused()
+        );
+    }
+    fx_psi::OLD.store(false, Ordering::Relaxed);
+}
+
+/// The VM alone on a frame: without and with the change compare (the
+/// compare's own cost, ~1-2 µs a row by the note).
+fn console_compare(name: &str, src: &str) {
+    let mut prog = zeroed::<psi::Program>();
+    if compile(src, &mut prog, true, true).is_err() {
+        return;
+    }
+    let mut s = zeroed::<psi::Scratch<128>>();
+    s.reset();
+    let mut ink = psi::Ink::boxed();
+    let mut out = vec![0u8; psi::W * psi::H * 3];
+    let lp = prog.loop_ms().max(1);
+    let mut ch = [0u32; psi::H];
+    let t = fx_psi::tables();
+    let mut run = |with: bool| {
+        timed(|k| {
+            let i = inputs_at(&prog, k * 10 % lp);
+            if with {
+                psi::render_rows_changed::<128>(&prog, &mut s, Some(&mut ink), None, &i, &t, None, u32::MAX, &mut out, &mut ch);
+            } else {
+                psi::render_rows_still::<128>(&prog, &mut s, Some(&mut ink), None, &i, &t, None, u32::MAX, &mut out);
+            }
+        })
+    };
+    let (a50, a90, _) = run(false);
+    let (b50, b90, _) = run(true);
+    say!(info, "psi-probe: consolea compare {name}: VM frame p50/p90 {a50}/{a90} us without, {b50}/{b90} with the change compare");
+}
+
+/// Scanlines as a look over a GIF-like picture: a few rows of it change a
+/// frame (~17 % of the pixels, the card's mean); the look redraws those
+/// rows. What it marks now (the pixels that changed) against the whole
+/// rows it marked before Phase A, and its time.
+fn console_look(canvas: &mut Canvas) {
+    let Ok(mut look) = fx_psi::FormulaLook::from_path(&fx_psi::path(SCANLINES_FILE, "")) else {
+        say!(error, "psi-probe: consolea look: did not open");
+        return;
+    };
+    if !look.take() {
+        say!(error, "psi-probe: consolea look: no room for its buffers ({} B free)", heap());
+        return;
+    }
+    canvas.clear();
+    let _ = look.apply(Duration::ZERO, canvas, 0);
+    let (mut marked, mut rows_px, mut seed) = (0u64, 0u64, 0x2545_f491u32);
+    let mut us = Vec::with_capacity(FRAMES as usize);
+    for k in 0..FRAMES {
+        // ~700 pixels in 6 rows, as a GIF frame changes them.
+        for _ in 0..700 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let y = (seed as usize >> 8) % 6 + (k as usize * 5) % 26;
+            let x = (seed as usize >> 16) % psi::W;
+            canvas.set(x, y, opendmd_core::canvas::Rgb::new(seed as u8, (seed >> 8) as u8, k as u8));
+        }
+        rows_px += u64::from(canvas.dirty().row_mask().count_ones()) * psi::W as u64;
+        let t = Instant::now();
+        let out = look.apply(Duration::from_millis(u64::from(k) * 40 + 40), canvas, 0);
+        us.push(t.elapsed().as_micros() as u32);
+        marked += u64::from(out.dirty().count());
+        out.dirty_mut().clear();
+    }
+    let (p50, p90, max) = pct(&mut us);
+    say!(info,
+        "psi-probe: consolea look Scanlines over a changing picture: p50 {p50} p90 {p90} max {max} us a frame, marked {} px a frame (the rows it redrew: {} px)",
+        marked / u64::from(FRAMES),
+        rows_px / u64::from(FRAMES)
+    );
+}
+
+/// consolea: Phase A's rows, then the play lines (with the marking A/B).
+fn console_probe(root: &str, start: Instant, stack0: u32) {
+    play::AB.store(true, Ordering::Relaxed);
+    play::start(format!("{root}/{REPORT_NAME}"));
+    say!(info, "psi-probe: consolea: heap {} B free, largest block {} B, main stack {stack0} B unused, Scratch<128> {} B",
+        heap(), crate::state::largest_free_block(), std::mem::size_of::<psi::Scratch<128>>());
+    fx_psi::set_still_gate(Some(crate::still_gate));
+    let mut canvas = Canvas::new();
+    let rows: [(&str, &str, &str); 6] = [
+        ("Endless road", ROAD_FILE, ""),
+        ("Starfield", STARFIELD_FILE, ""),
+        ("Big clock", BIG_CLOCK_FILE, ""),
+        ("Glitter", GLITTER_FILE, ""),
+        ("Rotozoom floor", ROTOZOOM_FLOOR_FILE, ""),
+        ("Time gate", TIME_GATE_FILE, ""),
+    ];
+    for (name, src, opts) in rows {
+        console_row(name, src, opts, &mut canvas);
+        fx_psi::set_still_gate(Some(crate::still_gate));
+    }
+    console_look(&mut canvas);
+    console_compare("Endless road", ROAD_FILE);
+    console_compare("Starfield", STARFIELD_FILE);
+    say!(info,
+        "{DONE}: consolea, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
         stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
     );
     *REPORT.lock().unwrap() = None;
@@ -1440,6 +1619,10 @@ pub fn run(root: &str) {
     }
     let start = Instant::now();
     let stack0 = stack_unused();
+    if CONSOLE_ONLY {
+        console_probe(root, start, stack0);
+        return;
+    }
     if ROAD_ONLY {
         road_probe(root, start, stack0);
         return;

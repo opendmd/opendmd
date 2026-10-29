@@ -2344,3 +2344,49 @@ fn fused_runs_are_their_steps() {
         assert!(c * 30 > n, "{name}: only {c} fused runs in {n} formulas");
     }
 }
+
+/// `render_rows_changed` writes the same bytes as `render_rows_still` and
+/// says exactly which 4-pixel groups of the rows it drew differ from what
+/// the picture held (rows not drawn left as given), over random formulas
+/// and frames, full and partial.
+#[test]
+fn what_changed_is_exactly_what_differs() {
+    let mut r = Rng(0x5eed_c0a5_01e5_0a0a);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let srcs: Vec<String> = sketches::ALL
+        .iter()
+        .map(|(_, s)| s.to_string())
+        .chain(GOLDEN.iter().map(|g| g.1.to_string()))
+        .collect();
+    for (k, src) in srcs.iter().enumerate() {
+        let Ok(p) = compile(src) else { continue };
+        let mut s = Scratch::<128>::new();
+        let mut ink = Ink::boxed();
+        let mut was = vec![0u8; W * H * 3];
+        for j in 0..6u32 {
+            let ms = [0, 20, 40, 1000, 1020, 33_333][j as usize];
+            let rows = if j % 3 == 2 { r.next() as u32 } else { u32::MAX };
+            let mut want = was.clone();
+            render_rows_ink::<128>(&p, &mut s, Some(&mut ink), &inputs(ms), &OWN, Some(&under), rows, &mut want);
+            let mut got = was.clone();
+            let mut ch = [0xdead_beefu32; H];
+            opendmd_psi::render_rows_changed::<128>(
+                &p, &mut s, Some(&mut ink), None, &inputs(ms), &OWN, Some(&under), rows, &mut got, &mut ch,
+            );
+            assert!(got == want, "case {k} frame {j}: bytes differ");
+            for (y, &bits) in ch.iter().enumerate() {
+                if rows & (1 << y) == 0 {
+                    assert_eq!(bits, 0xdead_beef, "case {k}: row {y} not drawn but written");
+                    continue;
+                }
+                for g in 0..W / 4 {
+                    let o = (y * W + 4 * g) * 3;
+                    let differs = was[o..o + 12] != got[o..o + 12];
+                    assert_eq!(bits & (1 << g) != 0, differs, "case {k} frame {j}: row {y} group {g}");
+                }
+            }
+            was = got;
+        }
+    }
+}
