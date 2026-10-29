@@ -2151,12 +2151,16 @@ fn formula_json(path: &str) -> String {
     )
 }
 
-/// `formula.jit` (see [`formula_json`]).
+/// `formula.jit` (see [`formula_json`]); `look`: `formula_look.jit`.
 #[cfg(feature = "psi")]
-fn jit_json() -> String {
+fn jit_json_of(look: bool) -> String {
     #[cfg(feature = "jit")]
     {
-        let (on, why, bytes) = opendmd_core::fx_psi::jit_status();
+        let (on, why, bytes) = if look {
+            opendmd_core::fx_psi::look_jit_status()
+        } else {
+            opendmd_core::fx_psi::jit_status()
+        };
         if on {
             return format!(r#"{{"on":true,"bytes":{bytes}}}"#);
         }
@@ -2167,8 +2171,14 @@ fn jit_json() -> String {
     }
     #[cfg(not(feature = "jit"))]
     {
+        let _ = look;
         r#"{"on":false,"why":"not in this build"}"#.into()
     }
+}
+
+#[cfg(feature = "psi")]
+fn jit_json() -> String {
+    jit_json_of(false)
 }
 
 #[cfg(not(feature = "psi"))]
@@ -2213,13 +2223,17 @@ fn formula_look_json() -> String {
     let (us, ms, held) = opendmd_core::fx_psi::look_stats();
     #[cfg(not(feature = "psi"))]
     let (us, ms, held) = (0, 0, 0);
+    #[cfg(feature = "psi")]
+    let jit = format!(r#","jit":{}"#, jit_json_of(true));
+    #[cfg(not(feature = "psi"))]
+    let jit = String::new();
     // The setting's formula no longer builds (a firmware change): why.
     let error = crate::formula_look::ERROR
         .lock()
         .ok()
         .filter(|e| !e.is_empty())
         .map_or(String::new(), |e| format!(r#","error":{}"#, json_string(&e)));
-    format!(r#"{{"source":"{source}","held":{held},"frame_us":{us},"frame_ms":{ms}{error}}}"#)
+    format!(r#"{{"source":"{source}","held":{held},"frame_us":{us},"frame_ms":{ms}{jit}{error}}}"#)
 }
 
 /// The end of the status object: `"look","glow","glow_held","formula_look","attract_live",
