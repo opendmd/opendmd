@@ -1444,9 +1444,18 @@ fn bundled(canvas: &mut Canvas) {
     say!(info, "psi-probe: short heap, {h} B free (the check needs {need}): Endless road: {check}");
     // 2. The check skipped: the compile's stack and ~6 KB more, so the
     // compiler itself runs short (its tokens alone are ~12 KB).
+    // The task's stack must be one block: hold one of its size while the
+    // ballast fills the heap in small pieces, and let it go just before the
+    // task is made (else the ~19 KB left can be too scattered for a stack, and
+    // the run reports "no task" instead of the compiler's refusal).
     let mut prog = zeroed::<psi::Program>();
-    let b = ballast(crate::config::PSI_COMPILE_STACK + 512 + 6 * 1024);
-    let h = heap();
+    // (black_box: an allocation nothing reads may be optimised away.)
+    let mut hold: Vec<u8> = Vec::with_capacity(crate::config::PSI_COMPILE_STACK + 512);
+    hold.push(1);
+    let hold = core::hint::black_box(hold);
+    let b = ballast(6 * 1024);
+    let h = heap() + hold.capacity() as u32;
+    drop(hold);
     let r = crate::psi_stack::run(|| psi::compile_into(&road, &mut prog).map(|_| ()).map_err(|e| e.msg));
     drop(b);
     let compiler = match r {
