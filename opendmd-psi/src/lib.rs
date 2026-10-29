@@ -33,7 +33,6 @@ pub mod look;
 mod meta;
 mod program;
 mod range;
-mod rows;
 mod still;
 #[cfg(feature = "syntax")]
 pub mod syntax;
@@ -41,17 +40,13 @@ mod tables;
 mod vm;
 
 pub use compile::{
-    compact, compile_declared, compile_into, compile_layout, compile_opts, compile_unfused,
-    compile_with, number, Declared, DeclaredControl, Error, Info, MAX_ABOUT_TEXT, MAX_DEPTH,
-    MAX_LABEL_TEXT, MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE,
+    compact, compile_declared, compile_into, compile_layout, compile_opts, compile_unfused, compile_with, number,
+    Declared, DeclaredControl, Error, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT,
+    MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE,
 };
-pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use meta::{Control, Meta};
+pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
-#[cfg(feature = "stats")]
-pub use rows::probe as rows_probe;
-#[cfg(not(target_arch = "wasm32"))]
-pub use rows::row_table;
 pub use still::{Still, StillLane, STILL_LANES};
 pub use tables::{Glyphs, Tables, ATAN};
 #[cfg(feature = "tables")]

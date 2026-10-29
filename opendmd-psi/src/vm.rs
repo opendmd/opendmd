@@ -583,9 +583,8 @@ pub fn render_rows_changed<const N: usize>(
 }
 
 /// [`render_rows_ink`] with every draw loop run a turn at a time (as before
-/// draw loops ran as lanes, `draw::run`) and the row stage a row at a time
-/// (as before it ran as a table, `crate::rows`): the same bytes, for the
-/// tests that compare the two.
+/// draw loops ran as lanes, `draw::run`): the same bytes, for the tests
+/// that compare the two.
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_ink_turns<const N: usize>(
@@ -706,9 +705,9 @@ fn frame<const N: usize>(
         unpack_palettes(&prog.tables, &mut own);
     }
     let backdrop = prog.uses & BACKDROP != 0;
-    // Each row's values and what it changed (`Rows`): the row stage as a
-    // table when it can be, the row as it was when `changed` asks.
-    let mut per_row = Rows::new(prog, scratch, tables, rows, lanes, changed, out);
+    // Each row's values and what it changed (`Rows`): the row as it was
+    // kept when `changed` asks.
+    let mut per_row = Rows::new(changed, out);
     // The column run: on the first row drawn, then its values are kept in
     // their registers (one lane is the whole row only at N = W).
     let mut columns_kept = false;
@@ -861,9 +860,9 @@ fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n: u8, at: u
     }
 }
 
-/// The row steps for one row, a row at a time (without a row table: in
-/// wasm, a turn at a time, a program the table doesn't take). In flash:
-/// the table is the usual way, and IRAM is short.
+/// The row steps for one row. In flash (consolea-a: as quick as in IRAM,
+/// the road 3,347 µs against main's 3,393; `noise_o` and the other row
+/// helpers they call stay in IRAM), and IRAM is short.
 #[inline(never)]
 fn row_steps<const N: usize>(prog: &Program, scratch: &mut Scratch<N>, tables: &Tables) {
     for op in &prog.ops[prog.draw_end as usize..prog.row_end as usize] {
@@ -872,12 +871,11 @@ fn row_steps<const N: usize>(prog: &Program, scratch: &mut Scratch<N>, tables: &
 }
 
 /// What the frame loop does for each row besides its pixels: its values
-/// in the slots (the row table's, `crate::rows`, or the row steps run),
-/// and, when the caller asked what changed, the row as it was kept before
-/// and compared after. One small state, two calls a row (in IRAM beside
-/// the frame loop), so the loop itself carries little more than before.
+/// in the slots (the row steps run) and, when the caller asked what
+/// changed, the row as it was kept before and compared after. One small
+/// state and one call a row (in IRAM beside the frame loop), so the loop
+/// itself carries little more than before.
 struct Rows<'a> {
-    table: Option<crate::rows::RowTab>,
     changed: Option<&'a mut [u32; H]>,
     /// The row `before` holds, until it is compared (`H`: none).
     kept: usize,
@@ -888,38 +886,9 @@ struct Rows<'a> {
 }
 
 impl<'a> Rows<'a> {
-    /// For a frame: the row table when the draw loops run as lanes
-    /// (`lanes`; a turn at a time is the old way throughout) and the
-    /// program is one the table takes. Any rows: a row's values depend on
-    /// its row and the frame's values alone, so a look's few rows read
-    /// theirs from the table as well (32 rows as lanes cost less than a
-    /// few a row at a time).
     #[inline(never)]
-    fn new<const N: usize>(
-        prog: &Program,
-        scratch: &mut Scratch<N>,
-        tables: &Tables,
-        rows: u32,
-        lanes: bool,
-        changed: Option<&'a mut [u32; H]>,
-        out: &[u8],
-    ) -> Self {
-        #[cfg(feature = "stats")]
-        let lanes =
-            lanes && !crate::rows::probe::TABLE_OFF.load(core::sync::atomic::Ordering::Relaxed);
-        #[cfg(not(target_arch = "wasm32"))]
-        let table = if lanes && rows != 0 && prog.draw_end < prog.row_end {
-            crate::rows::table(prog, scratch, tables)
-        } else {
-            None
-        };
-        #[cfg(target_arch = "wasm32")]
-        let table = {
-            let _ = (prog, scratch, tables, rows, lanes);
-            None
-        };
+    fn new(changed: Option<&'a mut [u32; H]>, out: &[u8]) -> Self {
         Rows {
-            table,
             track: changed.is_some() && (out.as_ptr() as usize).is_multiple_of(4),
             changed,
             kept: H,
@@ -928,8 +897,8 @@ impl<'a> Rows<'a> {
     }
 
     /// Row `row`'s values in the slots the pixel steps read (`py` and `y`,
-    /// then its entries of the row table, or without one the row steps
-    /// run), and its bytes kept (the row drawn before it compared first).
+    /// then the row steps), and its bytes kept (the row drawn before it
+    /// compared first).
     /// One call a row: a second in the frame loop had LLVM copy the loop's
     /// whole lane dispatch, 1 KB of IRAM.
     #[inline(never)]
@@ -947,10 +916,7 @@ impl<'a> Rows<'a> {
         let py = ((H - 1 - row) as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
-        match &self.table {
-            Some(t) => t.load(scratch, row),
-            None => row_steps(prog, scratch, tables),
-        }
+        row_steps(prog, scratch, tables);
         if self.track && row < H {
             self.kept = row;
             // SAFETY: row `row`'s W × 3 bytes of the W × H × 3 picture,
@@ -980,17 +946,18 @@ impl<'a> Rows<'a> {
         let row = core::mem::replace(&mut self.kept, H);
         if row < H {
             let mut m = 0;
-            // SAFETY: as `begin`'s.
-            let now = unsafe { out.as_ptr().add(row * W * 3).cast::<u32>() };
-            for g in 0..W / 4 {
-                let w = &self.before[3 * g..3 * g + 3];
-                // SAFETY: words 3g..3g + 2 of the row (g < W / 4).
-                let d = unsafe {
-                    (w[0] ^ *now.add(3 * g))
-                        | (w[1] ^ *now.add(3 * g + 1))
-                        | (w[2] ^ *now.add(3 * g + 2))
-                };
-                m |= u32::from(d != 0) << g;
+            // SAFETY: as `begin`'s: the row's W × 3 / 4 words, and
+            // `before`'s as many; a group is three of each, read in step
+            // (consolea-a: ~6 µs a row with a slice of `before` a group).
+            unsafe {
+                let mut now = out.as_ptr().add(row * W * 3).cast::<u32>();
+                let mut was = self.before.as_ptr();
+                for g in 0..W / 4 {
+                    let d = (*was ^ *now) | (*was.add(1) ^ *now.add(1)) | (*was.add(2) ^ *now.add(2));
+                    m |= u32::from(d != 0) << g;
+                    now = now.add(3);
+                    was = was.add(3);
+                }
             }
             ch[row] = m;
         }
@@ -1034,7 +1001,7 @@ fn noise_o(x: i32, y: i32, z: i32, sc: &[i32; MAX_SCALARS], c: u8) -> i32 {
 /// A sprite's pixel once a frame or a row (out of line: the frame loop is
 /// in IRAM).
 #[inline(never)]
-pub(crate) fn spr(tabs: &[i32; MAX_TABLE], at: u8, u: i32, v: i32) -> i32 {
+fn spr(tabs: &[i32; MAX_TABLE], at: u8, u: i32, v: i32) -> i32 {
     SprHead::new(tabs, at).read(tabs, u, v)
 }
 

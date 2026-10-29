@@ -121,57 +121,6 @@ fn noise_and_hash_stay_in_range() {
     assert!((a - b).abs() < 64);
 }
 
-/// The noise-cell memo's parts (the row table's noise, `crate::rows`) are
-/// `noise_off` exactly: the key, the corners of the cell it names, the
-/// blend at the fractions; and a cell's corners serve every point in it.
-#[test]
-fn the_noise_cell_memo_is_noise() {
-    let mut h: u32 = 0x2545_f491;
-    let mut r = || {
-        h ^= h << 13;
-        h ^= h >> 17;
-        h ^= h << 5;
-        h as i32
-    };
-    for k in 0..40000 {
-        let (x, y, z) = (
-            r() >> (k % 9),
-            r() >> 8,
-            if k % 3 == 0 {
-                (r() >> 16) << 16
-            } else {
-                r() >> 6
-            },
-        );
-        let off = if k % 2 == 0 {
-            [0; 3]
-        } else {
-            [r() as u32, r() as u32, r() as u32]
-        };
-        let key = fixed::noise_key(x, y, z, off);
-        let want = fixed::noise_off(x, y, z, off);
-        assert_eq!(
-            fixed::noise_blend(&fixed::noise_corners(key), x, y, z),
-            want,
-            "{x} {y} {z} {off:?}"
-        );
-        if off == [0; 3] {
-            assert_eq!(fixed::noise(x, y, z), want);
-        }
-        // Another point of the same cell, from the same corners.
-        let (x2, y2, z2) = (
-            (x & !0xffff) | (r() & 0xffff),
-            (y & !0xffff) | (r() & 0xffff),
-            z,
-        );
-        assert_eq!(fixed::noise_key(x2, y2, z2, off), key);
-        assert_eq!(
-            fixed::noise_blend(&fixed::noise_corners(key), x2, y2, z2),
-            fixed::noise_off(x2, y2, z2, off)
-        );
-    }
-}
-
 #[test]
 fn flat_noise_is_noise_at_a_whole_z() {
     let mut h: u32 = 12345;
@@ -2673,3 +2622,4 @@ fn palette_error_messages() {
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
+
