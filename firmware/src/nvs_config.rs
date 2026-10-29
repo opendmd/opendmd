@@ -157,8 +157,9 @@ pub struct Settings {
     /// Phosphor glow; off by default (it holds 12 KB while lit).
     pub glow: GlowLevel,
     /// The Formula look (`formula_look.rs`): a formula drawn over
-    /// everything that plays, as its `@formula?src=…` path (at most
-    /// `synth::MAX_FORMULA_PATH`); `""` = none.
+    /// everything that plays: a bundled Formula's name (`@formula:<name>`),
+    /// the user's on the card (`/formulas/<stem>.psi`) or inline
+    /// (`@formula?src=…`, at most `synth::MAX_LOOK_PATH`); `""` = none.
     pub look_formula: String,
     /// The start-up show: `off`, `short` (the default) or `full`
     /// (`opendmd_core::boot`, `show.rs`).
@@ -399,7 +400,7 @@ impl Config {
                 .and_then(|s| GlowLevel::from_name(&s))
                 .unwrap_or(d.glow),
             look_formula: self
-                .get_long_string(KEY_LOOK_FORMULA, opendmd_core::synth::MAX_FORMULA_PATH)
+                .get_long_string(KEY_LOOK_FORMULA, opendmd_core::synth::MAX_LOOK_PATH)
                 .unwrap_or(d.look_formula),
             boot_show: self
                 .get_string(KEY_BOOT_SHOW)

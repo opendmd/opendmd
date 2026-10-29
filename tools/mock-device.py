@@ -999,12 +999,54 @@ ATTRACT_MESSAGE = 'attract must be "" (the playlist), "clock" or "text:<message>
 RETIRED_FX_MESSAGE = "the built-in effects are gone: Formulas replace them (play one as @formula?src=…)"
 
 
+def _bundled() -> dict[str, str]:
+    """The bundled Formulas by file stem (opendmd-web/formulas/'s `-- bundle`
+    files, the header cut), as the firmware builds them in: what
+    `@formula:<stem>` plays."""
+    out = {}
+    folder = Path(__file__).resolve().parent.parent / "opendmd-web" / "formulas"
+    for f in sorted(folder.glob("*.psi")):
+        lines = f.read_text(encoding="utf-8").split("\n")
+        if "-- bundle" in lines:
+            n = 0
+            while n < len(lines) and lines[n].startswith("--"):
+                n += 1
+            out[f.stem] = "\n".join(lines[n:])
+    return out
+
+
+BUNDLED_FORMULAS = _bundled()
+# A user's Formula on the card: `<path>.psi[?a=&b=&c=&fps=]` (synth::formula_file).
+FORMULA_FILE_RE = re.compile(r"^/.*[^/]\.psi(\?.*)?$", re.I)
+INLINE_MAX = 6144     # synth::MAX_FORMULA_PATH
+LOOK_INLINE_MAX = 2048  # synth::MAX_LOOK_PATH
+NO_SUCH_FORMULA = "there is no bundled Formula by that name"
+
+
+def stem_title(stem: str) -> str:
+    """synth::stem_title: `endless-road` -> "Endless road"."""
+    t = re.sub(r"[-_]", " ", stem)[:60].strip()
+    return t[:1].upper() + t[1:] if t else "Formula"
+
+
+def is_formula_ref(path: str) -> bool:
+    """A Formula the device plays from its path or the card: inline, by name, a file."""
+    return path.startswith("@formula?") or path.startswith("@formula:") or bool(FORMULA_FILE_RE.match(path))
+
+
 def live_parse(path: str):
     """A live item (`@clock[?..]`, `@text?msg=..[&..]`, `@formula?src=..`)
     -> ("clock"|"text"|"formula", {param: value}) with the values
     percent-decoded, or None for anything else (a text needs a non-empty
     `msg`, a formula a non-empty `src`)."""
     head, _, query = path.partition("?")
+    if head.startswith("@formula:"):
+        src = BUNDLED_FORMULAS.get(head[len("@formula:"):])
+        if src is None:
+            return None
+        params = {k: urllib.parse.unquote(v) for k, _, v in (kv.partition("=") for kv in query.split("&") if kv)}
+        params["src"] = src
+        return "formula", params
     if head == "@formula" and "src=" in query:
         pass
     elif head not in ("@clock", "@text", "@boot"):
@@ -1067,6 +1109,8 @@ def virtual_delays(path: str) -> list[int] | None:
     live = live_parse(path)
     if live is not None:
         return live_delays(*live)
+    if FORMULA_FILE_RE.match(path):
+        return live_delays("formula", {})
     return None
 
 
@@ -1110,6 +1154,9 @@ def virtual_title(path: str) -> str | None:
         return path[len("@card:"):].split("|", 1)[0]
     live = live_parse(path)
     if live is not None:
+        if live[0] == "formula" and path.startswith("@formula:"):
+            n = "".join(c for c in declared_name(live[1]["src"]) or "" if c.isprintable())[:60]
+            return n if n.strip() else stem_title(path[len("@formula:"):].partition("?")[0])
         if live[0] == "formula":
             # synth::title: its `name "…"` line, else `&name=` (an older
             # playlist entry's), 60 characters.
@@ -2925,6 +2972,7 @@ def make_handler(ctx: Context, quiet: bool):
                 (m_prefix("/filelist"), {"GET": self.h_filelist}),
                 (m_prefix("/gifs/"), {"GET": self.h_serve_under}),
                 (m_prefix("/sets/"), {"GET": self.h_serve_under}),
+                (m_prefix("/formulas/"), {"GET": self.h_serve_under}),
                 (m_prefix("/cache/"), {"GET": self.h_serve_under}),
                 (m_prefix("/www/"), {"GET": self.h_www}),
                 (m_exact("/mock/io"), {"GET": self.h_mock_io}),
@@ -3147,7 +3195,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "now_playing": {
                         "ordinal": player.ordinal,
                         "path": cur if cur else "",
-                        "title": (virtual_title(cur) if cur and cur.startswith("@") else derive_title(cur, ctx.settings)) if cur else "",
+                        "title": (virtual_title(cur) if cur and cur.startswith("@") else self.formula_file_title(cur) if FORMULA_FILE_RE.match(cur) else derive_title(cur, ctx.settings)) if cur else "",
                         "elapsed_ms": elapsed_ms,
                         "frame": frame,
                     },
@@ -3390,11 +3438,11 @@ def make_handler(ctx: Context, quiet: bool):
                     if field == "glow" and v not in GLOWS:
                         self.send_error_json(400, "glow must be off, short or long")
                         return
-                    if field == "look_formula" and v and not v.startswith("@formula?"):
-                        self.send_error_json(400, "look_formula must be \"\" or a formula (@formula?src=…)")
+                    if field == "look_formula" and v and not is_formula_ref(v):
+                        self.send_error_json(400, "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?src=…)")
                         return
-                    if field == "look_formula" and len(v.encode()) > 2048:
-                        self.send_error_json(413, f"this formula is too long for the panel ({len(v.encode())} B as sent; the limit is 2048 B)")
+                    if field == "look_formula" and len(v.encode()) > LOOK_INLINE_MAX:
+                        self.send_error_json(413, f"this formula is too long for the panel as a look ({len(v.encode())} B as sent; the limit is {LOOK_INLINE_MAX} B): save it and set it by name")
                         return
                     if field == "api_key" and v != "" and not API_KEY_RE.fullmatch(v):
                         self.send_error_json(400, "api_key must be 8..64 of A-Z a-z 0-9 . _ ~ - (or \"\" for none)")
@@ -3802,17 +3850,20 @@ def make_handler(ctx: Context, quiet: bool):
             if not isinstance(p, str):
                 self.send_error_json(400, "invalid JSON: missing field `path`")
                 return
-            if req.get("live") is True and not p.startswith("@formula?"):
+            if req.get("live") is True and not (p.startswith("@formula?") or p.startswith("@formula:")):
                 self.send_error_json(400, "\"live\" is only for a formula (@formula?src=…)")
                 return
             if req.get("over") is True:
                 # The editor's formula over the file on screen, until the
                 # playlist moves on ("" takes it off).
-                if p and not p.startswith("@formula?"):
+                if p and not is_formula_ref(p):
                     self.send_error_json(400, "\"over\" is only for a formula (@formula?src=…), or \"\" to take it off")
                     return
-                if len(p.encode()) > 2048:
-                    self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is 2048 B)")
+                if len(p.encode()) > INLINE_MAX:
+                    self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is {INLINE_MAX} B)")
+                    return
+                if p.startswith("@formula:") and live_parse(p) is None:
+                    self.send_error_json(404, NO_SUCH_FORMULA)
                     return
                 with ctx.lock:
                     if not p:
@@ -3832,9 +3883,12 @@ def make_handler(ctx: Context, quiet: bool):
                 return
             if p.startswith("@"):
                 # A live item: drawn by the player, no file lookup.
-                formula = p.startswith("@formula?")
-                if formula and len(p.encode()) > 2048:
-                    self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is 2048 B)")
+                formula = p.startswith("@formula?") or p.startswith("@formula:")
+                if formula and len(p.encode()) > INLINE_MAX:
+                    self.send_error_json(413, f"this formula is too long for the panel ({len(p.encode())} B as sent; the limit is {INLINE_MAX} B)")
+                    return
+                if p.startswith("@formula:") and live_parse(p) is None:
+                    self.send_error_json(404, NO_SUCH_FORMULA)
                     return
                 if not is_live(p):
                     self.send_error_json(415, f"{p[:96]}: not a playable file")
@@ -3843,7 +3897,7 @@ def make_handler(ctx: Context, quiet: bool):
                     if not ctx.player.playlist:
                         self.send_error_json(503, "no playlist is running")
                         return
-                    if formula and (ctx.player.current() or "").startswith("@formula?"):
+                    if formula and (ctx.player.current() or "").startswith("@formula"):
                         ctx.player.retune(p)
                     elif req.get("live") is True:
                         self.send_error_json(409, "no formula is on the panel now")
@@ -3852,7 +3906,9 @@ def make_handler(ctx: Context, quiet: bool):
                         ctx.player.play_now(p)
                 self.send_json(200, {"ok": True, "path": p})
                 return
-            rel = card_path(p) if p.startswith("/") else None
+            psi_file = bool(FORMULA_FILE_RE.match(p))
+            on_card = p.partition("?")[0] if psi_file else p
+            rel = card_path(on_card) if on_card.startswith("/") else None
             if rel is None:
                 self.send_error_json(400, "path must be card-absolute and stay on the card")
                 return
@@ -3867,11 +3923,21 @@ def make_handler(ctx: Context, quiet: bool):
                     return
                 with open(fpath, "rb") as f:
                     magic = f.read(4)
-                if magic[:4] != b"GIF8":
+                if magic[:4] != b"GIF8" and not psi_file:
                     self.send_error_json(415, f"{p}: not a GIF file")
                     return
                 ctx.player.play_now(p)
             self.send_json(200, {"ok": True, "path": p})
+
+        def formula_file_title(self, p: str) -> str:
+            """A card Formula's `name "…"` line (the engine reports it once
+            the file is read), else its stem."""
+            file = p.partition("?")[0]
+            rel = card_path(file)
+            fpath = ctx.fs.read_path(rel) if rel else None
+            n = declared_name(fpath.read_text(errors="replace")) if fpath else None
+            n = "".join(c for c in n or "" if c.isprintable())[:60]
+            return n if n.strip() else stem_title(file.rsplit("/", 1)[-1][:-4])
 
         def h_stat(self, path):
             _, _, query = self.path.partition("?")

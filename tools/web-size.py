@@ -317,7 +317,10 @@ PSI_WASM_GZ_BUDGET = 87 * 1024  # 85 until compile-oom and jit-2 both merged; 84
 # 30 KB for the revised bundle (owner, 2026-10-28): Endless road and Time
 # gate in, Clock and Corner clock out; the two are the largest examples
 # (26,584 -> 28,806 B gz, all of it formulas.json).
-FORMULAS_GZ_BUDGET = 30 * 1024  # 27 until Endless road and Time gate were bundled; 32 until formula-apps F3; 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
+# 32 KB since formula-refs (2026-10-29): Endless road readable again (names,
+# comments: its text no longer has to fit a 2 KB path), +~0.8 KB gz of
+# formulas.json; bundled links and their details, +~0.2 KB.
+FORMULAS_GZ_BUDGET = 32 * 1024  # 30 until formula-refs; 27 until Endless road and Time gate were bundled; 32 until formula-apps F3; 31 until formula-apps F2; 30 until formula-apps F1; 28 until Time gate; 27 until loop forever; 16 KB until 2026-10-23 (Psi phase 2: Show on panel), 17 until 2026-10-24 (over a GIF, 8 examples), 20 until parts, 21 until psi-ergo, 22 until the draw stage, 24 until pickers, 25 until phase 2
 FORMULAS = {"js/formulas.js", "js/psikit.js", "formulas.css", "formulas.json"}
 SHOW_GZ_BUDGET = 2 * 1024
 SHOW = {"js/psishow.js"}
@@ -331,6 +334,12 @@ LOOKS = {"js/looks.js"}
 # view loads).
 FSHEET_GZ_BUDGET = 3 * 1024
 FSHEET = {"js/fsheet.js"}
+# Your Formulas where they live (on the panel's card, or this browser) and
+# the line a playlist or the look names one by (js/fstore.js, branch
+# formula-refs, 2026-10-29): imported by the Formulas view and Settings ›
+# Look, a line of its own.
+FSTORE_GZ_BUDGET = 3 * 1024
+FSTORE = {"js/fstore.js"}
 SHARE_GZ_BUDGET = 13 * 1024  # 12 -> 13 KB with short links (S5: Copy link posts /api/f, 11,548 -> 12,481 B)
 # What the formula page loads from the demo (its own files aside).
 SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "fonts/silkscreen.woff2")
@@ -340,7 +349,9 @@ LICENCES = {"licenses.txt"}
 # the schedule, what settings do to the demo's panel): imported by app.js
 # only for the site's demo and left out of the pack (opendmd-pack www.rs
 # DEMO_ONLY), so outside the 60 KB line.
-DEMO_GZ_BUDGET = 8 * 1024
+# 9 KB since formula-refs (2026-10-29): a look named `@formula:<stem>`
+# resolved from formulas.json, as the player has the bundled ones built in.
+DEMO_GZ_BUDGET = 9 * 1024
 DEMO = {"js/demo.js"}
 # The Library's folder tree and the thumbnails (2026-10-26, branch
 # library-playlists): imported with the Library (and the playlist editor),
@@ -391,6 +402,8 @@ def main() -> int:
             kind = "looks"
         elif rel in FSHEET:
             kind = "fsheet"
+        elif rel in FSTORE:
+            kind = "fstore"
         elif rel in STUDIO:
             kind = "studio"
         elif rel in LIVE:
@@ -459,7 +472,7 @@ def main() -> int:
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),
-                         ("fsheet", FSHEET_GZ_BUDGET),
+                         ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET),
                          ("other", None)):

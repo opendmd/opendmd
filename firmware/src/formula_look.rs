@@ -76,12 +76,29 @@ pub fn check(path: &str) -> Result<(), String> {
     }
     #[cfg(feature = "psi")]
     {
-        opendmd_core::fx_psi::FormulaLook::from_path(path)
-            .map(drop)
-            .map_err(|e| e.msg)
+        build(path).map(drop).map_err(|e| e.msg)
     }
     #[cfg(not(feature = "psi"))]
     Err("this build cannot draw formulas".to_string())
+}
+
+/// The look a `look_formula` value names: inline (`@formula?src=…`), a
+/// bundled Formula by name (`@formula:<name>`) or the user's on the card
+/// (`/formulas/<stem>.psi`, read here, on the main task, like any file the
+/// player opens).
+#[cfg(feature = "psi")]
+pub fn build(path: &str) -> Result<opendmd_core::fx_psi::FormulaLook, opendmd_core::psi::Error> {
+    use opendmd_core::fx_psi::FormulaLook;
+    match opendmd_core::synth::formula_file(path) {
+        Some((file, opts)) => FormulaLook::from_text(&crate::formulas::read_card(file)?, opts),
+        None => FormulaLook::from_path(path),
+    }
+}
+
+/// Whether a `look_formula` value is read from the card (built again once
+/// the card is mounted: at boot the look is set before it is).
+pub fn on_card(path: &str) -> bool {
+    opendmd_core::synth::formula_file(path).is_some()
 }
 
 #[cfg(feature = "psi")]
@@ -176,7 +193,7 @@ mod with_psi {
             }
             let mut why = String::new();
             if !path.is_empty() {
-                match FormulaLook::from_path(path) {
+                match super::build(path) {
                     Ok(l) => self.saved = Some(l),
                     Err(e) => {
                         log::warn!(
@@ -226,7 +243,7 @@ mod with_psi {
                 }
                 _ if live => return Err(PlayError::MovedOn),
                 _ => {
-                    let l = FormulaLook::from_path(path)
+                    let l = super::build(path)
                         .map_err(|e| PlayError::BadFormula(e.msg))?;
                     if let Some((mut old, _)) = self.over.take() {
                         old.release(display);

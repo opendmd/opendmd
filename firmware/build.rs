@@ -87,32 +87,13 @@ fn main() {
         .map(|p| (p.file_stem().unwrap().to_string_lossy().into_owned(), p))
         .collect();
     bundled.sort();
-    // The sources go into the image with their comments and blank lines left
-    // out (the play path compacts them anyway: `fx_psi::path`), a third
-    // smaller. The probe's other examples (not bundled) ride in the same list.
+    // The sources go into the image as `opendmd_psi::squeeze` writes them:
+    // comments, blank lines and the spaces nothing depends on left out (the
+    // same programs, opendmd-psi's tests/squeeze.rs; about half the bytes),
+    // and the `about` line, which the panel never shows.
     let strip = |text: &str| -> String {
-        let mut out = String::new();
-        for line in text.lines() {
-            let t = line.trim_end();
-            if t.trim_start().starts_with("--") || t.trim().is_empty() {
-                continue;
-            }
-            // A trailing comment, but never on a line with quotes (a name or
-            // an about, or a character literal).
-            let t = match t.find(" --") {
-                Some(i) if !t.contains('"') && !t.contains('\'') => t[..i].trim_end(),
-                _ => t,
-            };
-            // Indentation and runs of spaces go too (nothing in quotes).
-            let t = if t.contains('"') || t.contains('\'') {
-                t.to_string()
-            } else {
-                t.split_whitespace().collect::<Vec<_>>().join(" ")
-            };
-            out += &t;
-            out += "\n";
-        }
-        out
+        let kept: Vec<&str> = text.lines().filter(|l| !l.starts_with("about \"")).collect();
+        opendmd_psi::squeeze(&kept.join("\n"))
     };
     let mut list = String::from("&[\n");
     for (name, path) in &bundled {

@@ -148,7 +148,8 @@ struct Args {
 
     /// Play just this path instead of the manifest: a card path, or a
     /// virtual file (`@clock?style=small&date=1`, `@text?msg=Hello`,
-    /// `@formula?src=…`).
+    /// `@formula?src=…`, a bundled Formula by name: `@formula:endless-road`),
+    /// or a Formula's file on the card (`/formulas/x.psi?a=0.5`).
     #[arg(long)]
     play: Option<String>,
 
@@ -747,10 +748,34 @@ fn launched_from_desktop(args: &Args) -> bool {
         && args.screenshot_canvas.is_none()
 }
 
+/// `@formula:<name>` (`--play`, playlists): the bundled Formulas, read from
+/// the source tree's `opendmd-web/formulas/` (`-- bundle` files), as the
+/// firmware builds them in. None found: names play nothing (a 404).
+#[cfg(feature = "psi")]
+fn install_bundled() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/formulas");
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut list: Vec<(&'static str, &'static str)> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "psi"))
+        .filter_map(|p| {
+            let text = std::fs::read_to_string(&p).ok()?;
+            text.lines().any(|l| l.starts_with("-- bundle")).then(|| {
+                let stem = p.file_stem()?.to_string_lossy().into_owned();
+                Some((&*Box::leak(stem.into_boxed_str()), &*Box::leak(text.into_boxed_str())))
+            })?
+        })
+        .collect();
+    list.sort();
+    opendmd_core::synth::set_bundled(Box::leak(list.into_boxed_slice()));
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,rfd=off"))
         .init();
     let args = Args::parse();
+    #[cfg(feature = "psi")]
+    install_bundled();
     let desktop = launched_from_desktop(&args);
     let result = run(args);
     if let (Err(e), true) = (&result, desktop && has_desktop()) {

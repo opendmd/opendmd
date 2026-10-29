@@ -580,6 +580,8 @@ impl Playing {
         gif: Stream,
         at: Duration,
     ) -> Self {
+        // A Formula's file says its name once it is read.
+        let title = gif.formula_name().map_or(title, str::to_string);
         Playing {
             index,
             timed: None,
@@ -676,10 +678,34 @@ impl Engine {
     /// Open `path` for playing: a virtual file ([`synth`]) in memory, else
     /// through the source.
     fn open_stream(&self, path: &str) -> io::Result<Stream> {
-        match synth::open(path) {
-            Some(bytes) => Stream::open(Box::new(bytes) as Box<dyn ReadSeek>),
-            None => self.source.open(path).and_then(Stream::open),
+        self.open_reader(path).and_then(Stream::open)
+    }
+
+    /// What `path` reads as: a virtual file in memory, a Formula's `.psi`
+    /// file read through the source (compacted as it is read, then closed:
+    /// [`crate::fx_psi::read_text`]) into a virtual file, else the source's
+    /// file.
+    fn open_reader(&self, path: &str) -> io::Result<Box<dyn ReadSeek>> {
+        if let Some(bytes) = synth::open(path) {
+            return Ok(Box::new(bytes));
         }
+        if let Some((file, opts)) = synth::formula_file(path) {
+            #[cfg(feature = "psi")]
+            {
+                let f = self.source.open(file)?;
+                let text = crate::fx_psi::read_text(io::BufReader::with_capacity(512, f))?;
+                return Ok(Box::new(synth::open_formula_text(opts, &text)));
+            }
+            #[cfg(not(feature = "psi"))]
+            {
+                let _ = (file, opts);
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Formulas are not in this build",
+                ));
+            }
+        }
+        self.source.open(path)
     }
 
     /// How new files come in (default [`Transition::DEFAULT`], Dissolve over
@@ -865,10 +891,7 @@ impl Engine {
         now: Duration,
         ov: Option<Override>,
     ) -> io::Result<()> {
-        let reader: Box<dyn ReadSeek> = match synth::open(path) {
-            Some(bytes) => Box::new(bytes),
-            None => self.source.open(path)?,
-        };
+        let reader = self.open_reader(path)?;
         self.current = None;
         self.skip_requested = false;
         // The pick is still what comes after this file; a copy held for it
@@ -1074,7 +1097,7 @@ impl Engine {
             let (path, title) = (entry.path, entry.title);
             let title = synth::title(&path).unwrap_or(title);
             // A live item is drawn, not read: nothing to open ahead.
-            let file = if synth::is_virtual(&path) {
+            let file = if synth::is_virtual(&path) || synth::formula_file(&path).is_some() {
                 AheadFile::Cold
             } else {
                 AheadFile::Picked
@@ -1668,6 +1691,74 @@ mod tests {
         }
         assert_eq!(e.now_playing().unwrap().path, b);
         assert_eq!(c.get(0, 0).r, 255, "the new sliders");
+    }
+
+    /// Formulas by reference: a bundled one by name and the user's `.psi`
+    /// file on the card, from a playlist and from `play_now`, with their
+    /// controls and their names; a name not bundled and a file not there
+    /// are `NotFound` (the firmware's 404), and the playlist skips them.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn formulas_play_by_name_and_from_their_files() {
+        crate::synth::install_test_bundled();
+        let mine = "-- author: me\n-- a comment\nname \"Mine\"\ncontrol k = 0\n\n  rgb(0, k, 0)   -- green\n";
+        let mut e = engine_with(
+            &[("/formulas/mine.psi", mine.as_bytes().to_vec())],
+            "@formula:nope\n/formulas/gone.psi\n@formula:red\n/formulas/mine.psi?a=1\n",
+            DwellPolicy {
+                min: Duration::from_secs(1),
+                max: Duration::from_secs(1),
+                min_loops: 0,
+            },
+        );
+        let mut c = Canvas::new();
+        e.tick(Duration::ZERO, &mut c).unwrap();
+        let now = e.now_playing().unwrap();
+        assert_eq!((now.path.as_str(), now.title.as_str()), ("@formula:red", "Red one"));
+        assert_eq!((c.get(0, 0).r, c.get(0, 0).g), (255, 0));
+        let mut t = 0;
+        while e.now_playing().unwrap().path == "@formula:red" {
+            t += 20;
+            e.tick(Duration::from_millis(t), &mut c).unwrap();
+            assert!(t < 5_000);
+        }
+        for _ in 0..40 {
+            t += 20;
+            e.tick(Duration::from_millis(t), &mut c).unwrap();
+        }
+        let now = e.now_playing().unwrap();
+        assert_eq!((now.path.as_str(), now.title.as_str()), ("/formulas/mine.psi?a=1", "Mine"));
+        assert_eq!((c.get(5, 5).r, c.get(5, 5).g), (0, 255), "its control from the path");
+        // By hand: the bundled one's control, then the errors.
+        e.play_now("@formula:slider?a=1", Duration::from_millis(t)).unwrap();
+        assert_eq!(e.now_playing().unwrap().title, "Slider");
+        for (p, kind) in [
+            ("@formula:nope", io::ErrorKind::NotFound),
+            ("@formula:../x", io::ErrorKind::NotFound),
+            ("/formulas/gone.psi", io::ErrorKind::NotFound),
+        ] {
+            assert_eq!(e.play_now(p, Duration::from_millis(t)).unwrap_err().kind(), kind, "{p}");
+        }
+    }
+
+    /// A Formula's file over [`MAX_FORMULA_SOURCE`](crate::synth::MAX_FORMULA_SOURCE)
+    /// compacted is refused with a sentence, never cut.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_formula_file_too_long_is_refused() {
+        let mut long = String::from("v = 0\n");
+        while long.len() < crate::synth::MAX_FORMULA_SOURCE + 100 {
+            long += "v = v + x * 0.5\n";
+        }
+        long += "gray(v)\n";
+        let mut e = engine_with(
+            &[("/formulas/long.psi", long.into_bytes())],
+            "/formulas/long.psi",
+            DwellPolicy::default(),
+        );
+        let err = e.play_now("/formulas/long.psi", Duration::ZERO).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("too long"), "{err}");
     }
 
     /// A formula played over a formula is retuned in place, and the title

@@ -1189,6 +1189,7 @@ dependencies = [
  "flate2",
  "log",
  "opendmd-core",
+ "opendmd-psi",
  "serde",
  "serde_json",
  "tera",

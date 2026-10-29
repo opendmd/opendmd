@@ -55,8 +55,10 @@ that file at the root, any other name is `/sets/<name>.txt`. No `/` or `..`.
 Play one file now (with the transition, from its prepared copy if there is
 one), then the playlist carries on.
 
-Body: `{"path": string}`, a card-absolute GIF path or a live item (see
-"Live items"). `"live":true`: only replace a formula on screen (`409` if
+Body: `{"path": string}`, a card-absolute GIF path, a Formula (a bundled
+one by name, `@formula:<stem>`; one of yours on the card,
+`/formulas/<stem>.psi`, maybe with `?a=…`; or inline, `@formula?src=…`) or
+a live item (see "Live items"). `"live":true`: only replace a formula on screen (`409` if
 none is; `400` for any other path). `"over":true` with a formula: draw it
 over the file on screen instead of playing it, until the playlist moves on
 to another file (in place of the `look_formula` meanwhile); with `"live"`
@@ -69,11 +71,12 @@ too heavy to draw over GIFs is a `400` with the reason.
 Reply: `{"ok":true,"path":"…"}` (with `"over":true` when drawn over).
 
 Errors: `400` neither card-absolute nor a live item, or a bad formula;
-`404` the file does not open (what was playing carries on); `415` not a
+`404` the file does not open, or no bundled Formula has that name
+(`there is no bundled Formula by that name`; what was playing carries on); `415` not a
 GIF, a live item this firmware does not know (`@nonsense`), or a retired
 `@fx:` path: the built-in effects are gone (`the built-in effects are gone:
 Formulas replace them (play one as @formula?src=…)`); `503` no
-playlist running; `413` body over 8 KB, or a formula over 2,048 B.
+playlist running; `413` body over 8 KB, or an inline formula over 6,144 B.
 
 ```sh
 curl -s $DMD/api/play --json '{"path":"/gifs/Consoles/SNES_Super_Metroid_01.gif"}'
@@ -236,7 +239,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `attract` | string, `""` | shown in the menus instead of a playlist: `""`, `"clock"`, `"text:<message>"` (≤ 200 characters, one line); anything else, `fx:` included, is `400` (the built-in effects are gone: for a Formula, make a playlist of it and choose it as `attract_set`). An `fx:` value stored by an earlier firmware reads as `""` (the playlist), with one log line at boot |
 | `look` | `colour` | tint: `colour` (`color`), `amber`, `red`, `green`, `blue`, `white` |
 | `glow` | `off` | phosphor glow: `off`, `short`, `long` |
-| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""` or its `@formula?src=…` path (≤ 2,048 B, else `413`; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: the formula drawn as a part under `layer screen { look(x, y, 0.4) }`; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
+| `look_formula` | `""` | a formula drawn over everything that plays, before the tint and glow: `""`, a bundled Formula by name (`@formula:<stem>`), one of yours on the card (`/formulas/<stem>.psi`, maybe `?a=…`; built again once the card is mounted) or inline, `@formula?src=…` (≤ 2,048 B, else `413`: save it and set it by name; one that does not compile, is too heavy to draw over GIFs (12 ms estimated), or covers the GIF entirely is a `400` with the reason, nothing saved). How it goes over the GIF is the formula's own `look [blend] [amount]` line (`look screen 40`: the formula drawn as a part under `layer screen { look(x, y, 0.4) }`; no line, or `look` alone: the formula as it is, over at 100 %); its name is its `name "…"` line. The web app offers Formulas that declare `look` |
 | `boot_show` | `short` | start-up show: `off`, `short`, `full` (from the next boot) |
 | `panel_sync` | `true` | refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. `/api/status` `scan` counts seams either way |
 | `panel_split` | `true` | with `panel_sync`: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once |
@@ -336,6 +339,7 @@ The card's files are served as they are:
 | GET | `/gifs/…` | a GIF |
 | GET | `/sets/…` | a playlist (`/sets/<name>.txt`) or its overrides (`.meta`) |
 | GET | `/cache/…` | a prepared copy |
+| GET | `/formulas/…` | one of the user's Formulas (`/formulas/<stem>.psi`, written with `PUT /api/files/formulas/<stem>.psi`) |
 | GET | `/filelist.txt`, `/filelist.<x>` | a playlist at the card's root |
 
 With a `Content-Length` and the type from the extension; playlists and
@@ -757,11 +761,22 @@ used). A heavy one is shown at fewer frames a second; status
 `{"on":true,"bytes":N}` while the JIT's kernel (N bytes of code) draws
 its pixel stage, else `{"on":false,"why":"…"}` (e.g. `it has layers`,
 `it reads the picture under it`, `it draws (ink)`, `off (setting)`,
-`being checked`). The whole path is at most 2,048 B; `name=<url-encoded>`
-(≤ 60 characters) is its name for display.
+`being checked`). The whole inline path is at most 6,144 B;
+`name=<url-encoded>` (≤ 60 characters) is its name for display.
+
+**By reference** (what playlists and the look use, so a Formula's length
+never matters there): `@formula:<stem>[?a=&b=&c=&fps=]` plays a bundled
+Formula (its file's stem in `opendmd-web/formulas/`, built into the
+firmware: `endless-road`, `big-clock`, …); a card path ending `.psi`,
+`/formulas/<stem>.psi[?a=…]`, plays one of the user's, read from the card
+as it opens (comments and indentation left out as it is read; 8 KB of
+Formula after that, 64 KB of file). A name that is not bundled, or a file
+that is not there, is a `404`. Its title is its `name "…"` line.
 
 ```sh
 curl -s $DMD/api/play --json '{"path":"@formula?src=gray(x)"}'
+curl -s $DMD/api/play --json '{"path":"@formula:endless-road"}'
+curl -s $DMD/api/play --json '{"path":"/formulas/my-road.psi?a=0.4"}'
 ```
 
 **Retired: `@fx:`.** The built-in effects (`@fx:tunnel`, `@fx:rotozoom`,
