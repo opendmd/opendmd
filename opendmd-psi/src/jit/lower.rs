@@ -146,9 +146,20 @@ const CALLEE: Reg = 8;
 /// and a5..a15 kept across a colour memo's cold call ([`cold_slot`]).
 const SLOT_HSV: i32 = 24;
 const SLOT_COVER: i32 = 28;
-/// (A multiple of 16: the windowed ABI keeps a1 16-byte aligned for the
-/// helpers and interrupts that run on it.)
-const FRAME: u32 = 80;
+/// A multiple of 16 (the windowed ABI keeps a1 16-byte aligned for the
+/// helpers and interrupts that run on it), and nothing of ours in its top
+/// 32 B: a window overflow keeps this frame's a4..a7 at [FRAME-32,
+/// FRAME-16) (it makes `call8`s) and its caller's caller's a0..a3 at
+/// [FRAME-16, FRAME), possibly before the kernel even starts. (jit2-a, on
+/// the emulator: an 80 B frame with a slot at 64 overwrote
+/// `Kernel::check`'s saved return address.) The slots end at 76.
+const FRAME: u32 = 112;
+const _: () = assert!(cold_slot_end() <= FRAME as i32 - 32);
+
+/// Where the last cold slot ends.
+const fn cold_slot_end() -> i32 {
+    32 + (15 - 5 + 1) * 4
+}
 
 /// Where a5..a15's value is kept across a memo's cold call.
 fn cold_slot(r: Reg) -> i32 {
@@ -233,14 +244,24 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
     let items = items(prog, start, pe)?;
     // The fewest temporaries the steps get by with (a kernel without calls
     // hoists into the rest).
-    let mut e = Emitter::new(prog, &items, 0)?;
-    // (Up to 7: a layer's blend wants five or six at once.)
-    for t in 0..=7 {
-        e = Emitter::new(prog, &items, t)?;
-        match e.emit() {
-            Ok(()) => break,
-            Err(TEMPS_OUT) if t < 7 => continue,
-            Err(w) => return Err(w),
+    // (Up to 7: a layer's blend wants five or six at once, an inline
+    // `hsv` eight; short of them, `hsv` through its helper.)
+    let mut e = Emitter::new(prog, &items, 0, false)?;
+    'ways: for hsv_call in [false, true] {
+        for t in 0..=7 {
+            e = match Emitter::new(prog, &items, t, hsv_call) {
+                Ok(e) => e,
+                // (An inline `hsv` keeps its values in more registers
+                // than the call does: the call's way may fit.)
+                Err(_) if !hsv_call => continue 'ways,
+                Err(w) => return Err(w),
+            };
+            match e.emit() {
+                Ok(()) => break 'ways,
+                Err(TEMPS_OUT) if t < 7 => continue,
+                Err(TEMPS_OUT) if !hsv_call => continue 'ways,
+                Err(w) => return Err(w),
+            }
         }
     }
     if e.c.bad {
@@ -483,11 +504,13 @@ struct Emitter<'a> {
     hot: bool,
     /// `src` with SAR 16 (`mul_w`, `mul`).
     uses_src: bool,
+    /// `hsv` through its helper (else inline, when the registers allow).
+    hsv_call: bool,
 }
 
 /// The values of `items` (each with its interval) and which value each
 /// register reads first, and each item writes.
-fn values(prog: &Program, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], Vec<Option<usize>>) {
+fn values(hsv_call: bool, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], Vec<Option<usize>>) {
     let mut vals: Vec<Val> = Vec::new();
     let mut cur: [Option<usize>; REGS] = [None; REGS];
     let mut livein: [Option<usize>; REGS] = [None; REGS];
@@ -525,7 +548,7 @@ fn values(prog: &Program, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], V
         }
     }
     for (k, it) in items.iter().enumerate() {
-        if hot_call(prog, it) {
+        if hot_call(hsv_call, it) {
             for v in vals.iter_mut() {
                 // (Its own result, and operands read for the last time, need not survive.)
                 if v.start <= k && v.end > k && !(v.start == k && !v.livein) {
@@ -578,13 +601,13 @@ impl<'a> Emitter<'a> {
     /// The emitter with `t` temporaries (a kernel without calls: values,
     /// hoists and temporaries share a5..a15; with calls: values in a5..a12,
     /// hoists in what a5..a7 the values leave, temporaries a13..a15).
-    fn new(prog: &'a Program, items: &'a [Item], t: usize) -> Result<Emitter<'a>, Refusal> {
-        let calls = items.iter().any(|it| needs_call(prog, it));
-        let hot = items.iter().any(|it| hot_call(prog, it));
+    fn new(prog: &'a Program, items: &'a [Item], t: usize, hsv_call: bool) -> Result<Emitter<'a>, Refusal> {
+        let calls = items.iter().any(|it| needs_call(hsv_call, it));
+        let hot = items.iter().any(|it| hot_call(hsv_call, it));
         let uses_src = items
             .iter()
             .any(|it| matches!(it, Item::Step(op) if matches!(op.code, code::MUL_W | code::MUL)));
-        let (mut vals, livein, wv) = values(prog, items);
+        let (mut vals, livein, wv) = values(hsv_call, items);
         let p = pressure(&vals, items.len());
         let all: [Reg; 11] = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         let (temps, spare, pool): (Vec<Reg>, Vec<Reg>, Vec<Reg>) = if hot {
@@ -628,6 +651,7 @@ impl<'a> Emitter<'a> {
             calls,
             hot,
             uses_src,
+            hsv_call,
         };
         e.choose_hoists(&spare);
         if hot {
@@ -661,6 +685,7 @@ impl<'a> Emitter<'a> {
             calls: true,
             hot: true,
             uses_src: false,
+            hsv_call: true,
         }
     }
 
@@ -1683,6 +1708,12 @@ impl<'a> Emitter<'a> {
                     self.release(g);
                 }
             }
+            OUT_HSV if !self.hsv_call => {
+                let rgb = self.hsv(op.a, op.b, op.c)?;
+                for (o, g) in rgb.into_iter().enumerate() {
+                    self.c.s8i(g, OUT, o as i32);
+                }
+            }
             OUT_HSV => {
                 self.call(
                     k,
@@ -1709,6 +1740,97 @@ impl<'a> Emitter<'a> {
             _ => self.layer(k, op)?,
         }
         Ok(())
+    }
+
+    /// `fixed::hsv(h, s, v)` inline: its three bytes in temporaries
+    /// (red, green, blue). The same operations in its order: s and v
+    /// clamped to 0..65,535, the hue's sixth, p q t as u32 products >> 16,
+    /// each channel `(x·255 + 0x8000) >> 16`, chosen by the sector.
+    fn hsv(&mut self, h: u8, s: u8, v: u8) -> Result<[Reg; 3], Refusal> {
+        // 0..65,535 of a value (clamp(x, 0, 0xffff)).
+        fn clamp16(e: &mut Emitter, x: Reg) -> Result<Reg, Refusal> {
+            let t = e.tmp()?;
+            let m = e.tmp()?;
+            e.c.movi(t, 0);
+            e.c.max(t, x, t);
+            e.release(x);
+            e.c.movi(m, -1);
+            e.c.extui(m, m, 0, 16);
+            e.c.min(t, t, m);
+            e.release(m);
+            Ok(t)
+        }
+        let hv = self.val(h)?;
+        let x = self.tmp()?;
+        self.c.extui(x, hv, 0, 16);
+        self.release(hv);
+        self.c.addx2(x, x, x);
+        self.c.slli(x, x, 1); // h6 = hue · 6
+        let sec = self.tmp()?;
+        self.c.extui(sec, x, 16, 3);
+        self.c.extui(x, x, 0, 16); // f
+        let f = x;
+        let sv = self.val(s)?;
+        let s = clamp16(self, sv)?;
+        let vv = self.val(v)?;
+        let v = clamp16(self, vv)?;
+        let w = self.tmp()?;
+        // v · (0x10000 − y) >> 16 into d (y consumed into w).
+        let prod = |e: &mut Emitter, d: Reg, y: Reg, w: Reg| {
+            e.c.movi(w, 1);
+            e.c.slli(w, w, 16);
+            e.c.sub(w, w, y);
+            e.c.mull(d, v, w);
+            e.c.extui(d, d, 16, 16);
+        };
+        let p = self.tmp()?;
+        prod(self, p, s, w);
+        let q = self.tmp()?;
+        self.c.mull(q, s, f);
+        self.c.extui(q, q, 16, 16);
+        prod(self, q, q, w);
+        // t: s · (0x10000 − f) >> 16 first.
+        self.c.movi(w, 1);
+        self.c.slli(w, w, 16);
+        self.c.sub(w, w, f);
+        self.c.mull(w, s, w);
+        self.c.extui(f, w, 16, 16);
+        let t = f;
+        prod(self, t, t, w);
+        // Each as a byte: (x·255 + 0x8000) >> 16.
+        for r in [v, p, q, t] {
+            self.c.slli(w, r, 8);
+            self.c.sub(r, w, r);
+            self.c.addmi(r, r, 0x4000);
+            self.c.addmi(r, r, 0x4000);
+            self.c.extui(r, r, 16, 8);
+        }
+        // (r, g, b) by sector: 0 (v t p), 1 (q v p), 2 (p v t), 3 (p q v),
+        // 4 (t p v), 5 (v p q).
+        let (r, g, b) = (s, w, self.tmp()?);
+        let ways = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]];
+        let mut done = Vec::new();
+        for (k, way) in ways.iter().enumerate() {
+            let next = match k {
+                0 => Some(self.c.bz_fwd(Zero::Nez, sec)),
+                5 => None,
+                k => Some(self.c.bi_fwd(Imm::Nei, sec, k as i32)),
+            };
+            self.c.mov(r, way[0]);
+            self.c.mov(g, way[1]);
+            self.c.mov(b, way[2]);
+            if let Some(n) = next {
+                done.push(self.c.j_fwd());
+                self.c.bind(n);
+            }
+        }
+        for d in done {
+            self.c.bind(d);
+        }
+        for x in [sec, v, p, q, t] {
+            self.release(x);
+        }
+        Ok([r, g, b])
     }
 
     /// A layer's coverage operand `v` clamped to 0..1 in a register, or
@@ -1817,6 +1939,13 @@ impl<'a> Emitter<'a> {
                     let g = self.chan(v)?;
                     self.put(o as i32, g, mode, cov)?;
                     self.release(g);
+                }
+            }
+            OUT_HSV if !self.hsv_call => {
+                let rgb = self.hsv(op.a, op.b, op.c)?;
+                let cov = self.coverage(cv)?;
+                for (o, g) in rgb.into_iter().enumerate() {
+                    self.put(o as i32, g, mode, cov)?;
                 }
             }
             OUT_HSV => {
@@ -2044,15 +2173,15 @@ fn slot(h: Reg) -> i32 {
 /// Whether an item calls a helper on every pixel (a colour's memo misses
 /// call one now and then: "cold", after which the hoists are loaded again;
 /// they do not make the kernel one with calls for its registers).
-fn hot_call(prog: &Program, it: &Item) -> bool {
-    needs_call(prog, it)
+fn hot_call(hsv_call: bool, it: &Item) -> bool {
+    needs_call(hsv_call, it)
         && !matches!(*it, Item::Step(op)
             if code::is_colour(op.code) && code::colour_parts(op.code).0 == code::OUT_PAL)
         && !matches!(*it, Item::SelPal { .. })
 }
 
 /// Whether an item calls a helper.
-fn needs_call(_prog: &Program, it: &Item) -> bool {
+fn needs_call(hsv_call: bool, it: &Item) -> bool {
     use code::*;
     match *it {
         Item::Step(op) => {
@@ -2074,7 +2203,7 @@ fn needs_call(_prog: &Program, it: &Item) -> bool {
                     | MULR
             ) || (DIGIT..=DIGIT_B).contains(&op.code)
                 || (NOISE_O..=NOISE_O_LAST).contains(&op.code)
-                || (is_colour(op.code) && colour_parts(op.code).0 == OUT_HSV)
+                || (hsv_call && is_colour(op.code) && colour_parts(op.code).0 == OUT_HSV)
                 || (is_colour(op.code)
                     && colour_parts(op.code).0 == OUT_PAL
                     && op.d & PAL_SCALED != 0)

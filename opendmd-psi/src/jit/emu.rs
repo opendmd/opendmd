@@ -25,6 +25,9 @@ const JUNK: u32 = 0xdead_beef;
 
 pub(crate) struct Emu {
     code: Vec<u8>,
+    /// The running function's reserved top of frame, `[top - 32, top)`
+    /// (its window's save areas): a kernel store there panics.
+    reserved: Option<(u32, u32)>,
     /// Host regions: (address, length); region k is at `(k + 1) << 20`.
     regions: Vec<(usize, usize)>,
     stack: Vec<u8>,
@@ -42,6 +45,7 @@ impl Emu {
     pub fn new(code: &[u8]) -> Emu {
         Emu {
             code: code.to_vec(),
+            reserved: None,
             regions: Vec::new(),
             stack: vec![0; STACK_LEN],
             steps: 0,
@@ -99,6 +103,12 @@ impl Emu {
     }
 
     fn st(&mut self, a: u32, n: usize, v: u32) {
+        if let Some((lo, hi)) = self.reserved {
+            assert!(
+                a + n as u32 <= lo || a >= hi,
+                "a store into the frame's save areas at {a:#x} ([{lo:#x}, {hi:#x}): a window spill keeps the caller's caller's registers there)"
+            );
+        }
         assert!(
             (a as usize).is_multiple_of(n),
             "misaligned {n}-byte store at {a:#x}"
@@ -128,6 +138,7 @@ impl Emu {
         let mut pc: usize = start;
         let mut sp_set = false;
         let mut sp = 0;
+        let mut frame_top = 0u32;
         loop {
             self.steps += 1;
             assert!(self.steps < 2_000_000_000, "the kernel ran away");
@@ -191,6 +202,18 @@ impl Emu {
                             for k in [8, 9, 11, 12, 13, 14, 15] {
                                 a[k] = JUNK ^ (k as u32);
                             }
+                            // A window overflow while the helper runs may
+                            // spill this frame's a4..a7 into its top
+                            // [frame-32, frame-16) and its caller's caller's
+                            // a0..a3 into [frame-16, frame): a kernel must
+                            // keep nothing there (jit2-a on the emulator: a
+                            // slot at 64 of an 80 B frame took Kernel::check's
+                            // return address).
+                            self.reserved = None;
+                            for o in (frame_top - 32..frame_top).step_by(4) {
+                                self.st(o, 4, JUNK ^ o);
+                            }
+                            self.reserved = Some((frame_top - 32, frame_top));
                             a[10] = v;
                             sar = JUNK;
                         }
@@ -291,9 +314,11 @@ impl Emu {
                                 assert!(!sp_set && pc == start && s == 1, "entry not first");
                                 let frame = (w >> 12) << 3;
                                 assert!(frame >= 16 && frame as usize <= STACK_LEN);
+                                frame_top = a[1];
                                 a[1] -= frame;
                                 sp = a[1];
                                 sp_set = true;
+                                self.reserved = Some((frame_top - 32, frame_top));
                             }
                             2 | 3 => {
                                 let c = B4CONSTU[r_];
