@@ -210,3 +210,14 @@ pub const JIT_LOOKS: &[(&str, &str, &str, u8, u32)] = &[
     ("Plasma letters", include_str!("../../opendmd-web/formulas/plasma-letters.psi"), "over", 100, 4895),
     ("Plasma", include_str!("../../opendmd-web/formulas/plasma.psi"), "screen", 40, 4083),
 ];
+
+// console-b on the spare (psi-probe CONSOLEB_ONLY, 1.0.0-beta.11-consoleb-a,
+// 2026-10-29): the cycled and rate Formulas as effects on the player's path,
+// p50 µs a frame, whichever the trial kept (JIT or VM; the still cache
+// taken, the held picture held). For `Program::esp32_us_jit_still`.
+pub const CONSOLEB: &[(&str, &str, u32)] = &[
+    ("Cycled plasma", include_str!("../../opendmd-web/formulas/cycled-plasma.psi"), 880),
+    ("Waterfall", include_str!("../../opendmd-web/formulas/waterfall.psi"), 1033),
+    ("Copper sky", include_str!("../../opendmd-web/formulas/copper-sky.psi"), 2093),
+    ("Big clock rate (bar in the mask)", include_str!("../../opendmd-web/experiments/console-b/big-clock-rate-mask.psi"), 2571),
+];

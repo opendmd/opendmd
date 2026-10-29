@@ -766,10 +766,6 @@ fn consoleb_probe(start: Instant, stack0: u32) {
             c.store(0, Ordering::Relaxed);
         }
         jit2::effect(name, src, "", &mut canvas);
-        let r: Vec<u32> = fx_psi::RATE_FRAMES.iter().map(|c| c.load(Ordering::Relaxed)).collect();
-        if r.iter().any(|&n| n > 0) {
-            say!(info, "psi-probe: consoleb {name}: rate frames (both runs): {} with the held picture, {} by the kernel, {} without it", r[0], r[1], r[2]);
-        }
         consoleb_split(name, src);
     }
     // The compiler's time on the longest bundled Formula (some of the
@@ -2181,6 +2177,12 @@ pub(crate) mod jit2 {
                 marked / u64::from(FRAMES), heap()
             );
             row.push(e50);
+            // (A `rate` formula's frames this run: held, by the kernel,
+            // from nothing, past the asked grid.)
+            let r: Vec<u32> = fx_psi::RATE_FRAMES.iter().map(|c| c.swap(0, Ordering::Relaxed)).collect();
+            if r.iter().any(|&n| n > 0) {
+                say!(info, "psi-probe: jit2: example {name} ({what}): rate frames {} held, {} by the kernel, {} from nothing, {} past the asked grid", r[0], r[1], r[2], r[3]);
+            }
         }
         if let [j, v] = row[..] {
             say!(info, "psi-probe: jit2: example {name}: JIT {j} us against VM {v} us = {}.{:02}x", v / j.max(1), (v * 100 / j.max(1)) % 100);
