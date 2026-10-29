@@ -183,20 +183,18 @@ pub fn bundled_names() -> impl Iterator<Item = &'static str> {
 /// A Formula's name from a file stem or a bundled name, for when its
 /// `name "…"` line is not at hand: `endless-road` -> "Endless road".
 pub fn stem_title(stem: &str) -> String {
-    let mut t: String = stem
-        .chars()
-        .map(|c| if c == '-' || c == '_' { ' ' } else { c })
-        .take(MAX_FORMULA_NAME)
-        .collect();
-    if let Some(c) = t.chars().next() {
-        let up: String = c.to_uppercase().collect();
-        t.replace_range(..c.len_utf8(), &up);
+    // (Stems are `[a-z0-9-]`: ASCII is enough, and keeps Unicode's case
+    // tables out of the firmware.)
+    let mut t = String::with_capacity(stem.len().min(MAX_FORMULA_NAME));
+    for c in stem.chars().take(MAX_FORMULA_NAME) {
+        let c = if c == '-' || c == '_' { ' ' } else { c };
+        t.push(if t.is_empty() { c.to_ascii_uppercase() } else { c });
     }
-    let t = t.trim().to_string();
+    let t = t.trim();
     if t.is_empty() {
         "Formula".to_string()
     } else {
-        t
+        t.to_string()
     }
 }
 

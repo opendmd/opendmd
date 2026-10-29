@@ -434,9 +434,11 @@ fn with_text<'a>(text: &'a str, opts: &str) -> Query<'a> {
     q
 }
 
-/// A `.psi` file's Formula, compacted as it is read ([`psi::compact`], a
-/// line at a time: the same text as compacting the whole), so comments and
-/// indentation never reach the heap: only what the compiler reads is kept.
+/// A `.psi` file's Formula as it is read, a line at a time: lines that are
+/// only a comment (`--`, `//`) or blank are left out and the rest trimmed,
+/// so comments and indentation mostly never reach the heap (a comment after
+/// code stays: the compiler skips it). Not `psi::compact`, whose code would
+/// cost the firmware 1.7 KB.
 /// `InvalidInput` ("too long for the panel") past
 /// [`MAX_FORMULA_SOURCE`](crate::synth::MAX_FORMULA_SOURCE) compacted or
 /// [`MAX_FORMULA_FILE`](crate::synth::MAX_FORMULA_FILE) read.
@@ -459,16 +461,12 @@ pub fn read_text<R: std::io::BufRead>(mut r: R) -> std::io::Result<String> {
         if read > MAX_FORMULA_FILE {
             return Err(too_long());
         }
-        let l = line.strip_suffix('\n').unwrap_or(&line);
-        let l = l.strip_suffix('\r').unwrap_or(l);
-        let code = psi::compact(l);
-        if code.is_empty() {
+        let code = line.trim();
+        if code.is_empty() || code.starts_with("--") || code.starts_with("//") {
             continue;
         }
-        if !out.is_empty() {
-            out.push_str("; ");
-        }
-        out.push_str(&code);
+        out.push_str(code);
+        out.push('\n');
         if out.len() > MAX_FORMULA_SOURCE {
             return Err(too_long());
         }
@@ -3227,10 +3225,11 @@ mod tests {
         assert_eq!(look.held.as_ref().unwrap().ink.as_ref().unwrap().0, before);
     }
 
-    /// A `.psi` file read a line at a time is the whole file compacted:
-    /// every example, its header and comments too.
+    /// A `.psi` file read a line at a time compiles to the same program as
+    /// the file (every example, header and comments too), with no comment
+    /// line or indentation kept.
     #[test]
-    fn a_file_read_is_the_file_compacted() {
+    fn a_file_read_is_the_formula_without_its_comment_lines() {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/formulas");
         let mut n = 0;
         for e in std::fs::read_dir(dir).unwrap() {
@@ -3240,8 +3239,10 @@ mod tests {
             }
             let text = std::fs::read_to_string(&p).unwrap();
             let read = read_text(std::io::Cursor::new(text.replace('\n', "\r\n"))).unwrap();
-            assert_eq!(read, psi::compact(&text), "{}", p.display());
-            assert!(!read.contains("--"), "{}", p.display());
+            let listing = |s: &str| psi::compile(s).map(|p| p.listing()).map_err(|e| e.msg);
+            assert_eq!(listing(&read), listing(&text), "{}", p.display());
+            assert!(read.lines().all(|l| !l.starts_with("--") && !l.starts_with(' ') && !l.is_empty()), "{}", p.display());
+            assert!(read.len() < text.len(), "{}", p.display());
             n += 1;
         }
         assert!(n > 20);
