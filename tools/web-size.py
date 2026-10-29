@@ -74,7 +74,7 @@ message, so the error texts and their formatting were dropped; with them,
 the wasm-bindgen glue and std it was 40 KB, without std 34.7 KB.
 The formula page on the site (`--share opendmd-web/share`: `f/`'s page,
 script, style and QR encoder, gzipped here since `make web` does not
-compress them; never packed) has a line of its own, <= 12 KB (the in-house
+compress them; never packed) has a line of its own, <= 13 KB (the in-house
 QR encoder is ~2.9 KB of it); it runs on the
 demo's files (the main wasm, js/preview.js and its imports, js/psikit.js,
 pkg-psi), which are counted in their own lines and printed as the page's
@@ -331,7 +331,7 @@ LOOKS = {"js/looks.js"}
 # view loads).
 FSHEET_GZ_BUDGET = 3 * 1024
 FSHEET = {"js/fsheet.js"}
-SHARE_GZ_BUDGET = 12 * 1024
+SHARE_GZ_BUDGET = 13 * 1024  # 12 -> 13 KB with short links (S5: Copy link posts /api/f, 11,548 -> 12,481 B)
 # What the formula page loads from the demo (its own files aside).
 SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024

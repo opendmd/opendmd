@@ -99,12 +99,13 @@ def new_page(browser, size: str, errors: list[str]) -> Page:
                               is_mobile=phone, has_touch=phone)
     ctx.grant_permissions(["clipboard-read", "clipboard-write"])
     page = ctx.new_page()
-    # (The demo asks /api/status first: a static site answers 404, as opendmd.dev does.)
-    page.on("console", lambda m: m.type == "error" and "/api/status" not in m.location.get("url", "")
+    # (The demo asks /api/status first: a static site answers 404, as opendmd.dev does.
+    # /f/'s Copy link posts to /api/f: a static server refuses it, and /f/ copies the long link.)
+    page.on("console", lambda m: m.type == "error" and not any(a in m.location.get("url", "") for a in ("/api/status", "/api/f"))
             and errors.append(f"[{size}] console: {m.text} ({m.location.get('url')})"))
     page.on("pageerror", lambda e: errors.append(f"[{size}] pageerror: {e}"))
     page.on("response", lambda r: r.status >= 400 and "/demo/api/" not in r.url and "/api/status" not in r.url
-            and errors.append(f"[{size}] HTTP {r.status} {r.url}"))
+            and not r.url.endswith("/api/f") and errors.append(f"[{size}] HTTP {r.status} {r.url}"))
     return page
 
 
@@ -161,6 +162,11 @@ def share_link(base: str, src: str, name: str, **sliders) -> str:
     return f"{base}/f/#" + urllib.parse.urlencode(q)
 
 
+def is_short(base: str, u: str) -> bool:
+    """A short link (/f/<id>, maybe ?a=…), as /f/ copies one on a site with its Worker."""
+    return re.fullmatch(re.escape(base) + r"/f/[0-9a-hjkmnp-tv-z]{10,}(\?.*)?", u) is not None
+
+
 def params(u: str) -> dict:
     return urllib.parse.parse_qs(urllib.parse.urlsplit(u).fragment, keep_blank_values=True)
 
@@ -194,8 +200,11 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
             own = page.evaluate("location.href")
             check(bool(r) and r[0].text.split("#")[0] == own.split("#")[0] and params(r[0].text) == params(own), f"/f/: the QR code reads back the link ({r[0].text[:60] if r else None}…)")
             page.click("#f-copy-link")
+            page.wait_for_timeout(500)
             clip = page.evaluate("navigator.clipboard.readText()")
-            check(clip.startswith(f"{base}/f/#formula=") and params(clip) == params(url), "/f/: Copy link copies the page's link")
+            # (Served by the site's Worker, a short link: tools/site-worker-test.py checks those.)
+            check(clip.startswith(f"{base}/f/#formula=") and params(clip) == params(url) or is_short(base, clip),
+                  f"/f/: Copy link copies the page's link ({clip[:60]})")
             page.click("#f-copy-code")
             check(page.evaluate("navigator.clipboard.readText()") == src, "/f/: Copy code copies the formula")
             demo = page.get_attribute("#f-demo", "href")
@@ -203,7 +212,8 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
             # A slider moved: the links follow it.
             page.eval_on_selector("#f-sl-a", "r => { r.value = 0.5; r.dispatchEvent(new Event('input')); }")
             page.click("#f-copy-link")
-            check(page.evaluate("navigator.clipboard.readText()").endswith("&a=0.5"), "/f/: the link carries the slider")
+            page.wait_for_timeout(300)
+            check(re.search(r"[&?]a=0\.5$", page.evaluate("navigator.clipboard.readText()")), "/f/: the link carries the slider")
             # Open on my display: asked once, a bad address refused, then remembered.
             seen: list[str] = []
             page.context.route("http://192.168.1.50/**", lambda r: (seen.append(r.request.url), r.fulfill(body="<p>display</p>", content_type="text/html")))
@@ -268,7 +278,8 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
     was = page.eval_on_selector_all("#f-sl-a [aria-checked=true]", "els => els.map(e => e.textContent)")
     page.click("#f-sl-a [role=radio] >> text=ring")
     page.click("#f-copy-link")
-    check(was == ["bar"] and page.inner_text("#f-sl > div > span") == "shape" and page.evaluate("navigator.clipboard.readText()").endswith("&a=1"),
+    page.wait_for_timeout(500)
+    check(was == ["bar"] and page.inner_text("#f-sl > div > span") == "shape" and re.search(r"[&?]a=1$", page.evaluate("navigator.clipboard.readText()")),
           f"/f/: a choice's buttons ({was} at a=2), ring -> a=1 in the link")
     page.context.close()
 

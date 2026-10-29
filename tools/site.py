@@ -25,7 +25,8 @@
 - /f/          a formula's own page (`/f/#formula=…&name=…&a=…`, the share
                links the web app's Formulas make): opendmd-web/share/f/, which
                runs on the demo's files (the link's decoder, the LED preview,
-               Psi)
+               Psi); the site's Worker also serves it as a short link's page,
+               /f/<id> (site/worker/src/index.ts)
 - /formulas/   the formula gallery: OpenDMD's examples (opendmd-web/formulas/
                *.psi, CC0, copied to formulas/src/; the ten marked
                `-- bundle` are also the web app's formulas.json) and the contributions merged into the public

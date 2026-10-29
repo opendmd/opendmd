@@ -295,6 +295,21 @@ There is no other host.
   public gallery repo's `gallery/` and `dev/api/`, as release.yml fetches
   them), or the deployed site lacks the contributions and the earlier
   releases' API pages.
+- **Short links** (`https://opendmd.dev/f/<id>`, made by the formula
+  page's Copy link) are stored in the D1 database `opendmd-site`, bound to
+  the Worker as `DB` in `site/worker/cloudflare.config.ts`. Its schema is
+  `site/worker/migrations/*.sql`, applied in order with `cf d1 migrations
+  apply` and recorded in the database's `d1_migrations` table: `make
+  site-d1-migrate` applies the new ones, and `make site-deploy-built`
+  runs it before every deploy, so a deploy whose Worker needs a new table
+  has it first. A schema change is a new numbered file, never an edit of
+  an applied one. An API token for the deploy needs D1 Edit as well as
+  Workers Scripts Edit.
+- **Locally**, `make site-dev` and `make site-worker-test` run offline:
+  `cf dev` keeps its own D1 in a SQLite file under
+  `site/worker/.wrangler/state` (the migrations are applied to it first)
+  and simulates the rate limiter; nothing in the Cloudflare account is
+  touched. Delete that folder to start the local database again.
 - **The public gallery repo** (github.com/opendmd/opendmd.github.io,
   serving nothing) takes Formula contributions by pull request in
   `gallery/`, checked by its `gallery-check.yml`. A release updates its
