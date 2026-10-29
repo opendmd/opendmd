@@ -1882,11 +1882,11 @@ def look_checks(page: Page, base: str, mock: bool) -> None:
     st0 = get_json(base + "/api/status")
     # (No look_formula_name, look_blend or look_amount: the Formula's own
     # `name` and `look` lines say them, formula-apps F2.)
-    check(list(cfg0)[-12:] == ["attract", "look", "glow", "look_formula", "boot_show",
-                              "panel_sync", "panel_split", "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"]
+    check(list(cfg0)[-13:] == ["attract", "look", "glow", "look_formula", "boot_show",
+                              "panel_sync", "panel_split", "formula_jit", "api_key_set", "panel", "panel_now", "panel_next", "panel_trial_s"]
           and not {"look_formula_name", "look_blend", "look_amount"} & set(cfg0),
           f"config: attract/look/glow/look_formula/boot_show/panel_sync/panel_split/"
-          f"api_key_set, then the panel keys, end the object ({list(cfg0)[-13:]})")
+          f"formula_jit/api_key_set, then the panel keys, end the object ({list(cfg0)[-14:]})")
     # The mock's config is the firmware's (http.rs settings_json's keys; the
     # mock's panel keys are the panel-timing card's).
     fw = re.findall(r'"(\w+)":', "".join(re.findall(r'r#"(.*?)"#', (REPO / "firmware/src/http.rs").read_text().split("fn settings_json", 1)[1].split("\n}\n", 1)[0])))
