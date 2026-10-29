@@ -20,8 +20,12 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// The longest source accepted (bytes).
-pub const MAX_SOURCE: usize = 4096;
+/// The longest source accepted (bytes): comments and indentation count, so
+/// it is roomy (4,096 until Formulas were played by reference, 2026-10-29:
+/// the readable Endless road is ~6 KB). What the panel compiles is bounded
+/// by its heap check, by tokens (`compile_heap_estimate`); a Formula read
+/// from the card is compacted first (8 KB at most), an inline path is 6 KB.
+pub const MAX_SOURCE: usize = 16 * 1024;
 /// Expression nodes (before dead ones are dropped): bounds compile time.
 pub const MAX_NODES: usize = 1024;
 /// Brackets and operators nested this deep: bounds the parser's stack.

@@ -64,15 +64,17 @@ fn bundled_src(stem: &str) -> &'static str {
 /// row noises, and without those, the draw stage, the palette and pick
 /// (the rows' floor). roadprobe-a..c also timed the sprite car's version.
 fn road_variants() -> Vec<(&'static str, String)> {
+    // (As build.rs keeps it: comment lines out, runs of spaces made one.)
     let src = bundled_src("endless-road");
-    let rows = src.find("-- each row looks").unwrap_or(0);
-    let draw = src.find("draw{").unwrap_or(rows);
-    let no_noise = |s: &str| s.replace("noise(un,5,0)", "v0").replace("noise(un,0,0)", "h0");
-    let no_draw = |s: &str| format!("{}{}", &s[..draw], s[rows..].replace("ink*16", "0"));
-    // (Since road-full the pick's first value is written in place: up to
-    // the road's arm, `,r0-al`.)
-    let gray = |s: &str| match (s.find("pal(road,pick("), s.find(",r0-al")) {
-        (Some(i), Some(j)) if i + 14 <= j => format!("{}gray(({})/6)\n", &s[..i], &s[i + 14..j]),
+    let rows = src.find("below = py < 19").unwrap_or(0);
+    let draw = src.find("draw {").unwrap_or(rows);
+    let no_noise = |s: &str| s.replace("noise(rowDriven, 5, 0)", "height").replace("noise(rowDriven, 0, 0)", "heading");
+    let no_draw = |s: &str| format!("{}{}", &s[..draw], s[rows..].replace("ink * 16", "0"));
+    // (The pick's first value is written in place: up to the road's arm,
+    // `,\nroadInk - stripe`.)
+    const PICK: &str = "pal(road, pick(";
+    let gray = |s: &str| match (s.find(PICK), s.find(",\nroadInk - stripe")) {
+        (Some(i), Some(j)) if i + PICK.len() <= j => format!("{}gray(({})/6)\n", &s[..i], &s[i + PICK.len()..j]),
         _ => s.to_string(),
     };
     vec![
