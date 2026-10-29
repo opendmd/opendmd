@@ -223,6 +223,60 @@ web app over the smaller `www` partition (1,310,720 B: one pack for both). Signi
 per layout; `FW_RELEASE_TARGET_DIR=/roomier/dir make fw-release` puts it
 elsewhere (the 8mb build in its `v8mb/`).
 
+### Releasing (local)
+
+While GitHub Actions is unavailable (the private repo has no build minutes
+until it goes public), a release is made on the dev box by
+`tools/release.sh`. `.github/workflows/release.yml` stays, for when Actions
+is available again; the script does the same steps.
+
+```bash
+make release VERSION=1.0.0-beta.12                       # dry run: builds and checks everything, publishes nothing
+make release VERSION=1.0.0-beta.12 PUBLISH=1             # the same, then publishes
+make release VERSION=1.0.0-beta.12 PUBLISH=1 RESUME=1    # after a publish that stopped part way
+```
+
+**A dry run** (the default):
+
+1. Plan: the version is newer than the latest release (a `-` suffix makes
+   it a pre-release), its tag `v<version>` exists neither here nor on
+   GitHub, the tree is clean and on main, GitHub's and the local mirror's
+   main are in it, gh can push, and the signing key is there.
+2. Bump: the version in every crate's `Cargo.toml` and `Cargo.lock`,
+   committed as "Release <version>" (on a detached HEAD: main does not
+   move) and tagged `v<version>` locally.
+3. Build: `make fw-release`, both layouts, signed with
+   `~/.config/opendmd/opendmd.key`, into
+   `~/scratch/opendmd-release/v<version>/dist` (`RELEASE_DIR=` moves
+   it); then the version in the images, manifests, bundles and www pack,
+   and at least 64 KB of factory spare per layout.
+4. Assets: the GitHub release's files, `SHA256SUMS` and the release notes.
+5. Site: `make site` with the public gallery repo's contributions and
+   earlier API pages, this release's API page frozen; the `release.json`
+   and installer checks, `make site-smoke`, `make site-deploy-check`
+   (uploads nothing), and the tree still clean.
+
+It then goes back to main and deletes the local tag: nothing has left the
+machine.
+
+**`PUBLISH=1`** (`--publish`) does all of the above, then, in order:
+
+1. main fast-forwarded to the release commit;
+2. main and the tag pushed to GitHub (over https with gh's credentials) and
+   to the local mirror `origin`;
+3. the GitHub release on opendmd/opendmd (a pre-release for a `-` version,
+   marked latest otherwise) and its assets;
+4. the public gallery repo updated (`tools/gallery-repo-publish.sh`);
+5. the site deployed to opendmd.dev (`make site-deploy-built`, cf's login),
+   then checked live.
+
+Each step prints its outcome, and the first failure stops it with what was
+and wasn't published. A failure before the first push undoes the local
+commit and tag. After that, rerun with `RESUME=1`: it reuses the build and
+skips whatever is already done (the pushes, the release, each asset with
+the same digest, a live site already at this version). A published tag is
+never moved, and nothing on GitHub is overwritten.
+
 ### Installing from a browser (the flasher)
 
 `flasher/index.html` is an install page built on

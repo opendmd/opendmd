@@ -108,7 +108,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
-	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built
+	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built release
 
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
@@ -415,6 +415,17 @@ site-deploy-built: site-worker-deps
 # runs it for a tag; by hand only with the owner.
 gallery-repo-publish: site
 	tools/gallery-repo-publish.sh $(SITE) $(GALLERY_REPO)
+
+# A release from this machine (tools/release.sh: release.yml's steps while
+# Actions is unavailable). make release VERSION=1.0.0-beta.12 is a dry run:
+# plan, bump (a detached commit + local tag, undone after), build both
+# layouts signed with the real key, every check, the assets and the site;
+# nothing pushed. PUBLISH=1 then publishes (main, GitHub and origin pushes,
+# the GitHub release, the gallery repo, the Cloudflare deploy); RESUME=1
+# with it continues a publish that stopped part way.
+release:
+	@test -n "$(VERSION)" || { echo "make release VERSION=X.Y.Z[-beta.N] [PUBLISH=1 [RESUME=1]]"; exit 2; }
+	tools/release.sh $(VERSION) $(if $(PUBLISH),--publish) $(if $(RESUME),--resume)
 
 fmt:
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo fmt
