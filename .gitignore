@@ -39,7 +39,7 @@ __pycache__/
 
 # Experiment outputs made from third-party art (DMDoS pack GIFs, homebrew
 # ROMs, console logos): regenerate locally, never commit (CLAUDE.md "Content
-# licensing"). The Kenney (CC0) outputs in art/process/out stay committed.
+# licensing"). The Kenney (CC0) inputs and PNG outputs in art/process stay committed.
 opendmd-web/experiments/tween/out/sheets/
 opendmd-web/experiments/art/emulator/out/*.png
 opendmd-web/experiments/art/process/out/c_logos.png

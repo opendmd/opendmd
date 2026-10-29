@@ -238,29 +238,16 @@ jobs:
           path: ${{ runner.temp }}/assets
           if-no-files-found: error
 
-      # The demo card's Kenney (CC0) animations come from the art pipeline
-      # prototypes, whose GIFs the repo ignores: made from the downloaded
-      # Kenney pack unless cached. (The sheets they rewrite are committed
-      # and come out the same.)
-      - name: Cache the art demos' GIFs
-        id: art-gifs
-        uses: actions/cache@v6
-        with:
-          path: |
-            opendmd-web/experiments/art/process/out/b_walk.gif
-            opendmd-web/experiments/art/process/out/b_pan.gif
-            opendmd-web/experiments/art/process/out/d_scroll.gif
-          key: art-gifs-${{ hashFiles('opendmd-web/experiments/art/process/*.py') }}
-
+      # The demo card's Kenney (CC0) animations: made from the sprites committed
+      # in art/process/kenney-pixel-platformer (offline; the GIFs are ignored).
       - name: The art demos' GIFs
-        if: steps.art-gifs.outputs.cache-hit != 'true'
         working-directory: opendmd-web/experiments/art/process
         env:
           ART_TMP: ${{ runner.temp }}/art
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          uv run --quiet fetch_inputs.py
+          uv run --quiet fetch_inputs.py kenney
           uv run --quiet demos.py b d
           git checkout -- out
 
