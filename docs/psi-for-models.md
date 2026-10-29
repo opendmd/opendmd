@@ -572,9 +572,9 @@ its overflow check (the cheaper rows below); a multiply by 1/2ⁿ is a shift.
 | `*` by 1/2ⁿ (`/2`, `/8`, `*0.25`) | 33 | | | |
 | `%` (other) | 113 | | `mix` | 130 |
 | neg abs floor frac not | 40 | | `smoothstep` | 214 + a division if its edges vary |
-| `/` by a varying value, `1/v` | 685 | | `hash` | 220 |
-| `sqrt` | 539 | | `atan2` | 529 |
-| `len` | 642 | | `noise` | 855 |
+| `/` by a varying value | 360 (`1/v` 230) | | `hash` | 220 |
+| `sqrt` | 229 | | `atan2` | 384 |
+| `len` | 472 | | `noise` | 855 |
 | `noise` of a growing value (section 11) | 870 | | | |
 | colour `rgb` | 120 | | colour `hsv` | 195 |
 | `ur` `ug` `ub` | 70 | | `ul` | 140 |

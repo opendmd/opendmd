@@ -280,6 +280,10 @@ fn levels_run_as_rarely_as_they_can() {
     // Division by a per-row value: one reciprocal a row, a multiply a pixel.
     let p = compile("gray(x / (y + 1))").unwrap();
     assert_eq!(p.counts(), (0, 2, 2), "{}", p.listing());
+    // One over a pixel value: `recip` (the same bits as the division).
+    let p = compile("gray(1 / (px + 1))").unwrap();
+    assert!(p.listing().contains("recip"), "{}", p.listing());
+    assert!(!p.listing().contains("div"), "{}", p.listing());
     let plasma = compile(sketches::PLASMA).unwrap();
     // (its `len(x-0.5, y-0.5)*6` is worked out once: the still cache's
     // marker is one step more)
@@ -651,9 +655,13 @@ fn sliders_and_the_esp32_estimate() {
     assert_eq!(i("gray(minute / 60 + b)"), 16 | 2);
     // Within 25 % of what psi-probe measured on the ESP32 (effect frame p50, µs).
     for (src, measured) in [
-        (sketches::PLASMA, 7245),
+        // (7,245 before fast-div, less its `len`'s saving on the spare: 848
+        // → 683 ns a pixel at fastdiv-a/-b.)
+        (sketches::PLASMA, 6569),
         (sketches::FIRE, 4964),
-        (sketches::RING_CLOCK, 11817),
+        // (11,817 before fast-div, less its `atan2`'s and `len`'s savings:
+        // 147 and 165 ns a pixel.)
+        (sketches::RING_CLOCK, 10539),
     ] {
         let est = compile(src).unwrap().esp32_us();
         assert!(
