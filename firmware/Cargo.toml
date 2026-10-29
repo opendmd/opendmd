@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-firmware"
-version = "1.0.0-beta.11"
+version = "1.0.0-beta.12"
 edition = "2021"
 resolver = "2"
 description = "OpenDMD ESP32 firmware: plays 128x32 GIFs from microSD onto two chained HUB75 panels"
