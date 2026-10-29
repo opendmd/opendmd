@@ -1,0 +1,27 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Big clock"
+about "The real time, drawn live: big rainbow digits and a seconds bar. Check it against your watch"
+loop 60
+-- Big clock with `rate`, the bar in the mask: the digits and the bar as a
+-- slow mask (redrawn whole when the second changes), the rainbow drifting
+-- over it every frame. The same frames as the bundled Big clock.
+frame {
+  h1 = floor(hour/10); h2 = hour % 10       -- the hours' two digits
+  m1 = floor(minute/10); m2 = minute % 10   -- the minutes' two digits
+  end = (second + 1)*128/60                 -- where the seconds bar ends
+}
+layer rate 50 {
+  q = px >= 64 ? px - 8 : px     -- the minutes sit 8 px further right
+  k = floor(q/32)                -- which digit: one every 32 px
+  n = pick(k, h1, h2, m1, m2)    -- and its value
+  col = floor(q % 32 / 8)        -- the font's column, 0 to 2 (then the gap)
+  row = floor(ty/6)              -- its row from the top, 0 to 4 (5: below)
+  bar = py < 1                   -- the bottom row is the seconds bar
+  gray(bar ? px < end : digit(n, col, row, bold))
+}
+-- a rainbow drifting through the digits, tilted by row; the bar is white
+layer min {
+  hue = py/64 + hour/24 + t/10
+  hsv(x + hue, py < 1 ? 0 : 1, 1)
+}

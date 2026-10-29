@@ -177,3 +177,23 @@ fn the_jit_estimate_is_within_20_percent_of_the_device() {
     println!("{}", rows.join("\n"));
     assert!(bad.is_empty(), "{bad:?}\n{}", rows.join("\n"));
 }
+
+/// `cycle` and `layer rate N` (console-b): the estimate the editor and the
+/// governor start from against the spare's frames, within ±20 %.
+#[test]
+fn the_cycled_and_slow_formulas_estimate_their_frames() {
+    let mut rows = Vec::new();
+    let mut bad = Vec::new();
+    for &(name, src, us) in measured::CONSOLEB {
+        let mut p = opendmd_psi::Program::default();
+        opendmd_psi::compile_into(src, &mut p).unwrap();
+        let est = p.esp32_us_jit_still();
+        let r = est as f64 / us as f64;
+        rows.push(format!("{name:<34} measured {us:>5} est {est:>5} ({:+.0} %)", (r - 1.0) * 100.0));
+        if !(0.8..=1.2).contains(&r) {
+            bad.push(name);
+        }
+    }
+    println!("{}", rows.join("\n"));
+    assert!(bad.is_empty(), "{bad:?}\n{}", rows.join("\n"));
+}

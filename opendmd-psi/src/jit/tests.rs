@@ -66,6 +66,11 @@ fn kernel_frame_changed(
     if let Some(b) = before {
         out.copy_from_slice(b);
     }
+    // (As `Kernel::render`: a `rate` formula without its held picture has
+    // its slow rows drawn first.)
+    if low.rate && with.under.is_none() {
+        crate::draw_slow::<128>(prog, &mut Scratch::new(), inputs, &OWN, u32::MAX, out);
+    }
     let base = out.as_mut_ptr();
     // SAFETY: row < 32: within `out`.
     let dest = |row: usize| unsafe { base.add(row * W * 3) };
@@ -144,6 +149,10 @@ fn same_as_vm_with(
     let low = lower(prog)?;
     let mut steps = 0;
     let mut frames = 0;
+    // A `rate` formula: the kernel draws its fast part over the held slow
+    // layers (the VM's), as the player has it.
+    let mut held = crate::Held::try_boxed().unwrap();
+    let mut pic: Vec<u8>;
     for &ms in times {
         let mut inputs = golden::inputs(ms);
         inputs.set_ms(prog, u64::from(ms));
@@ -151,6 +160,13 @@ fn same_as_vm_with(
             continue;
         }
         let want = vm_frame(prog, &inputs, None, with);
+        let with = if prog.rate().is_some() {
+            held.update::<128>(prog, &mut Scratch::new(), &inputs, &OWN);
+            pic = held.picture().to_vec();
+            With { under: Some(&pic), ink: with.ink }
+        } else {
+            with
+        };
         let (got, n) = kernel_frame(prog, &low, &inputs, None, with);
         if let Some(d) = first_diff(&got, &want) {
             panic!(
@@ -525,6 +541,11 @@ fn the_check_rows_alone_are_the_frames_rows() {
     let u = picture();
     for (name, src) in bundled() {
         let Ok(prog) = compile(&src) else { continue };
+        // (A `rate` formula's kernel draws over its held picture: its own
+        // test, `rate_formulas_draw_the_same_through_kernels`.)
+        if prog.rate().is_some() {
+            continue;
+        }
         let Ok(low) = lower(&prog) else { continue };
         let inputs = golden::inputs(500);
         if !crate::range::inputs_in_range(&prog, &inputs) {
@@ -578,6 +599,11 @@ fn kernels_say_what_changed_as_the_vm_does() {
     let mut n = 0;
     for (name, src) in bundled() {
         let Ok(prog) = compile(&src) else { continue };
+        // (A `rate` formula's kernel draws over its held picture: its own
+        // test, `rate_formulas_draw_the_same_through_kernels`.)
+        if prog.rate().is_some() {
+            continue;
+        }
         let Ok(low) = lower(&prog) else { continue };
         let lp = prog.loop_ms().max(1000);
         for ms in [0, lp / 2] {
@@ -698,4 +724,48 @@ fn helpers_draw_the_same_through_kernels() {
         }
     }
     assert_eq!(lowered, cases.len());
+}
+
+/// `cycle`: the turned palettes through kernels, turned once a frame and
+/// once a row (the row's colour words and memos filled again each row),
+/// scaled, fused and as layers.
+#[test]
+fn cycled_palettes_draw_the_same_through_kernels() {
+    let cases = [
+        "cycle(fire, sin(x*2) + sin(y*1.5) + sin(x*1.5 + y), t/8)",
+        "palette sky = #000, #024, #08c, #fc8, #fff\ncycle(sky, x*0.3 + y*0.5, t/4 + py/64)",
+        "cycle(rainbow, len(cx, cy), -t/3 + py/40) * (0.5 + x/2)",
+        "cycle(chrono, floor(px/8)/16, t + py/32) * (floor(px/16)/8)",
+        "cycle(ice, x > 0.5 ? y : 0.25, t/2 + py/20)",
+        "cycle(amber, pick(floor(px/32), 0.1, 0.4, 0.7, t), t/3)",
+        "layer { gray(x) }\nlayer screen { cycle(ice, y*7, t + py/9, x) }",
+        "palette p = #f00, #0f0, #00f\nlayer { cycle(p, x - y*2.5, t*0.37) }\nlayer multiply { cycle(fire, y, py/32 - t) * 0.75 }",
+    ];
+    for src in cases {
+        let prog = compile(src).unwrap();
+        let times = [0, 130, 1000, 2470, 5555, 7990];
+        if let Err(why) = same_as_vm("cycle", src, &prog, &times) {
+            panic!("{src}: on the VM ({why})");
+        }
+    }
+}
+
+/// `layer rate N`: the kernel draws the fast part over the held slow
+/// layers, the bytes of the VM's frame.
+#[test]
+fn rate_formulas_draw_the_same_through_kernels() {
+    let cases = [
+        "loop 60\nframe { h1 = floor(hour/10); m2 = minute % 10 }\nlayer rate 50 { gray(digit(pick(floor(px/32), h1, m2, 3, 4), floor(px % 32 / 8), floor(ty/6), bold)) }\nlayer min { hsv(x + py/64 + t/10, py < 1 ? 0 : 1, 1) }",
+        "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { gray(x*a*0.2) }",
+        "fps 100\nloop 2\nlayer rate 40 { cycle(fire, x, t/2) }\nlayer max { cycle(ice, len(cx, cy), t + py/32, 0.5) }",
+        "layer rate 3 { gray(x) }\nlayer multiply rate 3 { pal(ice, y) }\nlayer screen { hsv(t, 1, x) }",
+    ];
+    for src in cases {
+        let prog = compile(src).unwrap();
+        assert!(prog.rate().is_some());
+        let times = [0, 20, 40, 1000, 1500, 1980];
+        if let Err(why) = same_as_vm("rate", src, &prog, &times) {
+            panic!("{src}: on the VM ({why})");
+        }
+    }
 }
