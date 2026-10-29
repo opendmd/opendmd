@@ -367,12 +367,11 @@ pub(crate) fn frame<T: Target>(
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
         match low.rows_at {
-            Some(at) => t.run_rows(at, ctx, scratch.sc.as_mut_ptr()),
-            None => {
-                for op in &prog.ops[de..re] {
-                    vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
-                }
+            Some(at) => {
+                t.run_rows(at, ctx, scratch.sc.as_mut_ptr());
+                turn_rows(prog, tables, &mut own, &scratch.sc);
             }
+            None => vm::row_steps(prog, scratch, tables, &mut own),
         }
         #[cfg(feature = "stats")]
         clk.lap(stats::ROWS);

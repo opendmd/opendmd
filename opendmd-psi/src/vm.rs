@@ -731,7 +731,7 @@ fn frame<const N: usize>(
         if rows & (1 << row) == 0 {
             continue;
         }
-        per_row.begin(prog, scratch, tables, out, row);
+        per_row.begin(prog, scratch, tables, out, row, &mut own);
         let span = row * W * 3..(row + 1) * W * 3;
         let row_bytes = &mut out[span.clone()];
         let under_row = under.map(|u| &u[span.clone()]);
@@ -877,10 +877,22 @@ pub(crate) fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n
 /// The row steps for one row. In flash (consolea-a: as quick as in IRAM,
 /// the road 3,347 µs against main's 3,393; `noise_o` and the other row
 /// helpers they call stay in IRAM), and IRAM is short.
+///
+/// `cycle`'s turns (`code::TURN`, the section's last steps) turn the
+/// formula's palette slots in `own` for the row.
 #[inline(never)]
-fn row_steps<const N: usize>(prog: &Program, scratch: &mut Scratch<N>, tables: &Tables) {
+pub(crate) fn row_steps<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    tables: &Tables,
+    own: &mut Pals,
+) {
     for op in &prog.ops[prog.draw_end as usize..prog.row_end as usize] {
-        scalar(&mut scratch.sc, op, tables, &prog.tables);
+        if op.code == code::TURN {
+            crate::program::turn(tables, own, &scratch.sc, op);
+        } else {
+            scalar(&mut scratch.sc, op, tables, &prog.tables);
+        }
     }
 }
 
@@ -924,13 +936,14 @@ impl<'a> Rows<'a> {
         tables: &Tables,
         out: &[u8],
         row: usize,
+        own: &mut Pals,
     ) {
         self.finish(out);
         // y and py count from the bottom (y = 0 is the bottom row).
         let py = ((H - 1 - row) as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
-        row_steps(prog, scratch, tables);
+        row_steps(prog, scratch, tables, own);
         if self.track && row < H {
             self.kept = row;
             // SAFETY: row `row`'s W × 3 bytes of the W × H × 3 picture,

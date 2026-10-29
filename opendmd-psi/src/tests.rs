@@ -2631,3 +2631,82 @@ fn palette_error_messages() {
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
 
+
+// --- `cycle`: palette cycling (console-lessons Phase B) -------------------------
+
+/// `cycle(P, v, s)` is entry (floor(v·32) + floor(s·32)) mod 32 of P: the
+/// same bytes as `pal` of the folded index wherever that sum can't
+/// saturate, the turn per frame or per row, scaled and covered.
+#[test]
+fn cycle_is_the_palette_turned() {
+    let pairs = [
+        (
+            "cycle(fire, x*3 - 1, t/4)",
+            "pal(fire, frac(frac(x*3 - 1) + floor(frac(t/4)*32)/32))",
+        ),
+        (
+            "cycle(rainbow, len(cx, cy), -t/3 + py/40)",
+            "pal(rainbow, frac(frac(len(cx, cy)) + floor(frac(-t/3 + py/40)*32)/32))",
+        ),
+        (
+            "palette p = #f00, #0f0, #00f\ncycle(p, x - y*2.5, t*0.37) * (0.5 + x/2)",
+            "palette p = #f00, #0f0, #00f\npal(p, frac(frac(x - y*2.5) + floor(frac(t*0.37)*32)/32)) * (0.5 + x/2)",
+        ),
+        (
+            "layer { gray(x) }\nlayer screen { cycle(ice, y*7, t, x) }",
+            "layer { gray(x) }\nlayer screen { pal(ice, frac(frac(y*7) + floor(frac(t)*32)/32), x) }",
+        ),
+        (
+            "cycle(chrono, x, 0.5)",
+            "pal(chrono, frac(x + 0.5))",
+        ),
+    ];
+    for (a, b) in pairs {
+        for ms in [0, 130, 1000, 2470, 5555, 7990] {
+            assert_eq!(over(a, None, ms), over(b, None, ms), "{a} at {ms} ms");
+        }
+    }
+}
+
+#[test]
+fn cycle_turns_once_a_row_and_takes_the_still_cache() {
+    let p = compile("cycle(fire, sin(x*2) + sin(y*1.5) + sin(x*1.5 + y), t/8)").unwrap();
+    let l = p.listing();
+    assert!(l.contains("turn("), "{l}");
+    assert_eq!(p.still_lanes(), 1, "{l}");
+    // A turn per row: in the row section, the last step there.
+    let (de, re) = (p.draw_end as usize, p.row_end as usize);
+    assert_eq!(p.ops[re - 1].code, code::TURN);
+    assert!(de < re);
+    // The same palette and turn twice: one turn.
+    let p = compile("layer { cycle(fire, x, t) }\nlayer add { cycle(fire, y, t, 0.5) }").unwrap();
+    assert_eq!(p.listing().matches("turn(").count(), 1);
+    // `cycle` stays a name a saved formula may set.
+    assert!(compile("cycle = x\ngray(cycle)").is_ok());
+}
+
+/// The errors (E931-E934).
+#[test]
+fn cycle_error_messages() {
+    let cases: &[(&str, &str, &str)] = &[
+        ("cycle(fire, x, x)", "the same along a row", "E931"),
+        ("cycle(gray, x, t)", "gray is not one", "E932"),
+        ("cycle(nope, x, t)", "unknown palette", "E932"),
+        (
+            "palette pa = #f00\npalette pb = #0f0\nlayer { cycle(pa, x, t) }\nlayer add { cycle(pb, x, t/2) }",
+            "room for 3 palettes",
+            "E933",
+        ),
+        ("cycle(fire, x)", "and the turn", "E934"),
+        ("cycle(fire, x, t) + 1", "can't go into a sum", "E934"),
+    ];
+    let mut bad = alloc::vec::Vec::new();
+    for &(src, want, code) in cases {
+        match compile(src) {
+            Ok(_) => bad.push(alloc::format!("{code} {src:?}: compiled")),
+            Err(e) if !e.msg.contains(want) => bad.push(alloc::format!("{code} {src:?}: {}", e.msg)),
+            Err(_) => {}
+        }
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}

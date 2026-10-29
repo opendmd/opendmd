@@ -302,7 +302,10 @@ pub(crate) fn narrow(prog: &mut Program) {
         }
     }
     for &op in &ops[de.min(re)..re] {
-        sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
+        // (`cycle`'s turn writes a palette, no slot: its `d` is the palette's.)
+        if op.code != TURN {
+            sc[(op.d & 0x7f) as usize] = value(&op, g(&sc, op.a), g(&sc, op.b), g(&sc, op.c), tabs);
+        }
     }
     let mut regs = [FULL; REGS + 1];
     let lane = |regs: &[Iv; REGS + 1], sc: &[Iv], v: u8| -> Iv {
@@ -318,7 +321,7 @@ pub(crate) fn narrow(prog: &mut Program) {
     };
     for slot in &mut ops[re.min(pe)..pe] {
         let mut op = *slot;
-        if code::is_colour(op.code) || matches!(op.code, STILL | COLUMN | FUSE) {
+        if code::is_colour(op.code) || matches!(op.code, STILL | COLUMN | FUSE | SLOW) {
             continue;
         }
         if op.d & LANE == 0 || op.d & !LANE < L_REG0 {
