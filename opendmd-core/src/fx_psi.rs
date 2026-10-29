@@ -935,6 +935,14 @@ impl PsiFx {
                 bytes,
             );
         }
+        #[cfg(feature = "psi-stats")]
+        if self.prog.rate().is_some() {
+            let k = if self.held.is_none() { 2 } else { 0 };
+            RATE_FRAMES[k].fetch_add(1, Ordering::Relaxed);
+            if drawn {
+                RATE_FRAMES[1].fetch_add(1, Ordering::Relaxed);
+            }
+        }
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         let t2 = clock.map_or(0, |c| c());
         if compare {
@@ -975,6 +983,12 @@ impl PsiFx {
         Duration::from_millis(u64::from(ms))
     }
 }
+
+/// psi-probe's counts of a `rate` formula's frames (feature `psi-stats`):
+/// drawn with the held picture, drawn by the kernel, drawn without the
+/// held picture (from nothing).
+#[cfg(feature = "psi-stats")]
+pub static RATE_FRAMES: [std::sync::atomic::AtomicU32; 3] = [const { std::sync::atomic::AtomicU32::new(0) }; 3];
 
 /// psi-probe's switch (feature `psi-stats`): a Formula's frames as before
 /// console-a's Phase A (no compare; every pixel marked, a look's redrawn

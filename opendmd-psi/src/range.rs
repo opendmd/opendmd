@@ -40,23 +40,28 @@ const UNIT: Iv = Iv(0, ONE as i64);
 const SIGNED: Iv = Iv(-(ONE as i64), ONE as i64);
 
 impl Iv {
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn point(v: i32) -> Iv {
         Iv(v as i64, v as i64)
     }
 
     /// Clamped into i32, as saturation does.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sat(self) -> Iv {
         Iv(self.0.clamp(LO, HI), self.1.clamp(LO, HI))
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn fits(self) -> bool {
         self.0 >= LO && self.1 <= HI
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn union(self, o: Iv) -> Iv {
         Iv(self.0.min(o.0), self.1.max(o.1))
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn konst(self) -> Option<i32> {
         (self.0 == self.1).then_some(self.0 as i32)
     }
@@ -64,6 +69,7 @@ impl Iv {
 
 /// The highest `t` a frame of a loop of `loop_ms` is drawn at: every player
 /// draws `t` = `Inputs::at_ms(ms)` for an `ms` under the loop.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn t_max(loop_ms: u32) -> i32 {
     Inputs::at_ms(loop_ms)
 }
@@ -101,21 +107,25 @@ pub(crate) fn checked(c: u8) -> u8 {
     }
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn mul_corners(a: Iv, b: Iv) -> Iv {
     let c = [a.0 * b.0, a.0 * b.1, a.1 * b.0, a.1 * b.1];
     Iv(*c.iter().min().unwrap_or(&0), *c.iter().max().unwrap_or(&0))
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn add_iv(a: Iv, b: Iv) -> Iv {
     Iv(a.0 + b.0, a.1 + b.1)
 }
 
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn sub_iv(a: Iv, b: Iv) -> Iv {
     Iv(a.0 - b.1, a.1 - b.0)
 }
 
 /// `mul`'s exact result (before saturation): the corners' products, each
 /// shifted down (floor, monotonic).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn mul_iv(a: Iv, b: Iv) -> Iv {
     let p = mul_corners(a, b);
     Iv(p.0 >> 16, p.1 >> 16)
@@ -123,6 +133,7 @@ fn mul_iv(a: Iv, b: Iv) -> Iv {
 
 /// What a step's value can be, from its operands'. `tabs` for `tab`.
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
     use code::*;
     match op.code {
@@ -211,6 +222,7 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
 
 /// A floored remainder by a divisor in `b`: the divisor's sign, within it
 /// (0 by 0).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn mod_iv(b: Iv) -> Iv {
     if b.0 > 0 {
         Iv(0, b.1 - 1)
@@ -224,6 +236,7 @@ fn mod_iv(b: Iv) -> Iv {
 /// `div`: `sat((a << 16) / b)` truncated; over a `b` of one sign the
 /// quotient is monotonic in each operand, so the corners bound it. A `b`
 /// that can be 0: anything.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn div_iv(a: Iv, b: Iv) -> Iv {
     if b.0 <= 0 && b.1 >= 0 {
         // Over a `b` of one sign and 0 (a division by 0 is the end of the
@@ -250,6 +263,7 @@ fn div_iv(a: Iv, b: Iv) -> Iv {
 /// working memory): the compiler runs on a 12 KB stack of its own on the
 /// ESP32.
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn narrow(prog: &mut Program) {
     use code::*;
     let mut sc = alloc::vec![FULL; MAX_SCALARS];

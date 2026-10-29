@@ -43,6 +43,7 @@ impl Meta {
     /// Slot `k`'s control (0 `a`, 1 `b`, 2 `c`), `None` when undeclared (a
     /// formula that reads `a` without a `control` line: a slider 0 to 1,
     /// default 0, as before the declarations).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn control(&self, k: usize) -> Option<Control> {
         match *self.kind.get(k)? {
             SLIDER => Some(Control::Slider {
@@ -58,11 +59,13 @@ impl Meta {
     }
 
     /// Bit `k` set for each declared slot.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn declared(&self) -> u8 {
         (0..3).filter(|&k| self.kind[k] != NONE).fold(0, |m, k| m | 1 << k)
     }
 
     /// Slot `k`'s default (Q16.16): the declared one, else 0.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn default_value(&self, k: usize) -> i32 {
         self.def.get(k).copied().unwrap_or(0)
     }
@@ -70,11 +73,13 @@ impl Meta {
     /// The value a slot plays at: the one given (a path's `&a=`, a
     /// slider's), else the declared default. The formula clamps it to the
     /// declared range itself; nothing here needs to.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn value(&self, k: usize, given: Option<i32>) -> i32 {
         given.unwrap_or_else(|| self.default_value(k))
     }
 
     /// [`value`](Self::value) for the three slots.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn values(&self, given: [Option<i32>; 3]) -> [i32; 3] {
         [
             self.value(0, given[0]),
@@ -85,21 +90,25 @@ impl Meta {
 
     /// `look [blend] [amount]`: the blend (one of [`crate::look::BLENDS`])
     /// and the amount (0 to 100), when the formula says it may be a look.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn look(&self) -> Option<(&'static str, u8)> {
         let b = crate::look::BLENDS.get(usize::from(self.look).checked_sub(1)?)?;
         Some((b, self.amount))
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub(crate) fn set_slider(&mut self, k: usize, lo: i32, hi: i32, default: i32) {
         self.kind[k] = SLIDER;
         (self.lo[k], self.hi[k], self.def[k]) = (lo, hi, default);
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub(crate) fn set_choice(&mut self, k: usize, n: usize) {
         self.kind[k] = CHOICE;
         (self.lo[k], self.hi[k], self.def[k]) = (0, ((n as i32) - 1) << 16, 0);
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub(crate) fn set_look(&mut self, blend: usize, amount: u8) {
         self.look = blend as u8 + 1;
         self.amount = amount;

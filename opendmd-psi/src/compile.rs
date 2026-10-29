@@ -390,7 +390,6 @@ impl Toks {
     }
 }
 
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn lex_into(src: &str, out: &mut Toks) -> Result<(), Error> {
     let b = src.as_bytes();
     let mut i = 0;
@@ -1620,7 +1619,6 @@ impl Dag {
     /// where there is no such way (a growing value per pixel, `t*t`,
     /// `sqrt(t)`, …).
     #[inline(never)]
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn wide_op(&mut self, c: u8, args: [Id; 3], at: (usize, usize)) -> Result<Id, Error> {
         use code::*;
         let [a, b, k3] = args;
@@ -2126,12 +2124,13 @@ struct Colour {
     blend: u8,
     /// `pal(P, v) * k`: the palette's colour times k (each channel).
     scale: Option<Id>,
-    /// `cycle(P, v, s)`: its turn (a `code::TURN` node; `pal` is P until
-    /// `finish` gives the turned palette its slot).
-    turn: Option<Id>,
-    /// `layer rate N { }`: N (0: every frame).
-    rate: u8,
 }
+
+/// A colour's palette flag: `cycle(P, v, s)`, its turn (a `code::TURN`
+/// node) in `args[1]` (`pal` is P | this until `finish` gives the turned
+/// palette its slot). In the colour itself, so a colour stays its size
+/// (parts hold many: the compile's heap).
+const TURNED: u8 = 0x40;
 
 /// What a formula's or a part's lines come to: its colours, bottom to top
 /// (the last line's, or its layers'), the line that made the top one,
@@ -2144,6 +2143,8 @@ struct Body {
     loop_v: Option<i32>,
     /// `fps N`: the frame time it asks for, ms (10, 20 or 40).
     fps: Option<u8>,
+    /// `layer rate N { }`: each such layer's colour (its index) and N.
+    rates: Vec<(usize, u8)>,
 }
 
 const BP_TERNARY: u8 = 1;
@@ -2853,8 +2854,6 @@ impl<'s> Parser<'s> {
                 alpha: (k > ar).then_some(a[ar]),
                 blend: fixed::BLEND_OVER,
                 scale: None,
-                turn: None,
-                rate: 0,
             });
         }
         let cycle = name == "cycle";
@@ -2949,13 +2948,11 @@ impl<'s> Parser<'s> {
         };
         Ok(Colour {
             code,
-            args: [k, 0, 0],
-            pal,
+            args: [k, turn.unwrap_or(0), 0],
+            pal: if turn.is_some() { pal | TURNED } else { pal },
             alpha,
             blend: fixed::BLEND_OVER,
             scale: None,
-            turn,
-            rate: 0,
         })
     }
 
@@ -3062,8 +3059,6 @@ impl<'s> Parser<'s> {
             alpha: None,
             blend: fixed::BLEND_OVER,
             scale: None,
-            turn: None,
-            rate: 0,
         })
     }
 
@@ -3414,8 +3409,6 @@ impl<'s> Parser<'s> {
                 alpha: None,
                 blend: fixed::BLEND_OVER,
                 scale: None,
-                turn: None,
-                rate: 0,
             }],
             false,
         ))
@@ -3425,7 +3418,7 @@ impl<'s> Parser<'s> {
     /// ending in its colour (several: a part with layers drawn whole).
     #[cfg_attr(target_arch = "xtensa", optimize(size))]
     #[inline(never)]
-    fn layer(&mut self, kw: Token) -> Result<(Vec<Colour>, Token), Error> {
+    fn layer(&mut self, kw: Token) -> Result<(Vec<Colour>, Token, u8), Error> {
         self.next();
         let mut blend = None;
         let b = self.peek();
@@ -3553,15 +3546,12 @@ impl<'s> Parser<'s> {
             (true, _) => {}
             (false, m) => cs[0].blend = m.unwrap_or(fixed::BLEND_OVER),
         }
-        if rate > 0 {
-            if layered {
-                // E945.
-                return self.err(r, "`rate` goes on the formula's own layers, not on a part's");
-            }
-            cs[0].rate = rate;
+        if rate > 0 && layered {
+            // E945.
+            return self.err(r, "`rate` goes on the formula's own layers, not on a part's");
         }
         self.end_of_statement()?;
-        Ok((cs, ct))
+        Ok((cs, ct, rate))
     }
 
     /// The `loop` the lines from token `k` set (to their `}`, or the end),
@@ -3890,7 +3880,6 @@ impl<'s> Parser<'s> {
     /// steps between), as the tables' last 32 numbers (the next palette's
     /// the 32 below).
     #[inline(never)]
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn palette(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.next();
@@ -4104,7 +4093,6 @@ impl<'s> Parser<'s> {
     /// widths up to 64, up to 32 rows), packed into the tables: a header
     /// word, the keys' numbers, the rows at 1, 2 or 4 bits a pixel.
     #[inline(never)]
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn sprite(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.next();
@@ -4254,7 +4242,6 @@ impl<'s> Parser<'s> {
     /// `table NAME = n, n, …` at `kw`: numbers only (a `,` may end a line
     /// and the numbers go on), 256 in all.
     #[inline(never)]
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn table(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.peek();
@@ -4434,7 +4421,6 @@ impl<'s> Parser<'s> {
     /// `for k < N { … }` at `kw`: `k` = 0, 1, … N − 1, N a whole number
     /// from 1 to 1024; two deep at most; 2048 turns a frame in all.
     #[inline(never)]
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn for_loop(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         if self.in_draw > 2 {
@@ -4533,7 +4519,6 @@ impl<'s> Parser<'s> {
 
     /// `line(x0, y0, x1, y1[, v0[, v1]])` or `dot(x, y[, v])` at `t`.
     #[inline(never)]
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn primitive(&mut self, t: Token) -> Result<(), Error> {
         let line = self.text(t) == "line";
         let (need, most) = if line { (4, 6) } else { (2, 3) };
@@ -4613,6 +4598,7 @@ impl<'s> Parser<'s> {
             blocks: 0,
             loop_v: None,
             fps: None,
+            rates: Vec::new(),
         };
         let mut last: Option<Token> = None;
         let mut seen_frame = false;
@@ -4666,7 +4652,10 @@ impl<'s> Parser<'s> {
                 }
                 "frame" => self.frame_block(t, &mut seen_frame)?,
                 "layer" => {
-                    let (cs, ct) = self.layer(t)?;
+                    let (cs, ct, rate) = self.layer(t)?;
+                    if rate > 0 {
+                        try_push(&mut b.rates, (b.colours.len(), rate))?;
+                    }
                     b.colours.extend(cs);
                     b.top = Some(ct);
                     b.layered = true;
@@ -4766,7 +4755,6 @@ impl<'s> Parser<'s> {
     /// The declarations at the top of a formula (`host`) or a part: read,
     /// checked, and — for the formula's own — kept in [`Decls`].
     #[inline(never)]
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn header(&mut self, host: bool) -> Result<(), Error> {
         // Where each of `name`, `about` and `look` was set (0: not yet).
         let mut seen = [0usize; 3];
@@ -4973,7 +4961,6 @@ impl<'s> Parser<'s> {
     /// lines declare none (so a formula pasted in as `part look { … }`
     /// keeps its controls).
     #[inline(never)]
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn control(&mut self, kw: Token, k: usize, host: bool) -> Result<(), Error> {
         const HOW: &str = "a control is `control NAME lo..hi = default \"Label\"` or `control NAME = word, word, …`";
         let nt = self.next();
@@ -5359,7 +5346,6 @@ fn compile_inner<'s>(
 /// laid out. Out of line, so its locals are not in the frame under the
 /// parser's deepest (the firmware's compile stack).
 #[inline(never)]
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn finish(
     src: &str,
     p: &mut Parser<'_>,
@@ -5423,15 +5409,24 @@ fn finish(
             && c.alpha
                 .is_none_or(|a| dag.konst(a).is_some_and(|v| v >= ONE))
     };
+    // Each layer's `rate` (0: every frame), by its index after the drain.
+    let mut rates = try_vec(0u8, layers.len())?;
+    for &(i, n) in &body.rates {
+        if let Some(r) = rates.get_mut(i) {
+            *r = n;
+        }
+    }
     if let Some(k) = layers.iter().rposition(opaque) {
         layers.drain(..k);
+        rates.drain(..k);
     }
     let backdrop = !opaque(&layers[0]);
     // `cycle`'s turned palettes: a slot each after the formula's own, one
     // for each palette and turn (E933 past three in all).
     let mut turns: Vec<Id> = Vec::new();
+    let turn_of = |c: &Colour| (c.code == code::OUT_PAL && c.pal & TURNED != 0).then_some(c.args[1]);
     for c in &layers {
-        if let Some(tn) = c.turn.filter(|tn| !turns.contains(tn)) {
+        if let Some(tn) = turn_of(c).filter(|tn| !turns.contains(tn)) {
             turns.push(tn);
         }
     }
@@ -5483,27 +5478,27 @@ fn finish(
                 code::OUT_LAYER + (c.code - code::OUT_RGB) + 4 * c.blend
             },
             args: c.args,
-            pal: match c.turn {
+            pal: match turn_of(c) {
                 Some(tn) => 5 + p.dag.nodes[tn as usize].b as u8,
                 None => c.pal,
             },
             alpha,
             scale,
             shift,
-            turn: c.turn,
+            turn: turn_of(c),
         });
     }
     // `layer rate N { }`: the slow layers, a run from the bottom with one
     // rate, under at least one that moves, covering the panel.
-    let n_slow = layers.iter().take_while(|c| c.rate > 0).count();
+    let n_slow = rates.iter().take_while(|&&r| r > 0).count();
     let rate_err = |msg: &str| Err(Error::new(ct.start, ct.end, String::from(msg)));
-    if layers[n_slow..].iter().any(|c| c.rate > 0) {
+    if rates[n_slow..].iter().any(|&r| r > 0) {
         // E941.
         return rate_err("`rate` goes on the bottom layers only: the first layer, or the first few one after another");
     }
     let slow = if n_slow > 0 {
-        let n = layers[0].rate;
-        if layers[..n_slow].iter().any(|c| c.rate != n) {
+        let n = rates[0];
+        if rates[..n_slow].iter().any(|&r| r != n) {
             // E943.
             return rate_err("the slow layers share one `rate`: give each the same number");
         }
@@ -5847,7 +5842,6 @@ fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, Error> 
 /// reads `ink`, goes between the per-frame and the per-row steps in the
 /// order it is written: each loop's values (those that depend on its
 /// counter) at the top of its body.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
 #[inline(never)]
 fn emit(
     dag: &Dag,
@@ -6209,8 +6203,12 @@ fn emit(
     // The slow layers' pixel values (`split_slow` gave them their own):
     // never in the column or the still run (the slow part runs without
     // them, the fast part without the slow steps).
-    let mut in_slow = try_vec(false, n)?;
+    // (Lists of their own only for a `rate` formula: this is where the
+    // compile's heap peaks.)
+    let none = alloc::vec![false; n];
+    let mut in_slow = Vec::new();
     if let Some(sl) = slow {
+        in_slow = try_vec(false, n)?;
         for st in &steps[..sl.layers] {
             for x in st.reads() {
                 in_slow[x as usize] = true;
@@ -6224,17 +6222,20 @@ fn emit(
             }
         }
     }
+    let slow_px = |i: usize| in_slow.get(i).copied().unwrap_or(false);
     let col = column_nodes(dag);
-    let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i] && !in_slow[i]).collect();
-    let mut no_still = in_slow.clone();
-    for (o, &c) in no_still.iter_mut().zip(&in_col) {
-        *o |= c;
+    let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i] && !slow_px(i)).collect();
+    let mut no_still = Vec::new();
+    if slow.is_some() {
+        no_still = in_slow.clone();
+        for (o, &c) in no_still.iter_mut().zip(&in_col) {
+            *o |= c;
+        }
     }
     let col_ns: u32 = (0..n)
         .filter(|&i| in_col[i])
         .map(|i| value_ns(nodes[i].code))
         .sum();
-    let none = alloc::vec![false; n];
     let mut layout = None;
     // A formula that cycles a palette (`cycle`) asks the still cache first:
     // its picture is usually still, and with the index cached a frame is
@@ -6252,7 +6253,16 @@ fn emit(
         let excl = if use_col { &in_col } else { &none };
         let markers = usize::from(use_col);
         let cached = if use_still && total + markers < MAX_OPS {
-            choose_still(dag, steps, &px_op, if use_col { &no_still } else { &in_slow })
+            choose_still(
+                dag,
+                steps,
+                &px_op,
+                match (slow.is_some(), use_col) {
+                    (false, _) => excl,
+                    (true, true) => &no_still,
+                    (true, false) => &in_slow,
+                },
+            )
         } else {
             Vec::new()
         };
@@ -6402,7 +6412,6 @@ const VS: u16 = 0x100;
 /// A pick's table goes after all of them (its choices are read by the pick,
 /// per pixel).
 #[allow(clippy::too_many_arguments)]
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn assign_slots(
     ops: &[WOp],
     vs: &[VSlot],
@@ -6603,7 +6612,6 @@ fn reads(dag: &Dag, i: usize) -> impl Iterator<Item = Id> + '_ {
 /// again after its value's last use, and a step never writes a register it
 /// reads): the register of each item (0 for the others) and how many were
 /// used, `None` when more than [`REGS`] are live at once.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn registers(
     nodes: &[Node],
     steps: &[Step],
@@ -6719,7 +6727,6 @@ fn per_frame(dag: &Dag, steps: &[Step], cached: &[usize]) -> Vec<bool> {
 /// The values for the still cache, best first (at most
 /// [`crate::still::STILL_LANES`]): still per-pixel values chosen greedily
 /// by what they save a pixel per frame, each at least [`STILL_GAIN_NS`].
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn choose_still(
     dag: &Dag,
     steps: &[Step],
@@ -6856,7 +6863,6 @@ struct PixelSeq {
 /// still cache the per-frame values the cached run reads, the marker and
 /// the run (the cached values and the steps only they need), then the other
 /// values before the colour step that first needs them, as without either.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn pixel_seq(
     dag: &Dag,
     steps: &[Step],
