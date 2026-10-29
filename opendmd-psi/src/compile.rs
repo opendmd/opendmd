@@ -112,9 +112,12 @@ pub const fn compile_heap_estimate(src_len: usize) -> usize {
 }
 
 /// `v.push(x)`, or [`NO_MEMORY`] when the list can't grow (instead of the
-/// abort an infallible push is on the device).
+/// abort an infallible push is on the device). In the browser (wasm: the
+/// web module's bump heap grows the page's memory) the plain push: the
+/// fallible paths cost the download ~2.4 KB gz.
 #[inline]
 fn try_push<T>(v: &mut Vec<T>, x: T) -> Result<(), Error> {
+    #[cfg(not(target_arch = "wasm32"))]
     if v.len() == v.capacity() {
         v.try_reserve(1).map_err(|_| no_memory())?;
     }
@@ -122,19 +125,37 @@ fn try_push<T>(v: &mut Vec<T>, x: T) -> Result<(), Error> {
     Ok(())
 }
 
-/// `vec![x; n]`, or [`NO_MEMORY`].
-fn try_vec<T: Clone>(x: T, n: usize) -> Result<Vec<T>, Error> {
-    let mut v = Vec::new();
-    v.try_reserve_exact(n).map_err(|_| no_memory())?;
-    v.resize(n, x);
-    Ok(v)
+/// `v.extend_from_slice(s)`, or [`NO_MEMORY`] (wasm: as [`try_push`]).
+fn try_extend<T: Copy>(v: &mut Vec<T>, s: &[T]) -> Result<(), Error> {
+    #[cfg(not(target_arch = "wasm32"))]
+    v.try_reserve(s.len()).map_err(|_| no_memory())?;
+    v.extend_from_slice(s);
+    Ok(())
 }
 
-/// An empty list with room for exactly `n`, or [`NO_MEMORY`].
+/// `vec![x; n]`, or [`NO_MEMORY`].
+fn try_vec<T: Clone>(x: T, n: usize) -> Result<Vec<T>, Error> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut v = try_with_capacity(n)?;
+        v.resize(n, x);
+        Ok(v)
+    }
+    #[cfg(target_arch = "wasm32")]
+    Ok(alloc::vec![x; n])
+}
+
+/// An empty list with room for exactly `n`, or [`NO_MEMORY`] (wasm: as
+/// [`try_push`]).
 fn try_with_capacity<T>(n: usize) -> Result<Vec<T>, Error> {
-    let mut v = Vec::new();
-    v.try_reserve_exact(n).map_err(|_| no_memory())?;
-    Ok(v)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut v = Vec::new();
+        v.try_reserve_exact(n).map_err(|_| no_memory())?;
+        Ok(v)
+    }
+    #[cfg(target_arch = "wasm32")]
+    Ok(Vec::with_capacity(n))
 }
 
 /// `s[a..b]`, or "" (never a panic: a slice of a `str` that could panic
@@ -200,6 +221,7 @@ struct Token {
 /// ESP32 (24 on the host). The list is the compiler's biggest; a source is
 /// at most [`MAX_SOURCE`] bytes (the language service's at most 64 KB,
 /// [`lex`]), so its places fit in 16 bits.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy)]
 struct Packed {
     tok: Tok,
@@ -207,6 +229,20 @@ struct Packed {
     end: u16,
 }
 
+/// (The browser keeps the tokens as they are: no heap to spare there, and
+/// a smaller download.)
+#[cfg(target_arch = "wasm32")]
+type Packed = Token;
+
+#[cfg(target_arch = "wasm32")]
+impl Token {
+    #[inline]
+    fn get(self) -> Token {
+        self
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl Packed {
     #[inline]
     fn get(self) -> Token {
@@ -290,10 +326,8 @@ fn lex(src: &str) -> Result<Vec<Packed>, Error> {
         nl: false,
     };
     lex_into(src, &mut count)?;
-    let mut v = Vec::new();
-    v.try_reserve_exact(count.n).map_err(|_| no_memory())?;
     let mut out = Toks {
-        v: Some(v),
+        v: Some(try_with_capacity(count.n)?),
         n: 0,
         nl: false,
     };
@@ -319,11 +353,14 @@ impl Toks {
         if let Some(v) = &mut self.v {
             // (Never grows: `lex` reserved the count. `lex` checked the
             // source's length: the places fit.)
+            #[cfg(not(target_arch = "wasm32"))]
             v.push(Packed {
                 tok: t.tok,
                 start: t.start as u16,
                 end: t.end as u16,
             });
+            #[cfg(target_arch = "wasm32")]
+            v.push(t);
         }
     }
 }
@@ -3969,8 +4006,7 @@ impl<'s> Parser<'s> {
                     // E917.
                     return Err(self.too_full(kw, words.len()));
                 }
-                self.tables.try_reserve(words.len()).map_err(|_| no_memory())?;
-                self.tables.extend_from_slice(&words);
+                try_extend(&mut self.tables, &words)?;
                 self.tables.len() - words.len()
             }
         };
@@ -4034,8 +4070,7 @@ impl<'s> Parser<'s> {
                         ),
                     );
                 }
-                self.tables.try_reserve(vals.len()).map_err(|_| no_memory())?;
-                self.tables.extend_from_slice(&vals);
+                try_extend(&mut self.tables, &vals)?;
                 self.tables.len() - vals.len()
             }
         };
