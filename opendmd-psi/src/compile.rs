@@ -5781,7 +5781,8 @@ fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, Error> 
         }
     }
     // Copies, in node order (operands first): a pixel value both read is
-    // copied for the slow layers; one only they read takes the copies.
+    // copied for the slow layers, and so is one only they read that reads
+    // a copy.
     let mut what = 0u8;
     let mut map = try_vec(NO, len)?;
     for i in 0..len {
@@ -5806,13 +5807,17 @@ fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, Error> 
         if c.level != LV_PIXEL || c.code >= K_CONST {
             continue;
         }
+        let mut moved = false;
         for x in [&mut c.a, &mut c.b, &mut c.c].into_iter().take(code::arity(c.code)) {
             if map[*x as usize] != NO {
                 *x = map[*x as usize];
+                moved = true;
             }
         }
-        if by[i] & 2 == 0 {
-            dag.nodes[i] = c;
+        // (A node only the slow layers read, of a copy: copied too, after
+        // it — every node after the nodes it reads.)
+        if by[i] & 2 == 0 && !moved {
+            continue;
         } else if dag.nodes.len() >= MAX_NODES {
             return Err(Error::new(0, 0, "this formula is too long for the panel — simplify it"));
         } else {
@@ -5992,6 +5997,15 @@ fn emit(
     }
     if backdrop {
         prog.uses |= BACKDROP;
+    }
+    // A `rate` formula's fast part draws over the held picture, which it
+    // reads as the picture under: none of it may read what is under (E944).
+    if slow.is_some() && prog.uses & UNDER != 0 {
+        return Err(Error::new(
+            0,
+            0,
+            "a formula with `rate` draws its own picture: it can't read `ur`, `ug`, `ub` or `ul`",
+        ));
     }
     let mut ops: Vec<WOp> = try_with_capacity(total + 2)?;
     // A step for node `m` into `d`; a pick's table of its choices' slots

@@ -2840,6 +2840,7 @@ fn rate_error_messages() {
         ("layer rate 4 { gray(x) }\nlayer multiply rate 5 { gray(y) }\nlayer add { gray(t) }", "share one", "E943"),
         ("layer rate 4 { gray(x, 0.5) }\nlayer add { gray(y) }", "cover everything", "E944"),
         ("layer rate 4 { gray(ul) }\nlayer add { gray(y) }", "can't read", "E944"),
+        ("layer rate 4 { gray(x) }\nlayer add { gray(ur) }", "can't read", "E944"),
         ("draw { dot(3, 3) }\nlayer rate 4 { gray(ink) }\nlayer add { gray(y) }", "can't read", "E944"),
         ("part p { layer rate 3 { gray(x) }\nlayer add { gray(y) } }\nlayer { p }\nlayer add { gray(t) }", "not inside a part", "E945"),
         ("layer rate 4 { gray(x) }", "add a layer above", "E947"),
