@@ -1137,6 +1137,263 @@ fn worst_stack() {
 
 /// The probe, when the card at `root` is the main task's (see the module
 /// docs).
+// --- The JIT spike (docs/research/psi-jit-esp32.md, phase 0) ---------------
+//
+// Three hand-assembled kernels (`src/jitspike/*.s`; `assemble.sh` makes the
+// bytes), copied into executable heap and called: does `MALLOC_CAP_EXEC`
+// give memory and where, does it run from each region, does a windowed call
+// out of it reach a Rust helper, and what does a register-resident pixel
+// stage (Rotozoom floor's) cost against the VM's lanes, drawing the same
+// bytes.
+mod jitk {
+    pub static TINY: &[u8] = include_bytes!("jitspike/tiny.bin");
+    pub static CALL: &[u8] = include_bytes!("jitspike/call.bin");
+    pub static FLOOR: &[u8] = include_bytes!("jitspike/floor.bin");
+}
+
+type TinyFn = extern "C" fn() -> i32;
+type HelperFn = extern "C" fn(i32) -> i32;
+type CallFn = extern "C" fn(HelperFn, i32) -> i32;
+type FloorFn = extern "C" fn(*const i32, *const i32, *mut u8, *const i32);
+
+/// A block of executable heap.
+struct Exec {
+    p: *mut u32,
+    bytes: usize,
+}
+
+impl Exec {
+    fn take(bytes: usize) -> Option<Exec> {
+        // SAFETY: a plain allocation, freed by `Drop`.
+        let p = unsafe { esp_idf_sys::heap_caps_malloc(bytes, esp_idf_sys::MALLOC_CAP_EXEC) };
+        if p.is_null() {
+            None
+        } else {
+            Some(Exec { p: p as *mut u32, bytes })
+        }
+    }
+
+    fn addr(&self) -> usize {
+        self.p as usize
+    }
+
+    fn region(&self) -> &'static str {
+        match self.addr() {
+            0x4007_0000..=0x4007_FFFF => "cache IRAM",
+            0x4008_0000..=0x4009_FFFF => "IRAM",
+            0x400A_0000..=0x400B_FFFF => "D/IRAM",
+            _ => "elsewhere",
+        }
+    }
+
+    /// `code` into the block as 32-bit words (IRAM takes no byte stores):
+    /// the address to call, or None when it does not fit.
+    fn load(&self, code: &[u8]) -> Option<usize> {
+        if code.len() > self.bytes {
+            return None;
+        }
+        for (w, chunk) in code.chunks(4).enumerate() {
+            let mut b = [0u8; 4];
+            b[..chunk.len()].copy_from_slice(chunk);
+            // SAFETY: within the block (checked above), word-aligned (the heap's).
+            unsafe { self.p.add(w).write_volatile(u32::from_le_bytes(b)) };
+        }
+        // A data barrier (`memw`). No `isync`: internal SRAM has no
+        // instruction cache, and the block is nowhere near fetched code.
+        std::sync::atomic::fence(Ordering::SeqCst);
+        Some(self.addr())
+    }
+}
+
+impl Drop for Exec {
+    fn drop(&mut self) {
+        // SAFETY: from `heap_caps_malloc`, freed once.
+        unsafe { esp_idf_sys::heap_caps_free(self.p as *mut _) }
+    }
+}
+
+extern "C" fn sin_helper(a: i32) -> i32 {
+    psi::fixed::sin(&fx_psi::tables(), a)
+}
+
+fn exec_heap() -> (usize, usize) {
+    // SAFETY: plain queries.
+    unsafe {
+        (
+            esp_idf_sys::heap_caps_get_free_size(esp_idf_sys::MALLOC_CAP_EXEC),
+            esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_EXEC),
+        )
+    }
+}
+
+/// The floor's rows through the VM, one at a time, keeping what the kernel
+/// reads: the four row scalars and the row's two colours (`params`), and
+/// the column run's lanes `L0` (dx) and `L2` (col).
+#[allow(clippy::too_many_arguments)]
+fn floor_capture(
+    prog: &psi::Program,
+    t: &psi::Tables,
+    s: &mut psi::Scratch<128>,
+    ms: u32,
+    params: &mut [[i32; 6]; psi::H],
+    dx: &mut [i32; 128],
+    col: &mut [i32; 128],
+    out: &mut [u8],
+) {
+    let inputs = inputs_at(prog, ms);
+    let fire = t.palettes[0];
+    for (row, p) in params.iter_mut().enumerate() {
+        psi::render_rows::<128>(prog, s, &inputs, t, None, 1 << row, out);
+        let k = s.scalar_slot(23);
+        let ca = psi::fixed::pal_lit(fire, 51118, k);
+        let cb = psi::fixed::pal_lit(fire, 18350, k);
+        *p = [
+            s.scalar_slot(34),
+            s.scalar_slot(36),
+            s.scalar_slot(35),
+            s.scalar_slot(15),
+            i32::from_le_bytes([ca[0], ca[1], ca[2], cb[0]]),
+            i32::from_le_bytes([cb[1], cb[2], 0, 0]),
+        ];
+    }
+    dx.copy_from_slice(s.lane_reg(0));
+    col.copy_from_slice(s.lane_reg(2));
+}
+
+fn jit_spike(out: &mut [u8]) {
+    let (free0, big0) = exec_heap();
+    say!(info, "psi-probe: jit: exec heap {free0} B free, largest block {big0} B; data heap {} B free", heap());
+    // 4 KB blocks until one is D/IRAM (the IRAM leftover goes first).
+    let mut blocks: Vec<Exec> = Vec::new();
+    let mut iram: Option<usize> = None;
+    let mut diram: Option<usize> = None;
+    for k in 0..12 {
+        let Some(b) = Exec::take(4096) else {
+            say!(error, "psi-probe: jit: block {k}: no executable memory");
+            break;
+        };
+        say!(info,
+            "psi-probe: jit: block {k}: {:#x} ({}); exec heap {} B free, data heap {} B free",
+            b.addr(), b.region(), exec_heap().0, heap()
+        );
+        let last = b.region() == "D/IRAM";
+        if b.region() == "IRAM" && iram.is_none() {
+            iram = Some(blocks.len());
+        }
+        if last && diram.is_none() {
+            diram = Some(blocks.len());
+        }
+        blocks.push(b);
+        if last {
+            break;
+        }
+    }
+    let regions = [("IRAM", iram), ("D/IRAM", diram)];
+    for (what, at) in regions {
+        let Some(i) = at else {
+            say!(error, "psi-probe: jit: no {what} block to run from");
+            continue;
+        };
+        let Some(a) = blocks[i].load(jitk::TINY) else { continue };
+        // SAFETY: the block holds `tiny_kernel`, a windowed-ABI function of no arguments.
+        let f: TinyFn = unsafe { std::mem::transmute::<usize, TinyFn>(a) };
+        let r = f();
+        say!(info, "psi-probe: jit: tiny kernel at {a:#x} ({what}) returned {r} (want 42)");
+    }
+    if let Some(i) = iram.or(diram) {
+        if let Some(a) = blocks[i].load(jitk::CALL) {
+            // SAFETY: the block holds `call_kernel`.
+            let f: CallFn = unsafe { std::mem::transmute::<usize, CallFn>(a) };
+            let want = sin_helper(1 << 14);
+            let got = f(sin_helper, 1 << 14);
+            say!(info,
+                "psi-probe: jit: call kernel at {a:#x}: sin(1/4) through callx8 = {got}, direct {want} ({})",
+                if got == want { "the same" } else { "DIFFER" }
+            );
+        }
+    }
+
+    // Rotozoom floor's pixel stage by hand, against the VM.
+    let mut prog = zeroed::<psi::Program>();
+    if let Err(e) = compile(ROTOZOOM_FLOOR_EX, &mut prog, true, true) {
+        say!(error, "psi-probe: jit: the floor does not compile: {}", e.msg);
+        return;
+    }
+    let listing = prog.listing();
+    let want = [
+        "pixel L0 = sub_w(px, 64)",
+        "pixel L2 = mul_w(L1, s13)",
+        "pixel L1 = mul_w(s34, L0)",
+        "pixel L3 = add_w(L1, s36)",
+        "pixel L1 = mul_w(s35, L0)",
+        "pixel L4 = add_w(L1, L2)",
+        "pixel L1 = add_w(L4, s15)",
+        "pixel L4 = floor(L3)",
+        "pixel L3 = floor(L1)",
+        "pixel L1 = add_w(L4, L3)",
+        "pixel L4 = mask(L1, 1.9999847412109375)",
+        "pixel L1 = select(L4, 0.779998779296875, 0.279998779296875)",
+        "pixel out = pal(L1, s23)",
+    ];
+    if let Some(miss) = want.iter().find(|w| !listing.contains(*w)) {
+        say!(error, "psi-probe: jit: the floor's listing has no `{miss}`: the kernel was written for another layout; skipping");
+        return;
+    }
+    let t = fx_psi::tables();
+    let mut s = zeroed::<psi::Scratch<128>>();
+    s.reset();
+    let lp = prog.loop_ms().max(1);
+    let mut jit = vec![0u8; out.len()];
+    let mut params = [[0i32; 6]; psi::H];
+    let mut dx = [0i32; 128];
+    let mut col = [0i32; 128];
+    let Some(i) = iram.or(diram) else { return };
+    let Some(a) = blocks[i].load(jitk::FLOOR) else { return };
+    // SAFETY: the block holds `floor_kernel`; its arguments are a 128-lane,
+    // a 128-lane, a 384 B row and the 6-word params, all live below.
+    let f: FloorFn = unsafe { std::mem::transmute::<usize, FloorFn>(a) };
+    let row_of = |buf: &mut [u8], row: usize| buf[row * psi::W * 3..(row + 1) * psi::W * 3].as_mut_ptr();
+    // The same bytes? Four times in the loop.
+    let (mut differ, mut checked) = (0usize, 0usize);
+    for ms in [0, lp / 4, lp / 2, lp * 3 / 4] {
+        let inputs = inputs_at(&prog, ms);
+        psi::render_rows::<128>(&prog, &mut s, &inputs, &t, None, u32::MAX, out);
+        floor_capture(&prog, &t, &mut s, ms, &mut params, &mut dx, &mut col, &mut jit);
+        for row in 0..psi::H {
+            f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), params[row].as_ptr());
+        }
+        differ += out.iter().zip(jit.iter()).filter(|(a, b)| a != b).count();
+        checked += out.len();
+    }
+    say!(info, "psi-probe: jit: floor kernel against the VM at four times: {differ} of {checked} bytes differ{}", if differ == 0 { " (the same bytes)" } else { "" });
+    // Time: the VM's whole frame (frame, row and column steps included)
+    // against the kernel over the 32 rows (the pixel stage alone), from
+    // each region.
+    let (v50, v90, _) = timed(|k| {
+        let inputs = inputs_at(&prog, k * 20 % lp);
+        psi::render_rows::<128>(&prog, &mut s, &inputs, &t, None, u32::MAX, out);
+    });
+    say!(info, "psi-probe: jit: floor VM frame p50 {v50} p90 {v90} us = {} ns a pixel (rows and all)", v50 * 1000 / 4096);
+    floor_capture(&prog, &t, &mut s, lp / 3, &mut params, &mut dx, &mut col, &mut jit);
+    for (what, at) in regions {
+        let Some(i) = at else { continue };
+        let Some(a) = blocks[i].load(jitk::FLOOR) else { continue };
+        // SAFETY: as above.
+        let f: FloorFn = unsafe { std::mem::transmute::<usize, FloorFn>(a) };
+        let (j50, j90, _) = timed(|_| {
+            for row in 0..psi::H {
+                f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), params[row].as_ptr());
+            }
+        });
+        say!(info,
+            "psi-probe: jit: floor kernel from {what} at {a:#x}: p50 {j50} p90 {j90} us a frame = {} ns a pixel ({}.{}x the VM frame)",
+            j50 * 1000 / 4096, v50 / j50.max(1), (v50 * 10 / j50.max(1)) % 10
+        );
+    }
+    drop(blocks);
+    say!(info, "psi-probe: jit: done, exec heap {} B free, data heap {} B free", exec_heap().0, heap());
+}
+
 pub fn run(root: &str) {
     if !open_report(root) {
         return;
@@ -1159,6 +1416,7 @@ pub fn run(root: &str) {
     worst_stack();
     let mut out = vec![0u8; psi::W * psi::H * 3];
     let mut canvas = Canvas::new();
+    jit_spike(&mut out);
 
     // The examples as effects, first while the heap is at its fullest (the
     // still cache is 16-32 KB; p2probe-a ran these last, ~38 KB free, and no
