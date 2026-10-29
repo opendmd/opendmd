@@ -1,0 +1,11 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Copper sky"
+about "A sunset of copper bars: every row turns the palette its own way, behind still hills"
+loop 6
+palette sunset = #102, #315, #a24, #f62, #fb4, #fe8, #fb4, #f62, #a24, #315
+-- the sky: one palette, turned by the time and by the row
+layer { cycle(sunset, 0, t/6 + py/40) }
+-- the hills in front
+hill = py < 5 + 3*sin(x*2.5) + 2*sin(x*6.5 + 1)
+layer { rgb(0.03, 0.01, 0.06, hill) }

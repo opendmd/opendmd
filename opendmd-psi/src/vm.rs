@@ -574,6 +574,8 @@ pub fn render_rows_still<const N: usize>(
 /// not word-aligned; a row not drawn is left as it was: give zeros).
 /// The bytes written are the same as without it; the player marks only
 /// what changed, so the blit pushes nothing else (console-lessons 2.5).
+/// A `rate` formula (drawn from nothing: see [`crate::render_held`] for
+/// its held way) says every row drawn changed.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_changed<const N: usize>(
     prog: &Program,
@@ -685,11 +687,7 @@ pub(crate) fn frame<const N: usize>(
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = inputs.seed;
     }
-    let (fe, re, pe) = (
-        prog.frame_end as usize,
-        prog.row_end as usize,
-        prog.pixel_end as usize,
-    );
+    let (fe, pe) = (prog.frame_end as usize, prog.pixel_end as usize);
     // A `loop forever` formula's wide values (0: `t`) live in the last
     // lane while the frame's steps run (no lane is in use before the rows).
     if prog.forever() {
@@ -713,20 +711,11 @@ pub(crate) fn frame<const N: usize>(
     };
     // A `rate` formula's parts (`crate::rate`): the slow part runs only
     // the steps after its marker (no still cache: the caller gives none),
-    // the fast part skips them and starts each lane from `under` (the
-    // held picture) or, without one, from what `out` holds.
+    // the fast part the steps after those, each lane starting from `under`
+    // (the held picture) or, without one, from what `out` holds. (Any part
+    // but these of a `rate` formula: the fast part.)
     let fast = part == crate::rate::FAST;
-    let (mut k0, mut k1, mut skip) = (re, pe, 0);
-    if part != crate::rate::WHOLE {
-        if let Some(m) = prog.slow_marker() {
-            let n = prog.ops[m].a as usize;
-            if fast {
-                skip = n;
-            } else {
-                (k0, k1) = (m + 1, (m + 1 + n).min(pe));
-            }
-        }
-    }
+    let (k0, k1) = crate::rate::steps(prog, part);
     let mut cache = match (still, prog.still_marker()) {
         (Some(st), Some(at)) if st.lanes_for(prog) => {
             if st.holds(prog) {
@@ -802,10 +791,6 @@ pub(crate) fn frame<const N: usize>(
                 }
                 if op.code == code::COLUMN {
                     k += 1 + if columns_kept { op.a as usize } else { 0 };
-                    continue;
-                }
-                if op.code == code::SLOW {
-                    k += 1 + skip;
                     continue;
                 }
                 if op.code == code::STILL {

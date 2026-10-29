@@ -1049,7 +1049,9 @@ fn a_part_drawn_whole_is_the_formula() {
         .iter()
         .map(|s| (s.1, 0u32))
         .chain(golden::FRAMES.iter().map(|f| (f.1, f.2)))
-        .chain(golden::OVER.iter().map(|f| (f.1, f.2)));
+        .chain(golden::OVER.iter().map(|f| (f.1, f.2)))
+        // (`rate` is the formula's own: never inside a part, E945.)
+        .filter(|(src, _)| !src.contains(" rate "));
     for (src, ms) in all {
         for ms in [ms, ms + 1230, ms + 7000] {
             let want = over(src, Some(&u), ms);

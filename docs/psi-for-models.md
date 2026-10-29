@@ -280,6 +280,7 @@ The last line is the colour:
 | `hsv(h, s, v)` | hue in turns (wraps: `frac`), saturation and value clamped 0..1 |
 | `pal(P, k)` | palette P at k (clamped 0..1), **32 steps** (bands on slow ramps) |
 | `pal(P, k) * v` | the palette's colour with each channel times v (a light, a fog): one step |
+| `cycle(P, v, s)` | palette cycling: entry `(floor(v·32) + floor(s·32)) mod 32` of P (wraps; P not `gray`); `s` per frame or per row |
 | `gray(v)` | black to white; a bare value `v` means `gray(v)` |
 | `#ff8800`, `#f80` | a colour: red, green, blue as two hex digits each (or one, doubled) |
 | a colour expression | arithmetic on colours, read once a channel (below) |
@@ -297,6 +298,28 @@ a built-in palette: a scene's colours by index without `pick`s.
 ```psi
 palette dusk = #10082a, #4a1858, #c0306a, #ff8c40, #ffe0a0
 pal(dusk, floor(y*5)/4)      -- five bands, bottom to top
+```
+
+**Palette cycling.** `cycle(P, v, s)` (also `* k` and `cycle(P, v, s,
+cover)`, as `pal`) is palette P turned by `s`: entry `(floor(v·32) +
+floor(s·32)) mod 32`, so both wrap (where `pal` clamps). `s` may not vary
+along a row (E931: a value of `t`, a `frame { }` value, or a row value
+like `py/40`, which turns the palette per row: copper bars). P is a
+built-in palette or the formula's own, never `gray` (E932); each distinct
+(P, s) takes one of the formula's three palette slots, with its own
+`palette` lines (E933). The cost: the turn is a row step (a 32-entry copy,
+~20 µs a frame), the pixel pays `frac(v)` and a palette look-up; with `v`
+the pixel's position alone (no `t`, no slider) the still cache keeps
+`frac(v)` and a frame is ~0.6-0.9 ms — the idiom for plasma, rings,
+water, fire at `fps 100`. Write the motion into `s`, not `v`; keep `s` a
+whole number of turns over the loop.
+
+```psi
+loop 8
+fps 100
+palette glow = #002, #208, #80f, #f0c, #f60, #ff0, #fff, #ff0, #f60, #f0c, #80f, #208
+wave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)
+cycle(glow, wave/6, t/8)
 ```
 
 **Colours.** `#rrggbb` names a colour by its bytes: the channel `cc` is
@@ -355,6 +378,24 @@ names (two layers may both set `v`) and may have its own `frame { }`; it
 sees names set before it outside the layers, but may not set them again.
 `loop`, `fps` and `part` go outside layers. Layers do not nest. A layer under an
 opaque `over` layer (no coverage, or a constant ≥ 1) is dropped (free).
+
+**Slow layers: `layer [blend] rate N { … }`** (N 2..200). The bottom
+layer, or a run of layers from the bottom with the same N, is redrawn
+every Nth frame of the formula's grid (its `fps`, else 50), a band of rows
+a frame: row r (from the top) is in band `floor(r·N/32)`, and in frame k
+it shows the slow layers as at frame `k − ((k − band) mod N)`, their `t`
+taken back to it (the clock, sliders and `seed` as now). A slow layer that
+reads no `t` is redrawn only when what it reads changes (once a second for
+a clock's `second`). The layers above are drawn over it every frame. Rules
+(E941-E947): `rate` only on the bottom run, one N, at least one layer above
+it, the bottom one opaque (no blend, no coverage), no `ink` or `ur ug ub
+ul` in a slow layer, not inside a part. Cost: the slow layers' pixel steps
+÷ N, plus a row copy; as a look the slow layers are drawn every frame.
+Commutative blends (`multiply`, `min`, `max`, `add`, `screen`) let a
+static mask sit at the bottom: Big clock's digits as `layer rate 50 {
+gray(lit) }` under `layer min { hsv(…) }` draws the same frames as the
+one-layer Big clock. Fast motion in a slow layer shows bands moving at
+different times: use it for what changes slowly.
 
 ## 8. Over a GIF
 

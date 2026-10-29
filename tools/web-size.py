@@ -263,7 +263,15 @@ FONT = {"fonts/silkscreen.woff2"}
 # only. Raised under the budget authority (CLAUDE: Claude may adjust web
 # size budgets itself).
 # 87 KB with both merged (compile-oom +0.9 KB, the JIT estimate +0.5 KB on 85.6).
-PSI_WASM_GZ_BUDGET = 87 * 1024  # 85 until compile-oom and jit-2 both merged; 84 until compile-oom/jit-2; 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 91 KB for console-lessons Phase B (2026-10-29, branch console-b,
+# docs/research/console-lessons.md §7): `cycle(P, v, s)` (its parse, the
+# turn step, the palette slots) and `layer rate N { }` (the slow layers'
+# own values in the compiler, the band plan and the from-nothing frame in
+# `rate.rs`, the VM's parts), their eleven sentences and the estimate's
+# rows: the wasm 83,008 -> 86,639 B gz (+3.6 KB), the line ~87.3 -> ~90.9
+# KB. Raised under the budget authority (CLAUDE: Claude may adjust web size
+# budgets itself).
+PSI_WASM_GZ_BUDGET = 91 * 1024  # 87 until console-b; 85 until compile-oom and jit-2 both merged; 84 until compile-oom/jit-2; 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,

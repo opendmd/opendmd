@@ -41,6 +41,20 @@ pub(crate) const SLOW: u8 = 1;
 /// The steps but the slow layers', over a picture.
 pub(crate) const FAST: u8 = 2;
 
+/// The pixel steps a `part` runs (`vm::frame`'s), from and to: the slow
+/// layers' are the first, after their marker (`compile`'s layout). Out of
+/// line, in flash: once a frame. (A branch for the marker in the frame
+/// loop cost 266 B of IRAM.)
+#[inline(never)]
+pub(crate) fn steps(prog: &Program, part: u8) -> (usize, usize) {
+    let (re, pe) = (prog.row_end as usize, prog.len().min(MAX_OPS));
+    match prog.slow_marker() {
+        Some(m) if part == SLOW => (m + 1, (m + 1 + prog.ops[m].a as usize).min(pe)),
+        Some(m) => ((m + 1 + prog.ops[m].a as usize).min(pe), pe),
+        None => (re, pe),
+    }
+}
+
 /// What the slow layers read (the `SLOW` marker's `c`), transitively:
 /// `t`, the clock, a slider, `seed`.
 pub(crate) const READS_T: u8 = 1;
@@ -54,6 +68,7 @@ pub const MAX_RATE: usize = 200;
 /// The time (ms) each row of the slow layers is drawn at in the frame of
 /// `inputs` (see the module), and whether the slow layers read `t` at all
 /// (else every row is drawn at `inputs` as they are).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn plan(prog: &Program, m: usize, inputs: &Inputs) -> ([i64; H], bool) {
     let mut at = [0i64; H];
     let op = &prog.ops[m];
@@ -95,6 +110,7 @@ fn inputs_at(prog: &Program, inputs: &Inputs, ms: i64) -> Inputs {
 /// (`dirty`: only the rows whose time is not `at[r]` already, then noted
 /// there). Returns the rows drawn.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn slow_rows<const N: usize>(
     prog: &Program,
     m: usize,
@@ -153,12 +169,31 @@ fn slow_rows<const N: usize>(
     due
 }
 
+/// The slow layers' rows of `rows` from nothing, into `out` (a kernel's
+/// frame without a held picture draws them so first, then its fast part
+/// over them). Nothing for a formula without `rate`.
+#[doc(hidden)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+pub fn draw_slow<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    inputs: &Inputs,
+    tables: &Tables,
+    rows: u32,
+    out: &mut [u8],
+) {
+    if let Some(m) = prog.slow_marker() {
+        slow_rows::<N>(prog, m, scratch, inputs, tables, rows, out, true, None);
+    }
+}
+
 /// A `rate` formula's frame from nothing (the render functions' way for
 /// one): the slow layers' rows of `rows`, each band at its time, then the
 /// fast part over them, into `out`; `changed` (when asked) says every row
 /// drawn changed. The still cache, the canvas and `under` as the render
 /// functions take them (a `rate` formula reads no picture under).
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub(crate) fn render_scratch<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
@@ -243,6 +278,7 @@ impl Held {
     /// Bring the slow layers' picture to the frame of `inputs`: the rows
     /// whose time moved (or all, when what else they read moved or the
     /// program is another); how many rows were drawn.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     pub fn update<const N: usize>(
         &mut self,
         prog: &Program,
@@ -288,6 +324,7 @@ impl Held {
 
 /// A program's shape, cheaply: enough that a held picture is not used for
 /// another formula's by mistake (the player forgets it at a live edit).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn shape(prog: &Program, m: usize) -> u32 {
     let op = &prog.ops[m];
     let mut h: u32 = 0x811c_9dc5;

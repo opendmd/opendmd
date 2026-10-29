@@ -23,6 +23,9 @@
 // `fixed::lz32`'s one `nsau` (the esp toolchain is a nightly; the host and
 // wasm builds never see the gate).
 #![cfg_attr(target_arch = "xtensa", feature(asm_experimental_arch))]
+// Code that runs once a compile or once a frame, optimised for size on the
+// ESP32 (`#[optimize(size)]`: the app's flash is the scarce thing there).
+#![cfg_attr(target_arch = "xtensa", feature(optimize_attribute))]
 
 extern crate alloc;
 
@@ -53,7 +56,7 @@ pub use compile::{
 pub use meta::{Control, Meta};
 pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
-pub use rate::{render_fast, render_held, Held, MAX_RATE};
+pub use rate::{draw_slow, render_fast, render_held, Held, MAX_RATE};
 pub use still::{Still, StillLane, STILL_LANES};
 pub use tables::{Glyphs, Tables, ATAN};
 /// (psi-probe's references for `fixed::sqrt` and `len`.)
@@ -234,7 +237,29 @@ pub mod golden {
         // indexed by a sprite.
         ("palettes", PALETTES_OWN, 700, 0x9b6bdb382e0435d6),
         ("still", "loop 4.8\nd = len(px - 63.5, (15.5 - py)*2)\nk = 64/(d + 0.5)\nu = frac(atan2(15.5 - py, px - 63.5)*2 + t/4.8 + k/64)\nv = frac(k/16 + t/2.4)\ncell = (floor(u*8) + floor(v*4)) % 2\npal(chrono, frac(mix(0.28, 0.78, cell) + t/4.8)) * clamp((d - 6)/12, 0, 1)", 1900, 0x79d9337fc1b74897),
+        // `cycle` (console-b): turned once a frame (the still cache's
+        // index), once a row, a palette of its own, scaled and covered.
+        ("cycle", CYCLE, 0, 0x1dafac8c198d4911),
+        ("cycle", CYCLE, 3330, 0xb13bbf0bad5e4e55),
+        ("cycle-rows", CYCLE_ROWS, 1250, 0x20b621d54d05db4f),
+        // `layer rate N` (console-b): bands at their times (looping, fps
+        // 100, past the 32 rows, forever), a slow layer of the clock only.
+        ("rate", RATE, 0, 0x57d49b0e627769a0),
+        ("rate", RATE, 1730, 0xa3c74d5eb893a76b),
+        ("rate-100", RATE_100, 2990, 0x404a87488edd7322),
+        ("rate-clock", RATE_CLOCK, 41_000, 0xf4eb43cf6366638f),
+        ("rate-forever", RATE_FOREVER, 7_777, 0xca273ff9be4f165d),
     ];
+
+    /// `cycle` golden formulas: a still index turned once a frame; per-row
+    /// turns of a palette of its own, scaled and as a covered layer.
+    pub const CYCLE: &str = "loop 8\nwave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)\ncycle(rainbow, wave/6, t/8)";
+    pub const CYCLE_ROWS: &str = "loop 5\npalette sky = #000, #024, #08c, #fc8, #fff\nlayer { cycle(sky, x*0.3 - y*2.5, t/5 + py/64) * (0.6 + x*0.4) }\nlayer screen { cycle(fire, len(cx, cy), -t + py/32, 0.5) }";
+    /// `layer rate N` golden formulas.
+    pub const RATE: &str = "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { pal(ice, frac(x - t), 0.5) }";
+    pub const RATE_100: &str = "loop 3\nfps 100\nlayer rate 40 { cycle(fire, len(cx, cy), t/2) }\nlayer multiply rate 40 { gray(0.5 + y/2) }\nlayer max { gray(px == floor(t*40) % 128) }";
+    pub const RATE_CLOCK: &str = "loop 60\nframe { m2 = minute % 10; s = second/60 }\nlayer rate 50 { gray(px < s*128 or digit(m2, floor(px/8) % 8, ty % 8, bold)) }\nlayer min { hsv(x + py/64 + t/10, 1, 1) }";
+    pub const RATE_FOREVER: &str = "loop forever\nlayer rate 5 { gray(frac(x + t/5 + seed)) }\nlayer multiply { pal(ice, y + frac(t)) }";
 
     /// A `loop forever` golden formula: per frame and per pixel.
     pub const FOREVER: &str = "loop forever\nframe { u = t*0.15 + seed*1000 }\nv = noise(x*8 + t*0.5, y*4, t*0.2)*0.5 + sin(x*3 + t/8)*0.2\nhsv(u + v + noise(u, 5, 0)*0.25, 1 - (t % 7)/14, smoothstep(0, 20, t)*0.5 + 0.5)";

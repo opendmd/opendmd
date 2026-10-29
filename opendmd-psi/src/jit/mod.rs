@@ -276,7 +276,7 @@ pub(crate) fn frame<T: Target>(
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = inputs.seed;
     }
-    let (fe, re) = (prog.frame_end as usize, prog.row_end as usize);
+    let fe = prog.frame_end as usize;
     if prog.forever() {
         vm::wset(&mut scratch.lanes[REGS], 0, inputs.tw);
     }
@@ -379,7 +379,8 @@ pub(crate) fn frame<T: Target>(
         // The column and still runs (and what the still run reads, laid
         // out before its marker): lanes, the VM's own steps.
         let mut alias: Alias = [core::ptr::null(); REGS + 1];
-        let mut k = re;
+        // (After a `rate` formula's slow layers: the VM's, in their part.)
+        let mut k = prog.fast_start();
         let mut keep_at = usize::MAX;
         while k < main {
             let op = &prog.ops[k];
@@ -713,6 +714,11 @@ mod device {
                 }
                 return false;
             }
+            // A `rate` formula without its held picture: the slow layers'
+            // rows first (the VM's), the kernel's fast part over them.
+            if self.low.rate && under.is_none() {
+                crate::rate::draw_slow::<128>(prog, scratch, inputs, tables, rows, out);
+            }
             let mut d = self.device();
             let base = out.as_mut_ptr();
             // SAFETY: row < 32, within `out` (asserted above).
@@ -751,7 +757,8 @@ mod device {
             under: Option<&[u8]>,
             frame_bytes: &[u8],
         ) -> Result<bool, (usize, usize)> {
-            if !crate::range::inputs_in_range(prog, inputs) {
+            // (A `rate` formula's kernel is checked over its held picture.)
+            if !crate::range::inputs_in_range(prog, inputs) || (self.low.rate && under.is_none()) {
                 return Ok(false);
             }
             // (On the heap, once an open: the main task's stack is short.)

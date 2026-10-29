@@ -785,7 +785,6 @@ impl PsiFx {
         if self.held.is_some() {
             if !still_allowed(0) {
                 self.held = None;
-                log::info!("formula: slow layers' picture given back to the heap");
             }
             return;
         }
@@ -800,7 +799,6 @@ impl PsiFx {
             self.held_tried = 0;
             // This frame draws every slow row: left out.
             self.gov.edited();
-            log::info!("formula: slow layers' picture taken ({} B)", psi::Held::BYTES);
         } else {
             self.held_tried = now | 1;
         }

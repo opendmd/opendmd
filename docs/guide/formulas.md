@@ -260,6 +260,7 @@ false), and `and`, `or`, `not`. There is no power operator: write `x * x`.
 | `rgb(r, g, b)` | red, green and blue, 0 to 1 each |
 | `pal(name, v)` | a palette, `v` from 0 to 1: `fire`, `ice` (or `ocean`), `chrono`, `amber`, `rainbow`, `gray` |
 | `pal(name, v) * k` | the palette's colour, dimmed (or brightened) by `k`: a light or a fog on it |
+| `cycle(name, v, s)` | palette cycling: the palette turned by `s` (one turn per 1), at `v`; see below |
 | `gray(v)` | black to white |
 | `#ff8800` | a colour by its red, green and blue, two hex digits each (`#f80` for short) |
 
@@ -272,6 +273,34 @@ them, and up to three palettes in a formula), used like the others:
 last; with four colours, `pal(sea, 1/3)` is the second and `pal(sea, 2/3)`
 the third. In between you get the nearest colour, in bands — handy with a
 sprite or `floor(…)` choosing which colour each pixel is.
+
+**Palette cycling.** The old paint programs and games animated water,
+fire and plasma without redrawing them: the picture stayed still and its
+palette turned. `cycle(name, v, s)` is that: palette `name` (a built-in one
+or your own, not `gray`) turned by `s`, at `v`. One whole turn of `s` (from
+0 to 1) brings every colour once round the palette; unlike `pal` it wraps
+at both ends, so `v` can be anything. `cycle(sea, v, t/8)` turns once in 8
+seconds (keep `s` a whole number of turns over the loop for a seamless
+one). Leave the time out of `v` and the panel works the picture out once
+and keeps it: a frame costs little more than the palette's look-up, so a
+cycled plasma plays at 100 frames a second.
+
+```
+loop 8
+fps 100
+palette glow = #002, #208, #80f, #f0c, #f60, #ff0, #fff, #ff0, #f60, #f0c, #80f, #208
+wave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)
+cycle(glow, wave/6, t/8)
+```
+
+`s` must be the same along a row: the time, a value from `frame { }`, or
+one that changes with the row (`py`). Turning by the row is how the
+copper-bar skies of the 16-bit machines were made: `cycle(sunset, 0, t/6
++ py/40)` gives each row its own place in the palette. It takes `* k` and
+a coverage as `pal` does. A formula has room for three palettes in all:
+its own `palette` lines and each palette `cycle` turns by another value.
+The gallery's **Cycled plasma**, **Waterfall** and **Copper sky** are made
+this way.
 
 **Colours by name.** `#ff8800` is a colour, the way web pages write them.
 It can be the whole last line, and you can do sums with colours there:
@@ -336,6 +365,34 @@ set outside the layers can be used in all of them; names set inside a
 layer are its own, so two layers can each have a `v`, and you can paste a
 whole formula into a `layer { … }` to combine it with another. `loop` and
 `fps` go on their own lines outside the layers.
+
+**Slow layers.** A bottom layer that changes slowly need not be drawn
+every frame: `layer rate 4 { … }` is redrawn every 4th frame, a quarter of
+its rows each frame (bands, top to bottom), and the layers above are drawn
+over it every frame. Clouds, a sky, a clock's digits: the panel's time goes
+to what moves.
+
+```
+loop forever
+layer rate 4 {
+  cl = noise(x*3 - t*0.15, y*2, 0)*0.7 + noise(x*7 - t*0.3, y*5, 0)*0.3
+  pal(ice, cl*0.8 + y*0.3) * (0.35 + cl*0.5)
+}
+layer add {
+  fall = frac(t/8)*96
+  gray(hash(px, floor(ty/4 + hash(px, 1)*8 - fall)) > 0.93 ? 0.45 : 0)
+}
+```
+
+A slow layer that doesn't use `t` at all (a clock's digits) is redrawn
+only when what it does use changes: the clock, a control. A few rules:
+`rate` goes on the bottom layer (or the first few, with the same number),
+under at least one layer that isn't slow; the bottom one covers everything
+(no blend, no coverage); and a slow layer can't read `ink` or the GIF
+under it (`ur`, `ug`, `ub`, `ul`). Something that moves fast in a slow
+layer shows its bands moving at different times: `rate` is for what
+changes slowly. The browser's preview draws the same frames as the panel.
+The gallery's **Storm front** is made this way.
 
 **How much it covers.** Every colour takes one more value, if you like:
 how much of the pixel it covers, from 0 to 1 — `rgb(r, g, b, k)`,
@@ -562,6 +619,10 @@ milliseconds); all the examples are light or medium.
   The **Tunnel** example is made this way. Over a GIF (as the look) they
   are worked out every frame, so the editor may rate such a formula heavier
   as a look.
+- For a rainbow, a palette is cheaper than `hsv`: `pal(rainbow, h)` or
+  a palette of your own, and `cycle` turns it for next to nothing.
+- A slow bottom layer, `layer rate N`, costs an Nth of itself a frame (a
+  look draws it every frame).
 
 ## Sharing
 

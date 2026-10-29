@@ -841,7 +841,7 @@ impl Program {
     /// still cache's run with what is laid out before its marker (the VM
     /// runs those as lanes).
     pub(crate) fn kernel_start(&self) -> usize {
-        let (re, pe) = (self.row_end as usize, self.len());
+        let (re, pe) = (self.fast_start(), self.len());
         if let Some(k) = self.still_marker() {
             return (k + 1 + self.ops[k].a as usize).min(pe);
         }
@@ -853,6 +853,7 @@ impl Program {
         }
     }
 
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn estimate_with(&self, still: Option<usize>, lanes: bool, jit: bool) -> u32 {
         let (skip, cached) = match still {
             Some(k) => {
@@ -937,6 +938,7 @@ impl Program {
     }
 
     /// A kernel step's cost, ns a pixel (see `esp32_us_jit`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn jit_step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
         if !is_colour(op.code) {
@@ -979,6 +981,7 @@ impl Program {
     }
 
     /// A pixel step's cost, ns a pixel at 128 lanes (see `esp32_us`).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
         match op.code {
@@ -1083,6 +1086,15 @@ impl Program {
     pub(crate) fn slow_marker(&self) -> Option<usize> {
         let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
         (re.min(pe)..pe).find(|&k| self.ops[k].code == code::SLOW)
+    }
+
+    /// The first pixel step after the slow layers' (`layer rate N`: they
+    /// are laid out first, after their marker; `row_end` without them).
+    pub(crate) fn fast_start(&self) -> usize {
+        match self.slow_marker() {
+            Some(m) => (m + 1 + self.ops[m].a as usize).min(self.len()),
+            None => self.row_end as usize,
+        }
     }
 
     /// `layer rate N { }`'s N: its slow layers are redrawn every Nth frame

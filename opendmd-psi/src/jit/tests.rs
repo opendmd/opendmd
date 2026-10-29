@@ -66,6 +66,11 @@ fn kernel_frame_changed(
     if let Some(b) = before {
         out.copy_from_slice(b);
     }
+    // (As `Kernel::render`: a `rate` formula without its held picture has
+    // its slow rows drawn first.)
+    if low.rate && with.under.is_none() {
+        crate::draw_slow::<128>(prog, &mut Scratch::new(), inputs, &OWN, u32::MAX, out);
+    }
     let base = out.as_mut_ptr();
     // SAFETY: row < 32: within `out`.
     let dest = |row: usize| unsafe { base.add(row * W * 3) };
@@ -536,6 +541,11 @@ fn the_check_rows_alone_are_the_frames_rows() {
     let u = picture();
     for (name, src) in bundled() {
         let Ok(prog) = compile(&src) else { continue };
+        // (A `rate` formula's kernel draws over its held picture: its own
+        // test, `rate_formulas_draw_the_same_through_kernels`.)
+        if prog.rate().is_some() {
+            continue;
+        }
         let Ok(low) = lower(&prog) else { continue };
         let inputs = golden::inputs(500);
         if !crate::range::inputs_in_range(&prog, &inputs) {
@@ -589,6 +599,11 @@ fn kernels_say_what_changed_as_the_vm_does() {
     let mut n = 0;
     for (name, src) in bundled() {
         let Ok(prog) = compile(&src) else { continue };
+        // (A `rate` formula's kernel draws over its held picture: its own
+        // test, `rate_formulas_draw_the_same_through_kernels`.)
+        if prog.rate().is_some() {
+            continue;
+        }
         let Ok(low) = lower(&prog) else { continue };
         let lp = prog.loop_ms().max(1000);
         for ms in [0, lp / 2] {

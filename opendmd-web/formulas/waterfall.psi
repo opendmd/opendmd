@@ -1,0 +1,11 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Waterfall"
+about "Water pouring down, drawn once: only its colours move, as in the old paint programs"
+loop 4
+fps 100
+palette water = #012, #024, #048, #08c, #4cf, #fff, #4cf, #08c, #048, #024
+-- the water: smooth runs across, a little ripple down them
+v = ty/24 + noise(px/9, 0.5, 0)*1.5 + noise(px/3, ty/12, 0)*0.2
+-- turned twice round in the loop: the water falls
+cycle(water, v, -t/2)
