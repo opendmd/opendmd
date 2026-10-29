@@ -115,6 +115,20 @@ impl<const N: usize> Scratch<N> {
     }
 }
 
+impl<const N: usize> Scratch<N> {
+    /// (The firmware's probe.) Lane register `k` (0 = `L0`) as the VM left it.
+    #[doc(hidden)]
+    pub fn lane_reg(&self, k: usize) -> &[i32; N] {
+        &self.lanes[k + 1]
+    }
+
+    /// (The firmware's probe.) Scalar slot `k` as the VM left it.
+    #[doc(hidden)]
+    pub fn scalar_slot(&self, k: usize) -> i32 {
+        self.sc[k]
+    }
+}
+
 impl<const N: usize> Default for Scratch<N> {
     fn default() -> Self {
         Self::new()
