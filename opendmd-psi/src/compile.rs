@@ -5846,6 +5846,7 @@ fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, Error> 
 /// order it is written: each loop's values (those that depend on its
 /// counter) at the top of its body.
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 fn emit(
     dag: &Dag,
     steps: &[Step],
@@ -6866,6 +6867,7 @@ struct PixelSeq {
 /// still cache the per-frame values the cached run reads, the marker and
 /// the run (the cached values and the steps only they need), then the other
 /// values before the colour step that first needs them, as without either.
+#[allow(clippy::too_many_arguments)]
 fn pixel_seq(
     dag: &Dag,
     steps: &[Step],
@@ -6888,8 +6890,8 @@ fn pixel_seq(
     // (One loop for a layer's values and colour, the slow ones' and the
     // others'.)
     let layer = |seq: &mut Vec<Item>, k: usize, ok: &dyn Fn(usize) -> bool| {
-        for i in 0..n {
-            if ok(i) && need[i] == k {
+        for (i, &nd) in need.iter().enumerate().take(n) {
+            if nd == k && ok(i) {
                 seq.push(Item::Value(i));
             }
         }

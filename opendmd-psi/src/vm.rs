@@ -687,7 +687,9 @@ pub(crate) fn frame<const N: usize>(
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = inputs.seed;
     }
-    let (fe, pe) = (prog.frame_end as usize, prog.pixel_end as usize);
+    let fe = prog.frame_end as usize;
+    #[cfg(not(target_arch = "wasm32"))]
+    let pe = prog.pixel_end as usize;
     // A `loop forever` formula's wide values (0: `t`) live in the last
     // lane while the frame's steps run (no lane is in use before the rows).
     if prog.forever() {
