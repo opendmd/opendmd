@@ -1,6 +1,6 @@
 [package]
 name = "opendmd-firmware"
-version = "1.0.0-beta.11"
+version = "1.0.0-beta.11-jit1-a"
 edition = "2021"
 resolver = "2"
 description = "OpenDMD ESP32 firmware: plays 128x32 GIFs from microSD onto two chained HUB75 panels"
@@ -25,7 +25,7 @@ serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
 [features]
 # Formulas on the panel (`psi`) are in every build, releases included.
-default = ["psi"]
+default = ["psi", "jit"]
 # Bench-rig WiFi credentials from `firmware/.env`, compiled in as an NVS seed
 # (see `nvs_config.rs`). On for `make fw-build`/`fw-flash`/`fw-clippy`, OFF for
 # `make fw-release`: without it the `option_env!` reads do not exist in the
@@ -49,6 +49,11 @@ diag-heap = []
 # the web app's Formulas "Show on panel" (`POST /api/play`). On by default
 # (~63 KB of flash); `--no-default-features` builds without.
 psi = ["opendmd-core/psi"]
+# The narrow JIT (docs/research/psi-jit-esp32.md, phase 1): a Formula's
+# pixel stage as Xtensa code in executable heap, checked against the VM at
+# its first frame; `formula_jit` in /api/config turns it off. In every
+# build; `--no-default-features --features psi` builds without.
+jit = ["psi", "opendmd-core/psi-jit"]
 # Bench test hooks that a release does without: card speed's
 # `POST /api/card/full-speed?test_errors=N` (`cardspeed.rs`). On for
 # `make fw-build`/`fw-flash`/`fw-clippy` (with `dev-credentials`); a

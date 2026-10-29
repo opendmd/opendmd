@@ -255,6 +255,8 @@ struct ConfigPatch {
     panel_sync: Option<bool>,
     /// With it, the bottom half a refresh after the top; applied at once.
     panel_split: Option<bool>,
+    /// The Formulas' JIT (the kill switch); applied at the next frame.
+    formula_jit: Option<bool>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
     api_key: Option<String>,
@@ -569,6 +571,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         if let Some(v) = patch.panel_split {
             next.panel_split = v;
+        }
+        if let Some(v) = patch.formula_jit {
+            next.formula_jit = v;
         }
         if let Some(v) = &patch.api_key {
             if !v.is_empty() && !opendmd_core::access::valid_key(v) {
@@ -2128,10 +2133,11 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
 }
 
 /// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms",
-/// "compile_us","still"}` while a formula plays: its mean render time, the
+/// "compile_us","still","jit"}` while a formula plays: its mean render time, the
 /// frame time its governor holds it to (`fx_psi::Governor`), the one it
-/// asked for, the last formula compile's time, and the heap its still cache
-/// holds (B, 0 none); empty otherwise.
+/// asked for, the last formula compile's time, the heap its still cache
+/// holds (B, 0 none), and the JIT: `{"on":true,"bytes":N}` while a kernel
+/// draws its pixel stage, else `{"on":false,"why":"…"}`; empty otherwise.
 #[cfg(feature = "psi")]
 fn formula_json(path: &str) -> String {
     let (us, ms, asked, compile_us) = opendmd_core::fx_psi::stats();
@@ -2139,9 +2145,30 @@ fn formula_json(path: &str) -> String {
         return String::new();
     }
     let still = opendmd_core::fx_psi::still_held();
+    let jit = jit_json();
     format!(
-        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"compile_us":{compile_us},"still":{still}}}"#
+        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"compile_us":{compile_us},"still":{still},"jit":{jit}}}"#
     )
+}
+
+/// `formula.jit` (see [`formula_json`]).
+#[cfg(feature = "psi")]
+fn jit_json() -> String {
+    #[cfg(feature = "jit")]
+    {
+        let (on, why, bytes) = opendmd_core::fx_psi::jit_status();
+        if on {
+            return format!(r#"{{"on":true,"bytes":{bytes}}}"#);
+        }
+        if !opendmd_core::fx_psi::jit_allowed() {
+            return r#"{"on":false,"why":"off (setting)"}"#.into();
+        }
+        format!(r#"{{"on":false,"why":{}}}"#, json_string(why))
+    }
+    #[cfg(not(feature = "jit"))]
+    {
+        r#"{"on":false,"why":"not in this build"}"#.into()
+    }
 }
 
 #[cfg(not(feature = "psi"))]
@@ -2254,7 +2281,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"api_key_set":{},"card_speed":"{}"}}"#
+            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"api_key_set":{},"card_speed":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2282,6 +2309,7 @@ fn settings_json(s: &Settings) -> String {
         s.boot_show.name(),
         s.panel_sync,
         s.panel_split,
+        s.formula_jit,
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
     )
