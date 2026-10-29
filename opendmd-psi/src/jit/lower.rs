@@ -130,7 +130,9 @@ const TEMPS_OUT: Refusal = "the kernel ran out of temporaries";
 const CALLEE: Reg = 8;
 /// Frame slots: a8..a12's homes across a call, then one spare.
 const SLOT_SPARE: i32 = 20;
-const FRAME: u32 = 32 + 24;
+/// (64, not 56: the windowed ABI keeps a1 16-byte aligned for the
+/// helpers and interrupts that run on it.)
+const FRAME: u32 = 64;
 
 /// One unit of the kernel: a step, or a fused colour the kernel draws in
 /// one piece (as the VM's fused runs, `crate::fuse`).
@@ -403,6 +405,8 @@ struct Emitter<'a> {
     /// alive).
     pool: Vec<Reg>,
     free: Vec<Reg>,
+    /// The temporaries `tmp` gave this item (only these are released).
+    taken: Vec<Reg>,
     sar16: bool,
     /// Any helper call (the frame's save areas).
     calls: bool,
@@ -549,6 +553,7 @@ impl<'a> Emitter<'a> {
             temps,
             pool,
             free: Vec::new(),
+            taken: Vec::new(),
             sar16: false,
             calls,
             hot,
@@ -634,7 +639,9 @@ impl<'a> Emitter<'a> {
     }
 
     fn tmp(&mut self) -> Result<Reg, Refusal> {
-        self.free.pop().ok_or(TEMPS_OUT)
+        let r = self.free.pop().ok_or(TEMPS_OUT)?;
+        self.taken.push(r);
+        Ok(r)
     }
 
     /// A memo miss writes a8 and a10..a12 itself: none of them a
@@ -645,7 +652,9 @@ impl<'a> Emitter<'a> {
     }
 
     fn release(&mut self, r: Reg) {
-        if (self.temps.contains(&r) || self.pool.contains(&r)) && !self.free.contains(&r) {
+        // Only what `tmp` gave this item: an operand's register may be a
+        // live value's (Fable's review: `release` once freed one).
+        if self.taken.contains(&r) && !self.free.contains(&r) {
             self.free.push(r);
         }
     }
@@ -665,6 +674,7 @@ impl<'a> Emitter<'a> {
             }
         }
         self.free = free;
+        self.taken.clear();
     }
 
     /// `w` (a word) into `r`.
@@ -876,7 +886,8 @@ impl<'a> Emitter<'a> {
                 let args = [
                     Arg::Val(op.a),
                     Arg::Word(Word::Tabs),
-                    Arg::Imm(i32::from(op.b) | i32::from(op.c) << 8),
+                    Arg::Imm(i32::from(op.b)),
+                    Arg::Imm(i32::from(op.c)),
                 ];
                 return self.call(k, hid::TAB, &args, Some(op.d));
             }
@@ -884,7 +895,8 @@ impl<'a> Emitter<'a> {
                 let args = [
                     Arg::Val(op.a),
                     Arg::Word(Word::Sc),
-                    Arg::Imm(i32::from(op.b) | i32::from(op.c) << 8),
+                    Arg::Imm(i32::from(op.b)),
+                    Arg::Imm(i32::from(op.c)),
                 ];
                 return self.call(k, hid::PICK, &args, Some(op.d));
             }
