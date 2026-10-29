@@ -910,6 +910,8 @@ api-load:
 # ~/scratch, a rootless FAT32 card, a boot of the real full flash image.
 # Correctness only, never timing. Agents may run it freely.
 EMU_DIR ?= ~/scratch/opendmd-emu-sim
+# The updater's idf.py build is tied to one checkout: one build dir per checkout (a hash of its path).
+EMU_UPDATER ?= $(EMU_DIR)/updater-$(shell printf '%s' '$(CURDIR)' | md5sum | cut -c1-8)
 export EMU_DIR
 emu-build:
 	tools/emu/build-emulator.sh
@@ -923,7 +925,7 @@ EMU_SMOKE_IMAGE = $(EMU_DIR)/smoke/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-smoke:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	rm -f $(EMU_DIR)/smoke/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/smoke/dist/opendmd-*-4mb-app.bin
-	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_TARGET_DIR=$(EMU_DIR)/smoke/target DIST=$(EMU_DIR)/smoke/dist UPDATER_BUILD=$(EMU_DIR)/updater
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_TARGET_DIR=$(EMU_DIR)/smoke/target DIST=$(EMU_DIR)/smoke/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-smoke: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py smoke --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
@@ -935,7 +937,7 @@ EMU_PROBE_IMAGE = $(EMU_DIR)/probe/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-probe:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
 	rm -f $(EMU_DIR)/probe/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/probe/dist/opendmd-*-4mb-app.bin
-	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=psi-probe FW_APP_SPARE=$(EMU_PROBE_SPARE) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/probe/target DIST=$(EMU_DIR)/probe/dist UPDATER_BUILD=$(EMU_DIR)/updater
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=psi-probe FW_APP_SPARE=$(EMU_PROBE_SPARE) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/probe/target DIST=$(EMU_DIR)/probe/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-probe: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-probe &&) \
 	uv run --quiet tools/emu/run.py probe --image $(or $(FW_IMAGE),$(EMU_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
