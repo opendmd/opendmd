@@ -1026,7 +1026,7 @@ impl Program {
     /// The value of slot `v` as step `at` reads it if it holds a constant
     /// there, `None` for anything else (a slot holds a constant until a step
     /// writes another value into it: slots are used again).
-    fn const_value(&self, v: u8, at: usize) -> Option<i32> {
+    pub(crate) fn const_value(&self, v: u8, at: usize) -> Option<i32> {
         (v & LANE == 0
             && v >= S_FIRST_FREE
             && (v as usize) < MAX_SCALARS
