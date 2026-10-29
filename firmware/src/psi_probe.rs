@@ -212,6 +212,10 @@ macro_rules! say {
 /// starts the play lines when it is done.
 const ROAD_ONLY: bool = false;
 
+/// Only the JIT spike's rows (jitspike-b: a's full probe ran out of heap
+/// in the looks, 225 s in, and the spike's own rows were done long before).
+const JIT_ONLY: bool = true;
+
 /// Endless road and its variants one at a time (each source made, run and
 /// dropped before the next), splits, then Starfield and Time gate as
 /// references; the play lines start first.
@@ -1226,6 +1230,31 @@ fn exec_heap() -> (usize, usize) {
     }
 }
 
+/// The floor's scalar slots as this build's compiler laid them out:
+/// `L1 = mul_w(s_a, L0); L3 = L1 + s_b; L1 = mul_w(s_c, L0); L4 = L1 + L2;
+/// L1 = L4 + s_d; … pal(L1, s_k)`.
+#[derive(Clone, Copy, Debug)]
+struct FloorSlots {
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+    k: usize,
+}
+
+/// The number between `prefix` and `suffix` in the `nth` line of `listing`
+/// that has them (the slot a step reads).
+fn slot_in(listing: &str, prefix: &str, suffix: &str, nth: usize) -> Option<usize> {
+    listing
+        .lines()
+        .filter_map(|l| {
+            let rest = &l[l.find(prefix)? + prefix.len()..];
+            let end = rest.find(suffix)?;
+            rest[..end].parse::<usize>().ok()
+        })
+        .nth(nth)
+}
+
 /// The floor's rows through the VM, one at a time, keeping what the kernel
 /// reads: the four row scalars and the row's two colours (`params`), and
 /// the column run's lanes `L0` (dx) and `L2` (col).
@@ -1235,6 +1264,7 @@ fn floor_capture(
     t: &psi::Tables,
     s: &mut psi::Scratch<128>,
     ms: u32,
+    slots: FloorSlots,
     params: &mut [[i32; 6]; psi::H],
     dx: &mut [i32; 128],
     col: &mut [i32; 128],
@@ -1244,14 +1274,14 @@ fn floor_capture(
     let fire = t.palettes[0];
     for (row, p) in params.iter_mut().enumerate() {
         psi::render_rows::<128>(prog, s, &inputs, t, None, 1 << row, out);
-        let k = s.scalar_slot(23);
+        let k = s.scalar_slot(slots.k);
         let ca = psi::fixed::pal_lit(fire, 51118, k);
         let cb = psi::fixed::pal_lit(fire, 18350, k);
         *p = [
-            s.scalar_slot(34),
-            s.scalar_slot(36),
-            s.scalar_slot(35),
-            s.scalar_slot(15),
+            s.scalar_slot(slots.a),
+            s.scalar_slot(slots.b),
+            s.scalar_slot(slots.c),
+            s.scalar_slot(slots.d),
             i32::from_le_bytes([ca[0], ca[1], ca[2], cb[0]]),
             i32::from_le_bytes([cb[1], cb[2], 0, 0]),
         ];
@@ -1319,26 +1349,36 @@ fn jit_spike(out: &mut [u8]) {
         say!(error, "psi-probe: jit: the floor does not compile: {}", e.msg);
         return;
     }
+    // The kernel's layout (registers fixed, scalar slots read from the
+    // listing: they move with the source's header, jitspike-a found).
     let listing = prog.listing();
     let want = [
         "pixel L0 = sub_w(px, 64)",
-        "pixel L2 = mul_w(L1, s13)",
-        "pixel L1 = mul_w(s34, L0)",
-        "pixel L3 = add_w(L1, s36)",
-        "pixel L1 = mul_w(s35, L0)",
+        "pixel L2 = mul_w(L1, s",
         "pixel L4 = add_w(L1, L2)",
-        "pixel L1 = add_w(L4, s15)",
         "pixel L4 = floor(L3)",
         "pixel L3 = floor(L1)",
         "pixel L1 = add_w(L4, L3)",
         "pixel L4 = mask(L1, 1.9999847412109375)",
         "pixel L1 = select(L4, 0.779998779296875, 0.279998779296875)",
-        "pixel out = pal(L1, s23)",
     ];
     if let Some(miss) = want.iter().find(|w| !listing.contains(*w)) {
         say!(error, "psi-probe: jit: the floor's listing has no `{miss}`: the kernel was written for another layout; skipping");
         return;
     }
+    let slots = [
+        slot_in(&listing, "pixel L1 = mul_w(s", ", L0)", 0),
+        slot_in(&listing, "pixel L3 = add_w(L1, s", ")", 0),
+        slot_in(&listing, "pixel L1 = mul_w(s", ", L0)", 1),
+        slot_in(&listing, "pixel L1 = add_w(L4, s", ")", 0),
+        slot_in(&listing, "pixel out = pal(L1, s", ")", 0),
+    ];
+    let [Some(s_a), Some(s_b), Some(s_c), Some(s_d), Some(s_k)] = slots else {
+        say!(error, "psi-probe: jit: the floor's scalar slots were not found in its listing ({slots:?}); skipping");
+        return;
+    };
+    let slots = FloorSlots { a: s_a, b: s_b, c: s_c, d: s_d, k: s_k };
+    say!(info, "psi-probe: jit: floor layout: mul_w(s{s_a}, L0) + s{s_b}; mul_w(s{s_c}, L0) + L2 + s{s_d}; pal * s{s_k}");
     let t = fx_psi::tables();
     let mut s = zeroed::<psi::Scratch<128>>();
     s.reset();
@@ -1358,7 +1398,7 @@ fn jit_spike(out: &mut [u8]) {
     for ms in [0, lp / 4, lp / 2, lp * 3 / 4] {
         let inputs = inputs_at(&prog, ms);
         psi::render_rows::<128>(&prog, &mut s, &inputs, &t, None, u32::MAX, out);
-        floor_capture(&prog, &t, &mut s, ms, &mut params, &mut dx, &mut col, &mut jit);
+        floor_capture(&prog, &t, &mut s, ms, slots, &mut params, &mut dx, &mut col, &mut jit);
         for row in 0..psi::H {
             f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), params[row].as_ptr());
         }
@@ -1374,7 +1414,7 @@ fn jit_spike(out: &mut [u8]) {
         psi::render_rows::<128>(&prog, &mut s, &inputs, &t, None, u32::MAX, out);
     });
     say!(info, "psi-probe: jit: floor VM frame p50 {v50} p90 {v90} us = {} ns a pixel (rows and all)", v50 * 1000 / 4096);
-    floor_capture(&prog, &t, &mut s, lp / 3, &mut params, &mut dx, &mut col, &mut jit);
+    floor_capture(&prog, &t, &mut s, lp / 3, slots, &mut params, &mut dx, &mut col, &mut jit);
     for (what, at) in regions {
         let Some(i) = at else { continue };
         let Some(a) = blocks[i].load(jitk::FLOOR) else { continue };
@@ -1402,6 +1442,16 @@ pub fn run(root: &str) {
     let stack0 = stack_unused();
     if ROAD_ONLY {
         road_probe(root, start, stack0);
+        return;
+    }
+    if JIT_ONLY {
+        say!(info, "psi-probe: start: main stack {stack0} B unused, heap {} B free (the JIT spike only)", heap());
+        let mut out = vec![0u8; psi::W * psi::H * 3];
+        jit_spike(&mut out);
+        say!(info,
+            "{DONE}: jitspike, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
+            stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
+        );
         return;
     }
     say!(info,
