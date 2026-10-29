@@ -5,4 +5,4 @@ about "A retro rainbow ribbon waving across the screen"
 loop 8
 band = (cy - 0.25*sin(x*1.5 - t/4))*1.8 + 0.5
 inside = step(0, band)*step(band, 1)
-hsv((5 - floor(band*6))/7, 1, inside)
+hsv((5 - floor(band*6)) / 7, 1, inside)

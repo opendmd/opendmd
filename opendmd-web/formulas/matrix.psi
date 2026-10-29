@@ -7,6 +7,6 @@ loop 8
 -- 32 columns of little 3x5 characters, each column falling at its own speed
 r = frac(floor(px/4)*0.618)
 fall = frac(y*0.5 + t*(floor(r*3) + 1)/4 + r)
-glyph = step(0.35, frac(px*(py*0.3719 + 0.13))) * step(px%4, 2.5) * step(py%6, 4.5)
-head = step(fall, 0.04) * glyph
+glyph = step(0.35, frac(px * (py*0.3719 + 0.13))) * step(px%4, 2.5) * step(py%6, 4.5)
+head = step(fall, 0.04)*glyph
 rgb(head, glyph*(1 - fall*1.8) + head, head)

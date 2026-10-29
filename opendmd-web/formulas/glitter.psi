@@ -8,4 +8,6 @@ loop 2
 -- a new handful of sparkles twelve times a second
 s = hash(px, py + floor(t*12)*61)
 sparkle = step(0.985, s) * (0.6 + 0.4*sin(t*6 + s*40))
-layer screen { sparkle * #ffe699 }
+layer screen {
+  sparkle*#ffe699
+}

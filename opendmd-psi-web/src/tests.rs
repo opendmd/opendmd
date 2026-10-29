@@ -238,7 +238,8 @@ fn the_examples_are_light_enough_for_the_panel() {
         let most = if e.name == "Endless road" {
             52
         } else if e.name == "Time gate" {
-            19
+            // 20 since `psi fmt` (2026-10-29): one statement a line.
+            20
         } else if ["Big clock", "Tunnel", "Rotozoom", "Rotozoom floor"].contains(&e.name.as_str()) {
             16
         } else {

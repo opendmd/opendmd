@@ -6,5 +6,9 @@ look
 loop 8
 wave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)
 -- as bright as the GIF is there: dark stays dark
-layer { hsv(wave/6 + t/8, 0.8, ul*1.2) }
-layer add { gray(ul, 0.2) }
+layer {
+  hsv(wave/6 + t/8, 0.8, ul*1.2)
+}
+layer add {
+  gray(ul, 0.2)
+}
