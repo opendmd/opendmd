@@ -102,11 +102,11 @@ pub(crate) unsafe fn eval_helper(id: u8, a: [u32; 5], ptr: &dyn Fn(u32) -> *mut 
         }
         hid::TAB => {
             let tabs = &*(ptr(a[1]) as *const [i32; MAX_TABLE]);
-            tab(tabs, a[2] as u8, (a[2] >> 8) as u8, i(0))
+            tab(tabs, a[2] as u8, a[3] as u8, i(0))
         }
         hid::PICK => {
             let sc = &*(ptr(a[1]) as *const [i32; MAX_SCALARS]);
-            pick(sc, a[2] as u8, (a[2] >> 8) as u8, i(0))
+            pick(sc, a[2] as u8, a[3] as u8, i(0))
         }
         hid::SPR => {
             let tabs = &*(ptr(a[2]) as *const [i32; MAX_TABLE]);

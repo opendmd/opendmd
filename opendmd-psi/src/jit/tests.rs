@@ -435,6 +435,14 @@ fn helpers_draw_the_same_through_kernels() {
         "pal(rainbow, pick(floor(px*0.07 + py*0.3) % 9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, t/8, 0.8, 0.9)) * (py / 31)",
         "gray(tri(x * 3 + t) * sqr(y * 2 + t) * saw(x + y))",
         "gray(x > t or not (y < 0.5) and px != 7)",
+        // Fable's review: a saturating mul's operand read again later (a
+        // released operand register was a live value's).
+        "v = (x + y) * 30000 + y + t\nu = v * v\ngray(min(u, 0.1) + frac(v))",
+        "v = (x + y + t) * 300 + y\nu = v * v\ngray(frac(v) + min(u, 0.1))",
+        "v = x * 3 + t\nu = sin(v) + cos(v * 2)\ngray(u + frac(v))",
+        // ...and a table past 8 entries, a lane pick of 9 (two immediates).
+        "table T = 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9\ngray(T[x*9 + y*3 + t] + y)",
+        "gray(pick(floor(x * 9 + t) % 9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, y, 0.8, x) + y)",
     ];
     let mut lowered = 0;
     for src in cases {
