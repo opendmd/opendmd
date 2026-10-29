@@ -32,6 +32,7 @@ use lower::{hid, Lowered, Word, NONE};
 use crate::fixed;
 use crate::fuse::PICK_MAX;
 use crate::program::*;
+use crate::draw::Ink;
 use crate::still::Still;
 use crate::tables::{Glyphs, Tables};
 use crate::vm::{self, Alias, Inputs, Scratch};
@@ -47,6 +48,8 @@ pub(crate) trait Target {
     fn helper(&mut self, id: u8) -> u32;
     /// Run the kernel for a row.
     fn run(&mut self, ctx: &mut [u32], out: *mut u8);
+    /// Run the row stage's function (at `at` in the code) on `sc`.
+    fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32);
 }
 
 /// A colour as a word: `r | g << 8 | b << 16`.
@@ -131,6 +134,9 @@ pub(crate) unsafe fn eval_helper(id: u8, a: [u32; 5], ptr: &dyn Fn(u32) -> *mut 
 
 /// A frame's state the words are filled from.
 struct Rows<'a> {
+    row: usize,
+    ink: Option<&'a Ink>,
+    under: Option<&'a [u8]>,
     prog: &'a Program,
     scratch: &'a Scratch<128>,
     alias: &'a Alias,
@@ -151,13 +157,15 @@ fn colour_of(st: &Rows<'_>, pal: u8, v: i32, k: u8, shift: u8) -> u32 {
     pack(fixed::scale_rgb(p[fixed::pal_index(v)], k))
 }
 
-/// Fill the row's words.
-/// Fill the words (`first`: all, a frame's first row; else those that
-/// change from row to row).
-fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, first: bool) {
+/// What a kernel reads for a canvas or a picture it has not got.
+static ZEROS: [u8; W * 3] = [0; W * 3];
+
+/// Fill the words that change from row to row (`per_row`), or those that
+/// do not (once a frame, before the rows).
+fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per_row: bool) {
     let s = st.scratch;
     for ((w, out), &row) in low.words.iter().zip(ctx.iter_mut()).zip(&low.per_row) {
-        if !first && !row {
+        if row != per_row {
             continue;
         }
         *out = match *w {
@@ -197,6 +205,15 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, fir
                 t.addr(p[fixed::pal_index(s.sc[(v & 0x7f) as usize])].as_ptr(), 3)
             }
             Word::Init(c) | Word::Const(c) => c as u32,
+            Word::Ink => match st.ink {
+                Some(k) => t.addr(k.0[st.row * W..].as_ptr(), W),
+                None => t.addr(ZEROS.as_ptr(), W),
+            },
+            Word::Under => match st.under {
+                Some(u) => t.addr(u[st.row * W * 3..].as_ptr(), W * 3),
+                None => t.addr(ZEROS.as_ptr(), W * 3),
+            },
+            Word::Cover(k) => s.sc[(k & 0x7f) as usize].clamp(0, fixed::ONE) as u32,
             Word::Pick {
                 pal,
                 b,
@@ -223,8 +240,11 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, fir
 /// (`vm::frame`'s order: the frame steps, the still cache's choice, then
 /// per row the row steps, the column run on the first row drawn, the still
 /// run or its cached lanes). The inputs must be in range (the caller draws
-/// a frame that is not with the VM). No ink, nothing under (the lowering
-/// refuses formulas that read them), lanes of a whole row.
+/// a frame that is not with the VM). The draw stage draws into `ink` on a
+/// full call (`rows` all), as the VM's; `under` is what `ur ug ub ul` read
+/// and a backdrop shows (`None`: black); `changed`, when given, says what
+/// each row drawn changed, as `render_rows_changed` does. Lanes of a whole
+/// row.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn frame<T: Target>(
     t: &mut T,
@@ -232,11 +252,14 @@ pub(crate) fn frame<T: Target>(
     ctx: &mut [u32],
     prog: &Program,
     scratch: &mut Scratch<128>,
+    ink: Option<&mut Ink>,
     still: Option<&mut Still>,
     inputs: &Inputs,
     tables: &Tables,
+    under: Option<&[u8]>,
     rows: u32,
     dest: &dyn Fn(usize) -> *mut u8,
+    mut changed: Option<&mut [u32; H]>,
 ) {
     #[cfg(feature = "stats")]
     let mut clk = stats::Clock::start();
@@ -268,7 +291,23 @@ pub(crate) fn frame<T: Target>(
             vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
         }
     }
-    // The still cache, as the VM decides it.
+    #[cfg(feature = "stats")]
+    clk.lap(stats::FRAME);
+    // The draw stage, as the VM runs it: on a full call only (a call for
+    // some rows reads the canvas the last full one left).
+    let ink: Option<&Ink> = match ink {
+        Some(k) if prog.draws() => {
+            if rows == u32::MAX {
+                crate::draw::run(prog, scratch, tables, k, true);
+            }
+            Some(k)
+        }
+        _ => None,
+    };
+    if let Some(u) = under {
+        assert_eq!(u.len(), W * H * 3);
+    }
+    let backdrop = prog.uses & BACKDROP != 0;
     enum Cache<'s> {
         Off,
         Use(&'s Still),
@@ -301,10 +340,25 @@ pub(crate) fn frame<T: Target>(
     let uses_i = prog.uses & USES_I != 0;
     let main = low.main_start;
     let mut columns_kept = false;
-    let mut first = true;
     t.begin();
+    {
+        // The words the same all frame (the row stage's among them), once.
+        let alias: Alias = [core::ptr::null(); REGS + 1];
+        let st = Rows {
+            row: 0,
+            ink,
+            under,
+            prog,
+            scratch,
+            alias: &alias,
+            tables,
+            own: &own,
+            glyphs: &glyphs,
+        };
+        fill(t, low, ctx, &st, false);
+    }
     #[cfg(feature = "stats")]
-    clk.lap(stats::FRAME);
+    clk.lap(stats::DRAW);
     for row in 0..H {
         if rows & (1 << row) == 0 {
             continue;
@@ -312,8 +366,13 @@ pub(crate) fn frame<T: Target>(
         let py = ((H - 1 - row) as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
-        for op in &prog.ops[de..re] {
-            vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
+        match low.rows_at {
+            Some(at) => t.run_rows(at, ctx, scratch.sc.as_mut_ptr()),
+            None => {
+                for op in &prog.ops[de..re] {
+                    vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
+                }
+            }
         }
         #[cfg(feature = "stats")]
         clk.lap(stats::ROWS);
@@ -370,6 +429,9 @@ pub(crate) fn frame<T: Target>(
         #[cfg(feature = "stats")]
         clk.lap(stats::PRE);
         let st = Rows {
+            row,
+            ink,
+            under,
             prog,
             scratch,
             alias: &alias,
@@ -377,11 +439,32 @@ pub(crate) fn frame<T: Target>(
             own: &own,
             glyphs: &glyphs,
         };
-        fill(t, low, ctx, &st, first);
-        first = false;
+        fill(t, low, ctx, &st, true);
         #[cfg(feature = "stats")]
         clk.lap(stats::FILL);
-        t.run(ctx, dest(row));
+        let d = dest(row);
+        // What changed (the VM's `Rows::begin`/`finish`): the row's bytes
+        // kept before, compared after (every group when not word-aligned).
+        let mut before = [0u32; W * 3 / 4];
+        let track = changed.is_some() && (d as usize).is_multiple_of(4);
+        if track {
+            // SAFETY: `dest` gives W × 3 bytes, word-aligned (`track`).
+            unsafe { core::ptr::copy_nonoverlapping(d.cast::<u32>(), before.as_mut_ptr(), W * 3 / 4) };
+        }
+        if backdrop {
+            let src = under.map_or(&ZEROS[..], |u| &u[row * W * 3..(row + 1) * W * 3]);
+            // SAFETY: as above: W × 3 bytes at `d`, not `src`'s.
+            unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), d, W * 3) };
+        }
+        t.run(ctx, d);
+        if let Some(ch) = changed.as_deref_mut() {
+            ch[row] = if track {
+                // SAFETY: the row's W × 3 bytes at `d`, word-aligned.
+                unsafe { changed_groups(d.cast::<u32>(), &before) }
+            } else {
+                u32::MAX
+            };
+        }
         #[cfg(feature = "stats")]
         clk.lap(stats::KERNEL);
         columns_kept = true;
@@ -389,6 +472,27 @@ pub(crate) fn frame<T: Target>(
     if let Cache::Keep(st, _) = cache {
         st.kept = crate::still::fingerprint(prog);
     }
+}
+
+/// Which 4-pixel groups of a row differ from `before` (bit g: pixels
+/// 4g..4g + 4, three words each), a word at a time as `vm::Rows::finish`
+/// does. (jit2-b: a slice compare a group cost the player's kernel frames
+/// ~0.5-0.8 ms, the floor's kernel lost its trial to the VM by it.)
+///
+/// # Safety
+/// `now` points at W × 3 / 4 readable words.
+#[inline(never)]
+unsafe fn changed_groups(now: *const u32, before: &[u32; W * 3 / 4]) -> u32 {
+    let mut m = 0;
+    let mut now = now;
+    let mut was = before.as_ptr();
+    for g in 0..W / 4 {
+        let d = (*was ^ *now) | (*was.add(1) ^ *now.add(1)) | (*was.add(2) ^ *now.add(2));
+        m |= u32::from(d != 0) << g;
+        now = now.add(3);
+        was = was.add(3);
+    }
+    m
 }
 
 /// psi-probe's split of the JIT's frames (the `stats` feature): cycles in
@@ -403,14 +507,17 @@ pub mod stats {
     pub const PRE: usize = 2;
     pub const FILL: usize = 3;
     pub const KERNEL: usize = 4;
-    pub const NAMES: [&str; 5] = [
+    /// The draw stage, and the frame's words and the still cache's choice.
+    pub const DRAW: usize = 5;
+    pub const NAMES: [&str; 6] = [
         "frame steps",
         "row steps",
         "column/still runs",
         "words",
         "kernel",
+        "draw stage and frame words",
     ];
-    pub static CYCLES: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
+    pub static CYCLES: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
     pub static FRAMES: AtomicU32 = AtomicU32::new(0);
 
     pub(crate) struct Clock(u32);
@@ -437,7 +544,7 @@ pub mod stats {
     }
 
     /// The sums so far (cycles), and the frames; reset.
-    pub fn take() -> ([u32; 5], u32) {
+    pub fn take() -> ([u32; 6], u32) {
         (
             core::array::from_fn(|k| CYCLES[k].swap(0, Relaxed)),
             FRAMES.swap(0, Relaxed),
@@ -486,6 +593,7 @@ mod device {
     ];
 
     type KernelFn = extern "C" fn(*mut u32, *mut u8);
+    type RowsFn = extern "C" fn(*mut u32, *mut i32);
 
     struct Device(KernelFn);
 
@@ -498,6 +606,14 @@ mod device {
         }
         fn run(&mut self, ctx: &mut [u32], out: *mut u8) {
             (self.0)(ctx.as_mut_ptr(), out)
+        }
+        fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32) {
+            // SAFETY: `at` is the row stage's function in the block
+            // (`lower`'s, 4-byte aligned): the windowed ABI, (ctx, sc).
+            let f = unsafe {
+                core::mem::transmute::<*const u8, RowsFn>((self.0 as *const u8).add(at))
+            };
+            f(ctx.as_mut_ptr(), sc)
         }
     }
 
@@ -569,33 +685,35 @@ mod device {
             Device(unsafe { core::mem::transmute::<*mut u32, KernelFn>(self.block) })
         }
 
-        /// Render a frame of the program this kernel was made from, as
-        /// [`crate::render_rows_still`] does with every row (`ink` none,
-        /// nothing under): the kernel draws the pixel stage when the inputs
-        /// are in range, the VM the whole frame when they are not
-        /// (`false`).
+        /// Render the rows `rows` has a bit for of a frame of the program
+        /// this kernel was made from, as [`crate::render_rows_changed`]
+        /// does (`changed` given) or [`crate::render_rows_still`]: the
+        /// kernel draws the pixel stage when the inputs are in range, the
+        /// VM the whole frame when they are not (`false`).
+        #[allow(clippy::too_many_arguments)]
         pub fn render(
             &mut self,
             prog: &Program,
             scratch: &mut Scratch<128>,
+            ink: Option<&mut Ink>,
             still: Option<&mut Still>,
             inputs: &Inputs,
             tables: &Tables,
+            under: Option<&[u8]>,
+            rows: u32,
             out: &mut [u8],
+            changed: Option<&mut [u32; H]>,
         ) -> bool {
             assert_eq!(out.len(), W * H * 3);
             if !crate::range::inputs_in_range(prog, inputs) {
-                crate::render_rows_still::<128>(
-                    prog,
-                    scratch,
-                    None,
-                    still,
-                    inputs,
-                    tables,
-                    None,
-                    u32::MAX,
-                    out,
-                );
+                match changed {
+                    Some(ch) => crate::render_rows_changed::<128>(
+                        prog, scratch, ink, still, inputs, tables, under, rows, out, ch,
+                    ),
+                    None => crate::render_rows_still::<128>(
+                        prog, scratch, ink, still, inputs, tables, under, rows, out,
+                    ),
+                }
                 return false;
             }
             let mut d = self.device();
@@ -608,11 +726,14 @@ mod device {
                 &mut self.ctx,
                 prog,
                 scratch,
+                ink,
                 still,
                 inputs,
                 tables,
-                u32::MAX,
+                under,
+                rows,
                 &dest,
+                changed,
             );
             true
         }
@@ -620,12 +741,17 @@ mod device {
         /// The kernel's bytes for [`CHECK_ROWS`] against `frame_bytes`, the
         /// VM's frame at `inputs` (in range: else nothing is checked,
         /// `Ok(false)`). `Err((row, x))`: the first pixel that differs.
+        /// `ink` and `under` as the VM's frame had them (the canvas is
+        /// read, not drawn again: the VM's full frame just drew it).
+        #[allow(clippy::too_many_arguments)]
         pub fn check(
             &mut self,
             prog: &Program,
             scratch: &mut Scratch<128>,
+            ink: Option<&mut Ink>,
             inputs: &Inputs,
             tables: &Tables,
+            under: Option<&[u8]>,
             frame_bytes: &[u8],
         ) -> Result<bool, (usize, usize)> {
             if !crate::range::inputs_in_range(prog, inputs) {
@@ -650,11 +776,14 @@ mod device {
                 &mut self.ctx,
                 prog,
                 scratch,
+                ink,
                 None,
                 inputs,
                 tables,
+                under,
                 check_rows(),
                 &dest,
+                None,
             );
             for (j, &row) in CHECK_ROWS.iter().enumerate() {
                 let want = &frame_bytes[row * W * 3..(row + 1) * W * 3];

@@ -254,7 +254,16 @@ FONT = {"fonts/silkscreen.woff2"}
 # so Endless road's compile fits the ESP32's heap: ~85.6 -> 86,560 B gz
 # (+0.9 KB, with the fallible growth and packed tokens left out of the
 # wasm build). Raised under the budget authority (written reasons).
-PSI_WASM_GZ_BUDGET = 85 * 1024  # 84 until compile-oom; 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 85 KB for the JIT's estimate (2026-10-29, branch jit-2, docs/research/
+# psi-jit-esp32.md "Phase 2 as built"): `Program::esp32_us_jit` and
+# `_jit_still` so the editor's label knows what the panel's JIT draws (its
+# cost table `jit_value_ns`, the kernel's first step, a fused colour's
+# cost, folded into the estimate's one loop; `info()[13]`): +478 B gz on
+# main's 85,622 (86,100). The browser never runs the JIT: the cost table
+# only. Raised under the budget authority (CLAUDE: Claude may adjust web
+# size budgets itself).
+# 87 KB with both merged (compile-oom +0.9 KB, the JIT estimate +0.5 KB on 85.6).
+PSI_WASM_GZ_BUDGET = 87 * 1024  # 85 until compile-oom and jit-2 both merged; 84 until compile-oom/jit-2; 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,

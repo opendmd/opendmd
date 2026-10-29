@@ -23,6 +23,7 @@
 
 use super::enc::*;
 use crate::fuse::{F_PICKPAL, F_SELPAL, F_SELPAL_K, PICK_MAX};
+use crate::fixed;
 use crate::program::*;
 use alloc::vec::Vec;
 
@@ -62,6 +63,15 @@ pub enum Word {
     Init(i32),
     /// A constant the kernel only reads (hoisted: `chan`'s).
     Const(i32),
+    /// The draw stage's canvas at the row's first pixel (a row of zeros
+    /// without one: `ink` reads 0).
+    Ink,
+    /// The picture under the formula at the row's first pixel (a row of
+    /// zeros without one: `ur ug ub ul` read 0).
+    Under,
+    /// A layer's coverage, scalar slot `k`'s value clamped to 0..1 (as
+    /// `fixed::cover` clamps it).
+    Cover(u8),
     /// Choice `i` of a fused `pal(P, pick(m, …)) * k`'s colours for the
     /// row (`b`, `n` the pick's), packed; `i` = [`PICK_MAX`] the colour of
     /// a pick outside its choices.
@@ -114,6 +124,9 @@ pub struct Lowered {
     pub main_start: usize,
     /// It calls helpers.
     pub calls: bool,
+    /// Where the row stage's function starts in `code` (4-byte aligned),
+    /// if the row steps lowered ([`lower_rows`]): it shares `words`.
+    pub rows_at: Option<usize>,
 }
 
 // The register map.
@@ -128,11 +141,30 @@ const TEMPS_OUT: Refusal = "the kernel ran out of temporaries";
 /// The helper's address goes here for `callx8` (and comes back as the
 /// return address: it is the callee's a0).
 const CALLEE: Reg = 8;
-/// Frame slots: a8..a12's homes across a call, then one spare.
-const SLOT_SPARE: i32 = 20;
-/// (64, not 56: the windowed ABI keeps a1 16-byte aligned for the
-/// helpers and interrupts that run on it.)
-const FRAME: u32 = 64;
+/// Frame slots: a8..a12's homes across a call (0..19), (20 unused),
+/// a layer's `hsv` bytes (24..27), a coverage kept across a call (28),
+/// and a5..a15 kept across a colour memo's cold call ([`cold_slot`]).
+const SLOT_HSV: i32 = 24;
+const SLOT_COVER: i32 = 28;
+/// A multiple of 16 (the windowed ABI keeps a1 16-byte aligned for the
+/// helpers and interrupts that run on it), and nothing of ours in its top
+/// 32 B: a window overflow keeps this frame's a4..a7 at [FRAME-32,
+/// FRAME-16) (it makes `call8`s) and its caller's caller's a0..a3 at
+/// [FRAME-16, FRAME), possibly before the kernel even starts. (jit2-a, on
+/// the emulator: an 80 B frame with a slot at 64 overwrote
+/// `Kernel::check`'s saved return address.) The slots end at 76.
+const FRAME: u32 = 112;
+const _: () = assert!(cold_slot_end() <= FRAME as i32 - 32);
+
+/// Where the last cold slot ends.
+const fn cold_slot_end() -> i32 {
+    32 + (15 - 5 + 1) * 4
+}
+
+/// Where a5..a15's value is kept across a memo's cold call.
+fn cold_slot(r: Reg) -> i32 {
+    32 + (i32::from(r) - 5) * 4
+}
 
 /// One unit of the kernel: a step, or a fused colour the kernel draws in
 /// one piece (as the VM's fused runs, `crate::fuse`).
@@ -191,43 +223,45 @@ fn writes(it: &Item) -> Option<usize> {
 /// (with the values laid out before the still marker): the driver runs
 /// those as lanes, the VM's way.
 pub fn main_start(prog: &Program) -> usize {
-    let (re, pe) = (prog.row_end as usize, prog.len());
-    if let Some(k) = prog.still_marker() {
-        return (k + 1 + prog.ops[k].a as usize).min(pe);
-    }
-    let col = prog.column_run();
-    if col.end > col.start {
-        col.end
-    } else {
-        re
-    }
+    prog.kernel_start()
 }
 
 /// Lower `prog`'s pixel stage, or say why the VM must draw it.
 pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
-    if prog.uses & (UNDER | BACKDROP) != 0 {
-        return Err("it reads the picture under it");
-    }
-    if prog.uses & INKED != 0 || prog.draws() {
-        return Err("it draws (ink)");
-    }
-    if prog.layers() != 1 {
-        return Err("it has layers");
-    }
     let (pe, start) = (prog.len(), main_start(prog));
     if start >= pe {
         return Err("no pixel steps");
     }
+    // The driver runs the steps before the kernel as lanes with nothing
+    // under and no canvas: none of them may read either (they are values
+    // of the position and the frame, so none does).
+    if prog.ops[prog.row_end as usize..start]
+        .iter()
+        .any(|op| (code::U_R..=code::INK).contains(&op.code))
+    {
+        return Err("an unexpected layout");
+    }
     let items = items(prog, start, pe)?;
     // The fewest temporaries the steps get by with (a kernel without calls
     // hoists into the rest).
-    let mut e = Emitter::new(prog, &items, 0)?;
-    for t in 0..=3 {
-        e = Emitter::new(prog, &items, t)?;
-        match e.emit() {
-            Ok(()) => break,
-            Err(TEMPS_OUT) if t < 3 => continue,
-            Err(w) => return Err(w),
+    // (Up to 7: a layer's blend wants five or six at once, an inline
+    // `hsv` eight; short of them, `hsv` through its helper.)
+    let mut e = Emitter::new(prog, &items, 0, false)?;
+    'ways: for hsv_call in [false, true] {
+        for t in 0..=7 {
+            e = match Emitter::new(prog, &items, t, hsv_call) {
+                Ok(e) => e,
+                // (An inline `hsv` keeps its values in more registers
+                // than the call does: the call's way may fit.)
+                Err(_) if !hsv_call => continue 'ways,
+                Err(w) => return Err(w),
+            };
+            match e.emit() {
+                Ok(()) => break 'ways,
+                Err(TEMPS_OUT) if t < 7 => continue,
+                Err(TEMPS_OUT) if !hsv_call => continue 'ways,
+                Err(w) => return Err(w),
+            }
         }
     }
     if e.c.bad {
@@ -236,6 +270,18 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
     if e.words.len() > 255 {
         return Err("too many values for the kernel");
     }
+    let mut code = e.c.bytes;
+    let mut words = e.words;
+    let rows_at = match lower_rows_from(prog, words.clone()) {
+        Ok(r) => {
+            code.resize(code.len().next_multiple_of(4), 0);
+            let at = code.len();
+            code.extend_from_slice(&r.code);
+            words = r.words;
+            Some(at)
+        }
+        Err(_) => None,
+    };
     // Slots a row writes: y, py and the row steps' values.
     let mut row_slot = [false; MAX_SCALARS];
     row_slot[S_Y as usize] = true;
@@ -246,28 +292,78 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
         }
     }
     let rs = |k: u8| k != NONE && row_slot[(k & 0x7f) as usize];
-    let per_row = e
-        .words
+    let per_row = words
         .iter()
         .map(|w| match *w {
             // (A register's lane: its still cache's alias moves each row.)
             Word::Lane(l) => l >= L_REG0,
-            Word::Scalar(k) => rs(k),
+            Word::Ink | Word::Under => true,
+            Word::Scalar(k) | Word::Cover(k) => rs(k),
             Word::Colour { v, k, .. } => rs(v) || rs(k),
             Word::Entry { v, .. } => rs(v),
             // (A memo starts again each row, as the VM's each lane.)
             Word::Init(_) => true,
-            // (Its choices are slots the pick names: any may be a row's.)
-            Word::Pick { .. } => true,
+            // (Its choice's slot, from the pick's table of slots: a row's
+            // only if a row step writes it; outside the choices, 0.)
+            Word::Pick { b, n, i, k, .. } => {
+                let m = (n as usize).min(PICK_MAX);
+                let choice = (i as usize) < m && rs((prog.init[(b as usize + i as usize) & (MAX_SCALARS - 1)] & 0x7f) as u8);
+                choice || rs(k)
+            }
             _ => false,
         })
         .collect();
     Ok(Lowered {
-        code: e.c.bytes,
-        words: e.words,
+        code,
+        words,
         per_row,
         main_start: start,
         calls: e.calls,
+        rows_at,
+    })
+}
+
+/// A lowered row stage: one function (`extern "C" fn(ctx: *const u32,
+/// sc: *mut i32)`) running the row steps once, straight through, each
+/// reading its scalar slots from `sc` and writing its own there, as
+/// `vm::scalar` does (the narrowed steps as their checked forms, as
+/// `program::eval` gives them); its words (helpers, tables) once a frame.
+pub struct LoweredRows {
+    pub code: Vec<u8>,
+    pub words: Vec<Word>,
+}
+
+/// The row kernel's `sc` (a2 is `ctx`, as the pixel kernel's).
+const SC: Reg = 3;
+
+/// Lower `prog`'s row steps, or say why the VM runs them.
+pub fn lower_rows(prog: &Program) -> Result<LoweredRows, Refusal> {
+    lower_rows_from(prog, Vec::new())
+}
+
+/// [`lower_rows`] with `words` (the pixel kernel's) first: the two share
+/// one `ctx`.
+fn lower_rows_from(prog: &Program, words: Vec<Word>) -> Result<LoweredRows, Refusal> {
+    let (de, re) = (prog.draw_end as usize, prog.row_end as usize);
+    if re <= de {
+        return Err("no row steps");
+    }
+    let mut e = Emitter::bare(prog);
+    e.words = words;
+    e.c.entry(FRAME);
+    for op in &prog.ops[de..re] {
+        e.row_step(*op)?;
+    }
+    e.c.retw_n();
+    if e.c.bad {
+        return Err("an operand out of the kernel's range");
+    }
+    if e.words.len() > 255 {
+        return Err("too many values for the kernel");
+    }
+    Ok(LoweredRows {
+        code: e.c.bytes,
+        words: e.words,
     })
 }
 
@@ -282,9 +378,8 @@ fn supported(c: u8) -> Result<(), Refusal> {
         | NOISE | MULR => Ok(()),
         DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST => Ok(()),
         OUT_RGB | OUT_HSV | OUT_PAL | OUT_GRAY => Ok(()),
-        U_R..=U_L => Err("it reads the picture under it"),
-        INK => Err("it draws (ink)"),
-        c if c >= OUT_LAYER => Err("it has layers"),
+        U_R..=U_L | INK => Ok(()),
+        c if (OUT_LAYER..OUT_LAYER + 4 * crate::fixed::BLENDS as u8).contains(&c) => Ok(()),
         STILL | COLUMN => Err("an unexpected layout"),
         _ => Err("a step the kernel has no template for"),
     }
@@ -310,9 +405,6 @@ fn items(prog: &Program, start: usize, pe: usize) -> Result<Vec<Item>, Refusal> 
             continue;
         }
         supported(op.code)?;
-        if code::is_colour(op.code) && k + 1 != pe {
-            return Err("it has layers");
-        }
         out.push(Item::Step(op));
         k += 1;
     }
@@ -367,6 +459,8 @@ enum Arg {
     Word(Word),
     Imm(i32),
     Out,
+    /// The address of a frame slot (a1 + the offset).
+    Stack(i32),
 }
 
 /// A value a Psi register holds in the kernel: written by an item (or, for
@@ -385,6 +479,7 @@ struct Val {
 }
 
 struct Emitter<'a> {
+    prog: &'a Program,
     items: &'a [Item],
     c: Code,
     words: Vec<Word>,
@@ -414,11 +509,13 @@ struct Emitter<'a> {
     hot: bool,
     /// `src` with SAR 16 (`mul_w`, `mul`).
     uses_src: bool,
+    /// `hsv` through its helper (else inline, when the registers allow).
+    hsv_call: bool,
 }
 
 /// The values of `items` (each with its interval) and which value each
 /// register reads first, and each item writes.
-fn values(prog: &Program, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], Vec<Option<usize>>) {
+fn values(hsv_call: bool, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], Vec<Option<usize>>) {
     let mut vals: Vec<Val> = Vec::new();
     let mut cur: [Option<usize>; REGS] = [None; REGS];
     let mut livein: [Option<usize>; REGS] = [None; REGS];
@@ -456,7 +553,7 @@ fn values(prog: &Program, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], V
         }
     }
     for (k, it) in items.iter().enumerate() {
-        if hot_call(prog, it) {
+        if hot_call(hsv_call, it) {
             for v in vals.iter_mut() {
                 // (Its own result, and operands read for the last time, need not survive.)
                 if v.start <= k && v.end > k && !(v.start == k && !v.livein) {
@@ -509,13 +606,13 @@ impl<'a> Emitter<'a> {
     /// The emitter with `t` temporaries (a kernel without calls: values,
     /// hoists and temporaries share a5..a15; with calls: values in a5..a12,
     /// hoists in what a5..a7 the values leave, temporaries a13..a15).
-    fn new(prog: &'a Program, items: &'a [Item], t: usize) -> Result<Emitter<'a>, Refusal> {
-        let calls = items.iter().any(|it| needs_call(prog, it));
-        let hot = items.iter().any(|it| hot_call(prog, it));
+    fn new(prog: &'a Program, items: &'a [Item], t: usize, hsv_call: bool) -> Result<Emitter<'a>, Refusal> {
+        let calls = items.iter().any(|it| needs_call(hsv_call, it));
+        let hot = items.iter().any(|it| hot_call(hsv_call, it));
         let uses_src = items
             .iter()
             .any(|it| matches!(it, Item::Step(op) if matches!(op.code, code::MUL_W | code::MUL)));
-        let (mut vals, livein, wv) = values(prog, items);
+        let (mut vals, livein, wv) = values(hsv_call, items);
         let p = pressure(&vals, items.len());
         let all: [Reg; 11] = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         let (temps, spare, pool): (Vec<Reg>, Vec<Reg>, Vec<Reg>) = if hot {
@@ -541,6 +638,7 @@ impl<'a> Emitter<'a> {
             )
         };
         let mut e = Emitter {
+            prog,
             items,
             c: Code::new(),
             words: Vec::new(),
@@ -558,9 +656,137 @@ impl<'a> Emitter<'a> {
             calls,
             hot,
             uses_src,
+            hsv_call,
         };
         e.choose_hoists(&spare);
+        if hot {
+            // The values' registers where they are not alive are a step's
+            // temporaries too (a call item takes none: it writes a10..
+            // itself), but never a hoist's.
+            let hoisted: Vec<Reg> = e.hoist.iter().map(|&(_, r)| r).collect();
+            e.pool = POOL.iter().copied().filter(|r| !hoisted.contains(r)).collect();
+        }
         Ok(e)
+    }
+
+    /// An emitter with no items, values or hoists (the row stage's).
+    fn bare(prog: &'a Program) -> Emitter<'a> {
+        Emitter {
+            prog,
+            items: &[],
+            c: Code::new(),
+            words: Vec::new(),
+            valid: Vec::new(),
+            vals: Vec::new(),
+            cur: [None; REGS],
+            livein: [None; REGS],
+            wv: Vec::new(),
+            hoist: Vec::new(),
+            temps: Vec::new(),
+            pool: Vec::new(),
+            free: Vec::new(),
+            taken: Vec::new(),
+            sar16: false,
+            calls: true,
+            hot: true,
+            uses_src: false,
+            hsv_call: true,
+        }
+    }
+
+    /// A row step: its operands loaded from their slots, its template or
+    /// its helper, its value stored in its slot.
+    fn row_step(&mut self, op: Op) -> Result<(), Refusal> {
+        use code::*;
+        let slot = |v: u8| i32::from(v & 0x7f) * 4;
+        // (`eval`: a narrowed step is its checked form here.)
+        let code = match op.code {
+            ADD_W => ADD,
+            SUB_W => SUB,
+            MUL_W | MUL_N => MUL,
+            c => c,
+        };
+        let h = match code {
+            DIV => Some(hid::DIV),
+            MOD => Some(hid::MOD),
+            ATAN2 => Some(hid::ATAN2),
+            HASH => Some(hid::HASH),
+            LEN => Some(hid::LEN),
+            BIT => Some(hid::BIT),
+            SQRT => Some(hid::SQRT),
+            RECIP => Some(hid::RECIP),
+            SMOOTH => Some(hid::SMOOTH),
+            MIX => Some(hid::MIX),
+            MULR => Some(hid::MULR),
+            NOISE => Some(hid::NOISE),
+            TAB => Some(hid::TAB),
+            SPR => Some(hid::SPR),
+            NOISE_O..=NOISE_O_LAST => Some(hid::NOISE_O),
+            DIGIT..=DIGIT_B => Some(hid::GLYPH),
+            _ => None,
+        };
+        if let Some(h) = h {
+            let n = arity(code);
+            let args: Vec<Arg> = match code {
+                TAB => alloc::vec![
+                    Arg::Val(op.a),
+                    Arg::Word(Word::Tabs),
+                    Arg::Imm(i32::from(op.b)),
+                    Arg::Imm(i32::from(op.c)),
+                ],
+                SPR => alloc::vec![
+                    Arg::Val(op.a),
+                    Arg::Val(op.b),
+                    Arg::Word(Word::Tabs),
+                    Arg::Imm(i32::from(op.c)),
+                ],
+                NOISE_O..=NOISE_O_LAST => alloc::vec![
+                    Arg::Val(op.a),
+                    Arg::Val(op.b),
+                    Arg::Val(op.c),
+                    Arg::Word(Word::Sc),
+                    Arg::Imm(i32::from(code)),
+                ],
+                DIGIT..=DIGIT_B => alloc::vec![
+                    Arg::Val(op.a),
+                    Arg::Val(op.b),
+                    Arg::Val(op.c),
+                    Arg::Word(Word::Glyphs(code)),
+                ],
+                _ => [op.a, op.b, op.c][..n].iter().map(|&v| Arg::Val(v)).collect(),
+            };
+            for (j, a) in args.into_iter().enumerate() {
+                let t = 10 + j as Reg;
+                match a {
+                    Arg::Val(v) => self.c.l32i(t, SC, slot(v)),
+                    Arg::Word(w) => self.load_word(t, w),
+                    Arg::Imm(v) => self.c.movi(t, v),
+                    _ => return Err("an unexpected helper argument"),
+                }
+            }
+            self.load_word(CALLEE, Word::Helper(h));
+            self.c.callx8(CALLEE);
+            self.sar16 = false;
+            self.c.s32i(10, SC, slot(op.d));
+            return Ok(());
+        }
+        match code {
+            ADD | SUB | MUL | MASK | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP
+            | NEG | NOT | ABS | FLOOR | FRAC | SIN | COS | TRI | SAW | SQR | SELECT | CLAMP => {}
+            _ => return Err("a row step the kernel has no template for"),
+        }
+        self.free = (4..=15).rev().filter(|&r| r != CALLEE).collect();
+        self.taken.clear();
+        let n = arity(code);
+        let mut r = [0 as Reg; 3];
+        for (j, &v) in [op.a, op.b, op.c][..n].iter().enumerate() {
+            r[j] = self.tmp()?;
+            self.c.l32i(r[j], SC, slot(v));
+        }
+        let d = self.tmp()?;
+        self.template(Op { code, ..op }, d, r[0], r[1], r[2])?;
+        self.c.s32i(d, SC, slot(op.d));
+        Ok(())
     }
 
     /// Hoist the most used loop-invariant words into `spare`.
@@ -573,18 +799,33 @@ impl<'a> Emitter<'a> {
         for it in self.items {
             if let Item::Step(op) = it {
                 let (v, n) = reads(it);
-                for &x in &v[..n] {
+                let cover = code::is_colour(op.code) && code::colour_parts(op.code).1.is_some();
+                for (j, &x) in v[..n].iter().enumerate() {
                     match x & !LANE {
+                        // (A layer's scalar coverage is read as `Cover`.)
+                        _ if !is_lane(x) && cover && j + 1 == n => note(Word::Cover(x)),
                         _ if !is_lane(x) => note(Word::Scalar(x)),
                         L_X | L_I => note(Word::Lane(x & !LANE)),
                         _ => {}
                     }
                 }
-                let chans = match op.code {
+                let (kind, blend) = code::colour_parts(op.code);
+                let chans = match kind {
+                    _ if !code::is_colour(op.code) => 0,
                     code::OUT_GRAY => 1,
                     code::OUT_RGB => 3,
                     _ => 0,
                 };
+                if matches!(blend, Some(fixed::BLEND_ADD | fixed::BLEND_SCREEN)) {
+                    for _ in 0..3 {
+                        note(Word::Const(255));
+                    }
+                }
+                match op.code {
+                    code::INK => note(Word::Ink),
+                    code::U_R..=code::U_L => note(Word::Under),
+                    _ => {}
+                }
                 for _ in 0..chans {
                     for c in [0, ONE_Q, 0x8000] {
                         note(Word::Const(c));
@@ -595,7 +836,7 @@ impl<'a> Emitter<'a> {
                         note(Word::Sin);
                         note(Word::Sin);
                     }
-                    code::OUT_PAL if op.d & PAL_SCALED == 0 => {
+                    c if code::is_colour(c) && kind == code::OUT_PAL && op.d & PAL_SCALED == 0 => {
                         note(Word::Pal(op.d & code::PAL_MASK));
                         note(Word::Pal(op.d & code::PAL_MASK));
                     }
@@ -646,9 +887,12 @@ impl<'a> Emitter<'a> {
 
     /// A memo miss writes a8 and a10..a12 itself: none of them a
     /// temporary of this item.
-    fn keep_call_regs(&mut self) {
+    /// The registers taken out, to give back once the miss is past.
+    fn keep_call_regs(&mut self) -> Vec<Reg> {
+        // (This item's only: `reset_temps` starts the next from the pool.)
+        let out = self.free.iter().copied().filter(|&r| r == 8 || (10..=12).contains(&r)).collect();
         self.free.retain(|&r| r != 8 && !(10..=12).contains(&r));
-        self.pool.retain(|&r| r != 8 && !(10..=12).contains(&r));
+        out
     }
 
     fn release(&mut self, r: Reg) {
@@ -909,6 +1153,7 @@ impl<'a> Emitter<'a> {
                 ];
                 return self.call(k, hid::SPR, &args, Some(op.d));
             }
+            INK | U_R..=U_L => return self.read_pixel(k, op.code),
             DIGIT..=DIGIT_B => {
                 let args = [
                     Arg::Val(op.a),
@@ -928,6 +1173,15 @@ impl<'a> Emitter<'a> {
         if [a, b, cc][..n].contains(&d) {
             return Err("a step reads its own register");
         }
+        self.template(op, d, a, b, cc)?;
+        self.wrote(k, id);
+        Ok(())
+    }
+
+    /// `d = op(a, b, cc)` for a step with an inline template (`fixed`'s
+    /// operation in its order), its operands in registers (none `d`).
+    fn template(&mut self, op: Op, d: Reg, a: Reg, b: Reg, cc: Reg) -> Result<(), Refusal> {
+        use code::*;
         let c = &mut self.c;
         match op.code {
             ADD_W => c.add_n(d, a, b),
@@ -1114,6 +1368,52 @@ impl<'a> Emitter<'a> {
             }
             _ => return Err("a step the kernel has no template for"),
         }
+        Ok(())
+    }
+
+    /// `ink` (the canvas's byte at the pixel) or `ur ug ub ul` (the
+    /// picture's), as 0..1: `fixed::byte` (`b·257 + b/128`), the luminance
+    /// as `fixed::luma`.
+    fn read_pixel(&mut self, k: usize, code: u8) -> Result<(), Refusal> {
+        let (id, d) = self.dst(k)?;
+        let t = self.tmp()?;
+        if code == code::INK {
+            let p = self.word_in(t, Word::Ink);
+            self.c.add(t, p, PIX);
+            self.c.l8ui(t, t, 0);
+        } else {
+            let p = self.word_in(t, Word::Under);
+            let u = self.tmp()?;
+            self.c.addx2(u, PIX, PIX);
+            self.c.add(t, p, u);
+            if code == code::U_L {
+                // (77 r + 150 g + 29 b + 128) >> 8.
+                let m = self.tmp()?;
+                let n = self.tmp()?;
+                let c = &mut self.c;
+                c.l8ui(u, t, 0);
+                c.movi(n, 77);
+                c.mull(u, u, n);
+                c.l8ui(m, t, 1);
+                c.movi(n, 150);
+                c.mull(m, m, n);
+                c.add(u, u, m);
+                c.l8ui(m, t, 2);
+                c.movi(n, 29);
+                c.mull(m, m, n);
+                c.add(u, u, m);
+                c.movi(n, 128);
+                c.add(u, u, n);
+                c.srli(t, u, 8);
+            } else {
+                self.c.l8ui(t, t, i32::from(code - code::U_R));
+            }
+        }
+        let c = &mut self.c;
+        c.slli(d, t, 8);
+        c.add(d, d, t);
+        c.srli(t, t, 7);
+        c.add(d, d, t);
         self.wrote(k, id);
         Ok(())
     }
@@ -1170,6 +1470,7 @@ impl<'a> Emitter<'a> {
                 Arg::Imm(v) => self.c.movi(t, v),
                 Arg::Word(w) => self.load_word(t, w),
                 Arg::Out => self.c.mov(t, OUT),
+                Arg::Stack(off) => self.c.addi(t, 1, off),
                 Arg::Val(v) if !is_lane(v) => self.load_word(t, Word::Scalar(v)),
                 Arg::Val(v) => match v & !LANE {
                     L_PX => self.c.slli(t, PIX, 16),
@@ -1219,8 +1520,9 @@ impl<'a> Emitter<'a> {
     /// A memo miss: `x` = `fixed::scale_rgb(*a10, s)` packed (a10 the
     /// palette entry's address), as `scale_rgb` takes its cases: s ≤ 0
     /// black, s = 1 the bytes, 0 < s < 1 inline, s > 1 the helper (a call:
-    /// `keep` saved across it). a11, a12 scratch.
-    fn scale_miss(&mut self, s: Reg, x: Reg, keep: Option<Reg>) -> Result<(), Refusal> {
+    /// `keep`, saved by [`keep_save`](Self::keep_save) before the miss
+    /// touched a10, loaded back at the end). a11, a12 scratch.
+    fn scale_miss(&mut self, s: Reg, x: Reg, keep: &[Reg]) -> Result<(), Refusal> {
         let (e, y, b) = (10, 11, 12);
         let c = &mut self.c;
         c.movi(x, 0);
@@ -1268,23 +1570,20 @@ impl<'a> Emitter<'a> {
         c.or(x, x, y);
         let done2 = c.j_fwd();
         c.bind(big);
-        if let Some(k) = keep {
-            c.s32i(k, 1, SLOT_SPARE);
-        }
         c.mov(11, s);
         self.load_word(CALLEE, Word::Helper(hid::SCALE));
         self.c.callx8(CALLEE);
         self.sar16 = false;
         self.c.mov(x, 10);
-        if let Some(k) = keep {
-            self.c.l32i(k, 1, SLOT_SPARE);
-        }
         self.after_cold_call();
         let sar = self.sar16;
         self.c.bind(black1);
         self.c.bind(black2);
         self.c.bind(done1);
         self.c.bind(done2);
+        for &r in keep {
+            self.c.l32i(r, 1, cold_slot(r));
+        }
         // a10..a12 were scratch on every path here: the hoists there again.
         if !self.hot {
             for (w, r) in self.hoist.clone() {
@@ -1298,6 +1597,24 @@ impl<'a> Emitter<'a> {
         // path set it again only for a kernel without hot calls.)
         self.sar16 = sar;
         Ok(())
+    }
+
+    /// What a memo miss must keep: a10..a12 are scratch on every path of
+    /// [`scale_miss`](Self::scale_miss), a8..a15 on its call's, so the
+    /// values alive at item `k` held there (and `extra`) are kept in the
+    /// frame meanwhile (`scale_miss` loads them back). Before the miss
+    /// writes a10.
+    fn keep_save(&mut self, k: usize, extra: &[Reg]) -> Vec<Reg> {
+        let mut keep: Vec<Reg> = extra.to_vec();
+        for (id, v) in self.vals.iter().enumerate() {
+            if v.start <= k && k <= v.end && v.gpr >= 8 && self.valid[id] && !keep.contains(&v.gpr) {
+                keep.push(v.gpr);
+            }
+        }
+        for &r in &keep {
+            self.c.s32i(r, 1, cold_slot(r));
+        }
+        keep
     }
 
     /// After a memo miss's call: the hoists it clobbered (a8..a15) and SAR,
@@ -1399,6 +1716,12 @@ impl<'a> Emitter<'a> {
                     self.release(g);
                 }
             }
+            OUT_HSV if !self.hsv_call => {
+                let rgb = self.hsv(op.a, op.b, op.c)?;
+                for (o, g) in rgb.into_iter().enumerate() {
+                    self.c.s8i(g, OUT, o as i32);
+                }
+            }
             OUT_HSV => {
                 self.call(
                     k,
@@ -1421,7 +1744,273 @@ impl<'a> Emitter<'a> {
                     c.s8i(i, OUT, o);
                 }
             }
-            OUT_PAL => self.pal_lit(op)?,
+            OUT_PAL => self.pal_lit(k, op)?,
+            _ => self.layer(k, op)?,
+        }
+        Ok(())
+    }
+
+    /// `fixed::hsv(h, s, v)` inline: its three bytes in temporaries
+    /// (red, green, blue). The same operations in its order: s and v
+    /// clamped to 0..65,535, the hue's sixth, p q t as u32 products >> 16,
+    /// each channel `(x·255 + 0x8000) >> 16`, chosen by the sector.
+    fn hsv(&mut self, h: u8, s: u8, v: u8) -> Result<[Reg; 3], Refusal> {
+        // 0..65,535 of a value (clamp(x, 0, 0xffff)).
+        fn clamp16(e: &mut Emitter, x: Reg) -> Result<Reg, Refusal> {
+            let t = e.tmp()?;
+            let m = e.tmp()?;
+            e.c.movi(t, 0);
+            e.c.max(t, x, t);
+            e.release(x);
+            e.c.movi(m, -1);
+            e.c.extui(m, m, 0, 16);
+            e.c.min(t, t, m);
+            e.release(m);
+            Ok(t)
+        }
+        let hv = self.val(h)?;
+        let x = self.tmp()?;
+        self.c.extui(x, hv, 0, 16);
+        self.release(hv);
+        self.c.addx2(x, x, x);
+        self.c.slli(x, x, 1); // h6 = hue · 6
+        let sec = self.tmp()?;
+        self.c.extui(sec, x, 16, 3);
+        self.c.extui(x, x, 0, 16); // f
+        let f = x;
+        let sv = self.val(s)?;
+        let s = clamp16(self, sv)?;
+        let vv = self.val(v)?;
+        let v = clamp16(self, vv)?;
+        let w = self.tmp()?;
+        // v · (0x10000 − y) >> 16 into d (y consumed into w).
+        let prod = |e: &mut Emitter, d: Reg, y: Reg, w: Reg| {
+            e.c.movi(w, 1);
+            e.c.slli(w, w, 16);
+            e.c.sub(w, w, y);
+            e.c.mull(d, v, w);
+            e.c.extui(d, d, 16, 16);
+        };
+        let p = self.tmp()?;
+        prod(self, p, s, w);
+        let q = self.tmp()?;
+        self.c.mull(q, s, f);
+        self.c.extui(q, q, 16, 16);
+        prod(self, q, q, w);
+        // t: s · (0x10000 − f) >> 16 first.
+        self.c.movi(w, 1);
+        self.c.slli(w, w, 16);
+        self.c.sub(w, w, f);
+        self.c.mull(w, s, w);
+        self.c.extui(f, w, 16, 16);
+        let t = f;
+        prod(self, t, t, w);
+        // Each as a byte: (x·255 + 0x8000) >> 16.
+        for r in [v, p, q, t] {
+            self.c.slli(w, r, 8);
+            self.c.sub(r, w, r);
+            self.c.addmi(r, r, 0x4000);
+            self.c.addmi(r, r, 0x4000);
+            self.c.extui(r, r, 16, 8);
+        }
+        // (r, g, b) by sector: 0 (v t p), 1 (q v p), 2 (p v t), 3 (p q v),
+        // 4 (t p v), 5 (v p q).
+        let (r, g, b) = (s, w, self.tmp()?);
+        let ways = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]];
+        let mut done = Vec::new();
+        for (k, way) in ways.iter().enumerate() {
+            let next = match k {
+                0 => Some(self.c.bz_fwd(Zero::Nez, sec)),
+                5 => None,
+                k => Some(self.c.bi_fwd(Imm::Nei, sec, k as i32)),
+            };
+            self.c.mov(r, way[0]);
+            self.c.mov(g, way[1]);
+            self.c.mov(b, way[2]);
+            if let Some(n) = next {
+                done.push(self.c.j_fwd());
+                self.c.bind(n);
+            }
+        }
+        for d in done {
+            self.c.bind(d);
+        }
+        for x in [sec, v, p, q, t] {
+            self.release(x);
+        }
+        Ok([r, g, b])
+    }
+
+    /// A layer's coverage operand `v` clamped to 0..1 in a register, or
+    /// `None` when it is a constant ≥ 1 (then `fixed::cover` is the blend
+    /// itself).
+    fn coverage(&mut self, v: u8) -> Result<Option<Reg>, Refusal> {
+        if !is_lane(v) {
+            let at = self.prog.len();
+            if self.prog.const_value(v, at).is_some_and(|c| c >= ONE_Q) {
+                return Ok(None);
+            }
+            let t = self.tmp()?;
+            return Ok(Some(self.word_in(t, Word::Cover(v))));
+        }
+        let a = self.val(v)?;
+        let t = self.tmp()?;
+        self.c.movi(t, 0);
+        self.c.max(t, a, t);
+        self.release(a);
+        let u = self.tmp()?;
+        let one = self.konst(u, ONE_Q);
+        self.c.min(t, t, one);
+        self.release(u);
+        Ok(Some(t))
+    }
+
+    /// Channel `o` of a layer's colour (`s`, a byte, left as it is)
+    /// blended onto the pixel's byte by `mode` (`fixed::blend`) and moved
+    /// towards it by the coverage `cov` (`fixed::cover`), stored.
+    fn put(&mut self, o: i32, s: Reg, mode: u8, cov: Option<Reg>) -> Result<(), Refusal> {
+        if mode == fixed::BLEND_OVER && cov.is_none() {
+            self.c.s8i(s, OUT, o);
+            return Ok(());
+        }
+        let d = self.tmp()?;
+        self.c.l8ui(d, OUT, o);
+        let r = self.tmp()?;
+        match mode {
+            fixed::BLEND_ADD => {
+                self.c.add(r, d, s);
+                let u = self.tmp()?;
+                let m = self.konst(u, 255);
+                self.c.minu(r, r, m);
+                self.release(u);
+            }
+            fixed::BLEND_MULTIPLY | fixed::BLEND_SCREEN => {
+                // mul255(d, s): p = d·s + 128, (p + p/256) / 256.
+                let u = self.tmp()?;
+                let c = &mut self.c;
+                c.mull(r, d, s);
+                c.addi(r, r, 127);
+                c.addi(r, r, 1);
+                c.srli(u, r, 8);
+                c.add(r, r, u);
+                c.srli(r, r, 8);
+                if mode == fixed::BLEND_SCREEN {
+                    // d + (s − mul255), at most 255.
+                    c.sub(r, s, r);
+                    c.add(r, r, d);
+                    let m = self.konst(u, 255);
+                    self.c.minu(r, r, m);
+                }
+                self.release(u);
+            }
+            fixed::BLEND_MAX => self.c.maxu(r, d, s),
+            fixed::BLEND_MIN => self.c.minu(r, d, s),
+            _ => self.c.mov(r, s),
+        }
+        if let Some(a) = cov {
+            // d + ((r − d)·a + 0x8000) >> 16.
+            let c = &mut self.c;
+            c.sub(r, r, d);
+            c.mull(r, r, a);
+            c.addmi(r, r, 0x4000);
+            c.addmi(r, r, 0x4000);
+            c.srai(r, r, 16);
+            c.add(r, r, d);
+        }
+        self.c.s8i(r, OUT, o);
+        self.release(r);
+        self.release(d);
+        Ok(())
+    }
+
+    /// A layer: its colour worked out as the bottom layer's is, then each
+    /// channel blended onto the pixel (`vm::colour_step`).
+    fn layer(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
+        use code::*;
+        let (kind, Some(mode)) = colour_parts(op.code) else {
+            return Err("a colour the kernel has no template for");
+        };
+        let cv = if kind == OUT_RGB || kind == OUT_HSV { op.d } else { op.b };
+        match kind {
+            OUT_GRAY => {
+                let v = self.val(op.a)?;
+                let g = self.chan(v)?;
+                let cov = self.coverage(cv)?;
+                for o in 0..3 {
+                    self.put(o, g, mode, cov)?;
+                }
+            }
+            OUT_RGB => {
+                let cov = self.coverage(cv)?;
+                for (o, x) in [op.a, op.b, op.c].into_iter().enumerate() {
+                    let v = self.val(x)?;
+                    let g = self.chan(v)?;
+                    self.put(o as i32, g, mode, cov)?;
+                    self.release(g);
+                }
+            }
+            OUT_HSV if !self.hsv_call => {
+                let rgb = self.hsv(op.a, op.b, op.c)?;
+                let cov = self.coverage(cv)?;
+                for (o, g) in rgb.into_iter().enumerate() {
+                    self.put(o as i32, g, mode, cov)?;
+                }
+            }
+            OUT_HSV => {
+                // The coverage first, kept in the frame across the call.
+                let cov = self.coverage(cv)?;
+                if let Some(a) = cov {
+                    self.c.s32i(a, 1, SLOT_COVER);
+                }
+                self.call(
+                    k,
+                    hid::HSV,
+                    &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c), Arg::Stack(SLOT_HSV)],
+                    None,
+                )?;
+                let cov = match cov {
+                    Some(_) => {
+                        let a = self.tmp()?;
+                        self.c.l32i(a, 1, SLOT_COVER);
+                        Some(a)
+                    }
+                    None => None,
+                };
+                for o in 0..3 {
+                    let t = self.tmp()?;
+                    self.c.l8ui(t, 1, SLOT_HSV + o);
+                    self.put(o, t, mode, cov)?;
+                    self.release(t);
+                }
+            }
+            OUT_PAL if op.d & PAL_SCALED == 0 => {
+                let v = self.val(op.a)?;
+                let i = self.pal_index(v)?;
+                let p = self.tmp()?;
+                let p = self.word_in(p, Word::Pal(op.d & code::PAL_MASK));
+                let e = self.tmp()?;
+                self.c.addx2(e, i, i);
+                self.c.add(e, e, p);
+                self.release(i);
+                self.release(p);
+                let cov = self.coverage(cv)?;
+                for o in 0..3 {
+                    let t = self.tmp()?;
+                    self.c.l8ui(t, e, o);
+                    self.put(o, t, mode, cov)?;
+                    self.release(t);
+                }
+            }
+            OUT_PAL => {
+                let x = self.pal_lit_x(k, op)?;
+                let cov = self.coverage(cv)?;
+                for o in 0..3 {
+                    let t = self.tmp()?;
+                    self.c.extui(t, x, 8 * o as u32, 8);
+                    self.put(o, t, mode, cov)?;
+                    self.release(t);
+                }
+            }
             _ => return Err("a colour the kernel has no template for"),
         }
         Ok(())
@@ -1429,11 +2018,17 @@ impl<'a> Emitter<'a> {
 
     /// `pal(P, k) * s` with the last index and scale's colour kept in `ctx`
     /// (the VM's `pal_lit_lane`): a new one from `scale_rgb` (a call).
-    fn pal_lit(&mut self, op: Op) -> Result<(), Refusal> {
+    fn pal_lit(&mut self, k: usize, op: Op) -> Result<(), Refusal> {
+        let x = self.pal_lit_x(k, op)?;
+        self.store_packed(x)
+    }
+
+    /// [`pal_lit`](Self::pal_lit)'s colour, packed, in a temporary.
+    fn pal_lit_x(&mut self, k: usize, op: Op) -> Result<Reg, Refusal> {
         let shift = u32::from((op.d & !PAL_SCALED) >> PAL_SHIFT);
         let memo = self.words_run(&[Word::Init(-1), Word::Init(0), Word::Init(0)]);
         let pal = Word::Pal(op.d & code::PAL_MASK);
-        self.keep_call_regs();
+        let back = self.keep_call_regs();
         let v = self.val(op.a)?;
         let i = self.pal_index(v)?;
         let sv = self.val(op.c)?;
@@ -1452,25 +2047,29 @@ impl<'a> Emitter<'a> {
         c.bind(m2);
         c.s32i(i, CTX, memo);
         c.s32i(s, CTX, memo + 4);
-        // (Nothing a8..a12 hold is wanted after the colour: it is the last.)
-        c.addx2(10, i, i);
-        let p = self.word_in(12, pal);
-        self.c.add(10, 10, p);
-        self.scale_miss(s, x, None)?;
+        let keep = self.keep_save(k, &[]);
+        // (The palette into a11 first: its hoist may be a10 itself — Fable's
+        // review: a hoist read after a10 was written made 6·i the entry.)
+        self.load_word(11, pal);
+        self.c.addx2(10, i, i);
+        self.c.add(10, 10, 11);
+        self.scale_miss(s, x, &keep)?;
         self.c.s32i(x, CTX, memo + 8);
         self.c.bind(hit);
         self.release(i);
         self.release(s);
-        self.store_packed(x)
+        // (Past the miss: a8, a10..a12 are this item's again.)
+        self.free.extend(back);
+        Ok(x)
     }
 
     /// `pal(P, select(c, A, B)) [* k]`.
-    fn sel_pal(&mut self, _k: usize, cv: u8, a: u8, b: u8, col: Op) -> Result<(), Refusal> {
+    fn sel_pal(&mut self, k: usize, cv: u8, a: u8, b: u8, col: Op) -> Result<(), Refusal> {
         let pal = col.d & code::PAL_MASK;
         let shift = (col.d & !PAL_SCALED) >> PAL_SHIFT;
         let scaled = col.d & PAL_SCALED != 0;
         if scaled && is_lane(col.c) {
-            self.keep_call_regs();
+            let _ = self.keep_call_regs();
         }
         if !scaled || !is_lane(col.c) {
             // Two colours a row (the VM's: two a lane).
@@ -1531,8 +2130,9 @@ impl<'a> Emitter<'a> {
         let hit = cc.j_fwd();
         cc.bind(miss);
         cc.s32i(s, o, base);
-        cc.l32i(10, o, base + 8);
-        self.scale_miss(s, x, Some(o))?;
+        let keep = self.keep_save(k, &[o]);
+        self.c.l32i(10, o, base + 8);
+        self.scale_miss(s, x, &keep)?;
         self.c.s32i(x, o, base + 4);
         self.c.bind(hit);
         self.release(o);
@@ -1583,14 +2183,15 @@ fn slot(h: Reg) -> i32 {
 /// Whether an item calls a helper on every pixel (a colour's memo misses
 /// call one now and then: "cold", after which the hoists are loaded again;
 /// they do not make the kernel one with calls for its registers).
-fn hot_call(prog: &Program, it: &Item) -> bool {
-    needs_call(prog, it)
-        && !matches!(*it, Item::Step(op) if op.code == code::OUT_PAL)
+fn hot_call(hsv_call: bool, it: &Item) -> bool {
+    needs_call(hsv_call, it)
+        && !matches!(*it, Item::Step(op)
+            if code::is_colour(op.code) && code::colour_parts(op.code).0 == code::OUT_PAL)
         && !matches!(*it, Item::SelPal { .. })
 }
 
 /// Whether an item calls a helper.
-fn needs_call(_prog: &Program, it: &Item) -> bool {
+fn needs_call(hsv_call: bool, it: &Item) -> bool {
     use code::*;
     match *it {
         Item::Step(op) => {
@@ -1610,10 +2211,12 @@ fn needs_call(_prog: &Program, it: &Item) -> bool {
                     | SMOOTH
                     | NOISE
                     | MULR
-                    | OUT_HSV
             ) || (DIGIT..=DIGIT_B).contains(&op.code)
                 || (NOISE_O..=NOISE_O_LAST).contains(&op.code)
-                || (op.code == OUT_PAL && op.d & PAL_SCALED != 0)
+                || (hsv_call && is_colour(op.code) && colour_parts(op.code).0 == OUT_HSV)
+                || (is_colour(op.code)
+                    && colour_parts(op.code).0 == OUT_PAL
+                    && op.d & PAL_SCALED != 0)
         }
         Item::SelPal { col, .. } => col.d & PAL_SCALED != 0 && is_lane(col.c),
         Item::PickPal { .. } => false,
@@ -1628,7 +2231,10 @@ fn word_rank(w: Word) -> u32 {
         Word::Scalar(k) => 0x200 | u32::from(k),
         Word::Sin => 0x300,
         Word::Pal(k) => 0x400 | u32::from(k),
-        Word::Const(c) => 0x500 | (c as u32 >> 12 & 0xff),
+        Word::Const(c) => 0x500 | (c as u32 >> 12 & 0xff) | (c as u32 & 0xfff) << 8,
+        Word::Ink => 0x600,
+        Word::Under => 0x601,
+        Word::Cover(k) => 0x700 | u32::from(k),
         _ => 0xfff,
     }
 }

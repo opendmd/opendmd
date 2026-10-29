@@ -53,6 +53,18 @@ pub(crate) const F_PICKPAL: u8 = 4;
 /// A pick fused with its colour has at most this many choices.
 pub(crate) const PICK_MAX: usize = 16;
 
+/// What a fused colour costs in the JIT's kernel, ns a pixel, when the
+/// kernel draws it in one piece (`pal_select`, `pal_pick`: a choice of
+/// colours worked out a row); `None`: its steps, one at a time.
+pub(crate) fn jit_ns(kind: u8) -> Option<u32> {
+    match kind {
+        F_SELPAL => Some(35),
+        F_SELPAL_K => Some(80),
+        F_PICKPAL => Some(45),
+        _ => None,
+    }
+}
+
 /// A kind's name, for listings.
 pub(crate) fn name(kind: u8) -> &'static str {
     match kind {
