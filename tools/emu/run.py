@@ -91,7 +91,8 @@ def main():
     env = {**os.environ, "ESP32SIM_SD_IMG": str(a.card)}
     env.pop("ESP32SIM_SD_OUT", None)
     cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(rom),
-           "--flash-image", str(a.image), "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
+           "--flash-image", str(a.image), "--flash-mb", str(max(4, a.image.stat().st_size >> 20)),
+           "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
     print("emu:", " ".join(cmd), flush=True)
     print(f"emu: log {log}  (card {a.card}; {seconds} emulated s, {wall} s wall limit)", flush=True)
 

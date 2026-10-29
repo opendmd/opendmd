@@ -930,14 +930,19 @@ emu-smoke: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
 	uv run --quiet tools/emu/run.py smoke --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
-# A psi-probe image (the psi-probe feature alone, never `probe`; a probe app
-# is bigger, hence the smaller spare (EMU_PROBE_SPARE, 8 KB: 12 KB was left at beta.11)) to $(EMU_DIR)/probe/. FW_IMAGE=... skips the build.
+# A psi-probe image (the psi-probe feature alone, never `probe`) to $(EMU_DIR)/probe/.
+# The 8mb layout by default: the emulator does not care about the DevKit's 4 MB,
+# and the full probe does not fit the 4mb factory partition with margin (same
+# firmware code, classic ESP32; only the partition table and flash size differ).
+# EMU_PROBE_VARIANT=4mb builds the DevKit layout (then EMU_PROBE_SPARE, 8 KB,
+# is the rule). FW_IMAGE=... skips the build.
+EMU_PROBE_VARIANT ?= 8mb
 EMU_PROBE_SPARE ?= 8192
-EMU_PROBE_IMAGE = $(EMU_DIR)/probe/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+EMU_PROBE_IMAGE = $(EMU_DIR)/probe/dist/opendmd-$(FW_VERSION)-$(EMU_PROBE_VARIANT)-full.bin
 emu-image-probe:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
-	rm -f $(EMU_DIR)/probe/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/probe/dist/opendmd-*-4mb-app.bin
-	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=psi-probe FW_APP_SPARE=$(EMU_PROBE_SPARE) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/probe/target DIST=$(EMU_DIR)/probe/dist UPDATER_BUILD=$(EMU_UPDATER)
+	rm -f $(EMU_DIR)/probe/dist/opendmd-*-full.bin $(EMU_DIR)/probe/dist/opendmd-*-app.bin
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=$(EMU_PROBE_VARIANT) FW_RELEASE_FEATURES=psi-probe FW_APP_SPARE=$(EMU_PROBE_SPARE) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/probe/target DIST=$(EMU_DIR)/probe/dist UPDATER_BUILD=$(EMU_UPDATER)
 emu-probe: emu-build emu-card
 	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-probe &&) \
 	uv run --quiet tools/emu/run.py probe --image $(or $(FW_IMAGE),$(EMU_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
