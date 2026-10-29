@@ -309,3 +309,40 @@ fn dump_kernel() {
     println!("{}", String::from_utf8_lossy(&out.stdout));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The helpers the fuzz rarely reaches (tables, glyphs, sprites, picks of
+/// lanes, a wide noise and a split's multiply in `loop forever`, `bit`,
+/// checked arithmetic at its ends), each against the VM.
+#[test]
+fn helpers_draw_the_same_through_kernels() {
+    let cases = [
+        "table T = 0.1, 0.5, 0.9, 0.3\ngray(T[x * 4 + t] + y)",
+        "rgb(digit(floor(px/5) % 12 - 1, px % 5, 31 - py), glyph(32 + px % 64, px % 5, py % 8, small), bit(px*258 - 16000, py - 1))",
+        "gray(digit(px % 10, px % 4, py % 6, bold) * 0.5 + digit(floor(t*3) % 10, px % 5, py % 7))",
+        "sprite s {\nkey . 0, X 1, Y 0.5\nXY.XY.XY.XY.XY.XY.\n.XYXY.XYXY.XYXY.XY\n}\ngray(s[x * 18 + t, y * 3])",
+        "loop forever\ngray(noise(x * 8 + t, y * 4, t * 0.5))",
+        "loop forever\nv = frac((t + x) * 0.37)\ngray(v)",
+        "loop forever\nhsv(x + t * 0.1, 1, noise(px / 9 + t * 3, py / 5, 0))",
+        "gray(pick(floor(x * 5 + t), 0.1, y, 0.6, x * x))",
+        "gray((x * 30000 + y * 30000) * 3 - t * 20000)",
+        "gray(-(x * 30000 * 3 - 32767 - 1) + abs(y * 30000 * 3 - 32000) / 30000)",
+        "v = (px - 64) * (py - 16) * 9 * t\ngray(v * v)",
+        "gray(sqrt(x + t) * (1 / (y + 0.1)) % 1 + x / (x + t) + atan2(y - 0.5, x - 0.5))",
+        "gray(smoothstep(0.2, 0.8, x + sin(t)) * mix(x, y, t))",
+        "palette p = #102030, #f08000, #ffffff\npal(p, x + t/8) * y",
+        "palette p = #102030, #f08000, #ffffff\npal(p, floor(x * 3 + t) % 3 / 2)",
+        "pal(chrono, (floor(px*0.1 + t) + floor(py*0.3)) % 2 ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * (floor(px*py*0.002 + t) % 8 / 8)",
+        "pal(rainbow, pick(floor(px*0.07 + py*0.3) % 9, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, t/8, 0.8, 0.9)) * (py / 31)",
+        "gray(tri(x * 3 + t) * sqr(y * 2 + t) * saw(x + y))",
+        "gray(x > t or not (y < 0.5) and px != 7)",
+    ];
+    let mut lowered = 0;
+    for src in cases {
+        let prog = compile(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
+        match same_as_vm("helpers", src, &prog, &[0, 1234, 4321, 99_999]) {
+            Ok(_) => lowered += 1,
+            Err(w) => println!("{src}: VM ({w})"),
+        }
+    }
+    assert_eq!(lowered, cases.len());
+}
