@@ -3,6 +3,6 @@
 -- bundle
 name "Old photo"
 about "The GIF in warm sepia tones"
-control amount = 0.8 "How much"     -- 0: the GIF as it is
+control amount = 0.8 "How much" -- 0: the GIF as it is
 look
 mix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), amount)

@@ -7,4 +7,4 @@ loop 4
 r = frac(sin(px*0.37)*97.3)
 drop = frac(y + t*(floor(r*6) + 1)/2 + r*2)
 glow = max(0, 1 - drop*5) * step(r, 0.5)
-glow * #80b3ff
+glow*#80b3ff
