@@ -63,6 +63,7 @@ fn pack(c: [u8; 3]) -> u32 {
 /// The pointer arguments must be what the kernel passes: a `Word`'s
 /// address (the scalar slots, the tables, a palette entry, a font) or the
 /// pixel's three bytes.
+#[inline(always)]
 pub(crate) unsafe fn eval_helper(id: u8, a: [u32; 5], ptr: &dyn Fn(u32) -> *mut u8) -> u32 {
     let i = |k: usize| a[k] as i32;
     (match id {
@@ -178,7 +179,7 @@ fn fill<T: Target>(t: &mut T, words: &[Word], ctx: &mut [u32], st: &Rows<'_>) {
                 let p = palette(st.tables, st.own, pal);
                 t.addr(p[fixed::pal_index(s.sc[(v & 0x7f) as usize])].as_ptr(), 3)
             }
-            Word::Init(c) => c as u32,
+            Word::Init(c) | Word::Const(c) => c as u32,
             Word::Pick { pal, b, n, i, k, shift } => {
                 let m = (n as usize).min(PICK_MAX);
                 let v = if (i as usize) < m {
@@ -213,6 +214,8 @@ pub(crate) fn frame<T: Target>(
     rows: u32,
     dest: &dyn Fn(usize) -> *mut u8,
 ) {
+    #[cfg(feature = "stats")]
+    let mut clk = stats::Clock::start();
     let ns = prog.n_scalars as usize;
     scratch.sc[..ns].copy_from_slice(&prog.init[..ns]);
     let sc = &mut scratch.sc;
@@ -270,6 +273,8 @@ pub(crate) fn frame<T: Target>(
     let uses_i = prog.uses & USES_I != 0;
     let main = low.main_start;
     let mut columns_kept = false;
+    #[cfg(feature = "stats")]
+    clk.lap(stats::FRAME);
     for row in 0..H {
         if rows & (1 << row) == 0 {
             continue;
@@ -280,6 +285,8 @@ pub(crate) fn frame<T: Target>(
         for op in &prog.ops[de..re] {
             vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
         }
+        #[cfg(feature = "stats")]
+        clk.lap(stats::ROWS);
         if uses_i {
             for (k, v) in scratch.lanes[0].iter_mut().enumerate() {
                 *v = ((row * W + k) as i32) << 16;
@@ -320,6 +327,8 @@ pub(crate) fn frame<T: Target>(
                 vm::keep::<128>(scratch, st, [m.b, m.c], m.d, row * W);
             }
         }
+        #[cfg(feature = "stats")]
+        clk.lap(stats::PRE);
         let st = Rows {
             prog,
             scratch,
@@ -329,11 +338,60 @@ pub(crate) fn frame<T: Target>(
             glyphs: &glyphs,
         };
         fill(t, &low.words, ctx, &st);
+        #[cfg(feature = "stats")]
+        clk.lap(stats::FILL);
         t.run(ctx, dest(row));
+        #[cfg(feature = "stats")]
+        clk.lap(stats::KERNEL);
         columns_kept = true;
     }
     if let Cache::Keep(st, _) = cache {
         st.kept = crate::still::fingerprint(prog);
+    }
+}
+
+/// psi-probe's split of the JIT's frames (the `stats` feature): cycles in
+/// the frame steps, the row steps, the column and still runs, filling the
+/// words, and the kernel, summed over the frames since the last `take`.
+#[cfg(feature = "stats")]
+#[doc(hidden)]
+pub mod stats {
+    use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+    pub const FRAME: usize = 0;
+    pub const ROWS: usize = 1;
+    pub const PRE: usize = 2;
+    pub const FILL: usize = 3;
+    pub const KERNEL: usize = 4;
+    pub const NAMES: [&str; 5] = ["frame steps", "row steps", "column/still runs", "words", "kernel"];
+    pub static CYCLES: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
+    pub static FRAMES: AtomicU32 = AtomicU32::new(0);
+
+    pub(crate) struct Clock(u32);
+
+    fn now() -> u32 {
+        let f = crate::vm::stats::CLOCK.load(Relaxed);
+        if f == 0 {
+            return 0;
+        }
+        // SAFETY: stored by the firmware from a `fn() -> u32`.
+        unsafe { core::mem::transmute::<usize, fn() -> u32>(f)() }
+    }
+
+    impl Clock {
+        pub(crate) fn start() -> Clock {
+            FRAMES.fetch_add(1, Relaxed);
+            Clock(now())
+        }
+        pub(crate) fn lap(&mut self, k: usize) {
+            let t = now();
+            CYCLES[k].fetch_add(t.wrapping_sub(self.0), Relaxed);
+            self.0 = t;
+        }
+    }
+
+    /// The sums so far (cycles), and the frames; reset.
+    pub fn take() -> ([u32; 5], u32) {
+        (core::array::from_fn(|k| CYCLES[k].swap(0, Relaxed)), FRAMES.swap(0, Relaxed))
     }
 }
 
