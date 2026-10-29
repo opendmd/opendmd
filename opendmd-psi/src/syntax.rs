@@ -10,6 +10,9 @@
 //! the player: the calls are compiled out.
 
 use crate::compile::{lex_tokens, Error, Info};
+
+mod fmt;
+pub use fmt::format;
 use crate::Program;
 use alloc::vec::Vec;
 

@@ -193,7 +193,7 @@ fn sub(s: &str, a: usize, b: usize) -> &str {
 // --- the lexer ----------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Tok {
+pub(crate) enum Tok {
     Num(i32),
     /// `#rrggbb` (`#rgb` widened): a colour, 0xRRGGBB.
     Hex(u32),
@@ -236,10 +236,10 @@ enum Tok {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Token {
-    tok: Tok,
-    start: usize,
-    end: usize,
+pub(crate) struct Token {
+    pub(crate) tok: Tok,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 /// A [`Token`] as the lexer's list keeps it: 12 B instead of 16 on the
@@ -248,7 +248,7 @@ struct Token {
 /// [`lex`]), so its places fit in 16 bits.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy)]
-struct Packed {
+pub(crate) struct Packed {
     tok: Tok,
     start: u16,
     end: u16,
@@ -257,12 +257,12 @@ struct Packed {
 /// (The browser keeps the tokens as they are: no heap to spare there, and
 /// a smaller download.)
 #[cfg(target_arch = "wasm32")]
-type Packed = Token;
+pub(crate) type Packed = Token;
 
 #[cfg(target_arch = "wasm32")]
 impl Token {
     #[inline]
-    fn get(self) -> Token {
+    pub(crate) fn get(self) -> Token {
         self
     }
 }
@@ -270,7 +270,7 @@ impl Token {
 #[cfg(not(target_arch = "wasm32"))]
 impl Packed {
     #[inline]
-    fn get(self) -> Token {
+    pub(crate) fn get(self) -> Token {
         Token {
             tok: self.tok,
             start: self.start as usize,
@@ -336,7 +336,7 @@ pub fn number(s: &str) -> Option<i32> {
 }
 
 #[inline(never)]
-fn lex(src: &str) -> Result<Vec<Packed>, Error> {
+pub(crate) fn lex(src: &str) -> Result<Vec<Packed>, Error> {
     if src.len() > u16::MAX as usize {
         return Err(Error::new(0, 0, "too long"));
     }

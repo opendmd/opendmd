@@ -94,6 +94,15 @@ fn every_declaration_error_says_what_and_where() {
             Ok(_) => bad.push(format!("{code} {src:?}: compiled")),
             Err(e) => {
                 let lc = e.line_col(src);
+                // (With `docs`: the sentence's code, from `errors.rs`, is the row's.)
+                #[cfg(feature = "docs")]
+                if opendmd_psi::errors::code_of(&e.msg).map(opendmd_psi::errors::label).as_deref() != Some(code) {
+                    bad.push(format!(
+                        "{code} {src:?}: classified as {:?}: {}",
+                        opendmd_psi::errors::code_of(&e.msg),
+                        e.msg
+                    ));
+                }
                 if !e.msg.contains(want) || lc != (line, col) {
                     bad.push(format!(
                         "{code} {src:?}: got {:?} at {lc:?}, want {want:?} at {:?}\n{}",

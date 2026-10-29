@@ -1,0 +1,21 @@
+[package]
+name = "opendmd-psi-cli"
+version = "1.0.0-beta.12"
+edition = "2021"
+description = "psi: check and format Psi Formulas from the command line (errors with codes, the panel's estimates, a contact sheet; the canonical layout)."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/opendmd/opendmd"
+publish = false
+
+# No dependencies but opendmd-psi (with its own tables, the language
+# service's hook and the built-ins' docs), like opendmd-gallery: it builds
+# offline. `cargo install --path opendmd-psi-cli` puts `psi` on PATH.
+[dependencies]
+opendmd-psi = { path = "../opendmd-psi", features = ["tables", "syntax", "docs"] }
+
+[[bin]]
+name = "psi"
+path = "src/main.rs"
+
+[profile.release]
+debug = false

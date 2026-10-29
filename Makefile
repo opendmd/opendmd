@@ -9,6 +9,7 @@ ART    := opendmd-art-web
 PACK   := opendmd-pack
 PSI    := opendmd-psi
 PSIWEB := opendmd-psi-web
+PSICLI := opendmd-psi-cli
 GAL    := opendmd-gallery
 FW     := firmware
 
@@ -103,7 +104,7 @@ ARGS ?= --root $(CARD_ROOT)
 # `make pack` uses ARGS too, but only when given: the sim's default is no use to it.
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
-.PHONY: test test-card test-wasm sim sim-build psi-bench psi-check check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
+.PHONY: test test-card test-wasm sim sim-build psi-bench psi-check psi check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
 	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
@@ -133,6 +134,8 @@ test:
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	@echo "==> Testing $(PSIWEB) (the web app's Formulas module)"
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo test
+	@echo "==> Testing $(PSICLI) (the psi command)"
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo test
 	@echo "==> Testing $(GAL) (the formula gallery's checker)"
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo test
 	tools/gallery-repo-publish-test.sh
@@ -168,12 +171,17 @@ sim-build:
 psi-bench:
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo run --release --example bench -- $(if $(filter command line,$(origin ARGS)),$(ARGS),)
 
-# Check a candidate formula (docs/psi-for-models.md): errors with the line and
-# carets, steps, the panel's estimate, and a PNG contact sheet of its frames.
+# Check a candidate formula (docs/psi-for-models.md): `psi check` — errors with
+# their code, line and carets, steps, the panel's estimates (VM and JIT), the
+# compile's heap, the lengths, and a PNG contact sheet of its frames.
 # make psi-check F=my.psi [ARGS="--out sheet.png --frames 8 --a 0.5 --hash"]
 psi-check:
 	@test -n "$(F)" || { echo 'usage: make psi-check F=formula.psi [ARGS="--out sheet.png"]'; exit 2; }
-	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release --example psi-check -- $(abspath $(F)) $(if $(filter command line,$(origin ARGS)),$(ARGS),)
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo run -q --release -- check $(abspath $(F)) $(if $(filter command line,$(origin ARGS)),$(ARGS),)
+
+# The `psi` command (check, fmt, builtins/errors --json) into ~/.cargo/bin.
+psi:
+	RUSTUP_TOOLCHAIN=stable cargo install --locked --path $(PSICLI)
 
 CARGO_ABOUT ?= cargo-about
 CARGO_ABOUT_VERSION := 0.9.2
@@ -476,6 +484,8 @@ clippy:
 	cd $(PSIWEB) && RUSTUP_TOOLCHAIN=stable cargo clippy --lib --target $(WASM_TARGET) --features bare,bump -- -D warnings
 	@echo "==> Clippy $(GAL)"
 	cd $(GAL) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
+	@echo "==> Clippy $(PSICLI)"
+	cd $(PSICLI) && RUSTUP_TOOLCHAIN=stable cargo clippy --all-targets -- -D warnings
 
 clean:
 	cd $(CORE) && cargo clean
@@ -487,6 +497,7 @@ clean:
 	cd $(PSI) && cargo clean
 	cd $(PSIWEB) && cargo clean
 	cd $(GAL) && cargo clean
+	cd $(PSICLI) && cargo clean
 	rm -rf $(WEB)/www/pkg $(WEB)/www/pkg-art $(WEB)/www/pkg-psi $(WWW_PACK) ./target
 
 # --- ESP32 firmware ---------------------------------------------------------

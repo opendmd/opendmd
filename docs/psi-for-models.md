@@ -13,11 +13,15 @@ Users see the words *Formula* and *GIF*; Psi is the language's name.
 make psi-check F=candidate.psi [ARGS="--out sheet.png --frames 8 --a 0.5"]
 ```
 
+(or `psi check candidate.psi --out sheet.png`, with the `psi` command
+installed: `make psi`).
+
 It prints `ok: …` (steps, layers, registers, values), the loop and what it reads,
 and `panel: ~N ms a frame: light|medium|heavy`, and writes a PNG contact
 sheet of frames across one loop (over a sample picture — sky, sun, hills —
 when the formula draws over what is under it). On a compile error it prints
-`error: line L, column C: <sentence>`, the line and carets, and fails:
+`error[E###]: line L, column C: <sentence>` (the code links the language
+reference's error index, `/dev/psi/#E###`), the line and carets, and fails:
 the tool itself exits 1 (2 for a missing file or a bad option), and
 `make psi-check` then exits 2, as make does for any failed command.
 Look at the sheet: the numbers say it runs, only the picture says it is
@@ -661,7 +665,7 @@ and the colour `pal(P, c ? A : B)` (~190 saved with `* k` of a row value,
   memory; then they and the steps only they need cost nothing a frame. It is
   an effect's only (not a look's: a look is estimated without it), and the
   panel may let it go at any time (then every step runs, slower, the same
-  bytes). `psi-check` prints both estimates. So a tunnel's depth and angle
+  bytes). `psi check` prints both estimates. So a tunnel's depth and angle
   are free, but `depth*a` is not still (a slider moves): keep the sliders
   out of the values you want kept (`twist = 1 -- try 0 to 3`).
 - **noise at a whole z** (`noise(x, y, 0)`, any whole constant third
@@ -1590,7 +1594,7 @@ pal(city, k/4)
 
 ## 17. In the product (not built)
 
-This reference and `psi-check` are tooling only: nothing in OpenDMD calls a
+This reference and `psi check` are tooling only: nothing in OpenDMD calls a
 model. If the owner wants it later, the natural place is the Formulas
 editor: a "Describe an effect…" box whose text, with this document as the
 system prompt, asks a model for a formula; the editor compiles the answer
