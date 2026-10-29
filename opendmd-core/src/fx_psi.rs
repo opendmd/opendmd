@@ -65,6 +65,11 @@ pub struct PsiFx {
     /// the clock read each frame (a `gettimeofday` and a `localtime_r` on
     /// the device).
     clock: bool,
+    /// Frames in a row whose compare found (nearly) every pixel changed;
+    /// from [`FULL_RUN`] on the frames are not compared (`mark_all`) but
+    /// every [`RECHECK`]th, counted in `uncompared` (all-zero: compare).
+    full: u8,
+    uncompared: u8,
     delay_ms: u8,
     inputs: psi::Inputs,
     gov: Governor,
@@ -567,6 +572,7 @@ impl PsiFx {
         }
         self.prog = *prog;
         self.clock = reads_clock(&self.prog);
+        self.full = 0;
         self.delay_ms = delay;
         let s = self.prog.meta().values(q.sliders);
         self.set_sliders(s);
@@ -710,21 +716,47 @@ impl PsiFx {
         let (bytes, dirty) = canvas.bytes_and_dirty_mut();
         // Only what changed is marked (the canvas holds the frame before:
         // the `Effect` contract; what differs from it is what the panel
-        // lacks, the map marking the rest).
-        let mut changed = [0u32; psi::H];
-        psi::render_rows_changed::<LANES>(
-            &self.prog,
-            &mut self.scratch,
-            self.ink.as_deref_mut(),
-            Some(&mut self.still),
-            &self.inputs,
-            &tables(),
-            None,
-            u32::MAX,
-            bytes,
-            &mut changed,
-        );
-        mark_changed(dirty, &changed);
+        // lacks, the map marking the rest). A Formula that keeps changing
+        // every pixel (Tunnel, Time gate, Plasma) is not compared, only
+        // checked again now and then: the compare costs it ~0.1-0.2 ms a
+        // frame for nothing.
+        if !old() && (self.full < FULL_RUN || self.uncompared >= RECHECK) {
+            let mut changed = [0u32; psi::H];
+            psi::render_rows_changed::<LANES>(
+                &self.prog,
+                &mut self.scratch,
+                self.ink.as_deref_mut(),
+                Some(&mut self.still),
+                &self.inputs,
+                &tables(),
+                None,
+                u32::MAX,
+                bytes,
+                &mut changed,
+            );
+            mark_changed(dirty, &changed);
+            let groups: u32 = changed.iter().map(|m| m.count_ones()).sum();
+            self.full = if groups >= FULL_GROUPS {
+                self.full.saturating_add(1)
+            } else {
+                0
+            };
+            self.uncompared = 0;
+        } else {
+            psi::render_rows_still::<LANES>(
+                &self.prog,
+                &mut self.scratch,
+                self.ink.as_deref_mut(),
+                Some(&mut self.still),
+                &self.inputs,
+                &tables(),
+                None,
+                u32::MAX,
+                bytes,
+            );
+            dirty.mark_all();
+            self.uncompared += 1;
+        }
         let Some(c) = clock else {
             return self.delay();
         };
@@ -742,10 +774,28 @@ impl PsiFx {
     }
 }
 
-/// psi-probe's switch (feature `psi-stats`): mark every pixel of a
-/// Formula's frame as before, for the play lines' A/B. Not in a release.
+/// psi-probe's switch (feature `psi-stats`): a Formula's frames as before
+/// console-a's Phase A (no compare; every pixel marked, a look's redrawn
+/// rows whole), for A/B rows and play lines in one build. Not in a release.
 #[cfg(feature = "psi-stats")]
-pub static MARK_ALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static OLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// [`OLD`]'s state (false without `psi-stats`).
+#[inline(always)]
+fn old() -> bool {
+    #[cfg(feature = "psi-stats")]
+    return OLD.load(Ordering::Relaxed);
+    #[cfg(not(feature = "psi-stats"))]
+    false
+}
+
+/// A frame that changed this many of its 1,024 four-pixel groups changed
+/// "everything" (97 %); after [`FULL_RUN`] of them in a row a Formula's
+/// frames are not compared, but one in [`RECHECK`] is (then compared again
+/// as soon as one changes less).
+const FULL_GROUPS: u32 = 992;
+const FULL_RUN: u8 = 4;
+const RECHECK: u8 = 32;
 
 /// What pushing the panel costs, in tenths of a µs (the firmware's blit:
 /// `hub75_draw_span` ~0.45 µs a pixel and ~1 µs a call, rows y and y + 16
@@ -770,11 +820,6 @@ fn spans_cost(m: u32) -> u32 {
 /// spans. Never less than what changed (a few pixels more, by the groups).
 pub fn mark_changed(dirty: &mut crate::canvas::DirtyMap, changed: &[u32; psi::H]) {
     const HALF: usize = psi::H / 2;
-    #[cfg(feature = "psi-stats")]
-    if MARK_ALL.load(Ordering::Relaxed) {
-        dirty.mark_all();
-        return;
-    }
     let whole = spans_cost(u32::MAX);
     let row = |dirty: &mut crate::canvas::DirtyMap, y: usize, m: u32| {
         if m == 0 {
@@ -1255,7 +1300,14 @@ impl FormulaLook {
             bytes,
             &mut changed,
         );
-        if self.fresh {
+        if old() {
+            let mut r = rows;
+            while r != 0 {
+                let y = r.trailing_zeros() as usize;
+                r &= r - 1;
+                dirty.mark_span(y, 0, crate::canvas::WIDTH);
+            }
+        } else if self.fresh {
             // (Its picture is not what the panel shows: all of it.)
             dirty.mark_all();
         } else {
@@ -1561,6 +1613,32 @@ mod tests {
             eprintln!("{name}: {} px marked a frame", marked / 24);
         }
         assert!(few >= 3, "only {few} formulas marked under half the panel");
+    }
+
+    /// A Formula that changes every pixel stops being compared after
+    /// `FULL_RUN` frames (marks all, checked again every `RECHECK`th), and
+    /// one that changes little is always compared.
+    #[test]
+    fn a_formula_that_changes_everything_is_not_compared() {
+        let mut fx = Fx::parse(&path("loop 1\nrgb(frac(t*7 + x), frac(y - t*3), 0.5)")).unwrap();
+        let mut c = Canvas::new();
+        let mut counts = Vec::new();
+        for k in 0..80u32 {
+            c.dirty_mut().clear();
+            fx.frame(Duration::from_millis(u64::from(k) * 20), &mut c);
+            counts.push(c.dirty().count());
+        }
+        assert!(counts.iter().all(|&n| n == 4096), "{counts:?}");
+        let Fx::Psi(p) = &fx;
+        assert!(p.full >= FULL_RUN && p.uncompared < RECHECK);
+        // A still one: every frame compared, nothing marked after the first.
+        let mut fx = Fx::parse(&path("gray(x)")).unwrap();
+        fx.frame(Duration::ZERO, &mut c);
+        for k in 1..40u32 {
+            c.dirty_mut().clear();
+            fx.frame(Duration::from_millis(u64::from(k) * 20), &mut c);
+            assert!(c.dirty().is_clean(), "frame {k}");
+        }
     }
 
     #[test]

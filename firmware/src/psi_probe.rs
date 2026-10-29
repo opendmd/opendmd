@@ -142,14 +142,14 @@ pub mod play {
             return None;
         }
         let (us, ms, asked, _) = opendmd_core::fx_psi::stats();
-        // (consolea: the window's frames were marked as the switch was
-        // through it; it flips after each line.)
-        let all = opendmd_core::fx_psi::MARK_ALL.load(Relaxed);
+        // (consolea: the window's frames ran as the switch was through
+        // it; it flips after each line.)
+        let all = opendmd_core::fx_psi::OLD.load(Relaxed);
         let mut s = format!(
             "psi-probe: play {} s [{}]: {n} formula frames, misses {}, late excused {}, stretched {}, governor {us} us mean -> {ms} ms frames (asked {asked}); mean/max us:",
             // SAFETY: a clock read.
             unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000,
-            if all { "marks all" } else { "marks changed" },
+            if all { "as before" } else { "phase A" },
             c[0],
             c[1],
             c[2]
@@ -164,7 +164,7 @@ pub mod play {
         Some(s)
     }
 
-    /// Flip `fx_psi::MARK_ALL` after each line (consolea).
+    /// Flip `fx_psi::OLD` after each line (consolea).
     pub static AB: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     /// Append a line every [`EVERY`] for [`FOR`] (a CPU0 task).
@@ -178,10 +178,10 @@ pub mod play {
                 while t0.elapsed() < FOR {
                     std::thread::sleep(EVERY);
                     let Some(l) = line() else { continue };
-                    // consolea's A/B: every other window marks a Formula's
-                    // whole frame (as before Phase A).
+                    // consolea's A/B: every other window runs a Formula's
+                    // frames as before Phase A (`fx_psi::OLD`).
                     if AB.load(Relaxed) {
-                        let all = &opendmd_core::fx_psi::MARK_ALL;
+                        let all = &opendmd_core::fx_psi::OLD;
                         all.store(!all.load(Relaxed), Relaxed);
                     }
                     log::info!("{l}");
@@ -265,33 +265,34 @@ const ROTOZOOM_FLOOR_FILE: &str = include_str!("../../opendmd-web/formulas/rotoz
 const SCANLINES_FILE: &str = include_str!("../../opendmd-web/formulas/scanlines.psi");
 
 /// One Formula as an effect on the real path, a way at a time (each made,
-/// run and dropped before the next): the row table and the noise memo on
-/// (as shipped), the row table off (rows one by one, as before), and for
-/// a row stage with noise the memo off; each line the frame's p50/p90/max,
-/// the pixels it marked for the blit (of 4,096), and the heap.
+/// run and dropped before the next): Phase A as shipped, then as before it
+/// (`fx_psi::OLD`: no compare, every pixel marked); each line the frame's
+/// p50/p90/max, the pixels marked for the blit (of 4,096), the still cache
+/// and the heap. A Formula with still values says what the firmware's
+/// still gate says first, and why.
 fn console_row(name: &str, src: &str, opts: &str, canvas: &mut Canvas) {
     let mut prog = zeroed::<psi::Program>();
-    let (est, cols) = match compile(src, &mut prog, true, true) {
-        Ok(_) => {
-            let mut s = zeroed::<psi::Scratch<128>>();
-            s.reset();
-            (prog.esp32_us_still(), psi::row_table(&prog, &mut s, &fx_psi::tables()))
-        }
+    let (est, still) = match compile(src, &mut prog, true, true) {
+        Ok(_) => (prog.esp32_us_still(), psi::Still::bytes_for(&prog)),
         Err(e) => {
             say!(error, "psi-probe: consolea {name}: does not compile: {e:?}");
             return;
         }
     };
-    let noisy = prog.listing().lines().any(|l| l.contains(" row ") && l.contains("noise"));
     drop(prog);
-    let ways: &[(&str, bool, bool)] = if noisy {
-        &[("table", false, false), ("rows one by one", true, false), ("table, no memo", false, true)]
-    } else {
-        &[("table", false, false), ("rows one by one", true, false)]
-    };
-    for &(way, table_off, memo_off) in ways {
-        psi::rows_probe::TABLE_OFF.store(table_off, Ordering::Relaxed);
-        psi::rows_probe::MEMO_OFF.store(memo_off, Ordering::Relaxed);
+    if still > 0 {
+        say!(info,
+            "psi-probe: consolea {name}: still gate for {still} B says {}: heap {} B free (needs {}), largest block {} B, look source {}, card builder {}",
+            crate::still_gate(still),
+            heap(),
+            still + crate::config::STILL_KEEP_HEAP,
+            crate::state::largest_free_block(),
+            crate::formula_look::SOURCE.load(Ordering::Relaxed),
+            if crate::cache_builder::holding() { "mid-file" } else { "idle" }
+        );
+    }
+    for (way, old) in [("phase A", false), ("as before", true)] {
+        fx_psi::OLD.store(old, Ordering::Relaxed);
         let h0 = heap();
         let Some(mut fx) = Fx::parse(&fx_psi::path(src, opts)) else {
             say!(error, "psi-probe: consolea {name}: did not open");
@@ -309,14 +310,12 @@ fn console_row(name: &str, src: &str, opts: &str, canvas: &mut Canvas) {
         });
         drop(fx);
         say!(info,
-            "psi-probe: consolea {name} ({way}): p50 {p50} p90 {p90} max {max} us a frame (timed with the count), est {est} us, row table {}, marked {} px a frame of 4096, still cache {held} B, heap {h0} B before, main stack {} B unused",
-            cols.map_or("none".to_string(), |c| format!("{c} values")),
+            "psi-probe: consolea {name} ({way}): p50 {p50} p90 {p90} max {max} us a frame (timed with the count), est {est} us, marked {} px a frame of 4096, still cache {held} B, heap {h0} B before, main stack {} B unused",
             marked / u64::from(FRAMES),
             stack_unused()
         );
     }
-    psi::rows_probe::TABLE_OFF.store(false, Ordering::Relaxed);
-    psi::rows_probe::MEMO_OFF.store(false, Ordering::Relaxed);
+    fx_psi::OLD.store(false, Ordering::Relaxed);
 }
 
 /// The VM alone on a frame: without and with the change compare (the
