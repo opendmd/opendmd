@@ -366,7 +366,7 @@ fn fastdiv_any(seed: &mut u32) -> i32 {
     let (v, k) = (next(), next());
     let m = match k % 4 {
         0 => (v % (200 << 16)) as i32,
-        _ => (v >> (k >> 8) % 32) as i32,
+        _ => (v >> ((k >> 8) % 32)) as i32,
     };
     if k & 0x8000 == 0 {
         m
@@ -455,7 +455,8 @@ fn fastdiv_micro() {
         f64::from(best) / n as f64
     };
     type F<'a> = &'a dyn Fn(i32, i32) -> i32;
-    let rows: [(&str, F, F, &[i32], &[i32]); 8] = [
+    type Row<'a> = (&'a str, F<'a>, F<'a>, &'a [i32], &'a [i32]);
+    let rows: [Row; 8] = [
         ("div x/y (any)", &psi::fixed::div, &div_ref, &xs, &zs),
         ("div 128/len", &|_, d| psi::fixed::div(128 << 16, d), &|_, d| div_ref(128 << 16, d), &xs, &ds),
         ("div 1/v", &|a, _| psi::fixed::div(1 << 16, a), &|a, _| div_ref(1 << 16, a), &ys, &zs),
@@ -1666,8 +1667,8 @@ fn jit_spike(out: &mut [u8]) {
         let inputs = inputs_at(&prog, ms);
         psi::render_rows::<128>(&prog, &mut s, &inputs, &t, None, u32::MAX, out);
         floor_capture(&prog, &t, &mut s, ms, slots, &mut params, &mut dx, &mut col, &mut jit);
-        for row in 0..psi::H {
-            f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), params[row].as_ptr());
+        for (row, p) in params.iter().enumerate().take(psi::H) {
+            f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), p.as_ptr());
         }
         differ += out.iter().zip(jit.iter()).filter(|(a, b)| a != b).count();
         checked += out.len();
@@ -1688,8 +1689,8 @@ fn jit_spike(out: &mut [u8]) {
         // SAFETY: as above.
         let f: FloorFn = unsafe { std::mem::transmute::<usize, FloorFn>(a) };
         let (j50, j90, _) = timed(|_| {
-            for row in 0..psi::H {
-                f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), params[row].as_ptr());
+            for (row, p) in params.iter().enumerate().take(psi::H) {
+                f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), p.as_ptr());
             }
         });
         say!(info,
