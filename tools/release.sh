@@ -368,8 +368,15 @@ else
   # The demo card's Kenney (CC0) animations: the art pipeline's GIFs, which
   # the repo ignores (release.yml "The art demos' GIFs").
   out=opendmd-web/experiments/art/process/out
-  if [ -f $out/b_walk.gif ] && [ -f $out/b_pan.gif ] && [ -f $out/d_scroll.gif ]; then
+  gifs=(b_walk.gif b_pan.gif d_scroll.gif)
+  have_gifs() { local f; for f in "${gifs[@]}"; do [ -f "$1/$f" ] || return 1; done; }
+  # The main checkout's, when this is another worktree (made the same way).
+  main_out=$(cd "$(git rev-parse --git-common-dir)/.." && pwd)/$out
+  if have_gifs $out; then
     skip "the art demos' GIFs are there"
+  elif [ "$main_out" != "$ROOT/$out" ] && have_gifs "$main_out"; then
+    for f in "${gifs[@]}"; do cp "$main_out/$f" $out/; done
+    pass "the art demos' GIFs copied from $main_out"
   else
     (cd opendmd-web/experiments/art/process && export ART_TMP=$RELEASE_DIR/art PYTHONDONTWRITEBYTECODE=1 &&
       uv run --quiet fetch_inputs.py && uv run --quiet demos.py b d && git checkout -- out)
