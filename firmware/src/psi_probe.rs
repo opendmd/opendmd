@@ -265,6 +265,293 @@ fn road_probe(root: &str, start: Instant, stack0: u32) {
     *REPORT.lock().unwrap() = None;
 }
 
+/// fast-div (fastdiv-a before, -b after): only its rows, first, one
+/// source at a time (the full probe has run out of heap twice), then the
+/// play lines. `false`: the full probe (or the others above).
+const FASTDIV_ONLY: bool = true;
+
+const TUNNEL_FILE: &str = include_str!("../../opendmd-web/formulas/tunnel.psi");
+
+// The definitions of `div`, `recip`, `sqrt`, `len` and `atan2` as they were
+// before fast-div (64-bit divisions and shifts, `leading_zeros`), for the
+// device's own check of psi's (the same code on fastdiv-a).
+
+fn sat64(v: i64) -> i32 {
+    v.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
+fn div_ref(a: i32, b: i32) -> i32 {
+    if b == 0 {
+        return match a {
+            0 => 0,
+            a if a > 0 => i32::MAX,
+            _ => i32::MIN,
+        };
+    }
+    sat64(((a as i64) << 16) / b as i64)
+}
+
+fn sqrt_q32_ref(v: u64) -> i32 {
+    if v == 0 {
+        return 0;
+    }
+    let s = v.leading_zeros() as i32 & !1;
+    let w = ((v << s) >> 34) as u32;
+    let i = (w >> 22) as usize - 64;
+    let f = (w >> 6) & 0xffff;
+    let (a, b) = (psi::SQRT[i] as u32, psi::SQRT[(i + 1).min(192)] as u32);
+    let r = (a + (((b - a) * f) >> 16)) as u64;
+    let sh = 17 - s / 2;
+    sat64((if sh >= 0 { r << sh } else { r >> -sh }) as i64)
+}
+
+fn sqrt_ref(a: i32) -> i32 {
+    if a <= 0 {
+        0
+    } else {
+        sqrt_q32_ref((a as u64) << 16)
+    }
+}
+
+fn len_ref(a: i32, b: i32) -> i32 {
+    let (a, b) = (a.unsigned_abs() as u64, b.unsigned_abs() as u64);
+    sqrt_q32_ref((a * a).saturating_add(b * b))
+}
+
+fn atan2_ref(y: i32, x: i32) -> i32 {
+    let (ax, ay) = (x.unsigned_abs(), y.unsigned_abs());
+    let (mut lo, mut hi) = if ay > ax { (ax, ay) } else { (ay, ax) };
+    if hi == 0 {
+        return 0;
+    }
+    let bits = 32 - hi.leading_zeros();
+    if bits > 15 {
+        lo >>= bits - 15;
+        hi >>= bits - 15;
+        if hi == 0 {
+            return 0;
+        }
+    }
+    let r = (lo << 16) / hi;
+    let (i, f) = ((r >> 8) as usize, (r & 255) as i32);
+    let (t0, t1) = (psi::ATAN[i] as i32, psi::ATAN[(i + 1).min(256)] as i32);
+    let mut ang = t0 + (((t1 - t0) * f) >> 8);
+    if ay > ax {
+        ang = (1 << 14) - ang;
+    }
+    if x < 0 {
+        ang = (1 << 15) - ang;
+    }
+    if y < 0 {
+        -ang
+    } else {
+        ang
+    }
+}
+
+/// A value of any magnitude and either sign (xorshift32), or every few a
+/// pixel-sized one (0..±200 in Q16.16).
+fn fastdiv_any(seed: &mut u32) -> i32 {
+    let mut next = || {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 17;
+        *seed ^= *seed << 5;
+        *seed
+    };
+    let (v, k) = (next(), next());
+    let m = match k % 4 {
+        0 => (v % (200 << 16)) as i32,
+        _ => (v >> (k >> 8) % 32) as i32,
+    };
+    if k & 0x8000 == 0 {
+        m
+    } else {
+        m.wrapping_neg()
+    }
+}
+
+/// psi's `div`, `recip`, `sqrt`, `len`, `atan2` against the definitions on
+/// the device itself (the ESP32's own `quou`, `nsau` and ROM 64-bit
+/// division): every power of two and its neighbours, then random inputs.
+fn fastdiv_check() {
+    let mut edges = vec![0i32, i32::MIN, i32::MIN + 1, i32::MAX, i32::MAX - 1];
+    for k in 0..31 {
+        for d in -2i32..=2 {
+            let v = (1i32 << k).wrapping_add(d);
+            edges.extend([v, v.wrapping_neg()]);
+        }
+    }
+    let (mut n, mut bad) = (0u64, 0u64);
+    let mut check = |a: i32, b: i32| {
+        let pairs = [
+            ("div", psi::fixed::div(a, b), div_ref(a, b)),
+            ("recip", psi::fixed::recip(a), div_ref(1 << 16, a)),
+            ("sqrt", psi::fixed::sqrt(a), sqrt_ref(a)),
+            ("len", psi::fixed::len(a, b), len_ref(a, b)),
+            ("atan2", psi::fixed::atan2(a, b), atan2_ref(a, b)),
+        ];
+        for (what, got, want) in pairs {
+            n += 1;
+            if got != want {
+                bad += 1;
+                if bad <= 20 {
+                    say!(error, "psi-probe: fastdiv check {what}({a}, {b}): {got}, the definition {want}");
+                }
+            }
+        }
+    };
+    for &a in &edges {
+        for &b in &edges {
+            check(a, b);
+        }
+    }
+    let t0 = Instant::now();
+    let mut seed = 0x2545_f491u32;
+    for k in 0..400_000u32 {
+        let (a, b) = (fastdiv_any(&mut seed), fastdiv_any(&mut seed));
+        check(a, b);
+        if k % 20_000 == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    say!(info,
+        "psi-probe: fastdiv check: {n} results of div/recip/sqrt/len/atan2 against the definitions, {bad} differ{} ({} ms)",
+        if bad == 0 { " (bit-identical)" } else { "" },
+        t0.elapsed().as_millis()
+    );
+}
+
+/// Cycles a call over 4,096 inputs (best of 5 passes), psi's function
+/// against the definition's copy here (both in flash, inlined in the same
+/// loop shape): what each costs alone, outside the VM's lanes.
+fn fastdiv_micro() {
+    let mut seed = 0x9e37_79b9u32;
+    let n = 4096usize;
+    // Pixel-like inputs: values 0..±200, and the panel's distances.
+    let xs: Vec<i32> = (0..n).map(|_| fastdiv_any(&mut seed)).collect();
+    let ys: Vec<i32> = (0..n)
+        .map(|k| (((k % 128) as i32 - 64) << 16) + (fastdiv_any(&mut seed) & 0xffff))
+        .collect();
+    let zs: Vec<i32> = (0..n).map(|k| ((k / 128) as i32 - 16) << 16 | 0x8000).collect();
+    // Distances from the panel's middle (Tunnel's `len`), never 0.
+    let ds: Vec<i32> = (0..n).map(|k| len_ref(ys[k], zs[k])).collect();
+    let mut out = vec![0i32; n];
+    let mut time = |f: &dyn Fn(i32, i32) -> i32, a: &[i32], b: &[i32]| -> f64 {
+        let mut best = u32::MAX;
+        for _ in 0..5 {
+            let t0 = ccount();
+            for k in 0..n {
+                out[k] = f(core::hint::black_box(a[k]), b[k]);
+            }
+            best = best.min(ccount().wrapping_sub(t0));
+            core::hint::black_box(&out);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        f64::from(best) / n as f64
+    };
+    type F<'a> = &'a dyn Fn(i32, i32) -> i32;
+    let rows: [(&str, F, F, &[i32], &[i32]); 8] = [
+        ("div x/y (any)", &psi::fixed::div, &div_ref, &xs, &zs),
+        ("div 128/len", &|_, d| psi::fixed::div(128 << 16, d), &|_, d| div_ref(128 << 16, d), &xs, &ds),
+        ("div 1/v", &|a, _| psi::fixed::div(1 << 16, a), &|a, _| div_ref(1 << 16, a), &ys, &zs),
+        ("recip", &|a, _| psi::fixed::recip(a), &|a, _| div_ref(1 << 16, a), &ys, &zs),
+        ("sqrt", &|a, _| psi::fixed::sqrt(a), &|a, _| sqrt_ref(a), &ds, &zs),
+        ("len (panel)", &psi::fixed::len, &len_ref, &ys, &zs),
+        ("atan2 (panel)", &|a, b| psi::fixed::atan2(b, a), &|a, b| atan2_ref(b, a), &ys, &zs),
+        ("mod (control)", &psi::fixed::modulo, &|a, b| psi::fixed::modulo(a, b), &xs, &zs),
+    ];
+    for (what, new, old, a, b) in rows {
+        let c_new = time(new, a, b);
+        let c_old = time(old, a, b);
+        say!(info,
+            "psi-probe: fastdiv micro {what:<14}: psi {c_new:.1} cycles a call ({:.0} ns), the definition {c_old:.1} ({:.0} ns)",
+            c_new / 0.24,
+            c_old / 0.24
+        );
+    }
+}
+
+/// fast-div's rows: the device's exactness check, the functions alone,
+/// single-step formulas (each over a baseline row; fastdiv-a against -b is
+/// the step's saving), Tunnel and Time gate as effects with the still
+/// cache and with the gate refusing it, and the golden frames.
+fn fastdiv_probe(start: Instant, stack0: u32) {
+    say!(info, "psi-probe: fastdiv: heap {} B free, largest block {} B, main stack {stack0} B unused",
+        heap(), crate::state::largest_free_block());
+    psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
+    // The effects first, while the heap is at its fullest (the still cache
+    // wants a 16-32 KB block).
+    let mut canvas = Canvas::new();
+    for (name, src) in [("Tunnel (bundled)", TUNNEL_FILE), ("Time gate (bundled)", TIME_GATE_FILE)] {
+        effects(&[(name, src, "")], "", &mut canvas);
+        fx_psi::set_still_gate(Some(crate::still_gate));
+    }
+    drop(canvas);
+    fastdiv_check();
+    fastdiv_micro();
+    // Single steps, laid out without the column and still runs and checked
+    // (as the step table was measured).
+    const ROWS: [(&str, &str); 13] = [
+        ("base gray(x)", "gray(x)"),
+        ("add", "gray(x + t)"),
+        ("mul", "gray(x * t)"),
+        ("mod 0.3", "gray(x % 0.3)"),
+        ("div (+add)", "gray(x / (x + t))"),
+        ("div 1/v (+add)", "gray(1 / (px + t))"),
+        ("div 128/v (+add)", "gray(128 / (px + t))"),
+        ("sqrt (+add)", "gray(sqrt(x + t))"),
+        ("sqrt px (+add)", "gray(sqrt(px + t) / 12)"),
+        ("len (+add)", "gray(len(x, x + t))"),
+        ("len px (+2)", "gray(len(px - 63.5, py + t) / 70)"),
+        ("atan2 (+sub)", "gray(atan2(y - 0.5, x - t))"),
+        ("atan2 px (+2)", "gray(atan2(py - 15.5, px - 63.5 + t))"),
+    ];
+    let mut out = vec![0u8; psi::W * psi::H * 3];
+    let mut prog = zeroed::<psi::Program>();
+    for (what, src) in ROWS {
+        if compile(src, &mut prog, false, false).is_err() {
+            say!(error, "psi-probe: fastdiv step {what}: does not compile");
+            continue;
+        }
+        let (p50, p90, _) = lanes_over::<128>(&prog, 8000, None, &mut out);
+        let (_, row, px) = prog.counts();
+        say!(info,
+            "psi-probe: fastdiv step {what:<18} pixel steps {px} (+{row} row): p50 {p50} p90 {p90} us a frame = {} ns a pixel, est {} us",
+            p50 as u64 * 1000 / 4096,
+            prog.esp32_us()
+        );
+    }
+    // The golden frames: the host's and wasm's hashes, here.
+    let t = fx_psi::tables();
+    let mut s = zeroed::<psi::Scratch<128>>();
+    s.reset();
+    let (mut ok, mut bad) = (0, 0);
+    for &(name, src, ms, want) in psi::golden::FRAMES {
+        if compile(src, &mut prog, true, true).is_err() {
+            bad += 1;
+            say!(error, "psi-probe: golden {name}: does not compile");
+            continue;
+        }
+        psi::render_with::<128>(&prog, &mut s, &psi::golden::inputs(ms), &t, &mut out);
+        let got = psi::golden::fnv(&out);
+        if got == want {
+            ok += 1;
+        } else {
+            bad += 1;
+            say!(error, "psi-probe: golden {name} at {ms} ms: {got:#018x}, host/wasm {want:#018x}");
+        }
+    }
+    say!(info,
+        "psi-probe: golden frames: {ok} match the host/wasm hashes, {bad} differ{}",
+        if bad == 0 { " (bit-identical)" } else { "" }
+    );
+    say!(info,
+        "{DONE}: fastdiv, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
+        stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
+    );
+    *REPORT.lock().unwrap() = None;
+}
+
 /// console-lessons Phase A (consolea): only its rows, first, one source at
 /// a time (the full probe has run out of heap), then the play lines.
 /// `false`: the full probe (or `ROAD_ONLY`).
@@ -1627,6 +1914,10 @@ pub fn run(root: &str) {
     }
     let start = Instant::now();
     let stack0 = stack_unused();
+    if FASTDIV_ONLY {
+        fastdiv_probe(start, stack0);
+        return;
+    }
     if CONSOLE_ONLY {
         console_probe(root, start, stack0);
         return;
