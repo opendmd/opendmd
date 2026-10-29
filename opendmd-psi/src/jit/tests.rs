@@ -55,6 +55,19 @@ fn kernel_frame_changed(
     with: With,
     before: Option<&[u8]>,
 ) -> (Vec<u8>, u64, [u32; H]) {
+    kernel_frame_beam(prog, low, inputs, still, with, before, None)
+}
+
+/// [`kernel_frame_changed`], racing the beam when `sink` is given.
+fn kernel_frame_beam(
+    prog: &Program,
+    low: &Lowered,
+    inputs: &Inputs,
+    still: Option<&mut Still>,
+    with: With,
+    before: Option<&[u8]>,
+    sink: Option<crate::PairSink<'_>>,
+) -> (Vec<u8>, u64, [u32; H]) {
     let mut t = EmuTarget {
         emu: Emu::new(&low.code),
     };
@@ -90,6 +103,7 @@ fn kernel_frame_changed(
         u32::MAX,
         &dest,
         before.is_some().then_some(&mut changed),
+        sink,
     );
     (out.to_vec(), t.emu.steps, changed)
 }
@@ -580,6 +594,7 @@ fn the_check_rows_alone_are_the_frames_rows() {
             check_rows(),
             &dest,
             None,
+            None,
         );
         for (j, &row) in CHECK_ROWS.iter().enumerate() {
             assert_eq!(
@@ -768,4 +783,56 @@ fn rate_formulas_draw_the_same_through_kernels() {
             panic!("{src}: on the VM ({why})");
         }
     }
+}
+
+/// Racing the beam through a kernel: the same bytes and changed groups as
+/// the VM's frame at once, each pair told once, in order, as soon as its
+/// rows hold the new frame and while the rows to come hold the old.
+#[test]
+fn kernels_race_the_beam_as_the_vm_draws_at_once() {
+    let u = picture();
+    let mut n = 0;
+    for (name, src) in bundled() {
+        let Ok(prog) = compile(&src) else { continue };
+        if prog.rate().is_some() {
+            continue;
+        }
+        let Ok(low) = lower(&prog) else { continue };
+        let lp = prog.loop_ms().max(1000);
+        for ms in [0, lp / 2] {
+            let before_in = golden::inputs(ms);
+            let mut inputs = golden::inputs(ms + 40);
+            inputs.set_ms(&prog, u64::from(ms + 40));
+            if !crate::range::inputs_in_range(&prog, &inputs) {
+                continue;
+            }
+            for with in [With { under: Some(&u), ink: prog.draws() }, With { under: None, ink: prog.draws() }] {
+                let before = vm_frame(&prog, &before_in, None, with);
+                let mut s = Scratch::<128>::new();
+                let mut ink = Ink::boxed();
+                let mut words = vec![0u32; W * H * 3 / 4];
+                let want = bytemuck_bytes(&mut words);
+                want.copy_from_slice(&before);
+                let mut want_ch = [0u32; H];
+                render_rows_changed::<128>(&prog, &mut s, Some(&mut ink), None, &inputs, &OWN, with.under, u32::MAX, want, &mut want_ch);
+                let mut told = Vec::new();
+                let mut sink = |p: usize, out: &[u8], a: u32, b: u32| {
+                    let row = |r: usize, pic: &[u8]| pic[r * W * 3..(r + 1) * W * 3].to_vec();
+                    for q in 0..H / 2 {
+                        let pic = if q <= p { &want[..] } else { &before[..] };
+                        assert!(row(q, out) == row(q, pic) && row(q + H / 2, out) == row(q + H / 2, pic),
+                            "{name} at {ms} ms: pair {q} when pair {p} was told");
+                    }
+                    told.push((p, a, b));
+                };
+                let (got, _, got_ch) = kernel_frame_beam(&prog, &low, &inputs, None, with, Some(&before), Some(&mut sink));
+                assert_eq!(&got[..], &want[..], "{name} at {ms} ms");
+                assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
+                let want_told: Vec<_> = (0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2])).collect();
+                assert_eq!(told, want_told, "{name} at {ms} ms: the pairs told");
+                n += 1;
+            }
+        }
+    }
+    assert!(n >= 40, "only {n} frames raced");
 }
