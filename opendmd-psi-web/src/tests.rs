@@ -38,6 +38,8 @@ fn formulas() {
     assert_eq!(i[5], 0b011);
     assert!(i[0] >= 2 && i[0] == i[1] + i[2] + i[3]);
     assert!(i[6] > 0);
+    assert_eq!(i.len(), 15);
+    assert!(i[14] > 0 && i[14] <= i[6], "the still estimate: never more than the VM's");
     assert_eq!(i[10], 0, "no `fps` line: the player's 20 ms");
     assert!(compile("fps 100\nloop 4\ngray(x)"));
     assert_eq!(
