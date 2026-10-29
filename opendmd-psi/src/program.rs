@@ -530,11 +530,8 @@ pub(crate) fn turn(t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCA
 /// function: they are the section's last steps, so the same as the VM's).
 #[cfg(any(test, all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
 pub(crate) fn turn_rows(prog: &Program, t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCALARS]) {
-    let (de, re) = (prog.draw_end as usize, (prog.row_end as usize).min(MAX_OPS));
-    for op in &prog.ops[de.min(re)..re] {
-        if op.code == code::TURN {
-            turn(t, own, sc, op);
-        }
+    for op in &prog.ops[prog.turns()] {
+        turn(t, own, sc, op);
     }
 }
 
@@ -1084,11 +1081,28 @@ impl Program {
         (re.min(pe)..pe).find(|&k| self.ops[k].code == code::STILL)
     }
 
+    /// `cycle`'s turns: the row section's last steps (none: an empty
+    /// range at its end). A look back from the end, once a row: no scan.
+    #[inline]
+    pub(crate) fn turns(&self) -> core::ops::Range<usize> {
+        let (de, re) = (self.draw_end as usize, (self.row_end as usize).min(MAX_OPS));
+        let mut k = re;
+        while k > de && self.ops[k - 1].code == code::TURN {
+            k -= 1;
+        }
+        k..re
+    }
+
     /// Where the slow layers' marker is (`code::SLOW`), if the formula has
-    /// `layer rate N { }`.
+    /// `layer rate N { }`: always the first pixel step (the compiler lays
+    /// the slow layers out first, and fuse never puts a marker before it),
+    /// so one look, not a scan — it is asked several times a frame, and
+    /// per row by the JIT's driver (consoleb-fix: Endless road missed
+    /// deadlines with the scans).
+    #[inline]
     pub(crate) fn slow_marker(&self) -> Option<usize> {
-        let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
-        (re.min(pe)..pe).find(|&k| self.ops[k].code == code::SLOW)
+        let re = self.row_end as usize;
+        (re < self.len().min(MAX_OPS) && self.ops[re].code == code::SLOW).then_some(re)
     }
 
     /// The rows of the slow layers a frame redraws in steady play at its

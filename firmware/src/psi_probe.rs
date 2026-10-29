@@ -883,6 +883,63 @@ fn consoleb_split(name: &str, src: &str) {
     say!(info, "psi-probe: consoleb split {name}: from nothing (no held picture) p50 {p50} us");
 }
 
+/// consoleb-fix: Endless road's frames. Only these rows, then the play
+/// lines (play `@formula:endless-road` after it to see its misses).
+/// `false`: the full probe (or another `*_ONLY` mode).
+const ROADFIX_ONLY: bool = false;
+
+/// consoleb-fix: Endless road as bundled (played by name), directly
+/// (its kernel's frame, the VM's) and as an effect (JIT on, then off); what
+/// the per-frame `rate` questions cost (`Program::rate`, 40 a frame).
+#[cfg(feature = "jit")]
+fn roadfix_probe(root: &str, start: Instant, stack0: u32) {
+    play::start(format!("{root}/{REPORT_NAME}"));
+    say!(info, "psi-probe: roadfix: heap {} B free, largest block {} B, main stack {stack0} B unused",
+        heap(), crate::state::largest_free_block());
+    fx_psi::set_still_gate(Some(crate::still_gate));
+    let road = bundled_src("endless-road");
+    let mut prog = zeroed::<psi::Program>();
+    if compile(road, &mut prog, true, true).is_ok() {
+        let mut n = 0u32;
+        let (q50, _, _) = timed(|_| {
+            for _ in 0..40 {
+                n += u32::from(core::hint::black_box(&*prog).rate().is_some());
+            }
+        });
+        say!(info, "psi-probe: roadfix: 40 rate() questions a frame: p50 {q50} us ({n})");
+        let t = fx_psi::tables();
+        let mut s = zeroed::<psi::Scratch<128>>();
+        s.reset();
+        let mut ink = psi::Ink::boxed();
+        let mut out = vec![0u8; psi::W * psi::H * 3];
+        let (v50, v90, _) = timed(|k| {
+            let i = inputs_at(&prog, k * 10);
+            psi::render_rows_ink::<128>(&prog, &mut s, Some(&mut ink), &i, &t, None, u32::MAX, &mut out);
+        });
+        let kernel = psi::jit::emit(&prog);
+        let (k50, k90) = match kernel {
+            Ok(mut kn) => {
+                let (a, b, _) = timed(|k| {
+                    let i = inputs_at(&prog, k * 10);
+                    kn.render(&prog, &mut s, Some(&mut ink), None, &i, &t, None, u32::MAX, &mut out, None);
+                });
+                (a, b)
+            }
+            Err(_) => (0, 0),
+        };
+        say!(info, "psi-probe: roadfix: Endless road direct: VM p50/p90 {v50}/{v90} us, kernel {k50}/{k90} us");
+    }
+    drop(prog);
+    let mut canvas = Canvas::new();
+    jit2::effect("Endless road", road, "", &mut canvas);
+    fx_psi::set_still_gate(Some(crate::still_gate));
+    say!(info,
+        "{DONE}: roadfix, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all; play @formula:endless-road now for the play lines",
+        stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
+    );
+    *REPORT.lock().unwrap() = None;
+}
+
 /// The line a finished probe ends its report with.
 const DONE: &str = "psi-probe: done";
 
@@ -1937,6 +1994,11 @@ pub fn run(root: &str) {
     }
     if CONSOLE_ONLY {
         console_probe(root, start, stack0);
+        return;
+    }
+    #[cfg(feature = "jit")]
+    if ROADFIX_ONLY {
+        roadfix_probe(root, start, stack0);
         return;
     }
     #[cfg(feature = "jit")]
