@@ -472,11 +472,19 @@ fn compile(q: &Query, prog: &mut psi::Program) -> Result<(u32, u8), psi::Error> 
 /// `est` (every step every frame). The refusal limit is always held to
 /// `est`: the cache may be refused or let go at any time.
 fn start_estimate(prog: &psi::Program, est: u32) -> u32 {
-    if prog.still_lanes() > 0 && still_allowed(psi::Still::bytes_for(prog)) {
-        prog.esp32_us_still()
-    } else {
-        est
+    let still = prog.still_lanes() > 0 && still_allowed(psi::Still::bytes_for(prog));
+    match (still, jit_built()) {
+        (true, true) => prog.esp32_us_jit_still(),
+        (true, false) => prog.esp32_us_still(),
+        (false, true) => est.min(prog.esp32_us_jit()),
+        (false, false) => est,
     }
+}
+
+/// Whether formulas here may be drawn by the JIT (built for the ESP32 with
+/// `psi-jit`, and the setting on): the governor starts from its estimate.
+fn jit_built() -> bool {
+    cfg!(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")) && jit_allowed()
 }
 
 /// The frame grid for a frame time asked (ms), floored like [`PsiFx::ms`].
@@ -1069,6 +1077,7 @@ impl FormulaLook {
     fn set(&mut self, q: &Query, est: u32) {
         self.delay_ms = Self::delay(q);
         [self.inputs.a, self.inputs.b, self.inputs.c] = self.prog.meta().values(q.sliders);
+        let est = if jit_built() { est.min(self.prog.esp32_us_jit()) } else { est };
         let g = Governor::new(est, self.ms());
         if g.level > self.gov.level || self.t0.is_none() {
             self.gov = g;

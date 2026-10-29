@@ -821,6 +821,128 @@ impl Program {
         (((45 + px) * (W * H) as u32) / 1000 + row * 10 + self.draw_cost(lanes)) * 115 / 100
     }
 
+    /// [`esp32_us`](Self::esp32_us) as the ESP32's JIT draws it (its
+    /// pixel stage compiled: `docs/research/psi-jit-esp32.md`): the steps
+    /// before the kernel (the column and still runs) and the rest of the
+    /// frame as the VM's, the kernel's steps at [`jit_value_ns`]'s costs,
+    /// from the device's rows (`tests/measured.rs` `JIT`). Never more than
+    /// the VM's: the player keeps whichever draws a frame faster. A look's
+    /// estimate (no still cache); the label and the governor's start, never
+    /// a limit (the limits stay the VM's: the JIT may be off).
+    pub fn esp32_us_jit(&self) -> u32 {
+        self.estimate_jit(None).min(self.esp32_us())
+    }
+
+    /// [`esp32_us_jit`](Self::esp32_us_jit) with a filled still cache, as
+    /// [`esp32_us_still`](Self::esp32_us_still).
+    pub fn esp32_us_jit_still(&self) -> u32 {
+        let m = self.still_marker();
+        self.estimate_jit(m).min(self.esp32_us_still())
+    }
+
+    /// The first step a kernel draws: after the column run, and after the
+    /// still cache's run with what is laid out before its marker (the VM
+    /// runs those as lanes).
+    pub(crate) fn kernel_start(&self) -> usize {
+        let (re, pe) = (self.row_end as usize, self.len());
+        if let Some(k) = self.still_marker() {
+            return (k + 1 + self.ops[k].a as usize).min(pe);
+        }
+        let col = self.column_run();
+        if col.end > col.start {
+            col.end
+        } else {
+            re
+        }
+    }
+
+    fn estimate_jit(&self, still: Option<usize>) -> u32 {
+        let (re, pe, start) = (self.row_end as usize, self.len(), self.kernel_start());
+        let skip = match still {
+            Some(k) => k + 1..k + 1 + self.ops[k].a as usize,
+            None => 0..0,
+        };
+        let col = self.column_run();
+        // Before the kernel: the VM's lanes (the column run a 32nd).
+        let mut px: u32 = (re..start.min(pe))
+            .filter(|k| !skip.contains(k))
+            .map(|k| {
+                let ns = self.step_ns(k, &self.ops[k]);
+                if col.contains(&k) {
+                    ns.div_ceil(H as u32)
+                } else {
+                    ns
+                }
+            })
+            .sum();
+        // A still lane is read in place by the kernel.
+        px += still.map_or(0, |k| JIT_LANE_NS * u32::from(self.ops[k].d.min(2)));
+        let mut kp = JIT_LOOP_NS;
+        let mut k = start;
+        while k < pe {
+            let op = &self.ops[k];
+            if op.code == code::FUSE {
+                // The fused colours the kernel draws in one piece.
+                if let Some(ns) = crate::fuse::jit_ns(op.d) {
+                    kp += ns;
+                    k += 1 + op.a as usize;
+                } else {
+                    k += 1;
+                }
+                continue;
+            }
+            kp += self.jit_step_ns(k, op);
+            k += 1;
+        }
+        // (Phase 1's kernels as effects ran ~30 % over their rows' sum:
+        // the effect's frame around them, and registers spilled.)
+        px += kp * JIT_PATH_PCT / 100;
+        let row = self.counts().1 as u32;
+        ((px * (W * H) as u32) / 1000 + row * 10 + self.draw_cost(true) + JIT_ROWS_US) * 115 / 100
+    }
+
+    /// A kernel step's cost, ns a pixel (see `esp32_us_jit`).
+    fn jit_step_ns(&self, at: usize, op: &Op) -> u32 {
+        use code::*;
+        if !is_colour(op.code) {
+            return jit_value_ns(op.code);
+        }
+        let (kind, blend) = colour_parts(op.code);
+        let (v, n) = operands(op);
+        let vals = values(op);
+        let base = match kind {
+            OUT_GRAY => 27,
+            OUT_RGB => 80,
+            OUT_HSV => 430,
+            OUT_PAL if vals > 1 => {
+                if self.const_value(op.c, at) == Some(ONE) {
+                    45
+                } else if self.stepped(at, op.a) && self.stepped(at, op.c) {
+                    60
+                } else {
+                    400
+                }
+            }
+            _ => 39,
+        };
+        let k = v[n.saturating_sub(1)];
+        let konst = k & LANE == 0 && k >= S_FIRST_FREE && self.is_const_slot(k, at);
+        let covered = n > vals && !(konst && self.init[k as usize] >= ONE);
+        let mix = match blend {
+            None => 0,
+            Some(crate::fixed::BLEND_ADD) => 52,
+            Some(crate::fixed::BLEND_MULTIPLY) => 103,
+            Some(crate::fixed::BLEND_SCREEN) => 142,
+            Some(crate::fixed::BLEND_MAX | crate::fixed::BLEND_MIN) => 39,
+            Some(_) => 13,
+        };
+        let cover = match (blend, covered) {
+            (Some(_), true) => 77 + if k & LANE != 0 { 15 } else { 0 },
+            _ => 0,
+        };
+        base + mix + cover
+    }
+
     /// A pixel step's cost, ns a pixel at 128 lanes (see `esp32_us`).
     fn step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
@@ -1516,6 +1638,45 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         U_R | U_G | U_B | INK => 70,
         U_L => 140,
         _ => 0,
+    }
+}
+
+/// The JIT's loop around a pixel (its counter, output pointer, branch),
+/// ns: jit1-b's `gray(x)` kernel 107 ns a pixel less its colour (27).
+pub(crate) const JIT_LOOP_NS: u32 = 80;
+/// A lane from before the kernel read at the pixel (a still lane), ns.
+pub(crate) const JIT_LANE_NS: u32 = 13;
+/// The kernel's words filled for each row, µs a frame (jit1-b: ~93 µs
+/// before the frame's constant words were filled once).
+pub(crate) const JIT_ROWS_US: u32 = 32;
+/// The kernel's steps as an effect draws them against their rows' sum, %
+/// (jit1-b: Rotozoom floor, Tunnel, Time gate and Fire as effects).
+pub(crate) const JIT_PATH_PCT: u32 = 130;
+
+/// A kernel step's cost, ns a pixel on the ESP32: phase 1's rows on the
+/// spare (jit1-b, each over `gray(x)`'s kernel; `tests/measured.rs`
+/// `JIT`), instruction counts where a step was not measured alone (~4.3
+/// ns an instruction), and a helper call the VM's step less ~60 ns (the
+/// lane loop's traffic the call does not pay).
+pub(crate) fn jit_value_ns(c: u8) -> u32 {
+    use code::*;
+    match c {
+        ADD_W | SUB_W => 2,
+        MUL_W => 5,
+        MUL_N => 10,
+        SHR | MASK | FRAC | MIN | MAX => 6,
+        FLOOR | CLAMP | SELECT => 9,
+        ADD | SUB => 37,
+        MUL => 54,
+        ABS | NEG | NOT | SAW | SQR => 17,
+        LT | LE | GT | GE | EQ | NE | STEP => 17,
+        AND | OR => 25,
+        TRI => 49,
+        SIN => 60,
+        COS => 65,
+        INK | U_R | U_G | U_B => 26,
+        U_L => 70,
+        c => value_ns(c).saturating_sub(60).max(60),
     }
 }
 

@@ -206,10 +206,11 @@ pub fn error_at() -> Vec<u32> {
 /// the panel, layers, steps in `draw { }` (0: it draws nothing), lines and
 /// dots it draws a frame, the frame time its `fps N` asks for in ms (10, 20
 /// or 40; 0: none, so 20), estimated µs a frame as an effect with its still
-/// cache (the panel keeps the values it works out from the pixel's position
-/// alone; the same as the estimate without values for one, and a look never
-/// has one), the still cache's values (0-2, 16 KB each)]`; empty before
-/// anything compiled.
+/// cache and the JIT (the panel keeps the values it works out from the
+/// pixel's position alone, and compiles the pixel stage; never more than the
+/// VM's), the still cache's values (0-2, 16 KB each), estimated µs a frame
+/// as a look with the JIT (no still cache; never more than [6])]`; empty
+/// before anything compiled.
 #[wasm_bindgen]
 pub fn info() -> Vec<u32> {
     let s = state();
@@ -230,8 +231,9 @@ pub fn info() -> Vec<u32> {
         p.draw_steps() as u32,
         p.primitives(),
         p.frame_ms().unwrap_or(0),
-        p.esp32_us_still(),
+        p.esp32_us_jit_still(),
         p.still_lanes() as u32,
+        p.esp32_us_jit(),
     ]
 }
 
