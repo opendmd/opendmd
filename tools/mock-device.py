@@ -650,6 +650,7 @@ DEFAULT_SETTINGS = {
     "panel_sync": True,         # writes paced to the panel's refresh (no tearing)
     "panel_split": True,        # with it, each frame's bottom half a refresh after the top
     "formula_jit": True,        # the Formulas' JIT (the device's kill switch)
+    "formula_beam": False,      # racing the beam for Formulas (console-c's spike)
     "api_key": "",              # "" = no key asked; never echoed back
 }
 LOOKS = ("colour", "amber", "red", "green", "blue", "white")
@@ -695,6 +696,7 @@ FIELD_TYPES = {
     "panel_sync": "bool",
     "panel_split": "bool",
     "formula_jit": "bool",
+    "formula_beam": "bool",
     "api_key": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
     # alongside "set" (see h_config_put).
@@ -3320,6 +3322,7 @@ def make_handler(ctx: Context, quiet: bool):
                     "panel_sync": s["panel_sync"],
                     "panel_split": s["panel_split"],
                     "formula_jit": s["formula_jit"],
+                    "formula_beam": s["formula_beam"],
                     "api_key_set": bool(s["api_key"]),
                 }
                 self.panel_poll()
