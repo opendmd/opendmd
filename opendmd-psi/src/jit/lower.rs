@@ -65,7 +65,14 @@ pub enum Word {
     /// Choice `i` of a fused `pal(P, pick(m, …)) * k`'s colours for the
     /// row (`b`, `n` the pick's), packed; `i` = [`PICK_MAX`] the colour of
     /// a pick outside its choices.
-    Pick { pal: u8, b: u8, n: u8, i: u8, k: u8, shift: u8 },
+    Pick {
+        pal: u8,
+        b: u8,
+        n: u8,
+        i: u8,
+        k: u8,
+        shift: u8,
+    },
 }
 
 /// The helpers a kernel calls (`super::helper_addr`, `super::eval_helper`).
@@ -131,9 +138,18 @@ const FRAME: u32 = 32 + 24;
 enum Item {
     Step(Op),
     /// `pal(P, select(c, A, B)) [* k]`: c a lane, A and B scalars.
-    SelPal { c: u8, a: u8, b: u8, col: Op },
+    SelPal {
+        c: u8,
+        a: u8,
+        b: u8,
+        col: Op,
+    },
     /// `pal(P, pick(m, …)) [* k]`: m a lane, k a scalar or none.
-    PickPal { m: u8, pk: Op, col: Op },
+    PickPal {
+        m: u8,
+        pk: Op,
+        col: Op,
+    },
 }
 
 #[inline]
@@ -318,7 +334,12 @@ fn fused(kind: u8, run: &[Op]) -> Option<Item> {
                 && !is_lane(sel.c)
                 && col.a == sel.d =>
         {
-            Some(Item::SelPal { c: sel.a, a: sel.b, b: sel.c, col: *col })
+            Some(Item::SelPal {
+                c: sel.a,
+                a: sel.b,
+                b: sel.c,
+                col: *col,
+            })
         }
         (F_PICKPAL, [pk, col])
             if pk.code == code::PICK
@@ -327,7 +348,11 @@ fn fused(kind: u8, run: &[Op]) -> Option<Item> {
                 && col.a == pk.d
                 && (col.d & PAL_SCALED == 0 || !is_lane(col.c)) =>
         {
-            Some(Item::PickPal { m: pk.a, pk: *pk, col: *col })
+            Some(Item::PickPal {
+                m: pk.a,
+                pk: *pk,
+                col: *col,
+            })
         }
         _ => None,
     }
@@ -339,8 +364,6 @@ enum Arg {
     Val(u8),
     Word(Word),
     Imm(i32),
-    /// The address of a `ctx` word.
-    AddrOf(Word),
     Out,
 }
 
@@ -403,7 +426,13 @@ fn values(prog: &Program, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], V
             match cur[r] {
                 Some(id) => vals[id].end = k,
                 None => {
-                    vals.push(Val { start: k, end: k, livein: true, crosses: false, gpr: 0 });
+                    vals.push(Val {
+                        start: k,
+                        end: k,
+                        livein: true,
+                        crosses: false,
+                        gpr: 0,
+                    });
                     let id = vals.len() - 1;
                     cur[r] = Some(id);
                     livein[r] = Some(id);
@@ -411,7 +440,13 @@ fn values(prog: &Program, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], V
             }
         }
         if let Some(w) = writes(it) {
-            vals.push(Val { start: k, end: k, livein: false, crosses: false, gpr: 0 });
+            vals.push(Val {
+                start: k,
+                end: k,
+                livein: false,
+                crosses: false,
+                gpr: 0,
+            });
             cur[w] = Some(vals.len() - 1);
             wv[k] = cur[w];
         }
@@ -431,7 +466,10 @@ fn values(prog: &Program, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], V
 
 /// The most values alive at once.
 fn pressure(vals: &[Val], n: usize) -> usize {
-    (0..n).map(|k| vals.iter().filter(|v| v.start <= k && k <= v.end).count()).max().unwrap_or(0)
+    (0..n)
+        .map(|k| vals.iter().filter(|v| v.start <= k && k <= v.end).count())
+        .max()
+        .unwrap_or(0)
 }
 
 /// Give each value a register from `pool` (a linear scan over the items:
@@ -442,9 +480,15 @@ fn allocate(vals: &mut [Val], n: usize, pool: &[Reg]) -> Result<(), Refusal> {
     for k in 0..n {
         for v in vals.iter_mut().filter(|v| v.start == k) {
             let pick = if v.crosses {
-                free.iter().position(|&r| r <= 7).or(if free.is_empty() { None } else { Some(0) })
+                free.iter()
+                    .position(|&r| r <= 7)
+                    .or(if free.is_empty() { None } else { Some(0) })
             } else {
-                free.iter().rposition(|&r| r >= 8).or(if free.is_empty() { None } else { Some(free.len() - 1) })
+                free.iter().rposition(|&r| r >= 8).or(if free.is_empty() {
+                    None
+                } else {
+                    Some(free.len() - 1)
+                })
             };
             let j = pick.ok_or("more values at once than the kernel's registers")?;
             v.gpr = free.remove(j);
@@ -475,7 +519,10 @@ impl<'a> Emitter<'a> {
                 return Err("more values at once than the kernel's registers");
             }
             allocate(&mut vals, items.len(), &POOL)?;
-            let spare = [5, 6, 7].into_iter().filter(|&r| vals.iter().all(|v| v.gpr != r)).collect();
+            let spare = [5, 6, 7]
+                .into_iter()
+                .filter(|&r| vals.iter().all(|v| v.gpr != r))
+                .collect();
             // (No borrowing here: a call item writes a10.. directly.)
             (TEMPS.to_vec(), spare, Vec::new())
         } else {
@@ -483,7 +530,11 @@ impl<'a> Emitter<'a> {
                 return Err("more values at once than the kernel's registers");
             }
             allocate(&mut vals, items.len(), &all[..p])?;
-            (all[all.len() - t..].to_vec(), all[p..all.len() - t].to_vec(), all[..p].to_vec())
+            (
+                all[all.len() - t..].to_vec(),
+                all[p..all.len() - t].to_vec(),
+                all[..p].to_vec(),
+            )
         };
         let mut e = Emitter {
             items,
@@ -604,7 +655,12 @@ impl<'a> Emitter<'a> {
     fn reset_temps(&mut self, k: usize) {
         let mut free: Vec<Reg> = self.temps.iter().rev().copied().collect();
         for g in self.pool.clone() {
-            if !free.contains(&g) && self.vals.iter().all(|v| v.gpr != g || v.start > k || v.end < k) {
+            if !free.contains(&g)
+                && self
+                    .vals
+                    .iter()
+                    .all(|v| v.gpr != g || v.start > k || v.end < k)
+            {
                 free.insert(0, g);
             }
         }
@@ -667,7 +723,8 @@ impl<'a> Emitter<'a> {
                 Ok(t)
             }
             l => {
-                let id = self.cur[(l - L_REG0) as usize].ok_or("a register read before it is written")?;
+                let id = self.cur[(l - L_REG0) as usize]
+                    .ok_or("a register read before it is written")?;
                 let h = self.vals[id].gpr;
                 if !self.valid[id] {
                     // A value from before the kernel (the column or still
@@ -765,18 +822,46 @@ impl<'a> Emitter<'a> {
         match op.code {
             DIV => return self.call(k, hid::DIV, &[Arg::Val(op.a), Arg::Val(op.b)], Some(op.d)),
             MOD => return self.call(k, hid::MOD, &[Arg::Val(op.a), Arg::Val(op.b)], Some(op.d)),
-            ATAN2 => return self.call(k, hid::ATAN2, &[Arg::Val(op.a), Arg::Val(op.b)], Some(op.d)),
+            ATAN2 => {
+                return self.call(k, hid::ATAN2, &[Arg::Val(op.a), Arg::Val(op.b)], Some(op.d))
+            }
             HASH => return self.call(k, hid::HASH, &[Arg::Val(op.a), Arg::Val(op.b)], Some(op.d)),
             LEN => return self.call(k, hid::LEN, &[Arg::Val(op.a), Arg::Val(op.b)], Some(op.d)),
             BIT => return self.call(k, hid::BIT, &[Arg::Val(op.a), Arg::Val(op.b)], Some(op.d)),
             SQRT => return self.call(k, hid::SQRT, &[Arg::Val(op.a)], Some(op.d)),
             RECIP => return self.call(k, hid::RECIP, &[Arg::Val(op.a)], Some(op.d)),
             SMOOTH => {
-                return self.call(k, hid::SMOOTH, &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c)], Some(op.d))
+                return self.call(
+                    k,
+                    hid::SMOOTH,
+                    &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c)],
+                    Some(op.d),
+                )
             }
-            MIX => return self.call(k, hid::MIX, &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c)], Some(op.d)),
-            MULR => return self.call(k, hid::MULR, &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c)], Some(op.d)),
-            NOISE => return self.call(k, hid::NOISE, &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c)], Some(op.d)),
+            MIX => {
+                return self.call(
+                    k,
+                    hid::MIX,
+                    &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c)],
+                    Some(op.d),
+                )
+            }
+            MULR => {
+                return self.call(
+                    k,
+                    hid::MULR,
+                    &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c)],
+                    Some(op.d),
+                )
+            }
+            NOISE => {
+                return self.call(
+                    k,
+                    hid::NOISE,
+                    &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c)],
+                    Some(op.d),
+                )
+            }
             NOISE_O..=NOISE_O_LAST => {
                 let args = [
                     Arg::Val(op.a),
@@ -1072,18 +1157,14 @@ impl<'a> Emitter<'a> {
             match a {
                 Arg::Imm(v) => self.c.movi(t, v),
                 Arg::Word(w) => self.load_word(t, w),
-                Arg::AddrOf(w) => {
-                    let off = self.word(w);
-                    self.c.movi(t, off);
-                    self.c.add(t, t, CTX);
-                }
                 Arg::Out => self.c.mov(t, OUT),
                 Arg::Val(v) if !is_lane(v) => self.load_word(t, Word::Scalar(v)),
                 Arg::Val(v) => match v & !LANE {
                     L_PX => self.c.slli(t, PIX, 16),
                     L_X | L_I => self.lane_into(t, v & !LANE),
                     l => {
-                        let id = self.cur[(l - L_REG0) as usize].ok_or("a register read before it is written")?;
+                        let id = self.cur[(l - L_REG0) as usize]
+                            .ok_or("a register read before it is written")?;
                         let g = self.vals[id].gpr;
                         if !self.valid[id] {
                             self.lane_into(t, l);
@@ -1307,7 +1388,12 @@ impl<'a> Emitter<'a> {
                 }
             }
             OUT_HSV => {
-                self.call(k, hid::HSV, &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c), Arg::Out], None)?;
+                self.call(
+                    k,
+                    hid::HSV,
+                    &[Arg::Val(op.a), Arg::Val(op.b), Arg::Val(op.c), Arg::Out],
+                    None,
+                )?;
             }
             OUT_PAL if op.d & PAL_SCALED == 0 => {
                 let v = self.val(op.a)?;
@@ -1377,8 +1463,18 @@ impl<'a> Emitter<'a> {
         if !scaled || !is_lane(col.c) {
             // Two colours a row (the VM's: two a lane).
             let k = if scaled { col.c } else { NONE };
-            let ca = self.word(Word::Colour { pal, v: a, k, shift });
-            let cb = self.word(Word::Colour { pal, v: b, k, shift });
+            let ca = self.word(Word::Colour {
+                pal,
+                v: a,
+                k,
+                shift,
+            });
+            let cb = self.word(Word::Colour {
+                pal,
+                v: b,
+                k,
+                shift,
+            });
             let c = self.val(cv)?;
             let x = self.tmp()?;
             let y = self.tmp()?;
@@ -1439,7 +1535,14 @@ impl<'a> Emitter<'a> {
         let k = if col.d & PAL_SCALED != 0 { col.c } else { NONE };
         let n = (pk.c as usize).min(PICK_MAX);
         let ws: Vec<Word> = (0..=PICK_MAX as u8)
-            .map(|i| Word::Pick { pal, b: pk.b, n: pk.c, i, k, shift })
+            .map(|i| Word::Pick {
+                pal,
+                b: pk.b,
+                n: pk.c,
+                i,
+                k,
+                shift,
+            })
             .collect();
         let tbl = self.words_run(&ws);
         let mv = self.val(m)?;
@@ -1478,13 +1581,28 @@ fn hot_call(prog: &Program, it: &Item) -> bool {
 fn needs_call(_prog: &Program, it: &Item) -> bool {
     use code::*;
     match *it {
-        Item::Step(op) => matches!(
-            op.code,
-            DIV | MOD | ATAN2 | HASH | LEN | BIT | SQRT | RECIP | PICK | TAB | SPR | MIX | SMOOTH
-                | NOISE | MULR | OUT_HSV
-        ) || (DIGIT..=DIGIT_B).contains(&op.code)
-            || (NOISE_O..=NOISE_O_LAST).contains(&op.code)
-            || (op.code == OUT_PAL && op.d & PAL_SCALED != 0),
+        Item::Step(op) => {
+            matches!(
+                op.code,
+                DIV | MOD
+                    | ATAN2
+                    | HASH
+                    | LEN
+                    | BIT
+                    | SQRT
+                    | RECIP
+                    | PICK
+                    | TAB
+                    | SPR
+                    | MIX
+                    | SMOOTH
+                    | NOISE
+                    | MULR
+                    | OUT_HSV
+            ) || (DIGIT..=DIGIT_B).contains(&op.code)
+                || (NOISE_O..=NOISE_O_LAST).contains(&op.code)
+                || (op.code == OUT_PAL && op.d & PAL_SCALED != 0)
+        }
         Item::SelPal { col, .. } => col.d & PAL_SCALED != 0 && is_lane(col.c),
         Item::PickPal { .. } => false,
     }

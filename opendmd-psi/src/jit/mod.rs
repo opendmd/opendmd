@@ -17,11 +17,11 @@
 //! instructions they use (`emu`) against the VM over the goldens and the
 //! bundled formulas.
 
+#[cfg(test)]
+mod emu;
 pub mod enc;
 #[cfg(test)]
 mod enc_tests;
-#[cfg(test)]
-mod emu;
 pub mod lower;
 #[cfg(test)]
 mod tests;
@@ -89,8 +89,16 @@ pub(crate) unsafe fn eval_helper(id: u8, a: [u32; 5], ptr: &dyn Fn(u32) -> *mut 
         }
         hid::NOISE_O => {
             let sc = &*(ptr(a[3]) as *const [i32; MAX_SCALARS]);
-            let k = noise_slot((a[4] as u8).wrapping_sub(code::NOISE_O) as usize % NOISE_CTX, 0);
-            fixed::noise_off(i(0), i(1), i(2), [sc[k] as u32, sc[k + 1] as u32, sc[k + 2] as u32])
+            let k = noise_slot(
+                (a[4] as u8).wrapping_sub(code::NOISE_O) as usize % NOISE_CTX,
+                0,
+            );
+            fixed::noise_off(
+                i(0),
+                i(1),
+                i(2),
+                [sc[k] as u32, sc[k + 1] as u32, sc[k + 2] as u32],
+            )
         }
         hid::TAB => {
             let tabs = &*(ptr(a[1]) as *const [i32; MAX_TABLE]);
@@ -176,15 +184,27 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, fir
             Word::Tabs => t.addr(st.prog.tables.as_ptr() as *const u8, MAX_TABLE * 4),
             Word::Glyphs(c) => {
                 let g = &st.glyphs[(c.saturating_sub(code::DIGIT) as usize).min(4)];
-                t.addr(g as *const Glyphs as *const u8, core::mem::size_of::<Glyphs>())
+                t.addr(
+                    g as *const Glyphs as *const u8,
+                    core::mem::size_of::<Glyphs>(),
+                )
             }
-            Word::Colour { pal, v, k, shift } => colour_of(st, pal, s.sc[(v & 0x7f) as usize], k, shift),
+            Word::Colour { pal, v, k, shift } => {
+                colour_of(st, pal, s.sc[(v & 0x7f) as usize], k, shift)
+            }
             Word::Entry { pal, v } => {
                 let p = palette(st.tables, st.own, pal);
                 t.addr(p[fixed::pal_index(s.sc[(v & 0x7f) as usize])].as_ptr(), 3)
             }
             Word::Init(c) | Word::Const(c) => c as u32,
-            Word::Pick { pal, b, n, i, k, shift } => {
+            Word::Pick {
+                pal,
+                b,
+                n,
+                i,
+                k,
+                shift,
+            } => {
                 let m = (n as usize).min(PICK_MAX);
                 let v = if (i as usize) < m {
                     pick(&s.sc, b, n, i32::from(i) << 16)
@@ -233,7 +253,11 @@ pub(crate) fn frame<T: Target>(
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = inputs.seed;
     }
-    let (fe, de, re) = (prog.frame_end as usize, prog.draw_end as usize, prog.row_end as usize);
+    let (fe, de, re) = (
+        prog.frame_end as usize,
+        prog.draw_end as usize,
+        prog.row_end as usize,
+    );
     if prog.forever() {
         vm::wset(&mut scratch.lanes[REGS], 0, inputs.tw);
     }
@@ -322,7 +346,17 @@ pub(crate) fn frame<T: Target>(
                 },
                 code::FUSE => k += 1,
                 _ => {
-                    vm::lane_op::<128>(scratch, &mut alias, op, true, 0, tables, &prog.tables, None, None);
+                    vm::lane_op::<128>(
+                        scratch,
+                        &mut alias,
+                        op,
+                        true,
+                        0,
+                        tables,
+                        &prog.tables,
+                        None,
+                        None,
+                    );
                     k += 1;
                 }
             }
@@ -369,7 +403,13 @@ pub mod stats {
     pub const PRE: usize = 2;
     pub const FILL: usize = 3;
     pub const KERNEL: usize = 4;
-    pub const NAMES: [&str; 5] = ["frame steps", "row steps", "column/still runs", "words", "kernel"];
+    pub const NAMES: [&str; 5] = [
+        "frame steps",
+        "row steps",
+        "column/still runs",
+        "words",
+        "kernel",
+    ];
     pub static CYCLES: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
     pub static FRAMES: AtomicU32 = AtomicU32::new(0);
 
@@ -398,7 +438,10 @@ pub mod stats {
 
     /// The sums so far (cycles), and the frames; reset.
     pub fn take() -> ([u32; 5], u32) {
-        (core::array::from_fn(|k| CYCLES[k].swap(0, Relaxed)), FRAMES.swap(0, Relaxed))
+        (
+            core::array::from_fn(|k| CYCLES[k].swap(0, Relaxed)),
+            FRAMES.swap(0, Relaxed),
+        )
     }
 }
 
@@ -437,25 +480,9 @@ mod device {
     }
 
     const SHIMS: [Shim; hid::COUNT as usize] = [
-        shim::<0>,
-        shim::<1>,
-        shim::<2>,
-        shim::<3>,
-        shim::<4>,
-        shim::<5>,
-        shim::<6>,
-        shim::<7>,
-        shim::<8>,
-        shim::<9>,
-        shim::<10>,
-        shim::<11>,
-        shim::<12>,
-        shim::<13>,
-        shim::<14>,
-        shim::<15>,
-        shim::<16>,
-        shim::<17>,
-        shim::<18>,
+        shim::<0>, shim::<1>, shim::<2>, shim::<3>, shim::<4>, shim::<5>, shim::<6>, shim::<7>,
+        shim::<8>, shim::<9>, shim::<10>, shim::<11>, shim::<12>, shim::<13>, shim::<14>,
+        shim::<15>, shim::<16>, shim::<17>, shim::<18>,
     ];
 
     type KernelFn = extern "C" fn(*mut u32, *mut u8);
@@ -510,7 +537,12 @@ mod device {
         let code_bytes = low.code.len();
         low.code = Vec::new();
         let ctx = alloc::vec![0u32; low.words.len()];
-        Ok(Kernel { block, code_bytes, low, ctx })
+        Ok(Kernel {
+            block,
+            code_bytes,
+            low,
+            ctx,
+        })
     }
 
     impl Drop for Kernel {
@@ -553,14 +585,35 @@ mod device {
         ) -> bool {
             assert_eq!(out.len(), W * H * 3);
             if !crate::range::inputs_in_range(prog, inputs) {
-                crate::render_rows_still::<128>(prog, scratch, None, still, inputs, tables, None, u32::MAX, out);
+                crate::render_rows_still::<128>(
+                    prog,
+                    scratch,
+                    None,
+                    still,
+                    inputs,
+                    tables,
+                    None,
+                    u32::MAX,
+                    out,
+                );
                 return false;
             }
             let mut d = self.device();
             let base = out.as_mut_ptr();
             // SAFETY: row < 32, within `out` (asserted above).
             let dest = |row: usize| unsafe { base.add(row * W * 3) };
-            frame(&mut d, &self.low, &mut self.ctx, prog, scratch, still, inputs, tables, u32::MAX, &dest);
+            frame(
+                &mut d,
+                &self.low,
+                &mut self.ctx,
+                prog,
+                scratch,
+                still,
+                inputs,
+                tables,
+                u32::MAX,
+                &dest,
+            );
             true
         }
 
@@ -591,7 +644,18 @@ mod device {
                 unsafe { base.add(j * W * 3) }
             };
             let mut d = self.device();
-            frame(&mut d, &self.low, &mut self.ctx, prog, scratch, None, inputs, tables, check_rows(), &dest);
+            frame(
+                &mut d,
+                &self.low,
+                &mut self.ctx,
+                prog,
+                scratch,
+                None,
+                inputs,
+                tables,
+                check_rows(),
+                &dest,
+            );
             for (j, &row) in CHECK_ROWS.iter().enumerate() {
                 let want = &frame_bytes[row * W * 3..(row + 1) * W * 3];
                 let got = &buf[j * W * 3..(j + 1) * W * 3];
