@@ -21,12 +21,15 @@ const REPO = 'https://github.com/opendmd/opendmd.github.io';
 const MAX_URL = 6000;
 const D = 20; // the panel's frame: 50 a second
 
-const { f, cut, has } = parse(location.hash);
+const { f, cut, has, bundled } = parse(location.hash);
 // Another link pasted into this tab: start again with it.
 addEventListener('hashchange', () => location.reload());
 const here = () => new URL('./', location.href).href;
 
-if (!has || !f.src.trim()) {
+// A bundled Formula by name: the gallery's copy of its file, the header cut.
+const named = bundled && fetch(`../formulas/src/${bundled}.psi`).then((r) => (r.ok ? r.text() : '')).catch(() => '')
+  .then((t) => { const l = t.split('\n'); let n = 0; while (n < l.length && /^-- (author|licen[cs]e|bundle)/.test(l[n])) n++; f.src = l.slice(n).join('\n'); });
+if (!has || (!bundled && !f.src.trim())) {
   $('f-none').hidden = false;
 } else {
   // #f is aria-busy until start() has wired everything (the preview, the
@@ -36,13 +39,18 @@ if (!has || !f.src.trim()) {
 }
 
 async function start() {
+  if (named) {
+    await named;
+    if (!f.src.trim()) { $('f-none').hidden = false; return; }
+    f.stem = bundled;
+  }
   $('f').hidden = false;
   $('f-name').textContent = f.name;
   document.title = `${f.name} · OpenDMD`;
   // The code as plain text at once, with the name: readable while the wasm
   // loads (or if it never does); highlighted below once Psi is up.
   $('f-code').textContent = f.src + '\n';
-  if (cut) $('f-cap').textContent = 'This link was too long: only the first 4,096 characters of the formula are here.';
+  if (cut) $('f-cap').textContent = 'This link was too long: only the first 16,384 characters of the formula are here.';
 
   await init();
   const [{ PanelPreview }, P] = await Promise.all([import('../demo/js/preview.js'), import('../demo/pkg-psi/opendmd_psi_web.js')]);
