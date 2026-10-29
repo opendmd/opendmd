@@ -1049,6 +1049,10 @@ impl Dag {
                     return self.op(code::FLOOR, [m, 0, 0], at);
                 }
             }
+            // 1 / x: `recip`, exactly `div(1, x)` (on the ESP32 one 32-bit
+            // division where `div`'s general path takes two and a Knuth
+            // digit).
+            (code::DIV, Some(ONE), None) => return self.op(code::RECIP, [b, 0, 0], at),
             // x / s, s per frame or per row: one division there, a multiply
             // per pixel.
             (code::DIV, None, None) if self.level(a) == LV_PIXEL && self.level(b) < LV_PIXEL => {

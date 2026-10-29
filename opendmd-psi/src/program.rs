@@ -1405,6 +1405,7 @@ pub(crate) fn lane_loop(c: u8) -> bool {
         ADD | SUB
             | MUL
             | DIV
+            | RECIP
             | MOD
             | LT
             | LE
@@ -1483,14 +1484,21 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         MUL_N => 37,
         SHR => 33,
         MOD => 113,
-        DIV | RECIP => 685,
-        ATAN2 => 529,
-        LEN => 642,
+        // fast-div (fastdiv-b, 2026-10-29: 32-bit divisions and `nsau`;
+        // were 685, 685, 529, 642, 539 with __divdi3 and the bit count),
+        // fitted to the step rows as before. DIV holds both `x / (x + t)`
+        // (half of it one `quou`) and `128 / v` (the Knuth digit) within
+        // ±15 %; RECIP (`1 / v` since fast-div) is `128 / v`'s less the
+        // 52 cycles the micro rows saw it save.
+        DIV => 360,
+        RECIP => 230,
+        ATAN2 => 384,
+        LEN => 472,
         HASH => 220,
         NEG | NOT | ABS | FLOOR | FRAC => 40,
         SIN | COS => 110,
         TRI | SAW | SQR => 60,
-        SQRT => 539,
+        SQRT => 229,
         SELECT | CLAMP => 60,
         PICK | TAB => 100,
         // A sprite's pixel: a table read, a shift and a mask (a guess until

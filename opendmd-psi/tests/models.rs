@@ -265,13 +265,14 @@ fn the_cost_table_is_the_estimates() {
             "gray(abs(x*px))",
         ),
         (
-            "| `/` by a varying value, `1/v` | 685 |",
-            685,
+            "| `/` by a varying value | 360 ",
+            360,
             "gray(x)",
             "gray(x / px)",
         ),
-        ("| `sqrt` | 539 |", 539, "gray(x)", "gray(sqrt(x))"),
-        ("| `len` | 642 |", 642, "gray(x)", "gray(len(x, px))"),
+        ("(`1/v` 230) |", 230, "gray(x)", "gray(1 / px)"),
+        ("| `sqrt` | 229 |", 229, "gray(x)", "gray(sqrt(x))"),
+        ("| `len` | 472 |", 472, "gray(x)", "gray(len(x, px))"),
         ("| `sin` `cos` | 110 |", 110, "gray(x)", "gray(sin(x))"),
         (
             "| `tri` `saw` `sqr` `select` `clamp` | 60 |",
@@ -293,7 +294,7 @@ fn the_cost_table_is_the_estimates() {
             "gray(smoothstep(0.2, 0.8, x))",
         ),
         ("| `hash` | 220 |", 220, "gray(x)", "gray(hash(px, x))"),
-        ("| `atan2` | 529 |", 529, "gray(x)", "gray(atan2(x, px))"),
+        ("| `atan2` | 384 |", 384, "gray(x)", "gray(atan2(x, px))"),
         ("| `noise` | 855 |", 855, "gray(x)", "gray(noise(x, px, x))"),
         (
             "| `noise` of a growing value (section 11) | 870 |",
