@@ -126,6 +126,9 @@ test:
 	@echo "==> Testing $(PSI) (Psi formulas; + core's and the simulator's psi feature)"
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test --features docs,syntax
 	cd $(PSI) && RUSTUP_TOOLCHAIN=stable CARGO_PROFILE_RELEASE_OPT_LEVEL=2 cargo test --release --test stack
+	@# The compiler's heap as the device compiles (no `syntax`): every bundled
+	@# Formula under its budget, a short heap refused, never an abort.
+	cd $(PSI) && RUSTUP_TOOLCHAIN=stable cargo test --release --test compile_heap
 	cd $(CORE) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	cd $(SIM) && RUSTUP_TOOLCHAIN=stable cargo test --features psi
 	@echo "==> Testing $(PSIWEB) (the web app's Formulas module)"
