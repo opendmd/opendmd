@@ -3464,6 +3464,9 @@ impl<'s> Parser<'s> {
             }
         }
         let open = self.peek();
+        if open.tok != Tok::LBrace && rate > 0 && open.tok == Tok::Name && BLENDS.iter().any(|e| e.0 == self.text(open)) {
+            return self.err(open, "write the blend first: `layer add rate 4 { … }`");
+        }
         if open.tok != Tok::LBrace {
             return self.err(
                 open,
