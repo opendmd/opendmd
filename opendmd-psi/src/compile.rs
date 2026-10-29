@@ -86,6 +86,8 @@ impl core::fmt::Display for Error {
 /// as with any other compile error, instead of aborting.
 pub const NO_MEMORY: &str = "not enough memory for this Formula right now";
 
+// (Unused in the wasm build: it grows infallibly.)
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[cold]
 #[inline(never)]
 fn no_memory() -> Error {
