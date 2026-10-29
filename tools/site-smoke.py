@@ -312,7 +312,9 @@ def f_page(browser, base: str, errors: list[str], tool: Path | None, shots: Path
 
 
 def demo_share(browser, base: str, errors: list[str]) -> None:
-    """The demo's Copy share link gives a /f/ link."""
+    """The demo's Copy share link gives a /f/ link: a bundled Formula by
+    name (`#bundled=<stem>`, /f/ reads the gallery's copy), Submit with its
+    text."""
     page = new_page(browser, "laptop", errors)
     page.goto(f"{base}/demo/#formulas")
     page.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
@@ -320,11 +322,13 @@ def demo_share(browser, base: str, errors: list[str]) -> None:
     page.click("#psi-share-btn")
     link = page.input_value("#psi-link")
     sub = page.get_attribute("#psi-submit", "href")
-    check(link.startswith(f"{base}/f/#formula=") and sub == link + "&submit", f"demo: Copy share link -> {link[:60]}…")
+    first = examples(bundled_only=True)[0]
+    check(link == f"{base}/f/#bundled={first['slug']}" and sub.startswith(f"{base}/f/#formula=") and sub.endswith("&submit"),
+          f"demo: Copy share link -> {link[:60]}… (Submit {sub[:40]}…)")
     page.goto(link)
     page.wait_for_selector(F_READY, timeout=20000)
-    first = examples(bundled_only=True)[0]
-    check(page.inner_text("#f-name") == first["name"], f"demo: the link opens {first['name']} on its page")
+    check(page.inner_text("#f-name") == first["name"] and page.locator("#f-code").inner_text().rstrip("\n") == first["src"].rstrip("\n"),
+          f"demo: the link opens {first['name']} on its page, its text from the gallery's copy")
     page.context.close()
 
 

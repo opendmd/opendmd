@@ -64,7 +64,11 @@ NAME_LINE = re.compile(r'^name "[^"\n]*"', re.M)
 def share_hash(e: dict, name: str | None = None) -> str:
     """`#formula=…&name=…`, as the web app's `link` writes it for a formula
     with its controls at their defaults (which it leaves out). With `name`
-    (a remix), the formula's `name` line says it too."""
+    (a remix), the formula's `name` line says it too. A bundled one (not a
+    remix) goes by name, `#bundled=<slug>`, as the web app's link writes it
+    too: /f/ reads it from formulas/src/, a panel has it built in."""
+    if name is None and e.get("bundle"):
+        return "#" + urlencoded([("bundled", e["slug"])])
     src = e["src"]
     if name is not None:
         src = NAME_LINE.sub(lambda _: f'name "{name}"', src, count=1)

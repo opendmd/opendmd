@@ -11,6 +11,7 @@
 import { app } from './state.js';
 import { h, toast } from './util.js';
 import { path as fpath, controls as ctlOf, num } from './psikit.js';
+import { line, onCard, stemTitle } from './fstore.js';
 
 export const BLENDS = [['over', 'Over'], ['screen', 'Screen'], ['add', 'Add'], ['multiply', 'Multiply'], ['max', 'Lighten'], ['min', 'Darken']];
 let mod = null;
@@ -18,8 +19,10 @@ export const psi = () => (mod ??= import('../pkg-psi/opendmd_psi_web.js?look').t
 
 // What a formula declares (psikit `controls`).
 export { ctlOf as decl };
-// `f`'s path, as the panel is sent it (values at their defaults left out).
-export const path = (m, f) => fpath(f, ctlOf(m, f.src));
+// What the look setting names `f` by (js/fstore.js `line`: a bundled one by
+// name, one of yours on the panel by its file, else its inline path; values
+// at their defaults left out).
+export const path = (m, f) => { const c = ctlOf(m, f.src); return line(f, c, fpath(f, c)); };
 // Whether `f` declares `look` (one Settings › Look lists).
 export const declares = (m, f) => !!ctlOf(m, f?.src)?.look;
 // Its name: its `name` line, else the one it was saved under.
@@ -27,12 +30,12 @@ export const named = (m, f) => ctlOf(m, f.src)?.name || f.name || 'Formula';
 
 // `f` as the panel's look, as its `look` line says (none: as it is): {src,
 // i} (the text the panel draws and what it is), or {why} — the panel's
-// own refusals (its 2,048 B path, a 413; fx_psi: it hides the GIF; over
-// its 12 ms).
+// own refusals (an inline look over 2,048 B, a 413; fx_psi: it hides the
+// GIF; over its 12 ms).
 export function as(m, f) {
   const src = f?.src && m.asLook(f.src), i = src && m.info();
   return !src ? { why: f?.src ? m.error() : 'pick a Formula' }
-    : path(m, f).length > 2048 ? { why: 'this Formula is too long for the panel as a look' }
+    : /^@formula\?/.test(path(m, f)) && path(m, f).length > 2048 ? { why: 'this Formula is too long for the panel as a look: save it first' }
     : !(i[5] & 32) ? { why: 'this Formula covers the GIF entirely: choose a lower amount or another blend' }
       : i[6] > 12000 ? { why: `this Formula is too heavy to draw over every GIF (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 12 ms)` }
         : { src, i };
@@ -49,8 +52,10 @@ export function choice(m, f) {
   return as(m, set(m, f, 'screen', 40)).why ? ['over', 30] : ['screen', 40];
 }
 
-// Kept as the panel's look: the config, then read again.
-export async function use(f) {
+// Kept as the panel's look: the config, then read again. `keep` (the
+// editor's): the Formula as saved, so the look names it on the panel.
+export async function use(f, keep) {
+  if (keep && onCard()) f = { ...f, ...await keep() };
   const m = await psi(), x = as(m, f);
   if (x.why) throw new Error(x.why);
   await app.src.putConfig({ look_formula: path(m, f) });
@@ -58,9 +63,9 @@ export async function use(f) {
 }
 
 // The same, said in a toast (the Formulas view's Set as the panel's look).
-export async function useSaid(f) {
+export async function useSaid(f, keep) {
   try {
-    await use(f);
+    await use(f, keep);
     toast(`“${f.name || 'Formula'}” is the panel’s look now: drawn over every GIF (Settings › Look changes it)`, 'ok');
   } catch (e) { toast(e.status == 400 ? `The panel can’t use it: ${e.message.replace(/^400: (look_formula: )?/, '')}` : 'Set as the panel’s look: ' + e.message, 'bad'); }
 }
@@ -68,6 +73,8 @@ export async function useSaid(f) {
 // The look a path holds, as a formula (for one not found among this
 // browser's Formulas): its text and values.
 export function fromPath(m, p) {
+  // A name or a file not among those listed: named from it.
+  if (!p.startsWith('@formula?')) return { src: '', saved: 1, name: stemTitle(p.replace(/^@formula:|\?.*$/g, '').replace(/^.*\/|\.psi$/gi, '')) };
   const q = new URLSearchParams(p.slice(9)), f = { src: q.get('src') || '', saved: 1 };
   for (const k of 'abc') if (num(q.get(k)) != null) f[k] = num(q.get(k));
   f.name = named(m, f);

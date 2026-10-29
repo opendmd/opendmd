@@ -544,17 +544,28 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             next.glow = glow;
         }
         if let Some(v) = patch.look_formula {
-            if !v.is_empty() && !opendmd_core::synth::is_formula(&v) {
-                return req.bad_request("look_formula must be \"\" or a formula (@formula?src=…)");
+            use opendmd_core::synth::{formula_ref, FormulaRef, MAX_LOOK_PATH};
+            match formula_ref(&v) {
+                _ if v.is_empty() => {}
+                Some(FormulaRef::File { file, .. })
+                    if files::card_path(config::SD_MOUNT, file).is_none() =>
+                {
+                    return req.bad_request("look_formula: the Formula's path must stay on the card");
+                }
+                Some(_) => {}
+                None => {
+                    return req.bad_request(
+                        "look_formula must be \"\" or a Formula (@formula:<name>, /formulas/<name>.psi or @formula?src=…)",
+                    )
+                }
             }
-            if v.len() > opendmd_core::synth::MAX_FORMULA_PATH {
+            if v.len() > MAX_LOOK_PATH {
                 return req.error(
                     413,
                     "413 Payload Too Large",
                     &format!(
-                        "this formula is too long for the panel ({} B as sent; the limit is {} B)",
+                        "this formula is too long for the panel as a look ({} B as sent; the limit is {MAX_LOOK_PATH} B): save it and set it by name",
                         v.len(),
-                        opendmd_core::synth::MAX_FORMULA_PATH
                     ),
                 );
             }
@@ -841,9 +852,10 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
             Ok(p) => p,
             Err(e) => return req.bad_request(&format!("invalid JSON: {e}")),
         };
-        // A formula (`@formula?src=…`) may be up to 2 KB; it is compiled on
-        // the main task as it opens (a compile error or one too heavy for
-        // the panel is a 400 with the compiler's sentence).
+        // An inline formula (`@formula?src=…`) may be up to 6 KB; it is
+        // compiled on the main task as it opens (a compile error or one too
+        // heavy for the panel is a 400 with the compiler's sentence; a
+        // bundled name or a card file that isn't there, a 404).
         if opendmd_core::synth::is_formula(&play.path)
             && play.path.len() > opendmd_core::synth::MAX_FORMULA_PATH
         {
@@ -871,15 +883,23 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         if play.live && !opendmd_core::synth::is_formula(&play.path) {
             return req.bad_request("\"live\" is only for a formula (@formula?src=…)");
         }
-        if play.over && !play.path.is_empty() && !opendmd_core::synth::is_formula(&play.path) {
+        let formula_file = opendmd_core::synth::formula_file(&play.path);
+        if play.over
+            && !play.path.is_empty()
+            && !opendmd_core::synth::is_formula(&play.path)
+            && formula_file.is_none()
+        {
             return req.bad_request(
                 "\"over\" is only for a formula (@formula?src=…), or \"\" to take it off",
             );
         }
         let virtual_file = opendmd_core::synth::is_virtual(&play.path);
-        if !play.over && !virtual_file
-            && (!play.path.starts_with('/')
-                || files::card_path(config::SD_MOUNT, &play.path).is_none())
+        // A Formula's file may carry its controls after `?`.
+        let on_card = formula_file.map_or(play.path.as_str(), |(f, _)| f);
+        if !(play.over && play.path.is_empty())
+            && !virtual_file
+            && (!on_card.starts_with('/')
+                || files::card_path(config::SD_MOUNT, on_card).is_none())
         {
             return req.bad_request("path must be card-absolute and stay on the card, or a live item (@clock, @text?msg=…)");
         }
@@ -1484,6 +1504,11 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         serve_under(req, config::SD_MOUNT, Duration::ZERO)
     })?;
     server.route("/sets/*", Method::Get, |req| {
+        serve_under(req, config::SD_MOUNT, stream::QUEUE_WAIT)
+    })?;
+    // The user's Formulas (`/formulas/<stem>.psi`: the web app lists and
+    // reads them, and writes them through `PUT /api/files/formulas/…`).
+    server.route("/formulas/*", Method::Get, |req| {
         serve_under(req, config::SD_MOUNT, stream::QUEUE_WAIT)
     })?;
     // The playback cache: prepared copies, `cache/<Category>/<xx>/<name>.gif`

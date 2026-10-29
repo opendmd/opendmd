@@ -9,8 +9,10 @@ controls and whether it can be the panel's look (`name "…"`, `about "…"`,
 `control …`, `look`). The site's gallery shows all of them (tools/site.py
 hands the folder to opendmd-gallery, which reads those lines from the
 compiler); the panel's web app gets only the bundled ones, as
-`[{"src": …}, …]` (the Formula without the header, in file-name order):
-nothing else, since the source says the rest.
+`[{"stem": …, "src": …}, …]` (the file's stem, which a playlist line or the
+look names it by, `@formula:<stem>`, as the firmware builds the same files
+in; and the Formula without the header, in file-name order): nothing else,
+since the source says the rest.
 
     uv run tools/formulas-json.py [FORMULAS_DIR] [OUT]
 """
@@ -47,7 +49,7 @@ def bundled(folder: Path) -> list[dict]:
         if not any(l.startswith('name "') for l in src.split("\n")):
             raise SystemExit(f'formulas-json: {p.name}: no name "…" line')
         if "-- bundle" in head:
-            out.append({"src": src.rstrip("\n") + "\n"})
+            out.append({"stem": p.stem, "src": src.rstrip("\n") + "\n"})
     if not out:
         raise SystemExit(f"formulas-json: no file in {folder} has a -- bundle line")
     return out

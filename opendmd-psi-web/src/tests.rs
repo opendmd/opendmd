@@ -271,45 +271,22 @@ fn the_examples_are_light_enough_for_the_panel() {
     }
 }
 
-/// The path the web app sends for an example (js/psikit.js `path`: the
-/// compiler's `compact`, lightly encoded, its `about` line left out when
-/// that would pass 2,048 B), with the sliders at their most: within the
-/// panel's 2,048 B (`synth::MAX_FORMULA_PATH`). (Every example has a `name`
-/// line, so Add to playlist adds no `&name=`.)
+/// Every example compacted (what an inline path and a Formula read from its
+/// file on the card carry: js/psikit.js `path`, `fx_psi::read_text`, the
+/// firmware's bundled list) compiles to the same program. (No size test:
+/// playlists and looks name Formulas, `@formula:<stem>` or their file, so
+/// the inline cap no longer shapes them.)
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn every_example_fits_the_panels_path_as_sent() {
-    let enc = |c: &str| {
-        let mut p = String::from("@formula?src=");
-        for b in c.bytes() {
-            match b {
-                b' ' => p.push('+'),
-                b'%' | b'&' | b'+' | b'#' | b'?' => p.push_str(&format!("%{b:02X}")),
-                0x21..=0x7e => p.push(b as char),
-                _ => p.push_str(&format!("%{b:02X}")),
-            }
-        }
-        p
-    };
+fn every_example_compacts_to_the_same_program() {
     for e in crate::examples() {
         let s = opendmd_psi::compact(&e.src);
-        // The compacted text still compiles to the same program.
         assert_eq!(
             opendmd_psi::compile(&s).map(|p| p.len()).ok(),
             opendmd_psi::compile(&e.src).map(|p| p.len()).ok(),
             "{}",
             e.name
         );
-        let mut p = enc(&s);
-        if p.len() + 33 > 2048 {
-            p = enc(&opendmd_psi::compact(&opendmd_psi::look::declare(&e.src, "about", 0, "")));
-        }
-        p.push_str("&a=0.3333&b=0.3333&c=0.3333");
-        assert!(p.len() <= 2048, "{}: {} B as sent", e.name, p.len());
-        // The bundled ones keep their `about` (the ten are short; Endless
-        // road at 2,044 B with it since road-full, Full written tight to
-        // fit: 2,046 B as Both, 2,048 B without `about` as first written).
-        assert!(!e.bundled || p.contains("about+"), "{}: {} B", e.name, p.len());
     }
 }
 
@@ -583,9 +560,9 @@ fn the_web_apps_compact_is_the_compilers() {
     ] {
         srcs.push(s.to_string());
     }
-    // Over the panel's 2,048 B with its `about` line, under it without:
+    // Over the panel's 6,144 B with its `about` line, under it without:
     // the path leaves the line out (`;` and `--` in another's quotes).
-    let body = format!("gray({}1)", "x*".repeat(970));
+    let body = format!("gray({}1)", "x*".repeat(3010));
     let about = format!("about \"{}\"", "A".repeat(110));
     srcs.push(format!("name \"Long; -- one\"\n{about}\ncontrol k = 0.5 \"x; y\"\n{body}"));
     srcs.push(format!("{about}\n{body}"));
@@ -631,8 +608,8 @@ fn the_web_apps_compact_is_the_compilers() {
     assert!(out.status.success());
     let got: Vec<String> = String::from_utf8(out.stdout).unwrap().lines().map(String::from).collect();
     assert_eq!(got.len(), srcs.len() * 2);
-    // fx_psi's path: the compact text, lightly encoded; over 2,048 B
-    // without its `about` line.
+    // fx_psi's path: the compact text, lightly encoded; over 6,144 B
+    // (`synth::MAX_FORMULA_PATH`) without its `about` line.
     let enc = |c: &str| {
         let mut p = String::from("@formula?src=");
         for b in c.bytes() {
@@ -645,17 +622,19 @@ fn the_web_apps_compact_is_the_compilers() {
         }
         p
     };
+    // (`synth::MAX_FORMULA_PATH`, psikit `MAX_PATH`.)
+    const MAX_PATH: usize = 6144;
     let mut dropped = 0;
     for (src, g) in srcs.iter().zip(got.chunks(2)) {
         let full = enc(&opendmd_psi::compact(src));
-        let want = if full.len() > 2048 {
+        let want = if full.len() > MAX_PATH {
             dropped += 1;
             enc(&opendmd_psi::compact(&opendmd_psi::look::declare(src, "about", 0, "")))
         } else {
             full
         };
         assert_eq!(g[1], want, "path of {src:?}");
-        assert!(want.len() <= 2048 || !src.starts_with("name"), "{}", want.len());
+        assert!(want.len() <= MAX_PATH || !src.starts_with("name"), "{}", want.len());
     }
     // (The three long cases. Endless road keeps its `about` since road-cost.)
     assert_eq!(dropped, 3);

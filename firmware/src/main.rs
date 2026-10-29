@@ -51,6 +51,7 @@ mod task;
 mod files;
 mod follow;
 mod formula_look;
+mod formulas;
 mod frametime;
 mod http;
 mod httpd;
@@ -282,6 +283,8 @@ fn main() -> Result<()> {
     // compiler's worst case is more than the main task or httpd can spare.
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_compiler(psi_stack::compile);
+    // `@formula:<name>`: the bundled Formulas, built in.
+    formulas::install();
 
     // The version (`state::firmware_version`: the app descriptor's, which
     // `FW_VERSION` sets) and the descriptor itself (`"<version> 4mb"`).
@@ -1345,6 +1348,10 @@ fn main() -> Result<()> {
             psi_probe::run(config::SD_MOUNT);
             CARD_READY.store(true, Ordering::Relaxed);
             fatidx::mounted();
+            // A look kept on the card was set before the card was there.
+            if formula_look::on_card(&settings.look_formula) {
+                looks.set_saved(&settings.look_formula, &mut canvas);
+            }
             // A card at full speed in `fast` with no record: read it for a
             // while soon (`cardspeed`), on a task of its own. Here, where
             // the card becomes the player's (the probe checks that).

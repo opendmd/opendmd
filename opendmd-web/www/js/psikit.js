@@ -5,15 +5,17 @@
 // formula is in a sentence, the code's highlighting and the sample
 // picture. No imports; the DOM only in `picker` and `control`.
 
-export const MAX_SRC = 4096, MAX_NAME = 60;
+export const MAX_SRC = 16384, MAX_NAME = 60;
 
 // A share link: `<base>#formula=<src>&name=<name>&a=…` (URLSearchParams),
 // with the values set that differ from their control's default (`ctl`:
 // controls(); a slot left out plays at the default) of the controls the
 // formula declares or reads (without `ctl`: every value set).
+// A bundled Formula (`f.stem`) goes by name, `#bundled=<stem>`: the site's
+// /f/ page reads it from the gallery's copy (formulas/src/<stem>.psi).
 export function link(f, base, ctl) {
-  const q = new URLSearchParams({ formula: f.src });
-  if (f.name) q.set('name', f.name);
+  const q = new URLSearchParams(f.stem ? { bundled: f.stem } : { formula: f.src });
+  if (f.name && !f.stem) q.set('name', f.name);
   for (const k of 'abc') if (f[k] != null && moved(ctl, f, k)) q.set(k, +(+f[k]).toFixed(2));
   return base + '#' + q;
 }
@@ -28,11 +30,13 @@ const moved = (ctl, f, k) => {
 // formula can have (`cut` says the source was), the values as numbers
 // (`fit` holds them to the formula's ranges), `has` whether there was a
 // formula at all.
+// `bundled`: a bundled one's name (`#bundled=<stem>`, no source in the link).
 export function parse(s) {
   const q = new URLSearchParams(s.replace(/^#/, '')), src = q.get('formula') || '', name = q.get('name') || 'Shared formula';
   const f = { name: name.slice(0, MAX_NAME), src: src.slice(0, MAX_SRC) };
   for (const k of 'abc') if (num(q.get(k)) != null) f[k] = num(q.get(k));
-  return { f, cut: f.src !== src, has: q.has('formula') };
+  const b = /^[a-z0-9-]{1,40}$/.test(q.get('bundled') || '') ? q.get('bundled') : null;
+  return { f, cut: f.src !== src, has: q.has('formula') || !!b, bundled: b };
 }
 // Text for a declaration's quotes (`name`, `about`, a label): without `" <
 // > \`, control characters or ones that hide or reorder text (the compiler
@@ -73,11 +77,18 @@ export function compact(src) {
 // The panel's path for a formula (fx_psi's `@formula?src=…`; what Show on
 // panel, a playlist line and the look send): compact(src) lightly encoded
 // (a space is `+`; `% & + # ?`, controls and non-ASCII as %XX), then the
-// values worth sending (`moved`). Over the panel's 2,048 B its `about` line
+// values worth sending (`vals`). Over the panel's 6,144 B its `about` line
 // is left out first (psi-web's tests hold this to the compiler's compact).
+// Playlists and the look name a Formula instead (js/fstore.js `line`).
+export const MAX_PATH = 6144;
 export function path(f, ctl) {
   let c = compact(f.src), p = enc(c);
-  if (p.length > 2048) p = enc(noAbout(c));
+  if (p.length > MAX_PATH) p = enc(noAbout(c));
+  return p + vals(f, ctl);
+}
+// `&a=0.5&b=1`: the values that differ from their declared defaults.
+export function vals(f, ctl) {
+  let p = '';
   for (const k of 'abc') if (f[k] != null && moved(ctl, f, k)) p += `&${k}=${+(+f[k]).toFixed(4)}`;
   return p;
 }

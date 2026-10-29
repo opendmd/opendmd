@@ -31,7 +31,7 @@ every Formula OpenDMD has made (tunnels, rotozooms, plasma, fire, rain,
 clocks and more) and the ones people have shared. Open one there and
 press **Open on my display**: it opens in your panel's editor, where you
 can play it, add it to a playlist or save it (it is then under *Your
-formulas* in that browser).
+formulas*).
 
 **Big clock** shows what a GIF can't do: it draws
 the real time in big rainbow digits, with a bar along the bottom that
@@ -56,8 +56,16 @@ playlist moves on. **Add to playlist…** puts it in one of your playlists
 (the same list of playlists the Library offers), where the player draws it
 itself: it follows the clock, loops for as long as it plays and takes a
 line of the playlist, not the space of a GIF. The playlist shows it by its
-name, marked *Formula*, and so does Now while it plays. It goes in as it is
-at that moment, sliders included; change it later and add it again. (In
+name, marked *Formula*, and so does Now while it plays. A bundled one goes
+in by its name; one of yours is saved first, and the playlist plays it as
+saved, with the sliders as they were when you added it: save a change and
+the playlist plays the change.
+
+**Your formulas** are kept on the panel when it has a card, so every
+browser that opens it sees them, and a Formula can be as long as you like
+(comments and all). Formulas you had saved in this browser before go onto
+the panel the first time you open Formulas there. In the online demo, or
+on a panel without a card, they are kept in the browser. (In
 the online demo, Now's preview skips Formulas in a playlist: only a player
 draws them there.) Formulas that draw over a GIF have their own section,
 [Over a GIF](#over-a-gif).
@@ -85,8 +93,9 @@ written and change it.
 
 Starfield, Wireframe cube, Tunnel and the Rotozoom floor ask for 100 frames
 a second (`fps 100`). The older `@fx:tunnel` and the other built-in effect
-paths are gone: a playlist line that has one is skipped, and a Formula is
-played or put in a playlist as `@formula?src=…`.
+paths are gone: a playlist line that has one is skipped. A bundled Formula
+is played or put in a playlist by its name (`@formula:endless-road`), one
+of yours by its place on the panel (see the [API](../api.md#post-apiplay)).
 
 For Tunnel and the others to be on the panel's Follow RePlayOS menus, make
 a playlist of the Formula and choose it as the attract playlist.

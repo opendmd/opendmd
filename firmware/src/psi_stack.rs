@@ -171,7 +171,7 @@ pub fn run_std_thread<T: Send>(f: impl FnOnce() -> T + Send) -> Option<T> {
 /// error, for what the check can't foresee (the network allocating on CPU0
 /// meanwhile).
 pub fn compile(src: &str, prog: &mut psi::Program) -> Result<psi::Info, psi::Error> {
-    if let Err(e) = compile_fits(src.len()) {
+    if let Err(e) = compile_fits(src) {
         prog.clear();
         return Err(e);
     }
@@ -184,15 +184,16 @@ pub fn compile(src: &str, prog: &mut psi::Program) -> Result<psi::Info, psi::Err
     })
 }
 
-/// Whether the heap can hold a compile of `len` bytes of source now: its
+/// Whether the heap can hold a compile of `src` now (counted by its tokens): its
 /// stack and task block, [`psi::compile_heap_estimate`], and
 /// [`config::PSI_COMPILE_RESERVE`] left over, with a largest block of
 /// [`config::PSI_COMPILE_BLOCK`].
-pub fn compile_fits(len: usize) -> Result<(), psi::Error> {
+pub fn compile_fits(src: &str) -> Result<(), psi::Error> {
     use crate::state::{free_heap, largest_free_block};
+    let len = src.len();
     let need = config::PSI_COMPILE_STACK
         + 512
-        + psi::compile_heap_estimate(len)
+        + psi::compile_heap_estimate(src)
         + config::PSI_COMPILE_RESERVE;
     let (free, block) = (free_heap() as usize, largest_free_block());
     if free >= need && block >= config::PSI_COMPILE_BLOCK {

@@ -30,7 +30,9 @@ async function route() {
   // A shared formula: the Formulas editor (js/formulas.js reads it, and
   // replaces the address once the editor has it).
   const f = location.hash.startsWith('#formula=') && (app.formula = location.hash.slice(1));
-  const [v, sub = ''] = f ? ['formulas', 'edit'] : location.hash.slice(1).split('/');
+  // A bundled one by name (`#bundled=<stem>`): its details, in Formulas.
+  if (location.hash.startsWith('#bundled=')) app.bundled = (await import('./js/psikit.js')).parse(location.hash);
+  const [v, sub = ''] = f ? ['formulas', 'edit'] : app.bundled ? ['formulas', ''] : location.hash.slice(1).split('/');
   const name = VIEWS.includes(v) ? v : 'now';
   if (name !== current) {
     if (shown) ready[shown]?.hide?.();

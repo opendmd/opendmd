@@ -126,7 +126,7 @@ impl Entry {
     pub fn from_path(path: &str) -> Entry {
         // A virtual file (`@clock`, `@text?msg=…`): what it shows is its
         // title; no category, no platform.
-        if crate::synth::is_virtual(path) {
+        if crate::synth::is_virtual(path) || crate::synth::formula_file(path).is_some() {
             return Entry {
                 path: path.to_string(),
                 category: None,
