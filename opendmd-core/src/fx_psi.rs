@@ -891,6 +891,24 @@ impl PsiFx {
         // compares as the VM's does.
         let compare = !old() && (self.full < FULL_RUN || self.uncompared >= RECHECK);
         let mut changed = [0u32; psi::H];
+        // A `rate` formula with its slow layers held: the slow rows due
+        // first (the VM's, for the kernel's frames and the VM's alike).
+        // Timed apart: the trial times the rest (the part kernel and VM
+        // draw differently), and the governor counts slow rows beyond a
+        // band's at a band's share — on a slower grid more bands are due a
+        // frame, and that must not hold the formula there.
+        let mut slow_us = 0u32;
+        let mut slow_fair = 0u32;
+        if let (Some(h), Some(band)) = (self.held.as_deref_mut(), self.prog.rate_rows()) {
+            let ta = clock.map_or(0, |c| c());
+            let rows = h.update::<LANES>(&self.prog, &mut self.scratch, &self.inputs, &tables());
+            slow_us = clock.map_or(0, |c| c()).wrapping_sub(ta);
+            slow_fair = if band > 0 && rows > band {
+                (u64::from(slow_us) * u64::from(band) / u64::from(rows)) as u32
+            } else {
+                slow_us
+            };
+        }
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         let (trial, t1) = (self.jit.trialing(), clock.map_or(0, |c| c()));
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
@@ -898,16 +916,17 @@ impl PsiFx {
         #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
         let drawn = false;
         if drawn {
-        } else if let Some(h) = self.held.as_deref_mut() {
-            // A `rate` formula: the slow rows due, then the rest over them.
-            psi::render_held::<LANES>(
+        } else if let Some(h) = self.held.as_deref().filter(|_| self.prog.rate().is_some()) {
+            // A `rate` formula: the rest over the slow rows held.
+            psi::render_fast::<LANES>(
                 &self.prog,
                 &mut self.scratch,
                 self.ink.as_deref_mut(),
                 Some(&mut self.still),
-                h,
                 &self.inputs,
                 &tables(),
+                Some(h.picture()),
+                u32::MAX,
                 bytes,
                 compare.then_some(&mut changed),
             );
@@ -972,7 +991,7 @@ impl PsiFx {
         let Some(c) = clock else {
             return self.delay();
         };
-        if self.gov.observe(c().wrapping_sub(t0), grid) {
+        if self.gov.observe(c().wrapping_sub(t0).wrapping_sub(slow_us).wrapping_add(slow_fair), grid) {
             log::info!(
                 "formula: {} us a frame -> {} ms frames (asked {grid})",
                 self.gov.avg_us(),
@@ -980,6 +999,10 @@ impl PsiFx {
             );
         }
         let ms = self.gov.delay_ms(grid);
+        #[cfg(feature = "psi-stats")]
+        if self.prog.rate().is_some() && ms > grid {
+            RATE_FRAMES[3].fetch_add(1, Ordering::Relaxed);
+        }
         STATS[0].store(self.gov.avg_us(), Ordering::Relaxed);
         STATS[1].store(ms << 16 | grid, Ordering::Relaxed);
         Duration::from_millis(u64::from(ms))
@@ -988,9 +1011,10 @@ impl PsiFx {
 
 /// psi-probe's counts of a `rate` formula's frames (feature `psi-stats`):
 /// drawn with the held picture, drawn by the kernel, drawn without the
-/// held picture (from nothing).
+/// held picture (from nothing), held longer than the asked grid by the
+/// governor.
 #[cfg(feature = "psi-stats")]
-pub static RATE_FRAMES: [std::sync::atomic::AtomicU32; 3] = [const { std::sync::atomic::AtomicU32::new(0) }; 3];
+pub static RATE_FRAMES: [std::sync::atomic::AtomicU32; 4] = [const { std::sync::atomic::AtomicU32::new(0) }; 4];
 
 /// psi-probe's switch (feature `psi-stats`): a Formula's frames as before
 /// console-a's Phase A (no compare; every pixel marked, a look's redrawn
@@ -1853,13 +1877,8 @@ mod jit {
             let Some(k) = self.jit.kernel_for(0, &self.prog) else {
                 return false;
             };
-            let under = match self.held.as_deref_mut() {
-                Some(h) if rate => {
-                    h.update::<{ super::LANES }>(&self.prog, &mut self.scratch, &self.inputs, &tables());
-                    Some(h.picture())
-                }
-                _ => None,
-            };
+            // (Its slow rows are already brought up to date: `render`.)
+            let under = self.held.as_deref().filter(|_| rate).map(|h| h.picture());
             // (False when the inputs were out of range and the VM drew it:
             // a trial frame counted as the VM's — Fable's review.)
             k.render(

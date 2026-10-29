@@ -1091,6 +1091,23 @@ impl Program {
         (re.min(pe)..pe).find(|&k| self.ops[k].code == code::SLOW)
     }
 
+    /// The rows of the slow layers a frame redraws in steady play at its
+    /// grid: a band's (`ceil(32/N)`) when they read `t`, else none (they
+    /// are redrawn when what they read changes). `None` without `rate`.
+    /// The player's governor counts the slow rows a frame drew beyond this
+    /// (a slower grid has more bands due a frame) at this share, so a
+    /// slower grid does not look dearer a frame than the faster one.
+    pub fn rate_rows(&self) -> Option<u32> {
+        self.slow_marker().map(|m| {
+            let op = &self.ops[m];
+            if op.c & crate::rate::READS_T != 0 {
+                (H as u32).div_ceil(u32::from(op.d.max(1)))
+            } else {
+                0
+            }
+        })
+    }
+
     /// The first pixel step after the slow layers' (`layer rate N`: they
     /// are laid out first, after their marker; `row_end` without them).
     pub(crate) fn fast_start(&self) -> usize {
