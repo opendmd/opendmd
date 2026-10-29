@@ -25,6 +25,9 @@ const JUNK: u32 = 0xdead_beef;
 
 pub(crate) struct Emu {
     code: Vec<u8>,
+    /// The running function's reserved top of frame, `[top - 32, top)`
+    /// (its window's save areas): a kernel store there panics.
+    reserved: Option<(u32, u32)>,
     /// Host regions: (address, length); region k is at `(k + 1) << 20`.
     regions: Vec<(usize, usize)>,
     stack: Vec<u8>,
@@ -42,6 +45,7 @@ impl Emu {
     pub fn new(code: &[u8]) -> Emu {
         Emu {
             code: code.to_vec(),
+            reserved: None,
             regions: Vec::new(),
             stack: vec![0; STACK_LEN],
             steps: 0,
@@ -99,6 +103,12 @@ impl Emu {
     }
 
     fn st(&mut self, a: u32, n: usize, v: u32) {
+        if let Some((lo, hi)) = self.reserved {
+            assert!(
+                a + n as u32 <= lo || a >= hi,
+                "a store into the frame's save areas at {a:#x} ([{lo:#x}, {hi:#x}): a window spill keeps the caller's caller's registers there)"
+            );
+        }
         assert!(
             (a as usize).is_multiple_of(n),
             "misaligned {n}-byte store at {a:#x}"
@@ -114,15 +124,21 @@ impl Emu {
 
     /// Run the kernel once: `(ctx, out)` in a2, a3.
     pub fn call(&mut self, ctx: u32, out: u32) {
+        self.call_at(0, ctx, out)
+    }
+
+    /// Run the function at `start` once, (a2, a3) its arguments.
+    pub fn call_at(&mut self, start: usize, ctx: u32, out: u32) {
         let mut a = [0u32; 16];
         a[0] = RETURN;
         a[1] = STACK + STACK_LEN as u32;
         a[2] = ctx;
         a[3] = out;
         let mut sar: u32 = JUNK;
-        let mut pc: usize = 0;
+        let mut pc: usize = start;
         let mut sp_set = false;
         let mut sp = 0;
+        let mut frame_top = 0u32;
         loop {
             self.steps += 1;
             assert!(self.steps < 2_000_000_000, "the kernel ran away");
@@ -186,6 +202,18 @@ impl Emu {
                             for k in [8, 9, 11, 12, 13, 14, 15] {
                                 a[k] = JUNK ^ (k as u32);
                             }
+                            // A window overflow while the helper runs may
+                            // spill this frame's a4..a7 into its top
+                            // [frame-32, frame-16) and its caller's caller's
+                            // a0..a3 into [frame-16, frame): a kernel must
+                            // keep nothing there (jit2-a on the emulator: a
+                            // slot at 64 of an 80 B frame took Kernel::check's
+                            // return address).
+                            self.reserved = None;
+                            for o in (frame_top - 32..frame_top).step_by(4) {
+                                self.st(o, 4, JUNK ^ o);
+                            }
+                            self.reserved = Some((frame_top - 32, frame_top));
                             a[10] = v;
                             sar = JUNK;
                         }
@@ -283,12 +311,14 @@ impl Emu {
                         }
                         _ => match m {
                             0 => {
-                                assert!(!sp_set && pc == 0 && s == 1, "entry not first");
+                                assert!(!sp_set && pc == start && s == 1, "entry not first");
                                 let frame = (w >> 12) << 3;
                                 assert!(frame >= 16 && frame as usize <= STACK_LEN);
+                                frame_top = a[1];
                                 a[1] -= frame;
                                 sp = a[1];
                                 sp_set = true;
+                                self.reserved = Some((frame_top - 32, frame_top));
                             }
                             2 | 3 => {
                                 let c = B4CONSTU[r_];
@@ -352,6 +382,12 @@ impl Target for EmuTarget {
         let c = self.emu.map(ctx.as_mut_ptr() as *const u8, ctx.len() * 4);
         let o = self.emu.map(out, 128 * 3);
         self.emu.call(c, o);
+    }
+
+    fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32) {
+        let c = self.emu.map(ctx.as_mut_ptr() as *const u8, ctx.len() * 4);
+        let s = self.emu.map(sc as *const u8, crate::program::MAX_SCALARS * 4);
+        self.emu.call_at(at, c, s);
     }
 }
 

@@ -922,10 +922,11 @@ emu-card:
 EMU_SMOKE_IMAGE = $(EMU_DIR)/smoke/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-smoke:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/smoke/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/smoke/dist/opendmd-*-4mb-app.bin
 	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_TARGET_DIR=$(EMU_DIR)/smoke/target DIST=$(EMU_DIR)/smoke/dist UPDATER_BUILD=$(EMU_DIR)/updater
 emu-smoke: emu-build emu-card
-	@$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke;) \
-	uv run --quiet tools/emu/run.py smoke --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(EMU_ARGS)
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke &&) \
+	uv run --quiet tools/emu/run.py smoke --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)
 
 # A psi-probe image (the psi-probe feature alone, never `probe`; a probe app
 # is bigger, hence the smaller spare (EMU_PROBE_SPARE, 8 KB: 12 KB was left at beta.11)) to $(EMU_DIR)/probe/. FW_IMAGE=... skips the build.
@@ -933,7 +934,8 @@ EMU_PROBE_SPARE ?= 8192
 EMU_PROBE_IMAGE = $(EMU_DIR)/probe/dist/opendmd-$(FW_VERSION)-4mb-full.bin
 emu-image-probe:
 	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	rm -f $(EMU_DIR)/probe/dist/opendmd-*-4mb-full.bin $(EMU_DIR)/probe/dist/opendmd-*-4mb-app.bin
 	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=psi-probe FW_APP_SPARE=$(EMU_PROBE_SPARE) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/probe/target DIST=$(EMU_DIR)/probe/dist UPDATER_BUILD=$(EMU_DIR)/updater
 emu-probe: emu-build emu-card
-	@$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-probe;) \
-	uv run --quiet tools/emu/run.py probe --image $(or $(FW_IMAGE),$(EMU_PROBE_IMAGE)) $(EMU_ARGS)
+	@start=$$(date +%s) && $(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-probe &&) \
+	uv run --quiet tools/emu/run.py probe --image $(or $(FW_IMAGE),$(EMU_PROBE_IMAGE)) $(if $(FW_IMAGE),,--built-after $$start) $(EMU_ARGS)

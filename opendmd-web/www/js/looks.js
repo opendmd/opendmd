@@ -92,7 +92,7 @@ export function controls(id, change) {
       sel.title = only ? 'This Formula has layers of its own: it goes over the GIF' : '';
     },
     say(x) {
-      const t = x?.why || (x?.i?.[5] & 8 ? `On the panel it moves about ${x.i[6] > 8000 ? '25 times a second (a heavy look: lighter ones move at 50)' : '50 times a second'}` : '');
+      const t = x?.why || (x?.i?.[5] & 8 ? `On the panel it moves about ${(x.i[13] ?? x.i[6]) > 8000 ? '25 times a second (a heavy look: lighter ones move at 50)' : '50 times a second'}` : '');
       why.hidden = !t; why.textContent = t; why.classList.toggle('bad', !!x?.why);
     },
   };
