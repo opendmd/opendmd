@@ -1164,25 +1164,51 @@ def card_swap_checks(browser, base: str, errors: list[str]) -> None:
     try:
         get_json(base + f"/mock/card?id={other}")
         get_json(base + "/mock/io?reset=1")
-        # What the first card's store gave before the page learned of the swap
-        # is not a stale thumbnail (a row drawn again in that moment, the
-        # copy just stored, is as right as the rest of the screen: a loaded
-        # machine can have a status reply take a second): count the reads
-        # from the card event on.
-        page.evaluate("""async () => { const { on } = await import('./js/util.js'); const t = await import('./js/thumbs.js');
-            window.__cards = 0; window.__idbAtCard = null;
-            on('card', () => { window.__cards++; window.__idbAtCard = t.stats.idb; }); }""")
+        # What must not happen is the first card's thumbnail drawn once the
+        # page knows of the swap. Counting the thumbnails store reads
+        # (`stats.idb`) is not that: after the swap the new card's own store
+        # is read too (a row drawn again while its thumbnail is being stored;
+        # a read made while the store's write is open sees it), and on a loaded
+        # machine that overlap is common. So follow each decoded image to its
+        # source: a record read from the first card's store, or any image
+        # made before the card event, drawn after it, is a stale thumbnail.
+        page.evaluate("""async (first) => {
+            const { on } = await import('./js/util.js');
+            window.__cards = 0; window.__stale = [];
+            const t = await import('./js/thumbs.js'); let idb0 = null; window.__idbSince = () => t.stats.idb - idb0;
+            let armed = false; const made = new WeakMap();
+            const get = IDBObjectStore.prototype.get;
+            IDBObjectStore.prototype.get = function (k) {
+                const r = get.call(this, k), db = this.transaction.db.name;
+                r.addEventListener('success', () => { const s = r.result?.still; if (s && typeof s == 'object') try { s.__db = db; } catch {} });
+                return r;
+            };
+            const cib = window.createImageBitmap;
+            window.createImageBitmap = function (src, ...a) {
+                const was = armed;
+                return cib.call(this, src, ...a).then((bm) => { made.set(bm, { db: src?.__db, was }); return bm; });
+            };
+            const draw = CanvasRenderingContext2D.prototype.drawImage;
+            CanvasRenderingContext2D.prototype.drawImage = function (img, ...a) {
+                const m = armed && made.get(img);
+                if (m) {
+                    if (!m.was || m.db == 'odmd-thumbs-i' + first) window.__stale.push(m);
+                }
+                return draw.call(this, img, ...a);
+            };
+            on('card', () => { window.__cards++; armed = true; idb0 = t.stats.idb; });
+        }""", first)
         page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
         deadline = time.time() + 20
         while time.time() < deadline and get_json(base + "/mock/io")["gets"] < len(rows) - 2:
             page.wait_for_timeout(200)
         now = drawn(page)
         page.wait_for_timeout(500)
-        m, st = get_json(base + "/mock/io"), thumbs_stats(page)
-        at_card = page.evaluate("window.__idbAtCard")
-        check(m["gets"] >= len(now) - 2 and at_card is not None and st["idb"] == at_card and page.evaluate("window.__cards") == 1,
+        m = get_json(base + "/mock/io")
+        cards, stale, idb = page.evaluate("[window.__cards, window.__stale, window.__idbSince?.()]")
+        check(m["gets"] >= len(now) - 2 and cards == 1 and not stale,
               f"card swap: another card's thumbnails fetched afresh, none of the first card's shown ({m['gets']} requests for {len(now)} rows, "
-              f"{st['idb'] - (at_card or 0)} from a store after the card event, {page.evaluate('window.__cards')} card events)")
+              f"{len(stale)} stale images drawn after the card event, {idb} reads of the new card's own store after it, {cards} card events)")
         check(stores() == sorted([f"odmd-thumbs-i{first}", f"odmd-thumbs-i{other}"]), f"card swap: one store per card ({stores()})")
         keys = page.evaluate("Object.keys(localStorage).filter((k) => k.startsWith('odmd.lib.n')).sort()")
         check(keys == sorted([f"odmd.lib.n.i{first}", f"odmd.lib.n.i{other}"]), f"card swap: folder counts kept per card ({keys})")
