@@ -1,23 +1,26 @@
-//! Check a candidate formula the way a person (or a model) writing one would
-//! want: does it compile — and if not, the sentence, the line and carets —,
-//! how heavy it is for the panel, what it reads, and a PNG contact sheet of
-//! its frames. The feedback loop `docs/psi-for-models.md` describes.
+//! `psi check`: does a candidate Formula compile — and if not, its error's
+//! code, the line, the column and carets —, how heavy it is for the panel
+//! (on the VM and compiled by the panel's JIT), what it takes to compile
+//! on the panel, how long it is as a path, what it reads, and a PNG
+//! contact sheet of its frames. The feedback loop `docs/psi-for-models.md`
+//! describes (it was opendmd-psi's `psi-check` example).
 //!
+//!     psi check my.psi [--frames 8 --out my.png --a 0.5]
 //!     make psi-check F=my.psi [ARGS="--frames 8 --out my.png --a 0.5"]
-//!     cargo run --release --example psi-check -- my.psi --out my.png
-//!     echo 'gray(x)' | cargo run --release --example psi-check -- -
+//!     echo 'gray(x)' | psi check -
 //!
 //! Options: `--out FILE.png` (default: the formula's name with .png, or
 //! `formula.png` from stdin; `--out -` for none), `--frames N` (8, spread
 //! over one loop; a still formula gets 1), `--ms 0,250,…` (exact times
 //! instead), `--scale K` (4), `--a`/`--b`/`--c V` (the sliders; default a
-//! `control` line's default, 0.5 for one read without), `--clock HH:MM:SS` (10:09:30), `--over` (draw over the
-//! sample picture even if the formula doesn't read it; it is used anyway
-//! whenever it does), `--hash` (each frame's FNV-1a, as the golden tests
-//! print them), `--listing` (the compiled steps), `--seed V` (a `loop
-//! forever` formula's `seed`, 0 to 1; default 0). A formula that never
-//! repeats (`loop forever`) gets its frames over its first minute. Exit
-//! status 1 when it doesn't compile.
+//! `control` line's default, 0.5 for one read without), `--clock HH:MM:SS`
+//! (10:09:30), `--over` (draw over the sample picture even if the formula
+//! doesn't read it; it is used anyway whenever it does), `--hash` (each
+//! frame's FNV-1a, as the golden tests print them), `--listing` (the
+//! compiled steps), `--seed V` (a `loop forever` formula's `seed`, 0 to 1;
+//! default 0). A formula that never repeats (`loop forever`) gets its
+//! frames over its first minute. Exit status 1 when it doesn't compile, 2
+//! for a missing file or a bad option.
 
 use opendmd_psi::golden::fnv;
 use opendmd_psi::{
@@ -26,8 +29,10 @@ use opendmd_psi::{
 };
 use std::io::Read;
 
-fn main() {
-    let mut args = std::env::args().skip(1);
+const USAGE: &str = "psi check FILE.psi|- [--out FILE.png|-] [--frames N] [--ms 0,250,…] [--scale K] [--a V] [--b V] [--c V] [--clock HH:MM:SS] [--over] [--hash] [--listing] [--seed V]";
+
+pub fn run(args: Vec<String>) -> i32 {
+    let mut args = args.into_iter();
     let (mut path, mut out, mut frames, mut scale) =
         (None::<String>, None::<String>, 8usize, 4usize);
     let (mut ms_list, mut over, mut hash, mut listing) = (None::<Vec<u32>>, false, false, false);
@@ -71,33 +76,21 @@ fn main() {
             "--hash" => hash = true,
             "--listing" => listing = true,
             "-h" | "--help" => {
-                println!("psi-check FILE.psi|- [--out FILE.png|-] [--frames N] [--ms 0,250,…] [--scale K] [--a V] [--b V] [--c V] [--clock HH:MM:SS] [--over] [--hash] [--listing] [--seed V]");
-                return;
+                println!("{USAGE}");
+                return 0;
             }
             _ if path.is_none() => path = Some(a),
             _ => die(&format!("unknown option {a}")),
         }
     }
     let path = path.unwrap_or_else(|| die("which formula? (a .psi file, or - for stdin)"));
-    let src = if path == "-" {
-        let mut s = String::new();
-        std::io::stdin()
-            .read_to_string(&mut s)
-            .unwrap_or_else(|e| die(&e.to_string()));
-        s
-    } else {
-        std::fs::read_to_string(&path).unwrap_or_else(|e| die(&format!("{path}: {e}")))
-    };
+    let src = read(&path);
 
     let prog = match compile(&src) {
         Ok(p) => p,
         Err(e) => {
-            let (line, col) = e.line_col(&src);
-            let r = e.render(&src);
-            // render() starts "line N: msg"; say the column too.
-            let rest = r.split_once('\n').map_or("", |x| x.1);
-            println!("error: line {line}, column {col}: {}\n{rest}", e.msg);
-            std::process::exit(1);
+            print!("{}", crate::render_error(&e, &src));
+            return 1;
         }
     };
 
@@ -196,6 +189,45 @@ fn main() {
     println!(
         "panel: ~{:.1} ms a frame: {rating} (light ≤ 5 ms, medium ≤ 8 ms; GIF looks take ≤ 12 ms)",
         us as f64 / 1000.0
+    );
+    // The panel's JIT (pixel and row stages compiled; never slower: the
+    // player keeps whichever draws faster). The limits stay the VM's.
+    let jit = prog.esp32_us_jit_still();
+    if jit < us {
+        println!(
+            "compiled: ~{:.1} ms a frame with the panel's JIT (the VM's ~{:.1} ms is what the limits count)",
+            jit as f64 / 1000.0,
+            us as f64 / 1000.0
+        );
+    } else {
+        println!("compiled: no faster with the panel's JIT (it draws on the VM)");
+    }
+    // What compiling it takes on the panel: the compiler's heap at its peak
+    // (by tokens), and what the panel asks to have free first.
+    let heap = opendmd_psi::compile_heap_estimate(&src);
+    let asks = PANEL_COMPILE_STACK + 512 + heap + PANEL_COMPILE_RESERVE;
+    let tokens = opendmd_psi::syntax::tokens(&src).map_or(0, |t| t.len());
+    println!(
+        "compile: {} tokens, ~{:.1} KB of heap; the panel asks for ~{:.1} KB free first ({}about {} KB is free between items)",
+        n(tokens),
+        heap as f64 / 1024.0,
+        asks as f64 / 1024.0,
+        if asks > PANEL_FREE { "more than it has: " } else { "" },
+        PANEL_FREE / 1024
+    );
+    // How long it is, each way it travels.
+    let kept = kept_on_panel(&src);
+    let p = path_len(&opendmd_psi::compact(&src));
+    println!(
+        "length: {} B as written ({} at most), {} B as the panel keeps it saved ({} at most), {} B as a path (@formula?src=…: {} to show it, {} for an inline look){}",
+        n(src.len()),
+        n(opendmd_psi::MAX_SOURCE),
+        n(kept),
+        n(MAX_FORMULA_SOURCE),
+        n(p),
+        n(MAX_PATH),
+        n(MAX_LOOK_PATH),
+        if src.len() > GALLERY_MAX { format!("; over the gallery's {} B", n(GALLERY_MAX)) } else { String::new() }
     );
     if prog.still_lanes() > 0 {
         println!(
@@ -337,11 +369,70 @@ fn main() {
             }
         );
     }
+    0
 }
 
 fn die(msg: &str) -> ! {
-    eprintln!("psi-check: {msg}");
+    eprintln!("psi check: {msg}");
     std::process::exit(2)
+}
+
+/// `16384` as `16,384`.
+fn n(v: usize) -> String {
+    let s = v.to_string();
+    let mut o = String::new();
+    for (k, c) in s.chars().enumerate() {
+        if k > 0 && (s.len() - k).is_multiple_of(3) {
+            o.push(',');
+        }
+        o.push(c);
+    }
+    o
+}
+
+/// The file, or stdin for `-`.
+pub fn read(path: &str) -> String {
+    if path == "-" {
+        let mut s = String::new();
+        std::io::stdin()
+            .read_to_string(&mut s)
+            .unwrap_or_else(|e| die(&e.to_string()));
+        s
+    } else {
+        std::fs::read_to_string(path).unwrap_or_else(|e| die(&format!("{path}: {e}")))
+    }
+}
+
+// The panel's numbers (firmware/src/config.rs, opendmd-core/src/synth.rs,
+// js/psikit.js, opendmd-gallery): what `psi check` measures a Formula
+// against. `PANEL_FREE` is the heap measured free between items on the
+// DevKit (CLAUDE.md, "The compiler's heap").
+const PANEL_COMPILE_STACK: usize = 12 * 1024;
+const PANEL_COMPILE_RESERVE: usize = 6 * 1024;
+const PANEL_FREE: usize = 63 * 1024;
+const MAX_FORMULA_SOURCE: usize = 8192;
+const MAX_LOOK_PATH: usize = 2048;
+const MAX_PATH: usize = 6144;
+const GALLERY_MAX: usize = 4096;
+
+/// What the panel keeps of a saved Formula (opendmd-core `fx_psi::read_text`):
+/// its lines trimmed, blank and comment-only ones left out.
+fn kept_on_panel(src: &str) -> usize {
+    src.lines()
+        .map(str::trim)
+        .filter(|l| !(l.is_empty() || l.starts_with("--") || l.starts_with("//")))
+        .map(|l| l.len() + 1)
+        .sum()
+}
+
+/// `@formula?src=` and the compacted text as js/psikit.js `enc` writes it:
+/// a space `+`; `% & + # ?`, controls and non-ASCII as %XX.
+fn path_len(compact: &str) -> usize {
+    "@formula?src=".len()
+        + compact
+            .bytes()
+            .map(|b| if b == b' ' || (b > 32 && b < 127 && !b"%&+#?".contains(&b)) { 1 } else { 3 })
+            .sum::<usize>()
 }
 
 fn q(v: f64) -> i32 {

@@ -195,6 +195,7 @@ A formula is a few lines: names you set (`wave = …`, each name once), and a
 colour on the last line. It is worked out for every pixel, every frame.
 `--` starts a comment. Everything is a number; there are no loops, lists or
 words (a single character in quotes, `'A'`, is a number too: its code).
+The [language reference](../psi-spec.md) has all of it in one place.
 
 **Values**
 
@@ -246,8 +247,8 @@ counts up). `pick` chooses which character goes where:
 `glyph(pick(floor(px/5), 'H', 'I'), px % 5, ty)` writes HI in the top
 left, and nothing after it. Add `small` for the smaller font, 4 by 6 (digits 3 by 5):
 `digit(n, col, row, small)`, or `bold` for chunky 3 by 5 digits (digits
-only): `digit(n, col, row, bold)`. **Big clock** is made this way, in
-`bold`.
+only): `digit(n, col, row, bold)`; `normal`, the panel's own font, is
+what you get without one. **Big clock** is made this way, in `bold`.
 
 Operators: `+ - * / %`, comparisons `< <= > >= == !=` (1 for true, 0 for
 false), and `and`, `or`, `not`. There is no power operator: write `x * x`.

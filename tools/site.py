@@ -18,7 +18,9 @@
                reads)
 - /guide/      the user guide (docs/guide/)
 - /dev/        the developer pages: an overview and a few clean references
-               (the detailed notes in docs/ stay in the repo)
+               (the detailed notes in docs/ stay in the repo), among them
+               /dev/psi/, the Psi language reference (docs/psi-spec.md:
+               its tables and error codes generated from the compiler's)
 - /demo/       the web app with the demo card (tools/demo-card.py) beside it:
                with no player answering, it loads demo/index.json and plays
                that card in the browser (js/source.js, demoCard)
@@ -107,6 +109,7 @@ PAGES = {
     "docs/guide/troubleshooting.md": "guide/troubleshooting.html",
     "docs/developers.md": "dev/index.html",
     "docs/api.md": "dev/api.html",
+    "docs/psi-spec.md": "dev/psi/index.html",
     "docs/simulator.md": "dev/simulator.html",
     "hardware/PINOUT.md": "dev/pinout.html",
 }
@@ -147,6 +150,7 @@ MENU = [
     (None, "For developers"),
     ("Building from source", "dev/index.html"),
     ("HTTP API", "dev/api.html"),
+    ("Psi language", "dev/psi/index.html"),
     ("The simulator", "dev/simulator.html"),
     ("Hardware pinout", "dev/pinout.html"),
 ]
