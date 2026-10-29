@@ -291,6 +291,8 @@ pub(crate) fn frame<T: Target>(
             vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
         }
     }
+    #[cfg(feature = "stats")]
+    clk.lap(stats::FRAME);
     // The draw stage, as the VM runs it: on a full call only (a call for
     // some rows reads the canvas the last full one left).
     let ink: Option<&Ink> = match ink {
@@ -356,7 +358,7 @@ pub(crate) fn frame<T: Target>(
         fill(t, low, ctx, &st, false);
     }
     #[cfg(feature = "stats")]
-    clk.lap(stats::FRAME);
+    clk.lap(stats::DRAW);
     for row in 0..H {
         if rows & (1 << row) == 0 {
             continue;
@@ -457,14 +459,8 @@ pub(crate) fn frame<T: Target>(
         t.run(ctx, d);
         if let Some(ch) = changed.as_deref_mut() {
             ch[row] = if track {
-                let mut m = 0u32;
-                for g in 0..W / 4 {
-                    // SAFETY: within the row (as above).
-                    let now = unsafe { core::slice::from_raw_parts(d.cast::<u32>().add(g * 3), 3) };
-                    let was = &before[g * 3..g * 3 + 3];
-                    m |= u32::from(now != was) << g;
-                }
-                m
+                // SAFETY: the row's W × 3 bytes at `d`, word-aligned.
+                unsafe { changed_groups(d.cast::<u32>(), &before) }
             } else {
                 u32::MAX
             };
@@ -476,6 +472,27 @@ pub(crate) fn frame<T: Target>(
     if let Cache::Keep(st, _) = cache {
         st.kept = crate::still::fingerprint(prog);
     }
+}
+
+/// Which 4-pixel groups of a row differ from `before` (bit g: pixels
+/// 4g..4g + 4, three words each), a word at a time as `vm::Rows::finish`
+/// does. (jit2-b: a slice compare a group cost the player's kernel frames
+/// ~0.5-0.8 ms, the floor's kernel lost its trial to the VM by it.)
+///
+/// # Safety
+/// `now` points at W × 3 / 4 readable words.
+#[inline(never)]
+unsafe fn changed_groups(now: *const u32, before: &[u32; W * 3 / 4]) -> u32 {
+    let mut m = 0;
+    let mut now = now;
+    let mut was = before.as_ptr();
+    for g in 0..W / 4 {
+        let d = (*was ^ *now) | (*was.add(1) ^ *now.add(1)) | (*was.add(2) ^ *now.add(2));
+        m |= u32::from(d != 0) << g;
+        now = now.add(3);
+        was = was.add(3);
+    }
+    m
 }
 
 /// psi-probe's split of the JIT's frames (the `stats` feature): cycles in
@@ -490,14 +507,17 @@ pub mod stats {
     pub const PRE: usize = 2;
     pub const FILL: usize = 3;
     pub const KERNEL: usize = 4;
-    pub const NAMES: [&str; 5] = [
+    /// The draw stage, and the frame's words and the still cache's choice.
+    pub const DRAW: usize = 5;
+    pub const NAMES: [&str; 6] = [
         "frame steps",
         "row steps",
         "column/still runs",
         "words",
         "kernel",
+        "draw stage and frame words",
     ];
-    pub static CYCLES: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
+    pub static CYCLES: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
     pub static FRAMES: AtomicU32 = AtomicU32::new(0);
 
     pub(crate) struct Clock(u32);
@@ -524,7 +544,7 @@ pub mod stats {
     }
 
     /// The sums so far (cycles), and the frames; reset.
-    pub fn take() -> ([u32; 5], u32) {
+    pub fn take() -> ([u32; 6], u32) {
         (
             core::array::from_fn(|k| CYCLES[k].swap(0, Relaxed)),
             FRAMES.swap(0, Relaxed),
