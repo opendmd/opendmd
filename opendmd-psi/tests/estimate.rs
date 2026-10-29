@@ -149,3 +149,31 @@ fn the_jit_estimate_is_never_above_the_vms() {
     }
     assert!(n > 30);
 }
+
+/// The JIT's estimate against the spare's JIT frames (jit2-c): within
+/// ±20 % of each (the governor measures anyway; the estimate is the
+/// editor's label and the governor's first frame).
+#[test]
+fn the_jit_estimate_is_within_20_percent_of_the_device() {
+    let mut rows = Vec::new();
+    let mut bad = Vec::new();
+    let mut check = |name: String, est: u32, us: u32| {
+        let r = est as f64 / us as f64;
+        rows.push(format!("{name:<30} measured {us:>5} est {est:>5} ({:+.0} %)", (r - 1.0) * 100.0));
+        if !(0.8..=1.2).contains(&r) {
+            bad.push(name);
+        }
+    };
+    for &(name, src, us) in measured::JIT_EFFECTS {
+        let mut p = opendmd_psi::Program::default();
+        opendmd_psi::compile_into(src, &mut p).unwrap();
+        check(name.to_string(), p.esp32_us_jit_still(), us);
+    }
+    for &(name, src, blend, k, us) in measured::JIT_LOOKS {
+        let mut p = opendmd_psi::Program::default();
+        opendmd_psi::compile_into(&compose(src, blend, k).unwrap(), &mut p).unwrap();
+        check(format!("look {name} {blend} {k}"), p.esp32_us_jit(), us);
+    }
+    println!("{}", rows.join("\n"));
+    assert!(bad.is_empty(), "{bad:?}\n{}", rows.join("\n"));
+}
