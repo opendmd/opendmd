@@ -7,7 +7,7 @@ Correctness only, never timing; agents may run it freely.
 ```
 make emu-build     # fetch esp32sim at the pinned commit of our fork (the SD-SPI board is in it), cargo build --release (cached)
 make emu-smoke     # normal 4mb image + card: mount, panel up, httpd, www pack, GIFs start -> EMU_SMOKE_OK
-make emu-probe     # psi-probe image: wait for `psi-probe: done`, no `differ`, golden line -> EMU_PROBE_OK
+make emu-probe     # psi-probe image (8mb layout: the full probe outgrew the 4mb partition; EMU_PROBE_VARIANT=4mb for the DevKit one; run.py gives esp32sim --flash-mb from the image size): wait for `psi-probe: done`, no `differ`, golden line -> EMU_PROBE_OK
 make emu-smoke FW_IMAGE=/path/to/x-4mb-full.bin   # boot a given image instead of building one
 make emu-probe EMU_ARGS="--seconds 600 --wall 5400"
 ```

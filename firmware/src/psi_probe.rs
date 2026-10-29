@@ -44,30 +44,27 @@ use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Examples (opendmd-web/formulas/, as they were) timed as looks.
-const PLASMA_EX: &str = "loop 8\n-- three waves added together\nwave = sin(x*2 + t/8) + sin(y*1.5 - t/4) + sin(x*1.5 + y + t/8)\nhsv(wave/6 + t/8, 0.9, 1)";
-const FIRE_EX: &str = "loop 4\n-- curl bends the flames, more and more as they rise\ncurl = sin(y*1.5 - t)*0.25 + sin(y*3 - t*2 + x*4)*0.15\nflames = sin(x*6 + curl)*0.5 + sin(x*11 - curl)*0.5\nheat = (1 - y)*(1.6 + flames*0.7) - 0.5\npal(fire, clamp(heat, 0, 0.95))";
+/// Every bundled Formula (`-- bundle`), by file stem, comments left out (the
+/// play path compacts them anyway): one copy of each in the image, which the
+/// rows below look up rather than `include_str!` again. (Time-gate and
+/// Endless road are the roadprobe's pair; Endless road is also the
+/// psi-lang case for `loop forever`, a sprite and slot reuse.)
+const BUNDLED: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/bundled_formulas.rs"));
 
-/// The drawing examples (opendmd-web/formulas/, as they were), timed as effects.
-const STARFIELD_EX: &str = "loop 2.4\nfps 100\n-- Starfield: 192 stars flying at you, a pass through the field a loop,\n-- each a streak from where it was a moment ago\n-- a: streak length\nframe { back = 1 + 1/64 + (144 + a*240)/4096 }\ndraw {\n  for k < 192 {\n    sx = hash(k, 7)*32 - 16; sy = hash(k, 3)*8 - 4  -- where it is, across and up\n    near = frac(t/2.4 - hash(k, 11))          -- 0 far, 1 at you\n    s = 1/(65/64 - near); st = 1/(back - near)  -- perspective, now and a moment ago\n    hx = sx*s; hy = sy*s                      -- the head, from the middle\n    -- a head off the panel: the line moved far below it, where it is skipped\n    row = abs(hx) > 64 or abs(hy) > 16 ? -999 : 16\n    lit = near*near                           -- squared: far stars stay dark longer\n    line(64 + sx*st, row + sy*st, 64 + hx, row + hy, lit*0.2, lit)\n  }\n}\npal(ice, ink)";
-const TUNNEL_EX: &str = "loop 4.8\nfps 100\n-- Tunnel: the time warp. Each loop the walls turn once, travel two\n-- checker lengths, and the palette goes round once.\n-- From the vanishing point, the tunnel twice as tall as wide:\ndx = px - 63.5; dy = (15.5 - py)*2\n-- how far each pixel is from the black middle: 0 there (where the\n-- tunnel is deeper than 16), ~15 at the edges\n-- (this and `round` depend on the pixel alone: worked out once, kept)\nnear = 16 - min(128/len(dx, dy), 16)\n-- round the walls: 16 checker cells a turn, twisting with depth\ntwist = 1                              -- try 0 to 3\nround = atan2(dy, dx)*16 + (16 - near)*twist/8\n-- the checker, turning and travelling\nu = round + t/0.3; v = 16 + t/0.6 - near\ncell = (floor(u) + floor(v)) % 2\n-- lit by depth (full near, fading as a square, black in the middle) and\n-- by a light going round with the walls, in eight steps\nfade = min(near, 10)                    -- 10 near, to 0 where it turns black\nside = 0.0635 + 0.0159*cos(u/16)\nlight = floor(fade*fade*side + (near > 0))/8\npal(chrono, cell ? frac(0.711 + t/4.8) : frac(0.336 + t/4.8)) * light";
-const ROTOZOOM_EX: &str = "loop 9.6\n-- Rotozoom: Mode 7. A checker turning once a loop, its zoom breathing\n-- twice, gliding two checkers across and one down; under it a noise\n-- texture turning the other way twice as fast; rows and columns wobble.\n-- a: wobble = gentle, strong, off\nframe {\n  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn\n  s2 = -sin(t/4.8); c2 = cos(t/4.8)                -- the noise's, back twice\n  zoom = 2                                         -- try 1 to 4\n  sc = 1/((1 + sin(t/4.8)/2)*zoom*8)               -- checker cells a pixel\n  sc2 = sc*0.75\n  cu = t/0.6; cv = t/1.2                           -- the glide, in cells\n  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels\n}\ndx = px - 64; dy = 15 - py\n-- the wobble: rows slide sideways, columns up and down, on travelling waves\nwob = sin((31 - py)/32 + t/3.2)*amp\ncol = sin(px*0.0234375 - t/4.8)*amp\n-- where each pixel is on the checker: its column's part plus its row's\nu = (cu + cs*sc*dx) + (wob - sn*sc*dy)\nv = (cv + sn*sc*dx + col) + cs*sc*dy\ncell = (floor(u) + floor(v)) % 2\nu2 = (cv + c2*sc2*dx) + (wob - s2*sc2*dy)\nv2 = (cu + s2*sc2*dx + col) + c2*sc2*dy\npal(fire, (cell ? 0.44 : 0.19) + noise(u2, v2, 0)*0.6)";
-const ROTOZOOM_FLOOR_EX: &str = "loop 9.6\nfps 100\n-- Rotozoom floor: Mode 7 as a floor. A checker running away to a horizon\n-- at the top, turning once a loop and gliding, each row scaled by its\n-- distance and the far rows fogged; rows and columns wobble.\n-- a: wobble = gentle, strong, off\nframe {\n  sn = sin(t/9.6); cs = cos(t/9.6)                 -- the turn\n  zoom = 2                                         -- try 1 to 4\n  cu = t/0.6; cv = t/1.2                           -- the glide, in cells\n  amp = pick(floor(a*2 + 0.5), 3, 4.5, 0)/8        -- the wobble, in texels\n}\ndx = px - 64; ty = 31 - py\n-- a row's distance: checker cells a pixel, smaller further down\nrs = 1/((ty + 2)*zoom)\nwob = sin(ty/32 + t/3.2)*amp\ncol = sin(px*0.0234375 - t/4.8)*amp\n-- ahead by the row's distance, across by the pixel's\nu = cs*rs*dx + (cu + wob + sn*rs*64)\nv = sn*rs*dx + col + (cv - cs*rs*64)\ncell = (floor(u) + floor(v)) % 2\n-- the far rows fade into the fog (black at the horizon)\nfog = ty < 3 ? 0 : ty < 6 ? 0.375 : ty < 10 ? 0.625 : 1\npal(fire, cell ? 0.78 : 0.28) * fog";
-// psi-lang: `loop forever`, a sprite, slot reuse (opendmd-web/formulas/endless-road.psi).
-const ROAD_EX: &str = "loop forever\nfps 100\n-- Endless road: an OutRun drive into a synthwave sunset. Bends and hills\n-- come from noise along the distance driven, which grows without end, so\n-- the track doesn't repeat; each time it plays it starts somewhere else.\n-- The colours, 0 to 18: the mountains and the car's glass and tyres\n-- (0), the road's stripes (1, 2), the kerbs' (3, 4), the verge's (5, 6),\n-- the sun from the top down (7 to 9), the car's body and tail lights\n-- (10, 11), then the sky from the top down to the horizon (12 to 18)\npalette road = #000, #400032, #800064, #e4cf00, #f00, #3f0000, #7f0000,\n  #e4cf00, #ff7800, #ff2800, #bf0000, #ff5000,\n  #1478ff, #2850ff, #3c28ff, #5000ff, #7b00f2, #a700e4, #d300d6\n-- The car, from behind: body (4), glass and tyres (5), tail lights (6)\nsprite car {\n  key . 0, R 4, D 5, L 6\n  ........RRRRRRRRRR........\n  .......RDDDDDDDDDDR.......\n  ......RDDDDDDDDDDDDR......\n  ...RRRRRRRRRRRRRRRRRRRR...\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RLLLLRDDDDDDDDDDDDRLLLLR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  .RRRRRRRRRRRRRRRRRRRRRRRR.\n  DDDDDDDDDDDDDDDDDDDDDDDDDD\n}\n-- The mountains: 19 spans (row, from, to)\ntable MY = 19,19,19,20,20,20,21,21,21,22,22,22,23,23,23,24,24,25,26\ntable MA = -1,57,118,0,59,120,2,61,122,4,62,123,5,64,125,7,66,67,69\ntable MB = 17,83,134,16,81,132,14,79,130,12,78,129,11,76,127,9,74,73,71\n-- Road rows py 0 to 18: depth/2 in bends (ZH), depth in stripes (ZS),\n-- half width in pixels (HW); the sun's rows and half widths\ntable ZH = .0058,.0061,.0064,.0068,.0072,.0077,.0083,.009,.0098,.011,.012,.013,.015,.017,.02,.025,.032,.045,.075\ntable ZS = .77,.81,.86,.91,.97,1.03,1.11,1.2,1.3,1.43,1.58,1.76,2,2.31,2.73,3.33,4.29,6,10\ntable HW = 50.7,48.1,45.5,42.9,40.3,37.7,35.1,32.5,29.9,27.3,24.7,22.1,19.5,16.9,14.3,11.7,9.1,6.5,3.9\ntable UY = 20,21,23,24,25,26,27,28,29,30,31\ntable UC = 7.2,7.6,8,8,7.9,7.6,7.2,6.7,6,5,3.5\nframe {\n  u = t*0.15 + seed*1000                    -- distance driven, in bends\n  h0 = noise(u, 0, 0); h1 = noise(u + 0.03, 0, 0)    -- heading here, just ahead\n  v0 = noise(u, 5, 0)                       -- height here, and its slope\n  dv = (noise(u + 0.01, 5, 0) - v0)*100\n  cx = 50.5 + (h1 - h0)*80                  -- the car's left edge: it slides out in bends\n  mx = (0.5 - h0)*60; sunx = 64 + mx        -- the sky turns with the road\n}\ndraw {\n  for k < 19 {\n    my = MY[k]\n    line(MA[k] + mx, my, MB[k] + mx, my, .35)\n  }\n  for k < 11 {\n    uy = UY[k]; uc = UC[k]\n    line(sunx - uc, uy, sunx + uc, uy, .2)\n  }\n}\n-- each row looks ahead: how far the road bends there, and how far a hill\n-- lifts or hides it (a crest moves rows to where the road is out of sight)\nzp = ZH[py]\nun = u + zp\nq = py - clamp((noise(un, 5, 0) - v0 - zp*dv)*ZS[py]*200, -6, 2)\nhw = HW[q]\nalt = frac(t*10 + ZS[q]) < 0.5             -- light or dark stripe: 10 a second\nadx = abs(px - (64 + (noise(un, 0, 0) - h0)*2000))\n-- 0 road, 1 kerb, 2 verge or sky; drawn: 3 the sun, 5 the mountains,\n-- 4 to 6 the car\nm = max(max((adx >= hw) + (adx >= hw*1.2), ink*16), car[px - cx, ty - 23])\n-- its colour, i/18 for colour i: the stripes', the sky's and the sun's by row\npal(road, pick(m, (1 + alt)/18, (3 + alt)/18,\n                  (py < 19 ? 5 + alt : floor(28.44 - py*.515))/18,\n                  (py < 23 ? 9 : py < 27 ? 8 : 7)/18, 10/18, 0, 11/18))";
-const CUBE_EX: &str = "loop 4.8\nfps 100\n-- Wireframe cube: turning about two axes and swinging across; the near\n-- edges brighter. The colour is the last line's #40c0ff\n-- a: size\ntable V = -1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1\ntable E = 0,1, 1,2, 2,3, 3,0, 4,5, 5,6, 6,7, 7,4, 0,4, 1,5, 2,6, 3,7\nframe {\n  sa = sin(t/4.8); ca = cos(t/4.8); sb = sin(t/4.8 + 1/6); cb = cos(t/4.8 + 1/6)\n  size = 34 + a*28; mid = 64 + sa*40\n}\ndraw {\n  for e < 12 {\n    m = E[e*2]*3; n = E[e*2 + 1]*3            -- the edge's two corners\n    x0 = V[m]*size; y0 = V[m + 1]*size; z0 = V[m + 2]*size\n    x1 = V[n]*size; y1 = V[n + 1]*size; z1 = V[n + 2]*size\n    xa = x0*ca + z0*sa; za = z0*ca - x0*sa; ya = y0*cb - za*sb; zb = y0*sb + za*cb  -- turned\n    xc = x1*ca + z1*sa; zc = z1*ca - x1*sa; yc = y1*cb - zc*sb; zd = y1*sb + zc*cb\n    line(mid + xa*36/(zb + 128), 16 + ya*36/(zb + 128), mid + xc*36/(zd + 128), 16 + yc*36/(zd + 128),\n         clamp(0.594 - zb/148, 0.156, 1), clamp(0.594 - zd/148, 0.156, 1))\n  }\n}\n#40c0ff * ink";
+/// The examples that are not bundled (the drawing and plain ones the speed2
+/// and leak rows compile), likewise comment-free, from build.rs.
+const EXAMPLES: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/probe_examples.rs"));
 
-/// The bundled files as they ship (roadprobe: Endless road's cost on the
-/// panel, against Time gate's).
-const ROAD_FILE: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
-const TIME_GATE_FILE: &str = include_str!("../../opendmd-web/formulas/time-gate.psi");
+fn bundled_src(stem: &str) -> &'static str {
+    BUNDLED.iter().chain(EXAMPLES).find(|(n, _)| *n == stem).map_or("", |(_, s)| s)
+}
 
 /// Endless road as bundled (since road-life written tight: the matches
 /// below follow its spelling), without its
 /// row noises, and without those, the draw stage, the palette and pick
 /// (the rows' floor). roadprobe-a..c also timed the sprite car's version.
 fn road_variants() -> Vec<(&'static str, String)> {
-    let src = ROAD_FILE;
+    let src = bundled_src("endless-road");
     let rows = src.find("-- each row looks").unwrap_or(0);
     let draw = src.find("draw{").unwrap_or(rows);
     let no_noise = |s: &str| s.replace("noise(un,5,0)", "v0").replace("noise(un,0,0)", "h0");
@@ -261,10 +258,10 @@ fn road_probe(root: &str, start: Instant, stack0: u32) {
         effects(&[(name, src.as_str(), "")], "", &mut canvas);
         fx_psi::set_still_gate(Some(crate::still_gate));
     }
-    split("Endless road (bundled)", ROAD_FILE, true, &mut canvas);
-    effects(&[("Starfield", STARFIELD_EX, "a=0.5"), ("Time gate (bundled)", TIME_GATE_FILE, "")], "", &mut canvas);
+    split("Endless road (bundled)", bundled_src("endless-road"), true, &mut canvas);
+    effects(&[("Starfield", bundled_src("starfield"), "a=0.5"), ("Time gate (bundled)", bundled_src("time-gate"), "")], "", &mut canvas);
     fx_psi::set_still_gate(Some(crate::still_gate));
-    split("Time gate (bundled)", TIME_GATE_FILE, true, &mut canvas);
+    split("Time gate (bundled)", bundled_src("time-gate"), true, &mut canvas);
     fx_psi::set_still_gate(Some(crate::still_gate));
     say!(info,
         "{DONE}: roadprobe, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
@@ -369,7 +366,7 @@ fn fastdiv_any(seed: &mut u32) -> i32 {
     let (v, k) = (next(), next());
     let m = match k % 4 {
         0 => (v % (200 << 16)) as i32,
-        _ => (v >> (k >> 8) % 32) as i32,
+        _ => (v >> ((k >> 8) % 32)) as i32,
     };
     if k & 0x8000 == 0 {
         m
@@ -458,7 +455,8 @@ fn fastdiv_micro() {
         f64::from(best) / n as f64
     };
     type F<'a> = &'a dyn Fn(i32, i32) -> i32;
-    let rows: [(&str, F, F, &[i32], &[i32]); 8] = [
+    type Row<'a> = (&'a str, F<'a>, F<'a>, &'a [i32], &'a [i32]);
+    let rows: [Row; 8] = [
         ("div x/y (any)", &psi::fixed::div, &div_ref, &xs, &zs),
         ("div 128/len", &|_, d| psi::fixed::div(128 << 16, d), &|_, d| div_ref(128 << 16, d), &xs, &ds),
         ("div 1/v", &|a, _| psi::fixed::div(1 << 16, a), &|a, _| div_ref(1 << 16, a), &ys, &zs),
@@ -490,7 +488,7 @@ fn fastdiv_probe(start: Instant, stack0: u32) {
     // The effects first, while the heap is at its fullest (the still cache
     // wants a 16-32 KB block).
     let mut canvas = Canvas::new();
-    for (name, src) in [("Tunnel (bundled)", TUNNEL_FILE), ("Time gate (bundled)", TIME_GATE_FILE)] {
+    for (name, src) in [("Tunnel (bundled)", TUNNEL_FILE), ("Time gate (bundled)", bundled_src("time-gate"))] {
         effects(&[(name, src, "")], "", &mut canvas);
         fx_psi::set_still_gate(Some(crate::still_gate));
     }
@@ -705,19 +703,19 @@ fn console_probe(root: &str, start: Instant, stack0: u32) {
     fx_psi::set_still_gate(Some(crate::still_gate));
     let mut canvas = Canvas::new();
     let rows: [(&str, &str, &str); 6] = [
-        ("Endless road", ROAD_FILE, ""),
+        ("Endless road", bundled_src("endless-road"), ""),
         ("Starfield", STARFIELD_FILE, ""),
         ("Big clock", BIG_CLOCK_FILE, ""),
         ("Glitter", GLITTER_FILE, ""),
         ("Rotozoom floor", ROTOZOOM_FLOOR_FILE, ""),
-        ("Time gate", TIME_GATE_FILE, ""),
+        ("Time gate", bundled_src("time-gate"), ""),
     ];
     for (name, src, opts) in rows {
         console_row(name, src, opts, &mut canvas);
         fx_psi::set_still_gate(Some(crate::still_gate));
     }
     console_look(&mut canvas);
-    console_compare("Endless road", ROAD_FILE);
+    console_compare("Endless road", bundled_src("endless-road"));
     console_compare("Starfield", STARFIELD_FILE);
     say!(info,
         "{DONE}: consolea, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
@@ -1086,7 +1084,7 @@ fn heap_low(section: &str) -> bool {
 #[inline(never)]
 fn compile_leak() {
     let mut prog = zeroed::<psi::Program>();
-    let src = TUNNEL_EX;
+    let src = bundled_src("tunnel");
     for (how, n) in [("formula stack (task)", 200u32), ("old std thread", 50)] {
         std::thread::sleep(Duration::from_millis(50));
         let (h0, b0) = (heap(), crate::state::largest_free_block());
@@ -1165,14 +1163,14 @@ fn draw_way(
 fn speed2(out: &mut [u8]) {
     let (mut same, mut differ) = (0u32, 0u32);
     for (name, src) in [
-        ("Starfield", STARFIELD_EX),
-        ("Wireframe cube", CUBE_EX),
-        ("Tunnel", TUNNEL_EX),
-        ("Rotozoom", ROTOZOOM_EX),
-        ("Rotozoom floor", ROTOZOOM_FLOOR_EX),
-        ("Endless road", ROAD_EX),
-        ("Plasma", PLASMA_EX),
-        ("Fire", FIRE_EX),
+        ("Starfield", bundled_src("starfield")),
+        ("Wireframe cube", bundled_src("wireframe-cube")),
+        ("Tunnel", bundled_src("tunnel")),
+        ("Rotozoom", bundled_src("rotozoom")),
+        ("Rotozoom floor", bundled_src("rotozoom-floor")),
+        ("Endless road", bundled_src("endless-road")),
+        ("Plasma", bundled_src("plasma")),
+        ("Fire", bundled_src("fire")),
     ] {
         if heap_low("speed2") {
             break;
@@ -1233,10 +1231,9 @@ const BUNDLED_ONLY: bool = false;
 /// was on 2026-10-29. `make emu-probe` requires the summary line.
 #[inline(never)]
 fn bundled(canvas: &mut Canvas) {
-    const LIST: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/bundled_formulas.rs"));
     let (mut opened, mut failed) = (0, 0);
     let mut road = None;
-    for &(name, src) in LIST {
+    for &(name, src) in BUNDLED {
         let path = fx_psi::path(src, "");
         let h0 = heap();
         let Some(mut fx) = Fx::parse(&path) else {
@@ -1360,11 +1357,13 @@ fn worst_stack() {
         }
     }
     let fits = |k: usize| used_by[k] as usize + PSI_MARGIN as usize <= crate::config::PSI_COMPILE_STACK;
-    // Through `psi_stack` itself, on its own thread (the size the player
-    // uses, pinned and prioritised as it does): the compile time (what a
-    // frame deadline sees when a formula opens) and the bytes of that stack
-    // never touched — the real headroom, the thread's entry frames and any
-    // interrupt frames pushed on it included.
+    // Each that fits, through `psi_stack` itself, on its own thread (the size
+    // the player uses, pinned and prioritised as it does): the compile time
+    // (what a frame deadline sees when a formula opens) and the bytes of that
+    // stack never touched, the thread's entry frames and any interrupt frames
+    // pushed on it included; then through the real path (`Fx::parse`, as the
+    // engine and the checks before saving open a formula), the main task's
+    // mark not to move.
     for (k, (name, src)) in srcs.iter().enumerate() {
         if !fits(k) {
             say!(warn,
@@ -1380,28 +1379,14 @@ fn worst_stack() {
             let ok = psi::compile_into(src, &mut prog).is_ok();
             (t0.elapsed().as_micros(), ok, stack_unused())
         });
-        match r {
-            Some((us, ok, free)) => say!(info,
-                "psi-probe: worst {name} on psi_stack ({} B): compile {us} us ({}), {free} B of its stack never touched",
-                crate::config::PSI_COMPILE_STACK,
-                if ok { "ok" } else { "an error" }
-            ),
-            None => say!(error, "psi-probe: worst {name} on psi_stack: no thread (heap {} B free)", heap()),
-        }
-    }
-    // The deepest through the real path (`Fx::parse`, as the engine and the
-    // checks before saving open a formula): compiled on its own stack
-    // (`psi_stack`), so the main task's mark should not move.
-    for (k, (name, src)) in srcs.iter().enumerate() {
-        if !fits(k) {
-            continue;
-        }
-        let fixed = src.replace("tme", "t");
+        let (us, ok, free) = r.unwrap_or((0, false, 0));
         let before = stack_unused();
         let bad = Fx::parse(&fx_psi::path(src, "")).is_some();
-        let good = Fx::parse(&fx_psi::path(&fixed, "")).is_some();
+        let good = Fx::parse(&fx_psi::path(&src.replace("tme", "t"), "")).is_some();
         say!(info,
-            "psi-probe: worst {name} as an effect on the main task: misspelt opened {bad}, fixed opened {good}, main stack {before} -> {} B unused",
+            "psi-probe: worst {name} on psi_stack ({} B): compile {us} us ({}), {free} B of its stack never touched; as an effect on the main task: misspelt opened {bad}, fixed opened {good}, main stack {before} -> {} B unused",
+            crate::config::PSI_COMPILE_STACK,
+            if r.is_none() { "no thread" } else if ok { "ok" } else { "an error" },
             stack_unused()
         );
     }
@@ -1628,7 +1613,7 @@ fn jit_spike(out: &mut [u8]) {
 
     // Rotozoom floor's pixel stage by hand, against the VM.
     let mut prog = zeroed::<psi::Program>();
-    if let Err(e) = compile(ROTOZOOM_FLOOR_EX, &mut prog, true, true) {
+    if let Err(e) = compile(bundled_src("rotozoom-floor"), &mut prog, true, true) {
         say!(error, "psi-probe: jit: the floor does not compile: {}", e.msg);
         return;
     }
@@ -1682,8 +1667,8 @@ fn jit_spike(out: &mut [u8]) {
         let inputs = inputs_at(&prog, ms);
         psi::render_rows::<128>(&prog, &mut s, &inputs, &t, None, u32::MAX, out);
         floor_capture(&prog, &t, &mut s, ms, slots, &mut params, &mut dx, &mut col, &mut jit);
-        for row in 0..psi::H {
-            f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), params[row].as_ptr());
+        for (row, p) in params.iter().enumerate().take(psi::H) {
+            f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), p.as_ptr());
         }
         differ += out.iter().zip(jit.iter()).filter(|(a, b)| a != b).count();
         checked += out.len();
@@ -1704,8 +1689,8 @@ fn jit_spike(out: &mut [u8]) {
         // SAFETY: as above.
         let f: FloorFn = unsafe { std::mem::transmute::<usize, FloorFn>(a) };
         let (j50, j90, _) = timed(|_| {
-            for row in 0..psi::H {
-                f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), params[row].as_ptr());
+            for (row, p) in params.iter().enumerate().take(psi::H) {
+                f(dx.as_ptr(), col.as_ptr(), row_of(&mut jit, row), p.as_ptr());
             }
         });
         say!(info,
@@ -1772,29 +1757,13 @@ pub fn run(root: &str) {
     // Then its heap: every bundled Formula opens, a short heap refuses one.
     bundled(&mut canvas);
 
-    // The examples as effects, first while the heap is at its fullest (the
-    // still cache is 16-32 KB; p2probe-a ran these last, ~38 KB free, and no
-    // 16 KB block was left for it). The real path: `Fx::parse`, the canvas taken
-    // at open, `Fx::frame`, the still cache taken on the first frame): with
-    // the cache, then with the gate refusing it (every step every frame).
-    // Where the effect path's time goes (speed-d: Tunnel 4,932 us as an
-    // effect against 3,651 VM-direct; the others ~200-250 us over).
+    // (The examples as effects, with and without the still cache, timed, are
+    // not in the full probe: it is the emulator lane's correctness run, and
+    // `bundled` already opens and draws every bundled Formula through the same
+    // `Fx` path. For timing work use the `*_ONLY` modes: `ROAD_ONLY`,
+    // `JIT2_ONLY` (the examples JIT against VM, with frame splits), `JIT_ONLY`,
+    // `CONSOLE_ONLY`, `FASTDIV_ONLY`.)
     psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
-    fx_psi::set_still_gate(Some(crate::still_gate));
-    effects(
-        &[
-            ("Starfield", STARFIELD_EX, "a=0.5"),
-            ("Wireframe cube", CUBE_EX, "a=0.5"),
-            ("Tunnel", TUNNEL_EX, ""),
-            ("Rotozoom", ROTOZOOM_EX, ""),
-            ("Rotozoom floor", ROTOZOOM_FLOOR_EX, ""),
-            ("Endless road", ROAD_EX, ""),
-        ],
-        "",
-        &mut canvas,
-    );
-    say!(info, "psi-probe: main stack {} B unused after the examples as effects (the play path; compiles on the formula stack)", stack_unused());
-    // The firmware's own gate again.
     fx_psi::set_still_gate(Some(crate::still_gate));
 
     speed2(&mut out);
@@ -1821,34 +1790,26 @@ pub fn run(root: &str) {
     );
 
     // The formula look as the main loop runs it (`FormulaLook::apply` over
-    // a picture, every row: a frame of its own), timed, with the heap its
+    // a picture, every row: a frame of its own), with the heap its
     // buffers take and the stack after (the high-water mark).
-    const LOOKS: [(&str, &str); 3] = [
-        ("Scanlines", "layer multiply { gray(py % 2 ? 1 : 0.3 + a*0.6) }"),
-        ("Old TV", "loop 4\ndx = (x - 0.5)*1.6; dy = (y - 0.5)*1.2\nlines = py % 2 ? 1 : 0.6\nroll = 0.85 + 0.15*max(0, tri(y/2 + t/4))\ncorners = clamp(1.5 - (dx*dx + dy*dy)*1.6, 0, 1)\nlayer multiply { gray(lines * roll * corners) }"),
-        ("Corner clock", "frame { hr = 104 + (hour % 12 + minute/60)/12*22; mn = 104 + minute/60*22 }\ntop = py > 3 and py < 6; bot = py > 0 and py < 3\nbar = (top or bot) * (px >= 104) * (px < (top ? hr : mn))\nlayer multiply { gray(1 - (px >= 101) * (py < 8) * 0.8) }\nlayer { rgb(1, 0.75, 0.3, bar) }"),
-
-    ];
+    const LOOKS: [(&str, &str); 3] = [("Scanlines", "scanlines"), ("Old TV", "old-tv"), ("Corner clock", "corner-clock")];
     let mut pic = Canvas::new();
     pic.as_mut_bytes().copy_from_slice(&under);
     for (name, src) in LOOKS {
-        let Ok(mut look) = fx_psi::FormulaLook::from_path(&fx_psi::path(src, "a=0.4")) else {
+        let Ok(mut look) = fx_psi::FormulaLook::from_path(&fx_psi::path(bundled_src(src), "a=0.4")) else {
             say!(error, "psi-probe: look {name}: refused");
             continue;
         };
         let h0 = heap();
         let took = look.take();
         let h1 = heap();
-        let mut k = 0u32;
-        let (p50, p90, max) = timed(|_| {
-            look.redraw();
-            pic.dirty_mut().mark_all();
-            k += 1;
-            let out = look.apply(Duration::from_millis(u64::from(k) * 20), &mut pic, 0);
-            out.dirty_mut().clear();
-        });
+        // (One apply over every row, a frame of its own; the timed run of
+        // them is the `*_ONLY` modes' job, `JIT2_ONLY` for the looks.)
+        look.redraw();
+        pic.dirty_mut().mark_all();
+        look.apply(Duration::from_millis(20), &mut pic, 0).dirty_mut().clear();
         say!(info,
-            "psi-probe: look {name}: est {} us, apply every row p50 {p50} p90 {p90} max {max} us, buffers {} ({h0} -> {h1} B free), main stack {} B unused",
+            "psi-probe: look {name}: est {} us, buffers {} ({h0} -> {h1} B free), main stack {} B unused",
             look.program().esp32_us(),
             if took { "taken" } else { "REFUSED" },
             stack_unused()
@@ -1861,8 +1822,10 @@ pub fn run(root: &str) {
         heap(),
         start.elapsed().as_millis()
     );
+    // (No `play::start` here: the play lines are timing on the panel, started
+    // by the `*_ONLY` modes -- `ROAD_ONLY`, `JIT2_ONLY` -- for the rig.)
     *REPORT.lock().unwrap() = None;
-    play::start(format!("{root}/{REPORT_NAME}"));
+    let _ = root;
 }
 
 /// The JIT's rows (docs/research/psi-jit-esp32.md, "Phase 2 as built"):
@@ -2133,7 +2096,7 @@ pub(crate) mod jit2 {
         exec_line("after the goldens");
         let mut canvas = Canvas::new();
         let list: [(&str, &str, &str); 11] = [
-            ("Endless road", ROAD_FILE, ""),
+            ("Endless road", bundled_src("endless-road"), ""),
             ("Endless road Both", ROAD_BOTH, ""),
             ("Starfield", STARFIELD, ""),
             ("Wireframe cube", CUBE, ""),
@@ -2141,7 +2104,7 @@ pub(crate) mod jit2 {
             ("Plasma letters", PLASMA_LETTERS, ""),
             ("Rotozoom floor", FLOOR, ""),
             ("Tunnel", TUNNEL, ""),
-            ("Time gate", TIME_GATE_FILE, ""),
+            ("Time gate", bundled_src("time-gate"), ""),
             ("Fire", FIRE, ""),
             ("Plasma", PLASMA, ""),
         ];
