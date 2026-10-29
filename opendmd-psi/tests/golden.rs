@@ -2383,6 +2383,12 @@ fn what_changed_is_exactly_what_differs() {
                 for g in 0..W / 4 {
                     let o = (y * W + 4 * g) * 3;
                     let differs = was[o..o + 12] != got[o..o + 12];
+                    // (A `rate` formula drawn from nothing says every row it
+                    // drew changed: more than changed, never less.)
+                    if p.rate().is_some() {
+                        assert!(bits & (1 << g) != 0 || !differs, "case {k} frame {j}: row {y} group {g}");
+                        continue;
+                    }
                     assert_eq!(bits & (1 << g) != 0, differs, "case {k} frame {j}: row {y} group {g}");
                 }
             }
