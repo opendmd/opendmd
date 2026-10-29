@@ -242,11 +242,15 @@ pub(crate) fn fuse(prog: &mut Program) {
         start = start.max(k + 1 + prog.ops[k].a as usize);
     }
     let room = MAX_OPS - pe;
+    // (A run inside the slow layers' steps ends inside them.)
+    let slow = prog
+        .slow_marker()
+        .map_or(0..0, |m| m + 1..m + 1 + prog.ops[m].a as usize);
     let mut runs: Vec<(usize, u8, usize)> = Vec::new();
     let mut k = start;
     while k < pe && runs.len() < room {
         let ops = &prog.ops[k..pe];
-        if matches!(ops[0].code, code::STILL | code::COLUMN | code::FUSE) {
+        if matches!(ops[0].code, code::STILL | code::COLUMN | code::FUSE | code::SLOW) {
             k += 1;
             continue;
         }
@@ -254,7 +258,9 @@ pub(crate) fn fuse(prog: &mut Program) {
             |n: usize, mid: [u8; 3], dst: u8| mid.iter().all(|&r| r == dst || dead(&ops[n..], r));
         match pattern(ops) {
             Some((kind, n, mid, dst))
-                if ok(n, mid, dst) && (kind != F_CHECKER3 || floored(prog, re, k)) =>
+                if ok(n, mid, dst)
+                    && (kind != F_CHECKER3 || floored(prog, re, k))
+                    && slow.contains(&k) == slow.contains(&(k + n - 1)) =>
             {
                 runs.push((k, kind, n));
                 k += n;
@@ -285,6 +291,14 @@ pub(crate) fn fuse(prog: &mut Program) {
     }
     debug_assert_eq!(end, src);
     prog.pixel_end = (pe + runs.len()) as u16;
+    // The slow layers' marker counts the markers put among its steps.
+    if let Some(m) = prog.slow_marker() {
+        let inside = runs
+            .iter()
+            .filter(|&&(at, _, _)| at > m && at <= m + prog.ops[m].a as usize)
+            .count();
+        prog.ops[m].a += inside as u8;
+    }
 }
 
 /// What a fused run of kind `kind` saves, ns a pixel, against its steps'

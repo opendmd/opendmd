@@ -2396,6 +2396,22 @@ impl<'s> Parser<'s> {
 
     /// Whether names set in `scope` can be seen here: this scope's and its
     /// parents', up to the part it is in (a part sees nothing outside it).
+    /// Whether the lines being read are a part's (its own scope or one
+    /// inside it).
+    fn in_part(&self) -> bool {
+        let mut s = self.scope;
+        loop {
+            let (parent, own) = self.scopes[s as usize];
+            if own {
+                return true;
+            }
+            if s == 0 {
+                return false;
+            }
+            s = parent;
+        }
+    }
+
     fn visible(&self, scope: u16) -> bool {
         let mut s = self.scope;
         loop {
@@ -3411,7 +3427,7 @@ impl<'s> Parser<'s> {
         self.next();
         let mut blend = None;
         let b = self.peek();
-        if b.tok == Tok::Name {
+        if b.tok == Tok::Name && self.text(b) != "rate" {
             let name = self.text(b);
             let Some(&(_, m)) = BLENDS.iter().find(|e| e.0 == name) else {
                 let s = suggest(name, BLENDS.iter().map(|e| e.0));
@@ -3425,6 +3441,30 @@ impl<'s> Parser<'s> {
             };
             self.next();
             blend = Some(m);
+        }
+        // `rate N`: redrawn every Nth frame, a band of rows a frame
+        // (`crate::rate`).
+        let mut rate = 0u8;
+        let r = self.peek();
+        if r.tok == Tok::Name && self.text(r) == "rate" {
+            self.next();
+            let n = self.next();
+            rate = match n.tok {
+                Tok::Num(v) if v & 0xffff == 0 && (2..=crate::rate::MAX_RATE as i32).contains(&(v >> 16)) => {
+                    (v >> 16) as u8
+                }
+                // E942.
+                _ => {
+                    return self.err(
+                        n,
+                        format!("`rate` takes a whole number of frames, 2 to {}: `layer rate 4 {{ … }}` is redrawn every 4th frame", crate::rate::MAX_RATE),
+                    )
+                }
+            };
+            if self.in_part() {
+                // E945.
+                return self.err(r, "`rate` goes on the formula's own layers, not inside a part");
+            }
         }
         let open = self.peek();
         if open.tok != Tok::LBrace {
@@ -3508,6 +3548,13 @@ impl<'s> Parser<'s> {
             }
             (true, _) => {}
             (false, m) => cs[0].blend = m.unwrap_or(fixed::BLEND_OVER),
+        }
+        if rate > 0 {
+            if layered {
+                // E945.
+                return self.err(r, "`rate` goes on the formula's own layers, not on a part's");
+            }
+            cs[0].rate = rate;
         }
         self.end_of_statement()?;
         Ok((cs, ct))
@@ -5434,6 +5481,38 @@ fn finish(
             turn: c.turn,
         });
     }
+    // `layer rate N { }`: the slow layers, a run from the bottom with one
+    // rate, under at least one that moves, covering the panel.
+    let n_slow = layers.iter().take_while(|c| c.rate > 0).count();
+    let rate_err = |msg: &str| Err(Error::new(ct.start, ct.end, String::from(msg)));
+    if layers[n_slow..].iter().any(|c| c.rate > 0) {
+        // E941.
+        return rate_err("`rate` goes on the bottom layers only: the first layer, or the first few one after another");
+    }
+    let slow = if n_slow > 0 {
+        let n = layers[0].rate;
+        if layers[..n_slow].iter().any(|c| c.rate != n) {
+            // E943.
+            return rate_err("the slow layers share one `rate`: give each the same number");
+        }
+        if n_slow == layers.len() {
+            // E947.
+            return rate_err("a `rate` layer is the slow one under a layer that moves: add a layer above it, or leave `rate` out");
+        }
+        if backdrop {
+            // E944.
+            return rate_err("the bottom `rate` layer draws the whole panel: make it cover everything (`layer rate N { … }` with no blend and no coverage)");
+        }
+        let reads = split_slow(&mut p.dag, &mut steps, n_slow)
+            .map_err(|msg| Error::new(ct.start, ct.end, String::from(msg)))?;
+        Some(Slow {
+            layers: n_slow,
+            rate: n,
+            reads,
+        })
+    } else {
+        None
+    };
     // What only reading needed goes before the layout: the tokens (the
     // biggest list), the names, the sharing index. Laying out holds a
     // dozen lists of its own; the compile's peak was the two at once.
@@ -5449,7 +5528,7 @@ fn finish(
     p.dag.divs = Vec::new();
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
-    emit(&p.dag, &steps, &p.draw, backdrop, runs, reuse, prog).map_err(|e| Error {
+    emit(&p.dag, &steps, &p.draw, backdrop, runs, reuse, slow, prog).map_err(|e| Error {
         start: ct.start,
         end: ct.end,
         ..e
@@ -5653,6 +5732,109 @@ impl Step {
     }
 }
 
+/// A formula's slow layers (`layer rate N { }`): the first `layers`
+/// colour steps, redrawn every `rate`th frame, reading what `reads` says
+/// (`crate::rate::READS_*`).
+#[derive(Clone, Copy)]
+struct Slow {
+    layers: usize,
+    rate: u8,
+    reads: u8,
+}
+
+/// Give the slow layers (the first `n` steps) pixel values of their own:
+/// one the layers above read too is copied for them (the fast part runs
+/// without the slow one's steps, the slow part without the fast one's).
+/// What they read, transitively (`rate::READS_*`); E944 if they read the
+/// canvas or the picture under.
+#[inline(never)]
+fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, &'static str> {
+    let len = dag.nodes.len();
+    let mut rs = try_vec(false, len).map_err(|_| NO_MEMORY)?;
+    let mut rf = try_vec(false, len).map_err(|_| NO_MEMORY)?;
+    for (k, st) in steps.iter().enumerate() {
+        for x in st.reads() {
+            if k < n {
+                rs[x as usize] = true;
+            } else {
+                rf[x as usize] = true;
+            }
+        }
+    }
+    for i in (0..len).rev() {
+        if dag.nodes[i].code >= K_CONST {
+            continue;
+        }
+        let (s, f) = (rs[i], rf[i]);
+        for x in reads(dag, i) {
+            rs[x as usize] |= s;
+            rf[x as usize] |= f;
+        }
+    }
+    let mut what = 0u8;
+    for i in (0..len).filter(|&i| rs[i]) {
+        let m = &dag.nodes[i];
+        if (code::U_R..=code::INK).contains(&m.code) {
+            // E944.
+            return Err("a `rate` layer is drawn on its own: it can't read `ink`, `ur`, `ug`, `ub` or `ul`");
+        }
+        if m.code == K_INPUT {
+            what |= match m.val {
+                WIDE_T => crate::rate::READS_T,
+                v if v == S_T as i32 => crate::rate::READS_T,
+                v if (S_HOUR as i32..=S_SECOND as i32).contains(&v) => crate::rate::READS_CLOCK,
+                v if (S_A as i32..=S_C as i32).contains(&v) => crate::rate::READS_SLIDERS,
+                v if v == S_SEED as i32 => crate::rate::READS_SEED,
+                _ => 0,
+            };
+        }
+    }
+    // Copies, in node order (operands first): a pixel value both read is
+    // copied for the slow layers; one only they read takes the copies.
+    let mut map = try_vec(NO, len).map_err(|_| NO_MEMORY)?;
+    for i in 0..len {
+        let m = dag.nodes[i];
+        if !rs[i] || m.level != LV_PIXEL || m.code >= K_CONST {
+            continue;
+        }
+        let mut c = m;
+        let ar = code::arity(m.code);
+        for (k, x) in [&mut c.a, &mut c.b, &mut c.c].into_iter().enumerate().take(ar) {
+            if map[*x as usize] != NO {
+                *x = map[*x as usize];
+            }
+            let _ = k;
+        }
+        if rf[i] {
+            if dag.nodes.len() >= MAX_NODES {
+                return Err("this formula is too long for the panel — simplify it");
+            }
+            try_push(&mut dag.nodes, c).map_err(|_| NO_MEMORY)?;
+            map[i] = (dag.nodes.len() - 1) as Id;
+        } else {
+            dag.nodes[i] = c;
+        }
+    }
+    let remap = |x: &mut Id| {
+        if (*x as usize) < len && map[*x as usize] != NO {
+            *x = map[*x as usize];
+        }
+    };
+    for st in &mut steps[..n] {
+        let ar = code::arity(st.code);
+        for x in &mut st.args[..ar] {
+            remap(x);
+        }
+        if let Some(x) = st.scale.as_mut() {
+            remap(x);
+        }
+        if let Some(x) = st.alpha.as_mut() {
+            remap(x);
+        }
+    }
+    Ok(what)
+}
+
 /// Lay the reachable nodes out as steps: scalar slots for the constants
 /// and the per-frame and per-row values, lane registers for the per-pixel
 /// ones (linear scan: a register is free again after its value's last
@@ -5670,6 +5852,7 @@ fn emit(
     backdrop: bool,
     runs: bool,
     reuse: bool,
+    slow: Option<Slow>,
     prog: &mut Program,
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
@@ -5736,7 +5919,8 @@ fn emit(
             _ => 1,
         })
         .sum();
-    let total = (0..n).filter(|&i| is_op(i)).count() + steps.len() + control;
+    let total =
+        (0..n).filter(|&i| is_op(i)).count() + steps.len() + control + usize::from(slow.is_some());
     if total > MAX_OPS {
         return Err(too_long(total));
     }
@@ -6009,8 +6193,27 @@ fn emit(
     // worked out on a frame's first row and kept (`Item::Column`), when
     // they are worth a step; then the still cache's values. Each tried
     // with the registers, dropped when they don't fit.
+    // The slow layers' pixel values (`split_slow` gave them their own):
+    // never in the column or the still run (the slow part runs without
+    // them, the fast part without the slow steps).
+    let mut in_slow = try_vec(false, n)?;
+    if let Some(sl) = slow {
+        for st in &steps[..sl.layers] {
+            for x in st.reads() {
+                in_slow[x as usize] = true;
+            }
+        }
+        for i in (0..n).rev() {
+            if in_slow[i] && nodes[i].code < K_CONST {
+                for x in reads(dag, i) {
+                    in_slow[x as usize] = true;
+                }
+            }
+        }
+    }
     let col = column_nodes(dag);
-    let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i]).collect();
+    let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i] && !in_slow[i]).collect();
+    let no_still: Vec<bool> = (0..n).map(|i| in_col[i] || in_slow[i]).collect();
     let col_ns: u32 = (0..n)
         .filter(|&i| in_col[i])
         .map(|i| value_ns(nodes[i].code))
@@ -6033,7 +6236,7 @@ fn emit(
         let excl = if use_col { &in_col } else { &none };
         let markers = usize::from(use_col);
         let cached = if use_still && total + markers < MAX_OPS {
-            choose_still(dag, steps, &px_op, excl)
+            choose_still(dag, steps, &px_op, if use_col { &no_still } else { &in_slow })
         } else {
             Vec::new()
         };
@@ -6046,7 +6249,7 @@ fn emit(
         if total + markers + usize::from(!cached.is_empty()) > MAX_OPS {
             continue;
         }
-        let lay = pixel_seq(dag, steps, &px_op, &need, &cached, excl, use_col);
+        let lay = pixel_seq(dag, steps, &px_op, &need, &cached, excl, use_col, slow.map_or(0, |s| s.layers));
         if let Some(r) = registers(nodes, steps, &lay.seq, &lay.pinned) {
             layout = Some((lay, cached, r));
             break;
@@ -6059,7 +6262,7 @@ fn emit(
             format!("this formula keeps too many values at once (more than {REGS}) — simplify it"),
         ));
     };
-    let (seq, run_len, col_len) = (lay.seq, lay.run_len, lay.col_len);
+    let (seq, run_len, col_len, slow_len) = (lay.seq, lay.run_len, lay.col_len, lay.slow_len);
     let mut marker = None;
     for (at, item) in seq.iter().enumerate() {
         match *item {
@@ -6070,6 +6273,16 @@ fn emit(
                 b: 0,
                 c: 0,
             }),
+            Item::Slow => {
+                let sl = slow.unwrap_or(Slow { layers: 0, rate: 0, reads: 0 });
+                ops.push(WOp {
+                    code: code::SLOW,
+                    d: u16::from(sl.rate),
+                    a: slow_len as u16,
+                    b: sl.layers as u16,
+                    c: u16::from(sl.reads),
+                });
+            }
             Item::Still => {
                 marker = Some(ops.len());
                 ops.push(WOp {
@@ -6338,6 +6551,8 @@ enum Item {
     Colour(usize),
     Still,
     Column,
+    /// The slow layers' marker (`code::SLOW`).
+    Slow,
 }
 
 /// A wide noise's code.
@@ -6392,7 +6607,7 @@ fn registers(
                     last_use[x as usize] = at;
                 }
             }
-            Item::Still | Item::Column => {}
+            Item::Still | Item::Column | Item::Slow => {}
         }
     }
     // A kept column value is never given up: the rows after the first
@@ -6612,6 +6827,8 @@ struct PixelSeq {
     seq: Vec<Item>,
     run_len: usize,
     col_len: usize,
+    /// The slow layers' items after their marker.
+    slow_len: usize,
     pinned: Vec<bool>,
 }
 
@@ -6628,6 +6845,7 @@ fn pixel_seq(
     cached: &[usize],
     in_col: &[bool],
     col: bool,
+    slow: usize,
 ) -> PixelSeq {
     let n = dag.nodes.len();
     let mut seq: Vec<Item> = Vec::new();
@@ -6666,18 +6884,30 @@ fn pixel_seq(
             run_len = seq.len() - before;
         }
     }
+    // The slow layers (`layer rate N`) after their marker: their values
+    // and colours, then the fast ones'.
+    let mut slow_at = 0;
+    let mut slow_len = 0;
     for k in 0..steps.len() {
+        if slow > 0 && k == 0 {
+            seq.push(Item::Slow);
+            slow_at = seq.len();
+        }
         for i in 0..n {
             if px(i) && need[i] == k && !run[i] && !first[i] {
                 seq.push(Item::Value(i));
             }
         }
         seq.push(Item::Colour(k));
+        if slow > 0 && k + 1 == slow {
+            slow_len = seq.len() - slow_at;
+        }
     }
     PixelSeq {
         seq,
         run_len,
         col_len,
+        slow_len,
         pinned,
     }
 }

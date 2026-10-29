@@ -276,11 +276,7 @@ pub(crate) fn frame<T: Target>(
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = inputs.seed;
     }
-    let (fe, de, re) = (
-        prog.frame_end as usize,
-        prog.draw_end as usize,
-        prog.row_end as usize,
-    );
+    let (fe, re) = (prog.frame_end as usize, prog.row_end as usize);
     if prog.forever() {
         vm::wset(&mut scratch.lanes[REGS], 0, inputs.tw);
     }
@@ -450,7 +446,9 @@ pub(crate) fn frame<T: Target>(
             // SAFETY: `dest` gives W × 3 bytes, word-aligned (`track`).
             unsafe { core::ptr::copy_nonoverlapping(d.cast::<u32>(), before.as_mut_ptr(), W * 3 / 4) };
         }
-        if backdrop {
+        // (A `rate` formula's fast part: over the held slow layers, or over
+        // the row as it is without them.)
+        if backdrop || (low.rate && under.is_some()) {
             let src = under.map_or(&ZEROS[..], |u| &u[row * W * 3..(row + 1) * W * 3]);
             // SAFETY: as above: W × 3 bytes at `d`, not `src`'s.
             unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), d, W * 3) };

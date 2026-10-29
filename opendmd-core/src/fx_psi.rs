@@ -61,6 +61,12 @@ pub struct PsiFx {
     /// transition's buffers hold the heap for a moment), then once a second
     /// after a refusal.
     still_once: bool,
+    /// A `rate` formula's slow layers' picture ([`psi::Held`], ~12.6 KB),
+    /// taken in `frame` when the still cache's gate allows (and when it was
+    /// last refused, as `ink_tried`): without it each frame draws the slow
+    /// layers from nothing (the same bytes, slower). `None` is all-zero.
+    held: Option<Box<psi::Held>>,
+    held_tried: u32,
     /// It reads the wall clock (`hour`, `minute`, `second`): only then is
     /// the clock read each frame (a `gettimeofday` and a `localtime_r` on
     /// the device).
@@ -687,6 +693,13 @@ impl PsiFx {
             set_still_held(0);
         }
         self.prog = *prog;
+        // Another program: its slow layers are drawn again (or their
+        // picture let go).
+        if self.prog.rate().is_none() {
+            self.held = None;
+        } else if let Some(h) = self.held.as_deref_mut() {
+            h.forget();
+        }
         // Another program: its kernel (if any) is made at the next frame.
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
         {
@@ -757,6 +770,39 @@ impl PsiFx {
             log::info!("formula: still cache taken ({need} B)");
         } else {
             self.still_tried = now | 1;
+        }
+    }
+}
+
+impl PsiFx {
+    /// Before a frame of a `rate` formula: take the held picture when the
+    /// still cache's gate allows (at most once a second after a refusal;
+    /// every frame without a clock), let it go when the gate says.
+    fn held_step(&mut self, clocked: bool, now: u32) {
+        if self.prog.rate().is_none() {
+            return;
+        }
+        if self.held.is_some() {
+            if !still_allowed(0) {
+                self.held = None;
+                log::info!("formula: slow layers' picture given back to the heap");
+            }
+            return;
+        }
+        let due = !clocked || self.held_tried == 0 || now.wrapping_sub(self.held_tried) >= CANVAS_RETRY_US;
+        if !due {
+            return;
+        }
+        if still_allowed(psi::Held::BYTES) {
+            self.held = psi::Held::try_boxed();
+        }
+        if self.held.is_some() {
+            self.held_tried = 0;
+            // This frame draws every slow row: left out.
+            self.gov.edited();
+            log::info!("formula: slow layers' picture taken ({} B)", psi::Held::BYTES);
+        } else {
+            self.held_tried = now | 1;
         }
     }
 }
@@ -834,6 +880,7 @@ impl PsiFx {
             }
         }
         self.still_step(clock.is_some(), t0);
+        self.held_step(clock.is_some(), t0);
         let (bytes, dirty) = canvas.bytes_and_dirty_mut();
         // Only what changed is marked (the canvas holds the frame before:
         // the `Effect` contract; what differs from it is what the panel
@@ -851,6 +898,19 @@ impl PsiFx {
         #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
         let drawn = false;
         if drawn {
+        } else if let Some(h) = self.held.as_deref_mut() {
+            // A `rate` formula: the slow rows due, then the rest over them.
+            psi::render_held::<LANES>(
+                &self.prog,
+                &mut self.scratch,
+                self.ink.as_deref_mut(),
+                Some(&mut self.still),
+                h,
+                &self.inputs,
+                &tables(),
+                bytes,
+                compare.then_some(&mut changed),
+            );
         } else if compare {
             psi::render_rows_changed::<LANES>(
                 &self.prog,
@@ -1646,6 +1706,8 @@ mod jit {
     const TRIAL: u8 = 8;
     /// Why, when the VM drew the formula faster in the trial.
     const SLOWER: &str = "the VM is faster for this formula";
+    /// Why, for a `rate` formula as a look.
+    const LOOK_RATE: &str = "a formula with `rate` as a look draws on the VM";
     /// Why, after a self-check found a difference.
     const DIFFERS: &str = "the kernel's bytes differed from the VM's (self-check)";
 
@@ -1663,6 +1725,12 @@ mod jit {
             }
             if self.why == Some(OFF) {
                 *self = Jit::default();
+            }
+            // (A `rate` formula as a look draws its slow layers every frame,
+            // on the VM: no held picture to draw the fast part over.)
+            if which == 1 && prog.rate().is_some() && self.why.is_none() {
+                self.why = Some(LOOK_RATE);
+                set_jit_status(which, false, LOOK_RATE, 0);
             }
             if self.kernel.is_none() && self.why.is_none() {
                 match psi::jit::emit(prog) {
@@ -1762,8 +1830,21 @@ mod jit {
         /// Draw the frame with the kernel if it draws this one (`true`),
         /// what changed into `changed` when given; else leave it to the VM.
         pub(super) fn jit_render(&mut self, bytes: &mut [u8], changed: Option<&mut [u32; psi::H]>) -> bool {
+            // (A `rate` formula's kernel draws its fast part over the held
+            // slow layers: without them, the VM.)
+            let rate = self.prog.rate().is_some();
+            if rate && self.held.is_none() {
+                return false;
+            }
             let Some(k) = self.jit.kernel_for(0, &self.prog) else {
                 return false;
+            };
+            let under = match self.held.as_deref_mut() {
+                Some(h) if rate => {
+                    h.update::<{ super::LANES }>(&self.prog, &mut self.scratch, &self.inputs, &tables());
+                    Some(h.picture())
+                }
+                _ => None,
             };
             // (False when the inputs were out of range and the VM drew it:
             // a trial frame counted as the VM's — Fable's review.)
@@ -1774,7 +1855,7 @@ mod jit {
                 Some(&mut self.still),
                 &self.inputs,
                 &tables(),
-                None,
+                under,
                 u32::MAX,
                 bytes,
                 changed,
@@ -1782,7 +1863,12 @@ mod jit {
         }
 
         pub(super) fn jit_check(&mut self, bytes: &[u8]) {
-            self.jit.check(0, &self.prog, &mut self.scratch, self.ink.as_deref_mut(), &self.inputs, None, bytes);
+            let rate = self.prog.rate().is_some();
+            if rate && self.held.is_none() {
+                return;
+            }
+            let under = self.held.as_deref().filter(|_| rate).map(|h| h.picture());
+            self.jit.check(0, &self.prog, &mut self.scratch, self.ink.as_deref_mut(), &self.inputs, under, bytes);
         }
     }
 }
@@ -2050,6 +2136,34 @@ mod tests {
             eprintln!("{name}: {} px marked a frame", marked / 24);
         }
         assert!(few >= 3, "only {few} formulas marked under half the panel");
+    }
+
+    /// A `rate` formula plays with its slow layers held: every frame the
+    /// bytes drawn from nothing, what changed marked, frames skipped too.
+    #[test]
+    fn a_rate_formula_plays_its_slow_layers_held() {
+        let src = "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { gray(px == floor(t*60) % 128) }";
+        let mut fx = PsiFx::from_query(&path(src)[Q..]).unwrap();
+        let mut c = Canvas::new();
+        let mut ms = 0u64;
+        for k in 0..60u64 {
+            ms += 20 * (1 + u64::from(k % 13 == 5) * 3);
+            let before = c.as_bytes().to_vec();
+            c.dirty_mut().clear();
+            fx.frame(Duration::from_millis(ms), &mut c);
+            assert!(fx.held.is_some(), "frame {k}: no held picture");
+            let mut want = vec![0u8; psi::W * psi::H * 3];
+            psi::render_rows::<LANES>(&fx.prog, &mut psi::Scratch::new(), &fx.inputs, &tables(), None, u32::MAX, &mut want);
+            assert_eq!(c.as_bytes(), &want[..], "frame {k} at {ms} ms");
+            for y in 0..psi::H {
+                for x in 0..psi::W {
+                    let o = (y * psi::W + x) * 3;
+                    if before[o..o + 3] != want[o..o + 3] {
+                        assert!(c.dirty().is_dirty(x, y), "frame {k}: ({x}, {y}) not marked");
+                    }
+                }
+            }
+        }
     }
 
     /// A Formula that changes every pixel stops being compared after

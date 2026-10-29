@@ -144,6 +144,10 @@ fn same_as_vm_with(
     let low = lower(prog)?;
     let mut steps = 0;
     let mut frames = 0;
+    // A `rate` formula: the kernel draws its fast part over the held slow
+    // layers (the VM's), as the player has it.
+    let mut held = crate::Held::try_boxed().unwrap();
+    let mut pic: Vec<u8>;
     for &ms in times {
         let mut inputs = golden::inputs(ms);
         inputs.set_ms(prog, u64::from(ms));
@@ -151,6 +155,13 @@ fn same_as_vm_with(
             continue;
         }
         let want = vm_frame(prog, &inputs, None, with);
+        let with = if prog.rate().is_some() {
+            held.update::<128>(prog, &mut Scratch::new(), &inputs, &OWN);
+            pic = held.picture().to_vec();
+            With { under: Some(&pic), ink: with.ink }
+        } else {
+            with
+        };
         let (got, n) = kernel_frame(prog, &low, &inputs, None, with);
         if let Some(d) = first_diff(&got, &want) {
             panic!(
@@ -719,6 +730,26 @@ fn cycled_palettes_draw_the_same_through_kernels() {
         let prog = compile(src).unwrap();
         let times = [0, 130, 1000, 2470, 5555, 7990];
         if let Err(why) = same_as_vm("cycle", src, &prog, &times) {
+            panic!("{src}: on the VM ({why})");
+        }
+    }
+}
+
+/// `layer rate N`: the kernel draws the fast part over the held slow
+/// layers, the bytes of the VM's frame.
+#[test]
+fn rate_formulas_draw_the_same_through_kernels() {
+    let cases = [
+        "loop 60\nframe { h1 = floor(hour/10); m2 = minute % 10 }\nlayer rate 50 { gray(digit(pick(floor(px/32), h1, m2, 3, 4), floor(px % 32 / 8), floor(ty/6), bold)) }\nlayer min { hsv(x + py/64 + t/10, py < 1 ? 0 : 1, 1) }",
+        "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { gray(x*a*0.2) }",
+        "fps 100\nloop 2\nlayer rate 40 { cycle(fire, x, t/2) }\nlayer max { cycle(ice, len(cx, cy), t + py/32, 0.5) }",
+        "layer rate 3 { gray(x) }\nlayer multiply rate 3 { pal(ice, y) }\nlayer screen { hsv(t, 1, x) }",
+    ];
+    for src in cases {
+        let prog = compile(src).unwrap();
+        assert!(prog.rate().is_some());
+        let times = [0, 20, 40, 1000, 1500, 1980];
+        if let Err(why) = same_as_vm("rate", src, &prog, &times) {
             panic!("{src}: on the VM ({why})");
         }
     }
