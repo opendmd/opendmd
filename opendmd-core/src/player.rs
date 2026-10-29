@@ -634,6 +634,14 @@ impl<R: Read + io::Seek> FrameSource<R> {
         }
     }
 
+    /// A Formula read from its `.psi` file: its `name "…"` line.
+    pub fn formula_name(&self) -> Option<&str> {
+        match &self.dec {
+            Dec::Synth(s) => s.formula_name(),
+            _ => None,
+        }
+    }
+
     /// Loop a virtual file in place ([`SynthSource::rewind`](crate::synth::SynthSource::rewind)):
     /// true if this is one (nothing reopened, nothing allocated), false for
     /// a GIF, which the caller rewinds and reopens.

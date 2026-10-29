@@ -59,11 +59,22 @@ pub const CARD_DWELL: Duration = Duration::from_millis(3000);
 /// A virtual path longer than this is refused (a formula's may be
 /// [`MAX_FORMULA_PATH`]).
 pub(crate) const MAX_PATH: usize = 512;
-/// A formula's path (`@formula?src=…`) may be this long: ~2 KB of compacted
-/// source. `POST /api/play` refuses a longer one with a 413.
-pub const MAX_FORMULA_PATH: usize = 2048;
+/// A formula's inline path (`@formula?src=…`) may be this long: ~6 KB of
+/// compacted, lightly encoded source (`POST /api/play`'s body is 8 KB at
+/// most). `POST /api/play` refuses a longer one with a 413. Playlists and
+/// looks name Formulas by reference instead ([`formula_ref`]): a bundled one
+/// by name, one of the user's by its `.psi` file on the card.
+pub const MAX_FORMULA_PATH: usize = 6144;
+/// An inline formula as the Look setting (`look_formula`, kept in NVS) may be
+/// this long; the web app sets looks by reference.
+pub const MAX_LOOK_PATH: usize = 2048;
+/// A Formula read from a `.psi` file is compacted as it is read
+/// (`fx_psi::read_text`) and may be this long then; the file itself may be
+/// [`MAX_FORMULA_FILE`] (comments and indentation cost nothing).
+pub const MAX_FORMULA_SOURCE: usize = 8192;
+pub const MAX_FORMULA_FILE: usize = 64 * 1024;
 const MAX_READ: usize = if cfg!(feature = "psi") {
-    MAX_FORMULA_PATH
+    MAX_FORMULA_PATH + MAX_FORMULA_SOURCE + 16
 } else {
     MAX_PATH
 };
@@ -81,10 +92,128 @@ pub fn is_retired_effect(path: &str) -> bool {
     path.starts_with(crate::fx::RETIRED_PREFIX)
 }
 
-/// Is `path` a formula (`@formula?…`)?
+/// Is `path` a formula played from its path: inline (`@formula?src=…`) or a
+/// bundled one by name (`@formula:<name>[?a=&b=&c=&fps=]`)? A `.psi` file on
+/// the card is a formula too, but read from the card: [`formula_file`].
 pub fn is_formula(path: &str) -> bool {
     path.strip_prefix(FORMULA)
-        .is_some_and(|r| r.is_empty() || r.starts_with('?'))
+        .is_some_and(|r| r.is_empty() || r.starts_with('?') || r.starts_with(':'))
+}
+
+/// A bundled Formula's path starts with this: `@formula:<name>`, the name its
+/// file's stem in `opendmd-web/formulas/` (`[a-z0-9-]`, 1-40).
+pub const FORMULA_REF: &str = "@formula:";
+/// A user's Formula on the card: a file with this extension, played as
+/// `/formulas/<stem>.psi[?a=&b=&c=&fps=]`.
+pub const FORMULA_EXT: &str = ".psi";
+
+/// How a path names a Formula ([`formula_ref`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FormulaRef<'a> {
+    /// `@formula?src=…`: the source on the path.
+    Inline,
+    /// `@formula:<name>?<opts>`: one of the bundled Formulas (a name that
+    /// is not a valid stem is still this: it names none, a 404).
+    Bundled { name: &'a str, opts: &'a str },
+    /// `<file>.psi?<opts>`: a file on the card.
+    File { file: &'a str, opts: &'a str },
+}
+
+/// How `path` names a Formula, or `None` if it names none.
+pub fn formula_ref(path: &str) -> Option<FormulaRef<'_>> {
+    if let Some(rest) = path.strip_prefix(FORMULA_REF) {
+        let (name, opts) = rest.split_once('?').unwrap_or((rest, ""));
+        return Some(FormulaRef::Bundled { name, opts });
+    }
+    if is_formula(path) {
+        return Some(FormulaRef::Inline);
+    }
+    formula_file(path).map(|(file, opts)| FormulaRef::File { file, opts })
+}
+
+/// A card path to a `.psi` file, maybe with options after `?` (a FAT name
+/// has no `?`): the file and the options.
+pub fn formula_file(path: &str) -> Option<(&str, &str)> {
+    if !path.starts_with('/') {
+        return None;
+    }
+    let (file, opts) = path.split_once('?').unwrap_or((path, ""));
+    let n = file.len();
+    let ext = FORMULA_EXT.len();
+    (n > ext + 1
+        && file.is_char_boundary(n - ext)
+        && file[n - ext..].eq_ignore_ascii_case(FORMULA_EXT)
+        && !file.ends_with("/.psi"))
+    .then_some((file, opts))
+}
+
+/// Is `name` a bundled Formula's name as written (`[a-z0-9-]`, 1-40)?
+pub fn valid_formula_name(name: &str) -> bool {
+    (1..=40).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// The bundled Formulas, (name, compacted source), as the host built them in
+/// (the firmware's from `opendmd-web/formulas/`'s `-- bundle` files): what
+/// `@formula:<name>` plays. Nothing until [`set_bundled`].
+pub type Bundled = &'static [(&'static str, &'static str)];
+static BUNDLED: std::sync::OnceLock<Bundled> = std::sync::OnceLock::new();
+
+/// Install the bundled Formulas (once; later calls are ignored).
+pub fn set_bundled(list: Bundled) {
+    let _ = BUNDLED.set(list);
+}
+
+/// A bundled Formula's source by name.
+pub fn bundled(name: &str) -> Option<&'static str> {
+    BUNDLED
+        .get()?
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, s)| *s)
+}
+
+/// The names of the bundled Formulas, in the order installed.
+pub fn bundled_names() -> impl Iterator<Item = &'static str> {
+    BUNDLED.get().into_iter().flat_map(|l| l.iter().map(|(n, _)| *n))
+}
+
+/// A Formula's name from a file stem or a bundled name, for when its
+/// `name "…"` line is not at hand: `endless-road` -> "Endless road".
+pub fn stem_title(stem: &str) -> String {
+    let mut t: String = stem
+        .chars()
+        .map(|c| if c == '-' || c == '_' { ' ' } else { c })
+        .take(MAX_FORMULA_NAME)
+        .collect();
+    if let Some(c) = t.chars().next() {
+        let up: String = c.to_uppercase().collect();
+        t.replace_range(..c.len_utf8(), &up);
+    }
+    let t = t.trim().to_string();
+    if t.is_empty() {
+        "Formula".to_string()
+    } else {
+        t
+    }
+}
+
+/// A virtual stream holding a Formula's text (read from a `.psi` file) and
+/// its options: what the engine plays for a [`FormulaRef::File`]. The
+/// marker can't come from a path ([`open`] refuses control characters).
+pub(crate) const TEXT_MARK: &str = "@formula\u{1}";
+
+/// The in-memory stream for a Formula's `text` with `opts` (`a=0.5&fps=…`).
+pub fn open_formula_text(opts: &str, text: &str) -> Cursor<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(4 + TEXT_MARK.len() + opts.len() + 1 + text.len());
+    bytes.extend_from_slice(&MAGIC);
+    bytes.extend_from_slice(TEXT_MARK.as_bytes());
+    bytes.extend_from_slice(opts.as_bytes());
+    bytes.push(1);
+    bytes.extend_from_slice(text.as_bytes());
+    Cursor::new(bytes)
 }
 /// The live clock's path (options after `?`: see [`ClockSpec`]).
 pub const CLOCK: &str = "@clock";
@@ -388,6 +517,24 @@ pub fn card_path(title: &str, subtitle: &str) -> String {
 pub fn title(path: &str) -> Option<String> {
     // Without compiling it (2-3 ms and 10 KB on the device), and in builds
     // without Psi (the web app's Recently played). The player ignores `name`.
+    match formula_ref(path) {
+        Some(FormulaRef::Bundled { name, .. }) => {
+            return Some(
+                bundled(name)
+                    .and_then(declared_name)
+                    .map(|n| n.chars().filter(|c| !c.is_control()).take(MAX_FORMULA_NAME).collect::<String>())
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| stem_title(name)),
+            );
+        }
+        // A file's `name` line is read when it opens (the engine reports
+        // it then: `FrameSource::formula_name`); till then, its stem.
+        Some(FormulaRef::File { file, .. }) => {
+            let stem = file.rsplit('/').next().unwrap_or(file);
+            return Some(stem_title(&stem[..stem.len() - FORMULA_EXT.len()]));
+        }
+        _ => {}
+    }
     if is_formula(path) {
         let q = || path[FORMULA.len()..].trim_start_matches('?').split('&');
         let clean = |n: String| {
@@ -425,7 +572,7 @@ pub fn title(path: &str) -> Option<String> {
 /// `name`, `about`, `control`, `look`; the compiler allows them nowhere
 /// else), past blank lines, `;` and comments. Text in quotes may hold `;`
 /// and `--`.
-fn declared_name(src: &str) -> Option<String> {
+pub(crate) fn declared_name(src: &str) -> Option<String> {
     let b = src.as_bytes();
     let mut i = 0;
     loop {
@@ -479,7 +626,11 @@ pub fn open(path: &str) -> Option<Cursor<Vec<u8>>> {
     }
     let mut bytes = Vec::with_capacity(4 + path.len());
     bytes.extend_from_slice(&MAGIC);
-    bytes.extend_from_slice(path.as_bytes());
+    // (A control character names nothing, and would pass for the text
+    // form's marker: `open_formula_text`.)
+    if !path.bytes().any(|b| b < 0x20) {
+        bytes.extend_from_slice(path.as_bytes());
+    }
     Some(Cursor::new(bytes))
 }
 
@@ -591,6 +742,8 @@ pub struct SynthSource<R: Read> {
     /// An effect's position in its loop: the sum of the frame times it
     /// returned (a formula's governor may hold frames longer).
     elapsed: Duration,
+    /// A Formula read from its file: its `name` line.
+    name: Option<String>,
 }
 
 impl<R: Read> SynthSource<R> {
@@ -605,6 +758,32 @@ impl<R: Read> SynthSource<R> {
             .strip_prefix(&MAGIC)
             .and_then(|p| std::str::from_utf8(p).ok())
             .unwrap_or("");
+        // A Formula's text, read from its file (`open_formula_text`).
+        if let Some(rest) = path.strip_prefix(TEXT_MARK) {
+            let (opts, text) = rest.split_once('\u{1}').unwrap_or((rest, ""));
+            #[cfg(not(feature = "psi"))]
+            {
+                let _ = (opts, text);
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown virtual file"));
+            }
+            #[cfg(feature = "psi")]
+            {
+                let spec = crate::fx_psi::PsiFx::from_text(text, opts)
+                    .map(|f| Spec::Fx(crate::fx::Fx::Psi(f)))
+                    .map_err(crate::fx_psi::io_error)?;
+                let name = declared_name(text);
+                return Ok(SynthSource {
+                    reader,
+                    spec,
+                    frames: 0,
+                    table: None,
+                    painted: false,
+                    shows: u64::MAX,
+                    elapsed: Duration::ZERO,
+                    name,
+                });
+            }
+        }
         // Only a formula may be longer than a virtual path.
         let path = if path.len() > MAX_PATH && !is_formula(path) {
             ""
@@ -626,7 +805,14 @@ impl<R: Read> SynthSource<R> {
             painted: false,
             shows: u64::MAX,
             elapsed: Duration::ZERO,
+            name: None,
         })
+    }
+
+    /// A Formula read from its file: its `name "…"` line (what the engine
+    /// reports as the title), if it has one.
+    pub fn formula_name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 
     /// A formula on screen takes `path`'s formula in place, keeping its
@@ -641,8 +827,7 @@ impl<R: Read> SynthSource<R> {
         if !is_formula(path) {
             return None;
         }
-        let q = path[FORMULA.len()..].trim_start_matches('?');
-        Some(cur.retune_from(q).map_err(crate::fx_psi::io_error))
+        Some(cur.retune_from(&path[FORMULA.len()..]).map_err(crate::fx_psi::io_error))
     }
 
     /// Start again from the first frame without reopening: a loop. The live
@@ -1034,6 +1219,18 @@ fn glow(level: f32) -> Rgb {
         v.round().clamp(0.0, 255.0) as u8
     };
     Rgb::new(c(0), c(1), c(2))
+}
+
+/// The bundled list every test installs (the list is set once per process).
+#[cfg(test)]
+pub(crate) const TEST_BUNDLED: Bundled = &[
+    ("red", "name \"Red one\"\nrgb(1, 0, 0)"),
+    ("slider", "control k = 0.25\nrgb(k, 0, 0)"),
+];
+
+#[cfg(test)]
+pub(crate) fn install_test_bundled() {
+    set_bundled(TEST_BUNDLED);
 }
 
 #[cfg(test)]
@@ -1590,5 +1787,59 @@ mod tests {
         // Cut to 60 characters.
         let long = p(&format!("name+%22{}%22%3B+gray(x)", "é".repeat(80)), "");
         assert_eq!(title(&long).unwrap(), "é".repeat(MAX_FORMULA_NAME));
+    }
+
+    #[test]
+    fn formulas_by_reference_parse() {
+        use FormulaRef::*;
+        assert_eq!(formula_ref("@formula:endless-road"), Some(Bundled { name: "endless-road", opts: "" }));
+        assert_eq!(
+            formula_ref("@formula:endless-road?a=0.4&fps=50"),
+            Some(Bundled { name: "endless-road", opts: "a=0.4&fps=50" })
+        );
+        assert_eq!(formula_ref("@formula?src=gray(x)"), Some(Inline));
+        assert_eq!(formula_ref("@formula"), Some(Inline));
+        assert_eq!(
+            formula_ref("/formulas/my-road.psi?a=1"),
+            Some(File { file: "/formulas/my-road.psi", opts: "a=1" })
+        );
+        assert_eq!(
+            formula_ref("/formulas/X.PSI"),
+            Some(File { file: "/formulas/X.PSI", opts: "" })
+        );
+        for not in ["/gifs/a.gif", "/gifs/a.gif?a=1", "formulas/x.psi", "/formulas/.psi", "/x.psix", "@formulax?src=1", "@clock", ""] {
+            assert_eq!(formula_ref(not), None, "{not}");
+        }
+        assert!(is_formula("@formula:x") && !is_formula("/formulas/x.psi"));
+        assert!(valid_formula_name("endless-road") && valid_formula_name("a1"));
+        for bad in ["", "Endless", "../x", "a/b", "a b", "a.psi", &"a".repeat(41)] {
+            assert!(!valid_formula_name(bad), "{bad}");
+        }
+        assert_eq!(stem_title("endless-road"), "Endless road");
+        assert_eq!(stem_title("my_formula-2"), "My formula 2");
+        assert_eq!(stem_title("-"), "Formula");
+    }
+
+    #[test]
+    fn a_formula_by_reference_has_a_title() {
+        install_test_bundled();
+        assert_eq!(title("@formula:red?a=1").as_deref(), Some("Red one"));
+        // No `name` line: from the name.
+        assert_eq!(title("@formula:slider").as_deref(), Some("Slider"));
+        // Not bundled: still from the name (it plays nothing: a 404).
+        assert_eq!(title("@formula:big-clock").as_deref(), Some("Big clock"));
+        assert_eq!(title("/formulas/my-road.psi?a=0.5").as_deref(), Some("My road"));
+        let e = crate::manifest::Entry::from_path("/formulas/my-road.psi");
+        assert_eq!((e.title.as_str(), e.category), ("My road", None));
+        assert_eq!(crate::manifest::Entry::from_path("@formula:red").title, "Red one");
+    }
+
+    #[test]
+    fn a_path_with_a_control_character_names_nothing() {
+        // (It would pass for a Formula's text: `open_formula_text`.)
+        let mut raw = Vec::new();
+        open("@formula\u{1}\u{1}gray(x)").unwrap().read_to_end(&mut raw).unwrap();
+        assert_eq!(raw, MAGIC);
+        assert!(SynthSource::new(open("@formula\u{1}\u{1}gray(x)").unwrap()).is_err());
     }
 }

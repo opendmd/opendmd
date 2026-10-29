@@ -207,6 +207,16 @@ def build(out: Path) -> None:
     for name in MANY:
         save_many(*many_colours(), gifs / "Arcade" / f"{name}.gif")
 
+    # One of the user's Formulas, as the web app saves it (the emulator's
+    # psi-probe plays it: `refs`); comments and indentation, as written.
+    (out / "formulas").mkdir(parents=True, exist_ok=True)
+    (out / "formulas" / "ci-test.psi").write_text(
+        'name "CI test"\n'
+        'control k = 0.5\n'
+        '-- a ramp, its brightness the control\n'
+        'v = frac(x + t / 4)   -- moving\n'
+        '  rgb(v * k, 0.2, 1 - v)\n'
+    )
     # A boot logo at the card root, as on the real card.
     make_gif(out / "logos" / "boot.gif", "boot")
     (out / "filelist.txt").write_text("".join(p + "\n" for p in listed))

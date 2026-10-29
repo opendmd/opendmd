@@ -396,22 +396,95 @@ pub fn path(src: &str, opts: &str) -> String {
 /// An `@formula` query: the source, the frame time asked (`fps=`; `None`:
 /// the formula's `fps N`, else 20 ms), the sliders (`None`: not on the
 /// path, so the formula's declared default: `psi::Meta::values`).
-struct Query {
-    src: String,
+struct Query<'a> {
+    src: std::borrow::Cow<'a, str>,
     delay_ms: Option<u8>,
     sliders: [Option<i32>; 3],
 }
 
-fn query(query: &str) -> Query {
+/// The sentence for `@formula:<name>` when no bundled Formula has that name
+/// ([`io_error`] makes it `NotFound`: `/api/play` answers 404).
+pub const NO_SUCH_FORMULA: &str = "there is no bundled Formula by that name";
+
+/// What follows `@formula` on a path: `?src=…&…` (or the query alone,
+/// `src=…`), or `:<name>?<opts>` for a bundled Formula (any `src=` there is
+/// ignored: the name says what plays).
+fn resolve(rest: &str) -> Result<Query<'static>, psi::Error> {
+    let Some(named) = rest.strip_prefix(':') else {
+        return Ok(query(rest.trim_start_matches('?')));
+    };
+    let (name, opts) = named.split_once('?').unwrap_or((named, ""));
+    let src = crate::synth::valid_formula_name(name)
+        .then(|| crate::synth::bundled(name))
+        .flatten()
+        .ok_or_else(|| psi::Error {
+            start: 0,
+            end: 0,
+            msg: NO_SUCH_FORMULA.to_string(),
+        })?;
+    let mut q = query(opts);
+    q.src = std::borrow::Cow::Borrowed(src);
+    Ok(q)
+}
+
+/// A Formula's `text` (read from its file) with `opts` (`a=0.5&fps=100`).
+fn with_text<'a>(text: &'a str, opts: &str) -> Query<'a> {
+    let mut q = query(opts);
+    q.src = std::borrow::Cow::Borrowed(text);
+    q
+}
+
+/// A `.psi` file's Formula, compacted as it is read ([`psi::compact`], a
+/// line at a time: the same text as compacting the whole), so comments and
+/// indentation never reach the heap: only what the compiler reads is kept.
+/// `InvalidInput` ("too long for the panel") past
+/// [`MAX_FORMULA_SOURCE`](crate::synth::MAX_FORMULA_SOURCE) compacted or
+/// [`MAX_FORMULA_FILE`](crate::synth::MAX_FORMULA_FILE) read.
+pub fn read_text<R: std::io::BufRead>(mut r: R) -> std::io::Result<String> {
+    use crate::synth::{MAX_FORMULA_FILE, MAX_FORMULA_SOURCE};
+    let too_long = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "this Formula is too long for the panel",
+        )
+    };
+    let (mut out, mut line, mut read) = (String::new(), String::new(), 0usize);
+    loop {
+        line.clear();
+        let n = r.read_line(&mut line)?;
+        if n == 0 {
+            return Ok(out);
+        }
+        read += n;
+        if read > MAX_FORMULA_FILE {
+            return Err(too_long());
+        }
+        let l = line.strip_suffix('\n').unwrap_or(&line);
+        let l = l.strip_suffix('\r').unwrap_or(l);
+        let code = psi::compact(l);
+        if code.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str("; ");
+        }
+        out.push_str(&code);
+        if out.len() > MAX_FORMULA_SOURCE {
+            return Err(too_long());
+        }
+    }
+}
+
+fn query(query: &str) -> Query<'static> {
     let mut q = Query {
-        src: String::new(),
+        src: std::borrow::Cow::Borrowed(""),
         delay_ms: None,
         sliders: [None; 3],
     };
     for kv in query.split('&') {
         let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
         match k {
-            "src" => q.src = crate::synth::url_decode(v.as_bytes()),
+            "src" => q.src = std::borrow::Cow::Owned(crate::synth::url_decode(v.as_bytes())),
             "fps" => {
                 q.delay_ms = match v {
                     "100" => Some(10),
@@ -519,7 +592,12 @@ fn canvas_for(
 /// compiler's sentence (the firmware's `/api/play` makes it a 400; an
 /// unknown `@` path is `InvalidData`, a 415).
 pub fn io_error(e: psi::Error) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::InvalidInput, e.msg)
+    let kind = if e.msg == NO_SUCH_FORMULA {
+        std::io::ErrorKind::NotFound
+    } else {
+        std::io::ErrorKind::InvalidInput
+    };
+    std::io::Error::new(kind, e.msg)
 }
 
 /// A zeroed `Box<T>`, or `None` when the heap has no block for it.
@@ -549,16 +627,24 @@ pub fn open_error(path: &str) -> Option<std::io::Error> {
     if !crate::synth::is_formula(path) {
         return None;
     }
-    let q = path[crate::synth::FORMULA.len()..].trim_start_matches('?');
-    PsiFx::from_query(q).err().map(io_error)
+    PsiFx::from_query(&path[crate::synth::FORMULA.len()..]).err().map(io_error)
 }
 
 impl PsiFx {
-    /// The effect for an `@formula` query, or why not.
+    /// The effect for what follows `@formula` on a path (`?src=…`, the
+    /// query alone, or `:<name>?…` for a bundled one), or why not.
     pub fn from_query(q: &str) -> Result<PsiBox, psi::Error> {
-        let q = query(q);
+        Self::open(&resolve(q)?)
+    }
+
+    /// The effect for a Formula's text (read from its file) with `opts`.
+    pub fn from_text(text: &str, opts: &str) -> Result<PsiBox, psi::Error> {
+        Self::open(&with_text(text, opts))
+    }
+
+    fn open(q: &Query) -> Result<PsiBox, psi::Error> {
         let mut fx = PsiBox::try_new().ok_or_else(no_memory)?;
-        let (est, delay) = compile(&q, &mut fx.prog)?;
+        let (est, delay) = compile(q, &mut fx.prog)?;
         fx.ink = canvas_for(&fx.prog, None)?;
         fx.clock = reads_clock(&fx.prog);
         fx.delay_ms = delay;
@@ -587,7 +673,7 @@ impl PsiFx {
     /// estimate says. Only a program's worth (2.8 KB) is allocated, and
     /// only while compiling.
     pub fn retune_from(&mut self, q: &str) -> Result<(), psi::Error> {
-        let q = query(q);
+        let q = resolve(q)?;
         // SAFETY: `Program` is integers all the way down: zero is valid.
         let mut prog = unsafe { try_zeroed::<psi::Program>() }.ok_or_else(no_memory)?;
         prog.clear();
@@ -1027,15 +1113,24 @@ impl FormulaLook {
     /// as for the effect), or why not: it does not compile, or it is too
     /// heavy to draw over GIFs ([`LOOK_MAX_EST_US`]).
     pub fn from_path(path: &str) -> Result<FormulaLook, psi::Error> {
-        let q = query(Self::query_of(path));
+        Self::open(&resolve(Self::query_of(path))?)
+    }
+
+    /// The look for a Formula's text (read from its `.psi` file, as
+    /// [`read_text`] gives it) with `opts`.
+    pub fn from_text(text: &str, opts: &str) -> Result<FormulaLook, psi::Error> {
+        Self::open(&with_text(text, opts))
+    }
+
+    fn open(q: &Query) -> Result<FormulaLook, psi::Error> {
         // SAFETY: `Program` is integers all the way down: zero is valid.
         let mut prog = unsafe { try_zeroed::<psi::Program>() }.ok_or_else(no_memory)?;
-        let est = Self::compile(&q, &mut prog)?;
+        let est = Self::compile(q, &mut prog)?;
         let mut look = FormulaLook {
             prog,
             held: None,
             inputs: psi::Inputs::default(),
-            delay_ms: Self::delay(&q),
+            delay_ms: Self::delay(q),
             gov: Governor::default(),
             t0: None,
             next: None,
@@ -1046,14 +1141,12 @@ impl FormulaLook {
             jit: jit::Jit::default(),
         };
         look.inputs.seed = next_seed();
-        look.set(&q, est);
+        look.set(q, est);
         Ok(look)
     }
 
     fn query_of(path: &str) -> &str {
-        path.strip_prefix(crate::synth::FORMULA)
-            .unwrap_or(path)
-            .trim_start_matches('?')
+        path.strip_prefix(crate::synth::FORMULA).unwrap_or(path)
     }
 
     fn compile(q: &Query, prog: &mut psi::Program) -> Result<u32, psi::Error> {
@@ -1140,7 +1233,7 @@ impl FormulaLook {
     /// Another formula in place (a live edit from the editor): the clock,
     /// the buffers and the governor stay. On an error nothing changes.
     pub fn retune(&mut self, path: &str) -> Result<(), psi::Error> {
-        let q = query(Self::query_of(path));
+        let q = resolve(Self::query_of(path))?;
         // SAFETY: as in `from_path`.
         let mut prog = unsafe { try_zeroed::<psi::Program>() }.ok_or_else(no_memory)?;
         let est = Self::compile(&q, &mut prog)?;
@@ -3132,5 +3225,25 @@ mod tests {
         let mut c = picture();
         let _ = look.apply(Duration::from_millis(2), &mut c, 0);
         assert_eq!(look.held.as_ref().unwrap().ink.as_ref().unwrap().0, before);
+    }
+
+    /// A `.psi` file read a line at a time is the whole file compacted:
+    /// every example, its header and comments too.
+    #[test]
+    fn a_file_read_is_the_file_compacted() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../opendmd-web/formulas");
+        let mut n = 0;
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.extension().is_none_or(|x| x != "psi") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&p).unwrap();
+            let read = read_text(std::io::Cursor::new(text.replace('\n', "\r\n"))).unwrap();
+            assert_eq!(read, psi::compact(&text), "{}", p.display());
+            assert!(!read.contains("--"), "{}", p.display());
+            n += 1;
+        }
+        assert!(n > 20);
     }
 }

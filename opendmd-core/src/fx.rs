@@ -314,8 +314,9 @@ impl Fx {
         }
         #[cfg(feature = "psi")]
         {
-            let q = path[crate::synth::FORMULA.len()..].trim_start_matches('?');
-            crate::fx_psi::PsiFx::from_query(q).ok().map(Fx::Psi)
+            crate::fx_psi::PsiFx::from_query(&path[crate::synth::FORMULA.len()..])
+                .ok()
+                .map(Fx::Psi)
         }
         #[cfg(not(feature = "psi"))]
         None
