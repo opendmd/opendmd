@@ -257,6 +257,8 @@ struct ConfigPatch {
     panel_split: Option<bool>,
     /// The Formulas' JIT (the kill switch); applied at the next frame.
     formula_jit: Option<bool>,
+    /// Racing the beam for Formulas (the spike); applied at once.
+    formula_beam: Option<bool>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
     api_key: Option<String>,
@@ -585,6 +587,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         if let Some(v) = patch.formula_jit {
             next.formula_jit = v;
+        }
+        if let Some(v) = patch.formula_beam {
+            next.formula_beam = v;
         }
         if let Some(v) = &patch.api_key {
             if !v.is_empty() && !opendmd_core::access::valid_key(v) {
@@ -2158,9 +2163,10 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
 }
 
 /// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms",
-/// "compile_us","still","jit"}` while a formula plays: its mean render time, the
+/// "beam_us","compile_us","still","jit"}` while a formula plays: its mean render time, the
 /// frame time its governor holds it to (`fx_psi::Governor`), the one it
-/// asked for, the last formula compile's time, the heap its still cache
+/// asked for, its raced frame time (µs on the refresh grid, `formula_beam`;
+/// 0 when its frames are not raced), the last formula compile's time, the heap its still cache
 /// holds (B, 0 none), and the JIT: `{"on":true,"bytes":N}` while a kernel
 /// draws its pixel stage, else `{"on":false,"why":"…"}`; empty otherwise.
 #[cfg(feature = "psi")]
@@ -2170,9 +2176,10 @@ fn formula_json(path: &str) -> String {
         return String::new();
     }
     let still = opendmd_core::fx_psi::still_held();
+    let beam = opendmd_core::fx_psi::beam_us();
     let jit = jit_json();
     format!(
-        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"compile_us":{compile_us},"still":{still},"jit":{jit}}}"#
+        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"beam_us":{beam},"compile_us":{compile_us},"still":{still},"jit":{jit}}}"#
     )
 }
 
@@ -2320,7 +2327,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"api_key_set":{},"card_speed":"{}"}}"#
+            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_beam":{},"api_key_set":{},"card_speed":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2349,6 +2356,7 @@ fn settings_json(s: &Settings) -> String {
         s.panel_sync,
         s.panel_split,
         s.formula_jit,
+        s.formula_beam,
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
     )

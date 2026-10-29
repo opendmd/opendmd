@@ -638,8 +638,10 @@ fn sizes() {
     // draw stage's canvas).
     assert_eq!(core::mem::size_of::<Program>(), 2876);
     assert_eq!(core::mem::size_of::<crate::Ink>(), 4096);
-    assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192);
-    assert_eq!(core::mem::size_of::<Scratch<64>>(), 4864);
+    // (+ racing the beam's order, places and sink: 12 B on the ESP32.)
+    let beam = 3 * core::mem::size_of::<usize>();
+    assert_eq!(core::mem::size_of::<Scratch<128>>(), 8192 + beam);
+    assert_eq!(core::mem::size_of::<Scratch<64>>(), 4864 + beam);
 }
 
 #[test]
@@ -3038,4 +3040,111 @@ fn ink_zero_walks_nothing() {
     let a = draw("draw { line(0, 0, 127, 31, 0, 1); line(0, 31, 127, 0, 0); dot(3, 3, 0) }\ngray(ink)");
     let b = draw("draw { line(0, 0, 127, 31, 0, 1) }\ngray(ink)");
     assert!(a == b);
+
+/// Every formula the tests know: the goldens' sources, the formulas here
+/// and the web app's (bundled and gallery).
+fn every_formula() -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = golden::FRAMES
+        .iter()
+        .map(|&(n, s, _, _)| (n.to_string(), s.to_string()))
+        .collect();
+    v.dedup();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for dir in [root.join("formulas"), root.join("../opendmd-web/formulas")] {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let mut files: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        files.sort();
+        for f in files.into_iter().filter(|f| f.extension().is_some_and(|e| e == "psi")) {
+            let name = f.file_name().unwrap().to_string_lossy().into_owned();
+            v.push((name, std::fs::read_to_string(&f).unwrap()));
+        }
+    }
+    v
+}
+
+/// Racing the beam (console-lessons §2.6): a frame drawn in the panel's
+/// pair order is the frame drawn at once, byte for byte, with the same
+/// changed groups; each pair is told once, in order, as soon as its two
+/// rows hold the new frame and while the rows still to come hold the old
+/// one; with the still cache kept and used, with the draw stage's canvas,
+/// and without a compare.
+#[test]
+fn a_frame_raced_in_pair_order_is_the_frame_drawn_at_once() {
+    let mut frames = 0;
+    for (name, src) in every_formula() {
+        let Ok(prog) = compile(&src) else { continue };
+        let lp = prog.loop_ms().max(1000);
+        for ms in [0, 777, lp / 2 + 13] {
+            let before_in = golden::inputs(ms);
+            let mut inputs = golden::inputs(ms + 40);
+            inputs.set_ms(&prog, u64::from(ms + 40));
+            // The picture before (word-aligned, as the player's canvas).
+            let mut before_w = vec![0u32; W * H * 3 / 4];
+            let before = words_as_bytes(&mut before_w);
+            render_rows_ink::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), &before_in, &OWN, None, u32::MAX, before);
+            let before = before.to_vec();
+            for still_on in [false, true] {
+                // At once.
+                let mut st = Still::new();
+                let mut want_w = vec![0u32; W * H * 3 / 4];
+                let want = words_as_bytes(&mut want_w);
+                want.copy_from_slice(&before);
+                let mut want_ch = [0u32; H];
+                {
+                    let s = if still_on && st.take(&prog) { Some(&mut st) } else { None };
+                    render_rows_changed::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), s, &inputs, &OWN, None, u32::MAX, want, &mut want_ch);
+                }
+                // Raced: twice with the still cache (kept, then used).
+                let mut st2 = Still::new();
+                let mut s2 = if still_on && st2.take(&prog) { Some(&mut st2) } else { None };
+                for pass in 0..1 + usize::from(s2.is_some()) {
+                    let mut got_w = vec![0u32; W * H * 3 / 4];
+                    let got = words_as_bytes(&mut got_w);
+                    got.copy_from_slice(&before);
+                    let mut got_ch = [0u32; H];
+                    let mut told = Vec::new();
+                    let mut sink = |p: usize, out: &[u8], a: u32, b: u32| {
+                        let row = |r: usize, pic: &[u8]| pic[r * W * 3..(r + 1) * W * 3].to_vec();
+                        // (A `rate` formula is drawn whole, then told.)
+                        for q in (0..H / 2).filter(|&q| q <= p || prog.rate().is_none()) {
+                            let (top, bottom) = if q <= p { (&want[..], &want[..]) } else { (&before[..], &before[..]) };
+                            assert!(row(q, out) == row(q, top) && row(q + H / 2, out) == row(q + H / 2, bottom),
+                                "{name} at {ms} ms: pair {q} when pair {p} was told");
+                        }
+                        told.push((p, a, b));
+                    };
+                    render_rows_beam::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), s2.as_deref_mut(), &inputs, &OWN, got, Some(&mut got_ch), &mut sink);
+                    assert_eq!(&got[..], &want[..], "{name} at {ms} ms, still {still_on} pass {pass}");
+                    assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
+                    let want_told: Vec<_> = (0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2])).collect();
+                    assert_eq!(told, want_told, "{name} at {ms} ms: the pairs told");
+                    frames += 1;
+                }
+            }
+            // Without a compare: the bytes, every group said to change.
+            let mut want = vec![0u8; W * H * 3];
+            render_rows_still::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), None, &inputs, &OWN, None, u32::MAX, &mut want);
+            let mut got = vec![0u8; W * H * 3];
+            let mut told = 0;
+            render_rows_beam::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), None, &inputs, &OWN, &mut got, None, &mut |p, _, a, b| {
+                assert_eq!((p, a, b), (told, u32::MAX, u32::MAX));
+                told += 1;
+            });
+            assert_eq!(got, want, "{name} at {ms} ms, no compare");
+            assert_eq!(told, H / 2);
+        }
+    }
+    assert!(frames >= 200, "only {frames} frames raced");
+}
+
+fn words_as_bytes(w: &mut [u32]) -> &mut [u8] {
+    // SAFETY: u32s as their bytes, the same memory.
+    unsafe { core::slice::from_raw_parts_mut(w.as_mut_ptr().cast::<u8>(), w.len() * 4) }
+}
+
+#[test]
+fn the_pair_order_is_the_panels() {
+    let order: Vec<usize> = (0..H).map(pair_row).collect();
+    assert_eq!(&order[..6], &[0, 16, 1, 17, 2, 18]);
+    assert_eq!(&order[30..], &[15, 31]);
 }

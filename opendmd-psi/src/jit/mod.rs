@@ -267,6 +267,7 @@ pub(crate) fn frame<T: Target>(
     rows: u32,
     dest: &dyn Fn(usize) -> *mut u8,
     mut changed: Option<&mut [u32; H]>,
+    mut beam: Option<crate::PairSink<'_>>,
 ) {
     #[cfg(feature = "stats")]
     let mut clk = stats::Clock::start();
@@ -363,7 +364,11 @@ pub(crate) fn frame<T: Target>(
     }
     #[cfg(feature = "stats")]
     clk.lap(stats::DRAW);
-    for row in 0..H {
+    // Racing the beam: the rows in the panel's pair order, each pair told
+    // as soon as both its rows are drawn (`vm::render_rows_beam`'s).
+    let order = beam.is_some();
+    for i in 0..H {
+        let row = if order { crate::pair_row(i) } else { i };
         if rows & (1 << row) == 0 {
             continue;
         }
@@ -474,6 +479,16 @@ pub(crate) fn frame<T: Target>(
         #[cfg(feature = "stats")]
         clk.lap(stats::KERNEL);
         columns_kept = true;
+        if i & 1 == 1 {
+            if let Some(sink) = beam.as_deref_mut() {
+                let p = row - H / 2;
+                let (a, b) = changed.as_deref().map_or((u32::MAX, u32::MAX), |c| (c[p], c[row]));
+                // SAFETY: `dest` maps rows into one W × H × 3 picture
+                // (`Kernel::render`'s `out`), whose start is row 0's.
+                let all = unsafe { core::slice::from_raw_parts(dest(0).cast_const(), W * H * 3) };
+                sink(p, all, a, b);
+            }
+        }
     }
     if let Cache::Keep(st, _) = cache {
         st.kept = crate::still::fingerprint(prog);
@@ -710,7 +725,69 @@ mod device {
             out: &mut [u8],
             changed: Option<&mut [u32; H]>,
         ) -> bool {
+            self.render_inner(prog, scratch, ink, still, inputs, tables, under, rows, out, changed, None)
+        }
+
+        /// A whole frame as [`Kernel::render`] draws it, racing the beam:
+        /// the rows in the panel's pair order and `sink` told of each pair
+        /// as it is finished ([`crate::render_rows_beam`]). The same bytes
+        /// and changed groups.
+        #[allow(clippy::too_many_arguments)]
+        pub fn render_beam(
+            &mut self,
+            prog: &Program,
+            scratch: &mut Scratch<128>,
+            ink: Option<&mut Ink>,
+            still: Option<&mut Still>,
+            inputs: &Inputs,
+            tables: &Tables,
+            out: &mut [u8],
+            changed: Option<&mut [u32; H]>,
+            sink: crate::PairSink<'_>,
+        ) -> bool {
+            self.render_inner(prog, scratch, ink, still, inputs, tables, None, u32::MAX, out, changed, Some(sink))
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn render_inner(
+            &mut self,
+            prog: &Program,
+            scratch: &mut Scratch<128>,
+            ink: Option<&mut Ink>,
+            still: Option<&mut Still>,
+            inputs: &Inputs,
+            tables: &Tables,
+            under: Option<&[u8]>,
+            rows: u32,
+            out: &mut [u8],
+            changed: Option<&mut [u32; H]>,
+            beam: Option<crate::PairSink<'_>>,
+        ) -> bool {
             assert_eq!(out.len(), W * H * 3);
+            let mut beam = beam;
+            if let Some(sink) = beam.take() {
+                // The VM's frame (inputs out of range) races the same way;
+                // a `rate` formula is drawn whole and its pairs told after.
+                if !crate::range::inputs_in_range(prog, inputs) {
+                    crate::render_rows_beam::<128>(prog, scratch, ink, still, inputs, tables, out, changed, sink);
+                    return false;
+                }
+                if self.low.rate {
+                    let mut ch = [u32::MAX; H];
+                    let tell = changed.is_some();
+                    let drawn = self.render_inner(
+                        prog, scratch, ink, still, inputs, tables, under, rows, out, tell.then_some(&mut ch), None,
+                    );
+                    for p in 0..H / 2 {
+                        sink(p, out, ch[p], ch[p + H / 2]);
+                    }
+                    if let Some(c) = changed {
+                        *c = ch;
+                    }
+                    return drawn;
+                }
+                beam = Some(sink);
+            }
             if !crate::range::inputs_in_range(prog, inputs) {
                 match changed {
                     Some(ch) => crate::render_rows_changed::<128>(
@@ -745,6 +822,7 @@ mod device {
                 rows,
                 &dest,
                 changed,
+                beam,
             );
             true
         }
@@ -795,6 +873,7 @@ mod device {
                 under,
                 check_rows(),
                 &dest,
+                None,
                 None,
             );
             for (j, &row) in CHECK_ROWS.iter().enumerate() {

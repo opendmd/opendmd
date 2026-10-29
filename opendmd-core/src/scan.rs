@@ -298,6 +298,126 @@ impl Pacer {
     }
 }
 
+/// Racing the beam (console-lessons §2.6): a Formula's frame drawn in the
+/// panel's pair order, each pair written as soon as it is drawn, so that
+/// every pair lands after the scan has left its slot in refresh `T - 1`
+/// and before its slot in `T` — no wait for a clear start, no second pass,
+/// no tear.
+///
+/// Pair `k`'s window is `[(T - 1) C + (k + 1) R, T C + k R)`: one refresh
+/// less a pair long, sliding a pair (`R`) down per pair. A render of `E` µs
+/// spread over the 16 pairs finishes pair `k` at `s + E (k + 1) / 16`; it
+/// fits every window when its start `s` is in `[T C - E, T C - E / 16 -
+/// w]` (`w` a pair's write), and [`Beam::plan`] aims at the middle of
+/// [`BEAM_LATE_ROOM_US`] inside its late edge. The player's next frame is timed to come back there
+/// ([`beam_delay_us`]), so in steady play a frame neither waits nor is
+/// late; a pair that would still come early waits for its window
+/// ([`Beam::wait`]), and one past it is written anyway and counted
+/// ([`Beam::late`]: it shows a refresh late, a seam for one refresh).
+#[derive(Clone, Copy, Debug)]
+pub struct Beam {
+    clock: Clock,
+    target: u32,
+    margin: u32,
+}
+
+/// How far (µs) a raced frame's start is aimed from the late edge of its
+/// window: more than a wake is ever late (~0.2 ms mean, ~1 ms worst on the
+/// spare with the `esp_timer` wake).
+pub const BEAM_LATE_ROOM_US: u32 = 1_500;
+
+/// What [`Beam::plan`] decided for a frame.
+#[derive(Clone, Copy, Debug)]
+pub struct BeamPlan {
+    pub beam: Beam,
+    /// How far (µs) the start was after (+) or before (−) the middle of
+    /// its window: what the next frame's delay corrects.
+    pub err: i32,
+    /// Wait this long (µs) before drawing: the start was so early that
+    /// pairs would come before their windows open.
+    pub wait_us: u32,
+}
+
+impl Beam {
+    /// Plan a frame whose drawing starts at reading `now` and is expected
+    /// to take `est_us` (its 16 pairs evenly, the writes included, each
+    /// write at most `write_us`), keeping `margin` from every slot.
+    pub fn plan(row_us: u32, now: Reading, est_us: u32, write_us: u32, margin: u32) -> BeamPlan {
+        let clock = Clock::new(row_us, now);
+        let c = clock.cycle() as i64;
+        let u = i64::from(now.pos);
+        let e = i64::from(est_us);
+        let w = i64::from(write_us) + 2 * i64::from(margin);
+        // The window for the start, as leads on T's start: from `e` (the
+        // last pair just after the scan leaves it) to `e / 16 + w` (the
+        // first pair just before the scan comes back to it). Aimed
+        // `BEAM_LATE_ROOM_US` from its late edge (or at its middle when
+        // it is narrower): a wake comes late more than early.
+        let late_lead = e / 16 + w;
+        let room = (e - late_lead).max(0);
+        let late_room = (room / 2).min(i64::from(BEAM_LATE_ROOM_US));
+        let lead = late_lead + late_room;
+        let target = ((u + lead + c / 2) / c).max(1);
+        let err = u + lead - target * c;
+        // Early past its window: wait for it.
+        let wait_us = (-err - (room - late_room)).max(0) as u32;
+        BeamPlan {
+            beam: Beam {
+                clock,
+                target: target as u32,
+                margin,
+            },
+            err: err as i32,
+            wait_us,
+        }
+    }
+
+    /// Before writing pair `k`, with the scan at `now`: how long to wait
+    /// for its window (µs; 0: write now).
+    pub fn wait(&self, k: usize, now: Reading) -> u32 {
+        let free_at = self.clock.slot(self.target - 1, k as u32) + self.clock.row_us + self.margin;
+        free_at.saturating_sub(self.clock.unwrap(now))
+    }
+
+    /// Pair `k`'s write ended at `after` past its window: refresh `T`
+    /// showed the old pair (a seam for that refresh).
+    pub fn late(&self, k: usize, after: Reading) -> bool {
+        self.clock.unwrap(after) + self.margin > self.clock.slot(self.target, k as u32)
+    }
+
+    pub fn clock(&self) -> Clock {
+        self.clock
+    }
+
+    /// The refresh the frame is first shown by, counted on the clock.
+    pub fn target(&self) -> u32 {
+        self.target
+    }
+}
+
+/// The delay (µs) to the next raced frame: `frames` refreshes of
+/// `cycle_us`, less half the start's error ([`BeamPlan::err`]: a late
+/// start brings the next one forward, an early one puts it back), so the
+/// frames lock onto the scan whatever the clocks' drift and the wake's
+/// lateness. The error counted is at most half a refresh either way.
+pub fn beam_delay_us(frames: u32, cycle_us: u32, err: i32) -> u32 {
+    let half = (cycle_us / 2) as i32;
+    let fix = err.clamp(-half, half) / 2;
+    (frames.max(1) * cycle_us).saturating_add_signed(-fix)
+}
+
+/// The frames a raced Formula's frame grid holds each picture for: the
+/// most refreshes (1, 2, 4 …) of `cycle_us` that still fit the frame time
+/// it asked for (`grid_us`; its `fps`): 100 fps → every refresh (125 Hz on
+/// the rig), 50 → every 2nd (62.6 Hz), 25 → every 4th (31.3 Hz).
+pub fn beam_frames(grid_us: u32, cycle_us: u32) -> u32 {
+    let mut n = 1;
+    while cycle_us > 0 && 2 * n * cycle_us <= grid_us && n < 64 {
+        n *= 2;
+    }
+    n
+}
+
 /// A blit checked afterwards: the scan read before and after each pair's
 /// write.
 #[derive(Clone, Copy, Debug)]
@@ -386,6 +506,91 @@ mod tests {
             judge.pair(k, before, read(t));
         }
         Some((judge.straddled, t))
+    }
+
+    /// A raced frame loop, simulated: a scan of `ROW` µs pairs from phase
+    /// `p0`; each frame starts at its due time plus a wake 0-`jitter` µs
+    /// late, plans, waits if told, draws its pairs at `render` µs each
+    /// (`frame_us` before the first: the frame and draw stages; each pair's
+    /// time varied ±`spread`), waits per pair as the beam says, and is
+    /// timed by [`beam_delay_us`]. Returns (frames with a late pair, frames
+    /// that waited, the frames' mean period).
+    fn race(p0: u32, render: u32, frame_us: u32, spread: u32, jitter: u32, frames: u32) -> (u32, u32, f64) {
+        let read = |t: u64| Reading { pos: ((u64::from(p0) + t) % u64::from(CYCLE)) as u32, at: t as u32 };
+        let mut rng = 12345u64;
+        let mut rnd = |n: u32| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            if n == 0 { 0 } else { (rng % u64::from(n)) as u32 }
+        };
+        let est = frame_us + 16 * (render + 74);
+        let (mut due, mut late, mut waited, mut end) = (0u64, 0, 0, 0u64);
+        let first = due;
+        for f in 0..frames {
+            let mut t = (due + u64::from(rnd(jitter))).max(end);
+            let plan = Beam::plan(ROW, read(t), est, 80, 30);
+            if plan.wait_us > 0 {
+                waited += u32::from(f > 4);
+                t += u64::from(plan.wait_us);
+            }
+            t += u64::from(frame_us);
+            let mut frame_late = false;
+            for k in 0..PAIRS {
+                t += u64::from(render.saturating_sub(spread) + rnd(2 * spread + 1));
+                let w = plan.beam.wait(k, read(t));
+                if w > 0 && f > 4 {
+                    // (A pair early in steady play: counted as waiting.)
+                    waited += 1;
+                }
+                t += u64::from(w);
+                t += 74;
+                frame_late |= plan.beam.late(k, read(t));
+            }
+            late += u32::from(frame_late && f > 4);
+            end = t;
+            due += u64::from(beam_delay_us(1, CYCLE, plan.err));
+        }
+        (late, waited, (due - first) as f64 / f64::from(frames))
+    }
+
+    #[test]
+    fn racing_the_beam_locks_on_and_never_tears() {
+        // Renders from a cycled plasma's ~0.9 ms to the 6.5 ms budget
+        // (the road ~3.6-4.4 ms, Time gate ~2.8-5), from every phase.
+        for render_ms in [0.9, 2.0, 3.6, 4.4, 5.0, 6.0] {
+            let total = (render_ms * 1000.0) as u32;
+            let frame_us = total / 6;
+            let per = (total - frame_us) / 16;
+            for p0 in (0..CYCLE).step_by(397) {
+                let (late, waited, period) = race(p0, per.saturating_sub(74), frame_us, per / 5, 400, 400);
+                assert_eq!(late, 0, "{render_ms} ms from phase {p0}: frames with a late pair");
+                // (A render quicker than its windows are wide waits for
+                // some of them: the plasma's.)
+                assert!(render_ms < 2.0 || waited <= 2, "{render_ms} ms from phase {p0}: {waited} waits");
+                assert!(waited <= 40, "{render_ms} ms from phase {p0}: {waited} waits");
+                assert!((period - f64::from(CYCLE)).abs() < 30.0, "{render_ms} ms: period {period}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_raced_frame_too_slow_for_its_windows_is_late_not_lost() {
+        // 9 ms of drawing in one refresh: pairs past their windows, counted.
+        let (late, _, _) = race(0, 9_000 / 16, 0, 0, 0, 50);
+        assert!(late > 0);
+    }
+
+    #[test]
+    fn the_beam_grid_holds_frames_for_whole_refreshes() {
+        assert_eq!(beam_frames(10_000, 7_980), 1);
+        assert_eq!(beam_frames(20_000, 7_980), 2);
+        assert_eq!(beam_frames(40_000, 7_980), 4);
+        assert_eq!(beam_frames(8_000, 7_980), 1);
+        assert_eq!(beam_frames(5_000, 7_980), 1);
+        assert_eq!(beam_delay_us(1, 8_000, 0), 8_000);
+        assert_eq!(beam_delay_us(2, 8_000, 1_000), 15_500);
+        assert_eq!(beam_delay_us(1, 8_000, -100_000), 10_000);
     }
 
     #[test]

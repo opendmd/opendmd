@@ -391,6 +391,7 @@ fn main() -> Result<()> {
     panel.set_brightness(settings.brightness);
     panel.set_display(settings.look, settings.glow);
     panel.set_sync(settings.panel_sync, settings.panel_split);
+    panel.set_beam(settings.formula_beam);
     #[cfg(feature = "psi")]
     opendmd_core::fx_psi::set_jit(settings.formula_jit);
     clock::set_timezone(&settings.tz, &settings.tz_name);
@@ -901,6 +902,7 @@ fn main() -> Result<()> {
                             // at once if what it shows no longer matches
                             // (a dark panel is repainted when it lights).
                             panel.set_sync(settings.panel_sync, settings.panel_split);
+                            panel.set_beam(settings.formula_beam);
                             #[cfg(feature = "psi")]
                             opendmd_core::fx_psi::set_jit(settings.formula_jit);
                             if panel.set_display(settings.look, settings.glow) && !sched.off() {
@@ -1512,6 +1514,15 @@ fn main() -> Result<()> {
         let due_before = eng.frame_due();
         // Night mode "off": the panel is dark and nothing is decoded.
         let off = sched.off();
+        // Racing the beam (`formula_beam`): a Formula's frame this tick may
+        // write its pairs as it draws them — not under the glow or a
+        // formula look (each composites the whole picture) nor while a
+        // transition runs (its steps are paced whole); `fx_psi` also
+        // leaves out a Formula's first frame and its JIT trial.
+        #[cfg(feature = "psi")]
+        opendmd_core::fx_psi::arm_beam(
+            !off && panel.beam_ok() && !looks.is_on() && !eng.is_transitioning(),
+        );
         let outcome = if off {
             TickOutcome::Idle
         } else {

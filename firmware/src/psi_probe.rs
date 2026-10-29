@@ -159,6 +159,9 @@ pub mod play {
             "; work >=8 ms {} >=9 {} >=10 {} >=11 {} >=12 {}",
             o[0], o[1], o[2], o[3], o[4]
         ));
+        // Racing the beam (console-c): the raced frame time and the
+        // counters since boot (`scan.beam`).
+        s.push_str(&format!("; beam {} us {}", opendmd_core::fx_psi::beam_us(), crate::panel::beam_json()));
         Some(s)
     }
 
@@ -2054,12 +2057,24 @@ fn jit_spike(out: &mut [u8]) {
     say!(info, "psi-probe: jit: done, exec heap {} B free, data heap {} B free", exec_heap().0, heap());
 }
 
+/// Racing the beam (console-c): no rows, only the play lines (each with
+/// the beam's counters), for the integrator's Formulas played by name with
+/// `formula_beam` on and off. Built with `OPENDMD_PROBE_BEAM` set in the
+/// environment (`make fw-release-variant FW_RELEASE_FEATURES=psi-probe`);
+/// `make emu-probe` builds the full probe.
+const BEAM_ONLY: bool = option_env!("OPENDMD_PROBE_BEAM").is_some();
+
 pub fn run(root: &str) {
     if !open_report(root) {
         return;
     }
     let start = Instant::now();
     let stack0 = stack_unused();
+    if BEAM_ONLY {
+        play::start(format!("{root}/{REPORT_NAME}"));
+        say!(info, "{DONE}: beam only (play lines from now), main stack {stack0} B unused, heap {} B free", heap());
+        return;
+    }
     if BUNDLED_ONLY {
         let mut canvas = Canvas::new();
         bundled(&mut canvas);
