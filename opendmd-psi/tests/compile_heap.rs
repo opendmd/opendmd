@@ -156,7 +156,11 @@ fn formulas() -> Vec<(String, String, bool)> {
 /// Every compile peaks under `compile_heap_estimate` (what the firmware
 /// asks the heap for before it compiles), and every bundled Formula under
 /// [`BUNDLED_BUDGET`].
+///
+/// Not with `syntax`: the language service's records come on top (the
+/// editor's, never on the device); `make test` runs this file without it.
 #[test]
+#[cfg_attr(feature = "syntax", ignore = "the language service's records come on top")]
 fn compile_peak_heap_is_in_budget() {
     let mut prog = Box::<Program>::default();
     let mut bad = Vec::new();
@@ -186,7 +190,11 @@ fn compile_peak_heap_is_in_budget() {
 /// [`NO_MEMORY`] wherever it runs short, never an abort (the test would
 /// die with the process) and never another error; with room, the same
 /// program as always.
+///
+/// Not with `syntax` (the language service's records of what it read grow
+/// infallibly: the editor's, never on the device).
 #[test]
+#[cfg_attr(feature = "syntax", ignore = "the language service's records grow infallibly")]
 fn a_short_heap_refuses_the_formula() {
     let mut prog = Box::<Program>::default();
     let mut want = Box::<Program>::default();
