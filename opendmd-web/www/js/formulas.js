@@ -287,11 +287,12 @@ export async function mount(el) {
   build(el);
   await B.ready;
   return {
-    show() { if (!B.editing) B.tiles(); kick(); bundledLink(); },
+    show() { if (!B.editing) B.tiles(); kick(); bundledLink(); adding(); },
     sub(s) {
       if (s !== 'edit') { if (B.editing) close(false); } else if (!B.editing || app.formula || app.psiEdit) edit();
       kick();
       bundledLink();
+      adding();
     },
   };
 }
@@ -308,6 +309,27 @@ function bundledLink() {
   for (const k of 'abc') if (b.f[k] != null) f[k] = b.f[k];
   fit(ctlOf(f), f);
   B.pick(f, false);
+}
+
+// `#formula=…&add=1` or `#bundled=<stem>&add=1` (the site's Add to my
+// panel, app.js keeps it in app.adding): saved on the panel, then a sheet
+// with Play now, Add to a playlist and Use as the look (js/fadd.js). Not a
+// panel (the demo, local mode): the editor or the details, as a plain link.
+function adding() {
+  const a = app.adding;
+  if (!a) return;
+  app.adding = null;
+  if (!app.device || !P) {
+    if (a.bundled) { app.bundled = a; bundledLink(); } else { app.formula = a.hash.replace(/&add=1\b/, ''); app.go('formulas/edit'); }
+    return;
+  }
+  location.replace('#formulas');
+  import('./fadd.js').then((m) => m.add(a, {
+    P, EX, info, ctlOf, nameOf, fit, toList, setLook, path: mklink,
+    // Its details behind the sheet: yours (the list as saved) or a bundled one.
+    show(f, mineToo) { if (B.editing) close(false); B.tiles(); B.pick(f, mineToo); },
+    edit(f) { app.formula = mklink(f, '').slice(1); app.go('formulas/edit'); },
+  }), (e) => toast('Couldn’t add it: ' + (e.message || e), 'bad'));
 }
 
 // An in-page question (a sheet on a phone): `yes` or `no`, Escape is neither.

@@ -27,12 +27,16 @@ async function route() {
   // Old addresses: the Studio's, and the editor's when Formulas were a Library tab.
   if (location.hash === '#studio') { location.replace('#create'); return; }
   if (location.hash === '#library/formula') { location.replace('#formulas/edit'); return; }
+  // Add to my panel (the site's, `&add=1` on either link below): Formulas
+  // saves it and offers what to do with it (js/fadd.js).
+  const add = /^#(formula|bundled)=/.test(location.hash) && /&add=1(&|$)/.test(location.hash);
+  if (add) app.adding = { ...(await import('./js/psikit.js')).parse(location.hash), hash: location.hash.slice(1) };
   // A shared formula: the Formulas editor (js/formulas.js reads it, and
   // replaces the address once the editor has it).
-  const f = location.hash.startsWith('#formula=') && (app.formula = location.hash.slice(1));
+  const f = !add && location.hash.startsWith('#formula=') && (app.formula = location.hash.slice(1));
   // A bundled one by name (`#bundled=<stem>`): its details, in Formulas.
-  if (location.hash.startsWith('#bundled=')) app.bundled = (await import('./js/psikit.js')).parse(location.hash);
-  const [v, sub = ''] = f ? ['formulas', 'edit'] : app.bundled ? ['formulas', ''] : location.hash.slice(1).split('/');
+  if (!add && location.hash.startsWith('#bundled=')) app.bundled = (await import('./js/psikit.js')).parse(location.hash);
+  const [v, sub = ''] = f ? ['formulas', 'edit'] : app.bundled || app.adding ? ['formulas', ''] : location.hash.slice(1).split('/');
   const name = VIEWS.includes(v) ? v : 'now';
   if (name !== current) {
     if (shown) ready[shown]?.hide?.();
