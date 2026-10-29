@@ -204,6 +204,20 @@ pub(crate) mod code {
     pub const U_L: u8 = 83;
     // nullary, per pixel: what the draw stage put at the pixel, 0..1
     pub const INK: u8 = 84;
+    // `cycle(P, v, s)`'s turn (a row step, the row section's last steps):
+    // `TURN d, a, b`: the formula's palette slot `d` (0..=2, palette 5 + d)
+    // is palette `b` turned by `a`: entry e is `b`'s entry (e + floor(a·32))
+    // mod 32 ([`super::turn`]). Writes no slot; run for each row before its
+    // pixels (a turn of a per-frame value the same each row).
+    pub const TURN: u8 = 86;
+    // `layer rate N { }`'s marker, first of the pixel steps after the
+    // column and still runs: `SLOW d, a, b, c`: the `a` steps after it are
+    // the slow layers' (their values and `b` colour steps), redrawn every
+    // `d`th frame a band of rows at a time (`crate::rate`); `c` says what
+    // they read (`rate::READS_*`). Laid out first in the pixel section: the
+    // slow part runs only them, the fast part the steps after them, over
+    // the held picture; never the two in one go.
+    pub const SLOW: u8 = 87;
     // The draw stage (`ops[frame_end..draw_end]`, scalar slots only):
     // `FOR d, a, b`: counter `d` = 0, the count in slot `a`, its END at
     // index `b`; `END a, b, c`: counter `a` += 1 and, while it is under the
@@ -278,7 +292,7 @@ pub(crate) mod code {
     pub fn writes_scalar(c: u8) -> bool {
         match c {
             W_FIRST..=W_LAST => !wide_ops(c).0,
-            LINE_FROM | LINE_TO | DOT | STILL | COLUMN | FUSE | END => false,
+            LINE_FROM | LINE_TO | DOT | STILL | COLUMN | FUSE | END | TURN | SLOW => false,
             c => !is_colour(c),
         }
     }
@@ -308,6 +322,8 @@ pub(crate) mod code {
             W_FIRST..=W_LAST => wide_ops(c).1,
             64..=LAST_TERN => 3,
             U_R..=INK => 0,
+            TURN => 1,
+            SLOW => 0,
             FOR => 1,
             END => 2,
             LINE_FROM..=DOT => 3,
@@ -409,6 +425,8 @@ pub(crate) mod code {
             W_FIRST..=W_LAST => WN[(c - W_FIRST) as usize],
             64..=LAST_TERN => T[(c - 64) as usize],
             U_R..=INK => ["ur", "ug", "ub", "ul", "ink"][(c - U_R) as usize],
+            TURN => "turn",
+            SLOW => "slow",
             FOR..=FUSE => [
                 "for",
                 "end",
@@ -490,6 +508,32 @@ pub(crate) fn unpack_palettes(tabs: &[i32; MAX_TABLE], own: &mut Pals) {
         for (k, c) in p.iter_mut().enumerate() {
             let v = tabs[at + k] as u32;
             *c = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+        }
+    }
+}
+
+/// `cycle`'s turn (`code::TURN`): the formula's palette slot `op.d` is
+/// palette `op.b` turned by the value in slot `op.a`, entry e being `b`'s
+/// entry (e + floor(a·32)) mod 32. Out of line, in flash: a row step's
+/// (once a row, ~1 µs). Indices are masked, whatever the program.
+#[inline(never)]
+pub(crate) fn turn(t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCALARS], op: &Op) {
+    let n = ((sc[(op.a & 0x7f) as usize] >> 11) & 31) as usize;
+    let src = *palette(t, own, op.b);
+    let dst = &mut own[(op.d as usize) % USER_PALETTES];
+    for (e, c) in dst.iter_mut().enumerate() {
+        *c = src[(e + n) & 31];
+    }
+}
+
+/// Every `TURN` of the row section (the JIT's driver, after its row
+/// function: they are the section's last steps, so the same as the VM's).
+#[cfg(any(test, all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
+pub(crate) fn turn_rows(prog: &Program, t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCALARS]) {
+    let (de, re) = (prog.draw_end as usize, (prog.row_end as usize).min(MAX_OPS));
+    for op in &prog.ops[de.min(re)..re] {
+        if op.code == code::TURN {
+            turn(t, own, sc, op);
         }
     }
 }
@@ -798,7 +842,7 @@ impl Program {
     /// still cache's run with what is laid out before its marker (the VM
     /// runs those as lanes).
     pub(crate) fn kernel_start(&self) -> usize {
-        let (re, pe) = (self.row_end as usize, self.len());
+        let (re, pe) = (self.fast_start(), self.len());
         if let Some(k) = self.still_marker() {
             return (k + 1 + self.ops[k].a as usize).min(pe);
         }
@@ -826,10 +870,28 @@ impl Program {
         let start = if jit { self.kernel_start() } else { usize::MAX };
         // A fused run's steps on the VM: as ever, less what its kernel saves.
         let (mut saved, mut px, mut kp) = (0, 0, JIT_LOOP_NS);
+        // `layer rate N`: the slow layers' steps a band of rows a frame (an
+        // Nth of the rows), on the VM; the fast part's lanes start from the
+        // held picture (a row copy).
+        // (Slow layers that read no `t` are redrawn when what they read
+        // changes: at most once a second for the clock, counted as every
+        // 50th frame, or every Nth if N is more.)
+        let (slow, rate) = match self.slow_marker() {
+            Some(m) => {
+                let op = &self.ops[m];
+                let n = u32::from(op.d.max(1));
+                let every = if op.c & crate::rate::READS_T != 0 { n } else { n.max(50) };
+                (m + 1..m + 1 + op.a as usize, every)
+            }
+            None => (0..0, 1),
+        };
+        let mut slow_ns = 0;
         let mut k = self.row_end as usize;
         while k < self.len() {
             let op = &self.ops[k];
             if skip.contains(&k) {
+            } else if slow.contains(&k) {
+                slow_ns += self.step_ns(k, op);
             } else if k >= start {
                 // (A marker the kernel does not draw in one piece: its
                 // steps follow, one at a time.)
@@ -851,6 +913,13 @@ impl Program {
             k += 1;
         }
         let row = self.counts().1 as u32;
+        // `cycle`'s turns: a palette copied each row, on top of a row
+        // step's 10 µs a frame.
+        let turns = self.ops[self.draw_end as usize..self.row_end as usize]
+            .iter()
+            .filter(|o| o.code == code::TURN)
+            .count() as u32
+            * TURN_US;
         // The loop itself (a pixel's colour is counted above: `gray(x)` is
         // 45 + 120, as measured); then what the real paths add to the VM's
         // own frame — the effect's copy into the canvas, the look's rows
@@ -864,8 +933,13 @@ impl Program {
         } else {
             (45 + px + STILL_COPY_NS * cached, 0)
         };
-        let px = px.saturating_sub(saved);
-        ((px * (W * H) as u32) / 1000 + row * 10 + self.draw_cost(lanes) + extra) * 115 / 100
+        let px = px.saturating_sub(saved)
+            + if slow.is_empty() {
+                0
+            } else {
+                (45 + slow_ns).div_ceil(rate) + HELD_COPY_NS
+            };
+        ((px * (W * H) as u32) / 1000 + row * 10 + turns + self.draw_cost(lanes) + extra) * 115 / 100
     }
 
     /// A kernel step's cost, ns a pixel (see `esp32_us_jit`).
@@ -1008,6 +1082,46 @@ impl Program {
     pub(crate) fn still_marker(&self) -> Option<usize> {
         let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
         (re.min(pe)..pe).find(|&k| self.ops[k].code == code::STILL)
+    }
+
+    /// Where the slow layers' marker is (`code::SLOW`), if the formula has
+    /// `layer rate N { }`.
+    pub(crate) fn slow_marker(&self) -> Option<usize> {
+        let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
+        (re.min(pe)..pe).find(|&k| self.ops[k].code == code::SLOW)
+    }
+
+    /// The rows of the slow layers a frame redraws in steady play at its
+    /// grid: a band's (`ceil(32/N)`) when they read `t`, else none (they
+    /// are redrawn when what they read changes). `None` without `rate`.
+    /// The player's governor counts the slow rows a frame drew beyond this
+    /// (a slower grid has more bands due a frame) at this share, so a
+    /// slower grid does not look dearer a frame than the faster one.
+    pub fn rate_rows(&self) -> Option<u32> {
+        self.slow_marker().map(|m| {
+            let op = &self.ops[m];
+            if op.c & crate::rate::READS_T != 0 {
+                (H as u32).div_ceil(u32::from(op.d.max(1)))
+            } else {
+                0
+            }
+        })
+    }
+
+    /// The first pixel step after the slow layers' (`layer rate N`: they
+    /// are laid out first, after their marker; `row_end` without them).
+    pub(crate) fn fast_start(&self) -> usize {
+        match self.slow_marker() {
+            Some(m) => (m + 1 + self.ops[m].a as usize).min(self.len()),
+            None => self.row_end as usize,
+        }
+    }
+
+    /// `layer rate N { }`'s N: its slow layers are redrawn every Nth frame
+    /// of its grid, a band of rows a frame (`None`: every layer every
+    /// frame). A player keeps their picture in a [`crate::Held`].
+    pub fn rate(&self) -> Option<u32> {
+        self.slow_marker().map(|m| u32::from(self.ops[m].d))
     }
 
     /// The column run's steps (`code::COLUMN`), if the formula has one.
@@ -1218,6 +1332,10 @@ impl Program {
                 alloc::format!("{args}; back to {}", op.c)
             } else if op.code == code::FUSE {
                 alloc::format!("{}; {} steps", crate::fuse::name(op.d), op.a)
+            } else if op.code == code::TURN {
+                alloc::format!("{args}; palette {}", op.b)
+            } else if op.code == code::SLOW {
+                alloc::format!("skip {} in the fast part; {} layers, rate {}, reads {:#x}", op.a, op.b, op.d, op.c)
             } else if op.code == code::COLUMN {
                 alloc::format!("skip {} after the first row", op.a)
             } else if op.code == code::STILL {
@@ -1247,6 +1365,10 @@ impl Program {
                         | code::COLUMN
                         | code::FUSE
                 ) {
+                "out".into()
+            } else if op.code == code::TURN {
+                alloc::format!("pal{}", 5 + op.d as usize)
+            } else if op.code == code::SLOW {
                 "out".into()
             } else if code::is_wide(op.code) && code::wide_ops(op.code).0 {
                 alloc::format!("w{}", op.d)
@@ -1545,6 +1667,15 @@ impl VecLoop {
         (r > 0).then_some(r)
     }
 }
+
+/// A `rate` formula's fast part starts each row from the held picture: a
+/// 384 B copy a row, ns a pixel (a guess until psi-probe measures it).
+pub(crate) const HELD_COPY_NS: u32 = 5;
+
+/// `cycle`'s turn of a palette, µs a frame over a row step's 10: 32 rows
+/// of a 32-entry copy (consoleb-a on the spare: `cycle(fire, x*3, t)` 838
+/// µs a frame against `pal(fire, frac(x*3))`'s 735).
+pub(crate) const TURN_US: u32 = 90;
 
 /// What a cached lane costs a pixel, ns: its register is pointed at it
 /// (read in place), once a lane of pixels — next to nothing. (It was a

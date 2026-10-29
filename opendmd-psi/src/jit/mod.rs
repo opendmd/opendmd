@@ -276,11 +276,7 @@ pub(crate) fn frame<T: Target>(
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = inputs.seed;
     }
-    let (fe, de, re) = (
-        prog.frame_end as usize,
-        prog.draw_end as usize,
-        prog.row_end as usize,
-    );
+    let fe = prog.frame_end as usize;
     if prog.forever() {
         vm::wset(&mut scratch.lanes[REGS], 0, inputs.tw);
     }
@@ -367,12 +363,11 @@ pub(crate) fn frame<T: Target>(
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
         match low.rows_at {
-            Some(at) => t.run_rows(at, ctx, scratch.sc.as_mut_ptr()),
-            None => {
-                for op in &prog.ops[de..re] {
-                    vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
-                }
+            Some(at) => {
+                t.run_rows(at, ctx, scratch.sc.as_mut_ptr());
+                turn_rows(prog, tables, &mut own, &scratch.sc);
             }
+            None => vm::row_steps(prog, scratch, tables, &mut own),
         }
         #[cfg(feature = "stats")]
         clk.lap(stats::ROWS);
@@ -384,7 +379,8 @@ pub(crate) fn frame<T: Target>(
         // The column and still runs (and what the still run reads, laid
         // out before its marker): lanes, the VM's own steps.
         let mut alias: Alias = [core::ptr::null(); REGS + 1];
-        let mut k = re;
+        // (After a `rate` formula's slow layers: the VM's, in their part.)
+        let mut k = prog.fast_start();
         let mut keep_at = usize::MAX;
         while k < main {
             let op = &prog.ops[k];
@@ -451,7 +447,9 @@ pub(crate) fn frame<T: Target>(
             // SAFETY: `dest` gives W × 3 bytes, word-aligned (`track`).
             unsafe { core::ptr::copy_nonoverlapping(d.cast::<u32>(), before.as_mut_ptr(), W * 3 / 4) };
         }
-        if backdrop {
+        // (A `rate` formula's fast part: over the held slow layers, or over
+        // the row as it is without them.)
+        if backdrop || (low.rate && under.is_some()) {
             let src = under.map_or(&ZEROS[..], |u| &u[row * W * 3..(row + 1) * W * 3]);
             // SAFETY: as above: W × 3 bytes at `d`, not `src`'s.
             unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), d, W * 3) };
@@ -716,6 +714,11 @@ mod device {
                 }
                 return false;
             }
+            // A `rate` formula without its held picture: the slow layers'
+            // rows first (the VM's), the kernel's fast part over them.
+            if self.low.rate && under.is_none() {
+                crate::rate::draw_slow::<128>(prog, scratch, inputs, tables, rows, out);
+            }
             let mut d = self.device();
             let base = out.as_mut_ptr();
             // SAFETY: row < 32, within `out` (asserted above).
@@ -754,7 +757,8 @@ mod device {
             under: Option<&[u8]>,
             frame_bytes: &[u8],
         ) -> Result<bool, (usize, usize)> {
-            if !crate::range::inputs_in_range(prog, inputs) {
+            // (A `rate` formula's kernel is checked over its held picture.)
+            if !crate::range::inputs_in_range(prog, inputs) || (self.low.rate && under.is_none()) {
                 return Ok(false);
             }
             // (On the heap, once an open: the main task's stack is short.)

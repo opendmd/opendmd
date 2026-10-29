@@ -545,6 +545,11 @@ pub fn render_rows_still<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
+    if prog.slow_marker().is_some() {
+        return crate::rate::render_scratch::<N>(
+            prog, scratch, ink, still, inputs, tables, rows, out, true, None,
+        );
+    }
     frame::<N>(
         prog,
         scratch,
@@ -559,6 +564,7 @@ pub fn render_rows_still<const N: usize>(
         // (Opaque: a constant here had LLVM make a second, specialised
         // copy of the frame loop, 9 KB of IRAM.)
         core::hint::black_box(None),
+        core::hint::black_box(crate::rate::WHOLE),
     )
 }
 
@@ -568,6 +574,8 @@ pub fn render_rows_still<const N: usize>(
 /// not word-aligned; a row not drawn is left as it was: give zeros).
 /// The bytes written are the same as without it; the player marks only
 /// what changed, so the blit pushes nothing else (console-lessons 2.5).
+/// A `rate` formula (drawn from nothing: see [`crate::render_held`] for
+/// its held way) says every row drawn changed.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_changed<const N: usize>(
     prog: &Program,
@@ -581,6 +589,11 @@ pub fn render_rows_changed<const N: usize>(
     out: &mut [u8],
     changed: &mut [u32; H],
 ) {
+    if prog.slow_marker().is_some() {
+        return crate::rate::render_scratch::<N>(
+            prog, scratch, ink, still, inputs, tables, rows, out, true, Some(changed),
+        );
+    }
     frame::<N>(
         prog,
         scratch,
@@ -593,6 +606,7 @@ pub fn render_rows_changed<const N: usize>(
         out,
         true,
         core::hint::black_box(Some(changed)),
+        core::hint::black_box(crate::rate::WHOLE),
     )
 }
 
@@ -611,6 +625,11 @@ pub fn render_rows_ink_turns<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
+    if prog.slow_marker().is_some() {
+        return crate::rate::render_scratch::<N>(
+            prog, scratch, ink, None, inputs, tables, rows, out, false, None,
+        );
+    }
     frame::<N>(
         prog,
         scratch,
@@ -623,6 +642,7 @@ pub fn render_rows_ink_turns<const N: usize>(
         out,
         core::hint::black_box(false),
         core::hint::black_box(None),
+        core::hint::black_box(crate::rate::WHOLE),
     )
 }
 
@@ -634,7 +654,7 @@ pub fn render_rows_ink_turns<const N: usize>(
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
-fn frame<const N: usize>(
+pub(crate) fn frame<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
@@ -646,6 +666,7 @@ fn frame<const N: usize>(
     out: &mut [u8],
     lanes: bool,
     changed: Option<&mut [u32; H]>,
+    part: u8,
 ) {
     #[cfg(feature = "stats")]
     stats::stamp(1);
@@ -666,11 +687,9 @@ fn frame<const N: usize>(
     if prog.uses & SEEDED != 0 {
         sc[S_SEED as usize] = inputs.seed;
     }
-    let (fe, re, pe) = (
-        prog.frame_end as usize,
-        prog.row_end as usize,
-        prog.pixel_end as usize,
-    );
+    let fe = prog.frame_end as usize;
+    #[cfg(not(target_arch = "wasm32"))]
+    let pe = prog.pixel_end as usize;
     // A `loop forever` formula's wide values (0: `t`) live in the last
     // lane while the frame's steps run (no lane is in use before the rows).
     if prog.forever() {
@@ -692,6 +711,13 @@ fn frame<const N: usize>(
         }
         _ => None,
     };
+    // A `rate` formula's parts (`crate::rate`): the slow part runs only
+    // the steps after its marker (no still cache: the caller gives none),
+    // the fast part the steps after those, each lane starting from `under`
+    // (the held picture) or, without one, from what `out` holds. (Any part
+    // but these of a `rate` formula: the fast part.)
+    let fast = part == crate::rate::FAST;
+    let (k0, k1) = crate::rate::steps(prog, part);
     let mut cache = match (still, prog.still_marker()) {
         (Some(st), Some(at)) if st.lanes_for(prog) => {
             if st.holds(prog) {
@@ -718,7 +744,7 @@ fn frame<const N: usize>(
     if prog.uses & OWNPAL != 0 {
         unpack_palettes(&prog.tables, &mut own);
     }
-    let backdrop = prog.uses & BACKDROP != 0;
+    let backdrop = prog.uses & BACKDROP != 0 || fast;
     // Each row's values and what it changed (`Rows`): the row as it was
     // kept when `changed` asks.
     let mut per_row = Rows::new(changed, out);
@@ -731,7 +757,7 @@ fn frame<const N: usize>(
         if rows & (1 << row) == 0 {
             continue;
         }
-        per_row.begin(prog, scratch, tables, out, row);
+        per_row.begin(prog, scratch, tables, out, row, &mut own);
         let span = row * W * 3..(row + 1) * W * 3;
         let row_bytes = &mut out[span.clone()];
         let under_row = under.map(|u| &u[span.clone()]);
@@ -748,15 +774,16 @@ fn frame<const N: usize>(
             if backdrop {
                 match ul {
                     Some(u) => px.as_flattened_mut().copy_from_slice(u),
-                    None => px.fill([0; 3]),
+                    None if !fast => px.fill([0; 3]),
+                    None => {}
                 }
             }
             // (A still cache's lanes are pointed at again by its marker
             // below, at this lane's pixels.)
             let mut alias: Alias = [core::ptr::null(); REGS + 1];
-            let mut k = re;
+            let mut k = k0;
             let mut keep_at = usize::MAX;
-            while k < pe {
+            while k < k1 {
                 let op = &prog.ops[k];
                 if k == keep_at {
                     if let Cache::Keep(st, at) = &mut cache {
@@ -877,10 +904,22 @@ pub(crate) fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n
 /// The row steps for one row. In flash (consolea-a: as quick as in IRAM,
 /// the road 3,347 µs against main's 3,393; `noise_o` and the other row
 /// helpers they call stay in IRAM), and IRAM is short.
+///
+/// `cycle`'s turns (`code::TURN`, the section's last steps) turn the
+/// formula's palette slots in `own` for the row.
 #[inline(never)]
-fn row_steps<const N: usize>(prog: &Program, scratch: &mut Scratch<N>, tables: &Tables) {
+pub(crate) fn row_steps<const N: usize>(
+    prog: &Program,
+    scratch: &mut Scratch<N>,
+    tables: &Tables,
+    own: &mut Pals,
+) {
     for op in &prog.ops[prog.draw_end as usize..prog.row_end as usize] {
-        scalar(&mut scratch.sc, op, tables, &prog.tables);
+        if op.code == code::TURN {
+            crate::program::turn(tables, own, &scratch.sc, op);
+        } else {
+            scalar(&mut scratch.sc, op, tables, &prog.tables);
+        }
     }
 }
 
@@ -924,13 +963,14 @@ impl<'a> Rows<'a> {
         tables: &Tables,
         out: &[u8],
         row: usize,
+        own: &mut Pals,
     ) {
         self.finish(out);
         // y and py count from the bottom (y = 0 is the bottom row).
         let py = ((H - 1 - row) as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
-        row_steps(prog, scratch, tables);
+        row_steps(prog, scratch, tables, own);
         if self.track && row < H {
             self.kept = row;
             // SAFETY: row `row`'s W × 3 bytes of the W × H × 3 picture,

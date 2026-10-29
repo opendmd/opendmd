@@ -445,6 +445,7 @@ const FUNCS = [
   ['fps 100', 'frames a second: 25, 50 (else) or 100, for fast motion; a light formula only'],
   ['frame { … }', 'values worked out once a frame'],
   ['layer add { … }', 'a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min'],
+  ['layer rate 4 { … }', 'a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame', 'layer rate 4 {\n  \n}\n'],
   ['use Plasma as p', 'puts in one of your formulas or an example, as part p { … }', 'use Plasma as p\n'],
   ['p.v', 'a value part p sets'],
   ['p(x, y, k)', 'part p as a colour, drawn at another place; k: how much it covers']
@@ -466,6 +467,7 @@ const COLS = [
   ['pal(fire, v)', 'a palette: fire, ice, ocean, chrono, amber, rainbow, gray'],
   ['palette sea = #024, #08c, #fff', 'your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one', 'palette p = #000, #f80, #fff\n'],
   ['pal(fire, v) * k', 'a palette colour, dimmed (or lit) by k'],
+  ['cycle(fire, v, s)', 'palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame'],
   ['gray(v)', 'white, 0 to 1'],
   ['#ff8800', 'a colour: alone, or #f80 * v, mix(#000, #f80, v)'],
   ['rgb(r, g, b, k)', 'a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)']

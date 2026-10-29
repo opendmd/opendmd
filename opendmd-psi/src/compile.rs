@@ -2126,6 +2126,12 @@ struct Colour {
     scale: Option<Id>,
 }
 
+/// A colour's palette flag: `cycle(P, v, s)`, its turn (a `code::TURN`
+/// node) in `args[1]` (`pal` is P | this until `finish` gives the turned
+/// palette its slot). In the colour itself, so a colour stays its size
+/// (parts hold many: the compile's heap).
+const TURNED: u8 = 0x40;
+
 /// What a formula's or a part's lines come to: its colours, bottom to top
 /// (the last line's, or its layers'), the line that made the top one,
 /// whether they are layers, `layer` blocks written, and its `loop`.
@@ -2137,6 +2143,8 @@ struct Body {
     loop_v: Option<i32>,
     /// `fps N`: the frame time it asks for, ms (10, 20 or 40).
     fps: Option<u8>,
+    /// `layer rate N { }`: each such layer's colour (its index) and N.
+    rates: Vec<(usize, u8)>,
 }
 
 const BP_TERNARY: u8 = 1;
@@ -2391,6 +2399,22 @@ impl<'s> Parser<'s> {
 
     /// Whether names set in `scope` can be seen here: this scope's and its
     /// parents', up to the part it is in (a part sees nothing outside it).
+    /// Whether the lines being read are a part's (its own scope or one
+    /// inside it).
+    fn in_part(&self) -> bool {
+        let mut s = self.scope;
+        loop {
+            let (parent, own) = self.scopes[s as usize];
+            if own {
+                return true;
+            }
+            if s == 0 {
+                return false;
+            }
+            s = parent;
+        }
+    }
+
     fn visible(&self, scope: u16) -> bool {
         let mut s = self.scope;
         loop {
@@ -2793,6 +2817,7 @@ impl<'s> Parser<'s> {
     /// The colour call at `t` (its name): `rgb(r, g, b)`, `hsv(h, s, v)`,
     /// `pal(name, k)`, `gray(v)`.
     #[inline(never)]
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn colour(&mut self, t: Token) -> Result<Colour, Error> {
         let name = self.text(t);
         let &(_, ar, c) = COLOURS.iter().find(|e| e.0 == name).unwrap_or(&COLOURS[0]);
@@ -2831,12 +2856,17 @@ impl<'s> Parser<'s> {
                 scale: None,
             });
         }
+        let cycle = name == "cycle";
         self.expect(Tok::LParen, "`(`")?;
         let p = self.peek();
         if p.tok != Tok::Name {
             return self.err(
                 p,
-                "the first value of `pal` is a palette: fire, ocean, ice, chrono, amber, rainbow or gray",
+                if cycle {
+                    "the first value of `cycle` is a palette: fire, ocean, ice, chrono, amber, rainbow or one of yours"
+                } else {
+                    "the first value of `pal` is a palette: fire, ocean, ice, chrono, amber, rainbow or gray"
+                },
             );
         }
         self.next();
@@ -2847,8 +2877,53 @@ impl<'s> Parser<'s> {
         let Some(pal) = PALETTES.iter().find(|e| e.0 == pname).map(|e| e.1).or(own) else {
             return Err(self.unknown_palette(p));
         };
-        self.expect(Tok::Comma, "`,` (as in `pal(fire, k)`)")?;
-        let k = self.expr(0)?;
+        if cycle && pal == 255 {
+            // E932.
+            return self.err(
+                p,
+                "`cycle` turns a palette of colours, and gray is not one: write your own, `palette g = #000, #fff`",
+            );
+        }
+        self.expect(
+            Tok::Comma,
+            if cycle { "`,` (as in `cycle(fire, v, t/4)`)" } else { "`,` (as in `pal(fire, k)`)" },
+        )?;
+        let mut k = self.expr(0)?;
+        let mut turn = None;
+        if cycle {
+            self.expect(Tok::Comma, "`,` and the turn (as in `cycle(fire, v, t/4)`)")?;
+            let st = self.peek();
+            let s = self.expr(0)?;
+            let at = (st.start, self.toks[self.pos.saturating_sub(1)].get().end.max(st.end));
+            if self.dag.level(s) == LV_PIXEL {
+                // E931.
+                return Err(Error::new(
+                    at.0,
+                    at.1,
+                    "`cycle`'s turn is the same along a row: a value of t, a frame or the row (py), not of x or px",
+                ));
+            }
+            // The entry is (floor(v·32) + floor(s·32)) mod 32: the fraction
+            // of each is all it reads (a value that grows without end too).
+            let s = if self.dag.grows(s) {
+                self.dag.op(code::FRAC, [s, 0, 0], at)?
+            } else {
+                s
+            };
+            k = self.dag.op(code::FRAC, [k, 0, 0], at)?;
+            turn = Some(self.dag.push(
+                Node {
+                    code: code::TURN,
+                    a: s,
+                    b: 0,
+                    c: 0,
+                    val: i32::from(pal),
+                    level: LV_ROW,
+                    why: 0,
+                },
+                at,
+            )?);
+        }
         let mut alpha = None;
         if self.peek().tok == Tok::Comma {
             self.next();
@@ -2859,7 +2934,8 @@ impl<'s> Parser<'s> {
             return self.err(
                 close,
                 format!(
-                    "`pal` takes a palette and one value (and how much of the pixel it covers, 0 to 1, if you like); found {}",
+                    "`{name}` takes a palette{} (and how much of the pixel it covers, 0 to 1, if you like); found {}",
+                    if cycle { ", the picture and the turn" } else { " and one value" },
                     self.found(close)
                 ),
             );
@@ -2872,8 +2948,8 @@ impl<'s> Parser<'s> {
         };
         Ok(Colour {
             code,
-            args: [k, 0, 0],
-            pal,
+            args: [k, turn.unwrap_or(0), 0],
+            pal: if turn.is_some() { pal | TURNED } else { pal },
             alpha,
             blend: fixed::BLEND_OVER,
             scale: None,
@@ -3027,7 +3103,9 @@ impl<'s> Parser<'s> {
             || FUNCS
                 .iter()
                 .any(|e| e.0 == name && !LATER_FUNCS.contains(&name))
-            || COLOURS.iter().any(|e| e.0 == name)
+            || COLOURS
+                .iter()
+                .any(|e| e.0 == name && !LATER_FUNCS.contains(&name))
             || KEYWORDS.contains(&name)
         {
             return self.err(t, format!("`{name}` is built in; pick another name"));
@@ -3259,7 +3337,7 @@ impl<'s> Parser<'s> {
             let mut e = self.peek();
             // `pal(P, v) * k`: the palette's colour, each channel times k
             // (a light on a palette, in one step); `* k * m` too.
-            if word == "pal" && e.tok == Tok::Star && !self.has_colour(self.pos + 1, false) {
+            if (word == "pal" || word == "cycle") && e.tok == Tok::Star && !self.has_colour(self.pos + 1, false) {
                 let at = (e.start, e.end);
                 let mut k = None;
                 while self.peek().tok == Tok::Star {
@@ -3282,7 +3360,12 @@ impl<'s> Parser<'s> {
             if infix_bp(e.tok).is_some() && word != "rgb" {
                 return self.err(
                     e,
-                        if word == "pal" {
+                        if word == "cycle" {
+                        String::from(
+                            "`cycle(…)` can't go into a sum: it can only be scaled, `cycle(fire, v, s) * k` \
+                             (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
+                        )
+                    } else if word == "pal" {
                         String::from(
                             "`pal(…)` can't go into a sum: it can only be scaled, `pal(fire, v) * k` \
                              (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
@@ -3333,12 +3416,13 @@ impl<'s> Parser<'s> {
 
     /// `layer [blend] { … }` at `kw`: its own values (and `frame { }`),
     /// ending in its colour (several: a part with layers drawn whole).
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     #[inline(never)]
-    fn layer(&mut self, kw: Token) -> Result<(Vec<Colour>, Token), Error> {
+    fn layer(&mut self, kw: Token) -> Result<(Vec<Colour>, Token, u8), Error> {
         self.next();
         let mut blend = None;
         let b = self.peek();
-        if b.tok == Tok::Name {
+        if b.tok == Tok::Name && self.text(b) != "rate" {
             let name = self.text(b);
             let Some(&(_, m)) = BLENDS.iter().find(|e| e.0 == name) else {
                 let s = suggest(name, BLENDS.iter().map(|e| e.0));
@@ -3353,7 +3437,36 @@ impl<'s> Parser<'s> {
             self.next();
             blend = Some(m);
         }
+        // `rate N`: redrawn every Nth frame, a band of rows a frame
+        // (`crate::rate`).
+        let mut rate = 0u8;
+        let r = self.peek();
+        if r.tok == Tok::Name && self.text(r) == "rate" {
+            self.next();
+            let n = self.next();
+            rate = match n.tok {
+                Tok::Num(v) if v & 0xffff == 0 && (2..=crate::rate::MAX_RATE as i32).contains(&(v >> 16)) => {
+                    (v >> 16) as u8
+                }
+                // E942.
+                _ => {
+                    return self.err(
+                        n,
+                        format!("`rate` takes a whole number of frames, 2 to {}: `layer rate 4 {{ … }}` is redrawn every 4th frame", crate::rate::MAX_RATE),
+                    )
+                }
+            };
+            // Inside a part (a whole formula pasted in, `use … as p`, a
+            // composed look) it is allowed and left out: the slow layers are
+            // the formula's own, as its frame rate is (`fps`).
+            if self.in_part() {
+                rate = 0;
+            }
+        }
         let open = self.peek();
+        if open.tok != Tok::LBrace && rate > 0 && open.tok == Tok::Name && BLENDS.iter().any(|e| e.0 == self.text(open)) {
+            return self.err(open, "write the blend first: `layer add rate 4 { … }`");
+        }
         if open.tok != Tok::LBrace {
             return self.err(
                 open,
@@ -3436,8 +3549,12 @@ impl<'s> Parser<'s> {
             (true, _) => {}
             (false, m) => cs[0].blend = m.unwrap_or(fixed::BLEND_OVER),
         }
+        if rate > 0 && layered {
+            // E945.
+            return self.err(r, "`rate` goes on the formula's own layers, not on a part's");
+        }
         self.end_of_statement()?;
-        Ok((cs, ct))
+        Ok((cs, ct, rate))
     }
 
     /// The `loop` the lines from token `k` set (to their `}`, or the end),
@@ -4484,6 +4601,7 @@ impl<'s> Parser<'s> {
             blocks: 0,
             loop_v: None,
             fps: None,
+            rates: Vec::new(),
         };
         let mut last: Option<Token> = None;
         let mut seen_frame = false;
@@ -4537,7 +4655,10 @@ impl<'s> Parser<'s> {
                 }
                 "frame" => self.frame_block(t, &mut seen_frame)?,
                 "layer" => {
-                    let (cs, ct) = self.layer(t)?;
+                    let (cs, ct, rate) = self.layer(t)?;
+                    if rate > 0 {
+                        try_push(&mut b.rates, (b.colours.len(), rate))?;
+                    }
                     b.colours.extend(cs);
                     b.top = Some(ct);
                     b.layered = true;
@@ -5291,10 +5412,42 @@ fn finish(
             && c.alpha
                 .is_none_or(|a| dag.konst(a).is_some_and(|v| v >= ONE))
     };
+    // Each layer's `rate` (0: every frame), by its index after the drain.
+    let mut rates = try_vec(0u8, layers.len())?;
+    for &(i, n) in &body.rates {
+        if let Some(r) = rates.get_mut(i) {
+            *r = n;
+        }
+    }
     if let Some(k) = layers.iter().rposition(opaque) {
         layers.drain(..k);
+        rates.drain(..k);
     }
     let backdrop = !opaque(&layers[0]);
+    // `cycle`'s turned palettes: a slot each after the formula's own, one
+    // for each palette and turn (E933 past three in all).
+    let mut turns: Vec<Id> = Vec::new();
+    let turn_of = |c: &Colour| (c.code == code::OUT_PAL && c.pal & TURNED != 0).then_some(c.args[1]);
+    for c in &layers {
+        if let Some(tn) = turn_of(c).filter(|tn| !turns.contains(tn)) {
+            turns.push(tn);
+        }
+    }
+    let n_own = p.palettes.len();
+    if n_own + turns.len() > USER_PALETTES {
+        // E933.
+        return Err(Error::new(
+            ct.start,
+            ct.end,
+            format!(
+                "a formula has room for {USER_PALETTES} palettes: its own ({n_own} here) and each palette `cycle` turns by another value ({} here)",
+                turns.len()
+            ),
+        ));
+    }
+    for (j, &tn) in turns.iter().enumerate() {
+        p.dag.nodes[tn as usize].b = (n_own + j) as Id;
+    }
     let mut steps = Vec::with_capacity(layers.len());
     for (k, c) in layers.iter().enumerate() {
         let plain = k == 0 && !backdrop;
@@ -5328,12 +5481,51 @@ fn finish(
                 code::OUT_LAYER + (c.code - code::OUT_RGB) + 4 * c.blend
             },
             args: c.args,
-            pal: c.pal,
+            pal: match turn_of(c) {
+                Some(tn) => 5 + p.dag.nodes[tn as usize].b as u8,
+                None => c.pal,
+            },
             alpha,
             scale,
             shift,
+            turn: turn_of(c),
         });
     }
+    // `layer rate N { }`: the slow layers, a run from the bottom with one
+    // rate, under at least one that moves, covering the panel.
+    let n_slow = rates.iter().take_while(|&&r| r > 0).count();
+    let rate_err = |msg: &str| Err(Error::new(ct.start, ct.end, String::from(msg)));
+    if rates[n_slow..].iter().any(|&r| r > 0) {
+        // E941.
+        return rate_err("`rate` goes on the bottom layers only: the first layer, or the first few one after another");
+    }
+    let slow = if n_slow > 0 {
+        let n = rates[0];
+        if rates[..n_slow].iter().any(|&r| r != n) {
+            // E943.
+            return rate_err("the slow layers share one `rate`: give each the same number");
+        }
+        if n_slow == layers.len() {
+            // E947.
+            return rate_err("a `rate` layer is the slow one under a layer that moves: add a layer above it, or leave `rate` out");
+        }
+        if backdrop {
+            // E944.
+            return rate_err("the bottom `rate` layer draws the whole panel: make it cover everything (`layer rate N { … }` with no blend and no coverage)");
+        }
+        let reads = split_slow(&mut p.dag, &mut steps, n_slow).map_err(|e| Error {
+            start: ct.start,
+            end: ct.end,
+            ..e
+        })?;
+        Some(Slow {
+            layers: n_slow,
+            rate: n,
+            reads,
+        })
+    } else {
+        None
+    };
     // What only reading needed goes before the layout: the tokens (the
     // biggest list), the names, the sharing index. Laying out holds a
     // dozen lists of its own; the compile's peak was the two at once.
@@ -5349,7 +5541,7 @@ fn finish(
     p.dag.divs = Vec::new();
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
-    emit(&p.dag, &steps, &p.draw, backdrop, runs, reuse, prog).map_err(|e| Error {
+    emit(&p.dag, &steps, &p.draw, backdrop, runs, reuse, slow, prog).map_err(|e| Error {
         start: ct.start,
         end: ct.end,
         ..e
@@ -5535,18 +5727,113 @@ struct Step {
     /// x, 3).
     scale: Option<Id>,
     shift: u8,
+    /// `cycle`'s turn of its palette (a row step, `code::TURN`).
+    turn: Option<Id>,
 }
 
 impl Step {
     /// What it reads, in operand order (a palette's scale, then the
-    /// coverage last).
+    /// coverage), then the turn of its palette (not an operand: a row step
+    /// before it).
     fn reads(&self) -> impl Iterator<Item = Id> + '_ {
         self.args[..code::arity(self.code)]
             .iter()
             .copied()
             .chain(self.scale)
             .chain(self.alpha)
+            .chain(self.turn)
     }
+}
+
+/// A formula's slow layers (`layer rate N { }`): the first `layers`
+/// colour steps, redrawn every `rate`th frame, reading what `reads` says
+/// (`crate::rate::READS_*`).
+#[derive(Clone, Copy)]
+struct Slow {
+    layers: usize,
+    rate: u8,
+    reads: u8,
+}
+
+/// Give the slow layers (the first `n` steps) pixel values of their own:
+/// one the layers above read too is copied for them (the fast part runs
+/// without the slow one's steps, the slow part without the fast one's).
+/// What they read, transitively (`rate::READS_*`); E944 if they read the
+/// canvas or the picture under.
+#[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
+fn split_slow(dag: &mut Dag, steps: &mut [Step], n: usize) -> Result<u8, Error> {
+    let len = dag.nodes.len();
+    // Who reads each node: bit 0 the slow layers, bit 1 the others.
+    let mut by = try_vec(0u8, len)?;
+    for (k, st) in steps.iter().enumerate() {
+        let b = if k < n { 1 } else { 2 };
+        for x in st.reads() {
+            by[x as usize] |= b;
+        }
+    }
+    for i in (0..len).rev() {
+        let b = by[i];
+        if b != 0 && dag.nodes[i].code < K_CONST {
+            for x in reads(dag, i) {
+                by[x as usize] |= b;
+            }
+        }
+    }
+    // Copies, in node order (operands first): a pixel value both read is
+    // copied for the slow layers, and so is one only they read that reads
+    // a copy.
+    let mut what = 0u8;
+    let mut map = try_vec(NO, len)?;
+    for i in 0..len {
+        if by[i] & 1 == 0 {
+            continue;
+        }
+        let mut c = dag.nodes[i];
+        if (code::U_R..=code::INK).contains(&c.code) {
+            // E944.
+            return Err(Error::new(0, 0, "a `rate` layer is drawn on its own: it can't read `ink`, `ur`, `ug`, `ub` or `ul`"));
+        }
+        if c.code == K_INPUT {
+            what |= match c.val {
+                WIDE_T | 0 => crate::rate::READS_T,
+                1..=3 => crate::rate::READS_CLOCK,
+                4..=6 => crate::rate::READS_SLIDERS,
+                v if v == S_SEED as i32 => crate::rate::READS_SEED,
+                _ => 0,
+            };
+            continue;
+        }
+        if c.level != LV_PIXEL || c.code >= K_CONST {
+            continue;
+        }
+        let mut moved = false;
+        for x in [&mut c.a, &mut c.b, &mut c.c].into_iter().take(code::arity(c.code)) {
+            if map[*x as usize] != NO {
+                *x = map[*x as usize];
+                moved = true;
+            }
+        }
+        // (A node only the slow layers read, of a copy: copied too, after
+        // it — every node after the nodes it reads.)
+        if by[i] & 2 == 0 && !moved {
+            continue;
+        } else if dag.nodes.len() >= MAX_NODES {
+            return Err(Error::new(0, 0, "this formula is too long for the panel — simplify it"));
+        } else {
+            try_push(&mut dag.nodes, c)?;
+            map[i] = (dag.nodes.len() - 1) as Id;
+        }
+    }
+    for st in &mut steps[..n] {
+        let ar = code::arity(st.code);
+        for x in st.args[..ar].iter_mut().chain(st.scale.as_mut()).chain(st.alpha.as_mut()) {
+            if map[*x as usize] != NO {
+                *x = map[*x as usize];
+            }
+        }
+    }
+    Ok(what)
 }
 
 /// Lay the reachable nodes out as steps: scalar slots for the constants
@@ -5559,6 +5846,7 @@ impl Step {
 /// order it is written: each loop's values (those that depend on its
 /// counter) at the top of its body.
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 fn emit(
     dag: &Dag,
     steps: &[Step],
@@ -5566,6 +5854,7 @@ fn emit(
     backdrop: bool,
     runs: bool,
     reuse: bool,
+    slow: Option<Slow>,
     prog: &mut Program,
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
@@ -5632,7 +5921,8 @@ fn emit(
             _ => 1,
         })
         .sum();
-    let total = (0..n).filter(|&i| is_op(i)).count() + steps.len() + control;
+    let total =
+        (0..n).filter(|&i| is_op(i)).count() + steps.len() + control + usize::from(slow.is_some());
     if total > MAX_OPS {
         return Err(too_long(total));
     }
@@ -5708,6 +5998,15 @@ fn emit(
     if backdrop {
         prog.uses |= BACKDROP;
     }
+    // A `rate` formula's fast part draws over the held picture, which it
+    // reads as the picture under: none of it may read what is under (E944).
+    if slow.is_some() && prog.uses & UNDER != 0 {
+        return Err(Error::new(
+            0,
+            0,
+            "a formula with `rate` draws its own picture: it can't read `ur`, `ug`, `ub` or `ul`",
+        ));
+    }
     let mut ops: Vec<WOp> = try_with_capacity(total + 2)?;
     // A step for node `m` into `d`; a pick's table of its choices' slots
     // goes in constant slots of its own, one for every pick of the same
@@ -5775,7 +6074,7 @@ fn emit(
     for level in [LV_FRAME, LV_ROW] {
         for i in 0..n {
             let m = &nodes[i];
-            if is_op(i) && m.level == level {
+            if is_op(i) && m.level == level && m.code != code::TURN {
                 // A wide value has a wide slot; a noise's offset its place.
                 let d = if code::is_wide(m.code) && code::wide_ops(m.code).0 {
                     if next_wide >= WIDE {
@@ -5871,6 +6170,27 @@ fn emit(
             }
             prog.draw_end = ops.len().min(MAX_OPS) as u16;
         } else {
+            // `cycle`'s turns, the row section's last steps (the JIT's
+            // driver runs them after its row function): palette slot `b`
+            // (`finish`'s) as palette `val` turned by `a`.
+            for i in 0..n {
+                let m = &nodes[i];
+                if is_op(i) && m.code == code::TURN {
+                    if !set[m.a as usize] {
+                        return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+                    }
+                    loc[i] = 0;
+                    set[i] = true;
+                    prog.uses |= OWNPAL;
+                    ops.push(WOp {
+                        code: code::TURN,
+                        d: m.b,
+                        a: loc[m.a as usize],
+                        b: m.val as u16,
+                        c: 0,
+                    });
+                }
+            }
             prog.row_end = ops.len().min(MAX_OPS) as u16;
         }
     }
@@ -5884,32 +6204,82 @@ fn emit(
     // worked out on a frame's first row and kept (`Item::Column`), when
     // they are worth a step; then the still cache's values. Each tried
     // with the registers, dropped when they don't fit.
+    // The slow layers' pixel values (`split_slow` gave them their own):
+    // never in the column or the still run (the slow part runs without
+    // them, the fast part without the slow steps).
+    // (Lists of their own only for a `rate` formula: this is where the
+    // compile's heap peaks.)
+    let none = alloc::vec![false; n];
+    let mut in_slow = Vec::new();
+    if let Some(sl) = slow {
+        in_slow = try_vec(false, n)?;
+        for st in &steps[..sl.layers] {
+            for x in st.reads() {
+                in_slow[x as usize] = true;
+            }
+        }
+        for i in (0..n).rev() {
+            if in_slow[i] && nodes[i].code < K_CONST {
+                for x in reads(dag, i) {
+                    in_slow[x as usize] = true;
+                }
+            }
+        }
+    }
+    let slow_px = |i: usize| in_slow.get(i).copied().unwrap_or(false);
     let col = column_nodes(dag);
-    let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i]).collect();
+    let in_col: Vec<bool> = (0..n).map(|i| px_op(i) && col[i] && !slow_px(i)).collect();
+    let mut no_still = Vec::new();
+    if slow.is_some() {
+        no_still = in_slow.clone();
+        for (o, &c) in no_still.iter_mut().zip(&in_col) {
+            *o |= c;
+        }
+    }
     let col_ns: u32 = (0..n)
         .filter(|&i| in_col[i])
         .map(|i| value_ns(nodes[i].code))
         .sum();
-    let none = alloc::vec![false; n];
     let mut layout = None;
-    for (use_col, use_still) in [(true, true), (true, false), (false, true), (false, false)] {
+    // A formula that cycles a palette (`cycle`) asks the still cache first:
+    // its picture is usually still, and with the index cached a frame is
+    // the palette's turn and a look-up (console-lessons 2.1). The others
+    // keep the column run first, as before.
+    let cycles = steps.iter().any(|st| st.turn.is_some());
+    let orders = if cycles {
+        [(true, true), (false, true), (true, false), (false, false)]
+    } else {
+        [(true, true), (true, false), (false, true), (false, false)]
+    };
+    for (use_col, use_still) in orders {
         let (use_col, use_still) = (use_col && runs, use_still && runs);
         let use_col = use_col && col_ns >= COLUMN_GAIN_NS;
         let excl = if use_col { &in_col } else { &none };
         let markers = usize::from(use_col);
         let cached = if use_still && total + markers < MAX_OPS {
-            choose_still(dag, steps, &px_op, excl)
+            choose_still(
+                dag,
+                steps,
+                &px_op,
+                match (slow.is_some(), use_col) {
+                    (false, _) => excl,
+                    (true, true) => &no_still,
+                    (true, false) => &in_slow,
+                },
+            )
         } else {
             Vec::new()
         };
-        if (use_col && col_ns < COLUMN_GAIN_NS) || (use_still && cached.is_empty() && !use_col) {
+        if (use_col && col_ns < COLUMN_GAIN_NS)
+            || (use_still && cached.is_empty() && (!use_col || cycles))
+        {
             continue;
         }
         // The markers are steps too: at the step limit, the plain layout.
         if total + markers + usize::from(!cached.is_empty()) > MAX_OPS {
             continue;
         }
-        let lay = pixel_seq(dag, steps, &px_op, &need, &cached, excl, use_col);
+        let lay = pixel_seq(dag, steps, &px_op, &need, &cached, excl, use_col, slow.map_or(0, |s| s.layers));
         if let Some(r) = registers(nodes, steps, &lay.seq, &lay.pinned) {
             layout = Some((lay, cached, r));
             break;
@@ -5922,7 +6292,7 @@ fn emit(
             format!("this formula keeps too many values at once (more than {REGS}) — simplify it"),
         ));
     };
-    let (seq, run_len, col_len) = (lay.seq, lay.run_len, lay.col_len);
+    let (seq, run_len, col_len, slow_len) = (lay.seq, lay.run_len, lay.col_len, lay.slow_len);
     let mut marker = None;
     for (at, item) in seq.iter().enumerate() {
         match *item {
@@ -5933,6 +6303,16 @@ fn emit(
                 b: 0,
                 c: 0,
             }),
+            Item::Slow => {
+                let sl = slow.unwrap_or(Slow { layers: 0, rate: 0, reads: 0 });
+                ops.push(WOp {
+                    code: code::SLOW,
+                    d: u16::from(sl.rate),
+                    a: slow_len as u16,
+                    b: sl.layers as u16,
+                    c: u16::from(sl.reads),
+                });
+            }
             Item::Still => {
                 marker = Some(ops.len());
                 ops.push(WOp {
@@ -6201,6 +6581,8 @@ enum Item {
     Colour(usize),
     Still,
     Column,
+    /// The slow layers' marker (`code::SLOW`).
+    Slow,
 }
 
 /// A wide noise's code.
@@ -6255,7 +6637,7 @@ fn registers(
                     last_use[x as usize] = at;
                 }
             }
-            Item::Still | Item::Column => {}
+            Item::Still | Item::Column | Item::Slow => {}
         }
     }
     // A kept column value is never given up: the rows after the first
@@ -6475,6 +6857,8 @@ struct PixelSeq {
     seq: Vec<Item>,
     run_len: usize,
     col_len: usize,
+    /// The slow layers' items after their marker.
+    slow_len: usize,
     pinned: Vec<bool>,
 }
 
@@ -6483,6 +6867,7 @@ struct PixelSeq {
 /// still cache the per-frame values the cached run reads, the marker and
 /// the run (the cached values and the steps only they need), then the other
 /// values before the colour step that first needs them, as without either.
+#[allow(clippy::too_many_arguments)]
 fn pixel_seq(
     dag: &Dag,
     steps: &[Step],
@@ -6491,15 +6876,40 @@ fn pixel_seq(
     cached: &[usize],
     in_col: &[bool],
     col: bool,
+    slow: usize,
 ) -> PixelSeq {
     let n = dag.nodes.len();
     let mut seq: Vec<Item> = Vec::new();
     let mut pinned = alloc::vec![false; n];
     let mut col_len = 0;
+    // The slow layers (`layer rate N`) first, after their marker: their
+    // values and colours (none in the runs below); the slow part runs only
+    // them, the fast part starts after them. (A whole frame never runs a
+    // `rate` formula's steps in one go: the runs' kept registers are not
+    // the slow steps' to keep.)
+    // (One loop for a layer's values and colour, the slow ones' and the
+    // others'.)
+    let layer = |seq: &mut Vec<Item>, k: usize, ok: &dyn Fn(usize) -> bool| {
+        for (i, &nd) in need.iter().enumerate().take(n) {
+            if nd == k && ok(i) {
+                seq.push(Item::Value(i));
+            }
+        }
+        seq.push(Item::Colour(k));
+    };
+    let mut slow_len = 0;
+    if slow > 0 {
+        seq.push(Item::Slow);
+        for k in 0..slow {
+            layer(&mut seq, k, px_op);
+        }
+        slow_len = seq.len() - 1;
+    }
     if col {
         seq.push(Item::Column);
+        let at = seq.len();
         seq.extend((0..n).filter(|&i| in_col[i]).map(Item::Value));
-        col_len = seq.len() - 1;
+        col_len = seq.len() - at;
         // Kept: the column values something after the run reads.
         for i in 0..n {
             if px_op(i) && !in_col[i] {
@@ -6529,18 +6939,14 @@ fn pixel_seq(
             run_len = seq.len() - before;
         }
     }
-    for k in 0..steps.len() {
-        for i in 0..n {
-            if px(i) && need[i] == k && !run[i] && !first[i] {
-                seq.push(Item::Value(i));
-            }
-        }
-        seq.push(Item::Colour(k));
+    for k in slow..steps.len() {
+        layer(&mut seq, k, &|i| px(i) && !run[i] && !first[i]);
     }
     PixelSeq {
         seq,
         run_len,
         col_len,
+        slow_len,
         pinned,
     }
 }

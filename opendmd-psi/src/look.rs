@@ -58,6 +58,7 @@ const PART: &str = "look";
 /// the blend is not one of [`BLENDS`]. The result is not compiled here
 /// (a layered formula with a blend other than over is the compiler's
 /// error, as is a look too long for the panel).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn compose(src: &str, blend: &str, amount: u8) -> Result<String, Error> {
     // Only its loop and declarations are wanted (boxed: ~2.9 KB).
     let mut p = alloc::boxed::Box::<Program>::default();
@@ -68,6 +69,7 @@ pub fn compose(src: &str, blend: &str, amount: u8) -> Result<String, Error> {
 /// The look a formula's own `look` line asks for, composed as [`compose`]
 /// would: `None` when it has none, or it is `look` (over, 100: the formula
 /// itself). `prog` is `src` compiled.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn declared(src: &str, prog: &Program) -> Option<Result<String, Error>> {
     let (blend, amount) = prog.meta().look()?;
     (blend != "over" || amount < 100).then(|| wrap(src, prog, blend, amount))
@@ -76,6 +78,7 @@ pub fn declared(src: &str, prog: &Program) -> Option<Result<String, Error>> {
 /// [`compose`] for a formula already compiled into `prog` (its loop, and
 /// where a `look` line is, which is left out). The web module compiles
 /// once and calls this.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn wrap(src: &str, prog: &Program, blend: &str, amount: u8) -> Result<String, Error> {
     let loop_ms = prog.loop_ms();
     // Its `look` line, left out.
@@ -146,6 +149,7 @@ pub fn wrap(src: &str, prog: &Program, blend: &str, amount: u8) -> Result<String
 /// declarations are the statements at its top whose first word is one
 /// (`name`, `about` and `control` lines may have text in quotes, with
 /// `;` or `--` inside).
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn look_statement(src: &str) -> Option<(usize, usize)> {
     let b = src.as_bytes();
     let mut i = 0;
@@ -195,6 +199,7 @@ fn look_statement(src: &str) -> Option<(usize, usize)> {
 /// 30`), or taken out when `blend` is empty: a text edit ([`declare`]),
 /// the one way the web app writes a look (its settings sheet). `None`
 /// for a blend that is not one of [`BLENDS`].
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn set(src: &str, blend: &str, amount: u8) -> Option<String> {
     if blend.is_empty() {
         return Some(declare(src, "look", 0, ""));
@@ -226,6 +231,7 @@ pub fn set(src: &str, blend: &str, amount: u8) -> Option<String> {
 /// compiler requires them to be: each ends at its line's end or at a `;`
 /// outside quotes (a path's text has them all on one line, `; `-joined).
 #[inline(never)]
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 pub fn declare(src: &str, word: &str, nth: usize, line: &str) -> String {
     const ORDER: [&str; 5] = ["psi", "name", "about", "control", "look"];
     let rank = |w: &str| ORDER.iter().position(|&o| o == w).unwrap_or(5);
@@ -329,6 +335,7 @@ pub fn declare(src: &str, word: &str, nth: usize, line: &str) -> String {
 
 /// `whole.frac` with `frac` in `places` decimal places, trailing zeros
 /// (and a point with none after it) left out.
+#[cfg_attr(target_arch = "xtensa", optimize(size))]
 fn decimal(s: &mut String, whole: u32, frac: u32, places: u32) {
     let mut b = [0u8; 16];
     let mut n = 10;

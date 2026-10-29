@@ -2383,10 +2383,125 @@ fn what_changed_is_exactly_what_differs() {
                 for g in 0..W / 4 {
                     let o = (y * W + 4 * g) * 3;
                     let differs = was[o..o + 12] != got[o..o + 12];
+                    // (A `rate` formula drawn from nothing says every row it
+                    // drew changed: more than changed, never less.)
+                    if p.rate().is_some() {
+                        assert!(bits & (1 << g) != 0 || !differs, "case {k} frame {j}: row {y} group {g}");
+                        continue;
+                    }
                     assert_eq!(bits & (1 << g) != 0, differs, "case {k} frame {j}: row {y} group {g}");
                 }
             }
             was = got;
         }
     }
+}
+
+/// `expr`'s leaves `ur` and `ul` (the picture under) as `x` and `y`.
+fn no_under(e: &str) -> String {
+    let b = e.as_bytes();
+    let mut o = String::new();
+    let mut k = 0;
+    while k < b.len() {
+        let word = k == 0 || !b[k - 1].is_ascii_alphanumeric();
+        let end = k + 2 >= b.len() || !b[k + 2].is_ascii_alphanumeric();
+        if word && end && (e[k..].starts_with("ur") || e[k..].starts_with("ul")) {
+            o.push(if b[k + 1] == b'r' { 'x' } else { 'y' });
+            k += 2;
+        } else {
+            o.push(b[k] as char);
+            k += 1;
+        }
+    }
+    o
+}
+
+/// `cycle` over random pictures and turns: the bytes of `pal` of the
+/// folded index (`frac` of each, the turn's whole 32nds), per frame and
+/// per row, at both lane widths.
+#[test]
+fn random_cycles_are_the_folded_palette() {
+    let mut r = Rng(0xc1c1_e5ee_d000_0001);
+    let pals = ["fire", "ice", "chrono", "amber", "rainbow"];
+    let mut ok = 0;
+    for k in 0..200 {
+        let v = no_under(&expr(&mut r, 3));
+        // A turn the same along a row: of t, the row, a slider, the clock.
+        let s = match r.below(4) {
+            0 => format!("t/{}", 1 + r.below(7)),
+            1 => format!("t*{} + py/{}", r.below(5), 8 + r.below(40)),
+            2 => format!("a*3 - y*{} + hour/24", r.below(4)),
+            _ => format!("frac(t/2)*{} - {}", r.below(9), r.below(3)),
+        };
+        let p = pals[r.below(pals.len())];
+        let a = format!("loop {}\ncycle({p}, {v}, {s})", 1 + k % 9);
+        let b = format!("loop {}\npal({p}, frac(frac({v}) + floor(frac({s})*32)/32))", 1 + k % 9);
+        let (Ok(pa), Ok(pb)) = (compile(&a), compile(&b)) else { continue };
+        ok += 1;
+        for ms in [0, 777, 3210] {
+            let fa = frame::<128>(&pa, ms);
+            assert!(fa == frame::<64>(&pa, ms), "{a}");
+            assert!(fa == frame::<128>(&pb, ms), "{a}\nvs\n{b}\nat {ms}");
+        }
+    }
+    assert!(ok > 150, "only {ok} compiled");
+}
+
+/// `layer rate N` over random layers: the held picture's frames are the
+/// frames drawn from nothing (frames skipped, sliders and the clock
+/// moving), at both lane widths; a slow layer without `t` draws what the
+/// formula without `rate` draws.
+#[test]
+fn random_rate_formulas_hold_the_same_frames() {
+    let mut r = Rng(0x5a7e_0f00_d00d_0002);
+    let blends = ["add", "multiply", "screen", "max", "min", "over"];
+    let mut ok = 0;
+    let mut held = opendmd_psi::Held::try_boxed().unwrap();
+    for k in 0..150 {
+        let n = [2, 3, 4, 7, 16, 33, 50][r.below(7)];
+        let slow = no_under(&expr(&mut r, 3));
+        let fps = ["", "fps 100\n", "fps 25\n"][r.below(3)];
+        let head = if k % 5 == 0 { "loop forever\n".to_string() } else { format!("loop {}\n", 1 + k % 7) };
+        let top = format!(
+            "layer {} {{ rgb({}, {}, {}, {}) }}",
+            blends[r.below(blends.len())],
+            no_under(&expr(&mut r, 2)),
+            no_under(&expr(&mut r, 2)),
+            no_under(&expr(&mut r, 2)),
+            no_under(&expr(&mut r, 1)),
+        );
+        let src = format!("{head}{fps}layer rate {n} {{ hsv({slow}, 1, frac({slow}*0.5)) }}\n{top}");
+        let p = match compile(&src) {
+            Ok(p) => p,
+            // (Only a value of `t` where `loop forever` can't take it.)
+            Err(e) if e.msg.contains("grows without end") => continue,
+            Err(e) => panic!("{src}\n{}", e.msg),
+        };
+        if p.rate().is_none() {
+            continue;
+        }
+        ok += 1;
+        held.forget();
+        let mut s = Scratch::<128>::new();
+        let mut out = vec![0u8; W * H * 3];
+        let mut ms = 0u64;
+        let mut i = inputs(0);
+        for step in 0..14u64 {
+            ms += 20 * (1 + (r.below(4) == 0) as u64 * r.below(6) as u64);
+            i.set_ms(&p, ms);
+            if step == 7 {
+                i.a = 1 << 13;
+                i.second = 31;
+            }
+            opendmd_psi::render_held::<128>(&p, &mut s, None, None, &mut held, &i, &OWN, &mut out, None);
+            let mut want = vec![0u8; W * H * 3];
+            render_rows::<64>(&p, &mut Scratch::<64>::new(), &i, &OWN, None, u32::MAX, &mut want);
+            assert!(out == want, "{src}\nat {ms} ms (step {step})");
+        }
+        if !slow.contains('t') {
+            let q = compile(&src.replace(&format!(" rate {n} "), " ")).unwrap();
+            assert!(frame::<128>(&p, 4321) == frame::<128>(&q, 4321), "{src}");
+        }
+    }
+    assert!(ok > 100, "only {ok} compiled");
 }
