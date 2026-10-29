@@ -58,8 +58,9 @@ impl Meta {
         }
     }
 
-    /// Bit `k` set for each declared slot.
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    /// Bit `k` set for each declared slot. (Every frame, through
+    /// `range::inputs_in_range`: not optimised for size.)
+    #[inline]
     pub fn declared(&self) -> u8 {
         (0..3).filter(|&k| self.kind[k] != NONE).fold(0, |m, k| m | 1 << k)
     }
