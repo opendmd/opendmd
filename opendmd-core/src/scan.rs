@@ -305,10 +305,11 @@ impl Pacer {
 /// no tear.
 ///
 /// Pair `k`'s window is `[(T - 1) C + (k + 1) R, T C + k R)`: one refresh
-/// less a pair long, sliding a pair (`R`) down per pair. A render of `E` µs
-/// spread over the 16 pairs finishes pair `k` at `s + E (k + 1) / 16`; it
-/// fits every window when its start `s` is in `[T C - E, T C - E / 16 -
-/// w]` (`w` a pair's write), and [`Beam::plan`] aims at the middle of
+/// less a pair long, sliding a pair (`R`) down per pair. A render whose
+/// first pair is drawn `F` µs after its start `s` and its last `E` µs after
+/// fits every window (its pairs between at most a pair's scan apart) when
+/// `s` is in `[T C - E, T C - F - w]` (`w` a pair's write), and
+/// [`Beam::plan`] aims at the middle of
 /// [`BEAM_LATE_ROOM_US`] inside its late edge. The player's next frame is timed to come back there
 /// ([`beam_delay_us`]), so in steady play a frame neither waits nor is
 /// late; a pair that would still come early waits for its window
@@ -339,21 +340,29 @@ pub struct BeamPlan {
 }
 
 impl Beam {
-    /// Plan a frame whose drawing starts at reading `now` and is expected
-    /// to take `est_us` (its 16 pairs evenly, the writes included, each
-    /// write at most `write_us`), keeping `margin` from every slot.
-    pub fn plan(row_us: u32, now: Reading, est_us: u32, write_us: u32, margin: u32) -> BeamPlan {
+    /// Plan a frame whose drawing starts at reading `now`, its first pair
+    /// expected drawn `first_us` later (the frame and draw stages before
+    /// it) and its last `last_us` later (the writes between included),
+    /// each write at most `write_us`, keeping `margin` from every slot.
+    pub fn plan(
+        row_us: u32,
+        now: Reading,
+        first_us: u32,
+        last_us: u32,
+        write_us: u32,
+        margin: u32,
+    ) -> BeamPlan {
         let clock = Clock::new(row_us, now);
         let c = clock.cycle() as i64;
         let u = i64::from(now.pos);
-        let e = i64::from(est_us);
+        let e = i64::from(last_us.max(first_us));
         let w = i64::from(write_us) + 2 * i64::from(margin);
         // The window for the start, as leads on T's start: from `e` (the
-        // last pair just after the scan leaves it) to `e / 16 + w` (the
-        // first pair just before the scan comes back to it). Aimed
-        // `BEAM_LATE_ROOM_US` from its late edge (or at its middle when
-        // it is narrower): a wake comes late more than early.
-        let late_lead = e / 16 + w;
+        // last pair just after the scan leaves it) to `first + w` (the
+        // first pair written just before the scan comes back to it).
+        // Aimed `BEAM_LATE_ROOM_US` from its late edge (or at its middle
+        // when it is narrower): a wake comes late more than early.
+        let late_lead = i64::from(first_us) + w;
         let room = (e - late_lead).max(0);
         let late_room = (room / 2).min(i64::from(BEAM_LATE_ROOM_US));
         let lead = late_lead + late_room;
@@ -515,21 +524,36 @@ mod tests {
     /// time varied ±`spread`), waits per pair as the beam says, and is
     /// timed by [`beam_delay_us`]. Returns (frames with a late pair, frames
     /// that waited, the frames' mean period).
-    fn race(p0: u32, render: u32, frame_us: u32, spread: u32, jitter: u32, frames: u32) -> (u32, u32, f64) {
-        let read = |t: u64| Reading { pos: ((u64::from(p0) + t) % u64::from(CYCLE)) as u32, at: t as u32 };
+    fn race(
+        p0: u32,
+        render: u32,
+        frame_us: u32,
+        spread: u32,
+        jitter: u32,
+        frames: u32,
+    ) -> (u32, u32, f64) {
+        let read = |t: u64| Reading {
+            pos: ((u64::from(p0) + t) % u64::from(CYCLE)) as u32,
+            at: t as u32,
+        };
         let mut rng = 12345u64;
         let mut rnd = |n: u32| {
             rng ^= rng << 13;
             rng ^= rng >> 7;
             rng ^= rng << 17;
-            if n == 0 { 0 } else { (rng % u64::from(n)) as u32 }
+            if n == 0 {
+                0
+            } else {
+                (rng % u64::from(n)) as u32
+            }
         };
         let est = frame_us + 16 * (render + 74);
+        let first_us = frame_us + render;
         let (mut due, mut late, mut waited, mut end) = (0u64, 0, 0, 0u64);
         let first = due;
         for f in 0..frames {
             let mut t = (due + u64::from(rnd(jitter))).max(end);
-            let plan = Beam::plan(ROW, read(t), est, 80, 30);
+            let plan = Beam::plan(ROW, read(t), first_us, est, 80, 30);
             if plan.wait_us > 0 {
                 waited += u32::from(f > 4);
                 t += u64::from(plan.wait_us);
@@ -560,16 +584,33 @@ mod tests {
         // (the road ~3.6-4.4 ms, Time gate ~2.8-5), from every phase.
         for render_ms in [0.9, 2.0, 3.6, 4.4, 5.0, 6.0] {
             let total = (render_ms * 1000.0) as u32;
-            let frame_us = total / 6;
-            let per = (total - frame_us) / 16;
-            for p0 in (0..CYCLE).step_by(397) {
-                let (late, waited, period) = race(p0, per.saturating_sub(74), frame_us, per / 5, 400, 400);
-                assert_eq!(late, 0, "{render_ms} ms from phase {p0}: frames with a late pair");
+            // (The frame and draw stages before the first pair: a sixth or
+            // a third of it, the road's.)
+            for (frame_us, p0) in [6, 3]
+                .into_iter()
+                .flat_map(|d| (0..CYCLE).step_by(397).map(move |p| (total / d, p)))
+            {
+                let per = (total - frame_us) / 16;
+                let (late, waited, period) =
+                    race(p0, per.saturating_sub(74), frame_us, per / 5, 400, 400);
+                assert_eq!(
+                    late, 0,
+                    "{render_ms} ms from phase {p0}: frames with a late pair"
+                );
                 // (A render quicker than its windows are wide waits for
                 // some of them: the plasma's.)
-                assert!(render_ms < 2.0 || waited <= 2, "{render_ms} ms from phase {p0}: {waited} waits");
-                assert!(waited <= 40, "{render_ms} ms from phase {p0}: {waited} waits");
-                assert!((period - f64::from(CYCLE)).abs() < 30.0, "{render_ms} ms: period {period}");
+                assert!(
+                    render_ms < 2.0 || waited <= 2,
+                    "{render_ms} ms from phase {p0}: {waited} waits"
+                );
+                assert!(
+                    waited <= 40,
+                    "{render_ms} ms from phase {p0}: {waited} waits"
+                );
+                assert!(
+                    (period - f64::from(CYCLE)).abs() < 30.0,
+                    "{render_ms} ms: period {period}"
+                );
             }
         }
     }

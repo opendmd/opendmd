@@ -1075,6 +1075,11 @@ mod beam {
         row_us: u32,
         look: Look,
         frame: Option<Frame>,
+        /// When the first and the last pair were drawn after a frame's
+        /// start (µs, waits left out): running means, 1/4 a frame (0: none
+        /// yet). What the plan aims the start with.
+        first_us: u32,
+        last_us: u32,
     }
 
     #[derive(Clone, Copy)]
@@ -1082,7 +1087,13 @@ mod beam {
         beam: Beam,
         judge: Judge,
         err: i32,
+        /// The clock when drawing started (after any wait for the window).
+        start: u32,
+        /// µs waited for the scan: at the start, and for pairs.
         waited: u32,
+        pair_waited: u32,
+        first: u32,
+        last: u32,
         late: bool,
         judged: bool,
     }
@@ -1092,7 +1103,17 @@ mod beam {
         row_us: 0,
         look: Look::Colour,
         frame: None,
+        first_us: 0,
+        last_us: 0,
     });
+
+    fn mean(m: u32, v: u32) -> u32 {
+        if m == 0 {
+            v
+        } else {
+            m - m / 4 + v / 4
+        }
+    }
 
     /// Since boot (`/api/status` `scan.beam`, [`json`]).
     static FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -1113,6 +1134,8 @@ mod beam {
         st.row_us = row_us;
         st.look = look;
         st.frame = None;
+        st.first_us = 0;
+        st.last_us = 0;
         ON.store(u32::from(on), Relaxed);
     }
 
@@ -1174,9 +1197,11 @@ mod beam {
             return None;
         };
         let write = if st.look == Look::Colour { WRITE_US } else { WRITE_US_TINTED };
-        // (A frame's render is at least its pairs' writes.)
-        let est = est_us.max(PAIRS as u32 * write);
-        let plan = Beam::plan(st.row_us, now, est, write, MARGIN_US);
+        // Measured, else from the governor's mean (a frame's render is at
+        // least its pairs' writes).
+        let last = if st.last_us > 0 { st.last_us } else { est_us.max(PAIRS as u32 * write) };
+        let first = if st.first_us > 0 { st.first_us } else { last / PAIRS as u32 };
+        let plan = Beam::plan(st.row_us, now, first, last, write, MARGIN_US);
         let mut waited = 0;
         if plan.wait_us > 0 {
             waited = wait_for(plan.wait_us);
@@ -1187,7 +1212,11 @@ mod beam {
             beam: plan.beam,
             judge: Judge::with_clock(plan.beam.clock()),
             err: plan.err,
+            start: now_us(),
             waited,
+            pair_waited: 0,
+            first: 0,
+            last: 0,
             late: false,
             judged: false,
         });
@@ -1199,13 +1228,19 @@ mod beam {
         let mut st = STATE.lock().unwrap();
         let look = st.look;
         let rows = (1u32 << p) | (1 << (p + PAIRS));
-        if dirty.row_mask() & rows == 0 {
-            return;
-        }
         let Some(f) = st.frame.as_mut() else {
             write_pair(bytes, dirty, p, look);
             return;
         };
+        let ready = now_us().wrapping_sub(f.start).saturating_sub(f.pair_waited);
+        if p == 0 {
+            f.first = ready;
+        } else if p == PAIRS - 1 {
+            f.last = ready;
+        }
+        if dirty.row_mask() & rows == 0 {
+            return;
+        }
         if let Some(now) = read_scan() {
             let w = f.beam.wait(p, now);
             if w > 0 {
@@ -1216,6 +1251,7 @@ mod beam {
                 }
                 let waited = now_us().wrapping_sub(t);
                 f.waited += waited;
+                f.pair_waited += waited;
                 PAIR_WAITS.fetch_add(1, Relaxed);
                 WAIT_US.fetch_add(waited, Relaxed);
             }
@@ -1241,6 +1277,10 @@ mod beam {
         let Some(f) = st.frame.take() else {
             return (0, 0);
         };
+        if f.last > 0 {
+            st.first_us = mean(st.first_us, f.first);
+            st.last_us = mean(st.last_us, f.last);
+        }
         FRAMES.fetch_add(1, Relaxed);
         LATE_FRAMES.fetch_add(u32::from(f.late), Relaxed);
         if f.judged {
