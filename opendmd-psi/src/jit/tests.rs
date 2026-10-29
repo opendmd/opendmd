@@ -10,8 +10,28 @@ use crate::program::{Program, H, W};
 use crate::still::Still;
 use crate::tables::OWN;
 use crate::vm::{Inputs, Scratch};
-use crate::{compile, golden, render_rows_still};
+use crate::{compile, golden, render_rows_changed, render_rows_still, Ink};
 use std::path::Path;
+
+/// What a frame is drawn with besides the program: the picture under it
+/// and whether it has a canvas (each frame its own, drawn on a full call).
+#[derive(Clone, Copy)]
+struct With<'a> {
+    under: Option<&'a [u8]>,
+    ink: bool,
+}
+
+const PLAIN: With<'static> = With {
+    under: None,
+    ink: false,
+};
+
+/// The picture the tests draw over (`golden::picture`).
+fn picture() -> Vec<u8> {
+    let mut u = vec![0u8; W * H * 3];
+    golden::picture(&mut u);
+    u
+}
 
 /// A frame through the kernel (`still` as the player passes it).
 fn kernel_frame(
@@ -19,42 +39,73 @@ fn kernel_frame(
     low: &Lowered,
     inputs: &Inputs,
     still: Option<&mut Still>,
+    with: With,
 ) -> (Vec<u8>, u64) {
+    let (out, steps, _) = kernel_frame_changed(prog, low, inputs, still, with, None);
+    (out, steps)
+}
+
+/// [`kernel_frame`] over `before` (the picture held before; zeros if
+/// `None`), and what changed when `before` is given.
+fn kernel_frame_changed(
+    prog: &Program,
+    low: &Lowered,
+    inputs: &Inputs,
+    still: Option<&mut Still>,
+    with: With,
+    before: Option<&[u8]>,
+) -> (Vec<u8>, u64, [u32; H]) {
     let mut t = EmuTarget {
         emu: Emu::new(&low.code),
     };
     let mut ctx = vec![0u32; low.words.len()];
     let mut s = Scratch::<128>::new();
-    let mut out = vec![0u8; W * H * 3];
+    // (Word-aligned, as the player's canvas.)
+    let mut words = vec![0u32; W * H * 3 / 4];
+    let out: &mut [u8] = bytemuck_bytes(&mut words);
+    if let Some(b) = before {
+        out.copy_from_slice(b);
+    }
     let base = out.as_mut_ptr();
     // SAFETY: row < 32: within `out`.
     let dest = |row: usize| unsafe { base.add(row * W * 3) };
+    let mut ink = with.ink.then(Ink::boxed);
+    let mut changed = [0u32; H];
     frame(
         &mut t,
         low,
         &mut ctx,
         prog,
         &mut s,
+        ink.as_deref_mut(),
         still,
         inputs,
         &OWN,
+        with.under,
         u32::MAX,
         &dest,
+        before.is_some().then_some(&mut changed),
     );
-    (out, t.emu.steps)
+    (out.to_vec(), t.emu.steps, changed)
 }
 
-fn vm_frame(prog: &Program, inputs: &Inputs, still: Option<&mut Still>) -> Vec<u8> {
+fn bytemuck_bytes(w: &mut [u32]) -> &mut [u8] {
+    // SAFETY: u32s as their bytes, the same memory.
+    unsafe { core::slice::from_raw_parts_mut(w.as_mut_ptr().cast::<u8>(), w.len() * 4) }
+}
+
+fn vm_frame(prog: &Program, inputs: &Inputs, still: Option<&mut Still>, with: With) -> Vec<u8> {
     let mut s = Scratch::<128>::new();
     let mut out = vec![0u8; W * H * 3];
+    let mut ink = with.ink.then(Ink::boxed);
     render_rows_still::<128>(
         prog,
         &mut s,
-        None,
+        ink.as_deref_mut(),
         still,
         inputs,
         &OWN,
-        None,
+        with.under,
         u32::MAX,
         &mut out,
     );
@@ -75,6 +126,21 @@ fn first_diff(a: &[u8], b: &[u8]) -> Option<(usize, usize, [u8; 3], [u8; 3])> {
 /// the still cache (kept, then used): `None` when the formula is refused
 /// (the reason), else the instructions a pixel the kernel took.
 fn same_as_vm(name: &str, src: &str, prog: &Program, times: &[u32]) -> Result<f64, &'static str> {
+    let u = picture();
+    // Over the picture (what a look draws over), with a canvas if it draws.
+    same_as_vm_with(name, src, prog, times, With { under: Some(&u), ink: prog.draws() })?;
+    // ...and alone (nothing under: black; ink 0 without a canvas).
+    same_as_vm_with(name, src, prog, times, PLAIN)
+}
+
+/// [`same_as_vm`] drawn with `with`.
+fn same_as_vm_with(
+    name: &str,
+    src: &str,
+    prog: &Program,
+    times: &[u32],
+    with: With,
+) -> Result<f64, &'static str> {
     let low = lower(prog)?;
     let mut steps = 0;
     let mut frames = 0;
@@ -84,8 +150,8 @@ fn same_as_vm(name: &str, src: &str, prog: &Program, times: &[u32]) -> Result<f6
         if !crate::range::inputs_in_range(prog, &inputs) {
             continue;
         }
-        let want = vm_frame(prog, &inputs, None);
-        let (got, n) = kernel_frame(prog, &low, &inputs, None);
+        let want = vm_frame(prog, &inputs, None, with);
+        let (got, n) = kernel_frame(prog, &low, &inputs, None, with);
         if let Some(d) = first_diff(&got, &want) {
             panic!(
                 "{name} at {ms} ms: the kernel's pixel ({}, {}) is {:?}, the VM's {:?}\n{src}\n{}",
@@ -101,12 +167,12 @@ fn same_as_vm(name: &str, src: &str, prog: &Program, times: &[u32]) -> Result<f6
         if prog.still_lanes() > 0 {
             let mut st = Still::new();
             assert!(st.take(prog));
-            let (kept, _) = kernel_frame(prog, &low, &inputs, Some(&mut st));
+            let (kept, _) = kernel_frame(prog, &low, &inputs, Some(&mut st), with);
             assert!(
                 st.holds(prog),
                 "{name}: the kernel's frame kept no still lanes"
             );
-            let (used, _) = kernel_frame(prog, &low, &inputs, Some(&mut st));
+            let (used, _) = kernel_frame(prog, &low, &inputs, Some(&mut st), with);
             assert!(
                 first_diff(&kept, &want).is_none(),
                 "{name} at {ms} ms: the kernel's frame keeping the still cache differs"
@@ -141,10 +207,10 @@ fn kernels_draw_the_goldens() {
             refused.push(format!("{name}: a checked frame"));
             continue;
         }
-        let (got, _) = kernel_frame(&prog, &low, &inputs, None);
+        let (got, _) = kernel_frame(&prog, &low, &inputs, None, PLAIN);
         let h = golden::fnv(&got);
         if h != want {
-            let vm = vm_frame(&prog, &inputs, None);
+            let vm = vm_frame(&prog, &inputs, None, PLAIN);
             panic!(
                 "golden {name} at {ms} ms through the kernel: {h:#018x}, want {want:#018x}; first difference {:?}\n{}",
                 first_diff(&got, &vm),
@@ -158,6 +224,83 @@ fn kernels_draw_the_goldens() {
         refused.len()
     );
     assert!(ok >= golden::FRAMES.len() / 2, "only {ok} goldens lowered");
+}
+
+/// The goldens over a picture and the drawn ones, through kernels: their
+/// hashes.
+#[test]
+fn kernels_draw_the_goldens_over_and_drawn() {
+    let u = picture();
+    let (mut ok, mut refused) = (0, Vec::new());
+    for &(name, src, ms, over, want) in golden::OVER.iter().chain(golden::DRAWN) {
+        let prog = compile(src).unwrap();
+        let low = match lower(&prog) {
+            Ok(l) => l,
+            Err(why) => {
+                refused.push(format!("{name}: {why}"));
+                continue;
+            }
+        };
+        let inputs = golden::inputs(ms);
+        if !crate::range::inputs_in_range(&prog, &inputs) {
+            refused.push(format!("{name}: a checked frame"));
+            continue;
+        }
+        let with = With { under: over.then_some(&u[..]), ink: true };
+        let (got, _) = kernel_frame(&prog, &low, &inputs, None, with);
+        let h = golden::fnv(&got);
+        if h != want {
+            let vm = vm_frame(&prog, &inputs, None, with);
+            panic!(
+                "golden {name} at {ms} ms through the kernel: {h:#018x}, want {want:#018x}; first difference {:?}\n{}",
+                first_diff(&got, &vm),
+                prog.listing()
+            );
+        }
+        ok += 1;
+    }
+    println!("over/drawn goldens through kernels: {ok} the same, on the VM: {refused:#?}");
+    assert!(refused.len() <= 2, "{refused:?}");
+}
+
+/// Random formulas with layers (every blend, with and without coverage),
+/// `ur ug ub ul` and a draw stage's `ink`, against the VM over the picture.
+#[test]
+fn random_layers_under_and_ink_draw_the_same_through_kernels() {
+    let mut r = Rng(0x1d17_0b5e_55ed_0002);
+    let (mut ok, mut why) = (0, std::collections::BTreeMap::<&str, u32>::new());
+    let blends = ["", "over", "add", "multiply", "screen", "max", "min"];
+    let pals = ["fire", "ice", "chrono", "amber", "rainbow"];
+    let leaf = |r: &mut Rng| ["ur", "ug", "ub", "ul", "ink", "x", "y"][r.below(7)].to_string();
+    for k in 0..400 {
+        let mut src = format!("loop {}\n", 1 + k % 5);
+        if k % 3 != 0 {
+            src.push_str("draw {\n  for j < 24 {\n    line(hash(j, 3)*128, hash(j, 5)*32, hash(j, 7)*128 + t*9, hash(j, 9)*32, hash(j, 1), 0.5)\n  }\n  dot(px0, 7, 0.75)\n}\npx0 = 0\n".replace("px0 = 0\n", "").replace("px0", "64").as_str());
+        }
+        src.push_str(&format!("v = {}\n", expr(&mut r, 2).replace("hour", &leaf(&mut r))));
+        src.push_str(&format!("u = {} * {}\n", leaf(&mut r), expr(&mut r, 2)));
+        let n = 1 + r.below(3);
+        for j in 0..n {
+            let cov = ["", ", 0.4", ", v", ", x", ", a", ", 1", ", u*2 - 0.5"][r.below(7)];
+            let colour = match r.below(6) {
+                0 => format!("gray({}{cov})", leaf(&mut r)),
+                1 => format!("rgb({}, v, {}{cov})", leaf(&mut r), leaf(&mut r)),
+                2 => format!("hsv(v + {}, 1, u{cov})", leaf(&mut r)),
+                3 => format!("pal({}, {}{cov})", pals[r.below(5)], leaf(&mut r)),
+                4 => format!("pal({}, {}{cov}) * {}", pals[r.below(5)], leaf(&mut r), ["0.5", "y", "u", "1.5", "v"][r.below(5)]),
+                _ => format!("rgb(ur*1.2 - 0.05, ug, ub*0.7 + ul*0.2{cov})"),
+            };
+            let b = if j == 0 && k % 2 == 0 { "" } else { blends[r.below(blends.len())] };
+            src.push_str(&format!("layer {b} {{ {colour} }}\n"));
+        }
+        let Ok(prog) = compile(&src) else { continue };
+        match same_as_vm("random layers", &src, &prog, &[0, 1234, 3210]) {
+            Ok(_) => ok += 1,
+            Err(w) => *why.entry(w).or_default() += 1,
+        }
+    }
+    println!("random layers/under/ink through kernels: {ok}; on the VM: {why:?}");
+    assert!(ok >= 250, "only {ok} lowered: {why:?}");
 }
 
 /// The bundled formulas (the web app's examples and psi's own).
@@ -318,9 +461,11 @@ fn random_formulas_draw_the_same_through_kernels() {
 }
 
 /// The rows the player checks a kernel on, drawn alone, are the full
-/// frame's rows (the check renders only those).
+/// frame's rows (the check renders only those; the canvas is the full
+/// frame's, not drawn again).
 #[test]
 fn the_check_rows_alone_are_the_frames_rows() {
+    let u = picture();
     for (name, src) in bundled() {
         let Ok(prog) = compile(&src) else { continue };
         let Ok(low) = lower(&prog) else { continue };
@@ -328,12 +473,14 @@ fn the_check_rows_alone_are_the_frames_rows() {
         if !crate::range::inputs_in_range(&prog, &inputs) {
             continue;
         }
-        let want = vm_frame(&prog, &inputs, None);
+        let mut s = Scratch::<128>::new();
+        let mut want = vec![0u8; W * H * 3];
+        let mut ink = Ink::boxed();
+        render_rows_still::<128>(&prog, &mut s, Some(&mut ink), None, &inputs, &OWN, Some(&u), u32::MAX, &mut want);
         let mut t = EmuTarget {
             emu: Emu::new(&low.code),
         };
         let mut ctx = vec![0u32; low.words.len()];
-        let mut s = Scratch::<128>::new();
         let mut buf = [[0u8; W * 3]; CHECK_ROWS.len()];
         let base = buf.as_mut_ptr() as *mut u8;
         let dest = |row: usize| {
@@ -347,11 +494,14 @@ fn the_check_rows_alone_are_the_frames_rows() {
             &mut ctx,
             &prog,
             &mut s,
+            Some(&mut ink),
             None,
             &inputs,
             &OWN,
+            Some(&u),
             check_rows(),
             &dest,
+            None,
         );
         for (j, &row) in CHECK_ROWS.iter().enumerate() {
             assert_eq!(
@@ -363,19 +513,53 @@ fn the_check_rows_alone_are_the_frames_rows() {
     }
 }
 
-/// Every refusal is one of the phase's: layers, under, ink (drawing).
+/// What a kernel frame says changed is what the VM's says, over a frame
+/// before it (the bundled formulas, a frame 40 ms on).
 #[test]
-fn what_the_kernel_refuses() {
-    for (src, want) in [
-        ("layer { gray(y) }\nlayer add { gray(x) }", "it has layers"),
-        ("rgb(ur, ug, ub)", "it reads the picture under it"),
-        (
-            "draw { line(0, 0, 127, 31, 1) }\ngray(ink)",
-            "it draws (ink)",
-        ),
+fn kernels_say_what_changed_as_the_vm_does() {
+    let u = picture();
+    let mut n = 0;
+    for (name, src) in bundled() {
+        let Ok(prog) = compile(&src) else { continue };
+        let Ok(low) = lower(&prog) else { continue };
+        let lp = prog.loop_ms().max(1000);
+        for ms in [0, lp / 2] {
+            let before_in = golden::inputs(ms);
+            let mut inputs = golden::inputs(ms + 40);
+            inputs.set_ms(&prog, u64::from(ms + 40));
+            if !crate::range::inputs_in_range(&prog, &inputs) {
+                continue;
+            }
+            let with = With { under: Some(&u), ink: prog.draws() };
+            let before = vm_frame(&prog, &before_in, None, with);
+            let mut s = Scratch::<128>::new();
+            let mut ink = Ink::boxed();
+            let mut words = vec![0u32; W * H * 3 / 4];
+            let want = bytemuck_bytes(&mut words);
+            want.copy_from_slice(&before);
+            let mut want_ch = [0u32; H];
+            render_rows_changed::<128>(&prog, &mut s, Some(&mut ink), None, &inputs, &OWN, Some(&u), u32::MAX, want, &mut want_ch);
+            let (got, _, got_ch) = kernel_frame_changed(&prog, &low, &inputs, None, with, Some(&before));
+            assert_eq!(&got[..], &want[..], "{name} at {ms} ms");
+            assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
+            n += 1;
+        }
+    }
+    assert!(n >= 20, "only {n} frames compared");
+}
+
+/// What the kernel still refuses: nothing of phase 2's (layers, under,
+/// ink lower now).
+#[test]
+fn what_the_kernel_lowers_now() {
+    for src in [
+        "layer { gray(y) }\nlayer add { gray(x) }",
+        "rgb(ur, ug, ub)",
+        "draw { line(0, 0, 127, 31, 1) }\ngray(ink)",
+        "layer screen { pal(fire, x, 0.4) }",
     ] {
         let prog = compile(src).unwrap();
-        assert_eq!(lower(&prog).err(), Some(want), "{src}");
+        assert!(lower(&prog).is_ok(), "{src}: {:?}", lower(&prog).err());
     }
 }
 
