@@ -214,7 +214,7 @@ const ROAD_ONLY: bool = false;
 
 /// Only the JIT spike's rows (jitspike-b: a's full probe ran out of heap
 /// in the looks, 225 s in, and the spike's own rows were done long before).
-const JIT_ONLY: bool = true;
+const JIT_ONLY: bool = false;
 
 /// Endless road and its variants one at a time (each source made, run and
 /// dropped before the next), splits, then Starfield and Time gate as
