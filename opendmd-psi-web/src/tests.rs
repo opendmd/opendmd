@@ -233,9 +233,8 @@ fn the_examples_are_light_enough_for_the_panel() {
         // effect's knobs, written out.
         // Time gate is a showcase too: the per-row tables are a line a
         // quantity (19 lines of code, 6.1 ms with its still cache).
-        // Endless road is a showcase too, and most of its lines are data:
-        // 13 `table` lines (the car, the mountains and the sun as spans,
-        // the road's rows) and three draw loops.
+        // Endless road is a showcase too: its tables (the car, the peaks,
+        // the palm) and five draw loops, written tight for the path.
         let most = if e.name == "Endless road" {
             52
         } else if e.name == "Time gate" {
@@ -308,7 +307,7 @@ fn every_example_fits_the_panels_path_as_sent() {
         p.push_str("&a=0.3333&b=0.3333&c=0.3333");
         assert!(p.len() <= 2048, "{}: {} B as sent", e.name, p.len());
         // The bundled ones keep their `about` (the ten are short; Endless
-        // road at 2,015 B with it since road-cost, the most there is room for).
+        // road at 2,046 B with it since road-life, written tight to fit).
         assert!(!e.bundled || p.contains("about+"), "{}: {} B", e.name, p.len());
     }
 }
@@ -437,9 +436,9 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Rotozoom floor", 0, 0xab6b6c0c1c05d139),
     ("Rotozoom floor", 1730, 0x66b37879e7a17a09),
     ("Rotozoom floor", 6420, 0x5af9feaa3a8b41f5),
-    ("Endless road", 0, 0x150f6df9763d2806),
-    ("Endless road", 1730, 0xfbe6b29e2e5c9bd1),
-    ("Endless road", 6420, 0x5ff2083213399702),
+    ("Endless road", 0, 0x22544dd5c7cbba37),
+    ("Endless road", 1730, 0xedeaa6bff7b09128),
+    ("Endless road", 6420, 0xa1a8472548735a18),
     ("Time gate", 0, 0x24bd9942453ef2e8),
     ("Time gate", 1730, 0x7787a7d7cc3f723e),
     ("Time gate", 6420, 0x2a17edb7a1ade755),

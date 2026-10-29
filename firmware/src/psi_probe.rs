@@ -68,16 +68,17 @@ const CUBE_EX: &str = "loop 4.8\nfps 100\n-- Wireframe cube: turning about two a
 const ROAD_FILE: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
 const TIME_GATE_FILE: &str = include_str!("../../opendmd-web/formulas/time-gate.psi");
 
-/// Endless road as bundled (the car drawn since roadprobe-c), without its
+/// Endless road as bundled (since road-life written tight: the matches
+/// below follow its spelling), without its
 /// row noises, and without those, the draw stage, the palette and pick
 /// (the rows' floor). roadprobe-a..c also timed the sprite car's version.
 fn road_variants() -> Vec<(&'static str, String)> {
     let src = ROAD_FILE;
     let rows = src.find("-- each row looks").unwrap_or(0);
-    let draw = src.find("draw {").unwrap_or(rows);
-    let no_noise = |s: &str| s.replace("noise(un, 5, 0)", "v0").replace("noise(un, 0, 0)", "h0");
+    let draw = src.find("draw{").unwrap_or(rows);
+    let no_noise = |s: &str| s.replace("noise(un,5,0)", "v0").replace("noise(un,0,0)", "h0");
     let no_draw = |s: &str| format!("{}{}", &s[..draw], s[rows..].replace("ink*16", "0"));
-    let gray = |s: &str| match s.find("pal(road, pick(m,") {
+    let gray = |s: &str| match s.find("pal(road,pick(m,") {
         Some(i) => format!("{}gray(m/6)\n", &s[..i]),
         None => s.to_string(),
     };
