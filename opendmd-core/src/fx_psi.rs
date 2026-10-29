@@ -254,7 +254,6 @@ impl Governor {
     }
 
     /// One frame took `us` to render; `true` if the frame time changed.
-    #[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
     pub fn observe(&mut self, us: u32, grid: u32) -> bool {
         let ms = self.delay_ms(grid);
         if self.skip > 0 && us < ms * 1000 {
@@ -830,7 +829,6 @@ impl Effect for PsiFx {
         (lp / self.ms()).max(1)
     }
 
-    #[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
     fn frame(&mut self, t: Duration, canvas: &mut Canvas) -> Duration {
         #[cfg(feature = "psi-stats")]
         psi::stats::stamp(0);
@@ -842,7 +840,6 @@ impl Effect for PsiFx {
 }
 
 impl PsiFx {
-    #[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
     fn frame_inner(&mut self, t: Duration, canvas: &mut Canvas) -> Duration {
         let n = self.loop_frames();
         let grid = self.ms();
@@ -866,7 +863,6 @@ impl PsiFx {
     }
 
     /// Draw the frame of `self.inputs` and say how long it shows.
-    #[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
     fn render(&mut self, canvas: &mut Canvas) -> Duration {
         let grid = self.ms();
         let clock = clock();
@@ -1069,7 +1065,6 @@ fn spans_cost(m: u32) -> u32 {
 /// or both rows of a pair whole when one pair write costs less than their
 /// spans. Never less than what changed (a few pixels more, by the groups).
 /// Returns the pixels it marked.
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 pub fn mark_changed(dirty: &mut crate::canvas::DirtyMap, changed: &[u32; psi::H]) -> u32 {
     const HALF: usize = psi::H / 2;
     let whole = spans_cost(u32::MAX);

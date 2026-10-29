@@ -84,7 +84,6 @@ impl Default for Ink {
 /// registers are free before the rows); without, every loop a turn at a
 /// time (the same canvas and slots: the tests compare).
 #[inline(never)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 pub(crate) fn run<const N: usize>(
     prog: &Program,
     s: &mut Scratch<N>,
@@ -163,7 +162,6 @@ const PRIMS: usize = 6;
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 fn run_lanes<const N: usize>(
     prog: &Program,
     s: &mut Scratch<N>,
@@ -303,7 +301,6 @@ impl Pen {
     /// The line from `self.from` to `to`: integer Bresenham as
     /// `opendmd-core`'s `reference_line` (its two tests in its order), the ink from
     /// the start's byte to the end's in equal integer steps.
-    #[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
     fn line(&mut self, ink: &mut Ink, to: (i32, i32, i32)) {
         if !self.may() {
             return;

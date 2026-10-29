@@ -162,7 +162,6 @@ static ZEROS: [u8; W * 3] = [0; W * 3];
 
 /// Fill the words that change from row to row (`per_row`), or those that
 /// do not (once a frame, before the rows).
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per_row: bool) {
     let s = st.scratch;
     for ((w, out), &row) in low.words.iter().zip(ctx.iter_mut()).zip(&low.per_row) {
@@ -247,7 +246,6 @@ fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per
 /// each row drawn changed, as `render_rows_changed` does. Lanes of a whole
 /// row.
 #[allow(clippy::too_many_arguments)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 pub(crate) fn frame<T: Target>(
     t: &mut T,
     low: &Lowered,
@@ -483,7 +481,6 @@ pub(crate) fn frame<T: Target>(
 /// # Safety
 /// `now` points at W × 3 / 4 readable words.
 #[inline(never)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 unsafe fn changed_groups(now: *const u32, before: &[u32; W * 3 / 4]) -> u32 {
     let mut m = 0;
     let mut now = now;

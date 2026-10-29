@@ -552,7 +552,6 @@ const P3: u32 = 0xcb1a_b31f;
 /// with the smooth weight. One lattice cell per unit, so `noise(x*8, ...)`
 /// has eight cells across the panel.
 #[inline(always)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 pub fn noise(x: i32, y: i32, z: i32) -> i32 {
     let (x0, y0, z0) = (
         ((x >> 16) as u32).wrapping_mul(P1),
