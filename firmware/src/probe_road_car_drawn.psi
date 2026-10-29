@@ -1,0 +1,71 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+-- bundle
+name "Endless road"
+about "OutRun into a synthwave sunset: bends and hills without end"
+loop forever
+fps 100
+-- Endless road: an OutRun drive into a synthwave sunset. Bends and hills
+-- come from noise along the distance driven, which grows without end, so
+-- the track doesn't repeat; each time it plays it starts somewhere else.
+-- The colours, 0 to 18: the mountains and the car's glass and tyres
+-- (0), the road's stripes (1, 2), the kerbs' (3, 4), the verge's (5, 6),
+-- the sun from the top down (7 to 9), the car's body and tail lights
+-- (10, 11), then the sky from the top down to the horizon (12 to 18)
+palette road = #000, #400032, #800064, #e4cf00, #f00, #3f0000, #7f0000,
+  #e4cf00, #ff7800, #ff2800, #bf0000, #ff5000,
+  #1478ff, #2850ff, #3c28ff, #5000ff, #7b00f2, #a700e4, #d300d6
+-- The car, from behind: 17 spans (row, from, to, colour): body (4),
+-- glass and tyres (5), tail lights (6), drawn as ink 4/16 to 6/16
+table CY = 8,7,7,6,6,5,4,4,4,4,3,3,3,3,2,1,0
+table CA = 8,7,8,6,7,3,1,2,7,20,1,2,7,20,1,1,0
+table CB = 17,18,17,19,18,22,24,5,18,23,24,5,18,23,24,24,25
+table CI = 4,4,5,4,5,4,4,6,5,6,4,6,5,6,4,4,5
+-- The mountains: 19 spans (row, from, to)
+table MY = 19,19,19,20,20,20,21,21,21,22,22,22,23,23,23,24,24,25,26
+table MA = -1,57,118,0,59,120,2,61,122,4,62,123,5,64,125,7,66,67,69
+table MB = 17,83,134,16,81,132,14,79,130,12,78,129,11,76,127,9,74,73,71
+-- Road rows py 0 to 18: depth/2 in bends (ZH), depth in stripes (ZS),
+-- half width in pixels (HW); the sun's rows and half widths
+table ZH = .0058,.0061,.0064,.0068,.0072,.0077,.0083,.009,.0098,.011,.012,.013,.015,.017,.02,.025,.032,.045,.075
+table ZS = .77,.81,.86,.91,.97,1.03,1.11,1.2,1.3,1.43,1.58,1.76,2,2.31,2.73,3.33,4.29,6,10
+table HW = 50.7,48.1,45.5,42.9,40.3,37.7,35.1,32.5,29.9,27.3,24.7,22.1,19.5,16.9,14.3,11.7,9.1,6.5,3.9
+table UY = 20,21,23,24,25,26,27,28,29,30,31
+table UC = 7.2,7.6,8,8,7.9,7.6,7.2,6.7,6,5,3.5
+frame {
+  u = t*0.15 + seed*1000                    -- distance driven, in bends
+  h0 = noise(u, 0, 0); h1 = noise(u + 0.03, 0, 0)    -- heading here, just ahead
+  v0 = noise(u, 5, 0)                       -- height here, and its slope
+  dv = (noise(u + 0.01, 5, 0) - v0)*100
+  cx = 50.5 + (h1 - h0)*80                  -- the car's left edge: it slides out in bends
+  mx = (0.5 - h0)*60; sunx = 64 + mx        -- the sky turns with the road
+}
+draw {
+  for k < 19 {
+    my = MY[k]
+    line(MA[k] + mx, my, MB[k] + mx, my, .35)
+  }
+  for k < 17 {
+    cy = CY[k]
+    line(cx + CA[k] + .49998, cy, cx + CB[k] + .49998, cy, CI[k]/16)
+  }
+  for k < 11 {
+    uy = UY[k]; uc = UC[k]
+    line(sunx - uc, uy, sunx + uc, uy, .2)
+  }
+}
+-- each row looks ahead: how far the road bends there, and how far a hill
+-- lifts or hides it (a crest moves rows to where the road is out of sight)
+zp = ZH[py]
+un = u + zp
+q = py - clamp((noise(un, 5, 0) - v0 - zp*dv)*ZS[py]*200, -6, 2)
+hw = HW[q]
+alt = frac(t*10 + ZS[q]) < 0.5             -- light or dark stripe: 10 a second
+adx = abs(px - (64 + (noise(un, 0, 0) - h0)*2000))
+-- 0 road, 1 kerb, 2 verge or sky; drawn: 3 the sun, 5 the mountains,
+-- 4 to 6 the car
+m = max((adx >= hw) + (adx >= hw*1.2), ink*16)
+-- its colour, i/18 for colour i: the stripes', the sky's and the sun's by row
+pal(road, pick(m, (1 + alt)/18, (3 + alt)/18,
+                  (py < 19 ? 5 + alt : floor(28.44 - py*.515))/18,
+                  (py < 23 ? 9 : py < 27 ? 8 : 7)/18, 10/18, 0, 11/18))

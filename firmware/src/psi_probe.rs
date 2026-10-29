@@ -67,13 +67,15 @@ const CUBE_EX: &str = "loop 4.8\nfps 100\n-- Wireframe cube: turning about two a
 /// panel, against Time gate's).
 const ROAD_FILE: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
 const TIME_GATE_FILE: &str = include_str!("../../opendmd-web/formulas/time-gate.psi");
+/// Endless road with its car drawn as 17 ink spans instead of the sprite
+/// (the same bytes over 1,400 host frames at four seeds).
+const ROAD_CAR_DRAWN: &str = include_str!("probe_road_car_drawn.psi");
 
 /// Endless road as bundled and with one suspect taken out at a time
 /// (roadprobe): the row noises, the car sprite, the palette and pick, the
 /// draw stage, and all four (the rows' floor).
 fn road_variants() -> Vec<(&'static str, String)> {
     let src = ROAD_FILE;
-    let colour = src.find("pal(road, pick(m,").unwrap_or(src.len());
     let rows = src.find("-- each row looks").unwrap_or(0);
     let draw = src.find("draw {").unwrap_or(rows);
     let no_noise = |s: &str| s.replace("noise(un, 5, 0)", "v0").replace("noise(un, 0, 0)", "h0");
@@ -87,9 +89,7 @@ fn road_variants() -> Vec<(&'static str, String)> {
         ("Endless road (bundled)", src.to_string()),
         ("road: no row noise", no_noise(src)),
         ("road: no car", no_car(src)),
-        ("road: gray(m/6), no pal or pick", format!("{}gray(m/6)\n", &src[..colour])),
-        ("road: gray(pick), no pal", src.replace("pal(road, pick(", "gray(pick(")),
-        ("road: no draw", no_draw(src)),
+        ("road: car drawn (17 lines, same pixels)", ROAD_CAR_DRAWN.to_string()),
         ("road: floor (none of the four)", gray(&no_car(&no_noise(&no_draw(src))))),
     ]
 }
@@ -213,7 +213,7 @@ macro_rules! say {
     }};
 }
 
-/// roadprobe-b: only the road's rows (a's full probe ran out of heap
+/// roadprobe-b/c: only the road's rows (a's full probe ran out of heap
 /// before them), then the play lines.
 const ROAD_ONLY: bool = true;
 

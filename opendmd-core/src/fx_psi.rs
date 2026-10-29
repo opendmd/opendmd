@@ -61,6 +61,10 @@ pub struct PsiFx {
     /// transition's buffers hold the heap for a moment), then once a second
     /// after a refusal.
     still_once: bool,
+    /// It reads the wall clock (`hour`, `minute`, `second`): only then is
+    /// the clock read each frame (a `gettimeofday` and a `localtime_r` on
+    /// the device).
+    clock: bool,
     delay_ms: u8,
     inputs: psi::Inputs,
     gov: Governor,
@@ -324,6 +328,11 @@ fn clock() -> Option<Clock> {
     }
 }
 
+/// Whether `prog` reads the wall clock (`hour`, `minute`, `second`).
+fn reads_clock(prog: &psi::Program) -> bool {
+    prog.inputs() & 16 != 0
+}
+
 /// The last formula drawn: (mean render µs, frame time ms, asked ms, the
 /// last compile's µs) — for `/api/status`. Zeros before any.
 pub fn stats() -> (u32, u32, u32, u32) {
@@ -514,6 +523,7 @@ impl PsiFx {
         let mut fx = PsiBox::new();
         let (est, delay) = compile(&q, &mut fx.prog)?;
         fx.ink = canvas_for(&fx.prog, None)?;
+        fx.clock = reads_clock(&fx.prog);
         fx.delay_ms = delay;
         let s = fx.prog.meta().values(q.sliders);
         fx.set_sliders(s);
@@ -556,6 +566,7 @@ impl PsiFx {
             set_still_held(0);
         }
         self.prog = *prog;
+        self.clock = reads_clock(&self.prog);
         self.delay_ms = delay;
         let s = self.prog.meta().values(q.sliders);
         self.set_sliders(s);
@@ -668,7 +679,7 @@ impl PsiFx {
         self.inputs.t = psi::Inputs::at_ms(i * grid);
         // (One that never repeats: its own time since it opened.)
         self.inputs.tw = psi::Inputs::wide_ms(self.played_ms);
-        if let Some(now) = crate::synth::wall_now() {
+        if let Some(now) = self.clock.then(crate::synth::wall_now).flatten() {
             self.inputs.hour = now.hour;
             self.inputs.minute = now.minute;
             self.inputs.second = now.second;
@@ -1143,7 +1154,7 @@ impl FormulaLook {
             // (One that never repeats: the time since it was taken on.)
             self.inputs.tw =
                 psi::Inputs::wide_ms(el.as_millis() as u64 / u64::from(grid) * u64::from(grid));
-            if let Some(w) = crate::synth::wall_now() {
+            if let Some(w) = reads_clock(&self.prog).then(crate::synth::wall_now).flatten() {
                 self.inputs.hour = w.hour;
                 self.inputs.minute = w.minute;
                 self.inputs.second = w.second;
@@ -1271,6 +1282,7 @@ mod alloc_box {
             b.0.prog = self.0.prog;
             // (A clone that can't have its canvas draws nothing: `ink` 0.)
             b.0.ink = super::canvas_for(&b.0.prog, None).unwrap_or(None);
+            b.0.clock = self.0.clock;
             b.0.delay_ms = self.0.delay_ms;
             b.0.inputs = self.0.inputs;
             b.0.gov = self.0.gov;

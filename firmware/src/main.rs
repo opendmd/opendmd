@@ -73,6 +73,7 @@ mod show;
 mod state;
 mod stream;
 mod wifi;
+mod wake;
 mod www;
 
 use crate::chan as mpsc;
@@ -449,6 +450,11 @@ fn main() -> Result<()> {
     // when the last sleep ended, how much later than planned, and the
     // heartbeat's time since. `fresh`: the last iteration had no engine, so
     // there is nothing to attribute.
+    // The loop's sleep, ended by a µs timer (`wake`).
+    let waker = wake::Waker::new();
+    if waker.is_none() {
+        log::warn!("display loop: no wake timer; sleeping in whole ticks");
+    }
     let mut woke = Instant::now();
     let mut wake_us: u32 = 0;
     let mut log_us: u32 = 0;
@@ -1789,10 +1795,9 @@ fn main() -> Result<()> {
         // The next file, ahead: a held copy let go on a card error or low
         // heap; then the steps that fit before the next frame (`ahead.rs`).
         ahead::guard(eng);
-        let stepped = match slot {
-            Some(deadline) if !off => ahead::between_frames(eng, deadline, &epoch),
-            _ => false,
-        };
+        if let Some(deadline) = slot.filter(|_| !off) {
+            ahead::between_frames(eng, deadline, &epoch);
+        }
 
         // Nothing moving (paused, or dark): once the fade is over the
         // glow's 12 KB goes back (the builder works at full speed now).
@@ -1861,11 +1866,10 @@ fn main() -> Result<()> {
         // The sleep should end at `judged + sleep_for`; anything after that
         // (publishing above, preemption on CPU1) is the next frame's `wake`.
         let planned = judged + sleep_for;
-        thread::sleep(if stepped {
-            planned.saturating_duration_since(Instant::now())
-        } else {
-            sleep_for
-        });
+        // (On time: `wake`. Before road-cost a whole-tick `thread::sleep`,
+        // ~0.9 ms late on average; and of `sleep_for` from here unless the
+        // next file had been stepped ahead, so publishing came on top.)
+        wake::sleep_until(waker.as_ref(), planned);
         woke = Instant::now();
         wake_us = us(woke.saturating_duration_since(planned));
         log_us = 0;
