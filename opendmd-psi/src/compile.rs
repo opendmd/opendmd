@@ -2124,6 +2124,11 @@ struct Colour {
     blend: u8,
     /// `pal(P, v) * k`: the palette's colour times k (each channel).
     scale: Option<Id>,
+    /// `cycle(P, v, s)`: its turn (a `code::TURN` node; `pal` is P until
+    /// `finish` gives the turned palette its slot).
+    turn: Option<Id>,
+    /// `layer rate N { }`: N (0: every frame).
+    rate: u8,
 }
 
 /// What a formula's or a part's lines come to: its colours, bottom to top
@@ -2829,14 +2834,17 @@ impl<'s> Parser<'s> {
                 alpha: (k > ar).then_some(a[ar]),
                 blend: fixed::BLEND_OVER,
                 scale: None,
+                turn: None,
+                rate: 0,
             });
         }
+        let cycle = name == "cycle";
         self.expect(Tok::LParen, "`(`")?;
         let p = self.peek();
         if p.tok != Tok::Name {
             return self.err(
                 p,
-                "the first value of `pal` is a palette: fire, ocean, ice, chrono, amber, rainbow or gray",
+                format!("the first value of `{name}` is a palette: fire, ocean, ice, chrono, amber, rainbow{}", if cycle { " or one of yours" } else { " or gray" }),
             );
         }
         self.next();
@@ -2847,8 +2855,53 @@ impl<'s> Parser<'s> {
         let Some(pal) = PALETTES.iter().find(|e| e.0 == pname).map(|e| e.1).or(own) else {
             return Err(self.unknown_palette(p));
         };
-        self.expect(Tok::Comma, "`,` (as in `pal(fire, k)`)")?;
-        let k = self.expr(0)?;
+        if cycle && pal == 255 {
+            // E932.
+            return self.err(
+                p,
+                "`cycle` turns a palette of colours, and gray is not one: write your own, `palette g = #000, #fff`",
+            );
+        }
+        self.expect(
+            Tok::Comma,
+            if cycle { "`,` (as in `cycle(fire, v, t/4)`)" } else { "`,` (as in `pal(fire, k)`)" },
+        )?;
+        let mut k = self.expr(0)?;
+        let mut turn = None;
+        if cycle {
+            self.expect(Tok::Comma, "`,` and the turn (as in `cycle(fire, v, t/4)`)")?;
+            let st = self.peek();
+            let s = self.expr(0)?;
+            let at = (st.start, self.toks[self.pos.saturating_sub(1)].get().end.max(st.end));
+            if self.dag.level(s) == LV_PIXEL {
+                // E931.
+                return Err(Error::new(
+                    at.0,
+                    at.1,
+                    "`cycle`'s turn is the same along a row: a value of t, a frame or the row (py), not of x or px",
+                ));
+            }
+            // The entry is (floor(v·32) + floor(s·32)) mod 32: the fraction
+            // of each is all it reads (a value that grows without end too).
+            let s = if self.dag.grows(s) {
+                self.dag.op(code::FRAC, [s, 0, 0], at)?
+            } else {
+                s
+            };
+            k = self.dag.op(code::FRAC, [k, 0, 0], at)?;
+            turn = Some(self.dag.push(
+                Node {
+                    code: code::TURN,
+                    a: s,
+                    b: 0,
+                    c: 0,
+                    val: i32::from(pal),
+                    level: LV_ROW,
+                    why: 0,
+                },
+                at,
+            )?);
+        }
         let mut alpha = None;
         if self.peek().tok == Tok::Comma {
             self.next();
@@ -2858,10 +2911,17 @@ impl<'s> Parser<'s> {
         if close.tok != Tok::RParen {
             return self.err(
                 close,
-                format!(
-                    "`pal` takes a palette and one value (and how much of the pixel it covers, 0 to 1, if you like); found {}",
-                    self.found(close)
-                ),
+                if cycle {
+                    format!(
+                        "`cycle` takes a palette, the picture and the turn (and how much of the pixel it covers, 0 to 1, if you like); found {}",
+                        self.found(close)
+                    )
+                } else {
+                    format!(
+                        "`pal` takes a palette and one value (and how much of the pixel it covers, 0 to 1, if you like); found {}",
+                        self.found(close)
+                    )
+                },
             );
         }
         self.next();
@@ -2877,6 +2937,8 @@ impl<'s> Parser<'s> {
             alpha,
             blend: fixed::BLEND_OVER,
             scale: None,
+            turn,
+            rate: 0,
         })
     }
 
@@ -2983,6 +3045,8 @@ impl<'s> Parser<'s> {
             alpha: None,
             blend: fixed::BLEND_OVER,
             scale: None,
+            turn: None,
+            rate: 0,
         })
     }
 
@@ -3027,7 +3091,9 @@ impl<'s> Parser<'s> {
             || FUNCS
                 .iter()
                 .any(|e| e.0 == name && !LATER_FUNCS.contains(&name))
-            || COLOURS.iter().any(|e| e.0 == name)
+            || COLOURS
+                .iter()
+                .any(|e| e.0 == name && !LATER_FUNCS.contains(&name))
             || KEYWORDS.contains(&name)
         {
             return self.err(t, format!("`{name}` is built in; pick another name"));
@@ -3259,7 +3325,7 @@ impl<'s> Parser<'s> {
             let mut e = self.peek();
             // `pal(P, v) * k`: the palette's colour, each channel times k
             // (a light on a palette, in one step); `* k * m` too.
-            if word == "pal" && e.tok == Tok::Star && !self.has_colour(self.pos + 1, false) {
+            if (word == "pal" || word == "cycle") && e.tok == Tok::Star && !self.has_colour(self.pos + 1, false) {
                 let at = (e.start, e.end);
                 let mut k = None;
                 while self.peek().tok == Tok::Star {
@@ -3282,7 +3348,12 @@ impl<'s> Parser<'s> {
             if infix_bp(e.tok).is_some() && word != "rgb" {
                 return self.err(
                     e,
-                        if word == "pal" {
+                        if word == "cycle" {
+                        String::from(
+                            "`cycle(…)` can't go into a sum: it can only be scaled, `cycle(fire, v, s) * k` \
+                             (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
+                        )
+                    } else if word == "pal" {
                         String::from(
                             "`pal(…)` can't go into a sum: it can only be scaled, `pal(fire, v) * k` \
                              (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
@@ -3326,6 +3397,8 @@ impl<'s> Parser<'s> {
                 alpha: None,
                 blend: fixed::BLEND_OVER,
                 scale: None,
+                turn: None,
+                rate: 0,
             }],
             false,
         ))
@@ -5295,6 +5368,29 @@ fn finish(
         layers.drain(..k);
     }
     let backdrop = !opaque(&layers[0]);
+    // `cycle`'s turned palettes: a slot each after the formula's own, one
+    // for each palette and turn (E933 past three in all).
+    let mut turns: Vec<Id> = Vec::new();
+    for c in &layers {
+        if let Some(tn) = c.turn.filter(|tn| !turns.contains(tn)) {
+            turns.push(tn);
+        }
+    }
+    let n_own = p.palettes.len();
+    if n_own + turns.len() > USER_PALETTES {
+        // E933.
+        return Err(Error::new(
+            ct.start,
+            ct.end,
+            format!(
+                "a formula has room for {USER_PALETTES} palettes: its own ({n_own} here) and each palette `cycle` turns by another value ({} here)",
+                turns.len()
+            ),
+        ));
+    }
+    for (j, &tn) in turns.iter().enumerate() {
+        p.dag.nodes[tn as usize].b = (n_own + j) as Id;
+    }
     let mut steps = Vec::with_capacity(layers.len());
     for (k, c) in layers.iter().enumerate() {
         let plain = k == 0 && !backdrop;
@@ -5328,10 +5424,14 @@ fn finish(
                 code::OUT_LAYER + (c.code - code::OUT_RGB) + 4 * c.blend
             },
             args: c.args,
-            pal: c.pal,
+            pal: match c.turn {
+                Some(tn) => 5 + p.dag.nodes[tn as usize].b as u8,
+                None => c.pal,
+            },
             alpha,
             scale,
             shift,
+            turn: c.turn,
         });
     }
     // What only reading needed goes before the layout: the tokens (the
@@ -5535,17 +5635,21 @@ struct Step {
     /// x, 3).
     scale: Option<Id>,
     shift: u8,
+    /// `cycle`'s turn of its palette (a row step, `code::TURN`).
+    turn: Option<Id>,
 }
 
 impl Step {
     /// What it reads, in operand order (a palette's scale, then the
-    /// coverage last).
+    /// coverage), then the turn of its palette (not an operand: a row step
+    /// before it).
     fn reads(&self) -> impl Iterator<Item = Id> + '_ {
         self.args[..code::arity(self.code)]
             .iter()
             .copied()
             .chain(self.scale)
             .chain(self.alpha)
+            .chain(self.turn)
     }
 }
 
@@ -5775,7 +5879,7 @@ fn emit(
     for level in [LV_FRAME, LV_ROW] {
         for i in 0..n {
             let m = &nodes[i];
-            if is_op(i) && m.level == level {
+            if is_op(i) && m.level == level && m.code != code::TURN {
                 // A wide value has a wide slot; a noise's offset its place.
                 let d = if code::is_wide(m.code) && code::wide_ops(m.code).0 {
                     if next_wide >= WIDE {
@@ -5871,6 +5975,27 @@ fn emit(
             }
             prog.draw_end = ops.len().min(MAX_OPS) as u16;
         } else {
+            // `cycle`'s turns, the row section's last steps (the JIT's
+            // driver runs them after its row function): palette slot `b`
+            // (`finish`'s) as palette `val` turned by `a`.
+            for i in 0..n {
+                let m = &nodes[i];
+                if is_op(i) && m.code == code::TURN {
+                    if !set[m.a as usize] {
+                        return Err(Error::new(0, 0, String::from(LAYOUT_BUG)));
+                    }
+                    loc[i] = 0;
+                    set[i] = true;
+                    prog.uses |= OWNPAL;
+                    ops.push(WOp {
+                        code: code::TURN,
+                        d: m.b,
+                        a: loc[m.a as usize],
+                        b: m.val as u16,
+                        c: 0,
+                    });
+                }
+            }
             prog.row_end = ops.len().min(MAX_OPS) as u16;
         }
     }
@@ -5892,7 +6017,17 @@ fn emit(
         .sum();
     let none = alloc::vec![false; n];
     let mut layout = None;
-    for (use_col, use_still) in [(true, true), (true, false), (false, true), (false, false)] {
+    // A formula that cycles a palette (`cycle`) asks the still cache first:
+    // its picture is usually still, and with the index cached a frame is
+    // the palette's turn and a look-up (console-lessons 2.1). The others
+    // keep the column run first, as before.
+    let cycles = steps.iter().any(|st| st.turn.is_some());
+    let orders = if cycles {
+        [(true, true), (false, true), (true, false), (false, false)]
+    } else {
+        [(true, true), (true, false), (false, true), (false, false)]
+    };
+    for (use_col, use_still) in orders {
         let (use_col, use_still) = (use_col && runs, use_still && runs);
         let use_col = use_col && col_ns >= COLUMN_GAIN_NS;
         let excl = if use_col { &in_col } else { &none };
@@ -5902,7 +6037,9 @@ fn emit(
         } else {
             Vec::new()
         };
-        if (use_col && col_ns < COLUMN_GAIN_NS) || (use_still && cached.is_empty() && !use_col) {
+        if (use_col && col_ns < COLUMN_GAIN_NS)
+            || (use_still && cached.is_empty() && (!use_col || cycles))
+        {
             continue;
         }
         // The markers are steps too: at the step limit, the plain layout.

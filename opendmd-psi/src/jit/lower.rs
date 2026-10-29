@@ -292,6 +292,13 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
         }
     }
     let rs = |k: u8| k != NONE && row_slot[(k & 0x7f) as usize];
+    // The palettes `cycle` turns: turned each row (`TURN`), so a colour of
+    // one is a row's.
+    let turned = |pal: u8| {
+        prog.ops[prog.draw_end as usize..prog.row_end as usize]
+            .iter()
+            .any(|o| o.code == code::TURN && 5 + o.d == pal & code::PAL_MASK)
+    };
     let per_row = words
         .iter()
         .map(|w| match *w {
@@ -299,16 +306,16 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
             Word::Lane(l) => l >= L_REG0,
             Word::Ink | Word::Under => true,
             Word::Scalar(k) | Word::Cover(k) => rs(k),
-            Word::Colour { v, k, .. } => rs(v) || rs(k),
-            Word::Entry { v, .. } => rs(v),
+            Word::Colour { pal, v, k, .. } => rs(v) || rs(k) || turned(pal),
+            Word::Entry { pal, v } => rs(v) || turned(pal),
             // (A memo starts again each row, as the VM's each lane.)
             Word::Init(_) => true,
             // (Its choice's slot, from the pick's table of slots: a row's
             // only if a row step writes it; outside the choices, 0.)
-            Word::Pick { b, n, i, k, .. } => {
+            Word::Pick { pal, b, n, i, k, .. } => {
                 let m = (n as usize).min(PICK_MAX);
                 let choice = (i as usize) < m && rs((prog.init[(b as usize + i as usize) & (MAX_SCALARS - 1)] & 0x7f) as u8);
-                choice || rs(k)
+                choice || rs(k) || turned(pal)
             }
             _ => false,
         })
@@ -352,7 +359,11 @@ fn lower_rows_from(prog: &Program, words: Vec<Word>) -> Result<LoweredRows, Refu
     e.words = words;
     e.c.entry(FRAME);
     for op in &prog.ops[de..re] {
-        e.row_step(*op)?;
+        // (`cycle`'s turns, the section's last steps: the driver's, after
+        // the function: `program::turn_rows`.)
+        if op.code != code::TURN {
+            e.row_step(*op)?;
+        }
     }
     e.c.retw_n();
     if e.c.bad {

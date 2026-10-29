@@ -699,3 +699,27 @@ fn helpers_draw_the_same_through_kernels() {
     }
     assert_eq!(lowered, cases.len());
 }
+
+/// `cycle`: the turned palettes through kernels, turned once a frame and
+/// once a row (the row's colour words and memos filled again each row),
+/// scaled, fused and as layers.
+#[test]
+fn cycled_palettes_draw_the_same_through_kernels() {
+    let cases = [
+        "cycle(fire, sin(x*2) + sin(y*1.5) + sin(x*1.5 + y), t/8)",
+        "palette sky = #000, #024, #08c, #fc8, #fff\ncycle(sky, x*0.3 + y*0.5, t/4 + py/64)",
+        "cycle(rainbow, len(cx, cy), -t/3 + py/40) * (0.5 + x/2)",
+        "cycle(chrono, floor(px/8)/16, t + py/32) * (floor(px/16)/8)",
+        "cycle(ice, x > 0.5 ? y : 0.25, t/2 + py/20)",
+        "cycle(amber, pick(floor(px/32), 0.1, 0.4, 0.7, t), t/3)",
+        "layer { gray(x) }\nlayer screen { cycle(ice, y*7, t + py/9, x) }",
+        "palette p = #f00, #0f0, #00f\nlayer { cycle(p, x - y*2.5, t*0.37) }\nlayer multiply { cycle(fire, y, py/32 - t) * 0.75 }",
+    ];
+    for src in cases {
+        let prog = compile(src).unwrap();
+        let times = [0, 130, 1000, 2470, 5555, 7990];
+        if let Err(why) = same_as_vm("cycle", src, &prog, &times) {
+            panic!("{src}: on the VM ({why})");
+        }
+    }
+}

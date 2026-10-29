@@ -134,7 +134,8 @@ pub const FUNCS: [(&str, usize, F); 25] = [
 
 /// Functions added once people had saved formulas (2026-10-26): a name
 /// set with one of these still works as a value (`glyph = …; gray(glyph)`).
-pub const LATER_FUNCS: [&str; 4] = ["bit", "digit", "glyph", "pick"];
+/// (`cycle`, a colour, since console-b 2026-10-29.)
+pub const LATER_FUNCS: [&str; 5] = ["bit", "digit", "glyph", "pick", "cycle"];
 
 /// The fonts `digit` and `glyph` take as a last value: core's 5x7 (the
 /// panel's text and clock; 4 × 6 digits; the default), 4x6 (3 × 5 digits)
@@ -145,11 +146,13 @@ pub const FONTS: [(&str, u8); 3] = [
     ("bold", tables::BOLD),
 ];
 
-pub const COLOURS: [(&str, usize, u8); 4] = [
+pub const COLOURS: [(&str, usize, u8); 5] = [
     ("rgb", 3, code::OUT_RGB),
     ("hsv", 3, code::OUT_HSV),
     ("pal", 2, code::OUT_PAL),
     ("gray", 1, code::OUT_GRAY),
+    // `cycle(P, v, s)`: palette P turned by s (`code::TURN`), at v.
+    ("cycle", 3, code::OUT_PAL),
 ];
 
 /// Palette names: core's order (fire, ice, chrono, amber, rainbow); `gray`
@@ -271,6 +274,7 @@ pub mod cheat {
         ("pal(fire, v)", "a palette: fire, ice, ocean, chrono, amber, rainbow, gray", ""),
         ("palette sea = #024, #08c, #fff", "your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one", "palette p = #000, #f80, #fff\n"),
         ("pal(fire, v) * k", "a palette colour, dimmed (or lit) by k", ""),
+        ("cycle(fire, v, s)", "palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame", ""),
         ("gray(v)", "white, 0 to 1", ""),
         ("#ff8800", "a colour: alone, or #f80 * v, mix(#000, #f80, v)", ""),
         ("rgb(r, g, b, k)", "a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k)", ""),
