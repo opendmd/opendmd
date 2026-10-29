@@ -20,6 +20,9 @@
 //! The language (v0) and the VM's design are in `docs/research/psi-spike.md`.
 
 #![cfg_attr(not(test), no_std)]
+// `fixed::lz32`'s one `nsau` (the esp toolchain is a nightly; the host and
+// wasm builds never see the gate).
+#![cfg_attr(target_arch = "xtensa", feature(asm_experimental_arch))]
 
 extern crate alloc;
 
@@ -51,6 +54,9 @@ pub use draw::{Ink, FRAME_STEPS, LINE_STEPS, PRIMITIVES, TURNS};
 pub use program::{Op, Program, H, MAX_OPS, MAX_SCALARS, MAX_TABLE, REGS, W};
 pub use still::{Still, StillLane, STILL_LANES};
 pub use tables::{Glyphs, Tables, ATAN};
+/// (psi-probe's references for `fixed::sqrt` and `len`.)
+#[doc(hidden)]
+pub use tables::SQRT;
 #[cfg(feature = "tables")]
 pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
 #[cfg(feature = "stats")]
@@ -569,3 +575,6 @@ pub mod worst {
 
 #[cfg(all(test, feature = "tables"))]
 mod tests;
+
+#[cfg(test)]
+mod fixed_tests;
