@@ -72,9 +72,11 @@ fn road_variants() -> Vec<(&'static str, String)> {
     let draw = src.find("draw{").unwrap_or(rows);
     let no_noise = |s: &str| s.replace("noise(un,5,0)", "v0").replace("noise(un,0,0)", "h0");
     let no_draw = |s: &str| format!("{}{}", &s[..draw], s[rows..].replace("ink*16", "0"));
-    let gray = |s: &str| match s.find("pal(road,pick(m,") {
-        Some(i) => format!("{}gray(m/6)\n", &s[..i]),
-        None => s.to_string(),
+    // (Since road-full the pick's first value is written in place: up to
+    // the road's arm, `,r0-al`.)
+    let gray = |s: &str| match (s.find("pal(road,pick("), s.find(",r0-al")) {
+        (Some(i), Some(j)) if i + 14 <= j => format!("{}gray(({})/6)\n", &s[..i], &s[i + 14..j]),
+        _ => s.to_string(),
     };
     vec![
         ("Endless road (bundled)", src.to_string()),
@@ -1881,7 +1883,8 @@ pub(crate) mod jit2 {
     const OLD_TV: &str = include_str!("../../opendmd-web/formulas/old-tv.psi");
     const PLASMA: &str = include_str!("../../opendmd-web/formulas/plasma.psi");
     const FIRE: &str = include_str!("../../opendmd-web/formulas/fire.psi");
-    const ROAD_FULL: &str = include_str!("../../opendmd-web/experiments/road-life/road-full.psi");
+    // The road as bundled before road-full (the bundled one is Full since).
+    const ROAD_BOTH: &str = include_str!("../../opendmd-web/experiments/road-life/road-both.psi");
 
     fn exec_line(what: &str) {
         let (free, big) = exec_heap();
@@ -2131,7 +2134,7 @@ pub(crate) mod jit2 {
         let mut canvas = Canvas::new();
         let list: [(&str, &str, &str); 11] = [
             ("Endless road", ROAD_FILE, ""),
-            ("Endless road Full", ROAD_FULL, ""),
+            ("Endless road Both", ROAD_BOTH, ""),
             ("Starfield", STARFIELD, ""),
             ("Wireframe cube", CUBE, ""),
             ("Rotozoom", ROTOZOOM, ""),
