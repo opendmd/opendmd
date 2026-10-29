@@ -874,6 +874,15 @@ def add_files(page: Page, files) -> None:
     fc.value.set_files([str(f) for f in files])
 
 
+def wait_thumbs_idle(page: Page, timeout: int = 60000) -> None:
+    """No thumbnail read in flight and every canvas in the view drawn (or
+    given up on, in the Library's list): what is left on the card is not asked for again."""
+    page.wait_for_function("""async () => {
+        const { stats } = await import('./js/thumbs.js');
+        return stats.busy === 0 && [...document.querySelectorAll('#lib-list canvas.th')].every((c) => c.parentNode.hidden || c.dataset.done);
+    }""", timeout=timeout)
+
+
 def details_do(page: Page, item: str) -> None:
     """Library Details: the "…" menu, then one of its items."""
     page.click("#lib-d-more")
@@ -5425,6 +5434,11 @@ def details_checks(page: Page, base: str, overlay: Path) -> None:
           f"{page.input_value('#st-author')}) and Replace / Save as new")
     # Delete: after asking, the GIF, its copy, its playlist line, favourite, Smooth line.
     lib_row(page, to)
+    # The thumbnails drawn and none being read: a row's still asked for the
+    # renamed GIF (its copy first, then the file) would otherwise be answered
+    # after the delete, by two 404s that are the app's right answer and not
+    # a page error. (On a loaded machine the read was still queued.)
+    wait_thumbs_idle(page)
     details_do(page, "#lib-d-del")
     page.wait_for_function("document.querySelector('#lib-d-body').hidden", timeout=60000)
     check(not (overlay / to.lstrip("/")).exists() and not (overlay / cache_path(to).lstrip("/")).exists(), "delete: the GIF and its copy are gone")
