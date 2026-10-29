@@ -43,6 +43,9 @@ build URL serves. There the art index must also carry
   out) and this release frozen: both exist and are listed newest first,
   the frozen page says which release it describes and links the latest;
   with `--api-freeze auto` off a tag, nothing new is frozen;
+- /dev/psi/ (the Psi language reference): in the menu, its generated
+  tables, grammar and error index (every code an anchor), under the docs'
+  CSP with no violation, no sideways scroll on a phone;
 - the demo's Settings, against its player in the page (js/demo.js): every
   tab; brightness, the colour, the Formula look, each GIF's stay, the
   playlist, night mode and a rule shown on its panel and in Now's banner;
@@ -832,6 +835,45 @@ def api_pages(browser, site: Path, dist: Path, art: Path, errors: list[str]) -> 
             check(names == ["v0.0.1.html"], f"api: off the tag ({desc}), --api-freeze auto freezes nothing new {names}")
 
 
+def psi_reference(browser, base: str, site: Path, errors: list[str]) -> None:
+    """/dev/psi/, the Psi language reference: in the menu (and linked from
+    every page's), its generated tables and error index there, each code an
+    anchor; under the site's own CSP (the docs' policy from _headers, set on
+    the page's responses here too, so a violation shows without --base);
+    no sideways scroll on a phone."""
+    rules = (site / "_headers").read_text().split("\n\n")
+    csp = next(l.split(": ", 1)[1] for l in rules[0].splitlines() if l.strip().startswith("Content-Security-Policy:"))
+    check((site / "dev/psi/index.html").is_file(), "psi reference: dev/psi/index.html is in the site")
+    check('href="../dev/psi/index.html"' in (site / "guide/formulas.html").read_text(), "psi reference: linked from the guide's menu")
+    for size in SIZES:
+        page = new_page(browser, size, errors)
+        violations: list[str] = []
+        page.on("console", lambda m: "Content Security Policy" in m.text and violations.append(m.text))
+
+        def with_csp(route):
+            r = route.fetch()
+            route.fulfill(response=r, headers={**r.headers, "content-security-policy": csp})
+        page.route("**/dev/psi/**", with_csp)
+        page.goto(f"{base}/dev/psi/#E203")
+        page.wait_for_selector("h1")
+        if size == "laptop":
+            check(page.title().startswith("Psi language reference"), f"psi reference: its title ({page.title()})")
+            check(page.locator("nav a.on").inner_text() == "Psi language", "psi reference: in the menu, marked")
+            codes = page.eval_on_selector_all("h4[id^=E]", "els => els.map(e => e.id)")
+            check(len(codes) >= 100 and "E203" in codes and "E601" in codes, f"psi reference: the error index ({len(codes)} codes, each an anchor)")
+            top = page.evaluate("document.getElementById('E203').getBoundingClientRect().top")
+            check(0 <= top < 400, f"psi reference: #E203 opens at its entry ({top:.0f} px from the top)")
+            cells = page.eval_on_selector_all("table code", "els => els.map(e => e.textContent)")
+            check(all(any(n in c for c in cells) for n in ("atan2", "rainbow", "screen", "control")),
+                  f"psi reference: the generated tables ({len(cells)} names)")
+            check(page.locator("pre code", has_text="formula   =").count() == 1, "psi reference: the grammar")
+            check(page.locator("pre code", has_text="psi check").count() >= 1, "psi reference: the psi command's example")
+        else:
+            check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "psi reference (phone): no sideways scroll")
+        check(not violations, f"psi reference [{size}]: no CSP violations {violations[:2]}")
+        page.context.close()
+
+
 def install_links(site: Path) -> None:
     install = (site / "install/index.html").read_text()
     # One board: the DevKit's button. An 8 MB board in development (8mb) is hidden for now, but its
@@ -878,6 +920,8 @@ def main() -> int:
         add_to_panel(browser, base, a.site, errors)
         print("the HTTP API (dev/api.html, dev/api/)")
         api_pages(browser, a.site, a.dist, a.art, errors)
+        print("the Psi language reference (dev/psi/)")
+        psi_reference(browser, base, a.site, errors)
         print("install page")
         install_links(a.site)
         if a.shots:

@@ -51,7 +51,15 @@ name = "builtins"
 required-features = ["docs"]
 
 [[test]]
+name = "diagnostics"
+required-features = ["docs"]
+
+[[test]]
 name = "syntax"
+required-features = ["syntax"]
+
+[[test]]
+name = "fmt"
 required-features = ["syntax"]
 
 [[test]]
@@ -66,9 +74,6 @@ required-features = ["tables"]
 name = "stack"
 required-features = ["tables"]
 
-[[example]]
-name = "psi-check"
-required-features = ["tables"]
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
