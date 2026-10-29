@@ -2342,10 +2342,54 @@ mod jit1 {
             if let [j, v] = row[..] {
                 say!(info, "psi-probe: jit1: example {name}: JIT {j} us against VM {v} us = {}.{:02}x", v / j.max(1), (v * 100 / j.max(1)) % 100);
             }
+            split(name, src);
         }
         fx_psi::set_jit(true);
         fx_psi::set_still_gate(Some(crate::still_gate));
         let _ = MATRIX;
+    }
+
+    /// Where a kernel's frame goes: the example drawn directly through its
+    /// kernel (still cache taken when it has values for one), the frame
+    /// split by `psi::jit::stats` (µs a frame, from cycles at 240 MHz),
+    /// against the VM's direct frame.
+    fn split(name: &str, src: &str) {
+        let mut prog = zeroed::<psi::Program>();
+        if compile(src, &mut prog, true, true).is_err() {
+            return;
+        }
+        let Ok(mut k) = psi::jit::emit(&prog) else { return };
+        let t = fx_psi::tables();
+        let mut s = zeroed::<psi::Scratch<128>>();
+        s.reset();
+        let mut out = vec![0u8; psi::W * psi::H * 3];
+        let mut st = psi::Still::new();
+        let still = prog.still_lanes() > 0 && st.take(&prog);
+        let lp = prog.loop_ms().max(1);
+        let inputs = |n: u32| {
+            let mut i = psi::golden::inputs(0);
+            i.set_ms(&prog, u64::from(n * 20 % lp));
+            i
+        };
+        // (Keeps the still cache on its first frame.)
+        k.render(&prog, &mut s, if still { Some(&mut st) } else { None }, &inputs(0), &t, &mut out);
+        let _ = psi::jit::stats::take();
+        let (k50, _, _) = timed(|n| {
+            k.render(&prog, &mut s, if still { Some(&mut st) } else { None }, &inputs(n), &t, &mut out);
+        });
+        let (cyc, frames) = psi::jit::stats::take();
+        let (v50, _, _) = timed(|n| {
+            psi::render_rows_still::<128>(&prog, &mut s, None, if still { Some(&mut st) } else { None }, &inputs(n), &t, None, u32::MAX, &mut out);
+        });
+        let parts: Vec<String> = psi::jit::stats::NAMES
+            .iter()
+            .zip(cyc)
+            .map(|(n, c)| format!("{n} {}", c / 240 / frames.max(1)))
+            .collect();
+        say!(info,
+            "psi-probe: jit1: split {name} (direct, still {}): kernel frame p50 {k50} us = {} us a frame; VM frame p50 {v50} us; kernel at {:#x}, {} B",
+            still, parts.join(", "), k.addr(), k.code_bytes()
+        );
     }
 
     pub fn probe(root: &str, start: Instant, stack0: u32) {

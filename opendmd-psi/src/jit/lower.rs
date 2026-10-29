@@ -26,6 +26,9 @@ use crate::fuse::{F_PICKPAL, F_SELPAL, F_SELPAL_K, PICK_MAX};
 use crate::program::*;
 use alloc::vec::Vec;
 
+/// 1.0 in Q16.16.
+const ONE_Q: i32 = 1 << 16;
+
 /// "No slot" in a [`Word`] (a scale of 1).
 pub const NONE: u8 = 0xff;
 
@@ -55,8 +58,10 @@ pub enum Word {
     Colour { pal: u8, v: u8, k: u8, shift: u8 },
     /// The address of palette `pal`'s entry for `sc[v]`.
     Entry { pal: u8, v: u8 },
-    /// A constant (a colour memo's start).
+    /// A constant (a colour memo's start: the kernel writes it).
     Init(i32),
+    /// A constant the kernel only reads (hoisted: `chan`'s).
+    Const(i32),
     /// Choice `i` of a fused `pal(P, pick(m, …)) * k`'s colours for the
     /// row (`b`, `n` the pick's), packed; `i` = [`PICK_MAX`] the colour of
     /// a pick outside its choices.
@@ -196,8 +201,8 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
     let items = items(prog, start, pe)?;
     // The fewest temporaries the steps get by with (a kernel without calls
     // hoists into the rest).
-    let mut e = Emitter::new(prog, &items, 1)?;
-    for t in 1..=3 {
+    let mut e = Emitter::new(prog, &items, 0)?;
+    for t in 0..=3 {
         e = Emitter::new(prog, &items, t)?;
         match e.emit() {
             Ok(()) => break,
@@ -342,9 +347,17 @@ struct Emitter<'a> {
     /// Words held in registers for the whole row.
     hoist: Vec<(Word, Reg)>,
     temps: Vec<Reg>,
+    /// The values' registers (each a temporary where its values are not
+    /// alive).
+    pool: Vec<Reg>,
     free: Vec<Reg>,
     sar16: bool,
+    /// Any helper call (the frame's save areas).
     calls: bool,
+    /// Calls on every pixel (registers: values across them in a5..a7).
+    hot: bool,
+    /// `src` with SAR 16 (`mul_w`, `mul`).
+    uses_src: bool,
 }
 
 /// The values of `items` (each with its interval) and which value each
@@ -375,7 +388,7 @@ fn values(prog: &Program, items: &[Item]) -> (Vec<Val>, [Option<usize>; REGS], V
         }
     }
     for (k, it) in items.iter().enumerate() {
-        if needs_call(prog, it) {
+        if hot_call(prog, it) {
             for v in vals.iter_mut() {
                 // (Its own result, and operands read for the last time, need not survive.)
                 if v.start <= k && v.end > k && !(v.start == k && !v.livein) {
@@ -421,22 +434,27 @@ impl<'a> Emitter<'a> {
     /// hoists in what a5..a7 the values leave, temporaries a13..a15).
     fn new(prog: &'a Program, items: &'a [Item], t: usize) -> Result<Emitter<'a>, Refusal> {
         let calls = items.iter().any(|it| needs_call(prog, it));
+        let hot = items.iter().any(|it| hot_call(prog, it));
+        let uses_src = items
+            .iter()
+            .any(|it| matches!(it, Item::Step(op) if matches!(op.code, code::MUL_W | code::MUL)));
         let (mut vals, livein, wv) = values(prog, items);
         let p = pressure(&vals, items.len());
         let all: [Reg; 11] = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-        let (temps, spare): (Vec<Reg>, Vec<Reg>) = if calls {
+        let (temps, spare, pool): (Vec<Reg>, Vec<Reg>, Vec<Reg>) = if hot {
             if p > POOL.len() {
                 return Err("more values at once than the kernel's registers");
             }
             allocate(&mut vals, items.len(), &POOL)?;
             let spare = [5, 6, 7].into_iter().filter(|&r| vals.iter().all(|v| v.gpr != r)).collect();
-            (TEMPS.to_vec(), spare)
+            // (No borrowing here: a call item writes a10.. directly.)
+            (TEMPS.to_vec(), spare, Vec::new())
         } else {
             if p + t > all.len() {
                 return Err("more values at once than the kernel's registers");
             }
             allocate(&mut vals, items.len(), &all[..p])?;
-            (all[all.len() - t..].to_vec(), all[p..all.len() - t].to_vec())
+            (all[all.len() - t..].to_vec(), all[p..all.len() - t].to_vec(), all[..p].to_vec())
         };
         let mut e = Emitter {
             items,
@@ -449,9 +467,12 @@ impl<'a> Emitter<'a> {
             wv,
             hoist: Vec::new(),
             temps,
+            pool,
             free: Vec::new(),
             sar16: false,
             calls,
+            hot,
+            uses_src,
         };
         e.choose_hoists(&spare);
         Ok(e)
@@ -472,6 +493,16 @@ impl<'a> Emitter<'a> {
                         _ if !is_lane(x) => note(Word::Scalar(x)),
                         L_X | L_I => note(Word::Lane(x & !LANE)),
                         _ => {}
+                    }
+                }
+                let chans = match op.code {
+                    code::OUT_GRAY => 1,
+                    code::OUT_RGB => 3,
+                    _ => 0,
+                };
+                for _ in 0..chans {
+                    for c in [0, ONE_Q, 0x8000] {
+                        note(Word::Const(c));
                     }
                 }
                 match op.code {
@@ -526,14 +557,29 @@ impl<'a> Emitter<'a> {
         self.free.pop().ok_or(TEMPS_OUT)
     }
 
+    /// A memo miss writes a8 and a10..a12 itself: none of them a
+    /// temporary of this item.
+    fn keep_call_regs(&mut self) {
+        self.free.retain(|&r| r != 8 && !(10..=12).contains(&r));
+        self.pool.retain(|&r| r != 8 && !(10..=12).contains(&r));
+    }
+
     fn release(&mut self, r: Reg) {
-        if self.temps.contains(&r) && !self.free.contains(&r) {
+        if (self.temps.contains(&r) || self.pool.contains(&r)) && !self.free.contains(&r) {
             self.free.push(r);
         }
     }
 
-    fn reset_temps(&mut self) {
-        self.free = self.temps.iter().rev().copied().collect();
+    /// Item `k`'s temporaries: the fixed ones, and the registers of the
+    /// values not alive at `k` (ended, or not begun).
+    fn reset_temps(&mut self, k: usize) {
+        let mut free: Vec<Reg> = self.temps.iter().rev().copied().collect();
+        for g in self.pool.clone() {
+            if !free.contains(&g) && self.vals.iter().all(|v| v.gpr != g || v.start > k || v.end < k) {
+                free.insert(0, g);
+            }
+        }
+        self.free = free;
     }
 
     /// `w` (a word) into `r`.
@@ -641,7 +687,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit(&mut self) -> Result<(), Refusal> {
-        let uses_src = self.items.iter().any(|it| matches!(it, Item::Step(op) if matches!(op.code, code::MUL_W | code::MUL)));
+        let uses_src = self.uses_src;
         self.c.entry(if self.calls { FRAME } else { 32 });
         self.c.mov(OUT, PIX);
         for (w, r) in self.hoist.clone() {
@@ -654,13 +700,13 @@ impl<'a> Emitter<'a> {
         self.c.movi(PIX, 0);
         let top = self.c.here();
         // At the loop's top SAR is 16 unless a call in the body changed it.
-        self.sar16 = uses_src && !self.calls;
+        self.sar16 = uses_src && !self.hot;
         self.cur = self.livein;
         for v in self.valid.iter_mut() {
             *v = false;
         }
         for k in 0..self.items.len() {
-            self.reset_temps();
+            self.reset_temps(k);
             let it = self.items[k];
             match it {
                 Item::Step(op) if code::is_colour(op.code) => self.colour(k, op)?,
@@ -1048,6 +1094,108 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// A memo miss: `x` = `fixed::scale_rgb(*a10, s)` packed (a10 the
+    /// palette entry's address), as `scale_rgb` takes its cases: s ≤ 0
+    /// black, s = 1 the bytes, 0 < s < 1 inline, s > 1 the helper (a call:
+    /// `keep` saved across it). a11, a12 scratch.
+    fn scale_miss(&mut self, s: Reg, x: Reg, keep: Option<Reg>) -> Result<(), Refusal> {
+        let (e, y, b) = (10, 11, 12);
+        let c = &mut self.c;
+        c.movi(x, 0);
+        let black1 = c.bz_fwd(Zero::Ltz, s);
+        let black2 = c.bz_fwd(Zero::Eqz, s);
+        c.movi(y, 1);
+        c.slli(y, y, 16);
+        // (Through jumps: the inline block is past a branch's reach.)
+        let to_bytes = c.b_fwd(Cond::Eq, s, y);
+        let to_big = c.b_fwd(Cond::Lt, y, s);
+        let inline = c.j_fwd();
+        c.bind(to_bytes);
+        let bytes = c.j_fwd();
+        c.bind(to_big);
+        let big = c.j_fwd();
+        c.bind(inline);
+        // 0 < s < 1: chan(mul(byte(b), s)) as one 32-bit multiply a channel
+        // (`scale_rgb`'s), blue first into the low byte, shifted up.
+        for ch in [2, 1, 0] {
+            c.l8ui(b, e, ch);
+            c.slli(y, b, 8);
+            c.add(y, y, b);
+            c.srli(b, b, 7);
+            c.add(y, y, b); // byte(b) = b·257 + b/128
+            c.mull(y, y, s);
+            c.extui(y, y, 16, 16);
+            c.slli(b, y, 8);
+            c.sub(y, b, y); // · 255
+            c.addmi(y, y, 0x4000);
+            c.addmi(y, y, 0x4000); // + 0x8000
+            c.extui(y, y, 16, 8);
+            if ch != 2 {
+                c.slli(x, x, 8);
+            }
+            c.or(x, x, y);
+        }
+        let done1 = c.j_fwd();
+        c.bind(bytes);
+        c.l8ui(x, e, 2);
+        c.slli(x, x, 8);
+        c.l8ui(y, e, 1);
+        c.or(x, x, y);
+        c.slli(x, x, 8);
+        c.l8ui(y, e, 0);
+        c.or(x, x, y);
+        let done2 = c.j_fwd();
+        c.bind(big);
+        if let Some(k) = keep {
+            c.s32i(k, 1, SLOT_SPARE);
+        }
+        c.mov(11, s);
+        self.load_word(CALLEE, Word::Helper(hid::SCALE));
+        self.c.callx8(CALLEE);
+        self.sar16 = false;
+        self.c.mov(x, 10);
+        if let Some(k) = keep {
+            self.c.l32i(k, 1, SLOT_SPARE);
+        }
+        self.after_cold_call();
+        let sar = self.sar16;
+        self.c.bind(black1);
+        self.c.bind(black2);
+        self.c.bind(done1);
+        self.c.bind(done2);
+        // a10..a12 were scratch on every path here: the hoists there again.
+        if !self.hot {
+            for (w, r) in self.hoist.clone() {
+                if (10..=12).contains(&r) {
+                    let off = self.word(w);
+                    self.c.l32i(r, CTX, off);
+                }
+            }
+        }
+        // (SAR is 16 on the other paths when it was before; the call's
+        // path set it again only for a kernel without hot calls.)
+        self.sar16 = sar;
+        Ok(())
+    }
+
+    /// After a memo miss's call: the hoists it clobbered (a8..a15) and SAR,
+    /// as the loop's top expects them.
+    fn after_cold_call(&mut self) {
+        if self.hot {
+            return;
+        }
+        for (w, r) in self.hoist.clone() {
+            if r >= 8 {
+                let off = self.word(w);
+                self.c.l32i(r, CTX, off);
+            }
+        }
+        if self.uses_src {
+            self.c.ssai(16);
+        }
+        self.sar16 = self.uses_src;
+    }
+
     // --- Colours ---------------------------------------------------------------
 
     /// Store a packed colour (`r | g << 8 | b << 16`) at the pixel.
@@ -1062,23 +1210,36 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// A register holding the constant `c`: its hoist, or `r` made.
+    fn konst(&mut self, r: Reg, c: i32) -> Reg {
+        if let Some(h) = self.hoisted(Word::Const(c)) {
+            return h;
+        }
+        match c {
+            ONE_Q => self.one(r),
+            0x8000 => {
+                self.c.movi(r, 1);
+                self.c.slli(r, r, 15);
+            }
+            c => self.c.movi(r, c),
+        }
+        r
+    }
+
     /// `fixed::chan(v)` into a temporary.
     fn chan(&mut self, v: Reg) -> Result<Reg, Refusal> {
         let t = self.tmp()?;
         let u = self.tmp()?;
-        let c = &mut self.c;
-        c.movi(t, 0);
-        c.max(t, v, t);
+        let z = self.konst(t, 0);
+        self.c.max(t, v, z);
         self.release(v);
-        self.one(u);
-        let c = &mut self.c;
-        c.min(t, t, u);
-        c.slli(u, t, 8);
-        c.sub(t, u, t); // · 255
-        c.movi(u, 1);
-        c.slli(u, u, 15);
-        c.add_n(t, t, u); // + 0x8000
-        c.extui(t, t, 16, 8);
+        let one = self.konst(u, ONE_Q);
+        self.c.min(t, t, one);
+        self.c.slli(u, t, 8);
+        self.c.sub(t, u, t); // · 255
+        let h = self.konst(u, 0x8000);
+        self.c.add_n(t, t, h); // + 0x8000
+        self.c.extui(t, t, 16, 8);
         self.release(u);
         Ok(t)
     }
@@ -1145,6 +1306,7 @@ impl<'a> Emitter<'a> {
         let shift = u32::from((op.d & !PAL_SCALED) >> PAL_SHIFT);
         let memo = self.words_run(&[Word::Init(-1), Word::Init(0), Word::Init(0)]);
         let pal = Word::Pal(op.d & code::PAL_MASK);
+        self.keep_call_regs();
         let v = self.val(op.a)?;
         let i = self.pal_index(v)?;
         let sv = self.val(op.c)?;
@@ -1165,14 +1327,10 @@ impl<'a> Emitter<'a> {
         c.s32i(s, CTX, memo + 4);
         // (Nothing a8..a12 hold is wanted after the colour: it is the last.)
         c.addx2(10, i, i);
-        c.mov(11, s);
         let p = self.word_in(12, pal);
         self.c.add(10, 10, p);
-        self.load_word(CALLEE, Word::Helper(hid::SCALE));
-        self.c.callx8(CALLEE);
-        self.sar16 = false;
-        self.c.s32i(10, CTX, memo + 8);
-        self.c.mov(x, 10);
+        self.scale_miss(s, x, None)?;
+        self.c.s32i(x, CTX, memo + 8);
         self.c.bind(hit);
         self.release(i);
         self.release(s);
@@ -1184,6 +1342,9 @@ impl<'a> Emitter<'a> {
         let pal = col.d & code::PAL_MASK;
         let shift = (col.d & !PAL_SCALED) >> PAL_SHIFT;
         let scaled = col.d & PAL_SCALED != 0;
+        if scaled && is_lane(col.c) {
+            self.keep_call_regs();
+        }
         if !scaled || !is_lane(col.c) {
             // Two colours a row (the VM's: two a lane).
             let k = if scaled { col.c } else { NONE };
@@ -1233,15 +1394,9 @@ impl<'a> Emitter<'a> {
         let hit = cc.j_fwd();
         cc.bind(miss);
         cc.s32i(s, o, base);
-        cc.s32i(o, 1, SLOT_SPARE);
         cc.l32i(10, o, base + 8);
-        cc.mov(11, s);
-        self.load_word(CALLEE, Word::Helper(hid::SCALE));
-        self.c.callx8(CALLEE);
-        self.sar16 = false;
-        self.c.l32i(o, 1, SLOT_SPARE);
-        self.c.s32i(10, o, base + 4);
-        self.c.mov(x, 10);
+        self.scale_miss(s, x, Some(o))?;
+        self.c.s32i(x, o, base + 4);
         self.c.bind(hit);
         self.release(o);
         self.release(s);
@@ -1279,6 +1434,15 @@ impl<'a> Emitter<'a> {
 /// The frame slot of a8..a12's home `h`.
 fn slot(h: Reg) -> i32 {
     (i32::from(h) - 8) * 4
+}
+
+/// Whether an item calls a helper on every pixel (a colour's memo misses
+/// call one now and then: "cold", after which the hoists are loaded again;
+/// they do not make the kernel one with calls for its registers).
+fn hot_call(prog: &Program, it: &Item) -> bool {
+    needs_call(prog, it)
+        && !matches!(*it, Item::Step(op) if op.code == code::OUT_PAL)
+        && !matches!(*it, Item::SelPal { .. })
 }
 
 /// Whether an item calls a helper.
