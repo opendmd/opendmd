@@ -365,21 +365,16 @@ else
   pass "$(( ${#files[@]} + 1 )) assets (with SHA256SUMS) in $ASSETS; notes in $REL/notes.md"
 
   step "5. The public site"
-  # The demo card's Kenney (CC0) animations: the art pipeline's GIFs, which
-  # the repo ignores (release.yml "The art demos' GIFs").
+  # The demo card's Kenney (CC0) animations: made from the sprites committed
+  # in the art pipeline (offline), as release.yml "The art demos' GIFs" does.
   out=opendmd-web/experiments/art/process/out
   gifs=(b_walk.gif b_pan.gif d_scroll.gif)
   have_gifs() { local f; for f in "${gifs[@]}"; do [ -f "$1/$f" ] || return 1; done; }
-  # The main checkout's, when this is another worktree (made the same way).
-  main_out=$(cd "$(git rev-parse --git-common-dir)/.." && pwd)/$out
   if have_gifs $out; then
     skip "the art demos' GIFs are there"
-  elif [ "$main_out" != "$ROOT/$out" ] && have_gifs "$main_out"; then
-    for f in "${gifs[@]}"; do cp "$main_out/$f" $out/; done
-    pass "the art demos' GIFs copied from $main_out"
   else
     (cd opendmd-web/experiments/art/process && export ART_TMP=$RELEASE_DIR/art PYTHONDONTWRITEBYTECODE=1 &&
-      uv run --quiet fetch_inputs.py && uv run --quiet demos.py b d && git checkout -- out)
+      uv run --quiet fetch_inputs.py kenney && uv run --quiet demos.py b d && git checkout -- out)
     pass "the art demos' GIFs made"
   fi
   # The gallery's contributions and the earlier API pages: the public repo,

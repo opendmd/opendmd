@@ -1,15 +1,19 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Download the freely licensed inputs the demos use into $ART_TMP/src
-(default /tmp/opendmd-art/src). Nothing here is committed.
+"""Gather the freely licensed inputs the demos use into $ART_TMP/src
+(default /tmp/opendmd-art/src). `fetch_inputs.py kenney` stops after the
+Kenney files (offline; all the site's three GIFs need).
 
-  - Kenney "Pixel Platformer" 1.2, CC0 (https://kenney.nl/assets/pixel-platformer)
+  - Kenney "Pixel Platformer" 1.2, CC0 (https://kenney.nl/assets/pixel-platformer):
+    the five files used are committed in kenney-pixel-platformer/ (kenney.nl
+    no longer offers a stable direct download), copied to src/pp; the rest
+    is downloaded and not committed
   - Public-domain (PD-textlogo) console logos from Wikimedia Commons
   - Tom Thumb 3x5 font (MIT / CC0 / CC-BY 3.0, https://robey.lag.net/2010/01/23/tiny-monospace-font.html)
   - Spleen 2.1.0 5x8 and 8x16 (BSD-2-Clause, https://github.com/fcambus/spleen)
 """
-import io, os, tarfile, urllib.request, zipfile
+import io, os, shutil, sys, tarfile, urllib.request
 from pathlib import Path
 
 SRC = Path(os.environ.get("ART_TMP", "/tmp/opendmd-art")) / "src"
@@ -31,8 +35,10 @@ LOGOS = {  # File:… on commons.wikimedia.org, all "Public domain" per the API'
 def main():
     SRC.mkdir(parents=True, exist_ok=True)
     if not (SRC / "pp").exists():
-        z = get("https://kenney.nl/media/pages/assets/pixel-platformer/33bb4921eb-1696667883/kenney_pixel-platformer.zip")
-        zipfile.ZipFile(io.BytesIO(z)).extractall(SRC / "pp")
+        shutil.copytree(Path(__file__).resolve().parent / "kenney-pixel-platformer", SRC / "pp")
+    if sys.argv[1:] == ["kenney"]:  # all demos b and d (the site's GIFs) need: offline
+        print("inputs in", SRC)
+        return
     for name, path in LOGOS.items():
         if not (SRC / name).exists():
             (SRC / name).write_bytes(get(COMMONS + path))
