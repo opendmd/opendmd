@@ -100,6 +100,8 @@ pub type Refusal = &'static str;
 pub struct Lowered {
     pub code: Vec<u8>,
     pub words: Vec<Word>,
+    /// Which words change from row to row (the rest are filled once a frame).
+    pub per_row: Vec<bool>,
     /// The first step the kernel draws (after the column and still runs,
     /// which the driver runs as lanes).
     pub main_start: usize,
@@ -216,9 +218,36 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
     if e.words.len() > 255 {
         return Err("too many values for the kernel");
     }
+    // Slots a row writes: y, py and the row steps' values.
+    let mut row_slot = [false; MAX_SCALARS];
+    row_slot[S_Y as usize] = true;
+    row_slot[S_PY as usize] = true;
+    for op in &prog.ops[prog.draw_end as usize..prog.row_end as usize] {
+        if code::writes_scalar(op.code) {
+            row_slot[(op.d & 0x7f) as usize] = true;
+        }
+    }
+    let rs = |k: u8| k != NONE && row_slot[(k & 0x7f) as usize];
+    let per_row = e
+        .words
+        .iter()
+        .map(|w| match *w {
+            // (A register's lane: its still cache's alias moves each row.)
+            Word::Lane(l) => l >= L_REG0,
+            Word::Scalar(k) => rs(k),
+            Word::Colour { v, k, .. } => rs(v) || rs(k),
+            Word::Entry { v, .. } => rs(v),
+            // (A memo starts again each row, as the VM's each lane.)
+            Word::Init(_) => true,
+            // (Its choices are slots the pick names: any may be a row's.)
+            Word::Pick { .. } => true,
+            _ => false,
+        })
+        .collect();
     Ok(Lowered {
         code: e.c.bytes,
         words: e.words,
+        per_row,
         main_start: start,
         calls: e.calls,
     })
@@ -524,7 +553,7 @@ impl<'a> Emitter<'a> {
                 note(Word::Lane(L_REG0 + r as u8));
             }
         }
-        counts.sort_by_key(|&(_, n)| core::cmp::Reverse(n));
+        counts.sort_unstable_by_key(|&(w, n)| (core::cmp::Reverse(n), word_rank(w)));
         for (&(w, _), &r) in counts.iter().zip(spare.iter()) {
             self.hoist.push((w, r));
         }
@@ -1458,5 +1487,18 @@ fn needs_call(_prog: &Program, it: &Item) -> bool {
             || (op.code == OUT_PAL && op.d & PAL_SCALED != 0),
         Item::SelPal { col, .. } => col.d & PAL_SCALED != 0 && is_lane(col.c),
         Item::PickPal { .. } => false,
+    }
+}
+
+/// A fixed order among hoist candidates used as often, so the unstable
+/// sort gives a formula the same kernel every time.
+fn word_rank(w: Word) -> u32 {
+    match w {
+        Word::Lane(l) => 0x100 | u32::from(l),
+        Word::Scalar(k) => 0x200 | u32::from(k),
+        Word::Sin => 0x300,
+        Word::Pal(k) => 0x400 | u32::from(k),
+        Word::Const(c) => 0x500 | (c as u32 >> 12 & 0xff),
+        _ => 0xfff,
     }
 }
