@@ -455,6 +455,20 @@ pub const HTTP_STACK: usize = 6 * 1024 + 512;
 /// the compile only.
 #[cfg(feature = "psi")]
 pub const PSI_COMPILE_STACK: usize = 12 * 1024;
+/// The heap a compile leaves for everyone else (the network on CPU0, the
+/// compile's error text, allocator overhead): `psi_stack::compile` starts
+/// one only with its stack, `psi::compile_heap_estimate` for the source
+/// and this free, and a largest block of [`PSI_COMPILE_BLOCK`]; else the
+/// Formula is refused ("not enough memory for this Formula right now") and
+/// the player goes on. The compiler's big lists grow fallibly besides, so
+/// a misjudged estimate is a refusal too, not an abort (Endless road
+/// aborted the spare at 39 s on 2026-10-29: 9,648 B free, no 4 KB block).
+#[cfg(feature = "psi")]
+pub const PSI_COMPILE_RESERVE: usize = 6 * 1024;
+/// The largest free block a compile needs: its stack (12 KB) and the
+/// tokens of a 2 KB formula (~12 KB) are each one block.
+#[cfg(feature = "psi")]
+pub const PSI_COMPILE_BLOCK: usize = 16 * 1024;
 /// The file-streaming task's stack (`stream.rs`): `files::serve` and, since
 /// uploads moved here, `files::stream_body_to` and the manifest/`.meta`
 /// installs, chunk buffers on the heap, plus logging. Also one contiguous

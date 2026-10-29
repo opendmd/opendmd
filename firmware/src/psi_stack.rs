@@ -163,12 +163,48 @@ pub fn run_std_thread<T: Send>(f: impl FnOnce() -> T + Send) -> Option<T> {
 
 /// [`opendmd_core::fx_psi::Compiler`]: `psi::compile_into` on its own stack.
 /// No thread: an error the user sees, nothing compiled.
+///
+/// **Heap first.** A compile the heap can't hold is refused before it
+/// starts ([`compile_fits`]): [`psi::NO_MEMORY`], an open error like any
+/// other compile error (the schedule skips to the next item, `/api/play`
+/// answers 400). The compiler's big lists grow fallibly too, with the same
+/// error, for what the check can't foresee (the network allocating on CPU0
+/// meanwhile).
 pub fn compile(src: &str, prog: &mut psi::Program) -> Result<psi::Info, psi::Error> {
+    if let Err(e) = compile_fits(src.len()) {
+        prog.clear();
+        return Err(e);
+    }
     run(|| psi::compile_into(src, prog)).unwrap_or_else(|| {
         Err(psi::Error {
             start: 0,
             end: 0,
             msg: "the player is short of memory just now: try again in a moment".to_string(),
         })
+    })
+}
+
+/// Whether the heap can hold a compile of `len` bytes of source now: its
+/// stack and task block, [`psi::compile_heap_estimate`], and
+/// [`config::PSI_COMPILE_RESERVE`] left over, with a largest block of
+/// [`config::PSI_COMPILE_BLOCK`].
+pub fn compile_fits(len: usize) -> Result<(), psi::Error> {
+    use crate::state::{free_heap, largest_free_block};
+    let need = config::PSI_COMPILE_STACK
+        + 512
+        + psi::compile_heap_estimate(len)
+        + config::PSI_COMPILE_RESERVE;
+    let (free, block) = (free_heap() as usize, largest_free_block());
+    if free >= need && block >= config::PSI_COMPILE_BLOCK {
+        return Ok(());
+    }
+    log::warn!(
+        "formula: not compiled, short of memory: {free} B free (needs {need}), largest block {block} B (needs {}), {len} B of source",
+        config::PSI_COMPILE_BLOCK
+    );
+    Err(psi::Error {
+        start: 0,
+        end: 0,
+        msg: psi::NO_MEMORY.to_string(),
     })
 }
