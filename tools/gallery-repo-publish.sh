@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Update the public gallery repo, github.com/opendmd/opendmd.github.io (the
 # name is from when it was the GitHub Pages site; the site is opendmd.dev
-# now, on Cloudflare, and this repo publishes nothing).
+# now, on Cloudflare; this repo's Pages serve only index.html and 404.html,
+# which forward every address to the same path on opendmd.dev).
 #
 #   tools/gallery-repo-publish.sh <site-dir> <repo-url>   (normally via `make gallery-repo-publish`)
 #
@@ -25,7 +26,10 @@
 #   carries are added only where missing. A site that lacks one the repo
 #   has is refused: its dev/api.html would not list it (build it with
 #   API_ARCHIVE, see the refusal);
-# - README.md: what the repo is, from site/public-repo/README.md.
+# - README.md: what the repo is, from site/public-repo/README.md;
+# - index.html, 404.html, .nojekyll: GitHub Pages can't be switched off for
+#   an <org>.github.io repo, so its Pages forward to opendmd.dev, keeping the
+#   path, query and #hash (old /f/#… share links land on the same Formula).
 #
 # Anything else (an old copy of the site) is removed. Commits as
 # "OpenDMD <release>" only when something changed.

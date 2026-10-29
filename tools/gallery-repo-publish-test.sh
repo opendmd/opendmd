@@ -49,13 +49,16 @@ look() { rm -rf "$tmp/look"; g clone -q "$tmp/pub.git" "$tmp/look" 2>/dev/null; 
 site v1
 publish >/dev/null
 look
-for old in index.html stale.html art-index f install dev/index.html; do
+for old in stale.html art-index f install dev/index.html; do
   [ ! -e "$tmp/look/$old" ] || fail "the old site's $old was kept"
 done
 for cf in _headers _redirects; do [ ! -e "$tmp/look/$cf" ] || fail "the Cloudflare file $cf was published"; done
 [ -f "$tmp/look/gallery/theirs.psi" ] || fail "the first publish removed a contribution"
 [ "$(cat "$tmp/look/dev/api/v0.9.0.html" 2>/dev/null)" = "<p>API of 0.9.0</p>" ] || fail "a publish removed an earlier release's API page"
 cmp -s "$tmp/look/README.md" site/public-repo/README.md || fail "README.md is not ours"
+for fwd in index.html 404.html .nojekyll; do
+  cmp -s "$tmp/look/$fwd" "site/public-repo/$fwd" || fail "$fwd is not our forward to opendmd.dev (the old site's kept?)"
+done
 cmp -s "$tmp/look/gallery/README.md" site/public-repo/gallery/README.md || fail "gallery/README.md is not ours"
 cmp -s "$tmp/look/.github/workflows/gallery-check.yml" site/public-repo/.github/workflows/gallery-check.yml || fail "the workflow is not ours"
 [ "$(git -C "$tmp/look" log --format=%s -1)" = "OpenDMD v9.9.9, docs of $(date -u +%F)" ] || fail "commit message: $(git -C "$tmp/look" log --format=%s -1)"
@@ -137,4 +140,4 @@ CARGO_HOME="$tmp/cargo" RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-stable} cargo build
   --manifest-path "$tmp/look/.github/gallery-check/opendmd-gallery/Cargo.toml" --target-dir "$tmp/target" ||
   fail "the vendored checker does not build offline"
 "$tmp/target/release/opendmd-gallery" check "$tmp/look/gallery/merged.psi" 2>/dev/null || fail "the vendored checker refused a good file"
-echo "gallery-repo-publish-test: ok (the old site removed; gallery/ kept, .github/ ours; earlier releases' dev/api/ pages kept, only a release froze its own; the vendored checker builds offline)"
+echo "gallery-repo-publish-test: ok (the old site removed, its Pages a forward to opendmd.dev; gallery/ kept, .github/ ours; earlier releases' dev/api/ pages kept, only a release froze its own; the vendored checker builds offline)"
