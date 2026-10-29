@@ -68,8 +68,9 @@ impl Iv {
 }
 
 /// The highest `t` a frame of a loop of `loop_ms` is drawn at: every player
-/// draws `t` = `Inputs::at_ms(ms)` for an `ms` under the loop.
-#[cfg_attr(target_arch = "xtensa", optimize(size))]
+/// draws `t` = `Inputs::at_ms(ms)` for an `ms` under the loop. (Not
+/// optimised for size: `inputs_in_range` runs it every frame.)
+#[inline]
 fn t_max(loop_ms: u32) -> i32 {
     Inputs::at_ms(loop_ms)
 }

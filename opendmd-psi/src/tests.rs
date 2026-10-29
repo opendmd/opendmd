@@ -2883,3 +2883,20 @@ fn the_held_picture_redraws_a_band_a_frame() {
     i.second += 1;
     assert_eq!(held.update::<128>(&p, &mut sc, &i, &OWN), 32);
 }
+
+/// The slow layers' marker is the first pixel step (`slow_marker` looks
+/// only there), whatever the fused runs and the runs before the fast part.
+#[test]
+fn the_slow_marker_is_the_first_pixel_step() {
+    let srcs = [
+        "layer rate 4 { pal(fire, (floor(x*4) + floor(y*2)) % 2 ? 0.2 : 0.8) }\nlayer add { gray(x*a) }",
+        "layer rate 3 { gray(x) }\nlayer multiply rate 3 { pal(ice, y > 0.5 ? x : y) }\nlayer screen { cycle(fire, len(cx, cy), t) }",
+        "loop forever\nlayer rate 5 { gray(frac(x + t/5 + seed)) }\nlayer multiply { pal(ice, y + frac(t)) }",
+    ];
+    for src in srcs {
+        let p = compile(src).unwrap();
+        let re = p.row_end as usize;
+        assert_eq!(p.ops[re].code, code::SLOW, "{src}\n{}", p.listing());
+        assert!(!p.ops[re + 1..p.len()].iter().any(|o| o.code == code::SLOW));
+    }
+}
