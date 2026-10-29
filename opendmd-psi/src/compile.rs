@@ -81,6 +81,62 @@ impl core::fmt::Display for Error {
     }
 }
 
+/// The sentence for a compile the heap can't hold just now (a list the
+/// compiler couldn't grow): the player refuses the Formula and goes on,
+/// as with any other compile error, instead of aborting.
+pub const NO_MEMORY: &str = "not enough memory for this Formula right now";
+
+#[cold]
+#[inline(never)]
+fn no_memory() -> Error {
+    Error::new(0, 0, NO_MEMORY)
+}
+
+/// What a compile of `src_len` bytes is expected to take from the heap at
+/// its peak, at most (bytes): the firmware asks for this much free, plus
+/// the compile's stack and a reserve, before it compiles. On the host
+/// (64-bit: its lists' entries are as big as the device's or bigger) every
+/// bundled and example Formula and the `worst` cases stay under it
+/// (`tests/compile_heap.rs`): the tokens (12 B a token, ~1 token per 2
+/// bytes), the nodes (16 B), the sharing index (4 KB) and the layout's
+/// lists; parts drawn in several places read their tokens again, hence
+/// the floor. Endless road (1,858 B compacted): 30.2 KB measured on the
+/// host, 32 KB here.
+pub const fn compile_heap_estimate(src_len: usize) -> usize {
+    let e = 6 * 1024 + 14 * src_len;
+    if e < 16 * 1024 {
+        16 * 1024
+    } else {
+        e
+    }
+}
+
+/// `v.push(x)`, or [`NO_MEMORY`] when the list can't grow (instead of the
+/// abort an infallible push is on the device).
+#[inline]
+fn try_push<T>(v: &mut Vec<T>, x: T) -> Result<(), Error> {
+    if v.len() == v.capacity() {
+        v.try_reserve(1).map_err(|_| no_memory())?;
+    }
+    v.push(x);
+    Ok(())
+}
+
+/// `vec![x; n]`, or [`NO_MEMORY`].
+fn try_vec<T: Clone>(x: T, n: usize) -> Result<Vec<T>, Error> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| no_memory())?;
+    v.resize(n, x);
+    Ok(v)
+}
+
+/// An empty list with room for exactly `n`, or [`NO_MEMORY`].
+fn try_with_capacity<T>(n: usize) -> Result<Vec<T>, Error> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| no_memory())?;
+    Ok(v)
+}
+
 /// `s[a..b]`, or "" (never a panic: a slice of a `str` that could panic
 /// brings ~3 KB of panic formatting into the wasm).
 #[inline(never)]
@@ -140,6 +196,28 @@ struct Token {
     end: usize,
 }
 
+/// A [`Token`] as the lexer's list keeps it: 12 B instead of 16 on the
+/// ESP32 (24 on the host). The list is the compiler's biggest; a source is
+/// at most [`MAX_SOURCE`] bytes (the language service's at most 64 KB,
+/// [`lex`]), so its places fit in 16 bits.
+#[derive(Clone, Copy)]
+struct Packed {
+    tok: Tok,
+    start: u16,
+    end: u16,
+}
+
+impl Packed {
+    #[inline]
+    fn get(self) -> Token {
+        Token {
+            tok: self.tok,
+            start: self.start as usize,
+            end: self.end as usize,
+        }
+    }
+}
+
 fn describe(t: Tok) -> &'static str {
     match t {
         Tok::Num(_) => "a number",
@@ -197,9 +275,61 @@ pub fn number(s: &str) -> Option<i32> {
 }
 
 #[inline(never)]
-fn lex(src: &str) -> Result<Vec<Token>, Error> {
+fn lex(src: &str) -> Result<Vec<Packed>, Error> {
+    if src.len() > u16::MAX as usize {
+        return Err(Error::new(0, 0, "too long"));
+    }
+    // Twice: counted, then kept in a list of exactly that length. The
+    // tokens are the compiler's biggest list (a 2 KB formula has ~1,500,
+    // 16 B each on the ESP32), and a list grown by doubling holds the old
+    // and the new block at once (the ~48 KB that aborted the device on
+    // Endless road, 2026-10-29).
+    let mut count = Toks {
+        v: None,
+        n: 0,
+        nl: false,
+    };
+    lex_into(src, &mut count)?;
+    let mut v = Vec::new();
+    v.try_reserve_exact(count.n).map_err(|_| no_memory())?;
+    let mut out = Toks {
+        v: Some(v),
+        n: 0,
+        nl: false,
+    };
+    lex_into(src, &mut out)?;
+    debug_assert_eq!(out.n, count.n);
+    Ok(out.v.unwrap_or_default())
+}
+
+/// The lexer's output: only counted (`v` is `None`: [`lex`]'s first pass)
+/// or kept; how many, and whether the last was a line's end (or there is
+/// none yet).
+struct Toks {
+    v: Option<Vec<Packed>>,
+    n: usize,
+    nl: bool,
+}
+
+impl Toks {
+    #[inline]
+    fn push(&mut self, t: Token) {
+        self.n += 1;
+        self.nl = t.tok == Tok::Newline;
+        if let Some(v) = &mut self.v {
+            // (Never grows: `lex` reserved the count. `lex` checked the
+            // source's length: the places fit.)
+            v.push(Packed {
+                tok: t.tok,
+                start: t.start as u16,
+                end: t.end as u16,
+            });
+        }
+    }
+}
+
+fn lex_into(src: &str, out: &mut Toks) -> Result<(), Error> {
     let b = src.as_bytes();
-    let mut out: Vec<Token> = Vec::new();
     let mut i = 0;
     let mut depth = 0usize; // ( ) nesting: newlines inside are spaces
                             // At the start of a line (nothing but spaces before, outside brackets):
@@ -207,14 +337,8 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
     let mut line_start = true;
     // On a `name`, `about` or `control` line: where text in quotes may be.
     let mut text = false;
-    let push_nl = |out: &mut Vec<Token>, at: usize| {
-        if !matches!(
-            out.last(),
-            None | Some(Token {
-                tok: Tok::Newline,
-                ..
-            })
-        ) {
+    let push_nl = |out: &mut Toks, at: usize| {
+        if out.n > 0 && !out.nl {
             out.push(Token {
                 tok: Tok::Newline,
                 start: at,
@@ -235,7 +359,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
         }
         if c == b'\n' || c == b';' {
             if depth == 0 {
-                push_nl(&mut out, i);
+                push_nl(out, i);
                 line_start = true;
             }
             text &= depth > 0;
@@ -243,7 +367,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
             continue;
         }
         if c == b'"' && text {
-            i = quoted(src, i, &mut out)?;
+            i = quoted(src, i, out)?;
             continue;
         }
         if c.is_ascii_whitespace() {
@@ -252,7 +376,7 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
         }
         if line_start && depth == 0 {
             if let Some(j) = sprite_head(b, i) {
-                i = sprite_rows(src, i, j, &mut out);
+                i = sprite_rows(src, i, j, out);
                 line_start = false;
                 continue;
             }
@@ -428,13 +552,13 @@ fn lex(src: &str) -> Result<Vec<Token>, Error> {
         i += n;
         out.push(Token { tok, start, end: i });
     }
-    push_nl(&mut out, b.len());
+    push_nl(out, b.len());
     out.push(Token {
         tok: Tok::Eof,
         start: b.len(),
         end: b.len(),
     });
-    Ok(out)
+    Ok(())
 }
 
 /// The lexer's tokens as the language service sees them ([`crate::syntax`]).
@@ -443,6 +567,7 @@ pub(crate) fn lex_tokens(src: &str) -> Result<Vec<(crate::syntax::Kind, usize, u
     use crate::syntax::Kind;
     Ok(lex(src)?
         .iter()
+        .map(|t| t.get())
         .filter(|t| t.tok != Tok::Eof)
         .map(|t| {
             let k = match t.tok {
@@ -486,7 +611,7 @@ pub const MAX_LABEL_TEXT: usize = 24;
 /// JSON as it is). Where it ends.
 #[cold]
 #[inline(never)]
-fn quoted(src: &str, i: usize, out: &mut Vec<Token>) -> Result<usize, Error> {
+fn quoted(src: &str, i: usize, out: &mut Toks) -> Result<usize, Error> {
     let b = src.as_bytes();
     let mut j = i + 1;
     while j < b.len() && b[j] != b'"' {
@@ -577,7 +702,7 @@ fn sprite_head(b: &[u8], i: usize) -> Option<usize> {
 /// its name and `{` as tokens, then each line (to a newline or `;`, a
 /// comment cut off, trimmed, blank ones left out) as a [`Tok::Raw`] up to a
 /// line that is `}` alone, its [`Tok::RBrace`]. Where lexing goes on.
-fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Vec<Token>) -> usize {
+fn sprite_rows(src: &str, i: usize, brace: usize, out: &mut Toks) -> usize {
     let b = src.as_bytes();
     let mut name = i + 6;
     while b[name] == b' ' || b[name] == b'\t' {
@@ -918,7 +1043,7 @@ impl Dag {
                 "this formula is too long for the panel — simplify it",
             ));
         }
-        self.nodes.push(n);
+        try_push(&mut self.nodes, n)?;
         let id = (self.nodes.len() - 1) as Id;
         self.index[slot] = id;
         #[cfg(feature = "syntax")]
@@ -1172,7 +1297,7 @@ impl Dag {
         let b = match self.picks.iter().position(|p| *p == opts) {
             Some(j) => j,
             None => {
-                self.picks.push(opts);
+                try_push(&mut self.picks, opts)?;
                 self.picks.len() - 1
             }
         };
@@ -1602,7 +1727,7 @@ impl Dag {
         let ctx = match self.ctx.iter().position(|c| *c == key) {
             Some(j) => j,
             None if self.ctx.len() < NOISE_CTX => {
-                self.ctx.push(key);
+                try_push(&mut self.ctx, key)?;
                 self.ctx.len() - 1
             }
             None => {
@@ -1622,7 +1747,7 @@ impl Dag {
         let di = match self.deps.iter().position(|d| *d == lats) {
             Some(j) => j,
             None => {
-                self.deps.push(lats);
+                try_push(&mut self.deps, lats)?;
                 self.deps.len() - 1
             }
         };
@@ -1756,7 +1881,7 @@ const IN_RGB: u8 = 4;
 
 struct Parser<'s> {
     src: &'s str,
-    toks: Vec<Token>,
+    toks: Vec<Packed>,
     pos: usize,
     dag: Dag,
     locals: Vec<Local<'s>>,
@@ -1904,16 +2029,17 @@ impl<'s> Parser<'s> {
             .get(k)
             .copied()
             .unwrap_or(self.toks[self.toks.len() - 1])
+            .get()
     }
 
     #[inline(never)]
     fn peek(&self) -> Token {
-        self.toks[self.pos]
+        self.toks[self.pos].get()
     }
 
     #[inline(never)]
     fn next(&mut self) -> Token {
-        let t = self.toks[self.pos];
+        let t = self.toks[self.pos].get();
         if self.pos + 1 < self.toks.len() {
             self.pos += 1;
         }
@@ -2617,10 +2743,10 @@ impl<'s> Parser<'s> {
     fn has_colour(&self, mut k: usize, arg: bool) -> bool {
         let mut depth = 0;
         loop {
-            let t = self.toks[k];
+            let t = self.toks[k].get();
             match t.tok {
                 Tok::Hex(_) => return true,
-                Tok::Name if self.toks[k + 1].tok == Tok::LParen && self.text(t) == "rgb" => {
+                Tok::Name if self.toks[k + 1].get().tok == Tok::LParen && self.text(t) == "rgb" => {
                     return true
                 }
                 Tok::LParen => depth += 1,
@@ -2804,7 +2930,7 @@ impl<'s> Parser<'s> {
         }
         let start = self.peek().start;
         let id = self.expr(0)?;
-        let end = self.toks[self.pos.saturating_sub(1)].end;
+        let end = self.toks[self.pos.saturating_sub(1)].get().end;
         if in_frame && self.dag.level(id) > LV_FRAME {
             let why = INPUTS[self.dag.nodes[id as usize].why as usize];
             return Err(Error::new(
@@ -2820,20 +2946,20 @@ impl<'s> Parser<'s> {
         if self.in_draw > 0 {
             self.drawable(id, start, end)?;
         }
-        self.locals.push(Local {
+        try_push(&mut self.locals, Local {
             name,
             id,
             at: t.start,
             in_frame,
             counter: false,
             scope: self.scope,
-        });
+        })?;
         self.end_of_statement()
     }
 
     #[inline(never)]
     fn is_assignment(&self) -> bool {
-        self.peek().tok == Tok::Name && self.toks[self.pos + 1].tok == Tok::Assign
+        self.peek().tok == Tok::Name && self.toks[self.pos + 1].get().tok == Tok::Assign
     }
 
     /// `fps N` at the cursor: the word `fps` with a number (or nothing)
@@ -2844,7 +2970,7 @@ impl<'s> Parser<'s> {
         t.tok == Tok::Name
             && self.text(t) == "fps"
             && matches!(
-                self.toks[self.pos + 1].tok,
+                self.toks[self.pos + 1].get().tok,
                 Tok::Num(_) | Tok::Newline | Tok::RBrace | Tok::Eof
             )
     }
@@ -2876,7 +3002,7 @@ impl<'s> Parser<'s> {
     /// used as one (`loop = 3` is an assignment, and refused as such).
     fn keyword(&self) -> &'s str {
         let t = self.peek();
-        if t.tok != Tok::Name || self.toks[self.pos + 1].tok == Tok::Assign {
+        if t.tok != Tok::Name || self.toks[self.pos + 1].get().tok == Tok::Assign {
             return "";
         }
         let w = self.text(t);
@@ -2931,10 +3057,10 @@ impl<'s> Parser<'s> {
     /// (`open`: what a `(` never closed counts as.)
     fn whole_line(&self, open: bool) -> bool {
         let mut k = self.pos + 1;
-        if self.toks[k].tok == Tok::LParen {
+        if self.toks[k].get().tok == Tok::LParen {
             let mut depth = 0;
             loop {
-                match self.toks[k].tok {
+                match self.toks[k].get().tok {
                     Tok::LParen => depth += 1,
                     Tok::RParen => {
                         depth -= 1;
@@ -2949,7 +3075,7 @@ impl<'s> Parser<'s> {
             }
             k += 1;
         }
-        matches!(self.toks[k].tok, Tok::Newline | Tok::Eof | Tok::RBrace)
+        matches!(self.toks[k].get().tok, Tok::Newline | Tok::Eof | Tok::RBrace)
     }
 
     /// A colour line at `t` (its name), a part drawn (`p`, `p(x', y')`,
@@ -2982,7 +3108,7 @@ impl<'s> Parser<'s> {
         }
         if t.tok == Tok::Name
             && COLOURS.iter().any(|e| e.0 == word)
-            && self.toks[self.pos + 1].tok == Tok::LParen
+            && self.toks[self.pos + 1].get().tok == Tok::LParen
             && (word != "rgb" || self.whole_line(true))
         {
             self.next();
@@ -3041,7 +3167,7 @@ impl<'s> Parser<'s> {
         if self.peek().tok != end {
             return Err(Error::new(
                 t.start,
-                self.toks[self.pos.saturating_sub(1)].start.max(t.end),
+                self.toks[self.pos.saturating_sub(1)].get().start.max(t.end),
                 if self.in_layer() {
                     "only a layer's last line can be a bare value (its colour) — did you mean `name = …`?"
                 } else {
@@ -3096,7 +3222,7 @@ impl<'s> Parser<'s> {
         }
         self.next();
         let outer = self.scope;
-        self.scopes.push((outer, false));
+        try_push(&mut self.scopes, (outer, false))?;
         self.scope = (self.scopes.len() - 1) as u16;
         let mut seen_frame = false;
         let mut colour: Option<((Vec<Colour>, bool), Token)> = None;
@@ -3177,16 +3303,16 @@ impl<'s> Parser<'s> {
         let mut depth = 0;
         let mut start = true;
         loop {
-            let t = self.toks[k];
+            let t = self.toks[k].get();
             match t.tok {
                 Tok::LBrace => depth += 1,
                 Tok::RBrace if depth == 0 => return None,
                 Tok::RBrace => depth -= 1,
                 Tok::Eof => return None,
                 Tok::Name if depth == 0 && start && self.text(t) == "loop" => {
-                    match self.toks[k + 1].tok {
+                    match self.toks[k + 1].get().tok {
                         Tok::Num(v) => return Some(v),
-                        Tok::Name if self.text(self.toks[k + 1]) == "forever" => {
+                        Tok::Name if self.text(self.toks[k + 1].get()) == "forever" => {
                             return Some(FOREVER)
                         }
                         _ => {}
@@ -3224,7 +3350,7 @@ impl<'s> Parser<'s> {
         let mut depth = 0;
         let mut end = self.pos;
         loop {
-            match self.toks[end].tok {
+            match self.toks[end].get().tok {
                 Tok::LBrace => depth += 1,
                 Tok::RBrace => {
                     depth -= 1;
@@ -3238,7 +3364,7 @@ impl<'s> Parser<'s> {
             end += 1;
         }
         let loop_v = self.loop_ahead(body).unwrap_or(8 * ONE);
-        self.parts.push(Part {
+        try_push(&mut self.parts, Part {
             name,
             at: n.start,
             scope: self.scope,
@@ -3246,7 +3372,7 @@ impl<'s> Parser<'s> {
             end,
             loop_v,
             insts: Vec::new(),
-        });
+        })?;
         self.instance(self.parts.len() - 1, None, kw)?;
         self.pos = end + 1;
         self.end_of_statement()
@@ -3290,7 +3416,7 @@ impl<'s> Parser<'s> {
             let n = self.dag.constant(loop_v, a)?;
             Some(self.dag.op(code::MOD, [t0, n, 0], a)?)
         };
-        self.scopes.push((self.scope, true));
+        try_push(&mut self.scopes, (self.scope, true))?;
         self.scope = (self.scopes.len() - 1) as u16;
         self.env = Env {
             at: at.or(self.env.at),
@@ -3304,12 +3430,12 @@ impl<'s> Parser<'s> {
         (self.pos, self.scope, self.env, self.record, self.in_draw) = saved;
         self.depth -= PART_DEPTH;
         let p = &mut self.parts[k];
-        p.insts.push(Inst {
+        try_push(&mut p.insts, Inst {
             at,
             scope,
             colours: b.colours,
             layered: b.layered,
-        });
+        })?;
         Ok(p.insts.len() - 1)
     }
 
@@ -3541,16 +3667,16 @@ impl<'s> Parser<'s> {
                 if self.tables.len() + 32 * (self.palettes.len() + 1) > MAX_TABLE {
                     return Err(self.too_full(kw, 32));
                 }
-                self.palettes.push(entries);
+                try_push(&mut self.palettes, entries)?;
                 self.palettes.len() - 1
             }
         };
-        self.palette_names.push(Palette {
+        try_push(&mut self.palette_names, Palette {
             name,
             at: n.start,
             scope: self.scope,
             j,
-        });
+        })?;
         self.end_of_statement()
     }
 
@@ -3843,16 +3969,17 @@ impl<'s> Parser<'s> {
                     // E917.
                     return Err(self.too_full(kw, words.len()));
                 }
+                self.tables.try_reserve(words.len()).map_err(|_| no_memory())?;
                 self.tables.extend_from_slice(&words);
                 self.tables.len() - words.len()
             }
         };
-        self.sprites.push(Sprite {
+        try_push(&mut self.sprites, Sprite {
             name,
             at: n.start,
             scope: self.scope,
             start,
-        });
+        })?;
         self.end_of_statement()
     }
 
@@ -3907,17 +4034,18 @@ impl<'s> Parser<'s> {
                         ),
                     );
                 }
+                self.tables.try_reserve(vals.len()).map_err(|_| no_memory())?;
                 self.tables.extend_from_slice(&vals);
                 self.tables.len() - vals.len()
             }
         };
-        self.table_names.push(Table {
+        try_push(&mut self.table_names, Table {
             name,
             at: n.start,
             scope: self.scope,
             start,
             len: vals.len(),
-        });
+        })?;
         self.end_of_statement()
     }
 
@@ -4024,7 +4152,7 @@ impl<'s> Parser<'s> {
     /// Whether the block the cursor is in has its `}` ahead.
     fn closed(&self) -> bool {
         let mut depth = 0;
-        for t in &self.toks[self.pos..] {
+        for t in self.toks[self.pos..].iter().map(|t| t.get()) {
             match t.tok {
                 Tok::LBrace => depth += 1,
                 Tok::RBrace if depth == 0 => return true,
@@ -4095,7 +4223,7 @@ impl<'s> Parser<'s> {
             return Err(self.too_deep());
         }
         let outer = self.scope;
-        self.scopes.push((outer, false));
+        try_push(&mut self.scopes, (outer, false))?;
         self.scope = (self.scopes.len() - 1) as u16;
         let ctr = self.dag.push(
             Node {
@@ -4110,16 +4238,16 @@ impl<'s> Parser<'s> {
             (n.start, n.end),
         )?;
         self.loops += 1;
-        self.locals.push(Local {
+        try_push(&mut self.locals, Local {
             name,
             id: ctr,
             at: n.start,
             in_frame: false,
             counter: true,
             scope: self.scope,
-        });
+        })?;
         if self.record {
-            self.draw.push(DItem::For(ctr, count as u16));
+            try_push(&mut self.draw, DItem::For(ctr, count as u16))?;
         }
         self.in_draw += 1;
         let r = self.draw_lines(kw);
@@ -4129,7 +4257,7 @@ impl<'s> Parser<'s> {
         r?;
         self.next();
         if self.record {
-            self.draw.push(DItem::End);
+            try_push(&mut self.draw, DItem::End)?;
         }
         self.end_of_statement()
     }
@@ -4147,7 +4275,7 @@ impl<'s> Parser<'s> {
             loop {
                 let start = self.peek().start;
                 let e = self.expr(0)?;
-                let end = self.toks[self.pos.saturating_sub(1)].end;
+                let end = self.toks[self.pos.saturating_sub(1)].get().end;
                 self.drawable(e, start, end)?;
                 if self.dag.grows(e) {
                     // E906.
@@ -4195,11 +4323,11 @@ impl<'s> Parser<'s> {
             v[2] = self.dag.constant(ONE, at)?;
         }
         if self.record {
-            self.draw.push(if line {
+            try_push(&mut self.draw, if line {
                 DItem::Line(v)
             } else {
                 DItem::Dot([v[0], v[1], v[2]])
-            });
+            })?;
         }
         self.end_of_statement()
     }
@@ -4293,7 +4421,7 @@ impl<'s> Parser<'s> {
                     if b.blocks > 0 {
                         return Err(Error::new(
                             t.start,
-                            self.toks[self.pos.saturating_sub(1)].end.max(t.end),
+                            self.toks[self.pos.saturating_sub(1)].get().end.max(t.end),
                             "with layers, every colour goes inside one: put this line in `layer { … }`",
                         ));
                     }
@@ -4651,14 +4779,14 @@ impl<'s> Parser<'s> {
             v = self.dag.op(code::FLOOR, [v, 0, 0], at)?;
         }
         if letter.is_none() {
-            self.locals.push(Local {
+            try_push(&mut self.locals, Local {
                 name,
                 id: v,
                 at: nt.start,
                 in_frame: false,
                 counter: false,
                 scope: self.scope,
-            });
+            })?;
         }
         // The slots: the formula's own controls, or a part's for a slot the
         // formula's own lines leave undeclared (the first part to declare it).
@@ -4895,13 +5023,18 @@ fn compile_inner<'s>(
         ));
     }
     let toks = lex(src)?;
+    // Room for the nodes from the start, by the tokens (about one node for
+    // every two; the bundled Formulas 0.3-0.45): a list grown by doubling
+    // holds the old block and the new at once.
+    let nodes = try_with_capacity((toks.len() / 2).clamp(64, MAX_NODES))?;
+    let index = try_vec(NO, SLOTS)?;
     let mut p = Parser {
         src,
         toks,
         pos: 0,
         dag: Dag {
-            nodes: Vec::with_capacity(64),
-            index: alloc::vec![NO; SLOTS],
+            nodes,
+            index,
             divs: Vec::new(),
             picks: Vec::new(),
             forever: false,
@@ -4989,7 +5122,7 @@ fn finish(
     // `ink` with nothing drawn: always a mistake (unlike `ur` alone).
     if p.drawn.is_none() && p.dag.nodes.iter().any(|m| m.code == code::INK) {
         let t = (0..p.toks.len())
-            .map(|k| p.toks[k])
+            .map(|k| p.toks[k].get())
             .find(|&t| t.tok == Tok::Name && p.text(t) == "ink")
             .unwrap_or(ct);
         return Err(Error::new(
@@ -5060,6 +5193,19 @@ fn finish(
             shift,
         });
     }
+    // What only reading needed goes before the layout: the tokens (the
+    // biggest list), the names, the sharing index. Laying out holds a
+    // dozen lists of its own; the compile's peak was the two at once.
+    p.toks = Vec::new();
+    p.locals = Vec::new();
+    p.parts = Vec::new();
+    p.tables = Vec::new();
+    p.table_names = Vec::new();
+    p.sprites = Vec::new();
+    p.palettes = Vec::new();
+    p.palette_names = Vec::new();
+    p.dag.index = Vec::new();
+    p.dag.divs = Vec::new();
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
     emit(&p.dag, &steps, &p.draw, backdrop, runs, reuse, prog).map_err(|e| Error {
@@ -5295,7 +5441,7 @@ fn emit(
     // Reachability, and the first colour step each value is needed for
     // (children always precede their parents).
     const NONE: usize = usize::MAX;
-    let mut need = alloc::vec![NONE; n];
+    let mut need = try_vec(NONE, n)?;
     for (k, st) in steps.iter().enumerate() {
         for a in st.reads() {
             need[a as usize] = need[a as usize].min(k);
@@ -5352,13 +5498,27 @@ fn emit(
     // Where each node's value lives: a slot of `vs` (`VS` + its index,
     // given a scalar slot once the steps are laid out: `assign_slots`), or
     // as it is (an input, a lane, a wide slot, a noise's offset).
-    let mut loc = alloc::vec![0u16; n];
-    let mut vs: Vec<VSlot> = Vec::new();
+    let mut loc = try_vec(0u16, n)?;
+    // A slot for each constant and each value a frame, a row or a loop
+    // works out, two for each loop and one for each pick's table (at most:
+    // a wide value or a noise's offset has its place elsewhere), reserved
+    // at once: grown by doubling it was the 4 KB the device couldn't find
+    // (2026-10-29).
+    let n_for = draw.iter().filter(|d| matches!(d, DItem::For(..))).count();
+    let mut vs: Vec<VSlot> = try_with_capacity(
+        (0..n)
+            .filter(|&i| {
+                live(i) && (nodes[i].code == K_CONST || (is_op(i) && nodes[i].level != LV_PIXEL))
+            })
+            .count()
+            + 2 * n_for
+            + dag.picks.len(),
+    )?;
     // The picks' tables' choices (`VSlot::Pick`'s index here).
     let mut ch: Vec<Vec<u16>> = Vec::new();
     // Which nodes have a place yet: a step may read only those (an operand
     // without one would read slot 0, `t`, silently).
-    let mut set = alloc::vec![false; n];
+    let mut set = try_vec(false, n)?;
     let mut next_slot = S_FIRST_FREE as usize;
     // `seed` has the first free slot; the wide noises' offsets the slots
     // after it (`noise_slot`; `seed`'s kept for it then).
@@ -5376,16 +5536,19 @@ fn emit(
     }
     // Wide slots: 0 is `t`.
     let mut next_wide = 1usize;
-    fn new_slot(vs: &mut Vec<VSlot>, v: Option<i32>) -> u16 {
-        vs.push(match v {
-            Some(v) => VSlot::Const(v),
-            None => VSlot::Value,
-        });
-        VS + (vs.len() - 1) as u16
+    fn new_slot(vs: &mut Vec<VSlot>, v: Option<i32>) -> Result<u16, Error> {
+        try_push(
+            vs,
+            match v {
+                Some(v) => VSlot::Const(v),
+                None => VSlot::Value,
+            },
+        )?;
+        Ok(VS + (vs.len() - 1) as u16)
     }
     for i in 0..n {
         if live(i) && nodes[i].code == K_CONST {
-            loc[i] = new_slot(&mut vs, Some(nodes[i].val));
+            loc[i] = new_slot(&mut vs, Some(nodes[i].val))?;
             set[i] = true;
         } else if live(i) && nodes[i].code == K_INPUT {
             loc[i] = if nodes[i].val == WIDE_T {
@@ -5404,7 +5567,7 @@ fn emit(
     if backdrop {
         prog.uses |= BACKDROP;
     }
-    let mut ops: Vec<WOp> = Vec::with_capacity(total + 2);
+    let mut ops: Vec<WOp> = try_with_capacity(total + 2)?;
     // A step for node `m` into `d`; a pick's table of its choices' slots
     // goes in constant slots of its own, one for every pick of the same
     // choices (`tabs`: where each went, 0 for not yet; the choices all
@@ -5439,7 +5602,7 @@ fn emit(
             let tab = &mut tabs[m.b as usize];
             if *tab == 0 {
                 ch.push(opts.iter().map(|&o| loc[o as usize]).collect());
-                vs.push(VSlot::Pick((ch.len() - 1) as u16));
+                try_push(vs, VSlot::Pick((ch.len() - 1) as u16))?;
                 *tab = VS + (vs.len() - 1) as u16;
             }
             (b, c) = (*tab, opts.len() as u16);
@@ -5454,7 +5617,7 @@ fn emit(
     };
     // Each loop's own values: those whose deepest counter is its (a value
     // at a loop's level takes the loop of its operand at that level).
-    let mut owner = alloc::vec![u16::MAX; n];
+    let mut owner = try_vec(u16::MAX, n)?;
     for i in 0..n {
         let m = &nodes[i];
         if m.code == K_COUNTER {
@@ -5486,7 +5649,7 @@ fn emit(
                 } else if m.code == code::W_LAT {
                     noise_slot(m.val as usize / 3, m.val as usize % 3) as u16
                 } else {
-                    new_slot(&mut vs, None)
+                    new_slot(&mut vs, None)?
                 };
                 loc[i] = d;
                 set[i] = true;
@@ -5502,8 +5665,8 @@ fn emit(
             for item in draw {
                 match *item {
                     DItem::For(ctr, count) => {
-                        let cs = new_slot(&mut vs, Some((count as i32) << 16));
-                        let ks = new_slot(&mut vs, None);
+                        let cs = new_slot(&mut vs, Some((count as i32) << 16))?;
+                        let ks = new_slot(&mut vs, None)?;
                         loc[ctr as usize] = ks;
                         set[ctr as usize] = true;
                         open.push((ops.len(), ks, cs));
@@ -5517,7 +5680,7 @@ fn emit(
                         let lp = nodes[ctr as usize].val as u16;
                         for i in 0..n {
                             if is_op(i) && owner[i] == lp {
-                                let d = new_slot(&mut vs, None);
+                                let d = new_slot(&mut vs, None)?;
                                 loc[i] = d;
                                 set[i] = true;
                                 ops.push(mk(
