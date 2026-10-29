@@ -214,8 +214,9 @@ pub(crate) mod code {
     // column and still runs: `SLOW d, a, b, c`: the `a` steps after it are
     // the slow layers' (their values and `b` colour steps), redrawn every
     // `d`th frame a band of rows at a time (`crate::rate`); `c` says what
-    // they read (`rate::READS_*`). A whole frame runs them (a no-op
-    // marker); the fast part skips them, drawing over the held picture.
+    // they read (`rate::READS_*`). Laid out first in the pixel section: the
+    // slow part runs only them, the fast part the steps after them, over
+    // the held picture; never the two in one go.
     pub const SLOW: u8 = 87;
     // The draw stage (`ops[frame_end..draw_end]`, scalar slots only):
     // `FOR d, a, b`: counter `d` = 0, the count in slot `a`, its END at

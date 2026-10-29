@@ -389,7 +389,8 @@ only when what it does use changes: the clock, a control. A few rules:
 `rate` goes on the bottom layer (or the first few, with the same number),
 under at least one layer that isn't slow; the bottom one covers everything
 (no blend, no coverage); and a slow layer can't read `ink` or the GIF
-under it (`ur`, `ug`, `ub`, `ul`). Something that moves fast in a slow
+under it (`ur`, `ug`, `ub`, `ul`); in a formula pasted in as a part
+(`use … as p`) `rate` is left out, as `fps` is. Something that moves fast in a slow
 layer shows its bands moving at different times: `rate` is for what
 changes slowly. The browser's preview draws the same frames as the panel.
 The gallery's **Storm front** is made this way.
@@ -621,8 +622,9 @@ milliseconds); all the examples are light or medium.
   as a look.
 - For a rainbow, a palette is cheaper than `hsv`: `pal(rainbow, h)` or
   a palette of your own, and `cycle` turns it for next to nothing.
-- A slow bottom layer, `layer rate N`, costs an Nth of itself a frame (a
-  look draws it every frame).
+- A slow bottom layer, `layer rate N`, costs an Nth of itself a frame on
+  the panel (it keeps the slow picture while it has the memory to spare);
+  a look, and the panel without that memory, draw it whole every frame.
 
 ## Sharing
 

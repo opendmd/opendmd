@@ -2836,7 +2836,7 @@ fn rate_error_messages() {
     let p = compile("part p { layer rate 3 { gray(x) }\nlayer add { gray(y*t) } }\np").unwrap();
     assert!(p.rate().is_none());
     let cases: &[(&str, &str, &str)] = &[
-        ("layer { gray(x) }\nlayer rate 4 add { gray(y) }", "expected `{`", "—"),
+        ("layer { gray(x) }\nlayer rate 4 add { gray(y) }", "write the blend first", "—"),
         ("layer { gray(x) }\nlayer add rate 4 { gray(y) }", "bottom layers only", "E941"),
         ("layer rate 1 { gray(x) }\nlayer add { gray(y) }", "2 to 200", "E942"),
         ("layer rate 2.5 { gray(x) }\nlayer add { gray(y) }", "2 to 200", "E942"),

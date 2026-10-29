@@ -3,10 +3,11 @@
 //! The bottom layers of a formula may say `rate N`: they are redrawn every
 //! Nth frame of the formula's grid, a band of rows a frame, and every frame
 //! the layers above are drawn over what they last drew. The compiler lays
-//! the slow layers' steps out after a `code::SLOW` marker (their own values:
-//! nothing shared with the layers above); the VM runs a frame whole (the
-//! marker a no-op), the slow part alone, or the fast part alone over a
-//! picture ([`crate::vm::frame`]'s `part`).
+//! the slow layers' steps out first, after a `code::SLOW` marker (their own
+//! values: nothing shared with the layers above); the VM runs the slow part
+//! alone, or the fast part alone over a picture ([`crate::vm::frame`]'s
+//! `part`). Never a `rate` formula's steps in one go: the render functions
+//! send one to [`render_scratch`].
 //!
 //! **The definition** (a function of the frame's inputs alone, so the
 //! browser, the simulator and the device draw the same bytes): the
@@ -15,7 +16,9 @@
 //! b = floor(r·N/32); and in frame k row r of the slow layers is drawn as
 //! at frame k − ((k − b) mod N), the last frame of its band — its time
 //! taken back by whole frames (into the loop before, for a formula that
-//! loops; never before the start, for one that goes on forever), the clock,
+//! loops — for a loop that isn't a whole number of frames that may be an
+//! instant the grid never shows; never before the start, for one that goes
+//! on forever), the clock,
 //! the sliders and `seed` as they are now. When the slow layers read no
 //! `t`, every row is simply drawn now.
 //!
@@ -50,7 +53,10 @@ pub(crate) fn steps(prog: &Program, part: u8) -> (usize, usize) {
     let (re, pe) = (prog.row_end as usize, prog.len().min(MAX_OPS));
     match prog.slow_marker() {
         Some(m) if part == SLOW => (m + 1, (m + 1 + prog.ops[m].a as usize).min(pe)),
-        Some(m) => ((m + 1 + prog.ops[m].a as usize).min(pe), pe),
+        Some(m) => {
+            debug_assert!(part == FAST, "a `rate` formula drawn whole");
+            ((m + 1 + prog.ops[m].a as usize).min(pe), pe)
+        }
         None => (re, pe),
     }
 }

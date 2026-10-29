@@ -699,6 +699,8 @@ impl PsiFx {
             self.held = None;
         } else if let Some(h) = self.held.as_deref_mut() {
             h.forget();
+        } else {
+            self.held_tried = 0;
         }
         // Another program: its kernel (if any) is made at the next frame.
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
