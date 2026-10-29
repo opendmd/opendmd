@@ -920,7 +920,7 @@ impl<'a> Rows<'a> {
         };
         Rows {
             table,
-            track: changed.is_some() && (out.as_ptr() as usize) % 4 == 0,
+            track: changed.is_some() && (out.as_ptr() as usize).is_multiple_of(4),
             changed,
             kept: H,
             before: [0; W * 3 / 4],
