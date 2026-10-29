@@ -831,11 +831,14 @@ impl Program {
             let op = &self.ops[k];
             if skip.contains(&k) {
             } else if k >= start {
-                match (op.code == code::FUSE).then(|| crate::fuse::jit_ns(op.d)).flatten() {
-                    Some(ns) => {
+                // (A marker the kernel does not draw in one piece: its
+                // steps follow, one at a time.)
+                match (op.code == code::FUSE).then(|| crate::fuse::jit_ns(op.d)) {
+                    Some(Some(ns)) => {
                         kp += ns;
                         k += op.a as usize;
                     }
+                    Some(None) => {}
                     None => kp += self.jit_step_ns(k, op),
                 }
             } else {
@@ -1614,8 +1617,8 @@ pub(crate) const JIT_LANE_NS: u32 = 13;
 /// before the frame's constant words were filled once).
 pub(crate) const JIT_ROWS_US: u32 = 32;
 /// The kernel's steps as an effect draws them against their rows' sum, %
-/// (jit1-b: Rotozoom floor, Tunnel, Time gate and Fire as effects).
-pub(crate) const JIT_PATH_PCT: u32 = 130;
+/// (jit1-b; refit on jit2-c: 12 rows within -11..+6 %, tests/estimate.rs).
+pub(crate) const JIT_PATH_PCT: u32 = 140;
 
 /// A kernel step's cost, ns a pixel on the ESP32: phase 1's rows on the
 /// spare (jit1-b, each over `gray(x)`'s kernel; `tests/measured.rs`

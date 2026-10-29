@@ -185,3 +185,25 @@ pub const SPEED2: &[(&str, &str, u32)] = &[
     ("Endless road (sprite car)", ROAD_SPRITE, 3677),
     ("Endless road (car drawn)", ROAD_DRAWN, 3351),
 ];
+
+// The JIT on the spare (psi-probe JIT2_ONLY, 1.0.0-beta.11-jit2-c,
+// 2026-10-29): each bundled formula as an effect on the player's path with
+// the JIT on (its kernel, after the self-check and the trial; the still
+// cache taken where it has values), p50 µs a frame; and the looks over a
+// changing picture. For `Program::esp32_us_jit_still` / `esp32_us_jit`.
+pub const JIT_EFFECTS: &[(&str, &str, u32)] = &[
+    ("Endless road", include_str!("../../opendmd-web/formulas/endless-road.psi"), 2723),
+    ("Endless road Full", include_str!("../../opendmd-web/experiments/road-life/road-full.psi"), 3601),
+    ("Wireframe cube", include_str!("../../opendmd-web/formulas/wireframe-cube.psi"), 1691),
+    ("Plasma letters", include_str!("../../opendmd-web/formulas/plasma-letters.psi"), 4793),
+    ("Rotozoom floor", include_str!("../../opendmd-web/formulas/rotozoom-floor.psi"), 1517),
+    ("Tunnel", include_str!("../../opendmd-web/formulas/tunnel.psi"), 2520),
+    ("Time gate", include_str!("../../opendmd-web/formulas/time-gate.psi"), 2816),
+    ("Fire", include_str!("../../opendmd-web/formulas/fire.psi"), 2392),
+    ("Plasma", include_str!("../../opendmd-web/formulas/plasma.psi"), 2657),
+];
+pub const JIT_LOOKS: &[(&str, &str, &str, u8, u32)] = &[
+    ("Old TV", include_str!("../../opendmd-web/formulas/old-tv.psi"), "over", 100, 1873),
+    ("Plasma letters", include_str!("../../opendmd-web/formulas/plasma-letters.psi"), "over", 100, 4895),
+    ("Plasma", include_str!("../../opendmd-web/formulas/plasma.psi"), "screen", 40, 4083),
+];
