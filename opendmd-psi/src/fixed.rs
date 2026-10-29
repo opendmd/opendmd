@@ -447,6 +447,55 @@ fn noise_cell(x0: u32, y0: u32, z0: u32, x: i32, y: i32, z: i32) -> i32 {
     lerp15(lerp15(a, b, fy), lerp15(c, d, fy), fz)
 }
 
+/// The lattice terms of the cell `noise_off(x, y, z, off)` reads: its low
+/// corner's `x0 y0 z0` (a noise-cell memo's key; `off` 0 for `noise`).
+#[inline(always)]
+pub fn noise_key(x: i32, y: i32, z: i32, off: [u32; 3]) -> [u32; 3] {
+    [
+        ((x >> 16) as u32).wrapping_mul(P1).wrapping_add(off[0]),
+        ((y >> 16) as u32).wrapping_mul(P2).wrapping_add(off[1]),
+        ((z >> 16) as u32).wrapping_mul(P3).wrapping_add(off[2]),
+    ]
+}
+
+/// The eight corner values of the cell whose low corner's lattice terms
+/// are `k` ([`noise_key`]), in [`noise_blend`]'s order.
+#[inline(always)]
+pub fn noise_corners(k: [u32; 3]) -> [i32; 8] {
+    let [x0, y0, z0] = k;
+    let (x1, y1, z1) = (
+        x0.wrapping_add(P1),
+        y0.wrapping_add(P2),
+        z0.wrapping_add(P3),
+    );
+    [
+        corner(x0, y0, z0),
+        corner(x1, y0, z0),
+        corner(x0, y1, z0),
+        corner(x1, y1, z0),
+        corner(x0, y0, z1),
+        corner(x1, y0, z1),
+        corner(x0, y1, z1),
+        corner(x1, y1, z1),
+    ]
+}
+
+/// A cell's noise at the fractions of `x y z` from its corners
+/// ([`noise_corners`]): `noise_off(x, y, z, off)` is exactly
+/// `noise_blend(&noise_corners(noise_key(x, y, z, off)), x, y, z)` (the
+/// same steps as `noise_cell`), so a caller that keeps the last cell's
+/// corners — the row stage's noise, whose rows mostly share a cell — gets
+/// the same value without the eight hashes.
+#[inline(always)]
+pub fn noise_blend(c: &[i32; 8], x: i32, y: i32, z: i32) -> i32 {
+    let (fx, fy, fz) = (fade15(x & 0xffff), fade15(y & 0xffff), fade15(z & 0xffff));
+    let a = lerp15(c[0], c[1], fx);
+    let b = lerp15(c[2], c[3], fx);
+    let e = lerp15(c[4], c[5], fx);
+    let d = lerp15(c[6], c[7], fx);
+    lerp15(lerp15(a, b, fy), lerp15(e, d, fy), fz)
+}
+
 /// [`noise`] at a whole `z` (its fraction 0): the same value from the
 /// four corners of that plane (the other four are weighed by
 /// `fade15(0)` = 0, and `lerp15(a, b, 0)` is `a`).
