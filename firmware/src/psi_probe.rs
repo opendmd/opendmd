@@ -268,7 +268,7 @@ fn road_probe(root: &str, start: Instant, stack0: u32) {
 /// fast-div (fastdiv-a before, -b after): only its rows, first, one
 /// source at a time (the full probe has run out of heap twice), then the
 /// play lines. `false`: the full probe (or the others above).
-const FASTDIV_ONLY: bool = true;
+const FASTDIV_ONLY: bool = false;
 
 const TUNNEL_FILE: &str = include_str!("../../opendmd-web/formulas/tunnel.psi");
 
