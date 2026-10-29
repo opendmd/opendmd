@@ -70,6 +70,8 @@ layout, recovery and the update flow in detail.
 | `opendmd-web` | The web app: wasm module plus hand-written HTML, CSS and JS in `www/` |
 | `opendmd-art-web` | Create Art's image processing and GIF writer, loaded on demand |
 | `opendmd-pack` | Prepares a card's GIF copies offline |
+| `opendmd-psi` | Psi, the Formula language: its compiler and VM (`no_std`), shared by the firmware, the simulator and the browser |
+| `opendmd-psi-cli` | `psi`, Formulas from the command line: `psi check` and `psi fmt` (`make psi` installs it) |
 | `firmware` | The ESP32 firmware |
 
 The crates are deliberately not a Cargo workspace.
@@ -90,6 +92,8 @@ the [HTTP API](api.md#live-items); to see a live item without a board,
   follows the latest docs; it links a copy for each release, as that
   release described it, and the web app's Settings → Device → About opens
   the one for the player's firmware.
+- [Psi language reference](psi-spec.md): the Formula language, every
+  name it knows, its limits and its error codes; the `psi` command.
 - [The simulator](simulator.md): running it from source, its keys and screenshots,
   and where the LED model lives.
 - [Hardware pinout](../hardware/PINOUT.md): the DMDoS carrier board's

@@ -31,6 +31,9 @@ extern crate alloc;
 
 #[doc(hidden)]
 pub mod builtins;
+#[cfg(feature = "docs")]
+#[doc(hidden)]
+pub mod errors;
 mod compile;
 mod draw;
 pub mod fixed;
