@@ -114,13 +114,18 @@ impl Emu {
 
     /// Run the kernel once: `(ctx, out)` in a2, a3.
     pub fn call(&mut self, ctx: u32, out: u32) {
+        self.call_at(0, ctx, out)
+    }
+
+    /// Run the function at `start` once, (a2, a3) its arguments.
+    pub fn call_at(&mut self, start: usize, ctx: u32, out: u32) {
         let mut a = [0u32; 16];
         a[0] = RETURN;
         a[1] = STACK + STACK_LEN as u32;
         a[2] = ctx;
         a[3] = out;
         let mut sar: u32 = JUNK;
-        let mut pc: usize = 0;
+        let mut pc: usize = start;
         let mut sp_set = false;
         let mut sp = 0;
         loop {
@@ -283,7 +288,7 @@ impl Emu {
                         }
                         _ => match m {
                             0 => {
-                                assert!(!sp_set && pc == 0 && s == 1, "entry not first");
+                                assert!(!sp_set && pc == start && s == 1, "entry not first");
                                 let frame = (w >> 12) << 3;
                                 assert!(frame >= 16 && frame as usize <= STACK_LEN);
                                 a[1] -= frame;
@@ -352,6 +357,12 @@ impl Target for EmuTarget {
         let c = self.emu.map(ctx.as_mut_ptr() as *const u8, ctx.len() * 4);
         let o = self.emu.map(out, 128 * 3);
         self.emu.call(c, o);
+    }
+
+    fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32) {
+        let c = self.emu.map(ctx.as_mut_ptr() as *const u8, ctx.len() * 4);
+        let s = self.emu.map(sc as *const u8, crate::program::MAX_SCALARS * 4);
+        self.emu.call_at(at, c, s);
     }
 }
 
