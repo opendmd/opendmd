@@ -914,12 +914,12 @@ pub(crate) fn row_steps<const N: usize>(
     tables: &Tables,
     own: &mut Pals,
 ) {
-    for op in &prog.ops[prog.draw_end as usize..prog.row_end as usize] {
-        if op.code == code::TURN {
-            crate::program::turn(tables, own, &scratch.sc, op);
-        } else {
-            scalar(&mut scratch.sc, op, tables, &prog.tables);
-        }
+    let turns = prog.turns();
+    for op in &prog.ops[prog.draw_end as usize..turns.start] {
+        scalar(&mut scratch.sc, op, tables, &prog.tables);
+    }
+    for op in &prog.ops[turns] {
+        crate::program::turn(tables, own, &scratch.sc, op);
     }
 }
 
