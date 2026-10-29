@@ -61,26 +61,16 @@ jobs:
           (cd dist && sha256sum -c SHA256SUMS)
           test "$(jq -r .version dist/manifest-4mb.json)" = "${TAG#v}" || { echo "::error::dist/manifest-4mb.json is not ${TAG#v}"; exit 1; }
 
-      # As in release.yml: the demo card's Kenney (CC0) animations.
-      - name: Cache the art demos' GIFs
-        id: art-gifs
-        uses: actions/cache@v6
-        with:
-          path: |
-            opendmd-web/experiments/art/process/out/b_walk.gif
-            opendmd-web/experiments/art/process/out/b_pan.gif
-            opendmd-web/experiments/art/process/out/d_scroll.gif
-          key: art-gifs-${{ hashFiles('opendmd-web/experiments/art/process/*.py') }}
-
+      # The demo card's Kenney (CC0) animations: made from the sprites committed
+      # in art/process/kenney-pixel-platformer (offline; the GIFs are ignored).
       - name: The art demos' GIFs
-        if: steps.art-gifs.outputs.cache-hit != 'true'
         working-directory: opendmd-web/experiments/art/process
         env:
           ART_TMP: ${{ runner.temp }}/art
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          uv run --quiet fetch_inputs.py
+          uv run --quiet fetch_inputs.py kenney
           uv run --quiet demos.py b d
           git checkout -- out
 
