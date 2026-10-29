@@ -95,7 +95,14 @@ export const app = {
   // `value` is what `set` holds to play it ("" for All files, the default).
   // Callers at the same moment (a config change refreshes several views)
   // share one listing: the device has four sockets.
-  playlists() { return (this.pl ??= this.listPlaylists().finally(() => { this.pl = null; })).then((l) => [...l]); },
+  // Callers share a listing already in flight; `fresh` asks for one begun now
+  // (a caller that has just changed the card must not take a listing that
+  // began before the change: it would bring a deleted playlist back).
+  playlists(fresh) {
+    if (fresh) this.pl = null;
+    const mine = (this.pl ??= this.listPlaylists().finally(() => { if (this.pl === mine) this.pl = null; }));
+    return mine.then((l) => [...l]);
+  },
   async listPlaylists() {
     const root = await listOr('/');
     const sets = root.some((f) => f.dir && f.name === 'sets') ? await listOr('/sets') : [];

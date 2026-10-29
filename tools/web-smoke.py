@@ -3379,8 +3379,28 @@ def mock_pass(browser) -> None:
         check(get_json(base + "/api/config")["set"] == "smoke" and st["manifest"] == "/sdcard/sets/smoke.txt",
               f"sets: activated ({st['entries']} entries)")
         shot(page, "sets", "laptop")
+        # A loaded device: the first listing of /sets after this is delivered
+        # 1.2 s late (read when asked, so it still holds the file) and the
+        # DELETE reaches the device late. The config change that Delete starts
+        # (back to All files) lists the card before the file is gone; that
+        # listing, landing after the one the delete started, must not be what
+        # the page shows.
+        page.evaluate("""() => {
+            const f = window.fetch.bind(window);
+            window.__fetch = f; window.__slow = 0;
+            window.fetch = async (u, ...a) => {
+                if (a[0]?.method === 'DELETE') await new Promise((k) => setTimeout(k, 150));
+                const r = await f(u, ...a);
+                if (String(u).includes('/api/files') && /dir=(%2F|\\/)sets/.test(String(u))) await new Promise((k) => setTimeout(k, window.__slow++ ? 0 : 1200));
+                return r;
+            };
+        }""")
         sets_do(page, '/sets/smoke.txt', "delete")
-        page.wait_for_selector("#sets-list [data-path='/sets/smoke.txt']", state="detached", timeout=60000)
+        page.wait_for_selector("#sets-list [data-path='/sets/smoke.txt']", state="detached", timeout=10000)
+        page.wait_for_timeout(1500)  # past any late listing
+        check(page.locator("#sets-list [data-path='/sets/smoke.txt']").count() == 0,
+              "sets: the deleted playlist stays gone when an earlier listing lands late")
+        page.evaluate("() => { window.fetch = window.__fetch; }")
         check(not written.exists() and get_json(base + "/api/config")["set"] == "",
               "sets: deleted after switching back to the default")
         # Playlists: a /sets playlist's own overrides (the card copy has
