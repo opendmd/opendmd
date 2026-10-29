@@ -33,6 +33,8 @@ import zlib
 from pathlib import Path
 
 PAGE = "formulas/index.html"
+# Beside it: the entries as data (`write_json`).
+JSON = "gallery.json"
 REPO = "https://github.com/opendmd/opendmd.github.io"
 LICENCE_LINKS = {"CC0-1.0": ("CC0", "https://creativecommons.org/publicdomain/zero/1.0/"),
                  "CC-BY-4.0": ("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/")}
@@ -162,6 +164,7 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path) -> s
         for e in dup:
             say(f"gallery: left out {e['slug']!r}: the same formula as an example")
         entries = sorted((e for e in entries if e not in dup), key=lambda e: (e["name"].casefold(), e["slug"]))
+    write_json(formulas, seeds, examples, entries, contrib)
 
     def tile(e: dict, pic: str) -> str:
         t = html.escape
@@ -190,12 +193,36 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path) -> s
             f'at once. <strong>Add to my panel</strong> saves one on your display, ready to play, add to a playlist or use as '
             f'the look; Open shows it here with its sliders and code; Remix opens it in the demo\'s editor. Made one you like? Its page has <strong>Submit to the gallery</strong>, or read {how}.</p>\n'
             f'<h2 id="community">From the community</h2>\n'
-            + (f'<ul class="ftiles">{community}</ul>\n' if community else
-               '<p class="tiles-note">Nothing here yet: be the first. Make a formula in the <a href="../demo/#formulas">demo</a>, '
-               'then Copy share link, and on its page, Submit to the gallery.</p>\n')
+            + listed("community", f'<ul class="ftiles">{community}</ul>\n' if community else EMPTY)
             + f'<h2 id="examples">Examples</h2>\n<p class="tiles-note">By OpenDMD (CC0). The ones marked <em>on the panel</em> come with '
             f'the panel and need no saving; the others are saved on your display when you add them.</p>\n'
-            f'<ul class="ftiles">{ex}</ul>\n')
+            + listed("examples", f'<ul class="ftiles">{ex}</ul>\n'))
+
+
+# The community list when it is empty.
+EMPTY = ('<p class="tiles-note">Nothing here yet: be the first. Make a formula in the <a href="../demo/#formulas">demo</a>, '
+         'then Copy share link, and on its page, Submit to the gallery.</p>\n')
+
+
+def listed(part: str, inner: str) -> str:
+    """A list between its own markers: the site's Worker writes the two lists
+    (`community`, `examples`) again from its gallery store (site/worker/src/
+    gallery.ts `page`, the same tiles: site-worker-test holds them equal)
+    and keeps the rest of the page as built."""
+    return f"<!-- gallery:{part} -->{inner}<!-- gallery:{part}-end -->\n"
+
+
+def write_json(formulas: Path, seeds: list[dict], examples: Path, entries: list[dict], contrib: Path | None) -> None:
+    """formulas/gallery.json: every entry on the page as the checker read
+    it, with its whole file (`file`). The site's Worker seeds its gallery
+    store (D1) with the examples from it at each deploy, and serves the
+    contributions it syncs from the public repo itself (site/worker/src/
+    gallery.ts); site-worker-test compares the two."""
+    def one(e: dict, d: Path) -> dict:
+        return {**e, "file": (d / f"{e['slug']}.psi").read_text(encoding="utf-8")}
+    data = {"examples": [one(e, examples) for e in seeds],
+            "contributions": [one(e, contrib) for e in entries] if contrib is not None else []}
+    (formulas / JSON).write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
 
 
 def marked(body: str) -> str:

@@ -385,7 +385,10 @@ site-serve: site
 #   site-deploy        make site, then site-d1-migrate and cf deploy: uploads a new version of the
 #                      opendmd-site Worker and makes it live on opendmd.dev (auth:
 #                      cf's OAuth profile, or CLOUDFLARE_API_TOKEN in the environment)
-#   site-deploy-built  the same without rebuilding $(SITE)
+#   site-deploy-built  the same without rebuilding $(SITE); then POST /api/gallery/sync, so the
+#                      gallery store (S6) holds this build's examples at once
+# The Worker's cron syncs the public gallery repo's gallery/ into the store every 5 minutes
+# (site/worker/src/gallery.ts): a merged contribution needs no deploy.
 # site-smoke takes SITE_BASE=<url> too (the files it reads are still $(SITE)).
 SITE_WORKER := site/worker
 SITE_DEV_PORT ?= 8787
@@ -407,10 +410,10 @@ site-d1-migrate: site-worker-deps
 	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
 	$(CF) d1 migrations apply $(SITE_D1) </dev/null
 
-site-worker-test: site-worker-deps
+site-worker-test: site-worker-deps gallery-tool
 	uv run tools/site-worker-test.py $(SITE) $(if $(SITE_BASE),--base $(SITE_BASE))
 
-site-dev-smoke: site-worker-deps
+site-dev-smoke: site-worker-deps gallery-tool
 	uv run tools/site-worker-test.py $(SITE) $(if $(SITE_BASE),--base $(SITE_BASE)) --smoke
 
 site-deploy-check: site-worker-deps
@@ -426,7 +429,10 @@ site-deploy-built: site-worker-deps
 	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
 	@case "$$(git describe --always --dirty --tags --match 'v*')" in *-dirty) echo "refusing: the working tree is dirty; commit first"; exit 1;; esac
 	$(MAKE) site-d1-migrate
-	$(CF) deploy --message "site $$(git describe --always --tags --match 'v*')"
+	unset SITE_TEST_GALLERY_SOURCE; $(CF) deploy --message "site $$(git describe --always --tags --match 'v*')"
+	@# The gallery store: this build's examples and the public repo's gallery/ now, not at the next cron.
+	@curl -fsS -X POST -A 'opendmd-site-deploy/1 (+https://opendmd.dev)' --retry 3 --retry-delay 11 --retry-all-errors \
+		https://opendmd.dev/api/gallery/sync -o /dev/null -w 'gallery sync: %{http_code}\n' || echo "gallery sync: not now (the cron runs it within 5 minutes)"
 
 # The public gallery repo's own files (tools/gallery-repo-publish.sh): the
 # gallery check and its vendored checker, the READMEs, and dev/api/ (this
