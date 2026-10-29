@@ -108,7 +108,7 @@ PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
-	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built release
+	site-worker-deps site-dev site-worker-test site-dev-smoke site-deploy-check site-deploy site-deploy-built site-d1-migrate release
 
 test:
 	@echo "==> Testing $(CORE) (+ the tween feature: Smooth motion; names: the GIF name builder; ota: firmware bundles)"
@@ -366,12 +366,15 @@ site-serve: site
 # and wrangler pinned in its package.json/package-lock.json, installed by
 # site-worker-deps) serves $(SITE) as static assets plus /f/* and /api/*.
 # None of these rebuilds the site except site-deploy; make site first.
-#   site-dev           cf dev, the Worker and the assets on http://127.0.0.1:$(SITE_DEV_PORT)
+#   site-dev           cf dev, the Worker and the assets on http://127.0.0.1:$(SITE_DEV_PORT), with
+#                      a local D1 (site/worker/.wrangler/state; the migrations applied first)
 #   site-worker-test   tools/site-worker-test.py: starts cf dev itself (or SITE_BASE=<url>),
-#                      checks the Worker's routes, _headers, _redirects and the CSP in Chromium
+#                      checks the Worker's routes, short links, _headers, _redirects and the CSP in Chromium
+#   site-d1-migrate    cf d1 migrations apply: site/worker/migrations/ to the opendmd-site D1
+#                      (remote; site-deploy-built runs it before every deploy)
 #   site-dev-smoke     site-worker-test, then site-smoke against the same cf dev
 #   site-deploy-check  cf deploy --dry-run: builds and checks, uploads nothing
-#   site-deploy        make site, then cf deploy: uploads a new version of the
+#   site-deploy        make site, then site-d1-migrate and cf deploy: uploads a new version of the
 #                      opendmd-site Worker and makes it live on opendmd.dev (auth:
 #                      cf's OAuth profile, or CLOUDFLARE_API_TOKEN in the environment)
 #   site-deploy-built  the same without rebuilding $(SITE)
@@ -381,13 +384,20 @@ SITE_DEV_PORT ?= 8787
 SITE_BASE ?=
 CF = cd $(SITE_WORKER) && SITE_DIR="$(abspath $(SITE))" SITE_DEV_PORT=$(SITE_DEV_PORT) \
 	SITE_VERSION="$$(git describe --always --dirty --tags --match 'v*')" npx --no-install cf
+# The DB binding's database (cloudflare.config.ts, the one place its id is written).
+SITE_D1 = $(shell sed -n 's/.*DB: {.* id: "\([0-9a-f-]*\)".*/\1/p' $(SITE_WORKER)/cloudflare.config.ts)
 $(SITE_WORKER)/node_modules/.package-lock.json: $(SITE_WORKER)/package-lock.json $(SITE_WORKER)/package.json
 	cd $(SITE_WORKER) && npm ci --no-audit --no-fund
 site-worker-deps: $(SITE_WORKER)/node_modules/.package-lock.json
 
 site-dev: site-worker-deps
 	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
+	$(CF) d1 migrations apply $(SITE_D1) --local --persist-to .wrangler/state </dev/null
 	$(CF) dev
+
+site-d1-migrate: site-worker-deps
+	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
+	$(CF) d1 migrations apply $(SITE_D1) </dev/null
 
 site-worker-test: site-worker-deps
 	uv run tools/site-worker-test.py $(SITE) $(if $(SITE_BASE),--base $(SITE_BASE))
@@ -407,6 +417,7 @@ site-deploy: site
 site-deploy-built: site-worker-deps
 	@test -f $(SITE)/_headers || { echo "no $(SITE)/_headers: make site first"; exit 2; }
 	@case "$$(git describe --always --dirty --tags --match 'v*')" in *-dirty) echo "refusing: the working tree is dirty; commit first"; exit 1;; esac
+	$(MAKE) site-d1-migrate
 	$(CF) deploy --message "site $$(git describe --always --tags --match 'v*')"
 
 # The public gallery repo's own files (tools/gallery-repo-publish.sh): the

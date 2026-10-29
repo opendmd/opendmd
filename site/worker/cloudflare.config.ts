@@ -18,9 +18,13 @@
 // What a deploy does with this file as it is: creates or updates the Worker
 // script "opendmd-site" with its assets, on opendmd-site.<account
 // subdomain>.workers.dev (workersDev) and per-version preview URLs
-// (previewUrls). No route, D1, R2 or Durable
-// Object: those come with short links (S5). Since the cutover (S3) it also
-// serves opendmd.dev and www.opendmd.dev (`domains`).
+// (previewUrls). Since the cutover (S3) it also serves opendmd.dev and
+// www.opendmd.dev (`domains`). Short links (S5): the D1 database
+// opendmd-site (DB; its schema in migrations/, applied by make
+// site-d1-migrate before a deploy that needs it) and a rate limiter for
+// POST /api/f (POSTS). Locally, cf dev keeps its own D1 in a SQLite file
+// (--local --persist-to, the Makefile's SITE_DEV_STATE) and simulates the
+// limiter: nothing in the account is touched.
 import { defineConfig } from "cf/config";
 
 export default defineConfig({
@@ -36,6 +40,11 @@ export default defineConfig({
     },
     env: {
       ASSETS: { type: "assets" },
+      // Shared Formulas (cf d1 create --name opendmd-site, 2026-10-29).
+      DB: { type: "d1", name: "opendmd-site", id: "72a1c0cf-e5c6-4c75-8ad1-8aaa2c6f3857" },
+      // POST /api/f: 10 a minute per client address (per Cloudflare
+      // location; the namespace is this account's own number for it).
+      POSTS: { type: "rate-limit", namespace: "20261029", simple: { limit: 10, period: 60 } },
     },
     workersDev: true,
     previewUrls: true,

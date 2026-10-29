@@ -1,4 +1,5 @@
-// The share page (/f/#formula=…&name=…&a=…): one formula, playing in the
+// The share page (/f/#formula=…&name=…&a=…, or a short link's /f/<id>?a=…):
+// one formula, playing in the
 // web app's LED preview, its code, its sliders, and the ways on: open it on
 // my display, try it in the demo, copy, submit to the gallery, a QR code.
 // The demo's files do the work: the share link's encoder and decoder
@@ -21,7 +22,14 @@ const REPO = 'https://github.com/opendmd/opendmd.github.io';
 const MAX_URL = 6000;
 const D = 20; // the panel's frame: 50 a second
 
-const { f, cut, has } = parse(location.hash);
+// A short link's page (/f/<id>, written by the site's Worker) carries its
+// Formula in #f-data and slider values in the query; a long link carries
+// both in the hash.
+const data = (() => { try { return JSON.parse($('f-data')?.textContent || 'null'); } catch { return null; } })();
+const { f, cut, has } = parse(data ? '#' + new URLSearchParams([['formula', data.src], ...(data.name ? [['name', data.name]] : []),
+  ...[...new URLSearchParams(location.search)].filter(([k]) => /^[abc]$/.test(k))]) : location.hash);
+// Its short link's id, once it has one.
+let shortId = data?.id || null;
 // Another link pasted into this tab: start again with it.
 addEventListener('hashchange', () => location.reload());
 const here = () => new URL('./', location.href).href;
@@ -100,8 +108,12 @@ async function start() {
 
   // The links: this page, the demo, the display (the device's own share
   // links open the formula in its editor: `#formula=…`).
-  const own = () => link(f, here(), ctl);
-  const hash = () => own().slice(here().length);
+  const long = () => link(f, here(), ctl);
+  const hash = () => long().slice(here().length);
+  // The short link (/f/<id>, with the sliders that moved as a query), once
+  // there is one; else the long one.
+  const vals = () => { const q = new URLSearchParams(link(f, '', ctl).slice(1)); q.delete('formula'); q.delete('name'); return String(q); };
+  const own = () => (shortId ? `${location.origin}/f/${shortId}${vals() ? '?' + vals() : ''}` : long());
   let qrFor = '';
   function links() {
     $('f-demo').href = new URL('../demo/', location.href).href + hash();
@@ -150,7 +162,29 @@ async function start() {
 
   const flash = (btn, text) => { const was = btn.textContent; btn.textContent = text; setTimeout(() => { btn.textContent = was; }, 1500); };
   $('f-copy-code').onclick = async (e) => flash(e.currentTarget, (await copy(f.src)) ? 'Copied' : 'Select and copy it');
-  $('f-copy-link').onclick = async (e) => flash(e.currentTarget, (await copy(own())) ? 'Copied' : 'Select and copy it');
+  // Copy link: a short link, made by the site (POST /api/f stores the
+  // source; the same source is always the same link), with a `name` line
+  // added when only the long link named it. Offline or refused: the long
+  // link, which needs nothing from the site.
+  async function shorten() {
+    if (shortId) return true;
+    let src = f.src;
+    if (ok && !ctl?.name && f.name && f.name !== 'Shared formula') src = P.declare(src, 'name', 0, `name "${declText(f.name, 40)}"`);
+    try {
+      const r = await fetch('/api/f', { method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: src });
+      const j = r.ok ? await r.json() : null;
+      if (!j?.id) return false;
+      shortId = j.id;
+      links();
+      return true;
+    } catch { return false; }
+  }
+  $('f-copy-link').onclick = async (e) => {
+    const btn = e.currentTarget;
+    let made = true;
+    const url = shorten().then((s) => { made = s; return own(); });
+    flash(btn, (await copyLater(url)) ? (made ? 'Copied' : 'Copied a long link') : 'Select and copy it');
+  };
 
   // The QR code: this page's link (with the sliders as they are).
   function drawQr(url) {
@@ -231,6 +265,19 @@ async function start() {
   $('f-submit').onclick = () => { openSub(); $('f-sub').scrollIntoView({ behavior: 'smooth', block: 'start' }); $('s-desc').focus({ preventScroll: true }); };
   if (/(^#|&)submit(=|&|$)/.test(location.hash)) openSub();
   links();
+}
+
+// copy() of text still to come (the short link): a ClipboardItem holding a
+// promise keeps the click's permission across the wait (Safari needs
+// that); else copy it once it is here.
+async function copyLater(p) {
+  if (window.ClipboardItem && navigator.clipboard?.write) {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': p.then((t) => new Blob([t], { type: 'text/plain' })) })]);
+      return true;
+    } catch { /* below */ }
+  }
+  return copy(await p);
 }
 
 async function copy(text) {
