@@ -240,6 +240,7 @@ The saved settings (never the WiFi password or the RePlayOS code).
 | `boot_show` | `short` | start-up show: `off`, `short`, `full` (from the next boot) |
 | `panel_sync` | `true` | refresh-synchronised frames: each frame waits (within its slack before the next) for a point in the panel's scan where writing it shows no seam; applied at once. `/api/status` `scan` counts seams either way |
 | `panel_split` | `true` | with `panel_sync`: each frame's bottom half (rows 16-31) goes up a refresh after its top half. The panel lights rows r and r+16 together, top to bottom, so a frame shown whole is lit almost a refresh later at row 15 than at row 16 (moving edges step at the half line); split, the lighting time rises smoothly down all 32 rows. A frame whose next is due too soon for the second pass goes up whole; applied at once |
+| `formula_jit` | `true` | the narrow JIT for Formulas on the ESP32 (`docs/research/psi-jit-esp32.md`): a Formula's pixel stage compiled to machine code at its first frame, checked against the VM there, then drawing the same bytes faster. `false` is the kill switch: every Formula plays on the VM (a kernel held is let go at its next frame). `/api/status` `now_playing.formula.jit` says which draws |
 | `card_speed` | `safe` | the card's SPI clock: `safe` (20 MHz), `fast` (40 MHz; at a card error, 20 MHz from then on for that card, changed in place with the transfer retried, so nothing restarts), `full` (API and bench only: always 40 MHz, never slowed; errors restart the player as a failing card does). 20 MHz is the default because the SD spec only promises SPI up to 25 MHz, and a marginal card at 40 MHz was measured returning wrong data with no error; at 20 MHz the card still reads several times faster than playback (tens of KB/s) or WiFi downloads (~300 KB/s) use it. Older firmware's `auto` reads as `safe` |
 | `panel` | object | panel timing: `clk_phase` true (rising edge) or false, `latch_blanking` 1..=4 (1), `driver` `shiftreg`, `fm6126a`, `fm6124`, `icn2038s`, `mbi5124`, `dp3246`, `i2s_speed` 8, 16, 20 MHz (8), `min_refresh` 30..=240 Hz (60) |
 | `panel_now`, `panel_next`, `panel_trial_s` | | what runs; what a restart would run, else null; seconds until the trial reverts, else null |
@@ -751,8 +752,12 @@ curl -s $DMD/api/play --json '{"path":"@text?msg=Game%20over&speed=30&color=00ff
 formula>`, `a=`, `b=`, `c=` (sliders, 0..1), `fps=50|100|25` (default:
 the formula's `fps` line, else 50; as a look over the GIF the line is not
 used). A heavy one is shown at fewer frames a second; status
-`now_playing.formula` has `frame_us`, `frame_ms`, `asked_ms` and
-`compile_us`. The whole path is at most 2,048 B; `name=<url-encoded>`
+`now_playing.formula` has `frame_us`, `frame_ms`, `asked_ms`,
+`compile_us`, `still` (the still cache's bytes) and `jit`:
+`{"on":true,"bytes":N}` while the JIT's kernel (N bytes of code) draws
+its pixel stage, else `{"on":false,"why":"…"}` (e.g. `it has layers`,
+`it reads the picture under it`, `it draws (ink)`, `off (setting)`,
+`being checked`). The whole path is at most 2,048 B; `name=<url-encoded>`
 (≤ 60 characters) is its name for display.
 
 ```sh
