@@ -77,6 +77,9 @@ pub struct PsiFx {
     /// returned): a `loop forever` formula's `t`, which a new pass (the
     /// engine's rewind) leaves running and a live edit keeps.
     played_ms: u64,
+    /// The JIT's kernel for the pixel stage (the ESP32 with `psi-jit`).
+    #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+    jit: jit::Jit,
 }
 
 /// A pass of a formula that never repeats (`loop forever`): what the engine
@@ -571,6 +574,11 @@ impl PsiFx {
             set_still_held(0);
         }
         self.prog = *prog;
+        // Another program: its kernel (if any) is made at the next frame.
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        {
+            self.jit = jit::Jit::default();
+        }
         self.clock = reads_clock(&self.prog);
         self.full = 0;
         self.delay_ms = delay;
@@ -714,13 +722,22 @@ impl PsiFx {
         }
         self.still_step(clock.is_some(), t0);
         let (bytes, dirty) = canvas.bytes_and_dirty_mut();
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        let (trial, t1) = (self.jit_trialing(), clock.map_or(0, |c| c()));
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        let drawn = self.jit_render(bytes);
+        #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
+        let drawn = false;
+        if drawn {
+            // A kernel draws every row: all of it marked.
+            dirty.mark_all();
         // Only what changed is marked (the canvas holds the frame before:
         // the `Effect` contract; what differs from it is what the panel
         // lacks, the map marking the rest). A Formula that keeps changing
         // half the panel or more (Tunnel, Time gate, Plasma, Big clock) is
         // not compared, only checked again now and then: there the compare
         // costs more than the blit saves (`FULL_PX`).
-        if !old() && (self.full < FULL_RUN || self.uncompared >= RECHECK) {
+        } else if !old() && (self.full < FULL_RUN || self.uncompared >= RECHECK) {
             let mut changed = [0u32; psi::H];
             psi::render_rows_changed::<LANES>(
                 &self.prog,
@@ -755,6 +772,16 @@ impl PsiFx {
             );
             dirty.mark_all();
             self.uncompared += 1;
+        }
+        // After a VM frame: a trial's frame is timed, else a kernel not yet
+        // checked is checked against it; a kernel's trial frame is timed.
+        #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+        if trial {
+            if let Some(c) = clock {
+                self.jit_timed(drawn, c().wrapping_sub(t1));
+            }
+        } else if !drawn {
+            self.jit_check(bytes);
         }
         let Some(c) = clock else {
             return self.delay();
@@ -1364,6 +1391,166 @@ impl std::fmt::Debug for FormulaLook {
             self.prog,
             self.held.is_some()
         )
+    }
+}
+
+/// The kill switch (`/api/config` `formula_jit`): off, every formula plays
+/// on the VM (a kernel held is let go at its next frame).
+static JIT_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Turn the JIT on or off (the firmware, from its settings).
+pub fn set_jit(on: bool) {
+    JIT_ON.store(on, Ordering::Relaxed);
+}
+
+/// Whether the JIT is allowed (the setting).
+pub fn jit_allowed() -> bool {
+    JIT_ON.load(Ordering::Relaxed)
+}
+
+/// What `/api/status` says of the formula on screen and the JIT: (a kernel
+/// draws it, why not if not, the kernel's code bytes).
+static JIT_STATUS: std::sync::Mutex<(bool, &'static str, u32)> = std::sync::Mutex::new((false, "not built in", 0));
+
+/// The playing formula's JIT status: (on, why not, code bytes).
+pub fn jit_status() -> (bool, &'static str, u32) {
+    JIT_STATUS.lock().map_or((false, "", 0), |s| *s)
+}
+
+#[allow(dead_code)]
+fn set_jit_status(on: bool, why: &'static str, bytes: u32) {
+    if let Ok(mut s) = JIT_STATUS.lock() {
+        *s = (on, why, bytes);
+    }
+}
+
+#[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
+mod jit {
+    use super::{psi, set_jit_status, tables, PsiFx};
+
+    /// A formula's kernel: made at its first frame (never at open: the
+    /// HTTP server's open check must not take executable heap), checked
+    /// against the VM's frame, then drawing. All-zero is "not made yet".
+    #[derive(Default)]
+    pub struct Jit {
+        kernel: Option<Box<psi::jit::Kernel>>,
+        checked: bool,
+        /// Frames timed after the check (kernel and VM in turn), and each
+        /// one's best render (µs).
+        trial: u8,
+        best: [u32; 2],
+        /// Why the VM draws this formula (`None`: not decided yet).
+        why: Option<&'static str>,
+    }
+
+    /// Why, with the switch off.
+    const OFF: &str = "off (setting)";
+    /// Frames timed, kernel and VM in turn, before the faster is kept.
+    const TRIAL: u8 = 8;
+    /// Why, when the VM drew the formula faster in the trial.
+    const SLOWER: &str = "the VM is faster for this formula";
+    /// Why, after a self-check found a difference.
+    const DIFFERS: &str = "the kernel's bytes differed from the VM's (self-check)";
+
+    impl PsiFx {
+        /// Draw the frame with the kernel if it is made and checked
+        /// (`true`), else leave it to the VM (making the kernel first if
+        /// it is not made yet).
+        pub(super) fn jit_render(&mut self, bytes: &mut [u8]) -> bool {
+            let j = &mut self.jit;
+            if !super::jit_allowed() {
+                if j.why != Some(OFF) {
+                    *j = Jit { why: Some(OFF), ..Jit::default() };
+                    set_jit_status(false, OFF, 0);
+                }
+                return false;
+            }
+            if j.why == Some(OFF) {
+                *j = Jit::default();
+            }
+            if j.kernel.is_none() && j.why.is_none() {
+                match psi::jit::emit(&self.prog) {
+                    Ok(k) => {
+                        log::info!("formula: kernel of {} B at {:#x}, to be checked", k.code_bytes(), k.addr());
+                        set_jit_status(false, "being checked", k.code_bytes() as u32);
+                        j.kernel = Some(Box::new(k));
+                        j.checked = false;
+                    }
+                    Err(why) => {
+                        log::info!("formula: on the VM ({why})");
+                        j.why = Some(why);
+                        set_jit_status(false, why, 0);
+                    }
+                }
+                return false;
+            }
+            match &mut j.kernel {
+                // (The trial's odd frames are the VM's.)
+                Some(_) if j.checked && j.trial < TRIAL && j.trial % 2 == 1 => false,
+                Some(k) if j.checked => {
+                    k.render(&self.prog, &mut self.scratch, Some(&mut self.still), &self.inputs, &tables(), bytes);
+                    true
+                }
+                _ => false,
+            }
+        }
+
+        /// Whether this frame is one of the trial's (kernel against VM).
+        pub(super) fn jit_trialing(&self) -> bool {
+            let j = &self.jit;
+            super::jit_allowed() && j.kernel.is_some() && j.checked && j.trial < TRIAL
+        }
+
+        /// A trial frame took `us` (the kernel's or the VM's): after
+        /// [`TRIAL`] of them the faster draws from then on (a formula never
+        /// gets slower with the JIT on).
+        pub(super) fn jit_timed(&mut self, kernel: bool, us: u32) {
+            let j = &mut self.jit;
+            let Some(k) = j.kernel.as_ref() else { return };
+            let b = &mut j.best[usize::from(!kernel)];
+            *b = (*b).min(us);
+            j.trial += 1;
+            if j.trial < TRIAL {
+                return;
+            }
+            let [kb, vb] = j.best;
+            if kb < vb {
+                log::info!("formula: kernel {kb} us a frame against the VM's {vb}: the kernel draws");
+                set_jit_status(true, "", k.code_bytes() as u32);
+            } else {
+                log::info!("formula: kernel {kb} us a frame against the VM's {vb}: the VM draws");
+                j.kernel = None;
+                j.why = Some(SLOWER);
+                set_jit_status(false, SLOWER, 0);
+            }
+        }
+
+        /// After a VM frame: a kernel not yet checked is checked against it.
+        pub(super) fn jit_check(&mut self, bytes: &[u8]) {
+            let j = &mut self.jit;
+            let Some(k) = j.kernel.as_mut().filter(|_| !j.checked) else {
+                return;
+            };
+            match k.check(&self.prog, &mut self.scratch, &self.inputs, &tables(), bytes) {
+                Ok(true) => {
+                    j.checked = true;
+                    j.trial = 0;
+                    j.best = [u32::MAX; 2];
+                    log::info!("formula: kernel of {} B checked against the VM: the same bytes; timing it", k.code_bytes());
+                    set_jit_status(false, "being timed against the VM", k.code_bytes() as u32);
+                }
+                Ok(false) => {} // a checked frame: next time
+                Err((row, x)) => {
+                    log::error!(
+                        "formula: the kernel's row {row} differs from the VM's at x = {x}: playing on the VM\n{}",
+                        self.prog.listing()
+                    );
+                    j.kernel = None;
+                    j.why = Some(DIFFERS);
+                    set_jit_status(false, DIFFERS, 0);
+                }
+            }
+        }
     }
 }
 
