@@ -213,6 +213,38 @@ macro_rules! say {
     }};
 }
 
+/// roadprobe-b: only the road's rows (a's full probe ran out of heap
+/// before them), then the play lines.
+const ROAD_ONLY: bool = true;
+
+/// Endless road and its variants one at a time (each source made, run and
+/// dropped before the next), splits, then Starfield and Time gate as
+/// references; the play lines start first.
+fn road_probe(root: &str, start: Instant, stack0: u32) {
+    play::start(format!("{root}/{REPORT_NAME}"));
+    say!(info, "psi-probe: roadprobe: heap {} B free, largest block {} B, main stack {stack0} B unused",
+        heap(), crate::state::largest_free_block());
+    psi::stats::CLOCK.store(ccount as fn() -> u32 as usize, Ordering::Relaxed);
+    fx_psi::set_still_gate(Some(crate::still_gate));
+    let mut canvas = Canvas::new();
+    let n = road_variants().len();
+    for k in 0..n {
+        let (name, src) = road_variants().swap_remove(k);
+        effects(&[(name, src.as_str(), "")], "", &mut canvas);
+        fx_psi::set_still_gate(Some(crate::still_gate));
+    }
+    split("Endless road (bundled)", ROAD_FILE, true, &mut canvas);
+    effects(&[("Starfield", STARFIELD_EX, "a=0.5"), ("Time gate (bundled)", TIME_GATE_FILE, "")], "", &mut canvas);
+    fx_psi::set_still_gate(Some(crate::still_gate));
+    split("Time gate (bundled)", TIME_GATE_FILE, true, &mut canvas);
+    fx_psi::set_still_gate(Some(crate::still_gate));
+    say!(info,
+        "{DONE}: roadprobe, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all",
+        stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
+    );
+    *REPORT.lock().unwrap() = None;
+}
+
 /// The line a finished probe ends its report with.
 const DONE: &str = "psi-probe: done";
 
@@ -1116,6 +1148,10 @@ pub fn run(root: &str) {
     }
     let start = Instant::now();
     let stack0 = stack_unused();
+    if ROAD_ONLY {
+        road_probe(root, start, stack0);
+        return;
+    }
     say!(info,
         "psi-probe: start: main stack {stack0} B unused, heap {} B free, Program {} B, Scratch<128> {} B, Scratch<64> {} B, Ink {} B",
         heap(),
@@ -1152,21 +1188,11 @@ pub fn run(root: &str) {
             ("Tunnel", TUNNEL_EX, ""),
             ("Rotozoom", ROTOZOOM_EX, ""),
             ("Rotozoom floor", ROTOZOOM_FLOOR_EX, ""),
+            ("Endless road", ROAD_EX, ""),
         ],
         "",
         &mut canvas,
     );
-    // roadprobe: the bundled Endless road, its suspects one at a time, and
-    // Time gate as bundled (the references are the rows above).
-    {
-        let mut list: Vec<(&str, String, &str)> =
-            road_variants().into_iter().map(|(n, s)| (n, s, "")).collect();
-        list.push(("Time gate (bundled)", TIME_GATE_FILE.to_string(), ""));
-        let refs: Vec<(&str, &str, &str)> = list.iter().map(|(n, s, o)| (*n, s.as_str(), *o)).collect();
-        effects(&refs, "", &mut canvas);
-        split("Endless road (bundled)", ROAD_FILE, true, &mut canvas);
-        split("Time gate (bundled)", TIME_GATE_FILE, true, &mut canvas);
-    }
     say!(info, "psi-probe: main stack {} B unused after the examples as effects (the play path; compiles on the formula stack)", stack_unused());
     // The firmware's own gate again.
     fx_psi::set_still_gate(Some(crate::still_gate));
@@ -1615,5 +1641,4 @@ pub fn run(root: &str) {
         start.elapsed().as_millis()
     );
     *REPORT.lock().unwrap() = None;
-    play::start(format!("{root}/{REPORT_NAME}"));
 }
