@@ -90,8 +90,9 @@ export async function mount(el) {
   let lfs = [], L = null, M = null;
   async function lookFormulas() {
     let ex;
-    try { [ex, L] = await Promise.all([examples(), import('./looks.js')]); M = await L.psi(); } catch (e) { lfErr.hidden = false; lfErr.textContent = 'Formulas could not be loaded: ' + (e.message || e); return; }
-    const mine = store.get('psi.mine', []), cf = app.config || {}, grp = (label, list) => list.length && h('optgroup', { label }, list.map(opt));
+    let mine;
+    try { [ex, L, mine] = await Promise.all([examples(), import('./looks.js'), import('./fstore.js').then((S) => S.loaded())]); M = await L.psi(); } catch (e) { lfErr.hidden = false; lfErr.textContent = 'Formulas could not be loaded: ' + (e.message || e); return; }
+    const cf = app.config || {}, grp = (label, list) => list.length && h('optgroup', { label }, list.map(opt));
     const opt = (x) => h('option', { value: x.k, disabled: !!x.off }, x.name + (!x.off ? '' : /too heavy/.test(x.off) ? ' (too heavy)' : /too long/.test(x.off) ? ' (too long)' : ' (can’t be a look)'));
     lfs = [...(Array.isArray(mine) ? mine : []).map((x) => ({ ...x, mine: 1 })), ...(Array.isArray(ex) ? ex : []).map((x) => ({ ...x }))]
       .filter((x) => typeof x?.src == 'string' && L.declares(M, x)).map((x) => ({ ...x, name: L.named(M, x) }));

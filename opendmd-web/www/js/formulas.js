@@ -14,9 +14,10 @@
 
 import { app } from './state.js';
 import { PanelPreview } from './preview.js';
-import { h, clear, store, toast, debounce, saver, base, SITE } from './util.js';
+import { h, clear, store, toast, debounce, saver, base, SITE, drawn } from './util.js';
 import { popup, closeMenu, actions } from './overrides.js';
-import { link as mklink, parse, controls, control, fit, Q, about, TIP, est, marks, sample, declText, MAX_NAME } from './psikit.js';
+import { link as mklink, parse, controls, control, fit, Q, about, TIP, est, marks, sample, declText, MAX_NAME, MAX_PATH, MAX_SRC } from './psikit.js';
+import * as S from './fstore.js';
 
 let P = null, mod = null, gen = 0;
 const psi = () => (mod ??= import(`../pkg-psi/opendmd_psi_web.js${gen ? '?' + gen : ''}`).then(async (m) => { P = { ...m, mem: (await m.default()).memory }; })
@@ -45,7 +46,7 @@ const grid = (i) => (i[5] & 32 ? 0 : i[10]) || D;
 // `over`: it draws over what is under it.
 let held = null, over = false;
 const hold = (src) => { held = src; over = src != null && !!(P.info()[5] & 32); return true; };
-const take = (src) => T(() => src != null && (src === held || (P.compile(src.slice(0, 4096)) && hold(src))), false);
+const take = (src) => T(() => src != null && (src === held || (P.compile(src.slice(0, MAX_SRC)) && hold(src))), false);
 // `still`: a thumbnail, drawn at 10:09:30 like the site's gallery (opendmd-gallery's
 // preview clock), so one that follows the clock doesn't come out dark at night.
 // `gms`: where the GIF under it is (its own clock: ms since the preview started).
@@ -120,7 +121,7 @@ async function pickGif(btn) {
     U && h('button.mi', { id: 'psi-gif-none', onclick: () => { closeMenu(); setUnder(null); } }, 'The sample picture')), r.left, r.bottom + 4);
   if (app.src) {
     const text = await app.text(app.activePath).catch(() => '');
-    all = (text ? app.wasm.parseManifest(text) : []).filter((e) => e.path[0] !== '@').map((e) => ({ t: e.title || base(e.path), p: e.path }));
+    all = (text ? app.wasm.parseManifest(text) : []).filter((e) => !drawn(e.path)).map((e) => ({ t: e.title || base(e.path), p: e.path }));
     show();
   }
 }
@@ -135,22 +136,27 @@ function overRow(id) {
 
 // On a device (or the demo's player): a Formula that declares `look` kept
 // as the panel's look (Settings › Look), over every GIF (js/looks.js).
-const setLook = (f) => import('./looks.js').then((L) => L.useSaid(f));
+const setLook = (f, keep) => import('./looks.js').then((L) => L.useSaid(f, keep));
 
 // Add to playlist: a line in one of the card's playlists (a player's, the
-// demo's, a card folder's): the path Show on panel sends (js/psishow.js),
-// and `&name=` for one without a `name` line (the player ignores it; the
-// playlist and Now show it), all in the player's 2,048 B, else without it.
-async function toList(f, btn) {
+// demo's, a card folder's) naming the Formula (js/fstore.js `line`): a
+// bundled one by name, one of yours on the panel by its file (the editor
+// saves it first: `keep`), with the values that differ from its defaults;
+// else (local mode, no card) the path Show on panel sends (js/psishow.js),
+// and `&name=` for one without a `name` line, all in the player's 6,144 B.
+async function toList(f, btn, keep) {
   if (!info(f.src).length) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
+  if (keep && S.onCard()) f = await keep().catch(() => null);
+  if (!f) return;
   const c = ctlOf(f), p = (await import('./psishow.js')).fpath(f, c), q = f.name && !c?.name ? p + '&' + new URLSearchParams({ name: f.name.slice(0, MAX_NAME) }) : p;
-  if (p.length > 2048) { toast('This formula is too long for a playlist', 'bad'); return; }
+  const l = S.line(f, c, q.length > MAX_PATH ? p : q);
+  if (l.length > MAX_PATH) { toast('This formula is too long for a playlist', 'bad'); return; }
   const lists = await app.playlists().catch(() => []);
   if (!lists.length) lists.push({ path: '/filelist.txt', label: 'All files' });
   const { appendTo } = await import('./gifs.js');
-  actions(btn, 'psi-pl-menu', lists.map((l) => [{ 'data-path': l.path }, l.label, () => appendTo(l.path, [q.length > 2048 ? p : q])]), 'Add to');
+  actions(btn, 'psi-pl-menu', lists.map((x) => [{ 'data-path': x.path }, x.label, () => appendTo(x.path, [l])]), 'Add to');
 }
-const plBtn = (id, f) => app.src && h('button', { id, onclick: (e) => toList(f(), e.currentTarget) }, 'Add to playlist…');
+const plBtn = (id, f, keep) => app.src && h('button', { id, onclick: (e) => toList(f(), e.currentTarget, keep) }, 'Add to playlist…');
 
 const NOTE = () => (app.device ? 'Show on panel plays it there until the playlist moves on (one that draws over a GIF, over the panel’s GIF); save it as a GIF to keep it.' : 'Formulas play here in the browser. Save one as a GIF to play it on an OpenDMD panel.');
 
@@ -200,8 +206,11 @@ function sliders(box, f, set) {
 }
 
 // --- Saving and sharing
-const mine = () => { const m = store.get('psi.mine', []); return Array.isArray(m) ? m.filter((x) => typeof x?.src == 'string') : []; };
-const keep = (list) => store.set('psi.mine', list);
+// Yours: on the panel (a device with a card) or in this browser (js/fstore.js).
+const mine = () => S.list();
+// Once per card the ones saved in this browser went onto the panel (as the
+// view loaded: S.copyUp): said once.
+const copied = (n) => n && toast(`${n} Formula${n > 1 ? 's' : ''} saved in this browser ${n > 1 ? 'are' : 'is'} on the panel now`, 'ok');
 const stored = () => { const d = store.get('psi.draft', null); return typeof d?.src == 'string' ? d : null; };
 // A draft with changes not saved: its text or name differs from where it started.
 const sig = (f) => f.src + '\n\0' + (f.name || '');
@@ -214,7 +223,7 @@ function fromLink(s) {
   const { f, cut } = parse(s), c = P && ctlOf(f);
   fit(c, f);
   if (c?.name) f.name = c.name;
-  if (cut) toast('The shared formula was too long: only its first 4,096 characters are here', 'bad');
+  if (cut) toast('The shared formula was too long: only its first 16,384 characters are here', 'bad');
   f.base = sig(f);
   return f;
 }
@@ -234,7 +243,8 @@ const SHARE = () => (app.demo ? new URL('../f/', location.href).href : SITE + 'f
 // and the ones people share. The demo's is its own site's.
 const GALLERY = () => (app.demo ? new URL('../formulas/', location.href).href : SITE + 'formulas/');
 function share(btn, f) {
-  const r = btn.getBoundingClientRect(), url = link(f, SHARE()), here = app.device && link(f);
+  // A bundled one by name on the site; to this display and to the gallery, its text.
+  const r = btn.getBoundingClientRect(), url = link(f, SHARE()), here = app.device && link({ ...f, stem: null }), sub = link({ ...f, stem: null }, SHARE());
   const field = h('input', { type: 'text', id: 'psi-link', readOnly: true, value: url, onfocus: (e) => e.target.select() });
   const go = (u) => async () => { closeMenu(); toast((await copy(u)) ? 'Link copied' : 'Select the link and copy it', 'ok'); };
   popup(h('div.menu.wide', { id: 'psi-share', role: 'dialog', 'aria-label': 'Share' }, h('div.mh', 'Share this formula'), field,
@@ -242,7 +252,7 @@ function share(btn, f) {
     h('p.cap', 'Anyone can open it: the formula’s own page, to try it or open it on their display.'),
     url.length > 1500 && h('p.cap.bad', `This link is long (${url.length.toLocaleString()} characters): some apps cut long links`),
     here && h('button.mi', { id: 'psi-copy-here', 'data-url': here, onclick: go(here) }, 'Copy a link to this display'),
-    h('a.btn.mi', { id: 'psi-submit', href: url + '&submit', target: '_blank', rel: 'noopener', style: 'text-decoration:none', onclick: closeMenu }, 'Submit to the gallery…')), r.left, r.bottom + 4);
+    h('a.btn.mi', { id: 'psi-submit', href: sub + '&submit', target: '_blank', rel: 'noopener', style: 'text-decoration:none', onclick: closeMenu }, 'Submit to the gallery…')), r.left, r.bottom + 4);
 }
 
 // "Save as GIF…": one loop into Create Art: 20 ms frames (a GIF can't do 10: `fps 100`
@@ -277,12 +287,27 @@ export async function mount(el) {
   build(el);
   await B.ready;
   return {
-    show() { if (!B.editing) B.tiles(); kick(); },
+    show() { if (!B.editing) B.tiles(); kick(); bundledLink(); },
     sub(s) {
       if (s !== 'edit') { if (B.editing) close(false); } else if (!B.editing || app.formula || app.psiEdit) edit();
       kick();
+      bundledLink();
     },
   };
+}
+
+// `#bundled=<stem>&a=…` (a gallery's "Open on my display", app.js keeps it
+// in app.bundled): that bundled Formula's details, its values as linked.
+function bundledLink() {
+  const b = app.bundled;
+  if (!b) return;
+  app.bundled = null;
+  location.replace('#formulas');
+  const f = EX.find((x) => x.stem === b.bundled);
+  if (!f) { toast('This panel doesn’t come with that Formula: update it to get it', 'bad'); return; }
+  for (const k of 'abc') if (b.f[k] != null) f[k] = b.f[k];
+  fit(ctlOf(f), f);
+  B.pick(f, false);
 }
 
 // An in-page question (a sheet on a phone): `yes` or `no`, Escape is neither.
@@ -338,7 +363,7 @@ function build(root) {
     gifBtn.onclick = () => toGif(f);
     shareBtn.onclick = (e) => share(e.currentTarget, f);
     del.hidden = !mineToo;
-    del.onclick = (e) => ask(`Delete “${f.name}”?`, ['Delete', () => { keep(mine().filter((x) => x.id !== f.id)); side.classList.remove('open'); cur = null; tiles(); }], ['Keep it', () => {}], e.currentTarget);
+    del.onclick = (e) => ask(`Delete “${f.name}”?`, ['Delete', () => S.drop(f).then(() => { side.classList.remove('open'); cur = null; tiles(); }, (x) => toast('Couldn’t delete it: ' + x.message, 'bad'))], ['Keep it', () => {}], e.currentTarget);
     for (const t of gal.querySelectorAll('.psi-tile')) t.classList.toggle('cur', t._f === f);
     if (i.length) play(pv, f, i); else { pv.f = null; pv.pv.clear(); }
   }
@@ -372,10 +397,10 @@ function build(root) {
     // Two columns: the details are never empty (a sheet on a phone waits for a pick).
     else if (EX[0] && matchMedia('(min-width:1001px)').matches) pick(EX[0], false);
   }
-  B = { root, ed, tiles, editing: false, draft: null };
-  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; })])
+  B = { root, ed, tiles, pick, editing: false, draft: null };
+  B.ready = Promise.all([psi(), app.device && import('./psishow.js').then((m) => { PS = m; m.init(shows, isOver, ctlOf); }), new Promise((res) => document.head.append(h('link', { rel: 'stylesheet', href: './formulas.css', onload: res, onerror: res }))), fetch('formulas.json').then((r) => r.json()).then((x) => { EX = Array.isArray(x) ? x.filter((f) => typeof f?.src == 'string') : []; }), S.load().then(S.copyUp).then((n) => { B.copied = n; }, () => {})])
     // (Each says its own name: `[{src}]`.)
-    .then(() => { EX = EX.map((f) => ({ ...f, name: nameOf(f) })); tiles(); })
+    .then(() => { EX = EX.map((f) => ({ ...f, name: nameOf(f) })); tiles(); copied(B.copied); })
     .catch((e) => { clear(gal, h('div.card', h('p.bad', 'Formulas could not be loaded: ' + (e.message || e)))); });
 }
 
@@ -459,7 +484,7 @@ function editor() {
   const name = h('input', { type: 'text', id: 'psi-name', placeholder: 'Untitled formula', maxLength: 60, 'aria-label': 'Name', oninput: () => { B.draft.name = name.value; named(name.value); stash(); } });
   const setBtn = h('button', { id: 'psi-set-btn', 'aria-haspopup': 'dialog', title: 'Formula settings: name, about, controls, look', onclick: (e) => settings(e.currentTarget) }, '⚙ Settings');
   const head = h('div.card.psi-edhead', h('button', { id: 'psi-back', onclick: () => close(true) }, '‹ Formulas'), name, setBtn,
-    h('button.pri', { id: 'psi-save', onclick: save }, 'Save'));
+    h('button.pri', { id: 'psi-save', onclick: () => save().catch(() => {}) }, 'Save'));
   const said = saver(head);
   const ta = h('textarea', { id: 'psi-src', spellcheck: false, autocapitalize: 'off', autocomplete: 'off', wrap: 'off', 'aria-label': 'Formula', 'aria-describedby': 'psi-err' });
   ta.setAttribute('autocorrect', 'off');
@@ -475,7 +500,7 @@ function editor() {
     'Heavy for the panel: noise, len, sqrt, atan2 and dividing by a changing value cost the most');
   const sl = h('div.psi-sls', { id: 'psi-ed-sl' });
   const under = overRow('psi-ed-under');
-  const look = LOOK() && h('button', { id: 'psi-ed-look', hidden: true, onclick: () => { if (ready()) setLook({ ...live }); } }, 'Set as the panel’s look');
+  const look = LOOK() && h('button', { id: 'psi-ed-look', hidden: true, onclick: () => { if (ready()) setLook({ ...live }, () => keep()); } }, 'Set as the panel’s look');
   const touch = matchMedia('(pointer:coarse)').matches;
   // One card: the preview (stuck to the top on a phone), the sliders, the
   // error over the code, the code, the actions.
@@ -483,7 +508,7 @@ function editor() {
   const el = h('div', { id: 'psi-ed' }, head, h('div.card.psi-edb', top, h('div.psi-sl2', sl, heavy), err,
     h('div.psi-code', h('div.psi-src', gut, h('div.psi-wrap', hl, ta)), strip,
       h('div.row.acts', help, h('span.cap', touch ? 'Tap a number, then drag the bar under the code to try other values' : 'Drag a number (or Alt + ↑ ↓) to try other values'))),
-    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live })), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
+    h('div.psi-acts', h('div.row.acts', showBtn('psi-ed-show', () => live), plBtn('psi-ed-pl', () => ({ ...live }), () => keep()), look, h('button', { id: 'psi-ed-gif', onclick: () => { if (ready()) toGif(B.draft); } }, 'Save as GIF…'),
       h('button', { id: 'psi-ed-share', onclick: (e) => { if (ready()) share(e.currentTarget, B.draft); } }, 'Copy share link')), h('p.cap', NOTE()))));
   let pv = null, toks = [], bad = null, num = null, good = null;
   // What the preview plays: the last text that compiled, with the sliders as they are.
@@ -721,30 +746,36 @@ function editor() {
     if (!good) { toast('Fix the formula first: it doesn’t work yet', 'bad'); return; }
     const back = () => { if (good) play(pv, live, info(good)); };
     (await import('./fsheet.js')).sheet({
-      P, f: B.draft, look: LOOK(), get: () => ta.value, put: edit,
+      P, f: B.draft, look: LOOK(), get: () => ta.value, put: edit, keep,
       moved: () => { stash(); pv.dirty = true; sliders(sl, B.draft, () => { stash(); pv.dirty = true; PS?.follow(live); }); PS?.follow(live); },
       preview: (src) => (src ? play(pv, { ...live, src }, info(src)) : back()),
     }, btn);
   }
 
+  // Saved where yours live (js/fstore.js): on the panel, a file it plays.
   function save() {
-    if (!ready()) return;
-    const f = B.draft, list = mine();
-    f.name = name.value.trim() || `My formula ${list.length + 1}`;
+    if (!ready()) return Promise.reject(new Error('it doesn’t work yet'));
+    const f = B.draft;
+    f.name = name.value.trim() || `My formula ${mine().length + 1}`;
     name.value = f.name;
     // The name is its `name` line.
     if (!ctlOf(f)?.name) named(f.name);
-    f.id ??= Date.now();
-    const k = list.findIndex((x) => x.id === f.id);
-    const rec = { id: f.id, name: f.name, src: ta.value, a: f.a, b: f.b, c: f.c };
-    f.src = ta.value;
-    if (k < 0) list.unshift(rec); else list[k] = rec;
-    said(() => {
-      if (!keep(list)) { const m = 'this browser’s storage is full or blocked'; toast('Couldn’t save: ' + m, 'bad'); throw new Error(m); }
-      f.base = sig({ src: ta.value, name: f.name });
+    const src = ta.value;
+    let r;
+    const done = said(async () => {
+      const rec = await S.put({ id: f.id, file: f.file, name: f.name, src, a: f.a, b: f.b, c: f.c });
+      f.id = rec.id;
+      if (rec.file) f.file = rec.file;
+      f.src = src;
+      f.base = sig({ src, name: f.name });
       stash();
+      r = { ...live, file: f.file };
     });
+    return done.then(() => { if (!r) throw new Error('not saved'); return r; });
   }
+  // The Formula as saved (its file, on the panel), for a playlist line or
+  // the look: saved first when it changed or never was.
+  const keep = () => (B.draft.file && !dirty(B.draft) && B.draft.src === good ? Promise.resolve({ ...live, file: B.draft.file }) : save());
 
   return {
     el,

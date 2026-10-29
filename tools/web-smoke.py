@@ -1664,6 +1664,11 @@ def put_json(url: str, obj) -> dict:
         return json.load(r)
 
 
+def get_text(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=30) as r:
+        return r.read().decode()
+
+
 def put_text(url: str, text: str) -> dict:
     req = urllib.request.Request(url, data=text.encode(), method="PUT")
     with urllib.request.urlopen(req, timeout=30) as r:
@@ -3907,16 +3912,36 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
 
 
 def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
-    """Add to playlist: a bundled Formula goes into a playlist as its
-    player path (the path Show on panel sends: its `name` line names it),
-    once; the playlist editor shows it by name, as a Formula; the (mock)
-    player plays it and says its name."""
+    """Formulas by reference. Saved Formulas live on the panel: those saved
+    in this browser before are copied onto it once, when Formulas opens
+    (said in a toast), each a file in /formulas/ as written. Add to playlist
+    names the Formula: a bundled one `@formula:<stem>`, once; one of your
+    own from the editor is saved first and named by its file
+    (`/formulas/<stem>.psi`); the playlist editor shows both by name, as
+    Formulas; the (mock) player plays them and says their names."""
     gif = card_gifs()[0]
     put_text(base + "/api/sets/psitest", gif + "\n")
     page = new_page(browser, "laptop", errors)
+    page.goto(base + "/#now")
+    page.evaluate("""localStorage.setItem('odmd.psi.mine', JSON.stringify([{ id: 7, name: 'Kept here', src: 'name "Kept here"\\ngray(x)' }]))""")
     page.goto(base + "/#formulas")
     open_formulas(page)
-    page.click("#psi-ex .psi-tile[data-name='Starfield']")
+    page.wait_for_selector("#psi-mine .psi-tile[data-name='Kept here']", timeout=10000)
+    t0 = last_toast(page, "ok")
+    kept = overlay / "formulas" / "kept-here.psi"
+    check(t0 == "1 Formula saved in this browser is on the panel now" and kept.exists() and kept.read_text() == 'name "Kept here"\ngray(x)',
+          f"formulas on the panel: one saved in this browser is copied onto it once ('{t0}', {kept.exists()})")
+    page.reload()
+    open_formulas(page)
+    page.wait_for_selector("#psi-mine .psi-tile[data-name='Kept here']", timeout=10000)
+    page.wait_for_timeout(500)
+    again = page.locator("#toasts .toast:has-text('on the panel now')").count()
+    check(again == 0 and sorted(p.name for p in (overlay / "formulas").glob("kept-here*")) == ["kept-here.psi"],
+          f"formulas on the panel: not copied again ({again} toasts)")
+    # A gallery's link to a bundled one goes by name: its details here.
+    page.goto(base + "/#bundled=starfield")
+    page.wait_for_function("document.querySelector('#psi-side.open #psi-d-title')?.textContent == 'Starfield'", timeout=20000)
+    check(page.evaluate("location.hash") == "#formulas", "formulas: a #bundled= link opens that bundled Formula's details")
     clear_toasts(page)
     page.click("#psi-pl")
     page.wait_for_selector("#psi-pl-menu", timeout=5000)
@@ -3924,12 +3949,9 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
     t = last_toast(page, "ok")
     lines = (overlay / "sets" / "psitest.txt").read_text().split("\n")
-    src = next(e["src"] for e in bundled() if e["name"] == "Starfield")
-    want = page.evaluate("s => import('./js/psishow.js').then(m => m.fpath({src: s}))", src)
-    check(lists[0] == "/filelist.txt" and "/sets/psitest.txt" in lists and t == "1 added to “psitest”"
-          and lines == [gif, want, ""] and len(want) <= 2048 and "\t" not in want and " " not in want
-          and want.startswith('@formula?src=name+"Starfield"') and "&name=" not in want,
-          f"formulas playlist: Starfield added to psitest ('{t}'; {len(want)} B: {want[:60]}…{want[-30:]})")
+    want = "@formula:starfield"
+    check(lists[0] == "/filelist.txt" and "/sets/psitest.txt" in lists and t == "1 added to “psitest”" and lines == [gif, want, ""],
+          f"formulas playlist: Starfield added to psitest by name ('{t}'; {lines[1:]})")
     clear_toasts(page)
     page.click("#psi-pl")
     page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
@@ -3937,9 +3959,9 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     t = page.eval_on_selector_all("#toasts .toast", "els => els.at(-1).textContent")
     check(t == "already in “psitest”" and (overlay / "sets" / "psitest.txt").read_text().count("@formula") == 1,
           f"formulas playlist: added again, it is there once ('{t}')")
-    # The editor: a button too, with what it plays (a Formula of one's own:
-    # the name typed is its `name` line, so no `&name=`; its `-- a:`
-    # comment, retired, is a comment: `a` an undeclared slider).
+    # The editor: one of your own is saved on the panel first, then named
+    # by its file (its `-- a:` comment, retired, is a comment: `a` an
+    # undeclared slider).
     formula_editor(page, "-- a: level\nloop 4\ngray(a * x + saw(t / 4) * 0.1)")
     page.fill("#psi-name", "Smoke & ramp")
     src = page.input_value("#psi-src")
@@ -3947,27 +3969,48 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     page.click("#psi-pl-menu [data-path='/sets/psitest.txt']")
     last_toast(page, "ok")
     mine = (overlay / "sets" / "psitest.txt").read_text().split("\n")[2]
-    check(src.startswith('name "Smoke & ramp"\n-- a: level\n')
-          and mine == '@formula?src=name+"Smoke+%26+ramp";+loop+4;+gray(a+*+x+%2B+saw(t+/+4)+*+0.1)',
-          f"formulas playlist: from the editor, the formula as compiled, its name its own line ({src[:30]!r}; {mine})")
-    # The playlist editor: by name, as a Formula, not a 2 KB line.
+    f = overlay / "formulas" / "smoke-ramp.psi"
+    tick = page.inner_text("#psi-ed .tick")
+    check(src.startswith('name "Smoke & ramp"\n-- a: level\n') and mine == "/formulas/smoke-ramp.psi"
+          and f.exists() and f.read_text() == src and tick == "Saved ✓",
+          f"formulas playlist: from the editor, saved on the panel and named by its file ({mine}; '{tick}')")
+    # Saved again with a change: the same file.
+    page.fill("#psi-src", src + "\n-- changed")
+    page.wait_for_timeout(300)
+    page.click("#psi-save")
+    page.wait_for_function("document.querySelector('#psi-ed .tick')?.dataset.n >= 2", timeout=10000)
+    check(f.read_text().endswith("-- changed") and sorted(p.name for p in (overlay / "formulas").glob("smoke-ramp*")) == ["smoke-ramp.psi"],
+          "formulas playlist: saved again, the same file")
+    # The playlist editor: by name, as Formulas.
     goto_view(page, "sets")
     page.click("#sets-list [data-path='/sets/psitest.txt'] button.pl")
     page.wait_for_selector("#set-editor", state="visible", timeout=10000)
     page.wait_for_function("document.querySelectorAll('#set-entries .vrow:not([hidden])').length >= 3", timeout=10000)
+    page.wait_for_function("[...document.querySelectorAll('#set-entries .vrow .t')].some(t => t.textContent == 'Smoke & ramp')", timeout=10000)
     rows = page.eval_on_selector_all("#set-entries .vrow:not([hidden])",
                                      "els => els.map(r => [r.querySelector('.t').textContent, r.querySelector('.tag')?.textContent || ''])")
     check(entries(page) == lines[:2] + [mine] and rows[1:] == [["Starfield", "Formula"], ["Smoke & ramp", "Formula"]],
           f"formulas playlist: the playlist editor shows them by name ({rows})")
     shot(page, "formulas-playlist", "laptop")
     page.context.close()
-    # The player plays it, by its name.
+    # The player plays them, by their names; a name not bundled is a 404.
     put_json(base + "/api/config", {"set": "psitest"})
     cur = wait_playing(base, want, 20)
     st = get_json(base + "/api/status")["now_playing"]
     check(cur == want and st["title"] == "Starfield", f"formulas playlist: the player plays it as “{st['title']}”")
+    cur = wait_playing(base, mine, 30)
+    st = get_json(base + "/api/status")["now_playing"]
+    check(cur == mine and st["title"] == "Smoke & ramp", f"formulas playlist: and the file, as “{st['title']}”")
     put_json(base + "/api/config", {"set": ""})
-    urllib.request.urlopen(urllib.request.Request(base + "/api/files/sets/psitest.txt", method="DELETE"), timeout=30)
+    for path, code in (("@formula:no-such", 404), ("/formulas/gone.psi", 404)):
+        try:
+            post_json(base + "/api/play", {"path": path})
+            got = 200
+        except urllib.error.HTTPError as e:
+            got = e.code
+        check(got == code, f"formulas playlist: {path} is a {got}")
+    for name in ("sets/psitest.txt", "formulas/smoke-ramp.psi", "formulas/kept-here.psi"):
+        urllib.request.urlopen(urllib.request.Request(base + "/api/files/" + name, method="DELETE"), timeout=30)
 
 
 def clear_toasts(page: Page) -> None:
@@ -4097,12 +4140,11 @@ def formulas_over_checks(browser, base: str, errors: list[str]) -> None:
     t = last_toast(page, "ok")
     c = get_json(base + "/api/config")
     fl = get_json(base + "/api/status")["formula_look"]
-    # The Formula's path, as Show on panel sends it.
-    same = page.evaluate("""async () => { const ex = await (await fetch('formulas.json')).json(), f = ex.find((x) => /^name "Old photo"/m.test(x.src));
-        return (await import('./js/psishow.js')).fpath(f); }""")
+    # A bundled Formula: named, as the player has it built in.
+    same = "@formula:old-photo"
     page.click("#psi-ex .psi-tile[data-name='Matrix']")
     plain = page.is_visible("#psi-look")
-    check(c["look_formula"] == same and same.startswith('@formula?src=name+"Old+photo";+about+"The+GIF+in+warm+sepia+tones";+control+amount+=+0.8+') and "look;" in same and not plain
+    check(c["look_formula"] == same and not plain
           and (fl or {}).get("source") == "setting" and t.startswith("“Old photo” is the panel’s look now"),
           f"formulas over: Set as the panel’s look ('{t}', {fl}; Matrix has the button: {plain})")
     goto_view(page, "settings")
@@ -4148,12 +4190,11 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.select_option("#st-look-formula", label="Vignette")
     page.wait_for_selector("#st-tab-look .tick.ok", timeout=10000)
     c = get_json(base + "/api/config")
-    want = page.evaluate("""async () => { const ex = await (await fetch('formulas.json')).json();
-        return (await import('./js/psishow.js')).fpath(ex.find((x) => /^name "Vignette"/m.test(x.src))); }""")
+    want = "@formula:vignette"
     why = page.inner_text("#st-look-why")
-    check(c["look_formula"] == want and "look;" in want and why.startswith("Over at 100%") and page.is_visible("#st-look-change")
+    check(c["look_formula"] == want and why.startswith("Over at 100%") and page.is_visible("#st-look-change")
           and not {"look_formula_name", "look_blend", "look_amount"} & set(c),
-          f"looks: Vignette saved as its path ('{why}'; ...{c['look_formula'][-40:]!r})")
+          f"looks: Vignette saved by its name ('{why}'; {c['look_formula']!r})")
     shot(page, "looks-settings", "laptop")
     # A refusal by the player: the picker goes back to what it has.
     def refuse(route):
@@ -4244,9 +4285,10 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     t = last_toast(page, "ok")
     c5 = get_json(base + "/api/config")
     st = get_json(base + "/api/status")
-    check(c5["look_formula"].startswith('@formula?src=name+"Matrix+glow";+about+"Matrix,+screened+over+the+GIF";+look+screen+40;')
+    saved = get_text(base + "/formulas/matrix-glow.psi") if c5["look_formula"] == "/formulas/matrix-glow.psi" else ""
+    check(c5["look_formula"] == "/formulas/matrix-glow.psi" and saved.startswith('name "Matrix glow"\nabout "Matrix, screened over the GIF"\n') and "\nlook screen 40\n" in saved
           and t.startswith("“Matrix glow” is the panel’s look now") and (st.get("formula_look") or {}).get("source") == "setting",
-          f"looks: Set as the panel’s look sends the Formula's path ('{t}'; {c5['look_formula'][:70]!r}…)")
+          f"looks: Set as the panel’s look saves it on the panel and names its file ('{t}'; {c5['look_formula']!r})")
     # Off: the line goes.
     page.click("#psi-set-btn")
     page.wait_for_selector("#psi-set #psi-set-look", timeout=10000)
@@ -4271,6 +4313,7 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     check(f0 == ["@formula?src=gray(a)", "@formula?src=gray(a)&a=0.25", "#formula=gray%28a%29"] and "&a=" not in l0 and l1.endswith("&a=0.75"),
           f"looks: a value at its default stays out of paths and links ({f0}; {l0[-30:]!r}, {l1[-30:]!r})")
     put_json(base + "/api/config", {"look_formula": ""})
+    urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/matrix-glow.psi", method="DELETE"), timeout=30)
     page.context.close()
 
 
@@ -4407,12 +4450,12 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     page.wait_for_selector("#psi-ex .psi-tile", timeout=5000)
     safe = safe and page.locator("#psi-gal img").count() == 0 and page.evaluate("window.__pwned") is None
     check(safe, "formulas: markup in a link's name and formula stays text")
-    page.goto(base + "/#formula=" + urllib.parse.quote("gray(x)\n" + "-" * 6000) + "&name=" + "N" * 200)
+    page.goto(base + "/#formula=" + urllib.parse.quote("gray(x)\n" + "-" * 17000) + "&name=" + "N" * 200)
     page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
     page.wait_for_timeout(500)
     src_len, name_len = len(page.input_value("#psi-src")), len(page.input_value("#psi-name"))
     toast = page.locator("#toasts .toast:has-text('too long')").count()
-    check(src_len == 4096 and name_len == 60 and toast == 1, f"formulas: an over-long link is cut ({src_len}, {name_len}) and says so")
+    check(src_len == 16384 and name_len == 60 and toast == 1, f"formulas: an over-long link is cut ({src_len}, {name_len}) and says so")
     page.context.close()
 
 

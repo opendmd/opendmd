@@ -13,7 +13,7 @@
 
 import { app } from './state.js';
 import { dfetch } from './source.js';
-import { enc, store, on } from './util.js';
+import { enc, store, on, drawn } from './util.js';
 
 export const thumbsOn = () => store.get('thumbs', true);
 // What the page has asked for, for the tests and the design note's numbers.
@@ -196,7 +196,7 @@ export async function forget(path) {
 // The whole file was read anyway (the Details preview): if it is not the
 // size the thumbnail came from, make it again from these bytes. Free.
 export async function check(path, bytes) {
-  if (!thumbsOn() || path[0] === '@' || !bytes?.length) return;
+  if (!thumbsOn() || drawn(path) || !bytes?.length) return;
   const rec = await get(path);
   if (rec && rec.size === bytes.length) return;
   const still = cutBytes(bytes, 1, bytes.length);

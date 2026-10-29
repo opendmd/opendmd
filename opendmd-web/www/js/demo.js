@@ -233,6 +233,16 @@ function apply() {
   look(c.look_formula);
 }
 
+// A look's Formula and its values: a bundled one by name (`@formula:<stem>`,
+// formulas.json, as the player has them built in) or inline (`src=`).
+let exs = null;
+async function lookOf(path) {
+  if (!path.startsWith('@formula:')) { const q = new URLSearchParams(path.slice(9)); return [q.get('src') || '', q]; }
+  const [n, q = ''] = path.slice(9).split('?');
+  const ex = await (exs ??= fetch('formulas.json').then((r) => r.json()).catch(() => (exs = null, [])));
+  return [ex.find((x) => x.stem == n)?.src || '', new URLSearchParams(q)];
+}
+
 // The Formula look on the demo's panel: Psi (an instance of its own) over
 // every frame, at the panel's clock and the formula's sliders, as its `look`
 // line asks (pkg-psi asLook: the player's FormulaLook composition).
@@ -242,10 +252,10 @@ async function look(path) {
   lookErr = '';
   if (!path) { sim.preview.p.setOver(undefined); return; }
   try {
-    const P = await pkg();
+    const P = await pkg(), [src, q] = await lookOf(path);
     if (lookOn != path || !sim) return;
-    const q = new URLSearchParams(path.slice(9)), Q = (k, v = q.get(k)) => (/^-?(\d+\.?\d*|\.\d+)$/.test(v || '') && Math.abs(+v) < 32768 ? Math.round(+v * 65536) : -2147483648); // unset (also empty, junk, out of range): the formula's default, as fx_psi's query
-    if (!P.asLook(q.get('src') || '')) throw new Error(P.error());
+    const Q = (k, v = q.get(k)) => (/^-?(\d+\.?\d*|\.\d+)$/.test(v || '') && Math.abs(+v) < 32768 ? Math.round(+v * 65536) : -2147483648); // unset (also empty, junk, out of range): the formula's default, as fx_psi's query
+    if (!P.asLook(src)) throw new Error(src ? P.error() : 'there is no bundled Formula by that name');
     const loop = P.info()[4] || 0;
     sim.preview.p.setOver((px) => {
       const t = Math.floor(performance.now()), d = new Date();
@@ -264,12 +274,12 @@ async function look(path) {
 // The player's checks of a Formula look before it is saved (fx_psi's
 // FormulaLook::compile): it compiles, lets the GIF show through, ≤ 12 ms.
 async function lookCheck(path) {
-  const P = await pkg(), src = (p) => new URLSearchParams(p.slice(9)).get('src') || '';
-  const i = P.asLook(src(path)) && P.info();
+  const P = await pkg(), [s] = await lookOf(path), back = lookOn && (await lookOf(lookOn))[0];
+  const i = P.asLook(s) && P.info();
   const why = !i ? P.error() : !(i[5] & 32) ? 'this Formula covers the GIF entirely: choose a lower amount or another blend'
     : i[6] > 12000 ? `this formula is too heavy to draw over GIFs (about ${Math.ceil(i[6] / 1000)} ms a frame; the limit is 12 ms) — simplify it` : '';
   // (One instance: the look on the panel goes back to its own formula.)
-  if (lookOn) P.asLook(src(lookOn));
+  if (back) P.asLook(back);
   if (why) bad('look_formula: ' + why);
 }
 

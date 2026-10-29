@@ -19,7 +19,8 @@ const n = (v, d) => (Number.isFinite(+v) && v !== '' ? String(+v) : d);
 // `x`: {P (the editor's pkg-psi), get() (the text), put(text) (into the
 // editor, compiled), f (the values), moved() (a value changed), preview(src
 // | null) (the look over the picture, or the formula again), look (a
-// player or the demo: Set as the panel's look)}.
+// player or the demo: Set as the panel's look), keep() (the Formula as
+// saved: what the look names on the panel)}.
 export async function sheet(x, btn) {
   let L, M;
   try { L = await import('./looks.js'); M = await L.psi(); } catch (e) { toast('Settings: ' + (e.message || e), 'bad'); return; }
@@ -39,7 +40,7 @@ export async function sheet(x, btn) {
   const err = h('p.cap.bad', { id: 'psi-set-err', hidden: true });
   const vals = () => ({ src: x.get(), a: x.f.a, b: x.f.b, c: x.f.c, name: d()?.name || x.f.name });
   sw.onchange = () => { x.put(L.set(M, vals(), ...(sw.checked ? L.choice(M, vals()) : ['', 0])).src); look(); };
-  if (use) use.onclick = () => { closeMenu(); L.useSaid(vals()); };
+  if (use) use.onclick = () => { closeMenu(); L.useSaid(vals(), x.keep); };
   // The look's part as the text has it now.
   function look() {
     const c = d(), on = !!c?.look;

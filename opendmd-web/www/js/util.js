@@ -40,6 +40,12 @@ export const bus = new EventTarget();
 export const emit = (type, detail) => bus.dispatchEvent(new CustomEvent(type, { detail }));
 export const on = (type, fn) => bus.addEventListener(type, (e) => fn(e.detail));
 
+// A playlist line that names a Formula, not a GIF: inline or by name
+// (`@formula…`), or one of the user's on the card (`/formulas/x.psi?a=…`).
+export const isFormula = (p) => p.startsWith('@formula') || /^\/.*\.psi(\?|$)/i.test(p);
+// Drawn by the player, not read as a GIF: a live item or a Formula.
+export const drawn = (p) => p[0] == '@' || isFormula(p);
+
 export const store = {
   get(key, fallback) {
     try { const v = localStorage.getItem('odmd.' + key); return v == null ? fallback : JSON.parse(v); } catch { return fallback; }

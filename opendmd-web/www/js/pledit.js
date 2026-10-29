@@ -11,7 +11,7 @@ import { Overrides, glyphs, menu, moreButton, actions, popup, closeMenu } from '
 import { VList } from './vlist.js';
 import { Tree, chipRow } from './tree.js';
 import { attach, watch, thumbsOn } from './thumbs.js';
-import { h, clear, on, store, toast, label, note, niceName, isSys, byNice, FLAGS } from './util.js';
+import { h, clear, on, store, toast, label, note, niceName, isSys, byNice, FLAGS, isFormula, drawn } from './util.js';
 
 // Not `filelist.*`: the firmware reads such a `set` as a root manifest.
 const NAME_RE = /^(?!filelist\.)[A-Za-z0-9][A-Za-z0-9 _.-]{0,40}$/;
@@ -45,14 +45,26 @@ export function editor(se, ctx) {
 
   const ov = new Overrides();
   ov.onChange = () => list.refresh();
+  // One of the user's Formulas on the card says its name in its `name`
+  // line: read once, the row drawn again.
+  const fnames = new Map();
+  const fname = (p) => {
+    const f = p.split('?')[0];
+    if (f[0] != '/' || !/\.psi$/i.test(f)) return null;
+    if (!fnames.has(f)) {
+      fnames.set(f, null);
+      app.src.readText(f).then((t) => { const n = /^\s*name\s+"([^"\n]*)"/m.exec(t || '')?.[1]; if (n) { fnames.set(f, n); list.refresh(); } }, () => {});
+    }
+    return fnames.get(f);
+  };
   const list = new VList({
     rowHeight: 40,
     render(row, i) {
       const p = app.draft.paths[i];
       const e = app.wasm.parsePath(p);
-      const o = ov.get(p), cv = thumbsOn() && p[0] != '@' && h('canvas.th', { width: 128, height: 32 });
+      const o = ov.get(p), cv = thumbsOn() && !drawn(p) && h('canvas.th', { width: 128, height: 32 });
       clear(row, h('button.grip', { title: 'Drag to move (or Alt+↑/↓)', 'aria-label': 'Move', onpointerdown: (ev) => drag(ev, row, i) }, '⠿'),
-        cv, h('span.t', label(e)), glyphs(o), (e.platform || p.startsWith('@formula?') && 'Formula') && h('span.tag', e.platform || 'Formula'),
+        cv, h('span.t', fname(p) || label(e)), glyphs(o), (e.platform || isFormula(p) && 'Formula') && h('span.tag', e.platform || 'Formula'),
         h('button.sm.rm', { title: 'Remove', 'aria-label': 'Remove', onclick: (ev) => { ev.stopPropagation(); remove(i); } }, '✕'),
         moreButton(ov, p, ['Remove from playlist', () => remove(i)]));
       if (cv) attach(cv, p);
