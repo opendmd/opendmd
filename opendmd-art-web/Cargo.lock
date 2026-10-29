@@ -169,7 +169,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "opendmd-art-web"
-version = "1.0.0-beta.11"
+version = "1.0.0-beta.12"
 dependencies = [
  "gif",
  "js-sys",
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "opendmd-core"
-version = "1.0.0-beta.11"
+version = "1.0.0-beta.12"
 dependencies = [
  "gif",
  "log",
