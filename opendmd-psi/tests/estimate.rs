@@ -123,3 +123,29 @@ fn the_estimate_is_within_15_percent_of_the_device() {
         rows.join("\n")
     );
 }
+
+/// The JIT's estimate is never above the VM's (the player keeps whichever
+/// draws a frame faster), with and without the still cache, for every
+/// bundled formula; and it is the VM's for none of the ones the device
+/// measured faster compiled.
+#[test]
+fn the_jit_estimate_is_never_above_the_vms() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut n = 0;
+    for dir in [root.join("formulas"), root.join("../opendmd-web/formulas")] {
+        for f in std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()) {
+            let p = f.path();
+            if p.extension().is_none_or(|e| e != "psi") {
+                continue;
+            }
+            let mut prog = opendmd_psi::Program::default();
+            if opendmd_psi::compile_into(&std::fs::read_to_string(&p).unwrap(), &mut prog).is_err() {
+                continue;
+            }
+            assert!(prog.esp32_us_jit() <= prog.esp32_us(), "{p:?}");
+            assert!(prog.esp32_us_jit_still() <= prog.esp32_us_still(), "{p:?}");
+            n += 1;
+        }
+    }
+    assert!(n > 30);
+}
