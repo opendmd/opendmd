@@ -1499,6 +1499,12 @@ fn speed2(out: &mut [u8]) {
     );
 }
 
+/// Only [`bundled`] (and `done`): a probe image small enough for the 4mb
+/// layout while the full probe is not (beta.11: 2,418,496 B, over the
+/// factory partition); `make emu-probe` then fails on the missing golden
+/// line, so read the bundled line from its log. `false`: the full probe.
+const BUNDLED_ONLY: bool = false;
+
 /// The bundled Formulas (`-- bundle` in opendmd-web/formulas/; the list
 /// is firmware/build.rs's), each opened through the real path
 /// (`Fx::parse`: the Formula's box, `psi_stack::compile` with its heap
@@ -1507,6 +1513,7 @@ fn speed2(out: &mut [u8]) {
 /// by the compiler itself (`psi::compile_into` on the formula stack, the
 /// check skipped) with [`psi::NO_MEMORY`] — not the abort Endless road
 /// was on 2026-10-29. `make emu-probe` requires the summary line.
+#[inline(never)]
 fn bundled(canvas: &mut Canvas) {
     const LIST: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/bundled_formulas.rs"));
     let (mut opened, mut failed) = (0, 0);
@@ -1997,6 +2004,13 @@ pub fn run(root: &str) {
     }
     let start = Instant::now();
     let stack0 = stack_unused();
+    if BUNDLED_ONLY {
+        let mut canvas = Canvas::new();
+        bundled(&mut canvas);
+        say!(info, "{DONE}: bundled, main stack {} B unused (was {stack0}), heap {} B free, {} ms in all",
+            stack_unused(), heap(), start.elapsed().as_millis());
+        return;
+    }
     if FASTDIV_ONLY {
         fastdiv_probe(start, stack0);
         return;
