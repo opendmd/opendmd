@@ -234,7 +234,7 @@ const JIT_ONLY: bool = false;
 /// Only the JIT's phase-1 rows (`jit1_probe`: the goldens through kernels,
 /// the per-step costs, the examples as effects JIT against VM), then the
 /// play lines. The full probe runs out of heap; these run first and alone.
-const JIT1_ONLY: bool = true;
+const JIT1_ONLY: bool = false;
 
 /// Endless road and its variants one at a time (each source made, run and
 /// dropped before the next), splits, then Starfield and Time gate as
