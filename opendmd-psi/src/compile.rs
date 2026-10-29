@@ -94,24 +94,43 @@ fn no_memory() -> Error {
     Error::new(0, 0, NO_MEMORY)
 }
 
-/// What a compile of `src_len` bytes is expected to take from the heap at
-/// its peak, at most (bytes): the firmware asks for this much free, plus
-/// the compile's stack and a reserve, before it compiles. On the host
-/// (64-bit: its lists' entries are as big as the device's or bigger) every
-/// bundled and example Formula and the `worst` cases stay under it
-/// (`tests/compile_heap.rs`): the tokens (12 B a token, ~1 token per 2
-/// bytes), the nodes (16 B), the sharing index (4 KB) and the layout's
-/// lists; parts drawn in several places read their tokens again, hence
-/// the floor. Endless road (1,858 B compacted): 30.2 KB measured on the
-/// host, 32 KB here.
-pub const fn compile_heap_estimate(src_len: usize) -> usize {
-    let e = 6 * 1024 + 14 * src_len;
-    if e < 16 * 1024 {
-        16 * 1024
+/// What a compile of `src` is expected to take from the heap at its peak,
+/// at most (bytes): the firmware asks for this much free, plus the
+/// compile's stack and a reserve, before it compiles. Counted by **tokens**
+/// (one lexing pass that keeps nothing), not bytes, so a readable Formula
+/// with long names and comments costs what its tokens cost: the tokens (12 B
+/// each), the nodes (16 B, about one per two tokens), the sharing index
+/// (4 KB) and the layout's lists; parts drawn in several places read their
+/// tokens again, hence the floor. On the host (64-bit: its lists' entries
+/// are as big as the device's or bigger) every bundled and example Formula
+/// and the `worst` cases stay under it (`tests/compile_heap.rs`). A source
+/// that doesn't lex fails before it takes anything: the floor.
+pub fn compile_heap_estimate(src: &str) -> usize {
+    let mut count = Toks {
+        v: None,
+        n: 0,
+        nl: false,
+    };
+    let tokens = if src.len() > u16::MAX as usize {
+        0
+    } else {
+        lex_into(src, &mut count).map_or(0, |()| count.n)
+    };
+    compile_heap_for_tokens(tokens)
+}
+
+/// [`compile_heap_estimate`] for a count of tokens.
+pub const fn compile_heap_for_tokens(tokens: usize) -> usize {
+    let e = HEAP_BASE + HEAP_PER_TOKEN * tokens;
+    if e < HEAP_FLOOR {
+        HEAP_FLOOR
     } else {
         e
     }
 }
+const HEAP_BASE: usize = 6 * 1024;
+const HEAP_PER_TOKEN: usize = 30;
+const HEAP_FLOOR: usize = 16 * 1024;
 
 /// `v.push(x)`, or [`NO_MEMORY`] when the list can't grow (instead of the
 /// abort an infallible push is on the device). In the browser (wasm: the
@@ -1081,6 +1100,14 @@ impl Dag {
                 at.1,
                 "this formula is too long for the panel — simplify it",
             ));
+        }
+        // Grown by half, never past MAX_NODES: the old and the new block are
+        // held at once while it grows (`compile_heap_estimate` counts that).
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.nodes.len() == self.nodes.capacity() {
+            let cap = self.nodes.capacity();
+            let more = (cap / 2).max(16).min(MAX_NODES - cap);
+            self.nodes.try_reserve_exact(more).map_err(|_| no_memory())?;
         }
         try_push(&mut self.nodes, n)?;
         let id = (self.nodes.len() - 1) as Id;

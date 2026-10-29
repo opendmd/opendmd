@@ -49,7 +49,7 @@ use std::time::{Duration, Instant};
 /// rows below look up rather than `include_str!` again. (Time-gate and
 /// Endless road are the roadprobe's pair; Endless road is also the
 /// psi-lang case for `loop forever`, a sprite and slot reuse.)
-const BUNDLED: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/bundled_formulas.rs"));
+use crate::formulas::BUNDLED;
 
 /// The examples that are not bundled (the drawing and plain ones the speed2
 /// and leak rows compile), likewise comment-free, from build.rs.
@@ -1234,7 +1234,8 @@ fn bundled(canvas: &mut Canvas) {
     let (mut opened, mut failed) = (0, 0);
     let mut road = None;
     for &(name, src) in BUNDLED {
-        let path = fx_psi::path(src, "");
+        // Through the path playlists and looks use: `@formula:<name>`.
+        let path = format!("{}{name}", opendmd_core::synth::FORMULA_REF);
         let h0 = heap();
         let Some(mut fx) = Fx::parse(&path) else {
             failed += 1;
@@ -1276,7 +1277,7 @@ fn bundled(canvas: &mut Canvas) {
         b
     };
     // 1. Under the check's figure: refused before any compile.
-    let need = crate::config::PSI_COMPILE_STACK + 512 + psi::compile_heap_estimate(road.len()) + crate::config::PSI_COMPILE_RESERVE;
+    let need = crate::config::PSI_COMPILE_STACK + 512 + psi::compile_heap_estimate(&road) + crate::config::PSI_COMPILE_RESERVE;
     let b = ballast(need - 4096);
     let h = heap();
     let check = fx_psi::open_error(&fx_psi::path(&road, "")).map(|e| e.to_string()).unwrap_or_else(|| "opened".into());
@@ -1301,6 +1302,53 @@ fn bundled(canvas: &mut Canvas) {
         if ok(&check) { "refused" } else { "NOT refused" },
         if ok(&compiler) { "refused" } else { "NOT refused" },
         heap()
+    );
+}
+
+/// The card's Formula the probe plays (tools/ci-card.py writes it).
+const CARD_FORMULA: &str = "/formulas/ci-test.psi";
+
+/// Formulas by reference, opened as the engine opens them (`Engine::open_reader`):
+/// a bundled one by name through its virtual stream, and the card's `.psi`
+/// file read through the card (compacted as it is read) into one, each
+/// drawn for a few frames. `make emu-probe` requires the summary line.
+#[inline(never)]
+fn refs(root: &str, canvas: &mut Canvas) {
+    use opendmd_core::FrameSource;
+    let draw = |r: std::io::Result<std::io::Cursor<Vec<u8>>>, canvas: &mut Canvas| -> String {
+        let mut src = match r.and_then(FrameSource::open) {
+            Ok(s) => s,
+            Err(e) => return format!("did not open: {e}"),
+        };
+        for _ in 0..3 {
+            if let Err(e) = src.next_frame(canvas) {
+                return format!("did not draw: {e}");
+            }
+        }
+        match src.formula_name() {
+            Some(n) => format!("opened and drawn (\"{n}\")"),
+            None => "opened and drawn".to_string(),
+        }
+    };
+    let h0 = heap();
+    let named = draw(
+        opendmd_core::synth::open("@formula:endless-road?a=0.5")
+            .ok_or_else(|| std::io::Error::other("not virtual")),
+        canvas,
+    );
+    say!(info, "psi-probe: @formula:endless-road: {named} (heap {h0} B free at open)");
+    let h0 = heap();
+    let card = std::fs::File::open(format!("{root}{CARD_FORMULA}")).and_then(|f| {
+        let text = opendmd_core::fx_psi::read_text(std::io::BufReader::with_capacity(512, f))?;
+        Ok(opendmd_core::synth::open_formula_text("a=1", &text))
+    });
+    let card = draw(card, canvas);
+    say!(info, "psi-probe: {CARD_FORMULA}: {card} (heap {h0} B free at open)");
+    let ok = |m: &str| m.starts_with("opened");
+    say!(info,
+        "psi-probe: formulas by reference: by name {}, card file {}",
+        if ok(&named) { "played" } else { "FAILED" },
+        if ok(&card) { "played" } else { "FAILED" }
     );
 }
 
@@ -1756,6 +1804,8 @@ pub fn run(root: &str) {
     let mut canvas = Canvas::new();
     // Then its heap: every bundled Formula opens, a short heap refuses one.
     bundled(&mut canvas);
+    // Formulas by reference, as the engine opens them.
+    refs(root, &mut canvas);
 
     // (The examples as effects, with and without the still cache, timed, are
     // not in the full probe: it is the emulator lane's correctness run, and
