@@ -1,7 +1,14 @@
 // The share page (/f/#formula=…&name=…&a=…, or a short link's /f/<id>?a=…):
 // one formula, playing in the
-// web app's LED preview, its code, its sliders, and the ways on: open it on
-// my display, try it in the demo, copy, submit to the gallery, a QR code.
+// web app's LED preview, its code, its sliders, and the ways on: add it to
+// my panel, open it on my display, try it in the demo, copy, submit to the
+// gallery, a QR code.
+// Add to my panel (also the gallery's tiles: `…&add=1`, or `?add=1` on a
+// short link) and Open on my display are the same hand-off: a top-level
+// navigation to the panel's own web app, `http://<addr>/#formula=…` (or
+// `#bundled=<stem>`), which Add marks `&add=1`: the panel saves it and
+// offers Play now, Add to a playlist, Use as the look. An https page can
+// navigate to http, never fetch from it (until S8's Local Network Access).
 // The demo's files do the work: the share link's encoder and decoder
 // (js/psikit.js, the app's own), the LED preview (js/preview.js and its
 // wasm) and Psi (pkg-psi), so a frame here is the panel's and looks like
@@ -30,6 +37,13 @@ const { f, cut, has, bundled } = parse(data ? '#' + new URLSearchParams([['formu
   ...[...new URLSearchParams(location.search)].filter(([k]) => /^[abc]$/.test(k))]) : location.hash);
 // Its short link's id, once it has one.
 let shortId = data?.id || null;
+// Arrived to be added to the panel (a gallery tile's Add to my panel).
+const intent = /(^#|&)add=1(&|$)/.test(location.hash) || new URLSearchParams(location.search).get('add') === '1';
+// The panel's address, asked once (Add or Open), then remembered.
+const addr = () => store.get('display');
+// `#formula=…` or `#bundled=<stem>` (the panel's own share links), marked
+// for Add.
+const toPanel = (a, hash, add) => { location.href = `http://${a}/${hash}${add ? '&add=1' : ''}`; };
 // Another link pasted into this tab: start again with it.
 addEventListener('hashchange', () => location.reload());
 const here = () => new URL('./', location.href).href;
@@ -40,6 +54,12 @@ const named = bundled && fetch(`../formulas/src/${bundled}.psi`).then((r) => (r.
 if (!has || (!bundled && !f.src.trim())) {
   $('f-none').hidden = false;
 } else {
+  // Add to my panel from the gallery, the address known: straight on (the
+  // page itself still loads, without the mark, for the way back).
+  if (intent && addr()) {
+    history.replaceState(null, '', location.pathname + location.search.replace(/[?&]add=1\b/, '').replace(/^&/, '?') + location.hash.replace(/&add=1\b/, ''));
+    toPanel(addr(), link({ ...f, stem: bundled }, ''), true);
+  }
   // #f is aria-busy until start() has wired everything (the preview, the
   // buttons, the highlighted code): what a test waits for, not #f-name.
   start().catch((e) => { $('f-cap').textContent = 'This page could not load: ' + (e.message || e); })
@@ -130,15 +150,20 @@ async function start() {
     sub();
   }
 
-  // Open on my display: asked once, then remembered.
-  const addr = () => store.get('display');
+  // Add to my panel (saved there) and Open on my display (its editor): the
+  // address asked once, then remembered.
   const where = () => { const a = addr(); $('f-where').hidden = !a; $('f-where-addr').textContent = a || ''; };
   where();
-  const go = (a) => { location.href = `http://${a}/${hash()}`; };
-  $('f-open').onclick = () => { if (addr()) go(addr()); else ask(); };
-  $('f-change').onclick = ask;
+  let adding = true;
+  const go = (a) => toPanel(a, hash(), adding);
+  $('f-add').onclick = () => { adding = true; if (addr()) go(addr()); else ask(); };
+  $('f-open').onclick = () => { adding = false; if (addr()) go(addr()); else ask(); };
+  $('f-change').onclick = () => ask();
   function ask() {
     $('f-ask').hidden = false;
+    $('f-go').textContent = adding ? 'Add' : 'Open';
+    $('f-ask-what').textContent = adding ? 'The Formula is saved on your display; then you can play it now, add it to a playlist, or use it as the look.'
+      : 'The Formula opens in the display’s editor, where you can change it and save it.';
     $('f-addr').value = addr() || 'opendmd.local';
     $('f-addr').focus();
     $('f-addr').select();
@@ -160,7 +185,7 @@ async function start() {
     if (!near && $('f-ask').dataset.sure !== a) {
       $('f-ask').dataset.sure = a;
       $('f-addr-err').hidden = false;
-      $('f-addr-err').textContent = `${a} doesn’t look like a display on your own network (like opendmd.local or 192.168.1.50): the formula would go to that site. Press Open again if you’re sure.`;
+      $('f-addr-err').textContent = `${a} doesn’t look like a display on your own network (like opendmd.local or 192.168.1.50): the formula would go to that site. Press ${adding ? 'Add' : 'Open'} again if you’re sure.`;
       return;
     }
     store.set('display', a);
@@ -273,6 +298,8 @@ async function start() {
   $('f-submit').onclick = () => { openSub(); $('f-sub').scrollIntoView({ behavior: 'smooth', block: 'start' }); $('s-desc').focus({ preventScroll: true }); };
   if (/(^#|&)submit(=|&|$)/.test(location.hash)) openSub();
   links();
+  // Add to my panel from the gallery with no address yet: ask for it.
+  if (intent && !addr()) ask();
 }
 
 // copy() of text still to come (the short link): a ClipboardItem holding a

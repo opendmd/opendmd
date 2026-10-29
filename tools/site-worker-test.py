@@ -319,6 +319,15 @@ def short_in_browser(base: str, sh: Short) -> None:
         page.wait_for_timeout(300)
         seen = page.evaluate("window.__csp || []")
         check(not seen and not errors and page.locator("#f-qr svg").count() == 1, f"the short page: no CSP violation or error {seen[:2]} {errors[:2]}")
+        # Add to my panel: a top-level navigation to the display (remembered
+        # here; never a real one) with the text, the slider and the mark.
+        page.evaluate("localStorage.setItem('odmd.display', '192.168.1.50')")
+        ctx.route("http://192.168.1.50/**", lambda r: r.fulfill(body="<p>display</p>", content_type="text/html"))
+        with page.expect_navigation(url=re.compile(r"^http://192\.168\.1\.50/"), timeout=20000):
+            page.click("#f-add")
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(page.url).fragment)
+        check(q == {"formula": [stored], "name": [sh.b_name], "a": ["0.5"], "add": ["1"]},
+              f"the short page: Add to my panel hands its Formula to the display ({page.url[:60]}…)")
         ctx.close()
         # The site out of reach: the long link, which needs nothing from it.
         ctx = browser.new_context()

@@ -28,10 +28,10 @@ with its sliders if it has any. The bundled ten:
 
 **More Formulas** opens the online [formula gallery](#the-formula-gallery):
 every Formula OpenDMD has made (tunnels, rotozooms, plasma, fire, rain,
-clocks and more) and the ones people have shared. Open one there and
-press **Open on my display**: it opens in your panel's editor, where you
-can play it, add it to a playlist or save it (it is then under *Your
-formulas*).
+clocks and more) and the ones people have shared. Press **Add to my
+panel** on one (see [Add to my panel](#add-to-my-panel)): your panel's app
+opens with it saved, under *Your formulas*, and offers to play it now, add
+it to a playlist, or use it as the look.
 
 **Big clock** shows what a GIF can't do: it draws
 the real time in big rainbow digits, with a bar along the bottom that
@@ -626,6 +626,31 @@ milliseconds); all the examples are light or medium.
   the panel (it keeps the slow picture while it has the memory to spare);
   a look, and the panel without that memory, draw it whole every frame.
 
+## Add to my panel
+
+**Add to my panel** is on every tile in the [formula
+gallery](#the-formula-gallery) and on every formula's own page (a share
+link, long or short). Press it and your panel's app opens with the formula
+saved on the panel, under *Your formulas*, and a small box:
+
+- **Play now**: on the panel straight away, until the playlist moves on.
+- **Add to a playlist…**: pick which; the playlist names the formula, so a
+  later change to it shows there too.
+- **Use as the look**: for a formula that can be a look (marked *look*),
+  drawn over every GIF.
+
+The first time, it asks for your display's address (it suggests
+`opendmd.local`; the name or IP address your display shows in Settings ›
+Device); after that one press is enough. Your phone or computer must be on
+the same network as the display. A bundled formula is on the panel already,
+so nothing is saved; one saved before isn't saved twice (the box says
+*Already on your panel*).
+
+If it can't be added the box says why: the panel has no card (or can't
+read it), the formula doesn't work (and on which line; **Open it in the
+editor** to fix it), or it's too long for the panel (8 KB once its comment
+lines are left out).
+
 ## Sharing
 
 **Copy share link** gives a link to the formula's own page on the OpenDMD
@@ -633,10 +658,9 @@ site, with the whole formula in it, its name and its sliders. Anyone can
 open it, with or without a player: the page plays it in the panel look,
 shows its code and its sliders, and has
 
-- **Open on my display**: asks once for your display's address (it
-  suggests `opendmd.local`; the name or IP address your display shows) and
-  opens the formula in your display's editor, where you can save it. Your
-  phone or computer must be on the same network as the display.
+- **Add to my panel** (see [Add to my panel](#add-to-my-panel)).
+- **Open on my display**: opens the formula in your display's editor
+  instead (the same address), to change it before you save it.
 - **Try it in the demo**: opens it in the [online demo](https://opendmd.dev/demo/)'s
   editor.
 - **Copy code** and **Copy link**, and a QR code of the link to open it on
@@ -654,9 +678,9 @@ The [formula gallery](https://opendmd.dev/formulas/) on the OpenDMD
 site has every Formula OpenDMD has made (the ones marked *on the panel* are
 the bundled ten) and the ones people have shared. Each tile shows what the
 formula says of itself: its name, its line about it, its controls and
-whether it can be a look. **Open** shows one on its own page, where **Open
-on my display** sends it to your panel's editor; **Remix** opens it in the
-demo's editor.
+whether it can be a look. **Add to my panel** saves it on your panel
+(see [Add to my panel](#add-to-my-panel)); **Open** shows it on its own
+page, with its sliders and code; **Remix** opens it in the demo's editor.
 
 To add yours, open its share link and press **Submit to the gallery**: give
 it a name and a line about it (they become the formula's own `name` and

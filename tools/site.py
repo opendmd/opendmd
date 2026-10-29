@@ -335,6 +335,7 @@ ul.ftiles{list-style:none;padding:0;display:grid;grid-template-columns:repeat(au
 .ftile .fctl{color:var(--mut);font-size:13px;margin-top:4px}
 .ftile .fbadge{display:inline-block;vertical-align:middle;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:6px;font-size:12px;font-weight:normal;color:var(--mut)}
 .ftile .facts .cta{padding:6px 14px;font-size:14px}
+.ftile .facts .add{display:block;text-align:center;margin:6px 0 2px}
 
 /* Cards: feature lists, the hardware page */
 ul.features{list-style:none;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin:18px 0}
@@ -756,7 +757,7 @@ def write_gallery(out: Path, examples: Path, contrib: Path | None, tool: Path, w
     body = gallery_page.build(page_dir, page_dir / "src", contrib, tool)
     (out / GALLERY_PAGE).write_text(PAGE.format(
         title="Formula gallery · OpenDMD", description=html.escape("Formulas for the OpenDMD LED display: open one, "
-                                                                     "try it, send it to your display."),
+                                                                     "try it, add it to your display."),
         up=up, head="",
         brand=(f'<picture class="led" style="--cols:{wm["w"]};--rows:{wm["h"]}"><img src="{up}art/{wm["src"]}" '
                f'alt="OpenDMD" width="{wm["w"]}" height="{wm["h"]}"></picture>'),

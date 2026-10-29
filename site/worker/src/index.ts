@@ -154,7 +154,7 @@ async function page(request: Request, url: URL, env: Env, f: Stored): Promise<Re
   const res = await env.ASSETS.fetch(new Request(new URL("/f/", url), { method: request.method }));
   if (!res.ok) return res;
   const name = f.name || "Shared formula";
-  const about = f.about || "A formula for the OpenDMD LED display: try it, then open it on your own display.";
+  const about = f.about || "A formula for the OpenDMD LED display: try it, then add it to your own display.";
   const canonical = `${url.origin}/f/${f.id}`;
   // The page's data for f.js (a JSON block, not a script: the CSP has no
   // inline scripts, and none is needed). `<` escaped, so the source cannot

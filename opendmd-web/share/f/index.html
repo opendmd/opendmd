@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<meta name="description" content="A formula for the OpenDMD LED display: try it, then open it on your own display.">
+<meta name="description" content="A formula for the OpenDMD LED display: try it, then add it to your own display.">
 <meta name="referrer" content="no-referrer">
 <title>Formula · OpenDMD</title>
 <link rel="preload" href="../fonts/silkscreen.woff2" as="font" type="font/woff2" crossorigin>
@@ -23,17 +23,18 @@
 <p class="lead" id="f-about" hidden></p>
 <div class="card stage"><canvas class="panel" id="f-panel"></canvas><p class="cap" id="f-cap"></p><div id="f-sl" class="sls"></div></div>
 <div class="acts">
-<button class="pri" id="f-open">Open on my display</button>
+<button class="pri" id="f-add">Add to my panel</button>
+<button id="f-open">Open on my display</button>
 <a class="btn" id="f-demo" href="../demo/">Try it in the demo</a>
 <button id="f-copy-code">Copy code</button>
 <button id="f-copy-link">Copy link</button>
 <button id="f-submit">Submit to the gallery…</button>
 </div>
-<p class="cap" id="f-where" hidden>Opens on <b id="f-where-addr"></b> · <button class="txt" id="f-change">Change</button></p>
+<p class="cap" id="f-where" hidden>Your display: <b id="f-where-addr"></b> · <button class="txt" id="f-change">Change</button></p>
 <form id="f-ask" class="card" hidden>
 <label for="f-addr">Your display’s address</label>
 <div class="row"><input id="f-addr" name="addr" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="opendmd.local" value="opendmd.local"><button class="pri" id="f-go">Open</button></div>
-<p class="cap">The name or IP address your display shows on its screen and in its web app (Settings › Device). Your device must be on the same network as the display. The formula opens in the display’s editor, where you can save it.</p>
+<p class="cap">The name or IP address your display shows on its screen and in its web app (Settings › Device). Your device must be on the same network as the display. <span id="f-ask-what"></span></p>
 <p class="cap bad" id="f-addr-err" hidden></p>
 </form>
 <section class="card sub" id="f-sub" hidden aria-labelledby="f-sub-h">

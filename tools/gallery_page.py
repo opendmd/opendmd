@@ -178,20 +178,23 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path) -> s
                 f'<h3>{t(name)}{badges}</h3><p class="fdesc">{t(e["about"])}</p>'
                 + (f'<p class="fctl">Controls: {t(", ".join(ctl))}</p>' if ctl else "")
                 + f'<p class="fby">by {t(e["author"])} · <a href="{url}" rel="license">{lic}</a></p>'
-                f'<p class="facts"><a class="cta" href="../f/{t(share_hash(e))}">Open</a>'
+                # Add to my panel: the Formula's page with the mark, which hands it to
+                # the panel at once once its address is known (else asks for it).
+                f'<p class="facts"><a class="cta add" href="../f/{t(share_hash(e))}&amp;add=1">Add to my panel</a>'
+                f'<a class="cta alt" href="../f/{t(share_hash(e))}">Open</a>'
                 f'<a class="cta alt" href="../demo/{t(share_hash(e, (name + " remix")[:60]))}">Remix</a></p></li>')
     community = "".join(tile(e, f"thumbs/{e['slug']}.png") for e in entries)
     ex = "".join(tile(e, f"examples/{e['slug']}.png") for e in seeds)
     how = (f'<a href="{REPO}/tree/main/gallery">how to add yours</a>')
     return (f'<h1>Formula gallery</h1>\n<p class="lead">Formulas are a few lines of maths that draw on the display, every pixel '
-            f'at once. Open one to watch it, change its sliders and send it to your display; Remix opens it in the demo\'s '
-            f'editor. Made one you like? Its page has <strong>Submit to the gallery</strong>, or read {how}.</p>\n'
+            f'at once. <strong>Add to my panel</strong> saves one on your display, ready to play, add to a playlist or use as '
+            f'the look; Open shows it here with its sliders and code; Remix opens it in the demo\'s editor. Made one you like? Its page has <strong>Submit to the gallery</strong>, or read {how}.</p>\n'
             f'<h2 id="community">From the community</h2>\n'
             + (f'<ul class="ftiles">{community}</ul>\n' if community else
                '<p class="tiles-note">Nothing here yet: be the first. Make a formula in the <a href="../demo/#formulas">demo</a>, '
                'then Copy share link, and on its page, Submit to the gallery.</p>\n')
             + f'<h2 id="examples">Examples</h2>\n<p class="tiles-note">By OpenDMD (CC0). The ones marked <em>on the panel</em> come with '
-            f'the web app; Open any of the others and send it to your display from its page.</p>\n'
+            f'the panel and need no saving; the others are saved on your display when you add them.</p>\n'
             f'<ul class="ftiles">{ex}</ul>\n')
 
 
