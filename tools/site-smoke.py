@@ -844,7 +844,7 @@ def psi_reference(browser, base: str, site: Path, errors: list[str]) -> None:
     rules = (site / "_headers").read_text().split("\n\n")
     csp = next(l.split(": ", 1)[1] for l in rules[0].splitlines() if l.strip().startswith("Content-Security-Policy:"))
     check((site / "dev/psi/index.html").is_file(), "psi reference: dev/psi/index.html is in the site")
-    check('href="../dev/psi/"' in (site / "guide/formulas.html").read_text(), "psi reference: linked from the guide's menu")
+    check('href="../dev/psi/index.html"' in (site / "guide/formulas.html").read_text(), "psi reference: linked from the guide's menu")
     for size in SIZES:
         page = new_page(browser, size, errors)
         violations: list[str] = []
