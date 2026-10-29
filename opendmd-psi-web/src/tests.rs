@@ -315,6 +315,11 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
         (out, p.loop_ms())
     };
     for e in crate::examples() {
+        // (`rate` is left out inside a part: a slow layer that moves draws
+        // every frame there, not as the formula does.)
+        if opendmd_psi::compile(&e.src).is_ok_and(|p| p.rate().is_some()) {
+            continue;
+        }
         let inner: String = e.src.lines().map(|l| format!("  {l}\n")).collect();
         for ms in [0, 1730, 6420] {
             let (want, lp) = draw(&e.src, ms);
@@ -341,8 +346,10 @@ fn every_example_pasted_in_as_a_part_draws_the_same() {
 #[cfg(not(target_arch = "wasm32"))]
 fn every_example_as_a_look() {
     // (Tunnel: ~4.6 ms as an effect with its still cache, ~14.4 without
-    // one, and a look never has one. Time gate: ~6.1 ms and ~15.6.)
-    const TOO_HEAVY: &[&str] = &["Time gate", "Tunnel"];
+    // one, and a look never has one. Time gate: ~6.1 ms and ~15.6. Storm
+    // front: its slow clouds are drawn every frame in a look, two noises a
+    // pixel.)
+    const TOO_HEAVY: &[&str] = &["Storm front", "Time gate", "Tunnel"];
     let mut heavy = Vec::new();
     let mut chosen = Vec::new();
     for e in crate::examples() {
@@ -498,6 +505,19 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Searchlight", 0, 0x6688521f0639056f),
     ("Searchlight", 1730, 0x27134696e6b29b96),
     ("Searchlight", 6420, 0xf3755c40b9cf4ce2),
+    // console-b (2026-10-29): `cycle` and `layer rate N`.
+    ("Cycled plasma", 0, 0x29972ee92caa0f1b),
+    ("Cycled plasma", 1730, 0x977b747bc2dd4286),
+    ("Cycled plasma", 6420, 0x3928057f5f1044f8),
+    ("Waterfall", 0, 0x48cec5829abeb314),
+    ("Waterfall", 1730, 0x2883fa1fa89f947c),
+    ("Waterfall", 6420, 0xc139dc8e6cbb20cd),
+    ("Copper sky", 0, 0x37d19a046136c611),
+    ("Copper sky", 1730, 0x30938cc2cfb8aa77),
+    ("Copper sky", 6420, 0x37d16e5a38a4527b),
+    ("Storm front", 0, 0x98a68d2c73ac89dd),
+    ("Storm front", 1730, 0x61b0d4e51c3a6693),
+    ("Storm front", 6420, 0x1d518c5020f2eb93),
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
