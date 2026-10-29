@@ -1,0 +1,83 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Endless road"
+about "OutRun into a synthwave sunset: bends and hills without end"
+loop forever
+fps 100
+-- Endless road: an OutRun drive into a synthwave sunset. Bends and hills
+-- come from noise along the distance driven, which grows without end, so
+-- the track doesn't repeat; each time it plays it starts somewhere else.
+-- Palms and street lamps pass now and then on either side.
+-- (Written tight: the panel's link has room for 2,048 characters.)
+-- Colours: black (0), road (1, 2), kerbs (3, 4), verge (5, 6), sun and
+-- lamps (7 to 9), the car (10, 11), the sky top down (12 to 18)
+palette road = #000,#400032,#800064,#e4cf00,#f00,#3f0000,#7f0000,
+  #e4cf00,#ff7800,#ff2800,#bf0000,#ff5000,
+  #1478ff,#2850ff,#3c28ff,#5000ff,#7b00f2,#a700e4,#d300d6
+-- The car: 17 spans, from*32 + to (CP) and row*8 + ink*16 (CQ: ink 4
+-- body, 5 glass and tyres, 6 tail lights)
+table CP=273,242,273,211,242,118,56,69,242,663,56,69,242,663,56,56,25
+table CQ=68,60,61,52,53,44,36,38,37,38,28,30,29,30,20,12,5
+-- The mountains: three peaks (middle, half width at the foot)
+table MC=8,70,126
+table MW=9,13,8
+-- The sun's rows and half widths
+table UY=20,21,23,24,25,26,27,28,29,30,31
+table UC=7.2,7.6,8,8,7.9,7.6,7.2,6.7,6,5,3.5
+-- Roadside things: 4 lines each in twentieths of the road's half width
+-- (out from the road, up; from, to): a palm, a lamp post (its lamp lit)
+table X0=0,5,5,5,0,0,-6,-6
+table Y0=0,22,22,22,0,26,27,26
+table X1=5,16,-5,8,0,-6,-9,-8
+table Y1=22,17,17,27,26,27,26,25
+frame {
+  u=t*.15+seed*1000                    -- distance driven, in bends
+  h0=noise(u,0,0); h1=noise(u+.03,0,0)  -- heading here, just ahead
+  v0=noise(u,5,0)                      -- height here, and its slope
+  dv=(noise(u+.01,5,0)-v0)*100
+  cx=50.99999+(h1-h0)*80               -- the car's left edge: out in bends
+  mx=(.5-h0)*60; sunx=64+mx            -- the sky turns with the road
+  g=t*10/14                            -- a place by the road every 14 stripes
+}
+draw {
+  for k<3 {
+    for j<7 {
+      hm=MW[k]-j*1.9; mc=hm<0?-999:MC[k]+mx
+      line(mc-hm,19+j,mc+hm,19+j,.35)
+    }
+  }
+  for k<11 { line(sunx-UC[k],UY[k],sunx+UC[k],UY[k],.2) }
+  -- four places, two each side: now and then a palm or a lamp there.
+  -- Its distance d in stripes, its row (on the hill), where the road
+  -- is at that row, its size; moved off the panel when not there
+  for k<4 {
+    ph=g+(k*.29+k*k*.04); f=frac(ph); n=ph-f
+    d=(1-f)*14+.7; zh=d*.0075; s=1.2/d
+    by=19.5-15/d+clamp((noise(u+zh,5,0)-v0-zh*dv)*d*200,-6,2)
+    sd=(k%2)*2-1
+    bx=noise(n,k*5,0)>.45 or d>11 or by>19?-999 :
+      64+(noise(u+.1125/max(19.5-by,.5),0,0)-h0)*2000+sd*s*47
+    ty=(noise(n,k*5+2,0)>.5)*4; ax=sd*s
+    for j<4 {
+      e=ty+j
+      line(bx+X0[e]*ax,by+Y0[e]*s,bx+X1[e]*ax,by+Y1[e]*s,e>5?.46:.33)
+    }
+  }
+  for k<17 {
+    p=CP[k]/32; rq=CQ[k]/8; yq=floor(rq)
+    line(cx+floor(p),yq,cx+frac(p)*32,yq,frac(rq)/2)
+  }
+}
+-- each row looks ahead: how far the road bends there, and how far a hill
+-- lifts or hides it (a crest moves rows to where the road is out of sight)
+lo=py<19
+zh=lo?.1125/(19.5-py):0             -- the row's depth, in bends
+un=u+zh
+q=py-clamp((noise(un,5,0)-v0-zh*dv)*zh*26667,-6,2)
+hw=50.7-2.6*q                          -- the road's half width there
+alt=frac(t*10+39/max(hw,1.3))<.5       -- light or dark stripe: 10 a second
+adx=abs(px-(64+(noise(un,0,0)-h0)*2000))
+-- 0 road, 1 kerb, 2 verge/sky; drawn 3 sun, 4-6 car, 5 black, 7 lamp
+m=max((adx>=hw)+(adx>=hw*1.2),ink*16)
+pal(road,pick(m,(1+alt)/18,(3+alt)/18,(lo?5+alt:floor(28.44-py*.515))/18,
+  (py<23?9:py<27?8:7)/18,10/18,0,11/18,7/18))
