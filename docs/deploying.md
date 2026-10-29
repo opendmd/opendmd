@@ -345,10 +345,12 @@ There is no other host.
 - **From the dev box**, with the owner: `make fw-release` (or a release's
   files in `dist/`), then `make site-deploy` (refuses a dirty tree), or
   `make site` and `make site-deploy-built`. `make site-deploy-check` is a
-  dry run. Build with `GALLERY=` and `API_ARCHIVE=` (a checkout of the
-  public gallery repo's `gallery/` and `dev/api/`, as release.yml fetches
-  them), or the deployed site lacks the contributions and the earlier
-  releases' API pages.
+  dry run. Build with `API_ARCHIVE=` (a checkout of the public gallery
+  repo's `dev/api/`, as release.yml fetches it), or the deployed site
+  lacks the earlier releases' API pages; `GALLERY=` (its `gallery/`) only
+  fills the built gallery page, which is served until the gallery store
+  below is ready. After the deploy, `make site-deploy-built` posts to
+  `/api/gallery/sync` so the store holds the new build's examples at once.
 - **Short links** (`https://opendmd.dev/f/<id>`, made by the formula
   page's Copy link) are stored in the D1 database `opendmd-site`, bound to
   the Worker as `DB` in `site/worker/cloudflare.config.ts`. Its schema is
@@ -364,13 +366,29 @@ There is no other host.
   `site/worker/.wrangler/state` (the migrations are applied to it first)
   and simulates the rate limiter; nothing in the Cloudflare account is
   touched. Delete that folder to start the local database again.
+- **The gallery store** (`/formulas/`): the same D1 holds the gallery.
+  The Worker seeds it with the deployed build's examples (from
+  `formulas/gallery.json`) and, from a cron trigger every 5 minutes,
+  syncs the public gallery repo's `gallery/`: it reads `main`'s commit from
+  git's `info/refs` and, when it moved, that commit's tarball from GitHub
+  (no token, no API rate limit), checks each changed file as the gallery
+  checker does and draws its thumbnail. **A merged contribution is on
+  opendmd.dev within about five minutes, with no deploy.** A file that
+  fails keeps its last good version on the site; a removed file leaves it.
+  `POST https://opendmd.dev/api/gallery/sync` runs a sync at once (anyone
+  may; one every 10 s) and answers with what it did; `GET
+  /api/gallery` shows the store: the commit synced, every entry and what
+  was refused, and why. Until the store holds the build's examples and
+  one sync, or if D1 fails, the built page is served (header `X-Gallery:
+  built`, else `store`).
 - **The public gallery repo** (github.com/opendmd/opendmd.github.io,
   serving nothing) takes Formula contributions by pull request in
   `gallery/`, checked by its `gallery-check.yml`. A release updates its
   own files with `tools/gallery-repo-publish.sh` (`make
   gallery-repo-publish`): the check and its vendored checker, the READMEs,
   and the release's frozen API page added to `dev/api/`. A merged
-  contribution appears on the site at the next deploy.
+  contribution appears on the site within minutes (the gallery store,
+  above).
 
 ### Installing with espflash (USB)
 
