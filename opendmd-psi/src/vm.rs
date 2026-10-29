@@ -827,8 +827,11 @@ pub(crate) fn scalar_value(
 }
 
 /// A wide noise of the small parts `x y z` with noise context `code -
-/// NOISE_O`'s lattice offsets (out of line: the frame loop is in IRAM).
+/// NOISE_O`'s lattice offsets (out of line, and in IRAM beside the frame
+/// loop: a row step, run between the row's lanes, whose flash copy cost
+/// Endless road ~1.1 ms a frame on the spare — roadprobe-b, two a row).
 #[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn noise_o(x: i32, y: i32, z: i32, sc: &[i32; MAX_SCALARS], c: u8) -> i32 {
     fixed::noise_off(x, y, z, ctx(sc, c))
 }
@@ -1336,6 +1339,7 @@ fn colours(p: &[[u8; 3]; 32], v: [i32; 2], k: i32) -> [[u8; 3]; 2] {
 /// then (at `PICK_MAX`) the colour of 0, a pick's value outside them.
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn pick_colours(
     sc: &[i32; MAX_SCALARS],
     pk: &Op,
@@ -1439,10 +1443,20 @@ fn mulr_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 3]) {
 }
 
 /// A sprite's pixels along the lane (its header read once), the column
-/// and row read with a stride (0: a value for the lane).
+/// and row read with a stride (0: a value for the lane); a row value
+/// outside its rows fills the lane with 0 at once. In IRAM (road-cost).
 #[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn spr_lane<const N: usize>(d: &mut [i32; N], args: [Arg; 2], tabs: &[i32; MAX_TABLE], at: u8) {
     let hd = SprHead::new(tabs, at);
+    // A row value outside the sprite's rows: 0 along the whole lane (as
+    // `read` gives each pixel).
+    if let Arg::Sc(v) = args[1] {
+        if (v >> 16) as u32 >= hd.h {
+            d.fill(0);
+            return;
+        }
+    }
     let mut one = [0i32; 2];
     let mut p = [core::ptr::null::<i32>(); 2];
     let mut stride = [0usize; 2];
@@ -1549,6 +1563,7 @@ fn load_under<const N: usize>(d: &mut [i32; N], under: Option<&[u8]>, ch: u8) {
 
 /// The draw stage's canvas under the lane, 0..1; 0 without one.
 #[inline(never)]
+#[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
 fn load_ink<const N: usize>(d: &mut [i32; N], ink: Option<&[u8]>) {
     match ink {
         Some(k) => {
