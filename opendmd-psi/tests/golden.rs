@@ -2038,13 +2038,21 @@ fn draw_loops_as_lanes_are_a_turn_at_a_time() {
 /// (`include_str!`): the wasm run has no file system.
 macro_rules! example {
     ($slug:literal) => {
-        strip_header(include_str!(concat!("../../opendmd-web/formulas/", $slug, ".psi")))
+        strip_header(include_str!(concat!(
+            "../../opendmd-web/formulas/",
+            $slug,
+            ".psi"
+        )))
     };
 }
 
 fn strip_header(text: &str) -> String {
     text.split_inclusive('\n')
-        .skip_while(|l| ["-- author:", "-- licence:", "-- license:", "-- bundle"].iter().any(|h| l.starts_with(h)))
+        .skip_while(|l| {
+            ["-- author:", "-- licence:", "-- license:", "-- bundle"]
+                .iter()
+                .any(|h| l.starts_with(h))
+        })
         .collect()
 }
 
@@ -2343,4 +2351,245 @@ fn fused_runs_are_their_steps() {
     for (name, &c) in KINDS.iter().zip(&kinds) {
         assert!(c * 30 > n, "{name}: only {c} fused runs in {n} formulas");
     }
+}
+
+/// Every bundled example's frames with the row stage as a table
+/// (`crate::rows`, and the draw loops as lanes) and a row at a time
+/// (`render_rows_ink_turns`), at both lane widths and across its loop; and
+/// the examples with a real row stage do take the table.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_row_stage_as_a_table_is_the_rows_one_by_one() {
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let all = [
+        ("bars-to-stars", example!("bars-to-stars")),
+        ("big-clock", example!("big-clock")),
+        ("clock", example!("clock")),
+        ("copper-bars", example!("copper-bars")),
+        ("corner-clock", example!("corner-clock")),
+        ("crt", example!("crt")),
+        ("endless-road", example!("endless-road")),
+        ("fire", example!("fire")),
+        ("glitter", example!("glitter")),
+        ("kaleidoscope", example!("kaleidoscope")),
+        ("lava-lamp", example!("lava-lamp")),
+        ("matrix", example!("matrix")),
+        ("moire", example!("moire")),
+        ("old-photo", example!("old-photo")),
+        ("old-tv", example!("old-tv")),
+        ("plasma-letters", example!("plasma-letters")),
+        ("plasma", example!("plasma")),
+        ("rainbow-wave", example!("rainbow-wave")),
+        ("rain", example!("rain")),
+        ("rings", example!("rings")),
+        ("rings-through-stripes", example!("rings-through-stripes")),
+        ("rotozoom-floor", example!("rotozoom-floor")),
+        ("rotozoom", example!("rotozoom")),
+        ("scanlines", example!("scanlines")),
+        ("searchlight", example!("searchlight")),
+        ("spotlight", example!("spotlight")),
+        ("starfield", example!("starfield")),
+        ("stripes", example!("stripes")),
+        ("time-gate", example!("time-gate")),
+        ("tunnel", example!("tunnel")),
+        ("vignette", example!("vignette")),
+        ("wireframe-cube", example!("wireframe-cube")),
+        ("xor-pattern", example!("xor-pattern")),
+    ];
+    let mut taken = Vec::new();
+    for (name, src) in &all {
+        let p = compile(src).unwrap_or_else(|e| panic!("{name}: {}", e.render(src)));
+        if let Some(n) = opendmd_psi::row_table(&p, &mut Scratch::<128>::new(), &OWN) {
+            taken.push((*name, n));
+        }
+        for ms in [0, 40, 1234, 2399, 4800, 9000, 61_000] {
+            for a in [0, 1 << 15, 1 << 16] {
+                let i = opendmd_psi::Inputs { a, ..inputs(ms) };
+                let want = frame_and_ink::<128>(&p, &i, &under, true);
+                assert!(
+                    frame_and_ink::<128>(&p, &i, &under, false) == want,
+                    "{name} at {ms} ms, a {a}\n{}",
+                    p.listing()
+                );
+                assert!(
+                    frame_and_ink::<64>(&p, &i, &under, false) == want,
+                    "{name} (64 lanes) at {ms} ms, a {a}"
+                );
+            }
+        }
+    }
+    eprintln!("row tables (values kept): {taken:?}");
+    for name in ["endless-road", "time-gate", "rotozoom-floor", "copper-bars"] {
+        assert!(
+            taken.iter().any(|&(n, _)| n == name),
+            "{name} runs its rows one by one: {taken:?}"
+        );
+    }
+}
+
+/// Random row stages: chains of row values (of `py`, `y`, the frame's
+/// values, tables read by row, noise along the rows, divisions that can
+/// meet 0, selects, a `loop forever`'s wide noise, values that share slots
+/// as the compiler reuses them), read by the pixel steps directly, through
+/// a pick of row values, a palette, a layer; drawn with the row stage as a
+/// table and a row at a time, at both lane widths, at times across the loop
+/// and past it, sliders in and out of range, and (a look's partial redraw)
+/// some rows only. `PSI_FUZZ_N` sets the number of formulas (1,000).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn random_row_stages_are_the_rows_one_by_one() {
+    let mut r = Rng(0x0e0a_d5fa_b1e5_0001);
+    let mut under = vec![0u8; W * H * 3];
+    picture(&mut under);
+    let n: usize = std::env::var("PSI_FUZZ_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000);
+    fn row(r: &mut Rng, ks: &[String], d: u32) -> String {
+        if d == 0 || r.below(4) == 0 {
+            let leaves = ["py", "y", "f", "g", "t", "a", "0.5", "-3.25", "19", "1/3"];
+            return if !ks.is_empty() && r.below(2) != 0 {
+                ks[r.below(ks.len())].clone()
+            } else {
+                leaves[r.below(leaves.len())].to_string()
+            };
+        }
+        let e = |r: &mut Rng| row(r, ks, d - 1);
+        match r.below(16) {
+            0..=3 => {
+                let op = ["+", "-", "*", "/", "%", "<", ">=", "and", "==", "!=", "or"][r.below(11)];
+                format!("({} {op} {})", e(r), e(r))
+            }
+            4 => format!(
+                "{}({})",
+                ["sin", "cos", "tri", "sqrt", "abs", "floor", "frac"][r.below(7)],
+                e(r)
+            ),
+            5 => format!("T[{}]", e(r)),
+            6 => format!("T[py % 6]"),
+            7 => format!(
+                "noise({}, {}, {})",
+                e(r),
+                ["0", "5", "f", "py/4"][r.below(4)],
+                ["0", "1", "g"][r.below(3)]
+            ),
+            8 => format!("noise(f + T[py % 6]*0.01, 5, 0)"),
+            9 => format!("({} ? {} : {})", e(r), e(r), e(r)),
+            10 => format!("clamp({}, -6, {})", e(r), e(r)),
+            11 => format!("1/({} - {})", e(r), e(r)),
+            12 => format!("hash({}, {})", e(r), r.below(9)),
+            13 => format!("mix({}, {}, {})", e(r), e(r), e(r)),
+            14 => format!("min({}, {})*{}", e(r), e(r), e(r)),
+            _ => format!("smoothstep({}, {}, {})", e(r), e(r), e(r)),
+        }
+    }
+    let (mut ok, mut tabled, mut frames) = (0, 0, 0);
+    for k in 0..n {
+        let forever = k % 5 == 4;
+        let mut lines = String::new();
+        let mut ks: Vec<String> = Vec::new();
+        for j in 0..1 + r.below(14) {
+            let name = format!("r{j}");
+            lines += &format!("{name} = {}\n", row(&mut r, &ks, 3));
+            ks.push(name);
+        }
+        let pick = |r: &mut Rng| ks[r.below(ks.len())].clone();
+        let colour = match r.below(5) {
+            0 => format!(
+                "rgb({}, frac(px*{} + {}), {})",
+                pick(&mut r),
+                pick(&mut r),
+                pick(&mut r),
+                pick(&mut r)
+            ),
+            1 => format!(
+                "pal(fire, pick(floor(abs(px - 64)/8) % 4, {}, {}, 0.25, {}))",
+                pick(&mut r),
+                pick(&mut r),
+                pick(&mut r)
+            ),
+            2 => format!("gray(abs(px - 64 - {}) < {})", pick(&mut r), pick(&mut r)),
+            3 => format!(
+                "pal(rainbow, frac({} + x))\nlayer add {{ gray(frac(px*{}) * {}) }}",
+                pick(&mut r),
+                pick(&mut r),
+                pick(&mut r)
+            ),
+            _ => format!(
+                "hsv(frac({} + {}), 1, frac(px/16 + {}))",
+                pick(&mut r),
+                pick(&mut r),
+                pick(&mut r)
+            ),
+        };
+        let head = if forever {
+            "loop forever\n".to_string()
+        } else {
+            format!("loop {}\n", 1 + k % 7)
+        };
+        let src = format!(
+            "{head}table T = 0.5, -2, 30, 100, 7, 0.125\nframe {{ f = t*0.{}; g = a*3 - 1 }}\n{lines}{colour}",
+            1 + r.below(9),
+        );
+        let p = match compile(&src) {
+            Ok(p) => p,
+            Err(e) => {
+                if k < 200 && std::env::var("PSI_SHOW").is_ok() {
+                    eprintln!("{}", e.render(&src));
+                }
+                continue;
+            }
+        };
+        ok += 1;
+        tabled +=
+            usize::from(opendmd_psi::row_table(&p, &mut Scratch::<128>::new(), &OWN).is_some());
+        for j in 0..4 {
+            let ms = [0, 333, 2999, 90_000][j];
+            let a = [0, 1 << 15, 1 << 16, -(3 << 16)][r.below(4)];
+            let i = opendmd_psi::Inputs {
+                a,
+                seed: 12345,
+                tw: opendmd_psi::Inputs::wide_ms(ms as u64 * 1000),
+                ..inputs(ms)
+            };
+            frames += 1;
+            let want = frame_and_ink::<128>(&p, &i, &under, true);
+            assert!(
+                frame_and_ink::<128>(&p, &i, &under, false) == want,
+                "case {k} at {ms} ms, a {a}: {src}\n{}",
+                p.listing()
+            );
+            assert!(
+                frame_and_ink::<64>(&p, &i, &under, false) == want,
+                "case {k} (64 lanes) at {ms} ms: {src}"
+            );
+            // Some rows only (a look's redraw): a row at a time, the same
+            // rows' bytes.
+            let rows = (r.next() as u32) | 1;
+            let mut s = Scratch::<128>::new();
+            let mut out = want.0.clone();
+            for b in 0..H {
+                if rows & (1 << b) != 0 {
+                    out[b * W * 3..(b + 1) * W * 3].fill(0x33);
+                }
+            }
+            let mut ink = Ink::boxed();
+            ink.0.copy_from_slice(&want.1);
+            render_rows_ink::<128>(
+                &p,
+                &mut s,
+                Some(&mut ink),
+                &i,
+                &OWN,
+                Some(&under),
+                rows,
+                &mut out,
+            );
+            assert!(out == want.0, "case {k} rows {rows:#x} at {ms} ms: {src}");
+        }
+    }
+    eprintln!("{n} formulas, {ok} compiled, {tabled} as row tables, {frames} frames compared");
+    assert!(ok * 10 > n * 6, "only {ok} of {n} compiled");
+    assert!(tabled * 2 > ok, "only {tabled} of {ok} took the row table");
 }
