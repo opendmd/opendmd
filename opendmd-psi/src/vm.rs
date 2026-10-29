@@ -1142,6 +1142,7 @@ pub(crate) fn lane_draw<const N: usize>(
         SUB => bin!(fast2, d, a, b, fixed::sub),
         MUL => bin!(fast2, d, a, b, fixed::mul),
         DIV => bin!(run2, d, a, b, fixed::div),
+        RECIP => un!(run1, d, a, fixed::recip),
         LT => bin!(fast2, d, a, b, fixed::lt),
         GT => bin!(fast2, d, a, b, fixed::gt),
         AND => bin!(fast2, d, a, b, fixed::and),
