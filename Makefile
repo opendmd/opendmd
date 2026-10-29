@@ -104,7 +104,7 @@ ARGS ?= --root $(CARD_ROOT)
 PACK_ARGS = $(if $(filter command line environment,$(origin ARGS)),$(ARGS),)
 
 .PHONY: test test-card test-wasm sim sim-build psi-bench psi-check check check-wasm web font web-serve web-mock web-smoke fmt clippy clean pack \
-	notices notices-check notices-check-web \
+	notices notices-check notices-check-web emu-build emu-card emu-smoke emu-probe emu-image-smoke emu-image-probe \
 	fw-build fw-sdkconfig-flavour fw-flash fw-monitor fw-capture fw-erase fw-clean fw-clippy fw-fmt \
 	fw-release fw-release-variant fw-release-flash fw-sign fw-ota updater www-push flasher flasher-smoke improv-check card-sync api-load screenshots \
 	site site-serve gallery-repo-publish site-smoke gallery-tool \
@@ -902,3 +902,35 @@ WORKERS ?= 3
 api-load:
 	@test -n "$(HOST)" || { echo "usage: make api-load HOST=<ip> [SECONDS_=120] [WORKERS=3] [PATHS=file]"; exit 2; }
 	uv run tools/api-load.py $(HOST) $(SECONDS_) --workers $(WORKERS) $(if $(PATHS),--paths $(PATHS))
+
+# The emulator lane (tools/emu/README.md): esp32sim at a pinned commit under
+# ~/scratch, a rootless FAT32 card, a boot of the real full flash image.
+# Correctness only, never timing. Agents may run it freely.
+EMU_DIR ?= ~/scratch/opendmd-emu-sim
+export EMU_DIR
+emu-build:
+	tools/emu/build-emulator.sh
+
+emu-card:
+	uv run --quiet tools/emu/mkcard.py
+
+# FW_IMAGE=<full.bin> boots that image; otherwise a normal 4mb release build
+# (incremental) goes to $(EMU_DIR)/smoke/.
+EMU_SMOKE_IMAGE = $(EMU_DIR)/smoke/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+emu-image-smoke:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_TARGET_DIR=$(EMU_DIR)/smoke/target DIST=$(EMU_DIR)/smoke/dist UPDATER_BUILD=$(EMU_DIR)/updater
+emu-smoke: emu-build emu-card
+	@$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-smoke;) \
+	uv run --quiet tools/emu/run.py smoke --image $(or $(FW_IMAGE),$(EMU_SMOKE_IMAGE)) $(EMU_ARGS)
+
+# A psi-probe image (the psi-probe feature alone, never `probe`; a probe app
+# is bigger, hence the smaller spare (EMU_PROBE_SPARE, 8 KB: 12 KB was left at beta.11)) to $(EMU_DIR)/probe/. FW_IMAGE=... skips the build.
+EMU_PROBE_SPARE ?= 8192
+EMU_PROBE_IMAGE = $(EMU_DIR)/probe/dist/opendmd-$(FW_VERSION)-4mb-full.bin
+emu-image-probe:
+	@test -f $(WWW_PACK) || $(MAKE) --no-print-directory web
+	$(MAKE) --no-print-directory fw-release-variant VARIANT=4mb FW_RELEASE_FEATURES=psi-probe FW_APP_SPARE=$(EMU_PROBE_SPARE) FW_RELEASE_TARGET_DIR=$(EMU_DIR)/probe/target DIST=$(EMU_DIR)/probe/dist UPDATER_BUILD=$(EMU_DIR)/updater
+emu-probe: emu-build emu-card
+	@$(if $(FW_IMAGE),,$(MAKE) --no-print-directory emu-image-probe;) \
+	uv run --quiet tools/emu/run.py probe --image $(or $(FW_IMAGE),$(EMU_PROBE_IMAGE)) $(EMU_ARGS)

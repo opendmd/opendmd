@@ -1,0 +1,159 @@
+#!/usr/bin/env -S uv run
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Boot a full flash image in esp32sim with the SD-SPI card, capture the console, judge it.
+
+    uv run tools/emu/run.py smoke|probe --image FULL.bin [--card SD.img] [--log LOG] [--seconds N] [--wall N]
+
+smoke: pass when the microSD mount, panel up, httpd, www pack verified and a GIF start
+       from the playlist are all seen; prints EMU_SMOKE_OK.
+probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0 or a missing/
+       mismatching golden line; prints EMU_PROBE_OK and the correctness lines.
+Either fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
+Correctness only: emulated cycles are not trustworthy, never read timings from this.
+"""
+import argparse, os, re, signal, subprocess, sys, time
+from pathlib import Path
+
+EMU_DIR = Path(os.environ.get("EMU_DIR", "~/scratch/opendmd-emu-sim"))
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+FAIL = [
+    (re.compile(r"Guru Meditation"), "Guru Meditation"),
+    (re.compile(r"panicked at|\bpanic\b.*\bat\b|abort\(\) was called|\bassert failed\b", re.I), "panic/abort"),
+    (re.compile(r"stack overflow", re.I), "stack overflow"),
+    (re.compile(r"^Backtrace:"), "backtrace"),
+    (re.compile(r"CORRUPT HEAP|heap_caps_.*(alloc|free) failed.*abort", re.I), "heap corruption"),
+]
+SMOKE = [
+    ("microSD mounted", re.compile(r"microSD mounted at /sdcard")),
+    ("panel up", re.compile(r"opendmd_firmware: panel up: 128x32")),
+    ("httpd started", re.compile(r"httpd started on port")),
+    ("www pack verified", re.compile(r"www: pack '.*' verified")),
+    ("GIFs from the playlist", re.compile(r"\] /gifs/\S+\.gif <- (prepared|original)")),
+]
+DIFFER = re.compile(r"(\d+)(?: of \d+ \w+)? differ")
+GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes, (\d+) differ")
+PROBE_KEYS = re.compile(r"psi-probe: (jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("mode", choices=["smoke", "probe"])
+    ap.add_argument("--image", type=Path, required=True)
+    ap.add_argument("--card", type=Path, default=EMU_DIR / "card" / "sd.img")
+    ap.add_argument("--log", type=Path)
+    ap.add_argument("--seconds", type=int, help="emulated seconds (default smoke 60, probe 400)")
+    ap.add_argument("--wall", type=int, help="wall-clock limit in s (default smoke 900, probe 3600)")
+    ap.add_argument("--rom", type=Path)
+    ap.add_argument("--min-gifs", type=int, default=3)
+    a = ap.parse_args()
+
+    sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
+    rom = a.rom or next(iter(sorted(Path.home().glob(".espressif/tools/esp-rom-elfs/*/esp32_rev300_rom.elf"))[::-1]), None)
+    for what, p in (("emulator (run make emu-build)", sim), ("flash image", a.image), ("card image (run mkcard.py)", a.card), ("esp32_rev300_rom.elf under ~/.espressif/tools/esp-rom-elfs/", rom)):
+        if not p or not Path(p).exists():
+            sys.exit(f"run: missing {what}: {p}")
+    seconds = a.seconds or (60 if a.mode == "smoke" else 400)
+    wall = a.wall or (900 if a.mode == "smoke" else 3600)
+    log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+
+    # the card is copy-on-write in RAM; the output is discarded (ESP32SIM_SD_OUT unset)
+    env = {**os.environ, "ESP32SIM_SD_IMG": str(a.card)}
+    env.pop("ESP32SIM_SD_OUT", None)
+    cmd = [str(sim), "--chip", "esp32", "--board", "esp32dev-sdspi", "--boot", "rom", "--rom", str(rom),
+           "--flash-image", str(a.image), "--max-seconds", str(seconds), "--console", "uart0", "--net", "none", "--no-dump"]
+    print("emu:", " ".join(cmd), flush=True)
+    print(f"emu: log {log}  (card {a.card}; {seconds} emulated s, {wall} s wall limit)", flush=True)
+
+    t0 = time.time()
+    seen, gifs, resets, failure, done_at = {}, 0, 0, None, None
+    golden = None
+    differ_bad = []
+    lines = []
+    p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
+    with open(log, "w") as lf:
+        import threading
+        stop = threading.Event()
+        def watchdog():
+            if not stop.wait(wall):
+                os.killpg(p.pid, signal.SIGKILL)
+        threading.Thread(target=watchdog, daemon=True).start()
+        for raw in p.stdout:
+            lf.write(raw)
+            line = ANSI.sub("", raw.rstrip("\n"))
+            lines.append(line)
+            if line.startswith("rst:0x"):
+                resets += 1
+                if resets > 1:
+                    failure = f"unexpected reset: {line}"
+            for rx, name in FAIL:
+                if rx.search(line):
+                    failure = f"{name}: {line[:200]}"
+            if failure:
+                break
+            if a.mode == "smoke":
+                for name, rx in SMOKE:
+                    if name not in seen and rx.search(line) and name != "GIFs from the playlist":
+                        seen[name] = line
+                if SMOKE[4][1].search(line):
+                    gifs += 1
+                    seen.setdefault("GIFs from the playlist", line)
+                if len(seen) == len(SMOKE) and gifs >= a.min_gifs:
+                    break
+            else:
+                m = GOLDEN.search(line)
+                if m:
+                    golden = (line, int(m[1]), int(m[2]))
+                if "psi-probe:" in line:
+                    for d in DIFFER.finditer(line):
+                        if int(d[1]) > 0:
+                            differ_bad.append(line)
+                if "psi-probe: done" in line:
+                    done_at = line
+                    break
+        stop.set()
+    try:
+        os.killpg(p.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    p.wait()
+    took = time.time() - t0
+    print(f"emu: {len(lines)} console lines, {took:.0f} s wall; log {log}")
+
+    def die(msg):
+        print(f"EMU_{a.mode.upper()}_FAIL: {msg}")
+        print(f"--- last console lines of {log}:")
+        print("\n".join(l[:200] for l in lines[-15:]))
+        sys.exit(1)
+
+    if failure:
+        die(failure)
+    if a.mode == "smoke":
+        missing = [n for n, _ in SMOKE if n not in seen]
+        if missing or gifs < a.min_gifs:
+            die(f"not seen within {seconds} emulated s / {wall} s wall: {missing or ''} (GIF starts {gifs}/{a.min_gifs})")
+        for n, _ in SMOKE:
+            print(f"pass  {n}: {seen[n][:170]}")
+        print(f"pass  GIF starts: {gifs}")
+        print(f"EMU_SMOKE_OK ({took:.0f} s wall)")
+    else:
+        if not done_at:
+            die(f"no `psi-probe: done` within {seconds} emulated s / {wall} s wall")
+        if differ_bad:
+            die("differ with a non-zero count:\n" + "\n".join(differ_bad))
+        if not golden:
+            die("the golden-frames result line is missing")
+        if golden[1] == 0 or golden[2] != 0:
+            die(f"golden frames: {golden[1]} match, {golden[2]} differ")
+        print("--- correctness lines:")
+        for l in lines:
+            if PROBE_KEYS.search(l):
+                print(l[:230])
+        print(f"golden: {golden[1]} match, {golden[2]} differ")
+        print(f"EMU_PROBE_OK ({took:.0f} s wall)")
+
+
+main()
