@@ -2375,15 +2375,15 @@ fn what_changed_is_exactly_what_differs() {
                 &p, &mut s, Some(&mut ink), None, &inputs(ms), &OWN, Some(&under), rows, &mut got, &mut ch,
             );
             assert!(got == want, "case {k} frame {j}: bytes differ");
-            for y in 0..H {
+            for (y, &bits) in ch.iter().enumerate() {
                 if rows & (1 << y) == 0 {
-                    assert_eq!(ch[y], 0xdead_beef, "case {k}: row {y} not drawn but written");
+                    assert_eq!(bits, 0xdead_beef, "case {k}: row {y} not drawn but written");
                     continue;
                 }
                 for g in 0..W / 4 {
                     let o = (y * W + 4 * g) * 3;
                     let differs = was[o..o + 12] != got[o..o + 12];
-                    assert_eq!(ch[y] & (1 << g) != 0, differs, "case {k} frame {j}: row {y} group {g}");
+                    assert_eq!(bits & (1 << g) != 0, differs, "case {k} frame {j}: row {y} group {g}");
                 }
             }
             was = got;
