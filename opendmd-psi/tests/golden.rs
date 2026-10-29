@@ -2467,14 +2467,14 @@ fn random_row_stages_are_the_rows_one_by_one() {
                 e(r)
             ),
             5 => format!("T[{}]", e(r)),
-            6 => format!("T[py % 6]"),
+            6 => "T[py % 6]".to_string(),
             7 => format!(
                 "noise({}, {}, {})",
                 e(r),
                 ["0", "5", "f", "py/4"][r.below(4)],
                 ["0", "1", "g"][r.below(3)]
             ),
-            8 => format!("noise(f + T[py % 6]*0.01, 5, 0)"),
+            8 => "noise(f + T[py % 6]*0.01, 5, 0)".to_string(),
             9 => format!("({} ? {} : {})", e(r), e(r), e(r)),
             10 => format!("clamp({}, -6, {})", e(r), e(r)),
             11 => format!("1/({} - {})", e(r), e(r)),
