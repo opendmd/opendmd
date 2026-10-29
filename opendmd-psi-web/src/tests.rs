@@ -307,7 +307,8 @@ fn every_example_fits_the_panels_path_as_sent() {
         }
         p.push_str("&a=0.3333&b=0.3333&c=0.3333");
         assert!(p.len() <= 2048, "{}: {} B as sent", e.name, p.len());
-        // The bundled ones keep their `about` (the ten are short).
+        // The bundled ones keep their `about` (the ten are short; Endless
+        // road at 2,015 B with it since road-cost, the most there is room for).
         assert!(!e.bundled || p.contains("about+"), "{}: {} B", e.name, p.len());
     }
 }
@@ -653,8 +654,8 @@ fn the_web_apps_compact_is_the_compilers() {
         assert_eq!(g[1], want, "path of {src:?}");
         assert!(want.len() <= 2048 || !src.starts_with("name"), "{}", want.len());
     }
-    // (The three long cases, and Endless road: its `about` line goes.)
-    assert_eq!(dropped, 4);
+    // (The three long cases. Endless road keeps its `about` since road-cost.)
+    assert_eq!(dropped, 3);
     for (src, g) in srcs.iter().zip(got.into_iter().step_by(2)) {
         let want = opendmd_psi::compact(src);
         let mut w = String::from("\"");

@@ -431,8 +431,9 @@ counted from the sprite's top left (and 0 outside it), so moving it is
 adding to `px` and `ty`, and making it bigger is dividing them. The key
 comes first; up to 16 characters (not spaces, or `; { } , - /`), rows up
 to 64 characters wide and 32 tall. Use the numbers for colours —
-`pick(k, #000, #f00, #ff0)` — or for brightness. The Endless road's car is
-one.
+`pick(k, #000, #f00, #ff0)` — or for brightness. A sprite's pixel costs a
+little more on the panel than a few drawn lines: Endless road draws its car
+as 17 spans to stay at 100 frames a second.
 
 **Limits.** A formula can be 4,096 characters and 256 steps (the editor
 shows the count). Numbers go from −32,768 to 32,767; past that they stop

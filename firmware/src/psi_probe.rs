@@ -67,19 +67,15 @@ const CUBE_EX: &str = "loop 4.8\nfps 100\n-- Wireframe cube: turning about two a
 /// panel, against Time gate's).
 const ROAD_FILE: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
 const TIME_GATE_FILE: &str = include_str!("../../opendmd-web/formulas/time-gate.psi");
-/// Endless road with its car drawn as 17 ink spans instead of the sprite
-/// (the same bytes over 1,400 host frames at four seeds).
-const ROAD_CAR_DRAWN: &str = include_str!("probe_road_car_drawn.psi");
 
-/// Endless road as bundled and with one suspect taken out at a time
-/// (roadprobe): the row noises, the car sprite, the palette and pick, the
-/// draw stage, and all four (the rows' floor).
+/// Endless road as bundled (the car drawn since roadprobe-c), without its
+/// row noises, and without those, the draw stage, the palette and pick
+/// (the rows' floor). roadprobe-a..c also timed the sprite car's version.
 fn road_variants() -> Vec<(&'static str, String)> {
     let src = ROAD_FILE;
     let rows = src.find("-- each row looks").unwrap_or(0);
     let draw = src.find("draw {").unwrap_or(rows);
     let no_noise = |s: &str| s.replace("noise(un, 5, 0)", "v0").replace("noise(un, 0, 0)", "h0");
-    let no_car = |s: &str| s.replace("car[px - cx, ty - 23]", "0");
     let no_draw = |s: &str| format!("{}{}", &s[..draw], s[rows..].replace("ink*16", "0"));
     let gray = |s: &str| match s.find("pal(road, pick(m,") {
         Some(i) => format!("{}gray(m/6)\n", &s[..i]),
@@ -88,9 +84,7 @@ fn road_variants() -> Vec<(&'static str, String)> {
     vec![
         ("Endless road (bundled)", src.to_string()),
         ("road: no row noise", no_noise(src)),
-        ("road: no car", no_car(src)),
-        ("road: car drawn (17 lines, same pixels)", ROAD_CAR_DRAWN.to_string()),
-        ("road: floor (none of the four)", gray(&no_car(&no_noise(&no_draw(src))))),
+        ("road: floor (no noise, draw, pal or pick)", gray(&no_noise(&no_draw(src)))),
     ]
 }
 
@@ -213,9 +207,10 @@ macro_rules! say {
     }};
 }
 
-/// roadprobe-b/c: only the road's rows (a's full probe ran out of heap
-/// before them), then the play lines.
-const ROAD_ONLY: bool = true;
+/// Only the road's rows, then the play lines (roadprobe-b/c: a's full
+/// probe ran out of heap before them). `false`: the full probe, which
+/// starts the play lines when it is done.
+const ROAD_ONLY: bool = false;
 
 /// Endless road and its variants one at a time (each source made, run and
 /// dropped before the next), splits, then Starfield and Time gate as
@@ -1641,4 +1636,5 @@ pub fn run(root: &str) {
         start.elapsed().as_millis()
     );
     *REPORT.lock().unwrap() = None;
+    play::start(format!("{root}/{REPORT_NAME}"));
 }
