@@ -1085,10 +1085,15 @@ impl Program {
     }
 
     /// Where the slow layers' marker is (`code::SLOW`), if the formula has
-    /// `layer rate N { }`.
+    /// `layer rate N { }`: always the first pixel step (the compiler lays
+    /// the slow layers out first, and fuse never puts a marker before it),
+    /// so one look, not a scan — it is asked several times a frame, and
+    /// per row by the JIT's driver (consoleb-fix: Endless road missed
+    /// deadlines with the scans).
+    #[inline]
     pub(crate) fn slow_marker(&self) -> Option<usize> {
-        let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
-        (re.min(pe)..pe).find(|&k| self.ops[k].code == code::SLOW)
+        let re = self.row_end as usize;
+        (re < self.len().min(MAX_OPS) && self.ops[re].code == code::SLOW).then_some(re)
     }
 
     /// The rows of the slow layers a frame redraws in steady play at its

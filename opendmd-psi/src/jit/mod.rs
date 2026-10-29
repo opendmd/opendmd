@@ -335,6 +335,7 @@ pub(crate) fn frame<T: Target>(
     ];
     let uses_i = prog.uses & USES_I != 0;
     let main = low.main_start;
+    let fast_start = prog.fast_start();
     let mut columns_kept = false;
     t.begin();
     {
@@ -380,7 +381,7 @@ pub(crate) fn frame<T: Target>(
         // out before its marker): lanes, the VM's own steps.
         let mut alias: Alias = [core::ptr::null(); REGS + 1];
         // (After a `rate` formula's slow layers: the VM's, in their part.)
-        let mut k = prog.fast_start();
+        let mut k = fast_start;
         let mut keep_at = usize::MAX;
         while k < main {
             let op = &prog.ops[k];
