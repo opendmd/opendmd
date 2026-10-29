@@ -124,6 +124,9 @@ pub struct Lowered {
     pub main_start: usize,
     /// It calls helpers.
     pub calls: bool,
+    /// Where the row stage's function starts in `code` (4-byte aligned),
+    /// if the row steps lowered ([`lower_rows`]): it shares `words`.
+    pub rows_at: Option<usize>,
 }
 
 // The register map.
@@ -246,6 +249,18 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
     if e.words.len() > 255 {
         return Err("too many values for the kernel");
     }
+    let mut code = e.c.bytes;
+    let mut words = e.words;
+    let rows_at = match lower_rows_from(prog, words.clone()) {
+        Ok(r) => {
+            code.resize(code.len().next_multiple_of(4), 0);
+            let at = code.len();
+            code.extend_from_slice(&r.code);
+            words = r.words;
+            Some(at)
+        }
+        Err(_) => None,
+    };
     // Slots a row writes: y, py and the row steps' values.
     let mut row_slot = [false; MAX_SCALARS];
     row_slot[S_Y as usize] = true;
@@ -256,8 +271,7 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
         }
     }
     let rs = |k: u8| k != NONE && row_slot[(k & 0x7f) as usize];
-    let per_row = e
-        .words
+    let per_row = words
         .iter()
         .map(|w| match *w {
             // (A register's lane: its still cache's alias moves each row.)
@@ -274,11 +288,56 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
         })
         .collect();
     Ok(Lowered {
-        code: e.c.bytes,
-        words: e.words,
+        code,
+        words,
         per_row,
         main_start: start,
         calls: e.calls,
+        rows_at,
+    })
+}
+
+/// A lowered row stage: one function (`extern "C" fn(ctx: *const u32,
+/// sc: *mut i32)`) running the row steps once, straight through, each
+/// reading its scalar slots from `sc` and writing its own there, as
+/// `vm::scalar` does (the narrowed steps as their checked forms, as
+/// `program::eval` gives them); its words (helpers, tables) once a frame.
+pub struct LoweredRows {
+    pub code: Vec<u8>,
+    pub words: Vec<Word>,
+}
+
+/// The row kernel's `sc` (a2 is `ctx`, as the pixel kernel's).
+const SC: Reg = 3;
+
+/// Lower `prog`'s row steps, or say why the VM runs them.
+pub fn lower_rows(prog: &Program) -> Result<LoweredRows, Refusal> {
+    lower_rows_from(prog, Vec::new())
+}
+
+/// [`lower_rows`] with `words` (the pixel kernel's) first: the two share
+/// one `ctx`.
+fn lower_rows_from(prog: &Program, words: Vec<Word>) -> Result<LoweredRows, Refusal> {
+    let (de, re) = (prog.draw_end as usize, prog.row_end as usize);
+    if re <= de {
+        return Err("no row steps");
+    }
+    let mut e = Emitter::bare(prog);
+    e.words = words;
+    e.c.entry(FRAME);
+    for op in &prog.ops[de..re] {
+        e.row_step(*op)?;
+    }
+    e.c.retw_n();
+    if e.c.bad {
+        return Err("an operand out of the kernel's range");
+    }
+    if e.words.len() > 255 {
+        return Err("too many values for the kernel");
+    }
+    Ok(LoweredRows {
+        code: e.c.bytes,
+        words: e.words,
     })
 }
 
@@ -579,6 +638,125 @@ impl<'a> Emitter<'a> {
             e.pool = POOL.iter().copied().filter(|r| !hoisted.contains(r)).collect();
         }
         Ok(e)
+    }
+
+    /// An emitter with no items, values or hoists (the row stage's).
+    fn bare(prog: &'a Program) -> Emitter<'a> {
+        Emitter {
+            prog,
+            items: &[],
+            c: Code::new(),
+            words: Vec::new(),
+            valid: Vec::new(),
+            vals: Vec::new(),
+            cur: [None; REGS],
+            livein: [None; REGS],
+            wv: Vec::new(),
+            hoist: Vec::new(),
+            temps: Vec::new(),
+            pool: Vec::new(),
+            free: Vec::new(),
+            taken: Vec::new(),
+            sar16: false,
+            calls: true,
+            hot: true,
+            uses_src: false,
+        }
+    }
+
+    /// A row step: its operands loaded from their slots, its template or
+    /// its helper, its value stored in its slot.
+    fn row_step(&mut self, op: Op) -> Result<(), Refusal> {
+        use code::*;
+        let slot = |v: u8| i32::from(v & 0x7f) * 4;
+        // (`eval`: a narrowed step is its checked form here.)
+        let code = match op.code {
+            ADD_W => ADD,
+            SUB_W => SUB,
+            MUL_W | MUL_N => MUL,
+            c => c,
+        };
+        let h = match code {
+            DIV => Some(hid::DIV),
+            MOD => Some(hid::MOD),
+            ATAN2 => Some(hid::ATAN2),
+            HASH => Some(hid::HASH),
+            LEN => Some(hid::LEN),
+            BIT => Some(hid::BIT),
+            SQRT => Some(hid::SQRT),
+            RECIP => Some(hid::RECIP),
+            SMOOTH => Some(hid::SMOOTH),
+            MIX => Some(hid::MIX),
+            MULR => Some(hid::MULR),
+            NOISE => Some(hid::NOISE),
+            TAB => Some(hid::TAB),
+            SPR => Some(hid::SPR),
+            NOISE_O..=NOISE_O_LAST => Some(hid::NOISE_O),
+            DIGIT..=DIGIT_B => Some(hid::GLYPH),
+            _ => None,
+        };
+        if let Some(h) = h {
+            let n = arity(code);
+            let args: Vec<Arg> = match code {
+                TAB => alloc::vec![
+                    Arg::Val(op.a),
+                    Arg::Word(Word::Tabs),
+                    Arg::Imm(i32::from(op.b)),
+                    Arg::Imm(i32::from(op.c)),
+                ],
+                SPR => alloc::vec![
+                    Arg::Val(op.a),
+                    Arg::Val(op.b),
+                    Arg::Word(Word::Tabs),
+                    Arg::Imm(i32::from(op.c)),
+                ],
+                NOISE_O..=NOISE_O_LAST => alloc::vec![
+                    Arg::Val(op.a),
+                    Arg::Val(op.b),
+                    Arg::Val(op.c),
+                    Arg::Word(Word::Sc),
+                    Arg::Imm(i32::from(code)),
+                ],
+                DIGIT..=DIGIT_B => alloc::vec![
+                    Arg::Val(op.a),
+                    Arg::Val(op.b),
+                    Arg::Val(op.c),
+                    Arg::Word(Word::Glyphs(code)),
+                ],
+                _ => [op.a, op.b, op.c][..n].iter().map(|&v| Arg::Val(v)).collect(),
+            };
+            for (j, a) in args.into_iter().enumerate() {
+                let t = 10 + j as Reg;
+                match a {
+                    Arg::Val(v) => self.c.l32i(t, SC, slot(v)),
+                    Arg::Word(w) => self.load_word(t, w),
+                    Arg::Imm(v) => self.c.movi(t, v),
+                    _ => return Err("an unexpected helper argument"),
+                }
+            }
+            self.load_word(CALLEE, Word::Helper(h));
+            self.c.callx8(CALLEE);
+            self.sar16 = false;
+            self.c.s32i(10, SC, slot(op.d));
+            return Ok(());
+        }
+        match code {
+            ADD | SUB | MUL | MASK | LT | LE | GT | GE | EQ | NE | AND | OR | MIN | MAX | STEP
+            | NEG | NOT | ABS | FLOOR | FRAC | SIN | COS | TRI | SAW | SQR | SELECT | CLAMP => {}
+            _ => return Err("a row step the kernel has no template for"),
+        }
+        self.free = (4..=15).rev().filter(|&r| r != CALLEE).collect();
+        self.taken.clear();
+        let n = arity(code);
+        let mut r = [0 as Reg; 3];
+        for (j, &v) in [op.a, op.b, op.c][..n].iter().enumerate() {
+            r[j] = self.tmp()?;
+            self.c.l32i(r[j], SC, slot(v));
+        }
+        let d = self.tmp()?;
+        self.template(Op { code, ..op }, d, r[0], r[1], r[2])?;
+        self.c.s32i(d, SC, slot(op.d));
+        Ok(())
     }
 
     /// Hoist the most used loop-invariant words into `spare`.
@@ -962,6 +1140,15 @@ impl<'a> Emitter<'a> {
         if [a, b, cc][..n].contains(&d) {
             return Err("a step reads its own register");
         }
+        self.template(op, d, a, b, cc)?;
+        self.wrote(k, id);
+        Ok(())
+    }
+
+    /// `d = op(a, b, cc)` for a step with an inline template (`fixed`'s
+    /// operation in its order), its operands in registers (none `d`).
+    fn template(&mut self, op: Op, d: Reg, a: Reg, b: Reg, cc: Reg) -> Result<(), Refusal> {
+        use code::*;
         let c = &mut self.c;
         match op.code {
             ADD_W => c.add_n(d, a, b),
@@ -1148,7 +1335,6 @@ impl<'a> Emitter<'a> {
             }
             _ => return Err("a step the kernel has no template for"),
         }
-        self.wrote(k, id);
         Ok(())
     }
 

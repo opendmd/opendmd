@@ -336,9 +336,10 @@ fn bundled_formulas_draw_the_same_through_kernels() {
                 lowered += 1;
                 let low = lower(&prog).unwrap();
                 report.push(format!(
-                    "{name}: {} B, {} words, {ipp:.1} instructions a pixel",
+                    "{name}: {} B, {} words, {ipp:.1} instructions a pixel{}",
                     low.code.len(),
-                    low.words.len()
+                    low.words.len(),
+                    if low.rows_at.is_some() { ", the row stage too" } else { "" }
                 ));
             }
             Err(why) => report.push(format!("{name}: VM ({why})")),
@@ -458,6 +459,62 @@ fn random_formulas_draw_the_same_through_kernels() {
     }
     println!("random formulas through kernels: {ok}; on the VM: {why:?}");
     assert!(ok >= 300, "only {ok} random formulas lowered");
+}
+
+/// Random row stages (values of `y`, `py`, `t` and the sliders only,
+/// helpers among them) through the row kernel, against the VM: a row value
+/// a pixel then shows.
+#[test]
+fn random_row_stages_draw_the_same_through_kernels() {
+    let mut r = Rng(0x1d17_0b5e_55ed_0003);
+    let (mut ok, mut rows, mut why) = (0, 0, std::collections::BTreeMap::<&str, u32>::new());
+    let leaf = ["y", "py", "t", "a", "0.5", "3", "-2.25", "100", "seed"];
+    fn row(r: &mut Rng, d: u32, leaf: &[&str]) -> String {
+        if d == 0 || r.below(4) == 0 {
+            return leaf[r.below(leaf.len())].to_string();
+        }
+        let e = |r: &mut Rng| row(r, d - 1, leaf);
+        match r.below(9) {
+            0..=2 => {
+                let op = ["+", "-", "*", "/", "%", "<", ">=", "==", "and", "or"][r.below(10)];
+                format!("({} {op} {})", e(r), e(r))
+            }
+            3 => format!("({} ? {} : {})", e(r), e(r), e(r)),
+            4 => format!("{}({})", ["sin", "cos", "tri", "saw", "sqr", "abs", "floor", "frac", "sqrt", "-"][r.below(10)], e(r)),
+            5 => format!("{}({}, {})", ["min", "max", "step", "hash", "len", "atan2", "bit"][r.below(7)], e(r), e(r)),
+            6 => format!("{}({}, {}, {})", ["clamp", "mix", "smoothstep", "noise"][r.below(4)], e(r), e(r), e(r)),
+            7 => format!("T[{}]", e(r)),
+            _ => format!("digit(floor({}) % 10, {}, {})", e(r), e(r), e(r)),
+        }
+    }
+    for k in 0..300 {
+        let forever = k % 4 == 0;
+        let lf: Vec<&str> = leaf.iter().copied().filter(|&l| forever || l != "seed").collect();
+        let src = format!(
+            "{}table T = 0.1, -3, 0.9, 7, 0.3\nq = {}\nr = {}\npal(fire, frac(x * q + r))",
+            if forever { "loop forever\n" } else { "loop 3\n" },
+            row(&mut r, 4, &lf),
+            row(&mut r, 3, &lf)
+        );
+        let prog = match compile(&src) {
+            Ok(p) => p,
+            Err(e) => {
+                if k < 3 {
+                    println!("{src}: {}", e.msg);
+                }
+                continue;
+            }
+        };
+        if lower(&prog).is_ok_and(|l| l.rows_at.is_some()) {
+            rows += 1;
+        }
+        match same_as_vm("random rows", &src, &prog, &[0, 1234, 2999]) {
+            Ok(_) => ok += 1,
+            Err(w) => *why.entry(w).or_default() += 1,
+        }
+    }
+    println!("random row stages through kernels: {ok} ({rows} with a row kernel); on the VM: {why:?}");
+    assert!(rows >= 200, "only {rows} row kernels");
 }
 
 /// The rows the player checks a kernel on, drawn alone, are the full

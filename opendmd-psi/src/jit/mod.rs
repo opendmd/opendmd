@@ -48,6 +48,8 @@ pub(crate) trait Target {
     fn helper(&mut self, id: u8) -> u32;
     /// Run the kernel for a row.
     fn run(&mut self, ctx: &mut [u32], out: *mut u8);
+    /// Run the row stage's function (at `at` in the code) on `sc`.
+    fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32);
 }
 
 /// A colour as a word: `r | g << 8 | b << 16`.
@@ -158,12 +160,12 @@ fn colour_of(st: &Rows<'_>, pal: u8, v: i32, k: u8, shift: u8) -> u32 {
 /// What a kernel reads for a canvas or a picture it has not got.
 static ZEROS: [u8; W * 3] = [0; W * 3];
 
-/// Fill the words (`first`: all, a frame's first row; else those that
-/// change from row to row).
-fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, first: bool) {
+/// Fill the words that change from row to row (`per_row`), or those that
+/// do not (once a frame, before the rows).
+fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, per_row: bool) {
     let s = st.scratch;
     for ((w, out), &row) in low.words.iter().zip(ctx.iter_mut()).zip(&low.per_row) {
-        if !first && !row {
+        if row != per_row {
             continue;
         }
         *out = match *w {
@@ -336,8 +338,23 @@ pub(crate) fn frame<T: Target>(
     let uses_i = prog.uses & USES_I != 0;
     let main = low.main_start;
     let mut columns_kept = false;
-    let mut first = true;
     t.begin();
+    {
+        // The words the same all frame (the row stage's among them), once.
+        let alias: Alias = [core::ptr::null(); REGS + 1];
+        let st = Rows {
+            row: 0,
+            ink,
+            under,
+            prog,
+            scratch,
+            alias: &alias,
+            tables,
+            own: &own,
+            glyphs: &glyphs,
+        };
+        fill(t, low, ctx, &st, false);
+    }
     #[cfg(feature = "stats")]
     clk.lap(stats::FRAME);
     for row in 0..H {
@@ -347,8 +364,13 @@ pub(crate) fn frame<T: Target>(
         let py = ((H - 1 - row) as i32) << 16;
         scratch.sc[S_PY as usize] = py;
         scratch.sc[S_Y as usize] = fixed::div(py, ((H - 1) as i32) << 16);
-        for op in &prog.ops[de..re] {
-            vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
+        match low.rows_at {
+            Some(at) => t.run_rows(at, ctx, scratch.sc.as_mut_ptr()),
+            None => {
+                for op in &prog.ops[de..re] {
+                    vm::scalar(&mut scratch.sc, op, tables, &prog.tables);
+                }
+            }
         }
         #[cfg(feature = "stats")]
         clk.lap(stats::ROWS);
@@ -415,8 +437,7 @@ pub(crate) fn frame<T: Target>(
             own: &own,
             glyphs: &glyphs,
         };
-        fill(t, low, ctx, &st, first);
-        first = false;
+        fill(t, low, ctx, &st, true);
         #[cfg(feature = "stats")]
         clk.lap(stats::FILL);
         let d = dest(row);
@@ -552,6 +573,7 @@ mod device {
     ];
 
     type KernelFn = extern "C" fn(*mut u32, *mut u8);
+    type RowsFn = extern "C" fn(*mut u32, *mut i32);
 
     struct Device(KernelFn);
 
@@ -564,6 +586,14 @@ mod device {
         }
         fn run(&mut self, ctx: &mut [u32], out: *mut u8) {
             (self.0)(ctx.as_mut_ptr(), out)
+        }
+        fn run_rows(&mut self, at: usize, ctx: &mut [u32], sc: *mut i32) {
+            // SAFETY: `at` is the row stage's function in the block
+            // (`lower`'s, 4-byte aligned): the windowed ABI, (ctx, sc).
+            let f = unsafe {
+                core::mem::transmute::<*const u8, RowsFn>((self.0 as *const u8).add(at))
+            };
+            f(ctx.as_mut_ptr(), sc)
         }
     }
 

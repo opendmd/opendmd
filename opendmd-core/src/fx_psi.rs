@@ -1348,13 +1348,12 @@ impl FormulaLook {
         let t_start = clock.map_or(0, |c| c());
         let (bytes, dirty) = b.out.bytes_and_dirty_mut();
         let mut changed = [0u32; psi::H];
-        let full = rows == u32::MAX;
         // The kernel draws it when it is made, checked and (after the
-        // trial's full frames, kernel and VM in turn) the faster.
+        // trial, kernel and VM in turn, timed a row) the faster.
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
-        let trial = full && self.jit.trialing();
+        let trial = self.jit.trialing();
         #[cfg(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf"))]
-        let drawn = match self.jit.kernel_for(1, &self.prog, full) {
+        let drawn = match self.jit.kernel_for(1, &self.prog) {
             Some(k) => {
                 k.render(
                     &self.prog,
@@ -1392,9 +1391,10 @@ impl FormulaLook {
         {
             if trial {
                 if let Some(c) = clock {
-                    self.jit.timed(1, drawn, c().wrapping_sub(t_start));
+                    let us = c().wrapping_sub(t_start);
+                    self.jit.timed(1, drawn, us / rows.count_ones().max(1));
                 }
-            } else if !drawn && full {
+            } else if !drawn {
                 self.jit.check(
                     1,
                     &self.prog,
@@ -1406,7 +1406,6 @@ impl FormulaLook {
                 );
             }
         }
-        let _ = (full, drawn);
         if old() {
             let mut r = rows;
             while r != 0 {
@@ -1534,16 +1533,10 @@ mod jit {
     const DIFFERS: &str = "the kernel's bytes differed from the VM's (self-check)";
 
     impl Jit {
-        /// The kernel, if it draws this frame (`full`: every row; a
-        /// trial's frames are full ones, kernel and VM in turn, and the
-        /// rows between them the VM's). Not made yet: made now, and the VM
-        /// draws this frame (the check reads its bytes).
-        pub(super) fn kernel_for(
-            &mut self,
-            which: usize,
-            prog: &psi::Program,
-            full: bool,
-        ) -> Option<&mut psi::jit::Kernel> {
+        /// The kernel, if it draws this frame (a trial's frames kernel and
+        /// VM in turn). Not made yet: made now, and the VM draws this frame
+        /// (the check reads its bytes).
+        pub(super) fn kernel_for(&mut self, which: usize, prog: &psi::Program) -> Option<&mut psi::jit::Kernel> {
             if !super::jit_allowed() {
                 if self.why != Some(OFF) {
                     *self = Jit { why: Some(OFF), ..Jit::default() };
@@ -1572,21 +1565,20 @@ mod jit {
             }
             let trial = self.trial < TRIAL;
             match &mut self.kernel {
-                // (The trial's odd frames are the VM's, and the partial
-                // ones between them.)
-                Some(_) if self.checked && trial && (!full || self.trial % 2 == 1) => None,
+                // (The trial's odd frames are the VM's.)
+                Some(_) if self.checked && trial && self.trial % 2 == 1 => None,
                 Some(k) if self.checked => Some(&mut **k),
                 _ => None,
             }
         }
 
-        /// Whether a full frame now is one of the trial's (kernel against
-        /// VM).
+        /// Whether a frame now is one of the trial's (kernel against VM).
         pub(super) fn trialing(&self) -> bool {
             super::jit_allowed() && self.kernel.is_some() && self.checked && self.trial < TRIAL
         }
 
-        /// A trial frame took `us` (the kernel's or the VM's): after
+        /// A trial frame took `us` (the kernel's or the VM's; a look's for
+        /// a row, its frames drawing the rows its picture changed): after
         /// [`TRIAL`] of them the faster draws from then on (a formula never
         /// gets slower with the JIT on).
         pub(super) fn timed(&mut self, which: usize, kernel: bool, us: u32) {
@@ -1609,9 +1601,10 @@ mod jit {
             }
         }
 
-        /// After a VM frame that drew every row (`frame_bytes`, with `ink`
-        /// and `under` as it had them): a kernel not yet checked is
-        /// checked against it.
+        /// After a VM frame (`frame_bytes`, with `ink` and `under` as it had
+        /// them; a look's rows not drawn are what it would draw now: the
+        /// same inputs over the same rows of the picture): a kernel not yet
+        /// checked is checked against it.
         #[allow(clippy::too_many_arguments)]
         pub(super) fn check(
             &mut self,
@@ -1652,7 +1645,7 @@ mod jit {
         /// Draw the frame with the kernel if it draws this one (`true`),
         /// what changed into `changed` when given; else leave it to the VM.
         pub(super) fn jit_render(&mut self, bytes: &mut [u8], changed: Option<&mut [u32; psi::H]>) -> bool {
-            let Some(k) = self.jit.kernel_for(0, &self.prog, true) else {
+            let Some(k) = self.jit.kernel_for(0, &self.prog) else {
                 return false;
             };
             k.render(
