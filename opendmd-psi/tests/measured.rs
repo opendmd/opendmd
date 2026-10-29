@@ -192,7 +192,10 @@ pub const SPEED2: &[(&str, &str, u32)] = &[
 // cache taken where it has values), p50 µs a frame; and the looks over a
 // changing picture. For `Program::esp32_us_jit_still` / `esp32_us_jit`.
 pub const JIT_EFFECTS: &[(&str, &str, u32)] = &[
-    ("Endless road", include_str!("../../opendmd-web/formulas/endless-road.psi"), 2723),
+    // The road as bundled from road-life to road-full (Both), and Full as
+    // measured: the bundled road since road-full is Full respelled for its
+    // `about` (the same frames, two frame steps fewer), not measured itself.
+    ("Endless road Both", include_str!("../../opendmd-web/experiments/road-life/road-both.psi"), 2723),
     ("Endless road Full", include_str!("../../opendmd-web/experiments/road-life/road-full.psi"), 3601),
     ("Wireframe cube", include_str!("../../opendmd-web/formulas/wireframe-cube.psi"), 1691),
     ("Plasma letters", include_str!("../../opendmd-web/formulas/plasma-letters.psi"), 4793),
