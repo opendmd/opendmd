@@ -248,7 +248,15 @@ FONT = {"fonts/silkscreen.woff2"}
 # (+1.4 KB; the edit is bytes and `get` only — a str slice's panic alone
 # was +5 KB of core::fmt). Raised under the brief's OK (budgets may move
 # with written reasons).
-PSI_WASM_GZ_BUDGET = 84 * 1024  # 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
+# 85 KB for the JIT's estimate (2026-10-29, branch jit-2, docs/research/
+# psi-jit-esp32.md "Phase 2 as built"): `Program::esp32_us_jit` and
+# `_jit_still` so the editor's label knows what the panel's JIT draws (its
+# cost table `jit_value_ns`, the kernel's first step, a fused colour's
+# cost, folded into the estimate's one loop; `info()[13]`): +478 B gz on
+# main's 85,622 (86,100). The browser never runs the JIT: the cost table
+# only. Raised under the budget authority (CLAUDE: Claude may adjust web
+# size budgets itself).
+PSI_WASM_GZ_BUDGET = 85 * 1024  # 84 until the JIT's estimate (jit-2); 83 until formula-apps F2; 82 until main's psi-speed3 merge; 76 until formula-apps F1; 74 until psi-speed2; 73 until palettes; 71 until slot reuse; 67 until sprites; 62 until loop forever; 58 until psi-speed; 36 KB until 2026-10-24 (Psi layers and drawing over a GIF: +4 KB); 40 until parts (one formula inside another); 43 until the text built-ins; 44 until any-look; 45 until the draw stage; 52 until phase 2
 # 21 KB for parts (2026-10-25: `use … as p` pasting with its guards, three
 # examples): approved by the owner 2026-10-25. 22 KB for Psi ergonomics
 # stage 2 (2026-10-26, branch psi-ergo: the cheat sheet's lines for pick,
