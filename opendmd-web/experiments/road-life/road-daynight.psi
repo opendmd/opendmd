@@ -1,0 +1,48 @@
+-- author: OpenDMD
+-- licence: CC0-1.0
+name "Endless road"
+about "OutRun into a synthwave sunset: bends and hills without end"
+loop forever
+fps 100
+-- Endless road, with a day going by. Bends and hills come from noise
+-- along the distance driven; each play starts somewhere else on the road
+-- and at another time of day. A day is 4 minutes and lingers at sunset
+-- and dawn; by night the stars come out and the kerbs turn neon, night's
+-- colours coming down the road from the horizon. Written tight: a link
+-- to the panel holds 2,048 bytes.
+-- Colours: black; road, kerbs, verge (light, dark), then the same by
+-- night; sun; car; stars; the sky's ramp, night to blue to violet to pink
+palette road=#000,#403,#806,#ec0,#f00,#400,#800,#103,#126,#1ef,#f29,#001,#103,
+  #f70,#f20,#b00,#f50,#fff,#001,#103,#126,#17f,#25f,#42f,#50f,#70e,#a0e,#d0d,#f48
+-- The car: 17 spans, from*32+to, row*32+ink*2+1 (7 body, 8 glass, 9 lights)
+table CP=273,242,273,211,242,118,56,69,242,663,56,69,242,663,56,56,25
+table CQ=271,239,241,207,209,175,143,147,145,147,111,115,113,115,79,47,17
+-- Three peaks: middle, half width
+table MC=8,70,126
+table MW=9,13,8
+frame{
+  -- distance in bends; heading here and just ahead; height and slope
+  u=t*.15+seed*1000;h0=noise(u,0,0);h1=noise(u+.03,0,0);v0=noise(u,5,0);dv=(noise(u+.01,5,0)-v0)*100
+  -- the car slides out in bends, the sky turns with the road
+  cx=50.99999+(h1-h0)*80;mx=(.5-h0)*60
+  -- the light el (-1 night, 0 sunset, 1 day), night nt, day dy; the
+  -- sun's middle and radius; the sky's ramp at the horizon and its rise
+  -- a row; dw towards dawn; night's edge ne coming down the road
+  sn=sin(t/240+seed);el=clamp(sn*sn*sn*-3,-1,1);nt=clamp(-el,0,1);dy=clamp(el,0,1)
+  sc=23.5+clamp(el*24,-20,2.5);sr=8-dy*3;sb=.5-(nt+dy)/3;sk=27.3-7*nt-4*dy+19*sb
+  dw=cos(t/240+seed)<0;ne=(nt-.5)*(dw?-1.3:1.3)}
+draw{
+  for k<3{for j<7{hm=MW[k]-j*1.9;mc=hm<0?-999:MC[k]+mx;line(mc-hm,19+j,mc+hm,19+j,.35)}}
+  -- the sun, a line a row, striped below its middle; the stars by night
+  for k<12{e=k-5;y0=sc+e;hu=sqrt(max(sr*sr-e*e,0));sx=y0<19.5 or e<-1 and k%3==1?-999:64+mx;line(sx-hu,y0,sx+hu,y0,.28)}
+  for k<16{dot(frac(k*.382)<nt*1.4-.4?frac(k*.7549+mx/256)*128:-999,20.5+frac(k*.5698)*11,.22)}
+  for k<17{p=CP[k]/32;rq=CQ[k]/32;yq=floor(rq);line(cx+floor(p),yq,cx+frac(p)*32,yq,frac(rq))}}
+-- each row looks ahead: the bend there, and the hill that lifts or hides
+-- it; the road's half width there, light or dark stripe
+lo=py<19;zh=lo?.1125/(19.5-py):0;un=u+zh;q=py-clamp((noise(un,5,0)-v0-zh*dv)*zh*26667,-6,2)
+hw=50.7-2.6*q;al=(frac(t*10+39/max(hw,1.3))<.5)/28;adx=abs(px-(64+(noise(un,0,0)-h0)*2000))
+-- 0 road, 1 kerb, 2 verge/sky; drawn 3 stars, 4 sun, 5 hills, 7-9 the
+-- car; night's colours where night's edge has passed
+m=max((adx>=hw)+(adx>=hw*1.2),ink*16);an=al+((zh>.075-ne)!=dw)*6/28
+pal(road,pick(m,an+1/28,an+3/28,lo?an+5/28:floor(sk-py*sb)/28,
+  17/28,(py-sc<-.5?14:py-sc<3.5?13:3)/28,0,0,15/28,0,16/28))

@@ -19,7 +19,8 @@ with its sliders if it has any. The bundled ten:
 
 - **Big clock**;
 - four screensavers: **Matrix**, **Starfield**, **Endless road** (a
-  synthwave drive) and **Time gate** (a swirling portal);
+  synthwave drive through a day and night, palms passing) and **Time
+  gate** (a swirling portal);
 - five looks, which draw over whatever GIF plays (marked *look*; see
   [Over a GIF](#over-a-gif)): **Scanlines**, **Old TV**, **Vignette**,
   **Old photo** and **Glitter**.
