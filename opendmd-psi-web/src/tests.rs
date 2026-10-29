@@ -307,7 +307,8 @@ fn every_example_fits_the_panels_path_as_sent() {
         p.push_str("&a=0.3333&b=0.3333&c=0.3333");
         assert!(p.len() <= 2048, "{}: {} B as sent", e.name, p.len());
         // The bundled ones keep their `about` (the ten are short; Endless
-        // road at 2,046 B with it since road-life, written tight to fit).
+        // road at 2,044 B with it since road-full, Full written tight to
+        // fit: 2,046 B as Both, 2,048 B without `about` as first written).
         assert!(!e.bundled || p.contains("about+"), "{}: {} B", e.name, p.len());
     }
 }
@@ -436,9 +437,12 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Rotozoom floor", 0, 0xab6b6c0c1c05d139),
     ("Rotozoom floor", 1730, 0x66b37879e7a17a09),
     ("Rotozoom floor", 6420, 0x5af9feaa3a8b41f5),
-    ("Endless road", 0, 0x22544dd5c7cbba37),
-    ("Endless road", 1730, 0xedeaa6bff7b09128),
-    ("Endless road", 6420, 0xa1a8472548735a18),
+    // Re-pinned for road-full (2026-10-29): Full bundled, the frames of
+    // experiments/road-life/road-full.psi (psi-check --hash, 3 seeds × 142
+    // frames over a day, all the same).
+    ("Endless road", 0, 0x3cbd8c7a60c8a9d8),
+    ("Endless road", 1730, 0xb5a7a75c00190bdc),
+    ("Endless road", 6420, 0xf89516c3b22a3706),
     ("Time gate", 0, 0x24bd9942453ef2e8),
     ("Time gate", 1730, 0x7787a7d7cc3f723e),
     ("Time gate", 6420, 0x2a17edb7a1ade755),
