@@ -14,31 +14,61 @@ use crate::{compile, golden, render_rows_still};
 use std::path::Path;
 
 /// A frame through the kernel (`still` as the player passes it).
-fn kernel_frame(prog: &Program, low: &Lowered, inputs: &Inputs, still: Option<&mut Still>) -> (Vec<u8>, u64) {
-    let mut t = EmuTarget { emu: Emu::new(&low.code) };
+fn kernel_frame(
+    prog: &Program,
+    low: &Lowered,
+    inputs: &Inputs,
+    still: Option<&mut Still>,
+) -> (Vec<u8>, u64) {
+    let mut t = EmuTarget {
+        emu: Emu::new(&low.code),
+    };
     let mut ctx = vec![0u32; low.words.len()];
     let mut s = Scratch::<128>::new();
     let mut out = vec![0u8; W * H * 3];
     let base = out.as_mut_ptr();
     // SAFETY: row < 32: within `out`.
     let dest = |row: usize| unsafe { base.add(row * W * 3) };
-    frame(&mut t, low, &mut ctx, prog, &mut s, still, inputs, &OWN, u32::MAX, &dest);
+    frame(
+        &mut t,
+        low,
+        &mut ctx,
+        prog,
+        &mut s,
+        still,
+        inputs,
+        &OWN,
+        u32::MAX,
+        &dest,
+    );
     (out, t.emu.steps)
 }
 
 fn vm_frame(prog: &Program, inputs: &Inputs, still: Option<&mut Still>) -> Vec<u8> {
     let mut s = Scratch::<128>::new();
     let mut out = vec![0u8; W * H * 3];
-    render_rows_still::<128>(prog, &mut s, None, still, inputs, &OWN, None, u32::MAX, &mut out);
+    render_rows_still::<128>(
+        prog,
+        &mut s,
+        None,
+        still,
+        inputs,
+        &OWN,
+        None,
+        u32::MAX,
+        &mut out,
+    );
     out
 }
 
 /// The first pixel two frames differ at, for a message.
 fn first_diff(a: &[u8], b: &[u8]) -> Option<(usize, usize, [u8; 3], [u8; 3])> {
-    (0..W * H).find(|&p| a[p * 3..p * 3 + 3] != b[p * 3..p * 3 + 3]).map(|p| {
-        let c = |v: &[u8]| [v[p * 3], v[p * 3 + 1], v[p * 3 + 2]];
-        (p % W, p / W, c(a), c(b))
-    })
+    (0..W * H)
+        .find(|&p| a[p * 3..p * 3 + 3] != b[p * 3..p * 3 + 3])
+        .map(|p| {
+            let c = |v: &[u8]| [v[p * 3], v[p * 3 + 1], v[p * 3 + 2]];
+            (p % W, p / W, c(a), c(b))
+        })
 }
 
 /// The kernel's frames against the VM's at `times` (ms), plain and with
@@ -72,13 +102,26 @@ fn same_as_vm(name: &str, src: &str, prog: &Program, times: &[u32]) -> Result<f6
             let mut st = Still::new();
             assert!(st.take(prog));
             let (kept, _) = kernel_frame(prog, &low, &inputs, Some(&mut st));
-            assert!(st.holds(prog), "{name}: the kernel's frame kept no still lanes");
+            assert!(
+                st.holds(prog),
+                "{name}: the kernel's frame kept no still lanes"
+            );
             let (used, _) = kernel_frame(prog, &low, &inputs, Some(&mut st));
-            assert!(first_diff(&kept, &want).is_none(), "{name} at {ms} ms: the kernel's frame keeping the still cache differs");
-            assert!(first_diff(&used, &want).is_none(), "{name} at {ms} ms: the kernel's frame from the still cache differs");
+            assert!(
+                first_diff(&kept, &want).is_none(),
+                "{name} at {ms} ms: the kernel's frame keeping the still cache differs"
+            );
+            assert!(
+                first_diff(&used, &want).is_none(),
+                "{name} at {ms} ms: the kernel's frame from the still cache differs"
+            );
         }
     }
-    Ok(if frames == 0 { 0.0 } else { steps as f64 / frames as f64 / (W * H) as f64 })
+    Ok(if frames == 0 {
+        0.0
+    } else {
+        steps as f64 / frames as f64 / (W * H) as f64
+    })
 }
 
 #[test]
@@ -110,7 +153,10 @@ fn kernels_draw_the_goldens() {
         }
         ok += 1;
     }
-    println!("goldens through kernels: {ok} the same, {} on the VM: {refused:#?}", refused.len());
+    println!(
+        "goldens through kernels: {ok} the same, {} on the VM: {refused:#?}",
+        refused.len()
+    );
     assert!(ok >= golden::FRAMES.len() / 2, "only {ok} goldens lowered");
 }
 
@@ -119,7 +165,9 @@ fn bundled() -> Vec<(String, String)> {
     let mut v = Vec::new();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for dir in [root.join("formulas"), root.join("../opendmd-web/formulas")] {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         let mut files: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
         files.sort();
         for f in files {
@@ -144,7 +192,11 @@ fn bundled_formulas_draw_the_same_through_kernels() {
             Ok(ipp) => {
                 lowered += 1;
                 let low = lower(&prog).unwrap();
-                report.push(format!("{name}: {} B, {} words, {ipp:.1} instructions a pixel", low.code.len(), low.words.len()));
+                report.push(format!(
+                    "{name}: {} B, {} words, {ipp:.1} instructions a pixel",
+                    low.code.len(),
+                    low.words.len()
+                ));
             }
             Err(why) => report.push(format!("{name}: VM ({why})")),
         }
@@ -157,7 +209,8 @@ fn bundled_formulas_draw_the_same_through_kernels() {
 /// the steps a kernel has).
 fn expr(r: &mut Rng, d: u32) -> String {
     const LEAVES: &[&str] = &[
-        "x", "y", "px", "py", "i", "t", "hour", "a", "0.5", "3", "-2.25", "100", "w", "32000", "-0.001",
+        "x", "y", "px", "py", "i", "t", "hour", "a", "0.5", "3", "-2.25", "100", "w", "32000",
+        "-0.001",
     ];
     if d == 0 || r.below(4) == 0 {
         return LEAVES[r.below(LEAVES.len())].to_string();
@@ -165,20 +218,28 @@ fn expr(r: &mut Rng, d: u32) -> String {
     let e = |r: &mut Rng| expr(r, d - 1);
     match r.below(12) {
         0..=3 => {
-            let op = ["+", "-", "*", "/", "%", "<", ">=", "==", "and", "or", "<=", ">", "!="][r.below(13)];
+            let op = [
+                "+", "-", "*", "/", "%", "<", ">=", "==", "and", "or", "<=", ">", "!=",
+            ][r.below(13)];
             format!("({} {op} {})", e(r), e(r))
         }
         4 => format!("-({})", e(r)),
         5 => format!("({} ? {} : {})", e(r), e(r), e(r)),
         6 | 7 => {
-            let f = ["sin", "cos", "tri", "saw", "sqr", "abs", "floor", "frac", "sqrt", "not "][r.below(10)];
+            let f = [
+                "sin", "cos", "tri", "saw", "sqr", "abs", "floor", "frac", "sqrt", "not ",
+            ][r.below(10)];
             format!("{f}({})", e(r))
         }
         8 => {
             let f = ["min", "max", "step", "hash", "len", "atan2", "bit"][r.below(7)];
             format!("{f}({}, {})", e(r), e(r))
         }
-        9 => format!("({} * {})", e(r), ["0.5", "0.25", "1/8", "3", "x", "a"][r.below(6)]),
+        9 => format!(
+            "({} * {})",
+            e(r),
+            ["0.5", "0.25", "1/8", "3", "x", "a"][r.below(6)]
+        ),
         10 => format!("(floor({}) + floor({})) % 2", e(r), e(r)),
         _ => {
             let f = ["clamp", "mix", "smoothstep", "noise"][r.below(4)];
@@ -211,10 +272,20 @@ fn random_formulas_draw_the_same_through_kernels() {
     for k in 0..500 {
         let colour = match k % 7 {
             0 => format!("hsv({}, 1, {})", expr(&mut r, 3), expr(&mut r, 2)),
-            1 => format!("rgb({}, {}, {})", expr(&mut r, 3), expr(&mut r, 2), expr(&mut r, 2)),
+            1 => format!(
+                "rgb({}, {}, {})",
+                expr(&mut r, 3),
+                expr(&mut r, 2),
+                expr(&mut r, 2)
+            ),
             2 => format!("gray({})", expr(&mut r, 3)),
             3 => format!("pal({}, {})", pals[r.below(pals.len())], expr(&mut r, 3)),
-            4 => format!("pal({}, {}) * {}", pals[r.below(5)], expr(&mut r, 3), expr(&mut r, 2)),
+            4 => format!(
+                "pal({}, {}) * {}",
+                pals[r.below(5)],
+                expr(&mut r, 3),
+                expr(&mut r, 2)
+            ),
             5 => format!(
                 "pal({}, {} ? {} : {}) * {}",
                 pals[r.below(5)],
@@ -230,7 +301,12 @@ fn random_formulas_draw_the_same_through_kernels() {
                 ["1", "0.5", "y", "a"][r.below(4)]
             ),
         };
-        let src = format!("loop {}\nv = {}\nu = {}\n{colour}", 1 + k % 9, expr(&mut r, 3), expr(&mut r, 3));
+        let src = format!(
+            "loop {}\nv = {}\nu = {}\n{colour}",
+            1 + k % 9,
+            expr(&mut r, 3),
+            expr(&mut r, 3)
+        );
         let Ok(prog) = compile(&src) else { continue };
         match same_as_vm("random", &src, &prog, &[0, 1234, 4321]) {
             Ok(_) => ok += 1,
@@ -253,7 +329,9 @@ fn the_check_rows_alone_are_the_frames_rows() {
             continue;
         }
         let want = vm_frame(&prog, &inputs, None);
-        let mut t = EmuTarget { emu: Emu::new(&low.code) };
+        let mut t = EmuTarget {
+            emu: Emu::new(&low.code),
+        };
         let mut ctx = vec![0u32; low.words.len()];
         let mut s = Scratch::<128>::new();
         let mut buf = [[0u8; W * 3]; CHECK_ROWS.len()];
@@ -263,9 +341,24 @@ fn the_check_rows_alone_are_the_frames_rows() {
             // SAFETY: j < 3.
             unsafe { base.add(j * W * 3) }
         };
-        frame(&mut t, &low, &mut ctx, &prog, &mut s, None, &inputs, &OWN, check_rows(), &dest);
+        frame(
+            &mut t,
+            &low,
+            &mut ctx,
+            &prog,
+            &mut s,
+            None,
+            &inputs,
+            &OWN,
+            check_rows(),
+            &dest,
+        );
         for (j, &row) in CHECK_ROWS.iter().enumerate() {
-            assert_eq!(&buf[j][..], &want[row * W * 3..(row + 1) * W * 3], "{name}: row {row}");
+            assert_eq!(
+                &buf[j][..],
+                &want[row * W * 3..(row + 1) * W * 3],
+                "{name}: row {row}"
+            );
         }
     }
 }
@@ -276,7 +369,10 @@ fn what_the_kernel_refuses() {
     for (src, want) in [
         ("layer { gray(y) }\nlayer add { gray(x) }", "it has layers"),
         ("rgb(ur, ug, ub)", "it reads the picture under it"),
-        ("draw { line(0, 0, 127, 31, 1) }\ngray(ink)", "it draws (ink)"),
+        (
+            "draw { line(0, 0, 127, 31, 1) }\ngray(ink)",
+            "it draws (ink)",
+        ),
     ] {
         let prog = compile(src).unwrap();
         assert_eq!(lower(&prog).err(), Some(want), "{src}");
@@ -288,8 +384,12 @@ fn what_the_kernel_refuses() {
 /// generated code.
 #[test]
 fn dump_kernel() {
-    let Some(f) = std::env::var_os("PSI_JIT_DUMP") else { return };
-    let Some(bin) = super::enc_tests::binutils() else { return };
+    let Some(f) = std::env::var_os("PSI_JIT_DUMP") else {
+        return;
+    };
+    let Some(bin) = super::enc_tests::binutils() else {
+        return;
+    };
     let src = std::fs::read_to_string(&f).unwrap();
     let prog = compile(&src).unwrap();
     println!("{}", prog.listing());

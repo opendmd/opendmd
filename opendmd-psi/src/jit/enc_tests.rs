@@ -30,11 +30,24 @@ pub(crate) fn binutils() -> Option<PathBuf> {
 /// Assemble `text` (one instruction a line) without the assembler's own
 /// transformations; the raw bytes of `.text`.
 pub(crate) fn assemble(bin: &std::path::Path, text: &str) -> Vec<u8> {
-    let dir = std::env::temp_dir().join(format!("psi-jit-as-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let dir = std::env::temp_dir().join(format!(
+        "psi-jit-as-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let (s, o, b) = (dir.join("t.s"), dir.join("t.o"), dir.join("t.bin"));
-    std::fs::write(&s, format!("\t.text\n\t.begin no-transform\n{text}\t.end no-transform\n")).unwrap();
-    let st = Command::new(bin.join("xtensa-esp32-elf-as")).arg("-o").arg(&o).arg(&s).status().unwrap();
+    std::fs::write(
+        &s,
+        format!("\t.text\n\t.begin no-transform\n{text}\t.end no-transform\n"),
+    )
+    .unwrap();
+    let st = Command::new(bin.join("xtensa-esp32-elf-as"))
+        .arg("-o")
+        .arg(&o)
+        .arg(&s)
+        .status()
+        .unwrap();
     assert!(st.success(), "the assembler refused the test's text");
     let st = Command::new(bin.join("xtensa-esp32-elf-objcopy"))
         .args(["-O", "binary", "-j", ".text"])
@@ -84,10 +97,20 @@ impl Pair {
         if want != *got {
             for (k, (at, line)) in self.lines.iter().enumerate() {
                 let end = self.lines.get(k + 1).map_or(got.len(), |l| l.0);
-                let (g, w) = (&got[*at..end], want.get(*at..end.min(want.len())).unwrap_or(&[]));
-                assert_eq!(g, w, "`{line}` at {at}: ours {g:02x?}, the assembler's {w:02x?}");
+                let (g, w) = (
+                    &got[*at..end],
+                    want.get(*at..end.min(want.len())).unwrap_or(&[]),
+                );
+                assert_eq!(
+                    g, w,
+                    "`{line}` at {at}: ours {g:02x?}, the assembler's {w:02x?}"
+                );
             }
-            panic!("lengths differ: ours {} B, the assembler's {} B", got.len(), want.len());
+            panic!(
+                "lengths differ: ours {} B, the assembler's {} B",
+                got.len(),
+                want.len()
+            );
         }
     }
 }
@@ -136,10 +159,16 @@ fn encoders_match_the_gnu_assembler() {
         ("src", Code::src),
         ("moveqz", Code::moveqz),
     ];
-    let more: [(&str, Rrr); 3] = [("movnez", Code::movnez), ("movltz", Code::movltz), ("movgez", Code::movgez)];
+    let more: [(&str, Rrr); 3] = [
+        ("movnez", Code::movnez),
+        ("movltz", Code::movltz),
+        ("movgez", Code::movgez),
+    ];
     for (name, f) in rrr.iter().chain(more.iter()) {
         for (r, s, t) in [(2, 3, 4), (15, 0, 7), (5, 14, 15), (8, 9, 10), (13, 13, 1)] {
-            p.at(format!("{name} {}, {}, {}", a(r), a(s), a(t)), |c| f(c, r, s, t));
+            p.at(format!("{name} {}, {}, {}", a(r), a(s), a(t)), |c| {
+                f(c, r, s, t)
+            });
         }
     }
     for (r, t) in [(2, 3), (15, 14), (9, 0)] {
@@ -159,7 +188,9 @@ fn encoders_match_the_gnu_assembler() {
     for shift in [0, 1, 7, 8, 11, 14, 15, 16, 17, 24, 31] {
         for bits in [1, 2, 5, 8, 15, 16] {
             if shift + bits <= 32 {
-                p.at(format!("extui a7, a13, {shift}, {bits}"), |c| c.extui(7, 13, shift, bits));
+                p.at(format!("extui a7, a13, {shift}, {bits}"), |c| {
+                    c.extui(7, 13, shift, bits)
+                });
             }
         }
     }
@@ -228,7 +259,12 @@ fn encoders_match_the_gnu_assembler() {
             c.bbci(6, bit, to)
         });
     }
-    let zeros = [("beqz", Zero::Eqz), ("bnez", Zero::Nez), ("bltz", Zero::Ltz), ("bgez", Zero::Gez)];
+    let zeros = [
+        ("beqz", Zero::Eqz),
+        ("bnez", Zero::Nez),
+        ("bltz", Zero::Ltz),
+        ("bgez", Zero::Gez),
+    ];
     for (name, z) in zeros {
         for off in [-2048, -8, 8, 2047] {
             p.at(format!("{name} a10, {}", rel(off + 4)), |c| {
@@ -237,7 +273,12 @@ fn encoders_match_the_gnu_assembler() {
             });
         }
     }
-    let imms = [("beqi", Imm::Eqi), ("bnei", Imm::Nei), ("blti", Imm::Lti), ("bgei", Imm::Gei)];
+    let imms = [
+        ("beqi", Imm::Eqi),
+        ("bnei", Imm::Nei),
+        ("blti", Imm::Lti),
+        ("bgei", Imm::Gei),
+    ];
     for (name, m) in imms {
         for imm in [-1, 1, 3, 12, 128, 256] {
             p.at(format!("{name} a5, {imm}, . + 16"), |c| {

@@ -18,7 +18,9 @@ const STACK_LEN: usize = 4096;
 const HELPERS: u32 = 0x5000_0000;
 const RETURN: u32 = 0x6000_0000;
 const B4CONST: [i32; 16] = [-1, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 32, 64, 128, 256];
-const B4CONSTU: [u32; 16] = [32768, 65536, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 32, 64, 128, 256];
+const B4CONSTU: [u32; 16] = [
+    32768, 65536, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 32, 64, 128, 256,
+];
 const JUNK: u32 = 0xdead_beef;
 
 pub(crate) struct Emu {
@@ -67,15 +69,24 @@ impl Emu {
             return self.stack[o..].as_mut_ptr();
         }
         let k = (a >> 20) as usize;
-        assert!(k >= 1 && k <= self.regions.len(), "access to an unmapped address {a:#x}");
+        assert!(
+            k >= 1 && k <= self.regions.len(),
+            "access to an unmapped address {a:#x}"
+        );
         let (b, len) = self.regions[k - 1];
         let o = (a & 0xfffff) as usize;
-        assert!(o + n <= len, "access past a region's end at {a:#x} ({n} bytes, region {len})");
+        assert!(
+            o + n <= len,
+            "access past a region's end at {a:#x} ({n} bytes, region {len})"
+        );
         (b + o) as *mut u8
     }
 
     fn ld(&mut self, a: u32, n: usize) -> u32 {
-        assert!(a as usize % n == 0, "misaligned {n}-byte load at {a:#x}");
+        assert!(
+            (a as usize).is_multiple_of(n),
+            "misaligned {n}-byte load at {a:#x}"
+        );
         let p = self.host(a, n);
         // SAFETY: inside a live region (checked by `host`).
         unsafe {
@@ -88,7 +99,10 @@ impl Emu {
     }
 
     fn st(&mut self, a: u32, n: usize, v: u32) {
-        assert!(a as usize % n == 0, "misaligned {n}-byte store at {a:#x}");
+        assert!(
+            (a as usize).is_multiple_of(n),
+            "misaligned {n}-byte store at {a:#x}"
+        );
         let p = self.host(a, n);
         // SAFETY: as `ld`.
         unsafe {
@@ -157,7 +171,10 @@ impl Emu {
                         (0, 3, 2) => {
                             // callx8
                             let f = as__;
-                            assert!((HELPERS..HELPERS + 16 * u32::from(hid::COUNT)).contains(&f), "callx8 to {f:#x}");
+                            assert!(
+                                (HELPERS..HELPERS + 16 * u32::from(hid::COUNT)).contains(&f),
+                                "callx8 to {f:#x}"
+                            );
                             let id = ((f - HELPERS) / 16) as u8;
                             let args = [a[10], a[11], a[12], a[13], a[14]];
                             self.calls += 1;
@@ -198,7 +215,9 @@ impl Emu {
                     }
                     (2, 8) => wr = Some((r_, as__.wrapping_mul(at_))),
                     (2, 10) => wr = Some((r_, ((as__ as u64 * at_ as u64) >> 32) as u32)),
-                    (2, 11) => wr = Some((r_, ((as__ as i32 as i64 * at_ as i32 as i64) >> 32) as u32)),
+                    (2, 11) => {
+                        wr = Some((r_, ((as__ as i32 as i64 * at_ as i32 as i64) >> 32) as u32))
+                    }
                     (3, 4) => wr = Some((r_, (as__ as i32).min(at_ as i32) as u32)),
                     (3, 5) => wr = Some((r_, (as__ as i32).max(at_ as i32) as u32)),
                     (3, 6) => wr = Some((r_, as__.min(at_))),
@@ -222,7 +241,12 @@ impl Emu {
                         2 => wr = Some((t_, self.ld(as__.wrapping_add(imm8 * 4), 4))),
                         4 => self.st(as__.wrapping_add(imm8), 1, at_),
                         6 => self.st(as__.wrapping_add(imm8 * 4), 4, at_),
-                        9 => wr = Some((t_, self.ld(as__.wrapping_add(imm8 * 2), 2) as u16 as i16 as i32 as u32)),
+                        9 => {
+                            wr = Some((
+                                t_,
+                                self.ld(as__.wrapping_add(imm8 * 2), 2) as u16 as i16 as i32 as u32,
+                            ))
+                        }
                         10 => wr = Some((t_, sext(s << 8 | imm8, 12) as u32)),
                         12 => wr = Some((t_, as__.wrapping_add(sext(imm8, 8) as u32))),
                         13 => wr = Some((t_, as__.wrapping_add((sext(imm8, 8) << 8) as u32))),

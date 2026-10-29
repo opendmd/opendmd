@@ -14,7 +14,9 @@ pub type Reg = u8;
 /// The immediates `beqi`/`bnei`/`blti`/`bgei` take (`b4const`).
 const B4CONST: [i32; 16] = [-1, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 32, 64, 128, 256];
 /// The immediates `bltui`/`bgeui` take (`b4constu`).
-const B4CONSTU: [u32; 16] = [32768, 65536, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 32, 64, 128, 256];
+const B4CONSTU: [u32; 16] = [
+    32768, 65536, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 32, 64, 128, 256,
+];
 
 /// The `r` field of a two-register branch (`op0` 7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,7 +110,8 @@ impl Code {
     }
 
     fn put24(&mut self, w: u32) {
-        self.bytes.extend_from_slice(&[w as u8, (w >> 8) as u8, (w >> 16) as u8]);
+        self.bytes
+            .extend_from_slice(&[w as u8, (w >> 8) as u8, (w >> 16) as u8]);
     }
 
     fn put16(&mut self, w: u32) {
@@ -430,7 +433,13 @@ impl Code {
         let off = to as i32 - self.here() as i32 - 4;
         let s = self.reg(as_);
         let ok = self.check(fits_s(off, 8) && bit < 32);
-        self.rri8(7, bit & 15, s, 6 | (bit >> 4 & 1), if ok { off as u32 } else { 0 });
+        self.rri8(
+            7,
+            bit & 15,
+            s,
+            6 | (bit >> 4 & 1),
+            if ok { off as u32 } else { 0 },
+        );
     }
     /// A branch on `as` against zero (12-bit offset).
     pub fn bz(&mut self, z: Zero, as_: Reg, to: usize) {
@@ -447,7 +456,13 @@ impl Code {
         let k = B4CONST.iter().position(|&c| c == imm);
         let ok = self.check(fits_s(off, 8) && k.is_some());
         let k = k.unwrap_or(0) as u32;
-        self.put24(6 | 2 << 4 | (m as u32) << 6 | s << 8 | k << 12 | if ok { (off as u32 & 0xff) << 16 } else { 0 });
+        self.put24(
+            6 | 2 << 4
+                | (m as u32) << 6
+                | s << 8
+                | k << 12
+                | if ok { (off as u32 & 0xff) << 16 } else { 0 },
+        );
     }
     /// `bltui`/`bgeui` (`ge`): `as` unsigned against a `b4constu`.
     pub fn bui(&mut self, ge: bool, as_: Reg, imm: u32, to: usize) {
@@ -457,7 +472,9 @@ impl Code {
         let ok = self.check(fits_s(off, 8) && k.is_some());
         let k = k.unwrap_or(0) as u32;
         let m = if ge { 3 } else { 2 };
-        self.put24(6 | 3 << 4 | m << 6 | s << 8 | k << 12 | if ok { (off as u32 & 0xff) << 16 } else { 0 });
+        self.put24(
+            6 | 3 << 4 | m << 6 | s << 8 | k << 12 | if ok { (off as u32 & 0xff) << 16 } else { 0 },
+        );
     }
     /// `j to` (18-bit offset).
     pub fn j(&mut self, to: usize) {
@@ -478,32 +495,50 @@ impl Code {
     pub fn b_fwd(&mut self, c: Cond, as_: Reg, at: Reg) -> Fixup {
         let at_ = self.here();
         self.b(c, as_, at, at_ + 4);
-        Fixup { at: at_, kind: FixKind::B8 }
+        Fixup {
+            at: at_,
+            kind: FixKind::B8,
+        }
     }
     pub fn bbci_fwd(&mut self, as_: Reg, bit: u32) -> Fixup {
         let at_ = self.here();
         self.bbci(as_, bit, at_ + 4);
-        Fixup { at: at_, kind: FixKind::B8 }
+        Fixup {
+            at: at_,
+            kind: FixKind::B8,
+        }
     }
     pub fn bz_fwd(&mut self, z: Zero, as_: Reg) -> Fixup {
         let at_ = self.here();
         self.bz(z, as_, at_ + 4);
-        Fixup { at: at_, kind: FixKind::B12 }
+        Fixup {
+            at: at_,
+            kind: FixKind::B12,
+        }
     }
     pub fn bi_fwd(&mut self, m: Imm, as_: Reg, imm: i32) -> Fixup {
         let at_ = self.here();
         self.bi(m, as_, imm, at_ + 4);
-        Fixup { at: at_, kind: FixKind::B8 }
+        Fixup {
+            at: at_,
+            kind: FixKind::B8,
+        }
     }
     pub fn bui_fwd(&mut self, ge: bool, as_: Reg, imm: u32) -> Fixup {
         let at_ = self.here();
         self.bui(ge, as_, imm, at_ + 4);
-        Fixup { at: at_, kind: FixKind::B8 }
+        Fixup {
+            at: at_,
+            kind: FixKind::B8,
+        }
     }
     pub fn j_fwd(&mut self) -> Fixup {
         let at_ = self.here();
         self.j(at_ + 4);
-        Fixup { at: at_, kind: FixKind::J18 }
+        Fixup {
+            at: at_,
+            kind: FixKind::J18,
+        }
     }
 
     /// Point `f` at the current address.
@@ -514,7 +549,12 @@ impl Code {
 
     pub fn bind_to(&mut self, f: Fixup, to: usize) {
         let off = to as i32 - f.at as i32 - 4;
-        let w = u32::from_le_bytes([self.bytes[f.at], self.bytes[f.at + 1], self.bytes[f.at + 2], 0]);
+        let w = u32::from_le_bytes([
+            self.bytes[f.at],
+            self.bytes[f.at + 1],
+            self.bytes[f.at + 2],
+            0,
+        ]);
         let w = match f.kind {
             FixKind::B8 => {
                 if !self.check(fits_s(off, 8)) {
