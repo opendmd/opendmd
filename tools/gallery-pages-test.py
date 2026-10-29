@@ -23,6 +23,7 @@ import argparse
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -124,7 +125,15 @@ def main() -> int:
         (g1 / "rainbow-rings.psi").write_text(RINGS)
         out, log = build("site-1", g1)
         page = (out / "formulas/index.html").read_text()
-        check(page.count("<!-- gallery:begin -->") == 1 and page.count("<!-- gallery:end -->") == 1, "the page has its markers")
+        check(page.count("<!-- gallery:begin -->") == 1 and page.count("<!-- gallery:end -->") == 1
+              and all(page.count(f"<!-- gallery:{p}{e} -->") == 1 for p in ("community", "examples") for e in ("", "-end")),
+              "the page has its markers (and its two lists', which the site's Worker rewrites from its store)")
+        data = json.loads((out / "formulas/gallery.json").read_text())
+        n_ex = len(list(site_py.EXAMPLES.glob("*.psi")))
+        check(len(data["examples"]) == n_ex and {e["slug"] for e in data["contributions"]} == {"spiral-sweep", "rainbow-rings"}
+              and data["contributions"][0]["file"] == (g1 / f"{data['contributions'][0]['slug']}.psi").read_text()
+              and all(e["file"].endswith(e["src"]) for e in data["examples"]),
+              f"formulas/gallery.json: the {n_ex} examples and the contributions, each with its file (the Worker seeds its store from it)")
         check("<h3>Spiral sweep</h3>" in page and "<h3>Rainbow rings</h3>" in page
               and (out / "formulas/thumbs/rainbow-rings.png").is_file(), "the contributions are on the page, with thumbnails", log)
         thumbs = sorted((out / "formulas").glob("*/*.png"))

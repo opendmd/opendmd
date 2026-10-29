@@ -25,15 +25,30 @@
 //   www.opendmd.dev/…  301 to https://opendmd.dev/… (for the paths that
 //                   reach the Worker; a zone redirect rule does the rest)
 //
+// The gallery store (S6, src/gallery.ts, "S6 as built"):
+//
+//   /formulas/      the built gallery page, its two lists written from the
+//                   store (X-Gallery: store; the page as built, X-Gallery:
+//                   built, until the store is ready or when D1 fails)
+//   /formulas/src/<stem>.psi     the file, from the store (an example first)
+//   /formulas/thumbs/<slug>.png  a contribution's thumbnail, from the store
+//   /formulas/…     anything else: the asset
+//   GET /api/gallery        the store: entries, the commit synced, refusals
+//   POST /api/gallery/sync  sync the public repo's gallery/ now (what the
+//                   cron does): 200 the report, 429 when one started under
+//                   10 s ago, 502 when GitHub couldn't be read
+//   cron (cloudflare.config.ts)  the same sync
+//
 // Asset responses carry target/site/_headers' headers whether they come
 // from the asset layer or through env.ASSETS here.
 
 import { check } from "./psi";
 import { D1Store, digest, type Store, type Stored } from "./store";
+import * as gallery from "./gallery";
 
 declare const __SITE_VERSION__: string;
 
-interface Env {
+interface Env extends gallery.GalleryEnv {
   ASSETS: { fetch(request: Request | string): Promise<Response> };
   DB: D1Database;
   POSTS: { limit(o: { key: string }): Promise<{ success: boolean }> };
@@ -46,6 +61,9 @@ const ID = "[0-9a-hjkmnp-tv-z]{10,}";
 const PAGE = new RegExp(`^/f/(${ID})$`);
 const PSI = new RegExp(`^/f/(${ID})\\.psi$`);
 const API_ONE = new RegExp(`^/api/f/(${ID})$`);
+const SLUG = "[a-z0-9]+(?:-[a-z0-9]+)*";
+const GALLERY_SRC = new RegExp(`^/formulas/src/(${SLUG})\\.psi$`);
+const GALLERY_THUMB = new RegExp(`^/formulas/thumbs/(${SLUG})\\.png$`);
 // What a stored Formula may be: the gallery's size cap.
 const MAX_BYTES = 4096;
 // The characters the gallery's checker refuses (f.js BAD, line by line):
@@ -73,8 +91,28 @@ function options(allow: string, cors: boolean): Response {
   });
 }
 
-async function api(request: Request, url: URL, env: Env): Promise<Response> {
+async function api(request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
   const m = request.method;
+  if (url.pathname === "/api/gallery") {
+    const allow = "GET, HEAD, OPTIONS";
+    if (m === "OPTIONS") return options(allow, true);
+    if (m !== "GET" && m !== "HEAD") return json({ error: "method not allowed" }, 405, { ...CORS, Allow: allow });
+    try {
+      return json(await gallery.api(env), 200, { ...CORS, "Cache-Control": "public, max-age=30" });
+    } catch (e) {
+      return json({ error: `the gallery store can't be read: ${(e as Error).message}` }, 503, CORS);
+    }
+  }
+  if (url.pathname === "/api/gallery/sync") {
+    // Anyone may ask: it only does sooner what the cron does, from the
+    // public repo, and one run at a time (10 s apart at least).
+    const allow = "POST";
+    if (m === "OPTIONS") return options(allow, false);
+    if (m !== "POST") return json({ error: "method not allowed" }, 405, { Allow: allow });
+    const r = await gallery.sync(env, url.origin);
+    if (r.busy) return json({ error: "a sync started a moment ago: try again in a few seconds" }, 429, { "Retry-After": "10" });
+    return json(r, r.ok ? 200 : 502);
+  }
   if (url.pathname === "/api/health") {
     const allow = "GET, HEAD, OPTIONS";
     if (m === "OPTIONS") return options(allow, true);
@@ -204,14 +242,34 @@ async function formula(request: Request, url: URL, env: Env): Promise<Response> 
   return out;
 }
 
+async function formulas(request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "HEAD") return env.ASSETS.fetch(request);
+  if (url.pathname === "/formulas/") return gallery.page(request, env, ctx);
+  const s = GALLERY_SRC.exec(url.pathname);
+  if (s) return gallery.file(request, env, ctx, "src", s[1]);
+  const t = GALLERY_THUMB.exec(url.pathname);
+  if (t) return gallery.file(request, env, ctx, "thumb", t[1]);
+  return env.ASSETS.fetch(request);
+}
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.hostname === `www.${APEX}`) {
       return Response.redirect(`https://${APEX}${url.pathname}${url.search}`, 301);
     }
-    if (url.pathname.startsWith("/api/")) return api(request, url, env);
+    if (url.pathname.startsWith("/api/")) return api(request, url, env, ctx);
     if (url.pathname.startsWith("/f/")) return formula(request, url, env);
+    if (url.pathname.startsWith("/formulas/")) return formulas(request, url, env, ctx);
     return env.ASSETS.fetch(request);
+  },
+
+  // The cron (cloudflare.config.ts): the public repo's gallery/ into the store.
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      gallery.sync(env).then((r) => {
+        if (!r.busy && (!r.ok || r.changed)) console.log(JSON.stringify({ gallerySync: r }));
+      }),
+    );
   },
 };

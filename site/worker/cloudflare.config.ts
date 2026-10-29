@@ -22,10 +22,12 @@
 // www.opendmd.dev (`domains`). Short links (S5): the D1 database
 // opendmd-site (DB; its schema in migrations/, applied by make
 // site-d1-migrate before a deploy that needs it) and a rate limiter for
-// POST /api/f (POSTS). Locally, cf dev keeps its own D1 in a SQLite file
+// POST /api/f (POSTS). The gallery store (S6): the same D1, a cron that
+// syncs the public repo's gallery/ into it, and /formulas/* through the
+// Worker (runWorkerFirst). Locally, cf dev keeps its own D1 in a SQLite file
 // (--local --persist-to, the Makefile's SITE_DEV_STATE) and simulates the
 // limiter: nothing in the account is touched.
-import { defineConfig } from "cf/config";
+import { defineConfig, triggers } from "cf/config";
 
 export default defineConfig({
   worker: {
@@ -36,7 +38,9 @@ export default defineConfig({
       // x.html is served at /x and x/index.html at /x/ (a .html address redirects once).
       htmlHandling: "auto-trailing-slash",
       notFoundHandling: "404-page",
-      runWorkerFirst: ["/f/*", "/api/*"],
+      // /formulas/*: the gallery page and its files from the store (S6);
+      // the Worker hands everything else under it to the assets.
+      runWorkerFirst: ["/f/*", "/api/*", "/formulas/*"],
     },
     env: {
       ASSETS: { type: "assets" },
@@ -46,6 +50,11 @@ export default defineConfig({
       // location; the namespace is this account's own number for it).
       POSTS: { type: "rate-limit", namespace: "20261029", simple: { limit: 10, period: 60 } },
     },
+    // The gallery sync (S6, src/gallery.ts): every 5 minutes it asks GitHub
+    // for the public repo's main (one small request) and, only when it
+    // moved, fetches that commit's gallery/ into the store, so a merged
+    // contribution is on opendmd.dev within minutes, without a deploy.
+    triggers: [triggers.scheduled({ schedule: "*/5 * * * *" })],
     workersDev: true,
     previewUrls: true,
     observability: { enabled: true },
