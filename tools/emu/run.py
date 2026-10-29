@@ -9,7 +9,8 @@
 smoke: pass when the microSD mount, panel up, httpd, www pack verified and a GIF start
        from the playlist are all seen; prints EMU_SMOKE_OK.
 probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0 or a missing/
-       mismatching golden line; prints EMU_PROBE_OK and the correctness lines.
+       mismatching golden line, or a bundled Formula that does not open / a short heap
+       that does not refuse Endless road; prints EMU_PROBE_OK and the correctness lines.
 Either fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
 """
@@ -35,7 +36,8 @@ SMOKE = [
 ]
 DIFFER = re.compile(r"(\d+)(?: of \d+ \w+)? differ")
 GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes, (\d+) differ")
-PROBE_KEYS = re.compile(r"psi-probe: (jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
+BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) by the check, (.*) by the compiler")
+PROBE_KEYS = re.compile(r"psi-probe: (bundled |short heap|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
 
 
 def main():
@@ -71,6 +73,7 @@ def main():
     t0 = time.time()
     seen, gifs, resets, failure, done_at = {}, 0, 0, None, None
     golden = None
+    bundled = None
     differ_bad = []
     lines = []
     p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
@@ -107,6 +110,9 @@ def main():
                 m = GOLDEN.search(line)
                 if m:
                     golden = (line, int(m[1]), int(m[2]))
+                m = BUNDLED.search(line)
+                if m:
+                    bundled = (line, int(m[1]), int(m[2]), m[3], m[4])
                 if "psi-probe:" in line:
                     for d in DIFFER.finditer(line):
                         if int(d[1]) > 0:
@@ -148,6 +154,12 @@ def main():
             die("the golden-frames result line is missing")
         if golden[1] == 0 or golden[2] != 0:
             die(f"golden frames: {golden[1]} match, {golden[2]} differ")
+        # Every bundled Formula opens through the real path, and a short heap
+        # refuses one (the check, and the compiler itself) instead of aborting.
+        if not bundled:
+            die("the bundled-formulas line is missing")
+        if bundled[1] == 0 or bundled[2] != 0 or bundled[3] != "refused" or bundled[4] != "refused":
+            die(f"bundled formulas: {bundled[0]}")
         print("--- correctness lines:")
         for l in lines:
             if PROBE_KEYS.search(l):

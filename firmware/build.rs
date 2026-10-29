@@ -70,6 +70,30 @@ fn main() {
 
     // The embedded setup page, rendered then gzipped.
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
+
+    // The bundled Formulas (`-- bundle` in opendmd-web/formulas/), for
+    // psi-probe's opens through the real path (`psi_probe::bundled`): a
+    // list of (file stem, `include_str!`), so a Formula bundled later is in
+    // it without an edit here.
+    let dir = std::fs::canonicalize("../opendmd-web/formulas").expect("opendmd-web/formulas");
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let mut bundled: Vec<(String, PathBuf)> = std::fs::read_dir(&dir)
+        .expect("reading opendmd-web/formulas")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "psi"))
+        .filter(|p| {
+            std::fs::read_to_string(p).is_ok_and(|t| t.lines().any(|l| l.starts_with("-- bundle")))
+        })
+        .map(|p| (p.file_stem().unwrap().to_string_lossy().into_owned(), p))
+        .collect();
+    bundled.sort();
+    let mut list = String::from("&[\n");
+    for (name, path) in &bundled {
+        println!("cargo:rerun-if-changed={}", path.display());
+        list += &format!("    ({name:?}, include_str!({:?})),\n", path.display().to_string());
+    }
+    list += "]\n";
+    std::fs::write(out_dir.join("bundled_formulas.rs"), list).expect("writing bundled_formulas.rs");
     let raw = std::fs::read_to_string("web/setup.html").expect("reading web/setup.html");
     let mut tera = Tera::default();
     tera.add_raw_template("setup", &raw)

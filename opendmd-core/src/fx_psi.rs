@@ -514,6 +514,27 @@ pub fn io_error(e: psi::Error) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidInput, e.msg)
 }
 
+/// A zeroed `Box<T>`, or `None` when the heap has no block for it.
+///
+/// # Safety
+/// All-zero must be a valid `T`.
+unsafe fn try_zeroed<T>() -> Option<Box<T>> {
+    let layout = std::alloc::Layout::new::<T>();
+    // SAFETY: `T` is not zero-sized (the callers' are KBs); a non-null
+    // block of `layout` from the global allocator is what `Box` frees.
+    let p = unsafe { std::alloc::alloc_zeroed(layout) } as *mut T;
+    (!p.is_null()).then(|| unsafe { Box::from_raw(p) })
+}
+
+/// The compile error for an open the heap can't hold just now.
+fn no_memory() -> psi::Error {
+    psi::Error {
+        start: 0,
+        end: 0,
+        msg: psi::NO_MEMORY.to_string(),
+    }
+}
+
 /// Why a formula's path does not open (`None` if it is not a formula, or
 /// it does).
 pub fn open_error(path: &str) -> Option<std::io::Error> {
@@ -528,7 +549,7 @@ impl PsiFx {
     /// The effect for an `@formula` query, or why not.
     pub fn from_query(q: &str) -> Result<PsiBox, psi::Error> {
         let q = query(q);
-        let mut fx = PsiBox::new();
+        let mut fx = PsiBox::try_new().ok_or_else(no_memory)?;
         let (est, delay) = compile(&q, &mut fx.prog)?;
         fx.ink = canvas_for(&fx.prog, None)?;
         fx.clock = reads_clock(&fx.prog);
@@ -560,7 +581,7 @@ impl PsiFx {
     pub fn retune_from(&mut self, q: &str) -> Result<(), psi::Error> {
         let q = query(q);
         // SAFETY: `Program` is integers all the way down: zero is valid.
-        let mut prog = unsafe { Box::<psi::Program>::new_zeroed().assume_init() };
+        let mut prog = unsafe { try_zeroed::<psi::Program>() }.ok_or_else(no_memory)?;
         prog.clear();
         let (est, delay) = compile(&q, &mut prog)?;
         // A formula that starts drawing takes its canvas here, between
@@ -992,7 +1013,7 @@ impl FormulaLook {
     pub fn from_path(path: &str) -> Result<FormulaLook, psi::Error> {
         let q = query(Self::query_of(path));
         // SAFETY: `Program` is integers all the way down: zero is valid.
-        let mut prog = unsafe { Box::<psi::Program>::new_zeroed().assume_init() };
+        let mut prog = unsafe { try_zeroed::<psi::Program>() }.ok_or_else(no_memory)?;
         let est = Self::compile(&q, &mut prog)?;
         let mut look = FormulaLook {
             prog,
@@ -1102,7 +1123,7 @@ impl FormulaLook {
     pub fn retune(&mut self, path: &str) -> Result<(), psi::Error> {
         let q = query(Self::query_of(path));
         // SAFETY: as in `from_path`.
-        let mut prog = unsafe { Box::<psi::Program>::new_zeroed().assume_init() };
+        let mut prog = unsafe { try_zeroed::<psi::Program>() }.ok_or_else(no_memory)?;
         let est = Self::compile(&q, &mut prog)?;
         self.prog = prog;
         // Held: a look that starts drawing takes its canvas now (if the heap
@@ -1564,16 +1585,24 @@ mod alloc_box {
 
     impl PsiBox {
         pub fn new() -> PsiBox {
+            Self::try_new().unwrap_or_else(|| {
+                std::alloc::handle_alloc_error(std::alloc::Layout::new::<PsiFx>())
+            })
+        }
+
+        /// [`PsiBox::new`], or `None` when the heap has no block for it
+        /// (an open refused, not the abort of an infallible `Box`).
+        pub fn try_new() -> Option<PsiBox> {
             // SAFETY: `PsiFx` is integers and arrays of integers all the
             // way down (`Program`, `Scratch`, `Inputs`, `u8`) but for its
             // canvas, an `Option<Box<_>>`, whose all-zero value is `None`:
             // all-zero is a valid value of it.
-            let mut b = PsiBox(unsafe { Box::<PsiFx>::new_zeroed().assume_init() });
+            let mut b = PsiBox(unsafe { super::try_zeroed::<PsiFx>()? });
             b.0.prog.clear();
             b.0.scratch.reset();
             b.0.delay_ms = 20;
             b.0.gov = super::Governor::default();
-            b
+            Some(b)
         }
     }
 

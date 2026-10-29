@@ -1499,6 +1499,96 @@ fn speed2(out: &mut [u8]) {
     );
 }
 
+/// Only [`bundled`] (and `done`): a probe image small enough for the 4mb
+/// layout while the full probe is not (beta.11: 2,418,496 B, over the
+/// factory partition); `make emu-probe` then fails on the missing golden
+/// line, so read the bundled line from its log. `false`: the full probe.
+const BUNDLED_ONLY: bool = false;
+
+/// The bundled Formulas (`-- bundle` in opendmd-web/formulas/; the list
+/// is firmware/build.rs's), each opened through the real path
+/// (`Fx::parse`: the Formula's box, `psi_stack::compile` with its heap
+/// check, the canvas) and drawn for a few frames; then a heap made short
+/// on purpose: Endless road refused by the check before the compile, and
+/// by the compiler itself (`psi::compile_into` on the formula stack, the
+/// check skipped) with [`psi::NO_MEMORY`] — not the abort Endless road
+/// was on 2026-10-29. `make emu-probe` requires the summary line.
+#[inline(never)]
+fn bundled(canvas: &mut Canvas) {
+    const LIST: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/bundled_formulas.rs"));
+    let (mut opened, mut failed) = (0, 0);
+    let mut road = None;
+    for &(name, src) in LIST {
+        let path = fx_psi::path(src, "");
+        let h0 = heap();
+        let Some(mut fx) = Fx::parse(&path) else {
+            failed += 1;
+            let why = fx_psi::open_error(&path).map(|e| e.to_string()).unwrap_or_default();
+            say!(error, "psi-probe: bundled {name}: did not open: {why} (heap {h0} B free, largest block {} B)", crate::state::largest_free_block());
+            continue;
+        };
+        let h1 = heap();
+        let delay = fx.delay();
+        for k in 0..3 {
+            fx.frame(delay * k, canvas);
+        }
+        drop(fx);
+        opened += 1;
+        say!(info, "psi-probe: bundled {name}: opened and drawn, {} B of source, heap {h0} -> {h1} B at open, {} B after",
+            psi::compact(src).len(), heap());
+        if name == "endless-road" {
+            road = Some(psi::compact(src));
+        }
+    }
+    let Some(road) = road else {
+        say!(error, "psi-probe: bundled formulas: {opened} opened, {failed} failed; short heap: no Endless road to try");
+        return;
+    };
+    // Ballast down to `left` B free: 4 KB blocks, then 256 B ones.
+    let ballast = |left: usize| -> Vec<Vec<u8>> {
+        let mut b: Vec<Vec<u8>> = Vec::new();
+        let _ = b.try_reserve(512);
+        for size in [4096usize, 256] {
+            while heap() as usize > left + size && b.len() < b.capacity() {
+                let mut v = Vec::new();
+                if v.try_reserve_exact(size).is_err() {
+                    break;
+                }
+                v.resize(size, 1u8);
+                b.push(v);
+            }
+        }
+        b
+    };
+    // 1. Under the check's figure: refused before any compile.
+    let need = crate::config::PSI_COMPILE_STACK + 512 + psi::compile_heap_estimate(road.len()) + crate::config::PSI_COMPILE_RESERVE;
+    let b = ballast(need - 4096);
+    let h = heap();
+    let check = fx_psi::open_error(&fx_psi::path(&road, "")).map(|e| e.to_string()).unwrap_or_else(|| "opened".into());
+    drop(b);
+    say!(info, "psi-probe: short heap, {h} B free (the check needs {need}): Endless road: {check}");
+    // 2. The check skipped: the compile's stack and ~6 KB more, so the
+    // compiler itself runs short (its tokens alone are ~12 KB).
+    let mut prog = zeroed::<psi::Program>();
+    let b = ballast(crate::config::PSI_COMPILE_STACK + 512 + 6 * 1024);
+    let h = heap();
+    let r = crate::psi_stack::run(|| psi::compile_into(&road, &mut prog).map(|_| ()).map_err(|e| e.msg));
+    drop(b);
+    let compiler = match r {
+        None => "no task".to_string(),
+        Some(Ok(())) => "compiled".to_string(),
+        Some(Err(m)) => m,
+    };
+    say!(info, "psi-probe: short heap, {h} B free, the check skipped: Endless road: {compiler}");
+    let ok = |m: &str| m == psi::NO_MEMORY;
+    say!(info,
+        "psi-probe: bundled formulas: {opened} opened, {failed} failed; short heap: {} by the check, {} by the compiler; heap {} B free after",
+        if ok(&check) { "refused" } else { "NOT refused" },
+        if ok(&compiler) { "refused" } else { "NOT refused" },
+        heap()
+    );
+}
+
 /// The compiler's own stack on the worst inputs (`psi::worst`, the deepest
 /// last): each compiled on a thread of its own with a [`WORST_STACK`] stack,
 /// reporting the bytes it used; then on the player's compile stack and
@@ -1914,6 +2004,13 @@ pub fn run(root: &str) {
     }
     let start = Instant::now();
     let stack0 = stack_unused();
+    if BUNDLED_ONLY {
+        let mut canvas = Canvas::new();
+        bundled(&mut canvas);
+        say!(info, "{DONE}: bundled, main stack {} B unused (was {stack0}), heap {} B free, {} ms in all",
+            stack_unused(), heap(), start.elapsed().as_millis());
+        return;
+    }
     if FASTDIV_ONLY {
         fastdiv_probe(start, stack0);
         return;
@@ -1953,6 +2050,8 @@ pub fn run(root: &str) {
     worst_stack();
     let mut out = vec![0u8; psi::W * psi::H * 3];
     let mut canvas = Canvas::new();
+    // Then its heap: every bundled Formula opens, a short heap refuses one.
+    bundled(&mut canvas);
     jit_spike(&mut out);
 
     // The examples as effects, first while the heap is at its fullest (the
