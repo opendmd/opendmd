@@ -200,8 +200,8 @@ pub const VERSION: usize = 1;
 
 /// Words that are keywords only in one place: `fps` before a number,
 /// `forever` after `loop`, `sprite NAME {`, `palette NAME =`, a sprite's
-/// `key` line.
-pub const CONTEXT_WORDS: [&str; 5] = ["fps", "forever", "sprite", "palette", "key"];
+/// `key` line, `rate N` after `layer` (and its blend).
+pub const CONTEXT_WORDS: [&str; 6] = ["fps", "forever", "sprite", "palette", "key", "rate"];
 
 /// The editor's cheat sheet (`js/formulas.js` `VARS FUNCS DRAW COLS
 /// DECLS`, generated from these): what to write, what it does, and what a
@@ -251,6 +251,7 @@ pub mod cheat {
         ("fps 100", "frames a second: 25, 50 (else) or 100, for fast motion; a light formula only", ""),
         ("frame { … }", "values worked out once a frame", ""),
         ("layer add { … }", "a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min", ""),
+        ("layer rate 4 { … }", "a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame", "layer rate 4 {\n  \n}\n"),
         ("use Plasma as p", "puts in one of your formulas or an example, as part p { … }", "use Plasma as p\n"),
         ("p.v", "a value part p sets", ""),
         ("p(x, y, k)", "part p as a colour, drawn at another place; k: how much it covers", ""),

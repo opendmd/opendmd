@@ -127,6 +127,10 @@ pub struct Lowered {
     /// Where the row stage's function starts in `code` (4-byte aligned),
     /// if the row steps lowered ([`lower_rows`]): it shares `words`.
     pub rows_at: Option<usize>,
+    /// A `rate` formula's (`layer rate N`): the kernel is its fast part (the
+    /// slow layers' steps are the VM's), each row drawn over the picture
+    /// under (the held slow layers), or over what the row holds without one.
+    pub rate: bool,
 }
 
 // The register map.
@@ -327,6 +331,7 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
         main_start: start,
         calls: e.calls,
         rows_at,
+        rate: prog.slow_marker().is_some(),
     })
 }
 
@@ -403,6 +408,11 @@ fn items(prog: &Program, start: usize, pe: usize) -> Result<Vec<Item>, Refusal> 
     let mut k = start;
     while k < pe {
         let op = ops[k];
+        if op.code == code::SLOW {
+            // The slow layers: the VM's (`crate::rate`).
+            k += 1 + op.a as usize;
+            continue;
+        }
         if op.code == code::FUSE {
             let n = op.a as usize;
             let run = &ops[(k + 1).min(pe)..(k + 1 + n).min(pe)];

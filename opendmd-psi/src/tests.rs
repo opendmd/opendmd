@@ -2710,3 +2710,170 @@ fn cycle_error_messages() {
     }
     assert!(bad.is_empty(), "\n{}", bad.join("\n"));
 }
+
+// --- `layer rate N { }`: slow layers (console-lessons Phase B) ------------------
+
+fn frame_of(p: &Program, i: &Inputs) -> alloc::vec::Vec<u8> {
+    let mut out = alloc::vec![0u8; W * H * 3];
+    render_rows::<128>(p, &mut Scratch::new(), i, &OWN, None, u32::MAX, &mut out);
+    out
+}
+
+/// The time each row of the slow layers is drawn at, from the definition
+/// (`rate`'s module doc), written out again here.
+fn slow_ms(n: i64, f: i64, lp: Option<i64>, ms: i64, r: usize) -> i64 {
+    let k = ms / f;
+    let b = r as i64 * n / 32;
+    let t = (k - (k - b).rem_euclid(n)) * f;
+    match lp {
+        Some(l) => t.rem_euclid(l),
+        None => t.max(0),
+    }
+}
+
+/// Slow layers that read no `t` draw what the formula without `rate`
+/// draws, frame for frame (Big clock's way).
+#[test]
+fn a_still_slow_layer_is_the_formula_without_rate() {
+    let srcs = [
+        "layer rate 50 { gray(digit(floor(px/8) % 10, px % 8, ty % 8, bold)) }\nlayer multiply { hsv(x + t/10, 1, 1) }",
+        "frame { hh = hour/24 }\nlayer rate 4 { pal(fire, x*hh + y*a) }\nlayer add { rgb(0, 0, frac(x + t), 0.5) }",
+        "layer rate 3 { gray(x) }\nlayer multiply rate 3 { pal(ice, y) }\nlayer screen { hsv(t, 1, x) }",
+    ];
+    for src in srcs {
+        let a = compile(src).unwrap();
+        assert!(a.rate().is_some(), "{src}\n{}", a.listing());
+        let b = compile(&src.replace(" rate 50", "").replace(" rate 4", "").replace(" rate 3", "")).unwrap();
+        assert!(b.rate().is_none());
+        for ms in [0, 20, 40, 980, 1000, 4321, 7980] {
+            let i = golden::inputs(ms);
+            assert_eq!(frame_of(&a, &i), frame_of(&b, &i), "{src} at {ms}");
+        }
+    }
+}
+
+/// A slow layer that reads `t`: each row as the bottom layer alone draws
+/// it at its band's time (`slow_ms`), under a top layer that changes
+/// nothing; looping and forever, fps 50, 100 and 25, rates within and past
+/// the 32 rows.
+#[test]
+fn a_moving_slow_layer_is_drawn_band_by_band() {
+    for (head, n, f, lp) in [
+        ("loop 2\n", 4i64, 20i64, Some(2000i64)),
+        ("loop 3\nfps 100\n", 7, 10, Some(3000)),
+        ("loop 1.01\nfps 25\n", 3, 40, Some(1010)),
+        ("loop 4\n", 50, 20, Some(4000)),
+        ("loop forever\n", 5, 20, None),
+    ] {
+        let bottom = "hsv(x + t/3, 1, frac(y + t))";
+        let a = compile(&alloc::format!("{head}layer rate {n} {{ {bottom} }}\nlayer max {{ gray(0*t) }}")).unwrap();
+        let s = compile(&alloc::format!("{head}{bottom}")).unwrap();
+        for ms in [0u64, 20, 60, 140, 990, 1000, 1010, 1990, 2020, 2990, 61_000] {
+            let mut i = golden::inputs(0);
+            i.set_ms(&a, ms);
+            let got = frame_of(&a, &i);
+            let lms = match lp {
+                Some(l) => ms as i64 % l,
+                None => ms as i64,
+            };
+            for r in 0..H {
+                let mut j = i;
+                j.set_ms(&s, slow_ms(n, f, lp, lms, r) as u64);
+                let want = frame_of(&s, &j);
+                assert_eq!(
+                    &got[r * W * 3..(r + 1) * W * 3],
+                    &want[r * W * 3..(r + 1) * W * 3],
+                    "{head} rate {n} at {ms} ms, row {r}"
+                );
+            }
+        }
+    }
+}
+
+/// The held picture gives the frames drawn from nothing, whatever frames
+/// the player skips, the clock and sliders moving, a loop's end.
+#[test]
+fn the_held_picture_draws_the_frames_drawn_from_nothing() {
+    let srcs = [
+        "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { gray(x*a*0.2) }",
+        "loop 1.03\nframe { s = second/60 }\nlayer rate 6 { pal(fire, frac(x + s + t)) }\nlayer screen { hsv(y + t, 1, 0.3) }",
+        "loop 60\nlayer rate 50 { gray(digit(minute % 10, floor(px/8) % 8, ty % 8, bold) + b*0) }\nlayer min { hsv(x + t/10, 1, 1) }",
+        "loop forever\nlayer rate 3 { gray(frac(x + t/5 + seed)) }\nlayer multiply { pal(ice, y + frac(t)) }",
+        "fps 100\nloop 2\nlayer rate 40 { cycle(fire, x, t/2) }\nlayer max { cycle(ice, y, t, 0.5) }",
+    ];
+    let mut held = Held::try_boxed().unwrap();
+    for src in srcs {
+        let p = compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
+        held.forget();
+        let mut sc = Scratch::<128>::new();
+        let mut out = alloc::vec![0u8; W * H * 3];
+        let mut ms = 0u64;
+        let mut i = golden::inputs(0);
+        for step in 0..160u64 {
+            // Mostly the next frame; now and then 2-9 frames on (the
+            // governor), the clock and a slider moving.
+            ms += 20 * (1 + (step * 7 % 11 == 0) as u64 * (step % 9));
+            i.set_ms(&p, ms);
+            i.second = ((ms / 1000) % 60) as u8;
+            i.minute = ((ms / 3000) % 60) as u8;
+            if step == 90 {
+                i.a = 3 << 14;
+                i.b = 1 << 15;
+            }
+            let mut changed = [0u32; H];
+            render_held::<128>(&p, &mut sc, None, None, &mut held, &i, &OWN, &mut out, Some(&mut changed));
+            assert_eq!(out, frame_of(&p, &i), "{src} at {ms} ms (step {step})");
+        }
+    }
+}
+
+/// The errors (E941-E947).
+#[test]
+fn rate_error_messages() {
+    let cases: &[(&str, &str, &str)] = &[
+        ("layer { gray(x) }\nlayer rate 4 add { gray(y) }", "expected `{`", "—"),
+        ("layer { gray(x) }\nlayer add rate 4 { gray(y) }", "bottom layers only", "E941"),
+        ("layer rate 1 { gray(x) }\nlayer add { gray(y) }", "2 to 200", "E942"),
+        ("layer rate 2.5 { gray(x) }\nlayer add { gray(y) }", "2 to 200", "E942"),
+        ("layer rate 4 { gray(x) }\nlayer multiply rate 5 { gray(y) }\nlayer add { gray(t) }", "share one", "E943"),
+        ("layer rate 4 { gray(x, 0.5) }\nlayer add { gray(y) }", "cover everything", "E944"),
+        ("layer rate 4 { gray(ul) }\nlayer add { gray(y) }", "can't read", "E944"),
+        ("draw { dot(3, 3) }\nlayer rate 4 { gray(ink) }\nlayer add { gray(y) }", "can't read", "E944"),
+        ("part p { layer rate 3 { gray(x) }\nlayer add { gray(y) } }\nlayer { p }\nlayer add { gray(t) }", "not inside a part", "E945"),
+        ("layer rate 4 { gray(x) }", "add a layer above", "E947"),
+    ];
+    let mut bad = alloc::vec::Vec::new();
+    for &(src, want, code) in cases {
+        match compile(src) {
+            Ok(_) => bad.push(alloc::format!("{code} {src:?}: compiled")),
+            Err(e) if !e.msg.contains(want) => bad.push(alloc::format!("{code} {src:?}: {}", e.msg)),
+            Err(_) => {}
+        }
+    }
+    assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+}
+
+/// In steady play the held picture redraws a band a frame (`t`), or
+/// nothing until the clock it reads ticks.
+#[test]
+fn the_held_picture_redraws_a_band_a_frame() {
+    let mut held = Held::try_boxed().unwrap();
+    let mut sc = Scratch::<128>::new();
+    let p = compile("loop 2\nlayer rate 4 { hsv(x + t/3, 1, 1) }\nlayer add { gray(x) }").unwrap();
+    let mut i = golden::inputs(0);
+    i.set_ms(&p, 0);
+    assert_eq!(held.update::<128>(&p, &mut sc, &i, &OWN), 32);
+    for f in 1..20u64 {
+        i.set_ms(&p, f * 20);
+        assert_eq!(held.update::<128>(&p, &mut sc, &i, &OWN), 8, "frame {f}");
+    }
+    let p = compile("layer rate 50 { gray(second/60) }\nlayer add { gray(x*t) }").unwrap();
+    held.forget();
+    assert_eq!(held.update::<128>(&p, &mut sc, &i, &OWN), 32);
+    for f in 1..20u64 {
+        i.set_ms(&p, f * 20);
+        assert_eq!(held.update::<128>(&p, &mut sc, &i, &OWN), 0);
+    }
+    i.second += 1;
+    assert_eq!(held.update::<128>(&p, &mut sc, &i, &OWN), 32);
+}

@@ -869,10 +869,23 @@ impl Program {
         let start = if jit { self.kernel_start() } else { usize::MAX };
         // A fused run's steps on the VM: as ever, less what its kernel saves.
         let (mut saved, mut px, mut kp) = (0, 0, JIT_LOOP_NS);
+        // `layer rate N`: the slow layers' steps a band of rows a frame (an
+        // Nth of the rows), on the VM; the fast part's lanes start from the
+        // held picture (a row copy).
+        let (slow, rate) = match self.slow_marker() {
+            Some(m) => (
+                m + 1..m + 1 + self.ops[m].a as usize,
+                u32::from(self.ops[m].d.max(1)),
+            ),
+            None => (0..0, 1),
+        };
+        let mut slow_ns = 0;
         let mut k = self.row_end as usize;
         while k < self.len() {
             let op = &self.ops[k];
             if skip.contains(&k) {
+            } else if slow.contains(&k) {
+                slow_ns += self.step_ns(k, op);
             } else if k >= start {
                 // (A marker the kernel does not draw in one piece: its
                 // steps follow, one at a time.)
@@ -914,7 +927,12 @@ impl Program {
         } else {
             (45 + px + STILL_COPY_NS * cached, 0)
         };
-        let px = px.saturating_sub(saved);
+        let px = px.saturating_sub(saved)
+            + if slow.is_empty() {
+                0
+            } else {
+                (45 + slow_ns).div_ceil(rate) + HELD_COPY_NS
+            };
         ((px * (W * H) as u32) / 1000 + row * 10 + turns + self.draw_cost(lanes) + extra) * 115 / 100
     }
 
@@ -1058,6 +1076,20 @@ impl Program {
     pub(crate) fn still_marker(&self) -> Option<usize> {
         let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
         (re.min(pe)..pe).find(|&k| self.ops[k].code == code::STILL)
+    }
+
+    /// Where the slow layers' marker is (`code::SLOW`), if the formula has
+    /// `layer rate N { }`.
+    pub(crate) fn slow_marker(&self) -> Option<usize> {
+        let (re, pe) = (self.row_end as usize, self.len().min(MAX_OPS));
+        (re.min(pe)..pe).find(|&k| self.ops[k].code == code::SLOW)
+    }
+
+    /// `layer rate N { }`'s N: its slow layers are redrawn every Nth frame
+    /// of its grid, a band of rows a frame (`None`: every layer every
+    /// frame). A player keeps their picture in a [`crate::Held`].
+    pub fn rate(&self) -> Option<u32> {
+        self.slow_marker().map(|m| u32::from(self.ops[m].d))
     }
 
     /// The column run's steps (`code::COLUMN`), if the formula has one.
@@ -1603,6 +1635,10 @@ impl VecLoop {
         (r > 0).then_some(r)
     }
 }
+
+/// A `rate` formula's fast part starts each row from the held picture: a
+/// 384 B copy a row, ns a pixel (a guess until psi-probe measures it).
+pub(crate) const HELD_COPY_NS: u32 = 5;
 
 /// `cycle`'s turn of a palette, µs a frame over a row step's 10: 32 rows
 /// of a 32-entry copy (a guess until psi-probe's `TURN` row).

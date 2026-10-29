@@ -545,6 +545,11 @@ pub fn render_rows_still<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
+    if prog.slow_marker().is_some() {
+        return crate::rate::render_scratch::<N>(
+            prog, scratch, ink, still, inputs, tables, rows, out, true, None,
+        );
+    }
     frame::<N>(
         prog,
         scratch,
@@ -559,6 +564,7 @@ pub fn render_rows_still<const N: usize>(
         // (Opaque: a constant here had LLVM make a second, specialised
         // copy of the frame loop, 9 KB of IRAM.)
         core::hint::black_box(None),
+        core::hint::black_box(crate::rate::WHOLE),
     )
 }
 
@@ -581,6 +587,11 @@ pub fn render_rows_changed<const N: usize>(
     out: &mut [u8],
     changed: &mut [u32; H],
 ) {
+    if prog.slow_marker().is_some() {
+        return crate::rate::render_scratch::<N>(
+            prog, scratch, ink, still, inputs, tables, rows, out, true, Some(changed),
+        );
+    }
     frame::<N>(
         prog,
         scratch,
@@ -593,6 +604,7 @@ pub fn render_rows_changed<const N: usize>(
         out,
         true,
         core::hint::black_box(Some(changed)),
+        core::hint::black_box(crate::rate::WHOLE),
     )
 }
 
@@ -611,6 +623,11 @@ pub fn render_rows_ink_turns<const N: usize>(
     rows: u32,
     out: &mut [u8],
 ) {
+    if prog.slow_marker().is_some() {
+        return crate::rate::render_scratch::<N>(
+            prog, scratch, ink, None, inputs, tables, rows, out, false, None,
+        );
+    }
     frame::<N>(
         prog,
         scratch,
@@ -623,6 +640,7 @@ pub fn render_rows_ink_turns<const N: usize>(
         out,
         core::hint::black_box(false),
         core::hint::black_box(None),
+        core::hint::black_box(crate::rate::WHOLE),
     )
 }
 
@@ -634,7 +652,7 @@ pub fn render_rows_ink_turns<const N: usize>(
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
-fn frame<const N: usize>(
+pub(crate) fn frame<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
     ink: Option<&mut Ink>,
@@ -646,6 +664,7 @@ fn frame<const N: usize>(
     out: &mut [u8],
     lanes: bool,
     changed: Option<&mut [u32; H]>,
+    part: u8,
 ) {
     #[cfg(feature = "stats")]
     stats::stamp(1);
@@ -692,6 +711,22 @@ fn frame<const N: usize>(
         }
         _ => None,
     };
+    // A `rate` formula's parts (`crate::rate`): the slow part runs only
+    // the steps after its marker (no still cache: the caller gives none),
+    // the fast part skips them and starts each lane from `under` (the
+    // held picture) or, without one, from what `out` holds.
+    let fast = part == crate::rate::FAST;
+    let (mut k0, mut k1, mut skip) = (re, pe, 0);
+    if part != crate::rate::WHOLE {
+        if let Some(m) = prog.slow_marker() {
+            let n = prog.ops[m].a as usize;
+            if fast {
+                skip = n;
+            } else {
+                (k0, k1) = (m + 1, (m + 1 + n).min(pe));
+            }
+        }
+    }
     let mut cache = match (still, prog.still_marker()) {
         (Some(st), Some(at)) if st.lanes_for(prog) => {
             if st.holds(prog) {
@@ -718,7 +753,7 @@ fn frame<const N: usize>(
     if prog.uses & OWNPAL != 0 {
         unpack_palettes(&prog.tables, &mut own);
     }
-    let backdrop = prog.uses & BACKDROP != 0;
+    let backdrop = prog.uses & BACKDROP != 0 || fast;
     // Each row's values and what it changed (`Rows`): the row as it was
     // kept when `changed` asks.
     let mut per_row = Rows::new(changed, out);
@@ -748,15 +783,16 @@ fn frame<const N: usize>(
             if backdrop {
                 match ul {
                     Some(u) => px.as_flattened_mut().copy_from_slice(u),
-                    None => px.fill([0; 3]),
+                    None if !fast => px.fill([0; 3]),
+                    None => {}
                 }
             }
             // (A still cache's lanes are pointed at again by its marker
             // below, at this lane's pixels.)
             let mut alias: Alias = [core::ptr::null(); REGS + 1];
-            let mut k = re;
+            let mut k = k0;
             let mut keep_at = usize::MAX;
-            while k < pe {
+            while k < k1 {
                 let op = &prog.ops[k];
                 if k == keep_at {
                     if let Cache::Keep(st, at) = &mut cache {
@@ -766,6 +802,10 @@ fn frame<const N: usize>(
                 }
                 if op.code == code::COLUMN {
                     k += 1 + if columns_kept { op.a as usize } else { 0 };
+                    continue;
+                }
+                if op.code == code::SLOW {
+                    k += 1 + skip;
                     continue;
                 }
                 if op.code == code::STILL {
