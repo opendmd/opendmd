@@ -65,6 +65,11 @@ pub struct PsiFx {
     /// the clock read each frame (a `gettimeofday` and a `localtime_r` on
     /// the device).
     clock: bool,
+    /// Frames in a row whose changes marked half the panel or more;
+    /// from [`FULL_RUN`] on the frames are not compared (`mark_all`) but
+    /// every [`RECHECK`]th, counted in `uncompared` (all-zero: compare).
+    full: u8,
+    uncompared: u8,
     delay_ms: u8,
     inputs: psi::Inputs,
     gov: Governor,
@@ -567,6 +572,7 @@ impl PsiFx {
         }
         self.prog = *prog;
         self.clock = reads_clock(&self.prog);
+        self.full = 0;
         self.delay_ms = delay;
         let s = self.prog.meta().values(q.sliders);
         self.set_sliders(s);
@@ -708,18 +714,48 @@ impl PsiFx {
         }
         self.still_step(clock.is_some(), t0);
         let (bytes, dirty) = canvas.bytes_and_dirty_mut();
-        psi::render_rows_still::<LANES>(
-            &self.prog,
-            &mut self.scratch,
-            self.ink.as_deref_mut(),
-            Some(&mut self.still),
-            &self.inputs,
-            &tables(),
-            None,
-            u32::MAX,
-            bytes,
-        );
-        dirty.mark_all();
+        // Only what changed is marked (the canvas holds the frame before:
+        // the `Effect` contract; what differs from it is what the panel
+        // lacks, the map marking the rest). A Formula that keeps changing
+        // half the panel or more (Tunnel, Time gate, Plasma, Big clock) is
+        // not compared, only checked again now and then: there the compare
+        // costs more than the blit saves (`FULL_PX`).
+        if !old() && (self.full < FULL_RUN || self.uncompared >= RECHECK) {
+            let mut changed = [0u32; psi::H];
+            psi::render_rows_changed::<LANES>(
+                &self.prog,
+                &mut self.scratch,
+                self.ink.as_deref_mut(),
+                Some(&mut self.still),
+                &self.inputs,
+                &tables(),
+                None,
+                u32::MAX,
+                bytes,
+                &mut changed,
+            );
+            let marked = mark_changed(dirty, &changed);
+            self.full = if marked >= FULL_PX {
+                self.full.saturating_add(1)
+            } else {
+                0
+            };
+            self.uncompared = 0;
+        } else {
+            psi::render_rows_still::<LANES>(
+                &self.prog,
+                &mut self.scratch,
+                self.ink.as_deref_mut(),
+                Some(&mut self.still),
+                &self.inputs,
+                &tables(),
+                None,
+                u32::MAX,
+                bytes,
+            );
+            dirty.mark_all();
+            self.uncompared += 1;
+        }
         let Some(c) = clock else {
             return self.delay();
         };
@@ -735,6 +771,91 @@ impl PsiFx {
         STATS[1].store(ms << 16 | grid, Ordering::Relaxed);
         Duration::from_millis(u64::from(ms))
     }
+}
+
+/// psi-probe's switch (feature `psi-stats`): a Formula's frames as before
+/// console-a's Phase A (no compare; every pixel marked, a look's redrawn
+/// rows whole), for A/B rows and play lines in one build. Not in a release.
+#[cfg(feature = "psi-stats")]
+pub static OLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// [`OLD`]'s state (false without `psi-stats`).
+#[inline(always)]
+fn old() -> bool {
+    #[cfg(feature = "psi-stats")]
+    return OLD.load(Ordering::Relaxed);
+    #[cfg(not(feature = "psi-stats"))]
+    false
+}
+
+/// A frame whose changes marked this many pixels for the blit (half the
+/// panel) did not pay for its compare: consolea-b on the spare, per frame
+/// (render + blit), Endless road −0.65 ms at ~570 px pushed, Starfield,
+/// Glitter, Rotozoom floor −0.47..−0.51 ms at 290-400, Big clock +0.18 ms
+/// at ~2,550 (the compare ~0.18 ms and the marking ~0.1, against ~0.23 µs
+/// of blit a pixel not pushed). After [`FULL_RUN`] such frames in a row a
+/// Formula's frames are not compared (all marked), but one in [`RECHECK`]
+/// is (then compared again as soon as one marks less).
+const FULL_PX: u32 = 2048;
+const FULL_RUN: u8 = 4;
+const RECHECK: u8 = 32;
+
+/// What pushing the panel costs, in tenths of a µs (the firmware's blit:
+/// `hub75_draw_span` ~0.45 µs a pixel and ~1 µs a call, rows y and y + 16
+/// whole through `hub75_draw_row_pair` 74 µs: CLAUDE.md "Frame time: the
+/// blit"): how [`mark_changed`] chooses between a row's spans, the whole
+/// row and the whole pair. Only the cost moves with these; any choice
+/// marks every pixel that changed.
+const SPAN_PX: u32 = 5;
+const SPAN_CALL: u32 = 10;
+const PAIR: u32 = 740;
+
+/// A row's push as spans of its changed groups (bit g: pixels 4g..4g + 4).
+fn spans_cost(m: u32) -> u32 {
+    let runs = (m & !(m << 1)).count_ones();
+    SPAN_PX * 4 * m.count_ones() + SPAN_CALL * runs
+}
+
+/// Mark in `dirty` what `changed` says changed (`psi::render_rows_changed`:
+/// a bit for each 4-pixel group of a row), as the blit pushes it cheapest:
+/// a row's runs as spans, or the whole row when its spans would cost more,
+/// or both rows of a pair whole when one pair write costs less than their
+/// spans. Never less than what changed (a few pixels more, by the groups).
+/// Returns the pixels it marked.
+pub fn mark_changed(dirty: &mut crate::canvas::DirtyMap, changed: &[u32; psi::H]) -> u32 {
+    const HALF: usize = psi::H / 2;
+    let whole = spans_cost(u32::MAX);
+    let w = crate::canvas::WIDTH as u32;
+    let row = |dirty: &mut crate::canvas::DirtyMap, y: usize, m: u32| -> u32 {
+        if m == 0 {
+            return 0;
+        }
+        if spans_cost(m) >= whole {
+            dirty.mark_span(y, 0, crate::canvas::WIDTH);
+            return w;
+        }
+        let px = 4 * m.count_ones();
+        let mut m = m;
+        while m != 0 {
+            let g0 = m.trailing_zeros();
+            let run = (!(m >> g0)).trailing_zeros();
+            dirty.mark_span(y, 4 * g0 as usize, 4 * (g0 + run) as usize);
+            m &= u32::MAX.checked_shl(g0 + run).unwrap_or(0);
+        }
+        px
+    };
+    let mut marked = 0;
+    for p in 0..HALF {
+        let (a, b) = (changed[p], changed[p + HALF]);
+        if a != 0 && b != 0 && PAIR <= spans_cost(a).min(whole) + spans_cost(b).min(whole) {
+            dirty.mark_span(p, 0, crate::canvas::WIDTH);
+            dirty.mark_span(p + HALF, 0, crate::canvas::WIDTH);
+            marked += 2 * w;
+        } else {
+            marked += row(dirty, p, a) + row(dirty, p + HALF, b);
+        }
+    }
+    marked
 }
 
 /// A formula estimated to take longer than this a frame (µs on the ESP32)
@@ -1154,7 +1275,10 @@ impl FormulaLook {
             // (One that never repeats: the time since it was taken on.)
             self.inputs.tw =
                 psi::Inputs::wide_ms(el.as_millis() as u64 / u64::from(grid) * u64::from(grid));
-            if let Some(w) = reads_clock(&self.prog).then(crate::synth::wall_now).flatten() {
+            if let Some(w) = reads_clock(&self.prog)
+                .then(crate::synth::wall_now)
+                .flatten()
+            {
                 self.inputs.hour = w.hour;
                 self.inputs.minute = w.minute;
                 self.inputs.second = w.second;
@@ -1172,25 +1296,34 @@ impl FormulaLook {
         let clock = clock();
         let t_start = clock.map_or(0, |c| c());
         let (bytes, dirty) = b.out.bytes_and_dirty_mut();
-        psi::render_rows_ink::<LANES>(
+        let mut changed = [0u32; psi::H];
+        psi::render_rows_changed::<LANES>(
             &self.prog,
             &mut b.scratch,
             b.ink.as_deref_mut(),
+            None,
             &self.inputs,
             &tables(),
             Some(under.as_bytes()),
             rows,
             bytes,
+            &mut changed,
         );
-        if rows == u32::MAX {
-            dirty.mark_all();
-        } else {
+        if old() {
             let mut r = rows;
             while r != 0 {
                 let y = r.trailing_zeros() as usize;
                 r &= r - 1;
                 dirty.mark_span(y, 0, crate::canvas::WIDTH);
             }
+        } else if self.fresh {
+            // (Its picture is not what the panel shows: all of it.)
+            dirty.mark_all();
+        } else {
+            // Its picture is what the panel shows but for its map: what the
+            // rows drawn changed (a still look over a GIF: the GIF's
+            // changed pixels, not their whole rows).
+            mark_changed(dirty, &changed);
         }
         under.dirty_mut().clear();
         self.fresh = false;
@@ -1392,6 +1525,129 @@ mod tests {
             assert!((0..psi::Q16_ONE).contains(&b.inputs.seed));
         }
         assert!(seeds.len() >= 7, "{seeds:?}");
+    }
+
+    /// `mark_changed` marks every pixel of every changed group, whatever
+    /// it chooses (spans, a whole row, a whole pair), and nothing in a row
+    /// or pair that did not change.
+    #[test]
+    fn marking_what_changed_covers_it() {
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for k in 0..4000 {
+            let mut ch = [0u32; psi::H];
+            for (y, m) in ch.iter_mut().enumerate() {
+                let r = next();
+                *m = match (r % 7, k % 3) {
+                    (0, _) => 0,
+                    (1, _) => u32::MAX,
+                    (2, _) => (r >> 8) as u32 & (r >> 40) as u32,
+                    (3, _) => 1 << ((r >> 8) % 32),
+                    (_, 0) => (r >> 8) as u32,
+                    _ => ((r >> 8) as u32).rotate_left(y as u32) & 0x00ff_ff00,
+                };
+            }
+            let mut d = crate::canvas::DirtyMap::default();
+            mark_changed(&mut d, &ch);
+            for y in 0..psi::H {
+                let pair = ch[y % 16] | ch[y % 16 + 16];
+                for x in 0..psi::W {
+                    if ch[y] & (1 << (x / 4)) != 0 {
+                        assert!(d.is_dirty(x, y), "case {k}: ({x}, {y}) changed, not marked");
+                    }
+                }
+                if ch[y] == 0 && pair == 0 {
+                    assert!(d.row_spans(y).next().is_none(), "case {k}: row {y} marked");
+                }
+            }
+        }
+        // A whole pair through one write; a few pixels as one span.
+        let mut ch = [0u32; psi::H];
+        ch[2] = u32::MAX;
+        ch[18] = u32::MAX >> 4;
+        ch[5] = 0b110;
+        let mut d = crate::canvas::DirtyMap::default();
+        mark_changed(&mut d, &ch);
+        assert_eq!(d.row_spans(18).collect::<Vec<_>>(), [(0, 128)]);
+        assert_eq!(d.row_spans(5).collect::<Vec<_>>(), [(4, 12)]);
+        assert_eq!(d.count(), 256 + 8);
+    }
+
+    /// A Formula played as an effect marks every pixel its frame changed
+    /// (what the canvas held before is what the panel shows, but for the
+    /// map), and a frame that changes little marks little.
+    #[test]
+    fn a_formula_marks_what_its_frame_changed() {
+        const STARS: &str = include_str!("../../opendmd-web/formulas/starfield.psi");
+        const ROAD: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
+        const CLOCK: &str = include_str!("../../opendmd-web/formulas/big-clock.psi");
+        const GLITTER: &str = include_str!("../../opendmd-web/formulas/glitter.psi");
+        let mut few = 0;
+        for (name, src) in psi::sketches::ALL.iter().copied().chain([
+            ("Starfield", STARS),
+            ("Endless road", ROAD),
+            ("Big clock", CLOCK),
+            ("Glitter", GLITTER),
+        ]) {
+            let mut fx = Fx::parse(&path(src)).unwrap_or_else(|| panic!("{name}"));
+            let mut c = Canvas::new();
+            let delay = fx.delay();
+            let mut marked = 0;
+            for k in 0..24u32 {
+                let before = c.as_bytes().to_vec();
+                c.dirty_mut().clear();
+                fx.frame(delay * k, &mut c);
+                let now = c.as_bytes();
+                for y in 0..psi::H {
+                    for x in 0..psi::W {
+                        let o = (y * psi::W + x) * 3;
+                        if before[o..o + 3] != now[o..o + 3] {
+                            assert!(
+                                c.dirty().is_dirty(x, y),
+                                "{name} frame {k}: ({x}, {y}) not marked"
+                            );
+                        }
+                    }
+                }
+                marked += c.dirty().count();
+            }
+            if marked < 24 * 4096 / 2 {
+                few += 1;
+            }
+            eprintln!("{name}: {} px marked a frame", marked / 24);
+        }
+        assert!(few >= 3, "only {few} formulas marked under half the panel");
+    }
+
+    /// A Formula that changes every pixel stops being compared after
+    /// `FULL_RUN` frames (marks all, checked again every `RECHECK`th), and
+    /// one that changes little is always compared.
+    #[test]
+    fn a_formula_that_changes_everything_is_not_compared() {
+        let mut fx = Fx::parse(&path("loop 1\nrgb(frac(t*7 + x), frac(y - t*3), 0.5)")).unwrap();
+        let mut c = Canvas::new();
+        let mut counts = Vec::new();
+        for k in 0..80u32 {
+            c.dirty_mut().clear();
+            fx.frame(Duration::from_millis(u64::from(k) * 20), &mut c);
+            counts.push(c.dirty().count());
+        }
+        assert!(counts.iter().all(|&n| n == 4096), "{counts:?}");
+        let Fx::Psi(p) = &fx;
+        assert!(p.full >= FULL_RUN && p.uncompared < RECHECK);
+        // A still one: every frame compared, nothing marked after the first.
+        let mut fx = Fx::parse(&path("gray(x)")).unwrap();
+        fx.frame(Duration::ZERO, &mut c);
+        for k in 1..40u32 {
+            c.dirty_mut().clear();
+            fx.frame(Duration::from_millis(u64::from(k) * 20), &mut c);
+            assert!(c.dirty().is_clean(), "frame {k}");
+        }
     }
 
     #[test]
@@ -1938,7 +2194,10 @@ mod tests {
         let Some(Fx::Psi(fx)) = Fx::parse(&super::path(src, "a=9&b=1&c=0.5")) else {
             panic!()
         };
-        assert_eq!((fx.inputs.a, fx.inputs.b, fx.inputs.c), (9 << 16, 1 << 16, 1 << 15));
+        assert_eq!(
+            (fx.inputs.a, fx.inputs.b, fx.inputs.c),
+            (9 << 16, 1 << 16, 1 << 15)
+        );
         // Below zero is a value; empty, junk and out of range are unset.
         let Some(Fx::Psi(fx)) = Fx::parse(&super::path(src, "a=-0.5&b=&c=40000")) else {
             panic!()
@@ -1956,7 +2215,11 @@ mod tests {
         fx.retune_from(&super::path(src, "")[Q..]).unwrap();
         assert_eq!(fx.inputs.a, 5 << 15);
         // And a look.
-        let look = FormulaLook::from_path(&super::path("control k 0..1 = 0.75\nlayer multiply { gray(k) }", "")).unwrap();
+        let look = FormulaLook::from_path(&super::path(
+            "control k 0..1 = 0.75\nlayer multiply { gray(k) }",
+            "",
+        ))
+        .unwrap();
         assert_eq!(look.inputs.a, 3 << 14);
     }
 
@@ -1965,7 +2228,8 @@ mod tests {
     #[test]
     fn a_formulas_look_line_is_its_look() {
         let body = "control k 0..1 = 0.5\nhsv(x, 1, k)";
-        let mine = FormulaLook::from_path(&super::path(&format!("look screen 40\n{body}"), "")).unwrap();
+        let mine =
+            FormulaLook::from_path(&super::path(&format!("look screen 40\n{body}"), "")).unwrap();
         let composed = psi::look::compose(body, "screen", 40).unwrap();
         let theirs = FormulaLook::from_path(&super::path(&composed, "")).unwrap();
         assert!(*mine.prog == *theirs.prog);
@@ -1973,7 +2237,9 @@ mod tests {
         // `look` alone is the formula itself: one that covers the GIF is
         // still no look.
         assert_eq!(
-            FormulaLook::from_path(&super::path(&format!("look\n{body}"), "")).unwrap_err().msg,
+            FormulaLook::from_path(&super::path(&format!("look\n{body}"), ""))
+                .unwrap_err()
+                .msg,
             COVERS
         );
         // Played on its own the line is ignored.
@@ -2040,7 +2306,8 @@ mod tests {
         let mut look = FormulaLook::from_path(&super::path(F, "")).unwrap();
         assert!(look.take());
         let mut src =
-            crate::synth::SynthSource::new(crate::synth::open(&super::path(STARS, "")).unwrap()).unwrap();
+            crate::synth::SynthSource::new(crate::synth::open(&super::path(STARS, "")).unwrap())
+                .unwrap();
         let mut c = Canvas::new();
         let mut t = Duration::ZERO;
         for _ in 0..30 {
@@ -2167,7 +2434,10 @@ mod tests {
         let mut look = FormulaLook::from_path(&super::path(F, "fps=50")).unwrap();
         assert!(look.take());
         let mut canvas = picture();
-        look.apply(ms(990), &mut canvas, 0).dirty_mut().clear();
+        let first = look.apply(ms(990), &mut canvas, 0);
+        first.dirty_mut().clear();
+        // The look's picture as last drawn (what the panel shows).
+        let mut shown = first.as_bytes().to_vec();
         assert_eq!(
             look.due_between(false),
             Some(ms(1010)),
@@ -2200,9 +2470,18 @@ mod tests {
                     // Its own frame, at the grid frame the step is in.
                     own += 1;
                     let t = (now - ms(990)).as_millis() as u32 / 20 * 20;
-                    assert_eq!(out.dirty().count(), 4096);
                     assert!(out.as_bytes() == over(F, t, &snap).as_slice(), "t {t}");
                 }
+                // Whatever it drew, what changed is marked.
+                for (k, (a, b)) in shown.chunks(3).zip(out.as_bytes().chunks(3)).enumerate() {
+                    if a != b {
+                        assert!(
+                            out.dirty().is_dirty(k % 128, k / 128),
+                            "pixel {k} not marked"
+                        );
+                    }
+                }
+                shown.copy_from_slice(out.as_bytes());
                 out.dirty_mut().clear();
             } else if c.is_active() && look.due_between(true).is_some_and(|d| d <= now) {
                 between += 1;

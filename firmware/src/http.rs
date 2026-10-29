@@ -2173,9 +2173,13 @@ fn main_stack_json() -> String {
 /// `error` when the setting's formula can no longer be drawn.
 fn formula_look_json() -> String {
     use std::sync::atomic::Ordering::Relaxed;
+    // (A saved formula that does not build draws nothing, source 0, but
+    // the status still says why, as the setting's.)
+    let broken = crate::formula_look::ERROR.lock().is_ok_and(|e| !e.is_empty());
     let source = match crate::formula_look::SOURCE.load(Relaxed) {
         1 => "setting",
         2 => "over_gif",
+        _ if broken => "setting",
         _ => return "null".to_string(),
     };
     #[cfg(feature = "psi")]

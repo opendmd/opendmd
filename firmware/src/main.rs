@@ -1549,6 +1549,8 @@ fn main() -> Result<()> {
                 } else {
                     tick_us.saturating_sub(open_us)
                 };
+                #[cfg(feature = "psi-probe")]
+                let look_on = looks.avg_us() > 0;
                 let pic = looks.apply(epoch.elapsed(), eng.display_mut(&mut canvas), decode_us);
                 tick_us += us(look_start.elapsed()) + std::mem::take(&mut look_us);
                 // With `panel_sync` the blit may wait for the scan, as
@@ -1652,7 +1654,7 @@ fn main() -> Result<()> {
                 }
                 // roadprobe: a Formula's frame on its schedule, phase by phase.
                 #[cfg(feature = "psi-probe")]
-                if fx && decoded && !transitioning && !is_new {
+                if (fx || look_on) && decoded && !transitioning && !is_new {
                     let wait = panel.last_wait_us();
                     let excused = now > deadline
                         && panel.last_stretched()
@@ -1660,7 +1662,7 @@ fn main() -> Result<()> {
                     let start = due_before.map_or(0, |d| us(tick_now.saturating_sub(d)));
                     let post = us(blit_start.elapsed()).saturating_sub(blit_us + wait);
                     psi_probe::play::note(
-                        [wake_us, pre_us, start, tick_us, blit_us, wait, post],
+                        [wake_us, pre_us, start, tick_us, blit_us, wait, post, blit_px],
                         now > deadline && !excused,
                         excused,
                         panel.last_stretched(),
