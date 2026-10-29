@@ -65,7 +65,7 @@ pub struct PsiFx {
     /// the clock read each frame (a `gettimeofday` and a `localtime_r` on
     /// the device).
     clock: bool,
-    /// Frames in a row whose compare found (nearly) every pixel changed;
+    /// Frames in a row whose changes marked half the panel or more;
     /// from [`FULL_RUN`] on the frames are not compared (`mark_all`) but
     /// every [`RECHECK`]th, counted in `uncompared` (all-zero: compare).
     full: u8,
@@ -717,9 +717,9 @@ impl PsiFx {
         // Only what changed is marked (the canvas holds the frame before:
         // the `Effect` contract; what differs from it is what the panel
         // lacks, the map marking the rest). A Formula that keeps changing
-        // every pixel (Tunnel, Time gate, Plasma) is not compared, only
-        // checked again now and then: the compare costs it ~0.1-0.2 ms a
-        // frame for nothing.
+        // half the panel or more (Tunnel, Time gate, Plasma, Big clock) is
+        // not compared, only checked again now and then: there the compare
+        // costs more than the blit saves (`FULL_PX`).
         if !old() && (self.full < FULL_RUN || self.uncompared >= RECHECK) {
             let mut changed = [0u32; psi::H];
             psi::render_rows_changed::<LANES>(
@@ -734,9 +734,8 @@ impl PsiFx {
                 bytes,
                 &mut changed,
             );
-            mark_changed(dirty, &changed);
-            let groups: u32 = changed.iter().map(|m| m.count_ones()).sum();
-            self.full = if groups >= FULL_GROUPS {
+            let marked = mark_changed(dirty, &changed);
+            self.full = if marked >= FULL_PX {
                 self.full.saturating_add(1)
             } else {
                 0
@@ -789,11 +788,15 @@ fn old() -> bool {
     false
 }
 
-/// A frame that changed this many of its 1,024 four-pixel groups changed
-/// "everything" (97 %); after [`FULL_RUN`] of them in a row a Formula's
-/// frames are not compared, but one in [`RECHECK`] is (then compared again
-/// as soon as one changes less).
-const FULL_GROUPS: u32 = 992;
+/// A frame whose changes marked this many pixels for the blit (half the
+/// panel) did not pay for its compare: consolea-b on the spare, per frame
+/// (render + blit), Endless road −0.65 ms at ~570 px pushed, Starfield,
+/// Glitter, Rotozoom floor −0.47..−0.51 ms at 290-400, Big clock +0.18 ms
+/// at ~2,550 (the compare ~0.18 ms and the marking ~0.1, against ~0.23 µs
+/// of blit a pixel not pushed). After [`FULL_RUN`] such frames in a row a
+/// Formula's frames are not compared (all marked), but one in [`RECHECK`]
+/// is (then compared again as soon as one marks less).
+const FULL_PX: u32 = 2048;
 const FULL_RUN: u8 = 4;
 const RECHECK: u8 = 32;
 
@@ -818,17 +821,20 @@ fn spans_cost(m: u32) -> u32 {
 /// a row's runs as spans, or the whole row when its spans would cost more,
 /// or both rows of a pair whole when one pair write costs less than their
 /// spans. Never less than what changed (a few pixels more, by the groups).
-pub fn mark_changed(dirty: &mut crate::canvas::DirtyMap, changed: &[u32; psi::H]) {
+/// Returns the pixels it marked.
+pub fn mark_changed(dirty: &mut crate::canvas::DirtyMap, changed: &[u32; psi::H]) -> u32 {
     const HALF: usize = psi::H / 2;
     let whole = spans_cost(u32::MAX);
-    let row = |dirty: &mut crate::canvas::DirtyMap, y: usize, m: u32| {
+    let w = crate::canvas::WIDTH as u32;
+    let row = |dirty: &mut crate::canvas::DirtyMap, y: usize, m: u32| -> u32 {
         if m == 0 {
-            return;
+            return 0;
         }
         if spans_cost(m) >= whole {
             dirty.mark_span(y, 0, crate::canvas::WIDTH);
-            return;
+            return w;
         }
+        let px = 4 * m.count_ones();
         let mut m = m;
         while m != 0 {
             let g0 = m.trailing_zeros();
@@ -836,17 +842,20 @@ pub fn mark_changed(dirty: &mut crate::canvas::DirtyMap, changed: &[u32; psi::H]
             dirty.mark_span(y, 4 * g0 as usize, 4 * (g0 + run) as usize);
             m &= u32::MAX.checked_shl(g0 + run).unwrap_or(0);
         }
+        px
     };
+    let mut marked = 0;
     for p in 0..HALF {
         let (a, b) = (changed[p], changed[p + HALF]);
         if a != 0 && b != 0 && PAIR <= spans_cost(a).min(whole) + spans_cost(b).min(whole) {
             dirty.mark_span(p, 0, crate::canvas::WIDTH);
             dirty.mark_span(p + HALF, 0, crate::canvas::WIDTH);
+            marked += 2 * w;
         } else {
-            row(dirty, p, a);
-            row(dirty, p + HALF, b);
+            marked += row(dirty, p, a) + row(dirty, p + HALF, b);
         }
     }
+    marked
 }
 
 /// A formula estimated to take longer than this a frame (µs on the ESP32)

@@ -46,8 +46,13 @@ use std::time::Duration;
 #[cfg(feature = "psi")]
 pub const TAKE_HEAP: usize = 48 * 1024;
 
-/// What is drawn over the picture, for `/api/status`: 0 nothing, 1 the
-/// setting's formula, 2 the editor's (over the GIF).
+/// What is drawn over the picture (`/api/status`, the still gate): 0
+/// nothing, 1 the setting's formula, 2 the editor's (over the GIF). A
+/// saved formula that does not build (an `@fx:` value from before no-fx,
+/// or one a later build refuses) is 0: nothing is drawn, so nothing holds
+/// the heap or keeps a Formula from its still cache (consolea-a: such a
+/// value on the spare cost Time gate its cache, 5.1 → 14.4 ms); its
+/// reason is [`ERROR`].
 pub static SOURCE: AtomicU8 = AtomicU8::new(0);
 
 /// The look's buffers are held (`main::transition_gate` counts them).
@@ -116,7 +121,7 @@ mod with_psi {
         fn publish(&self) {
             let s = if self.over.is_some() {
                 2
-            } else if self.saved.is_some() || ERROR.lock().is_ok_and(|e| !e.is_empty()) {
+            } else if self.saved.is_some() {
                 1
             } else {
                 0
@@ -174,7 +179,11 @@ mod with_psi {
                 match FormulaLook::from_path(path) {
                     Ok(l) => self.saved = Some(l),
                     Err(e) => {
-                        log::warn!("formula look: not drawn: {}", e.msg);
+                        log::warn!(
+                            "formula look: the saved look does not build, none drawn ({}): {}",
+                            e.msg,
+                            crate::short(path)
+                        );
                         why = e.msg;
                     }
                 }
