@@ -32,10 +32,18 @@ def main():
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
     need_mtools()
-    if a.out.exists() and not a.force:
+    # Stale when the card's recipe changed since it was built: ci-card.py (what
+    # is on the card) or this script. Then both the tree and the image are remade.
+    inputs = [REPO / "tools" / "ci-card.py", Path(__file__).resolve()]
+    stale = a.out.exists() and any(p.stat().st_mtime > a.out.stat().st_mtime for p in inputs)
+    if stale:
+        print(f"card image older than {', '.join(p.name for p in inputs)}: rebuilding")
+    if a.out.exists() and not a.force and not stale:
         print(f"card image up to date: {a.out}")
         return
-    if a.force or not (a.root / "filelist.txt").exists():
+    if a.force or stale or not (a.root / "filelist.txt").exists():
+        if a.root.exists():
+            shutil.rmtree(a.root)
         print(f"==> synthetic card tree -> {a.root}")
         subprocess.run(["uv", "run", "--quiet", str(REPO / "tools" / "ci-card.py"), str(a.root)], check=True)
     a.out.parent.mkdir(parents=True, exist_ok=True)
