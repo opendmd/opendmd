@@ -39,7 +39,7 @@ use crate::vm::{self, Alias, Inputs, Scratch};
 /// Where a kernel runs: the device (real addresses, a call), or the host
 /// tests' emulator (its own address space).
 pub(crate) trait Target {
-    /// Before a row's words are filled.
+    /// Before a frame's words are filled.
     fn begin(&mut self) {}
     /// The address the kernel reads `len` bytes at `p` through.
     fn addr(&mut self, p: *const u8, len: usize) -> u32;
@@ -144,10 +144,14 @@ fn colour_of(st: &Rows<'_>, pal: u8, v: i32, k: u8, shift: u8) -> u32 {
 }
 
 /// Fill the row's words.
-fn fill<T: Target>(t: &mut T, words: &[Word], ctx: &mut [u32], st: &Rows<'_>) {
-    t.begin();
+/// Fill the words (`first`: all, a frame's first row; else those that
+/// change from row to row).
+fn fill<T: Target>(t: &mut T, low: &Lowered, ctx: &mut [u32], st: &Rows<'_>, first: bool) {
     let s = st.scratch;
-    for (w, out) in words.iter().zip(ctx.iter_mut()) {
+    for ((w, out), &row) in low.words.iter().zip(ctx.iter_mut()).zip(&low.per_row) {
+        if !first && !row {
+            continue;
+        }
         *out = match *w {
             Word::Lane(l) => {
                 let p = match l {
@@ -273,6 +277,8 @@ pub(crate) fn frame<T: Target>(
     let uses_i = prog.uses & USES_I != 0;
     let main = low.main_start;
     let mut columns_kept = false;
+    let mut first = true;
+    t.begin();
     #[cfg(feature = "stats")]
     clk.lap(stats::FRAME);
     for row in 0..H {
@@ -337,7 +343,8 @@ pub(crate) fn frame<T: Target>(
             own: &own,
             glyphs: &glyphs,
         };
-        fill(t, &low.words, ctx, &st);
+        fill(t, low, ctx, &st, first);
+        first = false;
         #[cfg(feature = "stats")]
         clk.lap(stats::FILL);
         t.run(ctx, dest(row));
