@@ -747,8 +747,8 @@ fn consoleb_probe(start: Instant, stack0: u32) {
     let mut canvas = Canvas::new();
     let list: [(&str, &str); 8] = [
         ("Big clock", BIG_CLOCK_FILE),
-        ("Big clock rate (min)", include_str!("../../opendmd-web/experiments/console-b/big-clock-rate.psi")),
-        ("Big clock rate (multiply)", include_str!("../../opendmd-web/experiments/console-b/big-clock-rate-multiply.psi")),
+        ("Big clock rate", include_str!("../../opendmd-web/experiments/console-b/big-clock-rate.psi")),
+        ("Big clock rate (bar in the mask)", include_str!("../../opendmd-web/experiments/console-b/big-clock-rate-mask.psi")),
         ("Cycled plasma", include_str!("../../opendmd-web/formulas/cycled-plasma.psi")),
         ("Plasma", include_str!("../../opendmd-web/formulas/plasma.psi")),
         ("Waterfall", include_str!("../../opendmd-web/formulas/waterfall.psi")),
@@ -762,7 +762,15 @@ fn consoleb_probe(start: Instant, stack0: u32) {
                 prog.esp32_us(), prog.esp32_us_still(), prog.esp32_us_jit(), prog.esp32_us_jit_still());
         }
         drop(prog);
+        for c in &fx_psi::RATE_FRAMES {
+            c.store(0, Ordering::Relaxed);
+        }
         jit2::effect(name, src, "", &mut canvas);
+        let r: Vec<u32> = fx_psi::RATE_FRAMES.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+        if r.iter().any(|&n| n > 0) {
+            say!(info, "psi-probe: consoleb {name}: rate frames (both runs): {} with the held picture, {} by the kernel, {} without it", r[0], r[1], r[2]);
+        }
+        consoleb_split(name, src);
     }
     // The compiler's time on the longest bundled Formula (some of the
     // compiler is optimised for size since consoleb).
@@ -812,6 +820,71 @@ fn consoleb_probe(start: Instant, stack0: u32) {
         stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
     );
     *REPORT.lock().unwrap() = None;
+}
+
+/// A `rate` formula drawn directly, frame by frame (each 20 ms on): the
+/// held picture brought up to date, then its fast part by the VM and by
+/// the kernel over it, µs and pixels changed; and the frame drawn from
+/// nothing. Nothing for a formula without `rate`.
+#[cfg(feature = "jit")]
+fn consoleb_split(name: &str, src: &str) {
+    let mut prog = zeroed::<psi::Program>();
+    if compile(src, &mut prog, true, true).is_err() || prog.rate().is_none() {
+        return;
+    }
+    let t = fx_psi::tables();
+    let mut s = zeroed::<psi::Scratch<128>>();
+    s.reset();
+    let Some(mut held) = psi::Held::try_boxed() else {
+        say!(error, "psi-probe: consoleb split {name}: no heap for the held picture ({} B free, largest {} B)", heap(), crate::state::largest_free_block());
+        return;
+    };
+    let mut kernel = psi::jit::emit(&prog);
+    let mut a = vec![0u8; psi::W * psi::H * 3];
+    let mut b = vec![0u8; psi::W * psi::H * 3];
+    let px = |ch: &[u32; psi::H]| ch.iter().map(|m| m.count_ones() * 4).sum::<u32>();
+    let mut sums = [0u64; 6];
+    let n = 40u32;
+    for k in 0..n {
+        let mut i = psi::golden::inputs(0);
+        i.set_ms(&prog, u64::from(k) * 20);
+        let t0 = Instant::now();
+        let rows = held.update::<128>(&prog, &mut s, &i, &t);
+        let t1 = Instant::now();
+        let mut ch = [0u32; psi::H];
+        psi::render_fast::<128>(&prog, &mut s, None, None, &i, &t, Some(held.picture()), u32::MAX, &mut a, Some(&mut ch));
+        let t2 = Instant::now();
+        let vpx = px(&ch);
+        let (mut kus, mut kpx) = (0u64, 0u64);
+        if let Ok(kn) = kernel.as_mut() {
+            let mut ch = [0u32; psi::H];
+            let t3 = Instant::now();
+            let drew = kn.render(&prog, &mut s, None, None, &i, &t, Some(held.picture()), u32::MAX, &mut b, Some(&mut ch));
+            kus = t3.elapsed().as_micros() as u64;
+            kpx = u64::from(px(&ch));
+            if !drew {
+                say!(info, "psi-probe: consoleb split {name}: frame {k}: the kernel's inputs out of range (the VM drew it)");
+            }
+            if a != b {
+                say!(error, "psi-probe: consoleb split {name}: frame {k}: the kernel's bytes differ from the VM's");
+            }
+        }
+        for (j, v) in [u64::from(rows), (t1 - t0).as_micros() as u64, (t2 - t1).as_micros() as u64, u64::from(vpx), kus, kpx].into_iter().enumerate() {
+            sums[j] += v;
+        }
+    }
+    let m = |j: usize| sums[j] / u64::from(n);
+    say!(info,
+        "psi-probe: consoleb split {name}: a frame on average: {} slow rows drawn in {} us; the fast part VM {} us ({} px changed), kernel {} us ({} px changed){}",
+        m(0), m(1), m(2), m(3), m(4), m(5),
+        match &kernel { Ok(_) => String::new(), Err(w) => format!(" (no kernel: {w})") }
+    );
+    let (p50, _, _) = timed(|k| {
+        let mut i = psi::golden::inputs(0);
+        i.set_ms(&prog, u64::from(k) * 20);
+        psi::render_rows_still::<128>(&prog, &mut s, None, None, &i, &t, None, u32::MAX, &mut a);
+    });
+    say!(info, "psi-probe: consoleb split {name}: from nothing (no held picture) p50 {p50} us");
 }
 
 /// The line a finished probe ends its report with.

@@ -853,7 +853,6 @@ impl Program {
         }
     }
 
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn estimate_with(&self, still: Option<usize>, lanes: bool, jit: bool) -> u32 {
         let (skip, cached) = match still {
             Some(k) => {
@@ -873,11 +872,16 @@ impl Program {
         // `layer rate N`: the slow layers' steps a band of rows a frame (an
         // Nth of the rows), on the VM; the fast part's lanes start from the
         // held picture (a row copy).
+        // (Slow layers that read no `t` are redrawn when what they read
+        // changes: at most once a second for the clock, counted as every
+        // 50th frame, or every Nth if N is more.)
         let (slow, rate) = match self.slow_marker() {
-            Some(m) => (
-                m + 1..m + 1 + self.ops[m].a as usize,
-                u32::from(self.ops[m].d.max(1)),
-            ),
+            Some(m) => {
+                let op = &self.ops[m];
+                let n = u32::from(op.d.max(1));
+                let every = if op.c & crate::rate::READS_T != 0 { n } else { n.max(50) };
+                (m + 1..m + 1 + op.a as usize, every)
+            }
             None => (0..0, 1),
         };
         let mut slow_ns = 0;
@@ -908,8 +912,8 @@ impl Program {
             k += 1;
         }
         let row = self.counts().1 as u32;
-        // `cycle`'s turns: a palette copied each row (~1 µs: a guess until
-        // psi-probe's `TURN` row), on top of a row step's 10 µs a frame.
+        // `cycle`'s turns: a palette copied each row, on top of a row
+        // step's 10 µs a frame.
         let turns = self.ops[self.draw_end as usize..self.row_end as usize]
             .iter()
             .filter(|o| o.code == code::TURN)
@@ -938,7 +942,6 @@ impl Program {
     }
 
     /// A kernel step's cost, ns a pixel (see `esp32_us_jit`).
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn jit_step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
         if !is_colour(op.code) {
@@ -981,7 +984,6 @@ impl Program {
     }
 
     /// A pixel step's cost, ns a pixel at 128 lanes (see `esp32_us`).
-    #[cfg_attr(target_arch = "xtensa", optimize(size))]
     fn step_ns(&self, at: usize, op: &Op) -> u32 {
         use code::*;
         match op.code {
@@ -1653,8 +1655,9 @@ impl VecLoop {
 pub(crate) const HELD_COPY_NS: u32 = 5;
 
 /// `cycle`'s turn of a palette, µs a frame over a row step's 10: 32 rows
-/// of a 32-entry copy (a guess until psi-probe's `TURN` row).
-pub(crate) const TURN_US: u32 = 20;
+/// of a 32-entry copy (consoleb-a on the spare: `cycle(fire, x*3, t)` 838
+/// µs a frame against `pal(fire, frac(x*3))`'s 735).
+pub(crate) const TURN_US: u32 = 90;
 
 /// What a cached lane costs a pixel, ns: its register is pointed at it
 /// (read in place), once a lane of pixels — next to nothing. (It was a

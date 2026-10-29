@@ -3,9 +3,9 @@
 name "Big clock"
 about "The real time, drawn live: big rainbow digits and a seconds bar. Check it against your watch"
 loop 60
--- Big clock with `rate`: the digits and the bar as a slow mask (redrawn
--- when the clock moves), the rainbow drifting over it every frame. The
--- same frames as the bundled Big clock.
+-- Big clock with `rate`: the digits as a slow mask (redrawn when the hour
+-- or the minute changes), the rainbow and the seconds bar over it every
+-- frame. The same frames as the bundled Big clock.
 frame {
   h1 = floor(hour/10); h2 = hour % 10       -- the hours' two digits
   m1 = floor(minute/10); m2 = minute % 10   -- the minutes' two digits
@@ -17,11 +17,12 @@ layer rate 50 {
   n = pick(k, h1, h2, m1, m2)    -- and its value
   col = floor(q % 32 / 8)        -- the font's column, 0 to 2 (then the gap)
   row = floor(ty/6)              -- its row from the top, 0 to 4 (5: below)
-  bar = py < 1                   -- the bottom row is the seconds bar
-  gray(bar ? px < end : digit(n, col, row, bold))
+  gray(py < 1 or digit(n, col, row, bold))   -- the bottom row left lit
 }
--- a rainbow drifting through the digits, tilted by row; the bar is white
+-- a rainbow drifting through the digits, tilted by row; the bottom row
+-- is the seconds bar, white
 layer min {
   hue = py/64 + hour/24 + t/10
-  hsv(x + hue, py < 1 ? 0 : 1, 1)
+  bar = py < 1
+  hsv(x + hue, bar ? 0 : 1, bar ? px < end : 1)
 }
