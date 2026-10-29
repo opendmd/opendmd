@@ -209,16 +209,7 @@ fn writes(it: &Item) -> Option<usize> {
 /// (with the values laid out before the still marker): the driver runs
 /// those as lanes, the VM's way.
 pub fn main_start(prog: &Program) -> usize {
-    let (re, pe) = (prog.row_end as usize, prog.len());
-    if let Some(k) = prog.still_marker() {
-        return (k + 1 + prog.ops[k].a as usize).min(pe);
-    }
-    let col = prog.column_run();
-    if col.end > col.start {
-        col.end
-    } else {
-        re
-    }
+    prog.kernel_start()
 }
 
 /// Lower `prog`'s pixel stage, or say why the VM must draw it.
