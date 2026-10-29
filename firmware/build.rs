@@ -71,7 +71,7 @@ fn main() {
     // The embedded setup page, rendered then gzipped.
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
 
-    // The bundled Formulas (`-- bundle` in opendmd-web/formulas/), for
+    // The bundled Formulas (`-- bundle` in opendmd-web/formulas/, then the probe's other examples), for
     // psi-probe's opens through the real path (`psi_probe::bundled`): a
     // list of (file stem, `include_str!`), so a Formula bundled later is in
     // it without an edit here.
@@ -87,13 +87,50 @@ fn main() {
         .map(|p| (p.file_stem().unwrap().to_string_lossy().into_owned(), p))
         .collect();
     bundled.sort();
+    // The sources go into the image with their comments and blank lines left
+    // out (the play path compacts them anyway: `fx_psi::path`), a third
+    // smaller. The probe's other examples (not bundled) ride in the same list.
+    let strip = |text: &str| -> String {
+        let mut out = String::new();
+        for line in text.lines() {
+            let t = line.trim_end();
+            if t.trim_start().starts_with("--") || t.trim().is_empty() {
+                continue;
+            }
+            // A trailing comment, but never on a line with quotes (a name or
+            // an about, or a character literal).
+            let t = match t.find(" --") {
+                Some(i) if !t.contains('"') && !t.contains('\'') => t[..i].trim_end(),
+                _ => t,
+            };
+            // Indentation and runs of spaces go too (nothing in quotes).
+            let t = if t.contains('"') || t.contains('\'') {
+                t.to_string()
+            } else {
+                t.split_whitespace().collect::<Vec<_>>().join(" ")
+            };
+            out += &t;
+            out += "\n";
+        }
+        out
+    };
     let mut list = String::from("&[\n");
     for (name, path) in &bundled {
         println!("cargo:rerun-if-changed={}", path.display());
-        list += &format!("    ({name:?}, include_str!({:?})),\n", path.display().to_string());
+        let text = std::fs::read_to_string(path).expect("reading a bundled Formula");
+        list += &format!("    ({name:?}, {:?}),\n", strip(&text));
     }
     list += "]\n";
     std::fs::write(out_dir.join("bundled_formulas.rs"), list).expect("writing bundled_formulas.rs");
+    let mut list = String::from("&[\n");
+    for name in ["plasma", "fire", "tunnel", "rotozoom", "rotozoom-floor", "wireframe-cube", "corner-clock"] {
+        let path = dir.join(format!("{name}.psi"));
+        println!("cargo:rerun-if-changed={}", path.display());
+        let text = std::fs::read_to_string(&path).expect("reading an example Formula");
+        list += &format!("    ({name:?}, {:?}),\n", strip(&text));
+    }
+    list += "]\n";
+    std::fs::write(out_dir.join("probe_examples.rs"), list).expect("writing probe_examples.rs");
     let raw = std::fs::read_to_string("web/setup.html").expect("reading web/setup.html");
     let mut tera = Tera::default();
     tera.add_raw_template("setup", &raw)
