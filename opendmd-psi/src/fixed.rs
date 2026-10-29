@@ -110,14 +110,142 @@ pub fn div(a: i32, b: i32) -> i32 {
             _ => i32::MIN,
         };
     }
+    #[cfg(target_arch = "xtensa")]
+    {
+        div_u32(a, b)
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        div_i64(a, b)
+    }
+}
+
+/// [`div`] by a non-zero `b` as a 64-bit division: `sat((a << 16) / b)`,
+/// truncated towards zero (the definition; the host and wasm run it, where
+/// a 64-bit division is one instruction).
+#[cfg_attr(target_arch = "xtensa", allow(dead_code))]
+#[inline(always)]
+pub(crate) fn div_i64(a: i32, b: i32) -> i32 {
     sat(((a as i64) << 16) / b as i64)
+}
+
+/// [`div_i64`] with 32-bit divisions only (the ESP32's `quou`; its 64-bit
+/// division is a ROM call, ~900 ns a pixel): the same bits for every
+/// non-zero `b`. On magnitudes `n = |a|`, `d = |b|` (the quotient
+/// truncates towards zero, so it is the magnitudes' floor with the sign
+/// put back): `n << 16` fits 32 bits when `n < 2^15`, one division; else
+/// `n / d` is the whole part (2^15 or more saturates: the result is at
+/// least 2^31 either way) and the 16 bits below the point divide the
+/// remainder, `(r << 16) / d`, which fits 32 bits when `d < 2^16` and is
+/// one Knuth digit ([`digit16`]) when it doesn't.
+#[cfg_attr(not(target_arch = "xtensa"), allow(dead_code))]
+#[inline(always)]
+pub(crate) fn div_u32(a: i32, b: i32) -> i32 {
+    // (`| (b == 0)`: no zero test before the divisions; b is never 0.)
+    let (n, d) = (a.unsigned_abs(), b.unsigned_abs() | (b == 0) as u32);
+    let m = if n >> 15 == 0 {
+        (n << 16) / d
+    } else {
+        let q = n / d;
+        if q >> 15 != 0 {
+            return ends(a ^ b);
+        }
+        let r = n - q * d;
+        let f = if d >> 16 == 0 {
+            (r << 16) / d
+        } else {
+            digit16(r, d)
+        };
+        (q << 16) | f
+    };
+    // m < 2^31: negating it cannot overflow.
+    if (a ^ b) < 0 {
+        (m as i32).wrapping_neg()
+    } else {
+        m as i32
+    }
+}
+
+/// `floor(r · 2^16 / d)` for `r < d`, `d ≥ 2^16` (a 16-bit quotient) with
+/// one 32-bit division: Knuth's algorithm D for a single digit in base
+/// 2^16 (Hacker's Delight's `divlu`): `d` normalised so its top bit is
+/// set, the digit estimated from `d`'s top half, then corrected (at most
+/// twice) against its low half. With a two-digit divisor that test is
+/// exact, so no multiply-and-subtract follows.
+#[inline(always)]
+fn digit16(r: u32, d: u32) -> u32 {
+    // d ≥ 2^16: s ≤ 15; r < d, so r << s fits too. (`| 0x8000` changes
+    // nothing, dn's top bit is set: it spares a zero test.)
+    let s = lz32(d);
+    let (dn, rn) = (d << s, r << s);
+    let (dh, dl) = ((dn >> 16) | 0x8000, dn & 0xffff);
+    let mut q = rn / dh;
+    let mut rh = rn - q * dh;
+    while q > 0xffff || q * dl > (rh << 16) {
+        q -= 1;
+        rh += dh;
+        if rh > 0xffff {
+            break;
+        }
+    }
+    q
+}
+
+/// `v.leading_zeros()` (32 for 0). On the ESP32 its `nsau` instruction:
+/// the Xtensa backend never emits it, and expands `leading_zeros` to a
+/// ~30-instruction bit count with four constants loaded from flash.
+#[inline(always)]
+pub(crate) fn lz32(v: u32) -> u32 {
+    #[cfg(target_arch = "xtensa")]
+    {
+        let r: u32;
+        // SAFETY: one register-to-register instruction (NSAU: the number of
+        // leading zeros, 32 for 0); no memory, no stack, no flags.
+        unsafe {
+            core::arch::asm!("nsau {0}, {1}", out(reg) r, in(reg) v, options(pure, nomem, nostack));
+        }
+        r
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        v.leading_zeros()
+    }
 }
 
 /// `1 / a`, what a division by a per-frame or per-row value becomes (one
 /// division per frame or row, then a multiply per pixel).
 #[inline(always)]
 pub fn recip(a: i32) -> i32 {
-    div(ONE, a)
+    #[cfg(target_arch = "xtensa")]
+    {
+        recip_u32(a)
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        div(ONE, a)
+    }
+}
+
+/// [`recip`] with one 32-bit division: `div(ONE, a)` is `2^32 / |a|`,
+/// floored, signed and saturated; for `|a| ≥ 2` that is `(2^32 − 1) / |a|`,
+/// plus 1 when `|a|` divides 2^32 (a power of two).
+#[cfg_attr(not(target_arch = "xtensa"), allow(dead_code))]
+#[inline(always)]
+pub(crate) fn recip_u32(a: i32) -> i32 {
+    let d = a.unsigned_abs();
+    if d <= 1 {
+        // 1 / 0 and 1 / ±2^-16 saturate (a = 0 to the top end).
+        return ends(a | (a == 0) as i32);
+    }
+    let q = u32::MAX / d + (d & (d - 1) == 0) as u32;
+    if q >> 31 != 0 {
+        return ends(a);
+    }
+    if a < 0 {
+        -(q as i32)
+    } else {
+        q as i32
+    }
 }
 
 /// `1 / k` for the compiler's `x / k` (k a positive constant, x per pixel),
@@ -279,7 +407,7 @@ pub fn sqr(a: i32) -> i32 {
 /// 1/64 step is good to ~2^−17; the table's rounding makes it ~15 bits.
 /// Ten-odd instructions where a bit-by-bit root takes fifteen rounds.
 #[inline(always)]
-fn sqrt30(v: u32) -> u32 {
+pub(crate) fn sqrt30(v: u32) -> u32 {
     let i = (v >> 22) as usize - 64; // 0..192
     let f = (v >> 6) & 0xffff;
     let (a, b) = (SQRT[i] as u32, SQRT[(i + 1).min(192)] as u32);
@@ -287,22 +415,33 @@ fn sqrt30(v: u32) -> u32 {
 }
 
 /// √ of a Q32 value (u64) as Q16, ~15 significant bits: normalised to
-/// 2^28..2^30 by an even shift, the table root, shifted back.
+/// 2^28..2^30 by an even shift, the table root, shifted back. (The same
+/// bits as first written, with 64-bit shifts and `leading_zeros`, in
+/// 32-bit steps: the ESP32 has neither.)
 #[inline(always)]
 fn sqrt_q32(v: u64) -> i32 {
-    if v == 0 {
+    // The top non-zero word, the word under it, and what the even shift
+    // of the whole is past the top word's own.
+    let (hi, lo) = ((v >> 32) as u32, v as u32);
+    let (top, next, base) = if hi == 0 { (lo, 0, 32) } else { (hi, lo, 0) };
+    if top == 0 {
         return 0;
     }
-    // Shift left by s (even) so the top bit lands at 28 or 29: then
-    // v' = (v << s) >> 34 is in 2^28..2^30.
-    let lz = v.leading_zeros() as i32; // 0..63
-    let s = lz & !1; // even, ≤ lz
-    let w = ((v << s) >> 34) as u32;
-    let r = sqrt30(w) as u64;
-    // √v = √(w · 2^34 / 2^s) = √w · 2^17 / 2^(s/2)
-    let sh = 17 - s / 2;
-    let out = if sh >= 0 { r << sh } else { r >> -sh };
-    sat(out as i64)
+    // (v << (base + s)) >> 34: the top word shifted by its own even shift
+    // (s ≤ 30) with the next word's top s bits under it, then >> 2.
+    let s = lz32(top) & !1;
+    let w = ((top << s) | ((next >> 1) >> (31 - s))) >> 2;
+    let r = sqrt30(w);
+    // √v = r · 2^(17 − (base + s)/2), −14..=17; past i32::MAX saturates
+    // (r ≤ 2^15).
+    let sh = 17 - ((base + s) / 2) as i32;
+    if sh < 0 {
+        (r >> -sh) as i32
+    } else if r >> (31 - sh) != 0 {
+        i32::MAX
+    } else {
+        (r << sh) as i32
+    }
 }
 
 #[inline(always)]
@@ -310,15 +449,23 @@ pub fn sqrt(a: i32) -> i32 {
     if a <= 0 {
         return 0;
     }
-    // a is Q16; a << 16 is Q32.
-    sqrt_q32((a as u64) << 16)
+    // a is Q16; a << 16 is Q32, whose even shift is 16 + s for a's own s
+    // (a < 2^31): w = (a << s) >> 2, the root shifted by 9 − s/2.
+    let s = lz32(a as u32) & !1;
+    let r = sqrt30((a as u32) << s >> 2);
+    if s <= 18 {
+        (r << (9 - s / 2)) as i32
+    } else {
+        (r >> (s / 2 - 9)) as i32
+    }
 }
 
 /// √(a² + b²).
 #[inline(always)]
 pub fn len(a: i32, b: i32) -> i32 {
     let (a, b) = (a.unsigned_abs() as u64, b.unsigned_abs() as u64);
-    sqrt_q32((a * a).saturating_add(b * b))
+    // (Each square is at most 2^62: the sum fits.)
+    sqrt_q32(a * a + b * b)
 }
 
 /// The angle of (x, y) in turns, −½..½ (0 along +x, ¼ along +y): the
@@ -330,7 +477,7 @@ pub fn atan2(y: i32, x: i32) -> i32 {
     if hi == 0 {
         return 0;
     }
-    let bits = 32 - hi.leading_zeros();
+    let bits = 32 - lz32(hi);
     if bits > 15 {
         lo >>= bits - 15;
         hi >>= bits - 15;
