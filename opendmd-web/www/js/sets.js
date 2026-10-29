@@ -29,9 +29,14 @@ export async function mount(el) {
     goEd();
   }
 
-  let ctok = 0;
+  let ctok = 0, ltok = 0;
   async function loadSets() {
-    lists = await app.playlists();
+    // Each load lists the card afresh and only the latest asked is shown: the
+    // load a config change started before a Delete must not land after the
+    // one the Delete started, and bring the deleted row back.
+    const t = ++ltok, got = await app.playlists(true);
+    if (t !== ltok) return;
+    lists = got;
     known = lists.map((p) => p.path);
     const active = app.activeSet;
     const rows = lists.sort((a, b) => a.root - b.root || byNice(a.label, b.label)).map((p) => {
