@@ -41,6 +41,10 @@ ota = ["dep:ed25519-dalek", "dep:sha2"]
 psi = ["dep:opendmd-psi"]
 # psi-probe's counters (`psi::stats`).
 psi-stats = ["psi", "opendmd-psi/stats"]
+# The narrow JIT (opendmd-psi's `jit`): a formula's pixel stage as Xtensa
+# code on the ESP32 (only there: on any other target the feature does
+# nothing), checked against the VM when it opens.
+psi-jit = ["psi", "opendmd-psi/jit"]
 
 # Vendored gif 0.13.3 with a one-line LZW allocation fix; see third_party/gif/README-OPENDMD.md
 [patch.crates-io]

@@ -29,6 +29,8 @@ mod compile;
 mod draw;
 pub mod fixed;
 mod fuse;
+#[cfg(any(test, all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
+pub mod jit;
 pub mod look;
 mod meta;
 mod program;

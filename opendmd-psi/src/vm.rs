@@ -84,8 +84,8 @@ pub struct Scratch<const N: usize> {
     /// `[0]` is the `i` lane, then the [`REGS`] registers.
     pub(crate) lanes: [[i32; N]; REGS + 1],
     pub(crate) sc: [i32; MAX_SCALARS],
-    xs: [i32; W],
-    pxs: [i32; W],
+    pub(crate) xs: [i32; W],
+    pub(crate) pxs: [i32; W],
 }
 
 impl<const N: usize> Scratch<N> {
@@ -842,19 +842,19 @@ fn frame<const N: usize>(
 /// Where each register's lane is read from instead of its own, null for
 /// its own: a still cache's lane at the pixels (`fetch`), until the
 /// register is written. One lane pass long.
-type Alias = [*const i32; REGS + 1];
+pub(crate) type Alias = [*const i32; REGS + 1];
 
 /// The lane register a register operand names (as `lane_op`'s
 /// destination).
 #[inline(always)]
-fn reg_index(v: u8) -> usize {
+pub(crate) fn reg_index(v: u8) -> usize {
     ((v & !LANE).saturating_sub(L_I) as usize).clamp(1, REGS)
 }
 
 /// Copy the cached registers' lanes (`n` of `regs`) into the kept lanes at
 /// pixel `at`.
 #[inline(never)]
-fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at: usize) {
+pub(crate) fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at: usize) {
     for (j, &r) in regs.iter().enumerate().take(n as usize) {
         if let Some(l) = st.lanes[j].as_deref_mut() {
             l.0[at..at + N].copy_from_slice(&s.lanes[reg_index(r)]);
@@ -866,7 +866,7 @@ fn keep<const N: usize>(s: &Scratch<N>, st: &mut Still, regs: [u8; 2], n: u8, at
 /// in place until written: no copy).
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
-fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n: u8, at: usize) {
+pub(crate) fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n: u8, at: usize) {
     for (j, &r) in regs.iter().enumerate().take(n as usize) {
         if let Some(l) = st.lanes[j].as_deref() {
             al[reg_index(r)] = l.0[at..at + N].as_ptr();
@@ -1035,7 +1035,7 @@ fn wget(l: &[i32], k: usize) -> i64 {
 }
 
 #[inline(always)]
-fn wset(l: &mut [i32], k: usize, v: i64) {
+pub(crate) fn wset(l: &mut [i32], k: usize, v: i64) {
     let k = (k % WIDE) * 2;
     l[k] = v as i32;
     l[k + 1] = (v >> 32) as i32;
@@ -1245,7 +1245,7 @@ fn tab_lane<const N: usize>(d: &mut [i32; N], a: Arg, tabs: &[i32; MAX_TABLE], o
 
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn lane_op<const N: usize>(
+pub(crate) fn lane_op<const N: usize>(
     s: &mut Scratch<N>,
     al: &mut Alias,
     op: &Op,

@@ -388,6 +388,8 @@ fn main() -> Result<()> {
     panel.set_brightness(settings.brightness);
     panel.set_display(settings.look, settings.glow);
     panel.set_sync(settings.panel_sync, settings.panel_split);
+    #[cfg(feature = "psi")]
+    opendmd_core::fx_psi::set_jit(settings.formula_jit);
     clock::set_timezone(&settings.tz, &settings.tz_name);
     // The live clock (`@clock`) reads local time from here.
     opendmd_core::synth::set_wall_clock(Some(clock::wall_now));
@@ -896,6 +898,8 @@ fn main() -> Result<()> {
                             // at once if what it shows no longer matches
                             // (a dark panel is repainted when it lights).
                             panel.set_sync(settings.panel_sync, settings.panel_split);
+                            #[cfg(feature = "psi")]
+                            opendmd_core::fx_psi::set_jit(settings.formula_jit);
                             if panel.set_display(settings.look, settings.glow) && !sched.off() {
                                 repaint_look(&mut looks, &mut panel, engine.as_mut(), &mut canvas, epoch.elapsed());
                             }
