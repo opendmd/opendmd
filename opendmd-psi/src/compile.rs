@@ -911,6 +911,79 @@ pub fn compact(src: &str) -> String {
     out
 }
 
+/// The same formula as short as it goes, line for line: comment lines,
+/// blank lines, comments after code and indentation dropped, and the spaces
+/// next to an operator or bracket (`= , * + - / < > ( ) [ ] { } ? : ;`)
+/// too, so `x = a * -3` is `x=a*-3`. Never two `-` or `/` joined (that
+/// would start a comment); text in quotes and a character in quotes kept
+/// as written. It compiles to the very same program (tests/squeeze.rs holds
+/// that for every example): the firmware's built-in bundled Formulas are
+/// kept this way (build.rs), where every byte of the image counts.
+pub fn squeeze(src: &str) -> String {
+    const OPS: &[u8] = b"=,*+-/<>()[]{}?:;";
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        let b = line.as_bytes();
+        // The line's code: up to a comment outside quotes.
+        let (mut end, mut i, mut quote) = (b.len(), 0, false);
+        while i < b.len() {
+            let c = b[i];
+            if !quote && c == b'\'' && b.get(i + 2) == Some(&b'\'') {
+                i += 3;
+                continue;
+            }
+            if c == b'"' {
+                quote = !quote;
+            } else if !quote && (c == b'-' || c == b'/') && b.get(i + 1) == Some(&c) {
+                end = i;
+                break;
+            }
+            i += 1;
+        }
+        let code = line[..end].trim();
+        if code.is_empty() {
+            continue;
+        }
+        // Spaces out where nothing depends on them.
+        let c = code.as_bytes();
+        let mut kept = String::with_capacity(code.len());
+        let (mut i, mut quote) = (0, false);
+        while i < c.len() {
+            let ch = c[i];
+            if !quote && ch == b'\'' && c.get(i + 2) == Some(&b'\'') {
+                kept.push_str(&code[i..i + 3]);
+                i += 3;
+                continue;
+            }
+            if ch == b'"' {
+                quote = !quote;
+            }
+            if !quote && ch.is_ascii_whitespace() {
+                let mut j = i;
+                while j < c.len() && c[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                let prev = kept.as_bytes().last().copied().unwrap_or(b' ');
+                let next = c.get(j).copied().unwrap_or(b' ');
+                let glue = (prev == next && (prev == b'-' || prev == b'/'))
+                    || !(OPS.contains(&prev) || OPS.contains(&next));
+                if glue {
+                    kept.push(' ');
+                }
+                i = j;
+                continue;
+            }
+            // One character (whole, not a byte of one).
+            let n = code[i..].chars().next().map_or(1, char::len_utf8);
+            kept.push_str(&code[i..i + n]);
+            i += n;
+        }
+        out.push_str(&kept);
+        out.push('\n');
+    }
+    out
+}
+
 // --- names ----------------------------------------------------------------------
 
 /// `loop forever`'s loop (Q16 seconds, as `loop N`'s): longer than any.

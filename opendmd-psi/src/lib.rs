@@ -45,7 +45,7 @@ mod tables;
 mod vm;
 
 pub use compile::{
-    compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into, compile_layout, compile_opts, compile_unfused, compile_with, number,
+    compact, compile_declared, compile_heap_estimate, compile_heap_for_tokens, compile_into, compile_layout, compile_opts, compile_unfused, compile_with, number, squeeze,
     Declared, DeclaredControl, Error, Info, MAX_ABOUT_TEXT, MAX_DEPTH, MAX_LABEL_TEXT,
     MAX_NAME_TEXT, MAX_NODES, MAX_SOURCE, NO_MEMORY,
 };

@@ -68,6 +68,9 @@ psi-probe = ["psi", "opendmd-core/psi-stats"]
 
 [build-dependencies]
 embuild = { version = "0.32", features = ["espidf"] }
+# The built-in bundled Formulas are kept as `opendmd_psi::squeeze` writes
+# them (the same programs, about half the bytes: build.rs).
+opendmd-psi = { path = "../opendmd-psi", default-features = false }
 # The embedded setup page is rendered and gzipped at build time, the same way
 # ~/projects/stripe-dashboard does it.
 flate2 = "1"
