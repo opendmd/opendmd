@@ -5,6 +5,12 @@
 """Boot a full flash image in esp32sim with the SD-SPI card, capture the console, judge it.
 
     uv run tools/emu/run.py smoke|probe --image FULL.bin [--card SD.img] [--log LOG] [--seconds N] [--wall N]
+        [--built-after EPOCH]
+
+The image must be the one that boots: its app descriptor's ELF SHA-256 is checked against
+the boot log's `ELF file SHA256:` line, and with --built-after (the Makefile passes the time it
+started the build) an image file older than that is refused before anything runs (a failed
+build must never leave an earlier image to be booted in its place).
 
 smoke: pass when the microSD mount, panel up, httpd, www pack verified and a GIF start
        from the playlist are all seen; prints EMU_SMOKE_OK.
@@ -18,6 +24,19 @@ from pathlib import Path
 
 EMU_DIR = Path(os.environ.get("EMU_DIR", "~/scratch/opendmd-emu-sim"))
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+BOOT_SHA = re.compile(r"ELF file SHA256:\s+([0-9a-f]+)")
+APP_DESC_MAGIC = (0xABCD5432).to_bytes(4, "little")
+
+
+def image_elf_sha(image: Path) -> str | None:
+    """The app descriptor's ELF SHA-256 (hex) of the first app in a full flash image: the
+    descriptor follows the app image's 24 B header and first 8 B segment header, its hash at +0x90."""
+    data = image.read_bytes()
+    for off in range(0x10000, len(data) - 0x100, 0x10000):
+        d = off + 0x20
+        if data[off] == 0xE9 and data[d:d + 4] == APP_DESC_MAGIC:
+            return data[d + 0x90:d + 0xB0].hex()
+    return None
 
 FAIL = [
     (re.compile(r"Guru Meditation"), "Guru Meditation"),
@@ -48,6 +67,7 @@ def main():
     ap.add_argument("--wall", type=int, help="wall-clock limit in s (default smoke 900, probe 3600)")
     ap.add_argument("--rom", type=Path)
     ap.add_argument("--min-gifs", type=int, default=3)
+    ap.add_argument("--built-after", type=float, help="refuse an image file older than this (epoch s)")
     a = ap.parse_args()
 
     sim = EMU_DIR / "src" / "target" / "release" / "esp32sim"
@@ -55,6 +75,11 @@ def main():
     for what, p in (("emulator (run make emu-build)", sim), ("flash image", a.image), ("card image (run mkcard.py)", a.card), ("esp32_rev300_rom.elf under ~/.espressif/tools/esp-rom-elfs/", rom)):
         if not p or not Path(p).exists():
             sys.exit(f"run: missing {what}: {p}")
+    if a.built_after is not None and a.image.stat().st_mtime < a.built_after:
+        sys.exit(f"EMU_{a.mode.upper()}_FAIL: {a.image} is older than this build (a failed build left it): not booting it")
+    want_sha = image_elf_sha(a.image)
+    if not want_sha:
+        sys.exit(f"EMU_{a.mode.upper()}_FAIL: no app descriptor found in {a.image}")
     seconds = a.seconds or (60 if a.mode == "smoke" else 400)
     wall = a.wall or (900 if a.mode == "smoke" else 3600)
     log = a.log or EMU_DIR / "logs" / f"{a.mode}-{time.strftime('%Y%m%d-%H%M%S')}.log"
@@ -70,6 +95,7 @@ def main():
 
     t0 = time.time()
     seen, gifs, resets, failure, done_at = {}, 0, 0, None, None
+    booted_sha = None
     golden = None
     differ_bad = []
     lines = []
@@ -85,6 +111,11 @@ def main():
             lf.write(raw)
             line = ANSI.sub("", raw.rstrip("\n"))
             lines.append(line)
+            m = BOOT_SHA.search(line)
+            if m and booted_sha is None:
+                booted_sha = m[1]
+                if not want_sha.startswith(booted_sha):
+                    failure = f"the booted app (ELF SHA256 {booted_sha}...) is not {a.image} ({want_sha[:16]}...)"
             if line.startswith("rst:0x"):
                 resets += 1
                 if resets > 1:
@@ -131,6 +162,8 @@ def main():
 
     if failure:
         die(failure)
+    if booted_sha is None:
+        die("no `ELF file SHA256:` line at boot: cannot tell which app ran")
     if a.mode == "smoke":
         missing = [n for n, _ in SMOKE if n not in seen]
         if missing or gifs < a.min_gifs:
