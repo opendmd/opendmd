@@ -908,7 +908,6 @@ pub(crate) fn fetch<const N: usize>(al: &mut Alias, st: &Still, regs: [u8; 2], n
 /// `cycle`'s turns (`code::TURN`, the section's last steps) turn the
 /// formula's palette slots in `own` for the row.
 #[inline(never)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 pub(crate) fn row_steps<const N: usize>(
     prog: &Program,
     scratch: &mut Scratch<N>,
@@ -1086,7 +1085,6 @@ pub(crate) fn wset(l: &mut [i32], k: usize, v: i64) {
 /// `t` and what is made from it; `w` the lane holding the wide values),
 /// out of line and in flash: the frame loop that calls it is in IRAM.
 #[inline(never)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 pub(crate) fn wide_step(sc: &mut [i32; MAX_SCALARS], w: &mut [i32], op: &Op) {
     use code::*;
     let s = |v: u8| sc[(v & 0x7f) as usize];
@@ -1164,7 +1162,6 @@ impl<const N: usize> Scratch<N> {
 /// scalar steps' own functions ([`value_of`]: what a turn at a time runs).
 #[cfg(not(target_arch = "wasm32"))]
 #[inline(never)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 pub(crate) fn lane_draw<const N: usize>(
     s: &mut Scratch<N>,
     op: &Op,

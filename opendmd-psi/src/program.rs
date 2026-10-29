@@ -502,7 +502,6 @@ pub(crate) fn palette<'a>(
 /// The formula's own palettes from its tables (out of line: once a frame,
 /// and only for a formula with some, `OWNPAL`).
 #[inline(never)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 pub(crate) fn unpack_palettes(tabs: &[i32; MAX_TABLE], own: &mut Pals) {
     for (j, p) in own.iter_mut().enumerate() {
         let at = user_palette_at(j);
@@ -518,7 +517,6 @@ pub(crate) fn unpack_palettes(tabs: &[i32; MAX_TABLE], own: &mut Pals) {
 /// entry (e + floor(a·32)) mod 32. Out of line, in flash: a row step's
 /// (once a row, ~1 µs). Indices are masked, whatever the program.
 #[inline(never)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 pub(crate) fn turn(t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCALARS], op: &Op) {
     let n = ((sc[(op.a & 0x7f) as usize] >> 11) & 31) as usize;
     let src = *palette(t, own, op.b);
@@ -1881,7 +1879,6 @@ pub(crate) fn pick(sc: &[i32; MAX_SCALARS], base: u8, n: u8, k: i32) -> i32 {
 /// a table, [`code::is_table`], hence the `Option`: `None` there). Out of
 /// line: one copy for both (inlined, the ESP32 build carried two, 2.4 KB).
 #[inline(never)]
-#[cfg_attr(target_os = "espidf", link_section = ".text.psi_hot")]
 pub(crate) fn eval(c: u8, a: i32, b: i32, x: i32, t: Option<&Tables>) -> i32 {
     use code::*;
     match c {
