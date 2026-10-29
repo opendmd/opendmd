@@ -3463,9 +3463,11 @@ impl<'s> Parser<'s> {
                     )
                 }
             };
+            // Inside a part (a whole formula pasted in, `use … as p`, a
+            // composed look) it is allowed and left out: the slow layers are
+            // the formula's own, as its frame rate is (`fps`).
             if self.in_part() {
-                // E945.
-                return self.err(r, "`rate` goes on the formula's own layers, not inside a part");
+                rate = 0;
             }
         }
         let open = self.peek();

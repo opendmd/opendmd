@@ -1050,7 +1050,8 @@ fn a_part_drawn_whole_is_the_formula() {
         .map(|s| (s.1, 0u32))
         .chain(golden::FRAMES.iter().map(|f| (f.1, f.2)))
         .chain(golden::OVER.iter().map(|f| (f.1, f.2)))
-        // (`rate` is the formula's own: never inside a part, E945.)
+        // (`rate` is the formula's own: left out inside a part, its slow
+        // layers drawn every frame there.)
         .filter(|(src, _)| !src.contains(" rate "));
     for (src, ms) in all {
         for ms in [ms, ms + 1230, ms + 7000] {
@@ -2829,9 +2830,11 @@ fn the_held_picture_draws_the_frames_drawn_from_nothing() {
     }
 }
 
-/// The errors (E941-E947).
+/// The errors (E941-E947), and `rate` inside a part left out.
 #[test]
 fn rate_error_messages() {
+    let p = compile("part p { layer rate 3 { gray(x) }\nlayer add { gray(y*t) } }\np").unwrap();
+    assert!(p.rate().is_none());
     let cases: &[(&str, &str, &str)] = &[
         ("layer { gray(x) }\nlayer rate 4 add { gray(y) }", "expected `{`", "—"),
         ("layer { gray(x) }\nlayer add rate 4 { gray(y) }", "bottom layers only", "E941"),
@@ -2842,7 +2845,7 @@ fn rate_error_messages() {
         ("layer rate 4 { gray(ul) }\nlayer add { gray(y) }", "can't read", "E944"),
         ("layer rate 4 { gray(x) }\nlayer add { gray(ur) }", "can't read", "E944"),
         ("draw { dot(3, 3) }\nlayer rate 4 { gray(ink) }\nlayer add { gray(y) }", "can't read", "E944"),
-        ("part p { layer rate 3 { gray(x) }\nlayer add { gray(y) } }\nlayer { p }\nlayer add { gray(t) }", "not inside a part", "E945"),
+        ("part p { layer { gray(x) }\nlayer add { gray(y) } }\nlayer rate 3 { p }\nlayer add { gray(t) }", "not on a part's", "E945"),
         ("layer rate 4 { gray(x) }", "add a layer above", "E947"),
     ];
     let mut bad = alloc::vec::Vec::new();

@@ -389,7 +389,7 @@ reads no `t` is redrawn only when what it reads changes (once a second for
 a clock's `second`). The layers above are drawn over it every frame. Rules
 (E941-E947): `rate` only on the bottom run, one N, at least one layer above
 it, the bottom one opaque (no blend, no coverage), no `ink` or `ur ug ub
-ul` in a slow layer, not inside a part. Cost: the slow layers' pixel steps
+ul` in a slow layer; inside a part `rate` is left out (as `fps` is). Cost: the slow layers' pixel steps
 ÷ N, plus a row copy; as a look the slow layers are drawn every frame.
 Commutative blends (`multiply`, `min`, `max`, `add`, `screen`) let a
 static mask sit at the bottom: Big clock's digits as `layer rate 50 {
