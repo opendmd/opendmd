@@ -348,7 +348,12 @@ FSHEET = {"js/fsheet.js"}
 # Look, a line of its own.
 FSTORE_GZ_BUDGET = 3 * 1024
 FSTORE = {"js/fstore.js"}
-SHARE_GZ_BUDGET = 13 * 1024  # 12 -> 13 KB with short links (S5: Copy link posts /api/f, 11,548 -> 12,481 B)
+# Add to my panel's arrival (js/fadd.js, branch add-to-panel, 2026-10-29):
+# the site hands a Formula over with `&add=1`; saved, then the sheet (Play
+# now, Add to a playlist, Use as the look). Imported only then: its own line.
+FADD_GZ_BUDGET = 3 * 1024
+FADD = {"js/fadd.js"}
+SHARE_GZ_BUDGET = 14 * 1024  # 12 -> 13 KB with short links (S5: Copy link posts /api/f, 11,548 -> 12,481 B); 14 with Add to my panel (the hand-off, its mark, the form's two modes: ~13.3 KB)
 # What the formula page loads from the demo (its own files aside).
 SHARE_USES = ("pkg/", "pkg-psi/", "js/psikit.js", "js/preview.js", "js/state.js", "js/util.js", "fonts/silkscreen.woff2")
 LICENCES_GZ_BUDGET = 40 * 1024
@@ -412,6 +417,8 @@ def main() -> int:
             kind = "fsheet"
         elif rel in FSTORE:
             kind = "fstore"
+        elif rel in FADD:
+            kind = "fadd"
         elif rel in STUDIO:
             kind = "studio"
         elif rel in LIVE:
@@ -480,7 +487,7 @@ def main() -> int:
                          ("smooth", SMOOTH_GZ_BUDGET), ("firmware", FIRMWARE_GZ_BUDGET), ("update", UPDATE_GZ_BUDGET), ("card", CARD_GZ_BUDGET),
                          ("panel", PANEL_GZ_BUDGET), ("panel test", PANEL_TEST_GZ_BUDGET), ("device", DEVICE_GZ_BUDGET),
                          ("psi wasm", PSI_WASM_GZ_BUDGET), ("formulas", FORMULAS_GZ_BUDGET), ("show", SHOW_GZ_BUDGET), ("looks", LOOKS_GZ_BUDGET),
-                         ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET),
+                         ("fsheet", FSHEET_GZ_BUDGET), ("fstore", FSTORE_GZ_BUDGET), ("fadd", FADD_GZ_BUDGET),
                          ("font", FONT_GZ_BUDGET), ("licences", LICENCES_GZ_BUDGET), ("demo", DEMO_GZ_BUDGET),
                          ("tree", TREE_GZ_BUDGET), ("editor", EDITOR_GZ_BUDGET),
                          ("other", None)):
