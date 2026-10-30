@@ -1390,7 +1390,9 @@ pub(crate) fn lane_op<const N: usize>(
         // monomorphised copies would be ~1 KB more of wasm.
         DIGIT..=DIGIT_B => glyph_lane(d, [a, b, c], &glyphs(t, op.code)),
         U_R..=U_L => load_under(d, under, op.code - U_R),
-        INK => load_ink(d, ink),
+        INK => load_ink(d, ink, 0),
+        // (`n` a constant: `Arg::Sc`.)
+        INKN => load_ink(d, ink, if let Arg::Sc(n) = a { n >> 16 } else { 0 }),
         _ => {}
     }
 }
@@ -1778,11 +1780,17 @@ fn load_under<const N: usize>(d: &mut [i32; N], under: Option<&[u8]>, ch: u8) {
     }
 }
 
-/// The draw stage's canvas under the lane, 0..1; 0 without one.
+/// The draw stage's canvas under the lane, 0..1 (`n` 0), or in `n`
+/// levels (`ink(n)`, `fixed::ink_levels`); 0 without one.
 #[inline(never)]
 #[cfg_attr(target_os = "espidf", link_section = ".iram1.psi")]
-fn load_ink<const N: usize>(d: &mut [i32; N], ink: Option<&[u8]>) {
+fn load_ink<const N: usize>(d: &mut [i32; N], ink: Option<&[u8]>, n: i32) {
     match ink {
+        Some(k) if n > 0 => {
+            for (o, &b) in d.iter_mut().zip(k) {
+                *o = fixed::ink_levels(b, n);
+            }
+        }
         Some(k) => {
             for (o, &b) in d.iter_mut().zip(k) {
                 *o = fixed::byte(b);

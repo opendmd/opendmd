@@ -65,6 +65,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("line(x0, y0, x1, y1, v0, v1)", "loop 4; draw { line(64, 16, 64 + 40*cos(t/4), 16 + 15*sin(t/4), 0.2, 1) }; pal(ice, ink)"),
     ("dot(x, y, v)", "draw { for k < 64 { dot(hash(k, 1)*128, hash(k, 2)*32, hash(k, 3)) } }; gray(ink)"),
     ("ink", "draw { line(0, 16, 127, 16) }; #40c0ff * ink"),
+    ("ink(16)", "draw { for k < 16 { line(k*8, 0, k*8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)"),
     ("table T = 1, -2, 0.5", "table T = 0.2, 0.6, 1, 0.6; gray(T[floor(x*4)])"),
     ("T[k]", "table hue = 0, 0.1, 0.3, 0.6; hsv(hue[px % 4], 1, 1)"),
     ("sprite s { … }", "sprite s {\n  key . 0, X 1\n  .X.\n  XXX\n  .X.\n}\ngray(s[floor(px/4) - 14, floor(ty/4) - 2])"),
@@ -74,6 +75,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("rgb(r, g, b)", "rgb(x, y, 1 - x)"),
     ("pal(fire, v)", "pal(fire, y)"),
     ("palette sea = #024, #08c, #fff", "palette sea = #024, #08c, #fff; pal(sea, y)"),
+    ("palette sea = deep #024, foam #fff", "palette sea = deep #024, mid #08c, foam #fff; pal(sea, sea.mid + sea.step*(y > 0.5))"),
     ("pal(fire, v) * k", "pal(fire, y) * x"),
     ("cycle(fire, v, s)", "loop 4; cycle(fire, x, t/4)"),
     ("gray(v)", "gray(x)"),
@@ -172,9 +174,9 @@ pub const HELP: &[Help] = &[
     },
     Help {
         code: 203,
-        why: "A name is set once in its block: it is a definition, not a variable that changes. Give the second value a name of its own.",
-        before: "v = x\nv = v * 2\ngray(v)",
-        after: "v = x\nv2 = v * 2\ngray(v2)",
+        why: "A value may be set again (`v = v * 2` reads the `v` before it), but parts, tables, sprites, palettes and controls keep their names: neither a value nor another of them can take one. Give it a name of its own.",
+        before: "table T = 0.5, 1\nT = 2\ngray(T[0])",
+        after: "table T = 0.5, 1\nk = 2\ngray(T[0] * k)",
     },
     Help {
         code: 204,
@@ -215,6 +217,12 @@ pub const HELP: &[Help] = &[
     Help {
         code: 402,
         why: "The panel works a formula out for 4,096 pixels at every frame, so the steps a formula takes are limited. Values that change less often (once a row, once a frame) cost much less: move what you can out of the pixel.",
+        before: "",
+        after: "",
+    },
+    Help {
+        code: 408,
+        why: "The panel didn't have the memory to compile this Formula just then (a GIF, a look or a transition was holding it): not the formula's fault. It plays when it is next due; a shorter formula needs less.",
         before: "",
         after: "",
     },
@@ -268,9 +276,10 @@ pub const HELP: &[Help] = &[
     },
 ];
 
-/// The codes that are never a formula's fault: a bug in Psi, or the panel
-/// short of room. The reference marks them as internal.
-pub const INTERNAL: &[u16] = &[407, 408];
+/// The codes that are a bug in Psi, never a formula's fault. The reference
+/// marks them as internal. (E408, the panel short of memory for a moment,
+/// is not a bug: it has its own help.)
+pub const INTERNAL: &[u16] = &[407];
 
 /// The help for `code`.
 pub fn help(code: u16) -> Option<&'static Help> {

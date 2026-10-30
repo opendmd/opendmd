@@ -204,6 +204,9 @@ pub(crate) mod code {
     pub const U_L: u8 = 83;
     // nullary, per pixel: what the draw stage put at the pixel, 0..1
     pub const INK: u8 = 84;
+    // `ink(n)`: the canvas at the pixel in `n` levels, round(byte·n/255)
+    // (`fixed::ink_levels`); `a` the constant n. Per pixel, never folded.
+    pub const INKN: u8 = 85;
     // `cycle(P, v, s)`'s turn (a row step, the row section's last steps):
     // `TURN d, a, b`: the formula's palette slot `d` (0..=2, palette 5 + d)
     // is palette `b` turned by `a`: entry e is `b`'s entry (e + floor(a·32))
@@ -322,6 +325,7 @@ pub(crate) mod code {
             W_FIRST..=W_LAST => wide_ops(c).1,
             64..=LAST_TERN => 3,
             U_R..=INK => 0,
+            INKN => 1,
             TURN => 1,
             SLOW => 0,
             FOR => 1,
@@ -424,7 +428,7 @@ pub(crate) mod code {
             32..=LAST_UN => U[(c - 32) as usize],
             W_FIRST..=W_LAST => WN[(c - W_FIRST) as usize],
             64..=LAST_TERN => T[(c - 64) as usize],
-            U_R..=INK => ["ur", "ug", "ub", "ul", "ink"][(c - U_R) as usize],
+            U_R..=INKN => ["ur", "ug", "ub", "ul", "ink", "inkn"][(c - U_R) as usize],
             TURN => "turn",
             SLOW => "slow",
             FOR..=FUSE => [
@@ -528,7 +532,7 @@ pub(crate) fn turn(t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCA
 
 /// Every `TURN` of the row section (the JIT's driver, after its row
 /// function: they are the section's last steps, so the same as the VM's).
-#[cfg(any(test, all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
+#[cfg(any(test, feature = "docs", all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
 pub(crate) fn turn_rows(prog: &Program, t: &crate::tables::Tables, own: &mut Pals, sc: &[i32; MAX_SCALARS]) {
     for op in &prog.ops[prog.turns()] {
         turn(t, own, sc, op);
@@ -936,7 +940,7 @@ impl Program {
             } else {
                 (45 + slow_ns).div_ceil(rate) + HELD_COPY_NS
             };
-        ((px * (W * H) as u32) / 1000 + row * 10 + turns + self.draw_cost(lanes) + extra) * 115 / 100
+        ((px * (W * H) as u32) / 1000 + row * 10 + turns + self.draw_cost(lanes, usize::MAX) + extra) * 115 / 100
     }
 
     /// A kernel step's cost, ns a pixel (see `esp32_us_jit`).
@@ -1165,12 +1169,31 @@ impl Program {
     /// 10 µs to clear the canvas. (The design guessed 300, 400 and 1,500 +
     /// 200.)
     pub fn draw_us(&self) -> u32 {
-        self.draw_cost(true)
+        self.draw_cost(true, usize::MAX)
+    }
+
+    /// Each draw loop in order: its count, and for one that runs as lanes
+    /// the draw stage's cost (µs) as it is and with that loop turned one
+    /// turn at a time (the language service's lane note).
+    #[cfg(feature = "syntax")]
+    pub(crate) fn draw_loops(&self) -> alloc::vec::Vec<(u32, Option<(u32, u32)>)> {
+        let (fe, de) = (
+            self.frame_end as usize,
+            (self.draw_end as usize).min(MAX_OPS),
+        );
+        let all = self.draw_cost(true, usize::MAX);
+        (fe.min(de)..de)
+            .filter(|&k| self.ops[k].code == code::FOR)
+            .map(|k| {
+                let count = (self.init[(self.ops[k].a & 0x7f) as usize] >> 16) as u32;
+                (count, self.vector_loop(k).map(|_| (all, self.draw_cost(true, k))))
+            })
+            .collect()
     }
 
     /// [`draw_us`](Self::draw_us), with (`lanes`) or without the loops run
-    /// as lanes.
-    fn draw_cost(&self, lanes: bool) -> u32 {
+    /// as lanes (and the one whose `FOR` is at `turned` a turn at a time).
+    fn draw_cost(&self, lanes: bool, turned: usize) -> u32 {
         if !self.draws() {
             return 0;
         }
@@ -1183,7 +1206,7 @@ impl Program {
         let mut lane_end = 0;
         let mut lane: Option<VecLoop> = None;
         self.draw_walk(|at, op, mult| {
-            if let Some(v) = self.vector_loop(at).filter(|_| lanes) {
+            if let Some(v) = self.vector_loop(at).filter(|_| lanes && at != turned) {
                 lane = Some(v);
                 let chunks = u64::from(v.count.div_ceil(W as u32));
                 let mut steps = 0u64;
@@ -1748,6 +1771,9 @@ pub(crate) fn value_ns(c: u8) -> u32 {
         MULR => 110,
         DIGIT..=DIGIT_B => 240,
         U_R | U_G | U_B | INK => 70,
+        // `ink`'s read, a multiply and three adds and shifts (a guess until
+        // psi-probe measures it).
+        INKN => 90,
         U_L => 140,
         _ => 0,
     }
@@ -1787,6 +1813,7 @@ pub(crate) fn jit_value_ns(c: u8) -> u32 {
         SIN => 60,
         COS => 65,
         INK | U_R | U_G | U_B => 26,
+        INKN => 34,
         U_L => 70,
         c => value_ns(c).saturating_sub(60).max(60),
     }

@@ -1161,7 +1161,7 @@ fn scalar_cap_is_a_friendly_error() {
     let body: Vec<String> = (1..=120).map(|k| format!("x*{k}.{k}")).collect();
     let src = format!("gray(frac({}))", body.join(" + "));
     let e = compile(&src).unwrap_err();
-    assert!(e.msg.contains("too many numbers"), "{}", e.msg);
+    assert!(e.msg.contains("numbers and once-a-frame values"), "{}", e.msg);
 }
 
 #[test]
@@ -2474,7 +2474,7 @@ fn random_rate_formulas_hold_the_same_frames() {
         let p = match compile(&src) {
             Ok(p) => p,
             // (Only a value of `t` where `loop forever` can't take it.)
-            Err(e) if e.msg.contains("grows without end") => continue,
+            Err(e) if e.msg.contains("grows without end") || e.msg.contains("a growing value") => continue,
             Err(e) => panic!("{src}\n{}", e.msg),
         };
         if p.rate().is_none() {

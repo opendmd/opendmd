@@ -225,10 +225,10 @@ pub const ERRORS: &[ErrorDoc] = &[
     },
     ErrorDoc {
         code: 203,
-        title: "a name set twice",
-        sentence: "`…` is already set on line … — each name can be set once",
-        fix: "Use a different name for the second one.",
-        matches: &["is already set on line", "each name can be set once"],
+        title: "a name that is already a part, table, sprite, palette or control",
+        sentence: "`…` is already the name of a … (line …) — pick another name",
+        fix: "Give it a name of its own. (A value may be set again, `v = v*2`, and a layer or part may set a name from outside: only parts, tables, sprites, palettes and controls keep theirs.)",
+        matches: &["is already the name of a "],
     },
     ErrorDoc {
         code: 204,
@@ -301,18 +301,25 @@ pub const ERRORS: &[ErrorDoc] = &[
         matches: &["unknown blend `"],
     },
     ErrorDoc {
+        code: 214,
+        title: "`ink(n)` without a whole number",
+        sentence: "`ink(n)` takes a whole number from 1 to 255: `ink(16)` is the canvas in 16 levels",
+        fix: "Write the number of levels, as `ink(16)`, and draw with inks `k/16`.",
+        matches: &["`ink(n)` takes a whole number from 1 to 255"],
+    },
+    ErrorDoc {
         code: 301,
         title: "a per-pixel value in `frame { }`",
-        sentence: "inside frame { } only values that are the same for every pixel can be used, but this uses `…` (…)",
+        sentence: "`frame { }` is worked out once a frame, before any pixel, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))",
         fix: "Use only values that are the same everywhere (such as `t`) inside `frame { }`.",
-        matches: &["inside frame { } only values that are the same for every pixel"],
+        matches: &["`frame { }` is worked out once a frame"],
     },
     ErrorDoc {
         code: 302,
         title: "a colour used as a value",
-        sentence: "a colour can't be a value: use it in the colour itself (the last line), as `#f80`, `#f80 * k`, `mix(#000, #f80, k)` or `rgb(#f80, k)`",
+        sentence: "`#…` is a colour, not a number: use it on the last line, as `#f80 * k` or `mix(#000, #f80, k)`",
         fix: "Use the colour in the colour line, not in a number's place.",
-        matches: &["a colour can't be a value"],
+        matches: &["is a colour, not a number"],
     },
     ErrorDoc {
         code: 303,
@@ -324,30 +331,30 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 304,
         title: "a colour function in a sum of colours",
-        sentence: "in a sum with colours only `#…` and `rgb(r, g, b)` are colours: `…(…)` can only be a whole line of its own",
+        sentence: "`…(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)",
         fix: "Use `#…` or `rgb(…)` in the sum, or give the function its own line.",
-        matches: &["in a sum with colours"],
+        matches: &["is a whole colour: it can't be added to others"],
     },
     ErrorDoc {
         code: 305,
         title: "a colour that can't be summed",
-        sentence: "`…(…)` can't go into a sum: it can only be scaled, `… * k` (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)",
+        sentence: "`…(…)` is a whole colour: it can't go into a sum, only be scaled, `… * k`",
         fix: "Scale it on its own line, or use `#…` or `rgb(…)` colours in the sum.",
-        matches: &["can't go into a sum"],
+        matches: &["is a whole colour: it can't go into a sum"],
     },
     ErrorDoc {
         code: 306,
         title: "a colour function that is not the whole line",
-        sentence: "`…(…)` makes the colour, so it can only be the whole last line (of the formula, or of a layer)",
+        sentence: "`…(…)` is a whole colour: it can only be the last line (of the formula or a layer)",
         fix: "Make it the whole last line.",
-        matches: &["makes the colour, so it can only be the whole last line"],
+        matches: &["is a whole colour: it can only be the last line"],
     },
     ErrorDoc {
         code: 307,
         title: "a colour inside `rgb(r, g, b)`",
-        sentence: "inside `rgb(r, g, b)` the three are values, not colours: write the colour on its own (`#f80`, `#f80 * k`)",
+        sentence: "`rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`",
         fix: "Give `rgb(r, g, b)` three numbers, or write the colour on its own.",
-        matches: &["the three are values, not colours"],
+        matches: &["takes three numbers, not colours"],
     },
     ErrorDoc {
         code: 308,
@@ -373,23 +380,23 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 402,
         title: "too many steps",
-        sentence: "this formula is too long for the panel (… steps; the limit is …) — simplify it",
+        sentence: "this formula is too long for the panel: … steps, the limit is … (or: … — simplify it)",
         fix: "Simplify the formula: fewer or simpler steps.",
         matches: &["this formula is too long for the panel"],
     },
     ErrorDoc {
         code: 403,
         title: "too many live values",
-        sentence: "this formula keeps too many values at once (more than …) — simplify it",
+        sentence: "this formula holds more than … values at once (the panel's registers): use each sooner",
         fix: "Set fewer names, or use each value sooner.",
-        matches: &["keeps too many values at once"],
+        matches: &["values at once (the panel's registers)"],
     },
     ErrorDoc {
         code: 404,
         title: "too many numbers",
-        sentence: "this formula has too many numbers and steps (more than … values) — simplify it",
+        sentence: "this formula needs more than … numbers and once-a-frame values: use fewer",
         fix: "Use fewer different numbers and steps.",
-        matches: &["too many numbers and steps"],
+        matches: &["numbers and once-a-frame values"],
     },
     ErrorDoc {
         code: 405,
@@ -464,7 +471,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 507,
         title: "a part used as a value",
-        sentence: "`…` is a part: draw it as a whole last line (of the formula, or of a layer), or use one of its values, as in `….v`",
+        sentence: "`…` is a part: draw it as a whole last line, or read one of its values, as `….v`",
         fix: "Draw it as the last line, or use `p.v`.",
         matches: &["is a part: draw it as a whole last line"],
     },
@@ -485,9 +492,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 510,
         title: "a layer without a colour",
-        sentence: "this layer has no colour: end it with `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`",
+        sentence: "this layer ends without a colour: its last line is `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`",
         fix: "End the layer with a colour.",
-        matches: &["this layer has no colour"],
+        matches: &["this layer ends without a colour"],
     },
     ErrorDoc {
         code: 601,
@@ -548,9 +555,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 706,
         title: "drawing outside `draw { }`",
-        sentence: "`…(…)` draws: it goes on a line of its own inside `draw { }` (also: `ink` needs a `draw { }` block to read from; `for` goes inside `draw { }`)",
-        fix: "Put the line inside `draw { }`, and write a `draw { }` block to read `ink`.",
-        matches: &["`draw { }`"],
+        sentence: "`…(…)` draws: it goes on a line of its own inside `draw { }`",
+        fix: "Put the line inside `draw { }`.",
+        matches: &["draws: it goes on a line of its own inside `draw { }`"],
     },
     ErrorDoc {
         code: 707,
@@ -562,9 +569,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 708,
         title: "a per-pixel value in `draw { }`",
-        sentence: "inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but this uses `…` (…)",
+        sentence: "`draw { }` runs once a frame, before any pixel, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))",
         fix: "Use only values that are the same everywhere inside `draw { }`.",
-        matches: &["inside draw { } only values that are the same for every pixel"],
+        matches: &["`draw { }` runs once a frame"],
     },
     ErrorDoc {
         code: 709,
@@ -576,9 +583,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 710,
         title: "a table read wrongly",
-        sentence: "`[ ]` reads a table: `NAME[k]` — `…` is not a table (or: `…` is a table: read one of its numbers with `…[k]`)",
+        sentence: "`…[…]` reads a table, and `…` is not one",
         fix: "Read a table with `NAME[k]`.",
-        matches: &["[k]`"],
+        matches: &["reads a table, and `"],
     },
     ErrorDoc {
         code: 711,
@@ -590,9 +597,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 712,
         title: "the wrong values for `line` or `dot`",
-        sentence: "`line` takes 4 values (x0, y0, x1, y1: pixels, y up from the bottom) and, if you like, the ink at each end (0 to 1), but got … (`dot` takes 2 values)",
+        sentence: "`line` takes x0, y0, x1, y1 (pixels up from the bottom left) and 1 or 2 inks: … given (`dot`: x, y and an ink)",
         fix: "Give `line` four values and `dot` two.",
-        matches: &["pixels, y up from the bottom"],
+        matches: &["(pixels up from the bottom left)"],
     },
     ErrorDoc {
         code: 713,
@@ -600,6 +607,27 @@ pub const ERRORS: &[ErrorDoc] = &[
         sentence: "inside draw { } go `name = value`, `for k < N { … }`, `line(…)` and `dot(…)` lines only",
         fix: "Use only those lines inside `draw { }`.",
         matches: &["inside draw { } go `name = value`"],
+    },
+    ErrorDoc {
+        code: 714,
+        title: "`ink` without `draw { }`",
+        sentence: "`ink` needs a `draw { }` block to read from",
+        fix: "Write a `draw { }` block that draws what `ink` reads.",
+        matches: &["`ink` needs a `draw { }` block"],
+    },
+    ErrorDoc {
+        code: 715,
+        title: "`for` outside `draw { }`",
+        sentence: "`for` goes inside `draw { }`: `draw { for k < 12 { … } }`",
+        fix: "Put the loop inside `draw { }`.",
+        matches: &["`for` goes inside `draw { }`"],
+    },
+    ErrorDoc {
+        code: 716,
+        title: "a table without `[k]`",
+        sentence: "`…` is a table: read one of its numbers, `…[k]` (k from 0)",
+        fix: "Read a number of the table with `NAME[k]`.",
+        matches: &["is a table: read one of its numbers"],
     },
     ErrorDoc {
         code: 801,
@@ -625,9 +653,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 901,
         title: "a value that grows without end",
-        sentence: "a value that grows without end (`t` in `loop forever`) can't go in here: use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min, max or smoothstep",
+        sentence: "`t` grows without end in `loop forever`, and this can't take it: use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min or max",
         fix: "Use frac(t*k), t % n, sin(t*k) or similar in its place.",
-        matches: &["a value that grows without end"],
+        matches: &["grows without end in `loop forever`, and this can't take it"],
     },
     ErrorDoc {
         code: 902,
@@ -646,14 +674,14 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 904,
         title: "too many growing values",
-        sentence: "this formula has too many values that grow without end (more than …) — simplify it",
+        sentence: "too many values that grow without end (more than …): share one, as frac(u*k) of one `u`",
         fix: "Use fewer values that grow without end.",
         matches: &["too many values that grow without end"],
     },
     ErrorDoc {
         code: 905,
         title: "a colour fed a growing value",
-        sentence: "a colour can't take a value that grows without end and changes across the panel (`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1)",
+        sentence: "a colour can't take a value that grows without end and changes across the panel: use frac(…) of it, or min(t/k, 1) (or: …, as `v` (line …) does: use frac(v) or min(v/k, 1))",
         fix: "Wrap it in frac(…), or limit it with min(t/k, 1).",
         matches: &["a colour can't take a value that grows without end"],
     },
@@ -663,6 +691,13 @@ pub const ERRORS: &[ErrorDoc] = &[
         sentence: "a value that grows without end can't be drawn at: use frac(t*k)*128, t % n or min(t, k)",
         fix: "Use frac(t*k)*128, t % n or min(t, k) as the place.",
         matches: &["a value that grows without end can't be drawn at"],
+    },
+    ErrorDoc {
+        code: 907,
+        title: "a growing value with a per-pixel part",
+        sentence: "a growing value plus a per-pixel or per-row part only goes into frac, the waves, noise, % or a multiply: as frac(t*k) + x or sin(t*k + x)",
+        fix: "Add the pixel's part inside frac, a wave or noise: frac(t*k) + x, sin(t*k + x).",
+        matches: &["a growing value plus a per-pixel or per-row part"],
     },
     ErrorDoc {
         code: 910,
@@ -688,9 +723,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 913,
         title: "a bad key entry",
-        sentence: "a key is a character and its number, as `R 1` or `. -0.5`, separated by commas (not ; { } , - / or a space)",
+        sentence: "a key entry is a character (not ; { } , - / or a space) and its number, `R 1`, after a comma",
         fix: "Write each entry as a character, a space and its number, with commas between.",
-        matches: &["a key is a character and its number"],
+        matches: &["a key entry is a character"],
     },
     ErrorDoc {
         code: 914,
@@ -714,11 +749,18 @@ pub const ERRORS: &[ErrorDoc] = &[
         matches: &["a sprite has 1 to 32 rows"],
     },
     ErrorDoc {
+        code: 917,
+        title: "a sprite without `[u, v]`",
+        sentence: "`…` is a sprite: read its pixels, `…[u, v]`",
+        fix: "Read the sprite at a column and a row, `NAME[u, v]`.",
+        matches: &["is a sprite: read its pixels"],
+    },
+    ErrorDoc {
         code: 918,
         title: "a sprite read wrongly",
-        sentence: "a sprite is read at a column and a row: `NAME[u, v]` (or: `…` is a sprite: read its pixels with `NAME[u, v]`)",
+        sentence: "a sprite is read at a column and a row: `…[u, v]`",
         fix: "Read a sprite with `NAME[u, v]`.",
-        matches: &["[u, v]`"],
+        matches: &["a sprite is read at a column and a row"],
     },
     ErrorDoc {
         code: 919,
@@ -744,7 +786,7 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 922,
         title: "a palette of the wrong size",
-        sentence: "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff` (pal(sea, 0) is the first, pal(sea, 1) the last)",
+        sentence: "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`",
         fix: "Write 1 to 32 colours, each as #f80.",
         matches: &["a palette is 1 to 32 colours"],
     },
@@ -763,11 +805,32 @@ pub const ERRORS: &[ErrorDoc] = &[
         matches: &["tables, sprites and palettes hold"],
     },
     ErrorDoc {
+        code: 925,
+        title: "a palette's colour named twice",
+        sentence: "`…` already names a colour of `…`: give this one another name",
+        fix: "Give each named colour of a palette its own name.",
+        matches: &["already names a colour of `"],
+    },
+    ErrorDoc {
+        code: 926,
+        title: "a palette's colour named `n` or `step`",
+        sentence: "`n` and `step` are every palette's own (`….n`, `….step`): name this colour another way",
+        fix: "Pick another name for the colour: `P.n` is the palette's count and `P.step` the step between colours.",
+        matches: &["are every palette's own"],
+    },
+    ErrorDoc {
+        code: 927,
+        title: "an unknown colour of a palette",
+        sentence: "palette `…` has no colour named `…`: name it in its line, as `… #f80`",
+        fix: "Name the colour on the palette's line (`palette road = black #000, kerb #806`), or use another of its names.",
+        matches: &["has no colour named `"],
+    },
+    ErrorDoc {
         code: 931,
         title: "`cycle` turned by a value that changes along a row",
-        sentence: "`cycle`'s turn is the same along a row: a value of t, a frame or the row (py), not of x or px",
+        sentence: "`cycle` turns a whole row at once (by t, a frame value or py), but `…` (line …) is per pixel: it reads `…`",
         fix: "Turn it by t, a `frame { }` value or py.",
-        matches: &["`cycle`'s turn is the same along a row"],
+        matches: &["`cycle` turns a whole row at once"],
     },
     ErrorDoc {
         code: 932,
@@ -779,9 +842,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 933,
         title: "too many palettes with `cycle`",
-        sentence: "a formula has room for … palettes: its own (… here) and each palette `cycle` turns by another value (… here)",
+        sentence: "a formula holds … palettes: its own (… here) and one more for each turn `cycle` gives (… here)",
         fix: "Use fewer palettes, or turn fewer by different values.",
-        matches: &["a formula has room for", "palettes: its own"],
+        matches: &["a formula holds ", "palettes: its own"],
     },
     ErrorDoc {
         code: 934,
@@ -849,9 +912,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 948,
         title: "a bottom `rate` layer that does not cover",
-        sentence: "the bottom `rate` layer draws the whole panel: make it cover everything (`layer rate N { … }` with no blend and no coverage)",
+        sentence: "the bottom `rate` layer must cover the whole panel: `layer rate N { … }`, no blend, no coverage",
         fix: "Leave the blend and the coverage off the bottom `rate` layer.",
-        matches: &["the bottom `rate` layer draws the whole panel"],
+        matches: &["the bottom `rate` layer must cover the whole panel"],
     },
     ErrorDoc {
         code: 951,
@@ -940,9 +1003,9 @@ pub const ERRORS: &[ErrorDoc] = &[
     ErrorDoc {
         code: 963,
         title: "a control out of its slot",
-        sentence: "`…` is control …'s letter: name this one something else (controls take a, b and c in order)",
+        sentence: "`…` is the … control's letter: give this one another name (controls take a, b, c in order)",
         fix: "Name it something else, or put it in its slot.",
-        matches: &["is control ", "'s letter"],
+        matches: &["control's letter: give this one another name"],
     },
     ErrorDoc {
         code: 964,

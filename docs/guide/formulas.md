@@ -191,7 +191,8 @@ Now drag the `2` in `x*2`, or the `0.9`, and see what happens.
 
 ## The language
 
-A formula is a few lines: names you set (`wave = …`, each name once), and a
+A formula is a few lines: names you set (`wave = …`; set one again, `wave = wave*2`, and what
+follows reads the new one), and a
 colour on the last line. It is worked out for every pixel, every frame.
 `--` starts a comment. Everything is a number; there are no loops, lists or
 words (a single character in quotes, `'A'`, is a number too: its code).
@@ -273,7 +274,10 @@ them, and up to three palettes in a formula), used like the others:
 `pal(sea, v)`. `pal(sea, 0)` is the first colour and `pal(sea, 1)` the
 last; with four colours, `pal(sea, 1/3)` is the second and `pal(sea, 2/3)`
 the third. In between you get the nearest colour, in bands — handy with a
-sprite or `floor(…)` choosing which colour each pixel is.
+sprite or `floor(…)` choosing which colour each pixel is. Give colours
+names and use those instead of fractions: `palette road = black #000,
+kerb #806, sky #f48`, then `pal(road, road.kerb)`; `road.step` is the
+step from one colour to the next and `road.n` how many there are.
 
 **Palette cycling.** The old paint programs and games animated water,
 fire and plasma without redrawing them: the picture stayed still and its
@@ -363,8 +367,9 @@ The word after `layer` says how it goes onto what is below it: `over`
 (the default: it covers it), `add` (lighter), `multiply` (darker: white
 leaves it as it was), `screen` (lighter, softly), `max` or `min`. Names
 set outside the layers can be used in all of them; names set inside a
-layer are its own, so two layers can each have a `v`, and you can paste a
-whole formula into a `layer { … }` to combine it with another. `loop` and
+layer are its own, so two layers can each have a `v` (even one set outside
+too: inside the layer, its own), and you can paste a whole formula into a
+`layer { … }` to combine it with another. `loop` and
 `fps` go on their own lines outside the layers.
 
 **Slow layers.** A bottom layer that changes slowly need not be drawn
@@ -476,6 +481,12 @@ hsv(x, 0.6, ink)
   little picture of your own. It works anywhere, not only in `draw`.
 - The colour comes from the last line, as always: `pal(ice, ink)`,
   `#40c0ff * ink`, or over a GIF `layer screen { gray(ink) }`.
+- To tell drawn things apart, draw each with its own ink `k/16` (the
+  hills `6/16`, the sun `5/16`) and read `ink(16)`: the whole number `k`
+  that was drawn there, exactly, so `pick(ink(16), sky, …, hills, sun)`
+  colours each. Any number of levels from 1 to 255 works the same way.
+- To hide a line or a dot, give it ink 0 (`line(…, shown*6/16)`): it
+  draws nothing and costs nothing.
 - Every frame starts empty: nothing is left over from the frame before.
 
 **Starfield** (bundled) and the gallery's **Wireframe cube** are made this way.
@@ -626,6 +637,17 @@ milliseconds); all the examples are light or medium.
 - A slow bottom layer, `layer rate N`, costs an Nth of itself a frame on
   the panel (it keeps the slow picture while it has the memory to spare);
   a look, and the panel without that memory, draw it whole every frame.
+
+**Why is this per pixel?** A value is worked out as often as the most
+changing thing it reads: `px` makes it per pixel, `py` per row, `t` or a
+slider once a frame. On a computer, `psi check my.psi --levels` lists every
+value with the chain that made it so (`beam  per pixel: reads `off` (line
+3) ← `px``), and `psi check` notes the usual surprises with their line: a
+`pick` with one per-pixel choice is worked out per pixel whole (keep the
+choices the same for every pixel and add the per-pixel part after it), a
+sum like `px - 64 - X` works `- X` out for every pixel where
+`px - (64 + X)` would work it out once a frame, and a value that would be
+kept but reads something that moves.
 
 ## Add to my panel
 

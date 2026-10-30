@@ -67,7 +67,7 @@ stmt      = "loop" NUMBER                     -- 0.1..3600 s, once, default 8
           | "loop" "forever"                  -- no loop: t grows without end (section 11)
           | "fps" NUMBER                      -- 25, 50 or 100 frames a second, once, default 50
           | "frame" "{" { assign sep } "}"    -- values once a frame (no x, y, px, py, i, ur…)
-          | NAME "=" expr                     -- each name set once in its scope
+          | NAME "=" expr                     -- may set a name again: a read sees the latest
           | "layer" [BLEND] "{" { assign | frameblock } colourline "}"
           | "part" NAME "{" formula-body "}"  -- another formula inside this one
           | "draw" "{" { dstmt sep } "}"      -- once a frame, before the pixels: one per formula
@@ -297,7 +297,12 @@ end a line; up to 3 palettes) is used as the built-ins are: `pal(sea, k)`,
 i/(n−1))` is colour i: the first at 0, the last at 1 (`pal(sea, 1/3)` the
 second of four), and k in between gives the nearest — bands, not a blend,
 so a smooth ramp needs its steps written out. One step a pixel, the cost of
-a built-in palette: a scene's colours by index without `pick`s.
+a built-in palette: a scene's colours by index without `pick`s. A colour
+may have a name before it, `palette road = black #000, kerb #806, sky
+#f48`: then `road.kerb` is exactly the k of that colour (i/(n−1)),
+`road.step` is 1/(n−1) (one colour on: `road.kerb + road.step`) and
+`road.n` the count — constants, no steps, and adding a colour renumbers
+nothing you wrote.
 
 ```psi
 palette dusk = #10082a, #4a1858, #c0306a, #ff8c40, #ffe0a0
@@ -494,6 +499,11 @@ pal(ice, ink)               -- the pixels read the canvas as ink, 0..1
   seen) is left out. One `draw { }` per formula (the formula's, or one
   part's: there is one canvas). Inside a part drawn elsewhere, `ink` is
   still the real pixel's: the canvas is not moved.
+- **`ink(n)`** (n a whole number, 1 to 255) is the canvas in `n` levels, a
+  whole number: what was drawn with ink `k/n` reads `k`, exactly, for every
+  k ≤ n. Draw each kind of thing with its own tag and colour them with a
+  `pick`: `line(…, 6/16)` for the hills, then `pal(P, pick(ink(16), …))`.
+  One step a pixel (~90 ns), no `+ ½` offsets, no `floor`.
 - **Tables**: `table V = -1, 1, 0.5` at the top of the formula (or a part),
   numbers only, 256 in all; `V[k]` is number `floor(k)` counting from 0, and
   0 outside the table. Any level: per pixel `V[px % 3]` is one step, like
@@ -570,8 +580,8 @@ the formula's `t`.
 |---|---|---|
 | source | 16,384 characters, comments included (a shared link past ~1,500 may be cut by apps; the gallery takes files of 4 KB) | too long |
 | steps | 256 in all: per frame + per row + per pixel + one per layer | too long for the panel (N steps) |
-| live per-pixel values at once | 12 | keeps too many values at once |
-| constants + per-frame/per-row values held at once | ~119 (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | too many numbers and steps |
+| live per-pixel values at once | 12 | holds more than 12 values at once |
+| constants + per-frame/per-row values held at once | ~119 (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | needs more than 128 numbers and once-a-frame values |
 | nesting | 18 levels of brackets and operators (a part level counts 3) | nested too deeply / parts go too deep |
 | `loop` | 0.1..3600 s, or `forever` | between 0.1 and 3600 seconds |
 | values that grow without end (`loop forever`: `t` and what is made of it once a frame) | 15 at once | too many values that grow without end |
@@ -668,6 +678,16 @@ and the colour `pal(P, c ? A : B)` (~190 saved with `* k` of a row value,
   bytes). `psi check` prints both estimates. So a tunnel's depth and angle
   are free, but `depth*a` is not still (a slider moves): keep the sliders
   out of the values you want kept (`twist = 1 -- try 0 to 3`).
+- **Ask the compiler.** `psi check` prints notes with their lines: what
+  the still cache and the column run took, the heaviest value they could
+  not take and what kept it out, a `pick` made per pixel by one per-pixel
+  arm (`pick(m, a, b, c*px)` is ~2n+2 steps a pixel; `pick(m, a, b, c) +
+  extra` is one), a left-to-right sum or product that works a frame or row
+  part out per pixel (`px - 64 - X` → `px - (64 + X)`; products may round
+  differently in the last bit), and a draw loop of 32+ turns run as lanes
+  (costed for 128 turns a lane). `psi check --levels` gives every value's
+  level and the chain to the input that set it; `psi check --same-as
+  old.psi` proves a rewrite draws the same frames.
 - **noise at a whole z** (`noise(x, y, 0)`, any whole constant third
   value) is ~470 ns, half the 855 of a moving one.
 
@@ -733,10 +753,11 @@ gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
   particle's start from `hash(k, …)` and its place from `t`: `frac(hash(k,
   1) + t/L)` cycles it once a loop. A streak is a `line` from where it was
   a moment ago to where it is, its ink fading towards the tail; a point is
-  a `dot`. Skip a particle that has left the panel by moving both ends of
-  its line to x = −999: a line wholly off one side of the panel walks no
-  steps, but one partly on it walks all of them, off the panel too, and
-  they count against the 16,384 a frame. Example 31.
+  a `dot`. Hide a particle that has left the panel with ink 0 at both
+  ends (`line(…, lit*shown, lit*shown)`): such a line, like one wholly off
+  one side of the panel, walks no steps, but one partly on it walks all of
+  them, off the panel too, and they count against the 16,384 a frame.
+  Example 31.
 - **A wireframe**: the corners in one `table` (x, y, z after each other),
   the edges in another (pairs of corner numbers); `for e < EDGES`, read the
   two corners (`V[E[e*2]*3 + 1]` is the first corner's y), turn them with
@@ -751,7 +772,7 @@ gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
 Each block below fails to compile with the sentence in its first comment.
 
 ```psi error
--- error: a value that grows without end
+-- error: grows without end in `loop forever`
 loop forever
 gray(frac(t*x))
 ```
@@ -803,23 +824,26 @@ gray(pow(x, 2))
 gray(2x)
 ```
 
+A value may be set again, and each use reads the latest above it: `v = x`
+then `v = v * 2` is `x * 2` from there on (a layer, a part or a loop may
+set a name from outside too: its own until it closes; `p.v` is the last `v`
+on the part's own lines, its layers' left out). Parts, tables, sprites, palettes and controls keep their names:
+
 ```psi error
--- error: `v` is already set on line 2
-v = x
-v = v * 2
-gray(v)
+-- error: is already the name of a table
+table T = 0.5, 1
+T = 2
+gray(T[0])
 ```
 
-Each name is set once: pick a new name for each step.
-
 ```psi error
--- error: inside frame { } only values that are the same for every pixel
+-- error: `frame { }` is worked out once a frame
 frame { k = x * 2 }
 gray(k)
 ```
 
 ```psi error
--- error: makes the colour, so it can only be the whole last line
+-- error: is a whole colour: it can only be the last line
 v = rgb(x, y, 0)
 gray(0)
 ```
@@ -856,7 +880,7 @@ pal(blue, x)
 ```
 
 ```psi error
--- error: a colour can't be a value
+-- error: is a colour, not a number
 glow = #ffcc00
 glow * x
 ```
@@ -865,7 +889,7 @@ A colour has no name: write it where it is used, in the colour line
 (`#ffcc00 * x`).
 
 ```psi error
--- error: a colour can't be a value
+-- error: is a colour, not a number
 hsv(#ff8800)
 ```
 
@@ -913,7 +937,7 @@ layer add { p }
 ```
 
 ```psi error
--- error: inside draw { } only values that are the same for every pixel
+-- error: `draw { }` runs once a frame
 draw { dot(px, 16) }
 gray(ink)
 ```
@@ -933,7 +957,8 @@ gray(ink)
 ```
 
 A loop's count is a number written out (the cost must be known): loop to
-the most and leave some out (`dot(k, 1, k < n)`: ink 0 draws nothing).
+the most and leave some out (`dot(k, 1, k < n)`: ink 0 draws nothing and
+costs no steps).
 
 ```psi error
 -- error: is a loop counter: it can't be set

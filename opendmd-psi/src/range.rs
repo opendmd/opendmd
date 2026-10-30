@@ -156,6 +156,7 @@ fn value(op: &Op, a: Iv, b: Iv, c: Iv, tabs: &[i32; MAX_TABLE]) -> Iv {
         }
         LT | LE | GT | GE | EQ | NE | AND | OR | STEP | NOT | BIT => UNIT,
         DIGIT..=DIGIT_B | U_R..=INK | SMOOTH => UNIT,
+        INKN => Iv(0, a.1),
         MIN => Iv(a.0.min(b.0), a.1.min(b.1)),
         MAX => Iv(a.0.max(b.0), a.1.max(b.1)),
         ATAN2 => Iv(-(ONE as i64) / 2, ONE as i64 / 2),

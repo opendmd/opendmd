@@ -16,6 +16,13 @@
 //! bytes differ. The host tests run kernels through an emulator of the
 //! instructions they use (`emu`) against the VM over the goldens and the
 //! bundled formulas.
+//!
+//! On the host with `docs` (`psi check`'s "JIT: yes/no") only
+//! [`refusal`] is used: the driver is there, unused.
+#![cfg_attr(
+    all(feature = "docs", not(test), not(all(feature = "jit", target_arch = "xtensa", target_os = "espidf"))),
+    allow(dead_code)
+)]
 
 #[cfg(test)]
 mod emu;
