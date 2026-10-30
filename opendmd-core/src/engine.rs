@@ -431,9 +431,7 @@ pub const WAKE_SLACK: Duration = Duration::from_millis(1);
 
 /// Effect frames whose tick came half a frame or more late, so the effect's
 /// schedule was re-timed from the tick (since boot; not its first frame).
-/// The firmware reports it as `/api/status` `scan` `retimed`: a
-/// synchronised blit's stretch (`scan::Budget`) is meant never to cause
-/// one.
+/// The firmware reports it as `/api/status` `scan` `retimed`.
 pub static FX_RETIMED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// The next file is chosen and opened ahead ([`Engine::ahead_due`]) from
