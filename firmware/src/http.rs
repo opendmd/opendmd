@@ -1625,7 +1625,12 @@ fn skip_if_playing(ctx: &Ctx, fs_path: &str) -> bool {
         return false;
     }
     let playing = ctx.status.lock().unwrap().path.clone();
-    if playing.is_empty() {
+    // A Formula's file is read (compacted) and closed as it opens: nothing
+    // holds it, and a skip would only drop the Formula being edited (whose
+    // `POST /api/play` then met the next file's transition still holding
+    // its 24 KB: short of the compile, swap-mem2). It plays on until sent
+    // again; a deleted one until its dwell ends.
+    if playing.is_empty() || opendmd_core::synth::formula_file(&playing).is_some() {
         return true;
     }
     let gif = format!("{}{playing}", config::SD_MOUNT);
