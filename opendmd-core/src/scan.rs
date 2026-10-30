@@ -327,6 +327,24 @@ pub struct Beam {
 /// spare with the `esp_timer` wake).
 pub const BEAM_LATE_ROOM_US: u32 = 1_500;
 
+/// The start window's late side: three quarters of it, at most
+/// [`BEAM_LATE_ROOM_US`] (the early side is waited out, which costs a
+/// frame nothing but CPU it has to spare). A half each, beam-c's
+/// Starfield (rows ~2 ms: a window ~1.7 ms wide, a draw stage before it
+/// that varies) was late 0.17-0.26 % of frames on the spare; simulated
+/// (`late_side_takes_three_quarters`), 3/4 takes its late starts from
+/// 0.3 % to under 0.06 %. (`LATE_SHARE`: the tests' knob, eighths.)
+fn late_share(room: i64) -> i64 {
+    #[cfg(test)]
+    {
+        let k = tests::LATE_SHARE.with(|c| c.get());
+        if k > 0 {
+            return (room * k / 8).min(i64::from(BEAM_LATE_ROOM_US));
+        }
+    }
+    (room * 3 / 4).min(i64::from(BEAM_LATE_ROOM_US))
+}
+
 /// What [`Beam::plan`] decided for a frame.
 #[derive(Clone, Copy, Debug)]
 pub struct BeamPlan {
@@ -335,15 +353,25 @@ pub struct BeamPlan {
     /// its window: what the next frame's delay corrects.
     pub err: i32,
     /// Wait this long (µs) before drawing: the start was so early that
-    /// pairs would come before their windows open.
+    /// pairs would come before their windows open (or, `retarget`, so late
+    /// that the frame goes to the next refresh).
     pub wait_us: u32,
+    /// How far (µs) the start was past its window's late edge (0: inside
+    /// it): its first pairs would be written after the scan came back.
+    pub late_by: u32,
+    /// The frame was moved to the next refresh for that (only when the
+    /// caller has the time: a frame of two refreshes or more).
+    pub retarget: bool,
 }
 
 impl Beam {
     /// Plan a frame whose drawing starts at reading `now`, its first pair
-    /// expected drawn `first_us` later (the frame and draw stages before
-    /// it) and its last `last_us` later (the writes between included),
-    /// each write at most `write_us`, keeping `margin` from every slot.
+    /// expected drawn `first_us` later and its last `last_us` later (the
+    /// writes between included), each write at most `write_us`, keeping `margin` from every slot.
+    ///
+    /// `spare_refresh`: the frame has a refresh to spare (it is held for two
+    /// or more): a start past the late edge moves to the next refresh and
+    /// waits for it, rather than writing its first pairs late.
     pub fn plan(
         row_us: u32,
         now: Reading,
@@ -351,6 +379,7 @@ impl Beam {
         last_us: u32,
         write_us: u32,
         margin: u32,
+        spare_refresh: bool,
     ) -> BeamPlan {
         let clock = Clock::new(row_us, now);
         let c = clock.cycle() as i64;
@@ -360,16 +389,24 @@ impl Beam {
         // The window for the start, as leads on T's start: from `e` (the
         // last pair just after the scan leaves it) to `first + w` (the
         // first pair written just before the scan comes back to it).
-        // Aimed `BEAM_LATE_ROOM_US` from its late edge (or at its middle
-        // when it is narrower): a wake comes late more than early.
+        // Aimed `late_share` of it from its late edge: a start comes late
+        // more than early, and an early one only waits.
         let late_lead = i64::from(first_us) + w;
         let room = (e - late_lead).max(0);
-        let late_room = (room / 2).min(i64::from(BEAM_LATE_ROOM_US));
+        let late_room = late_share(room);
         let lead = late_lead + late_room;
-        let target = ((u + lead + c / 2) / c).max(1);
+        let mut target = ((u + lead + c / 2) / c).max(1);
         let err = u + lead - target * c;
-        // Early past its window: wait for it.
-        let wait_us = (-err - (room - late_room)).max(0) as u32;
+        let late_by = (err - late_room).max(0) as u32;
+        // Early past its window: wait for it. Late past it with a refresh
+        // to spare: the next refresh, waited for to the aim.
+        let retarget = late_by > 0 && spare_refresh;
+        let wait_us = if retarget {
+            target += 1;
+            (c - err).max(0) as u32
+        } else {
+            (-err - (room - late_room)).max(0) as u32
+        };
         BeamPlan {
             beam: Beam {
                 clock,
@@ -378,6 +415,8 @@ impl Beam {
             },
             err: err as i32,
             wait_us,
+            late_by,
+            retarget,
         }
     }
 
@@ -553,7 +592,7 @@ mod tests {
         let first = due;
         for f in 0..frames {
             let mut t = (due + u64::from(rnd(jitter))).max(end);
-            let plan = Beam::plan(ROW, read(t), first_us, est, 80, 30);
+            let plan = Beam::plan(ROW, read(t), first_us, est, 80, 30, false);
             if plan.wait_us > 0 {
                 waited += u32::from(f > 4);
                 t += u64::from(plan.wait_us);
@@ -578,6 +617,103 @@ mod tests {
         (late, waited, (due - first) as f64 / f64::from(frames))
     }
 
+    /// The race as beam-c plans it: the start after the frame and draw
+    /// stages (`draw` µs, ±`draw_jitter`), a wake 0-`jitter` µs late and,
+    /// one frame in `spike_every`, `spike` µs more before the tick (a
+    /// heartbeat, a slow open). (frames with a late pair, waits).
+    fn race2(p0: u32, draw: u32, draw_jitter: u32, per: u32, jitter: u32, spike_every: u32, spike: u32) -> (u32, u32) {
+        let read = |t: u64| Reading {
+            pos: ((u64::from(p0) + t) % u64::from(CYCLE)) as u32,
+            at: t as u32,
+        };
+        let mut rng = 987_654_321u64;
+        let mut rnd = |n: u32| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            if n == 0 { 0 } else { (rng % u64::from(n)) as u32 }
+        };
+        let (first_us, last_us) = (per + 74, 16 * (per + 74));
+        let (mut due, mut late, mut waited, mut end) = (0u64, 0, 0, 0u64);
+        for f in 0..4_000u32 {
+            let mut t = (due + u64::from(rnd(jitter))).max(end);
+            if spike_every > 0 && rnd(spike_every) == 0 {
+                t += u64::from(spike);
+            }
+            t += u64::from(draw.saturating_sub(draw_jitter) + rnd(2 * draw_jitter + 1));
+            let plan = Beam::plan(ROW, read(t), first_us, last_us, 80, 30, false);
+            if plan.wait_us > 0 {
+                waited += u32::from(f > 20);
+                t += u64::from(plan.wait_us);
+            }
+            let mut frame_late = false;
+            for k in 0..PAIRS {
+                t += u64::from(per);
+                t += u64::from(plan.beam.wait(k, read(t)));
+                t += 74;
+                frame_late |= plan.beam.late(k, read(t));
+            }
+            late += u32::from(frame_late && f > 20);
+            end = t;
+            due += u64::from(beam_delay_us(1, CYCLE, plan.err));
+        }
+        (late, waited)
+    }
+
+    thread_local! {
+        pub(super) static LATE_SHARE: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Starfield-like (beam-c on the spare): a 1.5 ms draw stage ±0.6 ms,
+    /// 16 pairs of 50 µs + their writes, a 2.5 ms spike one frame in 40.
+    /// Three quarters of the window on the late side: a fifth of the late
+    /// frames half of it had (waits instead, harmless); without the spikes
+    /// nothing is late from any phase.
+    /// Held for two refreshes, a start past its window's late edge moves to
+    /// the next refresh and waits: no pair late. Held for one, it is
+    /// written late (counted).
+    #[test]
+    fn a_late_start_with_a_refresh_to_spare_takes_the_next() {
+        let (first, last, per) = (124, 16 * 124, 124);
+        // The window's late edge is `first + 140` before a refresh's start:
+        // start 100 µs before one.
+        let now = Reading { pos: CYCLE - 100, at: 1_000_000 };
+        for spare in [false, true] {
+            let plan = Beam::plan(ROW, now, first, last, 80, 30, spare);
+            assert!(plan.late_by > 0);
+            assert_eq!(plan.retarget, spare);
+            let mut t = now.at + plan.wait_us;
+            let read = |t: u32| Reading { pos: (now.pos + t.wrapping_sub(now.at)) % CYCLE, at: t };
+            let mut late = false;
+            for k in 0..PAIRS {
+                t += per - 74;
+                t += plan.beam.wait(k, read(t));
+                t += 74;
+                late |= plan.beam.late(k, read(t));
+            }
+            assert_eq!(late, !spare, "spare {spare}");
+        }
+    }
+
+    #[test]
+    fn late_side_takes_three_quarters() {
+        let run = |k: i64| {
+            LATE_SHARE.with(|c| c.set(k));
+            let mut tot = (0, 0);
+            for p0 in (0..CYCLE).step_by(997) {
+                let a = race2(p0, 1_500, 600, 50, 400, 40, 2_500);
+                tot = (tot.0 + a.0, tot.1 + a.1);
+                assert_eq!(race2(p0, 1_500, 300, 50, 400, 0, 0).0, 0, "share {k}/8 from phase {p0}");
+            }
+            LATE_SHARE.with(|c| c.set(0));
+            tot
+        };
+        let (half, three) = (run(4), run(6));
+        eprintln!("late frames / waits, 8 phases × 4,000 frames: half {half:?}, three quarters {three:?}");
+        assert!(three.0 * 4 < half.0, "half {half:?}, three quarters {three:?}");
+        assert!(three.0 < 32_000 / 1_000, "{three:?}: over 0.1 %");
+    }
+
     #[test]
     fn racing_the_beam_locks_on_and_never_tears() {
         // Renders from a cycled plasma's ~0.9 ms to the 6.5 ms budget
@@ -597,12 +733,9 @@ mod tests {
                     late, 0,
                     "{render_ms} ms from phase {p0}: frames with a late pair"
                 );
-                // (A render quicker than its windows are wide waits for
-                // some of them: the plasma's.)
-                assert!(
-                    render_ms < 2.0 || waited <= 2,
-                    "{render_ms} ms from phase {p0}: {waited} waits"
-                );
+                // (Early starts wait: harmless; three quarters of the
+                // window are on the late side, so the quicker renders wait
+                // now and then.)
                 assert!(
                     waited <= 40,
                     "{render_ms} ms from phase {p0}: {waited} waits"

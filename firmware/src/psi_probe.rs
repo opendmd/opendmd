@@ -2655,8 +2655,33 @@ pub(crate) mod beam {
                 psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, out,
                     Some(&mut ch), &mut |p, _, _, _| told += u32::from(p != psi::BEAM_START));
             });
+            // Before the rows (frame steps, draw stage) and the rows, over
+            // 120 frames 8 ms apart: how much the start moves frame to frame
+            // (beam-c: Starfield's late frames).
+            let (mut pre, mut rows): (Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new());
+            for k in 0..120u32 {
+                let t0 = Instant::now();
+                let mut at = t0;
+                psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(k * 8), &t, out,
+                    Some(&mut ch), &mut |p, _, _, _| {
+                        if p == psi::BEAM_START {
+                            at = Instant::now();
+                        }
+                    });
+                pre.push(at.duration_since(t0).as_micros() as u32);
+                rows.push(at.elapsed().as_micros() as u32);
+            }
+            let spread = |v: &mut Vec<u32>| {
+                v.sort_unstable();
+                let n = v.len();
+                format!("{}/{}/{}/{}", v[n / 10], v[n / 2], v[n * 9 / 10], v[n - 1])
+            };
             #[allow(unused_mut)]
-            let mut line = format!("psi-probe: beam: {name}: VM at once {whole} us, raced {raced} us");
+            let mut line = format!(
+                "psi-probe: beam: {name}: VM at once {whole} us, raced {raced} us; raced p10/p50/p90/max us: before the rows {}, the rows {}",
+                spread(&mut pre),
+                spread(&mut rows)
+            );
             #[cfg(feature = "jit")]
             if let Ok(mut k) = psi::jit::emit(&prog) {
                 let mut ms = 0u32;
