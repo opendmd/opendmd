@@ -248,7 +248,7 @@ pub fn lower(prog: &Program) -> Result<Lowered, Refusal> {
     // of the position and the frame, so none does).
     if prog.ops[prog.row_end as usize..start]
         .iter()
-        .any(|op| (code::U_R..=code::INK).contains(&op.code))
+        .any(|op| (code::U_R..=code::INKN).contains(&op.code))
     {
         return Err("an unexpected layout");
     }
@@ -404,7 +404,7 @@ fn supported(c: u8) -> Result<(), Refusal> {
         | NOISE | MULR => Ok(()),
         DIGIT..=DIGIT_B | NOISE_O..=NOISE_O_LAST => Ok(()),
         OUT_RGB | OUT_HSV | OUT_PAL | OUT_GRAY => Ok(()),
-        U_R..=U_L | INK => Ok(()),
+        U_R..=U_L | INK | INKN => Ok(()),
         c if (OUT_LAYER..OUT_LAYER + 4 * crate::fixed::BLENDS as u8).contains(&c) => Ok(()),
         STILL | COLUMN => Err("an unexpected layout"),
         _ => Err("a step the kernel has no template for"),
@@ -862,7 +862,7 @@ impl<'a> Emitter<'a> {
                     }
                 }
                 match op.code {
-                    code::INK => note(Word::Ink),
+                    code::INK | code::INKN => note(Word::Ink),
                     code::U_R..=code::U_L => note(Word::Under),
                     _ => {}
                 }
@@ -1212,6 +1212,7 @@ impl<'a> Emitter<'a> {
                 return self.call(k, hid::SPR, &args, Some(op.d));
             }
             INK | U_R..=U_L => return self.read_pixel(k, op.code),
+            INKN => return self.ink_levels(k, op.a),
             DIGIT..=DIGIT_B => {
                 let args = [
                     Arg::Val(op.a),
@@ -1474,6 +1475,32 @@ impl<'a> Emitter<'a> {
         c.add(d, d, t);
         c.srli(t, t, 7);
         c.add(d, d, t);
+        self.wrote(k, id);
+        Ok(())
+    }
+
+    /// `ink(n)`: the canvas's byte `b` at the pixel in `n` levels, as
+    /// `fixed::ink_levels` (`n` the scalar operand `nv`, n << 16):
+    /// u = b·n + 127, ((u + 1 + (u >> 8)) >> 8) << 16.
+    #[cfg_attr(target_arch = "xtensa", optimize(size))]
+    fn ink_levels(&mut self, k: usize, nv: u8) -> Result<(), Refusal> {
+        let n = self.val(nv)?;
+        let (id, d) = self.dst(k)?;
+        let t = self.tmp()?;
+        let u = self.tmp()?;
+        let p = self.word_in(t, Word::Ink);
+        self.c.add(t, p, PIX);
+        self.c.l8ui(t, t, 0);
+        self.c.extui(u, n, 16, 8);
+        self.release(n);
+        let c = &mut self.c;
+        c.mull(t, t, u);
+        c.addi(t, t, 127);
+        c.srli(u, t, 8);
+        c.add(t, t, u);
+        c.addi(t, t, 1);
+        c.srli(t, t, 8);
+        c.slli(d, t, 16);
         self.wrote(k, id);
         Ok(())
     }

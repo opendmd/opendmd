@@ -19,15 +19,19 @@ fps 100
 -- bit, so they stay as they are and the road draws exactly as it always
 -- has.
 
--- Colours: black; road, kerbs, verge (light, dark); night's kerbs; sun;
--- car; stars; the sky's ramp from night through blue and violet to pink
-palette road = #000, #403, #806, #ec0, #f00, #400, #800, #1ef, #f29, #f70, #f20,
-  #b00, #f50, #fff, #001, #103, #126, #17f, #25f, #42f, #50f, #70e, #a0e, #d0d, #f48
+-- Colours: the road, kerbs and verge (each with its stripe's), night's
+-- neon kerbs, the sun, the car, a star, then the sky's ramp from night
+-- through blue and violet to pink (by night the road and verge take two
+-- of its shades)
+palette road = black #000, road #403, roadStripe #806, yellow #ec0, red #f00,
+  verge #400, vergeStripe #800, neon #1ef, pink #f29, sun #f70, sunLow #f20,
+  body #b00, lights #f50, star #fff, nightVerge #001, nightRoad #103,
+  #126, #17f, #25f, #42f, #50f, #70e, #a0e, #d0d, horizon #f48
 
 -- The car: 17 spans, each `from*32 + to` in carSpan and
--- `row*32 + ink*2 + 1` in carRow (ink 8 body, 9 glass, 10 lights)
+-- `row*16 + tag` in carRow (tag 8 body, 9 glass, 10 lights)
 table carSpan = 273, 242, 273, 211, 242, 118, 56, 69, 242, 663, 56, 69, 242, 663, 56, 56, 25
-table carRow = 273, 241, 243, 209, 211, 177, 145, 149, 147, 149, 113, 117, 115, 117, 81, 49, 19
+table carRow = 136, 120, 121, 104, 105, 88, 72, 74, 73, 74, 56, 58, 57, 58, 40, 24, 9
 
 -- Three hill peaks: the middle (64 less it) and the half width
 table peakMid = 56, -6, -62
@@ -68,43 +72,46 @@ frame {
   -- By night (neon): neon palms, night's colours for road, kerbs and
   -- verge, and the headlights' shift of the road's colour
   neon = night > .5
-  palmInk = neon/3
-  roadInk = (1 + neon*14) / 24
-  kerbInk = neon/6 + 1/8
-  vergeInk = (5 + neon*9) / 24
-  beamShift = neon*7/12
+  palmInk = neon*road.pink
+  roadInk = neon ? road.nightRoad : road.road
+  kerbInk = neon ? road.neon : road.yellow
+  vergeInk = neon ? road.nightVerge : road.verge
+  beamShift = neon*(road.nightRoad - road.road)
 }
 
 draw {
+  -- What is drawn carries a tag, ink k/16 (read back as ink(16)): 3 the
+  -- sun's glow, 4 stars, 5 the sun, 6 hills, 7 palms, 8-10 the car; a
+  -- line of ink 0 is not drawn.
   -- The hills: three peaks, a line a row, each narrower than the last
-  -- (off the panel once it has no width left)
+  -- (none once it has no width left)
   for k < 3 {
     for j < 7 {
       hillHalf = peakHalf[k] - j*1.9
-      hillX = hillHalf < 0 ? -99 : skyMid - peakMid[k]
-      line(hillX - hillHalf, 19 + j, hillX + hillHalf, 19 + j, .41)
+      hillX = skyMid - peakMid[k]
+      line(hillX - hillHalf, 19 + j, hillX + hillHalf, 19 + j, (hillHalf >= 0)*6/16)
     }
   }
 
-  -- The sun, a line a row, in its glow (below the horizon: off the panel)
+  -- The sun, a line a row, in its glow (none below the horizon)
   for k < 12 {
     e = 5 - k
     rowY = sunY - e
     sunHalf = sqrt(max(sunR*sunR - e*e, 0))
-    sunX = rowY < 19.5 ? -99 : skyMid
+    shown = rowY >= 19.5
     glow = sunHalf*-1.4 - 2
-    line(sunX - sunHalf, rowY, sunX + sunHalf, rowY, .34)
-    line(sunX + glow, rowY, sunX - glow, rowY, .22)
+    line(skyMid - sunHalf, rowY, skyMid + sunHalf, rowY, shown*5/16)
+    line(skyMid + glow, rowY, skyMid - glow, rowY, shown*3/16)
   }
 
   -- The stars, by night
   for k < 16 {
-    dot(frac(k*.382) < night*1.4 - .4 ? frac(k*.7549)*128 : -99, 20.5 - frac(k*.5698)*-11, .28)
+    dot(frac(k*.7549)*128, 20.5 - frac(k*.5698)*-11, (frac(k*.382) < night*1.4 - .4)*4/16)
   }
 
   -- Palms: three places, one every 14 stripes, now and then a palm there:
   -- how far ahead it is in stripes, its row, its size and side, where the
-  -- road is there; off the panel when there is none
+  -- road is there; not drawn when there is none
   for k < 3 {
     place = t/1.4 - k*-.37
     along = frac(place)
@@ -112,17 +119,18 @@ draw {
     size = 1.2/ahead
     baseY = 19.5 - 12.5*size
     sideX = cos(k/2)*size
-    palmX = noise(place - along, k*5, 0) > .45 or ahead > 11 ? -99 : 64 - (heading - noise(driven + ahead*.0075, 0, 0))*2000 - sideX*-47
+    palmX = 64 - (heading - noise(driven + ahead*.0075, 0, 0))*2000 - sideX*-47
+    palm = not (noise(place - along, k*5, 0) > .45 or ahead > 11)
     for j < 4 {
       frond = j > 0
-      line(palmX - frond*-5*sideX, baseY - frond*-22*size, palmX + palmOut[j]*sideX, baseY + palmUp[j]*size, .47)
+      line(palmX - frond*-5*sideX, baseY - frond*-22*size, palmX + palmOut[j]*sideX, baseY + palmUp[j]*size, palm*7/16)
     }
   }
 
   -- The car, span by span
   for k < 17 {
     span = carSpan[k]/32
-    rowInk = carRow[k]/32
+    rowInk = carRow[k]/16
     carY = floor(rowInk)
     line(floor(span) - carLeft, carY, frac(span)*32 - carLeft, carY, frac(rowInk))
   }
@@ -130,21 +138,22 @@ draw {
 
 -- Each row looks ahead: below the horizon, how far (depth) and the bend
 -- there; the hill there lifts or hides it; the road's half width there,
--- and a light or dark stripe (stripe: 0 or -1/24); how far this pixel is
--- from the road's middle
+-- and a light or dark stripe (stripe: 0, or one colour on); how far this
+-- pixel is from the road's middle
 below = py < 19
 depth = below * .1125 / (19.5 - py)
 rowDriven = driven + depth
 halfWidth = 50.7 - 2.6*(py - clamp((noise(rowDriven, 5, 0) - height - depth*slope) * depth * 26667, -6, 2))
-stripe = (frac(39/max(halfWidth, 1.3) - t*-10) < .5) / -24
+stripe = (frac(39/max(halfWidth, 1.3) - t*-10) < .5) * -road.step
 offRoad = abs(px - (64 - (heading - noise(rowDriven, 0, 0))*2000))
 
--- The colours: 0 road, 1 kerb, 2 verge or sky, 3 the sun's glow (the sky
--- a shade on); what draw drew: 4 stars, 5 sun, 6 hills, 7 palms, 8-10 the
--- car. By night the headlights light the road ahead (the one part done
--- per pixel): beam is their half width, on the rows they reach
+-- What each pixel shows: 0 road, 1 kerb, 2 verge or sky, then the tags
+-- drawn (3 the sun's glow: the sky a shade on). By night the headlights
+-- light the road ahead (the one part done per pixel): beam is their half
+-- width, on the rows they reach
 beam = (abs(py - 12.5) < 4) * halfWidth * .5
-sky = floor(skyBase - py*skyStep) / 24
-pal(road, pick(max((offRoad >= halfWidth) + (offRoad >= halfWidth*1.2), ink*16),
-    roadInk - stripe, kerbInk - stripe, below ? vergeInk - stripe : sky - 1/24,
-    sky, 13/24, (py - sunY < -.5 ? 10 : py - sunY < 3.5 ? 9 : 3) / 24, 0, palmInk, 11/24, 0, 12/24) - (offRoad < beam)*beamShift)
+sky = floor(skyBase - py*skyStep) * road.step
+pal(road, pick(max((offRoad >= halfWidth) + (offRoad >= halfWidth*1.2), ink(16)),
+    roadInk - stripe, kerbInk - stripe, below ? vergeInk - stripe : sky - road.step,
+    sky, road.star, py - sunY < -.5 ? road.sunLow : py - sunY < 3.5 ? road.sun : road.yellow,
+    road.black, palmInk, road.body, road.black, road.lights) - (offRoad < beam)*beamShift)

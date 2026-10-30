@@ -880,7 +880,7 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
             r = route.fetch()
             route.fulfill(response=r, headers={**r.headers, "content-security-policy": csp})
         page.route("**/dev/psi/**", with_csp)
-        page.goto(f"{base}/dev/psi/#E203")
+        page.goto(f"{base}/dev/psi/#E202")
         page.wait_for_selector("h1")
         wait_js(page, "document.querySelector('main').dataset.psiRef == 'ready'")
         if size == "laptop":
@@ -890,15 +890,16 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
             check(page.title().startswith("Psi language reference"), f"psi reference: its title ({page.title()})")
             check(page.locator("nav a.on").inner_text() == "Psi language", "psi reference: in the menu, marked")
             codes = page.eval_on_selector_all("h4[id^=E]", "els => els.map(e => e.id)")
-            check(len(codes) >= 100 and "E203" in codes and "E601" in codes, f"psi reference: the error index ({len(codes)} codes, each an anchor)")
-            top = page.evaluate("document.getElementById('E203').getBoundingClientRect().top")
-            check(0 <= top < 400, f"psi reference: #E203 opens at its entry ({top:.0f} px from the top)")
-            e203 = page.locator(".psi-err:has(#E203)").inner_text()
-            check("Before:" in e203 and "After:" in e203 and "v2 = v * 2" in e203, "psi reference: E203 has a before and an after")
+            check(len(codes) >= 100 and "E202" in codes and "E601" in codes, f"psi reference: the error index ({len(codes)} codes, each an anchor)")
+            top = page.evaluate("document.getElementById('E202').getBoundingClientRect().top")
+            check(0 <= top < 400, f"psi reference: #E202 opens at its entry ({top:.0f} px from the top)")
+            e202 = page.locator(".psi-err:has(#E202)").inner_text()
+            check("Before:" in e202 and "After:" in e202 and "gray(sin(x))" in e202, "psi reference: E202 has a before and an after")
             internal = page.eval_on_selector_all("h4[id^=E]:has(.badge)", "els => els.map(e => e.id)")
             e407 = page.locator(".psi-err:has(#E407)").inner_text()
-            check(internal == ["E407", "E408"] and "a bug in Psi: please report it" in e407,
-                  f"psi reference: E407 and E408 marked internal ({internal})")
+            e408 = page.locator(".psi-err:has(#E408)").inner_text()
+            check(internal == ["E407"] and "a bug in Psi: please report it" in e407 and "not the formula" in e408,
+                  f"psi reference: E407 marked internal, E408 explained ({internal})")
             cells = page.eval_on_selector_all("table code", "els => els.map(e => e.textContent)")
             check(all(any(n in c for c in cells) for n in ("atan2", "rainbow", "screen", "control")),
                   f"psi reference: the generated tables ({len(cells)} names)")
@@ -946,7 +947,7 @@ def psi_reference(browser, base: str, site: Path, errors: list[str], shots: Path
             shown_cook = page.locator("#cookbook").is_visible() or page.evaluate(
                 "[...document.querySelectorAll('.psi-live.big, #cookbook ~ pre')].some(e => e.checkVisibility())")
             check(rows and all("cycle" in page.locator("table.psi-ex-t tbody tr:not([hidden])").nth(i).inner_text() for i in range(len(rows)))
-                  and "cycle(fire, v, s)" in rows and "E931" in errs and "E203" not in errs and not shown_cook
+                  and "cycle(fire, v, s)" in rows and "E931" in errs and "E202" not in errs and not shown_cook
                   and "built-in" in page.inner_text("#psi-n"),
                   f"psi reference: search 'cycle' leaves {len(rows)} rows and {len(errs)} errors, the rest hidden ({page.inner_text('#psi-n')})")
             if shots:
@@ -997,15 +998,15 @@ def psi_error_links(browser, base: str, errors: list[str]) -> None:
     own copy: /f/'s caption (a broken formula) and the demo's editor; the
     entry is there."""
     page = new_page(browser, "laptop", errors)
-    page.goto(share_link(base, "v = 1\nv = 2\ngray(v)", "Broken"))
+    page.goto(share_link(base, "gray(sine(x))", "Broken"))
     page.wait_for_selector("#f-cap a.ecode", timeout=20000)
     a = page.locator("#f-cap a.ecode")
     href = a.get_attribute("href")
-    check(a.inner_text() == "E203" and urllib.parse.urljoin(page.url, href) == f"{base}/dev/psi/#E203"
+    check(a.inner_text() == "E202" and urllib.parse.urljoin(page.url, href) == f"{base}/dev/psi/#E202"
           and "doesn’t work" in page.inner_text("#f-cap"), f"/f/: a broken formula's code links the reference ({href})")
     a.click()
-    page.wait_for_selector("#E203")
-    check(page.url == f"{base}/dev/psi/#E203", f"/f/: the code's link leads to its entry ({page.url})")
+    page.wait_for_selector("#E202")
+    check(page.url == f"{base}/dev/psi/#E202", f"/f/: the code's link leads to its entry ({page.url})")
     page.goto(f"{base}/demo/#formulas")
     page.wait_for_selector("#psi-ex .psi-tile", timeout=30000)
     page.click("#psi-new")

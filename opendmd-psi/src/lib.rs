@@ -41,7 +41,9 @@ mod compile;
 mod draw;
 pub mod fixed;
 mod fuse;
-#[cfg(any(test, all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
+// (With `docs` on the host too: `psi check` says whether the panel's JIT
+// takes a formula, and why not.)
+#[cfg(any(test, feature = "docs", all(feature = "jit", target_arch = "xtensa", target_os = "espidf")))]
 pub mod jit;
 pub mod look;
 mod meta;
@@ -331,6 +333,7 @@ pub mod golden {
     ("ink-part", "part p {\n  loop 2\n  draw { for k < 24 { dot(k*5 + t*2, 16 + sin(k/24 + t/2)*12) } }\n  gray(ink)\n}\nlayer { p(x*0.5, y) }\nlayer add { p(1 - x, y, 0.5) }", 500, false, 0x20b3d33cb32de631),
     ("forever-rows", super::golden::FOREVER_ROWS, 3_500, false, 0x847d8d42f450cf91),
     ("forever-rows", super::golden::FOREVER_ROWS, 40_000_000, true, 0xf4f2f6627225ad38),
+    ("ink-levels", "loop 2\ndraw {\n  for k < 16 { line(k*8, 0, k*8 + 7, 31, k/16) }\n  for j < 3 { dot(t*60 + j, 16, j/3) }\n}\nn = ink(16)\nrgb(pick(n, 0, 0.1, 0.3, 0.5, 0.7, 0.9, 1, 0.8, 0.6, 0.4, 0.2, 0.15, 0.25, 0.35, 0.45, 0.55), ink(3)/3, ink(255)/255)", 700, false, 0x2929b758946186c0),
     ("ink-look", "part look {\n  loop 4.8\n  draw { for e < 6 { line(64 + 30*cos(e/6 + t/4.8), 16 + 12*sin(e/6 + t/4.8), 64 + 30*cos(e/6 + 1/6 + t/4.8), 16 + 12*sin(e/6 + 1/6 + t/4.8)) } }\n  #40c0ff * ink\n}\nloop 4.8\nlayer screen { look(x, y, 0.4) }", 600, true, 0x6c519b2a47772c08),
     ];
 }
