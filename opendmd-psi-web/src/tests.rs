@@ -523,9 +523,9 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Storm front", 1730, 0x61b0d4e51c3a6693),
     ("Storm front", 6420, 0x1d518c5020f2eb93),
     // road-alts (2026-10-30): Endless road's alternatives.
-    ("Neon city", 0, 0xd94c1d15045eaa7d),
-    ("Neon city", 1730, 0x3ebd86348f7ffbff),
-    ("Neon city", 6420, 0x8da996ca787c9193),
+    ("Neon city", 0, 0x84636442d78d5842),
+    ("Neon city", 1730, 0x68a41da6b5ee30cc),
+    ("Neon city", 6420, 0x708169097c5d46ef),
     ("Wormhole run", 0, 0x2071af4450a60587),
     ("Wormhole run", 1730, 0xa5400da6ff221e59),
     ("Wormhole run", 6420, 0xe43faaf20b1d4d02),

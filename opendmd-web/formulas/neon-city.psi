@@ -1,30 +1,31 @@
 -- author: OpenDMD
 -- licence: CC0-1.0
 name "Neon city"
-about "A night drive through a neon megacity: crowding towers, glowing signs and holo panels, a wet road"
+about "A night drive through a neon megacity: crowding towers lined with neon, a holo screen, rain on a wet road"
 loop forever
-fps 100
+fps 50
 
 -- Neon city: Endless road's pseudo-3D road, through a megacity at night.
 -- Dark towers crowd the road, tall enough to leave the top of the panel,
 -- with a hazy violet row behind them and a magenta glow over it all;
--- neon signs of made-up glyphs hang on the towers, flickering, a holo
--- panel scrolls its colours, and the wet road catches the haze. Four
--- lanes, a dashed cyan middle line and neon kerbs; the car is dark, with
--- a red light bar and a cyan glow under it. Now and then a shower comes
--- through: rain streaks over everything, the road wetter. Each play
--- starts elsewhere, in another city.
+-- each tower is lined with neon, a lit roof or a lit edge, in its own
+-- colour (some changing), one carries a holo screen, and the wet road
+-- catches the haze. Four lanes, a dashed cyan middle line and neon kerbs;
+-- the car is dark, with a red light bar and a cyan glow under it. Now and
+-- then a shower comes through: a sheet of slanted rain streaks, as 16-bit
+-- consoles drew it, and the road wetter. Each play starts elsewhere, in
+-- another city. (50 frames a second: the rain sheet costs 100's budget.)
 
 -- Colours: the sky's ramp from the top down to the haze; the towers (far,
 -- near, a lit window); the street (pavement, dry and wet asphalt, each
 -- with its stripe's, lane line, kerb); then what is drawn, the later over
--- the earlier
+-- the earlier: the rain (under everything else drawn), the car, the neon
 palette city = black #000, #05020c, #0a0418, #140626, #220a36, #380e44,
   #6a1658, #a02870, farTower #3a1450, nearTower #08060e, window #90e8ff,
   pavement #120c1c, #1a1224, asphalt #0e0a16, #130e1c, wet #2a0e30,
-  #34123a, lane #8090b0, kerb #e0207a, violet #a040ff, magenta #ff40ff,
-  pink #ff2a9a, cyan #20f0ff, glyph #120818, car #303850, glass #5878a8,
-  red #ff2030, rain #a0b8e0
+  #34123a, lane #8090b0, kerb #e0207a, rain #4c5884, car #303850,
+  glass #5878a8, red #ff2030, violet #a040ff, magenta #ff40ff,
+  pink #ff2a9a, cyan #20f0ff, white #fff
 
 -- Across the road, left to right, in 30ths of its half width (the middle
 -- at 31): 3 kerb, 1 asphalt, 2 a lane line, 4 the middle line; past
@@ -38,8 +39,8 @@ table twos = 1, 2, 4, 8, 16, 32, 64
 
 -- The car from behind: 11 spans, each `from + (to + (row + colour)/16)/64`
 -- with colour its place in the palette (car, glass, red, the cyan glow)
-table car = 10.335831, 8.366104, 9.35051, 5.412003, 2.457901, 3.442352,
-  2.456924, 2.455948, 3.111221, 24.439346, 1.469543
+table car = 10.335678, 8.365952, 9.350372, 5.41185, 2.457748, 3.4422,
+  2.456772, 2.455795, 3.111069, 24.439194, 1.469696
 
 frame {
   -- How far we have driven, in bends (from somewhere else each play);
@@ -56,9 +57,12 @@ frame {
   -- near row repeats every 176 columns; `seed` picks another city)
   nearShift = heading*-90
 
-  -- The neon's flicker, the glyphs' and the holo panel's changes
-  flicker = floor(t*8)
-  glyphs = floor(t*1.5)
+  -- The towers in view (the first one's number, and where its first
+  -- column is less its number*8), the neon's colour changes, and the
+  -- holo screen's
+  firstTower = floor(nearShift/8)
+  towerLeft = .9999 - nearShift
+  turn = floor(t*1.5)
   holo = floor(t*3)
 
   -- Showers come and go (none, then a drizzle, then a downpour): how
@@ -71,30 +75,28 @@ draw {
   -- colours win where things cross. (Small things are dots: a line costs
   -- a dozen pixels' walk however short it is.)
 
-  -- Neon signs on four towers of the near row, hanging under the roof
-  -- (as the pixels work it out) and moving with them: a lit panel three
-  -- columns wide in violet, magenta, pink or cyan (two of them changing
-  -- colour), flickering, with made-up glyphs on it, a dark stroke or two
-  -- a glyph, changing
-  for k < 4 {
-    signX = (k*44 + 1 - nearShift + 20)%176 - 20
-    roof = 20 + hash(floor((k*44 + 1) / 8) % 22, seed)*13
-    neon = (hash(k, flicker) > .06) * (city.violet + (k + glyphs%4*(k%2))%4*city.step)
-    for j < 3 {
-      line(signX + j, roof - 1, signX + j, roof - 9, neon)
-    }
-    for j < 3 {
-      glyphY = roof - 2 - j*3
-      dot(signX + hash(k*3 + j, glyphs)*3, glyphY, city.glyph)
-      dot(signX + 1, glyphY - 1, city.glyph)
-    }
+  -- Neon on the near row's towers, worked out as the pixels do (tower
+  -- `id` has the columns where floor((px + nearShift)/8) is `id`, the
+  -- last of each eight a gap, and its top row just under 22 + its height),
+  -- so each sits on its own tower and moves with it: along the roof of
+  -- every other one, down the right-hand edge of the rest (and of any
+  -- whose roof is above the panel); each tower its own colour, a third of
+  -- them changing
+  for k < 17 {
+    id = firstTower + k
+    left = floor(id*8 + towerLeft)
+    top = floor(hash(id%22, seed)*13 + 21.9999)
+    edge = id%2 or top > 31
+    line(left + edge*6, top, left + 6, edge ? 20 : top, city.violet + (id + turn%4*(id%3 < 1))%4*city.step)
   }
 
-  -- A holo panel across two towers: bands of colour scrolling down it,
-  -- now and then a band dropping out
-  panelX = (140 - nearShift + 20)%176 - 26
-  for k < 6 {
-    line(panelX, 22 + k, panelX + 12, 22 + k, (hash(k, holo) > .2) * (city.violet + (holo - k)%4*city.step))
+  -- One tower carries a holo screen across its face, under its roof
+  -- (when it is tall enough for one): bands of colour (and white) scrolling down it,
+  -- now and then one dropping out
+  screenX = floor((156.9999 - nearShift) % 176) - 20
+  screenTop = floor(hash(17, seed)*13 + 19.9999)
+  for k < 4 {
+    line(screenX + 1, screenTop - k, screenX + 5, screenTop - k, (screenTop > 23) * (hash(k, holo) > .2) * (city.violet + (holo - k)%5*city.step))
   }
 
   -- The car, span by span
@@ -104,15 +106,13 @@ draw {
     line(floor(car[k]) - carLeft, floor(rowInk), floor(span) - carLeft, floor(rowInk), frac(rowInk))
   }
 
-  -- Rain: 28 streaks falling and drifting with the wind, over everything,
-  -- as many as the shower brings
-  for k < 28 {
-    dropX = frac(hash(k, 3) + t*.37)*140 - 6
-    dropY = 34 - frac(t*2.5 + hash(k, 2))*36
-    drop = (hash(k, 5) < shower) * city.rain
-    dot(dropX, dropY, drop)
-    dot(dropX, dropY - 1, drop)
-    dot(dropX - 1, dropY - 2, drop)
+  -- Rain, as 16-bit consoles drew it: 96 thin streaks at one slant,
+  -- spread evenly (golden-ratio steps) and falling as one sheet, down
+  -- and to the right; as many as the shower brings
+  for k < 96 {
+    dropX = frac(k*.618 + t*.49)*150 - 12
+    dropY = frac(k*.7549 - t*4) * 44
+    line(dropX, dropY, dropX + 2.5, dropY - 6, (hash(k, 5) < shower) * city.rain)
   }
 }
 
