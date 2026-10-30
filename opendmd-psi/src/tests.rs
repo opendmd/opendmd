@@ -3106,9 +3106,12 @@ fn a_frame_raced_in_pair_order_is_the_frame_drawn_at_once() {
                     let mut told = Vec::new();
                     let mut sink = |p: usize, out: &[u8], a: u32, b: u32| {
                         let row = |r: usize, pic: &[u8]| pic[r * W * 3..(r + 1) * W * 3].to_vec();
-                        // (A `rate` formula is drawn whole, then told.)
-                        for q in (0..H / 2).filter(|&q| q <= p || prog.rate().is_none()) {
-                            let (top, bottom) = if q <= p { (&want[..], &want[..]) } else { (&before[..], &before[..]) };
+                        // (A `rate` formula is drawn whole, then told; at the
+                        // start, `BEAM_START`, every row still holds the old
+                        // frame.)
+                        let drawn = |q: usize| p != BEAM_START && q <= p;
+                        for q in (0..H / 2).filter(|&q| drawn(q) || prog.rate().is_none()) {
+                            let (top, bottom) = if drawn(q) { (&want[..], &want[..]) } else { (&before[..], &before[..]) };
                             assert!(row(q, out) == row(q, top) && row(q + H / 2, out) == row(q + H / 2, bottom),
                                 "{name} at {ms} ms: pair {q} when pair {p} was told");
                         }
@@ -3117,7 +3120,8 @@ fn a_frame_raced_in_pair_order_is_the_frame_drawn_at_once() {
                     render_rows_beam::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), s2.as_deref_mut(), &inputs, &OWN, got, Some(&mut got_ch), &mut sink);
                     assert_eq!(&got[..], &want[..], "{name} at {ms} ms, still {still_on} pass {pass}");
                     assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
-                    let want_told: Vec<_> = (0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2])).collect();
+                    let want_told: Vec<_> =
+                        [(BEAM_START, 0, 0)].into_iter().chain((0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2]))).collect();
                     assert_eq!(told, want_told, "{name} at {ms} ms: the pairs told");
                     frames += 1;
                 }
@@ -3127,11 +3131,18 @@ fn a_frame_raced_in_pair_order_is_the_frame_drawn_at_once() {
             render_rows_still::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), None, &inputs, &OWN, None, u32::MAX, &mut want);
             let mut got = vec![0u8; W * H * 3];
             let mut told = 0;
+            let mut started = false;
             render_rows_beam::<LANES>(&prog, &mut Scratch::new(), Some(&mut Ink::boxed()), None, &inputs, &OWN, &mut got, None, &mut |p, _, a, b| {
+                if p == BEAM_START {
+                    assert!(!started && told == 0);
+                    started = true;
+                    return;
+                }
                 assert_eq!((p, a, b), (told, u32::MAX, u32::MAX));
                 told += 1;
             });
             assert_eq!(got, want, "{name} at {ms} ms, no compare");
+            assert!(started);
             assert_eq!(told, H / 2);
         }
     }

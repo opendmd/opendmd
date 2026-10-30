@@ -427,10 +427,13 @@ fn clock() -> Option<Clock> {
 /// (`pair`), behind the scan, instead of a whole frame then a paced blit.
 #[derive(Clone, Copy, Debug)]
 pub struct BeamHooks {
-    /// A frame is about to be raced, expected to take `est_us` (render and
-    /// writes): plans it (and may wait for its window); the refresh (µs),
-    /// or `None` when it can't be raced now (the scan unreadable).
-    pub begin: fn(est_us: u32) -> Option<u32>,
+    /// A frame is about to be raced: the refresh (µs), or `None` when it
+    /// can't be raced now (the scan unreadable).
+    pub begin: fn() -> Option<u32>,
+    /// Its rows start (after the frame's steps and draw stage:
+    /// [`psi::BEAM_START`]), the frame expected to take `est_us` (render
+    /// and writes): plans the race from here (and may wait for its window).
+    pub start: fn(est_us: u32),
     /// Pair `p` (rows `p`, `p + 16`) is drawn in `bytes` (the canvas, packed
     /// RGB888) and `dirty` marks what of it to write.
     pub pair: fn(p: usize, bytes: &[u8], dirty: &crate::canvas::DirtyMap),
@@ -1045,7 +1048,8 @@ impl PsiFx {
         // Racing the beam: planned (any wait for its window left out of
         // the governor's time), else drawn as before.
         let hooks = beam_hooks().filter(|_| self.racing);
-        let cycle = hooks.and_then(|h| (h.begin)(self.gov.avg_us()));
+        let cycle = hooks.and_then(|h| (h.begin)());
+        let est = self.gov.avg_us();
         let hooks = hooks.filter(|_| cycle.is_some());
         let t0 = match (hooks, clock) {
             (Some(_), Some(c)) => c(),
@@ -1090,6 +1094,9 @@ impl PsiFx {
                 // with its pair).
                 let mut tell = |p: usize, out: &[u8], a: u32, b: u32| {
                     const HALF: usize = psi::H / 2;
+                    if p == psi::BEAM_START {
+                        return (h.start)(est);
+                    }
                     marked += if compare {
                         mark_pair(dirty, p, a, b)
                     } else {
@@ -2414,6 +2421,7 @@ mod tests {
         static PANEL: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0; psi::W * psi::H * 3]);
         static TOLD: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
         static SLOW: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static STARTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
 
     fn slow_clock() -> u32 {
@@ -2423,8 +2431,13 @@ mod tests {
         })
     }
 
-    fn beam_begin(_est: u32) -> Option<u32> {
+    fn beam_begin() -> Option<u32> {
         Some(7_980)
+    }
+
+    fn beam_start(_est: u32) {
+        TOLD.with(|t| assert!(t.borrow().is_empty(), "the start after a pair"));
+        STARTS.with(|n| n.set(n.get() + 1));
     }
 
     /// The panel's side: the marked pixels of rows p and p + 16 copied.
@@ -2456,7 +2469,7 @@ mod tests {
         const STARS: &str = include_str!("../../opendmd-web/formulas/starfield.psi");
         const GATE: &str = include_str!("../../opendmd-web/formulas/time-gate.psi");
         set_clock(Some(slow_clock));
-        set_beam(Some(BeamHooks { begin: beam_begin, pair: beam_pair, end: beam_end }));
+        set_beam(Some(BeamHooks { begin: beam_begin, start: beam_start, pair: beam_pair, end: beam_end }));
         for (name, src) in psi::sketches::ALL.iter().copied().chain([
             ("Endless road", ROAD),
             ("Starfield", STARS),
@@ -2489,6 +2502,7 @@ mod tests {
                     continue;
                 }
                 assert_eq!(TOLD.with(|t| t.borrow().clone()), (0..16).collect::<Vec<_>>(), "{name} frame {k}");
+                assert_eq!(STARTS.with(|n| n.replace(0)), 1, "{name} frame {k}: started once");
                 assert!(c.dirty().is_clean(), "{name} frame {k}: left for the blit");
                 assert!(PANEL.with(|p| p.borrow().as_slice() == c.as_bytes()), "{name} frame {k}: the panel");
                 assert_eq!(d, Duration::from_micros(7_980 << raced_level(&raced)), "{name} frame {k}");
