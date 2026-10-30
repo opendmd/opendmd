@@ -1019,19 +1019,19 @@ fn distance(a: &str, b: &str) -> usize {
     for (j, v) in r[0].iter_mut().enumerate().take(b.len() + 1) {
         *v = j as u8;
     }
+    // Row i is written over row i-3 in place, read from the other two (no
+    // copies of rows: they were half this frame, at the deepest point).
     for i in 1..=a.len() {
-        let (prev2, prev) = (r[(i + 1) % 3], r[(i - 1) % 3]);
-        let mut cur = [0u8; 25];
-        cur[0] = i as u8;
+        let (p2, p, c) = ((i + 1) % 3, (i - 1) % 3, i % 3);
+        r[c][0] = i as u8;
         for j in 1..=b.len() {
             let cost = u8::from(a[i - 1] != b[j - 1]);
-            let mut v = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+            let mut v = (r[p][j] + 1).min(r[c][j - 1] + 1).min(r[p][j - 1] + cost);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                v = v.min(prev2[j - 2] + 1);
+                v = v.min(r[p2][j - 2] + 1);
             }
-            cur[j] = v;
+            r[c][j] = v;
         }
-        r[i % 3] = cur;
     }
     r[a.len() % 3][b.len()] as usize
 }
@@ -2553,6 +2553,18 @@ impl<'s> Parser<'s> {
             )
     }
 
+    /// [`Self::name`] as a call of its own, for `pick`'s rare part (inlined
+    /// there it made `pick`'s frame, on the recursive path too, bigger).
+    #[inline(never)]
+    fn name_out_of_line(&mut self, t: Token) -> Result<Id, Error> {
+        self.name(t)
+    }
+
+    /// A name where a value goes: a part's value, a special form, a table,
+    /// a function call or a value. Inlined into `expr` (its one caller on
+    /// the recursive path): a frame of its own between `expr` and `args` was
+    /// ~100 B of the compile stack per level of nesting, ×[`MAX_DEPTH`].
+    #[inline(always)]
     fn name(&mut self, t: Token) -> Result<Id, Error> {
         let name = self.text(t);
         let at = (t.start, t.end);
@@ -2793,7 +2805,9 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// `( a, b, … )` with exactly `n` values.
+    /// `( a, b, … )` with exactly `n` values. Always inlined: as a frame of
+    /// its own (64 B on the ESP32) it sat in `expr`'s recursion.
+    #[inline(always)]
     fn args(&mut self, f: Token, name: &str, n: usize) -> Result<[Id; 3], Error> {
         let (a, _) = self.args_or_cover(f, name, n, false)?;
         Ok([a[0], a[1], a[2]])
@@ -2809,7 +2823,13 @@ impl<'s> Parser<'s> {
         n: usize,
         cover: bool,
     ) -> Result<([Id; 4], usize), Error> {
-        let open = self.expect(Tok::LParen, "`(`")?;
+        // `expect` by hand: its `Result<Token, Error>` was a slot in this
+        // frame, on the recursive path (as in `glyph_args`).
+        let open = self.peek();
+        if open.tok != Tok::LParen {
+            return Err(self.expected(open, "`(`"));
+        }
+        self.next();
         let mut out = [0 as Id; 4];
         let mut k = 0;
         if self.peek().tok != Tok::RParen {
@@ -2842,7 +2862,7 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn pick(&mut self, t: Token) -> Result<Id, Error> {
         if self.part_named("pick").is_some() {
-            return self.name(t);
+            return self.name_out_of_line(t);
         }
         let open = self.next();
         let k = self.expr(0)?;
@@ -2882,7 +2902,11 @@ impl<'s> Parser<'s> {
     /// last if you like: the three values and the font.
     #[inline(never)]
     fn glyph_args(&mut self, f: Token, name: &str) -> Result<([Id; 3], u8), Error> {
-        let open = self.expect(Tok::LParen, "`(`")?;
+        let open = self.peek();
+        if open.tok != Tok::LParen {
+            return Err(self.expected(open, "`(`"));
+        }
+        self.next();
         let mut out = [0 as Id; 3];
         let (mut k, mut font_of) = (0, tables::NORMAL);
         if self.peek().tok != Tok::RParen {
