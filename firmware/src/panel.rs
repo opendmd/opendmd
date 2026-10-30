@@ -12,7 +12,7 @@ use esp_idf_sys::hub75;
 use opendmd_core::canvas::{Canvas, DirtyMap, Rgb, HEIGHT, WIDTH};
 use opendmd_core::look::{tint, Glow, GlowLevel, Look, GLOW_STEP};
 use opendmd_core::panel_timing::PanelTiming;
-use opendmd_core::scan::{Budget, Judge, Pacer, Reading, SPLIT_LEAD_US};
+use opendmd_core::scan::{Beam, Budget, Judge, Pacer, Reading, SPLIT_LEAD_US};
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 
@@ -167,8 +167,8 @@ mod counters {
 /// `/api/status` `scan`: `null` when the scan position cannot be read,
 /// else `{"row_us","sync","blits","torn","in_pair","waited","wait_us",
 /// "wait_max_us","gave_up","split_on","split","split_ok","unsplit",
-/// "spin_us","stretched","late","retimed"}`
-/// (counts since boot).
+/// "spin_us","stretched","late","retimed","beam"}`
+/// (counts since boot; `beam` [`beam::json`]).
 pub fn scan_json() -> String {
     use counters::*;
     let row_us = ROW_US.load(Relaxed);
@@ -176,7 +176,7 @@ pub fn scan_json() -> String {
         return "null".into();
     }
     format!(
-        r#"{{"row_us":{row_us},"sync":{},"blits":{},"torn":{},"in_pair":{},"waited":{},"wait_us":{},"wait_max_us":{},"gave_up":{},"split_on":{},"split":{},"split_ok":{},"unsplit":{},"spin_us":{},"stretched":{},"late":{},"retimed":{}}}"#,
+        r#"{{"row_us":{row_us},"sync":{},"blits":{},"torn":{},"in_pair":{},"waited":{},"wait_us":{},"wait_max_us":{},"gave_up":{},"split_on":{},"split":{},"split_ok":{},"unsplit":{},"spin_us":{},"stretched":{},"late":{},"retimed":{},"beam":{}}}"#,
         SYNC_ON.load(Relaxed) != 0,
         BLITS.load(Relaxed),
         TORN.load(Relaxed),
@@ -193,7 +193,14 @@ pub fn scan_json() -> String {
         STRETCHED.load(Relaxed),
         LATE.load(Relaxed),
         opendmd_core::engine::FX_RETIMED.load(Relaxed),
+        beam::json(),
     )
+}
+
+/// `scan.beam` alone (psi-probe's play lines).
+#[cfg(feature = "psi-probe")]
+pub fn beam_json() -> String {
+    beam::json()
 }
 
 /// The longest one row pair's write may take (µs, 240 MHz), untinted and
@@ -443,6 +450,7 @@ impl Panel {
     pub fn set_display(&mut self, look: Look, glow: GlowLevel) -> bool {
         let tinted = look != self.look;
         self.look = look;
+        beam::set_look(look);
         self.repaint |= tinted;
         // Formulas hold to 50 fps under the glow (its blit and a
         // 100 fps Formula do not fit a 10 ms frame).
@@ -585,6 +593,28 @@ impl Panel {
         self.sync.split = split;
         counters::SPLIT_ON.store(u32::from(on && split), Relaxed);
         counters::SYNC_ON.store(u32::from(on), Relaxed);
+    }
+
+    /// Racing the beam for Formulas (`/api/config` `formula_beam`, the
+    /// spike; console-lessons §2.6): the player's hooks installed in
+    /// `fx_psi` (or taken out). Only with the scan readable.
+    pub fn set_beam(&mut self, on: bool) {
+        let on = on && self.sync.row_us > 0;
+        beam::set(on, self.sync.row_us, self.look);
+        #[cfg(feature = "psi")]
+        opendmd_core::fx_psi::set_beam(on.then_some(opendmd_core::fx_psi::BeamHooks {
+            begin: beam::begin,
+            start: beam::start,
+            pair: beam::pair,
+            end: beam::end,
+        }));
+    }
+
+    /// Whether a Formula's frame may be raced as far as the panel goes:
+    /// the glow composites a whole picture (its frames go up as before).
+    #[cfg_attr(not(feature = "psi"), allow(dead_code))]
+    pub fn beam_ok(&self) -> bool {
+        self.glow.level() == GlowLevel::Off
     }
 
     /// Time the ways of getting a canvas into the DMA buffer, and check that
@@ -1016,4 +1046,289 @@ fn pace(pacer: &Pacer, pair: usize, last: bool) -> u32 {
         counters::SPIN_US.fetch_add(spun, Relaxed);
     }
     end.wrapping_sub(t)
+}
+
+/// Racing the beam (`formula_beam`; console-lessons §2.6, §8;
+/// `opendmd_core::scan::Beam`): `fx_psi`'s hooks. A Formula's frame is
+/// drawn in the panel's pair order and each pair written here as soon as
+/// it is drawn, after the scan has left its slot in the refresh before the
+/// target and before it comes back: no wait for a clear start, no second
+/// pass, no stretch, no tear. The main task only (the display loop).
+/// (Without Formulas, `psi`, only its counters are read.)
+#[cfg_attr(not(feature = "psi"), allow(dead_code))]
+mod beam {
+    use super::{now_us, read_scan, write_pair, Beam, Look, Relaxed};
+    use opendmd_core::canvas::DirtyMap;
+    use opendmd_core::scan::PAIRS;
+    use std::cell::UnsafeCell;
+    use std::sync::atomic::AtomicU32;
+
+    /// What one pair's write is allowed in the plan (µs): ~74 measured for
+    /// a full pair from flash, plus the scan reading's error (a descriptor,
+    /// up to ~102 µs).
+    const WRITE_US: u32 = 180;
+    const WRITE_US_TINTED: u32 = 330;
+    /// Kept from a slot's edges (the pacer's `SYNC_MARGIN_US`).
+    const MARGIN_US: u32 = 30;
+
+    struct State {
+        on: bool,
+        row_us: u32,
+        look: Look,
+        frame: Option<Frame>,
+        /// When the first and the last pair were drawn after a frame's
+        /// start (µs, waits left out): running means, 1/4 a frame (0: none
+        /// yet). What the plan aims the start with.
+        first_us: u32,
+        last_us: u32,
+    }
+
+    #[derive(Clone, Copy)]
+    struct Frame {
+        beam: Beam,
+        err: i32,
+        /// The clock when drawing started (after any wait for the window).
+        start: u32,
+        /// µs waited for the scan: at the start, and for pairs.
+        waited: u32,
+        pair_waited: u32,
+        first: u32,
+        last: u32,
+        late: bool,
+    }
+
+    /// The main task's alone (the display loop calls every function here
+    /// but [`json`], which reads only the atomics): no lock a pair.
+    struct Cell(UnsafeCell<State>);
+    // SAFETY: only the main task touches the state (see above).
+    unsafe impl Sync for Cell {}
+
+    static STATE: Cell = Cell(UnsafeCell::new(State {
+        on: false,
+        row_us: 0,
+        look: Look::Colour,
+        frame: None,
+        first_us: 0,
+        last_us: 0,
+    }));
+
+    /// The state. Main task only, and no two of these alive at once (each
+    /// function here takes it once and calls nothing that takes it).
+    #[allow(clippy::mut_from_ref)]
+    fn state() -> &'static mut State {
+        // SAFETY: as above.
+        unsafe { &mut *STATE.0.get() }
+    }
+
+    fn mean(m: u32, v: u32) -> u32 {
+        if m == 0 {
+            v
+        } else {
+            m - m / 4 + v / 4
+        }
+    }
+
+    /// Since boot (`/api/status` `scan.beam`, [`json`]).
+    static FRAMES: AtomicU32 = AtomicU32::new(0);
+    static LATE_FRAMES: AtomicU32 = AtomicU32::new(0);
+    static LATE_PAIRS: AtomicU32 = AtomicU32::new(0);
+    static WAITS: AtomicU32 = AtomicU32::new(0);
+    static PAIR_WAITS: AtomicU32 = AtomicU32::new(0);
+    static WAIT_US: AtomicU32 = AtomicU32::new(0);
+    static WRITE_TOTAL_US: AtomicU32 = AtomicU32::new(0);
+    static PAIR_TOTAL_US: AtomicU32 = AtomicU32::new(0);
+    static UNREAD: AtomicU32 = AtomicU32::new(0);
+    static LATE_STARTS: AtomicU32 = AtomicU32::new(0);
+    static RETARGETS: AtomicU32 = AtomicU32::new(0);
+    static ON: AtomicU32 = AtomicU32::new(0);
+    static FIRST_US: AtomicU32 = AtomicU32::new(0);
+    static LAST_US: AtomicU32 = AtomicU32::new(0);
+
+    pub(super) fn set(on: bool, row_us: u32, look: Look) {
+        let st = state();
+        st.on = on;
+        st.row_us = row_us;
+        st.look = look;
+        st.frame = None;
+        st.first_us = 0;
+        st.last_us = 0;
+        ON.store(u32::from(on), Relaxed);
+    }
+
+    pub(super) fn set_look(look: Look) {
+        state().look = look;
+    }
+
+    /// `{"on","frames","late_frames","late_pairs","waits","pair_waits",
+    /// "wait_us","write_us","pair_us","first_us","last_us","unread"}`:
+    /// raced frames since boot, those with a pair written past its window
+    /// (`late_pairs` in all: each shows a refresh late, a seam for that
+    /// refresh), the starts past their window's late edge and of them the
+    /// ones moved to the next refresh instead (a frame held for two or
+    /// more), the frames that waited for their window as their rows
+    /// started and
+    /// the pairs that waited for theirs (µs in all, wrapping), the µs spent
+    /// writing pairs and in the pair hook in all (writes included;
+    /// wrapping), the running means of when a frame's first and last pair
+    /// are drawn (µs after its rows start), and the frames not raced because the
+    /// scan could not be read.
+    pub(super) fn json() -> String {
+        format!(
+            r#"{{"on":{},"frames":{},"late_frames":{},"late_pairs":{},"late_starts":{},"retargets":{},"waits":{},"pair_waits":{},"wait_us":{},"write_us":{},"pair_us":{},"first_us":{},"last_us":{},"unread":{}}}"#,
+            ON.load(Relaxed) != 0,
+            FRAMES.load(Relaxed),
+            LATE_FRAMES.load(Relaxed),
+            LATE_PAIRS.load(Relaxed),
+            LATE_STARTS.load(Relaxed),
+            RETARGETS.load(Relaxed),
+            WAITS.load(Relaxed),
+            PAIR_WAITS.load(Relaxed),
+            WAIT_US.load(Relaxed),
+            WRITE_TOTAL_US.load(Relaxed),
+            PAIR_TOTAL_US.load(Relaxed),
+            FIRST_US.load(Relaxed),
+            LAST_US.load(Relaxed),
+            UNREAD.load(Relaxed),
+        )
+    }
+
+    /// Wait `us`: whole ticks asleep while more than 1.5 ms is left, then a
+    /// spin on the clock. Returns the µs waited.
+    #[cold]
+    fn wait_for(us: u32) -> u32 {
+        let t = now_us();
+        loop {
+            let gone = now_us().wrapping_sub(t);
+            if gone >= us {
+                return gone;
+            }
+            if us - gone > 1_500 {
+                // SAFETY: a FreeRTOS delay of the calling task (1 ms ticks).
+                unsafe { esp_idf_sys::vTaskDelay(1) };
+            } else {
+                core::hint::spin_loop();
+            }
+        }
+    }
+
+    /// `fx_psi::BeamHooks::begin`: can this frame be raced (the scan read)?
+    pub(super) fn begin() -> Option<u32> {
+        let st = state();
+        st.frame = None;
+        if !st.on || st.row_us == 0 {
+            return None;
+        }
+        if read_scan().is_none() {
+            UNREAD.fetch_add(1, Relaxed);
+            return None;
+        }
+        Some(st.row_us * PAIRS as u32)
+    }
+
+    /// `fx_psi::BeamHooks::start`: the rows start (the frame's steps and
+    /// draw stage done): the race planned from here, so a heavy draw stage
+    /// (Starfield's 192 lines) is not the first pair's time.
+    pub(super) fn start(est_us: u32, frames: u32) {
+        let st = state();
+        let Some(now) = read_scan() else {
+            UNREAD.fetch_add(1, Relaxed);
+            return;
+        };
+        let write = if st.look == Look::Colour { WRITE_US } else { WRITE_US_TINTED };
+        // Measured, else from the governor's mean (a frame's render is at
+        // least its pairs' writes).
+        let last = if st.last_us > 0 { st.last_us } else { est_us.max(PAIRS as u32 * write) };
+        let first = if st.first_us > 0 { st.first_us } else { last / PAIRS as u32 };
+        let plan = Beam::plan(st.row_us, now, first, last, write, MARGIN_US, frames >= 2);
+        if plan.late_by > 0 {
+            LATE_STARTS.fetch_add(1, Relaxed);
+        }
+        let mut waited = 0;
+        if plan.wait_us > 0 {
+            waited = wait_for(plan.wait_us);
+            if plan.retarget {
+                RETARGETS.fetch_add(1, Relaxed);
+            } else {
+                WAITS.fetch_add(1, Relaxed);
+            }
+            WAIT_US.fetch_add(waited, Relaxed);
+        }
+        st.frame = Some(Frame {
+            beam: plan.beam,
+            err: plan.err,
+            start: now_us(),
+            waited,
+            pair_waited: 0,
+            first: 0,
+            last: 0,
+            late: false,
+        });
+    }
+
+    /// A pair early for its window: spin on the scan until it opens.
+    /// Returns the µs waited.
+    #[cold]
+    #[inline(never)]
+    fn wait_window(beam: &Beam, p: usize, w: u32) -> u32 {
+        let t = now_us();
+        while read_scan().is_some_and(|r| beam.wait(p, r) > 0) && now_us().wrapping_sub(t) < w + 1_000 {
+            core::hint::spin_loop();
+        }
+        let waited = now_us().wrapping_sub(t);
+        PAIR_WAITS.fetch_add(1, Relaxed);
+        WAIT_US.fetch_add(waited, Relaxed);
+        waited
+    }
+
+    /// `fx_psi::BeamHooks::pair`: one scan reading before (is its window
+    /// open?) and one after (did the write end inside it?).
+    pub(super) fn pair(p: usize, bytes: &[u8], dirty: &DirtyMap) {
+        let t = now_us();
+        let st = state();
+        let look = st.look;
+        let Some(f) = st.frame.as_mut() else {
+            write_pair(bytes, dirty, p, look);
+            return;
+        };
+        let ready = t.wrapping_sub(f.start).saturating_sub(f.pair_waited);
+        if p == 0 {
+            f.first = ready;
+        } else if p == PAIRS - 1 {
+            f.last = ready;
+        }
+        if dirty.row_mask() & ((1u32 << p) | (1 << (p + PAIRS))) == 0 {
+            return;
+        }
+        if let Some(w) = read_scan().map(|r| f.beam.wait(p, r)).filter(|&w| w > 0) {
+            let waited = wait_window(&f.beam, p, w);
+            f.waited += waited;
+            f.pair_waited += waited;
+        }
+        let w0 = now_us();
+        write_pair(bytes, dirty, p, look);
+        let w1 = now_us();
+        WRITE_TOTAL_US.fetch_add(w1.wrapping_sub(w0), Relaxed);
+        if read_scan().is_some_and(|a| f.beam.late(p, a)) {
+            f.late = true;
+            LATE_PAIRS.fetch_add(1, Relaxed);
+        }
+        PAIR_TOTAL_US.fetch_add(now_us().wrapping_sub(t), Relaxed);
+    }
+
+    /// `fx_psi::BeamHooks::end`.
+    pub(super) fn end() -> (i32, u32, bool) {
+        let st = state();
+        let Some(f) = st.frame.take() else {
+            return (0, 0, false);
+        };
+        if f.last > 0 {
+            st.first_us = mean(st.first_us, f.first);
+            st.last_us = mean(st.last_us, f.last);
+            FIRST_US.store(st.first_us, Relaxed);
+            LAST_US.store(st.last_us, Relaxed);
+        }
+        FRAMES.fetch_add(1, Relaxed);
+        LATE_FRAMES.fetch_add(u32::from(f.late), Relaxed);
+        (f.err, f.waited, f.late)
+    }
 }

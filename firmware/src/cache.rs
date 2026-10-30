@@ -310,6 +310,8 @@ fn bucket_name(name: &str) -> Option<u8> {
 
 /// Step 1: every directory under `cache/` (depth ≤ 3, for nested categories)
 /// that has bucket directories in it. A card with no `cache/` has none.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn discover(fs_dir: &str, card_dir: &str, depth: u32, out: &mut Vec<Parent>) -> io::Result<u32> {
     let mut dirs = 1;
     let mut buckets = [0u32; 8];

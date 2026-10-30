@@ -532,6 +532,8 @@ impl Poller {
         let _ = self.cmd.send(Command::Follow(event));
     }
 
+    #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+    #[inline(never)]
     fn act(&mut self, action: Action) {
         match action {
             Action::Normal => self.send(Event::Normal),
@@ -572,6 +574,8 @@ impl Poller {
     /// `esp_http_client` held 3.35 KB of heap for a request every 2 s; this
     /// is a plain socket now, `opendmd_core::http_client`). Connecting,
     /// each write and each read time out after `FOLLOW_TIMEOUT`.
+    #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+    #[inline(never)]
     fn get(
         &mut self,
         host: &str,
@@ -870,6 +874,8 @@ impl Poller {
     /// Make sure the logos file is current for the playlist: every followed
     /// console's logo entries, `PLATFORM<TAB>path`, after a `#<length>` line.
     /// One pass over the manifest when it is missing or stale.
+    #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+    #[inline(never)]
     fn ensure_logos(&mut self) {
         let manifest = self.cfg.manifest();
         let Ok(len) = fs::metadata(&manifest).map(|m| m.len()) else {

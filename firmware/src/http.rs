@@ -132,6 +132,8 @@ pub enum NetCommand {
 /// waiting at most [`config::NAME_CHECK_WAIT`] on the httpd task: a worker
 /// that is busy for longer (a connect) or gone makes it `Check::Unknown`,
 /// never a hang.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn name_check(c: &Ctx, name: &str) -> Check {
     let until = Instant::now() + config::NAME_CHECK_WAIT;
     let (tx, rx) = mpsc::channel();
@@ -257,6 +259,8 @@ struct ConfigPatch {
     panel_split: Option<bool>,
     /// The Formulas' JIT (the kill switch); applied at the next frame.
     formula_jit: Option<bool>,
+    /// Racing the beam for Formulas (the spike); applied at once.
+    formula_beam: Option<bool>,
     /// The API key (`opendmd_core::access`); `""` turns it off. Never
     /// echoed back (only `api_key_set`).
     api_key: Option<String>,
@@ -585,6 +589,9 @@ pub fn start(ctx: Arc<Ctx>) -> Result<Server> {
         }
         if let Some(v) = patch.formula_jit {
             next.formula_jit = v;
+        }
+        if let Some(v) = patch.formula_beam {
+            next.formula_beam = v;
         }
         if let Some(v) = &patch.api_key {
             if !v.is_empty() && !opendmd_core::access::valid_key(v) {
@@ -1653,6 +1660,8 @@ const NOT_RELEASED: &str = "the player did not let go of the file; try again";
 /// builder is held off and a copy the player is reading is skipped first.
 /// `{"ok","path","removed","done"}`; `done` false means the time budget ran
 /// out and the client should ask again.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn delete_tree(req: &mut Req, c: &Ctx, rel: &str, path: &str) -> Result<()> {
     let allowed = [config::CACHE_ROOT, config::LEGACY_ROOT]
         .iter()
@@ -1914,6 +1923,8 @@ fn move_file(up: &mut Upload, c: &Ctx) -> Result<()> {
 
 /// Stream a manifest upload to a temp file, then hand the swap to the main
 /// task, which drops the engine before the file underneath it changes.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn install_manifest(req: &mut Upload, ctx: &Ctx, dest: String) -> Result<()> {
     let temp = format!("{dest}.part");
     files::stream_body_to(req, &temp)?;
@@ -2068,6 +2079,8 @@ fn applied_json(a: &Applied) -> String {
 /// moment this is built, and `now_playing.elapsed_ms` the file's position at
 /// that same moment — the pair a browser needs to put its preview in step
 /// with the panel, correcting for its own request latency the NTP way.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn status_json(s: &Status, looks: &str, recent: bool) -> String {
     let t = s.epoch.elapsed();
     // `?recent=1`: Recently played, newest first, and which is on screen.
@@ -2158,9 +2171,10 @@ fn status_json(s: &Status, looks: &str, recent: bool) -> String {
 }
 
 /// `now_playing`'s `,"formula":{"frame_us","frame_ms","asked_ms",
-/// "compile_us","still","jit"}` while a formula plays: its mean render time, the
+/// "beam_us","compile_us","still","jit"}` while a formula plays: its mean render time, the
 /// frame time its governor holds it to (`fx_psi::Governor`), the one it
-/// asked for, the last formula compile's time, the heap its still cache
+/// asked for, its raced frame time (µs on the refresh grid, `formula_beam`;
+/// 0 when its frames are not raced), the last formula compile's time, the heap its still cache
 /// holds (B, 0 none), and the JIT: `{"on":true,"bytes":N}` while a kernel
 /// draws its pixel stage, else `{"on":false,"why":"…"}`; empty otherwise.
 #[cfg(feature = "psi")]
@@ -2170,9 +2184,10 @@ fn formula_json(path: &str) -> String {
         return String::new();
     }
     let still = opendmd_core::fx_psi::still_held();
+    let beam = opendmd_core::fx_psi::beam_us();
     let jit = jit_json();
     format!(
-        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"compile_us":{compile_us},"still":{still},"jit":{jit}}}"#
+        r#","formula":{{"frame_us":{us},"frame_ms":{ms},"asked_ms":{asked},"beam_us":{beam},"compile_us":{compile_us},"still":{still},"jit":{jit}}}"#
     )
 }
 
@@ -2312,6 +2327,8 @@ fn panel_json(st: &Status) -> String {
 
 /// The saved configuration. The WiFi password and the RePlayOS code are never
 /// returned — only whether one is set.
+#[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+#[inline(never)]
 fn settings_json(s: &Settings) -> String {
     format!(
         concat!(
@@ -2320,7 +2337,7 @@ fn settings_json(s: &Settings) -> String {
             r#""tz":{},"tz_name":{},"transition":"{}","transition_ms":{},"auto_prepare":"{}","#,
             r#""follow":{},"follow_host":{},"follow_code_set":{},"attract_set":{},"attract":{},"#,
             r#""look":"{}","glow":"{}","look_formula":{},"#,
-            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"api_key_set":{},"card_speed":"{}"}}"#
+            r#""boot_show":"{}","panel_sync":{},"panel_split":{},"formula_jit":{},"formula_beam":{},"api_key_set":{},"card_speed":"{}"}}"#
         ),
         json_string(&s.wifi_ssid),
         !s.wifi_pass.is_empty(),
@@ -2349,6 +2366,7 @@ fn settings_json(s: &Settings) -> String {
         s.panel_sync,
         s.panel_split,
         s.formula_jit,
+        s.formula_beam,
         !s.api_key.is_empty(),
         s.card_speed.as_str(),
     )

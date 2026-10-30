@@ -68,6 +68,8 @@ const KEY_PANEL_SYNC: &str = "panel_sync";
 /// With it, the bottom half a refresh after the top (`Panel::set_sync`), 0/1.
 const KEY_PANEL_SPLIT: &str = "panel_split";
 const KEY_FORMULA_JIT: &str = "formula_jit";
+/// Racing the beam for Formulas (`Panel::set_beam`, the spike), 0/1.
+const KEY_FORMULA_BEAM: &str = "formula_beam";
 /// The card's clock policy (`opendmd_core::card_speed::CardSpeed`).
 const KEY_CARD_SPEED: &str = "card_speed";
 /// The longest `attract` value (`text:` and the message).
@@ -175,6 +177,11 @@ pub struct Settings {
     /// The narrow JIT for Formulas (`opendmd_core::fx_psi::set_jit`): on by
     /// default; off, every Formula plays on the VM. The kill switch.
     pub formula_jit: bool,
+    /// Racing the beam for Formulas (`Panel::set_beam`; console-lessons
+    /// §2.6, the spike): a Formula's frames drawn in the panel's pair
+    /// order and written behind the scan, on its refresh grid. Off by
+    /// default.
+    pub formula_beam: bool,
     /// The API key every API and card request must carry when set
     /// (`httpd::gate`, docs/api.md "Security"); empty = none. Never
     /// returned by the API (only `api_key_set`).
@@ -238,6 +245,7 @@ impl Default for Settings {
             panel_sync: true,
             panel_split: true,
             formula_jit: true,
+            formula_beam: false,
             api_key: String::new(),
             card_speed: CardSpeed::Safe,
         }
@@ -301,6 +309,8 @@ impl Config {
     }
 
     /// Read everything, falling back to [`Settings::default`] field by field.
+    #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+    #[inline(never)]
     pub fn load(&self) -> Settings {
         let d = Settings::default();
         // A device without the key gets the default ceiling; a saved
@@ -427,6 +437,13 @@ impl Config {
                 .flatten()
                 .map(|v| v != 0)
                 .unwrap_or(d.formula_jit),
+            formula_beam: self
+                .nvs
+                .get_u8(KEY_FORMULA_BEAM)
+                .ok()
+                .flatten()
+                .map(|v| v != 0)
+                .unwrap_or(d.formula_beam),
             api_key: self
                 .get_string(KEY_API_KEY)
                 .filter(|k| opendmd_core::access::valid_key(k))
@@ -437,6 +454,8 @@ impl Config {
 
     /// Write every field back. Cheap enough (NVS only rewrites what changed)
     /// and it keeps the "PUT replaces the config" semantics honest.
+    #[optimize(size)] // (CPU0 / boot / config: no frame runs it — console-c)
+    #[inline(never)]
     pub fn save(&mut self, s: &Settings) -> anyhow::Result<()> {
         self.nvs.set_str(KEY_WIFI_SSID, &s.wifi_ssid)?;
         self.nvs.set_str(KEY_WIFI_PASS, &s.wifi_pass)?;
@@ -474,6 +493,7 @@ impl Config {
         self.nvs.set_u8(KEY_PANEL_SYNC, u8::from(s.panel_sync))?;
         self.nvs.set_u8(KEY_PANEL_SPLIT, u8::from(s.panel_split))?;
         self.nvs.set_u8(KEY_FORMULA_JIT, u8::from(s.formula_jit))?;
+        self.nvs.set_u8(KEY_FORMULA_BEAM, u8::from(s.formula_beam))?;
         self.nvs.set_str(KEY_API_KEY, &s.api_key)?;
         self.nvs.set_str(KEY_CARD_SPEED, s.card_speed.as_str())?;
         Ok(())
