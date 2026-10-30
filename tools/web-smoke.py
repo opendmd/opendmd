@@ -3535,7 +3535,7 @@ def mock_pass(browser) -> None:
         formulas_panel_checks(browser, base, errors)
         formula_keep_checks(browser, base, errors)
         formulas_playlist_checks(browser, base, overlay, errors)
-        formulas_add_checks(browser, base, overlay, errors)
+        formulas_remix_checks(browser, base, overlay, errors)
         formulas_over_checks(browser, base, errors)
         looks_checks(browser, base, errors)
         find_checks(page)
@@ -3748,6 +3748,27 @@ def formula_editor(page: Page, src: str) -> None:
     page.wait_for_timeout(400)  # the 150 ms compile, a frame or two
 
 
+def remix_open(page: Page, base: str, errors: list[str], src, name="", bad_first=False, **vals) -> Page:
+    """The panel's app opened at `#remix` by `page` (as the site's page opens
+    it with Open on my panel, here from the app's own origin, which it
+    accepts as it does opendmd.dev), its ready answered with the Formula by
+    postMessage (`bad_first`: a message of the wrong shape first). Returns
+    the app's page, its editor up."""
+    page.evaluate("""([src, name, vals, bad]) => addEventListener('message', function on(e) {
+        if (e.data?.type !== 'opendmd-remix-ready') return;
+        removeEventListener('message', on);
+        if (bad) e.source.postMessage({ type: 'opendmd-remix', src: 42 }, '*');
+        e.source.postMessage({ type: 'opendmd-remix', name, src, ...vals }, '*');
+    })""", [src, name, vals, bad_first])
+    with page.context.expect_page() as info:
+        page.evaluate("u => { window.open(u, '_blank'); }", base + "/#remix")
+    app = info.value
+    app.on("pageerror", lambda e: errors.append(f"[remix] pageerror: {e}"))
+    app.wait_for_selector("#psi-ed #psi-src", timeout=20000)
+    app.wait_for_timeout(500)
+    return app
+
+
 def scrub(page: Page, line: int, col: float, dx: int) -> None:
     """A mouse drag of `dx` px on the text at (line, column), 0-based."""
     box = page.locator("#psi-src").bounding_box()
@@ -3800,7 +3821,7 @@ def psi_error_links(page: Page) -> None:
 def formulas_checks(browser, base: str, errors: list[str]) -> None:
     """Library → Formulas: the module loads only then; the examples render;
     a plain error with its line; a number scrubbed changes the text, the
-    preview and is one undo; a slider for `a`; saving; a share link round
+    preview and is one undo; a slider for `a`; saving; a Formula sent by postMessage round
     trip; Save as GIF into Create Art with one loop of frames."""
     page = new_page(browser, "laptop", errors)
     asked: list[str] = []
@@ -3915,26 +3936,31 @@ def formulas_checks(browser, base: str, errors: list[str]) -> None:
     page.fill("#psi-name", "Smoke brightness")
     page.click("#psi-save")
     page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
-    # The share link: the online demo's first, then this display's; it opens the
-    # formula, slider and all, in a fresh page.
-    page.click("#psi-ed-share")
-    demo = page.input_value("#psi-link")
-    url = page.get_attribute("#psi-copy-here", "data-url")
-    sub = page.get_attribute("#psi-submit", "href")
-    page.wait_for_timeout(400)
-    shot(page, "formulas-share", "laptop")
+    # No links with a Formula in them: Copy code, and Submit to the gallery
+    # (the form the site's page has: the file with its header, GitHub's
+    # new-file page filled in).
+    check(page.locator("#psi-ed-share").count() == 0 and page.inner_text("#psi-ed-code") == "Copy code",
+          "formulas: no share link, Copy code instead")
+    page.click("#psi-ed-submit")
+    page.wait_for_selector("#psi-submit-sheet #s-text", timeout=10000)
+    page.fill("#s-desc", "A smoke test")
+    page.fill("#s-author", "@smoke")
+    page.wait_for_timeout(200)
+    text, go = page.inner_text("#s-text"), page.get_attribute("#s-go", "href")
+    shot(page, "formulas-submit", "laptop")
     page.keyboard.press("Escape")
-    check(demo.startswith("https://opendmd.dev/f/#formula=") and url.startswith(base + "/#formula=") and "&a=0.75" in url
-          and len(url) < 200 and demo[demo.index("#"):] == url[url.index("#"):] and sub == demo + "&submit",
-          f"formulas: share links, the formula's page on the site first ({demo}, {url}), Submit to the gallery")
-    other = new_page(browser, "laptop", errors)
-    other.goto(url)
-    other.wait_for_selector("#psi-ed #psi-src", timeout=20000)
-    other.wait_for_timeout(500)
+    check(text.startswith("-- author: @smoke\n-- licence: CC0-1.0\nname \"Smoke brightness\"\nabout \"A smoke test\"\n")
+          and go.startswith("https://github.com/opendmd/opendmd.github.io/new/main/gallery?filename=smoke-brightness.psi&value="),
+          f"formulas: Submit to the gallery fills in the file and GitHub's page ({text[:60]!r}, {go[:90]})")
+    # From the site (Open on my panel, edited): the panel's app opened by its
+    # page gets the Formula by postMessage, slider and all.
+    opener = new_page(browser, "laptop", errors)
+    opener.goto(base + "/version.txt")
+    other = remix_open(opener, base, errors, 'name "Smoke brightness"\ncontrol brightness = 0\ngray(brightness)', "Smoke brightness", a=0.75)
     got = (other.input_value("#psi-src"), other.input_value("#psi-name"), other.input_value("#psi-ed-sl-a"))
     check(got == ('name "Smoke brightness"\ncontrol brightness = 0\ngray(brightness)', "Smoke brightness", "0.75") and other.evaluate("location.hash") == "#formulas/edit",
-          f"formulas: the link opens the editor with it ({got})")
-    other.context.close()
+          f"formulas: a Formula sent from the site's page opens in the editor ({got})")
+    opener.context.close()
     page.click("#psi-back")
     page.wait_for_selector("#psi-mine .psi-tile", timeout=5000)
     check(page.eval_on_selector_all("#psi-mine .psi-tile", "els => els.map(e => e.dataset.name)") == ["Smoke brightness"]
@@ -3983,10 +4009,9 @@ def formulas_playlist_checks(browser, base: str, overlay: Path, errors: list[str
     again = page.locator("#toasts .toast:has-text('on the panel now')").count()
     check(again == 0 and sorted(p.name for p in (overlay / "formulas").glob("kept-here*")) == ["kept-here.psi"],
           f"formulas on the panel: not copied again ({again} toasts)")
-    # A gallery's link to a bundled one goes by name: its details here.
-    page.goto(base + "/#bundled=starfield")
+    # A bundled one's details: Add to playlist names it.
+    page.click("#psi-ex .psi-tile[data-name='Starfield']")
     page.wait_for_function("document.querySelector('#psi-side.open #psi-d-title')?.textContent == 'Starfield'", timeout=20000)
-    check(page.evaluate("location.hash") == "#formulas", "formulas: a #bundled= link opens that bundled Formula's details")
     clear_toasts(page)
     page.click("#psi-pl")
     page.wait_for_selector("#psi-pl-menu", timeout=5000)
@@ -4135,114 +4160,77 @@ def formula_keep_checks(browser, base: str, errors: list[str]) -> None:
     page.context.close()
 
 
-def formulas_add_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
-    """Add to my panel: the site hands a Formula over as `#formula=…&add=1`
-    (or `#bundled=<stem>&add=1`). One from the gallery is saved on the panel
-    (/formulas/<stem>.psi, a `name` line from the link when it has none of
-    its own), not twice; a bundled one needs no saving. Then the sheet:
-    Play now (the mock plays it by its file or name), Add to a playlist (the
-    picker, a line naming it), Use as the look (only one that declares
-    `look`). A Formula that doesn't compile or is too long says so in plain
-    words, saves nothing, and offers the editor."""
-    src = (REPO / "opendmd-web/formulas/searchlight.psi").read_text().split("\n", 2)[2]
-    gif = card_gifs()[0]
-    put_text(base + "/api/sets/addtest", gif + "\n")
-    expected.append("/api/play")
+def formulas_remix_checks(browser, base: str, overlay: Path, errors: list[str]) -> None:
+    """Open on my panel: the site hands a Formula to the panel's app by name
+    (`#gallery=<slug>`: a bundled one is built in, another fetched from
+    opendmd.dev/formulas/src/, here a stand-in) or, edited, by postMessage
+    from the page that opened it (`#remix`, from opendmd.dev or the app's
+    own origin only), never in the link. It opens in the editor (the
+    remix), nothing saved until Save; a name it doesn't have, no opener, or
+    an opener elsewhere: said plainly."""
+    raw = (REPO / "opendmd-web/formulas/searchlight.psi").read_text()
+    src = raw.split("\n", 2)[2]
     f = overlay / "formulas" / "searchlight.psi"
     if f.exists():
         f.unlink()
     page = new_page(browser, "laptop", errors)
+    asked: list[str] = []
 
-    def arrive(q: dict) -> None:
-        page.goto("about:blank")
-        page.goto(base + "/#" + urllib.parse.urlencode({**q, "add": "1"}))
-        page.wait_for_selector("#psi-added", timeout=20000)
-
-    # A gallery Formula (it declares `look` and a control), a slider moved on the site.
-    arrive({"formula": src, "name": "Searchlight", "a": "0.6"})
-    head = page.inner_text("#psi-added .mh")
-    check(head == "Added to your panel" and page.inner_text("#psi-added-name") == "Searchlight"
-          and f.exists() and f.read_text() == src and page.evaluate("location.hash") == "#formulas",
-          f"add to panel: a gallery Formula is saved on the panel as /formulas/searchlight.psi ('{head}')")
-    page.wait_for_function("document.querySelector('#psi-d-title')?.textContent == 'Searchlight'", timeout=10000)
-    check(page.locator("#psi-mine .psi-tile[data-name='Searchlight']").count() == 1,
-          "add to panel: its details behind the sheet, under Your formulas")
-    check(page.is_visible("#psi-added-play") and page.is_visible("#psi-added-pl") and page.is_visible("#psi-added-look"),
-          "add to panel: the sheet offers Play now, Add to a playlist, Use as the look")
-    shot(page, "formulas-added", "laptop")
-    clear_toasts(page)
-    put_json(base + "/api/config", {"formula_keep": "5m"})
-    page.click("#psi-added-play")
-    t = last_toast(page, "ok")
-    want = "/formulas/searchlight.psi?a=0.6"
-    cur = wait_playing(base, want)
-    check(t == "On the panel: Searchlight" and cur == want and page.locator("#psi-added").count() == 0,
-          f"add to panel: Play now plays it by its file, with the slider ({cur}, '{t}')")
-    kept = get_json(base + "/api/status")["now_playing"].get("kept_s")
-    check(kept == 300, f"add to panel: Play now keeps it on the panel as Keep on the panel says (kept_s {kept})")
-    put_json(base + "/api/config", {"formula_keep": "turn"})
-    # Again: the same text is not saved twice.
-    arrive({"formula": src, "name": "Searchlight", "a": "0.6"})
-    head = page.inner_text("#psi-added .mh")
-    check(head == "Already on your panel" and sorted(p.name for p in (overlay / "formulas").glob("searchlight*")) == ["searchlight.psi"],
-          f"add to panel: the same Formula again is not saved twice ('{head}')")
-    clear_toasts(page)
-    page.click("#psi-added-pl")
-    page.wait_for_selector("#psi-pl-menu", timeout=5000)
-    page.click("#psi-pl-menu [data-path='/sets/addtest.txt']")
-    t = last_toast(page, "ok")
-    lines = (overlay / "sets" / "addtest.txt").read_text().split("\n")
-    check(t == "1 added to “addtest”" and lines == [gif, want, ""], f"add to panel: Add to a playlist names it by its file ({lines[1:]}, '{t}')")
-    arrive({"formula": src, "name": "Searchlight", "a": "0.6"})
-    clear_toasts(page)
-    page.click("#psi-added-look")
-    t = last_toast(page, "ok")
-    c = get_json(base + "/api/config")
-    check(c["look_formula"] == want and t.startswith("“Searchlight” is the panel’s look now"),
-          f"add to panel: Use as the look sets it by its file ({c['look_formula']!r})")
-    put_json(base + "/api/config", {"look_formula": ""})
-    # One with no `name` line: the link's name is written in as one.
-    arrive({"formula": "loop 4\ngray(saw(x - t/4))", "name": "Smoke ramp add"})
-    g = overlay / "formulas" / "smoke-ramp-add.psi"
-    check(g.exists() and g.read_text() == 'name "Smoke ramp add"\nloop 4\ngray(saw(x - t/4))' and page.locator("#psi-added-look").count() == 0,
-          f"add to panel: the link's name becomes its name line; no look offered ({g.exists() and g.read_text()[:30]!r})")
-    # A bundled one: nothing saved, by its name.
-    n0 = len(list((overlay / "formulas").glob("*.psi")))
-    arrive({"bundled": "starfield"})
-    head = page.inner_text("#psi-added .mh")
-    check(head == "It comes with your panel" and page.inner_text("#psi-added-name") == "Starfield"
-          and len(list((overlay / "formulas").glob("*.psi"))) == n0 and page.locator("#psi-added-look").count() == 0,
-          f"add to panel: a bundled Formula needs no saving ('{head}')")
-    page.wait_for_function("document.querySelector('#psi-d-title')?.textContent == 'Starfield'", timeout=10000)
-    clear_toasts(page)
-    page.click("#psi-added-play")
-    last_toast(page, "ok")
-    cur = wait_playing(base, "@formula:starfield")
-    check(cur == "@formula:starfield", f"add to panel: Play now plays a bundled one by name ({cur})")
-    arrive({"bundled": "vignette"})
-    clear_toasts(page)
-    page.click("#psi-added-look")
-    last_toast(page, "ok")
-    c = get_json(base + "/api/config")
-    check(c["look_formula"] == "@formula:vignette", f"add to panel: a bundled look by name ({c['look_formula']!r})")
-    put_json(base + "/api/config", {"look_formula": ""})
-    # What can go wrong, said plainly; nothing saved.
-    n0 = len(list((overlay / "formulas").glob("*.psi")))
-    arrive({"formula": "loop 4\ngray(x +)", "name": "Broken add"})
-    why = page.inner_text("#psi-added-why")
-    check(page.inner_text("#psi-added .mh") == "Couldn’t add it to your panel" and "doesn’t work" in why and "line 2" in why
-          and len(list((overlay / "formulas").glob("*.psi"))) == n0, f"add to panel: one that doesn't compile says so ('{why}')")
-    page.click("#psi-added-edit")
-    page.wait_for_selector("#psi-ed #psi-src", timeout=10000)
-    check(page.input_value("#psi-src") == "loop 4\ngray(x +)", "add to panel: and opens in the editor on request")
-    arrive({"formula": "gray(x)\n" + "v = x\n" * 1500, "name": "Huge add"})
-    why = page.inner_text("#psi-added-why")
-    check("too long for the panel" in why and "8 KB" in why and len(list((overlay / "formulas").glob("*.psi"))) == n0,
-          f"add to panel: one too long for the panel says so ('{why}')")
-    page.click("#psi-added-done")
+    def site(route):
+        asked.append(route.request.url)
+        slug = route.request.url.rsplit("/", 1)[1]
+        if slug == "searchlight.psi":
+            route.fulfill(status=200, body=raw, headers={"content-type": "text/plain; charset=utf-8", "access-control-allow-origin": "*"})
+        else:
+            route.fulfill(status=404, body="no", headers={"access-control-allow-origin": "*"})
+    page.context.route("https://opendmd.dev/formulas/src/*", site)
+    # A gallery Formula the panel doesn't come with, a slider moved on the site.
+    page.goto(base + "/#gallery=searchlight&a=0.6")
+    page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
+    page.wait_for_timeout(500)
+    got = (page.input_value("#psi-src"), page.input_value("#psi-name"), page.input_value("#psi-ed-sl-a"), page.evaluate("location.hash"))
+    check(got == (src, "Searchlight", "0.6", "#formulas/edit") and asked == ["https://opendmd.dev/formulas/src/searchlight.psi"] and not f.exists(),
+          f"remix: a gallery Formula is fetched by name and opens in the editor, nothing saved yet ({got[1:]}, {asked})")
+    shot(page, "formulas-remix", "laptop")
+    page.click("#psi-save")
+    page.wait_for_selector("#psi-ed .tick.ok", timeout=5000)
+    check(f.exists() and f.read_text() == src, "remix: Save puts it on the panel (/formulas/searchlight.psi)")
+    # A bundled one: here already, nothing fetched.
+    asked.clear()
+    page.goto("about:blank")
+    page.goto(base + "/#gallery=starfield")
+    page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
+    page.wait_for_timeout(500)
+    star = next(e for e in bundled() if e["name"] == "Starfield")
+    check(page.input_value("#psi-src") == star["src"] and not asked, f"remix: a bundled one opens from the panel's own copy ({asked})")
+    # A name the gallery doesn't have (its 404 expected).
+    expected.append("/formulas/src/no-such-formula")
+    page.goto("about:blank")
+    page.goto(base + "/#gallery=no-such-formula")
+    t = last_toast(page, "bad")
+    check(t == "Couldn’t open that Formula: the gallery has no Formula by that name" and page.evaluate("location.hash") == "#formulas",
+          f"remix: a name the gallery doesn't have says so ('{t}')")
+    # `#remix` with no page that opened it.
+    page.goto("about:blank")
+    page.goto(base + "/#remix")
+    t = last_toast(page, "bad")
+    check(t == "Couldn’t open that Formula: open it again from opendmd.dev", f"remix: no page sending it says so ('{t}')")
+    # Sent from another site: ignored, and said after the wait.
+    other = new_page(browser, "laptop", errors)
+    other.context.route("http://elsewhere.test/**", lambda r: r.fulfill(status=200, headers={"content-type": "text/html"}, body=(
+        "<!doctype html><script>addEventListener('message', (e) => { if (e.data?.type === 'opendmd-remix-ready') "
+        "e.source.postMessage({type: 'opendmd-remix', name: 'Elsewhere', src: 'gray(1)'}, '*'); });</script>")))
+    other.goto("http://elsewhere.test/")
+    with other.context.expect_page() as info:
+        other.evaluate("u => { window.open(u, '_blank'); }", base + "/#remix")
+    app = info.value
+    app.wait_for_selector("#toasts .toast.bad", timeout=20000)
+    t = app.eval_on_selector_all("#toasts .toast.bad", "els => els.at(-1).textContent")
+    check("didn’t send it" in t and app.input_value("#psi-name") != "Elsewhere" if app.locator("#psi-name").count() else "didn’t send it" in t,
+          f"remix: a Formula sent from another site is ignored ('{t}')")
+    other.context.close()
     page.context.close()
-    for name in ("sets/addtest.txt", "formulas/searchlight.psi", "formulas/smoke-ramp-add.psi"):
-        urllib.request.urlopen(urllib.request.Request(base + "/api/files/" + name, method="DELETE"), timeout=30)
+    urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/searchlight.psi", method="DELETE"), timeout=30)
 
 
 def clear_toasts(page: Page) -> None:
@@ -4533,17 +4521,9 @@ def looks_checks(browser, base: str, errors: list[str]) -> None:
     page.fill("#psi-src", "control k 0..1 = 0.5\ngray(k*x)")
     page.wait_for_timeout(400)
     f0 = page.evaluate("""() => import('./js/psikit.js').then((k) => { const c = { controls: [{ slot: 'a', default: 0.5 }] };
-        return [k.path({ src: 'gray(a)', a: 0.5 }, c), k.path({ src: 'gray(a)', a: 0.25 }, c), k.link({ src: 'gray(a)', a: 0.5 }, '', c)]; })""")
-    page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = 0.5; r.dispatchEvent(new Event('input')); }")
-    page.click("#psi-ed-share")
-    l0 = page.input_value("#psi-link")
-    page.keyboard.press("Escape")
-    page.eval_on_selector("#psi-ed-sl-a", "r => { r.value = 0.75; r.dispatchEvent(new Event('input')); }")
-    page.click("#psi-ed-share")
-    l1 = page.input_value("#psi-link")
-    page.keyboard.press("Escape")
-    check(f0 == ["@formula?src=gray(a)", "@formula?src=gray(a)&a=0.25", "#formula=gray%28a%29"] and "&a=" not in l0 and l1.endswith("&a=0.75"),
-          f"looks: a value at its default stays out of paths and links ({f0}; {l0[-30:]!r}, {l1[-30:]!r})")
+        return [k.path({ src: 'gray(a)', a: 0.5 }, c), k.path({ src: 'gray(a)', a: 0.25 }, c), k.vals({ src: 'gray(a)', a: 0.5 }, c), k.vals({ src: 'gray(a)', a: 0.75 }, c)]; })""")
+    check(f0 == ["@formula?src=gray(a)", "@formula?src=gray(a)&a=0.25", "", "&a=0.75"],
+          f"looks: a value at its default stays out of paths and the site's hand-over ({f0})")
     put_json(base + "/api/config", {"look_formula": ""})
     urllib.request.urlopen(urllib.request.Request(base + "/api/files/formulas/matrix-glow.psi", method="DELETE"), timeout=30)
     page.context.close()
@@ -4602,17 +4582,15 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     page.goto(base + "/#formulas")
     page.evaluate("""localStorage.setItem('odmd.psi.mine', JSON.stringify([
         {id: 1, name: 'Ay', src: 'use Bee as q\\nq'}, {id: 2, name: 'Bee', src: 'use Ay as p\\np'}]))""")
-    page.goto(base + "/#formula=" + urllib.parse.quote("use Bee as q\nq") + "&name=Ay")
-    page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
-    page.wait_for_timeout(600)
-    src = page.input_value("#psi-src")
+    app = remix_open(page, base, errors, "use Bee as q\nq", "Ay")
+    src = app.input_value("#psi-src")
     check(src.count("part ") == 1 and "-- use Ay as p" in src, f"formulas: a cycle through saved formulas pastes once ({src!r})")
     page.context.close()
 
 
 def formulas_more(browser, base: str, errors: list[str]) -> None:
     """Drafts not saved are kept (Continue editing, an in-page question before
-    one is replaced); links that try to inject markup or are too long; the
+    one is replaced); Formulas sent that try to inject markup or are too long; the
     drawing stops when nothing is shown; a trap in the module restarts it."""
     page = new_page(browser, "laptop", errors)
     page.goto(base + "/#formulas")
@@ -4672,24 +4650,22 @@ def formulas_more(browser, base: str, errors: list[str]) -> None:
     check(page.get_attribute("#psi-ed", "data-err") is None and psi_frames(page, "#psi-ed-panel") > f0
           and page.get_attribute("#psi-ed", "data-steps") is not None, "formulas: a trap in the module restarts it and the editor carries on")
     page.context.close()
-    # Hostile and over-long links: shown as text, cut to size, nothing run.
+    # Hostile and over-long Formulas sent from the site: shown as text, cut
+    # to size, nothing run; a message of the wrong shape ignored.
     page = new_page(browser, "laptop", errors)
+    page.goto(base + "/version.txt")
     evil = '<img src=x onerror="window.__pwned=1">'
-    page.goto(base + "/#formula=" + urllib.parse.quote("-- " + evil + "\ngray(x)") + "&name=" + urllib.parse.quote(evil))
-    page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
-    page.wait_for_timeout(500)
-    safe = (page.evaluate("window.__pwned") is None and page.locator("#psi-ed img, #psi-gal img").count() == 0
-            and page.input_value("#psi-name") == evil[:60] and page.input_value("#psi-src").startswith("-- <img"))
-    page.click("#psi-back")
-    page.wait_for_selector("#psi-ex .psi-tile", timeout=5000)
-    safe = safe and page.locator("#psi-gal img").count() == 0 and page.evaluate("window.__pwned") is None
-    check(safe, "formulas: markup in a link's name and formula stays text")
-    page.goto(base + "/#formula=" + urllib.parse.quote("gray(x)\n" + "-" * 17000) + "&name=" + "N" * 200)
-    page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
-    page.wait_for_timeout(500)
-    src_len, name_len = len(page.input_value("#psi-src")), len(page.input_value("#psi-name"))
-    toast = page.locator("#toasts .toast:has-text('too long')").count()
-    check(src_len == 16384 and name_len == 60 and toast == 1, f"formulas: an over-long link is cut ({src_len}, {name_len}) and says so")
+    app = remix_open(page, base, errors, "-- " + evil + "\ngray(x)", evil, bad_first=True)
+    safe = (app.evaluate("window.__pwned") is None and app.locator("#psi-ed img, #psi-gal img").count() == 0
+            and app.input_value("#psi-name") == evil[:60] and app.input_value("#psi-src").startswith("-- <img"))
+    app.click("#psi-back")
+    app.wait_for_selector("#psi-ex .psi-tile", timeout=5000)
+    safe = safe and app.locator("#psi-gal img").count() == 0 and app.evaluate("window.__pwned") is None
+    check(safe, "formulas: markup in a sent Formula's name and text stays text (the wrong shape first, ignored)")
+    app.close()
+    app = remix_open(page, base, errors, "gray(x)\n" + "-" * 17000, "N" * 200)
+    src_len, name_len = len(app.input_value("#psi-src")), len(app.input_value("#psi-name"))
+    check(src_len == 16384 and name_len == 60, f"formulas: an over-long Formula is cut ({src_len}, {name_len})")
     page.context.close()
 
 
@@ -4727,23 +4703,20 @@ def formulas_phone_pass(browser, base: str, errors: list[str]) -> None:
 
 
 def formulas_demo_pass(browser, base: str, errors: list[str]) -> None:
-    """The web demo (status `{}`, its card in memory): a shared formula's link
-    opens the editor and plays."""
+    """The web demo (status `{}`, its card in memory): a Formula its site's
+    page sends opens in the editor and plays."""
     page = new_page(browser, "laptop", errors)
     page.route("**/api/status", lambda r: r.fulfill(status=200, body="{}", headers={"content-type": "application/json"}))
     page.route("**/demo/index.json", lambda r: r.fulfill(status=200, body="[]", headers={"content-type": "application/json"}))
-    page.goto(base + "/#formula=loop+4%0Arings+%3D+sin(x*4+-+t%2F4)%0Ahsv(rings*0.5,+1,+1)&name=Demo+rings")
-    page.wait_for_function("document.querySelector('#where').textContent.startsWith('Demo')", timeout=20000)
-    page.wait_for_selector("#psi-ed #psi-src", timeout=20000)
-    wait_lit(page, "#psi-ed-panel", "formulas (demo): a shared formula")
-    check(page.input_value("#psi-name") == "Demo rings" and page.input_value("#psi-src").startswith("loop 4\nrings")
-          and page.locator("#psi-ed-show, #psi-show").count() == 0,
-          f"formulas (demo): the link opened '{page.input_value('#psi-name')}', no Show on panel")
-    # The demo's share link is its own site's formula page.
-    page.click("#psi-ed-share")
-    link = page.input_value("#psi-link")
-    page.keyboard.press("Escape")
-    check(link.startswith(base + "/f/#formula=loop+4"), f"formulas (demo): Copy share link -> its site's /f/ ({link[:60]}…)")
+    page.goto(base + "/version.txt")
+    page.context.route("**/api/status", lambda r: r.fulfill(status=200, body="{}", headers={"content-type": "application/json"}))
+    page.context.route("**/demo/index.json", lambda r: r.fulfill(status=200, body="[]", headers={"content-type": "application/json"}))
+    app = remix_open(page, base, errors, "loop 4\nrings = sin(x*4 - t/4)\nhsv(rings*0.5, 1, 1)", "Demo rings")
+    app.wait_for_function("document.querySelector('#where').textContent.startsWith('Demo')", timeout=20000)
+    wait_lit(app, "#psi-ed-panel", "formulas (demo): a Formula from the site's page")
+    check(app.input_value("#psi-name") == "Demo rings" and app.input_value("#psi-src").startswith("loop 4\nrings")
+          and app.locator("#psi-ed-show, #psi-show").count() == 0 and app.locator("#psi-ed-share").count() == 0,
+          f"formulas (demo): it opened '{app.input_value('#psi-name')}', no Show on panel, no share link")
     page.context.close()
 
 
@@ -6764,13 +6737,6 @@ def sd_unreadable_pass(browser) -> None:
         check(card == ["Not readable: needs FAT32", True], f"unreadable card: Settings › Device's Card line says so, in red ({card})")
         goto_view(page, "now")
         shot(page, "now-sd-unreadable", "laptop")
-        # Add to my panel with a card it can't read: said, nothing saved.
-        page.goto(base + "/#" + urllib.parse.urlencode({"formula": "gray(x)", "name": "No card add", "add": "1"}))
-        page.wait_for_selector("#psi-added-why", timeout=20000)
-        why = page.inner_text("#psi-added-why")
-        check("can’t read its card" in why, f"unreadable card: Add to my panel says the card can't be read ('{why}')")
-        page.click("#psi-added-done")
-        goto_view(page, "now")
         code, reply = put_www(base, (REPO / "opendmd-web" / "www.pack").read_bytes())
         check(code == 200 and reply is not None and reply.get("staged") is False,
               f"unreadable card: PUT /api/www is not staged ({code}, staged {reply and reply.get('staged')})")

@@ -28,10 +28,10 @@ with its sliders if it has any. The bundled ten:
 
 **More Formulas** opens the online [formula gallery](#the-formula-gallery):
 every Formula OpenDMD has made (tunnels, rotozooms, plasma, fire, rain,
-clocks and more) and the ones people have shared. Press **Add to my
-panel** on one (see [Add to my panel](#add-to-my-panel)): your panel's app
-opens with it saved, under *Your formulas*, and offers to play it now, add
-it to a playlist, or use it as the look.
+clocks and more) and the ones people have shared. Press **Open on my
+panel** on one (see [Open on my panel](#open-on-my-panel)): your panel's
+app opens it in the editor, ready to save, play, add to a playlist or use
+as the look.
 
 **Big clock** shows what a GIF can't do: it draws
 the real time in big rainbow digits, with a bar along the bottom that
@@ -44,8 +44,8 @@ From there:
 
 - **Remix** (a bundled one) or **Edit** (one of yours) opens it in the editor.
 - **Save as GIF…** makes a GIF of it in [Create Art](create-art.md).
-- **Copy share link** gives you a link to its own page, for anyone (see
-  [Sharing](#sharing)).
+- **Copy code** copies its text; **Submit to the gallery…** (in the
+  editor) shares it (see [Sharing](#sharing)).
 - **+ New formula** starts a fresh one.
 
 If you leave the editor without saving, the gallery offers **Continue
@@ -127,7 +127,7 @@ last version that worked, dimmed.
   (two to six words; two make a switch): `shape` is the chosen word's
   number, 0 for the first, so read it with `pick(shape, …)`. Up to three
   controls; they travel with the formula, so its name, controls and
-  defaults are the same in a share link, a playlist and on the panel. A
+  defaults are the same in the gallery, a playlist and on the panel. A
   formula that uses `a`, `b` or `c` without a `control` line gets a plain
   slider, 0 to 1, for each.
 - **Name and look:** `name "My sunrise"` and `about "…"` at the top say
@@ -575,7 +575,7 @@ what the formula says about itself: its **Name**, a line **About** it, its
 words; three at most) and **Can be the panel’s look**. Every change there
 is a line at the top of the formula — `name "…"`, `about "…"`,
 `control …`, `look …` — so the text and the sheet always agree, and the
-formula carries them wherever it goes (a share link, a playlist, the
+formula carries them wherever it goes (the gallery, a playlist, the
 panel). Turned on, the look has a **Blend** and an **Amount**. The blend
 says how the formula goes onto the GIF — **Over** (it covers it),
 **Screen** (it lightens: the GIF's bright parts stay and the formula shows
@@ -654,52 +654,31 @@ sum like `px - 64 - X` works `- X` out for every pixel where
 `px - (64 + X)` would work it out once a frame, and a value that would be
 kept but reads something that moves.
 
-## Add to my panel
+## Open on my panel
 
-**Add to my panel** is on every tile in the [formula
-gallery](#the-formula-gallery) and on every formula's own page (a share
-link, long or short). Press it and your panel's app opens with the formula
-saved on the panel, under *Your formulas*, and a small box:
+**Open on my panel** is on every tile in the [formula
+gallery](#the-formula-gallery) and on every formula's page there. Press it
+and your panel's app opens the formula in its editor, the way **Remix**
+does on the panel: from there you can change it, **Save** it on the panel,
+**Show on panel**, add it to a playlist, or use it as the look. Nothing is
+saved until you say so.
 
-- **Play now**: on the panel straight away, for as long as **Keep on the
-  panel** says (one turn, unless you set it longer).
-- **Add to a playlist…**: pick which; the playlist names the formula, so a
-  later change to it shows there too.
-- **Use as the look**: for a formula that can be a look (marked *look*),
-  drawn over every GIF.
-
-The first time, it asks for your display's address (it suggests
-`opendmd.local`; the name or IP address your display shows in Settings ›
+The first time, it asks for your panel's address (it suggests
+`opendmd.local`; the name or IP address your panel shows in Settings ›
 Device); after that one press is enough. Your phone or computer must be on
-the same network as the display. A bundled formula is on the panel already,
-so nothing is saved; one saved before isn't saved twice (the box says
-*Already on your panel*).
-
-If it can't be added the box says why: the panel has no card (or can't
-read it), the formula doesn't work (and on which line; **Open it in the
-editor** to fix it), or it's too long for the panel (8 KB once its comment
-lines are left out).
+the same network as the panel. A formula as the gallery has it goes to
+your panel by its name (the panel fetches it from the OpenDMD site, or has
+it already if it is one of the bundled ten); one you changed on the
+formula's page goes straight from that page to the window it opens. Your
+browser may ask you to allow pop-ups for opendmd.dev the first time.
 
 ## Sharing
 
-**Copy share link** gives a link to the formula's own page on the OpenDMD
-site, with the whole formula in it, its name and its sliders. Anyone can
-open it, with or without a player: the page plays it in the panel look,
-shows its code and its sliders, and has
-
-- **Add to my panel** (see [Add to my panel](#add-to-my-panel)).
-- **Open on my display**: opens the formula in your display's editor
-  instead (the same address), to change it before you save it.
-- **Try it in the demo**: opens it in the [online demo](https://opendmd.dev/demo/)'s
-  editor.
-- **Copy code** and **Copy link**, and a QR code of the link to open it on
-  a phone.
-- **Submit to the gallery** (see [The formula gallery](#the-formula-gallery)).
-
-On your player, the share box also has **Copy a link to this display**:
-that one opens the formula in your own player's app, on your own network.
-Keep formulas short to share them: past about 1,500 characters the link
-gets long enough that some apps cut it, and the share box says so.
+To share a formula, submit it to the [gallery](#the-formula-gallery):
+**Submit to the gallery…** is in the editor, on your panel, in the demo
+and on every formula's page. There are no links with a formula in them:
+a link anyone can make shouldn't be able to put code in front of someone.
+**Copy code** copies the formula's text, to paste wherever you like.
 
 ## The formula gallery
 
@@ -707,11 +686,12 @@ The [formula gallery](https://opendmd.dev/formulas/) on the OpenDMD
 site has every Formula OpenDMD has made (the ones marked *on the panel* are
 the bundled ten) and the ones people have shared. Each tile shows what the
 formula says of itself: its name, its line about it, its controls and
-whether it can be a look. **Add to my panel** saves it on your panel
-(see [Add to my panel](#add-to-my-panel)); **Open** shows it on its own
-page, with its sliders and code; **Remix** opens it in the demo's editor.
+whether it can be a look. **Open on my panel** opens it in your panel's
+editor (see [Open on my panel](#open-on-my-panel)); **Open** opens it in
+the editor on the site, live: change it and watch, with its sliders, its
+errors and the cheat sheet.
 
-To add yours, open its share link and press **Submit to the gallery**: give
+To add yours, press **Submit to the gallery…** in the editor: give
 it a name and a line about it (they become the formula's own `name` and
 `about` lines), your name or GitHub handle and a licence (CC0, anyone may
 use it; or CC BY 4.0, with credit), then **Open on GitHub**. Its sliders
