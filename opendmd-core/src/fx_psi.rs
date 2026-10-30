@@ -204,6 +204,14 @@ pub struct Governor {
     /// Frames left out of the mean: the first after an open or a live
     /// edit runs from a cold flash cache (the compiler just ran).
     skip: u8,
+    /// Racing the beam: late raced frames in the current window of
+    /// [`Governor::LATE_WINDOW`] (and the frames seen in it); over
+    /// [`Governor::LATE_MAX`] there, every 2nd refresh at least (`floor`)
+    /// for [`Governor::LATE_HOLD`] frames, then tried again.
+    late: u16,
+    seen: u16,
+    floor: u8,
+    floor_left: u16,
 }
 
 impl Governor {
@@ -238,6 +246,7 @@ impl Governor {
             calm: 0,
             avg_us: est_us,
             skip: Self::SKIP,
+            ..Governor::default()
         };
         while g.level < Self::MAX_LEVEL && est_us > Self::budget_us(grid << g.level) {
             g.level += 1;
@@ -334,7 +343,40 @@ impl Governor {
 
     /// The frames (refreshes) a raced picture is held for.
     pub fn beam_frames(&self, unit: u32) -> u32 {
-        unit << self.level
+        unit << self.level.max(self.floor)
+    }
+
+    /// Raced frames in a window (~8 s at 125 Hz).
+    pub const LATE_WINDOW: u16 = 1024;
+    /// More late frames than this in a window (over 0.1 %) …
+    pub const LATE_MAX: u16 = 1;
+    /// … hold every 2nd refresh for this many frames (~65 s), then try
+    /// every refresh again. (Held for two, a start too late for its window
+    /// waits for the next refresh instead: none are late.)
+    pub const LATE_HOLD: u16 = 4096;
+
+    /// A raced frame was (`late`) or wasn't late; `true` when that just
+    /// moved the formula to every 2nd refresh.
+    pub fn note_late(&mut self, late: bool) -> bool {
+        if self.floor > 0 {
+            self.floor_left = self.floor_left.saturating_sub(1);
+            if self.floor_left == 0 {
+                self.floor = 0;
+            }
+            return false;
+        }
+        self.late += u16::from(late);
+        self.seen += 1;
+        if self.late > Self::LATE_MAX {
+            (self.late, self.seen) = (0, 0);
+            self.floor = 1;
+            self.floor_left = Self::LATE_HOLD;
+            return self.level == 0;
+        }
+        if self.seen >= Self::LATE_WINDOW {
+            (self.late, self.seen) = (0, 0);
+        }
+        false
     }
 }
 
@@ -432,15 +474,18 @@ pub struct BeamHooks {
     pub begin: fn() -> Option<u32>,
     /// Its rows start (after the frame's steps and draw stage:
     /// [`psi::BEAM_START`]), the frame expected to take `est_us` (render
-    /// and writes): plans the race from here (and may wait for its window).
-    pub start: fn(est_us: u32),
+    /// and writes) and held for `frames` refreshes: plans the race from
+    /// here (and may wait for its window; with two refreshes or more, a
+    /// start too late for its window waits for the next refresh).
+    pub start: fn(est_us: u32, frames: u32),
     /// Pair `p` (rows `p`, `p + 16`) is drawn in `bytes` (the canvas, packed
     /// RGB888) and `dirty` marks what of it to write.
     pub pair: fn(p: usize, bytes: &[u8], dirty: &crate::canvas::DirtyMap),
-    /// The frame is written: `(err, waited)` — how late (+) or early (−)
-    /// its start was for its window (µs; the next delay corrects it), and
-    /// the µs it waited for the scan (left out of the governor's time).
-    pub end: fn() -> (i32, u32),
+    /// The frame is written: `(err, waited, late)` — how late (+) or early
+    /// (−) its start was for its window (µs; the next delay corrects it),
+    /// the µs it waited for the scan (left out of the governor's time), and
+    /// whether a pair was written past its window.
+    pub end: fn() -> (i32, u32, bool),
 }
 
 static BEAM: std::sync::Mutex<Option<BeamHooks>> = std::sync::Mutex::new(None);
@@ -1050,6 +1095,7 @@ impl PsiFx {
         let hooks = beam_hooks().filter(|_| self.racing);
         let cycle = hooks.and_then(|h| (h.begin)());
         let est = self.gov.avg_us();
+        let frames = self.gov.beam_frames(crate::scan::beam_frames(grid * 1000, cycle.unwrap_or(0)));
         let hooks = hooks.filter(|_| cycle.is_some());
         let t0 = match (hooks, clock) {
             (Some(_), Some(c)) => c(),
@@ -1095,7 +1141,7 @@ impl PsiFx {
                 let mut tell = |p: usize, out: &[u8], a: u32, b: u32| {
                     const HALF: usize = psi::H / 2;
                     if p == psi::BEAM_START {
-                        return (h.start)(est);
+                        return (h.start)(est, frames);
                     }
                     marked += if compare {
                         mark_pair(dirty, p, a, b)
@@ -1253,8 +1299,14 @@ impl PsiFx {
     /// the delay to the next, locked onto the scan
     /// ([`crate::scan::beam_delay_us`]).
     fn beam_end(&mut self, h: BeamHooks, cycle: u32, clock: Option<Clock>, t0: u32, grid: u32) -> Duration {
-        let (err, waited) = (h.end)();
+        let (err, waited, late) = (h.end)();
         let unit = crate::scan::beam_frames(grid * 1000, cycle);
+        if self.gov.note_late(late) {
+            log::info!(
+                "formula: over 1 in 1,000 raced frames late -> every {} refreshes for a while",
+                self.gov.beam_frames(unit)
+            );
+        }
         if let Some(c) = clock {
             let us = c().wrapping_sub(t0).saturating_sub(waited);
             if self.gov.observe_beam(us, unit * cycle, cycle) {
@@ -2417,6 +2469,27 @@ mod tests {
         assert_eq!(d.count(), 256 + 8);
     }
 
+    /// Racing the beam: over one late frame in a window of 1,024, every 2nd
+    /// refresh for 4,096 frames, then every refresh again.
+    #[test]
+    fn late_raced_frames_hold_every_second_refresh_for_a_while() {
+        let mut g = Governor::new(1_000, 10);
+        assert_eq!(g.beam_frames(1), 1);
+        // One late frame a window: fine.
+        for k in 0..3 * Governor::LATE_WINDOW {
+            assert!(!g.note_late(k % Governor::LATE_WINDOW == 7));
+        }
+        assert_eq!(g.beam_frames(1), 1);
+        assert!(!g.note_late(true));
+        assert!(g.note_late(true), "two in a window");
+        assert_eq!(g.beam_frames(1), 2);
+        for _ in 0..Governor::LATE_HOLD {
+            assert_eq!(g.beam_frames(1), 2);
+            g.note_late(false);
+        }
+        assert_eq!(g.beam_frames(1), 1, "tried again");
+    }
+
     thread_local! {
         static PANEL: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0; psi::W * psi::H * 3]);
         static TOLD: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -2435,7 +2508,7 @@ mod tests {
         Some(7_980)
     }
 
-    fn beam_start(_est: u32) {
+    fn beam_start(_est: u32, _frames: u32) {
         TOLD.with(|t| assert!(t.borrow().is_empty(), "the start after a pair"));
         STARTS.with(|n| n.set(n.get() + 1));
     }
@@ -2454,8 +2527,8 @@ mod tests {
         });
     }
 
-    fn beam_end() -> (i32, u32) {
-        (0, 0)
+    fn beam_end() -> (i32, u32, bool) {
+        (0, 0, false)
     }
 
     /// Racing the beam: from the second frame each pair is written as it

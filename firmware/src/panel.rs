@@ -1138,6 +1138,8 @@ mod beam {
     static WRITE_TOTAL_US: AtomicU32 = AtomicU32::new(0);
     static PAIR_TOTAL_US: AtomicU32 = AtomicU32::new(0);
     static UNREAD: AtomicU32 = AtomicU32::new(0);
+    static LATE_STARTS: AtomicU32 = AtomicU32::new(0);
+    static RETARGETS: AtomicU32 = AtomicU32::new(0);
     static ON: AtomicU32 = AtomicU32::new(0);
     static FIRST_US: AtomicU32 = AtomicU32::new(0);
     static LAST_US: AtomicU32 = AtomicU32::new(0);
@@ -1161,7 +1163,9 @@ mod beam {
     /// "wait_us","write_us","pair_us","first_us","last_us","unread"}`:
     /// raced frames since boot, those with a pair written past its window
     /// (`late_pairs` in all: each shows a refresh late, a seam for that
-    /// refresh), the frames that waited for their window as their rows
+    /// refresh), the starts past their window's late edge and of them the
+    /// ones moved to the next refresh instead (a frame held for two or
+    /// more), the frames that waited for their window as their rows
     /// started and
     /// the pairs that waited for theirs (µs in all, wrapping), the µs spent
     /// writing pairs and in the pair hook in all (writes included;
@@ -1170,11 +1174,13 @@ mod beam {
     /// scan could not be read.
     pub(super) fn json() -> String {
         format!(
-            r#"{{"on":{},"frames":{},"late_frames":{},"late_pairs":{},"waits":{},"pair_waits":{},"wait_us":{},"write_us":{},"pair_us":{},"first_us":{},"last_us":{},"unread":{}}}"#,
+            r#"{{"on":{},"frames":{},"late_frames":{},"late_pairs":{},"late_starts":{},"retargets":{},"waits":{},"pair_waits":{},"wait_us":{},"write_us":{},"pair_us":{},"first_us":{},"last_us":{},"unread":{}}}"#,
             ON.load(Relaxed) != 0,
             FRAMES.load(Relaxed),
             LATE_FRAMES.load(Relaxed),
             LATE_PAIRS.load(Relaxed),
+            LATE_STARTS.load(Relaxed),
+            RETARGETS.load(Relaxed),
             WAITS.load(Relaxed),
             PAIR_WAITS.load(Relaxed),
             WAIT_US.load(Relaxed),
@@ -1222,7 +1228,7 @@ mod beam {
     /// `fx_psi::BeamHooks::start`: the rows start (the frame's steps and
     /// draw stage done): the race planned from here, so a heavy draw stage
     /// (Starfield's 192 lines) is not the first pair's time.
-    pub(super) fn start(est_us: u32) {
+    pub(super) fn start(est_us: u32, frames: u32) {
         let st = state();
         let Some(now) = read_scan() else {
             UNREAD.fetch_add(1, Relaxed);
@@ -1233,11 +1239,18 @@ mod beam {
         // least its pairs' writes).
         let last = if st.last_us > 0 { st.last_us } else { est_us.max(PAIRS as u32 * write) };
         let first = if st.first_us > 0 { st.first_us } else { last / PAIRS as u32 };
-        let plan = Beam::plan(st.row_us, now, first, last, write, MARGIN_US);
+        let plan = Beam::plan(st.row_us, now, first, last, write, MARGIN_US, frames >= 2);
+        if plan.late_by > 0 {
+            LATE_STARTS.fetch_add(1, Relaxed);
+        }
         let mut waited = 0;
         if plan.wait_us > 0 {
             waited = wait_for(plan.wait_us);
-            WAITS.fetch_add(1, Relaxed);
+            if plan.retarget {
+                RETARGETS.fetch_add(1, Relaxed);
+            } else {
+                WAITS.fetch_add(1, Relaxed);
+            }
             WAIT_US.fetch_add(waited, Relaxed);
         }
         st.frame = Some(Frame {
@@ -1303,10 +1316,10 @@ mod beam {
     }
 
     /// `fx_psi::BeamHooks::end`.
-    pub(super) fn end() -> (i32, u32) {
+    pub(super) fn end() -> (i32, u32, bool) {
         let st = state();
         let Some(f) = st.frame.take() else {
-            return (0, 0);
+            return (0, 0, false);
         };
         if f.last > 0 {
             st.first_us = mean(st.first_us, f.first);
@@ -1316,6 +1329,6 @@ mod beam {
         }
         FRAMES.fetch_add(1, Relaxed);
         LATE_FRAMES.fetch_add(u32::from(f.late), Relaxed);
-        (f.err, f.waited)
+        (f.err, f.waited, f.late)
     }
 }
