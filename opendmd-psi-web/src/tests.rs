@@ -352,8 +352,9 @@ fn every_example_as_a_look() {
     // (Tunnel: ~4.6 ms as an effect with its still cache, ~14.4 without
     // one, and a look never has one. Time gate: ~6.1 ms and ~15.6. Storm
     // front: its slow clouds are drawn every frame in a look, two noises a
-    // pixel.)
-    const TOO_HEAVY: &[&str] = &["Storm front", "Time gate", "Tunnel"];
+    // pixel. Wormhole run: its slow sky (every fourteenth frame as an
+    // effect, ~4.8 ms) is drawn every frame in a look.)
+    const TOO_HEAVY: &[&str] = &["Storm front", "Time gate", "Tunnel", "Wormhole run"];
     let mut heavy = Vec::new();
     let mut chosen = Vec::new();
     for e in crate::examples() {
@@ -526,9 +527,9 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Neon city", 0, 0xdd8d76d95e063f16),
     ("Neon city", 1730, 0x55d20ef119e3d3cc),
     ("Neon city", 6420, 0x8524e6429d345e87),
-    ("Wormhole run", 0, 0x2071af4450a60587),
-    ("Wormhole run", 1730, 0xa5400da6ff221e59),
-    ("Wormhole run", 6420, 0xe43faaf20b1d4d02),
+    ("Wormhole run", 0, 0x961dfc0db4e4c9b2),
+    ("Wormhole run", 1730, 0x2798db250a6d531f),
+    ("Wormhole run", 6420, 0xfa2af8fffc57f46d),
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
