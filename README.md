@@ -14,7 +14,6 @@
   &nbsp;·&nbsp; <a href="https://opendmd.dev/">Documentation</a>
 </p>
 
-<!-- site:hero -->
 
 OpenDMD is open-source firmware and a web app for the **DMDoS display**: a 128x32 LED
 dot-matrix display, two chained 64x32 HUB75 panels driven by an ESP32, that plays animated GIFs
@@ -31,7 +30,6 @@ it is, and adds a web app to manage it.
   (for developers: [build it from source](docs/simulator.md); everyone else can try the
   [web demo](https://opendmd.dev/demo/)).
 
-<!-- site:tiles -->
 
 ## OpenDMD and DMDoS
 
