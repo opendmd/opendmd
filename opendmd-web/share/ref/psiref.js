@@ -3,7 +3,8 @@
 // - the examples: every `code.psi-ex` in the generated tables (one a
 //   cheat-sheet row, opendmd-psi/src/reference.rs) and every ```psi block
 //   of the Cookbook, drawn as the panel draws them by the demo's Psi
-//   (pkg-psi), each with an "Open in editor" link to the demo's editor.
+//   (pkg-psi, through ../../psiled.js, as the home page's panel is), each
+//   with an "Open in editor" link to the demo's editor.
 //   Nothing loads until the first one scrolls near: then the wasm, once,
 //   and only the examples on screen are drawn (one frame for a still one,
 //   or for every one when the reader prefers less motion);
@@ -14,10 +15,10 @@
 // demo's files.
 
 import { marks, sample } from '../../demo/js/psikit.js';
+import { psi, use, frameAt, panel, paint } from '../../psiled.js';
 
 const main = document.querySelector('main');
 const SITE = new URL('../../', location.href).href;
-const UNSET = -2147483648;
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
 
@@ -60,7 +61,7 @@ for (const c of main.querySelectorAll('pre code.language-psi')) {
 // --- drawing: only what is on screen ----------------------------------------------
 
 const near = new Set();
-let P = null, mem = null, loading = null, t0 = 0, raf = 0;
+let L = null, loading = null, t0 = 0, raf = 0;
 const seen = new IntersectionObserver((es) => {
   for (const e of es) {
     const x = examples.find((x) => x.box === e.target);
@@ -77,14 +78,11 @@ const editor = (src, name) => SITE + 'demo/#' + new URLSearchParams(name ? { for
 
 const examples = [];
 function live(src, name, at, big) {
-  const cv = el('canvas', { width: 128, height: 32 });
-  cv.setAttribute('role', 'img');
-  cv.setAttribute('aria-label', 'What this formula draws');
+  const x = panel('What this formula draws');
   const box = el('div', { className: 'psi-live' + (big ? ' big' : '') },
-    el('span', { className: 'led' }, cv),
-    el('a', { className: 'psi-open', href: editor(src, name) }, 'Open in editor'));
+    x.led, el('a', { className: 'psi-open', href: editor(src, name) }, 'Open in editor'));
   at(box);
-  const x = { src, cv, box, ctx: cv.getContext('2d'), img: null, info: null, drawn: false };
+  Object.assign(x, { src, box, info: null, drawn: false });
   examples.push(x);
   seen.observe(box);
 }
@@ -103,15 +101,14 @@ for (const pre of cookEls.filter((e) => e.tagName === 'PRE')) {
 
 function start() {
   if (!loading) {
-    loading = import('../../demo/pkg-psi/opendmd_psi_web.js').then(async (m) => {
-      mem = (await m.default()).memory;
-      P = m;
-      P.setSeed(20000);
+    loading = psi().then((l) => {
+      L = l;
+      L.P.setSeed(20000);
       t0 = performance.now();
       main.dataset.psiLive = 'ready';
     }).catch((e) => { main.dataset.psiLive = 'failed'; console.warn('Psi did not load:', e); });
   }
-  loading.then(() => { if (P && !raf) raf = requestAnimationFrame(tick); });
+  loading.then(() => { if (L && !raf) raf = requestAnimationFrame(tick); });
 }
 
 let last = 0;
@@ -130,30 +127,16 @@ function tick(now) {
   if ([...near].some((x) => !x.drawn || !(still || x.still))) raf = requestAnimationFrame(tick);
 }
 
-let compiled = null;
 function draw(x, el_ms, d) {
-  if (compiled !== x.src) {
-    if (!P.compile(x.src)) { x.box.replaceChildren(el('p', { className: 'cap bad' }, P.error())); x.drawn = x.still = true; return; }
-    compiled = x.src;
-    if (!x.info) {
-      x.info = P.info();
-      // Neither the time nor the clock: one frame is all of it.
-      x.still = !(x.info[5] & 24);
-    }
+  const { P } = L;
+  if (!use(P, x.src)) { x.box.replaceChildren(el('p', { className: 'cap bad' }, P.error())); x.drawn = x.still = true; return; }
+  if (!x.info) {
+    x.info = P.info();
+    // Neither the time nor the clock: one frame is all of it.
+    x.still = !(x.info[5] & 24);
   }
-  const i = x.info;
-  const D = i[10] || 20, n = i[4] ? Math.max(1, Math.floor(i[4] / D)) : Infinity;
-  const ms = (Math.floor(el_ms / D) % n) * D;
-  const over = !!(i[5] & 32);
-  if (over) new Uint8Array(mem.buffer, P.under(), 12288).set(sample());
-  P[over ? 'frameOver' : 'frame'](ms, d.getHours(), d.getMinutes(), d.getSeconds(), UNSET, UNSET, UNSET);
-  const rgb = new Uint8Array(mem.buffer, P.pixels(), 12288);
-  x.img ||= x.ctx.createImageData(128, 32);
-  const o = x.img.data;
-  for (let k = 0, j = 0; k < 4096; k++, j += 3) { o[k * 4] = rgb[j]; o[k * 4 + 1] = rgb[j + 1]; o[k * 4 + 2] = rgb[j + 2]; o[k * 4 + 3] = 255; }
-  x.ctx.putImageData(x.img, 0, 0);
+  paint(L, x.info, x, frameAt(x.info, el_ms), x.info[5] & 32 ? sample() : null, d);
   x.drawn = true;
-  x.cv.dataset.frames = -~x.cv.dataset.frames;
 }
 
 // --- search and the cheat sheet ----------------------------------------------------

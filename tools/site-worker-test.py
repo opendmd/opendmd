@@ -40,6 +40,13 @@ runs against the same server (--base).
 - every request names itself in User-Agent: Cloudflare's Browser Integrity
   Check refuses urllib's default one (error 1010);
 - _headers, _redirects and .assetsignore not served;
+- in Chromium, the home page's live panels (the hero's Endless road and
+  the Formulas door's Matrix): each poster first, then a canvas drawing lit,
+  changing pixels with no CSP violation or console error; with reduced
+  motion the stills stay and no wasm loads; with the wasm blocked the
+  stills stay; the gallery's tiles: hovering one plays it (changing
+  pixels), leaving brings its thumbnail back, keyboard focus plays one
+  too, one at a time; screenshots in target/site-worker-test/ (--shots);
 - in Chromium, no CSP violation on the docs, the install page (ESP Web
   Tools from jsDelivr), the gallery, the licences, the 404 page, the demo
   and /f/ with a Formula;
@@ -480,11 +487,12 @@ def redirects(base: str, site: Path) -> None:
 def headers(base: str, site: Path) -> None:
     ver = json.loads((site / "install/release.json").read_text())["version"]
     want = {  # path: (CSP must contain, must not contain, CORS, Cache-Control)
-        "/": ("script-src 'self';", "wasm", None, "public, max-age=600"),
+        # The home page's live panels and the gallery's tiles on hover: Psi's wasm, nothing more.
+        "/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, "public, max-age=600"),
         "/guide/web-app": ("script-src 'self';", "wasm", None, "public, max-age=600"),
         "/guide/": ("script-src 'self';", "wasm", None, "public, max-age=600"),
         # (60 s once the gallery store serves it; 600 s as built)
-        "/formulas/": ("script-src 'self';", "jsdelivr", None, ("public, max-age=60", "public, max-age=600")),
+        "/formulas/": ("script-src 'self' 'wasm-unsafe-eval';", "connect-src", None, ("public, max-age=60", "public, max-age=600")),
         "/install/": ("script-src 'self' https://cdn.jsdelivr.net", "wasm", "*", "public, max-age=600"),
         "/install/release.json": (None, None, "*", "public, max-age=60"),
         f"/install/firmware/opendmd-{ver}-4mb.odfw": (None, None, "*", "public, max-age=31536000, immutable"),
@@ -556,6 +564,127 @@ def csp_in_browser(base: str, short_id: str) -> None:
             seen += page.evaluate("window.__csp || []")
             check(not seen, f"CSP in Chromium: {path.split('#')[0]} {'clean' if not seen else seen[:3]}")
             ctx.close()
+        browser.close()
+
+
+PIXELS = """sel => { const c = document.querySelector(sel); if (!c) return null;
+  const d = c.getContext('2d').getImageData(0, 0, 128, 32).data; let lit = 0, h = 0;
+  for (let i = 0; i < d.length; i += 4) { if (d[i] + d[i + 1] + d[i + 2] > 30) lit++; h = (h * 31 + d[i] + d[i + 1] * 7 + d[i + 2] * 13) | 0; }
+  return { lit, h, frames: +(c.dataset.frames || 0) }; }"""
+
+
+def live_panels(base: str, shots: Path) -> None:
+    """The home page's live panels and the gallery's tiles on hover (psiled.js)."""
+    from playwright.sync_api import sync_playwright
+    shots.mkdir(parents=True, exist_ok=True)
+
+    def watch(page) -> tuple[list[str], list[str]]:
+        seen: list[str] = []
+        psi: list[str] = []
+        page.add_init_script("""document.addEventListener('securitypolicyviolation', e =>
+            (window.__csp = window.__csp || []).push(e.violatedDirective + ' ' + e.blockedURI))""")
+        # (A request the test blocks is logged by Chromium itself: "Failed to load resource";
+        # the test's own reading of the canvas, PIXELS, draws Chromium's getImageData hint.)
+        page.on("console", lambda m: m.type in ("error", "warning") and "Failed to load resource" not in m.text
+                and not m.text.startswith("Canvas2D: Multiple readback") and seen.append(m.text[:160]))
+        page.on("pageerror", lambda e: seen.append(str(e)[:160]))
+        page.on("request", lambda r: "/pkg-psi/" in r.url and psi.append(r.url))
+        return seen, psi
+
+    def poll(page, expr: str, arg=None, timeout: float = 20000):
+        for _ in range(int(timeout / 100)):
+            v = page.evaluate(expr, arg)
+            if v:
+                return v
+            page.wait_for_timeout(100)
+        return None
+
+    hero, door = ".hero-panel [data-live=on] canvas", ".door[data-live=on] canvas"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        # The home page, live.
+        ctx = browser.new_context(viewport={"width": 1280, "height": 1100})
+        page = ctx.new_page()
+        seen, psi = watch(page)
+        page.goto(base + "/", wait_until="domcontentloaded")
+        poster = page.evaluate("!!document.querySelector('.hero-panel .led img') && !document.querySelector('.hero-panel canvas')")
+        a = poll(page, f"() => {{ const f = ({PIXELS}); const x = f('{hero}'); return x && x.frames >= 30 && x.lit > 200 && x; }}")
+        page.wait_for_timeout(300)
+        b = page.evaluate(PIXELS, hero)
+        # Psi's files only once the page had loaded (their resource timings after its load event).
+        early = page.evaluate("""() => { const load = performance.getEntriesByType('navigation')[0].loadEventStart;
+            return performance.getEntriesByType('resource').filter(e => e.name.includes('/pkg-psi/') && e.startTime < load).length; }""")
+        check(poster and psi and early == 0, f"home: the hero's still first, Psi loaded only after the page ({len(psi)} requests, {early} early)")
+        check(bool(a and b and b["h"] != a["h"] and b["frames"] > a["frames"]),
+              f"home: the hero plays Endless road live (lit {a and a['lit']} of 4096, frames {a and a['frames']} -> {b and b['frames']})")
+        d1 = poll(page, f"() => {{ const f = ({PIXELS}); const x = f('{door}'); return x && x.frames >= 10 && x.lit > 20 && x; }}")
+        page.wait_for_timeout(300)
+        d2 = page.evaluate(PIXELS, door)
+        check(bool(d1 and d2 and d1["h"] != d2["h"]), f"home: the Formulas door plays Matrix live ({d1 and d1['lit']} lit)")
+        page.locator(".hero-panel").screenshot(path=str(shots / "home-hero-live.png"))
+        page.locator(".doors").screenshot(path=str(shots / "home-get-started.png"))
+        # Off-screen: the hero stops drawing.
+        page.evaluate("scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(400)
+        f1 = page.evaluate(PIXELS, hero)["frames"]
+        page.wait_for_timeout(500)
+        f2 = page.evaluate(PIXELS, hero)["frames"]
+        check(f1 == f2, f"home: the hero pauses off-screen ({f1} -> {f2} frames)")
+        seen += page.evaluate("window.__csp || []")
+        check(not seen, f"home: no CSP violation or console message {seen[:3]}")
+        ctx.close()
+        # Reduced motion: the stills, no wasm.
+        ctx = browser.new_context(reduced_motion="reduce")
+        page = ctx.new_page()
+        seen, psi = watch(page)
+        page.goto(base + "/", wait_until="load")
+        page.wait_for_timeout(2500)
+        still = page.evaluate("[!!document.querySelector('.hero-panel .led img'), document.querySelectorAll('.hero-panel canvas, .door canvas').length]")
+        check(still == [True, 0] and not psi and not seen, f"home, reduced motion: the stills stay, no wasm ({len(psi)} requests) {seen[:2]}")
+        ctx.close()
+        # The wasm out of reach: the stills stay, quietly.
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        seen, psi = watch(page)
+        page.route("**/pkg-psi/**", lambda r: r.abort())
+        page.goto(base + "/", wait_until="load")
+        page.wait_for_timeout(3000)
+        still = page.evaluate("[!!document.querySelector('.hero-panel .led img'), document.querySelectorAll('.hero-panel canvas').length]")
+        seen += page.evaluate("window.__csp || []")
+        check(still == [True, 0] and psi and not seen, f"home, no wasm: the still stays, nothing on the console {seen[:2]}")
+        ctx.close()
+        # The gallery: a tile plays while hovered or focused.
+        ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+        page = ctx.new_page()
+        seen, psi = watch(page)
+        page.goto(base + "/formulas/", wait_until="load")
+        page.wait_for_timeout(1500)
+        check(not psi, f"gallery: no wasm before a hover ({len(psi)} requests)")
+        tile = page.locator("li.ftile:has(a.fpic[href*='bundled=matrix'])")
+        tile.scroll_into_view_if_needed()
+        tile.hover()
+        live = "li.ftile[data-live=on] canvas"
+        a = poll(page, f"() => {{ const f = ({PIXELS}); const x = f('{live}'); return x && x.frames >= 10 && x.lit > 20 && x; }}")
+        page.wait_for_timeout(300)
+        b = page.evaluate(PIXELS, live)
+        tile.screenshot(path=str(shots / "gallery-hover.png"))
+        check(bool(a and b and a["h"] != b["h"]) and page.locator("li.ftile canvas").count() == 1,
+              f"gallery: hovering Matrix's tile plays it ({a and a['frames']} -> {b and b['frames']} frames, one canvas)")
+        page.mouse.move(2, 2)
+        page.wait_for_timeout(200)
+        back = page.evaluate("[document.querySelectorAll('li.ftile canvas').length, document.querySelector(\"li.ftile:has(a.fpic[href*='bundled=matrix']) .led img\").closest('.led').hidden]")
+        check(back == [0, False], f"gallery: leaving it brings the thumbnail back {back}")
+        other = page.locator("li.ftile:has(a.fpic[href*='bundled=starfield'])")
+        other.locator("a.cta.alt").first.focus()
+        f = poll(page, f"() => {{ const f = ({PIXELS}); const x = f('{live}'); return x && x.frames >= 5 && x; }}")
+        check(bool(f) and page.locator("li.ftile canvas").count() == 1 and other.get_attribute("data-live") == "on",
+              "gallery: keyboard focus in Starfield's tile plays it, one at a time")
+        page.evaluate("document.activeElement.blur()")
+        page.wait_for_timeout(200)
+        check(page.locator("li.ftile canvas").count() == 0, "gallery: focus gone, the thumbnail back")
+        seen += page.evaluate("window.__csp || []")
+        check(not seen, f"gallery: no CSP violation or console message {seen[:3]}")
+        ctx.close()
         browser.close()
 
 
@@ -741,7 +870,7 @@ def compare_store(base: str, site: Path, tool: Path, shown: Path, refused_want: 
     check(st == 200 and h.get("X-Gallery") == "store" and got == want and got[0] is not None,
           f"{what}: /formulas/ from the store (X-Gallery {h.get('X-Gallery')}), its lists as gallery_page.py builds them "
           f"({'same' if got == want else 'differ'})")
-    check(h.get("Cache-Control") == "public, max-age=60" and len(csp_of(h)) == 1 and "script-src 'self';" in csp_of(h)[0],
+    check(h.get("Cache-Control") == "public, max-age=60" and len(csp_of(h)) == 1 and "script-src 'self' 'wasm-unsafe-eval';" in csp_of(h)[0],
           f"{what}: /formulas/ cached 60 s, the gallery's CSP ({h.get('Cache-Control')})")
     pics = []
     for slug in sorted(set(good) & set(stored)):
@@ -936,6 +1065,8 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=0, help="cf dev's port (default: a free one)")
     ap.add_argument("--smoke", action="store_true", help="then run tools/site-smoke.py --base against it")
     ap.add_argument("--dist", type=Path, default=ROOT / "dist")
+    ap.add_argument("--shots", type=Path, default=ROOT / "target/site-worker-test",
+                    help="where the live panels' screenshots go")
     ap.add_argument("--art", type=Path, default=ROOT / "target/site-art")
     ap.add_argument("--gallery-tool", type=Path, default=ROOT / "opendmd-gallery/target/release/opendmd-gallery",
                     help="opendmd-gallery, built (make gallery-tool): the store is compared with it")
@@ -974,6 +1105,8 @@ def main() -> int:
         headers(base, a.site)
         print("CSP in the browser")
         csp_in_browser(base, sh.id_a)
+        print("live Formulas: the home page's panels, the gallery's tiles")
+        live_panels(base, a.shots)
         print("the rate limit")
         rate_limit(base, sh)
         print(f"site-worker-test: {'ok' if not failures else f'{len(failures)} failures'}")

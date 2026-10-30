@@ -9,7 +9,8 @@
 
 - /            the home page (site/pages/home.html: what OpenDMD is, the
                panel and its art, and the way to Install, the guide and the
-               Formula gallery); the README stays GitHub's front page
+               Formula gallery; the panel plays a bundled Formula live,
+               home.js); the README stays GitHub's front page
 - /install/    the browser installer (docs/guide/install.md with ESP Web
                Tools' button for the DevKit; the 8 MB build's (8 MB) is
                hidden for now, see INSTALL_BOARDS) and, under
@@ -214,6 +215,14 @@ INSTALL_PAGE = "install/index.html"
 # imports the demo's Psi, so its CSP allows wasm: CSP["psi"]).
 PSI_PAGE = "dev/psi/index.html"
 PSI_HEAD = '<script type="module" src="psiref.js"></script>'
+# The home page's panel plays a bundled Formula live once the page has
+# loaded (opendmd-web/share/ref/home.js, on psiled.js, the reference's
+# drawing; both copied to the root): the demo's Psi again, so CSP["home"].
+HOME_HEAD = '<script type="module" src="home.js"></script>'
+ROOT_SCRIPTS = ("psiled.js", "home.js")  # from opendmd-web/share/ref/
+# The gallery's tiles play on hover or focus (ftiles.js, beside the page,
+# on psiled.js): CSP["home"] there too.
+GALLERY_HEAD = '<script type="module" src="ftiles.js"></script>'
 INSTALL_HEAD = ('<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/'
                 'install-button.js?module"></script>')
 # Every flash layout (the firmware's `variant`): the board, the words on its
@@ -299,8 +308,9 @@ Device › About › Open-source licences**.
 as `art-index/`); the pictures come from those collections when you search, and are never
 stored on this site.
 
-The demo's and this site's animations are recordings of OpenDMD's own Formulas, and the
-[Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites (CC0).
+The demo's and this site's animations are OpenDMD's own (its Formulas, recorded or playing
+live in your browser, and its start-up show) and the
+[Kenney Pixel Platformer](https://kenney.nl/assets/pixel-platformer) sprites and tiles (CC0).
 """
 
 # The pages' chrome and styles (see the docstring).
@@ -341,6 +351,9 @@ CSP = {
     # the docs' policy: no blob:, no connect-src beyond 'self' (the wasm is
     # fetched from the site itself), no inline script.
     "psi": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
+    # The home page and the gallery: their live Formulas run the demo's Psi,
+    # as the reference's examples do (the same policy).
+    "home": CSP_BASE.replace("script-src 'self'", "script-src 'self' 'wasm-unsafe-eval'"),
     # The demo: the web app's wasm, Create Art's sources (js/find.js) and the
     # update check (util.js SITE).
     "demo": CSP_BASE.replace("img-src 'self' data:", "img-src 'self' data: blob: https://blob.gifcities.org "
@@ -364,7 +377,7 @@ def headers_file() -> str:
     ]
     for p in CORS_PATHS:
         rules.append((p, ["Access-Control-Allow-Origin: *"]))
-    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/demo/*", "demo"), ("/dev/psi/*", "psi")):
+    for path, which in (("/install/*", "install"), ("/f/*", "f"), ("/demo/*", "demo"), ("/dev/psi/*", "psi"), ("/", "home"), ("/formulas/*", "home")):
         rules.append((path, ["! Content-Security-Policy", f"Content-Security-Policy: {CSP[which]}"]))
     for name in ("release.json", "beta.json"):
         rules.append((f"/install/{name}", ["! Cache-Control", f"Cache-Control: {CACHE_SHORT}"]))
@@ -550,6 +563,7 @@ def tiles(art: dict) -> str:
 # The home page (site/pages/home.html).
 HOME = "site/pages/home.html"
 HOME_IMAGES = re.compile(r'src="(docs/images/[\w.-]+)"')
+HOME_FORMULA = re.compile(r'data-formula="formulas/src/([\w.-]+\.psi)"')
 
 
 def home(art: dict, assets: set[str]) -> str:
@@ -566,6 +580,12 @@ def home(art: dict, assets: set[str]) -> str:
             raise SystemExit(f"{HOME}: no animation {name!r} in the site's art")
         return led("", items[name], alt=None if alt is None else "")
     text = re.sub(r"\{\{(tiles|led):?([\w-]*)(:)?\}\}", fill, text)
+    # The live panel's Formula: an example, bundled (the caption says it
+    # comes with OpenDMD).
+    for m in HOME_FORMULA.finditer(text):
+        psi = ROOT / "opendmd-web/formulas" / m.group(1)
+        if not psi.is_file() or "\n-- bundle" not in "\n" + psi.read_text(encoding="utf-8"):
+            raise SystemExit(f"{HOME}: data-formula {m.group(1)} is not a bundled Formula in opendmd-web/formulas/")
     for m in HOME_IMAGES.finditer(text):
         if not (ROOT / m.group(1)).is_file():
             raise SystemExit(f"{HOME}: no {m.group(1)}")
@@ -729,8 +749,9 @@ def write_gallery(out: Path, examples: Path, contrib: Path | None, tool: Path, w
         for p in sorted(examples.glob("*.psi")):
             shutil.copyfile(p, page_dir / "src" / p.name)
     body = gallery_page.build(page_dir, page_dir / "src", contrib, tool)
+    shutil.copyfile(ROOT / "opendmd-web/share/ref/ftiles.js", page_dir / "ftiles.js")
     (out / GALLERY_PAGE).write_text(render(
-        GALLERY_PAGE, "Formula gallery · OpenDMD", gallery_page.marked(body), wm, kind="gallery",
+        GALLERY_PAGE, "Formula gallery · OpenDMD", gallery_page.marked(body), wm, kind="gallery", head="\n" + GALLERY_HEAD,
         description="Formulas for the OpenDMD LED display: try one here, then add it to your display."), encoding="utf-8")
 
 
@@ -771,7 +792,7 @@ def write_doc(out: Path, src: str, page: str, info: dict, art: dict, assets: set
     body = after_h1(decorate(body), extra)
     dest = out / page
     dest.parent.mkdir(parents=True, exist_ok=True)
-    head = "\n" + INSTALL_HEAD if page == INSTALL_PAGE else "\n" + PSI_HEAD if page == PSI_PAGE else ""
+    head = "\n" + {INSTALL_PAGE: INSTALL_HEAD, PSI_PAGE: PSI_HEAD}.get(page, HOME_HEAD if src == HOME else "")
     dest.write_text(render(page, title, body, art["wordmark"], head=head, on=on,
                            kind="home" if src == HOME else "doc"), encoding="utf-8")
     return body
@@ -861,6 +882,8 @@ def main() -> None:
     # The Psi reference's script (the page itself is a doc, written below).
     (out / PSI_PAGE).parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(ROOT / "opendmd-web/share/ref/psiref.js", out / posixpath.dirname(PSI_PAGE) / "psiref.js")
+    for name in ROOT_SCRIPTS:
+        shutil.copyfile(ROOT / "opendmd-web/share/ref" / name, out / name)
     info = release(a.dist, out)
     write_art_index(out)
     (out / "art/strip").mkdir(parents=True)
