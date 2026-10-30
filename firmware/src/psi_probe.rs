@@ -69,7 +69,7 @@ fn road_variants() -> Vec<(&'static str, String)> {
     let rows = src.find("below=py<19").unwrap_or(0);
     let draw = src.find("draw{").unwrap_or(rows);
     let no_noise = |s: &str| s.replace("noise(rowDriven,5,0)", "height").replace("noise(rowDriven,0,0)", "heading");
-    let no_draw = |s: &str| format!("{}{}", &s[..draw], s[rows..].replace("ink*16", "0"));
+    let no_draw = |s: &str| format!("{}{}", &s[..draw], s[rows..].replace("ink(16)", "0"));
     // (The pick's first value is written in place: up to the road's arm,
     // `,\nroadInk-stripe`.)
     const PICK: &str = "pal(road,pick(";
@@ -935,6 +935,85 @@ fn roadfix_probe(root: &str, start: Instant, stack0: u32) {
     fx_psi::set_still_gate(Some(crate::still_gate));
     say!(info,
         "{DONE}: roadfix, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all; play @formula:endless-road now for the play lines",
+        stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
+    );
+    *REPORT.lock().unwrap() = None;
+}
+
+/// psi-ergo-1: only its rows. `false`: the full probe (or another
+/// `*_ONLY` mode).
+const ERGO_ONLY: bool = false;
+
+/// psi-ergo-1: the goldens (VM and kernels: `ink-levels` among them),
+/// Endless road as bundled (respelled: `ink(16)`, named palette entries,
+/// lines hidden by ink 0) directly (VM, kernel) and as an effect (JIT on,
+/// then off), and the VM's step rows for `ink(16)` against `ink*16`.
+#[cfg(feature = "jit")]
+fn ergo_probe(root: &str, start: Instant, stack0: u32) {
+    play::start(format!("{root}/{REPORT_NAME}"));
+    say!(info, "psi-probe: ergo: heap {} B free, largest block {} B, main stack {stack0} B unused",
+        heap(), crate::state::largest_free_block());
+    let mut out = vec![0u8; psi::W * psi::H * 3];
+    let (vo, vb) = vm_goldens(&mut out, false);
+    let (ko, kb) = jit2::goldens(&mut out);
+    say!(info,
+        "psi-probe: golden frames: {} match the host/wasm hashes, {} differ{}",
+        vo + ko, vb + kb, if vb + kb == 0 { " (bit-identical)" } else { "" }
+    );
+    fx_psi::set_still_gate(Some(crate::still_gate));
+    let t = fx_psi::tables();
+    let road = bundled_src("endless-road");
+    let mut prog = zeroed::<psi::Program>();
+    if compile(road, &mut prog, true, true).is_ok() {
+        let mut s = zeroed::<psi::Scratch<128>>();
+        s.reset();
+        let mut ink = psi::Ink::boxed();
+        let (v50, v90, _) = timed(|k| {
+            let i = inputs_at(&prog, k * 10);
+            psi::render_rows_ink::<128>(&prog, &mut s, Some(&mut ink), &i, &t, None, u32::MAX, &mut out);
+        });
+        let (k50, k90) = match psi::jit::emit(&prog) {
+            Ok(mut kn) => {
+                let (a, b, _) = timed(|k| {
+                    let i = inputs_at(&prog, k * 10);
+                    kn.render(&prog, &mut s, Some(&mut ink), None, &i, &t, None, u32::MAX, &mut out, None);
+                });
+                (a, b)
+            }
+            Err(_) => (0, 0),
+        };
+        say!(info, "psi-probe: ergo: Endless road direct: VM p50/p90 {v50}/{v90} us, kernel {k50}/{k90} us, est VM {} JIT {} us",
+            prog.esp32_us(), prog.esp32_us_jit());
+    }
+    drop(prog);
+    let mut canvas = Canvas::new();
+    jit2::effect("Endless road", road, "", &mut canvas);
+    fx_psi::set_still_gate(Some(crate::still_gate));
+    // The VM's frames of a canvas read three ways (16 lines of ink k/16).
+    const DRAW: &str = "draw { for k < 16 { line(k*8, 0, k*8 + 7, 31, k/16) } }\n";
+    let rows: [(&str, &str); 3] = [
+        ("gray(ink)", "gray(ink)"),
+        ("ink*16 picked", "pal(fire, pick(max(px > 200, ink*16), 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 0.9, 0.8, 0.7, 0.6, 0.5))"),
+        ("ink(16) picked", "pal(fire, pick(max(px > 200, ink(16)), 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 0.9, 0.8, 0.7, 0.6, 0.5))"),
+    ];
+    for (name, colour) in rows {
+        let src = format!("{DRAW}{colour}");
+        let mut prog = zeroed::<psi::Program>();
+        if let Err(e) = compile(&src, &mut prog, true, true) {
+            say!(error, "psi-probe: ergo row {name}: {e:?}");
+            continue;
+        }
+        let mut s = zeroed::<psi::Scratch<128>>();
+        s.reset();
+        let mut ink = psi::Ink::boxed();
+        let (p50, p90, _) = timed(|k| {
+            let i = inputs_at(&prog, k * 20);
+            psi::render_rows_ink::<128>(&prog, &mut s, Some(&mut ink), &i, &t, None, u32::MAX, &mut out);
+        });
+        say!(info, "psi-probe: ergo row {name}: VM frame p50/p90 {p50}/{p90} us, est {} us", prog.esp32_us());
+    }
+    say!(info,
+        "{DONE}: ergo, main stack {} B unused (was {stack0}), heap {} B free (largest {} B), {} ms in all; play @formula:endless-road now for the play lines",
         stack_unused(), heap(), crate::state::largest_free_block(), start.elapsed().as_millis()
     );
     *REPORT.lock().unwrap() = None;
@@ -1994,6 +2073,11 @@ pub fn run(root: &str) {
     }
     if CONSOLE_ONLY {
         console_probe(root, start, stack0);
+        return;
+    }
+    #[cfg(feature = "jit")]
+    if ERGO_ONLY {
+        ergo_probe(root, start, stack0);
         return;
     }
     #[cfg(feature = "jit")]
