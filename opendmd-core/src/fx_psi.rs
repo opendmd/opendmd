@@ -432,8 +432,26 @@ pub fn set_compiler(f: Compiler) {
     let _ = COMPILER.set(f);
 }
 
+// Tests: refuse the next N compiles on this thread with [`psi::NO_MEMORY`]
+// (the firmware's heap check, without a heap to make short).
+#[cfg(test)]
+thread_local! {
+    static REFUSE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Tests: the next `n` compiles on this thread are refused for the heap.
+#[cfg(test)]
+pub(crate) fn refuse_compiles(n: u32) {
+    REFUSE.with(|r| r.set(n));
+}
+
 /// Compile `src` into `prog` the installed way.
 pub fn compile_into(src: &str, prog: &mut psi::Program) -> Result<psi::Info, psi::Error> {
+    #[cfg(test)]
+    if REFUSE.with(|r| r.replace(r.get().saturating_sub(1)) > 0) {
+        prog.clear();
+        return Err(no_memory());
+    }
     match COMPILER.get() {
         Some(f) => f(src, prog),
         None => psi::compile_into(src, prog),
@@ -793,6 +811,13 @@ pub fn io_error(e: psi::Error) -> std::io::Error {
         std::io::ErrorKind::InvalidInput
     };
     std::io::Error::new(kind, e.msg)
+}
+
+/// Whether an open failed only for the heap ([`psi::NO_MEMORY`], as
+/// [`io_error`] makes it): it may open once the memory something else holds
+/// is let go (the Formula on screen, `Engine::retune`).
+pub fn is_no_memory(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::InvalidInput && e.to_string() == psi::NO_MEMORY
 }
 
 /// A zeroed `Box<T>`, or `None` when the heap has no block for it.

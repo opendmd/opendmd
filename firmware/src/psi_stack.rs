@@ -175,11 +175,13 @@ pub fn compile(src: &str, prog: &mut psi::Program) -> Result<psi::Info, psi::Err
         prog.clear();
         return Err(e);
     }
+    // No task (its stack is the heap's too): the same error, so a formula
+    // on screen is let go and the compile tried again (`Engine::retune`).
     run(|| psi::compile_into(src, prog)).unwrap_or_else(|| {
         Err(psi::Error {
             start: 0,
             end: 0,
-            msg: "the player is short of memory just now: try again in a moment".to_string(),
+            msg: psi::NO_MEMORY.to_string(),
         })
     })
 }
