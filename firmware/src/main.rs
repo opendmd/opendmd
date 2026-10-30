@@ -687,13 +687,16 @@ fn main() -> Result<()> {
                         // A Formula stays as long as `formula_keep` says
                         // (a one-off dwell: it keeps animating; a live edit
                         // keeps it kept).
-                        let keep = if opendmd_core::synth::is_formula(&path)
-                            || opendmd_core::synth::formula_file(&path).is_some()
-                        {
+                        let formula = opendmd_core::synth::is_formula(&path)
+                            || opendmd_core::synth::formula_file(&path).is_some();
+                        let keep = if formula {
                             settings.formula_keep
                         } else {
                             opendmd_core::FormulaKeep::Turn
                         };
+                        if formula {
+                            room_for_formula(engine.as_mut(), &mut canvas);
+                        }
                         let r = match retune(engine.as_mut(), &path, epoch.elapsed(), keep.dwell()) {
                             Some(r) => {
                                 // No new start (the ordinal stays), but
@@ -2446,6 +2449,18 @@ fn retune(
 #[cfg(not(feature = "psi"))]
 fn retune(_: Option<&mut Engine>, _: &str, _: Duration, _: Option<overrides::Override>) -> Option<Result<(), PlayError>> {
     None
+}
+
+/// Before a Formula sent with `/api/play` compiles: a transition still
+/// running holds its 24 KB through the compile, which a heavy Formula
+/// can't share (the rig, 664d0ed: Neon city sent within 400 ms of a skip,
+/// 48 KB free against the 59.6 KB its check asks). It ends now, the file
+/// underneath on display (`canvas`, its dirty map what the panel is owed);
+/// the Formula gets a transition of its own at its first frame.
+fn room_for_formula(engine: Option<&mut Engine>, canvas: &mut Canvas) {
+    if let Some(e) = engine.filter(|e| e.is_transitioning()) {
+        e.finish_transition(canvas);
+    }
 }
 
 /// A full push's time, roughly (µs): what an Idle frame of the formula

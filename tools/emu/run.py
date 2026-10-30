@@ -19,7 +19,8 @@ probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0 or a m
        that does not refuse Endless road, or a Formula by reference (a bundled one by
        name, the card's /formulas/ci-test.psi) that does not play, or a formula sent over
        Time gate with the heap short that is not played once Time gate goes (or, shorter
-       still, not refused with the playlist going on); prints EMU_PROBE_OK
+       still, not refused with the playlist going on), or a card Formula sent over a card
+       Formula (Neon city, Wormhole run) that is not played; prints EMU_PROBE_OK
        and the correctness lines.
 Either fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
@@ -62,7 +63,8 @@ GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes
 BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) by the check, (.*) by the compiler")
 REFS = re.compile(r"psi-probe: formulas by reference: by name (\w+), card file (\w+)")
 SWAP = re.compile(r"psi-probe: formula over formula: short beside Time gate: (.*); short without it: (.*); heap")
-PROBE_KEYS = re.compile(r"psi-probe: (bundled |short heap|formulas by reference|formula over formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
+SWAP_CARD = re.compile(r"psi-probe: card formula over card formula: (all played|NOT all played.*); heap")
+PROBE_KEYS = re.compile(r"psi-probe: (bundled |short heap|formulas by reference|(card )?formula over (card )?formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
 
 
 def main():
@@ -109,6 +111,7 @@ def main():
     bundled = None
     refs = None
     swap = None
+    swap_card = None
     differ_bad = []
     lines = []
     p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
@@ -159,6 +162,9 @@ def main():
                 m = SWAP.search(line)
                 if m:
                     swap = (line, m[1], m[2])
+                m = SWAP_CARD.search(line)
+                if m:
+                    swap_card = (line, m[1])
                 if "psi-probe:" in line:
                     for d in DIFFER.finditer(line):
                         if int(d[1]) > 0:
@@ -219,6 +225,12 @@ def main():
             die("the formula-over-formula line is missing")
         if swap[1] != "played" or swap[2] != "refused, the playlist on":
             die(f"formula over formula: {swap[0]}")
+        # A card Formula over a card Formula (the same file written anew, the
+        # same within a skip's transition, another): each played.
+        if not swap_card:
+            die("the card-formula-over-card-formula line is missing")
+        if swap_card[1] != "all played":
+            die(f"card formula over card formula: {swap_card[0]}")
         print("--- correctness lines:")
         for l in lines:
             if PROBE_KEYS.search(l):
