@@ -4561,7 +4561,7 @@ def formulas_combine_checks(browser, base: str, errors: list[str]) -> None:
     page.goto(base + "/#formulas")
     formula_editor(page, "loop 8\nuse matrix as p\nlayer { p(1 - x, y) }")
     src = page.input_value("#psi-src")
-    check("part p {\n  -- Matrix\n  name \"Matrix\"\n  about \"" in src and "\n  loop 8\n" in src and "use " not in src and page.get_attribute("#psi-ed", "data-err") is None
+    check("part p {\n  -- Matrix\n  name \"Matrix\"\n  about \"" in src and "\n  loop 30\n" in src and "use " not in src and page.get_attribute("#psi-ed", "data-err") is None
           and page.get_attribute("#psi-ed", "data-steps") is not None, f"formulas: use … as p pastes the example in as a part ({src[:60]!r})")
     page.fill("#psi-src", "\nr")
     page.focus("#psi-src")
