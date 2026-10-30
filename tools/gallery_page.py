@@ -189,9 +189,12 @@ def build(formulas: Path, examples: Path, contrib: Path | None, tool: Path) -> s
     community = "".join(tile(e, f"thumbs/{e['slug']}.png") for e in entries)
     ex = "".join(tile(e, f"examples/{e['slug']}.png") for e in seeds)
     how = (f'<a href="{REPO}/tree/main/gallery">how to add yours</a>')
-    return (f'<h1>Formula gallery</h1>\n<p class="lead">Formulas are a few lines of maths that draw on the display, every pixel '
-            f'at once. <strong>Add to my panel</strong> saves one on your display, ready to play, add to a playlist or use as '
-            f'the look; Open shows it here with its sliders and code; Remix opens it in the demo\'s editor. Made one you like? Its page has <strong>Submit to the gallery</strong>, or read {how}.</p>\n'
+    return (f'<h1>Formula gallery</h1>\n<p class="lead">Formulas are little animations and looks for your display, each '
+            f'drawn by a few lines of maths. Find one you like and press <strong>Add to my panel</strong>: it goes onto your '
+            f'display, ready to play, to put in a playlist, or to lay over your GIFs as the look.</p>\n'
+            f'<p><strong>Open</strong> plays it here, with its sliders and its code. <strong>Remix</strong> opens it in the '
+            f'demo\'s editor, so you can change it. Made one you like? Its page has <strong>Submit to the gallery</strong>, '
+            f'or read {how}.</p>\n'
             f'<h2 id="community">From the community</h2>\n'
             + listed("community", f'<ul class="ftiles">{community}</ul>\n' if community else EMPTY)
             + f'<h2 id="examples">Examples</h2>\n<p class="tiles-note">By OpenDMD (CC0). The ones marked <em>on the panel</em> come with '
