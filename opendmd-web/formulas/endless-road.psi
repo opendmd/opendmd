@@ -137,13 +137,14 @@ draw {
 }
 
 -- Each row looks ahead: below the horizon, how far (depth) and the bend
--- there; the hill there lifts or hides it; the road's half width there,
--- and a light or dark stripe (stripe: 0, or one colour on); how far this
--- pixel is from the road's middle
+-- there; the hill there lifts or hides it; the road's half width there
+-- (none from the horizon up, where it once left a flickering speck in the
+-- sky), and a light or dark stripe (stripe: 0, or one colour on); how far
+-- this pixel is from the road's middle
 below = py < 19
 depth = below * .1125 / (19.5 - py)
 rowDriven = driven + depth
-halfWidth = 50.7 - 2.6*(py - clamp((noise(rowDriven, 5, 0) - height - depth*slope) * depth * 26667, -6, 2))
+halfWidth = below*(50.7 - 2.6*(py - clamp((noise(rowDriven, 5, 0) - height - depth*slope) * depth * 26667, -6, 2)))
 stripe = (frac(39/max(halfWidth, 1.3) - t*-10) < .5) * -road.step
 offRoad = abs(px - (64 - (heading - noise(rowDriven, 0, 0))*2000))
 
