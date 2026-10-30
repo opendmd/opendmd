@@ -23,6 +23,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use opendmd_psi::errors::{self, ERRORS};
+use opendmd_psi::reference;
 use opendmd_psi::{compile, look};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -574,12 +575,19 @@ fn index() -> String {
         s += &format!("### {title} (E{h}xx)\n\n");
         for d in ds {
             let l = errors::label(d.code);
-            s += &format!(
-                "<h4 id=\"{l}\">{l} · {}</h4>\n\n> {}\n\n{}\n\n",
-                html(d.title),
-                md(d.sentence),
-                md(d.fix)
-            );
+            let internal = reference::INTERNAL.contains(&d.code);
+            let badge = if internal { " <span class=\"badge\">internal</span>" } else { "" };
+            s += &format!("<h4 id=\"{l}\">{l} · {}{badge}</h4>\n\n> {}\n\n", html(d.title), md(d.sentence));
+            if internal {
+                s += "**Internal:** a bug in Psi: please report it, with the formula. It is never the formula's fault.\n\n";
+            }
+            if let Some(h) = reference::help(d.code) {
+                s += &format!("{}\n\n", md(h.why));
+            }
+            s += &format!("{}\n\n", md(d.fix));
+            if let Some(h) = reference::help(d.code).filter(|h| !h.before.is_empty()) {
+                s += &format!("Before:\n\n```psi\n{}\n```\n\nAfter:\n\n```psi\n{}\n```\n\n", h.before, h.after);
+            }
         }
     }
     s
@@ -607,4 +615,54 @@ fn the_error_index_in_the_language_reference_is_current() {
         return;
     }
     panic!("the error index in docs/psi-spec.md is stale: PSI_BLESS=1 cargo test --features docs --test diagnostics");
+}
+
+// --- the web app's code table (js/psierr.js) ---------------------------------
+
+/// A JS string literal.
+fn js(s: &str) -> String {
+    let mut o = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' => o += "\\\\",
+            '"' => o += "\\\"",
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
+/// `C`: each code, the bytes of its fragments in all (what `code_of`
+/// weighs: UTF-8, as JS's lengths are not), its fragments.
+fn js_codes() -> String {
+    let mut s = String::from(
+        "// psi-errors: codes (generated from opendmd-psi/src/errors.rs: PSI_BLESS=1 cargo test --features docs --test diagnostics)\nconst C = [\n",
+    );
+    for (k, d) in ERRORS.iter().enumerate() {
+        let w: usize = d.matches.iter().map(|m| m.len()).sum();
+        let f: Vec<String> = d.matches.iter().map(|m| js(m)).collect();
+        let sep = if k + 1 == ERRORS.len() { "" } else { "," };
+        s += &format!("  [{}, {w}, {}]{sep}\n", d.code, f.join(", "));
+    }
+    s += "];\n// psi-errors end\n";
+    s
+}
+
+#[test]
+fn the_web_apps_code_table_is_the_index() {
+    let file = path("../opendmd-web/www/js/psierr.js");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let a = text.find("// psi-errors: codes").expect("js/psierr.js: the block's start");
+    let end = "// psi-errors end\n";
+    let z = a + text[a..].find(end).expect("its end") + end.len();
+    let want = js_codes();
+    if text[a..z] == want {
+        return;
+    }
+    if bless() {
+        std::fs::write(&file, format!("{}{want}{}", &text[..a], &text[z..])).unwrap();
+        return;
+    }
+    panic!("js/psierr.js's code table is stale: PSI_BLESS=1 cargo test --features docs --test diagnostics");
 }

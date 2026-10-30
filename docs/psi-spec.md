@@ -9,7 +9,9 @@ with [the guide's Formulas page](guide/formulas.md); to try it, open the
 
 The tables of names, the limits and the error codes on this page are
 generated from the compiler's own tables, and the tests fail when they
-drift, so what this page says is what the panel does.
+drift, so what this page says is what the panel does. On the site, the
+search box filters the built-ins and the error codes (press `/`), and
+**Cheat sheet** folds the page down to the tables and the error titles.
 
 ## Versions
 
@@ -166,97 +168,99 @@ A formula may set a name added after people had saved formulas, and then it is t
 ## What each does
 
 These are the editor's own words (its cheat sheet), so the editor and this
-page say the same thing.
+page say the same thing. Each row has a small example; on the site it is
+drawn as the panel draws it, with a link to try it in the editor. Every
+example is compiled by the tests.
 
 <!-- psi-builtins: reference (generated from opendmd-psi/src/builtins.rs: PSI_BLESS=1 cargo test --features docs --test builtins) -->
 
 #### Values
 
-| write | what it does |
-| --- | --- |
-| `x, y` | where the pixel is: 0 to 1 across, and up from the bottom |
-| `px, py` | the pixel’s column 0–127 and row 0–31 from the bottom |
-| `t` | seconds into the loop |
-| `hour, minute, second` | the time of day |
-| `a, b, c` | the controls, in the order the control lines declare them (0 to 1 when undeclared) |
-| `w, h` | 128 and 32 |
-| `i` | the pixel’s number, 0–4095 |
-| `cx, cy` | from the middle: −2 to 2 across, −0.5 to 0.5 up |
-| `r, angle` | distance and angle (turns) from the middle |
-| `ty` | row 0–31 from the top |
-| `ur, ug, ub` | the colour under the formula: the GIF it is drawn over, 0 to 1 |
-| `ul` | how bright that is |
+| write | what it does | example |
+| --- | --- | --- |
+| `x, y` | where the pixel is: 0 to 1 across, and up from the bottom | <code class="psi-ex">rgb(x, y, 0.5)</code> |
+| `px, py` | the pixel’s column 0–127 and row 0–31 from the bottom | <code class="psi-ex">gray(px % 8 == 0 or py % 8 == 0)</code> |
+| `t` | seconds into the loop | <code class="psi-ex">loop 4; hsv(x + t/4, 1, 1)</code> |
+| `hour, minute, second` | the time of day | <code class="psi-ex">band = floor(y&#42;3); hsv(band/3, 0.8, x &lt; pick(band, second/60, minute/60, hour/24))</code> |
+| `a, b, c` | the controls, in the order the control lines declare them (0 to 1 when undeclared) | <code class="psi-ex">control size 0..1 = 0.5 "Size"; gray(r &lt; size&#42;2)</code> |
+| `w, h` | 128 and 32 | <code class="psi-ex">gray(px == 0 or py == 0 or px == w - 1 or py == h - 1)</code> |
+| `i` | the pixel’s number, 0–4095 | <code class="psi-ex">hsv(i/4096, 1, 1)</code> |
+| `cx, cy` | from the middle: −2 to 2 across, −0.5 to 0.5 up | <code class="psi-ex">rgb(abs(cx)/2, abs(cy)&#42;2, 0.3)</code> |
+| `r, angle` | distance and angle (turns) from the middle | <code class="psi-ex">loop 4; hsv(angle + t/4, 1, 1 - r/2)</code> |
+| `ty` | row 0–31 from the top | <code class="psi-ex">gray(ty/31)</code> |
+| `ur, ug, ub` | the colour under the formula: the GIF it is drawn over, 0 to 1 | <code class="psi-ex">rgb(ub, ug, ur)</code> |
+| `ul` | how bright that is | <code class="psi-ex">pal(fire, ul)</code> |
 
 #### Functions and statements
 
-| write | what it does |
-| --- | --- |
-| `sin(v) cos(v)` | a wave: one turn per 1, between −1 and 1 |
-| `tri(v) saw(v) sqr(v)` | triangle, sawtooth and square waves |
-| `abs floor frac sqrt` | size, whole part, fraction, square root |
-| `min max clamp(v, lo, hi)` | limits |
-| `mix(a, b, k)` | from a to b as k goes 0 to 1 |
-| `step(edge, v)` | 1 past the edge, else 0 |
-| `smoothstep(e0, e1, v)` | a soft step |
-| `len(dx, dy)` | distance |
-| `atan2(dy, dx)` | angle, in turns |
-| `noise(x, y, z)` | smooth random hills, 0 to 1 |
-| `hash(a, b)` | random 0 to 1 |
-| `select(c, a, b)` | a when c is true (not 0), else b; or c ? a : b |
-| `pick(k, a, b, …)` | a at k = 0, b at 1, …; else 0 |
-| `digit(n, col, row)` | the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font |
-| `glyph('A', col, row)` | the same for a character |
-| `bit(n, i)` | bit i of a whole number: 1 or 0 |
-| `< <= > >= == !=` | compare: 1 or 0; and, or, not |
-| `%` | remainder: v % 1 is the fraction |
-| `;` | a new line, on the same line |
-| `loop 8` | the loop’s length in seconds (first line) |
-| `loop forever` | goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays |
-| `fps 100` | frames a second: 25, 50 (else) or 100, for fast motion; a light formula only |
-| `frame { … }` | values worked out once a frame |
-| `layer add { … }` | a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min |
-| `layer rate 4 { … }` | a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame |
-| `use Plasma as p` | puts in one of your formulas or an example, as part p { … } |
-| `p.v` | a value part p sets |
-| `p(x, y, k)` | part p as a colour, drawn at another place; k: how much it covers |
+| write | what it does | example |
+| --- | --- | --- |
+| `sin(v) cos(v)` | a wave: one turn per 1, between −1 and 1 | <code class="psi-ex">loop 4; gray(abs(y - 0.5 - 0.4&#42;sin(x&#42;2 + t/4)) &lt; 0.06)</code> |
+| `tri(v) saw(v) sqr(v)` | triangle, sawtooth and square waves | <code class="psi-ex">loop 4; k = floor(y&#42;3); v = pick(k, tri(x&#42;2 - t/4), saw(x&#42;2 - t/4), sqr(x&#42;2 - t/4)); hsv(k/3, 1, 0.5 + v/2)</code> |
+| `abs floor frac sqrt` | size, whole part, fraction, square root | <code class="psi-ex">loop 4; gray(frac(x&#42;4 - t/4) &#42; sqrt(abs(cy)&#42;2))</code> |
+| `min max clamp(v, lo, hi)` | limits | <code class="psi-ex">gray(clamp(sin(x&#42;2)&#42;2, 0, 1))</code> |
+| `mix(a, b, k)` | from a to b as k goes 0 to 1 | <code class="psi-ex">mix(&#35;f40, &#35;04f, x)</code> |
+| `step(edge, v)` | 1 past the edge, else 0 | <code class="psi-ex">loop 4; gray(step(frac(t/4), x))</code> |
+| `smoothstep(e0, e1, v)` | a soft step | <code class="psi-ex">gray(smoothstep(0.3, 0.7, x))</code> |
+| `len(dx, dy)` | distance | <code class="psi-ex">gray(len(px - 63.5, py - 15.5) &lt; 12)</code> |
+| `atan2(dy, dx)` | angle, in turns | <code class="psi-ex">hsv(atan2(py - 15.5, px - 63.5), 1, 1)</code> |
+| `noise(x, y, z)` | smooth random hills, 0 to 1 | <code class="psi-ex">loop 8; gray(noise(x&#42;8, y&#42;2, t/2))</code> |
+| `hash(a, b)` | random 0 to 1 | <code class="psi-ex">gray(hash(px, py) &gt; 0.9)</code> |
+| `select(c, a, b)` | a when c is true (not 0), else b; or c ? a : b | <code class="psi-ex">gray(select(x &lt; 0.5, y, 1 - y))</code> |
+| `pick(k, a, b, …)` | a at k = 0, b at 1, …; else 0 | <code class="psi-ex">pal(rainbow, pick(floor(x&#42;4), 0, 0.3, 0.6, 0.9))</code> |
+| `digit(n, col, row)` | the panel’s font: 1 where digit n has a pixel; col 0–4, row 0–6 from the top; add , small or , bold (chunky digits) for another font | <code class="psi-ex">gray(digit(second % 10, floor(px/4) - 14, floor(ty/4)))</code> |
+| `glyph('A', col, row)` | the same for a character | <code class="psi-ex">gray(glyph('A', floor(px/4) - 14, floor(ty/4)))</code> |
+| `bit(n, i)` | bit i of a whole number: 1 or 0 | <code class="psi-ex">gray(bit(px, floor(ty/4)))</code> |
+| `< <= > >= == !=` | compare: 1 or 0; and, or, not | <code class="psi-ex">rgb(x &lt; 0.5, y &gt;= 0.5, 0.2)</code> |
+| `%` | remainder: v % 1 is the fraction | <code class="psi-ex">gray((px % 16 &lt; 8) != (py % 16 &lt; 8))</code> |
+| `;` | a new line, on the same line | <code class="psi-ex">u = x; v = y; rgb(u, v, 0.5)</code> |
+| `loop 8` | the loop’s length in seconds (first line) | <code class="psi-ex">loop 2; gray(frac(x - t/2))</code> |
+| `loop forever` | goes on without repeating: t grows from when it starts (use frac, %, sin, noise of it); seed is 0 to 1, new each time it plays | <code class="psi-ex">loop forever; hsv(frac(x + t/10), 1, 1)</code> |
+| `fps 100` | frames a second: 25, 50 (else) or 100, for fast motion; a light formula only | <code class="psi-ex">fps 100; loop 1; gray(abs(x - frac(t)) &lt; 0.02)</code> |
+| `frame { … }` | values worked out once a frame | <code class="psi-ex">loop 4; frame { k = sin(t/4)&#42;0.5 + 0.5 }; gray(x &lt; k)</code> |
+| `layer add { … }` | a layer with its own names and colour, on what is below: over, add, multiply, screen, max or min | <code class="psi-ex">layer { gray(y&#42;0.5) }; layer add { rgb(x, 0, 0) }</code> |
+| `layer rate 4 { … }` | a slow bottom layer: redrawn every 4th frame, a band of rows a frame (or when the clock or a control it reads changes); the layers above draw over it every frame | <code class="psi-ex">loop 4; layer rate 4 { gray(noise(x&#42;6, y&#42;2, t)) }; layer { rgb(1, 0.5, 0, abs(x - frac(t/4)) &lt; 0.01) }</code> |
+| `use Plasma as p` | puts in one of your formulas or an example, as part p { … } | <code class="psi-ex">part p { hsv(x + t/8, 1, 1) }; p</code> |
+| `p.v` | a value part p sets | <code class="psi-ex">loop 4; part p { v = sin(x + t/4); gray(v) }; gray(p.v&#42;0.5 + 0.5)</code> |
+| `p(x, y, k)` | part p as a colour, drawn at another place; k: how much it covers | <code class="psi-ex">part p { gray(r &lt; 0.5) }; p(x + 0.2, y, 1)</code> |
 
 #### Drawing
 
-| write | what it does |
-| --- | --- |
-| `draw { … }` | once a frame, before the pixels: values, loops, lines and dots into ink |
-| `for k < 12 { … }` | inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame |
-| `line(x0, y0, x1, y1, v0, v1)` | a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1) |
-| `dot(x, y, v)` | one pixel of ink v |
-| `ink` | what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink |
-| `table T = 1, -2, 0.5` | numbers, 256 in all |
-| `T[k]` | number k of table T, from 0 (0 outside it) |
-| `sprite s { … }` | a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall |
-| `s[u, v]` | sprite s at column u, row v from its top left: its key’s number (0 outside) |
+| write | what it does | example |
+| --- | --- | --- |
+| `draw { … }` | once a frame, before the pixels: values, loops, lines and dots into ink | <code class="psi-ex">draw { line(0, 0, 127, 31) }; pal(fire, ink)</code> |
+| `for k < 12 { … }` | inside draw: k = 0, 1, … 11; two deep at most, 2048 turns a frame | <code class="psi-ex">draw { for k &lt; 12 { line(k&#42;10 + 8, 4, k&#42;10 + 8, 27, 0.2, 1) } }; gray(ink)</code> |
+| `line(x0, y0, x1, y1, v0, v1)` | a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1) | <code class="psi-ex">loop 4; draw { line(64, 16, 64 + 40&#42;cos(t/4), 16 + 15&#42;sin(t/4), 0.2, 1) }; pal(ice, ink)</code> |
+| `dot(x, y, v)` | one pixel of ink v | <code class="psi-ex">draw { for k &lt; 64 { dot(hash(k, 1)&#42;128, hash(k, 2)&#42;32, hash(k, 3)) } }; gray(ink)</code> |
+| `ink` | what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink | <code class="psi-ex">draw { line(0, 16, 127, 16) }; &#35;40c0ff &#42; ink</code> |
+| `table T = 1, -2, 0.5` | numbers, 256 in all | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
+| `T[k]` | number k of table T, from 0 (0 outside it) | <code class="psi-ex">table hue = 0, 0.1, 0.3, 0.6; hsv(hue&#91;px % 4&#93;, 1, 1)</code> |
+| `sprite s { … }` | a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall | <code class="psi-ex">sprite s {<br>  key . 0, X 1<br>  .X.<br>  XXX<br>  .X.<br>}<br>gray(s&#91;floor(px/4) - 14, floor(ty/4) - 2&#93;)</code> |
+| `s[u, v]` | sprite s at column u, row v from its top left: its key’s number (0 outside) | <code class="psi-ex">sprite heart {<br>  key . 0, X 1<br>  .X.X.<br>  XXXXX<br>  .XXX.<br>  ..X..<br>}<br>rgb(1, 0.2, 0.3) &#42; heart&#91;px % 6, ty % 5&#93;</code> |
 
 #### Colours
 
-| write | what it does |
-| --- | --- |
-| `hsv(hue, sat, val)` | colour: hue in turns, 0 to 1 each |
-| `rgb(r, g, b)` | red, green, blue: 0 to 1 |
-| `pal(fire, v)` | a palette: fire, ice, ocean, chrono, amber, rainbow, gray |
-| `palette sea = #024, #08c, #fff` | your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one |
-| `pal(fire, v) * k` | a palette colour, dimmed (or lit) by k |
-| `cycle(fire, v, s)` | palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame |
-| `gray(v)` | white, 0 to 1 |
-| `#ff8800` | a colour: alone, or #f80 * v, mix(#000, #f80, v) |
-| `rgb(r, g, b, k)` | a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k) |
+| write | what it does | example |
+| --- | --- | --- |
+| `hsv(hue, sat, val)` | colour: hue in turns, 0 to 1 each | <code class="psi-ex">hsv(x, 1, y)</code> |
+| `rgb(r, g, b)` | red, green, blue: 0 to 1 | <code class="psi-ex">rgb(x, y, 1 - x)</code> |
+| `pal(fire, v)` | a palette: fire, ice, ocean, chrono, amber, rainbow, gray | <code class="psi-ex">pal(fire, y)</code> |
+| `palette sea = #024, #08c, #fff` | your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one | <code class="psi-ex">palette sea = &#35;024, &#35;08c, &#35;fff; pal(sea, y)</code> |
+| `pal(fire, v) * k` | a palette colour, dimmed (or lit) by k | <code class="psi-ex">pal(fire, y) &#42; x</code> |
+| `cycle(fire, v, s)` | palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame | <code class="psi-ex">loop 4; cycle(fire, x, t/4)</code> |
+| `gray(v)` | white, 0 to 1 | <code class="psi-ex">gray(x)</code> |
+| `#ff8800` | a colour: alone, or #f80 * v, mix(#000, #f80, v) | <code class="psi-ex">&#35;f80 &#42; y</code> |
+| `rgb(r, g, b, k)` | a last value: how much it covers, 0 to 1 (what is under shows through); rgb(#f80, k) | <code class="psi-ex">layer { pal(ice, x) }; layer { rgb(1, 0.5, 0, r &lt; 0.6) }</code> |
 
 #### Declarations
 
-| write | what it does |
-| --- | --- |
-| `name "Sunrise"` | the formula’s name (60 characters at most) |
-| `about "…"` | one line about it (120 at most) |
-| `control speed 0..1 = 0.5 "Speed"` | a slider: its name in the formula, range, default and label (three controls at most) |
-| `control mode = calm, wild` | buttons: the value is the choice’s number, 0 for the first (pick(mode, …)); two words make a switch |
-| `look screen 40` | it can be the panel’s look: drawn over the GIF with a blend and an amount (look alone: over, 100) |
+| write | what it does | example |
+| --- | --- | --- |
+| `name "Sunrise"` | the formula’s name (60 characters at most) | <code class="psi-ex">name "Sunrise"; hsv(0.08, 1, y)</code> |
+| `about "…"` | one line about it (120 at most) | <code class="psi-ex">about "A warm glow"; pal(fire, y)</code> |
+| `control speed 0..1 = 0.5 "Speed"` | a slider: its name in the formula, range, default and label (three controls at most) | <code class="psi-ex">control speed 0..2 = 1 "Speed"; loop 4; gray(frac(x - t&#42;speed/4))</code> |
+| `control mode = calm, wild` | buttons: the value is the choice’s number, 0 for the first (pick(mode, …)); two words make a switch | <code class="psi-ex">control mode = calm, wild; hsv(x, 1, pick(mode, 0.5, 1))</code> |
+| `look screen 40` | it can be the panel’s look: drawn over the GIF with a blend and an amount (look alone: over, 100) | <code class="psi-ex">look screen 40; pal(fire, y)</code> |
 <!-- psi-builtins end -->
 
 ## Limits
@@ -327,11 +331,168 @@ the formula is the same program, and it says so before it writes.
 `psi builtins --json` and `psi errors --json` give this page's tables as
 data.
 
+## Cookbook
+
+Short recipes, each a whole formula that works as it is: open one in the
+editor and change it. Three are Formulas from the
+[gallery](/formulas/), word for word.
+
+### Scrolling text
+
+A message is a `table` of character codes (a character in single quotes is
+its code). Each pixel works out which character of the message it is in and
+where in that character, and `glyph` says whether the font has a pixel
+there. The message moves a whole number of characters a loop, so it wraps
+without a jump.
+
+```psi
+name "Scrolling text"
+about "A message scrolling across, in the panel's own font, twice its size"
+loop 6
+-- the message: a character in quotes is its code ('A' is 65)
+table msg = 'H', 'E', 'L', 'L', 'O', ' ', 'P', 'A', 'N', 'E', 'L', ' '
+-- a character is 6 cells (5 and a gap), a cell 2 pixels; the 12 go by
+-- once a loop: 72 cells in 6 s
+u = floor(px/2 + t*12)
+k = floor(u/6) % 12
+row = floor((ty - 9)/2)
+hsv(x/2 + t/6, 0.6, glyph(msg[k], u % 6, row))
+```
+
+### A palette cycle
+
+The 1990s trick: the picture never moves, only its palette turns.
+`cycle(P, v, s)` reads palette `P` at `v` turned by `s`; with `s = t/8`
+it turns once in an 8-second loop. Since `wave` reads only the pixel's
+position, the panel works it out once and keeps it, so the formula is very
+light.
+
+<!-- psi-gallery: cycled-plasma -->
+```psi
+name "Cycled plasma"
+about "Plasma the 1992 way: the picture holds still and only its palette turns"
+loop 8
+fps 100
+palette glow = #002, #208, #80f, #f0c, #f60, #ff0, #fff, #ff0, #f60, #f0c, #80f, #208
+-- three waves that never move (worked out once, then kept)
+wave = sin(x*2) + sin(y*1.5) + sin(x*1.5 + y)
+-- the palette turned once round in the loop
+cycle(glow, wave/6, t/8)
+```
+
+### A clock face
+
+`hour` and `minute` are the panel's clock. The hands' angles change once a
+minute, so they go in `frame { }`, worked out once a frame rather than for
+every pixel. Each hand is a thin box turned by that angle; the dial is a
+ring where the distance from the middle is close to 15.
+
+<!-- psi-gallery: clock -->
+```psi
+name "Clock"
+about "A clock face with hour and minute hands"
+-- Hands on a round dial; dx, dy: pixels from the middle
+dx = px - 63.5
+dy = py - 15.5
+frame {
+  hours = (hour%12 + minute/60) / 12
+  mins = minute/60
+}
+hour_hand = step(max(abs(dx*cos(hours) - dy*sin(hours)), abs(dx*sin(hours) + dy*cos(hours) - 4) - 3), 1)
+minute_hand = step(max(abs(dx*cos(mins) - dy*sin(mins)), abs(dx*sin(mins) + dy*cos(mins) - 6.5) - 5.5), 0.8)
+dial = step(abs(dx*dx + dy*dy - 218), 22)
+pal(ice, dial*0.6 + hour_hand + minute_hand)
+```
+
+### Drawing over a GIF
+
+A formula with a `look` line can be the panel's look, drawn over whatever
+GIF plays. `ur`, `ug` and `ub` are the colour of the GIF under each pixel
+and `ul` its brightness, so the formula can recolour it. Here the GIF goes
+sepia, as much as the control says.
+
+<!-- psi-gallery: old-photo -->
+```psi
+name "Old photo"
+about "The GIF in warm sepia tones"
+control amount = 0.8 "How much" -- 0: the GIF as it is
+look
+mix(rgb(ur, ug, ub), rgb(ul*1.1 + 0.08, ul*0.92 + 0.04, ul*0.65), amount)
+```
+
+### A slow background with `rate`
+
+Noise is one of the heavier steps. A bottom layer marked `rate 4` is redrawn
+every 4th frame (a band of rows each frame), while the layers above it are
+drawn every frame, so something small can move smoothly over a heavy
+background.
+
+```psi
+name "Slow clouds"
+about "Clouds redrawn every 4th frame, with a spark racing over them every frame"
+loop 8
+-- the bottom layer: heavy noise, worked out every 4th frame
+layer rate 4 {
+  pal(ocean, noise(x*6 + t/2, y*2, t/4)*0.9)
+}
+-- the layer above is drawn every frame
+layer {
+  rgb(1, 0.8, 0.3, len((x - frac(t/8))*4, cy) < 0.12)
+}
+```
+
+### A starfield: a draw loop
+
+`draw { }` runs once a frame, before the pixels, and puts lines and dots
+into the frame's ink; the colour line reads it back as `ink`. A `for` loop
+draws one streak a star: `hash(k, …)` gives each star its own direction
+and start, the same every frame. The gallery's Starfield is the full
+version.
+
+```psi
+name "Warp stars"
+about "64 stars streaking out from the middle: lines drawn once a frame"
+loop 2
+fps 100
+draw {
+  for k < 64 {
+    dir = hash(k, 1)         -- its direction, in turns
+    near = frac(t/2 + hash(k, 2)) -- 0 far away, 1 here
+    d = near*near*80         -- how far out it is, in pixels
+    tail = d*0.8             -- where it was a moment ago
+    line(64 + cos(dir)*tail, 16 + sin(dir)*tail*0.4, 64 + cos(dir)*d, 16 + sin(dir)*d*0.4, 0, near)
+  }
+}
+pal(ice, ink)
+```
+
+### Reading slider controls
+
+A `control` line makes a slider (or, with words, a row of buttons) in the
+editor, the gallery and the panel's settings, and gives its value a name.
+Up to three controls; they read as values like any other. Whole-number
+speeds keep the loop seamless.
+
+```psi
+name "Sliders"
+about "A bar to steer: its speed, its width and its colour are controls"
+control speed 0..4 = 1 "Speed"
+control width 0.05..0.5 = 0.2 "Width"
+control tone = warm, cold
+loop 8
+-- a control is a value like any other, read once a frame
+pos = frac(t*speed/8)
+bar = abs(x - pos) < width/2
+hsv(pick(tone, 0.06, 0.55), 0.9, bar*(0.3 + y*0.7))
+```
+
 ## Error codes
 
 Every error the compiler gives has a code, for tools and links (each
 entry's address is this page with `#` and the code, as `#E203`). The
-editor shows the sentence only.
+editor shows the sentence with its code, linked to its entry here. The
+common errors have a word on why they happen and a before and after; the
+codes marked internal are never a formula's fault.
 
 
 <!-- psi-errors (generated from opendmd-psi/src/errors.rs: PSI_BLESS=1 cargo test --features docs --test diagnostics) -->
@@ -341,7 +502,21 @@ editor shows the sentence only.
 
 > I don't understand `…`
 
+Psi has numbers, names, a few operators and brackets; anything else, such as `^`, `$` or a double quote outside a declaration, is not part of it.
+
 Take the character out. Text in quotes only goes on `name`, `about` and `control` lines; for a character's code write it in single quotes, 'A'.
+
+Before:
+
+```psi
+gray(x ^ 2)
+```
+
+After:
+
+```psi
+gray(x * x)
+```
 
 <h4 id="E002">E002 · a bad number</h4>
 
@@ -365,7 +540,21 @@ Use a smaller number, or scale it down with a multiply.
 
 > `…` is not a number or a name (to multiply, write `… * …`)
 
+Psi never multiplies by putting things side by side, as maths on paper does.
+
 Put a `*` between the number and the name.
+
+Before:
+
+```psi
+gray(2x)
+```
+
+After:
+
+```psi
+gray(2 * x)
+```
 
 <h4 id="E006">E006 · a bad character</h4>
 
@@ -379,25 +568,90 @@ Write one character between single quotes, as 'A'.
 
 > expected … here, found …
 
+Two values side by side with nothing between them: usually an operator or a comma is missing.
+
 Write what the message says is expected at that place.
+
+Before:
+
+```psi
+v = x y
+gray(v)
+```
+
+After:
+
+```psi
+v = x * y
+gray(v)
+```
 
 <h4 id="E102">E102 · a ( never closed</h4>
 
 > this `(` is never closed — add `)`
 
+Every `(` needs its `)`: the message points at the one left open.
+
 Add the `)` that closes it.
+
+Before:
+
+```psi
+v = (x + 1
+gray(v / 2)
+```
+
+After:
+
+```psi
+v = (x + 1)
+gray(v / 2)
+```
 
 <h4 id="E103">E103 · a block never closed</h4>
 
 > this `layer {` is never closed — add `}`
 
+A block (`layer`, `frame`, `draw`, `part`, `for`, `sprite`) runs to its `}`; the formula ended first.
+
 Add the `}` that closes the block.
+
+Before:
+
+```psi
+layer {
+  gray(x)
+```
+
+After:
+
+```psi
+layer {
+  gray(x)
+}
+```
 
 <h4 id="E104">E104 · the colour is not last</h4>
 
 > the colour has to be the last line (move this to the end)
 
+The last line is the colour, and only the last: lines after it would never be used.
+
 Move the colour line to the end of the formula (or the layer or part).
+
+Before:
+
+```psi
+gray(x)
+v = 1
+```
+
+After:
+
+```psi
+v = 1
+gray(x * v)
+```
 
 <h4 id="E105">E105 · <code>loop</code> inside a layer</h4>
 
@@ -409,7 +663,23 @@ Move the `loop` line out of the layer.
 
 > a value is missing here
 
+An operator, a `=` or a `,` with nothing after it.
+
 Write the value that goes there.
+
+Before:
+
+```psi
+v =
+gray(v)
+```
+
+After:
+
+```psi
+v = x
+gray(v)
+```
 
 <h4 id="E107">E107 · a [ never closed</h4>
 
@@ -421,7 +691,23 @@ Add the `]` that closes it.
 
 > only the last line can be a bare value (the colour) — did you mean `name = …`?
 
+A line that is only a value, not the last line: it would be worked out and thrown away, so it is most likely a name left out.
+
 Give the value a name with `name = …`, or make it the last line.
+
+Before:
+
+```psi
+x + 1
+gray(x)
+```
+
+After:
+
+```psi
+v = x + 1
+gray(v / 2)
+```
 
 <h4 id="E109">E109 · <code>loop</code> set twice</h4>
 
@@ -457,7 +743,21 @@ End the formula with a colour line.
 
 > `…` takes … values, but got …
 
+Each function takes a fixed number of values (the reference's tables say how many); colours may take one more, how much of the pixel they cover.
+
 Give the function the number of values it takes.
+
+Before:
+
+```psi
+gray(x, 2, 3)
+```
+
+After:
+
+```psi
+gray(x, 0.5)
+```
 
 <h4 id="E115">E115 · the wrong values for a character</h4>
 
@@ -501,31 +801,108 @@ Move the coverage to the outer `rgb(…)`.
 
 > unknown name `…` (did you mean `…`?)
 
+A name is used before it is set, or is spelled differently where it is set.
+
 Set the name on an earlier line, or fix the spelling.
+
+Before:
+
+```psi
+gray(level)
+```
+
+After:
+
+```psi
+level = x
+gray(level)
+```
 
 <h4 id="E202">E202 · an unknown function</h4>
 
 > unknown function `…` (did you mean `…`?)
 
+Only the built-in functions can be called; the message suggests the nearest one.
+
 Fix the spelling, or use a function from the cheat sheet.
+
+Before:
+
+```psi
+gray(sine(x))
+```
+
+After:
+
+```psi
+gray(sin(x))
+```
 
 <h4 id="E203">E203 · a name set twice</h4>
 
 > `…` is already set on line … — each name can be set once
 
+A name is set once in its block: it is a definition, not a variable that changes. Give the second value a name of its own.
+
 Use a different name for the second one.
+
+Before:
+
+```psi
+v = x
+v = v * 2
+gray(v)
+```
+
+After:
+
+```psi
+v = x
+v2 = v * 2
+gray(v2)
+```
 
 <h4 id="E204">E204 · a name that is built in</h4>
 
 > `…` is built in; pick another name
 
+Built-in values such as `x`, `t` and `a` can't be set; pick another name.
+
 Pick another name.
+
+Before:
+
+```psi
+x = 1
+gray(x)
+```
+
+After:
+
+```psi
+x1 = 1
+gray(x1)
+```
 
 <h4 id="E205">E205 · a function used as a value</h4>
 
 > `…` is a function: write `…(…)`
 
+A function's name alone is not a value: it needs its brackets and values.
+
 Call it with brackets: `name(…)`.
+
+Before:
+
+```psi
+gray(sin)
+```
+
+After:
+
+```psi
+gray(sin(x))
+```
 
 <h4 id="E206">E206 · a palette used as a value</h4>
 
@@ -561,7 +938,21 @@ Move it to the start of a line.
 
 > unknown palette `…` (there are fire, ocean, ice, chrono, amber, rainbow and gray…)
 
+The palettes are fire, ice, ocean, chrono, amber, rainbow and gray, and the ones the formula makes with `palette`.
+
 Use one of the listed palettes, or write your own with `palette name = #…, #…`.
+
+Before:
+
+```psi
+pal(lava, x)
+```
+
+After:
+
+```psi
+pal(fire, x)
+```
 
 <h4 id="E212">E212 · a palette expected</h4>
 
@@ -581,19 +972,71 @@ Use one of the listed blends.
 
 > inside frame { } only values that are the same for every pixel can be used, but this uses `…` (…)
 
+`frame { }` is worked out once a frame, before any pixel, so it can't read a pixel's position or what is under it.
+
 Use only values that are the same everywhere (such as `t`) inside `frame { }`.
+
+Before:
+
+```psi
+frame {
+  k = x
+}
+gray(k)
+```
+
+After:
+
+```psi
+frame {
+  k = t / 8
+}
+gray(x * k)
+```
 
 <h4 id="E302">E302 · a colour used as a value</h4>
 
 > a colour can't be a value: use it in the colour itself (the last line), as `#f80`, `#f80 * k`, `mix(#000, #f80, k)` or `rgb(#f80, k)`
 
+A colour such as `#f80` is not a number: it goes in the colour line, where it can be dimmed or mixed.
+
 Use the colour in the colour line, not in a number's place.
+
+Before:
+
+```psi
+v = #f80
+gray(v)
+```
+
+After:
+
+```psi
+v = x
+#f80 * v
+```
 
 <h4 id="E303">E303 · a colour outside a layer</h4>
 
 > with layers, every colour goes inside one: put this line in `layer { … }`
 
+Once a formula has a layer, each colour belongs to one: a colour line outside them would have nothing to go on.
+
 Put the colour line inside a layer.
+
+Before:
+
+```psi
+layer { gray(x) }
+gray(y)
+```
+
+After:
+
+```psi
+layer { gray(x) }
+layer add { gray(y) }
+```
 
 <h4 id="E304">E304 · a colour function in a sum of colours</h4>
 
@@ -643,6 +1086,8 @@ Shorten the formula.
 
 > this formula is too long for the panel (… steps; the limit is …) — simplify it
 
+The panel works a formula out for 4,096 pixels at every frame, so the steps a formula takes are limited. Values that change less often (once a row, once a frame) cost much less: move what you can out of the pixel.
+
 Simplify the formula: fewer or simpler steps.
 
 <h4 id="E403">E403 · too many live values</h4>
@@ -669,15 +1114,19 @@ Split it into named steps, `name = …`.
 
 Use a loop between 0.1 and 3600 seconds.
 
-<h4 id="E407">E407 · a layout fault</h4>
+<h4 id="E407">E407 · a layout fault <span class="badge">internal</span></h4>
 
 > this formula could not be laid out (a bug in Psi) — please report it
 
+**Internal:** a bug in Psi: please report it, with the formula. It is never the formula's fault.
+
 Report it with the formula.
 
-<h4 id="E408">E408 · not enough memory</h4>
+<h4 id="E408">E408 · not enough memory <span class="badge">internal</span></h4>
 
 > not enough memory for this Formula right now
+
+**Internal:** a bug in Psi: please report it, with the formula. It is never the formula's fault.
 
 Try again, or make the Formula smaller.
 
@@ -799,7 +1248,25 @@ Use at most two `for` loops, one inside the other.
 
 > `…(…)` draws: it goes on a line of its own inside `draw { }` (also: `ink` needs a `draw { }` block to read from; `for` goes inside `draw { }`)
 
+`line` and `dot` draw into the frame's ink once a frame, so they live in `draw { }`; the pixels read what they drew as `ink`.
+
 Put the line inside `draw { }`, and write a `draw { }` block to read `ink`.
+
+Before:
+
+```psi
+line(0, 0, 127, 31)
+gray(1)
+```
+
+After:
+
+```psi
+draw {
+  line(0, 0, 127, 31)
+}
+gray(ink)
+```
 
 <h4 id="E707">E707 · a table that is not numbers</h4>
 
@@ -811,7 +1278,23 @@ Write only numbers in the table.
 
 > inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but this uses `…` (…)
 
+`draw { }` runs once a frame, before the pixels: there is no pixel position there. Work in pixels, with numbers and the time.
+
 Use only values that are the same everywhere inside `draw { }`.
+
+Before:
+
+```psi
+draw { dot(x, 1) }
+gray(ink)
+```
+
+After:
+
+```psi
+draw { dot(t * 16, 1) }
+gray(ink)
+```
 
 <h4 id="E709">E709 · a loop counter set twice</h4>
 
@@ -849,7 +1332,23 @@ Use only those lines inside `draw { }`.
 
 > `fps` is 25, 50 or 100 frames a second
 
+The panel shows 25, 50 or 100 frames a second; nothing in between.
+
 Write `fps 25`, `fps 50` or `fps 100`.
+
+Before:
+
+```psi
+fps 60
+gray(x)
+```
+
+After:
+
+```psi
+fps 50
+gray(x)
+```
 
 <h4 id="E802">E802 · <code>fps</code> inside a layer</h4>
 
@@ -869,7 +1368,23 @@ Keep one `fps` line.
 
 > a value that grows without end (`t` in `loop forever`) can't go in here: use frac(t\*k), t % n, sin(t\*k), noise(t\*k, y, z), a comparison, min, max or smoothstep
 
+In a `loop forever` formula `t` grows without end, and most arithmetic on it would lose its precision or overflow. Wrap it first: `frac`, `%`, `sin` and `noise` keep it in range.
+
 Use frac(t\*k), t % n, sin(t\*k) or similar in its place.
+
+Before:
+
+```psi
+loop forever
+gray(t*x)
+```
+
+After:
+
+```psi
+loop forever
+gray(frac(t/4 + x))
+```
 
 <h4 id="E902">E902 · too many noises of growing values</h4>
 
@@ -893,7 +1408,25 @@ Use fewer values that grow without end.
 
 > a colour can't take a value that grows without end and changes across the panel (`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1)
 
+A colour has to be worked out from values that stay in range; `t` in a `loop forever` formula does not.
+
 Wrap it in frac(…), or limit it with min(t/k, 1).
+
+Before:
+
+```psi
+loop forever
+v = t + x
+gray(v)
+```
+
+After:
+
+```psi
+loop forever
+v = frac(t/8 + x)
+gray(v)
+```
 
 <h4 id="E906">E906 · drawing at a growing value</h4>
 
@@ -989,7 +1522,22 @@ Make the tables, sprites and palettes smaller.
 
 > `cycle`'s turn is the same along a row: a value of t, a frame or the row (py), not of x or px
 
+`cycle` turns a whole row's palette at once, so how far it turns can change with the time or the row, not along the row.
+
 Turn it by t, a `frame { }` value or py.
+
+Before:
+
+```psi
+cycle(fire, x, x)
+```
+
+After:
+
+```psi
+loop 4
+cycle(fire, x, t/4 + y)
+```
 
 <h4 id="E932">E932 · <code>cycle</code> of gray</h4>
 
@@ -1067,7 +1615,25 @@ Leave the blend and the coverage off the bottom `rate` layer.
 
 > `…` goes at the top of the formula, before its other lines
 
+Declarations (`name`, `about`, `control`, `look`) say what the formula is, so they come first, before anything it works out.
+
 Move it to the top.
+
+Before:
+
+```psi
+loop 4
+name "Late"
+gray(x)
+```
+
+After:
+
+```psi
+name "Late"
+loop 4
+gray(x)
+```
 
 <h4 id="E952">E952 · a declaration twice</h4>
 
@@ -1103,7 +1669,23 @@ Write the text in quotes.
 
 > a control is `control NAME lo..hi = default "Label"` or `control NAME = word, word, …`
 
+A control is a slider (`control NAME lo..hi = default "Label"`) or a row of buttons (`control NAME = word, word`).
+
 Write it as shown.
+
+Before:
+
+```psi
+control k 1 = 2
+gray(k)
+```
+
+After:
+
+```psi
+control k 0..2 = 1 "Level"
+gray(k / 2)
+```
 
 <h4 id="E958">E958 · too many controls</h4>
 

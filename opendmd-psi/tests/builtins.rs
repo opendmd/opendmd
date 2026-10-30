@@ -109,6 +109,31 @@ fn cell(s: &str) -> String {
     s.replace('|', "\\|")
 }
 
+/// A live example as a table cell: inline HTML `<code class="psi-ex">`
+/// (the reference page draws it), with every character Markdown or a table
+/// would read escaped and the lines as `<br>`.
+fn example_cell(src: &str) -> String {
+    let mut o = String::from("<code class=\"psi-ex\">");
+    for c in src.chars() {
+        match c {
+            '&' => o.push_str("&amp;"),
+            '<' => o.push_str("&lt;"),
+            '>' => o.push_str("&gt;"),
+            '|' => o.push_str("&#124;"),
+            '*' => o.push_str("&#42;"),
+            '_' => o.push_str("&#95;"),
+            '[' => o.push_str("&#91;"),
+            ']' => o.push_str("&#93;"),
+            '\\' => o.push_str("&#92;"),
+            '#' => o.push_str("&#35;"),
+            '\n' => o.push_str("<br>"),
+            c => o.push(c),
+        }
+    }
+    o.push_str("</code>");
+    o
+}
+
 fn code_list(v: &[&str]) -> String {
     v.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
 }
@@ -166,9 +191,10 @@ fn spec_reference() -> String {
         ("Colours", cheat::COLS),
         ("Declarations", cheat::DECLS),
     ] {
-        s.push_str(&format!("\n#### {title}\n\n| write | what it does |\n| --- | --- |\n"));
+        s.push_str(&format!("\n#### {title}\n\n| write | what it does | example |\n| --- | --- | --- |\n"));
         for (what, does, _) in rows {
-            s.push_str(&format!("| `{}` | {} |\n", cell(what), cell(does)));
+            let ex = opendmd_psi::reference::example(what).expect("every row has an example (tests/reference.rs)");
+            s.push_str(&format!("| `{}` | {} | {} |\n", cell(what), cell(does), example_cell(ex)));
         }
     }
     s.push_str("<!-- psi-builtins end -->\n");

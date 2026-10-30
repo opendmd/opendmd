@@ -151,9 +151,12 @@ fn every_formula_formats_to_the_same_program() {
     let all = corpus();
     for (what, src) in &all {
         holds(what, src);
-        // The ways a formula travels: on one line, and squeezed.
-        holds(&format!("{what} (compact)"), &compact(src));
-        holds(&format!("{what} (squeezed)"), &squeeze(src));
+        // The ways a formula travels: on one line, and squeezed. (An error
+        // there need only stay an error: on one line, an unclosed bracket
+        // reads on into the next statement, as the reference's E102 shows.)
+        let ok = compile(src).is_ok();
+        holds_as(&format!("{what} (compact)"), &compact(src), ok);
+        holds_as(&format!("{what} (squeezed)"), &squeeze(src), ok);
     }
     eprintln!("{} formulas", all.len());
 }
