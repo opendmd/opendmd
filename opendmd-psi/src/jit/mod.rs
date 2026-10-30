@@ -720,7 +720,7 @@ mod device {
         beam: Option<crate::PairSink<'_>>,
     ) -> bool {
         match (beam, changed) {
-            (Some(sink), ch) => crate::render_rows_beam::<128>(prog, scratch, ink, still, inputs, tables, out, ch, sink),
+            (Some(sink), ch) => crate::render_rows_beam::<128>(prog, scratch, ink, still, inputs, tables, under, out, ch, sink),
             (None, Some(ch)) => crate::render_rows_changed::<128>(prog, scratch, ink, still, inputs, tables, under, rows, out, ch),
             (None, None) => crate::render_rows_still::<128>(prog, scratch, ink, still, inputs, tables, under, rows, out),
         }
@@ -768,8 +768,9 @@ mod device {
 
         /// A whole frame as [`Kernel::render`] draws it, racing the beam:
         /// the rows in the panel's pair order and `sink` told of each pair
-        /// as it is finished ([`crate::render_rows_beam`]). The same bytes
-        /// and changed groups.
+        /// as it is finished ([`crate::render_rows_beam`]; a `rate`
+        /// formula's fast part over `under`, its held slow layers). The
+        /// same bytes and changed groups.
         #[allow(clippy::too_many_arguments)]
         pub fn render_beam(
             &mut self,
@@ -779,11 +780,12 @@ mod device {
             still: Option<&mut Still>,
             inputs: &Inputs,
             tables: &Tables,
+            under: Option<&[u8]>,
             out: &mut [u8],
             changed: Option<&mut [u32; H]>,
             sink: crate::PairSink<'_>,
         ) -> bool {
-            self.render_inner(prog, scratch, ink, still, inputs, tables, None, u32::MAX, out, changed, Some(sink))
+            self.render_inner(prog, scratch, ink, still, inputs, tables, under, u32::MAX, out, changed, Some(sink))
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -805,7 +807,7 @@ mod device {
             if !crate::range::inputs_in_range(prog, inputs) {
                 return vm_instead(prog, scratch, ink, still, inputs, tables, under, rows, out, changed, beam);
             }
-            if self.low.rate && beam.is_some() {
+            if self.low.rate && beam.is_some() && under.is_none() {
                 return self.rate_raced(prog, scratch, ink, still, inputs, tables, under, rows, out, changed, beam);
             }
             // A `rate` formula without its held picture: the slow layers'
@@ -836,8 +838,8 @@ mod device {
             true
         }
 
-        /// A `rate` formula raced (the player never races one): drawn
-        /// whole, then its pairs told.
+        /// A `rate` formula raced without its held picture: drawn whole
+        /// (the slow layers' rows first), then its pairs told.
         #[cold]
         #[inline(never)]
         #[allow(clippy::too_many_arguments)]

@@ -650,7 +650,6 @@ DEFAULT_SETTINGS = {
     "panel_sync": True,         # writes paced to the panel's refresh (no tearing)
     "panel_split": True,        # with it, each frame's bottom half a refresh after the top
     "formula_jit": True,        # the Formulas' JIT (the device's kill switch)
-    "formula_beam": False,      # racing the beam for Formulas (console-c's spike)
     "formula_keep": "turn",     # a Formula sent to the panel stays: turn / 1m / 5m / hold
     "api_key": "",              # "" = no key asked; never echoed back
 }
@@ -700,7 +699,6 @@ FIELD_TYPES = {
     "panel_sync": "bool",
     "panel_split": "bool",
     "formula_jit": "bool",
-    "formula_beam": "bool",
     "formula_keep": "str",
     "api_key": "str",
     # "attract_set" is not here: it is null-or-string, validated by hand
@@ -3264,7 +3262,7 @@ def make_handler(ctx: Context, quiet: bool):
                              "in_pair": 0, "waited": 0, "wait_us": 0, "wait_max_us": 0, "gave_up": 0,
                              "split_on": ctx.settings["panel_sync"] and ctx.settings["panel_split"],
                              "split": 0, "split_ok": 0, "unsplit": 0, "spin_us": 0,
-                             "stretched": 0, "late": 0, "retimed": 0},
+                             "retimed": 0},
                 }
                 if ctx.settings["follow"] and ctx.follow.state == "attract":
                     obj["attract_live"] = attract_live_path(ctx.settings["attract"])
@@ -3344,7 +3342,6 @@ def make_handler(ctx: Context, quiet: bool):
                     "panel_sync": s["panel_sync"],
                     "panel_split": s["panel_split"],
                     "formula_jit": s["formula_jit"],
-                    "formula_beam": s["formula_beam"],
                     "formula_keep": s["formula_keep"],
                     "api_key_set": bool(s["api_key"]),
                 }

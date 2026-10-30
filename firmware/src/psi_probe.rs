@@ -109,19 +109,17 @@ pub mod play {
     static N: AtomicU32 = AtomicU32::new(0);
     static SUM: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
     static MAX: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
-    static COUNTS: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
+    static MISSES: AtomicU32 = AtomicU32::new(0);
     static OVERS: [AtomicU32; 5] = [const { AtomicU32::new(0) }; 5];
 
     /// One Formula frame (main task only), or a frame under a formula look.
-    pub fn note(p: [u32; 8], missed: bool, excused: bool, stretched: bool) {
+    pub fn note(p: [u32; 8], missed: bool) {
         N.fetch_add(1, Relaxed);
         for (i, v) in p.iter().enumerate() {
             SUM[i].fetch_add(*v, Relaxed);
             MAX[i].fetch_max(*v, Relaxed);
         }
-        for (c, b) in COUNTS.iter().zip([missed, excused, stretched]) {
-            c.fetch_add(u32::from(b), Relaxed);
-        }
+        MISSES.fetch_add(u32::from(missed), Relaxed);
         let work = p[2] + p[3] + p[4] + p[5] + p[6];
         for (c, o) in OVERS.iter().zip(OVER) {
             c.fetch_add(u32::from(work >= o), Relaxed);
@@ -132,7 +130,7 @@ pub mod play {
         let n = N.swap(0, Relaxed);
         let sums: [u32; 8] = core::array::from_fn(|i| SUM[i].swap(0, Relaxed));
         let maxes: [u32; 8] = core::array::from_fn(|i| MAX[i].swap(0, Relaxed));
-        let c: [u32; 3] = core::array::from_fn(|i| COUNTS[i].swap(0, Relaxed));
+        let missed = MISSES.swap(0, Relaxed);
         let o: [u32; 5] = core::array::from_fn(|i| OVERS[i].swap(0, Relaxed));
         if n == 0 {
             return None;
@@ -144,13 +142,10 @@ pub mod play {
         let (jit, why, _) = opendmd_core::fx_psi::jit_status();
         let jit = if jit { "kernel".to_string() } else { format!("vm: {why}") };
         let mut s = format!(
-            "psi-probe: play {} s [{}]: {n} formula frames, misses {}, late excused {}, stretched {}, governor {us} us mean -> {ms} ms frames (asked {asked}), {jit}; mean/max us:",
+            "psi-probe: play {} s [{}]: {n} formula frames, misses {missed}, governor {us} us mean -> {ms} ms frames (asked {asked}), {jit}; mean/max us:",
             // SAFETY: a clock read.
             unsafe { esp_idf_sys::esp_timer_get_time() } / 1_000_000,
             if all { "as before" } else { "phase A" },
-            c[0],
-            c[1],
-            c[2]
         );
         for (i, name) in PHASES.iter().enumerate() {
             s.push_str(&format!(" {name} {}/{}", sums[i] / n, maxes[i]));
@@ -2057,9 +2052,9 @@ fn jit_spike(out: &mut [u8]) {
     say!(info, "psi-probe: jit: done, exec heap {} B free, data heap {} B free", exec_heap().0, heap());
 }
 
-/// Racing the beam (console-c): no rows, only the play lines (each with
-/// the beam's counters), for the integrator's Formulas played by name with
-/// `formula_beam` on and off. Built with `OPENDMD_PROBE_BEAM` set in the
+/// Racing the beam (console-c): the raced goldens and the split, then the
+/// play lines (each with the beam's counters), for the integrator's
+/// Formulas played by name. Built with `OPENDMD_PROBE_BEAM` set in the
 /// environment (`make fw-release-variant FW_RELEASE_FEATURES=psi-probe`);
 /// `make emu-probe` builds the full probe.
 const BEAM_ONLY: bool = option_env!("OPENDMD_PROBE_BEAM").is_some();
@@ -2582,7 +2577,7 @@ pub(crate) mod beam {
             }
             let inputs = psi::golden::inputs(ms);
             let mut order = Order { next: 0, bad: false, started: false };
-            psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &inputs, &t, out, None,
+            psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &inputs, &t, None, out, None,
                 &mut |p, _, _, _| order.tell(p));
             let mut check = |pass: &str, got: u64, told: bool| {
                 if got == want && told {
@@ -2597,7 +2592,7 @@ pub(crate) mod beam {
             #[cfg(feature = "jit")]
             if let Ok(mut k) = psi::jit::emit(&prog) {
                 let mut order = Order { next: 0, bad: false, started: false };
-                k.render_beam(&prog, &mut s, draws.then_some(&mut *ink), None, &inputs, &t, out, None,
+                k.render_beam(&prog, &mut s, draws.then_some(&mut *ink), None, &inputs, &t, None, out, None,
                     &mut |p, _, _, _| order.tell(p));
                 check("kernel", psi::golden::fnv(out), order.done());
                 kernels += 1;
@@ -2652,7 +2647,7 @@ pub(crate) mod beam {
             let mut told = 0u32;
             let raced = p50(15, || {
                 ms += 10;
-                psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, out,
+                psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, None, out,
                     Some(&mut ch), &mut |p, _, _, _| told += u32::from(p != psi::BEAM_START));
             });
             // Before the rows (frame steps, draw stage) and the rows, over
@@ -2662,7 +2657,7 @@ pub(crate) mod beam {
             for k in 0..120u32 {
                 let t0 = Instant::now();
                 let mut at = t0;
-                psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(k * 8), &t, out,
+                psi::render_rows_beam::<128>(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(k * 8), &t, None, out,
                     Some(&mut ch), &mut |p, _, _, _| {
                         if p == psi::BEAM_START {
                             at = Instant::now();
@@ -2692,7 +2687,7 @@ pub(crate) mod beam {
                 let mut ms = 0u32;
                 let kr = p50(15, || {
                     ms += 10;
-                    k.render_beam(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, out,
+                    k.render_beam(&prog, &mut s, draws.then_some(&mut *ink), None, &psi::golden::inputs(ms), &t, None, out,
                         Some(&mut ch), &mut |p, _, _, _| told += u32::from(p != psi::BEAM_START));
                 });
                 line.push_str(&format!("; kernel at once {kw} us, raced {kr} us"));

@@ -837,3 +837,59 @@ fn kernels_race_the_beam_as_the_vm_draws_at_once() {
     }
     assert!(n >= 40, "only {n} frames raced");
 }
+
+/// A `rate` formula raced through its kernel: the fast part in pair order
+/// over the held slow layers, the bytes and changed groups of the VM's
+/// fast part over them at once, each pair told once, in order.
+#[test]
+fn rate_kernels_race_their_fast_part_over_the_held_picture() {
+    let mut srcs: Vec<(String, String)> = bundled()
+        .into_iter()
+        .filter(|(_, src)| compile(src).is_ok_and(|p| p.rate().is_some()))
+        .collect();
+    srcs.push(("sketch".into(), "loop 2\nlayer rate 4 { hsv(x + t/3, 1, frac(y + t)) }\nlayer add { gray(x*t) }".into()));
+    let mut n = 0;
+    for (name, src) in srcs {
+        let prog = compile(&src).unwrap();
+        let Ok(low) = lower(&prog) else { continue };
+        assert!(low.rate, "{name}");
+        let mut held = crate::Held::try_boxed().unwrap();
+        let mut hs = Scratch::<128>::new();
+        let mut before = vec![0u8; W * H * 3];
+        for step in 0..6u32 {
+            let ms = step * 20 + 40;
+            let mut inputs = golden::inputs(ms);
+            inputs.set_ms(&prog, u64::from(ms));
+            if !crate::range::inputs_in_range(&prog, &inputs) {
+                continue;
+            }
+            held.update::<128>(&prog, &mut hs, &inputs, &OWN);
+            let with = With { under: Some(held.picture()), ink: prog.draws() };
+            let mut words = vec![0u32; W * H * 3 / 4];
+            let want = bytemuck_bytes(&mut words);
+            want.copy_from_slice(&before);
+            let mut want_ch = [0u32; H];
+            let mut ink = Ink::boxed();
+            crate::render_fast::<128>(&prog, &mut Scratch::new(), Some(&mut ink), None, &inputs, &OWN, with.under, u32::MAX, want, Some(&mut want_ch));
+            let mut told = Vec::new();
+            let mut sink = |p: usize, out: &[u8], a: u32, b: u32| {
+                let row = |r: usize, pic: &[u8]| pic[r * W * 3..(r + 1) * W * 3].to_vec();
+                for q in 0..H / 2 {
+                    let pic = if p != crate::BEAM_START && q <= p { &want[..] } else { &before[..] };
+                    assert!(row(q, out) == row(q, pic) && row(q + H / 2, out) == row(q + H / 2, pic),
+                        "{name} at {ms} ms: pair {q} when pair {p} was told");
+                }
+                told.push((p, a, b));
+            };
+            let (got, _, got_ch) = kernel_frame_beam(&prog, &low, &inputs, None, with, Some(&before), Some(&mut sink));
+            assert_eq!(&got[..], &want[..], "{name} at {ms} ms");
+            assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
+            let want_told: Vec<_> =
+                [(crate::BEAM_START, 0, 0)].into_iter().chain((0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2]))).collect();
+            assert_eq!(told, want_told, "{name} at {ms} ms: the pairs told");
+            before = got;
+            n += 1;
+        }
+    }
+    assert!(n >= 6, "only {n} frames raced");
+}
