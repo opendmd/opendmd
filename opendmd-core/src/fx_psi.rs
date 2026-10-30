@@ -1041,7 +1041,12 @@ impl PsiFx {
         // draw between them. A raced frame is on the panel's refresh grid
         // instead: its own `t` (one `t` a frame, the picture the browser
         // draws for it).
+        // (Not a `rate` formula: on the refresh grid its held slow rows are
+        // due 0, 1 or 2 bands a frame before its rows start, which moved
+        // the start by milliseconds — Storm front raced went from 20 to
+        // 32 ms frames with 213 misses a minute on the spare, beam-rate-fix.)
         self.racing = self.drawn > 0
+            && self.prog.rate().is_none()
             && clock().is_some()
             && !self.trialing()
             && beam_hooks().is_some();
@@ -1193,7 +1198,7 @@ impl PsiFx {
         #[cfg(not(all(feature = "psi-jit", target_arch = "xtensa", target_os = "espidf")))]
         let _ = drawn;
         if let Some(h) = hooks {
-            return self.beam_end(h, cycle.unwrap_or(0), clock, t0, slow_us.saturating_sub(slow_fair), grid);
+            return self.beam_end(h, cycle.unwrap_or(0), clock, t0, grid);
         }
         let Some(c) = clock else {
             return self.delay();
@@ -1233,11 +1238,9 @@ impl PsiFx {
         let ink = self.ink.as_deref_mut();
         let still = Some(&mut self.still);
         match (sink, self.held.as_deref().filter(|_| self.prog.rate().is_some())) {
-            // (A `rate` formula: its fast part raced over the slow rows
-            // held; without them, drawn whole then told.)
-            (Some(s), held) => {
-                let under = held.map(|h| h.picture());
-                psi::render_rows_beam::<LANES>(&self.prog, &mut self.scratch, ink, still, &self.inputs, &tables, under, bytes, changed, s)
+            // (Never a `rate` formula's frame: see `frame_inner`.)
+            (Some(s), _) => {
+                psi::render_rows_beam::<LANES>(&self.prog, &mut self.scratch, ink, still, &self.inputs, &tables, None, bytes, changed, s)
             }
             // A `rate` formula: the rest over the slow rows held.
             (None, Some(h)) => psi::render_fast::<LANES>(
@@ -1297,11 +1300,10 @@ impl PsiFx {
     }
 
     /// A raced frame written: the governor told its time (render and
-    /// writes, less any wait for the scan and `unfair`, a `rate` formula's
-    /// slow rows beyond a band's share) against its refresh grid, and the
-    /// delay to the next, locked onto the scan
+    /// writes, less any wait for the scan) against its refresh grid, and
+    /// the delay to the next, locked onto the scan
     /// ([`crate::scan::beam_delay_us`]).
-    fn beam_end(&mut self, h: BeamHooks, cycle: u32, clock: Option<Clock>, t0: u32, unfair: u32, grid: u32) -> Duration {
+    fn beam_end(&mut self, h: BeamHooks, cycle: u32, clock: Option<Clock>, t0: u32, grid: u32) -> Duration {
         let (err, waited, late) = (h.end)();
         let unit = crate::scan::beam_frames(grid * 1000, cycle);
         if self.gov.note_late(late) {
@@ -1311,7 +1313,7 @@ impl PsiFx {
             );
         }
         if let Some(c) = clock {
-            let us = c().wrapping_sub(t0).saturating_sub(waited).saturating_sub(unfair);
+            let us = c().wrapping_sub(t0).saturating_sub(waited);
             if self.gov.observe_beam(us, unit * cycle, cycle) {
                 log::info!(
                     "formula: {} us a frame raced -> every {} refreshes (asked {grid} ms)",
@@ -2214,6 +2216,7 @@ mod jit {
             // (False when the inputs were out of range and the VM drew it:
             // a trial frame counted as the VM's — Fable's review.)
             if let Some(sink) = beam {
+                // (Racing the beam: never a `rate` formula's frame.)
                 return k.render_beam(
                     &self.prog,
                     &mut self.scratch,
@@ -2221,7 +2224,7 @@ mod jit {
                     Some(&mut self.still),
                     &self.inputs,
                     &tables(),
-                    under,
+                    None,
                     bytes,
                     changed,
                     sink,
@@ -2538,21 +2541,18 @@ mod tests {
     /// is drawn, in the panel's order, and what was written makes the
     /// panel the canvas; nothing is left for the blit; the frames are the
     /// ones drawn at once (on the grid's times), and the delay is the
-    /// refresh. A `rate` formula too, over its held slow layers.
+    /// refresh.
     #[test]
     fn a_raced_formula_writes_each_pair_as_it_is_drawn() {
         const ROAD: &str = include_str!("../../opendmd-web/formulas/endless-road.psi");
         const STARS: &str = include_str!("../../opendmd-web/formulas/starfield.psi");
         const GATE: &str = include_str!("../../opendmd-web/formulas/time-gate.psi");
-        const STORM: &str = include_str!("../../opendmd-web/formulas/storm-front.psi");
         set_clock(Some(slow_clock));
         set_beam(Some(BeamHooks { begin: beam_begin, start: beam_start, pair: beam_pair, end: beam_end }));
         for (name, src) in psi::sketches::ALL.iter().copied().chain([
             ("Endless road", ROAD),
             ("Starfield", STARS),
             ("Time gate", GATE),
-            // (A `rate` formula: its fast part raced over the held clouds.)
-            ("Storm front", STORM),
         ]) {
             let mut raced = Fx::parse(&path(src)).unwrap_or_else(|| panic!("{name}"));
             let mut plain = Fx::parse(&path(src)).unwrap();
@@ -2587,6 +2587,7 @@ mod tests {
                 assert_eq!(d, Duration::from_micros(7_980 << raced_level(&raced)), "{name} frame {k}");
             }
         }
+        a_rate_formula_is_not_raced_and_keeps_its_grid();
         arm_beam(false);
         set_beam(None);
         set_clock(None);
@@ -2595,6 +2596,39 @@ mod tests {
     fn raced_level(fx: &Fx) -> u32 {
         let _ = fx;
         u32::from(stats().1 > 12)
+    }
+
+    /// A `rate` formula with the beam's hooks armed is not raced: its
+    /// frames go up whole through the blit on its own grid (Storm front's
+    /// 20 ms), as without the hooks. (Raced, beam-on held it to 16 or 32
+    /// ms frames on the refresh grid and its starts slipped: the spare's
+    /// 213 misses a minute.)
+    /// (Called from `a_raced_formula_writes_each_pair_as_it_is_drawn`, with
+    /// its clock and hooks: they are the process's, so one test.)
+    fn a_rate_formula_is_not_raced_and_keeps_its_grid() {
+        const STORM: &str = include_str!("../../opendmd-web/formulas/storm-front.psi");
+        let mut raced = Fx::parse(&path(STORM)).unwrap();
+        let mut plain = Fx::parse(&path(STORM)).unwrap();
+        let (Fx::Psi(a), Fx::Psi(b)) = (&mut raced, &mut plain);
+        assert!(a.program().rate().is_some());
+        a.set_seed(7);
+        b.set_seed(7);
+        let (mut c, mut want) = (Canvas::new(), Canvas::new());
+        for k in 0..30u32 {
+            let t = plain.delay() * k;
+            arm_beam(false);
+            let dw = plain.frame(t, &mut want);
+            arm_beam(true);
+            TOLD.with(|t| t.borrow_mut().clear());
+            let d = raced.frame(t, &mut c);
+            assert!(TOLD.with(|t| t.borrow().is_empty()), "frame {k}: raced");
+            assert_eq!(STARTS.with(|n| n.replace(0)), 0, "frame {k}: started");
+            assert_eq!(c.as_bytes(), want.as_bytes(), "frame {k}: the bytes");
+            assert!(k == 0 || !c.dirty().is_clean(), "frame {k}: nothing left for the blit");
+            assert_eq!((d, dw), (Duration::from_millis(20), Duration::from_millis(20)), "frame {k}: its grid");
+            c.dirty_mut().clear();
+            want.dirty_mut().clear();
+        }
     }
 
     /// A Formula played as an effect marks every pixel its frame changed
