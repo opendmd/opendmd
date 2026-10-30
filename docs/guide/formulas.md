@@ -274,7 +274,10 @@ them, and up to three palettes in a formula), used like the others:
 `pal(sea, v)`. `pal(sea, 0)` is the first colour and `pal(sea, 1)` the
 last; with four colours, `pal(sea, 1/3)` is the second and `pal(sea, 2/3)`
 the third. In between you get the nearest colour, in bands — handy with a
-sprite or `floor(…)` choosing which colour each pixel is.
+sprite or `floor(…)` choosing which colour each pixel is. Give colours
+names and use those instead of fractions: `palette road = black #000,
+kerb #806, sky #f48`, then `pal(road, road.kerb)`; `road.step` is the
+step from one colour to the next and `road.n` how many there are.
 
 **Palette cycling.** The old paint programs and games animated water,
 fire and plasma without redrawing them: the picture stayed still and its
@@ -482,6 +485,8 @@ hsv(x, 0.6, ink)
   hills `6/16`, the sun `5/16`) and read `ink(16)`: the whole number `k`
   that was drawn there, exactly, so `pick(ink(16), sky, …, hills, sun)`
   colours each. Any number of levels from 1 to 255 works the same way.
+- To hide a line or a dot, give it ink 0 (`line(…, shown*6/16)`): it
+  draws nothing and costs nothing.
 - Every frame starts empty: nothing is left over from the frame before.
 
 **Starfield** (bundled) and the gallery's **Wireframe cube** are made this way.

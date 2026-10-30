@@ -2990,3 +2990,52 @@ fn names_may_be_set_again() {
         assert!(e.msg.contains(want), "{src:?}: {}", e.msg);
     }
 }
+
+// --- named palette entries, lines hidden by ink 0 ----------------------------
+
+/// `P.name` is the fraction `pal` maps back to that colour, i/(n − 1) as
+/// written (the same constant: the same program); `P.step` 1/(n − 1),
+/// `P.n` the count; names are optional per colour.
+#[test]
+fn palette_entries_have_names() {
+    let same = |a: &str, b: &str| {
+        let pa = compile(a).unwrap_or_else(|e| panic!("{}", e.render(a)));
+        let pb = compile(b).unwrap_or_else(|e| panic!("{}", e.render(b)));
+        assert!(pa == pb, "{a:?} is not {b:?}");
+    };
+    let p = "palette road = black #000, #403, kerb #806, #ec0, sky #f48\n";
+    same(&format!("{p}pal(road, road.kerb)"), &format!("{p}pal(road, 2/4)"));
+    same(&format!("{p}pal(road, road.sky - road.step*x)"), &format!("{p}pal(road, 4/4 - 1/4*x)"));
+    same(&format!("{p}gray(road.n/8 + road.black)"), &format!("{p}gray(5/8)"));
+    same(
+        "palette p = a #000, b #fff\npal(p, p.b)",
+        "palette p = #000, #fff\npal(p, 1)",
+    );
+    // In a part, its own palette.
+    same(
+        "part q {\n  palette sea = deep #003, foam #fff\n  pal(sea, sea.foam*x)\n}\nq(x, y)",
+        "part q {\n  palette sea = #003, #fff\n  pal(sea, 1*x)\n}\nq(x, y)",
+    );
+}
+
+/// A line or dot of ink 0 draws nothing and walks nothing: lines hidden
+/// that way leave the frame's steps to the lines after them.
+#[test]
+fn ink_zero_walks_nothing() {
+    let draw = |src: &str| {
+        let p = compile(src).unwrap_or_else(|e| panic!("{}", e.render(src)));
+        let mut ink = Ink::boxed();
+        let mut out = [0u8; W * H * 3];
+        render_rows_ink::<128>(&p, &mut Scratch::new(), Some(&mut ink), &Inputs::default(), &OWN, None, u32::MAX, &mut out);
+        out
+    };
+    // 40 hidden lines of 812 steps each (32,480: twice the frame's 16,384),
+    // then a row of dots: all drawn.
+    let hidden = draw("draw { for k < 40 { line(-512, 300, 300, -512, 0) }\nfor j < 128 { dot(j, 31) } }\ngray(ink)");
+    let none = draw("draw { for j < 128 { dot(j, 31) } }\ngray(ink)");
+    assert!(hidden == none);
+    // Shown at one end: walked, as ever (the same picture as before).
+    let a = draw("draw { line(0, 0, 127, 31, 0, 1); line(0, 31, 127, 0, 0); dot(3, 3, 0) }\ngray(ink)");
+    let b = draw("draw { line(0, 0, 127, 31, 0, 1) }\ngray(ink)");
+    assert!(a == b);
+}

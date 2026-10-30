@@ -75,6 +75,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("rgb(r, g, b)", "rgb(x, y, 1 - x)"),
     ("pal(fire, v)", "pal(fire, y)"),
     ("palette sea = #024, #08c, #fff", "palette sea = #024, #08c, #fff; pal(sea, y)"),
+    ("palette sea = deep #024, foam #fff", "palette sea = deep #024, mid #08c, foam #fff; pal(sea, sea.mid + sea.step*(y > 0.5))"),
     ("pal(fire, v) * k", "pal(fire, y) * x"),
     ("cycle(fire, v, s)", "loop 4; cycle(fire, x, t/4)"),
     ("gray(v)", "gray(x)"),

@@ -291,7 +291,7 @@ impl Pen {
     }
 
     fn dot(&mut self, ink: &mut Ink, x: i32, y: i32, v: i32) {
-        if !self.may() {
+        if !self.may() || fixed::chan(v) == 0 {
             return;
         }
         let (x, y) = (pixel(x, X_MIN, X_MAX), pixel(y, Y_MIN, Y_MAX));
@@ -306,6 +306,12 @@ impl Pen {
             return;
         }
         let from = self.from;
+        // Ink 0 at both ends draws nothing (0 under the canvas's `max`):
+        // walked, it would only use the frame's steps. A line hidden this
+        // way (`line(…, shown)`) costs what one off the panel does.
+        if fixed::chan(from.2) == 0 && fixed::chan(to.2) == 0 {
+            return;
+        }
         let (mut x, mut y) = (pixel(from.0, X_MIN, X_MAX), pixel(from.1, Y_MIN, Y_MAX));
         let (x1, y1) = (pixel(to.0, X_MIN, X_MAX), pixel(to.1, Y_MIN, Y_MAX));
         // Wholly off one side of the panel: nothing of it would show (its

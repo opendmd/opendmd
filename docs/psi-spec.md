@@ -247,6 +247,7 @@ example is compiled by the tests.
 | `rgb(r, g, b)` | red, green, blue: 0 to 1 | <code class="psi-ex">rgb(x, y, 1 - x)</code> |
 | `pal(fire, v)` | a palette: fire, ice, ocean, chrono, amber, rainbow, gray | <code class="psi-ex">pal(fire, y)</code> |
 | `palette sea = #024, #08c, #fff` | your own palette, up to 32 colours (3 palettes): pal(sea, 0) the first, pal(sea, 1) the last, pal(sea, 0.5) the middle one | <code class="psi-ex">palette sea = &#35;024, &#35;08c, &#35;fff; pal(sea, y)</code> |
+| `palette sea = deep #024, foam #fff` | a colour may have a name: sea.foam is where pal finds it (sea.step from one colour to the next, sea.n how many) | <code class="psi-ex">palette sea = deep &#35;024, mid &#35;08c, foam &#35;fff; pal(sea, sea.mid + sea.step&#42;(y &gt; 0.5))</code> |
 | `pal(fire, v) * k` | a palette colour, dimmed (or lit) by k | <code class="psi-ex">pal(fire, y) &#42; x</code> |
 | `cycle(fire, v, s)` | palette cycling: the palette turned by s (one turn per 1: t/4 turns it every 4 s), at v; wraps where pal stops; s may change by row; cheap when v is the same every frame | <code class="psi-ex">loop 4; cycle(fire, x, t/4)</code> |
 | `gray(v)` | white, 0 to 1 | <code class="psi-ex">gray(x)</code> |
@@ -1538,6 +1539,24 @@ Use fewer palettes.
 > tables, sprites and palettes hold 256 numbers in all — this would make …
 
 Make the tables, sprites and palettes smaller.
+
+<h4 id="E925">E925 · a palette's colour named twice</h4>
+
+> `…` already names a colour of `…`: give this one another name
+
+Give each named colour of a palette its own name.
+
+<h4 id="E926">E926 · a palette's colour named <code>n</code> or <code>step</code></h4>
+
+> `n` and `step` are every palette's own (`….n`, `….step`): name this colour another way
+
+Pick another name for the colour: `P.n` is the palette's count and `P.step` the step between colours.
+
+<h4 id="E927">E927 · an unknown colour of a palette</h4>
+
+> palette `…` has no colour named `…`: name it in its line, as `… #f80`
+
+Name the colour on the palette's line (`palette road = black #000, kerb #806`), or use another of its names.
 
 <h4 id="E931">E931 · <code>cycle</code> turned by a value that changes along a row</h4>
 

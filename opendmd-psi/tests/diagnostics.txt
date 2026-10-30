@@ -716,6 +716,21 @@ palette q = #0f0
 pal(q, T[x])
 --- 3:1 tables, sprites and palettes hold 256 numbers in all — this would make 264
 
+=== E925
+palette sea = deep #003, deep #06c
+pal(sea, x)
+--- 1:26 `deep` already names a colour of `sea`: give this one another name
+
+=== E926
+palette sea = n #003, #06c
+pal(sea, x)
+--- 1:15 `n` and `step` are every palette's own (`sea.n`, `sea.step`): name this colour another way
+
+=== E927
+palette sea = deep #003, #06c
+pal(sea, sea.foam)
+--- 2:14 palette `sea` has no colour named `foam`: name it in its line, as `foam #f80`
+
 === E931
 cycle(fire, x, x)
 --- 1:16 `cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but this uses `x` (the pixel's position across, 0 to 1)
