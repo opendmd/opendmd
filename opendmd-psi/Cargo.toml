@@ -55,6 +55,10 @@ name = "diagnostics"
 required-features = ["docs"]
 
 [[test]]
+name = "reference"
+required-features = ["docs"]
+
+[[test]]
 name = "syntax"
 required-features = ["syntax"]
 

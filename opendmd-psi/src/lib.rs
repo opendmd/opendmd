@@ -34,6 +34,9 @@ pub mod builtins;
 #[cfg(feature = "docs")]
 #[doc(hidden)]
 pub mod errors;
+#[cfg(feature = "docs")]
+#[doc(hidden)]
+pub mod reference;
 mod compile;
 mod draw;
 pub mod fixed;
