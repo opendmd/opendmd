@@ -4520,7 +4520,7 @@ impl<'s> Parser<'s> {
                 );
             };
             self.next();
-            vals.push(if neg { -x } else { x });
+            try_push(&mut vals, if neg { -x } else { x })?;
             if self.peek().tok != Tok::Comma {
                 break;
             }
