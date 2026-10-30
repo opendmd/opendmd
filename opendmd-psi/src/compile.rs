@@ -1984,6 +1984,8 @@ struct Local<'s> {
     in_frame: bool,
     /// A `for` loop's counter (it can't be set).
     counter: bool,
+    /// A `control` line's name (it keeps it: E203).
+    control: bool,
     /// The scope it was set in ([`Parser::scopes`]).
     scope: u16,
 }
@@ -2070,6 +2072,18 @@ struct Env {
 const NO_CH: u8 = 3;
 /// Inside `rgb(r, g, b)`'s values (for the error a colour there gets).
 const IN_RGB: u8 = 4;
+
+/// What a name is being set as ([`Parser::new_name`]): a value (set
+/// again, or shadowing one from outside, as often as you like), a loop
+/// counter (may shadow a value), a control, or a part, table, sprite or
+/// palette (a name of their own).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Naming {
+    Value,
+    Counter,
+    Control,
+    Thing,
+}
 
 struct Parser<'s> {
     src: &'s str,
@@ -2675,11 +2689,8 @@ impl<'s> Parser<'s> {
 
     #[inline(never)]
     fn lookup_value(&mut self, name: &str) -> Option<Result<Id, Error>> {
-        if let Some(l) = self
-            .locals
-            .iter()
-            .find(|l| l.name == name && self.visible(l.scope))
-        {
+        // (The latest: a name may be set again, or shadow one from outside.)
+        if let Some(l) = self.lookup_local(name) {
             return Some(Ok(l.id));
         }
         if let Some(&(_, inp, _)) = INPUTS.iter().find(|e| e.0 == name) {
@@ -3220,9 +3231,11 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// A name about to be set at `t` (a value or a part): not a built-in,
-    /// and not one already set here.
-    fn new_name(&self, t: Token) -> Result<&'s str, Error> {
+    /// A name about to be set at `t` as `kind`: not a built-in, not a
+    /// loop counter, and for anything but a value or a counter (which may
+    /// set a name again, or shadow one from outside: the latest is read)
+    /// not a name already set here (E203).
+    fn new_name(&self, t: Token, kind: Naming) -> Result<&'s str, Error> {
         let name = self.text(t);
         // (`ink` came after formulas were saved: a name set with it is that
         // name, as `cx` and the rest.)
@@ -3251,35 +3264,43 @@ impl<'s> Parser<'s> {
                 format!("`{name}` is a palette's name; pick another name"),
             );
         }
-        let local = self
-            .locals
-            .iter()
-            .find(|l| l.name == name && self.visible(l.scope));
-        if local.is_some_and(|l| l.counter) {
+        let local = self.lookup_local(name);
+        if kind == Naming::Value && local.is_some_and(|l| l.counter) {
             return self.err(t, format!("`{name}` is a loop counter: it can't be set"));
         }
-        let prev = local
-            .map(|l| l.at)
-            .or(self.part_named(name).map(|k| self.parts[k].at))
-            .or(self.table_named(name).map(|k| self.table_names[k].at))
-            .or(self.sprite_named(name).map(|k| self.sprites[k].at))
-            .or(self.palette_named(name).map(|k| self.palette_names[k].at));
-        if let Some(at) = prev {
-            return self.err(
-                t,
-                format!(
-                    "`{name}` is already set on line {} — each name can be set once",
-                    self.line_of(at)
-                ),
-            );
-        }
-        Ok(name)
+        // (A control keeps its name: set again, its slider would do nothing.)
+        let control = local.filter(|l| l.control);
+        let (what, at) = if let Some(k) = self.part_named(name) {
+            ("part", self.parts[k].at)
+        } else if let Some(k) = self.table_named(name) {
+            ("table", self.table_names[k].at)
+        } else if let Some(k) = self.sprite_named(name) {
+            ("sprite", self.sprites[k].at)
+        } else if let Some(k) = self.palette_named(name) {
+            ("palette", self.palette_names[k].at)
+        } else {
+            match (control, local) {
+                (Some(l), _) => ("control", l.at),
+                (_, Some(l)) if matches!(kind, Naming::Thing | Naming::Control) => {
+                    (if l.counter { "loop counter" } else { "value" }, l.at)
+                }
+                _ => return Ok(name),
+            }
+        };
+        // E203.
+        self.err(
+            t,
+            format!(
+                "`{name}` is already the name of a {what} (line {}) — pick another name",
+                self.line_of(at)
+            ),
+        )
     }
 
     /// `name = expr`.
     fn assignment(&mut self, in_frame: bool) -> Result<(), Error> {
         let t = self.next();
-        let name = self.new_name(t)?;
+        let name = self.new_name(t, Naming::Value)?;
         let eq = self.expect(Tok::Assign, "`=`")?;
         if matches!(self.peek().tok, Tok::Newline | Tok::Eof) {
             return self.err(eq, format!("a value is missing after `=` (`{name} = …`)"));
@@ -3307,6 +3328,7 @@ impl<'s> Parser<'s> {
             at: t.start,
             in_frame,
             counter: false,
+            control: false,
             scope: self.scope,
         })?;
         self.end_of_statement()
@@ -3728,7 +3750,7 @@ impl<'s> Parser<'s> {
         if n.tok != Tok::Name {
             return self.err(n, "a part needs a name, as in `part p { … }`");
         }
-        let name = self.new_name(n)?;
+        let name = self.new_name(n, Naming::Thing)?;
         self.next();
         let open = self.peek();
         if open.tok != Tok::LBrace {
@@ -3860,9 +3882,11 @@ impl<'s> Parser<'s> {
         let v = self.expect(Tok::Name, "the name of one of the part's values")?;
         let vn = self.text(v);
         let scope = self.parts[k].insts[j].scope;
+        // (`p.v`: the part's last `v`.)
         match self
             .locals
             .iter()
+            .rev()
             .find(|l| l.scope == scope && l.name == vn)
         {
             Some(l) => Ok(l.id),
@@ -4020,7 +4044,7 @@ impl<'s> Parser<'s> {
     fn palette(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.next();
-        let name = self.new_name(n)?;
+        let name = self.new_name(n, Naming::Thing)?;
         self.next(); // `=`
         let mut cols: Vec<u32> = Vec::new();
         loop {
@@ -4233,7 +4257,7 @@ impl<'s> Parser<'s> {
     fn sprite(&mut self, kw: Token) -> Result<(), Error> {
         self.next();
         let n = self.next();
-        let name = self.new_name(n)?;
+        let name = self.new_name(n, Naming::Thing)?;
         self.next(); // `{`
         let mut raws: Vec<Token> = Vec::new();
         loop {
@@ -4385,7 +4409,7 @@ impl<'s> Parser<'s> {
         if n.tok != Tok::Name {
             return self.err(n, "a table needs a name, as in `table T = 1, 2, 3`");
         }
-        let name = self.new_name(n)?;
+        let name = self.new_name(n, Naming::Thing)?;
         self.next();
         self.expect(Tok::Assign, "`=` (as in `table T = 1, 2, 3`)")?;
         let mut vals: Vec<i32> = Vec::new();
@@ -4613,7 +4637,7 @@ impl<'s> Parser<'s> {
         {
             return self.err(n, format!("`{name}` is already a loop counter here"));
         }
-        let name = self.new_name(n)?;
+        let name = self.new_name(n, Naming::Counter)?;
         self.pos += 3;
         let open = self.peek();
         if open.tok != Tok::LBrace {
@@ -4666,6 +4690,7 @@ impl<'s> Parser<'s> {
             at: n.start,
             in_frame: false,
             counter: true,
+            control: false,
             scope: self.scope,
         })?;
         if self.record {
@@ -5148,7 +5173,7 @@ impl<'s> Parser<'s> {
             }
             Some(_) => {}
             None => {
-                self.new_name(nt)?;
+                self.new_name(nt, Naming::Control)?;
             }
         }
         let (mut lo, mut hi, mut def) = (0, ONE, None);
@@ -5213,6 +5238,7 @@ impl<'s> Parser<'s> {
                 at: nt.start,
                 in_frame: false,
                 counter: false,
+                control: true,
                 scope: self.scope,
             })?;
         }

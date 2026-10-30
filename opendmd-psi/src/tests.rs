@@ -427,8 +427,8 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
     ),
     ("frame {\n  g = y\n}\ngray(g)", "this uses `y`", 2, 7),
     (
-        "v = 1\nv = 2\ngray(v)",
-        "`v` is already set on line 1",
+        "table T = 1\nT = 2\ngray(T)",
+        "`T` is already the name of a table (line 1)",
         2,
         1,
     ),
@@ -976,8 +976,8 @@ const LAYER_ERRORS: &[(&str, &str, usize, usize)] = &[
         1,
     ),
     (
-        "v = 1\nlayer { v = 2\ngray(v) }",
-        "`v` is already set on line 1",
+        "part p { gray(x) }\nlayer { p = 2\ngray(p) }",
+        "`p` is already the name of a part (line 1)",
         2,
         9,
     ),
@@ -1197,13 +1197,13 @@ const PART_ERRORS: &[(&str, &str, usize, usize)] = &[
     ("part p {\ngray(x)\n", "this `part {` is never closed", 1, 1),
     (
         "v = 1\npart v { gray(x) }\ngray(x)",
-        "`v` is already set on line 1",
+        "`v` is already the name of a value (line 1)",
         2,
         6,
     ),
     (
         "part p { gray(x) }\np = 2\ngray(x)",
-        "`p` is already set on line 1",
+        "`p` is already the name of a part (line 1)",
         2,
         1,
     ),
@@ -1616,7 +1616,7 @@ const DRAW_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ("draw { line(1, 2, 3, 4, 5, 6, 7) }\ngray(ink)", "`line` takes 4 values", 1, 8, "—"),
     ("for k < 3 { }\ngray(1)", "`for` goes inside `draw { }`", 1, 1, "—"),
     ("draw { dot(1, 1)\ngray(ink)", "this `draw {` is never closed", 1, 1, "—"),
-    ("table T = 1\ntable T = 2\ngray(T[0])", "`T` is already set on line 1", 2, 7, "—"),
+    ("table T = 1\ntable T = 2\ngray(T[0])", "`T` is already the name of a table (line 1)", 2, 7, "—"),
 ];
 
 #[test]
@@ -2421,7 +2421,7 @@ const SPRITE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ),
     (
         "sprite s {\nkey . 0, X 1\n.X.\n}\nsprite s {\nkey . 0\n.\n}\ngray(1)",
-        "`s` is already set on line 1",
+        "`s` is already the name of a sprite (line 1)",
         5,
         8,
         "—",
@@ -2608,7 +2608,7 @@ const PALETTE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ),
     (
         "palette p = #f00\npalette p = #0f0\npal(p, x)",
-        "`p` is already set on line 1",
+        "`p` is already the name of a palette (line 1)",
         2,
         9,
         "—",
@@ -2933,5 +2933,60 @@ fn the_slow_marker_is_the_first_pixel_step() {
         let re = p.row_end as usize;
         assert_eq!(p.ops[re].code, code::SLOW, "{src}\n{}", p.listing());
         assert!(!p.ops[re + 1..p.len()].iter().any(|o| o.code == code::SLOW));
+    }
+}
+
+// --- rebinding ----------------------------------------------------------------
+
+/// A name may be set again (`v = v*2` reads the one before), a layer, a
+/// part or a loop may set a name from outside (its own until it closes),
+/// and `p.v` is the last `v` on the part's own lines: each the same program as written
+/// with fresh names. Parts, tables, sprites, palettes and controls keep
+/// their names (E203); a loop counter can't be set (E709).
+#[test]
+fn names_may_be_set_again() {
+    let same = |a: &str, b: &str| {
+        let pa = compile(a).unwrap_or_else(|e| panic!("{}", e.render(a)));
+        let pb = compile(b).unwrap_or_else(|e| panic!("{}", e.render(b)));
+        assert!(pa == pb, "{a:?} is not {b:?}");
+    };
+    same("v = x\nv = v*2\ngray(v)", "v = x*2\ngray(v)");
+    same("v = t\nv = v + x\nv = sin(v)\ngray(v)", "q = sin(t + x)\ngray(q)");
+    same(
+        "v = x\nlayer { v = y\ngray(v) }\nlayer add { gray(v*0.5) }",
+        "v = x\nlayer { q = y\ngray(q) }\nlayer add { gray(v*0.5) }",
+    );
+    same(
+        "v = x\nlayer { v = v*y\ngray(v) }\nlayer add { gray(v) }",
+        "v = x\nlayer { q = v*y\ngray(q) }\nlayer add { gray(v) }",
+    );
+    same("part p { v = x\nv = v*0.5\ngray(v) }\ngray(p.v)", "gray(x*0.5)");
+    same("part p { v = 2\ngray(v) }\nv = y\nlayer { p(x, y) }\nlayer add { gray(v) }", "part p { q = 2\ngray(q) }\nv = y\nlayer { p(x, y) }\nlayer add { gray(v) }");
+    same(
+        "k = 3\ndraw { for k < 4 { dot(k, 1) } }\ngray(ink*k/4)",
+        "k = 3\ndraw { for j < 4 { dot(j, 1) } }\ngray(ink*k/4)",
+    );
+    same(
+        "draw { for k < 4 { v = k\nv = v*2\ndot(v, 1) } }\ngray(ink)",
+        "draw { for k < 4 { dot(k*2, 1) } }\ngray(ink)",
+    );
+    same("frame { s = t\ns = s*2 }\ngray(frac(s + x))", "frame { s = t*2 }\ngray(frac(s + x))");
+    same("cycle = 2\ncycle = cycle*x\ngray(cycle)", "gray(2*x)");
+    same("loop forever\nseed = 0.25\nseed = seed*2\ngray(seed)", "loop forever\ngray(0.5)");
+    // Kinds that keep their names, and counters.
+    for (src, want) in [
+        ("table T = 1\nT = 2\ngray(T)", "`T` is already the name of a table (line 1)"),
+        ("v = 1\ntable v = 2\ngray(v)", "`v` is already the name of a value (line 1)"),
+        ("part p { gray(x) }\nlayer { p = 2\ngray(p) }", "`p` is already the name of a part (line 1)"),
+        ("control s 0..1\ncontrol s 0..2\ngray(s)", "`s` is already the name of a control (line 1)"),
+        ("control s 0..1 = 0.5\ns = s*2\ngray(s)", "`s` is already the name of a control (line 1)"),
+        ("control s 0..1\ndraw { for s < 4 { dot(s, 1) } }\ngray(ink*s)", "`s` is already the name of a control (line 1)"),
+        ("part p { control s 0..1\ns = 2\ngray(s) }\ngray(p.s)", "`s` is already the name of a control (line 1)"),
+        ("draw { for k < 4 { k = 2\ndot(k, 1) } }\ngray(ink)", "`k` is a loop counter: it can't be set"),
+        ("draw { for k < 4 { for k < 2 { dot(k, 1) } } }\ngray(ink)", "`k` is already a loop counter here"),
+        ("v = v*2\ngray(v)", "unknown name `v`"),
+    ] {
+        let e = compile(src).unwrap_err();
+        assert!(e.msg.contains(want), "{src:?}: {}", e.msg);
     }
 }

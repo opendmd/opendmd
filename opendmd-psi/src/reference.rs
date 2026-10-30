@@ -173,9 +173,9 @@ pub const HELP: &[Help] = &[
     },
     Help {
         code: 203,
-        why: "A name is set once in its block: it is a definition, not a variable that changes. Give the second value a name of its own.",
-        before: "v = x\nv = v * 2\ngray(v)",
-        after: "v = x\nv2 = v * 2\ngray(v2)",
+        why: "A value may be set again (`v = v * 2` reads the `v` before it), but parts, tables, sprites, palettes and controls keep their names: neither a value nor another of them can take one. Give it a name of its own.",
+        before: "table T = 0.5, 1\nT = 2\ngray(T[0])",
+        after: "table T = 0.5, 1\nk = 2\ngray(T[0] * k)",
     },
     Help {
         code: 204,
@@ -216,6 +216,12 @@ pub const HELP: &[Help] = &[
     Help {
         code: 402,
         why: "The panel works a formula out for 4,096 pixels at every frame, so the steps a formula takes are limited. Values that change less often (once a row, once a frame) cost much less: move what you can out of the pixel.",
+        before: "",
+        after: "",
+    },
+    Help {
+        code: 408,
+        why: "The panel didn't have the memory to compile this Formula just then (a GIF, a look or a transition was holding it): not the formula's fault. It plays when it is next due; a shorter formula needs less.",
         before: "",
         after: "",
     },
@@ -269,9 +275,10 @@ pub const HELP: &[Help] = &[
     },
 ];
 
-/// The codes that are never a formula's fault: a bug in Psi, or the panel
-/// short of room. The reference marks them as internal.
-pub const INTERNAL: &[u16] = &[407, 408];
+/// The codes that are a bug in Psi, never a formula's fault. The reference
+/// marks them as internal. (E408, the panel short of memory for a moment,
+/// is not a bug: it has its own help.)
+pub const INTERNAL: &[u16] = &[407];
 
 /// The help for `code`.
 pub fn help(code: u16) -> Option<&'static Help> {

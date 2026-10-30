@@ -166,10 +166,10 @@ gray(foo(1))
 --- 1:6 unknown function `foo` — did you mean `cos`?
 
 === E203
-v = 1
-v = 2
-gray(v)
---- 2:1 `v` is already set on line 1 — each name can be set once
+table T = 1, 2
+T = 3
+gray(T)
+--- 2:1 `T` is already the name of a table (line 1) — pick another name
 
 === E204
 x = 1

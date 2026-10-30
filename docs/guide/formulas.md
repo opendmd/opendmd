@@ -191,7 +191,8 @@ Now drag the `2` in `x*2`, or the `0.9`, and see what happens.
 
 ## The language
 
-A formula is a few lines: names you set (`wave = …`, each name once), and a
+A formula is a few lines: names you set (`wave = …`; set one again, `wave = wave*2`, and what
+follows reads the new one), and a
 colour on the last line. It is worked out for every pixel, every frame.
 `--` starts a comment. Everything is a number; there are no loops, lists or
 words (a single character in quotes, `'A'`, is a number too: its code).
@@ -363,8 +364,9 @@ The word after `layer` says how it goes onto what is below it: `over`
 (the default: it covers it), `add` (lighter), `multiply` (darker: white
 leaves it as it was), `screen` (lighter, softly), `max` or `min`. Names
 set outside the layers can be used in all of them; names set inside a
-layer are its own, so two layers can each have a `v`, and you can paste a
-whole formula into a `layer { … }` to combine it with another. `loop` and
+layer are its own, so two layers can each have a `v` (even one set outside
+too: inside the layer, its own), and you can paste a whole formula into a
+`layer { … }` to combine it with another. `loop` and
 `fps` go on their own lines outside the layers.
 
 **Slow layers.** A bottom layer that changes slowly need not be drawn
