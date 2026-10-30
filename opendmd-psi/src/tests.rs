@@ -229,7 +229,7 @@ fn a_scaled_palette_is_its_channels_scaled() {
     );
     // Not into sums.
     let e = compile("pal(fire, x) * y + 0.1").unwrap_err();
-    assert!(e.msg.contains("can only be scaled"), "{}", e.msg);
+    assert!(e.msg.contains("only be scaled"), "{}", e.msg);
 }
 
 #[test]
@@ -382,7 +382,7 @@ fn too_many_live_values() {
     let sum: Vec<String> = (1..=14).map(|k| format!("v{k}")).collect();
     src += &format!("gray({})", sum.join(" + "));
     let e = compile(&src).unwrap_err();
-    assert!(e.msg.contains("too many values at once"), "{}", e.msg);
+    assert!(e.msg.contains("values at once"), "{}", e.msg);
 }
 
 /// (source, message, line, column)
@@ -421,7 +421,7 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
     ),
     (
         "frame {\n  g = x * 2\n}\ngray(g)",
-        "only values that are the same for every pixel",
+        "`frame { }` is worked out once a frame",
         2,
         7,
     ),
@@ -458,7 +458,7 @@ const ERRORS: &[(&str, &str, usize, usize)] = &[
     ("gray(2x)", "to multiply, write `2 * x`", 1, 6),
     (
         "gray(rgb(1,1,1))",
-        "makes the colour, so it can only be the whole last line",
+        "is a whole colour: it can only be the last line",
         1,
         6,
     ),
@@ -931,7 +931,7 @@ const LAYER_ERRORS: &[(&str, &str, usize, usize)] = &[
         10,
     ),
     ("layer {\ngray(x)\n", "this `layer {` is never closed", 1, 1),
-    ("layer { v = x }", "this layer has no colour", 1, 1),
+    ("layer { v = x }", "this layer ends without a colour", 1, 15),
     (
         "layer { gray(x)\nv = 1 }",
         "the colour has to be the layer's last line",
@@ -1487,24 +1487,24 @@ fn colour_and_pick_errors() {
         ("gray(#ff88)", "a colour is # and 3 or 6 hex digits", 1, 6),
         ("gray(#ggg)", "a colour is # and 3 or 6 hex digits", 1, 6),
         ("gray(x # 2)", "a colour is # and 3 or 6 hex digits", 1, 8),
-        ("gray(#fff)", "a colour can't be a value", 1, 6),
-        ("hsv(#f00)", "a colour can't be a value", 1, 5),
+        ("gray(#fff)", "is a colour, not a number", 1, 6),
+        ("hsv(#f00)", "is a colour, not a number", 1, 5),
         (
             "v = mix(#000, #fff, x)\ngray(v)",
-            "a colour can't be a value",
+            "is a colour, not a number",
             1,
             9,
         ),
         ("mix(#000, #fff)", "`mix` takes 3 values, but got 2", 1, 1),
         (
             "rgb(1, #fff, 0)",
-            "inside `rgb(r, g, b)` the three are values",
+            "takes three numbers, not colours",
             1,
             8,
         ),
         (
             "mix(rgb(1, #fff, 0), #000, x)",
-            "inside `rgb(r, g, b)` the three are values",
+            "takes three numbers, not colours",
             1,
             12,
         ),
@@ -1516,12 +1516,12 @@ fn colour_and_pick_errors() {
         ),
         (
             "mix(hsv(x, 1, 1), #000, x)",
-            "in a sum with colours only `#…` and `rgb(r, g, b)` are colours",
+            "is a whole colour: it can't be added to others",
             1,
             5,
         ),
-        ("pal(fire, x) * #fff", "`pal(…)` can't go into a sum", 1, 14),
-        ("gray(x) * #fff", "`gray(…)` can't go into a sum", 1, 9),
+        ("pal(fire, x) * #fff", "`pal(…)` is a whole colour: it can't go into a sum", 1, 14),
+        ("gray(x) * #fff", "`gray(…)` is a whole colour: it can't go into a sum", 1, 9),
         (
             "x + 1 * rgb(1, 2)",
             "`,` (`rgb(r, g, b)` takes three values)",
@@ -1602,18 +1602,18 @@ const DRAW_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ("draw { v = dot(1, 2) }\ngray(ink)", "`dot(…)` draws", 1, 12, "E706"),
     ("gray(ink)", "`ink` needs a `draw { }` block", 1, 6, "E706"),
     ("table T = 1, x\ngray(T[0])", "a table holds numbers only", 1, 14, "E707"),
-    ("table T = 1, 2\ntable U = 3,\n4\ngray(T[0] + U[1] + V[0])", "`[ ]` reads a table", 4, 20, "E710"),
-    ("draw { dot(x, 1) }\ngray(ink)", "inside draw { } only values that are the same for every pixel", 1, 12, "E708"),
+    ("table T = 1, 2\ntable U = 3,\n4\ngray(T[0] + U[1] + V[0])", "reads a table, and `V` is not one", 4, 20, "E710"),
+    ("draw { dot(x, 1) }\ngray(ink)", "`draw { }` runs once a frame", 1, 12, "E708"),
     ("draw { v = py*2\ndot(v, 1) }\ngray(ink)", "but this uses `py`", 1, 12, "E708"),
     ("draw { line(0, 0, 9, ink) }\ngray(ink)", "but this uses `ink`", 1, 22, "E708"),
     ("draw { for k < 3 { k = 2\ndot(k, 1) } }\ngray(ink)", "`k` is a loop counter: it can't be set", 1, 20, "E709"),
     ("draw { for k < 3 { for k < 2 { dot(k, 1) } } }\ngray(ink)", "`k` is already a loop counter here", 1, 24, "E709"),
-    ("v = 1\ngray(v[0])", "`[ ]` reads a table: `NAME[k]` — `v` is not a table", 2, 6, "E710"),
-    ("table T = 1, 2\ngray(T)", "`T` is a table: read one of its numbers with `T[k]`", 2, 6, "E710"),
+    ("v = 1\ngray(v[0])", "`v[…]` reads a table, and `v` is not one", 2, 6, "E710"),
+    ("table T = 1, 2\ngray(T)", "`T` is a table: read one of its numbers, `T[k]`", 2, 6, "E710"),
     ("table T = 1, 2\ngray(T[0)", "expected `]` here", 2, 9, "—"),
     ("draw { frame { v = 1 } }\ngray(ink)", "inside draw { } go `name = value`", 1, 8, "—"),
-    ("draw { dot(1) }\ngray(ink)", "`dot` takes 2 values", 1, 8, "—"),
-    ("draw { line(1, 2, 3, 4, 5, 6, 7) }\ngray(ink)", "`line` takes 4 values", 1, 8, "—"),
+    ("draw { dot(1) }\ngray(ink)", "`dot` takes x, y", 1, 8, "—"),
+    ("draw { line(1, 2, 3, 4, 5, 6, 7) }\ngray(ink)", "`line` takes x0, y0, x1, y1", 1, 8, "—"),
     ("for k < 3 { }\ngray(1)", "`for` goes inside `draw { }`", 1, 1, "—"),
     ("draw { dot(1, 1)\ngray(ink)", "this `draw {` is never closed", 1, 1, "—"),
     ("table T = 1\ntable T = 2\ngray(T[0])", "`T` is already the name of a table (line 1)", 2, 7, "—"),
@@ -2168,13 +2168,13 @@ const FOREVER_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ("loop forever\ngray(t*x)", "grows without end", 2, 7, "E901"),
     ("loop forever\ngray(sqrt(t))", "grows without end", 2, 6, "E901"),
     ("loop forever\ngray(frac(t*t))", "grows without end", 2, 12, "E901"),
-    ("loop forever\ngray(floor(t + x))", "grows without end", 2, 6, "E901"),
-    ("loop forever\nv = t + px\ngray(v < 3)", "grows without end", 3, 8, "E901"),
+    ("loop forever\ngray(floor(t + x))", "a growing value plus a per-pixel", 2, 6, "E907"),
+    ("loop forever\nv = t + px\ngray(v < 3)", "a growing value plus a per-pixel", 3, 8, "E907"),
     ("loop forever\ntable T = 1, 2\ngray(T[t])", "grows without end", 3, 6, "E901"),
     ("loop forever\ngray(pick(px/32, t, 1))", "grows without end", 2, 6, "E901"),
     ("loop forever\ngray(x / t)", "grows without end", 2, 8, "E901"),
-    ("loop forever\ngray(frac((t + x)/3))", "add the pixel's part there", 2, 18, "E901"),
-    ("loop forever\ngray((t + x) > 5)", "add the pixel's part there", 2, 14, "E901"),
+    ("loop forever\ngray(frac((t + x)/3))", "a growing value plus a per-pixel or per-row part", 2, 18, "E907"),
+    ("loop forever\ngray((t + x) > 5)", "a growing value plus a per-pixel or per-row part", 2, 14, "E907"),
     ("loop forever\nv = t + x\ngray(v)", "a colour can't take a value that grows", 2, 1, "E905"),
     ("loop forever\nrgb(1, 1, 1, t + x)", "a colour can't take a value that grows", 2, 1, "E905"),
     ("loop forever\npal(fire, x) * t", "a colour can't take a value that grows", 2, 1, "E905"),
@@ -2351,21 +2351,21 @@ const SPRITE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ),
     (
         "sprite s {\nkey .0, X 1\n.X.\n}\ngray(s[0, 0])",
-        "a key is a character and its number",
+        "a key entry is a character",
         2,
         5,
         "E913",
     ),
     (
         "sprite s {\nkey . 0, X one\n.X.\n}\ngray(s[0, 0])",
-        "a key is a character and its number",
+        "a key entry is a character",
         2,
         10,
         "E913",
     ),
     (
         "sprite s {\nkey . 0, - 1\n.X.\n}\ngray(s[0, 0])",
-        "a key is a character and its number",
+        "a key entry is a character",
         2,
         10,
         "E913",
@@ -2407,7 +2407,7 @@ const SPRITE_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ),
     (
         "sprite s {\nkey . 0, X 1\n.X.\n}\ngray(s)",
-        "`s` is a sprite: read its pixels with `s[u, v]`",
+        "`s` is a sprite: read its pixels, `s[u, v]`",
         5,
         6,
         "E918",
@@ -2727,12 +2727,12 @@ fn cycle_turns_once_a_row_and_takes_the_still_cache() {
 #[test]
 fn cycle_error_messages() {
     let cases: &[(&str, &str, &str)] = &[
-        ("cycle(fire, x, x)", "the same along a row", "E931"),
+        ("cycle(fire, x, x)", "turns a whole row at once", "E931"),
         ("cycle(gray, x, t)", "gray is not one", "E932"),
         ("cycle(nope, x, t)", "unknown palette", "E932"),
         (
             "palette pa = #f00\npalette pb = #0f0\nlayer { cycle(pa, x, t) }\nlayer add { cycle(pb, x, t/2) }",
-            "room for 3 palettes",
+            "holds 3 palettes",
             "E933",
         ),
         ("cycle(fire, x)", "and the turn", "E934"),
@@ -2876,7 +2876,7 @@ fn rate_error_messages() {
         ("layer rate 1 { gray(x) }\nlayer add { gray(y) }", "2 to 200", "E942"),
         ("layer rate 2.5 { gray(x) }\nlayer add { gray(y) }", "2 to 200", "E942"),
         ("layer rate 4 { gray(x) }\nlayer multiply rate 5 { gray(y) }\nlayer add { gray(t) }", "share one", "E943"),
-        ("layer rate 4 { gray(x, 0.5) }\nlayer add { gray(y) }", "cover everything", "E944"),
+        ("layer rate 4 { gray(x, 0.5) }\nlayer add { gray(y) }", "must cover the whole panel", "E944"),
         ("layer rate 4 { gray(ul) }\nlayer add { gray(y) }", "can't read", "E944"),
         ("layer rate 4 { gray(x) }\nlayer add { gray(ur) }", "can't read", "E944"),
         ("draw { dot(3, 3) }\nlayer rate 4 { gray(ink) }\nlayer add { gray(y) }", "can't read", "E944"),

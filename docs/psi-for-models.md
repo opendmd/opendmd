@@ -580,8 +580,8 @@ the formula's `t`.
 |---|---|---|
 | source | 16,384 characters, comments included (a shared link past ~1,500 may be cut by apps; the gallery takes files of 4 KB) | too long |
 | steps | 256 in all: per frame + per row + per pixel + one per layer | too long for the panel (N steps) |
-| live per-pixel values at once | 12 | keeps too many values at once |
-| constants + per-frame/per-row values held at once | ~119 (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | too many numbers and steps |
+| live per-pixel values at once | 12 | holds more than 12 values at once |
+| constants + per-frame/per-row values held at once | ~119 (a value's slot is used again once nothing reads it any more: a per-frame value only the frame's steps read frees its slot for the rows' values, a row value the pixels don't read for the next one; constants and values the pixels read hold theirs all frame) | needs more than 128 numbers and once-a-frame values |
 | nesting | 18 levels of brackets and operators (a part level counts 3) | nested too deeply / parts go too deep |
 | `loop` | 0.1..3600 s, or `forever` | between 0.1 and 3600 seconds |
 | values that grow without end (`loop forever`: `t` and what is made of it once a frame) | 15 at once | too many values that grow without end |
@@ -772,7 +772,7 @@ gray(glyph(ch, floor(u/2) % 5, floor(v/2)))
 Each block below fails to compile with the sentence in its first comment.
 
 ```psi error
--- error: a value that grows without end
+-- error: grows without end in `loop forever`
 loop forever
 gray(frac(t*x))
 ```
@@ -837,13 +837,13 @@ gray(T[0])
 ```
 
 ```psi error
--- error: inside frame { } only values that are the same for every pixel
+-- error: `frame { }` is worked out once a frame
 frame { k = x * 2 }
 gray(k)
 ```
 
 ```psi error
--- error: makes the colour, so it can only be the whole last line
+-- error: is a whole colour: it can only be the last line
 v = rgb(x, y, 0)
 gray(0)
 ```
@@ -880,7 +880,7 @@ pal(blue, x)
 ```
 
 ```psi error
--- error: a colour can't be a value
+-- error: is a colour, not a number
 glow = #ffcc00
 glow * x
 ```
@@ -889,7 +889,7 @@ A colour has no name: write it where it is used, in the colour line
 (`#ffcc00 * x`).
 
 ```psi error
--- error: a colour can't be a value
+-- error: is a colour, not a number
 hsv(#ff8800)
 ```
 
@@ -937,7 +937,7 @@ layer add { p }
 ```
 
 ```psi error
--- error: inside draw { } only values that are the same for every pixel
+-- error: `draw { }` runs once a frame
 draw { dot(px, 16) }
 gray(ink)
 ```

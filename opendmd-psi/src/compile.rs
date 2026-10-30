@@ -1090,8 +1090,8 @@ const K_SPLIT: u8 = 203;
 const WIDE_T: i32 = 0x100;
 
 /// E901: a value that grows without end where it can't go.
-const GROWS: &str = "a value that grows without end (`t` in `loop forever`) can't go in here: \
-use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min, max or smoothstep";
+const GROWS: &str = "`t` grows without end in `loop forever`, and this can't take it: \
+use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min or max";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Node {
@@ -2436,11 +2436,9 @@ impl<'s> Parser<'s> {
                 Tok::Hex(_) => return self.err(
                     t,
                     if self.env.ch == IN_RGB {
-                        "inside `rgb(r, g, b)` the three are values, not colours: \
-                         write the colour on its own (`#f80`, `#f80 * k`)"
+                        "`rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`"
                     } else {
-                        "a colour can't be a value: use it in the colour itself (the last line), \
-                         as `#f80`, `#f80 * k`, `mix(#000, #f80, k)` or `rgb(#f80, k)`"
+                        "`#…` is a colour, not a number: use it on the last line, as `#f80 * k` or `mix(#000, #f80, k)`"
                     },
                 ),
                 _ => return Err(self.no_value(t)),
@@ -2626,13 +2624,11 @@ impl<'s> Parser<'s> {
         let msg = if self.peek().tok == Tok::LParen {
             if self.env.ch < NO_CH && COLOURS.iter().any(|e| e.0 == name) {
                 format!(
-                    "in a sum with colours only `#…` and `rgb(r, g, b)` are colours: \
-                     `{name}(…)` can only be a whole line of its own"
+                    "`{name}(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)"
                 )
             } else if COLOURS.iter().any(|e| e.0 == name) {
                 format!(
-                    "`{name}(…)` makes the colour, so it can only be the whole last line \
-                     (of the formula, or of a layer)"
+                    "`{name}(…)` is a whole colour: it can only be the last line (of the formula or a layer)"
                 )
             } else if PRIMITIVES.contains(&name) {
                 format!("`{name}(…)` draws: it goes on a line of its own inside `draw {{ }}`")
@@ -3055,7 +3051,7 @@ impl<'s> Parser<'s> {
                     at.0,
                     at.1,
                     format!(
-                        "`cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but {}",
+                        "`cycle` turns a whole row at once (by t, a frame value or py), but {}",
                         self.varies(s)
                     ),
                 ));
@@ -3324,8 +3320,7 @@ impl<'s> Parser<'s> {
                 start,
                 end.max(start),
                 format!(
-                    "inside frame {{ }} only values that are the same for every pixel can be used, \
-                     but {}",
+                    "`frame {{ }}` is worked out once a frame, before any pixel, but {}",
                     self.varies(id)
                 ),
             ));
@@ -3529,18 +3524,15 @@ impl<'s> Parser<'s> {
                     e,
                         if word == "cycle" {
                         String::from(
-                            "`cycle(…)` can't go into a sum: it can only be scaled, `cycle(fire, v, s) * k` \
-                             (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
+                            "`cycle(…)` is a whole colour: it can't go into a sum, only be scaled, `cycle(fire, v, s) * k`"
                         )
                     } else if word == "pal" {
                         String::from(
-                            "`pal(…)` can't go into a sum: it can only be scaled, `pal(fire, v) * k` \
-                             (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)"
+                            "`pal(…)` is a whole colour: it can't go into a sum, only be scaled, `pal(fire, v) * k`"
                         )
                     } else {
                         format!(
-                            "`{word}(…)` can't go into a sum: only `#…` and `rgb(r, g, b)` colours can \
-                             (`#fff * k`, `rgb(r, g, b) * k`)"
+                            "`{word}(…)` is a whole colour: it can't go into a sum (only `#…` and `rgb(r, g, b)` can)"
                         )
                     },
                 );
@@ -3697,12 +3689,13 @@ impl<'s> Parser<'s> {
             }
             self.skip_newlines();
         }
-        self.next();
+        let close = self.next();
         self.scope = outer;
         let Some(((mut cs, layered), ct)) = colour else {
+            // (At its `}`: where the colour line goes.)
             return self.err(
-                kw,
-                "this layer has no colour: end it with `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`",
+                close,
+                "this layer ends without a colour: its last line is `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`",
             );
         };
         match (layered, blend) {
@@ -3915,8 +3908,7 @@ impl<'s> Parser<'s> {
             return self.fail_at(
                 t,
                 format!(
-                    "`{name}` is a part: draw it as a whole last line (of the formula, or of a layer), \
-                     or use one of its values, as in `{name}.v`"
+                    "`{name}` is a part: draw it as a whole last line, or read one of its values, as `{name}.v`"
                 ),
             );
         };
@@ -3978,14 +3970,14 @@ impl<'s> Parser<'s> {
         let Some(k) = self.table_named(name) else {
             return self.err(
                 t,
-                format!("`[ ]` reads a table: `NAME[k]` — `{name}` is not a table"),
+                format!("`{name}[…]` reads a table, and `{name}` is not one"),
             );
         };
         let open = self.peek();
         if open.tok != Tok::LBracket {
             return self.err(
                 t,
-                format!("`{name}` is a table: read one of its numbers with `{name}[k]` (k from 0)"),
+                format!("`{name}` is a table: read one of its numbers, `{name}[k]` (k from 0)"),
             );
         }
         self.next();
@@ -4270,7 +4262,7 @@ impl<'s> Parser<'s> {
         }
         self.fail_at(
             t,
-            format!("`{name}` is a sprite: read its pixels with `{name}[u, v]`"),
+            format!("`{name}` is a sprite: read its pixels, `{name}[u, v]`"),
         )
     }
 
@@ -4552,8 +4544,7 @@ impl<'s> Parser<'s> {
             start,
             end.max(start),
             format!(
-                "inside draw {{ }} only values that are the same for every pixel can be used \
-                 (no x, y, px, py, i, ur, ug, ub, ul or ink), but {}",
+                "`draw {{ }}` runs once a frame, before any pixel, but {}",
                 self.varies(id)
             ),
         ))
@@ -4830,9 +4821,9 @@ impl<'s> Parser<'s> {
             return self.err(
                 t,
                 if line {
-                    format!("`line` takes 4 values (x0, y0, x1, y1: pixels, y up from the bottom) and, if you like, the ink at each end (0 to 1), but got {k}")
+                    format!("`line` takes x0, y0, x1, y1 (pixels up from the bottom left) and 1 or 2 inks: {k} given")
                 } else {
-                    format!("`dot` takes 2 values (x, y: pixels, y up from the bottom) and, if you like, its ink (0 to 1), but got {k}")
+                    format!("`dot` takes x, y (pixels up from the bottom left) and an ink: {k} given")
                 },
             );
         }
@@ -5242,8 +5233,8 @@ impl<'s> Parser<'s> {
                 return Err(self.fail_at(
                     nt,
                     format!(
-                        "`{name}` is control {}'s letter: name this one something else (controls take a, b and c in order)",
-                        j + 1
+                        "`{name}` is the {} control's letter: give this one another name (controls take a, b, c in order)",
+                        ["first", "second", "third"][j]
                     ),
                 ));
             }
@@ -5686,7 +5677,7 @@ fn finish(
                 l.at + l.name.len(),
                 format!(
                     "a colour can't take a value that grows without end and changes across the panel, \
-                     as `{}` (line {line}) does: use frac(…) of it, or min(t/k, 1)",
+                     as `{0}` (line {line}) does: use frac({0}) or min({0}/k, 1)",
                     l.name
                 ),
             ))
@@ -5733,7 +5724,7 @@ fn finish(
             ct.start,
             ct.end,
             format!(
-                "a formula has room for {USER_PALETTES} palettes: its own ({n_own} here) and each palette `cycle` turns by another value ({} here)",
+                "a formula holds {USER_PALETTES} palettes: its own ({n_own} here) and one more for each turn `cycle` gives ({} here)",
                 turns.len()
             ),
         ));
@@ -5803,8 +5794,8 @@ fn finish(
             return rate_err("a `rate` layer is the slow one under a layer that moves: add a layer above it, or leave `rate` out");
         }
         if backdrop {
-            // E944.
-            return rate_err("the bottom `rate` layer draws the whole panel: make it cover everything (`layer rate N { … }` with no blend and no coverage)");
+            // E948.
+            return rate_err("the bottom `rate` layer must cover the whole panel: `layer rate N { … }`, no blend, no coverage");
         }
         let reads = split_slow(&mut p.dag, &mut steps, n_slow).map_err(|e| Error {
             start: ct.start,
@@ -6056,21 +6047,21 @@ fn grown_colour(
 
 /// E922: a palette's colours.
 const PALETTE_COLOURS: &str =
-    "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff` (pal(sea, 0) is the first, pal(sea, 1) the last)";
+    "a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`";
 
 /// E912/E913: a sprite's key.
 const SPRITE_KEY: &str =
     "a sprite starts with its key: `key . 0, R 1, D 2` (each character, then the number it reads as)";
-const SPRITE_KEY_ENTRY: &str = "a key is a character and its number, as `R 1` or `. -0.5`, separated by commas (not ; { } , - / or a space)";
+const SPRITE_KEY_ENTRY: &str = "a key entry is a character (not ; { } , - / or a space) and its number, `R 1`, after a comma";
 
 /// E901 for a growing value with a part per pixel or row.
-const GROWS_SPLIT: &str = "a value that grows without end plus a part per pixel or row only goes into frac, sin, cos, tri, saw, sqr, noise, % or a multiply: \
-add the pixel's part there, as frac(t*k) + x or sin(t*k + x)";
+const GROWS_SPLIT: &str = "a growing value plus a per-pixel or per-row part only goes into frac, \
+the waves, noise, % or a multiply: as frac(t*k) + x or sin(t*k + x)";
 
 /// E905.
 const GROWN_COLOUR: &str =
-    "a colour can't take a value that grows without end and changes across the panel \
-(`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1)";
+    "a colour can't take a value that grows without end and changes across the panel: \
+use frac(…) of it, or min(t/k, 1)";
 
 /// A colour step to lay out: its code (plain or a layer's), its values,
 /// the palette and the coverage (a layer's).
@@ -6221,7 +6212,7 @@ fn emit(
             0,
             0,
             format!(
-                "this formula is too long for the panel ({steps} steps; the limit is {MAX_OPS}) — simplify it"
+                "this formula is too long for the panel: {steps} steps, the limit is {MAX_OPS}"
             ),
         )
     };
@@ -6438,7 +6429,7 @@ fn emit(
                         return Err(Error::new(
                             0,
                             0,
-                            format!("this formula has too many values that grow without end (more than {}) — simplify it", WIDE - 1),
+                            format!("too many values that grow without end (more than {}): share one, as frac(u*k) of one `u`", WIDE - 1),
                         ));
                     }
                     next_wide += 1;
@@ -6646,7 +6637,7 @@ fn emit(
         return Err(Error::new(
             0,
             0,
-            format!("this formula keeps too many values at once (more than {REGS}) — simplify it"),
+            format!("this formula holds more than {REGS} values at once (the panel's registers): use each sooner"),
         ));
     };
     let (seq, run_len, col_len, slow_len) = (lay.seq, lay.run_len, lay.col_len, lay.slow_len);
@@ -6873,7 +6864,7 @@ fn assign_slots(
         Error::new(
             0,
             0,
-            format!("this formula has too many numbers and steps (more than {MAX_SCALARS} values) — simplify it"),
+            format!("this formula needs more than {MAX_SCALARS} numbers and once-a-frame values: use fewer"),
         )
     };
     let mut phys = alloc::vec![0u8; n];

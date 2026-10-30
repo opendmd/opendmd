@@ -229,18 +229,18 @@ frame {
 k = x
 }
 gray(k)
---- 2:5 inside frame { } only values that are the same for every pixel can be used, but this uses `x` (the pixel's position across, 0 to 1)
+--- 2:5 `frame { }` is worked out once a frame, before any pixel, but this uses `x` (the pixel's position across, 0 to 1)
 
 === E301
 k = x*2
 frame { s = k + t }
 gray(s)
---- 2:13 inside frame { } only values that are the same for every pixel can be used, but `k` (line 1) is per pixel: it reads `x`
+--- 2:13 `frame { }` is worked out once a frame, before any pixel, but `k` (line 1) is per pixel: it reads `x`
 
 === E302
 v = #f80
 gray(v)
---- 1:5 a colour can't be a value: use it in the colour itself (the last line), as `#f80`, `#f80 * k`, `mix(#000, #f80, k)` or `rgb(#f80, k)`
+--- 1:5 `#…` is a colour, not a number: use it on the last line, as `#f80 * k` or `mix(#000, #f80, k)`
 
 === E303
 layer { gray(x) }
@@ -249,24 +249,24 @@ gray(y)
 
 === E304
 #f00 + gray(x)
---- 1:8 in a sum with colours only `#…` and `rgb(r, g, b)` are colours: `gray(…)` can only be a whole line of its own
+--- 1:8 `gray(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)
 
 === E305
 cycle(fire, x, t) + 1
---- 1:19 `cycle(…)` can't go into a sum: it can only be scaled, `cycle(fire, v, s) * k` (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)
+--- 1:19 `cycle(…)` is a whole colour: it can't go into a sum, only be scaled, `cycle(fire, v, s) * k`
 
 === E305
 pal(fire, x) + #fff
---- 1:14 `pal(…)` can't go into a sum: it can only be scaled, `pal(fire, v) * k` (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)
+--- 1:14 `pal(…)` is a whole colour: it can't go into a sum, only be scaled, `pal(fire, v) * k`
 
 === E306
 v = gray(x)
 gray(v)
---- 1:5 `gray(…)` makes the colour, so it can only be the whole last line (of the formula, or of a layer)
+--- 1:5 `gray(…)` is a whole colour: it can only be the last line (of the formula or a layer)
 
 === E307
 rgb(0.5, #f00, 1)
---- 1:10 inside `rgb(r, g, b)` the three are values, not colours: write the colour on its own (`#f80`, `#f80 * k`)
+--- 1:10 `rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`
 
 === E308
 frame { }
@@ -286,16 +286,16 @@ gray(x)
 
 === E402
 gray(<<200; + ;sin(x * {k})>>)
---- 1:1 this formula is too long for the panel (599 steps; the limit is 256) — simplify it
+--- 1:1 this formula is too long for the panel: 599 steps, the limit is 256
 
 === E403
 <<14;\n;w{k} = sin(x * {k})>>
 gray(<<14; + ;w{k}>>)
---- 15:1 this formula keeps too many values at once (more than 12) — simplify it
+--- 15:1 this formula holds more than 12 values at once (the panel's registers): use each sooner
 
 === E404
 gray(x<<140;; + {k}.37>>)
---- 1:1 this formula has too many numbers and steps (more than 128 values) — simplify it
+--- 1:1 this formula needs more than 128 numbers and once-a-frame values: use fewer
 
 === E405
 v = <<200*(>>x<<200*)>>
@@ -394,7 +394,7 @@ gray(x)
 }
 v = p
 gray(v)
---- 4:5 `p` is a part: draw it as a whole last line (of the formula, or of a layer), or use one of its values, as in `p.v`
+--- 4:5 `p` is a part: draw it as a whole last line, or read one of its values, as `p.v`
 
 === E508
 layer {
@@ -413,7 +413,7 @@ layer {
 v = 1
 }
 layer add { gray(x) }
---- 1:1 this layer has no colour: end it with `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`
+--- 3:1 this layer ends without a colour: its last line is `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`
 
 === E601
 psi 2
@@ -474,7 +474,7 @@ line(0, 0, 9, 9)
 gray(1)
 --- 1:1 `line(…)` draws: it goes on a line of its own inside `draw { }`
 
-=== E706
+=== E714
 gray(ink)
 --- 1:6 `ink` needs a `draw { }` block to read from
 
@@ -483,7 +483,7 @@ draw { v = dot(1, 2) }
 gray(ink)
 --- 1:12 `dot(…)` draws: it goes on a line of its own inside `draw { }`
 
-=== E706
+=== E715
 layer {
 for k < 3 { }
 gray(1)
@@ -498,13 +498,13 @@ gray(T[0])
 === E708
 draw { dot(x, 1) }
 gray(ink)
---- 1:12 inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but this uses `x` (the pixel's position across, 0 to 1)
+--- 1:12 `draw { }` runs once a frame, before any pixel, but this uses `x` (the pixel's position across, 0 to 1)
 
 === E708
 k = py/31
 draw { dot(k, 1) }
 gray(ink)
---- 2:12 inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but `k` (line 1) is per row: it reads `py`
+--- 2:12 `draw { }` runs once a frame, before any pixel, but `k` (line 1) is per row: it reads `py`
 
 === E709
 draw { for k < 3 { k = 2
@@ -520,12 +520,12 @@ gray(ink)
 === E710
 v = 1
 gray(v[0])
---- 2:6 `[ ]` reads a table: `NAME[k]` — `v` is not a table
+--- 2:6 `v[…]` reads a table, and `v` is not one
 
-=== E710
+=== E716
 table T = 1, 2
 gray(T)
---- 2:6 `T` is a table: read one of its numbers with `T[k]` (k from 0)
+--- 2:6 `T` is a table: read one of its numbers, `T[k]` (k from 0)
 
 === E711
 table
@@ -535,7 +535,7 @@ gray(1)
 === E712
 draw { line(0, 0, 9) }
 gray(ink)
---- 1:8 `line` takes 4 values (x0, y0, x1, y1: pixels, y up from the bottom) and, if you like, the ink at each end (0 to 1), but got 3
+--- 1:8 `line` takes x0, y0, x1, y1 (pixels up from the bottom left) and 1 or 2 inks: 3 given
 
 === E713
 draw { gray(1) }
@@ -568,12 +568,12 @@ gray(x)
 === E901
 loop forever
 gray(t*x)
---- 2:7 a value that grows without end (`t` in `loop forever`) can't go in here: use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min, max or smoothstep
+--- 2:7 `t` grows without end in `loop forever`, and this can't take it: use frac(t*k), t % n, sin(t*k), noise(t*k, y, z), a comparison, min or max
 
-=== E901
+=== E907
 loop forever
 gray(frac((t + x)/3))
---- 2:18 a value that grows without end plus a part per pixel or row only goes into frac, sin, cos, tri, saw, sqr, noise, % or a multiply: add the pixel's part there, as frac(t*k) + x or sin(t*k + x)
+--- 2:18 a growing value plus a per-pixel or per-row part only goes into frac, the waves, noise, % or a multiply: as frac(t*k) + x or sin(t*k + x)
 
 === E902
 loop forever
@@ -588,13 +588,13 @@ gray(seed)
 loop forever
 <<16;\n;w{k} = t*{k}.5>>
 gray(<<16; + ;frac(w{k})>>)
---- 18:1 this formula has too many values that grow without end (more than 15) — simplify it
+--- 18:1 too many values that grow without end (more than 15): share one, as frac(u*k) of one `u`
 
 === E905
 loop forever
 v = t + x
 gray(v)
---- 2:1 a colour can't take a value that grows without end and changes across the panel, as `v` (line 2) does: use frac(…) of it, or min(t/k, 1)
+--- 2:1 a colour can't take a value that grows without end and changes across the panel, as `v` (line 2) does: use frac(v) or min(v/k, 1)
 
 === E906
 loop forever
@@ -632,7 +632,7 @@ key .0, X 1
 .X.
 }
 gray(s[0, 0])
---- 2:5 a key is a character and its number, as `R 1` or `. -0.5`, separated by commas (not ; { } , - / or a space)
+--- 2:5 a key entry is a character (not ; { } , - / or a space) and its number, `R 1`, after a comma
 
 === E914
 sprite s {
@@ -666,13 +666,13 @@ key . 0, X 1
 gray(s[0])
 --- 5:9 a sprite is read at a column and a row: `s[u, v]`
 
-=== E918
+=== E917
 sprite s {
 key . 0, X 1
 .X.
 }
 gray(s)
---- 5:6 `s` is a sprite: read its pixels with `s[u, v]`
+--- 5:6 `s` is a sprite: read its pixels, `s[u, v]`
 
 === E919
 sprite s {
@@ -699,7 +699,7 @@ pal(p, x)
 === E922
 palette p = #fff, 3
 pal(p, x)
---- 1:19 a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff` (pal(sea, 0) is the first, pal(sea, 1) the last)
+--- 1:19 a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`
 
 === E923
 palette p1 = #f00
@@ -733,12 +733,12 @@ pal(sea, sea.foam)
 
 === E931
 cycle(fire, x, x)
---- 1:16 `cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but this uses `x` (the pixel's position across, 0 to 1)
+--- 1:16 `cycle` turns a whole row at once (by t, a frame value or py), but this uses `x` (the pixel's position across, 0 to 1)
 
 === E931
 s = x*2
 cycle(fire, y, s)
---- 2:16 `cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but `s` (line 1) is per pixel: it reads `x`
+--- 2:16 `cycle` turns a whole row at once (by t, a frame value or py), but `s` (line 1) is per pixel: it reads `x`
 
 === E932
 cycle(gray, x, t)
@@ -749,7 +749,7 @@ palette pa = #f00
 palette pb = #0f0
 layer { cycle(pa, x, t) }
 layer add { cycle(pb, x, t/2) }
---- 4:13 a formula has room for 3 palettes: its own (2 here) and each palette `cycle` turns by another value (2 here)
+--- 4:13 a formula holds 3 palettes: its own (2 here) and one more for each turn `cycle` gives (2 here)
 
 === E934
 cycle(fire, x)
@@ -807,7 +807,7 @@ layer rate 4 { gray(x) }
 === E948
 layer rate 4 { gray(x, 0.5) }
 layer add { gray(y) }
---- 2:13 the bottom `rate` layer draws the whole panel: make it cover everything (`layer rate N { … }` with no blend and no coverage)
+--- 2:13 the bottom `rate` layer must cover the whole panel: `layer rate N { … }`, no blend, no coverage
 
 === E951
 loop 4
@@ -882,7 +882,7 @@ gray(k)
 === E963
 control b = 0.5
 gray(b)
---- 1:9 `b` is control 2's letter: name this one something else (controls take a, b and c in order)
+--- 1:9 `b` is the second control's letter: give this one another name (controls take a, b, c in order)
 
 === E964
 look shiny
