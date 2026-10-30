@@ -624,13 +624,19 @@ pub fn render_rows_changed<const N: usize>(
     )
 }
 
-/// Racing the beam (console-lessons §2.6): told each row pair as soon as
-/// both its rows are drawn — `sink(p, out, top, bottom)` for rows `p` and
+/// Racing the beam (console-lessons §2.6): told [`BEAM_START`] as the rows
+/// start, then each row pair as soon as both its rows are drawn — `sink(p, out, top, bottom)` for rows `p` and
 /// `p + 16` (`p` in 0..16, in order), `top` and `bottom` their changed
 /// groups as [`render_rows_changed`] gives them (all set without a
 /// compare). `out` then holds those two rows of the new frame, the rows
 /// told before them, and the old bytes of the rows still to come.
 pub type PairSink<'a> = &'a mut (dyn FnMut(usize, &[u8], u32, u32) + 'a);
+
+/// What a [`PairSink`] is told once, first, as the rows start (after the
+/// frame's steps and its draw stage, before the first row): `sink(BEAM_START,
+/// out, 0, 0)`. The player plans the race from there, so a heavy draw stage
+/// is not counted as the first pair's time (Starfield, beam-b).
+pub const BEAM_START: usize = usize::MAX;
 
 /// Row `i` of the pair order: 0, 16, 1, 17, … 15, 31 (the panel lights
 /// rows `r` and `r + 16` together, `r` = 0..15 down each refresh).
@@ -727,6 +733,7 @@ pub fn render_rows_beam<const N: usize>(
             true,
             Some(&mut ch),
         );
+        sink(BEAM_START, out, 0, 0);
         for p in 0..H / 2 {
             sink(p, out, ch[p], ch[p + H / 2]);
         }
@@ -1117,7 +1124,10 @@ impl<'a> Rows<'a> {
         self.finish(out);
         let last = core::mem::replace(&mut scratch.last, 0) as usize;
         let Some(mut sink) = scratch.beam.0 else { return };
-        if last > H / 2 {
+        if last == 0 {
+            // SAFETY: as below.
+            unsafe { (sink.as_mut())(BEAM_START, out, 0, 0) };
+        } else if last > H / 2 {
             let row = last - 1;
             let p = row - H / 2;
             let (a, b) = self.changed.as_deref().map_or((u32::MAX, u32::MAX), |c| (c[p], c[row]));

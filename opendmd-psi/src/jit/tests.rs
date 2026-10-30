@@ -819,7 +819,7 @@ fn kernels_race_the_beam_as_the_vm_draws_at_once() {
                 let mut sink = |p: usize, out: &[u8], a: u32, b: u32| {
                     let row = |r: usize, pic: &[u8]| pic[r * W * 3..(r + 1) * W * 3].to_vec();
                     for q in 0..H / 2 {
-                        let pic = if q <= p { &want[..] } else { &before[..] };
+                        let pic = if p != crate::BEAM_START && q <= p { &want[..] } else { &before[..] };
                         assert!(row(q, out) == row(q, pic) && row(q + H / 2, out) == row(q + H / 2, pic),
                             "{name} at {ms} ms: pair {q} when pair {p} was told");
                     }
@@ -828,7 +828,8 @@ fn kernels_race_the_beam_as_the_vm_draws_at_once() {
                 let (got, _, got_ch) = kernel_frame_beam(&prog, &low, &inputs, None, with, Some(&before), Some(&mut sink));
                 assert_eq!(&got[..], &want[..], "{name} at {ms} ms");
                 assert_eq!(got_ch, want_ch, "{name} at {ms} ms: what changed");
-                let want_told: Vec<_> = (0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2])).collect();
+                let want_told: Vec<_> =
+                    [(crate::BEAM_START, 0, 0)].into_iter().chain((0..H / 2).map(|p| (p, want_ch[p], want_ch[p + H / 2]))).collect();
                 assert_eq!(told, want_told, "{name} at {ms} ms: the pairs told");
                 n += 1;
             }

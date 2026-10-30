@@ -604,6 +604,7 @@ impl Panel {
         #[cfg(feature = "psi")]
         opendmd_core::fx_psi::set_beam(on.then_some(opendmd_core::fx_psi::BeamHooks {
             begin: beam::begin,
+            start: beam::start,
             pair: beam::pair,
             end: beam::end,
         }));
@@ -1160,11 +1161,12 @@ mod beam {
     /// "wait_us","write_us","pair_us","first_us","last_us","unread"}`:
     /// raced frames since boot, those with a pair written past its window
     /// (`late_pairs` in all: each shows a refresh late, a seam for that
-    /// refresh), the frames that waited for their window at the start and
+    /// refresh), the frames that waited for their window as their rows
+    /// started and
     /// the pairs that waited for theirs (µs in all, wrapping), the µs spent
     /// writing pairs and in the pair hook in all (writes included;
     /// wrapping), the running means of when a frame's first and last pair
-    /// are drawn (µs after its start), and the frames not raced because the
+    /// are drawn (µs after its rows start), and the frames not raced because the
     /// scan could not be read.
     pub(super) fn json() -> String {
         format!(
@@ -1203,15 +1205,28 @@ mod beam {
         }
     }
 
-    /// `fx_psi::BeamHooks::begin`.
-    pub(super) fn begin(est_us: u32) -> Option<u32> {
+    /// `fx_psi::BeamHooks::begin`: can this frame be raced (the scan read)?
+    pub(super) fn begin() -> Option<u32> {
         let st = state();
+        st.frame = None;
         if !st.on || st.row_us == 0 {
             return None;
         }
-        let Some(now) = read_scan() else {
+        if read_scan().is_none() {
             UNREAD.fetch_add(1, Relaxed);
             return None;
+        }
+        Some(st.row_us * PAIRS as u32)
+    }
+
+    /// `fx_psi::BeamHooks::start`: the rows start (the frame's steps and
+    /// draw stage done): the race planned from here, so a heavy draw stage
+    /// (Starfield's 192 lines) is not the first pair's time.
+    pub(super) fn start(est_us: u32) {
+        let st = state();
+        let Some(now) = read_scan() else {
+            UNREAD.fetch_add(1, Relaxed);
+            return;
         };
         let write = if st.look == Look::Colour { WRITE_US } else { WRITE_US_TINTED };
         // Measured, else from the governor's mean (a frame's render is at
@@ -1235,7 +1250,6 @@ mod beam {
             last: 0,
             late: false,
         });
-        Some(st.row_us * PAIRS as u32)
     }
 
     /// A pair early for its window: spin on the scan until it opens.

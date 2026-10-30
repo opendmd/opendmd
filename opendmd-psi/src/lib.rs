@@ -76,7 +76,7 @@ pub use tables::{FONT_4X6, FONT_5X7, FONT_BOLD, OWN, PALETTES, SIN};
 pub use vm::stats;
 pub use vm::{
     pair_row, q16, render_rows, render_rows_beam, render_rows_changed, render_rows_ink, render_rows_ink_turns,
-    render_rows_still, render_with, Inputs, PairSink, Scratch, Q16_ONE,
+    render_rows_still, render_with, Inputs, PairSink, Scratch, BEAM_START, Q16_ONE,
 };
 
 /// The lane width the effect uses: one panel row.

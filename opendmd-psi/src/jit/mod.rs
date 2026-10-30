@@ -367,6 +367,9 @@ pub(crate) fn frame<T: Target>(
     // Racing the beam: the rows in the panel's pair order, each pair told
     // as soon as both its rows are drawn (`vm::render_rows_beam`'s).
     let order = beam.is_some();
+    if order {
+        tell_pair(&mut beam, None, dest, crate::BEAM_START);
+    }
     for i in 0..H {
         let row = if order { crate::pair_row(i) } else { i };
         if rows & (1 << row) == 0 {
@@ -488,16 +491,19 @@ pub(crate) fn frame<T: Target>(
     }
 }
 
-/// Racing the beam: rows `row - 16` and `row` are drawn, the pair told.
-/// (Out of the row loop.)
+/// Racing the beam: rows `row - 16` and `row` are drawn, the pair told
+/// (`row` [`crate::BEAM_START`]: the rows start). (Out of the row loop.)
 #[inline(never)]
 fn tell_pair(beam: &mut Option<crate::PairSink<'_>>, changed: Option<&[u32; H]>, dest: &dyn Fn(usize) -> *mut u8, row: usize) {
     let Some(sink) = beam.as_deref_mut() else { return };
-    let p = row - H / 2;
-    let (a, b) = changed.map_or((u32::MAX, u32::MAX), |c| (c[p], c[row]));
     // SAFETY: `dest` maps rows into one W × H × 3 picture (`Kernel::render`'s
     // `out`), whose start is row 0's.
     let all = unsafe { core::slice::from_raw_parts(dest(0).cast_const(), W * H * 3) };
+    if row == crate::BEAM_START {
+        return sink(crate::BEAM_START, all, 0, 0);
+    }
+    let p = row - H / 2;
+    let (a, b) = changed.map_or((u32::MAX, u32::MAX), |c| (c[p], c[row]));
     sink(p, all, a, b);
 }
 
@@ -853,6 +859,7 @@ mod device {
             let tell = changed.is_some();
             let drawn = self.render_inner(prog, scratch, ink, still, inputs, tables, under, rows, out, tell.then_some(&mut ch), None);
             if let Some(sink) = beam {
+                sink(crate::BEAM_START, out, 0, 0);
                 for p in 0..H / 2 {
                     sink(p, out, ch[p], ch[p + H / 2]);
                 }
