@@ -65,6 +65,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("line(x0, y0, x1, y1, v0, v1)", "loop 4; draw { line(64, 16, 64 + 40*cos(t/4), 16 + 15*sin(t/4), 0.2, 1) }; pal(ice, ink)"),
     ("dot(x, y, v)", "draw { for k < 64 { dot(hash(k, 1)*128, hash(k, 2)*32, hash(k, 3)) } }; gray(ink)"),
     ("ink", "draw { line(0, 16, 127, 16) }; #40c0ff * ink"),
+    ("ink(16)", "draw { for k < 16 { line(k*8, 0, k*8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)"),
     ("table T = 1, -2, 0.5", "table T = 0.2, 0.6, 1, 0.6; gray(T[floor(x*4)])"),
     ("T[k]", "table hue = 0, 0.1, 0.3, 0.6; hsv(hue[px % 4], 1, 1)"),
     ("sprite s { … }", "sprite s {\n  key . 0, X 1\n  .X.\n  XXX\n  .X.\n}\ngray(s[floor(px/4) - 14, floor(ty/4) - 2])"),

@@ -233,6 +233,7 @@ example is compiled by the tests.
 | `line(x0, y0, x1, y1, v0, v1)` | a line, in pixels up from the bottom left; v0, v1 its ink at each end, 0 to 1 (else 1) | <code class="psi-ex">loop 4; draw { line(64, 16, 64 + 40&#42;cos(t/4), 16 + 15&#42;sin(t/4), 0.2, 1) }; pal(ice, ink)</code> |
 | `dot(x, y, v)` | one pixel of ink v | <code class="psi-ex">draw { for k &lt; 64 { dot(hash(k, 1)&#42;128, hash(k, 2)&#42;32, hash(k, 3)) } }; gray(ink)</code> |
 | `ink` | what draw put at the pixel, 0 to 1: pal(ice, ink), #40c0ff * ink | <code class="psi-ex">draw { line(0, 16, 127, 16) }; &#35;40c0ff &#42; ink</code> |
+| `ink(16)` | the same in 16 levels, a whole number: what was drawn with ink k/16 reads k, exactly (pick(ink(16), …)); 1 to 255 levels | <code class="psi-ex">draw { for k &lt; 16 { line(k&#42;8, 0, k&#42;8 + 7, 31, k/16) } }; pal(rainbow, ink(16)/15)</code> |
 | `table T = 1, -2, 0.5` | numbers, 256 in all | <code class="psi-ex">table T = 0.2, 0.6, 1, 0.6; gray(T&#91;floor(x&#42;4)&#93;)</code> |
 | `T[k]` | number k of table T, from 0 (0 outside it) | <code class="psi-ex">table hue = 0, 0.1, 0.3, 0.6; hsv(hue&#91;px % 4&#93;, 1, 1)</code> |
 | `sprite s { … }` | a small picture in characters: first its key, key . 0, X 1 (each character and the number it reads as, up to 16), then rows up to 64 wide and 32 tall | <code class="psi-ex">sprite s {<br>  key . 0, X 1<br>  .X.<br>  XXX<br>  .X.<br>}<br>gray(s&#91;floor(px/4) - 14, floor(ty/4) - 2&#93;)</code> |
@@ -979,6 +980,12 @@ Start with a palette name.
 > unknown blend `…` (a layer goes over, add, multiply, screen, max or min)
 
 Use one of the listed blends.
+
+<h4 id="E214">E214 · <code>ink(n)</code> without a whole number</h4>
+
+> `ink(n)` takes a whole number from 1 to 255: `ink(16)` is the canvas in 16 levels
+
+Write the number of levels, as `ink(16)`, and draw with inks `k/16`.
 
 ### Placement and levels (E3xx)
 
