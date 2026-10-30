@@ -17,7 +17,9 @@ smoke: pass when the microSD mount, panel up, httpd, www pack verified and a GIF
 probe: wait for `psi-probe: done`, then fail on any `N differ` with N > 0 or a missing/
        mismatching golden line, or a bundled Formula that does not open / a short heap
        that does not refuse Endless road, or a Formula by reference (a bundled one by
-       name, the card's /formulas/ci-test.psi) that does not play; prints EMU_PROBE_OK
+       name, the card's /formulas/ci-test.psi) that does not play, or a formula sent over
+       Time gate with the heap short that is not played once Time gate goes (or, shorter
+       still, not refused with the playlist going on); prints EMU_PROBE_OK
        and the correctness lines.
 Either fails at once on a panic, Guru Meditation, stack overflow, abort() or a second reset.
 Correctness only: emulated cycles are not trustworthy, never read timings from this.
@@ -59,7 +61,8 @@ DIFFER = re.compile(r"(\d+)(?: of \d+ \w+)? differ")
 GOLDEN = re.compile(r"psi-probe: golden frames: (\d+) match the host/wasm hashes, (\d+) differ")
 BUNDLED = re.compile(r"psi-probe: bundled formulas: (\d+) opened, (\d+) failed; short heap: (.*) by the check, (.*) by the compiler")
 REFS = re.compile(r"psi-probe: formulas by reference: by name (\w+), card file (\w+)")
-PROBE_KEYS = re.compile(r"psi-probe: (bundled |short heap|formulas by reference|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
+SWAP = re.compile(r"psi-probe: formula over formula: short beside Time gate: (.*); short without it: (.*); heap")
+PROBE_KEYS = re.compile(r"psi-probe: (bundled |short heap|formulas by reference|formula over formula|@formula:|/formulas/|jit: .*(differ|returned|the same)|speed2? frames|golden frames:|done)")
 
 
 def main():
@@ -105,6 +108,7 @@ def main():
     golden = None
     bundled = None
     refs = None
+    swap = None
     differ_bad = []
     lines = []
     p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
@@ -152,6 +156,9 @@ def main():
                 m = REFS.search(line)
                 if m:
                     refs = (line, m[1], m[2])
+                m = SWAP.search(line)
+                if m:
+                    swap = (line, m[1], m[2])
                 if "psi-probe:" in line:
                     for d in DIFFER.finditer(line):
                         if int(d[1]) > 0:
@@ -206,6 +213,12 @@ def main():
             die("the formulas-by-reference line is missing")
         if refs[1] != "played" or refs[2] != "played":
             die(f"formulas by reference: {refs[0]}")
+        # A formula over a formula with the heap short (Engine::retune): played
+        # once the one on screen is let go; refused when even that is short.
+        if not swap:
+            die("the formula-over-formula line is missing")
+        if swap[1] != "played" or swap[2] != "refused, the playlist on":
+            die(f"formula over formula: {swap[0]}")
         print("--- correctness lines:")
         for l in lines:
             if PROBE_KEYS.search(l):

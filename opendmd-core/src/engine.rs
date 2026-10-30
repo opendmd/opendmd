@@ -972,6 +972,16 @@ impl Engine {
     /// usual); `Some(Err)` if it does not compile — what is on screen
     /// carries on. `ov` bends the fresh dwell as in
     /// [`play_now_with`](Self::play_now_with) (a kept Formula stays kept).
+    ///
+    /// **Short of memory** ([`fx_psi::is_no_memory`](crate::fx_psi::is_no_memory)):
+    /// the formula on screen holds its program, canvas, still cache, slow
+    /// layers and kernel through the compile, which a heavy formula can't
+    /// share the heap with (Time gate on screen, Endless road sent). It is
+    /// let go and `path` is played from nothing instead, once
+    /// ([`play_now_with`](Self::play_now_with) with `ov`: a new start, its
+    /// clock from zero). Refused again: nothing is on screen and the
+    /// playlist goes on at the next tick, as after any failed play, and the
+    /// error is returned.
     #[cfg(feature = "psi")]
     pub fn retune(
         &mut self,
@@ -982,6 +992,12 @@ impl Engine {
         let at = self.paused_since.unwrap_or(now);
         let p = self.current.as_mut()?;
         let r = p.gif.synth_mut()?.retune(path)?;
+        if let Err(e) = &r {
+            if crate::fx_psi::is_no_memory(e) {
+                log::info!("formula: no room to compile beside the one on screen: letting it go, then again");
+                return Some(self.play_now_with(path, now, ov));
+            }
+        }
         if r.is_ok() {
             // The new formula's own name (`&name=`), as `play_now` would
             // report it: `now_playing.title` follows what is on the panel.
@@ -1919,6 +1935,91 @@ mod tests {
         let bad = crate::fx_psi::path("gray(nope)", "name=Broken");
         assert!(e.retune(&bad, Duration::from_millis(t), None).unwrap().is_err());
         assert_eq!(e.now_playing().unwrap().title, "Tunnel");
+    }
+
+    /// A formula sent over a formula when the heap can't hold its compile
+    /// beside the one on screen (Time gate, then Endless road: refused
+    /// until a GIF or a light formula had played): the one on screen is let
+    /// go and the new one played from nothing, with the keep asked; refused
+    /// again, nothing is on screen and the playlist goes on.
+    #[cfg(feature = "psi")]
+    #[test]
+    fn a_formula_short_of_memory_beside_another_lets_it_go_and_tries_again() {
+        let gif = "/gifs/Consoles/NES_A_01.gif";
+        let mut e = engine_with(
+            &[(gif, one_pixel_gif(255, 0, 0))],
+            gif,
+            DwellPolicy {
+                min: Duration::from_secs(10),
+                max: Duration::from_secs(10),
+                min_loops: 0,
+            },
+        );
+        let mut c = Canvas::new();
+        e.tick(Duration::ZERO, &mut c).unwrap();
+        let gate = crate::fx_psi::path("rgb(x, y, 0)", "name=Time+gate");
+        let road = crate::fx_psi::path("rgb(y, x, 0)", "name=Endless+road");
+        let keep = FormulaKeep::Minute.dwell();
+        e.play_now_with(&gate, Duration::from_millis(100), keep)
+            .unwrap();
+        let mut t = 100;
+        while t < 1_000 {
+            t += 20;
+            e.tick(Duration::from_millis(t), &mut c).unwrap();
+        }
+        let first = e.now_playing().unwrap().ordinal;
+
+        // In place it is refused; after the one on screen goes, it compiles.
+        crate::fx_psi::refuse_compiles(1);
+        e.retune(&road, Duration::from_millis(t), keep)
+            .unwrap()
+            .unwrap();
+        let np = e.now_playing().unwrap();
+        assert_eq!(
+            (np.path.as_str(), np.title.as_str()),
+            (road.as_str(), "Endless road")
+        );
+        assert!(np.ordinal > first, "a new start, not in place");
+        let start = t;
+        while t < start + 30_000 {
+            t += 50;
+            e.tick(Duration::from_millis(t), &mut c).unwrap();
+            assert_eq!(
+                e.now_playing().unwrap().path,
+                road,
+                "kept past the 10 s dwell ({t})"
+            );
+        }
+        let px = c.get(3, 7);
+        assert!(
+            px.r > 100 && px.g < 20,
+            "the road's picture (red from y), not the gate's: {px:?}"
+        );
+
+        // Refused before and after: the error, nothing on screen, then the playlist.
+        crate::fx_psi::refuse_compiles(u32::MAX);
+        let err = e
+            .retune(&gate, Duration::from_millis(t), keep)
+            .unwrap()
+            .unwrap_err();
+        crate::fx_psi::refuse_compiles(0);
+        assert!(crate::fx_psi::is_no_memory(&err), "{err}");
+        assert!(e.now_playing().is_none(), "the one on screen was let go");
+        t += 20;
+        e.tick(Duration::from_millis(t), &mut c).unwrap();
+        assert_eq!(e.now_playing().unwrap().path, gif, "the playlist goes on");
+
+        // Any other compile error still leaves the formula on screen alone.
+        e.play_now(&gate, Duration::from_millis(t)).unwrap();
+        e.tick(Duration::from_millis(t + 20), &mut c).unwrap();
+        let on = e.now_playing().unwrap().ordinal;
+        let bad = crate::fx_psi::path("gray(nope)", "");
+        let err = e
+            .retune(&bad, Duration::from_millis(t + 40), None)
+            .unwrap()
+            .unwrap_err();
+        assert!(!crate::fx_psi::is_no_memory(&err));
+        assert_eq!(e.now_playing().unwrap().ordinal, on);
     }
 
     #[test]

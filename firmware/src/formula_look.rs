@@ -237,25 +237,62 @@ mod with_psi {
             let Some(ordinal) = ordinal else {
                 return Err(PlayError::NoPlaylist);
             };
-            match &mut self.over {
-                Some((l, at)) if *at == ordinal => {
-                    l.retune(path).map_err(|e| PlayError::BadFormula(e.msg))?;
-                }
+            let short = |e: &opendmd_core::psi::Error| e.msg == opendmd_core::psi::NO_MEMORY;
+            // Retuned in place (`None`), or built anew: at once (`Some(false)`)
+            // or after the live edit was short of memory (`Some(true)`).
+            let fresh = match &mut self.over {
+                Some((l, at)) if *at == ordinal => match l.retune(path) {
+                    Err(e) if short(&e) => Some(true),
+                    r => {
+                        r.map_err(|e| PlayError::BadFormula(e.msg))?;
+                        None
+                    }
+                },
                 _ if live => return Err(PlayError::MovedOn),
-                _ => {
-                    let l = super::build(path)
-                        .map_err(|e| PlayError::BadFormula(e.msg))?;
-                    if let Some((mut old, _)) = self.over.take() {
-                        old.release(display);
+                _ => Some(false),
+            };
+            if let Some(was_short) = fresh {
+                // Short of memory beside the editor's formula on screen (a
+                // live edit) or the one before: it goes, the setting's
+                // buffers too, and the build is tried once more from there.
+                // Refused again: no editor's formula (the setting's look,
+                // if any, comes back) and the error.
+                let first = if was_short { None } else { Some(super::build(path)) };
+                let l = match first {
+                    Some(Err(e))
+                        if short(&e)
+                            && (self.over.is_some() || self.saved.as_ref().is_some_and(FormulaLook::is_held)) =>
+                    {
+                        None
                     }
-                    // Its buffers in place of the setting's.
-                    if let Some(s) = &mut self.saved {
-                        s.release(display);
+                    Some(r) => Some(r),
+                    None => None,
+                };
+                let l = match l {
+                    Some(r) => r,
+                    None => {
+                        log::info!("formula look: no room to compile beside the one drawn: letting it go, then again");
+                        if let Some((mut old, _)) = self.over.take() {
+                            old.release(display);
+                        }
+                        if let Some(s) = &mut self.saved {
+                            s.release(display);
+                        }
+                        self.publish();
+                        super::build(path)
                     }
-                    self.over = Some((l, ordinal));
-                    self.refused = None;
-                    self.yielded = None;
                 }
+                .map_err(|e| PlayError::BadFormula(e.msg))?;
+                if let Some((mut old, _)) = self.over.take() {
+                    old.release(display);
+                }
+                // Its buffers in place of the setting's.
+                if let Some(s) = &mut self.saved {
+                    s.release(display);
+                }
+                self.over = Some((l, ordinal));
+                self.refused = None;
+                self.yielded = None;
             }
             self.publish();
             Ok(())
