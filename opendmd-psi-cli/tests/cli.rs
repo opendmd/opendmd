@@ -29,7 +29,7 @@ fn tmp(name: &str, text: &str) -> std::path::PathBuf {
 fn check_says_what_a_formula_costs() {
     let (code, out, _) = psi(&["check", "-", "--out", "-"], "loop 4\nv = sin(x*3 + t/4)\nhsv(v, 1, 1)\n");
     assert_eq!(code, 0, "{out}");
-    for line in ["ok: ", "panel: ~", "compiled: ", "compile: ", "length: ", "loop 4 s at 50 fps; reads t"] {
+    for line in ["ok: ", "panel: ~", "JIT: yes", "compile: ", "length: ", "loop 4 s at 50 fps; reads t"] {
         assert!(out.contains(line), "no `{line}` in:\n{out}");
     }
 }
@@ -80,4 +80,42 @@ fn the_json_lists_every_name_and_code() {
 fn a_bad_command_is_refused() {
     assert_eq!(psi(&["frobnicate"], "").0, 2);
     assert_eq!(psi(&[], "").0, 2);
+}
+
+#[test]
+fn check_says_why_the_jit_refuses() {
+    // Nine values alive at once around helper calls (the kernel keeps eight).
+    let many: String = (1..=9).map(|k| format!("v{k} = sqrt(x*{k} + y*t)\n")).collect();
+    let sum: Vec<String> = (1..=9).map(|k| format!("v{k}*v{}", 10 - k)).collect();
+    let (code, out, _) = psi(&["check", "-", "--out", "-"], &format!("{many}gray({})\n", sum.join(" + ")));
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("JIT: no, more values at once than the kernel's registers ("), "{out}");
+}
+
+#[test]
+fn check_levels_and_notes() {
+    let src = "off = px - 64\nbeam = abs(off)*2\nX = sin(t)*9\nd = px*py - 64 - X\ngray(beam/64 + d/99)\n";
+    let (code, out, _) = psi(&["check", "-", "--out", "-", "--levels"], src);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("note: line 4: `px*py - 64 - X` works out `- X` for every pixel"), "{out}");
+    assert!(out.contains("levels:\n"), "{out}");
+    assert!(out.contains("beam  per pixel: reads `off` (line 1) ← `px`"), "{out}");
+    assert!(out.contains("X     once a frame: reads `t`"), "{out}");
+}
+
+#[test]
+fn check_same_as_compares_programs_and_frames() {
+    let a = tmp("a.psi", "v = sin(x*3 + t/4)\nhsv(v, 1, 1)\n");
+    let b = tmp("b.psi", "s = sin(t/4 + x*3)\nhsv(s, 1, 1)\n");
+    let c = tmp("c.psi", "v = sin(x*3 + t/5)\nhsv(v, 1, 1)\n");
+    let (a, b, c) = (a.to_str().unwrap(), b.to_str().unwrap(), c.to_str().unwrap());
+    let (code, out, _) = psi(&["check", a, "--out", "-", "--same-as", a], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("yes: the same program"), "{out}");
+    let (code, out, _) = psi(&["check", a, "--out", "-", "--same-as", b, "--seeds", "2", "--frames", "10"], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("(2 seeds × 10 over 8 s"), "{out}");
+    let (code, out, _) = psi(&["check", a, "--out", "-", "--same-as", c], "");
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("same as ") && out.contains(": no: "), "{out}");
 }

@@ -627,6 +627,17 @@ milliseconds); all the examples are light or medium.
   the panel (it keeps the slow picture while it has the memory to spare);
   a look, and the panel without that memory, draw it whole every frame.
 
+**Why is this per pixel?** A value is worked out as often as the most
+changing thing it reads: `px` makes it per pixel, `py` per row, `t` or a
+slider once a frame. On a computer, `psi check my.psi --levels` lists every
+value with the chain that made it so (`beam  per pixel: reads `off` (line
+3) ← `px``), and `psi check` notes the usual surprises with their line: a
+`pick` with one per-pixel choice is worked out per pixel whole (keep the
+choices the same for every pixel and add the per-pixel part after it), a
+sum like `px - 64 - X` works `- X` out for every pixel where
+`px - (64 + X)` would work it out once a frame, and a value that would be
+kept but reads something that moves.
+
 ## Add to my panel
 
 **Add to my panel** is on every tile in the [formula

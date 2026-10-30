@@ -2140,7 +2140,7 @@ const FOREVER_ERRORS: &[(&str, &str, usize, usize, &str)] = &[
     ("loop forever\ngray(x / t)", "grows without end", 2, 8, "E901"),
     ("loop forever\ngray(frac((t + x)/3))", "add the pixel's part there", 2, 18, "E901"),
     ("loop forever\ngray((t + x) > 5)", "add the pixel's part there", 2, 14, "E901"),
-    ("loop forever\nv = t + x\ngray(v)", "a colour can't take a value that grows", 3, 1, "E905"),
+    ("loop forever\nv = t + x\ngray(v)", "a colour can't take a value that grows", 2, 1, "E905"),
     ("loop forever\nrgb(1, 1, 1, t + x)", "a colour can't take a value that grows", 2, 1, "E905"),
     ("loop forever\npal(fire, x) * t", "a colour can't take a value that grows", 2, 1, "E905"),
     ("loop forever\ngray(noise(t + x, 0, 0) + noise(t*2 + x, 0, 0) + noise(t*3 + x, 0, 0) + noise(t*4 + x, 0, 0) + noise(t*5 + x, 0, 0))", "four different ones at most", 2, 96, "E902"),

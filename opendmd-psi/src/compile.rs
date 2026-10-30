@@ -20,6 +20,12 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+// The language service's notes (`syntax::Sink::note`): not errors, so out
+// of this file (whose sentences tests/diagnostics.rs reads as errors).
+#[cfg(feature = "syntax")]
+#[path = "notes.rs"]
+mod notes;
+
 /// The longest source accepted (bytes): comments and indentation count, so
 /// it is roomy (4,096 until Formulas were played by reference, 2026-10-29:
 /// the readable Endless road is ~6 KB). What the panel compiles is bounded
@@ -1460,6 +1466,49 @@ impl Dag {
     }
 }
 
+/// What makes `id` vary as much as it does: the nearest value on the way
+/// down (breadth first, through the operands at `id`'s level) that `named`
+/// knows (a local's index), else the input there. For the errors that name
+/// the formula's own value and for the language service, never per frame.
+#[cold]
+#[inline(never)]
+fn cause(dag: &Dag, id: Id, named: &dyn Fn(Id) -> Option<usize>) -> (Option<usize>, Id) {
+    let lv = dag.level(id);
+    let mut q: Vec<Id> = Vec::new();
+    q.push(id);
+    let mut k = 0;
+    while k < q.len() && k < 256 {
+        let m = q[k];
+        k += 1;
+        if m != id {
+            if let Some(j) = named(m) {
+                return (Some(j), m);
+            }
+        }
+        let n = &dag.nodes[m as usize];
+        if n.code == K_INPUT || (code::U_R..=code::INK).contains(&n.code) {
+            return (None, m);
+        }
+        let split = [n.a, n.b];
+        let more: &[Id] = if n.code == K_SPLIT { &split } else { &[] };
+        for x in reads(dag, m as usize).chain(more.iter().copied()) {
+            if dag.level(x) == lv && !q.contains(&x) {
+                q.push(x);
+            }
+        }
+    }
+    (None, id)
+}
+
+/// An input node's word and what it means (`seed` is not in [`INPUTS`]).
+fn input_word(n: &Node) -> (&'static str, &'static str) {
+    if n.code == K_INPUT && n.val == S_SEED as i32 {
+        return ("seed", "a new number each play");
+    }
+    let e = INPUTS[n.why as usize];
+    (e.0, e.2)
+}
+
 /// The compares the other way round (`a < b` is `b > a`).
 fn flip(c: u8) -> u8 {
     match c {
@@ -2072,6 +2121,12 @@ struct Parser<'s> {
     decls_seen: Vec<(usize, usize)>,
     #[cfg(feature = "syntax")]
     sink: Option<&'s mut (dyn crate::syntax::Sink + 's)>,
+    /// The language service's notes (`Sink::note`: place, text) and each
+    /// recorded draw loop's place (`for` to its count).
+    #[cfg(feature = "syntax")]
+    notes: Vec<(usize, usize, String, Id)>,
+    #[cfg(feature = "syntax")]
+    loop_at: Vec<(usize, usize)>,
 }
 
 /// What the declarations said, while compiling: the program's [`Meta`],
@@ -2370,9 +2425,17 @@ impl<'s> Parser<'s> {
                 ),
                 _ => return Err(self.no_value(t)),
             };
+        // (The language service's: the operator before and its right-hand
+        // side's place, for the split note.)
+        #[cfg(feature = "syntax")]
+        let mut prev: Option<(Token, (usize, usize), Id, Id)> = None;
         loop {
             let op = self.peek();
             if op.tok == Tok::Question {
+                #[cfg(feature = "syntax")]
+                {
+                    prev = None;
+                }
                 if BP_TERNARY < min_bp {
                     break;
                 }
@@ -2391,8 +2454,23 @@ impl<'s> Parser<'s> {
                 break;
             }
             self.next();
+            #[cfg(feature = "syntax")]
+            let rs = self.peek().start;
             let rhs = self.expr(rbp)?;
+            #[cfg(feature = "syntax")]
+            let span = (rs, self.toks[self.pos - 1].get().end);
+            #[cfg(feature = "syntax")]
+            let note = prev.take().and_then(|p| self.split_note(t.start, p, (op, span, lhs, rhs)));
+            #[cfg(feature = "syntax")]
+            let before = lhs;
             lhs = self.dag.op(c, [lhs, rhs, 0], (op.start, op.end))?;
+            #[cfg(feature = "syntax")]
+            {
+                if let Some((a, b, text)) = note {
+                    self.notes.push((a, b, text, lhs));
+                }
+                prev = Some((op, span, before, rhs));
+            }
         }
         Ok(lhs)
     }
@@ -2694,9 +2772,15 @@ impl<'s> Parser<'s> {
         let open = self.next();
         let k = self.expr(0)?;
         let mut v = Vec::new();
+        #[cfg(feature = "syntax")]
+        let mut spans = Vec::new();
         while self.peek().tok == Tok::Comma {
             self.next();
+            #[cfg(feature = "syntax")]
+            let st = self.peek().start;
             v.push(self.expr(0)?);
+            #[cfg(feature = "syntax")]
+            spans.push((st, self.toks[self.pos - 1].get().end));
         }
         let close = self.peek();
         if close.tok != Tok::RParen {
@@ -2709,7 +2793,14 @@ impl<'s> Parser<'s> {
                 "`pick` takes a number, then the values to pick from: `pick(k, a, b, …)`",
             );
         }
-        self.dag.pick(k, v, (t.start, t.end))
+        #[cfg(feature = "syntax")]
+        let note = self.pick_note(t, k, &v, &spans);
+        let id = self.dag.pick(k, v, (t.start, t.end))?;
+        #[cfg(feature = "syntax")]
+        if let Some((a, b, text)) = note {
+            self.notes.push((a, b, text, id));
+        }
+        Ok(id)
     }
 
     /// `digit(n, x, y)` / `glyph(c, x, y)`, with a font (`, small`, …)
@@ -2900,7 +2991,10 @@ impl<'s> Parser<'s> {
                 return Err(Error::new(
                     at.0,
                     at.1,
-                    "`cycle`'s turn is the same along a row: a value of t, a frame or the row (py), not of x or px",
+                    format!(
+                        "`cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but {}",
+                        self.varies(s)
+                    ),
                 ));
             }
             // The entry is (floor(v·32) + floor(s·32)) mod 32: the fraction
@@ -3153,14 +3247,13 @@ impl<'s> Parser<'s> {
         let id = self.expr(0)?;
         let end = self.toks[self.pos.saturating_sub(1)].get().end;
         if in_frame && self.dag.level(id) > LV_FRAME {
-            let why = INPUTS[self.dag.nodes[id as usize].why as usize];
             return Err(Error::new(
                 start,
                 end.max(start),
                 format!(
                     "inside frame {{ }} only values that are the same for every pixel can be used, \
-                     but this uses `{}` ({})",
-                    why.0, why.2
+                     but {}",
+                    self.varies(id)
                 ),
             ));
         }
@@ -4314,16 +4407,46 @@ impl<'s> Parser<'s> {
         if self.dag.level(id) < LV_ROW {
             return Ok(());
         }
-        let why = INPUTS[self.dag.nodes[id as usize].why as usize];
         Err(Error::new(
             start,
             end.max(start),
             format!(
                 "inside draw {{ }} only values that are the same for every pixel can be used \
-                 (no x, y, px, py, i, ur, ug, ub, ul or ink), but this uses `{}` ({})",
-                why.0, why.2
+                 (no x, y, px, py, i, ur, ug, ub, ul or ink), but {}",
+                self.varies(id)
             ),
         ))
+    }
+
+    /// What makes `id` vary across the panel, for an error: "`k` (line 2)
+    /// is per pixel: it reads `x`" when one of the formula's own values is
+    /// on the way (the nearest), else "this uses `x` (…)" (E301, E708,
+    /// E931).
+    #[cold]
+    #[inline(never)]
+    fn varies(&self, id: Id) -> String {
+        let named = |m: Id| {
+            self.locals
+                .iter()
+                .rposition(|l| l.id == m && !l.counter && self.visible(l.scope))
+        };
+        let (j, root) = match named(id) {
+            Some(j) => (Some(j), cause(&self.dag, id, &|_| None).1),
+            None => cause(&self.dag, id, &named),
+        };
+        match j {
+            Some(j) => {
+                let l = &self.locals[j];
+                let root = cause(&self.dag, l.id, &|_| None).1;
+                let w = input_word(&self.dag.nodes[root as usize]).0;
+                let per = if self.dag.level(l.id) == LV_ROW { "row" } else { "pixel" };
+                format!("`{}` (line {}) is per {per}: it reads `{w}`", l.name, self.line_of(l.at))
+            }
+            None => {
+                let (w, what) = input_word(&self.dag.nodes[root as usize]);
+                format!("this uses `{w}` ({what})")
+            }
+        }
     }
 
     /// `draw { … }` at `kw`: once a frame, before the rows — values, `for`
@@ -4506,6 +4629,8 @@ impl<'s> Parser<'s> {
         })?;
         if self.record {
             try_push(&mut self.draw, DItem::For(ctr, count as u16))?;
+            #[cfg(feature = "syntax")]
+            self.loop_at.push((kw.start, num.end));
         }
         self.in_draw += 1;
         let r = self.draw_lines(kw);
@@ -5336,6 +5461,10 @@ fn compile_inner<'s>(
         decls_seen: Vec::new(),
         #[cfg(feature = "syntax")]
         sink,
+        #[cfg(feature = "syntax")]
+        notes: Vec::new(),
+        #[cfg(feature = "syntax")]
+        loop_at: Vec::new(),
     };
     p.env.loop_v = p.loop_ahead(0).unwrap_or(8 * ONE);
     p.dag.forever = p.env.loop_v == FOREVER;
@@ -5398,8 +5527,29 @@ fn finish(
         prog.tables[user_palette_at(j)..][..32].copy_from_slice(entries);
     }
     if p.dag.forever {
+        // E905 at the formula's own value that grows and varies across the
+        // panel, when one is on the way.
+        let locals = &p.locals;
+        let named = |dag: &Dag, v: Id| -> Option<Error> {
+            let j = locals.iter().rposition(|l| l.id == v).or_else(|| {
+                cause(dag, v, &|m| locals.iter().rposition(|l| l.id == m && dag.grows(m))).0
+            })?;
+            let l = &locals[j];
+            // (Bytes, not `&src[..]`: a str slice brings its panic's
+            // Debug and Unicode tables, ~4 KB of wasm.)
+            let line = src.bytes().take(l.at).filter(|&b| b == b'\n').count() + 1;
+            Some(Error::new(
+                l.at,
+                l.at + l.name.len(),
+                format!(
+                    "a colour can't take a value that grows without end and changes across the panel, \
+                     as `{}` (line {line}) does: use frac(…) of it, or min(t/k, 1)",
+                    l.name
+                ),
+            ))
+        };
         for c in &mut layers {
-            grown_colour(&mut p.dag, c, (ct.start, ct.end))?;
+            grown_colour(&mut p.dag, c, (ct.start, ct.end), &named)?;
         }
     }
     // A layer under one that covers everything (`over`, coverage 1) is never
@@ -5530,7 +5680,11 @@ fn finish(
     // biggest list), the names, the sharing index. Laying out holds a
     // dozen lists of its own; the compile's peak was the two at once.
     p.toks = Vec::new();
-    p.locals = Vec::new();
+    // (The language service names values in its notes after the layout.)
+    #[cfg(not(feature = "syntax"))]
+    {
+        p.locals = Vec::new();
+    }
     p.parts = Vec::new();
     p.tables = Vec::new();
     p.table_names = Vec::new();
@@ -5541,11 +5695,27 @@ fn finish(
     p.dag.divs = Vec::new();
     // A limit hit while laying out the steps is the formula's as a whole:
     // point at its (top) colour line.
-    emit(&p.dag, &steps, &p.draw, backdrop, runs, reuse, slow, prog).map_err(|e| Error {
+    #[cfg(feature = "syntax")]
+    let mut seen = (Vec::new(), Vec::new());
+    emit(
+        &p.dag,
+        &steps,
+        &p.draw,
+        backdrop,
+        runs,
+        reuse,
+        slow,
+        prog,
+        #[cfg(feature = "syntax")]
+        &mut seen,
+    )
+    .map_err(|e| Error {
         start: ct.start,
         end: ct.end,
         ..e
     })?;
+    #[cfg(feature = "syntax")]
+    p.layout_notes(prog, &seen);
     Ok(Info {
         frame_values,
         layers: body.blocks,
@@ -5582,6 +5752,21 @@ impl<'s> Parser<'s> {
         self.reads.push((t.start, t.end, def.unwrap_or(usize::MAX)));
     }
 
+    /// Whether a name set in `scope` is seen from `from` (as
+    /// [`visible`](Self::visible) from the scope being read).
+    fn seen_from(&self, mut from: u16, scope: u16) -> bool {
+        loop {
+            if from == scope {
+                return true;
+            }
+            let (parent, own) = self.scopes[from as usize];
+            if own || from == 0 {
+                return false;
+            }
+            from = parent;
+        }
+    }
+
     /// Tell the sink what was read (after the formula, or up to an error).
     fn observe(&mut self) {
         use crate::syntax::{Defined, Level};
@@ -5606,9 +5791,32 @@ impl<'s> Parser<'s> {
         for &(a, e) in &self.decls_seen {
             sink.declaration(sub(self.src, a, e), (a, e));
         }
-        for l in &self.locals {
+        for (i, l) in self.locals.iter().enumerate() {
             let kind = if l.counter { Defined::Counter } else { Defined::Value };
-            sink.defined(l.name, word(self, l.at), kind, l.scope, level(self.dag.level(l.id)));
+            let lv = self.dag.level(l.id);
+            sink.defined(l.name, word(self, l.at), kind, l.scope, level(lv));
+            if l.counter || lv == LV_CONST {
+                continue;
+            }
+            // The nearest value set before it (and seen from it) that makes
+            // it vary as it does, else the built-in.
+            let named = |m: Id| {
+                self.locals[..i]
+                    .iter()
+                    .rposition(|e| e.id == m && self.seen_from(l.scope, e.scope))
+            };
+            let via = match named(l.id) {
+                Some(j) => Some(j),
+                None => cause(&self.dag, l.id, &named).0,
+            };
+            let root = cause(&self.dag, l.id, &|_| None).1;
+            let n = &self.dag.nodes[root as usize];
+            let input = if n.code == K_INPUT || (code::U_R..=code::INK).contains(&n.code) {
+                input_word(n).0
+            } else {
+                ""
+            };
+            sink.why(word(self, l.at), via.map(|j| word(self, self.locals[j].at)), input);
         }
         for p in &self.parts {
             sink.defined(p.name, word(self, p.at), Defined::Part, p.scope, Level::Pixel);
@@ -5667,11 +5875,16 @@ fn declarations(
 /// the others held to 0..1 (the colour step clamps them so anyway); a
 /// coverage, a palette's scale or a value with a part per pixel can't
 /// (E905).
-fn grown_colour(dag: &mut Dag, c: &mut Colour, at: (usize, usize)) -> Result<(), Error> {
+fn grown_colour(
+    dag: &mut Dag,
+    c: &mut Colour,
+    at: (usize, usize),
+    named: &dyn Fn(&Dag, Id) -> Option<Error>,
+) -> Result<(), Error> {
     // Held to 0..1, as the colour step and the coverage hold it anyway.
     let unit = |dag: &mut Dag, v: Id| -> Result<Id, Error> {
         if !dag.is_wide(v) {
-            return Err(Error::new(at.0, at.1, GROWN_COLOUR));
+            return Err(named(dag, v).unwrap_or_else(|| Error::new(at.0, at.1, GROWN_COLOUR)));
         }
         let (z, one) = (dag.constant(0, at)?, dag.constant(ONE, at)?);
         let lo = dag.op(code::MAX, [v, z, 0], at)?;
@@ -5692,8 +5905,8 @@ fn grown_colour(dag: &mut Dag, c: &mut Colour, at: (usize, usize)) -> Result<(),
     if let Some(a) = c.alpha.filter(|&a| dag.grows(a)) {
         c.alpha = Some(unit(dag, a)?);
     }
-    if c.scale.is_some_and(|k| dag.grows(k)) {
-        return Err(Error::new(at.0, at.1, GROWN_COLOUR));
+    if let Some(k) = c.scale.filter(|&k| dag.grows(k)) {
+        return Err(named(dag, k).unwrap_or_else(|| Error::new(at.0, at.1, GROWN_COLOUR)));
     }
     Ok(())
 }
@@ -5856,6 +6069,7 @@ fn emit(
     reuse: bool,
     slow: Option<Slow>,
     prog: &mut Program,
+    #[cfg(feature = "syntax")] seen: &mut (Vec<usize>, Vec<usize>),
 ) -> Result<(), Error> {
     let nodes = &dag.nodes;
     let n = nodes.len();
@@ -6293,6 +6507,17 @@ fn emit(
         ));
     };
     let (seq, run_len, col_len, slow_len) = (lay.seq, lay.run_len, lay.col_len, lay.slow_len);
+    // (The language service's cache note: the still cache's values and the
+    // column run's.)
+    #[cfg(feature = "syntax")]
+    {
+        seen.0 = if run_len > 0 { cached.clone() } else { Vec::new() };
+        seen.1 = if col_len > 0 {
+            (0..n).filter(|&i| in_col[i]).collect()
+        } else {
+            Vec::new()
+        };
+    }
     let mut marker = None;
     for (at, item) in seq.iter().enumerate() {
         match *item {
