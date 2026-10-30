@@ -829,7 +829,9 @@ def reachable(site: Path) -> None:
 
 
 def csp_pattern(path: str) -> str:
-    for pat in ("/install/*", "/f/*", "/dev/psi/*"):
+    if path in ("/", "/index.html"):
+        return "/"
+    for pat in ("/install/*", "/f/*", "/dev/psi/*", "/formulas/*"):
         if path.startswith(pat[:-1]):
             return pat
     return "/*"
@@ -901,6 +903,9 @@ def structure(browser, base: str, site: Path, errors: list[str]) -> None:
                       f"home ({size}): Install, the demo and Formulas up top {hrefs}; Install, the guide and the gallery below {doors}")
                 lit_tiles = page.eval_on_selector_all(".tiles img, .hero img", "els => els.filter(i => i.getAttribute('src').startsWith('art/')).length")
                 check(lit_tiles >= 8 and page.inner_text("h1").strip() != "", f"home ({size}): a heading, the panel and {lit_tiles} pieces of art")
+                # The hero's Formula plays live once the page has loaded (home.js).
+                wait_js(page, "+document.querySelector('.hero-panel [data-live=on] canvas')?.dataset.frames > 10")
+                check(True, f"home ({size}): the hero plays its Formula live")
                 if size == "phone":
                     hero = page.evaluate("document.querySelector('.hero-panel').getBoundingClientRect().top < document.querySelector('.hero h1').getBoundingClientRect().top")
                     check(hero, "home (phone): the panel comes first")

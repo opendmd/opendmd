@@ -12,6 +12,10 @@
   (--screenshot-canvas) a frame at a time, one whole loop each; and the
   Kenney "Pixel Platformer" (CC0) sprites the demo card has too, re-encoded
   lighter.
+  The home page's "Get started" panels also have the start-up show
+  (`@boot`, the firmware's own frames) and a little Kenney level drawn by
+  opendmd-web/experiments/art/process/kenney-pixel-platformer/scene.py
+  (scene:…).
 - strip/*.png: a still of each, which the site shows instead when the
   visitor asks for reduced motion.
 - wordmark.png: "OpenDMD" in the panel's own font, cropped.
@@ -23,6 +27,7 @@ Recordings already in OUT_DIR are kept while their recipe is unchanged
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import subprocess
 import tempfile
@@ -31,15 +36,17 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageSequence
 
 ROOT = Path(__file__).resolve().parent.parent
-KENNEY = ROOT / "opendmd-web/experiments/art/process/out"
+PROCESS = ROOT / "opendmd-web/experiments/art/process"
+KENNEY = PROCESS / "out"
 
 # OpenDMD's Formulas, one file each: a header of comments (author, licence,
 # `-- bundle`), then the formula, whose `name "…"` line names it.
 FORMULAS = ROOT / "opendmd-web/formulas"
 
 # name, source (a live item, formula:NAME[?--formula-opts] -- an example in
-# opendmd-web/formulas/ --, or kenney:FILE), ms a frame, colours, where it shows
-# (strip, tiles), alt text, caption.
+# opendmd-web/formulas/ --, kenney:FILE, or scene:SCRIPT: a scene() in a script under
+# opendmd-web/experiments/art/process/), ms a frame, colours, where it shows
+# (strip, tiles, hero, doors: the home page's Get started), alt text, caption.
 ART = [
     ("press-start", "@text?msg=PRESS%20START&speed=20&color=ff3366", 40, 16, "strip tiles",
      "PRESS START scrolling across the panel in pink", "Scrolling text"),
@@ -57,6 +64,17 @@ ART = [
      "The panel's big clock with the date underneath", "The clock"),
     ("time-gate", "formula:Time gate", 80, 32, "strip",
      "Star rings rushing out of a time gate", "Time gate (a Formula)"),
+    # The home page's panel: a still only (it never repeats, and the page
+    # plays it live: site/pages/home.html).
+    ("endless-road", "formula:Endless road", 0, 128, "hero",
+     "An OutRun road through a synthwave landscape, palms passing", "Endless road (a Formula)"),
+    # Get started: Install, Using it, Formulas (Matrix plays live; this is its still).
+    ("boot", "@boot?len=full&ip=opendmd.local", 40, 32, "doors",
+     "OpenDMD's start-up show: the name lighting up dot by dot", "The start-up show"),
+    ("kenney-run", "scene:kenney-pixel-platformer/scene.py", 0, 64, "doors",
+     "A little alien running across a grassy level, picking up coins", "Kenney Pixel Platformer tiles (CC0)"),
+    ("matrix", "formula:Matrix", 0, 16, "doors",
+     "Green code raining down the panel", "Matrix (a Formula)"),
     ("game-over", "@card:GAME OVER|thanks for playing", 0, 8, "strip",
      "A title card reading GAME OVER, thanks for playing", "Title card"),
     ("rotozoom-floor", "formula:Rotozoom floor", 80, 32, "tiles",
@@ -67,6 +85,10 @@ ART = [
      "Three waves making every colour of a plasma", "Plasma (a Formula)"),
 ]
 WORDMARK = "@text?msg=OpenDMD&scroll=0&color=ffaa00"
+# Recordings of something that plays once rather than loops (name: its
+# length, then how much longer its last frame is held, in ms): the start-up
+# show, whose last line, the address, would otherwise be gone in half a second.
+ONCE = {"boot": (5600, 2500)}
 MAX_FRAMES = 240  # a recording stops here if it has not looped
 RECIPE = 2  # bump to redo every recording after changing how they are made
 
@@ -100,6 +122,14 @@ def shot(sim: Path, card: Path, play: str, ms: int, png: Path) -> Image.Image:
     return Image.open(png).convert("RGB")
 
 
+def scene(script: Path) -> tuple[list[Image.Image], list[int]]:
+    """A drawn scene: the script's scene(), its frames and durations."""
+    spec = importlib.util.spec_from_file_location(script.stem, script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.scene()
+
+
 def same(a: Image.Image, b: Image.Image) -> bool:
     return ImageChops.difference(a, b).getbbox() is None
 
@@ -123,6 +153,13 @@ def record(sim: Path, card: Path, play: str, step: int) -> list[Image.Image]:
                 if all(same(frames[p + k], frames[k]) for k in range(8)):
                     return frames[:p]
         return frames
+
+
+def once(sim: Path, card: Path, play: str, step: int, length: int) -> list[Image.Image]:
+    """Something that plays once: its frames `step` ms apart up to `length`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        png = Path(tmp) / "f.png"
+        return [shot(sim, card, play, t, png) for t in range(0, length, step)]
 
 
 def save(frames: list[Image.Image], durations: list[int], colours: int, out: Path) -> None:
@@ -153,8 +190,9 @@ def main() -> None:
     items, keep = [], set()
     for name, src, step, colours, where, alt, caption in ART:
         # A Formula's tag covers its source, so editing the example re-records.
-        body = formula_src(src.removeprefix("formula:").partition("?")[0]) if src.startswith("formula:") else ""
-        tag = hashlib.sha1(f"{RECIPE}|{src}|{body}|{step}|{colours}".encode()).hexdigest()[:8]
+        body = (formula_src(src.removeprefix("formula:").partition("?")[0]) if src.startswith("formula:")
+                else (PROCESS / src.removeprefix("scene:")).read_text() if src.startswith("scene:") else "")
+        tag = hashlib.sha1(f"{RECIPE}|{src}|{body}|{step}|{colours}|{ONCE.get(name)}".encode()).hexdigest()[:8]
         gif, still = out / f"strip/{name}-{tag}.gif", out / f"strip/{name}-{tag}.png"
         if not gif.exists():
             if src.startswith("kenney:"):
@@ -163,12 +201,17 @@ def main() -> None:
                 for f in ImageSequence.Iterator(im):
                     frames.append(f.convert("RGB"))
                     durations.append(f.info.get("duration", 100))
+            elif src.startswith("scene:"):
+                frames, durations = scene(PROCESS / src.removeprefix("scene:"))
             else:
-                frames = record(a.sim, card, src, step)
+                length, hold = ONCE.get(name, (0, 0))
+                frames = once(a.sim, card, src, step, length) if length else record(a.sim, card, src, step)
                 durations = [step] * len(frames)
+                durations[-1] += hold
             # A single frame is a still; the GIF is then just that still.
             save(frames, durations, colours, gif)
-            save([frames[len(frames) // 2]], [0], colours, still)
+            # (Something that plays once: its last frame, the finished picture.)
+            save([frames[-1] if name in ONCE else frames[len(frames) // 2]], [0], colours, still)
             print(f"{gif.name}: {len(frames)} frames, {gif.stat().st_size:,} B")
         keep |= {gif.name, still.name}
         items.append({"name": name, "gif": f"strip/{gif.name}", "still": f"strip/{still.name}",

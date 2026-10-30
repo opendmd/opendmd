@@ -1,7 +1,9 @@
 <!-- The home page (tools/site.py writes it as index.html). Site-only: the README is
      GitHub's front page. {{led:NAME}} is that animation from tools/site-art.py drawn as
      LEDs, {{led:NAME:alt}} the same with no alt text (beside its own words);
-     {{tiles}} the grid of them. Links are relative to the site's root. -->
+     {{tiles}} the grid of them. Links are relative to the site's root. A panel's
+     data-formula (a bundled Formula) plays live in place of its still once the page has
+     loaded (opendmd-web/share/ref/home.js); the hero's caption names its Formula. -->
 <section class="hero">
 <div class="hero-text">
 <a class="chip" href="guide/hardware.html">For the DMDoS LED display</a>
@@ -16,20 +18,20 @@ build playlists, make your own art, and add Formulas, little animations you can 
 <li>Free, and you can go back to DMDoS any time</li>
 </ul>
 </div>
-<div class="hero-panel"><div class="bezel">{{led:time-gate}}</div>
-<p class="cap">Time gate, one of the Formulas that come with OpenDMD.</p></div>
+<div class="hero-panel"><div class="bezel" data-formula="formulas/src/endless-road.psi">{{led:endless-road}}</div>
+<p class="cap">Endless road, one of the Formulas that come with OpenDMD.</p></div>
 </section>
 
 <section class="band" aria-labelledby="start">
 <h2 id="start">Get started</h2>
 <div class="doors">
-<a class="door" href="install/">{{led:rotozoom-floor:}}<h3>Install</h3>
+<a class="door" href="install/">{{led:boot:}}<h3>Install</h3>
 <p>Plug the display's board into a computer, click Install, and pick your WiFi. It takes about a
 minute in Chrome or Edge.</p><span class="go">Install OpenDMD →</span></a>
-<a class="door" href="guide/">{{led:clock:}}<h3>Using it</h3>
+<a class="door" href="guide/">{{led:kenney-run:}}<h3>Using it</h3>
 <p>The web app view by view, playlists, Create Art, the SD card, updates, and what to do when
 something isn't right.</p><span class="go">Read the guide →</span></a>
-<a class="door" href="formulas/">{{led:plasma:}}<h3>Formulas</h3>
+<a class="door" href="formulas/" data-formula="formulas/src/matrix.psi">{{led:matrix:}}<h3>Formulas</h3>
 <p>Plasma, fire, starfields, clocks, and looks to lay over your GIFs. Add one to your panel in a
 click, or remix it in the demo.</p><span class="go">Open the gallery →</span></a>
 </div>
