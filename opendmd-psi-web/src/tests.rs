@@ -236,8 +236,9 @@ fn the_examples_are_light_enough_for_the_panel() {
         // Time gate is a showcase too: the per-row tables are a line a
         // quantity (19 lines of code, 6.1 ms with its still cache).
         // Endless road is a showcase too: its tables (the car, the peaks,
-        // the palm) and five draw loops, written tight for the path.
-        let most = if e.name == "Endless road" {
+        // the palm) and five draw loops, written tight for the path; and
+        // so are its two alternatives, Night city drive and Wormhole run.
+        let most = if ["Endless road", "Night city drive", "Wormhole run"].contains(&e.name.as_str()) {
             52
         } else if e.name == "Time gate" {
             // 20 since `psi fmt` (2026-10-29): one statement a line.
@@ -521,6 +522,13 @@ const EXAMPLE_FRAMES: &[(&str, u32, u64)] = &[
     ("Storm front", 0, 0x98a68d2c73ac89dd),
     ("Storm front", 1730, 0x61b0d4e51c3a6693),
     ("Storm front", 6420, 0x1d518c5020f2eb93),
+    // road-alts (2026-10-30): Endless road's alternatives.
+    ("Night city drive", 0, 0x2f8b1af92782e520),
+    ("Night city drive", 1730, 0x3cda1e490255fd78),
+    ("Night city drive", 6420, 0xca26e35d60f6d091),
+    ("Wormhole run", 0, 0x2071af4450a60587),
+    ("Wormhole run", 1730, 0xa5400da6ff221e59),
+    ("Wormhole run", 6420, 0xe43faaf20b1d4d02),
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
