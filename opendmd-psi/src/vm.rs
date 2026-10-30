@@ -704,8 +704,12 @@ impl<const N: usize> Drop for BeamGuard<'_, N> {
 /// [`render_rows_changed`]) draws it, the same bytes and the same changed
 /// groups, but its rows drawn in the panel's pair order with `sink` told
 /// of each pair as it is finished ([`PairSink`]), so the player can write
-/// it to the panel behind the scan. A `rate` formula is drawn whole first
-/// and the pairs told after.
+/// it to the panel behind the scan. A `rate` formula with its slow layers'
+/// picture held in `under` ([`crate::Held::picture`], brought up to date
+/// first): its fast part raced over it, the bytes of
+/// [`crate::render_held`]'s frame. Without `under` a `rate` formula is drawn
+/// whole from nothing first and the pairs told after; any other formula
+/// reads `under` as [`render_rows_still`] does.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows_beam<const N: usize>(
     prog: &Program,
@@ -714,11 +718,13 @@ pub fn render_rows_beam<const N: usize>(
     still: Option<&mut Still>,
     inputs: &Inputs,
     tables: &Tables,
+    under: Option<&[u8]>,
     out: &mut [u8],
     changed: Option<&mut [u32; H]>,
     sink: PairSink<'_>,
 ) {
-    if prog.slow_marker().is_some() {
+    let rate = prog.slow_marker().is_some();
+    if rate && under.is_none() {
         let mut ch = [u32::MAX; H];
         let tell = changed.is_some();
         crate::rate::render_scratch::<N>(
@@ -761,12 +767,12 @@ pub fn render_rows_beam<const N: usize>(
         still,
         inputs,
         tables,
-        None,
+        under,
         u32::MAX,
         out,
         true,
         core::hint::black_box(changed),
-        core::hint::black_box(crate::rate::WHOLE),
+        core::hint::black_box(if rate { crate::rate::FAST } else { crate::rate::WHOLE }),
     )
 }
 
