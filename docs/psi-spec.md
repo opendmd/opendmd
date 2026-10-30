@@ -992,7 +992,7 @@ Write the number of levels, as `ink(16)`, and draw with inks `k/16`.
 
 <h4 id="E301">E301 · a per-pixel value in <code>frame { }</code></h4>
 
-> inside frame { } only values that are the same for every pixel can be used, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))
+> `frame { }` is worked out once a frame, before any pixel, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))
 
 `frame { }` is worked out once a frame, before any pixel, so it can't read a pixel's position or what is under it.
 
@@ -1018,7 +1018,7 @@ gray(x * k)
 
 <h4 id="E302">E302 · a colour used as a value</h4>
 
-> a colour can't be a value: use it in the colour itself (the last line), as `#f80`, `#f80 * k`, `mix(#000, #f80, k)` or `rgb(#f80, k)`
+> `#…` is a colour, not a number: use it on the last line, as `#f80 * k` or `mix(#000, #f80, k)`
 
 A colour such as `#f80` is not a number: it goes in the colour line, where it can be dimmed or mixed.
 
@@ -1062,25 +1062,25 @@ layer add { gray(y) }
 
 <h4 id="E304">E304 · a colour function in a sum of colours</h4>
 
-> in a sum with colours only `#…` and `rgb(r, g, b)` are colours: `…(…)` can only be a whole line of its own
+> `…(…)` is a whole colour: it can't be added to others (only `#…` and `rgb(r, g, b)` can)
 
 Use `#…` or `rgb(…)` in the sum, or give the function its own line.
 
 <h4 id="E305">E305 · a colour that can't be summed</h4>
 
-> `…(…)` can't go into a sum: it can only be scaled, `… * k` (`#…` and `rgb(r, g, b)` colours can: `#fff * k`, `mix(#000, #f80, k)`)
+> `…(…)` is a whole colour: it can't go into a sum, only be scaled, `… * k`
 
 Scale it on its own line, or use `#…` or `rgb(…)` colours in the sum.
 
 <h4 id="E306">E306 · a colour function that is not the whole line</h4>
 
-> `…(…)` makes the colour, so it can only be the whole last line (of the formula, or of a layer)
+> `…(…)` is a whole colour: it can only be the last line (of the formula or a layer)
 
 Make it the whole last line.
 
 <h4 id="E307">E307 · a colour inside <code>rgb(r, g, b)</code></h4>
 
-> inside `rgb(r, g, b)` the three are values, not colours: write the colour on its own (`#f80`, `#f80 * k`)
+> `rgb(r, g, b)` takes three numbers, not colours: write a colour alone, as `#f80 * k`
 
 Give `rgb(r, g, b)` three numbers, or write the colour on its own.
 
@@ -1106,7 +1106,7 @@ Shorten the formula.
 
 <h4 id="E402">E402 · too many steps</h4>
 
-> this formula is too long for the panel (… steps; the limit is …) — simplify it
+> this formula is too long for the panel: … steps, the limit is … (or: … — simplify it)
 
 The panel works a formula out for 4,096 pixels at every frame, so the steps a formula takes are limited. Values that change less often (once a row, once a frame) cost much less: move what you can out of the pixel.
 
@@ -1114,13 +1114,13 @@ Simplify the formula: fewer or simpler steps.
 
 <h4 id="E403">E403 · too many live values</h4>
 
-> this formula keeps too many values at once (more than …) — simplify it
+> this formula holds more than … values at once (the panel's registers): use each sooner
 
 Set fewer names, or use each value sooner.
 
 <h4 id="E404">E404 · too many numbers</h4>
 
-> this formula has too many numbers and steps (more than … values) — simplify it
+> this formula needs more than … numbers and once-a-frame values: use fewer
 
 Use fewer different numbers and steps.
 
@@ -1192,7 +1192,7 @@ Name the part.
 
 <h4 id="E507">E507 · a part used as a value</h4>
 
-> `…` is a part: draw it as a whole last line (of the formula, or of a layer), or use one of its values, as in `….v`
+> `…` is a part: draw it as a whole last line, or read one of its values, as `….v`
 
 Draw it as the last line, or use `p.v`.
 
@@ -1210,7 +1210,7 @@ Close the first layer before starting another.
 
 <h4 id="E510">E510 · a layer without a colour</h4>
 
-> this layer has no colour: end it with `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`
+> this layer ends without a colour: its last line is `rgb(…)`, `hsv(…)`, `pal(…)` or `gray(…)`
 
 End the layer with a colour.
 
@@ -1268,11 +1268,11 @@ Use at most two `for` loops, one inside the other.
 
 <h4 id="E706">E706 · drawing outside <code>draw { }</code></h4>
 
-> `…(…)` draws: it goes on a line of its own inside `draw { }` (also: `ink` needs a `draw { }` block to read from; `for` goes inside `draw { }`)
+> `…(…)` draws: it goes on a line of its own inside `draw { }`
 
 `line` and `dot` draw into the frame's ink once a frame, so they live in `draw { }`; the pixels read what they drew as `ink`.
 
-Put the line inside `draw { }`, and write a `draw { }` block to read `ink`.
+Put the line inside `draw { }`.
 
 Before:
 
@@ -1298,7 +1298,7 @@ Write only numbers in the table.
 
 <h4 id="E708">E708 · a per-pixel value in <code>draw { }</code></h4>
 
-> inside draw { } only values that are the same for every pixel can be used (no x, y, px, py, i, ur, ug, ub, ul or ink), but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))
+> `draw { }` runs once a frame, before any pixel, but `…` (line …) is per pixel: it reads `…` (or: but this uses `…` (…))
 
 `draw { }` runs once a frame, before the pixels: there is no pixel position there. Work in pixels, with numbers and the time.
 
@@ -1326,7 +1326,7 @@ Use another name.
 
 <h4 id="E710">E710 · a table read wrongly</h4>
 
-> `[ ]` reads a table: `NAME[k]` — `…` is not a table (or: `…` is a table: read one of its numbers with `…[k]`)
+> `…[…]` reads a table, and `…` is not one
 
 Read a table with `NAME[k]`.
 
@@ -1338,7 +1338,7 @@ Name the table.
 
 <h4 id="E712">E712 · the wrong values for <code>line</code> or <code>dot</code></h4>
 
-> `line` takes 4 values (x0, y0, x1, y1: pixels, y up from the bottom) and, if you like, the ink at each end (0 to 1), but got … (`dot` takes 2 values)
+> `line` takes x0, y0, x1, y1 (pixels up from the bottom left) and 1 or 2 inks: … given (`dot`: x, y and an ink)
 
 Give `line` four values and `dot` two.
 
@@ -1347,6 +1347,24 @@ Give `line` four values and `dot` two.
 > inside draw { } go `name = value`, `for k < N { … }`, `line(…)` and `dot(…)` lines only
 
 Use only those lines inside `draw { }`.
+
+<h4 id="E714">E714 · <code>ink</code> without <code>draw { }</code></h4>
+
+> `ink` needs a `draw { }` block to read from
+
+Write a `draw { }` block that draws what `ink` reads.
+
+<h4 id="E715">E715 · <code>for</code> outside <code>draw { }</code></h4>
+
+> `for` goes inside `draw { }`: `draw { for k < 12 { … } }`
+
+Put the loop inside `draw { }`.
+
+<h4 id="E716">E716 · a table without <code>[k]</code></h4>
+
+> `…` is a table: read one of its numbers, `…[k]` (k from 0)
+
+Read a number of the table with `NAME[k]`.
 
 ### Frame rate (E8xx)
 
@@ -1388,7 +1406,7 @@ Keep one `fps` line.
 
 <h4 id="E901">E901 · a value that grows without end</h4>
 
-> a value that grows without end (`t` in `loop forever`) can't go in here: use frac(t\*k), t % n, sin(t\*k), noise(t\*k, y, z), a comparison, min, max or smoothstep
+> `t` grows without end in `loop forever`, and this can't take it: use frac(t\*k), t % n, sin(t\*k), noise(t\*k, y, z), a comparison, min or max
 
 In a `loop forever` formula `t` grows without end, and most arithmetic on it would lose its precision or overflow. Wrap it first: `frac`, `%`, `sin` and `noise` keep it in range.
 
@@ -1422,13 +1440,13 @@ Add `loop forever`, or leave `seed` out.
 
 <h4 id="E904">E904 · too many growing values</h4>
 
-> this formula has too many values that grow without end (more than …) — simplify it
+> too many values that grow without end (more than …): share one, as frac(u\*k) of one `u`
 
 Use fewer values that grow without end.
 
 <h4 id="E905">E905 · a colour fed a growing value</h4>
 
-> a colour can't take a value that grows without end and changes across the panel (`t` in a `loop forever` formula): use frac(…) of it, or min(t/k, 1)
+> a colour can't take a value that grows without end and changes across the panel: use frac(…) of it, or min(t/k, 1) (or: …, as `v` (line …) does: use frac(v) or min(v/k, 1))
 
 A colour has to be worked out from values that stay in range; `t` in a `loop forever` formula does not.
 
@@ -1456,6 +1474,12 @@ gray(v)
 
 Use frac(t\*k)\*128, t % n or min(t, k) as the place.
 
+<h4 id="E907">E907 · a growing value with a per-pixel part</h4>
+
+> a growing value plus a per-pixel or per-row part only goes into frac, the waves, noise, % or a multiply: as frac(t\*k) + x or sin(t\*k + x)
+
+Add the pixel's part inside frac, a wave or noise: frac(t\*k) + x, sin(t\*k + x).
+
 <h4 id="E910">E910 · a sprite's key too long</h4>
 
 > a sprite's key has 16 characters at most
@@ -1476,7 +1500,7 @@ Start the sprite with a `key` line.
 
 <h4 id="E913">E913 · a bad key entry</h4>
 
-> a key is a character and its number, as `R 1` or `. -0.5`, separated by commas (not ; { } , - / or a space)
+> a key entry is a character (not ; { } , - / or a space) and its number, `R 1`, after a comma
 
 Write each entry as a character, a space and its number, with commas between.
 
@@ -1498,9 +1522,15 @@ Make every row as wide as the first, at most 64.
 
 Use 1 to 32 rows.
 
+<h4 id="E917">E917 · a sprite without <code>[u, v]</code></h4>
+
+> `…` is a sprite: read its pixels, `…[u, v]`
+
+Read the sprite at a column and a row, `NAME[u, v]`.
+
 <h4 id="E918">E918 · a sprite read wrongly</h4>
 
-> a sprite is read at a column and a row: `NAME[u, v]` (or: `…` is a sprite: read its pixels with `NAME[u, v]`)
+> a sprite is read at a column and a row: `…[u, v]`
 
 Read a sprite with `NAME[u, v]`.
 
@@ -1524,7 +1554,7 @@ Move the palette out of the layer.
 
 <h4 id="E922">E922 · a palette of the wrong size</h4>
 
-> a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff` (pal(sea, 0) is the first, pal(sea, 1) the last)
+> a palette is 1 to 32 colours: `palette sea = #003, #06c, #fff`
 
 Write 1 to 32 colours, each as #f80.
 
@@ -1560,7 +1590,7 @@ Name the colour on the palette's line (`palette road = black #000, kerb #806`), 
 
 <h4 id="E931">E931 · <code>cycle</code> turned by a value that changes along a row</h4>
 
-> `cycle`'s turn is the same along a row: a value of t, a frame or the row (py), but … (a value of x or px)
+> `cycle` turns a whole row at once (by t, a frame value or py), but `…` (line …) is per pixel: it reads `…`
 
 `cycle` turns a whole row's palette at once, so how far it turns can change with the time or the row, not along the row.
 
@@ -1587,7 +1617,7 @@ Write your own palette.
 
 <h4 id="E933">E933 · too many palettes with <code>cycle</code></h4>
 
-> a formula has room for … palettes: its own (… here) and each palette `cycle` turns by another value (… here)
+> a formula holds … palettes: its own (… here) and one more for each turn `cycle` gives (… here)
 
 Use fewer palettes, or turn fewer by different values.
 
@@ -1647,7 +1677,7 @@ Add a layer above, or leave `rate` out.
 
 <h4 id="E948">E948 · a bottom <code>rate</code> layer that does not cover</h4>
 
-> the bottom `rate` layer draws the whole panel: make it cover everything (`layer rate N { … }` with no blend and no coverage)
+> the bottom `rate` layer must cover the whole panel: `layer rate N { … }`, no blend, no coverage
 
 Leave the blend and the coverage off the bottom `rate` layer.
 
@@ -1759,7 +1789,7 @@ Use each word once.
 
 <h4 id="E963">E963 · a control out of its slot</h4>
 
-> `…` is control …'s letter: name this one something else (controls take a, b and c in order)
+> `…` is the … control's letter: give this one another name (controls take a, b, c in order)
 
 Name it something else, or put it in its slot.
 
